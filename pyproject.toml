@@ -1,0 +1,37 @@
+[project]
+name = "infra2"
+version = "0.1.0"
+description = "Infrastructure as Code for self-hosted services"
+requires-python = ">=3.9"
+dependencies = [
+    # E2E testing dependencies
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "playwright>=1.40.0",
+    "httpx>=0.25.0",
+    "python-dotenv>=1.0.0",
+    "asyncpg>=0.29.0",
+    "cryptography>=41.0.0",
+    "pyyaml>=6.0.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["e2e_regressions/tests"]
+markers = [
+    "smoke: quick smoke tests",
+    "sso: SSO/Portal tests",
+    "platform: Platform service tests",
+    "api: API endpoint tests",
+    "database: Database connection tests",
+    "e2e: full end-to-end tests",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["e2e_regressions*"]
+exclude = ["bootstrap*", "docs*"]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
