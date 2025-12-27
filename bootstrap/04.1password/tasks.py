@@ -35,7 +35,7 @@ def upload_credentials(c):
     
     # 使用 1Password CLI 读取并上传
     print("从 1Password Vault 读取 credentials...")
-    cmd = f"op document get 'VPS-01 Credentials File' --vault Infra2 | ssh root@{VPS_HOST} 'cat > /data/bootstrap/1password/1password-credentials.json && chown 1000:1000 /data/bootstrap/1password/1password-credentials.json'"
+    cmd = f"op document get 'bootstrap-1password-VPS-01 Credentials File' --vault Infra2 | ssh root@{VPS_HOST} 'cat > /data/bootstrap/1password/1password-credentials.json && chown 1000:1000 /data/bootstrap/1password/1password-credentials.json'"
     
     result = c.run(cmd, warn=True)
     if not result.ok:
