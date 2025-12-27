@@ -15,6 +15,7 @@
 - [Infra-014: Terraform Module Hardening](./active/Infra-014.terraform_module_hardening.md) - **Proposed**
 - [Infra-015: Data Platform Cost Optimization](./active/Infra-015.data_platform_cost_optimization.md) - **Proposed**
 - [Infra-016: Digger Orchestrator](./active/Infra-016.digger_orchestrator.md) - **Proposed**
+- [Infra-017: Platform Module Architecture](./Infra-017.platform_module_architecture.md) - **In Progress**
 
 ## Archived Projects (Infra-001 to Infra-010)
 - [Infra-001: Staging Deployment Blueprint](./archive/Infra-001.staging_deployment_blueprint.md) - **Archived**
