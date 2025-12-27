@@ -174,11 +174,28 @@ dokploy env        # 环境变量管理
 # 前往 https://my.1password.com/integrations/
 # 创建 1Password Connect Server，下载 1password-credentials.json
 
-# 2. 准备数据目录（SSH 到 VPS）
+# 2. 准备数据目录和 credentials（SSH 到 VPS）
 ssh root@<VPS_IP>
+
+# 创建数据目录
 mkdir -p /data/1password
 
-# 3. 登录 Dokploy 创建应用
+# 设置目录权限（允许容器写入数据库文件）
+chown -R 1000:1000 /data/1password
+chmod 777 /data/1password
+
+# 3. 上传 credentials 文件到 VPS
+# 从本地执行（退出 SSH）
+exit
+
+# 使用 1Password CLI 和 scp 上传
+op document get "VPS-01 Credentials File" --vault Infra2 | \
+  ssh root@<VPS_IP> 'cat > /data/1password/1password-credentials.json && chown 1000:1000 /data/1password/1password-credentials.json'
+
+# 验证文件已上传
+ssh root@<VPS_IP> 'ls -la /data/1password/'
+
+# 4. 登录 Dokploy 创建应用
 # 访问 https://cloud.${INTERNAL_DOMAIN}
 # - 创建 Project: bootstrap
 # - 创建 Docker Compose 应用: 1password-connect
@@ -186,10 +203,31 @@ mkdir -p /data/1password
 #   - Branch: main
 #   - Compose Path: bootstrap/self_host_1password.yaml
 # - 或手动粘贴 Compose 内容
-# - Files: 上传 1password-credentials.json
 
-# 4. 部署并验证
+# 5. 部署并验证
 curl https://op.${INTERNAL_DOMAIN}/health
+# 预期响应: {"name":"1Password Connect API","version":"1.8.1",...}
+
+# 6. 测试读取 secrets（可选）
+TOKEN=$(op item get "VPS-01 Access Token: own_service" --vault Infra2 --fields credential --reveal)
+curl -H "Authorization: Bearer $TOKEN" https://op.${INTERNAL_DOMAIN}/v1/vaults
+```
+
+**常见问题**：
+
+1. **数据库权限错误**（`attempt to write a readonly database`）
+   ```bash
+   ssh root@<VPS_IP> 'chmod 777 /data/1password'
+   ```
+
+2. **sync 服务无法启动**（`no such file or directory`）
+   - 确认目录权限是 `777`
+   - 检查 credentials 文件是否存在
+
+3. **API 返回 404**
+   - 等待 1-2 分钟让服务完全启动
+   - 检查容器状态：`docker ps | grep op-connect`
+
 ```
 
 **前提条件**：
