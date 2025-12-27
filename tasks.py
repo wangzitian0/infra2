@@ -1,7 +1,7 @@
 """
-Infrastructure automation tasks - 根任务文件
+Infrastructure automation tasks - Root task file
 
-此文件自动加载各模块的 tasks.py
+This file automatically loads tasks.py from each module.
 """
 from invoke import Collection
 from pathlib import Path
@@ -11,20 +11,20 @@ import os
 from dotenv import load_dotenv
 from invoke import task
 
-# 加载 .env 文件
+# Load .env file
 load_dotenv()
 
 @task
 def check_env(c):
-    """全局环境变量校验"""
+    """Global environment variable check"""
     missing = []
     for var in ["VPS_HOST", "INTERNAL_DOMAIN"]:
         if not os.environ.get(var):
             missing.append(var)
     if missing:
-        print(f"\n❌ 错误: 缺少全局环境变量: {', '.join(missing)}")
+        print(f"\n❌ ERROR: Missing global environment variables: {', '.join(missing)}")
         exit(1)
-    print("✅ 全局环境变量校验通过")
+    print("✅ Global environment variable check passed")
 
 
 # 创建根 namespace
@@ -45,13 +45,13 @@ for component_dir in sorted(bootstrap_dir.iterdir()):
                 sys.modules[module_name] = module
                 spec.loader.exec_module(module)
                 
-                # 添加到 namespace，使用组件名作为前缀
-                component_name = component_dir.name.split('.')[-1]  # 去掉编号前缀
+                # Add to namespace, use component name as prefix
+                component_name = component_dir.name.split('.')[-1]  # Remove numeric prefix
                 ns.add_collection(Collection.from_module(module), name=component_name)
-                print(f"✅ 加载模块: {component_name}")
+                print(f"✅ Loaded module: {component_name}")
 
 
-# Invoke 会自动查找此变量
-# 使用方式: 
+# Invoke will automatically look for this variable
+# Usage: 
 # uv run invoke vault.setup
 # uv run invoke vault.prepare
