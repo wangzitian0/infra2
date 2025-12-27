@@ -12,7 +12,7 @@ storage "file" {
   path = "/vault/file"
 }
 
-# API 地址
+# API 地址 - 使用环境变量 ${INTERNAL_DOMAIN} 替换
 api_addr = "https://vault.${INTERNAL_DOMAIN}"
 
 # UI 启用

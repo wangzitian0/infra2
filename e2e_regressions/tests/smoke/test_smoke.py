@@ -45,7 +45,7 @@ async def test_deployment_ingress_routing(config: TestConfig):
     """Verify Ingress is routing all services correctly."""
     from urllib.parse import urlparse
 
-    # Extract base domain (e.g., "${INTERNAL_DOMAIN}" from "home.${INTERNAL_DOMAIN}")
+    # Extract base domain from portal URL
     portal_url = urlparse(config.PORTAL_URL)
     portal_host = portal_url.hostname
     domain_parts = portal_host.split(".")
@@ -122,7 +122,12 @@ async def test_deployment_cross_service_access(page: Page, config: TestConfig):
     page.on("requestfailed", lambda request: errors.append(request.url))
 
     # Should not have failed requests to critical domains
-    critical_domains = ["${INTERNAL_DOMAIN}", "localhost"]
+    # Extract base domain from portal URL dynamically
+    from urllib.parse import urlparse
+    portal_host = urlparse(config.PORTAL_URL).hostname
+    domain_parts = portal_host.split(".")
+    base_domain = ".".join(domain_parts[-2:]) if len(domain_parts) >= 2 else portal_host
+    critical_domains = [base_domain, "localhost"]
     critical_failures = [
         e for e in errors
         if not any(d in e for d in critical_domains)
