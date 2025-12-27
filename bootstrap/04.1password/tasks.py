@@ -33,7 +33,7 @@ def upload_credentials(c):
     """Upload 1Password credentials file"""
     print("\n📤 Uploading credentials file...")
     
-    # Reading credentials from 1Password Vault...
+    # Read credentials from 1Password CLI and upload
     print("Reading credentials from 1Password Vault...")
     cmd = f"op document get 'bootstrap/1password/VPS-01 Credentials File' --vault Infra2 | ssh root@{VPS_HOST} 'cat > /data/bootstrap/1password/1password-credentials.json && chown 1000:1000 /data/bootstrap/1password/1password-credentials.json'"
     
