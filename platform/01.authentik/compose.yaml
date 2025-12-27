@@ -10,7 +10,7 @@ services:
       retries: 5
       timeout: 5s
     volumes:
-      - /data/bootstrap/authentik/postgres:/var/lib/postgresql/data
+      - /data/platform/authentik/postgres:/var/lib/postgresql/data
     environment:
       POSTGRES_PASSWORD: ${PG_PASS:?error}
       POSTGRES_USER: ${PG_USER:-authentik}
@@ -30,7 +30,7 @@ services:
       retries: 5
       timeout: 3s
     volumes:
-      - /data/bootstrap/authentik/redis:/data
+      - /data/platform/authentik/redis:/data
     networks:
       - dokploy-network
 
@@ -48,8 +48,8 @@ services:
       AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:?error}
       # AUTHENTIK_ERROR_REPORTING__ENABLED: "true"
     volumes:
-      - /data/bootstrap/authentik/media:/media
-      - /data/bootstrap/authentik/certs:/certs
+      - /data/platform/authentik/media:/media
+      - /data/platform/authentik/certs:/certs
     networks:
       - dokploy-network
     labels:
@@ -74,8 +74,8 @@ services:
     user: root
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - /data/bootstrap/authentik/media:/media
-      - /data/bootstrap/authentik/certs:/certs
+      - /data/platform/authentik/media:/media
+      - /data/platform/authentik/certs:/certs
     networks:
       - dokploy-network
 
