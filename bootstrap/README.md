@@ -182,7 +182,10 @@ mkdir -p /data/1password
 # 访问 https://cloud.${INTERNAL_DOMAIN}
 # - 创建 Project: bootstrap
 # - 创建 Docker Compose 应用: 1password-connect
-# - Compose File: 粘贴 bootstrap/self_host_1password.yaml 内容
+# - Repository: GitHub → wangzitian0/infra2 (推荐)
+#   - Branch: main
+#   - Compose Path: bootstrap/self_host_1password.yaml
+# - 或手动粘贴 Compose 内容
 # - Files: 上传 1password-credentials.json
 
 # 4. 部署并验证
