@@ -34,8 +34,7 @@
 | 文件 | SSOT Key | 关键内容 |
 |------|----------|----------|
 | [bootstrap.nodep.md](./bootstrap.nodep.md) | `bootstrap.nodep` | 非 Terraform 管理组件（Dokploy 等） |
-| [bootstrap.storage.md](./bootstrap.storage.md) | `bootstrap.storage` | Platform PG、StorageClass、PVC |
-| [bootstrap.network.md](./bootstrap.network.md) | `bootstrap.network` | Cloudflare DNS、TLS 证书、Ingress |
+
 
 ---
 

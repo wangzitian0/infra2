@@ -1,2 +1,3 @@
 # infra2
-terraform + coolify
+dokploy
+

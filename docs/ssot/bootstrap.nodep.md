@@ -18,10 +18,14 @@
 
 - **Dokploy 官方文档**：[docs.dokploy.com](https://docs.dokploy.com)
 - **Dokploy 源码**：[github.com/dokploy/dokploy](https://github.com/dokploy/dokploy)
+- **1Password Connect 文档**：[developer.1password.com/docs/connect](https://developer.1password.com/docs/connect/)
+- **1Password Connect 配置**：[`self_host_1password.yaml`](../../bootstrap/self_host_1password.yaml)
 
 ---
 
 ## 2. 架构模型
+
+### Dokploy
 
 ```mermaid
 flowchart TB
@@ -35,10 +39,33 @@ flowchart TB
     DOK -->|Manage| DBS[Databases]
 ```
 
+### 1Password Connect
+
+```mermaid
+flowchart LR
+    Internet[Internet]
+    Traefik[Traefik]
+    API[op-connect-api<br/>:8080]
+    SYNC[op-connect-sync<br/>内部服务]
+    Cloud[1Password Cloud]
+    
+    Internet -->|op.${INTERNAL_DOMAIN}| Traefik
+    Traefik --> API
+    API <--> SYNC
+    SYNC <-.同步.-> Cloud
+    
+    style API fill:#90EE90
+    style SYNC fill:#FFE4B5
+```
+
 ### 关键决策 (Architecture Decision)
 
 - **为什么 nodep**：部分组件（如 PaaS 平台）更适合用官方脚本安装，避免过度 Terraform 化。
 - **Trust Anchor**：Bootstrap 是系统信任锚点，独立于上层服务。
+- **1Password Connect 服务划分**：
+  - `op-connect-api`：对外 REST API，需要域名访问（有 Traefik labels）
+  - `op-connect-sync`：内部同步服务，无需对外暴露（无 labels）
+- **端口暴露策略**：所有服务通过 Traefik 反向代理，不直接暴露端口到宿主机，确保只能通过域名 HTTPS 访问。
 
 ---
 
@@ -63,6 +90,7 @@ flowchart TB
 | 组件 | 当前版本 | 安装日期 | 操作人 |
 |------|----------|----------|--------|
 | Dokploy | _待记录_ | _待记录_ | - |
+| 1Password Connect | latest | _待记录_ | - |
 
 ---
 
