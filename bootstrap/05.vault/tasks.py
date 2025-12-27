@@ -66,6 +66,6 @@ def status(c):
 
 @task(pre=[prepare, upload_config, deploy, init, unseal])
 def setup(c):
-    """Complete Vault setup flow (incl. auto-unseal)"""
+    """Complete Vault setup flow (including auto-unseal)"""
     print("\n✅ Vault setup complete! Unsealer container will handle future unsealing.")
     print(f"\nAccess URL: https://vault.{INTERNAL_DOMAIN}")
