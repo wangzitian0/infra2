@@ -44,9 +44,7 @@ flowchart TB
 | 层级 | 目录 | 职责 | 部署份数 |
 |------|------|------|----------|
 | **L1 Bootstrap** | `bootstrap/` | 启动集群，建立 Trust Anchor | 1 (Global) |
-| **L2 Platform** | `platform/` | 提供公共服务 (Vault, SSO) | 1 (Global) |
-| **L3 Data** | `envs/<env>/data/` | 提供数据服务 (DB, Redis) | N (Per-env) |
-| **L4 Apps** | `apps/` | 业务应用 | N (Per-env) |
+| **L2 Platform** | `platform/` | 提供公共服务 (Vault, SSO) | 1 or N (Per-env) |
 
 ---
 
@@ -64,7 +62,71 @@ flowchart TB
 
 ---
 
-## 4. 环境变量规范
+## 4. 目录结构规范
+
+### Bootstrap 层目录结构
+
+```
+bootstrap/
+├── 01.dokploy_install/    # 使用编号前缀（按部署顺序）
+│   └── README.md
+├── 02.dns_and_cert/
+│   └── README.md
+├── 03.dokploy_setup/
+│   └── README.md
+├── 04.1password/
+│   ├── README.md
+│   └── compose.yaml       # 统一使用 compose.yaml
+├── 05.vault/
+│   ├── README.md
+│   ├── compose.yaml
+│   └── vault.hcl
+├── 06.casdoor/
+│   └── README.md
+└── README.md              # 组件索引
+```
+
+**规则**：
+- ✅ 使用 `NN.component_name/` 格式（两位数字 + 点号 + 组件名）
+- ✅ 编号反映部署顺序和依赖关系
+- ✅ 每个组件目录包含 `README.md`（操作手册）
+- ✅ Docker Compose 配置统一命名为 `compose.yaml`
+- ✅ 配置文件与 README 放在同一目录
+
+### Volume 路径规范
+
+**层次结构**：
+```
+/data/
+└── bootstrap/           # 按层级组织
+    ├── 1password/       # 组件数据目录
+    │   ├── 1password-credentials.json
+    │   └── ... (database files)
+    └── vault/
+        ├── file/        # 存储
+        ├── logs/        # 日志
+        └── config/      # 配置文件
+```
+
+**规则**：
+- ✅ Volume 根路径：`/data/<layer>/<component>/`
+- ✅ Bootstrap 层：`/data/bootstrap/<component>/`
+- ✅ Platform 层：`/data/platform/<component>/`
+- ✅ Data 层：`/data/<env>/data/<component>/`
+
+### 文件命名规范
+
+| 文件类型 | 命名规则 | 示例 |
+|---------|---------|------|
+| Docker Compose | `compose.yaml` | ✅ 统一标准名 |
+| HCL 配置 | `<service>.hcl` | `vault.hcl`, `traefik.hcl` |
+| 环境变量 | `.env`, `.env.example` | 项目根目录 |
+| 自动化脚本 | `tasks.py` | Invoke 任务文件 |
+| README | `README.md` | 每个组件目录必需 |
+
+---
+
+## 5. 环境变量规范
 
 ### 命名空间 (Namespace)
 
@@ -105,7 +167,7 @@ flowchart TB
 
 ---
 
-## 5. 验证与测试 (The Proof)
+## 6. 验证与测试 (The Proof)
 
 | 行为描述 | 测试文件 (Test Anchor) | 覆盖率 |
 |----------|-----------------------|--------|

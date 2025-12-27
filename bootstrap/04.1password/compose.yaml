@@ -4,8 +4,8 @@ services:
   op-connect-api:
     image: 1password/connect-api:latest
     volumes:
-      - "/data/1password/1password-credentials.json:/home/opuser/.op/1password-credentials.json"
-      - "/data/1password:/home/opuser/.op/data"
+      - /data/bootstrap/1password/1password-credentials.json:/home/opuser/.op/1password-credentials.json
+      - /data/bootstrap/1password:/home/opuser/.op/data
     networks:
       - dokploy-network
     labels:
@@ -18,8 +18,8 @@ services:
   op-connect-sync:
     image: 1password/connect-sync:latest
     volumes:
-      - "/data/1password/1password-credentials.json:/home/opuser/.op/1password-credentials.json"
-      - "/data/1password:/home/opuser/.op/data"
+      - /data/bootstrap/1password/1password-credentials.json:/home/opuser/.op/1password-credentials.json
+      - /data/bootstrap/1password:/home/opuser/.op/data
     networks:
       - dokploy-network
 

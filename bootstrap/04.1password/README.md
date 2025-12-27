@@ -17,9 +17,9 @@
 
 ```bash
 ssh root@<VPS_IP>
-mkdir -p /data/1password
-chown -R 1000:1000 /data/1password
-chmod 777 /data/1password
+mkdir -p /data/bootstrap/1password
+chown -R 1000:1000 /data/bootstrap/1password
+chmod 777 /data/bootstrap/1password
 exit
 ```
 
@@ -27,10 +27,10 @@ exit
 
 ```bash
 op document get "VPS-01 Credentials File" --vault Infra2 | \
-  ssh root@<VPS_IP> 'cat > /data/1password/1password-credentials.json && chown 1000:1000 /data/1password/1password-credentials.json'
+  ssh root@<VPS_IP> 'cat > /data/bootstrap/1password/1password-credentials.json && chown 1000:1000 /data/bootstrap/1password/1password-credentials.json'
 
 # 验证
-ssh root@<VPS_IP> 'ls -la /data/1password/'
+ssh root@<VPS_IP> 'ls -la /data/bootstrap/1password/'
 ```
 
 ### 4. 在 Dokploy 部署
@@ -57,7 +57,7 @@ curl -H "Authorization: Bearer $TOKEN" https://op.$INTERNAL_DOMAIN/v1/vaults
 
 ### 数据库权限错误
 ```bash
-ssh root@<VPS_IP> 'chmod 777 /data/1password'
+ssh root@<VPS_IP> 'chmod 777 /data/bootstrap/1password'
 ```
 
 ### sync 服务无法启动

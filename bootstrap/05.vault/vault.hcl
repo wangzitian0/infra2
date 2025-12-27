@@ -1,5 +1,5 @@
 # Vault 配置文件
-# 路径: /data/vault/config/vault.hcl
+# 路径: /data/bootstrap/vault/config/vault.hcl
 
 # 监听配置
 listener "tcp" {
