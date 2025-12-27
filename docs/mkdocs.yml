@@ -10,7 +10,6 @@ site_dir: ../.site
 exclude_docs: |
   README_tempate.md
   project/Infra-001.TODOWRITE.md
-
 theme:
   name: material
   language: zh

@@ -104,7 +104,6 @@ temp/
 
 # MkDocs build output
 .site/
-docs/.site/
 
 # Secrets and credentials (extra protection)
 *credentials*.json
