@@ -121,7 +121,7 @@ def fix_permissions(c):
     print("\n🔧 Fixing permission issues...")
     c.run(f"ssh root@{VPS_HOST} 'chmod 777 /data/bootstrap/1password'")
     print("✅ Permissions fixed to 777")
-    print("Note: Recommend redeploying the app in Dokploy")
+    print("Note: Recommend redeploying the app in Dokploy.")
 
 
 @task(pre=[prepare, upload_credentials, deploy, verify])
