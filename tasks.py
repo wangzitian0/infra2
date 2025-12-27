@@ -7,10 +7,29 @@ from invoke import Collection
 from pathlib import Path
 import importlib.util
 import sys
+import os
+from dotenv import load_dotenv
+from invoke import task
+
+# 加载 .env 文件
+load_dotenv()
+
+@task
+def check_env(c):
+    """全局环境变量校验"""
+    missing = []
+    for var in ["VPS_HOST", "INTERNAL_DOMAIN"]:
+        if not os.environ.get(var):
+            missing.append(var)
+    if missing:
+        print(f"\n❌ 错误: 缺少全局环境变量: {', '.join(missing)}")
+        exit(1)
+    print("✅ 全局环境变量校验通过")
 
 
 # 创建根 namespace
 ns = Collection()
+ns.add_task(check_env)
 
 # 自动加载 bootstrap 模块的 tasks
 bootstrap_dir = Path(__file__).parent / "bootstrap"

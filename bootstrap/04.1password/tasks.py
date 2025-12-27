@@ -6,8 +6,8 @@ from invoke import task
 
 
 # Environment variables
-VPS_HOST = os.environ["VPS_HOST"]  # Required: no default
-INTERNAL_DOMAIN = os.environ["INTERNAL_DOMAIN"]  # Required: no default
+VPS_HOST = os.environ.get("VPS_HOST")
+INTERNAL_DOMAIN = os.environ.get("INTERNAL_DOMAIN")
 
 
 @task
