@@ -22,4 +22,4 @@ ui = true
 log_level = "info"
 
 # 禁用 mlock（容器环境中通常需要）
-disable_mlock = false
+disable_mlock = true

@@ -6,11 +6,28 @@ services:
     environment:
       VAULT_ADDR: "http://127.0.0.1:8200"
       VAULT_API_ADDR: "https://vault.${INTERNAL_DOMAIN}"
+      VAULT_LOCAL_CONFIG: |
+        {
+          "listener": [{
+            "tcp": {
+              "address": "0.0.0.0:8200",
+              "tls_disable": true
+            }
+          }],
+          "storage": {
+            "file": {
+              "path": "/vault/file"
+            }
+          },
+          "api_addr": "https://vault.${INTERNAL_DOMAIN}",
+          "ui": true,
+          "disable_mlock": true,
+          "log_level": "info"
+        }
     volumes:
       - /data/bootstrap/vault/file:/vault/file
       - /data/bootstrap/vault/logs:/vault/logs
-      - /data/bootstrap/vault/config:/vault/config
-    command: server -config=/vault/config/vault.hcl
+    command: server
     networks:
       - dokploy-network
     labels:
