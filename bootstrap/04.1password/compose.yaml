@@ -1,7 +1,6 @@
 services:
   op-connect-api:
     image: 1password/connect-api:latest
-    user: "1000:1000"
     volumes:
       - /data/bootstrap/1password/1password-credentials.json:/home/opuser/.op/1password-credentials.json
       - /data/bootstrap/1password:/home/opuser/.op/data
