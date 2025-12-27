@@ -1,0 +1,27 @@
+version: "3.8"
+
+services:
+  vault:
+    image: hashicorp/vault:1.15.4
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_ADDR: "http://127.0.0.1:8200"
+      VAULT_API_ADDR: "https://vault.${INTERNAL_DOMAIN}"
+    volumes:
+      - /data/vault/file:/vault/file
+      - /data/vault/logs:/vault/logs
+      - /data/vault/config:/vault/config
+    command: server -config=/vault/config/vault.hcl
+    networks:
+      - dokploy-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.vault.rule=Host(`vault.${INTERNAL_DOMAIN}`)"
+      - "traefik.http.routers.vault.entrypoints=websecure"
+      - "traefik.http.routers.vault.tls.certresolver=letsencrypt"
+      - "traefik.http.services.vault.loadbalancer.server.port=8200"
+
+networks:
+  dokploy-network:
+    external: true
