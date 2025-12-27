@@ -1,10 +1,10 @@
 services:
   vault:
     image: hashicorp/vault:1.15.4
-    cap_add:
-      - IPC_LOCK
+    container_name: vault
+    restart: always
     environment:
-      VAULT_ADDR: "http://127.0.0.1:8200"
+      VAULT_ADDR: "http://0.0.0.0:8200"
       VAULT_API_ADDR: "https://vault.${INTERNAL_DOMAIN}"
       VAULT_LOCAL_CONFIG: |
         {
@@ -19,7 +19,6 @@ services:
               "path": "/vault/file"
             }
           },
-          "api_addr": "https://vault.${INTERNAL_DOMAIN}",
           "ui": true,
           "disable_mlock": true,
           "log_level": "info"
@@ -27,7 +26,8 @@ services:
     volumes:
       - /data/bootstrap/vault/file:/vault/file
       - /data/bootstrap/vault/logs:/vault/logs
-    command: server
+    cap_add:
+      - IPC_LOCK
     networks:
       - dokploy-network
     labels:
@@ -37,6 +37,22 @@ services:
       - "traefik.http.routers.vault.tls.certresolver=letsencrypt"
       - "traefik.http.routers.vault.service=vault"
       - "traefik.http.services.vault.loadbalancer.server.port=8200"
+    command: server
+
+  unsealer:
+    build: .
+    container_name: vault-unsealer
+    restart: always
+    environment:
+      VAULT_ADDR: "http://vault:8200"
+      OP_CONNECT_HOST: "http://op-connect-api:8080"
+      OP_CONNECT_TOKEN: "${OP_CONNECT_TOKEN}"
+      OP_VAULT_ID: "${OP_VAULT_ID}"
+      OP_ITEM_ID: "${OP_ITEM_ID}"
+    depends_on:
+      - vault
+    networks:
+      - dokploy-network
 
 networks:
   dokploy-network:

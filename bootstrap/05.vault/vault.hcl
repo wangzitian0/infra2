@@ -1,25 +1,16 @@
-# Vault 配置文件
-# 路径: /data/bootstrap/vault/config/vault.hcl
+# Vault Configuration File
+# Note: Currently overridden by VAULT_LOCAL_CONFIG in compose.yaml for better environment variable support.
 
-# 监听配置
 listener "tcp" {
   address     = "0.0.0.0:8200"
-  tls_disable = 1  # Traefik 已提供 HTTPS
+  tls_disable = 1
 }
 
-# 存储后端（文件系统）
 storage "file" {
   path = "/vault/file"
 }
 
-# API 地址 - 使用环境变量 ${INTERNAL_DOMAIN} 替换
-api_addr = "https://vault.${INTERNAL_DOMAIN}"
-
-# UI 启用
+api_addr = "https://vault.zitian.party"
 ui = true
-
-# 日志级别
-log_level = "info"
-
-# 禁用 mlock（容器环境中通常需要）
 disable_mlock = true
+log_level = "info"
