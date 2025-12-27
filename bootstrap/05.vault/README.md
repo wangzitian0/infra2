@@ -4,7 +4,7 @@ HashiCorp Vault - 秘密管理和加密服务。
 
 ## 配置文件
 
-- [`self_host_vault.yaml`](./self_host_vault.yaml) - Docker Compose 配置
+- [`compose.yaml`](./compose.yaml) - Docker Compose 配置
 - [`vault.hcl`](./vault.hcl) - Vault 配置文件
 
 ## 操作步骤
@@ -29,7 +29,7 @@ scp bootstrap/vault/vault.hcl root@<VPS_IP>:/data/vault/config/
 - 访问 https://cloud.$INTERNAL_DOMAIN
 - 创建 Docker Compose 应用: vault
 - Repository: GitHub → wangzitian0/infra2
-- Compose Path: `bootstrap/vault/self_host_vault.yaml`
+- Compose Path: `bootstrap/05.vault/compose.yaml`
 
 ### 4. 初始化 Vault
 

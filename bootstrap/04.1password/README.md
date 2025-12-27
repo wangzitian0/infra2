@@ -4,7 +4,7 @@
 
 ##  配置文件
 
-- [`self_host_1password.yaml`](./self_host_1password.yaml) - Docker Compose 配置
+- [`compose.yaml`](./compose.yaml) - Docker Compose 配置
 
 ## 操作步骤
 
@@ -40,7 +40,7 @@ ssh root@<VPS_IP> 'ls -la /data/1password/'
 - 创建 Docker Compose 应用: 1password-connect
 - Repository: GitHub → wangzitian0/infra2
 - Branch: main
-- Compose Path: `bootstrap/1password/self_host_1password.yaml`
+- Compose Path: `bootstrap/04.1password/compose.yaml`
 
 ### 5. 验证部署
 
