@@ -7,6 +7,10 @@ from invoke import Collection
 from pathlib import Path
 import importlib.util
 import sys
+from dotenv import load_dotenv
+
+# 加载 .env 文件
+load_dotenv()
 
 
 # 创建根 namespace
