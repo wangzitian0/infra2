@@ -4,17 +4,18 @@
 **Scope**: Infra project catalog and status tracking for Infra-xxx items.
 
 ## Structure
-- Active projects live in `docs/project/active/`.
+- Active projects live in `docs/project/`.
 - Archived projects live in `docs/project/archive/`.
-- Each project file includes PR links, change_log references, and git backtrace.
+- Each project file includes PR links and an embedded change log section.
+- TODO inbox lives in `docs/project/Infra-001.TODOWRITE.md`.
 
 ## Active Projects
-- [Infra-011: Platform Service Catalog](./active/Infra-011.platform_service_catalog.md) - **Proposed**
-- [Infra-012: Observability SLO Baseline](./active/Infra-012.observability_slo_baseline.md) - **Proposed**
-- [Infra-013: Backup and Restore Game Day](./active/Infra-013.backup_restore_game_day.md) - **Proposed**
-- [Infra-014: Terraform Module Hardening](./active/Infra-014.terraform_module_hardening.md) - **Proposed**
-- [Infra-015: Data Platform Cost Optimization](./active/Infra-015.data_platform_cost_optimization.md) - **Proposed**
-- [Infra-016: Digger Orchestrator](./active/Infra-016.digger_orchestrator.md) - **Proposed**
+- [Infra-011: Platform Service Catalog](./Infra-011.platform_service_catalog.md) - **Proposed**
+- [Infra-012: Observability SLO Baseline](./Infra-012.observability_slo_baseline.md) - **Proposed**
+- [Infra-013: Backup and Restore Game Day](./Infra-013.backup_restore_game_day.md) - **Proposed**
+- [Infra-014: Terraform Module Hardening](./Infra-014.terraform_module_hardening.md) - **Proposed**
+- [Infra-015: Data Platform Cost Optimization](./Infra-015.data_platform_cost_optimization.md) - **Proposed**
+- [Infra-016: Digger Orchestrator](./Infra-016.digger_orchestrator.md) - **Proposed**
 - [Infra-017: Platform Module Architecture](./Infra-017.platform_module_architecture.md) - **In Progress**
 
 ## Archived Projects (Infra-001 to Infra-010)
@@ -30,9 +31,7 @@
 - [Infra-010: Bootstrap Drift Reconcile](./archive/Infra-010.bootstrap_drift_reconcile.md) - **Archived**
 
 ## Related
-- [docs/change_log/README.md](../change_log/README.md) - Completed work history
 - [docs/ssot/README.md](../ssot/README.md) - SSOT index
-- [0.check_now.md](../../0.check_now.md) - Current execution checklist
 
 ---
-*Last updated: 2025-12-25*
+*Last updated: 2025-12-28*

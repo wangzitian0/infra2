@@ -15,7 +15,7 @@ choices for k3s, Vault, and platform services, with a path to five environments.
 - PR #260: https://github.com/wangzitian0/infra/pull/260
 
 ## Change Log
-- [2025-12-05: Staging Deployment Design](../../change_log/2025-12-05.staging_deployment_design.md)
+- 2025-12-05: Staging Deployment Design
 
 ## Git Commits (Backtrace)
 - 0a2d311 feat(platform): add OpenPanel L2 infrastructure with Portal Gate authentication (#336)

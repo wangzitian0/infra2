@@ -20,8 +20,8 @@ align infra documentation with L1 trust anchor principles.
 - PR #260: https://github.com/wangzitian0/infra/pull/260
 
 ## Change Log
-- [2025-12-12: BRN-008 P0 Infrastructure & SSOT Docs](../../change_log/2025-12-12.brn_008_infrastructure_ssot.md)
-- [2025-12-25: SSOT Refactor](../../change_log/2025-12-25.ssot_refactor.md)
+- 2025-12-12: BRN-008 P0 Infrastructure & SSOT Docs
+- 2025-12-25: SSOT Refactor
 
 ## Git Commits (Backtrace)
 - 01e253a docs: mermaid diagrams + ssot naming alignment (#309)
@@ -182,9 +182,8 @@ resource "vault_generic_secret" "business_db" {
 flowchart TB
     Docs["docs/"]
     Docs --> DocsReadme["README.md<br/>Documentation 入口"]
-    Docs --> ChangeLog["change_log/<br/>历史变更"]
+    Docs --> Project["project/<br/>项目文档 + 变更历史"]
     Docs --> DeepDives["deep_dives/<br/>设计决策"]
-    Docs --> Project["project/<br/>BRN 项目文档"]
     Project --> ProjectReadme["README.md<br/>项目索引"]
     Project --> BRN004["BRN-004.md<br/>已有"]
     Project --> BRN008["BRN-008.md<br/>本文件"]

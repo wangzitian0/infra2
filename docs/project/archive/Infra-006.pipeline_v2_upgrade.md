@@ -17,7 +17,7 @@ reverse lookup, improving PR status table consistency and auditability.
 - PR #290: https://github.com/wangzitian0/infra/pull/290
 
 ## Change Log
-- [2025-12-19: Pipeline V2 Upgrade](../../change_log/2025-12-19.pipeline_v2_upgrade.md)
+- 2025-12-19: Pipeline V2 Upgrade
 
 ## Git Commits (Backtrace)
 - ac56920 Final Pipeline Validation (#290)
