@@ -105,11 +105,11 @@ graph TD
 | 行为描述 | 测试文件 (Test Anchor) | 覆盖率 |
 |----------|-----------------------|--------|
 | **备份文件存在性** | `test_backup_integrity.py` (Pending) | ⏳ Planned |
-| **Vault Unseal 流程** | [`test_vault_health.py`](../../e2e_regressions/tests/platform/secrets/test_vault_health.py) | ✅ Critical |
+| **Vault Unseal 流程** | [`test_vault_health.py`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/tests/platform/secrets/test_vault_health.py) | ✅ Critical |
 
 ---
 
 ## Used by
 
 - [docs/ssot/README.md](./README.md)
-- [docs/onboarding/README.md](../../docs/onboarding/README.md)
+- [docs/onboarding/README.md](../onboarding/README.md)

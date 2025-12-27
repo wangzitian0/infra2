@@ -61,4 +61,4 @@
 
 ## SSOT Reference
 
-- [bootstrap.compute.md](../ssot/bootstrap.compute.md#digger-orchestrator-自部署)
+- [ops.pipeline.md](../ssot/ops.pipeline.md)

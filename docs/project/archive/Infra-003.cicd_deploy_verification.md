@@ -328,6 +328,6 @@ TEST_PASSWORD       (可选) 密码
 
 ## 参考
 
-- [E2E 回归测试 SSOT](../ssot/ops.e2e-regressions.md)
-- [CI 流程文档](../ssot/ops.pipeline.md)
+- [E2E 回归测试 SSOT](../../ssot/ops.e2e-regressions.md)
+- [CI 流程文档](../../ssot/ops.pipeline.md)
 - [GitHub Actions 最佳实践](https://docs.github.com/en/actions/learn-github-actions)

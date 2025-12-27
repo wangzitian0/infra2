@@ -9,9 +9,9 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **Docs Workflow** | [`.github/workflows/docs-site.yml`](../../.github/workflows/docs-site.yml) | Pages 构建与发布 |
-| **MkDocs 配置** | [`docs/mkdocs.yml`](../../docs/mkdocs.yml) | 站点结构与导航 |
-| **依赖列表** | [`docs/requirements.txt`](../../docs/requirements.txt) | Python 依赖 |
+| **Docs Workflow** | [`.github/workflows/docs-site.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/docs-site.yml) | Pages 构建与发布 |
+| **MkDocs 配置** | [`docs/mkdocs.yml`](../mkdocs.yml) | 站点结构与导航 |
+| **依赖列表** | [`docs/requirements.txt`](../requirements.txt) | Python 依赖 |
 
 ---
 

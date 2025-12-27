@@ -13,7 +13,7 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **实例定义** | [`bootstrap/5.platform_pg.tf`](../../bootstrap/5.platform_pg.tf) | 数据库 Helm 配置 |
+| **实例定义** | [`bootstrap/5.platform_pg.tf`](https://github.com/wangzitian0/infra2/blob/main/bootstrap/5.platform_pg.tf) | 数据库 Helm 配置 |
 | **认证凭证** | **GitHub Secrets** | `TF_VAR_platform_pg_password` |
 | **存储路径** | `/data/postgres` | 宿主机持久化路径 |
 
@@ -69,11 +69,11 @@ graph TD
 
 | 行为描述 | 测试文件 (Test Anchor) | 覆盖率 |
 |----------|-----------------------|--------|
-| **DB 可用性验证** | [`test_platform_pg.py`](../../e2e_regressions/tests/bootstrap/storage_layer/test_platform_pg.py) | ✅ Critical |
+| **DB 可用性验证** | [`test_platform_pg.py`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/tests/bootstrap/storage_layer/test_platform_pg.py) | ✅ Critical |
 
 ---
 
 ## Used by
 
 - [docs/ssot/db.overview.md](./db.overview.md)
-- [bootstrap/README.md](../../bootstrap/README.md)
+- [bootstrap/README.md](https://github.com/wangzitian0/infra2/blob/main/bootstrap/README.md)

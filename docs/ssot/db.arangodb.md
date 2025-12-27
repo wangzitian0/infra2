@@ -11,7 +11,7 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **实例定义** | [`envs/data-shared/4.arangodb.tf`](../../envs/data-shared/4.arangodb.tf) | ArangoDB 部署配置 |
+| **实例定义** | [`envs/data-shared/4.arangodb.tf`](https://github.com/wangzitian0/infra2/blob/main/envs/data-shared/4.arangodb.tf) | ArangoDB 部署配置 |
 | **运行时密钥** | **Vault** (`secret/data/arangodb`) | root 密码与 JWT Secret |
 
 ---
@@ -56,7 +56,7 @@ graph LR
 
 | 行为描述 | 测试文件 (Test Anchor) | 覆盖率 |
 |----------|-----------------------|--------|
-| **ArangoDB 响应测试** | [`test_arangodb.py`](../../e2e_regressions/tests/data/test_arangodb.py) | ✅ Critical |
+| **ArangoDB 响应测试** | [`test_arangodb.py`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/tests/data/test_arangodb.py) | ✅ Critical |
 
 ---
 

@@ -57,7 +57,7 @@
 
 - [Project Portfolio](./project/README.md) - 进行中的任务与归档
 - [SSOT Index](./ssot/README.md) - 话题式技术参考
-- [AI 行为准则](../AGENTS.md) - 协作规范与边界
+- [AI 行为准则](https://github.com/wangzitian0/infra2/blob/main/AGENTS.md) - 协作规范与边界
 
 ---
 *Last updated: 2025-12-28*

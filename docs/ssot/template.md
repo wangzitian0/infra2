@@ -13,18 +13,18 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **代码定义** | `[path/to/file.tf](../../path/to/file)` | 架构与资源的声明源头 |
+| **代码定义** | `path/to/file.tf` | 架构与资源的声明源头 |
 | **运行时状态** | **Vault** (`secret/data/...`) | 密钥与敏感配置的运行时真理 |
-| **策略约束** | `[policy.rego](../../path/to/policy)` | 自动化的合规性检查 |
-| **环境变量** | `[env.ci](../../tools/envs/env.ci)` | 变量契约 |
+| **策略约束** | `path/to/policy.rego` | 自动化的合规性检查 |
+| **环境变量** | `tools/envs/env.ci` | 变量契约 |
 
 ### Code as SSOT 索引
 
 <!-- 关键：不要复制全部代码。列出关键逻辑的文件入口，让开发者去代码里看细节 -->
 
-- **核心逻辑实现**：参见 `[src/core/logic.py](../../src/core/logic.py)`
-- **Schema 定义**：参见 `[schema.graphql](../../libs/schema/schema.graphql)`
-- **默认配置值**：参见 `[variables.tf](../../variables.tf)` (搜索 `variable "xxx"`)
+- **核心逻辑实现**：参见 `src/core/logic.py`
+- **Schema 定义**：参见 `libs/schema/schema.graphql`
+- **默认配置值**：参见 `variables.tf` (搜索 `variable "xxx"`)
 
 ---
 
@@ -72,7 +72,7 @@ flowchart TB
 - **执行者**：DevOps 工程师 / 自动化 Pipeline
 - **步骤**：
     1. 触发轮换指令：`vault write -f secret/data/postgres/rotate`
-    2. 验证新密码生效：`[check_db.sh](../../tools/ops/check_db.sh)`
+    2. 验证新密码生效：`tools/ops/check_db.sh`
     3. 重启相关 Pod（如需）：`kubectl rollout restart deployment/myapp`
 
 ### SOP-002: [任务名称，如：紧急扩容]
@@ -93,9 +93,9 @@ flowchart TB
 
 | 行为描述 | 测试文件 (Test Anchor) | 覆盖率 |
 |----------|-----------------------|--------|
-| **核心功能验证** | `[test_auth_flow.py](../../e2e_regressions/tests/platform/auth/test_auth_flow.py)` | ✅ Critical |
-| **异常恢复验证** | `[test_recovery.py](../../e2e_regressions/tests/ops/recovery/test_recovery.py)` | ⚠️ Partial |
-| **配置合规性** | `[check_policy.rego](../../tools/checks/check_policy.rego)` | ✅ 100% |
+| **核心功能验证** | `e2e_regressions/tests/platform/auth/test_auth_flow.py` | ✅ Critical |
+| **异常恢复验证** | `e2e_regressions/tests/ops/recovery/test_recovery.py` | ⚠️ Partial |
+| **配置合规性** | `tools/checks/check_policy.rego` | ✅ 100% |
 
 **如何运行验证**：
 ```bash
@@ -110,11 +110,11 @@ pytest e2e_regressions/tests/platform/auth/ -v
 在其他文档（如 README 或设计文档）中引用 SSOT 时，请使用标准格式：
 
 - **引用整体架构**：
-  > 详见 [**Auth SSOT**](./path/to/platform.auth.md)。
+  > 详见 `docs/ssot/platform.auth.md`。
 - **引用特定 SOP**：
-  > 执行 [**SOP-001: 轮换密钥**](./path/to/platform.auth.md#sop-001-轮换数据库密码)。
+  > 执行 `docs/ssot/platform.auth.md#sop-001-轮换数据库密码`。
 - **引用设计约束**：
-  > 根据 [**Auth SSOT / Blacklist**](./path/to/platform.auth.md#禁止模式-blacklist)，禁止提交 .env 文件。
+  > 根据 `docs/ssot/platform.auth.md#禁止模式-blacklist`，禁止提交 .env 文件。
 
 ---
 

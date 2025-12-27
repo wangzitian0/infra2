@@ -13,14 +13,14 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **目录结构** | [`docs/ssot/core.dir.md`](./core.dir.md) | 物理文件布局 |
-| **层级定义** | [`.`](../../) (Root Directory) | Bootstrap, Platform, Envs |
-| **变量契约** | [`variables.tf`](../../variables.tf) | 全局变量定义 |
+| **目录结构** | [目录结构规范](#4-目录结构规范) | 物理文件布局 |
+| **层级定义** | [Repo Root](https://github.com/wangzitian0/infra2/tree/main) | Bootstrap, Platform, Envs |
+| **变量契约** | [`variables.tf`](https://github.com/wangzitian0/infra2/blob/main/variables.tf) | 全局变量定义 |
 
 ### Code as SSOT 索引
 
-- **全局变量**：参见 [`variables.tf`](../../variables.tf)
-- **环境定义**：参见 [`envs/README.md`](../../envs/README.md)
+- **全局变量**：参见 [`variables.tf`](https://github.com/wangzitian0/infra2/blob/main/variables.tf)
+- **环境定义**：参见 [`envs/README.md`](https://github.com/wangzitian0/infra2/blob/main/envs/README.md)
 
 ---
 
@@ -39,7 +39,7 @@ flowchart TB
     Platform -->|Provides SSO| Apps
 ```
 
-### 层级定义
+### 层级定义 {#层级定义}
 
 | 层级 | 目录 | 职责 | 部署份数 |
 |------|------|------|----------|
@@ -62,7 +62,7 @@ flowchart TB
 
 ---
 
-## 4. 目录结构规范
+## 4. 目录结构规范 {#4-目录结构规范}
 
 ### Bootstrap 层目录结构
 
@@ -156,7 +156,7 @@ bootstrap/
 - `redis-master.data-staging.svc.cluster.local`
 - `vault.platform.svc.cluster.local`
 
-### 域名规则
+### 域名规则 {#域名规则}
 
 
 | 环境 | 域名模式 | 示例 |
@@ -172,11 +172,11 @@ bootstrap/
 | 行为描述 | 测试文件 (Test Anchor) | 覆盖率 |
 |----------|-----------------------|--------|
 | **目录结构完整性** | `test_structure.py` (Pending) | ⏳ Planned |
-| **DNS 规则一致性** | [`test_network.py`](../../e2e_regressions/tests/bootstrap/network_layer/test_network.py) | ✅ Critical |
+| **DNS 规则一致性** | [`test_network.py`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/tests/bootstrap/network_layer/test_network.py) | ✅ Critical |
 
 ---
 
 ## Used by
 
 - [docs/ssot/README.md](./README.md)
-- [docs/README.md](../../docs/README.md)
+- [docs/README.md](../README.md)

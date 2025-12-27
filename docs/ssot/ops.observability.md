@@ -11,7 +11,7 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **SigNoz 部署** | [`platform/11.signoz.tf`](../../platform/11.signoz.tf) | 观测平台 Helm 定义 |
+| **SigNoz 部署** | [`platform/11.signoz.tf`](https://github.com/wangzitian0/infra2/blob/main/platform/11.signoz.tf) | 观测平台 Helm 定义 |
 | **存储后端** | **ClickHouse** (L3) | 所有的 Trace/Log/Metric 数据 |
 | **采集配置** | **OTel Collector** | 统一采集策略 |
 

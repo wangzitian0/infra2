@@ -11,7 +11,7 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **StorageClass** | [`bootstrap/4.storage.tf`](../../bootstrap/4.storage.tf) | K8s 存储类定义 |
+| **StorageClass** | [`bootstrap/4.storage.tf`](https://github.com/wangzitian0/infra2/blob/main/bootstrap/4.storage.tf) | K8s 存储类定义 |
 | **备份归档** | **Cloudflare R2** | 异地冷备 |
 | **本地快照** | **VPS `/data`** | 快速恢复快照 |
 
@@ -72,11 +72,11 @@
 
 | 行为描述 | 测试文件 (Test Anchor) | 覆盖率 |
 |----------|-----------------------|--------|
-| **StorageClass 定义** | [`test_storage.py`](../../e2e_regressions/tests/bootstrap/storage_layer/test_storage.py) | ✅ Critical |
+| **StorageClass 定义** | [`test_storage.py`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/tests/bootstrap/storage_layer/test_storage.py) | ✅ Critical |
 
 ---
 
 ## Used by
 
 - [docs/ssot/README.md](./README.md)
-- [bootstrap/README.md](../../bootstrap/README.md)
+- [bootstrap/README.md](https://github.com/wangzitian0/infra2/blob/main/bootstrap/README.md)

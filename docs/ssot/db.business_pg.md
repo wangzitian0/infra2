@@ -11,7 +11,7 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **实例定义** | [`envs/data-shared/1.postgres.tf`](../../envs/data-shared/1.postgres.tf) | 数据库集群定义 |
+| **实例定义** | [`envs/data-shared/1.postgres.tf`](https://github.com/wangzitian0/infra2/blob/main/envs/data-shared/1.postgres.tf) | 数据库集群定义 |
 | **运行时密钥** | **Vault** (`secret/data/postgres`) | 静态 Master 密码 |
 | **动态角色** | **Vault** (`database/creds/app-*`) | 动态生成的应用凭据 |
 
@@ -74,11 +74,11 @@ graph LR
 
 | 行为描述 | 测试文件 (Test Anchor) | 覆盖率 |
 |----------|-----------------------|--------|
-| **PG 集群健康状态** | [`test_postgresql.py`](../../e2e_regressions/tests/data/postgresql/test_postgresql.py) | ✅ Critical |
+| **PG 集群健康状态** | [`test_postgresql.py`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/tests/data/postgresql/test_postgresql.py) | ✅ Critical |
 
 ---
 
 ## Used by
 
 - [docs/ssot/db.overview.md](./db.overview.md)
-- [e2e_regressions/tests/data/postgresql/README.md](../../e2e_regressions/tests/data/postgresql/README.md)
+- [e2e_regressions/tests/data/postgresql/README.md](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/tests/data/postgresql/README.md)

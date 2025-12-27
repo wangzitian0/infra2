@@ -10,12 +10,12 @@
 
 | 文档类型 | 路径 | 适用场景 |
 |---------|------|---------|
-| **[开发者体验](../onboarding/)** | `docs/onboarding/` | **新手入门，快速上手** → 场景驱动教程 |
+| **[开发者体验](../onboarding/README.md)** | `docs/onboarding/` | **新手入门，快速上手** → 场景驱动教程 |
 | **SSOT（本目录）** | `docs/ssot/` | **查技术细节，理解原理** → 话题式参考 |
 | **Layer README** | 各目录 | **修改基础设施，了解设计** → 模块说明 |
 
 **建议使用方式**：
-- 先看 [开发者体验](../onboarding/) 快速上手
+- 先看 [开发者体验](../onboarding/README.md) 快速上手
 - 遇到问题查 **SSOT**（本目录）了解技术细节
 - 需要修改基础设施时看对应模块的 README
 
@@ -103,8 +103,8 @@ flowchart TB
 
 - **[开发者接入指南](../onboarding/README.md)** - 场景驱动的快速上手教程
 - **[文档中心](../README.md)** - 文档体系总入口
-- **[设计文档](../project/)** - Infra-* 项目文档
-- **[AI 行为准则](../../AGENTS.md)** - Claude 协作规范
+- **[设计文档](../project/README.md)** - Infra-* 项目文档
+- **[AI 行为准则](https://github.com/wangzitian0/infra2/blob/main/AGENTS.md)** - Claude 协作规范
 
 ---
 

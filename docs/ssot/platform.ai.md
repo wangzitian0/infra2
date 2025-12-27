@@ -19,8 +19,8 @@
 
 ### Code as SSOT 索引
 
-- **Vault 路径定义**：参见 [`platform/locals.tf`](../../platform/locals.tf) (AI 相关的 secret path)
-- **应用注入示例**：参见 [`apps/cms/deployment.yaml`](../../apps/cms/deployment.yaml) (搜索 `vault.hashicorp.com/agent-inject`)
+- **Vault 路径定义**：参见 [`platform/locals.tf`](https://github.com/wangzitian0/infra2/blob/main/platform/locals.tf) (AI 相关的 secret path)
+- **应用注入示例**：参见 [`apps/cms/deployment.yaml`](https://github.com/wangzitian0/infra2/blob/main/apps/cms/deployment.yaml) (搜索 `vault.hashicorp.com/agent-inject`)
 
 ---
 
@@ -102,4 +102,4 @@ flowchart TB
 ## Used by
 
 - [docs/ssot/README.md](./README.md)
-- [apps/README.md](../../apps/README.md)
+- [apps/README.md](https://github.com/wangzitian0/infra2/blob/main/apps/README.md)

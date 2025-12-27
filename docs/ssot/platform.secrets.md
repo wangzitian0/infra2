@@ -14,14 +14,14 @@
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
 | **Master Record** | **1Password** (`Infra-GHA-Secrets`) | 所有静态密钥的源头 |
-| **映射逻辑** | [`tools/secrets/ci_load_secrets.py`](../../tools/secrets/ci_load_secrets.py) | 将 GH Secrets 映射为 TF_VAR |
+| **映射逻辑** | [`tools/secrets/ci_load_secrets.py`](https://github.com/wangzitian0/infra2/blob/main/tools/secrets/ci_load_secrets.py) | 将 GH Secrets 映射为 TF_VAR |
 | **运行时注入** | **Vault** (`secret/data/...`) | 动态/业务密钥的运行时真理 |
 | **部署缓存** | **GitHub Secrets** | 仅用于 CI 运行，不应人工维护 |
 
 ### Code as SSOT 索引
 
-- **密钥映射字典**：参见 [`tools/secrets/ci_load_secrets.py`](../../tools/secrets/ci_load_secrets.py) (查看 `OP_CONTRACT` 和 `MAPPING`)
-- **L1 密钥注入**：参见 [`bootstrap/variables.tf`](../../bootstrap/variables.tf)
+- **密钥映射字典**：参见 [`tools/secrets/ci_load_secrets.py`](https://github.com/wangzitian0/infra2/blob/main/tools/secrets/ci_load_secrets.py) (查看 `OP_CONTRACT` 和 `MAPPING`)
+- **L1 密钥注入**：参见 [`bootstrap/variables.tf`](https://github.com/wangzitian0/infra2/blob/main/bootstrap/variables.tf)
 
 ---
 
@@ -97,8 +97,8 @@ graph LR
 
 | 行为描述 | 测试文件 (Test Anchor) | 覆盖率 |
 |----------|-----------------------|--------|
-| **密钥加载器逻辑** | [`test_secrets_loader.py`](../../tools/secrets/tests/test_secrets_loader.py) | ✅ Unit Test |
-| **Vault 读写验证** | [`test_secrets.py`](../../e2e_regressions/tests/platform/secrets/test_secrets.py) | ✅ Critical |
+| **密钥加载器逻辑** | [`test_secrets_loader.py`](https://github.com/wangzitian0/infra2/blob/main/tools/secrets/tests/test_secrets_loader.py) | ✅ Unit Test |
+| **Vault 读写验证** | [`test_secrets.py`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/tests/platform/secrets/test_secrets.py) | ✅ Critical |
 
 **如何运行验证**:
 ```bash
@@ -111,5 +111,5 @@ pytest e2e_regressions/tests/platform/secrets/ -v
 ## Used by
 
 - [docs/ssot/README.md](./README.md)
-- [docs/onboarding/04.secrets.md](../../docs/onboarding/04.secrets.md)
-- [bootstrap/README.md](../../bootstrap/README.md)
+- [docs/onboarding/04.secrets.md](../onboarding/04.secrets.md)
+- [bootstrap/README.md](https://github.com/wangzitian0/infra2/blob/main/bootstrap/README.md)

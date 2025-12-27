@@ -27,9 +27,9 @@ choices for k3s, Vault, and platform services, with a path to five environments.
 > **这是最终的全景架构设计**，整合了 BRN-004（Staging MVP）、BRN-007（五环境）以及所有基础设施、平台、观测等选型。
 
 **关联文档 (Apps Submodule)**：
-- [应用架构 (Apps Arch)](../../apps/docs/arch.md)
-- [应用文档索引 (Apps Index)](../../apps/docs/index.md)
-- [项目规格 (Specs)](../../apps/docs/specs)
+- [应用架构 (Apps Arch)](https://github.com/wangzitian0/infra2/blob/main/apps/docs/arch.md)
+- [应用文档索引 (Apps Index)](https://github.com/wangzitian0/infra2/blob/main/apps/docs/index.md)
+- [项目规格 (Specs)](https://github.com/wangzitian0/infra2/tree/main/apps/docs/specs)
 
 ---
 

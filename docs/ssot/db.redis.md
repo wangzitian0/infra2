@@ -11,7 +11,7 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **实例定义** | [`envs/data-shared/2.redis.tf`](../../envs/data-shared/2.redis.tf) | Redis Helm 配置 |
+| **实例定义** | [`envs/data-shared/2.redis.tf`](https://github.com/wangzitian0/infra2/blob/main/envs/data-shared/2.redis.tf) | Redis Helm 配置 |
 | **运行时密钥** | **Vault** (`secret/data/redis`) | Redis AUTH 密码 |
 
 ---
@@ -58,7 +58,7 @@ flowchart LR
 
 | 行为描述 | 测试文件 (Test Anchor) | 覆盖率 |
 |----------|-----------------------|--------|
-| **Redis 读写测试** | [`test_redis.py`](../../e2e_regressions/tests/data/redis/test_redis.py) | ✅ Critical |
+| **Redis 读写测试** | [`test_redis.py`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/tests/data/redis/test_redis.py) | ✅ Critical |
 
 ---
 
