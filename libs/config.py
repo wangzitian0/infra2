@@ -1,38 +1,50 @@
-"""Three-tier configuration loader"""
+"""Three-tier configuration loader
+
+Structure:
+- Project: .env (root)
+- Environment: .env.<env> (root)
+- Service: {project}/.env.<env> (project directory)
+
+Priority: service > environment > project
+"""
 from pathlib import Path
 from dotenv import dotenv_values
 from typing import Optional, Dict
 
 
 class Config:
-    """Load config from project/environment/service levels. Priority: service > env > project"""
+    """Load config from project/environment/service levels."""
     
-    def __init__(self, project: str = 'platform', env: str = 'prod', service: Optional[str] = None):
+    def __init__(self, project: str, env: str = 'production', service: Optional[str] = None):
+        """
+        Args:
+            project: bootstrap, platform, e2e_regression, or tools
+            env: production, staging, or test_xxx
+            service: Deprecated, kept for compatibility (ignored)
+        """
         self.project = project
         self.env = env
-        self.service = service
         self.root = Path(__file__).parent.parent
         
         self._project = self._load('.env')
-        self._env = self._load(f'.env.{env}')
-        self._service = self._load_service() if service else {}
+        self._environment = self._load(f'.env.{env}')
+        self._service = self._load_service()
     
     def _load(self, filename: str) -> Dict[str, str]:
         f = self.root / filename
         return dict(dotenv_values(f)) if f.exists() else {}
     
     def _load_service(self) -> Dict[str, str]:
-        for d in (self.root / self.project).iterdir():
-            if d.is_dir() and (d.name == self.service or d.name.endswith(f'.{self.service}')):
-                f = d / f'.env.{self.env}.local'
-                return dict(dotenv_values(f)) if f.exists() else {}
-        return {}
+        """Load service-level config from {project}/.env.<env>"""
+        f = self.root / self.project / f'.env.{self.env}'
+        return dict(dotenv_values(f)) if f.exists() else {}
     
     def get(self, key: str, level: Optional[str] = None, default: Optional[str] = None) -> Optional[str]:
         if level == 'project': return self._project.get(key, default)
-        if level == 'environment': return self._env.get(key, default)
+        if level == 'environment': return self._environment.get(key, default)
         if level == 'service': return self._service.get(key, default)
-        return self._service.get(key) or self._env.get(key) or self._project.get(key) or default
+        # Priority: service > environment > project
+        return self._service.get(key) or self._environment.get(key) or self._project.get(key) or default
     
     def all(self) -> Dict[str, str]:
-        return {**self._project, **self._env, **self._service}
+        return {**self._project, **self._environment, **self._service}

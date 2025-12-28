@@ -1,133 +1,126 @@
 """
 1Password Connect deployment automation tasks
+Uses libs/ system for consistent environment and console utilities.
+Bootstrap layer uses 1Password for secrets, not Vault.
 """
-import os
 from invoke import task
+from libs.common import get_env, validate_env
+from libs.console import header, success, error, warning, prompt_action, run_with_status
 
 
-# Environment variables
-VPS_HOST = os.environ.get("VPS_HOST")
-INTERNAL_DOMAIN = os.environ.get("INTERNAL_DOMAIN")
+class OnePasswordDeployer:
+    """1Password Connect deployer using libs/ system"""
+    
+    service = "1password"
+    compose_path = "bootstrap/04.1password/compose.yaml"
+    data_path = "/data/bootstrap/1password"
+    
+    @classmethod
+    def env(cls):
+        return get_env()
+    
+    @classmethod
+    def pre_compose(cls, c) -> bool:
+        """Prepare data directory and upload credentials"""
+        if missing := validate_env():
+            error(f"Missing: {', '.join(missing)}")
+            return False
+        
+        e = cls.env()
+        header("1Password pre_compose", "Preparing")
+        
+        # Create directory
+        run_with_status(c, f"ssh root@{e['VPS_HOST']} 'mkdir -p {cls.data_path}'", "Create directory")
+        run_with_status(c, f"ssh root@{e['VPS_HOST']} 'chown -R 1000:1000 {cls.data_path}'", "Set ownership")
+        run_with_status(c, f"ssh root@{e['VPS_HOST']} 'chmod 777 {cls.data_path}'", "Set permissions")
+        
+        # Upload credentials from 1Password
+        header("1Password credentials", "Uploading from 1Password CLI")
+        cmd = f"op document get 'bootstrap/1password/VPS-01 Credentials File' --vault Infra2 | ssh root@{e['VPS_HOST']} 'cat > {cls.data_path}/1password-credentials.json && chown 1000:1000 {cls.data_path}/1password-credentials.json'"
+        
+        result = c.run(cmd, warn=True)
+        if not result.ok:
+            error("Upload failed", "Ensure 1Password CLI is configured")
+            return False
+        
+        success("pre_compose complete")
+        return True
+    
+    @classmethod
+    def composing(cls, c):
+        """Deploy in Dokploy"""
+        e = cls.env()
+        header("1Password composing", "Deploy in Dokploy")
+        prompt_action("Deploy in Dokploy", [
+            f"Access: https://cloud.{e['INTERNAL_DOMAIN']}",
+            "Project: bootstrap",
+            f"Compose: {cls.compose_path}",
+            "Click Deploy"
+        ])
+        success("composing complete")
+    
+    @classmethod
+    def post_compose(cls, c) -> bool:
+        """Verify deployment"""
+        e = cls.env()
+        header("1Password post_compose", "Verifying")
+        
+        result = c.run(f"curl -s https://op.{e['INTERNAL_DOMAIN']}/health", warn=True)
+        if result.ok and "1Password Connect" in result.stdout:
+            success("1Password Connect is healthy")
+            return True
+        warning("Service may need a few minutes to start")
+        return False
 
 
 @task
 def prepare(c):
     """Prepare 1Password data directory"""
-    print("\n📁 Preparing 1Password data directory...")
-    
-    # Create directory
-    c.run(f"ssh root@{VPS_HOST} 'mkdir -p /data/bootstrap/1password'")
-    
-    # Set permissions (allow container to write database files)
-    c.run(f"ssh root@{VPS_HOST} 'chown -R 1000:1000 /data/bootstrap/1password'")
-    c.run(f"ssh root@{VPS_HOST} 'chmod 777 /data/bootstrap/1password'")
-    
-    # Verify
-    result = c.run(f"ssh root@{VPS_HOST} 'ls -la /data/bootstrap/1password'", hide=True)
-    print(result.stdout)
-    print("✅ Directory preparation complete")
+    OnePasswordDeployer.pre_compose(c)
 
 
 @task
 def upload_credentials(c):
     """Upload 1Password credentials file"""
-    print("\n📤 Uploading credentials file...")
-    
-    # Read credentials from 1Password CLI and upload
-    print("Reading credentials from 1Password Vault...")
-    cmd = f"op document get 'bootstrap/1password/VPS-01 Credentials File' --vault Infra2 | ssh root@{VPS_HOST} 'cat > /data/bootstrap/1password/1password-credentials.json && chown 1000:1000 /data/bootstrap/1password/1password-credentials.json'"
-    
+    e = get_env()
+    header("1Password credentials", "Uploading")
+    cmd = f"op document get 'bootstrap/1password/VPS-01 Credentials File' --vault Infra2 | ssh root@{e['VPS_HOST']} 'cat > /data/bootstrap/1password/1password-credentials.json && chown 1000:1000 /data/bootstrap/1password/1password-credentials.json'"
     result = c.run(cmd, warn=True)
-    if not result.ok:
-        print("❌ Upload failed, please ensure:")
-        print("  1. 1Password CLI (op) is installed")
-        print("  2. Logged in: eval $(op signin)")
-        print("  3. 'VPS-01 Credentials File' exists in Vault 'Infra2'")
-        raise Exception("Credentials upload failed")
-    
-    # Verify
-    result = c.run(f"ssh root@{VPS_HOST} 'ls -lh /data/bootstrap/1password/1password-credentials.json'")
-    print("✅ Credentials uploaded")
+    if result.ok:
+        success("Credentials uploaded")
+    else:
+        error("Upload failed")
 
 
-@task(pre=[prepare, upload_credentials])
+@task(pre=[prepare])
 def deploy(c):
     """Deploy 1Password Connect to Dokploy"""
-    print("\n🚀 Deploying 1Password Connect...")
-    print("\n" + "="*60)
-    print("⏸️ Please complete the following in Dokploy UI:")
-    print("="*60)
-    print(f"1. Access: https://cloud.{INTERNAL_DOMAIN}")
-    print("2. Create Project: bootstrap (if not exists)")
-    print("3. Create Docker Compose App:")
-    print("   - Name: 1password-connect")
-    print("   - Repository: GitHub → wangzitian0/infra2")
-    print("   - Branch: main")
-    print("   - Compose Path: bootstrap/04.1password/compose.yaml")
-    print("4. Click Deploy")
-    print("5. Wait for deployment to complete (watch logs)")
-    print("="*60)
-    
-    input("\n✋ Press Enter to continue after completion...")
-    
-    # Verify deployment
-    print("\n🔍 Verifying 1Password Connect service...")
-    result = c.run(f"curl -s https://op.{INTERNAL_DOMAIN}/health", warn=True)
-    if result.ok and "1Password Connect" in result.stdout:
-        print("✅ 1Password Connect service is healthy")
-        print(result.stdout)
-    else:
-        print("⚠️ Service temporarily unavailable (may need to wait a few minutes)")
+    OnePasswordDeployer.composing(c)
 
 
 @task(pre=[deploy])
 def verify(c):
     """Verify 1Password Connect functionality"""
-    print("\n🔍 Verifying 1Password Connect...")
-    
-    # Health check
-    print("1. Health check:")
-    result = c.run(f"curl -s https://op.{INTERNAL_DOMAIN}/health", warn=True)
-    if result.ok:
-        print(result.stdout)
-    
-    # Test reading secrets (optional)
-    print("\n2. Test reading secrets (requires Access Token):")
-    print("   Run the following command to test:")
-    print(f"   TOKEN=$(op item get 'VPS-01 Access Token: own_service' --vault Infra2 --fields credential --reveal)")
-    print(f"   curl -H \"Authorization: Bearer $TOKEN\" https://op.{INTERNAL_DOMAIN}/v1/vaults")
+    OnePasswordDeployer.post_compose(c)
 
 
 @task
 def status(c):
     """Check 1Password Connect status"""
-    print(f"\n🔍 Checking 1Password Connect status...")
-    
-    # Check HTTP
-    c.run(f"curl -s https://op.{INTERNAL_DOMAIN}/health", warn=True)
-    
-    # Check container status
-    print(f"\nChecking container status:")
-    c.run(f"ssh root@{VPS_HOST} 'docker ps | grep op-connect'", warn=True)
-    
-    # Check data directory
-    print(f"\nChecking data directory:")
-    c.run(f"ssh root@{VPS_HOST} 'ls -lh /data/bootstrap/1password/'", warn=True)
+    e = get_env()
+    header("1Password status", "Checking")
+    c.run(f"curl -s https://op.{e['INTERNAL_DOMAIN']}/health", warn=True)
+    c.run(f"ssh root@{e['VPS_HOST']} 'docker ps | grep op-connect'", warn=True)
 
 
 @task
 def fix_permissions(c):
     """Fix database permission issues"""
-    print("\n🔧 Fixing permission issues...")
-    c.run(f"ssh root@{VPS_HOST} 'chmod 777 /data/bootstrap/1password'")
-    print("✅ Permissions fixed to 777")
-    print("Note: Recommend redeploying the app in Dokploy.")
+    e = get_env()
+    run_with_status(c, f"ssh root@{e['VPS_HOST']} 'chmod 777 /data/bootstrap/1password'", "Fix permissions")
 
 
-@task(pre=[prepare, upload_credentials, deploy, verify])
+@task(pre=[prepare, deploy, verify])
 def setup(c):
     """Complete 1Password Connect setup flow"""
-    print("\n✅ 1Password Connect setup complete!")
-    print(f"\nAccess URL: https://op.{INTERNAL_DOMAIN}")
-    print("\nRemember to update SSOT version tracking table:")
-    print("docs/ssot/bootstrap.nodep.md")
+    success("1Password Connect setup complete!")

@@ -12,7 +12,7 @@ def get_env():
         "VPS_HOST": os.environ.get("VPS_HOST"),
         "INTERNAL_DOMAIN": os.environ.get("INTERNAL_DOMAIN"),
         "PROJECT": os.environ.get("PROJECT", "platform"),
-        "ENV": os.environ.get("DEPLOY_ENV", "prod"),
+        "ENV": os.environ.get("DEPLOY_ENV", "production"),
     }
 
 

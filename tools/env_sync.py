@@ -1,44 +1,77 @@
-"""Environment variable sync tools"""
+"""Environment variable sync tools
+
+Three-tier structure:
+- Project: .env (root) -> Vault: secret/{project}/
+- Environment: .env.<env> (root) -> Vault: secret/{project}/{env}/
+- Service: {project}/.env.<env> -> Vault: secret/{project}/{env}/service/
+"""
 from invoke import task
 import json
 import os
 from pathlib import Path
-from dotenv import dotenv_values
+from dotenv import dotenv_values, load_dotenv
+
+# Load env for INTERNAL_DOMAIN
+load_dotenv()
+load_dotenv('.env.local', override=True)
+
+VALID_PROJECTS = ['bootstrap', 'platform', 'e2e_regression', 'tools']
+VALID_ENVS = ['production', 'staging']
 
 
-def _resolve_path(root, level, project, env, service):
+def _vault_cmd(c, cmd: str, **kwargs):
+    """Run vault command with correct VAULT_ADDR"""
+    domain = os.environ.get("INTERNAL_DOMAIN", "")
+    vault_addr = f"https://vault.{domain}" if domain else ""
+    if not vault_addr:
+        print("⚠️ INTERNAL_DOMAIN not set, using default VAULT_ADDR")
+        return c.run(cmd, **kwargs)
+    return c.run(f"VAULT_ADDR={vault_addr} {cmd}", **kwargs)
+
+
+def _validate_params(project, env):
+    """Validate project and env parameters"""
+    if project not in VALID_PROJECTS:
+        print(f"❌ Invalid project: {project}. Must be one of: {VALID_PROJECTS}")
+        return False
+    if not env.startswith('test_') and env not in VALID_ENVS:
+        print(f"❌ Invalid env: {env}. Must be one of: {VALID_ENVS} or test_xxx")
+        return False
+    return True
+
+
+def _resolve_path(root, level, project, env):
     """Resolve vault path and local file path for a given level"""
     if level == 'project':
         return project, root / '.env'
     elif level == 'environment':
         return f"{project}/{env}", root / f'.env.{env}'
     elif level == 'service':
-        if not service:
-            return None, None
-        # Find service directory
-        svc_dir = None
-        for d in (root / project).iterdir():
-            if d.is_dir() and (d.name == service or d.name.endswith(f'.{service}')):
-                svc_dir = d
-                break
-        if not svc_dir:
-            return None, None
-        return f"{project}/{env}/{service}", svc_dir / f'.env.{env}.local'
+        return f"{project}/{env}/service", root / project / f'.env.{env}'
     return None, None
 
 
 @task
-def pull(c, level, project='platform', env='prod', service=None):
-    """Pull from Vault to local .env"""
+def pull(c, project, env='production', level='service'):
+    """Pull from Vault to local .env
+    
+    Args:
+        project: bootstrap, platform, e2e_regression, or tools
+        env: production, staging, or test_xxx
+        level: project, environment, or service
+    """
+    if not _validate_params(project, env):
+        return
+    
     root = Path(__file__).parent.parent
-    vault_path, local_file = _resolve_path(root, level, project, env, service)
+    vault_path, local_file = _resolve_path(root, level, project, env)
     
     if not vault_path:
-        print(f"❌ Invalid level or missing service")
+        print(f"❌ Invalid level: {level}")
         return
     
     print(f"📥 Pulling {vault_path} → {local_file}")
-    result = c.run(f"vault kv get -format=json secret/{vault_path}", hide=True, warn=True)
+    result = _vault_cmd(c, f"vault kv get -format=json secret/{vault_path}", hide=True, warn=True)
     if not result.ok:
         print(f"❌ Failed to read from Vault")
         return
@@ -52,13 +85,22 @@ def pull(c, level, project='platform', env='prod', service=None):
 
 
 @task
-def push(c, level, project='platform', env='prod', service=None):
-    """Push local .env to Vault"""
+def push(c, project, env='production', level='service'):
+    """Push local .env to Vault
+    
+    Args:
+        project: bootstrap, platform, e2e_regression, or tools
+        env: production, staging, or test_xxx
+        level: project, environment, or service
+    """
+    if not _validate_params(project, env):
+        return
+    
     root = Path(__file__).parent.parent
-    vault_path, local_file = _resolve_path(root, level, project, env, service)
+    vault_path, local_file = _resolve_path(root, level, project, env)
     
     if not vault_path:
-        print(f"❌ Invalid level or missing service")
+        print(f"❌ Invalid level: {level}")
         return
     
     if not local_file.exists():
@@ -72,7 +114,7 @@ def push(c, level, project='platform', env='prod', service=None):
     
     kv_pairs = " ".join(f"{k}={v}" for k, v in data.items())
     print(f"📤 Pushing {local_file} → {vault_path}")
-    result = c.run(f"vault kv put secret/{vault_path} {kv_pairs}", warn=True, hide=True)
+    result = _vault_cmd(c, f"vault kv put secret/{vault_path} {kv_pairs}", warn=True, hide=True)
     if result.ok:
         print(f"✅ Pushed {len(data)} vars")
     else:
@@ -80,14 +122,20 @@ def push(c, level, project='platform', env='prod', service=None):
 
 
 @task
-def status(c, project='platform', env='prod', service=None):
-    """Show env var status"""
+def status(c, project, env='production'):
+    """Show env var status
+    
+    Args:
+        project: bootstrap, platform, e2e_regression, or tools
+        env: production, staging, or test_xxx
+    """
+    if not _validate_params(project, env):
+        return
+    
     root = Path(__file__).parent.parent
-    print("Configuration:")
+    print(f"Configuration for {project}/{env}:")
     
     for lvl in ['project', 'environment', 'service']:
-        if lvl == 'service' and not service:
-            continue
-        vault_path, local_file = _resolve_path(root, lvl, project, env, service)
+        vault_path, local_file = _resolve_path(root, lvl, project, env)
         exists = "✅" if local_file and local_file.exists() else "❌"
         print(f"  {lvl}: {exists} {local_file or 'N/A'}")

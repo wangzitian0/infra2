@@ -1,91 +1,61 @@
 # Environment Variable Management
 
-本文档描述三层环境变量管理系统的使用方法。
+三层环境变量管理系统。
 
 ## 三层结构
 
-| 层级 | 本地文件 | Vault 路径 | Dokploy |
-|------|----------|------------|---------|
-| Project | `.env` | `platform/` | Project Variables |
-| Environment | `.env.{env}` | `platform/prod/` | Environment Variables |
-| Service | `{service}/.env.{env}.local` | `platform/prod/postgres/` | Service Variables |
+| 层级 | 开发机 | Vault | Dokploy |
+|------|--------|-------|---------|
+| **Project** | `.env` | `secret/{project}/` | Project Variables |
+| **Environment** | `.env.<env>` | `secret/{project}/{env}/` | Environment Variables |
+| **Service** | `{project}/.env.<env>` | `secret/{project}/{env}/service/` | Service Variables |
 
-## 优先级
-
-`service > environment > project`
+优先级：`service > environment > project`
 
 ## 文件结构
 
 ```
 infra2/
-├── .env                      # Project (INTERNAL_DOMAIN, VPS_HOST)
-├── .env.prod                 # Prod environment
-├── .env.staging              # Staging environment
-└── platform/
-    ├── 01.postgres/
-    │   ├── .env.example      # Key 模板
-    │   └── .env.prod.local   # Prod 值
-    ├── 02.redis/
-    │   └── ...
-    └── 10.authentik/
-        └── ...
+├── .env                    # Project 级 (INTERNAL_DOMAIN, VPS_HOST)
+├── .env.production         # Environment 级 (production)
+├── .env.staging            # Environment 级 (staging)
+├── bootstrap/
+│   └── .env.production     # bootstrap 的 service 级
+├── platform/
+│   └── .env.production     # platform 的 service 级
+└── e2e_regression/
+    └── .env.production     # e2e 的 service 级
 ```
 
 ## Vault 路径
 
 ```
 secret/data/
-└── platform/
-    ├── INTERNAL_DOMAIN       # project 级
-    ├── prod/
-    │   ├── LOG_LEVEL         # environment 级
-    │   ├── postgres/
-    │   │   └── root_password # service 级
-    │   ├── redis/
-    │   │   └── password
-    │   └── authentik/
-    │       └── secret_key
-    └── staging/
-        └── ...
+└── platform/               # project
+    └── production/         # environment
+        └── service/        # service
+            └── POSTGRES_PASSWORD
 ```
 
 ## 命令
 
 ```bash
 # 查看配置
-invoke env.status
-invoke env.status --service=postgres
+invoke env.status --project=platform
 
 # 本地 → Vault
-invoke env.push --level=service --env=prod --service=postgres
+invoke env.push --project=platform --level=service
 
 # Vault → 本地
-invoke env.pull --level=service --env=prod --service=postgres
+invoke env.pull --project=platform --level=service
 ```
 
 ## Python 使用
 
 ```python
-from tools.config import Config
+from libs.config import Config
 
-config = Config(project='platform', env='prod', service='postgres')
-
-# 自动优先级查找
+config = Config(project='platform', env='production')
 password = config.get('POSTGRES_PASSWORD')
-
-# 指定层级
 domain = config.get('INTERNAL_DOMAIN', level='project')
-```
-
-## 部署流程
-
-```bash
-# 1. 部署 postgres (生成密码存入 Vault)
-invoke postgres.setup
-
-# 2. 部署 redis
-invoke redis.setup
-
-# 3. 部署 authentik (从 Vault 读取 pg/redis 密码)
-invoke authentik.setup
 ```

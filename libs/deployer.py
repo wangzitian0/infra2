@@ -43,9 +43,16 @@ class Deployer:
         return True
     
     @classmethod
+    def _vault_cmd(cls, c, cmd: str, **kwargs):
+        """Run vault command with correct VAULT_ADDR"""
+        e = cls.env()
+        vault_addr = f"https://vault.{e['INTERNAL_DOMAIN']}"
+        return c.run(f"VAULT_ADDR={vault_addr} {cmd}", **kwargs)
+    
+    @classmethod
     def store_secret(cls, c, key: str, value: str) -> bool:
         """Store secret in Vault with error handling"""
-        result = c.run(f"vault kv put secret/{cls.vault_path()} {key}={value}", warn=True, hide=True)
+        result = cls._vault_cmd(c, f"vault kv put secret/{cls.vault_path()} {key}={value}", warn=True, hide=True)
         if not result.ok:
             error(f"Failed to store {key} in Vault", result.stderr)
             return False
@@ -55,7 +62,7 @@ class Deployer:
     @classmethod
     def read_secret(cls, c, path: str, field: str) -> str | None:
         """Read secret from Vault"""
-        result = c.run(f"vault kv get -field={field} secret/{path}", warn=True, hide=True)
+        result = cls._vault_cmd(c, f"vault kv get -field={field} secret/{path}", warn=True, hide=True)
         return result.stdout.strip() if result.ok else None
     
     @classmethod
