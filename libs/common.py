@@ -1,12 +1,25 @@
 """
 Common utilities shared across deploy scripts
 """
+from __future__ import annotations
 import os
 import secrets
 import string
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from invoke import Context
 
 
-def get_env():
+# Magic strings - extracted as constants
+CONTAINER_NAMES = {
+    "postgres": "platform-postgres",
+    "redis": "platform-redis",
+    "authentik": "authentik-server",
+}
+
+
+def get_env() -> dict[str, str | None]:
     """Get environment config (lazy evaluation)"""
     return {
         "VPS_HOST": os.environ.get("VPS_HOST"),
@@ -16,7 +29,7 @@ def get_env():
     }
 
 
-def validate_env():
+def validate_env() -> list[str]:
     """Validate required environment variables, returns list of missing vars"""
     env = get_env()
     missing = []
@@ -27,15 +40,15 @@ def validate_env():
     return missing
 
 
-def generate_password(length=24):
+def generate_password(length: int = 24) -> str:
     """Generate a random password"""
     alphabet = string.ascii_letters + string.digits
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 
-def check_docker_service(c, container: str, health_cmd: str, service_name: str) -> dict:
+def check_docker_service(c: "Context", container: str, health_cmd: str, service_name: str) -> dict:
     """
-    Check if a Docker service is healthy (Fix #4 - DRY)
+    Check if a Docker service is healthy
     
     Args:
         c: invoke context
@@ -46,12 +59,11 @@ def check_docker_service(c, container: str, health_cmd: str, service_name: str) 
     Returns:
         {is_ready: bool, details: str}
     """
-    from tools.console import success, error
+    from libs.console import success, error
     env = get_env()
     result = c.run(f"ssh root@{env['VPS_HOST']} 'docker exec {container} {health_cmd}'", warn=True, hide=True)
     if result.ok:
         success(f"{service_name}: ready")
         return {"is_ready": True, "details": "Healthy"}
-    else:
-        error(f"{service_name}: not ready")
-        return {"is_ready": False, "details": "Unhealthy"}
+    error(f"{service_name}: not ready")
+    return {"is_ready": False, "details": "Unhealthy"}

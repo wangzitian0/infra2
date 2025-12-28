@@ -1,11 +1,5 @@
-"""PostgreSQL deployment - DRY version"""
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
-from invoke import task
-from libs.deployer import Deployer
-from libs.console import env_vars, success
+"""PostgreSQL deployment using make_tasks() for DRY"""
+from libs.deployer import Deployer, make_tasks
 
 
 class PostgresDeployer(Deployer):
@@ -17,22 +11,22 @@ class PostgresDeployer(Deployer):
     env_var_name = "POSTGRES_PASSWORD"
 
 
-@task
-def pre_compose(c):
-    return PostgresDeployer.pre_compose(c)
+# Import shared_tasks dynamically to avoid relative import issues
+def _get_shared_tasks():
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location(
+        "shared_tasks",
+        Path(__file__).parent / "shared_tasks.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-@task
-def composing(c):
-    PostgresDeployer.composing(c)
-
-
-@task
-def post_compose(c):
-    from . import shared_tasks
-    return PostgresDeployer.post_compose(c, shared_tasks)
-
-
-@task(pre=[pre_compose, composing, post_compose])
-def setup(c):
-    success(f"{PostgresDeployer.service} setup complete!")
+# Generate tasks using make_tasks() - DRY
+_tasks = make_tasks(PostgresDeployer, _get_shared_tasks())
+pre_compose = _tasks["pre_compose"]
+composing = _tasks["composing"]
+post_compose = _tasks["post_compose"]
+setup = _tasks["setup"]
