@@ -1,15 +1,16 @@
 """Three-tier configuration loader
 
-Structure:
-- Project: .env (root)
-- Environment: .env.<env> (root)
-- Service: {project}/.env.<env> (project directory)
+Structure (matches Dokploy):
+- Project: {project}/.env
+- Environment: {project}/.env.{env}
+- Service: {project}/{service}/.env.{env}
 
 Priority: service > environment > project
 """
+from __future__ import annotations
 from pathlib import Path
 from dotenv import dotenv_values
-from typing import Optional, Dict
+from typing import Optional
 
 
 class Config:
@@ -20,34 +21,36 @@ class Config:
         Args:
             project: bootstrap, platform, e2e_regression, or tools
             env: production, staging, or test_xxx
-            service: Deprecated - will be removed in future version
+            service: Service name (e.g., postgres, redis)
         """
-        if service is not None:
-            import warnings
-            warnings.warn("service parameter is deprecated and ignored", DeprecationWarning, stacklevel=2)
         self.project = project
         self.env = env
+        self.service = service
         self.root = Path(__file__).parent.parent
+        self.project_dir = self.root / project
         
-        self._project = self._load('.env')
-        self._environment = self._load(f'.env.{env}')
-        self._service = self._load_service()
+        self._project_vars = self._load(self.project_dir / '.env')
+        self._env_vars = self._load(self.project_dir / f'.env.{env}')
+        self._service_vars = self._load_service() if service else {}
     
-    def _load(self, filename: str) -> Dict[str, str]:
-        f = self.root / filename
-        return dict(dotenv_values(f)) if f.exists() else {}
+    def _load(self, filepath: Path) -> dict[str, str]:
+        return dict(dotenv_values(filepath)) if filepath.exists() else {}
     
-    def _load_service(self) -> Dict[str, str]:
-        """Load service-level config from {project}/.env.<env>"""
-        f = self.root / self.project / f'.env.{self.env}'
-        return dict(dotenv_values(f)) if f.exists() else {}
+    def _load_service(self) -> dict[str, str]:
+        """Load service-level config from {project}/{service}/.env.{env}"""
+        if not self.project_dir.exists():
+            return {}
+        for d in self.project_dir.iterdir():
+            if d.is_dir() and (d.name == self.service or d.name.endswith(f'.{self.service}')):
+                return self._load(d / f'.env.{self.env}')
+        return {}
     
     def get(self, key: str, level: Optional[str] = None, default: Optional[str] = None) -> Optional[str]:
-        if level == 'project': return self._project.get(key, default)
-        if level == 'environment': return self._environment.get(key, default)
-        if level == 'service': return self._service.get(key, default)
+        if level == 'project': return self._project_vars.get(key, default)
+        if level == 'environment': return self._env_vars.get(key, default)
+        if level == 'service': return self._service_vars.get(key, default)
         # Priority: service > environment > project
-        return self._service.get(key) or self._environment.get(key) or self._project.get(key) or default
+        return self._service_vars.get(key) or self._env_vars.get(key) or self._project_vars.get(key) or default
     
-    def all(self) -> Dict[str, str]:
-        return {**self._project, **self._environment, **self._service}
+    def all(self) -> dict[str, str]:
+        return {**self._project_vars, **self._env_vars, **self._service_vars}
