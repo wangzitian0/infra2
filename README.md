@@ -36,10 +36,13 @@ infra2/
 
 | 层级 | 文件位置 | 说明 |
 |------|----------|------|
-| **Global** | `.env` | 全局 (VPS_HOST, INTERNAL_DOMAIN) |
 | **Project** | `{project}/.env` | 项目级 |
 | **Environment** | `{project}/.env.{env}` | 环境级 (production/staging) |
 | **Service** | `{project}/{service}/.env.{env}` | 服务级 |
+
+**SSOT 按项目区分**：
+- `bootstrap`: 1Password 是环境变量和密钥的 SSOT
+- `platform`: Dokploy 是环境变量的 SSOT，Vault 是密钥的 SSOT
 
 > 详见 [docs/env_management.md](docs/env_management.md)
 
