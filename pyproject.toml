@@ -15,6 +15,7 @@ dependencies = [
     "pyyaml>=6.0.0",
     # Automation
     "invoke>=2.2.0",
+    "rich>=14.2.0",
 ]
 
 [tool.pytest.ini_options]

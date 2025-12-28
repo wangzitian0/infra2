@@ -1,62 +1,60 @@
-# Authentik
+# Authentik (Platform SSO)
 
-> **Category**: Auth & Gateway  
-> **Dependencies**: `01.postgres`, `02.redis` (TODO), Vault  
-> **Status**: 🏗️ Migrating to Init Container pattern
+> **Category**: Auth & Gateway (10-19)
 
-Identity Provider (IdP) for Single Sign-On and authentication across all platform services.
+Identity Provider for Single Sign-On across all platform services.
 
-## Quick Links
+## Dependencies (Edges)
 
-- **Domain**: `auth.${INTERNAL_DOMAIN}`
-- **Initial Setup**: `auth.${INTERNAL_DOMAIN}/if/flow/initial-setup/`
-- **Vault Secrets**: `secret/services/authentik/*`
+Must execute edges before deploying:
 
-## Components
+| Edge | Source | Purpose |
+|------|--------|---------|
+| `01.create_database.py` | 01.postgres | Create authentik database |
+| `02.verify_redis.py` | 02.redis | Verify Redis accessible |
 
-| Service | Image | Purpose |
-|---------|-------|---------|
-| `server` | `ghcr.io/goauthentik/server:2024.12` | Web UI & API |
-| `worker` | `ghcr.io/goauthentik/server:2024.12` | Background tasks |
+## Files
 
-## Dependencies
-
-- **PostgreSQL**: Shared from `platform/01.postgres` (TODO: migrate from embedded)
-- **Redis**: Shared from `platform/02.redis` (TODO: migrate from embedded)
-- **Vault**: Secrets at `secret/services/authentik/`
+| File | Purpose |
+|------|---------|
+| `compose.yaml` | Docker Compose (server + worker) |
+| `pre-compose.py` | Prepare directories, generate secret key |
+| `post-compose.py` | Verify health, display setup URL |
+| `01.create_database.py` | Edge: Create DB in postgres |
+| `02.verify_redis.py` | Edge: Verify Redis |
 
 ## Deployment
 
 ```bash
-# 1. Setup Vault secrets and policies
-invoke authentik.setup-vault
+# 1. Ensure dependencies are deployed
+python platform/01.postgres/post-compose.py
+python platform/02.redis/post-compose.py
 
-# 2. Prepare VPS directories
-invoke authentik.prepare
+# 2. Run edges
+python platform/10.authentik/01.create_database.py
+python platform/10.authentik/02.verify_redis.py
 
-# 3. Deploy to Dokploy
-invoke authentik.deploy
+# 3. Pre-compose
+python platform/10.authentik/pre-compose.py
+
+# 4. Deploy in Dokploy
+#    - Compose Path: platform/10.authentik/compose.yaml
+#    - Add env vars: AUTHENTIK_SECRET_KEY, PG_PASS, REDIS_PASSWORD
+
+# 5. Post-compose
+python platform/10.authentik/post-compose.py
 ```
 
-## Current State (Temporary)
+## Domain
 
-Currently using embedded PostgreSQL and Redis. Migration plan:
+`sso.${INTERNAL_DOMAIN}` - SSO Web UI
 
-- [ ] Extract database to `01.postgres`
-- [ ] Extract cache to `02.redis`
-- [ ] Add Init Container for Vault secrets
-- [ ] Update compose to use shared infrastructure
+## Environment Variables
 
-## Data Paths
-
-| Path | Contents |
-|------|----------|
-| `/data/platform/authentik/postgres` | Database (temp, will migrate) |
-| `/data/platform/authentik/redis` | Cache (temp, will migrate) |
-| `/data/platform/authentik/media` | Uploaded files |
-| `/data/platform/authentik/certs` | SSL certificates |
-
-## References
-
-- **Vault Secret Structure**: [docs/ssot/platform.secrets.md](../../docs/ssot/platform.secrets.md)
-- **Init Container Pattern**: [docs/ssot/platform.secrets.md#init-container-pattern](../../docs/ssot/platform.secrets.md)
+| Variable | Required |
+|----------|----------|
+| `AUTHENTIK_SECRET_KEY` | Yes |
+| `PG_PASS` | Yes (same as 01.postgres) |
+| `REDIS_PASSWORD` | Yes (same as 02.redis) |
+| `PG_USER` | No (default: authentik) |
+| `PG_DB` | No (default: authentik) |

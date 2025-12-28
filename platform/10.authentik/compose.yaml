@@ -1,52 +1,17 @@
 services:
-  postgresql:
-    image: postgres:16-alpine
-    container_name: authentik-db
-    restart: always
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
-      start_period: 20s
-      interval: 30s
-      retries: 5
-      timeout: 5s
-    volumes:
-      - /data/platform/authentik/postgres:/var/lib/postgresql/data
-    environment:
-      POSTGRES_PASSWORD: ${PG_PASS:?error}
-      POSTGRES_USER: ${PG_USER:-authentik}
-      POSTGRES_DB: ${PG_DB:-authentik}
-    networks:
-      - dokploy-network
-
-  redis:
-    image: redis:alpine
-    container_name: authentik-redis
-    restart: always
-    command: --save 60 1 --loglevel warning
-    healthcheck:
-      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
-      start_period: 20s
-      interval: 30s
-      retries: 5
-      timeout: 3s
-    volumes:
-      - /data/platform/authentik/redis:/data
-    networks:
-      - dokploy-network
-
   server:
     image: ${AUTHENTIK_IMAGE:-ghcr.io/goauthentik/server:2024.12}
     container_name: authentik-server
     restart: always
     command: server
     environment:
-      AUTHENTIK_REDIS__HOST: redis
-      AUTHENTIK_POSTGRESQL__HOST: postgresql
+      AUTHENTIK_REDIS__HOST: platform-redis
+      AUTHENTIK_REDIS__PASSWORD: ${REDIS_PASSWORD:?error}
+      AUTHENTIK_POSTGRESQL__HOST: platform-postgres
       AUTHENTIK_POSTGRESQL__USER: ${PG_USER:-authentik}
       AUTHENTIK_POSTGRESQL__NAME: ${PG_DB:-authentik}
       AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS:?error}
       AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:?error}
-      # AUTHENTIK_ERROR_REPORTING__ENABLED: "true"
     volumes:
       - /data/platform/authentik/media:/media
       - /data/platform/authentik/certs:/certs
@@ -54,7 +19,7 @@ services:
       - dokploy-network
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.authentik.rule=Host(`auth.${INTERNAL_DOMAIN}`)"
+      - "traefik.http.routers.authentik.rule=Host(`sso.${INTERNAL_DOMAIN}`)"
       - "traefik.http.routers.authentik.entrypoints=websecure"
       - "traefik.http.routers.authentik.tls.certresolver=letsencrypt"
       - "traefik.http.services.authentik.loadbalancer.server.port=9000"
@@ -65,8 +30,9 @@ services:
     restart: always
     command: worker
     environment:
-      AUTHENTIK_REDIS__HOST: redis
-      AUTHENTIK_POSTGRESQL__HOST: postgresql
+      AUTHENTIK_REDIS__HOST: platform-redis
+      AUTHENTIK_REDIS__PASSWORD: ${REDIS_PASSWORD:?error}
+      AUTHENTIK_POSTGRESQL__HOST: platform-postgres
       AUTHENTIK_POSTGRESQL__USER: ${PG_USER:-authentik}
       AUTHENTIK_POSTGRESQL__NAME: ${PG_DB:-authentik}
       AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS:?error}
