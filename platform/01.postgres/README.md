@@ -2,28 +2,27 @@
 
 > **Category**: Databases (01-09)
 
-Shared PostgreSQL database for all platform applications.
+Shared PostgreSQL database for platform services.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
 | `compose.yaml` | Docker Compose service definition |
-| `pre-compose.py` | Prepare directories, generate password |
-| `post-compose.py` | Verify health, ensure ready |
+| `deploy.py` | Invoke tasks (pre_compose/composing/post_compose) |
+| `shared_tasks.py` | Health check status() |
+| `.env.example` | Environment template |
 
 ## Deployment
 
 ```bash
-# 1. Pre-compose (prepare + generate password)
-python platform/01.postgres/pre-compose.py
+# Full setup
+invoke postgres.setup
 
-# 2. Deploy in Dokploy
-#    - Compose Path: platform/01.postgres/compose.yaml
-#    - Add POSTGRES_PASSWORD env var
-
-# 3. Post-compose (verify)
-python platform/01.postgres/post-compose.py
+# Or step-by-step
+invoke postgres.pre-compose
+invoke postgres.composing
+invoke postgres.post-compose
 ```
 
 ## Data Path
@@ -39,4 +38,4 @@ python platform/01.postgres/post-compose.py
 
 ## Used By
 
-- `10.authentik` (edge: `01.create_database.py`)
+- `10.authentik`

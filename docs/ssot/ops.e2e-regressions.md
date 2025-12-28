@@ -18,7 +18,7 @@
 
 ### Code as SSOT 索引
 
-- **测试矩阵**：参见 [`e2e_regressions/tests/README.md`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/tests/README.md)
+- **测试矩阵**：参见 [`e2e_regressions/README.md`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/README.md)
 - **环境配置**：参见 [`e2e_regressions/conftest.py`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/conftest.py)
 
 ---
@@ -68,7 +68,7 @@ flowchart LR
 - **触发条件**: 开发新功能前
 - **步骤**:
     1. 配置环境变量 (参考 `.env.example`)。
-    2. 运行: `uv run pytest tests/platform/ -m smoke`。
+    2. 运行: `uv run pytest e2e_regressions/tests -m smoke`。
 
 ### SOP-002: 添加新测试
 

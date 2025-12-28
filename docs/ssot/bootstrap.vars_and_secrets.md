@@ -145,5 +145,4 @@ pw = get_or_set('POSTGRES_PASSWORD', length=32)
 ## Used by
 
 - [docs/ssot/README.md](./README.md)
-- [docs/env_management.md](../env_management.md)
 - [bootstrap/README.md](../../bootstrap/README.md)

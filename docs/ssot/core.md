@@ -14,13 +14,15 @@
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
 | **目录结构** | [目录结构规范](#4-目录结构规范) | 物理文件布局 |
-| **层级定义** | [Repo Root](https://github.com/wangzitian0/infra2/tree/main) | Bootstrap, Platform, Envs |
-| **变量契约** | [`variables.tf`](https://github.com/wangzitian0/infra2/blob/main/variables.tf) | 全局变量定义 |
+| **层级定义** | [Repo Root](https://github.com/wangzitian0/infra2/tree/main) | Bootstrap, Platform, Libs, Tools |
+| **变量契约** | `.env` / `.env.<env>` / `.env.example` | 运行时配置入口 |
+| **自动化入口** | [`tasks.py`](https://github.com/wangzitian0/infra2/blob/main/tasks.py) | Invoke 任务加载与执行 |
 
 ### Code as SSOT 索引
 
-- **全局变量**：参见 [`variables.tf`](https://github.com/wangzitian0/infra2/blob/main/variables.tf)
-- **环境定义**：参见 [`envs/README.md`](https://github.com/wangzitian0/infra2/blob/main/envs/README.md)
+- **任务加载器**：参见 [`tasks.py`](https://github.com/wangzitian0/infra2/blob/main/tasks.py)
+- **部署基类**：参见 [`libs/deployer.py`](https://github.com/wangzitian0/infra2/blob/main/libs/deployer.py)
+- **环境同步**：参见 [`tools/env_sync.py`](https://github.com/wangzitian0/infra2/blob/main/tools/env_sync.py)
 
 ---
 
@@ -33,10 +35,9 @@ flowchart TB
     Data["L3 Data<br/>(Stateful Services)"]
     Apps["L4 Apps<br/>(Business Logic)"]
 
-    Bootstrap -->|Provides K3s| Platform
-    Platform -->|Provides Vault| Data
-    Data -->|Provides DBs| Apps
-    Platform -->|Provides SSO| Apps
+    Bootstrap -->|Provides Dokploy| Platform
+    Platform -->|Provides Vault/DB/SSO| Apps
+    Data -->|Planned| Apps
 ```
 
 ### 层级定义 {#层级定义}
@@ -44,7 +45,7 @@ flowchart TB
 | 层级 | 目录 | 职责 | 部署份数 |
 |------|------|------|----------|
 | **L1 Bootstrap** | `bootstrap/` | 启动集群，建立 Trust Anchor | 1 (Global) |
-| **L2 Platform** | `platform/` | 提供公共服务 (Vault, SSO) | 1 or N (Per-env) |
+| **L2 Platform** | `platform/` | 提供公共服务 (Vault, SSO, DB) | 1 or N (Per-env) |
 
 ---
 
@@ -52,7 +53,7 @@ flowchart TB
 
 ### ✅ 推荐模式 (Whitelist)
 
-- **模式 A**: 上层模块只能依赖下层模块提供的 Output (通过 `terraform_remote_state` 或 Vault)。
+- **模式 A**: 上层模块只能依赖下层模块的**显式交付物**（Vault KV 或 Dokploy 环境变量），禁止隐式依赖。
 - **模式 B**: 环境之间 (Staging vs Prod) 必须在 Data 层及以上进行物理隔离。
 
 ### ⛔ 禁止模式 (Blacklist)
@@ -81,8 +82,6 @@ bootstrap/
 │   ├── README.md
 │   ├── compose.yaml
 │   └── vault.hcl
-├── 06.casdoor/
-│   └── README.md
 └── README.md              # 组件索引
 ```
 
@@ -92,6 +91,28 @@ bootstrap/
 - ✅ 每个组件目录包含 `README.md`（操作手册）
 - ✅ Docker Compose 配置统一命名为 `compose.yaml`
 - ✅ 配置文件与 README 放在同一目录
+
+### Platform 层目录结构
+
+```
+platform/
+├── 01.postgres/
+│   ├── README.md
+│   ├── compose.yaml
+│   ├── deploy.py
+│   └── shared_tasks.py
+├── 02.redis/
+│   ├── README.md
+│   ├── compose.yaml
+│   ├── deploy.py
+│   └── shared_tasks.py
+├── 10.authentik/
+│   ├── README.md
+│   ├── compose.yaml
+│   ├── deploy.py
+│   └── shared_tasks.py
+└── README.md
+```
 
 ### Volume 路径规范
 
@@ -112,7 +133,7 @@ bootstrap/
 - ✅ Volume 根路径：`/data/<layer>/<component>/`
 - ✅ Bootstrap 层：`/data/bootstrap/<component>/`
 - ✅ Platform 层：`/data/platform/<component>/`
-- ✅ Data 层：`/data/<env>/data/<component>/`
+- ✅ Data 层：`/data/<env>/data/<component>/`（若未来引入）
 
 ### 文件命名规范
 
@@ -121,40 +142,34 @@ bootstrap/
 | Docker Compose | `compose.yaml` | ✅ 统一标准名 |
 | HCL 配置 | `<service>.hcl` | `vault.hcl`, `traefik.hcl` |
 | 环境变量 | `.env`, `.env.example` | 项目根目录 |
-| 自动化脚本 | `tasks.py` | Invoke 任务文件 |
+| 自动化脚本 | `tasks.py` / `deploy.py` | Invoke 任务文件 |
 | README | `README.md` | 每个组件目录必需 |
 
 ---
 
 ## 5. 环境变量规范
 
-### 命名空间 (Namespace)
+### 配置层级
 
-| 模块 | Namespace | 用途 |
+| 级别 | 配置入口 | 用途 |
 |------|-----------|------|
-| Bootstrap | `kube-system`, `bootstrap` | 系统组件 |
-| Platform | `platform`, `observability` | 平台服务 |
-| Data | `data-staging`, `data-prod` | 数据服务 |
-| Apps | `apps-staging`, `apps-prod` | 业务应用 |
+| Project | `.env` | 项目级通用配置 |
+| Environment | `.env.<env>` | 环境级差异配置 |
+| Service | `platform/{nn}.{service}/.env.<env>.local` | 服务级配置 |
 
-### Service 命名规范
+### 服务命名规范
 
-> **原则**：统一后缀，便于多实例扩展。
+> **原则**：目录名、Dokploy 应用名、容器名保持一致性。
 
-| 服务类型 | 后缀 | 示例 |
-|:---|:---|:---|
-| PostgreSQL (读写) | `-rw` | `platform-pg-rw`, `postgresql-rw` |
-| PostgreSQL (只读) | `-ro` | `platform-pg-ro` |
-| Redis 主节点 | `-master` | `redis-master` |
-| Redis 副本 | `-replica` | `redis-replica` |
-| 单实例服务 | (无后缀) | `clickhouse`, `arangodb`, `vault` |
+- **目录名**：`{nn}.{service}`（如 `01.postgres`）
+- **Dokploy 应用名**：`service`（如 `postgres`, `redis`, `authentik`）
+- **容器名**：`platform-<service>` 或 `<service>-<role>`（如 `platform-postgres`, `authentik-server`）
 
-**完整 DNS 格式**: `<service>-<suffix>.<namespace>.svc.cluster.local`
+**完整域名格式**: `<service>.<internal_domain>`
 
 **示例**:
-- `platform-pg-rw.platform.svc.cluster.local`
-- `redis-master.data-staging.svc.cluster.local`
-- `vault.platform.svc.cluster.local`
+- `sso.${INTERNAL_DOMAIN}`
+- `vault.${INTERNAL_DOMAIN}`
 
 ### 域名规则 {#域名规则}
 
@@ -171,7 +186,7 @@ bootstrap/
 
 | 行为描述 | 测试文件 (Test Anchor) | 覆盖率 |
 |----------|-----------------------|--------|
-| **目录结构完整性** | `test_structure.py` (Pending) | ⏳ Planned |
+| **目录结构完整性** | `test_structure.py` (Backlog) | ⏳ Backlog |
 | **DNS 规则一致性** | [`test_network.py`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/tests/bootstrap/network_layer/test_network.py) | ✅ Critical |
 
 ---

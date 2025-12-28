@@ -23,6 +23,8 @@ NC='\033[0m' # No Color
 TEST_TYPE="${1:-smoke}"
 HEADED="${2:-}"
 EXTRA_ARGS="${@:3}"
+DEPLOY_ENV="${DEPLOY_ENV:-production}"
+ENV_FILE=".env.${DEPLOY_ENV}"
 
 # Functions
 print_usage() {
@@ -63,12 +65,12 @@ run_tests() {
     local test_type="$1"
     local extra_args="$2"
 
-    # Check if .env exists
-    if [ ! -f .env ]; then
-        echo -e "${YELLOW}⚠ .env file not found${NC}"
+    # Check if env file exists
+    if [ ! -f "$ENV_FILE" ]; then
+        echo -e "${YELLOW}⚠ ${ENV_FILE} file not found${NC}"
         echo "Creating from template..."
-        cp .env.example .env
-        echo -e "${YELLOW}Please configure .env before running tests${NC}"
+        cp .env.example "$ENV_FILE"
+        echo -e "${YELLOW}Please configure ${ENV_FILE} before running tests${NC}"
         exit 1
     fi
 

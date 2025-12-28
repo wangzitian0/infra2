@@ -21,10 +21,13 @@ Docs are scattered across multiple paths and contain stale links/anchors. We nee
 - MkDocs site builds without warnings.
 
 ## PR Links
-- TBD
+- None yet.
 
 ## Change Log
 - 2025-12-28: Initialized docs reorg and Pages site.
+- 2025-12-28: Fixed Top30 doc issues and normalized links/anchors.
+- 2025-12-29: Aligned SSOT/onboarding/platform docs with Python + Dokploy deployment.
+- 2025-12-29: Refactored E2E regression tests to match Dokploy/Vault/Authentik stack.
 
 ## Verification
 - `mkdocs build --config-file docs/mkdocs.yml` passes without warnings.

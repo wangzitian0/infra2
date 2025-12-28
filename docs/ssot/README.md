@@ -33,9 +33,8 @@
 
 | 文件 | SSOT Key | 关键内容 |
 |------|----------|----------|
-| [bootstrap.nodep.md](./bootstrap.nodep.md) | `bootstrap.nodep` | 非 Terraform 管理组件（Dokploy、1Password Connect） |
+| [bootstrap.nodep.md](./bootstrap.nodep.md) | `bootstrap.nodep` | Bootstrap 组件（Dokploy、1Password、Vault） |
 | [bootstrap.vars_and_secrets.md](./bootstrap.vars_and_secrets.md) | `bootstrap.vars_and_secrets` | 变量与密钥管理、.env 结构 |
-
 
 ---
 
@@ -56,10 +55,10 @@
 | [db.overview.md](./db.overview.md) | `db.overview` | 数据库总览、Vault 机制 |
 | [db.vault-integration.md](./db.vault-integration.md) | `db.vault` | Per-App Token、故障排查 |
 | [db.platform_pg.md](./db.platform_pg.md) | `db.platform_pg` | Platform PG (L1) |
-| [db.business_pg.md](./db.business_pg.md) | `db.business_pg` | Business PG (L3) |
+| [db.business_pg.md](./db.business_pg.md) | `db.business_pg` | Business PG (规划中) |
 | [db.redis.md](./db.redis.md) | `db.redis` | Redis 缓存 |
-| [db.clickhouse.md](./db.clickhouse.md) | `db.clickhouse` | ClickHouse OLAP |
-| [db.arangodb.md](./db.arangodb.md) | `db.arangodb` | ArangoDB Graph |
+| [db.clickhouse.md](./db.clickhouse.md) | `db.clickhouse` | ClickHouse OLAP (规划中) |
+| [db.arangodb.md](./db.arangodb.md) | `db.arangodb` | ArangoDB Graph (规划中) |
 
 ---
 
@@ -89,12 +88,11 @@
 
 ```mermaid
 flowchart TB
-    B["Bootstrap<br/>Trust Anchor<br/>• K3s Cluster<br/>• Platform PostgreSQL<br/>• Digger CI<br/>密钥来源：GitHub Secrets"]
-    P["Platform<br/>(Vault, SSO, PaaS, Obs)<br/>依赖: Bootstrap"]
-    D["Data<br/>(业务数据库)<br/>依赖: Platform (Vault)"]
+    B["Bootstrap<br/>Trust Anchor<br/>• Dokploy<br/>• 1Password<br/>• Vault"]
+    P["Platform<br/>(Postgres, Redis, Authentik)<br/>依赖: Bootstrap"]
+    D["Data<br/>(业务数据库)<br/>规划中"]
 
     B --> P
-    B --> D
     P --> D
 ```
 
@@ -109,4 +107,4 @@ flowchart TB
 
 ---
 
-*Last updated: 2025-12-28*
+*Last updated: 2025-12-29*

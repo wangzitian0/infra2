@@ -2,52 +2,47 @@
 
 > **Category**: Auth & Gateway (10-19)
 
-Identity Provider for Single Sign-On across all platform services.
+Identity Provider for Single Sign-On across platform services.
 
-## Dependencies (Edges)
+## Dependencies
 
-Must execute edges before deploying:
-
-| Edge | Source | Purpose |
-|------|--------|---------|
-| `01.create_database.py` | 01.postgres | Create authentik database |
-| `02.verify_redis.py` | 02.redis | Verify Redis accessible |
+- `01.postgres` must be deployed
+- `02.redis` must be deployed
 
 ## Files
 
 | File | Purpose |
 |------|---------|
 | `compose.yaml` | Docker Compose (server + worker) |
-| `pre-compose.py` | Prepare directories, generate secret key |
-| `post-compose.py` | Verify health, display setup URL |
-| `01.create_database.py` | Edge: Create DB in postgres |
-| `02.verify_redis.py` | Edge: Verify Redis |
+| `deploy.py` | Invoke tasks with custom pre_compose logic |
+| `shared_tasks.py` | Health check status() |
+| `.env.example` | Environment template |
 
 ## Deployment
 
 ```bash
-# 1. Ensure dependencies are deployed
-python platform/01.postgres/post-compose.py
-python platform/02.redis/post-compose.py
+# Ensure dependencies are ready
+invoke postgres.shared.status
+invoke redis.shared.status
 
-# 2. Run edges
-python platform/10.authentik/01.create_database.py
-python platform/10.authentik/02.verify_redis.py
+# Full setup
+invoke authentik.setup
 
-# 3. Pre-compose
-python platform/10.authentik/pre-compose.py
-
-# 4. Deploy in Dokploy
-#    - Compose Path: platform/10.authentik/compose.yaml
-#    - Add env vars: AUTHENTIK_SECRET_KEY, PG_PASS, REDIS_PASSWORD
-
-# 5. Post-compose
-python platform/10.authentik/post-compose.py
+# Or step-by-step
+invoke authentik.pre-compose
+invoke authentik.composing
+invoke authentik.post-compose
 ```
+
+`pre-compose` will:
+- create data directories
+- read DB/Redis passwords from Vault (fallback to manual)
+- create the authentik database
+- generate `AUTHENTIK_SECRET_KEY`
 
 ## Domain
 
-`sso.${INTERNAL_DOMAIN}` - SSO Web UI
+`sso.${INTERNAL_DOMAIN}` - Authentik Web UI
 
 ## Environment Variables
 

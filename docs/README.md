@@ -24,10 +24,10 @@
 场景驱动的完整指南：
 1. **[5 分钟快速开始](./onboarding/01.quick-start.md)** - 了解平台能力
 2. **[部署第一个应用](./onboarding/02.first-app.md)** - 端到端完整流程
-3. **[使用数据库](./onboarding/03.database.md)** - PostgreSQL/Redis/ClickHouse
+3. **[使用数据库](./onboarding/03.database.md)** - PostgreSQL/Redis（其余规划中）
 4. **[管理密钥](./onboarding/04.secrets.md)** - Vault 接入
-5. **[接入 SSO](./onboarding/05.sso.md)** - Casdoor OIDC
-6. **[监控和分析](./onboarding/06.observability.md)** - SigNoz + OpenPanel
+5. **[接入 SSO](./onboarding/05.sso.md)** - Authentik OIDC
+6. **[监控和分析](./onboarding/06.observability.md)** - 规划中
 
 ---
 
@@ -45,11 +45,11 @@
 
 **如果你要修改基础设施**，优先参考对应模块 README：
 
-- [Tools](https://github.com/wangzitian0/infra2/blob/main/tools/README.md) - CI 工具和脚本
 - [Bootstrap](https://github.com/wangzitian0/infra2/blob/main/bootstrap/README.md) - 集群引导层 (L1)
 - [Platform](https://github.com/wangzitian0/infra2/blob/main/platform/README.md) - 平台服务层 (L2)
-- [Data](https://github.com/wangzitian0/infra2/blob/main/envs/README.md) - 数据层 (L3)
-- [Apps](https://github.com/wangzitian0/infra2/blob/main/apps/README.md) - 业务应用层 (L4)
+- Tools - 本仓库暂未维护（如有独立仓库请补充链接）
+- Data - 本仓库暂未维护（如有独立仓库请补充链接）
+- Apps - 本仓库暂未维护（如有独立仓库请补充链接）
 
 ---
 

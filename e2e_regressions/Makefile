@@ -25,7 +25,7 @@ help:
 	@echo ""
 	@echo "Utilities:"
 	@echo "  make clean            - Remove test artifacts"
-	@echo "  make env              - Create .env file from template"
+	@echo "  make env              - Create .env.<env> file from template"
 
 install:
 	uv sync
@@ -77,11 +77,13 @@ clean:
 	find . -type f -name "*.pyc" -delete
 
 env:
-	@if [ ! -f .env ]; then \
-		cp .env.example .env; \
-		echo "Created .env from template. Please configure your environment variables."; \
+	@ENV_NAME=$${DEPLOY_ENV:-production}; \
+	ENV_FILE=".env.$${ENV_NAME}"; \
+	if [ ! -f "$${ENV_FILE}" ]; then \
+		cp .env.example "$${ENV_FILE}"; \
+		echo "Created $${ENV_FILE} from template. Please configure your environment variables."; \
 	else \
-		echo ".env already exists"; \
+		echo "$${ENV_FILE} already exists"; \
 	fi
 
 .DEFAULT_GOAL := help

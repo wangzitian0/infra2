@@ -10,79 +10,48 @@ from dotenv import load_dotenv
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
 
-# Load environment variables
-env_path = Path(__file__).parent / ".env"
-load_dotenv(env_path)
+ROOT = Path(__file__).parent.parent
+SERVICE_ROOT = Path(__file__).parent
+ENV_NAME = os.getenv("DEPLOY_ENV", "production")
+
+# Load project + environment + service env files (service overrides)
+load_dotenv(ROOT / ".env")
+load_dotenv(ROOT / ".env.local", override=True)
+load_dotenv(ROOT / f".env.{ENV_NAME}")
+load_dotenv(SERVICE_ROOT / f".env.{ENV_NAME}", override=True)
 
 
-
-def get_env_required(name: str) -> str:
-    """Get environment variable or raise error."""
+def _require_env(name: str) -> str:
     val = os.getenv(name)
     if not val:
-        raise RuntimeError(f"Required environment variable '{name}' is not set. Check your CI/local .env file.")
+        raise RuntimeError(f"Required environment variable '{name}' is not set. Check your env files.")
     return val
 
 
 class TestConfig:
     """Test configuration from environment variables."""
 
-    # Domain - E2E_DOMAIN (preferred) or fallback to INTERNAL_DOMAIN/BASE_DOMAIN
-    BASE_DOMAIN = os.getenv("E2E_DOMAIN") or os.getenv("INTERNAL_DOMAIN") or get_env_required("BASE_DOMAIN")
+    # Domain
+    BASE_DOMAIN = os.getenv("E2E_DOMAIN") or os.getenv("INTERNAL_DOMAIN") or os.getenv("BASE_DOMAIN") or _require_env("BASE_DOMAIN")
 
-    # Portal & SSO
-    PORTAL_URL = os.getenv("PORTAL_URL", f"https://home.{BASE_DOMAIN}")
+    # Core Bootstrap services
+    DOKPLOY_URL = os.getenv("DOKPLOY_URL", f"https://cloud.{BASE_DOMAIN}")
+    OP_URL = os.getenv("OP_URL", f"https://op.{BASE_DOMAIN}")
+    VAULT_URL = os.getenv("VAULT_URL", f"https://vault.{BASE_DOMAIN}")
     SSO_URL = os.getenv("SSO_URL", f"https://sso.{BASE_DOMAIN}")
-    
-    # Credentials - E2E_USERNAME/E2E_PASSWORD (preferred) or fallback
-    E2E_USERNAME = os.getenv("E2E_USERNAME", "admin")
-    E2E_PASSWORD = get_env_required("E2E_PASSWORD")
 
-    # Platform Services
-    VAULT_URL = os.getenv("VAULT_URL", f"https://secrets.{BASE_DOMAIN}")
-    DASHBOARD_URL = os.getenv("DASHBOARD_URL", f"https://kdashboard.{BASE_DOMAIN}")
-    DIGGER_URL = os.getenv("DIGGER_URL", f"https://digger.{BASE_DOMAIN}")
-    KUBERO_URL = os.getenv("KUBERO_URL", f"https://kcloud.{BASE_DOMAIN}")
-    SIGNOZ_URL = os.getenv("SIGNOZ_URL", f"https://signoz.{BASE_DOMAIN}")
-    K3S_URL = os.getenv("K3S_URL", f"https://k3s.{BASE_DOMAIN}:6443")
+    # Optional portal/homepage
+    PORTAL_URL = os.getenv("PORTAL_URL", "")
 
-    # K8s Resource Identifiers
-    class K8sResources:
-        """Kubernetes resource naming and configuration constants."""
-        # Platform PostgreSQL
-        PLATFORM_PG_NAME = "platform-pg"
-        PLATFORM_PG_NAMESPACE = "platform"
-        CNPG_CLUSTER_TYPE = "clusters.postgresql.cnpg.io"
-        PLATFORM_PG_LABEL = "cnpg.io/cluster=platform-pg"
-        
-        # Namespaces
-        CRITICAL_NAMESPACES = ["kube-system", "bootstrap", "platform"]
-        
-        # Pod Health Thresholds
-        MIN_SYSTEM_POD_HEALTH_RATIO = 0.8  # 80%
-        MIN_PLATFORM_POD_HEALTH_RATIO = 0.5  # 50% (allow for initializing pods)
-        MIN_BOOTSTRAP_POD_COUNT = 1
-        
-        # Token/Secret Length Requirements
-        MIN_TOKEN_LENGTH = 32
-        MIN_WEBHOOK_SECRET_LENGTH = 16
-        
-        # Digger Configuration
-        DIGGER_POD_LABEL = "app.kubernetes.io/name=digger-backend"
-        DIGGER_NAMESPACE = "bootstrap"
-        
-        # Traefik Configuration
-        TRAEFIK_NAMESPACE = "kube-system"
-        TRAEFIK_LABELS = [
-            "app.kubernetes.io/name=traefik",
-            "app=traefik"
-        ]
-    
-    # Database Configuration
-    PLATFORM_DB_HOST = os.getenv("PLATFORM_DB_HOST", f"platform-pg-rw.platform.svc.cluster.local")
+    # Auth (optional, only required for login flows)
+    E2E_USERNAME = os.getenv("E2E_USERNAME")
+    E2E_PASSWORD = os.getenv("E2E_PASSWORD")
+
+    # Platform DB (optional)
+    PLATFORM_DB_HOST = os.getenv("PLATFORM_DB_HOST")
     PLATFORM_DB_PORT = os.getenv("PLATFORM_DB_PORT", "5432")
     PLATFORM_DB_USER = os.getenv("PLATFORM_DB_USER", "postgres")
-    PLATFORM_DB_PASSWORD = os.getenv("PLATFORM_DB_PASSWORD") or os.getenv("TF_VAR_vault_postgres_password", "")
+    PLATFORM_DB_PASSWORD = os.getenv("PLATFORM_DB_PASSWORD") or os.getenv("PG_PASS") or ""
 
     # Test Configuration (Sensible defaults for execution)
     HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
@@ -137,24 +106,10 @@ async def page(context: BrowserContext) -> AsyncGenerator[Page, None]:
 
 
 @pytest.fixture
-async def http_client():
-    """
-    Async HTTP client for API tests (DRY).
-    
-    Configured with:
-    - verify=False (allow self-signed certs)
-    - timeout=10.0s default
-    """
-    import httpx
-    async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
-        yield client
-
-
-@pytest.fixture
 async def platform_pg_connection():
     """
-    Provide a PostgreSQL connection to platform-pg database.
-    
+    Provide a PostgreSQL connection to platform database.
+
     Automatically closes connection after test.
     Skips test if asyncpg not installed or connection fails.
     """
@@ -162,11 +117,11 @@ async def platform_pg_connection():
         import asyncpg
     except ImportError:
         pytest.skip("asyncpg not installed")
-    
+
     config = TestConfig()
-    if not config.PLATFORM_DB_PASSWORD:
+    if not config.PLATFORM_DB_HOST or not config.PLATFORM_DB_PASSWORD:
         pytest.skip("Platform DB credentials not configured")
-    
+
     try:
         conn = await asyncpg.connect(
             host=config.PLATFORM_DB_HOST,
@@ -186,20 +141,20 @@ async def platform_pg_connection():
 async def platform_pg_connection_to_db():
     """
     Factory fixture for connecting to specific databases.
-    
+
     Returns a coroutine that creates connections to named databases.
     """
     try:
         import asyncpg
     except ImportError:
         pytest.skip("asyncpg not installed")
-    
+
     config = TestConfig()
-    if not config.PLATFORM_DB_PASSWORD:
+    if not config.PLATFORM_DB_HOST or not config.PLATFORM_DB_PASSWORD:
         pytest.skip("Platform DB credentials not configured")
-    
+
     connections = []
-    
+
     async def connect_to(database: str):
         try:
             conn = await asyncpg.connect(
@@ -213,24 +168,9 @@ async def platform_pg_connection_to_db():
             connections.append(conn)
             return conn
         except Exception as e:
-            pytest.skip(f"Cannot connect to database {database}: {e}")
-    
+            pytest.skip(f"Cannot connect to database: {e}")
+
     yield connect_to
-    
-    # Cleanup: close all connections
+
     for conn in connections:
         await conn.close()
-
-
-# Markers
-def pytest_configure(config):
-    """Register custom markers."""
-    config.addinivalue_line("markers", "smoke: quick smoke tests")
-    config.addinivalue_line("markers", "bootstrap: bootstrap layer tests")
-    config.addinivalue_line("markers", "sso: SSO/Portal tests")
-    config.addinivalue_line("markers", "platform: Platform service tests")
-    config.addinivalue_line("markers", "api: API endpoint tests")
-    config.addinivalue_line("markers", "e2e: full end-to-end tests")
-    config.addinivalue_line("markers", "compute: compute layer tests")
-    config.addinivalue_line("markers", "storage: storage layer tests")
-    config.addinivalue_line("markers", "network: network layer tests")

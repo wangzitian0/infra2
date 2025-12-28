@@ -56,7 +56,7 @@
 
 | 行为描述 | 测试文件 (Test Anchor) | 覆盖率 |
 |----------|-----------------------|--------|
-| **告警通道连通性** | `test_alert_channel.py` (Pending) | ⏳ Planned |
+| **告警通道连通性** | `test_alert_channel.py` (Backlog) | ⏳ Backlog |
 
 ---
 

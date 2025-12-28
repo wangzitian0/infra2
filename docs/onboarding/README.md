@@ -14,10 +14,10 @@
 - **[部署第一个应用](./02.first-app.md)** - 端到端完整流程
 
 ### 核心能力接入
-- **[使用数据库](./03.database.md)** - PostgreSQL、Redis、ClickHouse、ArangoDB
+- **[使用数据库](./03.database.md)** - PostgreSQL、Redis（其余规划中）
 - **[管理密钥](./04.secrets.md)** - Vault 接入和凭据管理
-- **[接入 SSO 登录](./05.sso.md)** - Casdoor OIDC 集成
-- **[监控和分析](./06.observability.md)** - SigNoz 追踪 + OpenPanel 分析
+- **[接入 SSO 登录](./05.sso.md)** - Authentik OIDC 集成
+- **[监控和分析](./06.observability.md)** - 规划中
 
 ---
 
@@ -29,8 +29,8 @@
 
 | 查阅内容 | 对应 SSOT 文件 |
 |----------|---------------|
-| **认证逻辑/SSO** | [`platform.auth.md`](../ssot/platform.auth.md) |
-| **密钥管理流程** | [`platform.secrets.md`](../ssot/platform.secrets.md) |
+| **认证逻辑/SSO** | [`platform.sso.md`](../ssot/platform.sso.md) |
+| **密钥管理流程** | [`bootstrap.vars_and_secrets.md`](../ssot/bootstrap.vars_and_secrets.md) |
 | **数据库接入规范** | [`db.overview.md`](../ssot/db.overview.md) |
 | **流水线命令** | [`ops.pipeline.md`](../ssot/ops.pipeline.md) |
 | **故障恢复** | [`ops.recovery.md`](../ssot/ops.recovery.md) |

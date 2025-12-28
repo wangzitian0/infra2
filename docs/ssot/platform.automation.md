@@ -17,9 +17,9 @@
 
 ### Code as SSOT 索引
 
-- **任务加载器**: [`tasks.py`](../../tasks.py)
-- **基类**: [`libs/deployer.py`](../../libs/deployer.py)
-- **公共函数**: [`libs/common.py`](../../libs/common.py)
+- **任务加载器**: [`tasks.py`](https://github.com/wangzitian0/infra2/blob/main/tasks.py)
+- **基类**: [`libs/deployer.py`](https://github.com/wangzitian0/infra2/blob/main/libs/deployer.py)
+- **公共函数**: [`libs/common.py`](https://github.com/wangzitian0/infra2/blob/main/libs/common.py)
 
 ---
 
@@ -116,10 +116,10 @@ invoke authentik.shared.status
 
 ```bash
 # 推送到 Vault
-invoke env.push --level=service --service=postgres
+invoke env.push --project=platform --env=production --level=service
 
 # 从 Vault 拉取
-invoke env.pull --level=service --service=postgres
+invoke env.pull --project=platform --env=production --level=service
 ```
 
 ---
@@ -130,11 +130,11 @@ invoke env.pull --level=service --service=postgres
 |----------|----------|
 | **所有模块加载** | `invoke --list` 无报错 |
 | **服务健康** | `invoke {service}.shared.status` |
-| **Vault 读写** | `invoke vault.shared.read-secret --path=...` |
+| **Vault 读写** | `invoke env.status --project=platform --env=production` |
 
 ---
 
 ## Used by
 
-- [platform/README.md](../../platform/README.md)
-- [libs/README.md](../../libs/README.md)
+- [platform/README.md](https://github.com/wangzitian0/infra2/blob/main/platform/README.md)
+- [libs/README.md](https://github.com/wangzitian0/infra2/blob/main/libs/README.md)

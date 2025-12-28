@@ -14,7 +14,6 @@
 ├── 03.dokploy_setup/      # Dokploy 域名和 CLI 配置
 ├── 04.1password/          # 1Password Connect
 ├── 05.vault/              # HashiCorp Vault
-├── 06.casdoor/            # Casdoor SSO（待部署）
 └── README.md              # 本文件（组件索引）
 ```
 
@@ -71,16 +70,10 @@ HashiCorp Vault 秘密管理。
 **状态**：⏭️ 待部署  
 **域名**：`vault.$INTERNAL_DOMAIN`
 
-### 6. [Casdoor](./06.casdoor/)
-SSO 和身份认证服务。
-
-**状态**：⏭️ 待部署  
-**域名**：`sso.$INTERNAL_DOMAIN`
-
 ---
 
 ## 🔗 相关文档
 
-- [SSOT: Bootstrap 非 Terraform 组件](../docs/ssot/bootstrap.nodep.md)
+- [SSOT: Bootstrap 组件](../docs/ssot/bootstrap.nodep.md)
 - [SSOT: 核心架构](../docs/ssot/core.md)
 - [总览: 文档索引](../docs/ssot/README.md)
