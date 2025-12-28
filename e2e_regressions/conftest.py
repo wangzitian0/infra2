@@ -137,6 +137,20 @@ async def page(context: BrowserContext) -> AsyncGenerator[Page, None]:
 
 
 @pytest.fixture
+async def http_client():
+    """
+    Async HTTP client for API tests (DRY).
+    
+    Configured with:
+    - verify=False (allow self-signed certs)
+    - timeout=10.0s default
+    """
+    import httpx
+    async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
+        yield client
+
+
+@pytest.fixture
 async def platform_pg_connection():
     """
     Provide a PostgreSQL connection to platform-pg database.

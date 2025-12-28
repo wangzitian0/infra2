@@ -104,7 +104,7 @@
 |----------|----------------------|
 | **防御性运维/守则** | [**Ops Standards / Defensive Maintenance**](./docs/ssot/ops.standards.md#3-防御性运维守则-defensive-maintenance) |
 | **Provider 优先级** | [**Ops Standards / Provider Priority**](./docs/ssot/ops.standards.md#2-托管资源评估-sop-provider-priority) |
-| **密钥流转/契约** | [**Platform Secrets SSOT**](./docs/ssot/platform.secrets.md) |
+| **密钥流转/契约** | [**Bootstrap Vars & Secrets SSOT**](./docs/ssot/bootstrap.vars_and_secrets.md) |
 | **故障恢复 SOP** | [**Recovery SSOT**](./docs/ssot/ops.recovery.md) |
 | **流水线操作** | [**Pipeline SSOT**](./docs/ssot/ops.pipeline.md) |
 

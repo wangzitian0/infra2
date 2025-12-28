@@ -1,19 +1,19 @@
-"""Vault shared tasks"""
-import os
+"""Vault shared tasks - uses libs/ system"""
+from __future__ import annotations
 import json
 from invoke import task
-import sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from libs.common import get_env
 from libs.console import success, error, info
 
 
-def _vault_addr():
-    domain = os.environ.get("INTERNAL_DOMAIN")
-    return f"https://vault.{domain}" if domain else "https://vault.local"
+def _vault_addr() -> str:
+    """Get Vault address from environment"""
+    e = get_env()
+    return f"https://vault.{e['INTERNAL_DOMAIN']}" if e['INTERNAL_DOMAIN'] else "https://vault.local"
 
 
 @task
-def status(c):
+def status(c) -> dict:
     """Check Vault status"""
     result = c.run("vault status", warn=True, hide=True)
     if result.ok:
@@ -24,7 +24,7 @@ def status(c):
 
 
 @task
-def write_secret(c, path, data):
+def write_secret(c, path: str, data: str) -> bool:
     """Write to Vault KV v2. Example: --data='key1=val1 key2=val2'"""
     if data.startswith("{"):
         kv = " ".join(f"{k}={v}" for k, v in json.loads(data).items())
@@ -39,7 +39,7 @@ def write_secret(c, path, data):
 
 
 @task
-def read_secret(c, path, field=None):
+def read_secret(c, path: str, field: str | None = None) -> str | dict | None:
     """Read from Vault KV v2"""
     if field:
         result = c.run(f"vault kv get -field={field} secret/{path}", warn=True, hide=True)
@@ -56,7 +56,7 @@ def read_secret(c, path, field=None):
 
 
 @task
-def list_secrets(c, path):
+def list_secrets(c, path: str) -> list[str]:
     """List secrets in path"""
     result = c.run(f"vault kv list secret/{path}", warn=True, hide=True)
     if result.ok:

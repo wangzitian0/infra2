@@ -1,32 +1,27 @@
-"""
-1Password Connect shared tasks
-"""
-import os
+"""1Password Connect shared tasks - uses libs/ system"""
 from invoke import task
-
-INTERNAL_DOMAIN = os.environ.get("INTERNAL_DOMAIN")
+from libs.common import get_env
+from libs.console import success, error
 
 
 @task
-def status(c):
-    """
-    Check 1Password Connect status
+def status(c) -> dict:
+    """Check 1Password Connect status
     
     Returns:
         dict: {is_ready: bool, details: str}
     """
-    result = c.run(f"curl -sf https://op.{INTERNAL_DOMAIN}/health", warn=True, hide=True)
+    e = get_env()
+    result = c.run(f"curl -sf https://op.{e['INTERNAL_DOMAIN']}/health", warn=True, hide=True)
     if result.ok:
-        print("✅ 1Password Connect: ready")
+        success("1Password Connect: ready")
         return {"is_ready": True, "details": "Health check passed"}
-    else:
-        print("❌ 1Password Connect: not ready")
-        return {"is_ready": False, "details": "Health check failed"}
+    error("1Password Connect: not ready")
+    return {"is_ready": False, "details": "Health check failed"}
 
 
 @task
-def get_secret(c, vault, item, field):
+def get_secret(c, vault: str, item: str, field: str) -> str | None:
     """Get a secret from 1Password"""
-    print(f"Getting {vault}/{item}/{field} from 1Password")
-    # TODO: Implement actual API call
-    return "secret_value"
+    # TODO: Implement actual API call via 1Password Connect
+    return None

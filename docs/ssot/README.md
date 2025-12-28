@@ -33,7 +33,8 @@
 
 | 文件 | SSOT Key | 关键内容 |
 |------|----------|----------|
-| [bootstrap.nodep.md](./bootstrap.nodep.md) | `bootstrap.nodep` | 非 Terraform 管理组件（Dokploy 等） |
+| [bootstrap.nodep.md](./bootstrap.nodep.md) | `bootstrap.nodep` | 非 Terraform 管理组件（Dokploy、1Password Connect） |
+| [bootstrap.vars_and_secrets.md](./bootstrap.vars_and_secrets.md) | `bootstrap.vars_and_secrets` | 变量与密钥管理、.env 结构 |
 
 
 ---
@@ -42,8 +43,8 @@
 
 | 文件 | SSOT Key | 关键内容 |
 |------|----------|----------|
-| [platform.auth.md](./platform.auth.md) | `platform.auth` | Casdoor SSO、Vault RBAC |
-| [platform.secrets.md](./platform.secrets.md) | `platform.secrets` | 密钥管理、四层模型、1Password、本地 tfvars |
+| [platform.sso.md](./platform.sso.md) | `platform.sso` | Authentik SSO |
+| [platform.automation.md](./platform.automation.md) | `platform.automation` | Deployer 自动化 |
 | [platform.ai.md](./platform.ai.md) | `platform.ai` | AI 接入、OpenRouter |
 
 ---

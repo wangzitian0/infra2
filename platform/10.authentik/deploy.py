@@ -1,11 +1,7 @@
-"""Authentik deployment - has custom logic so not using make_tasks()"""
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
+"""Authentik deployment - has custom logic"""
 from invoke import task
 from libs.deployer import Deployer
-from libs.common import generate_password
+from libs.common import generate_password, get_env
 from libs.console import header, success, warning, info, env_vars, run_with_status
 
 
@@ -17,6 +13,19 @@ class AuthentikDeployer(Deployer):
     gid = "1000"
     secret_key = "secret_key"
     env_var_name = "AUTHENTIK_SECRET_KEY"
+
+
+def _get_shared_tasks():
+    """Import shared_tasks dynamically to avoid relative import issues"""
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location(
+        "shared_tasks",
+        Path(__file__).parent / "shared_tasks.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 @task
@@ -64,8 +73,8 @@ def composing(c):
 
 @task
 def post_compose(c):
-    from . import shared_tasks
-    e = AuthentikDeployer.env()
+    shared_tasks = _get_shared_tasks()
+    e = get_env()
     header(f"{AuthentikDeployer.service} post_compose", "Verifying")
     result = shared_tasks.status(c)
     if result["is_ready"]:

@@ -1,9 +1,14 @@
 """
 Base deployer class with DRY task generation
 """
+from __future__ import annotations
+from typing import TYPE_CHECKING, Any
 from invoke import task
 from libs.common import get_env, validate_env, generate_password
 from libs.console import header, success, error, warning, info, env_vars, prompt_action, run_with_status
+
+if TYPE_CHECKING:
+    from invoke import Context
 
 
 class Deployer:
@@ -19,16 +24,16 @@ class Deployer:
     env_var_name: str = ""  # Env var to display
     
     @classmethod
-    def env(cls):
+    def env(cls) -> dict[str, str | None]:
         return get_env()
     
     @classmethod
-    def vault_path(cls):
+    def vault_path(cls) -> str:
         e = cls.env()
         return f"{e['PROJECT']}/{e['ENV']}/{cls.service}"
     
     @classmethod
-    def _prepare_dirs(cls, c):
+    def _prepare_dirs(cls, c: "Context") -> bool:
         """Create data directories"""
         if missing := validate_env():
             error(f"Missing: {', '.join(missing)}")
@@ -43,9 +48,16 @@ class Deployer:
         return True
     
     @classmethod
-    def store_secret(cls, c, key: str, value: str) -> bool:
+    def _vault_cmd(cls, c: "Context", cmd: str, **kwargs) -> Any:
+        """Run vault command with correct VAULT_ADDR"""
+        e = cls.env()
+        vault_addr = f"https://vault.{e['INTERNAL_DOMAIN']}"
+        return c.run(f"VAULT_ADDR={vault_addr} {cmd}", **kwargs)
+    
+    @classmethod
+    def store_secret(cls, c: "Context", key: str, value: str) -> bool:
         """Store secret in Vault with error handling"""
-        result = c.run(f"vault kv put secret/{cls.vault_path()} {key}={value}", warn=True, hide=True)
+        result = cls._vault_cmd(c, f"vault kv put secret/{cls.vault_path()} {key}={value}", warn=True, hide=True)
         if not result.ok:
             error(f"Failed to store {key} in Vault", result.stderr)
             return False
@@ -53,13 +65,13 @@ class Deployer:
         return True
     
     @classmethod
-    def read_secret(cls, c, path: str, field: str) -> str | None:
+    def read_secret(cls, c: "Context", path: str, field: str) -> str | None:
         """Read secret from Vault"""
-        result = c.run(f"vault kv get -field={field} secret/{path}", warn=True, hide=True)
+        result = cls._vault_cmd(c, f"vault kv get -field={field} secret/{path}", warn=True, hide=True)
         return result.stdout.strip() if result.ok else None
     
     @classmethod
-    def pre_compose(cls, c) -> dict | None:
+    def pre_compose(cls, c: "Context") -> dict | None:
         """Prepare and return generated secrets"""
         if not cls._prepare_dirs(c):
             return None
@@ -74,7 +86,7 @@ class Deployer:
         return secrets
     
     @classmethod
-    def composing(cls, c, env_keys: list[str] = None):
+    def composing(cls, c: "Context", env_keys: list[str] | None = None) -> None:
         """Deploy in Dokploy"""
         e = cls.env()
         keys = env_keys or [cls.env_var_name]
@@ -88,7 +100,7 @@ class Deployer:
         success("composing complete")
     
     @classmethod
-    def post_compose(cls, c, shared_tasks) -> bool:
+    def post_compose(cls, c: "Context", shared_tasks: Any) -> bool:
         """Verify deployment"""
         header(f"{cls.service} post_compose", "Verifying")
         result = shared_tasks.status(c)
@@ -99,9 +111,9 @@ class Deployer:
         return False
 
 
-def make_tasks(deployer_cls, shared_tasks_module):
+def make_tasks(deployer_cls: type[Deployer], shared_tasks_module: Any) -> dict:
     """
-    Generate standard tasks for a deployer (Fix #5 - DRY)
+    Generate standard tasks for a deployer (DRY)
     
     Returns dict of tasks: {pre_compose, composing, post_compose, setup}
     """
