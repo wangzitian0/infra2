@@ -62,5 +62,5 @@
 
 ## Used by
 
-- [AGENTS.md](../../AGENTS.md)
+- [AGENTS.md](https://github.com/wangzitian0/infra2/blob/main/AGENTS.md)
 - [docs/ssot/README.md](./README.md)

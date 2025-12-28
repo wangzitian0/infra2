@@ -11,7 +11,7 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **实例定义** | [`envs/data-shared/3.clickhouse.tf`](../../envs/data-shared/3.clickhouse.tf) | ClickHouse 集群定义 |
+| **实例定义** | [`envs/data-shared/3.clickhouse.tf`](https://github.com/wangzitian0/infra2/blob/main/envs/data-shared/3.clickhouse.tf) | ClickHouse 集群定义 |
 | **运行时密钥** | **Vault** (`secret/data/clickhouse`) | 默认用户密码 |
 
 ---
@@ -59,7 +59,7 @@ graph TD
 
 | 行为描述 | 测试文件 (Test Anchor) | 覆盖率 |
 |----------|-----------------------|--------|
-| **CH 连通性测试** | [`test_clickhouse.py`](../../e2e_regressions/tests/data/test_clickhouse.py) | ✅ Critical |
+| **CH 连通性测试** | [`test_clickhouse.py`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/tests/data/test_clickhouse.py) | ✅ Critical |
 
 ---
 

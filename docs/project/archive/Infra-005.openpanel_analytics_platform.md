@@ -12,7 +12,7 @@ Portal Gate authentication for SSO.
 - PR #336: https://github.com/wangzitian0/infra/pull/336
 
 ## Change Log
-- No dedicated change_log entry (plan document only).
+- No dedicated change log entry (plan document only).
 
 ## Git Commits (Backtrace)
 - 0a2d311 feat(platform): add OpenPanel L2 infrastructure with Portal Gate authentication (#336)

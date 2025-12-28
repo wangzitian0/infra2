@@ -12,7 +12,7 @@ for infra operators, documenting pitfalls and validation steps.
 - PR #307: https://github.com/wangzitian0/infra/pull/307
 
 ## Change Log
-- No dedicated change_log entry (issue-driven operational work).
+- No dedicated change log entry (issue-driven operational work).
 
 ## Git Commits (Backtrace)
 - eb1b5f8 feat(sso): decouple Casdoor OIDC from portal gate (#307)

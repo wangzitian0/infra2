@@ -13,9 +13,9 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **K8s Auth 配置** | [`platform/91.vault-auth-kubernetes.tf`](../../platform/91.vault-auth-kubernetes.tf) | 信任 K8s 集群的配置 |
-| **应用 Role 定义** | [`platform/92.vault-myapp.tf`](../../platform/92.vault-myapp.tf) | 应用与 Policy 的绑定 |
-| **注入规范** | [`platform/6.vault-database.tf`](../../platform/6.vault-database.tf) | 数据库密码存放路径 |
+| **K8s Auth 配置** | [`platform/91.vault-auth-kubernetes.tf`](https://github.com/wangzitian0/infra2/blob/main/platform/91.vault-auth-kubernetes.tf) | 信任 K8s 集群的配置 |
+| **应用 Role 定义** | [`platform/92.vault-myapp.tf`](https://github.com/wangzitian0/infra2/blob/main/platform/92.vault-myapp.tf) | 应用与 Policy 的绑定 |
+| **注入规范** | [`platform/6.vault-database.tf`](https://github.com/wangzitian0/infra2/blob/main/platform/6.vault-database.tf) | 数据库密码存放路径 |
 
 ---
 
@@ -89,12 +89,12 @@ graph TD
 
 | 行为描述 | 测试文件 (Test Anchor) | 覆盖率 |
 |----------|-----------------------|--------|
-| **K8s Auth 认证流** | [`test_vault_auth.py`](../../e2e_regressions/tests/platform/secrets/test_vault_auth.py) | ✅ Critical |
-| **Agent 注入文件存在性** | [`test_agent_injection.py`](../../e2e_regressions/tests/platform/secrets/test_agent_injection.py) | ✅ Critical |
+| **K8s Auth 认证流** | [`test_vault_auth.py`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/tests/platform/secrets/test_vault_auth.py) | ✅ Critical |
+| **Agent 注入文件存在性** | [`test_agent_injection.py`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/tests/platform/secrets/test_agent_injection.py) | ✅ Critical |
 
 ---
 
 ## Used by
 
 - [docs/ssot/db.overview.md](./db.overview.md)
-- [docs/onboarding/03.database.md](../../docs/onboarding/03.database.md)
+- [docs/onboarding/03.database.md](../onboarding/03.database.md)

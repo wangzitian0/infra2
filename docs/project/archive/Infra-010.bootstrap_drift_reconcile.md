@@ -16,7 +16,7 @@ resources before apply, and updating health checks.
 - PR #416: https://github.com/wangzitian0/infra/pull/416
 
 ## Change Log
-- [2025-12-25: Reconcile Bootstrap Drift in Post-Merge CI](../../change_log/2025-12-25.bootstrap_drift_reconcile.md)
+- 2025-12-25: Reconcile Bootstrap Drift in Post-Merge CI
 
 ## Git Commits (Backtrace)
 - cde8257 fix(bootstrap): reconcile post-merge drift (#416)

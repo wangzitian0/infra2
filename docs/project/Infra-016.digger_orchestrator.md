@@ -51,7 +51,7 @@
 
 ## Change Log
 
-- 2025-12-26: Initial planning (see `docs/change_log/2025-12-26.digger_orchestrator_planning.md`)
+- 2025-12-26: Initial planning (folded into project change log)
 
 ## Verification
 
@@ -61,4 +61,4 @@
 
 ## SSOT Reference
 
-- [bootstrap.compute.md](../ssot/bootstrap.compute.md#digger-orchestrator-自部署)
+- [ops.pipeline.md](../ssot/ops.pipeline.md)

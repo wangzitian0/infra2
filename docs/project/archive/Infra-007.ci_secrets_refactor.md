@@ -17,7 +17,7 @@ single source for bootstrap secret handling.
 - PR #402: https://github.com/wangzitian0/infra/pull/402
 
 ## Change Log
-- [2025-12-19: CI/CD Secret Chain Refactoring](../../change_log/2025-12-19.ci_secrets_refactor.md)
+- 2025-12-19: CI/CD Secret Chain Refactoring
 
 ## Git Commits (Backtrace)
 - 6b49413 Refactor: Harden Bootstrap & Tools Migration (#402)

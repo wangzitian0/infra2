@@ -14,8 +14,8 @@ and real deployment readiness, with PR feedback loops.
 - PR #289: https://github.com/wangzitian0/infra/pull/289
 
 ## Change Log
-- [2025-12-19: Pipeline V2 Upgrade](../../change_log/2025-12-19.pipeline_v2_upgrade.md)
-- [2025-12-15: Infra-Flash Per-Commit](../../change_log/2025-12-15.infra_flash_per_commit.md)
+- 2025-12-19: Pipeline V2 Upgrade
+- 2025-12-15: Infra-Flash Per-Commit
 
 ## Git Commits (Backtrace)
 - e52a10d feat(e2e): Add CI integration for E2E regression tests (#357)
@@ -328,6 +328,6 @@ TEST_PASSWORD       (可选) 密码
 
 ## 参考
 
-- [E2E 回归测试 SSOT](../ssot/ops.e2e-regressions.md)
-- [CI 流程文档](../ssot/ops.pipeline.md)
+- [E2E 回归测试 SSOT](../../ssot/ops.e2e-regressions.md)
+- [CI 流程文档](../../ssot/ops.pipeline.md)
 - [GitHub Actions 最佳实践](https://docs.github.com/en/actions/learn-github-actions)

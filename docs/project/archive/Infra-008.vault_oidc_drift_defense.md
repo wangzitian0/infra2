@@ -15,7 +15,7 @@ prevent configuration drift and improve plan-time visibility.
 - PR #279: https://github.com/wangzitian0/infra/pull/279
 
 ## Change Log
-- [2025-12-19: Vault OIDC Permission Fix & Native Drift Defense](../../change_log/2025-12-19.vault_oidc_drift_defense.md)
+- 2025-12-19: Vault OIDC Permission Fix & Native Drift Defense
 
 ## Git Commits (Backtrace)
 - f1e0827 feat(platform): implement native drift defense and whitebox health checks (#279)

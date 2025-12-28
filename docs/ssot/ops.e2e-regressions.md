@@ -13,13 +13,13 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **测试代码** | [`e2e_regressions/`](../../e2e_regressions/) | Pytest 测试套件 |
-| **CI 流程** | [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) | 触发逻辑 |
+| **测试代码** | [`e2e_regressions/`](https://github.com/wangzitian0/infra2/tree/main/e2e_regressions) | Pytest 测试套件 |
+| **CI 流程** | [`.github/workflows/`](https://github.com/wangzitian0/infra2/tree/main/.github/workflows) | Workflow 定义 |
 
 ### Code as SSOT 索引
 
-- **测试矩阵**：参见 [`e2e_regressions/tests/README.md`](../../e2e_regressions/tests/README.md)
-- **环境配置**：参见 [`e2e_regressions/conftest.py`](../../e2e_regressions/conftest.py)
+- **测试矩阵**：参见 [`e2e_regressions/tests/README.md`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/tests/README.md)
+- **环境配置**：参见 [`e2e_regressions/conftest.py`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/conftest.py)
 
 ---
 
@@ -84,7 +84,7 @@ flowchart LR
 
 > **权重**：按团队目标可调整。
 
-- **定义**：评分细则与可计算子指标参见 [`e2e_regressions/README.md`](../../e2e_regressions/README.md#-scoring)。
+- **定义**：评分细则与可计算子指标参见 [`e2e_regressions/README.md`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/README.md#-scoring)。
 
 ---
 
@@ -92,11 +92,11 @@ flowchart LR
 
 | 行为描述 | 测试文件 (Test Anchor) | 覆盖率 |
 |----------|-----------------------|--------|
-| **测试框架自身** | [`conftest.py`](../../e2e_regressions/conftest.py) | ✅ Meta-Test |
+| **测试框架自身** | [`conftest.py`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/conftest.py) | ✅ Meta-Test |
 
 ---
 
 ## Used by
 
 - [docs/ssot/README.md](./README.md)
-- [e2e_regressions/README.md](../../e2e_regressions/README.md)
+- [e2e_regressions/README.md](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/README.md)

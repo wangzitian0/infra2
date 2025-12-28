@@ -13,15 +13,15 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **Casdoor 部署** | [`platform/5.casdoor.tf`](../../platform/5.casdoor.tf) | SSO 服务定义 |
-| **OIDC 配置** | [`platform/90.casdoor-apps.tf`](../../platform/90.casdoor-apps.tf) | OIDC Clients 定义 |
-| **Vault Roles** | [`platform/91.casdoor-roles.tf`](../../platform/91.casdoor-roles.tf) | Casdoor Roles 定义 |
-| **Vault Policies** | [`platform/91.vault-oidc.tf`](../../platform/91.vault-oidc.tf) | OIDC Group Alias 映射 |
+| **Casdoor 部署** | [`platform/5.casdoor.tf`](https://github.com/wangzitian0/infra2/blob/main/platform/5.casdoor.tf) | SSO 服务定义 |
+| **OIDC 配置** | [`platform/90.casdoor-apps.tf`](https://github.com/wangzitian0/infra2/blob/main/platform/90.casdoor-apps.tf) | OIDC Clients 定义 |
+| **Vault Roles** | [`platform/91.casdoor-roles.tf`](https://github.com/wangzitian0/infra2/blob/main/platform/91.casdoor-roles.tf) | Casdoor Roles 定义 |
+| **Vault Policies** | [`platform/91.vault-oidc.tf`](https://github.com/wangzitian0/infra2/blob/main/platform/91.vault-oidc.tf) | OIDC Group Alias 映射 |
 
 ### Code as SSOT 索引
 
-- **Role 映射逻辑**：参见 [`platform/91.vault-oidc.tf`](../../platform/91.vault-oidc.tf) (Identity Group Alias)
-- **Portal Gate 配置**：参见 [`platform/92.portal-auth.tf`](../../platform/92.portal-auth.tf)
+- **Role 映射逻辑**：参见 [`platform/91.vault-oidc.tf`](https://github.com/wangzitian0/infra2/blob/main/platform/91.vault-oidc.tf) (Identity Group Alias)
+- **Portal Gate 配置**：参见 [`platform/92.portal-auth.tf`](https://github.com/wangzitian0/infra2/blob/main/platform/92.portal-auth.tf)
 
 ---
 
@@ -109,8 +109,8 @@ graph TD
 
 | 行为描述 | 测试文件 (Test Anchor) | 覆盖率 |
 |----------|-----------------------|--------|
-| **Vault OIDC 登录** | [`test_auth_flow.py`](../../e2e_regressions/tests/platform/auth/test_auth_flow.py) | ✅ Critical |
-| **Casdoor 服务状态** | [`test_casdoor.py`](../../e2e_regressions/tests/platform/auth/test_casdoor.py) | ✅ Critical |
+| **Vault OIDC 登录** | [`test_auth_flow.py`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/tests/platform/auth/test_auth_flow.py) | ✅ Critical |
+| **Casdoor 服务状态** | [`test_casdoor.py`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/tests/platform/auth/test_casdoor.py) | ✅ Critical |
 
 **如何运行验证**:
 ```bash
@@ -122,5 +122,5 @@ pytest e2e_regressions/tests/platform/auth/ -v
 ## Used by
 
 - [docs/ssot/README.md](./README.md)
-- [docs/onboarding/05.sso.md](../../docs/onboarding/05.sso.md)
-- [platform/README.md](../../platform/README.md)
+- [docs/onboarding/05.sso.md](../onboarding/05.sso.md)
+- [platform/README.md](https://github.com/wangzitian0/infra2/blob/main/platform/README.md)

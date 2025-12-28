@@ -13,15 +13,15 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **实例定义 (L1)** | [`bootstrap/5.platform_pg.tf`](../../bootstrap/5.platform_pg.tf) | 平台级数据库 |
-| **实例定义 (L3)** | [`envs/data-shared/`](../../envs/data-shared/) | 业务级数据库集群 |
-| **凭据管理** | [`platform/6.vault-database.tf`](../../platform/6.vault-database.tf) | Vault DB 引擎配置 |
-| **访问路径** | [`platform/locals.tf`](../../platform/locals.tf) | Vault KV 路径定义 |
+| **实例定义 (L1)** | [`bootstrap/5.platform_pg.tf`](https://github.com/wangzitian0/infra2/blob/main/bootstrap/5.platform_pg.tf) | 平台级数据库 |
+| **实例定义 (L3)** | [`envs/data-shared/`](https://github.com/wangzitian0/infra2/tree/main/envs/data-shared) | 业务级数据库集群 |
+| **凭据管理** | [`platform/6.vault-database.tf`](https://github.com/wangzitian0/infra2/blob/main/platform/6.vault-database.tf) | Vault DB 引擎配置 |
+| **访问路径** | [`platform/locals.tf`](https://github.com/wangzitian0/infra2/blob/main/platform/locals.tf) | Vault KV 路径定义 |
 
 ### Code as SSOT 索引
 
-- **数据库角色定义**：参见 [`platform/6.vault-database.tf`](../../platform/6.vault-database.tf) (搜索 `vault_database_secret_backend_role`)
-- **存储策略**：参见 [**存储层 SSOT**](./bootstrap.storage.md)
+- **数据库角色定义**：参见 [`platform/6.vault-database.tf`](https://github.com/wangzitian0/infra2/blob/main/platform/6.vault-database.tf) (搜索 `vault_database_secret_backend_role`)
+- **存储策略**：参见 [**存储层 SSOT**](./ops.storage.md)
 
 ---
 
@@ -101,12 +101,12 @@ flowchart TB
 
 | 行为描述 | 测试文件 (Test Anchor) | 覆盖率 |
 |----------|-----------------------|--------|
-| **DB 连通性矩阵** | [`test_db_connectivity.py`](../../e2e_regressions/tests/data/test_db_connectivity.py) | ✅ Critical |
-| **Vault 注入验证** | [`test_vault_injection.py`](../../e2e_regressions/tests/platform/secrets/test_vault_injection.py) | ✅ Critical |
+| **DB 连通性矩阵** | [`test_db_connectivity.py`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/tests/data/test_db_connectivity.py) | ✅ Critical |
+| **Vault 注入验证** | [`test_vault_injection.py`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/tests/platform/secrets/test_vault_injection.py) | ✅ Critical |
 
 ---
 
 ## Used by
 
 - [docs/ssot/README.md](./README.md)
-- [envs/README.md](../../envs/README.md)
+- [envs/README.md](https://github.com/wangzitian0/infra2/blob/main/envs/README.md)

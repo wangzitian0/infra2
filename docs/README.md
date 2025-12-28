@@ -1,19 +1,17 @@
-# Documentation Center
+# Documentation Wiki
 
-> **定位**：文档体系总入口，连接三类文档
-> **受众**：所有角色（开发者 + 运维者）
+> **定位**：文档体系首页（入口 + 导航 + 索引）
+> **在线站点**：https://wangzitian0.github.io/infra2/
+> **源码入口**：本仓库 `docs/` 目录
 
 ---
 
-## 📚 文档体系说明
+## 📌 快速入口
 
-本平台的文档分为三类，各有侧重：
-
-| 分类 | 路径 | 用途 | 适合人群 |
-|------|------|------|---------|
-| **[开发者体验](./onboarding/)** | `docs/onboarding/` | 场景驱动，注重接入顺滑 | 应用开发者 |
-| **[SSOT](./ssot/)** | `docs/ssot/` | 关键信息集中，技术参考手册 | 所有人 |
-| **Layer README** | 各目录 `README.md` | 模块驱动，设计和维护指南 | 基础设施维护者 |
+- **在线文档站**：https://wangzitian0.github.io/infra2/
+- **开发者入门**：`docs/onboarding/`
+- **SSOT 技术参考**：`docs/ssot/`
+- **项目进度**：`docs/project/`
 
 ---
 
@@ -43,24 +41,23 @@
 
 ---
 
-## 🔧 架构与设计文档
+## 🔧 基础设施维护者入口
 
-**如果你要修改基础设施**，参考这里：
+**如果你要修改基础设施**，优先参考对应模块 README：
 
-### Layer 文档
-
-- [Tools](../tools/README.md) - CI 工具和脚本
-- [Bootstrap](../bootstrap/README.md) - 集群引导层 (L1)
-- [Platform](../platform/README.md) - 平台服务层 (L2)
-- [Data](../envs/README.md) - 数据层 (L3)
-- [Apps](../apps/README.md) - 业务应用层 (L4)
-
-### 项目治理
-
-- [Project Status](./project/README.md) - 进行中的任务 (BRNs)
-- [Change Log](./change_log/) - 变更历史
-- [Deep Dives](./deep_dives/) - 深度技术决策文档
-- [AGENTS.md](../AGENTS.md) - AI 行为准则
+- [Tools](https://github.com/wangzitian0/infra2/blob/main/tools/README.md) - CI 工具和脚本
+- [Bootstrap](https://github.com/wangzitian0/infra2/blob/main/bootstrap/README.md) - 集群引导层 (L1)
+- [Platform](https://github.com/wangzitian0/infra2/blob/main/platform/README.md) - 平台服务层 (L2)
+- [Data](https://github.com/wangzitian0/infra2/blob/main/envs/README.md) - 数据层 (L3)
+- [Apps](https://github.com/wangzitian0/infra2/blob/main/apps/README.md) - 业务应用层 (L4)
 
 ---
-*Last updated: 2025-12-25*
+
+## 🧭 项目治理
+
+- [Project Portfolio](./project/README.md) - 进行中的任务与归档
+- [SSOT Index](./ssot/README.md) - 话题式技术参考
+- [AI 行为准则](https://github.com/wangzitian0/infra2/blob/main/AGENTS.md) - 协作规范与边界
+
+---
+*Last updated: 2025-12-28*

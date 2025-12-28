@@ -11,7 +11,7 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **操作手册** | [`bootstrap/README.md`](../../bootstrap/README.md) | 安装步骤 |
+| **操作手册** | [`bootstrap/README.md`](https://github.com/wangzitian0/infra2/blob/main/bootstrap/README.md) | 安装步骤 |
 | **版本追踪** | 本文档 [§4](#4-版本追踪) | 组件版本记录 |
 
 ### Code as SSOT 索引
@@ -19,7 +19,7 @@
 - **Dokploy 官方文档**：[docs.dokploy.com](https://docs.dokploy.com)
 - **Dokploy 源码**：[github.com/dokploy/dokploy](https://github.com/dokploy/dokploy)
 - **1Password Connect 文档**：[developer.1password.com/docs/connect](https://developer.1password.com/docs/connect/)
-- **1Password Connect 配置**：[`self_host_1password.yaml`](../../bootstrap/self_host_1password.yaml)
+- **1Password Connect 配置**：[`self_host_1password.yaml`](https://github.com/wangzitian0/infra2/blob/main/bootstrap/self_host_1password.yaml)
 
 ---
 
@@ -83,7 +83,7 @@ flowchart LR
 
 ---
 
-## 4. 版本追踪
+## 4. 版本追踪 {#4-版本追踪}
 
 > **约定**：每次安装/升级后更新此表。
 
