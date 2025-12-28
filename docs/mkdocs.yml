@@ -9,7 +9,7 @@ site_dir: ../.site
 
 exclude_docs: |
   README_tempate.md
-  project/Infra-001.TODOWRITE.md
+  project/Infra-003.TODOWRITE.md
 theme:
   name: material
   language: zh
@@ -76,22 +76,8 @@ nav:
       - Template: ssot/template.md
   - Projects:
       - Portfolio: project/README.md
-      - Infra-011: project/Infra-011.platform_service_catalog.md
-      - Infra-012: project/Infra-012.observability_slo_baseline.md
-      - Infra-013: project/Infra-013.backup_restore_game_day.md
-      - Infra-014: project/Infra-014.terraform_module_hardening.md
-      - Infra-015: project/Infra-015.data_platform_cost_optimization.md
-      - Infra-016: project/Infra-016.digger_orchestrator.md
-      - Infra-017: project/Infra-017.platform_module_architecture.md
-      - Template: project/Infra-0xx.template_do_something.md
+      - Infra-003: project/Infra-003.docs_reorg.md
+      - Infra-004: project/Infra-004.authentik_install.md
   - Archived Projects:
-      - Infra-001: project/archive/Infra-001.staging_deployment_blueprint.md
-      - Infra-002: project/archive/Infra-002.ssot_refactor_and_docs.md
-      - Infra-003: project/archive/Infra-003.cicd_deploy_verification.md
-      - Infra-004: project/archive/Infra-004.kubero_sso_rollout.md
-      - Infra-005: project/archive/Infra-005.openpanel_analytics_platform.md
-      - Infra-006: project/archive/Infra-006.pipeline_v2_upgrade.md
-      - Infra-007: project/archive/Infra-007.ci_secrets_refactor.md
-      - Infra-008: project/archive/Infra-008.vault_oidc_drift_defense.md
-      - Infra-009: project/archive/Infra-009.l1_provider_migration.md
-      - Infra-010: project/archive/Infra-010.bootstrap_drift_reconcile.md
+      - Infra-001: project/archive/Infra-001.bootstrap_setup.md
+      - Infra-002: project/archive/Infra-002.1password_vault_install.md

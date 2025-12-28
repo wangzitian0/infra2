@@ -7,28 +7,15 @@
 - Active projects live in `docs/project/`.
 - Archived projects live in `docs/project/archive/`.
 - Each project file includes PR links and an embedded change log section.
-- TODO inbox lives in `docs/project/Infra-001.TODOWRITE.md`.
+- TODO inbox for docs reorg lives in `docs/project/Infra-003.TODOWRITE.md`.
 
 ## Active Projects
-- [Infra-011: Platform Service Catalog](./Infra-011.platform_service_catalog.md) - **Proposed**
-- [Infra-012: Observability SLO Baseline](./Infra-012.observability_slo_baseline.md) - **Proposed**
-- [Infra-013: Backup and Restore Game Day](./Infra-013.backup_restore_game_day.md) - **Proposed**
-- [Infra-014: Terraform Module Hardening](./Infra-014.terraform_module_hardening.md) - **Proposed**
-- [Infra-015: Data Platform Cost Optimization](./Infra-015.data_platform_cost_optimization.md) - **Proposed**
-- [Infra-016: Digger Orchestrator](./Infra-016.digger_orchestrator.md) - **Proposed**
-- [Infra-017: Platform Module Architecture](./Infra-017.platform_module_architecture.md) - **In Progress**
+- [Infra-003: Documentation Reorganization](./Infra-003.docs_reorg.md) - **In Progress**
+- [Infra-004: Authentik Installation](./Infra-004.authentik_install.md) - **Not Started**
 
-## Archived Projects (Infra-001 to Infra-010)
-- [Infra-001: Staging Deployment Blueprint](./archive/Infra-001.staging_deployment_blueprint.md) - **Archived**
-- [Infra-002: SSOT Refactor and Documentation Restructure](./archive/Infra-002.ssot_refactor_and_docs.md) - **Archived**
-- [Infra-003: CI/CD Deploy Verification Architecture](./archive/Infra-003.cicd_deploy_verification.md) - **Archived**
-- [Infra-004: Kubero SSO Rollout and Emergency Access](./archive/Infra-004.kubero_sso_rollout.md) - **Archived**
-- [Infra-005: OpenPanel Analytics Platform Deployment](./archive/Infra-005.openpanel_analytics_platform.md) - **Archived**
-- [Infra-006: Pipeline V2 Upgrade](./archive/Infra-006.pipeline_v2_upgrade.md) - **Archived**
-- [Infra-007: CI Secrets Refactor](./archive/Infra-007.ci_secrets_refactor.md) - **Archived**
-- [Infra-008: Vault OIDC Drift Defense](./archive/Infra-008.vault_oidc_drift_defense.md) - **Archived**
-- [Infra-009: L1 Provider Migration](./archive/Infra-009.l1_provider_migration.md) - **Archived**
-- [Infra-010: Bootstrap Drift Reconcile](./archive/Infra-010.bootstrap_drift_reconcile.md) - **Archived**
+## Archived Projects
+- [Infra-001: Bootstrap Base Setup](./archive/Infra-001.bootstrap_setup.md) - **Archived**
+- [Infra-002: 1Password + Vault Installation](./archive/Infra-002.1password_vault_install.md) - **Archived**
 
 ## Related
 - [docs/ssot/README.md](../ssot/README.md) - SSOT index
