@@ -72,7 +72,7 @@ graph TD
     3. 创建 **Application** 并绑定 Provider。
     4. 将 Client Secret 写入 Vault（示例）：
        ```bash
-       vault kv put secret/platform/prod/<app> client_id=... client_secret=...
+       vault kv put secret/platform/production/<app> client_id=... client_secret=...
        ```
     5. 在应用侧配置 OIDC 参数并完成回调。
 

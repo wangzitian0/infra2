@@ -11,7 +11,7 @@
 |------|----------------|------|
 | **实例定义** | [`platform/02.redis/compose.yaml`](https://github.com/wangzitian0/infra2/blob/main/platform/02.redis/compose.yaml) | 服务配置 |
 | **部署任务** | [`platform/02.redis/deploy.py`](https://github.com/wangzitian0/infra2/blob/main/platform/02.redis/deploy.py) | Invoke 任务 |
-| **运行时密钥** | **Vault** (`secret/platform/prod/redis`) | password |
+| **运行时密钥** | **Vault** (`secret/platform/production/redis`) | password |
 
 ---
 

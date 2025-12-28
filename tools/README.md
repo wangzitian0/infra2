@@ -7,20 +7,20 @@ Standalone tools runnable via `invoke`.
 Sync environment variables between local `.env` files and Vault.
 
 ```bash
-# Push local .env to Vault
-invoke env.push --level=service --env=prod --service=postgres
+# Push local env to Vault
+invoke env.push --project=platform --env=production --level=service
 
 # Pull from Vault to local
-invoke env.pull --level=service --env=prod --service=postgres
+invoke env.pull --project=platform --env=production --level=service
 
 # Show status
-invoke env.status --service=postgres
+invoke env.status --project=platform --env=production
 ```
 
 ### Levels
 
 | Level | Local File | Vault Path |
 |-------|------------|------------|
-| project | `.env` | `secret/platform/` |
-| environment | `.env.{env}` | `secret/platform/{env}/` |
-| service | `platform/{svc}/.env.{env}.local` | `secret/platform/{env}/{svc}/` |
+| project | `.env` | `secret/{project}/` |
+| environment | `.env.{env}` | `secret/{project}/{env}/` |
+| service | `{project}/.env.{env}` | `secret/{project}/{env}/service/` |

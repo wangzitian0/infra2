@@ -55,7 +55,7 @@ flowchart TB
 - **步骤**:
     1. 读取 Vault 密码：
        ```bash
-       vault kv get -field=root_password secret/platform/prod/postgres
+       vault kv get -field=root_password secret/platform/production/postgres
        ```
     2. 在 VPS 侧测试连接：
        ```bash

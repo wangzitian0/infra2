@@ -47,7 +47,7 @@ graph TD
 - **步骤**:
     1. 在 Vault 中写入凭据：
        ```bash
-       vault kv put secret/platform/prod/<app> PG_HOST=... PG_USER=... PG_PASS=...
+       vault kv put secret/platform/production/<app> PG_HOST=... PG_USER=... PG_PASS=...
        ```
     2. 使用 env_sync 拉取到本地：
        ```bash

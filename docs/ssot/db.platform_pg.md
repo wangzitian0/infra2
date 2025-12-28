@@ -11,7 +11,7 @@
 |------|----------------|------|
 | **实例定义** | [`platform/01.postgres/compose.yaml`](https://github.com/wangzitian0/infra2/blob/main/platform/01.postgres/compose.yaml) | 服务配置 |
 | **部署任务** | [`platform/01.postgres/deploy.py`](https://github.com/wangzitian0/infra2/blob/main/platform/01.postgres/deploy.py) | Invoke 任务 |
-| **运行时密钥** | **Vault** (`secret/platform/prod/postgres`) | root_password |
+| **运行时密钥** | **Vault** (`secret/platform/production/postgres`) | root_password |
 
 ---
 
