@@ -48,7 +48,7 @@ async def test_vault_oidc_configured(config: TestConfig):
         # If we can't access /v1/sys/auth without token (Standard), 
         # we check the UI for OIDC buttons
         if response.status_code == 403:
-             # Check UI for OIDC login button text
+            # Check UI for OIDC login button text
              from playwright.async_api import Page
              # This would require a separate test function taking Page
              pass

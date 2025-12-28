@@ -5,7 +5,7 @@
 ## 📚 SSOT References
 
 本测试套件是以下文档的 **Test Anchor**：
-> [**Platform Secrets SSOT**](../../../../docs/ssot/platform.secrets.md#5-验证与测试-the-proof)
+> [**Bootstrap Vars & Secrets SSOT**](../../../../docs/ssot/bootstrap.vars_and_secrets.md)
 
 ## 测试矩阵
 

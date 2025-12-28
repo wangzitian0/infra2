@@ -20,8 +20,11 @@ class Config:
         Args:
             project: bootstrap, platform, e2e_regression, or tools
             env: production, staging, or test_xxx
-            service: Deprecated, kept for compatibility (ignored)
+            service: Deprecated - will be removed in future version
         """
+        if service is not None:
+            import warnings
+            warnings.warn("service parameter is deprecated and ignored", DeprecationWarning, stacklevel=2)
         self.project = project
         self.env = env
         self.root = Path(__file__).parent.parent

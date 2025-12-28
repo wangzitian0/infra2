@@ -70,7 +70,7 @@ class Deployer:
 
 ```python
 class Config:
-    def __init__(project='platform', env='prod', service=None)
+    def __init__(project, env='production', service=None)
     def get(key, level=None, default=None) -> str | None
     def all() -> dict
 ```

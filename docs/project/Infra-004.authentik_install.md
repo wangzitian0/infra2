@@ -68,7 +68,7 @@ platform/{nn}.{service}/
 
 ## PR Links
 
-- TBD (feat/deploy-authentik)
+- [PR #7: Deploy Authentik with DRY/Pythonic improvements](https://github.com/wangzitian0/infra2/pull/7)
 
 ## Change Log
 
@@ -79,7 +79,7 @@ platform/{nn}.{service}/
 
 ## Verification
 
-- [ ] `invoke --list` loads all modules
+- [x] `invoke --list` loads all modules
 - [ ] `invoke postgres.shared.status` returns healthy
 - [ ] `invoke redis.shared.status` returns healthy
 - [ ] `invoke authentik.shared.status` returns healthy

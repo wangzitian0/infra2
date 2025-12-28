@@ -1,6 +1,6 @@
 """
 Task loader for invoke automation
-Discovers and loads tasks from bootstrap, platform, e2e_regression, and tools directories.
+Discovers and loads tasks from bootstrap, platform, and tools directories.
 """
 from invoke import Collection, Task
 from pathlib import Path
