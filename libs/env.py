@@ -6,11 +6,10 @@ SSOT per project:
 - platform/others: Dokploy for env, Vault for secrets
 
 Usage:
-    from libs.env import EnvManager
+    from libs.env import EnvManager, get_or_set
     
     env = EnvManager(project='platform', env='production', service='postgres')
     password = env.get_secret('POSTGRES_PASSWORD')
-    env.set_secret('POSTGRES_PASSWORD', 'newvalue')
 """
 from __future__ import annotations
 import json
@@ -18,7 +17,17 @@ import os
 import secrets
 import string
 import subprocess
-from typing import Optional
+
+
+__all__ = [
+    'EnvManager',
+    'get_or_set',
+    'generate_password',
+    'SSOT_CONFIG',
+    'OP_VAULT',
+    'INIT_ITEM',
+    'REQUIRED_INIT_FIELDS',
+]
 
 
 # SSOT configuration per project

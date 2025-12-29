@@ -14,6 +14,28 @@ from libs.env import EnvManager, generate_password
 if TYPE_CHECKING:
     from invoke import Context
 
+__all__ = ['Deployer', 'make_tasks', 'load_shared_tasks']
+
+
+def load_shared_tasks(caller_file: str) -> Any:
+    """Load shared_tasks.py from the same directory as caller
+    
+    DRY helper to avoid repeating importlib boilerplate in every deploy.py.
+    
+    Usage:
+        shared = load_shared_tasks(__file__)
+        _tasks = make_tasks(MyDeployer, shared)
+    """
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location(
+        "shared_tasks",
+        Path(caller_file).parent / "shared_tasks.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 
 class Deployer:
     """Base class for service deployment
