@@ -40,9 +40,26 @@ invoke env.copy --from-project=platform --from-env=staging --to-env=production
 ## Python API
 
 ```python
-from libs.config import Config
+from libs.env import EnvManager, get_or_set
 
-config = Config(project='platform', env='production', service='postgres')
-host = config.get('POSTGRES_HOST')
-password = config.get_secret('POSTGRES_PASSWORD')
+# Use EnvManager for explicit control
+mgr = EnvManager(project='platform', env='production', service='postgres')
+
+# Get env var (checks Dokploy/Vault/1Password)
+host = mgr.get_env('POSTGRES_HOST')
+
+# Get secret (checks Vault/1Password)
+password = mgr.get_secret('POSTGRES_PASSWORD')
+
+# Idempotent Secret Generation
+# Returns existing secret if found, else generates new one
+pswd = get_or_set('POSTGRES_PASSWORD', length=32)
 ```
+
+## .env.example Role
+
+`.env.example` files served as the **manifest** for required environment variables.
+- Git tracked.
+- Contains KEYS only (no values).
+- Used by `Deployer` to validate environment readiness.
+

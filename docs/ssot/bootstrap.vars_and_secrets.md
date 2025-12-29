@@ -109,16 +109,20 @@ invoke env.preview --project=platform --env=production --service=postgres
 ## 6. Python API
 
 ```python
-from libs.config import Config
+from libs.env import EnvManager, get_or_set
 
 # 从远端加载（无本地存储）
-config = Config(project='platform', env='production', service='postgres')
+mgr = EnvManager(project='platform', env='production', service='postgres')
 
 # 获取环境变量
-host = config.get('POSTGRES_HOST')
+host = mgr.get_env('POSTGRES_HOST')
 
 # 获取密钥
-password = config.get_secret('POSTGRES_PASSWORD')
+password = mgr.get_secret('POSTGRES_PASSWORD')
+
+# 幂等生成密钥
+# 如果远端已有，返回现有值；否则生成新值并写入
+pw = get_or_set('POSTGRES_PASSWORD', length=32)
 ```
 
 ---
@@ -127,8 +131,8 @@ password = config.get_secret('POSTGRES_PASSWORD')
 
 ### ✅ 推荐模式
 - 使用 `invoke env.*` 命令读写远端
-- 使用 `Config` 类在代码中获取配置
-- `.env.example` 只保留 KEY
+- 使用 `EnvManager` 类在代码中获取配置
+- `.env.example` 仅作为 KEY 清单（用于 `Deployer` 校验）
 - 每个组件 README 包含完整手动步骤
 
 ### ⛔ 禁止模式
