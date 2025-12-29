@@ -16,7 +16,7 @@ class OnePasswordDeployer(Deployer):
     data_path = "/data/bootstrap/1password"
     uid = "1000"
     gid = "1000"
-    chmod = "777"
+    chmod = "750"
 
     @classmethod
     def _upload_credentials(cls, c) -> bool:
@@ -115,4 +115,4 @@ def fix_permissions(c):
     """Fix database permission issues"""
     e = get_env()
     ssh_user = e.get("VPS_SSH_USER") or "root"
-    run_with_status(c, f"ssh {ssh_user}@{e['VPS_HOST']} 'chmod 777 /data/bootstrap/1password'", "Fix permissions")
+    run_with_status(c, f"ssh {ssh_user}@{e['VPS_HOST']} 'chmod 750 /data/bootstrap/1password'", "Fix permissions")

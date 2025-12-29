@@ -31,6 +31,10 @@ def _query_exists(c, ssh_user: str, host: str, query: str) -> bool:
     return result.stdout.strip() == "1"
 
 
+def _escape_sql_literal(value: str) -> str:
+    return value.replace("'", "''")
+
+
 @task
 def create_database(c, name):
     """Create a database"""
@@ -56,13 +60,14 @@ def create_user(c, username, database, password):
         return
     e = get_env()
     ssh_user = e.get("VPS_SSH_USER") or "root"
+    password_literal = _escape_sql_literal(password)
     if _query_exists(c, ssh_user, e["VPS_HOST"], f"SELECT 1 FROM pg_roles WHERE rolname='{username}';"):
         info(f"User already exists: {username}")
     else:
         info(f"Creating user: {username}")
         c.run(
             f"ssh {ssh_user}@{e['VPS_HOST']} "
-            f"\"docker exec {CONTAINER_NAMES['postgres']} psql -U postgres -c \\\"CREATE USER {username} WITH PASSWORD '{password}';\\\"\"",
+            f"\"docker exec {CONTAINER_NAMES['postgres']} psql -U postgres -c \\\"CREATE USER {username} WITH PASSWORD '{password_literal}';\\\"\"",
             warn=True,
         )
     c.run(

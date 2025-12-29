@@ -100,6 +100,7 @@ def _load_tools(ns, root):
     if not tools_dir.exists():
         return
     
+    # Tools are loaded into isolated namespaces to avoid task name collisions.
     coll = Collection()
     if _load_tasks_into_collection(tools_dir / "env_tool.py", "tools.env_tool", coll):
         ns.add_collection(coll, name="env")

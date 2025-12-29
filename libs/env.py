@@ -211,15 +211,7 @@ class EnvManager:
         op_vault = self._config.get('op_vault', OP_VAULT)
         path = self._op_item_path(level)
         
-        # Check if item exists
-        ok, _ = self._run_cli([
-            "op",
-            "item",
-            "get",
-            path,
-            f"--vault={op_vault}",
-        ])
-        if ok:
+        if self._op_item_exists(path, op_vault):
             ok, _ = self._run_cli([
                 "op",
                 "item",
@@ -241,6 +233,16 @@ class EnvManager:
         
         # Clear cache
         self._cache.pop(f'_op_{level}', None)
+        return ok
+
+    def _op_item_exists(self, path: str, op_vault: str) -> bool:
+        ok, _ = self._run_cli([
+            "op",
+            "item",
+            "get",
+            path,
+            f"--vault={op_vault}",
+        ])
         return ok
     
     # =========================================================================
@@ -305,10 +307,8 @@ class EnvManager:
     def _dokploy_get_all(self, level: str = 'service') -> dict[str, str]:
         """Get env vars from Dokploy (placeholder)"""
         # TODO: Implement Dokploy CLI/API
-        if not self._cache.get("_dokploy_warned"):
-            from libs.console import warning
-            warning("Dokploy API not yet implemented; returning empty env vars.")
-            self._cache["_dokploy_warned"] = True
+        from libs.console import warning
+        warning("Dokploy API not yet implemented; returning empty env vars.")
         return {}
     
     def _dokploy_get(self, key: str, level: str = 'service') -> Optional[str]:

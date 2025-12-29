@@ -140,7 +140,6 @@ def setup(c):
         success("Vault already healthy - skipping setup")
         return
 
-    prepare(c)
     deploy(c)
     init(c)
     unseal(c)

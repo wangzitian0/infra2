@@ -19,7 +19,7 @@
 ssh ${VPS_SSH_USER:-root}@<VPS_IP>
 mkdir -p /data/bootstrap/1password
 chown -R 1000:1000 /data/bootstrap/1password
-chmod 777 /data/bootstrap/1password
+chmod 750 /data/bootstrap/1password
 exit
 ```
 
@@ -57,7 +57,7 @@ curl -H "Authorization: Bearer $TOKEN" https://op.$INTERNAL_DOMAIN/v1/vaults
 
 ### 数据库权限错误
 ```bash
-ssh root@<VPS_IP> 'chmod 777 /data/bootstrap/1password'
+ssh root@<VPS_IP> 'chmod 750 /data/bootstrap/1password'
 ```
 
 ### sync 服务无法启动
