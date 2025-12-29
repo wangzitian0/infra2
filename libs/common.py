@@ -31,6 +31,28 @@ def _load_init_config() -> dict[str, str]:
     return mgr.get_all_env(level='service')
 
 
+def load_env_keys(path: str) -> list[str]:
+    """Parse .env file and return list of keys"""
+    if not os.path.exists(path):
+        return []
+    
+    keys = []
+    with open(path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            # Handle default values/comments in line
+            # e.g. KEY=VAL # comment
+            if '=' in line:
+                key = line.split('=', 1)[0].strip()
+                # Remove export prefix if present
+                if key.upper().startswith('EXPORT '):
+                    key = key[7:].strip()
+                keys.append(key)
+    return keys
+
+
 def get_env() -> dict[str, str | None]:
     """Get environment config from 1Password (no local .env needed)
     
@@ -77,6 +99,7 @@ def generate_password(length: int = 24) -> str:
 __all__ = [
     'get_env',
     'validate_env',
+    'load_env_keys',
     'generate_password',
     'check_docker_service',
     'CONTAINER_NAMES',

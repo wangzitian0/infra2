@@ -7,9 +7,11 @@ Key pattern: check status first, skip if healthy.
 from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from invoke import task
-from libs.common import get_env, validate_env
+from libs.common import get_env, validate_env, load_env_keys
 from libs.console import header, success, error, warning, info, env_vars, prompt_action, run_with_status
 from libs.env import EnvManager, generate_password
+import sys
+from pathlib import Path
 
 if TYPE_CHECKING:
     from invoke import Context
@@ -18,16 +20,8 @@ __all__ = ['Deployer', 'make_tasks', 'load_shared_tasks']
 
 
 def load_shared_tasks(caller_file: str) -> Any:
-    """Load shared_tasks.py from the same directory as caller
-    
-    DRY helper to avoid repeating importlib boilerplate in every deploy.py.
-    
-    Usage:
-        shared = load_shared_tasks(__file__)
-        _tasks = make_tasks(MyDeployer, shared)
-    """
+    """Load shared_tasks.py from the same directory as caller"""
     import importlib.util
-    from pathlib import Path
     spec = importlib.util.spec_from_file_location(
         "shared_tasks",
         Path(caller_file).parent / "shared_tasks.py"
@@ -53,6 +47,7 @@ class Deployer:
     chmod: str = "755"
     secret_key: str = "password"  # Key name in Vault
     env_var_name: str = ""  # Env var to display
+    env_example_path: str = ".env.example" # Relative to deploy.py
     
     @classmethod
     def env(cls) -> dict[str, str | None]:
@@ -65,6 +60,14 @@ class Deployer:
         project = e.get('PROJECT', 'platform')
         env = e.get('ENV', 'production')
         return EnvManager(project=project, env=env, service=cls.service)
+    
+    @classmethod
+    def get_example_keys(cls) -> list[str]:
+        """Get keys from .env.example"""
+        # Resolve path relative to subclass file
+        deployer_file = sys.modules[cls.__module__].__file__
+        path = Path(deployer_file).parent / cls.env_example_path
+        return load_env_keys(str(path))
     
     @classmethod
     def check_status(cls, c: "Context", shared_tasks: Any) -> bool:
@@ -96,12 +99,28 @@ class Deployer:
         if not cls._prepare_dirs(c):
             return None
         
-        # Generate NEW password (atomic install)
         env_mgr = cls.get_env_manager()
-        password = generate_password(24)
-        env_mgr.set_secret(cls.secret_key, password)
+        keys = cls.get_example_keys()
         
-        secrets = {cls.env_var_name: password}
+        # Fallback if no .env.example (for legacy)
+        if not keys and cls.env_var_name:
+            keys = [cls.env_var_name]
+            
+        secrets = {}
+        for key in keys:
+             # Check if it exists
+             val = env_mgr.get_secret(key) or env_mgr.get_env(key)
+             
+             # If missing and matches our primary secret, generate it
+             if not val and key == cls.env_var_name:
+                 val = generate_password(24)
+                 env_mgr.set_secret(cls.secret_key, val)
+             
+             if val:
+                 secrets[key] = val
+             else:
+                 warning(f"Missing env var: {key} (Checked Vault/1Password)")
+
         env_vars("DOKPLOY ENV", secrets)
         success("pre_compose complete")
         return secrets
