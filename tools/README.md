@@ -1,23 +1,62 @@
 # Infra2 CLI Tools
 
-Standalone tools runnable via `invoke`.
+Standalone `invoke` namespaces loaded by `tools/loader.py`.
 
-## env_tool.py
+## Runner
 
-Remote-first env/secret operations (1Password/Dokploy/Vault). No local `.env` sync.
+- Use `invoke` inside an activated venv, or prefix with `uv run` when using uv.
+- List all tasks: `invoke --list` (未激活虚拟环境时用 `uv run invoke --list`).
+
+## Namespaces
+
+| Namespace | Entry | Purpose |
+|-----------|-------|---------|
+| `env` | `tools/env_tool.py` | Remote env/secret SSOT operations |
+| `local` | `tools/local_init.py` | Local CLI checks and bootstrap helpers |
+
+## Common Conventions
+
+- Pattern: `invoke <namespace>.<task>`
+- `env` defaults: `--env=production`, `--service` optional (required for `list-all`)
+- Write operations use `KEY=VALUE` (quote values with spaces)
+- Output uses `libs.console` helpers; avoid raw `print` in new tasks.
+- Omit `--service` for environment-level (`{project}/{env}`) values.
+
+## env (remote secrets)
+
+Remote-first secrets operations (1Password/Vault). No local `.env` sync.
 
 ```bash
-# Read/set env vars
-invoke env.get KEY --project=platform --env=production --service=postgres
-invoke env.set KEY=VALUE --project=platform --env=production --service=postgres
+# Read secret
+invoke env.get KEY --project=platform --service=postgres
 
-# Read/set secrets
-invoke env.secret-get KEY --project=platform --env=production --service=postgres
-invoke env.secret-set KEY=VALUE --project=platform --env=production --service=postgres
+# Write secret
+invoke env.set KEY=VALUE --project=platform --service=postgres
 
-# Preview merged values (project + environment + service)
-invoke env.preview --project=platform --env=production --service=postgres
+# List secrets (masked)
+invoke env.list-all --project=platform --service=postgres
 
-# Copy env/secrets between environments
-invoke env.copy --from-project=platform --from-env=production --to-env=staging --service=postgres
+# Show init/env_vars from 1Password
+invoke env.init-status
+```
+
+## local (local readiness + bootstrap)
+
+- 输出统一使用 `libs.console`（状态行 + 命令块），不直接 `print`。
+
+```bash
+# Check CLI dependencies
+invoke local.check
+
+# Guide local setup (prints install instructions)
+invoke local.init
+
+# Show installed CLI versions
+invoke local.version
+
+# Validate init/env_vars in 1Password (no local .env)
+invoke local.bootstrap
+
+# Detect current bootstrap phase
+invoke local.phase
 ```

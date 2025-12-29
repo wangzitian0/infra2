@@ -113,3 +113,10 @@ Project closed on 2025-12-30; list retained for record.
 - [x] `docs/onboarding/04.secrets.md`: 权限提示用语对齐。
 - [x] `e2e_regressions/README.md`: 测试命令位置说明更清晰（去掉 cd ..）。
 - [x] `docs/ssot/ops.recovery.md`: 统一占位符格式。
+- [x] `libs/README.md` + `tools/README.md`: 增补 libs/tools 总览与 env/local CLI 一致性说明。
+- [x] `tools/loader.py` + `bootstrap/05.vault/*` + `platform/01.postgres/shared_tasks.py`: CLI 日志统一改为 `libs.console` 输出。
+- [x] `tools/local_init.py`: CLI 安装/提示输出统一改为 `libs.console` 风格。
+- [x] `README.md` + `docs/README.md` + `docs/onboarding/README.md` + `docs/ssot/README.md`: 统一命令示例为 `invoke` 并提示 `uv run invoke` 备用。
+- [x] `docs/ssot/bootstrap.vars_and_secrets.md` + `README.md`: env CLI 示例补齐 `--service` 与说明。
+- [x] `libs/deployer.py` + `bootstrap/04.1password/tasks.py` + `bootstrap/05.vault/tasks.py` + `platform/10.authentik/deploy.py`: CLI 日志文案统一为 pre/post-compose。
+- [x] `docs/ssot/platform.automation.md` + `docs/ssot/platform.sso.md` + `platform/*/README.md`: 统一 pre/post-compose 命名展示。

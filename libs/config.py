@@ -1,23 +1,28 @@
-"""Configuration loader using libs/env.py
+"""Configuration loader using libs/env.py (legacy wrapper).
 
 Usage:
     from libs.config import Config
-    
+
     config = Config(project='platform', env='production', service='postgres')
-    password = config.get('POSTGRES_PASSWORD')
-    secret = config.get_secret('POSTGRES_PASSWORD')
+    password = config.get_secret('POSTGRES_PASSWORD')
 """
 from __future__ import annotations
 from typing import Optional
-from libs.env import EnvManager
+from libs.env import get_secrets
 
 
 class Config:
-    """Load config from remote SSOT using EnvManager."""
+    """Legacy secrets wrapper around get_secrets().
+
+    Note: This no longer reads Dokploy env vars; only secrets in Vault/1Password.
+    """
     
     def __init__(self, project: str, env: str = 'production', service: Optional[str] = None):
-        self._mgr = EnvManager(project, env, service)
-        self._project_mgr = EnvManager(project, env, None)
+        self._project = project
+        self._env = env
+        self._service = service
+        self._service_secrets = get_secrets(project, service, env)
+        self._env_secrets = get_secrets(project, None, env)
     
     def _parse_key(self, key: str) -> tuple[str, str]:
         """Parse Dokploy-style key: 'project.VAR' -> ('project', 'VAR')"""
@@ -32,44 +37,38 @@ class Config:
         level, actual_key = self._parse_key(key)
         
         if level != 'service':
-            return self._project_mgr.get_env(actual_key, level) or default
-        
-        # Merged: service > environment > project
-        for lvl in ['service', 'environment', 'project']:
-            mgr = self._mgr if lvl == 'service' else self._project_mgr
-            val = mgr.get_env(actual_key, lvl)
-            if val is not None:
-                return val
-        return default
+            return self._env_secrets.get(actual_key) or default
+
+        if self._service is None:
+            return self._env_secrets.get(actual_key) or default
+
+        return self._service_secrets.get(actual_key) or self._env_secrets.get(actual_key) or default
     
     def get_secret(self, key: str, default: Optional[str] = None) -> Optional[str]:
         """Get secret. Same syntax as get()."""
         level, actual_key = self._parse_key(key)
         
         if level != 'service':
-            return self._project_mgr.get_secret(actual_key, level) or default
-        
-        for lvl in ['service', 'environment', 'project']:
-            mgr = self._mgr if lvl == 'service' else self._project_mgr
-            val = mgr.get_secret(actual_key, lvl)
-            if val is not None:
-                return val
-        return default
+            return self._env_secrets.get(actual_key) or default
+
+        if self._service is None:
+            return self._env_secrets.get(actual_key) or default
+
+        return self._service_secrets.get(actual_key) or self._env_secrets.get(actual_key) or default
     
     def all(self, level: str = 'service') -> dict:
         """Get all env vars from a level."""
-        mgr = self._mgr if level == 'service' else self._project_mgr
-        return mgr.get_all_env(level)
+        if level == 'service' and self._service is not None:
+            return self._service_secrets.get_all()
+        return self._env_secrets.get_all()
     
     def all_secrets(self, level: str = 'service') -> dict:
         """Get all secrets from a level."""
-        mgr = self._mgr if level == 'service' else self._project_mgr
-        return mgr.get_all_secrets(level)
+        return self.all(level)
     
     def merged(self) -> dict:
         """Get merged env vars (service > environment > project)."""
-        result = {}
-        for lvl in ['project', 'environment', 'service']:
-            mgr = self._mgr if lvl == 'service' else self._project_mgr
-            result.update(mgr.get_all_env(lvl))
+        result = self._env_secrets.get_all().copy()
+        if self._service is not None:
+            result.update(self._service_secrets.get_all())
         return result

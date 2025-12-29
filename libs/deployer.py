@@ -59,7 +59,7 @@ class Deployer:
             return False
         
         e = cls.env()
-        header(f"{cls.service} pre_compose", f"Preparing ({e['ENV']})")
+        header(f"{cls.service} pre-compose", f"Preparing ({e['ENV']})")
         
         host = e['VPS_HOST']
         run_with_status(c, f"ssh root@{host} 'mkdir -p {cls.data_path}'", "Create directory")
@@ -85,7 +85,7 @@ class Deployer:
             result[cls.env_var_name] = val
         
         env_vars("DOKPLOY ENV", result)
-        success("pre_compose complete")
+        success("pre-compose complete")
         return result
     
     @classmethod
@@ -103,10 +103,10 @@ class Deployer:
     @classmethod
     def post_compose(cls, c: "Context", shared_tasks: Any) -> bool:
         """Verify deployment"""
-        header(f"{cls.service} post_compose", "Verifying")
+        header(f"{cls.service} post-compose", "Verifying")
         result = shared_tasks.status(c)
         if result["is_ready"]:
-            success(f"post_compose complete - {result['details']}")
+            success(f"post-compose complete - {result['details']}")
             return True
         error("Verification failed", result["details"])
         return False
@@ -145,7 +145,7 @@ def make_tasks(deployer_cls: type[Deployer], shared_tasks: Any) -> dict:
         
         warning(f"{deployer_cls.service} not healthy - starting install")
         if deployer_cls.pre_compose(c) is None:
-            error("pre_compose failed")
+            error("pre-compose failed")
             return
         deployer_cls.composing(c)
         deployer_cls.post_compose(c, shared_tasks)

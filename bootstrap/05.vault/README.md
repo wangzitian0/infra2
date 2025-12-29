@@ -9,6 +9,19 @@ HashiCorp Vault - 秘密管理和加密服务。
 
 ## 操作步骤
 
+### 自动化任务 (Invoke)
+
+```bash
+invoke vault.setup
+invoke vault.prepare
+invoke vault.deploy
+invoke vault.init
+invoke vault.unseal
+invoke vault.status
+```
+
+> CLI 输出统一使用 `libs.console`，避免直接 `print`。
+
 ### 1. 准备配置
 
 ```bash

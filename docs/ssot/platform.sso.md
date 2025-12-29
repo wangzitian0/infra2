@@ -12,7 +12,7 @@
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
 | **Authentik 部署** | [`platform/10.authentik/compose.yaml`](https://github.com/wangzitian0/infra2/blob/main/platform/10.authentik/compose.yaml) | SSO 服务定义 |
-| **部署任务** | [`platform/10.authentik/deploy.py`](https://github.com/wangzitian0/infra2/blob/main/platform/10.authentik/deploy.py) | pre_compose / composing / post_compose |
+| **部署任务** | [`platform/10.authentik/deploy.py`](https://github.com/wangzitian0/infra2/blob/main/platform/10.authentik/deploy.py) | pre-compose / composing / post-compose |
 | **状态检查** | [`platform/10.authentik/shared_tasks.py`](https://github.com/wangzitian0/infra2/blob/main/platform/10.authentik/shared_tasks.py) | status() 健康检查 |
 
 ---

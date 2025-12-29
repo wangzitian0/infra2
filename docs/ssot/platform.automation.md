@@ -10,12 +10,12 @@
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
 | **服务定义** | `platform/{nn}.{service}/compose.yaml` | Docker Compose 配置 |
-| **部署任务** | `platform/{nn}.{service}/deploy.py` | pre_compose, composing, post_compose |
+| **部署任务** | `platform/{nn}.{service}/deploy.py` | pre-compose, composing, post-compose |
 | **状态检查** | `platform/{nn}.{service}/shared_tasks.py` | status() 返回 {is_ready, details} |
-| **公共库** | `libs/` | common, console, config, deployer |
-| **CLI 工具** | `tools/` | env_tool.py |
+| **公共库** | `libs/` | env, common, console, config, deployer |
+| **CLI 工具** | `tools/` | env_tool.py, local_init.py |
 
-> **Note**: Dokploy env API integration is pending. `EnvManager` will warn and return empty values for Dokploy-backed env reads until implemented.
+> **Note**: Dokploy env API integration is pending. `env_tool` only manages 1Password/Vault secrets for now; Dokploy env vars still require manual updates.
 
 ### Code as SSOT 索引
 
@@ -30,6 +30,7 @@
 ```mermaid
 flowchart TB
     subgraph Libs["libs/ (开发库)"]
+        Env[env.py]
         Common[common.py]
         Console[console.py]
         Deployer[deployer.py]
@@ -38,6 +39,7 @@ flowchart TB
     
     subgraph Tools["tools/ (CLI工具)"]
         EnvTool[env_tool.py]
+        LocalInit[local_init.py]
     end
     
     subgraph Platform["platform/ (服务)"]
@@ -49,6 +51,7 @@ flowchart TB
     Deployer --> PG
     Deployer --> RD
     Deployer --> AUTH
+    Env --> EnvTool
     Common --> EnvTool
     PG --> AUTH
     RD --> AUTH
@@ -61,7 +64,6 @@ platform/{nn}.{service}/
 ├── compose.yaml       # Docker Compose
 ├── deploy.py          # XxxDeployer 类 + @task
 ├── shared_tasks.py    # status() 检查
-├── .env.example       # 环境变量模板
 └── README.md          # 服务文档
 ```
 
@@ -79,10 +81,10 @@ platform/{nn}.{service}/
       data_path = "/data/platform/postgres"
   ```
 
-- **模式 B**: status() 使用 check_docker_service()
+- **模式 B**: status() 使用 check_service()
   ```python
   def status(c):
-      return check_docker_service(c, "platform-postgres", "pg_isready", "PostgreSQL")
+      return check_service(c, "postgres", "pg_isready")
   ```
 
 ### ⛔ 禁止模式
@@ -93,6 +95,16 @@ platform/{nn}.{service}/
 ---
 
 ## 4. 标准操作程序 (Playbooks)
+
+### SOP-000: 本地 CLI 就绪检查
+
+```bash
+invoke local.check
+invoke local.init
+invoke local.version
+invoke local.bootstrap
+invoke local.phase
+```
 
 ### SOP-001: 部署服务
 
@@ -114,20 +126,18 @@ invoke redis.shared.status
 invoke authentik.shared.status
 ```
 
-### SOP-003: 管理环境变量与密钥
+### SOP-003: 管理密钥
 
 ```bash
-# 读取/设置环境变量
+# 读取/设置密钥
 invoke env.get KEY --project=platform --env=production --service=postgres
 invoke env.set KEY=VALUE --project=platform --env=production --service=postgres
 
-# 读取/设置密钥
-invoke env.secret-get KEY --project=platform --env=production --service=postgres
-invoke env.secret-set KEY=VALUE --project=platform --env=production --service=postgres
+# 预览（masked）
+invoke env.list-all --project=platform --service=postgres
 
-# 预览与复制
-invoke env.preview --project=platform --env=production --service=postgres
-invoke env.copy --from-project=platform --from-env=production --to-env=staging --service=postgres
+# init/env_vars
+invoke env.init-status
 ```
 
 ---
@@ -138,7 +148,7 @@ invoke env.copy --from-project=platform --from-env=production --to-env=staging -
 |----------|----------|
 | **所有模块加载** | `invoke --list` 无报错 |
 | **服务健康** | `invoke {service}.shared.status` |
-| **Vault 读写** | `invoke env.secret-get POSTGRES_PASSWORD --project=platform --env=production --service=postgres` |
+| **Vault 读写** | `invoke env.get POSTGRES_PASSWORD --project=platform --env=production --service=postgres` |
 
 ---
 

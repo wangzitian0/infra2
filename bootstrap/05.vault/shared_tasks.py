@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from invoke import task
 from libs.common import get_env
-from libs.console import success, error
+from libs.console import console, success, error
 
 
 @task
@@ -43,7 +43,7 @@ def read_secret(c, path: str, field: str | None = None) -> str | dict | None:
         result = c.run(f"vault kv get -field={field} secret/{path}", warn=True, hide=True)
         if result.ok:
             val = result.stdout.strip()
-            print(val)
+            console.print(val)
             return val
     else:
         result = c.run(f"vault kv get -format=json secret/{path}", warn=True, hide=True)
@@ -60,7 +60,7 @@ def list_secrets(c, path: str) -> list[str]:
     if result.ok:
         keys = [k for k in result.stdout.strip().split("\n")[2:] if k]
         for k in keys:
-            print(f"  - {k}")
+            console.print(f"  - {k}")
         return keys
     error(f"List failed: {path}")
     return []

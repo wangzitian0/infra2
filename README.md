@@ -10,20 +10,24 @@
 # uv: curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # 1. 初始化本地依赖
-uv run invoke local.init
+invoke local.init
 
 # 2. 登录 1Password CLI（首次）
 op signin
 
-# 3. 验证 1Password 配置
-uv run invoke local.bootstrap
+# 3. 验证 init/env_vars (VPS_HOST, INTERNAL_DOMAIN)
+invoke local.bootstrap
 
 # 4. 验证环境
-uv run invoke check-env
+invoke check-env
 
 # 5. 查看可用命令
-uv run invoke --list
+invoke --list
 ```
+
+## 🧭 CLI 运行方式
+
+本文示例默认使用 `invoke`；若未激活虚拟环境，请使用 `uv run invoke` 代替。
 
 ## 📁 项目结构
 
@@ -32,8 +36,8 @@ infra2/
 ├── bootstrap/        # L1 - 基础层 (1Password, Vault)
 ├── platform/         # L2 - 平台层 (PostgreSQL, Redis, Authentik)
 ├── e2e_regressions/  # E2E 测试
-├── libs/             # 共享库 (Deployer, Config)
-├── tools/            # 工具脚本 (env_tool)
+├── libs/             # 共享库 (env, deployer, console)
+├── tools/            # CLI 工具 (env, local)
 └── docs/             # 文档
     ├── ssot/         # SSOT 真理源
     └── project/      # 项目追踪
@@ -60,16 +64,26 @@ infra2/
 
 ## 🛠️ 常用命令
 
-### 环境变量管理 (env_tool)
+### 密钥管理 (env_tool)
 
 | 命令 | 说明 |
 |------|------|
-| `invoke env.get KEY --project=P --env=E --service=S` | 读取环境变量 |
-| `invoke env.set KEY=VAL --project=P --env=E --service=S` | 写入环境变量 |
-| `invoke env.secret-get KEY --project=P --env=E` | 读取密钥 |
-| `invoke env.secret-set KEY=VAL --project=P --env=E` | 写入密钥 |
-| `invoke env.preview --project=P --env=E --service=S` | 预览所有变量 |
-| `invoke env.copy --from-project=P --from-env=E1 --to-env=E2` | 复制环境配置 |
+| `invoke env.get KEY --project=<project> --env=<env> --service=<service>` | 读取密钥 |
+| `invoke env.set KEY=VAL --project=<project> --env=<env> --service=<service>` | 写入密钥 |
+| `invoke env.list-all --project=<project> --service=<service>` | 列出密钥（masked） |
+| `invoke env.init-status` | 查看 init/env_vars |
+
+> 省略 `--service` 表示读取/写入环境级（`{project}/{env}`）密钥。
+
+### 本地工具 (local)
+
+```bash
+invoke local.check
+invoke local.init
+invoke local.bootstrap
+invoke local.phase
+invoke local.version
+```
 
 ### 服务部署
 

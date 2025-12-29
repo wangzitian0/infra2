@@ -25,7 +25,7 @@ class VaultDeployer(Deployer):
         if not cls._prepare_dirs(c):
             return False
         e = cls.env()
-        header("Vault pre_compose", "Preparing")
+        header("Vault pre-compose", "Preparing")
         ssh_user = e.get("VPS_SSH_USER") or "root"
 
         # Create directories
@@ -40,7 +40,7 @@ class VaultDeployer(Deployer):
         if not cls.upload_config(c):
             return False
 
-        success("pre_compose complete")
+        success("pre-compose complete")
         return True
 
     @classmethod
@@ -59,7 +59,7 @@ class VaultDeployer(Deployer):
     def post_compose(cls, c, shared_tasks: Any) -> bool:
         """Verify deployment"""
         e = cls.env()
-        header("Vault post_compose", "Verifying")
+        header("Vault post-compose", "Verifying")
         if cls.check_status(c, shared_tasks):
             success("Vault is reachable")
             return True
@@ -103,11 +103,14 @@ def init(c):
     """Initialize Vault"""
     e = get_env()
     header("Vault init", "Initialization required")
-    print(f"export VAULT_ADDR=https://vault.{e['INTERNAL_DOMAIN']}")
-    print("vault operator init")
+    commands = [
+        f"export VAULT_ADDR=https://vault.{e['INTERNAL_DOMAIN']}",
+        "vault operator init",
+    ]
     prompt_action("Initialize Vault", [
-        "Run the commands above",
-        "Save keys to 1Password"
+        f"Run: {commands[0]}",
+        f"Run: {commands[1]}",
+        "Save keys to 1Password",
     ])
 
 
