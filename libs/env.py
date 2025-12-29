@@ -43,10 +43,52 @@ SSOT_CONFIG = {
 }
 
 
+# =========================================================================
+# Constants
+# =========================================================================
+OP_VAULT = "Infra2"
+INIT_ITEM = "init/env_vars"
+REQUIRED_INIT_FIELDS = ["VPS_HOST", "INTERNAL_DOMAIN"]
+
+
 def generate_password(length: int = 24) -> str:
-    """Generate a secure random password"""
+    """Generate a secure random alphanumeric password"""
     alphabet = string.ascii_letters + string.digits
     return ''.join(secrets.choice(alphabet) for _ in range(length))
+
+
+def get_or_set(
+    key: str,
+    project: str = 'platform',
+    env: str = 'production',
+    service: str | None = None,
+    length: int = 24,
+    generator: callable = None,
+) -> str:
+    """Get existing secret or generate and store new one.
+    
+    Core pattern: check or set - if exists, use it; if not, create it.
+    
+    Args:
+        key: Secret key name
+        project: Project name (platform, bootstrap, init)
+        env: Environment (production, staging)
+        service: Service name (postgres, redis, etc)
+        length: Password length if generating
+        generator: Custom generator function, defaults to generate_password
+    
+    Returns:
+        The existing or newly generated secret value
+    """
+    mgr = EnvManager(project, env, service)
+    existing = mgr.get_secret(key)
+    if existing:
+        return existing
+    
+    # Generate new value
+    value = generator() if generator else generate_password(length)
+    mgr.set_secret(key, value)
+    return value
 
 
 class EnvManager:

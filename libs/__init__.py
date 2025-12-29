@@ -1,12 +1,16 @@
 # Infra2 shared libraries
-from libs.common import get_env, validate_env, generate_password, check_docker_service, CONTAINER_NAMES
-from libs.console import header, success, error, warning, info, env_vars, prompt_action, run_with_status
-from libs.deployer import Deployer, make_tasks
-from libs.config import Config
+# 
+# NOTE: Imports are lazy to avoid circular dependencies.
+# Import specific modules directly when needed:
+#   from libs.env import EnvManager, get_or_set
+#   from libs.common import get_env
+#   from libs.console import header, success
 
 __all__ = [
+    # env
+    "EnvManager", "get_or_set", "generate_password",
     # common
-    "get_env", "validate_env", "generate_password", "check_docker_service", "CONTAINER_NAMES",
+    "get_env", "validate_env", "check_docker_service", "CONTAINER_NAMES",
     # console
     "header", "success", "error", "warning", "info", "env_vars", "prompt_action", "run_with_status",
     # deployer
@@ -14,3 +18,23 @@ __all__ = [
     # config
     "Config",
 ]
+
+
+def __getattr__(name):
+    """Lazy imports to avoid circular dependencies"""
+    if name in ("EnvManager", "get_or_set", "generate_password", "OP_VAULT", "INIT_ITEM"):
+        from libs import env
+        return getattr(env, name)
+    elif name in ("get_env", "validate_env", "check_docker_service", "CONTAINER_NAMES"):
+        from libs import common
+        return getattr(common, name)
+    elif name in ("header", "success", "error", "warning", "info", "env_vars", "prompt_action", "run_with_status", "console"):
+        from libs import console
+        return getattr(console, name)
+    elif name in ("Deployer", "make_tasks"):
+        from libs import deployer
+        return getattr(deployer, name)
+    elif name == "Config":
+        from libs import config
+        return getattr(config, name)
+    raise AttributeError(f"module 'libs' has no attribute {name!r}")

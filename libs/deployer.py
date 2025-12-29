@@ -2,20 +2,26 @@
 Base deployer class with DRY task generation
 
 Uses libs/env.py for secret management.
+Key pattern: check status first, skip if healthy.
 """
 from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from invoke import task
 from libs.common import get_env, validate_env
-from libs.console import header, success, error, env_vars, prompt_action, run_with_status
-from libs.env import EnvManager
+from libs.console import header, success, error, warning, info, env_vars, prompt_action, run_with_status
+from libs.env import EnvManager, generate_password
 
 if TYPE_CHECKING:
     from invoke import Context
 
 
 class Deployer:
-    """Base class for service deployment"""
+    """Base class for service deployment
+    
+    Key principle: check status first
+    - If service healthy → skip setup, preserve existing config
+    - If service not ready → can generate new secrets, do full install
+    """
     
     service: str = ""
     compose_path: str = ""
@@ -39,6 +45,15 @@ class Deployer:
         return EnvManager(project=project, env=env, service=cls.service)
     
     @classmethod
+    def check_status(cls, c: "Context", shared_tasks: Any) -> bool:
+        """Check if service is already healthy"""
+        try:
+            result = shared_tasks.status(c)
+            return result.get("is_ready", False)
+        except Exception:
+            return False
+    
+    @classmethod
     def _prepare_dirs(cls, c: "Context") -> bool:
         """Create data directories"""
         if missing := validate_env():
@@ -55,17 +70,14 @@ class Deployer:
     
     @classmethod
     def pre_compose(cls, c: "Context") -> dict | None:
-        """Prepare and generate secrets using EnvManager"""
+        """Prepare and generate NEW secrets (only call if not healthy)"""
         if not cls._prepare_dirs(c):
             return None
         
-        # Use EnvManager to generate and store secret
+        # Generate NEW password (atomic install)
         env_mgr = cls.get_env_manager()
-        password = env_mgr.generate_and_store_secret(cls.secret_key, length=24)
-        
-        if not password:
-            error(f"Failed to store {cls.secret_key}")
-            return None
+        password = generate_password(24)
+        env_mgr.set_secret(cls.secret_key, password)
         
         secrets = {cls.env_var_name: password}
         env_vars("DOKPLOY ENV", secrets)
@@ -102,8 +114,13 @@ def make_tasks(deployer_cls: type[Deployer], shared_tasks_module: Any) -> dict:
     """
     Generate standard tasks for a deployer (DRY)
     
-    Returns dict of tasks: {pre_compose, composing, post_compose, setup}
+    Key pattern: setup checks status first, skips if healthy.
     """
+    @task
+    def status(c):
+        """Check service status"""
+        return shared_tasks_module.status(c)
+    
     @task
     def pre_compose(c):
         return deployer_cls.pre_compose(c)
@@ -116,11 +133,26 @@ def make_tasks(deployer_cls: type[Deployer], shared_tasks_module: Any) -> dict:
     def post_compose(c):
         return deployer_cls.post_compose(c, shared_tasks_module)
     
-    @task(pre=[pre_compose, composing, post_compose])
+    @task
     def setup(c):
+        """Full setup - skips if already healthy"""
+        # Check if already healthy
+        if deployer_cls.check_status(c, shared_tasks_module):
+            success(f"{deployer_cls.service} already healthy - skipping setup")
+            info("Use individual tasks (pre_compose, composing) to force reinstall")
+            return
+        
+        # Not healthy - do full install
+        warning(f"{deployer_cls.service} not healthy - starting fresh install")
+        if deployer_cls.pre_compose(c) is None:
+            error("pre_compose failed")
+            return
+        deployer_cls.composing(c)
+        deployer_cls.post_compose(c, shared_tasks_module)
         success(f"{deployer_cls.service} setup complete!")
     
     return {
+        "status": status,
         "pre_compose": pre_compose,
         "composing": composing,
         "post_compose": post_compose,
