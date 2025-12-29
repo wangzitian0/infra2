@@ -10,6 +10,7 @@ import importlib.util
 import sys
 from typing import Optional
 from dotenv import load_dotenv
+from libs.console import success, error, warning
 
 # Load optional local overrides if present.
 load_dotenv()
@@ -36,7 +37,7 @@ def _add_tasks(module, collection):
                 collection.add_task(obj)
             except ValueError as e:
                 if "already" not in str(e):
-                    print(f"⚠️ Failed to add task {name}: {e}")
+                    warning(f"Failed to add task {name}: {e}")
 
 
 def _load_tasks_into_collection(file_path: Path, module_name: str, collection: Collection, sub_name: Optional[str] = None) -> bool:
@@ -91,7 +92,7 @@ def _load_project(ns, root, project_name):
         
         if loaded:
             ns.add_collection(coll, name=name)
-            print(f"✅ {project_name}/{name}")
+            success(f"{project_name}/{name}")
 
 
 def _load_tools(ns, root):
@@ -104,12 +105,12 @@ def _load_tools(ns, root):
     coll = Collection()
     if _load_tasks_into_collection(tools_dir / "env_tool.py", "tools.env_tool", coll):
         ns.add_collection(coll, name="env")
-        print("✅ tools/env")
+        success("tools/env")
 
     coll = Collection()
     if _load_tasks_into_collection(tools_dir / "local_init.py", "tools.local_init", coll):
         ns.add_collection(coll, name="local")
-        print("✅ tools/local")
+        success("tools/local")
 
 
 def load_all():
@@ -122,9 +123,9 @@ def load_all():
         """Check required environment variables"""
         missing = validate_env()
         if missing:
-            print(f"❌ Missing: {', '.join(missing)}")
+            error(f"Missing: {', '.join(missing)}")
             exit(1)
-        print("✅ Environment OK")
+        success("Environment OK")
     
     ns = Collection()
     ns.add_task(check_env)

@@ -51,7 +51,7 @@ class OnePasswordDeployer(Deployer):
         if not cls._upload_credentials(c):
             return False
 
-        success("pre_compose complete")
+        success("pre-compose complete")
         return True
     
     @classmethod
@@ -71,7 +71,7 @@ class OnePasswordDeployer(Deployer):
     def post_compose(cls, c) -> bool:
         """Verify deployment"""
         e = cls.env()
-        header("1Password post_compose", "Verifying")
+        header("1Password post-compose", "Verifying")
         
         result = c.run(f"curl -s https://op.{e['INTERNAL_DOMAIN']}/health", warn=True)
         if result.ok and "1Password Connect" in result.stdout:

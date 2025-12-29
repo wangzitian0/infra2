@@ -14,8 +14,8 @@ Identity Provider for Single Sign-On across platform services.
 | File | Purpose |
 |------|---------|
 | `compose.yaml` | Docker Compose (server + worker) |
-| `deploy.py` | Invoke tasks (pre_compose/composing/post_compose/setup) |
-| `shared_tasks.py` | Status checks |
+| `deploy.py` | Invoke tasks (pre-compose/composing/post-compose) with custom pre-compose logic |
+| `shared_tasks.py` | Health check status() |
 
 ## Deployment
 

@@ -112,17 +112,20 @@ def init(c):
         console.print()
         info("Installation instructions:")
         platform = _get_platform()
-        
+
+        missing = {name for name, ok, _ in results if not ok}
         for name, dep in CLI_DEPS.items():
-            if not next((ok for dep_name, ok, _ in results if dep_name == name), False):
-                console.print(f"\n[bold]{name}[/]:")
-                if platform == 'mac' and 'install_mac' in dep:
-                    console.print(f"  [cyan]{dep['install_mac']}[/]")
-                elif platform == 'linux' and 'install_linux' in dep:
-                    console.print(f"  [cyan]{dep['install_linux']}[/]")
-                elif 'install' in dep:
-                    console.print(f"  [cyan]{dep['install']}[/]")
-                console.print(f"  [dim]Docs: {dep['docs']}[/]")
+            if name not in missing:
+                continue
+            console.print()
+            info(f"{name}:")
+            if platform == 'mac' and 'install_mac' in dep:
+                console.print(f"  {dep['install_mac']}")
+            elif platform == 'linux' and 'install_linux' in dep:
+                console.print(f"  {dep['install_linux']}")
+            elif 'install' in dep:
+                console.print(f"  {dep['install']}")
+            info(f"Docs: {dep['docs']}")
     
     # Check uv
     console.print()
@@ -158,11 +161,11 @@ def version(c):
             )
             if result.returncode == 0:
                 ver = result.stdout.strip().split('\n')[0]
-                console.print(f"[cyan]{name}[/]: {ver}")
+                success(f"{name}: {ver}")
             else:
-                console.print(f"[cyan]{name}[/]: [red]not installed[/]")
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            console.print(f"[cyan]{name}[/]: [red]error[/]")
+                warning(f"{name}: not installed")
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+            error(f"{name}: error", str(exc))
 
 
 @task
@@ -178,32 +181,34 @@ def bootstrap(c):
     3. vault.setup -> deploys Vault
     4. platform services -> uses Vault
     """
-    from libs.env import EnvManager, OP_VAULT, INIT_ITEM, REQUIRED_INIT_FIELDS
+    from libs.env import OpSecrets
     
     header("Bootstrap Check", "Validating 1Password config")
     
     # Check op signin
     if not _check_command('op whoami'):
         error("1Password CLI not signed in")
-        console.print("[yellow]Run: op signin[/]")
+        info("Run: op signin")
         return False
     
-    # Read init/env_vars using EnvManager
-    mgr = EnvManager('init')
-    fields = mgr.get_all_env(level='service')
+    op = OpSecrets()
+    fields = op.get_all()
+    init_item = OpSecrets.INIT_ITEM
+    vault_name = OpSecrets.VAULT
     
     if not fields:
-        error(f"Item '{INIT_ITEM}' not found in vault '{OP_VAULT}'")
-        console.print("[yellow]Create it with:[/]")
-        console.print(f'  op item create --category=login --title="{INIT_ITEM}" --vault="{OP_VAULT}" \\')
+        error(f"Item '{init_item}' not found in vault '{vault_name}'")
+        info("Create it with:")
+        console.print(f'  op item create --category=login --title="{init_item}" --vault="{vault_name}" \\')
         console.print('    "VPS_HOST[text]=<ip>" "INTERNAL_DOMAIN[text]=<domain>"')
         return False
     
     # Validate required fields
-    missing = [k for k in REQUIRED_INIT_FIELDS if k not in fields]
+    required_fields = ["VPS_HOST", "INTERNAL_DOMAIN"]
+    missing = [k for k in required_fields if not fields.get(k)]
     
     if missing:
-        error(f"Missing fields in {INIT_ITEM}: {', '.join(missing)}")
+        error(f"Missing fields in {init_item}: {', '.join(missing)}")
         return False
     
     # Display config
@@ -221,8 +226,8 @@ def bootstrap(c):
     success("Bootstrap config validated!")
     info("No local .env needed - libs/common.py reads directly from 1Password")
     info("Next steps:")
-    console.print("  1. [cyan]invoke 1password.setup[/] - Deploy 1Password Connect")
-    console.print("  2. [cyan]invoke vault.setup[/] - Deploy Vault")
+    console.print("  1. invoke 1password.setup - Deploy 1Password Connect")
+    console.print("  2. invoke vault.setup - Deploy Vault")
     
     return True
 
@@ -241,17 +246,15 @@ def phase(c):
     Each phase reads from its respective 1Password item.
     """
     from rich.table import Table
-    from libs.env import EnvManager, INIT_ITEM, OP_VAULT, op_get_item_field
+    from libs.env import OpSecrets
     
     header("Bootstrap Phase Detection")
     
     def get_field(item_name: str, field_label: str) -> str:
-        value = op_get_item_field(item_name, field_label, vault=OP_VAULT)
-        return value or ""
+        return OpSecrets(item=item_name).get(field_label) or ""
     
-    # EnvManager can read INIT_ITEM easily
-    mgr_init = EnvManager('init')
-    init_vars = mgr_init.get_all_env('service')
+    init_vars = OpSecrets().get_all()
+    init_item = OpSecrets.INIT_ITEM
     
     # Phase checks: (check_fn, phase_desc)
     # Phase 0: init vars
@@ -272,7 +275,7 @@ def phase(c):
     table.add_column("Status")
     table.add_column("Details")
     
-    table.add_row("Phase 0: Local config", "[green]✅[/]" if phase_0 else "[dim]⏳[/]", f"{INIT_ITEM}")
+    table.add_row("Phase 0: Local config", "[green]✅[/]" if phase_0 else "[dim]⏳[/]", f"{init_item}")
     table.add_row("Phase 2: 1Password Connect", "[green]✅[/]" if phase_2 else "[dim]⏳[/]", "Connect Token")
     table.add_row("Phase 3: Vault deployed", "[green]✅[/]" if phase_3 else "[dim]⏳[/]", "Root Token")
     
@@ -295,4 +298,4 @@ def phase(c):
             2: "Run: invoke vault.setup",
         }
         if current in next_steps:
-            console.print(f"[yellow]Next: {next_steps[current]}[/]")
+            info(f"Next: {next_steps[current]}")

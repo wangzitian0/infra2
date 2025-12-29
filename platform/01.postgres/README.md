@@ -9,8 +9,8 @@ Shared PostgreSQL database for all platform applications.
 | File | Purpose |
 |------|---------|
 | `compose.yaml` | Docker Compose service definition |
-| `deploy.py` | Invoke tasks (pre_compose/composing/post_compose/setup) |
-| `shared_tasks.py` | Status + admin helpers |
+| `deploy.py` | Invoke tasks (pre-compose/composing/post-compose) |
+| `shared_tasks.py` | Health check + admin helpers |
 
 ## Deployment
 
@@ -23,6 +23,16 @@ invoke postgres.pre-compose
 invoke postgres.composing
 invoke postgres.post-compose
 ```
+
+## Shared Tasks
+
+```bash
+invoke postgres.shared.status
+invoke postgres.shared.create-database --name=<db>
+invoke postgres.shared.create-user --username=<user> --database=<db> --password=<pass>
+```
+
+> Output uses `libs.console` helpers for consistent CLI logs.
 
 ## Data Path
 

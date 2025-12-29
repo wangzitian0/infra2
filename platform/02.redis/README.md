@@ -9,8 +9,8 @@ Shared Redis cache for all platform applications.
 | File | Purpose |
 |------|---------|
 | `compose.yaml` | Docker Compose service definition |
-| `deploy.py` | Invoke tasks (pre_compose/composing/post_compose/setup) |
-| `shared_tasks.py` | Status checks |
+| `deploy.py` | Invoke tasks (pre-compose/composing/post-compose) |
+| `shared_tasks.py` | Health check status() |
 
 ## Deployment
 

@@ -3,7 +3,7 @@ import sys
 from invoke import task
 from libs.deployer import Deployer
 from libs.common import get_env
-from libs.console import header, success, warning, info, env_vars, run_with_status
+from libs.console import header, success, warning, info, env_vars, run_with_status, error
 from libs.env import generate_password, get_secrets
 
 shared_tasks = sys.modules.get("platform.10.authentik.shared")
@@ -21,7 +21,7 @@ class AuthentikDeployer(Deployer):
 
 @task
 def pre_compose(c):
-    """Authentik has custom pre_compose logic"""
+    """Authentik has custom pre-compose logic"""
     if not AuthentikDeployer._prepare_dirs(c):
         return None
     
@@ -59,7 +59,7 @@ def pre_compose(c):
         warning("Failed to store Authentik secret key in Vault")
     
     env_vars("DOKPLOY ENV", {"AUTHENTIK_SECRET_KEY": secret_key, "PG_PASS": pg_pass, "REDIS_PASSWORD": redis_pass})
-    success("pre_compose complete")
+    success("pre-compose complete")
     return {"AUTHENTIK_SECRET_KEY": secret_key, "PG_PASS": pg_pass, "REDIS_PASSWORD": redis_pass}
 
 
@@ -71,13 +71,16 @@ def composing(c):
 @task
 def post_compose(c):
     e = get_env()
-    header(f"{AuthentikDeployer.service} post_compose", "Verifying")
-    if shared_tasks:
-        result = shared_tasks.status(c)
-        if result["is_ready"]:
-            info(f"Setup: https://sso.{e['INTERNAL_DOMAIN']}/if/flow/initial-setup/")
-            success(f"post_compose complete - {result['details']}")
-            return True
+    header(f"{AuthentikDeployer.service} post-compose", "Verifying")
+    if not shared_tasks:
+        error("Authentik shared tasks missing", "Loader did not register shared_tasks")
+        return False
+    result = shared_tasks.status(c)
+    if result.get("is_ready"):
+        info(f"Setup: https://sso.{e['INTERNAL_DOMAIN']}/if/flow/initial-setup/")
+        success(f"post-compose complete - {result.get('details', 'healthy')}")
+        return True
+    error("post-compose failed", result.get("details"))
     return False
 
 

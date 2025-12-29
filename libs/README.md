@@ -1,85 +1,70 @@
 # Infra2 Shared Libraries
 
-> **Purpose**: Internal libraries used by deploy scripts and tools.
+> **Purpose**: Internal libraries used by deploy scripts and CLI tools.
 
-## Modules
+## At a Glance
 
-| Module | Purpose | Key Functions |
-|--------|---------|---------------|
-| `env.py` | **Core** Env & Secret SSOT | `EnvManager`, `get_or_set`, `op_get_item_field` |
-| `common.py` | Utilities | `get_env()`, `validate_env()`, `load_env_keys()` |
-| `console.py` | Rich CLI output | `success()`, `error()`, `header()`, `prompt_action()` |
-| `deployer.py` | Deployment base class | `Deployer`, `load_shared_tasks()` |
-| `config.py` | _Compatibility wrapper_ | `Config` class |
+- `get_secrets` selects `OpSecrets` (1Password) or `VaultSecrets` (Vault) for SSOT reads/writes.
+- `Deployer` + `make_tasks` standardize service deploy flows.
+- `console` helpers keep CLI output consistent (Rich).
+- `Config` is a legacy wrapper around secrets (avoid for new code).
 
-## Usage
+## Module Map
 
-### Quick Import
+| Module | Role | Key APIs |
+|--------|------|----------|
+| `env.py` | **Core** SSOT secrets access | `OpSecrets`, `VaultSecrets`, `get_secrets`, `generate_password` |
+| `common.py` | Shared environment helpers | `get_env()`, `validate_env()`, `check_service()` |
+| `console.py` | Rich CLI output | `header()`, `success()`, `error()`, `prompt_action()` |
+| `deployer.py` | Deployment base class + task helpers | `Deployer`, `make_tasks()` |
+| `config.py` | Legacy compatibility wrapper | `Config` |
+
+## Usage Patterns
+
+### Secrets (SSOT-first)
 ```python
-from libs import Deployer, success, get_env
-from libs.env import EnvManager
+from libs.env import get_secrets
+
+secrets = get_secrets(project="platform", service="postgres", env="production")
+db_pass = secrets.get("POSTGRES_PASSWORD")
 ```
 
-### Module Import
+### Init seed vars (1Password)
 ```python
-from libs.env import EnvManager, get_or_set
-from libs.common import load_env_keys
-from libs.deployer import Deployer
+from libs.env import OpSecrets
+
+init = OpSecrets()  # defaults to init/env_vars in Infra2 vault
+vps_host = init.get("VPS_HOST")
 ```
 
-## API Reference
-
-### libs.env (New Core)
-
+### Deployer-based tasks
 ```python
-class EnvManager:
-    def __init__(project, env, service)
-    def get_env(key, level) -> str
-    def get_secret(key, level) -> str
-    def set_secret(key, value) -> bool
-
-def get_or_set(key, length=24) -> str
-# Idempotent secret generation (check remote first)
-
-def op_get_item_field(item_name, field_label, vault=OP_VAULT) -> str | None
-# Read a specific 1Password item field (for non-standard items)
+from libs.deployer import Deployer, make_tasks
 ```
 
-Notes:
-- `EnvManager(project="init")` reads 1Password item `init/env_vars` (seed vars like `VPS_HOST`, `INTERNAL_DOMAIN`).
-
-### libs.common
-
+### Config (legacy wrapper)
 ```python
-get_env() -> dict
-# Returns: {"VPS_HOST", "INTERNAL_DOMAIN", "PROJECT", "ENV"}
+from libs.config import Config
 
-validate_env() -> list[str]
-# Returns: list of missing required env vars
-
-load_env_keys(path) -> list[str]
-# Parse .env.example file for keys
+config = Config(project="platform", env="production", service="postgres")
+db_pass = config.get_secret("POSTGRES_PASSWORD")
 ```
 
-### libs.deployer
+## CLI Output Conventions
 
-```python
-class Deployer:
-    # ... attrs ...
-    env_example_path: str = ".env.example"
-    
-    @classmethod
-    def get_example_keys() -> list[str]
-    # ... standard methods ...
-```
+- Use `libs.console.header()` at task boundaries to anchor logs.
+- Use `success()`/`warning()`/`error()`/`info()` for status lines; avoid raw `print`.
+- Use `run_with_status()` for remote commands so success/error is consistent.
+- Use `prompt_action()` for manual steps; keep instructions in the panel.
+- Use `console.print()` only for raw values, Rich tables, or command blocks that must remain unwrapped.
 
-### libs.config (Legacy)
+## Notes
 
-Wrapper around `EnvManager` for backward compatibility.
-
-Priority: service > environment > project
+- Prefer explicit imports (e.g. `from libs.env import get_secrets`) over `from libs import ...` to avoid circular deps.
+- `libs.common.get_env()` reads from `init/env_vars` in 1Password; no local `.env` required.
 
 ## References
 
 - **SSOT**: [docs/ssot/platform.automation.md](../docs/ssot/platform.automation.md)
+- **Core**: [docs/ssot/core.md](../docs/ssot/core.md)
 - **Platform**: [platform/README.md](../platform/README.md)

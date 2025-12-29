@@ -13,12 +13,15 @@
 - **SSOT 技术参考**：[docs/ssot/README.md](./ssot/README.md)
 - **项目进度**：[docs/project/README.md](./project/README.md)
 
+> 文档命令示例默认使用 `invoke`；未激活虚拟环境时请使用 `uv run invoke`。
+
 ---
 
 ## 🔧 基础设施维护者入口
 
 - **Bootstrap**：https://github.com/wangzitian0/infra2/blob/main/bootstrap/README.md
 - **Platform**：https://github.com/wangzitian0/infra2/blob/main/platform/README.md
+- **Libs**：https://github.com/wangzitian0/infra2/blob/main/libs/README.md
 - **Tools**：https://github.com/wangzitian0/infra2/blob/main/tools/README.md
 
 ---

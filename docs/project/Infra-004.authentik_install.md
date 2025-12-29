@@ -45,10 +45,10 @@ invoke authentik.setup
 
 | File | Purpose |
 |------|---------|
-| `libs/common.py` | get_env, validate_env, generate_password, check_docker_service |
+| `libs/common.py` | get_env, validate_env, generate_password, check_service |
 | `libs/console.py` | Rich CLI output helpers |
-| `libs/deployer.py` | Deployer base class with Vault integration |
-| `libs/config.py` | Three-tier env loading |
+| `libs/deployer.py` | Deployer base class with secrets integration |
+| `libs/config.py` | Legacy secrets wrapper |
 
 ### Service Structure
 
@@ -57,14 +57,14 @@ platform/{nn}.{service}/
 ├── compose.yaml       # Docker Compose
 ├── deploy.py          # XxxDeployer + @task
 ├── shared_tasks.py    # status() check
-└── .env.example       # Env template
+└── README.md          # Service docs
 ```
 
 ### Key Features
 
-- **Three-tier env**: project > environment > service
+- **Secrets SSOT**: Vault/1Password via `libs.env`
 - **Vault integration**: Auto VAULT_ADDR from INTERNAL_DOMAIN
-- **DRY pattern**: Deployer base class, check_docker_service()
+- **DRY pattern**: Deployer base class, check_service()
 
 ## PR Links
 
