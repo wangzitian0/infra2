@@ -11,7 +11,7 @@
 
 ## Active Projects
 - [Infra-003: Documentation Reorganization](./Infra-003.docs_reorg.md) - **In Progress**
-- [Infra-004: Authentik Installation](./Infra-004.authentik_install.md) - **Not Started**
+- [Infra-004: Authentik Installation](./Infra-004.authentik_install.md) - **In Progress**
 
 ## Archived Projects
 - [Infra-001: Bootstrap Base Setup](./archive/Infra-001.bootstrap_setup.md) - **Archived**
@@ -21,4 +21,4 @@
 - [docs/ssot/README.md](../ssot/README.md) - SSOT index
 
 ---
-*Last updated: 2025-12-28*
+*Last updated: 2025-12-30*

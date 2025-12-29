@@ -44,3 +44,13 @@ Track top documentation issues discovered across all markdown files.
 - [x] `docs/ssot/ops.recovery.md`: 改为 Docker/VPS 侧恢复流程。
 - [x] `e2e_regressions/**`: 移除 Terraform/K8s/Casdoor/Kubero 依赖，改为 Dokploy/Vault/Authentik。
 - [x] `e2e_regressions/.env.example`: 更新为新环境变量清单。
+- [x] `docs/project/Infra-004.authentik_install.md`: 修复 MkDocs 外链警告（指向 libs/platform README）。
+- [x] `docs/ssot/bootstrap.vars_and_secrets.md`: 修复 MkDocs 外链警告（指向 bootstrap README）。
+- [x] `docs/README.md`: Tools 入口恢复链接并更新日期。
+- [x] `README.md`: 环境变量 SSOT 链接与 tools 说明对齐代码。
+- [x] `docs/project/README.md`: Infra-004 状态与项目文件对齐为 In Progress。
+- [x] `README.md`: Quick Start 与 1Password/bootstrap 流程对齐，移除不存在的 `.env.example` 步骤。
+- [x] `docs/ssot/bootstrap.vars_and_secrets.md`: 修正 local.bootstrap 不生成 `.env` 的说明。
+- [x] `docs/ssot/core.md`: 环境变量文件位置与 bootstrap 现状对齐。
+- [x] `docs/ssot/ops.e2e-regressions.md`: 明确 `.env.example` 的目录路径。
+- [x] `README.md`: 1Password Vault 名称大小写对齐为 Infra2。

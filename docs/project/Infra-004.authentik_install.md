@@ -88,5 +88,5 @@ platform/{nn}.{service}/
 ## References
 
 - [SSOT: platform.automation.md](../ssot/platform.automation.md)
-- [libs/README.md](../../libs/README.md)
-- [platform/README.md](../../platform/README.md)
+- [libs/README.md](https://github.com/wangzitian0/infra2/blob/main/libs/README.md)
+- [platform/README.md](https://github.com/wangzitian0/infra2/blob/main/platform/README.md)

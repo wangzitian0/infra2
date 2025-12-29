@@ -47,7 +47,7 @@
 
 - [Bootstrap](https://github.com/wangzitian0/infra2/blob/main/bootstrap/README.md) - 集群引导层 (L1)
 - [Platform](https://github.com/wangzitian0/infra2/blob/main/platform/README.md) - 平台服务层 (L2)
-- Tools - 本仓库暂未维护（如有独立仓库请补充链接）
+- [Tools](https://github.com/wangzitian0/infra2/blob/main/tools/README.md) - CLI 工具 (env_tool)
 - Data - 本仓库暂未维护（如有独立仓库请补充链接）
 - Apps - 本仓库暂未维护（如有独立仓库请补充链接）
 
@@ -60,4 +60,4 @@
 - [AI 行为准则](https://github.com/wangzitian0/infra2/blob/main/AGENTS.md) - 协作规范与边界
 
 ---
-*Last updated: 2025-12-28*
+*Last updated: 2025-12-30*

@@ -53,14 +53,14 @@ Bootstrap 不追求自动化，追求**可复现**。每个组件的 README 包�
 
 ```bash
 invoke local.phase   # 检测当前 bootstrap 阶段
-invoke local.bootstrap  # 从 1Password 生成 .env
+invoke local.bootstrap  # 校验 init/env_vars（不生成本地文件）
 ```
 
 ### 3.2 Phase 顺序
 
 | Phase | 前置条件 | 操作 | 产出 |
 |-------|---------|------|------|
-| 0 | 1Password CLI 已登录 | `local.bootstrap` | `.env` 种子文件 |
+| 0 | 1Password CLI 已登录 | `local.bootstrap` | init/env_vars 校验通过（无本地文件） |
 | 1 | VPS 可访问 | 安装 Dokploy | Dokploy Web UI |
 | 2 | Dokploy 可用 | `1password.setup` | 1Password Connect |
 | 3 | Connect 可用 | `vault.setup` | Vault 服务 |
@@ -80,8 +80,8 @@ invoke local.bootstrap  # 从 1Password 生成 .env
 
 | 文件 | 内容 | Git 跟踪 |
 |------|------|----------|
-| `.env.example` | 仅 KEY（无 VALUE） | ✅ 进 Git |
-| `.env` | 种子变量（local.bootstrap 生成） | ❌ 不进 Git |
+| `.env.example` | 仅 KEY（无 VALUE，随组件分布） | ✅ 进 Git |
+| `.env` | bootstrap 种子变量（可选/手动） | ❌ 不进 Git |
 
 ---
 
@@ -145,4 +145,4 @@ pw = get_or_set('POSTGRES_PASSWORD', length=32)
 ## Used by
 
 - [docs/ssot/README.md](./README.md)
-- [bootstrap/README.md](../../bootstrap/README.md)
+- [bootstrap/README.md](https://github.com/wangzitian0/infra2/blob/main/bootstrap/README.md)
