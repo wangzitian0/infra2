@@ -1,8 +1,9 @@
 """Authentik deployment - has custom logic"""
 from invoke import task
-from libs.deployer import Deployer
-from libs.common import generate_password, get_env
+from libs.deployer import Deployer, load_shared_tasks
+from libs.common import generate_password, get_env, CONTAINER_NAMES
 from libs.console import header, success, warning, info, env_vars, run_with_status
+from libs.env import EnvManager
 
 
 class AuthentikDeployer(Deployer):
@@ -11,21 +12,8 @@ class AuthentikDeployer(Deployer):
     data_path = "/data/platform/authentik"
     uid = "1000"
     gid = "1000"
-    secret_key = "secret_key"
+    secret_key = "AUTHENTIK_SECRET_KEY"
     env_var_name = "AUTHENTIK_SECRET_KEY"
-
-
-def _get_shared_tasks():
-    """Import shared_tasks dynamically to avoid relative import issues"""
-    import importlib.util
-    from pathlib import Path
-    spec = importlib.util.spec_from_file_location(
-        "shared_tasks",
-        Path(__file__).parent / "shared_tasks.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 @task
@@ -35,31 +23,55 @@ def pre_compose(c):
         return None
     
     e = AuthentikDeployer.env()
+    ssh_user = e.get("VPS_SSH_USER") or "root"
+    project = e.get("PROJECT", "platform")
+    env_name = e.get("ENV", "production")
     
     # Check dependencies
     warning("Checking dependencies...")
-    c.run("invoke postgres.shared.status", hide=True, warn=True)
-    c.run("invoke redis.shared.status", hide=True, warn=True)
+    if not c.run("invoke postgres.shared.status", hide=True, warn=True).ok:
+        warning("PostgreSQL status check failed")
+    if not c.run("invoke redis.shared.status", hide=True, warn=True).ok:
+        warning("Redis status check failed")
     
     # Read secrets from Vault
-    pg_pass = AuthentikDeployer.read_secret(c, f"{e['PROJECT']}/{e['ENV']}/postgres", "root_password")
-    redis_pass = AuthentikDeployer.read_secret(c, f"{e['PROJECT']}/{e['ENV']}/redis", "password")
-    
-    if pg_pass and redis_pass:
-        success("Read passwords from Vault")
-    else:
-        warning("Could not read from Vault, manual entry required")
-        pg_pass = pg_pass or "<get from Vault>"
-        redis_pass = redis_pass or "<get from Vault>"
+    pg_mgr = EnvManager(project, env_name, "postgres")
+    redis_mgr = EnvManager(project, env_name, "redis")
+    pg_pass = pg_mgr.get_secret("root_password")
+    redis_pass = redis_mgr.get_secret("password")
+
+    if not pg_pass or not redis_pass:
+        warning("Missing database credentials in Vault")
+        return None
+    success("Read passwords from Vault")
     
     # Create subdirs and database
-    run_with_status(c, f"ssh root@{e['VPS_HOST']} 'mkdir -p {AuthentikDeployer.data_path}/media {AuthentikDeployer.data_path}/certs'", "Create subdirs")
-    run_with_status(c, f"ssh root@{e['VPS_HOST']} \"docker exec platform-postgres psql -U postgres -c 'CREATE DATABASE authentik;'\"", "Create database", hide=True)
+    run_with_status(
+        c,
+        f"ssh {ssh_user}@{e['VPS_HOST']} 'mkdir -p {AuthentikDeployer.data_path}/media {AuthentikDeployer.data_path}/certs'",
+        "Create subdirs",
+    )
+    db_cmd = (
+        f"docker exec {CONTAINER_NAMES['postgres']} psql -U postgres -tc "
+        "\"SELECT 1 FROM pg_database WHERE datname='authentik'\" | "
+        "grep -q 1 || "
+        f"docker exec {CONTAINER_NAMES['postgres']} psql -U postgres -c \"CREATE DATABASE authentik;\""
+    )
+    run_with_status(
+        c,
+        f"ssh {ssh_user}@{e['VPS_HOST']} \"{db_cmd}\"",
+        "Ensure database",
+        hide=True,
+    )
     
     # Store secret
-    secret_key = generate_password(50)
-    if not AuthentikDeployer.store_secret(c, "secret_key", secret_key):
-        return None
+    auth_mgr = AuthentikDeployer.get_env_manager()
+    secret_key = auth_mgr.get_secret(AuthentikDeployer.secret_key)
+    if secret_key is None:
+        secret_key = generate_password(50)
+        if not auth_mgr.set_secret(AuthentikDeployer.secret_key, secret_key):
+            warning("Failed to store AUTHENTIK_SECRET_KEY in Vault")
+            return None
     
     env_vars("DOKPLOY ENV", {"AUTHENTIK_SECRET_KEY": secret_key, "PG_PASS": pg_pass, "REDIS_PASSWORD": redis_pass})
     success("pre_compose complete")
@@ -73,7 +85,7 @@ def composing(c):
 
 @task
 def post_compose(c):
-    shared_tasks = _get_shared_tasks()
+    shared_tasks = load_shared_tasks(__file__)
     e = get_env()
     header(f"{AuthentikDeployer.service} post_compose", "Verifying")
     result = shared_tasks.status(c)

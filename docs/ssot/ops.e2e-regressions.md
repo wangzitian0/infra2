@@ -67,10 +67,10 @@ flowchart LR
 
 - **触发条件**: 开发新功能前
 - **步骤**:
-    1. 配置环境变量 (参考 `e2e_regressions/.env.example`)。
+    1. 配置环境变量 (参考 `e2e_regressions/.env.example`，若未设置 INTERNAL_DOMAIN 会尝试从 1Password `init/env_vars` 读取)。
     2. 运行（任选其一）:
-       - 仓库根目录: `uv run pytest e2e_regressions/tests/smoke -v`
-       - 进入 `e2e_regressions/`: `uv run pytest tests/smoke -v`
+       - 仓库根目录: `uv run pytest e2e_regressions/tests -m smoke -v`
+       - 进入 `e2e_regressions/`: `uv run pytest tests -m smoke -v`
 
 ### SOP-002: 添加新测试
 

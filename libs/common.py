@@ -8,6 +8,10 @@ import os
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
+from dotenv import dotenv_values
+
+from libs.env import REQUIRED_INIT_FIELDS as _REQUIRED_INIT_FIELDS
+
 if TYPE_CHECKING:
     from invoke import Context
 
@@ -19,8 +23,8 @@ CONTAINER_NAMES = {
     "authentik": "authentik-server",
 }
 
-# Required fields for bootstrap
-REQUIRED_INIT_FIELDS = ["VPS_HOST", "INTERNAL_DOMAIN"]
+# Required fields for bootstrap (single source: libs.env)
+REQUIRED_INIT_FIELDS = _REQUIRED_INIT_FIELDS
 
 
 @lru_cache(maxsize=1)
@@ -35,22 +39,8 @@ def load_env_keys(path: str) -> list[str]:
     """Parse .env file and return list of keys"""
     if not os.path.exists(path):
         return []
-    
-    keys = []
-    with open(path, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            # Handle default values/comments in line
-            # e.g. KEY=VAL # comment
-            if '=' in line:
-                key = line.split('=', 1)[0].strip()
-                # Remove export prefix if present
-                if key.upper().startswith('EXPORT '):
-                    key = key[7:].strip()
-                keys.append(key)
-    return keys
+    data = dotenv_values(path)
+    return [key for key in data.keys() if key]
 
 
 def get_env() -> dict[str, str | None]:
@@ -80,7 +70,12 @@ def check_docker_service(c: "Context", container: str, health_cmd: str, service_
     """Check if a Docker service is healthy"""
     from libs.console import success, error
     env = get_env()
-    result = c.run(f"ssh root@{env['VPS_HOST']} 'docker exec {container} {health_cmd}'", warn=True, hide=True)
+    ssh_user = env.get("VPS_SSH_USER") or "root"
+    result = c.run(
+        f"ssh {ssh_user}@{env['VPS_HOST']} 'docker exec {container} {health_cmd}'",
+        warn=True,
+        hide=True,
+    )
     if result.ok:
         success(f"{service_name}: ready")
         return {"is_ready": True, "details": "Healthy"}

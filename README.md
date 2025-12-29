@@ -9,16 +9,19 @@
 # macOS: brew install 1password-cli
 # uv: curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# 1. 登录 1Password CLI（首次）
+# 1. 初始化本地依赖
+uv run invoke local.init
+
+# 2. 登录 1Password CLI（首次）
 op signin
 
-# 2. 验证 init/env_vars (VPS_HOST, INTERNAL_DOMAIN)
+# 3. 验证 1Password 配置
 uv run invoke local.bootstrap
 
-# 3. 验证环境
+# 4. 验证环境
 uv run invoke check-env
 
-# 4. 查看可用命令
+# 5. 查看可用命令
 uv run invoke --list
 ```
 
@@ -45,7 +48,7 @@ infra2/
 | `bootstrap` | 1Password | 1Password |
 | `platform` | Dokploy | Vault |
 
-> 详见 [docs/ssot/bootstrap.vars_and_secrets.md](docs/ssot/bootstrap.vars_and_secrets.md)
+> 详见 [docs/ssot/bootstrap.vars_and_secrets.md](docs/ssot/bootstrap.vars_and_secrets.md) 与 [docs/ssot/platform.automation.md](docs/ssot/platform.automation.md)
 
 ## 📚 文档入口
 

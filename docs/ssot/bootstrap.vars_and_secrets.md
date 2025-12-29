@@ -53,14 +53,14 @@ Bootstrap 不追求自动化，追求**可复现**。每个组件的 README 包�
 
 ```bash
 invoke local.phase   # 检测当前 bootstrap 阶段
-invoke local.bootstrap  # 校验 init/env_vars（不生成本地文件）
+invoke local.bootstrap  # 校验 1Password 的 init/env_vars（不生成本地 .env）
 ```
 
 ### 3.2 Phase 顺序
 
 | Phase | 前置条件 | 操作 | 产出 |
 |-------|---------|------|------|
-| 0 | 1Password CLI 已登录 | `local.bootstrap` | init/env_vars 校验通过（无本地文件） |
+| 0 | 1Password CLI 已登录 | `local.bootstrap` | 校验 init/env_vars（无本地文件） |
 | 1 | VPS 可访问 | 安装 Dokploy | Dokploy Web UI |
 | 2 | Dokploy 可用 | `1password.setup` | 1Password Connect |
 | 3 | Connect 可用 | `vault.setup` | Vault 服务 |
@@ -81,7 +81,7 @@ invoke local.bootstrap  # 校验 init/env_vars（不生成本地文件）
 | 文件 | 内容 | Git 跟踪 |
 |------|------|----------|
 | `.env.example` | 仅 KEY（无 VALUE，随组件分布） | ✅ 进 Git |
-| `.env` | bootstrap 种子变量（可选/手动） | ❌ 不进 Git |
+| `.env` | 可选本地种子变量（手动维护） | ❌ 不进 Git |
 
 ---
 
@@ -110,6 +110,10 @@ invoke env.preview --project=platform --env=production --service=postgres
 
 ```python
 from libs.env import EnvManager, get_or_set
+
+# Bootstrap seed vars (init/env_vars)
+init_mgr = EnvManager(project='init')
+seed = init_mgr.get_all_env()
 
 # 从远端加载（无本地存储）
 mgr = EnvManager(project='platform', env='production', service='postgres')

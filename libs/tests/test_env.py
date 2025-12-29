@@ -124,8 +124,9 @@ class TestVaultOperations:
         assert result == True
         # Verify put was called with merged data
         put_call = mock_run.call_args_list[-1]
-        assert 'existing_key' in put_call[0][0]
-        assert 'new_key' in put_call[0][0]
+        put_args = put_call[0][0]
+        assert any('existing_key' in arg for arg in put_args)
+        assert any('new_key' in arg for arg in put_args)
 
 
 class Test1PasswordOperations:
@@ -142,7 +143,7 @@ class Test1PasswordOperations:
                 {"label": "username", "value": "admin"},
                 {"label": "POSTGRES_PASSWORD", "value": "secret"},
                 {"label": "notesPlain", "value": "skip this"},
-                {"label": "password", "value": "also filtered"},  # 'password' label is filtered
+                {"label": "password", "value": "also included"},  # 'password' label is included
             ]
         })
         mock_run.return_value = mock_result
@@ -150,10 +151,24 @@ class Test1PasswordOperations:
         mgr = EnvManager('bootstrap', 'production', 'vault')
         result = mgr._op_get_all()
         
-        # 'password' and 'notesPlain' labels are filtered out
-        assert result == {"username": "admin", "POSTGRES_PASSWORD": "secret"}
+        # 'notesPlain' label is filtered out
+        assert result == {"username": "admin", "POSTGRES_PASSWORD": "secret", "password": "also included"}
         assert "notesPlain" not in result
-        assert "password" not in result
+
+    @patch('libs.env.subprocess.run')
+    def test_op_get_all_init_uses_init_item(self, mock_run):
+        from libs.env import EnvManager, INIT_ITEM
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps({"fields": []})
+        mock_run.return_value = mock_result
+
+        mgr = EnvManager('init', 'production')
+        mgr._op_get_all()
+
+        op_call = mock_run.call_args[0][0]
+        assert INIT_ITEM in op_call
 
 
 class TestGeneratePassword:

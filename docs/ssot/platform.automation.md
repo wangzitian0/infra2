@@ -15,6 +15,8 @@
 | **公共库** | `libs/` | common, console, config, deployer |
 | **CLI 工具** | `tools/` | env_tool.py |
 
+> **Note**: Dokploy env API integration is pending. `EnvManager` will warn and return empty values for Dokploy-backed env reads until implemented.
+
 ### Code as SSOT 索引
 
 - **任务加载器**: [`tasks.py`](https://github.com/wangzitian0/infra2/blob/main/tasks.py)
@@ -112,17 +114,20 @@ invoke redis.shared.status
 invoke authentik.shared.status
 ```
 
-### SOP-003: 读写远端变量
+### SOP-003: 管理环境变量与密钥
 
 ```bash
-# 读取环境变量
+# 读取/设置环境变量
 invoke env.get KEY --project=platform --env=production --service=postgres
+invoke env.set KEY=VALUE --project=platform --env=production --service=postgres
 
-# 写入密钥
-invoke env.secret-set POSTGRES_PASSWORD=... --project=platform --env=production --service=postgres
+# 读取/设置密钥
+invoke env.secret-get KEY --project=platform --env=production --service=postgres
+invoke env.secret-set KEY=VALUE --project=platform --env=production --service=postgres
 
-# 预览当前变量（不落地）
+# 预览与复制
 invoke env.preview --project=platform --env=production --service=postgres
+invoke env.copy --from-project=platform --from-env=production --to-env=staging --service=postgres
 ```
 
 ---

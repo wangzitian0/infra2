@@ -3,7 +3,7 @@
 This module provides the core logic for reading/writing env vars and secrets.
 SSOT per project:
 - bootstrap: 1Password for both
-- platform/others: Dokploy for env, Vault for secrets
+- platform/others: Dokploy for env (API pending), Vault for secrets
 
 Usage:
     from libs.env import EnvManager, get_or_set
@@ -17,6 +17,7 @@ import os
 import secrets
 import string
 import subprocess
+import inspect
 from typing import TypedDict, NotRequired, Optional
 
 
@@ -24,6 +25,7 @@ __all__ = [
     'EnvManager',
     'get_or_set',
     'generate_password',
+    'op_get_item_field',
     'SSOT_CONFIG',
     'OP_VAULT',
     'INIT_ITEM',
@@ -107,11 +109,22 @@ def get_or_set(
     """
     mgr = EnvManager(project, env, service)
     existing = mgr.get_secret(key)
-    if existing:
+    if existing is not None:
         return existing
     
     # Generate new value
-    value = generator() if generator else generate_password(length)
+    if generator:
+        try:
+            sig = inspect.signature(generator)
+        except (TypeError, ValueError):
+            value = generator(length)
+        else:
+            if not sig.parameters:
+                value = generator()
+            else:
+                value = generator(length)
+    else:
+        value = generate_password(length)
     mgr.set_secret(key, value)
     return value
 
@@ -137,22 +150,30 @@ class EnvManager:
                 return f"{self.project}/{self.env}/{self.service}"
             return f"{self.project}/{self.env}"
     
-    def _run_cli(self, cmd: str, env: dict[str, str] | None = None) -> tuple[bool, str]:
-        """Run CLI command safely"""
+    def _run_cli(self, cmd: list[str], env: dict[str, str] | None = None) -> tuple[bool, str]:
+        """Run a CLI command and return (ok, stdout/stderr)."""
         try:
             full_env = os.environ.copy()
             if env:
                 full_env.update(env)
-            
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=True, env=full_env)
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True, env=full_env)
             return True, result.stdout
         except subprocess.CalledProcessError as e:
             return False, e.stderr
+        except (FileNotFoundError, OSError) as e:
+            return False, str(e)
     
     # =========================================================================
     # 1Password Operations
     # =========================================================================
-    
+
+    def _op_item_path(self, level: str = 'service') -> str:
+        """Resolve 1Password item path, honoring explicit op_item overrides."""
+        op_item = self._config.get('op_item')
+        if op_item:
+            return op_item
+        return self._get_path(level)
+
     def _op_get_all(self, level: str = 'service') -> dict[str, str]:
         """Get all fields from 1Password item"""
         cache_key = f'_op_{level}'
@@ -160,14 +181,24 @@ class EnvManager:
             return self._cache[cache_key]
         
         op_vault = self._config.get('op_vault', OP_VAULT)
-        path = self._get_path(level)
-        ok, output = self._run_cli(f'op item get "{path}" --vault="{op_vault}" --format=json')
+        path = self._op_item_path(level)
+        ok, output = self._run_cli([
+            "op",
+            "item",
+            "get",
+            path,
+            f"--vault={op_vault}",
+            "--format=json",
+        ])
         if not ok:
             return {}
         try:
             item = json.loads(output)
-            data = {f["label"]: f.get("value", "") for f in item.get("fields", [])
-                    if f.get("label") and f.get("label") not in ["notesPlain", "password"]}
+            data = {
+                f["label"]: f.get("value", "")
+                for f in item.get("fields", [])
+                if f.get("label") and f.get("label") != "notesPlain"
+            }
             self._cache[cache_key] = data
             return data
         except json.JSONDecodeError:
@@ -178,17 +209,40 @@ class EnvManager:
     
     def _op_set(self, key: str, value: str, level: str = 'service') -> bool:
         op_vault = self._config.get('op_vault', OP_VAULT)
-        path = self._get_path(level)
+        path = self._op_item_path(level)
         
-        # Check if item exists
-        ok, _ = self._run_cli(f'op item get "{path}" --vault="{op_vault}"')
-        if ok:
-            ok, _ = self._run_cli(f'op item edit "{path}" --vault="{op_vault}" "{key}={value}"')
+        if self._op_item_exists(path, op_vault):
+            ok, _ = self._run_cli([
+                "op",
+                "item",
+                "edit",
+                path,
+                f"--vault={op_vault}",
+                f"{key}={value}",
+            ])
         else:
-            ok, _ = self._run_cli(f'op item create --category=login --title="{path}" --vault="{op_vault}" "{key}={value}"')
+            ok, _ = self._run_cli([
+                "op",
+                "item",
+                "create",
+                "--category=login",
+                f"--title={path}",
+                f"--vault={op_vault}",
+                f"{key}={value}",
+            ])
         
         # Clear cache
         self._cache.pop(f'_op_{level}', None)
+        return ok
+
+    def _op_item_exists(self, path: str, op_vault: str) -> bool:
+        ok, _ = self._run_cli([
+            "op",
+            "item",
+            "get",
+            path,
+            f"--vault={op_vault}",
+        ])
         return ok
     
     # =========================================================================
@@ -204,10 +258,15 @@ class EnvManager:
         path = self._get_path(level)
         
         domain = os.environ.get("INTERNAL_DOMAIN", "")
-        vault_addr = f"https://vault.{domain}" if domain else os.environ.get("VAULT_ADDR", "")
+        vault_addr = os.environ.get("VAULT_ADDR") or os.environ.get("VAULT_URL") or ""
+        if not vault_addr and domain:
+            vault_addr = f"https://vault.{domain}"
         env = {"VAULT_ADDR": vault_addr} if vault_addr else None
         
-        ok, output = self._run_cli(f"vault kv get -format=json secret/{path}", env=env)
+        ok, output = self._run_cli(
+            ["vault", "kv", "get", "-format=json", f"secret/{path}"],
+            env=env,
+        )
         if not ok:
             return {}
         try:
@@ -224,13 +283,18 @@ class EnvManager:
         path = self._get_path(level)
         existing = self._vault_get_all(level)
         existing[key] = value
-        kv_pairs = " ".join(f'{k}="{v}"' for k, v in existing.items())
+        kv_pairs = [f"{k}={v}" for k, v in existing.items()]
         
         domain = os.environ.get("INTERNAL_DOMAIN", "")
-        vault_addr = f"https://vault.{domain}" if domain else os.environ.get("VAULT_ADDR", "")
+        vault_addr = os.environ.get("VAULT_ADDR") or os.environ.get("VAULT_URL") or ""
+        if not vault_addr and domain:
+            vault_addr = f"https://vault.{domain}"
         env = {"VAULT_ADDR": vault_addr} if vault_addr else None
         
-        ok, _ = self._run_cli(f"vault kv put secret/{path} {kv_pairs}", env=env)
+        ok, _ = self._run_cli(
+            ["vault", "kv", "put", f"secret/{path}", *kv_pairs],
+            env=env,
+        )
         
         # Clear cache
         self._cache.pop(f'_vault_{level}', None)
@@ -243,6 +307,8 @@ class EnvManager:
     def _dokploy_get_all(self, level: str = 'service') -> dict[str, str]:
         """Get env vars from Dokploy (placeholder)"""
         # TODO: Implement Dokploy CLI/API
+        from libs.console import warning
+        warning("Dokploy API not yet implemented; returning empty env vars.")
         return {}
     
     def _dokploy_get(self, key: str, level: str = 'service') -> Optional[str]:
@@ -316,5 +382,29 @@ class EnvManager:
     def generate_and_store_secret(self, key: str, length: int = 24, level: str = 'service') -> str:
         """Generate a password and store it in SSOT, return the value"""
         password = generate_password(length)
-        self.set_secret(key, password, level)
+        if not self.set_secret(key, password, level):
+            raise RuntimeError(f"Failed to store secret '{key}' at level '{level}'")
         return password
+
+
+def op_get_item_field(item_name: str, field_label: str, vault: str = OP_VAULT) -> Optional[str]:
+    """Get a specific field from an arbitrary 1Password item."""
+    mgr = EnvManager('init')
+    ok, output = mgr._run_cli([
+        "op",
+        "item",
+        "get",
+        item_name,
+        f"--vault={vault}",
+        "--format=json",
+    ])
+    if not ok:
+        return None
+    try:
+        item = json.loads(output)
+    except json.JSONDecodeError:
+        return None
+    for field in item.get("fields", []):
+        if field.get("label") == field_label:
+            return field.get("value", "")
+    return None

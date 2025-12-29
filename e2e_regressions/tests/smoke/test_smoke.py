@@ -41,17 +41,17 @@ async def test_deployment_complete_smoke(config: TestConfig):
 
 @pytest.mark.e2e
 async def test_deployment_routing(config: TestConfig):
-    """Verify routing for core services on the same base domain."""
+    """Verify routing for core services on the same internal domain."""
     from urllib.parse import urlparse
 
     services_domains = [(url, name) for name, url in _core_services(config).items()]
-    base_domain = config.BASE_DOMAIN
+    internal_domain = config.INTERNAL_DOMAIN
 
     async with httpx.AsyncClient(verify=False) as client:
         for url, name in services_domains:
             service_domain = urlparse(url).hostname
-            assert service_domain.endswith(base_domain), \
-                f"{name} should be on domain {base_domain}, got {service_domain}"
+            assert service_domain.endswith(internal_domain), \
+                f"{name} should be on domain {internal_domain}, got {service_domain}"
 
             response = await client.get(url, timeout=10.0)
             assert response.status_code < 500, \

@@ -2,10 +2,18 @@
 Global pytest fixtures and configuration for E2E tests.
 """
 import os
+import sys
 import asyncio
+from pathlib import Path
 from typing import AsyncGenerator
 import pytest
+import httpx
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
+
+# Ensure repo root is on sys.path for libs imports when running from e2e_regressions/.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 def _require_env(name: str) -> str:
@@ -18,17 +26,43 @@ def _require_env(name: str) -> str:
     return val
 
 
+def _load_init_vars() -> dict[str, str]:
+    """Load init/env_vars from 1Password when env vars are missing."""
+    try:
+        from libs.env import EnvManager
+    except Exception:
+        return {}
+    try:
+        mgr = EnvManager(project="init", env="production")
+        return mgr.get_all_env(level="service") or {}
+    except Exception:
+        return {}
+
+
+def _resolve_internal_domain() -> str:
+    """Resolve INTERNAL_DOMAIN with optional 1Password fallback."""
+    env_domain = os.getenv("INTERNAL_DOMAIN")
+    if env_domain:
+        return env_domain
+    init_vars = _load_init_vars()
+    return init_vars.get("INTERNAL_DOMAIN") or _require_env("INTERNAL_DOMAIN")
+
+
 class TestConfig:
-    """Test configuration from environment variables."""
+    """Test configuration from environment variables.
+
+    Required: INTERNAL_DOMAIN.
+    Optional: E2E_USERNAME/E2E_PASSWORD (auth flows), PORTAL_URL, DB creds.
+    """
 
     # Domain
-    BASE_DOMAIN = os.getenv("E2E_DOMAIN") or os.getenv("INTERNAL_DOMAIN") or os.getenv("BASE_DOMAIN") or _require_env("BASE_DOMAIN")
+    INTERNAL_DOMAIN = _resolve_internal_domain()
 
     # Core Bootstrap services
-    DOKPLOY_URL = os.getenv("DOKPLOY_URL", f"https://cloud.{BASE_DOMAIN}")
-    OP_URL = os.getenv("OP_URL", f"https://op.{BASE_DOMAIN}")
-    VAULT_URL = os.getenv("VAULT_URL", f"https://vault.{BASE_DOMAIN}")
-    SSO_URL = os.getenv("SSO_URL", f"https://sso.{BASE_DOMAIN}")
+    DOKPLOY_URL = os.getenv("DOKPLOY_URL", f"https://cloud.{INTERNAL_DOMAIN}")
+    OP_URL = os.getenv("OP_URL", f"https://op.{INTERNAL_DOMAIN}")
+    VAULT_URL = os.getenv("VAULT_URL", f"https://vault.{INTERNAL_DOMAIN}")
+    SSO_URL = os.getenv("SSO_URL", f"https://sso.{INTERNAL_DOMAIN}")
 
     # Optional portal/homepage
     PORTAL_URL = os.getenv("PORTAL_URL", "")
@@ -164,3 +198,10 @@ async def platform_pg_connection_to_db():
 
     for conn in connections:
         await conn.close()
+
+
+@pytest.fixture
+async def http_client() -> AsyncGenerator[httpx.AsyncClient, None]:
+    """Shared HTTP client for platform tests."""
+    async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
+        yield client

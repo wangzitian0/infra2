@@ -21,7 +21,7 @@ Docs are scattered across multiple paths and contain stale links/anchors. We nee
 - MkDocs site builds without warnings.
 
 ## PR Links
-- None yet.
+- https://github.com/wangzitian0/infra2/pull/10
 
 ## Change Log
 - 2025-12-28: Initialized docs reorg and Pages site.
@@ -36,6 +36,8 @@ Docs are scattered across multiple paths and contain stale links/anchors. We nee
 - 2025-12-30: Simplified MkDocs nav and aligned onboarding/recovery/E2E guidance.
 - 2025-12-30: Clarified docs site homepage vs repo README.
 - 2025-12-30: Addressed review feedback on placeholders and E2E command clarity.
+- 2025-12-30: Fixed init/env_vars SSOT alignment in EnvManager + E2E fallback; refreshed docs.
+- 2025-12-30: Standardized E2E domain config on INTERNAL_DOMAIN (removed BASE_DOMAIN/E2E_DOMAIN).
 
 ## Verification
 - `mkdocs build --config-file docs/mkdocs.yml` passes without warnings.

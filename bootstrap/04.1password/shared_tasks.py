@@ -1,4 +1,5 @@
 """1Password Connect shared tasks - uses libs/ system"""
+from __future__ import annotations
 from invoke import task
 from libs.common import get_env
 from libs.console import success, error
@@ -23,5 +24,5 @@ def status(c) -> dict:
 @task
 def get_secret(c, vault: str, item: str, field: str) -> str | None:
     """Get a secret from 1Password"""
-    # TODO: Implement actual API call via 1Password Connect
-    return None
+    from libs.env import op_get_item_field
+    return op_get_item_field(item, field, vault=vault)

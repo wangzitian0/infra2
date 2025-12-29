@@ -6,7 +6,7 @@
 
 | Module | Purpose | Key Functions |
 |--------|---------|---------------|
-| `env.py` | **Core** Env & Secret SSOT | `EnvManager`, `get_or_set` |
+| `env.py` | **Core** Env & Secret SSOT | `EnvManager`, `get_or_set`, `op_get_item_field` |
 | `common.py` | Utilities | `get_env()`, `validate_env()`, `load_env_keys()` |
 | `console.py` | Rich CLI output | `success()`, `error()`, `header()`, `prompt_action()` |
 | `deployer.py` | Deployment base class | `Deployer`, `load_shared_tasks()` |
@@ -40,7 +40,13 @@ class EnvManager:
 
 def get_or_set(key, length=24) -> str
 # Idempotent secret generation (check remote first)
+
+def op_get_item_field(item_name, field_label, vault=OP_VAULT) -> str | None
+# Read a specific 1Password item field (for non-standard items)
 ```
+
+Notes:
+- `EnvManager(project="init")` reads 1Password item `init/env_vars` (seed vars like `VPS_HOST`, `INTERNAL_DOMAIN`).
 
 ### libs.common
 

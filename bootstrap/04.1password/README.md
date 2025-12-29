@@ -16,21 +16,21 @@
 ### 2. 准备数据目录
 
 ```bash
-ssh root@<VPS_IP>
+ssh ${VPS_SSH_USER:-root}@<VPS_IP>
 mkdir -p /data/bootstrap/1password
 chown -R 1000:1000 /data/bootstrap/1password
-chmod 777 /data/bootstrap/1password
+chmod 750 /data/bootstrap/1password
 exit
 ```
 
 ### 3. 上传 Credentials
 
 ```bash
-op document get "VPS-01 Credentials File" --vault Infra2 | \
-  ssh root@<VPS_IP> 'cat > /data/bootstrap/1password/1password-credentials.json && chown 1000:1000 /data/bootstrap/1password/1password-credentials.json'
+op document get "bootstrap/1password/VPS-01 Credentials File" --vault Infra2 | \
+  ssh ${VPS_SSH_USER:-root}@<VPS_IP> 'cat > /data/bootstrap/1password/1password-credentials.json && chown 1000:1000 /data/bootstrap/1password/1password-credentials.json'
 
 # 验证
-ssh root@<VPS_IP> 'ls -la /data/bootstrap/1password/'
+ssh ${VPS_SSH_USER:-root}@<VPS_IP> 'ls -la /data/bootstrap/1password/'
 ```
 
 ### 4. 在 Dokploy 部署
@@ -49,7 +49,7 @@ curl https://op.$INTERNAL_DOMAIN/health
 # 预期响应: {"name":"1Password Connect API","version":"1.8.1",...}
 
 # 测试读取 secrets
-TOKEN=$(op item get "VPS-01 Access Token: own_service" --vault Infra2 --fields credential --reveal)
+TOKEN=$(op item get "bootstrap/1password/VPS-01 Access Token: own_service" --vault Infra2 --fields credential --reveal)
 curl -H "Authorization: Bearer $TOKEN" https://op.$INTERNAL_DOMAIN/v1/vaults
 ```
 
@@ -57,7 +57,7 @@ curl -H "Authorization: Bearer $TOKEN" https://op.$INTERNAL_DOMAIN/v1/vaults
 
 ### 数据库权限错误
 ```bash
-ssh root@<VPS_IP> 'chmod 777 /data/bootstrap/1password'
+ssh root@<VPS_IP> 'chmod 750 /data/bootstrap/1password'
 ```
 
 ### sync 服务无法启动

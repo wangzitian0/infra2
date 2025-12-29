@@ -8,6 +8,7 @@ from __future__ import annotations
 from invoke import task
 import subprocess
 import shutil
+import shlex
 from libs.console import console, success, error, warning, info, header
 
 
@@ -36,11 +37,38 @@ def _check_command(cmd: str) -> bool:
     """Check if a command exists and runs successfully"""
     try:
         result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=10
+            shlex.split(cmd), capture_output=True, text=True, timeout=10
         )
         return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return False
+
+
+def _collect_cli_status() -> list[tuple[str, bool, str]]:
+    """Collect CLI status for table display."""
+    results = []
+    for name, dep in CLI_DEPS.items():
+        ok = _check_command(dep['check'])
+        results.append((name, ok, dep.get('docs', '')))
+    return results
+
+
+def _print_cli_status(results: list[tuple[str, bool, str]]) -> bool:
+    """Render CLI status table and return overall OK."""
+    from rich.table import Table
+    table = Table(show_header=True)
+    table.add_column("CLI", style="cyan")
+    table.add_column("Status")
+    table.add_column("Docs")
+
+    all_ok = True
+    for name, ok, docs in results:
+        status = "[green]✅ Installed[/]" if ok else "[red]❌ Missing[/]"
+        table.add_row(name, status, docs or "")
+        if not ok:
+            all_ok = False
+    console.print(table)
+    return all_ok
 
 
 def _get_platform() -> str:
@@ -59,29 +87,8 @@ def check(c):
     """Check CLI dependencies"""
     header("Local Environment Check", "Checking CLI dependencies")
     
-    all_ok = True
-    results = []
-    
-    for name, dep in CLI_DEPS.items():
-        if _check_command(dep['check']):
-            results.append((name, True, None))
-        else:
-            results.append((name, False, dep.get('docs', '')))
-            all_ok = False
-    
-    # Display results
-    from rich.table import Table
-    table = Table(show_header=True)
-    table.add_column("CLI", style="cyan")
-    table.add_column("Status")
-    table.add_column("Docs")
-    
-    for name, ok, docs in results:
-        status = "[green]✅ Installed[/]" if ok else "[red]❌ Missing[/]"
-        table.add_row(name, status, docs or "")
-    
-    console.print(table)
-    
+    results = _collect_cli_status()
+    all_ok = _print_cli_status(results)
     if all_ok:
         success("All CLI dependencies installed")
     else:
@@ -100,13 +107,14 @@ def init(c):
     
     # Check CLI deps
     console.print()
-    if not check(c):
+    results = _collect_cli_status()
+    if not _print_cli_status(results):
         console.print()
         info("Installation instructions:")
         platform = _get_platform()
         
         for name, dep in CLI_DEPS.items():
-            if not _check_command(dep['check']):
+            if not next((ok for dep_name, ok, _ in results if dep_name == name), False):
                 console.print(f"\n[bold]{name}[/]:")
                 if platform == 'mac' and 'install_mac' in dep:
                     console.print(f"  [cyan]{dep['install_mac']}[/]")
@@ -146,14 +154,14 @@ def version(c):
     for name, dep in CLI_DEPS.items():
         try:
             result = subprocess.run(
-                dep['check'], shell=True, capture_output=True, text=True, timeout=10
+                shlex.split(dep['check']), capture_output=True, text=True, timeout=10
             )
             if result.returncode == 0:
                 ver = result.stdout.strip().split('\n')[0]
                 console.print(f"[cyan]{name}[/]: {ver}")
             else:
                 console.print(f"[cyan]{name}[/]: [red]not installed[/]")
-        except:
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             console.print(f"[cyan]{name}[/]: [red]error[/]")
 
 
@@ -233,27 +241,13 @@ def phase(c):
     Each phase reads from its respective 1Password item.
     """
     from rich.table import Table
-    from libs.env import EnvManager, INIT_ITEM, OP_VAULT
-    import json
+    from libs.env import EnvManager, INIT_ITEM, OP_VAULT, op_get_item_field
     
     header("Bootstrap Phase Detection")
     
     def get_field(item_name: str, field_label: str) -> str:
-        """Get field from 1Password item via CLI (EnvManager doesn't support arbitrary items easily yet)"""
-        # TODO: Extend EnvManager to support arbitrary items or use it if items match standard naming
-        # specific items are tricky, sticking to op cli for specific non-standard items
-        try:
-            result = subprocess.run(
-                f'op item get "{item_name}" --vault="{OP_VAULT}" --format=json',
-                shell=True, capture_output=True, text=True, check=True
-            )
-            item = json.loads(result.stdout)
-            for f in item.get("fields", []):
-                if f.get("label") == field_label:
-                    return f.get("value", "")
-            return ""
-        except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError):
-            return ""
+        value = op_get_item_field(item_name, field_label, vault=OP_VAULT)
+        return value or ""
     
     # EnvManager can read INIT_ITEM easily
     mgr_init = EnvManager('init')

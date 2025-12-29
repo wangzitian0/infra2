@@ -11,8 +11,8 @@
 
 | 组件 | 测试 | 验证内容 |
 |------|------|----------|
-| **Vault** | `test_vault_unseal` | Unseal 流程可重复性 |
-| **Backup** | `test_backup_exists` | 备份文件在宿主机存在性 |
+| **Storage** | `test_recovery_storage_policy` | Retain 策略存在性 |
+| **Docs** | `test_recovery_docs_exist` | 恢复流程文档存在 |
 
 ## 运行测试
 
