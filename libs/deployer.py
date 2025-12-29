@@ -1,11 +1,14 @@
 """
 Base deployer class with DRY task generation
+
+Uses libs/env.py for secret management.
 """
 from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from invoke import task
-from libs.common import get_env, validate_env, generate_password
-from libs.console import header, success, error, warning, info, env_vars, prompt_action, run_with_status
+from libs.common import get_env, validate_env
+from libs.console import header, success, error, env_vars, prompt_action, run_with_status
+from libs.env import EnvManager
 
 if TYPE_CHECKING:
     from invoke import Context
@@ -28,9 +31,12 @@ class Deployer:
         return get_env()
     
     @classmethod
-    def vault_path(cls) -> str:
+    def get_env_manager(cls) -> EnvManager:
+        """Get EnvManager for this service"""
         e = cls.env()
-        return f"{e['PROJECT']}/{e['ENV']}/{cls.service}"
+        project = e.get('PROJECT', 'platform')
+        env = e.get('ENV', 'production')
+        return EnvManager(project=project, env=env, service=cls.service)
     
     @classmethod
     def _prepare_dirs(cls, c: "Context") -> bool:
@@ -48,36 +54,17 @@ class Deployer:
         return True
     
     @classmethod
-    def _vault_cmd(cls, c: "Context", cmd: str, **kwargs) -> Any:
-        """Run vault command with correct VAULT_ADDR"""
-        e = cls.env()
-        vault_addr = f"https://vault.{e['INTERNAL_DOMAIN']}"
-        return c.run(f"VAULT_ADDR={vault_addr} {cmd}", **kwargs)
-    
-    @classmethod
-    def store_secret(cls, c: "Context", key: str, value: str) -> bool:
-        """Store secret in Vault with error handling"""
-        result = cls._vault_cmd(c, f"vault kv put secret/{cls.vault_path()} {key}={value}", warn=True, hide=True)
-        if not result.ok:
-            error(f"Failed to store {key} in Vault", result.stderr)
-            return False
-        success(f"Stored {key} in Vault")
-        return True
-    
-    @classmethod
-    def read_secret(cls, c: "Context", path: str, field: str) -> str | None:
-        """Read secret from Vault"""
-        result = cls._vault_cmd(c, f"vault kv get -field={field} secret/{path}", warn=True, hide=True)
-        return result.stdout.strip() if result.ok else None
-    
-    @classmethod
     def pre_compose(cls, c: "Context") -> dict | None:
-        """Prepare and return generated secrets"""
+        """Prepare and generate secrets using EnvManager"""
         if not cls._prepare_dirs(c):
             return None
         
-        password = generate_password(24)
-        if not cls.store_secret(c, cls.secret_key, password):
+        # Use EnvManager to generate and store secret
+        env_mgr = cls.get_env_manager()
+        password = env_mgr.generate_and_store_secret(cls.secret_key, length=24)
+        
+        if not password:
+            error(f"Failed to store {cls.secret_key}")
             return None
         
         secrets = {cls.env_var_name: password}
