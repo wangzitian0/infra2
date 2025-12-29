@@ -114,12 +114,13 @@
 
 - **DRY**：避免重复代码，使用函数/类/模块/组件等抽象。
 - **避免魔法数字**：使用常量/枚举/配置文件等替代。
+- **尽可能复用已有的库**：动手前永远先检查 libs 目录 [README.md](./libs/README.md)。
 
 ### PR提交准则
 
-- **Make sure not conflict**
-- **checklist**: 要在 description 里面列checklist
+- **checklist**: 要在 description 里面列checklist。
 - **检查 wiki 完备程度**：包括 SSOT、Project、README 等。
+- **推送前检查**：确保没有冲突。已有的 Code Review评论都已经处理（resolved）。
 
 ---
 
