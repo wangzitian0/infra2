@@ -6,11 +6,6 @@ from invoke import Collection, Task
 from pathlib import Path
 import importlib.util
 import sys
-from dotenv import load_dotenv
-
-# Load .env first, then .env.local for secrets (overrides)
-load_dotenv()
-load_dotenv('.env.local', override=True)
 
 
 def _load_module(file_path, module_name):

@@ -52,7 +52,6 @@ nav:
   - SSOT:
       - Index: ssot/README.md
       - Core: ssot/core.md
-      - Env Management: env_management.md
       - Bootstrap: ssot/bootstrap.nodep.md
       - Vars & Secrets: ssot/bootstrap.vars_and_secrets.md
       - Platform:

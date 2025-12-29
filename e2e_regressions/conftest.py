@@ -4,27 +4,17 @@ Global pytest fixtures and configuration for E2E tests.
 import os
 import asyncio
 from typing import AsyncGenerator
-from pathlib import Path
 import pytest
-from dotenv import load_dotenv
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
-
-
-ROOT = Path(__file__).parent.parent
-SERVICE_ROOT = Path(__file__).parent
-ENV_NAME = os.getenv("DEPLOY_ENV", "production")
-
-# Load project + environment + service env files (service overrides)
-load_dotenv(ROOT / ".env")
-load_dotenv(ROOT / ".env.local", override=True)
-load_dotenv(ROOT / f".env.{ENV_NAME}")
-load_dotenv(SERVICE_ROOT / f".env.{ENV_NAME}", override=True)
 
 
 def _require_env(name: str) -> str:
     val = os.getenv(name)
     if not val:
-        raise RuntimeError(f"Required environment variable '{name}' is not set. Check your env files.")
+        raise RuntimeError(
+            f"Required environment variable '{name}' is not set. "
+            "Set it in your shell/CI (see .env.example for the key list)."
+        )
     return val
 
 

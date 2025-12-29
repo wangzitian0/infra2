@@ -14,7 +14,7 @@
 | **服务定义** | `path/to/compose.yaml` | 资源声明源头 |
 | **部署任务** | `path/to/deploy.py` | Invoke 任务入口 |
 | **运行时状态** | **Vault** (`secret/<project>/<env>/...`) | 密钥与敏感配置 |
-| **环境变量** | `.env` / `.env.<env>` | 变量契约 |
+| **环境变量** | 远端 SSOT + `.env.example` | 变量契约 |
 
 ### Code as SSOT 索引
 

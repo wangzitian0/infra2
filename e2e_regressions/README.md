@@ -26,8 +26,8 @@ For the authoritative test strategy and pyramid, refer to:
 cd e2e_regressions
 uv sync
 
-# Configure env
-cp .env.example .env.production
+# Configure env (export in shell/CI)
+# See .env.example for the required keys
 ```
 
 ### Execution

@@ -14,7 +14,7 @@
 | **PostgreSQL** | [`platform/01.postgres/compose.yaml`](https://github.com/wangzitian0/infra2/blob/main/platform/01.postgres/compose.yaml) | 平台共享数据库 |
 | **Redis** | [`platform/02.redis/compose.yaml`](https://github.com/wangzitian0/infra2/blob/main/platform/02.redis/compose.yaml) | 平台共享缓存 |
 | **凭据管理** | **Vault** (`secret/<project>/<env>/<service>`) | 密钥真理 |
-| **环境同步** | [`tools/env_sync.py`](https://github.com/wangzitian0/infra2/blob/main/tools/env_sync.py) | 本地对齐 |
+| **环境工具** | [`tools/env_tool.py`](https://github.com/wangzitian0/infra2/blob/main/tools/env_tool.py) | 远端读写 |
 
 ---
 

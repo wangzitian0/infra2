@@ -10,7 +10,7 @@
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
 | **Vault KV** | `secret/<project>/<env>/<service>` | 数据库凭据路径 |
-| **环境同步** | [`tools/env_sync.py`](https://github.com/wangzitian0/infra2/blob/main/tools/env_sync.py) | 读写 Vault |
+| **环境工具** | [`tools/env_tool.py`](https://github.com/wangzitian0/infra2/blob/main/tools/env_tool.py) | 读写远端 |
 | **部署入口** | Dokploy App Env | 应用运行时变量注入 |
 
 ---
@@ -49,11 +49,11 @@ graph TD
        ```bash
        vault kv put secret/platform/production/<app> PG_HOST=... PG_USER=... PG_PASS=...
        ```
-    2. 使用 env_sync 拉取到本地：
+    2. 使用 env_tool 验证已写入：
        ```bash
-       invoke env.pull --project=platform --env=production --level=service
+       invoke env.secret-get PG_PASS --project=platform --env=production --service=<app>
        ```
-    3. 在 Dokploy App 环境变量中设置上述值。
+    3. 在 Dokploy App 环境变量中设置上述值（从 Vault 读取）。
 
 ### SOP-002: 排查“Permission Denied”
 
@@ -69,7 +69,7 @@ graph TD
 
 | 行为描述 | 验证方式 | 状态 |
 |----------|----------|------|
-| **Vault 读写验证** | `invoke env.status --project=platform --env=production` | ✅ Manual |
+| **Vault 读写验证** | `invoke env.secret-get PG_PASS --project=platform --env=production --service=<app>` | ✅ Manual |
 
 ---
 

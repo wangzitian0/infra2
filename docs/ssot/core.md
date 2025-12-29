@@ -15,14 +15,14 @@
 |------|----------------|------|
 | **目录结构** | [目录结构规范](#4-目录结构规范) | 物理文件布局 |
 | **层级定义** | [Repo Root](https://github.com/wangzitian0/infra2/tree/main) | Bootstrap, Platform, Libs, Tools |
-| **变量契约** | `.env` / `.env.<env>` / `.env.example` | 运行时配置入口 |
+| **变量契约** | 远端 SSOT + `.env.example` | 运行时配置入口 |
 | **自动化入口** | [`tasks.py`](https://github.com/wangzitian0/infra2/blob/main/tasks.py) | Invoke 任务加载与执行 |
 
 ### Code as SSOT 索引
 
 - **任务加载器**：参见 [`tasks.py`](https://github.com/wangzitian0/infra2/blob/main/tasks.py)
 - **部署基类**：参见 [`libs/deployer.py`](https://github.com/wangzitian0/infra2/blob/main/libs/deployer.py)
-- **环境同步**：参见 [`tools/env_sync.py`](https://github.com/wangzitian0/infra2/blob/main/tools/env_sync.py)
+- **环境变量/密钥**：参见 [`libs/env.py`](https://github.com/wangzitian0/infra2/blob/main/libs/env.py)
 
 ---
 
@@ -141,7 +141,7 @@ platform/
 |---------|---------|------|
 | Docker Compose | `compose.yaml` | ✅ 统一标准名 |
 | HCL 配置 | `<service>.hcl` | `vault.hcl`, `traefik.hcl` |
-| 环境变量 | `.env`, `.env.example` | 项目根目录 |
+| 环境变量 | `.env.example`, `.env` | 项目根目录（`.env` 仅为 bootstrap 种子） |
 | 自动化脚本 | `tasks.py` / `deploy.py` | Invoke 任务文件 |
 | README | `README.md` | 每个组件目录必需 |
 
@@ -149,13 +149,18 @@ platform/
 
 ## 5. 环境变量规范
 
-### 配置层级
+### 三层结构 (远端 SSOT)
 
-| 级别 | 配置入口 | 用途 |
-|------|-----------|------|
-| Project | `.env` | 项目级通用配置 |
-| Environment | `.env.<env>` | 环境级差异配置 |
-| Service | `platform/{nn}.{service}/.env.<env>.local` | 服务级配置 |
+| 层级 | 路径格式 | 说明 |
+|------|----------|------|
+| Project | `{project}` | Dokploy/Vault 项目级变量 |
+| Environment | `{project}/{env}` | 环境级变量 |
+| Service | `{project}/{env}/{service}` | 服务级变量 |
+
+### 本地文件（仅模板/种子）
+
+- `.env.example`：仅 KEY 清单（进 Git）
+- `.env`：bootstrap 种子变量（local.bootstrap 生成，不进 Git）
 
 ### 服务命名规范
 

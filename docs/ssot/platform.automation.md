@@ -13,7 +13,7 @@
 | **部署任务** | `platform/{nn}.{service}/deploy.py` | pre_compose, composing, post_compose |
 | **状态检查** | `platform/{nn}.{service}/shared_tasks.py` | status() 返回 {is_ready, details} |
 | **公共库** | `libs/` | common, console, config, deployer |
-| **CLI 工具** | `tools/` | env_sync.py |
+| **CLI 工具** | `tools/` | env_tool.py |
 
 ### Code as SSOT 索引
 
@@ -35,7 +35,7 @@ flowchart TB
     end
     
     subgraph Tools["tools/ (CLI工具)"]
-        EnvSync[env_sync.py]
+        EnvTool[env_tool.py]
     end
     
     subgraph Platform["platform/ (服务)"]
@@ -47,7 +47,7 @@ flowchart TB
     Deployer --> PG
     Deployer --> RD
     Deployer --> AUTH
-    Common --> EnvSync
+    Common --> EnvTool
     PG --> AUTH
     RD --> AUTH
 ```
@@ -112,14 +112,17 @@ invoke redis.shared.status
 invoke authentik.shared.status
 ```
 
-### SOP-003: 同步环境变量
+### SOP-003: 读写远端变量
 
 ```bash
-# 推送到 Vault
-invoke env.push --project=platform --env=production --level=service
+# 读取环境变量
+invoke env.get KEY --project=platform --env=production --service=postgres
 
-# 从 Vault 拉取
-invoke env.pull --project=platform --env=production --level=service
+# 写入密钥
+invoke env.secret-set POSTGRES_PASSWORD=... --project=platform --env=production --service=postgres
+
+# 预览当前变量（不落地）
+invoke env.preview --project=platform --env=production --service=postgres
 ```
 
 ---
@@ -130,7 +133,7 @@ invoke env.pull --project=platform --env=production --level=service
 |----------|----------|
 | **所有模块加载** | `invoke --list` 无报错 |
 | **服务健康** | `invoke {service}.shared.status` |
-| **Vault 读写** | `invoke env.status --project=platform --env=production` |
+| **Vault 读写** | `invoke env.secret-get POSTGRES_PASSWORD --project=platform --env=production --service=postgres` |
 
 ---
 

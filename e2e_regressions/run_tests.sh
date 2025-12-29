@@ -23,8 +23,6 @@ NC='\033[0m' # No Color
 TEST_TYPE="${1:-smoke}"
 HEADED="${2:-}"
 EXTRA_ARGS="${@:3}"
-DEPLOY_ENV="${DEPLOY_ENV:-production}"
-ENV_FILE=".env.${DEPLOY_ENV}"
 
 # Functions
 print_usage() {
@@ -65,12 +63,9 @@ run_tests() {
     local test_type="$1"
     local extra_args="$2"
 
-    # Check if env file exists
-    if [ ! -f "$ENV_FILE" ]; then
-        echo -e "${YELLOW}⚠ ${ENV_FILE} file not found${NC}"
-        echo "Creating from template..."
-        cp .env.example "$ENV_FILE"
-        echo -e "${YELLOW}Please configure ${ENV_FILE} before running tests${NC}"
+    if [ -z "${E2E_DOMAIN}" ] && [ -z "${INTERNAL_DOMAIN}" ] && [ -z "${BASE_DOMAIN}" ]; then
+        echo -e "${YELLOW}Missing BASE_DOMAIN/INTERNAL_DOMAIN/E2E_DOMAIN${NC}"
+        echo "Export required env vars before running tests. See .env.example for the key list."
         exit 1
     fi
 

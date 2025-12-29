@@ -25,7 +25,6 @@ help:
 	@echo ""
 	@echo "Utilities:"
 	@echo "  make clean            - Remove test artifacts"
-	@echo "  make env              - Create .env.<env> file from template"
 
 install:
 	uv sync
@@ -75,15 +74,5 @@ clean:
 	rm -rf .pytest_cache __pycache__ test-results test-videos report.html
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete
-
-env:
-	@ENV_NAME=$${DEPLOY_ENV:-production}; \
-	ENV_FILE=".env.$${ENV_NAME}"; \
-	if [ ! -f "$${ENV_FILE}" ]; then \
-		cp .env.example "$${ENV_FILE}"; \
-		echo "Created $${ENV_FILE} from template. Please configure your environment variables."; \
-	else \
-		echo "$${ENV_FILE} already exists"; \
-	fi
 
 .DEFAULT_GOAL := help
