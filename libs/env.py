@@ -154,11 +154,20 @@ class EnvManager:
             return True, result.stdout
         except subprocess.CalledProcessError as e:
             return False, e.stderr
+        except (FileNotFoundError, OSError) as e:
+            return False, str(e)
     
     # =========================================================================
     # 1Password Operations
     # =========================================================================
-    
+
+    def _op_item_path(self, level: str = 'service') -> str:
+        """Resolve 1Password item path, honoring explicit op_item overrides."""
+        op_item = self._config.get('op_item')
+        if op_item:
+            return op_item
+        return self._get_path(level)
+
     def _op_get_all(self, level: str = 'service') -> dict[str, str]:
         """Get all fields from 1Password item"""
         cache_key = f'_op_{level}'
@@ -166,7 +175,7 @@ class EnvManager:
             return self._cache[cache_key]
         
         op_vault = self._config.get('op_vault', OP_VAULT)
-        path = self._get_path(level)
+        path = self._op_item_path(level)
         ok, output = self._run_cli([
             "op",
             "item",
@@ -194,7 +203,7 @@ class EnvManager:
     
     def _op_set(self, key: str, value: str, level: str = 'service') -> bool:
         op_vault = self._config.get('op_vault', OP_VAULT)
-        path = self._get_path(level)
+        path = self._op_item_path(level)
         
         # Check if item exists
         ok, _ = self._run_cli([

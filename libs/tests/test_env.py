@@ -155,6 +155,21 @@ class Test1PasswordOperations:
         assert result == {"username": "admin", "POSTGRES_PASSWORD": "secret", "password": "also filtered"}
         assert "notesPlain" not in result
 
+    @patch('libs.env.subprocess.run')
+    def test_op_get_all_init_uses_init_item(self, mock_run):
+        from libs.env import EnvManager, INIT_ITEM
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps({"fields": []})
+        mock_run.return_value = mock_result
+
+        mgr = EnvManager('init', 'production')
+        mgr._op_get_all()
+
+        op_call = mock_run.call_args[0][0]
+        assert INIT_ITEM in op_call
+
 
 class TestGeneratePassword:
     """Test password generation"""

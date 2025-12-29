@@ -45,6 +45,9 @@ def op_get_item_field(item_name, field_label, vault=OP_VAULT) -> str | None
 # Read a specific 1Password item field (for non-standard items)
 ```
 
+Notes:
+- `EnvManager(project="init")` reads 1Password item `init/env_vars` (seed vars like `VPS_HOST`, `INTERNAL_DOMAIN`).
+
 ### libs.common
 
 ```python

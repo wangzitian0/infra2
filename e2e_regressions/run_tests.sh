@@ -63,8 +63,8 @@ run_tests() {
     local test_type="$1"
     local extra_args="$2"
 
-    if [ -z "${E2E_DOMAIN}" ] && [ -z "${INTERNAL_DOMAIN}" ] && [ -z "${BASE_DOMAIN}" ]; then
-        echo -e "${YELLOW}Missing BASE_DOMAIN/INTERNAL_DOMAIN/E2E_DOMAIN${NC}"
+    if [ -z "${INTERNAL_DOMAIN}" ]; then
+        echo -e "${YELLOW}Missing INTERNAL_DOMAIN${NC}"
         echo "Export required env vars before running tests. See .env.example for the key list."
         exit 1
     fi

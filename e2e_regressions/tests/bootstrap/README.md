@@ -52,4 +52,4 @@ uv run pytest tests/bootstrap/ -m smoke -v
 | `OP_URL` | ❌ | 1Password URL（默认 op.<domain>） |
 | `VAULT_URL` | ❌ | Vault URL（默认 vault.<domain>） |
 | `SSO_URL` | ❌ | Authentik URL（默认 sso.<domain>） |
-| `BASE_DOMAIN` | ✅ | Base domain（或使用 INTERNAL_DOMAIN/E2E_DOMAIN） |
+| `INTERNAL_DOMAIN` | ✅ | Internal domain |

@@ -182,8 +182,8 @@ platform/
 | 环境 | 域名模式 | 示例 |
 |:---|:---|:---|
 | **Platform** | `<service>.<internal_domain>` | `sso.${INTERNAL_DOMAIN}` |
-| **Staging** | `x-staging.<base_domain>` | `x-staging.truealpha.club` |
-| **Prod** | `<base_domain>` | `truealpha.club` |
+| **Staging** | `x-staging.<internal_domain>` | `x-staging.${INTERNAL_DOMAIN}` |
+| **Prod** | `<internal_domain>` | `${INTERNAL_DOMAIN}` |
 
 ---
 
