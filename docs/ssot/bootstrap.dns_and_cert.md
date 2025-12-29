@@ -13,6 +13,7 @@
 | **操作手册** | `bootstrap/02.dns_and_cert/README.md` | 使用方法与兜底说明 |
 | **环境变量清单** | `bootstrap/02.dns_and_cert/.env.example` | 仅 Key 清单 |
 | **密钥真源** | 1Password `bootstrap/cloudflare` | `CF_API_TOKEN`, `CF_ZONE_ID`, `CF_ZONE_NAME` |
+| **默认域名列表** | 1Password `bootstrap/cloudflare` | `CF_RECORDS` |
 | **基础变量** | 1Password `init/env_vars` | `VPS_HOST`, `INTERNAL_DOMAIN` |
 
 ### Code as SSOT 索引
@@ -36,6 +37,7 @@ flowchart TB
 - **DNS 由 Cloudflare 管理**，DNS 记录通过 API 自动化。
 - **证书由 Cloudflare + Traefik 共同完成**：边缘证书由 Cloudflare 提供，源站证书由 Traefik 自动申请。
 - **域名范围**：`cloud`, `op`, `vault`, `sso`, `home`。
+- **可扩展**：新增域名写入 `CF_RECORDS` 或用 `invoke dns_and_cert.add`。
 
 ---
 
@@ -67,7 +69,13 @@ invoke dns_and_cert.setup
 invoke dns_and_cert.apply
 ```
 
-### SOP-003: 证书预热与验证
+### SOP-003: 新增域名
+
+```bash
+invoke dns_and_cert.add --records=newapp
+```
+
+### SOP-004: 证书预热与验证
 
 ```bash
 invoke dns_and_cert.warm

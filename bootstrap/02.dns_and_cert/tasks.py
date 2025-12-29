@@ -18,6 +18,7 @@ BASE_URL = "https://api.cloudflare.com/client/v4"
 DEFAULT_RECORDS = ("cloud", "op", "vault", "sso", "home")
 DEFAULT_TTL = 1
 CLOUDFLARE_ITEM = "bootstrap/cloudflare"
+RECORDS_KEY = "CF_RECORDS"
 
 
 def _parse_bool(value: str | bool | None, default: bool) -> bool:
@@ -59,6 +60,23 @@ def _load_cloudflare_secrets() -> dict[str, str]:
         if secret_val:
             result[key] = secret_val
     return result
+
+
+def _load_record_list(records: str | None) -> list[str]:
+    if records:
+        return _split_records(records)
+
+    env_val = os.getenv(RECORDS_KEY) or os.getenv("CLOUDFLARE_RECORDS") or os.getenv("DNS_RECORDS")
+    if env_val:
+        return _split_records(env_val)
+
+    secrets = OpSecrets(item=CLOUDFLARE_ITEM)
+    for key in (RECORDS_KEY, "CLOUDFLARE_RECORDS", "DNS_RECORDS"):
+        val = secrets.get(key)
+        if val:
+            return _split_records(val)
+
+    return list(DEFAULT_RECORDS)
 
 
 def _cloudflare_client(token: str) -> httpx.Client:
@@ -278,11 +296,17 @@ def _verify_https(records: list[str]) -> bool:
     return True
 
 
+def _write_record_list(records: list[str]) -> bool:
+    secrets = OpSecrets(item=CLOUDFLARE_ITEM)
+    joined = ",".join(records)
+    return secrets.set(RECORDS_KEY, joined)
+
+
 @task
 def apply(c, records="", proxied="true", ttl=str(DEFAULT_TTL)):
     """Ensure Cloudflare DNS records for bootstrap domains"""
     header("DNS apply", "Cloudflare DNS records")
-    record_list = _split_records(records)
+    record_list = _load_record_list(records)
     proxied_flag = _parse_bool(proxied, True)
     try:
         ttl_int = int(ttl)
@@ -290,6 +314,25 @@ def apply(c, records="", proxied="true", ttl=str(DEFAULT_TTL)):
         ttl_int = DEFAULT_TTL
     if _ensure_dns_records(record_list, proxied_flag, ttl_int):
         success("DNS apply complete")
+
+
+@task
+def add(c, records=""):
+    """Add DNS records to the 1Password list (CF_RECORDS)"""
+    header("DNS add", "Update CF_RECORDS in 1Password")
+    new_records = _split_records(records)
+    if not new_records:
+        error("No records provided", "Use --records=sub1,sub2")
+        return
+
+    current = _load_record_list("")
+    merged = list(dict.fromkeys(current + new_records))
+    if not _write_record_list(merged):
+        error("Failed to update CF_RECORDS", "Check 1Password CLI auth")
+        return
+
+    env_vars("CF_RECORDS", {"CF_RECORDS": ", ".join(merged)})
+    success("CF_RECORDS updated")
 
 
 @task
@@ -304,7 +347,7 @@ def ssl(c, mode="full", always_https="on"):
 def warm(c, records="", retries="8", delay="6"):
     """Warm HTTPS endpoints to trigger certificate issuance"""
     header("DNS warm", "HTTPS warm-up")
-    record_list = _split_records(records)
+    record_list = _load_record_list(records)
     try:
         retries_int = int(retries)
         delay_float = float(delay)
@@ -319,7 +362,7 @@ def warm(c, records="", retries="8", delay="6"):
 def verify(c, records=""):
     """Verify DNS resolution and HTTPS connectivity"""
     header("DNS verify", "DNS + HTTPS checks")
-    record_list = _split_records(records)
+    record_list = _load_record_list(records)
     if not _verify_dns(record_list):
         return
     _verify_https(record_list)
@@ -329,7 +372,7 @@ def verify(c, records=""):
 def setup(c, records="", proxied="true", ssl_mode="full", always_https="on"):
     """Full setup: DNS records + SSL settings + HTTPS warm-up"""
     header("DNS setup", "Cloudflare DNS + SSL automation")
-    record_list = _split_records(records)
+    record_list = _load_record_list(records)
     proxied_flag = _parse_bool(proxied, True)
     if not _ensure_dns_records(record_list, proxied_flag, DEFAULT_TTL):
         return

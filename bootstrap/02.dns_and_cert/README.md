@@ -9,6 +9,7 @@
   - `CF_API_TOKEN`
   - `CF_ZONE_ID`（可选，若缺省则通过 `CF_ZONE_NAME` 或 `INTERNAL_DOMAIN` 查找）
   - `CF_ZONE_NAME`（可选）
+  - `CF_RECORDS`（可选，逗号分隔子域名列表，如 `cloud,op,vault,sso,home`）
 
 > `.env.example` 仅作 Key 清单，不存值。
 
@@ -33,6 +34,9 @@ invoke dns_and_cert.warm
 
 # 验证 DNS/HTTPS
 invoke dns_and_cert.verify
+
+# 新增域名（写回 1Password 的 CF_RECORDS）
+invoke dns_and_cert.add --records=newapp
 ```
 
 可选参数示例：
@@ -40,6 +44,9 @@ invoke dns_and_cert.verify
 ```bash
 # 自定义子域名列表（逗号分隔）
 invoke dns_and_cert.apply --records=cloud,op,vault,sso,home
+
+# 写入新的默认列表
+invoke dns_and_cert.add --records=cloud,op,vault,sso,home,newapp
 
 # 关闭 Cloudflare 代理（灰云）
 invoke dns_and_cert.apply --proxied=false

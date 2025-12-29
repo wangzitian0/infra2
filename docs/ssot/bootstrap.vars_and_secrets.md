@@ -36,6 +36,7 @@ Bootstrap 依赖 1Password CLI (`op`)，使用 **`Infra2`** vault 存储所有�
 - `CF_API_TOKEN`
 - `CF_ZONE_ID`（可选，缺省时用 `CF_ZONE_NAME` 或 `INTERNAL_DOMAIN` 查找）
 - `CF_ZONE_NAME`（可选）
+- `CF_RECORDS`（可选，逗号分隔默认子域名列表）
 
 ### 2.2 创建 Infra2 Vault
 
