@@ -1,7 +1,7 @@
-# Bootstrap 非 Terraform 管理组件 SSOT
+# Bootstrap 组件 SSOT
 
 > **SSOT Key**: `bootstrap.nodep`
-> **核心定义**: Bootstrap 层中不通过 Terraform 管理的组件。
+> **核心定义**: Bootstrap 层中由脚本或手动安装的组件（Dokploy/1Password/Vault）。
 
 ---
 
@@ -11,56 +11,95 @@
 |------|----------|----------|------|
 | **Dokploy** | 官方脚本 | Web UI | ✅ Active |
 | **1Password Connect** | Docker Compose | Dokploy | ✅ Active |
+| **Vault** | Docker Compose | Dokploy | ⏭️ Planned |
 
 ---
 
-## 2. Dokploy
+## 2. 真理来源 (The Source)
 
-### 安装
+> **原则**：Bootstrap 组件是平台信任锚点，优先保持最小依赖。
 
-```bash
-# 官方一键安装（在 VPS 上执行）
-curl -sSL https://dokploy.com/install.sh | sh
+| 维度 | 物理位置 (SSOT) | 说明 |
+|------|----------------|------|
+| **操作手册** | [`bootstrap/README.md`](https://github.com/wangzitian0/infra2/blob/main/bootstrap/README.md) | 安装步骤 |
+| **版本追踪** | 本文档 [§5](#5-版本追踪) | 组件版本记录 |
+
+### Code as SSOT 索引
+
+- **Dokploy 官方文档**：[docs.dokploy.com](https://docs.dokploy.com)
+- **1Password Connect 配置**：[`bootstrap/04.1password/compose.yaml`](https://github.com/wangzitian0/infra2/blob/main/bootstrap/04.1password/compose.yaml)
+- **Vault 配置**：[`bootstrap/05.vault/compose.yaml`](https://github.com/wangzitian0/infra2/blob/main/bootstrap/05.vault/compose.yaml)
+
+---
+
+## 3. 架构模型
+
+### Dokploy
+
+```mermaid
+flowchart TB
+    VPS[VPS Server]
+    subgraph Bootstrap[Bootstrap Layer]
+        DOK[Dokploy]
+    end
+
+    VPS --> DOK
+    DOK -->|Manage| APPS[Applications]
+    DOK -->|Manage| SERVICES[Platform Services]
 ```
 
-### 访问
+### 1Password Connect
 
-- **URL**: `https://dokploy.{INTERNAL_DOMAIN}`
-- **默认端口**: 3000 (Traefik 代理)
+```mermaid
+flowchart LR
+    Internet[Internet]
+    Traefik[Traefik]
+    API[op-connect-api<br/>:8080]
+    SYNC[op-connect-sync<br/>内部服务]
+    Cloud[1Password Cloud]
 
-### 管理
+    Internet -->|op.${INTERNAL_DOMAIN}| Traefik
+    Traefik --> API
+    API <--> SYNC
+    SYNC <-.同步.-> Cloud
 
-通过 Web UI 管理 Projects、Applications、Databases。
-
----
-
-## 3. 1Password Connect
-
-### 配置文件
-
-[`bootstrap/self_host_1password.yaml`](https://github.com/wangzitian0/infra2/blob/main/bootstrap/self_host_1password.yaml)
-
-### 服务
-
-| 服务 | 端口 | 说明 |
-|------|------|------|
-| `op-connect-api` | 8080 | REST API（通过 Traefik 暴露） |
-| `op-connect-sync` | 内部 | 同步服务 |
-
-### 访问
-
-- **URL**: `https://op.{INTERNAL_DOMAIN}`
+    style API fill:#90EE90
+    style SYNC fill:#FFE4B5
+```
 
 ---
 
-## 4. 版本追踪
+## 4. 设计约束 (Dos & Don'ts)
 
-> 每次安装/升级后更新此表。
+### ✅ 推荐模式 (Whitelist)
 
-| 组件 | 当前版本 | 安装日期 | 备注 |
-|------|----------|----------|------|
-| Dokploy | latest | 2024-12 | 官方脚本安装 |
-| 1Password Connect | latest | 2024-12 | Docker 镜像 |
+- **模式 A**：使用官方安装脚本或官方镜像。
+- **模式 B**：安装后立即更新版本追踪表。
+
+### ⛔ 禁止模式 (Blacklist)
+
+- **反模式 A**：**禁止** 让 Bootstrap 依赖 Platform 服务（避免循环依赖）。
+- **反模式 B**：**禁止** 不记录版本的“幽灵安装”。
+
+---
+
+## 5. 版本追踪 {#5-版本追踪}
+
+> **约定**：每次安装/升级后更新此表。
+
+| 组件 | 当前版本 | 安装日期 | 操作人 |
+|------|----------|----------|--------|
+| Dokploy | unknown (需补) | unknown (需补) | - |
+| 1Password Connect | latest | unknown (需补) | - |
+| Vault | latest | unknown (需补) | - |
+
+---
+
+## 6. 验证与测试 (The Proof)
+
+| 行为描述 | 验证方式 | 状态 |
+|----------|----------|------|
+| **Dokploy 服务可达** | `curl -I http://<VPS_IP>:3000` | ⏳ 未验证 |
 
 ---
 

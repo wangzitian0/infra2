@@ -2,28 +2,27 @@
 
 > **Category**: Databases (01-09)
 
-Shared Redis cache for all platform applications.
+Shared Redis cache for platform services.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
 | `compose.yaml` | Docker Compose service definition |
-| `pre-compose.py` | Prepare directories, generate password |
-| `post-compose.py` | Verify health, ensure ready |
+| `deploy.py` | Invoke tasks (pre_compose/composing/post_compose) |
+| `shared_tasks.py` | Health check status() |
+| `.env.example` | Environment template |
 
 ## Deployment
 
 ```bash
-# 1. Pre-compose (prepare + generate password)
-python platform/02.redis/pre-compose.py
+# Full setup
+invoke redis.setup
 
-# 2. Deploy in Dokploy
-#    - Compose Path: platform/02.redis/compose.yaml
-#    - Add REDIS_PASSWORD env var
-
-# 3. Post-compose (verify)
-python platform/02.redis/post-compose.py
+# Or step-by-step
+invoke redis.pre-compose
+invoke redis.composing
+invoke redis.post-compose
 ```
 
 ## Data Path
@@ -38,4 +37,4 @@ python platform/02.redis/post-compose.py
 
 ## Used By
 
-- `10.authentik` (edge: `02.verify_redis.py`)
+- `10.authentik`

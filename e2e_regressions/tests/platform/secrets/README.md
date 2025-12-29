@@ -1,6 +1,6 @@
 # Platform Secrets Tests
 
-验证 Vault 密钥管理、读写权限及注入机制。
+验证 Vault 服务健康与密封状态。
 
 ## 📚 SSOT References
 
@@ -11,18 +11,13 @@
 
 | 组件 | 测试 | 标记 | 验证内容 |
 |------|------|------|----------|
-| **Vault** | `test_vault_health` | smoke | 服务健康及 Unseal 状态 |
-| **KV Engine** | `test_kv_read_write` | critical | 密钥读写能力 |
-| **Loader** | `test_secrets_loader` | unit | 1Password -> GitHub 映射逻辑 |
+| **Vault** | `test_vault_health` | platform | 健康与初始化状态 |
+| **Vault** | `test_vault_seal_status` | platform | Seal 状态端点可达 |
 
 ## 运行测试
 
 ```bash
-# E2E Tests
 uv run pytest tests/platform/secrets/ -v
-
-# Loader Unit Tests
-python3 ../../../tools/secrets/tests/test_secrets_loader.py
 ```
 
 ## 环境变量
@@ -30,4 +25,3 @@ python3 ../../../tools/secrets/tests/test_secrets_loader.py
 | 变量 | 必需 | 说明 |
 |------|------|------|
 | `VAULT_URL` | ✅ | Vault 地址 |
-| `VAULT_TOKEN` | ✅ | 测试用 Token (需有读写权限) |

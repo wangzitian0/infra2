@@ -63,12 +63,9 @@ run_tests() {
     local test_type="$1"
     local extra_args="$2"
 
-    # Check if .env exists
-    if [ ! -f .env ]; then
-        echo -e "${YELLOW}⚠ .env file not found${NC}"
-        echo "Creating from template..."
-        cp .env.example .env
-        echo -e "${YELLOW}Please configure .env before running tests${NC}"
+    if [ -z "${E2E_DOMAIN}" ] && [ -z "${INTERNAL_DOMAIN}" ] && [ -z "${BASE_DOMAIN}" ]; then
+        echo -e "${YELLOW}Missing BASE_DOMAIN/INTERNAL_DOMAIN/E2E_DOMAIN${NC}"
+        echo "Export required env vars before running tests. See .env.example for the key list."
         exit 1
     fi
 

@@ -1,21 +1,17 @@
-# Vault 数据库接入详解 SSOT
+# Vault 数据库接入 SSOT
 
 > **SSOT Key**: `db.vault`
-> **核心定义**: 定义应用如何通过 Kubernetes ServiceAccount 自动获取数据库凭据的“无感注入”机制。
+> **核心定义**: 定义应用通过 Vault 获取数据库凭据的接入方式（Dokploy + 环境变量）。
 
 ---
 
 ## 1. 真理来源 (The Source)
 
-> **原则**：认证走 K8s，授权走 Vault，交付走 Agent。
-
-本话题的配置和状态由以下物理位置唯一确定：
-
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **K8s Auth 配置** | [`platform/91.vault-auth-kubernetes.tf`](https://github.com/wangzitian0/infra2/blob/main/platform/91.vault-auth-kubernetes.tf) | 信任 K8s 集群的配置 |
-| **应用 Role 定义** | [`platform/92.vault-myapp.tf`](https://github.com/wangzitian0/infra2/blob/main/platform/92.vault-myapp.tf) | 应用与 Policy 的绑定 |
-| **注入规范** | [`platform/6.vault-database.tf`](https://github.com/wangzitian0/infra2/blob/main/platform/6.vault-database.tf) | 数据库密码存放路径 |
+| **Vault KV** | `secret/<project>/<env>/<service>` | 数据库凭据路径 |
+| **环境工具** | [`tools/env_tool.py`](https://github.com/wangzitian0/infra2/blob/main/tools/env_tool.py) | 读写远端 |
+| **部署入口** | Dokploy App Env | 应用运行时变量注入 |
 
 ---
 
@@ -23,25 +19,8 @@
 
 ```mermaid
 graph TD
-    subgraph "L4 App Pod"
-        SA[ServiceAccount: my-app]
-        AGENT[Vault Agent Sidecar]
-        APP[Application Container]
-    end
-    
-    subgraph "L2 Platform (Vault)"
-        VKA[K8s Auth Backend]
-        ROLE[Role: my-app]
-        POLICY[Policy: my-app-db]
-        KV[KV Secret: secret/data/postgres]
-    end
-    
-    SA -->|JWT Token| AGENT
-    AGENT -->|Authenticate| VKA
-    VKA -->|Validate| ROLE
-    ROLE -->|Attach| POLICY
-    POLICY -->|Read| KV
-    KV -->|Inject /vault/secrets/pg| APP
+    VAULT[Vault KV] --> ENV[Dokploy Env]
+    ENV --> APP[Application]
 ```
 
 ---
@@ -50,13 +29,13 @@ graph TD
 
 ### ✅ 推荐模式 (Whitelist)
 
-- **模式 A**: 使用 `vault.hashicorp.com/agent-inject-template` 格式化输出为应用原生支持的格式（如 `.env` 或 `export`）。
-- **模式 B**: 始终设置 `vault.hashicorp.com/role` 以明确标识身份。
+- **模式 A**: 数据库密码必须先写入 Vault，再由部署流程读取。
+- **模式 B**: 应用运行时仅通过环境变量读取凭据。
 
 ### ⛔ 禁止模式 (Blacklist)
 
-- **反模式 A**: **禁止** 直接在 Pod 环境变量中写死 Vault Token。
-- **反模式 B**: **禁止** 将不同环境 (staging/prod) 的 ServiceAccount 绑定到同一个具备读写权限的 Vault Role。
+- **反模式 A**: **禁止** 在代码或镜像中硬编码密码。
+- **反模式 B**: **禁止** 复用平台级 root 账号作为业务账号。
 
 ---
 
@@ -64,33 +43,33 @@ graph TD
 
 ### SOP-001: 接入一个新应用
 
-- **触发条件**: 开发者需要数据库访问权限
+- **触发条件**: 应用需要数据库访问
 - **步骤**:
-    1. **定义 Policy**: 在 `2.platform/` 下创建 `.tf` 文件定义应用所需的路径权限。
-    2. **定义 Role**: 绑定该应用的 `ServiceAccount` 和 `Namespace`。
-    3. **更新 Pod 注解**:
-       ```yaml
-       vault.hashicorp.com/agent-inject: "true"
-       vault.hashicorp.com/role: "myapp"
-       vault.hashicorp.com/agent-inject-secret-pg: "secret/data/postgres"
+    1. 在 Vault 中写入凭据：
+       ```bash
+       vault kv put secret/platform/production/<app> PG_HOST=... PG_USER=... PG_PASS=...
        ```
+    2. 使用 env_tool 验证已写入：
+       ```bash
+       invoke env.secret-get PG_PASS --project=platform --env=production --service=<app>
+       ```
+    3. 在 Dokploy App 环境变量中设置上述值（从 Vault 读取）。
 
 ### SOP-002: 排查“Permission Denied”
 
-- **触发条件**: Pod 启动失败或无法读取密钥
+- **触发条件**: 应用连接失败
 - **步骤**:
-    1. 检查 Role 绑定: `vault read auth/kubernetes/role/myapp`
-    2. 检查 Policy 权限: `vault policy read myapp`
-    3. 检查 K8s SA 是否存在: `kubectl get sa myapp -n my-namespace`
+    1. 检查 Vault 路径是否存在。
+    2. 确认 Dokploy App 环境变量已更新。
+    3. 重启应用容器。
 
 ---
 
 ## 5. 验证与测试 (The Proof)
 
-| 行为描述 | 测试文件 (Test Anchor) | 覆盖率 |
-|----------|-----------------------|--------|
-| **K8s Auth 认证流** | [`test_vault_auth.py`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/tests/platform/secrets/test_vault_auth.py) | ✅ Critical |
-| **Agent 注入文件存在性** | [`test_agent_injection.py`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/tests/platform/secrets/test_agent_injection.py) | ✅ Critical |
+| 行为描述 | 验证方式 | 状态 |
+|----------|----------|------|
+| **Vault 读写验证** | `invoke env.secret-get PG_PASS --project=platform --env=production --service=<app>` | ✅ Manual |
 
 ---
 

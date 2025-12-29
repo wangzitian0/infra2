@@ -18,23 +18,22 @@
 # |--------|------|------------|-----------------------|
 # | cloud  | A    | $VPS_HOST  | Proxied (橙色云朵) 🟠 |
 # | op     | A    | $VPS_HOST  | Proxied (橙色云朵) 🟠 |
+# | vault  | A    | $VPS_HOST  | Proxied (橙色云朵) 🟠 |
 # | sso    | A    | $VPS_HOST  | Proxied (橙色云朵) 🟠 |
-# | digger | A    | $VPS_HOST  | Proxied (橙色云朵) 🟠 |
 
 # 4. 验证 DNS 生效（可能需要 5-10 分钟）
 dig cloud.$INTERNAL_DOMAIN
 dig op.$INTERNAL_DOMAIN
+dig vault.$INTERNAL_DOMAIN
 dig sso.$INTERNAL_DOMAIN
-dig digger.$INTERNAL_DOMAIN
 ```
 
 ## 域名说明
 
 - `cloud.$INTERNAL_DOMAIN` → Dokploy Web UI
 - `op.$INTERNAL_DOMAIN` → 1Password Connect API
-- `sso.$INTERNAL_DOMAIN` → SSO 服务 (Platform 层)
-- `home.$INTERNAL_DOMAIN` → Home Page
-- `digger.$INTERNAL_DOMAIN` → Digger Orchestrator
+- `vault.$INTERNAL_DOMAIN` → Vault UI/API
+- `sso.$INTERNAL_DOMAIN` → Authentik SSO
 
 ## Cloudflare 代理模式（橙云）
 
@@ -50,4 +49,4 @@ dig digger.$INTERNAL_DOMAIN
   - 两者可以共存
 
 > [!NOTE]
-> 将来其他域名会通过 Terraform 管理，这 4 个作为 Bootstrap 层手动配置
+> 当前域名均为手动配置，后续如引入自动化需更新 SSOT。

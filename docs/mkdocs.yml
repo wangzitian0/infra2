@@ -53,9 +53,10 @@ nav:
       - Index: ssot/README.md
       - Core: ssot/core.md
       - Bootstrap: ssot/bootstrap.nodep.md
+      - Vars & Secrets: ssot/bootstrap.vars_and_secrets.md
       - Platform:
-          - Auth: ssot/platform.auth.md
-          - Secrets: ssot/platform.secrets.md
+          - Automation: ssot/platform.automation.md
+          - SSO: ssot/platform.sso.md
           - AI: ssot/platform.ai.md
       - Data:
           - Overview: ssot/db.overview.md

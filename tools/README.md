@@ -2,25 +2,23 @@
 
 Standalone tools runnable via `invoke`.
 
-## env_sync.py
+## env_tool.py
 
-Sync environment variables between local `.env` files and Vault.
+Remote-first env/secret operations (1Password/Dokploy/Vault). No local `.env` sync.
 
 ```bash
-# Push local .env to Vault
-invoke env.push --level=service --env=prod --service=postgres
+# Read env vars
+invoke env.get KEY --project=platform --env=production --service=postgres
 
-# Pull from Vault to local
-invoke env.pull --level=service --env=prod --service=postgres
+# Write env vars
+invoke env.set KEY=VALUE --project=platform --env=production
 
-# Show status
-invoke env.status --service=postgres
+# Read secrets
+invoke env.secret-get KEY --project=platform --env=production --service=postgres
+
+# Write secrets
+invoke env.secret-set KEY=VALUE --project=platform --env=production
+
+# Preview merged values (project + environment + service)
+invoke env.preview --project=platform --env=production --service=postgres
 ```
-
-### Levels
-
-| Level | Local File | Vault Path |
-|-------|------------|------------|
-| project | `.env` | `secret/platform/` |
-| environment | `.env.{env}` | `secret/platform/{env}/` |
-| service | `platform/{svc}/.env.{env}.local` | `secret/platform/{env}/{svc}/` |

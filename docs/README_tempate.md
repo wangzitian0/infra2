@@ -9,8 +9,8 @@
 
 ```
 ./
-├── file1.tf          # 描述
-├── file2.tf          # 描述
+├── compose.yaml      # Docker Compose 定义
+├── deploy.py         # Invoke 任务入口
 └── scripts/          # 子目录描述
 ```
 
@@ -20,7 +20,7 @@
 
 ### 修改前必读
 
-1. **阅读 SSOT**：先查阅 [相关 SSOT 文档](../docs/ssot/xxx.md) 了解设计约束
+1. **阅读 SSOT**：先查阅 `docs/ssot/<topic>.md` 了解设计约束
 2. **确认影响范围**：本目录的变更会影响哪些上下游组件？
 3. **检查依赖**：是否需要先修改其他目录？
 
@@ -62,6 +62,6 @@
 
 ## 相关文档
 
-- **SSOT**：[xxx.md](../docs/ssot/xxx.md) - 技术定义
-- **父目录**：[../README.md](../README.md)
+- **SSOT**：`docs/ssot/<topic>.md` - 技术定义
+- **父目录**：`../README.md`
 - **依赖目录**：[列出本目录依赖的其他目录]

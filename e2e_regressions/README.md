@@ -14,9 +14,9 @@ For the authoritative test strategy and pyramid, refer to:
 
 | Suite | Purpose | SSOT Anchor |
 |-------|---------|-------------|
-| `bootstrap/` | Core cluster, network, and storage. | [Bootstrap SSOTs](../docs/ssot/README.md#bootstrap---引导层) |
-| `platform/` | Identity, Secrets, and Control Plane. | [Platform SSOTs](../docs/ssot/README.md#platform---平台层) |
-| `data/` | Database connectivity and auth. | [Data SSOTs](../docs/ssot/README.md#data---数据层) |
+| `bootstrap/` | Dokploy, DNS, TLS, /data mounts. | [Bootstrap SSOTs](../docs/ssot/README.md#bootstrap---引导层) |
+| `platform/` | Vault + Authentik availability. | [Platform SSOTs](../docs/ssot/README.md#platform---平台层) |
+| `data/` | Database connectivity. | [Data SSOTs](../docs/ssot/README.md#data---数据层) |
 | `smoke/` | Critical path verification (Fast). | [E2E SSOT / Smoke](../docs/ssot/ops.e2e-regressions.md#测试分级-test-pyramid) |
 
 ## 🚦 Usage
@@ -25,6 +25,9 @@ For the authoritative test strategy and pyramid, refer to:
 ```bash
 cd e2e_regressions
 uv sync
+
+# Configure env (export in shell/CI)
+# See .env.example for the required keys
 ```
 
 ### Execution
@@ -86,14 +89,3 @@ RecoverabilityScore = 10 * (0.5 * AutoCleanupSuccessRate + 0.5 * RollbackOrRerun
 
 - **AutoCleanupSuccessRate**: automatic cleanup succeeds / cleanup attempts
 - **RollbackOrRerunSuccessRate**: rollback or rerun succeeds / attempts (idempotency)
-
----
-
-## ⚠️ /e2e Command Issue
-
-- **Issue**: `/e2e` comment did not trigger the E2E workflow
-- **Cause**: `issue_comment` event was triggered by a bot due to GitHub App token context
-- **Fix**: dispatch `e2e-tests.yml` via `workflow_dispatch` with the infra-flash App token
-
----
-*Last updated: 2025-12-26*
