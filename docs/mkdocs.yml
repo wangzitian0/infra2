@@ -48,7 +48,7 @@ nav:
       - Database: onboarding/03.database.md
       - Secrets: onboarding/04.secrets.md
       - SSO: onboarding/05.sso.md
-      - Observability: onboarding/06.observability.md
+      - Observability (Planned): onboarding/06.observability.md
   - SSOT:
       - Index: ssot/README.md
       - Core: ssot/core.md
@@ -57,24 +57,23 @@ nav:
       - Platform:
           - Automation: ssot/platform.automation.md
           - SSO: ssot/platform.sso.md
-          - AI: ssot/platform.ai.md
+          - AI (Planned): ssot/platform.ai.md
       - Data:
           - Overview: ssot/db.overview.md
           - Vault Integration: ssot/db.vault-integration.md
           - Platform PG: ssot/db.platform_pg.md
-          - Business PG: ssot/db.business_pg.md
+          - Business PG (Planned): ssot/db.business_pg.md
           - Redis: ssot/db.redis.md
-          - ClickHouse: ssot/db.clickhouse.md
-          - ArangoDB: ssot/db.arangodb.md
+          - ClickHouse (Planned): ssot/db.clickhouse.md
+          - ArangoDB (Planned): ssot/db.arangodb.md
       - Ops:
           - Standards: ssot/ops.standards.md
           - Pipeline: ssot/ops.pipeline.md
           - E2E: ssot/ops.e2e-regressions.md
           - Recovery: ssot/ops.recovery.md
           - Storage: ssot/ops.storage.md
-          - Observability: ssot/ops.observability.md
+          - Observability (Planned): ssot/ops.observability.md
           - Alerting: ssot/ops.alerting.md
-      - Template: ssot/template.md
   - Projects:
       - Portfolio: project/README.md
       - Infra-003: project/Infra-003.docs_reorg.md

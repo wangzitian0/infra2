@@ -5,6 +5,10 @@
 ## 🚀 Quick Start
 
 ```bash
+# 前置：安装 1Password CLI 与 uv
+# macOS: brew install 1password-cli
+# uv: curl -LsSf https://astral.sh/uv/install.sh | sh
+
 # 1. 登录 1Password CLI（首次）
 op signin
 

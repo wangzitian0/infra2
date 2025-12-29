@@ -33,6 +33,8 @@ Docs are scattered across multiple paths and contain stale links/anchors. We nee
 - 2025-12-30: Updated root Quick Start to match 1Password bootstrap flow.
 - 2025-12-30: Aligned bootstrap env seed notes with local.bootstrap behavior.
 - 2025-12-30: Clarified E2E env example path and 1Password vault name.
+- 2025-12-30: Simplified MkDocs nav and aligned onboarding/recovery/E2E guidance.
+- 2025-12-30: Clarified docs site homepage vs repo README.
 
 ## Verification
 - `mkdocs build --config-file docs/mkdocs.yml` passes without warnings.

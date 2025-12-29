@@ -27,7 +27,7 @@ cd e2e_regressions
 uv sync
 
 # Configure env (export in shell/CI)
-# See .env.example for the required keys
+# See e2e_regressions/.env.example for the required keys
 ```
 
 ### Execution
@@ -35,8 +35,16 @@ uv sync
 # Run smoke tests
 uv run pytest tests/smoke/ -v
 
+# Or from repo root
+cd ..
+uv run pytest e2e_regressions/tests/smoke/ -v
+
 # Run platform tests
 uv run pytest tests/platform/ -v
+
+# Or from repo root
+cd ..
+uv run pytest e2e_regressions/tests/platform/ -v
 ```
 
 ## 📊 Scoring
