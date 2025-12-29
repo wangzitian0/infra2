@@ -152,7 +152,7 @@ class Test1PasswordOperations:
         result = mgr._op_get_all()
         
         # 'notesPlain' label is filtered out
-        assert result == {"username": "admin", "POSTGRES_PASSWORD": "secret", "password": "also filtered"}
+        assert result == {"username": "admin", "POSTGRES_PASSWORD": "secret", "password": "also included"}
         assert "notesPlain" not in result
 
     @patch('libs.env.subprocess.run')
