@@ -6,27 +6,41 @@
 
 | Module | Purpose | Key Functions |
 |--------|---------|---------------|
-| `common.py` | Environment & utilities | `get_env()`, `validate_env()`, `generate_password()`, `check_docker_service()` |
-| `console.py` | Rich CLI output | `success()`, `error()`, `header()`, `env_vars()`, `run_with_status()` |
-| `config.py` | Three-tier env loading | `Config` class |
-| `deployer.py` | Deployment base class | `Deployer` class |
+| `env.py` | **Core** Env & Secret SSOT | `EnvManager`, `get_or_set` |
+| `common.py` | Utilities | `get_env()`, `validate_env()`, `load_env_keys()` |
+| `console.py` | Rich CLI output | `success()`, `error()`, `header()`, `prompt_action()` |
+| `deployer.py` | Deployment base class | `Deployer`, `load_shared_tasks()` |
+| `config.py` | _Compatibility wrapper_ | `Config` class |
 
 ## Usage
 
 ### Quick Import
 ```python
 from libs import Deployer, success, get_env
+from libs.env import EnvManager
 ```
 
 ### Module Import
 ```python
-from libs.common import check_docker_service
-from libs.console import header, run_with_status
+from libs.env import EnvManager, get_or_set
+from libs.common import load_env_keys
 from libs.deployer import Deployer
-from libs.config import Config
 ```
 
 ## API Reference
+
+### libs.env (New Core)
+
+```python
+class EnvManager:
+    def __init__(project, env, service)
+    def get_env(key, level) -> str
+    def get_secret(key, level) -> str
+    def set_secret(key, value) -> bool
+
+def get_or_set(key, length=24) -> str
+# Idempotent secret generation (check remote first)
+```
 
 ### libs.common
 
@@ -37,43 +51,25 @@ get_env() -> dict
 validate_env() -> list[str]
 # Returns: list of missing required env vars
 
-generate_password(length=24) -> str
-# Returns: random alphanumeric password
-
-check_docker_service(c, container, health_cmd, name) -> dict
-# Returns: {"is_ready": bool, "details": str}
+load_env_keys(path) -> list[str]
+# Parse .env.example file for keys
 ```
 
 ### libs.deployer
 
 ```python
 class Deployer:
-    service: str         # Service name
-    compose_path: str    # Path to compose.yaml
-    data_path: str       # Data directory on VPS
-    uid, gid: str        # Owner UID/GID
-    chmod: str           # Directory permissions
-    secret_key: str      # Vault secret key name
-    env_var_name: str    # Env var to display
+    # ... attrs ...
+    env_example_path: str = ".env.example"
     
     @classmethod
-    def env() -> dict
-    def vault_path() -> str
-    def pre_compose(c) -> dict | None
-    def store_secret(c, key, value) -> bool
-    def read_secret(c, path, field) -> str | None
-    def composing(c, env_keys)
-    def post_compose(c, shared_tasks) -> bool
+    def get_example_keys() -> list[str]
+    # ... standard methods ...
 ```
 
-### libs.config
+### libs.config (Legacy)
 
-```python
-class Config:
-    def __init__(project, env='production', service=None)
-    def get(key, level=None, default=None) -> str | None
-    def all() -> dict
-```
+Wrapper around `EnvManager` for backward compatibility.
 
 Priority: service > environment > project
 
