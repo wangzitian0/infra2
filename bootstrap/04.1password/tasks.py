@@ -3,10 +3,13 @@
 Uses libs/ system for consistent environment and console utilities.
 Bootstrap layer uses 1Password for secrets, not Vault.
 """
+import sys
 from invoke import task
 from libs.common import get_env
 from libs.console import header, success, error, warning, prompt_action, run_with_status
-from libs.deployer import Deployer, make_tasks, load_shared_tasks
+from libs.deployer import Deployer, make_tasks
+
+shared_tasks = sys.modules.get("bootstrap.04.1password.shared")
 
 
 class OnePasswordDeployer(Deployer):
@@ -78,12 +81,13 @@ class OnePasswordDeployer(Deployer):
         return False
 
 
-_tasks = make_tasks(OnePasswordDeployer, load_shared_tasks(__file__))
-status = _tasks["status"]
-pre_compose = _tasks["pre_compose"]
-composing = _tasks["composing"]
-post_compose = _tasks["post_compose"]
-setup = _tasks["setup"]
+if shared_tasks:
+    _tasks = make_tasks(OnePasswordDeployer, shared_tasks)
+    status = _tasks["status"]
+    pre_compose = _tasks["pre_compose"]
+    composing = _tasks["composing"]
+    post_compose = _tasks["post_compose"]
+    setup = _tasks["setup"]
 
 
 @task
