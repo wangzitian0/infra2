@@ -12,7 +12,6 @@ import secrets
 import string
 import subprocess
 from typing import Optional
-from functools import lru_cache
 
 import httpx
 
@@ -55,7 +54,9 @@ class OpSecrets:
                 for f in item.get("fields", [])
                 if f.get("label") and f.get("label") not in ["notesPlain", "password", "username"]
             }
-        except (subprocess.CalledProcessError, json.JSONDecodeError):
+        except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
+            import sys
+            print(f"OpSecrets load warning: {e}", file=sys.stderr)
             self._cache = {}
         return self._cache
     
@@ -129,7 +130,9 @@ class VaultSecrets:
                     self._cache = resp.json().get("data", {}).get("data", {})
                 else:
                     self._cache = {}
-        except Exception:
+        except Exception as e:
+            import sys
+            print(f"VaultSecrets load warning: {e}", file=sys.stderr)
             self._cache = {}
         return self._cache
     
@@ -163,11 +166,6 @@ class VaultSecrets:
             pass
         return False
 
-
-@lru_cache(maxsize=1)
-def get_init_config() -> dict[str, str]:
-    """Get init config from 1Password (cached)"""
-    return OpSecrets().get_all()
 
 
 def get_secrets(project: str, service: str, env: str = "production"):

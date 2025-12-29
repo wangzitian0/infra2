@@ -5,10 +5,9 @@ Simplified: minimal class attributes, uses new env.py API.
 """
 from __future__ import annotations
 from typing import TYPE_CHECKING, Any
-from pathlib import Path
 from invoke import task
 
-from libs.common import get_env, validate_env, parse_env_file, check_service
+from libs.common import get_env, validate_env
 from libs.console import header, success, error, warning, info, env_vars, prompt_action, run_with_status
 from libs.env import generate_password, get_secrets
 
@@ -34,6 +33,7 @@ class Deployer:
     # Optional with defaults
     uid: str = "999"
     gid: str = "999"
+    chmod: str = "755"  # Override to "700" for sensitive services like PostgreSQL
     secret_key: str = "password"
     env_var_name: str = ""
     
@@ -64,7 +64,7 @@ class Deployer:
         host = e['VPS_HOST']
         run_with_status(c, f"ssh root@{host} 'mkdir -p {cls.data_path}'", "Create directory")
         run_with_status(c, f"ssh root@{host} 'chown -R {cls.uid}:{cls.gid} {cls.data_path}'", "Set ownership")
-        run_with_status(c, f"ssh root@{host} 'chmod -R 755 {cls.data_path}'", "Set permissions")
+        run_with_status(c, f"ssh root@{host} 'chmod -R {cls.chmod} {cls.data_path}'", "Set permissions")
         return True
     
     @classmethod
@@ -140,8 +140,8 @@ def make_tasks(deployer_cls: type[Deployer], shared_tasks: Any) -> dict:
             if result.get("is_ready"):
                 success(f"{deployer_cls.service} already healthy - skipping")
                 return
-        except Exception:
-            pass
+        except Exception as exc:
+            warning(f"Status check failed: {exc}")
         
         warning(f"{deployer_cls.service} not healthy - starting install")
         if deployer_cls.pre_compose(c) is None:

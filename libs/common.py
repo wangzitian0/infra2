@@ -76,7 +76,7 @@ def parse_env_file(path: str) -> list[str]:
             line = line.strip()
             if line and not line.startswith('#') and '=' in line:
                 key = line.split('=', 1)[0].strip()
-                if key.startswith('export '):
+                if key.lower().startswith('export '):
                     key = key[7:]
                 keys.append(key)
     return keys

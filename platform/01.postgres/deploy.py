@@ -11,6 +11,7 @@ class PostgresDeployer(Deployer):
     compose_path = "platform/01.postgres/compose.yaml"
     data_path = "/data/platform/postgres"
     uid = "999"
+    chmod = "700"  # Restrictive permissions for database files
     secret_key = "root_password"
     env_var_name = "POSTGRES_PASSWORD"
 

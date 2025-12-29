@@ -21,4 +21,4 @@ def create_user(c, username, database, password):
     """Create a user with database access"""
     e = get_env()
     c.run(f"ssh root@{e['VPS_HOST']} \"docker exec platform-postgres psql -U postgres -c \\\"CREATE USER {username} WITH PASSWORD '{password}';\\\"\"", warn=True)
-    c.run(f"ssh root@{e['VPS_HOST']} \"docker exec platform-postgres psql -U postgres -c 'GRANT ALL ON DATABASE {database} TO {username};'\"", warn=True)
+    c.run(f"ssh root@{e['VPS_HOST']} \"docker exec platform-postgres psql -U postgres -c 'GRANT ALL PRIVILEGES ON DATABASE {database} TO {username};'\"", warn=True)

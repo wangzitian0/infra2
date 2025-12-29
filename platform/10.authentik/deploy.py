@@ -55,7 +55,8 @@ def pre_compose(c):
     # Store secret
     authentik_secrets = get_secrets(project, "authentik", env_name)
     secret_key = generate_password(50)
-    authentik_secrets.set("secret_key", secret_key)
+    if not authentik_secrets.set("secret_key", secret_key):
+        warning("Failed to store Authentik secret key in Vault")
     
     env_vars("DOKPLOY ENV", {"AUTHENTIK_SECRET_KEY": secret_key, "PG_PASS": pg_pass, "REDIS_PASSWORD": redis_pass})
     success("pre_compose complete")
