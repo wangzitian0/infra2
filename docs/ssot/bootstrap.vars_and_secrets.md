@@ -145,4 +145,4 @@ pw = get_or_set('POSTGRES_PASSWORD', length=32)
 ## Used by
 
 - [docs/ssot/README.md](./README.md)
-- [bootstrap/README.md](../../bootstrap/README.md)
+- [bootstrap/README.md](https://github.com/wangzitian0/infra2/blob/main/bootstrap/README.md)

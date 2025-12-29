@@ -29,6 +29,8 @@ Docs are scattered across multiple paths and contain stale links/anchors. We nee
 - 2025-12-29: Aligned SSOT/onboarding/platform docs with Python + Dokploy deployment.
 - 2025-12-29: Refactored E2E regression tests to match Dokploy/Vault/Authentik stack.
 - 2025-12-29: Aligned env rules (docs + tooling) with new three-tier scheme.
+- 2025-12-30: Fixed MkDocs external link warnings and aligned docs entry links.
+- 2025-12-30: Updated root Quick Start to match 1Password bootstrap flow.
 
 ## Verification
 - `mkdocs build --config-file docs/mkdocs.yml` passes without warnings.

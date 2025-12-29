@@ -5,14 +5,16 @@
 ## 🚀 Quick Start
 
 ```bash
-# 1. 配置环境变量
-cp .env.example .env
-# 编辑 .env 填入 VPS_HOST, INTERNAL_DOMAIN
+# 1. 登录 1Password CLI（首次）
+op signin
 
-# 2. 验证环境
+# 2. 验证 init/env_vars (VPS_HOST, INTERNAL_DOMAIN)
+uv run invoke local.bootstrap
+
+# 3. 验证环境
 uv run invoke check-env
 
-# 3. 查看可用命令
+# 4. 查看可用命令
 uv run invoke --list
 ```
 
@@ -24,7 +26,7 @@ infra2/
 ├── platform/         # L2 - 平台层 (PostgreSQL, Redis, Authentik)
 ├── e2e_regressions/  # E2E 测试
 ├── libs/             # 共享库 (Deployer, Config)
-├── tools/            # 工具脚本 (env_sync)
+├── tools/            # 工具脚本 (env_tool)
 └── docs/             # 文档
     ├── ssot/         # SSOT 真理源
     └── project/      # 项目追踪
@@ -39,7 +41,7 @@ infra2/
 | `bootstrap` | 1Password | 1Password |
 | `platform` | Dokploy | Vault |
 
-> 详见 [docs/env_management.md](docs/env_management.md)
+> 详见 [docs/ssot/bootstrap.vars_and_secrets.md](docs/ssot/bootstrap.vars_and_secrets.md)
 
 ## 📚 文档入口
 
@@ -82,4 +84,3 @@ invoke redis.shared.status
 - 📖 Documentation: https://wangzitian0.github.io/infra2/
 - 🔑 Secrets: 1Password (`infra2` vault)
 - 🌐 Dokploy: `https://cloud.{INTERNAL_DOMAIN}`
-
