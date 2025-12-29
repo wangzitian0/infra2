@@ -8,7 +8,7 @@
 |-------|----------|----------|
 | `01-09` | **Databases** | `01.postgres`, `02.redis` |
 | `10-19` | **Auth & Gateway** | `10.authentik` |
-| `20-29` | **Observability** | (future) |
+| `20-29` | **Portal & Observability** | `21.portal` |
 
 ## Service Directory
 
@@ -27,11 +27,13 @@ platform/{nn}.{service}/
 invoke postgres.setup
 invoke redis.setup
 invoke authentik.setup
+invoke portal.setup
 
 # Check status
 invoke postgres.shared.status
 invoke redis.shared.status
 invoke authentik.shared.status
+invoke portal.shared.status
 ```
 
 ## Adding New Service

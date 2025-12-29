@@ -47,6 +47,7 @@
 | [platform.sso.md](./platform.sso.md) | `platform.sso` | Authentik SSO |
 | [platform.automation.md](./platform.automation.md) | `platform.automation` | Deployer 自动化 |
 | [platform.ai.md](./platform.ai.md) | `platform.ai` | AI 接入、OpenRouter |
+| [platform.portal.md](./platform.portal.md) | `platform.portal` | Homer portal homepage |
 
 ---
 

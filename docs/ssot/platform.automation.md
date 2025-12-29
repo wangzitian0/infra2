@@ -46,6 +46,7 @@ flowchart TB
         PG[01.postgres]
         RD[02.redis]
         AUTH[10.authentik]
+        PORTAL[21.portal]
     end
     
     Deployer --> PG
