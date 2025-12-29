@@ -34,7 +34,7 @@
 ## 4. 设计约束 (Dos & Don'ts)
 
 ### ✅ 推荐模式
-- 文档结构以 `docs/` 为唯一输入源。
+- MkDocs 输入源为 `docs/` 目录（`docs_dir: .`）。
 - 变更导航请更新 `docs/mkdocs.yml`。
 
 ### ⛔ 禁止模式

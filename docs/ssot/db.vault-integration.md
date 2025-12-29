@@ -45,15 +45,15 @@ graph TD
 
 - **触发条件**: 应用需要数据库访问
 - **步骤**:
-    1. 在 Vault 中写入凭据：
+    1. 在 Vault 中写入敏感凭据（示例）：
        ```bash
-       vault kv put secret/platform/production/<app> PG_HOST=... PG_USER=... PG_PASS=...
+       vault kv put secret/platform/production/<app> PG_USER=... PG_PASS=... PG_DB=...
        ```
     2. 使用 env_tool 验证已写入：
        ```bash
        invoke env.secret-get PG_PASS --project=platform --env=production --service=<app>
        ```
-    3. 在 Dokploy App 环境变量中设置上述值（从 Vault 读取）。
+    3. 在 Dokploy App 环境变量中设置非敏感值（如 `PG_HOST`, `PG_PORT`），并注入 `PG_USER/PG_PASS/PG_DB`。
 
 ### SOP-002: 排查“Permission Denied”
 

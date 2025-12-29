@@ -64,7 +64,7 @@ graph TD
 
 - **触发条件**: Vault 重启后处于 Sealed 状态
 - **步骤**:
-    1. 获取 Keys: `op item get 'Vault Unseal Keys' --vault my_cloud --reveal`
+    1. 获取 Keys: `op item get "bootstrap/vault/Unseal Keys" --vault "Infra2" --reveal`
     2. 进入 VPS 并执行：
        ```bash
        ssh root@<VPS_HOST>
@@ -90,7 +90,7 @@ graph TD
 
 - **触发条件**: SSO 不可用，需操作 Vault
 - **步骤**:
-    1. 获取 Root Token: `op read 'op://Infrastructure/Vault Root Token/credential'`
+    1. 获取 Root Token: `op item get "bootstrap/vault/Unseal Keys" --vault "Infra2" --reveal`
     2. 登录: `vault login <root_token>`
 
 ---
