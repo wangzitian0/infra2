@@ -9,8 +9,8 @@ site_dir: ../.site
 
 exclude_docs: |
   README_tempate.md
-  onboarding/template.md
-  project/template.md
+  project/project_template.md
+  project/todowrite_template.md
   ssot/template.md
 theme:
   name: material
@@ -42,9 +42,9 @@ markdown_extensions:
       alternate_style: true
 
 nav:
-  - Home: README.md
+  - Home: onboarding/README.md
+  - Docs Index: README.md
   - Onboarding:
-      - Overview: onboarding/README.md
       - Quick Start: onboarding/01.quick-start.md
       - First App: onboarding/02.first-app.md
       - Database: onboarding/03.database.md

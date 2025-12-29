@@ -11,8 +11,8 @@
 - Docs reorg TODO record is archived in `docs/project/archive/Infra-003.docs_reorg.md`.
 
 ## Templates
-- Project doc template: `docs/project/template.md`
-- TODOWRITE template: `docs/project/template.md`
+- Project template: `docs/project/project_template.md`
+- TODOWRITE template: `docs/project/todowrite_template.md`
 
 ## Active Projects
 - [Infra-004: Authentik Installation](./Infra-004.authentik_install.md) - **In Progress**
