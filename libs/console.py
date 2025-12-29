@@ -15,6 +15,18 @@ if TYPE_CHECKING:
 
 console = Console()
 
+__all__ = [
+    'console',
+    'header',
+    'success',
+    'error',
+    'warning',
+    'info',
+    'prompt_action',
+    'env_vars',
+    'run_with_status',
+]
+
 
 def header(title: str, subtitle: str | None = None) -> None:
     """Display a task header"""

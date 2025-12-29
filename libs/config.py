@@ -1,53 +1,75 @@
-"""Three-tier configuration loader
+"""Configuration loader using libs/env.py
 
-Structure:
-- Project: .env (root)
-- Environment: .env.<env> (root)
-- Service: {project}/.env.<env> (project directory)
-
-Priority: service > environment > project
+Usage:
+    from libs.config import Config
+    
+    config = Config(project='platform', env='production', service='postgres')
+    password = config.get('POSTGRES_PASSWORD')
+    secret = config.get_secret('POSTGRES_PASSWORD')
 """
-from pathlib import Path
-from dotenv import dotenv_values
-from typing import Optional, Dict
+from __future__ import annotations
+from typing import Optional
+from libs.env import EnvManager
 
 
 class Config:
-    """Load config from project/environment/service levels."""
+    """Load config from remote SSOT using EnvManager."""
     
     def __init__(self, project: str, env: str = 'production', service: Optional[str] = None):
-        """
-        Args:
-            project: bootstrap, platform, e2e_regression, or tools
-            env: production, staging, or test_xxx
-            service: Deprecated - will be removed in future version
-        """
-        if service is not None:
-            import warnings
-            warnings.warn("service parameter is deprecated and ignored", DeprecationWarning, stacklevel=2)
-        self.project = project
-        self.env = env
-        self.root = Path(__file__).parent.parent
+        self._mgr = EnvManager(project, env, service)
+        self._project_mgr = EnvManager(project, env, None)
+    
+    def _parse_key(self, key: str) -> tuple[str, str]:
+        """Parse Dokploy-style key: 'project.VAR' -> ('project', 'VAR')"""
+        if '.' in key:
+            prefix, actual = key.split('.', 1)
+            if prefix in ('project', 'environment', 'service'):
+                return prefix, actual
+        return 'service', key
+    
+    def get(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        """Get environment variable. Supports: VAR, project.VAR, environment.VAR"""
+        level, actual_key = self._parse_key(key)
         
-        self._project = self._load('.env')
-        self._environment = self._load(f'.env.{env}')
-        self._service = self._load_service()
+        if level != 'service':
+            return self._project_mgr.get_env(actual_key, level) or default
+        
+        # Merged: service > environment > project
+        for lvl in ['service', 'environment', 'project']:
+            mgr = self._mgr if lvl == 'service' else self._project_mgr
+            val = mgr.get_env(actual_key, lvl)
+            if val:
+                return val
+        return default
     
-    def _load(self, filename: str) -> Dict[str, str]:
-        f = self.root / filename
-        return dict(dotenv_values(f)) if f.exists() else {}
+    def get_secret(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        """Get secret. Same syntax as get()."""
+        level, actual_key = self._parse_key(key)
+        
+        if level != 'service':
+            return self._project_mgr.get_secret(actual_key, level) or default
+        
+        for lvl in ['service', 'environment', 'project']:
+            mgr = self._mgr if lvl == 'service' else self._project_mgr
+            val = mgr.get_secret(actual_key, lvl)
+            if val:
+                return val
+        return default
     
-    def _load_service(self) -> Dict[str, str]:
-        """Load service-level config from {project}/.env.<env>"""
-        f = self.root / self.project / f'.env.{self.env}'
-        return dict(dotenv_values(f)) if f.exists() else {}
+    def all(self, level: str = 'service') -> dict:
+        """Get all env vars from a level."""
+        mgr = self._mgr if level == 'service' else self._project_mgr
+        return mgr.get_all_env(level)
     
-    def get(self, key: str, level: Optional[str] = None, default: Optional[str] = None) -> Optional[str]:
-        if level == 'project': return self._project.get(key, default)
-        if level == 'environment': return self._environment.get(key, default)
-        if level == 'service': return self._service.get(key, default)
-        # Priority: service > environment > project
-        return self._service.get(key) or self._environment.get(key) or self._project.get(key) or default
+    def all_secrets(self, level: str = 'service') -> dict:
+        """Get all secrets from a level."""
+        mgr = self._mgr if level == 'service' else self._project_mgr
+        return mgr.get_all_secrets(level)
     
-    def all(self) -> Dict[str, str]:
-        return {**self._project, **self._environment, **self._service}
+    def merged(self) -> dict:
+        """Get merged env vars (service > environment > project)."""
+        result = {}
+        for lvl in ['project', 'environment', 'service']:
+            mgr = self._mgr if lvl == 'service' else self._project_mgr
+            result.update(mgr.get_all_env(lvl))
+        return result

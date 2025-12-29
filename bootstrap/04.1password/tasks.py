@@ -107,10 +107,25 @@ def verify(c):
 @task
 def status(c):
     """Check 1Password Connect status"""
+    from libs.console import success, warning
     e = get_env()
     header("1Password status", "Checking")
-    c.run(f"curl -s https://op.{e['INTERNAL_DOMAIN']}/health", warn=True)
-    c.run(f"ssh root@{e['VPS_HOST']} 'docker ps | grep op-connect'", warn=True)
+    
+    # Check containers
+    result = c.run(f"ssh root@{e['VPS_HOST']} 'docker ps --format \"{{{{.Names}}}} {{{{.Status}}}}\" | grep op-connect'", warn=True, hide=True)
+    if result.ok:
+        for line in result.stdout.strip().split('\n'):
+            if line:
+                success(f"Container: {line}")
+    else:
+        warning("No op-connect containers found")
+    
+    # Check internal health (via container network)
+    result = c.run(f"ssh root@{e['VPS_HOST']} 'docker exec $(docker ps -qf name=op-connect-api) wget -qO- http://localhost:8080/heartbeat 2>/dev/null || echo \"unavailable\"'", warn=True, hide=True)
+    if "unavailable" not in result.stdout:
+        success(f"Health: {result.stdout.strip()[:50]}")
+    else:
+        warning("Health check unavailable")
 
 
 @task

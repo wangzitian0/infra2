@@ -72,13 +72,13 @@
 # 文档准则
 ## 文档归类
 
-本平台的文档分为四类，各有侧重：
+本平台的文档分为四类，各有侧重：一般来说，记录顺序为：Project -> Layer README -> SSOT -> 开发者体验。逐步要求更加严格和精炼准确。
 
 | 分类 | 路径 | 用途 | 适合人群 |
 |------|------|------|---------|
 | **[Project](./docs/project/)** | `docs/project/` | 项目追踪，任务管理 | AI / 维护者 |
-| **[SSOT](./docs/ssot/)** | `docs/ssot/` | 复杂话题集中管理，技术参考手册 | 所有人 |
 | **Layer README** | 各目录 `README.md` | 目录介绍，设计和维护指南 | 基础设施维护者 |
+| **[SSOT](./docs/ssot/)** | `docs/ssot/` | 复杂话题集中管理，技术参考手册 | 所有人 |
 | **[开发者体验](./docs/onboarding/)** | `docs/onboarding/` | 场景驱动，注重接入顺滑 | 应用开发者 |
 
 > **README 模板**：参考 [docs/README_tempate.md](./docs/README_tempate.md)
@@ -87,8 +87,8 @@
 
 1. **禁止随意生成文件**：需要记录的内容应集中放入 `docs/project/Infra-001.TODOWRITE.md`。
 2. **Project 目录规则**：
-   - `Infra-001.bootstrap_and_setup.md` **未经授权不得修改**。
-   - 新任务记录到 `Infra-001.TODOWRITE.md`，不可随意创建新 Project 文件。
+   - `Infra-001.bootstrap_and_setup.md` **未经授权只可以加东西不可以删东西**。
+   - 你的 artfacts 的简练的记录到到 `Infra-001.TODOWRITE.md`，不可随意创建新 Project 文件。
 3. **每次修改必须更新**：
    - 修改代码 → 更新对应目录的 `README.md`
    - 涉及架构变更 → 更新相关 SSOT 文档

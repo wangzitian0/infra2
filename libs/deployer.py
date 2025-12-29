@@ -1,18 +1,43 @@
 """
 Base deployer class with DRY task generation
+
+Uses libs/env.py for secret management.
+Key pattern: check status first, skip if healthy.
 """
 from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from invoke import task
-from libs.common import get_env, validate_env, generate_password
+from libs.common import get_env, validate_env, load_env_keys
 from libs.console import header, success, error, warning, info, env_vars, prompt_action, run_with_status
+from libs.env import EnvManager, generate_password
+import sys
+from pathlib import Path
 
 if TYPE_CHECKING:
     from invoke import Context
 
+__all__ = ['Deployer', 'make_tasks', 'load_shared_tasks']
+
+
+def load_shared_tasks(caller_file: str) -> Any:
+    """Load shared_tasks.py from the same directory as caller"""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "shared_tasks",
+        Path(caller_file).parent / "shared_tasks.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 
 class Deployer:
-    """Base class for service deployment"""
+    """Base class for service deployment
+    
+    Key principle: check status first
+    - If service healthy → skip setup, preserve existing config
+    - If service not ready → can generate new secrets, do full install
+    """
     
     service: str = ""
     compose_path: str = ""
@@ -22,15 +47,36 @@ class Deployer:
     chmod: str = "755"
     secret_key: str = "password"  # Key name in Vault
     env_var_name: str = ""  # Env var to display
+    env_example_path: str = ".env.example" # Relative to deploy.py
     
     @classmethod
     def env(cls) -> dict[str, str | None]:
         return get_env()
     
     @classmethod
-    def vault_path(cls) -> str:
+    def get_env_manager(cls) -> EnvManager:
+        """Get EnvManager for this service"""
         e = cls.env()
-        return f"{e['PROJECT']}/{e['ENV']}/{cls.service}"
+        project = e.get('PROJECT', 'platform')
+        env = e.get('ENV', 'production')
+        return EnvManager(project=project, env=env, service=cls.service)
+    
+    @classmethod
+    def get_example_keys(cls) -> list[str]:
+        """Get keys from .env.example"""
+        # Resolve path relative to subclass file
+        deployer_file = sys.modules[cls.__module__].__file__
+        path = Path(deployer_file).parent / cls.env_example_path
+        return load_env_keys(str(path))
+    
+    @classmethod
+    def check_status(cls, c: "Context", shared_tasks: Any) -> bool:
+        """Check if service is already healthy"""
+        try:
+            result = shared_tasks.status(c)
+            return result.get("is_ready", False)
+        except Exception:
+            return False
     
     @classmethod
     def _prepare_dirs(cls, c: "Context") -> bool:
@@ -48,39 +94,33 @@ class Deployer:
         return True
     
     @classmethod
-    def _vault_cmd(cls, c: "Context", cmd: str, **kwargs) -> Any:
-        """Run vault command with correct VAULT_ADDR"""
-        e = cls.env()
-        vault_addr = f"https://vault.{e['INTERNAL_DOMAIN']}"
-        return c.run(f"VAULT_ADDR={vault_addr} {cmd}", **kwargs)
-    
-    @classmethod
-    def store_secret(cls, c: "Context", key: str, value: str) -> bool:
-        """Store secret in Vault with error handling"""
-        result = cls._vault_cmd(c, f"vault kv put secret/{cls.vault_path()} {key}={value}", warn=True, hide=True)
-        if not result.ok:
-            error(f"Failed to store {key} in Vault", result.stderr)
-            return False
-        success(f"Stored {key} in Vault")
-        return True
-    
-    @classmethod
-    def read_secret(cls, c: "Context", path: str, field: str) -> str | None:
-        """Read secret from Vault"""
-        result = cls._vault_cmd(c, f"vault kv get -field={field} secret/{path}", warn=True, hide=True)
-        return result.stdout.strip() if result.ok else None
-    
-    @classmethod
     def pre_compose(cls, c: "Context") -> dict | None:
-        """Prepare and return generated secrets"""
+        """Prepare and generate NEW secrets (only call if not healthy)"""
         if not cls._prepare_dirs(c):
             return None
         
-        password = generate_password(24)
-        if not cls.store_secret(c, cls.secret_key, password):
-            return None
+        env_mgr = cls.get_env_manager()
+        keys = cls.get_example_keys()
         
-        secrets = {cls.env_var_name: password}
+        # Fallback if no .env.example (for legacy)
+        if not keys and cls.env_var_name:
+            keys = [cls.env_var_name]
+            
+        secrets = {}
+        for key in keys:
+             # Check if it exists
+             val = env_mgr.get_secret(key) or env_mgr.get_env(key)
+             
+             # If missing and matches our primary secret, generate it
+             if not val and key == cls.env_var_name:
+                 val = generate_password(24)
+                 env_mgr.set_secret(cls.secret_key, val)
+             
+             if val:
+                 secrets[key] = val
+             else:
+                 warning(f"Missing env var: {key} (Checked Vault/1Password)")
+
         env_vars("DOKPLOY ENV", secrets)
         success("pre_compose complete")
         return secrets
@@ -115,8 +155,13 @@ def make_tasks(deployer_cls: type[Deployer], shared_tasks_module: Any) -> dict:
     """
     Generate standard tasks for a deployer (DRY)
     
-    Returns dict of tasks: {pre_compose, composing, post_compose, setup}
+    Key pattern: setup checks status first, skips if healthy.
     """
+    @task
+    def status(c):
+        """Check service status"""
+        return shared_tasks_module.status(c)
+    
     @task
     def pre_compose(c):
         return deployer_cls.pre_compose(c)
@@ -129,11 +174,26 @@ def make_tasks(deployer_cls: type[Deployer], shared_tasks_module: Any) -> dict:
     def post_compose(c):
         return deployer_cls.post_compose(c, shared_tasks_module)
     
-    @task(pre=[pre_compose, composing, post_compose])
+    @task
     def setup(c):
+        """Full setup - skips if already healthy"""
+        # Check if already healthy
+        if deployer_cls.check_status(c, shared_tasks_module):
+            success(f"{deployer_cls.service} already healthy - skipping setup")
+            info("Use individual tasks (pre_compose, composing) to force reinstall")
+            return
+        
+        # Not healthy - do full install
+        warning(f"{deployer_cls.service} not healthy - starting fresh install")
+        if deployer_cls.pre_compose(c) is None:
+            error("pre_compose failed")
+            return
+        deployer_cls.composing(c)
+        deployer_cls.post_compose(c, shared_tasks_module)
         success(f"{deployer_cls.service} setup complete!")
     
     return {
+        "status": status,
         "pre_compose": pre_compose,
         "composing": composing,
         "post_compose": post_compose,
