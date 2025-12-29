@@ -21,7 +21,7 @@ Docs are scattered across multiple paths and contain stale links/anchors. We nee
 - MkDocs site builds without warnings.
 
 ## PR Links
-- None yet.
+- https://github.com/wangzitian0/infra2/pull/10
 
 ## Change Log
 - 2025-12-28: Initialized docs reorg and Pages site.
