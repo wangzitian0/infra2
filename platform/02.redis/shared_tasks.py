@@ -1,9 +1,9 @@
-"""Redis shared tasks - DRY version"""
+"""Redis shared tasks"""
 from invoke import task
-from libs.common import check_docker_service, CONTAINER_NAMES
+from libs.common import check_service
 
 
 @task
 def status(c):
     """Check Redis status"""
-    return check_docker_service(c, CONTAINER_NAMES["redis"], "redis-cli ping", "Redis")
+    return check_service(c, "redis", "redis-cli ping")

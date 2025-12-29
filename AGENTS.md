@@ -2,7 +2,7 @@
 
 > **禁令**：除非明确指定，否则 AI 不可以自动修改本文件。AI 不可以执行合流 (Merge PR) 操作。
 
-# ⚡ 快速理解路径（极简 5 步）
+## ⚡ 快速理解路径（极简 5 步）
 
 > **用途**：让第一次进入项目的人在 10 分钟内建立全局心智（目标导向）。
 
@@ -13,7 +13,7 @@
 4. **做 Step 0 真理检查**：对比“现状 vs SSOT”，把差距记录到对应 TODOWRITE。
 5. **闭环执行**：修改代码 → 更新 SSOT → 验证 → 更新 README / Project。
 
-# 📌 入口与命名补充（以此为准）
+## 📌 入口与命名补充（以此为准）
 
 1. **Project 选择/新增**：
    - 有合适的项目就选择它并绑定。
@@ -25,7 +25,7 @@
    - `docs/ssot/` 是事实真源与“主入口”。
    - `docs/README.md` 仅作为导航，不替代 SSOT。
 
-# ✅ 极简 SOP（执行细则）
+## ✅ 极简 SOP（执行细则）
 
 1. **写清目标**：一句话定义“完成标准”（可验证）。
 2. **锁定 SSOT**：列出 1-3 个最相关的 SSOT 话题。
@@ -35,7 +35,7 @@
 6. **验证闭环**：按 SSOT 的 “The Proof” 章节执行验证。
 
 
-# 🛠️ 问题解决框架 (STAR Framework)
+## 🛠️ 问题解决框架 (STAR Framework)
 
 在处理任务前，AI 必须使用以下级联结构进行深度分析：
 
@@ -69,8 +69,8 @@
 
 ---
 
-# 文档准则
-## 文档归类
+## 文档准则
+### 文档归类
 
 本平台的文档分为四类，各有侧重：一般来说，记录顺序为：Project -> Layer README -> SSOT -> 开发者体验。逐步要求更加严格和精炼准确。
 
@@ -96,7 +96,7 @@
 > **现行项目编号注记（以 `docs/project/README.md` 为准）**  
 > 若本节规则与当前项目结构不一致，请优先遵循 `docs/project/README.md`，并在执行完毕后同步更新本文件。
 
-## 知识库导航 (The Truth)
+### 知识库导航 (The Truth)
 
 👉 **[SSOT Documentation Index (docs/ssot/README.md)](./docs/ssot/README.md)**
 
@@ -107,6 +107,20 @@
 | **密钥流转/契约** | [**Bootstrap Vars & Secrets SSOT**](./docs/ssot/bootstrap.vars_and_secrets.md) |
 | **故障恢复 SOP** | [**Recovery SSOT**](./docs/ssot/ops.recovery.md) |
 | **流水线操作** | [**Pipeline SSOT**](./docs/ssot/ops.pipeline.md) |
+
+## 代码准则
+
+### 代码风格
+
+- **DRY**：避免重复代码，使用函数/类/模块/组件等抽象。
+- **避免魔法数字**：使用常量/枚举/配置文件等替代。
+- **尽可能复用已有的库**：动手前永远先检查 libs 目录 [README.md](./libs/README.md)。
+
+### PR提交准则
+
+- **checklist**: 要在 description 里面列checklist。
+- **检查 wiki 完备程度**：包括 SSOT、Project、README 等。
+- **推送前检查**：确保没有冲突。已有的 Code Review评论都已经处理（resolved）。
 
 ---
 
