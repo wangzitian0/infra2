@@ -23,10 +23,18 @@ from typing import Optional
 
 # SSOT configuration per project
 SSOT_CONFIG = {
+    'init': {
+        # Special project for bootstrap phase 0-3
+        # All vars stored in 1Password item: init/env_vars
+        'env_source': '1password',
+        'secret_source': '1password',
+        'op_vault': 'Infra2',
+        'op_item': 'init/env_vars',  # Fixed item name
+    },
     'bootstrap': {
         'env_source': '1password',
         'secret_source': '1password',
-        'op_vault': 'infra2-bootstrap',
+        'op_vault': 'Infra2',
     },
     'platform': {
         'env_source': 'dokploy',
@@ -179,7 +187,8 @@ class EnvManager:
     def _dokploy_set(self, key: str, value: str, level: str = 'service') -> bool:
         """Set env var in Dokploy (placeholder)"""
         # TODO: Implement Dokploy CLI/API
-        print(f"⚠️ Dokploy API not yet implemented. Would set {key} at {self._get_path(level)}")
+        from libs.console import warning
+        warning(f"Dokploy API not yet implemented. Would set {key} at {self._get_path(level)}")
         return False
     
     # =========================================================================

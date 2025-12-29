@@ -20,7 +20,7 @@ dependencies = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["e2e_regressions/tests"]
+testpaths = ["libs/tests", "e2e_regressions/tests"]
 markers = [
     "smoke: quick smoke tests",
     "sso: SSO/Portal tests",

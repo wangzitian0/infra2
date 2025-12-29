@@ -19,11 +19,46 @@ CONTAINER_NAMES = {
 }
 
 
+# Cache for 1Password values
+_op_cache: dict | None = None
+
+
+def _load_from_1password() -> dict[str, str]:
+    """Load env vars from 1Password init/env_vars (cached)"""
+    global _op_cache
+    if _op_cache is not None:
+        return _op_cache
+    
+    import subprocess
+    import json
+    
+    try:
+        result = subprocess.run(
+            'op item get "init/env_vars" --vault="Infra2" --format=json',
+            shell=True, capture_output=True, text=True, check=True
+        )
+        item = json.loads(result.stdout)
+        _op_cache = {f["label"]: f.get("value", "") for f in item.get("fields", [])
+                     if f.get("label") and f.get("value")}
+        return _op_cache
+    except:
+        _op_cache = {}
+        return _op_cache
+
+
 def get_env() -> dict[str, str | None]:
-    """Get environment config (lazy evaluation)"""
+    """Get environment config from 1Password (no local .env needed)
+    
+    Falls back to os.environ for CI environments.
+    """
+    # Try 1Password first
+    op_vars = _load_from_1password()
+    
+    # Merge with os.environ (CI fallback), 1Password takes priority
     return {
-        "VPS_HOST": os.environ.get("VPS_HOST"),
-        "INTERNAL_DOMAIN": os.environ.get("INTERNAL_DOMAIN"),
+        "VPS_HOST": op_vars.get("VPS_HOST") or os.environ.get("VPS_HOST"),
+        "VPS_SSH_USER": op_vars.get("VPS_SSH_USER") or os.environ.get("VPS_SSH_USER", "root"),
+        "INTERNAL_DOMAIN": op_vars.get("INTERNAL_DOMAIN") or os.environ.get("INTERNAL_DOMAIN"),
         "PROJECT": os.environ.get("PROJECT", "platform"),
         "ENV": os.environ.get("DEPLOY_ENV", "production"),
     }
