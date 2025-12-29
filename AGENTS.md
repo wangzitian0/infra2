@@ -96,7 +96,7 @@
 > **现行项目编号注记（以 `docs/project/README.md` 为准）**  
 > 若本节规则与当前项目结构不一致，请优先遵循 `docs/project/README.md`，并在执行完毕后同步更新本文件。
 
-## 知识库导航 (The Truth)
+### 知识库导航 (The Truth)
 
 👉 **[SSOT Documentation Index (docs/ssot/README.md)](./docs/ssot/README.md)**
 
@@ -110,8 +110,16 @@
 
 ## 代码准则
 
+### 代码风格
+
 - **DRY**：避免重复代码，使用函数/类/模块/组件等抽象。
 - **避免魔法数字**：使用常量/枚举/配置文件等替代。
+
+### PR提交准则
+
+- **Make sure not conflict**
+- **checklist**: 要在 description 里面列checklist
+- **检查 wiki 完备程度**：包括 SSOT、Project、README 等。
 
 ---
 
