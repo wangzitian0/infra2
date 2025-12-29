@@ -3,7 +3,7 @@ Simplified environment and secret management
 
 Two backends:
 - OpSecrets: 1Password for bootstrap (uses OP_SERVICE_ACCOUNT_TOKEN)
-- VaultSecrets: HashiCorp Vault for platform (uses VAULT_TOKEN or httpx)
+- VaultSecrets: HashiCorp Vault for platform (uses VAULT_TOKEN)
 """
 from __future__ import annotations
 import os
@@ -11,6 +11,7 @@ import json
 import secrets
 import string
 import subprocess
+import sys
 from typing import Optional
 
 import httpx
@@ -54,9 +55,11 @@ class OpSecrets:
                 for f in item.get("fields", [])
                 if f.get("label") and f.get("label") not in ["notesPlain", "password", "username"]
             }
-        except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
-            import sys
-            print(f"OpSecrets load warning: {e}", file=sys.stderr)
+        except subprocess.CalledProcessError as e:
+            print(f"OpSecrets: failed to load {self.item}: {e}", file=sys.stderr)
+            self._cache = {}
+        except json.JSONDecodeError as e:
+            print(f"OpSecrets: invalid JSON from {self.item}: {e}", file=sys.stderr)
             self._cache = {}
         return self._cache
     
@@ -77,7 +80,8 @@ class OpSecrets:
             )
             self._cache = None  # Invalidate cache
             return True
-        except subprocess.CalledProcessError:
+        except subprocess.CalledProcessError as e:
+            print(f"OpSecrets: failed to set {key}: {e}", file=sys.stderr)
             return False
 
 
@@ -85,6 +89,7 @@ class VaultSecrets:
     """Vault secrets for platform services.
     
     Uses HTTP API directly (no vault CLI dependency).
+    Set VAULT_SKIP_VERIFY=1 to skip SSL verification for self-signed certs.
     """
     
     def __init__(self, path: str, token: str | None = None, addr: str | None = None):
@@ -97,17 +102,15 @@ class VaultSecrets:
         self.path = path
         self.token = token or os.getenv("VAULT_TOKEN")
         self.addr = addr or self._get_addr()
+        self.verify_ssl = os.getenv("VAULT_SKIP_VERIFY", "").lower() not in ("1", "true", "yes")
         self._cache: dict | None = None
     
     @staticmethod
     def _get_addr() -> str:
+        """Get Vault address from environment only (no 1Password dependency)"""
         if addr := os.getenv("VAULT_ADDR"):
             return addr
         if domain := os.getenv("INTERNAL_DOMAIN"):
-            return f"https://vault.{domain}"
-        # Try 1Password
-        op = OpSecrets()
-        if domain := op.get("INTERNAL_DOMAIN"):
             return f"https://vault.{domain}"
         return "https://vault.localhost"
     
@@ -121,7 +124,7 @@ class VaultSecrets:
             return self._cache
         
         try:
-            with httpx.Client(verify=False, timeout=10.0) as client:
+            with httpx.Client(verify=self.verify_ssl, timeout=10.0) as client:
                 resp = client.get(
                     f"{self.addr}/v1/secret/data/{self.path}",
                     headers={"X-Vault-Token": self.token}
@@ -130,9 +133,11 @@ class VaultSecrets:
                     self._cache = resp.json().get("data", {}).get("data", {})
                 else:
                     self._cache = {}
+        except httpx.RequestError as e:
+            print(f"VaultSecrets: connection error to {self.addr}: {e}", file=sys.stderr)
+            self._cache = {}
         except Exception as e:
-            import sys
-            print(f"VaultSecrets load warning: {e}", file=sys.stderr)
+            print(f"VaultSecrets: unexpected error: {e}", file=sys.stderr)
             self._cache = {}
         return self._cache
     
@@ -153,7 +158,7 @@ class VaultSecrets:
         existing[key] = value
         
         try:
-            with httpx.Client(verify=False, timeout=10.0) as client:
+            with httpx.Client(verify=self.verify_ssl, timeout=10.0) as client:
                 resp = client.post(
                     f"{self.addr}/v1/secret/data/{self.path}",
                     headers={"X-Vault-Token": self.token},
@@ -162,24 +167,27 @@ class VaultSecrets:
                 if resp.status_code in (200, 204):
                     self._cache = None  # Invalidate
                     return True
-        except Exception:
-            pass
+        except httpx.RequestError as e:
+            print(f"VaultSecrets: connection error: {e}", file=sys.stderr)
+        except Exception as e:
+            print(f"VaultSecrets: unexpected error: {e}", file=sys.stderr)
         return False
 
 
-
-def get_secrets(project: str, service: str, env: str = "production"):
+def get_secrets(project: str, service: str | None = None, env: str = "production"):
     """Factory to get appropriate secrets backend.
     
     Args:
         project: 'bootstrap' or 'platform'
-        service: Service name (e.g., 'postgres')
+        service: Service name (e.g., 'postgres'), None uses project path
         env: Environment (default: 'production')
     
     Returns:
         OpSecrets or VaultSecrets instance
     """
     if project in ('init', 'bootstrap'):
-        return OpSecrets(item=f"{project}/{service}" if service else project)
+        item = f"{project}/{service}" if service is not None else project
+        return OpSecrets(item=item)
     else:
-        return VaultSecrets(path=f"{project}/{env}/{service}")
+        path = f"{project}/{env}/{service}" if service is not None else f"{project}/{env}"
+        return VaultSecrets(path=path)

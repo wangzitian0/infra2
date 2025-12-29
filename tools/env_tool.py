@@ -15,7 +15,8 @@ from libs.console import console, success, error, header
 @task
 def get(c, key: str, project: str = "platform", service: str = None, env: str = 'production'):
     """Get secret from SSOT (Vault or 1Password)"""
-    secrets = get_secrets(project, service or project, env)
+    svc = service if service is not None else project
+    secrets = get_secrets(project, svc, env)
     value = secrets.get(key)
     if value:
         console.print(value)
@@ -30,7 +31,8 @@ def set_secret(c, keyvalue: str, project: str = "platform", service: str = None,
         error("Format: KEY=VALUE")
         return
     key, value = keyvalue.split('=', 1)
-    secrets = get_secrets(project, service or project, env)
+    svc = service if service is not None else project
+    secrets = get_secrets(project, svc, env)
     if secrets.set(key, value):
         success(f"Set {key}")
     else:

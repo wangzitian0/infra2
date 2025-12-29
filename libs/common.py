@@ -5,7 +5,6 @@ Simplified: uses libs/env.py for secrets, minimal API surface.
 """
 from __future__ import annotations
 import os
-from functools import lru_cache
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -19,23 +18,30 @@ CONTAINERS = {
     "authentik": "authentik-server",
 }
 
+# Cache for env config (simple dict, no lru_cache to avoid OpSecrets caching issues)
+_env_cache: dict | None = None
 
-@lru_cache(maxsize=1)
+
 def get_env() -> dict[str, str | None]:
     """Get deployment environment config.
     
     Sources: 1Password init/env_vars → os.environ fallback
     """
+    global _env_cache
+    if _env_cache is not None:
+        return _env_cache
+    
     from libs.env import OpSecrets
     op = OpSecrets()
     
-    return {
+    _env_cache = {
         "VPS_HOST": op.get("VPS_HOST") or os.environ.get("VPS_HOST"),
         "VPS_SSH_USER": op.get("VPS_SSH_USER") or os.environ.get("VPS_SSH_USER", "root"),
         "INTERNAL_DOMAIN": op.get("INTERNAL_DOMAIN") or os.environ.get("INTERNAL_DOMAIN"),
         "PROJECT": os.environ.get("PROJECT", "platform"),
         "ENV": os.environ.get("DEPLOY_ENV", "production"),
     }
+    return _env_cache
 
 
 def validate_env() -> list[str]:
@@ -80,3 +86,10 @@ def parse_env_file(path: str) -> list[str]:
                     key = key[7:]
                 keys.append(key)
     return keys
+
+
+# Re-export generate_password for backward compatibility
+def generate_password(length: int = 24) -> str:
+    """Generate secure random password (re-exported from libs.env)"""
+    from libs.env import generate_password as _gen
+    return _gen(length)
