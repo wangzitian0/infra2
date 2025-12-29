@@ -4,7 +4,7 @@
 
 ## 域名配置
 
-**前提条件**：DNS 已生效
+**前提条件**：DNS 已生效（建议先运行 `invoke dns_and_cert.setup`）
 
 ```bash
 # 1. 访问 Dokploy（通过 IP:3000）

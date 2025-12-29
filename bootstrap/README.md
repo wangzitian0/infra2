@@ -49,7 +49,7 @@ VPS 初始化时安装 Dokploy 容器平台。
 配置 Cloudflare DNS 和 Traefik HTTPS 证书。
 
 **状态**：✅ 已配置  
-**手动配置域名**：`cloud`, `op`, `sso`, `digger`
+**自动化域名**：`cloud`, `op`, `vault`, `sso`, `home`
 
 ### 3. [Dokploy 配置](./03.dokploy_setup/)
 配置 Dokploy 域名访问和 CLI 工具。
