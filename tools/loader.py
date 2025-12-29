@@ -88,10 +88,10 @@ def _load_tools(ns, root):
     if not tools_dir.exists():
         return
     
-    # Load env_sync.py as env namespace
-    f = tools_dir / "env_sync.py"
+    # Load env_tool.py as env namespace
+    f = tools_dir / "env_tool.py"
     if f.exists():
-        m = _load_module(f, "tools.env_sync")
+        m = _load_module(f, "tools.env_tool")
         if m:
             coll = Collection()
             _add_tasks(m, coll)

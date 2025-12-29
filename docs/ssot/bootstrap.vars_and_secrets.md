@@ -1,148 +1,94 @@
 # 变量与密钥管理 SSOT
 
 > **SSOT Key**: `bootstrap.vars_and_secrets`
-> **核心定义**: 三层环境变量体系，对应 Dokploy Project/Environment/Service。不同项目有不同的 SSOT。
+> **核心定义**: 三层环境变量体系（对应 Dokploy Project/Environment/Service），无本地存储，远端优先。
 
 ---
 
 ## 1. SSOT 来源（按项目区分）
 
 > [!IMPORTANT]
-> **不同项目有不同的 SSOT**，这是最重要的设计约束。
+> **本地不存储**环境变量和密钥，直接从远端读写。
 
-### Platform 项目
-
-| 类型 | SSOT | 数据流向 |
-|-----|------|----------|
-| **环境变量** | **Dokploy** | Dokploy → Repo 文件 / 开发机本地文件 |
-| **密钥** | **Vault** | Vault → Repo 文件 / 开发机本地文件 |
-
-- 写入 Dokploy / Vault 通过脚本实现
-- Repo 文件和开发机文件是**被动同步**的副本
-
-### Bootstrap 项目
-
-| 类型 | SSOT | 数据流向 |
-|-----|------|----------|
-| **环境变量** | **1Password (op CLI)** | 1Password → 开发机文件 / Dokploy |
-| **密钥** | **1Password (op CLI)** | 1Password → 开发机文件 / Dokploy |
-
-- 写入 1Password 通过 `op` 命令行工具
-- 可同步到开发机文件或 Dokploy
+| 项目 | 环境变量 SSOT | 密钥 SSOT |
+|-----|--------------|-----------|
+| `bootstrap` | 1Password | 1Password |
+| `platform` | Dokploy | Vault |
 
 ---
 
 ## 2. 三层结构 (对应 Dokploy)
 
-| Dokploy 层级 | Repo 文件 | 开发机文件 | Vault 路径 (platform only) |
-|--------------|-----------|------------|----------------------------|
-| **Project** | `{project}/.env.example` | `{project}/.env` | `secret/{project}/` |
-| **Environment** | `{project}/.env.{env}.example` | `{project}/.env.{env}` | `secret/{project}/{env}/` |
-| **Service** | `{project}/{service}/.env.{env}.example` | `{project}/{service}/.env.{env}` | `secret/{project}/{env}/{service}/` |
+| Dokploy 层级 | 路径格式 | Vault 路径 (platform) |
+|--------------|----------|----------------------|
+| **Project** | `{project}` | `secret/{project}/` |
+| **Environment** | `{project}/{env}` | `secret/{project}/{env}/` |
+| **Service** | `{project}/{env}/{service}` | `secret/{project}/{env}/{service}/` |
 
-### 文件命名规范
+### 本地文件（仅模板）
 
-| 后缀 | 说明 | Git 跟踪 |
+| 文件 | 内容 | Git 跟踪 |
 |------|------|----------|
-| `.example` | 模板文件 | ✅ 进 Git |
-| 无后缀 | 实际配置（有敏感信息） | ❌ gitignore |
-| `.local` | 仅开发机本地使用 | ❌ gitignore |
+| `.env.example` | 仅 KEY（无 VALUE） | ✅ 进 Git |
 
 ---
 
-## 3. 文件结构
-
-```
-infra2/
-├── bootstrap/
-│   ├── .env                          # Project: bootstrap
-│   ├── .env.example
-│   ├── .env.production               # Environment: production
-│   ├── .env.production.example
-│   ├── 04.1password/
-│   │   ├── .env.production           # Service: 1password
-│   │   └── .env.production.example
-│   └── 05.vault/
-│       ├── .env.production
-│       └── .env.production.example
-│
-├── platform/
-│   ├── .env                          # Project: platform
-│   ├── .env.example
-│   ├── .env.production
-│   ├── .env.production.example
-│   ├── 01.postgres/
-│   │   ├── .env.production
-│   │   └── .env.production.example
-│   ├── 02.redis/
-│   │   └── ...
-│   └── 10.authentik/
-│       └── ...
-│
-└── e2e_regressions/
-    ├── .env                          # 测试配置
-    └── .env.example
-```
-
----
-
-## 4. 测试环境变量
-
-`e2e_regressions/` 的环境变量体系：
-
-| 变量 | 说明 |
-|------|------|
-| `E2E_DOMAIN` | 测试域名 |
-| `E2E_USERNAME` | 测试用户 |
-| `E2E_PASSWORD` | 测试密码 |
-| `HEADLESS` | 无头模式 (true/false) |
-
----
-
-## 5. 优先级
-
-`service > environment > project`
-
----
-
-## 6. 命令
-
-### Platform 项目（环境变量从 Dokploy，密钥从 Vault）
+## 3. 命令行工具
 
 ```bash
-# 查看配置状态
-invoke env.status --project=platform --service=postgres
+# 读取环境变量
+invoke env.get KEY --project=platform --env=production --service=postgres
 
-# 从 Vault 拉取密钥到本地
-invoke env.pull --project=platform --service=postgres
+# 写入环境变量
+invoke env.set KEY=VALUE --project=platform --env=production
 
-# 推送本地密钥到 Vault
-invoke env.push --project=platform --service=postgres
-```
+# 读取密钥
+invoke env.secret-get KEY --project=platform --env=production
 
-### Bootstrap 项目（从 1Password）
+# 写入密钥
+invoke env.secret-set KEY=VALUE --project=platform --env=production
 
-```bash
-# 从 1Password 拉取到本地
-invoke env.pull --project=bootstrap --service=vault
+# 预览所有变量（不存储本地）
+invoke env.preview --project=platform --env=production --service=postgres
 
-# 推送本地配置到 1Password
-invoke env.push --project=bootstrap --service=vault
+# 复制环境配置
+invoke env.copy --from-project=platform --from-env=staging --to-env=production
 ```
 
 ---
 
-## 7. 设计约束
+## 4. Python API
+
+```python
+from libs.config import Config
+
+# 从远端加载（无本地存储）
+config = Config(project='platform', env='production', service='postgres')
+
+# 获取环境变量
+host = config.get('POSTGRES_HOST')
+
+# 获取密钥
+password = config.get_secret('POSTGRES_PASSWORD')
+
+# 获取全部
+all_vars = config.all()
+all_secrets = config.all_secrets()
+```
+
+---
+
+## 5. 设计约束
 
 ### ✅ 推荐模式
-- 从 `.env.*.example` 复制，填入实际值
-- **Platform 密钥**：从 Vault 获取
-- **Bootstrap 配置**：从 1Password 获取
+- 使用 `invoke env.*` 命令读写远端
+- 使用 `Config` 类在代码中获取配置
+- `.env.example` 只保留 KEY
 
 ### ⛔ 禁止模式
-- **严禁** 将 `.env` / `.env.*` 提交到 Git（只提交 `.example`）
+- **禁止** 本地存储实际环境变量值
 - **禁止** 在代码中硬编码密钥
-- **禁止** 混淆不同项目的 SSOT
+- **禁止** 提交任何 `.env` 文件到 Git
 
 ---
 
@@ -150,4 +96,3 @@ invoke env.push --project=bootstrap --service=vault
 
 - [docs/ssot/README.md](./README.md)
 - [docs/env_management.md](../env_management.md)
-- [README.md](../../README.md)

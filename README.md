@@ -32,17 +32,12 @@ infra2/
 
 ## 🔧 环境变量体系
 
-三层结构对应 Dokploy Project/Environment/Service：
+三层结构对应 Dokploy Project/Environment/Service，**无本地存储**，远端优先。
 
-| 层级 | 文件位置 | 说明 |
-|------|----------|------|
-| **Project** | `{project}/.env` | 项目级 |
-| **Environment** | `{project}/.env.{env}` | 环境级 (production/staging) |
-| **Service** | `{project}/{service}/.env.{env}` | 服务级 |
-
-**SSOT 按项目区分**：
-- `bootstrap`: 1Password 是环境变量和密钥的 SSOT
-- `platform`: Dokploy 是环境变量的 SSOT，Vault 是密钥的 SSOT
+| 项目 | 环境变量 SSOT | 密钥 SSOT |
+|-----|--------------|-----------|
+| `bootstrap` | 1Password | 1Password |
+| `platform` | Dokploy | Vault |
 
 > 详见 [docs/env_management.md](docs/env_management.md)
 
@@ -56,18 +51,28 @@ infra2/
 
 ## 🛠️ 常用命令
 
+### 环境变量管理 (env_tool)
+
+| 命令 | 说明 |
+|------|------|
+| `invoke env.get KEY --project=P --env=E --service=S` | 读取环境变量 |
+| `invoke env.set KEY=VAL --project=P --env=E --service=S` | 写入环境变量 |
+| `invoke env.secret-get KEY --project=P --env=E` | 读取密钥 |
+| `invoke env.secret-set KEY=VAL --project=P --env=E` | 写入密钥 |
+| `invoke env.preview --project=P --env=E --service=S` | 预览所有变量 |
+| `invoke env.copy --from-project=P --from-env=E1 --to-env=E2` | 复制环境配置 |
+
+### 服务部署
+
 ```bash
-# 部署服务
 invoke postgres.setup
 invoke redis.setup
 invoke authentik.setup
+```
 
-# 环境变量管理
-invoke env.status --project=platform --service=postgres
-invoke env.push --project=platform --service=postgres
-invoke env.pull --project=platform --service=postgres
+### 健康检查
 
-# 健康检查
+```bash
 invoke postgres.shared.status
 invoke redis.shared.status
 ```
@@ -77,3 +82,4 @@ invoke redis.shared.status
 - 📖 Documentation: https://wangzitian0.github.io/infra2/
 - 🔑 Secrets: 1Password (`infra2` vault)
 - 🌐 Dokploy: `https://cloud.{INTERNAL_DOMAIN}`
+
