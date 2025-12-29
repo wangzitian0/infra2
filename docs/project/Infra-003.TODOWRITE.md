@@ -50,3 +50,5 @@ Track top documentation issues discovered across all markdown files.
 - [x] `README.md`: 环境变量 SSOT 链接与 tools 说明对齐代码。
 - [x] `docs/project/README.md`: Infra-004 状态与项目文件对齐为 In Progress。
 - [x] `README.md`: Quick Start 与 1Password/bootstrap 流程对齐，移除不存在的 `.env.example` 步骤。
+- [x] `docs/ssot/bootstrap.vars_and_secrets.md`: 修正 local.bootstrap 不生成 `.env` 的说明。
+- [x] `docs/ssot/core.md`: 环境变量文件位置与 bootstrap 现状对齐。

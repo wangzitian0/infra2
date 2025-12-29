@@ -141,7 +141,7 @@ platform/
 |---------|---------|------|
 | Docker Compose | `compose.yaml` | ✅ 统一标准名 |
 | HCL 配置 | `<service>.hcl` | `vault.hcl`, `traefik.hcl` |
-| 环境变量 | `.env.example`, `.env` | 项目根目录（`.env` 仅为 bootstrap 种子） |
+| 环境变量 | `.env.example`, `.env` | 组件目录（`.env.example`）与项目根（`.env` 仅作 bootstrap 种子，可选） |
 | 自动化脚本 | `tasks.py` / `deploy.py` | Invoke 任务文件 |
 | README | `README.md` | 每个组件目录必需 |
 
@@ -159,8 +159,8 @@ platform/
 
 ### 本地文件（仅模板/种子）
 
-- `.env.example`：仅 KEY 清单（进 Git）
-- `.env`：bootstrap 种子变量（local.bootstrap 生成，不进 Git）
+- `.env.example`：仅 KEY 清单（进 Git，按组件存放）
+- `.env`：bootstrap 种子变量（可选/手动，CI 可用；不进 Git）
 
 ### 服务命名规范
 
