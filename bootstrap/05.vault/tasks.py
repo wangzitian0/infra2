@@ -76,8 +76,19 @@ class VaultDeployer(Deployer):
             hide=True,
         )
         if not result.ok:
+            error("Vault status check failed: curl command did not complete successfully.")
+            stderr = getattr(result, "stderr", "") or ""
+            if stderr.strip():
+                error(stderr.strip())
             return False
-        return result.stdout.strip() in {"200", "429", "472", "473"}
+        status_code = (result.stdout or "").strip()
+        if not status_code:
+            error("Vault status check failed: no HTTP status code returned by curl.")
+            return False
+        if status_code in {"200", "429", "472", "473"}:
+            return True
+        warning(f"Vault health endpoint returned unexpected status code: {status_code}")
+        return False
 
 
 # Standard tasks

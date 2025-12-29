@@ -14,7 +14,7 @@ OP_CONNECT_TOKEN = os.environ.get("OP_CONNECT_TOKEN")
 # 1Password identifiers from environment
 OP_VAULT_ID = os.environ.get("OP_VAULT_ID") 
 OP_ITEM_ID = os.environ.get("OP_ITEM_ID")
-VERIFY_TLS = os.environ.get("VAULT_VERIFY", "false").lower() == "true"
+VERIFY_TLS = os.environ.get("VAULT_VERIFY", "true").lower() not in {"false", "0", "no"}
 
 CHECK_INTERVAL = 30  # seconds
 

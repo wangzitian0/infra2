@@ -143,7 +143,7 @@ class Test1PasswordOperations:
                 {"label": "username", "value": "admin"},
                 {"label": "POSTGRES_PASSWORD", "value": "secret"},
                 {"label": "notesPlain", "value": "skip this"},
-                {"label": "password", "value": "also filtered"},  # 'password' label is filtered
+                {"label": "password", "value": "also included"},  # 'password' label is included
             ]
         })
         mock_run.return_value = mock_result

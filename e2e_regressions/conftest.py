@@ -49,7 +49,11 @@ def _resolve_internal_domain() -> str:
 
 
 class TestConfig:
-    """Test configuration from environment variables."""
+    """Test configuration from environment variables.
+
+    Required: INTERNAL_DOMAIN.
+    Optional: E2E_USERNAME/E2E_PASSWORD (auth flows), PORTAL_URL, DB creds.
+    """
 
     # Domain
     INTERNAL_DOMAIN = _resolve_internal_domain()

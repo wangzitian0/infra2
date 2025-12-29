@@ -17,6 +17,7 @@ import os
 import secrets
 import string
 import subprocess
+import inspect
 from typing import TypedDict, NotRequired, Optional
 
 
@@ -114,9 +115,14 @@ def get_or_set(
     # Generate new value
     if generator:
         try:
+            sig = inspect.signature(generator)
+        except (TypeError, ValueError):
             value = generator(length)
-        except TypeError:
-            value = generator()
+        else:
+            if not sig.parameters:
+                value = generator()
+            else:
+                value = generator(length)
     else:
         value = generate_password(length)
     mgr.set_secret(key, value)
