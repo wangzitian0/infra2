@@ -52,3 +52,5 @@ Track top documentation issues discovered across all markdown files.
 - [x] `README.md`: Quick Start 与 1Password/bootstrap 流程对齐，移除不存在的 `.env.example` 步骤。
 - [x] `docs/ssot/bootstrap.vars_and_secrets.md`: 修正 local.bootstrap 不生成 `.env` 的说明。
 - [x] `docs/ssot/core.md`: 环境变量文件位置与 bootstrap 现状对齐。
+- [x] `docs/ssot/ops.e2e-regressions.md`: 明确 `.env.example` 的目录路径。
+- [x] `README.md`: 1Password Vault 名称大小写对齐为 Infra2。

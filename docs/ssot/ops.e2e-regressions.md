@@ -67,7 +67,7 @@ flowchart LR
 
 - **触发条件**: 开发新功能前
 - **步骤**:
-    1. 配置环境变量 (参考 `.env.example`)。
+    1. 配置环境变量 (参考 `e2e_regressions/.env.example`)。
     2. 运行: `uv run pytest e2e_regressions/tests -m smoke`。
 
 ### SOP-002: 添加新测试

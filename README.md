@@ -82,5 +82,5 @@ invoke redis.shared.status
 ## 🔗 相关链接
 
 - 📖 Documentation: https://wangzitian0.github.io/infra2/
-- 🔑 Secrets: 1Password (`infra2` vault)
+- 🔑 Secrets: 1Password (`Infra2` vault)
 - 🌐 Dokploy: `https://cloud.{INTERNAL_DOMAIN}`

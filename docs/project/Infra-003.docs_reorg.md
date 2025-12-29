@@ -32,6 +32,7 @@ Docs are scattered across multiple paths and contain stale links/anchors. We nee
 - 2025-12-30: Fixed MkDocs external link warnings and aligned docs entry links.
 - 2025-12-30: Updated root Quick Start to match 1Password bootstrap flow.
 - 2025-12-30: Aligned bootstrap env seed notes with local.bootstrap behavior.
+- 2025-12-30: Clarified E2E env example path and 1Password vault name.
 
 ## Verification
 - `mkdocs build --config-file docs/mkdocs.yml` passes without warnings.
