@@ -170,7 +170,7 @@ def bootstrap(c):
     3. vault.setup -> deploys Vault
     4. platform services -> uses Vault
     """
-    import json
+    from libs.env import EnvManager, OP_VAULT, INIT_ITEM, REQUIRED_INIT_FIELDS
     
     header("Bootstrap Check", "Validating 1Password config")
     
@@ -180,34 +180,22 @@ def bootstrap(c):
         console.print("[yellow]Run: op signin[/]")
         return False
     
-    # Read init/env_vars from 1Password
-    OP_VAULT = "Infra2"
-    OP_ITEM = "init/env_vars"
+    # Read init/env_vars using EnvManager
+    mgr = EnvManager('init')
+    fields = mgr.get_all_env(level='service')
     
-    try:
-        result = subprocess.run(
-            f'op item get "{OP_ITEM}" --vault="{OP_VAULT}" --format=json',
-            shell=True, capture_output=True, text=True, check=True
-        )
-        item = json.loads(result.stdout)
-        fields = {f["label"]: f.get("value", "") for f in item.get("fields", [])
-                  if f.get("label") and f.get("value")}
-    except subprocess.CalledProcessError:
-        error(f"Item '{OP_ITEM}' not found in vault '{OP_VAULT}'")
+    if not fields:
+        error(f"Item '{INIT_ITEM}' not found in vault '{OP_VAULT}'")
         console.print("[yellow]Create it with:[/]")
-        console.print('  op item create --category=login --title="init/env_vars" --vault="Infra2" \\')
+        console.print(f'  op item create --category=login --title="{INIT_ITEM}" --vault="{OP_VAULT}" \\')
         console.print('    "VPS_HOST[text]=<ip>" "INTERNAL_DOMAIN[text]=<domain>"')
-        return False
-    except json.JSONDecodeError:
-        error("Failed to parse 1Password response")
         return False
     
     # Validate required fields
-    required = ["VPS_HOST", "INTERNAL_DOMAIN"]
-    missing = [k for k in required if k not in fields]
+    missing = [k for k in REQUIRED_INIT_FIELDS if k not in fields]
     
     if missing:
-        error(f"Missing fields in {OP_ITEM}: {', '.join(missing)}")
+        error(f"Missing fields in {INIT_ITEM}: {', '.join(missing)}")
         return False
     
     # Display config
@@ -244,15 +232,16 @@ def phase(c):
     
     Each phase reads from its respective 1Password item.
     """
-    import json
     from rich.table import Table
+    from libs.env import EnvManager, INIT_ITEM, OP_VAULT
+    import json
     
     header("Bootstrap Phase Detection")
     
-    OP_VAULT = "Infra2"
-    
     def get_field(item_name: str, field_label: str) -> str:
-        """Get field from 1Password item"""
+        """Get field from 1Password item via CLI (EnvManager doesn't support arbitrary items easily yet)"""
+        # TODO: Extend EnvManager to support arbitrary items or use it if items match standard naming
+        # specific items are tricky, sticking to op cli for specific non-standard items
         try:
             result = subprocess.run(
                 f'op item get "{item_name}" --vault="{OP_VAULT}" --format=json',
@@ -263,54 +252,53 @@ def phase(c):
                 if f.get("label") == field_label:
                     return f.get("value", "")
             return ""
-        except:
+        except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError):
             return ""
     
-    # Phase checks: (item, field, phase_desc)
-    phase_checks = [
-        ("init/env_vars", "VPS_HOST", "Phase 0: Local config"),
-        ("init/env_vars", "INTERNAL_DOMAIN", "Phase 0: Domain set"),
-        ("bootstrap/1password/VPS-01 Access Token: own_service", "credential", "Phase 2: 1Password Connect"),
-        ("bootstrap/vault/Unseal Keys", "Root Token", "Phase 3: Vault deployed"),
-    ]
+    # EnvManager can read INIT_ITEM easily
+    mgr_init = EnvManager('init')
+    init_vars = mgr_init.get_all_env('service')
+    
+    # Phase checks: (check_fn, phase_desc)
+    # Phase 0: init vars
+    phase_0 = bool(init_vars.get("VPS_HOST") and init_vars.get("INTERNAL_DOMAIN"))
+    
+    # Phase 2: 1Password Connect (credential)
+    # Item: bootstrap/1password/VPS-01 Access Token: own_service
+    # This is standard structure? 'bootstrap' project, '1password' service?
+    # No, item name is custom.
+    phase_2 = bool(get_field("bootstrap/1password/VPS-01 Access Token: own_service", "credential"))
+    
+    # Phase 3: Vault
+    # Item: bootstrap/vault/Unseal Keys
+    phase_3 = bool(get_field("bootstrap/vault/Unseal Keys", "Root Token"))
     
     table = Table(show_header=True)
     table.add_column("Phase", style="cyan")
-    table.add_column("1Password Item")
-    table.add_column("Field")
     table.add_column("Status")
+    table.add_column("Details")
     
-    phase_num = 0
-    for item_name, field_label, desc in phase_checks:
-        value = get_field(item_name, field_label)
-        if value:
-            # Increment phase based on order
-            if "Phase 0" in desc:
-                phase_num = max(phase_num, 1)
-            elif "Phase 2" in desc:
-                phase_num = max(phase_num, 2)
-            elif "Phase 3" in desc:
-                phase_num = max(phase_num, 3)
-            status = "[green]✅[/]"
-        else:
-            status = "[dim]⏳[/]"
-        
-        # Shorten item name for display
-        short_item = item_name.split("/")[-1][:25]
-        table.add_row(desc, short_item, field_label, status)
+    table.add_row("Phase 0: Local config", "[green]✅[/]" if phase_0 else "[dim]⏳[/]", f"{INIT_ITEM}")
+    table.add_row("Phase 2: 1Password Connect", "[green]✅[/]" if phase_2 else "[dim]⏳[/]", "Connect Token")
+    table.add_row("Phase 3: Vault deployed", "[green]✅[/]" if phase_3 else "[dim]⏳[/]", "Root Token")
     
     console.print(table)
     
-    # Current phase
+    # Logic
+    current = 0
+    if phase_0: current = 1
+    if phase_2: current = 2
+    if phase_3: current = 3
+    
     console.print()
-    if phase_num >= 3:
-        success(f"Current Phase: {phase_num} - Ready for platform services!")
+    if current >= 3:
+        success(f"Current Phase: {current} - Ready for platform services!")
     else:
-        info(f"Current Phase: {phase_num}")
+        info(f"Current Phase: {current}")
         next_steps = {
             0: "Run: invoke local.bootstrap",
             1: "Run: invoke 1password.setup",
             2: "Run: invoke vault.setup",
         }
-        if phase_num in next_steps:
-            console.print(f"[yellow]Next: {next_steps[phase_num]}[/]")
+        if current in next_steps:
+            console.print(f"[yellow]Next: {next_steps[current]}[/]")

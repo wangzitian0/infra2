@@ -3,20 +3,18 @@ Vault deployment automation tasks
 Uses libs/ system for consistent environment and console utilities.
 """
 from invoke import task
+from libs.deployer import Deployer, make_tasks
 from libs.common import get_env, validate_env
 from libs.console import header, success, error, warning, prompt_action, run_with_status
+from typing import Any
 
 
-class VaultDeployer:
+class VaultDeployer(Deployer):
     """Vault deployer using libs/ system"""
     
     service = "vault"
     compose_path = "bootstrap/05.vault/compose.yaml"
     data_path = "/data/bootstrap/vault"
-    
-    @classmethod
-    def env(cls):
-        return get_env()
     
     @classmethod
     def pre_compose(cls, c) -> bool:
@@ -40,21 +38,7 @@ class VaultDeployer:
         return True
     
     @classmethod
-    def composing(cls, c):
-        """Deploy in Dokploy"""
-        e = cls.env()
-        header("Vault composing", "Deploy in Dokploy")
-        prompt_action("Deploy in Dokploy", [
-            f"Access: https://cloud.{e['INTERNAL_DOMAIN']}",
-            "Project: bootstrap",
-            f"Compose: {cls.compose_path}",
-            "Ensure OP_CONNECT_TOKEN is configured",
-            "Click Deploy"
-        ])
-        success("composing complete")
-    
-    @classmethod
-    def post_compose(cls, c) -> bool:
+    def post_compose(cls, c, shared_tasks: Any) -> bool:
         """Verify deployment"""
         e = cls.env()
         header("Vault post_compose", "Verifying")
@@ -65,25 +49,20 @@ class VaultDeployer:
             return True
         warning("Vault may need initialization")
         return False
+        
+    @classmethod
+    def check_status(cls, c, shared_tasks: Any) -> bool:
+        """Custom status check for Vault"""
+        e = cls.env()
+        result = c.run(f"curl -s https://vault.{e['INTERNAL_DOMAIN']}/v1/sys/health", warn=True)
+        return result.ok
 
 
-@task
-def prepare(c):
-    """Prepare Vault data directory"""
-    VaultDeployer.pre_compose(c)
-
-
-@task
-def upload_config(c):
-    """Upload Vault configuration"""
-    e = get_env()
-    run_with_status(c, f"scp bootstrap/05.vault/vault.hcl root@{e['VPS_HOST']}:/data/bootstrap/vault/config/", "Upload config")
-
-
-@task(pre=[prepare])
-def deploy(c):
-    """Deploy Vault to Dokploy (Manual steps)"""
-    VaultDeployer.composing(c)
+# Standard tasks
+# We don't use make_tasks fully because Vault requires extra steps (init, unseal)
+prepare = task(lambda c: VaultDeployer.pre_compose(c), name="prepare")
+deploy = task(lambda c: VaultDeployer.composing(c), name="deploy", pre=[prepare])
+upload_config = task(lambda c: VaultDeployer.pre_compose(c), name="upload-config")
 
 
 @task(pre=[deploy])
@@ -121,4 +100,10 @@ def status(c):
 @task(pre=[prepare, deploy, init, unseal])
 def setup(c):
     """Complete Vault setup flow"""
+    # Check if already running
+    if VaultDeployer.check_status(c, None):
+        success("Vault already healthy - skipping setup")
+        return
+
     success("Vault setup complete!")
+
