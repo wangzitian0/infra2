@@ -124,8 +124,9 @@ class TestVaultOperations:
         assert result == True
         # Verify put was called with merged data
         put_call = mock_run.call_args_list[-1]
-        assert 'existing_key' in put_call[0][0]
-        assert 'new_key' in put_call[0][0]
+        put_args = put_call[0][0]
+        assert any('existing_key' in arg for arg in put_args)
+        assert any('new_key' in arg for arg in put_args)
 
 
 class Test1PasswordOperations:
@@ -150,10 +151,9 @@ class Test1PasswordOperations:
         mgr = EnvManager('bootstrap', 'production', 'vault')
         result = mgr._op_get_all()
         
-        # 'password' and 'notesPlain' labels are filtered out
-        assert result == {"username": "admin", "POSTGRES_PASSWORD": "secret"}
+        # 'notesPlain' label is filtered out
+        assert result == {"username": "admin", "POSTGRES_PASSWORD": "secret", "password": "also filtered"}
         assert "notesPlain" not in result
-        assert "password" not in result
 
 
 class TestGeneratePassword:

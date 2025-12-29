@@ -12,7 +12,7 @@ HashiCorp Vault - 秘密管理和加密服务。
 ### 1. 准备配置
 
 ```bash
-ssh root@<VPS_IP>
+ssh ${VPS_SSH_USER:-root}@<VPS_IP>
 mkdir -p /data/bootstrap/vault/{file,logs,config}
 chown -R 1000:1000 /data/bootstrap/vault
 chmod 755 /data/bootstrap/vault
@@ -21,7 +21,7 @@ chmod 755 /data/bootstrap/vault
 ### 2. 上传配置文件
 
 ```bash
-scp bootstrap/05.vault/vault.hcl root@<VPS_IP>:/data/bootstrap/vault/config/
+scp bootstrap/05.vault/vault.hcl ${VPS_SSH_USER:-root}@<VPS_IP>:/data/bootstrap/vault/config/
 ```
 
 ### 3. 在 Dokploy 部署

@@ -14,9 +14,8 @@ Identity Provider for Single Sign-On across platform services.
 | File | Purpose |
 |------|---------|
 | `compose.yaml` | Docker Compose (server + worker) |
-| `deploy.py` | Invoke tasks with custom pre_compose logic |
-| `shared_tasks.py` | Health check status() |
-| `.env.example` | Environment template |
+| `deploy.py` | Invoke tasks (pre_compose/composing/post_compose/setup) |
+| `shared_tasks.py` | Status checks |
 
 ## Deployment
 
@@ -53,3 +52,5 @@ invoke authentik.post-compose
 | `REDIS_PASSWORD` | Yes (same as 02.redis) |
 | `PG_USER` | No (default: authentik) |
 | `PG_DB` | No (default: authentik) |
+
+> **Note**: `AUTHENTIK_SECRET_KEY` is stored in Vault using the same key name.

@@ -22,10 +22,11 @@ __all__ = ['Deployer', 'make_tasks', 'load_shared_tasks']
 def load_shared_tasks(caller_file: str) -> Any:
     """Load shared_tasks.py from the same directory as caller"""
     import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "shared_tasks",
-        Path(caller_file).parent / "shared_tasks.py"
-    )
+    shared_path = Path(caller_file).parent / "shared_tasks.py"
+    module_name = f"shared_tasks_{abs(hash(str(shared_path)))}"
+    spec = importlib.util.spec_from_file_location(module_name, shared_path)
+    if not spec or not spec.loader:
+        raise ImportError(f"Cannot load shared tasks from {shared_path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -75,7 +76,8 @@ class Deployer:
         try:
             result = shared_tasks.status(c)
             return result.get("is_ready", False)
-        except Exception:
+        except Exception as exc:
+            warning(f"{cls.service} status check failed: {exc}")
             return False
     
     @classmethod
@@ -87,11 +89,13 @@ class Deployer:
         
         e = cls.env()
         header(f"{cls.service} pre_compose", f"Preparing ({e['ENV']})")
-        
-        run_with_status(c, f"ssh root@{e['VPS_HOST']} 'mkdir -p {cls.data_path}'", "Create directory")
-        run_with_status(c, f"ssh root@{e['VPS_HOST']} 'chown -R {cls.uid}:{cls.gid} {cls.data_path}'", "Set ownership")
-        run_with_status(c, f"ssh root@{e['VPS_HOST']} 'chmod -R {cls.chmod} {cls.data_path}'", "Set permissions")
-        return True
+        ssh_user = e.get("VPS_SSH_USER") or "root"
+        results = [
+            run_with_status(c, f"ssh {ssh_user}@{e['VPS_HOST']} 'mkdir -p {cls.data_path}'", "Create directory"),
+            run_with_status(c, f"ssh {ssh_user}@{e['VPS_HOST']} 'chown -R {cls.uid}:{cls.gid} {cls.data_path}'", "Set ownership"),
+            run_with_status(c, f"ssh {ssh_user}@{e['VPS_HOST']} 'chmod -R {cls.chmod} {cls.data_path}'", "Set permissions"),
+        ]
+        return all(result.ok for result in results)
     
     @classmethod
     def pre_compose(cls, c: "Context") -> dict | None:
@@ -108,18 +112,28 @@ class Deployer:
             
         secrets = {}
         for key in keys:
-             # Check if it exists
-             val = env_mgr.get_secret(key) or env_mgr.get_env(key)
-             
-             # If missing and matches our primary secret, generate it
-             if not val and key == cls.env_var_name:
-                 val = generate_password(24)
-                 env_mgr.set_secret(cls.secret_key, val)
-             
-             if val:
-                 secrets[key] = val
-             else:
-                 warning(f"Missing env var: {key} (Checked Vault/1Password)")
+            if key == cls.env_var_name and cls.secret_key:
+                val = env_mgr.get_secret(cls.secret_key)
+                if val is None:
+                    val = env_mgr.get_env(key)
+                if val is None:
+                    val = generate_password(24)
+                    if not env_mgr.set_secret(cls.secret_key, val):
+                        warning(f"Failed to store secret: {cls.secret_key}")
+                if val is not None:
+                    secrets[key] = val
+                else:
+                    warning(f"Missing env var: {key} (Checked Vault/1Password)")
+                continue
+
+            val = env_mgr.get_secret(key)
+            if val is None:
+                val = env_mgr.get_env(key)
+
+            if val is not None:
+                secrets[key] = val
+            else:
+                warning(f"Missing env var: {key} (Checked Vault/1Password)")
 
         env_vars("DOKPLOY ENV", secrets)
         success("pre_compose complete")
@@ -129,12 +143,14 @@ class Deployer:
     def composing(cls, c: "Context", env_keys: list[str] | None = None) -> None:
         """Deploy in Dokploy"""
         e = cls.env()
-        keys = env_keys or [cls.env_var_name]
+        keys = env_keys or ([cls.env_var_name] if cls.env_var_name else [])
+        keys = [key for key in keys if key]
+        keys_display = ", ".join(keys) if keys else "(none)"
         header(f"{cls.service} composing", f"Deploy {cls.service}")
         prompt_action("Deploy in Dokploy", [
             f"Access: https://cloud.{e['INTERNAL_DOMAIN']}",
             f"Compose: {cls.compose_path}",
-            f"Add env: {', '.join(keys)}",
+            f"Add env: {keys_display}",
             "Click Deploy"
         ])
         success("composing complete")

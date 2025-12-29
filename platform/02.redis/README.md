@@ -2,16 +2,15 @@
 
 > **Category**: Databases (01-09)
 
-Shared Redis cache for platform services.
+Shared Redis cache for all platform applications.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
 | `compose.yaml` | Docker Compose service definition |
-| `deploy.py` | Invoke tasks (pre_compose/composing/post_compose) |
-| `shared_tasks.py` | Health check status() |
-| `.env.example` | Environment template |
+| `deploy.py` | Invoke tasks (pre_compose/composing/post_compose/setup) |
+| `shared_tasks.py` | Status checks |
 
 ## Deployment
 
@@ -35,6 +34,8 @@ invoke redis.post-compose
 |----------|----------|
 | `REDIS_PASSWORD` | Yes |
 
+> **Note**: `REDIS_PASSWORD` is sourced from Vault under the key `password`.
+
 ## Used By
 
-- `10.authentik`
+- `10.authentik` (edge: `invoke redis.shared.status`)

@@ -2,10 +2,18 @@
 Task loader for invoke automation
 Discovers and loads tasks from bootstrap, platform, and tools directories.
 """
+from __future__ import annotations
+
 from invoke import Collection, Task
 from pathlib import Path
 import importlib.util
 import sys
+from typing import Optional
+from dotenv import load_dotenv
+
+# Load optional local overrides if present.
+load_dotenv()
+load_dotenv('.env.local', override=True)
 
 
 def _load_module(file_path, module_name):
@@ -31,6 +39,25 @@ def _add_tasks(module, collection):
                     print(f"⚠️ Failed to add task {name}: {e}")
 
 
+def _load_tasks_into_collection(file_path: Path, module_name: str, collection: Collection, sub_name: Optional[str] = None) -> bool:
+    """Load tasks from a file into a collection (or sub-collection)."""
+    if not file_path.exists():
+        return False
+    module = _load_module(file_path, module_name)
+    if not module:
+        return False
+    if sub_name:
+        sub = Collection()
+        _add_tasks(module, sub)
+        if sub.tasks:
+            collection.add_collection(sub, name=sub_name)
+            return True
+        return False
+    before = len(collection.tasks)
+    _add_tasks(module, collection)
+    return len(collection.tasks) > before
+
+
 def _load_project(ns, root, project_name):
     """Load all services from a project directory"""
     project_dir = root / project_name
@@ -45,32 +72,22 @@ def _load_project(ns, root, project_name):
         coll = Collection()
         loaded = False
         
-        # Load shared_tasks.py
-        f = comp_dir / "shared_tasks.py"
-        if f.exists():
-            m = _load_module(f, f"{project_name}.{comp_dir.name}.shared")
-            if m:
-                shared = Collection()
-                _add_tasks(m, shared)
-                if shared.tasks:
-                    coll.add_collection(shared, name="shared")
-                    loaded = True
-        
-        # Load deploy.py
-        f = comp_dir / "deploy.py"
-        if f.exists():
-            m = _load_module(f, f"{project_name}.{comp_dir.name}.deploy")
-            if m:
-                _add_tasks(m, coll)
-                loaded = True
-        
-        # Load legacy tasks.py
-        f = comp_dir / "tasks.py"
-        if f.exists():
-            m = _load_module(f, f"{project_name}.{comp_dir.name}.tasks")
-            if m:
-                _add_tasks(m, coll)
-                loaded = True
+        loaded |= _load_tasks_into_collection(
+            comp_dir / "shared_tasks.py",
+            f"{project_name}.{comp_dir.name}.shared",
+            coll,
+            sub_name="shared",
+        )
+        loaded |= _load_tasks_into_collection(
+            comp_dir / "deploy.py",
+            f"{project_name}.{comp_dir.name}.deploy",
+            coll,
+        )
+        loaded |= _load_tasks_into_collection(
+            comp_dir / "tasks.py",
+            f"{project_name}.{comp_dir.name}.tasks",
+            coll,
+        )
         
         if loaded:
             ns.add_collection(coll, name=name)
@@ -83,27 +100,15 @@ def _load_tools(ns, root):
     if not tools_dir.exists():
         return
     
-    # Load env_tool.py as env namespace
-    f = tools_dir / "env_tool.py"
-    if f.exists():
-        m = _load_module(f, "tools.env_tool")
-        if m:
-            coll = Collection()
-            _add_tasks(m, coll)
-            if coll.tasks:
-                ns.add_collection(coll, name="env")
-                print("✅ tools/env")
-    
-    # Load local_init.py as local namespace
-    f = tools_dir / "local_init.py"
-    if f.exists():
-        m = _load_module(f, "tools.local_init")
-        if m:
-            coll = Collection()
-            _add_tasks(m, coll)
-            if coll.tasks:
-                ns.add_collection(coll, name="local")
-                print("✅ tools/local")
+    coll = Collection()
+    if _load_tasks_into_collection(tools_dir / "env_tool.py", "tools.env_tool", coll):
+        ns.add_collection(coll, name="env")
+        print("✅ tools/env")
+
+    coll = Collection()
+    if _load_tasks_into_collection(tools_dir / "local_init.py", "tools.local_init", coll):
+        ns.add_collection(coll, name="local")
+        print("✅ tools/local")
 
 
 def load_all():

@@ -2,16 +2,15 @@
 
 > **Category**: Databases (01-09)
 
-Shared PostgreSQL database for platform services.
+Shared PostgreSQL database for all platform applications.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
 | `compose.yaml` | Docker Compose service definition |
-| `deploy.py` | Invoke tasks (pre_compose/composing/post_compose) |
-| `shared_tasks.py` | Health check status() |
-| `.env.example` | Environment template |
+| `deploy.py` | Invoke tasks (pre_compose/composing/post_compose/setup) |
+| `shared_tasks.py` | Status + admin helpers |
 
 ## Deployment
 
@@ -36,6 +35,8 @@ invoke postgres.post-compose
 | `POSTGRES_PASSWORD` | Yes |
 | `POSTGRES_USER` | No (default: postgres) |
 
+> **Note**: `POSTGRES_PASSWORD` is sourced from Vault under the key `root_password`.
+
 ## Used By
 
-- `10.authentik`
+- `10.authentik` (edge: `invoke postgres.shared.create-database`)

@@ -11,9 +11,8 @@
 
 | 组件 | 测试 | 标记 | 验证内容 |
 |------|------|------|----------|
-| **Connectivity** | `test_pg_connection` | smoke | 基本连接可达性 |
-| **Auth** | `test_pg_auth` | critical | 静态/动态凭据登录 |
-| **Persistence** | `test_pg_persistence` | - | 数据持久化验证 |
+| **Connectivity** | `test_postgresql_connect` | database | 基本连接可达性 |
+| **Version** | `test_postgresql_version` | database | 版本信息可读 |
 
 ## 运行测试
 
@@ -26,5 +25,6 @@ uv run pytest tests/data/postgresql/ -v
 | 变量 | 必需 | 说明 |
 |------|------|------|
 | `DB_HOST` | ✅ | 数据库地址 |
-| `DB_USER` | ✅ | 用户名 |
+| `DB_PORT` | ❌ | 端口 (默认 5432) |
+| `DB_USER` | ❌ | 用户名 (默认 postgres) |
 | `DB_PASSWORD` | ✅ | 密码 |

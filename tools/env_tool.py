@@ -15,24 +15,40 @@ from libs.env import EnvManager, SSOT_CONFIG
 from libs.console import console, success, error, header
 
 
+def _parse_keyvalue(keyvalue: str) -> tuple[str, str] | None:
+    """Parse KEY=VALUE input."""
+    if '=' not in keyvalue:
+        error("Format: KEY=VALUE")
+        return None
+    key, value = keyvalue.split('=', 1)
+    if not key:
+        error("Key cannot be empty")
+        return None
+    return key, value
+
+
+def _print_or_error(value: str | None, label: str) -> None:
+    """Print value or error."""
+    if value is not None:
+        console.print(value)
+    else:
+        error(f"{label} not found")
+
+
 @task
 def get(c, key: str, project: str, env: str = 'production', service: str = None):
     """Get environment variable from remote SSOT"""
     mgr = EnvManager(project, env, service)
-    value = mgr.get_env(key)
-    if value:
-        console.print(value)
-    else:
-        error(f"Key '{key}' not found")
+    _print_or_error(mgr.get_env(key), f"Key '{key}'")
 
 
 @task(name="set")
 def set_env(c, keyvalue: str, project: str, env: str = 'production', service: str = None):
     """Set environment variable in remote SSOT"""
-    if '=' not in keyvalue:
-        error("Format: KEY=VALUE")
+    parsed = _parse_keyvalue(keyvalue)
+    if not parsed:
         return
-    key, value = keyvalue.split('=', 1)
+    key, value = parsed
     mgr = EnvManager(project, env, service)
     if mgr.set_env(key, value):
         success(f"Set {key}")
@@ -44,20 +60,16 @@ def set_env(c, keyvalue: str, project: str, env: str = 'production', service: st
 def secret_get(c, key: str, project: str, env: str = 'production', service: str = None):
     """Get secret from remote SSOT (Vault or 1Password)"""
     mgr = EnvManager(project, env, service)
-    value = mgr.get_secret(key)
-    if value:
-        console.print(value)
-    else:
-        error(f"Secret '{key}' not found")
+    _print_or_error(mgr.get_secret(key), f"Secret '{key}'")
 
 
 @task(name="secret-set")
 def secret_set(c, keyvalue: str, project: str, env: str = 'production', service: str = None):
     """Set secret in remote SSOT (Vault or 1Password)"""
-    if '=' not in keyvalue:
-        error("Format: KEY=VALUE")
+    parsed = _parse_keyvalue(keyvalue)
+    if not parsed:
         return
-    key, value = keyvalue.split('=', 1)
+    key, value = parsed
     mgr = EnvManager(project, env, service)
     if mgr.set_secret(key, value):
         success(f"Set secret {key}")
@@ -79,7 +91,6 @@ def preview(c, project: str, env: str = 'production', service: str = None):
     
     header(f"Preview: {path}", f"Env: {config['env_source']} | Secret: {config['secret_source']}")
     
-    # Get vars from all levels
     mgr_project = EnvManager(project, env, None)
     mgr_service = EnvManager(project, env, service)
     
@@ -88,12 +99,9 @@ def preview(c, project: str, env: str = 'production', service: str = None):
     table.add_column("Key")
     table.add_column("Value")
     
-    for k, v in (mgr_project.get_all_env('project') or {}).items():
-        table.add_row("project", k, _mask(v))
-    for k, v in (mgr_project.get_all_env('environment') or {}).items():
-        table.add_row("environment", k, _mask(v))
-    for k, v in (mgr_service.get_all_env('service') or {}).items():
-        table.add_row("service", k, _mask(v))
+    for level, mgr in [("project", mgr_project), ("environment", mgr_project), ("service", mgr_service)]:
+        for k, v in (mgr.get_all_env(level) or {}).items():
+            table.add_row(level, k, _mask(v))
     
     console.print(table)
     
@@ -103,12 +111,9 @@ def preview(c, project: str, env: str = 'production', service: str = None):
     secrets_table.add_column("Key")
     secrets_table.add_column("Value")
     
-    for k in (mgr_project.get_all_secrets('project') or {}).keys():
-        secrets_table.add_row("project", k, "********")
-    for k in (mgr_project.get_all_secrets('environment') or {}).keys():
-        secrets_table.add_row("environment", k, "********")
-    for k in (mgr_service.get_all_secrets('service') or {}).keys():
-        secrets_table.add_row("service", k, "********")
+    for level, mgr in [("project", mgr_project), ("environment", mgr_project), ("service", mgr_service)]:
+        for k in (mgr.get_all_secrets(level) or {}).keys():
+            secrets_table.add_row(level, k, "********")
     
     console.print(secrets_table)
 

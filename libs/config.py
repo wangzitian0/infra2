@@ -38,7 +38,7 @@ class Config:
         for lvl in ['service', 'environment', 'project']:
             mgr = self._mgr if lvl == 'service' else self._project_mgr
             val = mgr.get_env(actual_key, lvl)
-            if val:
+            if val is not None:
                 return val
         return default
     
@@ -52,7 +52,7 @@ class Config:
         for lvl in ['service', 'environment', 'project']:
             mgr = self._mgr if lvl == 'service' else self._project_mgr
             val = mgr.get_secret(actual_key, lvl)
-            if val:
+            if val is not None:
                 return val
         return default
     

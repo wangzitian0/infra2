@@ -17,7 +17,7 @@ platform/{nn}.{service}/
 ├── compose.yaml       # Docker Compose
 ├── deploy.py          # XxxDeployer + tasks
 ├── shared_tasks.py    # status() check
-├── .env.example       # Env template
+├── .env.example       # Env template (or .env.production.example)
 └── README.md          # Service docs
 ```
 
@@ -41,9 +41,7 @@ invoke authentik.shared.status
 
 2. Create `deploy.py`:
    ```python
-   from libs.deployer import Deployer
-   from libs.console import success
-   from invoke import task
+   from libs.deployer import Deployer, make_tasks, load_shared_tasks
    
    class NewDeployer(Deployer):
        service = "new"
@@ -51,23 +49,13 @@ invoke authentik.shared.status
        data_path = "/data/platform/new"
        secret_key = "password"
        env_var_name = "NEW_PASSWORD"
-   
-   @task
-   def pre_compose(c):
-       return NewDeployer.pre_compose(c)
-   
-   @task
-   def composing(c):
-       NewDeployer.composing(c)
-   
-   @task
-   def post_compose(c):
-       from . import shared_tasks
-       return NewDeployer.post_compose(c, shared_tasks)
-   
-   @task(pre=[pre_compose, composing, post_compose])
-   def setup(c):
-       success(f"{NewDeployer.service} setup complete!")
+
+   _tasks = make_tasks(NewDeployer, load_shared_tasks(__file__))
+   status = _tasks["status"]
+   pre_compose = _tasks["pre_compose"]
+   composing = _tasks["composing"]
+   post_compose = _tasks["post_compose"]
+   setup = _tasks["setup"]
    ```
 
 3. Create `shared_tasks.py`:

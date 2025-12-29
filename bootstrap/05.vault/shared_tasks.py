@@ -3,13 +3,7 @@ from __future__ import annotations
 import json
 from invoke import task
 from libs.common import get_env
-from libs.console import success, error, info
-
-
-def _vault_addr() -> str:
-    """Get Vault address from environment"""
-    e = get_env()
-    return f"https://vault.{e['INTERNAL_DOMAIN']}" if e['INTERNAL_DOMAIN'] else "https://vault.local"
+from libs.console import success, error
 
 
 @task
@@ -27,7 +21,11 @@ def status(c) -> dict:
 def write_secret(c, path: str, data: str) -> bool:
     """Write to Vault KV v2. Example: --data='key1=val1 key2=val2'"""
     if data.startswith("{"):
-        kv = " ".join(f"{k}={v}" for k, v in json.loads(data).items())
+        try:
+            kv = " ".join(f"{k}={v}" for k, v in json.loads(data).items())
+        except json.JSONDecodeError as exc:
+            error("Invalid JSON payload", str(exc))
+            return False
     else:
         kv = data
     result = c.run(f"vault kv put secret/{path} {kv}", warn=True, hide=True)

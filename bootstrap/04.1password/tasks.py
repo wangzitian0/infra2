@@ -4,16 +4,37 @@ Uses libs/ system for consistent environment and console utilities.
 Bootstrap layer uses 1Password for secrets, not Vault.
 """
 from invoke import task
-from libs.common import get_env, validate_env
+from libs.common import get_env
 from libs.console import header, success, error, warning, prompt_action, run_with_status
+from libs.deployer import Deployer, make_tasks, load_shared_tasks
 
 
-class OnePasswordDeployer:
+class OnePasswordDeployer(Deployer):
     """1Password Connect deployer using libs/ system"""
-    
     service = "1password"
     compose_path = "bootstrap/04.1password/compose.yaml"
     data_path = "/data/bootstrap/1password"
+    uid = "1000"
+    gid = "1000"
+    chmod = "777"
+
+    @classmethod
+    def _upload_credentials(cls, c) -> bool:
+        """Upload credentials from 1Password to server."""
+        e = cls.env()
+        ssh_user = e.get("VPS_SSH_USER") or "root"
+        header("1Password credentials", "Uploading from 1Password CLI")
+        cmd = (
+            "op document get 'bootstrap/1password/VPS-01 Credentials File' --vault Infra2 "
+            f"| ssh {ssh_user}@{e['VPS_HOST']} "
+            f"'cat > {cls.data_path}/1password-credentials.json && chown {cls.uid}:{cls.gid} {cls.data_path}/1password-credentials.json'"
+        )
+        result = c.run(cmd, warn=True)
+        if not result.ok:
+            error("Upload failed", "Ensure 1Password CLI is configured")
+            return False
+        success("Credentials uploaded")
+        return True
     
     @classmethod
     def env(cls):
@@ -22,27 +43,11 @@ class OnePasswordDeployer:
     @classmethod
     def pre_compose(cls, c) -> bool:
         """Prepare data directory and upload credentials"""
-        if missing := validate_env():
-            error(f"Missing: {', '.join(missing)}")
+        if not cls._prepare_dirs(c):
             return False
-        
-        e = cls.env()
-        header("1Password pre_compose", "Preparing")
-        
-        # Create directory
-        run_with_status(c, f"ssh root@{e['VPS_HOST']} 'mkdir -p {cls.data_path}'", "Create directory")
-        run_with_status(c, f"ssh root@{e['VPS_HOST']} 'chown -R 1000:1000 {cls.data_path}'", "Set ownership")
-        run_with_status(c, f"ssh root@{e['VPS_HOST']} 'chmod 777 {cls.data_path}'", "Set permissions")
-        
-        # Upload credentials from 1Password
-        header("1Password credentials", "Uploading from 1Password CLI")
-        cmd = f"op document get 'bootstrap/1password/VPS-01 Credentials File' --vault Infra2 | ssh root@{e['VPS_HOST']} 'cat > {cls.data_path}/1password-credentials.json && chown 1000:1000 {cls.data_path}/1password-credentials.json'"
-        
-        result = c.run(cmd, warn=True)
-        if not result.ok:
-            error("Upload failed", "Ensure 1Password CLI is configured")
+        if not cls._upload_credentials(c):
             return False
-        
+
         success("pre_compose complete")
         return True
     
@@ -73,23 +78,24 @@ class OnePasswordDeployer:
         return False
 
 
+_tasks = make_tasks(OnePasswordDeployer, load_shared_tasks(__file__))
+status = _tasks["status"]
+pre_compose = _tasks["pre_compose"]
+composing = _tasks["composing"]
+post_compose = _tasks["post_compose"]
+setup = _tasks["setup"]
+
+
 @task
 def prepare(c):
     """Prepare 1Password data directory"""
-    OnePasswordDeployer.pre_compose(c)
+    OnePasswordDeployer._prepare_dirs(c)
 
 
 @task
 def upload_credentials(c):
     """Upload 1Password credentials file"""
-    e = get_env()
-    header("1Password credentials", "Uploading")
-    cmd = f"op document get 'bootstrap/1password/VPS-01 Credentials File' --vault Infra2 | ssh root@{e['VPS_HOST']} 'cat > /data/bootstrap/1password/1password-credentials.json && chown 1000:1000 /data/bootstrap/1password/1password-credentials.json'"
-    result = c.run(cmd, warn=True)
-    if result.ok:
-        success("Credentials uploaded")
-    else:
-        error("Upload failed")
+    OnePasswordDeployer._upload_credentials(c)
 
 
 @task(pre=[prepare])
@@ -105,37 +111,8 @@ def verify(c):
 
 
 @task
-def status(c):
-    """Check 1Password Connect status"""
-    from libs.console import success, warning
-    e = get_env()
-    header("1Password status", "Checking")
-    
-    # Check containers
-    result = c.run(f"ssh root@{e['VPS_HOST']} 'docker ps --format \"{{{{.Names}}}} {{{{.Status}}}}\" | grep op-connect'", warn=True, hide=True)
-    if result.ok:
-        for line in result.stdout.strip().split('\n'):
-            if line:
-                success(f"Container: {line}")
-    else:
-        warning("No op-connect containers found")
-    
-    # Check internal health (via container network)
-    result = c.run(f"ssh root@{e['VPS_HOST']} 'docker exec $(docker ps -qf name=op-connect-api) wget -qO- http://localhost:8080/heartbeat 2>/dev/null || echo \"unavailable\"'", warn=True, hide=True)
-    if "unavailable" not in result.stdout:
-        success(f"Health: {result.stdout.strip()[:50]}")
-    else:
-        warning("Health check unavailable")
-
-
-@task
 def fix_permissions(c):
     """Fix database permission issues"""
     e = get_env()
-    run_with_status(c, f"ssh root@{e['VPS_HOST']} 'chmod 777 /data/bootstrap/1password'", "Fix permissions")
-
-
-@task(pre=[prepare, deploy, verify])
-def setup(c):
-    """Complete 1Password Connect setup flow"""
-    success("1Password Connect setup complete!")
+    ssh_user = e.get("VPS_SSH_USER") or "root"
+    run_with_status(c, f"ssh {ssh_user}@{e['VPS_HOST']} 'chmod 777 /data/bootstrap/1password'", "Fix permissions")
