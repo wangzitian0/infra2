@@ -62,3 +62,7 @@ Track top documentation issues discovered across all markdown files.
 - [x] `docs/ssot/ops.recovery.md`: 1Password 路径与域名占位符对齐 SSOT。
 - [x] `docs/ssot/ops.e2e-regressions.md`: 测试命令与 e2e_regressions/README 对齐。
 - [x] `docs/README.md`: 说明文档站首页与仓库 README 的职责区分。
+- [x] `docs/onboarding/03.database.md`: 占位符格式统一并说明 VAULT_TOKEN 来源。
+- [x] `docs/onboarding/04.secrets.md`: 权限提示用语对齐。
+- [x] `e2e_regressions/README.md`: 测试命令位置说明更清晰（去掉 cd ..）。
+- [x] `docs/ssot/ops.recovery.md`: 统一占位符格式。

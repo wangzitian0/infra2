@@ -68,7 +68,7 @@ graph TD
     2. 进入 VPS 并执行：
        ```bash
        ssh root@<VPS_HOST>
-       export VAULT_ADDR=https://vault.${INTERNAL_DOMAIN}
+       export VAULT_ADDR=https://vault.<INTERNAL_DOMAIN>
        vault operator unseal <key1>
        vault operator unseal <key2>
        vault operator unseal <key3>

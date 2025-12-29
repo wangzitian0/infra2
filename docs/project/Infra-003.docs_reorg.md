@@ -35,6 +35,7 @@ Docs are scattered across multiple paths and contain stale links/anchors. We nee
 - 2025-12-30: Clarified E2E env example path and 1Password vault name.
 - 2025-12-30: Simplified MkDocs nav and aligned onboarding/recovery/E2E guidance.
 - 2025-12-30: Clarified docs site homepage vs repo README.
+- 2025-12-30: Addressed review feedback on placeholders and E2E command clarity.
 
 ## Verification
 - `mkdocs build --config-file docs/mkdocs.yml` passes without warnings.

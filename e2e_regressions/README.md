@@ -32,18 +32,14 @@ uv sync
 
 ### Execution
 ```bash
-# Run smoke tests
+# Run smoke tests (from e2e_regressions/)
 uv run pytest tests/smoke/ -v
 
-# Or from repo root
-cd ..
-uv run pytest e2e_regressions/tests/smoke/ -v
-
-# Run platform tests
+# Run platform tests (from e2e_regressions/)
 uv run pytest tests/platform/ -v
 
-# Or from repo root
-cd ..
+# From repo root
+uv run pytest e2e_regressions/tests/smoke/ -v
 uv run pytest e2e_regressions/tests/platform/ -v
 ```
 
