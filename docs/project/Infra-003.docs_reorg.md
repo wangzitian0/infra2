@@ -31,6 +31,7 @@ Docs are scattered across multiple paths and contain stale links/anchors. We nee
 - 2025-12-29: Aligned env rules (docs + tooling) with new three-tier scheme.
 - 2025-12-30: Fixed MkDocs external link warnings and aligned docs entry links.
 - 2025-12-30: Updated root Quick Start to match 1Password bootstrap flow.
+- 2025-12-30: Aligned bootstrap env seed notes with local.bootstrap behavior.
 
 ## Verification
 - `mkdocs build --config-file docs/mkdocs.yml` passes without warnings.
