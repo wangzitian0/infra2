@@ -7,15 +7,20 @@
 - Active projects live in `docs/project/`.
 - Archived projects live in `docs/project/archive/`.
 - Each project file includes PR links and an embedded change log section.
-- TODO inbox for docs reorg lives in `docs/project/Infra-003.TODOWRITE.md`.
+- Archived projects merge the project record + TODOWRITE into a single file.
+- Docs reorg TODO record is archived in `docs/project/archive/Infra-003.docs_reorg.md`.
+
+## Templates
+- Project doc template: `docs/project/template.md`
+- TODOWRITE template: `docs/project/template.md`
 
 ## Active Projects
-- [Infra-003: Documentation Reorganization](./Infra-003.docs_reorg.md) - **In Progress**
 - [Infra-004: Authentik Installation](./Infra-004.authentik_install.md) - **In Progress**
 
 ## Archived Projects
 - [Infra-001: Bootstrap Base Setup](./archive/Infra-001.bootstrap_setup.md) - **Archived**
 - [Infra-002: 1Password + Vault Installation](./archive/Infra-002.1password_vault_install.md) - **Archived**
+- [Infra-003: Documentation Reorganization](./archive/Infra-003.docs_reorg.md) - **Archived**
 
 ## Related
 - [docs/ssot/README.md](../ssot/README.md) - SSOT index

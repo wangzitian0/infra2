@@ -57,4 +57,7 @@ A: 先完成应用构建与部署准备，权限相关操作由运维协助完�
 
 ---
 
-*Last updated: 2025-12-25*
+## Templates
+- Template: `docs/onboarding/template.md`
+
+*Last updated: 2025-12-30*
