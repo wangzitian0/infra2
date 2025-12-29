@@ -1,12 +1,59 @@
-# Infra-003: TODOWRITE (Docs Reorg)
+# Infra-003: Documentation Reorganization
 
-**Status**: Active  
+**Status**: Archived  
+**Owner**: Infra  
+**Priority**: P1
+
+## Goal
+Consolidate documentation into a clean, navigable structure with a stable SSOT and MkDocs site.
+
+## Context
+Docs are scattered across multiple paths and contain stale links/anchors. We need a single, consistent entry point and a clean docs site build.
+
+## Scope
+- Normalize docs structure and project catalog.
+- Fix broken links/anchors across markdown files.
+- Maintain MkDocs site config and Pages workflow.
+
+## Deliverables
+- Clean docs navigation and project index.
+- Reduced doc lint/link warnings.
+- MkDocs site builds without warnings.
+
+## PR Links
+- https://github.com/wangzitian0/infra2/pull/10
+
+## Change Log
+- 2025-12-28: Initialized docs reorg and Pages site.
+- 2025-12-28: Fixed Top30 doc issues and normalized links/anchors.
+- 2025-12-29: Aligned SSOT/onboarding/platform docs with Python + Dokploy deployment.
+- 2025-12-29: Refactored E2E regression tests to match Dokploy/Vault/Authentik stack.
+- 2025-12-29: Aligned env rules (docs + tooling) with new three-tier scheme.
+- 2025-12-30: Fixed MkDocs external link warnings and aligned docs entry links.
+- 2025-12-30: Updated root Quick Start to match 1Password bootstrap flow.
+- 2025-12-30: Aligned bootstrap env seed notes with local.bootstrap behavior.
+- 2025-12-30: Clarified E2E env example path and 1Password vault name.
+- 2025-12-30: Simplified MkDocs nav and aligned onboarding/recovery/E2E guidance.
+- 2025-12-30: Clarified docs site homepage vs repo README.
+- 2025-12-30: Addressed review feedback on placeholders and E2E command clarity.
+- 2025-12-30: Fixed init/env_vars SSOT alignment in EnvManager + E2E fallback; refreshed docs.
+- 2025-12-30: Standardized E2E domain config on INTERNAL_DOMAIN (removed BASE_DOMAIN/E2E_DOMAIN).
+- 2025-12-30: Archived Infra-003 after MkDocs build verification.
+- 2025-12-30: Merged TODOWRITE into archived project record.
+
+## Verification
+- 2025-12-30: `mkdocs build --config-file docs/mkdocs.yml` (no warnings).
+
+## TODOWRITE (Archived)
+
+**Status**: Archived  
 **Owner**: Infra
 
-## Purpose
+### Purpose
 Track top documentation issues discovered across all markdown files.
+Project closed on 2025-12-30; list retained for record.
 
-## Top Issues (Top 30)
+### Top Issues (Top 30)
 - [x] `docs/README.md`: 外链指向 `tools/README.md`，本仓库不存在 `tools/` 目录（已改为文本说明）。
 - [x] `docs/README.md`: 外链指向 `envs/README.md`，本仓库不存在 `envs/` 目录（已改为文本说明）。
 - [x] `docs/README.md`: 外链指向 `apps/README.md`，本仓库不存在 `apps/` 目录（已改为文本说明）。
@@ -32,7 +79,7 @@ Track top documentation issues discovered across all markdown files.
 - [x] `docs/ssot/ops.observability.md`: Planned 测试改为 Backlog 表述。
 - [x] `docs/ssot/ops.recovery.md`: Planned 测试改为 Backlog 表述。
 - [x] `docs/ssot/platform.ai.md`: Pending + TODO 改为 Backlog 说明。
-- [x] `docs/project/Infra-003.docs_reorg.md`: PR Links 改为 “None yet.”。
+- [x] `docs/project/archive/Infra-003.docs_reorg.md`: PR Links 更新为 PR #10。
 - [x] `docs/project/Infra-004.authentik_install.md`: PR Links 改为 “None yet.”。
 - [x] `docs/project/Infra-004.authentik_install.md`: Change Log 改为 “None yet.”。
 - [x] `docs/ssot/platform.sso.md`: 由 Casdoor 迁移到 Authentik，修正文档真理来源。

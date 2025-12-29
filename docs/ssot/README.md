@@ -77,7 +77,7 @@
 
 ## 维护约定 (Template)
 
-请参考 [**SSOT 模板**](./template.md) 进行文档编写。
+请参考 `docs/ssot/template.md` 进行文档编写。
 
 - **Used by**：由 MkDocs 自动维护。
 - **引用**：使用标准 Markdown 链接指向 SSOT 文件的特定章节或 Anchor。
@@ -107,4 +107,4 @@ flowchart TB
 
 ---
 
-*Last updated: 2025-12-29*
+*Last updated: 2025-12-30*

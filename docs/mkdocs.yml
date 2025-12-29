@@ -9,7 +9,9 @@ site_dir: ../.site
 
 exclude_docs: |
   README_tempate.md
-  project/Infra-003.TODOWRITE.md
+  project/project_template.md
+  project/todowrite_template.md
+  ssot/template.md
 theme:
   name: material
   language: zh
@@ -40,9 +42,9 @@ markdown_extensions:
       alternate_style: true
 
 nav:
-  - Home: README.md
+  - Home: onboarding/README.md
+  - Docs Index: README.md
   - Onboarding:
-      - Overview: onboarding/README.md
       - Quick Start: onboarding/01.quick-start.md
       - First App: onboarding/02.first-app.md
       - Database: onboarding/03.database.md
@@ -76,8 +78,8 @@ nav:
           - Alerting: ssot/ops.alerting.md
   - Projects:
       - Portfolio: project/README.md
-      - Infra-003: project/Infra-003.docs_reorg.md
       - Infra-004: project/Infra-004.authentik_install.md
   - Archived Projects:
       - Infra-001: project/archive/Infra-001.bootstrap_setup.md
       - Infra-002: project/archive/Infra-002.1password_vault_install.md
+      - Infra-003: project/archive/Infra-003.docs_reorg.md
