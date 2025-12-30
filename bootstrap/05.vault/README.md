@@ -76,6 +76,22 @@ invoke vault.setup-tokens
 - `VAULT_ROOT_TOKEN` 从 1Password `op://Infra2/bootstrap-vault/Root Token` 获取。
 - `vault.setup-tokens` 会自动为服务生成只读 token，并尝试写入 Dokploy 环境变量 `VAULT_APP_TOKEN`。
 
+### 6. 应用接入 Vault（vault-init）
+
+**目标**：运行时从 Vault 拉取密钥，不在磁盘持久化。
+
+流程：
+1. 在 Vault 写入 `secret/data/platform/production/<service>`（KV v2）。
+2. 运行 `invoke vault.setup-tokens` 为服务生成只读 token。
+3. Dokploy 服务环境变量设置 `VAULT_APP_TOKEN`（可自动注入）。
+4. Compose 加 `vault-init` 容器，拉取 Vault 并写入 `/secrets/.env`。
+5. 应用容器通过 `env_file: /secrets/.env` 或启动脚本 `source /secrets/.env` 读取。
+
+要点：
+- `VAULT_ADDR` 可放在 Dokploy 项目级 env。
+- `VAULT_APP_TOKEN` 必须是 per-service 的只读 token。
+- `/secrets` 使用 `tmpfs`，避免落盘。
+
 ## 配置说明
 
 ### vault.hcl
