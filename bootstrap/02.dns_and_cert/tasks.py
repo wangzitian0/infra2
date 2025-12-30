@@ -337,7 +337,7 @@ def _verify_https(records: list[str]) -> bool:
     def _check(url: str) -> str | None:
         try:
             resp = httpx.get(url, timeout=10.0)
-            if resp.status_code >= 500:
+            if resp.status_code >= 400:
                 return f"{url}: {resp.status_code}"
             return None
         except Exception as exc:
@@ -434,7 +434,11 @@ def verify(c, records=""):
 
 @task
 def setup(c, records="", proxied="true", ssl_mode="full", always_https="on", cooldown=str(DEFAULT_COOLDOWN_SECONDS)):
-    """Full setup: DNS records + SSL settings + HTTPS warm-up"""
+    """Full setup: DNS records + SSL settings + HTTPS warm-up.
+
+    Includes a cooldown (default 60s) for DNS/SSL propagation before warm-up.
+    Override with --cooldown=N (use --cooldown=0 to skip).
+    """
     header("DNS setup", "Cloudflare DNS + SSL automation")
     record_list = _load_record_list(records)
     proxied_flag = _parse_bool(proxied, True)

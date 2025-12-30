@@ -5,5 +5,5 @@ from libs.common import check_service
 
 @task
 def status(c):
-    """Check Homer portal status"""
+    """Check local Homer portal status (localhost health check)"""
     return check_service(c, "portal", "wget -q --spider http://127.0.0.1:8080/")

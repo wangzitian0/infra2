@@ -21,10 +21,11 @@ class PortalDeployer(Deployer):
     @classmethod
     def pre_compose(cls, c):
         if not cls._prepare_dirs(c):
+            error("Failed to prepare portal directories")
             return None
 
-        e = cls.env()
-        internal_domain = e.get("INTERNAL_DOMAIN")
+        env = cls.env()
+        internal_domain = env.get("INTERNAL_DOMAIN")
         if not internal_domain:
             error("Missing INTERNAL_DOMAIN")
             return None
@@ -36,16 +37,20 @@ class PortalDeployer(Deployer):
 
         config_content = template_path.read_text().replace("{{INTERNAL_DOMAIN}}", internal_domain)
         config_path = f"{cls.data_path}/config.yml"
-        host = e.get("VPS_HOST")
+        host = env.get("VPS_HOST")
         if not host:
             error("Missing VPS_HOST")
             return None
 
         tmp_path = None
         try:
-            with NamedTemporaryFile("w", delete=False) as tmp:
-                tmp.write(config_content)
-                tmp_path = tmp.name
+            try:
+                with NamedTemporaryFile("w", delete=False) as tmp:
+                    tmp.write(config_content)
+                    tmp_path = tmp.name
+            except OSError as exc:
+                error("Failed to create temp config", str(exc))
+                return None
 
             result = run_with_status(
                 c,
