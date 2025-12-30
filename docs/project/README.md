@@ -15,6 +15,7 @@
 - TODOWRITE template: `docs/project/todowrite_template.md`
 
 ## Active Projects
+- [Infra-005: Homer Portal Homepage](./Infra-005.homer_portal.md) - **In Progress**
 - [Infra-004: Authentik Installation](./Infra-004.authentik_install.md) - **In Progress**
 
 ## Archived Projects

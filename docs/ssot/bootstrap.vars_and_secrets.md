@@ -28,7 +28,15 @@ Bootstrap 依赖 1Password CLI (`op`)，使用 **`Infra2`** vault 存储所有�
 | `init/env_vars` | 种子变量（VPS_HOST, INTERNAL_DOMAIN） | 初始化时手动创建 |
 | `bootstrap/1password/VPS-01 Credentials File` | Connect 凭证文件 | 从 1Password.com 下载 |
 | `bootstrap/1password/VPS-01 Access Token: own_service` | Connect API Token | 创建时自动生成 |
+| `bootstrap/cloudflare` | Cloudflare DNS Token/Zone | 初始化时手动创建 |
 | `bootstrap/vault/Unseal Keys` | Vault unseal keys + root token | Vault 初始化时写入 |
+
+`bootstrap/cloudflare` 推荐字段：
+
+- `CF_API_TOKEN`
+- `CF_ZONE_ID`（可选，缺省时用 `CF_ZONE_NAME` 或 `INTERNAL_DOMAIN` 查找）
+- `CF_ZONE_NAME`（可选）
+- `CF_RECORDS`（可选，逗号分隔默认子域名列表）
 
 ### 2.2 创建 Infra2 Vault
 

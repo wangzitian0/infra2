@@ -1,0 +1,51 @@
+---
+title: "Infrastructure Portal"
+subtitle: "Quick access to platform services"
+icon: "fas fa-server"
+header: true
+footer: false
+columns: "3"
+connectivityCheck: true
+
+defaults:
+  layout: columns
+  colorTheme: auto
+
+links:
+  - name: "Infra2 Repo"
+    icon: "fab fa-github"
+    url: "https://github.com/wangzitian0/infra2"
+    target: "_blank"
+  - name: "Docs"
+    icon: "fas fa-book"
+    url: "https://wangzitian0.github.io/infra2/"
+    target: "_blank"
+
+services:
+  - name: "Platform Services"
+    icon: "fas fa-server"
+    items:
+      - name: "Dokploy"
+        icon: "fas fa-cloud"
+        subtitle: "Control plane"
+        tag: "platform"
+        url: "https://cloud.{{INTERNAL_DOMAIN}}"
+        target: "_blank"
+      - name: "Vault"
+        icon: "fas fa-lock"
+        subtitle: "Secrets and KV"
+        tag: "security"
+        url: "https://vault.{{INTERNAL_DOMAIN}}"
+        target: "_blank"
+      - name: "Authentik SSO"
+        icon: "fas fa-id-badge"
+        subtitle: "Login and SSO"
+        tag: "sso"
+        url: "https://sso.{{INTERNAL_DOMAIN}}"
+        target: "_blank"
+      - name: "1Password Connect"
+        icon: "fas fa-key"
+        subtitle: "Secrets sync API"
+        tag: "secrets"
+        url: "https://op.{{INTERNAL_DOMAIN}}/health"
+        target: "_blank"

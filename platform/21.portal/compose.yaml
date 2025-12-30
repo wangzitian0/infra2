@@ -1,0 +1,24 @@
+services:
+  portal:
+    image: b4bz/homer:latest
+    container_name: platform-portal
+    restart: always
+    user: "1000:1000"
+    environment:
+      # Disable Homer asset initialization to avoid overwriting mounted config.yml.
+      INIT_ASSETS: "0"
+    volumes:
+      # Read-only config; Homer does not need write access for config.yml.
+      - /data/platform/portal/config.yml:/www/assets/config.yml:ro
+    networks:
+      - dokploy-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.portal.rule=Host(`home.${INTERNAL_DOMAIN}`)"
+      - "traefik.http.routers.portal.entrypoints=websecure"
+      - "traefik.http.routers.portal.tls.certresolver=letsencrypt"
+      - "traefik.http.services.portal.loadbalancer.server.port=8080"
+
+networks:
+  dokploy-network:
+    external: true
