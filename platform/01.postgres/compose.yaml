@@ -26,6 +26,7 @@ services:
         set -a
         . /secrets/.env
         set +a
+        export POSTGRES_PASSWORD=$$ROOT_PASSWORD
         exec docker-entrypoint.sh postgres
     environment:
       POSTGRES_USER: postgres
@@ -46,11 +47,7 @@ services:
 
 volumes:
   secrets:
-    driver: local
-    driver_opts:
-      type: tmpfs
-      device: tmpfs
-      o: "size=10m,mode=0755"
+
 
 networks:
   dokploy-network:
