@@ -27,6 +27,7 @@ class DokployClient:
                 op = OpSecrets(item="bootstrap-dokploy")
                 self.api_key = op.get("DOKPLOY_API_KEY")
             except (ImportError, AttributeError, KeyError):
+                # If 1Password integration or secret is unavailable, fall back to env var / final validation below.
                 pass
         
         if not self.api_key:
