@@ -65,6 +65,17 @@ vault operator unseal <key3>
 vault login <root-token>
 ```
 
+### 5. 生成服务 Token（Vault-Init）
+
+```bash
+export VAULT_ROOT_TOKEN=<root-token>
+invoke vault.setup-tokens
+```
+
+说明：
+- `VAULT_ROOT_TOKEN` 从 1Password `op://Infra2/bootstrap-vault/Root Token` 获取。
+- `vault.setup-tokens` 会自动为服务生成只读 token，并尝试写入 Dokploy 环境变量 `VAULT_APP_TOKEN`。
+
 ## 配置说明
 
 ### vault.hcl

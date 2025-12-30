@@ -25,7 +25,7 @@ class VaultDeployer(Deployer):
         if not cls._prepare_dirs(c):
             return False
         e = cls.env()
-        header("Vault pre-compose", "Preparing")
+        header("Vault pre_compose", "Preparing")
         ssh_user = e.get("VPS_SSH_USER") or "root"
 
         # Create directories
@@ -40,7 +40,7 @@ class VaultDeployer(Deployer):
         if not cls.upload_config(c):
             return False
 
-        success("pre-compose complete")
+        success("pre_compose complete")
         return True
 
     @classmethod
@@ -59,7 +59,7 @@ class VaultDeployer(Deployer):
     def post_compose(cls, c, shared_tasks: Any) -> bool:
         """Verify deployment"""
         e = cls.env()
-        header("Vault post-compose", "Verifying")
+        header("Vault post_compose", "Verifying")
         if cls.check_status(c, shared_tasks):
             success("Vault is reachable")
             return True
@@ -103,14 +103,11 @@ def init(c):
     """Initialize Vault"""
     e = get_env()
     header("Vault init", "Initialization required")
-    commands = [
-        f"export VAULT_ADDR=https://vault.{e['INTERNAL_DOMAIN']}",
-        "vault operator init",
-    ]
+    print(f"export VAULT_ADDR=https://vault.{e['INTERNAL_DOMAIN']}")
+    print("vault operator init")
     prompt_action("Initialize Vault", [
-        f"Run: {commands[0]}",
-        f"Run: {commands[1]}",
-        "Save keys to 1Password",
+        "Run the commands above",
+        "Save keys to 1Password"
     ])
 
 
@@ -140,9 +137,9 @@ def setup_tokens(c):
     """Generate read-only tokens for platform services"""
     import os
     import json
-
+    
     header("Vault Token Setup", "Generating service tokens")
-
+    
     # Check VAULT_ROOT_TOKEN
     root_token = os.getenv("VAULT_ROOT_TOKEN")
     if not root_token:
@@ -151,10 +148,10 @@ def setup_tokens(c):
         info("Then run: export VAULT_ROOT_TOKEN=<token>")
         return
     show_tokens = os.getenv("VAULT_SHOW_TOKENS") == "1"
-
+    
     e = get_env()
     vault_addr = e.get("VAULT_ADDR", f"https://vault.{e['INTERNAL_DOMAIN']}")
-
+    
     # Service definitions: service_name -> list of paths
     services = {
         "postgres": ["secret/data/platform/production/postgres"],
@@ -165,7 +162,7 @@ def setup_tokens(c):
             "secret/data/platform/production/authentik",
         ],
     }
-
+    
     success(f"Using Vault: {vault_addr}")
     console.print()
     if show_tokens:
@@ -173,16 +170,15 @@ def setup_tokens(c):
     else:
         info("Tokens are masked. Set VAULT_SHOW_TOKENS=1 to print full tokens for capture.")
         console.print()
-
     for service, paths in services.items():
         policy_name = f"platform-{service}-reader"
-
+        
         # Create policy HCL
         policy_rules = "\n".join([
             f'path "{path}" {{\n  capabilities = ["read"]\n}}'
             for path in paths
         ])
-
+        
         # Write policy via vault CLI
         warning(f"Creating policy: {policy_name}")
         result = c.run(
@@ -198,7 +194,6 @@ def setup_tokens(c):
             else:
                 error(f"Failed to create policy '{policy_name}' for service '{service}'")
             continue
-
         # Generate token (permanent, orphan, no default policy)
         cmd = (
             f"vault token create "
@@ -213,7 +208,7 @@ def setup_tokens(c):
             env={"VAULT_ADDR": vault_addr, "VAULT_TOKEN": root_token},
             hide=True,
         )
-
+        
         if result.ok:
             token_data = json.loads(result.stdout)
             token = token_data["auth"]["client_token"]
@@ -256,25 +251,19 @@ def _configure_dokploy_token(_c, service: str, token: str):
     """Auto-configure VAULT_APP_TOKEN in Dokploy"""
     try:
         from libs.dokploy import get_dokploy
-    except Exception as exc:
-        warning(f"   Dokploy client unavailable: {exc}")
-        info("   Manual setup: Add VAULT_APP_TOKEN in Dokploy UI")
-        return
-
-    try:
         client = get_dokploy()
-
+        
         # Find compose service
         compose = client.find_compose_by_name(service, "platform")
         if compose:
             compose_id = compose["composeId"]
             info("   Configuring in Dokploy...")
-
+            
             client.update_compose_env(
                 compose_id,
                 env_vars={"VAULT_APP_TOKEN": token}
             )
-            success("   Auto-configured in Dokploy")
+            success("   ✅ Auto-configured in Dokploy")
         else:
             warning(f"   Service '{service}' not found in Dokploy, manual setup required")
     except Exception as exc:
