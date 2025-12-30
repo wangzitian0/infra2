@@ -19,8 +19,14 @@ services:
     depends_on:
       vault-init:
         condition: service_completed_successfully
-    env_file:
-      - /secrets/.env
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -a
+        . /secrets/.env
+        set +a
+        exec docker-entrypoint.sh postgres
     environment:
       POSTGRES_USER: postgres
       PGDATA: /var/lib/postgresql/data/pgdata

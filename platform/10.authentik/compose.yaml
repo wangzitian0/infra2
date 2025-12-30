@@ -31,12 +31,17 @@ services:
     image: ghcr.io/goauthentik/server:2024.12.0
     container_name: platform-authentik-server
     restart: unless-stopped
-    command: server
     depends_on:
       vault-init:
         condition: service_completed_successfully
-    env_file:
-      - /secrets/.env
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -a
+        . /secrets/.env
+        set +a
+        exec ak server
     environment:
       AUTHENTIK_REDIS__HOST: platform-redis
       AUTHENTIK_POSTGRESQL__HOST: platform-postgres
@@ -59,12 +64,17 @@ services:
     image: ghcr.io/goauthentik/server:2024.12.0
     container_name: platform-authentik-worker
     restart: unless-stopped
-    command: worker
     depends_on:
       vault-init:
         condition: service_completed_successfully
-    env_file:
-      - /secrets/.env
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -a
+        . /secrets/.env
+        set +a
+        exec ak worker
     environment:
       AUTHENTIK_REDIS__HOST: platform-redis
       AUTHENTIK_POSTGRESQL__HOST: platform-postgres
