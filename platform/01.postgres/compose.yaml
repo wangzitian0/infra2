@@ -2,10 +2,10 @@ services:
   vault-init:
     image: hashicorp/vault:1.15
     container_name: platform-postgres-vault-init
-    command: sh -c 'export VAULT_TOKEN=$$VAULT_APP_TOKEN && vault kv get -format=json secret/data/platform/production/postgres | jq -r ".data.data | to_entries[] | \"\\(.key | ascii_upcase)=\\(.value)\"" > /secrets/.env && chmod 400 /secrets/.env && echo "✅ Secrets ready"'
+    command: sh -c 'apk add --no-cache jq && export VAULT_TOKEN=$$VAULT_APP_TOKEN && vault read -format=json secret/data/platform/production/postgres | jq -r ".data.data | to_entries[] | \"\\(.key | ascii_upcase)=\\(.value)\"" > /secrets/.env && chmod 444 /secrets/.env && echo "✅ Secrets ready"'
     environment:
       VAULT_ADDR: ${VAULT_ADDR}
-      VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:?error}
+      VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:-}
     volumes:
       - secrets:/secrets
     networks:
@@ -44,7 +44,7 @@ volumes:
     driver_opts:
       type: tmpfs
       device: tmpfs
-      o: "size=10m,mode=0700"
+      o: "size=10m,mode=0755"
 
 networks:
   dokploy-network:
