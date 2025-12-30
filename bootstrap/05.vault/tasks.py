@@ -147,43 +147,49 @@ def setup_tokens(c):
         info("Get from: op read 'op://Infra2/bootstrap-vault/Root Token'")
         info("Then run: export VAULT_ROOT_TOKEN=<token>")
         return
-    show_tokens = os.getenv("VAULT_SHOW_TOKENS") == "1"
     
     e = get_env()
     vault_addr = e.get("VAULT_ADDR", f"https://vault.{e['INTERNAL_DOMAIN']}")
     
-    # Service definitions: service_name -> list of paths
-    services = {
-        "postgres": ["secret/data/platform/production/postgres"],
-        "redis": ["secret/data/platform/production/redis"],
-        "authentik": [
-            "secret/data/platform/production/postgres",
-            "secret/data/platform/production/redis",
-            "secret/data/platform/production/authentik",
-        ],
+    success(f"Using Vault: {vault_addr}")
+    print("")
+    
+    # Automatically discover policies from platform directories
+    current_dir = os.path.dirname(os.path.abspath(__file__))  # bootstrap/05.vault
+    root_dir = os.path.dirname(os.path.dirname(current_dir))
+    platform_dir = os.path.join(root_dir, "platform")
+    
+    # Map service name to its directory name
+    service_map = {
+        "postgres": "01.postgres",
+        "redis": "02.redis",
+        "authentik": "10.authentik",
     }
     
-    success(f"Using Vault: {vault_addr}")
-    console.print()
-    if show_tokens:
-        warning("VAULT_SHOW_TOKENS=1: full tokens will be printed; avoid logs.")
-    else:
-        info("Tokens are masked. Set VAULT_SHOW_TOKENS=1 to print full tokens for capture.")
-        console.print()
-    for service, paths in services.items():
-        policy_name = f"platform-{service}-reader"
+    env_name = e.get("ENV", "production")
+    
+    for service, dir_name in service_map.items():
+        policy_name = f"platform-{service}-app"
+        policy_path = os.path.join(platform_dir, dir_name, "vault.policy")
         
-        # Create policy HCL
-        policy_rules = "\n".join([
-            f'path "{path}" {{\n  capabilities = ["read"]\n}}'
-            for path in paths
-        ])
+        if os.path.exists(policy_path):
+            with open(policy_path, "r") as f:
+                policy_rules = f.read().replace("{{env}}", env_name)
+            info(f"Loaded tailored policy from {dir_name}/vault.policy")
+        else:
+            # Fallback policy
+            policy_rules = f'path "secret/data/platform/{env_name}/{service}" {{ capabilities = ["read", "list"] }}'
+            warning(f"No policy file found for {service}, using default read-only")
         
-        # Write policy via vault CLI
-        warning(f"Creating policy: {policy_name}")
+        # Write policy via vault CLI using stdin
+        import io
+        policy_io = io.StringIO(policy_rules)
+        
+        info(f"   Writing policy: {policy_name}...")
         result = c.run(
-            f'echo "{policy_rules}" | vault policy write {policy_name} -',
+            f"vault policy write {policy_name} -",
             env={"VAULT_ADDR": vault_addr, "VAULT_TOKEN": root_token},
+            in_stream=policy_io,
             hide=True,
             warn=True,
         )
@@ -194,6 +200,8 @@ def setup_tokens(c):
             else:
                 error(f"Failed to create policy '{policy_name}' for service '{service}'")
             continue
+        success(f"   ✅ Policy {policy_name} created")
+
         # Generate token (permanent, orphan, no default policy)
         cmd = (
             f"vault token create "
