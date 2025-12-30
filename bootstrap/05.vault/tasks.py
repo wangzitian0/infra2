@@ -252,9 +252,8 @@ def setup(c):
     success("Vault setup complete!")
 
 
-def _configure_dokploy_token(c, service: str, token: str):
+def _configure_dokploy_token(_c, service: str, token: str):
     """Auto-configure VAULT_APP_TOKEN in Dokploy"""
-    del c
     try:
         from libs.dokploy import get_dokploy
     except Exception as exc:
