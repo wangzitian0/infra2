@@ -137,7 +137,7 @@ def setup_tokens(c):
     """Generate read-only tokens for platform services"""
     import os
     import json
-    
+
     header("Vault Token Setup", "Generating service tokens")
     
     # Check VAULT_ROOT_TOKEN
@@ -219,9 +219,7 @@ def setup_tokens(c):
             else:
                 masked_token = token if len(token) <= 8 else f"{token[:4]}...{token[-4:]}"
                 console.print(f"   {masked_token}")
-
             _configure_dokploy_token(c, service, token)
-
             console.print()
         else:
             error(f"Failed to create token for {service}")

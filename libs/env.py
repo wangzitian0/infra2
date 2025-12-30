@@ -35,8 +35,9 @@ class OpSecrets:
     VAULT = "Infra2"
     INIT_ITEM = "init/env_vars"
     
-    def __init__(self, item: str = INIT_ITEM):
+    def __init__(self, item: str = INIT_ITEM, vault: str | None = None):
         self.item = item
+        self.vault = vault or self.VAULT
         self._cache: dict | None = None
     
     def _load(self) -> dict[str, str]:
@@ -46,7 +47,7 @@ class OpSecrets:
         
         try:
             result = subprocess.run(
-                ['op', 'item', 'get', self.item, f'--vault={self.VAULT}', '--format=json'],
+                ['op', 'item', 'get', self.item, f'--vault={self.vault}', '--format=json'],
                 capture_output=True, text=True, check=True
             )
             item = json.loads(result.stdout)
@@ -75,7 +76,7 @@ class OpSecrets:
         """Set a field value"""
         try:
             subprocess.run(
-                ['op', 'item', 'edit', self.item, f'--vault={self.VAULT}', f'{key}={value}'],
+                ['op', 'item', 'edit', self.item, f'--vault={self.vault}', f'{key}={value}'],
                 capture_output=True, check=True
             )
             self._cache = None  # Invalidate cache
