@@ -63,6 +63,8 @@ flowchart TB
 invoke dns_and_cert.setup
 ```
 
+`setup` 内置 60s 冷却等待，避免 DNS/证书传播导致误判。
+
 ### SOP-002: 仅更新 DNS 记录
 
 ```bash

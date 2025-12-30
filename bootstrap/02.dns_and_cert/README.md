@@ -22,6 +22,7 @@
 ```bash
 # 一键完成 DNS + SSL 设置 + HTTPS 预热
 invoke dns_and_cert.setup
+# 说明：setup 内置 60s 冷却等待，用于 DNS/证书传播
 
 # 仅创建/更新 DNS 记录
 invoke dns_and_cert.apply

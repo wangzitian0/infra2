@@ -19,6 +19,7 @@ DEFAULT_RECORDS = ("cloud", "op", "vault", "sso", "home")
 DEFAULT_TTL = 1
 CLOUDFLARE_ITEM = "bootstrap/cloudflare"
 RECORDS_KEY = "CF_RECORDS"
+DEFAULT_COOLDOWN_SECONDS = 60
 
 
 def _parse_bool(value: str | bool | None, default: bool) -> bool:
@@ -37,6 +38,12 @@ def _parse_bool(value: str | bool | None, default: bool) -> bool:
 def _split_records(records: str | None) -> list[str]:
     if not records:
         return list(DEFAULT_RECORDS)
+    return [r.strip() for r in records.split(",") if r.strip()]
+
+
+def _split_records_or_empty(records: str | None) -> list[str]:
+    if not records:
+        return []
     return [r.strip() for r in records.split(",") if r.strip()]
 
 
@@ -320,7 +327,7 @@ def apply(c, records="", proxied="true", ttl=str(DEFAULT_TTL)):
 def add(c, records=""):
     """Add DNS records to the 1Password list (CF_RECORDS)"""
     header("DNS add", "Update CF_RECORDS in 1Password")
-    new_records = _split_records(records)
+    new_records = _split_records_or_empty(records)
     if not new_records:
         error("No records provided", "Use --records=sub1,sub2")
         return
@@ -378,5 +385,8 @@ def setup(c, records="", proxied="true", ssl_mode="full", always_https="on"):
         return
     if not _ensure_ssl_settings(ssl_mode, always_https):
         return
+    if DEFAULT_COOLDOWN_SECONDS > 0:
+        warning(f"Cooldown {DEFAULT_COOLDOWN_SECONDS}s for DNS/SSL propagation")
+        time.sleep(DEFAULT_COOLDOWN_SECONDS)
     _warm_certs(record_list, retries=8, delay=6.0)
     success("DNS setup complete")
