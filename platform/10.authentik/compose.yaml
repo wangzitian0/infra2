@@ -1,49 +1,90 @@
 services:
-  server:
-    image: ${AUTHENTIK_IMAGE:-ghcr.io/goauthentik/server:2024.12}
-    container_name: authentik-server
-    restart: always
-    command: server
+  vault-init:
+    image: hashicorp/vault:1.15
+    container_name: platform-authentik-vault-init
+    command:
+      - sh
+      - -c
+      - |
+        # Fetch secrets from multiple Vault paths and merge
+        export VAULT_TOKEN=$$VAULT_APP_TOKEN
+        vault kv get -format=json secret/data/platform/production/postgres | \
+          jq -r '.data.data | to_entries[] | select(.key == "root_password") | "PG_PASS=\(.value)"' > /secrets/.env
+
+        vault kv get -format=json secret/data/platform/production/redis | \
+          jq -r '.data.data | to_entries[] | select(.key == "password") | "REDIS_PASSWORD=\(.value)"' >> /secrets/.env
+          
+        vault kv get -format=json secret/data/platform/production/authentik | \
+          jq -r '.data.data | to_entries[] | select(.key == "secret_key") | "AUTHENTIK_SECRET_KEY=\(.value)"' >> /secrets/.env
+          
+        chmod 400 /secrets/.env && echo "✅ Secrets ready"
     environment:
-      AUTHENTIK_REDIS__HOST: platform-redis
-      AUTHENTIK_REDIS__PASSWORD: ${REDIS_PASSWORD:?error}
-      AUTHENTIK_POSTGRESQL__HOST: platform-postgres
-      AUTHENTIK_POSTGRESQL__USER: ${PG_USER:-authentik}
-      AUTHENTIK_POSTGRESQL__NAME: ${PG_DB:-authentik}
-      AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS:?error}
-      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:?error}
+      VAULT_ADDR: ${VAULT_ADDR}
+      VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:?error}
     volumes:
-      - /data/platform/authentik/media:/media
-      - /data/platform/authentik/certs:/certs
+      - secrets:/secrets
     networks:
       - dokploy-network
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.authentik.rule=Host(`sso.${INTERNAL_DOMAIN}`)"
-      - "traefik.http.routers.authentik.entrypoints=websecure"
-      - "traefik.http.routers.authentik.tls.certresolver=letsencrypt"
-      - "traefik.http.services.authentik.loadbalancer.server.port=9000"
+    restart: "no"
+
+  server:
+    image: ghcr.io/goauthentik/server:2024.12.0
+    container_name: platform-authentik-server
+    restart: unless-stopped
+    command: server
+    depends_on:
+      vault-init:
+        condition: service_completed_successfully
+    env_file:
+      - /secrets/.env
+    environment:
+      AUTHENTIK_REDIS__HOST: platform-redis
+      AUTHENTIK_POSTGRESQL__HOST: platform-postgres
+      AUTHENTIK_POSTGRESQL__USER: postgres
+      AUTHENTIK_POSTGRESQL__NAME: authentik
+    volumes:
+      - secrets:/secrets:ro
+      - /data/platform/authentik/media:/media
+      - /data/platform/authentik/certs:/certs
+      - /data/platform/authentik/custom-templates:/templates
+    networks:
+      - dokploy-network
+    healthcheck:
+      test: [ "CMD", "ak", "healthcheck" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
   worker:
-    image: ${AUTHENTIK_IMAGE:-ghcr.io/goauthentik/server:2024.12}
-    container_name: authentik-worker
-    restart: always
+    image: ghcr.io/goauthentik/server:2024.12.0
+    container_name: platform-authentik-worker
+    restart: unless-stopped
     command: worker
+    depends_on:
+      vault-init:
+        condition: service_completed_successfully
+    env_file:
+      - /secrets/.env
     environment:
       AUTHENTIK_REDIS__HOST: platform-redis
-      AUTHENTIK_REDIS__PASSWORD: ${REDIS_PASSWORD:?error}
       AUTHENTIK_POSTGRESQL__HOST: platform-postgres
-      AUTHENTIK_POSTGRESQL__USER: ${PG_USER:-authentik}
-      AUTHENTIK_POSTGRESQL__NAME: ${PG_DB:-authentik}
-      AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS:?error}
-      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:?error}
-    user: root
+      AUTHENTIK_POSTGRESQL__USER: postgres
+      AUTHENTIK_POSTGRESQL__NAME: authentik
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - secrets:/secrets:ro
       - /data/platform/authentik/media:/media
       - /data/platform/authentik/certs:/certs
+      - /data/platform/authentik/custom-templates:/templates
     networks:
       - dokploy-network
+
+volumes:
+  secrets:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=10m,mode=0700"
 
 networks:
   dokploy-network:

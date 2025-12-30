@@ -1,21 +1,46 @@
 services:
+  vault-init:
+    image: hashicorp/vault:1.15
+    container_name: platform-redis-vault-init
+    command: sh -c 'export VAULT_TOKEN=$$VAULT_APP_TOKEN && vault kv get -format=json secret/data/platform/production/redis | jq -r ".data.data | to_entries[] | \"\\(.key | ascii_upcase)=\\(.value)\"" > /secrets/.env && chmod 400 /secrets/.env && echo "✅ Secrets ready"'
+    environment:
+      VAULT_ADDR: ${VAULT_ADDR}
+      VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:?error}
+    volumes:
+      - secrets:/secrets
+    networks:
+      - dokploy-network
+    restart: "no"
+
   redis:
     image: redis:alpine
     container_name: platform-redis
     restart: always
-    command: redis-server --save 60 1 --loglevel warning --requirepass ${REDIS_PASSWORD:?error}
+    depends_on:
+      vault-init:
+        condition: service_completed_successfully
+    command: sh -c 'source /secrets/.env && redis-server --save 60 1 --loglevel warning --requirepass $$REDIS_PASSWORD'
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
-      start_period: 20s
+      test: [ "CMD", "redis-cli", "ping" ]
+      start_period: 30s
       interval: 30s
       retries: 5
       timeout: 3s
     volumes:
+      - secrets:/secrets:ro
       - /data/platform/redis:/data
     networks:
       - dokploy-network
     labels:
       - "traefik.enable=false"
+
+volumes:
+  secrets:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=10m,mode=0700"
 
 networks:
   dokploy-network:
