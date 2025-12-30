@@ -5,7 +5,8 @@
 ## At a Glance
 
 - `get_secrets` selects `OpSecrets` (1Password) or `VaultSecrets` (Vault) for SSOT reads/writes.
-- `Deployer` + `make_tasks` standardize service deploy flows.
+- `Deployer` + `make_tasks` standardize service deploy flows (now via Dokploy API).
+- `dokploy` wraps the Dokploy REST API for compose deployments.
 - `console` helpers keep CLI output consistent (Rich).
 - `Config` is a legacy wrapper around secrets (avoid for new code).
 
@@ -17,6 +18,7 @@
 | `common.py` | Shared environment helpers | `get_env()`, `validate_env()`, `check_service()` |
 | `console.py` | Rich CLI output | `header()`, `success()`, `error()`, `prompt_action()` |
 | `deployer.py` | Deployment base class + task helpers | `Deployer`, `make_tasks()` |
+| `dokploy.py` | Dokploy API client | `DokployClient`, `deploy_compose_service()` |
 | `config.py` | Legacy compatibility wrapper | `Config` |
 
 ## Usage Patterns
