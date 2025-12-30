@@ -446,6 +446,9 @@ def setup(c, records="", proxied="true", ssl_mode="full", always_https="on", coo
         return
     if not _ensure_ssl_settings(ssl_mode, always_https):
         return
+    normalized = _normalize_record_list(record_list)
+    if not normalized:
+        return
     try:
         cooldown_seconds = int(cooldown)
     except ValueError:
@@ -453,5 +456,5 @@ def setup(c, records="", proxied="true", ssl_mode="full", always_https="on", coo
     if cooldown_seconds > 0:
         warning(f"Cooldown {cooldown_seconds}s for DNS/SSL propagation")
         time.sleep(cooldown_seconds)
-    _warm_certs(record_list, retries=8, delay=6.0)
+    _warm_certs(normalized, retries=8, delay=6.0)
     success("DNS setup complete")
