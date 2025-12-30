@@ -22,6 +22,7 @@ invoke vault.setup-tokens
 ```
 
 > CLI 输出统一使用 `libs.console`，避免直接 `print`。
+> `vault.setup-tokens` 默认只输出掩码 token；如需完整 token 用于录入 1Password，先设置 `VAULT_SHOW_TOKENS=1`。
 
 ### 1. 准备配置
 

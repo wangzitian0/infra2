@@ -92,8 +92,15 @@ class Deployer:
     @classmethod
     def get_compose_content(cls, c: "Context") -> str:
         """Get compose file content. Default: read from compose_path."""
-        with open(cls.compose_path, "r") as f:
-            return f.read()
+        try:
+            with open(cls.compose_path, "r") as f:
+                return f.read()
+        except FileNotFoundError:
+            error(f"Compose file not found at path: {cls.compose_path}")
+            raise
+        except OSError as exc:
+            error(f"Failed to read compose file at '{cls.compose_path}': {exc}")
+            raise
 
     @classmethod
     def composing(cls, c: "Context", env_vars: dict[str, str]) -> str:
@@ -148,7 +155,8 @@ def make_tasks(deployer_cls: type[Deployer], shared_tasks: Any) -> dict:
             warning("Running composing manually - fetching secrets first")
             env_vars = deployer_cls.pre_compose(c)
         if env_vars:
-            deployer_cls.composing(c, env_vars)
+            return deployer_cls.composing(c, env_vars)
+        return None
     
     @task
     def post_compose(c):
