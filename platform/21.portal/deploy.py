@@ -36,7 +36,10 @@ class PortalDeployer(Deployer):
 
         config_content = template_path.read_text().replace("{{INTERNAL_DOMAIN}}", internal_domain)
         config_path = f"{cls.data_path}/config.yml"
-        host = e["VPS_HOST"]
+        host = e.get("VPS_HOST")
+        if not host:
+            error("Missing VPS_HOST")
+            return None
 
         tmp_path = None
         try:

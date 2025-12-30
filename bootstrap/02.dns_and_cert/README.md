@@ -22,7 +22,7 @@
 ```bash
 # 一键完成 DNS + SSL 设置 + HTTPS 预热
 invoke dns_and_cert.setup
-# 说明：setup 内置 60s 冷却等待，用于 DNS/证书传播
+# 说明：默认内置 60 秒冷却等待，用于 DNS/证书传播
 
 # 仅创建/更新 DNS 记录
 invoke dns_and_cert.apply
@@ -51,6 +51,9 @@ invoke dns_and_cert.add --records=cloud,op,vault,sso,home,newapp
 
 # 关闭 Cloudflare 代理（灰云）
 invoke dns_and_cert.apply --proxied=false
+
+# 跳过冷却等待
+invoke dns_and_cert.setup --cooldown=0
 ```
 
 ## 域名说明

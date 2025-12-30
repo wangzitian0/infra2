@@ -13,7 +13,6 @@
 ## Scope
 - [ ] Add Homer portal service under `platform/21.portal`.
 - [ ] Render config template and document the update flow.
-- [ ] Add SSOT for `platform.portal` and update indexes/README.
 - [ ] Automate Cloudflare DNS records for `cloud/op/vault/sso/home`.
 - [ ] Automate Cloudflare SSL settings and HTTPS warm-up.
 - [ ] Add SSOT for DNS/cert automation and update Bootstrap docs.
@@ -21,7 +20,7 @@
 ## Deliverables
 - Docker Compose + deploy tasks for portal
 - Homer config template and generated config path
-- SSOT + Platform README updates
+- Platform README updates
 - Cloudflare DNS automation tasks + .env.example
 - DNS/TLS SSOT + Bootstrap README updates
 
@@ -39,8 +38,13 @@
 - [ ] `PORTAL_URL` set for E2E (optional)
 - [ ] `invoke dns_and_cert.verify`
 
+## Open Issues
+- [ ] Deploy the portal app in Dokploy and confirm `https://home.${INTERNAL_DOMAIN}`.
+- [ ] Confirm `bootstrap/cloudflare` item fields are complete (`CF_API_TOKEN`, `CF_ZONE_ID`/`CF_ZONE_NAME`, optional `CF_RECORDS`).
+- [ ] Dokploy Server Domain SSL is still manual; evaluate API/CLI automation.
+
 ## References
-- [SSOT: platform.portal](../ssot/platform.portal.md)
 - [SSOT: bootstrap.dns_and_cert](../ssot/bootstrap.dns_and_cert.md)
+- [Portal README](../../platform/21.portal/README.md)
 - [Platform portal compose](../../platform/21.portal/compose.yaml)
 - [Reference: 21.portal.tf](https://github.com/wangzitian0/infra/blob/main/platform/21.portal.tf)

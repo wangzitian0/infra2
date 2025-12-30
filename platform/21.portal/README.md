@@ -13,6 +13,12 @@ Static homepage for platform services, powered by Homer.
 | `shared_tasks.py` | Status checks |
 | `config.yml.tmpl` | Homer config template (rendered before deploy) |
 
+## Source of Truth
+
+- `platform/21.portal/compose.yaml` - service definition
+- `platform/21.portal/config.yml.tmpl` - Homer links and layout
+- `/data/platform/portal/config.yml` - rendered config on VPS
+
 ## Deployment
 
 ```bash
@@ -20,12 +26,12 @@ Static homepage for platform services, powered by Homer.
 invoke portal.setup
 
 # Or step-by-step
-invoke portal.pre-compose
+invoke portal.pre_compose
 invoke portal.composing
-invoke portal.post-compose
+invoke portal.post_compose
 ```
 
-`pre-compose` will:
+`pre_compose` will:
 - create `/data/platform/portal`
 - render `config.yml.tmpl` with `INTERNAL_DOMAIN`
 - upload `/data/platform/portal/config.yml`
@@ -44,4 +50,4 @@ None required (uses `INTERNAL_DOMAIN` from init/env_vars).
 
 ## Updating Links
 
-Edit `config.yml.tmpl` and re-run `invoke portal.pre-compose` to regenerate the config.
+Edit `config.yml.tmpl` and re-run `invoke portal.pre_compose` to regenerate the config.

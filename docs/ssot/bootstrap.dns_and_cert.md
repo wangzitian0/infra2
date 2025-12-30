@@ -63,7 +63,7 @@ flowchart TB
 invoke dns_and_cert.setup
 ```
 
-`setup` 内置 60s 冷却等待，避免 DNS/证书传播导致误判。
+`setup` 默认内置 60s 冷却等待，避免 DNS/证书传播导致误判，可用 `--cooldown=0` 跳过。
 
 ### SOP-002: 仅更新 DNS 记录
 

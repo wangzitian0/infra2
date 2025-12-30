@@ -261,6 +261,7 @@ def _warm_certs(records: list[str], retries: int, delay: float) -> bool:
                 try:
                     httpx.get(url, timeout=10.0, verify=False)
                 except Exception:
+                    # Best-effort warm-up without cert verification; ignore failures here.
                     pass
                 time.sleep(delay)
             except Exception as exc:
@@ -376,7 +377,7 @@ def verify(c, records=""):
 
 
 @task
-def setup(c, records="", proxied="true", ssl_mode="full", always_https="on"):
+def setup(c, records="", proxied="true", ssl_mode="full", always_https="on", cooldown=str(DEFAULT_COOLDOWN_SECONDS)):
     """Full setup: DNS records + SSL settings + HTTPS warm-up"""
     header("DNS setup", "Cloudflare DNS + SSL automation")
     record_list = _load_record_list(records)
@@ -385,8 +386,12 @@ def setup(c, records="", proxied="true", ssl_mode="full", always_https="on"):
         return
     if not _ensure_ssl_settings(ssl_mode, always_https):
         return
-    if DEFAULT_COOLDOWN_SECONDS > 0:
-        warning(f"Cooldown {DEFAULT_COOLDOWN_SECONDS}s for DNS/SSL propagation")
-        time.sleep(DEFAULT_COOLDOWN_SECONDS)
+    try:
+        cooldown_seconds = int(cooldown)
+    except ValueError:
+        cooldown_seconds = DEFAULT_COOLDOWN_SECONDS
+    if cooldown_seconds > 0:
+        warning(f"Cooldown {cooldown_seconds}s for DNS/SSL propagation")
+        time.sleep(cooldown_seconds)
     _warm_certs(record_list, retries=8, delay=6.0)
     success("DNS setup complete")
