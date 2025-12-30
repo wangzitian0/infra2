@@ -5,8 +5,10 @@ services:
     restart: always
     user: "1000:1000"
     environment:
+      # Disable Homer asset initialization to avoid overwriting mounted config.yml.
       INIT_ASSETS: "0"
     volumes:
+      # Read-only config; Homer does not need write access for config.yml.
       - /data/platform/portal/config.yml:/www/assets/config.yml:ro
     networks:
       - dokploy-network

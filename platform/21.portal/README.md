@@ -44,9 +44,11 @@ invoke portal.post_compose
 
 `/data/platform/portal/config.yml` - Rendered Homer configuration
 
+`config.yml` is mounted read-only to avoid accidental overwrites. If you need custom assets (logos/css), mount a writable `/data/platform/portal/assets` to `/www/assets`.
+
 ## Environment Variables
 
-None required (uses `INTERNAL_DOMAIN` from init/env_vars).
+None required (uses `INTERNAL_DOMAIN` from init/env_vars). `INIT_ASSETS=0` is set to prevent Homer from overwriting the custom config.
 
 ## Updating Links
 

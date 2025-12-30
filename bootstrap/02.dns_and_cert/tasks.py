@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import socket
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Iterable
 
 import httpx
@@ -28,10 +29,12 @@ def _parse_bool(value: str | bool | None, default: bool) -> bool:
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
-        if value.lower() in ("1", "true", "yes", "on"):
+        lowered = value.lower()
+        if lowered in ("1", "true", "yes", "on"):
             return True
-        if value.lower() in ("0", "false", "no", "off"):
+        if lowered in ("0", "false", "no", "off"):
             return False
+        warning(f"Invalid boolean value {value!r}; using default={default}")
     return default
 
 
@@ -53,6 +56,27 @@ def _normalize_record(name: str, internal_domain: str) -> str:
     if name == internal_domain or name.endswith(f".{internal_domain}"):
         return name
     return f"{name}.{internal_domain}"
+
+
+def _normalize_record_list(records: list[str], internal_domain: str | None = None) -> list[str] | None:
+    if not internal_domain:
+        env = get_env()
+        internal_domain = env.get("INTERNAL_DOMAIN")
+    if not internal_domain:
+        error("Missing INTERNAL_DOMAIN", "Set in init/env_vars")
+        return None
+
+    normalized: list[str] = []
+    for name in records:
+        if not name or any(ch.isspace() for ch in name):
+            warning(f"Skipping invalid record name: {name!r}")
+            continue
+        normalized.append(_normalize_record(name, internal_domain))
+
+    if not normalized:
+        error("No valid records to process")
+        return None
+    return normalized
 
 
 def _load_cloudflare_secrets() -> dict[str, str]:
@@ -127,7 +151,12 @@ def _resolve_zone_id(client: httpx.Client, zone_id: str | None, zone_name: str |
     if not result:
         error("Cloudflare zone lookup failed", zone_name)
         return None
-    return result[0].get("id")
+    if isinstance(result, list):
+        if not result:
+            error("Cloudflare zone lookup empty result", zone_name)
+            return None
+        return result[0].get("id")
+    return result.get("id")
 
 
 def _ensure_record(client: httpx.Client, zone_id: str, name: str, ip: str, proxied: bool, ttl: int) -> bool:
@@ -195,8 +224,11 @@ def _ensure_dns_records(records: list[str], proxied: bool, ttl: int) -> bool:
         error("Missing CF_API_TOKEN", "Set in 1Password item bootstrap/cloudflare")
         return False
 
-    normalized = [_normalize_record(name, internal_domain) for name in records]
+    normalized = _normalize_record_list(records, internal_domain)
+    if not normalized:
+        return False
     if not proxied and ttl <= 1:
+        warning("TTL too low for non-proxied records; using 300s")
         ttl = 300
     env_vars(
         "DNS TARGETS",
@@ -259,15 +291,16 @@ def _warm_certs(records: list[str], retries: int, delay: float) -> bool:
             except httpx.SSLError as exc:
                 warning(f"TLS not ready: {url} (attempt {attempt}/{retries})")
                 try:
+                    info(f"Retrying {url} without TLS verification to warm up certificate")
                     httpx.get(url, timeout=10.0, verify=False)
                 except Exception:
-                    # Best-effort warm-up without cert verification; ignore failures here.
-                    pass
+                    warning(f"Unverified warm-up failed for {url}")
                 time.sleep(delay)
             except Exception as exc:
                 warning(f"HTTPS error: {url} ({exc})")
                 time.sleep(delay)
         else:
+            # for-else: executes when all attempts failed without a break.
             error("TLS warm-up failed", url)
             ok = False
 
@@ -276,11 +309,19 @@ def _warm_certs(records: list[str], retries: int, delay: float) -> bool:
 
 def _verify_dns(records: list[str]) -> bool:
     failures = []
-    for record in records:
+    max_workers = min(10, len(records)) or 1
+
+    def _resolve(record: str) -> str | None:
         try:
             socket.gethostbyname(record)
+            return None
         except socket.gaierror as exc:
-            failures.append(f"{record}: {exc}")
+            return f"{record}: {exc}"
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for result in executor.map(_resolve, records):
+            if result:
+                failures.append(result)
     if failures:
         error("DNS resolution failed", "; ".join(failures))
         return False
@@ -290,13 +331,22 @@ def _verify_dns(records: list[str]) -> bool:
 
 def _verify_https(records: list[str]) -> bool:
     failures = []
-    for url in _record_urls(records):
+    urls = _record_urls(records)
+    max_workers = min(10, len(urls)) or 1
+
+    def _check(url: str) -> str | None:
         try:
             resp = httpx.get(url, timeout=10.0)
             if resp.status_code >= 500:
-                failures.append(f"{url}: {resp.status_code}")
+                return f"{url}: {resp.status_code}"
+            return None
         except Exception as exc:
-            failures.append(f"{url}: {exc}")
+            return f"{url}: {exc}"
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for result in executor.map(_check, urls):
+            if result:
+                failures.append(result)
     if failures:
         error("HTTPS verification failed", "; ".join(failures))
         return False
@@ -353,16 +403,19 @@ def ssl(c, mode="full", always_https="on"):
 
 @task
 def warm(c, records="", retries="8", delay="6"):
-    """Warm HTTPS endpoints to trigger certificate issuance"""
+    """Warm HTTPS endpoints to trigger certificate issuance (retries = max attempts)"""
     header("DNS warm", "HTTPS warm-up")
     record_list = _load_record_list(records)
+    normalized = _normalize_record_list(record_list)
+    if not normalized:
+        return
     try:
         retries_int = int(retries)
         delay_float = float(delay)
     except ValueError:
         retries_int = 8
         delay_float = 6.0
-    if _warm_certs(record_list, retries_int, delay_float):
+    if _warm_certs(normalized, retries_int, delay_float):
         success("HTTPS warm-up complete")
 
 
@@ -371,9 +424,12 @@ def verify(c, records=""):
     """Verify DNS resolution and HTTPS connectivity"""
     header("DNS verify", "DNS + HTTPS checks")
     record_list = _load_record_list(records)
-    if not _verify_dns(record_list):
-        return
-    _verify_https(record_list)
+    normalized = _normalize_record_list(record_list)
+    if not normalized:
+        return False
+    if not _verify_dns(normalized):
+        return False
+    return _verify_https(normalized)
 
 
 @task

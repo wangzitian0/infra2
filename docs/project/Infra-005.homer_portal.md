@@ -11,11 +11,11 @@
 统一入口页 + 自动化 DNS/证书，保证 0 帧起手可复现。
 
 ## Scope
-- [ ] Add Homer portal service under `platform/21.portal`.
-- [ ] Render config template and document the update flow.
-- [ ] Automate Cloudflare DNS records for `cloud/op/vault/sso/home`.
-- [ ] Automate Cloudflare SSL settings and HTTPS warm-up.
-- [ ] Add SSOT for DNS/cert automation and update Bootstrap docs.
+- [x] Add Homer portal service under `platform/21.portal`.
+- [x] Render config template and document the update flow.
+- [x] Automate Cloudflare DNS records for `cloud/op/vault/sso/home`.
+- [x] Automate Cloudflare SSL settings and HTTPS warm-up.
+- [x] Add SSOT for DNS/cert automation and update Bootstrap docs.
 
 ## Deliverables
 - Docker Compose + deploy tasks for portal
