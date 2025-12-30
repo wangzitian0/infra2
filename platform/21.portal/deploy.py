@@ -65,9 +65,16 @@ class PortalDeployer(Deployer):
                 return None
 
             portal_url = f"https://home.{internal_domain}"
-            env_vars("PORTAL INFO", {"PORTAL_URL": portal_url, "CONFIG_PATH": config_path})
+            env_vars("PORTAL INFO", {
+                "PORTAL_URL": portal_url,
+                "CONFIG_PATH": config_path,
+                "INTERNAL_DOMAIN": internal_domain,
+            })
             success("pre_compose complete")
-            return {"PORTAL_URL": portal_url}
+            return {
+                "PORTAL_URL": portal_url,
+                "INTERNAL_DOMAIN": internal_domain,
+            }
         except OSError as exc:
             error("Failed to create temp config", str(exc))
             return None
