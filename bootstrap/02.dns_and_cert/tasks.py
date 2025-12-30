@@ -295,10 +295,12 @@ def _warm_certs(records: list[str], retries: int, delay: float) -> bool:
                     httpx.get(url, timeout=10.0, verify=False)
                 except Exception:
                     warning(f"Unverified warm-up failed for {url}")
-                time.sleep(delay)
+                if attempt < retries:
+                    time.sleep(delay)
             except Exception as exc:
                 warning(f"HTTPS error: {url} ({exc})")
-                time.sleep(delay)
+                if attempt < retries:
+                    time.sleep(delay)
         else:
             # for-else: executes when all attempts failed without a break.
             error("TLS warm-up failed", url)

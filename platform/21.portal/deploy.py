@@ -44,13 +44,9 @@ class PortalDeployer(Deployer):
 
         tmp_path = None
         try:
-            try:
-                with NamedTemporaryFile("w", delete=False) as tmp:
-                    tmp.write(config_content)
-                    tmp_path = tmp.name
-            except OSError as exc:
-                error("Failed to create temp config", str(exc))
-                return None
+            with NamedTemporaryFile("w", delete=False) as tmp:
+                tmp.write(config_content)
+                tmp_path = tmp.name
 
             result = run_with_status(
                 c,
@@ -72,6 +68,9 @@ class PortalDeployer(Deployer):
             env_vars("PORTAL INFO", {"PORTAL_URL": portal_url, "CONFIG_PATH": config_path})
             success("pre_compose complete")
             return {"PORTAL_URL": portal_url}
+        except OSError as exc:
+            error("Failed to create temp config", str(exc))
+            return None
         finally:
             if tmp_path and os.path.exists(tmp_path):
                 os.unlink(tmp_path)

@@ -31,8 +31,8 @@ invoke dns_and_cert.apply
 invoke dns_and_cert.ssl
 
 # 触发证书申请（HTTPS 预热）
-invoke dns_and_cert.warm
-# 参数 retries 表示最大尝试次数
+invoke dns_and_cert.warm --retries=8
+# 参数 --retries 表示最大尝试次数（默认 8 次）
 
 # 验证 DNS/HTTPS
 invoke dns_and_cert.verify
