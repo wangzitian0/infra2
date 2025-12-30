@@ -74,6 +74,13 @@ invoke local.bootstrap  # 校验 1Password 的 init/env_vars（不生成本地 .
 | 3 | Connect 可用 | `vault.setup` | Vault 服务 |
 | 4+ | Vault 可用 | platform 服务 | 生产服务 |
 
+### 3.3 Vault Token 约定
+
+| 变量名 | 权限 | 用途 | 存储位置 |
+|--------|------|------|----------|
+| `VAULT_ROOT_TOKEN` | Read + Write | `invoke vault.setup-tokens` 生成/管理策略与 token | 1Password `bootstrap/vault/Root Token` |
+| `VAULT_APP_TOKEN` | Read-Only (per-service) | 运行时读取密钥 | Dokploy 服务环境变量 |
+
 ---
 
 ## 4. 三层结构 (对应 Dokploy)

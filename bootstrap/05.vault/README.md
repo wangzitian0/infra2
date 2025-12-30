@@ -18,6 +18,7 @@ invoke vault.deploy
 invoke vault.init
 invoke vault.unseal
 invoke vault.status
+invoke vault.setup-tokens
 ```
 
 > CLI 输出统一使用 `libs.console`，避免直接 `print`。
