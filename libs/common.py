@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 CONTAINERS = {
     "postgres": "platform-postgres",
     "redis": "platform-redis",
-    "authentik": "authentik-server",
+    # authentik maps to platform-authentik via fallback
 }
 
 # Cache for env config (simple dict, no lru_cache to avoid OpSecrets caching issues)

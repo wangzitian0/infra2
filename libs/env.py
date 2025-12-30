@@ -3,7 +3,7 @@ Simplified environment and secret management
 
 Two backends:
 - OpSecrets: 1Password for bootstrap (uses OP_SERVICE_ACCOUNT_TOKEN)
-- VaultSecrets: HashiCorp Vault for platform (uses VAULT_TOKEN)
+- VaultSecrets: HashiCorp Vault for platform (uses VAULT_ROOT_TOKEN)
 """
 from __future__ import annotations
 import os
@@ -97,11 +97,11 @@ class VaultSecrets:
         """
         Args:
             path: Secret path (e.g., "platform/production/postgres")
-            token: Vault token (default: from VAULT_TOKEN env)
+            token: Vault token (default: from VAULT_ROOT_TOKEN env)
             addr: Vault address (default: from VAULT_ADDR or INTERNAL_DOMAIN)
         """
         self.path = path
-        self.token = token or os.getenv("VAULT_TOKEN")
+        self.token = token or os.getenv("VAULT_ROOT_TOKEN")
         self.addr = addr or self._get_addr()
         self.verify_ssl = os.getenv("VAULT_SKIP_VERIFY", "").lower() not in ("1", "true", "yes")
         self._cache: dict | None = None
@@ -121,6 +121,9 @@ class VaultSecrets:
             return self._cache
         
         if not self.token:
+            print("\n❌ Error: VAULT_ROOT_TOKEN not set", file=sys.stderr)
+            print("Please set: export VAULT_ROOT_TOKEN=<admin-token>", file=sys.stderr)
+            print("Get from: op read 'op://Infra2/bootstrap-vault/Root Token'", file=sys.stderr)
             self._cache = {}
             return self._cache
         

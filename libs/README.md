@@ -66,6 +66,7 @@ db_pass = config.get_secret("POSTGRES_PASSWORD")
 - `libs.common.get_env()` reads from `init/env_vars` in 1Password; no local `.env` required.
 - `DokployClient.update_compose_env()` parses basic `KEY=VALUE` lines only (no quoted/escaped/multiline values).
 - Dokploy API errors include method + endpoint context via `httpx` exceptions.
+- `VaultSecrets` reads `VAULT_ROOT_TOKEN` and `VAULT_ADDR` (or falls back to `https://vault.$INTERNAL_DOMAIN`).
 
 ## References
 

@@ -29,7 +29,7 @@ Bootstrap 依赖 1Password CLI (`op`)，使用 **`Infra2`** vault 存储所有�
 | `bootstrap/1password/VPS-01 Credentials File` | Connect 凭证文件 | 从 1Password.com 下载 |
 | `bootstrap/1password/VPS-01 Access Token: own_service` | Connect API Token | 创建时自动生成 |
 | `bootstrap/cloudflare` | Cloudflare DNS Token/Zone | 初始化时手动创建 |
-| `bootstrap/vault/Unseal Keys` | Vault unseal keys + root token | Vault 初始化时写入 |
+| `bootstrap-vault` | Vault unseal keys + root token | Vault 初始化时写入 |
 
 `bootstrap/cloudflare` 推荐字段：
 
@@ -78,18 +78,34 @@ invoke local.bootstrap  # 校验 1Password 的 init/env_vars（不生成本地 .
 
 | 变量名 | 权限 | 用途 | 存储位置 |
 |--------|------|------|----------|
-| `VAULT_ROOT_TOKEN` | Read + Write | `invoke vault.setup-tokens` 生成/管理策略与 token | 1Password `bootstrap/vault/Root Token` |
+| `VAULT_ROOT_TOKEN` | Read + Write | `invoke vault.setup-tokens` 生成/管理策略与 token | 1Password `op://Infra2/bootstrap-vault/Root Token` |
 | `VAULT_APP_TOKEN` | Read-Only (per-service) | 运行时读取密钥 | Dokploy 服务环境变量 |
+
+### 3.4 App 接入 Vault（vault-init）
+
+**核心原则**：应用容器不直接持久化密钥，运行时由 `vault-init` 读取 Vault 并写入 `tmpfs`。
+
+步骤：
+1. **准备 Vault 密钥**：写入 `secret/data/platform/production/<service>`（KV v2）。
+2. **生成 Token**：`invoke vault.setup-tokens`（需 `VAULT_ROOT_TOKEN`）。
+3. **注入运行时变量**：Dokploy 服务环境变量里设置 `VAULT_APP_TOKEN`（可由 setup-tokens 自动注入）。
+4. **Compose 接入**：增加 `vault-init` 容器，读取 Vault 并写入 `/secrets/.env`。
+5. **应用读取**：主容器通过 `env_file: /secrets/.env` 或 `source /secrets/.env` 获取。
+
+约束：
+- `VAULT_ADDR` 仅是地址，可放在项目级 env（非敏感）。
+- `VAULT_APP_TOKEN` 必须是 per-service 的只读 token。
+- `/secrets` 需要挂载 `tmpfs`，避免磁盘落地。
 
 ---
 
 ## 4. 三层结构 (对应 Dokploy)
 
-| Dokploy 层级 | 路径格式 | Vault 路径 (platform) |
+| Dokploy 层级 | 路径格式 | Vault 路径 (platform, KV v2) |
 |--------------|----------|----------------------|
-| **Project** | `{project}` | `secret/{project}/` |
-| **Environment** | `{project}/{env}` | `secret/{project}/{env}/` |
-| **Service** | `{project}/{env}/{service}` | `secret/{project}/{env}/{service}/` |
+| **Project** | `{project}` | `secret/data/{project}/` |
+| **Environment** | `{project}/{env}` | `secret/data/{project}/{env}/` |
+| **Service** | `{project}/{env}/{service}` | `secret/data/{project}/{env}/{service}/` |
 
 ### 本地文件（仅模板）
 
@@ -129,7 +145,7 @@ from libs.env import OpSecrets, get_secrets, generate_password
 init = OpSecrets()
 seed = init.get_all()
 
-# Vault secrets (platform service)
+# Vault secrets (platform service, admin only)
 secrets = get_secrets(project='platform', env='production', service='postgres')
 password = secrets.get('POSTGRES_PASSWORD')
 
