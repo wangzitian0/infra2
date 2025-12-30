@@ -33,13 +33,13 @@
 | 2025-12-30 | Initialized project |
 
 ## Verification
-- [ ] `invoke portal.shared.status`
-- [ ] `https://home.${INTERNAL_DOMAIN}` loads portal
+- [x] `invoke portal.shared.status`
+- [x] `https://home.${INTERNAL_DOMAIN}` loads portal
 - [ ] `PORTAL_URL` set for E2E (optional)
-- [ ] `invoke dns_and_cert.verify`
+- [x] `invoke dns_and_cert.verify`
 
 ## Open Issues
-- [ ] Deploy the portal app in Dokploy and confirm `https://home.${INTERNAL_DOMAIN}`.
+- [x] Deploy the portal app in Dokploy and confirm `https://home.${INTERNAL_DOMAIN}`.
 - [ ] Confirm `bootstrap/cloudflare` item fields are complete (`CF_API_TOKEN`, `CF_ZONE_ID`/`CF_ZONE_NAME`, optional `CF_RECORDS`).
 - [ ] Dokploy Server Domain SSL is still manual; evaluate API/CLI automation.
 
