@@ -41,6 +41,8 @@ services:
         set -a
         . /secrets/.env
         set +a
+        export AUTHENTIK_POSTGRESQL__PASSWORD=$$PG_PASS
+        export AUTHENTIK_REDIS__PASSWORD=$$REDIS_PASSWORD
         exec ak server
     environment:
       AUTHENTIK_REDIS__HOST: platform-redis
@@ -74,6 +76,8 @@ services:
         set -a
         . /secrets/.env
         set +a
+        export AUTHENTIK_POSTGRESQL__PASSWORD=$$PG_PASS
+        export AUTHENTIK_REDIS__PASSWORD=$$REDIS_PASSWORD
         exec ak worker
     environment:
       AUTHENTIK_REDIS__HOST: platform-redis
@@ -90,11 +94,7 @@ services:
 
 volumes:
   secrets:
-    driver: local
-    driver_opts:
-      type: tmpfs
-      device: tmpfs
-      o: "size=10m,mode=0755"
+
 
 networks:
   dokploy-network:

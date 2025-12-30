@@ -36,11 +36,6 @@ services:
 
 volumes:
   secrets:
-    driver: local
-    driver_opts:
-      type: tmpfs
-      device: tmpfs
-      o: "size=10m,mode=0755"
 
 networks:
   dokploy-network:
