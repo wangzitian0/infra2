@@ -220,15 +220,10 @@ def setup_tokens(c):
         if result.ok:
             token_data = json.loads(result.stdout)
             token = token_data["auth"]["client_token"]
-            label = f"Token for {service} (masked):" if not show_tokens else f"Token for {service}:"
-            success(label)
-            if show_tokens:
-                console.print(f"   {token}")
-            else:
-                masked_token = token if len(token) <= 8 else f"{token[:4]}...{token[-4:]}"
-                console.print(f"   {masked_token}")
+            success(f"✅ Token for {service}:")
+            print(f"   {token}")
             _configure_dokploy_token(c, service, token)
-            console.print()
+            print()
         else:
             error(f"Failed to create token for {service}")
 
