@@ -5,7 +5,7 @@ Uses libs/ system for consistent environment and console utilities.
 from invoke import task
 from libs.deployer import Deployer
 from libs.common import get_env
-from libs.console import header, success, error, warning, prompt_action, run_with_status
+from libs.console import header, success, error, warning, info, prompt_action, run_with_status
 from typing import Any
 
 
@@ -136,6 +136,92 @@ def status(c):
 
 
 @task
+def setup_tokens(c):
+    """Generate read-only tokens for platform services"""
+    import os
+    import json
+
+    header("Vault Token Setup", "Generating service tokens")
+
+    # Check VAULT_ROOT_TOKEN
+    root_token = os.getenv("VAULT_ROOT_TOKEN")
+    if not root_token:
+        error("VAULT_ROOT_TOKEN not set")
+        print("\nGet from: op read 'op://Infra2/bootstrap-vault/Root Token'")
+        print("Then run: export VAULT_ROOT_TOKEN=<token>")
+        return
+
+    e = get_env()
+    vault_addr = e.get("VAULT_ADDR", f"https://vault.{e['INTERNAL_DOMAIN']}")
+
+    # Service definitions: service_name -> list of paths
+    services = {
+        "postgres": ["secret/data/platform/production/postgres"],
+        "redis": ["secret/data/platform/production/redis"],
+        "authentik": [
+            "secret/data/platform/production/postgres",
+            "secret/data/platform/production/redis",
+            "secret/data/platform/production/authentik",
+        ],
+    }
+
+    success(f"Using Vault: {vault_addr}")
+    print("")
+
+    for service, paths in services.items():
+        policy_name = f"platform-{service}-reader"
+
+        # Create policy HCL
+        policy_rules = "\n".join([
+            f'path "{path}" {{\n  capabilities = ["read"]\n}}'
+            for path in paths
+        ])
+
+        # Write policy via vault CLI
+        warning(f"Creating policy: {policy_name}")
+        result = c.run(
+            f'echo "{policy_rules}" | vault policy write {policy_name} -',
+            env={"VAULT_ADDR": vault_addr, "VAULT_TOKEN": root_token},
+            hide=True,
+            warn=True,
+        )
+
+        # Generate token (permanent, orphan, no default policy)
+        cmd = (
+            f"vault token create "
+            f"-orphan "
+            f"-policy={policy_name} "
+            f"-no-default-policy "
+            f"-display-name=platform-{service} "
+            f"-format=json"
+        )
+        result = c.run(
+            cmd,
+            env={"VAULT_ADDR": vault_addr, "VAULT_TOKEN": root_token},
+            hide=True,
+        )
+
+        if result.ok:
+            token_data = json.loads(result.stdout)
+            token = token_data["auth"]["client_token"]
+
+            success(f"Token for {service}:")
+            print(f"   {token}")
+
+            _configure_dokploy_token(service, token)
+
+            print("")
+        else:
+            error(f"Failed to create token for {service}")
+
+    success("\nAll tokens generated!")
+    print("\nNext steps:")
+    print("1. Store tokens in 1Password (optional but recommended)")
+    print("2. Set VAULT_APP_TOKEN in Dokploy for each service")
+    print("3. Run: invoke <service>.setup")
+
+
+@task
 def setup(c):
     """Complete Vault setup flow"""
     # Check if already running
@@ -147,3 +233,33 @@ def setup(c):
     init(c)
     unseal(c)
     success("Vault setup complete!")
+
+
+def _configure_dokploy_token(service: str, token: str):
+    """Auto-configure VAULT_APP_TOKEN in Dokploy"""
+    try:
+        from libs.dokploy import get_dokploy
+    except Exception as exc:
+        warning(f"   Dokploy client unavailable: {exc}")
+        info("   Manual setup: Add VAULT_APP_TOKEN in Dokploy UI")
+        return
+
+    try:
+        client = get_dokploy()
+
+        # Find compose service
+        compose = client.find_compose_by_name(service, "platform")
+        if compose:
+            compose_id = compose["composeId"]
+            info("   Configuring in Dokploy...")
+
+            client.update_compose_env(
+                compose_id,
+                env_vars={"VAULT_APP_TOKEN": token}
+            )
+            success("   Auto-configured in Dokploy")
+        else:
+            warning(f"   Service '{service}' not found in Dokploy, manual setup required")
+    except Exception as exc:
+        warning(f"   Auto-config failed: {exc}")
+        info("   Manual setup: Add VAULT_APP_TOKEN in Dokploy UI")
