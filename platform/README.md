@@ -36,6 +36,8 @@ invoke authentik.shared.status
 invoke portal.shared.status
 ```
 
+Note: Deploy runs through Dokploy API; set `DOKPLOY_API_KEY` (or store it in 1Password) before running `*.setup`.
+
 ## Adding New Service
 
 1. Create directory: `platform/{nn}.{service}/`

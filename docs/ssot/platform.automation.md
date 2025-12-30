@@ -12,10 +12,10 @@
 | **服务定义** | `platform/{nn}.{service}/compose.yaml` | Docker Compose 配置 |
 | **部署任务** | `platform/{nn}.{service}/deploy.py` | pre-compose, composing, post-compose |
 | **状态检查** | `platform/{nn}.{service}/shared_tasks.py` | status() 返回 {is_ready, details} |
-| **公共库** | `libs/` | env, common, console, config, deployer |
+| **公共库** | `libs/` | env, common, console, config, deployer, dokploy |
 | **CLI 工具** | `tools/` | env_tool.py, local_init.py |
 
-> **Note**: Dokploy env API integration is pending. `env_tool` only manages 1Password/Vault secrets for now; Dokploy env vars still require manual updates.
+> **Note**: 服务部署通过 Dokploy API 完成（需要 `DOKPLOY_API_KEY` 或 1Password 中的对应字段）。`env_tool` 仅管理 1Password/Vault secrets。
 
 ### Code as SSOT 索引
 
@@ -115,7 +115,7 @@ invoke postgres.setup
 
 # 分步部署
 invoke postgres.pre-compose   # 创建目录、生成密码
-invoke postgres.composing      # 手动在 Dokploy 部署
+invoke postgres.composing      # 通过 Dokploy API 部署
 invoke postgres.post-compose   # 验证健康状态
 ```
 
