@@ -64,6 +64,8 @@ db_pass = config.get_secret("POSTGRES_PASSWORD")
 
 - Prefer explicit imports (e.g. `from libs.env import get_secrets`) over `from libs import ...` to avoid circular deps.
 - `libs.common.get_env()` reads from `init/env_vars` in 1Password; no local `.env` required.
+- `DokployClient.update_compose_env()` parses basic `KEY=VALUE` lines only (no quoted/escaped/multiline values).
+- Dokploy API errors include method + endpoint context via `httpx` exceptions.
 
 ## References
 

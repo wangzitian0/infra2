@@ -8,7 +8,6 @@ from __future__ import annotations
 import os
 import httpx
 from dotenv import load_dotenv
-from typing import Any
 
 load_dotenv()
 
@@ -25,9 +24,9 @@ class DokployClient:
         if not self.api_key:
             try:
                 from libs.env import OpSecrets
-                op = OpSecrets(item="bootstrap-dokpoly")
+                op = OpSecrets(item="bootstrap-dokploy")
                 self.api_key = op.get("DOKPLOY_API_KEY")
-            except Exception:
+            except (ImportError, AttributeError, KeyError):
                 pass
         
         if not self.api_key:
@@ -41,11 +40,25 @@ class DokployClient:
             "x-api-key": self.api_key,
             **kwargs.pop("headers", {})
         }
-        
-        with httpx.Client(timeout=30.0) as client:
-            resp = client.request(method, f"{self.base_url}/{endpoint}", headers=headers, **kwargs)
-            resp.raise_for_status()
-            return resp.json() if resp.content else {}
+        url = f"{self.base_url}/{endpoint}"
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                resp = client.request(method, url, headers=headers, **kwargs)
+                resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise httpx.HTTPStatusError(
+                f"Dokploy API request failed for {method} {url}: "
+                f"status code {exc.response.status_code} {exc.response.reason_phrase}",
+                request=exc.request,
+                response=exc.response,
+            ) from exc
+        except httpx.RequestError as exc:
+            raise httpx.RequestError(
+                f"Error while performing Dokploy API request {method} {url}: {exc}",
+                request=exc.request,
+            ) from exc
+
+        return resp.json() if resp.content else {}
     
     # Project endpoints
     def list_projects(self) -> list[dict]:
@@ -90,14 +103,20 @@ class DokployClient:
             
         return self._request("POST", "compose.create", json=payload)
     
-    def update_compose(self, compose_id: str, compose_file: str = None, env: str = None, source_type: str = None) -> dict:
+    def update_compose(
+        self,
+        compose_id: str,
+        compose_file: str | None = None,
+        env: str | None = None,
+        source_type: str | None = None,
+    ) -> dict:
         """Update compose application"""
         payload = {"composeId": compose_id}
-        if compose_file:
+        if compose_file is not None:
             payload["composeFile"] = compose_file
         if env is not None:
             payload["env"] = env
-        if source_type:
+        if source_type is not None:
             payload["sourceType"] = source_type
         return self._request("POST", "compose.update", json=payload)
     
@@ -179,6 +198,9 @@ class DokployClient:
             compose_id: ID of the compose application
             env_vars: Dict of key-value pairs (will be merged with existing)
             env_str: Raw env string (will replace existing if provided)
+        Note:
+            This parser expects simple KEY=VALUE lines and does not handle quoted,
+            escaped, or multiline values.
         """
         if env_str is None:
             # Merge with existing
@@ -208,7 +230,7 @@ def get_dokploy() -> DokployClient:
 
 
 # Convenience functions
-def ensure_project(name: str, description: str = "") -> tuple[str, str]:
+def ensure_project(name: str, description: str = "") -> tuple[str, str | None]:
     """Ensure project exists, return (projectId, environmentId)"""
     client = get_dokploy()
     projects = client.list_projects()

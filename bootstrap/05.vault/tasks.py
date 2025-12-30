@@ -5,7 +5,7 @@ Uses libs/ system for consistent environment and console utilities.
 from invoke import task
 from libs.deployer import Deployer
 from libs.common import get_env
-from libs.console import header, success, error, warning, info, prompt_action, run_with_status
+from libs.console import header, success, error, warning, info, prompt_action, run_with_status, console
 from typing import Any
 
 
@@ -147,9 +147,10 @@ def setup_tokens(c):
     root_token = os.getenv("VAULT_ROOT_TOKEN")
     if not root_token:
         error("VAULT_ROOT_TOKEN not set")
-        print("\nGet from: op read 'op://Infra2/bootstrap-vault/Root Token'")
-        print("Then run: export VAULT_ROOT_TOKEN=<token>")
+        info("Get from: op read 'op://Infra2/bootstrap-vault/Root Token'")
+        info("Then run: export VAULT_ROOT_TOKEN=<token>")
         return
+    show_tokens = os.getenv("VAULT_SHOW_TOKENS") == "1"
 
     e = get_env()
     vault_addr = e.get("VAULT_ADDR", f"https://vault.{e['INTERNAL_DOMAIN']}")
@@ -166,7 +167,12 @@ def setup_tokens(c):
     }
 
     success(f"Using Vault: {vault_addr}")
-    print("")
+    console.print()
+    if show_tokens:
+        warning("VAULT_SHOW_TOKENS=1: full tokens will be printed; avoid logs.")
+    else:
+        info("Tokens are masked. Set VAULT_SHOW_TOKENS=1 to print full tokens for capture.")
+        console.print()
 
     for service, paths in services.items():
         policy_name = f"platform-{service}-reader"
@@ -185,6 +191,13 @@ def setup_tokens(c):
             hide=True,
             warn=True,
         )
+        if not result.ok:
+            stderr_msg = getattr(result, "stderr", "") or ""
+            if stderr_msg.strip():
+                error(f"Failed to create policy '{policy_name}' for service '{service}'", stderr_msg.strip())
+            else:
+                error(f"Failed to create policy '{policy_name}' for service '{service}'")
+            continue
 
         # Generate token (permanent, orphan, no default policy)
         cmd = (
@@ -204,21 +217,25 @@ def setup_tokens(c):
         if result.ok:
             token_data = json.loads(result.stdout)
             token = token_data["auth"]["client_token"]
+            label = "Token for {service} (masked):" if not show_tokens else "Token for {service}:"
+            success(label.format(service=service))
+            if show_tokens:
+                console.print(f"   {token}")
+            else:
+                masked_token = token if len(token) <= 8 else f"{token[:4]}...{token[-4:]}"
+                console.print(f"   {masked_token}")
 
-            success(f"Token for {service}:")
-            print(f"   {token}")
+            _configure_dokploy_token(c, service, token)
 
-            _configure_dokploy_token(service, token)
-
-            print("")
+            console.print()
         else:
             error(f"Failed to create token for {service}")
 
-    success("\nAll tokens generated!")
-    print("\nNext steps:")
-    print("1. Store tokens in 1Password (optional but recommended)")
-    print("2. Set VAULT_APP_TOKEN in Dokploy for each service")
-    print("3. Run: invoke <service>.setup")
+    success("All tokens generated!")
+    info("Next steps:")
+    info("1. Store tokens in 1Password (optional but recommended)")
+    info("2. Set VAULT_APP_TOKEN in Dokploy for each service")
+    info("3. Run: invoke <service>.setup")
 
 
 @task
@@ -235,8 +252,9 @@ def setup(c):
     success("Vault setup complete!")
 
 
-def _configure_dokploy_token(service: str, token: str):
+def _configure_dokploy_token(c, service: str, token: str):
     """Auto-configure VAULT_APP_TOKEN in Dokploy"""
+    del c
     try:
         from libs.dokploy import get_dokploy
     except Exception as exc:
