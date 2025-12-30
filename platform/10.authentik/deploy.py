@@ -18,8 +18,7 @@ class AuthentikDeployer(Deployer):
     secret_key = "secret_key"
     env_var_name = "AUTHENTIK_SECRET_KEY"
 
-        info("\nNote: VAULT_APP_TOKEN auto-configured via 'invoke vault.setup-tokens'")
-        return result
+
 
 
 @task

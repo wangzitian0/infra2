@@ -6,21 +6,21 @@ services:
       - sh
       - -c
       - |
-        # Fetch secrets from multiple Vault paths and merge
+        apk add --no-cache jq
         export VAULT_TOKEN=$$VAULT_APP_TOKEN
-        vault kv get -format=json secret/data/platform/production/postgres | \
+        vault read -format=json secret/data/platform/production/postgres | \
           jq -r '.data.data | to_entries[] | select(.key == "root_password") | "PG_PASS=\(.value)"' > /secrets/.env
 
-        vault kv get -format=json secret/data/platform/production/redis | \
+        vault read -format=json secret/data/platform/production/redis | \
           jq -r '.data.data | to_entries[] | select(.key == "password") | "REDIS_PASSWORD=\(.value)"' >> /secrets/.env
           
-        vault kv get -format=json secret/data/platform/production/authentik | \
+        vault read -format=json secret/data/platform/production/authentik | \
           jq -r '.data.data | to_entries[] | select(.key == "secret_key") | "AUTHENTIK_SECRET_KEY=\(.value)"' >> /secrets/.env
           
-        chmod 400 /secrets/.env && echo "✅ Secrets ready"
+        chmod 444 /secrets/.env && echo "✅ Secrets ready"
     environment:
       VAULT_ADDR: ${VAULT_ADDR}
-      VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:?error}
+      VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:-}
     volumes:
       - secrets:/secrets
     networks:
@@ -84,7 +84,7 @@ volumes:
     driver_opts:
       type: tmpfs
       device: tmpfs
-      o: "size=10m,mode=0700"
+      o: "size=10m,mode=0755"
 
 networks:
   dokploy-network:
