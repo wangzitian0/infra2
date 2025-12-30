@@ -59,7 +59,7 @@ class Deployer:
             return False
         
         e = cls.env()
-        header(f"{cls.service} pre-compose", f"Preparing ({e['ENV']})")
+        header(f"{cls.service} pre_compose", f"Preparing ({e['ENV']})")
         
         host = e['VPS_HOST']
         run_with_status(c, f"ssh root@{host} 'mkdir -p {cls.data_path}'", "Create directory")
@@ -85,28 +85,46 @@ class Deployer:
             result[cls.env_var_name] = val
         
         env_vars("DOKPLOY ENV", result)
-        success("pre-compose complete")
+        success("pre_compose complete")
+        info("\nNote: VAULT_APP_TOKEN auto-configured via 'invoke vault.setup-tokens'")
         return result
     
     @classmethod
-    def composing(cls, c: "Context") -> None:
-        """Guide manual Dokploy deployment"""
+    def get_compose_content(cls, c: "Context") -> str:
+        """Get compose file content. Default: read from compose_path."""
+        with open(cls.compose_path, "r") as f:
+            return f.read()
+
+    @classmethod
+    def composing(cls, c: "Context", env_vars: dict[str, str]) -> str:
+        """Deploy via Dokploy API. Returns composeId."""
+        from libs.dokploy import deploy_compose_service
+        
         e = cls.env()
-        header(f"{cls.service} composing", f"Deploy {cls.service}")
-        prompt_action("Deploy in Dokploy", [
-            f"Access: https://cloud.{e['INTERNAL_DOMAIN']}",
-            f"Compose: {cls.compose_path}",
-            "Click Deploy"
-        ])
-        success("composing complete")
+        header(f"{cls.service} composing", f"Deploying via Dokploy API")
+        
+        # Get compose content (from file or template)
+        compose_content = cls.get_compose_content(c)
+        
+        # Deploy via API
+        project_name = e.get("PROJECT", "platform")
+        compose_id = deploy_compose_service(
+            project_name=project_name,
+            service_name=cls.service,
+            compose_content=compose_content,
+            env_vars=env_vars,
+        )
+        
+        success(f"Deployed {cls.service} (composeId: {compose_id})")
+        return compose_id
     
     @classmethod
     def post_compose(cls, c: "Context", shared_tasks: Any) -> bool:
         """Verify deployment"""
-        header(f"{cls.service} post-compose", "Verifying")
+        header(f"{cls.service} post_compose", "Verifying")
         result = shared_tasks.status(c)
         if result["is_ready"]:
-            success(f"post-compose complete - {result['details']}")
+            success(f"post_compose complete - {result['details']}")
             return True
         error("Verification failed", result["details"])
         return False
@@ -125,8 +143,12 @@ def make_tasks(deployer_cls: type[Deployer], shared_tasks: Any) -> dict:
         return deployer_cls.pre_compose(c)
     
     @task
-    def composing(c):
-        deployer_cls.composing(c)
+    def composing(c, env_vars=None):
+        if env_vars is None:
+            warning("Running composing manually - fetching secrets first")
+            env_vars = deployer_cls.pre_compose(c)
+        if env_vars:
+            deployer_cls.composing(c, env_vars)
     
     @task
     def post_compose(c):
@@ -144,10 +166,11 @@ def make_tasks(deployer_cls: type[Deployer], shared_tasks: Any) -> dict:
             warning(f"Status check failed: {exc}")
         
         warning(f"{deployer_cls.service} not healthy - starting install")
-        if deployer_cls.pre_compose(c) is None:
-            error("pre-compose failed")
+        env_vars = deployer_cls.pre_compose(c)
+        if env_vars is None:
+            error("pre_compose failed")
             return
-        deployer_cls.composing(c)
+        deployer_cls.composing(c, env_vars)
         deployer_cls.post_compose(c, shared_tasks)
         success(f"{deployer_cls.service} setup complete!")
     
