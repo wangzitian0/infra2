@@ -48,7 +48,7 @@ invoke portal.post_compose
 
 ## Environment Variables
 
-None required (uses `INTERNAL_DOMAIN` from init/env_vars). `INIT_ASSETS=0` is set to prevent Homer from overwriting the custom config.
+`INTERNAL_DOMAIN` is injected into the Dokploy compose environment during `pre_compose` so the Traefik labels resolve. `INIT_ASSETS=0` is set to prevent Homer from overwriting the custom config.
 
 ## Updating Links
 
