@@ -117,6 +117,46 @@ class AuthentikDeployer(Deployer):
         info("\nNote: VAULT_APP_TOKEN auto-configured via 'invoke vault.setup-tokens'")
         return result
 
+    @classmethod
+    def post_compose(cls, c, shared_tasks):
+        """Verify deployment and initialize API token"""
+        from libs.console import header, success, info, warning
+        
+        header(f"{cls.service} post_compose", "Verifying")
+        result = shared_tasks.status(c)
+        if not result["is_ready"]:
+            warning("Service not ready yet, token init will run on next healthy state")
+            return False
+        
+        success("Service healthy")
+        
+        # Trigger token-init container
+        e = cls.env()
+        vault_token = os.getenv('VAULT_ROOT_TOKEN')
+        
+        if vault_token:
+            info("Triggering token initialization...")
+            compose_dir = "/etc/dokploy/compose/platform-authentik-*/code/platform/10.authentik"
+            init_cmd = f"cd {compose_dir} && VAULT_INIT_TOKEN={vault_token} VAULT_ADDR=https://vault.{e['INTERNAL_DOMAIN']} docker compose up token-init"
+            
+            result = c.run(
+                f"ssh root@{e['VPS_HOST']} '{init_cmd}'",
+                warn=True,
+                hide=True
+            )
+            
+            if result.ok:
+                success("API token initialized and stored in Vault")
+            else:
+                warning("Token initialization skipped or failed")
+                info("You can manually create token later via: invoke authentik.shared.create-api-token")
+        else:
+            info("VAULT_ROOT_TOKEN not set, skipping automatic token creation")
+            info("Set VAULT_ROOT_TOKEN and run: invoke authentik.post-compose")
+        
+        success("post_compose complete")
+        return True
+
 
 if shared_tasks:
     _tasks = make_tasks(AuthentikDeployer, shared_tasks)
