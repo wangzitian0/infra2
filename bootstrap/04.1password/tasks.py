@@ -56,18 +56,28 @@ class OnePasswordDeployer(Deployer):
     
     @classmethod
     def _get_github_provider_id(cls, client) -> str | None:
-        """Get GitHub provider ID by finding any existing compose with githubId."""
+        """Get GitHub provider ID by querying API or finding existing."""
+        # Method 1: Query API directly
+        try:
+            providers = client.list_git_providers()
+            for p in providers:
+                if p.get("provider") == "github":
+                    return p.get("gitProviderId")
+        except:
+            pass
+
+        # Method 2: Infer from existing services
         try:
             projects = client.list_projects()
             for proj in projects:
                 for env in proj.get('environments', []):
                     for comp in env.get('compose', []):
-                        github_id = comp.get('githubId')
-                        if github_id:
-                            return github_id
+                        if comp.get('githubId'):
+                            return comp.get('githubId')
         except:
             pass
-        return '126refcRlCoWj6pmPXElU'
+            
+        return None
 
     @classmethod
     def composing(cls, c, env_vars: dict = None) -> bool:
@@ -83,7 +93,6 @@ class OnePasswordDeployer(Deployer):
             from libs.dokploy import ensure_project, get_dokploy
             
             # Ensure project exists
-            # Pass host to ensure we don't default to localhost
             domain = env_vars.get('INTERNAL_DOMAIN')
             host = f"cloud.{domain}" if domain else None
             
@@ -102,19 +111,19 @@ class OnePasswordDeployer(Deployer):
             github_owner = "wangzitian0"
             github_repo = "infra2"
             github_branch = "main"
-            compose_path = cls.compose_path  # bootstrap/04.1password/compose.yaml
+            compose_path = cls.compose_path
             
             # Get GitHub provider ID
             github_id = cls._get_github_provider_id(client)
+            if not github_id:
+                raise ValueError("No GitHub provider configured in Dokploy. Please add one in Settings -> Git Providers.")
+                
             info(f"Using GitHub provider: {github_id}")
             
             if existing:
                 compose_id = existing["composeId"]
                 info("Updating existing compose service")
-                client.update_compose(
-                    compose_id,
-                    source_type="github"
-                )
+                client.update_compose(compose_id, source_type="github")
             else:
                 info("Creating new compose service with GitHub provider")
                 result = client._request("POST", "compose.create", json={
@@ -129,11 +138,9 @@ class OnePasswordDeployer(Deployer):
                 })
                 compose_id = result["composeId"]
             
-            # Update environment variables (Inject ALL vars from libs/1Password)
+            # Update environment variables
             info("Updating environment variables (from libs)")
-            # Filter out internal keys or empty values if needed, but injecting all is safest for completeness
             env_content = "\n".join([f"{k}={v}" for k, v in env_vars.items() if v is not None])
-            
             client.update_compose(compose_id, env=env_content)
             
             info(f"Deploying compose (ID: {compose_id})")
@@ -143,15 +150,6 @@ class OnePasswordDeployer(Deployer):
             warning("Wait 1-2 minutes for containers to start")
             return True
             
-        except ImportError:
-            warning("Dokploy API not available, falling back to manual")
-            prompt_action("Deploy in Dokploy manually", [
-                f"Access: https://cloud.{e['INTERNAL_DOMAIN']}",
-                "Project: bootstrap",
-                f"Compose: {cls.compose_path}",
-                "Click Deploy"
-            ])
-            return True
         except Exception as ex:
             error(f"Deployment failed: {ex}")
             warning("Falling back to manual deployment")

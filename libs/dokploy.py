@@ -225,9 +225,22 @@ class DokployClient:
         return self.update_compose(compose_id, env=env_str)
 
 
-def get_dokploy() -> DokployClient:
-    """Get configured Dokploy client"""
-    return DokployClient()
+    # Git Provider endpoints
+    def list_git_providers(self) -> list[dict]:
+        """List all configured git providers"""
+        return self._request("GET", "settings.gitProvider.all")
+
+    
+def get_dokploy(host: str = None) -> DokployClient:
+    """Get configured Dokploy client
+    
+    Args:
+        host: Optional host override (e.g. 'cloud.zitian.party')
+    """
+    base_url = None
+    if host:
+        base_url = f"https://{host}/api"
+    return DokployClient(base_url=base_url)
 
 
 # Convenience functions
