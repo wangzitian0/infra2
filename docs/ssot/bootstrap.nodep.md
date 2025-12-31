@@ -81,6 +81,20 @@ flowchart LR
 - **反模式 A**：**禁止** 让 Bootstrap 依赖 Platform 服务（避免循环依赖）。
 - **反模式 B**：**禁止** 不记录版本的“幽灵安装”。
 
+### ⚠️ 常见陷阱与对策
+
+1. **Strict 模式的代价**：
+   - 一旦开启 Cloudflare Full (Strict)，所有的自动化 HTTP-01 证书申请（包括 Traefik, Caddy, Certbot）都会大概率失败。
+   - 对策：必须使用 DNS-01 验证（需要 API Token），或者手动上传 Origin CA 证书。不要在这个模式下指望 HTTP 自动验证。
+
+2. **Dokploy 的 UI 陷阱**：
+   - 在 Dokploy 中修改了 Environment、Domain 或 Traefik 设置后，必须手动点击 Deploy（或重启服务）。
+   - 仅仅点击 "Save" 往往只更新数据库，不会自动重启容器应用新配置。如果发现配置没生效，第一时间去点 Deploy。
+
+3. **IaC 的重要性**：
+   - 这次问题排查花了很久是因为服务是手动创建的（Manual ClickOps），代码库里没有任何记录。
+   - 如果使用 platform/ 下的代码化部署，不仅配置透明（能直接看到是不是用了 DNS-01），而且 invoke deploy 命令会自动处理“配置下发”和“重启”的动作，避免“点了保存没生效”的尴尬。
+
 ---
 
 ## 5. 版本追踪 {#5-版本追踪}

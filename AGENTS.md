@@ -113,11 +113,12 @@
 
 ### AI 文档行为约束
 
-1. **禁止随意生成文件**：需要记录的内容应集中放入 `docs/project/Infra-001.TODOWRITE.md`。
-2. **Project 目录规则**：
+1. **禁止随意生成文件**：需要记录的内容应集中放入对应 `Infra-XXX.TODOWRITE.md`（同编号）。
+2. **Project 文件配对**：每个 Project 必须包含两份文件：`Infra-XXX.<project>.md` 与 `Infra-XXX.TODOWRITE.md`（同编号）。
+3. **Project 目录规则**：
    - `Infra-001.bootstrap_and_setup.md` **未经授权只可以加东西不可以删东西**。
-   - 你的 artfacts 的简练的记录到到 `Infra-001.TODOWRITE.md`，不可随意创建新 Project 文件。
-3. **每次修改必须更新**：
+   - 你的 artifacts 简要记录到对应 `Infra-XXX.TODOWRITE.md`，不可随意创建新 Project 文件。
+4. **每次修改必须更新**：
    - 修改代码 → 更新对应目录的 `README.md`
    - 涉及架构变更 → 更新相关 SSOT 文档
 
