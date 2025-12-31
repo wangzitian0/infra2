@@ -1,6 +1,13 @@
 # Platform Module
 
-> **Purpose**: Stateful applications and shared infrastructure using Deployer pattern.
+> **Purpose**: Stateful applications and shared infrastructure using vault-init pattern.
+
+## Architecture
+
+Platform services use **vault-init pattern**:
+- Secrets stored in Vault (`secret/platform/production/{service}`)
+- Fetched at container runtime via vault-agent sidecar
+- No secrets in Dokploy env vars or disk
 
 ## Structure
 
@@ -14,9 +21,12 @@
 
 ```
 platform/{nn}.{service}/
-├── compose.yaml       # Docker Compose
+├── compose.yaml       # Docker Compose with vault-agent sidecar
 ├── deploy.py          # XxxDeployer + tasks
 ├── shared_tasks.py    # status() check
+├── vault-agent.hcl    # Vault agent config
+├── vault-policy.hcl   # Vault policy for service
+├── secrets.ctmpl      # Template for secrets file
 └── README.md          # Service docs
 ```
 
@@ -26,6 +36,12 @@ platform/{nn}.{service}/
 - [Redis](./02.redis/README.md)
 - [Authentik](./10.authentik/README.md)
 - [Portal](./21.portal/README.md)
+
+## Prerequisites
+
+1. **Vault ready**: `invoke vault.status` should return healthy
+2. **Enable KV engine**: `vault secrets enable -path=secret kv-v2` (one-time)
+3. **Setup tokens**: `export VAULT_ROOT_TOKEN=<token> && invoke vault.setup-tokens`
 
 ## Quick Start
 
@@ -37,13 +53,11 @@ invoke authentik.setup
 invoke portal.setup
 
 # Check status
-invoke postgres.shared.status
-invoke redis.shared.status
-invoke authentik.shared.status
-invoke portal.shared.status
+invoke postgres.status
+invoke redis.status
+invoke authentik.status
+invoke portal.status
 ```
-
-Note: Deploy runs through Dokploy API; set `DOKPLOY_API_KEY` (or store it in 1Password) before running `*.setup`.
 
 ## Adding New Service
 
@@ -54,20 +68,26 @@ Note: Deploy runs through Dokploy API; set `DOKPLOY_API_KEY` (or store it in 1Pa
    import sys
    from libs.deployer import Deployer, make_tasks
    
+   shared_tasks = sys.modules.get("platform.XX.new.shared")
+   
    class NewDeployer(Deployer):
        service = "new"
        compose_path = "platform/XX.new/compose.yaml"
        data_path = "/data/platform/new"
-       secret_key = "password"
-       env_var_name = "NEW_PASSWORD"
-
-   shared_tasks = sys.modules.get("platform.XX.new.shared")
-   _tasks = make_tasks(NewDeployer, shared_tasks)
-   status = _tasks["status"]
-   pre_compose = _tasks["pre_compose"]
-   composing = _tasks["composing"]
-   post_compose = _tasks["post_compose"]
-   setup = _tasks["setup"]
+       secret_key = "password"  # Key in Vault
+       
+       # Optional: Domain configuration
+       subdomain = "new"
+       service_port = 8080
+       service_name = "server"  # For multi-service composes
+   
+   if shared_tasks:
+       _tasks = make_tasks(NewDeployer, shared_tasks)
+       status = _tasks["status"]
+       pre_compose = _tasks["pre_compose"]
+       composing = _tasks["composing"]
+       post_compose = _tasks["post_compose"]
+       setup = _tasks["setup"]
    ```
 
 3. Create `shared_tasks.py`:
@@ -77,10 +97,12 @@ Note: Deploy runs through Dokploy API; set `DOKPLOY_API_KEY` (or store it in 1Pa
    
    @task
    def status(c):
-       return check_service(c, "service", "health-cmd")
+       return check_service(c, "new", "health-cmd")
    ```
 
-4. Run: `invoke new.setup`
+4. Copy vault-agent config from existing service and adapt
+
+5. Run: `invoke new.setup`
 
 ## References
 
@@ -88,5 +110,6 @@ Note: Deploy runs through Dokploy API; set `DOKPLOY_API_KEY` (or store it in 1Pa
 - **Project Portfolio**: [docs/project/README.md](../docs/project/README.md)
 - **AI 行为准则**: [AGENTS.md](../AGENTS.md)
 - **SSOT**: [docs/ssot/platform.automation.md](../docs/ssot/platform.automation.md)
+- **Vault SSOT**: [docs/ssot/db.vault-integration.md](../docs/ssot/db.vault-integration.md)
 - **Libs**: [libs/README.md](../libs/README.md)
 - **Tools**: [tools/README.md](../tools/README.md)

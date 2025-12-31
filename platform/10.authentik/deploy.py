@@ -15,6 +15,11 @@ class AuthentikDeployer(Deployer):
     uid = "1000"
     gid = "1000"
     secret_key = "secret_key"
+    
+    # Domain configuration
+    subdomain = "sso"
+    service_port = 9000
+    service_name = "server"
 
     @classmethod
     def pre_compose(cls, c):

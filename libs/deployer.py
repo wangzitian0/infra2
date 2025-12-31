@@ -37,6 +37,11 @@ class Deployer:
     chmod: str = "755"  # Override to "700" for sensitive services like PostgreSQL
     secret_key: str = "password"
     env_var_name: str = ""
+    
+    # Domain configuration (optional)
+    subdomain: str = None  # e.g., "sso" for sso.{INTERNAL_DOMAIN}
+    service_port: int = None  # Container port
+    service_name: str = None  # For multi-service composes
 
     @classmethod
     def env(cls) -> dict[str, str | None]:
@@ -188,6 +193,22 @@ class Deployer:
         # Deploy
         info(f"Deploying compose {compose_id}...")
         client.deploy_compose(compose_id)
+        
+        # Configure domain if specified
+        if cls.subdomain and cls.service_port:
+            domain_host = f"{cls.subdomain}.{e.get('INTERNAL_DOMAIN')}"
+            try:
+                info(f"Configuring domain: {domain_host}")
+                client.create_domain(
+                    compose_id=compose_id,
+                    host=domain_host,
+                    port=cls.service_port,
+                    https=True,
+                    service_name=cls.service_name,
+                )
+                success(f"Domain configured: https://{domain_host}")
+            except Exception as exc:
+                warning(f"Domain configuration skipped: {exc}")
         
         success(f"Deployed {cls.service} (composeId: {compose_id})")
         return compose_id

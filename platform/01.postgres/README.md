@@ -2,51 +2,77 @@
 
 > **Category**: Databases (01-09)
 
-Shared PostgreSQL database for all platform applications.
+Shared PostgreSQL database for all platform applications using vault-init pattern.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `compose.yaml` | Docker Compose service definition |
-| `deploy.py` | Invoke tasks (pre-compose/composing/post-compose) |
+| `compose.yaml` | Docker Compose with vault-agent sidecar |
+| `deploy.py` | PostgresDeployer with vault-init |
 | `shared_tasks.py` | Health check + admin helpers |
+| `vault-agent.hcl` | Vault agent configuration |
+| `vault-policy.hcl` | Read-only policy for postgres secrets |
+| `secrets.ctmpl` | Template rendering `POSTGRES_PASSWORD` |
+
+## Architecture
+
+```
+┌─────────────────┐
+│ vault-agent     │ ──fetch──> Vault (secret/platform/production/postgres)
+│ (sidecar)       │            └─ root_password
+└────────┬────────┘
+         │ render
+         ▼
+    /secrets/.env ─source─> postgres container
+    (tmpfs)
+```
 
 ## Deployment
 
 ```bash
-# Full setup
+# Full setup (prepares dirs, ensures secrets, deploys)
 invoke postgres.setup
 
 # Or step-by-step
-invoke postgres.pre-compose
-invoke postgres.composing
-invoke postgres.post-compose
+invoke postgres.pre-compose  # Creates dirs, checks Vault secret
+invoke postgres.composing    # Deploys via Dokploy API
+invoke postgres.post-compose # Verifies health
+```
+
+## Vault Integration
+
+**Secret path**: `secret/platform/production/postgres`
+
+**Required keys**:
+- `root_password` - PostgreSQL root password
+
+**Policy** (`platform-postgres-app`):
+```hcl
+path "secret/data/platform/production/postgres" {
+  capabilities = ["read", "list"]
+}
 ```
 
 ## Shared Tasks
 
 ```bash
-invoke postgres.shared.status
+invoke postgres.status  # Check if ready
 invoke postgres.shared.create-database --name=<db>
 invoke postgres.shared.create-user --username=<user> --database=<db> --password=<pass>
 ```
 
-> Output uses `libs.console` helpers for consistent CLI logs.
-
 ## Data Path
 
-`/data/platform/postgres` - PostgreSQL data directory
+`/data/platform/postgres` - PostgreSQL data directory (uid=70, chmod=700)
 
-## Environment Variables
+## Container
 
-| Variable | Required |
-|----------|----------|
-| `POSTGRES_PASSWORD` | Yes |
-| `POSTGRES_USER` | No (default: postgres) |
-
-> **Note**: `POSTGRES_PASSWORD` is sourced from Vault under the key `root_password`.
+- **Name**: `platform-postgres`
+- **Image**: `postgres:16-alpine`
+- **Port**: 5432 (internal only)
+- **Health check**: `pg_isready -U postgres`
 
 ## Used By
 
-- `10.authentik` (edge: `invoke postgres.shared.create-database`)
+- `10.authentik` - Requires database `authentik`
