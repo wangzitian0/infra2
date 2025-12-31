@@ -1,4 +1,4 @@
-# Documentation Index
+# 文档索引
 
 > **定位**：docs/ 目录索引与导航入口
 > **文档首页**：`docs/onboarding/README.md`

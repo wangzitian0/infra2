@@ -38,6 +38,10 @@
 - [ ] `PORTAL_URL` set for E2E (optional)
 - [x] `invoke dns_and_cert.verify`
 
+## TODOWRITE
+
+- [Infra-005.TODOWRITE.md](./Infra-005.TODOWRITE.md)
+
 ## Open Issues
 - [x] Deploy the portal app in Dokploy and confirm `https://home.${INTERNAL_DOMAIN}`.
 - [ ] Confirm `bootstrap/cloudflare` item fields are complete (`CF_API_TOKEN`, `CF_ZONE_ID`/`CF_ZONE_NAME`, optional `CF_RECORDS`).

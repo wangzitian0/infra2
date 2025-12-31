@@ -52,9 +52,10 @@
 ## 🧭 返回入口
 
 - **工程入口**：[README.md](../../README.md)
-- **文档索引**：[docs/README.md](../README.md)
 - **SSOT 索引**：[docs/ssot/README.md](../ssot/README.md)
+- **项目追踪**：[docs/project/README.md](../project/README.md)
 - **AI 行为准则**：[AGENTS.md](../../AGENTS.md)
+- **文档索引**：[docs/README.md](../README.md)
 
 ---
 
@@ -69,9 +70,9 @@
 ## ✍️ 文档维护
 
 - **构建文档站**：`mkdocs build --config-file docs/mkdocs.yml`
-- **Project 模板**：`docs/project/project_template.md`
-- **TODOWRITE 模板**：`docs/project/todowrite_template.md`
-- **SSOT 模板**：`docs/ssot/template.md`
+- **Project 模板**：[docs/project/project_template.md](../project/project_template.md)
+- **TODOWRITE 模板**：[docs/project/todowrite_template.md](../project/todowrite_template.md)
+- **SSOT 模板**：[docs/ssot/template.md](../ssot/template.md)
 
 ---
 *Last updated: 2025-12-30*

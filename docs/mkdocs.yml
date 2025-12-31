@@ -43,7 +43,7 @@ markdown_extensions:
 
 nav:
   - Home: onboarding/README.md
-  - Docs Index: README.md
+  - 文档索引: README.md
   - Onboarding:
       - Quick Start: onboarding/01.quick-start.md
       - First App: onboarding/02.first-app.md

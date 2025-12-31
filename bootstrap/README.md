@@ -39,32 +39,32 @@
 
 ## 📖 组件列表
 
-###  1. [Dokploy 安装](./01.dokploy_install/)
+###  1. [Dokploy 安装](./01.dokploy_install/README.md)
 VPS 初始化时安装 Dokploy 容器平台。
 
 **状态**：✅ 已部署  
 **域名**：`cloud.$INTERNAL_DOMAIN`
 
-### 2. [DNS 和证书](./02.dns_and_cert/)
+### 2. [DNS 和证书](./02.dns_and_cert/README.md)
 配置 Cloudflare DNS 和 Traefik HTTPS 证书。
 
 **状态**：✅ 已配置  
 **自动化域名**：`cloud`, `op`, `vault`, `sso`, `home`
 
-### 3. [Dokploy 配置](./03.dokploy_setup/)
+### 3. [Dokploy 配置](./03.dokploy_setup/README.md)
 配置 Dokploy 域名访问和 CLI 工具。
 
 **状态**：✅ 已配置  
 **依赖**：DNS 配置完成
 
-### 4. [1Password Connect](./04.1password/)
+### 4. [1Password Connect](./04.1password/README.md)
 自托管密钥管理服务。
 
 **状态**：✅ 已部署  
 **域名**：`op.$INTERNAL_DOMAIN`  
 **API 版本**：1.8.1
 
-### 5. [Vault](./05.vault/)
+### 5. [Vault](./05.vault/README.md)
 HashiCorp Vault 秘密管理。
 
 **状态**：⏭️ 待部署  
@@ -74,7 +74,7 @@ HashiCorp Vault 秘密管理。
 
 ## 🔗 相关文档
 
-- [Docs Index](../docs/README.md)
+- [文档索引](../docs/README.md)
 - [Project Portfolio](../docs/project/README.md)
 - [AI 行为准则](../AGENTS.md)
 - [SSOT: Bootstrap 组件](../docs/ssot/bootstrap.nodep.md)

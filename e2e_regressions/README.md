@@ -12,10 +12,22 @@ For the authoritative test strategy and pyramid, refer to:
 
 ## 🧭 Navigation
 
-- [Docs Index](../docs/README.md)
+- [文档索引](../docs/README.md)
 - [SSOT Index](../docs/ssot/README.md)
 - [Project Portfolio](../docs/project/README.md)
 - [AI 行为准则](../AGENTS.md)
+
+## 📌 Suite READMEs
+
+- [Bootstrap](./tests/bootstrap/README.md)
+- [Bootstrap: Compute](./tests/bootstrap/compute/README.md)
+- [Bootstrap: Network](./tests/bootstrap/network_layer/README.md)
+- [Bootstrap: Storage](./tests/bootstrap/storage_layer/README.md)
+- [Platform: Auth](./tests/platform/auth/README.md)
+- [Platform: Secrets](./tests/platform/secrets/README.md)
+- [Data: PostgreSQL](./tests/data/postgresql/README.md)
+- [Ops: Recovery](./tests/ops/recovery/README.md)
+- [Apps](./tests/apps/README.md)
 
 ## 📂 Test Suites
 

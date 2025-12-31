@@ -3,7 +3,7 @@
 **Status**: In Progress  
 **Owner**: Infra  
 **Priority**: P2  
-**Branch**: TBD
+**Branch**: `feat/ssot-bootstrap-pitfalls`
 
 ## Goal
 Establish a repeatable documentation engineering workflow with measurable link reachability.
@@ -12,9 +12,9 @@ Establish a repeatable documentation engineering workflow with measurable link r
 The wiki has multiple entry points and deep references; we need consistent navigation, reachability, and maintenance checks.
 
 ## Scope
-- [ ] Define L0/L1/L2 entry map and update cross-links.
-- [ ] Add a lightweight link reachability check (script or checklist).
-- [ ] Normalize entry ordering across key docs for discoverability.
+- [x] Define L0/L1/L2 entry map and update cross-links.
+- [x] Add a lightweight link reachability check (script or checklist).
+- [x] Normalize entry ordering across key docs for discoverability.
 
 ## Deliverables
 - L0/L1/L2 entry map documented in AGENTS and docs index.
@@ -28,12 +28,19 @@ The wiki has multiple entry points and deep references; we need consistent navig
 | Date | Change |
 |------|--------|
 | 2025-12-31 | Initialized project |
+| 2025-12-31 | Standardized L1 entry ordering and labels across docs |
+| 2025-12-31 | Added reachability report and PageRank findings |
+| 2025-12-31 | Linked Bootstrap/E2E subdocs and closed reachability gaps |
+| 2025-12-31 | Added TODOWRITE links for active projects and refreshed metrics |
 
 ## Verification
 - [ ] L0 to L2 docs are reachable in <= 2 hops.
 - [ ] Link check passes for local docs.
 
+## TODOWRITE
+- [Infra-006.TODOWRITE.md](./Infra-006.TODOWRITE.md)
+
 ## References
-- [Docs Index](../README.md)
+- [文档索引](../README.md)
 - [SSOT Index](../ssot/README.md)
 - [SSOT: ops.standards](../ssot/ops.standards.md)
