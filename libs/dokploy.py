@@ -87,6 +87,7 @@ class DokployClient:
         compose_type: str = "docker-compose",
         app_name: str | None = None,
         source_type: str = "raw",  # raw = use composeFile content, github = pull from repo
+        **kwargs
     ) -> dict:
         """Create a new compose application in an environment"""
         payload = {
@@ -94,6 +95,7 @@ class DokployClient:
             "environmentId": environment_id,
             "composeType": compose_type,
             "sourceType": source_type,
+            **kwargs
         }
         if compose_file:
             payload["composeFile"] = compose_file
@@ -225,15 +227,28 @@ class DokployClient:
         return self.update_compose(compose_id, env=env_str)
 
 
-def get_dokploy() -> DokployClient:
-    """Get configured Dokploy client"""
-    return DokployClient()
+    # Git Provider endpoints
+    def list_git_providers(self) -> list[dict]:
+        """List all configured git providers"""
+        return self._request("GET", "settings.gitProvider.all")
+
+    
+def get_dokploy(host: str | None = None) -> DokployClient:
+    """Get configured Dokploy client
+    
+    Args:
+        host: Optional host override (e.g. 'cloud.zitian.party')
+    """
+    base_url = None
+    if host:
+        base_url = f"https://{host}/api"
+    return DokployClient(base_url=base_url)
 
 
 # Convenience functions
-def ensure_project(name: str, description: str = "") -> tuple[str, str | None]:
+def ensure_project(name: str, description: str = "", host: str = None) -> tuple[str, str | None]:
     """Ensure project exists, return (projectId, environmentId)"""
-    client = get_dokploy()
+    client = get_dokploy(host=host)
     projects = client.list_projects()
     
     for project in projects:
@@ -242,9 +257,12 @@ def ensure_project(name: str, description: str = "") -> tuple[str, str | None]:
             return project["projectId"], env_id
     
     result = client.create_project(name, description)
-    # New project should have a default production environment
+    # API returns {'project': {...}, 'environment': {...}}
+    project_id = result.get("project", {}).get("projectId") if isinstance(result, dict) else None
+    if not project_id:
+        raise ValueError(f"Failed to create project {name}: invalid API response")
     env_id = client.get_default_environment_id(name)
-    return result["projectId"], env_id
+    return project_id, env_id
 
 
 def deploy_compose_service(
