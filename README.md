@@ -48,10 +48,10 @@ infra2/
 | 入口 | 路径 | 用途 |
 |------|------|------|
 | **Onboarding** | [docs/onboarding/README.md](docs/onboarding/README.md) | 新手/应用接入 |
-| **Docs Index** | [docs/README.md](docs/README.md) | 文档总入口 |
 | **SSOT 索引** | [docs/ssot/README.md](docs/ssot/README.md) | 技术真理源 |
 | **项目追踪** | [docs/project/README.md](docs/project/README.md) | 任务管理 |
 | **AI 行为准则** | [AGENTS.md](AGENTS.md) | AI 协作规范 |
+| **文档索引** | [docs/README.md](docs/README.md) | 文档总入口 |
 
 ## 🔧 环境变量体系
 

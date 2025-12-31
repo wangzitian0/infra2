@@ -25,10 +25,11 @@
 
 ## 相关文档
 
+- **[工程入口](../../README.md)** - 仓库总览与命令入口
 - **[开发者接入指南](../onboarding/README.md)** - 场景驱动的快速上手教程
-- **[文档中心](../README.md)** - 文档体系总入口
 - **[设计文档](../project/README.md)** - Infra-* 项目文档
 - **[AI 行为准则](../../AGENTS.md)** - Claude 协作规范 · [GitHub](https://github.com/wangzitian0/infra2/blob/main/AGENTS.md)
+- **[文档索引](../README.md)** - 文档体系总入口
 
 ---
 

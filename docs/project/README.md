@@ -15,9 +15,11 @@
 - TODOWRITE template: `docs/project/todowrite_template.md`
 
 ## Related
-- [docs/README.md](../README.md) - Docs index
-- [docs/ssot/README.md](../ssot/README.md) - SSOT index
-- [AGENTS.md](../../AGENTS.md) - AI collaboration rules
+- [README.md](../../README.md) - 工程入口
+- [docs/onboarding/README.md](../onboarding/README.md) - Onboarding
+- [docs/ssot/README.md](../ssot/README.md) - SSOT 索引
+- [AGENTS.md](../../AGENTS.md) - AI 行为准则
+- [docs/README.md](../README.md) - 文档索引
 
 ## Active Projects
 - [Infra-006: Documentation Engineering](./Infra-006.documentation_engineering.md) - **In Progress**

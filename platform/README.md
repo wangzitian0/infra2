@@ -77,7 +77,7 @@ Note: Deploy runs through Dokploy API; set `DOKPLOY_API_KEY` (or store it in 1Pa
 
 ## References
 
-- **Docs Index**: [docs/README.md](../docs/README.md)
+- **文档索引**: [docs/README.md](../docs/README.md)
 - **Project Portfolio**: [docs/project/README.md](../docs/project/README.md)
 - **AI 行为准则**: [AGENTS.md](../AGENTS.md)
 - **SSOT**: [docs/ssot/platform.automation.md](../docs/ssot/platform.automation.md)

@@ -12,7 +12,7 @@ For the authoritative test strategy and pyramid, refer to:
 
 ## 🧭 Navigation
 
-- [Docs Index](../docs/README.md)
+- [文档索引](../docs/README.md)
 - [SSOT Index](../docs/ssot/README.md)
 - [Project Portfolio](../docs/project/README.md)
 - [AI 行为准则](../AGENTS.md)

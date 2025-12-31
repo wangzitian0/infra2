@@ -7,10 +7,13 @@
 **0级入口**：`AGENTS.md`（你在这里）
 
 **1级入口（按用途）**
-1. **新手/应用接入** → [docs/onboarding/README.md](docs/onboarding/README.md)
-2. **全局工程概览** → [README.md](README.md)
+1. **全局工程概览** → [README.md](README.md)
+2. **新手/应用接入** → [docs/onboarding/README.md](docs/onboarding/README.md)
 3. **技术真理/架构规范** → [docs/ssot/README.md](docs/ssot/README.md)
 4. **项目追踪/进行中任务** → [docs/project/README.md](docs/project/README.md)
+
+**补充入口**
+- **文档索引** → [docs/README.md](docs/README.md)
 
 **阅读顺序（10 分钟速览）**
 1. [README.md](README.md)（全局概览与命令）
@@ -27,16 +30,16 @@
 **互引原则**
 - 0/1 级入口之间必须互相引用，避免单点入口遗失。
 
-## ⚡ 快速理解路径（极简 5 步）
+## ⚡ 快速理解路径（极简 6 步）
 
 > **用途**：让第一次进入项目的人在 10 分钟内建立全局心智（目标导向）。
 
 1. **确定目标**：用一句话写清“要达成的状态/结果”（不是角色视角）。
 2. **选一个 Project 锚点**：从 `docs/project/README.md` 选择当前工作项（默认优先最新的 In Progress）。
-2. **读 SSOT 索引**：从 `docs/ssot/README.md` 进入，先看 `core.md`，再补足与项目相关的话题。
-3. **定位层级**：判断是 L1/L2/L3/L4 哪一层，避免跨层依赖与循环。
-4. **做 Step 0 真理检查**：对比“现状 vs SSOT”，把差距记录到对应 TODOWRITE。
-5. **闭环执行**：修改代码 → 更新 SSOT → 验证 → 更新 README / Project。
+3. **读 SSOT 索引**：从 `docs/ssot/README.md` 进入，先看 `core.md`，再补足与项目相关的话题。
+4. **定位层级**：判断是 L1/L2/L3/L4 哪一层，避免跨层依赖与循环。
+5. **做 Step 0 真理检查**：对比“现状 vs SSOT”，把差距记录到对应 TODOWRITE。
+6. **闭环执行**：修改代码 → 更新 SSOT → 验证 → 更新 README / Project。
 
 ## 📌 入口与命名补充（以此为准）
 
