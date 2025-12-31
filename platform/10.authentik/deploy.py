@@ -49,8 +49,10 @@ class AuthentikDeployer(Deployer):
         # Create database (ignore if exists)
         run_with_status(c, f"ssh root@{e['VPS_HOST']} \"docker exec platform-postgres psql -U postgres -c 'CREATE DATABASE authentik;'\"", "Create database", warn=True)
         
-        # Ensure Authentik secret exists
+        # Ensure Authentik secrets exist
         authentik_secrets = get_secrets(project, "authentik", env_name)
+        
+        # Secret key
         secret_key = authentik_secrets.get("secret_key")
         if not secret_key:
             secret_key = generate_password(50)
@@ -60,6 +62,19 @@ class AuthentikDeployer(Deployer):
             warning("Generated new Authentik secret key in Vault")
         else:
             info("Authentik secret key exists in Vault")
+        
+        # Bootstrap admin credentials (only generate once)
+        bootstrap_password = authentik_secrets.get("bootstrap_password")
+        bootstrap_email = authentik_secrets.get("bootstrap_email")
+        if not bootstrap_password or not bootstrap_email:
+            bootstrap_password = generate_password(24)
+            bootstrap_email = e.get("ADMIN_EMAIL", "admin@localhost")
+            authentik_secrets.set("bootstrap_password", bootstrap_password)
+            authentik_secrets.set("bootstrap_email", bootstrap_email)
+            warning(f"Generated bootstrap admin: {bootstrap_email}")
+            warning(f"Bootstrap password stored in Vault (key: bootstrap_password)")
+        else:
+            info("Bootstrap credentials exist in Vault")
         
         # Return VAULT_ADDR for vault-init pattern
         result = {
