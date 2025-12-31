@@ -23,6 +23,15 @@
 
 ---
 
+## 相关文档
+
+- **[开发者接入指南](../onboarding/README.md)** - 场景驱动的快速上手教程
+- **[文档中心](../README.md)** - 文档体系总入口
+- **[设计文档](../project/README.md)** - Infra-* 项目文档
+- **[AI 行为准则](../../AGENTS.md)** - Claude 协作规范（GitHub: https://github.com/wangzitian0/infra2/blob/main/AGENTS.md）
+
+---
+
 ## Core - 核心 (必读)
 
 | 文件 | SSOT Key | 关键内容 |
@@ -98,16 +107,5 @@ flowchart TB
     B --> P
     P --> D
 ```
-
----
-
-## 相关文档
-
-- **[开发者接入指南](../onboarding/README.md)** - 场景驱动的快速上手教程
-- **[文档中心](../README.md)** - 文档体系总入口
-- **[设计文档](../project/README.md)** - Infra-* 项目文档
-- **[AI 行为准则](https://github.com/wangzitian0/infra2/blob/main/AGENTS.md)** - Claude 协作规范
-
----
 
 *Last updated: 2025-12-30*

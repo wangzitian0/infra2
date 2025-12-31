@@ -2,6 +2,31 @@
 
 > **禁令**：除非明确指定，否则 AI 不可以自动修改本文件。AI 不可以执行合流 (Merge PR) 操作。
 
+## 🧭 Wiki 入口地图（0级/1级）
+
+**0级入口**：`AGENTS.md`（你在这里）
+
+**1级入口（按用途）**
+1. **新手/应用接入** → [docs/onboarding/README.md](docs/onboarding/README.md)
+2. **全局工程概览** → [README.md](README.md)
+3. **技术真理/架构规范** → [docs/ssot/README.md](docs/ssot/README.md)
+4. **项目追踪/进行中任务** → [docs/project/README.md](docs/project/README.md)
+
+**阅读顺序（10 分钟速览）**
+1. [README.md](README.md)（全局概览与命令）
+2. [docs/onboarding/README.md](docs/onboarding/README.md)（场景路径）
+3. [docs/ssot/README.md](docs/ssot/README.md) → 先读 [docs/ssot/core.md](docs/ssot/core.md)
+4. [docs/project/README.md](docs/project/README.md)（绑定当前项目）
+
+**路由规则（遇到问题进哪里）**
+- 要上线/接入应用 → [Onboarding](docs/onboarding/README.md)
+- 要改基础设施/服务 → Layer README（[bootstrap](bootstrap/README.md), [platform](platform/README.md), [tools](tools/README.md)）→ [SSOT](docs/ssot/README.md)
+- 要找规范/权威定义 → [SSOT](docs/ssot/README.md)
+- 要找当前任务 → [Project](docs/project/README.md)
+
+**互引原则**
+- 0/1 级入口之间必须互相引用，避免单点入口遗失。
+
 ## ⚡ 快速理解路径（极简 5 步）
 
 > **用途**：让第一次进入项目的人在 10 分钟内建立全局心智（目标导向）。

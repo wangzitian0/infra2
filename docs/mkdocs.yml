@@ -78,6 +78,8 @@ nav:
           - Alerting: ssot/ops.alerting.md
   - Projects:
       - Portfolio: project/README.md
+      - Infra-006: project/Infra-006.documentation_engineering.md
+      - Infra-005: project/Infra-005.homer_portal.md
       - Infra-004: project/Infra-004.authentik_install.md
   - Archived Projects:
       - Infra-001: project/archive/Infra-001.bootstrap_setup.md

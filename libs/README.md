@@ -70,6 +70,9 @@ db_pass = config.get_secret("POSTGRES_PASSWORD")
 
 ## References
 
+- **Docs Index**: [docs/README.md](../docs/README.md)
+- **Project Portfolio**: [docs/project/README.md](../docs/project/README.md)
+- **AI 行为准则**: [AGENTS.md](../AGENTS.md)
 - **SSOT**: [docs/ssot/platform.automation.md](../docs/ssot/platform.automation.md)
 - **Core**: [docs/ssot/core.md](../docs/ssot/core.md)
 - **Platform**: [platform/README.md](../platform/README.md)
