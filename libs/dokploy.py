@@ -111,7 +111,7 @@ class DokployClient:
         compose_id: str,
         compose_file: str | None = None,
         env: str | None = None,
-        env: str | None = None,
+
         source_type: str | None = None,
         **kwargs
     ) -> dict:

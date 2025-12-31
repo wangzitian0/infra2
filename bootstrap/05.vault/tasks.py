@@ -179,6 +179,7 @@ class VaultDeployer(Deployer):
                 source_type="github",
                 githubId=github_id,
                 repository=f"{GITHUB_OWNER}/{GITHUB_REPO}",
+                owner=GITHUB_OWNER,
                 branch=GITHUB_BRANCH,
             )
         else:
