@@ -15,6 +15,20 @@
 | `bootstrap` | 1Password | 1Password |
 | `platform` | Dokploy | Vault |
 
+### 1.1 密钥分类规则
+
+**Web UI 密码** → 1Password（人工访问）
+- 用于浏览器登录、手动操作
+- 例如：Dokploy admin 密码、Authentik admin 密码
+- 存储在 1Password 便于 1Password 浏览器插件自动填充
+
+**机器读密码** → Vault（自动化访问）
+- 用于服务间通信、API 调用、数据库连接
+- 例如：数据库密码、Redis 密码、Service Token
+- 存储在 Vault 便于 vault-agent 自动拉取
+
+**特例**：Bootstrap 阶段全部在 1Password（因为 Vault 尚未部署）
+
 ---
 
 ## 2. 1Password Vault 结构
@@ -23,13 +37,16 @@ Bootstrap 依赖 1Password CLI (`op`)，使用 **`Infra2`** vault 存储所有�
 
 ### 2.1 Items 结构
 
-| Item | 用途 | 写入时机 |
-|------|------|----------|
-| `init/env_vars` | 种子变量（VPS_HOST, INTERNAL_DOMAIN） | 初始化时手动创建 |
-| `bootstrap/1password/VPS-01 Credentials File` | Connect 凭证文件 | 从 1Password.com 下载 |
-| `bootstrap/1password/VPS-01 Access Token: own_service` | Connect API Token | 创建时自动生成 |
-| `bootstrap/cloudflare` | Cloudflare DNS Token/Zone | 初始化时手动创建 |
-| `bootstrap-vault` | Vault unseal keys + root token | Vault 初始化时写入 |
+| Item | 用途 | 分类 | 写入时机 |
+|------|------|------|----------|
+| `init/env_vars` | 种子变量（VPS_HOST, INTERNAL_DOMAIN） | 配置 | 初始化时手动创建 |
+| `bootstrap/1password/VPS-01 Credentials File` | Connect 凭证文件 | 机器读 | 从 1Password.com 下载 |
+| `bootstrap/1password/VPS-01 Access Token: own_service` | Connect API Token | 机器读 | 创建时自动生成 |
+| `bootstrap/cloudflare` | Cloudflare DNS Token/Zone | 机器读 | 初始化时手动创建 |
+| `bootstrap/vault/Root Token` | Vault root token | 机器读 | Vault 初始化时写入 |
+| `bootstrap/vault/Unseal Keys` | Vault unseal keys | 人工读 | Vault 初始化时写入 |
+| `bootstrap/dokploy/admin` | Dokploy Web UI 密码 | **Web UI** | 手动创建 |
+| `platform/authentik/admin` | Authentik Web UI 密码 | **Web UI** | 从 Vault 复制 |
 
 `bootstrap/cloudflare` 推荐字段：
 
@@ -78,24 +95,37 @@ invoke local.bootstrap  # 校验 1Password 的 init/env_vars（不生成本地 .
 
 | 变量名 | 权限 | 用途 | 存储位置 |
 |--------|------|------|----------|
-| `VAULT_ROOT_TOKEN` | Read + Write | `invoke vault.setup-tokens` 生成/管理策略与 token | 1Password `op://Infra2/bootstrap-vault/Root Token` |
+| `VAULT_ROOT_TOKEN` | Read + Write | `invoke vault.setup-tokens` 生成/管理策略与 token | 1Password `op://Infra2/bootstrap/vault/Root Token/Root Token` |
 | `VAULT_APP_TOKEN` | Read-Only (per-service) | 运行时读取密钥 | Dokploy 服务环境变量 |
 
 ### 3.4 App 接入 Vault（vault-init）
 
-**核心原则**：应用容器不直接持久化密钥，运行时由 `vault-init` 读取 Vault 并写入 `tmpfs`。
+**核心原则**：应用容器不直接持久化密钥，运行时由 `vault-agent` 读取 Vault 并写入 `tmpfs`。
 
 步骤：
 1. **准备 Vault 密钥**：写入 `secret/data/platform/production/<service>`（KV v2）。
-2. **生成 Token**：`invoke vault.setup-tokens`（需 `VAULT_ROOT_TOKEN`）。
-3. **注入运行时变量**：Dokploy 服务环境变量里设置 `VAULT_APP_TOKEN`（可由 setup-tokens 自动注入）。
-4. **Compose 接入**：增加 `vault-init` 容器，读取 Vault 并写入 `/secrets/.env`。
-5. **应用读取**：主容器通过 `env_file: /secrets/.env` 或 `source /secrets/.env` 获取。
+2. **生成 Token**：`export VAULT_ROOT_TOKEN=<token> && invoke vault.setup-tokens`。
+3. **注入运行时变量**：Dokploy 服务环境变量里设置 `VAULT_APP_TOKEN`（由 setup-tokens 自动注入）。
+4. **Compose 接入**：增加 `vault-agent` sidecar，读取 Vault 并渲染到 `/secrets/.env`。
+5. **应用读取**：主容器 entrypoint 中 `source /secrets/.env`。
 
 约束：
 - `VAULT_ADDR` 仅是地址，可放在项目级 env（非敏感）。
 - `VAULT_APP_TOKEN` 必须是 per-service 的只读 token。
 - `/secrets` 需要挂载 `tmpfs`，避免磁盘落地。
+
+### 3.5 Web UI 密码同步到 1Password
+
+Platform 服务的 Web UI 密码（如 Authentik）虽然机器生成存储在 Vault，但需要同步到 1Password 供人工登录：
+
+```bash
+# 从 Vault 读取密码并写入 1Password
+vault kv get -field=bootstrap_password secret/platform/production/authentik | \
+  op item create --category=login --title="platform/authentik/admin" \
+    --vault=Infra2 "username[text]=akadmin" "password[password]=-"
+```
+
+这样浏览器插件可以自动填充 Web UI 登录表单。
 
 ---
 

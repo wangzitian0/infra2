@@ -22,6 +22,8 @@ __all__ = [
     'error',
     'warning',
     'info',
+    'fatal',
+    'check_failed',
     'prompt_action',
     'env_vars',
     'run_with_status',
@@ -41,11 +43,26 @@ def success(msg: str) -> None:
     console.print(f"[green]✅ {msg}[/]")
 
 
-def error(msg: str, details: str | None = None) -> None:
-    """Print error message with optional details"""
+def error(msg: str, detail: str | None = None) -> None:
+    """Print error message (non-fatal)"""
     console.print(f"[red]❌ {msg}[/]")
-    if details:
-        console.print(f"[dim red]   {details}[/]")
+    if detail:
+        console.print(f"[dim]   {detail}[/]")
+
+
+def fatal(msg: str, detail: str | None = None) -> None:
+    """Print fatal error and exit"""
+    console.print(f"[bold red]🛑 FATAL: {msg}[/]")
+    if detail:
+        console.print(f"[dim]   {detail}[/]")
+    raise SystemExit(1)
+
+
+def check_failed(msg: str, detail: str | None = None) -> None:
+    """Print check failure (can continue with caution)"""
+    console.print(f"[yellow]⚠️  CHECK FAILED: {msg}[/]")
+    if detail:
+        console.print(f"[dim]   {detail}[/]")
 
 
 def warning(msg: str) -> None:
