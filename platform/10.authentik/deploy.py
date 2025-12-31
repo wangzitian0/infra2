@@ -115,7 +115,6 @@ class AuthentikDeployer(Deployer):
         
         success("pre_compose complete - vault-init will fetch secrets at runtime")
         info("\nNote: VAULT_APP_TOKEN auto-configured via 'invoke vault.setup-tokens'")
-        info("After deployment, create API token: invoke authentik.shared.create-api-token")
         return result
 
 
