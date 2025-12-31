@@ -6,6 +6,7 @@ Simplified: minimal class attributes, uses new env.py API.
 from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from invoke import task
+import httpx
 
 from libs.common import get_env, validate_env
 from libs.console import header, success, error, warning, info, env_vars, prompt_action, run_with_status
@@ -37,6 +38,11 @@ class Deployer:
     chmod: str = "755"  # Override to "700" for sensitive services like PostgreSQL
     secret_key: str = "password"
     env_var_name: str = ""
+    
+    # Domain configuration (optional)
+    subdomain: str = None  # e.g., "sso" for sso.{INTERNAL_DOMAIN}
+    service_port: int = None  # Container port
+    service_name: str = None  # For multi-service composes
 
     @classmethod
     def env(cls) -> dict[str, str | None]:
@@ -72,23 +78,37 @@ class Deployer:
     
     @classmethod
     def pre_compose(cls, c: "Context") -> dict | None:
-        """Prepare and generate secrets"""
+        """Prepare directories and ensure secrets exist in Vault.
+        
+        For vault-init pattern: secrets are fetched at container runtime,
+        so we only ensure they exist and return VAULT_ADDR.
+        """
         if not cls._prepare_dirs(c):
             return None
         
+        e = cls.env()
         secrets_backend = cls.secrets()
-        result = {}
         
         # Get or generate primary secret
-        if cls.env_var_name:
+        if cls.secret_key:
             val = secrets_backend.get(cls.secret_key)
             if not val:
                 val = generate_password(24)
-                secrets_backend.set(cls.secret_key, val)
-            result[cls.env_var_name] = val
+                if secrets_backend.set(cls.secret_key, val):
+                    warning(f"Generated new secret in Vault: {cls.secret_key}")
+                else:
+                    error(f"Failed to store secret in Vault: {cls.secret_key}")
+                    return None
+            else:
+                info(f"Vault secret exists: {cls.secret_key}")
         
-        env_vars("DOKPLOY ENV", result)
-        success("pre_compose complete")
+        # Return VAULT_ADDR for vault-init pattern
+        result = {
+            "VAULT_ADDR": e.get("VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}"),
+        }
+        
+        env_vars("DOKPLOY ENV (vault-init)", result)
+        success("pre_compose complete - vault-init will fetch secrets at runtime")
         info("\nNote: VAULT_APP_TOKEN auto-configured via 'invoke vault.setup-tokens'")
         return result
     
@@ -107,14 +127,12 @@ class Deployer:
             
     @classmethod
     def composing(cls, c: "Context", env_vars: dict[str, str]) -> str:
-        """Deploy via Dokploy API. Returns composeId."""
-        from libs.dokploy import deploy_compose_service
+        """Deploy via Dokploy API using GitHub provider. Returns composeId."""
+        from libs.dokploy import get_dokploy, ensure_project
+        from libs.const import GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH
         
         e = cls.env()
-        header(f"{cls.service} composing", f"Deploying via Dokploy API")
-        
-        # Get compose content (from file or template)
-        compose_content = cls.get_compose_content(c)
+        header(f"{cls.service} composing", f"Deploying via Dokploy API (GitHub)")
         
         # Deploy via API
         # Priority: ENV > Class Attribute > Default "platform"
@@ -122,13 +140,80 @@ class Deployer:
         domain = e.get('INTERNAL_DOMAIN')
         host = f"cloud.{domain}" if domain else None
         
-        compose_id = deploy_compose_service(
-            project_name=project_name,
-            service_name=cls.service,
-            compose_content=compose_content,
-            env_vars=env_vars,
-            host=host,
-        )
+        client = get_dokploy(host=host)
+        
+        # Ensure project exists
+        project_id, env_id = ensure_project(project_name, f"Platform services: {project_name}", host=host)
+        if not env_id:
+            error("Failed to get environment ID")
+            raise ValueError("Failed to get environment ID")
+        
+        # Get GitHub provider ID
+        github_id = client.get_github_provider_id()
+        if not github_id:
+            error("No GitHub provider configured in Dokploy. Please add one in Settings -> Git Providers.")
+            raise ValueError("No GitHub provider found")
+        
+        info(f"Using GitHub provider: {github_id}")
+        
+        # Format env vars
+        env_str = "\n".join(f"{k}={v}" for k, v in env_vars.items())
+        
+        # Check if compose already exists
+        existing = client.find_compose_by_name(cls.service, project_name)
+        
+        if existing:
+            compose_id = existing["composeId"]
+            info("Updating existing compose service")
+            client.update_compose(
+                compose_id,
+                source_type="github",
+                githubId=github_id,
+                repository=GITHUB_REPO,
+                owner=GITHUB_OWNER,
+                branch=GITHUB_BRANCH,
+                composePath=cls.compose_path,
+                env=env_str,
+            )
+        else:
+            info("Creating new compose service with GitHub provider")
+            result = client.create_compose(
+                environment_id=env_id,
+                name=cls.service,
+                app_name=f"{project_name}-{cls.service}",
+                source_type="github",
+                githubId=github_id,
+                repository=GITHUB_REPO,
+                owner=GITHUB_OWNER,
+                branch=GITHUB_BRANCH,
+                composePath=cls.compose_path,
+                env=env_str,
+            )
+            compose_id = result["composeId"]
+        
+        # Deploy
+        info(f"Deploying compose {compose_id}...")
+        client.deploy_compose(compose_id)
+        
+        # Configure domain if specified
+        if cls.subdomain and cls.service_port:
+            domain_host = f"{cls.subdomain}.{e.get('INTERNAL_DOMAIN')}"
+            try:
+                info(f"Configuring domain: {domain_host}")
+                client.create_domain(
+                    compose_id=compose_id,
+                    host=domain_host,
+                    port=cls.service_port,
+                    https=True,
+                    service_name=cls.service_name,
+                )
+                success(f"Domain configured: https://{domain_host}")
+            except httpx.HTTPStatusError as exc:
+                # Domain might already exist or API endpoint changed
+                warning(f"Domain configuration skipped: HTTP {exc.response.status_code}")
+            except Exception as exc:
+                # Unexpected error - log details for debugging
+                warning(f"Domain configuration failed: {type(exc).__name__}: {exc}")
         
         success(f"Deployed {cls.service} (composeId: {compose_id})")
         return compose_id
