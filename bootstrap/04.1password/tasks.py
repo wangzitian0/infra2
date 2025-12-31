@@ -21,11 +21,6 @@ class OnePasswordDeployer(Deployer):
     gid = "999"
     chmod = "700"
 
-    # Repository config (could be moved to libs/config later)
-    GITHUB_OWNER = "wangzitian0"
-    GITHUB_REPO = "infra2"
-    GITHUB_BRANCH = "main"
-
     @classmethod
     def _upload_credentials(cls, c) -> bool:
         """Upload credentials from 1Password to server."""
@@ -43,7 +38,7 @@ class OnePasswordDeployer(Deployer):
             return False
         success("Credentials uploaded")
         return True
-    
+
     @classmethod
     def env(cls):
         return get_env()
@@ -92,6 +87,9 @@ class OnePasswordDeployer(Deployer):
         if not isinstance(env_vars, dict):
              from libs.common import get_env
              env_vars = get_env()
+        
+        # Import shared constants    
+        from libs.const import GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH
              
         e = cls.env()
         header("1Password composing", "Deploy in Dokploy (automated)")
@@ -136,8 +134,8 @@ class OnePasswordDeployer(Deployer):
                     app_name="bootstrap-1password",
                     source_type="github",
                     githubId=github_id,
-                    repository=f"{cls.GITHUB_OWNER}/{cls.GITHUB_REPO}",
-                    branch=cls.GITHUB_BRANCH,
+                    repository=f"{GITHUB_OWNER}/{GITHUB_REPO}",
+                    branch=GITHUB_BRANCH,
                     composePath=compose_path,
                 )
                 compose_id = result["composeId"]
@@ -218,3 +216,4 @@ def fix_permissions(c):
     e = get_env()
     ssh_user = e.get("VPS_SSH_USER") or "root"
     run_with_status(c, f"ssh {ssh_user}@{e['VPS_HOST']} 'chmod 750 /data/bootstrap/1password'", "Fix permissions")
+
