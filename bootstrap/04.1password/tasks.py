@@ -53,33 +53,6 @@ class OnePasswordDeployer(Deployer):
 
         success("pre-compose complete")
         return True
-    
-    @classmethod
-    def _get_github_provider_id(cls, client) -> str | None:
-        """Get GitHub provider ID by querying API or finding existing."""
-        # Method 1: Query API directly
-        try:
-            providers = client.list_git_providers()
-            for p in providers:
-                if p.get("provider") == "github":
-                    return p.get("gitProviderId")
-        except Exception:
-            # Ignore API errors if method not supported or fails
-            pass
-
-        # Method 2: Infer from existing services
-        try:
-            projects = client.list_projects()
-            for proj in projects:
-                for env in proj.get('environments', []):
-                    for comp in env.get('compose', []):
-                        if comp.get('githubId'):
-                            return comp.get('githubId')
-        except Exception:
-            # Ignore errors during project enumeration
-            pass
-            
-        return None
 
     @classmethod
     def composing(cls, c, env_vars: dict = None) -> bool:
@@ -116,7 +89,7 @@ class OnePasswordDeployer(Deployer):
             compose_path = cls.compose_path
             
             # Get GitHub provider ID
-            github_id = cls._get_github_provider_id(client)
+            github_id = client.get_github_provider_id()
             if not github_id:
                 raise ValueError("No GitHub provider configured in Dokploy. Please add one in Settings -> Git Providers.")
                 
@@ -125,7 +98,15 @@ class OnePasswordDeployer(Deployer):
             if existing:
                 compose_id = existing["composeId"]
                 info("Updating existing compose service")
-                client.update_compose(compose_id, source_type="github")
+                client.update_compose(
+                    compose_id,
+                    source_type="github",
+                    githubId=github_id,
+                    repository=GITHUB_REPO,
+                    owner=GITHUB_OWNER,
+                    branch=GITHUB_BRANCH,
+                    composePath=compose_path,
+                )
             else:
                 info("Creating new compose service with GitHub provider")
                 result = client.create_compose(
@@ -134,7 +115,8 @@ class OnePasswordDeployer(Deployer):
                     app_name="bootstrap-1password",
                     source_type="github",
                     githubId=github_id,
-                    repository=f"{GITHUB_OWNER}/{GITHUB_REPO}",
+                    repository=GITHUB_REPO,
+                    owner=GITHUB_OWNER,
                     branch=GITHUB_BRANCH,
                     composePath=compose_path,
                 )

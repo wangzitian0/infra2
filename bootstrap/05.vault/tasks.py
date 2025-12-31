@@ -21,33 +21,6 @@ class VaultDeployer(Deployer):
     chmod = "755"
 
     @classmethod
-    def _get_github_provider_id(cls, client) -> str | None:
-        """Get GitHub provider ID by querying API or finding existing."""
-        # Method 1: Query API directly
-        try:
-            providers = client.list_git_providers()
-            for p in providers:
-                if p.get("provider") == "github":
-                    return p.get("gitProviderId")
-        except Exception:
-            # Ignore API errors if method not supported or fails
-            pass
-
-        # Method 2: Infer from existing services
-        try:
-            projects = client.list_projects()
-            for proj in projects:
-                for env in proj.get('environments', []):
-                    for comp in env.get('compose', []):
-                        if comp.get('githubId'):
-                            return comp.get('githubId')
-        except Exception:
-            # Ignore errors during project enumeration
-            pass
-            
-        return None
-    
-    @classmethod
     def pre_compose(cls, c) -> dict | None:
         """Prepare data directory, upload config, and fetch secrets."""
         # 1. Prepare directories
@@ -160,7 +133,7 @@ class VaultDeployer(Deployer):
         client = get_dokploy(host=host)
         
         # Get GitHub provider ID
-        github_id = cls._get_github_provider_id(client)
+        github_id = client.get_github_provider_id()
         if not github_id:
              from invoke.exceptions import Exit
              error("No GitHub provider configured in Dokploy. Please add one in Settings -> Git Providers.")
@@ -178,9 +151,10 @@ class VaultDeployer(Deployer):
                 compose_id, 
                 source_type="github",
                 githubId=github_id,
-                repository=f"{GITHUB_OWNER}/{GITHUB_REPO}",
+                repository=GITHUB_REPO,
                 owner=GITHUB_OWNER,
                 branch=GITHUB_BRANCH,
+                composePath=cls.compose_path,
             )
         else:
             info("Creating new compose service with GitHub provider")
@@ -190,7 +164,8 @@ class VaultDeployer(Deployer):
                 app_name=f"bootstrap-{cls.service}",
                 source_type="github",
                 githubId=github_id,
-                repository=f"{GITHUB_OWNER}/{GITHUB_REPO}",
+                repository=GITHUB_REPO,
+                owner=GITHUB_OWNER,
                 branch=GITHUB_BRANCH,
                 composePath=cls.compose_path,
             )
@@ -243,6 +218,21 @@ class VaultDeployer(Deployer):
         warning(f"Vault health endpoint returned unexpected status code: {status_code}")
         return False
 
+    @classmethod
+    def is_reachable(cls, c) -> bool:
+        """Check if Vault is reachable (any valid response from health endpoint)"""
+        e = cls.env()
+        result = c.run(
+            f"curl -s -o /dev/null -w '%{{http_code}}' https://vault.{e['INTERNAL_DOMAIN']}/v1/sys/health",
+            warn=True,
+            hide=True,
+        )
+        if not result.ok:
+            return False
+        status_code = (result.stdout or "").strip()
+        # 501=not initialized, 503=sealed - both mean Vault is reachable
+        return status_code in {"200", "429", "472", "473", "501", "503"}
+
 
 # Standard tasks
 # We don't use make_tasks fully because Vault requires extra steps (init, unseal)
@@ -263,9 +253,18 @@ def deploy(c):
 
 @task(pre=[deploy])
 def init(c):
-    """Initialize Vault"""
+    """Initialize Vault (checks reachability first)"""
     e = get_env()
-    header("Vault init", "Initialization required")
+    header("Vault init", "Checking reachability")
+    
+    # Pre-check: Vault must be reachable before init (501/503 are OK - means service is up)
+    if not VaultDeployer.is_reachable(c):
+        error("Vault is not reachable. Deployment may have failed.")
+        info("Check logs: ssh root@<host> 'docker logs vault'")
+        from invoke.exceptions import Exit
+        raise Exit("Vault not reachable", code=1)
+    
+    success("Vault is reachable, ready for initialization")
     print(f"export VAULT_ADDR=https://vault.{e['INTERNAL_DOMAIN']}")
     print("vault operator init")
     prompt_action("Initialize Vault", [

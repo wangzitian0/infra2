@@ -238,6 +238,30 @@ class DokployClient:
         """List all configured git providers"""
         return self._request("GET", "settings.gitProvider.all")
 
+    def get_github_provider_id(self) -> str | None:
+        """Get GitHub provider ID by querying API or inferring from existing services."""
+        # Method 1: Query API directly
+        try:
+            providers = self.list_git_providers()
+            for p in providers:
+                if p.get("provider") == "github":
+                    return p.get("gitProviderId")
+        except Exception:
+            pass
+
+        # Method 2: Infer from existing services
+        try:
+            projects = self.list_projects()
+            for proj in projects:
+                for env in proj.get('environments', []):
+                    for comp in env.get('compose', []):
+                        if comp.get('githubId'):
+                            return comp.get('githubId')
+        except Exception:
+            pass
+
+        return None
+
     
 def get_dokploy(host: str | None = None) -> DokployClient:
     """Get configured Dokploy client
