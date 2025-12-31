@@ -3,7 +3,7 @@
 **Status**: In Progress  
 **Owner**: Infra  
 **Priority**: P2  
-**Branch**: `feat/docs-entry-order`
+**Branch**: `feat/ssot-bootstrap-pitfalls`
 
 ## Goal
 Establish a repeatable documentation engineering workflow with measurable link reachability.
@@ -12,8 +12,8 @@ Establish a repeatable documentation engineering workflow with measurable link r
 The wiki has multiple entry points and deep references; we need consistent navigation, reachability, and maintenance checks.
 
 ## Scope
-- [ ] Define L0/L1/L2 entry map and update cross-links.
-- [ ] Add a lightweight link reachability check (script or checklist).
+- [x] Define L0/L1/L2 entry map and update cross-links.
+- [x] Add a lightweight link reachability check (script or checklist).
 - [x] Normalize entry ordering across key docs for discoverability.
 
 ## Deliverables
@@ -29,6 +29,7 @@ The wiki has multiple entry points and deep references; we need consistent navig
 |------|--------|
 | 2025-12-31 | Initialized project |
 | 2025-12-31 | Standardized L1 entry ordering and labels across docs |
+| 2025-12-31 | Added reachability report and PageRank findings |
 
 ## Verification
 - [ ] L0 to L2 docs are reachable in <= 2 hops.
