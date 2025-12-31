@@ -305,6 +305,35 @@ def create_proxy_app(c, name, slug, external_host, internal_host, port=None, all
             app_slug = resp.json()["slug"]
             success(f"Created application: {name} (slug: {app_slug})")
         
+        # Add provider to embedded outpost
+        info("Configuring embedded outpost...")
+        resp = client.get(f"{base_url}/api/v3/outposts/instances/?managed=goauthentik.io/outposts/embedded")
+        if resp.status_code == 200 and resp.json()["results"]:
+            outpost = resp.json()["results"][0]
+            outpost_pk = outpost["pk"]
+            current_providers = outpost.get("providers", [])
+            
+            if provider_id not in current_providers:
+                current_providers.append(provider_id)
+                
+                # Update outpost with provider and authentik_host
+                resp = client.patch(
+                    f"{base_url}/api/v3/outposts/instances/{outpost_pk}/",
+                    json={
+                        "providers": current_providers,
+                        "config": {"authentik_host": base_url}
+                    }
+                )
+                
+                if resp.status_code == 200:
+                    success(f"Added provider to embedded outpost")
+                else:
+                    warning(f"Failed to update outpost: {resp.status_code}")
+            else:
+                info("Provider already in outpost")
+        else:
+            warning("Embedded outpost not found - forward auth may not work")
+        
         info(f"\n✨ SSO protection enabled for {external_host}")
         info(f"Access control: Only users in [{', '.join(group_list)}] can access")
         info(f"Admin URL: {base_url}/if/admin/#/core/applications/{app_slug}")
