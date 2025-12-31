@@ -6,7 +6,7 @@ Bootstrap layer uses 1Password for secrets, not Vault.
 import sys
 from invoke import task
 from libs.common import get_env
-from libs.console import header, success, error, warning, prompt_action, run_with_status
+from libs.console import header, success, error, warning, info, prompt_action, run_with_status
 from libs.deployer import Deployer, make_tasks
 
 shared_tasks = sys.modules.get("bootstrap.04.1password.shared")
@@ -17,9 +17,9 @@ class OnePasswordDeployer(Deployer):
     service = "1password"
     compose_path = "bootstrap/04.1password/compose.yaml"
     data_path = "/data/bootstrap/1password"
-    uid = "1000"
-    gid = "1000"
-    chmod = "750"
+    uid = "999"
+    gid = "999"
+    chmod = "700"
 
     @classmethod
     def _upload_credentials(cls, c) -> bool:
@@ -55,20 +55,116 @@ class OnePasswordDeployer(Deployer):
         return True
     
     @classmethod
-    def composing(cls, c):
-        """Deploy in Dokploy"""
+    def _get_github_provider_id(cls, client) -> str | None:
+        """Get GitHub provider ID by finding any existing compose with githubId."""
+        try:
+            projects = client.list_projects()
+            for proj in projects:
+                for env in proj.get('environments', []):
+                    for comp in env.get('compose', []):
+                        github_id = comp.get('githubId')
+                        if github_id:
+                            return github_id
+        except:
+            pass
+        return '126refcRlCoWj6pmPXElU'
+
+    @classmethod
+    def composing(cls, c, env_vars: dict = None) -> bool:
+        """Deploy in Dokploy (automated)"""
+        if not isinstance(env_vars, dict):
+             from libs.common import get_env
+             env_vars = get_env()
+             
         e = cls.env()
-        header("1Password composing", "Deploy in Dokploy")
-        prompt_action("Deploy in Dokploy", [
-            f"Access: https://cloud.{e['INTERNAL_DOMAIN']}",
-            "Project: bootstrap",
-            f"Compose: {cls.compose_path}",
-            "Click Deploy"
-        ])
-        success("composing complete")
+        header("1Password composing", "Deploy in Dokploy (automated)")
+        
+        try:
+            from libs.dokploy import ensure_project, get_dokploy
+            
+            # Ensure project exists
+            # Pass host to ensure we don't default to localhost
+            domain = env_vars.get('INTERNAL_DOMAIN')
+            host = f"cloud.{domain}" if domain else None
+            
+            project_id, env_id = ensure_project("bootstrap", "Bootstrap infrastructure services", host=host)
+            if not env_id:
+                error("Failed to get environment ID")
+                return False
+            
+            info(f"Project: bootstrap (env: {env_id})")
+            
+            # Deploy compose using GitHub provider
+            client = get_dokploy(host=host)
+            existing = client.find_compose_by_name("1password-connect", "bootstrap")
+            
+            # GitHub repository info
+            github_owner = "wangzitian0"
+            github_repo = "infra2"
+            github_branch = "main"
+            compose_path = cls.compose_path  # bootstrap/04.1password/compose.yaml
+            
+            # Get GitHub provider ID
+            github_id = cls._get_github_provider_id(client)
+            info(f"Using GitHub provider: {github_id}")
+            
+            if existing:
+                compose_id = existing["composeId"]
+                info("Updating existing compose service")
+                client.update_compose(
+                    compose_id,
+                    source_type="github"
+                )
+            else:
+                info("Creating new compose service with GitHub provider")
+                result = client._request("POST", "compose.create", json={
+                    "name": "1password-connect",
+                    "appName": "bootstrap-1password",
+                    "environmentId": env_id,
+                    "sourceType": "github",
+                    "githubId": github_id,
+                    "repository": f"{github_owner}/{github_repo}",
+                    "branch": github_branch,
+                    "composePath": compose_path,
+                })
+                compose_id = result["composeId"]
+            
+            # Update environment variables (Inject ALL vars from libs/1Password)
+            info("Updating environment variables (from libs)")
+            # Filter out internal keys or empty values if needed, but injecting all is safest for completeness
+            env_content = "\n".join([f"{k}={v}" for k, v in env_vars.items() if v is not None])
+            
+            client.update_compose(compose_id, env=env_content)
+            
+            info(f"Deploying compose (ID: {compose_id})")
+            client.deploy_compose(compose_id)
+            
+            success("1Password Connect deployment triggered")
+            warning("Wait 1-2 minutes for containers to start")
+            return True
+            
+        except ImportError:
+            warning("Dokploy API not available, falling back to manual")
+            prompt_action("Deploy in Dokploy manually", [
+                f"Access: https://cloud.{e['INTERNAL_DOMAIN']}",
+                "Project: bootstrap",
+                f"Compose: {cls.compose_path}",
+                "Click Deploy"
+            ])
+            return True
+        except Exception as ex:
+            error(f"Deployment failed: {ex}")
+            warning("Falling back to manual deployment")
+            prompt_action("Deploy in Dokploy manually", [
+                f"Access: https://cloud.{e['INTERNAL_DOMAIN']}",
+                "Project: bootstrap",
+                f"Compose: {cls.compose_path}",
+                "Click Deploy"
+            ])
+            return False
     
     @classmethod
-    def post_compose(cls, c) -> bool:
+    def post_compose(cls, c, shared_tasks=None) -> bool:
         """Verify deployment"""
         e = cls.env()
         header("1Password post-compose", "Verifying")

@@ -75,11 +75,25 @@ flowchart LR
 
 - **模式 A**：使用官方安装脚本或官方镜像。
 - **模式 B**：安装后立即更新版本追踪表。
+- **模式 C**：使用 `libs` 系统全量注入环境变量到 Dokploy Compose，避免使用 local `.env` 文件。
 
 ### ⛔ 禁止模式 (Blacklist)
 
 - **反模式 A**：**禁止** 让 Bootstrap 依赖 Platform 服务（避免循环依赖）。
 - **反模式 B**：**禁止** 不记录版本的“幽灵安装”。
+- **反模式 C**：**禁止** 使用 root 权限 (UID 0) 挂载 1Password 数据目录（必须使用 UID 999）。
+
+### ⚠️ 常见坑点 (Pitfalls)
+
+#### 1Password Connect
+1. **权限控制**：
+   - 容器内用户 `opuser` 使用 UID/GID `999`.
+   - 宿主机数据目录必须 `chown -R 999:999`.
+   - `permissions too broad` 错误：`files` 目录权限必须为 `700`。
+2. **环境变量注入**：
+   - Traefik 标签（如 `Host(\`op.${INTERNAL_DOMAIN}\`)`）依赖 Compose 时的环境变量。
+   - 必须通过 Dokploy API (`update_compose`) 显式注入变量，否则解析为空导致 SSL 申请失败 (400 Bad Request).
+   - 不要依赖 Dokploy 生成的 `.env` 文件，它是运行时生成的。
 
 ---
 
@@ -89,8 +103,8 @@ flowchart LR
 
 | 组件 | 当前版本 | 安装日期 | 操作人 |
 |------|----------|----------|--------|
-| Dokploy | unknown (需补) | unknown (需补) | - |
-| 1Password Connect | latest | unknown (需补) | - |
+| Dokploy | v0.25.11 | 2025-12-31 | AI Agent |
+| 1Password Connect | v1.8.1 (latest) | 2025-12-31 | AI Agent |
 | Vault | latest | unknown (需补) | - |
 
 ---
@@ -99,7 +113,9 @@ flowchart LR
 
 | 行为描述 | 验证方式 | 状态 |
 |----------|----------|------|
-| **Dokploy 服务可达** | `curl -I http://<VPS_IP>:3000` | ⏳ 未验证 |
+| **Dokploy 服务可达** | `curl -I https://cloud.<DOMAIN>` | ✅ 200 OK |
+| **1Password API 健康** | `curl https://op.<DOMAIN>/health` | ✅ 200 OK |
+| **SSL 证书有效** | `openssl x509 -in <CERT>` | ✅ Let's Encrypt |
 
 ---
 

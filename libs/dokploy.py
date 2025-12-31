@@ -231,9 +231,9 @@ def get_dokploy() -> DokployClient:
 
 
 # Convenience functions
-def ensure_project(name: str, description: str = "") -> tuple[str, str | None]:
+def ensure_project(name: str, description: str = "", host: str = None) -> tuple[str, str | None]:
     """Ensure project exists, return (projectId, environmentId)"""
-    client = get_dokploy()
+    client = get_dokploy(host=host)
     projects = client.list_projects()
     
     for project in projects:
@@ -242,9 +242,12 @@ def ensure_project(name: str, description: str = "") -> tuple[str, str | None]:
             return project["projectId"], env_id
     
     result = client.create_project(name, description)
-    # New project should have a default production environment
+    # API returns {'project': {...}, 'environment': {...}}
+    project_id = result.get("project", {}).get("projectId") if isinstance(result, dict) else None
+    if not project_id:
+        raise ValueError(f"Failed to create project {name}: invalid API response")
     env_id = client.get_default_environment_id(name)
-    return result["projectId"], env_id
+    return project_id, env_id
 
 
 def deploy_compose_service(
