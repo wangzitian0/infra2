@@ -270,12 +270,13 @@ def deploy_compose_service(
     service_name: str,
     compose_content: str,
     env_vars: dict[str, str],
+    host: str | None = None,
 ) -> str:
     """Deploy a compose service, creating project if needed. Returns composeId."""
-    client = get_dokploy()
+    client = get_dokploy(host=host)
     
     # Ensure project and get environment
-    project_id, environment_id = ensure_project(project_name, f"Platform services: {project_name}")
+    project_id, environment_id = ensure_project(project_name, f"Platform services: {project_name}", host=host)
     
     if not environment_id:
         raise ValueError(f"No environment found for project {project_name}")

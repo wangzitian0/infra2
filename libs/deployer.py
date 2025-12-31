@@ -115,11 +115,15 @@ class Deployer:
         
         # Deploy via API
         project_name = e.get("PROJECT", "platform")
+        domain = e.get('INTERNAL_DOMAIN')
+        host = f"cloud.{domain}" if domain else None
+        
         compose_id = deploy_compose_service(
             project_name=project_name,
             service_name=cls.service,
             compose_content=compose_content,
             env_vars=env_vars,
+            host=host,
         )
         
         success(f"Deployed {cls.service} (composeId: {compose_id})")

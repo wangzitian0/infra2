@@ -15,43 +15,94 @@ class VaultDeployer(Deployer):
     service = "vault"
     compose_path = "bootstrap/05.vault/compose.yaml"
     data_path = "/data/bootstrap/vault"
-    uid = "1000"
+    uid = "100"   # Vault official image runs as uid 100
     gid = "1000"
     chmod = "755"
     
     @classmethod
-    def pre_compose(cls, c) -> bool:
-        """Prepare data directory and upload config"""
+    def pre_compose(cls, c) -> dict | None:
+        """Prepare data directory, upload config, and fetch secrets."""
+        # 1. Prepare directories
         if not cls._prepare_dirs(c):
-            return False
+            return None
+            
         e = cls.env()
-        header("Vault pre_compose", "Preparing")
         ssh_user = e.get("VPS_SSH_USER") or "root"
+        header("Vault pre_compose", "Preparing resources")
 
-        # Create directories
-        result = run_with_status(
-            c,
-            f"ssh {ssh_user}@{e['VPS_HOST']} 'mkdir -p {cls.data_path}/{{file,logs,config}}'",
-            "Create directories",
-        )
-        if not result.ok:
-            return False
-
+        # 2. Upload config
         if not cls.upload_config(c):
-            return False
+            return None
+            
+        # 3. Create subdirectories with strict permissions
+        # vault user (100) needs write access to file/ logs/
+        run_with_status(
+            c,
+            f"ssh {ssh_user}@{e['VPS_HOST']} 'mkdir -p {cls.data_path}/{{file,logs,config}} && chown -R {cls.uid}:{cls.gid} {cls.data_path}'",
+            "Set directory structure and permissions"
+        )
 
+        # 4. Fetch 1Password Secrets for Unsealer
+        info("Fetching secrets from 1Password...")
+        env_vars = {
+            "INTERNAL_DOMAIN": e.get("INTERNAL_DOMAIN"),
+            "OP_VAULT_ID": "Infra2",  # Default vault
+        }
+        
+        try:
+            from libs.env import OpSecrets
+            
+            # OP_CONNECT_TOKEN (from 1Password Connect service account)
+            # Item: "bootstrap/1password/VPS-01 Access Token: own_service"
+            token_item = OpSecrets(item="bootstrap/1password/VPS-01 Access Token: own_service")
+            token = token_item.get("credential")
+            if token:
+                env_vars["OP_CONNECT_TOKEN"] = token
+            else:
+                warning("Could not finding OP_CONNECT_TOKEN in 1Password")
+                
+            # OP_ITEM_ID (Item "bootstrap/vault" where unseal keys are stored)
+            try:
+                # We need the Item ID, not content. Use CLI wrapper or name
+                # If item doesn't exist yet (pre-init), we might skip or leave empty.
+                # Here we assume it might exist or will be created. 
+                # passing name might work if unsealer supports it, but compose expects ID usually.
+                # Let's try to look it up.
+                cmd = "op item get 'bootstrap/vault' --vault Infra2 --format json"
+                res = c.run(cmd, hide=True, warn=True)
+                if res.ok:
+                    import json
+                    item = json.loads(res.stdout)
+                    env_vars["OP_ITEM_ID"] = item["id"]
+                else:
+                    info("Vault item 'bootstrap/vault' not found (normal if first run)")
+                    env_vars["OP_ITEM_ID"] = "" 
+            except Exception as ex:
+                warning(f"Failed to lookup Vault item ID: {ex}")
+                env_vars["OP_ITEM_ID"] = ""
+
+        except ImportError:
+            error("Missing libs.env dependencies")
+            return None
+        except Exception as ex:
+            error(f"Failed to fetch secrets: {ex}")
+            return None
+            
         success("pre_compose complete")
-        return True
+        return env_vars
 
     @classmethod
     def upload_config(cls, c) -> bool:
         """Upload Vault config file."""
         e = cls.env()
         ssh_user = e.get("VPS_SSH_USER") or "root"
+        # Ensure config dir exists first
+        c.run(f"ssh {ssh_user}@{e['VPS_HOST']} 'mkdir -p {cls.data_path}/config'")
+        
         result = run_with_status(
             c,
             f"scp bootstrap/05.vault/vault.hcl {ssh_user}@{e['VPS_HOST']}:{cls.data_path}/config/",
-            "Upload config",
+            "Upload config file",
         )
         return result.ok
     
@@ -95,7 +146,17 @@ class VaultDeployer(Deployer):
 # We don't use make_tasks fully because Vault requires extra steps (init, unseal)
 prepare = task(lambda c: VaultDeployer.pre_compose(c), name="prepare")
 upload_config = task(lambda c: VaultDeployer.upload_config(c), name="upload-config")
-deploy = task(lambda c: VaultDeployer.composing(c), name="deploy", pre=[prepare])
+@task(name="deploy")
+def deploy(c):
+    """Deploy Vault (prepares, injects vars, and composes)"""
+    # Fetch env vars (includes secrets and domain)
+    env_vars = VaultDeployer.pre_compose(c)
+    if env_vars is None:
+        error("Deployment failed: pre_compose returned No config")
+        from invoke.exceptions import Exit
+        raise Exit("pre_compose failed", code=1)
+        
+    VaultDeployer.composing(c, env_vars)
 
 
 @task(pre=[deploy])
