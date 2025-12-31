@@ -17,6 +17,10 @@ class PortalDeployer(Deployer):
     data_path = "/data/platform/portal"
     uid = "1000"
     gid = "1000"
+    
+    # Domain configuration
+    subdomain = "home"
+    service_port = 8080
 
     @classmethod
     def pre_compose(cls, c):
