@@ -1,48 +1,36 @@
 services:
-  vault-init:
+  vault-agent:
     image: hashicorp/vault:1.15
-    container_name: platform-authentik-vault-init
-    command:
-      - sh
-      - -c
-      - |
-        apk add --no-cache jq
-        export VAULT_TOKEN=$$VAULT_APP_TOKEN
-        vault read -format=json secret/data/platform/production/postgres | \
-          jq -r '.data.data | to_entries[] | select(.key == "root_password") | "PG_PASS=\(.value)"' > /secrets/.env
-
-        vault read -format=json secret/data/platform/production/redis | \
-          jq -r '.data.data | to_entries[] | select(.key == "password") | "REDIS_PASSWORD=\(.value)"' >> /secrets/.env
-          
-        vault read -format=json secret/data/platform/production/authentik | \
-          jq -r '.data.data | to_entries[] | select(.key == "secret_key") | "AUTHENTIK_SECRET_KEY=\(.value)"' >> /secrets/.env
-          
-        chmod 444 /secrets/.env && echo "✅ Secrets ready"
+    container_name: platform-authentik-vault-agent
+    restart: always
+    command: agent -config=/etc/vault/vault-agent.hcl
     environment:
-      VAULT_ADDR: ${VAULT_ADDR}
-      VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:-}
+      VAULT_TOKEN: ${VAULT_APP_TOKEN:-}
     volumes:
-      - secrets:/secrets
+      - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
+      - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
+      - secrets:/vault/secrets
     networks:
       - dokploy-network
-    restart: "no"
 
   server:
     image: ghcr.io/goauthentik/server:2024.12.0
     container_name: platform-authentik-server
     restart: unless-stopped
     depends_on:
-      vault-init:
-        condition: service_completed_successfully
+      - vault-agent
     entrypoint:
       - sh
       - -c
       - |
+        # Wait for secrets file to be rendered by vault-agent
+        while [ ! -f /secrets/.env ]; do
+          echo "Waiting for secrets..."
+          sleep 1
+        done
         set -a
         . /secrets/.env
         set +a
-        export AUTHENTIK_POSTGRESQL__PASSWORD=$$PG_PASS
-        export AUTHENTIK_REDIS__PASSWORD=$$REDIS_PASSWORD
         exec ak server
     environment:
       AUTHENTIK_REDIS__HOST: platform-redis
@@ -67,17 +55,19 @@ services:
     container_name: platform-authentik-worker
     restart: unless-stopped
     depends_on:
-      vault-init:
-        condition: service_completed_successfully
+      - vault-agent
     entrypoint:
       - sh
       - -c
       - |
+        # Wait for secrets file to be rendered by vault-agent
+        while [ ! -f /secrets/.env ]; do
+          echo "Waiting for secrets..."
+          sleep 1
+        done
         set -a
         . /secrets/.env
         set +a
-        export AUTHENTIK_POSTGRESQL__PASSWORD=$$PG_PASS
-        export AUTHENTIK_REDIS__PASSWORD=$$REDIS_PASSWORD
         exec ak worker
     environment:
       AUTHENTIK_REDIS__HOST: platform-redis
@@ -94,7 +84,10 @@ services:
 
 volumes:
   secrets:
-
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=10m,mode=0755"
 
 networks:
   dokploy-network:

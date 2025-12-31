@@ -1,32 +1,36 @@
 services:
-  vault-init:
+  vault-agent:
     image: hashicorp/vault:1.15
-    container_name: platform-postgres-vault-init
-    command: sh -c 'apk add --no-cache jq && export VAULT_TOKEN=$$VAULT_APP_TOKEN && vault read -format=json secret/data/platform/production/postgres | jq -r ".data.data | to_entries[] | \"\\(.key | ascii_upcase)=\\(.value)\"" > /secrets/.env && chmod 444 /secrets/.env && echo "✅ Secrets ready"'
+    container_name: platform-postgres-vault-agent
+    restart: always
+    command: agent -config=/etc/vault/vault-agent.hcl
     environment:
-      VAULT_ADDR: ${VAULT_ADDR}
-      VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:-}
+      VAULT_TOKEN: ${VAULT_APP_TOKEN:-}
     volumes:
-      - secrets:/secrets
+      - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
+      - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
+      - secrets:/vault/secrets
     networks:
       - dokploy-network
-    restart: "no"
 
   postgres:
     image: postgres:16-alpine
     container_name: platform-postgres
     restart: always
     depends_on:
-      vault-init:
-        condition: service_completed_successfully
+      - vault-agent
     entrypoint:
       - sh
       - -c
       - |
+        # Wait for secrets file to be rendered by vault-agent
+        while [ ! -f /secrets/.env ]; do
+          echo "Waiting for secrets..."
+          sleep 1
+        done
         set -a
         . /secrets/.env
         set +a
-        export POSTGRES_PASSWORD=$$ROOT_PASSWORD
         exec docker-entrypoint.sh postgres
     environment:
       POSTGRES_USER: postgres
@@ -47,7 +51,10 @@ services:
 
 volumes:
   secrets:
-
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=10m,mode=0755"
 
 networks:
   dokploy-network:

@@ -170,12 +170,12 @@ def setup_tokens(c):
     
     for service, dir_name in service_map.items():
         policy_name = f"platform-{service}-app"
-        policy_path = os.path.join(platform_dir, dir_name, "vault.policy")
+        policy_path = os.path.join(platform_dir, dir_name, "vault-policy.hcl")
         
         if os.path.exists(policy_path):
             with open(policy_path, "r") as f:
                 policy_rules = f.read().replace("{{env}}", env_name)
-            info(f"Loaded tailored policy from {dir_name}/vault.policy")
+            info(f"Loaded tailored policy from {dir_name}/vault-policy.hcl")
         else:
             # Fallback policy
             policy_rules = f'path "secret/data/platform/{env_name}/{service}" {{ capabilities = ["read", "list"] }}'
