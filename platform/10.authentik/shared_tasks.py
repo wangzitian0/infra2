@@ -146,7 +146,9 @@ def create_proxy_app(c, name, slug, external_host, internal_host, port=None, all
             error(f"Root token auth failed: {resp.status_code}")
             return False
         
-        user = resp.json()
+        user_data = resp.json()
+        # Handle nested user object
+        user = user_data.get('user', user_data)
         success(f"Authenticated as: {user['username']}")
         
         # Ensure groups exist
@@ -182,6 +184,17 @@ def create_proxy_app(c, name, slug, external_host, internal_host, port=None, all
         
         auth_flow_uuid = resp.json()["results"][0]["pk"]
         
+        # Get invalidation flow UUID
+        resp = client.get(f"{base_url}/api/v3/flows/instances/?slug=default-provider-invalidation-flow")
+        if resp.status_code != 200 or not resp.json()["results"]:
+            # Try alternative flow name
+            resp = client.get(f"{base_url}/api/v3/flows/instances/?slug=default-invalidation-flow")
+            if resp.status_code != 200 or not resp.json()["results"]:
+                error("Invalidation flow not found")
+                return False
+        
+        invalidation_flow_uuid = resp.json()["results"][0]["pk"]
+        
         # Create group-based access policy
         info(f"Creating access policy (groups: {', '.join(group_list)})...")
         policy_binding_payload = {
@@ -193,41 +206,57 @@ def create_proxy_app(c, name, slug, external_host, internal_host, port=None, all
         
         # Create policy binding for each group
         for idx, (group_name, group_pk) in enumerate(zip(group_list, group_pks)):
+            policy_name = f"{slug}-require-{group_name}"
+            
+            # Check if policy already exists
+            resp = client.get(f"{base_url}/api/v3/policies/expression/?name={policy_name}")
+            if resp.status_code == 200 and resp.json()["results"]:
+                policy_pk = resp.json()["results"][0]["pk"]
+                info(f"Policy already exists: {policy_name}")
+            else:
+                resp = client.post(
+                    f"{base_url}/api/v3/policies/expression/",
+                    json={
+                        "name": policy_name,
+                        "execution_logging": False,
+                        "expression": f"return ak_is_group_member(request.user, name='{group_name}')"
+                    }
+                )
+                
+                if resp.status_code != 201:
+                    error(f"Failed to create policy for group {group_name}: {resp.status_code} - {resp.text}")
+                    return False
+                
+                policy_pk = resp.json()["pk"]
+                success(f"Created policy: require {group_name} membership")
+        
+        # Check if provider already exists
+        provider_name = f"{slug}-proxy"
+        resp = client.get(f"{base_url}/api/v3/providers/proxy/?name={provider_name}")
+        if resp.status_code == 200 and resp.json()["results"]:
+            provider_id = resp.json()["results"][0]["pk"]
+            info(f"Provider already exists: {provider_name} (pk: {provider_id})")
+        else:
+            # Create proxy provider
+            info(f"Creating proxy provider for {external_host}...")
             resp = client.post(
-                f"{base_url}/api/v3/policies/expression/",
+                f"{base_url}/api/v3/providers/proxy/",
                 json={
-                    "name": f"{slug}-require-{group_name}",
-                    "execution_logging": False,
-                    "expression": f"return ak_is_group_member(request.user, name='{group_name}')"
+                    "name": provider_name,
+                    "authorization_flow": auth_flow_uuid,
+                    "invalidation_flow": invalidation_flow_uuid,
+                    "mode": "forward_single",
+                    "external_host": external_host,
+                    "internal_host": internal_url,
                 }
             )
             
             if resp.status_code != 201:
-                error(f"Failed to create policy for group {group_name}: {resp.status_code}")
+                error(f"Failed to create provider: {resp.status_code} - {resp.text}")
                 return False
             
-            policy_pk = resp.json()["pk"]
-            success(f"Created policy: require {group_name} membership")
-        
-        # Create proxy provider
-        info(f"Creating proxy provider for {external_host}...")
-        resp = client.post(
-            f"{base_url}/api/v3/providers/proxy/",
-            json={
-                "name": f"{slug}-proxy",
-                "authorization_flow": auth_flow_uuid,
-                "mode": "forward_single",
-                "external_host": external_host,
-                "internal_host": internal_url,
-            }
-        )
-        
-        if resp.status_code != 201:
-            error(f"Failed to create provider: {resp.status_code} - {resp.text}")
-            return False
-        
-        provider_id = resp.json()["pk"]
-        success(f"Created proxy provider: {provider_id}")
+            provider_id = resp.json()["pk"]
+            success(f"Created proxy provider: {provider_id}")
         
         # Bind policies to provider
         info("Binding access policies to provider...")
@@ -252,23 +281,29 @@ def create_proxy_app(c, name, slug, external_host, internal_host, port=None, all
                 if resp.status_code == 201:
                     success(f"Bound policy: {group_name} → provider")
         
-        # Create application
-        info(f"Creating application: {name}...")
-        resp = client.post(
-            f"{base_url}/api/v3/core/applications/",
-            json={
-                "name": name,
-                "slug": slug,
-                "provider": provider_id,
-            }
-        )
-        
-        if resp.status_code != 201:
-            error(f"Failed to create application: {resp.status_code} - {resp.text}")
-            return False
-        
-        app_slug = resp.json()["slug"]
-        success(f"Created application: {name} (slug: {app_slug})")
+        # Check if application already exists
+        resp = client.get(f"{base_url}/api/v3/core/applications/?slug={slug}")
+        if resp.status_code == 200 and resp.json()["results"]:
+            app_slug = resp.json()["results"][0]["slug"]
+            info(f"Application already exists: {name} (slug: {app_slug})")
+        else:
+            # Create application
+            info(f"Creating application: {name}...")
+            resp = client.post(
+                f"{base_url}/api/v3/core/applications/",
+                json={
+                    "name": name,
+                    "slug": slug,
+                    "provider": provider_id,
+                }
+            )
+            
+            if resp.status_code != 201:
+                error(f"Failed to create application: {resp.status_code} - {resp.text}")
+                return False
+            
+            app_slug = resp.json()["slug"]
+            success(f"Created application: {name} (slug: {app_slug})")
         
         info(f"\n✨ SSO protection enabled for {external_host}")
         info(f"Access control: Only users in [{', '.join(group_list)}] can access")
