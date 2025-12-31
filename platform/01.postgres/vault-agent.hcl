@@ -4,8 +4,10 @@ vault {
 
 auto_auth {
   method {
-    type = "token"
-    config = {}
+    type = "token_file"
+    config = {
+      token_file_path = "/vault/token"
+    }
   }
 
   sink {

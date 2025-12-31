@@ -3,9 +3,15 @@ services:
     image: hashicorp/vault:1.15
     container_name: platform-redis-vault-agent
     restart: always
-    command: agent -config=/etc/vault/vault-agent.hcl
+    entrypoint:
+      - sh
+      - -c
+      - |
+        echo "$$VAULT_APP_TOKEN" > /vault/token
+        exec vault agent -config=/etc/vault/vault-agent.hcl
     environment:
-      VAULT_TOKEN: ${VAULT_APP_TOKEN:-}
+      VAULT_ADDR: ${VAULT_ADDR:-https://vault.zitian.party}
+      VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:-}
     volumes:
       - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
       - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
