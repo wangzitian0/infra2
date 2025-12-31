@@ -1,92 +1,71 @@
 # Infra-004: Authentik Installation
 
-**Status**: In Progress  
+**Status**: Completed ✅
 **Owner**: Infra  
 **Priority**: P2  
-**Branch**: `feat/deploy-authentik`
+**Branch**: `feat/authentik-simplified-deploy` (Merged)
 
 ## Goal
 
-Install Authentik SSO for identity management on platform services.
+Install Authentik SSO for identity management on platform services using Vault for secret management.
 
 ## Scope
 
 - [x] Create deployment automation framework (libs/deployer.py)
-- [ ] Deploy PostgreSQL (01.postgres)
-- [ ] Deploy Redis (02.redis)
-- [ ] Deploy Authentik (10.authentik)
-- [ ] Configure initial SSO
+- [x] Deploy PostgreSQL (01.postgres) with vault-init
+- [x] Deploy Redis (02.redis) with vault-init
+- [x] Deploy Authentik (10.authentik) with vault-init
+- [x] Automate Vault Token generation and Dokploy configuration
+- [x] Implement DRY compose templates (libs/compose_templates.py)
 
 ## Architecture
 
 ```mermaid
 flowchart LR
+    Vault[HashiCorp Vault] -->|Token| Init[vault-init container]
+    Init -->|Secrets /tmpfs| App[Application Container]
     PG[01.postgres] --> AUTH[10.authentik]
     RD[02.redis] --> AUTH
-    AUTH --> SSO[sso.zitian.party]
+    AUTH --> SSO[https://sso.zitian.party]
 ```
 
-## Deployment Order
+## Key Achievements
+
+### 1. 100% Automated Deployment
+- **Token Generation**: `invoke vault.setup-tokens` automatically generates permanent, read-only tokens for each service.
+- **Configuration**: Tokens are automatically injected into Dokploy service environment variables.
+- **Domain**: Sso domain is automatically configured via Dokploy API.
+
+### 2. Secure Secret Management (vault-init)
+- **Pattern**: Sidecar/Init container fetches secrets.
+- **Storage**: Secrets stored in `tmpfs` (RAM only), never on disk.
+- **Isolation**: Each service has its own limited-scope token.
+
+### 3. Code Quality (DRY)
+- **Templates**: `libs/compose_templates.py` eliminates ~150 lines of duplicate YAML.
+- **Deployer**: Base class handles common logic (directories, permissions, Dokploy API).
+
+## Deployment Commands
 
 ```bash
-# 1. PostgreSQL
+# 1. Generate Tokens (One-time)
+invoke vault.setup-tokens
+
+# 2. Deploy Services
 invoke postgres.setup
-
-# 2. Redis
 invoke redis.setup
-
-# 3. Authentik
 invoke authentik.setup
 ```
-
-## Implementation Details
-
-### libs/ Structure
-
-| File | Purpose |
-|------|---------|
-| `libs/common.py` | get_env, validate_env, generate_password, check_service |
-| `libs/console.py` | Rich CLI output helpers |
-| `libs/deployer.py` | Deployer base class with secrets integration |
-| `libs/config.py` | Legacy secrets wrapper |
-
-### Service Structure
-
-```
-platform/{nn}.{service}/
-├── compose.yaml       # Docker Compose
-├── deploy.py          # XxxDeployer + @task
-├── shared_tasks.py    # status() check
-└── README.md          # Service docs
-```
-
-### Key Features
-
-- **Secrets SSOT**: Vault/1Password via `libs.env`
-- **Vault integration**: Auto VAULT_ADDR from INTERNAL_DOMAIN
-- **DRY pattern**: Deployer base class, check_service()
-
-## PR Links
-
-- [PR #7: Deploy Authentik with DRY/Pythonic improvements](https://github.com/wangzitian0/infra2/pull/7)
-
-## Change Log
-
-| Date | Change |
-|------|--------|
-| 2025-12-29 | Created libs/, platform services, Deployer pattern |
-| 2025-12-29 | Fixed VAULT_ADDR to use https://vault.{INTERNAL_DOMAIN} |
 
 ## Verification
 
 - [x] `invoke --list` loads all modules
-- [ ] `invoke postgres.shared.status` returns healthy
-- [ ] `invoke redis.shared.status` returns healthy
-- [ ] `invoke authentik.shared.status` returns healthy
-- [ ] Authentik UI at https://sso.zitian.party reachable
+- [x] `invoke postgres.shared.status` returns healthy
+- [x] `invoke redis.shared.status` returns healthy
+- [x] `invoke authentik.shared.status` returns healthy
+- [x] Authentik UI at https://sso.zitian.party reachable
 
 ## References
 
 - [SSOT: platform.automation.md](../ssot/platform.automation.md)
-- [libs/README.md](https://github.com/wangzitian0/infra2/blob/main/libs/README.md)
-- [platform/README.md](https://github.com/wangzitian0/infra2/blob/main/platform/README.md)
+- [Walkthrough](../../walkthrough.md)

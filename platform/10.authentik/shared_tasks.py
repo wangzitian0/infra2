@@ -6,4 +6,4 @@ from libs.common import check_service
 @task
 def status(c):
     """Check Authentik status"""
-    return check_service(c, "authentik", "wget -q --spider http://localhost:9000/-/health/ready/")
+    return check_service(c, "authentik", "ak healthcheck")

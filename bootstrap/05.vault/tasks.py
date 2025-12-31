@@ -170,12 +170,12 @@ def setup_tokens(c):
     
     for service, dir_name in service_map.items():
         policy_name = f"platform-{service}-app"
-        policy_path = os.path.join(platform_dir, dir_name, "vault.policy")
+        policy_path = os.path.join(platform_dir, dir_name, "vault-policy.hcl")
         
         if os.path.exists(policy_path):
             with open(policy_path, "r") as f:
                 policy_rules = f.read().replace("{{env}}", env_name)
-            info(f"Loaded tailored policy from {dir_name}/vault.policy")
+            info(f"Loaded tailored policy from {dir_name}/vault-policy.hcl")
         else:
             # Fallback policy
             policy_rules = f'path "secret/data/platform/{env_name}/{service}" {{ capabilities = ["read", "list"] }}'
@@ -220,15 +220,10 @@ def setup_tokens(c):
         if result.ok:
             token_data = json.loads(result.stdout)
             token = token_data["auth"]["client_token"]
-            label = f"Token for {service} (masked):" if not show_tokens else f"Token for {service}:"
-            success(label)
-            if show_tokens:
-                console.print(f"   {token}")
-            else:
-                masked_token = token if len(token) <= 8 else f"{token[:4]}...{token[-4:]}"
-                console.print(f"   {masked_token}")
+            success(f"✅ Token for {service}:")
+            print(f"   {token}")
             _configure_dokploy_token(c, service, token)
-            console.print()
+            print()
         else:
             error(f"Failed to create token for {service}")
 

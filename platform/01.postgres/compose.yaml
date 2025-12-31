@@ -1,23 +1,66 @@
 services:
+  vault-agent:
+    image: hashicorp/vault:1.15
+    container_name: platform-postgres-vault-agent
+    restart: always
+    entrypoint:
+      - sh
+      - -c
+      - |
+        echo "$$VAULT_APP_TOKEN" > /vault/token
+        exec vault agent -config=/etc/vault/vault-agent.hcl
+    environment:
+      VAULT_ADDR: ${VAULT_ADDR:-https://vault.zitian.party}
+      VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:-}
+    volumes:
+      - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
+      - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
+      - secrets:/vault/secrets
+    networks:
+      - dokploy-network
+
   postgres:
     image: postgres:16-alpine
     container_name: platform-postgres
     restart: always
+    depends_on:
+      - vault-agent
+    entrypoint:
+      - sh
+      - -c
+      - |
+        # Wait for secrets file to be rendered by vault-agent
+        while [ ! -f /secrets/.env ]; do
+          echo "Waiting for secrets..."
+          sleep 1
+        done
+        set -a
+        . /secrets/.env
+        set +a
+        exec docker-entrypoint.sh postgres
+    environment:
+      POSTGRES_USER: postgres
+      PGDATA: /var/lib/postgresql/data/pgdata
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres}"]
-      start_period: 20s
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      start_period: 30s
       interval: 30s
       retries: 5
       timeout: 5s
     volumes:
+      - secrets:/secrets:ro
       - /data/platform/postgres:/var/lib/postgresql/data
-    environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?error}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
     networks:
       - dokploy-network
     labels:
       - "traefik.enable=false"
+
+volumes:
+  secrets:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=10m,mode=0755"
 
 networks:
   dokploy-network:
