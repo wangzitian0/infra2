@@ -87,6 +87,7 @@ class DokployClient:
         compose_type: str = "docker-compose",
         app_name: str | None = None,
         source_type: str = "raw",  # raw = use composeFile content, github = pull from repo
+        **kwargs
     ) -> dict:
         """Create a new compose application in an environment"""
         payload = {
@@ -94,6 +95,7 @@ class DokployClient:
             "environmentId": environment_id,
             "composeType": compose_type,
             "sourceType": source_type,
+            **kwargs
         }
         if compose_file:
             payload["composeFile"] = compose_file

@@ -130,16 +130,16 @@ class OnePasswordDeployer(Deployer):
                 client.update_compose(compose_id, source_type="github")
             else:
                 info("Creating new compose service with GitHub provider")
-                result = client._request("POST", "compose.create", json={
-                    "name": "1password-connect",
-                    "appName": "bootstrap-1password",
-                    "environmentId": env_id,
-                    "sourceType": "github",
-                    "githubId": github_id,
-                    "repository": f"{cls.GITHUB_OWNER}/{cls.GITHUB_REPO}",
-                    "branch": cls.GITHUB_BRANCH,
-                    "composePath": compose_path,
-                })
+                result = client.create_compose(
+                    environment_id=env_id,
+                    name="1password-connect",
+                    app_name="bootstrap-1password",
+                    source_type="github",
+                    githubId=github_id,
+                    repository=f"{cls.GITHUB_OWNER}/{cls.GITHUB_REPO}",
+                    branch=cls.GITHUB_BRANCH,
+                    composePath=compose_path,
+                )
                 compose_id = result["composeId"]
             
             # Update environment variables
