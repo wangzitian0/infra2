@@ -17,6 +17,12 @@ if [ -z "$VPS_IP" ]; then
     exit 1
 fi
 
+# 安全检查: 验证 VPS_IP 格式 (防止注入)
+if [[ ! "$VPS_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && [[ ! "$VPS_IP" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+    echo "❌ 错误: VPS_HOST 格式无效或包含非法字符"
+    exit 1
+fi
+
 echo "✓ VPS IP: $VPS_IP"
 echo "✓ Internal Domain: $INTERNAL_DOMAIN"
 echo ""
@@ -34,7 +40,7 @@ echo "🚀 开始安装 Dokploy v0.25.11..."
 echo ""
 
 # SSH 到 VPS 并安装
-ssh root@${VPS_IP} << 'ENDSSH'
+ssh root@"${VPS_IP}" << 'ENDSSH'
 set -e
 
 echo "📦 下载并执行 Dokploy 安装脚本 (v0.25.11)..."

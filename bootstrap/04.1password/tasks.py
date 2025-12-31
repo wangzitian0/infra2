@@ -63,7 +63,8 @@ class OnePasswordDeployer(Deployer):
             for p in providers:
                 if p.get("provider") == "github":
                     return p.get("gitProviderId")
-        except:
+        except Exception:
+            # Ignore API errors if method not supported or fails
             pass
 
         # Method 2: Infer from existing services
@@ -74,7 +75,8 @@ class OnePasswordDeployer(Deployer):
                     for comp in env.get('compose', []):
                         if comp.get('githubId'):
                             return comp.get('githubId')
-        except:
+        except Exception:
+            # Ignore errors during project enumeration
             pass
             
         return None

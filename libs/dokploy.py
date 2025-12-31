@@ -231,7 +231,7 @@ class DokployClient:
         return self._request("GET", "settings.gitProvider.all")
 
     
-def get_dokploy(host: str = None) -> DokployClient:
+def get_dokploy(host: str | None = None) -> DokployClient:
     """Get configured Dokploy client
     
     Args:
