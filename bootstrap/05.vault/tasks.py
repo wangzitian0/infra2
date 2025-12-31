@@ -20,6 +20,38 @@ class VaultDeployer(Deployer):
     gid = "1000"
     chmod = "755"
     
+    # Repository config
+    GITHUB_OWNER = "wangzitian0"
+    GITHUB_REPO = "infra2"
+    GITHUB_BRANCH = "main"
+
+    @classmethod
+    def _get_github_provider_id(cls, client) -> str | None:
+        """Get GitHub provider ID by querying API or finding existing."""
+        # Method 1: Query API directly
+        try:
+            providers = client.list_git_providers()
+            for p in providers:
+                if p.get("provider") == "github":
+                    return p.get("gitProviderId")
+        except Exception:
+            # Ignore API errors if method not supported or fails
+            pass
+
+        # Method 2: Infer from existing services
+        try:
+            projects = client.list_projects()
+            for proj in projects:
+                for env in proj.get('environments', []):
+                    for comp in env.get('compose', []):
+                        if comp.get('githubId'):
+                            return comp.get('githubId')
+        except Exception:
+            # Ignore errors during project enumeration
+            pass
+            
+        return None
+    
     @classmethod
     def pre_compose(cls, c) -> dict | None:
         """Prepare data directory, upload config, and fetch secrets."""
@@ -107,6 +139,72 @@ class VaultDeployer(Deployer):
         )
         return result.ok
     
+    @classmethod
+    def composing(cls, c, env_vars: dict) -> str:
+        """Deploy Vault via Dokploy API (using GitHub provider)"""
+        from libs.dokploy import ensure_project, get_dokploy
+        
+        e = cls.env()
+        header(f"{cls.service} composing", f"Deploying via Dokploy API")
+        
+        # Ensure project exists
+        domain = e.get('INTERNAL_DOMAIN')
+        host = f"cloud.{domain}" if domain else None
+        
+        # Priority: ENV > Class Attribute > Default "bootstrap"
+        project_name = e.get("PROJECT") or cls.project
+        
+        project_id, env_id = ensure_project(project_name, f"Bootstrap services: {project_name}", host=host)
+        if not env_id:
+            from invoke.exceptions import Exit
+            error("Failed to get environment ID")
+            raise Exit("Failed to get environment ID", code=1)
+            
+        # Deploy compose using GitHub provider
+        client = get_dokploy(host=host)
+        
+        # Get GitHub provider ID
+        github_id = cls._get_github_provider_id(client)
+        if not github_id:
+             from invoke.exceptions import Exit
+             error("No GitHub provider configured in Dokploy. Please add one in Settings -> Git Providers.")
+             raise Exit("No GitHub provider found", code=1)
+             
+        info(f"Using GitHub provider: {github_id}")
+        
+        # Check if exists
+        existing = client.find_compose_by_name(cls.service, project_name)
+        
+        if existing:
+            compose_id = existing["composeId"]
+            info("Updating existing compose service")
+            client.update_compose(compose_id, source_type="github")
+        else:
+            info("Creating new compose service with GitHub provider")
+            result = client.create_compose(
+                environment_id=env_id,
+                name=cls.service,
+                app_name=f"bootstrap-{cls.service}",
+                source_type="github",
+                githubId=github_id,
+                repository=f"{cls.GITHUB_OWNER}/{cls.GITHUB_REPO}",
+                branch=cls.GITHUB_BRANCH,
+                composePath=cls.compose_path,
+            )
+            compose_id = result["composeId"]
+        
+        # Update environment variables
+        info("Updating environment variables (from libs)")
+        # Filter out internal keys or empty values
+        env_content = "\n".join([f"{k}={v}" for k, v in env_vars.items() if v is not None])
+        client.update_compose(compose_id, env=env_content)
+        
+        info(f"Deploying compose {compose_id}...")
+        client.deploy_compose(compose_id)
+        
+        success(f"Deployed {cls.service} (composeId: {compose_id})")
+        return compose_id
+
     @classmethod
     def post_compose(cls, c, shared_tasks: Any) -> bool:
         """Verify deployment"""
