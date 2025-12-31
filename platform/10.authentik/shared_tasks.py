@@ -1,4 +1,5 @@
 """Authentik shared tasks for API operations"""
+import os
 from invoke import task
 from libs.common import check_service, get_env
 from libs.console import header, success, error, warning, info
@@ -11,7 +12,62 @@ def status(c):
 
 
 @task
-def create_proxy_app(c, name, slug, external_host, internal_host, port=None):
+def create_api_token(c):
+    """Create API token for automation (run after first deployment)
+    
+    Creates a long-lived API token for the akadmin user and stores it in Vault.
+    This token is used by automation tasks like create-proxy-app.
+    
+    Example:
+        export VAULT_ROOT_TOKEN=<token>
+        invoke authentik.shared.create-api-token
+    """
+    import subprocess
+    from libs.env import get_secrets
+    
+    header("Creating Authentik API Token", "Automation Setup")
+    
+    e = get_env()
+    env_name = e.get('ENV', 'production')
+    vault_token = os.getenv('VAULT_ROOT_TOKEN')
+    
+    if not vault_token:
+        error("VAULT_ROOT_TOKEN not set")
+        info("export VAULT_ROOT_TOKEN=<token>")
+        return False
+    
+    info("Running token creation script on server...")
+    
+    # Run init-token.sh script on server
+    script = f"""
+set -e
+cd /etc/dokploy/compose/platform-authentik-*/code/platform/10.authentik
+docker compose run --rm -e VAULT_INIT_TOKEN={vault_token} -e VAULT_INIT_ADDR=https://vault.{e['INTERNAL_DOMAIN']} token-init
+"""
+    
+    result = c.run(
+        f"ssh root@{e['VPS_HOST']} '{script}'",
+        warn=True
+    )
+    
+    if not result.ok:
+        error("Failed to create token")
+        return False
+    
+    # Verify token in Vault
+    authentik_secrets = get_secrets("platform", "authentik", env_name)
+    api_token = authentik_secrets.get("api_token")
+    
+    if api_token:
+        success(f"API token created and stored in Vault")
+        info(f"Token prefix: {api_token[:20]}...")
+        info("\nYou can now use:")
+        info("  invoke authentik.shared.create-proxy-app --name=... --slug=...")
+        return True
+    else:
+        warning("Token creation completed but not found in Vault")
+        info("Check logs above for errors")
+        return False
     """Create Authentik application with proxy provider
     
     First, create an API token in Authentik Web UI:
