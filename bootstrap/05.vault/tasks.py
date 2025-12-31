@@ -13,6 +13,7 @@ class VaultDeployer(Deployer):
     """Vault deployer using libs/ system"""
     
     service = "vault"
+    project = "bootstrap"
     compose_path = "bootstrap/05.vault/compose.yaml"
     data_path = "/data/bootstrap/vault"
     uid = "100"   # Vault official image runs as uid 100

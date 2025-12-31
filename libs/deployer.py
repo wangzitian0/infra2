@@ -29,6 +29,7 @@ class Deployer:
     service: str = ""
     compose_path: str = ""
     data_path: str = ""
+    project: str = "platform"  # Default project
     
     # Optional with defaults
     uid: str = "999"
@@ -36,7 +37,7 @@ class Deployer:
     chmod: str = "755"  # Override to "700" for sensitive services like PostgreSQL
     secret_key: str = "password"
     env_var_name: str = ""
-    
+
     @classmethod
     def env(cls) -> dict[str, str | None]:
         return get_env()
@@ -45,8 +46,10 @@ class Deployer:
     def secrets(cls):
         """Get secrets backend for this service"""
         e = cls.env()
+        # Use cls.project if PROJECT env not set
+        project = e.get('PROJECT') or cls.project
         return get_secrets(
-            project=e.get('PROJECT', 'platform'),
+            project=project,
             service=cls.service,
             env=e.get('ENV', 'production')
         )
@@ -101,7 +104,7 @@ class Deployer:
         except OSError as exc:
             error(f"Failed to read compose file at '{cls.compose_path}': {exc}")
             raise
-
+            
     @classmethod
     def composing(cls, c: "Context", env_vars: dict[str, str]) -> str:
         """Deploy via Dokploy API. Returns composeId."""
@@ -114,7 +117,8 @@ class Deployer:
         compose_content = cls.get_compose_content(c)
         
         # Deploy via API
-        project_name = e.get("PROJECT", "platform")
+        # Priority: ENV > Class Attribute > Default "platform"
+        project_name = e.get("PROJECT") or cls.project
         domain = e.get('INTERNAL_DOMAIN')
         host = f"cloud.{domain}" if domain else None
         
