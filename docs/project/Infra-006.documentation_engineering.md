@@ -31,6 +31,7 @@ The wiki has multiple entry points and deep references; we need consistent navig
 | 2025-12-31 | Standardized L1 entry ordering and labels across docs |
 | 2025-12-31 | Added reachability report and PageRank findings |
 | 2025-12-31 | Linked Bootstrap/E2E subdocs and closed reachability gaps |
+| 2025-12-31 | Added TODOWRITE links for active projects and refreshed metrics |
 
 ## Verification
 - [ ] L0 to L2 docs are reachable in <= 2 hops.

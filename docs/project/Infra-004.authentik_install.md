@@ -65,6 +65,10 @@ invoke authentik.setup
 - [x] `invoke authentik.shared.status` returns healthy
 - [x] Authentik UI at https://sso.zitian.party reachable
 
+## TODOWRITE
+
+- [Infra-004.TODOWRITE.md](./Infra-004.TODOWRITE.md)
+
 ## References
 
 - [SSOT: platform.automation.md](../ssot/platform.automation.md)

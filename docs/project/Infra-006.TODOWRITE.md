@@ -14,8 +14,8 @@ Track top issues discovered during documentation engineering.
 ## Latest Findings (2025-12-31)
 
 **Reachability**
-- TOTAL_MD: 68
-- DIST_LEVELS: {0: 1, 1: 15, 2: 42, 3: 10}
+- TOTAL_MD: 70
+- DIST_LEVELS: {0: 1, 1: 15, 2: 42, 3: 12}
 - UNREACHABLE: 0
 
 **PageRank Top 10**
