@@ -2,7 +2,7 @@
 
 **Status**: In Progress  
 **Owner**: Infra  
-**Priority**: P?  
+**Priority**: P2  
 **Branch**: TBD
 
 ## Goal

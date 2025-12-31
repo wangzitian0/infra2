@@ -79,7 +79,7 @@ Note: Deploy runs through Dokploy API; set `DOKPLOY_API_KEY` (or store it in 1Pa
 
 - **Docs Index**: [docs/README.md](../docs/README.md)
 - **Project Portfolio**: [docs/project/README.md](../docs/project/README.md)
-- **AI Rules**: [AGENTS.md](../AGENTS.md)
+- **AI 行为准则**: [AGENTS.md](../AGENTS.md)
 - **SSOT**: [docs/ssot/platform.automation.md](../docs/ssot/platform.automation.md)
 - **Libs**: [libs/README.md](../libs/README.md)
 - **Tools**: [tools/README.md](../tools/README.md)
