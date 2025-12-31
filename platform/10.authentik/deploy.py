@@ -3,7 +3,7 @@ import sys
 import os
 from libs.deployer import Deployer, make_tasks
 from libs.common import get_env
-from libs.console import success, warning, error, info, run_with_status
+from libs.console import success, warning, info, run_with_status
 from libs.env import generate_password, get_secrets
 
 shared_tasks = sys.modules.get("platform.10.authentik.shared")
@@ -54,22 +54,26 @@ class AuthentikDeployer(Deployer):
         success("Verified postgres and redis secrets in Vault")
         
         # Create subdirs
-        run_with_status(c, f"ssh root@{e['VPS_HOST']} 'mkdir -p {cls.data_path}/media/public {cls.data_path}/certs'", "Create subdirs")
+        run_with_status(c, f"ssh root@{e['VPS_HOST']} 'mkdir -p {cls.data_path}/media {cls.data_path}/certs'", "Create subdirs")
         
         # Create database (idempotent)
         result = c.run(
-            f"ssh root@{e['VPS_HOST']} \"docker exec platform-postgres psql -U postgres -c 'CREATE DATABASE IF NOT EXISTS authentik;'\"",
+            f"ssh root@{e['VPS_HOST']} \"docker exec platform-postgres psql -U postgres -c 'CREATE DATABASE authentik;'\"",
             warn=True,
             hide=True
         )
-        if not result.ok:
-            # Postgres doesn't support IF NOT EXISTS, fallback to normal CREATE
-            c.run(
-                f"ssh root@{e['VPS_HOST']} \"docker exec platform-postgres psql -U postgres -c 'CREATE DATABASE authentik;'\"",
-                warn=True,
-                hide=True
-            )
-        success("Database ready")
+        if result.failed:
+            # Check if database already exists
+            stderr = result.stderr or ""
+            if "already exists" in stderr:
+                info("Database 'authentik' already exists")
+            else:
+                fatal(
+                    "Failed to create 'authentik' database",
+                    f"Error: {stderr}"
+                )
+        else:
+            success("Database created")
         
         # Ensure Authentik secrets exist
         authentik_secrets = get_secrets(project, "authentik", env_name)
@@ -84,18 +88,25 @@ class AuthentikDeployer(Deployer):
         else:
             info("Authentik secret key exists in Vault")
         
-        # Bootstrap admin credentials (only generate once)
+        # Bootstrap admin credentials (generate independently if missing)
         bootstrap_password = authentik_secrets.get("bootstrap_password")
         bootstrap_email = authentik_secrets.get("bootstrap_email")
-        if not bootstrap_password or not bootstrap_email:
+        
+        if not bootstrap_password:
             bootstrap_password = generate_password(24)
-            bootstrap_email = e.get("ADMIN_EMAIL", "admin@localhost")
-            authentik_secrets.set("bootstrap_password", bootstrap_password)
-            authentik_secrets.set("bootstrap_email", bootstrap_email)
-            warning(f"Generated bootstrap admin: {bootstrap_email}")
+            if not authentik_secrets.set("bootstrap_password", bootstrap_password):
+                fatal("Failed to store Authentik bootstrap password in Vault")
+            warning("Generated new bootstrap admin password")
             info("Bootstrap password stored in Vault (key: bootstrap_password)")
-        else:
-            info(f"Bootstrap credentials exist: {bootstrap_email}")
+        
+        if not bootstrap_email:
+            bootstrap_email = e.get("ADMIN_EMAIL", "admin@localhost")
+            if not authentik_secrets.set("bootstrap_email", bootstrap_email):
+                fatal("Failed to store Authentik bootstrap email in Vault")
+            warning(f"Set bootstrap admin email: {bootstrap_email}")
+        
+        if bootstrap_password and bootstrap_email:
+            info(f"Bootstrap credentials ready: {bootstrap_email}")
         
         # Return VAULT_ADDR for vault-init pattern
         result = {

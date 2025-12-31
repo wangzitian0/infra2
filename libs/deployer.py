@@ -6,6 +6,7 @@ Simplified: minimal class attributes, uses new env.py API.
 from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from invoke import task
+import httpx
 
 from libs.common import get_env, validate_env
 from libs.console import header, success, error, warning, info, env_vars, prompt_action, run_with_status
@@ -207,8 +208,12 @@ class Deployer:
                     service_name=cls.service_name,
                 )
                 success(f"Domain configured: https://{domain_host}")
+            except httpx.HTTPStatusError as exc:
+                # Domain might already exist or API endpoint changed
+                warning(f"Domain configuration skipped: HTTP {exc.response.status_code}")
             except Exception as exc:
-                warning(f"Domain configuration skipped: {exc}")
+                # Unexpected error - log details for debugging
+                warning(f"Domain configuration failed: {type(exc).__name__}: {exc}")
         
         success(f"Deployed {cls.service} (composeId: {compose_id})")
         return compose_id
