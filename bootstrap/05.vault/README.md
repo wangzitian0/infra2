@@ -24,59 +24,64 @@ invoke vault.setup-tokens
 > CLI 输出统一使用 `libs.console`，避免直接 `print`。
 > `vault.setup-tokens` 默认只输出掩码 token；如需完整 token 用于录入 1Password，先设置 `VAULT_SHOW_TOKENS=1`。
 
-### 1. 准备配置
+### 1. 部署 Vault
 
 ```bash
-ssh ${VPS_SSH_USER:-root}@<VPS_IP>
-mkdir -p /data/bootstrap/vault/{file,logs,config}
-chown -R 1000:1000 /data/bootstrap/vault
-chmod 755 /data/bootstrap/vault
+invoke vault.deploy
 ```
 
-### 2. 上传配置文件
+自动执行：
+- 创建 `/data/bootstrap/vault/{file,logs,config}` 目录
+- 上传 `vault.hcl` 配置
+- 通过 Dokploy API 部署
+
+### 2. 初始化 Vault
 
 ```bash
-scp bootstrap/05.vault/vault.hcl ${VPS_SSH_USER:-root}@<VPS_IP>:/data/bootstrap/vault/config/
+invoke vault.init
 ```
 
-### 3. 在 Dokploy 部署
+`init` 会先检查 Vault 是否可达，然后提示手动初始化步骤。
 
-- 访问 https://cloud.$INTERNAL_DOMAIN
-- 创建 Docker Compose 应用: vault
-- Repository: GitHub → wangzitian0/infra2
-- Compose Path: `bootstrap/05.vault/compose.yaml`
+**方式一：Web UI 初始化（推荐）**
 
-### 4. 初始化 Vault
+1. 访问 https://vault.$INTERNAL_DOMAIN
+2. 选择初始化参数（默认 5 个 key，阈值 3）
+3. 下载/保存 unseal keys 和 root token
+4. 存入 1Password: `bootstrap/vault/Unseal Keys` 和 `bootstrap/vault/Root Token`
+
+**方式二：CLI 初始化**
 
 ```bash
 export VAULT_ADDR=https://vault.$INTERNAL_DOMAIN
-
-# 初始化（首次运行）
 vault operator init
 
 # ⚠️ 保存输出的 5 个 unseal keys 和 root token！
+```
 
-# Unseal（每次重启后需要至少 3 个 key）
+### 3. Unseal Vault
+
+每次 Vault 重启后需要至少 3 个 key 解封：
+
+```bash
 vault operator unseal <key1>
 vault operator unseal <key2>
 vault operator unseal <key3>
-
-# 登录
-vault login <root-token>
 ```
 
-### 5. 生成服务 Token（Vault-Init）
+或通过 Web UI 解封。
+
+### 4. 生成服务 Token（Vault-Init）
 
 ```bash
-export VAULT_ROOT_TOKEN=<root-token>
+export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/bootstrap/vault/Root Token/Root Token')
 invoke vault.setup-tokens
 ```
 
 说明：
-- `VAULT_ROOT_TOKEN` 从 1Password `op://Infra2/bootstrap-vault/Root Token` 获取。
 - `vault.setup-tokens` 会自动为服务生成只读 token，并尝试写入 Dokploy 环境变量 `VAULT_APP_TOKEN`。
 
-### 6. 应用接入 Vault（vault-init）
+### 5. 应用接入 Vault（vault-init）
 
 **目标**：运行时从 Vault 拉取密钥，不在磁盘持久化。
 
@@ -91,6 +96,39 @@ invoke vault.setup-tokens
 - `VAULT_ADDR` 可放在 Dokploy 项目级 env。
 - `VAULT_APP_TOKEN` 必须是 per-service 的只读 token。
 - `/secrets` 使用 `tmpfs`，避免落盘。
+
+## 常见问题 / Troubleshooting
+
+### Dokploy GitHub 部署失败：repository not found
+
+**症状**：`git clone` 失败，URL 显示 `owner/owner/repo`（owner 重复）
+
+**原因**：Dokploy API 的 `repository` 和 `owner` 参数需要分开传递：
+```python
+# ❌ 错误
+repository="wangzitian0/infra2"  # Dokploy 会再拼一次 owner
+
+# ✅ 正确
+repository="infra2"
+owner="wangzitian0"
+```
+
+**解决**：已在代码中修复，确保 `repository` 只传 repo 名。
+
+### vault.init 前检查
+
+`invoke vault.init` 会先检查 Vault 是否可达（接受 501/503 状态码，表示服务运行但未初始化/已密封），避免在部署失败时继续执行初始化。
+
+### Vault 健康端点状态码
+
+| 状态码 | 含义 |
+|--------|------|
+| 200 | 已初始化，已解封，活跃 |
+| 429 | 已解封，standby |
+| 472 | recovery mode |
+| 473 | performance standby |
+| 501 | 未初始化 |
+| 503 | 已密封 |
 
 ## 配置说明
 

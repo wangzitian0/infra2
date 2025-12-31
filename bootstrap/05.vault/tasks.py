@@ -13,48 +13,176 @@ class VaultDeployer(Deployer):
     """Vault deployer using libs/ system"""
     
     service = "vault"
+    project = "bootstrap"
     compose_path = "bootstrap/05.vault/compose.yaml"
     data_path = "/data/bootstrap/vault"
-    uid = "1000"
+    uid = "100"   # Vault official image runs as uid 100
     gid = "1000"
     chmod = "755"
-    
+
     @classmethod
-    def pre_compose(cls, c) -> bool:
-        """Prepare data directory and upload config"""
+    def pre_compose(cls, c) -> dict | None:
+        """Prepare data directory, upload config, and fetch secrets."""
+        # 1. Prepare directories
         if not cls._prepare_dirs(c):
-            return False
+            return None
+            
         e = cls.env()
-        header("Vault pre_compose", "Preparing")
         ssh_user = e.get("VPS_SSH_USER") or "root"
+        header("Vault pre_compose", "Preparing resources")
 
-        # Create directories
-        result = run_with_status(
-            c,
-            f"ssh {ssh_user}@{e['VPS_HOST']} 'mkdir -p {cls.data_path}/{{file,logs,config}}'",
-            "Create directories",
-        )
-        if not result.ok:
-            return False
-
+        # 2. Upload config
         if not cls.upload_config(c):
-            return False
+            return None
+            
+        # 3. Create subdirectories with strict permissions
+        # vault user (100) needs write access to file/ logs/
+        run_with_status(
+            c,
+            f"ssh {ssh_user}@{e['VPS_HOST']} 'mkdir -p {cls.data_path}/{{file,logs,config}} && chown -R {cls.uid}:{cls.gid} {cls.data_path}'",
+            "Set directory structure and permissions"
+        )
 
+        # 4. Fetch 1Password Secrets for Unsealer
+        info("Fetching secrets from 1Password...")
+        env_vars = {
+            "INTERNAL_DOMAIN": e.get("INTERNAL_DOMAIN"),
+            "OP_VAULT_ID": "Infra2",  # Default vault
+        }
+        
+        try:
+            from libs.env import OpSecrets
+            
+            # OP_CONNECT_TOKEN (from 1Password Connect service account)
+            # Item: "bootstrap/1password/VPS-01 Access Token: own_service"
+            token_item = OpSecrets(item="bootstrap/1password/VPS-01 Access Token: own_service")
+            token = token_item.get("credential")
+            if token:
+                env_vars["OP_CONNECT_TOKEN"] = token
+            else:
+                warning("Could not finding OP_CONNECT_TOKEN in 1Password")
+                
+            # OP_ITEM_ID (Item "bootstrap/vault" where unseal keys are stored)
+            try:
+                # We need the Item ID, not content. Use CLI wrapper or name
+                # If item doesn't exist yet (pre-init), we might skip or leave empty.
+                # Here we assume it might exist or will be created. 
+                # passing name might work if unsealer supports it, but compose expects ID usually.
+                # Let's try to look it up.
+                cmd = "op item get 'bootstrap/vault' --vault Infra2 --format json"
+                res = c.run(cmd, hide=True, warn=True)
+                if res.ok:
+                    import json
+                    item = json.loads(res.stdout)
+                    env_vars["OP_ITEM_ID"] = item["id"]
+                else:
+                    info("Vault item 'bootstrap/vault' not found (normal if first run)")
+                    env_vars["OP_ITEM_ID"] = "" 
+            except Exception as ex:
+                warning(f"Failed to lookup Vault item ID: {ex}")
+                env_vars["OP_ITEM_ID"] = ""
+
+        except ImportError:
+            error("Missing libs.env dependencies")
+            return None
+        except Exception as ex:
+            error(f"Failed to fetch secrets: {ex}")
+            return None
+            
         success("pre_compose complete")
-        return True
+        return env_vars
 
     @classmethod
     def upload_config(cls, c) -> bool:
         """Upload Vault config file."""
         e = cls.env()
         ssh_user = e.get("VPS_SSH_USER") or "root"
+        # Ensure config dir exists first
+        c.run(f"ssh {ssh_user}@{e['VPS_HOST']} 'mkdir -p {cls.data_path}/config'")
+        
         result = run_with_status(
             c,
             f"scp bootstrap/05.vault/vault.hcl {ssh_user}@{e['VPS_HOST']}:{cls.data_path}/config/",
-            "Upload config",
+            "Upload config file",
         )
         return result.ok
     
+    @classmethod
+    def composing(cls, c, env_vars: dict) -> str:
+        """Deploy Vault via Dokploy API (using GitHub provider)"""
+        from libs.dokploy import ensure_project, get_dokploy
+        from libs.const import GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH
+        
+        e = cls.env()
+        header(f"{cls.service} composing", f"Deploying via Dokploy API")
+        
+        # Ensure project exists
+        domain = e.get('INTERNAL_DOMAIN')
+        host = f"cloud.{domain}" if domain else None
+        
+        # Priority: Hardcoded "bootstrap" for this module
+        project_name = cls.project
+        
+        project_id, env_id = ensure_project(project_name, f"Bootstrap services: {project_name}", host=host)
+        if not env_id:
+            from invoke.exceptions import Exit
+            error("Failed to get environment ID")
+            raise Exit("Failed to get environment ID", code=1)
+            
+        # Deploy compose using GitHub provider
+        client = get_dokploy(host=host)
+        
+        # Get GitHub provider ID
+        github_id = client.get_github_provider_id()
+        if not github_id:
+             from invoke.exceptions import Exit
+             error("No GitHub provider configured in Dokploy. Please add one in Settings -> Git Providers.")
+             raise Exit("No GitHub provider found", code=1)
+             
+        info(f"Using GitHub provider: {github_id}")
+        
+        # Check if exists
+        existing = client.find_compose_by_name(cls.service, project_name)
+        
+        if existing:
+            compose_id = existing["composeId"]
+            info("Updating existing compose service")
+            client.update_compose(
+                compose_id, 
+                source_type="github",
+                githubId=github_id,
+                repository=GITHUB_REPO,
+                owner=GITHUB_OWNER,
+                branch=GITHUB_BRANCH,
+                composePath=cls.compose_path,
+            )
+        else:
+            info("Creating new compose service with GitHub provider")
+            result = client.create_compose(
+                environment_id=env_id,
+                name=cls.service,
+                app_name=f"bootstrap-{cls.service}",
+                source_type="github",
+                githubId=github_id,
+                repository=GITHUB_REPO,
+                owner=GITHUB_OWNER,
+                branch=GITHUB_BRANCH,
+                composePath=cls.compose_path,
+            )
+            compose_id = result["composeId"]
+        
+        # Update environment variables
+        info("Updating environment variables (from libs)")
+        # Filter out internal keys or empty values
+        env_content = "\n".join([f"{k}={v}" for k, v in env_vars.items() if v is not None])
+        client.update_compose(compose_id, env=env_content)
+        
+        info(f"Deploying compose {compose_id}...")
+        client.deploy_compose(compose_id)
+        
+        success(f"Deployed {cls.service} (composeId: {compose_id})")
+        return compose_id
+
     @classmethod
     def post_compose(cls, c, shared_tasks: Any) -> bool:
         """Verify deployment"""
@@ -90,19 +218,53 @@ class VaultDeployer(Deployer):
         warning(f"Vault health endpoint returned unexpected status code: {status_code}")
         return False
 
+    @classmethod
+    def is_reachable(cls, c) -> bool:
+        """Check if Vault is reachable (any valid response from health endpoint)"""
+        e = cls.env()
+        result = c.run(
+            f"curl -s -o /dev/null -w '%{{http_code}}' https://vault.{e['INTERNAL_DOMAIN']}/v1/sys/health",
+            warn=True,
+            hide=True,
+        )
+        if not result.ok:
+            return False
+        status_code = (result.stdout or "").strip()
+        # 501=not initialized, 503=sealed - both mean Vault is reachable
+        return status_code in {"200", "429", "472", "473", "501", "503"}
+
 
 # Standard tasks
 # We don't use make_tasks fully because Vault requires extra steps (init, unseal)
 prepare = task(lambda c: VaultDeployer.pre_compose(c), name="prepare")
 upload_config = task(lambda c: VaultDeployer.upload_config(c), name="upload-config")
-deploy = task(lambda c: VaultDeployer.composing(c), name="deploy", pre=[prepare])
+@task(name="deploy")
+def deploy(c):
+    """Deploy Vault (prepares, injects vars, and composes)"""
+    # Fetch env vars (includes secrets and domain)
+    env_vars = VaultDeployer.pre_compose(c)
+    if env_vars is None:
+        error("Deployment failed: pre_compose returned No config")
+        from invoke.exceptions import Exit
+        raise Exit("pre_compose failed", code=1)
+        
+    VaultDeployer.composing(c, env_vars)
 
 
 @task(pre=[deploy])
 def init(c):
-    """Initialize Vault"""
+    """Initialize Vault (checks reachability first)"""
     e = get_env()
-    header("Vault init", "Initialization required")
+    header("Vault init", "Checking reachability")
+    
+    # Pre-check: Vault must be reachable before init (501/503 are OK - means service is up)
+    if not VaultDeployer.is_reachable(c):
+        error("Vault is not reachable. Deployment may have failed.")
+        info("Check logs: ssh root@<host> 'docker logs vault'")
+        from invoke.exceptions import Exit
+        raise Exit("Vault not reachable", code=1)
+    
+    success("Vault is reachable, ready for initialization")
     print(f"export VAULT_ADDR=https://vault.{e['INTERNAL_DOMAIN']}")
     print("vault operator init")
     prompt_action("Initialize Vault", [

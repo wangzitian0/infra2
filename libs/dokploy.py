@@ -111,7 +111,9 @@ class DokployClient:
         compose_id: str,
         compose_file: str | None = None,
         env: str | None = None,
+
         source_type: str | None = None,
+        **kwargs
     ) -> dict:
         """Update compose application"""
         payload = {"composeId": compose_id}
@@ -121,6 +123,10 @@ class DokployClient:
             payload["env"] = env
         if source_type is not None:
             payload["sourceType"] = source_type
+        
+        # Merge extra args (e.g. repository, branch, githubId)
+        payload.update(kwargs)
+        
         return self._request("POST", "compose.update", json=payload)
     
     def deploy_compose(self, compose_id: str) -> dict:
@@ -232,6 +238,30 @@ class DokployClient:
         """List all configured git providers"""
         return self._request("GET", "settings.gitProvider.all")
 
+    def get_github_provider_id(self) -> str | None:
+        """Get GitHub provider ID by querying API or inferring from existing services."""
+        # Method 1: Query API directly
+        try:
+            providers = self.list_git_providers()
+            for p in providers:
+                if p.get("provider") == "github":
+                    return p.get("gitProviderId")
+        except Exception:
+            pass
+
+        # Method 2: Infer from existing services
+        try:
+            projects = self.list_projects()
+            for proj in projects:
+                for env in proj.get('environments', []):
+                    for comp in env.get('compose', []):
+                        if comp.get('githubId'):
+                            return comp.get('githubId')
+        except Exception:
+            pass
+
+        return None
+
     
 def get_dokploy(host: str | None = None) -> DokployClient:
     """Get configured Dokploy client
@@ -270,12 +300,13 @@ def deploy_compose_service(
     service_name: str,
     compose_content: str,
     env_vars: dict[str, str],
+    host: str | None = None,
 ) -> str:
     """Deploy a compose service, creating project if needed. Returns composeId."""
-    client = get_dokploy()
+    client = get_dokploy(host=host)
     
     # Ensure project and get environment
-    project_id, environment_id = ensure_project(project_name, f"Platform services: {project_name}")
+    project_id, environment_id = ensure_project(project_name, f"Platform services: {project_name}", host=host)
     
     if not environment_id:
         raise ValueError(f"No environment found for project {project_name}")
