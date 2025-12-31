@@ -136,19 +136,19 @@ class VaultDeployer(Deployer):
     
     @classmethod
     def composing(cls, c, env_vars: dict) -> str:
-        """Deploy Vault via Dokploy API (using Raw provider for stability)"""
+        """Deploy Vault via Dokploy API (using GitHub provider)"""
         from libs.dokploy import ensure_project, get_dokploy
-        # from libs.const import GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH
+        from libs.const import GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH
         
         e = cls.env()
-        header(f"{cls.service} composing", f"Deploying via Dokploy API (Raw)")
+        header(f"{cls.service} composing", f"Deploying via Dokploy API")
         
         # Ensure project exists
         domain = e.get('INTERNAL_DOMAIN')
         host = f"cloud.{domain}" if domain else None
         
-        # Priority: ENV > Class Attribute > Default "bootstrap"
-        project_name = e.get("PROJECT") or cls.project
+        # Priority: Hardcoded "bootstrap" for this module
+        project_name = cls.project
         
         project_id, env_id = ensure_project(project_name, f"Bootstrap services: {project_name}", host=host)
         if not env_id:
@@ -156,13 +156,17 @@ class VaultDeployer(Deployer):
             error("Failed to get environment ID")
             raise Exit("Failed to get environment ID", code=1)
             
-        # Deploy compose using Raw provider
+        # Deploy compose using GitHub provider
         client = get_dokploy(host=host)
         
-        # Get compose content
-        compose_content = cls.get_compose_content(c)
+        # Get GitHub provider ID
+        github_id = cls._get_github_provider_id(client)
+        if not github_id:
+             from invoke.exceptions import Exit
+             error("No GitHub provider configured in Dokploy. Please add one in Settings -> Git Providers.")
+             raise Exit("No GitHub provider found", code=1)
              
-        info(f"Using Raw provider (direct compose upload)")
+        info(f"Using GitHub provider: {github_id}")
         
         # Check if exists
         existing = client.find_compose_by_name(cls.service, project_name)
@@ -170,15 +174,23 @@ class VaultDeployer(Deployer):
         if existing:
             compose_id = existing["composeId"]
             info("Updating existing compose service")
-            client.update_compose(compose_id, compose_file=compose_content, source_type="docker-compose")
+            client.update_compose(
+                compose_id, 
+                source_type="github",
+                githubId=github_id,
+                repository=f"{GITHUB_OWNER}/{GITHUB_REPO}",
+                branch=GITHUB_BRANCH,
+            )
         else:
-            info("Creating new compose service")
+            info("Creating new compose service with GitHub provider")
             result = client.create_compose(
                 environment_id=env_id,
                 name=cls.service,
                 app_name=f"bootstrap-{cls.service}",
-                source_type="docker-compose",
-                compose_file=compose_content,
+                source_type="github",
+                githubId=github_id,
+                repository=f"{GITHUB_OWNER}/{GITHUB_REPO}",
+                branch=GITHUB_BRANCH,
                 composePath=cls.compose_path,
             )
             compose_id = result["composeId"]

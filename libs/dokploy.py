@@ -111,7 +111,9 @@ class DokployClient:
         compose_id: str,
         compose_file: str | None = None,
         env: str | None = None,
+        env: str | None = None,
         source_type: str | None = None,
+        **kwargs
     ) -> dict:
         """Update compose application"""
         payload = {"composeId": compose_id}
@@ -121,6 +123,10 @@ class DokployClient:
             payload["env"] = env
         if source_type is not None:
             payload["sourceType"] = source_type
+        
+        # Merge extra args (e.g. repository, branch, githubId)
+        payload.update(kwargs)
+        
         return self._request("POST", "compose.update", json=payload)
     
     def deploy_compose(self, compose_id: str) -> dict:
