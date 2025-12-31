@@ -4,13 +4,18 @@
 
 set -e
 
+# 配置
+OP_VAULT="Infra2"
+# 1Password Item: "init/env_vars" (使用 ID 以确保唯一性)
+OP_ITEM_ID="haih7qcpar5o2hxwllrpua7f2e"
+
 echo "=== Dokploy v0.25.11 安装脚本 ==="
 echo ""
 
 # 获取 VPS IP
 echo "📋 从 1Password 获取 VPS 信息..."
-VPS_IP=$(op item get "haih7qcpar5o2hxwllrpua7f2e" --vault Infra2 --fields VPS_HOST --format json | jq -r '.value')
-INTERNAL_DOMAIN=$(op item get "haih7qcpar5o2hxwllrpua7f2e" --vault Infra2 --fields INTERNAL_DOMAIN --format json | jq -r '.value')
+VPS_IP=$(op item get "$OP_ITEM_ID" --vault "$OP_VAULT" --fields VPS_HOST --format json | jq -r '.value')
+INTERNAL_DOMAIN=$(op item get "$OP_ITEM_ID" --vault "$OP_VAULT" --fields INTERNAL_DOMAIN --format json | jq -r '.value')
 
 if [ -z "$VPS_IP" ]; then
     echo "❌ 无法获取 VPS_HOST"

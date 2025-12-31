@@ -21,6 +21,11 @@ class OnePasswordDeployer(Deployer):
     gid = "999"
     chmod = "700"
 
+    # Repository config (could be moved to libs/config later)
+    GITHUB_OWNER = "wangzitian0"
+    GITHUB_REPO = "infra2"
+    GITHUB_BRANCH = "main"
+
     @classmethod
     def _upload_credentials(cls, c) -> bool:
         """Upload credentials from 1Password to server."""
@@ -110,9 +115,6 @@ class OnePasswordDeployer(Deployer):
             existing = client.find_compose_by_name("1password-connect", "bootstrap")
             
             # GitHub repository info
-            github_owner = "wangzitian0"
-            github_repo = "infra2"
-            github_branch = "main"
             compose_path = cls.compose_path
             
             # Get GitHub provider ID
@@ -134,8 +136,8 @@ class OnePasswordDeployer(Deployer):
                     "environmentId": env_id,
                     "sourceType": "github",
                     "githubId": github_id,
-                    "repository": f"{github_owner}/{github_repo}",
-                    "branch": github_branch,
+                    "repository": f"{cls.GITHUB_OWNER}/{cls.GITHUB_REPO}",
+                    "branch": cls.GITHUB_BRANCH,
                     "composePath": compose_path,
                 })
                 compose_id = result["composeId"]
