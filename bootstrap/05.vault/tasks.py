@@ -414,7 +414,12 @@ def _configure_dokploy_token(_c, service: str, token: str):
     """Auto-configure VAULT_APP_TOKEN in Dokploy"""
     try:
         from libs.dokploy import get_dokploy
-        client = get_dokploy()
+        from libs.common import get_env
+        
+        e = get_env()
+        domain = e.get('INTERNAL_DOMAIN')
+        host = f"cloud.{domain}" if domain else None
+        client = get_dokploy(host=host)
         
         # Find compose service
         compose = client.find_compose_by_name(service, "platform")
