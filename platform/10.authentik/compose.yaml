@@ -142,10 +142,6 @@ services:
       - ./init-token.sh:/init-token.sh:ro
     networks:
       - dokploy-network
-      - /data/platform/authentik/certs:/certs
-      - /data/platform/authentik/custom-templates:/templates
-    networks:
-      - dokploy-network
 
 volumes:
   secrets:
