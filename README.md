@@ -43,6 +43,16 @@ infra2/
     └── project/      # 项目追踪
 ```
 
+## 📚 文档入口
+
+| 入口 | 路径 | 用途 |
+|------|------|------|
+| **Onboarding** | [docs/onboarding/README.md](docs/onboarding/README.md) | 新手/应用接入 |
+| **Docs Index** | [docs/README.md](docs/README.md) | 文档总入口 |
+| **SSOT 索引** | [docs/ssot/README.md](docs/ssot/README.md) | 技术真理源 |
+| **项目追踪** | [docs/project/README.md](docs/project/README.md) | 任务管理 |
+| **AI 行为准则** | [AGENTS.md](AGENTS.md) | AI 协作规范 |
+
 ## 🔧 环境变量体系
 
 三层结构对应 Dokploy Project/Environment/Service，**无本地存储**，远端优先。
@@ -53,14 +63,6 @@ infra2/
 | `platform` | Dokploy | Vault |
 
 > 详见 [docs/ssot/bootstrap.vars_and_secrets.md](docs/ssot/bootstrap.vars_and_secrets.md) 与 [docs/ssot/platform.automation.md](docs/ssot/platform.automation.md)
-
-## 📚 文档入口
-
-| 入口 | 路径 | 用途 |
-|------|------|------|
-| **SSOT 索引** | [docs/ssot/README.md](docs/ssot/README.md) | 技术真理源 |
-| **项目追踪** | [docs/project/README.md](docs/project/README.md) | 任务管理 |
-| **AI 行为准则** | [AGENTS.md](AGENTS.md) | AI 协作规范 |
 
 ## 🛠️ 常用命令
 

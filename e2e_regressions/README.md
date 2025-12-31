@@ -10,6 +10,13 @@ This framework verifies that the actual state of the infrastructure matches the 
 For the authoritative test strategy and pyramid, refer to:
 > [**E2E Regression SSOT**](../docs/ssot/ops.e2e-regressions.md)
 
+## 🧭 Navigation
+
+- [Docs Index](../docs/README.md)
+- [SSOT Index](../docs/ssot/README.md)
+- [Project Portfolio](../docs/project/README.md)
+- [AI 行为准则](../AGENTS.md)
+
 ## 📂 Test Suites
 
 | Suite | Purpose | SSOT Anchor |

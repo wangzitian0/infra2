@@ -41,19 +41,28 @@
 
 ---
 
-## 🧰 基础设施维护入口
-
-- **Bootstrap (L1)**：https://github.com/wangzitian0/infra2/blob/main/bootstrap/README.md
-- **Platform (L2)**：https://github.com/wangzitian0/infra2/blob/main/platform/README.md
-- **Tools (env_tool)**：https://github.com/wangzitian0/infra2/blob/main/tools/README.md
-
----
-
 ## 🧭 项目治理
 
 - **[Project Portfolio](../project/README.md)** - 全量项目索引
 - **进行中项目**：`docs/project/Infra-XXX.*.md`
 - **归档项目**：`docs/project/archive/`
+
+---
+
+## 🧭 返回入口
+
+- **工程入口**：[README.md](../../README.md)
+- **文档索引**：[docs/README.md](../README.md)
+- **SSOT 索引**：[docs/ssot/README.md](../ssot/README.md)
+- **AI 行为准则**：[AGENTS.md](../../AGENTS.md)
+
+---
+
+## 🧰 基础设施维护入口
+
+- **Bootstrap (L1)**：[local](../../bootstrap/README.md) · [GitHub](https://github.com/wangzitian0/infra2/blob/main/bootstrap/README.md)
+- **Platform (L2)**：[local](../../platform/README.md) · [GitHub](https://github.com/wangzitian0/infra2/blob/main/platform/README.md)
+- **Tools (env_tool)**：[local](../../tools/README.md) · [GitHub](https://github.com/wangzitian0/infra2/blob/main/tools/README.md)
 
 ---
 

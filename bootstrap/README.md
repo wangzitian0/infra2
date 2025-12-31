@@ -74,6 +74,9 @@ HashiCorp Vault 秘密管理。
 
 ## 🔗 相关文档
 
+- [Docs Index](../docs/README.md)
+- [Project Portfolio](../docs/project/README.md)
+- [AI 行为准则](../AGENTS.md)
 - [SSOT: Bootstrap 组件](../docs/ssot/bootstrap.nodep.md)
 - [SSOT: 核心架构](../docs/ssot/core.md)
 - [总览: 文档索引](../docs/ssot/README.md)
