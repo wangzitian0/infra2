@@ -82,10 +82,11 @@ docker compose run --rm -e VAULT_INIT_TOKEN={vault_root_token} -e VAULT_INIT_ADD
 
 
 @task
-def create_proxy_app(c, name, slug, external_host, internal_host, port=None):
-    """Create SSO application with proxy provider
+def create_proxy_app(c, name, slug, external_host, internal_host, port=None, allowed_groups="admins"):
+    """Create SSO application with proxy provider and access policy
     
     Uses Authentik Root Token to create a forward-auth protected application.
+    By default, only users in 'admins' group can access.
     
     Args:
         name: Application name (e.g., "Portal")
@@ -93,19 +94,27 @@ def create_proxy_app(c, name, slug, external_host, internal_host, port=None):
         external_host: External URL (e.g., "https://home.zitian.party")
         internal_host: Internal service (e.g., "platform-portal")
         port: Internal port (default: 8080)
+        allowed_groups: Comma-separated group names (default: "admins")
     
     Example:
+        # Only admins can access
         invoke authentik.shared.create-proxy-app \\
             --name="Portal" \\
             --slug="portal" \\
             --external-host="https://home.zitian.party" \\
-            --internal-host="platform-portal" \\
-            --port=8080
+            --internal-host="platform-portal"
+        
+        # Multiple groups
+        invoke authentik.shared.create-proxy-app \\
+            --name="App" --slug="app" \\
+            --external-host="https://app.example.com" \\
+            --internal-host="app" \\
+            --allowed-groups="admins,developers"
     """
     import httpx
     from libs.env import get_secrets
     
-    header(f"Creating SSO App: {name}", "Proxy Provider (Forward Auth)")
+    header(f"Creating SSO App: {name}", "Proxy Provider + Access Policy")
     
     e = get_env()
     env_name = e.get('ENV', 'production')
@@ -122,6 +131,7 @@ def create_proxy_app(c, name, slug, external_host, internal_host, port=None):
     base_url = f"https://sso.{e.get('INTERNAL_DOMAIN')}"
     port = port or 8080
     internal_url = f"http://{internal_host}:{port}"
+    group_list = [g.strip() for g in allowed_groups.split(",")]
     
     try:
         client = httpx.Client(
@@ -139,6 +149,31 @@ def create_proxy_app(c, name, slug, external_host, internal_host, port=None):
         user = resp.json()
         success(f"Authenticated as: {user['username']}")
         
+        # Ensure groups exist
+        info(f"Checking groups: {', '.join(group_list)}...")
+        group_pks = []
+        for group_name in group_list:
+            resp = client.get(f"{base_url}/api/v3/core/groups/?name={group_name}")
+            if resp.status_code != 200:
+                error(f"Failed to query groups: {resp.status_code}")
+                return False
+            
+            results = resp.json()["results"]
+            if not results:
+                warning(f"Group '{group_name}' not found, creating...")
+                resp = client.post(
+                    f"{base_url}/api/v3/core/groups/",
+                    json={"name": group_name}
+                )
+                if resp.status_code != 201:
+                    error(f"Failed to create group: {resp.status_code}")
+                    return False
+                group_pks.append(resp.json()["pk"])
+                success(f"Created group: {group_name}")
+            else:
+                group_pks.append(results[0]["pk"])
+                info(f"Found group: {group_name}")
+        
         # Get auth flow UUID
         resp = client.get(f"{base_url}/api/v3/flows/instances/?slug=default-provider-authorization-implicit-consent")
         if resp.status_code != 200 or not resp.json()["results"]:
@@ -146,6 +181,33 @@ def create_proxy_app(c, name, slug, external_host, internal_host, port=None):
             return False
         
         auth_flow_uuid = resp.json()["results"][0]["pk"]
+        
+        # Create group-based access policy
+        info(f"Creating access policy (groups: {', '.join(group_list)})...")
+        policy_binding_payload = {
+            "name": f"{slug}-access-policy",
+            "execution_logging": False,
+            "policy_engine_mode": "any",  # Match ANY of the bindings
+            "bindings": []
+        }
+        
+        # Create policy binding for each group
+        for idx, (group_name, group_pk) in enumerate(zip(group_list, group_pks)):
+            resp = client.post(
+                f"{base_url}/api/v3/policies/expression/",
+                json={
+                    "name": f"{slug}-require-{group_name}",
+                    "execution_logging": False,
+                    "expression": f"return ak_is_group_member(request.user, name='{group_name}')"
+                }
+            )
+            
+            if resp.status_code != 201:
+                error(f"Failed to create policy for group {group_name}: {resp.status_code}")
+                return False
+            
+            policy_pk = resp.json()["pk"]
+            success(f"Created policy: require {group_name} membership")
         
         # Create proxy provider
         info(f"Creating proxy provider for {external_host}...")
@@ -167,6 +229,29 @@ def create_proxy_app(c, name, slug, external_host, internal_host, port=None):
         provider_id = resp.json()["pk"]
         success(f"Created proxy provider: {provider_id}")
         
+        # Bind policies to provider
+        info("Binding access policies to provider...")
+        for group_name in group_list:
+            # Find policy by name
+            resp = client.get(f"{base_url}/api/v3/policies/expression/?name={slug}-require-{group_name}")
+            if resp.status_code == 200 and resp.json()["results"]:
+                policy_pk = resp.json()["results"][0]["pk"]
+                
+                # Create policy binding
+                resp = client.post(
+                    f"{base_url}/api/v3/policies/bindings/",
+                    json={
+                        "policy": policy_pk,
+                        "target": provider_id,
+                        "enabled": True,
+                        "order": 0,
+                        "timeout": 30
+                    }
+                )
+                
+                if resp.status_code == 201:
+                    success(f"Bound policy: {group_name} → provider")
+        
         # Create application
         info(f"Creating application: {name}...")
         resp = client.post(
@@ -186,12 +271,15 @@ def create_proxy_app(c, name, slug, external_host, internal_host, port=None):
         success(f"Created application: {name} (slug: {app_slug})")
         
         info(f"\n✨ SSO protection enabled for {external_host}")
+        info(f"Access control: Only users in [{', '.join(group_list)}] can access")
         info(f"Admin URL: {base_url}/if/admin/#/core/applications/{app_slug}")
         
         return True
         
     except Exception as exc:
         error(f"API error: {type(exc).__name__}: {exc}")
+        import traceback
+        traceback.print_exc()
         return False
     finally:
         client.close()
@@ -234,6 +322,101 @@ def list_apps(c):
         info(f"Found {len(apps)} application(s):\n")
         for app in apps:
             success(f"• {app['name']} (slug: {app['slug']})")
+        
+        return True
+        
+    except Exception as exc:
+        error(f"API error: {exc}")
+        return False
+    finally:
+        client.close()
+
+
+@task
+def setup_admin_group(c):
+    """Ensure akadmin user is in admins group
+    
+    Creates 'admins' group if it doesn't exist and adds akadmin to it.
+    This should be run once after Authentik deployment.
+    
+    Example:
+        invoke authentik.shared.setup-admin-group
+    """
+    import httpx
+    from libs.env import get_secrets
+    
+    header("Setting up Admin Group", "Access Control")
+    
+    e = get_env()
+    env_name = e.get('ENV', 'production')
+    
+    authentik_secrets = get_secrets("platform", "authentik", env_name)
+    root_token = authentik_secrets.get("root_token") or authentik_secrets.get("api_token")
+    
+    if not root_token:
+        error("Authentik Root Token not found")
+        info("Run first: invoke authentik.shared.create-root-token")
+        return False
+    
+    base_url = f"https://sso.{e.get('INTERNAL_DOMAIN')}"
+    
+    try:
+        client = httpx.Client(headers={"Authorization": f"Bearer {root_token}"})
+        
+        # Find akadmin user
+        info("Finding akadmin user...")
+        resp = client.get(f"{base_url}/api/v3/core/users/?username=akadmin")
+        if resp.status_code != 200 or not resp.json()["results"]:
+            error("akadmin user not found")
+            return False
+        
+        user_pk = resp.json()["results"][0]["pk"]
+        success(f"Found akadmin user: {user_pk}")
+        
+        # Check/create admins group
+        info("Checking for 'admins' group...")
+        resp = client.get(f"{base_url}/api/v3/core/groups/?name=admins")
+        
+        if resp.status_code != 200:
+            error(f"Failed to query groups: {resp.status_code}")
+            return False
+        
+        results = resp.json()["results"]
+        if not results:
+            info("Creating 'admins' group...")
+            resp = client.post(
+                f"{base_url}/api/v3/core/groups/",
+                json={
+                    "name": "admins",
+                    "is_superuser": False,
+                }
+            )
+            if resp.status_code != 201:
+                error(f"Failed to create group: {resp.status_code}")
+                return False
+            group_pk = resp.json()["pk"]
+            success(f"Created 'admins' group: {group_pk}")
+        else:
+            group_pk = results[0]["pk"]
+            success(f"Found 'admins' group: {group_pk}")
+        
+        # Add user to group
+        info("Adding akadmin to admins group...")
+        resp = client.post(
+            f"{base_url}/api/v3/core/groups/{group_pk}/add_user/",
+            json={"pk": user_pk}
+        )
+        
+        if resp.status_code == 204:
+            success("akadmin added to admins group")
+        elif resp.status_code == 400:
+            info("akadmin already in admins group")
+        else:
+            error(f"Failed to add user to group: {resp.status_code}")
+            return False
+        
+        info("\n✨ Admin group configured")
+        info("Users in 'admins' group can now access admin-protected applications")
         
         return True
         
