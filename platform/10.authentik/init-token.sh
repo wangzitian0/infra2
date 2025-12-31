@@ -1,6 +1,6 @@
 #!/bin/sh
-# Authentik initialization script
-# Creates API token for automation if it doesn't exist
+# Authentik Root Token initialization script
+# Creates admin API token and stores as 'root_token' in Vault
 
 set -e
 
@@ -10,7 +10,7 @@ until ak healthcheck > /dev/null 2>&1; do
   sleep 5
 done
 
-echo "Authentik is ready, checking for automation token..."
+echo "Authentik is ready, checking for root token..."
 
 # Create API token using Django shell
 python -m manage shell << 'PYTHON'
@@ -22,7 +22,7 @@ try:
     
     # Check if token already exists
     token = Token.objects.filter(
-        identifier='automation',
+        identifier='root-automation',
         user=user,
         intent=TokenIntents.INTENT_API
     ).first()
@@ -30,9 +30,9 @@ try:
     if token:
         print(f"Token already exists: {token.key}")
     else:
-        # Create new token
+        # Create new token with 10-year expiry
         token = Token.objects.create(
-            identifier='automation',
+            identifier='root-automation',
             user=user,
             intent=TokenIntents.INTENT_API,
             expiring=True,
@@ -44,4 +44,4 @@ except Exception as e:
     exit(1)
 PYTHON
 
-echo "Token initialization complete"
+echo "Root token initialization complete"

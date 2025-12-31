@@ -1,4 +1,13 @@
-"""Authentik shared tasks for API operations"""
+"""Authentik shared tasks for API operations
+
+Token Hierarchy (mirrors Vault):
+- AUTHENTIK_ROOT_TOKEN: Full admin access, creates apps and issues app tokens
+- AUTHENTIK_APP_TOKEN: Per-service, limited to own SSO configuration
+
+Storage in Vault:
+- secret/platform/production/authentik/root_token: Admin API token
+- secret/platform/production/<service>/sso_*: Per-service SSO config
+"""
 import os
 from invoke import task
 from libs.common import check_service, get_env
@@ -12,75 +21,78 @@ def status(c):
 
 
 @task
-def create_api_token(c):
-    """Create API token for automation (run after first deployment)
+def create_root_token(c):
+    """Create Authentik Root Token for SSO administration
     
-    Creates a long-lived API token for the akadmin user and stores it in Vault.
-    This token is used by automation tasks like create-proxy-app.
+    This creates the admin API token stored as 'root_token' in Vault.
+    Requires VAULT_ROOT_TOKEN to write to Vault.
+    
+    The Authentik Root Token is used to:
+    - Create SSO applications
+    - Issue per-service app tokens
+    - Manage providers and policies
     
     Example:
-        export VAULT_ROOT_TOKEN=<token>
-        invoke authentik.shared.create-api-token
+        export VAULT_ROOT_TOKEN=<vault-admin-token>
+        invoke authentik.shared.create-root-token
     """
-    import subprocess
     from libs.env import get_secrets
     
-    header("Creating Authentik API Token", "Automation Setup")
+    header("Creating Authentik Root Token", "SSO Admin Setup")
     
     e = get_env()
     env_name = e.get('ENV', 'production')
-    vault_token = os.getenv('VAULT_ROOT_TOKEN')
+    vault_root_token = os.getenv('VAULT_ROOT_TOKEN')
     
-    if not vault_token:
+    if not vault_root_token:
         error("VAULT_ROOT_TOKEN not set")
-        info("export VAULT_ROOT_TOKEN=<token>")
+        info("Vault admin token needed to store Authentik root token")
+        info("Get from: op read 'op://Infra2/bootstrap/vault/Root Token/Root Token'")
+        info("Then: export VAULT_ROOT_TOKEN=<token>")
         return False
     
-    info("Running token creation script on server...")
+    info("Running token creation on server...")
     
-    # Run init-token.sh script on server
     script = f"""
 set -e
 cd /etc/dokploy/compose/platform-authentik-*/code/platform/10.authentik
-docker compose run --rm -e VAULT_INIT_TOKEN={vault_token} -e VAULT_INIT_ADDR=https://vault.{e['INTERNAL_DOMAIN']} token-init
+docker compose run --rm -e VAULT_INIT_TOKEN={vault_root_token} -e VAULT_INIT_ADDR=https://vault.{e['INTERNAL_DOMAIN']} token-init
 """
     
-    result = c.run(
-        f"ssh root@{e['VPS_HOST']} '{script}'",
-        warn=True
-    )
+    result = c.run(f"ssh root@{e['VPS_HOST']} '{script}'", warn=True)
     
     if not result.ok:
         error("Failed to create token")
         return False
     
-    # Verify token in Vault
+    # Verify in Vault
     authentik_secrets = get_secrets("platform", "authentik", env_name)
-    api_token = authentik_secrets.get("api_token")
+    root_token = authentik_secrets.get("root_token") or authentik_secrets.get("api_token")
     
-    if api_token:
-        success(f"API token created and stored in Vault")
-        info(f"Token prefix: {api_token[:20]}...")
-        info("\nYou can now use:")
-        info("  invoke authentik.shared.create-proxy-app --name=... --slug=...")
+    if root_token:
+        success("Authentik Root Token created and stored in Vault")
+        info(f"Vault path: secret/platform/production/authentik (key: root_token)")
+        info(f"Token prefix: {root_token[:20]}...")
+        info("\nYou can now create SSO apps:")
+        info("  invoke authentik.shared.create-proxy-app --name=Portal --slug=portal ...")
         return True
     else:
-        warning("Token creation completed but not found in Vault")
-        info("Check logs above for errors")
+        warning("Token creation ran but not found in Vault")
         return False
-    """Create Authentik application with proxy provider
+
+
+@task
+def create_proxy_app(c, name, slug, external_host, internal_host, port=None):
+    """Create SSO application with proxy provider
     
-    First, create an API token in Authentik Web UI:
-    1. Go to https://sso.{INTERNAL_DOMAIN}/if/admin/#/core/tokens
-    2. Create token with name "automation" and all permissions
-    3. Save token to Vault: vault kv put secret/platform/production/authentik api_token=<token>
+    Uses Authentik Root Token to create a forward-auth protected application.
     
     Args:
         name: Application name (e.g., "Portal")
-        slug: Application slug (e.g., "portal")
+        slug: Application slug (e.g., "portal")  
         external_host: External URL (e.g., "https://home.zitian.party")
-        internal_host: Internal service host (e.g., "platform-portal")
-        port: Internal service port (default: 8080)
+        internal_host: Internal service (e.g., "platform-portal")
+        port: Internal port (default: 8080)
     
     Example:
         invoke authentik.shared.create-proxy-app \\
@@ -93,25 +105,18 @@ docker compose run --rm -e VAULT_INIT_TOKEN={vault_token} -e VAULT_INIT_ADDR=htt
     import httpx
     from libs.env import get_secrets
     
-    header(f"Creating Authentik app: {name}", "Proxy Provider (Forward Auth)")
+    header(f"Creating SSO App: {name}", "Proxy Provider (Forward Auth)")
     
     e = get_env()
     env_name = e.get('ENV', 'production')
     
-    # Get API token from Vault
+    # Get Authentik Root Token from Vault
     authentik_secrets = get_secrets("platform", "authentik", env_name)
-    api_token = authentik_secrets.get("api_token")
+    root_token = authentik_secrets.get("root_token") or authentik_secrets.get("api_token")
     
-    if not api_token:
-        error("API token not found in Vault")
-        info("\nTo create an API token:")
-        info("1. Login to https://sso.{}/if/admin/".format(e.get('INTERNAL_DOMAIN')))
-        info("2. Go to Directory → Tokens → Create")
-        info("3. Set intent: API Token")
-        info("4. Save to Vault:")
-        info("   export VAULT_ADDR=https://vault.{}".format(e.get('INTERNAL_DOMAIN')))
-        info("   export VAULT_TOKEN=<your-root-token>")
-        info("   vault kv patch secret/platform/production/authentik api_token=<token>")
+    if not root_token:
+        error("Authentik Root Token not found in Vault")
+        info("\nRun first: invoke authentik.shared.create-root-token")
         return False
     
     base_url = f"https://sso.{e.get('INTERNAL_DOMAIN')}"
@@ -119,48 +124,40 @@ docker compose run --rm -e VAULT_INIT_TOKEN={vault_token} -e VAULT_INIT_ADDR=htt
     internal_url = f"http://{internal_host}:{port}"
     
     try:
-        # Use API token for authentication
         client = httpx.Client(
             verify=True,
-            headers={"Authorization": f"Bearer {api_token}"}
+            headers={"Authorization": f"Bearer {root_token}"}
         )
         
-        # Test authentication
-        info("Testing API token...")
+        # Test auth
+        info("Verifying Authentik Root Token...")
         resp = client.get(f"{base_url}/api/v3/core/users/me/")
         if resp.status_code != 200:
-            error(f"API token authentication failed: {resp.status_code}")
+            error(f"Root token auth failed: {resp.status_code}")
             return False
         
         user = resp.json()
         success(f"Authenticated as: {user['username']}")
         
-        # Get default authorization flow UUID
+        # Get auth flow UUID
         resp = client.get(f"{base_url}/api/v3/flows/instances/?slug=default-provider-authorization-implicit-consent")
-        if resp.status_code != 200:
-            error(f"Failed to get authorization flow: {resp.status_code}")
-            return False
-        
-        flows = resp.json()["results"]
-        if not flows:
+        if resp.status_code != 200 or not resp.json()["results"]:
             error("Default authorization flow not found")
             return False
         
-        auth_flow_uuid = flows[0]["pk"]
+        auth_flow_uuid = resp.json()["results"][0]["pk"]
         
         # Create proxy provider
         info(f"Creating proxy provider for {external_host}...")
-        provider_data = {
-            "name": f"{slug}-proxy",
-            "authorization_flow": auth_flow_uuid,
-            "mode": "forward_single",
-            "external_host": external_host,
-            "internal_host": internal_url,
-        }
-        
         resp = client.post(
             f"{base_url}/api/v3/providers/proxy/",
-            json=provider_data
+            json={
+                "name": f"{slug}-proxy",
+                "authorization_flow": auth_flow_uuid,
+                "mode": "forward_single",
+                "external_host": external_host,
+                "internal_host": internal_url,
+            }
         )
         
         if resp.status_code != 201:
@@ -172,36 +169,29 @@ docker compose run --rm -e VAULT_INIT_TOKEN={vault_token} -e VAULT_INIT_ADDR=htt
         
         # Create application
         info(f"Creating application: {name}...")
-        app_data = {
-            "name": name,
-            "slug": slug,
-            "provider": provider_id,
-        }
-        
         resp = client.post(
             f"{base_url}/api/v3/core/applications/",
-            json=app_data
+            json={
+                "name": name,
+                "slug": slug,
+                "provider": provider_id,
+            }
         )
         
         if resp.status_code != 201:
             error(f"Failed to create application: {resp.status_code} - {resp.text}")
             return False
         
-        app_id = resp.json()["slug"]
-        success(f"Created application: {name} (slug: {app_id})")
+        app_slug = resp.json()["slug"]
+        success(f"Created application: {name} (slug: {app_slug})")
         
-        info("\n✨ Configuration complete!")
-        info(f"Application URL: {base_url}/if/admin/#/core/applications/{app_id}")
-        info(f"External URL: {external_host}")
-        info(f"Internal URL: {internal_url}")
-        info("\nForward auth middleware should now work - test by visiting the external URL")
+        info(f"\n✨ SSO protection enabled for {external_host}")
+        info(f"Admin URL: {base_url}/if/admin/#/core/applications/{app_slug}")
         
         return True
         
     except Exception as exc:
         error(f"API error: {type(exc).__name__}: {exc}")
-        import traceback
-        traceback.print_exc()
         return False
     finally:
         client.close()
@@ -213,67 +203,42 @@ def list_apps(c):
     import httpx
     from libs.env import get_secrets
     
-    header("Listing Authentik applications", "API Query")
+    header("Listing SSO Applications", "")
     
     e = get_env()
     env_name = e.get('ENV', 'production')
     
-    # Get bootstrap credentials
     authentik_secrets = get_secrets("platform", "authentik", env_name)
-    admin_email = authentik_secrets.get("bootstrap_email")
-    admin_password = authentik_secrets.get("bootstrap_password")
+    root_token = authentik_secrets.get("root_token") or authentik_secrets.get("api_token")
     
-    if not admin_email or not admin_password:
-        error("Bootstrap credentials not found in Vault")
+    if not root_token:
+        error("Authentik Root Token not found")
         return False
     
     base_url = f"https://sso.{e.get('INTERNAL_DOMAIN')}"
     
     try:
-        client = httpx.Client(verify=True)
-        
-        # Login (simplified - reuse from create_proxy_app)
-        resp = client.post(
-            f"{base_url}/api/v3/flows/executor/default-authentication-flow/",
-            json={"uid_field": admin_email, "password": admin_password}
-        )
-        
-        token = None
-        for cookie in client.cookies.jar:
-            if cookie.name == "authentik_session":
-                token = cookie.value
-                break
-        
-        if not token:
-            error("Authentication failed")
-            return False
-        
-        client.headers["Authorization"] = f"Bearer {token}"
-        
-        # List applications
+        client = httpx.Client(headers={"Authorization": f"Bearer {root_token}"})
         resp = client.get(f"{base_url}/api/v3/core/applications/")
         
         if resp.status_code != 200:
-            error(f"Failed to list applications: {resp.status_code}")
+            error(f"API error: {resp.status_code}")
             return False
         
         apps = resp.json()["results"]
         
         if not apps:
-            info("No applications found")
+            info("No applications configured")
             return True
         
         info(f"Found {len(apps)} application(s):\n")
         for app in apps:
             success(f"• {app['name']} (slug: {app['slug']})")
-            if app.get('provider_obj'):
-                provider = app['provider_obj']
-                info(f"  Provider: {provider.get('name')} ({provider.get('pk')})")
         
         return True
         
     except Exception as exc:
-        error(f"API error: {type(exc).__name__}: {exc}")
+        error(f"API error: {exc}")
         return False
     finally:
         client.close()

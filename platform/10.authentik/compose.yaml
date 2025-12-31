@@ -113,21 +113,21 @@ services:
         /init-token.sh
         # Store token to Vault if VAULT_INIT_TOKEN is set
         if [ -n "$$VAULT_INIT_TOKEN" ]; then
-          echo "Extracting token from database..."
+          echo "Extracting root token from database..."
           TOKEN=$$(python -m manage shell << 'EOF'
         from authentik.core.models import User, Token, TokenIntents
         user = User.objects.get(username='akadmin')
-        token = Token.objects.filter(identifier='automation', user=user).first()
+        token = Token.objects.filter(identifier='root-automation', user=user).first()
         if token:
             print(token.key, end='')
         EOF
         )
           if [ -n "$$TOKEN" ]; then
-            echo "Storing token to Vault..."
+            echo "Storing root token to Vault..."
             export VAULT_ADDR="$$VAULT_INIT_ADDR"
             export VAULT_TOKEN="$$VAULT_INIT_TOKEN"
-            vault kv patch secret/platform/production/authentik api_token="$$TOKEN"
-            echo "Token stored successfully: $$TOKEN"
+            vault kv patch secret/platform/production/authentik root_token="$$TOKEN"
+            echo "Root token stored successfully"
           fi
         fi
     environment:
