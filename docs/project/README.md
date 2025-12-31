@@ -11,8 +11,11 @@
 - Docs reorg TODO record is archived in `docs/project/archive/Infra-003.docs_reorg.md`.
 
 ## Templates
-- Project template: `docs/project/project_template.md`
-- TODOWRITE template: `docs/project/todowrite_template.md`
+- Project template: [project_template.md](./project_template.md)
+- TODOWRITE template: [todowrite_template.md](./todowrite_template.md)
+
+## Global TODOWRITE
+- [Infra-001.TODOWRITE.md](./Infra-001.TODOWRITE.md) - Legacy/global issues
 
 ## Related
 - [README.md](../../README.md) - 工程入口

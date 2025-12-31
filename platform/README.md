@@ -20,6 +20,13 @@ platform/{nn}.{service}/
 └── README.md          # Service docs
 ```
 
+## Service Index
+
+- [Postgres](./01.postgres/README.md)
+- [Redis](./02.redis/README.md)
+- [Authentik](./10.authentik/README.md)
+- [Portal](./21.portal/README.md)
+
 ## Quick Start
 
 ```bash

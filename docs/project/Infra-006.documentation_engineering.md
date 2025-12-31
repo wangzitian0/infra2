@@ -30,10 +30,14 @@ The wiki has multiple entry points and deep references; we need consistent navig
 | 2025-12-31 | Initialized project |
 | 2025-12-31 | Standardized L1 entry ordering and labels across docs |
 | 2025-12-31 | Added reachability report and PageRank findings |
+| 2025-12-31 | Linked Bootstrap/E2E subdocs and closed reachability gaps |
 
 ## Verification
 - [ ] L0 to L2 docs are reachable in <= 2 hops.
 - [ ] Link check passes for local docs.
+
+## TODOWRITE
+- [Infra-006.TODOWRITE.md](./Infra-006.TODOWRITE.md)
 
 ## References
 - [文档索引](../README.md)
