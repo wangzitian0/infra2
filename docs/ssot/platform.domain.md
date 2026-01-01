@@ -70,7 +70,7 @@
 ${SERVICE}${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
 # ENV_DOMAIN_SUFFIX: production -> ""，非生产 -> "-${ENV}"
 # 示例: sso.zitian.party, home-staging.zitian.party
-# 说明: ENV 内部用 '_'，域名中使用 '-'（如 staging_cn -> staging-cn）
+# 说明: ENV 内部用 '_'，域名中使用 '-'（如 staging_cn -> staging-cn），且不允许 '-' 或 '/'
 ```
 
 ### 3.2 容器域名 (Container Domain)

@@ -37,7 +37,7 @@ class ClickHouseDeployer(Deployer):
             fatal(
                 "VAULT_ROOT_TOKEN not set",
                 "Required for storing ClickHouse password\n"
-                "   Get token: op read 'op://Infra2/bootstrap/vault/Root Token/Root Token'\n"
+                "   Get token: op read 'op://Infra2/bootstrap%2Fvault%2FRoot%20Token/Root%20Token'\n"
                 "   Then: export VAULT_ROOT_TOKEN=<token>"
             )
         

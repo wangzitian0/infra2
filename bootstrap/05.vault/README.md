@@ -74,7 +74,7 @@ vault operator unseal <key3>
 ### 4. 生成服务 Token（Vault-Init）
 
 ```bash
-export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/bootstrap/vault/Root Token/Root Token')
+export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/bootstrap%2Fvault%2FRoot%20Token/Root%20Token')
 invoke vault.setup-tokens
 ```
 

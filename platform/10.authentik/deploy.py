@@ -39,7 +39,7 @@ class AuthentikDeployer(Deployer):
             fatal(
                 "VAULT_ROOT_TOKEN not set",
                 "Required for: 1) Reading postgres/redis passwords, 2) Storing authentik secrets\n"
-                "   Get token: op read 'op://Infra2/bootstrap/vault/Root Token/Root Token'\n"
+                "   Get token: op read 'op://Infra2/bootstrap%2Fvault%2FRoot%20Token/Root%20Token'\n"
                 "   Then: export VAULT_ROOT_TOKEN=<token>"
             )
         

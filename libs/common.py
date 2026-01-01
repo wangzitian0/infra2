@@ -47,8 +47,8 @@ def normalize_env_name(value: str | None) -> str:
     if not value:
         return "production"
     value = value.strip().lower()
-    if "-" in value:
-        raise ValueError("ENV name must not include '-' (use '_')")
+    if "-" in value or "/" in value:
+        raise ValueError("ENV name must not include '-' or '/' (use '_')")
     if value in ("prod", "production"):
         return "production"
     return value
@@ -69,11 +69,17 @@ def get_env() -> dict[str, str | None]:
     env_name = normalize_env_name(os.environ.get("DEPLOY_ENV", "production"))
     env_dns = env_name.replace("_", "-")
     env_domain_suffix = "" if env_name == "production" else f"-{env_dns}"
+    project = (os.environ.get("PROJECT") or "platform").strip()
+    if not project:
+        raise ValueError("PROJECT must not be empty")
+    if "-" in project or "/" in project:
+        raise ValueError("PROJECT must not include '-' or '/'")
+
     _env_cache = {
         "VPS_HOST": op.get("VPS_HOST") or os.environ.get("VPS_HOST"),
         "VPS_SSH_USER": op.get("VPS_SSH_USER") or os.environ.get("VPS_SSH_USER", "root"),
         "INTERNAL_DOMAIN": op.get("INTERNAL_DOMAIN") or os.environ.get("INTERNAL_DOMAIN"),
-        "PROJECT": os.environ.get("PROJECT", "platform"),
+        "PROJECT": project,
         "ENV": env_name,
         "ENV_DOMAIN_SUFFIX": env_domain_suffix,
         "ENV_SUFFIX": os.environ.get("ENV_SUFFIX"),

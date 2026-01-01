@@ -162,6 +162,10 @@ platform/
 | Environment | `{project}/{env}` | 环境级变量 |
 | Service | `{project}/{env}/{service}` | 服务级变量 |
 
+**命名约束**：
+- `project` / `env` / `service` 不允许包含 `-` 或 `/`，避免路径歧义。
+- 需要分隔时使用 `_`（域名会自动转换为 `-`）。
+
 ### 本地文件（仅模板/种子）
 
 - `.env.example`：仅 KEY 清单（进 Git，按组件存放）
@@ -175,11 +179,11 @@ platform/
 - **Dokploy 应用名**：`service`（如 `postgres`, `redis`, `authentik`）
 - **容器名**：`platform-<service>` 或 `<service>-<role>`（如 `platform-postgres`, `authentik-server`）
 
-**完整域名格式**: `<service>.<internal_domain>`
+**完整域名格式**: `<service>${ENV_DOMAIN_SUFFIX}.<internal_domain>`
 
 **示例**:
-- `sso.${INTERNAL_DOMAIN}`
-- `vault.${INTERNAL_DOMAIN}`
+- `sso${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`
+- `vault${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`
 
 ### 域名规则 {#域名规则}
 
@@ -195,9 +199,8 @@ platform/
 
 | 环境 | 域名模式 | 示例 |
 |:---|:---|:---|
-| **Platform** | `<service>.<internal_domain>` | `sso.${INTERNAL_DOMAIN}` |
-| **Staging** | `x-staging.<internal_domain>` | `x-staging.${INTERNAL_DOMAIN}` |
-| **Prod** | `<internal_domain>` | `${INTERNAL_DOMAIN}` |
+| **Production** | `<service>.<internal_domain>` | `sso.${INTERNAL_DOMAIN}` |
+| **Non-Prod** | `<service>-<env>.<internal_domain>` | `sso-staging.${INTERNAL_DOMAIN}` |
 
 **SSO 保护服务的域名配置**：
 - deploy.py: `subdomain=None` (禁用 Dokploy 域名配置)
