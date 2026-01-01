@@ -46,13 +46,39 @@ class Deployer:
     @classmethod
     def env(cls) -> dict[str, str | None]:
         return get_env()
+
+    @classmethod
+    def project_name(cls, env: dict | None = None) -> str:
+        e = env or cls.env()
+        return e.get("PROJECT") or cls.project
+
+    @classmethod
+    def data_path_for_env(cls, env: dict | None = None) -> str:
+        e = env or cls.env()
+        env_name = e.get("ENV", "production")
+        project = cls.project_name(e)
+        if env_name == "production" or project == "bootstrap":
+            return cls.data_path
+        suffix = e.get("ENV_SUFFIX", "")
+        return f"{cls.data_path}{suffix}" if suffix else cls.data_path
+
+    @classmethod
+    def compose_env_base(cls, env: dict | None = None) -> dict[str, str]:
+        e = env or cls.env()
+        base = {
+            "ENV": e.get("ENV", "production"),
+            "ENV_SUFFIX": e.get("ENV_SUFFIX", ""),
+            "INTERNAL_DOMAIN": e.get("INTERNAL_DOMAIN"),
+            "DATA_PATH": cls.data_path_for_env(e),
+        }
+        return {k: v for k, v in base.items() if v is not None}
     
     @classmethod
     def secrets(cls):
         """Get secrets backend for this service"""
         e = cls.env()
         # Use cls.project if PROJECT env not set
-        project = e.get('PROJECT') or cls.project
+        project = cls.project_name(e)
         return get_secrets(
             project=project,
             service=cls.service,
@@ -67,12 +93,13 @@ class Deployer:
             return False
         
         e = cls.env()
+        data_path = cls.data_path_for_env(e)
         header(f"{cls.service} pre_compose", f"Preparing ({e['ENV']})")
         
         host = e['VPS_HOST']
-        run_with_status(c, f"ssh root@{host} 'mkdir -p {cls.data_path}'", "Create directory")
-        run_with_status(c, f"ssh root@{host} 'chown -R {cls.uid}:{cls.gid} {cls.data_path}'", "Set ownership")
-        run_with_status(c, f"ssh root@{host} 'chmod -R {cls.chmod} {cls.data_path}'", "Set permissions")
+        run_with_status(c, f"ssh root@{host} 'mkdir -p {data_path}'", "Create directory")
+        run_with_status(c, f"ssh root@{host} 'chown -R {cls.uid}:{cls.gid} {data_path}'", "Set ownership")
+        run_with_status(c, f"ssh root@{host} 'chmod -R {cls.chmod} {data_path}'", "Set permissions")
         return True
     
     @classmethod
@@ -101,10 +128,9 @@ class Deployer:
             else:
                 info(f"Vault secret exists: {cls.secret_key}")
         
-        # Return VAULT_ADDR for vault-init pattern
-        result = {
-            "VAULT_ADDR": e.get("VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}"),
-        }
+        # Return base env vars + VAULT_ADDR for vault-init pattern
+        result = cls.compose_env_base(e)
+        result["VAULT_ADDR"] = e.get("VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}")
         
         env_vars("DOKPLOY ENV (vault-init)", result)
         success("pre_compose complete - vault-init will fetch secrets at runtime")
@@ -135,14 +161,21 @@ class Deployer:
         
         # Deploy via API
         # Priority: ENV > Class Attribute > Default "platform"
-        project_name = e.get("PROJECT") or cls.project
+        env_name = e.get("ENV", "production")
+        project_name = cls.project_name(e)
         domain = e.get('INTERNAL_DOMAIN')
         host = f"cloud.{domain}" if domain else None
         
         client = get_dokploy(host=host)
         
         # Ensure project exists
-        project_id, env_id = ensure_project(project_name, f"Platform services: {project_name}", host=host)
+        project_id, env_id = ensure_project(
+            project_name,
+            f"Platform services: {project_name}",
+            host=host,
+            env_name=env_name,
+            require_env=env_name != "production",
+        )
         if not env_id:
             error("Failed to get environment ID")
             raise ValueError("Failed to get environment ID")
@@ -156,10 +189,10 @@ class Deployer:
         info(f"Using GitHub provider: {github_id}")
         
         # Format env vars
-        env_str = "\n".join(f"{k}={v}" for k, v in env_vars.items())
+        env_str = "\n".join(f"{k}={v}" for k, v in env_vars.items() if v is not None)
         
         # Check if compose already exists
-        existing = client.find_compose_by_name(cls.service, project_name)
+        existing = client.find_compose_by_name(cls.service, project_name, env_name=env_name)
         
         if existing:
             compose_id = existing["composeId"]
@@ -196,7 +229,8 @@ class Deployer:
         
         # Configure domain if specified
         if cls.subdomain and cls.service_port:
-            domain_host = f"{cls.subdomain}.{e.get('INTERNAL_DOMAIN')}"
+            domain_suffix = e.get("ENV_DOMAIN_SUFFIX", "")
+            domain_host = f"{cls.subdomain}{domain_suffix}.{e.get('INTERNAL_DOMAIN')}"
             info(f"Ensuring domain: {domain_host}")
             
             desired_domains = [

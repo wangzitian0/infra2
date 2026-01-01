@@ -444,11 +444,12 @@ def _configure_dokploy_token(_c, service: str, token: str):
         
         e = get_env()
         domain = e.get('INTERNAL_DOMAIN')
+        env_name = e.get("ENV", "production")
         host = f"cloud.{domain}" if domain else None
         client = get_dokploy(host=host)
         
         # Find compose service
-        compose = client.find_compose_by_name(service, "platform")
+        compose = client.find_compose_by_name(service, "platform", env_name=env_name)
         if compose:
             compose_id = compose["composeId"]
             info("   Configuring in Dokploy...")
