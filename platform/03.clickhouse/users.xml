@@ -10,7 +10,7 @@
 
     <users>
         <default>
-            <password></password_sha256_hex>
+            <password></password>
             <networks>
                 <ip>::/0</ip>
             </networks>

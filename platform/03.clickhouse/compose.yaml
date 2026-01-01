@@ -28,16 +28,16 @@ services:
     restart: unless-stopped
     environment:
       - ZOO_MY_ID=1
-      - ZOO_SERVERS=server.1=platform-clickhouse-zookeeper:2888:3888;2181
     volumes:
-      - /data/platform/clickhouse/zookeeper:/bitnami/zookeeper
+      - /data/platform/clickhouse/zookeeper:/data
     networks:
       - dokploy-network
     healthcheck:
-      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 | grep imok"]
-      interval: 30s
+      test: ["CMD-SHELL", "echo stat | nc localhost 2181 || exit 1"]
+      interval: 10s
       timeout: 5s
-      retries: 3
+      retries: 10
+      start_period: 30s
 
   clickhouse:
     image: clickhouse/clickhouse-server:25.5.6
