@@ -103,7 +103,7 @@ def create_proxy_app(c, name, slug, external_host, internal_host, port=None, all
     Args:
         name: Application name (e.g., "Portal")
         slug: Application slug (e.g., "portal")  
-        external_host: External URL (e.g., "https://home.zitian.party")
+        external_host: External URL (e.g., "https://home.example.com")
         internal_host: Internal service (e.g., "platform-portal")
         port: Internal port (default: 8080)
         allowed_groups: Comma-separated group names (default: "admins")
@@ -113,7 +113,7 @@ def create_proxy_app(c, name, slug, external_host, internal_host, port=None, all
         invoke authentik.shared.create-proxy-app \\
             --name="Portal" \\
             --slug="portal" \\
-            --external-host="https://home.zitian.party" \\
+            --external-host="https://home.example.com" \\
             --internal-host="platform-portal"
         
         # Multiple groups

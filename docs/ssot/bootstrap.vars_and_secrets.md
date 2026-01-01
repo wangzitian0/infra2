@@ -46,6 +46,7 @@ Bootstrap 依赖 1Password CLI (`op`)，使用 **`Infra2`** vault 存储所有�
 | `bootstrap/vault/Root Token` | Vault root token | 机器读 | Vault 初始化时写入 |
 | `bootstrap/vault/Unseal Keys` | Vault unseal keys (5 keys) | 机器读 | Vault 初始化时写入 |
 | `bootstrap/dokploy/admin` | Dokploy Web UI 密码 | **Web UI** | 手动创建 |
+| `platform/minio/admin` | MinIO Console 密码 | **Web UI** | 部署时写入 |
 | `platform/authentik/admin` | Authentik Web UI 密码 | **Web UI** | 从 Vault 复制 |
 
 > **注意**: `bootstrap/vault/Unseal Keys` 是 unsealer 自动解封 Vault 的关键，必须包含 `Unseal Key 1-5` 字段。

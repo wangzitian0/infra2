@@ -10,7 +10,7 @@ services:
         echo "$$VAULT_APP_TOKEN" > /vault/token
         exec vault agent -config=/etc/vault/vault-agent.hcl
     environment:
-      VAULT_ADDR: ${VAULT_ADDR:-https://vault.zitian.party}
+      VAULT_ADDR: ${VAULT_ADDR}
       VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:-}
     volumes:
       - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
@@ -123,7 +123,7 @@ services:
       AUTHENTIK_POSTGRESQL__USER: postgres
       AUTHENTIK_POSTGRESQL__NAME: authentik
       VAULT_INIT_TOKEN: ${VAULT_INIT_TOKEN:-}
-      VAULT_INIT_ADDR: ${VAULT_ADDR:-https://vault.zitian.party}
+      VAULT_INIT_ADDR: ${VAULT_ADDR}
     volumes:
       - secrets:/secrets:ro
       - ./init-token.sh:/init-token.sh:ro
