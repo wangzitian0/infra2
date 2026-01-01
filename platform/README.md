@@ -46,11 +46,16 @@ platform/{nn}.{service}/
 ## Quick Start
 
 ```bash
-# Deploy all (in order)
-invoke postgres.setup
-invoke redis.setup
-invoke authentik.setup
-invoke portal.setup
+# Deploy all (in dependency order)
+# 1. Database tier
+invoke postgres.setup   # Database for authentik
+invoke redis.setup      # Cache for authentik
+
+# 2. Auth tier
+invoke authentik.setup  # SSO provider
+
+# 3. Application tier
+invoke portal.setup     # Portal with SSO auth
 
 # Check status
 invoke postgres.status
@@ -58,6 +63,23 @@ invoke redis.status
 invoke authentik.status
 invoke portal.status
 ```
+
+## Deployment Order
+
+Services must be deployed in order due to dependencies:
+
+```
+postgres ─┐
+          ├──► authentik ──► portal
+redis ────┘
+```
+
+| Service | Dependencies | Notes |
+|---------|--------------|-------|
+| postgres | vault | Database for authentik |
+| redis | vault | Cache for authentik |
+| authentik | postgres, redis | SSO provider |
+| portal | authentik | Protected by SSO |
 
 ## Adding New Service
 
