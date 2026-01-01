@@ -28,7 +28,8 @@ try:
     ).first()
     
     if token:
-        print(f"Token already exists: {token.key}")
+        # Token exists, output only the key (no logging for security)
+        print(token.key, end='')
     else:
         # Create new token with 10-year expiry
         token = Token.objects.create(
@@ -38,7 +39,8 @@ try:
             expiring=True,
             expires=datetime.now() + timedelta(days=3650)
         )
-        print(f"Created new token: {token.key}")
+        # Output only the key (no logging for security)
+        print(token.key, end='')
 except Exception as e:
     print(f"Error: {e}")
     exit(1)

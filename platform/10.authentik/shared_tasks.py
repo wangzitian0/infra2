@@ -53,13 +53,25 @@ def create_root_token(c):
     
     info("Running token creation on server...")
     
+    # Write token to temp file on remote to avoid exposing in process list
     script = f"""
 set -e
 cd /etc/dokploy/compose/platform-authentik-*/code/platform/10.authentik
-docker compose run --rm -e VAULT_INIT_TOKEN={vault_root_token} -e VAULT_INIT_ADDR=https://vault.{e['INTERNAL_DOMAIN']} token-init
+# Create temp env file with token (more secure than command line args)
+TMPENV=$(mktemp)
+echo "VAULT_INIT_TOKEN=$VAULT_INIT_TOKEN" > "$TMPENV"
+echo "VAULT_INIT_ADDR=https://vault.{e['INTERNAL_DOMAIN']}" >> "$TMPENV"
+docker compose run --rm --env-file "$TMPENV" token-init
+rm -f "$TMPENV"
 """
     
-    result = c.run(f"ssh root@{e['VPS_HOST']} '{script}'", warn=True)
+    # Pass token via environment variable to SSH, not in command
+    result = c.run(
+        f"ssh root@{e['VPS_HOST']} 'VAULT_INIT_TOKEN=\"$VAULT_INIT_TOKEN\" bash -s'",
+        env={"VAULT_INIT_TOKEN": vault_root_token},
+        in_stream=script,
+        warn=True
+    )
     
     if not result.ok:
         error("Failed to create token")
@@ -195,23 +207,17 @@ def create_proxy_app(c, name, slug, external_host, internal_host, port=None, all
         
         invalidation_flow_uuid = resp.json()["results"][0]["pk"]
         
-        # Create group-based access policy
-        info(f"Creating access policy (groups: {', '.join(group_list)})...")
-        policy_binding_payload = {
-            "name": f"{slug}-access-policy",
-            "execution_logging": False,
-            "policy_engine_mode": "any",  # Match ANY of the bindings
-            "bindings": []
-        }
+        # Create group-based access policies and collect PKs for binding
+        info(f"Creating access policies (groups: {', '.join(group_list)})...")
+        policy_pks = {}  # Store policy PKs for later binding
         
-        # Create policy binding for each group
-        for idx, (group_name, group_pk) in enumerate(zip(group_list, group_pks)):
+        for group_name in group_list:
             policy_name = f"{slug}-require-{group_name}"
             
             # Check if policy already exists
             resp = client.get(f"{base_url}/api/v3/policies/expression/?name={policy_name}")
             if resp.status_code == 200 and resp.json()["results"]:
-                policy_pk = resp.json()["results"][0]["pk"]
+                policy_pks[group_name] = resp.json()["results"][0]["pk"]
                 info(f"Policy already exists: {policy_name}")
             else:
                 resp = client.post(
@@ -227,7 +233,7 @@ def create_proxy_app(c, name, slug, external_host, internal_host, port=None, all
                     error(f"Failed to create policy for group {group_name}: {resp.status_code} - {resp.text}")
                     return False
                 
-                policy_pk = resp.json()["pk"]
+                policy_pks[group_name] = resp.json()["pk"]
                 success(f"Created policy: require {group_name} membership")
         
         # Check if provider already exists
@@ -258,28 +264,26 @@ def create_proxy_app(c, name, slug, external_host, internal_host, port=None, all
             provider_id = resp.json()["pk"]
             success(f"Created proxy provider: {provider_id}")
         
-        # Bind policies to provider
+        # Bind policies to provider (use cached policy_pks)
         info("Binding access policies to provider...")
-        for group_name in group_list:
-            # Find policy by name
-            resp = client.get(f"{base_url}/api/v3/policies/expression/?name={slug}-require-{group_name}")
-            if resp.status_code == 200 and resp.json()["results"]:
-                policy_pk = resp.json()["results"][0]["pk"]
-                
-                # Create policy binding
-                resp = client.post(
-                    f"{base_url}/api/v3/policies/bindings/",
-                    json={
-                        "policy": policy_pk,
-                        "target": provider_id,
-                        "enabled": True,
-                        "order": 0,
-                        "timeout": 30
-                    }
-                )
-                
-                if resp.status_code == 201:
-                    success(f"Bound policy: {group_name} → provider")
+        for group_name, policy_pk in policy_pks.items():
+            resp = client.post(
+                f"{base_url}/api/v3/policies/bindings/",
+                json={
+                    "policy": policy_pk,
+                    "target": provider_id,
+                    "enabled": True,
+                    "order": 0,
+                    "timeout": 30
+                }
+            )
+            
+            if resp.status_code == 201:
+                success(f"Bound policy: {group_name} → provider")
+            elif resp.status_code == 400 and "already exists" in resp.text.lower():
+                info(f"Policy binding already exists: {group_name}")
+            else:
+                warning(f"Failed to bind policy {group_name}: {resp.status_code}")
         
         # Check if application already exists
         resp = client.get(f"{base_url}/api/v3/core/applications/?slug={slug}")

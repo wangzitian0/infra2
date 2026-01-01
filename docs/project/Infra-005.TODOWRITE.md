@@ -22,9 +22,9 @@ Track top issues discovered during the Homer portal and SSO protection project.
 
 ### Documentation
 - [x] Update Infra-005 project doc with SSO scope
-- [ ] Create SSOT `platform.sso.md` for SSO design and usage
-- [ ] Update Portal README with SSO configuration info
-- [ ] Update Authentik README with shared tasks documentation
+- [x] Create SSOT `platform.sso.md` for SSO design and usage
+- [x] Update Portal README with SSO configuration info
+- [x] Update Authentik README with shared tasks documentation
 
 ### Infrastructure
 - [ ] token-init compose service needs testing on fresh deploy
