@@ -8,7 +8,6 @@ Track top issues discovered during the project.
 
 ## Top Issues (Top 30)
 - [x] `libs/dokploy.py`: environment selection missing; staging deploys target default env
-- [x] `platform/*/compose.yaml`: container_name and volume paths are production-only (no env isolation)
-- [x] `platform/*/compose.yaml`: domain labels use fixed subdomains (no env suffix)
-- [x] `platform/*/deploy.py`: data_path and domain output not env-aware
-- [x] `platform/*/shared_tasks.py`: hardcoded container/domain references
+- [x] `libs/deployer.py`: non-production requires explicit DATA_PATH or ENV_SUFFIX (guarded)
+- [ ] `platform/*/compose.yaml`: Traefik labels use fixed router/service names (need appName/Dokploy domain API)
+- [ ] `platform/*`: env-specific values should move to Dokploy Environment (DATA_PATH / DOMAIN_SUFFIX)

@@ -5,6 +5,7 @@ Simplified: minimal class attributes, uses new env.py API.
 """
 from __future__ import annotations
 from typing import TYPE_CHECKING, Any
+import os
 from invoke import task
 
 from libs.common import get_env, validate_env
@@ -55,6 +56,9 @@ class Deployer:
     @classmethod
     def data_path_for_env(cls, env: dict | None = None) -> str:
         e = env or cls.env()
+        explicit_path = e.get("DATA_PATH")
+        if explicit_path:
+            return explicit_path
         env_name = e.get("ENV", "production")
         project = cls.project_name(e)
         if env_name == "production" or project == "bootstrap":
@@ -67,10 +71,15 @@ class Deployer:
         e = env or cls.env()
         base = {
             "ENV": e.get("ENV", "production"),
-            "ENV_SUFFIX": e.get("ENV_SUFFIX", ""),
             "INTERNAL_DOMAIN": e.get("INTERNAL_DOMAIN"),
-            "DATA_PATH": cls.data_path_for_env(e),
         }
+        data_path = cls.data_path_for_env(e)
+        if data_path:
+            base["DATA_PATH"] = data_path
+        if e.get("ENV_SUFFIX"):
+            base["ENV_SUFFIX"] = e.get("ENV_SUFFIX")
+        if e.get("DOMAIN_SUFFIX"):
+            base["DOMAIN_SUFFIX"] = e.get("DOMAIN_SUFFIX")
         return {k: v for k, v in base.items() if v is not None}
     
     @classmethod
@@ -94,6 +103,22 @@ class Deployer:
         
         e = cls.env()
         data_path = cls.data_path_for_env(e)
+        env_name = e.get("ENV", "production")
+        project = cls.project_name(e)
+        if env_name != "production" and project != "bootstrap":
+            if not e.get("DATA_PATH") and not e.get("ENV_SUFFIX"):
+                if os.environ.get("ALLOW_SHARED_DATA_PATH") == "1":
+                    warning(
+                        "Non-production is using the default data path; "
+                        "set DATA_PATH or ENV_SUFFIX to avoid collisions."
+                    )
+                else:
+                    error(
+                        "Non-production requires DATA_PATH or ENV_SUFFIX to avoid data collisions. "
+                        "Set DATA_PATH (recommended) or ENV_SUFFIX; "
+                        "override with ALLOW_SHARED_DATA_PATH=1 if intentional."
+                    )
+                    return False
         header(f"{cls.service} pre_compose", f"Preparing ({e['ENV']})")
         
         host = e['VPS_HOST']

@@ -5,19 +5,20 @@
 **Priority**: P1
 
 ## Goal
-Platform supports staging alongside production with env-scoped domains, containers, data paths, and Dokploy environment selection.
+Platform 支持 staging 与 production 并行，优先使用 Dokploy 的 Project/Environment/Service 分层，环境差异通过环境变量配置。
 
 ## Context
 当前 platform 只有 production 环境，改动时容易影响线上。Dokploy 原生支持多环境，需要将部署和配置体系升级为“一份代码，多环境配置”，并保证 staging/production 可同时运行。
 
 ## Scope
 - [x] 增加 Dokploy 环境选择（按 DEPLOY_ENV）
-- [x] 容器命名、数据路径、域名按环境隔离
-- [x] 平台服务 compose 与 deployer 适配 ENV_SUFFIX/DATA_PATH
-- [x] SSOT/README 更新（平台环境策略）
+- [ ] 环境差异通过 Dokploy Environment 变量配置（DATA_PATH / DOMAIN_SUFFIX）
+- [ ] 仅在必须手写 label 的场景使用后缀（Traefik router/service 名避免冲突）
+- [ ] SSOT/README 更新（平台环境策略）
 
 ## Deliverables
-- 环境感知的部署逻辑（ENV/ENV_SUFFIX/DATA_PATH）
+- 环境感知的部署逻辑（ENV 选择 + Environment 变量注入）
+- DATA_PATH/DOMAIN_SUFFIX 由 Dokploy Environment 管理
 - 平台服务 staging/production 可并行运行
 - SSOT + Platform 文档更新
 
@@ -33,7 +34,7 @@ Platform supports staging alongside production with env-scoped domains, containe
 ## Verification
 - [ ] `DEPLOY_ENV=staging invoke postgres.setup` 成功部署
 - [ ] `DEPLOY_ENV=staging invoke redis.setup` 成功部署
-- [ ] `DEPLOY_ENV=staging invoke authentik.setup` 域名使用 `sso-staging`
+- [ ] `DEPLOY_ENV=staging invoke authentik.setup` 域名使用 `sso${DOMAIN_SUFFIX}`
 - [ ] `DEPLOY_ENV=production invoke portal.shared.status` 生产不受影响
 
 ## References
