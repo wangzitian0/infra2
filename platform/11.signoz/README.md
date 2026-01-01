@@ -17,7 +17,7 @@ Open-source observability platform for logs, metrics, and traces (OpenTelemetry-
 | `otel-collector-config.yaml` | OpenTelemetry Collector configuration |
 | `prometheus.yml` | Prometheus config for query-service |
 | `deploy.py` | SigNozDeployer |
-| `shared_tasks.py` | status() + test-trace() |
+| `shared_tasks.py` | Health check and trace testing |
 
 ## Architecture
 
