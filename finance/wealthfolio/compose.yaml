@@ -1,6 +1,6 @@
 services:
   wealthfolio:
-    image: afadil/wealthfolio:latest
+    image: afadil/wealthfolio:latest@sha256:6896f692f5a3b3d48a201f9f49dec506021e5c12b4a086a67099b08b136ca580
     container_name: finance-wealthfolio
     restart: always
     environment:

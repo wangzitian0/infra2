@@ -6,7 +6,7 @@
 
 [Wealthfolio](https://wealthfolio.app/) is an open-source, private portfolio tracker that runs entirely locally.
 
-- **Image**: `afadil/wealthfolio:latest`
+- **Image**: `afadil/wealthfolio:latest` (Pinned: `sha256:6896f69...`)
 - **Port**: 8088
 - **Domain**: `wealth.${INTERNAL_DOMAIN}`
 - **Project**: `finance`
