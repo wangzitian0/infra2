@@ -50,6 +50,12 @@ services:
       - /data/platform/authentik/custom-templates:/templates
     networks:
       - dokploy-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.authentik.rule=Host(`sso.${INTERNAL_DOMAIN}`)"
+      - "traefik.http.routers.authentik.entrypoints=websecure"
+      - "traefik.http.routers.authentik.tls.certresolver=letsencrypt"
+      - "traefik.http.services.authentik.loadbalancer.server.port=9000"
     healthcheck:
       test: [ "CMD", "ak", "healthcheck" ]
       interval: 30s
@@ -83,8 +89,63 @@ services:
     volumes:
       - secrets:/secrets:ro
       - /data/platform/authentik/media:/media
-      - /data/platform/authentik/certs:/certs
       - /data/platform/authentik/custom-templates:/templates
+      - /data/platform/authentik/certs:/certs
+    networks:
+      - dokploy-network
+    healthcheck:
+      test: [ "CMD-SHELL", "celery -A authentik.root.celery inspect ping -d celery@$$HOSTNAME" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # One-time token initialization
+  token-init:
+    image: ghcr.io/goauthentik/server:2024.12.0
+    container_name: platform-authentik-token-init
+    restart: "no"
+    depends_on:
+      server:
+        condition: service_healthy
+      worker:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -a
+        . /secrets/.env
+        set +a
+        /init-token.sh
+        # Store token to Vault if VAULT_INIT_TOKEN is set
+        if [ -n "$$VAULT_INIT_TOKEN" ]; then
+          echo "Extracting root token from database..."
+          TOKEN=$$(python -m manage shell << 'EOF'
+from authentik.core.models import User, Token, TokenIntents
+user = User.objects.get(username='akadmin')
+token = Token.objects.filter(identifier='root-automation', user=user).first()
+if token:
+    print(token.key, end='')
+EOF
+          )
+          if [ -n "$$TOKEN" ]; then
+            echo "Storing root token to Vault..."
+            export VAULT_ADDR="$$VAULT_INIT_ADDR"
+            export VAULT_TOKEN="$$VAULT_INIT_TOKEN"
+            vault kv patch secret/platform/production/authentik root_token="$$TOKEN"
+            echo "Root token stored successfully"
+          fi
+        fi
+    environment:
+      AUTHENTIK_REDIS__HOST: platform-redis
+      AUTHENTIK_POSTGRESQL__HOST: platform-postgres
+      AUTHENTIK_POSTGRESQL__USER: postgres
+      AUTHENTIK_POSTGRESQL__NAME: authentik
+      VAULT_INIT_TOKEN: ${VAULT_INIT_TOKEN:-}
+      VAULT_INIT_ADDR: ${VAULT_ADDR:-https://vault.zitian.party}
+    volumes:
+      - secrets:/secrets:ro
+      - ./init-token.sh:/init-token.sh:ro
     networks:
       - dokploy-network
 
