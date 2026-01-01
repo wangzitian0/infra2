@@ -78,7 +78,7 @@ vault → clickhouse → signoz
 1. ClickHouse 健康检查：`invoke clickhouse.status`
 2. SigNoz 健康检查：`invoke signoz.status`
 3. SigNoz 访问测试：`https://signoz.${INTERNAL_DOMAIN}`
-4. OTLP 端点可用：4317 (gRPC), 4318 (HTTP)
+4. OTLP 端点测试：`invoke signoz.shared.test-trace`
 
 ## Deployment Steps
 
@@ -95,15 +95,18 @@ invoke signoz.setup
 # 4. 验证 SigNoz
 invoke signoz.status
 
-# 5. 访问 Web UI
+# 5. 测试 OTLP 连通性
+invoke signoz.shared.test-trace
+
+# 6. 访问 Web UI
 open https://signoz.${INTERNAL_DOMAIN}
 ```
 
 ## Design Decisions Summary
 
-1. **存储与��用分离**: ClickHouse (03) 与 SigNoz (11) 分离部署，便于独立扩展
+1. **存储与应用分离**: ClickHouse (03) 与 SigNoz (11) 分离部署，便于独立扩展
 2. **无密钥管理**: ClickHouse 使用空密码（仅内部访问），简化首次部署
-3. **标准端口映射**: OTLP 4317/4318 直接映射，无需 Traefik
+3. **Docker 网络内 OTLP**: 4317/4318 仅在 dokploy-network 内可访问，提高安全性
 4. **Traefik 反向代理**: Frontend 通过 Traefik 提供 HTTPS 访问
 5. **官方镜像**: 使用 SigNoz 官方镜像（v0.105.1 + v0.129.12）
 
@@ -113,7 +116,8 @@ open https://signoz.${INTERNAL_DOMAIN}
 - 2026-01-01: ✅ ClickHouse deployment completed (platform/03.clickhouse)
 - 2026-01-01: ✅ SigNoz deployment completed (platform/11.signoz)
 - 2026-01-01: ✅ Documentation updated (README + SSOT)
-- 2026-01-01: **Ready for deployment testing**
+- 2026-01-01: ✅ OTLP test-trace command added
+- 2026-01-01: **Project completed**
 
 ## Related PRs
 

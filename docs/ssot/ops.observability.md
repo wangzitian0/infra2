@@ -70,37 +70,29 @@ graph LR
 
 **前置条件**:
 - SigNoz 已部署并健康（`invoke signoz.status`）
-- 知道 OTLP 端点地址（`${VPS_HOST}:4317` 或 `:4318`）
+- 应用部署在 `dokploy-network` Docker 网络中
+- OTLP 端点：`platform-signoz-otel-collector:4317` (gRPC) 或 `:4318` (HTTP)
 
-**示例（Node.js）**:
-```javascript
-const { NodeSDK } = require('@opentelemetry/sdk-node');
-const { OTLPTraceExporter } = require('@opentelemetry/exporter-trace-otlp-grpc');
-const { Resource } = require('@opentelemetry/resources');
-const { SEMRESATTRS_SERVICE_NAME } = require('@opentelemetry/semantic-conventions');
+> **注意**: OTLP 端口仅在 Docker 网络内可访问，不对外暴露。
 
-const sdk = new NodeSDK({
-  resource: new Resource({
-    [SEMRESATTRS_SERVICE_NAME]: 'my-service',
-  }),
-  traceExporter: new OTLPTraceExporter({
-    url: `grpc://${process.env.OTLP_ENDPOINT}:4317`,
-  }),
-});
-
-sdk.start();
+**验证连通性**:
+```bash
+invoke signoz.shared.test-trace --service-name=myapp
 ```
 
-**示例（Python）**:
+**示例（Python，Docker 网络内）**:
 ```python
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.resources import Resource
 
-trace.set_tracer_provider(TracerProvider())
-otlp_exporter = OTLPSpanExporter(endpoint="http://<VPS_HOST>:4317", insecure=True)
-trace.get_tracer_provider().add_span_processor(BatchSpanProcessor(otlp_exporter))
+resource = Resource.create({"service.name": "my-service"})
+provider = TracerProvider(resource=resource)
+exporter = OTLPSpanExporter(endpoint="http://platform-signoz-otel-collector:4318/v1/traces")
+provider.add_span_processor(BatchSpanProcessor(exporter))
+trace.set_tracer_provider(provider)
 
 tracer = trace.get_tracer(__name__)
 with tracer.start_as_current_span("my-span"):
@@ -111,8 +103,7 @@ with tracer.start_as_current_span("my-span"):
 
 | 变量 | 说明 | 示例 |
 |------|------|------|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP 端点（HTTP） | `http://<VPS_HOST>:4318` |
-| `OTEL_EXPORTER_OTLP_HEADERS` | 可选认证头 | `x-signoz-api-key=...` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP 端点（HTTP） | `http://platform-signoz-otel-collector:4318` |
 | `OTEL_SERVICE_NAME` | 服务名 | `my-app` |
 | `OTEL_RESOURCE_ATTRIBUTES` | 资源属性 | `deployment.environment=prod` |
 
@@ -150,8 +141,8 @@ invoke signoz.status
 ### 5.3 访问地址
 
 - **Web UI**: `https://signoz.${INTERNAL_DOMAIN}`
-- **OTLP gRPC**: `${VPS_HOST}:4317`
-- **OTLP HTTP**: `${VPS_HOST}:4318`
+- **OTLP gRPC**: `platform-signoz-otel-collector:4317` (Docker 网络内)
+- **OTLP HTTP**: `platform-signoz-otel-collector:4318` (Docker 网络内)
 
 ### 5.4 容量规划
 
@@ -170,7 +161,7 @@ invoke signoz.status
 | **ClickHouse 健康** | `invoke clickhouse.status` | ✅ Implemented |
 | **SigNoz 健康** | `invoke signoz.status` | ✅ Implemented |
 | **Frontend 可访问** | `curl -I https://signoz.${INTERNAL_DOMAIN}` | ✅ Implemented |
-| **OTLP 端点可用** | 发送测试 span → 验证 UI 显示 | ⏳ Manual Test |
+| **OTLP 端点可用** | `invoke signoz.shared.test-trace` | ✅ Implemented |
 
 ---
 
