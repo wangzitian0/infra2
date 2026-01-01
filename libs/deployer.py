@@ -6,7 +6,6 @@ Simplified: minimal class attributes, uses new env.py API.
 from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from invoke import task
-import httpx
 
 from libs.common import get_env, validate_env
 from libs.console import header, success, error, warning, info, env_vars, prompt_action, run_with_status
@@ -196,35 +195,31 @@ class Deployer:
         client.deploy_compose(compose_id)
         
         # Configure domain if specified
-        domain_created = False
         if cls.subdomain and cls.service_port:
             domain_host = f"{cls.subdomain}.{e.get('INTERNAL_DOMAIN')}"
-            try:
-                info(f"Configuring domain: {domain_host}")
-                client.create_domain(
-                    compose_id=compose_id,
-                    host=domain_host,
-                    port=cls.service_port,
-                    https=True,
-                    service_name=cls.service_name,
-                )
+            info(f"Ensuring domain: {domain_host}")
+            
+            desired_domains = [
+                {"host": domain_host, "port": cls.service_port, "https": True}
+            ]
+            result = client.ensure_domains(
+                compose_id=compose_id,
+                desired_domains=desired_domains,
+                service_name=cls.service_name,
+            )
+            
+            if result["created"] > 0:
                 success(f"Domain configured: https://{domain_host}")
-                domain_created = True
-            except httpx.HTTPStatusError as exc:
-                # Domain might already exist or API endpoint changed
-                if exc.response.status_code == 409:
-                    info(f"Domain already exists: {domain_host}")
-                else:
-                    warning(f"Domain configuration skipped: HTTP {exc.response.status_code}")
-            except Exception as exc:
-                # Unexpected error - log details for debugging
-                warning(f"Domain configuration failed: {type(exc).__name__}: {exc}")
-        
-        # Redeploy if new domain was created (to regenerate Traefik labels)
-        if domain_created:
-            info("Redeploying to apply domain labels...")
-            client.deploy_compose(compose_id)
-            success("Domain labels updated")
+                # Redeploy to apply domain labels
+                info("Redeploying to apply domain labels...")
+                client.deploy_compose(compose_id)
+                success("Domain labels updated")
+            elif result["skipped"] > 0:
+                info(f"Domain already configured: {domain_host}")
+            
+            if result["conflicts"]:
+                for c in result["conflicts"]:
+                    warning(f"Domain conflict: {c['host']} exists with port {c['existing_port']}, need {c['desired_port']}")
         
         success(f"Deployed {cls.service} (composeId: {compose_id})")
         return compose_id
