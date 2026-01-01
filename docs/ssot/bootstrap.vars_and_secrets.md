@@ -98,7 +98,7 @@ invoke local.bootstrap  # 校验 1Password 的 init/env_vars（不生成本地 .
 
 | 变量名 | 权限 | 用途 | 存储位置 |
 |--------|------|------|----------|
-| `VAULT_ROOT_TOKEN` | Read + Write | `invoke vault.setup-tokens` 生成/管理策略与 token | 1Password `op://Infra2/bootstrap/vault/Root Token/Root Token` |
+| `VAULT_ROOT_TOKEN` | Read + Write | `invoke vault.setup-tokens` 生成/管理策略与 token | 1Password `op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token` |
 | `VAULT_APP_TOKEN` | Read-Only (per-service) | 运行时读取密钥 | Dokploy 服务环境变量 |
 
 ### 3.4 App 接入 Vault（vault-init）

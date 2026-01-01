@@ -1,0 +1,31 @@
+services:
+  wealthfolio:
+    image: afadil/wealthfolio:latest@sha256:6896f692f5a3b3d48a201f9f49dec506021e5c12b4a086a67099b08b136ca580
+    container_name: finance-wealthfolio
+    restart: always
+    environment:
+      - WF_LISTEN_ADDR=0.0.0.0:8088
+      - WF_DB_PATH=/data/wealthfolio.db
+      - WF_SECRET_KEY=${WF_SECRET_KEY}
+      - WF_AUTH_PASSWORD_HASH=${WF_AUTH_PASSWORD_HASH}
+      - WF_CORS_ALLOW_ORIGINS=https://wealth.${INTERNAL_DOMAIN}
+    volumes:
+      - /data/finance/wealthfolio:/data
+    healthcheck:
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8088/" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - dokploy-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.wealthfolio.rule=Host(`wealth.${INTERNAL_DOMAIN}`)"
+      - "traefik.http.routers.wealthfolio.entrypoints=websecure"
+      - "traefik.http.routers.wealthfolio.tls.certresolver=letsencrypt"
+      - "traefik.http.services.wealthfolio.loadbalancer.server.port=8088"
+
+networks:
+  dokploy-network:
+    external: true

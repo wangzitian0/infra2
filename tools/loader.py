@@ -133,7 +133,7 @@ def load_all():
     root = Path(__file__).parent.parent
     
     # Load projects
-    for project in ["bootstrap", "platform"]:
+    for project in ["bootstrap", "platform", "finance"]:
         _load_project(ns, root, project)
     
     # Load tools
