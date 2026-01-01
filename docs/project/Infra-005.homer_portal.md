@@ -1,6 +1,6 @@
 # Infra-005: Homer Portal + SSO Protection
 
-**Status**: In Progress  
+**Status**: Completed  
 **Owner**: Infra  
 **Priority**: P2  
 
@@ -17,10 +17,12 @@
 - [x] Automate Cloudflare SSL settings and HTTPS warm-up.
 - [x] Add SSOT for DNS/cert automation and update Bootstrap docs.
 - [x] Configure Traefik forward auth to Authentik.
-- [ ] Create Authentik Root Token and store in Vault.
-- [ ] Setup admin group and add akadmin.
-- [ ] Create Portal SSO application with group-based access.
-- [ ] Verify end-to-end: unauthenticated → login → access.
+- [x] Create Authentik Root Token and store in Vault.
+- [x] Setup admin group and add akadmin.
+- [x] Create Portal SSO application with group-based access.
+- [x] Verify end-to-end: unauthenticated → login → access.
+- [x] Fix: Disable Dokploy auto-domain for SSO-protected services.
+- [x] Add logout link to Homer config.
 
 ## Deliverables
 - Docker Compose + deploy tasks for portal
@@ -41,26 +43,43 @@
 | 2025-12-31 | Added Traefik forward auth labels |
 | 2025-12-31 | Created Authentik shared tasks for SSO automation |
 | 2025-12-31 | Added group-based access control |
+| 2026-01-01 | Fixed SSO by disabling Dokploy auto-domain |
+| 2026-01-01 | Added logout link to Homer |
 
 ## Verification
 - [x] `invoke portal.shared.status`
 - [x] `https://home.${INTERNAL_DOMAIN}` loads portal (without SSO)
-- [ ] `invoke authentik.shared.create-root-token` succeeds
-- [ ] `invoke authentik.shared.setup-admin-group` succeeds
-- [ ] `invoke authentik.shared.create-proxy-app --name=Portal ...` succeeds
-- [ ] Unauthenticated access → redirects to login
-- [ ] Non-admin user → access denied
-- [ ] Admin user → portal loads
+- [x] `invoke authentik.shared.create-root-token` succeeds
+- [x] `invoke authentik.shared.setup-admin-group` succeeds
+- [x] `invoke authentik.shared.create-proxy-app --name=Portal ...` succeeds
+- [x] Unauthenticated access → redirects to login
+- [x] Non-admin user → access denied (policy configured)
+- [x] Admin user → portal loads
 
 ## TODOWRITE
 
 - [Infra-005.TODOWRITE.md](./Infra-005.TODOWRITE.md)
 
+## Key Learnings
+
+### SSO 与 Dokploy 域名配置冲突
+
+**问题**：Portal 可以在隐身模式访问，SSO 认证没有生效。
+
+**根本原因**：Dokploy 通过 API 自动配置域名时，会生成额外的 Traefik router（如 `platform-portal-yl8mdl-5-websecure`），这个 router **没有** forwardauth 中间件，导致绕过认证。
+
+**解决方案**：
+1. 在 `deploy.py` 中设置 `subdomain = None` 禁用 Dokploy 自动域名配置
+2. 完全依赖 `compose.yaml` 中的 Traefik labels
+3. 如果已有 Dokploy 域名配置，需要从数据库删除
+
+**规则**：SSO 保护的服务必须禁用 Dokploy 自动域名配置。
+
 ## Open Issues
 - [x] Deploy the portal app in Dokploy and confirm `https://home.${INTERNAL_DOMAIN}`.
 - [ ] Confirm `bootstrap/cloudflare` item fields are complete.
 - [ ] Dokploy Server Domain SSL is still manual.
-- [ ] **Run SSO setup tasks and verify access control.**
+- [x] **Run SSO setup tasks and verify access control.**
 
 ## References
 - [SSOT: bootstrap.dns_and_cert](../ssot/bootstrap.dns_and_cert.md)

@@ -18,8 +18,10 @@ class PortalDeployer(Deployer):
     uid = "1000"
     gid = "1000"
     
-    # Domain configuration
-    subdomain = "home"
+    # Domain configuration - disabled to use compose.yaml Traefik labels with SSO
+    # When subdomain is None, Dokploy won't auto-configure domain, allowing
+    # compose.yaml labels (with forwardauth middleware) to take effect.
+    subdomain = None
     service_port = 8080
     service_name = "portal"  # Must match service name in compose.yaml
 

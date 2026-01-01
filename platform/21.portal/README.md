@@ -40,6 +40,12 @@ invoke portal.post_compose
 
 Portal is protected by Authentik forward auth. Only users in `admins` group can access.
 
+### Key Configuration
+
+> **重要**：SSO 保护的服务必须禁用 Dokploy 自动域名配置，否则 compose.yaml 中的 forwardauth 中间件会被覆盖。
+
+`deploy.py` 中设置 `subdomain = None`，让 compose.yaml 的 Traefik labels 生效。
+
 ### Setup SSO (one-time after Authentik deploy)
 
 ```bash
@@ -66,6 +72,11 @@ invoke authentik.shared.create-proxy-app \
 | Not logged in | Redirect to `sso.${INTERNAL_DOMAIN}` login |
 | Logged in, not in `admins` | 403 Forbidden |
 | Logged in, in `admins` | Access granted |
+
+### Logout
+
+Homer 页面右上角有 "Logout" 链接，指向 Authentik 的 end-session endpoint：
+`https://sso.${INTERNAL_DOMAIN}/application/o/portal/end-session/`
 
 ### Forward Auth Labels
 
