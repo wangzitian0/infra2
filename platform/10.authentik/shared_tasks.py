@@ -264,31 +264,12 @@ def create_proxy_app(c, name, slug, external_host, internal_host, port=None, all
             provider_id = resp.json()["pk"]
             success(f"Created proxy provider: {provider_id}")
         
-        # Bind policies to provider (use cached policy_pks)
-        info("Binding access policies to provider...")
-        for group_name, policy_pk in policy_pks.items():
-            resp = client.post(
-                f"{base_url}/api/v3/policies/bindings/",
-                json={
-                    "policy": policy_pk,
-                    "target": provider_id,
-                    "enabled": True,
-                    "order": 0,
-                    "timeout": 30
-                }
-            )
-            
-            if resp.status_code == 201:
-                success(f"Bound policy: {group_name} → provider")
-            elif resp.status_code == 400 and "already exists" in resp.text.lower():
-                info(f"Policy binding already exists: {group_name}")
-            else:
-                warning(f"Failed to bind policy {group_name}: {resp.status_code}")
-        
         # Check if application already exists
         resp = client.get(f"{base_url}/api/v3/core/applications/?slug={slug}")
         if resp.status_code == 200 and resp.json()["results"]:
-            app_slug = resp.json()["results"][0]["slug"]
+            app_data = resp.json()["results"][0]
+            app_slug = app_data["slug"]
+            app_pk = app_data["pk"]
             info(f"Application already exists: {name} (slug: {app_slug})")
         else:
             # Create application
@@ -306,8 +287,31 @@ def create_proxy_app(c, name, slug, external_host, internal_host, port=None, all
                 error(f"Failed to create application: {resp.status_code} - {resp.text}")
                 return False
             
-            app_slug = resp.json()["slug"]
+            app_data = resp.json()
+            app_slug = app_data["slug"]
+            app_pk = app_data["pk"]
             success(f"Created application: {name} (slug: {app_slug})")
+        
+        # Bind policies to APPLICATION (not provider) - use app_pk UUID
+        info("Binding access policies to application...")
+        for group_name, policy_pk in policy_pks.items():
+            resp = client.post(
+                f"{base_url}/api/v3/policies/bindings/",
+                json={
+                    "policy": policy_pk,
+                    "target": app_pk,  # Application UUID, not provider ID
+                    "enabled": True,
+                    "order": 0,
+                    "timeout": 30
+                }
+            )
+            
+            if resp.status_code == 201:
+                success(f"Bound policy: {group_name} → application")
+            elif resp.status_code == 400 and "already exists" in resp.text.lower():
+                info(f"Policy binding already exists: {group_name}")
+            else:
+                warning(f"Failed to bind policy {group_name}: {resp.status_code}")
         
         # Add provider to embedded outpost
         info("Configuring embedded outpost...")
