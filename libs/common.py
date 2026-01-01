@@ -17,6 +17,7 @@ CONTAINERS = {
     "redis": "platform-redis",
     "authentik": "platform-authentik-server",
     "minio": "platform-minio",
+    "wealthfolio": "finance-wealthfolio",
 }
 
 # Service subdomain mapping (subdomain prefix -> description)
@@ -31,6 +32,8 @@ SERVICE_SUBDOMAINS = {
     "minio_console": "minio",  # minio.{domain} -> Console (9001)
     "minio_api": "s3",         # s3.{domain} -> S3 API (9000)
     "portal": "portal",        # portal.{domain}
+    # Finance apps
+    "wealthfolio": "wealth",   # wealth.{domain}
 }
 
 
