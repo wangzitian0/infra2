@@ -11,7 +11,7 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **API Key** | **Vault** (`secret/platform/production/ai`) | 规划中的 Key 存储路径 |
+| **API Key** | **Vault** (`secret/platform/<env>/ai`) | 规划中的 Key 存储路径 |
 | **接入地址** | **环境变量** | `OPENROUTER_BASE_URL` |
 
 ---
@@ -51,7 +51,7 @@ flowchart TB
     1. 在 OpenRouter 控制台生成新 Key。
     2. 写入 Vault：
        ```bash
-       vault kv put secret/platform/production/ai key=sk-or-v1-new...
+       vault kv put secret/platform/<env>/ai key=sk-or-v1-new...
        ```
     3. 更新 Dokploy 环境变量并重启应用。
 

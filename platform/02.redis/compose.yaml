@@ -1,7 +1,7 @@
 services:
   vault-agent:
     image: hashicorp/vault:1.15
-    container_name: platform-redis-vault-agent
+    container_name: platform-redis-vault-agent${ENV_SUFFIX}
     restart: always
     entrypoint:
       - sh
@@ -12,6 +12,7 @@ services:
     environment:
       VAULT_ADDR: ${VAULT_ADDR}
       VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:-}
+      ENV: ${ENV}
     volumes:
       - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
       - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
@@ -21,7 +22,7 @@ services:
 
   redis:
     image: redis:alpine
-    container_name: platform-redis
+    container_name: platform-redis${ENV_SUFFIX}
     restart: always
     depends_on:
       - vault-agent
@@ -44,7 +45,7 @@ services:
       timeout: 3s
     volumes:
       - secrets:/secrets:ro
-      - /data/platform/redis:/data
+      - ${DATA_PATH}:/data
     networks:
       - dokploy-network
     labels:

@@ -36,14 +36,18 @@ class PortalDeployer(Deployer):
         if not internal_domain:
             error("Missing INTERNAL_DOMAIN")
             return None
+        suffix = env.get("ENV_SUFFIX", "")
 
         template_path = Path(__file__).with_name("config.yml.tmpl")
         if not template_path.exists():
             error("Missing config template", str(template_path))
             return None
 
-        config_content = template_path.read_text().replace("{{INTERNAL_DOMAIN}}", internal_domain)
-        config_path = f"{cls.data_path}/config.yml"
+        config_content = template_path.read_text()
+        config_content = config_content.replace("{{INTERNAL_DOMAIN}}", internal_domain)
+        config_content = config_content.replace("{{ENV_SUFFIX}}", suffix)
+        data_path = cls.data_path_for_env(env)
+        config_path = f"{data_path}/config.yml"
         host = env.get("VPS_HOST")
         if not host:
             error("Missing VPS_HOST")
@@ -71,17 +75,18 @@ class PortalDeployer(Deployer):
             if not result.ok:
                 return None
 
-            portal_url = f"https://home.{internal_domain}"
+            portal_url = f"https://home{suffix}.{internal_domain}"
             env_vars("PORTAL INFO", {
                 "PORTAL_URL": portal_url,
                 "CONFIG_PATH": config_path,
                 "INTERNAL_DOMAIN": internal_domain,
             })
             success("pre_compose complete")
-            return {
+            result = cls.compose_env_base(env)
+            result.update({
                 "PORTAL_URL": portal_url,
-                "INTERNAL_DOMAIN": internal_domain,
-            }
+            })
+            return result
         except OSError as exc:
             error("Failed to create temp config", str(exc))
             return None

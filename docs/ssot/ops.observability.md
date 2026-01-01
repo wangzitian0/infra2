@@ -34,16 +34,16 @@ graph LR
 |------|------|------|------|
 | **ClickHouse** | platform/03.clickhouse | 9000, 8123 (内部) | 时序数据存储 |
 | **ZooKeeper** | platform/03.clickhouse | 2181 (内部) | 集群协调 |
-| **OTLP Collector** | platform/11.signoz | 4317, 4318 | 数据采集 |
+| **OTLP Collector** | platform/11.signoz | 4317, 4318（内部） | 数据采集 |
 | **Query Service** | platform/11.signoz | 8080 (内部) | 查询引擎 |
 | **Frontend** | platform/11.signoz | 3301 (Traefik) | Web 界面 |
 
 ### 2.3 数据流
 
-1. **采集**: 应用通过 OTLP SDK 发送 traces/metrics/logs → OTLP Collector (4317/4318)
+1. **采集**: 应用通过 OTLP SDK 发送 traces/metrics/logs → OTLP Collector (4317/4318, Docker 网络内)
 2. **存储**: OTLP Collector 处理并导出 → ClickHouse
 3. **查询**: Frontend → Query Service → ClickHouse
-4. **展示**: 用户访问 `https://signoz.${INTERNAL_DOMAIN}` → Frontend
+4. **展示**: 用户访问 `https://signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}` → Frontend
 
 ---
 
@@ -71,7 +71,7 @@ graph LR
 **前置条件**:
 - SigNoz 已部署并健康（`invoke signoz.status`）
 - 应用部署在 `dokploy-network` Docker 网络中
-- OTLP 端点：`platform-signoz-otel-collector:4317` (gRPC) 或 `:4318` (HTTP)
+- OTLP 端点：`platform-signoz-otel-collector${ENV_SUFFIX}:4317` (gRPC) 或 `:4318` (HTTP)
 
 > **注意**: OTLP 端口仅在 Docker 网络内可访问，不对外暴露。
 
@@ -90,7 +90,7 @@ from opentelemetry.sdk.resources import Resource
 
 resource = Resource.create({"service.name": "my-service"})
 provider = TracerProvider(resource=resource)
-exporter = OTLPSpanExporter(endpoint="http://platform-signoz-otel-collector:4318/v1/traces")
+exporter = OTLPSpanExporter(endpoint="http://platform-signoz-otel-collector${ENV_SUFFIX}:4318/v1/traces")
 provider.add_span_processor(BatchSpanProcessor(exporter))
 trace.set_tracer_provider(provider)
 
@@ -103,7 +103,7 @@ with tracer.start_as_current_span("my-span"):
 
 | 变量 | 说明 | 示例 |
 |------|------|------|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP 端点（HTTP） | `http://platform-signoz-otel-collector:4318` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP 端点（HTTP） | `http://platform-signoz-otel-collector${ENV_SUFFIX}:4318` |
 | `OTEL_SERVICE_NAME` | 服务名 | `my-app` |
 | `OTEL_RESOURCE_ATTRIBUTES` | 资源属性 | `deployment.environment=prod` |
 
@@ -127,22 +127,28 @@ invoke signoz.status
 
 ### 5.2 数据路径
 
+ClickHouse DATA_PATH（如 `/data/platform/clickhouse${ENV_SUFFIX}`）:
+
 ```
-/data/platform/clickhouse/
+${DATA_PATH}/
 ├── data/          # 时序数据（traces, metrics, logs）
 ├── logs/          # ClickHouse 日志
 ├── user_scripts/  # 自定义函数
 └── zookeeper/     # 集群元数据
+```
 
-/data/platform/signoz/
+SigNoz DATA_PATH（如 `/data/platform/signoz${ENV_SUFFIX}`）:
+
+```
+${DATA_PATH}/
 └── data/          # SQLite 元数据（dashboards, alerts）
 ```
 
 ### 5.3 访问地址
 
-- **Web UI**: `https://signoz.${INTERNAL_DOMAIN}`
-- **OTLP gRPC**: `platform-signoz-otel-collector:4317` (Docker 网络内)
-- **OTLP HTTP**: `platform-signoz-otel-collector:4318` (Docker 网络内)
+- **Web UI**: `https://signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`
+- **OTLP gRPC**: `platform-signoz-otel-collector${ENV_SUFFIX}:4317` (Docker 网络内)
+- **OTLP HTTP**: `platform-signoz-otel-collector${ENV_SUFFIX}:4318` (Docker 网络内)
 
 ### 5.4 容量规划
 
@@ -160,7 +166,7 @@ invoke signoz.status
 |----------|----------|------|
 | **ClickHouse 健康** | `invoke clickhouse.status` | ✅ Implemented |
 | **SigNoz 健康** | `invoke signoz.status` | ✅ Implemented |
-| **Frontend 可访问** | `curl -I https://signoz.${INTERNAL_DOMAIN}` | ✅ Implemented |
+| **Frontend 可访问** | `curl -I https://signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}` | ✅ Implemented |
 | **OTLP 端点可用** | `invoke signoz.shared.test-trace` | ✅ Implemented |
 
 ---
@@ -168,17 +174,17 @@ invoke signoz.status
 ## 7. 故障排查
 
 ### 问题 1: ClickHouse 启动失败
-- **检查**: `docker logs platform-clickhouse`
+- **检查**: `docker logs platform-clickhouse${ENV_SUFFIX}`
 - **常见原因**: 权限问题（uid=101）、磁盘空间不足
 - **解决**: `invoke clickhouse.pre-compose` 重新初始化
 
 ### 问题 2: OTLP 数据未显示
-- **检查**: `docker logs platform-signoz-otel-collector`
+- **检查**: `docker logs platform-signoz-otel-collector${ENV_SUFFIX}`
 - **常见原因**: ClickHouse 连接失败、数据格式错误
 - **解决**: 检查 `otel-collector-config.yaml` 的 exporter 配置
 
 ### 问题 3: Frontend 502 错误
-- **检查**: `docker logs platform-signoz-query-service`
+- **检查**: `docker logs platform-signoz${ENV_SUFFIX}`
 - **常见原因**: Query Service 未就绪、ClickHouse 查询超时
 - **解决**: 等待 query-service 健康检查通过
 

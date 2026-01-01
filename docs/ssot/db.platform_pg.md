@@ -11,7 +11,7 @@
 |------|----------------|------|
 | **实例定义** | [`platform/01.postgres/compose.yaml`](https://github.com/wangzitian0/infra2/blob/main/platform/01.postgres/compose.yaml) | 服务配置 |
 | **部署任务** | [`platform/01.postgres/deploy.py`](https://github.com/wangzitian0/infra2/blob/main/platform/01.postgres/deploy.py) | Invoke 任务 |
-| **运行时密钥** | **Vault** (`secret/platform/production/postgres`) | root_password |
+| **运行时密钥** | **Vault** (`secret/platform/<env>/postgres`) | root_password |
 
 ---
 
@@ -19,8 +19,8 @@
 
 | 项目 | 值 |
 |------|-----|
-| **数据目录** | `/data/platform/postgres` |
-| **容器名** | `platform-postgres` |
+| **数据目录** | `${DATA_PATH}` |
+| **容器名** | `platform-postgres${ENV_SUFFIX}` |
 | **端口** | `5432` |
 | **环境变量** | `POSTGRES_PASSWORD`, `POSTGRES_USER` |
 

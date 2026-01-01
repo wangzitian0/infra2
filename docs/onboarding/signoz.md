@@ -11,8 +11,10 @@ SigNoz is deployed in two parts:
 ## Prerequisites
 
 - Vault must be accessible
-- DNS configured for `signoz.${INTERNAL_DOMAIN}`
-- Ports 4317, 4318 available for OTLP
+- DNS configured for `signoz${ENV_SUFFIX}.${INTERNAL_DOMAIN}`
+- Ports `${OTEL_GRPC_PORT}`, `${OTEL_HTTP_PORT}` available for OTLP (staging defaults: 14317/14318)
+
+> `ENV_SUFFIX` 生产为空，staging 为 `-staging`。
 
 ## Quick Deploy
 
@@ -32,9 +34,9 @@ invoke signoz.status
 
 ## Access
 
-- **Web UI**: `https://signoz.${INTERNAL_DOMAIN}`
-- **OTLP gRPC**: `platform-signoz-otel-collector:4317` (Docker network only)
-- **OTLP HTTP**: `platform-signoz-otel-collector:4318` (Docker network only)
+- **Web UI**: `https://signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`
+- **OTLP gRPC**: `platform-signoz-otel-collector${ENV_SUFFIX}:4317` (Docker network only)
+- **OTLP HTTP**: `platform-signoz-otel-collector${ENV_SUFFIX}:4318` (Docker network only)
 
 > **Note**: OTLP endpoints are only accessible within the `dokploy-network`. 
 > Use `invoke signoz.shared.test-trace` to verify connectivity.
@@ -76,7 +78,7 @@ platform/
                                  v
 ┌──────────────────┐     ┌───────────────┐
 │ Frontend         │<────│ Query Service │
-│ signoz.domain    │     │               │
+│ signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN} │     │               │
 └──────────────────┘     └───────────────┘
 ```
 
@@ -85,7 +87,7 @@ platform/
 ### ClickHouse not starting
 ```bash
 # Check logs
-docker logs platform-clickhouse
+docker logs platform-clickhouse${ENV_SUFFIX}
 
 # Re-initialize directories
 invoke clickhouse.pre-compose
@@ -94,7 +96,7 @@ invoke clickhouse.pre-compose
 ### SigNoz 502 error
 ```bash
 # Check signoz health
-docker logs platform-signoz
+docker logs platform-signoz${ENV_SUFFIX}
 
 # Ensure ClickHouse is ready
 invoke clickhouse.status
@@ -103,13 +105,13 @@ invoke clickhouse.status
 ### OTLP data not appearing
 ```bash
 # Check collector logs
-docker logs platform-signoz-otel-collector
+docker logs platform-signoz-otel-collector${ENV_SUFFIX}
 
 # Send a test trace
 invoke signoz.shared.test-trace
 
 # Verify ClickHouse connection
-docker exec platform-clickhouse clickhouse-client --query "SHOW DATABASES"
+docker exec platform-clickhouse${ENV_SUFFIX} clickhouse-client --query "SHOW DATABASES"
 ```
 
 ## Next Steps

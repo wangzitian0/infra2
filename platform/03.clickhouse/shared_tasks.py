@@ -9,5 +9,5 @@ def status(c):
     return check_service(
         c, 
         "clickhouse",
-        "docker exec platform-clickhouse wget --spider -q localhost:8123/ping && echo 'ClickHouse is healthy'"
+        "wget --spider -q localhost:8123/ping && echo 'ClickHouse is healthy'"
     )

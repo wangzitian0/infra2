@@ -14,7 +14,7 @@ Time-series database for observability data storage (logs, metrics, traces).
 | File | Purpose |
 |------|---------|
 | `compose.yaml` | Docker Compose (init + zookeeper + clickhouse) |
-| `config.xml` | ClickHouse server configuration |
+| `config.xml` | ClickHouse server config template (rendered per env) |
 | `users.xml` | User and permissions configuration |
 | `deploy.py` | ClickHouseDeployer |
 | `shared_tasks.py` | Health check status() |
@@ -31,7 +31,7 @@ Time-series database for observability data storage (logs, metrics, traces).
 └─────────────────┘
 
 ┌─────────────────┐
-│ clickhouse      │ ──store──> /data/platform/clickhouse/
+│ clickhouse      │ ──store──> ${DATA_PATH}/
 └─────────────────┘
 ```
 
@@ -51,12 +51,13 @@ invoke clickhouse.status
 ```
 
 **pre-compose** will:
-1. Create data directories (`/data/platform/clickhouse/{data,logs,user_scripts,zookeeper}`)
+1. Create data directories (`${DATA_PATH}/{data,logs,user_scripts,zookeeper}`)
 2. Set permissions (uid=101, gid=101 for ClickHouse)
+3. Render `${DATA_PATH}/config.xml` with env-scoped hostnames
 
 ## Data Path
 
-`/data/platform/clickhouse/` (uid=101, gid=101 for clickhouse, root for zookeeper)
+`${DATA_PATH}` (uid=101, gid=101 for clickhouse, root for zookeeper; staging uses `/data/platform/clickhouse-staging`)
 - `data/` - ClickHouse database files
 - `logs/` - Server logs
 - `user_scripts/` - Custom functions (histogram-quantile)
@@ -78,8 +79,8 @@ invoke clickhouse.status
 **Internal only** - no public domain configured.
 
 Services connect via:
-- Native protocol: `platform-clickhouse:9000`
-- HTTP API: `platform-clickhouse:8123`
+- Native protocol: `platform-clickhouse${ENV_SUFFIX}:9000`
+- HTTP API: `platform-clickhouse${ENV_SUFFIX}:8123`
 
 **Default credentials**:
 - User: `default`
@@ -96,7 +97,7 @@ Services connect via:
 
 ### Cluster (config.xml)
 - Cluster name: `cluster_1S_1R` (1 shard, 1 replica)
-- ZooKeeper: `platform-clickhouse-zookeeper:2181`
+- ZooKeeper: `platform-clickhouse-zookeeper${ENV_SUFFIX}:2181`
 
 ### Users (users.xml)
 - Profile: default (10GB memory limit)

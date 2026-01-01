@@ -11,7 +11,7 @@ Track top issues discovered during the Homer portal and SSO protection project.
 ### SSO Integration
 - [ ] **Create Authentik Root Token** - Run `invoke authentik.shared.create-root-token`
 - [ ] **Setup admin group** - Run `invoke authentik.shared.setup-admin-group`
-- [ ] **Create Portal SSO app** - Run `invoke authentik.shared.create-proxy-app --name=Portal --slug=portal --external-host=https://home.zitian.party --internal-host=platform-portal`
+- [ ] **Create Portal SSO app** - Run `invoke authentik.shared.create-proxy-app --name=Portal --slug=portal --external-host=https://home.zitian.party --internal-host=platform-portal${ENV_SUFFIX}`
 - [ ] **Test access flow** - Verify unauthenticated → login → access works
 - [ ] **Test denial flow** - Verify non-admin users get access denied
 

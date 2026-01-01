@@ -20,7 +20,11 @@ def _assert_contains(path: pathlib.Path, needle: str, label: str):
 async def test_recovery_data_paths_defined():
     """Verify recovery-critical data paths are mounted."""
     _assert_contains(ROOT / "bootstrap" / "05.vault" / "compose.yaml", "/data/bootstrap/vault", "Vault compose")
-    _assert_contains(ROOT / "platform" / "01.postgres" / "compose.yaml", "/data/platform/postgres", "Postgres compose")
+    _assert_contains(
+        ROOT / "platform" / "01.postgres" / "compose.yaml",
+        "${DATA_PATH}:/var/lib/postgresql/data",
+        "Postgres compose",
+    )
 
 
 @pytest.mark.ops

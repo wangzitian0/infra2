@@ -50,7 +50,7 @@
      │               │               │
      └───────────────┴───────────────┘
               Docker 内部网络
-         (容器名: platform-authentik-server)
+         (容器名: platform-authentik-server${ENV_SUFFIX})
 ```
 
 ---
@@ -76,7 +76,7 @@ ${SERVICE}${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
 ### 3.2 容器域名 (Container Domain)
 
 - **定义**: Docker 内部 DNS 自动解析的容器名
-- **格式**: `${LAYER}-${SERVICE}` (如 `platform-authentik-server`)
+- **格式**: `${LAYER}-${SERVICE}${ENV_SUFFIX}` (如 `platform-authentik-server-staging`)
 - **用途**: 容器间通信、Traefik ForwardAuth 地址
 - **DNS**: Docker 内部 DNS (不可公网访问)
 
@@ -85,8 +85,8 @@ ${SERVICE}${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
 # compose.yaml 中定义
 services:
   authentik-server:
-    container_name: platform-authentik-server
-    # 其他容器可通过 platform-authentik-server:9000 访问
+    container_name: platform-authentik-server${ENV_SUFFIX}
+    # 其他容器可通过 platform-authentik-server${ENV_SUFFIX}:9000 访问
 ```
 
 ### 3.3 Dokploy 域名配置 (可选)
@@ -121,7 +121,7 @@ labels:
   - "traefik.http.routers.${SERVICE}${ENV_DOMAIN_SUFFIX}.rule=Host(`${SERVICE}${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`)"
   - "traefik.http.routers.${SERVICE}${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
   - "traefik.http.routers.${SERVICE}${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
-  - "traefik.http.middlewares.${SERVICE}-auth.forwardauth.address=http://platform-authentik-server:9000/outpost.goauthentik.io/auth/traefik"
+  - "traefik.http.middlewares.${SERVICE}-auth.forwardauth.address=http://platform-authentik-server${ENV_SUFFIX}:9000/outpost.goauthentik.io/auth/traefik"
   - "traefik.http.routers.${SERVICE}${ENV_DOMAIN_SUFFIX}.middlewares=${SERVICE}-auth@docker"
 
 # 3. Cloudflare 添加 DNS 记录（如果不在泛域名内）
@@ -172,7 +172,7 @@ curl -vI https://${SERVICE}${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
 
 - **SSO 服务用 labels**: `subdomain=None` + compose.yaml labels
 - **简单服务用 Dokploy**: UI 配置域名，无需 labels
-- **容器间通信用容器名**: `platform-authentik-server:9000`
+- **容器间通信用容器名**: `platform-authentik-server${ENV_SUFFIX}:9000`
 - **公网访问用公网域名**: `https://sso.zitian.party`
 
 ### ⛔ 禁止模式 (Blacklist)
@@ -200,7 +200,7 @@ docker logs bootstrap-traefik 2>&1 | grep "home.zitian.party"
 # Expected: Router created
 
 # 4. 检查容器 DNS
-docker exec platform-portal ping -c 1 platform-authentik-server
+docker exec platform-portal${ENV_SUFFIX} ping -c 1 platform-authentik-server${ENV_SUFFIX}
 # Expected: 解析成功
 
 # 5. 端到端测试

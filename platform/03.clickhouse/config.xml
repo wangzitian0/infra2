@@ -44,7 +44,7 @@
         <cluster>
             <shard>
                 <replica>
-                    <host>platform-clickhouse</host>
+                    <host>{{CLICKHOUSE_HOST}}</host>
                     <port>9000</port>
                 </replica>
             </shard>
@@ -53,7 +53,7 @@
 
     <zookeeper>
         <node>
-            <host>platform-clickhouse-zookeeper</host>
+            <host>{{ZOOKEEPER_HOST}}</host>
             <port>2181</port>
         </node>
     </zookeeper>

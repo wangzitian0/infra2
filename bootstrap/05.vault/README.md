@@ -79,6 +79,11 @@ export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root T
 invoke vault.setup-tokens
 ```
 
+```bash
+# For staging tokens
+DEPLOY_ENV=staging invoke vault.setup-tokens
+```
+
 说明：
 - `vault.setup-tokens` 会自动为服务生成只读 token，并尝试写入 Dokploy 环境变量 `VAULT_APP_TOKEN`。
 
@@ -87,7 +92,7 @@ invoke vault.setup-tokens
 **目标**：运行时从 Vault 拉取密钥，不在磁盘持久化。
 
 流程：
-1. 在 Vault 写入 `secret/data/platform/production/<service>`（KV v2）。
+1. 在 Vault 写入 `secret/data/platform/<env>/<service>`（KV v2）。
 2. 运行 `invoke vault.setup-tokens` 为服务生成只读 token。
 3. Dokploy 服务环境变量设置 `VAULT_APP_TOKEN`（可自动注入）。
 4. Compose 加 `vault-init` 容器，拉取 Vault 并写入 `/secrets/.env`。

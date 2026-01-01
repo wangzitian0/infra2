@@ -19,7 +19,7 @@ Shared PostgreSQL database for all platform applications using vault-init patter
 
 ```
 ┌─────────────────┐
-│ vault-agent     │ ──fetch──> Vault (secret/platform/production/postgres)
+│ vault-agent     │ ──fetch──> Vault (secret/platform/<env>/postgres)
 │ (sidecar)       │            └─ root_password
 └────────┬────────┘
          │ render
@@ -42,14 +42,14 @@ invoke postgres.post-compose # Verifies health
 
 ## Vault Integration
 
-**Secret path**: `secret/platform/production/postgres`
+**Secret path**: `secret/platform/<env>/postgres`
 
 **Required keys**:
 - `root_password` - PostgreSQL root password
 
 **Policy** (`platform-postgres-app`):
 ```hcl
-path "secret/data/platform/production/postgres" {
+path "secret/data/platform/{{env}}/postgres" {
   capabilities = ["read", "list"]
 }
 ```
@@ -64,11 +64,11 @@ invoke postgres.shared.create-user --username=<user> --database=<db> --password=
 
 ## Data Path
 
-`/data/platform/postgres` - PostgreSQL data directory (uid=70, chmod=700)
+`${DATA_PATH}` - PostgreSQL data directory (uid=70, chmod=700, staging uses `/data/platform/postgres-staging`)
 
 ## Container
 
-- **Name**: `platform-postgres`
+- **Name**: `platform-postgres${ENV_SUFFIX}`
 - **Image**: `postgres:16-alpine`
 - **Port**: 5432 (internal only)
 - **Health check**: `pg_isready -U postgres`

@@ -5,12 +5,12 @@ Token Hierarchy (mirrors Vault):
 - AUTHENTIK_APP_TOKEN: Per-service, limited to own SSO configuration
 
 Storage in Vault:
-- secret/platform/production/authentik/root_token: Admin API token
-- secret/platform/production/<service>/sso_*: Per-service SSO config
+- secret/platform/<env>/authentik/root_token: Admin API token
+- secret/platform/<env>/<service>/sso_*: Per-service SSO config
 """
 import os
 from invoke import task
-from libs.common import check_service, get_env
+from libs.common import check_service, get_env, service_domain
 from libs.console import header, success, error, warning, info
 
 
@@ -86,7 +86,7 @@ rm -f "$TMPENV"
     
     if root_token:
         success("Authentik Root Token created and stored in Vault")
-        info(f"Vault path: secret/platform/production/authentik (key: root_token)")
+        info(f"Vault path: secret/platform/{env_name}/authentik (key: root_token)")
         info(f"Token prefix: {root_token[:20]}...")
         info("\nYou can now create SSO apps:")
         info("  invoke authentik.shared.create-proxy-app --name=Portal --slug=portal ...")
@@ -107,7 +107,7 @@ def create_proxy_app(c, name, slug, external_host, internal_host, port=None, all
         name: Application name (e.g., "Portal")
         slug: Application slug (e.g., "portal")  
         external_host: External URL (e.g., "https://home.example.com")
-        internal_host: Internal service (e.g., "platform-portal")
+        internal_host: Internal service (e.g., "platform-portal${ENV_SUFFIX}")
         port: Internal port (default: 8080)
         allowed_groups: Comma-separated group names (default: "admins")
     
@@ -117,7 +117,7 @@ def create_proxy_app(c, name, slug, external_host, internal_host, port=None, all
             --name="Portal" \\
             --slug="portal" \\
             --external-host="https://home.example.com" \\
-            --internal-host="platform-portal"
+            --internal-host="platform-portal${ENV_SUFFIX}"
         
         # Multiple groups
         invoke authentik.shared.create-proxy-app \\
@@ -143,7 +143,11 @@ def create_proxy_app(c, name, slug, external_host, internal_host, port=None, all
         info("\nRun first: invoke authentik.shared.create-root-token")
         return False
     
-    base_url = f"https://sso.{e.get('INTERNAL_DOMAIN')}"
+    base_host = service_domain("sso", e)
+    if not base_host:
+        error("INTERNAL_DOMAIN not set")
+        return False
+    base_url = f"https://{base_host}"
     port = port or 8080
     internal_url = f"http://{internal_host}:{port}"
     group_list = [g.strip() for g in allowed_groups.split(",")]
@@ -378,7 +382,11 @@ def list_apps(c):
         error("Authentik Root Token not found")
         return False
     
-    base_url = f"https://sso.{e.get('INTERNAL_DOMAIN')}"
+    base_host = service_domain("sso", e)
+    if not base_host:
+        error("INTERNAL_DOMAIN not set")
+        return False
+    base_url = f"https://{base_host}"
     
     try:
         client = httpx.Client(headers={"Authorization": f"Bearer {root_token}"})
@@ -433,7 +441,11 @@ def setup_admin_group(c):
         info("Run first: invoke authentik.shared.create-root-token")
         return False
     
-    base_url = f"https://sso.{e.get('INTERNAL_DOMAIN')}"
+    base_host = service_domain("sso", e)
+    if not base_host:
+        error("INTERNAL_DOMAIN not set")
+        return False
+    base_url = f"https://{base_host}"
     
     try:
         client = httpx.Client(headers={"Authorization": f"Bearer {root_token}"})

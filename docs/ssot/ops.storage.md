@@ -9,8 +9,8 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **Postgres 数据目录** | `platform/01.postgres/compose.yaml` | `/data/platform/postgres` |
-| **Redis 数据目录** | `platform/02.redis/compose.yaml` | `/data/platform/redis` |
+| **Postgres 数据目录** | `platform/01.postgres/compose.yaml` | `${DATA_PATH}` (e.g., `/data/platform/postgres${ENV_SUFFIX}`) |
+| **Redis 数据目录** | `platform/02.redis/compose.yaml` | `${DATA_PATH}` (e.g., `/data/platform/redis${ENV_SUFFIX}`) |
 | **Vault 数据目录** | `bootstrap/05.vault/compose.yaml` | `/data/bootstrap/vault` |
 | **备份归档** | **Cloudflare R2** | 异地冷备（规划中） |
 
@@ -21,7 +21,7 @@
 | 存储类型 | 位置 | 适用场景 |
 |----------|------|----------|
 | **Bootstrap** | `/data/bootstrap/<service>` | 1Password / Vault |
-| **Platform** | `/data/platform/<service>` | Postgres / Redis / Authentik |
+| **Platform** | `/data/platform/<service>${ENV_SUFFIX}` | Postgres / Redis / Authentik |
 
 ---
 
@@ -54,7 +54,7 @@
 - **触发条件**: 迁移到新磁盘或新路径
 - **步骤**:
     1. 停止对应服务（Dokploy Stop）。
-    2. 迁移 `/data/<layer>/<service>` 目录。
+    2. 迁移 `/data/<layer>/<service>${ENV_SUFFIX}` 目录（非生产带后缀）。
     3. 启动服务并验证健康。
 
 ---

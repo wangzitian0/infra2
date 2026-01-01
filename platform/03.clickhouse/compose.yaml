@@ -1,7 +1,7 @@
 services:
   init-clickhouse:
     image: clickhouse/clickhouse-server:25.5.6
-    container_name: platform-clickhouse-init
+    container_name: platform-clickhouse-init${ENV_SUFFIX}
     restart: on-failure
     command:
       - bash
@@ -18,18 +18,19 @@ services:
         chmod +x /var/lib/clickhouse/user_scripts/histogramQuantile
         echo "Histogram binary installed successfully"
     volumes:
-      - /data/platform/clickhouse/user_scripts:/var/lib/clickhouse/user_scripts
+      - ${DATA_PATH}/user_scripts:/var/lib/clickhouse/user_scripts
     networks:
       - dokploy-network
 
   zookeeper:
     image: zookeeper:3.9
-    container_name: platform-clickhouse-zookeeper
+    container_name: platform-clickhouse-zookeeper${ENV_SUFFIX}
     restart: unless-stopped
     environment:
       - ZOO_MY_ID=1
+      - ZOO_SERVERS=server.1=platform-clickhouse-zookeeper${ENV_SUFFIX}:2888:3888;2181
     volumes:
-      - /data/platform/clickhouse/zookeeper:/data
+      - ${DATA_PATH}/zookeeper:/data
     networks:
       - dokploy-network
     healthcheck:
@@ -41,7 +42,7 @@ services:
 
   clickhouse:
     image: clickhouse/clickhouse-server:25.5.6
-    container_name: platform-clickhouse
+    container_name: platform-clickhouse${ENV_SUFFIX}
     restart: unless-stopped
     depends_on:
       init-clickhouse:
@@ -53,10 +54,10 @@ services:
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
     volumes:
-      - /data/platform/clickhouse/data:/var/lib/clickhouse
-      - /data/platform/clickhouse/logs:/var/log/clickhouse-server
-      - /data/platform/clickhouse/user_scripts:/var/lib/clickhouse/user_scripts:ro
-      - ./config.xml:/etc/clickhouse-server/config.xml:ro
+      - ${DATA_PATH}/data:/var/lib/clickhouse
+      - ${DATA_PATH}/logs:/var/log/clickhouse-server
+      - ${DATA_PATH}/user_scripts:/var/lib/clickhouse/user_scripts:ro
+      - ${DATA_PATH}/config.xml:/etc/clickhouse-server/config.xml:ro
       - ./users.xml:/etc/clickhouse-server/users.xml:ro
     networks:
       - dokploy-network

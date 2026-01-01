@@ -19,7 +19,7 @@ Shared Redis cache for all platform applications using vault-init pattern.
 
 ```
 ┌─────────────────┐
-│ vault-agent     │ ──fetch──> Vault (secret/platform/production/redis)
+│ vault-agent     │ ──fetch──> Vault (secret/platform/<env>/redis)
 │ (sidecar)       │            └─ password
 └────────┬────────┘
          │ render
@@ -42,25 +42,25 @@ invoke redis.post-compose
 
 ## Vault Integration
 
-**Secret path**: `secret/platform/production/redis`
+**Secret path**: `secret/platform/<env>/redis`
 
 **Required keys**:
 - `password` - Redis password
 
 **Policy** (`platform-redis-app`):
 ```hcl
-path "secret/data/platform/production/redis" {
+path "secret/data/platform/{{env}}/redis" {
   capabilities = ["read", "list"]
 }
 ```
 
 ## Data Path
 
-`/data/platform/redis` - Redis persistence data (uid=999, chmod=755)
+`${DATA_PATH}` - Redis persistence data (uid=999, chmod=755, staging uses `/data/platform/redis-staging`)
 
 ## Container
 
-- **Name**: `platform-redis`
+- **Name**: `platform-redis${ENV_SUFFIX}`
 - **Image**: `redis:7-alpine`
 - **Port**: 6379 (internal only)
 - **Health check**: `redis-cli ping`

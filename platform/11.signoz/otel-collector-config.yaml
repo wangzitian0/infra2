@@ -14,13 +14,13 @@ processors:
 exporters:
   # SigNoz-specific exporters
   clickhousetraces:
-    datasource: tcp://platform-clickhouse:9000?database=signoz_traces
+    datasource: tcp://platform-clickhouse${ENV_SUFFIX}:9000?database=signoz_traces
 
   signozclickhousemetrics:
-    dsn: tcp://platform-clickhouse:9000
+    dsn: tcp://platform-clickhouse${ENV_SUFFIX}:9000
 
   clickhouselogsexporter:
-    dsn: tcp://platform-clickhouse:9000
+    dsn: tcp://platform-clickhouse${ENV_SUFFIX}:9000
 
 extensions:
   health_check:

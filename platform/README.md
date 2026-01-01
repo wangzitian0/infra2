@@ -5,7 +5,7 @@
 ## Architecture
 
 Platform services use **vault-init pattern**:
-- Secrets stored in Vault (`secret/platform/production/{service}`)
+- Secrets stored in Vault (`secret/platform/<env>/{service}`)
 - Fetched at container runtime via vault-agent sidecar
 - No secrets in Dokploy env vars or disk
 
@@ -45,6 +45,19 @@ platform/{nn}.{service}/
 1. **Vault ready**: `invoke vault.status` should return healthy
 2. **Enable KV engine**: `vault secrets enable -path=secret kv-v2` (one-time)
 3. **Setup tokens**: `export VAULT_ROOT_TOKEN=<token> && invoke vault.setup-tokens`
+
+## Environments
+
+- `DEPLOY_ENV` selects the target environment (default: `production`)
+- `ENV_SUFFIX` is derived automatically (`""` for production, `-staging` for staging)
+- Data paths use `${DATA_PATH}` which maps to `{data_path}${ENV_SUFFIX}`
+- Public domains use `<subdomain>${ENV_SUFFIX}.${INTERNAL_DOMAIN}`
+- Dokploy project must have an Environment named the same as `DEPLOY_ENV`
+
+Example:
+```bash
+DEPLOY_ENV=staging invoke postgres.setup
+```
 
 ## Quick Start
 
@@ -106,7 +119,7 @@ clickhouse ──► signoz
    class NewDeployer(Deployer):
        service = "new"
        compose_path = "platform/XX.new/compose.yaml"
-       data_path = "/data/platform/new"
+       data_path = "/data/platform/new"  # env suffix appended automatically
        secret_key = "password"  # Key in Vault
        
        # Domain configuration:
@@ -147,12 +160,12 @@ Services can be protected by Authentik SSO using Traefik forward auth:
 2. Add forwardauth middleware labels in compose.yaml:
    ```yaml
    labels:
-     - "traefik.http.middlewares.{service}-auth.forwardauth.address=http://platform-authentik-server:9000/outpost.goauthentik.io/auth/traefik"
+     - "traefik.http.middlewares.{service}-auth.forwardauth.address=http://platform-authentik-server${ENV_SUFFIX}:9000/outpost.goauthentik.io/auth/traefik"
      - "traefik.http.middlewares.{service}-auth.forwardauth.trustForwardHeader=true"
      - "traefik.http.middlewares.{service}-auth.forwardauth.authResponseHeaders=X-authentik-username,X-authentik-groups,X-authentik-email,X-authentik-name,X-authentik-uid"
      - "traefik.http.routers.{service}.middlewares={service}-auth@docker"
    ```
-3. Configure access control: `invoke authentik.shared.create-proxy-app --name={service} --slug={service} --external-host=https://{service}.{domain} --internal-host=platform-{service} --allowed-groups=admins`
+3. Configure access control: `invoke authentik.shared.create-proxy-app --name={service} --slug={service} --external-host=https://{service}${ENV_SUFFIX}.{domain} --internal-host=platform-{service}${ENV_SUFFIX} --allowed-groups=admins`
 
 See [docs/ssot/platform.sso.md](../docs/ssot/platform.sso.md) for details.
 

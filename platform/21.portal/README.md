@@ -17,7 +17,7 @@ Static homepage for platform services, powered by Homer. Protected by Authentik 
 
 - `platform/21.portal/compose.yaml` - service definition + SSO labels
 - `platform/21.portal/config.yml.tmpl` - Homer links and layout
-- `/data/platform/portal/config.yml` - rendered config on VPS
+- `${DATA_PATH}/config.yml` - rendered config on VPS
 
 ## Deployment
 
@@ -32,9 +32,9 @@ invoke portal.post_compose
 ```
 
 `pre_compose` will:
-- create `/data/platform/portal`
-- render `config.yml.tmpl` with `INTERNAL_DOMAIN`
-- upload `/data/platform/portal/config.yml`
+- create `${DATA_PATH}`
+- render `config.yml.tmpl` with `INTERNAL_DOMAIN` + `ENV_SUFFIX`
+- upload `${DATA_PATH}/config.yml`
 
 ## SSO Protection
 
@@ -60,8 +60,8 @@ invoke authentik.shared.setup-admin-group
 invoke authentik.shared.create-proxy-app \
   --name="Portal" \
   --slug="portal" \
-  --external-host="https://home.${INTERNAL_DOMAIN}" \
-  --internal-host="platform-portal" \
+  --external-host="https://home${ENV_SUFFIX}.${INTERNAL_DOMAIN}" \
+  --internal-host="platform-portal${ENV_SUFFIX}" \
   --port=8080
 ```
 
@@ -69,14 +69,14 @@ invoke authentik.shared.create-proxy-app \
 
 | User State | Result |
 |-----------|--------|
-| Not logged in | Redirect to `sso.${INTERNAL_DOMAIN}` login |
+| Not logged in | Redirect to `sso${ENV_SUFFIX}.${INTERNAL_DOMAIN}` login |
 | Logged in, not in `admins` | 403 Forbidden |
 | Logged in, in `admins` | Access granted |
 
 ### Logout
 
 Homer 页面右上角有 "Logout" 链接，指向 Authentik 的 end-session endpoint：
-`https://sso.${INTERNAL_DOMAIN}/application/o/portal/end-session/`
+`https://sso${ENV_SUFFIX}.${INTERNAL_DOMAIN}/application/o/portal/end-session/`
 
 ### Forward Auth Labels
 
@@ -84,7 +84,7 @@ The `compose.yaml` includes Traefik middleware labels for forward auth:
 
 ```yaml
 labels:
-  - "traefik.http.middlewares.portal-auth.forwardauth.address=http://platform-authentik-server:9000/outpost.goauthentik.io/auth/traefik"
+  - "traefik.http.middlewares.portal-auth.forwardauth.address=http://platform-authentik-server${ENV_SUFFIX}:9000/outpost.goauthentik.io/auth/traefik"
   - "traefik.http.middlewares.portal-auth.forwardauth.trustForwardHeader=true"
   - "traefik.http.middlewares.portal-auth.forwardauth.authResponseHeaders=X-authentik-username,X-authentik-groups,X-authentik-email,X-authentik-name,X-authentik-uid"
   - "traefik.http.routers.portal.middlewares=portal-auth@docker"
@@ -92,17 +92,17 @@ labels:
 
 ## Domain
 
-`home.${INTERNAL_DOMAIN}` - Portal homepage (SSO protected)
+`home${ENV_SUFFIX}.${INTERNAL_DOMAIN}` - Portal homepage (SSO protected)
 
 ## Data Path
 
-`/data/platform/portal/config.yml` - Rendered Homer configuration
+`${DATA_PATH}/config.yml` - Rendered Homer configuration
 
-`config.yml` is mounted read-only to avoid accidental overwrites. If you need custom assets (logos/css), mount a writable `/data/platform/portal/assets` to `/www/assets`.
+`config.yml` is mounted read-only to avoid accidental overwrites. If you need custom assets (logos/css), mount a writable `${DATA_PATH}/assets` to `/www/assets`.
 
 ## Environment Variables
 
-`INTERNAL_DOMAIN` is injected into the Dokploy compose environment during `pre_compose` so the Traefik labels resolve. `INIT_ASSETS=0` is set to prevent Homer from overwriting the custom config.
+`INTERNAL_DOMAIN` and `ENV_SUFFIX` are injected into the Dokploy compose environment during `pre_compose` so the Traefik labels resolve. `INIT_ASSETS=0` is set to prevent Homer from overwriting the custom config.
 
 ## Updating Links
 

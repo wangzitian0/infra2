@@ -2,7 +2,7 @@
 import sys
 import os
 from libs.deployer import Deployer, make_tasks
-from libs.common import get_env
+from libs.common import get_env, with_env_suffix
 from libs.console import success, warning, info, run_with_status
 from libs.env import generate_password, get_secrets
 
@@ -18,7 +18,7 @@ class AuthentikDeployer(Deployer):
     secret_key = "secret_key"
     
     # Domain configuration
-    subdomain = "sso"
+    subdomain = None
     service_port = 9000
     service_name = "server"
 
@@ -55,13 +55,19 @@ class AuthentikDeployer(Deployer):
         success("Verified postgres and redis secrets in Vault")
         
         # Create subdirs
-        run_with_status(c, f"ssh root@{e['VPS_HOST']} 'mkdir -p {cls.data_path}/media {cls.data_path}/certs'", "Create subdirs")
+        data_path = cls.data_path_for_env(e)
+        run_with_status(
+            c,
+            f"ssh root@{e['VPS_HOST']} 'mkdir -p {data_path}/media {data_path}/certs'",
+            "Create subdirs",
+        )
         
         # Create database (idempotent)
+        postgres_container = with_env_suffix("platform-postgres", e)
         result = c.run(
-            f"ssh root@{e['VPS_HOST']} \"docker exec platform-postgres psql -U postgres -c 'CREATE DATABASE authentik;'\"",
+            f"ssh root@{e['VPS_HOST']} \"docker exec {postgres_container} psql -U postgres -c 'CREATE DATABASE authentik;'\"",
             warn=True,
-            hide=True
+            hide=True,
         )
         if result.failed:
             # Check if database already exists
@@ -110,9 +116,8 @@ class AuthentikDeployer(Deployer):
             info(f"Bootstrap credentials ready: {bootstrap_email}")
         
         # Return VAULT_ADDR for vault-init pattern
-        result = {
-            "VAULT_ADDR": e.get("VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}"),
-        }
+        result = cls.compose_env_base(e)
+        result["VAULT_ADDR"] = e.get("VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}")
         
         success("pre_compose complete - vault-init will fetch secrets at runtime")
         info("\nNote: VAULT_APP_TOKEN auto-configured via 'invoke vault.setup-tokens'")
