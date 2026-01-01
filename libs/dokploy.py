@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import httpx
 from dotenv import load_dotenv
+from libs.common import normalize_env_name as _common_normalize_env_name
 
 load_dotenv()
 
@@ -15,10 +16,7 @@ load_dotenv()
 def _normalize_env_name(env_name: str | None) -> str | None:
     if not env_name:
         return None
-    value = env_name.strip().lower()
-    if value in ("prod", "production"):
-        return "production"
-    return value
+    return _common_normalize_env_name(env_name)
 
 
 class DokployClient:
@@ -181,7 +179,7 @@ class DokployClient:
         return None
 
     def get_environment_id(self, project_name: str, env_name: str | None = None, require: bool = False) -> str | None:
-        """Get environment ID by name (falls back to default unless require=True)."""
+        """Get environment ID by name (falls back to default only when env_name is omitted)."""
         target = _normalize_env_name(env_name)
         projects = self.list_projects()
         for project in projects:
@@ -191,8 +189,7 @@ class DokployClient:
                 for env in project.get("environments", []):
                     if _normalize_env_name(env.get("name")) == target:
                         return env.get("environmentId")
-                if require:
-                    return None
+                return None
             for env in project.get("environments", []):
                 if env.get("isDefault"):
                     return env.get("environmentId")
@@ -389,13 +386,14 @@ def ensure_project(
     """Ensure project exists, return (projectId, environmentId)."""
     client = get_dokploy(host=host)
     projects = client.list_projects()
+    normalized_env = _normalize_env_name(env_name)
     
     for project in projects:
         if project["name"] == name:
-            env_id = client.get_environment_id(name, env_name, require=require_env)
-            if require_env and not env_id:
+            env_id = client.get_environment_id(name, normalized_env, require=require_env)
+            if (normalized_env or require_env) and not env_id:
                 raise ValueError(
-                    f"Environment '{env_name}' not found in Dokploy project '{name}'. "
+                    f"Environment '{normalized_env}' not found in Dokploy project '{name}'. "
                     "Create it in Dokploy UI before deploying."
                 )
             return project["projectId"], env_id
@@ -405,10 +403,10 @@ def ensure_project(
     project_id = result.get("project", {}).get("projectId") if isinstance(result, dict) else None
     if not project_id:
         raise ValueError(f"Failed to create project {name}: invalid API response")
-    env_id = client.get_environment_id(name, env_name, require=False)
-    if require_env and not env_id:
+    env_id = client.get_environment_id(name, normalized_env, require=False)
+    if (normalized_env or require_env) and not env_id:
         raise ValueError(
-            f"Environment '{env_name}' not found in Dokploy project '{name}'. "
+            f"Environment '{normalized_env}' not found in Dokploy project '{name}'. "
             "Create it in Dokploy UI before deploying."
         )
     return project_id, env_id
@@ -424,24 +422,25 @@ def deploy_compose_service(
 ) -> str:
     """Deploy a compose service, creating project if needed. Returns composeId."""
     client = get_dokploy(host=host)
+    normalized_env = _normalize_env_name(env_name)
     
     # Ensure project and get environment
     project_id, environment_id = ensure_project(
         project_name,
         f"Platform services: {project_name}",
         host=host,
-        env_name=env_name,
-        require_env=env_name not in (None, "production"),
+        env_name=normalized_env,
+        require_env=normalized_env not in (None, "production"),
     )
     
     if not environment_id:
         raise ValueError(f"No environment found for project {project_name}")
     
     # Format env vars
-    env_str = "\n".join(f"{k}={v}" for k, v in env_vars.items())
+    env_str = "\n".join(f"{k}={v}" for k, v in env_vars.items() if v is not None)
     
     # Check if compose already exists
-    existing = client.find_compose_by_name(service_name, project_name, env_name=env_name)
+    existing = client.find_compose_by_name(service_name, project_name, env_name=normalized_env)
     
     if existing:
         compose_id = existing["composeId"]

@@ -119,7 +119,6 @@ def get_service_url(service: str, domain: str | None = None, env: dict | None = 
     subdomain = SERVICE_SUBDOMAINS.get(service)
     if not subdomain:
         raise ValueError(f"Unknown service: {service}")
-
     return f"https://{_build_domain(subdomain, e.get('ENV', 'production'), domain)}"
 
 
