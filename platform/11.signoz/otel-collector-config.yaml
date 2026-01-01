@@ -5,64 +5,39 @@ receivers:
         endpoint: 0.0.0.0:4317
       http:
         endpoint: 0.0.0.0:4318
-  
-  # Prometheus receiver for self-monitoring
-  prometheus:
-    config:
-      scrape_configs:
-        - job_name: 'otel-collector'
-          scrape_interval: 30s
-          static_configs:
-            - targets: ['localhost:8888']
 
 processors:
   batch:
     send_batch_size: 10000
-    send_batch_max_size: 11000
     timeout: 10s
-  
-  # Memory limiter to prevent OOM
-  memory_limiter:
-    check_interval: 1s
-    limit_mib: 1024
-    spike_limit_mib: 256
 
 exporters:
-  clickhouse:
-    endpoint: tcp://platform-clickhouse:9000?dial_timeout=10s&username=default&password=${CLICKHOUSE_PASSWORD}
-    database: signoz
-    logs_table: logs
-    traces_table: signoz_traces
-    metrics_table: samples
-    timeout: 10s
-    retry_on_failure:
-      enabled: true
-      initial_interval: 5s
-      max_interval: 30s
-      max_elapsed_time: 300s
+  # SigNoz-specific exporters
+  clickhousetraces:
+    datasource: tcp://platform-clickhouse:9000?database=signoz_traces
+
+  signozclickhousemetrics:
+    dsn: tcp://platform-clickhouse:9000
+
+  clickhouselogsexporter:
+    dsn: tcp://platform-clickhouse:9000
 
 extensions:
   health_check:
     endpoint: 0.0.0.0:13133
-  pprof:
-    endpoint: 0.0.0.0:1777
-  zpages:
-    endpoint: 0.0.0.0:55679
 
 service:
-  extensions: [health_check, pprof, zpages]
+  extensions: [health_check]
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, batch]
-      exporters: [clickhouse]
-    
+      processors: [batch]
+      exporters: [clickhousetraces]
     metrics:
-      receivers: [otlp, prometheus]
-      processors: [memory_limiter, batch]
-      exporters: [clickhouse]
-    
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [signozclickhousemetrics]
     logs:
       receivers: [otlp]
-      processors: [memory_limiter, batch]
-      exporters: [clickhouse]
+      processors: [batch]
+      exporters: [clickhouselogsexporter]
