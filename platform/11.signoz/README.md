@@ -17,7 +17,7 @@ Open-source observability platform for logs, metrics, and traces (OpenTelemetry-
 | `otel-collector-config.yaml` | OpenTelemetry Collector configuration |
 | `prometheus.yml` | Prometheus config for query-service |
 | `deploy.py` | SigNozDeployer |
-| `shared_tasks.py` | Health check status() |
+| `shared_tasks.py` | status() + test-trace() |
 
 ## Architecture
 
@@ -78,15 +78,13 @@ Automatically configured via Traefik labels in compose.yaml.
 ## Containers
 
 - **schema-migrator**: Initialize ClickHouse schema (one-time)
-  - Restart: on-failure
-- **query-service**: Backend API and query engine
-  - Port: 8080 (internal)
+  - Restart: no (runs once)
+- **signoz**: Combined query-service + frontend (v0.105.1+)
+  - Port: 8080 (API + UI, via Traefik)
   - Health: `/api/v1/health`
-- **frontend**: Web UI dashboard
-  - Port: 3301 (via Traefik)
   - URL: `https://signoz.${INTERNAL_DOMAIN}`
 - **otel-collector**: OpenTelemetry Collector
-  - Port: 4317 (OTLP gRPC), 4318 (OTLP HTTP)
+  - Port: 4317 (OTLP gRPC), 4318 (OTLP HTTP) - Docker network only
   - Health: 13133 (health_check extension)
 
 ## Access
@@ -96,21 +94,27 @@ Automatically configured via Traefik labels in compose.yaml.
 - **First-time setup**: Create admin account on first visit
 
 ### OTLP Endpoints (for instrumentation)
-- **gRPC**: `<VPS_HOST>:4317`
-- **HTTP**: `<VPS_HOST>:4318`
 
-Example instrumentation (Node.js):
-```javascript
-const { NodeSDK } = require('@opentelemetry/sdk-node');
-const { OTLPTraceExporter } = require('@opentelemetry/exporter-trace-otlp-grpc');
+> **Note**: OTLP ports (4317/4318) are only accessible within the Docker network (`dokploy-network`).
+> Applications must be deployed on the same network to send telemetry.
 
-const sdk = new NodeSDK({
-  traceExporter: new OTLPTraceExporter({
-    url: 'grpc://<VPS_HOST>:4317',
-  }),
-});
+- **gRPC**: `platform-signoz-otel-collector:4317` (Docker network only)
+- **HTTP**: `platform-signoz-otel-collector:4318` (Docker network only)
 
-sdk.start();
+Example instrumentation (Python, from Docker network):
+```python
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+exporter = OTLPSpanExporter(endpoint="http://platform-signoz-otel-collector:4318/v1/traces")
+```
+
+### Test OTLP Connectivity
+
+```bash
+# Send a test trace
+invoke signoz.shared.test-trace
+
+# With custom service name
+invoke signoz.shared.test-trace --service-name=myapp
 ```
 
 ## Configuration

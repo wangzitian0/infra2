@@ -33,8 +33,11 @@ invoke signoz.status
 ## Access
 
 - **Web UI**: `https://signoz.${INTERNAL_DOMAIN}`
-- **OTLP gRPC**: `${VPS_HOST}:4317`
-- **OTLP HTTP**: `${VPS_HOST}:4318`
+- **OTLP gRPC**: `platform-signoz-otel-collector:4317` (Docker network only)
+- **OTLP HTTP**: `platform-signoz-otel-collector:4318` (Docker network only)
+
+> **Note**: OTLP endpoints are only accessible within the `dokploy-network`. 
+> Use `invoke signoz.shared.test-trace` to verify connectivity.
 
 ## File Structure
 
@@ -90,8 +93,8 @@ invoke clickhouse.pre-compose
 
 ### SigNoz 502 error
 ```bash
-# Check query-service health
-docker logs platform-signoz-query-service
+# Check signoz health
+docker logs platform-signoz
 
 # Ensure ClickHouse is ready
 invoke clickhouse.status
@@ -101,6 +104,9 @@ invoke clickhouse.status
 ```bash
 # Check collector logs
 docker logs platform-signoz-otel-collector
+
+# Send a test trace
+invoke signoz.test-trace
 
 # Verify ClickHouse connection
 docker exec platform-clickhouse clickhouse-client --query "SHOW DATABASES"
