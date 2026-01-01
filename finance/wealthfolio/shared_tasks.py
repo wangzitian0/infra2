@@ -1,7 +1,5 @@
 """Wealthfolio shared tasks"""
 from invoke import task
-from invoke import task
-
 
 @task
 def status(c):
