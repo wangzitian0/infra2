@@ -71,7 +71,7 @@ services:
     networks:
       - dokploy-network
     healthcheck:
-      test: ["CMD-SHELL", "wget --spider -q localhost:13133 || exit 1"]
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/13133' || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
