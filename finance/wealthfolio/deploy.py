@@ -5,7 +5,7 @@ import shlex
 import secrets as py_secrets
 
 from libs.deployer import Deployer, make_tasks
-from libs.console import header, success, warning, error, info, env_vars
+from libs.console import header, warning, error, info, env_vars
 
 # Get shared_tasks from sys.modules (loaded by tools/loader.py)
 shared_tasks = sys.modules.get("finance.wealthfolio.shared")
