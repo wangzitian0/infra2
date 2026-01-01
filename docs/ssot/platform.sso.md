@@ -185,10 +185,15 @@ labels:
 
 ### 📋 SSO 保护服务配置清单
 
-1. **deploy.py**: 设置 `subdomain = None`
-2. **compose.yaml**: 添加 forwardauth middleware labels
-3. **Dokploy**: 确保不通过 UI 配置域名（如有，需删除）
+1. **deploy.py**: 设置 `subdomain = None`（禁用 Dokploy 域名配置）
+2. **compose.yaml**: 添加 Traefik labels（路由 + forwardauth middleware）
+3. **Cloudflare**: 确保泛域名 `*.${INTERNAL_DOMAIN}` 已解析到 VPS
 4. **Authentik**: 运行 `invoke authentik.shared.create-proxy-app`
+5. **验证**: 确认 Dokploy UI 中该服务的 Domain 字段为空
+
+**域名分层**：
+- 公网域名（用户访问）：`home.zitian.party` → Cloudflare → Traefik → ForwardAuth → Portal
+- 容器域名（内部通信）：`platform-portal:8080` ← Traefik ← `platform-authentik-server:9000`
 
 ---
 
