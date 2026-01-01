@@ -3,6 +3,9 @@ import re
 from invoke import task
 from libs.common import get_env
 
+# Delay before querying ClickHouse to allow trace ingestion
+CLICKHOUSE_INGESTION_DELAY_SECONDS = 2
+
 
 def _sanitize_service_name(name: str) -> str:
     """Sanitize service name to prevent SQL injection."""
@@ -103,7 +106,7 @@ print("OK")
         success("Test trace sent successfully!")
         
         # Wait for ClickHouse ingestion
-        time.sleep(2)
+        time.sleep(CLICKHOUSE_INGESTION_DELAY_SECONDS)
         
         # Verify in ClickHouse (service_name already validated)
         verify_query = f"SELECT count() FROM signoz_traces.distributed_signoz_index_v3 WHERE serviceName = '{service_name}'"
@@ -120,6 +123,6 @@ print("OK")
         error("Failed to send test trace")
         if result.stderr:
             error(f"stderr: {result.stderr[:500]}")
-        if result.stdout and "OK" not in result.stdout:
+        if result.stdout:
             error(f"stdout: {result.stdout[:500]}")
         return False
