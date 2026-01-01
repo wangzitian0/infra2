@@ -15,14 +15,22 @@ def status(c):
     e = get_env()
     domain = e.get("INTERNAL_DOMAIN")
     if domain:
+        from libs.console import info, success, warning
         endpoints = [
             (f"https://s3.{domain}", "Console"),
             (f"https://minio.{domain}", "S3 API"),
         ]
+        info(f"Checking external endpoints for domain: {domain}")
         for url, name in endpoints:
             check = c.run(f"curl -sI {url} -o /dev/null -w '%{{http_code}}'", hide=True, warn=True)
             code = check.stdout.strip() if check.ok else "error"
-            if code not in ("200", "403"):  # 403 is OK for S3 API without auth
+            
+            if code == "200":
+                success(f"   {name} ({url}): HTTP {code} (OK)")
+            elif code == "403" or code == "400": # 400/403 is OK for S3 API without auth
+                success(f"   {name} ({url}): HTTP {code} (API Active)")
+            else:
+                warning(f"   {name} ({url}): HTTP {code}")
                 result["details"] += f"; {name}: HTTP {code}"
     
     return result
