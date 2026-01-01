@@ -20,6 +20,11 @@ class OnePasswordDeployer(Deployer):
     uid = "999"
     gid = "999"
     chmod = "700"
+    
+    # Domain configuration via Dokploy API
+    subdomain = "op"
+    service_port = 8080
+    service_name = "op-connect-api"
 
     @classmethod
     def _upload_credentials(cls, c) -> bool:
@@ -129,6 +134,27 @@ class OnePasswordDeployer(Deployer):
             
             info(f"Deploying compose (ID: {compose_id})")
             client.deploy_compose(compose_id)
+            
+            # Configure domain via Dokploy API
+            if cls.subdomain and cls.service_port:
+                domain_host = f"{cls.subdomain}.{domain}"
+                info(f"Configuring domain: {domain_host}")
+                try:
+                    client.create_domain(
+                        compose_id=compose_id,
+                        host=domain_host,
+                        port=cls.service_port,
+                        https=True,
+                        service_name=cls.service_name,
+                    )
+                    success(f"Domain configured: https://{domain_host}")
+                    # Redeploy to apply domain labels
+                    client.deploy_compose(compose_id)
+                except Exception as exc:
+                    if "409" in str(exc) or "already" in str(exc).lower():
+                        info(f"Domain already exists: {domain_host}")
+                    else:
+                        warning(f"Domain configuration skipped: {exc}")
             
             success("1Password Connect deployment triggered")
             warning("Wait 1-2 minutes for containers to start")

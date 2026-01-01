@@ -45,10 +45,6 @@ services:
       start_period: 60s
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.signoz.rule=Host(`signoz.${INTERNAL_DOMAIN}`)"
-      - "traefik.http.routers.signoz.entrypoints=websecure"
-      - "traefik.http.routers.signoz.tls.certresolver=letsencrypt"
-      - "traefik.http.services.signoz.loadbalancer.server.port=8080"
 
   otel-collector:
     image: signoz/signoz-otel-collector:v0.129.12

@@ -12,10 +12,10 @@ class SigNozDeployer(Deployer):
     compose_path = "platform/11.signoz/compose.yaml"
     data_path = "/data/platform/signoz"
     
-    # Domain configuration (no SSO for now)
-    subdomain = None  # Using Traefik labels in compose.yaml
-    service_port = 3301
-    service_name = "frontend"
+    # Domain configuration via Dokploy API
+    subdomain = "signoz"
+    service_port = 8080  # SigNoz unified container port
+    service_name = "signoz"
     
     # SigNoz specific secret
     secret_key = "jwt_secret"
