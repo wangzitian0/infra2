@@ -24,7 +24,16 @@
     <tmp_path>/var/lib/clickhouse/tmp/</tmp_path>
     <user_files_path>/var/lib/clickhouse/user_files/</user_files_path>
 
-    <users_config>users.xml</users_config>
+    <!-- User directories configuration for ClickHouse 25.x -->
+    <user_directories>
+        <users_xml>
+            <path>/etc/clickhouse-server/users.xml</path>
+        </users_xml>
+        <local_directory>
+            <path>/var/lib/clickhouse/access/</path>
+        </local_directory>
+    </user_directories>
+
     <default_profile>default</default_profile>
     <default_database>default</default_database>
 
@@ -32,14 +41,14 @@
     <mlock_executable>false</mlock_executable>
 
     <remote_servers>
-        <cluster_1S_1R>
+        <cluster>
             <shard>
                 <replica>
                     <host>platform-clickhouse</host>
                     <port>9000</port>
                 </replica>
             </shard>
-        </cluster_1S_1R>
+        </cluster>
     </remote_servers>
 
     <zookeeper>
@@ -50,7 +59,7 @@
     </zookeeper>
 
     <macros>
-        <cluster>cluster_1S_1R</cluster>
+        <cluster>cluster</cluster>
         <shard>1</shard>
         <replica>replica_1</replica>
     </macros>
