@@ -141,7 +141,7 @@ Services can be protected by Authentik SSO using Traefik forward auth:
      - "traefik.http.middlewares.{service}-auth.forwardauth.authResponseHeaders=X-authentik-username,X-authentik-groups,X-authentik-email,X-authentik-name,X-authentik-uid"
      - "traefik.http.routers.{service}.middlewares={service}-auth@docker"
    ```
-3. Configure access control: `invoke authentik.shared.protect-app --app={service} --groups=admins`
+3. Configure access control: `invoke authentik.shared.create-proxy-app --name={service} --slug={service} --external-host=https://{service}.{domain} --internal-host=platform-{service} --allowed-groups=admins`
 
 See [docs/ssot/platform.sso.md](../docs/ssot/platform.sso.md) for details.
 
