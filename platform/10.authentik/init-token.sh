@@ -12,8 +12,8 @@ done
 
 echo "Authentik is ready, checking for root token..."
 
-# Create API token using Django shell
-python -m manage shell << 'PYTHON'
+# Create API token using Django shell and capture output
+TOKEN=$(python -m manage shell << 'PYTHON'
 from authentik.core.models import User, Token, TokenIntents
 from datetime import datetime, timedelta
 
@@ -42,8 +42,29 @@ try:
         # Output only the key (no logging for security)
         print(token.key, end='')
 except Exception as e:
-    print(f"Error: {e}")
+    print(f"Error: {e}", file=__import__('sys').stderr)
     exit(1)
 PYTHON
+)
+
+if [ -z "$TOKEN" ]; then
+  echo "Error: Failed to create or retrieve token"
+  exit 1
+fi
+
+echo "Root token initialized successfully"
+
+# Store token to Vault if VAULT_INIT_TOKEN is set
+if [ -n "$VAULT_INIT_TOKEN" ]; then
+  echo "Storing root token to Vault..."
+  export VAULT_ADDR="${VAULT_INIT_ADDR:-https://vault.zitian.party}"
+  export VAULT_TOKEN="$VAULT_INIT_TOKEN"
+  
+  if vault kv patch secret/platform/production/authentik root_token="$TOKEN"; then
+    echo "Root token stored to Vault successfully"
+  else
+    echo "Warning: Failed to store token to Vault"
+  fi
+fi
 
 echo "Root token initialization complete"

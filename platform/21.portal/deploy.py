@@ -21,6 +21,7 @@ class PortalDeployer(Deployer):
     # Domain configuration
     subdomain = "home"
     service_port = 8080
+    service_name = "portal"  # Must match service name in compose.yaml
 
     @classmethod
     def pre_compose(cls, c):
