@@ -122,7 +122,7 @@ class VaultSecrets:
         if not self.token:
             print("\n❌ Error: VAULT_ROOT_TOKEN not set", file=sys.stderr)
             print("Please set: export VAULT_ROOT_TOKEN=<admin-token>", file=sys.stderr)
-            print("Get from: op read 'op://Infra2/bootstrap-vault/Root Token'", file=sys.stderr)
+            print("Get from: op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token'", file=sys.stderr)
             self._cache = {}
             return self._cache
         

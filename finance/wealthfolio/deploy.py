@@ -108,7 +108,7 @@ class WealthfolioDeployer(Deployer):
         
         return {
             cls.secret_key: secret_key,
-            "WF_AUTH_PASSWORD_HASH": auth_hash,
+            "WF_AUTH_PASSWORD_HASH": auth_hash.replace("$", "$$") if auth_hash else None,
             "INTERNAL_DOMAIN": e.get("INTERNAL_DOMAIN"),
         }
 
