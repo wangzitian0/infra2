@@ -196,6 +196,7 @@ class Deployer:
         client.deploy_compose(compose_id)
         
         # Configure domain if specified
+        domain_created = False
         if cls.subdomain and cls.service_port:
             domain_host = f"{cls.subdomain}.{e.get('INTERNAL_DOMAIN')}"
             try:
@@ -208,12 +209,22 @@ class Deployer:
                     service_name=cls.service_name,
                 )
                 success(f"Domain configured: https://{domain_host}")
+                domain_created = True
             except httpx.HTTPStatusError as exc:
                 # Domain might already exist or API endpoint changed
-                warning(f"Domain configuration skipped: HTTP {exc.response.status_code}")
+                if exc.response.status_code == 409:
+                    info(f"Domain already exists: {domain_host}")
+                else:
+                    warning(f"Domain configuration skipped: HTTP {exc.response.status_code}")
             except Exception as exc:
                 # Unexpected error - log details for debugging
                 warning(f"Domain configuration failed: {type(exc).__name__}: {exc}")
+        
+        # Redeploy if new domain was created (to regenerate Traefik labels)
+        if domain_created:
+            info("Redeploying to apply domain labels...")
+            client.deploy_compose(compose_id)
+            success("Domain labels updated")
         
         success(f"Deployed {cls.service} (composeId: {compose_id})")
         return compose_id
