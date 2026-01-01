@@ -35,6 +35,7 @@ invoke wealthfolio.status
 | `WF_AUTH_PASSWORD_HASH` | Admin auth password hash (from Vault) |
 | `WF_LISTEN_ADDR` | Bind address (0.0.0.0:8088) |
 | `WF_DB_PATH` | Database path (/data/wealthfolio.db) |
+| `WF_CORS_ALLOW_ORIGINS` | Allowed CORS origins (https://wealth.${INTERNAL_DOMAIN}) |
 
 ## References
 

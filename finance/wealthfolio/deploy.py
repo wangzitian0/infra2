@@ -93,6 +93,7 @@ class WealthfolioDeployer(Deployer):
                 else:
                     from libs.console import error
                     error("Failed to store hash in Vault")
+                    return None
             else:
                 from libs.console import error
                 error("Failed to generate argon2 hash.")
