@@ -1,7 +1,7 @@
 services:
   vault-agent:
     image: hashicorp/vault:1.15
-    container_name: platform-redis-vault-agent
+    container_name: platform-minio-vault-agent
     restart: always
     entrypoint:
       - sh
@@ -19,13 +19,13 @@ services:
     networks:
       - dokploy-network
 
-  redis:
-    image: redis:alpine
-    container_name: platform-redis
+  minio:
+    image: minio/minio:latest
+    container_name: platform-minio
     restart: always
     depends_on:
       - vault-agent
-    command:
+    entrypoint:
       - sh
       - -c
       - |
@@ -34,17 +34,19 @@ services:
           echo "Waiting for secrets..."
           sleep 1
         done
+        set -a
         . /secrets/.env
-        exec redis-server --save 60 1 --loglevel warning --requirepass "$$PASSWORD"
+        set +a
+        exec minio server /data --console-address ":9001"
     healthcheck:
-      test: [ "CMD", "redis-cli", "ping" ]
+      test: [ "CMD", "mc", "ready", "local" ]
       start_period: 30s
       interval: 30s
       retries: 5
-      timeout: 3s
+      timeout: 5s
     volumes:
       - secrets:/secrets:ro
-      - /data/platform/redis:/data
+      - /data/platform/minio:/data
     networks:
       - dokploy-network
     labels:

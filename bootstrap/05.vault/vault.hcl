@@ -10,7 +10,7 @@ storage "file" {
   path = "/vault/file"
 }
 
-api_addr = "https://vault.zitian.party"
+# api_addr is set via VAULT_LOCAL_CONFIG in compose.yaml
 ui = true
 disable_mlock = true
 log_level = "info"

@@ -13,7 +13,7 @@ Platform services use **vault-init pattern**:
 
 | Range | Category | Services |
 |-------|----------|----------|
-| `01-09` | **Databases** | `01.postgres`, `02.redis` |
+| `01-09` | **Databases** | `01.postgres`, `02.redis`, `03.minio` |
 | `10-19` | **Auth & Gateway** | `10.authentik` |
 | `20-29` | **Portal & Observability** | `21.portal` |
 
@@ -34,6 +34,7 @@ platform/{nn}.{service}/
 
 - [Postgres](./01.postgres/README.md)
 - [Redis](./02.redis/README.md)
+- [MinIO](./03.minio/README.md)
 - [Authentik](./10.authentik/README.md)
 - [Portal](./21.portal/README.md)
 

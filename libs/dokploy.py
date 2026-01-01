@@ -169,7 +169,7 @@ class DokployClient:
         
         Args:
             compose_id: ID of the compose application
-            host: Domain name (e.g., 'sso.zitian.party')
+            host: Domain name (e.g., 'sso.example.com')
             port: Container port (e.g., 9000)
             https: Enable HTTPS with Let's Encrypt
             path: Path prefix (default: '/')
@@ -267,7 +267,7 @@ def get_dokploy(host: str | None = None) -> DokployClient:
     """Get configured Dokploy client
     
     Args:
-        host: Optional host override (e.g. 'cloud.zitian.party')
+        host: Optional host override (e.g. 'cloud.example.com')
     """
     base_url = None
     if host:

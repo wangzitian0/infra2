@@ -1,5 +1,6 @@
 vault {
-  address = "https://vault.zitian.party"
+  # VAULT_ADDR is set via container environment variable
+  # vault-agent CLI automatically uses VAULT_ADDR env var when address is not specified
 }
 
 auto_auth {
