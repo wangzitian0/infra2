@@ -125,8 +125,14 @@ class MinioDeployer(Deployer):
             for err in result["errors"]:
                 warning(f"Domain error: {err}")
         
-        if result["created"] > 0 or result["skipped"] > 0:
+        if result["created"] > 0:
             success(f"Domains: created={result['created']}, skipped={result['skipped']}")
+            # Trigger redeploy to generate new compose with updated Traefik labels
+            info("Redeploying to apply domain changes...")
+            client.deploy_compose(compose_id)
+            success("Redeploy triggered - domain labels will be updated")
+        elif result["skipped"] > 0:
+            info(f"Domains already configured (skipped={result['skipped']})")
     
     @classmethod
     def _sync_to_1password(cls, username: str, password: str) -> bool:

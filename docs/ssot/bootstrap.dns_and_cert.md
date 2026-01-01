@@ -53,6 +53,18 @@ flowchart TB
 - 禁止在 Cloudflare UI 手动改配置后不回写 SSOT。
 - 禁止在仓库中存储 Cloudflare Token。
 
+### ⚠️ 重要注意事项
+
+> [!WARNING]
+> **Dokploy 域名变更需要 Redeploy**
+>
+> 在 Dokploy UI 中修改域名配置后，必须触发一次 **Redeploy** 才能生效。
+> 这是因为 Traefik labels 是在 compose 文件部署时动态生成的。
+>
+> - 如果修改了域名端口映射 → 需要 Redeploy
+> - 如果新增了域名 → `ensure_domains()` 会自动触发 Redeploy
+> - 如果删除了域名 → 需要手动 Redeploy
+
 ---
 
 ## 4. 标准操作程序 (Playbooks)
