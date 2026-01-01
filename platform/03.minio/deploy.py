@@ -6,8 +6,11 @@ Root credentials pattern:
 """
 import subprocess
 import sys
+
+import httpx
+
 from libs.deployer import Deployer, make_tasks
-from libs.env import generate_password, get_secrets, OpSecrets
+from libs.env import generate_password
 from libs.console import header, success, error, warning, info, env_vars
 
 shared_tasks = sys.modules.get("platform.03.minio.shared")
@@ -19,8 +22,8 @@ class MinioDeployer(Deployer):
     data_path = "/data/platform/minio"
     secret_key = "root_password"
     
-    # Domain configuration for Dokploy
-    subdomain = "s3"  # s3.{INTERNAL_DOMAIN}
+    # Domain configuration for Dokploy (Console)
+    subdomain = "s3"  # s3.{INTERNAL_DOMAIN} -> Console
     service_port = 9001  # MinIO Console port
     service_name = "minio"
     
@@ -34,8 +37,6 @@ class MinioDeployer(Deployer):
             return None
         
         e = cls.env()
-        env_name = e.get('ENV', 'production')
-        
         header(f"{cls.service} pre_compose", "Setting up root credentials")
         
         # Get or generate root credentials
@@ -60,8 +61,12 @@ class MinioDeployer(Deployer):
             error("Failed to store root_password in Vault")
             return None
         
-        # Store in 1Password (for Web Console login)
-        cls._sync_to_1password(root_user, root_password)
+        # Store in 1Password (for Web Console login). Non-blocking: deployment continues if fails.
+        if not cls._sync_to_1password(root_user, root_password):
+            warning(
+                "1Password sync failed; continuing deployment. Web Console credentials may be "
+                "out of sync until 1Password is updated."
+            )
         
         # Return VAULT_ADDR for vault-init pattern
         result = {
@@ -71,20 +76,62 @@ class MinioDeployer(Deployer):
         env_vars("DOKPLOY ENV (vault-init)", result)
         success("pre_compose complete")
         info(f"MinIO Console: https://{cls.subdomain}.{e.get('INTERNAL_DOMAIN')}")
+        info(f"MinIO S3 API: https://minio.{e.get('INTERNAL_DOMAIN')}")
         info(f"Login: {root_user} / (password in 1Password)")
         return result
+    
+    @classmethod
+    def composing(cls, c, env_vars: dict) -> str:
+        """Deploy via Dokploy API and configure dual domains."""
+        # Call parent to deploy
+        compose_id = super().composing(c, env_vars)
+        
+        # Configure additional domain for S3 API (minio.* -> 9000)
+        cls._configure_s3_api_domain(compose_id)
+        
+        return compose_id
+    
+    @classmethod
+    def _configure_s3_api_domain(cls, compose_id: str):
+        """Configure S3 API domain (minio.* -> port 9000)."""
+        from libs.dokploy import get_dokploy
+        
+        e = cls.env()
+        domain = e.get('INTERNAL_DOMAIN')
+        if not domain:
+            warning("INTERNAL_DOMAIN not set, skipping S3 API domain")
+            return
+        
+        host = f"cloud.{domain}"
+        client = get_dokploy(host=host)
+        api_domain = f"minio.{domain}"
+        
+        try:
+            info(f"Configuring S3 API domain: {api_domain}")
+            client.create_domain(
+                compose_id=compose_id,
+                host=api_domain,
+                port=9000,  # S3 API port
+                https=True,
+                service_name=cls.service_name,
+            )
+            success(f"S3 API domain configured: https://{api_domain}")
+        except httpx.HTTPStatusError as exc:
+            warning(f"S3 API domain config skipped: HTTP {exc.response.status_code}")
+        except Exception as exc:
+            warning(f"S3 API domain config failed: {type(exc).__name__}: {exc}")
     
     @classmethod
     def _sync_to_1password(cls, username: str, password: str) -> bool:
         """Sync root credentials to 1Password for Web Console access."""
         try:
             # Check if item exists
-            result = subprocess.run(
+            check_result = subprocess.run(
                 ['op', 'item', 'get', cls.OP_ITEM, '--vault=Infra2', '--format=json'],
                 capture_output=True, text=True
             )
             
-            if result.returncode == 0:
+            if check_result.returncode == 0:
                 # Update existing item
                 subprocess.run(
                     ['op', 'item', 'edit', cls.OP_ITEM, '--vault=Infra2',
@@ -114,3 +161,4 @@ if shared_tasks:
     composing = _tasks["composing"]
     post_compose = _tasks["post_compose"]
     setup = _tasks["setup"]
+

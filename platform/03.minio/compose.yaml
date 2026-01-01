@@ -50,7 +50,7 @@ services:
     networks:
       - dokploy-network
     labels:
-      - "traefik.enable=false"
+      - "traefik.enable=true"
 
 volumes:
   secrets:
