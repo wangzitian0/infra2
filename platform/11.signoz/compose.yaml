@@ -1,0 +1,159 @@
+services:
+  vault-agent:
+    image: hashicorp/vault:1.15
+    container_name: platform-signoz-vault-agent
+    restart: always
+    entrypoint:
+      - sh
+      - -c
+      - |
+        echo "$$VAULT_APP_TOKEN" > /vault/token
+        exec vault agent -config=/etc/vault/vault-agent.hcl
+    environment:
+      VAULT_ADDR: ${VAULT_ADDR:-https://vault.zitian.party}
+      VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:-}
+    volumes:
+      - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
+      - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
+      - secrets:/vault/secrets
+    networks:
+      - dokploy-network
+
+  schema-migrator:
+    image: signoz/signoz-schema-migrator:v0.129.12
+    container_name: platform-signoz-schema-migrator
+    restart: on-failure
+    depends_on:
+      vault-agent:
+        condition: service_started
+    entrypoint:
+      - sh
+      - -c
+      - |
+        # Wait for secrets file
+        while [ ! -f /secrets/.env ]; do
+          echo "Waiting for secrets..."
+          sleep 1
+        done
+        set -a
+        . /secrets/.env
+        set +a
+        # Generate DSN with password
+        DSN="tcp://default:$${CLICKHOUSE_PASSWORD}@platform-clickhouse:9000"
+        exec /signoz-schema-migrator sync --dsn="$$DSN" --up=
+    volumes:
+      - secrets:/secrets:ro
+    networks:
+      - dokploy-network
+
+  query-service:
+    image: signoz/signoz:v0.105.1
+    container_name: platform-signoz-query-service
+    restart: unless-stopped
+    depends_on:
+      vault-agent:
+        condition: service_started
+      schema-migrator:
+        condition: service_completed_successfully
+    entrypoint:
+      - sh
+      - -c
+      - |
+        # Wait for secrets file
+        while [ ! -f /secrets/.env ]; do
+          echo "Waiting for secrets..."
+          sleep 1
+        done
+        set -a
+        . /secrets/.env
+        set +a
+        # Set DSN with password
+        export SIGNOZ_TELEMETRYSTORE_CLICKHOUSE_DSN="tcp://default:$${CLICKHOUSE_PASSWORD}@platform-clickhouse:9000"
+        exec /signoz --config=/root/config/prometheus.yml
+    environment:
+      - SIGNOZ_ALERTMANAGER_PROVIDER=signoz
+      - SIGNOZ_SQLSTORE_SQLITE_PATH=/var/lib/signoz/signoz.db
+      - STORAGE=clickhouse
+      - GODEBUG=netdns=go
+      - TELEMETRY_ENABLED=true
+      - DEPLOYMENT_TYPE=docker-standalone
+      - DOT_METRICS_ENABLED=true
+    volumes:
+      - secrets:/secrets:ro
+      - ./prometheus.yml:/root/config/prometheus.yml:ro
+      - /data/platform/signoz/data:/var/lib/signoz
+    networks:
+      - dokploy-network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "localhost:8080/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      - "traefik.enable=false"
+
+  frontend:
+    image: signoz/frontend:v0.105.1
+    container_name: platform-signoz-frontend
+    restart: unless-stopped
+    depends_on:
+      query-service:
+        condition: service_healthy
+    environment:
+      - FRONTEND_API_ENDPOINT=http://platform-signoz-query-service:8080
+    networks:
+      - dokploy-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.signoz.rule=Host(`signoz.${INTERNAL_DOMAIN}`)"
+      - "traefik.http.routers.signoz.entrypoints=websecure"
+      - "traefik.http.routers.signoz.tls.certresolver=letsencrypt"
+      - "traefik.http.services.signoz.loadbalancer.server.port=3301"
+
+  otel-collector:
+    image: signoz/signoz-otel-collector:v0.129.12
+    container_name: platform-signoz-otel-collector
+    restart: unless-stopped
+    depends_on:
+      vault-agent:
+        condition: service_started
+      query-service:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - |
+        # Wait for secrets file
+        while [ ! -f /secrets/.env ]; do
+          echo "Waiting for secrets..."
+          sleep 1
+        done
+        set -a
+        . /secrets/.env
+        set +a
+        exec /signoz-otel-collector --config=/etc/otel-collector-config.yaml --feature-gates=-pkg.translator.prometheus.NormalizeName
+    environment:
+      - OTEL_RESOURCE_ATTRIBUTES=host.name=signoz-collector,os.type=linux
+      - LOW_CARDINAL_EXCEPTION_GROUPING=false
+      - SIGNOZ_COMPONENT=otel-collector
+    volumes:
+      - secrets:/secrets:ro
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    ports:
+      - "4317:4317"  # OTLP gRPC receiver
+      - "4318:4318"  # OTLP HTTP receiver
+    networks:
+      - dokploy-network
+    labels:
+      - "traefik.enable=false"
+
+volumes:
+  secrets:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=10m,mode=0755"
+
+networks:
+  dokploy-network:
+    external: true

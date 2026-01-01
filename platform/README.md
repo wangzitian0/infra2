@@ -13,8 +13,8 @@ Platform services use **vault-init pattern**:
 
 | Range | Category | Services |
 |-------|----------|----------|
-| `01-09` | **Databases** | `01.postgres`, `02.redis`, `03.minio` |
-| `10-19` | **Auth & Gateway** | `10.authentik` |
+| `01-09` | **Databases** | `01.postgres`, `02.redis`, `03.clickhouse`, `03.minio` |
+| `10-19` | **Auth & Gateway** | `10.authentik`, `11.signoz` |
 | `20-29` | **Portal & Observability** | `21.portal` |
 
 ## Service Directory
@@ -34,8 +34,10 @@ platform/{nn}.{service}/
 
 - [Postgres](./01.postgres/README.md)
 - [Redis](./02.redis/README.md)
+- [ClickHouse](./03.clickhouse/README.md)
 - [MinIO](./03.minio/README.md)
 - [Authentik](./10.authentik/README.md)
+- [SigNoz](./11.signoz/README.md)
 - [Portal](./21.portal/README.md)
 
 ## Prerequisites
@@ -49,19 +51,23 @@ platform/{nn}.{service}/
 ```bash
 # Deploy all (in dependency order)
 # 1. Database tier
-invoke postgres.setup   # Database for authentik
-invoke redis.setup      # Cache for authentik
+invoke postgres.setup    # Database for authentik
+invoke redis.setup       # Cache for authentik
+invoke clickhouse.setup  # Storage for signoz
 
-# 2. Auth tier
-invoke authentik.setup  # SSO provider
+# 2. Auth & Observability tier
+invoke authentik.setup   # SSO provider
+invoke signoz.setup      # Observability platform
 
 # 3. Application tier
-invoke portal.setup     # Portal with SSO auth
+invoke portal.setup      # Portal with SSO auth
 
 # Check status
 invoke postgres.status
 invoke redis.status
+invoke clickhouse.status
 invoke authentik.status
+invoke signoz.status
 invoke portal.status
 ```
 
@@ -73,13 +79,17 @@ Services must be deployed in order due to dependencies:
 postgres ─┐
           ├──► authentik ──► portal
 redis ────┘
+
+clickhouse ──► signoz
 ```
 
 | Service | Dependencies | Notes |
 |---------|--------------|-------|
 | postgres | vault | Database for authentik |
 | redis | vault | Cache for authentik |
+| clickhouse | - | Storage for signoz |
 | authentik | postgres, redis | SSO provider |
+| signoz | clickhouse | Observability platform |
 | portal | authentik | Protected by SSO |
 
 ## Adding New Service
