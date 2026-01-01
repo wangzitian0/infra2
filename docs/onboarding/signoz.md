@@ -106,7 +106,7 @@ invoke clickhouse.status
 docker logs platform-signoz-otel-collector
 
 # Send a test trace
-invoke signoz.test-trace
+invoke signoz.shared.test-trace
 
 # Verify ClickHouse connection
 docker exec platform-clickhouse clickhouse-client --query "SHOW DATABASES"
