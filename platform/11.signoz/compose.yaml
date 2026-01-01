@@ -7,10 +7,10 @@ services:
     networks:
       - dokploy-network
 
-  query-service:
+  signoz:
     image: signoz/signoz:v0.105.1
-    container_name: platform-signoz-query-service
-    hostname: signoz-query-service
+    container_name: platform-signoz
+    hostname: signoz
     restart: unless-stopped
     depends_on:
       schema-migrator:
@@ -33,6 +33,7 @@ services:
     networks:
       dokploy-network:
         aliases:
+          - signoz
           - signoz-query-service
     healthcheck:
       test: ["CMD-SHELL", "wget --spider -q localhost:8080/api/v1/health || exit 1"]
@@ -41,32 +42,18 @@ services:
       retries: 5
       start_period: 60s
     labels:
-      - "traefik.enable=false"
-
-  frontend:
-    image: signoz/frontend:0.76.3-msk-integration
-    container_name: platform-signoz-frontend
-    restart: unless-stopped
-    depends_on:
-      query-service:
-        condition: service_healthy
-    environment:
-      - FRONTEND_API_ENDPOINT=http://signoz-query-service:8080
-    networks:
-      - dokploy-network
-    labels:
       - "traefik.enable=true"
       - "traefik.http.routers.signoz.rule=Host(`signoz.${INTERNAL_DOMAIN}`)"
       - "traefik.http.routers.signoz.entrypoints=websecure"
       - "traefik.http.routers.signoz.tls.certresolver=letsencrypt"
-      - "traefik.http.services.signoz.loadbalancer.server.port=3301"
+      - "traefik.http.services.signoz.loadbalancer.server.port=8080"
 
   otel-collector:
     image: signoz/signoz-otel-collector:v0.129.12
     container_name: platform-signoz-otel-collector
     restart: unless-stopped
     depends_on:
-      query-service:
+      signoz:
         condition: service_healthy
     command:
       - --config=/etc/otel-collector-config.yaml
