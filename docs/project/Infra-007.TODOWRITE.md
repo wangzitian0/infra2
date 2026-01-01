@@ -60,11 +60,12 @@
 
 ### TODO Items
 
-- [ ] 简化 ClickHouse compose（去除非必要组件）
-- [ ] 添加 vault-agent 到 query-service
-- [ ] 配置 Traefik labels for frontend
-- [ ] 测试 OTLP 端点连通性
+- [x] 简化 ClickHouse compose（去除非必要组件）
+- [ ] 添加 vault-agent 到 query-service（使用 deploy.py 生成 JWT secret 替代）
+- [x] 配置 Traefik labels for frontend
+- [x] 测试 OTLP 端点连通性（`invoke signoz.shared.test-trace`）
 - [ ] 考虑是否需要 SSO 保护
+- [ ] ClickHouse 添加密码认证（安全改进）
 
 ### Questions & Decisions
 
@@ -76,6 +77,9 @@
 
 **Q**: ClickHouse 是否需要多节点？  
 **A**: 第一阶段单节点 + ZooKeeper，后续可扩展
+
+**Q**: JWT secret 如何管理？
+**A**: 通过 Vault 存储，`deploy.py` 自动生成并传递给 Dokploy
 
 ---
 *Last updated: 2026-01-01*
