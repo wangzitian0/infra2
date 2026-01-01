@@ -26,13 +26,13 @@ invoke wealthfolio.status
 | Path | Description |
 |------|-------------|
 | `/data/finance/wealthfolio/wealthfolio.db` | SQLite database |
-| `/data/finance/wealthfolio/secrets.json` | Encrypted secrets |
 
 ## Environment Variables
 
 | Variable | Description |
 |----------|-------------|
 | `WF_SECRET_KEY` | 32-byte base64 key for encryption (from Vault) |
+| `WF_AUTH_PASSWORD_HASH` | Admin auth password hash (from Vault) |
 | `WF_LISTEN_ADDR` | Bind address (0.0.0.0:8088) |
 | `WF_DB_PATH` | Database path (/data/wealthfolio.db) |
 

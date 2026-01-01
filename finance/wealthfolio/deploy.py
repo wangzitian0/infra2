@@ -2,7 +2,7 @@
 import sys
 
 from libs.deployer import Deployer, make_tasks
-from libs.console import header, success
+from libs.console import header
 
 # Get shared_tasks from sys.modules (loaded by tools/loader.py)
 shared_tasks = sys.modules.get("finance.wealthfolio.shared")
