@@ -81,10 +81,10 @@ class MinioDeployer(Deployer):
         return result
     
     @classmethod
-    def composing(cls, c, env_vars_dict: dict) -> str:
+    def composing(cls, c, env_vars: dict) -> str:
         """Deploy via Dokploy API and configure dual domains."""
         # Call parent to deploy
-        compose_id = super().composing(c, env_vars_dict)
+        compose_id = super().composing(c, env_vars)
         
         # Configure additional domain for S3 API (minio.* -> 9000)
         cls._configure_s3_api_domain(compose_id)
