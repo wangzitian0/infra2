@@ -53,15 +53,21 @@ class TestConfig:
     Required: INTERNAL_DOMAIN.
     Optional: E2E_USERNAME/E2E_PASSWORD (auth flows), PORTAL_URL, DB creds.
     """
+    # Import SERVICE_SUBDOMAINS for canonical subdomain mapping
+    from libs.common import SERVICE_SUBDOMAINS
 
     # Domain
     INTERNAL_DOMAIN = _resolve_internal_domain()
 
-    # Core Bootstrap services
-    DOKPLOY_URL = os.getenv("DOKPLOY_URL", f"https://cloud.{INTERNAL_DOMAIN}")
-    OP_URL = os.getenv("OP_URL", f"https://op.{INTERNAL_DOMAIN}")
-    VAULT_URL = os.getenv("VAULT_URL", f"https://vault.{INTERNAL_DOMAIN}")
-    SSO_URL = os.getenv("SSO_URL", f"https://sso.{INTERNAL_DOMAIN}")
+    # Generate URLs from SERVICE_SUBDOMAINS (single source of truth)
+    DOKPLOY_URL = os.getenv("DOKPLOY_URL", f"https://{SERVICE_SUBDOMAINS['dokploy']}.{INTERNAL_DOMAIN}")
+    OP_URL = os.getenv("OP_URL", f"https://{SERVICE_SUBDOMAINS['1password']}.{INTERNAL_DOMAIN}")
+    VAULT_URL = os.getenv("VAULT_URL", f"https://{SERVICE_SUBDOMAINS['vault']}.{INTERNAL_DOMAIN}")
+    SSO_URL = os.getenv("SSO_URL", f"https://{SERVICE_SUBDOMAINS['sso']}.{INTERNAL_DOMAIN}")
+
+    # MinIO Object Storage
+    MINIO_CONSOLE_URL = os.getenv("MINIO_CONSOLE_URL", f"https://{SERVICE_SUBDOMAINS['minio_console']}.{INTERNAL_DOMAIN}")
+    MINIO_API_URL = os.getenv("MINIO_API_URL", f"https://{SERVICE_SUBDOMAINS['minio_api']}.{INTERNAL_DOMAIN}")
 
     # Optional portal/homepage
     PORTAL_URL = os.getenv("PORTAL_URL", "")

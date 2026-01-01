@@ -192,7 +192,72 @@ class DokployClient:
     
     def delete_domain(self, domain_id: str) -> dict:
         """Delete a domain"""
-        return self._request("DELETE", f"domain.remove?domainId={domain_id}")
+        # Try DELETE first, then POST if it fails
+        try:
+            return self._request("DELETE", f"domain.delete?domainId={domain_id}")
+        except Exception:
+            pass
+        # Fallback to POST
+        return self._request("POST", "domain.delete", json={"domainId": domain_id})
+    
+    def ensure_domains(
+        self,
+        compose_id: str,
+        desired_domains: list[dict],
+        service_name: str = None,
+    ) -> dict:
+        """Ensure required domains exist (create if missing, warn on conflict).
+        
+        This method NEVER deletes existing domains. If a domain exists with
+        a different port, it warns the user to manually resolve the conflict.
+        
+        Args:
+            compose_id: ID of the compose application
+            desired_domains: List of dicts with 'host', 'port', 'https' keys
+            service_name: Optional service name for multi-service composes
+            
+        Returns:
+            Dict with 'created', 'skipped', 'conflicts' info
+        """
+        result = {"created": 0, "skipped": 0, "conflicts": [], "errors": []}
+        
+        # Get existing domains
+        compose = self.get_compose(compose_id)
+        existing = compose.get("domains", [])
+        existing_hosts = {d["host"]: d for d in existing}
+        
+        for spec in desired_domains:
+            host = spec["host"]
+            desired_port = spec["port"]
+            
+            if host in existing_hosts:
+                existing_port = existing_hosts[host].get("port")
+                if existing_port == desired_port:
+                    # Already configured correctly
+                    result["skipped"] += 1
+                else:
+                    # Conflict: same host, different port
+                    result["conflicts"].append({
+                        "host": host,
+                        "existing_port": existing_port,
+                        "desired_port": desired_port,
+                    })
+            else:
+                # Domain doesn't exist, create it
+                try:
+                    self.create_domain(
+                        compose_id=compose_id,
+                        host=host,
+                        port=desired_port,
+                        https=spec.get("https", True),
+                        path=spec.get("path", "/"),
+                        service_name=service_name,
+                    )
+                    result["created"] += 1
+                except Exception as e:
+                    result["errors"].append(f"create {host}: {e}")
+        
+        return result
     
     # Environment endpoints
     def get_compose_env(self, compose_id: str) -> str:

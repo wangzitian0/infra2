@@ -16,7 +16,44 @@ CONTAINERS = {
     "postgres": "platform-postgres",
     "redis": "platform-redis",
     "authentik": "platform-authentik-server",
+    "minio": "platform-minio",
 }
+
+# Service subdomain mapping (subdomain prefix -> description)
+# These are the canonical subdomains for each service
+SERVICE_SUBDOMAINS = {
+    # Bootstrap services
+    "dokploy": "cloud",      # cloud.{domain}
+    "1password": "op",       # op.{domain}
+    "vault": "vault",        # vault.{domain}
+    "sso": "sso",            # sso.{domain} (Authentik)
+    # Platform services
+    "minio_console": "minio",  # minio.{domain} -> Console (9001)
+    "minio_api": "s3",         # s3.{domain} -> S3 API (9000)
+    "portal": "portal",        # portal.{domain}
+}
+
+
+def get_service_url(service: str, domain: str = None) -> str:
+    """Get full URL for a service.
+    
+    Args:
+        service: Service key from SERVICE_SUBDOMAINS
+        domain: Optional domain override (defaults to INTERNAL_DOMAIN from env)
+        
+    Returns:
+        Full HTTPS URL for the service
+    """
+    if domain is None:
+        domain = get_env().get("INTERNAL_DOMAIN")
+    if not domain:
+        raise ValueError("INTERNAL_DOMAIN not set")
+    
+    subdomain = SERVICE_SUBDOMAINS.get(service)
+    if not subdomain:
+        raise ValueError(f"Unknown service: {service}")
+    
+    return f"https://{subdomain}.{domain}"
 
 # Cache for env config (simple dict, no lru_cache to avoid OpSecrets caching issues)
 _env_cache: dict | None = None
