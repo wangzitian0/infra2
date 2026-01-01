@@ -325,6 +325,7 @@ def setup_tokens(c):
     service_map = {
         "postgres": "01.postgres",
         "redis": "02.redis",
+        "minio": "03.minio",
         "authentik": "10.authentik",
     }
     
