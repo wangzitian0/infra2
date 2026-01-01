@@ -19,6 +19,11 @@ class VaultDeployer(Deployer):
     uid = "100"   # Vault official image runs as uid 100
     gid = "1000"
     chmod = "755"
+    
+    # Domain configuration via Dokploy API
+    subdomain = "vault"
+    service_port = 8200
+    service_name = "vault"
 
     @classmethod
     def pre_compose(cls, c) -> dict | None:
@@ -179,6 +184,26 @@ class VaultDeployer(Deployer):
         
         info(f"Deploying compose {compose_id}...")
         client.deploy_compose(compose_id)
+        
+        # Configure domain via Dokploy API (using ensure_domains for idempotency)
+        if cls.subdomain and cls.service_port:
+            domain_host = f"{cls.subdomain}.{domain}"
+            info(f"Ensuring domain: {domain_host}")
+            
+            desired_domains = [
+                {"host": domain_host, "port": cls.service_port, "https": True}
+            ]
+            result = client.ensure_domains(
+                compose_id=compose_id,
+                desired_domains=desired_domains,
+                service_name=cls.service_name,
+            )
+            
+            if result["created"] > 0:
+                success(f"Domain configured: https://{domain_host}")
+                client.deploy_compose(compose_id)
+            elif result["skipped"] > 0:
+                info(f"Domain already configured: {domain_host}")
         
         success(f"Deployed {cls.service} (composeId: {compose_id})")
         return compose_id

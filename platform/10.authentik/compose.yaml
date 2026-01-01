@@ -52,10 +52,6 @@ services:
       - dokploy-network
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.authentik.rule=Host(`sso.${INTERNAL_DOMAIN}`)"
-      - "traefik.http.routers.authentik.entrypoints=websecure"
-      - "traefik.http.routers.authentik.tls.certresolver=letsencrypt"
-      - "traefik.http.services.authentik.loadbalancer.server.port=9000"
     healthcheck:
       test: [ "CMD", "ak", "healthcheck" ]
       interval: 30s
