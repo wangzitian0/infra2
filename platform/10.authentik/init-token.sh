@@ -3,6 +3,7 @@
 # Creates admin API token and stores as 'root_token' in Vault
 
 set -e
+set -o pipefail
 
 # Wait for Authentik to be ready
 echo "Waiting for Authentik to be ready..."
@@ -46,6 +47,12 @@ except Exception as e:
     exit(1)
 PYTHON
 )
+PYTHON_EXIT=$?
+
+if [ $PYTHON_EXIT -ne 0 ]; then
+  echo "Error: Python script failed"
+  exit 1
+fi
 
 if [ -z "$TOKEN" ]; then
   echo "Error: Failed to create or retrieve token"
@@ -57,10 +64,11 @@ echo "Root token initialized successfully"
 # Store token to Vault if VAULT_INIT_TOKEN is set
 if [ -n "$VAULT_INIT_TOKEN" ]; then
   echo "Storing root token to Vault..."
-  export VAULT_ADDR="${VAULT_INIT_ADDR:-https://vault.zitian.party}"
   export VAULT_TOKEN="$VAULT_INIT_TOKEN"
   
-  if vault kv patch secret/platform/production/authentik root_token="$TOKEN"; then
+  # Use VAULT_INIT_ADDR directly (passed from compose.yaml)
+  VAULT_URL="${VAULT_INIT_ADDR:-https://vault.zitian.party}"
+  if vault kv patch -address="$VAULT_URL" secret/platform/production/authentik root_token="$TOKEN"; then
     echo "Root token stored to Vault successfully"
   else
     echo "Warning: Failed to store token to Vault"

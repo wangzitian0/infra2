@@ -97,7 +97,7 @@ Automatically configured via Dokploy API during deployment.
   - Health: `ak healthcheck`
 - **worker**: Background tasks (`platform-authentik-worker`)
   - No exposed ports
-  - Health: celery status
+  - Health: `ak healthcheck`
 
 ## Initial Setup
 
