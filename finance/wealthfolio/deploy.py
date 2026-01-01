@@ -68,7 +68,6 @@ class WealthfolioDeployer(Deployer):
         if not auth_hash:
             from libs.console import info
             from libs.common import get_env
-            import secrets as py_secrets
             import shlex
             
             info("Generating Argon2 hash for password...")
@@ -83,11 +82,10 @@ class WealthfolioDeployer(Deployer):
             
             result = c.run(cmd, warn=True, hide=True)
             if result.ok and result.stdout:
-                # Extract hash (lines starting with $argon2id$)
+                # Extract hash, preferring the last line starting with $argon2id$
                 for line in result.stdout.splitlines():
                     if line.strip().startswith("$argon2id$"):
                         auth_hash = line.strip()
-                        break
             
             if auth_hash:
                 if secrets.set("WF_AUTH_PASSWORD_HASH", auth_hash):
@@ -97,13 +95,13 @@ class WealthfolioDeployer(Deployer):
                     error("Failed to store hash in Vault")
             else:
                 from libs.console import error
-                error(f"Failed to generate argon2 hash. Output: {result.stdout} / {result.stderr}")
+                error("Failed to generate argon2 hash.")
                 return None
 
         header("WEALTHFOLIO", "Service Ready")
         from libs.console import env_vars
         env_vars("Top Secrets", {
-            "Login Password": auth_password
+            "Login Password": "Stored securely in Vault as WF_AUTH_PASSWORD"
         })
         
         return {
