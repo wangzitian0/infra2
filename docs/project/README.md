@@ -25,6 +25,7 @@
 - [docs/README.md](../README.md) - 文档索引
 
 ## Active Projects
+- [Infra-007: SigNoz Observability Platform](./Infra-007.signoz_install.md) - **In Progress**
 - [Infra-006: Documentation Engineering](./Infra-006.documentation_engineering.md) - **In Progress**
 - [Infra-005: Homer Portal Homepage](./Infra-005.homer_portal.md) - **In Progress**
 - [Infra-004: Authentik Installation](./Infra-004.authentik_install.md) - **In Progress**
