@@ -174,12 +174,26 @@ labels:
 - **Forward Auth 优先**：静态服务使用 Forward Auth，无需改代码
 - **组策略管理**：通过 Authentik Group 管理访问权限
 - **CLI 自动化**：使用 `invoke authentik.shared.*` 任务
+- **禁用 Dokploy 域名**：SSO 保护的服务设置 `subdomain = None`，使用 compose.yaml Traefik labels
 
 ### ⛔ 禁止模式 (Blacklist)
 
 - **反模式 A**: 禁止多层认证叠加（Portal Gate + App OIDC）
 - **反模式 B**: 禁止共享 Client Secret（每应用独立）
 - **反模式 C**: 禁止在代码中硬编码 Token
+- **反模式 D**: 禁止同时使用 Dokploy 域名配置和 compose.yaml Traefik labels（会冲突）
+
+### 📋 SSO 保护服务配置清单
+
+1. **deploy.py**: 设置 `subdomain = None`（禁用 Dokploy 域名配置）
+2. **compose.yaml**: 添加 Traefik labels（路由 + forwardauth middleware）
+3. **Cloudflare**: 确保泛域名 `*.${INTERNAL_DOMAIN}` 已解析到 VPS
+4. **Authentik**: 运行 `invoke authentik.shared.create-proxy-app`
+5. **验证**: 确认 Dokploy UI 中该服务的 Domain 字段为空
+
+**域名分层**：
+- 公网域名（用户访问）：`home.zitian.party` → Cloudflare → Traefik → ForwardAuth → Portal
+- 容器域名（内部通信）：`platform-portal:8080` ← Traefik ← `platform-authentik-server:9000`
 
 ---
 

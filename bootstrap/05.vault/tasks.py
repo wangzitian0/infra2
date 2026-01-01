@@ -62,21 +62,21 @@ class VaultDeployer(Deployer):
             else:
                 warning("Could not finding OP_CONNECT_TOKEN in 1Password")
                 
-            # OP_ITEM_ID (Item "bootstrap/vault" where unseal keys are stored)
+            # OP_ITEM_ID (Item "bootstrap/vault/Unseal Keys" where unseal keys are stored)
             try:
                 # We need the Item ID, not content. Use CLI wrapper or name
                 # If item doesn't exist yet (pre-init), we might skip or leave empty.
                 # Here we assume it might exist or will be created. 
                 # passing name might work if unsealer supports it, but compose expects ID usually.
                 # Let's try to look it up.
-                cmd = "op item get 'bootstrap/vault' --vault Infra2 --format json"
+                cmd = "op item get 'bootstrap/vault/Unseal Keys' --vault Infra2 --format json"
                 res = c.run(cmd, hide=True, warn=True)
                 if res.ok:
                     import json
                     item = json.loads(res.stdout)
                     env_vars["OP_ITEM_ID"] = item["id"]
                 else:
-                    info("Vault item 'bootstrap/vault' not found (normal if first run)")
+                    info("Vault item 'bootstrap/vault/Unseal Keys' not found (normal if first run)")
                     env_vars["OP_ITEM_ID"] = "" 
             except Exception as ex:
                 warning(f"Failed to lookup Vault item ID: {ex}")

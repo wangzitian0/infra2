@@ -183,12 +183,26 @@ platform/
 
 ### 域名规则 {#域名规则}
 
+> **澄清**：`INTERNAL_DOMAIN` 实际是平台的**公网基础域名**（如 `zitian.party`），由 Cloudflare 管理 DNS 和证书。真正的内网域名是 Docker 容器名（如 `platform-authentik-server`）。
+
+| 域名类型 | 用途 | 示例 | 管理方式 |
+|:---|:---|:---|:---|
+| **公网域名** | 用户访问入口 | `sso.zitian.party` | Cloudflare DNS + compose.yaml Traefik labels |
+| **容器域名** | 容器间通信 | `platform-authentik-server` | Docker 内部 DNS |
+| **Dokploy 域名** | (可选) 非 SSO 服务 | - | Dokploy UI 配置（与 labels 冲突） |
+
+**环境域名规则**：
 
 | 环境 | 域名模式 | 示例 |
 |:---|:---|:---|
 | **Platform** | `<service>.<internal_domain>` | `sso.${INTERNAL_DOMAIN}` |
 | **Staging** | `x-staging.<internal_domain>` | `x-staging.${INTERNAL_DOMAIN}` |
 | **Prod** | `<internal_domain>` | `${INTERNAL_DOMAIN}` |
+
+**SSO 保护服务的域名配置**：
+- deploy.py: `subdomain=None` (禁用 Dokploy 域名配置)
+- compose.yaml: 添加 Traefik labels 定义路由和 ForwardAuth 中间件
+- Authentik: `external_host` 使用公网域名，`internal_host` 使用容器名
 
 ---
 

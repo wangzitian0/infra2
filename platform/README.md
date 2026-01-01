@@ -98,8 +98,10 @@ redis ────┘
        data_path = "/data/platform/new"
        secret_key = "password"  # Key in Vault
        
-       # Optional: Domain configuration
-       subdomain = "new"
+       # Domain configuration:
+       # - Set subdomain to auto-configure via Dokploy API (no SSO)
+       # - Set subdomain = None to use compose.yaml Traefik labels (for SSO)
+       subdomain = "new"  # or None for SSO-protected services
        service_port = 8080
        service_name = "server"  # For multi-service composes
    
@@ -125,6 +127,23 @@ redis ────┘
 4. Copy vault-agent config from existing service and adapt
 
 5. Run: `invoke new.setup`
+
+## SSO Protection
+
+Services can be protected by Authentik SSO using Traefik forward auth:
+
+1. Set `subdomain = None` in deploy.py to disable Dokploy auto-domain
+2. Add forwardauth middleware labels in compose.yaml:
+   ```yaml
+   labels:
+     - "traefik.http.middlewares.{service}-auth.forwardauth.address=http://platform-authentik-server:9000/outpost.goauthentik.io/auth/traefik"
+     - "traefik.http.middlewares.{service}-auth.forwardauth.trustForwardHeader=true"
+     - "traefik.http.middlewares.{service}-auth.forwardauth.authResponseHeaders=X-authentik-username,X-authentik-groups,X-authentik-email,X-authentik-name,X-authentik-uid"
+     - "traefik.http.routers.{service}.middlewares={service}-auth@docker"
+   ```
+3. Configure access control: `invoke authentik.shared.create-proxy-app --name={service} --slug={service} --external-host=https://{service}.{domain} --internal-host=platform-{service} --allowed-groups=admins`
+
+See [docs/ssot/platform.sso.md](../docs/ssot/platform.sso.md) for details.
 
 ## References
 
