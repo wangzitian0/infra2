@@ -7,8 +7,6 @@ Root credentials pattern:
 import subprocess
 import sys
 
-import httpx
-
 from libs.deployer import Deployer, make_tasks
 from libs.env import generate_password
 from libs.console import header, success, error, warning, info, env_vars
@@ -23,7 +21,7 @@ class MinioDeployer(Deployer):
     secret_key = "root_password"
     
     # Domain configuration for Dokploy (Console)
-    subdomain = "s3"  # s3.{INTERNAL_DOMAIN} -> Console
+    subdomain = "minio"  # minio.{INTERNAL_DOMAIN} -> Console
     service_port = 9001  # MinIO Console port
     service_name = "minio"
     
@@ -76,50 +74,59 @@ class MinioDeployer(Deployer):
         env_vars("DOKPLOY ENV (vault-init)", result)
         success("pre_compose complete")
         info(f"MinIO Console: https://{cls.subdomain}.{e.get('INTERNAL_DOMAIN')}")
-        info(f"MinIO S3 API: https://minio.{e.get('INTERNAL_DOMAIN')}")
+        info(f"MinIO S3 API: https://s3.{e.get('INTERNAL_DOMAIN')}")
         info(f"Login: {root_user} / (password in 1Password)")
         return result
     
     @classmethod
     def composing(cls, c, env_vars: dict) -> str:
-        """Deploy via Dokploy API and configure dual domains."""
+        """Deploy via Dokploy API and sync dual domains."""
         # Call parent to deploy
         compose_id = super().composing(c, env_vars)
         
-        # Configure additional domain for S3 API (minio.* -> 9000)
-        cls._configure_s3_api_domain(compose_id)
+        # Sync domains: minio=Console(9001), s3=API(9000)
+        cls._sync_domains(compose_id)
         
         return compose_id
     
     @classmethod
-    def _configure_s3_api_domain(cls, compose_id: str):
-        """Configure S3 API domain (minio.* -> port 9000)."""
+    def _sync_domains(cls, compose_id: str):
+        """Ensure domains exist: minio.{domain}=Console, s3.{domain}=API."""
         from libs.dokploy import get_dokploy
         
         e = cls.env()
         domain = e.get('INTERNAL_DOMAIN')
         if not domain:
-            warning("INTERNAL_DOMAIN not set, skipping S3 API domain")
+            warning("INTERNAL_DOMAIN not set, skipping domain sync")
             return
         
         host = f"cloud.{domain}"
         client = get_dokploy(host=host)
-        api_domain = f"minio.{domain}"
         
-        try:
-            info(f"Configuring S3 API domain: {api_domain}")
-            client.create_domain(
-                compose_id=compose_id,
-                host=api_domain,
-                port=9000,  # S3 API port
-                https=True,
-                service_name=cls.service_name,
-            )
-            success(f"S3 API domain configured: https://{api_domain}")
-        except httpx.HTTPStatusError as exc:
-            warning(f"S3 API domain config skipped: HTTP {exc.response.status_code}")
-        except Exception as exc:
-            warning(f"S3 API domain config failed: {type(exc).__name__}: {exc}")
+        desired_domains = [
+            {"host": f"minio.{domain}", "port": 9001, "https": True},  # Console
+            {"host": f"s3.{domain}", "port": 9000, "https": True},     # S3 API
+        ]
+        
+        info(f"Ensuring domains: minio.{domain}->9001(Console), s3.{domain}->9000(API)")
+        result = client.ensure_domains(
+            compose_id=compose_id,
+            desired_domains=desired_domains,
+            service_name=cls.service_name,
+        )
+        
+        # Report results
+        if result["conflicts"]:
+            error("Domain conflicts detected! Please fix manually in Dokploy UI:")
+            for c in result["conflicts"]:
+                warning(f"  {c['host']}: exists with port {c['existing_port']}, need port {c['desired_port']}")
+        
+        if result["errors"]:
+            for err in result["errors"]:
+                warning(f"Domain error: {err}")
+        
+        if result["created"] > 0 or result["skipped"] > 0:
+            success(f"Domains: created={result['created']}, skipped={result['skipped']}")
     
     @classmethod
     def _sync_to_1password(cls, username: str, password: str) -> bool:

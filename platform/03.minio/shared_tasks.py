@@ -17,8 +17,8 @@ def status(c):
     if domain:
         from libs.console import info, success, warning
         endpoints = [
-            (f"https://s3.{domain}", "Console"),
-            (f"https://minio.{domain}", "S3 API"),
+            (f"https://minio.{domain}", "Console"),
+            (f"https://s3.{domain}", "S3 API"),
         ]
         info(f"Checking external endpoints for domain: {domain}")
         for url, name in endpoints:

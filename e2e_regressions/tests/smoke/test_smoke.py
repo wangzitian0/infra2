@@ -15,10 +15,28 @@ def _core_services(config: TestConfig):
         "Vault": f"{config.VAULT_URL}/v1/sys/health",
         "SSO": config.SSO_URL,
         "1Password": config.OP_URL,
+        "MinIO Console": config.MINIO_CONSOLE_URL,
     }
     if config.PORTAL_URL:
         services["Portal"] = config.PORTAL_URL
     return services
+
+
+@pytest.mark.smoke
+@pytest.mark.e2e
+async def test_minio_health(config: TestConfig):
+    """Verify MinIO Console and S3 API are accessible."""
+    async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
+        # Console should return 200 (HTML login page)
+        console_resp = await client.get(config.MINIO_CONSOLE_URL)
+        assert console_resp.status_code == 200, \
+            f"MinIO Console returned {console_resp.status_code}"
+        
+        # S3 API health check
+        api_health_url = f"{config.MINIO_API_URL}/minio/health/live"
+        api_resp = await client.get(api_health_url)
+        assert api_resp.status_code == 200, \
+            f"MinIO API health check returned {api_resp.status_code}"
 
 
 @pytest.mark.smoke
