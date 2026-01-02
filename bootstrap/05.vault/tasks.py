@@ -331,7 +331,10 @@ def setup_tokens(c):
     root_token = os.getenv("VAULT_ROOT_TOKEN")
     if not root_token:
         error("VAULT_ROOT_TOKEN not set")
-        info("Get from: op read 'op://Infra2/bootstrap%2Fvault%2FRoot%20Token/Root%20Token'")
+        info(
+            "Get from: op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token' "
+            "(or /Token; item: bootstrap/vault/Root Token)"
+        )
         info("Then run: export VAULT_ROOT_TOKEN=<token>")
         return
     

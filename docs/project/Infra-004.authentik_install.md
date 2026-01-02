@@ -64,7 +64,8 @@ Automatically configures `https://sso.{INTERNAL_DOMAIN}` via Dokploy API after d
 - **Fatal errors**: Pre-flight checks with actionable guidance
   ```
   FATAL: VAULT_ROOT_TOKEN not set
-    Get token: op read 'op://Infra2/bootstrap%2Fvault%2FRoot%20Token/Root%20Token'
+    Get token: op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token' (item: bootstrap/vault/Root Token)
+    If field name is Token, use: op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token
     Then: export VAULT_ROOT_TOKEN=<token>
   ```
 - **Idempotent operations**: `CREATE DATABASE IF NOT EXISTS` pattern
@@ -79,7 +80,8 @@ Automatically configures `https://sso.{INTERNAL_DOMAIN}` via Dokploy API after d
 
 ```bash
 # 1. Generate Tokens (One-time)
-export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/bootstrap%2Fvault%2FRoot%20Token/Root%20Token')
+export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token') # item: bootstrap/vault/Root Token
+# If field name is Token, use: op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token
 invoke vault.setup-tokens
 
 # 2. Deploy Services

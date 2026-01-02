@@ -47,7 +47,10 @@ def create_root_token(c):
     if not vault_root_token:
         error("VAULT_ROOT_TOKEN not set")
         info("Vault admin token needed to store Authentik root token")
-        info("Get from: op read 'op://Infra2/bootstrap%2Fvault%2FRoot%20Token/Root%20Token'")
+        info(
+            "Get from: op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token' "
+            "(or /Token; item: bootstrap/vault/Root Token)"
+        )
         info("Then: export VAULT_ROOT_TOKEN=<token>")
         return False
     
