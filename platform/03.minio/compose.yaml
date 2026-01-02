@@ -20,11 +20,19 @@ services:
       - dokploy-network
 
   minio:
-    image: minio/minio:latest
+    # After RELEASE.2025-04-22T22-12-26Z, MinIO removed most of the admin UI
+    # Using the last version with full Console admin features
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     container_name: platform-minio
     restart: always
     depends_on:
       - vault-agent
+    environment:
+      # Clear _FILE vars from base image to use env vars from /secrets/.env
+      MINIO_ROOT_USER_FILE: ""
+      MINIO_ROOT_PASSWORD_FILE: ""
+      MINIO_ACCESS_KEY_FILE: ""
+      MINIO_SECRET_KEY_FILE: ""
     entrypoint:
       - sh
       - -c
