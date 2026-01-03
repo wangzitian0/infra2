@@ -80,7 +80,7 @@ path "secret/data/platform/{{env}}/authentik" {
 
 **URL**: `https://sso${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`
 
-Configured via Traefik labels in `compose.yaml`.
+Configured via Dokploy domain settings in `deploy.py` (compose.yaml only enables Traefik).
 
 ## Data Path
 

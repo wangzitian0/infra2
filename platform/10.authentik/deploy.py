@@ -2,7 +2,7 @@
 import sys
 import os
 from libs.deployer import Deployer, make_tasks
-from libs.common import get_env, with_env_suffix
+from libs.common import with_env_suffix
 from libs.console import success, warning, info, run_with_status
 from libs.env import generate_password, get_secrets
 
@@ -17,8 +17,8 @@ class AuthentikDeployer(Deployer):
     gid = "1000"
     secret_key = "secret_key"
     
-    # Domain configuration
-    subdomain = None
+    # Domain configuration via Dokploy domains
+    subdomain = "sso"
     service_port = 9000
     service_name = "server"
 

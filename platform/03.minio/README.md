@@ -35,7 +35,8 @@ Uses vault-init pattern:
 
 ## 1Password (Web UI)
 
-- Item: `platform/minio/admin` (staging: `platform/minio/admin-staging`)
+- Item: `platform/minio/admin` (non-production: `platform/minio/admin-<env>`)
+- `<env>` matches `DEPLOY_ENV` (e.g., `staging`), avoiding `-` or `/` in the env name.
 
 ## Data
 

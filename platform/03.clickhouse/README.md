@@ -54,6 +54,7 @@ invoke clickhouse.status
 1. Create data directories (`${DATA_PATH}/{data,logs,user_scripts,zookeeper}`)
 2. Set permissions (uid=101, gid=101 for ClickHouse)
 3. Render `${DATA_PATH}/config.xml` with env-scoped hostnames
+4. Persist `config.xml` under `${DATA_PATH}` so redeploys keep the same config
 
 ## Data Path
 
@@ -98,6 +99,7 @@ Services connect via:
 ### Cluster (config.xml)
 - Cluster name: `cluster_1S_1R` (1 shard, 1 replica)
 - ZooKeeper: `platform-clickhouse-zookeeper${ENV_SUFFIX}:2181`
+  - Single-node ZK only; multi-node clusters must override `ZOO_SERVERS` to list all nodes.
 
 ### Users (users.xml)
 - Profile: default (10GB memory limit)

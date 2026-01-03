@@ -85,6 +85,7 @@ class PortalDeployer(Deployer):
             result = cls.compose_env_base(env)
             result.update({
                 "PORTAL_URL": portal_url,
+                "INTERNAL_DOMAIN": internal_domain,
             })
             return result
         except OSError as exc:

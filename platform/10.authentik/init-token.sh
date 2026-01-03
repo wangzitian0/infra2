@@ -4,11 +4,22 @@
 
 set -e
 
+# Prefer python, fall back to python3 for minimal images.
+PYTHON_BIN=python
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+  if command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN=python3
+  else
+    echo "Error: python not found in container"
+    exit 1
+  fi
+fi
+
 # Wait for Authentik server to be ready (token-init container has no local API)
 AUTHENTIK_SERVER_HOST="platform-authentik-server${ENV_SUFFIX}:9000"
 export AUTHENTIK_SERVER_HOST
 echo "Waiting for Authentik server to be ready..."
-until python - <<'PY'
+until "$PYTHON_BIN" - <<'PY'
 import os
 import sys
 import urllib.request
@@ -31,7 +42,7 @@ done
 echo "Authentik is ready, checking for root token..."
 
 # Create API token using Django shell and capture output
-TOKEN=$(python -m manage shell << 'PYTHON'
+TOKEN=$("$PYTHON_BIN" -m manage shell << 'PYTHON'
 from authentik.core.models import User, Token, TokenIntents
 from datetime import datetime, timedelta
 
