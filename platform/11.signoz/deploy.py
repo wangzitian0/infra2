@@ -1,7 +1,11 @@
 """SigNoz deployment - observability platform"""
+import os
 import sys
+from pathlib import Path
+from tempfile import NamedTemporaryFile
+
 from libs.deployer import Deployer, make_tasks
-from libs.console import success, info, warning, run_with_status
+from libs.console import success, info, warning, run_with_status, error
 from libs.env import generate_password
 
 shared_tasks = sys.modules.get("platform.11.signoz.shared")
@@ -28,21 +32,67 @@ class SigNozDeployer(Deployer):
         
         e = cls.env()
         data_path = cls.data_path_for_env(e)
+        host = e.get("VPS_HOST")
+        if not host:
+            error("Missing VPS_HOST")
+            return None
         secrets_backend = cls.secrets()
         
         # Create data directory for query-service SQLite
-        run_with_status(
-            c, 
-            f"ssh root@{e['VPS_HOST']} 'mkdir -p {data_path}/data'",
+        result = run_with_status(
+            c,
+            f"ssh root@{host} 'mkdir -p {data_path}/data'",
             "Create data directory"
         )
+        if not result.ok:
+            return None
         
         # Set permissions (SigNoz runs as root in container, but let's be explicit)
-        run_with_status(
+        result = run_with_status(
             c,
-            f"ssh root@{e['VPS_HOST']} 'chmod -R 755 {data_path}'",
+            f"ssh root@{host} 'chmod -R 755 {data_path}'",
             "Set permissions"
         )
+        if not result.ok:
+            return None
+
+        template_path = Path(__file__).with_name("otel-collector-config.yaml")
+        if not template_path.exists():
+            error("Missing otel-collector config template", str(template_path))
+            return None
+
+        env_suffix = e.get("ENV_SUFFIX") or ""
+        config_path = f"{data_path}/otel-collector-config.yaml"
+
+        tmp_path = None
+        try:
+            config_content = template_path.read_text()
+            config_content = config_content.replace("${ENV_SUFFIX}", env_suffix)
+            with NamedTemporaryFile("w", delete=False, encoding="utf-8") as tmp:
+                tmp.write(config_content)
+                tmp_path = tmp.name
+
+            result = run_with_status(
+                c,
+                f"scp {tmp_path} root@{host}:{config_path}",
+                "Upload otel-collector config",
+            )
+            if not result.ok:
+                return None
+
+            result = run_with_status(
+                c,
+                f"ssh root@{host} 'chmod 644 {config_path}'",
+                "Set otel-collector config permissions",
+            )
+            if not result.ok:
+                return None
+        except OSError as exc:
+            error("Failed to prepare otel-collector config", str(exc))
+            return None
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                os.unlink(tmp_path)
         
         # Get or generate JWT secret from Vault
         jwt_secret = secrets_backend.get(cls.secret_key)

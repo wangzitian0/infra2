@@ -62,7 +62,7 @@ services:
       - SIGNOZ_COMPONENT=otel-collector
       - ENV_SUFFIX=${ENV_SUFFIX}
     volumes:
-      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+      - ${DATA_PATH}/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
     expose:
       - "4317"
       - "4318"
