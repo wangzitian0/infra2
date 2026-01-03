@@ -473,6 +473,7 @@ services:
       - dokploy-network
     depends_on:
       - redis
+      - mariadb
     environment:
       - _APP_ENV
       - _APP_WORKER_PER_CORE
@@ -509,6 +510,7 @@ services:
       - appwrite-uploads:/storage/uploads:rw
     depends_on:
       - redis
+      - mariadb
     environment:
       - _APP_ENV
       - _APP_WORKER_PER_CORE
@@ -560,6 +562,7 @@ services:
       - appwrite-imports:/storage/imports:rw
     depends_on:
       - mariadb
+      - redis
     environment:
       - _APP_ENV
       - _APP_WORKER_PER_CORE
@@ -594,6 +597,7 @@ services:
       - dokploy-network
     depends_on:
       - redis
+      - mariadb
     environment:
       - _APP_ENV
       - _APP_WORKER_PER_CORE
@@ -814,7 +818,7 @@ services:
       - appwrite-sites:/storage/sites:rw
       - /tmp:/tmp:rw
     environment:
-      - OPR_EXECUTOR_INACTIVE_TRESHOLD=$_APP_COMPUTE_INACTIVE_THRESHOLD
+      - OPR_EXECUTOR_INACTIVE_THRESHOLD=$_APP_COMPUTE_INACTIVE_THRESHOLD
       - OPR_EXECUTOR_MAINTENANCE_INTERVAL=$_APP_COMPUTE_MAINTENANCE_INTERVAL
       - OPR_EXECUTOR_NETWORK=$_APP_COMPUTE_RUNTIMES_NETWORK
       - OPR_EXECUTOR_DOCKER_HUB_USERNAME=$_APP_DOCKER_HUB_USERNAME
