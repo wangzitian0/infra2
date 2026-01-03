@@ -13,7 +13,7 @@
 | **部署任务** | `platform/{nn}.{service}/deploy.py` | pre-compose, composing, post-compose |
 | **状态检查** | `platform/{nn}.{service}/shared_tasks.py` | status() 返回 {is_ready, details} |
 | **公共库** | `libs/` | env, common, console, config, deployer, dokploy |
-| **CLI 工具** | `tools/` | env_tool.py, local_init.py |
+| **CLI 工具** | `tools/` | env_tool.py, dokploy_env.py, local_init.py |
 
 > **Note**: 服务部署通过 Dokploy API 完成（需要 `DOKPLOY_API_KEY` 或 1Password 中的对应字段）。`env_tool` 仅管理 1Password/Vault secrets。
 
@@ -39,6 +39,7 @@ flowchart TB
     
     subgraph Tools["tools/ (CLI工具)"]
         EnvTool[env_tool.py]
+        DokployEnv[dokploy_env.py]
         LocalInit[local_init.py]
     end
     
@@ -54,6 +55,7 @@ flowchart TB
     Deployer --> AUTH
     Env --> EnvTool
     Common --> EnvTool
+    Common --> DokployEnv
     PG --> AUTH
     RD --> AUTH
 ```
@@ -139,6 +141,13 @@ invoke env.list-all --project=platform --service=postgres
 
 # init/env_vars
 invoke env.init-status
+```
+
+### SOP-004: 创建 Dokploy 环境
+
+```bash
+# 确保 staging 环境存在
+invoke dokploy.env-ensure --project=platform --env=staging --description="staging env"
 ```
 
 ---

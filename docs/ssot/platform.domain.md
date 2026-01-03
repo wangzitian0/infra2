@@ -66,17 +66,11 @@
 
 **规则**:
 ```bash
-# Platform 服务
-${SERVICE}.${INTERNAL_DOMAIN}
-# 示例: sso.zitian.party, home.zitian.party
-
-# Staging 服务
-${SERVICE}-staging.${INTERNAL_DOMAIN}
-# 示例: app-staging.zitian.party
-
-# Production 服务
-${INTERNAL_DOMAIN}
-# 示例: zitian.party
+# Platform 服务（所有环境）
+${SERVICE}${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
+# ENV_DOMAIN_SUFFIX: production -> ""，非生产 -> "-${ENV}"
+# 示例: sso.zitian.party, home-staging.zitian.party
+# 说明: ENV 内部用 '_'，域名中使用 '-'（如 staging_cn -> staging-cn），且不允许 '-' 或 '/'
 ```
 
 ### 3.2 容器域名 (Container Domain)
@@ -124,20 +118,20 @@ subdomain = None
 # 2. compose.yaml 添加 Traefik labels
 labels:
   - "traefik.enable=true"
-  - "traefik.http.routers.${SERVICE}.rule=Host(`${SERVICE}.${INTERNAL_DOMAIN}`)"
-  - "traefik.http.routers.${SERVICE}.entrypoints=websecure"
-  - "traefik.http.routers.${SERVICE}.tls.certresolver=letsencrypt"
+  - "traefik.http.routers.${SERVICE}${ENV_DOMAIN_SUFFIX}.rule=Host(`${SERVICE}${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`)"
+  - "traefik.http.routers.${SERVICE}${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
+  - "traefik.http.routers.${SERVICE}${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
   - "traefik.http.middlewares.${SERVICE}-auth.forwardauth.address=http://platform-authentik-server:9000/outpost.goauthentik.io/auth/traefik"
-  - "traefik.http.routers.${SERVICE}.middlewares=${SERVICE}-auth@docker"
+  - "traefik.http.routers.${SERVICE}${ENV_DOMAIN_SUFFIX}.middlewares=${SERVICE}-auth@docker"
 
 # 3. Cloudflare 添加 DNS 记录（如果不在泛域名内）
-invoke dns_and_cert.add --records=${SERVICE}
+invoke dns_and_cert.add --records=${SERVICE}${ENV_DOMAIN_SUFFIX}
 
 # 4. Authentik 创建代理应用
 invoke authentik.shared.create-proxy-app \
   --name="${SERVICE}" \
   --slug="${SERVICE}" \
-  --external-host="https://${SERVICE}.${INTERNAL_DOMAIN}" \
+  --external-host="https://${SERVICE}${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}" \
   --internal-host="platform-${SERVICE}"
 ```
 
@@ -145,13 +139,13 @@ invoke authentik.shared.create-proxy-app \
 
 ```bash
 # 1. deploy.py 配置域名（可选）
-subdomain = "${SERVICE}"  # Dokploy UI 将显示该子域名
+subdomain = "${SERVICE}"  # 最终域名: ${SERVICE}${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
 
 # 2. compose.yaml 不需要 Traefik labels
 # Dokploy 会自动生成基础路由
 
 # 3. Cloudflare 添加 DNS 记录
-invoke dns_and_cert.add --records=${SERVICE}
+invoke dns_and_cert.add --records=${SERVICE}${ENV_DOMAIN_SUFFIX}
 ```
 
 ### SOP-003: 排查域名冲突
@@ -164,10 +158,10 @@ invoke dns_and_cert.add --records=${SERVICE}
 docker logs bootstrap-traefik 2>&1 | grep "Router"
 
 # 3. 检查 DNS 解析
-dig ${SERVICE}.${INTERNAL_DOMAIN}
+dig ${SERVICE}${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
 
 # 4. 检查证书
-curl -vI https://${SERVICE}.${INTERNAL_DOMAIN}
+curl -vI https://${SERVICE}${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
 ```
 
 ---

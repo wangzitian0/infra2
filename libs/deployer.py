@@ -5,9 +5,10 @@ Simplified: minimal class attributes, uses new env.py API.
 """
 from __future__ import annotations
 from typing import TYPE_CHECKING, Any
+import os
 from invoke import task
 
-from libs.common import get_env, validate_env
+from libs.common import get_env, validate_env, service_domain
 from libs.console import header, success, error, warning, info, env_vars, prompt_action, run_with_status
 from libs.env import generate_password, get_secrets
 
@@ -46,13 +47,53 @@ class Deployer:
     @classmethod
     def env(cls) -> dict[str, str | None]:
         return get_env()
+
+    @classmethod
+    def project_name(cls, env: dict | None = None) -> str:
+        e = env or cls.env()
+        return e.get("PROJECT") or cls.project
+
+    @classmethod
+    def data_path_for_env(cls, env: dict | None = None) -> str:
+        e = env or cls.env()
+        explicit_path = e.get("DATA_PATH")
+        if explicit_path:
+            return explicit_path
+        env_name = e.get("ENV", "production")
+        project = cls.project_name(e)
+        if env_name == "production" or project == "bootstrap":
+            return cls.data_path
+        suffix = e.get("ENV_SUFFIX")
+        if suffix:
+            return f"{cls.data_path}{suffix}"
+        if os.environ.get("ALLOW_SHARED_DATA_PATH") == "1":
+            return cls.data_path
+        raise ValueError(
+            "Non-production requires DATA_PATH or ENV_SUFFIX to avoid data collisions. "
+            "Set DATA_PATH (recommended) or ENV_SUFFIX; override with ALLOW_SHARED_DATA_PATH=1 if intentional."
+        )
+
+    @classmethod
+    def compose_env_base(cls, env: dict | None = None) -> dict[str, str]:
+        e = env or cls.env()
+        base = {
+            "ENV": e.get("ENV", "production"),
+            "ENV_DOMAIN_SUFFIX": e.get("ENV_DOMAIN_SUFFIX"),
+            "INTERNAL_DOMAIN": e.get("INTERNAL_DOMAIN"),
+        }
+        data_path = cls.data_path_for_env(e)
+        if data_path:
+            base["DATA_PATH"] = data_path
+        if e.get("ENV_SUFFIX"):
+            base["ENV_SUFFIX"] = e.get("ENV_SUFFIX")
+        return {k: v for k, v in base.items() if v is not None}
     
     @classmethod
     def secrets(cls):
         """Get secrets backend for this service"""
         e = cls.env()
         # Use cls.project if PROJECT env not set
-        project = e.get('PROJECT') or cls.project
+        project = cls.project_name(e)
         return get_secrets(
             project=project,
             service=cls.service,
@@ -67,12 +108,17 @@ class Deployer:
             return False
         
         e = cls.env()
+        try:
+            data_path = cls.data_path_for_env(e)
+        except ValueError as exc:
+            error(str(exc))
+            return False
         header(f"{cls.service} pre_compose", f"Preparing ({e['ENV']})")
         
         host = e['VPS_HOST']
-        run_with_status(c, f"ssh root@{host} 'mkdir -p {cls.data_path}'", "Create directory")
-        run_with_status(c, f"ssh root@{host} 'chown -R {cls.uid}:{cls.gid} {cls.data_path}'", "Set ownership")
-        run_with_status(c, f"ssh root@{host} 'chmod -R {cls.chmod} {cls.data_path}'", "Set permissions")
+        run_with_status(c, f"ssh root@{host} 'mkdir -p {data_path}'", "Create directory")
+        run_with_status(c, f"ssh root@{host} 'chown -R {cls.uid}:{cls.gid} {data_path}'", "Set ownership")
+        run_with_status(c, f"ssh root@{host} 'chmod -R {cls.chmod} {data_path}'", "Set permissions")
         return True
     
     @classmethod
@@ -101,10 +147,9 @@ class Deployer:
             else:
                 info(f"Vault secret exists: {cls.secret_key}")
         
-        # Return VAULT_ADDR for vault-init pattern
-        result = {
-            "VAULT_ADDR": e.get("VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}"),
-        }
+        # Return base env vars + VAULT_ADDR for vault-init pattern
+        result = cls.compose_env_base(e)
+        result["VAULT_ADDR"] = e.get("VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}")
         
         env_vars("DOKPLOY ENV (vault-init)", result)
         success("pre_compose complete - vault-init will fetch secrets at runtime")
@@ -135,14 +180,21 @@ class Deployer:
         
         # Deploy via API
         # Priority: ENV > Class Attribute > Default "platform"
-        project_name = e.get("PROJECT") or cls.project
+        env_name = e.get("ENV", "production")
+        project_name = cls.project_name(e)
         domain = e.get('INTERNAL_DOMAIN')
         host = f"cloud.{domain}" if domain else None
         
         client = get_dokploy(host=host)
         
         # Ensure project exists
-        project_id, env_id = ensure_project(project_name, f"Platform services: {project_name}", host=host)
+        project_id, env_id = ensure_project(
+            project_name,
+            f"Platform services: {project_name}",
+            host=host,
+            env_name=env_name,
+            require_env=env_name != "production",
+        )
         if not env_id:
             error("Failed to get environment ID")
             raise ValueError("Failed to get environment ID")
@@ -156,10 +208,10 @@ class Deployer:
         info(f"Using GitHub provider: {github_id}")
         
         # Format env vars
-        env_str = "\n".join(f"{k}={v}" for k, v in env_vars.items())
+        env_str = "\n".join(f"{k}={v}" for k, v in env_vars.items() if v is not None)
         
         # Check if compose already exists
-        existing = client.find_compose_by_name(cls.service, project_name)
+        existing = client.find_compose_by_name(cls.service, project_name, env_name=env_name)
         
         if existing:
             compose_id = existing["composeId"]
@@ -196,30 +248,30 @@ class Deployer:
         
         # Configure domain if specified
         if cls.subdomain and cls.service_port:
-            domain_host = f"{cls.subdomain}.{e.get('INTERNAL_DOMAIN')}"
-            info(f"Ensuring domain: {domain_host}")
-            
-            desired_domains = [
-                {"host": domain_host, "port": cls.service_port, "https": True}
-            ]
-            result = client.ensure_domains(
-                compose_id=compose_id,
-                desired_domains=desired_domains,
-                service_name=cls.service_name,
-            )
-            
-            if result["created"] > 0:
-                success(f"Domain configured: https://{domain_host}")
-                # Redeploy to apply domain labels
-                info("Redeploying to apply domain labels...")
-                client.deploy_compose(compose_id)
-                success("Domain labels updated")
-            elif result["skipped"] > 0:
-                info(f"Domain already configured: {domain_host}")
-            
-            if result["conflicts"]:
-                for c in result["conflicts"]:
-                    warning(f"Domain conflict: {c['host']} exists with port {c['existing_port']}, need {c['desired_port']}")
+            domain_host = service_domain(cls.subdomain, e)
+            if not domain_host:
+                warning("Domain configuration skipped: INTERNAL_DOMAIN missing")
+            else:
+                info(f"Ensuring domain: {domain_host}")
+                desired_domains = [
+                    {"host": domain_host, "port": cls.service_port, "https": True}
+                ]
+                result = client.ensure_domains(
+                    compose_id=compose_id,
+                    desired_domains=desired_domains,
+                    service_name=cls.service_name,
+                )
+                if result["created"] > 0:
+                    success(f"Domain configured: https://{domain_host}")
+                    # Redeploy to apply domain labels
+                    info("Redeploying to apply domain labels...")
+                    client.deploy_compose(compose_id)
+                    success("Domain labels updated")
+                elif result["skipped"] > 0:
+                    info(f"Domain already configured: {domain_host}")
+                if result["conflicts"]:
+                    for c in result["conflicts"]:
+                        warning(f"Domain conflict: {c['host']} exists with port {c['existing_port']}, need {c['desired_port']}")
         
         success(f"Deployed {cls.service} (composeId: {compose_id})")
         return compose_id

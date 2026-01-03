@@ -108,6 +108,11 @@ def _load_tools(ns, root):
         success("tools/env")
 
     coll = Collection()
+    if _load_tasks_into_collection(tools_dir / "dokploy_env.py", "tools.dokploy_env", coll):
+        ns.add_collection(coll, name="dokploy")
+        success("tools/dokploy")
+
+    coll = Collection()
     if _load_tasks_into_collection(tools_dir / "local_init.py", "tools.local_init", coll):
         ns.add_collection(coll, name="local")
         success("tools/local")

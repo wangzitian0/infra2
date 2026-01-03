@@ -98,7 +98,7 @@ invoke local.bootstrap  # 校验 1Password 的 init/env_vars（不生成本地 .
 
 | 变量名 | 权限 | 用途 | 存储位置 |
 |--------|------|------|----------|
-| `VAULT_ROOT_TOKEN` | Read + Write | `invoke vault.setup-tokens` 生成/管理策略与 token | 1Password `op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token` |
+| `VAULT_ROOT_TOKEN` | Read + Write | `invoke vault.setup-tokens` 生成/管理策略与 token | 1Password `op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token`（或 `/Token`；item: `bootstrap/vault/Root Token`） |
 | `VAULT_APP_TOKEN` | Read-Only (per-service) | 运行时读取密钥 | Dokploy 服务环境变量 |
 
 ### 3.4 App 接入 Vault（vault-init）
@@ -139,6 +139,14 @@ vault kv get -field=bootstrap_password secret/platform/production/authentik | \
 | **Project** | `{project}` | `secret/data/{project}/` |
 | **Environment** | `{project}/{env}` | `secret/data/{project}/{env}/` |
 | **Service** | `{project}/{env}/{service}` | `secret/data/{project}/{env}/{service}/` |
+
+### 命名与映射规则
+
+- `project` / `env` / `service` **不允许包含** `-` 或 `/`，避免路径歧义。
+- 1Password item 标题可以用 `project-env-service`，与 `{project}/{env}/{service}` **直接替换** `/` ↔ `-`（`-` 仅作为分隔符）。
+- `op://` 路径建议使用 item ID，避免编码歧义：
+  - `op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token'`（item: `bootstrap/vault/Root Token`）
+  - 若字段名是 `Token`，改为 `.../Token`
 
 ### 本地文件（仅模板）
 

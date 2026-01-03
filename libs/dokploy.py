@@ -8,8 +8,15 @@ from __future__ import annotations
 import os
 import httpx
 from dotenv import load_dotenv
+from libs.common import normalize_env_name as _common_normalize_env_name
 
 load_dotenv()
+
+
+def _normalize_env_name(env_name: str | None) -> str | None:
+    if not env_name:
+        return None
+    return _common_normalize_env_name(env_name)
 
 
 class DokployClient:
@@ -76,6 +83,43 @@ class DokployClient:
     def get_project(self, project_id: str) -> dict:
         """Get project by ID"""
         return self._request("GET", f"project.one?projectId={project_id}")
+
+    def list_environments(self, project_name: str) -> list[dict]:
+        """List environments for a project by name."""
+        projects = self.list_projects()
+        for project in projects:
+            if project.get("name") == project_name:
+                return project.get("environments", [])
+        return []
+
+    def create_environment(self, project_id: str, name: str, description: str = "") -> dict:
+        """Create a new environment under a project."""
+        payload = {
+            "projectId": project_id,
+            "name": name,
+        }
+        if description:
+            payload["description"] = description
+        return self._request("POST", "environment.create", json=payload)
+
+    def ensure_environment(self, project_name: str, env_name: str, description: str = "") -> tuple[dict, bool]:
+        """Ensure environment exists, returns (environment, created)."""
+        target = _normalize_env_name(env_name)
+        if not target:
+            raise ValueError("env_name is required")
+
+        projects = self.list_projects()
+        for project in projects:
+            if project.get("name") != project_name:
+                continue
+            for env in project.get("environments", []):
+                if _normalize_env_name(env.get("name")) == target:
+                    return env, False
+            env_desc = description or f"{target} env"
+            created = self.create_environment(project["projectId"], target, env_desc)
+            return created, True
+
+        raise ValueError(f"Project '{project_name}' not found in Dokploy")
     
     # Compose endpoints
     def create_compose(
@@ -137,13 +181,21 @@ class DokployClient:
         """Get compose details"""
         return self._request("GET", f"compose.one?composeId={compose_id}")
     
-    def find_compose_by_name(self, name: str, project_name: str = None) -> dict | None:
-        """Find compose by name across all projects/environments"""
+    def find_compose_by_name(
+        self,
+        name: str,
+        project_name: str = None,
+        env_name: str | None = None,
+    ) -> dict | None:
+        """Find compose by name across all projects/environments."""
+        target_env = _normalize_env_name(env_name)
         projects = self.list_projects()
         for project in projects:
             if project_name and project["name"] != project_name:
                 continue
             for env in project.get("environments", []):
+                if target_env and _normalize_env_name(env.get("name")) != target_env:
+                    continue
                 for compose in env.get("compose", []):
                     if compose.get("name") == name:
                         return compose
@@ -161,6 +213,28 @@ class DokployClient:
                 environments = project.get("environments", [])
                 if environments:
                     return environments[0]["environmentId"]
+        return None
+
+    def get_environment_id(self, project_name: str, env_name: str | None = None, require: bool = False) -> str | None:
+        """Get environment ID by name (falls back to default when env_name is omitted or production)."""
+        target = _normalize_env_name(env_name)
+        projects = self.list_projects()
+        for project in projects:
+            if project["name"] != project_name:
+                continue
+            if target:
+                for env in project.get("environments", []):
+                    if _normalize_env_name(env.get("name")) == target:
+                        return env.get("environmentId")
+                # For production, allow fallback to default environment to avoid breaking existing setups.
+                if target != "production":
+                    return None
+            for env in project.get("environments", []):
+                if env.get("isDefault"):
+                    return env.get("environmentId")
+            environments = project.get("environments", [])
+            if environments:
+                return environments[0].get("environmentId")
         return None
     
     # Domain endpoints
@@ -341,14 +415,26 @@ def get_dokploy(host: str | None = None) -> DokployClient:
 
 
 # Convenience functions
-def ensure_project(name: str, description: str = "", host: str = None) -> tuple[str, str | None]:
-    """Ensure project exists, return (projectId, environmentId)"""
+def ensure_project(
+    name: str,
+    description: str = "",
+    host: str | None = None,
+    env_name: str | None = None,
+    require_env: bool = False,
+) -> tuple[str, str | None]:
+    """Ensure project exists, return (projectId, environmentId)."""
     client = get_dokploy(host=host)
     projects = client.list_projects()
+    normalized_env = _normalize_env_name(env_name)
     
     for project in projects:
         if project["name"] == name:
-            env_id = client.get_default_environment_id(name)
+            env_id = client.get_environment_id(name, normalized_env, require=require_env)
+            if (normalized_env or require_env) and not env_id:
+                raise ValueError(
+                    f"Environment '{normalized_env}' not found in Dokploy project '{name}'. "
+                    "Create it in Dokploy UI before deploying."
+                )
             return project["projectId"], env_id
     
     result = client.create_project(name, description)
@@ -356,7 +442,12 @@ def ensure_project(name: str, description: str = "", host: str = None) -> tuple[
     project_id = result.get("project", {}).get("projectId") if isinstance(result, dict) else None
     if not project_id:
         raise ValueError(f"Failed to create project {name}: invalid API response")
-    env_id = client.get_default_environment_id(name)
+    env_id = client.get_environment_id(name, normalized_env, require=False)
+    if (normalized_env or require_env) and not env_id:
+        raise ValueError(
+            f"Environment '{normalized_env}' not found in Dokploy project '{name}'. "
+            "Create it in Dokploy UI before deploying."
+        )
     return project_id, env_id
 
 
@@ -366,21 +457,29 @@ def deploy_compose_service(
     compose_content: str,
     env_vars: dict[str, str],
     host: str | None = None,
+    env_name: str | None = None,
 ) -> str:
     """Deploy a compose service, creating project if needed. Returns composeId."""
     client = get_dokploy(host=host)
+    normalized_env = _normalize_env_name(env_name)
     
     # Ensure project and get environment
-    project_id, environment_id = ensure_project(project_name, f"Platform services: {project_name}", host=host)
+    project_id, environment_id = ensure_project(
+        project_name,
+        f"Platform services: {project_name}",
+        host=host,
+        env_name=normalized_env,
+        require_env=normalized_env not in (None, "production"),
+    )
     
     if not environment_id:
         raise ValueError(f"No environment found for project {project_name}")
     
     # Format env vars
-    env_str = "\n".join(f"{k}={v}" for k, v in env_vars.items())
+    env_str = "\n".join(f"{k}={v}" for k, v in env_vars.items() if v is not None)
     
     # Check if compose already exists
-    existing = client.find_compose_by_name(service_name, project_name)
+    existing = client.find_compose_by_name(service_name, project_name, env_name=normalized_env)
     
     if existing:
         compose_id = existing["composeId"]

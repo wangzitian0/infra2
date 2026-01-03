@@ -12,6 +12,7 @@ Standalone `invoke` namespaces loaded by `tools/loader.py`.
 | Namespace | Entry | Purpose |
 |-----------|-------|---------|
 | `env` | `tools/env_tool.py` | Remote env/secret SSOT operations |
+| `dokploy` | `tools/dokploy_env.py` | Dokploy project/environment helpers |
 | `local` | `tools/local_init.py` | Local CLI checks and bootstrap helpers |
 
 ## Common Conventions
@@ -38,6 +39,16 @@ invoke env.list-all --project=platform --service=postgres
 
 # Show init/env_vars from 1Password
 invoke env.init-status
+```
+
+## dokploy (project/environment)
+
+```bash
+# List environments for a project
+invoke dokploy.env-list --project=platform
+
+# Ensure staging environment exists
+invoke dokploy.env-ensure --project=platform --env=staging --description="staging env"
 ```
 
 ## local (local readiness + bootstrap)

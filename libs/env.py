@@ -26,6 +26,20 @@ def generate_password(length: int = 24) -> str:
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 
+def _validate_scope_value(label: str, value: str | None, allow_none: bool = False) -> str | None:
+    """Validate project/env/service values for consistent path mapping."""
+    if value is None:
+        if allow_none:
+            return None
+        raise ValueError(f"{label} is required")
+    trimmed = value.strip()
+    if not trimmed:
+        raise ValueError(f"{label} must not be empty")
+    if "-" in trimmed or "/" in trimmed:
+        raise ValueError(f"{label} must not include '-' or '/'")
+    return trimmed
+
+
 class OpSecrets:
     """1Password secrets for bootstrap phase.
     
@@ -122,7 +136,11 @@ class VaultSecrets:
         if not self.token:
             print("\n❌ Error: VAULT_ROOT_TOKEN not set", file=sys.stderr)
             print("Please set: export VAULT_ROOT_TOKEN=<admin-token>", file=sys.stderr)
-            print("Get from: op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token'", file=sys.stderr)
+            print(
+                "Get from: op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token' "
+                "(or /Token; item: bootstrap/vault/Root Token)",
+                file=sys.stderr,
+            )
             self._cache = {}
             return self._cache
         
@@ -188,6 +206,10 @@ def get_secrets(project: str, service: str | None = None, env: str = "production
     Returns:
         OpSecrets or VaultSecrets instance
     """
+    project = _validate_scope_value("project", project)
+    env = _validate_scope_value("env", env)
+    service = _validate_scope_value("service", service, allow_none=True)
+
     if project in ('init', 'bootstrap'):
         item = f"{project}/{service}" if service is not None else project
         return OpSecrets(item=item)
