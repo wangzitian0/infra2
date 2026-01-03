@@ -49,9 +49,10 @@ platform/{nn}.{service}/
 ## Environments
 
 - `DEPLOY_ENV` selects the target environment (default: `production`)
-- `ENV_SUFFIX` is derived automatically (`""` for production, `-staging` for staging)
-- Data paths use `${DATA_PATH}` which maps to `{data_path}${ENV_SUFFIX}`
-- Public domains use `<subdomain>${ENV_SUFFIX}.${INTERNAL_DOMAIN}`
+- `ENV_DOMAIN_SUFFIX` is derived from `DEPLOY_ENV` (`""` for production, `-<env>` for non-prod)
+- `ENV_SUFFIX` is optional and must be explicitly set when you need container/data isolation
+- Data paths use `${DATA_PATH}` (recommended) or `{data_path}${ENV_SUFFIX}` if set
+- Public domains use `<subdomain>${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`
 - Dokploy project must have an Environment named the same as `DEPLOY_ENV`
 
 Example:
@@ -160,12 +161,12 @@ Services can be protected by Authentik SSO using Traefik forward auth:
 2. Add forwardauth middleware labels in compose.yaml:
    ```yaml
    labels:
-     - "traefik.http.middlewares.{service}-auth.forwardauth.address=http://platform-authentik-server${ENV_SUFFIX}:9000/outpost.goauthentik.io/auth/traefik"
-     - "traefik.http.middlewares.{service}-auth.forwardauth.trustForwardHeader=true"
-     - "traefik.http.middlewares.{service}-auth.forwardauth.authResponseHeaders=X-authentik-username,X-authentik-groups,X-authentik-email,X-authentik-name,X-authentik-uid"
-     - "traefik.http.routers.{service}.middlewares={service}-auth@docker"
+     - "traefik.http.middlewares.{service}-auth${ENV_DOMAIN_SUFFIX}.forwardauth.address=http://platform-authentik-server${ENV_SUFFIX}:9000/outpost.goauthentik.io/auth/traefik"
+     - "traefik.http.middlewares.{service}-auth${ENV_DOMAIN_SUFFIX}.forwardauth.trustForwardHeader=true"
+     - "traefik.http.middlewares.{service}-auth${ENV_DOMAIN_SUFFIX}.forwardauth.authResponseHeaders=X-authentik-username,X-authentik-groups,X-authentik-email,X-authentik-name,X-authentik-uid"
+     - "traefik.http.routers.{service}${ENV_DOMAIN_SUFFIX}.middlewares={service}-auth${ENV_DOMAIN_SUFFIX}@docker"
    ```
-3. Configure access control: `invoke authentik.shared.create-proxy-app --name={service} --slug={service} --external-host=https://{service}${ENV_SUFFIX}.{domain} --internal-host=platform-{service}${ENV_SUFFIX} --allowed-groups=admins`
+3. Configure access control: `invoke authentik.shared.create-proxy-app --name={service} --slug={service} --external-host=https://{service}${ENV_DOMAIN_SUFFIX}.{domain} --internal-host=platform-{service}${ENV_SUFFIX} --allowed-groups=admins`
 
 See [docs/ssot/platform.sso.md](../docs/ssot/platform.sso.md) for details.
 

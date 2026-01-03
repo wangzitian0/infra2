@@ -86,7 +86,7 @@ invoke authentik.shared.setup-admin-group
 invoke authentik.shared.create-proxy-app \
   --name="Portal" \
   --slug="portal" \
-  --external-host="https://home${ENV_SUFFIX}.${INTERNAL_DOMAIN}" \
+  --external-host="https://home${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}" \
   --internal-host="platform-portal${ENV_SUFFIX}" \
   --port=8080
 
@@ -104,17 +104,17 @@ invoke authentik.shared.create-proxy-app \
 ```yaml
 labels:
   # Forward auth through Authentik
-  - "traefik.http.middlewares.portal-auth.forwardauth.address=http://platform-authentik-server${ENV_SUFFIX}:9000/outpost.goauthentik.io/auth/traefik"
-  - "traefik.http.middlewares.portal-auth.forwardauth.trustForwardHeader=true"
-  - "traefik.http.middlewares.portal-auth.forwardauth.authResponseHeaders=X-authentik-username,X-authentik-groups,X-authentik-email,X-authentik-name,X-authentik-uid"
-  - "traefik.http.routers.portal.middlewares=portal-auth@docker"
+  - "traefik.http.middlewares.portal-auth${ENV_DOMAIN_SUFFIX}.forwardauth.address=http://platform-authentik-server${ENV_SUFFIX}:9000/outpost.goauthentik.io/auth/traefik"
+  - "traefik.http.middlewares.portal-auth${ENV_DOMAIN_SUFFIX}.forwardauth.trustForwardHeader=true"
+  - "traefik.http.middlewares.portal-auth${ENV_DOMAIN_SUFFIX}.forwardauth.authResponseHeaders=X-authentik-username,X-authentik-groups,X-authentik-email,X-authentik-name,X-authentik-uid"
+  - "traefik.http.routers.portal${ENV_DOMAIN_SUFFIX}.middlewares=portal-auth${ENV_DOMAIN_SUFFIX}@docker"
 ```
 
 ### SOP-003: 新增 OIDC 应用
 
 - **触发条件**: 应用原生支持 OIDC
 - **步骤**:
-    1. 登录 Authentik UI: `https://sso${ENV_SUFFIX}.${INTERNAL_DOMAIN}`
+    1. 登录 Authentik UI: `https://sso${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`
     2. 创建 **Provider (OAuth2/OIDC)**，记录 Client ID/Secret
     3. 创建 **Application** 并绑定 Provider
     4. 将 Client Secret 写入 Vault：
@@ -136,7 +136,7 @@ labels:
 ## 5. 访问流程
 
 ```
-用户访问 https://home${ENV_SUFFIX}.${INTERNAL_DOMAIN}
+用户访问 https://home${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
          │
          ▼
 ┌────────────────────┐
@@ -192,7 +192,7 @@ labels:
 5. **验证**: 确认 Dokploy UI 中该服务的 Domain 字段为空
 
 **域名分层**：
-- 公网域名（用户访问）：`home${ENV_SUFFIX}.${INTERNAL_DOMAIN}` → Cloudflare → Traefik → ForwardAuth → Portal
+- 公网域名（用户访问）：`home${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}` → Cloudflare → Traefik → ForwardAuth → Portal
 - 容器域名（内部通信）：`platform-portal${ENV_SUFFIX}:8080` ← Traefik ← `platform-authentik-server${ENV_SUFFIX}:9000`
 
 ---
@@ -207,8 +207,8 @@ invoke authentik.shared.status
 invoke authentik.shared.list-apps
 
 # 3. 测试未登录访问（应重定向）
-curl -I https://home${ENV_SUFFIX}.${INTERNAL_DOMAIN}
-# Expected: 302 → sso${ENV_SUFFIX}.zitian.party
+curl -I https://home${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
+# Expected: 302 → sso${ENV_DOMAIN_SUFFIX}.zitian.party
 
 # 4. 测试已登录访问
 # 浏览器登录后，检查 Network 面板

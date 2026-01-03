@@ -11,10 +11,10 @@ SigNoz is deployed in two parts:
 ## Prerequisites
 
 - Vault must be accessible
-- DNS configured for `signoz${ENV_SUFFIX}.${INTERNAL_DOMAIN}`
+- DNS configured for `signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`
 - Ports `${OTEL_GRPC_PORT}`, `${OTEL_HTTP_PORT}` available for OTLP (staging defaults: 14317/14318)
 
-> `ENV_SUFFIX` 生产为空，staging 为 `-staging`。
+> `ENV_SUFFIX` 生产为空；staging 请在 Dokploy Environment 显式设为 `-staging`（避免容器冲突）。
 
 ## Quick Deploy
 

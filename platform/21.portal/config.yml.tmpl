@@ -22,7 +22,7 @@ links:
     target: "_blank"
   - name: "Logout"
     icon: "fas fa-sign-out-alt"
-    url: "https://sso{{ENV_SUFFIX}}.{{INTERNAL_DOMAIN}}/application/o/portal/end-session/"
+    url: "https://sso{{ENV_DOMAIN_SUFFIX}}.{{INTERNAL_DOMAIN}}/application/o/portal/end-session/"
     target: "_self"
 
 services:
@@ -45,7 +45,7 @@ services:
         icon: "fas fa-id-badge"
         subtitle: "Login and SSO"
         tag: "sso"
-        url: "https://sso{{ENV_SUFFIX}}.{{INTERNAL_DOMAIN}}"
+        url: "https://sso{{ENV_DOMAIN_SUFFIX}}.{{INTERNAL_DOMAIN}}"
         target: "_blank"
       - name: "1Password Connect"
         icon: "fas fa-key"

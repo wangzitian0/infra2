@@ -36,7 +36,7 @@ class PortalDeployer(Deployer):
         if not internal_domain:
             error("Missing INTERNAL_DOMAIN")
             return None
-        suffix = env.get("ENV_SUFFIX", "")
+        domain_suffix = env.get("ENV_DOMAIN_SUFFIX", "")
 
         template_path = Path(__file__).with_name("config.yml.tmpl")
         if not template_path.exists():
@@ -45,7 +45,7 @@ class PortalDeployer(Deployer):
 
         config_content = template_path.read_text()
         config_content = config_content.replace("{{INTERNAL_DOMAIN}}", internal_domain)
-        config_content = config_content.replace("{{ENV_SUFFIX}}", suffix)
+        config_content = config_content.replace("{{ENV_DOMAIN_SUFFIX}}", domain_suffix)
         data_path = cls.data_path_for_env(env)
         config_path = f"{data_path}/config.yml"
         host = env.get("VPS_HOST")
@@ -75,7 +75,7 @@ class PortalDeployer(Deployer):
             if not result.ok:
                 return None
 
-            portal_url = f"https://home{suffix}.{internal_domain}"
+            portal_url = f"https://home{domain_suffix}.{internal_domain}"
             env_vars("PORTAL INFO", {
                 "PORTAL_URL": portal_url,
                 "CONFIG_PATH": config_path,

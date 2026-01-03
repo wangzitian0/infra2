@@ -12,7 +12,7 @@
 | **Service Directory** | `{nn}.{service}` | `01.postgres`, `10.authentik` |
 | **Dokploy App** | `<service>` | `postgres`, `redis` |
 | **Container** | `<scope>-<service>[-<role>]${ENV_SUFFIX}` | `platform-postgres${ENV_SUFFIX}`, `authentik-server${ENV_SUFFIX}` |
-| **Domain** | `<service>${ENV_SUFFIX}.<internal_domain>` | `sso${ENV_SUFFIX}.${INTERNAL_DOMAIN}` |
+| **Domain** | `<service>${ENV_DOMAIN_SUFFIX}.<internal_domain>` | `sso${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}` |
 
 ### 标准标签 (Tagging)
 - 对外服务必须配置 Traefik labels（`traefik.enable`, router rule, entrypoints, tls）。

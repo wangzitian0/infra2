@@ -63,8 +63,9 @@ flowchart TB
 ### 2.1 环境选择
 
 - **DEPLOY_ENV**: 目标环境（默认 `production`）
-- **ENV_SUFFIX**: `""`（production）或 `-<env>`（如 `-staging`）
-- **DATA_PATH**: `{data_path}${ENV_SUFFIX}`（如 `/data/platform/postgres-staging`）
+- **ENV_DOMAIN_SUFFIX**: 域名后缀（production 为空，非生产为 `-<env>`）
+- **ENV_SUFFIX**: 可选，仅在需要容器/数据路径隔离时显式设置
+- **DATA_PATH**: 优先显式设置；也可用 `{data_path}${ENV_SUFFIX}`（如 `/data/platform/postgres-staging`）
 - `ENV` 注入 vault-agent，用于 `secrets.ctmpl` 动态路径
 - **Dokploy 环境**: 必须存在与 `DEPLOY_ENV` 同名的 Environment（缺失会阻止部署）
 

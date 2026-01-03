@@ -37,7 +37,7 @@ Open-source observability platform for logs, metrics, and traces (OpenTelemetry-
 └──────────────────┘
 
 ┌──────────────────┐
-│ frontend         │ ──ui──> https://signoz${ENV_SUFFIX}.${INTERNAL_DOMAIN}
+│ frontend         │ ──ui──> https://signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
 │                  │ ──api──> query-service:8080
 └──────────────────┘
 ```
@@ -68,7 +68,7 @@ invoke signoz.status
 
 **URL**: `https://signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`
 
-Automatically configured via Traefik labels in compose.yaml.
+Configured via Dokploy domain settings in `deploy.py` (compose.yaml only enables Traefik).
 
 ## Data Path
 

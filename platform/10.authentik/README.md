@@ -78,7 +78,7 @@ path "secret/data/platform/{{env}}/authentik" {
 
 ## Domain
 
-**URL**: `https://sso${ENV_SUFFIX}.${INTERNAL_DOMAIN}`
+**URL**: `https://sso${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`
 
 Configured via Traefik labels in `compose.yaml`.
 
@@ -101,7 +101,7 @@ Configured via Traefik labels in `compose.yaml`.
 
 ## Initial Setup
 
-1. Visit `https://sso${ENV_SUFFIX}.${INTERNAL_DOMAIN}/if/flow/initial-setup/`
+1. Visit `https://sso${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}/if/flow/initial-setup/`
 2. Create admin user
 3. Configure applications and flows
 
