@@ -98,6 +98,9 @@ Configured via Traefik labels in `compose.yaml`.
 - **worker**: Background tasks (`platform-authentik-worker${ENV_SUFFIX}`)
   - No exposed ports
   - Health: `ak healthcheck`
+- **token-init**: One-time root token creation (`platform-authentik-token-init${ENV_SUFFIX}`)
+  - Runs `init-token.sh` via `/bin/sh` after server/worker are healthy
+  - Stores `root_token` in Vault when `VAULT_INIT_TOKEN` is provided
 
 ## Initial Setup
 

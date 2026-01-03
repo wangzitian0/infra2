@@ -3,7 +3,6 @@
 # Creates admin API token and stores as 'root_token' in Vault
 
 set -e
-set -o pipefail
 
 # Wait for Authentik to be ready
 echo "Waiting for Authentik to be ready..."
