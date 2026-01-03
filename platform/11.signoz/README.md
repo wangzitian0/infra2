@@ -14,7 +14,7 @@ Open-source observability platform for logs, metrics, and traces (OpenTelemetry-
 | File | Purpose |
 |------|---------|
 | `compose.yaml` | Docker Compose (schema-migrator + query-service + frontend + otel-collector) |
-| `otel-collector-config.yaml` | OpenTelemetry Collector configuration |
+| `otel-collector-config.yaml` | OpenTelemetry Collector config template (rendered to `${DATA_PATH}/otel-collector-config.yaml`) |
 | `prometheus.yml` | Prometheus config for query-service |
 | `deploy.py` | SigNozDeployer |
 | `shared_tasks.py` | Health check and trace testing |
@@ -63,6 +63,7 @@ invoke signoz.status
 **pre-compose** will:
 1. Create data directory (`${DATA_PATH}/data`)
 2. Set permissions (755)
+3. Render OTEL config to `${DATA_PATH}/otel-collector-config.yaml`
 
 ## Domain
 
@@ -74,6 +75,7 @@ Configured via Dokploy domain settings in `deploy.py` (compose.yaml only enables
 
 `${DATA_PATH}` (chmod 755; staging uses `/data/platform/signoz-staging`)
 - `data/` - SQLite database for metadata
+- `otel-collector-config.yaml` - Rendered OTEL collector config (env suffix applied)
 
 ## Containers
 

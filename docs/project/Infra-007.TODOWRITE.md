@@ -5,6 +5,8 @@
 
 ## Artifacts & Notes
 
+- OTEL collector config now rendered to `${DATA_PATH}/otel-collector-config.yaml` during `signoz.pre-compose` to avoid `${ENV_SUFFIX}` placeholders in runtime config.
+
 ### Official Compose Analysis
 
 **Downloaded**: `platform/signoz-official-compose.yaml`
