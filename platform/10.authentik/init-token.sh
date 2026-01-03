@@ -4,9 +4,27 @@
 
 set -e
 
-# Wait for Authentik to be ready
-echo "Waiting for Authentik to be ready..."
-until ak healthcheck > /dev/null 2>&1; do
+# Wait for Authentik server to be ready (token-init container has no local API)
+AUTHENTIK_SERVER_HOST="platform-authentik-server${ENV_SUFFIX}:9000"
+export AUTHENTIK_SERVER_HOST
+echo "Waiting for Authentik server to be ready..."
+until python - <<'PY'
+import os
+import sys
+import urllib.request
+
+host = os.environ.get("AUTHENTIK_SERVER_HOST")
+if not host:
+    sys.exit(1)
+
+url = f"http://{host}/-/health/live/"
+try:
+    with urllib.request.urlopen(url, timeout=3) as resp:
+        sys.exit(0 if resp.status == 200 else 1)
+except Exception:
+    sys.exit(1)
+PY
+do
   sleep 5
 done
 
