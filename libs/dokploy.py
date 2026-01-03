@@ -216,7 +216,7 @@ class DokployClient:
         return None
 
     def get_environment_id(self, project_name: str, env_name: str | None = None, require: bool = False) -> str | None:
-        """Get environment ID by name (falls back to default only when env_name is omitted)."""
+        """Get environment ID by name (falls back to default when env_name is omitted or production)."""
         target = _normalize_env_name(env_name)
         projects = self.list_projects()
         for project in projects:
@@ -226,7 +226,9 @@ class DokployClient:
                 for env in project.get("environments", []):
                     if _normalize_env_name(env.get("name")) == target:
                         return env.get("environmentId")
-                return None
+                # For production, allow fallback to default environment to avoid breaking existing setups.
+                if target != "production":
+                    return None
             for env in project.get("environments", []):
                 if env.get("isDefault"):
                     return env.get("environmentId")
