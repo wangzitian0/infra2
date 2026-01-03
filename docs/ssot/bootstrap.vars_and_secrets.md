@@ -46,7 +46,7 @@ Bootstrap 依赖 1Password CLI (`op`)，使用 **`Infra2`** vault 存储所有�
 | `bootstrap/vault/Root Token` | Vault root token | 机器读 | Vault 初始化时写入 |
 | `bootstrap/vault/Unseal Keys` | Vault unseal keys (5 keys) | 机器读 | Vault 初始化时写入 |
 | `bootstrap/dokploy/admin` | Dokploy Web UI 密码 | **Web UI** | 手动创建 |
-| `platform/minio/admin` | MinIO Console 密码 | **Web UI** | 部署时写入 |
+| `platform/minio/admin` (`-staging` 可选) | MinIO Console 密码 | **Web UI** | 部署时写入 |
 | `platform/authentik/admin` | Authentik Web UI 密码 | **Web UI** | 从 Vault 复制 |
 
 > **注意**: `bootstrap/vault/Unseal Keys` 是 unsealer 自动解封 Vault 的关键，必须包含 `Unseal Key 1-5` 字段。
@@ -106,7 +106,7 @@ invoke local.bootstrap  # 校验 1Password 的 init/env_vars（不生成本地 .
 **核心原则**：应用容器不直接持久化密钥，运行时由 `vault-agent` 读取 Vault 并写入 `tmpfs`。
 
 步骤：
-1. **准备 Vault 密钥**：写入 `secret/data/platform/production/<service>`（KV v2）。
+1. **准备 Vault 密钥**：写入 `secret/data/platform/<env>/<service>`（KV v2）。
 2. **生成 Token**：`export VAULT_ROOT_TOKEN=<token> && invoke vault.setup-tokens`。
 3. **注入运行时变量**：Dokploy 服务环境变量里设置 `VAULT_APP_TOKEN`（由 setup-tokens 自动注入）。
 4. **Compose 接入**：增加 `vault-agent` sidecar，读取 Vault 并渲染到 `/secrets/.env`。
@@ -123,7 +123,7 @@ Platform 服务的 Web UI 密码（如 Authentik）虽然机器生成存储在 V
 
 ```bash
 # 从 Vault 读取密码并写入 1Password
-vault kv get -field=bootstrap_password secret/platform/production/authentik | \
+vault kv get -field=bootstrap_password secret/platform/<env>/authentik | \
   op item create --category=login --title="platform/authentik/admin" \
     --vault=Infra2 "username[text]=akadmin" "password[password]=-"
 ```
@@ -187,7 +187,7 @@ init = OpSecrets()
 seed = init.get_all()
 
 # Vault secrets (platform service, admin only)
-secrets = get_secrets(project='platform', env='production', service='postgres')
+secrets = get_secrets(project='platform', env='<env>', service='postgres')
 password = secrets.get('POSTGRES_PASSWORD')
 
 # 幂等生成密钥：不存在就生成并写入

@@ -1,7 +1,7 @@
 services:
   vault-agent:
     image: hashicorp/vault:1.15
-    container_name: platform-authentik-vault-agent
+    container_name: platform-authentik-vault-agent${ENV_SUFFIX}
     restart: always
     entrypoint:
       - sh
@@ -12,6 +12,7 @@ services:
     environment:
       VAULT_ADDR: ${VAULT_ADDR}
       VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:-}
+      ENV: ${ENV}
     volumes:
       - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
       - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
@@ -21,7 +22,7 @@ services:
 
   server:
     image: ghcr.io/goauthentik/server:2024.12.0
-    container_name: platform-authentik-server
+    container_name: platform-authentik-server${ENV_SUFFIX}
     restart: unless-stopped
     depends_on:
       - vault-agent
@@ -39,15 +40,15 @@ services:
         set +a
         exec ak server
     environment:
-      AUTHENTIK_REDIS__HOST: platform-redis
-      AUTHENTIK_POSTGRESQL__HOST: platform-postgres
+      AUTHENTIK_REDIS__HOST: platform-redis${ENV_SUFFIX}
+      AUTHENTIK_POSTGRESQL__HOST: platform-postgres${ENV_SUFFIX}
       AUTHENTIK_POSTGRESQL__USER: postgres
       AUTHENTIK_POSTGRESQL__NAME: authentik
     volumes:
       - secrets:/secrets:ro
-      - /data/platform/authentik/media:/media
-      - /data/platform/authentik/certs:/certs
-      - /data/platform/authentik/custom-templates:/templates
+      - ${DATA_PATH}/media:/media
+      - ${DATA_PATH}/certs:/certs
+      - ${DATA_PATH}/custom-templates:/templates
     networks:
       - dokploy-network
     labels:
@@ -60,7 +61,7 @@ services:
 
   worker:
     image: ghcr.io/goauthentik/server:2024.12.0
-    container_name: platform-authentik-worker
+    container_name: platform-authentik-worker${ENV_SUFFIX}
     restart: unless-stopped
     depends_on:
       - vault-agent
@@ -78,15 +79,15 @@ services:
         set +a
         exec ak worker
     environment:
-      AUTHENTIK_REDIS__HOST: platform-redis
-      AUTHENTIK_POSTGRESQL__HOST: platform-postgres
+      AUTHENTIK_REDIS__HOST: platform-redis${ENV_SUFFIX}
+      AUTHENTIK_POSTGRESQL__HOST: platform-postgres${ENV_SUFFIX}
       AUTHENTIK_POSTGRESQL__USER: postgres
       AUTHENTIK_POSTGRESQL__NAME: authentik
     volumes:
       - secrets:/secrets:ro
-      - /data/platform/authentik/media:/media
-      - /data/platform/authentik/custom-templates:/templates
-      - /data/platform/authentik/certs:/certs
+      - ${DATA_PATH}/media:/media
+      - ${DATA_PATH}/custom-templates:/templates
+      - ${DATA_PATH}/certs:/certs
     networks:
       - dokploy-network
     healthcheck:
@@ -98,7 +99,7 @@ services:
   # One-time token initialization
   token-init:
     image: ghcr.io/goauthentik/server:2024.12.0
-    container_name: platform-authentik-token-init
+    container_name: platform-authentik-token-init${ENV_SUFFIX}
     restart: "no"
     depends_on:
       server:
@@ -114,12 +115,13 @@ services:
         set +a
         /init-token.sh
     environment:
-      AUTHENTIK_REDIS__HOST: platform-redis
-      AUTHENTIK_POSTGRESQL__HOST: platform-postgres
+      AUTHENTIK_REDIS__HOST: platform-redis${ENV_SUFFIX}
+      AUTHENTIK_POSTGRESQL__HOST: platform-postgres${ENV_SUFFIX}
       AUTHENTIK_POSTGRESQL__USER: postgres
       AUTHENTIK_POSTGRESQL__NAME: authentik
       VAULT_INIT_TOKEN: ${VAULT_INIT_TOKEN:-}
       VAULT_INIT_ADDR: ${VAULT_ADDR}
+      ENV: ${ENV}
     volumes:
       - secrets:/secrets:ro
       - ./init-token.sh:/init-token.sh:ro

@@ -1,7 +1,7 @@
 services:
   vault-agent:
     image: hashicorp/vault:1.15
-    container_name: platform-clickhouse-vault-agent
+    container_name: platform-clickhouse-vault-agent${ENV_SUFFIX}
     restart: always
     entrypoint:
       - sh
@@ -12,6 +12,7 @@ services:
     environment:
       VAULT_ADDR: ${VAULT_ADDR:-https://vault.zitian.party}
       VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:-}
+      ENV: ${ENV}
     volumes:
       - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
       - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
@@ -21,7 +22,7 @@ services:
 
   init-clickhouse:
     image: clickhouse/clickhouse-server:25.5.6
-    container_name: platform-clickhouse-init
+    container_name: platform-clickhouse-init${ENV_SUFFIX}
     restart: on-failure
     command:
       - bash
@@ -38,13 +39,13 @@ services:
         chmod +x /var/lib/clickhouse/user_scripts/histogramQuantile
         echo "Histogram binary installed successfully"
     volumes:
-      - /data/platform/clickhouse/user_scripts:/var/lib/clickhouse/user_scripts
+      - ${DATA_PATH}/user_scripts:/var/lib/clickhouse/user_scripts
     networks:
       - dokploy-network
 
   zookeeper:
     image: bitnami/zookeeper:3.9
-    container_name: platform-clickhouse-zookeeper
+    container_name: platform-clickhouse-zookeeper${ENV_SUFFIX}
     restart: unless-stopped
     user: root
     environment:
@@ -52,7 +53,7 @@ services:
       - ALLOW_ANONYMOUS_LOGIN=yes
       - ZOO_AUTOPURGE_INTERVAL=1
     volumes:
-      - /data/platform/clickhouse/zookeeper:/bitnami/zookeeper
+      - ${DATA_PATH}/zookeeper:/bitnami/zookeeper
     networks:
       - dokploy-network
     healthcheck:
@@ -63,7 +64,7 @@ services:
 
   clickhouse:
     image: clickhouse/clickhouse-server:25.5.6
-    container_name: platform-clickhouse
+    container_name: platform-clickhouse${ENV_SUFFIX}
     restart: unless-stopped
     depends_on:
       vault-agent:
@@ -91,10 +92,10 @@ services:
       - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
     volumes:
       - secrets:/secrets:ro
-      - /data/platform/clickhouse/data:/var/lib/clickhouse
-      - /data/platform/clickhouse/logs:/var/log/clickhouse-server
-      - /data/platform/clickhouse/user_scripts:/var/lib/clickhouse/user_scripts:ro
-      - ./config.xml:/etc/clickhouse-server/config.xml:ro
+      - ${DATA_PATH}/data:/var/lib/clickhouse
+      - ${DATA_PATH}/logs:/var/log/clickhouse-server
+      - ${DATA_PATH}/user_scripts:/var/lib/clickhouse/user_scripts:ro
+      - ${DATA_PATH}/config.xml:/etc/clickhouse-server/config.xml:ro
       - ./users.xml:/etc/clickhouse-server/users.xml:ro
     networks:
       - dokploy-network

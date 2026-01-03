@@ -1,3 +1,3 @@
-path "secret/data/platform/production/clickhouse" {
+path "secret/data/platform/{{env}}/clickhouse" {
   capabilities = ["read", "list"]
 }

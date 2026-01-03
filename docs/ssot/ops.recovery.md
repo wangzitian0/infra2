@@ -82,7 +82,7 @@ graph TD
     2. 恢复数据：
        ```bash
        ssh root@<VPS_HOST>
-       docker exec -i platform-postgres psql -U postgres < /data/backups/latest.sql
+       docker exec -i platform-postgres${ENV_SUFFIX} psql -U postgres < /data/backups/latest.sql
        ```
     3. 启动服务并验证健康。
 

@@ -68,6 +68,7 @@ db_pass = config.get_secret("POSTGRES_PASSWORD")
 - Public domains follow `{subdomain}{ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}` where `ENV_DOMAIN_SUFFIX` is `""` for production and `"-<env>"` for non-prod; `ENV` must not include `-` or `/` (use `_`, which is converted to `-` in domains).
 - `project`/`env`/`service` identifiers must not include `-` or `/` to keep `{project}/{env}/{service}` paths unambiguous.
 - `ENV_SUFFIX` is opt-in and only used when explicitly set.
+- `check_service()` uses the `CONTAINERS` mapping; SigNoz runs as `platform-signoz`.
 - Non-production requires `DATA_PATH` or `ENV_SUFFIX` unless `ALLOW_SHARED_DATA_PATH=1` is set.
 - `DokployClient.update_compose_env()` parses basic `KEY=VALUE` lines only (no quoted/escaped/multiline values).
 - Dokploy API errors include method + endpoint context via `httpx` exceptions.

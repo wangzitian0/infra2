@@ -90,8 +90,8 @@ invoke redis.setup
 invoke authentik.setup
 
 # 3. Get Admin Credentials
-vault kv get -field=bootstrap_password secret/platform/production/authentik
-vault kv get -field=bootstrap_email secret/platform/production/authentik
+vault kv get -field=bootstrap_password secret/platform/<env>/authentik
+vault kv get -field=bootstrap_email secret/platform/<env>/authentik
 ```
 
 ## Verification
@@ -110,7 +110,7 @@ vault kv get -field=bootstrap_email secret/platform/production/authentik
 - Username: `akadmin`
 - Email: Stored in Vault & 1Password
 - Password: Stored in Vault & 1Password
-- Vault path: `secret/platform/production/authentik` (keys: `bootstrap_email`, `bootstrap_password`)
+- Vault path: `secret/platform/<env>/authentik` (keys: `bootstrap_email`, `bootstrap_password`)
 - 1Password: `platform/authentik/admin`
 
 ## TODOWRITE

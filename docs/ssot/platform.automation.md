@@ -60,6 +60,15 @@ flowchart TB
     RD --> AUTH
 ```
 
+### 2.1 环境选择
+
+- **DEPLOY_ENV**: 目标环境（默认 `production`）
+- **ENV_DOMAIN_SUFFIX**: 域名后缀（production 为空，非生产为 `-<env>`）
+- **ENV_SUFFIX**: 可选，仅在需要容器/数据路径隔离时显式设置
+- **DATA_PATH**: 优先显式设置；也可用 `{data_path}${ENV_SUFFIX}`（如 `/data/platform/postgres-staging`）
+- `ENV` 注入 vault-agent，用于 `secrets.ctmpl` 动态路径
+- **Dokploy 环境**: 必须存在与 `DEPLOY_ENV` 同名的 Environment（缺失会阻止部署）
+
 ### 目录结构
 
 ```
@@ -115,6 +124,9 @@ invoke local.phase
 # 完整部署
 invoke postgres.setup
 
+# Staging
+DEPLOY_ENV=staging invoke postgres.setup
+
 # 分步部署
 invoke postgres.pre-compose   # 创建目录、生成密码
 invoke postgres.composing      # 通过 Dokploy API 部署
@@ -135,6 +147,7 @@ invoke authentik.shared.status
 # 读取/设置密钥
 invoke env.get KEY --project=platform --env=production --service=postgres
 invoke env.set KEY=VALUE --project=platform --env=production --service=postgres
+invoke env.get KEY --project=platform --env=staging --service=postgres
 
 # 预览（masked）
 invoke env.list-all --project=platform --service=postgres
@@ -158,7 +171,7 @@ invoke dokploy.env-ensure --project=platform --env=staging --description="stagin
 |----------|----------|
 | **所有模块加载** | `invoke --list` 无报错 |
 | **服务健康** | `invoke {service}.shared.status` |
-| **Vault 读写** | `invoke env.get POSTGRES_PASSWORD --project=platform --env=production --service=postgres` |
+| **Vault 读写** | `invoke env.get POSTGRES_PASSWORD --project=platform --env=<env> --service=postgres` |
 
 ---
 

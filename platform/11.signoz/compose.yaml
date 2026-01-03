@@ -1,16 +1,16 @@
 services:
   schema-migrator:
     image: signoz/signoz-schema-migrator:v0.129.12
-    container_name: platform-signoz-schema-migrator
+    container_name: platform-signoz-schema-migrator${ENV_SUFFIX}
     restart: "no"
-    command: ["sync", "--dsn", "tcp://default@platform-clickhouse:9000"]
+    command: ["sync", "--dsn", "tcp://default@platform-clickhouse${ENV_SUFFIX}:9000"]
     networks:
       - dokploy-network
 
   signoz:
     image: signoz/signoz:v0.105.1
-    container_name: platform-signoz
-    hostname: signoz
+    container_name: platform-signoz${ENV_SUFFIX}
+    hostname: signoz${ENV_SUFFIX}
     restart: unless-stopped
     depends_on:
       schema-migrator:
@@ -19,7 +19,7 @@ services:
       - --config=/root/config/prometheus.yml
     environment:
       - SIGNOZ_ALERTMANAGER_PROVIDER=signoz
-      - SIGNOZ_TELEMETRYSTORE_CLICKHOUSE_DSN=tcp://default@platform-clickhouse:9000
+      - SIGNOZ_TELEMETRYSTORE_CLICKHOUSE_DSN=tcp://default@platform-clickhouse${ENV_SUFFIX}:9000
       - SIGNOZ_SQLSTORE_SQLITE_PATH=/var/lib/signoz/signoz.db
       # JWT secret for authentication. MUST be set via environment variable for production.
       - SIGNOZ_TOKENIZER_JWT_SECRET=${SIGNOZ_JWT_SECRET:?SIGNOZ_JWT_SECRET must be set to a strong random value}
@@ -31,12 +31,12 @@ services:
       - DOT_METRICS_ENABLED=true
     volumes:
       - ./prometheus.yml:/root/config/prometheus.yml:ro
-      - /data/platform/signoz/data:/var/lib/signoz
+      - ${DATA_PATH}/data:/var/lib/signoz
     networks:
       dokploy-network:
         aliases:
-          - signoz
-          - signoz-query-service
+          - signoz${ENV_SUFFIX}
+          - signoz-query-service${ENV_SUFFIX}
     healthcheck:
       test: ["CMD-SHELL", "wget --spider -q localhost:8080/api/v1/health || exit 1"]
       interval: 30s
@@ -48,7 +48,7 @@ services:
 
   otel-collector:
     image: signoz/signoz-otel-collector:v0.129.12
-    container_name: platform-signoz-otel-collector
+    container_name: platform-signoz-otel-collector${ENV_SUFFIX}
     restart: unless-stopped
     depends_on:
       signoz:
@@ -60,6 +60,7 @@ services:
       - OTEL_RESOURCE_ATTRIBUTES=host.name=signoz-collector,os.type=linux
       - LOW_CARDINAL_EXCEPTION_GROUPING=false
       - SIGNOZ_COMPONENT=otel-collector
+      - ENV_SUFFIX=${ENV_SUFFIX}
     volumes:
       - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
     expose:

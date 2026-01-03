@@ -60,21 +60,24 @@ class MinioDeployer(Deployer):
             return None
         
         # Store in 1Password (for Web Console login). Non-blocking: deployment continues if fails.
-        if not cls._sync_to_1password(root_user, root_password):
+        op_item = cls.OP_ITEM
+        if e.get("ENV") != "production":
+            op_item = f"{cls.OP_ITEM}-{e.get('ENV')}"
+        if not cls._sync_to_1password(root_user, root_password, op_item):
             warning(
                 "1Password sync failed; continuing deployment. Web Console credentials may be "
                 "out of sync until 1Password is updated."
             )
         
         # Return VAULT_ADDR for vault-init pattern
-        result = {
-            "VAULT_ADDR": e.get("VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}"),
-        }
+        result = cls.compose_env_base(e)
+        result["VAULT_ADDR"] = e.get("VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}")
         
         env_vars("DOKPLOY ENV (vault-init)", result)
         success("pre_compose complete")
-        info(f"MinIO Console: https://{cls.subdomain}.{e.get('INTERNAL_DOMAIN')}")
-        info(f"MinIO S3 API: https://s3.{e.get('INTERNAL_DOMAIN')}")
+        domain_suffix = e.get("ENV_DOMAIN_SUFFIX", "")
+        info(f"MinIO Console: https://{cls.subdomain}{domain_suffix}.{e.get('INTERNAL_DOMAIN')}")
+        info(f"MinIO S3 API: https://s3{domain_suffix}.{e.get('INTERNAL_DOMAIN')}")
         info(f"Login: {root_user} / (password in 1Password)")
         return result
     
@@ -102,13 +105,14 @@ class MinioDeployer(Deployer):
         
         host = f"cloud.{domain}"
         client = get_dokploy(host=host)
+        domain_suffix = e.get("ENV_DOMAIN_SUFFIX", "")
         
         desired_domains = [
-            {"host": f"minio.{domain}", "port": 9001, "https": True},  # Console
-            {"host": f"s3.{domain}", "port": 9000, "https": True},     # S3 API
+            {"host": f"minio{domain_suffix}.{domain}", "port": 9001, "https": True},  # Console
+            {"host": f"s3{domain_suffix}.{domain}", "port": 9000, "https": True},     # S3 API
         ]
         
-        info(f"Ensuring domains: minio.{domain}->9001(Console), s3.{domain}->9000(API)")
+        info(f"Ensuring domains: minio{domain_suffix}.{domain}->9001(Console), s3{domain_suffix}.{domain}->9000(API)")
         result = client.ensure_domains(
             compose_id=compose_id,
             desired_domains=desired_domains,
@@ -135,19 +139,19 @@ class MinioDeployer(Deployer):
             info(f"Domains already configured (skipped={result['skipped']})")
     
     @classmethod
-    def _sync_to_1password(cls, username: str, password: str) -> bool:
+    def _sync_to_1password(cls, username: str, password: str, op_item: str) -> bool:
         """Sync root credentials to 1Password for Web Console access."""
         try:
             # Check if item exists
             check_result = subprocess.run(
-                ['op', 'item', 'get', cls.OP_ITEM, '--vault=Infra2', '--format=json'],
+                ['op', 'item', 'get', op_item, '--vault=Infra2', '--format=json'],
                 capture_output=True, text=True
             )
             
             if check_result.returncode == 0:
                 # Update existing item
                 subprocess.run(
-                    ['op', 'item', 'edit', cls.OP_ITEM, '--vault=Infra2',
+                    ['op', 'item', 'edit', op_item, '--vault=Infra2',
                      f'username={username}', f'password={password}'],
                     capture_output=True, check=True
                 )
@@ -155,7 +159,7 @@ class MinioDeployer(Deployer):
             else:
                 # Create new item
                 subprocess.run(
-                    ['op', 'item', 'create', '--category=login', f'--title={cls.OP_ITEM}',
+                    ['op', 'item', 'create', '--category=login', f'--title={op_item}',
                      '--vault=Infra2', f'username={username}', f'password={password}'],
                     capture_output=True, check=True
                 )
@@ -174,4 +178,3 @@ if shared_tasks:
     composing = _tasks["composing"]
     post_compose = _tasks["post_compose"]
     setup = _tasks["setup"]
-

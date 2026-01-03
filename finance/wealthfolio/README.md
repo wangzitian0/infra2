@@ -37,6 +37,10 @@ invoke wealthfolio.status
 | `WF_DB_PATH` | Database path (/data/wealthfolio.db) |
 | `WF_CORS_ALLOW_ORIGINS` | Allowed CORS origins (https://wealth.${INTERNAL_DOMAIN}) |
 
+## Notes
+
+- Healthcheck uses `127.0.0.1` to avoid BusyBox `wget` resolving `localhost` to IPv6 and failing.
+
 ## References
 
 - [Wealthfolio GitHub](https://github.com/afadil/wealthfolio)

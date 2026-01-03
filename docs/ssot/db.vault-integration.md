@@ -47,11 +47,11 @@ graph TD
 - **步骤**:
     1. 在 Vault 中写入敏感凭据（示例）：
        ```bash
-       vault kv put secret/platform/production/<app> PG_USER=... PG_PASS=... PG_DB=...
+       vault kv put secret/platform/<env>/<app> PG_USER=... PG_PASS=... PG_DB=...
        ```
     2. 使用 env_tool 验证已写入：
        ```bash
-       invoke env.get PG_PASS --project=platform --env=production --service=<service>
+       invoke env.get PG_PASS --project=platform --env=<env> --service=<service>
        ```
     3. 在 Dokploy App 环境变量中设置非敏感值（如 `PG_HOST`, `PG_PORT`），并注入 `PG_USER/PG_PASS/PG_DB`。
 
@@ -69,7 +69,7 @@ graph TD
 
 | 行为描述 | 验证方式 | 状态 |
 |----------|----------|------|
-| **Vault 读写验证** | `invoke env.get PG_PASS --project=platform --env=production --service=<service>` | ✅ Manual |
+| **Vault 读写验证** | `invoke env.get PG_PASS --project=platform --env=<env> --service=<service>` | ✅ Manual |
 
 ---
 

@@ -1,7 +1,7 @@
 """Shared tasks for SigNoz"""
 import re
 from invoke import task
-from libs.common import get_env
+from libs.common import check_service, get_env, service_domain, with_env_suffix
 
 # Delay before querying ClickHouse to allow trace ingestion
 CLICKHOUSE_INGESTION_DELAY_SECONDS = 2
@@ -17,33 +17,25 @@ def _sanitize_service_name(name: str) -> str:
 
 @task
 def status(c):
-    """Check SigNoz and OTEL collector health"""
+    """Check SigNoz and OTEL collector health."""
     from libs.console import success, error
-    
+
     env = get_env()
     host = env["VPS_HOST"]
-    
-    # Check SigNoz query service
-    result = c.run(
-        f"ssh root@{host} 'docker exec platform-signoz wget --spider -q localhost:8080/api/v1/health'",
-        warn=True, hide=True
-    )
-    if result.ok:
-        success("signoz: ready")
-    else:
-        error("signoz: not ready")
-    
+    signoz_result = check_service(c, "signoz", "wget --spider -q localhost:8080/api/v1/health")
+
     # Check OTEL collector via Docker network (container has no wget/curl)
+    collector = with_env_suffix("platform-signoz-otel-collector", env)
     result2 = c.run(
-        f"ssh root@{host} 'docker run --rm --network=dokploy-network curlimages/curl:latest curl -s http://platform-signoz-otel-collector:13133 -o /dev/null -w \"%{{http_code}}\"'",
+        f"ssh root@{host} 'docker run --rm --network=dokploy-network curlimages/curl:latest curl -s http://{collector}:13133 -o /dev/null -w \"%{{http_code}}\"'",
         warn=True, hide=True
     )
     if result2.ok and "200" in result2.stdout:
         success("otel_collector: ready")
     else:
         error("otel_collector: not ready")
-    
-    return {"signoz": result.ok, "otel_collector": result2.ok and "200" in result2.stdout}
+
+    return {"signoz": signoz_result.get("is_ready"), "otel_collector": result2.ok and "200" in result2.stdout}
 
 
 @task
@@ -66,6 +58,7 @@ def test_trace(c, service_name="test"):
     
     info(f"Sending test trace with service name: {service_name}")
     
+    collector = with_env_suffix("platform-signoz-otel-collector", env)
     # Python script to send test trace
     python_script = f'''
 import time
@@ -77,7 +70,7 @@ from opentelemetry.sdk.resources import Resource
 
 resource = Resource.create({{"service.name": "{service_name}", "deployment.environment": "test"}})
 provider = TracerProvider(resource=resource)
-exporter = OTLPSpanExporter(endpoint="http://platform-signoz-otel-collector:4318/v1/traces", timeout=10)
+exporter = OTLPSpanExporter(endpoint="http://{collector}:4318/v1/traces", timeout=10)
 provider.add_span_processor(BatchSpanProcessor(exporter))
 trace.set_tracer_provider(provider)
 
@@ -110,14 +103,17 @@ print("OK")
         
         # Verify in ClickHouse (service_name already validated)
         verify_query = f"SELECT count() FROM signoz_traces.distributed_signoz_index_v3 WHERE serviceName = '{service_name}'"
-        verify_cmd = f'ssh root@{host} "docker exec platform-clickhouse clickhouse-client --query \\"{verify_query}\\""'
+        clickhouse = with_env_suffix("platform-clickhouse", env)
+        verify_cmd = f'ssh root@{host} "docker exec {clickhouse} clickhouse-client --query \\"{verify_query}\\""'
         verify_result = c.run(verify_cmd, warn=True, hide=True)
         
         if verify_result.ok and verify_result.stdout.strip():
             count = verify_result.stdout.strip()
             info(f"Traces in ClickHouse for '{service_name}': {count}")
         
-        info(f"View in SigNoz UI: https://signoz.{env['INTERNAL_DOMAIN']} → Traces → service={service_name}")
+        domain = service_domain("signoz", env)
+        if domain:
+            info(f"View in SigNoz UI: https://{domain} → Traces → service={service_name}")
         return True
     else:
         error("Failed to send test trace")

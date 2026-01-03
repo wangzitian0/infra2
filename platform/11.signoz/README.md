@@ -37,7 +37,7 @@ Open-source observability platform for logs, metrics, and traces (OpenTelemetry-
 └──────────────────┘
 
 ┌──────────────────┐
-│ frontend         │ ──ui──> https://signoz.${INTERNAL_DOMAIN}
+│ frontend         │ ──ui──> https://signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
 │                  │ ──api──> query-service:8080
 └──────────────────┘
 ```
@@ -61,18 +61,18 @@ invoke signoz.status
 ```
 
 **pre-compose** will:
-1. Create data directory (`/data/platform/signoz/data`)
+1. Create data directory (`${DATA_PATH}/data`)
 2. Set permissions (755)
 
 ## Domain
 
-**URL**: `https://signoz.${INTERNAL_DOMAIN}`
+**URL**: `https://signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`
 
-Automatically configured via Traefik labels in compose.yaml.
+Configured via Dokploy domain settings in `deploy.py` (compose.yaml only enables Traefik).
 
 ## Data Path
 
-`/data/platform/signoz/` (chmod 755)
+`${DATA_PATH}` (chmod 755; staging uses `/data/platform/signoz-staging`)
 - `data/` - SQLite database for metadata
 
 ## Containers
@@ -82,7 +82,7 @@ Automatically configured via Traefik labels in compose.yaml.
 - **signoz**: Combined query-service + frontend (v0.105.1+)
   - Port: 8080 (API + UI, via Traefik)
   - Health: `/api/v1/health`
-  - URL: `https://signoz.${INTERNAL_DOMAIN}`
+  - URL: `https://signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`
 - **otel-collector**: OpenTelemetry Collector
   - Port: 4317 (OTLP gRPC), 4318 (OTLP HTTP) - Docker network only
   - Health: 13133 (health_check extension)
@@ -90,7 +90,7 @@ Automatically configured via Traefik labels in compose.yaml.
 ## Access
 
 ### Web UI
-- **URL**: `https://signoz.${INTERNAL_DOMAIN}`
+- **URL**: `https://signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`
 - **First-time setup**: Create admin account on first visit
 
 ### OTLP Endpoints (for instrumentation)
@@ -98,13 +98,13 @@ Automatically configured via Traefik labels in compose.yaml.
 > **Note**: OTLP ports (4317/4318) are only accessible within the Docker network (`dokploy-network`).
 > Applications must be deployed on the same network to send telemetry.
 
-- **gRPC**: `platform-signoz-otel-collector:4317` (Docker network only)
-- **HTTP**: `platform-signoz-otel-collector:4318` (Docker network only)
+- **gRPC**: `platform-signoz-otel-collector${ENV_SUFFIX}:4317` (Docker network only)
+- **HTTP**: `platform-signoz-otel-collector${ENV_SUFFIX}:4318` (Docker network only)
 
 Example instrumentation (Python, from Docker network):
 ```python
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-exporter = OTLPSpanExporter(endpoint="http://platform-signoz-otel-collector:4318/v1/traces")
+exporter = OTLPSpanExporter(endpoint="http://platform-signoz-otel-collector${ENV_SUFFIX}:4318/v1/traces")
 ```
 
 ### Test OTLP Connectivity
@@ -133,8 +133,8 @@ invoke signoz.shared.test-trace --service-name=myapp
 ## Monitoring
 
 Self-monitoring via Prometheus scraping:
-- Query service: `platform-signoz-query-service:8080/metrics`
-- OTLP collector: `platform-signoz-otel-collector:8888/metrics`
+- SigNoz service: `platform-signoz${ENV_SUFFIX}:8080/metrics`
+- OTLP collector: `platform-signoz-otel-collector${ENV_SUFFIX}:8888/metrics`
 
 ## Used By
 

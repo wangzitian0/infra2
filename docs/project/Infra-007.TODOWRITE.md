@@ -45,7 +45,7 @@
 
 #### ClickHouse Volume Paths
 ```
-/data/platform/clickhouse/
+/data/platform/clickhouse${ENV_SUFFIX}/
 ├── data/          # ClickHouse 数据
 ├── logs/          # 日志
 └── zookeeper/     # ZooKeeper 数据
@@ -53,7 +53,7 @@
 
 #### SigNoz Volume Paths
 ```
-/data/platform/signoz/
+/data/platform/signoz${ENV_SUFFIX}/
 ├── signoz/        # query-service 数据
 └── alertmanager/  # alertmanager 配置
 ```

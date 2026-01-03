@@ -27,19 +27,20 @@ class SigNozDeployer(Deployer):
             return None
         
         e = cls.env()
+        data_path = cls.data_path_for_env(e)
         secrets_backend = cls.secrets()
         
         # Create data directory for query-service SQLite
         run_with_status(
             c, 
-            f"ssh root@{e['VPS_HOST']} 'mkdir -p {cls.data_path}/data'",
+            f"ssh root@{e['VPS_HOST']} 'mkdir -p {data_path}/data'",
             "Create data directory"
         )
         
         # Set permissions (SigNoz runs as root in container, but let's be explicit)
         run_with_status(
             c,
-            f"ssh root@{e['VPS_HOST']} 'chmod -R 755 {cls.data_path}'",
+            f"ssh root@{e['VPS_HOST']} 'chmod -R 755 {data_path}'",
             "Set permissions"
         )
         
@@ -56,13 +57,13 @@ class SigNozDeployer(Deployer):
             info(f"Vault secret exists: {cls.secret_key}")
         
         success("pre_compose complete")
-        info(f"Frontend will be available at: https://signoz.{e.get('INTERNAL_DOMAIN', 'localhost')}")
+        domain_suffix = e.get("ENV_DOMAIN_SUFFIX", "")
+        info(f"Frontend will be available at: https://signoz{domain_suffix}.{e.get('INTERNAL_DOMAIN', 'localhost')}")
         info("OTLP endpoints: 4317 (gRPC), 4318 (HTTP)")
         
-        return {
-            "INTERNAL_DOMAIN": e.get("INTERNAL_DOMAIN", "localhost"),
-            "SIGNOZ_JWT_SECRET": jwt_secret,
-        }
+        result = cls.compose_env_base(e)
+        result["SIGNOZ_JWT_SECRET"] = jwt_secret
+        return result
 
 
 if shared_tasks:

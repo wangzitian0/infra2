@@ -32,9 +32,21 @@ async def test_bootstrap_data_paths_defined():
 @pytest.mark.bootstrap
 async def test_platform_data_paths_defined():
     """Verify platform services mount /data paths."""
-    _assert_contains(ROOT / "platform" / "01.postgres" / "compose.yaml", "/data/platform/postgres", "Postgres compose")
-    _assert_contains(ROOT / "platform" / "02.redis" / "compose.yaml", "/data/platform/redis", "Redis compose")
-    _assert_contains(ROOT / "platform" / "10.authentik" / "compose.yaml", "/data/platform/authentik", "Authentik compose")
+    _assert_contains(
+        ROOT / "platform" / "01.postgres" / "compose.yaml",
+        "${DATA_PATH}:/var/lib/postgresql/data",
+        "Postgres compose",
+    )
+    _assert_contains(
+        ROOT / "platform" / "02.redis" / "compose.yaml",
+        "${DATA_PATH}:/data",
+        "Redis compose",
+    )
+    _assert_contains(
+        ROOT / "platform" / "10.authentik" / "compose.yaml",
+        "${DATA_PATH}/media:/media",
+        "Authentik compose",
+    )
 
 
 @pytest.mark.database

@@ -26,7 +26,7 @@ Platform 支持 staging 与 production 并行，优先使用 Dokploy 的 Project
 - SSOT + Platform 文档更新
 
 ## PR Links
-- None yet.
+- https://github.com/wangzitian0/infra2/pull/42 (WIP)
 
 ## Change Log
 | Date | Change |
@@ -34,6 +34,7 @@ Platform 支持 staging 与 production 并行，优先使用 Dokploy 的 Project
 | 2026-01-02 | Initialized project |
 | 2026-01-02 | Implemented multi-env platform deployment + docs |
 | 2026-01-03 | Added Dokploy environment CLI helper |
+| 2026-01-03 | Aligned ENV_DOMAIN_SUFFIX usage + portal Traefik labels |
 
 ## Verification
 - [ ] `DEPLOY_ENV=staging invoke postgres.setup` 成功部署

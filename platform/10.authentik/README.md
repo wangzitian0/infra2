@@ -26,9 +26,9 @@ Identity Provider for Single Sign-On across platform services using vault-init p
 ```
 ┌─────────────────┐
 │ vault-agent     │ ──fetch──> Vault (3 paths)
-│ (sidecar)       │            ├─ secret/platform/production/postgres (root_password)
-└────────┬────────┘            ├─ secret/platform/production/redis (password)
-         │ render              └─ secret/platform/production/authentik (secret_key)
+│ (sidecar)       │            ├─ secret/platform/<env>/postgres (root_password)
+└────────┬────────┘            ├─ secret/platform/<env>/redis (password)
+         │ render              └─ secret/platform/<env>/authentik (secret_key)
          ▼
     /secrets/.env ─source─> server + worker containers
     (tmpfs)
@@ -52,39 +52,39 @@ invoke authentik.post-compose
 
 **pre-compose** will:
 1. Check postgres/redis secrets exist in Vault
-2. Create data directories (`/data/platform/authentik/{media,certs}`)
+2. Create data directories (`${DATA_PATH}/{media,certs}`)
 3. Create `authentik` database in postgres
 4. Generate and store `AUTHENTIK_SECRET_KEY` in Vault
 
 ## Vault Integration
 
 **Secret paths**:
-- `secret/platform/production/postgres` (reads `root_password`)
-- `secret/platform/production/redis` (reads `password`)
-- `secret/platform/production/authentik` (reads `secret_key`)
+- `secret/platform/<env>/postgres` (reads `root_password`)
+- `secret/platform/<env>/redis` (reads `password`)
+- `secret/platform/<env>/authentik` (reads `secret_key`)
 
 **Policy** (`platform-authentik-app`):
 ```hcl
-path "secret/data/platform/production/postgres" {
+path "secret/data/platform/{{env}}/postgres" {
   capabilities = ["read"]
 }
-path "secret/data/platform/production/redis" {
+path "secret/data/platform/{{env}}/redis" {
   capabilities = ["read"]
 }
-path "secret/data/platform/production/authentik" {
+path "secret/data/platform/{{env}}/authentik" {
   capabilities = ["read", "list"]
 }
 ```
 
 ## Domain
 
-**URL**: `https://sso.${INTERNAL_DOMAIN}`
+**URL**: `https://sso${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`
 
-Automatically configured via Dokploy API during deployment.
+Configured via Dokploy domain settings in `deploy.py` (compose.yaml only enables Traefik).
 
 ## Data Path
 
-`/data/platform/authentik/` (uid=1000, gid=1000, chmod=755)
+`${DATA_PATH}` (uid=1000, gid=1000, chmod=755; staging uses `/data/platform/authentik-staging`)
 - `media/` - User uploads and generated assets
 - `certs/` - Custom certificates
 - `custom-templates/` - Template overrides
@@ -92,16 +92,19 @@ Automatically configured via Dokploy API during deployment.
 ## Containers
 
 - **vault-agent**: Fetches secrets, renders to `/secrets/.env`
-- **server**: Web UI and API (`platform-authentik-server`)
+- **server**: Web UI and API (`platform-authentik-server${ENV_SUFFIX}`)
   - Port: 9000
   - Health: `ak healthcheck`
-- **worker**: Background tasks (`platform-authentik-worker`)
+- **worker**: Background tasks (`platform-authentik-worker${ENV_SUFFIX}`)
   - No exposed ports
   - Health: `ak healthcheck`
+- **token-init**: One-time root token creation (`platform-authentik-token-init${ENV_SUFFIX}`)
+  - Runs `init-token.sh` via `/bin/sh` and waits for `platform-authentik-server` `/-/health/live/`
+  - Stores `root_token` in Vault when `VAULT_INIT_TOKEN` is provided
 
 ## Initial Setup
 
-1. Visit `https://sso.${INTERNAL_DOMAIN}/if/flow/initial-setup/`
+1. Visit `https://sso${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}/if/flow/initial-setup/`
 2. Create admin user
 3. Configure applications and flows
 

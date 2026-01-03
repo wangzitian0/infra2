@@ -64,6 +64,16 @@ infra2/
 
 > 详见 [docs/ssot/bootstrap.vars_and_secrets.md](docs/ssot/bootstrap.vars_and_secrets.md) 与 [docs/ssot/platform.automation.md](docs/ssot/platform.automation.md)
 
+### 多环境部署
+
+- 使用 `DEPLOY_ENV` 选择环境（默认 `production`，如 `staging`）
+- 容器名/域名/数据路径会自动追加 `ENV_SUFFIX`（如 `-staging`）
+
+示例：
+```bash
+DEPLOY_ENV=staging invoke postgres.setup
+```
+
 ## 🛠️ 常用命令
 
 ### 密钥管理 (env_tool)

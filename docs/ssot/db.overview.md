@@ -38,7 +38,7 @@ flowchart TB
 ### ✅ 推荐模式 (Whitelist)
 
 - **模式 A**: 密码必须写入 Vault，再由部署流程读取。
-- **模式 B**: 所有数据目录落盘到 `/data/platform/<service>/`。
+- **模式 B**: 所有数据目录落盘到 `/data/platform/<service>${ENV_SUFFIX}/`。
 
 ### ⛔ 禁止模式 (Blacklist)
 
@@ -55,12 +55,12 @@ flowchart TB
 - **步骤**:
     1. 读取 Vault 密码：
        ```bash
-       vault kv get -field=root_password secret/platform/production/postgres
+       vault kv get -field=root_password secret/platform/<env>/postgres
        ```
     2. 在 VPS 侧测试连接：
        ```bash
        ssh root@<VPS_HOST>
-       docker exec -it platform-postgres psql -U postgres -c 'SELECT 1;'
+       docker exec -it platform-postgres${ENV_SUFFIX} psql -U postgres -c 'SELECT 1;'
        ```
 
 ---

@@ -1,7 +1,7 @@
 services:
   vault-agent:
     image: hashicorp/vault:1.15
-    container_name: platform-minio-vault-agent
+    container_name: platform-minio-vault-agent${ENV_SUFFIX}
     restart: always
     entrypoint:
       - sh
@@ -12,6 +12,7 @@ services:
     environment:
       VAULT_ADDR: ${VAULT_ADDR}
       VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:-}
+      ENV: ${ENV}
     volumes:
       - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
       - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
@@ -23,7 +24,7 @@ services:
     # After RELEASE.2025-04-22T22-12-26Z, MinIO removed most of the admin UI
     # Using the last version with full Console admin features
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
-    container_name: platform-minio
+    container_name: platform-minio${ENV_SUFFIX}
     restart: always
     depends_on:
       - vault-agent
@@ -54,7 +55,7 @@ services:
       timeout: 5s
     volumes:
       - secrets:/secrets:ro
-      - /data/platform/minio:/data
+      - ${DATA_PATH}:/data
     networks:
       - dokploy-network
     labels:

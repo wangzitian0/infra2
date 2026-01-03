@@ -19,7 +19,7 @@ CONTAINERS = {
     "minio": "platform-minio",
     "wealthfolio": "finance-wealthfolio",
     "clickhouse": "platform-clickhouse",
-    "signoz": "platform-signoz-query-service",
+    "signoz": "platform-signoz",
 }
 
 # Service subdomain mapping (subdomain prefix -> description)
@@ -44,7 +44,7 @@ _env_cache: dict | None = None
 
 def normalize_env_name(value: str | None) -> str:
     """Normalize environment name for consistent behavior."""
-    if not value:
+    if not value or not value.strip():
         return "production"
     value = value.strip().lower()
     if "-" in value or "/" in value:

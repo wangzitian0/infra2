@@ -1,7 +1,7 @@
 services:
   vault-agent:
     image: hashicorp/vault:1.15
-    container_name: platform-postgres-vault-agent
+    container_name: platform-postgres-vault-agent${ENV_SUFFIX}
     restart: always
     entrypoint:
       - sh
@@ -12,6 +12,7 @@ services:
     environment:
       VAULT_ADDR: ${VAULT_ADDR}
       VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:-}
+      ENV: ${ENV}
     volumes:
       - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
       - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
@@ -21,7 +22,7 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    container_name: platform-postgres
+    container_name: platform-postgres${ENV_SUFFIX}
     restart: always
     depends_on:
       - vault-agent
@@ -49,7 +50,7 @@ services:
       timeout: 5s
     volumes:
       - secrets:/secrets:ro
-      - /data/platform/postgres:/var/lib/postgresql/data
+      - ${DATA_PATH}:/var/lib/postgresql/data
     networks:
       - dokploy-network
     labels:

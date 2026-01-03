@@ -137,7 +137,7 @@ platform/
 **规则**：
 - ✅ Volume 根路径：`/data/<layer>/<component>/`
 - ✅ Bootstrap 层：`/data/bootstrap/<component>/`
-- ✅ Platform 层：`/data/platform/<component>/`
+- ✅ Platform 层：`/data/platform/<component>${ENV_SUFFIX}/`
 - ✅ Data 层：`/data/<env>/data/<component>/`（若未来引入）
 
 ### 文件命名规范
@@ -166,6 +166,13 @@ platform/
 - `project` / `env` / `service` 不允许包含 `-` 或 `/`，避免路径歧义。
 - 需要分隔时使用 `_`（域名会自动转换为 `-`）。
 
+### 部署环境选择
+
+- **DEPLOY_ENV**: 目标环境（默认 `production`）
+- **ENV_DOMAIN_SUFFIX**: 生产为空，非生产为 `-<env>`（如 `-staging`；内部 `_` 会转为 `-`）
+- **ENV_SUFFIX**: 可选，仅在需要容器/数据路径隔离时显式设置
+- **数据路径**: 非生产必须配置 `DATA_PATH` 或 `ENV_SUFFIX`（除非 `ALLOW_SHARED_DATA_PATH=1`）
+
 ### 本地文件（仅模板/种子）
 
 - `.env.example`：仅 KEY 清单（进 Git，按组件存放）
@@ -177,7 +184,7 @@ platform/
 
 - **目录名**：`{nn}.{service}`（如 `01.postgres`）
 - **Dokploy 应用名**：`service`（如 `postgres`, `redis`, `authentik`）
-- **容器名**：`platform-<service>` 或 `<service>-<role>`（如 `platform-postgres`, `authentik-server`）
+- **容器名**：`platform-<service>${ENV_SUFFIX}` 或 `<service>-<role>${ENV_SUFFIX}`（如 `platform-postgres-staging`, `authentik-server-staging`）
 
 **完整域名格式**: `<service>${ENV_DOMAIN_SUFFIX}.<internal_domain>`
 
@@ -187,12 +194,12 @@ platform/
 
 ### 域名规则 {#域名规则}
 
-> **澄清**：`INTERNAL_DOMAIN` 实际是平台的**公网基础域名**（如 `zitian.party`），由 Cloudflare 管理 DNS 和证书。真正的内网域名是 Docker 容器名（如 `platform-authentik-server`）。
+> **澄清**：`INTERNAL_DOMAIN` 实际是平台的**公网基础域名**（如 `zitian.party`），由 Cloudflare 管理 DNS 和证书。真正的内网域名是 Docker 容器名（如 `platform-authentik-server${ENV_SUFFIX}`）。
 
 | 域名类型 | 用途 | 示例 | 管理方式 |
 |:---|:---|:---|:---|
-| **公网域名** | 用户访问入口 | `sso.zitian.party` | Cloudflare DNS + compose.yaml Traefik labels |
-| **容器域名** | 容器间通信 | `platform-authentik-server` | Docker 内部 DNS |
+| **公网域名** | 用户访问入口 | `sso${ENV_DOMAIN_SUFFIX}.zitian.party` | Cloudflare DNS + compose.yaml Traefik labels |
+| **容器域名** | 容器间通信 | `platform-authentik-server${ENV_SUFFIX}` | Docker 内部 DNS |
 | **Dokploy 域名** | (可选) 非 SSO 服务 | - | Dokploy UI 配置（与 labels 冲突） |
 
 **环境域名规则**：
