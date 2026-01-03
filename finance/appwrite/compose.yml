@@ -16,6 +16,11 @@ services:
     labels:
       - traefik.enable=true
       - traefik.constraint-label-stack=appwrite
+      # Custom Domain for Wealth Pipeline Site
+      - "traefik.http.routers.appwrite-site-wf.rule=Host(`wf.zitian.party`)"
+      - "traefik.http.routers.appwrite-site-wf.entrypoints=websecure"
+      - "traefik.http.routers.appwrite-site-wf.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.appwrite-site-wf.service=appwrite"
     volumes:
       - appwrite-uploads:/storage/uploads:rw
       - appwrite-imports:/storage/imports:rw
