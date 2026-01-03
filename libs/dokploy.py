@@ -83,6 +83,43 @@ class DokployClient:
     def get_project(self, project_id: str) -> dict:
         """Get project by ID"""
         return self._request("GET", f"project.one?projectId={project_id}")
+
+    def list_environments(self, project_name: str) -> list[dict]:
+        """List environments for a project by name."""
+        projects = self.list_projects()
+        for project in projects:
+            if project.get("name") == project_name:
+                return project.get("environments", [])
+        return []
+
+    def create_environment(self, project_id: str, name: str, description: str = "") -> dict:
+        """Create a new environment under a project."""
+        payload = {
+            "projectId": project_id,
+            "name": name,
+        }
+        if description:
+            payload["description"] = description
+        return self._request("POST", "environment.create", json=payload)
+
+    def ensure_environment(self, project_name: str, env_name: str, description: str = "") -> tuple[dict, bool]:
+        """Ensure environment exists, returns (environment, created)."""
+        target = _normalize_env_name(env_name)
+        if not target:
+            raise ValueError("env_name is required")
+
+        projects = self.list_projects()
+        for project in projects:
+            if project.get("name") != project_name:
+                continue
+            for env in project.get("environments", []):
+                if _normalize_env_name(env.get("name")) == target:
+                    return env, False
+            env_desc = description or f"{target} env"
+            created = self.create_environment(project["projectId"], target, env_desc)
+            return created, True
+
+        raise ValueError(f"Project '{project_name}' not found in Dokploy")
     
     # Compose endpoints
     def create_compose(

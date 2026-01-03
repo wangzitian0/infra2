@@ -12,6 +12,7 @@ Platform 支持 staging 与 production 并行，优先使用 Dokploy 的 Project
 
 ## Scope
 - [x] 增加 Dokploy 环境选择（按 DEPLOY_ENV）
+- [x] 提供 Dokploy Environment 创建命令（CLI）
 - [ ] 环境差异通过 Dokploy Environment 变量配置（DATA_PATH / ENV_SUFFIX 可选）
 - [ ] 仅在必须手写 label 的场景使用后缀（Traefik router/service 名避免冲突）
 - [ ] 域名统一为 `{subdomain}{ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`（prod 为空，env 内部用 `_`）
@@ -32,6 +33,7 @@ Platform 支持 staging 与 production 并行，优先使用 Dokploy 的 Project
 |------|--------|
 | 2026-01-02 | Initialized project |
 | 2026-01-02 | Implemented multi-env platform deployment + docs |
+| 2026-01-03 | Added Dokploy environment CLI helper |
 
 ## Verification
 - [ ] `DEPLOY_ENV=staging invoke postgres.setup` 成功部署
