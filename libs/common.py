@@ -19,7 +19,7 @@ CONTAINERS = {
     "minio": "platform-minio",
     "wealthfolio": "finance-wealthfolio",
     "clickhouse": "platform-clickhouse",
-    "signoz": "platform-signoz-query-service",
+    "signoz": "platform-signoz",
 }
 
 # Service subdomain mapping (subdomain prefix -> description)
