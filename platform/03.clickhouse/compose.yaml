@@ -28,6 +28,7 @@ services:
     restart: unless-stopped
     environment:
       - ZOO_MY_ID=1
+      # Single-node ZooKeeper. For multi-node, override ZOO_SERVERS to list all nodes.
       - ZOO_SERVERS=server.1=platform-clickhouse-zookeeper${ENV_SUFFIX}:2888:3888;2181
     volumes:
       - ${DATA_PATH}/zookeeper:/data
@@ -57,6 +58,7 @@ services:
       - ${DATA_PATH}/data:/var/lib/clickhouse
       - ${DATA_PATH}/logs:/var/log/clickhouse-server
       - ${DATA_PATH}/user_scripts:/var/lib/clickhouse/user_scripts:ro
+      # Config is rendered into DATA_PATH so it persists across redeploys.
       - ${DATA_PATH}/config.xml:/etc/clickhouse-server/config.xml:ro
       - ./users.xml:/etc/clickhouse-server/users.xml:ro
     networks:
