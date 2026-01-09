@@ -15,7 +15,7 @@ Platform services use **vault-init pattern**:
 |-------|----------|----------|
 | `01-09` | **Databases** | `01.postgres`, `02.redis`, `03.clickhouse`, `03.minio` |
 | `10-19` | **Auth & Gateway** | `10.authentik`, `11.signoz` |
-| `20-29` | **Portal & Observability** | `21.portal` |
+| `20-29` | **Portal & Applications** | `21.portal`, `22.activepieces` |
 
 ## Service Directory
 
@@ -39,6 +39,7 @@ platform/{nn}.{service}/
 - [Authentik](./10.authentik/README.md)
 - [SigNoz](./11.signoz/README.md)
 - [Portal](./21.portal/README.md)
+- [Activepieces](./22.activepieces/README.md)
 
 ## Prerequisites
 
@@ -74,7 +75,8 @@ invoke authentik.setup   # SSO provider
 invoke signoz.setup      # Observability platform
 
 # 3. Application tier
-invoke portal.setup      # Portal with SSO auth
+invoke portal.setup        # Portal with SSO auth
+invoke activepieces.setup  # Automation platform with SSO auth
 
 # Check status
 invoke postgres.status
@@ -83,6 +85,7 @@ invoke clickhouse.status
 invoke authentik.status
 invoke signoz.status
 invoke portal.status
+invoke activepieces.status
 ```
 
 ## Deployment Order
@@ -99,12 +102,13 @@ clickhouse ──► signoz
 
 | Service | Dependencies | Notes |
 |---------|--------------|-------|
-| postgres | vault | Database for authentik |
-| redis | vault | Cache for authentik |
+| postgres | vault | Database for authentik, activepieces |
+| redis | vault | Cache for authentik, activepieces |
 | clickhouse | - | Storage for signoz |
 | authentik | postgres, redis | SSO provider |
 | signoz | clickhouse | Observability platform |
 | portal | authentik | Protected by SSO |
+| activepieces | postgres, redis, authentik | Automation platform, protected by SSO |
 
 ## Adding New Service
 
