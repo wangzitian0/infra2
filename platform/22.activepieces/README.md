@@ -41,7 +41,8 @@ invoke authentik.shared.create-proxy-app \
   --name=Activepieces \
   --slug=activepieces \
   --external-host=https://automate.{domain} \
-  --internal-host=platform-activepieces
+  --internal-host=platform-activepieces \
+  --port=80
 
 # 3. Check status
 invoke activepieces.status

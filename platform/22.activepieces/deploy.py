@@ -137,7 +137,8 @@ class ActivepiecesDeployer(Deployer):
             info(f"     --name=Activepieces \\")
             info(f"     --slug=activepieces \\")
             info(f"     --external-host=https://automate{env_domain_suffix}.{internal_domain} \\")
-            info(f"     --internal-host=platform-activepieces{e.get('ENV_SUFFIX', '')}")
+            info(f"     --internal-host=platform-activepieces{e.get('ENV_SUFFIX', '')} \\")
+            info(f"     --port=80")
             return True
         error("Verification failed", result["details"])
         return False
