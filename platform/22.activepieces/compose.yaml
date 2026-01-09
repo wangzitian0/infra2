@@ -1,0 +1,93 @@
+services:
+  vault-agent:
+    image: hashicorp/vault:1.15
+    container_name: platform-activepieces-vault-agent${ENV_SUFFIX}
+    restart: always
+    entrypoint:
+      - sh
+      - -c
+      - |
+        echo "$$VAULT_APP_TOKEN" > /vault/token
+        exec vault agent -config=/etc/vault/vault-agent.hcl
+    environment:
+      VAULT_ADDR: ${VAULT_ADDR}
+      VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:-}
+      ENV: ${ENV}
+    volumes:
+      - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
+      - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
+      - secrets:/vault/secrets
+    networks:
+      - dokploy-network
+
+  activepieces:
+    image: ghcr.io/activepieces/activepieces:0.75.0
+    container_name: platform-activepieces${ENV_SUFFIX}
+    restart: unless-stopped
+    depends_on:
+      - vault-agent
+    entrypoint:
+      - sh
+      - -c
+      - |
+        # Wait for secrets file to be rendered by vault-agent
+        while [ ! -f /secrets/.env ]; do
+          echo "Waiting for secrets..."
+          sleep 1
+        done
+        set -a
+        . /secrets/.env
+        set +a
+        exec /usr/src/app/docker-entrypoint.sh
+    environment:
+      # Static configuration
+      AP_ENVIRONMENT: prod
+      AP_ENGINE_EXECUTABLE_PATH: dist/packages/engine/main.js
+      AP_SANDBOX_RUN_TIME_SECONDS: 600
+      AP_PIECES_SYNC_MODE: OFFICIAL_AUTO
+      AP_TRIGGER_DEFAULT_POLL_INTERVAL: 5
+      AP_TELEMETRY_ENABLED: "false"
+      # Database connection (password injected from secrets)
+      AP_POSTGRES_HOST: platform-postgres${ENV_SUFFIX}
+      AP_POSTGRES_PORT: 5432
+      AP_POSTGRES_USERNAME: postgres
+      AP_POSTGRES_DATABASE: activepieces
+      # Redis connection (password injected from secrets)
+      AP_REDIS_HOST: platform-redis${ENV_SUFFIX}
+      AP_REDIS_PORT: 6379
+      AP_REDIS_USE_SSL: "false"
+    volumes:
+      - secrets:/secrets:ro
+    networks:
+      - dokploy-network
+    labels:
+      - "traefik.enable=true"
+      # SSO-protected access via Authentik forward auth
+      - "traefik.http.routers.activepieces${ENV_DOMAIN_SUFFIX}.rule=Host(`automate${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`)"
+      - "traefik.http.routers.activepieces${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
+      - "traefik.http.routers.activepieces${ENV_DOMAIN_SUFFIX}.tls=true"
+      - "traefik.http.routers.activepieces${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.activepieces${ENV_DOMAIN_SUFFIX}.service=activepieces${ENV_DOMAIN_SUFFIX}"
+      - "traefik.http.services.activepieces${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=80"
+      # Authentik forward auth middleware
+      - "traefik.http.middlewares.activepieces-auth${ENV_DOMAIN_SUFFIX}.forwardauth.address=http://platform-authentik-server${ENV_SUFFIX}:9000/outpost.goauthentik.io/auth/traefik"
+      - "traefik.http.middlewares.activepieces-auth${ENV_DOMAIN_SUFFIX}.forwardauth.trustForwardHeader=true"
+      - "traefik.http.middlewares.activepieces-auth${ENV_DOMAIN_SUFFIX}.forwardauth.authResponseHeaders=X-authentik-username,X-authentik-groups,X-authentik-email,X-authentik-name,X-authentik-uid"
+      - "traefik.http.routers.activepieces${ENV_DOMAIN_SUFFIX}.middlewares=activepieces-auth${ENV_DOMAIN_SUFFIX}@docker"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/api/v1/flags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  secrets:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=10m,mode=0755"
+
+networks:
+  dokploy-network:
+    external: true
