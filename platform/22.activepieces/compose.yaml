@@ -38,7 +38,7 @@ services:
         set -a
         . /secrets/.env
         set +a
-        exec node dist/packages/server/main.js
+        exec /usr/src/app/docker-entrypoint.sh
     environment:
       # Static configuration
       AP_ENVIRONMENT: prod
