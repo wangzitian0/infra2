@@ -21,7 +21,7 @@ services:
       - dokploy-network
 
   activepieces:
-    image: ghcr.io/activepieces/activepieces:0.36.5
+    image: ghcr.io/activepieces/activepieces:0.75.0
     container_name: platform-activepieces${ENV_SUFFIX}
     restart: unless-stopped
     depends_on:
