@@ -355,6 +355,7 @@ def setup_tokens(c):
         "redis": "02.redis",
         "minio": "03.minio",
         "authentik": "10.authentik",
+        "activepieces": "22.activepieces",
     }
     
     env_name = e.get("ENV", "production")
