@@ -35,6 +35,7 @@ invoke --list
 infra2/
 ├── bootstrap/        # L1 - 基础层 (1Password, Vault)
 ├── platform/         # L2 - 平台层 (PostgreSQL, Redis, Authentik)
+├── finance_report/   # L3 - 应用层 (Finance Report)
 ├── e2e_regressions/  # E2E 测试
 ├── libs/             # 共享库 (env, deployer, console)
 ├── tools/            # CLI 工具 (env, local)
@@ -100,17 +101,84 @@ invoke local.version
 ### 服务部署
 
 ```bash
+# Platform 服务
 invoke postgres.setup
 invoke redis.setup
 invoke authentik.setup
+
+# Finance Report 应用
+invoke finance_report.postgres.setup
+invoke finance_report.redis.setup
+invoke finance_report.app.setup
 ```
 
 ### 健康检查
 
 ```bash
+# Platform 服务
 invoke postgres.shared.status
 invoke redis.shared.status
+
+# Finance Report 应用
+invoke finance_report.postgres.shared.status
+invoke finance_report.redis.shared.status
+invoke finance_report.app.shared.status
 ```
+
+## 📦 Finance Report 部署
+
+Finance Report 是一个个人财务管理系统，使用独立的 PostgreSQL 和 Redis 实例。
+
+### 架构
+
+```
+report.zitian.party
+├── /api/* → Backend (FastAPI, port 8000)
+└── /*     → Frontend (Next.js, port 3000)
+```
+
+### 前置条件
+
+1. Vault 已就绪：`invoke vault.status`
+2. MinIO 已就绪：`invoke minio.shared.status`
+3. Docker 镜像已构建并推送到 GHCR
+
+### 部署步骤
+
+```bash
+# 1. 设置环境变量
+export INTERNAL_DOMAIN=zitian.party
+export VAULT_ADDR=https://vault.zitian.party
+export VAULT_ROOT_TOKEN=$(op item get dexluuvzg5paff3cltmtnlnosm --vault=Infra2 --fields label=Token --reveal)
+
+# 2. 生成密钥（首次）
+invoke env.set POSTGRES_PASSWORD=$(openssl rand -base64 24) --project=finance_report --env=production --service=postgres
+invoke env.set PASSWORD=$(openssl rand -base64 24) --project=finance_report --env=production --service=redis
+
+# 3. 配置应用密钥
+# DATABASE_URL, REDIS_URL, S3_*, OPENROUTER_API_KEY
+# 见 docs/project/Infra-009.finance_report_deploy.md
+
+# 4. 生成 Vault tokens
+invoke vault.setup-tokens
+
+# 5. 部署服务
+invoke finance_report.postgres.setup
+invoke finance_report.redis.setup
+invoke finance_report.app.setup
+
+# 6. 验证
+invoke finance_report.postgres.shared.status
+invoke finance_report.redis.shared.status
+invoke finance_report.app.shared.status
+curl https://report.zitian.party/api/health
+```
+
+### 相关文档
+
+- [Finance Report README](finance_report/README.md)
+- [Infra-009 项目文档](docs/project/Infra-009.finance_report_deploy.md)
+- [源代码仓库](https://github.com/wangzitian0/finance_report)
 
 ## 🔗 相关链接
 
