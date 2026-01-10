@@ -31,10 +31,10 @@ graph TD
 
 - **模式 A**: 数据库密码必须先写入 Vault，再由部署流程读取。
 - **模式 B**: 应用运行时仅通过环境变量读取凭据。
-- **模式 C**: secrets.ctmpl 使用 `printf` 语法处理动态路径：
+- **模式 C**: secrets.ctmpl 使用 `printf` 语法处理动态环境路径：
   ```hcl
-  {{ with secret (printf "secret/data/%s/%s/service" (env "PROJECT") (env "ENV")) }}
-  {{ .Data.data.KEY }}
+  {{ with secret (printf "secret/data/finance_report/%s/postgres" (env "ENV")) }}
+  {{ .Data.data.POSTGRES_PASSWORD }}
   {{ end }}
   ```
 
@@ -45,10 +45,10 @@ graph TD
 - **反模式 C**: **禁止** 在 secrets.ctmpl 中嵌套 `{{ env }}` 函数：
   ```hcl
   # ❌ 错误 - 会导致 template parse error
-  {{ with secret "secret/data/{{ env \"PROJECT\" }}/{{ env \"ENV\" }}/service" }}
+  {{ with secret "secret/data/finance_report/{{ env \"ENV\" }}/postgres" }}
   
   # ✅ 正确 - 使用 printf 函数
-  {{ with secret (printf "secret/data/%s/%s/service" (env "PROJECT") (env "ENV")) }}
+  {{ with secret (printf "secret/data/finance_report/%s/postgres" (env "ENV")) }}
   ```
 
 ---
