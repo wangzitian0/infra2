@@ -141,6 +141,9 @@ def load_all():
     for project in ["bootstrap", "platform", "finance"]:
         _load_project(ns, root, project)
     
+    # Load finance_report (nested structure: finance_report/finance_report/)
+    _load_project(ns, root / "finance_report", "finance_report")
+    
     # Load tools
     _load_tools(ns, root)
     
