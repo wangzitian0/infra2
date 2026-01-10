@@ -50,6 +50,14 @@ class Deployer:
 
     @classmethod
     def project_name(cls, env: dict | None = None) -> str:
+        """Get project name, prioritizing class attribute over env var.
+        
+        The class `project` attribute takes precedence. Only uses PROJECT env var
+        if the class uses the default 'platform' project (for backward compat).
+        """
+        if cls.project != "platform":
+            # Class explicitly sets a non-default project, use it
+            return cls.project
         e = env or cls.env()
         return e.get("PROJECT") or cls.project
 
