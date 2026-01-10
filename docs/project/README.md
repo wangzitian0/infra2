@@ -25,6 +25,7 @@
 - [docs/README.md](../README.md) - 文档索引
 
 ## Active Projects
+- [Infra-009: Finance Report Deployment](./Infra-009.finance_report_deploy.md) - **In Progress**
 - [Infra-008: Platform Multi-Environment (Staging)](./Infra-008.platform_multi_env.md) - **In Progress**
 - [Infra-007: SigNoz Observability Platform](./Infra-007.signoz_install.md) - **In Progress**
 - [Infra-006: Documentation Engineering](./Infra-006.documentation_engineering.md) - **In Progress**
@@ -37,4 +38,4 @@
 - [Infra-003: Documentation Reorganization](./archive/Infra-003.docs_reorg.md) - **Archived**
 
 ---
-*Last updated: 2026-01-02*
+*Last updated: 2026-01-10*

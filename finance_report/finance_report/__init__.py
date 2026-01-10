@@ -1,0 +1,1 @@
+"""Finance Report application layer."""
