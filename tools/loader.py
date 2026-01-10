@@ -59,8 +59,15 @@ def _load_tasks_into_collection(file_path: Path, module_name: str, collection: C
     return len(collection.tasks) > before
 
 
-def _load_project(ns, root, project_name):
-    """Load all services from a project directory"""
+def _load_project(ns, root, project_name, use_prefix=False):
+    """Load all services from a project directory
+    
+    Args:
+        ns: Root namespace collection
+        root: Root directory path
+        project_name: Name of the project (e.g., 'platform', 'finance_report')
+        use_prefix: If True, prefix task names with project name to avoid conflicts
+    """
     project_dir = root / project_name
     if not project_dir.exists():
         return
@@ -70,6 +77,8 @@ def _load_project(ns, root, project_name):
             continue
         
         name = comp_dir.name.split('.')[-1]
+        # Prefix service name with project name if needed (e.g., fr-postgres)
+        task_name = f"fr-{name}" if use_prefix else name
         coll = Collection()
         loaded = False
         
@@ -91,7 +100,7 @@ def _load_project(ns, root, project_name):
         )
         
         if loaded:
-            ns.add_collection(coll, name=name)
+            ns.add_collection(coll, name=task_name)
             success(f"{project_name}/{name}")
 
 
@@ -142,7 +151,8 @@ def load_all():
         _load_project(ns, root, project)
     
     # Load finance_report (nested structure: finance_report/finance_report/)
-    _load_project(ns, root / "finance_report", "finance_report")
+    # Use prefix to avoid conflicts with platform/postgres, platform/redis
+    _load_project(ns, root / "finance_report", "finance_report", use_prefix=True)
     
     # Load tools
     _load_tools(ns, root)

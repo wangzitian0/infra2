@@ -321,8 +321,9 @@ def status(c):
 
 @task
 def setup_tokens(c):
-    """Generate read-only tokens for platform services"""
+    """Generate read-only tokens for platform and finance_report services"""
     import os
+    import io
     import json
 
     header("Vault Token Setup", "Generating service tokens")
@@ -344,80 +345,87 @@ def setup_tokens(c):
     success(f"Using Vault: {vault_addr}")
     print("")
     
-    # Automatically discover policies from platform directories
     current_dir = os.path.dirname(os.path.abspath(__file__))  # bootstrap/05.vault
     root_dir = os.path.dirname(os.path.dirname(current_dir))
-    platform_dir = os.path.join(root_dir, "platform")
-    
-    # Map service name to its directory name
-    service_map = {
-        "postgres": "01.postgres",
-        "redis": "02.redis",
-        "minio": "03.minio",
-        "authentik": "10.authentik",
-        "activepieces": "22.activepieces",
-    }
     
     env_name = e.get("ENV", "production")
     
-    for service, dir_name in service_map.items():
-        policy_name = f"platform-{service}-app"
-        policy_path = os.path.join(platform_dir, dir_name, "vault-policy.hcl")
-        
-        if os.path.exists(policy_path):
-            with open(policy_path, "r") as f:
-                policy_rules = f.read().replace("{{env}}", env_name)
-            info(f"Loaded tailored policy from {dir_name}/vault-policy.hcl")
-        else:
-            # Fallback policy
-            policy_rules = f'path "secret/data/platform/{env_name}/{service}" {{ capabilities = ["read", "list"] }}'
-            warning(f"No policy file found for {service}, using default read-only")
-        
-        # Write policy via vault CLI using stdin
-        import io
-        policy_io = io.StringIO(policy_rules)
-        
-        info(f"   Writing policy: {policy_name}...")
-        result = c.run(
-            f"vault policy write {policy_name} -",
-            env={"VAULT_ADDR": vault_addr, "VAULT_TOKEN": root_token},
-            in_stream=policy_io,
-            hide=True,
-            warn=True,
-        )
-        if not result.ok:
-            stderr_msg = getattr(result, "stderr", "") or ""
-            if stderr_msg.strip():
-                error(f"Failed to create policy '{policy_name}' for service '{service}'", stderr_msg.strip())
+    # Define projects and their services
+    # Each entry: (project_name, project_dir, service_map, dokploy_project)
+    projects = [
+        ("platform", os.path.join(root_dir, "platform"), {
+            "postgres": "01.postgres",
+            "redis": "02.redis",
+            "minio": "03.minio",
+            "authentik": "10.authentik",
+            "activepieces": "22.activepieces",
+        }, "platform"),
+        ("finance_report", os.path.join(root_dir, "finance_report", "finance_report"), {
+            "postgres": "01.postgres",
+            "redis": "02.redis",
+            "app": "10.app",
+        }, "finance_report"),
+    ]
+    
+    for project_name, project_dir, service_map, dokploy_project in projects:
+        print(f"\n--- {project_name} ---")
+        for service, dir_name in service_map.items():
+            policy_name = f"{project_name}-{service}-app"
+            policy_path = os.path.join(project_dir, dir_name, "vault-policy.hcl")
+            
+            if os.path.exists(policy_path):
+                with open(policy_path, "r") as f:
+                    policy_rules = f.read().replace("{{env}}", env_name)
+                info(f"Loaded tailored policy from {dir_name}/vault-policy.hcl")
             else:
-                error(f"Failed to create policy '{policy_name}' for service '{service}'")
-            continue
-        success(f"   ✅ Policy {policy_name} created")
+                # Fallback policy
+                policy_rules = f'path "secret/data/{project_name}/{env_name}/{service}" {{ capabilities = ["read", "list"] }}'
+                warning(f"No policy file found for {service}, using default read-only")
+            
+            # Write policy via vault CLI using stdin
+            policy_io = io.StringIO(policy_rules)
+            
+            info(f"   Writing policy: {policy_name}...")
+            result = c.run(
+                f"vault policy write {policy_name} -",
+                env={"VAULT_ADDR": vault_addr, "VAULT_TOKEN": root_token},
+                in_stream=policy_io,
+                hide=True,
+                warn=True,
+            )
+            if not result.ok:
+                stderr_msg = getattr(result, "stderr", "") or ""
+                if stderr_msg.strip():
+                    error(f"Failed to create policy '{policy_name}' for service '{service}'", stderr_msg.strip())
+                else:
+                    error(f"Failed to create policy '{policy_name}' for service '{service}'")
+                continue
+            success(f"   ✅ Policy {policy_name} created")
 
-        # Generate token (permanent, orphan, no default policy)
-        cmd = (
-            f"vault token create "
-            f"-orphan "
-            f"-policy={policy_name} "
-            f"-no-default-policy "
-            f"-display-name=platform-{service} "
-            f"-format=json"
-        )
-        result = c.run(
-            cmd,
-            env={"VAULT_ADDR": vault_addr, "VAULT_TOKEN": root_token},
-            hide=True,
-        )
-        
-        if result.ok:
-            token_data = json.loads(result.stdout)
-            token = token_data["auth"]["client_token"]
-            success(f"✅ Token for {service}:")
-            print(f"   {token}")
-            _configure_dokploy_token(c, service, token)
-            print()
-        else:
-            error(f"Failed to create token for {service}")
+            # Generate token (permanent, orphan, no default policy)
+            cmd = (
+                f"vault token create "
+                f"-orphan "
+                f"-policy={policy_name} "
+                f"-no-default-policy "
+                f"-display-name={project_name}-{service} "
+                f"-format=json"
+            )
+            result = c.run(
+                cmd,
+                env={"VAULT_ADDR": vault_addr, "VAULT_TOKEN": root_token},
+                hide=True,
+            )
+            
+            if result.ok:
+                token_data = json.loads(result.stdout)
+                token = token_data["auth"]["client_token"]
+                success(f"✅ Token for {service}:")
+                print(f"   {token}")
+                _configure_dokploy_token(c, service, token, dokploy_project)
+                print()
+            else:
+                error(f"Failed to create token for {service}")
 
     success("All tokens generated!")
     info("Next steps:")
@@ -440,7 +448,7 @@ def setup(c):
     success("Vault setup complete!")
 
 
-def _configure_dokploy_token(_c, service: str, token: str):
+def _configure_dokploy_token(_c, service: str, token: str, project: str = "platform"):
     """Auto-configure VAULT_APP_TOKEN in Dokploy"""
     try:
         from libs.dokploy import get_dokploy
@@ -453,7 +461,7 @@ def _configure_dokploy_token(_c, service: str, token: str):
         client = get_dokploy(host=host)
         
         # Find compose service
-        compose = client.find_compose_by_name(service, "platform", env_name=env_name)
+        compose = client.find_compose_by_name(service, project, env_name=env_name)
         if compose:
             compose_id = compose["composeId"]
             info("   Configuring in Dokploy...")
@@ -464,7 +472,7 @@ def _configure_dokploy_token(_c, service: str, token: str):
             )
             success("   ✅ Auto-configured in Dokploy")
         else:
-            warning(f"   Service '{service}' not found in Dokploy, manual setup required")
+            warning(f"   Service '{service}' not found in Dokploy project '{project}', manual setup required")
     except Exception as exc:
         warning(f"   Auto-config failed: {exc}")
         info("   Manual setup: Add VAULT_APP_TOKEN in Dokploy UI")
