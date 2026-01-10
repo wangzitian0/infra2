@@ -12,7 +12,7 @@ shared_tasks = sys.modules.get("bootstrap.06.iac-runner.shared")
 class IaCRunnerDeployer(Deployer):
     """Deployer for IaC Runner service."""
     
-    service = "iac-runner"
+    service = "iac_runner"  # Use underscore for Vault path compatibility
     compose_path = "bootstrap/06.iac-runner/compose.yaml"
     data_path = "/data/bootstrap/iac-runner"
     project = "bootstrap"
@@ -23,7 +23,7 @@ class IaCRunnerDeployer(Deployer):
     # Domain config
     subdomain = "iac"
     service_port = 8080
-    service_name = "iac-runner"
+    service_name = "iac-runner"  # Docker service name keeps hyphen
 
 
 if shared_tasks:
