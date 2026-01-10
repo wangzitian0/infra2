@@ -2,7 +2,7 @@ import sys
 
 from libs.deployer import Deployer, make_tasks
 
-shared_tasks = sys.modules.get("finance_report.finance_report.01.postgres.shared")
+shared_tasks = sys.modules.get("finance_report.01.postgres.shared")
 
 
 class PostgresDeployer(Deployer):
@@ -13,6 +13,10 @@ class PostgresDeployer(Deployer):
     data_path = "/data/finance_report/postgres"
     secret_key = "POSTGRES_PASSWORD"
     project = "finance_report"  # Dokploy project name
+
+    # PostgreSQL Alpine requires uid=70 and chmod=700
+    uid = "70"
+    chmod = "700"
 
     # No public domain (internal only)
     subdomain = None

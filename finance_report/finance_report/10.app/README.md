@@ -46,14 +46,12 @@ open https://report.${INTERNAL_DOMAIN}
 
 ## Build Configuration
 
-The compose requires:
-- `APP_SOURCE_PATH`: Path to finance_report repository root
+For the standard deployment using pre-built images from `ghcr.io` (via `invoke finance_report.app.setup`), no additional build-time configuration is required. The images are built and pushed by GitHub Actions.
+
+Optional environment variables:
 - `IMAGE_TAG`: Docker image tag (default: `latest`)
 
-Example:
-```bash
-APP_SOURCE_PATH=/path/to/finance_report invoke finance_report.app.setup
-```
+For local development builds, see the [finance_report repository](https://github.com/wangzitian0/finance_report).
 
 ## Health Checks
 

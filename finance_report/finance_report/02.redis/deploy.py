@@ -2,7 +2,7 @@ import sys
 
 from libs.deployer import Deployer, make_tasks
 
-shared_tasks = sys.modules.get("finance_report.finance_report.02.redis.shared")
+shared_tasks = sys.modules.get("finance_report.02.redis.shared")
 
 
 class RedisDeployer(Deployer):
