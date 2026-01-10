@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 logging.basicConfig(
     level=logging.INFO,
@@ -15,8 +16,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 WORKSPACE = Path("/workspace")
-GIT_REPO_URL = os.environ.get("GIT_REPO_URL", "https://github.com/wangzitian0/infra2.git")
+GIT_REPO_URL = os.environ.get("GIT_REPO_URL")
 GIT_BRANCH = os.environ.get("GIT_BRANCH", "main")
+
+if not GIT_REPO_URL:
+    raise RuntimeError("GIT_REPO_URL environment variable must be set")
+
+# Extract repo name from URL (e.g., "infra2" from "https://github.com/user/infra2.git")
+REPO_NAME = Path(urlparse(GIT_REPO_URL).path).stem
 
 # Service name to invoke task mapping
 # Maps "project/service" to invoke task name
@@ -58,7 +65,7 @@ ALL_SERVICES = [
 
 def update_repo() -> bool:
     """Clone or update the repo."""
-    repo_path = WORKSPACE / "infra2"
+    repo_path = WORKSPACE / REPO_NAME
     
     if not repo_path.exists():
         logger.info(f"Cloning {GIT_REPO_URL} to {repo_path}")
@@ -72,6 +79,9 @@ def update_repo() -> bool:
             return False
     else:
         logger.info(f"Updating repo at {repo_path}")
+        # Clean any local changes first
+        subprocess.run(["git", "clean", "-fd"], cwd=repo_path, capture_output=True)
+        
         result = subprocess.run(
             ["git", "fetch", "origin", GIT_BRANCH],
             cwd=repo_path,
@@ -125,7 +135,7 @@ def sync_services(services: set[str]):
         logger.error("Failed to update repo, aborting sync")
         return
     
-    repo_path = WORKSPACE / "infra2"
+    repo_path = WORKSPACE / REPO_NAME
     
     # Expand __all__ to all services
     if "__all__" in services:

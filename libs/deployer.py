@@ -321,7 +321,7 @@ class Deployer:
         if not existing:
             return None
         
-        # Hash is stored in env as IaC_CONFIG_HASH
+        # Hash is stored in env as IAC_CONFIG_HASH
         env_str = existing.get("env", "")
         for line in env_str.split('\n'):
             if line.startswith("IAC_CONFIG_HASH="):

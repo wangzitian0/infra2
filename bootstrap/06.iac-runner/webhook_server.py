@@ -6,24 +6,29 @@ Receives GitHub push events and triggers sync for changed services.
 """
 import hashlib
 import hmac
-import json
+import logging
 import os
-import subprocess
 import threading
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 WORKSPACE = "/workspace"
-GIT_REPO_URL = os.environ.get("GIT_REPO_URL", "https://github.com/wangzitian0/infra2.git")
+GIT_REPO_URL = os.environ.get("GIT_REPO_URL")
 GIT_BRANCH = os.environ.get("GIT_BRANCH", "main")
+
+if not GIT_REPO_URL:
+    raise RuntimeError("GIT_REPO_URL environment variable must be set")
 
 
 def verify_signature(payload: bytes, signature: str) -> bool:
     """Verify GitHub webhook signature."""
     if not WEBHOOK_SECRET:
-        return True  # No secret configured, skip verification (dev mode)
+        logger.warning("WEBHOOK_SECRET not configured - running in insecure dev mode!")
+        return True
     
     if not signature or not signature.startswith("sha256="):
         return False
@@ -141,7 +146,7 @@ def manual_sync():
     """
     # Verify signature for manual triggers too
     signature = request.headers.get("X-Hub-Signature-256", "")
-    if WEBHOOK_SECRET and not verify_signature(request.data, signature):
+    if not verify_signature(request.data, signature):
         return jsonify({"error": "Invalid signature"}), 401
     
     payload = request.json or {}

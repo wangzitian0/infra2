@@ -1,6 +1,5 @@
 flask>=3.0
 gunicorn>=21.0
-gitpython>=3.1
 invoke>=2.2
 httpx>=0.25
 python-dotenv>=1.0

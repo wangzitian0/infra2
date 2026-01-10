@@ -59,16 +59,21 @@ invoke iac-runner.setup
 ### Manual Sync
 
 ```bash
-# Sync specific services
+# Sync specific services (requires signature)
+PAYLOAD='{"services":["platform/postgres"]}'
+SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac 'YOUR_SECRET' | cut -d' ' -f2)
 curl -X POST https://iac.{domain}/sync \
   -H "Content-Type: application/json" \
-  -H "X-Hub-Signature-256: sha256=$(echo -n '{"services":["platform/postgres"]}' | openssl dgst -sha256 -hmac 'YOUR_SECRET' | cut -d' ' -f2)" \
-  -d '{"services": ["platform/postgres"]}'
+  -H "X-Hub-Signature-256: sha256=$SIGNATURE" \
+  -d "$PAYLOAD"
 
-# Sync all
+# Sync all (requires signature)
+PAYLOAD='{"all": true}'
+SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac 'YOUR_SECRET' | cut -d' ' -f2)
 curl -X POST https://iac.{domain}/sync \
   -H "Content-Type: application/json" \
-  -d '{"all": true}'
+  -H "X-Hub-Signature-256: sha256=$SIGNATURE" \
+  -d "$PAYLOAD"
 ```
 
 ## Service Mapping
