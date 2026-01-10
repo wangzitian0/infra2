@@ -106,10 +106,10 @@ invoke postgres.setup
 invoke redis.setup
 invoke authentik.setup
 
-# Finance Report 应用
-invoke finance_report.postgres.setup
-invoke finance_report.redis.setup
-invoke finance_report.app.setup
+# Finance Report 应用（使用 fr- 前缀避免命名冲突）
+invoke fr-postgres.setup
+invoke fr-redis.setup
+invoke fr-app.setup
 ```
 
 ### 健康检查
@@ -120,9 +120,9 @@ invoke postgres.shared.status
 invoke redis.shared.status
 
 # Finance Report 应用
-invoke finance_report.postgres.shared.status
-invoke finance_report.redis.shared.status
-invoke finance_report.app.shared.status
+invoke fr-postgres.shared.status
+invoke fr-redis.shared.status
+invoke fr-app.shared.status
 ```
 
 ## 📦 Finance Report 部署
@@ -160,17 +160,17 @@ invoke env.set PASSWORD=$(openssl rand -base64 24) --project=finance_report --en
 # 见 docs/project/Infra-009.finance_report_deploy.md
 
 # 4. 生成 Vault tokens
-invoke vault.setup-tokens
+invoke vault.setup-tokens --project=finance_report
 
 # 5. 部署服务
-invoke finance_report.postgres.setup
-invoke finance_report.redis.setup
-invoke finance_report.app.setup
+invoke fr-postgres.setup
+invoke fr-redis.setup
+invoke fr-app.setup
 
 # 6. 验证
-invoke finance_report.postgres.shared.status
-invoke finance_report.redis.shared.status
-invoke finance_report.app.shared.status
+invoke fr-postgres.shared.status
+invoke fr-redis.shared.status
+invoke fr-app.shared.status
 curl https://report.zitian.party/api/health
 ```
 

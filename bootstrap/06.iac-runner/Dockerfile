@@ -5,7 +5,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
     openssh-client \
-    docker.io \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
@@ -22,4 +21,4 @@ RUN mkdir -p /workspace
 
 EXPOSE 8080
 
-CMD ["python", "webhook_server.py"]
+CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:8080", "webhook_server:app"]

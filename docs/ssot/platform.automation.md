@@ -163,6 +163,30 @@ invoke env.init-status
 invoke dokploy.env-ensure --project=platform --env=staging --description="staging env"
 ```
 
+### SOP-005: 部署非 platform 项目（如 finance_report）
+
+> **重要**: 非 platform 项目的 invoke 任务使用前缀避免命名冲突
+
+```bash
+# finance_report 任务使用 fr- 前缀
+invoke fr-postgres.setup
+invoke fr-redis.setup
+invoke fr-app.setup
+
+# 检查状态
+invoke fr-postgres.shared.status
+invoke fr-redis.shared.status
+invoke fr-app.shared.status
+
+# Vault token 配置（需指定 project 参数）
+invoke vault.setup-tokens --project=finance_report
+```
+
+**约束**:
+- 非 platform 项目的 Deployer 必须设置 `project` 类属性
+- 项目目录结构: `{project_name}/{project_name}/{nn}.{service}/`
+- Loader 使用 `use_prefix=True` 避免任务命名覆盖
+
 ---
 
 ## 5. 验证与测试 (The Proof)

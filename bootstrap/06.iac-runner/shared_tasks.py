@@ -2,7 +2,7 @@
 IaC Runner health check
 """
 from invoke import task
-from libs.common import get_env, check_service
+from libs.common import check_service
 
 
 @task
