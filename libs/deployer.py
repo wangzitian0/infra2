@@ -6,6 +6,7 @@ Simplified: minimal class attributes, uses new env.py API.
 from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 import os
+import hashlib
 from invoke import task
 
 from libs.common import get_env, validate_env, service_domain
@@ -17,6 +18,14 @@ if TYPE_CHECKING:
 
 
 __all__ = ['Deployer', 'make_tasks']
+
+
+def _compute_config_hash(compose_content: str, env_vars: dict[str, str]) -> str:
+    """Compute hash of compose content + env vars for change detection."""
+    # Normalize env vars (sort keys, ignore empty values)
+    env_str = "\n".join(f"{k}={v}" for k, v in sorted(env_vars.items()) if v)
+    combined = f"{compose_content}\n---ENV---\n{env_str}"
+    return hashlib.sha256(combined.encode()).hexdigest()[:12]
 
 
 class Deployer:
@@ -295,6 +304,99 @@ class Deployer:
         error("Verification failed", result["details"])
         return False
 
+    @classmethod
+    def get_remote_config_hash(cls) -> str | None:
+        """Get config hash stored in Dokploy compose description/env."""
+        from libs.dokploy import get_dokploy
+        
+        e = cls.env()
+        env_name = e.get("ENV", "production")
+        project_name = cls.project_name(e)
+        domain = e.get('INTERNAL_DOMAIN')
+        host = f"cloud.{domain}" if domain else None
+        
+        client = get_dokploy(host=host)
+        existing = client.find_compose_by_name(cls.service, project_name, env_name=env_name)
+        
+        if not existing:
+            return None
+        
+        # Hash is stored in env as IaC_CONFIG_HASH
+        env_str = existing.get("env", "")
+        for line in env_str.split('\n'):
+            if line.startswith("IAC_CONFIG_HASH="):
+                return line.split("=", 1)[1].strip()
+        return None
+    
+    @classmethod
+    def compute_local_config_hash(cls, c: "Context", env_vars: dict[str, str]) -> str:
+        """Compute hash of local compose + env vars."""
+        compose_content = cls.get_compose_content(c)
+        return _compute_config_hash(compose_content, env_vars)
+    
+    @classmethod
+    def sync(cls, c: "Context", force: bool = False) -> dict:
+        """Sync IaC state - update only if config changed.
+        
+        Returns:
+            dict with keys: action (skipped|updated|created|failed), details
+        """
+        header(f"{cls.service} sync", "Checking for changes")
+        
+        # Prepare env vars (without full pre_compose side effects)
+        e = cls.env()
+        if missing := validate_env():
+            return {"action": "failed", "details": f"Missing env: {', '.join(missing)}"}
+        
+        # Get secrets backend and ensure secret exists
+        secrets_backend = cls.secrets()
+        if cls.secret_key:
+            val = secrets_backend.get(cls.secret_key)
+            if not val:
+                val = generate_password(24)
+                if not secrets_backend.set(cls.secret_key, val):
+                    return {"action": "failed", "details": f"Failed to store secret: {cls.secret_key}"}
+                warning(f"Generated new secret: {cls.secret_key}")
+        
+        # Build env vars
+        env_vars_dict = cls.compose_env_base(e)
+        env_vars_dict["VAULT_ADDR"] = e.get("VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}")
+        
+        # Compute local hash
+        local_hash = cls.compute_local_config_hash(c, env_vars_dict)
+        remote_hash = cls.get_remote_config_hash()
+        
+        info(f"Local config hash: {local_hash}")
+        info(f"Remote config hash: {remote_hash or 'not found'}")
+        
+        if not force and local_hash == remote_hash:
+            success(f"{cls.service}: config unchanged, skipping deploy")
+            return {"action": "skipped", "details": "Config hash matches"}
+        
+        # Config changed or force - do full deploy
+        if remote_hash is None:
+            info("No remote config found, creating new deployment")
+        elif force:
+            warning("Force sync requested")
+        else:
+            info(f"Config changed ({remote_hash} -> {local_hash}), deploying")
+        
+        # Prepare directories
+        if not cls._prepare_dirs(c):
+            return {"action": "failed", "details": "Failed to prepare directories"}
+        
+        # Add hash to env vars
+        env_vars_dict["IAC_CONFIG_HASH"] = local_hash
+        
+        # Deploy
+        try:
+            compose_id = cls.composing(c, env_vars_dict)
+            success(f"{cls.service}: deployed with hash {local_hash}")
+            return {"action": "updated" if remote_hash else "created", "details": f"composeId: {compose_id}"}
+        except Exception as exc:
+            error(f"Deploy failed: {exc}")
+            return {"action": "failed", "details": str(exc)}
+
 
 def make_tasks(deployer_cls: type[Deployer], shared_tasks: Any) -> dict:
     """Generate standard invoke tasks for a deployer"""
@@ -341,10 +443,16 @@ def make_tasks(deployer_cls: type[Deployer], shared_tasks: Any) -> dict:
         deployer_cls.post_compose(c, shared_tasks)
         success(f"{deployer_cls.service} setup complete!")
     
+    @task
+    def sync(c, force=False):
+        """Sync IaC state - deploy only if config changed"""
+        return deployer_cls.sync(c, force=force)
+    
     return {
         "status": status,
         "pre_compose": pre_compose,
         "composing": composing,
         "post_compose": post_compose,
         "setup": setup,
+        "sync": sync,
     }
