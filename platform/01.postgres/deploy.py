@@ -21,3 +21,4 @@ if shared_tasks:
     composing = _tasks["composing"]
     post_compose = _tasks["post_compose"]
     setup = _tasks["setup"]
+    sync = _tasks["sync"]
