@@ -1,3 +1,19 @@
+# Finance Report Production Deployment
+#
+# IMPORTANT: This compose file runs database migrations on container startup.
+# 
+# Deployment Considerations:
+# - Migrations run automatically before the application starts
+# - Alembic uses database locks to prevent concurrent migration conflicts
+# - For zero-downtime deployments, ensure migrations are backward-compatible
+# - Scale backend to 1 replica during deployments to avoid migration contention
+# - Use 'docker compose up -d --no-deps --scale backend=1 backend' for updates
+#
+# Migration Safety:
+# - Failed migrations prevent container startup (fail-fast)
+# - Retry logic handles transient PostgreSQL connection issues
+# - Healthcheck allows up to 180s for migration + startup time
+#
 services:
   vault-agent:
     image: hashicorp/vault:1.15
@@ -38,15 +54,32 @@ services:
         set -a
         . /secrets/.env
         set +a
+        
+        # Run database migrations with retry logic
+        # Retries handle cases where PostgreSQL might not be fully ready
         echo "Running database migrations..."
-        alembic upgrade head
-        echo "Migrations completed. Starting application..."
+        max_retries=10
+        retry_interval=5
+        attempt=1
+        
+        until alembic upgrade head; do
+          exit_code=$$?
+          if [ "$$attempt" -ge "$$max_retries" ]; then
+            echo "ERROR: Migrations failed after $$attempt attempts (exit code $$exit_code)"
+            exit $$exit_code
+          fi
+          echo "WARNING: Migration attempt $$attempt/$$max_retries failed (exit code $$exit_code). Retrying in $$retry_interval seconds..."
+          attempt=$$((attempt + 1))
+          sleep $$retry_interval
+        done
+        
+        echo "Migrations completed successfully. Starting application..."
         exec uvicorn src.main:app --host 0.0.0.0 --port 8000
     environment:
       DEBUG: ${DEBUG:-false}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
-      start_period: 60s
+      start_period: ${BACKEND_HEALTHCHECK_START_PERIOD:-180s}
       interval: 30s
       retries: 5
       timeout: 10s
