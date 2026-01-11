@@ -46,6 +46,9 @@ services:
       - sh
       - -c
       - |
+        # Ensure we're in the app directory (required for alembic to find alembic.ini)
+        cd /app
+        
         # Wait for secrets file to be rendered by vault-agent
         while [ ! -f /secrets/.env ]; do
           echo "Waiting for secrets..."
