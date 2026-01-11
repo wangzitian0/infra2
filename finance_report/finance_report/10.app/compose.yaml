@@ -12,7 +12,7 @@
 # Migration Safety:
 # - Failed migrations prevent container startup (fail-fast)
 # - Retry logic handles transient PostgreSQL connection issues
-# - Healthcheck allows up to 180s for migration + startup time
+# - Healthcheck by default allows up to 180s for migration + startup time (configurable via BACKEND_HEALTHCHECK_START_PERIOD)
 #
 services:
   vault-agent:
@@ -57,18 +57,18 @@ services:
         
         # Run database migrations with retry logic
         # Retries handle cases where PostgreSQL might not be fully ready
+        # Total retry time (~150s) aligns with healthcheck start_period (default 180s)
         echo "Running database migrations..."
-        max_retries=10
+        max_retries=30
         retry_interval=5
         attempt=1
         
         until alembic upgrade head; do
-          exit_code=$$?
           if [ "$$attempt" -ge "$$max_retries" ]; then
-            echo "ERROR: Migrations failed after $$attempt attempts (exit code $$exit_code)"
-            exit $$exit_code
+            echo "ERROR: Migrations failed after $$attempt attempts"
+            exit 1
           fi
-          echo "WARNING: Migration attempt $$attempt/$$max_retries failed (exit code $$exit_code). Retrying in $$retry_interval seconds..."
+          echo "WARNING: Migration attempt $$attempt/$$max_retries failed. Retrying in $$retry_interval seconds..."
           attempt=$$((attempt + 1))
           sleep $$retry_interval
         done
