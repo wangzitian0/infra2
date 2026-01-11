@@ -21,7 +21,7 @@ services:
       - dokploy-network
 
   backend:
-    image: ghcr.io/wangzitian0/finance_report-backend:${IMAGE_TAG:-latest}
+    image: ghcr.io/wangzitian0/finance_report-backend:sha-a092abd
     container_name: finance_report-backend${ENV_SUFFIX}
     restart: always
     depends_on:
@@ -63,7 +63,7 @@ services:
       - "traefik.http.routers.finance-report-api${ENV_DOMAIN_SUFFIX}.middlewares=finance-report-api-strip${ENV_DOMAIN_SUFFIX}@docker"
 
   frontend:
-    image: ghcr.io/wangzitian0/finance_report-frontend:${IMAGE_TAG:-latest}
+    image: ghcr.io/wangzitian0/finance_report-frontend:sha-a092abd
     container_name: finance_report-frontend${ENV_SUFFIX}
     restart: always
     depends_on:
