@@ -21,7 +21,7 @@ services:
       - dokploy-network
 
   backend:
-    image: ghcr.io/wangzitian0/finance_report-backend:sha-a092abd
+    image: ghcr.io/wangzitian0/finance_report-backend:${IMAGE_TAG:-latest}
     container_name: finance_report-backend${ENV_SUFFIX}
     restart: always
     depends_on:
@@ -38,12 +38,15 @@ services:
         set -a
         . /secrets/.env
         set +a
+        echo "Running database migrations..."
+        alembic upgrade head
+        echo "Migrations completed. Starting application..."
         exec uvicorn src.main:app --host 0.0.0.0 --port 8000
     environment:
       DEBUG: ${DEBUG:-false}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
-      start_period: 30s
+      start_period: 60s
       interval: 30s
       retries: 5
       timeout: 10s
@@ -63,7 +66,7 @@ services:
       - "traefik.http.routers.finance-report-api${ENV_DOMAIN_SUFFIX}.middlewares=finance-report-api-strip${ENV_DOMAIN_SUFFIX}@docker"
 
   frontend:
-    image: ghcr.io/wangzitian0/finance_report-frontend:sha-a092abd
+    image: ghcr.io/wangzitian0/finance_report-frontend:${IMAGE_TAG:-latest}
     container_name: finance_report-frontend${ENV_SUFFIX}
     restart: always
     depends_on:
