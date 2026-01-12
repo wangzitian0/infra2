@@ -46,12 +46,9 @@ services:
       - sh
       - -c
       - |
-        # Ensure we're in the app directory (required for alembic to find alembic.ini)
+        # Ensure we're in the app directory and set PYTHONPATH for alembic
         cd /app
-        echo "DEBUG: pwd=$(pwd)"
-        echo "DEBUG: ls -la /app/"
-        ls -la /app/
-        echo "DEBUG: alembic.ini exists? $(test -f /app/alembic.ini && echo YES || echo NO)"
+        export PYTHONPATH=/app
         
         # Wait for secrets file to be rendered by vault-agent
         while [ ! -f /secrets/.env ]; do
