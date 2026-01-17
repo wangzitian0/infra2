@@ -38,6 +38,7 @@ def app_url():
 @pytest.mark.api
 async def test_api_health_check(app_url):
     """Verify the API health endpoint is up."""
+    # verify=False is intentional for dev/staging self-signed certs
     async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
         # Try both common health paths just in case
         for path in ["/api/health", "/api/ping"]:
@@ -108,7 +109,7 @@ async def test_create_manual_journal_entry(page: Page, app_url):
         pass
     else:
         # If UI structure isn't known, just pass for now to establish the test file
-        print("Create button not found, skipping interaction step.")
+        pytest.skip("Create button not found, skipping interaction step.")
 
 # --- Integration Tests (API Data Mutation) ---
 
@@ -135,4 +136,4 @@ async def test_create_entry_via_api(app_url):
         # We accept 401/403 as "Success" in terms of "Service is up and responding",
         # since we aren't handling auth token here yet.
         if response.status_code >= 500:
-             pytest.fail(f"API Error: {response.status_code}")
+            pytest.fail(f"API Error: {response.status_code}")

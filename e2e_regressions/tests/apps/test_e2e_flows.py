@@ -6,11 +6,15 @@ They are skipped in Production/Read-Only modes.
 """
 import os
 import pytest
+from pathlib import Path
 from playwright.async_api import Page, expect
 
 # --- Configuration ---
 APP_URL = os.getenv("APP_URL", "http://localhost:3000")
 TEST_ENV = os.getenv("TEST_ENV", "staging").lower()
+
+EXPECTED_TXN_COUNT = 15
+PARSING_TIMEOUT = 45000
 
 # Skip all tests in this module if we are in PROD
 if TEST_ENV == "prod":
@@ -97,8 +101,8 @@ async def test_manual_journal_entry_flow(page: Page):
     # Find the row with our entry
     row = page.locator("div", has=page.get_by_text("E2E Test Entry Auto")).first
     
-    # Setup dialog handler for confirmation
-    page.on("dialog", lambda dialog: dialog.accept())
+    # Setup dialog handler for confirmation (single use)
+    page.once("dialog", lambda dialog: dialog.accept())
     
     # Click delete (we look for the delete button inside that row/context)
     # The delete button is a "Delete" text badge-error or similar.
@@ -166,7 +170,7 @@ async def test_statement_import_flow(page: Page, repo_root: Path):
     
     try:
         # Give it up to 45 seconds for LLM parsing
-        await expect(row).to_contain_text("15 txns", timeout=45000)
+        await expect(row).to_contain_text(f"{EXPECTED_TXN_COUNT} txns", timeout=PARSING_TIMEOUT)
         await expect(row).to_contain_text("parsed", ignore_case=True)
     except AssertionError:
         # If parsing failed or timed out, we might see 'rejected' or still 'parsing'
@@ -180,7 +184,7 @@ async def test_statement_import_flow(page: Page, repo_root: Path):
     row = page.locator("a", has=page.get_by_text("DBS E2E Test")).first
     
     # Handle confirmation
-    page.on("dialog", lambda dialog: dialog.accept())
+    page.once("dialog", lambda dialog: dialog.accept())
     
     # Click delete button (it has title="Delete Statement")
     await row.get_by_title("Delete Statement").click()
@@ -226,16 +230,8 @@ async def test_account_deletion_constraint(page: Page):
     await page.get_by_label("Memo *").fill("Constraint Test Entry")
     
     # Use the new account
-    # We assume it appears in the dropdown. Since we just added it, it might be last or sorted.
-    # To be safe, we type/search if the select supports it, or we rely on the backend sort.
-    # Standard HTML select: we can select by label.
     selects = page.locator("select")
     # Account 1
-    # We try to select by label "E2E Constraint Test" (might need prefix if code exists)
-    # The form shows: "{code} - {name}" or just "{name}"
-    # We try partial match if Playwright supports it, or exact.
-    # We'll try value based selection if we can grab ID, but we can't easily.
-    # We'll try selecting by label.
     await selects.nth(0).select_option(label="E2E Constraint Test")
     await page.locator("input[type='number']").nth(0).fill("100")
     
@@ -251,11 +247,9 @@ async def test_account_deletion_constraint(page: Page):
     await page.goto(get_url("/accounts"))
     row = page.locator("div", has=page.get_by_text("E2E Constraint Test")).last
     
-    page.on("dialog", lambda dialog: dialog.accept())
+    page.once("dialog", lambda dialog: dialog.accept())
     
     # We expect an error alert or notification
-    # The UI shows error in `error` state: "Failed to delete account. It may have transactions."
-    # We click delete
     await row.get_by_title("Delete Account").click()
     
     # Verify Error Message
@@ -266,6 +260,7 @@ async def test_account_deletion_constraint(page: Page):
     # 4. Delete Entry
     await page.goto(get_url("/journal"))
     entry_row = page.locator("div", has=page.get_by_text("Constraint Test Entry")).first
+    page.once("dialog", lambda dialog: dialog.accept())
     await entry_row.get_by_role("button", name="Delete").click()
     await expect(page.get_by_text("Constraint Test Entry")).not_to_be_visible()
     
@@ -273,8 +268,7 @@ async def test_account_deletion_constraint(page: Page):
     await page.goto(get_url("/accounts"))
     row = page.locator("div", has=page.get_by_text("E2E Constraint Test")).last
     
-    # Clear previous error if any (re-navigated so should be clear)
-    
+    page.once("dialog", lambda dialog: dialog.accept())
     await row.get_by_title("Delete Account").click()
     
     # Verify Gone
