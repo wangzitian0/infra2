@@ -16,6 +16,7 @@ dependencies = [
     # Automation
     "invoke>=2.2.0",
     "rich>=14.2.0",
+    "reportlab>=4.0.0",
 ]
 
 [tool.pytest.ini_options]

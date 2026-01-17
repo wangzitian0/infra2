@@ -89,6 +89,12 @@ class TestConfig:
 
 
 @pytest.fixture(scope="session")
+def repo_root() -> Path:
+    """Return the repository root path."""
+    return ROOT
+
+
+@pytest.fixture(scope="session")
 def config() -> TestConfig:
     """Provide test configuration."""
     return TestConfig()
