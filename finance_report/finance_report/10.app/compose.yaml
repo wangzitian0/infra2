@@ -73,6 +73,7 @@ services:
         condition: service_healthy
     environment:
       NEXT_PUBLIC_API_URL: https://report${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}/api
+      NEXT_PUBLIC_APP_URL: https://report${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:3000" ]
       start_period: 30s
