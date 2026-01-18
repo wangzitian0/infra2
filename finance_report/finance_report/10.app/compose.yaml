@@ -38,6 +38,7 @@ services:
 
   backend:
     image: ghcr.io/wangzitian0/finance_report-backend:${IMAGE_TAG:-latest}
+    pull_policy: always
     container_name: finance_report-backend${ENV_SUFFIX}
     restart: always
     depends_on:
@@ -104,6 +105,7 @@ services:
 
   frontend:
     image: ghcr.io/wangzitian0/finance_report-frontend:${IMAGE_TAG:-latest}
+    pull_policy: always
     container_name: finance_report-frontend${ENV_SUFFIX}
     restart: always
     depends_on:
@@ -111,6 +113,7 @@ services:
         condition: service_healthy
     environment:
       NEXT_PUBLIC_API_URL: https://report${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}/api
+      NEXT_PUBLIC_APP_URL: https://report${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:3000" ]
       start_period: 30s
