@@ -119,6 +119,41 @@ invoke signoz.shared.test-trace
 invoke signoz.shared.test-trace --service-name=myapp
 ```
 
+## Application Integration (Project/Env/Service)
+
+All application telemetry config is stored in Vault using the `project/env/service` hierarchy
+defined by the shared `libs/env` tooling. This keeps local development simple while production
+uses secure, IaC-managed secrets.
+
+**OTEL log export keys** (Vault, per service):
+- `OTEL_EXPORTER_OTLP_ENDPOINT` (HTTP): `http://platform-signoz-otel-collector${ENV_SUFFIX}:4318`
+- `OTEL_SERVICE_NAME`: e.g. `finance-report-backend`
+- `OTEL_RESOURCE_ATTRIBUTES`: e.g. `deployment.environment=production`
+
+### Finance Report Example
+
+```bash
+# Production (finance_report/production/app)
+uv run invoke env.set OTEL_EXPORTER_OTLP_ENDPOINT=http://platform-signoz-otel-collector:4318 --project=finance_report --env=production --service=app
+uv run invoke env.set OTEL_SERVICE_NAME=finance-report-backend --project=finance_report --env=production --service=app
+uv run invoke env.set OTEL_RESOURCE_ATTRIBUTES=deployment.environment=production --project=finance_report --env=production --service=app
+
+# Staging (finance_report/staging/app)
+uv run invoke env.set OTEL_EXPORTER_OTLP_ENDPOINT=http://platform-signoz-otel-collector-staging:4318 --project=finance_report --env=staging --service=app
+uv run invoke env.set OTEL_SERVICE_NAME=finance-report-backend --project=finance_report --env=staging --service=app
+uv run invoke env.set OTEL_RESOURCE_ATTRIBUTES=deployment.environment=staging --project=finance_report --env=staging --service=app
+```
+
+### Verification
+
+```bash
+# SigNoz health
+uv run invoke signoz.status
+
+# OTLP connectivity (shared_tasks.py)
+uv run invoke signoz.shared.test-trace --service-name=finance-report-backend
+```
+
 ## Configuration
 
 ### OpenTelemetry Collector

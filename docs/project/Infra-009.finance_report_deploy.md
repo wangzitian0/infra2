@@ -52,15 +52,24 @@ vault → postgres → app
 - finance_report/finance_report/02.redis/
 - finance_report/finance_report/10.app/
 
+## Observability (SigNoz Logs)
+
+- OTEL export is **optional** in app code; enabled via Vault in staging/production.
+- OTEL endpoint should be environment-specific (no placeholders in Vault).
+- Required keys in Vault: `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`.
+
 ## PR Links
 
-- None yet.
+- infra2: https://github.com/wangzitian0/infra2/pull/67
 
 ## Change Log
 
 | Date | Change |
 |------|--------|
 | 2026-01-10 | Initialized project, linked to EPIC-007 |
+| 2026-01-19 | Added SigNoz log export wiring for finance_report app |
+| 2026-01-19 | Set OTEL Vault values for finance_report app (staging/production) |
+| 2026-01-19 | Added restart-safe compose wiring and fixed Vault template quoting |
 
 ## Verification
 
@@ -68,6 +77,7 @@ vault → postgres → app
 - [ ] `invoke finance_report.redis.status`
 - [ ] `invoke finance_report.app.status`
 - [ ] `curl https://report.${INTERNAL_DOMAIN}`
+- [ ] Logs visible in SigNoz (after OTEL vars are set)
 
 ## References
 
