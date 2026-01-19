@@ -60,7 +60,7 @@ vault → postgres → app
 
 ## PR Links
 
-- None yet.
+- infra2: https://github.com/wangzitian0/infra2/pull/67
 
 ## Change Log
 
@@ -69,6 +69,7 @@ vault → postgres → app
 | 2026-01-10 | Initialized project, linked to EPIC-007 |
 | 2026-01-19 | Added SigNoz log export wiring for finance_report app |
 | 2026-01-19 | Set OTEL Vault values for finance_report app (staging/production) |
+| 2026-01-19 | Added restart-safe compose wiring and fixed Vault template quoting |
 
 ## Verification
 
