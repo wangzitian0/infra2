@@ -26,12 +26,17 @@ class AppDeployer(Deployer):
         if env_vars is None:
             return None
             
-        # Auto-configure S3 Public Endpoint
-        # Assumes Platform MinIO is exposed at s3{suffix}.{INTERNAL_DOMAIN} via Traefik
-        domain = env_vars.get("INTERNAL_DOMAIN")
-        suffix = env_vars.get("ENV_DOMAIN_SUFFIX", "")
-        if domain:
-            env_vars["S3_PUBLIC_ENDPOINT"] = f"https://s3{suffix}.{domain}"
+        # Auto-configure S3 Public Endpoint using standardized infrastructure lib
+        # This ensures we respect the central SERVICE_SUBDOMAINS definition (minio_api -> s3)
+        # and handle environment suffixes automatically.
+        from libs.common import get_service_url
+        
+        try:
+            # "minio_api" is the key in SERVICE_SUBDOMAINS for the S3 interface
+            env_vars["S3_PUBLIC_ENDPOINT"] = get_service_url("minio_api", env=env_vars)
+        except Exception as e:
+            from libs.console import warning
+            warning(f"Could not resolve Public S3 URL: {e}")
             
         return env_vars
 
