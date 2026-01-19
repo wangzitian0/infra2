@@ -17,7 +17,7 @@ services:
       - |
         if [ "${SIGNOZ_RESET_METADATA}" = "true" ]; then
           echo "Resetting SigNoz metadata..."
-          rm -f /var/lib/signoz/signoz.db
+          find /var/lib/signoz -maxdepth 2 -name '*.db*' -delete
         else
           echo "SIGNOZ_RESET_METADATA not set; skipping reset."
         fi
