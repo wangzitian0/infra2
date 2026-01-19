@@ -37,6 +37,10 @@ def _admin_item_name(env: dict) -> str:
 
 def _default_admin_email(env: dict) -> str:
     domain = env.get("INTERNAL_DOMAIN") or "example.com"
+    env_name = env.get("ENV", "production")
+    if env_name != "production":
+        env_label = env_name.replace("_", "-")
+        return f"{ADMIN_EMAIL_PREFIX}-{env_label}@{domain}"
     return f"{ADMIN_EMAIL_PREFIX}@{domain}"
 
 

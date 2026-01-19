@@ -154,6 +154,7 @@ ${DATA_PATH}/
 
 - **1Password**: `platform/signoz/admin` (non-production: `platform/signoz/admin-<env>`)
 - **Auto seed**: `invoke signoz.shared.ensure-admin` (runs after `signoz.setup`)
+- **Default email**: `signoz-admin@<domain>` (prod), `signoz-admin-<env>@<domain>` (non-prod)
 - **Note**: If self-registration is disabled, an admin already exists; reset the password manually and update 1Password.
 
 ### 5.4 容量规划

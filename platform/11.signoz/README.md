@@ -98,6 +98,7 @@ Configured via Dokploy domain settings in `deploy.py` (compose.yaml only enables
 ### Admin Credentials (1Password)
 - **Item**: `platform/signoz/admin` (non-production: `platform/signoz/admin-<env>`)
 - **Auto-seed**: `invoke signoz.shared.ensure-admin` (runs during `signoz.setup`)
+- **Default email**: `signoz-admin@<domain>` (prod), `signoz-admin-<env>@<domain>` (non-prod)
 - If registration is disabled, manually reset the admin password and update the 1Password item.
 
 ### OTLP Endpoints (for instrumentation)
