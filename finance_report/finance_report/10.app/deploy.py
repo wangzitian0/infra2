@@ -27,10 +27,11 @@ class AppDeployer(Deployer):
             return None
             
         # Auto-configure S3 Public Endpoint
-        # Assumes Platform MinIO is exposed at s3.{INTERNAL_DOMAIN} via Traefik
+        # Assumes Platform MinIO is exposed at s3{suffix}.{INTERNAL_DOMAIN} via Traefik
         domain = env_vars.get("INTERNAL_DOMAIN")
+        suffix = env_vars.get("ENV_DOMAIN_SUFFIX", "")
         if domain:
-            env_vars["S3_PUBLIC_ENDPOINT"] = f"https://s3.{domain}"
+            env_vars["S3_PUBLIC_ENDPOINT"] = f"https://s3{suffix}.{domain}"
             
         return env_vars
 
