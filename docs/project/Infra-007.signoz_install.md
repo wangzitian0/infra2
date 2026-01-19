@@ -52,6 +52,11 @@
 - [x] ops.observability.md（完整架构和接入指南）
 - [x] docs/project/README.md（添加 Infra-007）
 
+### Task 5: Admin Bootstrap ✅
+- [x] Auto-create admin account (register API)
+- [x] Store admin credentials in 1Password
+- [x] Documentation updates (README + SSOT)
+
 ## Architecture
 
 ```
@@ -118,6 +123,7 @@ open https://signoz.${INTERNAL_DOMAIN}
 - 2026-01-01: ✅ Documentation updated (README + SSOT)
 - 2026-01-01: ✅ OTLP test-trace command added
 - 2026-01-01: **Project completed**
+- 2026-01-19: ✅ Admin bootstrap + 1Password storage added
 
 ## Related PRs
 

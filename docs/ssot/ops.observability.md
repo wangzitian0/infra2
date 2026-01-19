@@ -150,6 +150,12 @@ ${DATA_PATH}/
 - **OTLP gRPC**: `platform-signoz-otel-collector${ENV_SUFFIX}:4317` (Docker 网络内)
 - **OTLP HTTP**: `platform-signoz-otel-collector${ENV_SUFFIX}:4318` (Docker 网络内)
 
+### 5.4 Admin Account
+
+- **1Password**: `platform/signoz/admin` (non-production: `platform/signoz/admin-<env>`)
+- **Auto seed**: `invoke signoz.shared.ensure-admin` (runs after `signoz.setup`)
+- **Note**: If self-registration is disabled, an admin already exists; reset the password manually and update 1Password.
+
 ### 5.4 容量规划
 
 | 指标 | 建议值 | 说明 |

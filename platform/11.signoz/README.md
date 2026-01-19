@@ -95,6 +95,11 @@ Configured via Dokploy domain settings in `deploy.py` (compose.yaml only enables
 - **URL**: `https://signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`
 - **First-time setup**: Create admin account on first visit
 
+### Admin Credentials (1Password)
+- **Item**: `platform/signoz/admin` (non-production: `platform/signoz/admin-<env>`)
+- **Auto-seed**: `invoke signoz.shared.ensure-admin` (runs during `signoz.setup`)
+- If registration is disabled, manually reset the admin password and update the 1Password item.
+
 ### OTLP Endpoints (for instrumentation)
 
 > **Note**: OTLP ports (4317/4318) are only accessible within the Docker network (`dokploy-network`).

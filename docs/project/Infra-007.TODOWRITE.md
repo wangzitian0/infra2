@@ -6,6 +6,7 @@
 ## Artifacts & Notes
 
 - OTEL collector config now rendered to `${DATA_PATH}/otel-collector-config.yaml` during `signoz.pre-compose` to avoid `${ENV_SUFFIX}` placeholders in runtime config.
+- Admin bootstrap added: `signoz.shared.ensure-admin` registers an admin account (when self-registration is allowed) and stores credentials in 1Password.
 
 ### Official Compose Analysis
 
@@ -66,6 +67,7 @@
 - [ ] 添加 vault-agent 到 query-service（使用 deploy.py 生成 JWT secret 替代）
 - [x] 配置 Traefik labels for frontend
 - [x] 测试 OTLP 端点连通性（`invoke signoz.shared.test-trace`）
+- [x] Admin bootstrap (registration + 1Password)
 - [ ] 考虑是否需要 SSO 保护
 - [ ] ClickHouse 添加密码认证（安全改进）
 

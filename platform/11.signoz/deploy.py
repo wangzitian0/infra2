@@ -115,6 +115,15 @@ class SigNozDeployer(Deployer):
         result["SIGNOZ_JWT_SECRET"] = jwt_secret
         return result
 
+    @classmethod
+    def post_compose(cls, c, shared_tasks_module) -> bool:
+        """Verify deployment and ensure admin credentials are seeded."""
+        if not super().post_compose(c, shared_tasks_module):
+            return False
+        if shared_tasks_module and hasattr(shared_tasks_module, "ensure_admin"):
+            shared_tasks_module.ensure_admin(c)
+        return True
+
 
 if shared_tasks:
     _tasks = make_tasks(SigNozDeployer, shared_tasks)
