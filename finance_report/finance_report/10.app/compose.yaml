@@ -82,6 +82,10 @@ services:
         exec uvicorn src.main:app --host 0.0.0.0 --port 8000
     environment:
       DEBUG: ${DEBUG:-false}
+      # NOTE:
+      # - This S3_PUBLIC_ENDPOINT is intentionally configured only for the backend.
+      # - All S3 access from the application (including the browser/frontend) is
+      #   performed via the backend API, so the frontend does not need this variable.
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
