@@ -29,6 +29,7 @@ services:
       VAULT_ADDR: ${VAULT_ADDR}
       VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:-}
       ENV: ${ENV}
+      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
     volumes:
       - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
       - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
@@ -87,6 +88,7 @@ services:
       # - All S3 access from the application (including the browser/frontend) is
       #   performed via the backend API, so the frontend does not need this variable.
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
+      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       start_period: ${BACKEND_HEALTHCHECK_START_PERIOD:-180s}
