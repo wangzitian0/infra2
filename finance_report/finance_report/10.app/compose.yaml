@@ -1,7 +1,7 @@
 # Finance Report Production Deployment
 #
 # IMPORTANT: This compose file runs database migrations on container startup.
-# 
+#
 # Deployment Considerations:
 # - Migrations run automatically before the application starts
 # - Alembic uses database locks to prevent concurrent migration conflicts
@@ -50,7 +50,7 @@ services:
         # Ensure we're in the app directory and set PYTHONPATH for alembic
         cd /app
         export PYTHONPATH=/app
-        
+
         # Wait for secrets file to be rendered by vault-agent
         while [ ! -f /secrets/.env ]; do
           echo "Waiting for secrets..."
@@ -59,7 +59,7 @@ services:
         set -a
         . /secrets/.env
         set +a
-        
+
         # Run database migrations with retry logic
         # Retries handle cases where PostgreSQL might not be fully ready
         # Total retry time (~150s) aligns with healthcheck start_period (default 180s)
@@ -67,7 +67,7 @@ services:
         max_retries=30
         retry_interval=5
         attempt=1
-        
+
         until alembic upgrade head; do
           if [ "$$attempt" -ge "$$max_retries" ]; then
             echo "ERROR: Migrations failed after $$attempt attempts"
@@ -77,11 +77,12 @@ services:
           attempt=$$((attempt + 1))
           sleep $$retry_interval
         done
-        
+
         echo "Migrations completed successfully. Starting application..."
         exec uvicorn src.main:app --host 0.0.0.0 --port 8000
     environment:
       DEBUG: ${DEBUG:-false}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       start_period: ${BACKEND_HEALTHCHECK_START_PERIOD:-180s}

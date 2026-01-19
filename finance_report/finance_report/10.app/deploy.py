@@ -19,6 +19,21 @@ class AppDeployer(Deployer):
     service_port = 3000
     service_name = "frontend"
 
+    @classmethod
+    def pre_compose(cls, c) -> dict | None:
+        """Inject public S3 endpoint based on internal domain."""
+        env_vars = super().pre_compose(c)
+        if env_vars is None:
+            return None
+            
+        # Auto-configure S3 Public Endpoint
+        # Assumes Platform MinIO is exposed at s3.{INTERNAL_DOMAIN} via Traefik
+        domain = env_vars.get("INTERNAL_DOMAIN")
+        if domain:
+            env_vars["S3_PUBLIC_ENDPOINT"] = f"https://s3.{domain}"
+            
+        return env_vars
+
 
 if shared_tasks:
     _tasks = make_tasks(AppDeployer, shared_tasks)
