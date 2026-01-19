@@ -56,6 +56,7 @@
 - [x] Auto-create admin account (register API)
 - [x] Store admin credentials in 1Password
 - [x] Documentation updates (README + SSOT)
+- [x] Non-prod reset hook for admin bootstrap
 
 ## Architecture
 
@@ -124,6 +125,7 @@ open https://signoz.${INTERNAL_DOMAIN}
 - 2026-01-01: ✅ OTLP test-trace command added
 - 2026-01-01: **Project completed**
 - 2026-01-19: ✅ Admin bootstrap + 1Password storage added
+- 2026-01-19: ✅ Non-prod metadata reset hook added
 
 ## Related PRs
 

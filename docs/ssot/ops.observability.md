@@ -157,6 +157,13 @@ ${DATA_PATH}/
 - **Default email**: `signoz-admin@<domain>` (prod), `signoz-admin-<env>@<domain>` (non-prod)
 - **Note**: If self-registration is disabled, an admin already exists; reset the password manually and update 1Password.
 
+### 5.5 Reset Metadata (Non-Prod Only)
+
+```bash
+# WARNING: Deletes users/dashboards/alerts in the target environment.
+DEPLOY_ENV=staging uv run invoke signoz.shared.reset-metadata
+```
+
 ### 5.4 容量规划
 
 | 指标 | 建议值 | 说明 |

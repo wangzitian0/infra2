@@ -101,6 +101,12 @@ Configured via Dokploy domain settings in `deploy.py` (compose.yaml only enables
 - **Default email**: `signoz-admin@<domain>` (prod), `signoz-admin-<env>@<domain>` (non-prod)
 - If registration is disabled, manually reset the admin password and update the 1Password item.
 
+### Reset Metadata (Staging)
+```bash
+# WARNING: Deletes users/dashboards/alerts in the target environment.
+DEPLOY_ENV=staging uv run invoke signoz.shared.reset-metadata
+```
+
 ### OTLP Endpoints (for instrumentation)
 
 > **Note**: OTLP ports (4317/4318) are only accessible within the Docker network (`dokploy-network`).

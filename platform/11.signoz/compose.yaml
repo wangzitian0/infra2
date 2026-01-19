@@ -7,6 +7,27 @@ services:
     networks:
       - dokploy-network
 
+  signoz-reset:
+    image: alpine:3.19
+    container_name: platform-signoz-reset${ENV_SUFFIX}
+    restart: "no"
+    command:
+      - sh
+      - -c
+      - |
+        if [ "${SIGNOZ_RESET_METADATA}" = "true" ]; then
+          echo "Resetting SigNoz metadata..."
+          rm -f /var/lib/signoz/signoz.db
+        else
+          echo "SIGNOZ_RESET_METADATA not set; skipping reset."
+        fi
+    environment:
+      - SIGNOZ_RESET_METADATA=${SIGNOZ_RESET_METADATA:-false}
+    volumes:
+      - ${DATA_PATH}/data:/var/lib/signoz
+    networks:
+      - dokploy-network
+
   signoz:
     image: signoz/signoz:v0.105.1
     container_name: platform-signoz${ENV_SUFFIX}
@@ -14,6 +35,8 @@ services:
     restart: unless-stopped
     depends_on:
       schema-migrator:
+        condition: service_completed_successfully
+      signoz-reset:
         condition: service_completed_successfully
     command:
       - --config=/root/config/prometheus.yml

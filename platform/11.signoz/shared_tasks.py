@@ -232,6 +232,35 @@ def ensure_admin(c, email: str | None = None):
 
 
 @task
+def reset_metadata(c):
+    """Reset SigNoz metadata (SQLite) via Dokploy env flag and redeploy."""
+    env = get_env()
+    domain = env.get("INTERNAL_DOMAIN")
+    if not domain:
+        error("INTERNAL_DOMAIN not set; cannot resolve Dokploy host")
+        return False
+
+    from libs.dokploy import get_dokploy
+
+    host = f"cloud.{domain}"
+    client = get_dokploy(host=host)
+    compose = client.find_compose_by_name("signoz", project_name="platform", env_name=env.get("ENV"))
+    if not compose:
+        error("SigNoz compose not found in Dokploy")
+        return False
+
+    compose_id = compose.get("composeId")
+    warning("This will delete SigNoz metadata (users, dashboards, alerts) for this environment.")
+    info(f"Setting SIGNOZ_RESET_METADATA=true on compose {compose_id}")
+    client.update_compose_env(compose_id, env_vars={"SIGNOZ_RESET_METADATA": "true"})
+    client.deploy_compose(compose_id)
+    info("Reset deployment triggered. Clearing reset flag for future deploys.")
+    client.update_compose_env(compose_id, env_vars={"SIGNOZ_RESET_METADATA": "false"})
+    success("Reset metadata deployment queued.")
+    return True
+
+
+@task
 def test_trace(c, service_name="test"):
     """Send a test OTLP trace to verify connectivity.
     

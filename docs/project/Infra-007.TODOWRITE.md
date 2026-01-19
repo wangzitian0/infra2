@@ -7,6 +7,7 @@
 
 - OTEL collector config now rendered to `${DATA_PATH}/otel-collector-config.yaml` during `signoz.pre-compose` to avoid `${ENV_SUFFIX}` placeholders in runtime config.
 - Admin bootstrap added: `signoz.shared.ensure-admin` registers an admin account (when self-registration is allowed) and stores credentials in 1Password. Default email uses env suffix for non-production.
+- Metadata reset hook added: `signoz.shared.reset-metadata` toggles `SIGNOZ_RESET_METADATA` via Dokploy and redeploys.
 
 ### Official Compose Analysis
 
