@@ -100,6 +100,16 @@ Configured via Dokploy domain settings in `deploy.py` (compose.yaml only enables
 - **Auto-seed**: `invoke signoz.shared.ensure-admin` (runs during `signoz.setup`)
 - **Default email**: `signoz-admin@<domain>` (prod), `signoz-admin-<env>@<domain>` (non-prod)
 - If registration is disabled, manually reset the admin password and update the 1Password item.
+- **Root account**: `platform/signoz/admin` also doubles as the highest-privilege (root) credential for the SigNoz installation.
+
+### Automated Admin Bootstrap
+- **Script**: `repo/platform/11.signoz/scripts/bootstrap_admin.py`
+- **Purpose**: Reset the SQLite metadata and re-run `ensure-admin` for a specific environment (staging/prod).
+- **Usage example**:
+```
+uv run python repo/platform/11.signoz/scripts/bootstrap_admin.py --env staging --reset
+```
+- **Behavior**: The script sets `DEPLOY_ENV`, optionally runs `signoz.shared.reset-metadata`, then re-runs `signoz.shared.ensure-admin`. Use it when you need to wipe dashboards/users (staging only) and reseed the admin.
 
 ### Reset Metadata (Staging)
 ```bash
