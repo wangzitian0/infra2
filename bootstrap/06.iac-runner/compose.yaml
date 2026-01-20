@@ -12,6 +12,8 @@ services:
       # Git config (required)
       - GIT_REPO_URL=${GIT_REPO_URL}
       - GIT_BRANCH=${GIT_BRANCH:-main}
+      # GitHub API (for commit status)
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
       # Vault config (for invoke tasks)
       - VAULT_ADDR=${VAULT_ADDR}
       - VAULT_APP_TOKEN=${VAULT_APP_TOKEN}

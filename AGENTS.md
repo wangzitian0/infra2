@@ -161,8 +161,33 @@
 
 - **工具优先级**：mcp > cli > api > ssh > web浏览器。
 - **drift修复**：可以手动创建测试或者修补线上问题。但是要确保代码修复，同时合并之后要 apply 一次消除 drift。
-- **0宕机原则**：如果有宕机风险，必须主动提出问题。如果必须宕机，必须提出方案，降低宕机时长。
+- **0宕机原则**：如果有宕机风险，必须主动提出问题。如果必须宕机,必须提出方案，降低宕机时长。
 
+### CI/CD 流程准则
+
+- **基础设施 CI**：`.github/workflows/infra-ci.yml` 在每个 PR 上自动运行
+  - 验证所有 `compose.yaml` 语法
+  - 测试配置哈希幂等性逻辑
+  - 测试服务自动发现功能
+  - 运行 Python 代码 lint 检查
+- **IaC Runner 自动同步**：合并到 `main` 后自动触发
+  - Webhook → 计算变更服务 → 调用对应 `deploy.py`
+  - GitHub Commit Status 实时反馈（Pending → Success/Failure）
+  - 查看部署状态：检查 GitHub commit status 或访问 `https://iac-runner.{INTERNAL_DOMAIN}/health`
+- **手动部署**：需要时可手动触发
+  ```bash
+  # 手动同步所有服务
+  invoke iac-runner.sync --force
+  
+  # 手动同步特定服务
+  invoke postgres.setup  # 或其他服务的 setup 命令
+  ```
+- **PR 测试环境**：
+  - 推送分支后可创建 staging 环境测试变更
+  - 确保 staging 环境符合预期后再合并 PR
+  - **合并前要求**：PR 必须通过 `infra-ci` 检查
+
+详见 [ops.pipeline.md](./docs/ssot/ops.pipeline.md) 中的 IaC Runner 章节。
 
 ---
 

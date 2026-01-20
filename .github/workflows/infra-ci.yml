@@ -1,0 +1,116 @@
+name: Infrastructure CI
+
+on:
+  pull_request:
+    paths:
+      - 'bootstrap/**'
+      - 'platform/**'
+      - 'finance_report/**'
+      - 'libs/**'
+      - '.github/workflows/infra-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'bootstrap/**'
+      - 'platform/**'
+      - 'finance_report/**'
+      - 'libs/**'
+
+permissions:
+  contents: read
+
+jobs:
+  validate-compose:
+    name: Validate Compose Files
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate all compose.yaml files
+        run: |
+          set -e
+          echo "🔍 Validating compose files..."
+          find . -name "compose.yaml" -type f | while read -r file; do
+            echo "Validating: $file"
+            docker compose -f "$file" config > /dev/null
+          done
+          echo "✅ All compose files are valid"
+
+  test-deployer-logic:
+    name: Test Deployer Hash Logic
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install dependencies
+        run: |
+          cd ${{ github.workspace }}
+          uv pip install --system invoke httpx python-dotenv
+
+      - name: Test config hash idempotency
+        run: |
+          cd ${{ github.workspace }}
+          python -c "
+          import sys
+          sys.path.insert(0, 'libs')
+          from deployer import _compute_config_hash
+          
+          # Test hash stability with different order
+          hash1 = _compute_config_hash('test: true', {'A': '1', 'B': '2'})
+          hash2 = _compute_config_hash('test: true', {'B': '2', 'A': '1'})
+          assert hash1 == hash2, f'Hash not stable! {hash1} != {hash2}'
+          
+          # Test hash changes when content changes
+          hash3 = _compute_config_hash('test: false', {'A': '1', 'B': '2'})
+          assert hash1 != hash3, 'Hash should change with content'
+          
+          print('✅ Config hash idempotency verified')
+          "
+
+      - name: Test service discovery
+        run: |
+          cd ${{ github.workspace }}
+          python -c "
+          import sys
+          sys.path.insert(0, 'libs')
+          from deployer import discover_services
+          
+          services = discover_services()
+          print(f'Discovered {len(services)} services:')
+          for key, task in sorted(services.items()):
+            print(f'  {key} -> {task}')
+          
+          assert len(services) > 0, 'Should discover at least one service'
+          print('✅ Service discovery working')
+          "
+
+  lint-python:
+    name: Lint Python Code
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Run ruff check
+        run: ruff check libs/ bootstrap/ platform/ finance_report/ tools/
+
+      - name: Run ruff format check
+        run: ruff format --check libs/ bootstrap/ platform/ finance_report/ tools/

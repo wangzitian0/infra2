@@ -46,6 +46,7 @@ Bootstrap 依赖 1Password CLI (`op`)，使用 **`Infra2`** vault 存储所有�
 | `bootstrap/vault/Root Token` | Vault root token | 机器读 | Vault 初始化时写入 |
 | `bootstrap/vault/Unseal Keys` | Vault unseal keys (5 keys) | 机器读 | Vault 初始化时写入 |
 | `bootstrap/dokploy/admin` | Dokploy Web UI 密码 | **Web UI** | 手动创建 |
+| `bootstrap/iac-runner` | GitHub Token (repo:status scope) | 机器读 | IaC Runner 部署时手动创建 |
 | `platform/minio/admin` (`-staging` 可选) | MinIO Console 密码 | **Web UI** | 部署时写入 |
 | `platform/authentik/admin` | Authentik Web UI 密码 | **Web UI** | 从 Vault 复制 |
 

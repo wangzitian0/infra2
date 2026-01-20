@@ -9,6 +9,10 @@ GitOps-style webhook service that syncs infrastructure when main branch changes.
 │   GitHub    │ ──────────────▶ │  IaC Runner  │ ─────────────────▶│  Services   │
 │  (push)     │                  │  (container) │                   │  (Dokploy)  │
 └─────────────┘                  └──────────────┘                   └─────────────┘
+                                         │
+                                         ▼
+                                  GitHub Commit
+                                  Status API
 ```
 
 1. Developer pushes to `main` branch
@@ -16,13 +20,28 @@ GitOps-style webhook service that syncs infrastructure when main branch changes.
 3. IaC Runner parses changed files to identify affected services
 4. Runs `invoke {service}.sync` for each changed service
 5. Sync task compares config hash and only redeploys if changed
+6. Updates GitHub commit status (✅ success / ❌ failure)
 
-## Idempotency
+## Key Features
 
+### Idempotency
 The `sync` task uses config hashing:
 - Computes SHA256 of `compose.yaml + env vars`
 - Stores hash as `IAC_CONFIG_HASH` in Dokploy env
 - Skips deploy if hash matches (no changes)
+
+### Auto-Discovery
+Services are discovered automatically by scanning `*/deploy.py` files:
+- `platform/{nn}.{service}/` → `{service}.sync`
+- `finance_report/finance_report/{nn}.{service}/` → `fr-{service}.sync`
+
+No manual `SERVICE_TASK_MAP` maintenance required!
+
+### Concurrency Safety
+File-based locking (`/workspace/.sync.lock`) prevents concurrent git operations.
+
+### GitHub Integration
+Commit status updates provide real-time feedback on deployment success/failure.
 
 ## Setup
 
@@ -34,7 +53,13 @@ openssl rand -hex 32
 
 Store in Vault: `secret/bootstrap/production/iac-runner` → `WEBHOOK_SECRET`
 
-### 2. Configure GitHub Webhook
+### 2. Generate GitHub Token
+
+Create a GitHub Personal Access Token with `repo:status` scope.
+
+Store in Vault: `secret/bootstrap/production/iac-runner` → `GITHUB_TOKEN`
+
+### 3. Configure GitHub Webhook
 
 1. Go to repo Settings → Webhooks → Add webhook
 2. Payload URL: `https://iac.{your-domain}/webhook`
@@ -42,7 +67,7 @@ Store in Vault: `secret/bootstrap/production/iac-runner` → `WEBHOOK_SECRET`
 4. Secret: (the secret you generated)
 5. Events: Just the push event
 
-### 3. Deploy
+### 4. Deploy
 
 ```bash
 invoke iac-runner.setup
@@ -76,14 +101,19 @@ curl -X POST https://iac.{domain}/sync \
   -d "$PAYLOAD"
 ```
 
-## Service Mapping
+## Service Mapping (Auto-Discovered)
 
 | Changed Path | Invoke Task |
 |--------------|-------------|
 | `platform/01.postgres/*` | `postgres.sync` |
 | `finance_report/finance_report/10.app/*` | `fr-app.sync` |
-| `libs/*` | All services (full sync) |
+| `libs/*` | All discovered services |
 | `bootstrap/*` | Skipped (manual only) |
+
+**Manual Exclusions**:
+- `bootstrap/vault` → None (too risky)
+- `bootstrap/1password` → None
+- `bootstrap/iac-runner` → None (avoid self-restart)
 
 ## Security Considerations
 
@@ -91,3 +121,14 @@ curl -X POST https://iac.{domain}/sync \
 - Read-only docker socket mount
 - No write access to host filesystem (except workspace)
 - Bootstrap services excluded from auto-sync
+- GitHub token limited to `repo:status` scope
+
+## Testing
+
+E2E tests are located in `e2e_regressions/tests/bootstrap/test_iac_runner.py`:
+
+```bash
+cd e2e_regressions
+export IAC_RUNNER_WEBHOOK_SECRET="your-secret"
+uv run pytest tests/bootstrap/test_iac_runner.py -v
+```
