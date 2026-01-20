@@ -1,4 +1,5 @@
 """Dokploy environment management CLI tasks."""
+
 from __future__ import annotations
 
 from invoke import task
@@ -33,14 +34,24 @@ def env_list(c, project: str = "platform", host: str | None = None):
 
 
 @task
-def env_ensure(c, project: str = "platform", env: str = "staging", description: str = "", host: str | None = None):
+def env_ensure(
+    c,
+    project: str = "platform",
+    env: str = "staging",
+    description: str = "",
+    host: str | None = None,
+):
     """Ensure a Dokploy environment exists for a project."""
     env_name = normalize_env_name(env)
     header("Dokploy Environment", f"{project}/{env_name}")
     client = get_dokploy(host=host)
-    env_obj, created = client.ensure_environment(project, env_name, description=description)
+    env_obj, created = client.ensure_environment(
+        project, env_name, description=description
+    )
     if created:
         success(f"Created environment '{env_name}'")
     else:
         info(f"Environment '{env_name}' already exists")
-    console.print({"environmentId": env_obj.get("environmentId"), "name": env_obj.get("name")})
+    console.print(
+        {"environmentId": env_obj.get("environmentId"), "name": env_obj.get("name")}
+    )

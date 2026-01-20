@@ -25,21 +25,22 @@ class AppDeployer(Deployer):
         env_vars = super().pre_compose(c)
         if env_vars is None:
             return None
-            
+
         # Auto-configure S3 Public Endpoint using standardized infrastructure lib
         # This ensures we respect the central SERVICE_SUBDOMAINS definition (minio_api -> s3)
         # and handle environment suffixes automatically.
         from libs.common import get_service_url
-        
+
         try:
             # "minio_api" is the key in SERVICE_SUBDOMAINS for the S3 interface
             env_vars["S3_PUBLIC_ENDPOINT"] = get_service_url("minio_api", env=env_vars)
         except Exception as e:
             from libs.console import error
+
             error(f"Could not resolve Public S3 URL: {e}")
             # Halt deployment when S3 endpoint cannot be resolved to avoid incomplete configuration
             return None
-            
+
         return env_vars
 
 

@@ -1,4 +1,5 @@
 """PostgreSQL deployment with vault-init"""
+
 import sys
 from libs.deployer import Deployer, make_tasks
 

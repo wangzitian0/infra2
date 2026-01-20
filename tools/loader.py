@@ -2,6 +2,7 @@
 Task loader for invoke automation
 Discovers and loads tasks from bootstrap, platform, and tools directories.
 """
+
 from __future__ import annotations
 
 from invoke import Collection, Task
@@ -14,7 +15,7 @@ from libs.console import success, error, warning
 
 # Load optional local overrides if present.
 load_dotenv()
-load_dotenv('.env.local', override=True)
+load_dotenv(".env.local", override=True)
 
 
 def _load_module(file_path, module_name):
@@ -40,7 +41,12 @@ def _add_tasks(module, collection):
                     warning(f"Failed to add task {name}: {e}")
 
 
-def _load_tasks_into_collection(file_path: Path, module_name: str, collection: Collection, sub_name: Optional[str] = None) -> bool:
+def _load_tasks_into_collection(
+    file_path: Path,
+    module_name: str,
+    collection: Collection,
+    sub_name: Optional[str] = None,
+) -> bool:
     """Load tasks from a file into a collection (or sub-collection)."""
     if not file_path.exists():
         return False
@@ -61,7 +67,7 @@ def _load_tasks_into_collection(file_path: Path, module_name: str, collection: C
 
 def _load_project(ns, root, project_name, use_prefix=False):
     """Load all services from a project directory
-    
+
     Args:
         ns: Root namespace collection
         root: Root directory path
@@ -71,17 +77,17 @@ def _load_project(ns, root, project_name, use_prefix=False):
     project_dir = root / project_name
     if not project_dir.exists():
         return
-    
+
     for comp_dir in sorted(project_dir.iterdir()):
         if not comp_dir.is_dir():
             continue
-        
-        name = comp_dir.name.split('.')[-1]
+
+        name = comp_dir.name.split(".")[-1]
         # Prefix service name with project name if needed (e.g., fr-postgres)
         task_name = f"fr-{name}" if use_prefix else name
         coll = Collection()
         loaded = False
-        
+
         loaded |= _load_tasks_into_collection(
             comp_dir / "shared_tasks.py",
             f"{project_name}.{comp_dir.name}.shared",
@@ -98,7 +104,7 @@ def _load_project(ns, root, project_name, use_prefix=False):
             f"{project_name}.{comp_dir.name}.tasks",
             coll,
         )
-        
+
         if loaded:
             ns.add_collection(coll, name=task_name)
             success(f"{project_name}/{name}")
@@ -109,7 +115,7 @@ def _load_tools(ns, root):
     tools_dir = root / "tools"
     if not tools_dir.exists():
         return
-    
+
     # Tools are loaded into isolated namespaces to avoid task name collisions.
     coll = Collection()
     if _load_tasks_into_collection(tools_dir / "env_tool.py", "tools.env_tool", coll):
@@ -117,12 +123,16 @@ def _load_tools(ns, root):
         success("tools/env")
 
     coll = Collection()
-    if _load_tasks_into_collection(tools_dir / "dokploy_env.py", "tools.dokploy_env", coll):
+    if _load_tasks_into_collection(
+        tools_dir / "dokploy_env.py", "tools.dokploy_env", coll
+    ):
         ns.add_collection(coll, name="dokploy")
         success("tools/dokploy")
 
     coll = Collection()
-    if _load_tasks_into_collection(tools_dir / "local_init.py", "tools.local_init", coll):
+    if _load_tasks_into_collection(
+        tools_dir / "local_init.py", "tools.local_init", coll
+    ):
         ns.add_collection(coll, name="local")
         success("tools/local")
 
@@ -131,7 +141,7 @@ def load_all():
     """Load all modules from all projects"""
     from libs.common import validate_env
     from invoke import task
-    
+
     @task
     def check_env(c):
         """Check required environment variables"""
@@ -140,23 +150,23 @@ def load_all():
             error(f"Missing: {', '.join(missing)}")
             exit(1)
         success("Environment OK")
-    
+
     ns = Collection()
     ns.add_task(check_env)
-    
+
     root = Path(__file__).parent.parent
-    
+
     # Load projects
     for project in ["bootstrap", "platform", "finance"]:
         _load_project(ns, root, project)
-    
+
     # Load finance_report (nested structure: finance_report/finance_report/)
     # Use prefix to avoid conflicts with platform/postgres, platform/redis
     _load_project(ns, root / "finance_report", "finance_report", use_prefix=True)
-    
+
     # Load tools
     _load_tools(ns, root)
-    
+
     return ns
 
 

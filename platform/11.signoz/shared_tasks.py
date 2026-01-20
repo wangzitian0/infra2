@@ -1,4 +1,5 @@
 """Shared tasks for SigNoz"""
+
 import re
 from invoke import task
 from libs.common import check_service, get_env, service_domain, with_env_suffix
@@ -10,8 +11,10 @@ CLICKHOUSE_INGESTION_DELAY_SECONDS = 2
 def _sanitize_service_name(name: str) -> str:
     """Sanitize service name to prevent SQL injection."""
     # Only allow alphanumeric, hyphen, underscore
-    if not re.match(r'^[a-zA-Z0-9_-]+$', name):
-        raise ValueError(f"Invalid service name: {name}. Only alphanumeric, hyphen, underscore allowed.")
+    if not re.match(r"^[a-zA-Z0-9_-]+$", name):
+        raise ValueError(
+            f"Invalid service name: {name}. Only alphanumeric, hyphen, underscore allowed."
+        )
     return name
 
 
@@ -22,42 +25,48 @@ def status(c):
 
     env = get_env()
     host = env["VPS_HOST"]
-    signoz_result = check_service(c, "signoz", "wget --spider -q localhost:8080/api/v1/health")
+    signoz_result = check_service(
+        c, "signoz", "wget --spider -q localhost:8080/api/v1/health"
+    )
 
     # Check OTEL collector via Docker network (container has no wget/curl)
     collector = with_env_suffix("platform-signoz-otel-collector", env)
     result2 = c.run(
         f"ssh root@{host} 'docker run --rm --network=dokploy-network curlimages/curl:latest curl -s http://{collector}:13133 -o /dev/null -w \"%{{http_code}}\"'",
-        warn=True, hide=True
+        warn=True,
+        hide=True,
     )
     if result2.ok and "200" in result2.stdout:
         success("otel_collector: ready")
     else:
         error("otel_collector: not ready")
 
-    return {"signoz": signoz_result.get("is_ready"), "otel_collector": result2.ok and "200" in result2.stdout}
+    return {
+        "signoz": signoz_result.get("is_ready"),
+        "otel_collector": result2.ok and "200" in result2.stdout,
+    }
 
 
 @task
 def test_trace(c, service_name="test"):
     """Send a test OTLP trace to verify connectivity.
-    
-    Usage: 
+
+    Usage:
         invoke signoz.shared.test-trace
         invoke signoz.shared.test_trace --service-name=myapp
     """
     from libs.console import success, error, info
     import base64
     import time
-    
+
     # Validate service name to prevent injection
     service_name = _sanitize_service_name(service_name)
-    
+
     env = get_env()
     host = env["VPS_HOST"]
-    
+
     info(f"Sending test trace with service name: {service_name}")
-    
+
     collector = with_env_suffix("platform-signoz-otel-collector", env)
     # Python script to send test trace
     python_script = f'''
@@ -86,34 +95,36 @@ provider.force_flush()
 provider.shutdown()
 print("OK")
 '''
-    
+
     # Base64 encode to avoid quoting issues
     script_b64 = base64.b64encode(python_script.encode()).decode()
-    
+
     # Use pip cache volume to speed up repeated runs
-    cmd = f'ssh root@{host} \'docker run --rm --network=dokploy-network -v signoz-otel-pip-cache:/root/.cache/pip python:3.11-slim bash -c "pip install -q opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http 2>/dev/null && echo {script_b64} | base64 -d | python3"\''
-    
+    cmd = f"ssh root@{host} 'docker run --rm --network=dokploy-network -v signoz-otel-pip-cache:/root/.cache/pip python:3.11-slim bash -c \"pip install -q opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http 2>/dev/null && echo {script_b64} | base64 -d | python3\"'"
+
     result = c.run(cmd, warn=True, hide=True)
-    
+
     if result.ok and "OK" in result.stdout:
         success("Test trace sent successfully!")
-        
+
         # Wait for ClickHouse ingestion
         time.sleep(CLICKHOUSE_INGESTION_DELAY_SECONDS)
-        
+
         # Verify in ClickHouse (service_name already validated)
         verify_query = f"SELECT count() FROM signoz_traces.distributed_signoz_index_v3 WHERE serviceName = '{service_name}'"
         clickhouse = with_env_suffix("platform-clickhouse", env)
         verify_cmd = f'ssh root@{host} "docker exec {clickhouse} clickhouse-client --query \\"{verify_query}\\""'
         verify_result = c.run(verify_cmd, warn=True, hide=True)
-        
+
         if verify_result.ok and verify_result.stdout.strip():
             count = verify_result.stdout.strip()
             info(f"Traces in ClickHouse for '{service_name}': {count}")
-        
+
         domain = service_domain("signoz", env)
         if domain:
-            info(f"View in SigNoz UI: https://{domain} → Traces → service={service_name}")
+            info(
+                f"View in SigNoz UI: https://{domain} → Traces → service={service_name}"
+            )
         return True
     else:
         error("Failed to send test trace")

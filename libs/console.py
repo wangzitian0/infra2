@@ -3,6 +3,7 @@ Shared console utilities using Rich
 
 All console output utilities for deployment scripts.
 """
+
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
@@ -16,17 +17,17 @@ if TYPE_CHECKING:
 console = Console()
 
 __all__ = [
-    'console',
-    'header',
-    'success',
-    'error',
-    'warning',
-    'info',
-    'fatal',
-    'check_failed',
-    'prompt_action',
-    'env_vars',
-    'run_with_status',
+    "console",
+    "header",
+    "success",
+    "error",
+    "warning",
+    "info",
+    "fatal",
+    "check_failed",
+    "prompt_action",
+    "env_vars",
+    "run_with_status",
 ]
 
 
@@ -80,7 +81,9 @@ def prompt_action(title: str, instructions: list[str]) -> None:
     table = Table(show_header=False, box=None, padding=(0, 2))
     for i, instruction in enumerate(instructions, 1):
         table.add_row(f"[yellow]{i}.[/]", instruction)
-    console.print(Panel(table, title=f"[bold yellow]⏸️  {title}[/]", border_style="yellow"))
+    console.print(
+        Panel(table, title=f"[bold yellow]⏸️  {title}[/]", border_style="yellow")
+    )
     console.input("[dim]Press Enter when complete...[/]")
 
 
