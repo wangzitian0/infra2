@@ -288,7 +288,7 @@ def _warm_certs(records: list[str], retries: int, delay: float) -> bool:
                 resp = httpx.get(url, timeout=10.0)
                 info(f"HTTPS ok: {url} ({resp.status_code})")
                 break
-            except httpx.SSLError as exc:
+            except httpx.SSLError:
                 warning(f"TLS not ready: {url} (attempt {attempt}/{retries})")
                 try:
                     info(f"Retrying {url} without TLS verification to warm up certificate")

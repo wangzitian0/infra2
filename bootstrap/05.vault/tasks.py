@@ -5,7 +5,7 @@ Uses libs/ system for consistent environment and console utilities.
 from invoke import task
 from libs.deployer import Deployer
 from libs.common import get_env
-from libs.console import header, success, error, warning, info, prompt_action, run_with_status, console
+from libs.console import header, success, error, warning, info, prompt_action, run_with_status
 from typing import Any
 
 
@@ -119,7 +119,7 @@ class VaultDeployer(Deployer):
         from libs.const import GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH
         
         e = cls.env()
-        header(f"{cls.service} composing", f"Deploying via Dokploy API")
+        header(f"{cls.service} composing", "Deploying via Dokploy API")
         
         # Ensure project exists
         domain = e.get('INTERNAL_DOMAIN')
@@ -211,7 +211,6 @@ class VaultDeployer(Deployer):
     @classmethod
     def post_compose(cls, c, shared_tasks: Any) -> bool:
         """Verify deployment"""
-        e = cls.env()
         header("Vault post_compose", "Verifying")
         if cls.check_status(c, shared_tasks):
             success("Vault is reachable")

@@ -283,9 +283,12 @@ def phase(c):
     
     # Logic
     current = 0
-    if phase_0: current = 1
-    if phase_2: current = 2
-    if phase_3: current = 3
+    if phase_0:
+        current = 1
+    if phase_2:
+        current = 2
+    if phase_3:
+        current = 3
     
     console.print()
     if current >= 3:

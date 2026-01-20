@@ -341,7 +341,7 @@ def create_proxy_app(c, name, slug, external_host, internal_host, port=None, all
                 )
                 
                 if resp.status_code == 200:
-                    success(f"Added provider to embedded outpost")
+                    success("Added provider to embedded outpost")
                 else:
                     warning(f"Failed to update outpost: {resp.status_code}")
             else:

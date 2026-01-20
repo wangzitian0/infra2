@@ -25,7 +25,6 @@ class ClickHouseDeployer(Deployer):
     @classmethod
     def pre_compose(cls, c):
         """Prepare directories and ensure secrets exist in Vault."""
-        import os
         from libs.console import fatal
         from libs.env import generate_password, get_secrets
         

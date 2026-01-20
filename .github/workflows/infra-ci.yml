@@ -57,7 +57,7 @@ jobs:
       - name: Install dependencies
         run: |
           cd ${{ github.workspace }}
-          uv pip install --system invoke httpx python-dotenv
+          uv pip install --system invoke httpx python-dotenv rich pyyaml
 
       - name: Test config hash idempotency
         run: |

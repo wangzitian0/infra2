@@ -3,7 +3,7 @@ import sys
 import os
 from libs.deployer import Deployer, make_tasks
 from libs.common import with_env_suffix
-from libs.console import success, warning, info, run_with_status, header
+from libs.console import success, warning, info, header
 from libs.env import generate_password, get_secrets
 
 shared_tasks = sys.modules.get("platform.22.activepieces.shared")
@@ -120,7 +120,7 @@ class ActivepiecesDeployer(Deployer):
     @classmethod
     def post_compose(cls, c, shared_tasks):
         """Verify deployment and setup SSO protection"""
-        from libs.console import header, success, error, info
+        from libs.console import success, error, info
         
         header(f"{cls.service} post_compose", "Verifying")
         result = shared_tasks.status(c)
@@ -133,12 +133,12 @@ class ActivepiecesDeployer(Deployer):
             internal_domain = e.get('INTERNAL_DOMAIN')
             
             info("\n📌 Next: Configure SSO protection in Authentik")
-            info(f"   invoke authentik.shared.create-proxy-app \\")
-            info(f"     --name=Activepieces \\")
-            info(f"     --slug=activepieces \\")
+            info("   invoke authentik.shared.create-proxy-app \\")
+            info("     --name=Activepieces \\")
+            info("     --slug=activepieces \\")
             info(f"     --external-host=https://automate{env_domain_suffix}.{internal_domain} \\")
             info(f"     --internal-host=platform-activepieces{e.get('ENV_SUFFIX', '')} \\")
-            info(f"     --port=80")
+            info("     --port=80")
             return True
         error("Verification failed", result["details"])
         return False

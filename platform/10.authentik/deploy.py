@@ -25,7 +25,7 @@ class AuthentikDeployer(Deployer):
     @classmethod
     def pre_compose(cls, c):
         """Prepare directories, check dependencies, ensure secrets exist in Vault."""
-        from libs.console import fatal, check_failed
+        from libs.console import fatal
         
         if not cls._prepare_dirs(c):
             return None

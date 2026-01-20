@@ -2,7 +2,6 @@
 from __future__ import annotations
 import json
 from invoke import task
-from libs.common import get_env
 from libs.console import console, success, error
 
 

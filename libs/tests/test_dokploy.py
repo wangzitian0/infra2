@@ -1,6 +1,6 @@
 """Unit tests for libs/dokploy.py."""
 import os
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from libs.dokploy import get_dokploy, DokployClient
 
 class TestDokployClient:

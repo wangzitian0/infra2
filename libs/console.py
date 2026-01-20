@@ -4,7 +4,7 @@ Shared console utilities using Rich
 All console output utilities for deployment scripts.
 """
 from __future__ import annotations
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from rich.console import Console
 from rich.panel import Panel
