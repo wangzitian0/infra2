@@ -30,6 +30,10 @@ Secrets stored at: `secret/data/finance_report/<env>/app`
 | `S3_SECRET_KEY` | MinIO/S3 secret key |
 | `S3_BUCKET` | Bucket name for statements |
 | `OPENROUTER_API_KEY` | OpenRouter API key for Gemini |
+| `NEXT_PUBLIC_APP_URL` | Frontend URL used by backend-generated links |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | SigNoz OTLP HTTP endpoint |
+| `OTEL_SERVICE_NAME` | OTEL service name for logs |
+| `OTEL_RESOURCE_ATTRIBUTES` | OTEL resource attributes (e.g., environment) |
 
 ## Quick Start
 

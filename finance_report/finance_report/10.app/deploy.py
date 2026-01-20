@@ -20,17 +20,33 @@ class AppDeployer(Deployer):
     service_name = "frontend"
 
     @classmethod
-    def pre_compose(cls, c):
+    def pre_compose(cls, c) -> dict | None:
         """Prepare environment and ensure MinIO bucket is configured."""
         header(f"{cls.service} pre_compose", "Setting up application dependencies")
 
-        result = super().pre_compose(c)
-        if not result:
+        env_vars = super().pre_compose(c)
+        if env_vars is None:
             return None
 
+        # Auto-configure S3 Public Endpoint using standardized infrastructure lib
+        # This ensures we respect the central SERVICE_SUBDOMAINS definition (minio_api -> s3)
+        # and handle environment suffixes automatically.
+        from libs.common import get_service_url
+
+        try:
+            # "minio_api" is the key in SERVICE_SUBDOMAINS for the S3 interface
+            env_vars["S3_PUBLIC_ENDPOINT"] = get_service_url("minio_api", env=env_vars)
+        except Exception as e:
+            from libs.console import error
+
+            error(f"Could not resolve Public S3 URL: {e}")
+            # Halt deployment when S3 endpoint cannot be resolved to avoid incomplete configuration
+            return None
+
+        # Ensure MinIO bucket exists with proper security configuration
         cls._ensure_minio_bucket(c)
 
-        return result
+        return env_vars
 
     @classmethod
     def _ensure_minio_bucket(cls, c):
