@@ -62,14 +62,16 @@ def create_app_bucket(
         enable_encryption: Enable server-side encryption (SSE-S3) - default True
         lifecycle_days: Auto-delete files after N days (default 90, 0 to disable)
         enable_versioning: Enable bucket versioning - default False
-        public_download: Allow public download via presigned URLs - default True
+        public_download: Allow anonymous public download via direct object URLs - default True
 
     Returns:
         dict: {"access_key": str, "secret_key": str, "bucket": str}
 
     Example:
         # In downstream deploy.py pre_compose:
-        from platform.03.minio.shared import create_app_bucket
+        import sys
+        minio_shared = sys.modules.get("platform.03.minio.shared")
+        create_app_bucket = minio_shared.create_app_bucket
 
         result = create_app_bucket(
             c,
@@ -106,16 +108,16 @@ def create_app_bucket(
         error(f"Failed to create bucket: {result.stderr}")
         return None
 
-    # Step 2: Set public download policy (required for presigned URLs)
+    # Step 2: Set public download policy (enables anonymous object downloads)
     if public_download:
-        info("Setting bucket policy: public download (presigned URLs only)...")
+        info("Setting bucket policy: public anonymous download (direct object URL access)...")
         result = c.run(
             f"docker exec {container_name} mc anonymous set download local/{bucket_name}",
             hide=True,
             warn=True,
         )
         if result.ok:
-            success("Public download enabled (GetObject via presigned URL)")
+            success("Public anonymous download enabled (direct object URL access)")
         else:
             warning(f"Failed to set public policy: {result.stderr}")
 
@@ -202,31 +204,58 @@ def create_app_bucket(
 
     # Verification
     header("Verification", f"Bucket '{bucket_name}' configuration")
+    verification_ok = True
 
     # Check bucket exists
-    c.run(f"docker exec {container_name} mc ls local/{bucket_name}", hide=True)
+    result = c.run(
+        f"docker exec {container_name} mc ls local/{bucket_name}", hide=True, warn=True
+    )
+    if not result.ok:
+        warning(f"Bucket verification failed: unable to list '{bucket_name}'.")
+        verification_ok = False
 
     # Check policy
-    c.run(
+    result = c.run(
         f"docker exec {container_name} mc anonymous get local/{bucket_name}",
         hide=True,
+        warn=True,
     )
+    if not result.ok:
+        warning(
+            f"Bucket verification failed: unable to read anonymous policy for '{bucket_name}'."
+        )
+        verification_ok = False
 
     # Check encryption
     if enable_encryption:
-        c.run(
+        result = c.run(
             f"docker exec {container_name} mc encrypt info local/{bucket_name}",
             hide=True,
+            warn=True,
         )
+        if not result.ok:
+            warning(
+                f"Bucket verification failed: unable to read encryption info for '{bucket_name}'."
+            )
+            verification_ok = False
 
     # Check lifecycle
     if lifecycle_days > 0:
-        c.run(
+        result = c.run(
             f"docker exec {container_name} mc ilm ls local/{bucket_name}",
             hide=True,
+            warn=True,
         )
+        if not result.ok:
+            warning(
+                f"Bucket verification failed: unable to read lifecycle rules for '{bucket_name}'."
+            )
+            verification_ok = False
 
-    success("Bucket setup complete!")
+    if verification_ok:
+        success("Bucket setup complete!")
+    else:
+        warning("Bucket setup completed with verification warnings")
     info("Next steps:")
     info(f"  1. Store credentials in Vault (project/env/service secrets)")
     info(f"     - S3_ACCESS_KEY={access_key}")

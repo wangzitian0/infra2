@@ -51,19 +51,26 @@ class AppDeployer(Deployer):
     @classmethod
     def _ensure_minio_bucket(cls, c):
         """Ensure MinIO bucket exists with proper security configuration."""
-        import sys
-        from pathlib import Path
-
-        repo_root = Path(__file__).parents[3]
-        if str(repo_root) not in sys.path:
-            sys.path.insert(0, str(repo_root))
-
-        from platform.minio.shared import create_app_bucket
+        minio_shared = sys.modules.get("platform.03.minio.shared")
+        if not minio_shared:
+            warning("MinIO shared tasks module not loaded; skipping bucket creation")
+            return
+        create_app_bucket = getattr(minio_shared, "create_app_bucket", None)
+        if not create_app_bucket:
+            warning("MinIO shared task create_app_bucket not found; skipping bucket creation")
+            return
 
         secrets = cls.secrets()
         bucket_name = secrets.get("S3_BUCKET") or "finance-report-statements"
         existing_access_key = secrets.get("S3_ACCESS_KEY")
         existing_secret_key = secrets.get("S3_SECRET_KEY")
+
+        if bool(existing_access_key) ^ bool(existing_secret_key):
+            warning(
+                "Partial MinIO credentials found in Vault; generating a new access/secret pair"
+            )
+            existing_access_key = None
+            existing_secret_key = None
 
         if existing_access_key and existing_secret_key:
             info(f"MinIO credentials already exist in Vault, skipping bucket creation")

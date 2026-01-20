@@ -99,7 +99,7 @@ MinIO bucket and user setup is **automated** via the `invoke fr-app.setup` comma
 1. Creates bucket `finance-report-statements`
 2. Generates MinIO service account credentials (if not already in Vault)
 3. Configures bucket with security best practices:
-   - Public download access (required for OpenRouter presigned URLs)
+   - Public download access (required for OpenRouter to access files via direct public URLs)
    - Server-side encryption (SSE-S3)
    - Lifecycle policy: auto-delete files after 90 days
 4. Stores credentials in Vault (`secret/data/finance_report/production/app`)
@@ -116,7 +116,7 @@ invoke minio.create-app-bucket \
 ```
 
 **Security Impact**:
-- ✅ Public can download files **only** with valid presigned URL (15 min expiry)
+- ✅ Public can download files anonymously when the object URL is known (public-read bucket)
 - ❌ Public **cannot** list bucket contents
 - ❌ Public **cannot** upload or delete files
 - ✅ Only application service account can upload/delete
