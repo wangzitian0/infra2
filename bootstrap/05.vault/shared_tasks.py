@@ -1,8 +1,8 @@
 """Vault shared tasks - uses libs/ system"""
+
 from __future__ import annotations
 import json
 from invoke import task
-from libs.common import get_env
 from libs.console import console, success, error
 
 
@@ -40,7 +40,9 @@ def write_secret(c, path: str, data: str) -> bool:
 def read_secret(c, path: str, field: str | None = None) -> str | dict | None:
     """Read from Vault KV v2"""
     if field:
-        result = c.run(f"vault kv get -field={field} secret/{path}", warn=True, hide=True)
+        result = c.run(
+            f"vault kv get -field={field} secret/{path}", warn=True, hide=True
+        )
         if result.ok:
             val = result.stdout.strip()
             console.print(val)
