@@ -261,7 +261,7 @@ def create_app_bucket(
     info("Next steps:")
     info("  1. Store credentials in Vault (project/env/service secrets)")
     info(f"     - S3_ACCESS_KEY={access_key}")
-    info(f"     - S3_SECRET_KEY=<hidden>")
+    info("     - S3_SECRET_KEY=<hidden>")
     info(f"     - S3_BUCKET={bucket_name}")
 
     return {
