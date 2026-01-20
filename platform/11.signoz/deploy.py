@@ -1,4 +1,5 @@
 """SigNoz deployment - observability platform"""
+
 import os
 import sys
 from pathlib import Path
@@ -15,12 +16,12 @@ class SigNozDeployer(Deployer):
     service = "signoz"
     compose_path = "platform/11.signoz/compose.yaml"
     data_path = "/data/platform/signoz"
-    
+
     # Domain configuration via Dokploy API
     subdomain = "signoz"
     service_port = 8080  # SigNoz unified container port
     service_name = "signoz"
-    
+
     # SigNoz specific secret
     secret_key = "jwt_secret"
 
@@ -29,7 +30,7 @@ class SigNozDeployer(Deployer):
         """Prepare directories and secrets for SigNoz."""
         if not cls._prepare_dirs(c):
             return None
-        
+
         e = cls.env()
         data_path = cls.data_path_for_env(e)
         host = e.get("VPS_HOST")
@@ -37,21 +38,17 @@ class SigNozDeployer(Deployer):
             error("Missing VPS_HOST")
             return None
         secrets_backend = cls.secrets()
-        
+
         # Create data directory for query-service SQLite
         result = run_with_status(
-            c,
-            f"ssh root@{host} 'mkdir -p {data_path}/data'",
-            "Create data directory"
+            c, f"ssh root@{host} 'mkdir -p {data_path}/data'", "Create data directory"
         )
         if not result.ok:
             return None
-        
+
         # Set permissions (SigNoz runs as root in container, but let's be explicit)
         result = run_with_status(
-            c,
-            f"ssh root@{host} 'chmod -R 755 {data_path}'",
-            "Set permissions"
+            c, f"ssh root@{host} 'chmod -R 755 {data_path}'", "Set permissions"
         )
         if not result.ok:
             return None
@@ -93,7 +90,7 @@ class SigNozDeployer(Deployer):
         finally:
             if tmp_path and os.path.exists(tmp_path):
                 os.unlink(tmp_path)
-        
+
         # Get or generate JWT secret from Vault
         jwt_secret = secrets_backend.get(cls.secret_key)
         if not jwt_secret:
@@ -105,12 +102,14 @@ class SigNozDeployer(Deployer):
                 warning("Failed to store JWT secret in Vault, using local generation")
         else:
             info(f"Vault secret exists: {cls.secret_key}")
-        
+
         success("pre_compose complete")
         domain_suffix = e.get("ENV_DOMAIN_SUFFIX", "")
-        info(f"Frontend will be available at: https://signoz{domain_suffix}.{e.get('INTERNAL_DOMAIN', 'localhost')}")
+        info(
+            f"Frontend will be available at: https://signoz{domain_suffix}.{e.get('INTERNAL_DOMAIN', 'localhost')}"
+        )
         info("OTLP endpoints: 4317 (gRPC), 4318 (HTTP)")
-        
+
         result = cls.compose_env_base(e)
         result["SIGNOZ_JWT_SECRET"] = jwt_secret
         return result

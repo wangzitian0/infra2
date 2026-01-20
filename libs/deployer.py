@@ -18,7 +18,6 @@ from libs.console import (
     warning,
     info,
     env_vars,
-    prompt_action,
     run_with_status,
 )
 from libs.env import generate_password, get_secrets
@@ -211,7 +210,7 @@ class Deployer:
         from libs.const import GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH
 
         e = cls.env()
-        header(f"{cls.service} composing", f"Deploying via Dokploy API (GitHub)")
+        header(f"{cls.service} composing", "Deploying via Dokploy API (GitHub)")
 
         # Deploy via API
         # Priority: ENV > Class Attribute > Default "platform"

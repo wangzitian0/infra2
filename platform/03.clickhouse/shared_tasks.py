@@ -1,4 +1,5 @@
 """Shared tasks for ClickHouse"""
+
 from invoke import task
 from libs.common import check_service
 
@@ -7,7 +8,7 @@ from libs.common import check_service
 def status(c):
     """Check ClickHouse health"""
     return check_service(
-        c, 
+        c,
         "clickhouse",
-        "wget --spider -q localhost:8123/ping && echo 'ClickHouse is healthy'"
+        "wget --spider -q localhost:8123/ping && echo 'ClickHouse is healthy'",
     )

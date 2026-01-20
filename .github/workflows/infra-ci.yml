@@ -36,6 +36,8 @@ jobs:
             docker compose -f "$file" config > /dev/null
           done
           echo "✅ All compose files are valid"
+        env:
+          DATA_PATH: /tmp/infra2-data
 
   test-deployer-logic:
     name: Test Deployer Hash Logic
@@ -55,7 +57,7 @@ jobs:
       - name: Install dependencies
         run: |
           cd ${{ github.workspace }}
-          uv pip install --system invoke httpx python-dotenv
+          uv pip install --system invoke httpx python-dotenv rich pyyaml
 
       - name: Test config hash idempotency
         run: |

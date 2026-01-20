@@ -1,4 +1,5 @@
 """Activepieces shared tasks"""
+
 from invoke import task
 from libs.common import check_service
 

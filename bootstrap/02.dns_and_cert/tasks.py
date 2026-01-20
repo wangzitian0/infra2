@@ -1,4 +1,5 @@
 """Cloudflare DNS + certificate automation for bootstrap domains."""
+
 from __future__ import annotations
 
 import os
@@ -58,7 +59,9 @@ def _normalize_record(name: str, internal_domain: str) -> str:
     return f"{name}.{internal_domain}"
 
 
-def _normalize_record_list(records: list[str], internal_domain: str | None = None) -> list[str] | None:
+def _normalize_record_list(
+    records: list[str], internal_domain: str | None = None
+) -> list[str] | None:
     if not internal_domain:
         env = get_env()
         internal_domain = env.get("INTERNAL_DOMAIN")
@@ -97,7 +100,11 @@ def _load_record_list(records: str | None) -> list[str]:
     if records:
         return _split_records(records)
 
-    env_val = os.getenv(RECORDS_KEY) or os.getenv("CLOUDFLARE_RECORDS") or os.getenv("DNS_RECORDS")
+    env_val = (
+        os.getenv(RECORDS_KEY)
+        or os.getenv("CLOUDFLARE_RECORDS")
+        or os.getenv("DNS_RECORDS")
+    )
     if env_val:
         return _split_records(env_val)
 
@@ -141,11 +148,16 @@ def _cf_request(client: httpx.Client, method: str, path: str, **kwargs):
     return data.get("result")
 
 
-def _resolve_zone_id(client: httpx.Client, zone_id: str | None, zone_name: str | None) -> str | None:
+def _resolve_zone_id(
+    client: httpx.Client, zone_id: str | None, zone_name: str | None
+) -> str | None:
     if zone_id:
         return zone_id
     if not zone_name:
-        error("Missing CF_ZONE_ID", "Provide CF_ZONE_ID or CF_ZONE_NAME in 1Password/bootstrap/cloudflare")
+        error(
+            "Missing CF_ZONE_ID",
+            "Provide CF_ZONE_ID or CF_ZONE_NAME in 1Password/bootstrap/cloudflare",
+        )
         return None
     result = _cf_request(client, "GET", "/zones", params={"name": zone_name})
     if not result:
@@ -159,7 +171,9 @@ def _resolve_zone_id(client: httpx.Client, zone_id: str | None, zone_name: str |
     return result.get("id")
 
 
-def _ensure_record(client: httpx.Client, zone_id: str, name: str, ip: str, proxied: bool, ttl: int) -> bool:
+def _ensure_record(
+    client: httpx.Client, zone_id: str, name: str, ip: str, proxied: bool, ttl: int
+) -> bool:
     query = {"type": "A", "name": name}
     existing = _cf_request(client, "GET", f"/zones/{zone_id}/dns_records", params=query)
     payload = {
@@ -177,7 +191,9 @@ def _ensure_record(client: httpx.Client, zone_id: str, name: str, ip: str, proxi
         if record.get("content") == ip and record.get("proxied") == proxied:
             info(f"DNS record ok: {name}")
             return True
-        result = _cf_request(client, "PUT", f"/zones/{zone_id}/dns_records/{record_id}", json=payload)
+        result = _cf_request(
+            client, "PUT", f"/zones/{zone_id}/dns_records/{record_id}", json=payload
+        )
         if result is None:
             return False
         success(f"DNS record updated: {name}")
@@ -190,12 +206,16 @@ def _ensure_record(client: httpx.Client, zone_id: str, name: str, ip: str, proxi
     return True
 
 
-def _ensure_zone_setting(client: httpx.Client, zone_id: str, setting: str, value: str) -> bool:
+def _ensure_zone_setting(
+    client: httpx.Client, zone_id: str, setting: str, value: str
+) -> bool:
     current = _cf_request(client, "GET", f"/zones/{zone_id}/settings/{setting}")
     if current and current.get("value") == value:
         info(f"Zone setting ok: {setting}={value}")
         return True
-    result = _cf_request(client, "PATCH", f"/zones/{zone_id}/settings/{setting}", json={"value": value})
+    result = _cf_request(
+        client, "PATCH", f"/zones/{zone_id}/settings/{setting}", json={"value": value}
+    )
     if result is None:
         return False
     success(f"Zone setting updated: {setting}={value}")
@@ -212,7 +232,10 @@ def _ensure_dns_records(records: list[str], proxied: bool, ttl: int) -> bool:
     vps_host = env.get("VPS_HOST")
 
     if not internal_domain or not vps_host:
-        error("Missing env vars", "Ensure INTERNAL_DOMAIN and VPS_HOST are set in init/env_vars")
+        error(
+            "Missing env vars",
+            "Ensure INTERNAL_DOMAIN and VPS_HOST are set in init/env_vars",
+        )
         return False
 
     secrets = _load_cloudflare_secrets()
@@ -245,7 +268,9 @@ def _ensure_dns_records(records: list[str], proxied: bool, ttl: int) -> bool:
         if not resolved_zone:
             return False
         for record in normalized:
-            if not _ensure_record(client, resolved_zone, record, vps_host, proxied, ttl):
+            if not _ensure_record(
+                client, resolved_zone, record, vps_host, proxied, ttl
+            ):
                 return False
 
     return True
@@ -273,7 +298,9 @@ def _ensure_ssl_settings(mode: str, always_https: str) -> bool:
             return False
         if not _ensure_zone_setting(client, resolved_zone, "ssl", mode):
             return False
-        if not _ensure_zone_setting(client, resolved_zone, "always_use_https", always_https):
+        if not _ensure_zone_setting(
+            client, resolved_zone, "always_use_https", always_https
+        ):
             return False
     return True
 
@@ -288,10 +315,12 @@ def _warm_certs(records: list[str], retries: int, delay: float) -> bool:
                 resp = httpx.get(url, timeout=10.0)
                 info(f"HTTPS ok: {url} ({resp.status_code})")
                 break
-            except httpx.SSLError as exc:
+            except httpx.SSLError:
                 warning(f"TLS not ready: {url} (attempt {attempt}/{retries})")
                 try:
-                    info(f"Retrying {url} without TLS verification to warm up certificate")
+                    info(
+                        f"Retrying {url} without TLS verification to warm up certificate"
+                    )
                     httpx.get(url, timeout=10.0, verify=False)
                 except Exception:
                     warning(f"Unverified warm-up failed for {url}")
@@ -435,7 +464,14 @@ def verify(c, records=""):
 
 
 @task
-def setup(c, records="", proxied="true", ssl_mode="full", always_https="on", cooldown=str(DEFAULT_COOLDOWN_SECONDS)):
+def setup(
+    c,
+    records="",
+    proxied="true",
+    ssl_mode="full",
+    always_https="on",
+    cooldown=str(DEFAULT_COOLDOWN_SECONDS),
+):
     """Full setup: DNS records + SSL settings + HTTPS warm-up.
 
     Includes a cooldown (default 60s) for DNS/SSL propagation before warm-up.

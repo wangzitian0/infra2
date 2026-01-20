@@ -1,4 +1,5 @@
 """Homer portal deployment"""
+
 import os
 import sys
 from pathlib import Path
@@ -17,7 +18,7 @@ class PortalDeployer(Deployer):
     data_path = "/data/platform/portal"
     uid = "1000"
     gid = "1000"
-    
+
     # Domain configuration - disabled to use compose.yaml Traefik labels with SSO
     # When subdomain is None, Dokploy won't auto-configure domain, allowing
     # compose.yaml labels (with forwardauth middleware) to take effect.
@@ -76,17 +77,22 @@ class PortalDeployer(Deployer):
                 return None
 
             portal_url = f"https://home{domain_suffix}.{internal_domain}"
-            env_vars("PORTAL INFO", {
-                "PORTAL_URL": portal_url,
-                "CONFIG_PATH": config_path,
-                "INTERNAL_DOMAIN": internal_domain,
-            })
+            env_vars(
+                "PORTAL INFO",
+                {
+                    "PORTAL_URL": portal_url,
+                    "CONFIG_PATH": config_path,
+                    "INTERNAL_DOMAIN": internal_domain,
+                },
+            )
             success("pre_compose complete")
             result = cls.compose_env_base(env)
-            result.update({
-                "PORTAL_URL": portal_url,
-                "INTERNAL_DOMAIN": internal_domain,
-            })
+            result.update(
+                {
+                    "PORTAL_URL": portal_url,
+                    "INTERNAL_DOMAIN": internal_domain,
+                }
+            )
             return result
         except OSError as exc:
             error("Failed to create temp config", str(exc))
