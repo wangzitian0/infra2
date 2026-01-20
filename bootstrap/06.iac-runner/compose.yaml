@@ -1,8 +1,6 @@
 services:
   iac-runner:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: bootstrap-iac_runner-bkewyn-iac-runner:v2
     container_name: iac-runner
     restart: unless-stopped
     environment:
