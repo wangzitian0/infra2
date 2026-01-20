@@ -13,13 +13,13 @@ services:
       # Vault config (for invoke tasks)
       - VAULT_ADDR=${VAULT_ADDR}
       - VAULT_APP_TOKEN=${VAULT_APP_TOKEN}
-       # Dokploy config
-       - DOKPLOY_API_KEY=${DOKPLOY_API_KEY}
-       - INTERNAL_DOMAIN=${INTERNAL_DOMAIN}
-       # Environment
-       - ENV=${ENV:-production}
-       - PROJECT=${PROJECT:-platform}
-       - BUILD_CACHE_BUST=v2
+      # Dokploy config
+      - DOKPLOY_API_KEY=${DOKPLOY_API_KEY}
+      - INTERNAL_DOMAIN=${INTERNAL_DOMAIN}
+      # Environment
+      - ENV=${ENV:-production}
+      - PROJECT=${PROJECT:-platform}
+      - BUILD_CACHE_BUST=v2
     volumes:
       # Persistent workspace for git clone
       - ${DATA_PATH:-/data/bootstrap/iac-runner}/workspace:/workspace

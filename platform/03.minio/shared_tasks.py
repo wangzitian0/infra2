@@ -110,7 +110,9 @@ def create_app_bucket(
 
     # Step 2: Set public download policy (enables anonymous object downloads)
     if public_download:
-        info("Setting bucket policy: public anonymous download (direct object URL access)...")
+        info(
+            "Setting bucket policy: public anonymous download (direct object URL access)..."
+        )
         result = c.run(
             f"docker exec {container_name} mc anonymous set download local/{bucket_name}",
             hide=True,
@@ -172,7 +174,7 @@ def create_app_bucket(
         success(f"Service account created: {access_key}")
     else:
         # User might already exist, try to update secret
-        warning(f"User may already exist, attempting to update...")
+        warning("User may already exist, attempting to update...")
         result = c.run(
             f"docker exec {container_name} mc admin user remove local {access_key}",
             hide=True,
@@ -257,7 +259,7 @@ def create_app_bucket(
     else:
         warning("Bucket setup completed with verification warnings")
     info("Next steps:")
-    info(f"  1. Store credentials in Vault (project/env/service secrets)")
+    info("  1. Store credentials in Vault (project/env/service secrets)")
     info(f"     - S3_ACCESS_KEY={access_key}")
     info(f"     - S3_SECRET_KEY=<hidden>")
     info(f"     - S3_BUCKET={bucket_name}")
