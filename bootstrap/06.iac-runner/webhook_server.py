@@ -169,27 +169,28 @@ def version_deploy():
 
     payload = request.json or {}
     env = payload.get("env", "staging")
-    tag = payload.get("tag")
+    # Support both 'ref' (generic) and 'tag' (legacy/specific)
+    ref = payload.get("ref") or payload.get("tag")
     triggered_by = payload.get("triggered_by", "unknown")
 
-    if not tag:
-        return jsonify({"error": "Tag required"}), 400
+    if not ref:
+        return jsonify({"error": "Ref or Tag required"}), 400
 
     if env not in ("staging", "production"):
         return jsonify({"error": "Invalid env (must be staging or production)"}), 400
 
-    logger.info(f"Version deployment: {tag} to {env} by {triggered_by}")
+    logger.info(f"Deployment: {ref} to {env} by {triggered_by}")
 
     from sync_runner import sync_services_by_version
 
     thread = threading.Thread(
-        target=sync_services_by_version, args=(env, tag, triggered_by)
+        target=sync_services_by_version, args=(env, ref, triggered_by)
     )
     thread.daemon = True
     thread.start()
 
     return jsonify(
-        {"status": "accepted", "env": env, "tag": tag, "triggered_by": triggered_by}
+        {"status": "accepted", "env": env, "ref": ref, "triggered_by": triggered_by}
     )
 
 

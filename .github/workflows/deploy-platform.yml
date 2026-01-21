@@ -1,0 +1,77 @@
+name: Platform Deployment
+
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+    paths:
+      - "platform/**"
+      - "finance_report/**"
+      - "finance/**"
+      - "libs/**"
+  workflow_dispatch:
+    inputs:
+      env:
+        description: 'Target Environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      ref:
+        description: 'Git Reference (branch/tag)'
+        required: true
+        default: 'main'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine Deployment Target
+        id: target
+        run: |
+          # Default from inputs (workflow_dispatch)
+          ENV="${{ inputs.env }}"
+          REF="${{ inputs.ref }}"
+          
+          # Override if push event
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+              ENV="production"
+              REF="${{ github.ref_name }}"
+            elif [[ "${{ github.ref }}" == refs/heads/main ]]; then
+              ENV="staging"
+              REF="main"
+            fi
+          fi
+          
+          echo "env=$ENV" >> $GITHUB_OUTPUT
+          echo "ref=$REF" >> $GITHUB_OUTPUT
+          
+          echo "🚀 Deploying $REF to $ENV"
+
+      - name: Trigger IaC Runner
+        env:
+          WEBHOOK_SECRET: ${{ secrets.IAC_WEBHOOK_SECRET }}
+        run: |
+          ENV="${{ steps.target.outputs.env }}"
+          REF="${{ steps.target.outputs.ref }}"
+          
+          PAYLOAD=$(cat <<EOF
+          {
+            "env": "$ENV",
+            "ref": "$REF",
+            "triggered_by": "${{ github.actor }}"
+          }
+          EOF
+          )
+          
+          SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $2}')
+          
+          echo "Sending payload to IaC Runner..."
+          curl -X POST https://iac.zitian.party/deploy \
+            -H "Content-Type: application/json" \
+            -H "X-Hub-Signature-256: sha256=$SIGNATURE" \
+            -d "$PAYLOAD" \
+            --fail-with-body
