@@ -1,11 +1,13 @@
 """Homer portal deployment"""
+
 import os
 import sys
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from invoke import task
 
 from libs.deployer import Deployer, make_tasks
-from libs.console import env_vars, error, run_with_status, success
+from libs.console import env_vars, error, run_with_status, success, header
 
 # Get shared_tasks from sys.modules (loaded by tools/loader.py)
 shared_tasks = sys.modules.get("platform.21.portal.shared")
@@ -17,7 +19,7 @@ class PortalDeployer(Deployer):
     data_path = "/data/platform/portal"
     uid = "1000"
     gid = "1000"
-    
+
     # Domain configuration - disabled to use compose.yaml Traefik labels with SSO
     # When subdomain is None, Dokploy won't auto-configure domain, allowing
     # compose.yaml labels (with forwardauth middleware) to take effect.
@@ -76,17 +78,22 @@ class PortalDeployer(Deployer):
                 return None
 
             portal_url = f"https://home{domain_suffix}.{internal_domain}"
-            env_vars("PORTAL INFO", {
-                "PORTAL_URL": portal_url,
-                "CONFIG_PATH": config_path,
-                "INTERNAL_DOMAIN": internal_domain,
-            })
+            env_vars(
+                "PORTAL INFO",
+                {
+                    "PORTAL_URL": portal_url,
+                    "CONFIG_PATH": config_path,
+                    "INTERNAL_DOMAIN": internal_domain,
+                },
+            )
             success("pre_compose complete")
             result = cls.compose_env_base(env)
-            result.update({
-                "PORTAL_URL": portal_url,
-                "INTERNAL_DOMAIN": internal_domain,
-            })
+            result.update(
+                {
+                    "PORTAL_URL": portal_url,
+                    "INTERNAL_DOMAIN": internal_domain,
+                }
+            )
             return result
         except OSError as exc:
             error("Failed to create temp config", str(exc))
@@ -94,6 +101,50 @@ class PortalDeployer(Deployer):
         finally:
             if tmp_path and os.path.exists(tmp_path):
                 os.unlink(tmp_path)
+
+
+@task
+def sso_setup(c):
+    """Register Portal in Authentik SSO (One-time)"""
+    env = PortalDeployer.env()
+    suffix = env.get("ENV_SUFFIX") or ""
+    domain_suffix = env.get("ENV_DOMAIN_SUFFIX") or ""
+    internal_domain = env.get("INTERNAL_DOMAIN")
+
+    if not internal_domain:
+        error("Missing INTERNAL_DOMAIN")
+        return
+
+    portal_url = f"https://home{domain_suffix}.{internal_domain}"
+    internal_host = f"platform-portal{suffix}"
+
+    header("Portal SSO Setup", f"Registering {portal_url} in Authentik")
+
+    res = run_with_status(
+        c, "invoke authentik.shared.create-root-token", "Ensure Root Token"
+    )
+    if not res.ok:
+        return
+
+    res = run_with_status(
+        c, "invoke authentik.shared.setup-admin-group", "Ensure Admin Group"
+    )
+    if not res.ok:
+        return
+
+    cmd = (
+        f"invoke authentik.shared.create-proxy-app "
+        f"--name='Portal' "
+        f"--slug='portal' "
+        f"--external-host='{portal_url}' "
+        f"--internal-host='{internal_host}' "
+        f"--port=8080"
+    )
+    res = run_with_status(c, cmd, "Create SSO Application")
+    if not res.ok:
+        return
+
+    success("Portal SSO setup complete")
 
 
 # Generate tasks
