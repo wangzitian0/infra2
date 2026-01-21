@@ -120,11 +120,17 @@ def sso_setup(c):
 
     header("Portal SSO Setup", f"Registering {portal_url} in Authentik")
 
-    run_with_status(c, "invoke authentik.shared.create-root-token", "Ensure Root Token")
+    res = run_with_status(
+        c, "invoke authentik.shared.create-root-token", "Ensure Root Token"
+    )
+    if not res.ok:
+        return
 
-    run_with_status(
+    res = run_with_status(
         c, "invoke authentik.shared.setup-admin-group", "Ensure Admin Group"
     )
+    if not res.ok:
+        return
 
     cmd = (
         f"invoke authentik.shared.create-proxy-app "
@@ -134,7 +140,10 @@ def sso_setup(c):
         f"--internal-host='{internal_host}' "
         f"--port=8080"
     )
-    run_with_status(c, cmd, "Create SSO Application")
+    res = run_with_status(c, cmd, "Create SSO Application")
+    if not res.ok:
+        return
+
     success("Portal SSO setup complete")
 
 
@@ -147,6 +156,3 @@ if shared_tasks:
     post_compose = _tasks["post_compose"]
     setup = _tasks["setup"]
     sync = _tasks["sync"]
-
-    # Export custom task
-    sso_setup = sso_setup
