@@ -39,10 +39,10 @@ SERVICE_TASK_MAP = {
     "bootstrap/vault": None,
     "bootstrap/1password": None,
     "bootstrap/iac-runner": None,
-    "finance_report/postgres": None,
-    "finance_report/redis": None,
-    "finance_report/app": None,
-    "finance/wealthfolio": None,
+    "finance_report/postgres": "fr-postgres.sync",
+    "finance_report/redis": "fr-redis.sync",
+    "finance_report/app": "fr-app.sync",
+    "finance/wealthfolio": "wealthfolio.sync",
 }
 
 ALL_SERVICES = [
@@ -54,6 +54,10 @@ ALL_SERVICES = [
     "platform/signoz",
     "platform/portal",
     "platform/activepieces",
+    "finance_report/postgres",
+    "finance_report/redis",
+    "finance_report/app",
+    "finance/wealthfolio",
 ]
 
 
