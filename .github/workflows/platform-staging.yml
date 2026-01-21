@@ -1,0 +1,81 @@
+name: Platform Staging Deployment
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'platform/**'
+      - 'libs/**'
+      - 'bootstrap/06.iac-runner/**'
+
+permissions:
+  contents: write  # 需要创建 tag
+
+jobs:
+  auto-tag-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取所有历史以便读取 tags
+      
+      - name: Get latest tag
+        id: get_tag
+        run: |
+          # 获取最新的 v*.*.* tag
+          LATEST_TAG=$(git tag -l "v*.*.*" | sort -V | tail -1)
+          
+          if [ -z "$LATEST_TAG" ]; then
+            # 首次部署，初始化为 v1.0.0
+            echo "tag=v1.0.0" >> $GITHUB_OUTPUT
+            echo "is_new=true" >> $GITHUB_OUTPUT
+          else
+            # 解析版本号
+            MAJOR=$(echo $LATEST_TAG | cut -d. -f1 | sed 's/v//')
+            MINOR=$(echo $LATEST_TAG | cut -d. -f2)
+            PATCH=$(echo $LATEST_TAG | cut -d. -f3)
+            
+            # Patch +1
+            NEW_PATCH=$((PATCH + 1))
+            NEW_TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
+            
+            echo "tag=${NEW_TAG}" >> $GITHUB_OUTPUT
+            echo "is_new=false" >> $GITHUB_OUTPUT
+            echo "Previous: $LATEST_TAG → New: $NEW_TAG"
+          fi
+      
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          TAG="${{ steps.get_tag.outputs.tag }}"
+          git tag -a "$TAG" -m "Staging release $TAG"
+          git push origin "$TAG"
+          
+          echo "✅ Created tag: $TAG"
+      
+      - name: Trigger IaC Runner deployment
+        env:
+          WEBHOOK_SECRET: ${{ secrets.IAC_WEBHOOK_SECRET }}
+        run: |
+          TAG="${{ steps.get_tag.outputs.tag }}"
+          PAYLOAD=$(cat <<EOF
+          {
+            "env": "staging",
+            "tag": "$TAG",
+            "commit": "${{ github.sha }}",
+            "triggered_by": "${{ github.actor }}"
+          }
+          EOF
+          )
+          
+          SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $2}')
+          
+          curl -X POST https://iac.zitian.party/deploy \
+            -H "Content-Type: application/json" \
+            -H "X-Hub-Signature-256: sha256=$SIGNATURE" \
+            -d "$PAYLOAD"
+          
+          echo "✅ Triggered staging deployment: $TAG"
