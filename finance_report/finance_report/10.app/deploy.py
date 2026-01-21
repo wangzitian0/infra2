@@ -3,7 +3,7 @@ import sys
 from libs.deployer import Deployer, make_tasks
 from libs.console import header, success, info, warning
 
-shared_tasks = sys.modules.get("finance_report.finance_report.10.app.shared")
+shared_tasks = sys.modules.get("finance_report.10.app.shared")
 
 
 class AppDeployer(Deployer):

@@ -215,16 +215,16 @@ def sync_services(
         logger.info(f"Sync complete: {succeeded} succeeded, {failed} failed")
 
 
-def sync_services_by_version(env: str, tag: str, triggered_by: str):
-    """Deploy all platform services to a specific environment using a version tag."""
-    logger.info("=== Version Deployment Started ===")
+def sync_services_by_version(env: str, ref: str, triggered_by: str):
+    """Deploy all platform services to a specific environment using a git ref."""
+    logger.info("=== Deployment Started ===")
     logger.info(f"Environment: {env}")
-    logger.info(f"Tag: {tag}")
+    logger.info(f"Ref: {ref}")
     logger.info(f"Triggered by: {triggered_by}")
 
-    sync_services(set(ALL_SERVICES), ref=tag, deploy_env=env)
+    sync_services(set(ALL_SERVICES), ref=ref, deploy_env=env)
 
-    logger.info("=== Version Deployment Complete ===")
+    logger.info("=== Deployment Complete ===")
 
 
 if __name__ == "__main__":
