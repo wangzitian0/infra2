@@ -57,7 +57,9 @@ class AppDeployer(Deployer):
             return
         create_app_bucket = getattr(minio_shared, "create_app_bucket", None)
         if not create_app_bucket:
-            warning("MinIO shared task create_app_bucket not found; skipping bucket creation")
+            warning(
+                "MinIO shared task create_app_bucket not found; skipping bucket creation"
+            )
             return
 
         secrets = cls.secrets()
@@ -73,7 +75,7 @@ class AppDeployer(Deployer):
             existing_secret_key = None
 
         if existing_access_key and existing_secret_key:
-            info(f"MinIO credentials already exist in Vault, skipping bucket creation")
+            info("MinIO credentials already exist in Vault, skipping bucket creation")
             info(
                 f"To recreate bucket, run: invoke minio.create-app-bucket --bucket-name={bucket_name}"
             )
@@ -98,19 +100,19 @@ class AppDeployer(Deployer):
 
         if not existing_access_key:
             if secrets.set("S3_ACCESS_KEY", minio_result["access_key"]):
-                success(f"Vault: S3_ACCESS_KEY stored")
+                success("Vault: S3_ACCESS_KEY stored")
             else:
                 warning("Failed to store S3_ACCESS_KEY in Vault")
 
         if not existing_secret_key:
             if secrets.set("S3_SECRET_KEY", minio_result["secret_key"]):
-                success(f"Vault: S3_SECRET_KEY stored")
+                success("Vault: S3_SECRET_KEY stored")
             else:
                 warning("Failed to store S3_SECRET_KEY in Vault")
 
         if not secrets.get("S3_BUCKET"):
             if secrets.set("S3_BUCKET", bucket_name):
-                success(f"Vault: S3_BUCKET stored")
+                success("Vault: S3_BUCKET stored")
 
 
 if shared_tasks:

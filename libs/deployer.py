@@ -1,23 +1,66 @@
-"""
-Base deployer with DRY task generation
+"""Base deployer with DRY task generation
 
 Simplified: minimal class attributes, uses new env.py API.
 """
+
 from __future__ import annotations
 from typing import TYPE_CHECKING, Any
+from pathlib import Path
 import os
 import hashlib
 from invoke import task
 
 from libs.common import get_env, validate_env, service_domain
-from libs.console import header, success, error, warning, info, env_vars, prompt_action, run_with_status
+from libs.console import (
+    header,
+    success,
+    error,
+    warning,
+    info,
+    env_vars,
+    run_with_status,
+)
 from libs.env import generate_password, get_secrets
 
 if TYPE_CHECKING:
     from invoke import Context
 
 
-__all__ = ['Deployer', 'make_tasks']
+__all__ = ["Deployer", "make_tasks", "discover_services"]
+
+
+def discover_services() -> dict[str, str]:
+    """Discover deployable services based on deploy.py files."""
+    root = Path(__file__).resolve().parents[1]
+    service_map: dict[str, str] = {}
+
+    layers = {
+        "platform": root / "platform",
+        "finance_report": root / "finance_report" / "finance_report",
+    }
+
+    for layer, layer_path in layers.items():
+        if not layer_path.exists():
+            continue
+
+        for service_dir in layer_path.iterdir():
+            if not service_dir.is_dir():
+                continue
+
+            parts = service_dir.name.split(".", 1)
+            if len(parts) != 2:
+                continue
+
+            service_name = parts[1]
+            deploy_file = service_dir / "deploy.py"
+            if not deploy_file.exists():
+                continue
+
+            key = f"{layer}/{service_name}"
+            task_prefix = "fr-" if layer == "finance_report" else ""
+            service_map[key] = f"{task_prefix}{service_name}.sync"
+
+    return service_map
 
 
 def _compute_config_hash(compose_content: str, env_vars: dict[str, str]) -> str:
@@ -30,24 +73,24 @@ def _compute_config_hash(compose_content: str, env_vars: dict[str, str]) -> str:
 
 class Deployer:
     """Base class for service deployment.
-    
+
     Subclass and set: service, compose_path, data_path
     Optional: secret_key (name in Vault), env_var_name (display name)
     """
-    
+
     # Required
     service: str = ""
     compose_path: str = ""
     data_path: str = ""
     project: str = "platform"  # Default project
-    
+
     # Optional with defaults
     uid: str = "999"
     gid: str = "999"
     chmod: str = "755"  # Override to "700" for sensitive services like PostgreSQL
     secret_key: str = "password"
     env_var_name: str = ""
-    
+
     # Domain configuration (optional)
     subdomain: str = None  # e.g., "sso" for sso.{INTERNAL_DOMAIN}
     service_port: int = None  # Container port
@@ -60,7 +103,7 @@ class Deployer:
     @classmethod
     def project_name(cls, env: dict | None = None) -> str:
         """Get project name, prioritizing class attribute over env var.
-        
+
         The class `project` attribute takes precedence. Only uses PROJECT env var
         if the class uses the default 'platform' project (for backward compat).
         """
@@ -104,7 +147,7 @@ class Deployer:
         if e.get("ENV_SUFFIX"):
             base["ENV_SUFFIX"] = e.get("ENV_SUFFIX")
         return {k: v for k, v in base.items() if v is not None}
-    
+
     @classmethod
     def secrets(cls):
         """Get secrets backend for this service"""
@@ -112,18 +155,16 @@ class Deployer:
         # Use cls.project if PROJECT env not set
         project = cls.project_name(e)
         return get_secrets(
-            project=project,
-            service=cls.service,
-            env=e.get('ENV', 'production')
+            project=project, service=cls.service, env=e.get("ENV", "production")
         )
-    
+
     @classmethod
     def _prepare_dirs(cls, c: "Context") -> bool:
         """Create data directories on VPS"""
         if missing := validate_env():
             error(f"Missing: {', '.join(missing)}")
             return False
-        
+
         e = cls.env()
         try:
             data_path = cls.data_path_for_env(e)
@@ -131,26 +172,34 @@ class Deployer:
             error(str(exc))
             return False
         header(f"{cls.service} pre_compose", f"Preparing ({e['ENV']})")
-        
-        host = e['VPS_HOST']
-        run_with_status(c, f"ssh root@{host} 'mkdir -p {data_path}'", "Create directory")
-        run_with_status(c, f"ssh root@{host} 'chown -R {cls.uid}:{cls.gid} {data_path}'", "Set ownership")
-        run_with_status(c, f"ssh root@{host} 'chmod -R {cls.chmod} {data_path}'", "Set permissions")
+
+        host = e["VPS_HOST"]
+        run_with_status(
+            c, f"ssh root@{host} 'mkdir -p {data_path}'", "Create directory"
+        )
+        run_with_status(
+            c,
+            f"ssh root@{host} 'chown -R {cls.uid}:{cls.gid} {data_path}'",
+            "Set ownership",
+        )
+        run_with_status(
+            c, f"ssh root@{host} 'chmod -R {cls.chmod} {data_path}'", "Set permissions"
+        )
         return True
-    
+
     @classmethod
     def pre_compose(cls, c: "Context") -> dict | None:
         """Prepare directories and ensure secrets exist in Vault.
-        
+
         For vault-init pattern: secrets are fetched at container runtime,
         so we only ensure they exist and return VAULT_ADDR.
         """
         if not cls._prepare_dirs(c):
             return None
-        
+
         e = cls.env()
         secrets_backend = cls.secrets()
-        
+
         # Get or generate primary secret
         if cls.secret_key:
             val = secrets_backend.get(cls.secret_key)
@@ -163,16 +212,18 @@ class Deployer:
                     return None
             else:
                 info(f"Vault secret exists: {cls.secret_key}")
-        
+
         # Return base env vars + VAULT_ADDR for vault-init pattern
         result = cls.compose_env_base(e)
-        result["VAULT_ADDR"] = e.get("VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}")
-        
+        result["VAULT_ADDR"] = e.get(
+            "VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}"
+        )
+
         env_vars("DOKPLOY ENV (vault-init)", result)
         success("pre_compose complete - vault-init will fetch secrets at runtime")
         info("\nNote: VAULT_APP_TOKEN auto-configured via 'invoke vault.setup-tokens'")
         return result
-    
+
     @classmethod
     def get_compose_content(cls, c: "Context") -> str:
         """Get compose file content. Default: read from compose_path."""
@@ -185,25 +236,24 @@ class Deployer:
         except OSError as exc:
             error(f"Failed to read compose file at '{cls.compose_path}': {exc}")
             raise
-            
+
     @classmethod
     def composing(cls, c: "Context", env_vars: dict[str, str]) -> str:
         """Deploy via Dokploy API using GitHub provider. Returns composeId."""
         from libs.dokploy import get_dokploy, ensure_project
         from libs.const import GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH
-        
+
         e = cls.env()
-        header(f"{cls.service} composing", f"Deploying via Dokploy API (GitHub)")
-        
+        header(f"{cls.service} composing", "Deploying via Dokploy API (GitHub)")
         # Deploy via API
         # Priority: ENV > Class Attribute > Default "platform"
         env_name = e.get("ENV", "production")
         project_name = cls.project_name(e)
-        domain = e.get('INTERNAL_DOMAIN')
+        domain = e.get("INTERNAL_DOMAIN")
         host = f"cloud.{domain}" if domain else None
-        
+
         client = get_dokploy(host=host)
-        
+
         # Ensure project exists
         project_id, env_id = ensure_project(
             project_name,
@@ -215,21 +265,25 @@ class Deployer:
         if not env_id:
             error("Failed to get environment ID")
             raise ValueError("Failed to get environment ID")
-        
+
         # Get GitHub provider ID
         github_id = client.get_github_provider_id()
         if not github_id:
-            error("No GitHub provider configured in Dokploy. Please add one in Settings -> Git Providers.")
+            error(
+                "No GitHub provider configured in Dokploy. Please add one in Settings -> Git Providers."
+            )
             raise ValueError("No GitHub provider found")
-        
+
         info(f"Using GitHub provider: {github_id}")
-        
+
         # Format env vars
         env_str = "\n".join(f"{k}={v}" for k, v in env_vars.items() if v is not None)
-        
+
         # Check if compose already exists
-        existing = client.find_compose_by_name(cls.service, project_name, env_name=env_name)
-        
+        existing = client.find_compose_by_name(
+            cls.service, project_name, env_name=env_name
+        )
+
         if existing:
             compose_id = existing["composeId"]
             info("Updating existing compose service")
@@ -258,11 +312,11 @@ class Deployer:
                 env=env_str,
             )
             compose_id = result["composeId"]
-        
+
         # Deploy
         info(f"Deploying compose {compose_id}...")
         client.deploy_compose(compose_id)
-        
+
         # Configure domain if specified
         if cls.subdomain and cls.service_port:
             domain_host = service_domain(cls.subdomain, e)
@@ -288,11 +342,13 @@ class Deployer:
                     info(f"Domain already configured: {domain_host}")
                 if result["conflicts"]:
                     for c in result["conflicts"]:
-                        warning(f"Domain conflict: {c['host']} exists with port {c['existing_port']}, need {c['desired_port']}")
-        
+                        warning(
+                            f"Domain conflict: {c['host']} exists with port {c['existing_port']}, need {c['desired_port']}"
+                        )
+
         success(f"Deployed {cls.service} (composeId: {compose_id})")
         return compose_id
-    
+
     @classmethod
     def post_compose(cls, c: "Context", shared_tasks: Any) -> bool:
         """Verify deployment"""
@@ -308,46 +364,48 @@ class Deployer:
     def get_remote_config_hash(cls) -> str | None:
         """Get config hash stored in Dokploy compose description/env."""
         from libs.dokploy import get_dokploy
-        
+
         e = cls.env()
         env_name = e.get("ENV", "production")
         project_name = cls.project_name(e)
-        domain = e.get('INTERNAL_DOMAIN')
+        domain = e.get("INTERNAL_DOMAIN")
         host = f"cloud.{domain}" if domain else None
-        
+
         client = get_dokploy(host=host)
-        existing = client.find_compose_by_name(cls.service, project_name, env_name=env_name)
-        
+        existing = client.find_compose_by_name(
+            cls.service, project_name, env_name=env_name
+        )
+
         if not existing:
             return None
-        
+
         # Hash is stored in env as IAC_CONFIG_HASH
         env_str = existing.get("env", "")
-        for line in env_str.split('\n'):
+        for line in env_str.split("\n"):
             if line.startswith("IAC_CONFIG_HASH="):
                 return line.split("=", 1)[1].strip()
         return None
-    
+
     @classmethod
     def compute_local_config_hash(cls, c: "Context", env_vars: dict[str, str]) -> str:
         """Compute hash of local compose + env vars."""
         compose_content = cls.get_compose_content(c)
         return _compute_config_hash(compose_content, env_vars)
-    
+
     @classmethod
     def sync(cls, c: "Context", force: bool = False) -> dict:
         """Sync IaC state - update only if config changed.
-        
+
         Returns:
             dict with keys: action (skipped|updated|created|failed), details
         """
         header(f"{cls.service} sync", "Checking for changes")
-        
+
         # Prepare env vars (without full pre_compose side effects)
         e = cls.env()
         if missing := validate_env():
             return {"action": "failed", "details": f"Missing env: {', '.join(missing)}"}
-        
+
         # Get secrets backend and ensure secret exists
         secrets_backend = cls.secrets()
         if cls.secret_key:
@@ -355,24 +413,29 @@ class Deployer:
             if not val:
                 val = generate_password(24)
                 if not secrets_backend.set(cls.secret_key, val):
-                    return {"action": "failed", "details": f"Failed to store secret: {cls.secret_key}"}
+                    return {
+                        "action": "failed",
+                        "details": f"Failed to store secret: {cls.secret_key}",
+                    }
                 warning(f"Generated new secret: {cls.secret_key}")
-        
+
         # Build env vars
         env_vars_dict = cls.compose_env_base(e)
-        env_vars_dict["VAULT_ADDR"] = e.get("VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}")
-        
+        env_vars_dict["VAULT_ADDR"] = e.get(
+            "VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}"
+        )
+
         # Compute local hash
         local_hash = cls.compute_local_config_hash(c, env_vars_dict)
         remote_hash = cls.get_remote_config_hash()
-        
+
         info(f"Local config hash: {local_hash}")
         info(f"Remote config hash: {remote_hash or 'not found'}")
-        
+
         if not force and local_hash == remote_hash:
             success(f"{cls.service}: config unchanged, skipping deploy")
             return {"action": "skipped", "details": "Config hash matches"}
-        
+
         # Config changed or force - do full deploy
         if remote_hash is None:
             info("No remote config found, creating new deployment")
@@ -380,19 +443,22 @@ class Deployer:
             warning("Force sync requested")
         else:
             info(f"Config changed ({remote_hash} -> {local_hash}), deploying")
-        
+
         # Prepare directories
         if not cls._prepare_dirs(c):
             return {"action": "failed", "details": "Failed to prepare directories"}
-        
+
         # Add hash to env vars
         env_vars_dict["IAC_CONFIG_HASH"] = local_hash
-        
+
         # Deploy
         try:
             compose_id = cls.composing(c, env_vars_dict)
             success(f"{cls.service}: deployed with hash {local_hash}")
-            return {"action": "updated" if remote_hash else "created", "details": f"composeId: {compose_id}"}
+            return {
+                "action": "updated" if remote_hash else "created",
+                "details": f"composeId: {compose_id}",
+            }
         except Exception as exc:
             error(f"Deploy failed: {exc}")
             return {"action": "failed", "details": str(exc)}
@@ -400,16 +466,16 @@ class Deployer:
 
 def make_tasks(deployer_cls: type[Deployer], shared_tasks: Any) -> dict:
     """Generate standard invoke tasks for a deployer"""
-    
+
     @task
     def status(c):
         """Check service status"""
         return shared_tasks.status(c)
-    
+
     @task
     def pre_compose(c):
         return deployer_cls.pre_compose(c)
-    
+
     @task
     def composing(c, env_vars=None):
         if env_vars is None:
@@ -418,11 +484,11 @@ def make_tasks(deployer_cls: type[Deployer], shared_tasks: Any) -> dict:
         if env_vars:
             return deployer_cls.composing(c, env_vars)
         return None
-    
+
     @task
     def post_compose(c):
         return deployer_cls.post_compose(c, shared_tasks)
-    
+
     @task
     def setup(c):
         """Full setup - skips if healthy"""
@@ -433,7 +499,7 @@ def make_tasks(deployer_cls: type[Deployer], shared_tasks: Any) -> dict:
                 return
         except Exception as exc:
             warning(f"Status check failed: {exc}")
-        
+
         warning(f"{deployer_cls.service} not healthy - starting install")
         env_vars = deployer_cls.pre_compose(c)
         if env_vars is None:
@@ -442,12 +508,12 @@ def make_tasks(deployer_cls: type[Deployer], shared_tasks: Any) -> dict:
         deployer_cls.composing(c, env_vars)
         deployer_cls.post_compose(c, shared_tasks)
         success(f"{deployer_cls.service} setup complete!")
-    
+
     @task
     def sync(c, force=False):
         """Sync IaC state - deploy only if config changed"""
         return deployer_cls.sync(c, force=force)
-    
+
     return {
         "status": status,
         "pre_compose": pre_compose,

@@ -1,8 +1,6 @@
 services:
   iac-runner:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: bootstrap-iac_runner-bkewyn-iac-runner:v2
     container_name: iac-runner
     restart: unless-stopped
     environment:
@@ -21,6 +19,7 @@ services:
       # Environment
       - ENV=${ENV:-production}
       - PROJECT=${PROJECT:-platform}
+      - BUILD_CACHE_BUST=v2
     volumes:
       # Persistent workspace for git clone
       - ${DATA_PATH:-/data/bootstrap/iac-runner}/workspace:/workspace
