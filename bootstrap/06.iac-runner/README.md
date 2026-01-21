@@ -104,14 +104,26 @@ curl -X POST https://iac.{domain}/sync \
   -d "$PAYLOAD"
 ```
 
+## Scope
+
+IaC Runner **ONLY manages `platform` project services**.
+
+| Project | Management Method |
+|---------|------------------|
+| **Bootstrap** (1Password, Vault, IaC Runner) | Manual deployment (avoid circular deps) |
+| **Platform** (postgres, redis, authentik, etc.) | Auto-sync via IaC Runner |
+| **Apps** (finance_report, wealthfolio) | Own GitHub CI/CD pipelines |
+
 ## Service Mapping
 
-| Changed Path | Invoke Task |
-|--------------|-------------|
-| `platform/01.postgres/*` | `postgres.sync` |
-| `finance_report/finance_report/10.app/*` | `fr-app.sync` |
-| `libs/*` | All services (full sync) |
-| `bootstrap/*` | Skipped (manual only) |
+| Changed Path | Invoke Task | Notes |
+|--------------|-------------|-------|
+| `platform/01.postgres/*` | `postgres.sync` | Auto-sync |
+| `platform/10.authentik/*` | `authentik.sync` | Auto-sync |
+| `libs/*` | All platform services | Full platform sync |
+| `bootstrap/*` | Skipped | Manual only |
+| `finance_report/*` | Skipped | Use finance_report CI |
+| `finance/*` | Skipped | Use app-specific CI |
 
 ## Security Considerations
 
