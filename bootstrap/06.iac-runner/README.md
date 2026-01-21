@@ -24,25 +24,53 @@ The `sync` task uses config hashing:
 - Stores hash as `IAC_CONFIG_HASH` in Dokploy env
 - Skips deploy if hash matches (no changes)
 
-## Setup
+## Architecture
 
-### 1. Generate Webhook Secret
+Uses **vault-agent sidecar** pattern for secrets injection:
 
-```bash
-openssl rand -hex 32
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                       IaC Runner Pod                            │
+│  ┌──────────────┐    tmpfs    ┌─────────────────────────────┐   │
+│  │ vault-agent  │───────────▶│     IaC Runner              │   │
+│  │ (sidecar)    │ /secrets   │  - webhook_server.py        │   │
+│  └──────────────┘            │  - sync_runner.py           │   │
+│         │                    └─────────────────────────────┘   │
+│         ▼                                                       │
+│  Vault (fetch WEBHOOK_SECRET, GIT_REPO_URL)                     │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-Store in Vault: `secret/bootstrap/production/iac-runner` → `WEBHOOK_SECRET`
+## Setup
 
-### 2. Configure GitHub Webhook
+### 1. Store Secrets in Vault
+
+```bash
+# Store webhook secret and git repo URL
+invoke env.set WEBHOOK_SECRET=$(openssl rand -hex 32) --project=bootstrap --service=iac_runner
+invoke env.set GIT_REPO_URL=https://github.com/wangzitian0/infra2.git --project=bootstrap --service=iac_runner
+```
+
+Vault path: `secret/data/bootstrap/production/iac_runner`
+
+### 2. Generate VAULT_APP_TOKEN
+
+```bash
+export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token')
+invoke vault.setup-tokens
+```
+
+This creates a read-only token for IaC Runner and auto-configures it in Dokploy.
+
+### 3. Configure GitHub Webhook
 
 1. Go to repo Settings → Webhooks → Add webhook
 2. Payload URL: `https://iac.{your-domain}/webhook`
 3. Content type: `application/json`
-4. Secret: (the secret you generated)
+4. Secret: (the WEBHOOK_SECRET from Vault)
 5. Events: Just the push event
 
-### 3. Deploy
+### 4. Deploy
 
 ```bash
 invoke iac-runner.setup
