@@ -205,6 +205,39 @@ IaC Runner **ONLY manages `platform` project services**.
 | `finance_report/*` | Skipped | Use finance_report CI |
 | `finance/*` | Skipped | Use app-specific CI |
 
+## Troubleshooting
+
+### Vault Token Not Persisting
+
+**Symptom**: After container restart, vault-agent fails to authenticate
+
+**Cause**: Dokploy GitHub provider doesn't persist environment variables set via API
+
+**Workaround**: Manually inject token when restarting:
+```bash
+ssh root@$VPS_HOST
+export VAULT_APP_TOKEN='<your-vault-token-here>'
+cd /etc/dokploy/compose/bootstrap-iac_runner-bkewyn/code/bootstrap/06.iac-runner
+docker compose down && docker compose up -d
+```
+
+**Long-term solution options**:
+1. Switch to Dokploy Docker Compose provider (not GitHub provider)
+2. Use Vault AppRole authentication (more complex)
+3. File bug with Dokploy team
+
+### Git Safe Directory Error
+
+**Symptom**: `fatal: detected dubious ownership in repository at '/workspace/infra2'`
+
+**Fix**: Permanent fix in PR #79 - adds git config to Dockerfile
+
+### Workspace State Issues
+
+**Symptom**: `error: Your local changes to the following files would be overwritten by checkout`
+
+**Fix**: Permanent fix in PR #79 - adds `git reset --hard HEAD` before checkout
+
 ## Security Considerations
 
 - HMAC signature verification for all requests
