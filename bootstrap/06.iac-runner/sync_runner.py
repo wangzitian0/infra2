@@ -83,6 +83,9 @@ def update_repo(ref: str | None = None) -> bool:
             return False
 
     logger.info(f"Checking out {target_ref}")
+    subprocess.run(
+        ["git", "reset", "--hard", "HEAD"], cwd=repo_path, capture_output=True
+    )
     subprocess.run(["git", "clean", "-fd"], cwd=repo_path, capture_output=True)
     subprocess.run(
         ["git", "fetch", "--tags", "origin"], cwd=repo_path, capture_output=True

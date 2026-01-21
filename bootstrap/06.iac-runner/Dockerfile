@@ -17,8 +17,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY webhook_server.py .
 COPY sync_runner.py .
 
-# Create workspace directory
-RUN mkdir -p /workspace
+# Create workspace directory and configure Git safe directory
+RUN mkdir -p /workspace && \
+    git config --global --add safe.directory /workspace/infra2
 
 EXPOSE 8080
 
