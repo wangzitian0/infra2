@@ -76,15 +76,95 @@ This creates a read-only token for IaC Runner and auto-configures it in Dokploy.
 invoke iac-runner.setup
 ```
 
+## Version-Based Deployment
+
+IaC Runner supports **GitOps version-based deployments** via GitHub Actions workflows.
+
+### Versioning Strategy
+
+**Semantic Versioning**: `v{major}.{minor}.{patch}`
+
+- **Patch**: Staging iterations (auto-incremented on every `main` push)
+- **Minor**: Production releases (manual promotion from staging)
+- **Major**: Architecture changes (rare, manual)
+
+### Deployment Flows
+
+**Staging (Automatic)**:
+```
+Push to main → platform-staging.yml → v1.2.{patch+1} → Deploy to Staging
+```
+
+**Production (Manual)**:
+```
+Promote staging tag → platform-production.yml → v1.{minor+1}.0 → Deploy to Production
+```
+
+**Hotfix (Manual)**:
+```
+Create from prod tag → v1.3.1 → Deploy to Production (no main merge required)
+```
+
+### Example Workflow
+
+1. **Developer pushes to main**:
+   ```bash
+   git add platform/01.postgres/compose.yaml
+   git commit -m "feat: update postgres config"
+   git push origin main
+   ```
+
+2. **GitHub Actions auto-tags and deploys**:
+   - Reads latest tag (e.g., `v1.2.3`)
+   - Increments patch: `v1.2.4`
+   - Creates git tag
+   - Calls `/deploy` endpoint with `{"env":"staging","tag":"v1.2.4"}`
+
+3. **IaC Runner deploys to staging**:
+   - Checks out tag `v1.2.4`
+   - Runs `invoke {service}.sync` for all platform services
+   - Each service compares config hash and deploys only if changed
+
+4. **Manual production promotion**:
+   ```bash
+   gh workflow run platform-production.yml \
+     -f confirm="deploy" \
+     -f staging_tag="v1.2.4"
+   ```
+   - Creates production tag `v1.3.0` (minor +1)
+   - Calls `/deploy` endpoint with `{"env":"production","tag":"v1.3.0"}`
+   - Creates GitHub Release
+
 ## Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Health check |
-| `/webhook` | POST | GitHub webhook receiver |
-| `/sync` | POST | Manual sync trigger |
+| `/webhook` | POST | GitHub webhook receiver (change-based sync) |
+| `/sync` | POST | Manual sync trigger (legacy) |
+| `/deploy` | POST | Version-based deployment (GitOps) |
 
-### Manual Sync
+### Version-Based Deployment
+
+```bash
+# Deploy specific version to staging
+PAYLOAD='{"env":"staging","tag":"v1.2.4","triggered_by":"github-actions"}'
+SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac 'YOUR_SECRET' | awk '{print $2}')
+curl -X POST https://iac.{domain}/deploy \
+  -H "Content-Type: application/json" \
+  -H "X-Hub-Signature-256: sha256=$SIGNATURE" \
+  -d "$PAYLOAD"
+
+# Deploy specific version to production
+PAYLOAD='{"env":"production","tag":"v1.3.0","triggered_by":"manual-promotion"}'
+SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac 'YOUR_SECRET' | awk '{print $2}')
+curl -X POST https://iac.{domain}/deploy \
+  -H "Content-Type: application/json" \
+  -H "X-Hub-Signature-256: sha256=$SIGNATURE" \
+  -d "$PAYLOAD"
+```
+
+### Manual Sync (Legacy)
 
 ```bash
 # Sync specific services (requires signature)
