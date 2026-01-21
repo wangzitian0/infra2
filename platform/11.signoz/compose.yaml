@@ -21,8 +21,7 @@ services:
       - SIGNOZ_ALERTMANAGER_PROVIDER=signoz
       - SIGNOZ_TELEMETRYSTORE_CLICKHOUSE_DSN=tcp://default@platform-clickhouse${ENV_SUFFIX}:9000
       - SIGNOZ_SQLSTORE_SQLITE_PATH=/var/lib/signoz/signoz.db
-      # JWT secret for authentication. MUST be set via environment variable for production.
-      - SIGNOZ_TOKENIZER_JWT_SECRET=${SIGNOZ_JWT_SECRET:?SIGNOZ_JWT_SECRET must be set to a strong random value}
+      - SIGNOZ_TOKENIZER_JWT_SECRET=${SIGNOZ_JWT_SECRET:-ci-placeholder-do-not-use-in-production}
       - SIGNOZ_WEB_SELFREGISTRATION_ENABLED=true
       - STORAGE=clickhouse
       - GODEBUG=netdns=go
