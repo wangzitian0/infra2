@@ -5,29 +5,47 @@
 
 ---
 
-## 1. SSOT 来源（按项目区分）
+## 1. SSOT 来源（按凭证类型区分）
 
 > [!IMPORTANT]
 > **本地不存储**环境变量和密钥，直接从远端读写。
 
+### 1.1 三种凭证类型 (Credential Types)
+
+CLI 命令 `invoke env.*` 和 `get_secrets()` 函数通过 `--type` 参数区分凭证类型：
+
+| Type | 存储后端 | 路径格式 | 用途 |
+|------|----------|----------|------|
+| `bootstrap` | 1Password | `{project}/{service}` | Bootstrap 项目的凭证（无 env 层） |
+| `root_vars` | 1Password | `{project}/{env}/{service}` | 非 bootstrap 项目的 superadmin 密码 |
+| `app_vars` | Vault | `secret/data/{project}/{env}/{service}` | 应用变量（**默认**，vault-agent 消费） |
+
+**核心原则**：
+- **不指定 `--type`** → 默认 `app_vars` → **Vault**（最安全）
+- 要写 1Password 必须**显式声明** `--type=bootstrap` 或 `--type=root_vars`
+
+### 1.2 按项目区分（简化视图）
+
 | 项目 | 环境变量 SSOT | 密钥 SSOT |
 |-----|--------------|-----------| 
-| `bootstrap` | 1Password | 1Password |
-| `platform` | Dokploy | Vault |
+| `bootstrap` | 1Password (`type=bootstrap`) | 1Password (`type=bootstrap`) |
+| `platform` / 其他 | Dokploy | Vault (`type=app_vars`, 默认) |
 
-### 1.1 密钥分类规则
+### 1.3 密钥分类规则
 
-**Web UI 密码** → 1Password（人工访问）
+**Web UI 密码** → 1Password（人工访问，`type=root_vars`）
 - 用于浏览器登录、手动操作
 - 例如：Dokploy admin 密码、Authentik admin 密码
 - 存储在 1Password 便于 1Password 浏览器插件自动填充
 
-**机器读密码** → Vault（自动化访问）
+**机器读密码** → Vault（自动化访问，`type=app_vars` 或省略）
 - 用于服务间通信、API 调用、数据库连接
 - 例如：数据库密码、Redis 密码、Service Token
 - 存储在 Vault 便于 vault-agent 自动拉取
 
-**特例**：Bootstrap 阶段全部在 1Password（因为 Vault 尚未部署）
+**Bootstrap 凭证** → 1Password（`type=bootstrap`）
+- Bootstrap 阶段全部在 1Password（因为 Vault 尚未部署）
+- 路径无 env 层：`{project}/{service}`
 
 ---
 
@@ -160,34 +178,62 @@ vault kv get -field=bootstrap_password secret/platform/<env>/authentik | \
 ## 5. 命令行工具
 
 ```bash
-# 读取密钥
+# 读取密钥（默认 Vault）
 invoke env.get KEY --project=<project> --env=<env> --service=<service>
 
-# 写入密钥
+# 写入密钥（默认 Vault）
 invoke env.set KEY=VALUE --project=<project> --env=<env> --service=<service>
 
-# 预览（masked）
+# 预览（masked，默认 Vault）
 invoke env.list-all --project=<project> --service=<service>
 
 # 查看 init/env_vars
 invoke env.init-status
 ```
 
+### 5.1 使用 `--type` 指定凭证类型
+
+```bash
+# Bootstrap 凭证（1Password，路径无 env）
+invoke env.get KEY --project=bootstrap --service=vault --type=bootstrap
+invoke env.set KEY=VALUE --project=bootstrap --service=vault --type=bootstrap
+
+# Root vars（1Password，路径含 env）
+invoke env.get ADMIN_PASSWORD --project=platform --env=production --service=authentik --type=root_vars
+invoke env.set ADMIN_PASSWORD=secret --project=platform --env=production --service=authentik --type=root_vars
+
+# App vars（Vault，默认行为）
+invoke env.get POSTGRES_PASSWORD --project=platform --env=production --service=postgres
+# 等价于:
+invoke env.get POSTGRES_PASSWORD --project=platform --env=production --service=postgres --type=app_vars
+```
+
 > 省略 `--service` 表示读取/写入环境级（`{project}/{env}`）密钥。
+> 省略 `--type` 默认走 Vault（`app_vars`）。
 
 ---
 
 ## 6. Python API
 
 ```python
-from libs.env import OpSecrets, get_secrets, generate_password
+from libs.env import OpSecrets, VaultSecrets, get_secrets, generate_password
 
-# Bootstrap seed vars (init/env_vars)
+# Bootstrap seed vars (init/env_vars) - 直接用 OpSecrets
 init = OpSecrets()
 seed = init.get_all()
 
-# Vault secrets (platform service, admin only)
-secrets = get_secrets(project='platform', env='<env>', service='postgres')
+# Bootstrap 凭证 (1Password, 无 env 层)
+bootstrap_secrets = get_secrets(project='bootstrap', service='vault', type='bootstrap')
+root_token = bootstrap_secrets.get('ROOT_TOKEN')
+
+# Root vars (1Password, 含 env 层，用于 Web UI 密码)
+root_vars = get_secrets(project='platform', env='production', service='authentik', type='root_vars')
+admin_password = root_vars.get('ADMIN_PASSWORD')
+
+# App vars (Vault, 默认行为)
+secrets = get_secrets(project='platform', env='production', service='postgres')
+# 等价于:
+secrets = get_secrets(project='platform', env='production', service='postgres', type='app_vars')
 password = secrets.get('POSTGRES_PASSWORD')
 
 # 幂等生成密钥：不存在就生成并写入
@@ -196,13 +242,24 @@ if not password:
     secrets.set('POSTGRES_PASSWORD', password)
 ```
 
+### 6.1 Type 参数说明
+
+| Type | 返回类型 | 路径格式 |
+|------|----------|----------|
+| `None` (默认) | `VaultSecrets` | `secret/data/{project}/{env}/{service}` |
+| `'app_vars'` | `VaultSecrets` | `secret/data/{project}/{env}/{service}` |
+| `'bootstrap'` | `OpSecrets` | `{project}/{service}` (无 env) |
+| `'root_vars'` | `OpSecrets` | `{project}/{env}/{service}` |
+
 ---
 
 ## 7. 设计约束
 
 ### ✅ 推荐模式
 - 使用 `invoke env.*` 命令读写远端
-- 使用 `get_secrets`/`OpSecrets` 在代码中获取配置
+- 使用 `get_secrets()`/`OpSecrets` 在代码中获取配置
+- **默认不指定 `--type`**，走 Vault（最安全）
+- 需要 1Password 时**显式声明** `--type=bootstrap` 或 `--type=root_vars`
 - `.env.example` 仅作为 KEY 清单（用于 `Deployer` 校验）
 - 每个组件 README 包含完整手动步骤
 
