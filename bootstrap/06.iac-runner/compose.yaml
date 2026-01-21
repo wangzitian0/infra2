@@ -1,26 +1,62 @@
 services:
+  vault-agent:
+    image: hashicorp/vault:1.15
+    container_name: iac-runner-vault-agent
+    restart: always
+    entrypoint:
+      - sh
+      - -c
+      - |
+        echo "$$VAULT_APP_TOKEN" > /vault/token
+        exec vault agent -config=/etc/vault/vault-agent.hcl
+    environment:
+      VAULT_ADDR: ${VAULT_ADDR}
+      VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:-}
+      ENV: ${ENV:-production}
+    volumes:
+      - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
+      - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
+      - secrets:/vault/secrets
+    networks:
+      - dokploy-network
+
   iac-runner:
     image: bootstrap-iac_runner-bkewyn-iac-runner:v2
     container_name: iac-runner
     restart: unless-stopped
+    depends_on:
+      - vault-agent
+    entrypoint:
+      - sh
+      - -c
+      - |
+        # Wait for secrets file to be rendered by vault-agent
+        while [ ! -f /secrets/.env ]; do
+          echo "Waiting for secrets..."
+          sleep 1
+        done
+        set -a
+        . /secrets/.env
+        set +a
+        exec gunicorn -w 2 -b 0.0.0.0:8080 webhook_server:app
     environment:
-      # Webhook config
-      - WEBHOOK_SECRET=${WEBHOOK_SECRET}
+      # Static config (not from Vault)
       - WEBHOOK_PORT=8080
-      # Git config (required)
-      - GIT_REPO_URL=${GIT_REPO_URL}
       - GIT_BRANCH=${GIT_BRANCH:-main}
-      # Vault config (for invoke tasks)
+      # Vault config (for invoke tasks running inside container)
       - VAULT_ADDR=${VAULT_ADDR}
-      - VAULT_APP_TOKEN=${VAULT_APP_TOKEN}
+      - VAULT_APP_TOKEN=${VAULT_APP_TOKEN:-}
       # Dokploy config
-      - DOKPLOY_API_KEY=${DOKPLOY_API_KEY}
+      - DOKPLOY_API_KEY=${DOKPLOY_API_KEY:-}
       - INTERNAL_DOMAIN=${INTERNAL_DOMAIN}
+      - VPS_HOST=${VPS_HOST:-}
       # Environment
       - ENV=${ENV:-production}
       - PROJECT=${PROJECT:-platform}
-      - BUILD_CACHE_BUST=v2
+      - BUILD_CACHE_BUST=v3
     volumes:
+      # Secrets from vault-agent
+      - secrets:/secrets:ro
       # Persistent workspace for git clone
       - ${DATA_PATH:-/data/bootstrap/iac-runner}/workspace:/workspace
       # SSH key for VPS access (mount only specific key)
@@ -39,6 +75,13 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+
+volumes:
+  secrets:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=10m,mode=0755"
 
 networks:
   dokploy-network:

@@ -383,6 +383,14 @@ def setup_tokens(c):
     # Each entry: (project_name, project_dir, service_map, dokploy_project)
     projects = [
         (
+            "bootstrap",
+            os.path.join(root_dir, "bootstrap"),
+            {
+                "iac_runner": "06.iac-runner",
+            },
+            "bootstrap",
+        ),
+        (
             "platform",
             os.path.join(root_dir, "platform"),
             {

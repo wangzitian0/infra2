@@ -26,6 +26,7 @@
 4. **[管理密钥](./04.secrets.md)** - Vault 获取与管理
 5. **[接入 SSO](./05.sso.md)** - Authentik OIDC
 6. **[监控和分析](./06.observability.md)** - 规划中
+7. **[新增服务 SOP](./07.new-service-sop.md)** - 新服务上线检查清单
 
 ---
 
