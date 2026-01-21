@@ -71,7 +71,7 @@
 | [db.platform_pg.md](./db.platform_pg.md) | `db.platform_pg` | Platform PG (L1) |
 | [db.business_pg.md](./db.business_pg.md) | `db.business_pg` | Business PG (规划中) |
 | [db.redis.md](./db.redis.md) | `db.redis` | Redis 缓存 |
-| [db.clickhouse.md](./db.clickhouse.md) | `db.clickhouse` | ClickHouse OLAP (规划中) |
+| [db.clickhouse.md](./db.clickhouse.md) | `db.clickhouse` | ClickHouse (SigNoz Storage) |
 | [db.arangodb.md](./db.arangodb.md) | `db.arangodb` | ArangoDB Graph (规划中) |
 
 ---

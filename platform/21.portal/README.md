@@ -46,7 +46,22 @@ Portal is protected by Authentik forward auth. Only users in `admins` group can 
 
 `deploy.py` 中设置 `subdomain = None`，让 compose.yaml 的 Traefik labels 生效。
 
-### Setup SSO (one-time after Authentik deploy)
+### Setup SSO (Automated)
+
+Run the one-time setup task to register Portal in Authentik:
+
+```bash
+invoke portal.sso-setup
+```
+
+This task will:
+1. Ensure Authentik Root Token exists
+2. Ensure `admins` group exists
+3. Create the Proxy Provider and Application with correct domains
+
+### Setup SSO (Manual - Legacy)
+
+If you prefer manual setup:
 
 ```bash
 # 1. Create Authentik Root Token
