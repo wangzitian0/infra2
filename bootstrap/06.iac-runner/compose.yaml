@@ -24,7 +24,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: bootstrap-iac_runner-bkewyn-iac-runner:v3
+      args:
+        - GIT_SHA=${GIT_SHA:-latest}
+    # Always rebuild from source when deploying (no image caching)
+    # This ensures webhook_server.py and other source files are always up-to-date
+    pull_policy: build
+    image: bootstrap-iac_runner-bkewyn-iac-runner:${GIT_SHA:-latest}
     container_name: iac-runner
     restart: unless-stopped
     depends_on:
