@@ -414,6 +414,33 @@ def setup_tokens(c):
         ),
     ]
 
+    info("Validating VAULT_ROOT_TOKEN before bulk operations...")
+    validate_result = c.run(
+        "vault token lookup -format=json",
+        env={"VAULT_ADDR": vault_addr, "VAULT_TOKEN": root_token},
+        hide=True,
+        warn=True,
+    )
+
+    if not validate_result.ok:
+        error("VAULT_ROOT_TOKEN is invalid or expired")
+        error("Get new token: op read 'op://Infra2/.../Token'")
+        error("Then run: export VAULT_ROOT_TOKEN=<token>")
+        from invoke.exceptions import Exit
+
+        raise Exit("Invalid root token", code=1)
+
+    token_info = json.loads(validate_result.stdout)
+    ttl = token_info.get("data", {}).get("ttl", 0)
+
+    if ttl > 0 and ttl < 300:
+        warning(f"Root token expires in {ttl}s. Consider renewing.")
+
+    success("Root token validated")
+    print("")
+
+    failed_services = []
+
     for project_name, project_dir, service_map, dokploy_project in projects:
         print(f"\n--- {project_name} ---")
         for service, dir_name in service_map.items():
@@ -456,6 +483,7 @@ path "secret/data/{project_name}/{env_name}/{service}" {{
                     error(
                         f"Failed to create policy '{policy_name}' for service '{service}'"
                     )
+                failed_services.append((project_name, service, "policy_write_failed"))
                 continue
             success(f"   ✅ Policy {policy_name} created")
 
@@ -483,6 +511,16 @@ path "secret/data/{project_name}/{env_name}/{service}" {{
                 print()
             else:
                 error(f"Failed to create token for {service}")
+                failed_services.append((project_name, service, "token_creation_failed"))
+
+    if failed_services:
+        print("")
+        error("❌ Some services failed:")
+        for proj, svc, reason in failed_services:
+            error(f"  - {proj}/{svc}: {reason}")
+        from invoke.exceptions import Exit
+
+        raise Exit("Token generation failed for some services", code=1)
 
     success("All tokens generated!")
     info("Next steps:")

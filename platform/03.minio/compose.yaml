@@ -20,6 +20,13 @@ services:
     networks:
       - dokploy-network
 
+    healthcheck:
+      test: ["CMD", "test", "-f", "/vault/secrets/.env"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   minio:
     # After RELEASE.2025-04-22T22-12-26Z, MinIO removed most of the admin UI
     # Using the last version with full Console admin features

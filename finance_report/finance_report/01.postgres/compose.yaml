@@ -20,6 +20,13 @@ services:
     networks:
       - dokploy-network
 
+    healthcheck:
+      test: ["CMD", "test", "-f", "/vault/secrets/.env"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   postgres:
     image: postgres:16-alpine
     container_name: finance_report-postgres${ENV_SUFFIX}
