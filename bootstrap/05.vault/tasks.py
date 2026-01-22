@@ -425,8 +425,13 @@ def setup_tokens(c):
                     policy_rules = f.read().replace("{{env}}", env_name)
                 info(f"Loaded tailored policy from {dir_name}/vault-policy.hcl")
             else:
-                # Fallback policy
-                policy_rules = f'path "secret/data/{project_name}/{env_name}/{service}" {{ capabilities = ["read", "list"] }}'
+                policy_rules = f"""path "auth/token/lookup-self" {{
+  capabilities = ["read"]
+}}
+
+path "secret/data/{project_name}/{env_name}/{service}" {{
+  capabilities = ["read", "list"]
+}}"""
                 warning(f"No policy file found for {service}, using default read-only")
 
             # Write policy via vault CLI using stdin
