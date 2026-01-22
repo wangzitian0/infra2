@@ -43,6 +43,13 @@ services:
     networks:
       - dokploy-network
 
+    healthcheck:
+      test: ["CMD", "test", "-f", "/vault/secrets/.env"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   backend:
     image: ghcr.io/wangzitian0/finance_report-backend:${IMAGE_TAG:-latest}
     pull_policy: always

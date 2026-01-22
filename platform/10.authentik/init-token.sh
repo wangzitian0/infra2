@@ -97,11 +97,13 @@ if [ -n "$VAULT_INIT_TOKEN" ]; then
   # Use VAULT_INIT_ADDR directly (passed from compose.yaml)
   VAULT_URL="${VAULT_INIT_ADDR:-https://vault.zitian.party}"
   ENV_NAME="${ENV:-production}"
-  if vault kv patch -address="$VAULT_URL" "secret/platform/${ENV_NAME}/authentik" root_token="$TOKEN"; then
-    echo "Root token stored to Vault successfully"
-  else
-    echo "Warning: Failed to store token to Vault"
+  if ! vault kv patch -address="$VAULT_URL" "secret/platform/${ENV_NAME}/authentik" root_token="$TOKEN"; then
+    echo "❌ CRITICAL: Failed to store token to Vault" >&2
+    echo "Token was generated but not persisted:" >&2
+    echo "  ${TOKEN}" >&2
+    exit 1
   fi
+  echo "Root token stored to Vault successfully"
 fi
 
 echo "Root token initialization complete"

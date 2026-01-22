@@ -20,6 +20,13 @@ services:
     networks:
       - dokploy-network
 
+    healthcheck:
+      test: ["CMD", "test", "-f", "/vault/secrets/.env"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   activepieces:
     image: ghcr.io/activepieces/activepieces:0.75.0
     container_name: platform-activepieces${ENV_SUFFIX}

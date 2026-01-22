@@ -142,6 +142,26 @@ class VaultSecrets:
     Set VAULT_SKIP_VERIFY=1 to skip SSL verification for self-signed certs.
     """
 
+    class VaultError(Exception):
+        """Base exception for Vault operations"""
+
+        pass
+
+    class VaultAuthError(VaultError):
+        """Raised when Vault authentication fails"""
+
+        pass
+
+    class VaultConnectionError(VaultError):
+        """Raised when Vault server is unreachable"""
+
+        pass
+
+    class VaultSecretNotFoundError(VaultError):
+        """Raised when requested secret doesn't exist"""
+
+        pass
+
     def __init__(self, path: str, token: str | None = None, addr: str | None = None):
         """
         Args:
@@ -174,15 +194,12 @@ class VaultSecrets:
             return self._cache
 
         if not self.token:
-            print("\n❌ Error: VAULT_ROOT_TOKEN not set", file=sys.stderr)
-            print("Please set: export VAULT_ROOT_TOKEN=<admin-token>", file=sys.stderr)
-            print(
-                "Get from: op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token' "
-                "(or /Token; item: bootstrap/vault/Root Token)",
-                file=sys.stderr,
+            raise self.VaultAuthError(
+                f"\n❌ VAULT_ROOT_TOKEN not set\n"
+                f"Fix: export VAULT_ROOT_TOKEN=<admin-token>\n"
+                f"Get from: op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token'\n"
+                f"(item: bootstrap/vault/Root Token)"
             )
-            self._cache = {}
-            return self._cache
 
         try:
             with httpx.Client(verify=self.verify_ssl, timeout=10.0) as client:
@@ -190,19 +207,54 @@ class VaultSecrets:
                     f"{self.addr}/v1/secret/data/{self.path}",
                     headers={"X-Vault-Token": self.token},
                 )
+
                 if resp.status_code == 200:
-                    self._cache = resp.json().get("data", {}).get("data", {})
+                    data = resp.json().get("data", {}).get("data", {})
+                    if not data:
+                        raise self.VaultSecretNotFoundError(
+                            f"\n❌ Secret path exists but has no data: {self.path}\n"
+                            f"Fix: vault kv put secret/{self.path} key=value"
+                        )
+                    self._cache = data
+                    return self._cache
+                elif resp.status_code == 404:
+                    raise self.VaultSecretNotFoundError(
+                        f"\n❌ Secret not found: {self.path}\n"
+                        f"Fix: vault kv put secret/{self.path} key=value\n"
+                        f"Or check path exists: vault kv list secret/{'/'.join(self.path.split('/')[:-1])}"
+                    )
+                elif resp.status_code == 403:
+                    raise self.VaultAuthError(
+                        f"\n❌ Permission denied accessing: {self.path}\n"
+                        f"Token lacks read permission to this path.\n"
+                        f"Check token: vault token lookup\n"
+                        f"Fix: Regenerate token with correct policy (invoke vault.setup-tokens)"
+                    )
+                elif resp.status_code == 503:
+                    raise self.VaultConnectionError(
+                        f"\n❌ Vault is sealed or unavailable\n"
+                        f"Check: curl {self.addr}/v1/sys/health\n"
+                        f"Fix: vault operator unseal (or check unsealer logs)"
+                    )
                 else:
-                    self._cache = {}
-        except httpx.RequestError as e:
-            print(
-                f"VaultSecrets: connection error to {self.addr}: {e}", file=sys.stderr
-            )
-            self._cache = {}
-        except Exception as e:
-            print(f"VaultSecrets: unexpected error: {e}", file=sys.stderr)
-            self._cache = {}
-        return self._cache
+                    raise self.VaultError(
+                        f"\n❌ Vault returned unexpected status {resp.status_code}\n"
+                        f"Path: {self.path}\n"
+                        f"Response: {resp.text[:200]}"
+                    )
+
+        except httpx.ConnectError as e:
+            raise self.VaultConnectionError(
+                f"\n❌ Cannot connect to Vault: {e}\n"
+                f"Check: VAULT_ADDR={self.addr}\n"
+                f"Troubleshoot: curl {self.addr}/v1/sys/health"
+            ) from e
+        except httpx.TimeoutException as e:
+            raise self.VaultConnectionError(
+                f"\n❌ Vault connection timeout: {e}\n"
+                f"Check: VAULT_ADDR={self.addr}\n"
+                f"Network: Is Vault reachable?"
+            ) from e
 
     def get(self, key: str) -> Optional[str]:
         """Get a single secret"""
@@ -215,7 +267,9 @@ class VaultSecrets:
     def set(self, key: str, value: str) -> bool:
         """Set a secret (merge with existing)"""
         if not self.token:
-            return False
+            raise self.VaultAuthError(
+                "\n❌ VAULT_ROOT_TOKEN not set - cannot write secrets"
+            )
 
         existing = self._load().copy()
         existing[key] = value
@@ -228,13 +282,32 @@ class VaultSecrets:
                     json={"data": existing},
                 )
                 if resp.status_code in (200, 204):
-                    self._cache = None  # Invalidate
+                    self._cache = None
                     return True
-        except httpx.RequestError as e:
-            print(f"VaultSecrets: connection error: {e}", file=sys.stderr)
-        except Exception as e:
-            print(f"VaultSecrets: unexpected error: {e}", file=sys.stderr)
-        return False
+                elif resp.status_code == 403:
+                    raise self.VaultAuthError(
+                        f"\n❌ Permission denied writing to: {self.path}\n"
+                        f"Token lacks write permission.\n"
+                        f"Check token: vault token lookup"
+                    )
+                elif resp.status_code == 503:
+                    raise self.VaultConnectionError(
+                        f"\n❌ Vault is sealed or unavailable\nCannot write secrets."
+                    )
+                else:
+                    raise self.VaultError(
+                        f"\n❌ Vault write failed with status {resp.status_code}\n"
+                        f"Path: {self.path}\n"
+                        f"Response: {resp.text[:200]}"
+                    )
+        except httpx.ConnectError as e:
+            raise self.VaultConnectionError(
+                f"\n❌ Cannot connect to Vault: {e}\nCheck: VAULT_ADDR={self.addr}"
+            ) from e
+        except httpx.TimeoutException as e:
+            raise self.VaultConnectionError(
+                f"\n❌ Vault connection timeout: {e}"
+            ) from e
 
 
 def get_secrets(

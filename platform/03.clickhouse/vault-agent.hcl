@@ -16,10 +16,13 @@ auto_auth {
       path = "/home/vault/.vault-token"
     }
   }
+
+  exit_on_err = true
 }
 
 template_config {
   static_secret_render_interval = "5m"
+  exit_on_retry_failure = true
 }
 
 template {
