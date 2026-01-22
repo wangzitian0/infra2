@@ -112,7 +112,7 @@ print("OK")
         # Wait for ClickHouse ingestion
         time.sleep(CLICKHOUSE_INGESTION_DELAY_SECONDS)
 
-        # Verify in ClickHouse (service_name already validated)
+        # Verify in ClickHouse (service_name already sanitized by _sanitize_service_name)
         verify_query = f"SELECT count() FROM signoz_traces.distributed_signoz_index_v3 WHERE serviceName = '{service_name}'"
         clickhouse = with_env_suffix("platform-clickhouse", env)
         verify_cmd = f'ssh root@{host} "docker exec {clickhouse} clickhouse-client --query \\"{verify_query}\\""'
@@ -186,6 +186,7 @@ def create_api_key(
 
     info(f"Logging in to SigNoz as {admin_email}")
     login_payload = json.dumps({"email": admin_email, "password": admin_password})
+    # SECURITY: hide=True required to prevent password leakage in logs
     login_result = c.run(
         f'curl -s -X POST "{base_url}/api/v1/login" '
         f'-H "Content-Type: application/json" '
@@ -218,6 +219,7 @@ def create_api_key(
     create_payload = json.dumps(
         {"name": name, "expiresInDays": expiry_days_int, "role": "ADMIN"}
     )
+    # SECURITY: hide=True required to prevent JWT token leakage in logs
     create_result = c.run(
         f'curl -s -X POST "{base_url}/api/v1/pats" '
         f'-H "Authorization: Bearer {jwt_token}" '
