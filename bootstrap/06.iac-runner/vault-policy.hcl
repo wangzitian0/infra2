@@ -1,6 +1,11 @@
 # Policy for IaC Runner service
 # Allows read access to its own secrets
 
+# Required for vault-agent token validation
+path "auth/token/lookup-self" {
+  capabilities = ["read"]
+}
+
 path "secret/data/bootstrap/{{env}}/iac_runner" {
   capabilities = ["read", "list"]
 }
