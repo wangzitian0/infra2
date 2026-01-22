@@ -430,8 +430,6 @@ def setup_tokens(c):
 
         raise Exit("Invalid root token", code=1)
 
-    import json
-
     token_info = json.loads(validate_result.stdout)
     ttl = token_info.get("data", {}).get("ttl", 0)
 

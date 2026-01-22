@@ -131,12 +131,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-    healthcheck:
-      test: ["CMD", "test", "-f", "/vault/secrets/.env"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
 
 
 volumes:

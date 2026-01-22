@@ -195,10 +195,10 @@ class VaultSecrets:
 
         if not self.token:
             raise self.VaultAuthError(
-                f"\n❌ VAULT_ROOT_TOKEN not set\n"
-                f"Fix: export VAULT_ROOT_TOKEN=<admin-token>\n"
-                f"Get from: op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token'\n"
-                f"(item: bootstrap/vault/Root Token)"
+                "\n❌ VAULT_ROOT_TOKEN not set\n"
+                "Fix: export VAULT_ROOT_TOKEN=<admin-token>\n"
+                "Get from: op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token'\n"
+                "(item: bootstrap/vault/Root Token)"
             )
 
         try:
@@ -292,7 +292,7 @@ class VaultSecrets:
                     )
                 elif resp.status_code == 503:
                     raise self.VaultConnectionError(
-                        f"\n❌ Vault is sealed or unavailable\nCannot write secrets."
+                        "\n❌ Vault is sealed or unavailable\nCannot write secrets."
                     )
                 else:
                     raise self.VaultError(
