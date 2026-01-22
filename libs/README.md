@@ -24,11 +24,30 @@
 ## Usage Patterns
 
 ### Secrets (SSOT-first)
+
+`get_secrets()` routes to the appropriate backend based on `type` parameter:
+
+| Type | Backend | Path Format |
+|------|---------|-------------|
+| `None` (default) | Vault | `secret/data/{project}/{env}/{service}` |
+| `'app_vars'` | Vault | `secret/data/{project}/{env}/{service}` |
+| `'bootstrap'` | 1Password | `{project}/{service}` (no env) |
+| `'root_vars'` | 1Password | `{project}/{env}/{service}` |
+
 ```python
 from libs.env import get_secrets
 
+# App vars (Vault, default)
 secrets = get_secrets(project="platform", service="postgres", env="production")
 db_pass = secrets.get("POSTGRES_PASSWORD")
+
+# Bootstrap credentials (1Password, no env layer)
+bootstrap = get_secrets(project="bootstrap", service="vault", type="bootstrap")
+root_token = bootstrap.get("ROOT_TOKEN")
+
+# Root vars (1Password, with env layer, for Web UI passwords)
+root_vars = get_secrets(project="platform", env="production", service="authentik", type="root_vars")
+admin_pass = root_vars.get("ADMIN_PASSWORD")
 ```
 
 ### Init seed vars (1Password)

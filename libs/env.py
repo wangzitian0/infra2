@@ -1,9 +1,14 @@
 """
 Simplified environment and secret management
 
+Three credential types:
+- bootstrap: 1Password - all bootstrap project credentials
+- root_vars: 1Password - superadmin passwords for non-bootstrap services
+- app_vars: Vault - application variables (consumed by vault-agent)
+
 Two backends:
-- OpSecrets: 1Password for bootstrap (uses OP_SERVICE_ACCOUNT_TOKEN)
-- VaultSecrets: HashiCorp Vault for platform (uses VAULT_ROOT_TOKEN)
+- OpSecrets: 1Password (uses OP_SERVICE_ACCOUNT_TOKEN)
+- VaultSecrets: HashiCorp Vault (uses VAULT_ROOT_TOKEN)
 """
 
 from __future__ import annotations
@@ -13,12 +18,20 @@ import secrets
 import string
 import subprocess
 import sys
-from typing import Optional
+from typing import Literal, Optional
 
 import httpx
 
 
-__all__ = ["OpSecrets", "VaultSecrets", "get_secrets", "generate_password"]
+CredentialType = Literal["bootstrap", "root_vars", "app_vars"]
+
+__all__ = [
+    "OpSecrets",
+    "VaultSecrets",
+    "get_secrets",
+    "generate_password",
+    "CredentialType",
+]
 
 
 def generate_password(length: int = 24) -> str:
@@ -224,26 +237,54 @@ class VaultSecrets:
         return False
 
 
-def get_secrets(project: str, service: str | None = None, env: str = "production"):
-    """Factory to get appropriate secrets backend.
+def get_secrets(
+    project: str,
+    service: str | None = None,
+    env: str = "production",
+    credential_type: CredentialType | None = None,
+) -> OpSecrets | VaultSecrets:
+    """Factory to get appropriate secrets backend based on credential type.
 
     Args:
-        project: 'bootstrap' or 'platform'
-        service: Service name (e.g., 'postgres'), None uses project path
+        project: Project name (e.g., 'bootstrap', 'platform', 'finance_report')
+        service: Service name (e.g., 'postgres'), None uses project/env path
         env: Environment (default: 'production')
+        credential_type: Credential type - 'bootstrap', 'root_vars', or 'app_vars'
+                        If not specified, defaults to 'app_vars' (Vault)
 
     Returns:
-        OpSecrets or VaultSecrets instance
-    """
-    project = _validate_scope_value("project", project)
-    env = _validate_scope_value("env", env)
-    service = _validate_scope_value("service", service, allow_none=True)
+        OpSecrets (1Password) for bootstrap/root_vars
+        VaultSecrets for app_vars
 
-    if project in ("init", "bootstrap"):
-        item = f"{project}/{service}" if service is not None else project
+    Type routing:
+        bootstrap  -> 1Password: {project}/{service} (no env layer)
+        root_vars  -> 1Password: {project}/{env}/{service}
+        app_vars   -> Vault: secret/data/{project}/{env}/{service}
+    """
+    validated_project: str = _validate_scope_value("project", project)  # type: ignore[assignment]
+    validated_env: str = _validate_scope_value("env", env)  # type: ignore[assignment]
+    validated_service = _validate_scope_value("service", service, allow_none=True)
+
+    resolved_type = credential_type or "app_vars"
+
+    if resolved_type == "bootstrap":
+        item = (
+            f"{validated_project}/{validated_service}"
+            if validated_service
+            else validated_project
+        )
+        return OpSecrets(item=item)
+    elif resolved_type == "root_vars":
+        item = (
+            f"{validated_project}/{validated_env}/{validated_service}"
+            if validated_service
+            else f"{validated_project}/{validated_env}"
+        )
         return OpSecrets(item=item)
     else:
         path = (
-            f"{project}/{env}/{service}" if service is not None else f"{project}/{env}"
+            f"{validated_project}/{validated_env}/{validated_service}"
+            if validated_service
+            else f"{validated_project}/{validated_env}"
         )
         return VaultSecrets(path=path)

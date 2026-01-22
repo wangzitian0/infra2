@@ -94,6 +94,27 @@ Configured via Dokploy domain settings in `deploy.py` (compose.yaml only enables
 ### Web UI
 - **URL**: `https://signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`
 - **First-time setup**: Create admin account on first visit
+- **Credentials**: Stored in 1Password (`Infra2` vault → `platform/signoz/admin`)
+
+### API Keys
+
+Create API keys for programmatic access:
+
+```bash
+# Create and store in Vault (default)
+uv run invoke signoz.shared.create-api-key
+
+# Custom name and expiry
+uv run invoke signoz.shared.create-api-key --name=my-automation --expiry-days=30
+
+# Print without storing
+uv run invoke signoz.shared.create-api-key --no-store-vault
+```
+
+API keys stored in Vault at `secret/platform/{env}/signoz`:
+- `api_key` - The token
+- `api_key_name` - Human-readable name
+- `api_key_id` - UUID for management
 
 ### OTLP Endpoints (for instrumentation)
 

@@ -519,7 +519,12 @@ def _configure_dokploy_token(_c, service: str, token: str, project: str = "platf
             info("   Configuring in Dokploy...")
 
             client.update_compose_env(compose_id, env_vars={"VAULT_APP_TOKEN": token})
-            success("   ✅ Auto-configured in Dokploy")
+            info("   Updated environment variables")
+
+            # Trigger redeploy to apply changes
+            info("   Triggering redeploy...")
+            client.deploy_compose(compose_id)
+            success("   ✅ Auto-configured in Dokploy and redeployed")
         else:
             warning(
                 f"   Service '{service}' not found in Dokploy project '{project}', manual setup required"
