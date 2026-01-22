@@ -31,11 +31,7 @@ jobs:
       - name: Determine Deployment Target
         id: target
         run: |
-          # Default from inputs (workflow_dispatch)
-          ENV="${{ inputs.env }}"
-          REF="${{ inputs.ref }}"
-          
-          # Override if push event
+          # Determine target based on event type
           if [[ "${{ github.event_name }}" == "push" ]]; then
             if [[ "${{ github.ref }}" == refs/tags/* ]]; then
               ENV="production"
@@ -43,7 +39,19 @@ jobs:
             elif [[ "${{ github.ref }}" == refs/heads/main ]]; then
               ENV="staging"
               REF="main"
+            else
+              echo "::error::Unsupported ref: ${{ github.ref }}"
+              exit 1
             fi
+          else
+            # workflow_dispatch
+            ENV="${{ inputs.env }}"
+            REF="${{ inputs.ref }}"
+          fi
+          
+          if [[ -z "$ENV" || -z "$REF" ]]; then
+            echo "::error::ENV or REF is empty (ENV=$ENV, REF=$REF)"
+            exit 1
           fi
           
           echo "env=$ENV" >> $GITHUB_OUTPUT
