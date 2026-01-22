@@ -30,6 +30,12 @@ services:
       VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:-}
       ENV: ${ENV}
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+    healthcheck:
+      test: ["CMD", "test", "-f", "/vault/secrets/.env"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 10s
     volumes:
       - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
       - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
@@ -43,7 +49,8 @@ services:
     container_name: finance_report-backend${ENV_SUFFIX}
     restart: always
     depends_on:
-      - vault-agent
+      vault-agent:
+        condition: service_healthy
     entrypoint:
       - sh
       - -c
@@ -53,10 +60,13 @@ services:
         export PYTHONPATH=/app
 
         # Wait for secrets file to be rendered by vault-agent
+        echo "🔍 [CHECKPOINT-1] Waiting for Vault secrets to be rendered..."
         while [ ! -f /secrets/.env ]; do
-          echo "Waiting for secrets..."
+          echo "  ⏳ Secrets not ready yet, retrying..."
           sleep 1
         done
+        echo "✅ [CHECKPOINT-1] Secrets file ready at /secrets/.env"
+        
         set -a
         . /secrets/.env
         set +a
@@ -64,22 +74,24 @@ services:
         # Run database migrations with retry logic
         # Retries handle cases where PostgreSQL might not be fully ready
         # Total retry time (~150s) aligns with healthcheck start_period (default 180s)
-        echo "Running database migrations..."
+        echo "🔍 [CHECKPOINT-2] Starting database migrations..."
         max_retries=30
         retry_interval=5
         attempt=1
 
         until alembic upgrade head; do
           if [ "$$attempt" -ge "$$max_retries" ]; then
-            echo "ERROR: Migrations failed after $$attempt attempts"
+            echo "❌ [CHECKPOINT-2] CRITICAL: Migrations failed after $$attempt attempts"
+            echo "   Possible causes: DB not reachable, migration syntax error, connection string wrong"
             exit 1
           fi
-          echo "WARNING: Migration attempt $$attempt/$$max_retries failed. Retrying in $$retry_interval seconds..."
+          echo "  ⚠️  Migration attempt $$attempt/$$max_retries failed. Retrying in $$retry_interval seconds..."
           attempt=$$((attempt + 1))
           sleep $$retry_interval
         done
 
-        echo "Migrations completed successfully. Starting application..."
+        echo "✅ [CHECKPOINT-2] Migrations completed successfully"
+        echo "🔍 [CHECKPOINT-3] Starting uvicorn application server on port 8000..."
         exec uvicorn src.main:app --host 0.0.0.0 --port 8000
     environment:
       DEBUG: ${DEBUG:-false}
@@ -91,10 +103,10 @@ services:
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
-      start_period: ${BACKEND_HEALTHCHECK_START_PERIOD:-180s}
-      interval: 30s
-      retries: 5
-      timeout: 10s
+      start_period: ${BACKEND_HEALTHCHECK_START_PERIOD:-60s}
+      interval: 10s
+      retries: 3
+      timeout: 5s
     volumes:
       - secrets:/secrets:ro
     networks:
