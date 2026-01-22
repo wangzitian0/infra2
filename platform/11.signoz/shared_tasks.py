@@ -185,10 +185,11 @@ def create_api_key(
         return None
 
     info(f"Logging in to SigNoz as {admin_email}")
+    login_payload = json.dumps({"email": admin_email, "password": admin_password})
     login_result = c.run(
         f'curl -s -X POST "{base_url}/api/v1/login" '
         f'-H "Content-Type: application/json" '
-        f'-d \'{{"email": "{admin_email}", "password": "{admin_password}"}}\'',
+        f"-d '{login_payload}'",
         hide=True,
         warn=True,
     )
@@ -207,12 +208,21 @@ def create_api_key(
         error("Invalid JSON response from login")
         return None
 
-    info(f"Creating API key: {name} (expires in {expiry_days} days)")
+    try:
+        expiry_days_int = int(expiry_days)
+    except (TypeError, ValueError):
+        error(f"Invalid expiry_days value: {expiry_days!r}. Must be an integer.")
+        return None
+
+    info(f"Creating API key: {name} (expires in {expiry_days_int} days)")
+    create_payload = json.dumps(
+        {"name": name, "expiresInDays": expiry_days_int, "role": "ADMIN"}
+    )
     create_result = c.run(
         f'curl -s -X POST "{base_url}/api/v1/pats" '
         f'-H "Authorization: Bearer {jwt_token}" '
         f'-H "Content-Type: application/json" '
-        f'-d \'{{"name": "{name}", "expiresInDays": {expiry_days}, "role": "ADMIN"}}\'',
+        f"-d '{create_payload}'",
         hide=True,
         warn=True,
     )

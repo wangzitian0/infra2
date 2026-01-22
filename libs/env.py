@@ -241,7 +241,7 @@ def get_secrets(
     project: str,
     service: str | None = None,
     env: str = "production",
-    type: CredentialType | None = None,
+    credential_type: CredentialType | None = None,
 ) -> OpSecrets | VaultSecrets:
     """Factory to get appropriate secrets backend based on credential type.
 
@@ -249,8 +249,8 @@ def get_secrets(
         project: Project name (e.g., 'bootstrap', 'platform', 'finance_report')
         service: Service name (e.g., 'postgres'), None uses project/env path
         env: Environment (default: 'production')
-        type: Credential type - 'bootstrap', 'root_vars', or 'app_vars'
-              If not specified, defaults to 'app_vars' (Vault)
+        credential_type: Credential type - 'bootstrap', 'root_vars', or 'app_vars'
+                        If not specified, defaults to 'app_vars' (Vault)
 
     Returns:
         OpSecrets (1Password) for bootstrap/root_vars
@@ -265,16 +265,16 @@ def get_secrets(
     validated_env: str = _validate_scope_value("env", env)  # type: ignore[assignment]
     validated_service = _validate_scope_value("service", service, allow_none=True)
 
-    credential_type = type or "app_vars"
+    resolved_type = credential_type or "app_vars"
 
-    if credential_type == "bootstrap":
+    if resolved_type == "bootstrap":
         item = (
             f"{validated_project}/{validated_service}"
             if validated_service
             else validated_project
         )
         return OpSecrets(item=item)
-    elif credential_type == "root_vars":
+    elif resolved_type == "root_vars":
         item = (
             f"{validated_project}/{validated_env}/{validated_service}"
             if validated_service

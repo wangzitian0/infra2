@@ -143,37 +143,37 @@ class TestGetSecrets:
     def test_get_secrets_app_vars_returns_vault(self):
         from libs.env import get_secrets, VaultSecrets
 
-        result = get_secrets("platform", "postgres", "production", type="app_vars")
+        result = get_secrets("platform", "postgres", "production", credential_type="app_vars")
         assert isinstance(result, VaultSecrets)
 
     def test_get_secrets_bootstrap_returns_op(self):
         from libs.env import get_secrets, OpSecrets
 
-        result = get_secrets("bootstrap", "vault", type="bootstrap")
+        result = get_secrets("bootstrap", "vault", credential_type="bootstrap")
         assert isinstance(result, OpSecrets)
 
     def test_get_secrets_root_vars_returns_op(self):
         from libs.env import get_secrets, OpSecrets
 
-        result = get_secrets("platform", "postgres", "production", type="root_vars")
+        result = get_secrets("platform", "postgres", "production", credential_type="root_vars")
         assert isinstance(result, OpSecrets)
 
     def test_get_secrets_bootstrap_path_no_env(self):
         from libs.env import get_secrets
 
-        result = get_secrets("bootstrap", "vault", type="bootstrap")
+        result = get_secrets("bootstrap", "vault", credential_type="bootstrap")
         assert result.item == "bootstrap/vault"
 
     def test_get_secrets_root_vars_path_includes_env(self):
         from libs.env import get_secrets
 
-        result = get_secrets("platform", "postgres", "production", type="root_vars")
+        result = get_secrets("platform", "postgres", "production", credential_type="root_vars")
         assert result.item == "platform/production/postgres"
 
     def test_get_secrets_app_vars_path_includes_env(self):
         from libs.env import get_secrets
 
-        result = get_secrets("platform", "postgres", "production", type="app_vars")
+        result = get_secrets("platform", "postgres", "production", credential_type="app_vars")
         assert result.path == "platform/production/postgres"
 
 

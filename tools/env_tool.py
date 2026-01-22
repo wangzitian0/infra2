@@ -41,13 +41,13 @@ def get(
     project: str = "platform",
     service: str | None = None,
     env: str = "production",
-    type: str | None = None,
+    credential_type: str | None = None,
 ):
     """Get secret from SSOT (Vault or 1Password)"""
-    validated_type = _validate_type(type)
-    if type is not None and validated_type is None:
-        return  # Error already printed
-    secrets = get_secrets(project, service, env, type=validated_type)
+    validated_type = _validate_type(credential_type)
+    if credential_type is not None and validated_type is None:
+        return
+    secrets = get_secrets(project, service, env, credential_type=validated_type)
     value = secrets.get(key)
     if value:
         console.print(value)
@@ -62,17 +62,17 @@ def set_secret(
     project: str = "platform",
     service: str | None = None,
     env: str = "production",
-    type: str | None = None,
+    credential_type: str | None = None,
 ):
     """Set secret in SSOT (Vault or 1Password)"""
     if "=" not in keyvalue:
         error("Format: KEY=VALUE")
         return
-    validated_type = _validate_type(type)
-    if type is not None and validated_type is None:
+    validated_type = _validate_type(credential_type)
+    if credential_type is not None and validated_type is None:
         return
     key, value = keyvalue.split("=", 1)
-    secrets = get_secrets(project, service, env, type=validated_type)
+    secrets = get_secrets(project, service, env, credential_type=validated_type)
     if secrets.set(key, value):
         success(f"Set {key}")
     else:
@@ -85,7 +85,7 @@ def list_all(
     project: str = "platform",
     service: str | None = None,
     env: str = "production",
-    type: str | None = None,
+    credential_type: str | None = None,
 ):
     """List all secrets for a service"""
     from rich.table import Table
@@ -94,14 +94,14 @@ def list_all(
         error("--service is required")
         return
 
-    validated_type = _validate_type(type)
-    if type is not None and validated_type is None:
+    validated_type = _validate_type(credential_type)
+    if credential_type is not None and validated_type is None:
         return
 
-    secrets = get_secrets(project, service, env, type=validated_type)
+    secrets = get_secrets(project, service, env, credential_type=validated_type)
     data = secrets.get_all()
 
-    type_label = type or "app_vars"
+    type_label = credential_type or "app_vars"
     header(f"Secrets [{type_label}]: {project}/{env}/{service}")
 
     table = Table(show_header=True)
