@@ -24,7 +24,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: bootstrap-iac_runner-bkewyn-iac-runner:v3
+    image: bootstrap-iac_runner-bkewyn-iac-runner:v4
     container_name: iac-runner
     restart: unless-stopped
     depends_on:
