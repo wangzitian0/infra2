@@ -242,12 +242,14 @@ def create_proxy_app(
                 policy_pks[group_name] = resp.json()["results"][0]["pk"]
                 info(f"Policy already exists: {policy_name}")
             else:
+                # SECURITY: Escape single quotes in group_name for Python expression
+                safe_group_name = group_name.replace("'", "\\'")
                 resp = client.post(
                     f"{base_url}/api/v3/policies/expression/",
                     json={
                         "name": policy_name,
                         "execution_logging": False,
-                        "expression": f"return ak_is_group_member(request.user, name='{group_name}')",
+                        "expression": f"return ak_is_group_member(request.user, name='{safe_group_name}')",
                     },
                 )
 
