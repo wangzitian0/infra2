@@ -73,16 +73,16 @@ services:
 
         # Run database migrations with retry logic
         # Retries handle cases where PostgreSQL might not be fully ready
-        # Total retry time (~150s) aligns with healthcheck start_period (default 180s)
+        # Total retry time (~50s) fits within healthcheck start_period (60s)
         echo "🔍 [CHECKPOINT-2] Starting database migrations..."
-        max_retries=30
+        max_retries=10
         retry_interval=5
         attempt=1
 
         until alembic upgrade head; do
           if [ "$$attempt" -ge "$$max_retries" ]; then
             echo "❌ [CHECKPOINT-2] CRITICAL: Migrations failed after $$attempt attempts"
-            echo "   Possible causes: DB not reachable, migration syntax error, connection string wrong"
+            echo "  Possible causes: DB not reachable, migration syntax error, connection string wrong"
             exit 1
           fi
           echo "  ⚠️  Migration attempt $$attempt/$$max_retries failed. Retrying in $$retry_interval seconds..."
