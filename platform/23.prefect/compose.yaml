@@ -40,17 +40,17 @@ services:
       - |
         # Wait for secrets file to be rendered by vault-agent
         MAX_WAIT=60; WAITED=0
-        while [ ! -f /secrets/.env ] && [ $WAITED -lt $MAX_WAIT ]; do
-          echo "Waiting for secrets... ($WAITED/$MAX_WAIT)"
+        while [ ! -f /secrets/.env ] && [ $$WAITED -lt $$MAX_WAIT ]; do
+          echo "Waiting for secrets... ($$WAITED/$$MAX_WAIT)"
           sleep 2
-          WAITED=$((WAITED+2))
+          WAITED=$$((WAITED+2))
         done
-        [ -f /secrets/.env ] || { echo "FATAL: Secrets timeout after ${MAX_WAIT}s. Check vault-agent logs."; exit 1; }
+        [ -f /secrets/.env ] || { echo "FATAL: Secrets timeout after $${MAX_WAIT}s. Check vault-agent logs."; exit 1; }
         set -a
         . /secrets/.env
         set +a
         # Construct DATABASE_URL with password from secrets
-        export PREFECT_API_DATABASE_CONNECTION_URL="postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@platform-postgres${ENV_SUFFIX}:5432/prefect"
+        export PREFECT_API_DATABASE_CONNECTION_URL="postgresql+asyncpg://postgres:$${POSTGRES_PASSWORD}@platform-postgres${ENV_SUFFIX}:5432/prefect"
         exec prefect server start --no-services
     environment:
       PREFECT_SERVER_API_HOST: 0.0.0.0
@@ -98,17 +98,17 @@ services:
       - |
         # Wait for secrets file
         MAX_WAIT=60; WAITED=0
-        while [ ! -f /secrets/.env ] && [ $WAITED -lt $MAX_WAIT ]; do
-          echo "Waiting for secrets... ($WAITED/$MAX_WAIT)"
+        while [ ! -f /secrets/.env ] && [ $$WAITED -lt $$MAX_WAIT ]; do
+          echo "Waiting for secrets... ($$WAITED/$$MAX_WAIT)"
           sleep 2
-          WAITED=$((WAITED+2))
+          WAITED=$$((WAITED+2))
         done
-        [ -f /secrets/.env ] || { echo "FATAL: Secrets timeout after ${MAX_WAIT}s. Check vault-agent logs."; exit 1; }
+        [ -f /secrets/.env ] || { echo "FATAL: Secrets timeout after $${MAX_WAIT}s. Check vault-agent logs."; exit 1; }
         set -a
         . /secrets/.env
         set +a
         # Construct DATABASE_URL with password from secrets
-        export PREFECT_API_DATABASE_CONNECTION_URL="postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@platform-postgres${ENV_SUFFIX}:5432/prefect"
+        export PREFECT_API_DATABASE_CONNECTION_URL="postgresql+asyncpg://postgres:$${POSTGRES_PASSWORD}@platform-postgres${ENV_SUFFIX}:5432/prefect"
         exec prefect server services start
     environment:
       PREFECT_MESSAGING_BROKER: prefect_redis.messaging
