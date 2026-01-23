@@ -262,13 +262,20 @@ def create_proxy_app(
                 policy_pks[group_name] = resp.json()["pk"]
                 success(f"Created policy: require {group_name} membership")
 
-        # Check if provider already exists
+        # Check if provider already exists (exact name match)
         provider_name = f"{slug}-proxy"
-        resp = client.get(f"{base_url}/api/v3/providers/proxy/?name={provider_name}")
-        if resp.status_code == 200 and resp.json()["results"]:
-            provider_id = resp.json()["results"][0]["pk"]
-            info(f"Provider already exists: {provider_name} (pk: {provider_id})")
-        else:
+        resp = client.get(f"{base_url}/api/v3/providers/proxy/")
+        provider_id = None
+        if resp.status_code == 200:
+            for provider in resp.json()["results"]:
+                if provider["name"] == provider_name:
+                    provider_id = provider["pk"]
+                    info(
+                        f"Provider already exists: {provider_name} (pk: {provider_id})"
+                    )
+                    break
+
+        if not provider_id:
             # Create proxy provider
             info(f"Creating proxy provider for {external_host}...")
             resp = client.post(
@@ -290,14 +297,19 @@ def create_proxy_app(
             provider_id = resp.json()["pk"]
             success(f"Created proxy provider: {provider_id}")
 
-        # Check if application already exists
-        resp = client.get(f"{base_url}/api/v3/core/applications/?slug={slug}")
-        if resp.status_code == 200 and resp.json()["results"]:
-            app_data = resp.json()["results"][0]
-            app_slug = app_data["slug"]
-            app_pk = app_data["pk"]
-            info(f"Application already exists: {name} (slug: {app_slug})")
-        else:
+        # Check if application already exists (exact slug match)
+        resp = client.get(f"{base_url}/api/v3/core/applications/")
+        app_data = None
+        if resp.status_code == 200:
+            for app in resp.json()["results"]:
+                if app["slug"] == slug:
+                    app_data = app
+                    app_slug = app["slug"]
+                    app_pk = app["pk"]
+                    info(f"Application already exists: {name} (slug: {app_slug})")
+                    break
+
+        if not app_data:
             # Create application
             info(f"Creating application: {name}...")
             resp = client.post(
