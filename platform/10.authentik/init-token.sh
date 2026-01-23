@@ -92,13 +92,50 @@ echo "Root token initialized successfully"
 # Store token to Vault if VAULT_INIT_TOKEN is set
 if [ -n "$VAULT_INIT_TOKEN" ]; then
   echo "Storing root token to Vault..."
-  export VAULT_TOKEN="$VAULT_INIT_TOKEN"
   
   # Use VAULT_INIT_ADDR directly (passed from compose.yaml)
   VAULT_URL="${VAULT_INIT_ADDR:-https://vault.zitian.party}"
   ENV_NAME="${ENV:-production}"
-  if ! vault kv patch -address="$VAULT_URL" "secret/platform/${ENV_NAME}/authentik" root_token="$TOKEN"; then
-    echo "❌ CRITICAL: Failed to store token to Vault" >&2
+  
+  # Use Python urllib to call Vault HTTP API (curl not available in container)
+  "$PYTHON_BIN" - << PYTHON
+import os
+import sys
+import json
+import urllib.request
+
+vault_url = "${VAULT_URL}/v1/secret/data/platform/${ENV_NAME}/authentik"
+token = """${TOKEN}"""
+vault_token = os.environ.get("VAULT_INIT_TOKEN")
+
+data = json.dumps({"data": {"root_token": token}}).encode('utf-8')
+req = urllib.request.Request(
+    vault_url,
+    data=data,
+    headers={
+        "X-Vault-Token": vault_token,
+        "Content-Type": "application/json"
+    },
+    method="PATCH"
+)
+
+try:
+    with urllib.request.urlopen(req) as response:
+        status = response.status
+        if status not in (200, 204):
+            print(f"❌ CRITICAL: Failed to store token to Vault (HTTP {status})", file=sys.stderr)
+            print(response.read().decode('utf-8'), file=sys.stderr)
+            sys.exit(1)
+except urllib.error.HTTPError as e:
+    print(f"❌ CRITICAL: Failed to store token to Vault (HTTP {e.code})", file=sys.stderr)
+    print(e.read().decode('utf-8'), file=sys.stderr)
+    sys.exit(1)
+except Exception as e:
+    print(f"❌ CRITICAL: Failed to store token to Vault: {e}", file=sys.stderr)
+    sys.exit(1)
+PYTHON
+  
+  if [ $? -ne 0 ]; then
     echo "Token was generated but not persisted:" >&2
     echo "  ${TOKEN}" >&2
     exit 1
