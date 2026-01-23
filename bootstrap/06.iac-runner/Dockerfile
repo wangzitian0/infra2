@@ -9,6 +9,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
+# Install 1Password CLI
+RUN curl -sSfLo /tmp/op.zip https://cache.agilebits.com/dist/1P/op2/pkg/v2.30.0/op_linux_amd64_v2.30.0.zip \
+    && unzip -d /tmp /tmp/op.zip \
+    && mv /tmp/op /usr/local/bin/op \
+    && chmod +x /usr/local/bin/op \
+    && rm /tmp/op.zip
+
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
