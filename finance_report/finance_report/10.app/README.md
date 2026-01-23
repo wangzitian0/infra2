@@ -19,12 +19,22 @@ Single domain with path-based routing:
 
 ## Secrets (Vault)
 
-Secrets stored at: `secret/data/finance_report/<env>/app`
+Secrets are read from multiple Vault paths:
+
+### Dynamic Construction (via secrets.ctmpl)
+
+`DATABASE_URL` and `REDIS_URL` are constructed dynamically using ENV_SUFFIX pattern:
+
+- Reads `POSTGRES_PASSWORD` from `secret/data/finance_report/<env>/postgres`
+- Reads redis `PASSWORD` from `secret/data/finance_report/<env>/redis`
+- Constructs URLs with environment-specific hostnames (e.g., `-staging` suffix)
+
+### Application Secrets
+
+Stored at: `secret/data/finance_report/<env>/app`
 
 | Key | Description |
 |-----|-------------|
-| `DATABASE_URL` | PostgreSQL connection string |
-| `REDIS_URL` | Redis connection string |
 | `S3_ENDPOINT` | MinIO/S3 endpoint URL |
 | `S3_ACCESS_KEY` | MinIO/S3 access key |
 | `S3_SECRET_KEY` | MinIO/S3 secret key |
@@ -64,18 +74,23 @@ For local development builds, see the [finance_report repository](https://github
 
 ## Connection Strings
 
-Build the connection strings from other services:
+Connection strings are constructed dynamically by vault-agent using the ENV_SUFFIX pattern:
 
 ```bash
-# PostgreSQL
-DATABASE_URL=postgresql://postgres:<pg_password>@finance_report-postgres${ENV_SUFFIX}:5432/finance_report
+# Production (ENV_SUFFIX="")
+DATABASE_URL=postgresql+asyncpg://postgres:<password>@finance_report-postgres:5432/finance_report
+REDIS_URL=redis://:<password>@finance_report-redis:6379/0
 
-# Redis
-REDIS_URL=redis://:<redis_password>@finance_report-redis${ENV_SUFFIX}:6379/0
+# Staging (ENV_SUFFIX="-staging")
+DATABASE_URL=postgresql+asyncpg://postgres:<password>@finance_report-postgres-staging:5432/finance_report
+REDIS_URL=redis://:<password>@finance_report-redis-staging:6379/0
 
-# MinIO (from platform)
-S3_ENDPOINT=http://platform-minio${ENV_SUFFIX}:9000
+# PR Environment (ENV_SUFFIX="-pr-123")
+DATABASE_URL=postgresql+asyncpg://postgres:<password>@finance_report-postgres-pr-123:5432/finance_report
+REDIS_URL=redis://:<password>@finance_report-redis-pr-123:6379/0
 ```
+
+This ensures correct hostname resolution in Dokploy's shared network where each environment has isolated containers.
 
 ## References
 
