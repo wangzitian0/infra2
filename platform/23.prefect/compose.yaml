@@ -54,6 +54,7 @@ services:
         export PREFECT_REDIS_MESSAGING_PASSWORD="$${REDIS_PASSWORD}"
         exec prefect server start --no-services
     environment:
+      ENV_SUFFIX: ${ENV_SUFFIX}
       PREFECT_SERVER_API_HOST: 0.0.0.0
       # Redis messaging
       PREFECT_MESSAGING_BROKER: prefect_redis.messaging
@@ -113,6 +114,7 @@ services:
         export PREFECT_REDIS_MESSAGING_PASSWORD="$${REDIS_PASSWORD}"
         exec prefect server services start
     environment:
+      ENV_SUFFIX: ${ENV_SUFFIX}
       PREFECT_MESSAGING_BROKER: prefect_redis.messaging
       PREFECT_MESSAGING_CACHE: prefect_redis.messaging
       PREFECT_REDIS_MESSAGING_HOST: platform-redis${ENV_SUFFIX}
