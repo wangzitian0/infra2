@@ -399,6 +399,7 @@ def setup_tokens(c):
                 "minio": "03.minio",
                 "authentik": "10.authentik",
                 "activepieces": "22.activepieces",
+                "prefect": "23.prefect",
             },
             "platform",
         ),
