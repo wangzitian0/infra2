@@ -1,0 +1,145 @@
+services:
+  vault-agent:
+    image: hashicorp/vault:1.15
+    container_name: platform-prefect-vault-agent${ENV_SUFFIX}
+    restart: always
+    entrypoint:
+      - sh
+      - -c
+      - |
+        echo "$$VAULT_APP_TOKEN" > /vault/token
+        exec vault agent -config=/etc/vault/vault-agent.hcl
+    environment:
+      VAULT_ADDR: ${VAULT_ADDR}
+      VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:-}
+      ENV: ${ENV}
+    volumes:
+      - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
+      - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
+      - secrets:/vault/secrets
+    networks:
+      - dokploy-network
+
+    healthcheck:
+      test: ["CMD", "test", "-f", "/vault/secrets/.env"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  prefect-server:
+    image: prefecthq/prefect:3-latest
+    container_name: platform-prefect-server${ENV_SUFFIX}
+    restart: unless-stopped
+    depends_on:
+      vault-agent:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - |
+        # Wait for secrets file to be rendered by vault-agent
+        MAX_WAIT=60; WAITED=0
+        while [ ! -f /secrets/.env ] && [ $WAITED -lt $MAX_WAIT ]; do
+          echo "Waiting for secrets... ($WAITED/$MAX_WAIT)"
+          sleep 2
+          WAITED=$((WAITED+2))
+        done
+        [ -f /secrets/.env ] || { echo "FATAL: Secrets timeout after ${MAX_WAIT}s. Check vault-agent logs."; exit 1; }
+        set -a
+        . /secrets/.env
+        set +a
+        exec prefect server start --no-services
+    environment:
+      # Database connection (password injected from secrets)
+      PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://postgres:$${POSTGRES_PASSWORD}@platform-postgres${ENV_SUFFIX}:5432/prefect
+      PREFECT_SERVER_API_HOST: 0.0.0.0
+      # Redis messaging
+      PREFECT_MESSAGING_BROKER: prefect_redis.messaging
+      PREFECT_MESSAGING_CACHE: prefect_redis.messaging
+      PREFECT_REDIS_MESSAGING_HOST: platform-redis${ENV_SUFFIX}
+      PREFECT_REDIS_MESSAGING_PORT: 6379
+      PREFECT_REDIS_MESSAGING_DB: 1
+    volumes:
+      - secrets:/secrets:ro
+    networks:
+      - dokploy-network
+    labels:
+      - "traefik.enable=true"
+      # SSO-protected access via Authentik forward auth
+      - "traefik.http.routers.prefect${ENV_DOMAIN_SUFFIX}.rule=Host(`prefect${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`)"
+      - "traefik.http.routers.prefect${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
+      - "traefik.http.routers.prefect${ENV_DOMAIN_SUFFIX}.tls=true"
+      - "traefik.http.routers.prefect${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.prefect${ENV_DOMAIN_SUFFIX}.service=prefect${ENV_DOMAIN_SUFFIX}"
+      - "traefik.http.services.prefect${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=4200"
+      # Authentik forward auth middleware
+      - "traefik.http.middlewares.prefect-auth${ENV_DOMAIN_SUFFIX}.forwardauth.address=http://platform-authentik-server${ENV_SUFFIX}:9000/outpost.goauthentik.io/auth/traefik"
+      - "traefik.http.middlewares.prefect-auth${ENV_DOMAIN_SUFFIX}.forwardauth.trustForwardHeader=true"
+      - "traefik.http.middlewares.prefect-auth${ENV_DOMAIN_SUFFIX}.forwardauth.authResponseHeaders=X-authentik-username,X-authentik-groups,X-authentik-email,X-authentik-name,X-authentik-uid"
+      - "traefik.http.routers.prefect${ENV_DOMAIN_SUFFIX}.middlewares=prefect-auth${ENV_DOMAIN_SUFFIX}@docker"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:4200/api/health', timeout=1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  prefect-services:
+    image: prefecthq/prefect:3-latest
+    container_name: platform-prefect-services${ENV_SUFFIX}
+    restart: unless-stopped
+    depends_on:
+      prefect-server:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - |
+        # Wait for secrets file
+        MAX_WAIT=60; WAITED=0
+        while [ ! -f /secrets/.env ] && [ $WAITED -lt $MAX_WAIT ]; do
+          echo "Waiting for secrets... ($WAITED/$MAX_WAIT)"
+          sleep 2
+          WAITED=$((WAITED+2))
+        done
+        [ -f /secrets/.env ] || { echo "FATAL: Secrets timeout after ${MAX_WAIT}s. Check vault-agent logs."; exit 1; }
+        set -a
+        . /secrets/.env
+        set +a
+        exec prefect server services start
+    environment:
+      PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://postgres:$${POSTGRES_PASSWORD}@platform-postgres${ENV_SUFFIX}:5432/prefect
+      PREFECT_MESSAGING_BROKER: prefect_redis.messaging
+      PREFECT_MESSAGING_CACHE: prefect_redis.messaging
+      PREFECT_REDIS_MESSAGING_HOST: platform-redis${ENV_SUFFIX}
+      PREFECT_REDIS_MESSAGING_PORT: 6379
+      PREFECT_REDIS_MESSAGING_DB: 1
+    volumes:
+      - secrets:/secrets:ro
+    networks:
+      - dokploy-network
+
+  prefect-worker:
+    image: prefecthq/prefect:3-latest
+    container_name: platform-prefect-worker${ENV_SUFFIX}
+    restart: on-failure
+    depends_on:
+      prefect-server:
+        condition: service_healthy
+    environment:
+      PREFECT_API_URL: http://platform-prefect-server${ENV_SUFFIX}:4200/api
+    command: prefect worker start --pool default
+    networks:
+      - dokploy-network
+
+volumes:
+  secrets:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=10m,mode=0755"
+
+networks:
+  dokploy-network:
+    external: true
