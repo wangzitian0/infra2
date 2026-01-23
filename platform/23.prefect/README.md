@@ -1,32 +1,54 @@
-# Prefect
+# Perfect (Prefect Workflow Orchestration)
 
 > **Purpose**: Workflow orchestration platform for automating data pipelines and scheduled tasks.
+> **Deployment**: Single global instance (production only), environment isolation via Prefect projects.
 
 ## Overview
 
-Prefect is a modern workflow orchestration platform that allows building, scheduling, and monitoring data pipelines. This deployment includes:
+Perfect is a modern workflow orchestration platform powered by Prefect. This deployment includes:
 
-- **prefect-server**: API server and web UI
+- **prefect-server**: API server and web UI (SSO-protected at https://perfect.zitian.party)
 - **prefect-services**: Background services (scheduler, flow runner)
 - **prefect-worker**: Worker for executing flows in the default pool
 - **postgres**: Stores flow runs, deployments, and task state (shared platform DB)
 - **redis**: Message broker for event streaming (shared platform Redis, DB 1)
 
+### Environment Strategy
+
+**Single global deployment** - No per-environment instances (staging/production).
+Use **Prefect projects** and **tags** for environment isolation:
+- Project: `finance-report-prod`, `finance-report-staging`
+- Tags: `env:production`, `env:staging`
+
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      Traefik                                │
-│     prefect.{domain} → Authentik ForwardAuth → Prefect UI  │
-└─────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────┐
+│                         Traefik                                │
+│  perfect.zitian.party → Authentik ForwardAuth → Prefect UI    │
+│  (Browser access only - requires SSO login)                    │
+└────────────────────────────────────────────────────────────────┘
                               │
         ┌─────────────────────┼─────────────────────┐
-        │                     │                     │
-  ┌─────▼─────┐      ┌────────▼────────┐     ┌─────▼──────┐
-  │ Postgres  │      │  Platform Redis │     │   Worker   │
-  │ (shared)  │      │  (shared, DB 1) │     │            │
-  └───────────┘      └─────────────────┘     └────────────┘
+        │                     │                      │
+  ┌─────▼─────┐      ┌────────▼────────┐     ┌──────▼──────┐
+  │ Postgres  │      │  Platform Redis │     │   Worker    │
+  │ (shared)  │      │  (shared, DB 1) │     │             │
+  └───────────┘      └─────────────────┘     └─────────────┘
+                              ▲
+                              │
+               ┌──────────────┴──────────────┐
+               │ Internal API (no SSO)       │
+               │ http://platform-prefect-    │
+               │ server:4200/api             │
+               │ (Docker network access)     │
+               └─────────────────────────────┘
 ```
+
+**Key Points**:
+- **UI Access**: `https://perfect.zitian.party` (SSO required)
+- **API Access**: `http://platform-prefect-server:4200/api` (no auth, Docker network only)
+- Python SDK/CLI use internal API, not affected by SSO
 
 ## Dependencies
 
@@ -43,13 +65,10 @@ Prefect is a modern workflow orchestration platform that allows building, schedu
 # 1. Deploy (requires postgres and vault to be up)
 invoke prefect.setup
 
-# 2. Configure SSO protection
-invoke authentik.shared.create-proxy-app \
-  --name=Prefect \
-  --slug=prefect \
-  --external-host=https://prefect.{domain} \
-  --internal-host=platform-prefect-server \
-  --port=4200
+# 2. Configure SSO (manual via Web UI)
+# Visit https://sso.zitian.party
+# Create Provider: Proxy, external=https://perfect.zitian.party, internal=http://platform-prefect-server:4200
+# Create Application: name=Perfect, slug=perfect
 
 # 3. Check status
 invoke prefect.status
@@ -78,25 +97,59 @@ Prefect uses **platform-redis DB 1** to avoid conflicts:
 
 ## Access
 
-- **URL**: `https://prefect{ENV_DOMAIN_SUFFIX}.{INTERNAL_DOMAIN}`
-- **Auth**: Authentik SSO (admins group)
+- **Web UI**: `https://perfect.zitian.party` (SSO-protected, browser only)
+- **API Endpoint** (for Python SDK/CLI): `http://platform-prefect-server:4200/api` (internal, no auth)
 
 ## Usage
 
-### Creating Flows
+### From Your Python Application (Internal API)
 
-From any machine with Prefect installed:
+```python
+import os
+from prefect import flow
+
+# Use internal API endpoint (no SSO required)
+os.environ['PREFECT_API_URL'] = 'http://platform-prefect-server:4200/api'
+
+@flow(name="my-workflow")
+def my_workflow():
+    # Your workflow logic
+    pass
+
+if __name__ == "__main__":
+    my_workflow()
+```
+
+### Environment Isolation
+
+Use **Prefect projects** to separate environments:
 
 ```bash
-export PREFECT_API_URL=https://prefect.{domain}/api
-prefect work-pool create my-pool --type process
-prefect deploy my_flow.py:my_flow --pool my-pool
+# Deploy to production project
+prefect project create finance-report-prod
+prefect --project finance-report-prod deploy my_flow.py:my_flow --tags env:production
+
+# Deploy to staging project  
+prefect project create finance-report-staging
+prefect --project finance-report-staging deploy my_flow.py:my_flow --tags env:staging
+```
+
+### Work Pools
+
+```bash
+prefect work-pool create production-pool --type process
+prefect work-pool create staging-pool --type process
 ```
 
 ### Monitoring
 
-- **UI**: `https://prefect.{domain}` - Flow runs, logs, metrics
-- **CLI**: `prefect flow-run ls` - List recent runs
+- **Web UI**: `https://perfect.zitian.party` - View flow runs, logs, metrics (requires SSO login)
+- **CLI**: Configure with internal API to list runs programmatically
+
+```bash
+export PREFECT_API_URL=http://platform-prefect-server:4200/api
+prefect flow-run ls
+```
 
 ## Troubleshooting
 
@@ -126,8 +179,19 @@ ssh root@{VPS_HOST} docker exec platform-postgres psql -U postgres -c '\l' | gre
 # Check worker status
 ssh root@{VPS_HOST} docker logs platform-prefect-worker
 
-# Verify work pool exists
-curl https://prefect.{domain}/api/work_pools/
+# Check API connectivity from worker
+ssh root@{VPS_HOST} docker exec platform-prefect-worker curl http://platform-prefect-server:4200/api/health
+```
+
+### Cannot Access UI (404 or Auth Loop)
+
+```bash
+# Verify SSO app exists in Authentik
+# Visit https://sso.zitian.party/if/admin/#/core/applications
+# Should see "Perfect" application with slug "perfect"
+
+# Check Traefik routing
+ssh root@{VPS_HOST} docker logs traefik 2>&1 | grep perfect
 ```
 
 ## References

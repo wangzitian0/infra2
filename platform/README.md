@@ -32,15 +32,15 @@ platform/{nn}.{service}/
 
 ## Service Index
 
-- [Postgres](./01.postgres/README.md)
-- [Redis](./02.redis/README.md)
-- [ClickHouse](./03.clickhouse/README.md)
-- [MinIO](./03.minio/README.md)
-- [Authentik](./10.authentik/README.md)
-- [SigNoz](./11.signoz/README.md)
-- [Portal](./21.portal/README.md)
-- [Activepieces](./22.activepieces/README.md)
-- [Prefect](./23.prefect/README.md)
+- [Postgres](./01.postgres/README.md) - Database for Authentik, Activepieces, Prefect
+- [Redis](./02.redis/README.md) - Cache for Authentik, Activepieces; Messaging for Prefect (DB 1)
+- [ClickHouse](./03.clickhouse/README.md) - SigNoz storage
+- [MinIO](./03.minio/README.md) - S3-compatible object storage
+- [Authentik](./10.authentik/README.md) - SSO provider
+- [SigNoz](./11.signoz/README.md) - Observability platform
+- [Portal](./21.portal/README.md) - Internal dashboard
+- [Activepieces](./22.activepieces/README.md) - Workflow automation
+- [Perfect](./23.prefect/README.md) - Workflow orchestration (Prefect)
 
 ## Prerequisites
 
