@@ -69,17 +69,17 @@ services:
     labels:
       - "traefik.enable=true"
       # SSO-protected access via Authentik forward auth
-      - "traefik.http.routers.prefect${ENV_DOMAIN_SUFFIX}.rule=Host(`prefect${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`)"
-      - "traefik.http.routers.prefect${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
-      - "traefik.http.routers.prefect${ENV_DOMAIN_SUFFIX}.tls=true"
-      - "traefik.http.routers.prefect${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.prefect${ENV_DOMAIN_SUFFIX}.service=prefect${ENV_DOMAIN_SUFFIX}"
-      - "traefik.http.services.prefect${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=4200"
+      - "traefik.http.routers.perfect.rule=Host(`perfect.${INTERNAL_DOMAIN}`)"
+      - "traefik.http.routers.perfect.entrypoints=websecure"
+      - "traefik.http.routers.perfect.tls=true"
+      - "traefik.http.routers.perfect.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.perfect.service=perfect"
+      - "traefik.http.services.perfect.loadbalancer.server.port=4200"
       # Authentik forward auth middleware
-      - "traefik.http.middlewares.prefect-auth${ENV_DOMAIN_SUFFIX}.forwardauth.address=http://platform-authentik-server${ENV_SUFFIX}:9000/outpost.goauthentik.io/auth/traefik"
-      - "traefik.http.middlewares.prefect-auth${ENV_DOMAIN_SUFFIX}.forwardauth.trustForwardHeader=true"
-      - "traefik.http.middlewares.prefect-auth${ENV_DOMAIN_SUFFIX}.forwardauth.authResponseHeaders=X-authentik-username,X-authentik-groups,X-authentik-email,X-authentik-name,X-authentik-uid"
-      - "traefik.http.routers.prefect${ENV_DOMAIN_SUFFIX}.middlewares=prefect-auth${ENV_DOMAIN_SUFFIX}@docker"
+      - "traefik.http.middlewares.perfect-auth.forwardauth.address=http://platform-authentik-server:9000/outpost.goauthentik.io/auth/traefik"
+      - "traefik.http.middlewares.perfect-auth.forwardauth.trustForwardHeader=true"
+      - "traefik.http.middlewares.perfect-auth.forwardauth.authResponseHeaders=X-authentik-username,X-authentik-groups,X-authentik-email,X-authentik-name,X-authentik-uid"
+      - "traefik.http.routers.perfect.middlewares=perfect-auth@docker"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:4200/api/health', timeout=1)"]
       interval: 30s
