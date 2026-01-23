@@ -4,7 +4,7 @@ import sys
 import os
 from libs.deployer import Deployer, make_tasks
 from libs.common import with_env_suffix
-from libs.console import success, warning, info, fatal
+from libs.console import success, info, fatal
 from libs.env import get_secrets
 
 shared_tasks = sys.modules.get("platform.23.prefect.shared")
