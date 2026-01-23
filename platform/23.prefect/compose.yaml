@@ -51,6 +51,7 @@ services:
         set +a
         # Construct DATABASE_URL with password from secrets
         export PREFECT_API_DATABASE_CONNECTION_URL="postgresql+asyncpg://postgres:$${POSTGRES_PASSWORD}@platform-postgres${ENV_SUFFIX}:5432/prefect"
+        export PREFECT_REDIS_MESSAGING_PASSWORD="$${REDIS_PASSWORD}"
         exec prefect server start --no-services
     environment:
       PREFECT_SERVER_API_HOST: 0.0.0.0
@@ -109,6 +110,7 @@ services:
         set +a
         # Construct DATABASE_URL with password from secrets
         export PREFECT_API_DATABASE_CONNECTION_URL="postgresql+asyncpg://postgres:$${POSTGRES_PASSWORD}@platform-postgres${ENV_SUFFIX}:5432/prefect"
+        export PREFECT_REDIS_MESSAGING_PASSWORD="$${REDIS_PASSWORD}"
         exec prefect server services start
     environment:
       PREFECT_MESSAGING_BROKER: prefect_redis.messaging
