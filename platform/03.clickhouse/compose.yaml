@@ -21,6 +21,11 @@ services:
       - ${DATA_PATH}/user_scripts:/var/lib/clickhouse/user_scripts
     networks:
       - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
 
   zookeeper:
     image: zookeeper:3.9
@@ -34,6 +39,11 @@ services:
       - ${DATA_PATH}/zookeeper:/data
     networks:
       - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
     healthcheck:
       test: ["CMD-SHELL", "echo stat | nc localhost 2181 || exit 1"]
       interval: 10s
@@ -63,6 +73,11 @@ services:
       - ./users.xml:/etc/clickhouse-server/users.xml:ro
     networks:
       - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
     ulimits:
       nproc: 65535
       nofile:

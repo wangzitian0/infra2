@@ -19,6 +19,11 @@ services:
       - secrets:/vault/secrets
     networks:
       - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
 
     healthcheck:
       test: ["CMD", "test", "-f", "/vault/secrets/.env"]
@@ -66,6 +71,11 @@ services:
       - secrets:/secrets:ro
     networks:
       - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
     labels:
       - "traefik.enable=true"
       # SSO-protected access via Authentik forward auth
@@ -124,6 +134,11 @@ services:
       - secrets:/secrets:ro
     networks:
       - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
 
   prefect-worker:
     image: prefecthq/prefect:3-latest
@@ -137,6 +152,11 @@ services:
     command: prefect worker start --pool default
     networks:
       - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
 
 volumes:
   secrets:
