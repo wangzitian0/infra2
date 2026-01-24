@@ -8,7 +8,7 @@
 
 | Service | IaC Status | Deploy Path | 健康状态 |
 |---------|-----------|-------------|---------|
-| iac-runner | ❌ **需修复** | `bootstrap/06.iac-runner/deploy.py` | ❌ 404 |
+| iac-runner | ❌ **需修复** | `bootstrap/06.iac_runner/deploy.py` | ❌ 404 |
 | postgres | ✅ | `platform/01.postgres/deploy.py` | ✅ |
 | redis | ✅ | `platform/02.redis/deploy.py` | ✅ |
 | clickhouse | ✅ | `platform/03.clickhouse/deploy.py` | ✅ |
@@ -119,7 +119,7 @@ GitHub push to main
 - [ ] IaC Runner value proposition 详细说明
 
 **相关文档**：
-- ✅ [bootstrap/06.iac-runner/README.md](../../bootstrap/06.iac-runner/README.md) (架构图已更新)
+- ✅ [bootstrap/06.iac_runner/README.md](../../bootstrap/06.iac_runner/README.md) (架构图已更新)
 - ⏳ [docs/ssot/ops.pipeline.md](../ssot/ops.pipeline.md) (待补充 IaC Runner workflow)
 
 ---

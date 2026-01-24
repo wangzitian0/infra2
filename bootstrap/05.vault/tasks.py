@@ -386,7 +386,7 @@ def setup_tokens(c):
             "bootstrap",
             os.path.join(root_dir, "bootstrap"),
             {
-                "iac_runner": "06.iac-runner",
+                "iac_runner": "06.iac_runner",
             },
             "bootstrap",
         ),
@@ -488,10 +488,14 @@ path "secret/data/{project_name}/{env_name}/{service}" {{
                 continue
             success(f"   ✅ Policy {policy_name} created")
 
-            # Generate token (permanent, orphan, no default policy)
+            # Generate periodic token (orphan, renewable indefinitely via -period)
+            # -period=168h (7 days): Token must be renewed within 7 days, but has NO max_ttl
+            # This means vault-agent can renew it forever, preventing expiration
+            # 7 days is chosen to cover weekends/holidays while any normal deploy cycle refreshes it
             cmd = (
                 f"vault token create "
                 f"-orphan "
+                f"-period=168h "
                 f"-policy={policy_name} "
                 f"-no-default-policy "
                 f"-display-name={project_name}-{service} "

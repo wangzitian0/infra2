@@ -96,6 +96,38 @@ jobs:
           print('✅ Service discovery working')
           "
 
+  validate-vault-agent:
+    name: Validate Vault Agent Config
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check vault-agent.hcl has required settings
+        run: |
+          set -e
+          echo "🔍 Checking vault-agent.hcl files..."
+          failed=0
+          for file in $(find . -name "vault-agent.hcl" -type f); do
+            echo "Checking: $file"
+            if ! grep -q "exit_on_err = true" "$file"; then
+              echo "❌ Missing 'exit_on_err = true' in $file"
+              failed=1
+            fi
+            if ! grep -q "exit_on_retry_failure = true" "$file"; then
+              echo "❌ Missing 'exit_on_retry_failure = true' in $file"
+              failed=1
+            fi
+          done
+          if [ $failed -eq 1 ]; then
+            echo ""
+            echo "⚠️  vault-agent.hcl files must have exit settings to prevent"
+            echo "   zombie containers when tokens expire. Run:"
+            echo "   python scripts/add_vault_agent_exit_on_failure.py"
+            exit 1
+          fi
+          echo "✅ All vault-agent.hcl files have required exit settings"
+
   lint-python:
     name: Lint Python Code
     runs-on: ubuntu-latest

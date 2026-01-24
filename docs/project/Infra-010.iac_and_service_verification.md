@@ -67,7 +67,7 @@
 
 | Layer | Service | Status | Deploy Path |
 |-------|---------|--------|-------------|
-| **Bootstrap** | iac-runner | ✅ 已修复 | `bootstrap/06.iac-runner/deploy.py` |
+| **Bootstrap** | iac-runner | ✅ 已修复 | `bootstrap/06.iac_runner/deploy.py` |
 | **Platform** | postgres | ✅ | `platform/01.postgres/deploy.py` |
 | **Platform** | redis | ✅ | `platform/02.redis/deploy.py` |
 | **Platform** | clickhouse | ✅ | `platform/03.clickhouse/deploy.py` |
@@ -227,7 +227,7 @@ bootstrap/**/deploy.py → <service>.sync
 ## 🔗 相关文档
 
 - [IaC Runner SSOT](../ssot/bootstrap.iac_runner.md) - 完整架构和故障排查
-- [IaC Runner README](../../bootstrap/06.iac-runner/README.md) - 操作手册和 troubleshooting
+- [IaC Runner README](../../bootstrap/06.iac_runner/README.md) - 操作手册和 troubleshooting
 - [Ops Pipeline SSOT](../ssot/ops.pipeline.md) - CI/CD 流程和 GitOps 工作流
 - [Core SSOT](../ssot/core.md) - 4-layer 架构概览
 - [New Service SOP](../onboarding/07.new-service-sop.md) - 新服务接入 SOP

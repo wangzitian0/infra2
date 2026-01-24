@@ -58,14 +58,14 @@ redis ────┘
 
 ```bash
 # Deploy all (in dependency order)
-invoke finance_report.postgres.setup
-invoke finance_report.redis.setup
-invoke finance_report.app.setup
+invoke fr-postgres.setup
+invoke fr-redis.setup
+invoke fr-app.setup
 
 # Check status
-invoke finance_report.postgres.status
-invoke finance_report.redis.status
-invoke finance_report.app.status
+invoke fr-postgres.shared.status
+invoke fr-redis.shared.status
+invoke fr-app.shared.status
 ```
 
 ## Environment Variables

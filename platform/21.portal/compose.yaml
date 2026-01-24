@@ -12,6 +12,11 @@ services:
       - ${DATA_PATH}/config.yml:/www/assets/config.yml:ro
     networks:
       - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.portal${ENV_DOMAIN_SUFFIX}.rule=Host(`home${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`)"
