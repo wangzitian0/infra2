@@ -1,20 +1,23 @@
 # Policy for IaC Runner service
-# Allows read access to its own secrets
+# Allows read access to its own secrets and all platform/finance_report secrets
+# for syncing across environments (staging/production)
 
 # Required for vault-agent token validation
 path "auth/token/lookup-self" {
   capabilities = ["read"]
 }
 
-path "secret/data/bootstrap/{{env}}/iac_runner" {
+# Bootstrap secrets - IaC Runner's own configuration
+path "secret/data/bootstrap/+/iac_runner" {
   capabilities = ["read", "list"]
 }
 
-# Also need to read platform and finance_report secrets for syncing
-path "secret/data/platform/{{env}}/*" {
+# Platform secrets for syncing all platform services
+path "secret/data/platform/+/*" {
   capabilities = ["read", "list"]
 }
 
-path "secret/data/finance_report/{{env}}/*" {
+# Finance Report secrets for syncing app services
+path "secret/data/finance_report/+/*" {
   capabilities = ["read", "list"]
 }

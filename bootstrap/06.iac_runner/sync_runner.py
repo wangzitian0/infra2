@@ -36,13 +36,14 @@ SERVICE_TASK_MAP = {
     "platform/signoz": "signoz.sync",
     "platform/portal": "portal.sync",
     "platform/activepieces": "activepieces.sync",
+    "platform/prefect": "prefect.sync",
     "bootstrap/vault": None,
     "bootstrap/1password": None,
     "bootstrap/iac-runner": None,
     "finance_report/postgres": "fr-postgres.sync",
     "finance_report/redis": "fr-redis.sync",
     "finance_report/app": "fr-app.sync",
-    "finance/wealthfolio": "wealthfolio.sync",
+    "finance/wealthfolio": None,
 }
 
 ALL_SERVICES = [
@@ -54,10 +55,10 @@ ALL_SERVICES = [
     "platform/signoz",
     "platform/portal",
     "platform/activepieces",
+    "platform/prefect",
     "finance_report/postgres",
     "finance_report/redis",
     "finance_report/app",
-    "finance/wealthfolio",
 ]
 
 
