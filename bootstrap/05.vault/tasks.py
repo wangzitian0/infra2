@@ -386,7 +386,7 @@ def setup_tokens(c):
             "bootstrap",
             os.path.join(root_dir, "bootstrap"),
             {
-                "iac_runner": "06.iac-runner",
+                "iac_runner": "06.iac_runner",
             },
             "bootstrap",
         ),

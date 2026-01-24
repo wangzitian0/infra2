@@ -30,16 +30,16 @@ finance_report/
 
 ```bash
 # 1. Deploy database layer
-invoke finance_report.postgres.setup
-invoke finance_report.redis.setup
+invoke fr-postgres.setup
+invoke fr-redis.setup
 
 # 2. Deploy application
-invoke finance_report.app.setup
+invoke fr-app.setup
 
 # 3. Verify
-invoke finance_report.postgres.status
-invoke finance_report.redis.status
-invoke finance_report.app.status
+invoke fr-postgres.shared.status
+invoke fr-redis.shared.status
+invoke fr-app.shared.status
 
 # 4. Access
 open https://report.${INTERNAL_DOMAIN}
