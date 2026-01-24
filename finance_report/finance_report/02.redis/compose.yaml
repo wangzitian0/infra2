@@ -3,6 +3,11 @@ services:
     image: hashicorp/vault:1.15
     container_name: finance_report-redis-vault-agent${ENV_SUFFIX}
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
     entrypoint:
       - sh
       - -c
@@ -31,6 +36,11 @@ services:
     image: redis:alpine
     container_name: finance_report-redis${ENV_SUFFIX}
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
     depends_on:
       - vault-agent
     command:

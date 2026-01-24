@@ -19,6 +19,11 @@ services:
     image: hashicorp/vault:1.15
     container_name: finance_report-app-vault-agent${ENV_SUFFIX}
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
     entrypoint:
       - sh
       - -c
@@ -48,6 +53,11 @@ services:
     pull_policy: always
     container_name: finance_report-backend${ENV_SUFFIX}
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
     depends_on:
       vault-agent:
         condition: service_healthy
@@ -127,6 +137,11 @@ services:
     pull_policy: always
     container_name: finance_report-frontend${ENV_SUFFIX}
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
     depends_on:
       backend:
         condition: service_healthy
