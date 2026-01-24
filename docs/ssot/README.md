@@ -48,6 +48,7 @@
 | [bootstrap.nodep.md](./bootstrap.nodep.md) | `bootstrap.nodep` | Bootstrap 组件（Dokploy、1Password、Vault） |
 | [bootstrap.vars_and_secrets.md](./bootstrap.vars_and_secrets.md) | `bootstrap.vars_and_secrets` | 变量与密钥管理、.env 结构 |
 | [bootstrap.dns_and_cert.md](./bootstrap.dns_and_cert.md) | `bootstrap.dns_and_cert` | DNS 与证书自动化 |
+| [bootstrap.iac_runner.md](./bootstrap.iac_runner.md) | `bootstrap.iac_runner` | IaC Runner GitOps 自动化、Vault-Agent 模式 |
 
 ---
 

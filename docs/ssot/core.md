@@ -28,6 +28,66 @@
 
 ## 2. 架构模型
 
+### 2.1 4-Layer Architecture Overview
+
+```mermaid
+flowchart TB
+    subgraph Secrets["Secrets Layer"]
+        OP["1Password<br/>(Bootstrap Credentials)"]
+        Vault["Vault<br/>(Machine Secrets)"]
+    end
+
+    subgraph CI["CI/CD Layer"]
+        GitHub["GitHub<br/>(Code Repository)"]
+        Actions["GitHub Actions<br/>(Workflows)"]
+        IaCRunner["IaC Runner<br/>(GitOps Webhook)"]
+    end
+
+    subgraph Bootstrap["L1 Bootstrap (Trust Anchor)"]
+        Dokploy["Dokploy<br/>(Container Platform)"]
+        OP1["1Password Connect"]
+        Vault1["Vault<br/>(Secret Store)"]
+        IaC["IaC Runner<br/>(Automation)"]
+    end
+
+    subgraph Platform["L2 Platform (Shared Services)"]
+        PG["PostgreSQL"]
+        Redis["Redis"]
+        Authentik["Authentik SSO"]
+        MinIO["MinIO"]
+    end
+
+    subgraph Apps["L4 Apps (Business Logic)"]
+        FinanceReport["Finance Report"]
+        Wealthfolio["Wealthfolio"]
+    end
+
+    %% Secrets flow
+    OP -->|bootstrap secrets| Vault
+    Vault -->|app tokens| Platform
+    Vault -->|app tokens| Apps
+
+    %% CI/CD flow
+    GitHub -->|push to main| Actions
+    Actions -->|webhook /deploy| IaCRunner
+    GitHub -->|webhook /webhook| IaCRunner
+    IaCRunner -->|invoke sync| Platform
+
+    %% Bootstrap provides
+    Dokploy -->|container orchestration| Platform
+    Dokploy -->|container orchestration| Apps
+    Vault1 -->|secrets| Platform
+    Vault1 -->|secrets| Apps
+
+    %% Platform provides
+    PG -->|database| Apps
+    Redis -->|cache| Apps
+    Authentik -->|SSO| Apps
+    MinIO -->|storage| Apps
+```
+
+### 2.2 Simplified Layer Dependency
+
 ```mermaid
 flowchart TB
     Bootstrap["L1 Bootstrap<br/>(Trust Anchor)"]
@@ -40,7 +100,7 @@ flowchart TB
     Data -->|Planned| Apps
 ```
 
-### 层级定义 {#层级定义}
+### 2.3 层级定义 {#层级定义}
 
 | 层级 | 目录 | 职责 | 部署份数 |
 |------|------|------|----------|

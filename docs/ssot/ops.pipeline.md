@@ -125,7 +125,58 @@ gh workflow run platform-production.yml \
 
 ## 4. IaC Runner 集成
 
-### Endpoints
+> **详细参考**: [bootstrap.iac_runner SSOT](./bootstrap.iac_runner.md)
+
+### 4.1 IaC Runner 架构
+
+IaC Runner 是 **L1 Bootstrap 层**组件，负责自动化部署 **L2 Platform 层**服务。
+
+```mermaid
+flowchart TB
+    subgraph "CI/CD Layer"
+        GitHub["GitHub<br/>(代码仓库)"]
+        Actions["GitHub Actions<br/>(platform-*.yml)"]
+    end
+
+    subgraph "Infrastructure Layer - Bootstrap (L1)"
+        IaCRunner["IaC Runner<br/>(GitOps Service)"]
+        VaultAgent["Vault Agent<br/>(Sidecar)"]
+    end
+
+    subgraph "Infrastructure Layer - Platform (L2)"
+        Postgres["PostgreSQL"]
+        Redis["Redis"]
+        Authentik["Authentik"]
+        MinIO["MinIO"]
+    end
+
+    GitHub -->|push to main| Actions
+    Actions -->|webhook /deploy| IaCRunner
+    GitHub -->|webhook /webhook| IaCRunner
+    
+    VaultAgent -->|inject secrets| IaCRunner
+    
+    IaCRunner -->|invoke *.sync| Postgres
+    IaCRunner -->|invoke *.sync| Redis
+    IaCRunner -->|invoke *.sync| Authentik
+    IaCRunner -->|invoke *.sync| MinIO
+```
+
+**Vault-Agent Sidecar 模式**:
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                       IaC Runner Pod                            │
+│  ┌──────────────┐    tmpfs    ┌─────────────────────────────┐   │
+│  │ vault-agent  │───────────▶│     IaC Runner              │   │
+│  │ (sidecar)    │ /secrets   │  - Webhook server           │   │
+│  └──────────────┘            │  - Sync runner              │   │
+│         │                    └─────────────────────────────┘   │
+│         ▼                                                       │
+│  Vault (fetch WEBHOOK_SECRET, GIT_REPO_URL)                     │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 4.2 Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -134,7 +185,7 @@ gh workflow run platform-production.yml \
 | `/deploy` | POST | 版本部署 (GitOps) |
 | `/sync` | POST | 手动同步 (legacy) |
 
-### 版本部署请求格式
+### 4.3 版本部署请求格式
 
 ```bash
 # 部署到 staging
@@ -154,12 +205,30 @@ curl -X POST https://iac.zitian.party/deploy \
   -d "$PAYLOAD"
 ```
 
-### 幂等性保证
+### 4.4 幂等性保证
 
 每个服务的 `sync` task 使用 config hash:
 1. 计算本地 `compose.yaml + env vars` 的 SHA256
 2. 与 Dokploy 中存储的 `IAC_CONFIG_HASH` 比较
 3. 仅在 hash 不匹配时重新部署
+
+### 4.5 服务映射规则
+
+| 变更路径 | 触发任务 | 说明 |
+|---------|---------|------|
+| `platform/01.postgres/*` | `postgres.sync` | 自动同步 PostgreSQL |
+| `platform/02.redis/*` | `redis.sync` | 自动同步 Redis |
+| `platform/10.authentik/*` | `authentik.sync` | 自动同步 Authentik |
+| `platform/11.minio/*` | `minio.sync` | 自动同步 MinIO |
+| `libs/*` | **All platform services** | 公共库变更，全量同步 |
+| `bootstrap/*` | **Skipped** | 手动部署（避免循环依赖）|
+| `finance_report/*` | **Skipped** | 使用 finance_report 独立 CI |
+| `finance/*` | **Skipped** | 使用应用独立 CI |
+
+**为什么 Bootstrap 不自动同步？**
+- IaC Runner 本身是 Bootstrap 组件
+- 自动同步会导致循环依赖（IaC Runner 重启自己）
+- Bootstrap 变更频率低，手动部署更安全
 
 ---
 
@@ -241,5 +310,6 @@ git push --delete origin v1.2.4
 ## Used by
 
 - [docs/ssot/README.md](./README.md)
+- [docs/ssot/bootstrap.iac_runner.md](./bootstrap.iac_runner.md)
 - [bootstrap/06.iac-runner/README.md](../../bootstrap/06.iac-runner/README.md)
 

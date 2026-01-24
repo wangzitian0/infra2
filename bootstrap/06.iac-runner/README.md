@@ -211,3 +211,120 @@ IaC Runner **ONLY manages `platform` project services**.
 - Read-only docker socket mount
 - No write access to host filesystem (except workspace)
 - Bootstrap services excluded from auto-sync
+
+---
+
+## Troubleshooting
+
+### Issue 1: `FileNotFoundError: 'op'`
+
+**Symptoms**:
+```
+FileNotFoundError: [Errno 2] No such file or directory: 'op'
+```
+
+**Cause**: Container missing 1Password CLI
+
+**Fixed in**: PR #101
+
+**Solution**: Dockerfile now includes op CLI installation:
+```dockerfile
+# Install 1Password CLI (required by libs/common.py::OpSecrets)
+RUN curl -sSfLo op.zip https://cache.agilebits.com/dist/1P/op2/pkg/v2.30.0/op_linux_amd64_v2.30.0.zip && \
+    unzip -od /usr/local/bin/ op.zip && \
+    rm op.zip && \
+    chmod +x /usr/local/bin/op
+```
+
+**Verification**:
+```bash
+docker exec iac-runner which op
+# Expected: /usr/local/bin/op
+```
+
+### Issue 2: `unzip: not found`
+
+**Symptoms**:
+```
+/bin/sh: 1: unzip: not found
+```
+
+**Cause**: `python:3.11-slim` base image doesn't include `unzip`
+
+**Fixed in**: PR #102
+
+**Solution**: Dockerfile now installs unzip:
+```dockerfile
+RUN apt-get update && apt-get install -y \
+    git \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+```
+
+### Issue 3: VAULT_APP_TOKEN not found
+
+**Symptoms**: Container logs show Vault connection errors
+
+**Cause**: Missing or invalid VAULT_APP_TOKEN
+
+**Solution**:
+```bash
+# Regenerate token
+export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token')
+invoke vault.setup-tokens
+
+# Restart container
+docker restart iac-runner
+```
+
+**Verification**:
+```bash
+docker exec iac-runner env | grep VAULT_APP_TOKEN
+# Should show token value
+```
+
+### Issue 4: Webhook signature verification failed
+
+**Symptoms**: GitHub webhook returns 403 Forbidden
+
+**Diagnosis**:
+```bash
+# 1. Check secret in Vault
+invoke env.get WEBHOOK_SECRET --project=bootstrap --service=iac_runner
+
+# 2. Compare with GitHub webhook config
+# Settings → Webhooks → Check Secret matches
+
+# 3. Test signature manually
+PAYLOAD='{"ref":"refs/heads/main"}'
+SECRET="<WEBHOOK_SECRET>"
+SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')
+echo "Expected: sha256=$SIGNATURE"
+```
+
+---
+
+## Health Checks
+
+```bash
+# Container status
+docker ps --filter name=iac-runner
+# Expected: iac-runner (Up, healthy)
+# Expected: iac-runner-vault-agent (Up, healthy)
+
+# Health endpoint
+curl https://iac.{domain}/health
+# Expected: {"status":"healthy"}
+
+# Vault Agent status
+docker logs iac-runner-vault-agent --tail 10
+# Expected: no errors, shows "renewed lease"
+```
+
+---
+
+## Related Documentation
+
+- [SSOT: IaC Runner](../../docs/ssot/bootstrap.iac_runner.md) - Comprehensive reference
+- [SSOT: Pipeline](../../docs/ssot/ops.pipeline.md) - CI/CD workflows
+- [GitHub Workflows](../../.github/workflows/) - platform-staging.yml, platform-production.yml
