@@ -97,6 +97,43 @@ graph TD
 
 ---
 
+## 6. Token Management
+
+### Token Type
+
+Use **periodic tokens** (`-period=168h`) for all services:
+- Renewable indefinitely by vault-agent
+- 7-day window covers weekends/holidays
+- Any deploy cycle refreshes the token
+
+### Required vault-agent.hcl Settings
+
+```hcl
+auto_auth {
+  exit_on_err = true  # Exit on auth failure → Docker restarts container
+}
+
+template_config {
+  static_secret_render_interval = "5m"
+  exit_on_retry_failure = true  # Exit on template failure
+}
+```
+
+CI enforces these settings on all `vault-agent.hcl` files.
+
+### SOP: Token Expired
+
+**Symptom**: Container stuck in "Created" state, logs show "token validation failed"
+
+**Fix**:
+```bash
+export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token')
+invoke vault.setup-tokens  # or: DEPLOY_ENV=staging invoke vault.setup-tokens
+invoke fr-app.shared.status  # verify
+```
+
+---
+
 ## Used by
 
 - [docs/ssot/db.overview.md](./db.overview.md)
