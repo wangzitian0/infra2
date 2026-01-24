@@ -62,7 +62,7 @@
 
 **触发条件**:
 - Push 到 `main` 分支
-- 修改了 `platform/**`, `libs/**`, 或 `bootstrap/06.iac-runner/**`
+- 修改了 `platform/**`, `libs/**`, 或 `bootstrap/06.iac_runner/**`
 
 **工作流**:
 1. 读取最新 tag (如 `v1.2.3`)
@@ -311,5 +311,5 @@ git push --delete origin v1.2.4
 
 - [docs/ssot/README.md](./README.md)
 - [docs/ssot/bootstrap.iac_runner.md](./bootstrap.iac_runner.md)
-- [bootstrap/06.iac-runner/README.md](../../bootstrap/06.iac-runner/README.md)
+- [bootstrap/06.iac_runner/README.md](../../bootstrap/06.iac_runner/README.md)
 
