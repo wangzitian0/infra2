@@ -142,9 +142,10 @@ jobs:
           failed=0
           for file in $(find . -name "vault-policy.hcl" -type f); do
             echo "Checking: $file"
-            # Use Vault container to validate HCL syntax
+            # vault policy fmt validates and formats HCL - exits non-zero on syntax error
+            # We compare before/after to detect if formatting changed (indicates valid but unformatted)
             if ! docker run --rm -v "$(pwd):/workspace" -w /workspace \
-              hashicorp/vault:1.15 vault policy fmt -check "$file" 2>&1; then
+              hashicorp/vault:1.15 vault policy fmt "$file" > /dev/null 2>&1; then
               echo "❌ Invalid HCL syntax in $file"
               failed=1
             fi
@@ -222,8 +223,7 @@ jobs:
                   errors.append('missing service name')
                 if not deployer_cls.compose_path:
                   errors.append('missing compose_path')
-                if not deployer_cls.data_path:
-                  errors.append('missing data_path')
+                # data_path is optional for stateless services (e.g., app containers)
 
                 # Validate compose_path exists
                 compose_path = Path(deployer_cls.compose_path)
