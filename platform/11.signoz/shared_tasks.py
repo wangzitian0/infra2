@@ -138,6 +138,182 @@ print("OK")
 
 
 @task
+def test_log(c, service_name="test-log-service", message="Test log from OTEL"):
+    """Send a test OTLP log to verify log ingestion.
+
+    Usage:
+        invoke signoz.shared.test-log
+        invoke signoz.shared.test-log --service-name=myapp --message="Hello SigNoz"
+    """
+    from libs.console import success, error, info
+    import base64
+    import time
+
+    # Validate service name to prevent injection
+    service_name = _sanitize_service_name(service_name)
+
+    env = get_env()
+    host = env["VPS_HOST"]
+
+    info(f"Sending test log with service name: {service_name}")
+
+    collector = with_env_suffix("platform-signoz-otel-collector", env)
+    # Python script to send test log via OTEL
+    python_script = f'''
+import logging
+import time
+from opentelemetry._logs import set_logger_provider
+from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+from opentelemetry.sdk.resources import Resource
+
+# Try both import paths for compatibility
+try:
+    from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+except ImportError:
+    from opentelemetry.exporter.otlp.proto.http.log_exporter import OTLPLogExporter
+
+# Configure OTEL logging
+resource = Resource.create({{"service.name": "{service_name}", "deployment.environment": "test"}})
+provider = LoggerProvider(resource=resource)
+exporter = OTLPLogExporter(endpoint="http://{collector}:4318/v1/logs", timeout=10)
+provider.add_log_record_processor(BatchLogRecordProcessor(exporter))
+set_logger_provider(provider)
+
+# Attach OTEL handler to root logger
+handler = LoggingHandler(level=logging.INFO, logger_provider=provider)
+logging.getLogger().addHandler(handler)
+logging.getLogger().setLevel(logging.INFO)
+
+# Send test logs
+logger = logging.getLogger("{service_name}")
+logger.info("{message}")
+logger.warning("Warning: This is a test warning log")
+logger.error("Error: This is a test error log")
+
+# Flush to ensure delivery
+provider.force_flush()
+time.sleep(1)
+provider.shutdown()
+print("OK")
+'''
+
+    # Base64 encode to avoid quoting issues
+    script_b64 = base64.b64encode(python_script.encode()).decode()
+
+    # Use pip cache volume to speed up repeated runs
+    cmd = f"ssh root@{host} 'docker run --rm --network=dokploy-network -v signoz-otel-pip-cache:/root/.cache/pip python:3.11-slim bash -c \"pip install -q opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http 2>/dev/null && echo {script_b64} | base64 -d | python3\"'"
+
+    result = c.run(cmd, warn=True, hide=True)
+
+    if result.ok and "OK" in result.stdout:
+        success("Test logs sent successfully!")
+
+        # Wait for ClickHouse ingestion
+        time.sleep(CLICKHOUSE_INGESTION_DELAY_SECONDS)
+
+        # Verify in ClickHouse (service_name already sanitized by _sanitize_service_name)
+        verify_query = f"SELECT count() FROM signoz_logs.distributed_logs_v2 WHERE resources_string['service.name'] = '{service_name}'"
+        clickhouse = with_env_suffix("platform-clickhouse", env)
+        verify_cmd = f'ssh root@{host} "docker exec {clickhouse} clickhouse-client --query \\"{verify_query}\\""'
+        verify_result = c.run(verify_cmd, warn=True, hide=True)
+
+        if verify_result.ok and verify_result.stdout.strip():
+            count = verify_result.stdout.strip()
+            if int(count) > 0:
+                success(f"Logs in ClickHouse for '{service_name}': {count}")
+            else:
+                error(f"No logs found in ClickHouse for '{service_name}'")
+                info("Checking if logs table exists...")
+                table_check = f'ssh root@{host} "docker exec {clickhouse} clickhouse-client --query \\"SHOW TABLES FROM signoz_logs\\""'
+                table_result = c.run(table_check, warn=True, hide=True)
+                info(
+                    f"Tables in signoz_logs: {table_result.stdout[:200] if table_result.stdout else 'none'}"
+                )
+                return False
+
+        domain = service_domain("signoz", env)
+        if domain:
+            info(f"View in SigNoz UI: https://{domain} → Logs → service={service_name}")
+        return True
+    else:
+        error("Failed to send test logs")
+        if result.stderr:
+            error(f"stderr: {result.stderr[:500]}")
+        if result.stdout:
+            error(f"stdout: {result.stdout[:500]}")
+        return False
+
+
+@task
+def query_logs(c, service_name=None, limit=10):
+    """Query logs from SigNoz via ClickHouse.
+
+    Usage:
+        invoke signoz.shared.query-logs
+        invoke signoz.shared.query-logs --service-name=finance-report-backend --limit=20
+    """
+    from libs.console import error, info
+
+    env = get_env()
+    host = env["VPS_HOST"]
+    clickhouse = with_env_suffix("platform-clickhouse", env)
+
+    # Build query
+    if service_name:
+        service_name = _sanitize_service_name(service_name)
+        where_clause = f"WHERE resources_string['service.name'] = '{service_name}'"
+    else:
+        where_clause = ""
+
+    query = f"SELECT timestamp, resources_string['service.name'] as service, body FROM signoz_logs.distributed_logs_v2 {where_clause} ORDER BY timestamp DESC LIMIT {int(limit)}"
+
+    info(f"Querying logs: {query[:100]}...")
+    cmd = f'ssh root@{host} "docker exec {clickhouse} clickhouse-client --query \\"{query}\\" --format=PrettyCompact"'
+    result = c.run(cmd, warn=True, hide=True)
+
+    if result.ok:
+        if result.stdout.strip():
+            print(result.stdout)
+            return True
+        else:
+            info("No logs found")
+            return False
+    else:
+        error("Failed to query logs")
+        if result.stderr:
+            error(f"stderr: {result.stderr[:500]}")
+        return False
+
+
+@task
+def list_services(c):
+    """List all services that have sent logs to SigNoz.
+
+    Usage:
+        invoke signoz.shared.list-services
+    """
+    from libs.console import info
+
+    env = get_env()
+    host = env["VPS_HOST"]
+    clickhouse = with_env_suffix("platform-clickhouse", env)
+
+    query = "SELECT resources_string['service.name'] as service, count() as log_count FROM signoz_logs.distributed_logs_v2 GROUP BY service ORDER BY log_count DESC"
+
+    info("Querying distinct services with logs...")
+    cmd = f'ssh root@{host} "docker exec {clickhouse} clickhouse-client --query \\"{query}\\" --format=PrettyCompact"'
+    result = c.run(cmd, warn=True, hide=True)
+
+    if result.ok and result.stdout.strip():
+        print(result.stdout)
+        return True
+    else:
+        info("No services found with logs")
+        return False
+
+
+@task
 def create_api_key(
     c,
     name=DEFAULT_API_KEY_NAME,
