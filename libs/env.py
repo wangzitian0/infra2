@@ -30,6 +30,7 @@ __all__ = [
     "VaultSecrets",
     "get_secrets",
     "generate_password",
+    "verify_vault_token",
     "CredentialType",
 ]
 
@@ -361,3 +362,84 @@ def get_secrets(
             else f"{validated_project}/{validated_env}"
         )
         return VaultSecrets(path=path)
+
+
+def verify_vault_token(
+    token: str,
+    addr: str | None = None,
+    min_ttl_hours: int = 24,
+) -> dict:
+    """Verify a Vault token is valid and has sufficient TTL.
+
+    Args:
+        token: The Vault token to verify
+        addr: Vault address (optional, uses VAULT_ADDR or INTERNAL_DOMAIN)
+        min_ttl_hours: Minimum acceptable TTL in hours (default: 24)
+
+    Returns:
+        dict with keys:
+            - valid: bool
+            - ttl_hours: float (remaining TTL, or -1 if expired/invalid)
+            - renewable: bool
+            - error: str | None
+    """
+    if not addr:
+        addr = os.getenv("VAULT_ADDR")
+        if not addr:
+            domain = os.getenv("INTERNAL_DOMAIN")
+            addr = f"https://vault.{domain}" if domain else "https://vault.localhost"
+
+    verify_ssl = os.getenv("VAULT_SKIP_VERIFY", "").lower() not in ("1", "true", "yes")
+
+    try:
+        with httpx.Client(verify=verify_ssl, timeout=10.0) as client:
+            resp = client.get(
+                f"{addr}/v1/auth/token/lookup-self",
+                headers={"X-Vault-Token": token},
+            )
+
+            if resp.status_code == 200:
+                data = resp.json().get("data", {})
+                ttl_seconds = data.get("ttl", 0)
+                ttl_hours = ttl_seconds / 3600
+                renewable = data.get("renewable", False)
+
+                is_valid = ttl_hours >= min_ttl_hours
+
+                return {
+                    "valid": is_valid,
+                    "ttl_hours": round(ttl_hours, 2),
+                    "renewable": renewable,
+                    "error": None
+                    if is_valid
+                    else f"TTL too low: {ttl_hours:.1f}h < {min_ttl_hours}h",
+                }
+            elif resp.status_code == 403:
+                return {
+                    "valid": False,
+                    "ttl_hours": -1,
+                    "renewable": False,
+                    "error": "Token expired or invalid (403 Forbidden)",
+                }
+            else:
+                return {
+                    "valid": False,
+                    "ttl_hours": -1,
+                    "renewable": False,
+                    "error": f"Vault returned status {resp.status_code}",
+                }
+
+    except httpx.ConnectError as e:
+        return {
+            "valid": False,
+            "ttl_hours": -1,
+            "renewable": False,
+            "error": f"Cannot connect to Vault: {e}",
+        }
+    except httpx.TimeoutException:
+        return {
+            "valid": False,
+            "ttl_hours": -1,
+            "renewable": False,
+            "error": "Vault connection timeout",
+        }

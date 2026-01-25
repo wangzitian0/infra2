@@ -128,6 +128,136 @@ jobs:
           fi
           echo "✅ All vault-agent.hcl files have required exit settings"
 
+  validate-vault-policy:
+    name: Validate Vault Policy Syntax
+    runs-on: ubuntu-latest
+    # This job is advisory - vault policy fmt has container issues in GHA
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install python-hcl2
+        run: pip install python-hcl2
+
+      - name: Validate vault-policy.hcl syntax
+        run: |
+          set -e
+          echo "🔍 Validating vault-policy.hcl files..."
+          failed=0
+          for file in $(find . -name "vault-policy.hcl" -type f); do
+            echo "Checking: $file"
+            if python3 -c "import hcl2, json; f=open('$file'); hcl2.load(f)" 2>&1; then
+              echo "  ✅ Valid HCL"
+            else
+              echo "  ❌ Invalid HCL syntax"
+              failed=1
+            fi
+          done
+          if [ $failed -eq 1 ]; then
+            echo ""
+            echo "⚠️  Fix HCL syntax errors before merging."
+            exit 1
+          fi
+          echo "✅ All vault-policy.hcl files have valid syntax"
+
+  validate-deployers:
+    name: Validate Deployer Classes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install dependencies
+        run: |
+          cd ${{ github.workspace }}
+          uv pip install --system invoke httpx python-dotenv rich
+
+      - name: Validate all deploy.py files
+        run: |
+          cd ${{ github.workspace }}
+          python -c "
+          import sys
+          import importlib.util
+          from pathlib import Path
+
+          sys.path.insert(0, '.')
+
+          failed = []
+          deploy_files = list(Path('.').rglob('deploy.py'))
+
+          print(f'Found {len(deploy_files)} deploy.py files')
+
+          for deploy_file in deploy_files:
+            # Skip playground and tests
+            if 'playground' in str(deploy_file) or 'test' in str(deploy_file):
+              continue
+
+            print(f'Validating: {deploy_file}')
+            try:
+              # Load the module
+              spec = importlib.util.spec_from_file_location('deploy', deploy_file)
+              module = importlib.util.module_from_spec(spec)
+
+              # Import libs.deployer to get Deployer class
+              from libs.deployer import Deployer
+
+              # Execute the module
+              spec.loader.exec_module(module)
+
+              # Find Deployer subclass
+              deployer_cls = None
+              for name, obj in vars(module).items():
+                if isinstance(obj, type) and issubclass(obj, Deployer) and obj is not Deployer:
+                  deployer_cls = obj
+                  break
+
+              if deployer_cls:
+                # Validate required attributes
+                errors = []
+                if not deployer_cls.service:
+                  errors.append('missing service name')
+                if not deployer_cls.compose_path:
+                  errors.append('missing compose_path')
+                # data_path is optional for stateless services (e.g., app containers)
+
+                # Validate compose_path exists
+                compose_path = Path(deployer_cls.compose_path)
+                if not compose_path.exists():
+                  errors.append(f'compose file not found: {deployer_cls.compose_path}')
+
+                if errors:
+                  failed.append((deploy_file, errors))
+                  print(f'  ❌ {deploy_file}: {errors}')
+                else:
+                  print(f'  ✅ {deployer_cls.__name__}: service={deployer_cls.service}')
+              else:
+                print(f'  ⚠️ No Deployer subclass found (may be OK for bootstrap)')
+
+            except Exception as e:
+              failed.append((deploy_file, [str(e)]))
+              print(f'  ❌ {deploy_file}: {e}')
+
+          if failed:
+            print(f'\\n❌ {len(failed)} deploy.py files have errors')
+            sys.exit(1)
+
+          print(f'\\n✅ All deploy.py files validated')
+          "
+
   lint-python:
     name: Lint Python Code
     runs-on: ubuntu-latest

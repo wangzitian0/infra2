@@ -20,7 +20,7 @@ from libs.console import (
     env_vars,
     run_with_status,
 )
-from libs.env import generate_password, get_secrets
+from libs.env import generate_password, get_secrets, verify_vault_token
 
 if TYPE_CHECKING:
     from invoke import Context
@@ -393,6 +393,47 @@ class Deployer:
         return _compute_config_hash(compose_content, env_vars)
 
     @classmethod
+    def verify_vault_app_token(cls) -> dict:
+        """Verify VAULT_APP_TOKEN stored in Dokploy is valid."""
+        from libs.dokploy import get_dokploy
+
+        e = cls.env()
+        env_name = e.get("ENV", "production")
+        project_name = cls.project_name(e)
+        domain = e.get("INTERNAL_DOMAIN")
+        host = f"cloud.{domain}" if domain else None
+
+        client = get_dokploy(host=host)
+        existing = client.find_compose_by_name(
+            cls.service, project_name, env_name=env_name
+        )
+
+        if not existing:
+            return {"valid": True, "error": None, "details": "No existing deployment"}
+
+        env_str = existing.get("env", "")
+        token = None
+        for line in env_str.split("\n"):
+            if line.startswith("VAULT_APP_TOKEN="):
+                token = line.split("=", 1)[1].strip()
+                break
+
+        if not token:
+            return {"valid": True, "error": None, "details": "No VAULT_APP_TOKEN found"}
+
+        vault_addr = e.get(
+            "VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}"
+        )
+
+        result = verify_vault_token(token, addr=vault_addr, min_ttl_hours=24)
+        if result["valid"]:
+            result["details"] = f"Token OK (TTL: {result['ttl_hours']}h)"
+        else:
+            result["details"] = f"Token invalid: {result['error']}"
+
+        return result
+
+    @classmethod
     def sync(cls, c: "Context", force: bool = False) -> dict:
         """Sync IaC state - update only if config changed.
 
@@ -405,6 +446,22 @@ class Deployer:
         e = cls.env()
         if missing := validate_env():
             return {"action": "failed", "details": f"Missing env: {', '.join(missing)}"}
+
+        # Pre-check: verify VAULT_APP_TOKEN validity
+        try:
+            token_status = cls.verify_vault_app_token()
+            if not token_status["valid"]:
+                warning(
+                    f"VAULT_APP_TOKEN issue: {token_status.get('details', 'unknown')}. "
+                    "Run `invoke vault.setup-tokens --project=<project>` to regenerate."
+                )
+            elif token_status.get("ttl_hours", 999) < 48:
+                warning(
+                    f"VAULT_APP_TOKEN expires in {token_status['ttl_hours']}h. "
+                    "Consider regenerating with `invoke vault.setup-tokens`."
+                )
+        except Exception as exc:
+            warning(f"Could not verify VAULT_APP_TOKEN: {exc}")
 
         # Get secrets backend and ensure secret exists
         secrets_backend = cls.secrets()
