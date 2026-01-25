@@ -142,12 +142,15 @@ jobs:
           failed=0
           for file in $(find . -name "vault-policy.hcl" -type f); do
             echo "Checking: $file"
-            # vault policy fmt validates and formats HCL - exits non-zero on syntax error
-            # We compare before/after to detect if formatting changed (indicates valid but unformatted)
-            if ! docker run --rm -v "$(pwd):/workspace" -w /workspace \
-              hashicorp/vault:1.15 vault policy fmt "$file" > /dev/null 2>&1; then
+            # Basic HCL syntax validation using vault policy fmt
+            # The command formats the file and exits 0 on valid HCL
+            # Use --cap-add=IPC_LOCK to avoid Vault's IPC_LOCK warning
+            if ! docker run --rm --cap-add=IPC_LOCK -v "$(pwd):/workspace:ro" -w /workspace \
+              hashicorp/vault:1.15 sh -c "vault policy fmt /dev/stdin < \"$file\" > /dev/null 2>&1"; then
               echo "❌ Invalid HCL syntax in $file"
               failed=1
+            else
+              echo "  ✅ Valid"
             fi
           done
           if [ $failed -eq 1 ]; then
