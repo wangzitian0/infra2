@@ -14,6 +14,7 @@
 |------|------|----------|
 | **Core Services** | `test_api_health` | 核心服务连通性 |
 | **Portal** | `test_portal_sso` | Portal 登录重定向（可选） |
+| **Finance Report** | `test_finance_report_health_endpoint`, `test_finance_report_frontend_available` | 应用健康检查与依赖状态 |
 
 ## 运行测试
 
