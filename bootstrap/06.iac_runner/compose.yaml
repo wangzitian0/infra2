@@ -113,6 +113,8 @@ services:
       - PROJECT=${PROJECT:-platform}
       - DEPLOY_TIMEOUT=${DEPLOY_TIMEOUT:-600}
       - BUILD_CACHE_BUST=v4
+      - ALLOW_SHARED_DATA_PATH=${ALLOW_SHARED_DATA_PATH:-0}
+      - OP_SERVICE_ACCOUNT_TOKEN=${OP_SERVICE_ACCOUNT_TOKEN:-}
     volumes:
       - secrets:/secrets:ro
       - ${DATA_PATH:-/data/bootstrap/iac-runner}/workspace:/workspace
