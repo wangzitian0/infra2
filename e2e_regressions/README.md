@@ -48,6 +48,8 @@ uv sync
 # Configure env (export in shell/CI)
 # See e2e_regressions/.env.example for the required keys
 # If INTERNAL_DOMAIN is missing, tests will try 1Password init/env_vars (requires `op` signed in).
+# Target env: DEPLOY_ENV=production|staging|pr-test (PR_NUMBER required for pr-test)
+# INTERNAL_DOMAIN is still required for platform/service URLs, even if BASE_DOMAIN is set.
 ```
 
 ### Execution

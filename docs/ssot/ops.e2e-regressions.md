@@ -68,7 +68,11 @@ flowchart LR
 - **触发条件**: 开发新功能前
 - **步骤**:
     1. 配置环境变量 (参考 `e2e_regressions/.env.example`，若未设置 INTERNAL_DOMAIN 会尝试从 1Password `init/env_vars` 读取)。
-    2. 运行（任选其一）:
+    2. 指定环境：
+       - `DEPLOY_ENV=production|staging|pr-test`
+       - 当 `DEPLOY_ENV=pr-test` 时必须设置 `PR_NUMBER`（用于 `report-pr-<num>.<domain>`）。
+       - 如需使用自定义域名，设置 `E2E_ALLOW_CUSTOM_DOMAIN=true`，并显式设置各服务 URL（如 `DOKPLOY_URL`、`FINANCE_REPORT_URL`）。
+    3. 运行（任选其一）:
        - 仓库根目录: `uv run pytest e2e_regressions/tests -m smoke -v`
        - 进入 `e2e_regressions/`: `uv run pytest tests -m smoke -v`
 
