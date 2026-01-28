@@ -125,7 +125,7 @@ class Deployer:
             return cls.data_path
         suffix = e.get("ENV_SUFFIX")
         if suffix:
-            return f"{cls.data_path}{suffix}"
+            return f"{cls.data_path}{suffix}" if cls.data_path else ""
         if os.environ.get("ALLOW_SHARED_DATA_PATH") == "1":
             return cls.data_path
         raise ValueError(
