@@ -161,6 +161,7 @@ The `S3_PUBLIC_ENDPOINT` is **required** for production deployments because:
 ## PR Links
 
 - infra2: https://github.com/wangzitian0/infra2/pull/67
+- infra2: https://github.com/wangzitian0/infra2/pull/116 (S3 endpoint fix)
 
 ## Change Log
 
@@ -170,6 +171,10 @@ The `S3_PUBLIC_ENDPOINT` is **required** for production deployments because:
 | 2026-01-19 | Added SigNoz log export wiring for finance_report app |
 | 2026-01-19 | Set OTEL Vault values for finance_report app (staging/production) |
 | 2026-01-19 | Added restart-safe compose wiring and fixed Vault template quoting |
+| 2026-02-02 | **Staging Investigation**: Found missing S3_PUBLIC_* in Vault, added them (v36) |
+| 2026-02-02 | **Root Cause Found**: get_service_url() was adding env suffix to shared services |
+| 2026-02-02 | **Fix Applied**: Updated libs/common.py to skip suffix for SHARED_PLATFORM_SERVICES |
+| 2026-02-02 | PR #116 created: Skip environment suffix for MinIO/Vault/Dokploy/SSO public URLs |
 
 ## Verification
 
