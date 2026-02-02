@@ -3,6 +3,7 @@ Common utilities for deploy scripts
 
 Simplified: uses libs/env.py for secrets, minimal API surface.
 """
+
 from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
@@ -26,16 +27,27 @@ CONTAINERS = {
 # These are the canonical subdomains for each service
 SERVICE_SUBDOMAINS = {
     # Bootstrap services
-    "dokploy": "cloud",      # cloud.{domain}
-    "1password": "op",       # op.{domain}
-    "vault": "vault",        # vault.{domain}
-    "sso": "sso",            # sso.{domain} (Authentik)
+    "dokploy": "cloud",  # cloud.{domain}
+    "1password": "op",  # op.{domain}
+    "vault": "vault",  # vault.{domain}
+    "sso": "sso",  # sso.{domain} (Authentik)
     # Platform services
     "minio_console": "minio",  # minio.{domain} -> Console (9001)
-    "minio_api": "s3",         # s3.{domain} -> S3 API (9000)
-    "portal": "portal",        # portal.{domain}
+    "minio_api": "s3",  # s3.{domain} -> S3 API (9000)
+    "portal": "portal",  # portal.{domain}
     # Finance apps
-    "wealthfolio": "wealth",   # wealth.{domain}
+    "wealthfolio": "wealth",  # wealth.{domain}
+}
+
+# Shared platform services that should NOT have environment suffixes in their public URLs
+# These services are shared across all environments (staging/production use same endpoint)
+# Environment isolation is achieved via buckets/databases/paths, not subdomains
+SHARED_PLATFORM_SERVICES = {
+    "minio_api",
+    "minio_console",
+    "vault",
+    "dokploy",
+    "sso",
 }
 
 # Cache for env config (simple dict, no lru_cache to avoid OpSecrets caching issues)
@@ -64,6 +76,7 @@ def get_env() -> dict[str, str | None]:
         return _env_cache
 
     from libs.env import OpSecrets
+
     op = OpSecrets()
 
     env_name = normalize_env_name(os.environ.get("DEPLOY_ENV", "production"))
@@ -77,8 +90,10 @@ def get_env() -> dict[str, str | None]:
 
     _env_cache = {
         "VPS_HOST": op.get("VPS_HOST") or os.environ.get("VPS_HOST"),
-        "VPS_SSH_USER": op.get("VPS_SSH_USER") or os.environ.get("VPS_SSH_USER", "root"),
-        "INTERNAL_DOMAIN": op.get("INTERNAL_DOMAIN") or os.environ.get("INTERNAL_DOMAIN"),
+        "VPS_SSH_USER": op.get("VPS_SSH_USER")
+        or os.environ.get("VPS_SSH_USER", "root"),
+        "INTERNAL_DOMAIN": op.get("INTERNAL_DOMAIN")
+        or os.environ.get("INTERNAL_DOMAIN"),
         "PROJECT": project,
         "ENV": env_name,
         "ENV_DOMAIN_SUFFIX": env_domain_suffix,
@@ -105,7 +120,9 @@ def _build_domain(subdomain: str, env_name: str, domain: str) -> str:
     return f"{subdomain}{_domain_env_suffix(env_name)}.{domain}"
 
 
-def get_service_url(service: str, domain: str | None = None, env: dict | None = None) -> str:
+def get_service_url(
+    service: str, domain: str | None = None, env: dict | None = None
+) -> str:
     """Get full HTTPS URL for a service.
 
     Args:
@@ -125,7 +142,12 @@ def get_service_url(service: str, domain: str | None = None, env: dict | None = 
     subdomain = SERVICE_SUBDOMAINS.get(service)
     if not subdomain:
         raise ValueError(f"Unknown service: {service}")
-    return f"https://{_build_domain(subdomain, e.get('ENV', 'production'), domain)}"
+
+    env_name = e.get("ENV", "production")
+    if service in SHARED_PLATFORM_SERVICES:
+        env_name = "production"
+
+    return f"https://{_build_domain(subdomain, env_name, domain)}"
 
 
 def validate_env() -> list[str]:
@@ -161,7 +183,8 @@ def check_service(c: "Context", service: str, health_cmd: str) -> dict:
 
     result = c.run(
         f"ssh root@{env['VPS_HOST']} 'docker exec {container} {health_cmd}'",
-        warn=True, hide=True
+        warn=True,
+        hide=True,
     )
 
     if result.ok:
@@ -181,9 +204,9 @@ def parse_env_file(path: str) -> list[str]:
     with open(path) as f:
         for line in f:
             line = line.strip()
-            if line and not line.startswith('#') and '=' in line:
-                key = line.split('=', 1)[0].strip()
-                if key.lower().startswith('export '):
+            if line and not line.startswith("#") and "=" in line:
+                key = line.split("=", 1)[0].strip()
+                if key.lower().startswith("export "):
                     key = key[7:]
                 keys.append(key)
     return keys
@@ -193,4 +216,5 @@ def parse_env_file(path: str) -> list[str]:
 def generate_password(length: int = 24) -> str:
     """Generate secure random password (re-exported from libs.env)"""
     from libs.env import generate_password as _gen
+
     return _gen(length)
