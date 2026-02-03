@@ -174,11 +174,26 @@ def service_domain(subdomain: str, env: dict | None = None) -> str:
 
 
 def check_service(c: "Context", service: str, health_cmd: str) -> dict:
-    """Check if a Docker service is healthy."""
+    """Check if a Docker service is healthy.
+
+    Args:
+        service: Either a key from CONTAINERS mapping or a full container name (e.g., 'finance_report-postgres')
+        health_cmd: Command to run inside container to check health
+
+    Returns:
+        dict with is_ready and details keys
+    """
     from libs.console import success, error
 
     env = get_env()
-    container = CONTAINERS.get(service, f"platform-{service}")
+
+    if service in CONTAINERS:
+        container = CONTAINERS[service]
+    elif "-" in service:
+        container = service
+    else:
+        container = f"platform-{service}"
+
     container = with_env_suffix(container, env)
 
     result = c.run(
@@ -188,10 +203,10 @@ def check_service(c: "Context", service: str, health_cmd: str) -> dict:
     )
 
     if result.ok:
-        success(f"{service}: ready")
+        success(f"{container}: ready")
         return {"is_ready": True, "details": "Healthy"}
 
-    error(f"{service}: not ready")
+    error(f"{container}: not ready")
     return {"is_ready": False, "details": "Unhealthy"}
 
 
