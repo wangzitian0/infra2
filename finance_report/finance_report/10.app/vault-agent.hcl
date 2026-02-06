@@ -2,6 +2,10 @@ vault {
   address = "${VAULT_ADDR}"
 }
 
+cache {
+  use_auto_auth_token = true
+}
+
 auto_auth {
   method "token_file" {
     config = {
