@@ -12,10 +12,26 @@
         "defaults": {
             "maxConcurrent": 4,
             "model": {
-                "primary": "zai/glm-4.6-v"
+                "primary": "coding/GLM-4.7"
             },
             "subagents": {
                 "maxConcurrent": 8
+            }
+        }
+    },
+    "models": {
+        "mode": "merge",
+        "providers": {
+            "coding": {
+                "baseUrl": "https://api.z.ai/api/coding/paas/v4",
+                "apiKey": "${ZAI_API_KEY}",
+                "api": "openai-completions",
+                "models": [
+                    {
+                        "id": "GLM-4.7",
+                        "name": "GLM-4.7"
+                    }
+                ]
             }
         }
     }
