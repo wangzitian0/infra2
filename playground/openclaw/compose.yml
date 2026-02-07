@@ -11,13 +11,10 @@ services:
       - OPENCLAW_GATEWAY_BIND
       - OPENCLAW_GATEWAY_PORT
       - GOG_KEYRING_PASSWORD
+      - ZAI_API_KEY
       - XDG_CONFIG_HOME=/home/node/.openclaw
       - HOME=/home/node
       - NODE_ENV=production
-      - LLM_PROVIDER
-      - OPENAI_BASE_URL
-      - OPENAI_API_KEY
-      - LLM_MODEL
       - PLUGIN_FEISHU_ENABLED
       - FEISHU_APP_ID
       - FEISHU_APP_SECRET
