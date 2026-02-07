@@ -1,0 +1,60 @@
+{
+    "gateway": {
+        "mode": "local",
+        "trustedProxies": [
+            "*"
+        ],
+        "controlUi": {
+            "dangerouslyDisableDeviceAuth": true
+        }
+    },
+    "agents": {
+        "defaults": {
+            "maxConcurrent": 4,
+            "model": {
+                "primary": "coding/GLM-4.7"
+            },
+            "subagents": {
+                "maxConcurrent": 8
+            }
+        }
+    },
+    "models": {
+        "mode": "merge",
+        "providers": {
+            "coding": {
+                "baseUrl": "https://api.z.ai/api/coding/paas/v4",
+                "apiKey": "${ZAI_API_KEY}",
+                "api": "openai-completions",
+                "models": [
+                    {
+                        "id": "GLM-4.7",
+                        "name": "GLM-4.7"
+                    }
+                ]
+            }
+        }
+    },
+    "channels": {
+        "feishu": {
+            "enabled": true,
+            "dmPolicy": "auto",
+            "accounts": {
+                "main": {
+                    "appId": "${FEISHU_APP_ID}",
+                    "appSecret": "${FEISHU_APP_SECRET}",
+                    "verificationToken": "${FEISHU_VERIFICATION_TOKEN}",
+                    "encryptKey": "${FEISHU_ENCRYPT_KEY}",
+                    "botName": "OpenClaw"
+                }
+            }
+        }
+    },
+    "plugins": {
+        "entries": {
+            "feishu": {
+                "enabled": true
+            }
+        }
+    }
+}

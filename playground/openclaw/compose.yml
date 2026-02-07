@@ -1,0 +1,33 @@
+services:
+  openclaw:
+    image: ghcr.io/openclaw/openclaw:latest
+    container_name: openclaw
+    restart: always
+    expose:
+      - "18789"
+    command: [ "node", "dist/index.js", "gateway", "--allow-unconfigured", "--bind", "${OPENCLAW_GATEWAY_BIND:-lan}", "--port", "${OPENCLAW_GATEWAY_PORT:-18789}" ]
+    environment:
+      - OPENCLAW_GATEWAY_TOKEN
+      - OPENCLAW_GATEWAY_BIND
+      - OPENCLAW_GATEWAY_PORT
+      - GOG_KEYRING_PASSWORD
+      - ZAI_API_KEY
+      - XDG_CONFIG_HOME=/home/node/.openclaw
+      - HOME=/home/node
+      - NODE_ENV=production
+      - PLUGIN_FEISHU_ENABLED
+      - FEISHU_APP_ID
+      - FEISHU_APP_SECRET
+      - FEISHU_VERIFICATION_TOKEN
+      - FEISHU_ENCRYPT_KEY
+    volumes:
+      - ./data:/home/node/.openclaw
+    depends_on:
+      init-permissions:
+        condition: service_completed_successfully
+
+  init-permissions:
+    image: busybox
+    command: chown -R 1000:1000 /data
+    volumes:
+      - ./data:/data
