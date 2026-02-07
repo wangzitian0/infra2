@@ -49,5 +49,12 @@
                 }
             }
         }
+    },
+    "plugins": {
+        "entries": {
+            "feishu": {
+                "enabled": true
+            }
+        }
     }
 }
