@@ -18,4 +18,4 @@ services:
       - FEISHU_VERIFICATION_TOKEN
       - FEISHU_ENCRYPT_KEY
     volumes:
-      - ./data:/root/.openclaw
+      - ./data:/home/node/.openclaw
