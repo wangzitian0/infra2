@@ -8,8 +8,8 @@ services:
     command: [ "node", "dist/index.js", "gateway", "--bind", "${OPENCLAW_GATEWAY_BIND:-lan}", "--port", "${OPENCLAW_GATEWAY_PORT:-18789}" ]
     environment:
       - OPENCLAW_GATEWAY_TOKEN
-      - OPENCLAW_GATEWAY_BIND=lan
-      - OPENCLAW_GATEWAY_PORT=18789
+      - OPENCLAW_GATEWAY_BIND
+      - OPENCLAW_GATEWAY_PORT
       - GOG_KEYRING_PASSWORD
       - XDG_CONFIG_HOME=/home/node/.openclaw
       - HOME=/home/node
