@@ -34,5 +34,20 @@
                 ]
             }
         }
+    },
+    "channels": {
+        "feishu": {
+            "enabled": true,
+            "dmPolicy": "pairing",
+            "accounts": {
+                "main": {
+                    "appId": "${FEISHU_APP_ID}",
+                    "appSecret": "${FEISHU_APP_SECRET}",
+                    "verificationToken": "${FEISHU_VERIFICATION_TOKEN}",
+                    "encryptKey": "${FEISHU_ENCRYPT_KEY}",
+                    "botName": "OpenClaw"
+                }
+            }
+        }
     }
 }
