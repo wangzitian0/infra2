@@ -38,7 +38,7 @@
     "channels": {
         "feishu": {
             "enabled": true,
-            "dmPolicy": "pairing",
+            "dmPolicy": "auto",
             "accounts": {
                 "main": {
                     "appId": "${FEISHU_APP_ID}",
