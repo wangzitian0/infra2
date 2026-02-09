@@ -71,6 +71,7 @@
 - **锚定Project**：在 `docs/project/` 中绑定一个project。
 - **现状分析**：描述当前系统状态及问题影响。
 - **真理检查 (Step 0)**：搜索并阅读 `docs/ssot/` 中的相关话题，明确“现状”与“理想真理”的差距。
+- **工具发现 (Tool Discovery)**：在编写新代码前，**必须** 搜索 `libs/` 和 `tools/` 目录是否存在相关服务的已有实现（如：`grep -r "dokploy" libs/ tools/`）。禁止在已有库存在时重复造轮子。
 
 ### 2. Tasks (多维任务拆解)
 - **目标分拆**：根据 Situation 拆解出多个子任务。

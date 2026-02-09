@@ -47,15 +47,22 @@ def env_ensure(c, project: str = "platform", env: str = "staging", description: 
 
 
 @task
-def logs(c, name, project: str = "platform", env: str | None = None, deployment: bool = False, tail: int = 50):
+def logs(c, name, project: str = "platform", env: str | None = None, deployment: bool = False, tail: int = 50, host: str | None = None):
     """Show logs for a Dokploy compose application.
     
     If --deployment is set, shows deployment (build) logs.
     Otherwise, shows container runtime logs.
     """
     header("Dokploy Logs", f"{project}/{env or 'default'}/{name}")
-    client = get_dokploy()
     e = get_env()
+    
+    # Derive host from INTERNAL_DOMAIN if not provided
+    if not host:
+        internal_domain = e.get("INTERNAL_DOMAIN")
+        if internal_domain:
+            host = f"cloud.{internal_domain}"
+    
+    client = get_dokploy(host=host)
     
     compose = client.find_compose_by_name(name, project_name=project, env_name=env)
     if not compose:

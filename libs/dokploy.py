@@ -247,20 +247,43 @@ class DokployClient:
         deployments = self.get_compose_deployments(compose_id)
         return deployments[0] if deployments else None
 
-    def get_deployment_log_path(self, deployment_id: str) -> str | None:
-        """Get the absolute path to the deployment log file on the server"""
-        # We need to find the deployment to get its logPath
-        # NOTE: This is inefficient but Dokploy API doesn't have a direct deployment.one
-        # by deploymentId alone in a way we've discovered yet.
+    def get_deployment_log_path(
+        self,
+        deployment_id: str,
+        compose_id: str | None = None,
+        project_name: str | None = None,
+        env_name: str | None = None,
+    ) -> str | None:
+        """Get the absolute path to the deployment log file on the server.
+
+        Optimized lookup using optional hints to avoid N+1 API calls.
+        """
+        # Fast path: if we know the compose_id, just look at that compose's deployments.
+        if compose_id:
+            deployments = self.get_compose_deployments(compose_id)
+            for depl in deployments:
+                if depl.get("deploymentId") == deployment_id:
+                    return depl.get("logPath")
+            return None
+
+        # Fallback: scan projects/environments/composes, optionally narrowed by hints.
+        target_env = _normalize_env_name(env_name) if env_name else None
         projects = self.list_projects()
         for project in projects:
+            # If a project_name hint is provided, skip other projects.
+            if project_name and project.get("name") != project_name:
+                continue
+            
             for env in project.get("environments", []):
+                # If an env_name hint is provided, skip non-matching environments.
+                if target_env and _normalize_env_name(env.get("name")) != target_env:
+                    continue
+                
                 for compose in env.get("compose", []):
-                    # Cache compose details if needed, but for now we fetch one by one
-                    # This is slow, but correct.
+                    # Fetch detailed deployments for each compose
                     details = self.get_compose(compose["composeId"])
                     for depl in details.get("deployments", []):
-                        if depl["deploymentId"] == deployment_id:
+                        if depl.get("deploymentId") == deployment_id:
                             return depl.get("logPath")
         return None
     

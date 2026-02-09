@@ -59,6 +59,18 @@ class TestDokployClient:
             
             assert log_path == "/path/to/log"
 
+    @patch("libs.dokploy.DokployClient.get_compose_deployments")
+    def test_get_deployment_log_path_with_hints(self, mock_get_depls):
+        with patch.dict(os.environ, {"DOKPLOY_API_KEY": "test-key"}):
+            client = DokployClient()
+            mock_get_depls.return_value = [{"deploymentId": "target", "logPath": "/hinted/path"}]
+            
+            # Using compose_id hint should trigger optimized path
+            log_path = client.get_deployment_log_path("target", compose_id="c1")
+            
+            assert log_path == "/hinted/path"
+            mock_get_depls.assert_called_with("c1")
+
 
 class TestGetDokployFactory:
     """Test factory function"""
