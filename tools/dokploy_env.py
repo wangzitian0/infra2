@@ -4,8 +4,8 @@ from __future__ import annotations
 from invoke import task
 from rich.table import Table
 
-from libs.common import normalize_env_name, get_env
-from libs.console import header, success, error, info, console
+from libs.common import normalize_env_name, get_env, get_service_url
+from libs.console import header, success, error, info, console, warning
 from libs.dokploy import get_dokploy
 
 
@@ -67,6 +67,16 @@ def logs(c, name, project: str = "platform", env: str | None = None, deployment:
     if not host:
         error("VPS_HOST not configured in 1Password (init/env_vars) or environment")
         return
+
+    # Check for SigNoz/OTel configuration
+    app_env = client.get_compose_env(compose_id)
+    if "OTEL_EXPORTER_OTLP_ENDPOINT" in app_env or "SIGNOZ_OTLP_ENDPOINT" in app_env:
+        try:
+            signoz_url = get_service_url("signoz", env=e)
+            warning("This application appears to use SigNoz for logging.")
+            info(f"SigNoz Dashboard: {signoz_url}/logs")
+        except Exception:
+            warning("This application appears to use SigNoz for logs, but SigNoz URL could not be determined.")
     
     if deployment:
         # Show build logs
