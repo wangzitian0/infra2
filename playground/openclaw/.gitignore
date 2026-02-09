@@ -1,0 +1,9 @@
+# Environment files with secrets
+.env
+
+# Runtime data (created by container)
+data/agents/
+data/cron/
+data/devices/
+data/canvas/
+data/update-check.json
