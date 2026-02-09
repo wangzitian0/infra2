@@ -32,6 +32,7 @@ SERVICE_SUBDOMAINS = {
     "vault": "vault",  # vault.{domain}
     "sso": "sso",  # sso.{domain} (Authentik)
     # Platform services
+    "signoz": "signoz",  # signoz.{domain}
     "minio_console": "minio",  # minio.{domain} -> Console (9001)
     "minio_api": "s3",  # s3.{domain} -> S3 API (9000)
     "portal": "portal",  # portal.{domain}
@@ -48,6 +49,7 @@ SHARED_PLATFORM_SERVICES = {
     "vault",
     "dokploy",
     "sso",
+    "signoz",
 }
 
 # Cache for env config (simple dict, no lru_cache to avoid OpSecrets caching issues)

@@ -236,6 +236,56 @@ class DokployClient:
             if environments:
                 return environments[0].get("environmentId")
         return None
+
+    def get_compose_deployments(self, compose_id: str) -> list[dict]:
+        """Get list of deployments for a compose application"""
+        details = self.get_compose(compose_id)
+        return details.get("deployments", [])
+
+    def get_latest_deployment(self, compose_id: str) -> dict | None:
+        """Get the most recent deployment for a compose application"""
+        deployments = self.get_compose_deployments(compose_id)
+        return deployments[0] if deployments else None
+
+    def get_deployment_log_path(
+        self,
+        deployment_id: str,
+        compose_id: str | None = None,
+        project_name: str | None = None,
+        env_name: str | None = None,
+    ) -> str | None:
+        """Get the absolute path to the deployment log file on the server.
+
+        Optimized lookup using optional hints to avoid N+1 API calls.
+        """
+        # Fast path: if we know the compose_id, just look at that compose's deployments.
+        if compose_id:
+            deployments = self.get_compose_deployments(compose_id)
+            for depl in deployments:
+                if depl.get("deploymentId") == deployment_id:
+                    return depl.get("logPath")
+            return None
+
+        # Fallback: scan projects/environments/composes, optionally narrowed by hints.
+        target_env = _normalize_env_name(env_name) if env_name else None
+        projects = self.list_projects()
+        for project in projects:
+            # If a project_name hint is provided, skip other projects.
+            if project_name and project.get("name") != project_name:
+                continue
+            
+            for env in project.get("environments", []):
+                # If an env_name hint is provided, skip non-matching environments.
+                if target_env and _normalize_env_name(env.get("name")) != target_env:
+                    continue
+                
+                for compose in env.get("compose", []):
+                    # Fetch detailed deployments for each compose
+                    details = self.get_compose(compose["composeId"])
+                    for depl in details.get("deployments", []):
+                        if depl.get("deploymentId") == deployment_id:
+                            return depl.get("logPath")
+        return None
     
     # Domain endpoints
     def create_domain(self, compose_id: str, host: str, port: int, https: bool = True, path: str = "/", service_name: str = None) -> dict:
