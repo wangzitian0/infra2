@@ -1,7 +1,6 @@
 services:
   openclaw:
     image: ghcr.io/openclaw/openclaw:latest
-    container_name: openclaw
     restart: always
     expose:
       - "18789"
