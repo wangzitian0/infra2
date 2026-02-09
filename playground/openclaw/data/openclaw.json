@@ -39,15 +39,7 @@
         "feishu": {
             "enabled": true,
             "dmPolicy": "auto",
-            "accounts": {
-                "main": {
-                    "appId": "${FEISHU_APP_ID}",
-                    "appSecret": "${FEISHU_APP_SECRET}",
-                    "verificationToken": "${FEISHU_VERIFICATION_TOKEN}",
-                    "encryptKey": "${FEISHU_ENCRYPT_KEY}",
-                    "botName": "OpenClaw"
-                }
-            }
+            "domain": "${FEISHU_DOMAIN}"
         }
     },
     "plugins": {

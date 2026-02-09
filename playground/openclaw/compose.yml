@@ -16,6 +16,7 @@ services:
       - HOME=/home/node
       - NODE_ENV=production
       - PLUGIN_FEISHU_ENABLED
+      - FEISHU_DOMAIN
       - FEISHU_APP_ID
       - FEISHU_APP_SECRET
       - FEISHU_VERIFICATION_TOKEN
