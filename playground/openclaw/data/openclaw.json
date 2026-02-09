@@ -8,6 +8,14 @@
             "dangerouslyDisableDeviceAuth": true
         }
     },
+    "accounts": {
+        "feishu": {
+            "appId": "${FEISHU_APP_ID}",
+            "appSecret": "${FEISHU_APP_SECRET}",
+            "encryptKey": "${FEISHU_ENCRYPT_KEY}",
+            "verificationToken": "${FEISHU_VERIFICATION_TOKEN}"
+        }
+    },
     "agents": {
         "defaults": {
             "maxConcurrent": 4,
