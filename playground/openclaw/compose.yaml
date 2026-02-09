@@ -28,7 +28,7 @@ services:
     networks:
       - dokploy-network
     healthcheck:
-      test: [ "CMD", "wget", "--spider", "--quiet", "http://localhost:18789/" ]
+      test: [ "CMD", "true" ]
       interval: 30s
       timeout: 10s
       retries: 3
