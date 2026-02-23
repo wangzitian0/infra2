@@ -1,11 +1,6 @@
 vault {
   address = "https://vault.zitian.party"
 }
-
-cache {
-  use_auto_auth_token = true
-}
-
 auto_auth {
   method {
     type = "token_file"

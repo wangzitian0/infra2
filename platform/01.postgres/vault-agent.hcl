@@ -2,11 +2,6 @@ vault {
   # VAULT_ADDR is set via container environment variable
   # vault-agent CLI automatically uses VAULT_ADDR env var when address is not specified
 }
-
-cache {
-  use_auto_auth_token = true
-}
-
 auto_auth {
   method {
     type = "token_file"
