@@ -1,9 +1,11 @@
 # Policy for finance_report redis service
-path "secret/data/finance_report/{{env}}/redis" {
+# Uses wildcard (+) to allow access to any environment
+# This allows the same policy/token to work for production, staging, test, etc.
+path "secret/data/finance_report/+/redis" {
   capabilities = ["read"]
 }
 
-path "secret/metadata/finance_report/{{env}}/redis" {
+path "secret/metadata/finance_report/+/redis" {
   capabilities = ["read", "list"]
 }
 

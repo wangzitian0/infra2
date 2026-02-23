@@ -1,9 +1,11 @@
 # Policy for finance_report postgres service
-path "secret/data/finance_report/{{env}}/postgres" {
+# Uses wildcard (+) to allow access to any environment
+# This allows the same policy/token to work for production, staging, test, etc.
+path "secret/data/finance_report/+/postgres" {
   capabilities = ["read"]
 }
 
-path "secret/metadata/finance_report/{{env}}/postgres" {
+path "secret/metadata/finance_report/+/postgres" {
   capabilities = ["read", "list"]
 }
 
