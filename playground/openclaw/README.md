@@ -57,3 +57,37 @@ Create this file based on `.env.example`.
       ```bash
       docker exec -it <container_id> node dist/index.js nodes approve <REQUEST_ID>
       ```
+
+## Troubleshooting
+
+### Health Check Failures
+
+**Symptom**: Container shows as `unhealthy` in `docker ps`
+
+**Cause**: OpenClaw runs as a WebSocket service (`ws://`), not HTTP. Previous health check used `wget` with HTTP protocol.
+
+**Solution**: Health check now uses process monitoring instead:
+```yaml
+healthcheck:
+  test: [ "CMD-SHELL", "pgrep -f 'openclaw-gateway' > /dev/null || exit 1" ]
+```
+
+### Trusted Proxy Warnings
+
+**Symptom**: Logs show `Proxy headers detected from untrusted address`
+
+**Cause**: Missing or incorrect `trustedProxies` configuration in `data/openclaw.json`
+
+**Solution**: Verify `data/openclaw.json` contains:
+```json
+{
+  "gateway": {
+    "trustedProxies": [
+      "10.0.0.0/8",
+      "172.16.0.0/12",
+      "192.168.0.0/16",
+      "127.0.0.1/8"
+    ]
+  }
+}
+```
