@@ -87,33 +87,33 @@ services:
           --arg feishuVerificationToken "${FEISHU_VERIFICATION_TOKEN}" \
           --arg feishuEncryptKey "${FEISHU_ENCRYPT_KEY}" \
           '{
-            meta: { lastTouchedVersion: $lastTouchedVersion },
+            meta: { lastTouchedVersion: $$lastTouchedVersion },
             models: {
               providers: {
-                ($provider): {
-                  baseUrl: $baseUrl,
-                  apiKey: $apiKey,
+                ($$provider): {
+                  baseUrl: $$baseUrl,
+                  apiKey: $$apiKey,
                   api: "openai-completions",
-                  models: [{ id: $modelId, name: $modelName }]
+                  models: [{ id: $$modelId, name: $$modelName }]
                 }
               }
             },
             agents: {
               defaults: {
-                model: { primary: "\($provider)/\($modelId)" },
+                model: { primary: "\($$provider)/\($$modelId)" },
                 maxConcurrent: 4
               }
             },
             channels: {
               feishu: {
-                enabled: $feishuEnabled,
-                domain: $feishuDomain,
+                enabled: $$feishuEnabled,
+                domain: $$feishuDomain,
                 accounts: {
                   main: {
-                    appId: $feishuAppId,
-                    appSecret: $feishuAppSecret,
-                    verificationToken: $feishuVerificationToken,
-                    encryptKey: $feishuEncryptKey
+                    appId: $$feishuAppId,
+                    appSecret: $$feishuAppSecret,
+                    verificationToken: $$feishuVerificationToken,
+                    encryptKey: $$feishuEncryptKey
                   }
                 }
               }
@@ -124,7 +124,7 @@ services:
               trustedProxies: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.1/8"]
             },
             plugins: {
-              entries: { feishu: { enabled: $feishuEnabled } }
+              entries: { feishu: { enabled: $$feishuEnabled } }
             }
           }' > /data/openclaw.json
 
