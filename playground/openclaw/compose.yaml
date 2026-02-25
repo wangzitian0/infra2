@@ -15,16 +15,10 @@ services:
       - XDG_CONFIG_HOME=/home/node/.openclaw
       - HOME=/home/node
       - NODE_ENV=production
-      - PLUGIN_FEISHU_ENABLED
-      - FEISHU_DOMAIN
-      - FEISHU_APP_ID
-      - FEISHU_APP_SECRET
-      - FEISHU_VERIFICATION_TOKEN
-      - FEISHU_ENCRYPT_KEY
     volumes:
       - openclaw-data:/home/node/.openclaw
     depends_on:
-      init-permissions:
+      init-config:
         condition: service_completed_successfully
     networks:
       - dokploy-network
@@ -42,6 +36,100 @@ services:
         max-size: "5m"
         max-file: "2"
 
+  # Generate openclaw.json from environment variables
+  # Supports multiple bot instances via different env vars
+  init-config:
+    image: alpine:3.19
+    volumes:
+      - openclaw-data:/data
+    environment:
+      - FEISHU_ENABLED=${FEISHU_ENABLED:-true}
+      - FEISHU_DOMAIN=${FEISHU_DOMAIN:-feishu}
+      - FEISHU_APP_ID
+      - FEISHU_APP_SECRET
+      - FEISHU_VERIFICATION_TOKEN
+      - FEISHU_ENCRYPT_KEY
+      - LLM_PROVIDER=${LLM_PROVIDER:-coding}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.z.ai/api/coding/paas/v4}
+      - LLM_API_KEY
+      - LLM_MODEL_ID=${LLM_MODEL_ID:-glm-5}
+      - LLM_MODEL_NAME=${LLM_MODEL_NAME:-GLM-5}
+    command:
+      - /bin/sh
+      - -c
+      - |
+        # Install envsubst
+        apk add --no-cache gettext
+        
+        # Generate openclaw.json from template
+        cat > /tmp/openclaw.json << 'TEMPLATE'
+        {
+          "meta": {
+            "lastTouchedVersion": "2026.2.6"
+          },
+          "models": {
+            "providers": {
+              "${LLM_PROVIDER}": {
+                "baseUrl": "${LLM_BASE_URL}",
+                "apiKey": "${LLM_API_KEY}",
+                "api": "openai-completions",
+                "models": [
+                  {
+                    "id": "${LLM_MODEL_ID}",
+                    "name": "${LLM_MODEL_NAME}"
+                  }
+                ]
+              }
+            }
+          },
+          "agents": {
+            "defaults": {
+              "model": {
+                "primary": "${LLM_PROVIDER}/${LLM_MODEL_ID}"
+              },
+              "maxConcurrent": 4
+            }
+          },
+          "channels": {
+            "feishu": {
+              "enabled": ${FEISHU_ENABLED},
+              "domain": "${FEISHU_DOMAIN}",
+              "accounts": {
+                "main": {
+                  "appId": "${FEISHU_APP_ID}",
+                  "appSecret": "${FEISHU_APP_SECRET}",
+                  "verificationToken": "${FEISHU_VERIFICATION_TOKEN}",
+                  "encryptKey": "${FEISHU_ENCRYPT_KEY}"
+                }
+              }
+            }
+          },
+          "gateway": {
+            "mode": "local",
+            "controlUi": {
+              "dangerouslyDisableDeviceAuth": true
+            },
+            "trustedProxies": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.1/8"]
+          },
+          "plugins": {
+            "entries": {
+              "feishu": {
+                "enabled": ${FEISHU_ENABLED}
+              }
+            }
+          }
+        }
+        TEMPLATE
+        
+        # Substitute env vars and write to volume
+        envsubst < /tmp/openclaw.json > /data/openclaw.json
+        
+        # Set permissions
+        chown -R 1000:1000 /data
+        
+        echo "Generated openclaw.json with FEISHU_APP_ID=${FEISHU_APP_ID}"
+
+  # Legacy init-permissions (can be removed after migration)
   init-permissions:
     image: busybox
     command: chown -R 1000:1000 /data
@@ -49,6 +137,8 @@ services:
       - openclaw-data:/data
     networks:
       - dokploy-network
+    profiles:
+      - migration
 
 networks:
   dokploy-network:
