@@ -22,7 +22,7 @@ services:
       - FEISHU_VERIFICATION_TOKEN
       - FEISHU_ENCRYPT_KEY
     volumes:
-      - ./data:/home/node/.openclaw
+      - openclaw-data:/home/node/.openclaw
     depends_on:
       init-permissions:
         condition: service_completed_successfully
@@ -46,10 +46,13 @@ services:
     image: busybox
     command: chown -R 1000:1000 /data
     volumes:
-      - ./data:/data
+      - openclaw-data:/data
     networks:
       - dokploy-network
 
 networks:
   dokploy-network:
     external: true
+
+volumes:
+  openclaw-data:

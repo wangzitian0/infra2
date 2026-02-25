@@ -6,7 +6,7 @@ This directory contains the Docker Compose configuration for deploying [OpenClaw
 
 - **Service**: OpenClaw Gateway
 - **Network**: Uses Host networking (via Dokploy/Traefik routing), internally binds to `0.0.0.0` (LAN) on port `18789`.
-- **Storage**: Persists configuration and workspace data in `./data` (mounted to `/home/node/.openclaw`).
+- **Storage**: Uses named Docker volume `openclaw-data` (mounted to `/home/node/.openclaw`) for persistence across redeploys.
 - **Configuration**:
     - Secrets via Environment Variables (`.env`).
     - Complex settings (Trusted Proxies) via `data/openclaw.json`.
@@ -25,7 +25,22 @@ Defines the service.
 - `command`: Force binds to `lan` interface to allow Docker networking.
 - `environment`: Passes secrets from Dokploy.
 
-### 2. `data/openclaw.json`
+### 2. Docker Volume (`openclaw-data`)
+
+OpenClaw stores its config and workspace data in a named Docker volume. To access or modify the config:
+
+```bash
+# Find the volume location
+docker volume inspect openclaw-data
+
+# Copy config into the volume (first time setup)
+docker run --rm -v openclaw-data:/data -v $(pwd):/src busybox cp /src/openclaw.json /data/
+
+# Or exec into a running container
+docker exec -it <container_id> sh
+```
+
+### 3. `openclaw.json` (inside volume)
 Handles configuration that cannot be set via environment variables.
 
 **Required sections**:
@@ -57,7 +72,7 @@ Handles configuration that cannot be set via environment variables.
 }
 ```
 
-### 3. `.env` (Secrets)
+### 4. `.env` (Secrets)
 Create this file based on `.env.example`.
 **Required Variables**:
 - `OPENCLAW_GATEWAY_TOKEN`: Secure token for accessing the dashboard.
@@ -110,6 +125,23 @@ healthcheck:
     ]
   }
 }
+```
+
+### Data Lost After Redeploy
+
+**Symptom**: `openclaw.json` or workspace data disappears after Dokploy redeploy
+
+**Cause**: Previously used `./data` relative path which gets wiped when Dokploy does a fresh git clone.
+
+**Solution**: Now using named Docker volume `openclaw-data` which persists across redeploys. If you need to restore config:
+```bash
+# Write config directly into the running container
+docker exec -it <container_id> sh -c 'cat > /home/node/.openclaw/openclaw.json << EOF
+{ ... your config ... }
+EOF'
+
+# Then restart
+docker restart <container_id>
 ```
 
 ### Feishu Channel Not Starting
