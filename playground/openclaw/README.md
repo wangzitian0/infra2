@@ -6,7 +6,7 @@ This directory contains the Docker Compose configuration for deploying [OpenClaw
 
 - **Service**: OpenClaw Gateway
 - **Network**: Uses Host networking (via Dokploy/Traefik routing), internally binds to `0.0.0.0` (LAN) on port `18789`.
-- **Storage**: Persists configuration and workspace data in `./data` (mounted to `/root/.openclaw`).
+- **Storage**: Persists configuration and workspace data in `./data` (mounted to `/home/node/.openclaw`).
 - **Configuration**:
     - Secrets via Environment Variables (`.env`).
     - Complex settings (Trusted Proxies) via `data/openclaw.json`.
@@ -26,13 +26,33 @@ Defines the service.
 - `environment`: Passes secrets from Dokploy.
 
 ### 2. `data/openclaw.json`
-Handles configuration that cannot be set via environment variables, specifically **Trusted Proxies**.
-This is required for OpenClaw to accept connections forwarded by Traefik/Dokploy.
+Handles configuration that cannot be set via environment variables.
 
+**Required sections**:
+- **Trusted Proxies**: Allow Traefik/Dokploy forwarded connections
+- **Feishu accounts**: Explicit account config (env vars alone are NOT sufficient for channel startup)
 ```json
 {
+  "channels": {
+    "feishu": {
+      "enabled": true,
+      "domain": "feishu",
+      "accounts": {
+        "main": {
+          "appId": "cli_xxx",
+          "appSecret": "xxx",
+          "verificationToken": "xxx",
+          "encryptKey": "xxx"
+        }
+      }
+    }
+  },
   "gateway": {
-    "trustedProxies": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.1/8"]
+    "trustedProxies": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.1/8"],
+    "controlUi": { "dangerouslyDisableDeviceAuth": true }
+  },
+  "plugins": {
+    "entries": { "feishu": { "enabled": true } }
   }
 }
 ```
@@ -91,3 +111,19 @@ healthcheck:
   }
 }
 ```
+
+### Feishu Channel Not Starting
+
+**Symptom**: No `[feishu] starting feishu[main]` in logs, tools show `No Feishu accounts configured`
+
+**Cause**: `data/openclaw.json` is missing the `channels.feishu.accounts` section. Environment variables (`FEISHU_APP_ID`, etc.) are NOT sufficient to configure accounts -- they must be explicitly set in the JSON config.
+
+**Solution**: Add the `channels.feishu.accounts` block to `data/openclaw.json` (see Configuration Files section above).
+
+### Image Version Breakage
+
+**Symptom**: Feishu worked before but stopped after container recreation
+
+**Cause**: Using `:latest` tag pulled a newer image version with incompatible plugin SDK changes
+
+**Solution**: Image is now pinned to v2026.2.6 digest in `compose.yaml`. Do NOT change to `:latest` without testing feishu channel first.
