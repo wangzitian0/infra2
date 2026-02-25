@@ -42,6 +42,8 @@ services:
   init-config:
     image: alpine:3.19
     restart: "no"
+    env_file:
+      - .env
     volumes:
       - openclaw-data:/data
     environment:
