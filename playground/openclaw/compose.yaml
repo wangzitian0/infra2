@@ -37,6 +37,8 @@ services:
 
   # Generate openclaw.json from environment variables
   # Supports multiple bot instances via different env vars
+  # Note: Uses alpine:3.19 with jq installed at runtime.
+  # Alpine CDN is reliable; if network isolation is required, build a custom image.
   init-config:
     image: alpine:3.19
     restart: "no"
@@ -137,3 +139,4 @@ networks:
 
 volumes:
   openclaw-data:
+    name: openclaw-data

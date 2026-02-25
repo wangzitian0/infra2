@@ -5,7 +5,7 @@ This directory contains the Docker Compose configuration for deploying [OpenClaw
 ## Architecture
 
 - **Service**: OpenClaw Gateway
-- **Network**: Uses Host networking (via Dokploy/Traefik routing), internally binds to `0.0.0.0` (LAN) on port `18789`.
+- **Network**: Connected to Dokploy's shared Docker network (`dokploy-network`); container listens on `0.0.0.0:18789` internally and is exposed externally via Traefik HTTP routing.
 - **Storage**: Named Docker volume `openclaw-data` for persistence across redeploys.
 - **Configuration**: **100% environment-driven** — no hardcoded secrets, supports multiple bot instances.
 
@@ -75,7 +75,7 @@ Each deployment will have its own volume and configuration.
 
 1. **init-config** container runs first:
    - Reads environment variables
-   - Generates `/data/openclaw.json` using envsubst
+   - Generates `/data/openclaw.json` using jq
    - Sets permissions
 
 2. **openclaw** container starts:
