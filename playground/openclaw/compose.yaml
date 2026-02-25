@@ -11,20 +11,13 @@ services:
       - OPENCLAW_GATEWAY_BIND
       - OPENCLAW_GATEWAY_PORT
       - GOG_KEYRING_PASSWORD
-      - ZAI_API_KEY
       - XDG_CONFIG_HOME=/home/node/.openclaw
       - HOME=/home/node
       - NODE_ENV=production
-      - PLUGIN_FEISHU_ENABLED
-      - FEISHU_DOMAIN
-      - FEISHU_APP_ID
-      - FEISHU_APP_SECRET
-      - FEISHU_VERIFICATION_TOKEN
-      - FEISHU_ENCRYPT_KEY
     volumes:
-      - ./data:/home/node/.openclaw
+      - openclaw-data:/home/node/.openclaw
     depends_on:
-      init-permissions:
+      init-config:
         condition: service_completed_successfully
     networks:
       - dokploy-network
@@ -42,14 +35,108 @@ services:
         max-size: "5m"
         max-file: "2"
 
-  init-permissions:
-    image: busybox
-    command: chown -R 1000:1000 /data
+  # Generate openclaw.json from environment variables
+  # Supports multiple bot instances via different env vars
+  # Note: Uses alpine:3.19 with jq installed at runtime.
+  # Alpine CDN is reliable; if network isolation is required, build a custom image.
+  init-config:
+    image: alpine:3.19
+    restart: "no"
     volumes:
-      - ./data:/data
-    networks:
-      - dokploy-network
+      - openclaw-data:/data
+    environment:
+      - FEISHU_ENABLED=${FEISHU_ENABLED:-true}
+      - FEISHU_DOMAIN=${FEISHU_DOMAIN:-feishu}
+      - FEISHU_APP_ID
+      - FEISHU_APP_SECRET
+      - FEISHU_VERIFICATION_TOKEN
+      - FEISHU_ENCRYPT_KEY
+      - LLM_PROVIDER=${LLM_PROVIDER:-coding}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.z.ai/api/coding/paas/v4}
+      - LLM_API_KEY
+      - LLM_MODEL_ID=${LLM_MODEL_ID:-glm-5}
+      - LLM_MODEL_NAME=${LLM_MODEL_NAME:-GLM-5}
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -euo pipefail
+
+        # Validate required environment variables
+        : "${FEISHU_APP_ID:?FEISHU_APP_ID is required}"
+        : "${FEISHU_APP_SECRET:?FEISHU_APP_SECRET is required}"
+        : "${FEISHU_VERIFICATION_TOKEN:?FEISHU_VERIFICATION_TOKEN is required}"
+        : "${FEISHU_ENCRYPT_KEY:?FEISHU_ENCRYPT_KEY is required}"
+        : "${LLM_API_KEY:?LLM_API_KEY is required}"
+
+        # Install jq for safe JSON generation
+        apk add --no-cache jq
+
+        # Generate openclaw.json using jq (safe escaping of special chars)
+        jq -n \
+          --arg lastTouchedVersion "2026.2.6" \
+          --arg provider "${LLM_PROVIDER}" \
+          --arg baseUrl "${LLM_BASE_URL}" \
+          --arg apiKey "${LLM_API_KEY}" \
+          --arg modelId "${LLM_MODEL_ID}" \
+          --arg modelName "${LLM_MODEL_NAME}" \
+          --argjson feishuEnabled "${FEISHU_ENABLED}" \
+          --arg feishuDomain "${FEISHU_DOMAIN}" \
+          --arg feishuAppId "${FEISHU_APP_ID}" \
+          --arg feishuAppSecret "${FEISHU_APP_SECRET}" \
+          --arg feishuVerificationToken "${FEISHU_VERIFICATION_TOKEN}" \
+          --arg feishuEncryptKey "${FEISHU_ENCRYPT_KEY}" \
+          '{
+            meta: { lastTouchedVersion: $lastTouchedVersion },
+            models: {
+              providers: {
+                ($provider): {
+                  baseUrl: $baseUrl,
+                  apiKey: $apiKey,
+                  api: "openai-completions",
+                  models: [{ id: $modelId, name: $modelName }]
+                }
+              }
+            },
+            agents: {
+              defaults: {
+                model: { primary: "\($provider)/\($modelId)" },
+                maxConcurrent: 4
+              }
+            },
+            channels: {
+              feishu: {
+                enabled: $feishuEnabled,
+                domain: $feishuDomain,
+                accounts: {
+                  main: {
+                    appId: $feishuAppId,
+                    appSecret: $feishuAppSecret,
+                    verificationToken: $feishuVerificationToken,
+                    encryptKey: $feishuEncryptKey
+                  }
+                }
+              }
+            },
+            gateway: {
+              mode: "local",
+              controlUi: { dangerouslyDisableDeviceAuth: true },
+              trustedProxies: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.1/8"]
+            },
+            plugins: {
+              entries: { feishu: { enabled: $feishuEnabled } }
+            }
+          }' > /data/openclaw.json
+
+        # Set permissions
+        chown -R 1000:1000 /data
+
+        echo "Generated openclaw.json successfully"
 
 networks:
   dokploy-network:
     external: true
+
+volumes:
+  openclaw-data:
+    name: openclaw-data
