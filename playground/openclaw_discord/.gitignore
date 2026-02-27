@@ -1,0 +1,5 @@
+# Environment files with secrets
+.env
+# Runtime data (created by container)
+# Keep ONLY .env.example - everything else should be managed via deployment
+data/
