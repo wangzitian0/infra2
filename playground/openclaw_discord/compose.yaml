@@ -4,8 +4,8 @@ services:
     image: ghcr.io/openclaw/openclaw@sha256:4efc318a6570e4aac66d8ce0ab94c9a577c2f5d4afe914aa73e9678f82799e26
     restart: always
     expose:
-      - "18789"
-    command: [ "node", "dist/index.js", "gateway", "--allow-unconfigured", "--bind", "lan", "--port", "18789" ]
+      - "${OPENCLAW_GATEWAY_PORT:-18789}"
+    command: [ "node", "dist/index.js", "gateway", "--allow-unconfigured", "--bind", "${OPENCLAW_GATEWAY_BIND:-lan}", "--port", "${OPENCLAW_GATEWAY_PORT:-18789}" ]
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - OPENCLAW_GATEWAY_TOKEN
