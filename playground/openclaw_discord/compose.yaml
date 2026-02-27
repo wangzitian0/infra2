@@ -95,8 +95,7 @@ services:
             channels: {
               discord: {
                 enabled: $$discordEnabled,
-                token: $$discordToken,
-                dmPolicy: "pairing"
+                token: $$discordToken
               }
             },
             gateway: {
