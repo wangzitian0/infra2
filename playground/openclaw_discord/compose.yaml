@@ -7,6 +7,7 @@ services:
       - "18789"
     command: [ "node", "dist/index.js", "gateway", "--allow-unconfigured", "--bind", "${OPENCLAW_GATEWAY_BIND:-lan}", "--port", "${OPENCLAW_GATEWAY_PORT:-18789}" ]
     environment:
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - OPENCLAW_GATEWAY_TOKEN
       - OPENCLAW_GATEWAY_BIND
       - OPENCLAW_GATEWAY_PORT
