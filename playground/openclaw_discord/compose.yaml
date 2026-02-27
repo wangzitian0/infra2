@@ -65,15 +65,15 @@ services:
         apk add --no-cache jq
 
         # Generate openclaw.json using jq (safe escaping of special chars)
-        jq -n 
-          --arg lastTouchedVersion "2026.2.6" 
-          --arg provider "${LLM_PROVIDER}" 
-          --arg baseUrl "${LLM_BASE_URL}" 
-          --arg apiKey "${LLM_API_KEY}" 
-          --arg modelId "${LLM_MODEL_ID}" 
-          --arg modelName "${LLM_MODEL_NAME}" 
-          --argjson discordEnabled "${DISCORD_ENABLED}" 
-          --arg discordToken "${DISCORD_TOKEN}" 
+        jq -n \
+          --arg lastTouchedVersion "2026.2.6" \
+          --arg provider "${LLM_PROVIDER}" \
+          --arg baseUrl "${LLM_BASE_URL}" \
+          --arg apiKey "${LLM_API_KEY}" \
+          --arg modelId "${LLM_MODEL_ID}" \
+          --arg modelName "${LLM_MODEL_NAME}" \
+          --argjson discordEnabled "${DISCORD_ENABLED}" \
+          --arg discordToken "${DISCORD_TOKEN}" \
           '{
             meta: { lastTouchedVersion: $$lastTouchedVersion },
             models: {
