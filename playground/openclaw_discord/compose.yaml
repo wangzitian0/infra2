@@ -5,7 +5,7 @@ services:
     restart: always
     expose:
       - "18789"
-    command: [ "node", "dist/index.js", "gateway", "--allow-unconfigured", "--bind", "0.0.0.0", "--port", "18789" ]
+    command: [ "node", "dist/index.js", "gateway", "--allow-unconfigured", "--bind", "lan", "--port", "18789" ]
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - OPENCLAW_GATEWAY_TOKEN
