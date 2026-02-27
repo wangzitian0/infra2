@@ -5,7 +5,7 @@ This directory contains the Docker Compose configuration for deploying [OpenClaw
 ## Architecture
 
 - **Service**: OpenClaw Gateway
-- **Network**: Connected to Dokploy's shared Docker network (`dokploy-network`); container listens on `0.0.0.0:18789` internally and is exposed externally via Traefik HTTP routing.
+- **Network**: Connected to Dokploy's shared Docker network (`dokploy-network`); container listens on `0.0.0.0:${OPENCLAW_GATEWAY_PORT}` internally and is exposed externally via Traefik HTTP routing.
 - **Storage**: Named Docker volume `openclaw-discord-data` for persistence across redeploys.
 - **Configuration**: **100% environment-driven** — no hardcoded secrets.
 
@@ -39,6 +39,12 @@ All configuration is driven by environment variables. The `init-config` containe
 | `LLM_MODEL_ID` | `glm-5` | Model ID |
 | `LLM_MODEL_NAME` | `GLM-5` | Model display name |
 | `DISCORD_ENABLED` | `true` | Enable discord channel |
+| `DISCORD_DM_ENABLED` | `true` | Enable Discord DM handling |
+| `DISCORD_DM_POLICY` | `open` | DM policy (`open` / `pairing` / `disabled`) |
+| `DISCORD_GROUP_POLICY` | `open` | Guild policy (`open` / `allowlist` / `disabled`) |
+| `DISCORD_GROUP_REQUIRE_MENTION` | `false` | Require `@bot` mention in guild channels |
+| `OPENCLAW_GATEWAY_BIND` | `lan` | Gateway bind mode |
+| `OPENCLAW_GATEWAY_PORT` | `18789` | Internal gateway port |
 
 ## Deployment Guide (Dokploy)
 
@@ -62,3 +68,15 @@ All configuration is driven by environment variables. The `init-config` containe
 **Solution**:
 - Verify `DISCORD_TOKEN` in Dokploy.
 - Ensure **Message Content Intent** is toggled ON in the [Discord Developer Portal](https://discord.com/developers/applications).
+
+### Bot Online But No Reply
+
+**Symptom**: Bot is logged in, but DM or guild messages get no response.
+
+**Cause**:
+- DM policy is `pairing` and sender is not approved yet.
+- Guild `requireMention` is `true` and message does not mention bot.
+
+**Solution**:
+- For "reply to any DM", set `DISCORD_DM_POLICY=open`.
+- For "reply in guild without mention", set `DISCORD_GROUP_REQUIRE_MENTION=false`.

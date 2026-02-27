@@ -47,6 +47,10 @@ services:
     environment:
       - DISCORD_ENABLED=${DISCORD_ENABLED:-true}
       - DISCORD_TOKEN
+      - DISCORD_DM_ENABLED=${DISCORD_DM_ENABLED:-true}
+      - DISCORD_DM_POLICY=${DISCORD_DM_POLICY:-open}
+      - DISCORD_GROUP_POLICY=${DISCORD_GROUP_POLICY:-open}
+      - DISCORD_GROUP_REQUIRE_MENTION=${DISCORD_GROUP_REQUIRE_MENTION:-false}
       - LLM_PROVIDER=${LLM_PROVIDER:-coding}
       - LLM_BASE_URL=${LLM_BASE_URL:-https://api.z.ai/api/coding/paas/v4}
       - LLM_API_KEY
@@ -75,6 +79,10 @@ services:
           --arg modelName "${LLM_MODEL_NAME}" \
           --argjson discordEnabled "${DISCORD_ENABLED}" \
           --arg discordToken "${DISCORD_TOKEN}" \
+          --argjson discordDmEnabled "${DISCORD_DM_ENABLED}" \
+          --arg discordDmPolicy "${DISCORD_DM_POLICY}" \
+          --arg discordGroupPolicy "${DISCORD_GROUP_POLICY}" \
+          --argjson discordGroupRequireMention "${DISCORD_GROUP_REQUIRE_MENTION}" \
           '{
             meta: { lastTouchedVersion: $$lastTouchedVersion },
             models: {
@@ -96,7 +104,17 @@ services:
             channels: {
               discord: {
                 enabled: $$discordEnabled,
-                token: $$discordToken
+                token: $$discordToken,
+                dm: {
+                  enabled: $$discordDmEnabled,
+                  policy: $$discordDmPolicy
+                },
+                groupPolicy: $$discordGroupPolicy,
+                guilds: {
+                  "*": {
+                    requireMention: $$discordGroupRequireMention
+                  }
+                }
               }
             },
             gateway: {
