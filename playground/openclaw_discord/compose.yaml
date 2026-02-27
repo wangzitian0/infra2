@@ -105,10 +105,12 @@ services:
               discord: {
                 enabled: $$discordEnabled,
                 token: $$discordToken,
-                dm: {
-                  enabled: $$discordDmEnabled,
-                  policy: $$discordDmPolicy
-                },
+                dm: (
+                  {
+                    enabled: $$discordDmEnabled,
+                    policy: $$discordDmPolicy
+                  } + (if $$discordDmPolicy == "open" then { allowFrom: ["*"] } else {} end)
+                ),
                 groupPolicy: $$discordGroupPolicy,
                 guilds: {
                   "*": {
