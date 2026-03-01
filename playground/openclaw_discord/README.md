@@ -5,7 +5,7 @@ This directory contains the Docker Compose configuration for deploying [OpenClaw
 ## Architecture
 
 - **Service**: OpenClaw Gateway
-- **Network**: Connected to Dokploy's shared Docker network (`dokploy-network`); container listens on `0.0.0.0:${OPENCLAW_GATEWAY_PORT}` internally and is exposed externally via Traefik HTTP routing.
+- **Network**: Connected to Dokploy's shared Docker network (`dokploy-network`); container listens according to `OPENCLAW_GATEWAY_BIND` (default `lan`) on `${OPENCLAW_GATEWAY_PORT}` internally and is exposed externally via Traefik HTTP routing.
 - **Storage**: Named Docker volume `openclaw-discord-data` for persistence across redeploys.
 - **Configuration**: **100% environment-driven** — no hardcoded secrets.
 
@@ -50,7 +50,7 @@ All configuration is driven by environment variables. The `init-config` containe
 
 1.  **Git Provider Deployment**:
     - Connect this repository to Dokploy.
-    - Point "Compose Path" to `repo/playground/openclaw_discord/compose.yaml`.
+    - Point "Compose Path" to `playground/openclaw_discord/compose.yaml`.
     - Set the Environment Variables in Dokploy UI.
 
 2.  **Verify**:

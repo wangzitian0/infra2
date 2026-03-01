@@ -1,6 +1,6 @@
 services:
   openclaw:
-    # Pin to v2026.2.6 digest — :latest broke feishu plugin loading (v2026.2.17+ changed plugin SDK)
+    # Pin to v2026.2.6 digest — :latest broke existing plugin loading (v2026.2.17+ changed plugin SDK)
     image: ghcr.io/openclaw/openclaw@sha256:4efc318a6570e4aac66d8ce0ab94c9a577c2f5d4afe914aa73e9678f82799e26
     restart: always
     expose:
