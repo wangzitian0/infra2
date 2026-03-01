@@ -51,6 +51,8 @@ services:
       - FEISHU_APP_SECRET
       - FEISHU_VERIFICATION_TOKEN
       - FEISHU_ENCRYPT_KEY
+      - OPENCLAW_GATEWAY_TOKEN
+      - GOG_KEYRING_PASSWORD
       - LLM_PROVIDER=${LLM_PROVIDER:-coding}
       - LLM_BASE_URL=${LLM_BASE_URL:-https://api.z.ai/api/coding/paas/v4}
       - LLM_API_KEY
@@ -68,6 +70,8 @@ services:
         : "${FEISHU_VERIFICATION_TOKEN:?FEISHU_VERIFICATION_TOKEN is required}"
         : "${FEISHU_ENCRYPT_KEY:?FEISHU_ENCRYPT_KEY is required}"
         : "${LLM_API_KEY:?LLM_API_KEY is required}"
+        : "${OPENCLAW_GATEWAY_TOKEN:?OPENCLAW_GATEWAY_TOKEN is required}"
+        : "${GOG_KEYRING_PASSWORD:?GOG_KEYRING_PASSWORD is required}"
 
         # Install jq for safe JSON generation
         apk add --no-cache jq
