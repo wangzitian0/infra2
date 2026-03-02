@@ -46,6 +46,16 @@ All configuration is driven by environment variables. The `init-config` containe
 | `OPENCLAW_GATEWAY_BIND` | `lan` | Gateway bind mode |
 | `OPENCLAW_GATEWAY_PORT` | `18789` | Internal gateway port |
 
+## Config Persistence
+
+The `init-config` container only generates `openclaw.json` **on first deploy** (when the file does not exist). Subsequent redeploys skip generation, preserving any changes made via the OpenClaw dashboard UI (e.g., adding bot accounts, adjusting policies).
+
+To **reset** the config to environment variable defaults, manually delete the file and redeploy:
+```bash
+docker exec <container> rm /home/node/.openclaw/openclaw.json
+# Then redeploy via Dokploy
+```
+
 ## Deployment Guide (Dokploy)
 
 1.  **Git Provider Deployment**:
