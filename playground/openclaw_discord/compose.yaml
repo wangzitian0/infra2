@@ -73,6 +73,13 @@ services:
         # Install jq for safe JSON generation
         apk add --no-cache jq
 
+        # Skip generation if config already exists (preserves UI edits across redeploys)
+        if [ -f /data/openclaw.json ]; then
+          echo "openclaw.json already exists, skipping generation (preserving existing config)"
+          chown -R 1000:1000 /data
+          exit 0
+        fi
+
         # Generate openclaw.json using jq (safe escaping of special chars)
         jq -n \
           --arg lastTouchedVersion "2026.2.6" \
