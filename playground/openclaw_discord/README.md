@@ -5,6 +5,7 @@ This directory contains the Docker Compose configuration for deploying [OpenClaw
 ## Architecture
 
 - **Service**: OpenClaw Gateway
+- **Version**: Pinned to stable release `ghcr.io/openclaw/openclaw:2026.3.13-1`
 - **Network**: Connected to Dokploy's shared Docker network (`dokploy-network`); container listens on `0.0.0.0:${OPENCLAW_GATEWAY_PORT}` internally and is exposed externally via Traefik HTTP routing.
 - **Storage**: Named Docker volume `openclaw-discord-data` for persistence across redeploys.
 - **Configuration**: **100% environment-driven** — no hardcoded secrets.

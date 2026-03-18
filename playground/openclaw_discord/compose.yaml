@@ -1,7 +1,7 @@
 services:
   openclaw:
-    # v2026.3.8 — gpt-5.4 support, provider bug fixes, Brave Search LLM context
-    image: ghcr.io/openclaw/openclaw:latest
+    # Pin to the latest stable OpenClaw release to avoid drift from :latest.
+    image: ghcr.io/openclaw/openclaw:2026.3.13-1
     restart: always
     expose:
       - "${OPENCLAW_GATEWAY_PORT:-18789}"
