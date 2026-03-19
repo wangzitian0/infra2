@@ -5,9 +5,65 @@ services:
     restart: always
     expose:
       - "${OPENCLAW_GATEWAY_PORT:-18789}"
-    command: [ "node", "dist/index.js", "gateway", "--allow-unconfigured", "--bind", "${OPENCLAW_GATEWAY_BIND:-lan}", "--port", "${OPENCLAW_GATEWAY_PORT:-18789}" ]
+    command:
+      - /bin/sh
+      - -lc
+      - |
+        set -eu
+
+        node dist/index.js gateway --allow-unconfigured --bind "$${OPENCLAW_GATEWAY_BIND:-lan}" --port "$${OPENCLAW_GATEWAY_PORT:-18789}" &
+        gateway_pid=$$!
+
+        cleanup() {
+          kill "$$gateway_pid" 2>/dev/null || true
+        }
+        trap cleanup INT TERM EXIT
+
+        grace_seconds="$${OPENCLAW_CHANNEL_WATCHDOG_GRACE_SECONDS:-120}"
+        interval_seconds="$${OPENCLAW_CHANNEL_WATCHDOG_INTERVAL_SECONDS:-30}"
+
+        sleep "$$grace_seconds"
+
+        while kill -0 "$$gateway_pid" 2>/dev/null; do
+          if ! status_json="$$(openclaw channels status --json 2>/dev/null)"; then
+            sleep "$$interval_seconds"
+            continue
+          fi
+
+          if ! printf '%s' "$$status_json" | node -e '
+            let data = "";
+            process.stdin.on("data", (chunk) => {
+              data += chunk;
+            });
+            process.stdin.on("end", () => {
+              try {
+                const status = JSON.parse(data);
+                const accounts = Object.values(status.channelAccounts || {}).flat();
+                const unhealthy = accounts.filter((account) => account.enabled !== false && account.configured && account.running && account.connected !== true);
+                if (unhealthy.length > 0) {
+                  console.error(`Disconnected accounts: $${unhealthy.map((account) => account.accountId).join(",")}`);
+                  process.exit(1);
+                }
+              } catch (error) {
+                console.error(`channel watchdog parse skipped: $${error}`);
+              }
+            });
+          '; then
+            echo "channel watchdog: disconnected Discord account detected; exiting gateway for Docker restart"
+            kill "$$gateway_pid" 2>/dev/null || true
+            wait "$$gateway_pid" || true
+            exit 1
+          fi
+
+          sleep "$$interval_seconds"
+        done
+
+        wait "$$gateway_pid"
     environment:
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - OPENCLAW_LOG_LEVEL=${OPENCLAW_LOG_LEVEL:-${LOG_LEVEL:-INFO}}
+      - OPENCLAW_DIAGNOSTICS=${OPENCLAW_DIAGNOSTICS:-}
+      - OPENCLAW_CHANNEL_WATCHDOG_GRACE_SECONDS=${OPENCLAW_CHANNEL_WATCHDOG_GRACE_SECONDS:-120}
+      - OPENCLAW_CHANNEL_WATCHDOG_INTERVAL_SECONDS=${OPENCLAW_CHANNEL_WATCHDOG_INTERVAL_SECONDS:-30}
       - OPENCLAW_GATEWAY_TOKEN
       - OPENCLAW_GATEWAY_BIND
       - OPENCLAW_GATEWAY_PORT
@@ -23,9 +79,26 @@ services:
     networks:
       - dokploy-network
     healthcheck:
-      # OpenClaw is a WebSocket service, not HTTP
-      # Use process check instead of HTTP endpoint check
-      test: [ "CMD-SHELL", "pgrep -f 'openclaw-gateway' > /dev/null || exit 1" ]
+      # Surface per-account Discord connectivity in container health status.
+      test:
+        - CMD-SHELL
+        - >
+          status_json="$$(openclaw channels status --json 2>/dev/null)" &&
+          printf '%s' "$$status_json" | node -e '
+            let data = "";
+            process.stdin.on("data", (chunk) => {
+              data += chunk;
+            });
+            process.stdin.on("end", () => {
+              const status = JSON.parse(data);
+              const accounts = Object.values(status.channelAccounts || {}).flat();
+              const unhealthy = accounts.filter((account) => account.enabled !== false && account.configured && account.running && account.connected !== true);
+              if (unhealthy.length > 0) {
+                console.error(`Disconnected accounts: $${unhealthy.map((account) => account.accountId).join(",")}`);
+                process.exit(1);
+              }
+            });
+          '
       interval: 30s
       timeout: 10s
       retries: 3
@@ -56,6 +129,7 @@ services:
       - LLM_API_KEY
       - LLM_MODEL_ID=${LLM_MODEL_ID:-glm-5}
       - LLM_MODEL_NAME=${LLM_MODEL_NAME:-GLM-5}
+      - TIANCLAW_MODEL=${TIANCLAW_MODEL:-openai-codex/gpt-5.4}
       - OPENCLAW_GATEWAY_TOKEN
       - GOG_KEYRING_PASSWORD
     command:
@@ -65,35 +139,49 @@ services:
         set -euo pipefail
 
         # Validate required environment variables
-        : "${DISCORD_TOKEN:?DISCORD_TOKEN is required}"
-        : "${LLM_API_KEY:?LLM_API_KEY is required}"
-        : "${OPENCLAW_GATEWAY_TOKEN:?OPENCLAW_GATEWAY_TOKEN is required}"
-        : "${GOG_KEYRING_PASSWORD:?GOG_KEYRING_PASSWORD is required}"
+        : "$${DISCORD_TOKEN:?DISCORD_TOKEN is required}"
+        : "$${LLM_API_KEY:?LLM_API_KEY is required}"
+        : "$${OPENCLAW_GATEWAY_TOKEN:?OPENCLAW_GATEWAY_TOKEN is required}"
+        : "$${GOG_KEYRING_PASSWORD:?GOG_KEYRING_PASSWORD is required}"
 
         # Install jq for safe JSON generation
         apk add --no-cache jq
 
-        # Skip generation if config already exists (preserves UI edits across redeploys)
+        # Preserve existing config, but still enforce selected declarative overrides.
         if [ -f /data/openclaw.json ]; then
-          echo "openclaw.json already exists, skipping generation (preserving existing config)"
+          jq \
+            --arg tianclawModel "$${TIANCLAW_MODEL:-openai-codex/gpt-5.4}" \
+            '
+              .agents.list = (
+                (.agents.list // []) as $$agents
+                | if any($$agents[]?; .id == "tianclaw") then
+                    [ $$agents[] | if .id == "tianclaw" then .model = $$tianclawModel else . end ]
+                  else
+                    $$agents
+                  end
+              )
+            ' /data/openclaw.json > /data/openclaw.json.tmp
+          mv /data/openclaw.json.tmp /data/openclaw.json
+          echo "openclaw.json already exists, patched declarative overrides"
           chown -R 1000:1000 /data
           exit 0
         fi
 
         # Generate openclaw.json using jq (safe escaping of special chars)
         jq -n \
-          --arg lastTouchedVersion "2026.2.6" \
-          --arg provider "${LLM_PROVIDER}" \
-          --arg baseUrl "${LLM_BASE_URL}" \
-          --arg apiKey "${LLM_API_KEY}" \
-          --arg modelId "${LLM_MODEL_ID}" \
-          --arg modelName "${LLM_MODEL_NAME}" \
-          --argjson discordEnabled "${DISCORD_ENABLED}" \
-          --arg discordToken "${DISCORD_TOKEN}" \
-          --argjson discordDmEnabled "${DISCORD_DM_ENABLED:-true}" \
-          --arg discordDmPolicy "${DISCORD_DM_POLICY:-open}" \
-          --arg discordGroupPolicy "${DISCORD_GROUP_POLICY:-open}" \
-          --argjson discordGroupRequireMention "${DISCORD_GROUP_REQUIRE_MENTION:-false}" \
+          --arg lastTouchedVersion "2026.3.13-1" \
+          --arg provider "$${LLM_PROVIDER}" \
+          --arg baseUrl "$${LLM_BASE_URL}" \
+          --arg apiKey "$${LLM_API_KEY}" \
+          --arg modelId "$${LLM_MODEL_ID}" \
+          --arg modelName "$${LLM_MODEL_NAME}" \
+          --arg tianclawModel "$${TIANCLAW_MODEL:-openai-codex/gpt-5.4}" \
+          --argjson discordEnabled "$${DISCORD_ENABLED}" \
+          --arg discordToken "$${DISCORD_TOKEN}" \
+          --argjson discordDmEnabled "$${DISCORD_DM_ENABLED:-true}" \
+          --arg discordDmPolicy "$${DISCORD_DM_POLICY:-open}" \
+          --arg discordGroupPolicy "$${DISCORD_GROUP_POLICY:-open}" \
+          --argjson discordGroupRequireMention "$${DISCORD_GROUP_REQUIRE_MENTION:-false}" \
           '{
             meta: { lastTouchedVersion: $$lastTouchedVersion },
             models: {
@@ -110,7 +198,15 @@ services:
               defaults: {
                 model: { primary: "\($$provider)/\($$modelId)" },
                 maxConcurrent: 4
-              }
+              },
+              list: [
+                {
+                  id: "tianclaw",
+                  name: "TianClaws",
+                  workspace: "/home/node/.openclaw/workspace/agents/tianclaw",
+                  model: $$tianclawModel
+                }
+              ]
             },
             channels: {
               discord: {

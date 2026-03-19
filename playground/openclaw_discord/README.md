@@ -39,6 +39,7 @@ All configuration is driven by environment variables. The `init-config` containe
 | `LLM_BASE_URL` | `https://api.z.ai/api/coding/paas/v4` | API endpoint |
 | `LLM_MODEL_ID` | `glm-5` | Model ID |
 | `LLM_MODEL_NAME` | `GLM-5` | Model display name |
+| `TIANCLAW_MODEL` | `openai-codex/gpt-5.4` | Model override for the `tianclaw` agent |
 | `DISCORD_ENABLED` | `true` | Enable discord channel |
 | `DISCORD_DM_ENABLED` | `true` | Enable Discord DM handling |
 | `DISCORD_DM_POLICY` | `open` | DM policy (`open` / `pairing` / `disabled`) |
@@ -46,10 +47,17 @@ All configuration is driven by environment variables. The `init-config` containe
 | `DISCORD_GROUP_REQUIRE_MENTION` | `false` | Require `@bot` mention in guild channels |
 | `OPENCLAW_GATEWAY_BIND` | `lan` | Gateway bind mode |
 | `OPENCLAW_GATEWAY_PORT` | `18789` | Internal gateway port |
+| `OPENCLAW_LOG_LEVEL` | `INFO` | Framework-recognized log level override for file + console logs |
+| `OPENCLAW_DIAGNOSTICS` | _empty_ | Optional targeted diagnostics flags, passed through to OpenClaw unchanged |
+| `OPENCLAW_CHANNEL_WATCHDOG_GRACE_SECONDS` | `120` | Initial delay before the channel watchdog starts checking account connectivity |
+| `OPENCLAW_CHANNEL_WATCHDOG_INTERVAL_SECONDS` | `30` | How often the channel watchdog checks `openclaw channels status --json` |
+| `TIANCLAW_MODEL` | `openai-codex/gpt-5.4` | Model override for the `tianclaw` agent |
+
+`LOG_LEVEL` is kept as a backward-compatible fallback in `compose.yaml`, but OpenClaw itself reads `OPENCLAW_LOG_LEVEL`.
 
 ## Config Persistence
 
-The `init-config` container only generates `openclaw.json` **on first deploy** (when the file does not exist). Subsequent redeploys skip generation, preserving any changes made via the OpenClaw dashboard UI (e.g., adding bot accounts, adjusting policies).
+The `init-config` container generates `openclaw.json` on first deploy. On subsequent redeploys it preserves the existing file, but still applies selected declarative overrides from environment variables, including `TIANCLAW_MODEL`. This lets operator-managed settings survive while still enforcing critical model routing.
 
 To **reset** the config to environment variable defaults, manually delete the file and redeploy:
 ```bash
@@ -67,6 +75,7 @@ docker exec <container> rm /home/node/.openclaw/openclaw.json
 2.  **Verify**:
     - Open `https://openclaw-discord.your-domain.com/?token=<YOUR_TOKEN>`.
     - Check logs for `[discord] discord channel starting`.
+    - Run `docker inspect --format '{{json .State.Health}}' <container>` and confirm the health check stays `healthy`.
 
 ## Troubleshooting
 
@@ -80,6 +89,18 @@ docker exec <container> rm /home/node/.openclaw/openclaw.json
 - Verify `DISCORD_TOKEN` in Dokploy.
 - Ensure **Message Content Intent** is toggled ON in the [Discord Developer Portal](https://discord.com/developers/applications).
 
+### Container Shows Healthy But Bots Still Disconnect
+
+**Symptom**: The container process is up, but one or more Discord accounts silently stop receiving events.
+
+**Cause**: OpenClaw's internal Discord monitor can leave the process alive while an account is disconnected. This compose file adds a channel watchdog that checks `openclaw channels status --json` and exits the gateway process when a configured account stays disconnected, so Docker restart policy can recycle the container.
+
+**Solution**:
+- Inspect the current account state with `openclaw channels status --json`.
+- Raise `OPENCLAW_LOG_LEVEL=debug` temporarily when investigating reconnect loops.
+- Set `OPENCLAW_DIAGNOSTICS` only for targeted troubleshooting; it increases log volume.
+- Increase `OPENCLAW_CHANNEL_WATCHDOG_GRACE_SECONDS` if the gateway needs more warm-up time after deploy.
+
 ### Bot Online But No Reply
 
 **Symptom**: Bot is logged in, but DM or guild messages get no response.
@@ -91,3 +112,14 @@ docker exec <container> rm /home/node/.openclaw/openclaw.json
 **Solution**:
 - For "reply to any DM", set `DISCORD_DM_POLICY=open`.
 - For "reply in guild without mention", set `DISCORD_GROUP_REQUIRE_MENTION=false`.
+
+### Agent Model Override Not Applied
+
+**Symptom**: `tianclaw` still uses an old model after redeploy.
+
+**Cause**: The running config was created before `TIANCLAW_MODEL` was introduced, or the override was not set in Dokploy.
+
+**Solution**:
+- Set `TIANCLAW_MODEL=openai-codex/gpt-5.4` in Dokploy.
+- Redeploy the compose application.
+- If the agent entry was manually removed from `openclaw.json`, restore it or reset the config file before redeploying.
