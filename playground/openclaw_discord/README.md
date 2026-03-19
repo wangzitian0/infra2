@@ -40,7 +40,7 @@ All configuration is driven by environment variables. The `init-config` containe
 | `LLM_MODEL_ID` | `glm-5` | Model ID |
 | `LLM_MODEL_NAME` | `GLM-5` | Model display name |
 | `TIANCLAW_MODEL` | `openai-codex/gpt-5.4` | Model override for the `tianclaw` agent |
-| `DISCORD_HEALTH_MONITOR_ENABLED` | `false` | Enable OpenClaw's framework-level Discord health-monitor restarts |
+| `OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES` | `0` | Framework channel health-monitor interval; `0` disables health-monitor restarts entirely |
 | `DISCORD_NATIVE_SKILL_COMMANDS` | `false` | Publish per-skill Discord slash commands in addition to core native commands |
 | `DISCORD_ENABLED` | `true` | Enable discord channel |
 | `DISCORD_DM_ENABLED` | `true` | Enable Discord DM handling |
@@ -78,12 +78,12 @@ docker exec <container> rm /home/node/.openclaw/openclaw.json
 
 ## Runtime Policy
 
-This deployment intentionally applies two Discord-specific overrides during `init-config`:
+This deployment intentionally applies two startup overrides during `init-config`:
 
-- `channels.discord.healthMonitor.enabled=false`
+- `gateway.channelHealthCheckMinutes=0`
 - `channels.discord.commands.nativeSkills=false`
 
-The first prevents OpenClaw's framework health-monitor from batch-restarting all Discord accounts on the same 5-minute tick. The second keeps core slash commands but drops per-skill command fan-out, reducing startup-time Discord API traffic.
+The first disables OpenClaw's framework health-monitor, which was batch-restarting all Discord accounts on the same 5-minute tick. The second keeps core slash commands but drops per-skill command fan-out, reducing startup-time Discord API traffic.
 
 ## Troubleshooting
 
@@ -104,7 +104,7 @@ The first prevents OpenClaw's framework health-monitor from batch-restarting all
 **Cause**: OpenClaw's framework health-monitor checks all Discord accounts on the same interval. If several accounts are stuck in `connected=false`, one monitor tick can restart them all together, creating a startup-time Discord API burst.
 
 **Solution**:
-- Keep `DISCORD_HEALTH_MONITOR_ENABLED=false` so the framework does not batch-restart Discord accounts.
+- Keep `OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES=0` so the framework does not batch-restart Discord accounts.
 - Keep `DISCORD_NATIVE_SKILL_COMMANDS=false` to reduce startup slash-command volume.
 - Raise `OPENCLAW_LOG_LEVEL=debug` temporarily when investigating reconnect loops.
 - Set `OPENCLAW_DIAGNOSTICS` only for targeted troubleshooting; it increases log volume.

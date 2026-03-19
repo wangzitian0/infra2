@@ -56,7 +56,7 @@ services:
       - LLM_MODEL_ID=${LLM_MODEL_ID:-glm-5}
       - LLM_MODEL_NAME=${LLM_MODEL_NAME:-GLM-5}
       - TIANCLAW_MODEL=${TIANCLAW_MODEL:-openai-codex/gpt-5.4}
-      - DISCORD_HEALTH_MONITOR_ENABLED=${DISCORD_HEALTH_MONITOR_ENABLED:-false}
+      - OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES=${OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES:-0}
       - DISCORD_NATIVE_SKILL_COMMANDS=${DISCORD_NATIVE_SKILL_COMMANDS:-false}
       - OPENCLAW_GATEWAY_TOKEN
       - GOG_KEYRING_PASSWORD
@@ -79,7 +79,7 @@ services:
         if [ -f /data/openclaw.json ]; then
           jq \
             --arg tianclawModel "$${TIANCLAW_MODEL:-openai-codex/gpt-5.4}" \
-            --argjson discordHealthMonitorEnabled "$${DISCORD_HEALTH_MONITOR_ENABLED:-false}" \
+            --argjson gatewayChannelHealthCheckMinutes "$${OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES:-0}" \
             --argjson discordNativeSkillCommands "$${DISCORD_NATIVE_SKILL_COMMANDS:-false}" \
             '
               .agents.list = (
@@ -90,7 +90,7 @@ services:
                     $$agents
                   end
               )
-              | .channels.discord.healthMonitor.enabled = $$discordHealthMonitorEnabled
+              | .gateway.channelHealthCheckMinutes = $$gatewayChannelHealthCheckMinutes
               | .channels.discord.commands.nativeSkills = $$discordNativeSkillCommands
             ' /data/openclaw.json > /data/openclaw.json.tmp
           mv /data/openclaw.json.tmp /data/openclaw.json
@@ -108,7 +108,7 @@ services:
           --arg modelId "$${LLM_MODEL_ID}" \
           --arg modelName "$${LLM_MODEL_NAME}" \
           --arg tianclawModel "$${TIANCLAW_MODEL:-openai-codex/gpt-5.4}" \
-          --argjson discordHealthMonitorEnabled "$${DISCORD_HEALTH_MONITOR_ENABLED:-false}" \
+          --argjson gatewayChannelHealthCheckMinutes "$${OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES:-0}" \
           --argjson discordNativeSkillCommands "$${DISCORD_NATIVE_SKILL_COMMANDS:-false}" \
           --argjson discordEnabled "$${DISCORD_ENABLED}" \
           --arg discordToken "$${DISCORD_TOKEN}" \
@@ -149,9 +149,6 @@ services:
                 commands: {
                   nativeSkills: $$discordNativeSkillCommands
                 },
-                healthMonitor: {
-                  enabled: $$discordHealthMonitorEnabled
-                },
                 dm: (
                   {
                     enabled: $$discordDmEnabled,
@@ -167,6 +164,7 @@ services:
               }
             },
             gateway: {
+              channelHealthCheckMinutes: $$gatewayChannelHealthCheckMinutes,
               mode: "local",
               controlUi: { dangerouslyDisableDeviceAuth: true },
               trustedProxies: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.1/8"]
