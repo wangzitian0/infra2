@@ -5,65 +5,9 @@ services:
     restart: always
     expose:
       - "${OPENCLAW_GATEWAY_PORT:-18789}"
-    command:
-      - /bin/sh
-      - -lc
-      - |
-        set -eu
-
-        node dist/index.js gateway --allow-unconfigured --bind "$${OPENCLAW_GATEWAY_BIND:-lan}" --port "$${OPENCLAW_GATEWAY_PORT:-18789}" &
-        gateway_pid=$$!
-
-        cleanup() {
-          kill "$$gateway_pid" 2>/dev/null || true
-        }
-        trap cleanup INT TERM EXIT
-
-        grace_seconds="$${OPENCLAW_CHANNEL_WATCHDOG_GRACE_SECONDS:-120}"
-        interval_seconds="$${OPENCLAW_CHANNEL_WATCHDOG_INTERVAL_SECONDS:-30}"
-
-        sleep "$$grace_seconds"
-
-        while kill -0 "$$gateway_pid" 2>/dev/null; do
-          if ! status_json="$$(openclaw channels status --json 2>/dev/null)"; then
-            sleep "$$interval_seconds"
-            continue
-          fi
-
-          if ! printf '%s' "$$status_json" | node -e '
-            let data = "";
-            process.stdin.on("data", (chunk) => {
-              data += chunk;
-            });
-            process.stdin.on("end", () => {
-              try {
-                const status = JSON.parse(data);
-                const accounts = Object.values(status.channelAccounts || {}).flat();
-                const unhealthy = accounts.filter((account) => account.enabled !== false && account.configured && account.running && account.connected !== true);
-                if (unhealthy.length > 0) {
-                  console.error(`Disconnected accounts: $${unhealthy.map((account) => account.accountId).join(",")}`);
-                  process.exit(1);
-                }
-              } catch (error) {
-                console.error(`channel watchdog parse skipped: $${error}`);
-              }
-            });
-          '; then
-            echo "channel watchdog: disconnected Discord account detected; exiting gateway for Docker restart"
-            kill "$$gateway_pid" 2>/dev/null || true
-            wait "$$gateway_pid" || true
-            exit 1
-          fi
-
-          sleep "$$interval_seconds"
-        done
-
-        wait "$$gateway_pid"
     environment:
-      - OPENCLAW_LOG_LEVEL=${OPENCLAW_LOG_LEVEL:-${LOG_LEVEL:-INFO}}
+      - OPENCLAW_LOG_LEVEL=${OPENCLAW_LOG_LEVEL:-${LOG_LEVEL:-info}}
       - OPENCLAW_DIAGNOSTICS=${OPENCLAW_DIAGNOSTICS:-}
-      - OPENCLAW_CHANNEL_WATCHDOG_GRACE_SECONDS=${OPENCLAW_CHANNEL_WATCHDOG_GRACE_SECONDS:-120}
-      - OPENCLAW_CHANNEL_WATCHDOG_INTERVAL_SECONDS=${OPENCLAW_CHANNEL_WATCHDOG_INTERVAL_SECONDS:-30}
       - OPENCLAW_GATEWAY_TOKEN
       - OPENCLAW_GATEWAY_BIND
       - OPENCLAW_GATEWAY_PORT
@@ -79,26 +23,8 @@ services:
     networks:
       - dokploy-network
     healthcheck:
-      # Surface per-account Discord connectivity in container health status.
-      test:
-        - CMD-SHELL
-        - >
-          status_json="$$(openclaw channels status --json 2>/dev/null)" &&
-          printf '%s' "$$status_json" | node -e '
-            let data = "";
-            process.stdin.on("data", (chunk) => {
-              data += chunk;
-            });
-            process.stdin.on("end", () => {
-              const status = JSON.parse(data);
-              const accounts = Object.values(status.channelAccounts || {}).flat();
-              const unhealthy = accounts.filter((account) => account.enabled !== false && account.configured && account.running && account.connected !== true);
-              if (unhealthy.length > 0) {
-                console.error(`Disconnected accounts: $${unhealthy.map((account) => account.accountId).join(",")}`);
-                process.exit(1);
-              }
-            });
-          '
+      # Keep container health tied to the gateway process; Discord account state is handled by OpenClaw runtime policy.
+      test: ["CMD-SHELL", "pgrep -f 'node dist/index.js gateway' >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -130,6 +56,8 @@ services:
       - LLM_MODEL_ID=${LLM_MODEL_ID:-glm-5}
       - LLM_MODEL_NAME=${LLM_MODEL_NAME:-GLM-5}
       - TIANCLAW_MODEL=${TIANCLAW_MODEL:-openai-codex/gpt-5.4}
+      - DISCORD_HEALTH_MONITOR_ENABLED=${DISCORD_HEALTH_MONITOR_ENABLED:-false}
+      - DISCORD_NATIVE_SKILL_COMMANDS=${DISCORD_NATIVE_SKILL_COMMANDS:-false}
       - OPENCLAW_GATEWAY_TOKEN
       - GOG_KEYRING_PASSWORD
     command:
@@ -151,6 +79,8 @@ services:
         if [ -f /data/openclaw.json ]; then
           jq \
             --arg tianclawModel "$${TIANCLAW_MODEL:-openai-codex/gpt-5.4}" \
+            --argjson discordHealthMonitorEnabled "$${DISCORD_HEALTH_MONITOR_ENABLED:-false}" \
+            --argjson discordNativeSkillCommands "$${DISCORD_NATIVE_SKILL_COMMANDS:-false}" \
             '
               .agents.list = (
                 (.agents.list // []) as $$agents
@@ -160,6 +90,8 @@ services:
                     $$agents
                   end
               )
+              | .channels.discord.healthMonitor.enabled = $$discordHealthMonitorEnabled
+              | .channels.discord.commands.nativeSkills = $$discordNativeSkillCommands
             ' /data/openclaw.json > /data/openclaw.json.tmp
           mv /data/openclaw.json.tmp /data/openclaw.json
           echo "openclaw.json already exists, patched declarative overrides"
@@ -176,6 +108,8 @@ services:
           --arg modelId "$${LLM_MODEL_ID}" \
           --arg modelName "$${LLM_MODEL_NAME}" \
           --arg tianclawModel "$${TIANCLAW_MODEL:-openai-codex/gpt-5.4}" \
+          --argjson discordHealthMonitorEnabled "$${DISCORD_HEALTH_MONITOR_ENABLED:-false}" \
+          --argjson discordNativeSkillCommands "$${DISCORD_NATIVE_SKILL_COMMANDS:-false}" \
           --argjson discordEnabled "$${DISCORD_ENABLED}" \
           --arg discordToken "$${DISCORD_TOKEN}" \
           --argjson discordDmEnabled "$${DISCORD_DM_ENABLED:-true}" \
@@ -212,6 +146,12 @@ services:
               discord: {
                 enabled: $$discordEnabled,
                 token: $$discordToken,
+                commands: {
+                  nativeSkills: $$discordNativeSkillCommands
+                },
+                healthMonitor: {
+                  enabled: $$discordHealthMonitorEnabled
+                },
                 dm: (
                   {
                     enabled: $$discordDmEnabled,

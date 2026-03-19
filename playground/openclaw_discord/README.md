@@ -40,6 +40,8 @@ All configuration is driven by environment variables. The `init-config` containe
 | `LLM_MODEL_ID` | `glm-5` | Model ID |
 | `LLM_MODEL_NAME` | `GLM-5` | Model display name |
 | `TIANCLAW_MODEL` | `openai-codex/gpt-5.4` | Model override for the `tianclaw` agent |
+| `DISCORD_HEALTH_MONITOR_ENABLED` | `false` | Enable OpenClaw's framework-level Discord health-monitor restarts |
+| `DISCORD_NATIVE_SKILL_COMMANDS` | `false` | Publish per-skill Discord slash commands in addition to core native commands |
 | `DISCORD_ENABLED` | `true` | Enable discord channel |
 | `DISCORD_DM_ENABLED` | `true` | Enable Discord DM handling |
 | `DISCORD_DM_POLICY` | `open` | DM policy (`open` / `pairing` / `disabled`) |
@@ -47,11 +49,8 @@ All configuration is driven by environment variables. The `init-config` containe
 | `DISCORD_GROUP_REQUIRE_MENTION` | `false` | Require `@bot` mention in guild channels |
 | `OPENCLAW_GATEWAY_BIND` | `lan` | Gateway bind mode |
 | `OPENCLAW_GATEWAY_PORT` | `18789` | Internal gateway port |
-| `OPENCLAW_LOG_LEVEL` | `INFO` | Framework-recognized log level override for file + console logs |
+| `OPENCLAW_LOG_LEVEL` | `info` | Framework-recognized log level override for file + console logs |
 | `OPENCLAW_DIAGNOSTICS` | _empty_ | Optional targeted diagnostics flags, passed through to OpenClaw unchanged |
-| `OPENCLAW_CHANNEL_WATCHDOG_GRACE_SECONDS` | `120` | Initial delay before the channel watchdog starts checking account connectivity |
-| `OPENCLAW_CHANNEL_WATCHDOG_INTERVAL_SECONDS` | `30` | How often the channel watchdog checks `openclaw channels status --json` |
-| `TIANCLAW_MODEL` | `openai-codex/gpt-5.4` | Model override for the `tianclaw` agent |
 
 `LOG_LEVEL` is kept as a backward-compatible fallback in `compose.yaml`, but OpenClaw itself reads `OPENCLAW_LOG_LEVEL`.
 
@@ -77,6 +76,15 @@ docker exec <container> rm /home/node/.openclaw/openclaw.json
     - Check logs for `[discord] discord channel starting`.
     - Run `docker inspect --format '{{json .State.Health}}' <container>` and confirm the health check stays `healthy`.
 
+## Runtime Policy
+
+This deployment intentionally applies two Discord-specific overrides during `init-config`:
+
+- `channels.discord.healthMonitor.enabled=false`
+- `channels.discord.commands.nativeSkills=false`
+
+The first prevents OpenClaw's framework health-monitor from batch-restarting all Discord accounts on the same 5-minute tick. The second keeps core slash commands but drops per-skill command fan-out, reducing startup-time Discord API traffic.
+
 ## Troubleshooting
 
 ### Discord Channel Not Starting
@@ -89,17 +97,17 @@ docker exec <container> rm /home/node/.openclaw/openclaw.json
 - Verify `DISCORD_TOKEN` in Dokploy.
 - Ensure **Message Content Intent** is toggled ON in the [Discord Developer Portal](https://discord.com/developers/applications).
 
-### Container Shows Healthy But Bots Still Disconnect
+### Bots Reconnect In Bursts Or Spam Discord Startup Calls
 
-**Symptom**: The container process is up, but one or more Discord accounts silently stop receiving events.
+**Symptom**: Multiple Discord accounts restart together every few minutes, followed by `deploy-rest:put:error`, `/gateway/bot` fetch failures, or bot identity fetch failures.
 
-**Cause**: OpenClaw's internal Discord monitor can leave the process alive while an account is disconnected. This compose file adds a channel watchdog that checks `openclaw channels status --json` and exits the gateway process when a configured account stays disconnected, so Docker restart policy can recycle the container.
+**Cause**: OpenClaw's framework health-monitor checks all Discord accounts on the same interval. If several accounts are stuck in `connected=false`, one monitor tick can restart them all together, creating a startup-time Discord API burst.
 
 **Solution**:
-- Inspect the current account state with `openclaw channels status --json`.
+- Keep `DISCORD_HEALTH_MONITOR_ENABLED=false` so the framework does not batch-restart Discord accounts.
+- Keep `DISCORD_NATIVE_SKILL_COMMANDS=false` to reduce startup slash-command volume.
 - Raise `OPENCLAW_LOG_LEVEL=debug` temporarily when investigating reconnect loops.
 - Set `OPENCLAW_DIAGNOSTICS` only for targeted troubleshooting; it increases log volume.
-- Increase `OPENCLAW_CHANNEL_WATCHDOG_GRACE_SECONDS` if the gateway needs more warm-up time after deploy.
 
 ### Bot Online But No Reply
 
