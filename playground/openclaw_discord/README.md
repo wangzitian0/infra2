@@ -35,12 +35,13 @@ All configuration is driven by environment variables. The `init-config` containe
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LLM_PROVIDER` | `coding` | Provider name in config |
-| `LLM_BASE_URL` | `https://api.z.ai/api/coding/paas/v4` | API endpoint |
-| `LLM_MODEL_ID` | `glm-5` | Model ID |
-| `LLM_MODEL_NAME` | `GLM-5` | Model display name |
+| `LLM_PROVIDER` | `coding` | Provider name for primary models |
+| `LLM_BASE_URL` | `https://api.z.ai/api/coding/paas/v4` | Primary API endpoint |
+| `LLM_MODEL_ID` | `glm-5` | Primary Model ID |
+| `LLM_MODEL_NAME` | `GLM-5` | Primary Model display name |
 | `TIANCLAW_MODEL` | `openai-codex/gpt-5.4` | Model override for the `tianclaw` agent |
 | `OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES` | `0` | Framework channel health-monitor interval; `0` disables health-monitor restarts entirely |
+| `OPENCLAW_AGENTS_MAX_CONCURRENT` | `4` | Maximum concurrent tasks per agent |
 | `DISCORD_NATIVE_SKILL_COMMANDS` | `false` | Publish per-skill Discord slash commands in addition to core native commands |
 | `DISCORD_ENABLED` | `true` | Enable discord channel |
 | `DISCORD_DM_ENABLED` | `true` | Enable Discord DM handling |
@@ -56,7 +57,7 @@ All configuration is driven by environment variables. The `init-config` containe
 
 ## Config Persistence
 
-The `init-config` container generates `openclaw.json` on first deploy. On subsequent redeploys it preserves the existing file, but still applies selected declarative overrides from environment variables, including `TIANCLAW_MODEL`. This lets operator-managed settings survive while still enforcing critical model routing.
+The `init-config` container generates `openclaw.json` on first deploy. On subsequent redeploys it preserves the existing file, but still applies selected declarative overrides from environment variables, including `TIANCLAW_MODEL`, `OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES`, `DISCORD_NATIVE_SKILL_COMMANDS`, and `OPENCLAW_AGENTS_MAX_CONCURRENT`. This lets operator-managed settings survive while still enforcing critical model routing and behavior.
 
 To **reset** the config to environment variable defaults, manually delete the file and redeploy:
 ```bash
@@ -68,13 +69,30 @@ docker exec <container> rm /home/node/.openclaw/openclaw.json
 
 1.  **Git Provider Deployment**:
     - Connect this repository to Dokploy.
-    - Point "Compose Path" to `repo/playground/openclaw_discord/compose.yaml`.
+    - Point "Compose Path" to `./playground/openclaw_discord/compose.yaml`.
     - Set the Environment Variables in Dokploy UI.
 
 2.  **Verify**:
     - Open `https://openclaw-discord.your-domain.com/?token=<YOUR_TOKEN>`.
     - Check logs for `[discord] discord channel starting`.
     - Run `docker inspect --format '{{json .State.Health}}' <container>` and confirm the health check stays `healthy`.
+
+## Branch Deploy Practice
+
+When validating changes in Dokploy, prefer a **Git branch deploy** over switching the application to `raw` compose:
+
+1. Push the candidate changes to a dedicated branch, for example `fix/openclaw-discord-stability`.
+2. Keep the Dokploy application `sourceType=github`.
+3. Temporarily point the Dokploy application branch at the test branch and redeploy.
+4. Verify:
+   - deployment log shows the expected branch commit
+   - `init-config` exits `0`
+   - gateway logs show `listening on ws://0.0.0.0:${OPENCLAW_GATEWAY_PORT}`
+   - Discord accounts log in cleanly
+   - the public URL returns `HTTP 200`
+5. After verification, either merge the branch or point Dokploy back to `main`.
+
+Avoid the `raw compose` fallback for this service unless you are also prepared to clean up Dokploy metadata. In practice, the Git deployment path is more reliable because Dokploy continues to clone the repository into its expected working directory and keeps `.env` handling, `composePath`, and deployment logs aligned.
 
 ## Runtime Policy
 
@@ -120,6 +138,16 @@ The first disables OpenClaw's framework health-monitor, which was batch-restarti
 **Solution**:
 - For "reply to any DM", set `DISCORD_DM_POLICY=open`.
 - For "reply in guild without mention", set `DISCORD_GROUP_REQUIRE_MENTION=false`.
+
+### Background Tasks/Reasoning Stability
+
+**Symptom**: Complex tasks fail or use the wrong model.
+
+**Cause**: All tasks default to the primary model, which might be too simple or have expired credits.
+
+**Solution**:
+- Point the primary `LLM_*` variables at a more robust model if the current provider is underpowered.
+- If a dedicated reasoning model is needed later, add it to the compose template and document the schema change here before relying on it in Dokploy.
 
 ### Agent Model Override Not Applied
 

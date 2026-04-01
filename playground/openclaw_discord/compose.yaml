@@ -57,6 +57,7 @@ services:
       - LLM_MODEL_NAME=${LLM_MODEL_NAME:-GLM-5}
       - TIANCLAW_MODEL=${TIANCLAW_MODEL:-openai-codex/gpt-5.4}
       - OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES=${OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES:-0}
+      - OPENCLAW_AGENTS_MAX_CONCURRENT=${OPENCLAW_AGENTS_MAX_CONCURRENT:-4}
       - DISCORD_NATIVE_SKILL_COMMANDS=${DISCORD_NATIVE_SKILL_COMMANDS:-false}
       - OPENCLAW_GATEWAY_TOKEN
       - GOG_KEYRING_PASSWORD
@@ -81,6 +82,7 @@ services:
             --arg tianclawModel "$${TIANCLAW_MODEL:-openai-codex/gpt-5.4}" \
             --argjson gatewayChannelHealthCheckMinutes "$${OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES:-0}" \
             --argjson discordNativeSkillCommands "$${DISCORD_NATIVE_SKILL_COMMANDS:-false}" \
+            --argjson agentsMaxConcurrent "$${OPENCLAW_AGENTS_MAX_CONCURRENT:-4}" \
             '
               .agents.list = (
                 (.agents.list // []) as $$agents
@@ -92,6 +94,7 @@ services:
               )
               | .gateway.channelHealthCheckMinutes = $$gatewayChannelHealthCheckMinutes
               | .channels.discord.commands.nativeSkills = $$discordNativeSkillCommands
+              | .agents.defaults.maxConcurrent = $$agentsMaxConcurrent
             ' /data/openclaw.json > /data/openclaw.json.tmp
           mv /data/openclaw.json.tmp /data/openclaw.json
           echo "openclaw.json already exists, patched declarative overrides"
@@ -110,6 +113,7 @@ services:
           --arg tianclawModel "$${TIANCLAW_MODEL:-openai-codex/gpt-5.4}" \
           --argjson gatewayChannelHealthCheckMinutes "$${OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES:-0}" \
           --argjson discordNativeSkillCommands "$${DISCORD_NATIVE_SKILL_COMMANDS:-false}" \
+          --argjson agentsMaxConcurrent "$${OPENCLAW_AGENTS_MAX_CONCURRENT:-4}" \
           --argjson discordEnabled "$${DISCORD_ENABLED}" \
           --arg discordToken "$${DISCORD_TOKEN}" \
           --argjson discordDmEnabled "$${DISCORD_DM_ENABLED:-true}" \
@@ -130,8 +134,8 @@ services:
             },
             agents: {
               defaults: {
-                model: { primary: "\($$provider)/\($$modelId)" },
-                maxConcurrent: 4
+                model: "\($$provider)/\($$modelId)",
+                maxConcurrent: $$agentsMaxConcurrent
               },
               list: [
                 {
