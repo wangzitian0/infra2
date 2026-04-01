@@ -5,9 +5,9 @@ services:
     restart: always
     expose:
       - "${OPENCLAW_GATEWAY_PORT:-18789}"
-    command: [ "node", "dist/index.js", "gateway", "--allow-unconfigured", "--bind", "${OPENCLAW_GATEWAY_BIND:-lan}", "--port", "${OPENCLAW_GATEWAY_PORT:-18789}" ]
     environment:
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - OPENCLAW_LOG_LEVEL=${OPENCLAW_LOG_LEVEL:-${LOG_LEVEL:-info}}
+      - OPENCLAW_DIAGNOSTICS=${OPENCLAW_DIAGNOSTICS:-}
       - OPENCLAW_GATEWAY_TOKEN
       - OPENCLAW_GATEWAY_BIND
       - OPENCLAW_GATEWAY_PORT
@@ -23,9 +23,8 @@ services:
     networks:
       - dokploy-network
     healthcheck:
-      # OpenClaw is a WebSocket service, not HTTP
-      # Use process check instead of HTTP endpoint check
-      test: [ "CMD-SHELL", "pgrep -f 'openclaw-gateway' > /dev/null || exit 1" ]
+      # Keep container health tied to the gateway process; Discord account state is handled by OpenClaw runtime policy.
+      test: ["CMD-SHELL", "pgrep -f 'node dist/index.js gateway' >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -56,6 +55,10 @@ services:
       - LLM_API_KEY
       - LLM_MODEL_ID=${LLM_MODEL_ID:-glm-5}
       - LLM_MODEL_NAME=${LLM_MODEL_NAME:-GLM-5}
+      - TIANCLAW_MODEL=${TIANCLAW_MODEL:-openai-codex/gpt-5.4}
+      - OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES=${OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES:-0}
+      - OPENCLAW_AGENTS_MAX_CONCURRENT=${OPENCLAW_AGENTS_MAX_CONCURRENT:-4}
+      - DISCORD_NATIVE_SKILL_COMMANDS=${DISCORD_NATIVE_SKILL_COMMANDS:-false}
       - OPENCLAW_GATEWAY_TOKEN
       - GOG_KEYRING_PASSWORD
     command:
@@ -65,35 +68,61 @@ services:
         set -euo pipefail
 
         # Validate required environment variables
-        : "${DISCORD_TOKEN:?DISCORD_TOKEN is required}"
-        : "${LLM_API_KEY:?LLM_API_KEY is required}"
-        : "${OPENCLAW_GATEWAY_TOKEN:?OPENCLAW_GATEWAY_TOKEN is required}"
-        : "${GOG_KEYRING_PASSWORD:?GOG_KEYRING_PASSWORD is required}"
+        : "$${DISCORD_TOKEN:?DISCORD_TOKEN is required}"
+        : "$${LLM_API_KEY:?LLM_API_KEY is required}"
+        : "$${OPENCLAW_GATEWAY_TOKEN:?OPENCLAW_GATEWAY_TOKEN is required}"
+        : "$${GOG_KEYRING_PASSWORD:?GOG_KEYRING_PASSWORD is required}"
 
         # Install jq for safe JSON generation
         apk add --no-cache jq
 
-        # Skip generation if config already exists (preserves UI edits across redeploys)
+        # Preserve existing config, but still enforce selected declarative overrides.
         if [ -f /data/openclaw.json ]; then
-          echo "openclaw.json already exists, skipping generation (preserving existing config)"
+          jq \
+            --arg tianclawModel "$${TIANCLAW_MODEL:-openai-codex/gpt-5.4}" \
+            --arg gatewayBind "$${OPENCLAW_GATEWAY_BIND:-lan}" \
+            --argjson gatewayChannelHealthCheckMinutes "$${OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES:-0}" \
+            --argjson discordNativeSkillCommands "$${DISCORD_NATIVE_SKILL_COMMANDS:-false}" \
+            --argjson agentsMaxConcurrent "$${OPENCLAW_AGENTS_MAX_CONCURRENT:-4}" \
+            '
+              .agents.list = (
+                (.agents.list // []) as $$agents
+                | if any($$agents[]?; .id == "tianclaw") then
+                    [ $$agents[] | if .id == "tianclaw" then .model = $$tianclawModel else . end ]
+                  else
+                    $$agents
+                  end
+              )
+              | .gateway.bind = $$gatewayBind
+              | .gateway.channelHealthCheckMinutes = $$gatewayChannelHealthCheckMinutes
+              | .channels.discord.commands.nativeSkills = $$discordNativeSkillCommands
+              | .agents.defaults.maxConcurrent = $$agentsMaxConcurrent
+            ' /data/openclaw.json > /data/openclaw.json.tmp
+          mv /data/openclaw.json.tmp /data/openclaw.json
+          echo "openclaw.json already exists, patched declarative overrides"
           chown -R 1000:1000 /data
           exit 0
         fi
 
         # Generate openclaw.json using jq (safe escaping of special chars)
         jq -n \
-          --arg lastTouchedVersion "2026.2.6" \
-          --arg provider "${LLM_PROVIDER}" \
-          --arg baseUrl "${LLM_BASE_URL}" \
-          --arg apiKey "${LLM_API_KEY}" \
-          --arg modelId "${LLM_MODEL_ID}" \
-          --arg modelName "${LLM_MODEL_NAME}" \
-          --argjson discordEnabled "${DISCORD_ENABLED}" \
-          --arg discordToken "${DISCORD_TOKEN}" \
-          --argjson discordDmEnabled "${DISCORD_DM_ENABLED:-true}" \
-          --arg discordDmPolicy "${DISCORD_DM_POLICY:-open}" \
-          --arg discordGroupPolicy "${DISCORD_GROUP_POLICY:-open}" \
-          --argjson discordGroupRequireMention "${DISCORD_GROUP_REQUIRE_MENTION:-false}" \
+          --arg lastTouchedVersion "2026.3.13-1" \
+          --arg provider "$${LLM_PROVIDER}" \
+          --arg baseUrl "$${LLM_BASE_URL}" \
+          --arg apiKey "$${LLM_API_KEY}" \
+          --arg modelId "$${LLM_MODEL_ID}" \
+          --arg modelName "$${LLM_MODEL_NAME}" \
+          --arg tianclawModel "$${TIANCLAW_MODEL:-openai-codex/gpt-5.4}" \
+          --arg gatewayBind "$${OPENCLAW_GATEWAY_BIND:-lan}" \
+          --argjson gatewayChannelHealthCheckMinutes "$${OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES:-0}" \
+          --argjson discordNativeSkillCommands "$${DISCORD_NATIVE_SKILL_COMMANDS:-false}" \
+          --argjson agentsMaxConcurrent "$${OPENCLAW_AGENTS_MAX_CONCURRENT:-4}" \
+          --argjson discordEnabled "$${DISCORD_ENABLED}" \
+          --arg discordToken "$${DISCORD_TOKEN}" \
+          --argjson discordDmEnabled "$${DISCORD_DM_ENABLED:-true}" \
+          --arg discordDmPolicy "$${DISCORD_DM_POLICY:-open}" \
+          --arg discordGroupPolicy "$${DISCORD_GROUP_POLICY:-open}" \
+          --argjson discordGroupRequireMention "$${DISCORD_GROUP_REQUIRE_MENTION:-false}" \
           '{
             meta: { lastTouchedVersion: $$lastTouchedVersion },
             models: {
@@ -108,14 +137,25 @@ services:
             },
             agents: {
               defaults: {
-                model: { primary: "\($$provider)/\($$modelId)" },
-                maxConcurrent: 4
-              }
+                model: "\($$provider)/\($$modelId)",
+                maxConcurrent: $$agentsMaxConcurrent
+              },
+              list: [
+                {
+                  id: "tianclaw",
+                  name: "TianClaws",
+                  workspace: "/home/node/.openclaw/workspace/agents/tianclaw",
+                  model: $$tianclawModel
+                }
+              ]
             },
             channels: {
               discord: {
                 enabled: $$discordEnabled,
                 token: $$discordToken,
+                commands: {
+                  nativeSkills: $$discordNativeSkillCommands
+                },
                 dm: (
                   {
                     enabled: $$discordDmEnabled,
@@ -131,6 +171,8 @@ services:
               }
             },
             gateway: {
+              bind: $$gatewayBind,
+              channelHealthCheckMinutes: $$gatewayChannelHealthCheckMinutes,
               mode: "local",
               controlUi: { dangerouslyDisableDeviceAuth: true },
               trustedProxies: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.1/8"]
