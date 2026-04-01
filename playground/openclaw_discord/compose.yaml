@@ -80,6 +80,7 @@ services:
         if [ -f /data/openclaw.json ]; then
           jq \
             --arg tianclawModel "$${TIANCLAW_MODEL:-openai-codex/gpt-5.4}" \
+            --arg gatewayBind "$${OPENCLAW_GATEWAY_BIND:-lan}" \
             --argjson gatewayChannelHealthCheckMinutes "$${OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES:-0}" \
             --argjson discordNativeSkillCommands "$${DISCORD_NATIVE_SKILL_COMMANDS:-false}" \
             --argjson agentsMaxConcurrent "$${OPENCLAW_AGENTS_MAX_CONCURRENT:-4}" \
@@ -92,6 +93,7 @@ services:
                     $$agents
                   end
               )
+              | .gateway.bind = $$gatewayBind
               | .gateway.channelHealthCheckMinutes = $$gatewayChannelHealthCheckMinutes
               | .channels.discord.commands.nativeSkills = $$discordNativeSkillCommands
               | .agents.defaults.maxConcurrent = $$agentsMaxConcurrent
@@ -111,6 +113,7 @@ services:
           --arg modelId "$${LLM_MODEL_ID}" \
           --arg modelName "$${LLM_MODEL_NAME}" \
           --arg tianclawModel "$${TIANCLAW_MODEL:-openai-codex/gpt-5.4}" \
+          --arg gatewayBind "$${OPENCLAW_GATEWAY_BIND:-lan}" \
           --argjson gatewayChannelHealthCheckMinutes "$${OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES:-0}" \
           --argjson discordNativeSkillCommands "$${DISCORD_NATIVE_SKILL_COMMANDS:-false}" \
           --argjson agentsMaxConcurrent "$${OPENCLAW_AGENTS_MAX_CONCURRENT:-4}" \
@@ -168,6 +171,7 @@ services:
               }
             },
             gateway: {
+              bind: $$gatewayBind,
               channelHealthCheckMinutes: $$gatewayChannelHealthCheckMinutes,
               mode: "local",
               controlUi: { dangerouslyDisableDeviceAuth: true },

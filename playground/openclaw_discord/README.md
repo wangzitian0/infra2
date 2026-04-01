@@ -57,7 +57,7 @@ All configuration is driven by environment variables. The `init-config` containe
 
 ## Config Persistence
 
-The `init-config` container generates `openclaw.json` on first deploy. On subsequent redeploys it preserves the existing file, but still applies selected declarative overrides from environment variables, including `TIANCLAW_MODEL`, `OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES`, `DISCORD_NATIVE_SKILL_COMMANDS`, and `OPENCLAW_AGENTS_MAX_CONCURRENT`. This lets operator-managed settings survive while still enforcing critical model routing and behavior.
+The `init-config` container generates `openclaw.json` on first deploy. On subsequent redeploys it preserves the existing file, but still applies selected declarative overrides from environment variables, including `OPENCLAW_GATEWAY_BIND`, `TIANCLAW_MODEL`, `OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES`, `DISCORD_NATIVE_SKILL_COMMANDS`, and `OPENCLAW_AGENTS_MAX_CONCURRENT`. This lets operator-managed settings survive while still enforcing critical network, model routing, and runtime behavior.
 
 To **reset** the config to environment variable defaults, manually delete the file and redeploy:
 ```bash
@@ -93,6 +93,8 @@ When validating changes in Dokploy, prefer a **Git branch deploy** over switchin
 5. After verification, either merge the branch or point Dokploy back to `main`.
 
 Avoid the `raw compose` fallback for this service unless you are also prepared to clean up Dokploy metadata. In practice, the Git deployment path is more reliable because Dokploy continues to clone the repository into its expected working directory and keeps `.env` handling, `composePath`, and deployment logs aligned.
+
+One more operational detail: if the persisted `openclaw.json` was ever generated with `gateway.bind=auto`, redeploys can silently fall back to loopback-only listening and the public route will return `502` even though the container is `healthy`. Keep `OPENCLAW_GATEWAY_BIND=lan` in Dokploy and let `init-config` patch `.gateway.bind` on every redeploy.
 
 ## Runtime Policy
 
