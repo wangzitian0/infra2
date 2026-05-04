@@ -1,7 +1,7 @@
 services:
   openclaw:
     # Pin to the latest stable OpenClaw release to avoid drift from :latest.
-    image: ghcr.io/openclaw/openclaw:2026.3.13-1
+    image: ghcr.io/openclaw/openclaw:2026.5.3
     restart: always
     expose:
       - "${OPENCLAW_GATEWAY_PORT:-18789}"
@@ -15,6 +15,7 @@ services:
       - XDG_CONFIG_HOME=/home/node/.openclaw
       - HOME=/home/node
       - NODE_ENV=production
+      - OPENCLAW_SKIP_ONBOARDING=${OPENCLAW_SKIP_ONBOARDING:-true}
     volumes:
       - openclaw-discord-data:/home/node/.openclaw
     depends_on:
@@ -50,12 +51,12 @@ services:
       - DISCORD_DM_POLICY=${DISCORD_DM_POLICY:-open}
       - DISCORD_GROUP_POLICY=${DISCORD_GROUP_POLICY:-open}
       - DISCORD_GROUP_REQUIRE_MENTION=${DISCORD_GROUP_REQUIRE_MENTION:-false}
-      - LLM_PROVIDER=${LLM_PROVIDER:-coding}
-      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.z.ai/api/coding/paas/v4}
+      - LLM_PROVIDER=${LLM_PROVIDER:-github-copilot}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.githubcopilot.com}
       - LLM_API_KEY
-      - LLM_MODEL_ID=${LLM_MODEL_ID:-glm-5}
-      - LLM_MODEL_NAME=${LLM_MODEL_NAME:-GLM-5}
-      - TIANCLAW_MODEL=${TIANCLAW_MODEL:-openai-codex/gpt-5.4}
+      - LLM_MODEL_ID=${LLM_MODEL_ID:-claude-sonnet-4.6}
+      - LLM_MODEL_NAME=${LLM_MODEL_NAME:-Claude Sonnet 4.6}
+      - TIANCLAW_MODEL=${TIANCLAW_MODEL:-openai-codex/gpt-5.5}
       - OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES=${OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES:-0}
       - OPENCLAW_AGENTS_MAX_CONCURRENT=${OPENCLAW_AGENTS_MAX_CONCURRENT:-4}
       - DISCORD_NATIVE_SKILL_COMMANDS=${DISCORD_NATIVE_SKILL_COMMANDS:-false}
@@ -79,7 +80,7 @@ services:
         # Preserve existing config, but still enforce selected declarative overrides.
         if [ -f /data/openclaw.json ]; then
           jq \
-            --arg tianclawModel "$${TIANCLAW_MODEL:-openai-codex/gpt-5.4}" \
+            --arg tianclawModel "$${TIANCLAW_MODEL:-openai-codex/gpt-5.5}" \
             --arg gatewayBind "$${OPENCLAW_GATEWAY_BIND:-lan}" \
             --argjson gatewayChannelHealthCheckMinutes "$${OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES:-0}" \
             --argjson discordNativeSkillCommands "$${DISCORD_NATIVE_SKILL_COMMANDS:-false}" \
@@ -106,13 +107,13 @@ services:
 
         # Generate openclaw.json using jq (safe escaping of special chars)
         jq -n \
-          --arg lastTouchedVersion "2026.3.13-1" \
+          --arg lastTouchedVersion "2026.5.3" \
           --arg provider "$${LLM_PROVIDER}" \
           --arg baseUrl "$${LLM_BASE_URL}" \
           --arg apiKey "$${LLM_API_KEY}" \
           --arg modelId "$${LLM_MODEL_ID}" \
           --arg modelName "$${LLM_MODEL_NAME}" \
-          --arg tianclawModel "$${TIANCLAW_MODEL:-openai-codex/gpt-5.4}" \
+          --arg tianclawModel "$${TIANCLAW_MODEL:-openai-codex/gpt-5.5}" \
           --arg gatewayBind "$${OPENCLAW_GATEWAY_BIND:-lan}" \
           --argjson gatewayChannelHealthCheckMinutes "$${OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES:-0}" \
           --argjson discordNativeSkillCommands "$${DISCORD_NATIVE_SKILL_COMMANDS:-false}" \

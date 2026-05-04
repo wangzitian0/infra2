@@ -5,10 +5,10 @@ This directory contains the Docker Compose configuration for deploying [OpenClaw
 ## Architecture
 
 - **Service**: OpenClaw Gateway
-- **Version**: Pinned to stable release `ghcr.io/openclaw/openclaw:2026.3.13-1`
+- **Version**: Pinned to stable release `ghcr.io/openclaw/openclaw:2026.5.3`
 - **Network**: Connected to Dokploy's shared Docker network (`dokploy-network`); container listens on `0.0.0.0:${OPENCLAW_GATEWAY_PORT}` internally and is exposed externally via Traefik HTTP routing.
 - **Storage**: Named Docker volume `openclaw-discord-data` for persistence across redeploys.
-- **Configuration**: **100% environment-driven** — no hardcoded secrets.
+- **Configuration**: First deploy is environment-driven, but the live source of truth becomes the persisted `/home/node/.openclaw/openclaw.json`.
 
 ## Prerequisites
 
@@ -21,6 +21,8 @@ This directory contains the Docker Compose configuration for deploying [OpenClaw
 ## Configuration (Environment Variables)
 
 All configuration is driven by environment variables. The `init-config` container generates `openclaw.json` at startup.
+
+Important: after the first successful deploy, OpenClaw reads the persisted config file from the Docker volume, not this repo's defaults. If you change a model, Discord account, or cron job in the dashboard UI, those changes survive redeploys until the persisted file is deleted or explicitly updated.
 
 ### Required Variables
 
@@ -35,14 +37,15 @@ All configuration is driven by environment variables. The `init-config` containe
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LLM_PROVIDER` | `coding` | Provider name for primary models |
-| `LLM_BASE_URL` | `https://api.z.ai/api/coding/paas/v4` | Primary API endpoint |
-| `LLM_MODEL_ID` | `glm-5` | Primary Model ID |
-| `LLM_MODEL_NAME` | `GLM-5` | Primary Model display name |
-| `TIANCLAW_MODEL` | `openai-codex/gpt-5.4` | Model override for the `tianclaw` agent |
+| `LLM_PROVIDER` | `github-copilot` | Provider name for primary models |
+| `LLM_BASE_URL` | `https://api.githubcopilot.com` | Primary API endpoint |
+| `LLM_MODEL_ID` | `claude-sonnet-4.6` | Primary Model ID |
+| `LLM_MODEL_NAME` | `Claude Sonnet 4.6` | Primary Model display name |
+| `TIANCLAW_MODEL` | `openai-codex/gpt-5.5` | Model override for the `tianclaw` agent |
 | `OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES` | `0` | Framework channel health-monitor interval; `0` disables health-monitor restarts entirely |
 | `OPENCLAW_AGENTS_MAX_CONCURRENT` | `4` | Maximum concurrent tasks per agent |
 | `DISCORD_NATIVE_SKILL_COMMANDS` | `false` | Publish per-skill Discord slash commands in addition to core native commands |
+| `OPENCLAW_SKIP_ONBOARDING` | `true` | Skip interactive onboarding in automated Docker deployments |
 | `DISCORD_ENABLED` | `true` | Enable discord channel |
 | `DISCORD_DM_ENABLED` | `true` | Enable Discord DM handling |
 | `DISCORD_DM_POLICY` | `open` | DM policy (`open` / `pairing` / `disabled`) |
@@ -58,6 +61,16 @@ All configuration is driven by environment variables. The `init-config` containe
 ## Config Persistence
 
 The `init-config` container generates `openclaw.json` on first deploy. On subsequent redeploys it preserves the existing file, but still applies selected declarative overrides from environment variables, including `OPENCLAW_GATEWAY_BIND`, `TIANCLAW_MODEL`, `OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES`, `DISCORD_NATIVE_SKILL_COMMANDS`, and `OPENCLAW_AGENTS_MAX_CONCURRENT`. This lets operator-managed settings survive while still enforcing critical network, model routing, and runtime behavior.
+
+This means there are multiple configuration layers:
+
+1. Repo defaults (`compose.yaml`, `.env.example`, this README)
+2. Dokploy environment variables
+3. Persisted live config (`/home/node/.openclaw/openclaw.json`)
+4. Runtime overrides such as `cron.payload.model`
+5. Discord-side profile state (bot username / guild nickname)
+
+For model or nickname migrations, always verify the live layers instead of trusting repo defaults.
 
 To **reset** the config to environment variable defaults, manually delete the file and redeploy:
 ```bash
@@ -76,6 +89,7 @@ docker exec <container> rm /home/node/.openclaw/openclaw.json
     - Open `https://openclaw-discord.your-domain.com/?token=<YOUR_TOKEN>`.
     - Check logs for `[discord] discord channel starting`.
     - Run `docker inspect --format '{{json .State.Health}}' <container>` and confirm the health check stays `healthy`.
+    - If you are changing models or names on an existing deployment, follow [SWITCHING.md](./SWITCHING.md) instead of only editing env vars.
 
 ## Branch Deploy Practice
 
@@ -129,6 +143,29 @@ The first disables OpenClaw's framework health-monitor, which was batch-restarti
 - Raise `OPENCLAW_LOG_LEVEL=debug` temporarily when investigating reconnect loops.
 - Set `OPENCLAW_DIAGNOSTICS` only for targeted troubleshooting; it increases log volume.
 
+### Model Change Did Not Take Effect
+
+**Symptom**: Dashboard, cron runs, or logs still show an old model after changing Dokploy env vars.
+
+**Cause**: The persisted `openclaw.json` still contains old `agents.*.model`, provider catalogs, or cron-level `payload.model` overrides.
+
+**Solution**:
+- Inspect the live config, not just this repo.
+- Update the provider model catalog if you introduce a new model ID.
+- Update agent defaults and any cron jobs with explicit `payload.model`.
+- See the full migration checklist in [SWITCHING.md](./SWITCHING.md).
+
+### Discord Name Did Not Change
+
+**Symptom**: OpenClaw account names changed, but Discord still shows the old bot name.
+
+**Cause**: OpenClaw account labels and Discord platform usernames/nicknames are separate layers.
+
+**Solution**:
+- Update `channels.discord.accounts.*.name` for OpenClaw-side labels.
+- Update the real Discord bot username or guild nickname separately in Discord or via Discord API.
+- Verify both layers after the switch.
+
 ### Bot Online But No Reply
 
 **Symptom**: Bot is logged in, but DM or guild messages get no response.
@@ -158,6 +195,6 @@ The first disables OpenClaw's framework health-monitor, which was batch-restarti
 **Cause**: The running config was created before `TIANCLAW_MODEL` was introduced, or the override was not set in Dokploy.
 
 **Solution**:
-- Set `TIANCLAW_MODEL=openai-codex/gpt-5.4` in Dokploy.
+- Set `TIANCLAW_MODEL=openai-codex/gpt-5.5` in Dokploy.
 - Redeploy the compose application.
 - If the agent entry was manually removed from `openclaw.json`, restore it or reset the config file before redeploying.
