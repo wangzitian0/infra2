@@ -86,6 +86,14 @@ services:
             --argjson discordNativeSkillCommands "$${DISCORD_NATIVE_SKILL_COMMANDS:-false}" \
             --argjson agentsMaxConcurrent "$${OPENCLAW_AGENTS_MAX_CONCURRENT:-4}" \
             '
+              def normalize_streaming:
+                if type == "object" then .
+                elif type == "string" then { mode: . }
+                elif type == "boolean" then { mode: (if . then "partial" else "off" end) }
+                elif . == null then { mode: "off" }
+                else { mode: "off" }
+                end;
+
               .agents.list = (
                 (.agents.list // []) as $$agents
                 | if any($$agents[]?; .id == "tianclaw") then
@@ -98,6 +106,16 @@ services:
               | .gateway.channelHealthCheckMinutes = $$gatewayChannelHealthCheckMinutes
               | .channels.discord.commands.nativeSkills = $$discordNativeSkillCommands
               | .agents.defaults.maxConcurrent = $$agentsMaxConcurrent
+              | .channels.discord.streaming = (.channels.discord.streaming | normalize_streaming)
+              | .channels.discord.accounts = (
+                  (.channels.discord.accounts // {})
+                  | with_entries(.value.streaming = (.value.streaming | normalize_streaming))
+                )
+              | if .tools.web.search.provider == "brave" then
+                  del(.tools.web.search.provider)
+                else
+                  .
+                end
             ' /data/openclaw.json > /data/openclaw.json.tmp
           mv /data/openclaw.json.tmp /data/openclaw.json
           echo "openclaw.json already exists, patched declarative overrides"
