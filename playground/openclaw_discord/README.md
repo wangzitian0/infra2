@@ -62,6 +62,8 @@ Important: after the first successful deploy, OpenClaw reads the persisted confi
 
 The `init-config` container generates `openclaw.json` on first deploy. On subsequent redeploys it preserves the existing file, but still applies selected declarative overrides from environment variables, including `OPENCLAW_GATEWAY_BIND`, `TIANCLAW_MODEL`, `OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES`, `DISCORD_NATIVE_SKILL_COMMANDS`, and `OPENCLAW_AGENTS_MAX_CONCURRENT`. This lets operator-managed settings survive while still enforcing critical network, model routing, and runtime behavior.
 
+For OpenClaw `2026.5.3`, the same patch step also normalizes legacy Discord streaming fields to the object form required by the current schema and removes an explicit legacy `tools.web.search.provider=brave` value while preserving the existing search API key. This lets OpenClaw use provider auto-detection instead of failing startup on a stale provider registration. This is a compatibility migration for persisted configs, not a config reset.
+
 This means there are multiple configuration layers:
 
 1. Repo defaults (`compose.yaml`, `.env.example`, this README)
@@ -116,6 +118,7 @@ This deployment intentionally applies two startup overrides during `init-config`
 
 - `gateway.channelHealthCheckMinutes=0`
 - `channels.discord.commands.nativeSkills=false`
+- legacy `channels.discord.*.streaming` scalar values are normalized to `{ mode: "..." }`
 
 The first disables OpenClaw's framework health-monitor, which was batch-restarting all Discord accounts on the same 5-minute tick. The second keeps core slash commands but drops per-skill command fan-out, reducing startup-time Discord API traffic.
 
