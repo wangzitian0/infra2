@@ -74,6 +74,7 @@ That means:
 - Later deploys: the Docker volume remains the live source of truth, except for declared guardrail overrides
 - Dashboard edits persist across redeploys
 - Compatibility patches may normalize old schema fields, such as Discord `streaming` scalar values or stale explicit web-search provider ids, without removing account tokens or cron jobs
+- Gateway startup bootstraps the official `@openclaw/discord` plugin if the persisted volume does not already have it installed
 
 If you want env vars to become authoritative again, you must delete the persisted config and regenerate it, or explicitly edit the live config.
 

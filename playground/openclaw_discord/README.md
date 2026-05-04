@@ -9,6 +9,7 @@ This directory contains the Docker Compose configuration for deploying [OpenClaw
 - **Network**: Connected to Dokploy's shared Docker network (`dokploy-network`); container listens on `0.0.0.0:${OPENCLAW_GATEWAY_PORT}` internally and is exposed externally via Traefik HTTP routing.
 - **Storage**: Named Docker volume `openclaw-discord-data` for persistence across redeploys.
 - **Configuration**: First deploy is environment-driven, but the live source of truth becomes the persisted `/home/node/.openclaw/openclaw.json`.
+- **Plugins**: The gateway bootstraps the official `@openclaw/discord` plugin before startup when the persisted volume does not already have it installed.
 
 ## Prerequisites
 
@@ -63,6 +64,8 @@ Important: after the first successful deploy, OpenClaw reads the persisted confi
 The `init-config` container generates `openclaw.json` on first deploy. On subsequent redeploys it preserves the existing file, but still applies selected declarative overrides from environment variables, including `OPENCLAW_GATEWAY_BIND`, `TIANCLAW_MODEL`, `OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES`, `DISCORD_NATIVE_SKILL_COMMANDS`, and `OPENCLAW_AGENTS_MAX_CONCURRENT`. This lets operator-managed settings survive while still enforcing critical network, model routing, and runtime behavior.
 
 For OpenClaw `2026.5.3`, the same patch step also normalizes legacy Discord streaming fields to the object form required by the current schema and removes an explicit legacy `tools.web.search.provider=brave` value while preserving the existing search API key. This lets OpenClaw use provider auto-detection instead of failing startup on a stale provider registration. This is a compatibility migration for persisted configs, not a config reset.
+
+OpenClaw `2026.5.x` loads Discord as an installable plugin. The `openclaw` service command installs the official `@openclaw/discord` plugin only when it is missing, then starts the gateway. This keeps fresh containers and fresh volumes from booting without the Discord channel.
 
 This means there are multiple configuration layers:
 

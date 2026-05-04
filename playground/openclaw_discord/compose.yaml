@@ -35,6 +35,22 @@ services:
       options:
         max-size: "5m"
         max-file: "2"
+    command:
+      - /bin/sh
+      - -lc
+      - |
+        set -e
+
+        # Dokploy values may be uppercase; OpenClaw accepts lowercase log levels.
+        export OPENCLAW_LOG_LEVEL="$(printf '%s' "$${OPENCLAW_LOG_LEVEL:-info}" | tr '[:upper:]' '[:lower:]')"
+
+        # Discord moved to an installable plugin in 2026.5.x. Keep this idempotent so
+        # fresh volumes and rebuilt containers load the channel before gateway startup.
+        if ! openclaw plugins inspect discord >/dev/null 2>&1; then
+          openclaw plugins install @openclaw/discord --force --dangerously-force-unsafe-install
+        fi
+
+        exec node openclaw.mjs gateway --allow-unconfigured
 
   # Generate openclaw.json from environment variables
   # Supports multiple bot instances via different env vars
