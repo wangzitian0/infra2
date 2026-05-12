@@ -279,6 +279,7 @@ services:
             --argjson discordAccountRetryAttempts "$${DISCORD_ACCOUNT_RETRY_ATTEMPTS:-10}" \
             --argjson discordAccountRetryMinDelayMs "$${DISCORD_ACCOUNT_RETRY_MIN_DELAY_MS:-1500}" \
             --argjson discordAccountRetryMaxDelayMs "$${DISCORD_ACCOUNT_RETRY_MAX_DELAY_MS:-8000}" \
+            --argjson discordGroupRequireMention "$${DISCORD_GROUP_REQUIRE_MENTION:-false}" \
             --arg openclawCronInvalidTargets "$${OPENCLAW_CRON_INVALID_TARGETS:-}" \
             --argjson openclawDisableInvalidCronTargets "$${OPENCLAW_DISABLE_INVALID_CRON_TARGETS:-true}" \
             --arg openclawGroupVisibleReplies "$${OPENCLAW_GROUP_VISIBLE_REPLIES:-automatic}" \
@@ -362,6 +363,7 @@ services:
               | .messages.groupChat.visibleReplies = $$openclawGroupVisibleReplies
               | .channels.discord.commands.nativeSkills = $$discordNativeSkillCommands
               | .agents.defaults.maxConcurrent = $$agentsMaxConcurrent
+              | .channels.discord.guilds["*"].requireMention = $$discordGroupRequireMention
               | .channels.discord.streaming = (.channels.discord.streaming | normalize_streaming)
               | .channels.discord.accounts = (
                   (.channels.discord.accounts // {})
