@@ -10,6 +10,7 @@ This directory contains the Docker Compose configuration for deploying [OpenClaw
 - **Storage**: Named Docker volume `openclaw-discord-data` for persistence across redeploys.
 - **Configuration**: First deploy is environment-driven, but the live source of truth becomes the persisted `/home/node/.openclaw/openclaw.json`.
 - **Plugins**: The gateway bootstraps the official `@openclaw/discord` plugin before startup when the persisted volume does not already have it installed.
+- **State Sync**: Optional `tianclaw-git-sync` sidecar can snapshot the sanitized `openclaw-discord-data` volume to `git@github.com:wangzitian-ai/tianclaw.git`.
 
 ## Prerequisites
 
@@ -56,6 +57,14 @@ Important: after the first successful deploy, OpenClaw reads the persisted confi
 | `OPENCLAW_GATEWAY_PORT` | `18789` | Internal gateway port |
 | `OPENCLAW_LOG_LEVEL` | `info` | Framework-recognized log level override for file + console logs |
 | `OPENCLAW_DIAGNOSTICS` | _empty_ | Optional targeted diagnostics flags, passed through to OpenClaw unchanged |
+| `TIANCLAW_GIT_SYNC_ENABLED` | `false` | Enable periodic sanitized volume snapshots to the TianClaw private repo |
+| `TIANCLAW_GIT_REPO` | `git@github.com:wangzitian-ai/tianclaw.git` | Git repository for OpenClaw volume snapshots |
+| `TIANCLAW_GIT_BRANCH` | `main` | Branch used by the sync sidecar |
+| `TIANCLAW_GIT_SYNC_INTERVAL_SECONDS` | `300` | Sync loop interval |
+| `TIANCLAW_GIT_SSH_KEY_PATH` | `/root/.ssh/id_ed25519` | Host private-key path mounted read-only by the sync sidecar |
+| `TIANCLAW_GIT_SSH_KNOWN_HOSTS_PATH` | `/root/.ssh/known_hosts` | Host known-hosts path mounted read-only by the sync sidecar |
+| `TIANCLAW_GIT_SSH_PRIVATE_KEY` | _empty_ | Optional private-key contents used instead of `TIANCLAW_GIT_SSH_KEY_PATH` |
+| `TIANCLAW_GIT_SSH_KNOWN_HOSTS` | _empty_ | Optional known-hosts contents used instead of `TIANCLAW_GIT_SSH_KNOWN_HOSTS_PATH` |
 
 `LOG_LEVEL` is kept as a backward-compatible fallback in `compose.yaml`, but OpenClaw itself reads `OPENCLAW_LOG_LEVEL`.
 
@@ -66,6 +75,8 @@ The `init-config` container generates `openclaw.json` on first deploy. On subseq
 For OpenClaw `2026.5.3`, the same patch step also normalizes legacy Discord streaming fields to the object form required by the current schema and removes an explicit legacy `tools.web.search.provider=brave` value while preserving the existing search API key. This lets OpenClaw use provider auto-detection instead of failing startup on a stale provider registration. This is a compatibility migration for persisted configs, not a config reset.
 
 OpenClaw `2026.5.x` loads Discord as an installable plugin. The `openclaw` service command installs the official `@openclaw/discord` plugin only when it is missing, then starts the gateway. This keeps fresh containers and fresh volumes from booting without the Discord channel.
+
+When enabled, `tianclaw-git-sync` mounts the same Docker volume read-only at `/openclaw`, mounts the configured SSH key material read-only, clones the private repo into an ephemeral container path, rsyncs the sanitized volume root, commits changes, and pushes the configured branch. It intentionally excludes `.git`, `.ssh`, `credentials`, `identity`, `keyrings`, `npm/node_modules`, virtualenvs, `openclaw.json*`, `.env*`, key files, token-like paths, and SQLite WAL/SHM files.
 
 This means there are multiple configuration layers:
 
