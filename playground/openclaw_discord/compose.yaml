@@ -279,6 +279,7 @@ services:
             --argjson discordAccountRetryAttempts "$${DISCORD_ACCOUNT_RETRY_ATTEMPTS:-10}" \
             --argjson discordAccountRetryMinDelayMs "$${DISCORD_ACCOUNT_RETRY_MIN_DELAY_MS:-1500}" \
             --argjson discordAccountRetryMaxDelayMs "$${DISCORD_ACCOUNT_RETRY_MAX_DELAY_MS:-8000}" \
+            --argjson discordGroupRequireMention "$${DISCORD_GROUP_REQUIRE_MENTION:-false}" \
             --arg openclawCronInvalidTargets "$${OPENCLAW_CRON_INVALID_TARGETS:-}" \
             --argjson openclawDisableInvalidCronTargets "$${OPENCLAW_DISABLE_INVALID_CRON_TARGETS:-true}" \
             --arg openclawGroupVisibleReplies "$${OPENCLAW_GROUP_VISIBLE_REPLIES:-automatic}" \
@@ -333,6 +334,19 @@ services:
                   .
                 end;
 
+              def ensure_model_allowlist:
+                .agents.defaults.models = (
+                  (.agents.defaults.models // {}) + {
+                    "coding/glm-5.1": {},
+                    "github-copilot/claude-opus-4.7": {},
+                    "github-copilot/claude-sonnet-4.6": {},
+                    "github-copilot/gemini-3.1-flash": {},
+                    "github-copilot/gemini-3.1-pro-preview": {},
+                    "github-copilot/grok-code-fast-1": {},
+                    "openai-codex/gpt-5.5": {}
+                  } + { ($$tianclawModel): {} }
+                );
+
               .agents.list = (
                 (.agents.list // []) as $$agents
                 | if any($$agents[]?; .id == "tianclaw") then
@@ -342,11 +356,14 @@ services:
                   end
               )
               | ensure_tianclaw_provider
+              | ensure_model_allowlist
+              | del(.cron.list)
               | .gateway.bind = $$gatewayBind
               | .gateway.channelHealthCheckMinutes = $$gatewayChannelHealthCheckMinutes
               | .messages.groupChat.visibleReplies = $$openclawGroupVisibleReplies
               | .channels.discord.commands.nativeSkills = $$discordNativeSkillCommands
               | .agents.defaults.maxConcurrent = $$agentsMaxConcurrent
+              | .channels.discord.guilds["*"].requireMention = $$discordGroupRequireMention
               | .channels.discord.streaming = (.channels.discord.streaming | normalize_streaming)
               | .channels.discord.accounts = (
                   (.channels.discord.accounts // {})
@@ -371,30 +388,6 @@ services:
                 else
                   .
                 end
-              | if $$tianclawMigrateCronModels then
-                  .cron.list = [
-                    (.cron.list // [])[] |
-                    if ((cron_model as $$model | csv_values($$tianclawModelMigrateFrom) | index($$model)) != null) then
-                      if .payload.model? then .payload.model = $$tianclawModel else .model = $$tianclawModel end
-                    else
-                      .
-                    end
-                  ]
-                else
-                  .
-                end
-              | if $$openclawDisableInvalidCronTargets then
-                  .cron.list = [
-                    (.cron.list // [])[] |
-                    if ((cron_target as $$target | csv_values($$openclawCronInvalidTargets) | index($$target)) != null) then
-                      .enabled = false
-                    else
-                      .
-                    end
-                  ]
-                else
-                  .
-                end
             ' /data/openclaw.json > /data/openclaw.json.tmp
           if [ "$${OPENCLAW_RESIDUE_SCAN:-true}" = "true" ]; then
             jq -r \
@@ -411,8 +404,7 @@ services:
                 [
                   "openclaw residue scan:",
                   ("  tianclawModel=" + $$tianclawModel),
-                  ("  legacyCronModels=" + (((.cron.list // []) | map(cron_model) | map(select(csv_values($$tianclawModelMigrateFrom) | index(.))) | unique) | join(","))),
-                  ("  invalidCronTargets=" + (((.cron.list // []) | map(cron_target) | map(select(csv_values($$openclawCronInvalidTargets) | index(.))) | unique) | join(","))),
+                  ("  modelAllowlist=" + (((.agents.defaults.models // {}) | keys | sort) | join(","))),
                   ("  webSearchProvider=" + (.tools.web.search.provider? // "<unset>"))
                 ] | .[]
               ' /data/openclaw.json.tmp
@@ -476,7 +468,18 @@ services:
             agents: {
               defaults: {
                 model: "\($$provider)/\($$modelId)",
-                maxConcurrent: $$agentsMaxConcurrent
+                maxConcurrent: $$agentsMaxConcurrent,
+                models: (
+                  {
+                    "coding/glm-5.1": {},
+                    "github-copilot/claude-opus-4.7": {},
+                    "github-copilot/claude-sonnet-4.6": {},
+                    "github-copilot/gemini-3.1-flash": {},
+                    "github-copilot/gemini-3.1-pro-preview": {},
+                    "github-copilot/grok-code-fast-1": {},
+                    "openai-codex/gpt-5.5": {}
+                  } + { ($$tianclawModel): {} }
+                )
               },
               list: [
                 {
