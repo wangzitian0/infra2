@@ -11,6 +11,7 @@ services:
       - OPENCLAW_GATEWAY_TOKEN
       - OPENCLAW_GATEWAY_BIND
       - OPENCLAW_GATEWAY_PORT
+      - BRAVE_API_KEY=${BRAVE_API_KEY:-}
       - GOG_KEYRING_PASSWORD
       - XDG_CONFIG_HOME=/home/node/.openclaw
       - HOME=/home/node
@@ -37,20 +38,175 @@ services:
         max-file: "2"
     command:
       - /bin/sh
-      - -lc
+      - -c
       - |
         set -e
 
         # Dokploy values may be uppercase; OpenClaw accepts lowercase log levels.
         export OPENCLAW_LOG_LEVEL="$(printf '%s' "$${OPENCLAW_LOG_LEVEL:-info}" | tr '[:upper:]' '[:lower:]')"
 
-        # Discord moved to an installable plugin in 2026.5.x. Keep this idempotent so
-        # fresh volumes and rebuilt containers load the channel before gateway startup.
+        # Discord and Brave moved to installable plugins in 2026.5.x. Keep this
+        # idempotent so fresh volumes and rebuilt containers load the channel and
+        # web_search provider before gateway startup.
         if ! openclaw plugins inspect discord >/dev/null 2>&1; then
           openclaw plugins install @openclaw/discord --force --dangerously-force-unsafe-install
         fi
+        if ! openclaw plugins inspect brave >/dev/null 2>&1; then
+          openclaw plugins install @openclaw/brave-plugin --force --dangerously-force-unsafe-install
+        fi
 
         exec node openclaw.mjs gateway --allow-unconfigured
+
+  tianclaw-git-sync:
+    image: alpine:3.19
+    restart: always
+    volumes:
+      - openclaw-discord-data:/openclaw:ro
+      - ${TIANCLAW_GIT_SSH_KEY_PATH:-/root/.ssh/id_ed25519}:/run/secrets/tianclaw_git_ssh_key:ro
+      - ${TIANCLAW_GIT_SSH_KNOWN_HOSTS_PATH:-/root/.ssh/known_hosts}:/run/secrets/tianclaw_git_known_hosts:ro
+    environment:
+      - TIANCLAW_GIT_SYNC_ENABLED=${TIANCLAW_GIT_SYNC_ENABLED:-false}
+      - TIANCLAW_GIT_REPO=${TIANCLAW_GIT_REPO:-git@github.com:wangzitian-ai/tianclaw.git}
+      - TIANCLAW_GIT_BRANCH=${TIANCLAW_GIT_BRANCH:-main}
+      - TIANCLAW_GIT_SYNC_INTERVAL_SECONDS=${TIANCLAW_GIT_SYNC_INTERVAL_SECONDS:-300}
+      - TIANCLAW_GIT_SYNC_DELETE=${TIANCLAW_GIT_SYNC_DELETE:-false}
+      - TIANCLAW_GIT_USER_NAME=${TIANCLAW_GIT_USER_NAME:-TianClaw Sync}
+      - TIANCLAW_GIT_USER_EMAIL=${TIANCLAW_GIT_USER_EMAIL:-tianclaw-sync@users.noreply.github.com}
+      - "TIANCLAW_GIT_COMMIT_PREFIX=${TIANCLAW_GIT_COMMIT_PREFIX:-chore: sync live OpenClaw state}"
+      - TIANCLAW_GIT_SYNC_SECRET_SCAN=${TIANCLAW_GIT_SYNC_SECRET_SCAN:-true}
+      - TIANCLAW_GIT_SSH_PRIVATE_KEY=${TIANCLAW_GIT_SSH_PRIVATE_KEY:-}
+      - TIANCLAW_GIT_SSH_KNOWN_HOSTS=${TIANCLAW_GIT_SSH_KNOWN_HOSTS:-}
+      - TIANCLAW_GIT_SSH_KEY_FILE=/run/secrets/tianclaw_git_ssh_key
+      - TIANCLAW_GIT_SSH_KNOWN_HOSTS_FILE=/run/secrets/tianclaw_git_known_hosts
+    depends_on:
+      init-config:
+        condition: service_completed_successfully
+    networks:
+      - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    command:
+      - /bin/sh
+      - -lc
+      - |
+        set -euo pipefail
+
+        if [ "$${TIANCLAW_GIT_SYNC_ENABLED}" != "true" ]; then
+          echo "tianclaw git sync disabled"
+          tail -f /dev/null
+        fi
+
+        apk add --no-cache git openssh-client rsync
+        mkdir -p /root/.ssh /sync
+
+        if [ -n "$${TIANCLAW_GIT_SSH_PRIVATE_KEY:-}" ]; then
+          printf '%s\n' "$${TIANCLAW_GIT_SSH_PRIVATE_KEY}" > /root/.ssh/id_ed25519
+        elif [ -s "$${TIANCLAW_GIT_SSH_KEY_FILE}" ]; then
+          cp "$${TIANCLAW_GIT_SSH_KEY_FILE}" /root/.ssh/id_ed25519
+        else
+          echo "TIANCLAW_GIT_SSH_PRIVATE_KEY or TIANCLAW_GIT_SSH_KEY_PATH is required when git sync is enabled"
+          exit 2
+        fi
+
+        if [ -n "$${TIANCLAW_GIT_SSH_KNOWN_HOSTS:-}" ]; then
+          printf '%s\n' "$${TIANCLAW_GIT_SSH_KNOWN_HOSTS}" > /root/.ssh/known_hosts
+        elif [ -s "$${TIANCLAW_GIT_SSH_KNOWN_HOSTS_FILE}" ]; then
+          cp "$${TIANCLAW_GIT_SSH_KNOWN_HOSTS_FILE}" /root/.ssh/known_hosts
+        else
+          echo "TIANCLAW_GIT_SSH_KNOWN_HOSTS or TIANCLAW_GIT_SSH_KNOWN_HOSTS_PATH is required when git sync is enabled"
+          exit 2
+        fi
+
+        chmod 700 /root/.ssh
+        chmod 600 /root/.ssh/id_ed25519 /root/.ssh/known_hosts
+        export GIT_SSH_COMMAND='ssh -i /root/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes'
+
+        source=/openclaw
+        repo=/sync/tianclaw
+        delete_flag=
+        if [ "$${TIANCLAW_GIT_SYNC_DELETE}" = "true" ]; then
+          delete_flag=--delete
+        fi
+
+        while true; do
+          if [ ! -d "$${source}" ]; then
+            echo "openclaw volume not found: $${source}"
+            sleep "$${TIANCLAW_GIT_SYNC_INTERVAL_SECONDS}"
+            continue
+          fi
+
+          rm -rf "$${repo}"
+          git clone "$${TIANCLAW_GIT_REPO}" "$${repo}" 2>/tmp/git-clone.err || {
+            cat /tmp/git-clone.err
+            sleep "$${TIANCLAW_GIT_SYNC_INTERVAL_SECONDS}"
+            continue
+          }
+          cd "$${repo}"
+          git config --global --add safe.directory "$${repo}"
+          git fetch origin "$${TIANCLAW_GIT_BRANCH}" >/dev/null 2>&1 || true
+          git checkout -B "$${TIANCLAW_GIT_BRANCH}" "origin/$${TIANCLAW_GIT_BRANCH}" >/dev/null 2>&1 || git checkout -B "$${TIANCLAW_GIT_BRANCH}"
+
+          rsync -a $${delete_flag} \
+            --exclude '.git/' \
+            --exclude '.env' \
+            --exclude '.env.*' \
+            --exclude 'credentials/' \
+            --exclude 'identity/' \
+            --exclude 'keyrings/' \
+            --exclude 'npm/node_modules/' \
+            --exclude '.venv/' \
+            --exclude '*/.venv/' \
+            --exclude '*.pem' \
+            --exclude '*.key' \
+            --exclude '*token*' \
+            --exclude '*TOKEN*' \
+            --exclude '*secret*' \
+            --exclude '*SECRET*' \
+            --exclude '*credential*' \
+            --exclude '*CREDENTIAL*' \
+            --exclude 'openclaw.json' \
+            --exclude 'openclaw.json*' \
+            --exclude '*.sqlite-wal' \
+            --exclude '*.sqlite-shm' \
+            --exclude '.ssh/' \
+            --exclude '.openclaw/' \
+            --exclude '.raw-local/' \
+            "$${source}/" "$${repo}/"
+
+          rm -rf \
+            "$${repo}/.ssh" \
+            "$${repo}/.openclaw" \
+            "$${repo}/.raw-local" \
+            "$${repo}/credentials" \
+            "$${repo}/identity" \
+            "$${repo}/keyrings" \
+            "$${repo}/npm/node_modules" \
+            "$${repo}"/openclaw.json*
+
+          git config user.name "$${TIANCLAW_GIT_USER_NAME}"
+          git config user.email "$${TIANCLAW_GIT_USER_EMAIL}"
+
+          if git status --porcelain | grep -q .; then
+            if [ "$${TIANCLAW_GIT_SYNC_SECRET_SCAN}" = "true" ]; then
+              if find . -type f -not -path './.git/*' -exec grep -IlE '(sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|BEGIN (RSA|OPENSSH|EC|DSA) PRIVATE KEY|DISCORD_TOKEN|discord[_-]?token|api[_-]?key|API[_-]?KEY)' {} +; then
+                echo "secret-like content detected; refusing to sync until the workspace is sanitized"
+                sleep "$${TIANCLAW_GIT_SYNC_INTERVAL_SECONDS}"
+                continue
+              fi
+            fi
+            git add -A
+            git commit -m "$${TIANCLAW_GIT_COMMIT_PREFIX} $$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            git push -u origin "HEAD:$${TIANCLAW_GIT_BRANCH}"
+            echo "synced OpenClaw volume to $${TIANCLAW_GIT_REPO}#$${TIANCLAW_GIT_BRANCH}"
+          else
+            echo "no tianclaw workspace changes"
+          fi
+
+          sleep "$${TIANCLAW_GIT_SYNC_INTERVAL_SECONDS}"
+        done
 
   # Generate openclaw.json from environment variables
   # Supports multiple bot instances via different env vars
@@ -72,9 +228,22 @@ services:
       - LLM_API_KEY
       - LLM_MODEL_ID=${LLM_MODEL_ID:-claude-sonnet-4.6}
       - LLM_MODEL_NAME=${LLM_MODEL_NAME:-Claude Sonnet 4.6}
-      - TIANCLAW_MODEL=${TIANCLAW_MODEL:-openai-codex/gpt-5.5}
+      - TIANCLAW_MODEL=${TIANCLAW_MODEL:-github-copilot/claude-opus-4.7}
+      - TIANCLAW_MODEL_NAME=${TIANCLAW_MODEL_NAME:-Claude Opus 4.7}
+      - TIANCLAW_PROVIDER_BASE_URL=${TIANCLAW_PROVIDER_BASE_URL:-https://chatgpt.com/backend-api}
+      - TIANCLAW_PROVIDER_API=${TIANCLAW_PROVIDER_API:-openai-codex-responses}
+      - TIANCLAW_MODEL_MIGRATE_FROM=${TIANCLAW_MODEL_MIGRATE_FROM:-github-copilot/claude-opus-4-5,github-copilot/claude-sonnet-4.6}
+      - TIANCLAW_MIGRATE_CRON_MODELS=${TIANCLAW_MIGRATE_CRON_MODELS:-true}
+      - BRAVE_API_KEY=${BRAVE_API_KEY:-}
       - OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES=${OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES:-0}
       - OPENCLAW_AGENTS_MAX_CONCURRENT=${OPENCLAW_AGENTS_MAX_CONCURRENT:-4}
+      - DISCORD_ACCOUNT_RETRY_ATTEMPTS=${DISCORD_ACCOUNT_RETRY_ATTEMPTS:-10}
+      - DISCORD_ACCOUNT_RETRY_MIN_DELAY_MS=${DISCORD_ACCOUNT_RETRY_MIN_DELAY_MS:-1500}
+      - DISCORD_ACCOUNT_RETRY_MAX_DELAY_MS=${DISCORD_ACCOUNT_RETRY_MAX_DELAY_MS:-8000}
+      - OPENCLAW_CRON_INVALID_TARGETS=${OPENCLAW_CRON_INVALID_TARGETS:-anne-breaking-news,1274620908435own}
+      - OPENCLAW_DISABLE_INVALID_CRON_TARGETS=${OPENCLAW_DISABLE_INVALID_CRON_TARGETS:-true}
+      - OPENCLAW_RESIDUE_SCAN=${OPENCLAW_RESIDUE_SCAN:-true}
+      - OPENCLAW_GROUP_VISIBLE_REPLIES=${OPENCLAW_GROUP_VISIBLE_REPLIES:-automatic}
       - DISCORD_NATIVE_SKILL_COMMANDS=${DISCORD_NATIVE_SKILL_COMMANDS:-false}
       - OPENCLAW_GATEWAY_TOKEN
       - GOG_KEYRING_PASSWORD
@@ -96,18 +265,72 @@ services:
         # Preserve existing config, but still enforce selected declarative overrides.
         if [ -f /data/openclaw.json ]; then
           jq \
-            --arg tianclawModel "$${TIANCLAW_MODEL:-openai-codex/gpt-5.5}" \
+            --arg tianclawModel "$${TIANCLAW_MODEL:-github-copilot/claude-opus-4.7}" \
+            --arg tianclawModelName "$${TIANCLAW_MODEL_NAME:-Claude Opus 4.7}" \
+            --arg tianclawProviderBaseUrl "$${TIANCLAW_PROVIDER_BASE_URL:-https://chatgpt.com/backend-api}" \
+            --arg tianclawProviderApi "$${TIANCLAW_PROVIDER_API:-openai-codex-responses}" \
+            --arg tianclawModelMigrateFrom "$${TIANCLAW_MODEL_MIGRATE_FROM:-}" \
+            --argjson tianclawMigrateCronModels "$${TIANCLAW_MIGRATE_CRON_MODELS:-true}" \
             --arg gatewayBind "$${OPENCLAW_GATEWAY_BIND:-lan}" \
             --argjson gatewayChannelHealthCheckMinutes "$${OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES:-0}" \
             --argjson discordNativeSkillCommands "$${DISCORD_NATIVE_SKILL_COMMANDS:-false}" \
             --argjson agentsMaxConcurrent "$${OPENCLAW_AGENTS_MAX_CONCURRENT:-4}" \
+            --arg braveApiKey "$${BRAVE_API_KEY:-}" \
+            --argjson discordAccountRetryAttempts "$${DISCORD_ACCOUNT_RETRY_ATTEMPTS:-10}" \
+            --argjson discordAccountRetryMinDelayMs "$${DISCORD_ACCOUNT_RETRY_MIN_DELAY_MS:-1500}" \
+            --argjson discordAccountRetryMaxDelayMs "$${DISCORD_ACCOUNT_RETRY_MAX_DELAY_MS:-8000}" \
+            --arg openclawCronInvalidTargets "$${OPENCLAW_CRON_INVALID_TARGETS:-}" \
+            --argjson openclawDisableInvalidCronTargets "$${OPENCLAW_DISABLE_INVALID_CRON_TARGETS:-true}" \
+            --arg openclawGroupVisibleReplies "$${OPENCLAW_GROUP_VISIBLE_REPLIES:-automatic}" \
             '
+              def csv_values($$csv):
+                $$csv | split(",") | map(gsub("^\\s+|\\s+$$"; "")) | map(select(. != ""));
+
               def normalize_streaming:
                 if type == "object" then .
                 elif type == "string" then { mode: . }
                 elif type == "boolean" then { mode: (if . then "partial" else "off" end) }
                 elif . == null then { mode: "off" }
                 else { mode: "off" }
+                end;
+
+              def has_brave_key:
+                ((.plugins.entries.brave.config.webSearch.apiKey? // "") != "") or ($$braveApiKey != "");
+
+              def normalize_retry:
+                (. // {}) + {
+                  attempts: ((.attempts // $$discordAccountRetryAttempts) | if . < $$discordAccountRetryAttempts then $$discordAccountRetryAttempts else . end),
+                  minDelayMs: (.minDelayMs // $$discordAccountRetryMinDelayMs),
+                  maxDelayMs: (.maxDelayMs // $$discordAccountRetryMaxDelayMs),
+                  jitter: (.jitter // 0.2)
+                };
+
+              def cron_model:
+                .payload.model? // .model? // empty;
+
+              def cron_target:
+                .target? // .payload.target? // .payload.channel? // .channel? // .channelId? // .payload.channelId? // empty;
+
+              def model_provider($$model):
+                $$model | split("/")[0];
+
+              def model_id($$model):
+                $$model | split("/") | .[1:] | join("/");
+
+              def ensure_tianclaw_provider:
+                if model_provider($$tianclawModel) == "openai-codex" then
+                  .models.providers["openai-codex"] = (
+                    (.models.providers["openai-codex"] // {
+                      baseUrl: $$tianclawProviderBaseUrl,
+                      api: $$tianclawProviderApi,
+                      models: []
+                    })
+                    | .baseUrl = (.baseUrl // $$tianclawProviderBaseUrl)
+                    | .api = (.api // $$tianclawProviderApi)
+                    | .models = (((.models // []) + [{ id: model_id($$tianclawModel), name: $$tianclawModelName }]) | unique_by(.id))
+                  )
+                else
+                  .
                 end;
 
               .agents.list = (
@@ -118,21 +341,82 @@ services:
                     $$agents
                   end
               )
+              | ensure_tianclaw_provider
               | .gateway.bind = $$gatewayBind
               | .gateway.channelHealthCheckMinutes = $$gatewayChannelHealthCheckMinutes
+              | .messages.groupChat.visibleReplies = $$openclawGroupVisibleReplies
               | .channels.discord.commands.nativeSkills = $$discordNativeSkillCommands
               | .agents.defaults.maxConcurrent = $$agentsMaxConcurrent
               | .channels.discord.streaming = (.channels.discord.streaming | normalize_streaming)
               | .channels.discord.accounts = (
                   (.channels.discord.accounts // {})
-                  | with_entries(.value.streaming = (.value.streaming | normalize_streaming))
+                  | with_entries(
+                      .value.streaming = (.value.streaming | normalize_streaming)
+                      | .value.retry = (.value.retry | normalize_retry)
+                      | if .key != "default" then
+                          if .key == "tianclaw" then .value.allowBots = false else .value.allowBots = "mentions" end
+                        else . end
+                    )
                 )
-              | if .tools.web.search.provider == "brave" then
-                  del(.tools.web.search.provider)
+              | .plugins.entries.discord.enabled = true
+              | .plugins.entries.brave.enabled = true
+              | if $$braveApiKey != "" then
+                  .plugins.entries.brave.config.webSearch.apiKey = $$braveApiKey
+                else
+                  .
+                end
+              | .plugins.allow = ((.plugins.allow // []) + ["browser", "device-pair", "discord", "file-transfer", "memory-core", "phone-control", "talk-voice", "brave"] | unique)
+              | if has_brave_key then
+                  .tools.web.search.provider = "brave"
+                else
+                  .
+                end
+              | if $$tianclawMigrateCronModels then
+                  .cron.list = [
+                    (.cron.list // [])[] |
+                    if ((cron_model as $$model | csv_values($$tianclawModelMigrateFrom) | index($$model)) != null) then
+                      if .payload.model? then .payload.model = $$tianclawModel else .model = $$tianclawModel end
+                    else
+                      .
+                    end
+                  ]
+                else
+                  .
+                end
+              | if $$openclawDisableInvalidCronTargets then
+                  .cron.list = [
+                    (.cron.list // [])[] |
+                    if ((cron_target as $$target | csv_values($$openclawCronInvalidTargets) | index($$target)) != null) then
+                      .enabled = false
+                    else
+                      .
+                    end
+                  ]
                 else
                   .
                 end
             ' /data/openclaw.json > /data/openclaw.json.tmp
+          if [ "$${OPENCLAW_RESIDUE_SCAN:-true}" = "true" ]; then
+            jq -r \
+              --arg tianclawModel "$${TIANCLAW_MODEL:-openai-codex/gpt-5.5}" \
+              --arg tianclawModelMigrateFrom "$${TIANCLAW_MODEL_MIGRATE_FROM:-}" \
+              --arg openclawCronInvalidTargets "$${OPENCLAW_CRON_INVALID_TARGETS:-}" \
+              '
+                def csv_values($$csv):
+                  $$csv | split(",") | map(gsub("^\\s+|\\s+$$"; "")) | map(select(. != ""));
+                def cron_model:
+                  .payload.model? // .model? // empty;
+                def cron_target:
+                  .target? // .payload.target? // .payload.channel? // .channel? // .channelId? // .payload.channelId? // empty;
+                [
+                  "openclaw residue scan:",
+                  ("  tianclawModel=" + $$tianclawModel),
+                  ("  legacyCronModels=" + (((.cron.list // []) | map(cron_model) | map(select(csv_values($$tianclawModelMigrateFrom) | index(.))) | unique) | join(","))),
+                  ("  invalidCronTargets=" + (((.cron.list // []) | map(cron_target) | map(select(csv_values($$openclawCronInvalidTargets) | index(.))) | unique) | join(","))),
+                  ("  webSearchProvider=" + (.tools.web.search.provider? // "<unset>"))
+                ] | .[]
+              ' /data/openclaw.json.tmp
+          fi
           mv /data/openclaw.json.tmp /data/openclaw.json
           echo "openclaw.json already exists, patched declarative overrides"
           chown -R 1000:1000 /data
@@ -147,17 +431,25 @@ services:
           --arg apiKey "$${LLM_API_KEY}" \
           --arg modelId "$${LLM_MODEL_ID}" \
           --arg modelName "$${LLM_MODEL_NAME}" \
-          --arg tianclawModel "$${TIANCLAW_MODEL:-openai-codex/gpt-5.5}" \
+          --arg tianclawModel "$${TIANCLAW_MODEL:-github-copilot/claude-opus-4.7}" \
+          --arg tianclawModelName "$${TIANCLAW_MODEL_NAME:-Claude Opus 4.7}" \
+          --arg tianclawProviderBaseUrl "$${TIANCLAW_PROVIDER_BASE_URL:-https://chatgpt.com/backend-api}" \
+          --arg tianclawProviderApi "$${TIANCLAW_PROVIDER_API:-openai-codex-responses}" \
+          --arg braveApiKey "$${BRAVE_API_KEY:-}" \
           --arg gatewayBind "$${OPENCLAW_GATEWAY_BIND:-lan}" \
           --argjson gatewayChannelHealthCheckMinutes "$${OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES:-0}" \
           --argjson discordNativeSkillCommands "$${DISCORD_NATIVE_SKILL_COMMANDS:-false}" \
           --argjson agentsMaxConcurrent "$${OPENCLAW_AGENTS_MAX_CONCURRENT:-4}" \
+          --argjson discordAccountRetryAttempts "$${DISCORD_ACCOUNT_RETRY_ATTEMPTS:-10}" \
+          --argjson discordAccountRetryMinDelayMs "$${DISCORD_ACCOUNT_RETRY_MIN_DELAY_MS:-1500}" \
+          --argjson discordAccountRetryMaxDelayMs "$${DISCORD_ACCOUNT_RETRY_MAX_DELAY_MS:-8000}" \
           --argjson discordEnabled "$${DISCORD_ENABLED}" \
           --arg discordToken "$${DISCORD_TOKEN}" \
           --argjson discordDmEnabled "$${DISCORD_DM_ENABLED:-true}" \
           --arg discordDmPolicy "$${DISCORD_DM_POLICY:-open}" \
           --arg discordGroupPolicy "$${DISCORD_GROUP_POLICY:-open}" \
           --argjson discordGroupRequireMention "$${DISCORD_GROUP_REQUIRE_MENTION:-false}" \
+          --arg openclawGroupVisibleReplies "$${OPENCLAW_GROUP_VISIBLE_REPLIES:-automatic}" \
           '{
             meta: { lastTouchedVersion: $$lastTouchedVersion },
             models: {
@@ -169,6 +461,17 @@ services:
                   models: [{ id: $$modelId, name: $$modelName }]
                 }
               }
+              | if ($$tianclawModel | startswith("openai-codex/")) then
+                  . + {
+                    "openai-codex": {
+                      baseUrl: $$tianclawProviderBaseUrl,
+                      api: $$tianclawProviderApi,
+                      models: [{ id: ($$tianclawModel | split("/") | .[1:] | join("/")), name: $$tianclawModelName }]
+                    }
+                  }
+                else
+                  .
+                end
             },
             agents: {
               defaults: {
@@ -191,6 +494,7 @@ services:
                 commands: {
                   nativeSkills: $$discordNativeSkillCommands
                 },
+                streaming: { mode: "off" },
                 dm: (
                   {
                     enabled: $$discordDmEnabled,
@@ -205,6 +509,11 @@ services:
                 }
               }
             },
+            messages: {
+              groupChat: {
+                visibleReplies: $$openclawGroupVisibleReplies
+              }
+            },
             gateway: {
               bind: $$gatewayBind,
               channelHealthCheckMinutes: $$gatewayChannelHealthCheckMinutes,
@@ -213,9 +522,32 @@ services:
               trustedProxies: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.1/8"]
             },
             plugins: {
-              entries: { discord: { enabled: $$discordEnabled } }
-            }
+              allow: ["browser", "device-pair", "discord", "file-transfer", "memory-core", "phone-control", "talk-voice", "brave"],
+              entries: (
+                { discord: { enabled: $$discordEnabled }, brave: { enabled: true } }
+                + (if $$braveApiKey != "" then { brave: { enabled: true, config: { webSearch: { apiKey: $$braveApiKey } } } } else {} end)
+              )
+            },
+            tools: (
+              if $$braveApiKey != "" then { web: { search: { provider: "brave" } } } else { web: { search: {} } } end
+            )
           }' > /data/openclaw.json
+
+        # Dynamic Agent Mention Protocol and Routing
+        TIANCLAW_ID=$$(jq -r '.channels.discord.accounts.tianclaw.token // "" | split(".")[0] | @base64d' /data/openclaw.json)
+
+        # 1. Generate TianClaw Host Instructions
+        mkdir -p /data/workspace/agents/tianclaw
+        printf '# SP500 Group Chat Orchestrator (TianClaw)\n\nYou are the host and moderator of the SP500 group chat.\nWhen a human user speaks, you acknowledge their message and invite ONE expert at a time to share their insights by explicitly mentioning their Discord User ID.\nDO NOT mention everyone at once. You should aim for a deep, sequential discussion lasting about 5-10 turns.\n\nAfter an expert finishes their turn, they will return the microphone to you by mentioning you. You should then summarize or ask a follow-up question to the next expert. If the topic is sufficiently discussed (after 5-10 turns), summarize the conclusion for the human user and end the round without mentioning another expert.\n\n## Roster of Experts\nUse exactly this format to mention them: `<@BOT_USER_ID>`\n\n' > /data/workspace/agents/tianclaw/AGENTS.md
+
+        jq -r '.channels.discord.accounts | to_entries[] | select(.key != "tianclaw" and .key != "default" and (.value.token != null)) | "- \(.value.name | split(" ")[0]): <@\(.value.token | split(".")[0] | @base64d)>"' /data/openclaw.json >> /data/workspace/agents/tianclaw/AGENTS.md
+
+        # 2. Generate Sub-agent Instructions
+        for account in $$(jq -r '.channels.discord.accounts | keys[]' /data/openclaw.json); do
+          if [ "$$account" = "default" ] || [ "$$account" = "tianclaw" ]; then continue; fi
+          mkdir -p "/data/workspace/agents/$$account"
+          printf '# Group Chat Expert Role\n\nYou are participating in a group chat hosted by TianClaw.\nYou will be called upon to share your expert insights. Keep your responses focused and professional.\n\n**CRITICAL RULE**: When you finish your response, you MUST hand the microphone back to the host by explicitly mentioning them at the very end of your message.\nFormat to return the mic: <@%s>\n' "$${TIANCLAW_ID}" > "/data/workspace/agents/$$account/AGENTS.md"
+        done
 
         # Set permissions
         chown -R 1000:1000 /data
