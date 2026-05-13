@@ -43,9 +43,14 @@ Important: after the first successful deploy, OpenClaw reads the persisted confi
 | `LLM_BASE_URL` | `https://api.githubcopilot.com` | Primary API endpoint |
 | `LLM_MODEL_ID` | `claude-sonnet-4.6` | Primary Model ID |
 | `LLM_MODEL_NAME` | `Claude Sonnet 4.6` | Primary Model display name |
-| `TIANCLAW_MODEL` | `openai-codex/gpt-5.5` | Model override for the `tianclaw` agent |
+| `TIANCLAW_MODEL` | `openai-codex/gpt-5.4-mini` | Model override for the `tianclaw` agent; uses OpenAI Codex device-code auth |
 | `OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES` | `0` | Framework channel health-monitor interval; `0` disables health-monitor restarts entirely |
-| `OPENCLAW_AGENTS_MAX_CONCURRENT` | `4` | Maximum concurrent tasks per agent |
+| `OPENCLAW_AGENTS_MAX_CONCURRENT` | `2` | Maximum concurrent tasks on the main agent lane; keeps Discord typing responsive while one run is active |
+| `OPENCLAW_AGENTS_SUBAGENTS_MAX_CONCURRENT` | `1` | Maximum concurrent subagent tasks |
+| `OPENCLAW_CRON_MAX_CONCURRENT_RUNS` | `1` | Maximum concurrent cron runs; keep cron serialized so scheduled jobs do not starve interactive Discord replies |
+| `OPENCLAW_AGENTS_TYPING_MODE` | `instant` | Agent typing policy; starts Discord typing as soon as the reply runtime begins |
+| `OPENCLAW_AGENTS_TYPING_INTERVAL_SECONDS` | `3` | Agent typing keepalive interval in seconds |
+| `OPENCLAW_GROUP_VISIBLE_REPLIES` | `message_tool` | Use the Discord message tool for group/channel visible replies |
 | `DISCORD_NATIVE_SKILL_COMMANDS` | `false` | Publish per-skill Discord slash commands in addition to core native commands |
 | `OPENCLAW_SKIP_ONBOARDING` | `true` | Skip interactive onboarding in automated Docker deployments |
 | `DISCORD_ENABLED` | `true` | Enable discord channel |
@@ -60,7 +65,8 @@ Important: after the first successful deploy, OpenClaw reads the persisted confi
 | `TIANCLAW_GIT_SYNC_ENABLED` | `false` | Enable periodic sanitized volume snapshots to the TianClaw private repo |
 | `TIANCLAW_GIT_REPO` | `git@github.com:wangzitian-ai/tianclaw.git` | Git repository for OpenClaw volume snapshots |
 | `TIANCLAW_GIT_BRANCH` | `main` | Branch used by the sync sidecar |
-| `TIANCLAW_GIT_SYNC_INTERVAL_SECONDS` | `300` | Sync loop interval |
+| `TIANCLAW_GIT_SYNC_INTERVAL_SECONDS` | `86400` | Sync loop interval; default is one daily snapshot |
+| `TIANCLAW_GIT_FALLBACK_BRANCH_PREFIX` | `snapshot/openclaw-volume` | Branch prefix used when pushing the volume snapshot to `main` fails |
 | `TIANCLAW_GIT_SSH_KEY_PATH` | `/root/.ssh/id_ed25519` | Host private-key path mounted read-only by the sync sidecar |
 | `TIANCLAW_GIT_SSH_KNOWN_HOSTS_PATH` | `/root/.ssh/known_hosts` | Host known-hosts path mounted read-only by the sync sidecar |
 | `TIANCLAW_GIT_SSH_PRIVATE_KEY` | _empty_ | Optional private-key contents used instead of `TIANCLAW_GIT_SSH_KEY_PATH` |
@@ -70,13 +76,13 @@ Important: after the first successful deploy, OpenClaw reads the persisted confi
 
 ## Config Persistence
 
-The `init-config` container generates `openclaw.json` on first deploy. On subsequent redeploys it preserves the existing file, but still applies selected declarative overrides from environment variables, including `OPENCLAW_GATEWAY_BIND`, `TIANCLAW_MODEL`, `OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES`, `DISCORD_NATIVE_SKILL_COMMANDS`, and `OPENCLAW_AGENTS_MAX_CONCURRENT`. This lets operator-managed settings survive while still enforcing critical network, model routing, and runtime behavior.
+The `init-config` container generates `openclaw.json` on first deploy. On subsequent redeploys it preserves the existing file, but still applies selected declarative overrides from environment variables, including `OPENCLAW_GATEWAY_BIND`, `TIANCLAW_MODEL`, `OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES`, `DISCORD_NATIVE_SKILL_COMMANDS`, `OPENCLAW_AGENTS_MAX_CONCURRENT`, `OPENCLAW_AGENTS_SUBAGENTS_MAX_CONCURRENT`, `OPENCLAW_CRON_MAX_CONCURRENT_RUNS`, `OPENCLAW_AGENTS_TYPING_MODE`, `OPENCLAW_AGENTS_TYPING_INTERVAL_SECONDS`, and `OPENCLAW_GROUP_VISIBLE_REPLIES`. This lets operator-managed settings survive while still enforcing critical network, model routing, and runtime behavior.
 
 For OpenClaw `2026.5.3`, the same patch step also normalizes legacy Discord streaming fields to the object form required by the current schema and removes an explicit legacy `tools.web.search.provider=brave` value while preserving the existing search API key. This lets OpenClaw use provider auto-detection instead of failing startup on a stale provider registration. This is a compatibility migration for persisted configs, not a config reset.
 
 OpenClaw `2026.5.x` loads Discord as an installable plugin. The `openclaw` service command installs the official `@openclaw/discord` plugin only when it is missing, then starts the gateway. This keeps fresh containers and fresh volumes from booting without the Discord channel.
 
-When enabled, `tianclaw-git-sync` mounts the same Docker volume read-only at `/openclaw`, mounts the configured SSH key material read-only, clones the private repo into an ephemeral container path, rsyncs the sanitized volume root, commits changes, and pushes the configured branch. It intentionally excludes `.git`, `.ssh`, `credentials`, `identity`, `keyrings`, `npm/node_modules`, virtualenvs, `openclaw.json*`, `.env*`, key files, token-like paths, and SQLite WAL/SHM files.
+When enabled, `tianclaw-git-sync` mounts the same Docker volume read-only at `/openclaw`, mounts the configured SSH key material read-only, clones the private repo into an ephemeral container path, rsyncs the sanitized volume root, commits changes, and pushes the configured branch. If pushing the configured branch fails, it preserves the snapshot by pushing the same commit to `TIANCLAW_GIT_FALLBACK_BRANCH_PREFIX/<UTC timestamp>` instead. It intentionally excludes `.git`, `.ssh`, `credentials`, `identity`, `keyrings`, `npm/node_modules`, virtualenvs, `openclaw.json*`, `.env*`, key files, token-like paths, and SQLite WAL/SHM files.
 
 This means there are multiple configuration layers:
 
@@ -132,9 +138,14 @@ This deployment intentionally applies two startup overrides during `init-config`
 
 - `gateway.channelHealthCheckMinutes=0`
 - `channels.discord.commands.nativeSkills=false`
+- `agents.defaults.maxConcurrent=2`
+- `cron.maxConcurrentRuns=1`
+- `agents.defaults.typingMode=instant` with a 3-second typing keepalive
 - legacy `channels.discord.*.streaming` scalar values are normalized to `{ mode: "..." }`
+- high-frequency persisted cron jobs are kept on `next-heartbeat`, `lightContext`, short timeouts, and the configured TianClaw model to avoid long command-lane stalls
+- group/channel visible replies use `message_tool` so Discord delivery goes through the explicit message sender
 
-The first disables OpenClaw's framework health-monitor, which was batch-restarting all Discord accounts on the same 5-minute tick. The second keeps core slash commands but drops per-skill command fan-out, reducing startup-time Discord API traffic.
+The first disables OpenClaw's framework health-monitor, which was batch-restarting all Discord accounts on the same 5-minute tick. The second keeps core slash commands but drops per-skill command fan-out, reducing startup-time Discord API traffic. Main-lane concurrency is set to 2 so a human Discord message can begin its reply lifecycle and show typing while another run is active; cron remains serialized through `cron.maxConcurrentRuns=1`.
 
 ## Troubleshooting
 
@@ -212,6 +223,6 @@ The first disables OpenClaw's framework health-monitor, which was batch-restarti
 **Cause**: The running config was created before `TIANCLAW_MODEL` was introduced, or the override was not set in Dokploy.
 
 **Solution**:
-- Set `TIANCLAW_MODEL=openai-codex/gpt-5.5` in Dokploy.
+- Set `TIANCLAW_MODEL=openai-codex/gpt-5.4-mini` in Dokploy and ensure Codex device-code auth is present in the persisted OpenClaw volume.
 - Redeploy the compose application.
 - If the agent entry was manually removed from `openclaw.json`, restore it or reset the config file before redeploying.
