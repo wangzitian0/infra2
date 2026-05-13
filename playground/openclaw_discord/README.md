@@ -45,8 +45,11 @@ Important: after the first successful deploy, OpenClaw reads the persisted confi
 | `LLM_MODEL_NAME` | `Claude Sonnet 4.6` | Primary Model display name |
 | `TIANCLAW_MODEL` | `openai-codex/gpt-5.4-mini` | Model override for the `tianclaw` agent; uses OpenAI Codex device-code auth |
 | `OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES` | `0` | Framework channel health-monitor interval; `0` disables health-monitor restarts entirely |
-| `OPENCLAW_AGENTS_MAX_CONCURRENT` | `1` | Maximum concurrent tasks per agent |
+| `OPENCLAW_AGENTS_MAX_CONCURRENT` | `2` | Maximum concurrent tasks on the main agent lane; keeps Discord typing responsive while one run is active |
 | `OPENCLAW_AGENTS_SUBAGENTS_MAX_CONCURRENT` | `1` | Maximum concurrent subagent tasks |
+| `OPENCLAW_CRON_MAX_CONCURRENT_RUNS` | `1` | Maximum concurrent cron runs; keep cron serialized so scheduled jobs do not starve interactive Discord replies |
+| `OPENCLAW_AGENTS_TYPING_MODE` | `instant` | Agent typing policy; starts Discord typing as soon as the reply runtime begins |
+| `OPENCLAW_AGENTS_TYPING_INTERVAL_SECONDS` | `3` | Agent typing keepalive interval in seconds |
 | `OPENCLAW_GROUP_VISIBLE_REPLIES` | `message_tool` | Use the Discord message tool for group/channel visible replies |
 | `DISCORD_NATIVE_SKILL_COMMANDS` | `false` | Publish per-skill Discord slash commands in addition to core native commands |
 | `OPENCLAW_SKIP_ONBOARDING` | `true` | Skip interactive onboarding in automated Docker deployments |
@@ -72,7 +75,7 @@ Important: after the first successful deploy, OpenClaw reads the persisted confi
 
 ## Config Persistence
 
-The `init-config` container generates `openclaw.json` on first deploy. On subsequent redeploys it preserves the existing file, but still applies selected declarative overrides from environment variables, including `OPENCLAW_GATEWAY_BIND`, `TIANCLAW_MODEL`, `OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES`, `DISCORD_NATIVE_SKILL_COMMANDS`, `OPENCLAW_AGENTS_MAX_CONCURRENT`, `OPENCLAW_AGENTS_SUBAGENTS_MAX_CONCURRENT`, and `OPENCLAW_GROUP_VISIBLE_REPLIES`. This lets operator-managed settings survive while still enforcing critical network, model routing, and runtime behavior.
+The `init-config` container generates `openclaw.json` on first deploy. On subsequent redeploys it preserves the existing file, but still applies selected declarative overrides from environment variables, including `OPENCLAW_GATEWAY_BIND`, `TIANCLAW_MODEL`, `OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES`, `DISCORD_NATIVE_SKILL_COMMANDS`, `OPENCLAW_AGENTS_MAX_CONCURRENT`, `OPENCLAW_AGENTS_SUBAGENTS_MAX_CONCURRENT`, `OPENCLAW_CRON_MAX_CONCURRENT_RUNS`, `OPENCLAW_AGENTS_TYPING_MODE`, `OPENCLAW_AGENTS_TYPING_INTERVAL_SECONDS`, and `OPENCLAW_GROUP_VISIBLE_REPLIES`. This lets operator-managed settings survive while still enforcing critical network, model routing, and runtime behavior.
 
 For OpenClaw `2026.5.3`, the same patch step also normalizes legacy Discord streaming fields to the object form required by the current schema and removes an explicit legacy `tools.web.search.provider=brave` value while preserving the existing search API key. This lets OpenClaw use provider auto-detection instead of failing startup on a stale provider registration. This is a compatibility migration for persisted configs, not a config reset.
 
@@ -134,11 +137,14 @@ This deployment intentionally applies two startup overrides during `init-config`
 
 - `gateway.channelHealthCheckMinutes=0`
 - `channels.discord.commands.nativeSkills=false`
+- `agents.defaults.maxConcurrent=2`
+- `cron.maxConcurrentRuns=1`
+- `agents.defaults.typingMode=instant` with a 3-second typing keepalive
 - legacy `channels.discord.*.streaming` scalar values are normalized to `{ mode: "..." }`
 - high-frequency persisted cron jobs are kept on `next-heartbeat`, `lightContext`, short timeouts, and the configured TianClaw model to avoid long command-lane stalls
 - group/channel visible replies use `message_tool` so Discord delivery goes through the explicit message sender
 
-The first disables OpenClaw's framework health-monitor, which was batch-restarting all Discord accounts on the same 5-minute tick. The second keeps core slash commands but drops per-skill command fan-out, reducing startup-time Discord API traffic.
+The first disables OpenClaw's framework health-monitor, which was batch-restarting all Discord accounts on the same 5-minute tick. The second keeps core slash commands but drops per-skill command fan-out, reducing startup-time Discord API traffic. Main-lane concurrency is set to 2 so a human Discord message can begin its reply lifecycle and show typing while another run is active; cron remains serialized through `cron.maxConcurrentRuns=1`.
 
 ## Troubleshooting
 

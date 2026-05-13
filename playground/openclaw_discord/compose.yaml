@@ -236,8 +236,11 @@ services:
       - TIANCLAW_MIGRATE_CRON_MODELS=${TIANCLAW_MIGRATE_CRON_MODELS:-true}
       - BRAVE_API_KEY=${BRAVE_API_KEY:-}
       - OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES=${OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES:-0}
-      - OPENCLAW_AGENTS_MAX_CONCURRENT=${OPENCLAW_AGENTS_MAX_CONCURRENT:-1}
+      - OPENCLAW_AGENTS_MAX_CONCURRENT=${OPENCLAW_AGENTS_MAX_CONCURRENT:-2}
       - OPENCLAW_AGENTS_SUBAGENTS_MAX_CONCURRENT=${OPENCLAW_AGENTS_SUBAGENTS_MAX_CONCURRENT:-1}
+      - OPENCLAW_CRON_MAX_CONCURRENT_RUNS=${OPENCLAW_CRON_MAX_CONCURRENT_RUNS:-1}
+      - OPENCLAW_AGENTS_TYPING_MODE=${OPENCLAW_AGENTS_TYPING_MODE:-instant}
+      - OPENCLAW_AGENTS_TYPING_INTERVAL_SECONDS=${OPENCLAW_AGENTS_TYPING_INTERVAL_SECONDS:-3}
       - DISCORD_ACCOUNT_RETRY_ATTEMPTS=${DISCORD_ACCOUNT_RETRY_ATTEMPTS:-10}
       - DISCORD_ACCOUNT_RETRY_MIN_DELAY_MS=${DISCORD_ACCOUNT_RETRY_MIN_DELAY_MS:-1500}
       - DISCORD_ACCOUNT_RETRY_MAX_DELAY_MS=${DISCORD_ACCOUNT_RETRY_MAX_DELAY_MS:-8000}
@@ -275,8 +278,11 @@ services:
             --arg gatewayBind "$${OPENCLAW_GATEWAY_BIND:-lan}" \
             --argjson gatewayChannelHealthCheckMinutes "$${OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES:-0}" \
             --argjson discordNativeSkillCommands "$${DISCORD_NATIVE_SKILL_COMMANDS:-false}" \
-            --argjson agentsMaxConcurrent "$${OPENCLAW_AGENTS_MAX_CONCURRENT:-1}" \
+            --argjson agentsMaxConcurrent "$${OPENCLAW_AGENTS_MAX_CONCURRENT:-2}" \
             --argjson agentsSubagentsMaxConcurrent "$${OPENCLAW_AGENTS_SUBAGENTS_MAX_CONCURRENT:-1}" \
+            --argjson cronMaxConcurrentRuns "$${OPENCLAW_CRON_MAX_CONCURRENT_RUNS:-1}" \
+            --arg agentsTypingMode "$${OPENCLAW_AGENTS_TYPING_MODE:-instant}" \
+            --argjson agentsTypingIntervalSeconds "$${OPENCLAW_AGENTS_TYPING_INTERVAL_SECONDS:-3}" \
             --arg braveApiKey "$${BRAVE_API_KEY:-}" \
             --argjson discordAccountRetryAttempts "$${DISCORD_ACCOUNT_RETRY_ATTEMPTS:-10}" \
             --argjson discordAccountRetryMinDelayMs "$${DISCORD_ACCOUNT_RETRY_MIN_DELAY_MS:-1500}" \
@@ -387,6 +393,9 @@ services:
               | .channels.discord.commands.nativeSkills = $$discordNativeSkillCommands
               | .agents.defaults.maxConcurrent = $$agentsMaxConcurrent
               | .agents.defaults.subagents.maxConcurrent = $$agentsSubagentsMaxConcurrent
+              | .agents.defaults.typingMode = $$agentsTypingMode
+              | .agents.defaults.typingIntervalSeconds = $$agentsTypingIntervalSeconds
+              | .cron.maxConcurrentRuns = $$cronMaxConcurrentRuns
               | .channels.discord.guilds["*"].requireMention = $$discordGroupRequireMention
               | .channels.discord.streaming = (.channels.discord.streaming | normalize_streaming)
               | .channels.discord.accounts = (
@@ -502,8 +511,11 @@ services:
           --arg gatewayBind "$${OPENCLAW_GATEWAY_BIND:-lan}" \
           --argjson gatewayChannelHealthCheckMinutes "$${OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES:-0}" \
           --argjson discordNativeSkillCommands "$${DISCORD_NATIVE_SKILL_COMMANDS:-false}" \
-          --argjson agentsMaxConcurrent "$${OPENCLAW_AGENTS_MAX_CONCURRENT:-1}" \
+          --argjson agentsMaxConcurrent "$${OPENCLAW_AGENTS_MAX_CONCURRENT:-2}" \
           --argjson agentsSubagentsMaxConcurrent "$${OPENCLAW_AGENTS_SUBAGENTS_MAX_CONCURRENT:-1}" \
+          --argjson cronMaxConcurrentRuns "$${OPENCLAW_CRON_MAX_CONCURRENT_RUNS:-1}" \
+          --arg agentsTypingMode "$${OPENCLAW_AGENTS_TYPING_MODE:-instant}" \
+          --argjson agentsTypingIntervalSeconds "$${OPENCLAW_AGENTS_TYPING_INTERVAL_SECONDS:-3}" \
           --argjson discordAccountRetryAttempts "$${DISCORD_ACCOUNT_RETRY_ATTEMPTS:-10}" \
           --argjson discordAccountRetryMinDelayMs "$${DISCORD_ACCOUNT_RETRY_MIN_DELAY_MS:-1500}" \
           --argjson discordAccountRetryMaxDelayMs "$${DISCORD_ACCOUNT_RETRY_MAX_DELAY_MS:-8000}" \
@@ -569,6 +581,8 @@ services:
               defaults: {
                 model: "\($$provider)/\($$modelId)",
                 maxConcurrent: $$agentsMaxConcurrent,
+                typingMode: $$agentsTypingMode,
+                typingIntervalSeconds: $$agentsTypingIntervalSeconds,
                 subagents: {
                   maxConcurrent: $$agentsSubagentsMaxConcurrent
                 },
@@ -594,6 +608,9 @@ services:
                   model: $$tianclawModel
                 }
               ]
+            },
+            cron: {
+              maxConcurrentRuns: $$cronMaxConcurrentRuns
             },
             channels: {
               discord: {
