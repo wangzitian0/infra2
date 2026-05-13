@@ -68,8 +68,9 @@ services:
       - TIANCLAW_GIT_SYNC_ENABLED=${TIANCLAW_GIT_SYNC_ENABLED:-false}
       - TIANCLAW_GIT_REPO=${TIANCLAW_GIT_REPO:-git@github.com:wangzitian-ai/tianclaw.git}
       - TIANCLAW_GIT_BRANCH=${TIANCLAW_GIT_BRANCH:-main}
-      - TIANCLAW_GIT_SYNC_INTERVAL_SECONDS=${TIANCLAW_GIT_SYNC_INTERVAL_SECONDS:-300}
+      - TIANCLAW_GIT_SYNC_INTERVAL_SECONDS=${TIANCLAW_GIT_SYNC_INTERVAL_SECONDS:-86400}
       - TIANCLAW_GIT_SYNC_DELETE=${TIANCLAW_GIT_SYNC_DELETE:-false}
+      - TIANCLAW_GIT_FALLBACK_BRANCH_PREFIX=${TIANCLAW_GIT_FALLBACK_BRANCH_PREFIX:-snapshot/openclaw-volume}
       - TIANCLAW_GIT_USER_NAME=${TIANCLAW_GIT_USER_NAME:-TianClaw Sync}
       - TIANCLAW_GIT_USER_EMAIL=${TIANCLAW_GIT_USER_EMAIL:-tianclaw-sync@users.noreply.github.com}
       - "TIANCLAW_GIT_COMMIT_PREFIX=${TIANCLAW_GIT_COMMIT_PREFIX:-chore: sync live OpenClaw state}"
@@ -197,10 +198,17 @@ services:
                 continue
               fi
             fi
+            snapshot_ts="$$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             git add -A
-            git commit -m "$${TIANCLAW_GIT_COMMIT_PREFIX} $$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            git push -u origin "HEAD:$${TIANCLAW_GIT_BRANCH}"
-            echo "synced OpenClaw volume to $${TIANCLAW_GIT_REPO}#$${TIANCLAW_GIT_BRANCH}"
+            git commit -m "$${TIANCLAW_GIT_COMMIT_PREFIX} $${snapshot_ts}"
+            if git push -u origin "HEAD:$${TIANCLAW_GIT_BRANCH}"; then
+              echo "synced OpenClaw volume to $${TIANCLAW_GIT_REPO}#$${TIANCLAW_GIT_BRANCH}"
+            else
+              fallback_branch="$${TIANCLAW_GIT_FALLBACK_BRANCH_PREFIX}/$$(date -u +%Y%m%dT%H%M%SZ)"
+              echo "push to $${TIANCLAW_GIT_BRANCH} failed; preserving snapshot on $${fallback_branch}"
+              git push -u origin "HEAD:$${fallback_branch}"
+              echo "synced OpenClaw volume snapshot to $${TIANCLAW_GIT_REPO}#$${fallback_branch}"
+            fi
           else
             echo "no tianclaw workspace changes"
           fi

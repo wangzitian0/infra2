@@ -65,7 +65,8 @@ Important: after the first successful deploy, OpenClaw reads the persisted confi
 | `TIANCLAW_GIT_SYNC_ENABLED` | `false` | Enable periodic sanitized volume snapshots to the TianClaw private repo |
 | `TIANCLAW_GIT_REPO` | `git@github.com:wangzitian-ai/tianclaw.git` | Git repository for OpenClaw volume snapshots |
 | `TIANCLAW_GIT_BRANCH` | `main` | Branch used by the sync sidecar |
-| `TIANCLAW_GIT_SYNC_INTERVAL_SECONDS` | `300` | Sync loop interval |
+| `TIANCLAW_GIT_SYNC_INTERVAL_SECONDS` | `86400` | Sync loop interval; default is one daily snapshot |
+| `TIANCLAW_GIT_FALLBACK_BRANCH_PREFIX` | `snapshot/openclaw-volume` | Branch prefix used when pushing the volume snapshot to `main` fails |
 | `TIANCLAW_GIT_SSH_KEY_PATH` | `/root/.ssh/id_ed25519` | Host private-key path mounted read-only by the sync sidecar |
 | `TIANCLAW_GIT_SSH_KNOWN_HOSTS_PATH` | `/root/.ssh/known_hosts` | Host known-hosts path mounted read-only by the sync sidecar |
 | `TIANCLAW_GIT_SSH_PRIVATE_KEY` | _empty_ | Optional private-key contents used instead of `TIANCLAW_GIT_SSH_KEY_PATH` |
@@ -81,7 +82,7 @@ For OpenClaw `2026.5.3`, the same patch step also normalizes legacy Discord stre
 
 OpenClaw `2026.5.x` loads Discord as an installable plugin. The `openclaw` service command installs the official `@openclaw/discord` plugin only when it is missing, then starts the gateway. This keeps fresh containers and fresh volumes from booting without the Discord channel.
 
-When enabled, `tianclaw-git-sync` mounts the same Docker volume read-only at `/openclaw`, mounts the configured SSH key material read-only, clones the private repo into an ephemeral container path, rsyncs the sanitized volume root, commits changes, and pushes the configured branch. It intentionally excludes `.git`, `.ssh`, `credentials`, `identity`, `keyrings`, `npm/node_modules`, virtualenvs, `openclaw.json*`, `.env*`, key files, token-like paths, and SQLite WAL/SHM files.
+When enabled, `tianclaw-git-sync` mounts the same Docker volume read-only at `/openclaw`, mounts the configured SSH key material read-only, clones the private repo into an ephemeral container path, rsyncs the sanitized volume root, commits changes, and pushes the configured branch. If pushing the configured branch fails, it preserves the snapshot by pushing the same commit to `TIANCLAW_GIT_FALLBACK_BRANCH_PREFIX/<UTC timestamp>` instead. It intentionally excludes `.git`, `.ssh`, `credentials`, `identity`, `keyrings`, `npm/node_modules`, virtualenvs, `openclaw.json*`, `.env*`, key files, token-like paths, and SQLite WAL/SHM files.
 
 This means there are multiple configuration layers:
 
