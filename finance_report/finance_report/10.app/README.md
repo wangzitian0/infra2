@@ -46,9 +46,9 @@ Stored at: `secret/data/finance_report/<env>/app`
 | `AI_CHAT_COMPLETIONS_PATH` | Chat completions API path |
 | `AI_LAYOUT_PARSING_PATH` | OCR/layout parsing API path |
 | `AI_MODEL_CATALOG_SOURCE` | Model catalog source; use `configured` for the local GLM catalog |
-| `PRIMARY_MODEL` | Primary text model; defaults to `glm-4.5` |
+| `PRIMARY_MODEL` | Primary text model; defaults to `glm-5.1` |
 | `OCR_MODEL` | Dedicated OCR model; defaults to `glm-ocr` |
-| `VISION_MODEL` | Vision-capable model; defaults to `glm-4.5v` |
+| `VISION_MODEL` | Vision-capable model; defaults to `glm-5v-turbo` |
 | `FALLBACK_MODELS` | Comma-separated fallback model list |
 | `AI_DAILY_LIMIT_USD` | Daily AI budget setting consumed by the app configuration |
 | `NEXT_PUBLIC_APP_URL` | Frontend URL used by backend-generated links |
