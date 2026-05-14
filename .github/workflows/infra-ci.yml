@@ -38,6 +38,13 @@ jobs:
           echo "✅ All compose files are valid"
         env:
           DATA_PATH: /tmp/infra2-data
+          FEISHU_APP_ID: dummy-feishu-app-id
+          FEISHU_APP_SECRET: dummy-feishu-app-secret
+          FEISHU_VERIFICATION_TOKEN: dummy-feishu-verification-token
+          FEISHU_ENCRYPT_KEY: dummy-feishu-encrypt-key
+          LLM_API_KEY: dummy-llm-api-key
+          OPENCLAW_GATEWAY_TOKEN: dummy-openclaw-gateway-token
+          GOG_KEYRING_PASSWORD: dummy-keyring-password
 
   test-deployer-logic:
     name: Test Deployer Hash Logic
