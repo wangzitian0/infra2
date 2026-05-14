@@ -39,7 +39,18 @@ Stored at: `secret/data/finance_report/<env>/app`
 | `S3_ACCESS_KEY` | MinIO/S3 access key |
 | `S3_SECRET_KEY` | MinIO/S3 secret key |
 | `S3_BUCKET` | Bucket name for statements |
-| `OPENROUTER_API_KEY` | OpenRouter API key for Gemini |
+| `AI_PROVIDER` | AI provider identifier; defaults to `zai` |
+| `ZAI_API_KEY` | Z.AI API key for GLM models |
+| `AI_API_KEY` | Provider-neutral API key alias for non-Z.AI providers |
+| `AI_BASE_URL` | Provider base URL; defaults to Z.AI |
+| `AI_CHAT_COMPLETIONS_PATH` | Chat completions API path |
+| `AI_LAYOUT_PARSING_PATH` | OCR/layout parsing API path |
+| `AI_MODEL_CATALOG_SOURCE` | Model catalog source; use `configured` for the local GLM catalog |
+| `PRIMARY_MODEL` | Primary text model; defaults to `glm-4.5` |
+| `OCR_MODEL` | Dedicated OCR model; defaults to `glm-ocr` |
+| `VISION_MODEL` | Vision-capable model; defaults to `glm-4.5v` |
+| `FALLBACK_MODELS` | Comma-separated fallback model list |
+| `AI_DAILY_LIMIT_USD` | Daily AI budget setting consumed by the app configuration |
 | `NEXT_PUBLIC_APP_URL` | Frontend URL used by backend-generated links |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | SigNoz OTLP HTTP endpoint |
 | `OTEL_SERVICE_NAME` | OTEL service name for logs |
