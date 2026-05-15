@@ -9,6 +9,7 @@ on:
       - "finance_report/**"
       - "finance/**"
       - "libs/**"
+      - ".github/workflows/deploy-platform.yml"
   workflow_dispatch:
     inputs:
       env:
@@ -24,6 +25,13 @@ on:
         required: true
         default: 'main'
 
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-deployment-${{ github.event_name == 'workflow_dispatch' && inputs.env || github.ref }}
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -31,6 +39,8 @@ jobs:
       - name: Determine Deployment Target
         id: target
         run: |
+          set -euo pipefail
+
           # Default from inputs (workflow_dispatch)
           ENV="${{ inputs.env }}"
           REF="${{ inputs.ref }}"
@@ -51,10 +61,38 @@ jobs:
           
           echo "🚀 Deploying $REF to $ENV"
 
+      - name: Check IaC Runner health
+        env:
+          IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
+        run: |
+          set -euo pipefail
+
+          body="$(mktemp)"
+          status="$(curl -sS -o "$body" -w "%{http_code}" \
+            --connect-timeout 10 \
+            --max-time 20 \
+            "${IAC_RUNNER_URL%/}/health" || true)"
+
+          echo "IaC Runner health HTTP status: $status"
+          cat "$body" || true
+
+          if [[ "$status" != "200" ]]; then
+            echo "::error::IaC Runner health check failed before deployment. Check Dokploy bootstrap/iac_runner source path, domain routing, VAULT_APP_TOKEN, and iac-runner container health."
+            exit 1
+          fi
+
       - name: Trigger IaC Runner
         env:
           WEBHOOK_SECRET: ${{ secrets.IAC_WEBHOOK_SECRET }}
+          IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
         run: |
+          set -euo pipefail
+
+          if [[ -z "${WEBHOOK_SECRET:-}" ]]; then
+            echo "::error::IAC_WEBHOOK_SECRET is not configured."
+            exit 1
+          fi
+
           ENV="${{ steps.target.outputs.env }}"
           REF="${{ steps.target.outputs.ref }}"
           
@@ -70,8 +108,13 @@ jobs:
           SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $2}')
           
           echo "Sending payload to IaC Runner..."
-          curl -X POST https://iac.zitian.party/deploy \
+          curl --fail-with-body \
+            --retry 3 \
+            --retry-delay 5 \
+            --retry-all-errors \
+            --connect-timeout 10 \
+            --max-time 120 \
+            -X POST "${IAC_RUNNER_URL%/}/deploy" \
             -H "Content-Type: application/json" \
             -H "X-Hub-Signature-256: sha256=$SIGNATURE" \
-            -d "$PAYLOAD" \
-            --fail-with-body
+            -d "$PAYLOAD"

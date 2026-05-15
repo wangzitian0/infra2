@@ -8,6 +8,7 @@ on:
       - 'finance_report/**'
       - 'libs/**'
       - '.github/workflows/infra-ci.yml'
+      - '.github/workflows/deploy-platform.yml'
   push:
     branches: [main]
     paths:
@@ -15,6 +16,8 @@ on:
       - 'platform/**'
       - 'finance_report/**'
       - 'libs/**'
+      - '.github/workflows/infra-ci.yml'
+      - '.github/workflows/deploy-platform.yml'
 
 permissions:
   contents: read

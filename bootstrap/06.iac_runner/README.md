@@ -92,12 +92,12 @@ IaC Runner supports **GitOps version-based deployments** via GitHub Actions work
 
 **Staging (Automatic)**:
 ```
-Push to main → platform-staging.yml → v1.2.{patch+1} → Deploy to Staging
+Push to main → deploy-platform.yml → Deploy `main` to Staging
 ```
 
 **Production (Manual)**:
 ```
-Promote staging tag → platform-production.yml → v1.{minor+1}.0 → Deploy to Production
+Select release ref → deploy-platform.yml → Deploy to Production
 ```
 
 **Hotfix (Manual)**:
@@ -127,13 +127,11 @@ Create from prod tag → v1.3.1 → Deploy to Production (no main merge required
 
 4. **Manual production promotion**:
    ```bash
-   gh workflow run platform-production.yml \
-     -f confirm="deploy" \
-     -f staging_tag="v1.2.4"
+   gh workflow run deploy-platform.yml \
+     -f env="production" \
+     -f ref="v1.2.4"
    ```
-   - Creates production tag `v1.3.0` (minor +1)
-   - Calls `/deploy` endpoint with `{"env":"production","tag":"v1.3.0"}`
-   - Creates GitHub Release
+   - Calls `/deploy` endpoint with `{"env":"production","ref":"v1.2.4"}`
 
 ## Endpoints
 
@@ -261,11 +259,14 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 ```
 
-### Issue 3: VAULT_APP_TOKEN not found
+### Issue 3: VAULT_APP_TOKEN invalid or not found
 
-**Symptoms**: Container logs show Vault connection errors
+**Symptoms**:
+- `iac-runner-vault-agent` logs show `token file validation failed`
+- `iac-runner` logs show `ERROR: Secrets file not found after 60s`
+- `https://iac.{domain}/health` returns 404 because the app container is not serving traffic
 
-**Cause**: Missing or invalid VAULT_APP_TOKEN
+**Cause**: Missing, expired, or invalid `VAULT_APP_TOKEN`. The Vault Agent renews valid periodic tokens, but it cannot recover once the token stored in Dokploy is already invalid.
 
 **Solution**:
 ```bash
@@ -279,11 +280,29 @@ docker restart iac-runner
 
 **Verification**:
 ```bash
-docker exec iac-runner env | grep VAULT_APP_TOKEN
-# Should show token value
+docker logs iac-runner-vault-agent --tail 20
+# Expected: no "token file validation failed" messages
+
+curl https://iac.{domain}/health
+# Expected: HTTP 200
 ```
 
-### Issue 4: Webhook signature verification failed
+### Issue 4: Host SSH key mount fails
+
+**Symptoms**:
+```
+error mounting "/root/.ssh/id_ed25519" ... not a directory
+```
+
+**Cause**: Docker creates a missing bind-mount source as a directory. Mounting the private key file directly is fragile when the host path is absent or has drifted.
+
+**Solution**: Mount the host SSH directory at `/host_ssh` and copy `id_ed25519` into a runtime-only location on container start. The compose file uses:
+```yaml
+volumes:
+  - ${SSH_DIR_PATH:-/root/.ssh}:/host_ssh:ro
+```
+
+### Issue 5: Webhook signature verification failed
 
 **Symptoms**: GitHub webhook returns 403 Forbidden
 
@@ -327,4 +346,4 @@ docker logs iac-runner-vault-agent --tail 10
 
 - [SSOT: IaC Runner](../../docs/ssot/bootstrap.iac_runner.md) - Comprehensive reference
 - [SSOT: Pipeline](../../docs/ssot/ops.pipeline.md) - CI/CD workflows
-- [GitHub Workflows](../../.github/workflows/) - platform-staging.yml, platform-production.yml
+- [GitHub Workflows](../../.github/workflows/) - deploy-platform.yml

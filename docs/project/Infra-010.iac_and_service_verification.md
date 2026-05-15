@@ -40,7 +40,7 @@
    - 创建 `docs/ssot/bootstrap.iac_runner.md` - 完整 IaC Runner SSOT 文档
    - 更新 `docs/ssot/ops.pipeline.md` - 添加 IaC Runner 架构和工作流
    - 更新 `docs/ssot/core.md` - 添加 4-layer architecture diagram
-   - 更新 `bootstrap/06.iac-runner/README.md` - 添加 troubleshooting 章节
+   - 更新 `bootstrap/06.iac_runner/README.md` - 添加 troubleshooting 章节
    - 更新 `bootstrap/README.md` - 添加 IaC Runner 组件说明
 
 7. **新服务 SOP 文档**
@@ -115,6 +115,23 @@
 **缺失的 Post-Merge Automation**：
 - IaC Runner webhook 应该在 merge to main 后触发 `invoke {service}.sync`
 - 目前 IaC Runner 挂了，所以这个环节断了
+
+### 2026-05-15 Post-Merge CI Regression
+
+**Symptoms**:
+- `Platform Deployment` failed on `main` after PR #153 and PR #154.
+- GitHub Actions received HTTP 404 from `https://iac.zitian.party/deploy`.
+
+**Root causes found**:
+- Dokploy `bootstrap/iac_runner` had drifted to the removed compose path `bootstrap/06.iac-runner/compose.yaml`; the canonical path is `bootstrap/06.iac_runner/compose.yaml`.
+- `iac-runner-vault-agent` had an invalid `VAULT_APP_TOKEN`, so `/secrets/.env` was not rendered.
+- `iac-runner` mounted `/root/.ssh/id_ed25519` directly; Docker created a directory when the host key path drifted, causing OCI mount failure.
+
+**Fixes in progress**:
+- `deploy-platform.yml` now serializes deployments, checks `/health` before `/deploy`, validates `IAC_WEBHOOK_SECRET`, and retries transient curl failures.
+- `infra-ci.yml` now watches `deploy-platform.yml` changes.
+- `bootstrap/06.iac_runner/compose.yaml` mounts the host SSH directory at `/host_ssh` instead of bind-mounting a single key file.
+- SSOT and README paths were updated from `06.iac-runner` to `06.iac_runner`.
 
 ---
 

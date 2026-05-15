@@ -9,11 +9,11 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **Service Code** | [`bootstrap/06.iac-runner/`](../../bootstrap/06.iac-runner/) | 服务实现、Dockerfile |
-| **Deployment** | [`bootstrap/06.iac-runner/deploy.py`](../../bootstrap/06.iac-runner/deploy.py) | 部署脚本 |
+| **Service Code** | [`bootstrap/06.iac_runner/`](../../bootstrap/06.iac_runner/) | 服务实现、Dockerfile |
+| **Deployment** | [`bootstrap/06.iac_runner/deploy.py`](../../bootstrap/06.iac_runner/deploy.py) | 部署脚本 |
 | **Secrets** | `secret/data/bootstrap/production/iac_runner` (Vault) | WEBHOOK_SECRET, GIT_REPO_URL |
-| **GitHub Workflows** | [`.github/workflows/platform-*.yml`](../../.github/workflows/) | 触发 IaC Runner 的 CI/CD 流程 |
-| **Component README** | [`bootstrap/06.iac-runner/README.md`](../../bootstrap/06.iac-runner/README.md) | 操作手册 |
+| **GitHub Workflows** | [`.github/workflows/deploy-platform.yml`](../../.github/workflows/deploy-platform.yml) | 触发 IaC Runner 的 CI/CD 流程 |
+| **Component README** | [`bootstrap/06.iac_runner/README.md`](../../bootstrap/06.iac_runner/README.md) | 操作手册 |
 
 ---
 
@@ -48,7 +48,7 @@ flowchart TB
 
     subgraph "CI/CD Layer"
         GitHub["GitHub<br/>(代码仓库)"]
-        Actions["GitHub Actions<br/>(platform-staging.yml<br/>platform-production.yml)"]
+        Actions["GitHub Actions<br/>(deploy-platform.yml)"]
     end
 
     subgraph "Infrastructure Layer - Bootstrap (L1)"
@@ -765,7 +765,18 @@ flowchart LR
 - ✅ `shared_tasks.py`
 - ❌ 密钥（存于 Vault，不进 Git）
 
-### 11.3 测试策略
+### 11.3 运行时漂移检查
+
+IaC Runner 是 bootstrap 服务，不能依赖自身自动修复。Post-merge workflow 调用 `/deploy` 前必须先调用 `/health`，把运行时漂移暴露为明确的 preflight failure。
+
+关键漂移信号：
+- `GET https://iac.{domain}/health` 返回 404：Dokploy 域名没有路由到 IaC Runner app，优先检查 `bootstrap/iac_runner` 的 domain、serviceName、source path。
+- Dokploy deployment log 出现 `Compose file not found`：`composePath` 必须是 `bootstrap/06.iac_runner/compose.yaml`。
+- `iac-runner-vault-agent` 出现 `token file validation failed`：Dokploy 中的 `VAULT_APP_TOKEN` 已失效，运行 `VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token') invoke vault.setup-tokens` 重新生成 periodic token。
+- `iac-runner` 出现 `Secrets file not found after 60s`：通常是 Vault Agent 未渲染 `/vault/secrets/.env`，先看 sidecar token 状态。
+- Docker 启动失败并提示 `error mounting "/root/.ssh/id_ed25519"`：不要挂载单个 SSH key 文件；挂载 `${SSH_DIR_PATH:-/root/.ssh}` 到 `/host_ssh`。
+
+### 11.4 测试策略
 
 **部署前测试**:
 ```bash
@@ -779,14 +790,14 @@ invoke postgres.shared.config-hash
 invoke check-env
 ```
 
-### 11.4 回滚策略
+### 11.5 回滚策略
 
 **快速回滚步骤**:
 ```bash
 # 方式 1: 回滚 Git tag（推荐）
-gh workflow run platform-production.yml \
-  -f confirm="deploy" \
-  -f staging_tag="v1.2.3"  # 使用之前的稳定版本
+gh workflow run deploy-platform.yml \
+  -f env="production" \
+  -f ref="v1.2.3"  # 使用之前的稳定版本
 
 # 方式 2: 手动执行上一个版本的 sync
 git checkout v1.2.3
@@ -887,13 +898,12 @@ docker logs iac-runner --tail 50
 
 ### 14.2 操作手册
 
-- [IaC Runner README](../../bootstrap/06.iac-runner/README.md) - 快速操作指南
+- [IaC Runner README](../../bootstrap/06.iac_runner/README.md) - 快速操作指南
 - [Bootstrap Layer README](../../bootstrap/README.md) - Bootstrap 组件索引
 
 ### 14.3 GitHub Workflows
 
-- [platform-staging.yml](../../.github/workflows/platform-staging.yml) - Staging 自动部署
-- [platform-production.yml](../../.github/workflows/platform-production.yml) - Production 手动部署
+- [deploy-platform.yml](../../.github/workflows/deploy-platform.yml) - Post-merge platform deployment
 
 ---
 
