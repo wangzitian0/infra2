@@ -12,8 +12,7 @@
 | **Docs Workflow** | [`.github/workflows/docs-site.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/docs-site.yml) | Pages 构建与发布 |
 | **MkDocs 配置** | [`docs/mkdocs.yml`](../mkdocs.yml) | 站点结构与导航 |
 | **依赖列表** | [`docs/requirements.txt`](../requirements.txt) | Python 依赖 |
-| **Platform Staging** | [`.github/workflows/platform-staging.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/platform-staging.yml) | 自动部署 staging |
-| **Platform Production** | [`.github/workflows/platform-production.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/platform-production.yml) | 手动部署 production |
+| **Platform Deployment** | [`.github/workflows/deploy-platform.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy-platform.yml) | Post-merge staging deploy and manual production deploy |
 
 ---
 
@@ -38,14 +37,14 @@
 ### 架构概览
 
 ```
-┌─────────────┐     platform-staging.yml    ┌──────────────┐     /deploy    ┌─────────────┐
-│   GitHub    │ ────────────────────────▶  │  Tag v1.2.X  │ ──────────────▶│ IaC Runner  │
-│  (main)     │                             │  (auto)      │                │  (staging)  │
+┌─────────────┐     deploy-platform.yml     ┌──────────────┐     /deploy    ┌─────────────┐
+│   GitHub    │ ────────────────────────▶  │  main/ref    │ ──────────────▶│ IaC Runner  │
+│  (main)     │                             │              │                │  (staging)  │
 └─────────────┘                             └──────────────┘                └─────────────┘
                                                                                     │
                                                                                     ▼
-┌─────────────┐     platform-production.yml ┌──────────────┐     /deploy    ┌─────────────┐
-│   Manual    │ ────────────────────────▶  │  Tag v1.X.0  │ ──────────────▶│ IaC Runner  │
+┌─────────────┐     deploy-platform.yml     ┌──────────────┐     /deploy    ┌─────────────┐
+│   Manual    │ ────────────────────────▶  │  chosen ref  │ ──────────────▶│ IaC Runner  │
 │  (promote)  │                             │  (manual)    │                │ (production)│
 └─────────────┘                             └──────────────┘                └─────────────┘
 ```
@@ -116,9 +115,9 @@ git tag v1.3.1
 git push origin v1.3.1
 
 # 手动触发 production 部署
-gh workflow run platform-production.yml \
-  -f confirm="deploy" \
-  -f staging_tag="v1.3.1"
+gh workflow run deploy-platform.yml \
+  -f env="production" \
+  -f ref="v1.3.1"
 ```
 
 ---
@@ -130,6 +129,8 @@ gh workflow run platform-production.yml \
 ### 4.1 IaC Runner 架构
 
 IaC Runner 是 **L1 Bootstrap 层**组件，负责自动化部署 **L2 Platform 层**服务。
+
+The post-merge deployment workflow is serialized with GitHub Actions `concurrency` before calling IaC Runner. It also runs a `/health` preflight so bootstrap drift fails before any signed `/deploy` request is sent.
 
 ```mermaid
 flowchart TB
@@ -267,11 +268,18 @@ curl -X POST https://iac.zitian.party/deploy \
 
 ```bash
 # 检查 GitHub Actions logs
-gh run list --workflow=platform-staging.yml
+gh run list --workflow=deploy-platform.yml
 gh run view <run-id> --log
 
 # 检查 IaC Runner logs
 ssh root@103.214.23.41 "docker logs iac-runner --tail 100"
+
+# 404 means routing/app drift, not a bad deploy payload
+curl -i https://iac.zitian.party/health
+
+# Check Dokploy source path
+uv run invoke dokploy.logs iac_runner --project=bootstrap --env=production --deployment --tail=120
+# Expected compose path: bootstrap/06.iac_runner/compose.yaml
 
 # 验证 webhook secret
 invoke env.get WEBHOOK_SECRET --project=bootstrap --service=iac_runner
@@ -282,7 +290,7 @@ gh secret list --repo wangzitian0/infra2 | grep IAC
 
 ```bash
 # 检查 workflow 输入
-gh run list --workflow=platform-production.yml
+gh run list --workflow=deploy-platform.yml
 gh run view <run-id> --log
 
 # 验证 staging tag 存在
@@ -312,4 +320,3 @@ git push --delete origin v1.2.4
 - [docs/ssot/README.md](./README.md)
 - [docs/ssot/bootstrap.iac_runner.md](./bootstrap.iac_runner.md)
 - [bootstrap/06.iac_runner/README.md](../../bootstrap/06.iac_runner/README.md)
-

@@ -14,7 +14,7 @@
 ├── 03.dokploy_setup/      # Dokploy 域名和 CLI 配置
 ├── 04.1password/          # 1Password Connect
 ├── 05.vault/              # HashiCorp Vault
-├── 06.iac-runner/         # IaC Runner GitOps 自动化
+├── 06.iac_runner/         # IaC Runner GitOps 自动化
 └── README.md              # 本文件（组件索引）
 ```
 
@@ -71,7 +71,7 @@ HashiCorp Vault 秘密管理。
 **状态**：✅ 已部署  
 **域名**：`vault.$INTERNAL_DOMAIN`
 
-### 6. [IaC Runner](./06.iac-runner/README.md)
+### 6. [IaC Runner](./06.iac_runner/README.md)
 GitOps 自动化部署服务，监听 GitHub webhook 并自动同步 Platform 层服务。
 
 **状态**：✅ 已部署  
