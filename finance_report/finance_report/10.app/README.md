@@ -51,6 +51,9 @@ Stored at: `secret/data/finance_report/<env>/app`
 | `PRIMARY_MODEL` | Primary text model; defaults to `glm-5.1` |
 | `OCR_MODEL` | Dedicated OCR model; defaults to `glm-ocr` |
 | `VISION_MODEL` | Vision-capable model; defaults to `glm-4.6v` |
+| `AI_JSON_TIMEOUT_SECONDS` | Provider JSON extraction timeout; defaults to `360` |
+| `AI_JSON_MAX_TOKENS` | Provider JSON extraction output cap; defaults to `8192` |
+| `AI_JSON_DISABLE_THINKING` | Disable GLM thinking for deterministic JSON extraction; defaults to `true` |
 | `FALLBACK_MODELS` | Comma-separated fallback model list |
 | `AI_DAILY_LIMIT_USD` | Daily AI budget setting consumed by the app configuration |
 | `NEXT_PUBLIC_APP_URL` | Frontend URL used by backend-generated links |
