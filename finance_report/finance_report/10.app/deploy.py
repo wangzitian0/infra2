@@ -91,7 +91,7 @@ class AppDeployer(Deployer):
             enable_encryption=True,
             lifecycle_days=90,
             enable_versioning=False,
-            public_download=True,
+            public_download=False,
         )
 
         if not minio_result:
