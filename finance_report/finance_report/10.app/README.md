@@ -49,7 +49,7 @@ Stored at: `secret/data/finance_report/<env>/app`
 | `AI_LAYOUT_PARSING_PATH` | OCR/layout parsing API path |
 | `AI_MODEL_CATALOG_SOURCE` | Model catalog source; use `configured` for the local GLM catalog |
 | `PRIMARY_MODEL` | Primary text model; defaults to `glm-5.1` |
-| `OCR_MODEL` | Dedicated OCR model; defaults to `glm-ocr` |
+| `OCR_MODEL` | OCR-capable model; defaults to `glm-4.6v` |
 | `VISION_MODEL` | Vision-capable model; defaults to `glm-4.6v` |
 | `AI_JSON_TIMEOUT_SECONDS` | Provider JSON extraction timeout; defaults to `360` |
 | `AI_JSON_MAX_TOKENS` | Provider JSON extraction output cap; defaults to `8192` |
