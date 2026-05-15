@@ -1,4 +1,8 @@
+import json
+import shlex
+
 from invoke import task
+
 from libs.common import check_service, get_env, service_domain
 from libs.env import generate_password
 from libs.console import header, success, error, warning, info
@@ -51,7 +55,7 @@ def create_app_bucket(
     enable_encryption=True,
     lifecycle_days=90,
     enable_versioning=False,
-    public_download=True,
+    public_download=False,
 ):
     """Create MinIO bucket with security best practices for application usage.
 
@@ -62,7 +66,7 @@ def create_app_bucket(
         enable_encryption: Enable server-side encryption (SSE-S3) - default True
         lifecycle_days: Auto-delete files after N days (default 90, 0 to disable)
         enable_versioning: Enable bucket versioning - default False
-        public_download: Allow anonymous public download via direct object URLs - default True
+        public_download: Allow anonymous public download via direct object URLs - default False
 
     Returns:
         dict: {"access_key": str, "secret_key": str, "bucket": str}
@@ -108,7 +112,8 @@ def create_app_bucket(
         error(f"Failed to create bucket: {result.stderr}")
         return None
 
-    # Step 2: Set public download policy (enables anonymous object downloads)
+    # Step 2: Set anonymous download policy. Application buckets default to
+    # private; external services should use short-lived presigned URLs instead.
     if public_download:
         info(
             "Setting bucket policy: public anonymous download (direct object URL access)..."
@@ -122,6 +127,17 @@ def create_app_bucket(
             success("Public anonymous download enabled (direct object URL access)")
         else:
             warning(f"Failed to set public policy: {result.stderr}")
+    else:
+        info("Ensuring bucket policy: private (no anonymous direct object access)...")
+        result = c.run(
+            f"docker exec {container_name} mc anonymous set none local/{bucket_name}",
+            hide=True,
+            warn=True,
+        )
+        if result.ok:
+            success("Anonymous download disabled")
+        else:
+            warning(f"Failed to disable anonymous policy: {result.stderr}")
 
     # Step 3: Enable server-side encryption
     if enable_encryption:
@@ -191,16 +207,62 @@ def create_app_bucket(
             error(f"Failed to create/update user: {result.stderr}")
             return None
 
-    # Step 7: Attach readwrite policy to user
-    info(f"Attaching readwrite policy to {access_key}...")
+    # Step 7: Attach bucket-scoped read/write policy to user
+    safe_bucket_name = "".join(char if char.isalnum() else "_" for char in bucket_name)
+    policy_name = f"{safe_bucket_name}_readwrite"
+    policy_doc = {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "s3:GetBucketLocation",
+                    "s3:ListBucket",
+                ],
+                "Resource": [f"arn:aws:s3:::{bucket_name}"],
+            },
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "s3:DeleteObject",
+                    "s3:GetObject",
+                    "s3:PutObject",
+                ],
+                "Resource": [f"arn:aws:s3:::{bucket_name}/*"],
+            },
+        ],
+    }
+    policy_json = json.dumps(policy_doc)
+    policy_path = f"/tmp/{policy_name}.json"
+    write_policy_script = f"cat > {policy_path} <<'EOF'\n{policy_json}\nEOF"
+    info(f"Creating bucket-scoped policy: {policy_name}...")
     result = c.run(
-        f"docker exec {container_name} mc admin policy attach local readwrite "
+        f"docker exec {container_name} sh -c {shlex.quote(write_policy_script)}",
+        hide=True,
+        warn=True,
+    )
+    if result.ok:
+        result = c.run(
+            f"docker exec {container_name} mc admin policy create local {policy_name} {policy_path}",
+            hide=True,
+            warn=True,
+        )
+        if result.ok:
+            success(f"Policy ready: {policy_name}")
+        else:
+            warning(f"Failed to create policy {policy_name}: {result.stderr}")
+    else:
+        warning(f"Failed to write policy file: {result.stderr}")
+
+    info(f"Attaching bucket-scoped policy to {access_key}...")
+    result = c.run(
+        f"docker exec {container_name} mc admin policy attach local {policy_name} "
         f"--user {access_key}",
         hide=True,
         warn=True,
     )
     if result.ok:
-        success(f"Policy attached: {access_key} -> readwrite")
+        success(f"Policy attached: {access_key} -> {policy_name}")
     else:
         warning(f"Failed to attach policy: {result.stderr}")
 

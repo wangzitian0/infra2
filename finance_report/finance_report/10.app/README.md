@@ -39,6 +39,8 @@ Stored at: `secret/data/finance_report/<env>/app`
 | `S3_ACCESS_KEY` | MinIO/S3 access key |
 | `S3_SECRET_KEY` | MinIO/S3 secret key |
 | `S3_BUCKET` | Bucket name for statements |
+| `S3_PUBLIC_ENDPOINT` | Externally reachable S3 API endpoint for short-lived presigned URLs |
+| `S3_PUBLIC_BUCKET` | Public-endpoint bucket alias; defaults to `S3_BUCKET` |
 | `AI_PROVIDER` | AI provider identifier; defaults to `zai` |
 | `ZAI_API_KEY` | Z.AI API key for GLM models |
 | `AI_API_KEY` | Provider-neutral API key alias for non-Z.AI providers |
@@ -48,7 +50,7 @@ Stored at: `secret/data/finance_report/<env>/app`
 | `AI_MODEL_CATALOG_SOURCE` | Model catalog source; use `configured` for the local GLM catalog |
 | `PRIMARY_MODEL` | Primary text model; defaults to `glm-5.1` |
 | `OCR_MODEL` | Dedicated OCR model; defaults to `glm-ocr` |
-| `VISION_MODEL` | Vision-capable model; defaults to `glm-5v-turbo` |
+| `VISION_MODEL` | Vision-capable model; defaults to `glm-4.6v` |
 | `FALLBACK_MODELS` | Comma-separated fallback model list |
 | `AI_DAILY_LIMIT_USD` | Daily AI budget setting consumed by the app configuration |
 | `NEXT_PUBLIC_APP_URL` | Frontend URL used by backend-generated links |
