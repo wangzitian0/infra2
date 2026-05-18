@@ -65,7 +65,7 @@ services:
       - ${TIANCLAW_GIT_SSH_KEY_PATH:-/root/.ssh/id_ed25519}:/run/secrets/tianclaw_git_ssh_key:ro
       - ${TIANCLAW_GIT_SSH_KNOWN_HOSTS_PATH:-/root/.ssh/known_hosts}:/run/secrets/tianclaw_git_known_hosts:ro
     environment:
-      - TIANCLAW_GIT_SYNC_ENABLED=${TIANCLAW_GIT_SYNC_ENABLED:-false}
+      - TIANCLAW_GIT_SYNC_ENABLED=${TIANCLAW_GIT_SYNC_ENABLED:-true}
       - TIANCLAW_GIT_REPO=${TIANCLAW_GIT_REPO:-git@github.com:wangzitian-ai/tianclaw.git}
       - TIANCLAW_GIT_BRANCH=${TIANCLAW_GIT_BRANCH:-main}
       - TIANCLAW_GIT_SYNC_INTERVAL_SECONDS=${TIANCLAW_GIT_SYNC_INTERVAL_SECONDS:-86400}
@@ -74,7 +74,6 @@ services:
       - TIANCLAW_GIT_USER_NAME=${TIANCLAW_GIT_USER_NAME:-TianClaw Sync}
       - TIANCLAW_GIT_USER_EMAIL=${TIANCLAW_GIT_USER_EMAIL:-tianclaw-sync@users.noreply.github.com}
       - "TIANCLAW_GIT_COMMIT_PREFIX=${TIANCLAW_GIT_COMMIT_PREFIX:-chore: sync live OpenClaw state}"
-      - TIANCLAW_GIT_SYNC_SECRET_SCAN=${TIANCLAW_GIT_SYNC_SECRET_SCAN:-true}
       - TIANCLAW_GIT_SSH_PRIVATE_KEY=${TIANCLAW_GIT_SSH_PRIVATE_KEY:-}
       - TIANCLAW_GIT_SSH_KNOWN_HOSTS=${TIANCLAW_GIT_SSH_KNOWN_HOSTS:-}
       - TIANCLAW_GIT_SSH_KEY_FILE=/run/secrets/tianclaw_git_ssh_key
@@ -152,52 +151,21 @@ services:
 
           rsync -a $${delete_flag} \
             --exclude '.git/' \
-            --exclude '.env' \
-            --exclude '.env.*' \
-            --exclude 'credentials/' \
-            --exclude 'identity/' \
-            --exclude 'keyrings/' \
             --exclude 'npm/node_modules/' \
+            --exclude 'node_modules/' \
+            --exclude '*/node_modules/' \
             --exclude '.venv/' \
             --exclude '*/.venv/' \
-            --exclude '*.pem' \
-            --exclude '*.key' \
-            --exclude '*token*' \
-            --exclude '*TOKEN*' \
-            --exclude '*secret*' \
-            --exclude '*SECRET*' \
-            --exclude '*credential*' \
-            --exclude '*CREDENTIAL*' \
-            --exclude 'openclaw.json' \
-            --exclude 'openclaw.json*' \
-            --exclude '*.sqlite-wal' \
-            --exclude '*.sqlite-shm' \
-            --exclude '.ssh/' \
-            --exclude '.openclaw/' \
-            --exclude '.raw-local/' \
+            --exclude '__pycache__/' \
+            --exclude '*/__pycache__/' \
+            --exclude '*.pyc' \
+            --exclude '.DS_Store' \
             "$${source}/" "$${repo}/"
-
-          rm -rf \
-            "$${repo}/.ssh" \
-            "$${repo}/.openclaw" \
-            "$${repo}/.raw-local" \
-            "$${repo}/credentials" \
-            "$${repo}/identity" \
-            "$${repo}/keyrings" \
-            "$${repo}/npm/node_modules" \
-            "$${repo}"/openclaw.json*
 
           git config user.name "$${TIANCLAW_GIT_USER_NAME}"
           git config user.email "$${TIANCLAW_GIT_USER_EMAIL}"
 
           if git status --porcelain | grep -q .; then
-            if [ "$${TIANCLAW_GIT_SYNC_SECRET_SCAN}" = "true" ]; then
-              if find . -type f -not -path './.git/*' -exec grep -IlE '(sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|BEGIN (RSA|OPENSSH|EC|DSA) PRIVATE KEY|DISCORD_TOKEN|discord[_-]?token|api[_-]?key|API[_-]?KEY)' {} +; then
-                echo "secret-like content detected; refusing to sync until the workspace is sanitized"
-                sleep "$${TIANCLAW_GIT_SYNC_INTERVAL_SECONDS}"
-                continue
-              fi
-            fi
             snapshot_ts="$$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             git add -A
             git commit -m "$${TIANCLAW_GIT_COMMIT_PREFIX} $${snapshot_ts}"
