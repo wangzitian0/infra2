@@ -10,7 +10,7 @@ This directory contains the Docker Compose configuration for deploying [OpenClaw
 - **Storage**: Named Docker volume `openclaw-discord-data` for persistence across redeploys.
 - **Configuration**: First deploy is environment-driven, but the live source of truth becomes the persisted `/home/node/.openclaw/openclaw.json`.
 - **Plugins**: The gateway bootstraps the official `@openclaw/discord` plugin before startup when the persisted volume does not already have it installed.
-- **State Sync**: Optional `tianclaw-git-sync` sidecar can snapshot the sanitized `openclaw-discord-data` volume to `git@github.com:wangzitian-ai/tianclaw.git`.
+- **State Sync**: The `tianclaw-git-sync` sidecar snapshots the private `openclaw-discord-data` volume to `git@github.com:wangzitian-ai/tianclaw.git`.
 
 ## Prerequisites
 
@@ -43,7 +43,7 @@ Important: after the first successful deploy, OpenClaw reads the persisted confi
 | `LLM_BASE_URL` | `https://api.githubcopilot.com` | Primary API endpoint |
 | `LLM_MODEL_ID` | `claude-sonnet-4.6` | Primary Model ID |
 | `LLM_MODEL_NAME` | `Claude Sonnet 4.6` | Primary Model display name |
-| `TIANCLAW_MODEL` | `openai-codex/gpt-5.4-mini` | Model override for the `tianclaw` agent; uses OpenAI Codex device-code auth |
+| `TIANCLAW_MODEL` | `openai-codex/gpt-5.5` | Model override for the `tianclaw` agent; uses OpenAI Codex device-code auth |
 | `OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES` | `0` | Framework channel health-monitor interval; `0` disables health-monitor restarts entirely |
 | `OPENCLAW_AGENTS_MAX_CONCURRENT` | `2` | Maximum concurrent tasks on the main agent lane; keeps Discord typing responsive while one run is active |
 | `OPENCLAW_AGENTS_SUBAGENTS_MAX_CONCURRENT` | `1` | Maximum concurrent subagent tasks |
@@ -62,7 +62,7 @@ Important: after the first successful deploy, OpenClaw reads the persisted confi
 | `OPENCLAW_GATEWAY_PORT` | `18789` | Internal gateway port |
 | `OPENCLAW_LOG_LEVEL` | `info` | Framework-recognized log level override for file + console logs |
 | `OPENCLAW_DIAGNOSTICS` | _empty_ | Optional targeted diagnostics flags, passed through to OpenClaw unchanged |
-| `TIANCLAW_GIT_SYNC_ENABLED` | `false` | Enable periodic sanitized volume snapshots to the TianClaw private repo |
+| `TIANCLAW_GIT_SYNC_ENABLED` | `true` | Enable periodic full volume snapshots to the TianClaw private repo |
 | `TIANCLAW_GIT_REPO` | `git@github.com:wangzitian-ai/tianclaw.git` | Git repository for OpenClaw volume snapshots |
 | `TIANCLAW_GIT_BRANCH` | `main` | Branch used by the sync sidecar |
 | `TIANCLAW_GIT_SYNC_INTERVAL_SECONDS` | `86400` | Sync loop interval; default is one daily snapshot |
@@ -82,7 +82,9 @@ For OpenClaw `2026.5.3`, the same patch step also normalizes legacy Discord stre
 
 OpenClaw `2026.5.x` loads Discord as an installable plugin. The `openclaw` service command installs the official `@openclaw/discord` plugin only when it is missing, then starts the gateway. This keeps fresh containers and fresh volumes from booting without the Discord channel.
 
-When enabled, `tianclaw-git-sync` mounts the same Docker volume read-only at `/openclaw`, mounts the configured SSH key material read-only, clones the private repo into an ephemeral container path, rsyncs the sanitized volume root, commits changes, and pushes the configured branch. If pushing the configured branch fails, it preserves the snapshot by pushing the same commit to `TIANCLAW_GIT_FALLBACK_BRANCH_PREFIX/<UTC timestamp>` instead. It intentionally excludes `.git`, `.ssh`, `credentials`, `identity`, `keyrings`, `npm/node_modules`, virtualenvs, `openclaw.json*`, `.env*`, key files, token-like paths, and SQLite WAL/SHM files.
+When enabled, `tianclaw-git-sync` mounts the same Docker volume read-only at `/openclaw`, mounts the configured SSH key material read-only, clones the private repo into an ephemeral container path, rsyncs the volume root, commits changes, and pushes the configured branch. If pushing the configured branch fails, it preserves the snapshot by pushing the same commit to `TIANCLAW_GIT_FALLBACK_BRANCH_PREFIX/<UTC timestamp>` instead.
+
+This is a private data-as-code repository, so the sidecar is intentionally a preservation snapshot rather than a sanitized export. It includes active config, credentials/identity state, runtime sessions, memory, tasks, SQLite files, and media. It excludes only files that are generated dependency/cache noise or would corrupt the cloned Git working tree: `.git/`, `node_modules/`, virtualenvs, Python bytecode caches, and `.DS_Store`. `TIANCLAW_GIT_SYNC_DELETE` defaults to `false` so Git-retained recovery data is not removed just because it is absent from the live volume.
 
 This means there are multiple configuration layers:
 
