@@ -204,8 +204,8 @@ services:
       - LLM_API_KEY
       - LLM_MODEL_ID=${LLM_MODEL_ID:-claude-sonnet-4.6}
       - LLM_MODEL_NAME=${LLM_MODEL_NAME:-Claude Sonnet 4.6}
-      - TIANCLAW_MODEL=${TIANCLAW_MODEL:-openai-codex/gpt-5.4-mini}
-      - TIANCLAW_MODEL_NAME=${TIANCLAW_MODEL_NAME:-gpt-5.4-mini}
+      - TIANCLAW_MODEL=${TIANCLAW_MODEL:-openai-codex/gpt-5.5}
+      - TIANCLAW_MODEL_NAME=${TIANCLAW_MODEL_NAME:-gpt-5.5}
       - TIANCLAW_PROVIDER_BASE_URL=${TIANCLAW_PROVIDER_BASE_URL:-https://chatgpt.com/backend-api}
       - TIANCLAW_PROVIDER_API=${TIANCLAW_PROVIDER_API:-openai-codex-responses}
       - TIANCLAW_MODEL_MIGRATE_FROM=${TIANCLAW_MODEL_MIGRATE_FROM:-github-copilot/claude-opus-4-5,github-copilot/claude-sonnet-4.6}
@@ -245,8 +245,8 @@ services:
         # Preserve existing config, but still enforce selected declarative overrides.
         if [ -f /data/openclaw.json ]; then
           jq \
-            --arg tianclawModel "$${TIANCLAW_MODEL:-openai-codex/gpt-5.4-mini}" \
-            --arg tianclawModelName "$${TIANCLAW_MODEL_NAME:-gpt-5.4-mini}" \
+            --arg tianclawModel "$${TIANCLAW_MODEL:-openai-codex/gpt-5.5}" \
+            --arg tianclawModelName "$${TIANCLAW_MODEL_NAME:-gpt-5.5}" \
             --arg tianclawProviderBaseUrl "$${TIANCLAW_PROVIDER_BASE_URL:-https://chatgpt.com/backend-api}" \
             --arg tianclawProviderApi "$${TIANCLAW_PROVIDER_API:-openai-codex-responses}" \
             --arg tianclawModelMigrateFrom "$${TIANCLAW_MODEL_MIGRATE_FROM:-}" \
@@ -392,15 +392,11 @@ services:
                   .
                 end
               | .plugins.allow = ((.plugins.allow // []) + ["browser", "device-pair", "discord", "file-transfer", "memory-core", "phone-control", "talk-voice", "brave"] | unique)
-              | if has_brave_key then
-                  .tools.web.search.provider = "brave"
-                else
-                  .
-                end
+              | .tools.web.search.provider = "duckduckgo"
             ' /data/openclaw.json > /data/openclaw.json.tmp
           if [ "$${OPENCLAW_RESIDUE_SCAN:-true}" = "true" ]; then
             jq -r \
-              --arg tianclawModel "$${TIANCLAW_MODEL:-openai-codex/gpt-5.4-mini}" \
+              --arg tianclawModel "$${TIANCLAW_MODEL:-openai-codex/gpt-5.5}" \
               --arg tianclawModelMigrateFrom "$${TIANCLAW_MODEL_MIGRATE_FROM:-}" \
               --arg openclawCronInvalidTargets "$${OPENCLAW_CRON_INVALID_TARGETS:-}" \
               '
@@ -431,35 +427,35 @@ services:
                 if .id == "2295553a-1f30-4104-9ee4-b4c5e8019a74" then
                   .schedule.expr = "15 10 * * *"
                   | .wakeMode = "next-heartbeat"
-                  | set_payload(45; "openai-codex/gpt-5.4-mini"; true; "off")
+                  | set_payload(300; "openai-codex/gpt-5.5"; true; "off")
                   | .payload.message = "组织每日投资讨论。最多一次 web_search；搜索超过 15 秒就直接 fallback。中文 250 字内：市场主线、1 个行业机会、3 个关注标的、1 个讨论问题。"
                 elif .id == "f2be78bf-517c-4b1b-8113-5f70c0ac9630" then
                   .wakeMode = "next-heartbeat"
-                  | set_payload(45; "openai-codex/gpt-5.4-mini"; true; "off")
+                  | set_payload(300; "openai-codex/gpt-5.5"; true; "off")
                   | .payload.message = "Nightly bizarre-news check. Use at most one web_search; fallback after 15 seconds. Post one concise weird-news item and one cold joke in Chinese, under 220 chars."
                 elif .id == "ad56ff4d-a57e-41fc-898e-9c61a70768bd" then
                   .wakeMode = "next-heartbeat"
-                  | set_payload(60; "openai-codex/gpt-5.4-mini"; true; "off")
+                  | set_payload(300; "openai-codex/gpt-5.5"; true; "off")
                   | .payload.message = "最多一次 web_search 获取当天市场头条；15 秒无结果就 fallback。中文 350 字内：市场主线、逻辑链、5 只 S&P 500 关注股。"
                 elif .id == "90ef071f-b9fd-4c26-8975-179b75525007" then
                   .wakeMode = "next-heartbeat"
-                  | set_payload(60; "openai-codex/gpt-5.4-mini"; true; "off")
+                  | set_payload(300; "openai-codex/gpt-5.5"; true; "off")
                   | .payload.message = "为 #an-an-daily 准备并发送 Anne 今日精选。最多一次 web_search，15 秒无结果就 fallback。输出并发送一次最终消息：2 条工作/科技/商业 + 1 条生活，末尾具体夸夸 <@1478061386952347779>。总长 450 字内。"
                 elif .id == "010c023d-ec48-403f-8681-45dd7daba569" then
                   .wakeMode = "next-heartbeat"
-                  | set_payload(45; "openai-codex/gpt-5.4-mini"; true; "off")
+                  | set_payload(300; "openai-codex/gpt-5.5"; true; "off")
                   | .payload.message = "重大新闻速报。最多一次 web_search；15 秒无结果就 fallback。若无重大新闻，输出过去几小时风平浪静，Anne安心工作。否则中文列 2 条，每条一句摘要 + Anne 视角。"
                 elif .id == "dcc7dff5-4731-4c17-809a-eee892c595d0" then
                   .wakeMode = "next-heartbeat"
-                  | set_payload(30; "openai-codex/gpt-5.4-mini"; true; "off")
+                  | set_payload(300; "openai-codex/gpt-5.5"; true; "off")
                 elif .id == "e0942f13-c82f-42ec-8cec-bee7aeae45b4" then
                   .wakeMode = "next-heartbeat"
-                  | set_payload(45; "openai-codex/gpt-5.4-mini"; true; "off")
+                  | set_payload(300; "openai-codex/gpt-5.5"; true; "off")
                   | .payload.message = "每日夸夸活动。最多一次 web_search，15 秒无结果就 fallback。给频道 1478398722424705108 生成一条 100-160 字中文最终消息，必须包含 <@1478061386952347779>，可邀请最多 1 位相关 agent。"
                 elif .id == "37469f11-4ed5-44a9-92b3-443a97c128b0" then
                   .schedule.expr = "5 10 * * 1"
                   | .wakeMode = "next-heartbeat"
-                  | set_payload(60; "openai-codex/gpt-5.4-mini"; true; "off")
+                  | set_payload(300; "openai-codex/gpt-5.5"; true; "off")
                   | .payload.message = "每周 agent persona 配置 review。不要联网。只检查当前 workspace 文件，中文 300 字内按 P0/P1/P2 给结论；无问题则写本周未发现明显配置冲突。"
                 else . end
               ))
@@ -479,8 +475,8 @@ services:
           --arg apiKey "$${LLM_API_KEY}" \
           --arg modelId "$${LLM_MODEL_ID}" \
           --arg modelName "$${LLM_MODEL_NAME}" \
-          --arg tianclawModel "$${TIANCLAW_MODEL:-openai-codex/gpt-5.4-mini}" \
-          --arg tianclawModelName "$${TIANCLAW_MODEL_NAME:-gpt-5.4-mini}" \
+          --arg tianclawModel "$${TIANCLAW_MODEL:-openai-codex/gpt-5.5}" \
+          --arg tianclawModelName "$${TIANCLAW_MODEL_NAME:-gpt-5.5}" \
           --arg tianclawProviderBaseUrl "$${TIANCLAW_PROVIDER_BASE_URL:-https://chatgpt.com/backend-api}" \
           --arg tianclawProviderApi "$${TIANCLAW_PROVIDER_API:-openai-codex-responses}" \
           --arg braveApiKey "$${BRAVE_API_KEY:-}" \
@@ -629,9 +625,7 @@ services:
                 + (if $$braveApiKey != "" then { brave: { enabled: true, config: { webSearch: { apiKey: $$braveApiKey } } } } else {} end)
               )
             },
-            tools: (
-              if $$braveApiKey != "" then { web: { search: { provider: "brave" } } } else { web: { search: {} } } end
-            )
+            tools: { web: { search: { provider: "duckduckgo" } } }
           }' > /data/openclaw.json
 
         # Dynamic Agent Mention Protocol and Routing

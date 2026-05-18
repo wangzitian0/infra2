@@ -78,7 +78,7 @@ Important: after the first successful deploy, OpenClaw reads the persisted confi
 
 The `init-config` container generates `openclaw.json` on first deploy. On subsequent redeploys it preserves the existing file, but still applies selected declarative overrides from environment variables, including `OPENCLAW_GATEWAY_BIND`, `TIANCLAW_MODEL`, `OPENCLAW_GATEWAY_CHANNEL_HEALTH_CHECK_MINUTES`, `DISCORD_NATIVE_SKILL_COMMANDS`, `OPENCLAW_AGENTS_MAX_CONCURRENT`, `OPENCLAW_AGENTS_SUBAGENTS_MAX_CONCURRENT`, `OPENCLAW_CRON_MAX_CONCURRENT_RUNS`, `OPENCLAW_AGENTS_TYPING_MODE`, `OPENCLAW_AGENTS_TYPING_INTERVAL_SECONDS`, and `OPENCLAW_GROUP_VISIBLE_REPLIES`. This lets operator-managed settings survive while still enforcing critical network, model routing, and runtime behavior.
 
-For OpenClaw `2026.5.3`, the same patch step also normalizes legacy Discord streaming fields to the object form required by the current schema and removes an explicit legacy `tools.web.search.provider=brave` value while preserving the existing search API key. This lets OpenClaw use provider auto-detection instead of failing startup on a stale provider registration. This is a compatibility migration for persisted configs, not a config reset.
+For OpenClaw `2026.5.3`, the same patch step also normalizes legacy Discord streaming fields to the object form required by the current schema and sets `tools.web.search.provider=duckduckgo` while preserving the existing Brave search API key for future use. This avoids failing startup or tool calls on a stale Brave provider registration. This is a compatibility migration for persisted configs, not a config reset.
 
 OpenClaw `2026.5.x` loads Discord as an installable plugin. The `openclaw` service command installs the official `@openclaw/discord` plugin only when it is missing, then starts the gateway. This keeps fresh containers and fresh volumes from booting without the Discord channel.
 
@@ -225,6 +225,6 @@ The first disables OpenClaw's framework health-monitor, which was batch-restarti
 **Cause**: The running config was created before `TIANCLAW_MODEL` was introduced, or the override was not set in Dokploy.
 
 **Solution**:
-- Set `TIANCLAW_MODEL=openai-codex/gpt-5.4-mini` in Dokploy and ensure Codex device-code auth is present in the persisted OpenClaw volume.
+- Set `TIANCLAW_MODEL=openai-codex/gpt-5.5` in Dokploy and ensure Codex device-code auth is present in the persisted OpenClaw volume.
 - Redeploy the compose application.
 - If the agent entry was manually removed from `openclaw.json`, restore it or reset the config file before redeploying.
