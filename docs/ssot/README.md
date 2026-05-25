@@ -74,6 +74,7 @@
 | [db.redis.md](./db.redis.md) | `db.redis` | Redis 缓存 |
 | [db.clickhouse.md](./db.clickhouse.md) | `db.clickhouse` | ClickHouse (SigNoz Storage) |
 | [db.arangodb.md](./db.arangodb.md) | `db.arangodb` | ArangoDB Graph (规划中) |
+| [vault-self-refresh-inventory.yaml](./vault-self-refresh-inventory.yaml) | `vault.self_refresh_inventory` | Vault app-token self-refresh audit inventory |
 
 ---
 

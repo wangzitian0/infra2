@@ -14,6 +14,7 @@ Standalone `invoke` namespaces loaded by `tools/loader.py`.
 | `env` | `tools/env_tool.py` | Remote env/secret SSOT operations |
 | `dokploy` | `tools/dokploy_env.py` | Dokploy project/environment helpers |
 | `local` | `tools/local_init.py` | Local CLI checks and bootstrap helpers |
+| `vault-audit` | `tools/vault_audit.py` | Read-only Vault app-token self-refresh audit |
 
 ## Common Conventions
 
@@ -70,6 +71,27 @@ invoke local.bootstrap
 
 # Detect current bootstrap phase
 invoke local.phase
+```
+
+## vault-audit (Vault runtime proof)
+
+Read-only audit for the Vault app-token self-refresh chain. It checks Dokploy
+env, Vault token lookup, rendered `/vault/secrets/.env` freshness, vault-agent
+logs, and container state for every service in
+`docs/ssot/vault-self-refresh-inventory.yaml`.
+
+```bash
+# Live production audit
+invoke vault-audit.self-refresh
+
+# Audit one inventory row
+invoke vault-audit.self-refresh --service=finance_report/app
+
+# Machine-readable output
+invoke vault-audit.self-refresh --json-output
+
+# Offline classifier test from a captured observation fixture
+invoke vault-audit.self-refresh --observations=/path/to/observations.json
 ```
 
 ## References
