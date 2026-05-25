@@ -121,6 +121,17 @@ template_config {
 
 CI enforces these settings on all `vault-agent.hcl` files.
 
+### Required compose health behavior
+
+Vault-agent compose services must:
+- Remove stale `/vault/secrets/.env` before starting `vault agent`.
+- Fail healthcheck when `vault token lookup` fails for `VAULT_APP_TOKEN`.
+- Fail healthcheck when the rendered secrets file is stale (`VAULT_AGENT_MAX_SECRET_AGE_SECONDS`, default 900s).
+
+This prevents a previously rendered secrets file from masking an expired token.
+Deploy automation must treat an invalid or short-lived `VAULT_APP_TOKEN` as a
+hard preflight failure instead of continuing with a redeploy.
+
 ### SOP: Token Expired
 
 **Symptom**: Container stuck in "Created" state, logs show "token validation failed"
