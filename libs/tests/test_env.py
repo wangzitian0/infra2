@@ -2,6 +2,8 @@
 
 from unittest.mock import patch, MagicMock
 
+import pytest
+
 
 class TestOpSecrets:
     """Test OpSecrets behavior"""
@@ -105,7 +107,8 @@ class TestVaultSecrets:
             token="token",
             addr="https://vault.example",
         )
-        assert secrets.get_all() == {}
+        with pytest.raises(VaultSecrets.VaultAuthError):
+            secrets.get_all()
 
     @patch("libs.env.httpx.Client")
     def test_vault_set_merges_existing(self, mock_client):
@@ -143,7 +146,9 @@ class TestGetSecrets:
     def test_get_secrets_app_vars_returns_vault(self):
         from libs.env import get_secrets, VaultSecrets
 
-        result = get_secrets("platform", "postgres", "production", credential_type="app_vars")
+        result = get_secrets(
+            "platform", "postgres", "production", credential_type="app_vars"
+        )
         assert isinstance(result, VaultSecrets)
 
     def test_get_secrets_bootstrap_returns_op(self):
@@ -155,7 +160,9 @@ class TestGetSecrets:
     def test_get_secrets_root_vars_returns_op(self):
         from libs.env import get_secrets, OpSecrets
 
-        result = get_secrets("platform", "postgres", "production", credential_type="root_vars")
+        result = get_secrets(
+            "platform", "postgres", "production", credential_type="root_vars"
+        )
         assert isinstance(result, OpSecrets)
 
     def test_get_secrets_bootstrap_path_no_env(self):
@@ -167,13 +174,17 @@ class TestGetSecrets:
     def test_get_secrets_root_vars_path_includes_env(self):
         from libs.env import get_secrets
 
-        result = get_secrets("platform", "postgres", "production", credential_type="root_vars")
+        result = get_secrets(
+            "platform", "postgres", "production", credential_type="root_vars"
+        )
         assert result.item == "platform/production/postgres"
 
     def test_get_secrets_app_vars_path_includes_env(self):
         from libs.env import get_secrets
 
-        result = get_secrets("platform", "postgres", "production", credential_type="app_vars")
+        result = get_secrets(
+            "platform", "postgres", "production", credential_type="app_vars"
+        )
         assert result.path == "platform/production/postgres"
 
 

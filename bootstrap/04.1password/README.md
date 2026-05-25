@@ -5,6 +5,10 @@
 ##  配置文件
 
 - [`compose.yaml`](./compose.yaml) - Docker Compose 配置
+- [`Dockerfile`](./Dockerfile) - Builds pinned Connect images with a static healthcheck binary.
+
+Runtime images are pinned to 1Password Connect `1.8.1`; do not deploy `latest` for
+bootstrap services.
 
 ## 操作步骤
 
@@ -53,6 +57,31 @@ TOKEN=$(op item get "bootstrap/1password/VPS-01 Access Token: own_service" --vau
 curl -H "Authorization: Bearer $TOKEN" https://op.$INTERNAL_DOMAIN/v1/vaults
 ```
 
+### 6. Reboot Health States
+
+```bash
+ssh ${VPS_SSH_USER:-root}@<VPS_IP> 'docker ps --filter name=op-connect --format "table {{.Names}}\t{{.Status}}"'
+curl -fsS https://op.$INTERNAL_DOMAIN/health
+```
+
+Expected healthy state:
+
+- `op-connect-api`: `Up ... (healthy)`
+- `op-connect-sync`: `Up ... (healthy)`
+- `/health`: HTTP 200 with `sqlite: ACTIVE` and `sync: ACTIVE`
+
+Degraded states:
+
+- API `unhealthy`: the REST API is not returning `/health`, or SQLite/sync dependency is not `ACTIVE`.
+- Sync `unhealthy`: the API cannot report `sync: ACTIVE`.
+- Container restarting: credentials file path, file permissions, or 1Password Connect credentials are invalid.
+
+Failed states that need immediate action:
+
+- Missing `/data/bootstrap/1password/1password-credentials.json`.
+- Credentials file unreadable by the Connect containers.
+- Both containers are running but `/health` reports `TOKEN_NEEDED` or a non-`ACTIVE` dependency.
+
 ## 常见问题
 
 ### 数据库权限错误
@@ -61,8 +90,9 @@ ssh root@<VPS_IP> 'chmod 750 /data/bootstrap/1password'
 ```
 
 ### sync 服务无法启动
-- 确认目录权限是 `777`
+- 确认目录权限允许 Connect containers 读取 `1password-credentials.json`
 - 检查 credentials 文件是否存在
+- 检查 `docker logs op-connect-sync --tail 100`
 
 ### API 返回 404
 - 等待 1-2 分钟让服务完全启动

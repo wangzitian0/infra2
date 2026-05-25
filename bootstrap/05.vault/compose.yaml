@@ -26,6 +26,11 @@ services:
     volumes:
       - /data/bootstrap/vault/file:/vault/file
       - /data/bootstrap/vault/logs:/vault/logs
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
     cap_add:
       - IPC_LOCK
     networks:
@@ -33,9 +38,16 @@ services:
     labels:
       - "traefik.enable=true"
     command: server
+    healthcheck:
+      test: ["CMD", "vault", "status", "-address=http://127.0.0.1:8200"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 
   unsealer:
     build: .
+    image: bootstrap-vault-unsealer:python3.11
     container_name: vault-unsealer
     restart: always
     environment:
@@ -48,6 +60,17 @@ services:
       - vault
     networks:
       - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    healthcheck:
+      test: ["CMD", "python", "unsealer.py", "health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
 
 networks:
   dokploy-network:

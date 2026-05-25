@@ -136,6 +136,31 @@ owner="wangzitian0"
 | 501 | 未初始化 |
 | 503 | 已密封 |
 
+### Reboot Health States
+
+```bash
+ssh ${VPS_SSH_USER:-root}@<VPS_IP> 'docker ps --filter name=vault --format "table {{.Names}}\t{{.Status}}"'
+curl -fsS https://vault.$INTERNAL_DOMAIN/v1/sys/health
+```
+
+Expected healthy state after reboot:
+
+- `vault`: `Up ... (healthy)`
+- `vault-unsealer`: `Up ... (healthy)`
+- Vault health endpoint returns HTTP 200.
+
+Degraded states:
+
+- `vault` is `unhealthy`: Vault is not initialized, is sealed, or cannot answer `vault status`.
+- `vault-unsealer` is `unhealthy`: Vault is sealed, 1Password Connect is unreachable, or required unseal-key environment variables are missing.
+- `vault-unsealer` is restarting: check `OP_CONNECT_TOKEN`, `OP_VAULT_ID`, and `OP_ITEM_ID`.
+
+Failed states that need immediate action:
+
+- Vault remains HTTP 503 after `vault-unsealer` has run for more than one healthcheck window.
+- 1Password Connect `/health` is not HTTP 200.
+- `docker logs vault-unsealer --tail 100` shows missing unseal keys or 1Password authorization failures.
+
 ## 配置说明
 
 ### vault.hcl
