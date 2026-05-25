@@ -152,14 +152,32 @@ jobs:
               failed=1
             fi
           done
+          for file in $(find . -name "compose.yaml" -type f); do
+            if ! grep -q "VAULT_APP_TOKEN" "$file"; then
+              continue
+            fi
+            echo "Checking vault-agent health behavior: $file"
+            if ! grep -q "rm -f /vault/secrets/.env" "$file"; then
+              echo "❌ Vault agent does not clear stale secrets before auth in $file"
+              failed=1
+            fi
+            if ! grep -q "vault token lookup" "$file"; then
+              echo "❌ Vault agent healthcheck does not validate token lookup in $file"
+              failed=1
+            fi
+            if ! grep -q "VAULT_AGENT_MAX_SECRET_AGE_SECONDS" "$file"; then
+              echo "❌ Vault agent healthcheck does not check secrets freshness in $file"
+              failed=1
+            fi
+          done
           if [ $failed -eq 1 ]; then
             echo ""
             echo "⚠️  vault-agent.hcl files must have exit settings to prevent"
-            echo "   zombie containers when tokens expire. Run:"
-            echo "   python scripts/add_vault_agent_exit_on_failure.py"
+            echo "   zombie containers when tokens expire. Compose healthchecks"
+            echo "   must also validate token lookup and clear stale secrets."
             exit 1
           fi
-          echo "✅ All vault-agent.hcl files have required exit settings"
+          echo "✅ All vault-agent files have required exit and health settings"
 
   validate-vault-policy:
     name: Validate Vault Policy Syntax

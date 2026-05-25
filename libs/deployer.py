@@ -451,17 +451,26 @@ class Deployer:
         try:
             token_status = cls.verify_vault_app_token()
             if not token_status["valid"]:
-                warning(
-                    f"VAULT_APP_TOKEN issue: {token_status.get('details', 'unknown')}. "
-                    "Run `invoke vault.setup-tokens --project=<project>` to regenerate."
-                )
+                return {
+                    "action": "failed",
+                    "details": (
+                        f"VAULT_APP_TOKEN issue: {token_status.get('details', 'unknown')}. "
+                        "Run `invoke vault.setup-tokens` for this environment before syncing."
+                    ),
+                }
             elif token_status.get("ttl_hours", 999) < 48:
-                warning(
-                    f"VAULT_APP_TOKEN expires in {token_status['ttl_hours']}h. "
-                    "Consider regenerating with `invoke vault.setup-tokens`."
-                )
+                return {
+                    "action": "failed",
+                    "details": (
+                        f"VAULT_APP_TOKEN expires in {token_status['ttl_hours']}h. "
+                        "Regenerate it with `invoke vault.setup-tokens` before syncing."
+                    ),
+                }
         except Exception as exc:
-            warning(f"Could not verify VAULT_APP_TOKEN: {exc}")
+            return {
+                "action": "failed",
+                "details": f"Could not verify VAULT_APP_TOKEN: {exc}",
+            }
 
         # Get secrets backend and ensure secret exists
         secrets_backend = cls.secrets()
