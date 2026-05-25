@@ -118,8 +118,8 @@ flowchart LR
 | 组件 | 当前版本 | 安装日期 | 操作人 |
 |------|----------|----------|--------|
 | Dokploy | v0.25.11 | 2025-12-31 | AI Agent |
-| 1Password Connect | v1.8.1 (latest) | 2025-12-31 | AI Agent |
-| Vault | latest | unknown (需补) | - |
+| 1Password Connect | v1.8.1 (pinned) | 2026-05-25 | AI Agent |
+| Vault | v1.15.4 (pinned) | 2026-05-25 | AI Agent |
 
 ---
 

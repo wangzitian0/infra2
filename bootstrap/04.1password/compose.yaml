@@ -1,21 +1,77 @@
 services:
   op-connect-api:
-    image: 1password/connect-api:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: op-connect-api
+      args:
+        OP_CONNECT_VERSION: "1.8.1"
+    image: bootstrap-1password-connect-api:1.8.1-healthcheck
+    container_name: op-connect-api
+    restart: always
     volumes:
       - /data/bootstrap/1password/1password-credentials.json:/home/opuser/.op/1password-credentials.json
       - /data/bootstrap/1password:/home/opuser/.op/data
     networks:
       - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    healthcheck:
+      test:
+        - CMD
+        - /usr/local/bin/op-connect-healthcheck
+        - --url
+        - http://127.0.0.1:8080/health
+        - --dependency
+        - sqlite:ACTIVE
+        - --dependency
+        - sync:ACTIVE
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
     labels:
       - "traefik.enable=true"
       
   op-connect-sync:
-    image: 1password/connect-sync:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: op-connect-sync
+      args:
+        OP_CONNECT_VERSION: "1.8.1"
+    image: bootstrap-1password-connect-sync:1.8.1-healthcheck
+    container_name: op-connect-sync
+    restart: always
+    depends_on:
+      - op-connect-api
     volumes:
       - /data/bootstrap/1password/1password-credentials.json:/home/opuser/.op/1password-credentials.json
       - /data/bootstrap/1password:/home/opuser/.op/data
     networks:
       - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    healthcheck:
+      test:
+        - CMD
+        - /usr/local/bin/op-connect-healthcheck
+        - --url
+        - http://op-connect-api:8080/health
+        - --dependency
+        - sync:ACTIVE
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    labels:
+      - "traefik.enable=false"
 
 networks:
   dokploy-network:
