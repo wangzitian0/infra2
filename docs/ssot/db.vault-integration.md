@@ -132,6 +132,37 @@ This prevents a previously rendered secrets file from masking an expired token.
 Deploy automation must treat an invalid or short-lived `VAULT_APP_TOKEN` as a
 hard preflight failure instead of continuing with a redeploy.
 
+### Required live self-refresh audit
+
+The runtime proof for this contract is `invoke vault-audit.self-refresh`.
+It is read-only and must not rotate, renew, restart, or redeploy services.
+
+The authoritative inventory is
+[`vault-self-refresh-inventory.yaml`](./vault-self-refresh-inventory.yaml). Each
+active compose file with a `vault-agent` service must have exactly one row unless
+the compose file is explicitly a non-deployed alternate.
+
+The audit must check:
+- Dokploy service env includes a non-empty `VAULT_APP_TOKEN`.
+- Vault token lookup reports `valid=true`, `renewable=true`, and TTL above the
+  configured floor.
+- `/vault/secrets/.env` exists in the vault-agent container, is readable,
+  non-empty, and fresher than `max_rendered_secret_age_seconds`.
+- vault-agent logs do not contain known token refresh or template render errors.
+- vault-agent and application containers are running with acceptable health; app
+  containers must mount `/secrets/.env`.
+
+The audit output is schema-versioned and redacts secret-like keys before
+printing or serializing results.
+
+### Test contract
+
+`libs/tests/test_vault_self_refresh_audit.py` is the regression suite for the
+self-refresh audit. It covers inventory/static drift, token classifier outcomes,
+rendered env freshness, log error detection, container checks, report schema, and
+redaction. New vault-agent services must extend the inventory and keep these
+tests passing.
+
 ### SOP: Token Expired
 
 **Symptom**: Container stuck in "Created" state, logs show "token validation failed"

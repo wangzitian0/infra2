@@ -1,0 +1,111 @@
+version: 1
+defaults:
+  vault_token_env_key: VAULT_APP_TOKEN
+  rendered_secret_path: /vault/secrets/.env
+  app_secret_mount_path: /secrets/.env
+  max_rendered_secret_age_seconds: 900
+  min_token_ttl_hours: 48
+services:
+  - id: bootstrap/iac_runner
+    project: bootstrap
+    dokploy_service: iac_runner
+    compose_path: bootstrap/06.iac_runner/compose.yaml
+    vault_agent_config_path: bootstrap/06.iac_runner/vault-agent.hcl
+    secret_template_path: bootstrap/06.iac_runner/secrets.ctmpl
+    vault_path_template: secret/data/bootstrap/{env}/iac_runner
+    vault_agent_container: iac-runner-vault-agent
+    app_containers:
+      - iac-runner
+  - id: platform/postgres
+    project: platform
+    dokploy_service: postgres
+    compose_path: platform/01.postgres/compose.yaml
+    vault_agent_config_path: platform/01.postgres/vault-agent.hcl
+    secret_template_path: platform/01.postgres/secrets.ctmpl
+    vault_path_template: secret/data/platform/{env}/postgres
+    vault_agent_container: platform-postgres-vault-agent${ENV_SUFFIX}
+    app_containers:
+      - platform-postgres${ENV_SUFFIX}
+  - id: platform/redis
+    project: platform
+    dokploy_service: redis
+    compose_path: platform/02.redis/compose.yaml
+    vault_agent_config_path: platform/02.redis/vault-agent.hcl
+    secret_template_path: platform/02.redis/secrets.ctmpl
+    vault_path_template: secret/data/platform/{env}/redis
+    vault_agent_container: platform-redis-vault-agent${ENV_SUFFIX}
+    app_containers:
+      - platform-redis${ENV_SUFFIX}
+  - id: platform/minio
+    project: platform
+    dokploy_service: minio
+    compose_path: platform/03.minio/compose.yaml
+    vault_agent_config_path: platform/03.minio/vault-agent.hcl
+    secret_template_path: platform/03.minio/secrets.ctmpl
+    vault_path_template: secret/data/platform/{env}/minio
+    vault_agent_container: platform-minio-vault-agent${ENV_SUFFIX}
+    app_containers:
+      - platform-minio${ENV_SUFFIX}
+  - id: platform/authentik
+    project: platform
+    dokploy_service: authentik
+    compose_path: platform/10.authentik/compose.yaml
+    vault_agent_config_path: platform/10.authentik/vault-agent.hcl
+    secret_template_path: platform/10.authentik/secrets.ctmpl
+    vault_path_template: secret/data/platform/{env}/authentik
+    vault_agent_container: platform-authentik-vault-agent${ENV_SUFFIX}
+    app_containers:
+      - platform-authentik-server${ENV_SUFFIX}
+      - platform-authentik-worker${ENV_SUFFIX}
+  - id: platform/activepieces
+    project: platform
+    dokploy_service: activepieces
+    compose_path: platform/22.activepieces/compose.yaml
+    vault_agent_config_path: platform/22.activepieces/vault-agent.hcl
+    secret_template_path: platform/22.activepieces/secrets.ctmpl
+    vault_path_template: secret/data/platform/{env}/activepieces
+    vault_agent_container: platform-activepieces-vault-agent${ENV_SUFFIX}
+    app_containers:
+      - platform-activepieces${ENV_SUFFIX}
+  - id: platform/prefect
+    project: platform
+    dokploy_service: prefect
+    compose_path: platform/23.prefect/compose.yaml
+    vault_agent_config_path: platform/23.prefect/vault-agent.hcl
+    secret_template_path: platform/23.prefect/secrets.ctmpl
+    vault_path_template: secret/data/platform/{env}/prefect
+    vault_agent_container: platform-prefect-vault-agent${ENV_SUFFIX}
+    app_containers:
+      - platform-prefect-server${ENV_SUFFIX}
+      - platform-prefect-services${ENV_SUFFIX}
+      - platform-prefect-worker${ENV_SUFFIX}
+  - id: finance_report/postgres
+    project: finance_report
+    dokploy_service: postgres
+    compose_path: finance_report/finance_report/01.postgres/compose.yaml
+    vault_agent_config_path: finance_report/finance_report/01.postgres/vault-agent.hcl
+    secret_template_path: finance_report/finance_report/01.postgres/secrets.ctmpl
+    vault_path_template: secret/data/finance_report/{env}/postgres
+    vault_agent_container: finance_report-postgres-vault-agent${ENV_SUFFIX}
+    app_containers:
+      - finance_report-postgres${ENV_SUFFIX}
+  - id: finance_report/redis
+    project: finance_report
+    dokploy_service: redis
+    compose_path: finance_report/finance_report/02.redis/compose.yaml
+    vault_agent_config_path: finance_report/finance_report/02.redis/vault-agent.hcl
+    secret_template_path: finance_report/finance_report/02.redis/secrets.ctmpl
+    vault_path_template: secret/data/finance_report/{env}/redis
+    vault_agent_container: finance_report-redis-vault-agent${ENV_SUFFIX}
+    app_containers:
+      - finance_report-redis${ENV_SUFFIX}
+  - id: finance_report/app
+    project: finance_report
+    dokploy_service: app
+    compose_path: finance_report/finance_report/10.app/compose.yaml
+    vault_agent_config_path: finance_report/finance_report/10.app/vault-agent.hcl
+    secret_template_path: finance_report/finance_report/10.app/secrets.ctmpl
+    vault_path_template: secret/data/finance_report/{env}/app
+    vault_agent_container: finance_report-app-vault-agent${ENV_SUFFIX}
+    app_containers:
+      - finance_report-backend${ENV_SUFFIX}

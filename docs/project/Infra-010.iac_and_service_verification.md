@@ -133,6 +133,40 @@
 - `bootstrap/06.iac_runner/compose.yaml` mounts the host SSH directory at `/host_ssh` instead of bind-mounting a single key file.
 - SSOT and README paths were updated from `06.iac-runner` to `06.iac_runner`.
 
+### 2026-05-25 Vault Self-Refresh Audit (#166)
+
+**Goal**: make the Vault app-token self-refresh chain provable with a tested,
+read-only audit instead of relying on ad hoc SSH checks.
+
+**Scope**:
+- Inventory every active deployed `vault-agent` compose service in
+  `docs/ssot/vault-self-refresh-inventory.yaml`.
+- Add `invoke vault-audit.self-refresh` to collect Dokploy env, Vault token
+  lookup, rendered env freshness, vault-agent logs, and container state.
+- Keep live collection read-only: no token renewal, restart, redeploy, or secret
+  mutation.
+- Add offline/unit tests for inventory drift, classifier behavior, report schema,
+  and redaction in `libs/tests/test_vault_self_refresh_audit.py`.
+
+**Acceptance criteria**:
+- P0: missing/malformed/invalid/non-renewable `VAULT_APP_TOKEN` fails the audit.
+- P0/P1: missing, unreadable, empty, or stale `/vault/secrets/.env` is classified
+  independently.
+- P1: known vault-agent refresh/render errors are detected from logs with secrets
+  redacted.
+- P0/P1: missing, stopped, unhealthy, high-restart, or mis-mounted containers are
+  reported per service.
+- Static coverage test fails when a new active vault-agent compose file is not in
+  the inventory.
+
+**Verification**:
+- `pytest libs/tests/test_vault_self_refresh_audit.py -q`
+- `invoke --list` includes `vault-audit.self-refresh`.
+- Live `invoke vault-audit.self-refresh` reaches Dokploy, Vault, and VPS; on
+  2026-05-25 it found valid renewable tokens but stale rendered env files and
+  unhealthy vault-agent sidecars across most services. Live remediation is
+  tracked separately in #168 so this audit work stays scoped to proof/coverage.
+
 ---
 
 ## 📝 技术细节
