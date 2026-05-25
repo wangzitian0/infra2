@@ -67,6 +67,11 @@ Important: after the first successful deploy, OpenClaw reads the persisted confi
 | `TIANCLAW_GIT_BRANCH` | `main` | Branch used by the sync sidecar |
 | `TIANCLAW_GIT_SYNC_INTERVAL_SECONDS` | `86400` | Sync loop interval; default is one daily snapshot |
 | `TIANCLAW_GIT_FALLBACK_BRANCH_PREFIX` | `snapshot/openclaw-volume` | Branch prefix used when pushing the volume snapshot to `main` fails |
+| `TIANCLAW_GIT_OPEN_PR_ON_FALLBACK` | `true` | Create a GitHub PR when the sidecar must preserve a failed direct push on a fallback branch |
+| `TIANCLAW_GIT_AUTO_MERGE_PR` | `true` | Attempt to merge the fallback PR automatically when GitHub reports it is mergeable |
+| `TIANCLAW_GIT_DELETE_FALLBACK_BRANCH_AFTER_MERGE` | `true` | Delete the fallback branch after the generated PR merges successfully |
+| `TIANCLAW_GIT_GITHUB_REPO` | inferred from `TIANCLAW_GIT_REPO` | GitHub repo slug used for fallback PR API calls, for example `wangzitian-ai/tianclaw` |
+| `TIANCLAW_GIT_GITHUB_TOKEN` | _empty_ | Optional sidecar GitHub API token for fallback PR creation and auto-merge; prefer the TianClaw repo GitHub Actions workflow when available |
 | `TIANCLAW_GIT_SSH_KEY_PATH` | `/root/.ssh/id_ed25519` | Host private-key path mounted read-only by the sync sidecar |
 | `TIANCLAW_GIT_SSH_KNOWN_HOSTS_PATH` | `/root/.ssh/known_hosts` | Host known-hosts path mounted read-only by the sync sidecar |
 | `TIANCLAW_GIT_SSH_PRIVATE_KEY` | _empty_ | Optional private-key contents used instead of `TIANCLAW_GIT_SSH_KEY_PATH` |
@@ -82,7 +87,9 @@ For OpenClaw `2026.5.3`, the same patch step also normalizes legacy Discord stre
 
 OpenClaw `2026.5.x` loads Discord as an installable plugin. The `openclaw` service command installs the official `@openclaw/discord` plugin only when it is missing, then starts the gateway. This keeps fresh containers and fresh volumes from booting without the Discord channel.
 
-When enabled, `tianclaw-git-sync` mounts the same Docker volume read-only at `/openclaw`, mounts the configured SSH key material read-only, clones the private repo into an ephemeral container path, rsyncs the volume root, commits changes, and pushes the configured branch. If pushing the configured branch fails, it preserves the snapshot by pushing the same commit to `TIANCLAW_GIT_FALLBACK_BRANCH_PREFIX/<UTC timestamp>` instead.
+When enabled, `tianclaw-git-sync` mounts the same Docker volume read-only at `/openclaw`, mounts the configured SSH key material read-only, clones the private repo into an ephemeral container path, rsyncs the volume root, commits changes, and pushes the configured branch. If the first push fails, it fetches and rebases on the latest configured branch, then retries the push. If that still fails, it preserves the snapshot by pushing the same commit to `TIANCLAW_GIT_FALLBACK_BRANCH_PREFIX/<UTC timestamp>`.
+
+Fallback branch preservation is normally completed by the TianClaw repository workflow `.github/workflows/auto-merge-openclaw-snapshots.yml`, which opens a PR back to `main`, merges it when GitHub reports it is clean, and deletes the branch after merge. If this deployment points at a repository without that workflow, set `TIANCLAW_GIT_GITHUB_TOKEN` to let the sidecar do the same PR and merge step directly. If the PR has conflicts or GitHub cannot determine mergeability, the branch and PR remain open for review instead of discarding the snapshot.
 
 This is a private data-as-code repository, so the sidecar is intentionally a preservation snapshot rather than a sanitized export. It includes active config, credentials/identity state, runtime sessions, memory, tasks, SQLite files, and media. It excludes only files that are generated dependency/cache noise or would corrupt the cloned Git working tree: `.git/`, `node_modules/`, virtualenvs, Python bytecode caches, and `.DS_Store`. `TIANCLAW_GIT_SYNC_DELETE` defaults to `false` so Git-retained recovery data is not removed just because it is absent from the live volume.
 
