@@ -71,6 +71,12 @@ services:
       - TIANCLAW_GIT_SYNC_INTERVAL_SECONDS=${TIANCLAW_GIT_SYNC_INTERVAL_SECONDS:-86400}
       - TIANCLAW_GIT_SYNC_DELETE=${TIANCLAW_GIT_SYNC_DELETE:-false}
       - TIANCLAW_GIT_FALLBACK_BRANCH_PREFIX=${TIANCLAW_GIT_FALLBACK_BRANCH_PREFIX:-snapshot/openclaw-volume}
+      - TIANCLAW_GIT_OPEN_PR_ON_FALLBACK=${TIANCLAW_GIT_OPEN_PR_ON_FALLBACK:-true}
+      - TIANCLAW_GIT_AUTO_MERGE_PR=${TIANCLAW_GIT_AUTO_MERGE_PR:-true}
+      - TIANCLAW_GIT_DELETE_FALLBACK_BRANCH_AFTER_MERGE=${TIANCLAW_GIT_DELETE_FALLBACK_BRANCH_AFTER_MERGE:-true}
+      - TIANCLAW_GIT_GITHUB_API_URL=${TIANCLAW_GIT_GITHUB_API_URL:-https://api.github.com}
+      - TIANCLAW_GIT_GITHUB_REPO=${TIANCLAW_GIT_GITHUB_REPO:-}
+      - TIANCLAW_GIT_GITHUB_TOKEN=${TIANCLAW_GIT_GITHUB_TOKEN:-}
       - TIANCLAW_GIT_USER_NAME=${TIANCLAW_GIT_USER_NAME:-TianClaw Sync}
       - TIANCLAW_GIT_USER_EMAIL=${TIANCLAW_GIT_USER_EMAIL:-tianclaw-sync@users.noreply.github.com}
       - "TIANCLAW_GIT_COMMIT_PREFIX=${TIANCLAW_GIT_COMMIT_PREFIX:-chore: sync live OpenClaw state}"
@@ -99,7 +105,7 @@ services:
           tail -f /dev/null
         fi
 
-        apk add --no-cache git openssh-client rsync
+        apk add --no-cache curl git jq openssh-client rsync
         mkdir -p /root/.ssh /sync
 
         if [ -n "$${TIANCLAW_GIT_SSH_PRIVATE_KEY:-}" ]; then
@@ -130,6 +136,151 @@ services:
         if [ "$${TIANCLAW_GIT_SYNC_DELETE}" = "true" ]; then
           delete_flag=--delete
         fi
+
+        github_repo_slug() {
+          if [ -n "$${TIANCLAW_GIT_GITHUB_REPO:-}" ]; then
+            printf '%s\n' "$${TIANCLAW_GIT_GITHUB_REPO}"
+            return 0
+          fi
+
+          repo_url="$${TIANCLAW_GIT_REPO%.git}"
+          case "$${repo_url}" in
+            git@github.com:*) printf '%s\n' "$${repo_url#git@github.com:}" ;;
+            ssh://git@github.com/*) printf '%s\n' "$${repo_url#ssh://git@github.com/}" ;;
+            https://github.com/*) printf '%s\n' "$${repo_url#https://github.com/}" ;;
+            http://github.com/*) printf '%s\n' "$${repo_url#http://github.com/}" ;;
+            *) printf '\n' ;;
+          esac
+        }
+
+        prepare_github_api_config() {
+          github_token="$${TIANCLAW_GIT_GITHUB_TOKEN:-}"
+          github_slug="$$(github_repo_slug)"
+          github_owner="$${github_slug%%/*}"
+          github_api="$${TIANCLAW_GIT_GITHUB_API_URL%/}"
+          github_curl_config=/tmp/tianclaw-github-curl.conf
+
+          if [ -z "$${github_token}" ] || [ -z "$${github_slug}" ] || [ "$${github_slug}" = "$${github_owner}" ]; then
+            github_curl_config=
+            return 0
+          fi
+
+          {
+            printf 'header = "Authorization: Bearer %s"\n' "$${github_token}"
+            printf 'header = "Accept: application/vnd.github+json"\n'
+            printf 'header = "X-GitHub-Api-Version: 2022-11-28"\n'
+          } > "$${github_curl_config}"
+          chmod 600 "$${github_curl_config}"
+        }
+
+        github_request() {
+          method="$${1}"
+          url="$${2}"
+          payload="$${3:-}"
+          if [ -z "$${github_curl_config:-}" ]; then
+            return 2
+          fi
+          if [ -n "$${payload}" ]; then
+            curl -fsS -K "$${github_curl_config}" -X "$${method}" -d "$${payload}" "$${url}"
+          else
+            curl -fsS -K "$${github_curl_config}" -X "$${method}" "$${url}"
+          fi
+        }
+
+        auto_merge_sync_pr() {
+          pr_number="$${1}"
+          fallback_branch="$${2}"
+          snapshot_ts="$${3}"
+
+          if [ "$${TIANCLAW_GIT_AUTO_MERGE_PR}" != "true" ]; then
+            echo "TianClaw sync PR #$${pr_number} left open; auto merge disabled"
+            return 0
+          fi
+
+          for attempt in $$(seq 1 12); do
+            pr_json="$$(github_request GET "$${github_api}/repos/$${github_slug}/pulls/$${pr_number}" || true)"
+            mergeable="$$(printf '%s' "$${pr_json}" | jq -r '.mergeable // "unknown"' 2>/dev/null || printf 'unknown')"
+            case "$${mergeable}" in
+              true)
+                merge_payload="$$(jq -nc \
+                  --arg title "$${TIANCLAW_GIT_COMMIT_PREFIX} $${snapshot_ts}" \
+                  '{commit_title: $$title, merge_method: "merge"}')"
+                merge_json="$$(github_request PUT "$${github_api}/repos/$${github_slug}/pulls/$${pr_number}/merge" "$${merge_payload}" || true)"
+                if [ "$$(printf '%s' "$${merge_json}" | jq -r '.merged // false' 2>/dev/null)" = "true" ]; then
+                  echo "auto-merged TianClaw sync PR #$${pr_number}"
+                  if [ "$${TIANCLAW_GIT_DELETE_FALLBACK_BRANCH_AFTER_MERGE}" = "true" ]; then
+                    git push origin --delete "$${fallback_branch}" >/dev/null 2>&1 || true
+                    echo "deleted merged fallback branch $${fallback_branch}"
+                  fi
+                else
+                  echo "TianClaw sync PR #$${pr_number} merge attempt did not complete"
+                fi
+                return 0
+                ;;
+              false)
+                echo "TianClaw sync PR #$${pr_number} is not mergeable; leaving it for review"
+                return 0
+                ;;
+              *)
+                sleep 5
+                ;;
+            esac
+          done
+
+          echo "TianClaw sync PR #$${pr_number} mergeability stayed unknown; leaving it for review"
+        }
+
+        open_sync_pr_for_fallback() {
+          fallback_branch="$${1}"
+          snapshot_ts="$${2}"
+
+          if [ "$${TIANCLAW_GIT_OPEN_PR_ON_FALLBACK}" != "true" ]; then
+            echo "fallback PR creation disabled for $${fallback_branch}"
+            return 0
+          fi
+
+          prepare_github_api_config
+          if [ -z "$${github_curl_config:-}" ]; then
+            echo "fallback branch $${fallback_branch} preserved; no sidecar GitHub token configured, relying on repository push workflows for PR automation if enabled"
+            return 0
+          fi
+
+          pr_title="$${TIANCLAW_GIT_COMMIT_PREFIX} $${snapshot_ts}"
+          pr_body="$$(printf '%s\n\n- Source: read-only `%s` volume mount\n- Base branch: `%s`\n- Snapshot branch: `%s`\n- Timestamp: `%s`\n\n%s\n' \
+            'Automated production OpenClaw volume snapshot from the TianClaw sync sidecar.' \
+            'openclaw-discord-data' \
+            "$${TIANCLAW_GIT_BRANCH}" \
+            "$${fallback_branch}" \
+            "$${snapshot_ts}" \
+            "The sidecar first tried to push directly to $${TIANCLAW_GIT_BRANCH}. This PR exists because direct push failed after the snapshot commit was created.")"
+          pr_payload="$$(jq -nc \
+            --arg title "$${pr_title}" \
+            --arg head "$${fallback_branch}" \
+            --arg base "$${TIANCLAW_GIT_BRANCH}" \
+            --arg body "$${pr_body}" \
+            '{title: $$title, head: $$head, base: $$base, body: $$body, maintainer_can_modify: true}')"
+
+          pr_json="$$(github_request POST "$${github_api}/repos/$${github_slug}/pulls" "$${pr_payload}" 2>/tmp/tianclaw-pr.err || true)"
+          pr_number="$$(printf '%s' "$${pr_json}" | jq -r '.number // empty' 2>/dev/null || true)"
+          if [ -z "$${pr_number}" ]; then
+            existing_json="$$(curl -fsS -G -K "$${github_curl_config}" \
+              --data-urlencode "state=open" \
+              --data-urlencode "base=$${TIANCLAW_GIT_BRANCH}" \
+              --data-urlencode "head=$${github_owner}:$${fallback_branch}" \
+              "$${github_api}/repos/$${github_slug}/pulls" 2>/tmp/tianclaw-pr-list.err || true)"
+            pr_number="$$(printf '%s' "$${existing_json}" | jq -r '.[0].number // empty' 2>/dev/null || true)"
+            pr_json="$${existing_json}"
+          fi
+
+          if [ -z "$${pr_number}" ]; then
+            echo "failed to create or find TianClaw sync PR for $${fallback_branch}"
+            return 0
+          fi
+
+          pr_url="$$(printf '%s' "$${pr_json}" | jq -r '.html_url // .[0].html_url // empty' 2>/dev/null || true)"
+          echo "opened TianClaw sync PR #$${pr_number} $${pr_url}"
+          auto_merge_sync_pr "$${pr_number}" "$${fallback_branch}" "$${snapshot_ts}"
+        }
 
         while true; do
           if [ ! -d "$${source}" ]; then
@@ -172,10 +323,21 @@ services:
             if git push -u origin "HEAD:$${TIANCLAW_GIT_BRANCH}"; then
               echo "synced OpenClaw volume to $${TIANCLAW_GIT_REPO}#$${TIANCLAW_GIT_BRANCH}"
             else
+              echo "push to $${TIANCLAW_GIT_BRANCH} failed; rebasing on latest remote branch and retrying"
+              if git fetch origin "$${TIANCLAW_GIT_BRANCH}" >/dev/null 2>&1 && git rebase "origin/$${TIANCLAW_GIT_BRANCH}"; then
+                if git push -u origin "HEAD:$${TIANCLAW_GIT_BRANCH}"; then
+                  echo "synced OpenClaw volume to $${TIANCLAW_GIT_REPO}#$${TIANCLAW_GIT_BRANCH} after rebase"
+                  sleep "$${TIANCLAW_GIT_SYNC_INTERVAL_SECONDS}"
+                  continue
+                fi
+              else
+                git rebase --abort >/dev/null 2>&1 || true
+              fi
               fallback_branch="$${TIANCLAW_GIT_FALLBACK_BRANCH_PREFIX}/$$(date -u +%Y%m%dT%H%M%SZ)"
               echo "push to $${TIANCLAW_GIT_BRANCH} failed; preserving snapshot on $${fallback_branch}"
               git push -u origin "HEAD:$${fallback_branch}"
               echo "synced OpenClaw volume snapshot to $${TIANCLAW_GIT_REPO}#$${fallback_branch}"
+              open_sync_pr_for_fallback "$${fallback_branch}" "$${snapshot_ts}"
             fi
           else
             echo "no tianclaw workspace changes"
