@@ -26,7 +26,7 @@ services:
       - dokploy-network
     healthcheck:
       # Keep container health tied to the gateway process; Discord account state is handled by OpenClaw runtime policy.
-      test: ["CMD-SHELL", "pgrep -f 'node dist/index.js gateway' >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "pgrep -f 'node (dist/index.js|openclaw.mjs) gateway|openclaw .*gateway' >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -48,12 +48,29 @@ services:
         # Discord and Brave moved to installable plugins in 2026.5.x. Keep this
         # idempotent so fresh volumes and rebuilt containers load the channel and
         # web_search provider before gateway startup.
-        if ! openclaw plugins inspect discord >/dev/null 2>&1; then
-          openclaw plugins install @openclaw/discord --force --dangerously-force-unsafe-install
-        fi
-        if ! openclaw plugins inspect brave >/dev/null 2>&1; then
-          openclaw plugins install @openclaw/brave-plugin --force --dangerously-force-unsafe-install
-        fi
+        plugin_inspect_timeout="$${OPENCLAW_PLUGIN_INSPECT_TIMEOUT_SECONDS:-20}"
+        plugin_install_timeout="$${OPENCLAW_PLUGIN_INSTALL_TIMEOUT_SECONDS:-180}"
+
+        ensure_plugin() {
+          plugin_id="$$1"
+          package_name="$$2"
+          set +e
+          timeout "$${plugin_inspect_timeout}" openclaw plugins inspect "$${plugin_id}" >/dev/null 2>&1
+          inspect_status="$$?"
+          set -e
+          if [ "$${inspect_status}" -eq 0 ]; then
+            return 0
+          fi
+          if [ "$${inspect_status}" -eq 124 ] || [ "$${inspect_status}" -eq 137 ]; then
+            echo "OpenClaw plugin $${plugin_id} inspect timed out; continuing gateway startup with existing volume state" >&2
+            return 0
+          fi
+          echo "OpenClaw plugin $${plugin_id} missing or inspect timed out; installing $${package_name}" >&2
+          timeout "$${plugin_install_timeout}" openclaw plugins install "$${package_name}" --force --dangerously-force-unsafe-install
+        }
+
+        ensure_plugin discord @openclaw/discord
+        ensure_plugin brave @openclaw/brave-plugin
 
         exec node openclaw.mjs gateway --allow-unconfigured
 
