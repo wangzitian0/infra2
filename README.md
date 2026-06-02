@@ -162,6 +162,9 @@ invoke env.set PASSWORD=$(openssl rand -base64 24) --project=finance_report --en
 # 4. 生成 Vault tokens
 invoke vault.setup-tokens --project=finance_report
 
+# Targeted staging repair for the app sidecar
+DEPLOY_ENV=staging invoke vault.setup-tokens --project=finance_report --service=app
+
 # 5. 部署服务
 invoke fr-postgres.setup
 invoke fr-redis.setup

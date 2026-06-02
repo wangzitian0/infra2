@@ -3,6 +3,9 @@ Vault deployment automation tasks
 Uses libs/ system for consistent environment and console utilities.
 """
 
+import json
+import os
+
 from invoke import task
 from libs.deployer import Deployer
 from libs.common import get_env
@@ -14,6 +17,15 @@ from libs.console import (
     info,
     prompt_action,
     run_with_status,
+)
+from libs.vault_tokens import (
+    TOKEN_PERIOD,
+    VaultTokenTarget,
+    accessor_kv_path,
+    display_name as vault_token_display_name,
+    normalize_selector,
+    policy_name as vault_policy_name,
+    token_for_output,
 )
 from typing import Any
 
@@ -348,39 +360,8 @@ def status(c):
     c.run(f"ssh {ssh_user}@{e['VPS_HOST']} 'docker ps | grep vault'", warn=True)
 
 
-@task
-def setup_tokens(c):
-    """Generate read-only tokens for platform and finance_report services"""
-    import os
-    import io
-    import json
-
-    header("Vault Token Setup", "Generating service tokens")
-
-    # Check VAULT_ROOT_TOKEN
-    root_token = os.getenv("VAULT_ROOT_TOKEN")
-    if not root_token:
-        error("VAULT_ROOT_TOKEN not set")
-        info(
-            "Get from: op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token' "
-            "(or /Token; item: bootstrap/vault/Root Token)"
-        )
-        info("Then run: export VAULT_ROOT_TOKEN=<token>")
-        return
-
-    e = get_env()
-    vault_addr = e.get("VAULT_ADDR", f"https://vault.{e['INTERNAL_DOMAIN']}")
-
-    success(f"Using Vault: {vault_addr}")
-    print("")
-
-    current_dir = os.path.dirname(os.path.abspath(__file__))  # bootstrap/05.vault
-    root_dir = os.path.dirname(os.path.dirname(current_dir))
-
-    env_name = e.get("ENV", "production")
-
-    # Define projects and their services
-    # Each entry: (project_name, project_dir, service_map, dokploy_project)
+def _vault_token_targets(root_dir: str) -> list[VaultTokenTarget]:
+    """Return all services that should receive a Vault app token."""
     projects = [
         (
             "bootstrap",
@@ -415,6 +396,205 @@ def setup_tokens(c):
         ),
     ]
 
+    targets: list[VaultTokenTarget] = []
+    for project_name, project_dir, service_map, dokploy_project in projects:
+        for service, service_dir in service_map.items():
+            targets.append(
+                VaultTokenTarget(
+                    project=project_name,
+                    service=service,
+                    service_dir=service_dir,
+                    project_dir=project_dir,
+                    dokploy_project=dokploy_project,
+                )
+            )
+    return targets
+
+
+def _select_token_targets(
+    targets: list[VaultTokenTarget],
+    project: str | None,
+    service: str | None,
+) -> list[VaultTokenTarget]:
+    """Filter token targets for a targeted repair."""
+    selected = []
+    for target in targets:
+        if project and target.project != project:
+            continue
+        if service and target.service != service:
+            continue
+        selected.append(target)
+    return selected
+
+
+def _vault_env(vault_addr: str, root_token: str) -> dict[str, str]:
+    return {"VAULT_ADDR": vault_addr, "VAULT_TOKEN": root_token}
+
+
+def _read_tracked_accessor(
+    c,
+    *,
+    vault_addr: str,
+    root_token: str,
+    project: str,
+    env_name: str,
+    service: str,
+) -> str | None:
+    """Read the previously active accessor for a service token, if any."""
+    path = accessor_kv_path(project, env_name, service)
+    result = c.run(
+        f"vault kv get -format=json {path}",
+        env=_vault_env(vault_addr, root_token),
+        hide=True,
+        warn=True,
+    )
+    if not result.ok:
+        return None
+
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        warning(f"Could not parse tracked accessor metadata at {path}")
+        return None
+
+    accessor = data.get("data", {}).get("data", {}).get("accessor")
+    return accessor if isinstance(accessor, str) and accessor else None
+
+
+def _lookup_accessor_for_token(
+    c,
+    *,
+    vault_addr: str,
+    token: str | None,
+) -> str | None:
+    """Look up an app token's own accessor without exposing it as a CLI arg."""
+    if not token:
+        return None
+    result = c.run(
+        "vault token lookup -format=json",
+        env={"VAULT_ADDR": vault_addr, "VAULT_TOKEN": token},
+        hide=True,
+        warn=True,
+    )
+    if not result.ok:
+        return None
+
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+
+    accessor = data.get("data", {}).get("accessor")
+    return accessor if isinstance(accessor, str) and accessor else None
+
+
+def _write_tracked_accessor(
+    c,
+    *,
+    vault_addr: str,
+    root_token: str,
+    project: str,
+    env_name: str,
+    service: str,
+    accessor: str,
+    policy: str,
+    display: str,
+) -> bool:
+    """Track the active accessor so later rotations can revoke the old token."""
+    path = accessor_kv_path(project, env_name, service)
+    result = c.run(
+        " ".join(
+            [
+                "vault kv put",
+                path,
+                f"accessor={accessor}",
+                f"policy={policy}",
+                f"display_name={display}",
+                f"period={TOKEN_PERIOD}",
+            ]
+        ),
+        env=_vault_env(vault_addr, root_token),
+        hide=True,
+        warn=True,
+    )
+    return bool(result.ok)
+
+
+def _revoke_accessor(
+    c,
+    *,
+    vault_addr: str,
+    root_token: str,
+    accessor: str | None,
+    new_accessor: str,
+) -> bool:
+    """Revoke the previous token accessor after the replacement is tracked."""
+    if not accessor or accessor == new_accessor:
+        return True
+
+    result = c.run(
+        f"vault token revoke -accessor {accessor}",
+        env=_vault_env(vault_addr, root_token),
+        hide=True,
+        warn=True,
+    )
+    if not result.ok:
+        warning(f"Could not revoke previous token accessor {accessor}")
+    return bool(result.ok)
+
+
+@task(
+    help={
+        "project": "Limit token setup to one project, e.g. finance_report.",
+        "service": "Limit token setup to one service, e.g. app.",
+        "deploy": "Update Dokploy env and trigger redeploy after token creation.",
+        "revoke_old": "Revoke the previously tracked accessor after successful Dokploy update.",
+    }
+)
+def setup_tokens(c, project=None, service=None, deploy=True, revoke_old=True):
+    """Generate read-only tokens for platform and finance_report services"""
+    import io
+
+    header("Vault Token Setup", "Generating service tokens")
+
+    # Check VAULT_ROOT_TOKEN
+    root_token = os.getenv("VAULT_ROOT_TOKEN")
+    if not root_token:
+        error("VAULT_ROOT_TOKEN not set")
+        info(
+            "Get from: op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token' "
+            "(or /Token; item: bootstrap/vault/Root Token)"
+        )
+        info("Then run: export VAULT_ROOT_TOKEN=<token>")
+        return
+
+    e = get_env()
+    vault_addr = e.get("VAULT_ADDR", f"https://vault.{e['INTERNAL_DOMAIN']}")
+
+    success(f"Using Vault: {vault_addr}")
+    print("")
+
+    current_dir = os.path.dirname(os.path.abspath(__file__))  # bootstrap/05.vault
+    root_dir = os.path.dirname(os.path.dirname(current_dir))
+
+    env_name = e.get("ENV", "production")
+    target_project = normalize_selector(project, label="project")
+    target_service = normalize_selector(service, label="service")
+    strict_dokploy = bool(target_project or target_service)
+    targets = _select_token_targets(
+        _vault_token_targets(root_dir),
+        target_project,
+        target_service,
+    )
+    if not targets:
+        error(
+            "No Vault token targets matched",
+            f"project={target_project or '*'} service={target_service or '*'}",
+        )
+        from invoke.exceptions import Exit
+
+        raise Exit("No matching Vault token targets", code=1)
+
     info("Validating VAULT_ROOT_TOKEN before bulk operations...")
     validate_result = c.run(
         "vault token lookup -format=json",
@@ -442,81 +622,147 @@ def setup_tokens(c):
 
     failed_services = []
 
-    for project_name, project_dir, service_map, dokploy_project in projects:
-        print(f"\n--- {project_name} ---")
-        for service, dir_name in service_map.items():
-            policy_name = f"{project_name}-{service}-app"
-            policy_path = os.path.join(project_dir, dir_name, "vault-policy.hcl")
+    current_project = None
+    for target in targets:
+        if target.project != current_project:
+            print(f"\n--- {target.project} ---")
+            current_project = target.project
 
-            if os.path.exists(policy_path):
-                with open(policy_path, "r") as f:
-                    policy_rules = f.read().replace("{{env}}", env_name)
-                info(f"Loaded tailored policy from {dir_name}/vault-policy.hcl")
-            else:
-                policy_rules = f"""path "auth/token/lookup-self" {{
+        policy = vault_policy_name(target.project, env_name, target.service)
+        display = vault_token_display_name(target.project, env_name, target.service)
+        policy_path = os.path.join(
+            target.project_dir, target.service_dir, "vault-policy.hcl"
+        )
+        previous_accessor = _read_tracked_accessor(
+            c,
+            vault_addr=vault_addr,
+            root_token=root_token,
+            project=target.project,
+            env_name=env_name,
+            service=target.service,
+        )
+
+        if os.path.exists(policy_path):
+            with open(policy_path, "r") as f:
+                policy_rules = f.read().replace("{{env}}", env_name)
+            info(f"Loaded tailored policy from {target.service_dir}/vault-policy.hcl")
+        else:
+            policy_rules = f"""path "auth/token/lookup-self" {{
   capabilities = ["read"]
 }}
 
-path "secret/data/{project_name}/{env_name}/{service}" {{
+path "secret/data/{target.project}/{env_name}/{target.service}" {{
   capabilities = ["read", "list"]
 }}"""
-                warning(f"No policy file found for {service}, using default read-only")
-
-            # Write policy via vault CLI using stdin
-            policy_io = io.StringIO(policy_rules)
-
-            info(f"   Writing policy: {policy_name}...")
-            result = c.run(
-                f"vault policy write {policy_name} -",
-                env={"VAULT_ADDR": vault_addr, "VAULT_TOKEN": root_token},
-                in_stream=policy_io,
-                hide=True,
-                warn=True,
-            )
-            if not result.ok:
-                stderr_msg = getattr(result, "stderr", "") or ""
-                if stderr_msg.strip():
-                    error(
-                        f"Failed to create policy '{policy_name}' for service '{service}'",
-                        stderr_msg.strip(),
-                    )
-                else:
-                    error(
-                        f"Failed to create policy '{policy_name}' for service '{service}'"
-                    )
-                failed_services.append((project_name, service, "policy_write_failed"))
-                continue
-            success(f"   ✅ Policy {policy_name} created")
-
-            # Generate periodic token (orphan, renewable indefinitely via -period)
-            # -period=168h (7 days): Token must be renewed within 7 days, but has NO max_ttl
-            # This means vault-agent can renew it forever, preventing expiration
-            # 7 days is chosen to cover weekends/holidays while any normal deploy cycle refreshes it
-            cmd = (
-                f"vault token create "
-                f"-orphan "
-                f"-period=168h "
-                f"-policy={policy_name} "
-                f"-no-default-policy "
-                f"-display-name={project_name}-{service} "
-                f"-format=json"
-            )
-            result = c.run(
-                cmd,
-                env={"VAULT_ADDR": vault_addr, "VAULT_TOKEN": root_token},
-                hide=True,
+            warning(
+                f"No policy file found for {target.service}, using default read-only"
             )
 
-            if result.ok:
-                token_data = json.loads(result.stdout)
-                token = token_data["auth"]["client_token"]
-                success(f"✅ Token for {service}:")
-                print(f"   {token}")
-                _configure_dokploy_token(c, service, token, dokploy_project)
-                print()
+        # Write policy via vault CLI using stdin
+        policy_io = io.StringIO(policy_rules)
+
+        info(f"   Writing policy: {policy}...")
+        result = c.run(
+            f"vault policy write {policy} -",
+            env=_vault_env(vault_addr, root_token),
+            in_stream=policy_io,
+            hide=True,
+            warn=True,
+        )
+        if not result.ok:
+            stderr_msg = getattr(result, "stderr", "") or ""
+            if stderr_msg.strip():
+                error(
+                    f"Failed to create policy '{policy}' for service '{target.service}'",
+                    stderr_msg.strip(),
+                )
             else:
-                error(f"Failed to create token for {service}")
-                failed_services.append((project_name, service, "token_creation_failed"))
+                error(
+                    f"Failed to create policy '{policy}' for service '{target.service}'"
+                )
+            failed_services.append(
+                (target.project, target.service, "policy_write_failed")
+            )
+            continue
+        success(f"   Policy {policy} created")
+
+        # Generate periodic token (orphan, renewable indefinitely via -period).
+        # The policy, display name, and tracked accessor are scoped by
+        # {project, env, service}; this prevents staging tokens from reading
+        # production secrets and lets rotations revoke only the old token.
+        cmd = (
+            f"vault token create "
+            f"-orphan "
+            f"-period={TOKEN_PERIOD} "
+            f"-policy={policy} "
+            f"-no-default-policy "
+            f"-display-name={display} "
+            f"-format=json"
+        )
+        result = c.run(
+            cmd,
+            env=_vault_env(vault_addr, root_token),
+            hide=True,
+            warn=True,
+        )
+
+        if result.ok:
+            token_data = json.loads(result.stdout)
+            token = token_data["auth"]["client_token"]
+            accessor = token_data["auth"].get("accessor", "")
+            success(f"Token for {display}: {token_for_output(token)}")
+
+            dokploy_configured = True
+            previous_dokploy_token = None
+            if deploy:
+                configure_result = _configure_dokploy_token(
+                    c, target.service, token, target.dokploy_project
+                )
+                if isinstance(configure_result, dict):
+                    dokploy_configured = bool(configure_result.get("configured"))
+                    previous_dokploy_token = configure_result.get("previous_token")
+                else:
+                    dokploy_configured = bool(configure_result)
+                if not dokploy_configured and strict_dokploy:
+                    failed_services.append(
+                        (target.project, target.service, "dokploy_config_failed")
+                    )
+
+            if deploy and dokploy_configured:
+                tracked = _write_tracked_accessor(
+                    c,
+                    vault_addr=vault_addr,
+                    root_token=root_token,
+                    project=target.project,
+                    env_name=env_name,
+                    service=target.service,
+                    accessor=accessor,
+                    policy=policy,
+                    display=display,
+                )
+                if not tracked:
+                    failed_services.append(
+                        (target.project, target.service, "accessor_tracking_failed")
+                    )
+                elif revoke_old:
+                    old_accessor = previous_accessor or _lookup_accessor_for_token(
+                        c,
+                        vault_addr=vault_addr,
+                        token=previous_dokploy_token,
+                    )
+                    _revoke_accessor(
+                        c,
+                        vault_addr=vault_addr,
+                        root_token=root_token,
+                        accessor=old_accessor,
+                        new_accessor=accessor,
+                    )
+            print()
+        else:
+            error(f"Failed to create token for {target.service}")
+            failed_services.append(
+                (target.project, target.service, "token_creation_failed")
+            )
 
     if failed_services:
         print("")
@@ -548,6 +794,14 @@ def setup(c):
     success("Vault setup complete!")
 
 
+def _env_value(env_text: str, key: str) -> str | None:
+    prefix = f"{key}="
+    for line in env_text.splitlines():
+        if line.startswith(prefix):
+            return line.split("=", 1)[1].strip()
+    return None
+
+
 def _configure_dokploy_token(_c, service: str, token: str, project: str = "platform"):
     """Auto-configure VAULT_APP_TOKEN in Dokploy"""
     try:
@@ -564,6 +818,7 @@ def _configure_dokploy_token(_c, service: str, token: str, project: str = "platf
         compose = client.find_compose_by_name(service, project, env_name=env_name)
         if compose:
             compose_id = compose["composeId"]
+            previous_token = _env_value(str(compose.get("env", "")), "VAULT_APP_TOKEN")
             info("   Configuring in Dokploy...")
 
             client.update_compose_env(compose_id, env_vars={"VAULT_APP_TOKEN": token})
@@ -572,11 +827,14 @@ def _configure_dokploy_token(_c, service: str, token: str, project: str = "platf
             # Trigger redeploy to apply changes
             info("   Triggering redeploy...")
             client.deploy_compose(compose_id)
-            success("   ✅ Auto-configured in Dokploy and redeployed")
+            success("   Auto-configured in Dokploy and redeployed")
+            return {"configured": True, "previous_token": previous_token}
         else:
             warning(
                 f"   Service '{service}' not found in Dokploy project '{project}', manual setup required"
             )
+            return {"configured": False, "previous_token": None}
     except Exception as exc:
         warning(f"   Auto-config failed: {exc}")
         info("   Manual setup: Add VAULT_APP_TOKEN in Dokploy UI")
+        return {"configured": False, "previous_token": None}

@@ -52,6 +52,12 @@ vault → postgres → app
 - finance_report/finance_report/02.redis/
 - finance_report/finance_report/10.app/
 
+## Change Log
+
+| Date | Change |
+|------|--------|
+| 2026-06-02 | Scoped finance_report Vault app-token policies by environment and added targeted token repair with accessor tracking/revoke. |
+
 ## Vault Secrets Setup
 
 Before deploying the application, configure the following secrets in Vault:

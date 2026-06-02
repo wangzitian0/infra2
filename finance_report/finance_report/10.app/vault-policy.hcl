@@ -1,28 +1,27 @@
 # Policy for finance_report app service
-# Uses wildcard (+) to allow access to any environment
-# This allows the same policy/token to work for production, staging, test, etc.
-path "secret/data/finance_report/+/app" {
+# Scoped by vault.setup-tokens to the target deployment environment.
+path "secret/data/finance_report/{{env}}/app" {
   capabilities = ["read"]
 }
 
-path "secret/metadata/finance_report/+/app" {
+path "secret/metadata/finance_report/{{env}}/app" {
   capabilities = ["read", "list"]
 }
 
 # Required for dynamic DATABASE_URL and REDIS_URL construction
-path "secret/data/finance_report/+/postgres" {
+path "secret/data/finance_report/{{env}}/postgres" {
   capabilities = ["read"]
 }
 
-path "secret/metadata/finance_report/+/postgres" {
+path "secret/metadata/finance_report/{{env}}/postgres" {
   capabilities = ["read", "list"]
 }
 
-path "secret/data/finance_report/+/redis" {
+path "secret/data/finance_report/{{env}}/redis" {
   capabilities = ["read"]
 }
 
-path "secret/metadata/finance_report/+/redis" {
+path "secret/metadata/finance_report/{{env}}/redis" {
   capabilities = ["read", "list"]
 }
 
