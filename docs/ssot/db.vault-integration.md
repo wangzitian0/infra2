@@ -104,7 +104,27 @@ graph TD
 Use **periodic tokens** (`-period=168h`) for all services:
 - Renewable indefinitely by vault-agent
 - 7-day window covers weekends/holidays
-- Any deploy cycle refreshes the token
+- Any valid token is renewed by vault-agent at runtime; deploy cycles only verify
+  and fail fast when the stored Dokploy token is missing, invalid, non-renewable,
+  or below the TTL floor.
+
+### Token Ownership
+
+`VAULT_APP_TOKEN` lifecycle is owned by infra2:
+- Token identity is `{project, env, service}`.
+- Policy names include the deployment environment, for example
+  `finance_report-staging-app`.
+- Policies must read only `secret/data/<project>/<env>/<service>` paths. Do not
+  use `+` wildcards across environments for app tokens.
+- `vault.setup-tokens` writes the policy, creates the periodic token, injects it
+  into the matching Dokploy compose env, tracks the new token accessor, and
+  revokes the previously tracked accessor after successful Dokploy update.
+- If the previous token was not tracked yet, the setup task can derive its
+  accessor from the old Dokploy `VAULT_APP_TOKEN` via `lookup-self` and revoke it
+  without printing the token.
+
+Finance Report CI/CD is only a consumer. It may preflight `VAULT_APP_TOKEN`, but
+it must not hold `VAULT_ROOT_TOKEN` or mutate Vault policies/tokens.
 
 ### Required vault-agent.hcl Settings
 
@@ -170,9 +190,35 @@ tests passing.
 **Fix**:
 ```bash
 export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token')
-invoke vault.setup-tokens  # or: DEPLOY_ENV=staging invoke vault.setup-tokens
+DEPLOY_ENV=staging invoke vault.setup-tokens --project=finance_report --service=app
 invoke fr-app.shared.status  # verify
 ```
+
+For PostgreSQL or Redis sidecars, replace `--service=app` with
+`--service=postgres` or `--service=redis`.
+
+### Scheduled Audit / Repair
+
+The normal runtime proof remains read-only:
+
+```bash
+invoke vault-audit.self-refresh --env=staging --service=finance_report/app
+```
+
+An infra-owned Dokploy server schedule may run a repair shell that only mutates
+Vault when the read-only audit fails:
+
+```bash
+set -euo pipefail
+cd /path/to/infra2
+if ! DEPLOY_ENV=staging invoke vault-audit.self-refresh --env=staging --service=finance_report/app; then
+  export VAULT_ROOT_TOKEN="$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token')"
+  DEPLOY_ENV=staging invoke vault.setup-tokens --project=finance_report --service=app
+fi
+```
+
+The schedule must run in infra2 or a Dokploy-controlled infra runner. GitHub
+Actions for application deploys must not receive `VAULT_ROOT_TOKEN`.
 
 ---
 

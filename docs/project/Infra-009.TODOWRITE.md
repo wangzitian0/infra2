@@ -21,3 +21,4 @@ Main documentation is in finance_report repository:
 - Documented OTEL keys in finance_report app README
 - Added `IAC_CONFIG_HASH` to finance_report app compose for restart-safe updates
 - Replaced unsupported template helpers in finance_report app secrets template
+- Scoped finance_report Vault app-token policies by environment and added targeted token repair/revoke tracking for `vault.setup-tokens`

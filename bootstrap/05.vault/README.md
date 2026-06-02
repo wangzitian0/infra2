@@ -23,6 +23,8 @@ invoke vault.setup-tokens
 
 > CLI 输出统一使用 `libs.console`，避免直接 `print`。
 > `vault.setup-tokens` 默认只输出掩码 token；如需完整 token 用于录入 1Password，先设置 `VAULT_SHOW_TOKENS=1`。
+> Generated app tokens are scoped by `{project, env, service}` and previous
+> tracked accessors are revoked after successful Dokploy update.
 
 ### 1. 部署 Vault
 
@@ -84,8 +86,15 @@ invoke vault.setup-tokens
 DEPLOY_ENV=staging invoke vault.setup-tokens
 ```
 
+```bash
+# Targeted staging repair for the Finance Report app sidecar
+DEPLOY_ENV=staging invoke vault.setup-tokens --project=finance_report --service=app
+```
+
 说明：
-- `vault.setup-tokens` 会自动为服务生成只读 token，并尝试写入 Dokploy 环境变量 `VAULT_APP_TOKEN`。
+- `vault.setup-tokens` 会自动为服务生成只读 periodic token，并尝试写入 Dokploy 环境变量 `VAULT_APP_TOKEN`。
+- Policy name, token display name, and accessor tracking include the target environment.
+- Targeted repair fails closed if the matching Dokploy compose cannot be updated; in that case the old accessor is not revoked.
 
 ### 5. 应用接入 Vault（vault-init）
 
@@ -93,14 +102,14 @@ DEPLOY_ENV=staging invoke vault.setup-tokens
 
 流程：
 1. 在 Vault 写入 `secret/data/platform/<env>/<service>`（KV v2）。
-2. 运行 `invoke vault.setup-tokens` 为服务生成只读 token。
+2. 运行 `DEPLOY_ENV=<env> invoke vault.setup-tokens --project=<project> --service=<service>` 为服务生成只读 token。
 3. Dokploy 服务环境变量设置 `VAULT_APP_TOKEN`（可自动注入）。
 4. Compose 加 `vault-init` 容器，拉取 Vault 并写入 `/secrets/.env`。
 5. 应用容器通过 `env_file: /secrets/.env` 或启动脚本 `source /secrets/.env` 读取。
 
 要点：
 - `VAULT_ADDR` 可放在 Dokploy 项目级 env。
-- `VAULT_APP_TOKEN` 必须是 per-service 的只读 token。
+- `VAULT_APP_TOKEN` 必须是 per-project/per-env/per-service 的只读 token。
 - `/secrets` 使用 `tmpfs`，避免落盘。
 
 ## 常见问题 / Troubleshooting

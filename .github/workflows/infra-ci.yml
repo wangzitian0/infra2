@@ -109,7 +109,7 @@ jobs:
       - name: Run infra unit tests
         run: |
           cd ${{ github.workspace }}
-          uv run pytest libs/tests -q
+          uv run python -P -m pytest libs/tests -q
 
   test-1password-healthcheck:
     name: Test 1Password Healthcheck
