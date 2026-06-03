@@ -188,6 +188,18 @@ uv run invoke signoz.shared.test-trace --service-name=finance-report-backend
 - Metadata: SQLite (`/var/lib/signoz/signoz.db`)
 - Alertmanager: Built-in
 
+### Alert Notifications
+
+SigNoz webhook notification channels should target the internal alerting bridge,
+not Feishu directly:
+
+```text
+http://platform-alerting${ENV_SUFFIX}:8080/signoz/webhook
+```
+
+The bridge converts Alertmanager payloads to Feishu custom bot text messages.
+See [platform/12.alerting](../12.alerting/README.md).
+
 ## Monitoring
 
 Self-monitoring via Prometheus scraping:

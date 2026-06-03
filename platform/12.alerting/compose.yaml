@@ -1,0 +1,105 @@
+services:
+  vault-agent:
+    image: hashicorp/vault:1.15
+    container_name: platform-alerting-vault-agent${ENV_SUFFIX}
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    entrypoint:
+      - sh
+      - -c
+      - |
+        rm -f /vault/secrets/.env /vault/.token /home/vault/.vault-token 2>/dev/null || true
+        if [ -z "$$VAULT_APP_TOKEN" ]; then
+          echo "VAULT_APP_TOKEN is required"
+          exit 1
+        fi
+        echo "$$VAULT_APP_TOKEN" > /vault/token
+        exec vault agent -config=/etc/vault/vault-agent.hcl
+    environment:
+      VAULT_ADDR: ${VAULT_ADDR}
+      VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:-}
+      ENV: ${ENV}
+      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - |
+          test -s /vault/secrets/.env &&
+          VAULT_TOKEN="$$(cat /vault/token)" vault token lookup >/dev/null &&
+          mtime="$$(stat -c %Y /vault/secrets/.env)" &&
+          now="$$(date +%s)" &&
+          [ "$$((now - mtime))" -le "$${VAULT_AGENT_MAX_SECRET_AGE_SECONDS:-900}" ]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 10s
+    volumes:
+      - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
+      - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
+      - secrets:/vault/secrets
+    networks:
+      - dokploy-network
+
+  feishu-alert-bridge:
+    build:
+      context: ../..
+      dockerfile: platform/12.alerting/Dockerfile
+    pull_policy: build
+    image: platform-alerting-feishu-bridge:${IAC_CONFIG_HASH:-latest}
+    container_name: platform-alerting${ENV_SUFFIX}
+    restart: unless-stopped
+    depends_on:
+      vault-agent:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -e
+        if [ ! -s /secrets/.env ]; then
+          echo "ERROR: /secrets/.env is missing or empty"
+          exit 1
+        fi
+        set -a
+        . /secrets/.env
+        set +a
+        if [ -z "$$FEISHU_WEBHOOK_URL" ]; then
+          echo "ERROR: FEISHU_WEBHOOK_URL is required"
+          exit 1
+        fi
+        exec python /app/app.py
+    environment:
+      PORT: "8080"
+      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3).read()\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    volumes:
+      - secrets:/secrets:ro
+    networks:
+      - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    labels:
+      - "traefik.enable=false"
+
+volumes:
+  secrets:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=10m,mode=0755"
+
+networks:
+  dokploy-network:
+    external: true

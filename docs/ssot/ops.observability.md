@@ -11,6 +11,7 @@
 |------|----------------|------|
 | **存储层** | [platform/03.clickhouse](../../platform/03.clickhouse/) | ClickHouse + ZooKeeper |
 | **应用层** | [platform/11.signoz](../../platform/11.signoz/) | Query Service + Frontend + OTLP Collector |
+| **告警通知** | [platform/12.alerting](../../platform/12.alerting/) | SigNoz webhook → Feishu custom bot bridge |
 | **部署指南** | [Infra-007](../project/Infra-007.signoz_install.md) | SigNoz 安装项目 |
 
 ---
@@ -25,6 +26,8 @@ graph LR
     Collector -->|Export| ClickHouse[(ClickHouse)]
     QueryService[Query Service] -->|Query| ClickHouse
     Frontend[Web UI] -->|API| QueryService
+    QueryService -->|Alert webhook| Alerting[Feishu Alert Bridge]
+    Alerting -->|Text message| Feishu[Feishu Group]
     Users[Users] -->|HTTPS| Frontend
 ```
 
@@ -37,6 +40,7 @@ graph LR
 | **OTLP Collector** | platform/11.signoz | 4317, 4318（内部） | 数据采集 |
 | **Query Service** | platform/11.signoz | 8080 (内部) | 查询引擎 |
 | **Frontend** | platform/11.signoz | 3301 (Traefik) | Web 界面 |
+| **Alert Bridge** | platform/12.alerting | 8080 (内部) | SigNoz 告警转飞书消息 |
 
 ### 2.3 数据流
 
@@ -44,6 +48,7 @@ graph LR
 2. **存储**: OTLP Collector 处理并导出 → ClickHouse
 3. **查询**: Frontend → Query Service → ClickHouse
 4. **展示**: 用户访问 `https://signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}` → Frontend
+5. **告警**: SigNoz Alertmanager webhook → `platform-alerting${ENV_SUFFIX}` → Feishu custom bot
 
 ---
 
@@ -120,9 +125,13 @@ invoke clickhouse.setup
 # 2. 部署应用层
 invoke signoz.setup
 
-# 3. 验证
+# 3. 部署告警 bridge
+invoke alerting.setup
+
+# 4. 验证
 invoke clickhouse.status
 invoke signoz.status
+invoke alerting.status
 ```
 
 ### 5.2 数据路径
@@ -166,8 +175,10 @@ ${DATA_PATH}/
 |----------|----------|------|
 | **ClickHouse 健康** | `invoke clickhouse.status` | ✅ Implemented |
 | **SigNoz 健康** | `invoke signoz.status` | ✅ Implemented |
+| **Alert bridge 健康** | `invoke alerting.status` | ✅ Implemented |
 | **Frontend 可访问** | `curl -I https://signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}` | ✅ Implemented |
 | **OTLP 端点可用** | `invoke signoz.shared.test-trace` | ✅ Implemented |
+| **Feishu 告警通道可用** | `invoke alerting.test-feishu` | Manual live gate |
 
 ---
 
@@ -195,3 +206,4 @@ ${DATA_PATH}/
 - [docs/ssot/README.md](./README.md)
 - [platform/03.clickhouse/README.md](../../platform/03.clickhouse/README.md)
 - [platform/11.signoz/README.md](../../platform/11.signoz/README.md)
+- [platform/12.alerting/README.md](../../platform/12.alerting/README.md)

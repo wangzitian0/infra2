@@ -14,7 +14,7 @@ Platform services use **vault-init pattern**:
 | Range | Category | Services |
 |-------|----------|----------|
 | `01-09` | **Databases** | `01.postgres`, `02.redis`, `03.clickhouse`, `03.minio` |
-| `10-19` | **Auth & Gateway** | `10.authentik`, `11.signoz` |
+| `10-19` | **Auth, Observability & Alerting** | `10.authentik`, `11.signoz`, `12.alerting` |
 | `20-29` | **Portal & Applications** | `21.portal`, `22.activepieces`, `23.prefect` |
 
 ## Service Directory
@@ -38,6 +38,7 @@ platform/{nn}.{service}/
 - [MinIO](./03.minio/README.md) - S3-compatible object storage
 - [Authentik](./10.authentik/README.md) - SSO provider
 - [SigNoz](./11.signoz/README.md) - Observability platform
+- [Alerting Bridge](./12.alerting/README.md) - SigNoz to Feishu alert delivery
 - [Portal](./21.portal/README.md) - Internal dashboard
 - [Activepieces](./22.activepieces/README.md) - Workflow automation
 - [Perfect](./23.prefect/README.md) - Workflow orchestration (Prefect)
@@ -74,6 +75,7 @@ invoke clickhouse.setup  # Storage for signoz
 # 2. Auth & Observability tier
 invoke authentik.setup   # SSO provider
 invoke signoz.setup      # Observability platform
+invoke alerting.setup    # Feishu alert bridge
 
 # 3. Application tier
 invoke portal.setup        # Portal with SSO auth
@@ -86,6 +88,7 @@ invoke redis.status
 invoke clickhouse.status
 invoke authentik.status
 invoke signoz.status
+invoke alerting.status
 invoke portal.status
 invoke activepieces.status
 invoke prefect.status
@@ -100,7 +103,7 @@ postgres ─┐
           ├──► authentik ──► portal
 redis ────┘
 
-clickhouse ──► signoz
+clickhouse ──► signoz ──► alerting
 ```
 
 | Service | Dependencies | Notes |
@@ -110,6 +113,7 @@ clickhouse ──► signoz
 | clickhouse | - | Storage for signoz |
 | authentik | postgres, redis | SSO provider |
 | signoz | clickhouse | Observability platform |
+| alerting | signoz, vault | Internal Feishu notification bridge |
 | portal | authentik | Protected by SSO |
 | activepieces | postgres, redis, authentik | Automation platform, protected by SSO |
 | prefect | postgres, authentik | Workflow orchestration, protected by SSO |

@@ -57,6 +57,16 @@ services:
     app_containers:
       - platform-authentik-server${ENV_SUFFIX}
       - platform-authentik-worker${ENV_SUFFIX}
+  - id: platform/alerting
+    project: platform
+    dokploy_service: alerting
+    compose_path: platform/12.alerting/compose.yaml
+    vault_agent_config_path: platform/12.alerting/vault-agent.hcl
+    secret_template_path: platform/12.alerting/secrets.ctmpl
+    vault_path_template: secret/data/platform/{env}/alerting
+    vault_agent_container: platform-alerting-vault-agent${ENV_SUFFIX}
+    app_containers:
+      - platform-alerting${ENV_SUFFIX}
   - id: platform/activepieces
     project: platform
     dokploy_service: activepieces
