@@ -1,20 +1,32 @@
-exit_after_auth = false
-pid_file = "/vault/.pid"
-
 vault {
-  address = "https://vault.zitian.party"
+  # VAULT_ADDR is set via container environment variable.
 }
 
 auto_auth {
-  method "token_file" {
+  method {
+    type = "token_file"
     config = {
       token_file_path = "/vault/token"
     }
   }
+
+  sink {
+    type = "file"
+    config = {
+      path = "/home/vault/.vault-token"
+    }
+  }
+
+  exit_on_err = true
+}
+
+template_config {
+  static_secret_render_interval = "5m"
+  exit_on_retry_failure = true
 }
 
 template {
   source      = "/etc/vault/secrets.ctmpl"
   destination = "/vault/secrets/.env"
-  perms       = "0640"
+  perms       = 0644
 }
