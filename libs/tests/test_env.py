@@ -133,6 +133,32 @@ class TestVaultSecrets:
         )
         assert secrets.set("new", "value") is True
 
+    @patch("libs.env.httpx.Client")
+    def test_vault_set_creates_missing_secret_path(self, mock_client):
+        from libs.env import VaultSecrets
+
+        get_resp = MagicMock()
+        get_resp.status_code = 404
+
+        post_resp = MagicMock()
+        post_resp.status_code = 204
+
+        client = MagicMock()
+        client.get.return_value = get_resp
+        client.post.return_value = post_resp
+        mock_client.return_value.__enter__.return_value = client
+
+        secrets = VaultSecrets(
+            path="platform/production/alerting",
+            token="token",
+            addr="https://vault.example",
+        )
+        assert secrets.set("FEISHU_APP_SECRET", "value") is True
+        client.post.assert_called_once()
+        assert client.post.call_args.kwargs["json"] == {
+            "data": {"FEISHU_APP_SECRET": "value"}
+        }
+
 
 class TestGetSecrets:
     """Test get_secrets factory"""

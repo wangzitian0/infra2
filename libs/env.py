@@ -272,7 +272,10 @@ class VaultSecrets:
                 "\n❌ VAULT_ROOT_TOKEN not set - cannot write secrets"
             )
 
-        existing = self._load().copy()
+        try:
+            existing = self._load().copy()
+        except self.VaultSecretNotFoundError:
+            existing = {}
         existing[key] = value
 
         try:

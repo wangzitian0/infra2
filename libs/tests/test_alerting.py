@@ -151,6 +151,10 @@ def test_alerting_platform_service_contract_files_exist() -> None:
     assert "open-apis/bot/v2/hook" not in compose
     assert "secrets:/secrets:ro" in compose
 
+    deploy = (base / "deploy.py").read_text(encoding="utf-8")
+    assert 'credential_type="root_vars"' in deploy
+    assert "Synced alerting runtime secrets from 1Password to Vault" in deploy
+
 
 def test_alerting_shared_tasks_are_invoke_tasks() -> None:
     """Infra-007 alerting: invoke exposes channel payload and test-send tasks."""

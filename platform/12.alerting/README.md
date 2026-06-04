@@ -26,14 +26,18 @@ uv run invoke alerting.status
 For Feishu Open Platform app bot mode:
 
 ```bash
-uv run invoke env.set ALERT_DELIVERY_MODE=feishu_app --project=platform --env=production --service=alerting
-uv run invoke env.set FEISHU_APP_ID=cli_xxx --project=platform --env=production --service=alerting
-uv run invoke env.set FEISHU_APP_SECRET=<secret> --project=platform --env=production --service=alerting
-uv run invoke env.set FEISHU_CHAT_ID=<chat_id> --project=platform --env=production --service=alerting
+uv run invoke env.set ALERT_DELIVERY_MODE=feishu_app --project=platform --env=production --service=alerting --credential-type=root_vars
+uv run invoke env.set FEISHU_APP_ID=cli_xxx --project=platform --env=production --service=alerting --credential-type=root_vars
+uv run invoke env.set FEISHU_APP_SECRET=<secret> --project=platform --env=production --service=alerting --credential-type=root_vars
+uv run invoke env.set FEISHU_CHAT_ID=<chat_id> --project=platform --env=production --service=alerting --credential-type=root_vars
 uv run invoke vault.setup-tokens --project=platform --service=alerting
 uv run invoke alerting.setup
 uv run invoke alerting.status
 ```
+
+1Password root vars are the long-lived source of truth. During
+`alerting.pre-compose`, the deployer mirrors those fields into
+`secret/platform/{env}/alerting` so the vault-agent can render runtime secrets.
 
 The bridge is internal only:
 
@@ -67,7 +71,8 @@ uv run invoke alerting.print-channel-payload
 
 ## Secrets
 
-Vault path: `secret/platform/{env}/alerting`
+Long-lived source: 1Password item `platform/{env}/alerting` (`root_vars`).
+Runtime mirror: Vault path `secret/platform/{env}/alerting`.
 
 | Key | Required | Purpose |
 |---|---:|---|

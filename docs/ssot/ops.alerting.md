@@ -13,7 +13,8 @@
 |------|----------------|------|
 | **规则定义** | **SigNoz Alert Manager** | 告警规则配置 |
 | **通知渠道** | [platform/12.alerting](../../platform/12.alerting/) | SigNoz webhook → Feishu custom bot bridge |
-| **通知密钥** | `secret/platform/{env}/alerting` | Feishu webhook or app bot credentials, plus optional bridge basic auth |
+| **通知密钥源头** | 1Password `platform/{env}/alerting` | Feishu webhook or app bot credentials, plus optional bridge basic auth |
+| **运行时镜像** | Vault `secret/platform/{env}/alerting` | vault-agent 消费；由 `alerting.pre-compose` 从 1Password 同步 |
 
 SigNoz webhook payloads use the Alertmanager schema. Feishu custom bot webhooks
 require a `msg_type=text` payload, so SigNoz must target the internal bridge
@@ -52,7 +53,7 @@ SigNoz Alertmanager webhook
 
 - **模式 A**: 告警必须包含 Actionable 的信息（Runbook 链接）。
 - **模式 B**: 尽量聚合告警，避免风暴。
-- **模式 C**: 飞书 webhook 或 app secret 只允许存放在 Vault，不允许写入 compose、README 或 Dokploy env。
+- **模式 C**: 飞书 webhook 或 app secret 的长期源头只允许存放在 1Password，不允许写入 compose、README 或 Dokploy env；Vault 仅作为运行时镜像。
 - **模式 D**: SigNoz webhook 只指向内部 bridge URL；飞书 URL/app secret 不暴露给 SigNoz channel。
 
 ### ⛔ 禁止模式 (Blacklist)
@@ -76,9 +77,9 @@ SigNoz Alertmanager webhook
 ### SOP-002: 接入飞书自定义机器人通知通道
 
 1. 在飞书群中创建自定义机器人，复制 webhook URL。
-2. 写入 Vault:
+2. 写入 1Password root vars:
    ```bash
-   uv run invoke env.set FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/<token> --project=platform --env=production --service=alerting
+   uv run invoke env.set FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/<token> --project=platform --env=production --service=alerting --credential-type=root_vars
    uv run invoke vault.setup-tokens --project=platform --service=alerting
    ```
 3. 部署 bridge:
@@ -101,12 +102,12 @@ SigNoz Alertmanager webhook
 1. 在飞书开放平台应用中启用机器人能力。
 2. 申请并发布 `im:message:send_as_bot` 或 `im:message` 权限。
 3. 将应用机器人添加到目标群，并获取该群 `chat_id`。
-4. 写入 Vault:
+4. 写入 1Password root vars:
    ```bash
-   uv run invoke env.set ALERT_DELIVERY_MODE=feishu_app --project=platform --env=production --service=alerting
-   uv run invoke env.set FEISHU_APP_ID=cli_xxx --project=platform --env=production --service=alerting
-   uv run invoke env.set FEISHU_APP_SECRET=<secret> --project=platform --env=production --service=alerting
-   uv run invoke env.set FEISHU_CHAT_ID=<chat_id> --project=platform --env=production --service=alerting
+   uv run invoke env.set ALERT_DELIVERY_MODE=feishu_app --project=platform --env=production --service=alerting --credential-type=root_vars
+   uv run invoke env.set FEISHU_APP_ID=cli_xxx --project=platform --env=production --service=alerting --credential-type=root_vars
+   uv run invoke env.set FEISHU_APP_SECRET=<secret> --project=platform --env=production --service=alerting --credential-type=root_vars
+   uv run invoke env.set FEISHU_CHAT_ID=<chat_id> --project=platform --env=production --service=alerting --credential-type=root_vars
    uv run invoke vault.setup-tokens --project=platform --service=alerting
    uv run invoke alerting.setup
    uv run invoke alerting.test-feishu --message="Infra2 alert test"
