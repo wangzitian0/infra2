@@ -12,8 +12,10 @@ import pytest
 from libs.alerting import (
     BasicAuth,
     InvalidWebhookUrl,
+    build_feishu_app_message_payload,
     build_feishu_text_payload,
     build_signoz_channel_payload,
+    deliver_feishu_app_text,
     format_signoz_alert,
     redacted_url,
     validate_feishu_webhook_url,
@@ -75,6 +77,55 @@ def test_signoz_channel_payload_targets_internal_bridge_with_optional_basic_auth
     assert webhook["send_resolved"] is True
     assert webhook["http_config"]["basic_auth"]["username"] == "signoz"
     assert webhook["http_config"]["basic_auth"]["password"] == "secret"
+
+
+def test_feishu_app_message_payload_stringifies_content() -> None:
+    """Infra-007 alerting: Feishu app bot payload follows OpenAPI contract."""
+    payload = build_feishu_app_message_payload("oc_test", "hello")
+    assert payload["receive_id"] == "oc_test"
+    assert payload["msg_type"] == "text"
+    assert payload["content"] == '{"text": "hello"}'
+
+
+def test_feishu_app_delivery_fetches_token_then_sends_message(monkeypatch) -> None:
+    """Infra-007 alerting: app bot mode uses tenant token and chat_id."""
+    requests = []
+
+    class FakeResponse:
+        def __init__(self, payload: dict):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            import json
+
+            return json.dumps(self.payload).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        requests.append((request, timeout))
+        if request.full_url.endswith("/tenant_access_token/internal"):
+            return FakeResponse({"code": 0, "tenant_access_token": "tenant-token"})
+        return FakeResponse({"code": 0, "data": {"message_id": "om_test"}})
+
+    monkeypatch.setattr("libs.alerting.urlopen", fake_urlopen)
+
+    result = deliver_feishu_app_text(
+        app_id="cli_test",
+        app_secret="secret",
+        chat_id="oc_test",
+        text="hello",
+    )
+
+    assert result["data"]["message_id"] == "om_test"
+    assert len(requests) == 2
+    send_request, _timeout = requests[1]
+    assert "receive_id_type=chat_id" in send_request.full_url
+    assert send_request.headers["Authorization"] == "Bearer tenant-token"
 
 
 def test_alerting_platform_service_contract_files_exist() -> None:

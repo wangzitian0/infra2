@@ -22,6 +22,10 @@ class InvalidWebhookUrl(AlertingError):
     """Raised when a Feishu webhook URL is unsafe or unsupported."""
 
 
+class InvalidFeishuAppConfig(AlertingError):
+    """Raised when Feishu app delivery config is incomplete or unsafe."""
+
+
 class FeishuDeliveryError(AlertingError):
     """Raised when Feishu webhook delivery fails."""
 
@@ -56,6 +60,18 @@ def build_feishu_text_payload(text: str) -> dict[str, Any]:
     if len(message) > MAX_MESSAGE_CHARS:
         message = message[: MAX_MESSAGE_CHARS - 14].rstrip() + "\n...[truncated]"
     return {"msg_type": "text", "content": {"text": message}}
+
+
+def build_feishu_app_message_payload(chat_id: str, text: str) -> dict[str, Any]:
+    """Build a Feishu OpenAPI text message payload."""
+    message = text.strip() or "SigNoz alert"
+    if len(message) > MAX_MESSAGE_CHARS:
+        message = message[: MAX_MESSAGE_CHARS - 14].rstrip() + "\n...[truncated]"
+    return {
+        "receive_id": chat_id,
+        "msg_type": "text",
+        "content": json.dumps({"text": message}, ensure_ascii=False),
+    }
 
 
 def format_signoz_alert(payload: dict[str, Any]) -> str:
@@ -158,12 +174,110 @@ def deliver_feishu_text(webhook_url: str, text: str, timeout: float = 10.0) -> d
     return decoded
 
 
+def deliver_feishu_app_text(
+    *,
+    app_id: str,
+    app_secret: str,
+    chat_id: str,
+    text: str,
+    api_base: str = "https://open.feishu.cn",
+    timeout: float = 10.0,
+) -> dict[str, Any]:
+    """Send a text message to a Feishu chat using app bot OpenAPI."""
+    base = validate_feishu_api_base(api_base)
+    safe_app_id = _required("FEISHU_APP_ID", app_id)
+    safe_app_secret = _required("FEISHU_APP_SECRET", app_secret)
+    safe_chat_id = _required("FEISHU_CHAT_ID", chat_id)
+
+    token_response = _post_json(
+        f"{base}/open-apis/auth/v3/tenant_access_token/internal",
+        {
+            "app_id": safe_app_id,
+            "app_secret": safe_app_secret,
+        },
+        timeout=timeout,
+    )
+    access_token = token_response.get("tenant_access_token")
+    if not access_token:
+        raise FeishuDeliveryError("Feishu tenant_access_token missing in response")
+
+    return _post_json(
+        f"{base}/open-apis/im/v1/messages?receive_id_type=chat_id",
+        build_feishu_app_message_payload(safe_chat_id, text),
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=timeout,
+    )
+
+
+def validate_feishu_api_base(api_base: str) -> str:
+    """Validate Feishu/Lark OpenAPI base URL."""
+    candidate = (api_base or "https://open.feishu.cn").strip().rstrip("/")
+    parsed = urlparse(candidate)
+    if parsed.scheme != "https":
+        raise InvalidFeishuAppConfig("Feishu API base must use https")
+    if parsed.hostname not in FEISHU_WEBHOOK_HOSTS:
+        allowed = ", ".join(sorted(FEISHU_WEBHOOK_HOSTS))
+        raise InvalidFeishuAppConfig(f"Feishu API host must be one of: {allowed}")
+    return candidate
+
+
 def redacted_url(url: str) -> str:
     """Return a webhook URL without the secret token."""
     parsed = urlparse(url)
     if not parsed.scheme or not parsed.netloc:
         return "***"
     return f"{parsed.scheme}://{parsed.netloc}/open-apis/bot/v2/hook/***"
+
+
+def redacted_app_config(app_id: str, chat_id: str, api_base: str) -> dict[str, str]:
+    """Return safe Feishu app delivery metadata."""
+    redacted_app_id = f"{app_id[:8]}..." if app_id else ""
+    redacted_chat_id = f"{chat_id[:8]}..." if chat_id else ""
+    return {
+        "api_base": validate_feishu_api_base(api_base),
+        "app_id": redacted_app_id,
+        "chat_id": redacted_chat_id,
+    }
+
+
+def _post_json(
+    url: str,
+    payload: dict[str, Any],
+    *,
+    headers: dict[str, str] | None = None,
+    timeout: float,
+) -> dict[str, Any]:
+    request_headers = {"Content-Type": "application/json"}
+    request_headers.update(headers or {})
+    request = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=request_headers,
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:  # noqa: S310
+            response_body = response.read().decode("utf-8")
+    except OSError as exc:
+        raise FeishuDeliveryError("Feishu OpenAPI request failed") from exc
+
+    try:
+        decoded = json.loads(response_body) if response_body else {}
+    except json.JSONDecodeError as exc:
+        raise FeishuDeliveryError("Feishu OpenAPI returned invalid JSON") from exc
+
+    code = decoded.get("code")
+    if code not in (None, 0):
+        message = decoded.get("msg") or decoded.get("message") or "unknown error"
+        raise FeishuDeliveryError(f"Feishu OpenAPI rejected message: {message}")
+    return decoded
+
+
+def _required(name: str, value: str) -> str:
+    candidate = (value or "").strip()
+    if not candidate:
+        raise InvalidFeishuAppConfig(f"{name} is required")
+    return candidate
 
 
 def _dict(value: Any) -> dict[str, Any]:

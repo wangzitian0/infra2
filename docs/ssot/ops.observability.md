@@ -11,7 +11,7 @@
 |------|----------------|------|
 | **存储层** | [platform/03.clickhouse](../../platform/03.clickhouse/) | ClickHouse + ZooKeeper |
 | **应用层** | [platform/11.signoz](../../platform/11.signoz/) | Query Service + Frontend + OTLP Collector |
-| **告警通知** | [platform/12.alerting](../../platform/12.alerting/) | SigNoz webhook → Feishu custom bot bridge |
+| **告警通知** | [platform/12.alerting](../../platform/12.alerting/) | SigNoz webhook → Feishu custom webhook or app bot bridge |
 | **部署指南** | [Infra-007](../project/Infra-007.signoz_install.md) | SigNoz 安装项目 |
 
 ---
@@ -48,7 +48,7 @@ graph LR
 2. **存储**: OTLP Collector 处理并导出 → ClickHouse
 3. **查询**: Frontend → Query Service → ClickHouse
 4. **展示**: 用户访问 `https://signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}` → Frontend
-5. **告警**: SigNoz Alertmanager webhook → `platform-alerting${ENV_SUFFIX}` → Feishu custom bot
+5. **告警**: SigNoz Alertmanager webhook → `platform-alerting${ENV_SUFFIX}` → Feishu custom webhook or app bot
 
 ---
 

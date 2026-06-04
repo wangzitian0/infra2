@@ -10,9 +10,12 @@ from typing import Any
 
 from libs.alerting import (
     AlertingError,
+    deliver_feishu_app_text,
     deliver_feishu_text,
     format_signoz_alert,
+    redacted_app_config,
     redacted_url,
+    validate_feishu_api_base,
     validate_feishu_webhook_url,
 )
 
@@ -28,13 +31,12 @@ class AlertBridgeHandler(BaseHTTPRequestHandler):
         if self.path != "/health":
             self._json(404, {"status": "not_found"})
             return
-        webhook_url = os.getenv("FEISHU_WEBHOOK_URL", "")
         try:
-            validate_feishu_webhook_url(webhook_url)
+            metadata = _validate_delivery_config()
         except AlertingError as exc:
             self._json(503, {"status": "degraded", "error": str(exc)})
             return
-        self._json(200, {"status": "ok", "webhook": redacted_url(webhook_url)})
+        self._json(200, {"status": "ok", **metadata})
 
     def do_POST(self) -> None:
         if self.path != "/signoz/webhook":
@@ -58,10 +60,9 @@ class AlertBridgeHandler(BaseHTTPRequestHandler):
             self._json(400, {"status": "invalid_payload"})
             return
 
-        webhook_url = os.getenv("FEISHU_WEBHOOK_URL", "")
         try:
             text = format_signoz_alert(payload)
-            response = deliver_feishu_text(webhook_url, text)
+            response = _deliver(text)
         except AlertingError as exc:
             self._json(502, {"status": "delivery_failed", "error": str(exc)})
             return
@@ -95,6 +96,44 @@ def main() -> None:
     server = ThreadingHTTPServer((HOST, PORT), AlertBridgeHandler)
     print(f"alert bridge listening on {HOST}:{PORT}", flush=True)
     server.serve_forever()
+
+
+def _delivery_mode() -> str:
+    return os.getenv("ALERT_DELIVERY_MODE", "feishu_webhook").strip()
+
+
+def _validate_delivery_config() -> dict[str, Any]:
+    mode = _delivery_mode()
+    if mode == "feishu_webhook":
+        webhook_url = os.getenv("FEISHU_WEBHOOK_URL", "")
+        validate_feishu_webhook_url(webhook_url)
+        return {"mode": mode, "webhook": redacted_url(webhook_url)}
+    if mode == "feishu_app":
+        app_id = os.getenv("FEISHU_APP_ID", "")
+        chat_id = os.getenv("FEISHU_CHAT_ID", "")
+        api_base = os.getenv("FEISHU_API_BASE", "https://open.feishu.cn")
+        validate_feishu_api_base(api_base)
+        if not app_id or not os.getenv("FEISHU_APP_SECRET") or not chat_id:
+            raise AlertingError(
+                "FEISHU_APP_ID, FEISHU_APP_SECRET, and FEISHU_CHAT_ID are required"
+            )
+        return {"mode": mode, "app": redacted_app_config(app_id, chat_id, api_base)}
+    raise AlertingError(f"Unsupported ALERT_DELIVERY_MODE: {mode}")
+
+
+def _deliver(text: str) -> dict[str, Any]:
+    mode = _delivery_mode()
+    if mode == "feishu_webhook":
+        return deliver_feishu_text(os.getenv("FEISHU_WEBHOOK_URL", ""), text)
+    if mode == "feishu_app":
+        return deliver_feishu_app_text(
+            app_id=os.getenv("FEISHU_APP_ID", ""),
+            app_secret=os.getenv("FEISHU_APP_SECRET", ""),
+            chat_id=os.getenv("FEISHU_CHAT_ID", ""),
+            text=text,
+            api_base=os.getenv("FEISHU_API_BASE", "https://open.feishu.cn"),
+        )
+    raise AlertingError(f"Unsupported ALERT_DELIVERY_MODE: {mode}")
 
 
 if __name__ == "__main__":

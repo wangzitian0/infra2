@@ -67,10 +67,24 @@ services:
         set -a
         . /secrets/.env
         set +a
-        if [ -z "$$FEISHU_WEBHOOK_URL" ]; then
-          echo "ERROR: FEISHU_WEBHOOK_URL is required"
-          exit 1
-        fi
+        case "$${ALERT_DELIVERY_MODE:-feishu_webhook}" in
+          feishu_webhook)
+            if [ -z "$$FEISHU_WEBHOOK_URL" ]; then
+              echo "ERROR: FEISHU_WEBHOOK_URL is required for feishu_webhook mode"
+              exit 1
+            fi
+            ;;
+          feishu_app)
+            if [ -z "$$FEISHU_APP_ID" ] || [ -z "$$FEISHU_APP_SECRET" ] || [ -z "$$FEISHU_CHAT_ID" ]; then
+              echo "ERROR: FEISHU_APP_ID, FEISHU_APP_SECRET, and FEISHU_CHAT_ID are required for feishu_app mode"
+              exit 1
+            fi
+            ;;
+          *)
+            echo "ERROR: unsupported ALERT_DELIVERY_MODE=$$ALERT_DELIVERY_MODE"
+            exit 1
+            ;;
+        esac
         exec python /app/app.py
     environment:
       PORT: "8080"
