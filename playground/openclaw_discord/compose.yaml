@@ -1,7 +1,7 @@
 services:
   openclaw:
     # Pin to the latest stable OpenClaw release to avoid drift from :latest.
-    image: ghcr.io/openclaw/openclaw:2026.5.22
+    image: ghcr.io/openclaw/openclaw:2026.5.18
     restart: always
     expose:
       - "${OPENCLAW_GATEWAY_PORT:-18789}"
