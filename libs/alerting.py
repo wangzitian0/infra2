@@ -11,6 +11,8 @@ from urllib.request import Request, urlopen
 
 FEISHU_WEBHOOK_HOSTS = {"open.feishu.cn", "open.larksuite.com"}
 FEISHU_WEBHOOK_PATH_PREFIX = "/open-apis/bot/v2/hook/"
+SIGNOZ_ALERT_SCHEMA_VERSION = "v2alpha1"
+SIGNOZ_ALERT_VERSION = "v5"
 MAX_ALERT_LINES = 8
 MAX_MESSAGE_CHARS = 3500
 TRUNCATION_SUFFIX = "\n...[truncated]"
@@ -149,6 +151,128 @@ def build_signoz_channel_payload(
             }
         }
     return {"name": channel_name, "webhook_configs": [config]}
+
+
+def build_signoz_log_alert_rule_payload(
+    *,
+    alert_name: str,
+    service_name: str,
+    channel_ids: list[str],
+    summary: str,
+    severity: str = "error",
+    threshold: int = 0,
+    eval_window: str = "5m0s",
+    frequency: str = "1m",
+) -> dict[str, Any]:
+    """Build a SigNoz v2 threshold rule for OTEL log error count alerts."""
+    return {
+        "alert": _required("alert_name", alert_name),
+        "alertType": "LOGS_BASED_ALERT",
+        "ruleType": "threshold_rule",
+        "condition": {
+            "thresholds": {
+                "kind": "basic",
+                "spec": [
+                    {
+                        "name": severity,
+                        "target": int(threshold),
+                        "matchType": "1",
+                        "op": "1",
+                        "channels": [channel_id for channel_id in channel_ids if channel_id],
+                        "targetUnit": "",
+                    }
+                ],
+            },
+            "compositeQuery": {
+                "queryType": "builder",
+                "panelType": "graph",
+                "unit": "",
+                "builderQueries": {
+                    "A": {
+                        "dataSource": "logs",
+                        "queryName": "A",
+                        "aggregateOperator": "count",
+                        "aggregateAttribute": _signoz_attribute("", "", ""),
+                        "aggregations": [{"expression": "count() "}],
+                        "filters": {
+                            "op": "AND",
+                            "items": [
+                                {
+                                    "id": "service.name--string--resource",
+                                    "key": _signoz_attribute(
+                                        "service.name", "string", "resource"
+                                    ),
+                                    "op": "=",
+                                    "value": service_name,
+                                },
+                                {
+                                    "id": "severity_text--string--tag",
+                                    "key": _signoz_attribute(
+                                        "severity_text", "string", "tag"
+                                    ),
+                                    "op": "in",
+                                    "value": ["ERROR", "FATAL"],
+                                },
+                            ],
+                        },
+                        "groupBy": [],
+                        "expression": "A",
+                        "disabled": False,
+                        "stepInterval": 60,
+                        "having": [],
+                        "limit": None,
+                        "orderBy": [],
+                        "legend": "",
+                        "reduceTo": "sum",
+                    }
+                },
+                "promQueries": {},
+                "chQueries": {},
+            },
+            "selectedQueryName": "A",
+            "alertOnAbsent": False,
+            "requireMinPoints": False,
+        },
+        "evaluation": {
+            "kind": "rolling",
+            "spec": {"evalWindow": eval_window, "frequency": frequency},
+        },
+        "labels": {"severity": severity, "service": service_name, "team": "infra"},
+        "annotations": {"description": summary, "summary": summary},
+        "notificationSettings": {
+            "groupBy": [],
+            "renotify": {"enabled": False, "interval": "30m", "alertStates": []},
+            "usePolicy": False,
+        },
+        "version": SIGNOZ_ALERT_VERSION,
+        "schemaVersion": SIGNOZ_ALERT_SCHEMA_VERSION,
+        "source": "infra2/platform/12.alerting",
+        "disabled": False,
+    }
+
+
+def find_signoz_channel_id(channels_response: Any, channel_name: str) -> str | None:
+    """Find a SigNoz notification channel id by name across known response shapes."""
+    for channel in _iter_signoz_items(channels_response, collection_keys=("channels",)):
+        if not isinstance(channel, dict):
+            continue
+        if channel.get("name") != channel_name:
+            continue
+        channel_id = channel.get("id") or channel.get("channelId")
+        return str(channel_id) if channel_id else None
+    return None
+
+
+def find_signoz_rule_id(rules_response: Any, alert_name: str) -> str | None:
+    """Find a SigNoz rule id by alert name across known response shapes."""
+    for rule in _iter_signoz_items(rules_response, collection_keys=("rules", "items")):
+        if not isinstance(rule, dict):
+            continue
+        if rule.get("alert") != alert_name and rule.get("name") != alert_name:
+            continue
+        rule_id = rule.get("id") or rule.get("ruleId")
+        return str(rule_id) if rule_id else None
+    return None
 
 
 def deliver_feishu_text(webhook_url: str, text: str, timeout: float = 10.0) -> dict[str, Any]:
@@ -291,6 +415,39 @@ def _dict(value: Any) -> dict[str, Any]:
 
 def _one_line(value: Any) -> str:
     return " ".join(str(value).split())
+
+
+def _signoz_attribute(key: str, data_type: str, attribute_type: str) -> dict[str, str]:
+    return {
+        "id": f"{key}--{data_type}--{attribute_type}" if key else "--",
+        "key": key,
+        "dataType": data_type,
+        "type": attribute_type,
+    }
+
+
+def _iter_signoz_items(
+    response: Any, *, collection_keys: tuple[str, ...]
+) -> list[dict[str, Any]]:
+    if isinstance(response, list):
+        return response
+    if not isinstance(response, dict):
+        return []
+
+    data = response.get("data", response)
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        if any(key in data for key in ("name", "alert", "id", "channelId", "ruleId")):
+            return [data]
+        for key in collection_keys:
+            value = data.get(key)
+            if isinstance(value, list):
+                return value
+        nested = data.get("data")
+        if isinstance(nested, list):
+            return nested
+    return []
 
 
 def _truncate_message(message: str) -> str:

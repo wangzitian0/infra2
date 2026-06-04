@@ -312,6 +312,19 @@ class Deployer:
                 env=env_str,
             )
             compose_id = result["composeId"]
+            # Dokploy initializes new GitHub compose records with default source
+            # fields on some versions; update immediately so first deploy uses
+            # the intended repository and compose path.
+            client.update_compose(
+                compose_id,
+                source_type="github",
+                githubId=github_id,
+                repository=GITHUB_REPO,
+                owner=GITHUB_OWNER,
+                branch=GITHUB_BRANCH,
+                composePath=cls.compose_path,
+                env=env_str,
+            )
 
         # Deploy
         info(f"Deploying compose {compose_id}...")

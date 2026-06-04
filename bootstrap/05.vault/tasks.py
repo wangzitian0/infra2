@@ -379,6 +379,7 @@ def _vault_token_targets(root_dir: str) -> list[VaultTokenTarget]:
                 "redis": "02.redis",
                 "minio": "03.minio",
                 "authentik": "10.authentik",
+                "alerting": "12.alerting",
                 "activepieces": "22.activepieces",
                 "prefect": "23.prefect",
             },

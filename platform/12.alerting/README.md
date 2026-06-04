@@ -69,6 +69,27 @@ To inspect the payload without mutating SigNoz:
 uv run invoke alerting.print-channel-payload
 ```
 
+## SigNoz Rule Automation
+
+`platform/12.alerting` owns shared SigNoz alert automation only. Application
+names are parameters; do not add app-specific tasks here.
+
+Inspect the rule payload without mutating SigNoz:
+
+```bash
+uv run python -m invoke alerting.shared.print-log-error-rule-payload \
+  --alert-name=ExampleBackendErrorLogs \
+  --service-name=example-backend
+```
+
+Create or verify the internal channel and a reusable OTEL log error rule:
+
+```bash
+uv run python -m invoke alerting.shared.ensure-log-error-rule \
+  --alert-name=ExampleBackendErrorLogs \
+  --service-name=example-backend
+```
+
 ## Secrets
 
 Long-lived source: 1Password item `platform/{env}/alerting` (`root_vars`).
@@ -90,6 +111,10 @@ Runtime mirror: Vault path `secret/platform/{env}/alerting`.
 ```bash
 uv run invoke alerting.status
 uv run invoke alerting.test-feishu --message="Infra2 alert test"
+uv run python -m invoke alerting.shared.ensure-log-error-rule \
+  --alert-name=ExampleBackendErrorLogs \
+  --service-name=example-backend \
+  --dry-run
 ```
 
 `test-feishu` sends a synthetic SigNoz-style alert through the bridge and should

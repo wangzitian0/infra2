@@ -17,7 +17,10 @@ from libs.alerting import (
     build_feishu_app_message_payload,
     build_feishu_text_payload,
     build_signoz_channel_payload,
+    build_signoz_log_alert_rule_payload,
     deliver_feishu_app_text,
+    find_signoz_channel_id,
+    find_signoz_rule_id,
     format_signoz_alert,
     redacted_url,
     validate_feishu_webhook_url,
@@ -58,14 +61,14 @@ def test_alertmanager_payload_is_rendered_as_feishu_text() -> None:
     """Infra-007 alerting: SigNoz webhook payloads become Feishu text messages."""
     payload = {
         "status": "firing",
-        "commonLabels": {"alertname": "FinanceReportDown", "severity": "critical"},
+        "commonLabels": {"alertname": "ExampleBackendDown", "severity": "critical"},
         "commonAnnotations": {"summary": "Production API health check failed"},
         "externalURL": "https://signoz.zitian.party",
         "alerts": [
             {
                 "labels": {
-                    "alertname": "FinanceReportDown",
-                    "instance": "finance_report-backend",
+                    "alertname": "ExampleBackendDown",
+                    "instance": "example-backend",
                 },
                 "annotations": {"summary": "GET /api/health returned 503"},
             }
@@ -73,9 +76,9 @@ def test_alertmanager_payload_is_rendered_as_feishu_text() -> None:
     }
 
     text = format_signoz_alert(payload)
-    assert "[FIRING] FinanceReportDown" in text
+    assert "[FIRING] ExampleBackendDown" in text
     assert "Severity: critical" in text
-    assert "finance_report-backend" in text
+    assert "example-backend" in text
 
     feishu_payload = build_feishu_text_payload(text)
     assert feishu_payload == {"msg_type": "text", "content": {"text": text}}
@@ -95,6 +98,55 @@ def test_signoz_channel_payload_targets_internal_bridge_with_optional_basic_auth
     assert webhook["send_resolved"] is True
     assert webhook["http_config"]["basic_auth"]["username"] == "signoz"
     assert webhook["http_config"]["basic_auth"]["password"] == "secret"
+
+
+def test_log_error_alert_rule_uses_signoz_v2_threshold_schema() -> None:
+    """Infra-007 alerting: shared app alerts are SigNoz rule payloads."""
+    payload = build_signoz_log_alert_rule_payload(
+        alert_name="ExampleBackendErrorLogs",
+        service_name="example-backend",
+        channel_ids=["channel-1"],
+        summary="example backend emitted error logs",
+    )
+
+    assert payload["schemaVersion"] == "v2alpha1"
+    assert payload["version"] == "v5"
+    assert payload["alertType"] == "LOGS_BASED_ALERT"
+    assert payload["condition"]["selectedQueryName"] == "A"
+    threshold = payload["condition"]["thresholds"]["spec"][0]
+    assert threshold["op"] == "1"
+    assert threshold["matchType"] == "1"
+    assert threshold["channels"] == ["channel-1"]
+
+    query = payload["condition"]["compositeQuery"]["builderQueries"]["A"]
+    assert query["dataSource"] == "logs"
+    assert query["aggregateOperator"] == "count"
+    filters = query["filters"]["items"]
+    assert filters[0]["key"]["key"] == "service.name"
+    assert filters[0]["key"]["type"] == "resource"
+    assert filters[0]["value"] == "example-backend"
+    assert filters[1]["key"]["key"] == "severity_text"
+    assert filters[1]["value"] == ["ERROR", "FATAL"]
+
+
+def test_signoz_api_response_helpers_find_channel_and_rule_ids() -> None:
+    """Infra-007 alerting: SigNoz API parsing tolerates common envelopes."""
+    channels_response = {
+        "status": "success",
+        "data": {
+            "channels": [{"name": "infra2-feishu-alerts-production", "id": "c1"}]
+        },
+    }
+    rules_response = {
+        "data": {"rules": [{"alert": "ExampleBackendErrorLogs", "id": "r1"}]}
+    }
+
+    assert (
+        find_signoz_channel_id(channels_response, "infra2-feishu-alerts-production")
+        == "c1"
+    )
+    assert find_signoz_rule_id(rules_response, "ExampleBackendErrorLogs") == "r1"
+    assert find_signoz_channel_id({"data": []}, "missing") is None
 
 
 def test_feishu_app_message_payload_stringifies_content() -> None:
@@ -188,11 +240,16 @@ def test_alerting_shared_tasks_are_invoke_tasks() -> None:
 
     assert hasattr(module, "status")
     assert hasattr(module, "print_channel_payload")
+    assert hasattr(module, "ensure_log_error_rule")
+    assert hasattr(module, "print_log_error_rule_payload")
     assert hasattr(module, "test_feishu")
 
     source = path.read_text(encoding="utf-8")
     assert 'shlex.quote(f"SIGNOZ-API-KEY: {api_key}")' in source
     assert "-H {api_key_header}" in source
+    assert '"is_ready": result.ok' in source
+    assert "finance_report" not in source
+    assert "FinanceReport" not in source
 
 
 def test_alerting_app_request_guards_are_explicit() -> None:
