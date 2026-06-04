@@ -226,6 +226,15 @@ def test_alerting_platform_service_contract_files_exist() -> None:
     assert "Synced alerting runtime secrets from 1Password to Vault" in deploy
 
 
+def test_alerting_ssot_catalog_includes_dokploy_control_plane() -> None:
+    """Infra-007 alerting: Dokploy control-plane alerts are explicitly cataloged."""
+    ssot = (ROOT / "docs/ssot/ops.alerting.md").read_text(encoding="utf-8")
+
+    assert "Dokploy" in ssot
+    assert "deployment control-plane" in ssot
+    assert "app health alerts remain app-owned" in ssot
+
+
 def test_alerting_shared_tasks_are_invoke_tasks() -> None:
     """Infra-007 alerting: invoke exposes channel payload and test-send tasks."""
     fake_invoke = types.ModuleType("invoke")
