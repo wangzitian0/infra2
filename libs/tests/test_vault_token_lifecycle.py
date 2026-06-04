@@ -141,6 +141,19 @@ def test_finance_report_vault_policies_are_env_scoped() -> None:
         assert "{{env}}" in policy, policy_path
 
 
+def test_setup_tokens_includes_alerting_bridge_target(monkeypatch) -> None:
+    """Infra-007 alerting: vault token setup can target the alerting bridge."""
+    tasks, _exit_cls = _load_vault_tasks(monkeypatch)
+    targets = tasks._vault_token_targets(str(ROOT))
+
+    assert any(
+        target.project == "platform"
+        and target.service == "alerting"
+        and target.service_dir == "12.alerting"
+        for target in targets
+    )
+
+
 def test_mask_token_never_returns_full_secret_by_default() -> None:
     """AC7.5.5: setup-token output is safe for logs unless explicitly requested."""
     token = "hvs.new-secret-token-value"

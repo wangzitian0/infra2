@@ -7,6 +7,8 @@
 
 - OTEL collector config now rendered to `${DATA_PATH}/otel-collector-config.yaml` during `signoz.pre-compose` to avoid `${ENV_SUFFIX}` placeholders in runtime config.
 - Feishu alerting bridge added under `platform/12.alerting` to convert SigNoz Alertmanager webhook payloads into Feishu custom bot text messages. This work is not bound to a GitHub issue because no issue number was provided; open PR check on 2026-06-03 found no competing infra2 PRs.
+- Alert coverage catalog added to `docs/ssot/ops.alerting.md`; shared app log-error rule automation is exposed as `alerting.shared.ensure-log-error-rule`.
+- `vault.setup-tokens` now includes `platform/alerting`, matching the existing vault self-refresh inventory row for `platform/12.alerting`.
 
 ### Official Compose Analysis
 
@@ -68,6 +70,7 @@
 - [x] 配置 Traefik labels for frontend
 - [x] 测试 OTLP 端点连通性（`invoke signoz.shared.test-trace`）
 - [x] 添加飞书告警 bridge（`invoke alerting.status`, `invoke alerting.test-feishu`）
+- [x] 添加共享 SigNoz OTEL 日志错误告警规则任务（`invoke alerting.shared.ensure-log-error-rule`）
 - [ ] 考虑是否需要 SSO 保护
 - [ ] ClickHouse 添加密码认证（安全改进）
 

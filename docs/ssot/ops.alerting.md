@@ -45,9 +45,40 @@ SigNoz Alertmanager webhook
 | **P1 (Error)** | 🟠 Orange | 30分钟 | 部分功能受损，核心链路仍通 |
 | **P2 (Warning)** | 🟡 Yellow | 工作日 | 资源使用率高，非关键错误 |
 
+## 3. Infra2 Alert Coverage Catalog
+
+All infra2 alert traffic must follow this path:
+
+```text
+component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Feishu/Lark
+```
+
+| Layer | Component | Signal | Severity | Status |
+|------|-----------|--------|----------|--------|
+| L1 Bootstrap | 1Password Connect | `/health` is not active or sync is not active | P0 | Planned |
+| L1 Bootstrap | Vault | sealed, unreachable, or token validation fails | P0 | Planned |
+| L1 Bootstrap | IaC Runner | `/health` fails before deployment webhook calls | P1 | Planned |
+| L2 Platform | platform Postgres | `pg_isready` fails or restart loop | P0 | Planned |
+| L2 Platform | platform Redis | `redis-cli ping` fails or restart loop | P1 | Planned |
+| L2 Platform | ClickHouse | `/ping` fails, disk pressure, or ingestion errors | P0 | Planned |
+| L2 Platform | MinIO | `mc ready local` fails or S3 endpoint is unavailable | P1 | Planned |
+| L2 Platform | Authentik | `ak healthcheck` fails | P0 | Planned |
+| L2 Platform | SigNoz | query-service or OTEL collector health fails | P0 | Planned |
+| L2 Platform | Alert Bridge | `/health` fails or Feishu delivery errors | P0 | Planned |
+| L2 Platform | Portal | Homer frontend unavailable | P2 | Planned |
+| L2 Platform | Activepieces | `/api/v1/flags` unavailable | P1 | Planned |
+| L2 Platform | Prefect | server health port missing or worker stopped | P1 | Planned |
+| L3 Finance | Wealthfolio | HTTP health check fails | P2 | Planned |
+| L3 Finance Report | fr-postgres | app database health fails | P0 | Planned |
+| L3 Finance Report | fr-redis | app cache health fails | P1 | Planned |
+| L3 Finance Report | fr-app backend | OTEL ERROR/FATAL log count is above zero over 5 minutes | P1 | First live instance via shared rule automation |
+| L3 Finance Report | fr-app frontend | frontend HTTP health fails | P1 | Planned |
+| Cross-cutting | Vault app tokens | missing, malformed, invalid, non-renewable, or low TTL | P0/P1 | Manual gate: `vault-audit.self-refresh` |
+| Cross-cutting | OTEL ingestion | expected app logs/traces absent after deployment | P1 | Manual gate: `signoz.shared.query-logs` |
+
 ---
 
-## 3. 设计约束 (Dos & Don'ts)
+## 4. 设计约束 (Dos & Don'ts)
 
 ### ✅ 推荐模式 (Whitelist)
 
@@ -64,7 +95,7 @@ SigNoz Alertmanager webhook
 
 ---
 
-## 4. 标准操作程序 (Playbooks)
+## 5. 标准操作程序 (Playbooks)
 
 ### SOP-001: 响应 P0 告警
 
@@ -113,13 +144,37 @@ SigNoz Alertmanager webhook
    uv run invoke alerting.test-feishu --message="Infra2 alert test"
    ```
 
+### SOP-004: 接入应用 OTEL 日志错误告警
+
+1. Ensure the alert bridge is deployed and healthy:
+   ```bash
+   uv run python -m invoke vault.setup-tokens --project=platform --service=alerting
+   uv run python -m invoke alerting.setup
+   uv run python -m invoke alerting.status
+   ```
+2. Ensure the SigNoz API key exists:
+   ```bash
+   uv run python -m invoke signoz.shared.create-api-key
+   ```
+3. Create the internal Feishu channel and first app rule:
+   ```bash
+   uv run python -m invoke alerting.shared.ensure-log-error-rule \
+     --alert-name=ExampleBackendErrorLogs \
+     --service-name=example-backend
+   ```
+4. Send one synthetic bridge message as a live delivery gate:
+   ```bash
+   uv run python -m invoke alerting.shared.test-feishu --message="Finance report alerting path live"
+   ```
+
 ---
 
-## 5. 验证与测试 (The Proof)
+## 6. 验证与测试 (The Proof)
 
 | 行为描述 | 测试文件 (Test Anchor) | 覆盖率 |
 |----------|-----------------------|--------|
 | **Feishu payload contract** | `libs/tests/test_alerting.py` | ✅ Implemented |
+| **Reusable SigNoz log error rule payload** | `libs/tests/test_alerting.py` | ✅ Implemented |
 | **告警通道连通性** | `uv run invoke alerting.test-feishu` | Manual live gate |
 
 ---

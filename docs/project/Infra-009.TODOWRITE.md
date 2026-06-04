@@ -9,6 +9,7 @@
 - [ ] Verify end-to-end
 - [x] Set OTEL Vault values for finance_report app (staging/production)
 - [ ] Confirm logs appear in SigNoz UI
+- [x] Connect finance_report app backend ERROR/FATAL logs as first live instance of shared SigNoz alert rule automation
 
 ## Notes
 
@@ -22,3 +23,4 @@ Main documentation is in finance_report repository:
 - Added `IAC_CONFIG_HASH` to finance_report app compose for restart-safe updates
 - Replaced unsupported template helpers in finance_report app secrets template
 - Scoped finance_report Vault app-token policies by environment and added targeted token repair/revoke tracking for `vault.setup-tokens`
+- First app alert path: `finance-report-backend` -> OTEL -> SigNoz `FinanceReportBackendErrorLogs` -> `platform/12.alerting` -> Feishu/Lark
