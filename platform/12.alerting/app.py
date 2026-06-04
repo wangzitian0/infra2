@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -22,6 +23,13 @@ from libs.alerting import (
 HOST = "0.0.0.0"
 PORT = int(os.getenv("PORT", "8080"))
 MAX_BODY_BYTES = 512 * 1024
+
+
+class RequestBodyError(ValueError):
+    def __init__(self, status_code: int, payload: dict[str, Any]):
+        super().__init__(payload["status"])
+        self.status_code = status_code
+        self.payload = payload
 
 
 class AlertBridgeHandler(BaseHTTPRequestHandler):
@@ -46,9 +54,10 @@ class AlertBridgeHandler(BaseHTTPRequestHandler):
             self._json(401, {"status": "unauthorized"})
             return
 
-        content_length = int(self.headers.get("Content-Length", "0") or "0")
-        if content_length <= 0 or content_length > MAX_BODY_BYTES:
-            self._json(413, {"status": "payload_too_large"})
+        try:
+            content_length = _parse_content_length(self.headers.get("Content-Length"))
+        except RequestBodyError as exc:
+            self._json(exc.status_code, exc.payload)
             return
 
         try:
@@ -81,7 +90,7 @@ class AlertBridgeHandler(BaseHTTPRequestHandler):
         expected = "Basic " + base64.b64encode(
             f"{username}:{password}".encode("utf-8")
         ).decode("ascii")
-        return header == expected
+        return secrets.compare_digest(header, expected)
 
     def _json(self, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload).encode("utf-8")
@@ -119,6 +128,20 @@ def _validate_delivery_config() -> dict[str, Any]:
             )
         return {"mode": mode, "app": redacted_app_config(app_id, chat_id, api_base)}
     raise AlertingError(f"Unsupported ALERT_DELIVERY_MODE: {mode}")
+
+
+def _parse_content_length(raw_value: str | None) -> int:
+    if raw_value is None:
+        raise RequestBodyError(411, {"status": "length_required"})
+    try:
+        content_length = int(raw_value)
+    except ValueError as exc:
+        raise RequestBodyError(400, {"status": "invalid_content_length"}) from exc
+    if content_length <= 0:
+        raise RequestBodyError(400, {"status": "empty_payload"})
+    if content_length > MAX_BODY_BYTES:
+        raise RequestBodyError(413, {"status": "payload_too_large"})
+    return content_length
 
 
 def _deliver(text: str) -> dict[str, Any]:

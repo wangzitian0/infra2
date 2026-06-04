@@ -84,10 +84,11 @@ def create_signoz_channel(c, username="", password=""):
         bridge_url=_bridge_url(env),
         basic_auth=auth,
     )
+    api_key_header = shlex.quote(f"SIGNOZ-API-KEY: {api_key}")
     payload_json = shlex.quote(json.dumps(payload))
     result = c.run(
         f"curl -sS -X POST 'https://{signoz_domain}/api/v1/channels' "
-        f"-H 'SIGNOZ-API-KEY: {api_key}' "
+        f"-H {api_key_header} "
         "-H 'Content-Type: application/json' "
         f"--data-raw {payload_json}",
         warn=True,

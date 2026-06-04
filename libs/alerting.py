@@ -10,8 +10,10 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 FEISHU_WEBHOOK_HOSTS = {"open.feishu.cn", "open.larksuite.com"}
+FEISHU_WEBHOOK_PATH_PREFIX = "/open-apis/bot/v2/hook/"
 MAX_ALERT_LINES = 8
 MAX_MESSAGE_CHARS = 3500
+TRUNCATION_SUFFIX = "\n...[truncated]"
 
 
 class AlertingError(Exception):
@@ -49,8 +51,11 @@ def validate_feishu_webhook_url(url: str) -> str:
     if parsed.hostname not in FEISHU_WEBHOOK_HOSTS:
         allowed = ", ".join(sorted(FEISHU_WEBHOOK_HOSTS))
         raise InvalidWebhookUrl(f"Feishu webhook host must be one of: {allowed}")
-    if not parsed.path.startswith("/open-apis/bot/v2/hook/"):
+    if not parsed.path.startswith(FEISHU_WEBHOOK_PATH_PREFIX):
         raise InvalidWebhookUrl("Feishu webhook path must be a custom bot hook")
+    token = parsed.path[len(FEISHU_WEBHOOK_PATH_PREFIX) :]
+    if not token or "/" in token:
+        raise InvalidWebhookUrl("Feishu webhook token must be a non-empty path segment")
     return candidate
 
 
@@ -58,7 +63,7 @@ def build_feishu_text_payload(text: str) -> dict[str, Any]:
     """Build a Feishu custom bot text payload."""
     message = text.strip() or "SigNoz alert"
     if len(message) > MAX_MESSAGE_CHARS:
-        message = message[: MAX_MESSAGE_CHARS - 14].rstrip() + "\n...[truncated]"
+        message = _truncate_message(message)
     return {"msg_type": "text", "content": {"text": message}}
 
 
@@ -66,7 +71,7 @@ def build_feishu_app_message_payload(chat_id: str, text: str) -> dict[str, Any]:
     """Build a Feishu OpenAPI text message payload."""
     message = text.strip() or "SigNoz alert"
     if len(message) > MAX_MESSAGE_CHARS:
-        message = message[: MAX_MESSAGE_CHARS - 14].rstrip() + "\n...[truncated]"
+        message = _truncate_message(message)
     return {
         "receive_id": chat_id,
         "msg_type": "text",
@@ -286,3 +291,7 @@ def _dict(value: Any) -> dict[str, Any]:
 
 def _one_line(value: Any) -> str:
     return " ".join(str(value).split())
+
+
+def _truncate_message(message: str) -> str:
+    return message[: MAX_MESSAGE_CHARS - len(TRUNCATION_SUFFIX)].rstrip() + TRUNCATION_SUFFIX

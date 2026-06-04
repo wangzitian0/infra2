@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import types
 from pathlib import Path
@@ -12,6 +13,7 @@ import pytest
 from libs.alerting import (
     BasicAuth,
     InvalidWebhookUrl,
+    MAX_MESSAGE_CHARS,
     build_feishu_app_message_payload,
     build_feishu_text_payload,
     build_signoz_channel_payload,
@@ -34,6 +36,22 @@ def test_feishu_webhook_validation_is_https_and_host_scoped() -> None:
         validate_feishu_webhook_url("http://open.feishu.cn/open-apis/bot/v2/hook/token")
     with pytest.raises(InvalidWebhookUrl):
         validate_feishu_webhook_url("https://example.com/open-apis/bot/v2/hook/token")
+    with pytest.raises(InvalidWebhookUrl):
+        validate_feishu_webhook_url("https://open.feishu.cn/open-apis/bot/v2/hook/")
+
+
+def test_feishu_message_truncation_respects_max_length() -> None:
+    """Infra-007 alerting: truncation suffix must not exceed Feishu limit."""
+    text = "x" * (MAX_MESSAGE_CHARS + 100)
+
+    webhook_payload = build_feishu_text_payload(text)
+    assert len(webhook_payload["content"]["text"]) <= MAX_MESSAGE_CHARS
+    assert webhook_payload["content"]["text"].endswith("\n...[truncated]")
+
+    app_payload = build_feishu_app_message_payload("oc_test", text)
+    app_text = json.loads(app_payload["content"])["text"]
+    assert len(app_text) <= MAX_MESSAGE_CHARS
+    assert app_text.endswith("\n...[truncated]")
 
 
 def test_alertmanager_payload_is_rendered_as_feishu_text() -> None:
@@ -171,3 +189,40 @@ def test_alerting_shared_tasks_are_invoke_tasks() -> None:
     assert hasattr(module, "status")
     assert hasattr(module, "print_channel_payload")
     assert hasattr(module, "test_feishu")
+
+    source = path.read_text(encoding="utf-8")
+    assert 'shlex.quote(f"SIGNOZ-API-KEY: {api_key}")' in source
+    assert "-H {api_key_header}" in source
+
+
+def test_alerting_app_request_guards_are_explicit() -> None:
+    """Infra-007 alerting: HTTP auth/body guards match review feedback."""
+    path = ROOT / "platform/12.alerting/app.py"
+    spec = importlib.util.spec_from_file_location("alerting_app_under_test", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module._parse_content_length("1") == 1
+    with pytest.raises(module.RequestBodyError) as missing:
+        module._parse_content_length(None)
+    assert missing.value.status_code == 411
+    assert missing.value.payload == {"status": "length_required"}
+
+    with pytest.raises(module.RequestBodyError) as invalid:
+        module._parse_content_length("abc")
+    assert invalid.value.status_code == 400
+    assert invalid.value.payload == {"status": "invalid_content_length"}
+
+    with pytest.raises(module.RequestBodyError) as empty:
+        module._parse_content_length("0")
+    assert empty.value.status_code == 400
+    assert empty.value.payload == {"status": "empty_payload"}
+
+    with pytest.raises(module.RequestBodyError) as oversized:
+        module._parse_content_length(str(module.MAX_BODY_BYTES + 1))
+    assert oversized.value.status_code == 413
+    assert oversized.value.payload == {"status": "payload_too_large"}
+
+    source = path.read_text(encoding="utf-8")
+    assert "secrets.compare_digest(header, expected)" in source
