@@ -58,6 +58,7 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
 | L1 Bootstrap | 1Password Connect | `/health` is not active or sync is not active | P0 | Planned |
 | L1 Bootstrap | Vault | sealed, unreachable, or token validation fails | P0 | Planned |
 | L1 Bootstrap | IaC Runner | `/health` fails before deployment webhook calls | P1 | Planned |
+| L1 Bootstrap | Dokploy | deployment control-plane API/UI is unreachable or deployment webhooks fail; app health alerts remain app-owned | P1 | Planned |
 | L2 Platform | platform Postgres | `pg_isready` fails or restart loop | P0 | Planned |
 | L2 Platform | platform Redis | `redis-cli ping` fails or restart loop | P1 | Planned |
 | L2 Platform | ClickHouse | `/ping` fails, disk pressure, or ingestion errors | P0 | Planned |
