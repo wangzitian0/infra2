@@ -481,12 +481,16 @@ invoke vault.setup-tokens
 |----------|--------|------|
 | `WEBHOOK_SECRET` | Vault | GitHub webhook 验证密钥 |
 | `GIT_REPO_URL` | Vault | Git 仓库地址 |
-| `OP_SERVICE_ACCOUNT_TOKEN` | Vault | Optional 1Password service account token used by IaC Runner to resolve `VAULT_ROOT_TOKEN` for infra sync subprocesses |
+| `OP_SERVICE_ACCOUNT_TOKEN` | Vault | Required 1Password service account token used by IaC Runner subprocesses to read Infra2 through `op` CLI |
 | `VAULT_ROOT_TOKEN_OP_REF` | Vault | Optional 1Password reference for the Vault root token; defaults to `op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token` |
 
 `VAULT_ROOT_TOKEN` must not be stored in GitHub Actions. IaC Runner resolves it
 inside the container via 1Password only for sync subprocesses, then passes it as
 process environment to `invoke *.sync`.
+
+IaC Runner `/health` must report `op_service_account_token=true`. It checks the
+actual runner process environment, not only the rendered `/secrets/.env` file, so
+a stale process that did not reload Vault Agent output is degraded.
 
 ---
 

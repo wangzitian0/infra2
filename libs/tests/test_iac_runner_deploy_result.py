@@ -383,6 +383,47 @@ def test_health_reports_missing_runtime_dependency(monkeypatch, tmp_path) -> Non
     assert body["checks"]["python:PyYAML"] is False
 
 
+def test_health_requires_runner_process_service_account_token(
+    monkeypatch, tmp_path
+) -> None:
+    """Infra-011.2: rendered secrets are insufficient if the process env is stale."""
+    monkeypatch.delenv("OP_SERVICE_ACCOUNT_TOKEN", raising=False)
+    fake_flask = types.ModuleType("flask")
+
+    class FakeFlask:
+        def __init__(self, _name):
+            pass
+
+        def route(self, *_args, **_kwargs):
+            return lambda func: func
+
+    fake_flask.Flask = FakeFlask
+    fake_flask.jsonify = lambda payload: payload
+    fake_flask.request = types.SimpleNamespace(headers={}, data=b"", json={})
+    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+    webhook_server = _load_module(
+        "webhook_server_health_op_token_under_test",
+        IAC_RUNNER / "webhook_server.py",
+        monkeypatch,
+    )
+    secrets_file = tmp_path / "secrets.env"
+    secrets_file.write_text("OP_SERVICE_ACCOUNT_TOKEN=rendered\n", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    (workspace / "infra2").mkdir(parents=True)
+    monkeypatch.setattr(webhook_server, "SECRETS_FILE", secrets_file)
+    monkeypatch.setattr(webhook_server, "WORKSPACE", workspace)
+    monkeypatch.setattr(
+        webhook_server,
+        "_dependency_checks",
+        lambda: {"python:PyYAML": True, "binary:op": True},
+    )
+
+    body, status_code = webhook_server.health()
+
+    assert status_code == 503
+    assert body["checks"]["op_service_account_token"] is False
+
+
 def test_vault_audit_task_import_does_not_require_pyyaml() -> None:
     """Infra-011.7: optional audit inventory parsing cannot break invoke startup."""
     script = """

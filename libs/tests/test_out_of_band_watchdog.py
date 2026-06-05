@@ -69,6 +69,19 @@ def test_default_targets_cover_public_host_and_bridge_health() -> None:
     assert ssh_targets[3].expected_text == "healthy"
 
 
+def test_custom_ssh_targets_preserve_mandatory_docker_health() -> None:
+    """Infra-011.2: GitHub variable drift must not remove Docker health checks."""
+    watchdog = _load_watchdog()
+
+    ssh_targets = watchdog.parse_ssh_targets(
+        "infra2-custom|echo custom-ok|custom-ok"
+    )
+    names = [target.name for target in ssh_targets]
+
+    assert "infra2-docker-health" in names
+    assert "infra2-custom" in names
+
+
 def test_iac_runner_is_not_a_default_whole_host_health_check() -> None:
     """Infra-007.2: IaC Runner is service-level, not whole-host health."""
     watchdog = _load_watchdog()

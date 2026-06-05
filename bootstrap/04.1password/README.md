@@ -57,6 +57,14 @@ TOKEN=$(op item get "bootstrap/1password/VPS-01 Access Token: own_service" --vau
 curl -H "Authorization: Bearer $TOKEN" https://op.$INTERNAL_DOMAIN/v1/vaults
 ```
 
+HTTP 200 from `/health` does not prove that Connect sync has been initialized.
+Deployment verification must make one authenticated `/v1/vaults` request with
+the bearer token from `bootstrap/1password/VPS-01 Access Token: own_service`,
+then verify that the `/health` dependencies `sqlite`, `sync`, and `1Password`
+are all `ACTIVE`. If `/health` reports `sync: TOKEN_NEEDED` or
+`1Password: UNINITIALIZED`, the credentials file was loaded but the matching
+Connect API token has not initialized sync yet.
+
 ### 6. Reboot Health States
 
 ```bash

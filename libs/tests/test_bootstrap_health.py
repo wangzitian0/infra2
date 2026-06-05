@@ -88,3 +88,13 @@ def test_critical_bootstrap_services_have_health_restart_logging_and_pinned_imag
             healthcheck = _healthcheck_test(service)
             for expected_part in expected["healthcheck_contains"]:
                 assert expected_part in healthcheck
+
+
+def test_1password_deploy_initializes_authenticated_connect_sync() -> None:
+    """Infra-011.2: Connect deploy must not stop at unauthenticated /health."""
+    tasks = (ROOT / "bootstrap/04.1password/tasks.py").read_text(encoding="utf-8")
+
+    assert "VPS-01 Access Token: own_service" in tasks
+    assert "/v1/vaults" in tasks
+    assert "sync did not become active" in tasks
+    assert "TOKEN_NEEDED" in tasks
