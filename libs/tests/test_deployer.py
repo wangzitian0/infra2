@@ -3,6 +3,33 @@
 from unittest.mock import MagicMock
 
 
+def test_preserve_runtime_env_keeps_existing_vault_app_token() -> None:
+    """Infra-011.3: deployer updates must not erase injected Vault app tokens."""
+    from libs.deployer import _preserve_runtime_env
+
+    result = _preserve_runtime_env(
+        "ENV=production\nINTERNAL_DOMAIN=zitian.party",
+        "ENV=old\nVAULT_APP_TOKEN=hvs.existing\nSTALE=value",
+    )
+
+    assert result.splitlines() == [
+        "ENV=production",
+        "INTERNAL_DOMAIN=zitian.party",
+        "VAULT_APP_TOKEN=hvs.existing",
+    ]
+
+
+def test_preserve_runtime_env_keeps_explicit_new_vault_app_token() -> None:
+    from libs.deployer import _preserve_runtime_env
+
+    result = _preserve_runtime_env(
+        "ENV=production\nVAULT_APP_TOKEN=hvs.new",
+        "VAULT_APP_TOKEN=hvs.existing",
+    )
+
+    assert result.splitlines() == ["ENV=production", "VAULT_APP_TOKEN=hvs.new"]
+
+
 class TestDeployerVaultTokenPreflight:
     """Deployment sync must fail before touching runtime when Vault tokens are bad."""
 

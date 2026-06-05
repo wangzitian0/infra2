@@ -28,6 +28,8 @@ if TYPE_CHECKING:
 
 __all__ = ["Deployer", "make_tasks", "discover_services"]
 
+RUNTIME_ENV_KEYS_TO_PRESERVE = {"VAULT_APP_TOKEN"}
+
 
 def discover_services() -> dict[str, str]:
     """Discover deployable services based on deploy.py files."""
@@ -69,6 +71,26 @@ def _compute_config_hash(compose_content: str, env_vars: dict[str, str]) -> str:
     env_str = "\n".join(f"{k}={v}" for k, v in sorted(env_vars.items()) if v)
     combined = f"{compose_content}\n---ENV---\n{env_str}"
     return hashlib.sha256(combined.encode()).hexdigest()[:12]
+
+
+def _parse_env_text(env_text: str) -> dict[str, str]:
+    env: dict[str, str] = {}
+    for line in env_text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        env[key] = value
+    return env
+
+
+def _preserve_runtime_env(env_str: str, existing_env: str | None) -> str:
+    desired = _parse_env_text(env_str)
+    existing = _parse_env_text(existing_env or "")
+    for key in RUNTIME_ENV_KEYS_TO_PRESERVE:
+        if key not in desired and key in existing:
+            desired[key] = existing[key]
+    return "\n".join(f"{key}={value}" for key, value in desired.items())
 
 
 class Deployer:
@@ -287,6 +309,7 @@ class Deployer:
         if existing:
             compose_id = existing["composeId"]
             info("Updating existing compose service")
+            existing_env = client.get_compose(compose_id).get("env")
             client.update_compose(
                 compose_id,
                 source_type="github",
@@ -295,7 +318,7 @@ class Deployer:
                 owner=GITHUB_OWNER,
                 branch=GITHUB_BRANCH,
                 composePath=cls.compose_path,
-                env=env_str,
+                env=_preserve_runtime_env(env_str, existing_env),
             )
         else:
             info("Creating new compose service with GitHub provider")
