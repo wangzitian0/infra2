@@ -105,6 +105,10 @@ services:
 | **Dokploy UI 配置** | UI 友好、快速配置 | 与 labels 冲突、不支持复杂中间件 | 简单服务、无 SSO |
 | **混合模式** | - | 配置分散、难以维护 | ⛔ 禁止 |
 
+**Verification**: `libs/tests/test_domain_routing_policy.py` rejects deployers that set
+`subdomain` while their compose file owns explicit `traefik.http.routers.*` or
+`traefik.http.services.*` labels.
+
 ---
 
 ## 5. 标准操作程序 (Playbooks)

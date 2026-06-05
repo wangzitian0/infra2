@@ -11,6 +11,7 @@
 | Infra-011.2 | Infra service probes run through the alert bridge and stay quiet on success. | `libs/tests/test_infra_probes.py` |
 | Infra-011.3 | Vault Agent Docker health avoids mtime false-unhealthy while audit keeps stale-file detection. | `libs/tests/test_vault_self_refresh_audit.py` |
 | Infra-011.4 | Backup inventory, archive/checksum generation, and freshness manifest verification are code-enforced. | `libs/tests/test_backup_verification.py` |
+| Infra-011.5 | Compose-owned Traefik routing is not mixed with Dokploy-generated domain routing. | `libs/tests/test_domain_routing_policy.py` |
 
 ## Issue Mapping
 
@@ -19,6 +20,7 @@
 - #168: Vault Agent rendered-file health contract.
 - #158: off-host backup inventory and restore proof path.
 - #162: external/synthetic and backup freshness alert coverage.
+- #186: IaC Runner route ownership drift blocked main deploy health checks.
 
 ## TODO
 
@@ -27,5 +29,6 @@
 - [x] Add infra probe runner tests and compose service.
 - [x] Update Vault Agent Docker health contract and tests.
 - [x] Add backup inventory, runner, and manifest verifier tests.
-- [ ] Run full lint/test suite.
-- [ ] Open PR.
+- [x] Add routing ownership policy test and remove current mixed-mode offenders.
+- [x] Run full lint/test suite.
+- [x] Open PR.
