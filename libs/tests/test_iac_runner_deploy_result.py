@@ -648,8 +648,11 @@ def test_deploy_platform_triggers_on_iac_runner_bootstrap_changes() -> None:
     assert "Detect IaC Runner bootstrap changes" in workflow
     assert "Deploy IaC Runner bootstrap changes" in workflow
     assert "scripts/deploy_iac_runner_bootstrap.sh" in workflow
-    assert "$GITHUB_EVENT_PATH" in workflow
-    assert ".added[]?, .modified[]?, .removed[]?" in workflow
+    assert "/compare/${before}...${after}" in workflow
+    assert ".files[]?.filename" in workflow
+    assert "Changed files from GitHub API" in workflow
+    assert "files_url=$files_url" in workflow
+    assert "$GITHUB_EVENT_PATH" not in workflow
     assert "git diff-tree" not in workflow
 
 
@@ -704,3 +707,20 @@ def test_iac_runner_bootstrap_deploy_script_is_scoped_to_runner_source() -> None
     assert "--force-recreate" in script
     assert "Health check timed out for iac-runner" in script
     assert "cat /secrets/.env" not in script
+
+
+def test_iac_runner_bootstrap_deploy_script_persists_dokploy_ownership() -> None:
+    """Infra-011.8: Dokploy must not auto-recreate the runner behind CI."""
+    script = BOOTSTRAP_DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    assert "http://dokploy:3000/api" in script
+    assert '"compose.update"' in script
+    assert '"autoDeploy": False' in script
+    assert '"GIT_SHA"' in script
+    assert "INFRA2_DOKPLOY_APP_NAME" in script
+    assert "DOKPLOY_API_KEY is required in rendered IaC Runner secrets" in script
+    assert "Selected Dokploy API base" in script
+    assert "Dokploy compose before update" in script
+    assert "Dokploy compose env before update" in script
+    assert "Dokploy compose after update" in script
+    assert "IaC Runner health attempt" in script

@@ -69,28 +69,55 @@ jobs:
       - name: Detect IaC Runner bootstrap changes
         id: runner-changes
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
           changed_file="$(mktemp)"
+          changed_files="$(mktemp)"
           echo false > "$changed_file"
-          jq -r '
-            [
-              .commits[]?
-              | .added[]?, .modified[]?, .removed[]?
-            ]
-            | unique
-            | .[]
-          ' "$GITHUB_EVENT_PATH" | while IFS= read -r file; do
+
+          before="${{ github.event.before }}"
+          after="$GITHUB_SHA"
+          if [[ "$before" =~ ^0+$ ]]; then
+            files_url="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/commits/${after}"
+            files_filter='.files[]?.filename'
+          else
+            files_url="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/compare/${before}...${after}"
+            files_filter='.files[]?.filename'
+          fi
+
+          echo "IaC Runner bootstrap change detection:"
+          echo "  before=$before"
+          echo "  after=$after"
+          echo "  files_url=$files_url"
+
+          curl -fsSL \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$files_url" \
+            | jq -r "$files_filter" \
+            > "$changed_files"
+
+          echo "::group::Changed files from GitHub API"
+          if [[ -s "$changed_files" ]]; then
+            sed 's/^/  /' "$changed_files"
+          else
+            echo "  <none>"
+          fi
+          echo "::endgroup::"
+
+          while IFS= read -r file; do
             case "$file" in
               bootstrap/06.iac_runner/*|scripts/deploy_iac_runner_bootstrap.sh|.github/workflows/deploy-platform.yml)
                 echo true > "$changed_file"
                 ;;
             esac
-          done
+          done < "$changed_files"
 
           changed="$(cat "$changed_file")"
-          rm -f "$changed_file"
+          rm -f "$changed_file" "$changed_files"
 
           echo "changed=$changed" >> "$GITHUB_OUTPUT"
           echo "IaC Runner bootstrap changed: $changed"
