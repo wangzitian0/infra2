@@ -172,19 +172,36 @@ jobs:
         run: |
           set -euo pipefail
 
+          health_url="${IAC_RUNNER_URL%/}/health"
           body="$(mktemp)"
-          status="$(curl -sS -o "$body" -w "%{http_code}" \
-            --connect-timeout 10 \
-            --max-time 20 \
-            "${IAC_RUNNER_URL%/}/health" || true)"
+          last_status=""
 
-          echo "IaC Runner health HTTP status: $status"
-          cat "$body" || true
+          for attempt in $(seq 1 12); do
+            : > "$body"
+            status="$(curl -sS -o "$body" -w "%{http_code}" \
+              --connect-timeout 10 \
+              --max-time 20 \
+              "$health_url" || true)"
+            last_status="$status"
 
-          if [[ "$status" != "200" ]]; then
-            echo "::error::IaC Runner health check failed before deployment. Check Dokploy bootstrap/iac_runner source path, domain routing, VAULT_APP_TOKEN, and iac-runner container health."
-            exit 1
-          fi
+            echo "IaC Runner public health attempt ${attempt}/12: url=$health_url status=$status"
+            if [[ -s "$body" ]]; then
+              sed 's/^/  /' "$body" || true
+            else
+              echo "  <empty body>"
+            fi
+
+            if [[ "$status" == "200" ]]; then
+              rm -f "$body"
+              exit 0
+            fi
+
+            sleep 10
+          done
+
+          rm -f "$body"
+          echo "::error::IaC Runner public health stayed unhealthy after 12 attempts. Last HTTP status: $last_status. Check Traefik/Dokploy routing, Cloudflare propagation, VAULT_APP_TOKEN, and iac-runner container health."
+          exit 1
 
       - name: Trigger IaC Runner
         env:
