@@ -62,6 +62,7 @@ Important: after the first successful deploy, OpenClaw reads the persisted confi
 | `OPENCLAW_GATEWAY_PORT` | `18789` | Internal gateway port |
 | `OPENCLAW_LOG_LEVEL` | `info` | Framework-recognized log level override for file + console logs |
 | `OPENCLAW_DIAGNOSTICS` | _empty_ | Optional targeted diagnostics flags, passed through to OpenClaw unchanged |
+| `OPENCLAW_SKIP_STARTUP_MODEL_PREWARM` | `1` | Skip startup primary-model warmup so provider discovery does not delay gateway startup or Discord handling |
 | `TIANCLAW_GIT_SYNC_ENABLED` | `true` | Enable periodic full volume snapshots to the TianClaw private repo |
 | `TIANCLAW_GIT_REPO` | `git@github.com:wangzitian-ai/tianclaw.git` | Git repository for OpenClaw volume snapshots |
 | `TIANCLAW_GIT_BRANCH` | `main` | Branch used by the sync sidecar |
