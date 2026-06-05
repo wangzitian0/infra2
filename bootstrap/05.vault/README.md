@@ -159,11 +159,12 @@ Expected healthy state after reboot:
 - Vault health endpoint returns HTTP 200.
 
 `vault-unsealer` health is intentionally stricter than raw Connect `/health`.
-It must verify:
+It first performs the authenticated item lookup to initialize Connect sync, then
+verifies:
 
 - `OP_CONNECT_TOKEN`, `OP_VAULT_ID`, and `OP_ITEM_ID` are present.
-- 1Password Connect dependencies are active (`sqlite`, `sync`, `1Password`).
 - The configured bearer token can read `/v1/vaults/$OP_VAULT_ID/items/$OP_ITEM_ID`.
+- 1Password Connect dependencies are active (`sqlite`, `sync`, `1Password`).
 - Vault is initialized, unsealed, and returns an accepted health status.
 
 Degraded states:
