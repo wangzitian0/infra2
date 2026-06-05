@@ -86,6 +86,7 @@
 | [ops.e2e-regressions.md](./ops.e2e-regressions.md) | `ops.e2e` | 部署验证、E2E 测试 |
 | [ops.recovery.md](./ops.recovery.md) | `ops.recovery` | 故障恢复、Vault Unseal |
 | [ops.storage.md](./ops.storage.md) | `ops.storage` | 备份策略、R2 同步 |
+| [ops.backup-inventory.yaml](./ops.backup-inventory.yaml) | `ops.backup_inventory` | Persistent data backup coverage inventory |
 | [ops.observability.md](./ops.observability.md) | `ops.obs` | SigNoz、日志、监控 |
 | [ops.alerting.md](./ops.alerting.md) | `ops.alerting` | 告警规则、值班 |
 

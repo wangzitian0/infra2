@@ -1,2 +1,3 @@
 """Infrastructure automation tasks - Entry point"""
-from tools.loader import ns
+
+from tools.loader import ns as ns

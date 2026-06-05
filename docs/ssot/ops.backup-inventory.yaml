@@ -1,0 +1,66 @@
+version: 1
+defaults:
+  retention_days: 30
+  rpo_hours: 24
+  remote: r2
+services:
+  - service_id: bootstrap/1password
+    data_path: /data/bootstrap/1password
+    method: encrypted_filesystem_archive
+    restore_command: restore 1Password Connect data directory from the selected off-host archive.
+  - service_id: bootstrap/vault
+    data_path: /data/bootstrap/vault
+    method: vault_file_storage_archive
+    restore_command: restore Vault file storage, then unseal with operator-held recovery material.
+  - service_id: bootstrap/iac_runner
+    data_path: /data/bootstrap/iac-runner
+    method: filesystem_archive
+    restore_command: restore IaC Runner workspace cache; service can reclone if missing.
+  - service_id: platform/postgres
+    data_path: /data/platform/postgres
+    method: pg_dump_plus_data_archive
+    restore_command: restore latest pg_dump, then reattach DATA_PATH if needed.
+  - service_id: platform/redis
+    data_path: /data/platform/redis
+    method: redis_rdb_archive
+    restore_command: stop Redis, restore dump.rdb, then start Redis.
+  - service_id: platform/clickhouse
+    data_path: /data/platform/clickhouse
+    method: clickhouse_data_archive
+    restore_command: restore ClickHouse data/log directories while service is stopped.
+  - service_id: platform/minio
+    data_path: /data/platform/minio
+    method: minio_bucket_mirror
+    restore_command: mirror the selected off-host bucket snapshot back into MinIO.
+  - service_id: platform/authentik
+    data_path: /data/platform/authentik
+    method: filesystem_archive
+    restore_command: restore media, certs, and custom templates from archive.
+  - service_id: platform/signoz
+    data_path: /data/platform/signoz
+    method: signoz_filesystem_archive
+    restore_command: restore SigNoz data and collector config while service is stopped.
+  - service_id: platform/alerting
+    data_path: /data/platform/alerting
+    method: config_archive
+    restore_command: restore alerting config artifacts; runtime secrets come from Vault.
+  - service_id: platform/portal
+    data_path: /data/platform/portal
+    method: config_archive
+    restore_command: restore portal config.yml.
+  - service_id: platform/activepieces
+    data_path: /data/platform/activepieces
+    method: filesystem_archive
+    restore_command: restore Activepieces persistent data while service is stopped.
+  - service_id: finance_report/postgres
+    data_path: /data/finance_report/postgres
+    method: pg_dump_plus_data_archive
+    restore_command: restore latest finance_report pg_dump, then reattach DATA_PATH if needed.
+  - service_id: finance_report/redis
+    data_path: /data/finance_report/redis
+    method: redis_rdb_archive
+    restore_command: stop Redis, restore dump.rdb, then start Redis.
+  - service_id: finance/wealthfolio
+    data_path: /data/finance/wealthfolio
+    method: sqlite_filesystem_archive
+    restore_command: restore wealthfolio.db and restart service.

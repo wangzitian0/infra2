@@ -12,7 +12,7 @@
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
 | **Master Keys** | **1Password** | Root Token, Unseal Keys, SSH Keys |
-| **数据备份** | **/data** + 远端备份（规划中） | DB Dumps |
+| **数据备份** | `/data` + [`ops.backup-inventory.yaml`](./ops.backup-inventory.yaml) + off-host manifest | DB dumps and persistent data archives |
 | **代码仓库** | **GitHub** | 部署代码、Compose 定义 |
 
 ---
@@ -50,6 +50,7 @@ graph TD
 
 - **模式 A**: 必须定期验证 1Password 中的密钥是否有效（演练）。
 - **模式 B**: 必须将 `/data` 的关键数据备份到异地。
+- **模式 C**: 每个 deployer-owned `DATA_PATH` 必须在 backup inventory 中登记 owner、method、RPO、retention 和 restore command。
 
 ### ⛔ 禁止模式 (Blacklist)
 
@@ -93,13 +94,65 @@ graph TD
     1. 获取 Root Token: `op item get "bootstrap/vault/Unseal Keys" --vault "Infra2" --reveal`
     2. 登录: `vault login <root_token>`
 
+### SOP-004: 备份 freshness 验证
+
+备份系统必须产出一个 off-host manifest，至少包含：
+
+```json
+{
+  "artifacts": [
+    {
+      "service_id": "platform/postgres",
+      "created_at": "2026-06-05T00:00:00Z",
+      "size_bytes": 123456,
+      "sha256": "<64 hex chars>",
+      "remote_uri": "r2:infra2/platform/postgres/archive.tar.zst"
+    }
+  ]
+}
+```
+
+验证命令：
+
+```bash
+uv run python tools/backup_verification.py --manifest /path/to/manifest.json --json
+```
+
+失败条件包括：manifest 缺少服务、artifact 超过 RPO、size 为空、checksum 缺失、
+或 `remote_uri` 不是 inventory 指定的 off-host remote。
+
+### SOP-005: 生成并上传 off-host 备份
+
+备份 runner 读取 [`ops.backup-inventory.yaml`](./ops.backup-inventory.yaml)，
+为每个登记的 `data_path` 创建 archive、计算 SHA256，并通过主机上的 `rclone`
+remote 上传到 off-host storage。
+
+Dry-run 不上传：
+
+```bash
+uv run python tools/backup_runner.py --output-dir /tmp/infra2-backups --no-upload
+```
+
+生产上传示例：
+
+```bash
+BACKUP_REMOTE=r2:infra2 uv run python tools/backup_runner.py \
+  --output-dir /data/backups/infra2 \
+  --manifest /data/backups/infra2/manifest.json
+```
+
+`rclone` remote credentials must live on the host or in 1Password-managed
+runtime configuration. They must not be committed to this repository.
+
 ---
 
 ## 5. 验证与测试 (The Proof)
 
 | 行为描述 | 验证方式 | 覆盖率 |
 |----------|----------|--------|
-| **备份文件存在性** | 手动检查 `/data/backups` | ⏳ Manual |
+| **Backup inventory covers DATA_PATH** | `libs/tests/test_backup_verification.py` | ✅ Implemented |
+| **Backup archive + checksum runner** | `tools/backup_runner.py` | ✅ Implemented |
+| **Backup freshness/checksum manifest** | `tools/backup_verification.py` | ✅ Implemented |
 | **Vault Unseal 流程** | `vault status` | ✅ Manual |
 
 ---

@@ -161,3 +161,33 @@ daemon reachability, and the `platform-alerting` in-container `/health` endpoint
 via SSH.
 IaC Runner, MinIO, Postgres, Redis, and application dependency health remain
 service-level signals handled in-band through SigNoz and this bridge.
+
+## Infra Service Probes
+
+`infra-probe-runner` runs beside the bridge and checks core infra dependencies
+from inside the Dokploy network. Failures are converted into SigNoz-compatible
+payloads and posted to the bridge.
+
+Default probe coverage:
+
+- Dokploy public entrypoint
+- Vault health endpoint
+- MinIO live endpoint
+- Authentik health endpoint
+- SigNoz frontend/query path
+- Alert bridge `/health`
+- platform Postgres TCP readiness
+- platform Redis TCP readiness
+- ClickHouse `/ping`
+
+Probe spec format:
+
+```text
+name|kind|target|expected|severity|timeout_seconds
+```
+
+Dry-run:
+
+```bash
+INFRA_PROBE_DRY_RUN=1 uv run python tools/infra_probe_runner.py --once --json
+```

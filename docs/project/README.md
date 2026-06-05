@@ -28,6 +28,7 @@
 - [Infra-009: Finance Report Deployment](./Infra-009.finance_report_deploy.md) - **In Progress**
 - [Infra-008: Platform Multi-Environment (Staging)](./Infra-008.platform_multi_env.md) - **In Progress**
 - [Infra-007: SigNoz Observability Platform](./Infra-007.signoz_install.md) - **In Progress**
+- [Infra-011: P1 Reliability Hardening](./Infra-011.reliability_hardening.md) - **In Progress**
 - [Infra-006: Documentation Engineering](./Infra-006.documentation_engineering.md) - **In Progress**
 - [Infra-005: Homer Portal Homepage](./Infra-005.homer_portal.md) - **In Progress**
 - [Infra-004: Authentik Installation](./Infra-004.authentik_install.md) - **In Progress**

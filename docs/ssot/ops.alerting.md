@@ -49,6 +49,22 @@ This path is intentionally limited to host reachability and alerting bridge
 availability. All service-level alerts continue to use the in-band path through
 SigNoz and `platform/12.alerting`.
 
+Code-owned infra probes run from `platform/12.alerting` as
+`platform-alerting-probes${ENV_SUFFIX}`. The probe runner checks service health
+from inside the Dokploy network and posts SigNoz-compatible failure payloads to
+the internal bridge:
+
+```text
+platform-alerting-probes${ENV_SUFFIX}
+  -> HTTP/TCP/command probes
+  -> http://platform-alerting${ENV_SUFFIX}:8080/signoz/webhook
+  -> Feishu/Lark
+```
+
+Successful probe runs stay quiet. Failed probes emit
+`InfraServiceProbeFailed` with the component name, probe kind, expected result,
+and observed result.
+
 The alert bridge must wait up to 300 seconds for `/secrets/.env` at startup, but
 it must not require the vault-agent sidecar to remain Docker-healthy after the
 secret file is rendered. Vault-agent stale-secret health is a separate
@@ -75,16 +91,16 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
 | Layer | Component | Signal | Severity | Status |
 |------|-----------|--------|----------|--------|
 | L1 Bootstrap | 1Password Connect | `/health` is not active or sync is not active | P0 | Planned |
-| L1 Bootstrap | Vault | sealed, unreachable, or token validation fails | P0 | Planned |
+| L1 Bootstrap | Vault | sealed, unreachable, or token validation fails | P0 | Live via infra probe + vault audit |
 | L1 Bootstrap | IaC Runner | `/health` fails before deployment webhook calls | P1 | Planned |
-| L1 Bootstrap | Dokploy | deployment control-plane API/UI is unreachable or deployment webhooks fail; app health alerts remain app-owned | P1 | Planned |
-| L2 Platform | platform Postgres | `pg_isready` fails or restart loop | P0 | Planned |
-| L2 Platform | platform Redis | `redis-cli ping` fails or restart loop | P1 | Planned |
-| L2 Platform | ClickHouse | `/ping` fails, disk pressure, or ingestion errors | P0 | Planned |
-| L2 Platform | MinIO | `mc ready local` fails or S3 endpoint is unavailable | P1 | Planned |
-| L2 Platform | Authentik | `ak healthcheck` fails | P0 | Planned |
-| L2 Platform | SigNoz | query-service or OTEL collector health fails | P0 | Planned |
-| L2 Platform | Alert Bridge | `/health` fails or Feishu delivery errors | P0 | Planned; out-of-band bridge container health watchdog is defined |
+| L1 Bootstrap | Dokploy | deployment control-plane API/UI is unreachable or deployment webhooks fail; app health alerts remain app-owned | P1 | Live via infra probe |
+| L2 Platform | platform Postgres | TCP readiness fails or restart loop | P0 | Live via infra probe |
+| L2 Platform | platform Redis | TCP readiness fails or restart loop | P1 | Live via infra probe |
+| L2 Platform | ClickHouse | `/ping` fails, disk pressure, or ingestion errors | P0 | Live via infra probe |
+| L2 Platform | MinIO | MinIO live endpoint is unavailable | P1 | Live via infra probe |
+| L2 Platform | Authentik | health endpoint fails | P0 | Live via infra probe |
+| L2 Platform | SigNoz | frontend/query path fails | P0 | Live via infra probe |
+| L2 Platform | Alert Bridge | `/health` fails or Feishu delivery errors | P0 | Live via infra probe; out-of-band bridge container health watchdog is also defined |
 | L2 Platform | Portal | Homer frontend unavailable | P2 | Planned |
 | L2 Platform | Activepieces | `/api/v1/flags` unavailable | P1 | Planned |
 | L2 Platform | Prefect | server health port missing or worker stopped | P1 | Planned |
@@ -94,6 +110,7 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
 | L3 Finance Report | fr-app backend | OTEL ERROR/FATAL log count is above zero over 5 minutes | P1 | First live instance via shared rule automation |
 | L3 Finance Report | fr-app frontend | frontend HTTP health fails | P1 | Planned |
 | Cross-cutting | Vault app tokens | missing, malformed, invalid, non-renewable, or low TTL | P0/P1 | Manual gate: `vault-audit.self-refresh` |
+| Cross-cutting | Backup freshness | latest off-host backup is missing, stale, empty, or missing checksum | P1 | Live contract: backup manifest verifier |
 | Cross-cutting | OTEL ingestion | expected app logs/traces absent after deployment | P1 | Manual gate: `signoz.shared.query-logs` |
 | Cross-cutting | Infra2 host reachability | public infra2 endpoints or external SSH bridge health check fail | P0 | GitHub Actions out-of-band watchdog |
 
@@ -223,6 +240,30 @@ reachability, and the `platform-alerting` in-container `/health` endpoint via
 SSH. IaC Runner, MinIO, Postgres, Redis, and application dependency probes are
 service-level signals and remain in-band alerts owned by the bridge/SigNoz path.
 
+### SOP-006: Infra service probes
+
+Infra service probes are configured in
+[`platform/12.alerting/compose.yaml`](../../platform/12.alerting/compose.yaml)
+under `INFRA_PROBE_SPECS`.
+
+Spec format:
+
+```text
+name|kind|target|expected|severity|timeout_seconds
+```
+
+Supported kinds:
+
+- `http`: expected is a comma-separated list of accepted HTTP status codes.
+- `tcp`: expected is normally `connected`.
+- `command`: expected is a substring of stdout.
+
+Dry-run locally without sending Feishu:
+
+```bash
+INFRA_PROBE_DRY_RUN=1 uv run python tools/infra_probe_runner.py --once --json
+```
+
 ---
 
 ## 6. 验证与测试 (The Proof)
@@ -232,6 +273,8 @@ service-level signals and remain in-band alerts owned by the bridge/SigNoz path.
 | **Feishu payload contract** | `libs/tests/test_alerting.py` | ✅ Implemented |
 | **Reusable SigNoz log error rule payload** | `libs/tests/test_alerting.py` | ✅ Implemented |
 | **Out-of-band host and bridge watchdog contract** | `libs/tests/test_out_of_band_watchdog.py` | ✅ Implemented |
+| **In-band infra service probes** | `libs/tests/test_infra_probes.py` | ✅ Implemented |
+| **Backup freshness alert payload** | `libs/tests/test_backup_verification.py` | ✅ Implemented |
 | **告警通道连通性** | `uv run invoke alerting.test-feishu` | Manual live gate |
 
 ---

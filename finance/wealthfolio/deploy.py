@@ -54,7 +54,7 @@ class WealthfolioDeployer(Deployer):
         if not auth_password:
             auth_password = py_secrets.token_urlsafe(16)
             if secrets.set("WF_AUTH_PASSWORD", auth_password):
-                warning(f"Generated new Login Password in Vault: WF_AUTH_PASSWORD")
+                warning("Generated new Login Password in Vault: WF_AUTH_PASSWORD")
                 # Invalidate hash if password changed (though here it's new)
                 auth_hash = None
             else:

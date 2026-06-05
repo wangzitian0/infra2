@@ -67,15 +67,17 @@
 1. 读取最新 tag (如 `v1.2.3`)
 2. 自动递增 patch: `v1.2.4`
 3. 创建 git tag
-4. 调用 IaC Runner `/deploy` endpoint:
+4. 调用 IaC Runner `/deploy` endpoint with `wait=true`:
    ```json
    {
      "env": "staging",
-     "tag": "v1.2.4",
-     "triggered_by": "github-actions"
+     "ref": "main",
+     "triggered_by": "github-actions",
+     "wait": true
    }
    ```
 5. IaC Runner checkout tag 并执行 `invoke {service}.sync` for all platform services
+6. GitHub Actions fails when any service sync fails.
 
 ### Production 手动部署
 
@@ -87,12 +89,13 @@
 1. 验证 staging tag 存在
 2. 提取 minor version 并 +1: `v1.2.4` → `v1.3.0`
 3. 创建 production tag
-4. 调用 IaC Runner `/deploy` endpoint:
+4. 调用 IaC Runner `/deploy` endpoint with `wait=true`:
    ```json
    {
      "env": "production",
-     "tag": "v1.3.0",
-     "triggered_by": "manual-promotion"
+     "ref": "v1.3.0",
+     "triggered_by": "manual-promotion",
+     "wait": true
    }
    ```
 5. 创建 GitHub Release
@@ -130,7 +133,11 @@ gh workflow run deploy-platform.yml \
 
 IaC Runner 是 **L1 Bootstrap 层**组件，负责自动化部署 **L2 Platform 层**服务。
 
-The post-merge deployment workflow is serialized with GitHub Actions `concurrency` before calling IaC Runner. It also runs a `/health` preflight so bootstrap drift fails before any signed `/deploy` request is sent.
+The post-merge deployment workflow is serialized with GitHub Actions
+`concurrency` before calling IaC Runner. It also runs a `/health` preflight so
+bootstrap drift fails before any signed `/deploy` request is sent. GitHub
+Actions must call `/deploy` with `wait=true`; a green workflow means IaC Runner
+returned the real service sync result, not merely that the request was accepted.
 
 ```mermaid
 flowchart TB
@@ -183,14 +190,14 @@ flowchart TB
 |----------|--------|-------------|
 | `/health` | GET | 健康检查 |
 | `/webhook` | POST | GitHub webhook (change-based sync) |
-| `/deploy` | POST | 版本部署 (GitOps) |
+| `/deploy` | POST | 版本部署 (GitOps); `wait=true` returns real sync result |
 | `/sync` | POST | 手动同步 (legacy) |
 
 ### 4.3 版本部署请求格式
 
 ```bash
 # 部署到 staging
-PAYLOAD='{"env":"staging","tag":"v1.2.4","triggered_by":"github-actions"}'
+PAYLOAD='{"env":"staging","ref":"main","triggered_by":"github-actions","wait":true}'
 SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $2}')
 curl -X POST https://iac.zitian.party/deploy \
   -H "Content-Type: application/json" \
@@ -198,7 +205,7 @@ curl -X POST https://iac.zitian.party/deploy \
   -d "$PAYLOAD"
 
 # 部署到 production
-PAYLOAD='{"env":"production","tag":"v1.3.0","triggered_by":"manual-promotion"}'
+PAYLOAD='{"env":"production","ref":"v1.3.0","triggered_by":"manual-promotion","wait":true}'
 SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $2}')
 curl -X POST https://iac.zitian.party/deploy \
   -H "Content-Type: application/json" \

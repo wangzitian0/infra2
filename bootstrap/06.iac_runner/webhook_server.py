@@ -172,6 +172,7 @@ def version_deploy():
     # Support both 'ref' (generic) and 'tag' (legacy/specific)
     ref = payload.get("ref") or payload.get("tag")
     triggered_by = payload.get("triggered_by", "unknown")
+    wait = bool(payload.get("wait", False))
 
     if not ref:
         return jsonify({"error": "Ref or Tag required"}), 400
@@ -183,6 +184,19 @@ def version_deploy():
 
     from sync_runner import sync_services_by_version
 
+    if wait:
+        result = sync_services_by_version(env, ref, triggered_by)
+        status_code = 200 if result.success else 500
+        return jsonify(
+            {
+                "status": "completed" if result.success else "failed",
+                "env": env,
+                "ref": ref,
+                "triggered_by": triggered_by,
+                "result": result.to_dict(),
+            }
+        ), status_code
+
     thread = threading.Thread(
         target=sync_services_by_version, args=(env, ref, triggered_by)
     )
@@ -190,7 +204,13 @@ def version_deploy():
     thread.start()
 
     return jsonify(
-        {"status": "accepted", "env": env, "ref": ref, "triggered_by": triggered_by}
+        {
+            "status": "accepted",
+            "env": env,
+            "ref": ref,
+            "triggered_by": triggered_by,
+            "wait": False,
+        }
     )
 
 

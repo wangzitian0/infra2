@@ -169,8 +169,8 @@ jobs:
               echo "❌ Vault agent healthcheck does not validate token lookup in $file"
               failed=1
             fi
-            if ! grep -q "VAULT_AGENT_MAX_SECRET_AGE_SECONDS" "$file"; then
-              echo "❌ Vault agent healthcheck does not check secrets freshness in $file"
+            if grep -q "VAULT_AGENT_MAX_SECRET_AGE_SECONDS\\|stat -c %Y" "$file"; then
+              echo "❌ Vault agent Docker healthcheck must not use rendered-file mtime freshness in $file"
               failed=1
             fi
           done
@@ -178,7 +178,7 @@ jobs:
             echo ""
             echo "⚠️  vault-agent.hcl files must have exit settings to prevent"
             echo "   zombie containers when tokens expire. Compose healthchecks"
-            echo "   must also validate token lookup and clear stale secrets."
+            echo "   must validate token lookup and clear stale secrets."
             exit 1
           fi
           echo "✅ All vault-agent files have required exit and health settings"
