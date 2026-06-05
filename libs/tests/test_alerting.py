@@ -219,6 +219,7 @@ def test_alerting_platform_service_contract_files_exist() -> None:
     assert "platform-alerting-vault-agent${ENV_SUFFIX}" in compose
     assert "platform-alerting${ENV_SUFFIX}" in compose
     assert "while [ ! -s /secrets/.env ]" in compose
+    assert "ALERTING_SECRETS_WAIT_SECONDS:-300" in compose
     assert "condition: service_healthy" not in compose
     assert "open-apis/bot/v2/hook" not in compose
     assert "secrets:/secrets:ro" in compose

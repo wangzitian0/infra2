@@ -127,10 +127,10 @@ by `.github/workflows/out-of-band-watchdog.yml`, which runs every 30 minutes fro
 GitHub Actions and sends Feishu directly when infra2 or the bridge cannot be
 trusted.
 
-The bridge waits for `/secrets/.env` at startup, but it does not require the
-vault-agent sidecar to stay Docker-healthy after the file is rendered. This keeps
-alert delivery available even when vault-agent's own stale-secret health check
-needs separate remediation.
+The bridge waits up to 300 seconds for `/secrets/.env` at startup, but it does
+not require the vault-agent sidecar to stay Docker-healthy after the file is
+rendered. This keeps alert delivery available even when vault-agent's own
+stale-secret health check needs separate remediation.
 
 Required repository secrets:
 

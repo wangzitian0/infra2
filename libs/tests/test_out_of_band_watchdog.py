@@ -96,6 +96,7 @@ def test_failure_message_is_out_of_band_and_redacts_secrets() -> None:
     message = watchdog.format_failure_message(results, run_url="https://github/run/1")
 
     assert "[OUT-OF-BAND] Infra2 watchdog failed" in message
+    assert "Route: GitHub Actions -> Feishu direct" in message
     assert "infra2-iac-runner" in message
     assert "infra2-alert-bridge" in message
     assert "https://github/run/1" in message
@@ -187,3 +188,21 @@ def test_out_of_band_delivery_supports_existing_feishu_app_mode(monkeypatch) -> 
             "text": "hello",
         }
     ]
+
+
+def test_webhook_mode_error_mentions_primary_and_fallback_env_names() -> None:
+    """Infra-007.2: missing webhook config is diagnosable in CI logs."""
+    watchdog = _load_watchdog()
+
+    try:
+        watchdog.deliver_out_of_band_alert(
+            {"INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE": "feishu_webhook"},
+            "hello",
+        )
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("Expected missing webhook configuration to fail")
+
+    assert "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL" in message
+    assert "FEISHU_WEBHOOK_URL" in message

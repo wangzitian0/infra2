@@ -210,7 +210,7 @@ def format_failure_message(results: list[CheckResult], *, run_url: str) -> str:
         "[OUT-OF-BAND] Infra2 watchdog failed",
         "Severity: P0",
         "Scope: host reachability / alert bridge availability",
-        "Route: GitHub Actions -> Feishu direct webhook",
+        "Route: GitHub Actions -> Feishu direct",
     ]
     if run_url:
         lines.append(f"Run: {run_url}")
@@ -282,7 +282,8 @@ def deliver_out_of_band_alert(env: Mapping[str, str], message: str) -> None:
     )
     if not webhook_url:
         raise ValueError(
-            "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL is required for feishu_webhook mode"
+            "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL or FEISHU_WEBHOOK_URL "
+            "is required for feishu_webhook mode"
         )
     deliver_feishu_text(webhook_url, message)
 

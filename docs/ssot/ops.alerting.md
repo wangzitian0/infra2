@@ -49,10 +49,10 @@ This path is intentionally limited to host reachability and alerting bridge
 availability. All service-level alerts continue to use the in-band path through
 SigNoz and `platform/12.alerting`.
 
-The alert bridge must wait for `/secrets/.env` at startup, but it must not
-require the vault-agent sidecar to remain Docker-healthy after the secret file is
-rendered. Vault-agent stale-secret health is a separate service-level signal; it
-must not block alert delivery.
+The alert bridge must wait up to 300 seconds for `/secrets/.env` at startup, but
+it must not require the vault-agent sidecar to remain Docker-healthy after the
+secret file is rendered. Vault-agent stale-secret health is a separate
+service-level signal; it must not block alert delivery.
 
 ---
 

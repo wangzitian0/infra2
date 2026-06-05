@@ -60,7 +60,8 @@ services:
       - |
         set -e
         waited=0
-        while [ ! -s /secrets/.env ] && [ "$$waited" -lt 120 ]; do
+        max_wait="$${ALERTING_SECRETS_WAIT_SECONDS:-300}"
+        while [ ! -s /secrets/.env ] && [ "$$waited" -lt "$$max_wait" ]; do
           echo "Waiting for alerting secrets file..."
           sleep 2
           waited=$$((waited + 2))
