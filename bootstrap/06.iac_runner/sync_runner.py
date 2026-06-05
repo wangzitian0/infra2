@@ -89,6 +89,20 @@ def _first_matching_line(text: str, patterns: tuple[str, ...]) -> str:
 def diagnose_failure(stderr: str, stdout: str = "") -> dict[str, str]:
     """Classify a failed invoke task into a one-look diagnostic."""
     combined = f"{stderr}\n{stdout}"
+    missing_module_match = re.search(
+        r"ModuleNotFoundError:\s+No module named ['\"]([^'\"]+)['\"]", combined
+    )
+    if missing_module_match:
+        module_name = missing_module_match.group(1)
+        return {
+            "error_kind": "missing_python_dependency",
+            "summary": f"IaC Runner runtime is missing Python module: {module_name}",
+            "next_action": (
+                "Rebuild or redeploy bootstrap/iac-runner from the current "
+                "requirements.txt, then rerun the deployment."
+            ),
+        }
+
     if "Non-production requires DATA_PATH or ENV_SUFFIX" in combined:
         return {
             "error_kind": "missing_environment_isolation",

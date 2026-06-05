@@ -95,27 +95,68 @@ jobs:
 
           ENV="${{ steps.target.outputs.env }}"
           REF="${{ steps.target.outputs.ref }}"
-          
-          PAYLOAD=$(cat <<EOF
-          {
-            "env": "$ENV",
-            "ref": "$REF",
-            "triggered_by": "${{ github.actor }}",
-            "wait": true
+
+          send_signed_json() {
+            local endpoint="$1"
+            local payload="$2"
+            local output="$3"
+            local signature
+            signature=$(echo -n "$payload" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $2}')
+            curl --fail-with-body \
+              --retry 3 \
+              --retry-delay 5 \
+              --retry-all-errors \
+              --connect-timeout 10 \
+              --max-time 60 \
+              -sS \
+              -o "$output" \
+              -X POST "${IAC_RUNNER_URL%/}${endpoint}" \
+              -H "Content-Type: application/json" \
+              -H "X-Hub-Signature-256: sha256=$signature" \
+              -d "$payload"
           }
-          EOF
-          )
-          
-          SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $2}')
-          
-          echo "Sending payload to IaC Runner..."
-          curl --fail-with-body \
-            --retry 3 \
-            --retry-delay 5 \
-            --retry-all-errors \
-            --connect-timeout 10 \
-            --max-time 1800 \
-            -X POST "${IAC_RUNNER_URL%/}/deploy" \
-            -H "Content-Type: application/json" \
-            -H "X-Hub-Signature-256: sha256=$SIGNATURE" \
-            -d "$PAYLOAD"
+
+          DEPLOY_PAYLOAD=$(jq -cn \
+            --arg env "$ENV" \
+            --arg ref "$REF" \
+            --arg triggered_by "${{ github.actor }}" \
+            '{env: $env, ref: $ref, triggered_by: $triggered_by, wait: false}')
+          DEPLOY_BODY="$(mktemp)"
+
+          echo "Starting IaC Runner deployment..."
+          send_signed_json "/deploy" "$DEPLOY_PAYLOAD" "$DEPLOY_BODY"
+          cat "$DEPLOY_BODY"
+
+          STATUS_PAYLOAD=$(jq -cn \
+            --arg env "$ENV" \
+            --arg ref "$REF" \
+            --arg triggered_by "${{ github.actor }}" \
+            '{env: $env, ref: $ref, triggered_by: $triggered_by}')
+
+          for attempt in $(seq 1 90); do
+            STATUS_BODY="$(mktemp)"
+            echo "Polling IaC Runner deployment status (attempt ${attempt}/90)..."
+            send_signed_json "/deploy/status" "$STATUS_PAYLOAD" "$STATUS_BODY"
+            cat "$STATUS_BODY"
+            STATUS="$(jq -r '.status' "$STATUS_BODY")"
+            case "$STATUS" in
+              completed)
+                echo "IaC Runner deployment completed successfully."
+                exit 0
+                ;;
+              failed)
+                echo "::error::IaC Runner deployment failed."
+                exit 1
+                ;;
+              in_progress)
+                sleep 10
+                ;;
+              *)
+                echo "::error::Unexpected IaC Runner deployment status: $STATUS"
+                exit 1
+                ;;
+            esac
+          done
+
+          echo "::error::Timed out waiting for IaC Runner deployment status."
+          exit 1

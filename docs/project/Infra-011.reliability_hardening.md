@@ -19,6 +19,9 @@ the P1 reliability review found four remaining hard gaps:
   failed to source `/secrets/.env`.
 - IaC Runner `.sync` only ensured the base deployer secret, so custom deployer
   runtime fields could remain missing unless someone ran manual setup.
+- IaC Runner `/health` did not include runtime dependency checks, so a stale
+  bootstrap image could accept deploys even when invoke startup would fail on a
+  missing Python package.
 - Backup coverage was not code-enforced against deployer-owned `DATA_PATH`
   services.
 
@@ -32,6 +35,7 @@ the P1 reliability review found four remaining hard gaps:
 | Infra-011.6 | IaC Runner sync ensures every runtime secret field consumed by custom service templates before deploy. | `libs/tests/test_deployer.py`, `platform/*/deploy.py` |
 | Infra-011.4 | Deployer-owned persistent data paths have backup inventory coverage, an archive/checksum runner, and manifest freshness verification. | `libs/tests/test_backup_verification.py`, `tools/backup_runner.py`, `docs/ssot/ops.backup-inventory.yaml` |
 | Infra-011.5 | Public service routing ownership is single-source: compose-owned Traefik routers must not also use Dokploy domain generation. | `libs/tests/test_domain_routing_policy.py`, `docs/ssot/platform.domain.md` |
+| Infra-011.7 | IaC Runner health checks include required runtime Python modules and binaries, missing dependency failures are classified, and optional audit inventory dependencies do not break invoke startup. | `libs/tests/test_iac_runner_deploy_result.py`, `bootstrap/06.iac_runner/webhook_server.py` |
 
 ## Validation
 

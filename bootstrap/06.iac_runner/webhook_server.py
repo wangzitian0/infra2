@@ -7,8 +7,10 @@ Receives GitHub push events and triggers sync for changed services.
 
 import hashlib
 import hmac
+import importlib.util
 import logging
 import os
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -24,6 +26,15 @@ GIT_REPO_URL = os.environ.get("GIT_REPO_URL")
 GIT_BRANCH = os.environ.get("GIT_BRANCH", "main")
 SECRETS_FILE = Path("/secrets/.env")
 RECENT_DEPLOY_TTL_SECONDS = int(os.environ.get("RECENT_DEPLOY_TTL_SECONDS", "600"))
+REQUIRED_PYTHON_MODULES = {
+    "flask": "flask",
+    "httpx": "httpx",
+    "invoke": "invoke",
+    "python-dotenv": "dotenv",
+    "PyYAML": "yaml",
+    "rich": "rich",
+}
+REQUIRED_BINARIES = ("git", "op")
 
 _deploy_state_lock = threading.Lock()
 _in_flight_deploys: set[tuple[str, str]] = set()
@@ -111,7 +122,11 @@ def _deployment_key(env: str, ref: str) -> tuple[str, str]:
     return (env, ref)
 
 
-def _recent_success(key: tuple[str, str]) -> dict | None:
+def _deployment_id(key: tuple[str, str]) -> str:
+    return hashlib.sha256(f"{key[0]}:{key[1]}".encode()).hexdigest()[:16]
+
+
+def _recent_result(key: tuple[str, str]) -> dict | None:
     item = _recent_deploys.get(key)
     if not item:
         return None
@@ -122,6 +137,68 @@ def _recent_success(key: tuple[str, str]) -> dict | None:
     return response
 
 
+def _in_progress_response(
+    env: str, ref: str, triggered_by: str = "unknown", duplicate: bool = False
+) -> dict:
+    key = _deployment_key(env, ref)
+    response = {
+        "status": "in_progress",
+        "deployment_id": _deployment_id(key),
+        "env": env,
+        "ref": ref,
+        "triggered_by": triggered_by,
+        "status_url": "/deploy/status",
+    }
+    if duplicate:
+        response["duplicate"] = True
+    return response
+
+
+def _completed_response(env: str, ref: str, triggered_by: str, result) -> dict:
+    key = _deployment_key(env, ref)
+    return {
+        "status": "completed" if result.success else "failed",
+        "deployment_id": _deployment_id(key),
+        "env": env,
+        "ref": ref,
+        "triggered_by": triggered_by,
+        "result": result.to_dict(),
+    }
+
+
+def _run_deployment(env: str, ref: str, triggered_by: str) -> None:
+    from sync_runner import sync_services_by_version
+
+    key = _deployment_key(env, ref)
+    try:
+        result = sync_services_by_version(env, ref, triggered_by)
+        response = _completed_response(env, ref, triggered_by, result)
+    except Exception as exc:
+        logger.exception("Deployment failed before producing a sync result")
+        response = {
+            "status": "failed",
+            "deployment_id": _deployment_id(key),
+            "env": env,
+            "ref": ref,
+            "triggered_by": triggered_by,
+            "error": str(exc),
+        }
+    with _deploy_state_lock:
+        _recent_deploys[key] = (time.monotonic(), response)
+        _in_flight_deploys.discard(key)
+
+
+def _dependency_checks() -> dict[str, bool]:
+    checks = {
+        f"python:{name}": importlib.util.find_spec(module) is not None
+        for name, module in REQUIRED_PYTHON_MODULES.items()
+    }
+    checks.update(
+        {f"binary:{name}": shutil.which(name) is not None for name in REQUIRED_BINARIES}
+    )
+    return checks
+
+
 @app.route("/health", methods=["GET"])
 def health():
     checks = {
@@ -130,6 +207,7 @@ def health():
         "git_repo_url": bool(GIT_REPO_URL),
         "webhook_secret": bool(WEBHOOK_SECRET),
     }
+    checks.update(_dependency_checks())
 
     repo_name = Path(GIT_REPO_URL).stem if GIT_REPO_URL else "unknown"
     workspace_path = WORKSPACE / repo_name
@@ -221,60 +299,75 @@ def version_deploy():
 
     logger.info(f"Deployment: {ref} to {env} by {triggered_by}")
 
-    from sync_runner import sync_services_by_version
-
     if wait:
         key = _deployment_key(env, ref)
         with _deploy_state_lock:
-            recent = _recent_success(key)
+            recent = _recent_result(key)
             if recent:
-                return jsonify({**recent, "cached": True}), 200
+                status_code = 200 if recent.get("status") == "completed" else 500
+                return jsonify({**recent, "cached": True}), status_code
             if key in _in_flight_deploys:
-                return jsonify(
-                    {
-                        "status": "in_progress",
-                        "env": env,
-                        "ref": ref,
-                        "triggered_by": triggered_by,
-                        "duplicate": True,
-                    }
-                ), 202
+                return jsonify(_in_progress_response(env, ref, triggered_by, True)), 202
             _in_flight_deploys.add(key)
 
-        try:
-            result = sync_services_by_version(env, ref, triggered_by)
-        finally:
-            with _deploy_state_lock:
-                _in_flight_deploys.discard(key)
-
-        response = {
-            "status": "completed" if result.success else "failed",
+        _run_deployment(env, ref, triggered_by)
+        response = _recent_result(key) or {
+            "status": "failed",
             "env": env,
             "ref": ref,
             "triggered_by": triggered_by,
-            "result": result.to_dict(),
+            "error": "Deployment finished without a stored result",
         }
-        with _deploy_state_lock:
-            if result.success:
-                _recent_deploys[key] = (time.monotonic(), response)
-        status_code = 200 if result.success else 500
+        status_code = 200 if response.get("status") == "completed" else 500
         return jsonify(response), status_code
 
-    thread = threading.Thread(
-        target=sync_services_by_version, args=(env, ref, triggered_by)
-    )
+    key = _deployment_key(env, ref)
+    with _deploy_state_lock:
+        recent = _recent_result(key)
+        if recent:
+            return jsonify({**recent, "cached": True}), 200
+        if key in _in_flight_deploys:
+            return jsonify(_in_progress_response(env, ref, triggered_by, True)), 202
+        _in_flight_deploys.add(key)
+
+    thread = threading.Thread(target=_run_deployment, args=(env, ref, triggered_by))
     thread.daemon = True
     thread.start()
 
+    return jsonify({**_in_progress_response(env, ref, triggered_by), "wait": False}), 202
+
+
+@app.route("/deploy/status", methods=["POST"])
+def deployment_status():
+    signature = request.headers.get("X-Hub-Signature-256", "")
+    if not verify_signature(request.data, signature):
+        return jsonify({"error": "Invalid signature"}), 401
+
+    payload = request.json or {}
+    env = payload.get("env", "staging")
+    ref = payload.get("ref") or payload.get("tag")
+    triggered_by = payload.get("triggered_by", "unknown")
+    if not ref:
+        return jsonify({"error": "Ref or Tag required"}), 400
+    if env not in ("staging", "production"):
+        return jsonify({"error": "Invalid env (must be staging or production)"}), 400
+
+    key = _deployment_key(env, ref)
+    with _deploy_state_lock:
+        recent = _recent_result(key)
+        if recent:
+            return jsonify(recent), 200
+        if key in _in_flight_deploys:
+            return jsonify(_in_progress_response(env, ref, triggered_by)), 200
+
     return jsonify(
         {
-            "status": "accepted",
+            "status": "not_found",
+            "deployment_id": _deployment_id(key),
             "env": env,
             "ref": ref,
-            "triggered_by": triggered_by,
-            "wait": False,
         }
-    )
+    ), 404
 
 
 if __name__ == "__main__":

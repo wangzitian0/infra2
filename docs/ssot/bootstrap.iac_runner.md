@@ -145,8 +145,11 @@ and public domains stay isolated. This is IaC Runner policy even though the
 broader deployer contract also permits explicit `DATA_PATH` isolation in
 non-GitOps contexts. Production deploys use empty suffixes.
 
-When `/deploy` is called with `wait=true`, failed responses must include a
-bounded `failure_summary` with `service`, `task`, `error_kind`, `summary`, and
+GitHub Actions starts deployments with a short signed `/deploy` request and
+polls `/deploy/status` with signed short requests. This preserves real sync
+result semantics without holding a public Cloudflare request open long enough
+to hit a 524 timeout. Failed deploy result responses must include a bounded
+`failure_summary` with `service`, `task`, `error_kind`, `summary`, and
 `next_action`. Full child stdout/stderr is tailed to keep GitHub Actions logs
 diagnostic instead of noisy.
 
@@ -343,19 +346,21 @@ curl -X POST https://iac.{domain}/deploy \
 
 **处理逻辑**:
 1. 验证 HMAC 签名
-2. Checkout 指定 tag
-3. 根据环境设置 `DEPLOY_ENV` 环境变量
-4. 执行 `invoke {service}.sync` for all platform services
-5. 记录部署日志
+2. `wait=false` 时启动后台部署并返回 `deployment_id`
+3. GitHub Actions 轮询签名 `/deploy/status`
+4. Checkout 指定 ref/tag
+5. 根据环境设置 `DEPLOY_ENV` 环境变量
+6. 执行 `invoke {service}.sync` for all platform services
+7. 记录部署日志
 
 **响应**:
 ```json
 {
-  "status": "success",
+  "status": "in_progress",
+  "deployment_id": "b3f8d7ad4d0e0d2f",
   "env": "staging",
-  "tag": "v1.2.4",
-  "deployed_services": ["postgres", "redis", "authentik", "minio"],
-  "timestamp": "2025-01-24T04:51:00Z"
+  "ref": "main",
+  "status_url": "/deploy/status"
 }
 ```
 
@@ -790,6 +795,11 @@ IaC Runner 是 bootstrap 服务，不能依赖自身自动修复。Post-merge wo
 
 关键漂移信号：
 - `GET https://iac.{domain}/health` 返回 404：Dokploy 域名没有路由到 IaC Runner app，优先检查 `bootstrap/iac_runner` 的 domain、serviceName、source path。
+- `/health` 中 `python:PyYAML`、`python:invoke`、`binary:op` 等 runtime
+  dependency check 为 `false`：当前 bootstrap image 没有按代码中的
+  `requirements.txt`/Dockerfile 重建。
+- GitHub Actions 收到 Cloudflare `524`：不要使用 public route 上的
+  `wait=true` 长请求；应使用 `/deploy` + `/deploy/status` 短请求轮询。
 - Dokploy deployment log 出现 `Compose file not found`：`composePath` 必须是 `bootstrap/06.iac_runner/compose.yaml`。
 - `iac-runner-vault-agent` 出现 `token file validation failed`：Dokploy 中的 `VAULT_APP_TOKEN` 已失效，运行 `VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token') invoke vault.setup-tokens` 重新生成 periodic token。
 - `iac-runner` 出现 `Secrets file not found after 60s`：通常是 Vault Agent 未渲染 `/vault/secrets/.env`，先看 sidecar token 状态。
