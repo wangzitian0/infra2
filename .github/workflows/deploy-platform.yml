@@ -5,10 +5,12 @@ on:
     branches: ["main"]
     tags: ["v*"]
     paths:
+      - "bootstrap/06.iac_runner/**"
       - "platform/**"
       - "finance_report/**"
       - "finance/**"
       - "libs/**"
+      - "scripts/deploy_iac_runner_bootstrap.sh"
       - ".github/workflows/deploy-platform.yml"
   workflow_dispatch:
     inputs:
@@ -36,6 +38,9 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Determine Deployment Target
         id: target
         run: |
@@ -60,6 +65,79 @@ jobs:
           echo "ref=$REF" >> $GITHUB_OUTPUT
           
           echo "🚀 Deploying $REF to $ENV"
+
+      - name: Detect IaC Runner bootstrap changes
+        id: runner-changes
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+
+          changed_file="$(mktemp)"
+          echo false > "$changed_file"
+          jq -r '
+            [
+              .commits[]?
+              | .added[]?, .modified[]?, .removed[]?
+            ]
+            | unique
+            | .[]
+          ' "$GITHUB_EVENT_PATH" | while IFS= read -r file; do
+            case "$file" in
+              bootstrap/06.iac_runner/*|scripts/deploy_iac_runner_bootstrap.sh|.github/workflows/deploy-platform.yml)
+                echo true > "$changed_file"
+                ;;
+            esac
+          done
+
+          changed="$(cat "$changed_file")"
+          rm -f "$changed_file"
+
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "IaC Runner bootstrap changed: $changed"
+
+      - name: Configure SSH key for IaC Runner bootstrap update
+        if: steps.runner-changes.outputs.changed == 'true'
+        env:
+          INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${INFRA2_WATCHDOG_SSH_PRIVATE_KEY:-}" ]]; then
+            echo "::error::INFRA2_WATCHDOG_SSH_PRIVATE_KEY is required when IaC Runner bootstrap files change."
+            exit 1
+          fi
+
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_bootstrap
+          chmod 600 ~/.ssh/infra2_bootstrap
+
+      - name: Deploy IaC Runner bootstrap changes
+        if: steps.runner-changes.outputs.changed == 'true'
+        env:
+          INFRA2_WATCHDOG_SSH_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
+          INFRA2_WATCHDOG_SSH_USER: ${{ secrets.INFRA2_WATCHDOG_SSH_USER }}
+          INFRA2_WATCHDOG_SSH_PORT: ${{ vars.INFRA2_WATCHDOG_SSH_PORT }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${INFRA2_WATCHDOG_SSH_HOST:-}" ]]; then
+            echo "::error::INFRA2_WATCHDOG_SSH_HOST is required when IaC Runner bootstrap files change."
+            exit 1
+          fi
+          if [[ -z "${INFRA2_WATCHDOG_SSH_USER:-}" ]]; then
+            echo "::error::INFRA2_WATCHDOG_SSH_USER is required when IaC Runner bootstrap files change."
+            exit 1
+          fi
+
+          ssh_port="${INFRA2_WATCHDOG_SSH_PORT:-22}"
+          ssh \
+            -i ~/.ssh/infra2_bootstrap \
+            -p "$ssh_port" \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            "${INFRA2_WATCHDOG_SSH_USER}@${INFRA2_WATCHDOG_SSH_HOST}" \
+            "INFRA2_DEPLOY_SHA='${GITHUB_SHA}' bash -s" \
+            < scripts/deploy_iac_runner_bootstrap.sh
 
       - name: Check IaC Runner health
         env:

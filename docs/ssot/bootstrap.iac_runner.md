@@ -33,7 +33,8 @@ IaC Runner 是 **L1 Bootstrap 层**组件，负责自动化部署 **L2 Platform 
 
 | 项目 | 管理方式 |
 |------|---------|
-| **Bootstrap** (1Password, Vault, IaC Runner) | 手动部署（避免循环依赖） |
+| **Bootstrap** (1Password, Vault) | Manual deployment and recovery |
+| **IaC Runner source image** | GitHub Actions external bootstrap update before `/deploy` when `bootstrap/06.iac_runner/**` changes |
 | **Platform** (Postgres, Redis, Authentik) | **IaC Runner 自动同步** ✅ |
 | **Apps** (finance_report, wealthfolio) | 各自独立的 CI/CD Pipeline |
 
@@ -401,17 +402,26 @@ curl -X POST https://iac.{domain}/sync \
 | `platform/02.redis/*` | `redis.sync` | 自动同步 Redis |
 | `platform/10.authentik/*` | `authentik.sync` | 自动同步 Authentik |
 | `platform/11.minio/*` | `minio.sync` | 自动同步 MinIO |
+| `platform/12.alerting/*` | `alerting.sync` | 自动同步 alert bridge and probe runner |
 | `libs/*` | **All platform services** | 公共库变更，全量同步 |
-| `bootstrap/*` | **Skipped** | 手动部署（避免循环依赖）|
+| `bootstrap/06.iac_runner/*` | External bootstrap update | GitHub Actions rebuilds the runner through SSH before `/deploy` |
+| `bootstrap/*` | **Skipped** | Other bootstrap services stay manual |
 | `finance_report/*` | **Skipped** | 使用 finance_report 独立 CI |
 | `finance/*` | **Skipped** | 使用应用独立 CI |
 
 ### 5.2 排除规则
 
-**为什么 Bootstrap 不自动同步？**
-- IaC Runner 本身是 Bootstrap 组件
-- 自动同步会导致循环依赖（IaC Runner 重启自己）
-- Bootstrap 变更频率低，手动部署更安全
+**Why IaC Runner is updated externally**
+- IaC Runner must not restart itself from inside its own `/deploy` request,
+  because that can kill the request handler before GitHub Actions receives a
+  terminal deployment result.
+- `deploy-platform.yml` detects `bootstrap/06.iac_runner/**` changes on
+  `main` from the GitHub push event file list, SSHes to the VPS with the
+  out-of-band watchdog key, updates only the runner source path in the Dokploy
+  compose checkout, rebuilds the compose project, and waits for container
+  health before calling `/deploy`.
+- Other bootstrap components remain manual to avoid circular dependency during
+  first install and disaster recovery.
 
 **为什么 Apps 不自动同步？**
 - Apps 有独立的构建流程（Docker 镜像构建）
@@ -613,7 +623,22 @@ docker restart iac-runner
 
 ### 7.4 更新 IaC Runner
 
-**手动更新流程**（Bootstrap 组件手动部署）:
+**Automated post-merge update**:
+
+When `bootstrap/06.iac_runner/**` changes on `main`, GitHub Actions runs
+`scripts/deploy_iac_runner_bootstrap.sh` on the VPS before the normal
+`/deploy` call. The script resolves the live Dokploy compose project from the
+`iac-runner` container label, checks out only `bootstrap/06.iac_runner` at the
+merged SHA in the Dokploy code checkout, rebuilds the compose project with
+`GIT_SHA=<short_sha>`, recreates the runner, and waits for Docker health.
+
+Generic deployer config hashes include compose text, deploy env values, local
+bind-mounted files referenced by compose, Dockerfiles, and Dockerfile
+`COPY`/`ADD` source files. Services such as `platform/12.alerting` therefore
+redeploy when bridge/probe source code or Vault templates change even if the
+compose YAML itself is unchanged.
+
+**Manual recovery flow**:
 ```bash
 # 1. 拉取最新代码
 cd /path/to/infra2
@@ -851,7 +876,9 @@ invoke postgres.sync
 
 ### 12.2 已知限制
 
-1. **Bootstrap 循环依赖**: IaC Runner 自身不能自动更新（需手动部署）
+1. **Bootstrap recovery boundary**: IaC Runner source is externally rebuilt by
+   GitHub Actions after merge, but first install and broken-SSH recovery remain
+   manual bootstrap operations.
 2. **单点故障**: 只有一个 IaC Runner 实例（未来可考虑主备模式）
 3. **缺乏审计日志**: 当前日志未持久化（可接入 SigNoz 改进）
 

@@ -22,6 +22,12 @@ the P1 reliability review found four remaining hard gaps:
 - IaC Runner `/health` did not include runtime dependency checks, so a stale
   bootstrap image could accept deploys even when invoke startup would fail on a
   missing Python package.
+- IaC Runner bootstrap source changes were not part of the post-merge deploy
+  trigger, so a merged runner fix could leave the live webhook image stale until
+  someone manually rebuilt the Dokploy compose.
+- Local build and mounted runtime artifacts were not part of the generic
+  deployer hash, so a service could keep an old image or template when compose
+  and env text stayed unchanged.
 - Backup coverage was not code-enforced against deployer-owned `DATA_PATH`
   services.
 
@@ -36,6 +42,7 @@ the P1 reliability review found four remaining hard gaps:
 | Infra-011.4 | Deployer-owned persistent data paths have backup inventory coverage, an archive/checksum runner, and manifest freshness verification. | `libs/tests/test_backup_verification.py`, `tools/backup_runner.py`, `docs/ssot/ops.backup-inventory.yaml` |
 | Infra-011.5 | Public service routing ownership is single-source: compose-owned Traefik routers must not also use Dokploy domain generation. | `libs/tests/test_domain_routing_policy.py`, `docs/ssot/platform.domain.md` |
 | Infra-011.7 | IaC Runner health checks include required runtime Python modules and binaries, missing dependency failures are classified, and optional audit inventory dependencies do not break invoke startup. | `libs/tests/test_iac_runner_deploy_result.py`, `bootstrap/06.iac_runner/webhook_server.py` |
+| Infra-011.8 | Post-merge deployments externally rebuild IaC Runner through the VPS/Dokploy compose checkout before calling `/deploy` when runner bootstrap files change, and generic deployer hashes include local build/mount artifacts so code-backed infra services do not skip redeploys. | `libs/tests/test_iac_runner_deploy_result.py`, `libs/tests/test_deployer.py`, `.github/workflows/deploy-platform.yml`, `scripts/deploy_iac_runner_bootstrap.sh` |
 
 ## Validation
 

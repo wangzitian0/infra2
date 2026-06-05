@@ -61,13 +61,20 @@
 
 **触发条件**:
 - Push 到 `main` 分支
-- 修改了 `platform/**`, `finance_report/**`, `finance/**`, `libs/**`, 或
+- Modified `bootstrap/06.iac_runner/**`, `platform/**`,
+  `finance_report/**`, `finance/**`, `libs/**`,
+  `scripts/deploy_iac_runner_bootstrap.sh`, or
   `.github/workflows/deploy-platform.yml`
 
 **工作流**:
-1. 读取最新 tag (如 `v1.2.3`)
-2. 自动递增 patch: `v1.2.4`
-3. 创建 git tag
+1. Detect whether `bootstrap/06.iac_runner/**` changed.
+2. If runner bootstrap changed, SSH to the VPS with the out-of-band watchdog
+   key and run `scripts/deploy_iac_runner_bootstrap.sh` before any public
+   `/deploy` request.
+   Detection reads the GitHub push event's `added`/`modified`/`removed` file
+   lists instead of diffing the merge commit, so squash, merge-commit, and
+   rebase-style main updates all use the same source of truth.
+3. Run IaC Runner `/health` after the external bootstrap update.
 4. 调用 IaC Runner `/deploy` endpoint with `wait=false`:
    ```json
    {
@@ -229,9 +236,14 @@ curl -X POST https://iac.zitian.party/deploy \
 ### 4.4 幂等性保证
 
 每个服务的 `sync` task 使用 config hash:
-1. 计算本地 `compose.yaml + env vars` 的 SHA256
+1. 计算本地 `compose.yaml + env vars + local artifacts` 的 SHA256
 2. 与 Dokploy 中存储的 `IAC_CONFIG_HASH` 比较
 3. 仅在 hash 不匹配时重新部署
+
+Local artifacts include compose-referenced bind mount files, Dockerfiles, and
+Dockerfile `COPY`/`ADD` source files. This prevents code-backed infra services
+from skipping redeploys when source code or Vault templates change without a
+compose/env text change.
 
 ### 4.5 服务映射规则
 
@@ -241,15 +253,21 @@ curl -X POST https://iac.zitian.party/deploy \
 | `platform/02.redis/*` | `redis.sync` | 自动同步 Redis |
 | `platform/10.authentik/*` | `authentik.sync` | 自动同步 Authentik |
 | `platform/11.minio/*` | `minio.sync` | 自动同步 MinIO |
+| `platform/12.alerting/*` | `alerting.sync` | 自动同步 alert bridge and probe runner |
 | `libs/*` | **All platform services** | 公共库变更，全量同步 |
-| `bootstrap/*` | **Skipped** | 手动部署（避免循环依赖）|
+| `bootstrap/06.iac_runner/*` | External bootstrap update | Actions rebuilds runner before `/deploy` |
+| `bootstrap/*` | **Skipped** | Other bootstrap services stay manual |
 | `finance_report/*` | **Skipped** | 使用 finance_report 独立 CI |
 | `finance/*` | **Skipped** | 使用应用独立 CI |
 
-**为什么 Bootstrap 不自动同步？**
-- IaC Runner 本身是 Bootstrap 组件
-- 自动同步会导致循环依赖（IaC Runner 重启自己）
-- Bootstrap 变更频率低，手动部署更安全
+**Why runner bootstrap is external**
+- IaC Runner must not restart itself inside the `/deploy` request that GitHub
+  Actions is polling.
+- GitHub Actions owns the self-update step from outside the container: update
+  the Dokploy compose checkout, rebuild the runner image, wait for health, then
+  call `/deploy`.
+- Other bootstrap services remain manual because they are first-install and
+  disaster-recovery dependencies.
 
 ---
 

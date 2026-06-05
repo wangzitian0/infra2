@@ -58,6 +58,51 @@ def test_preserve_runtime_env_keeps_explicit_new_vault_app_token() -> None:
     assert result.splitlines() == ["ENV=production", "VAULT_APP_TOKEN=hvs.new"]
 
 
+def test_config_hash_includes_compose_local_mounts_and_docker_copy_sources(
+    tmp_path, monkeypatch
+) -> None:
+    """Infra-011.8: local image/template source changes must force redeploy."""
+    from libs.deployer import Deployer
+
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    app_file = app_dir / "app.py"
+    app_file.write_text("print('v1')\n", encoding="utf-8")
+    mounted_file = tmp_path / "secrets.ctmpl"
+    mounted_file.write_text("TOKEN=v1\n", encoding="utf-8")
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text("FROM python:3.11-slim\nCOPY app /app\n", encoding="utf-8")
+    compose = tmp_path / "compose.yaml"
+    compose.write_text(
+        """
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./secrets.ctmpl:/etc/secrets.ctmpl:ro
+""",
+        encoding="utf-8",
+    )
+
+    class DummyDeployer(Deployer):
+        compose_path = str(compose)
+
+    before = DummyDeployer.compute_local_config_hash(MagicMock(), {"ENV": "staging"})
+    app_file.write_text("print('v2')\n", encoding="utf-8")
+    after_app_change = DummyDeployer.compute_local_config_hash(
+        MagicMock(), {"ENV": "staging"}
+    )
+    mounted_file.write_text("TOKEN=v2\n", encoding="utf-8")
+    after_mount_change = DummyDeployer.compute_local_config_hash(
+        MagicMock(), {"ENV": "staging"}
+    )
+
+    assert before != after_app_change
+    assert after_app_change != after_mount_change
+
+
 class TestDeployerVaultTokenPreflight:
     """Deployment sync must fail before touching runtime when Vault tokens are bad."""
 
@@ -115,7 +160,9 @@ class TestDeployerVaultTokenPreflight:
         def raise_error():
             raise RuntimeError("Vault unavailable")
 
-        monkeypatch.setattr(dummy, "verify_vault_app_token", classmethod(lambda cls: raise_error()))
+        monkeypatch.setattr(
+            dummy, "verify_vault_app_token", classmethod(lambda cls: raise_error())
+        )
 
         result = dummy.sync(MagicMock())
 
@@ -129,7 +176,9 @@ def test_minio_sync_secret_hook_repairs_root_user(monkeypatch) -> None:
     module = _load_deploy_module("platform/03.minio/deploy.py", "minio_deploy_test")
     secrets = FakeSecrets({"root_password": "existing"})
 
-    monkeypatch.setattr(module.MinioDeployer, "secrets", classmethod(lambda cls: secrets))
+    monkeypatch.setattr(
+        module.MinioDeployer, "secrets", classmethod(lambda cls: secrets)
+    )
 
     assert module.MinioDeployer.ensure_runtime_secrets() is True
 
