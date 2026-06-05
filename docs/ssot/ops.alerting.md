@@ -94,6 +94,7 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
 | L1 Bootstrap | Vault | sealed, unreachable, or token validation fails | P0 | Live via infra probe + vault audit |
 | L1 Bootstrap | IaC Runner | `/health` fails before deployment webhook calls | P1 | Planned |
 | L1 Bootstrap | Dokploy | deployment control-plane API/UI is unreachable or deployment webhooks fail; app health alerts remain app-owned | P1 | Live via infra probe |
+| Cross-cutting | Docker container health | any running container is `unhealthy`, `health: starting`, or `Restarting` outside a deployment window | P0/P1 | Live via out-of-band watchdog SSH check |
 | L2 Platform | platform Postgres | TCP readiness fails or restart loop | P0 | Live via infra probe |
 | L2 Platform | platform Redis | TCP readiness fails or restart loop | P1 | Live via infra probe |
 | L2 Platform | ClickHouse | `/ping` fails, disk pressure, or ingestion errors | P0 | Live via infra probe |
@@ -109,7 +110,7 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
 | L3 Finance Report | fr-redis | app cache health fails | P1 | Planned |
 | L3 Finance Report | fr-app backend | OTEL ERROR/FATAL log count is above zero over 5 minutes | P1 | First live instance via shared rule automation |
 | L3 Finance Report | fr-app frontend | frontend HTTP health fails | P1 | Planned |
-| Cross-cutting | Vault app tokens | missing, malformed, invalid, non-renewable, or low TTL | P0/P1 | Manual gate: `vault-audit.self-refresh` |
+| Cross-cutting | Vault app tokens and rendered env | missing, malformed, invalid, non-renewable, low TTL, or rendered `<no value>` fields | P0/P1 | Docker healthcheck + manual gate: `vault-audit.self-refresh` |
 | Cross-cutting | Backup freshness | latest off-host backup is missing, stale, empty, or missing checksum | P1 | Live contract: backup manifest verifier |
 | Cross-cutting | OTEL ingestion | expected app logs/traces absent after deployment | P1 | Manual gate: `signoz.shared.query-logs` |
 | Cross-cutting | Infra2 host reachability | public infra2 endpoints or external SSH bridge health check fail | P0 | GitHub Actions out-of-band watchdog |

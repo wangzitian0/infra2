@@ -66,7 +66,7 @@ def _assert_pinned_image(service_name: str, service: dict):
     if build:
         args = build.get("args", {}) if isinstance(build, dict) else {}
         if "1password" in service_name:
-            assert args.get("OP_CONNECT_VERSION") == "1.8.1"
+            assert args.get("OP_CONNECT_VERSION") == "1.8.2"
 
 
 def test_critical_bootstrap_services_have_health_restart_logging_and_pinned_images():

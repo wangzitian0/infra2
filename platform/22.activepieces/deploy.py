@@ -4,7 +4,7 @@ import sys
 import os
 from libs.deployer import Deployer, make_tasks
 from libs.common import with_env_suffix
-from libs.console import success, warning, info
+from libs.console import success, warning, info, error
 from libs.env import generate_password, get_secrets
 
 shared_tasks = sys.modules.get("platform.22.activepieces.shared")
@@ -24,6 +24,60 @@ class ActivepiecesDeployer(Deployer):
     service_name = "activepieces"
 
     @classmethod
+    def ensure_runtime_secrets(cls, c=None) -> bool:
+        """Ensure every Vault key referenced by secrets.ctmpl exists."""
+        e = cls.env()
+        env_name = e.get("ENV", "production")
+        project = e.get("PROJECT", "platform")
+        internal_domain = e.get("INTERNAL_DOMAIN")
+        env_domain_suffix = e.get("ENV_DOMAIN_SUFFIX", "")
+
+        pg_secrets = get_secrets(project, "postgres", env_name)
+        redis_secrets = get_secrets(project, "redis", env_name)
+        if not pg_secrets.get("root_password"):
+            warning("Postgres password not found in Vault")
+            return False
+        if not redis_secrets.get("password"):
+            warning("Redis password not found in Vault")
+            return False
+
+        activepieces_secrets = get_secrets(project, "activepieces", env_name)
+
+        encryption_key = activepieces_secrets.get("encryption_key")
+        if not encryption_key:
+            import secrets as py_secrets
+
+            encryption_key = py_secrets.token_hex(16)
+            if not activepieces_secrets.set("encryption_key", encryption_key):
+                error("Failed to store encryption key in Vault")
+                return False
+            warning("Generated new encryption key in Vault")
+        else:
+            info("Encryption key exists in Vault")
+
+        jwt_secret = activepieces_secrets.get("jwt_secret")
+        if not jwt_secret:
+            jwt_secret = generate_password(32)
+            if not activepieces_secrets.set("jwt_secret", jwt_secret):
+                error("Failed to store JWT secret in Vault")
+                return False
+            warning("Generated new JWT secret in Vault")
+        else:
+            info("JWT secret exists in Vault")
+
+        frontend_url = activepieces_secrets.get("frontend_url")
+        if not frontend_url:
+            frontend_url = f"https://automate{env_domain_suffix}.{internal_domain}"
+            if not activepieces_secrets.set("frontend_url", frontend_url):
+                error("Failed to store frontend URL in Vault")
+                return False
+            warning(f"Set frontend URL: {frontend_url}")
+        else:
+            info(f"Frontend URL exists: {frontend_url}")
+
+        return True
+
+    @classmethod
     def pre_compose(cls, c):
         """Prepare directories, check dependencies, ensure secrets exist in Vault."""
         from libs.console import fatal
@@ -34,8 +88,6 @@ class ActivepiecesDeployer(Deployer):
         e = cls.env()
         env_name = e.get("ENV", "production")
         project = e.get("PROJECT", "platform")
-        internal_domain = e.get("INTERNAL_DOMAIN")
-        env_domain_suffix = e.get("ENV_DOMAIN_SUFFIX", "")
 
         # Check Vault access
         if not os.getenv("VAULT_ROOT_TOKEN"):
@@ -79,40 +131,8 @@ class ActivepiecesDeployer(Deployer):
         else:
             success("Database created")
 
-        # Ensure Activepieces secrets exist
-        activepieces_secrets = get_secrets(project, "activepieces", env_name)
-
-        # Encryption key (32 hex characters)
-        encryption_key = activepieces_secrets.get("encryption_key")
-        if not encryption_key:
-            import secrets as py_secrets
-
-            encryption_key = py_secrets.token_hex(16)  # 32 hex chars
-            if not activepieces_secrets.set("encryption_key", encryption_key):
-                fatal("Failed to store encryption key in Vault")
-            warning("Generated new encryption key in Vault")
-        else:
-            info("Encryption key exists in Vault")
-
-        # JWT secret
-        jwt_secret = activepieces_secrets.get("jwt_secret")
-        if not jwt_secret:
-            jwt_secret = generate_password(32)
-            if not activepieces_secrets.set("jwt_secret", jwt_secret):
-                fatal("Failed to store JWT secret in Vault")
-            warning("Generated new JWT secret in Vault")
-        else:
-            info("JWT secret exists in Vault")
-
-        # Frontend URL
-        frontend_url = activepieces_secrets.get("frontend_url")
-        if not frontend_url:
-            frontend_url = f"https://automate{env_domain_suffix}.{internal_domain}"
-            if not activepieces_secrets.set("frontend_url", frontend_url):
-                fatal("Failed to store frontend URL in Vault")
-            warning(f"Set frontend URL: {frontend_url}")
-        else:
-            info(f"Frontend URL exists: {frontend_url}")
+        if not cls.ensure_runtime_secrets(c):
+            fatal("Failed to ensure Activepieces runtime secrets")
 
         # Return VAULT_ADDR for vault-init pattern
         result = cls.compose_env_base(e)

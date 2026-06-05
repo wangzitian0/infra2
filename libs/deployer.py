@@ -181,6 +181,24 @@ class Deployer:
         )
 
     @classmethod
+    def ensure_runtime_secrets(cls, c: "Context" | None = None) -> bool:
+        """Ensure all Vault secrets required by the runtime template exist."""
+        secrets_backend = cls.secrets()
+
+        if cls.secret_key:
+            val = secrets_backend.get(cls.secret_key)
+            if not val:
+                val = generate_password(24)
+                if secrets_backend.set(cls.secret_key, val):
+                    warning(f"Generated new secret in Vault: {cls.secret_key}")
+                else:
+                    error(f"Failed to store secret in Vault: {cls.secret_key}")
+                    return False
+            else:
+                info(f"Vault secret exists: {cls.secret_key}")
+        return True
+
+    @classmethod
     def _prepare_dirs(cls, c: "Context") -> bool:
         """Create data directories on VPS"""
         if missing := validate_env():
@@ -220,20 +238,9 @@ class Deployer:
             return None
 
         e = cls.env()
-        secrets_backend = cls.secrets()
 
-        # Get or generate primary secret
-        if cls.secret_key:
-            val = secrets_backend.get(cls.secret_key)
-            if not val:
-                val = generate_password(24)
-                if secrets_backend.set(cls.secret_key, val):
-                    warning(f"Generated new secret in Vault: {cls.secret_key}")
-                else:
-                    error(f"Failed to store secret in Vault: {cls.secret_key}")
-                    return None
-            else:
-                info(f"Vault secret exists: {cls.secret_key}")
+        if not cls.ensure_runtime_secrets(c):
+            return None
 
         # Return base env vars + VAULT_ADDR for vault-init pattern
         result = cls.compose_env_base(e)
@@ -508,18 +515,11 @@ class Deployer:
                 "details": f"Could not verify VAULT_APP_TOKEN: {exc}",
             }
 
-        # Get secrets backend and ensure secret exists
-        secrets_backend = cls.secrets()
-        if cls.secret_key:
-            val = secrets_backend.get(cls.secret_key)
-            if not val:
-                val = generate_password(24)
-                if not secrets_backend.set(cls.secret_key, val):
-                    return {
-                        "action": "failed",
-                        "details": f"Failed to store secret: {cls.secret_key}",
-                    }
-                warning(f"Generated new secret: {cls.secret_key}")
+        if not cls.ensure_runtime_secrets(c):
+            return {
+                "action": "failed",
+                "details": f"Failed to ensure runtime secrets for {cls.service}",
+            }
 
         # Build env vars
         env_vars_dict = cls.compose_env_base(e)

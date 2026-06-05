@@ -14,6 +14,11 @@ the P1 reliability review found four remaining hard gaps:
 - Core infra service probes existed mostly as alert catalog TODOs.
 - Vault Agent Docker health used rendered-file mtime freshness, which had
   already produced live unhealthy sidecars.
+- Vault Agent rendered files could contain `<no value>` when a Vault template
+  referenced a missing field; sidecars still looked healthy until the app
+  failed to source `/secrets/.env`.
+- IaC Runner `.sync` only ensured the base deployer secret, so custom deployer
+  runtime fields could remain missing unless someone ran manual setup.
 - Backup coverage was not code-enforced against deployer-owned `DATA_PATH`
   services.
 
@@ -22,8 +27,9 @@ the P1 reliability review found four remaining hard gaps:
 | AC | Description | Proof |
 |----|-------------|-------|
 | Infra-011.1 | GitHub Actions deployment waits for the real IaC Runner sync result, fails on failed service syncs, and runs invoke without repo path shadowing Python stdlib modules. | `libs/tests/test_iac_runner_deploy_result.py`, `.github/workflows/deploy-platform.yml` |
-| Infra-011.2 | P1 infra dependencies have code-owned probes that alert through `platform/12.alerting`. | `libs/tests/test_infra_probes.py`, `platform/12.alerting/compose.yaml` |
-| Infra-011.3 | Vault Agent Docker health checks token lookup and rendered-file presence, while mtime freshness remains an audit signal. | `libs/tests/test_vault_self_refresh_audit.py`, compose healthchecks |
+| Infra-011.2 | P1 infra dependencies and generic Docker unhealthy/starting/restarting states have code-owned probes or out-of-band checks. | `libs/tests/test_infra_probes.py`, `libs/tests/test_out_of_band_watchdog.py`, `platform/12.alerting/compose.yaml` |
+| Infra-011.3 | Vault Agent Docker health checks token lookup, rendered-file presence, and unresolved template values, while mtime freshness remains an audit signal. | `libs/tests/test_vault_self_refresh_audit.py`, compose healthchecks |
+| Infra-011.6 | IaC Runner sync ensures every runtime secret field consumed by custom service templates before deploy. | `libs/tests/test_deployer.py`, `platform/*/deploy.py` |
 | Infra-011.4 | Deployer-owned persistent data paths have backup inventory coverage, an archive/checksum runner, and manifest freshness verification. | `libs/tests/test_backup_verification.py`, `tools/backup_runner.py`, `docs/ssot/ops.backup-inventory.yaml` |
 | Infra-011.5 | Public service routing ownership is single-source: compose-owned Traefik routers must not also use Dokploy domain generation. | `libs/tests/test_domain_routing_policy.py`, `docs/ssot/platform.domain.md` |
 
@@ -33,6 +39,8 @@ the P1 reliability review found four remaining hard gaps:
 uv run python -P -m pytest \
   libs/tests/test_iac_runner_deploy_result.py \
   libs/tests/test_infra_probes.py \
+  libs/tests/test_out_of_band_watchdog.py \
+  libs/tests/test_deployer.py \
   libs/tests/test_backup_verification.py \
   libs/tests/test_vault_self_refresh_audit.py \
   libs/tests/test_domain_routing_policy.py \

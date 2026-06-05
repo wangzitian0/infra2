@@ -27,6 +27,28 @@ class MinioDeployer(Deployer):
     
     # 1Password item for root credentials
     OP_ITEM = "platform/minio/admin"
+
+    @classmethod
+    def ensure_runtime_secrets(cls, c=None) -> bool:
+        """Ensure every field consumed by secrets.ctmpl exists in Vault."""
+        vault_secrets = cls.secrets()
+        root_user = vault_secrets.get("root_user") or "admin"
+        root_password = vault_secrets.get("root_password")
+
+        if not root_password:
+            root_password = generate_password(32)
+            warning("Generated new MinIO root password")
+
+        if not vault_secrets.set("root_user", root_user):
+            error("Failed to store root_user in Vault")
+            return False
+        info("Vault: root_user stored")
+
+        if not vault_secrets.set("root_password", root_password):
+            error("Failed to store root_password in Vault")
+            return False
+        info("Vault: root_password stored")
+        return True
     
     @classmethod
     def pre_compose(cls, c):
@@ -37,27 +59,14 @@ class MinioDeployer(Deployer):
         e = cls.env()
         header(f"{cls.service} pre_compose", "Setting up root credentials")
         
-        # Get or generate root credentials
         vault_secrets = cls.secrets()
         root_user = vault_secrets.get("root_user") or "admin"
         root_password = vault_secrets.get("root_password")
         
-        if not root_password:
-            root_password = generate_password(32)
-            warning("Generated new MinIO root password")
-        
-        # Store in Vault (for vault-agent)
-        if vault_secrets.set("root_user", root_user):
-            info("Vault: root_user stored")
-        else:
-            error("Failed to store root_user in Vault")
+        if not cls.ensure_runtime_secrets(c):
             return None
-            
-        if vault_secrets.set("root_password", root_password):
-            info("Vault: root_password stored")
-        else:
-            error("Failed to store root_password in Vault")
-            return None
+        root_user = vault_secrets.get("root_user") or "admin"
+        root_password = vault_secrets.get("root_password")
         
         # Store in 1Password (for Web Console login). Non-blocking: deployment continues if fails.
         op_item = cls.OP_ITEM

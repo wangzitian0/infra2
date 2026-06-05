@@ -25,6 +25,7 @@ infra2-public-entrypoint|https://cloud.zitian.party|200,302
 DEFAULT_SSH_TARGETS = """\
 infra2-ssh|echo infra2-ssh-ok|infra2-ssh-ok
 infra2-docker|docker info >/dev/null && echo docker-ok|docker-ok
+infra2-docker-health|sh -lc 'bad="$(docker ps --filter health=unhealthy --filter health=starting --filter status=restarting --format "{{.Names}} {{.Status}}")"; if [ -z "$bad" ]; then echo docker-health-ok; else echo "$bad"; exit 1; fi'|docker-health-ok
 infra2-alert-bridge|docker exec platform-alerting python -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8080/health", timeout=3).read(); print("healthy")'|healthy
 """
 

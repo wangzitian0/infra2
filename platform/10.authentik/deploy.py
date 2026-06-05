@@ -4,7 +4,7 @@ import sys
 import os
 from libs.deployer import Deployer, make_tasks
 from libs.common import with_env_suffix
-from libs.console import success, warning, info, run_with_status
+from libs.console import success, warning, info, error, run_with_status
 from libs.env import generate_password, get_secrets
 
 shared_tasks = sys.modules.get("platform.10.authentik.shared")
@@ -22,6 +22,52 @@ class AuthentikDeployer(Deployer):
     subdomain = "sso"
     service_port = 9000
     service_name = "server"
+
+    @classmethod
+    def ensure_runtime_secrets(cls, c=None) -> bool:
+        """Ensure every Vault key referenced by secrets.ctmpl exists."""
+        e = cls.env()
+        env_name = e.get("ENV", "production")
+        project = e.get("PROJECT", "platform")
+
+        pg_secrets = get_secrets(project, "postgres", env_name)
+        redis_secrets = get_secrets(project, "redis", env_name)
+        if not pg_secrets.get("root_password"):
+            warning("Postgres password not found in Vault")
+            return False
+        if not redis_secrets.get("password"):
+            warning("Redis password not found in Vault")
+            return False
+
+        authentik_secrets = get_secrets(project, "authentik", env_name)
+
+        secret_key = authentik_secrets.get("secret_key")
+        if not secret_key:
+            secret_key = generate_password(50)
+            if not authentik_secrets.set("secret_key", secret_key):
+                error("Failed to store Authentik secret key in Vault")
+                return False
+            warning("Generated new Authentik secret key in Vault")
+        else:
+            info("Authentik secret key exists in Vault")
+
+        bootstrap_password = authentik_secrets.get("bootstrap_password")
+        if not bootstrap_password:
+            bootstrap_password = generate_password(24)
+            if not authentik_secrets.set("bootstrap_password", bootstrap_password):
+                error("Failed to store Authentik bootstrap password in Vault")
+                return False
+            warning("Generated new bootstrap admin password")
+
+        bootstrap_email = authentik_secrets.get("bootstrap_email")
+        if not bootstrap_email:
+            bootstrap_email = e.get("ADMIN_EMAIL", "admin@localhost")
+            if not authentik_secrets.set("bootstrap_email", bootstrap_email):
+                error("Failed to store Authentik bootstrap email in Vault")
+                return False
+            warning(f"Set bootstrap admin email: {bootstrap_email}")
+
+        return True
 
     @classmethod
     def pre_compose(cls, c):
@@ -86,38 +132,8 @@ class AuthentikDeployer(Deployer):
         else:
             success("Database created")
 
-        # Ensure Authentik secrets exist
-        authentik_secrets = get_secrets(project, "authentik", env_name)
-
-        # Secret key
-        secret_key = authentik_secrets.get("secret_key")
-        if not secret_key:
-            secret_key = generate_password(50)
-            if not authentik_secrets.set("secret_key", secret_key):
-                fatal("Failed to store Authentik secret key in Vault")
-            warning("Generated new Authentik secret key in Vault")
-        else:
-            info("Authentik secret key exists in Vault")
-
-        # Bootstrap admin credentials (generate independently if missing)
-        bootstrap_password = authentik_secrets.get("bootstrap_password")
-        bootstrap_email = authentik_secrets.get("bootstrap_email")
-
-        if not bootstrap_password:
-            bootstrap_password = generate_password(24)
-            if not authentik_secrets.set("bootstrap_password", bootstrap_password):
-                fatal("Failed to store Authentik bootstrap password in Vault")
-            warning("Generated new bootstrap admin password")
-            info("Bootstrap password stored in Vault (key: bootstrap_password)")
-
-        if not bootstrap_email:
-            bootstrap_email = e.get("ADMIN_EMAIL", "admin@localhost")
-            if not authentik_secrets.set("bootstrap_email", bootstrap_email):
-                fatal("Failed to store Authentik bootstrap email in Vault")
-            warning(f"Set bootstrap admin email: {bootstrap_email}")
-
-        if bootstrap_password and bootstrap_email:
-            info(f"Bootstrap credentials ready: {bootstrap_email}")
+        if not cls.ensure_runtime_secrets(c):
+            fatal("Failed to ensure Authentik runtime secrets")
 
         # Return VAULT_ADDR for vault-init pattern
         result = cls.compose_env_base(e)

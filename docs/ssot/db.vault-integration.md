@@ -147,6 +147,8 @@ Vault-agent compose services must:
 - Remove stale `/vault/secrets/.env` before starting `vault agent`.
 - Fail healthcheck when `vault token lookup` fails for `VAULT_APP_TOKEN`.
 - Fail healthcheck when `/vault/secrets/.env` is missing or empty.
+- Fail healthcheck when `/vault/secrets/.env` contains Vault template fallback
+  text such as `<no value>`.
 - Not use rendered-file mtime freshness in Docker healthchecks.
 
 This prevents a previously rendered secrets file from masking an expired token.
@@ -173,8 +175,8 @@ The audit must check:
 - Vault token lookup reports `valid=true`, `renewable=true`, and TTL above the
   configured floor.
 - `/vault/secrets/.env` exists in the vault-agent container, is readable,
-  non-empty, and fresher than `max_rendered_secret_age_seconds` as an audit
-  signal.
+  non-empty, contains no unresolved template values such as `<no value>`, and
+  is fresher than `max_rendered_secret_age_seconds` as an audit signal.
 - vault-agent logs do not contain known token refresh or template render errors.
 - vault-agent and application containers are running with acceptable health; app
   containers must mount `/secrets/.env`.
@@ -186,9 +188,9 @@ printing or serializing results.
 
 `libs/tests/test_vault_self_refresh_audit.py` is the regression suite for the
 self-refresh audit. It covers inventory/static drift, token classifier outcomes,
-rendered env freshness, log error detection, container checks, report schema, and
-redaction. New vault-agent services must extend the inventory and keep these
-tests passing.
+rendered env freshness, unresolved template values, log error detection,
+container checks, report schema, and redaction. New vault-agent services must
+extend the inventory and keep these tests passing.
 
 ### SOP: Token Expired
 
