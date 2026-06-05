@@ -243,6 +243,33 @@ def test_run_invoke_task_keeps_existing_vault_root_token(monkeypatch, tmp_path) 
     assert captured["kwargs"]["env"]["VAULT_ROOT_TOKEN"] == "existing-root"
 
 
+def test_run_invoke_task_uses_scoped_vault_app_token(monkeypatch, tmp_path) -> None:
+    """#191: IaC Runner uses its scoped Vault app token for sync reads."""
+    monkeypatch.delenv("VAULT_ROOT_TOKEN", raising=False)
+    monkeypatch.setenv("VAULT_APP_TOKEN", "scoped-app-token")
+    sync_runner = _load_module(
+        "sync_runner_app_token_under_test",
+        IAC_RUNNER / "sync_runner.py",
+        monkeypatch,
+    )
+    captured = {}
+
+    def fake_run(args, **kwargs):
+        captured.setdefault("calls", []).append(args)
+        captured["kwargs"] = kwargs
+        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(sync_runner.subprocess, "run", fake_run)
+
+    result = sync_runner.run_invoke_task("postgres.sync", tmp_path, "staging")
+
+    assert result["success"] is True
+    assert captured["calls"] == [
+        [sys.executable, "-P", "-c", sync_runner.INVOKE_BOOTSTRAP, "postgres.sync"]
+    ]
+    assert captured["kwargs"]["env"]["VAULT_ROOT_TOKEN"] == "scoped-app-token"
+
+
 def test_run_invoke_task_resolves_vault_root_token_from_1password(
     monkeypatch, tmp_path
 ) -> None:
