@@ -137,6 +137,19 @@ flowchart TB
 4. 对每个服务执行 `invoke {service}.sync`
 5. `sync` 任务计算配置哈希，仅在变更时重新部署
 
+IaC Runner owns the invoke child-process environment for GitOps deploys. For
+IaC Runner GitOps deploys specifically, non-production deploys must pass
+`DEPLOY_ENV=<env>`, `ENV_SUFFIX=-<env>`, and `ENV_DOMAIN_SUFFIX=-<env>` into
+every `invoke *.sync` subprocess so deployer-owned data paths, container names,
+and public domains stay isolated. This is IaC Runner policy even though the
+broader deployer contract also permits explicit `DATA_PATH` isolation in
+non-GitOps contexts. Production deploys use empty suffixes.
+
+When `/deploy` is called with `wait=true`, failed responses must include a
+bounded `failure_summary` with `service`, `task`, `error_kind`, `summary`, and
+`next_action`. Full child stdout/stderr is tailed to keep GitHub Actions logs
+diagnostic instead of noisy.
+
 ### 3.2 版本驱动 GitOps 部署（GitHub Actions）
 
 **语义化版本**: `v{major}.{minor}.{patch}`

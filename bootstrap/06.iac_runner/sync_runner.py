@@ -6,6 +6,7 @@ Sync Runner - executes invoke sync tasks for changed services.
 import fcntl
 import logging
 import os
+import re
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -23,6 +24,7 @@ GIT_REPO_URL = os.environ["GIT_REPO_URL"]
 GIT_BRANCH = os.environ.get("GIT_BRANCH", "main")
 DEPLOY_TIMEOUT = int(os.environ.get("DEPLOY_TIMEOUT", "600"))
 DEFAULT_VAULT_ROOT_TOKEN_OP_REF = "op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token"
+MAX_RESULT_OUTPUT_CHARS = int(os.environ.get("MAX_RESULT_OUTPUT_CHARS", "4000"))
 
 REPO_NAME = Path(urlparse(GIT_REPO_URL).path).stem
 
@@ -71,6 +73,77 @@ ALL_SERVICES = [
 _VAULT_ROOT_TOKEN_CACHE: str | None = None
 
 
+def _tail_text(value: str, limit: int = MAX_RESULT_OUTPUT_CHARS) -> str:
+    if len(value) <= limit:
+        return value
+    return f"...<truncated {len(value) - limit} chars>...\n{value[-limit:]}"
+
+
+def _first_matching_line(text: str, patterns: tuple[str, ...]) -> str:
+    for line in text.splitlines():
+        if any(pattern in line for pattern in patterns):
+            return line.strip()
+    return text.strip().splitlines()[-1].strip() if text.strip() else ""
+
+
+def diagnose_failure(stderr: str, stdout: str = "") -> dict[str, str]:
+    """Classify a failed invoke task into a one-look diagnostic."""
+    combined = f"{stderr}\n{stdout}"
+    if "Non-production requires DATA_PATH or ENV_SUFFIX" in combined:
+        return {
+            "error_kind": "missing_environment_isolation",
+            "summary": "Child invoke task is missing DATA_PATH or ENV_SUFFIX for a non-production deploy.",
+            "next_action": "Check IaC Runner child env: DEPLOY_ENV, ENV_SUFFIX, and ENV_DOMAIN_SUFFIX.",
+        }
+
+    secret_match = re.search(r"Secret not found:\s*([^\n]+)", combined)
+    if secret_match:
+        secret_path = secret_match.group(1).strip()
+        return {
+            "error_kind": "vault_secret_missing",
+            "summary": f"Vault secret path is missing: {secret_path}",
+            "next_action": f"Create or repair secret/data/{secret_path} before rerunning deploy.",
+        }
+
+    if "VAULT_ROOT_TOKEN not set" in combined:
+        return {
+            "error_kind": "vault_token_missing",
+            "summary": "Child invoke task could not find VAULT_ROOT_TOKEN.",
+            "next_action": "Check IaC Runner VAULT_APP_TOKEN rendering and token handoff to child tasks.",
+        }
+
+    if "permission denied" in combined.lower() and "vault" in combined.lower():
+        return {
+            "error_kind": "vault_permission_denied",
+            "summary": "Vault rejected the token for the requested path.",
+            "next_action": "Check the IaC Runner Vault policy and target env secret path.",
+        }
+
+    if "Timeout after" in combined:
+        return {
+            "error_kind": "invoke_timeout",
+            "summary": _first_matching_line(combined, ("Timeout after",)),
+            "next_action": "Inspect the service deploy logs and Dokploy deployment status for the timed-out task.",
+        }
+
+    summary = _first_matching_line(
+        combined,
+        (
+            "Traceback",
+            "Error:",
+            "ERROR:",
+            "ValueError:",
+            "RuntimeError:",
+            "Exception:",
+        ),
+    )
+    return {
+        "error_kind": "unknown_invoke_failure",
+        "summary": summary or "Invoke task failed without a recognizable diagnostic.",
+        "next_action": "Inspect this service stderr tail and the corresponding container/Dokploy logs.",
+    }
+
+
 @dataclass
 class ServiceSyncResult:
     service: str
@@ -81,7 +154,12 @@ class ServiceSyncResult:
     stderr: str = ""
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        data = asdict(self)
+        data["stdout"] = _tail_text(self.stdout)
+        data["stderr"] = _tail_text(self.stderr)
+        if not self.success and not self.skipped:
+            data["diagnostic"] = diagnose_failure(self.stderr, self.stdout)
+        return data
 
 
 @dataclass
@@ -110,6 +188,15 @@ class SyncResult:
         return self.repo_updated and self.failed == 0 and not self.error
 
     def to_dict(self) -> dict:
+        failure_summary = [
+            {
+                "service": result.service,
+                "task": result.task,
+                **diagnose_failure(result.stderr, result.stdout),
+            }
+            for result in self.results
+            if not result.success
+        ]
         return {
             "success": self.success,
             "env": self.env,
@@ -119,6 +206,7 @@ class SyncResult:
             "failed": self.failed,
             "skipped": self.skipped,
             "error": self.error,
+            "failure_summary": failure_summary,
             "results": [result.to_dict() for result in self.results],
         }
 
@@ -235,6 +323,46 @@ def resolve_vault_root_token(env: dict[str, str]) -> str | None:
     return token
 
 
+def deploy_env_overrides(deploy_env: str) -> dict[str, str]:
+    """Build deterministic environment isolation variables for invoke tasks."""
+    if not isinstance(deploy_env, str):
+        raise ValueError("deploy env must be a string")
+    env_name = deploy_env.strip().lower()
+    if not env_name:
+        raise ValueError("deploy env must not be empty")
+    if "-" in env_name or "/" in env_name:
+        raise ValueError("deploy env name must not include '-' or '/' (use '_')")
+    if env_name in ("prod", "production"):
+        env_name = "production"
+
+    env_dns = env_name.replace("_", "-")
+    suffix = "" if env_name == "production" else f"-{env_dns}"
+    return {
+        "DEPLOY_ENV": env_name,
+        "ENV_SUFFIX": suffix,
+        "ENV_DOMAIN_SUFFIX": suffix,
+    }
+
+
+def safe_invoke_env_summary(env: dict[str, str]) -> str:
+    """Summarize child env without logging secret values."""
+    keys = [
+        "DEPLOY_ENV",
+        "ENV_SUFFIX",
+        "ENV_DOMAIN_SUFFIX",
+        "VAULT_ROOT_TOKEN",
+        "VAULT_APP_TOKEN",
+        "OP_SERVICE_ACCOUNT_TOKEN",
+    ]
+    parts = []
+    for key in keys:
+        value = env.get(key)
+        if key.endswith("TOKEN"):
+            value = "set" if value else "unset"
+        parts.append(f"{key}={value if value is not None else 'unset'}")
+    return " ".join(parts)
+
+
 def run_invoke_task(
     task_name: str, repo_path: Path, deploy_env: str = "staging"
 ) -> dict:
@@ -245,10 +373,11 @@ def run_invoke_task(
 
     env_vars = {
         **os.environ,
-        "DEPLOY_ENV": deploy_env,
+        **deploy_env_overrides(deploy_env),
     }
     if vault_root_token := resolve_vault_root_token(env_vars):
         env_vars["VAULT_ROOT_TOKEN"] = vault_root_token
+    logger.info("Invoke child env: %s", safe_invoke_env_summary(env_vars))
 
     try:
         result = subprocess.run(
@@ -331,7 +460,18 @@ def sync_services(
                 logger.info(f"✅ {service}: sync completed")
             else:
                 logger.error(f"❌ {service}: sync failed")
-                logger.error(service_result.stderr)
+                diagnostic = diagnose_failure(
+                    service_result.stderr, service_result.stdout
+                )
+                logger.error(
+                    "Diagnostic: service=%s task=%s kind=%s summary=%s next=%s",
+                    service,
+                    task_name,
+                    diagnostic["error_kind"],
+                    diagnostic["summary"],
+                    diagnostic["next_action"],
+                )
+                logger.error(_tail_text(service_result.stderr))
 
         sync_result = SyncResult(
             env=deploy_env,
@@ -345,6 +485,15 @@ def sync_services(
             f"{sync_result.failed} failed, "
             f"{sync_result.skipped} skipped"
         )
+        for failure in sync_result.to_dict()["failure_summary"]:
+            logger.error(
+                "Failure summary: service=%s task=%s kind=%s summary=%s next=%s",
+                failure["service"],
+                failure["task"],
+                failure["error_kind"],
+                failure["summary"],
+                failure["next_action"],
+            )
         return sync_result
 
 

@@ -59,6 +59,66 @@ def test_sync_services_returns_structured_failure_result(monkeypatch) -> None:
     assert any(item["stderr"] == "boom" for item in payload["results"])
 
 
+def test_sync_result_includes_actionable_failure_summary(monkeypatch) -> None:
+    """#161: failed deploy responses expose one-look failure diagnostics."""
+    sync_runner = _load_module(
+        "sync_runner_summary_under_test", IAC_RUNNER / "sync_runner.py", monkeypatch
+    )
+    result = sync_runner.SyncResult(
+        env="staging",
+        ref="main",
+        requested_services=["platform/activepieces"],
+        results=[
+            sync_runner.ServiceSyncResult(
+                service="platform/activepieces",
+                task="activepieces.sync",
+                success=False,
+                stderr=(
+                    "libs.env.VaultSecrets.VaultSecretNotFoundError:\n"
+                    "❌ Secret not found: platform/staging/activepieces\n"
+                ),
+            )
+        ],
+    )
+
+    payload = result.to_dict()
+
+    assert payload["failure_summary"] == [
+        {
+            "service": "platform/activepieces",
+            "task": "activepieces.sync",
+            "error_kind": "vault_secret_missing",
+            "summary": "Vault secret path is missing: platform/staging/activepieces",
+            "next_action": (
+                "Create or repair secret/data/platform/staging/activepieces "
+                "before rerunning deploy."
+            ),
+        }
+    ]
+    assert payload["results"][0]["diagnostic"]["error_kind"] == "vault_secret_missing"
+
+
+def test_sync_result_truncates_large_service_output(monkeypatch) -> None:
+    """#161: deploy responses keep stderr useful without flooding Actions logs."""
+    sync_runner = _load_module(
+        "sync_runner_truncate_under_test", IAC_RUNNER / "sync_runner.py", monkeypatch
+    )
+    result = sync_runner.ServiceSyncResult(
+        service="platform/postgres",
+        task="postgres.sync",
+        success=False,
+        stdout="x" * (sync_runner.MAX_RESULT_OUTPUT_CHARS + 10),
+        stderr="y" * (sync_runner.MAX_RESULT_OUTPUT_CHARS + 20),
+    )
+
+    payload = result.to_dict()
+
+    assert payload["stdout"].startswith("...<truncated 10 chars>...")
+    assert payload["stderr"].startswith("...<truncated 20 chars>...")
+    assert len(payload["stdout"]) < sync_runner.MAX_RESULT_OUTPUT_CHARS + 80
+    assert len(payload["stderr"]) < sync_runner.MAX_RESULT_OUTPUT_CHARS + 80
+
+
 def test_deploy_wait_returns_500_when_sync_fails(monkeypatch) -> None:
     """#182: /deploy wait=true exposes failed sync to GitHub Actions."""
     sync_runner = _load_module("sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch)
@@ -215,6 +275,101 @@ def test_run_invoke_task_preloads_stdlib_platform_before_repo_path(
     assert captured["kwargs"]["cwd"] == tmp_path
     assert captured["kwargs"]["env"]["DEPLOY_ENV"] == "staging"
     assert "PYTHONPATH" not in captured["kwargs"]["env"]
+
+
+def test_run_invoke_task_materializes_staging_isolation_env(
+    monkeypatch, tmp_path
+) -> None:
+    """#161: IaC Runner child tasks receive staging isolation variables."""
+    sync_runner = _load_module(
+        "sync_runner_staging_env_under_test",
+        IAC_RUNNER / "sync_runner.py",
+        monkeypatch,
+    )
+    captured = {}
+
+    def fake_run(args, **kwargs):
+        captured["kwargs"] = kwargs
+        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(sync_runner.subprocess, "run", fake_run)
+
+    result = sync_runner.run_invoke_task("postgres.sync", tmp_path, "staging")
+
+    assert result["success"] is True
+    invoke_env = captured["kwargs"]["env"]
+    assert invoke_env["DEPLOY_ENV"] == "staging"
+    assert invoke_env["ENV_SUFFIX"] == "-staging"
+    assert invoke_env["ENV_DOMAIN_SUFFIX"] == "-staging"
+
+
+def test_run_invoke_task_logs_safe_child_env(monkeypatch, tmp_path) -> None:
+    """#161: child env diagnostics expose presence, never token values."""
+    monkeypatch.setenv("VAULT_APP_TOKEN", "scoped-app-token")
+    sync_runner = _load_module(
+        "sync_runner_safe_env_under_test",
+        IAC_RUNNER / "sync_runner.py",
+        monkeypatch,
+    )
+    captured = {}
+
+    def fake_run(args, **kwargs):
+        captured["env"] = kwargs["env"]
+        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(sync_runner.subprocess, "run", fake_run)
+
+    result = sync_runner.run_invoke_task("postgres.sync", tmp_path, "staging")
+
+    assert result["success"] is True
+    summary = sync_runner.safe_invoke_env_summary(captured["env"])
+    assert "DEPLOY_ENV=staging" in summary
+    assert "ENV_SUFFIX=-staging" in summary
+    assert "VAULT_APP_TOKEN=set" in summary
+    assert "VAULT_ROOT_TOKEN=set" in summary
+    assert "scoped-app-token" not in summary
+
+
+def test_run_invoke_task_materializes_production_without_suffix(
+    monkeypatch, tmp_path
+) -> None:
+    """#161: production deploys must not get staging-style suffixes."""
+    sync_runner = _load_module(
+        "sync_runner_production_env_under_test",
+        IAC_RUNNER / "sync_runner.py",
+        monkeypatch,
+    )
+    captured = {}
+
+    def fake_run(args, **kwargs):
+        captured["kwargs"] = kwargs
+        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(sync_runner.subprocess, "run", fake_run)
+
+    result = sync_runner.run_invoke_task("postgres.sync", tmp_path, "production")
+
+    assert result["success"] is True
+    invoke_env = captured["kwargs"]["env"]
+    assert invoke_env["DEPLOY_ENV"] == "production"
+    assert invoke_env["ENV_SUFFIX"] == ""
+    assert invoke_env["ENV_DOMAIN_SUFFIX"] == ""
+
+
+def test_deploy_env_overrides_rejects_empty_env(monkeypatch) -> None:
+    """#161: empty env must not silently become production."""
+    sync_runner = _load_module(
+        "sync_runner_empty_env_under_test",
+        IAC_RUNNER / "sync_runner.py",
+        monkeypatch,
+    )
+
+    try:
+        sync_runner.deploy_env_overrides("  ")
+    except ValueError as exc:
+        assert str(exc) == "deploy env must not be empty"
+    else:
+        raise AssertionError("empty deploy env should fail fast")
 
 
 def test_run_invoke_task_keeps_existing_vault_root_token(monkeypatch, tmp_path) -> None:
