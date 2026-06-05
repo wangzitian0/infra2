@@ -84,7 +84,9 @@ def test_alertmanager_payload_is_rendered_as_feishu_text() -> None:
     assert feishu_payload == {"msg_type": "text", "content": {"text": text}}
 
 
-def test_signoz_channel_payload_targets_internal_bridge_with_optional_basic_auth() -> None:
+def test_signoz_channel_payload_targets_internal_bridge_with_optional_basic_auth() -> (
+    None
+):
     """Infra-007 alerting: SigNoz channel points to bridge, not the Feishu secret."""
     payload = build_signoz_channel_payload(
         channel_name="infra2-feishu-alerts-production",
@@ -133,9 +135,7 @@ def test_signoz_api_response_helpers_find_channel_and_rule_ids() -> None:
     """Infra-007 alerting: SigNoz API parsing tolerates common envelopes."""
     channels_response = {
         "status": "success",
-        "data": {
-            "channels": [{"name": "infra2-feishu-alerts-production", "id": "c1"}]
-        },
+        "data": {"channels": [{"name": "infra2-feishu-alerts-production", "id": "c1"}]},
     }
     rules_response = {
         "data": {"rules": [{"alert": "ExampleBackendErrorLogs", "id": "r1"}]}
@@ -218,6 +218,9 @@ def test_alerting_platform_service_contract_files_exist() -> None:
     compose = (base / "compose.yaml").read_text(encoding="utf-8")
     assert "platform-alerting-vault-agent${ENV_SUFFIX}" in compose
     assert "platform-alerting${ENV_SUFFIX}" in compose
+    assert "while [ ! -s /secrets/.env ]" in compose
+    assert "ALERTING_SECRETS_WAIT_SECONDS:-300" in compose
+    assert "condition: service_healthy" not in compose
     assert "open-apis/bot/v2/hook" not in compose
     assert "secrets:/secrets:ro" in compose
 
