@@ -35,6 +35,20 @@ SigNoz Alertmanager webhook
   -> Feishu OpenAPI /open-apis/im/v1/messages
 ```
 
+Whole-host and alerting-stack failure detection is out-of-band because the
+infra2 host can take SigNoz and `platform/12.alerting` down with it:
+
+```text
+GitHub Actions schedule (external to infra2, every 30 minutes)
+  -> public infra2 endpoint checks
+  -> SSH bridge container health check
+  -> Feishu/Lark webhook directly
+```
+
+This path is intentionally limited to host reachability and alerting bridge
+availability. All service-level alerts continue to use the in-band path through
+SigNoz and `platform/12.alerting`.
+
 ---
 
 ## 2. 告警分级 (Severity)
@@ -47,7 +61,7 @@ SigNoz Alertmanager webhook
 
 ## 3. Infra2 Alert Coverage Catalog
 
-All infra2 alert traffic must follow this path:
+All in-band infra2 alert traffic must follow this path:
 
 ```text
 component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Feishu/Lark
@@ -65,7 +79,7 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
 | L2 Platform | MinIO | `mc ready local` fails or S3 endpoint is unavailable | P1 | Planned |
 | L2 Platform | Authentik | `ak healthcheck` fails | P0 | Planned |
 | L2 Platform | SigNoz | query-service or OTEL collector health fails | P0 | Planned |
-| L2 Platform | Alert Bridge | `/health` fails or Feishu delivery errors | P0 | Planned |
+| L2 Platform | Alert Bridge | `/health` fails or Feishu delivery errors | P0 | Planned; out-of-band bridge container health watchdog is defined |
 | L2 Platform | Portal | Homer frontend unavailable | P2 | Planned |
 | L2 Platform | Activepieces | `/api/v1/flags` unavailable | P1 | Planned |
 | L2 Platform | Prefect | server health port missing or worker stopped | P1 | Planned |
@@ -76,6 +90,7 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
 | L3 Finance Report | fr-app frontend | frontend HTTP health fails | P1 | Planned |
 | Cross-cutting | Vault app tokens | missing, malformed, invalid, non-renewable, or low TTL | P0/P1 | Manual gate: `vault-audit.self-refresh` |
 | Cross-cutting | OTEL ingestion | expected app logs/traces absent after deployment | P1 | Manual gate: `signoz.shared.query-logs` |
+| Cross-cutting | Infra2 host reachability | public infra2 endpoints or external SSH bridge health check fail | P0 | GitHub Actions out-of-band watchdog |
 
 ---
 
@@ -168,6 +183,30 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
    uv run python -m invoke alerting.shared.test-feishu --message="Finance report alerting path live"
    ```
 
+### SOP-005: Out-of-band infra2 watchdog
+
+The watchdog lives in GitHub Actions so it remains outside the infra2 host. It
+runs every 30 minutes and alerts Feishu directly instead of routing through the
+bridge it is meant to verify.
+
+Required GitHub secrets:
+
+- `INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL`
+- `INFRA2_WATCHDOG_SSH_HOST`
+- `INFRA2_WATCHDOG_SSH_USER`
+- `INFRA2_WATCHDOG_SSH_PRIVATE_KEY`
+
+Optional GitHub variables:
+
+- `INFRA2_WATCHDOG_HTTP_TARGETS`: newline-separated `name|url|status_csv`
+- `INFRA2_WATCHDOG_SSH_TARGETS`: newline-separated `name|command|expected_text`
+- `INFRA2_WATCHDOG_SSH_PORT`: defaults to `22`
+
+Defaults check `https://iac.zitian.party/health`, `https://cloud.zitian.party`,
+and the `platform-alerting` container health via SSH. Service-level checks such
+as MinIO, Postgres, Redis, and application dependency probes remain in-band
+alerts owned by the bridge/SigNoz path.
+
 ---
 
 ## 6. 验证与测试 (The Proof)
@@ -176,6 +215,7 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
 |----------|-----------------------|--------|
 | **Feishu payload contract** | `libs/tests/test_alerting.py` | ✅ Implemented |
 | **Reusable SigNoz log error rule payload** | `libs/tests/test_alerting.py` | ✅ Implemented |
+| **Out-of-band host and bridge watchdog contract** | `libs/tests/test_out_of_band_watchdog.py` | ✅ Implemented |
 | **告警通道连通性** | `uv run invoke alerting.test-feishu` | Manual live gate |
 
 ---

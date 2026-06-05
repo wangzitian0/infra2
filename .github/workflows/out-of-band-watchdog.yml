@@ -1,0 +1,55 @@
+name: Infra2 Out-of-Band Watchdog
+
+"on":
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run checks without sending Feishu notifications"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: infra2-out-of-band-watchdog
+  cancel-in-progress: false
+
+jobs:
+  watchdog:
+    name: Check infra2 host and alert bridge
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
+      INFRA2_WATCHDOG_HTTP_TARGETS: ${{ vars.INFRA2_WATCHDOG_HTTP_TARGETS }}
+      INFRA2_WATCHDOG_SSH_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
+      INFRA2_WATCHDOG_SSH_USER: ${{ secrets.INFRA2_WATCHDOG_SSH_USER }}
+      INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
+      INFRA2_WATCHDOG_SSH_PORT: ${{ vars.INFRA2_WATCHDOG_SSH_PORT }}
+      INFRA2_WATCHDOG_SSH_TARGETS: ${{ vars.INFRA2_WATCHDOG_SSH_TARGETS }}
+      WATCHDOG_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Configure SSH key
+        if: env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY != ''
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_watchdog
+          chmod 600 ~/.ssh/infra2_watchdog
+          echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_watchdog" >> "$GITHUB_ENV"
+
+      - name: Run watchdog
+        run: python tools/out_of_band_watchdog.py
