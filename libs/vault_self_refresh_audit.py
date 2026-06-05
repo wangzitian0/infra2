@@ -211,6 +211,15 @@ def classify_rendered_env(
             f"{service.rendered_secret_path} is empty",
             file_state,
         )
+    if file_state.get("has_no_value"):
+        return _result(
+            service,
+            "rendered-env-template-values",
+            "fail",
+            "P0",
+            f"{service.rendered_secret_path} contains unresolved Vault template values",
+            file_state,
+        )
     observed_now = int(now if now is not None else time.time())
     mtime = int(file_state.get("mtime", 0))
     age = max(0, observed_now - mtime)
@@ -563,8 +572,10 @@ def _remote_secret_file_state(host: str, vault_agent_container: str) -> dict[str
         "else "
         "size=$(stat -c %s /vault/secrets/.env) && "
         "mtime=$(stat -c %Y /vault/secrets/.env) && "
-        'printf \'{"exists":true,"readable":true,"size":%s,"mtime":%s}\' '
-        '"$size" "$mtime"; '
+        "if grep -q '<no value>' /vault/secrets/.env; then has_no_value=true; "
+        "else has_no_value=false; fi && "
+        'printf \'{"exists":true,"readable":true,"size":%s,"mtime":%s,"has_no_value":%s}\' '
+        '"$size" "$mtime" "$has_no_value"; '
         "fi"
     )
     command = (

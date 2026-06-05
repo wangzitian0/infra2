@@ -10,6 +10,7 @@ import hmac
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 from flask import Flask, request, jsonify
 
@@ -22,6 +23,11 @@ WORKSPACE = Path("/workspace")
 GIT_REPO_URL = os.environ.get("GIT_REPO_URL")
 GIT_BRANCH = os.environ.get("GIT_BRANCH", "main")
 SECRETS_FILE = Path("/secrets/.env")
+RECENT_DEPLOY_TTL_SECONDS = int(os.environ.get("RECENT_DEPLOY_TTL_SECONDS", "600"))
+
+_deploy_state_lock = threading.Lock()
+_in_flight_deploys: set[tuple[str, str]] = set()
+_recent_deploys: dict[tuple[str, str], tuple[float, dict]] = {}
 
 if not GIT_REPO_URL:
     raise RuntimeError("GIT_REPO_URL environment variable must be set")
@@ -99,6 +105,21 @@ def run_sync(services: set[str]):
     thread = threading.Thread(target=sync_services, args=(services,))
     thread.daemon = True
     thread.start()
+
+
+def _deployment_key(env: str, ref: str) -> tuple[str, str]:
+    return (env, ref)
+
+
+def _recent_success(key: tuple[str, str]) -> dict | None:
+    item = _recent_deploys.get(key)
+    if not item:
+        return None
+    completed_at, response = item
+    if time.monotonic() - completed_at > RECENT_DEPLOY_TTL_SECONDS:
+        _recent_deploys.pop(key, None)
+        return None
+    return response
 
 
 @app.route("/health", methods=["GET"])
@@ -203,17 +224,41 @@ def version_deploy():
     from sync_runner import sync_services_by_version
 
     if wait:
-        result = sync_services_by_version(env, ref, triggered_by)
+        key = _deployment_key(env, ref)
+        with _deploy_state_lock:
+            recent = _recent_success(key)
+            if recent:
+                return jsonify({**recent, "cached": True}), 200
+            if key in _in_flight_deploys:
+                return jsonify(
+                    {
+                        "status": "in_progress",
+                        "env": env,
+                        "ref": ref,
+                        "triggered_by": triggered_by,
+                        "duplicate": True,
+                    }
+                ), 202
+            _in_flight_deploys.add(key)
+
+        try:
+            result = sync_services_by_version(env, ref, triggered_by)
+        finally:
+            with _deploy_state_lock:
+                _in_flight_deploys.discard(key)
+
+        response = {
+            "status": "completed" if result.success else "failed",
+            "env": env,
+            "ref": ref,
+            "triggered_by": triggered_by,
+            "result": result.to_dict(),
+        }
+        with _deploy_state_lock:
+            if result.success:
+                _recent_deploys[key] = (time.monotonic(), response)
         status_code = 200 if result.success else 500
-        return jsonify(
-            {
-                "status": "completed" if result.success else "failed",
-                "env": env,
-                "ref": ref,
-                "triggered_by": triggered_by,
-                "result": result.to_dict(),
-            }
-        ), status_code
+        return jsonify(response), status_code
 
     thread = threading.Thread(
         target=sync_services_by_version, args=(env, ref, triggered_by)

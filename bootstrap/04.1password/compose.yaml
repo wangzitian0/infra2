@@ -5,8 +5,8 @@ services:
       dockerfile: Dockerfile
       target: op-connect-api
       args:
-        OP_CONNECT_VERSION: "1.8.1"
-    image: bootstrap-1password-connect-api:1.8.1-healthcheck
+        OP_CONNECT_VERSION: "1.8.2"
+    image: bootstrap-1password-connect-api:1.8.2-healthcheck
     container_name: op-connect-api
     restart: always
     volumes:
@@ -42,8 +42,8 @@ services:
       dockerfile: Dockerfile
       target: op-connect-sync
       args:
-        OP_CONNECT_VERSION: "1.8.1"
-    image: bootstrap-1password-connect-sync:1.8.1-healthcheck
+        OP_CONNECT_VERSION: "1.8.2"
+    image: bootstrap-1password-connect-sync:1.8.2-healthcheck
     container_name: op-connect-sync
     restart: always
     depends_on:

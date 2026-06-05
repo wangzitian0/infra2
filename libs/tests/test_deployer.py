@@ -1,6 +1,34 @@
 """Unit tests for deployer safety checks."""
 
 from unittest.mock import MagicMock
+import importlib.util
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+class FakeSecrets:
+    def __init__(self, values=None):
+        self.values = dict(values or {})
+        self.set_calls = []
+
+    def get(self, key):
+        return self.values.get(key)
+
+    def set(self, key, value):
+        self.values[key] = value
+        self.set_calls.append((key, value))
+        return True
+
+
+def _load_deploy_module(relative_path: str, module_name: str):
+    path = ROOT / relative_path
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_preserve_runtime_env_keeps_existing_vault_app_token() -> None:
@@ -94,3 +122,90 @@ class TestDeployerVaultTokenPreflight:
         assert result["action"] == "failed"
         assert "Could not verify VAULT_APP_TOKEN" in result["details"]
         assert "Vault unavailable" in result["details"]
+
+
+def test_minio_sync_secret_hook_repairs_root_user(monkeypatch) -> None:
+    """Infra-011: sync must ensure all MinIO template fields, not only password."""
+    module = _load_deploy_module("platform/03.minio/deploy.py", "minio_deploy_test")
+    secrets = FakeSecrets({"root_password": "existing"})
+
+    monkeypatch.setattr(module.MinioDeployer, "secrets", classmethod(lambda cls: secrets))
+
+    assert module.MinioDeployer.ensure_runtime_secrets() is True
+
+    assert secrets.values["root_user"] == "admin"
+    assert secrets.values["root_password"] == "existing"
+
+
+def test_activepieces_sync_secret_hook_repairs_all_runtime_fields(monkeypatch) -> None:
+    """Infra-011: sync must ensure every Activepieces secrets.ctmpl field."""
+    module = _load_deploy_module(
+        "platform/22.activepieces/deploy.py", "activepieces_deploy_test"
+    )
+    stores = {
+        "postgres": FakeSecrets({"root_password": "pg"}),
+        "redis": FakeSecrets({"password": "redis"}),
+        "activepieces": FakeSecrets({"encryption_key": "abc"}),
+    }
+
+    monkeypatch.setattr(
+        module.ActivepiecesDeployer,
+        "env",
+        classmethod(
+            lambda cls: {
+                "ENV": "staging",
+                "PROJECT": "platform",
+                "INTERNAL_DOMAIN": "zitian.party",
+                "ENV_DOMAIN_SUFFIX": "-staging",
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "get_secrets",
+        lambda _project, service, _env: stores[service],
+    )
+
+    assert module.ActivepiecesDeployer.ensure_runtime_secrets() is True
+
+    assert stores["activepieces"].values["encryption_key"] == "abc"
+    assert stores["activepieces"].values["jwt_secret"]
+    assert (
+        stores["activepieces"].values["frontend_url"]
+        == "https://automate-staging.zitian.party"
+    )
+
+
+def test_authentik_sync_secret_hook_repairs_bootstrap_fields(monkeypatch) -> None:
+    """Infra-011: sync must keep Authentik bootstrap template fields complete."""
+    module = _load_deploy_module(
+        "platform/10.authentik/deploy.py", "authentik_deploy_test"
+    )
+    stores = {
+        "postgres": FakeSecrets({"root_password": "pg"}),
+        "redis": FakeSecrets({"password": "redis"}),
+        "authentik": FakeSecrets({}),
+    }
+
+    monkeypatch.setattr(
+        module.AuthentikDeployer,
+        "env",
+        classmethod(
+            lambda cls: {
+                "ENV": "staging",
+                "PROJECT": "platform",
+                "ADMIN_EMAIL": "admin@example.test",
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "get_secrets",
+        lambda _project, service, _env: stores[service],
+    )
+
+    assert module.AuthentikDeployer.ensure_runtime_secrets() is True
+
+    assert stores["authentik"].values["secret_key"]
+    assert stores["authentik"].values["bootstrap_password"]
+    assert stores["authentik"].values["bootstrap_email"] == "admin@example.test"

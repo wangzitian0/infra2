@@ -50,6 +50,7 @@ def test_inventory_paths_exist_and_match_vault_agent_contract() -> None:
         assert service.vault_token_env_key in str(vault_agent.get("environment", {}))
         assert service.rendered_secret_path in str(vault_agent)
         assert "vault token lookup" in str(vault_agent.get("healthcheck", {}))
+        assert "<no value>" in str(vault_agent.get("healthcheck", {}))
         assert "stat -c %Y" not in str(vault_agent.get("healthcheck", {}))
         assert "VAULT_AGENT_MAX_SECRET_AGE_SECONDS" not in str(
             vault_agent.get("healthcheck", {})
@@ -137,6 +138,21 @@ def test_rendered_env_classifier_reports_missing_empty_stale_and_unreadable() ->
     )
     assert stale.status == "fail"
     assert stale.check_id == "rendered-env-freshness"
+
+    unresolved = classify_rendered_env(
+        service,
+        {
+            "exists": True,
+            "readable": True,
+            "size": 20,
+            "mtime": 999,
+            "has_no_value": True,
+        },
+        now=1000,
+    )
+    assert unresolved.status == "fail"
+    assert unresolved.severity == "P0"
+    assert unresolved.check_id == "rendered-env-template-values"
 
 
 def test_rendered_env_classifier_accepts_fresh_nonempty_file() -> None:
@@ -322,7 +338,10 @@ def test_remote_secret_file_state_parses_stat_json(monkeypatch) -> None:
 
         class Result:
             returncode = 0
-            stdout = '{"exists":true,"readable":true,"size":44,"mtime":123}'
+            stdout = (
+                '{"exists":true,"readable":true,"size":44,'
+                '"mtime":123,"has_no_value":false}'
+            )
             stderr = ""
 
         return Result()
@@ -331,6 +350,12 @@ def test_remote_secret_file_state_parses_stat_json(monkeypatch) -> None:
 
     result = _remote_secret_file_state("vps.example", "platform-postgres-vault-agent")
 
-    assert result == {"exists": True, "readable": True, "size": 44, "mtime": 123}
+    assert result == {
+        "exists": True,
+        "readable": True,
+        "size": 44,
+        "mtime": 123,
+        "has_no_value": False,
+    }
     assert captured["host"] == "vps.example"
     assert "docker exec platform-postgres-vault-agent sh -lc" in captured["command"]

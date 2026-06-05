@@ -7,7 +7,7 @@
 - [`compose.yaml`](./compose.yaml) - Docker Compose 配置
 - [`Dockerfile`](./Dockerfile) - Builds pinned Connect images with a static healthcheck binary.
 
-Runtime images are pinned to 1Password Connect `1.8.1`; do not deploy `latest` for
+Runtime images are pinned to 1Password Connect `1.8.2`; do not deploy `latest` for
 bootstrap services.
 
 ## 操作步骤
@@ -50,7 +50,7 @@ ssh ${VPS_SSH_USER:-root}@<VPS_IP> 'ls -la /data/bootstrap/1password/'
 
 ```bash
 curl https://op.$INTERNAL_DOMAIN/health
-# 预期响应: {"name":"1Password Connect API","version":"1.8.1",...}
+# 预期响应: {"name":"1Password Connect API","version":"1.8.2",...}
 
 # 测试读取 secrets
 TOKEN=$(op item get "bootstrap/1password/VPS-01 Access Token: own_service" --vault Infra2 --fields credential --reveal)

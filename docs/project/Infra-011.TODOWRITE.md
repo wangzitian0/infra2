@@ -8,10 +8,11 @@
 | AC | Description | Proof |
 |----|-------------|-------|
 | Infra-011.1 | Deploy workflow reports the real IaC Runner sync result instead of async acceptance. | `libs/tests/test_iac_runner_deploy_result.py` |
-| Infra-011.2 | Infra service probes run through the alert bridge and stay quiet on success. | `libs/tests/test_infra_probes.py` |
-| Infra-011.3 | Vault Agent Docker health avoids mtime false-unhealthy while audit keeps stale-file detection. | `libs/tests/test_vault_self_refresh_audit.py` |
+| Infra-011.2 | Infra service probes and out-of-band Docker health checks stay quiet on success and alert on unhealthy/starting/restarting containers. | `libs/tests/test_infra_probes.py`, `libs/tests/test_out_of_band_watchdog.py` |
+| Infra-011.3 | Vault Agent Docker health avoids mtime false-unhealthy, rejects unresolved template values, and audit keeps stale-file detection. | `libs/tests/test_vault_self_refresh_audit.py` |
 | Infra-011.4 | Backup inventory, archive/checksum generation, and freshness manifest verification are code-enforced. | `libs/tests/test_backup_verification.py` |
 | Infra-011.5 | Compose-owned Traefik routing is not mixed with Dokploy-generated domain routing. | `libs/tests/test_domain_routing_policy.py` |
+| Infra-011.6 | IaC Runner sync ensures every runtime secret field consumed by custom service templates before deploy. | `libs/tests/test_deployer.py` |
 
 ## Issue Mapping
 
@@ -31,6 +32,9 @@
 - [x] Add deploy result tests and synchronous `/deploy` behavior.
 - [x] Add infra probe runner tests and compose service.
 - [x] Update Vault Agent Docker health contract and tests.
+- [x] Reject rendered `<no value>` in Vault Agent health and audit.
+- [x] Ensure custom deployer runtime secrets during IaC Runner sync.
+- [x] Add out-of-band Docker unhealthy/starting/restarting watchdog coverage.
 - [x] Add backup inventory, runner, and manifest verifier tests.
 - [x] Add routing ownership policy test and remove current mixed-mode offenders.
 - [x] Run IaC Runner invoke tasks without `platform/` shadowing Python stdlib imports.

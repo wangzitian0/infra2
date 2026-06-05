@@ -55,13 +55,18 @@ def test_default_targets_cover_public_host_and_bridge_health() -> None:
     assert [target.name for target in ssh_targets] == [
         "infra2-ssh",
         "infra2-docker",
+        "infra2-docker-health",
         "infra2-alert-bridge",
     ]
     assert ssh_targets[0].command == "echo infra2-ssh-ok"
     assert "docker info" in ssh_targets[1].command
-    assert "docker exec platform-alerting" in ssh_targets[2].command
-    assert "127.0.0.1:8080/health" in ssh_targets[2].command
-    assert ssh_targets[2].expected_text == "healthy"
+    assert "health=unhealthy" in ssh_targets[2].command
+    assert "health=starting" in ssh_targets[2].command
+    assert "status=restarting" in ssh_targets[2].command
+    assert ssh_targets[2].expected_text == "docker-health-ok"
+    assert "docker exec platform-alerting" in ssh_targets[3].command
+    assert "127.0.0.1:8080/health" in ssh_targets[3].command
+    assert ssh_targets[3].expected_text == "healthy"
 
 
 def test_iac_runner_is_not_a_default_whole_host_health_check() -> None:

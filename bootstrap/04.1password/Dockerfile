@@ -1,4 +1,4 @@
-ARG OP_CONNECT_VERSION=1.8.1
+ARG OP_CONNECT_VERSION=1.8.2
 
 FROM golang:1.24-alpine AS healthcheck-builder
 WORKDIR /src

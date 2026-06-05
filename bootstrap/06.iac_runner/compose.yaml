@@ -29,6 +29,7 @@ services:
         - CMD-SHELL
         - |
           test -s /vault/secrets/.env &&
+          ! grep -q "<no value>" /vault/secrets/.env &&
           VAULT_TOKEN="$$(cat /vault/token)" vault token lookup >/dev/null
       interval: 10s
       timeout: 5s
