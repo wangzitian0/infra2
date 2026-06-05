@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
 import sys
 import types
 from contextlib import contextmanager
@@ -96,6 +98,28 @@ def test_sync_result_includes_actionable_failure_summary(monkeypatch) -> None:
         }
     ]
     assert payload["results"][0]["diagnostic"]["error_kind"] == "vault_secret_missing"
+
+
+def test_sync_result_classifies_missing_python_dependency(monkeypatch) -> None:
+    """Infra-011.7: missing runner dependencies get an actionable diagnostic."""
+    sync_runner = _load_module(
+        "sync_runner_missing_dependency_under_test",
+        IAC_RUNNER / "sync_runner.py",
+        monkeypatch,
+    )
+
+    diagnostic = sync_runner.diagnose_failure(
+        "ModuleNotFoundError: No module named 'yaml'"
+    )
+
+    assert diagnostic == {
+        "error_kind": "missing_python_dependency",
+        "summary": "IaC Runner runtime is missing Python module: yaml",
+        "next_action": (
+            "Rebuild or redeploy bootstrap/iac-runner from the current "
+            "requirements.txt, then rerun the deployment."
+        ),
+    }
 
 
 def test_sync_result_truncates_large_service_output(monkeypatch) -> None:
@@ -204,11 +228,80 @@ def test_deploy_wait_string_false_keeps_async_path(monkeypatch) -> None:
 
     monkeypatch.setattr(webhook_server.threading, "Thread", FakeThread)
 
-    body = webhook_server.version_deploy()
+    body, status_code = webhook_server.version_deploy()
 
-    assert body["status"] == "accepted"
+    assert status_code == 202
+    assert body["status"] == "in_progress"
+    assert body["status_url"] == "/deploy/status"
     assert body["wait"] is False
     assert started == [("staging", "main", "ci")]
+
+
+def test_async_deploy_status_reports_completed_result(monkeypatch) -> None:
+    """Infra-011.1: Actions can poll real deploy results without a long request."""
+    sync_runner = _load_module("sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch)
+    fake_flask = types.ModuleType("flask")
+
+    class FakeFlask:
+        def __init__(self, _name):
+            pass
+
+        def route(self, *_args, **_kwargs):
+            return lambda func: func
+
+    fake_flask.Flask = FakeFlask
+    fake_flask.jsonify = lambda payload: payload
+    fake_request = types.SimpleNamespace(
+        headers={},
+        data=b"",
+        json={"env": "staging", "ref": "main", "wait": False, "triggered_by": "ci"},
+    )
+    fake_flask.request = fake_request
+    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+    webhook_server = _load_module(
+        "webhook_server_async_status_under_test",
+        IAC_RUNNER / "webhook_server.py",
+        monkeypatch,
+    )
+    completed = sync_runner.SyncResult(
+        env="staging",
+        ref="main",
+        requested_services=["platform/redis"],
+        results=[
+            sync_runner.ServiceSyncResult(
+                service="platform/redis",
+                task="redis.sync",
+                success=True,
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        sync_runner, "sync_services_by_version", lambda *_args: completed
+    )
+
+    class ImmediateThread:
+        daemon = False
+
+        def __init__(self, target, args):
+            self.target = target
+            self.args = args
+
+        def start(self):
+            self.target(*self.args)
+
+    monkeypatch.setattr(webhook_server.threading, "Thread", ImmediateThread)
+
+    body, status_code = webhook_server.version_deploy()
+
+    assert status_code == 202
+    assert body["status"] == "in_progress"
+    fake_request.json = {"env": "staging", "ref": "main", "triggered_by": "ci"}
+    status_body, status_code = webhook_server.deployment_status()
+
+    assert status_code == 200
+    assert status_body["status"] == "completed"
+    assert status_body["result"]["succeeded"] == 1
+    assert status_body["result"]["failed"] == 0
 
 
 def test_deploy_wait_rejects_invalid_literal(monkeypatch) -> None:
@@ -239,6 +332,82 @@ def test_deploy_wait_rejects_invalid_literal(monkeypatch) -> None:
 
     assert status_code == 400
     assert body["error"] == "wait must be a boolean"
+
+
+def test_health_reports_missing_runtime_dependency(monkeypatch, tmp_path) -> None:
+    """Infra-011.7: /health fails before deploy when runner dependencies drift."""
+    fake_flask = types.ModuleType("flask")
+
+    class FakeFlask:
+        def __init__(self, _name):
+            pass
+
+        def route(self, *_args, **_kwargs):
+            return lambda func: func
+
+    fake_flask.Flask = FakeFlask
+    fake_flask.jsonify = lambda payload: payload
+    fake_flask.request = types.SimpleNamespace(headers={}, data=b"", json={})
+    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+    webhook_server = _load_module(
+        "webhook_server_health_deps_under_test",
+        IAC_RUNNER / "webhook_server.py",
+        monkeypatch,
+    )
+    secrets_file = tmp_path / "secrets.env"
+    secrets_file.write_text("VAULT_APP_TOKEN=redacted\n", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    (workspace / "infra2").mkdir(parents=True)
+    monkeypatch.setattr(webhook_server, "SECRETS_FILE", secrets_file)
+    monkeypatch.setattr(webhook_server, "WORKSPACE", workspace)
+    monkeypatch.setattr(
+        webhook_server,
+        "_dependency_checks",
+        lambda: {"python:PyYAML": False, "binary:op": True},
+    )
+
+    body, status_code = webhook_server.health()
+
+    assert status_code == 503
+    assert body["status"] == "degraded"
+    assert body["checks"]["python:PyYAML"] is False
+
+
+def test_vault_audit_task_import_does_not_require_pyyaml() -> None:
+    """Infra-011.7: optional audit inventory parsing cannot break invoke startup."""
+    script = """
+import builtins
+import sys
+import types
+
+original_import = builtins.__import__
+
+def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if name == "yaml":
+        raise ModuleNotFoundError("No module named 'yaml'", name="yaml")
+    return original_import(name, globals, locals, fromlist, level)
+
+builtins.__import__ = guarded_import
+fake_invoke = types.ModuleType("invoke")
+fake_invoke.Exit = type("Exit", (Exception,), {})
+fake_invoke.task = lambda func=None, **_kwargs: (
+    (lambda wrapped: wrapped) if func is None else func
+)
+sys.modules["invoke"] = fake_invoke
+
+import tools.vault_audit
+assert hasattr(tools.vault_audit, "self_refresh")
+"""
+    env = {**os.environ, "PYTHONPATH": str(ROOT)}
+    result = subprocess.run(
+        [sys.executable, "-P", "-c", script],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_run_invoke_task_preloads_stdlib_platform_before_repo_path(

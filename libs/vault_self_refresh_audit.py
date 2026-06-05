@@ -16,8 +16,6 @@ import subprocess
 import time
 from typing import Any
 
-import yaml
-
 from libs.env import verify_vault_token
 
 
@@ -75,6 +73,15 @@ class CheckResult:
 
 
 def load_inventory(path: Path | str = DEFAULT_INVENTORY_PATH) -> list[VaultService]:
+    try:
+        import yaml
+    except ModuleNotFoundError as exc:
+        if exc.name == "yaml":
+            raise RuntimeError(
+                "PyYAML is required to load the Vault self-refresh inventory."
+            ) from exc
+        raise
+
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     defaults = data.get("defaults", {})
     services: list[VaultService] = []
