@@ -102,3 +102,80 @@ def test_deploy_wait_returns_500_when_sync_fails(monkeypatch) -> None:
     assert status_code == 500
     assert body["status"] == "failed"
     assert body["result"]["failed"] == 1
+
+
+def test_deploy_wait_string_false_keeps_async_path(monkeypatch) -> None:
+    """#182: string wait=false must not become truthy."""
+    _load_module("sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch)
+    fake_flask = types.ModuleType("flask")
+
+    class FakeFlask:
+        def __init__(self, _name):
+            pass
+
+        def route(self, *_args, **_kwargs):
+            return lambda func: func
+
+    fake_flask.Flask = FakeFlask
+    fake_flask.jsonify = lambda payload: payload
+    fake_flask.request = types.SimpleNamespace(
+        headers={},
+        data=b"",
+        json={"env": "staging", "ref": "main", "wait": "false", "triggered_by": "ci"},
+    )
+    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+    webhook_server = _load_module(
+        "webhook_server_bool_under_test",
+        IAC_RUNNER / "webhook_server.py",
+        monkeypatch,
+    )
+
+    started = []
+
+    class FakeThread:
+        daemon = False
+
+        def __init__(self, target, args):
+            self.target = target
+            self.args = args
+
+        def start(self):
+            started.append(self.args)
+
+    monkeypatch.setattr(webhook_server.threading, "Thread", FakeThread)
+
+    body = webhook_server.version_deploy()
+
+    assert body["status"] == "accepted"
+    assert body["wait"] is False
+    assert started == [("staging", "main", "ci")]
+
+
+def test_deploy_wait_rejects_invalid_literal(monkeypatch) -> None:
+    fake_flask = types.ModuleType("flask")
+
+    class FakeFlask:
+        def __init__(self, _name):
+            pass
+
+        def route(self, *_args, **_kwargs):
+            return lambda func: func
+
+    fake_flask.Flask = FakeFlask
+    fake_flask.jsonify = lambda payload: payload
+    fake_flask.request = types.SimpleNamespace(
+        headers={},
+        data=b"",
+        json={"env": "staging", "ref": "main", "wait": "sometimes"},
+    )
+    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+    webhook_server = _load_module(
+        "webhook_server_invalid_bool_under_test",
+        IAC_RUNNER / "webhook_server.py",
+        monkeypatch,
+    )
+
+    body, status_code = webhook_server.version_deploy()
+
+    assert status_code == 400
+    assert body["error"] == "wait must be a boolean"

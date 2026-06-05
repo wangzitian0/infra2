@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import importlib.util
 import subprocess
+from pathlib import Path
 
 from libs.infra_probes import (
     build_probe_alert_payload,
@@ -10,6 +12,18 @@ from libs.infra_probes import (
     parse_probe_specs,
     run_probe,
 )
+
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def _load_probe_runner():
+    path = ROOT / "tools/infra_probe_runner.py"
+    spec = importlib.util.spec_from_file_location("infra_probe_runner_under_test", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_probe_specs_parse_http_tcp_and_command() -> None:
@@ -70,3 +84,29 @@ def test_failed_probes_build_signoz_compatible_payload() -> None:
     assert payload["alerts"][0]["labels"]["service"] == "vault"
     assert payload["alerts"][0]["annotations"]["observed"] == "503:sealed"
 
+
+def test_probe_runner_loop_catches_iteration_errors(monkeypatch) -> None:
+    """#183: looped runner keeps future probes alive after one failed iteration."""
+    runner = _load_probe_runner()
+    calls = []
+
+    def fake_run_once(*, as_json):
+        calls.append(as_json)
+        if len(calls) == 1:
+            raise RuntimeError("bridge unavailable")
+        return 0
+
+    def fake_sleep(_seconds):
+        if len(calls) >= 2:
+            raise SystemExit(0)
+
+    monkeypatch.setattr(runner, "run_once", fake_run_once)
+    monkeypatch.setattr(runner.time, "sleep", fake_sleep)
+    monkeypatch.setattr("sys.argv", ["infra_probe_runner.py", "--loop", "--json"])
+
+    try:
+        runner.main()
+    except SystemExit as exc:
+        assert exc.code == 0
+
+    assert calls == [True, True]

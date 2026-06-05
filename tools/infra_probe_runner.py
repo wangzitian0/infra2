@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import traceback
 import time
 from pathlib import Path
 
@@ -25,8 +26,9 @@ alert-bridge-http|http|http://platform-alerting:8080/health|200|critical|5
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--loop", action="store_true")
-    parser.add_argument("--once", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--loop", action="store_true")
+    mode.add_argument("--once", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
@@ -34,7 +36,12 @@ def main() -> int:
     interval = int(os.getenv("INFRA_PROBE_INTERVAL_SECONDS", "300"))
 
     while True:
-        exit_code = run_once(as_json=args.json)
+        try:
+            exit_code = run_once(as_json=args.json)
+        except Exception as exc:  # noqa: BLE001 - looped probes must keep running.
+            print(f"infra probe iteration failed: {exc}", flush=True)
+            traceback.print_exc()
+            exit_code = 1
         if not args.loop:
             return exit_code
         time.sleep(interval)

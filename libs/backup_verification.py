@@ -15,6 +15,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INVENTORY_PATH = REPO_ROOT / "docs/ssot/ops.backup-inventory.yaml"
 
 
+class BackupManifestError(ValueError):
+    """Raised when a backup manifest field cannot be interpreted."""
+
+
 @dataclass(frozen=True)
 class BackupEntry:
     service_id: str
@@ -141,7 +145,16 @@ def _verify_artifact(
     now: int,
 ) -> BackupCheck:
     size = int(artifact.get("size_bytes") or 0)
-    created_at = _parse_timestamp(str(artifact.get("created_at") or ""))
+    try:
+        created_at = _parse_timestamp(artifact.get("created_at"))
+    except BackupManifestError as exc:
+        return _check(
+            entry,
+            "fail",
+            "P1",
+            "backup artifact timestamp is invalid",
+            {"created_at": artifact.get("created_at"), "error": str(exc)},
+        )
     age_hours = (now - created_at) / 3600
     checksum = str(artifact.get("sha256") or "")
     remote_uri = str(artifact.get("remote_uri") or "")
@@ -205,8 +218,21 @@ def _service_id_from_deploy_path(relative_path: Path) -> str:
     return "/".join(parts[:-1])
 
 
-def _parse_timestamp(value: str) -> int:
-    if value.isdigit():
+def _parse_timestamp(value: Any) -> int:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
         return int(value)
-    normalized = value.replace("Z", "+00:00")
-    return int(datetime.fromisoformat(normalized).astimezone(timezone.utc).timestamp())
+    if not isinstance(value, str) or not value.strip():
+        raise BackupManifestError("created_at must be a Unix timestamp or ISO-8601 string")
+    candidate = value.strip()
+    if candidate.isdigit():
+        return int(candidate)
+    normalized = candidate.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise BackupManifestError(f"invalid created_at timestamp: {candidate}") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.astimezone(timezone.utc).timestamp())

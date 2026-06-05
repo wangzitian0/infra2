@@ -29,7 +29,7 @@ def main() -> int:
     report = verify_backup_manifest(
         entries,
         manifest,
-        now=args.now or int(manifest.get("verified_at") or time.time()),
+        now=args.now or int(time.time()),
     )
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))

@@ -106,7 +106,7 @@ graph TD
       "created_at": "2026-06-05T00:00:00Z",
       "size_bytes": 123456,
       "sha256": "<64 hex chars>",
-      "remote_uri": "r2:infra2/platform/postgres/archive.tar.zst"
+      "remote_uri": "r2:infra2/platform/postgres/archive.tar.gz"
     }
   ]
 }
