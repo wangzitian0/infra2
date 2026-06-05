@@ -23,8 +23,8 @@ class WealthfolioDeployer(Deployer):
     secret_key = "WF_SECRET_KEY"
     env_var_name = "WF_SECRET_KEY"
     
-    # Domain configuration - uses Dokploy API
-    subdomain = "wealth"
+    # Domain is owned by compose Traefik labels.
+    subdomain = None
     service_port = 8088
     service_name = "wealthfolio"
 

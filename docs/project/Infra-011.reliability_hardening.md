@@ -25,6 +25,7 @@ the P1 reliability review found four remaining hard gaps:
 | Infra-011.2 | P1 infra dependencies have code-owned probes that alert through `platform/12.alerting`. | `libs/tests/test_infra_probes.py`, `platform/12.alerting/compose.yaml` |
 | Infra-011.3 | Vault Agent Docker health checks token lookup and rendered-file presence, while mtime freshness remains an audit signal. | `libs/tests/test_vault_self_refresh_audit.py`, compose healthchecks |
 | Infra-011.4 | Deployer-owned persistent data paths have backup inventory coverage, an archive/checksum runner, and manifest freshness verification. | `libs/tests/test_backup_verification.py`, `tools/backup_runner.py`, `docs/ssot/ops.backup-inventory.yaml` |
+| Infra-011.5 | Public service routing ownership is single-source: compose-owned Traefik routers must not also use Dokploy domain generation. | `libs/tests/test_domain_routing_policy.py`, `docs/ssot/platform.domain.md` |
 
 ## Validation
 
@@ -34,6 +35,7 @@ uv run python -P -m pytest \
   libs/tests/test_infra_probes.py \
   libs/tests/test_backup_verification.py \
   libs/tests/test_vault_self_refresh_audit.py \
+  libs/tests/test_domain_routing_policy.py \
   -q
 ```
 
