@@ -693,6 +693,18 @@ def test_iac_runner_bootstrap_self_update_runs_before_health_check() -> None:
     assert "steps.runner-changes.outputs.changed == 'true'" in workflow
 
 
+def test_iac_runner_public_health_check_retries_with_diagnostics() -> None:
+    """Infra-011.8: public route convergence must not fail on one 404."""
+    workflow = DEPLOY_PLATFORM_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "IaC Runner public health attempt ${attempt}/12" in workflow
+    assert "for attempt in $(seq 1 12)" in workflow
+    assert "--connect-timeout 10" in workflow
+    assert "--max-time 20" in workflow
+    assert "Last HTTP status: $last_status" in workflow
+    assert "Traefik/Dokploy routing" in workflow
+
+
 def test_iac_runner_bootstrap_deploy_script_is_scoped_to_runner_source() -> None:
     """Infra-011.8: self-update preserves Dokploy drift outside runner source."""
     script = BOOTSTRAP_DEPLOY_SCRIPT.read_text(encoding="utf-8")
