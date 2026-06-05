@@ -215,3 +215,63 @@ def test_run_invoke_task_preloads_stdlib_platform_before_repo_path(
     assert captured["kwargs"]["cwd"] == tmp_path
     assert captured["kwargs"]["env"]["DEPLOY_ENV"] == "staging"
     assert "PYTHONPATH" not in captured["kwargs"]["env"]
+
+
+def test_run_invoke_task_keeps_existing_vault_root_token(monkeypatch, tmp_path) -> None:
+    """#189: existing Vault root token is passed through without invoking op."""
+    monkeypatch.setenv("VAULT_ROOT_TOKEN", "existing-root")
+    sync_runner = _load_module(
+        "sync_runner_existing_root_under_test",
+        IAC_RUNNER / "sync_runner.py",
+        monkeypatch,
+    )
+    captured = {}
+
+    def fake_run(args, **kwargs):
+        captured.setdefault("calls", []).append(args)
+        captured["kwargs"] = kwargs
+        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(sync_runner.subprocess, "run", fake_run)
+
+    result = sync_runner.run_invoke_task("postgres.sync", tmp_path, "staging")
+
+    assert result["success"] is True
+    assert captured["calls"] == [
+        [sys.executable, "-P", "-c", sync_runner.INVOKE_BOOTSTRAP, "postgres.sync"]
+    ]
+    assert captured["kwargs"]["env"]["VAULT_ROOT_TOKEN"] == "existing-root"
+
+
+def test_run_invoke_task_resolves_vault_root_token_from_1password(
+    monkeypatch, tmp_path
+) -> None:
+    """#189: IaC Runner resolves the root token internally for sync tasks."""
+    monkeypatch.delenv("VAULT_ROOT_TOKEN", raising=False)
+    monkeypatch.setenv("OP_SERVICE_ACCOUNT_TOKEN", "op-service-token")
+    sync_runner = _load_module(
+        "sync_runner_op_root_under_test",
+        IAC_RUNNER / "sync_runner.py",
+        monkeypatch,
+    )
+    captured = {"calls": []}
+
+    def fake_run(args, **kwargs):
+        captured["calls"].append(args)
+        if args[:2] == ["op", "read"]:
+            assert args[2] == sync_runner.DEFAULT_VAULT_ROOT_TOKEN_OP_REF
+            assert kwargs["env"]["OP_SERVICE_ACCOUNT_TOKEN"] == "op-service-token"
+            return types.SimpleNamespace(returncode=0, stdout="resolved-root\n", stderr="")
+        captured["invoke_env"] = kwargs["env"]
+        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(sync_runner.subprocess, "run", fake_run)
+
+    result = sync_runner.run_invoke_task("postgres.sync", tmp_path, "staging")
+
+    assert result["success"] is True
+    assert captured["calls"] == [
+        ["op", "read", sync_runner.DEFAULT_VAULT_ROOT_TOKEN_OP_REF],
+        [sys.executable, "-P", "-c", sync_runner.INVOKE_BOOTSTRAP, "postgres.sync"],
+    ]
+    assert captured["invoke_env"]["VAULT_ROOT_TOKEN"] == "resolved-root"

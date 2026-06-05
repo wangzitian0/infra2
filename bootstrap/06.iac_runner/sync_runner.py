@@ -22,6 +22,7 @@ WORKSPACE = Path("/workspace")
 GIT_REPO_URL = os.environ["GIT_REPO_URL"]
 GIT_BRANCH = os.environ.get("GIT_BRANCH", "main")
 DEPLOY_TIMEOUT = int(os.environ.get("DEPLOY_TIMEOUT", "600"))
+DEFAULT_VAULT_ROOT_TOKEN_OP_REF = "op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token"
 
 REPO_NAME = Path(urlparse(GIT_REPO_URL).path).stem
 
@@ -66,6 +67,8 @@ ALL_SERVICES = [
     "finance_report/redis",
     "finance_report/app",
 ]
+
+_VAULT_ROOT_TOKEN_CACHE: str | None = None
 
 
 @dataclass
@@ -194,6 +197,41 @@ def update_repo(ref: str | None = None) -> bool:
         return True
 
 
+def resolve_vault_root_token(env: dict[str, str]) -> str | None:
+    """Resolve the Vault root token for infrastructure sync subprocesses."""
+    global _VAULT_ROOT_TOKEN_CACHE
+
+    if token := env.get("VAULT_ROOT_TOKEN"):
+        return token
+
+    if _VAULT_ROOT_TOKEN_CACHE:
+        return _VAULT_ROOT_TOKEN_CACHE
+
+    if not env.get("OP_SERVICE_ACCOUNT_TOKEN"):
+        logger.warning("OP_SERVICE_ACCOUNT_TOKEN is not configured")
+        return None
+
+    op_ref = env.get("VAULT_ROOT_TOKEN_OP_REF") or DEFAULT_VAULT_ROOT_TOKEN_OP_REF
+    result = subprocess.run(
+        ["op", "read", op_ref],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        logger.error("Failed to resolve Vault root token via 1Password")
+        return None
+
+    token = result.stdout.strip()
+    if not token:
+        logger.error("1Password returned an empty Vault root token")
+        return None
+
+    _VAULT_ROOT_TOKEN_CACHE = token
+    return token
+
+
 def run_invoke_task(
     task_name: str, repo_path: Path, deploy_env: str = "staging"
 ) -> dict:
@@ -206,6 +244,8 @@ def run_invoke_task(
         **os.environ,
         "DEPLOY_ENV": deploy_env,
     }
+    if vault_root_token := resolve_vault_root_token(env_vars):
+        env_vars["VAULT_ROOT_TOKEN"] = vault_root_token
 
     try:
         result = subprocess.run(

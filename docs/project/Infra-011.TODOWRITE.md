@@ -22,6 +22,7 @@
 - #162: external/synthetic and backup freshness alert coverage.
 - #186: IaC Runner route ownership drift blocked main deploy health checks.
 - #187: IaC Runner deploy failed after health recovery because repo `platform/` shadowed Python stdlib `platform`.
+- #189: IaC Runner deploy sync lacks Vault automation token after stdlib shadow fix.
 
 ## TODO
 
@@ -33,5 +34,6 @@
 - [x] Add routing ownership policy test and remove current mixed-mode offenders.
 - [x] Run IaC Runner invoke tasks without `platform/` shadowing Python stdlib imports.
 - [x] Use Dokploy Domains for simple IaC Runner and Wealthfolio public routes.
+- [x] Resolve Vault root token inside IaC Runner sync tasks without putting it in GitHub Actions.
 - [x] Run full lint/test suite.
 - [x] Open PR.
