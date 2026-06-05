@@ -119,3 +119,28 @@ uv run python -m invoke alerting.shared.ensure-log-error-rule \
 
 `test-feishu` sends a synthetic SigNoz-style alert through the bridge and should
 result in a Feishu group message.
+
+## Out-of-band Watchdog
+
+The bridge remains internal only. Whole-host and bridge-down detection is handled
+by `.github/workflows/out-of-band-watchdog.yml`, which runs every 30 minutes from
+GitHub Actions and sends Feishu directly when infra2 or the bridge cannot be
+trusted.
+
+Required repository secrets:
+
+- `INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL`
+- `INFRA2_WATCHDOG_SSH_HOST`
+- `INFRA2_WATCHDOG_SSH_USER`
+- `INFRA2_WATCHDOG_SSH_PRIVATE_KEY`
+
+Optional repository variables:
+
+- `INFRA2_WATCHDOG_HTTP_TARGETS`: newline-separated `name|url|status_csv`
+- `INFRA2_WATCHDOG_SSH_TARGETS`: newline-separated `name|command|expected_text`
+- `INFRA2_WATCHDOG_SSH_PORT`: defaults to `22`
+
+Default checks cover `https://iac.zitian.party/health`,
+`https://cloud.zitian.party`, and the `platform-alerting` container health via
+SSH. Service-level health such as MinIO/Postgres/Redis remains in-band through
+SigNoz and this bridge.

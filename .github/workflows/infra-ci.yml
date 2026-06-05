@@ -7,8 +7,10 @@ on:
       - 'platform/**'
       - 'finance_report/**'
       - 'libs/**'
+      - 'tools/**'
       - '.github/workflows/infra-ci.yml'
       - '.github/workflows/deploy-platform.yml'
+      - '.github/workflows/out-of-band-watchdog.yml'
   push:
     branches: [main]
     paths:
@@ -16,8 +18,10 @@ on:
       - 'platform/**'
       - 'finance_report/**'
       - 'libs/**'
+      - 'tools/**'
       - '.github/workflows/infra-ci.yml'
       - '.github/workflows/deploy-platform.yml'
+      - '.github/workflows/out-of-band-watchdog.yml'
 
 permissions:
   contents: read
