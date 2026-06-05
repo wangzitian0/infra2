@@ -416,10 +416,11 @@ curl -X POST https://iac.{domain}/sync \
   because that can kill the request handler before GitHub Actions receives a
   terminal deployment result.
 - `deploy-platform.yml` detects `bootstrap/06.iac_runner/**` changes on
-  `main` from the GitHub push event file list, SSHes to the VPS with the
-  out-of-band watchdog key, updates only the runner source path in the Dokploy
-  compose checkout, rebuilds the compose project, and waits for container
-  health before calling `/deploy`.
+  `main` from the GitHub compare/commit API file list, SSHes to the VPS with
+  the out-of-band watchdog key, updates only the runner source path in the
+  Dokploy compose checkout, persists the target `GIT_SHA` and
+  `autoDeploy=false` through the internal Dokploy API, rebuilds the compose
+  project, and waits for container health before calling `/deploy`.
 - Other bootstrap components remain manual to avoid circular dependency during
   first install and disaster recovery.
 
