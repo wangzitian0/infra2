@@ -43,6 +43,7 @@ SERVICE_TASK_MAP = {
     "platform/minio": "minio.sync",
     "platform/authentik": "authentik.sync",
     "platform/signoz": "signoz.sync",
+    "platform/alerting": "alerting.sync",
     "platform/portal": "portal.sync",
     "platform/activepieces": "activepieces.sync",
     "platform/prefect": "prefect.sync",
@@ -62,6 +63,7 @@ ALL_SERVICES = [
     "platform/minio",
     "platform/authentik",
     "platform/signoz",
+    "platform/alerting",
     "platform/portal",
     "platform/activepieces",
     "platform/prefect",
@@ -187,7 +189,9 @@ class SyncResult:
 
     @property
     def succeeded(self) -> int:
-        return sum(1 for result in self.results if result.success and not result.skipped)
+        return sum(
+            1 for result in self.results if result.success and not result.skipped
+        )
 
     @property
     def failed(self) -> int:

@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any
 from pathlib import Path
 import os
 import hashlib
+import json
+import shlex
 from invoke import task
 
 from libs.common import get_env, validate_env, service_domain
@@ -65,12 +67,165 @@ def discover_services() -> dict[str, str]:
     return service_map
 
 
-def _compute_config_hash(compose_content: str, env_vars: dict[str, str]) -> str:
+def _compute_config_hash(
+    compose_content: str,
+    env_vars: dict[str, str],
+    artifact_payload: str = "",
+) -> str:
     """Compute hash of compose content + env vars for change detection."""
     # Normalize env vars (sort keys, ignore empty values)
     env_str = "\n".join(f"{k}={v}" for k, v in sorted(env_vars.items()) if v)
-    combined = f"{compose_content}\n---ENV---\n{env_str}"
+    combined = (
+        f"{compose_content}\n---ENV---\n{env_str}\n---ARTIFACTS---\n{artifact_payload}"
+    )
     return hashlib.sha256(combined.encode()).hexdigest()[:12]
+
+
+def _iter_path_files(path: Path) -> list[Path]:
+    if path.is_file():
+        return [path]
+    if not path.is_dir():
+        return []
+    return sorted(
+        child
+        for child in path.rglob("*")
+        if child.is_file()
+        and "__pycache__" not in child.parts
+        and not child.name.endswith((".pyc", ".pyo"))
+    )
+
+
+def _resolve_compose_relative(compose_dir: Path, source: str) -> Path | None:
+    if not source or "${" in source or source.startswith("/"):
+        return None
+    return (compose_dir / source).resolve()
+
+
+def _resolve_build_relative(context_dir: Path, source: str) -> Path | None:
+    if (
+        not source
+        or "${" in source
+        or source.startswith("/")
+        or source.startswith("--")
+    ):
+        return None
+    return (context_dir / source).resolve()
+
+
+def _dockerfile_copy_sources(dockerfile: Path, context_dir: Path) -> list[Path]:
+    if not dockerfile.exists():
+        return []
+
+    sources: list[Path] = []
+    for raw_line in dockerfile.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        instruction, _, remainder = line.partition(" ")
+        if instruction.upper() not in {"COPY", "ADD"} or not remainder:
+            continue
+        if "--from=" in remainder:
+            continue
+
+        parsed_sources: list[str] = []
+        if remainder.startswith("["):
+            try:
+                values = json.loads(remainder)
+            except json.JSONDecodeError:
+                values = []
+            if isinstance(values, list) and len(values) >= 2:
+                parsed_sources = [str(value) for value in values[:-1]]
+        else:
+            parts = [
+                part for part in shlex.split(remainder) if not part.startswith("--")
+            ]
+            if len(parts) >= 2:
+                parsed_sources = parts[:-1]
+
+        for source in parsed_sources:
+            resolved = _resolve_build_relative(context_dir, source)
+            if resolved:
+                sources.extend(_iter_path_files(resolved))
+
+    return sources
+
+
+def _compose_artifact_files(compose_path: str, compose_content: str) -> list[Path]:
+    try:
+        import yaml
+    except ModuleNotFoundError:
+        return []
+
+    compose_file = Path(compose_path)
+    compose_dir = compose_file.parent.resolve()
+    try:
+        compose = yaml.safe_load(compose_content) or {}
+    except yaml.YAMLError:
+        return []
+
+    services = compose.get("services", {})
+    if not isinstance(services, dict):
+        return []
+
+    files: list[Path] = []
+    for service in services.values():
+        if not isinstance(service, dict):
+            continue
+
+        build = service.get("build")
+        if build:
+            if isinstance(build, str):
+                context_dir = _resolve_compose_relative(compose_dir, build)
+                dockerfile = context_dir / "Dockerfile" if context_dir else None
+            elif isinstance(build, dict):
+                context = str(build.get("context") or ".")
+                context_dir = _resolve_compose_relative(compose_dir, context)
+                dockerfile_name = str(build.get("dockerfile") or "Dockerfile")
+                dockerfile = (
+                    _resolve_build_relative(context_dir, dockerfile_name)
+                    if context_dir
+                    else None
+                )
+            else:
+                context_dir = None
+                dockerfile = None
+
+            if dockerfile:
+                files.extend(_iter_path_files(dockerfile))
+                if context_dir:
+                    files.extend(_dockerfile_copy_sources(dockerfile, context_dir))
+
+        volumes = service.get("volumes", [])
+        if isinstance(volumes, list):
+            for volume in volumes:
+                if isinstance(volume, str):
+                    source = volume.split(":", 1)[0]
+                elif isinstance(volume, dict):
+                    source = str(volume.get("source") or "")
+                    if volume.get("type") not in (None, "bind"):
+                        continue
+                else:
+                    continue
+                if not source.startswith("."):
+                    continue
+                resolved = _resolve_compose_relative(compose_dir, source)
+                if resolved:
+                    files.extend(_iter_path_files(resolved))
+
+    return sorted(set(files))
+
+
+def _artifact_hash_payload(compose_path: str, compose_content: str) -> str:
+    root = Path.cwd().resolve()
+    lines: list[str] = []
+    for path in _compose_artifact_files(compose_path, compose_content):
+        try:
+            label = str(path.relative_to(root))
+        except ValueError:
+            label = str(path)
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        lines.append(f"{label}:{digest}")
+    return "\n".join(lines)
 
 
 def _parse_env_text(env_text: str) -> dict[str, str]:
@@ -433,7 +588,8 @@ class Deployer:
     def compute_local_config_hash(cls, c: "Context", env_vars: dict[str, str]) -> str:
         """Compute hash of local compose + env vars."""
         compose_content = cls.get_compose_content(c)
-        return _compute_config_hash(compose_content, env_vars)
+        artifact_payload = _artifact_hash_payload(cls.compose_path, compose_content)
+        return _compute_config_hash(compose_content, env_vars, artifact_payload)
 
     @classmethod
     def verify_vault_app_token(cls) -> dict:

@@ -13,6 +13,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 IAC_RUNNER = ROOT / "bootstrap/06.iac_runner"
+DEPLOY_PLATFORM_WORKFLOW = ROOT / ".github/workflows/deploy-platform.yml"
+BOOTSTRAP_DEPLOY_SCRIPT = ROOT / "scripts/deploy_iac_runner_bootstrap.sh"
 
 
 def _load_module(name: str, path: Path, monkeypatch):
@@ -27,7 +29,9 @@ def _load_module(name: str, path: Path, monkeypatch):
 
 def test_sync_services_returns_structured_failure_result(monkeypatch) -> None:
     """#182: sync result reports real failed service tasks."""
-    sync_runner = _load_module("sync_runner_under_test", IAC_RUNNER / "sync_runner.py", monkeypatch)
+    sync_runner = _load_module(
+        "sync_runner_under_test", IAC_RUNNER / "sync_runner.py", monkeypatch
+    )
 
     @contextmanager
     def unlocked(_path, _description):
@@ -145,7 +149,9 @@ def test_sync_result_truncates_large_service_output(monkeypatch) -> None:
 
 def test_deploy_wait_returns_500_when_sync_fails(monkeypatch) -> None:
     """#182: /deploy wait=true exposes failed sync to GitHub Actions."""
-    sync_runner = _load_module("sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch)
+    sync_runner = _load_module(
+        "sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch
+    )
     fake_flask = types.ModuleType("flask")
 
     class FakeFlask:
@@ -163,7 +169,9 @@ def test_deploy_wait_returns_500_when_sync_fails(monkeypatch) -> None:
         json={"env": "staging", "ref": "main", "wait": True, "triggered_by": "ci"},
     )
     monkeypatch.setitem(sys.modules, "flask", fake_flask)
-    webhook_server = _load_module("webhook_server_under_test", IAC_RUNNER / "webhook_server.py", monkeypatch)
+    webhook_server = _load_module(
+        "webhook_server_under_test", IAC_RUNNER / "webhook_server.py", monkeypatch
+    )
 
     failed = sync_runner.SyncResult(
         env="staging",
@@ -239,7 +247,9 @@ def test_deploy_wait_string_false_keeps_async_path(monkeypatch) -> None:
 
 def test_async_deploy_status_reports_completed_result(monkeypatch) -> None:
     """Infra-011.1: Actions can poll real deploy results without a long request."""
-    sync_runner = _load_module("sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch)
+    sync_runner = _load_module(
+        "sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch
+    )
     fake_flask = types.ModuleType("flask")
 
     class FakeFlask:
@@ -612,7 +622,9 @@ def test_run_invoke_task_resolves_vault_root_token_from_1password(
         if args[:2] == ["op", "read"]:
             assert args[2] == sync_runner.DEFAULT_VAULT_ROOT_TOKEN_OP_REF
             assert kwargs["env"]["OP_SERVICE_ACCOUNT_TOKEN"] == "op-service-token"
-            return types.SimpleNamespace(returncode=0, stdout="resolved-root\n", stderr="")
+            return types.SimpleNamespace(
+                returncode=0, stdout="resolved-root\n", stderr=""
+            )
         captured["invoke_env"] = kwargs["env"]
         return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
 
@@ -626,3 +638,69 @@ def test_run_invoke_task_resolves_vault_root_token_from_1password(
         [sys.executable, "-P", "-c", sync_runner.INVOKE_BOOTSTRAP, "postgres.sync"],
     ]
     assert captured["invoke_env"]["VAULT_ROOT_TOKEN"] == "resolved-root"
+
+
+def test_deploy_platform_triggers_on_iac_runner_bootstrap_changes() -> None:
+    """Infra-011.8: runner source changes must enter the deploy workflow."""
+    workflow = DEPLOY_PLATFORM_WORKFLOW.read_text(encoding="utf-8")
+
+    assert '"bootstrap/06.iac_runner/**"' in workflow
+    assert "Detect IaC Runner bootstrap changes" in workflow
+    assert "Deploy IaC Runner bootstrap changes" in workflow
+    assert "scripts/deploy_iac_runner_bootstrap.sh" in workflow
+    assert "$GITHUB_EVENT_PATH" in workflow
+    assert ".added[]?, .modified[]?, .removed[]?" in workflow
+    assert "git diff-tree" not in workflow
+
+
+def test_iac_runner_all_services_include_alerting_bridge(monkeypatch) -> None:
+    """Infra-011.8: alerting bridge must not be left outside GitOps deploys."""
+    sync_runner = _load_module(
+        "sync_runner_alerting_under_test", IAC_RUNNER / "sync_runner.py", monkeypatch
+    )
+
+    assert sync_runner.SERVICE_TASK_MAP["platform/alerting"] == "alerting.sync"
+    assert "platform/alerting" in sync_runner.ALL_SERVICES
+
+
+def test_iac_runner_service_map_matches_discovered_deployers(monkeypatch) -> None:
+    """Infra-011.8: every deploy.py service must be wired into GitOps."""
+    from libs.deployer import discover_services
+
+    sync_runner = _load_module(
+        "sync_runner_discovery_under_test", IAC_RUNNER / "sync_runner.py", monkeypatch
+    )
+    discovered = discover_services()
+
+    for service, task in discovered.items():
+        assert sync_runner.SERVICE_TASK_MAP.get(service) == task
+        assert service in sync_runner.ALL_SERVICES
+
+
+def test_iac_runner_bootstrap_self_update_runs_before_health_check() -> None:
+    """Infra-011.8: Actions updates stale runner code before polling /deploy."""
+    workflow = DEPLOY_PLATFORM_WORKFLOW.read_text(encoding="utf-8")
+
+    self_update = workflow.index("Deploy IaC Runner bootstrap changes")
+    health_check = workflow.index("Check IaC Runner health")
+    trigger_deploy = workflow.index("Trigger IaC Runner")
+
+    assert self_update < health_check < trigger_deploy
+    assert "INFRA2_WATCHDOG_SSH_PRIVATE_KEY" in workflow
+    assert "steps.runner-changes.outputs.changed == 'true'" in workflow
+
+
+def test_iac_runner_bootstrap_deploy_script_is_scoped_to_runner_source() -> None:
+    """Infra-011.8: self-update preserves Dokploy drift outside runner source."""
+    script = BOOTSTRAP_DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    assert "docker inspect iac-runner --format" in script
+    assert (
+        'git -C "$code_dir" checkout -f "$INFRA2_DEPLOY_SHA" -- bootstrap/06.iac_runner'
+        in script
+    )
+    assert "docker compose \\" in script
+    assert '-p "$project"' in script
+    assert "--force-recreate" in script
+    assert "Health check timed out for iac-runner" in script
+    assert "cat /secrets/.env" not in script
