@@ -35,6 +35,7 @@ class _Response:
 class _Client:
     def __init__(self, responses: dict[str, _Response]):
         self.responses = responses
+        self.calls: list[str] = []
 
     def __enter__(self):
         return self
@@ -43,6 +44,7 @@ class _Client:
         return False
 
     def get(self, url: str, **_kwargs) -> _Response:
+        self.calls.append(url)
         return self.responses[url]
 
 
@@ -100,3 +102,36 @@ def test_unsealer_health_requires_active_connect_sync(monkeypatch) -> None:
     )
 
     assert unsealer.health_check() == 1
+
+
+def test_unsealer_health_initializes_connect_before_health_probe(monkeypatch) -> None:
+    """Infra-011.7: bearer-auth lookup must run before Connect /health."""
+    unsealer = _load_unsealer(monkeypatch)
+    responses = {
+        "http://op-connect-api:8080/health": _Response(
+            200,
+            {
+                "dependencies": [
+                    {"service": "sqlite", "status": "ACTIVE"},
+                    {"service": "sync", "status": "ACTIVE"},
+                    {"service": "1Password", "status": "ACTIVE"},
+                ]
+            },
+        ),
+        "http://op-connect-api:8080/v1/vaults/vault-id/items/item-id": _Response(
+            200
+        ),
+        "http://vault:8200/v1/sys/health": _Response(200, {"sealed": False}),
+    }
+    client = _Client(responses)
+    monkeypatch.setattr(
+        unsealer.httpx,
+        "Client",
+        lambda **_kwargs: client,
+    )
+
+    assert unsealer.health_check() == 0
+    assert client.calls[:2] == [
+        "http://op-connect-api:8080/v1/vaults/vault-id/items/item-id",
+        "http://op-connect-api:8080/health",
+    ]

@@ -94,7 +94,8 @@ def test_1password_deploy_initializes_authenticated_connect_sync() -> None:
     """Infra-011.2: Connect deploy must not stop at unauthenticated /health."""
     tasks = (ROOT / "bootstrap/04.1password/tasks.py").read_text(encoding="utf-8")
 
-    assert "VPS-01 Access Token: own_service" in tasks
+    assert "infra2.0 Access Token: infra2.0" in tasks
+    assert "--fields label=credential --reveal" in tasks
     assert "/v1/vaults" in tasks
     assert "sync did not become active" in tasks
     assert "TOKEN_NEEDED" in tasks

@@ -49,6 +49,14 @@ def health_check() -> int:
 
     try:
         with httpx.Client(verify=VERIFY_TLS, timeout=5.0) as client:
+            item_resp = client.get(connect_item_url(), headers=connect_headers())
+            if item_resp.status_code != 200:
+                logger.error(
+                    "1Password Connect authenticated item lookup returned HTTP %s",
+                    item_resp.status_code,
+                )
+                return 1
+
             op_resp = client.get(f"{OP_CONNECT_HOST}/health")
             if op_resp.status_code != 200:
                 logger.error(
@@ -57,14 +65,6 @@ def health_check() -> int:
                 return 1
             if not connect_health_is_active(op_resp.json()):
                 logger.error("1Password Connect dependencies are not active.")
-                return 1
-
-            item_resp = client.get(connect_item_url(), headers=connect_headers())
-            if item_resp.status_code != 200:
-                logger.error(
-                    "1Password Connect authenticated item lookup returned HTTP %s",
-                    item_resp.status_code,
-                )
                 return 1
 
             vault_resp = client.get(f"{VAULT_ADDR}/v1/sys/health")

@@ -29,6 +29,8 @@ from libs.vault_tokens import (
 )
 from typing import Any
 
+CONNECT_TOKEN_ITEM = "infra2.0 Access Token: infra2.0"
+
 
 class VaultDeployer(Deployer):
     """Vault deployer using libs/ system"""
@@ -88,11 +90,9 @@ class VaultDeployer(Deployer):
                 error("Failed to resolve Infra2 vault ID for 1Password Connect")
                 return None
 
-            # OP_CONNECT_TOKEN (from 1Password Connect service account)
-            # Item: "bootstrap/1password/VPS-01 Access Token: own_service"
-            token_item = OpSecrets(
-                item="bootstrap/1password/VPS-01 Access Token: own_service"
-            )
+            # OP_CONNECT_TOKEN (from the 1Password Connect server token)
+            # Item: "infra2.0 Access Token: infra2.0"
+            token_item = OpSecrets(item=CONNECT_TOKEN_ITEM)
             token = token_item.get("credential")
             if token:
                 env_vars["OP_CONNECT_TOKEN"] = token

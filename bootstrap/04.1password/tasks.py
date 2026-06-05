@@ -21,6 +21,9 @@ from libs.deployer import Deployer, make_tasks
 
 shared_tasks = sys.modules.get("bootstrap.04.1password.shared")
 
+CONNECT_CREDENTIALS_ITEM = "infra2.0 Credentials File"
+CONNECT_TOKEN_ITEM = "infra2.0 Access Token: infra2.0"
+
 
 class OnePasswordDeployer(Deployer):
     """1Password Connect deployer using libs/ system"""
@@ -35,7 +38,7 @@ class OnePasswordDeployer(Deployer):
     subdomain = "op"
     service_port = 8080
     service_name = "op-connect-api"
-    connect_token_item = "bootstrap/1password/VPS-01 Access Token: own_service"
+    connect_token_item = CONNECT_TOKEN_ITEM
 
     @classmethod
     def _upload_credentials(cls, c) -> bool:
@@ -44,7 +47,7 @@ class OnePasswordDeployer(Deployer):
         ssh_user = e.get("VPS_SSH_USER") or "root"
         header("1Password credentials", "Uploading from 1Password CLI")
         cmd = (
-            "op document get 'bootstrap/1password/VPS-01 Credentials File' --vault Infra2 "
+            f"op document get {json.dumps(CONNECT_CREDENTIALS_ITEM)} --vault Infra2 "
             f"| ssh {ssh_user}@{e['VPS_HOST']} "
             f"'cat > {cls.data_path}/1password-credentials.json && chown {cls.uid}:{cls.gid} {cls.data_path}/1password-credentials.json'"
         )
@@ -73,7 +76,7 @@ class OnePasswordDeployer(Deployer):
         return c.run(
             "op item get "
             f"'{cls.connect_token_item}' "
-            "--vault Infra2 --fields credential --reveal "
+            "--vault Infra2 --fields label=credential --reveal "
             f"| ssh {ssh_user}@{e['VPS_HOST']} {json.dumps(remote)}",
             hide=True,
             warn=True,

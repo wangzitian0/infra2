@@ -30,7 +30,7 @@ exit
 ### 3. 上传 Credentials
 
 ```bash
-op document get "bootstrap/1password/VPS-01 Credentials File" --vault Infra2 | \
+op document get "infra2.0 Credentials File" --vault Infra2 | \
   ssh ${VPS_SSH_USER:-root}@<VPS_IP> 'cat > /data/bootstrap/1password/1password-credentials.json && chown 1000:1000 /data/bootstrap/1password/1password-credentials.json'
 
 # 验证
@@ -53,13 +53,13 @@ curl https://op.$INTERNAL_DOMAIN/health
 # 预期响应: {"name":"1Password Connect API","version":"1.8.2",...}
 
 # 测试读取 secrets
-TOKEN=$(op item get "bootstrap/1password/VPS-01 Access Token: own_service" --vault Infra2 --fields credential --reveal)
+TOKEN=$(op item get "infra2.0 Access Token: infra2.0" --vault Infra2 --fields label=credential --reveal)
 curl -H "Authorization: Bearer $TOKEN" https://op.$INTERNAL_DOMAIN/v1/vaults
 ```
 
 HTTP 200 from `/health` does not prove that Connect sync has been initialized.
 Deployment verification must make one authenticated `/v1/vaults` request with
-the bearer token from `bootstrap/1password/VPS-01 Access Token: own_service`,
+the bearer token from `infra2.0 Access Token: infra2.0`,
 then verify that the `/health` dependencies `sqlite`, `sync`, and `1Password`
 are all `ACTIVE`. If `/health` reports `sync: TOKEN_NEEDED` or
 `1Password: UNINITIALIZED`, the credentials file was loaded but the matching
