@@ -35,7 +35,9 @@ def test_workflow_alerts_directly_and_does_not_call_the_bridge() -> None:
     """Infra-007.2: host-down alerts bypass the in-band alert bridge."""
     text = WORKFLOW.read_text(encoding="utf-8")
 
+    assert "INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE" in text
     assert "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL" in text
+    assert "INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET" in text
     assert "http://platform-alerting" not in text
     assert "/signoz/webhook" not in text
     assert "tools/out_of_band_watchdog.py" in text
@@ -46,18 +48,33 @@ def test_default_targets_cover_public_host_and_bridge_health() -> None:
     watchdog = _load_watchdog()
 
     http_targets = watchdog.parse_http_targets("")
-    assert [target.name for target in http_targets] == [
-        "infra2-iac-runner",
-        "infra2-dokploy",
-    ]
-    assert http_targets[0].url == "https://iac.zitian.party/health"
-    assert http_targets[1].url == "https://cloud.zitian.party"
+    assert [target.name for target in http_targets] == ["infra2-public-entrypoint"]
+    assert http_targets[0].url == "https://cloud.zitian.party"
 
     ssh_targets = watchdog.parse_ssh_targets("")
-    assert len(ssh_targets) == 1
-    assert ssh_targets[0].name == "infra2-alert-bridge"
-    assert "platform-alerting" in ssh_targets[0].command
-    assert ssh_targets[0].expected_text == "healthy"
+    assert [target.name for target in ssh_targets] == [
+        "infra2-ssh",
+        "infra2-docker",
+        "infra2-alert-bridge",
+    ]
+    assert ssh_targets[0].command == "echo infra2-ssh-ok"
+    assert "docker info" in ssh_targets[1].command
+    assert "docker exec platform-alerting" in ssh_targets[2].command
+    assert "127.0.0.1:8080/health" in ssh_targets[2].command
+    assert ssh_targets[2].expected_text == "healthy"
+
+
+def test_iac_runner_is_not_a_default_whole_host_health_check() -> None:
+    """Infra-007.2: IaC Runner is service-level, not whole-host health."""
+    watchdog = _load_watchdog()
+
+    default_targets = "\n".join(
+        [target.url for target in watchdog.parse_http_targets("")]
+        + [target.command for target in watchdog.parse_ssh_targets("")]
+    )
+
+    assert "iac.zitian.party" not in default_targets
+    assert "iac-runner" not in default_targets
 
 
 def test_failure_message_is_out_of_band_and_redacts_secrets() -> None:
@@ -100,8 +117,8 @@ def test_main_sends_feishu_only_when_a_check_fails(monkeypatch) -> None:
     monkeypatch.setattr(watchdog, "run_ssh_checks", lambda _config, _targets: [])
     monkeypatch.setattr(
         watchdog,
-        "deliver_feishu_text",
-        lambda _webhook, text: sent_messages.append(text),
+        "deliver_out_of_band_alert",
+        lambda _env, text: sent_messages.append(text),
     )
 
     assert (
@@ -137,3 +154,36 @@ def test_main_sends_feishu_only_when_a_check_fails(monkeypatch) -> None:
     )
     assert len(sent_messages) == 1
     assert "OUT-OF-BAND" in sent_messages[0]
+
+
+def test_out_of_band_delivery_supports_existing_feishu_app_mode(monkeypatch) -> None:
+    """Infra-007.2: watchdog can reuse existing direct Feishu app credentials."""
+    watchdog = _load_watchdog()
+    calls = []
+
+    monkeypatch.setattr(
+        watchdog,
+        "deliver_feishu_app_text",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    watchdog.deliver_out_of_band_alert(
+        {
+            "INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE": "feishu_app",
+            "INFRA2_OUT_OF_BAND_FEISHU_APP_ID": "cli_test",
+            "INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET": "secret",
+            "INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID": "oc_test",
+            "INFRA2_OUT_OF_BAND_FEISHU_API_BASE": "https://open.feishu.cn",
+        },
+        "hello",
+    )
+
+    assert calls == [
+        {
+            "app_id": "cli_test",
+            "app_secret": "secret",
+            "chat_id": "oc_test",
+            "api_base": "https://open.feishu.cn",
+            "text": "hello",
+        }
+    ]

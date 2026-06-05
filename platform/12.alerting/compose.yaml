@@ -53,13 +53,18 @@ services:
     container_name: platform-alerting${ENV_SUFFIX}
     restart: unless-stopped
     depends_on:
-      vault-agent:
-        condition: service_healthy
+      - vault-agent
     entrypoint:
       - sh
       - -c
       - |
         set -e
+        waited=0
+        while [ ! -s /secrets/.env ] && [ "$$waited" -lt 120 ]; do
+          echo "Waiting for alerting secrets file..."
+          sleep 2
+          waited=$$((waited + 2))
+        done
         if [ ! -s /secrets/.env ]; then
           echo "ERROR: /secrets/.env is missing or empty"
           exit 1

@@ -49,6 +49,11 @@ This path is intentionally limited to host reachability and alerting bridge
 availability. All service-level alerts continue to use the in-band path through
 SigNoz and `platform/12.alerting`.
 
+The alert bridge must wait for `/secrets/.env` at startup, but it must not
+require the vault-agent sidecar to remain Docker-healthy after the secret file is
+rendered. Vault-agent stale-secret health is a separate service-level signal; it
+must not block alert delivery.
+
 ---
 
 ## 2. 告警分级 (Severity)
@@ -191,10 +196,21 @@ bridge it is meant to verify.
 
 Required GitHub secrets:
 
-- `INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL`
+- `INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE`: `feishu_webhook` or `feishu_app`
 - `INFRA2_WATCHDOG_SSH_HOST`
 - `INFRA2_WATCHDOG_SSH_USER`
 - `INFRA2_WATCHDOG_SSH_PRIVATE_KEY`
+
+For `feishu_webhook` mode:
+
+- `INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL`
+
+For `feishu_app` mode:
+
+- `INFRA2_OUT_OF_BAND_FEISHU_APP_ID`
+- `INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET`
+- `INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID`
+- `INFRA2_OUT_OF_BAND_FEISHU_API_BASE`: optional, defaults to `https://open.feishu.cn`
 
 Optional GitHub variables:
 
@@ -202,10 +218,10 @@ Optional GitHub variables:
 - `INFRA2_WATCHDOG_SSH_TARGETS`: newline-separated `name|command|expected_text`
 - `INFRA2_WATCHDOG_SSH_PORT`: defaults to `22`
 
-Defaults check `https://iac.zitian.party/health`, `https://cloud.zitian.party`,
-and the `platform-alerting` container health via SSH. Service-level checks such
-as MinIO, Postgres, Redis, and application dependency probes remain in-band
-alerts owned by the bridge/SigNoz path.
+Defaults check the public Dokploy entrypoint, SSH reachability, Docker daemon
+reachability, and the `platform-alerting` in-container `/health` endpoint via
+SSH. IaC Runner, MinIO, Postgres, Redis, and application dependency probes are
+service-level signals and remain in-band alerts owned by the bridge/SigNoz path.
 
 ---
 

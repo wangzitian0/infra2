@@ -127,12 +127,28 @@ by `.github/workflows/out-of-band-watchdog.yml`, which runs every 30 minutes fro
 GitHub Actions and sends Feishu directly when infra2 or the bridge cannot be
 trusted.
 
+The bridge waits for `/secrets/.env` at startup, but it does not require the
+vault-agent sidecar to stay Docker-healthy after the file is rendered. This keeps
+alert delivery available even when vault-agent's own stale-secret health check
+needs separate remediation.
+
 Required repository secrets:
 
-- `INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL`
+- `INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE`: `feishu_webhook` or `feishu_app`
 - `INFRA2_WATCHDOG_SSH_HOST`
 - `INFRA2_WATCHDOG_SSH_USER`
 - `INFRA2_WATCHDOG_SSH_PRIVATE_KEY`
+
+For `feishu_webhook` mode:
+
+- `INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL`
+
+For `feishu_app` mode:
+
+- `INFRA2_OUT_OF_BAND_FEISHU_APP_ID`
+- `INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET`
+- `INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID`
+- `INFRA2_OUT_OF_BAND_FEISHU_API_BASE`: optional, defaults to `https://open.feishu.cn`
 
 Optional repository variables:
 
@@ -140,7 +156,8 @@ Optional repository variables:
 - `INFRA2_WATCHDOG_SSH_TARGETS`: newline-separated `name|command|expected_text`
 - `INFRA2_WATCHDOG_SSH_PORT`: defaults to `22`
 
-Default checks cover `https://iac.zitian.party/health`,
-`https://cloud.zitian.party`, and the `platform-alerting` container health via
-SSH. Service-level health such as MinIO/Postgres/Redis remains in-band through
-SigNoz and this bridge.
+Default checks cover the public Dokploy entrypoint, SSH reachability, Docker
+daemon reachability, and the `platform-alerting` in-container `/health` endpoint
+via SSH.
+IaC Runner, MinIO, Postgres, Redis, and application dependency health remain
+service-level signals handled in-band through SigNoz and this bridge.
