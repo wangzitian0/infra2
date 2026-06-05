@@ -204,6 +204,9 @@ def resolve_vault_root_token(env: dict[str, str]) -> str | None:
     if token := env.get("VAULT_ROOT_TOKEN"):
         return token
 
+    if token := env.get("VAULT_APP_TOKEN"):
+        return token
+
     if _VAULT_ROOT_TOKEN_CACHE:
         return _VAULT_ROOT_TOKEN_CACHE
 
