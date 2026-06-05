@@ -21,7 +21,7 @@ the P1 reliability review found four remaining hard gaps:
 
 | AC | Description | Proof |
 |----|-------------|-------|
-| Infra-011.1 | GitHub Actions deployment waits for the real IaC Runner sync result and fails on failed service syncs. | `libs/tests/test_iac_runner_deploy_result.py`, `.github/workflows/deploy-platform.yml` |
+| Infra-011.1 | GitHub Actions deployment waits for the real IaC Runner sync result, fails on failed service syncs, and runs invoke without repo path shadowing Python stdlib modules. | `libs/tests/test_iac_runner_deploy_result.py`, `.github/workflows/deploy-platform.yml` |
 | Infra-011.2 | P1 infra dependencies have code-owned probes that alert through `platform/12.alerting`. | `libs/tests/test_infra_probes.py`, `platform/12.alerting/compose.yaml` |
 | Infra-011.3 | Vault Agent Docker health checks token lookup and rendered-file presence, while mtime freshness remains an audit signal. | `libs/tests/test_vault_self_refresh_audit.py`, compose healthchecks |
 | Infra-011.4 | Deployer-owned persistent data paths have backup inventory coverage, an archive/checksum runner, and manifest freshness verification. | `libs/tests/test_backup_verification.py`, `tools/backup_runner.py`, `docs/ssot/ops.backup-inventory.yaml` |

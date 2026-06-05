@@ -179,3 +179,39 @@ def test_deploy_wait_rejects_invalid_literal(monkeypatch) -> None:
 
     assert status_code == 400
     assert body["error"] == "wait must be a boolean"
+
+
+def test_run_invoke_task_preloads_stdlib_platform_before_repo_path(
+    monkeypatch, tmp_path
+) -> None:
+    """Infra-011.1: repo platform/ must not shadow stdlib platform in invoke."""
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    sync_runner = _load_module(
+        "sync_runner_platform_shadow_under_test",
+        IAC_RUNNER / "sync_runner.py",
+        monkeypatch,
+    )
+    captured = {}
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(sync_runner.subprocess, "run", fake_run)
+
+    result = sync_runner.run_invoke_task("postgres.sync", tmp_path, "staging")
+
+    assert result["success"] is True
+    assert captured["args"] == [
+        sys.executable,
+        "-P",
+        "-c",
+        sync_runner.INVOKE_BOOTSTRAP,
+        "postgres.sync",
+    ]
+    assert "import platform" in sync_runner.INVOKE_BOOTSTRAP
+    assert "sys.path.insert(0, '.')" in sync_runner.INVOKE_BOOTSTRAP
+    assert captured["kwargs"]["cwd"] == tmp_path
+    assert captured["kwargs"]["env"]["DEPLOY_ENV"] == "staging"
+    assert "PYTHONPATH" not in captured["kwargs"]["env"]

@@ -27,6 +27,11 @@ REPO_NAME = Path(urlparse(GIT_REPO_URL).path).stem
 
 WORKSPACE_LOCK_FILE = Path("/tmp/workspace.lock")
 DEPLOYMENT_LOCK_FILE = Path("/tmp/deployment.lock")
+INVOKE_BOOTSTRAP = (
+    "import platform, runpy, sys; "
+    "sys.path.insert(0, '.'); "
+    "runpy.run_module('invoke', run_name='__main__')"
+)
 
 SERVICE_TASK_MAP = {
     "platform/postgres": "postgres.sync",
@@ -199,13 +204,12 @@ def run_invoke_task(
 
     env_vars = {
         **os.environ,
-        "PYTHONPATH": str(repo_path),
         "DEPLOY_ENV": deploy_env,
     }
 
     try:
         result = subprocess.run(
-            ["invoke", task_name],
+            [sys.executable, "-P", "-c", INVOKE_BOOTSTRAP, task_name],
             cwd=repo_path,
             capture_output=True,
             text=True,

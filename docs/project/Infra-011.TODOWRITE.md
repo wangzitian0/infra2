@@ -21,6 +21,7 @@
 - #158: off-host backup inventory and restore proof path.
 - #162: external/synthetic and backup freshness alert coverage.
 - #186: IaC Runner route ownership drift blocked main deploy health checks.
+- #187: IaC Runner deploy failed after health recovery because repo `platform/` shadowed Python stdlib `platform`.
 
 ## TODO
 
@@ -30,5 +31,7 @@
 - [x] Update Vault Agent Docker health contract and tests.
 - [x] Add backup inventory, runner, and manifest verifier tests.
 - [x] Add routing ownership policy test and remove current mixed-mode offenders.
+- [x] Run IaC Runner invoke tasks without `platform/` shadowing Python stdlib imports.
+- [x] Use Dokploy Domains for simple IaC Runner and Wealthfolio public routes.
 - [x] Run full lint/test suite.
 - [x] Open PR.

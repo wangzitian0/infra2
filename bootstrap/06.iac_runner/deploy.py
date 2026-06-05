@@ -21,8 +21,8 @@ class IaCRunnerDeployer(Deployer):
     # Webhook secret
     secret_key = "WEBHOOK_SECRET"
 
-    # Domain is owned by compose Traefik labels.
-    subdomain = None
+    # Simple public route owned by Dokploy Domains.
+    subdomain = "iac"
     service_port = 8080
     service_name = "iac-runner"  # Docker service name keeps hyphen
 

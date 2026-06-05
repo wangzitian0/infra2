@@ -130,12 +130,6 @@ services:
       - ${SSH_DIR_PATH:-/root/.ssh}:/host_ssh:ro
     networks:
       - dokploy-network
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.iac-runner.rule=Host(`iac.${INTERNAL_DOMAIN}`)"
-      - "traefik.http.routers.iac-runner.entrypoints=websecure"
-      - "traefik.http.routers.iac-runner.tls.certResolver=letsencrypt"
-      - "traefik.http.services.iac-runner.loadbalancer.server.port=8080"
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 30s
