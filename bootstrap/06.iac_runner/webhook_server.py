@@ -206,6 +206,7 @@ def health():
         "vault_secrets": SECRETS_FILE.exists() and SECRETS_FILE.stat().st_size > 0,
         "git_repo_url": bool(GIT_REPO_URL),
         "webhook_secret": bool(WEBHOOK_SECRET),
+        "op_service_account_token": bool(os.environ.get("OP_SERVICE_ACCOUNT_TOKEN")),
     }
     checks.update(_dependency_checks())
 

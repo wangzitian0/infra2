@@ -22,6 +22,11 @@ the P1 reliability review found four remaining hard gaps:
 - IaC Runner `/health` did not include runtime dependency checks, so a stale
   bootstrap image could accept deploys even when invoke startup would fail on a
   missing Python package.
+- 1Password Connect and `vault-unsealer` could look healthy while Connect sync
+  was still `TOKEN_NEEDED` or while the configured Connect API token returned
+  401 on authenticated item reads.
+- IaC Runner could have a rendered `OP_SERVICE_ACCOUNT_TOKEN` in `/secrets/.env`
+  while the long-running process still had an empty environment value.
 - IaC Runner bootstrap source changes were not part of the post-merge deploy
   trigger, so a merged runner fix could leave the live webhook image stale until
   someone manually rebuilt the Dokploy compose.
@@ -36,7 +41,7 @@ the P1 reliability review found four remaining hard gaps:
 | AC | Description | Proof |
 |----|-------------|-------|
 | Infra-011.1 | GitHub Actions deployment waits for the real IaC Runner sync result, fails on failed service syncs, and runs invoke without repo path shadowing Python stdlib modules. | `libs/tests/test_iac_runner_deploy_result.py`, `.github/workflows/deploy-platform.yml` |
-| Infra-011.2 | P1 infra dependencies and generic Docker unhealthy/starting/restarting states have code-owned probes or out-of-band checks. | `libs/tests/test_infra_probes.py`, `libs/tests/test_out_of_band_watchdog.py`, `platform/12.alerting/compose.yaml` |
+| Infra-011.2 | P1 infra dependencies, authenticated 1Password Connect paths, IaC Runner process secrets, and generic Docker unhealthy/starting/restarting states have code-owned probes or out-of-band checks. | `libs/tests/test_infra_probes.py`, `libs/tests/test_bootstrap_health.py`, `libs/tests/test_vault_unsealer.py`, `libs/tests/test_iac_runner_deploy_result.py`, `libs/tests/test_out_of_band_watchdog.py`, `platform/12.alerting/compose.yaml` |
 | Infra-011.3 | Vault Agent Docker health checks token lookup, rendered-file presence, and unresolved template values, while mtime freshness remains an audit signal. | `libs/tests/test_vault_self_refresh_audit.py`, compose healthchecks |
 | Infra-011.6 | IaC Runner sync ensures every runtime secret field consumed by custom service templates before deploy. | `libs/tests/test_deployer.py`, `platform/*/deploy.py` |
 | Infra-011.4 | Deployer-owned persistent data paths have backup inventory coverage, an archive/checksum runner, and manifest freshness verification. | `libs/tests/test_backup_verification.py`, `tools/backup_runner.py`, `docs/ssot/ops.backup-inventory.yaml` |

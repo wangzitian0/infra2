@@ -3,10 +3,20 @@
 Uses libs/ system for consistent environment and console utilities.
 Bootstrap layer uses 1Password for secrets, not Vault.
 """
+import json
 import sys
+import time
 from invoke import task
 from libs.common import get_env
-from libs.console import header, success, error, warning, info, prompt_action, run_with_status
+from libs.console import (
+    header,
+    success,
+    error,
+    warning,
+    info,
+    prompt_action,
+    run_with_status,
+)
 from libs.deployer import Deployer, make_tasks
 
 shared_tasks = sys.modules.get("bootstrap.04.1password.shared")
@@ -25,6 +35,7 @@ class OnePasswordDeployer(Deployer):
     subdomain = "op"
     service_port = 8080
     service_name = "op-connect-api"
+    connect_token_item = "bootstrap/1password/VPS-01 Access Token: own_service"
 
     @classmethod
     def _upload_credentials(cls, c) -> bool:
@@ -47,7 +58,81 @@ class OnePasswordDeployer(Deployer):
     @classmethod
     def env(cls):
         return get_env()
-    
+
+    @classmethod
+    def _connect_internal_request(cls, c, path: str, timeout: int = 20):
+        e = cls.env()
+        ssh_user = e.get("VPS_SSH_USER") or "root"
+        remote = (
+            "read -r token; "
+            "docker run --rm -i --network dokploy-network curlimages/curl:8.10.1 "
+            f"-sS --max-time {timeout} "
+            "-H \"Authorization: Bearer ${token}\" "
+            f"\"http://op-connect-api:8080{path}\""
+        )
+        return c.run(
+            "op item get "
+            f"'{cls.connect_token_item}' "
+            "--vault Infra2 --fields credential --reveal "
+            f"| ssh {ssh_user}@{e['VPS_HOST']} {json.dumps(remote)}",
+            hide=True,
+            warn=True,
+        )
+
+    @classmethod
+    def _connect_internal_health(cls, c, timeout: int = 10):
+        e = cls.env()
+        ssh_user = e.get("VPS_SSH_USER") or "root"
+        remote = (
+            "docker run --rm --network dokploy-network curlimages/curl:8.10.1 "
+            f"-sS --max-time {timeout} http://op-connect-api:8080/health"
+        )
+        return c.run(
+            f"ssh {ssh_user}@{e['VPS_HOST']} {json.dumps(remote)}",
+            hide=True,
+            warn=True,
+        )
+
+    @staticmethod
+    def _health_has_active_sync(raw: str) -> bool:
+        try:
+            body = json.loads(raw)
+        except json.JSONDecodeError:
+            return False
+        statuses = {
+            item.get("service"): item.get("status")
+            for item in body.get("dependencies", [])
+        }
+        return (
+            statuses.get("sqlite") == "ACTIVE"
+            and statuses.get("sync") == "ACTIVE"
+            and statuses.get("1Password") == "ACTIVE"
+        )
+
+    @classmethod
+    def _initialize_connect_sync(cls, c) -> bool:
+        result = cls._connect_internal_request(c, "/v1/vaults")
+        if not result.ok:
+            error(
+                "1Password Connect authenticated initialization failed",
+                "The Connect API token must match the deployed credentials file.",
+            )
+            return False
+
+        for attempt in range(1, 13):
+            health = cls._connect_internal_health(c)
+            if health.ok and cls._health_has_active_sync(health.stdout):
+                success("1Password Connect sync is active")
+                return True
+            info(f"Waiting for 1Password Connect sync ({attempt}/12)")
+            time.sleep(5)
+
+        error(
+            "1Password Connect sync did not become active",
+            "Check for TOKEN_NEEDED, stale Connect API token, or mismatched credentials file.",
+        )
+        return False
+
     @classmethod
     def pre_compose(cls, c) -> bool:
         """Prepare data directory and upload credentials"""
@@ -175,7 +260,10 @@ class OnePasswordDeployer(Deployer):
         """Verify deployment"""
         e = cls.env()
         header("1Password post-compose", "Verifying")
-        
+
+        if not cls._initialize_connect_sync(c):
+            return False
+
         result = c.run(f"curl -s https://op.{e['INTERNAL_DOMAIN']}/health", warn=True)
         if result.ok and "1Password Connect" in result.stdout:
             success("1Password Connect is healthy")
@@ -223,4 +311,3 @@ def fix_permissions(c):
     e = get_env()
     ssh_user = e.get("VPS_SSH_USER") or "root"
     run_with_status(c, f"ssh {ssh_user}@{e['VPS_HOST']} 'chmod 750 /data/bootstrap/1password'", "Fix permissions")
-

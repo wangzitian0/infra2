@@ -73,11 +73,20 @@ class VaultDeployer(Deployer):
         info("Fetching secrets from 1Password...")
         env_vars = {
             "INTERNAL_DOMAIN": e.get("INTERNAL_DOMAIN"),
-            "OP_VAULT_ID": "Infra2",  # Default vault
         }
 
         try:
             from libs.env import OpSecrets
+
+            vault_result = c.run(
+                "op vault get Infra2 --format json", hide=True, warn=True
+            )
+            if vault_result.ok:
+                vault = json.loads(vault_result.stdout)
+                env_vars["OP_VAULT_ID"] = vault["id"]
+            else:
+                error("Failed to resolve Infra2 vault ID for 1Password Connect")
+                return None
 
             # OP_CONNECT_TOKEN (from 1Password Connect service account)
             # Item: "bootstrap/1password/VPS-01 Access Token: own_service"
@@ -100,8 +109,6 @@ class VaultDeployer(Deployer):
                 cmd = "op item get 'bootstrap/vault/Unseal Keys' --vault Infra2 --format json"
                 res = c.run(cmd, hide=True, warn=True)
                 if res.ok:
-                    import json
-
                     item = json.loads(res.stdout)
                     env_vars["OP_ITEM_ID"] = item["id"]
                 else:

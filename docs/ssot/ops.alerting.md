@@ -240,6 +240,10 @@ Defaults check the public Dokploy entrypoint, SSH reachability, Docker daemon
 reachability, and the `platform-alerting` in-container `/health` endpoint via
 SSH. IaC Runner, MinIO, Postgres, Redis, and application dependency probes are
 service-level signals and remain in-band alerts owned by the bridge/SigNoz path.
+Default SSH checks are mandatory: `INFRA2_WATCHDOG_SSH_TARGETS` can add checks or
+override a check by name, but it must not remove `infra2-docker-health`. That
+check fails on any Docker `unhealthy`, `health: starting`, or `Restarting`
+container outside an active deployment window.
 
 ### SOP-006: Infra service probes
 

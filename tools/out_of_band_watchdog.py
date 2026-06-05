@@ -75,15 +75,21 @@ def parse_http_targets(raw: str) -> list[HttpTarget]:
 
 def parse_ssh_targets(raw: str) -> list[SshTarget]:
     """Parse newline-separated `name|command|expected_text` bridge checks."""
-    targets: list[SshTarget] = []
-    for line in _effective_lines(raw or DEFAULT_SSH_TARGETS):
+    target_by_name: dict[str, SshTarget] = {}
+    ordered_names: list[str] = []
+    lines = _effective_lines(DEFAULT_SSH_TARGETS)
+    if raw:
+        lines.extend(_effective_lines(raw))
+    for line in lines:
         parts = [part.strip() for part in line.split("|", 2)]
         if len(parts) != 3:
             raise ValueError(f"Invalid SSH target: {line}")
-        targets.append(
-            SshTarget(name=parts[0], command=parts[1], expected_text=parts[2])
+        if parts[0] not in target_by_name:
+            ordered_names.append(parts[0])
+        target_by_name[parts[0]] = SshTarget(
+            name=parts[0], command=parts[1], expected_text=parts[2]
         )
-    return targets
+    return [target_by_name[name] for name in ordered_names]
 
 
 def load_ssh_config(env: Mapping[str, str]) -> SshConfig | None:

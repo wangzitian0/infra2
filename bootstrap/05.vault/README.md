@@ -158,16 +158,26 @@ Expected healthy state after reboot:
 - `vault-unsealer`: `Up ... (healthy)`
 - Vault health endpoint returns HTTP 200.
 
+`vault-unsealer` health is intentionally stricter than raw Connect `/health`.
+It must verify:
+
+- `OP_CONNECT_TOKEN`, `OP_VAULT_ID`, and `OP_ITEM_ID` are present.
+- 1Password Connect dependencies are active (`sqlite`, `sync`, `1Password`).
+- The configured bearer token can read `/v1/vaults/$OP_VAULT_ID/items/$OP_ITEM_ID`.
+- Vault is initialized, unsealed, and returns an accepted health status.
+
 Degraded states:
 
 - `vault` is `unhealthy`: Vault is not initialized, is sealed, or cannot answer `vault status`.
-- `vault-unsealer` is `unhealthy`: Vault is sealed, 1Password Connect is unreachable, or required unseal-key environment variables are missing.
+- `vault-unsealer` is `unhealthy`: Vault is sealed, 1Password Connect is unreachable, Connect sync is not active, the Connect token is stale/unauthorized, or required unseal-key environment variables are missing.
 - `vault-unsealer` is restarting: check `OP_CONNECT_TOKEN`, `OP_VAULT_ID`, and `OP_ITEM_ID`.
 
 Failed states that need immediate action:
 
 - Vault remains HTTP 503 after `vault-unsealer` has run for more than one healthcheck window.
 - 1Password Connect `/health` is not HTTP 200.
+- 1Password Connect `/health` is HTTP 200 but reports `sync: TOKEN_NEEDED` or `1Password: UNINITIALIZED`.
+- `vault-unsealer` logs show HTTP 401/403 from 1Password Connect authenticated item lookup.
 - `docker logs vault-unsealer --tail 100` shows missing unseal keys or 1Password authorization failures.
 
 ## 配置说明

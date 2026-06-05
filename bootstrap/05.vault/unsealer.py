@@ -21,8 +21,28 @@ CHECK_INTERVAL = 30  # seconds
 logger.info("Script loaded. Checking environment...")
 
 
+def connect_headers() -> dict[str, str]:
+    return {"Authorization": f"Bearer {OP_CONNECT_TOKEN}"}
+
+
+def connect_item_url() -> str:
+    return f"{OP_CONNECT_HOST}/v1/vaults/{OP_VAULT_ID}/items/{OP_ITEM_ID}"
+
+
+def connect_health_is_active(payload: dict) -> bool:
+    statuses = {
+        item.get("service"): item.get("status")
+        for item in payload.get("dependencies", [])
+    }
+    return (
+        statuses.get("sqlite") == "ACTIVE"
+        and statuses.get("sync") == "ACTIVE"
+        and statuses.get("1Password") == "ACTIVE"
+    )
+
+
 def health_check() -> int:
-    """Return 0 only when Vault is unsealed and 1Password Connect is reachable."""
+    """Return 0 only when Vault is unsealed and 1Password Connect auth works."""
     if not all([OP_CONNECT_TOKEN, OP_VAULT_ID, OP_ITEM_ID]):
         logger.error("Required 1Password Connect environment variables are missing.")
         return 1
@@ -33,6 +53,17 @@ def health_check() -> int:
             if op_resp.status_code != 200:
                 logger.error(
                     "1Password Connect health returned HTTP %s", op_resp.status_code
+                )
+                return 1
+            if not connect_health_is_active(op_resp.json()):
+                logger.error("1Password Connect dependencies are not active.")
+                return 1
+
+            item_resp = client.get(connect_item_url(), headers=connect_headers())
+            if item_resp.status_code != 200:
+                logger.error(
+                    "1Password Connect authenticated item lookup returned HTTP %s",
+                    item_resp.status_code,
                 )
                 return 1
 
@@ -73,10 +104,7 @@ def unseal():
             logger.warning("Vault is SEALED. Starting unseal process...")
 
             # Fetch keys from 1Password
-            headers = {"Authorization": f"Bearer {OP_CONNECT_TOKEN}"}
-            api_url = f"{OP_CONNECT_HOST}/v1/vaults/{OP_VAULT_ID}/items/{OP_ITEM_ID}"
-
-            op_resp = client.get(api_url, headers=headers)
+            op_resp = client.get(connect_item_url(), headers=connect_headers())
             op_resp.raise_for_status()
             item = op_resp.json()
 
