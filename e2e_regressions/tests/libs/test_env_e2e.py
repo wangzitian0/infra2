@@ -34,7 +34,7 @@ class TestVaultE2E:
         
         # Write
         result = secrets.set(test_key, test_value)
-        assert result == True, "Failed to write to Vault"
+        assert result is True, "Failed to write to Vault"
         
         # Read
         retrieved = secrets.get(test_key)

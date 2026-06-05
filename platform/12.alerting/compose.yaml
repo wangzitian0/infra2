@@ -29,10 +29,7 @@ services:
         - CMD-SHELL
         - |
           test -s /vault/secrets/.env &&
-          VAULT_TOKEN="$$(cat /vault/token)" vault token lookup >/dev/null &&
-          mtime="$$(stat -c %Y /vault/secrets/.env)" &&
-          now="$$(date +%s)" &&
-          [ "$$((now - mtime))" -le "$${VAULT_AGENT_MAX_SECRET_AGE_SECONDS:-900}" ]
+          VAULT_TOKEN="$$(cat /vault/token)" vault token lookup >/dev/null
       interval: 5s
       timeout: 3s
       retries: 60
@@ -101,6 +98,39 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    volumes:
+      - secrets:/secrets:ro
+    networks:
+      - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    labels:
+      - "traefik.enable=false"
+
+  infra-probe-runner:
+    image: platform-alerting-feishu-bridge:${IAC_CONFIG_HASH:-latest}
+    container_name: platform-alerting-probes${ENV_SUFFIX}
+    restart: unless-stopped
+    depends_on:
+      - feishu-alert-bridge
+    command: ["python", "/app/tools/infra_probe_runner.py", "--loop"]
+    environment:
+      ALERT_BRIDGE_URL: http://platform-alerting${ENV_SUFFIX}:8080/signoz/webhook
+      ALERTING_ENV_FILE: /secrets/.env
+      INFRA_PROBE_INTERVAL_SECONDS: ${INFRA_PROBE_INTERVAL_SECONDS:-300}
+      INFRA_PROBE_SPECS: |
+        dokploy-http|http|https://cloud.${INTERNAL_DOMAIN}|200,302|critical|5
+        vault-http|http|https://vault.${INTERNAL_DOMAIN}/v1/sys/health|200,429,472,473|critical|5
+        minio-http|http|https://minio.${INTERNAL_DOMAIN}/minio/health/live|200|critical|5
+        authentik-http|http|https://sso.${INTERNAL_DOMAIN}/-/health/live/|200,204,302|critical|5
+        signoz-http|http|https://signoz.${INTERNAL_DOMAIN}|200,302|critical|5
+        alert-bridge-http|http|http://platform-alerting${ENV_SUFFIX}:8080/health|200|critical|5
+        platform-postgres-tcp|tcp|platform-postgres${ENV_SUFFIX}:5432|connected|critical|5
+        platform-redis-tcp|tcp|platform-redis${ENV_SUFFIX}:6379|connected|critical|5
+        clickhouse-http|http|http://platform-clickhouse${ENV_SUFFIX}:8123/ping|200|critical|5
     volumes:
       - secrets:/secrets:ro
     networks:

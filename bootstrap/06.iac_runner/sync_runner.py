@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 from contextlib import contextmanager
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -60,6 +61,58 @@ ALL_SERVICES = [
     "finance_report/redis",
     "finance_report/app",
 ]
+
+
+@dataclass
+class ServiceSyncResult:
+    service: str
+    task: str | None
+    success: bool
+    skipped: bool = False
+    stdout: str = ""
+    stderr: str = ""
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class SyncResult:
+    env: str
+    ref: str | None
+    requested_services: list[str]
+    results: list[ServiceSyncResult] = field(default_factory=list)
+    repo_updated: bool = True
+    error: str = ""
+
+    @property
+    def succeeded(self) -> int:
+        return sum(1 for result in self.results if result.success and not result.skipped)
+
+    @property
+    def failed(self) -> int:
+        return sum(1 for result in self.results if not result.success)
+
+    @property
+    def skipped(self) -> int:
+        return sum(1 for result in self.results if result.skipped)
+
+    @property
+    def success(self) -> bool:
+        return self.repo_updated and self.failed == 0 and not self.error
+
+    def to_dict(self) -> dict:
+        return {
+            "success": self.success,
+            "env": self.env,
+            "ref": self.ref,
+            "requested_services": self.requested_services,
+            "succeeded": self.succeeded,
+            "failed": self.failed,
+            "skipped": self.skipped,
+            "error": self.error,
+            "results": [result.to_dict() for result in self.results],
+        }
 
 
 @contextmanager
@@ -177,8 +230,9 @@ def run_invoke_task(
 
 def sync_services(
     services: set[str], ref: str | None = None, deploy_env: str = "staging"
-):
+) -> SyncResult:
     """Sync the specified services with deployment lock."""
+    requested_services = sorted(services)
     with file_lock(DEPLOYMENT_LOCK_FILE, "deployment"):
         logger.info(
             f"Starting sync for services: {services} (env={deploy_env}, ref={ref})"
@@ -186,7 +240,13 @@ def sync_services(
 
         if not update_repo(ref=ref):
             logger.error("Failed to update repo, aborting sync")
-            return
+            return SyncResult(
+                env=deploy_env,
+                ref=ref,
+                requested_services=requested_services,
+                repo_updated=False,
+                error="Failed to update repo",
+            )
 
         repo_path = WORKSPACE / REPO_NAME
 
@@ -194,38 +254,68 @@ def sync_services(
             services = set(ALL_SERVICES)
             logger.info("Syncing all services due to libs/ change")
 
-        results = []
+        results: list[ServiceSyncResult] = []
         for service in sorted(services):
             task_name = SERVICE_TASK_MAP.get(service)
 
             if task_name is None:
                 logger.info(f"Skipping {service} (no sync task configured)")
+                results.append(
+                    ServiceSyncResult(
+                        service=service,
+                        task=None,
+                        success=True,
+                        skipped=True,
+                    )
+                )
                 continue
 
             result = run_invoke_task(task_name, repo_path, deploy_env)
-            results.append(result)
+            service_result = ServiceSyncResult(
+                service=service,
+                task=task_name,
+                success=bool(result["success"]),
+                stdout=str(result.get("stdout", "")),
+                stderr=str(result.get("stderr", "")),
+            )
+            results.append(service_result)
 
-            if result["success"]:
+            if service_result.success:
                 logger.info(f"✅ {service}: sync completed")
             else:
                 logger.error(f"❌ {service}: sync failed")
-                logger.error(result["stderr"])
+                logger.error(service_result.stderr)
 
-        succeeded = sum(1 for r in results if r["success"])
-        failed = sum(1 for r in results if not r["success"])
-        logger.info(f"Sync complete: {succeeded} succeeded, {failed} failed")
+        sync_result = SyncResult(
+            env=deploy_env,
+            ref=ref,
+            requested_services=requested_services,
+            results=results,
+        )
+        logger.info(
+            "Sync complete: "
+            f"{sync_result.succeeded} succeeded, "
+            f"{sync_result.failed} failed, "
+            f"{sync_result.skipped} skipped"
+        )
+        return sync_result
 
 
-def sync_services_by_version(env: str, ref: str, triggered_by: str):
+def sync_services_by_version(env: str, ref: str, triggered_by: str) -> SyncResult:
     """Deploy all platform services to a specific environment using a git ref."""
     logger.info("=== Deployment Started ===")
     logger.info(f"Environment: {env}")
     logger.info(f"Ref: {ref}")
     logger.info(f"Triggered by: {triggered_by}")
 
-    sync_services(set(ALL_SERVICES), ref=ref, deploy_env=env)
+    result = sync_services(set(ALL_SERVICES), ref=ref, deploy_env=env)
 
-    logger.info("=== Deployment Complete ===")
+    logger.info(
+        "=== Deployment Complete: "
+        f"{'success' if result.success else 'failed'} "
+        f"({result.succeeded} succeeded, {result.failed} failed) ==="
+    )
+    return result
 
 
 if __name__ == "__main__":

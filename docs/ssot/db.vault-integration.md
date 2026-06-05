@@ -146,11 +146,17 @@ CI enforces these settings on all `vault-agent.hcl` files.
 Vault-agent compose services must:
 - Remove stale `/vault/secrets/.env` before starting `vault agent`.
 - Fail healthcheck when `vault token lookup` fails for `VAULT_APP_TOKEN`.
-- Fail healthcheck when the rendered secrets file is stale (`VAULT_AGENT_MAX_SECRET_AGE_SECONDS`, default 900s).
+- Fail healthcheck when `/vault/secrets/.env` is missing or empty.
+- Not use rendered-file mtime freshness in Docker healthchecks.
 
 This prevents a previously rendered secrets file from masking an expired token.
 Deploy automation must treat an invalid or short-lived `VAULT_APP_TOKEN` as a
 hard preflight failure instead of continuing with a redeploy.
+
+Rendered-file freshness remains a P1 audit signal, not a Docker container health
+contract. Vault Agent templates may not rewrite a static secret file when the
+secret value is unchanged, so continuous mtime freshness creates false unhealthy
+sidecars even when token lookup and template rendering are functional.
 
 ### Required live self-refresh audit
 
@@ -167,7 +173,8 @@ The audit must check:
 - Vault token lookup reports `valid=true`, `renewable=true`, and TTL above the
   configured floor.
 - `/vault/secrets/.env` exists in the vault-agent container, is readable,
-  non-empty, and fresher than `max_rendered_secret_age_seconds`.
+  non-empty, and fresher than `max_rendered_secret_age_seconds` as an audit
+  signal.
 - vault-agent logs do not contain known token refresh or template render errors.
 - vault-agent and application containers are running with acceptable health; app
   containers must mount `/secrets/.env`.
@@ -206,7 +213,9 @@ invoke vault-audit.self-refresh --env=staging --service=finance_report/app
 ```
 
 An infra-owned Dokploy server schedule may run a repair shell that only mutates
-Vault when the read-only audit fails:
+Vault when the read-only audit reports token failures. Rendered-file freshness
+failures should alert first; they must not blindly rotate tokens when token
+lookup is still valid.
 
 ```bash
 set -euo pipefail

@@ -74,10 +74,12 @@ nav:
           - E2E: ssot/ops.e2e-regressions.md
           - Recovery: ssot/ops.recovery.md
           - Storage: ssot/ops.storage.md
+          - Backup Inventory: ssot/ops.backup-inventory.yaml
           - Observability (Planned): ssot/ops.observability.md
           - Alerting: ssot/ops.alerting.md
   - Projects:
       - Portfolio: project/README.md
+      - Infra-011: project/Infra-011.reliability_hardening.md
       - Infra-006: project/Infra-006.documentation_engineering.md
       - Infra-005: project/Infra-005.homer_portal.md
       - Infra-004: project/Infra-004.authentik_install.md

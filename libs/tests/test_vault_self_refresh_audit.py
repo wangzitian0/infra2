@@ -50,7 +50,10 @@ def test_inventory_paths_exist_and_match_vault_agent_contract() -> None:
         assert service.vault_token_env_key in str(vault_agent.get("environment", {}))
         assert service.rendered_secret_path in str(vault_agent)
         assert "vault token lookup" in str(vault_agent.get("healthcheck", {}))
-        assert "stat -c %Y" in str(vault_agent.get("healthcheck", {}))
+        assert "stat -c %Y" not in str(vault_agent.get("healthcheck", {}))
+        assert "VAULT_AGENT_MAX_SECRET_AGE_SECONDS" not in str(
+            vault_agent.get("healthcheck", {})
+        )
 
 
 def test_token_classifier_reports_missing_malformed_invalid_nonrenewable_and_low_ttl() -> (

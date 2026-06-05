@@ -78,6 +78,21 @@ def get_changed_services(commits: list[dict]) -> set[str]:
     return services
 
 
+def parse_bool(value) -> bool:
+    """Parse booleans from JSON or common string literals."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off", ""}:
+            return False
+    raise ValueError("wait must be a boolean")
+
+
 def run_sync(services: set[str]):
     from sync_runner import sync_services
 
@@ -172,6 +187,10 @@ def version_deploy():
     # Support both 'ref' (generic) and 'tag' (legacy/specific)
     ref = payload.get("ref") or payload.get("tag")
     triggered_by = payload.get("triggered_by", "unknown")
+    try:
+        wait = parse_bool(payload.get("wait", False))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
     if not ref:
         return jsonify({"error": "Ref or Tag required"}), 400
@@ -183,6 +202,19 @@ def version_deploy():
 
     from sync_runner import sync_services_by_version
 
+    if wait:
+        result = sync_services_by_version(env, ref, triggered_by)
+        status_code = 200 if result.success else 500
+        return jsonify(
+            {
+                "status": "completed" if result.success else "failed",
+                "env": env,
+                "ref": ref,
+                "triggered_by": triggered_by,
+                "result": result.to_dict(),
+            }
+        ), status_code
+
     thread = threading.Thread(
         target=sync_services_by_version, args=(env, ref, triggered_by)
     )
@@ -190,7 +222,13 @@ def version_deploy():
     thread.start()
 
     return jsonify(
-        {"status": "accepted", "env": env, "ref": ref, "triggered_by": triggered_by}
+        {
+            "status": "accepted",
+            "env": env,
+            "ref": ref,
+            "triggered_by": triggered_by,
+            "wait": False,
+        }
     )
 
 

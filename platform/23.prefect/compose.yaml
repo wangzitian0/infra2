@@ -35,10 +35,7 @@ services:
         - CMD-SHELL
         - |
           test -s /vault/secrets/.env &&
-          VAULT_TOKEN="$$(cat /vault/token)" vault token lookup >/dev/null &&
-          mtime="$$(stat -c %Y /vault/secrets/.env)" &&
-          now="$$(date +%s)" &&
-          [ "$$((now - mtime))" -le "$${VAULT_AGENT_MAX_SECRET_AGE_SECONDS:-900}" ]
+          VAULT_TOKEN="$$(cat /vault/token)" vault token lookup >/dev/null
       interval: 10s
       timeout: 5s
       retries: 3

@@ -100,7 +100,8 @@ jobs:
           {
             "env": "$ENV",
             "ref": "$REF",
-            "triggered_by": "${{ github.actor }}"
+            "triggered_by": "${{ github.actor }}",
+            "wait": true
           }
           EOF
           )
@@ -113,7 +114,7 @@ jobs:
             --retry-delay 5 \
             --retry-all-errors \
             --connect-timeout 10 \
-            --max-time 120 \
+            --max-time 1800 \
             -X POST "${IAC_RUNNER_URL%/}/deploy" \
             -H "Content-Type: application/json" \
             -H "X-Hub-Signature-256: sha256=$SIGNATURE" \
