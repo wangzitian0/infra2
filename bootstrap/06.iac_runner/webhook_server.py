@@ -10,6 +10,7 @@ import hmac
 import importlib.util
 import logging
 import os
+import re
 import shutil
 import threading
 import time
@@ -26,6 +27,9 @@ GIT_REPO_URL = os.environ.get("GIT_REPO_URL")
 GIT_BRANCH = os.environ.get("GIT_BRANCH", "main")
 SECRETS_FILE = Path("/secrets/.env")
 RECENT_DEPLOY_TTL_SECONDS = int(os.environ.get("RECENT_DEPLOY_TTL_SECONDS", "600"))
+SIGNATURE_TTL_SECONDS = int(os.environ.get("SIGNATURE_TTL_SECONDS", "300"))
+MAX_REQUEST_BODY_BYTES = int(os.environ.get("MAX_REQUEST_BODY_BYTES", "65536"))
+EXACT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 REQUIRED_PYTHON_MODULES = {
     "flask": "flask",
     "httpx": "httpx",
@@ -39,6 +43,10 @@ REQUIRED_BINARIES = ("git", "op")
 _deploy_state_lock = threading.Lock()
 _in_flight_deploys: set[tuple[str, str]] = set()
 _recent_deploys: dict[tuple[str, str], tuple[float, dict]] = {}
+_seen_nonces: dict[str, float] = {}
+_nonce_lock = threading.Lock()
+if hasattr(app, "config"):
+    app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_BODY_BYTES
 
 if not GIT_REPO_URL:
     raise RuntimeError("GIT_REPO_URL environment variable must be set")
@@ -46,8 +54,8 @@ if not GIT_REPO_URL:
 
 def verify_signature(payload: bytes, signature: str) -> bool:
     if not WEBHOOK_SECRET:
-        logger.warning("WEBHOOK_SECRET not configured - running in insecure dev mode!")
-        return True
+        logger.error("WEBHOOK_SECRET is not configured")
+        return False
 
     if not signature or not signature.startswith("sha256="):
         return False
@@ -58,6 +66,63 @@ def verify_signature(payload: bytes, signature: str) -> bool:
     )
 
     return hmac.compare_digest(expected, signature)
+
+
+def verify_iac_signature(
+    payload: bytes, signature: str, timestamp: str, nonce: str
+) -> bool:
+    if not WEBHOOK_SECRET:
+        logger.error("WEBHOOK_SECRET is not configured")
+        return False
+    if not timestamp or not nonce:
+        return False
+    if not re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", nonce):
+        return False
+    try:
+        timestamp_int = int(timestamp)
+    except ValueError:
+        return False
+    now = int(time.time())
+    if abs(now - timestamp_int) > SIGNATURE_TTL_SECONDS:
+        return False
+
+    signed_payload = f"{timestamp}.{nonce}.".encode() + payload
+    expected = (
+        "sha256="
+        + hmac.new(WEBHOOK_SECRET.encode(), signed_payload, hashlib.sha256).hexdigest()
+    )
+    if not signature or not hmac.compare_digest(expected, signature):
+        return False
+
+    nonce_key = f"{timestamp}:{nonce}"
+    with _nonce_lock:
+        expired = [
+            key
+            for key, seen_at in _seen_nonces.items()
+            if now - seen_at > SIGNATURE_TTL_SECONDS
+        ]
+        for key in expired:
+            _seen_nonces.pop(key, None)
+        if nonce_key in _seen_nonces:
+            return False
+        _seen_nonces[nonce_key] = now
+    return True
+
+
+def verify_iac_request() -> bool:
+    return verify_iac_signature(
+        request.data,
+        request.headers.get("X-Hub-Signature-256", ""),
+        request.headers.get("X-IAC-Timestamp", ""),
+        request.headers.get("X-IAC-Nonce", ""),
+    )
+
+
+def validate_deploy_ref(ref: str | None) -> str | None:
+    if not isinstance(ref, str):
+        return None
+    normalized = ref.strip().lower()
+    return normalized if EXACT_COMMIT_RE.fullmatch(normalized) else None
 
 
 def get_changed_services(commits: list[dict]) -> set[str]:
@@ -156,13 +221,16 @@ def _in_progress_response(
 
 def _completed_response(env: str, ref: str, triggered_by: str, result) -> dict:
     key = _deployment_key(env, ref)
+    result_payload = (
+        result.to_public_dict() if hasattr(result, "to_public_dict") else result.to_dict()
+    )
     return {
         "status": "completed" if result.success else "failed",
         "deployment_id": _deployment_id(key),
         "env": env,
         "ref": ref,
         "triggered_by": triggered_by,
-        "result": result.to_dict(),
+        "result": result_payload,
     }
 
 
@@ -257,11 +325,18 @@ def webhook():
 
 @app.route("/sync", methods=["POST"])
 def manual_sync():
-    signature = request.headers.get("X-Hub-Signature-256", "")
-    if not verify_signature(request.data, signature):
+    if os.environ.get("ENABLE_LEGACY_SYNC", "").lower() not in {
+        "1",
+        "true",
+        "yes",
+    }:
+        return jsonify({"error": "Legacy sync endpoint disabled"}), 404
+    if not verify_iac_request():
         return jsonify({"error": "Invalid signature"}), 401
 
     payload = request.json or {}
+    if not isinstance(payload, dict):
+        return jsonify({"error": "JSON object required"}), 400
 
     if payload.get("all"):
         services = {"__all__"}
@@ -278,14 +353,15 @@ def manual_sync():
 
 @app.route("/deploy", methods=["POST"])
 def version_deploy():
-    signature = request.headers.get("X-Hub-Signature-256", "")
-    if not verify_signature(request.data, signature):
+    if not verify_iac_request():
         return jsonify({"error": "Invalid signature"}), 401
 
     payload = request.json or {}
+    if not isinstance(payload, dict):
+        return jsonify({"error": "JSON object required"}), 400
     env = payload.get("env", "staging")
     # Support both 'ref' (generic) and 'tag' (legacy/specific)
-    ref = payload.get("ref") or payload.get("tag")
+    ref = validate_deploy_ref(payload.get("ref") or payload.get("tag"))
     triggered_by = payload.get("triggered_by", "unknown")
     try:
         wait = parse_bool(payload.get("wait", False))
@@ -293,7 +369,7 @@ def version_deploy():
         return jsonify({"error": str(exc)}), 400
 
     if not ref:
-        return jsonify({"error": "Ref or Tag required"}), 400
+        return jsonify({"error": "Ref must be an exact 40-character commit SHA"}), 400
 
     if env not in ("staging", "production"):
         return jsonify({"error": "Invalid env (must be staging or production)"}), 400
@@ -340,16 +416,17 @@ def version_deploy():
 
 @app.route("/deploy/status", methods=["POST"])
 def deployment_status():
-    signature = request.headers.get("X-Hub-Signature-256", "")
-    if not verify_signature(request.data, signature):
+    if not verify_iac_request():
         return jsonify({"error": "Invalid signature"}), 401
 
     payload = request.json or {}
+    if not isinstance(payload, dict):
+        return jsonify({"error": "JSON object required"}), 400
     env = payload.get("env", "staging")
-    ref = payload.get("ref") or payload.get("tag")
+    ref = validate_deploy_ref(payload.get("ref") or payload.get("tag"))
     triggered_by = payload.get("triggered_by", "unknown")
     if not ref:
-        return jsonify({"error": "Ref or Tag required"}), 400
+        return jsonify({"error": "Ref must be an exact 40-character commit SHA"}), 400
     if env not in ("staging", "production"):
         return jsonify({"error": "Invalid env (must be staging or production)"}), 400
 

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import importlib.util
 import os
 import subprocess
 import sys
+import time
 import types
 from contextlib import contextmanager
 from pathlib import Path
@@ -15,6 +18,8 @@ ROOT = Path(__file__).resolve().parents[2]
 IAC_RUNNER = ROOT / "bootstrap/06.iac_runner"
 DEPLOY_PLATFORM_WORKFLOW = ROOT / ".github/workflows/deploy-platform.yml"
 BOOTSTRAP_DEPLOY_SCRIPT = ROOT / "scripts/deploy_iac_runner_bootstrap.sh"
+DEPLOY_SHA = "a" * 40
+_nonce_counter = 0
 
 
 def _load_module(name: str, path: Path, monkeypatch):
@@ -25,6 +30,23 @@ def _load_module(name: str, path: Path, monkeypatch):
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _signed_headers(monkeypatch, payload: bytes = b"") -> dict[str, str]:
+    global _nonce_counter
+    monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
+    _nonce_counter += 1
+    timestamp = str(int(time.time()))
+    nonce = f"test-nonce-{_nonce_counter:04d}"
+    signing_input = f"{timestamp}.{nonce}.".encode() + payload
+    signature = hmac.new(
+        b"test-webhook-secret", signing_input, hashlib.sha256
+    ).hexdigest()
+    return {
+        "X-Hub-Signature-256": f"sha256={signature}",
+        "X-IAC-Timestamp": timestamp,
+        "X-IAC-Nonce": nonce,
+    }
 
 
 def test_sync_services_returns_structured_failure_result(monkeypatch) -> None:
@@ -164,9 +186,9 @@ def test_deploy_wait_returns_500_when_sync_fails(monkeypatch) -> None:
     fake_flask.Flask = FakeFlask
     fake_flask.jsonify = lambda payload: payload
     fake_flask.request = types.SimpleNamespace(
-        headers={},
+        headers=_signed_headers(monkeypatch),
         data=b"",
-        json={"env": "staging", "ref": "main", "wait": True, "triggered_by": "ci"},
+        json={"env": "staging", "ref": DEPLOY_SHA, "wait": True, "triggered_by": "ci"},
     )
     monkeypatch.setitem(sys.modules, "flask", fake_flask)
     webhook_server = _load_module(
@@ -175,7 +197,7 @@ def test_deploy_wait_returns_500_when_sync_fails(monkeypatch) -> None:
 
     failed = sync_runner.SyncResult(
         env="staging",
-        ref="main",
+        ref=DEPLOY_SHA,
         requested_services=["platform/redis"],
         results=[
             sync_runner.ServiceSyncResult(
@@ -194,6 +216,8 @@ def test_deploy_wait_returns_500_when_sync_fails(monkeypatch) -> None:
     assert status_code == 500
     assert body["status"] == "failed"
     assert body["result"]["failed"] == 1
+    assert "stderr" not in body["result"]["results"][0]
+    assert "stdout" not in body["result"]["results"][0]
 
 
 def test_deploy_wait_string_false_keeps_async_path(monkeypatch) -> None:
@@ -211,9 +235,9 @@ def test_deploy_wait_string_false_keeps_async_path(monkeypatch) -> None:
     fake_flask.Flask = FakeFlask
     fake_flask.jsonify = lambda payload: payload
     fake_flask.request = types.SimpleNamespace(
-        headers={},
+        headers=_signed_headers(monkeypatch),
         data=b"",
-        json={"env": "staging", "ref": "main", "wait": "false", "triggered_by": "ci"},
+        json={"env": "staging", "ref": DEPLOY_SHA, "wait": "false", "triggered_by": "ci"},
     )
     monkeypatch.setitem(sys.modules, "flask", fake_flask)
     webhook_server = _load_module(
@@ -242,7 +266,7 @@ def test_deploy_wait_string_false_keeps_async_path(monkeypatch) -> None:
     assert body["status"] == "in_progress"
     assert body["status_url"] == "/deploy/status"
     assert body["wait"] is False
-    assert started == [("staging", "main", "ci")]
+    assert started == [("staging", DEPLOY_SHA, "ci")]
 
 
 def test_async_deploy_status_reports_completed_result(monkeypatch) -> None:
@@ -262,9 +286,9 @@ def test_async_deploy_status_reports_completed_result(monkeypatch) -> None:
     fake_flask.Flask = FakeFlask
     fake_flask.jsonify = lambda payload: payload
     fake_request = types.SimpleNamespace(
-        headers={},
+        headers=_signed_headers(monkeypatch),
         data=b"",
-        json={"env": "staging", "ref": "main", "wait": False, "triggered_by": "ci"},
+        json={"env": "staging", "ref": DEPLOY_SHA, "wait": False, "triggered_by": "ci"},
     )
     fake_flask.request = fake_request
     monkeypatch.setitem(sys.modules, "flask", fake_flask)
@@ -275,7 +299,7 @@ def test_async_deploy_status_reports_completed_result(monkeypatch) -> None:
     )
     completed = sync_runner.SyncResult(
         env="staging",
-        ref="main",
+        ref=DEPLOY_SHA,
         requested_services=["platform/redis"],
         results=[
             sync_runner.ServiceSyncResult(
@@ -305,13 +329,16 @@ def test_async_deploy_status_reports_completed_result(monkeypatch) -> None:
 
     assert status_code == 202
     assert body["status"] == "in_progress"
-    fake_request.json = {"env": "staging", "ref": "main", "triggered_by": "ci"}
+    fake_request.headers = _signed_headers(monkeypatch)
+    fake_request.json = {"env": "staging", "ref": DEPLOY_SHA, "triggered_by": "ci"}
     status_body, status_code = webhook_server.deployment_status()
 
     assert status_code == 200
     assert status_body["status"] == "completed"
     assert status_body["result"]["succeeded"] == 1
     assert status_body["result"]["failed"] == 0
+    assert "stdout" not in status_body["result"]["results"][0]
+    assert "stderr" not in status_body["result"]["results"][0]
 
 
 def test_deploy_wait_rejects_invalid_literal(monkeypatch) -> None:
@@ -327,9 +354,9 @@ def test_deploy_wait_rejects_invalid_literal(monkeypatch) -> None:
     fake_flask.Flask = FakeFlask
     fake_flask.jsonify = lambda payload: payload
     fake_flask.request = types.SimpleNamespace(
-        headers={},
+        headers=_signed_headers(monkeypatch),
         data=b"",
-        json={"env": "staging", "ref": "main", "wait": "sometimes"},
+        json={"env": "staging", "ref": DEPLOY_SHA, "wait": "sometimes"},
     )
     monkeypatch.setitem(sys.modules, "flask", fake_flask)
     webhook_server = _load_module(
@@ -342,6 +369,37 @@ def test_deploy_wait_rejects_invalid_literal(monkeypatch) -> None:
 
     assert status_code == 400
     assert body["error"] == "wait must be a boolean"
+
+
+def test_deploy_rejects_mutable_ref(monkeypatch) -> None:
+    """Infra-011.10: /deploy must only accept immutable commit SHAs."""
+    fake_flask = types.ModuleType("flask")
+
+    class FakeFlask:
+        def __init__(self, _name):
+            self.config = {}
+
+        def route(self, *_args, **_kwargs):
+            return lambda func: func
+
+    fake_flask.Flask = FakeFlask
+    fake_flask.jsonify = lambda payload: payload
+    fake_flask.request = types.SimpleNamespace(
+        headers=_signed_headers(monkeypatch),
+        data=b"",
+        json={"env": "staging", "ref": "main", "wait": False},
+    )
+    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+    webhook_server = _load_module(
+        "webhook_server_mutable_ref_under_test",
+        IAC_RUNNER / "webhook_server.py",
+        monkeypatch,
+    )
+
+    body, status_code = webhook_server.version_deploy()
+
+    assert status_code == 400
+    assert body["error"] == "Ref must be an exact 40-character commit SHA"
 
 
 def test_health_reports_missing_runtime_dependency(monkeypatch, tmp_path) -> None:
@@ -645,11 +703,12 @@ def test_run_invoke_task_uses_scoped_vault_app_token(monkeypatch, tmp_path) -> N
     assert captured["kwargs"]["env"]["VAULT_ROOT_TOKEN"] == "scoped-app-token"
 
 
-def test_run_invoke_task_resolves_vault_root_token_from_1password(
+def test_run_invoke_task_does_not_resolve_vault_root_token_from_1password(
     monkeypatch, tmp_path
 ) -> None:
-    """#189: IaC Runner resolves the root token internally for sync tasks."""
+    """Infra-011.10: IaC Runner must not resolve root tokens from 1Password."""
     monkeypatch.delenv("VAULT_ROOT_TOKEN", raising=False)
+    monkeypatch.delenv("VAULT_APP_TOKEN", raising=False)
     monkeypatch.setenv("OP_SERVICE_ACCOUNT_TOKEN", "op-service-token")
     sync_runner = _load_module(
         "sync_runner_op_root_under_test",
@@ -661,11 +720,7 @@ def test_run_invoke_task_resolves_vault_root_token_from_1password(
     def fake_run(args, **kwargs):
         captured["calls"].append(args)
         if args[:2] == ["op", "read"]:
-            assert args[2] == sync_runner.DEFAULT_VAULT_ROOT_TOKEN_OP_REF
-            assert kwargs["env"]["OP_SERVICE_ACCOUNT_TOKEN"] == "op-service-token"
-            return types.SimpleNamespace(
-                returncode=0, stdout="resolved-root\n", stderr=""
-            )
+            raise AssertionError("IaC Runner must not read Vault root token via op")
         captured["invoke_env"] = kwargs["env"]
         return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
 
@@ -675,10 +730,9 @@ def test_run_invoke_task_resolves_vault_root_token_from_1password(
 
     assert result["success"] is True
     assert captured["calls"] == [
-        ["op", "read", sync_runner.DEFAULT_VAULT_ROOT_TOKEN_OP_REF],
         [sys.executable, "-P", "-c", sync_runner.INVOKE_BOOTSTRAP, "postgres.sync"],
     ]
-    assert captured["invoke_env"]["VAULT_ROOT_TOKEN"] == "resolved-root"
+    assert "VAULT_ROOT_TOKEN" not in captured["invoke_env"]
 
 
 def test_deploy_platform_triggers_on_iac_runner_bootstrap_changes() -> None:
@@ -695,6 +749,22 @@ def test_deploy_platform_triggers_on_iac_runner_bootstrap_changes() -> None:
     assert "files_url=$files_url" in workflow
     assert "$GITHUB_EVENT_PATH" not in workflow
     assert "git diff-tree" not in workflow
+
+
+def test_deploy_platform_uses_sha_and_nonce_signed_runner_requests() -> None:
+    """Infra-011.10: Actions resolves refs before calling IaC Runner."""
+    workflow = DEPLOY_PLATFORM_WORKFLOW.read_text(encoding="utf-8")
+
+    assert 'tags: ["v*"]' not in workflow
+    assert "name: ${{ github.event_name == 'workflow_dispatch' && inputs.env || 'staging' }}" in workflow
+    assert "Resolve Deployment Commit" in workflow
+    assert "Production deploys require a semver tag like v1.2.3." in workflow
+    assert 'DEPLOY_SHA="$GITHUB_SHA"' in workflow
+    assert "X-IAC-Timestamp: $timestamp" in workflow
+    assert "X-IAC-Nonce: $nonce" in workflow
+    assert "${timestamp}.${nonce}.${payload}" in workflow
+    assert 'cat "$DEPLOY_BODY"' not in workflow
+    assert 'cat "$STATUS_BODY"' not in workflow
 
 
 def test_iac_runner_all_services_include_alerting_bridge(monkeypatch) -> None:

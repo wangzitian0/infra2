@@ -331,28 +331,35 @@ Content-Type: application/json
 
 **请求示例**（GitHub Actions 调用）:
 ```bash
-PAYLOAD='{"env":"staging","tag":"v1.2.4","triggered_by":"github-actions"}'
-SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')
+PAYLOAD='{"env":"staging","ref":"0123456789abcdef0123456789abcdef01234567","source_ref":"main","triggered_by":"github-actions","wait":false}'
+TIMESTAMP="$(date +%s)"
+NONCE="$(openssl rand -hex 16)"
+SIGNATURE=$(printf '%s' "${TIMESTAMP}.${NONCE}.${PAYLOAD}" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')
 
 curl -X POST https://iac.{domain}/deploy \
   -H "Content-Type: application/json" \
   -H "X-Hub-Signature-256: sha256=$SIGNATURE" \
+  -H "X-IAC-Timestamp: $TIMESTAMP" \
+  -H "X-IAC-Nonce: $NONCE" \
   -d "$PAYLOAD"
 ```
 
 **参数**:
 - `env`: 目标环境（`staging` / `production`）
-- `tag`: Git tag（如 `v1.2.4`）
+- `ref`: immutable 40-character commit SHA. Branches and tags are resolved by
+  GitHub Actions before calling IaC Runner.
+- `source_ref`: original branch or tag for audit context only.
 - `triggered_by`: 触发来源（如 `github-actions`, `manual-promotion`）
 
 **处理逻辑**:
-1. 验证 HMAC 签名
-2. `wait=false` 时启动后台部署并返回 `deployment_id`
-3. GitHub Actions 轮询签名 `/deploy/status`
-4. Checkout 指定 ref/tag
-5. 根据环境设置 `DEPLOY_ENV` 环境变量
-6. 执行 `invoke {service}.sync` for all platform services
-7. 记录部署日志
+1. Validate timestamped nonce HMAC signature.
+2. Reject mutable refs; `/deploy` only accepts exact commit SHAs.
+3. `wait=false` 时启动后台部署并返回 `deployment_id`
+4. GitHub Actions 轮询签名 `/deploy/status`
+5. Checkout 指定 commit SHA
+6. 根据环境设置 `DEPLOY_ENV` 环境变量
+7. 执行 `invoke {service}.sync` for all platform services
+8. Return status/counts/diagnostics only; child stdout/stderr stay in runner logs.
 
 **响应**:
 ```json
@@ -360,12 +367,16 @@ curl -X POST https://iac.{domain}/deploy \
   "status": "in_progress",
   "deployment_id": "b3f8d7ad4d0e0d2f",
   "env": "staging",
-  "ref": "main",
+  "ref": "0123456789abcdef0123456789abcdef01234567",
   "status_url": "/deploy/status"
 }
 ```
 
 ### 4.5 `/sync` - 手动同步（Legacy）
+
+`/sync` is disabled by default. It is a legacy manual endpoint and must only be
+enabled temporarily with `ENABLE_LEGACY_SYNC=true`; enabled calls use the same
+timestamped nonce HMAC headers as `/deploy`.
 
 **请求示例**:
 ```bash
