@@ -38,13 +38,13 @@
 
 ```
 ┌─────────────┐     deploy-platform.yml     ┌──────────────┐     /deploy    ┌─────────────┐
-│   GitHub    │ ────────────────────────▶  │  main/ref    │ ──────────────▶│ IaC Runner  │
+│   GitHub    │ ────────────────────────▶  │ exact SHA    │ ──────────────▶│ IaC Runner  │
 │  (main)     │                             │              │                │  (staging)  │
 └─────────────┘                             └──────────────┘                └─────────────┘
                                                                                     │
                                                                                     ▼
 ┌─────────────┐     deploy-platform.yml     ┌──────────────┐     /deploy    ┌─────────────┐
-│   Manual    │ ────────────────────────▶  │  chosen ref  │ ──────────────▶│ IaC Runner  │
+│   Manual    │ ────────────────────────▶  │ tag → SHA    │ ──────────────▶│ IaC Runner  │
 │  (promote)  │                             │  (manual)    │                │ (production)│
 └─────────────┘                             └──────────────┘                └─────────────┘
 ```
@@ -75,40 +75,48 @@
    lists instead of diffing the merge commit, so squash, merge-commit, and
    rebase-style main updates all use the same source of truth.
 3. Run IaC Runner `/health` after the external bootstrap update.
-4. 调用 IaC Runner `/deploy` endpoint with `wait=false`:
+4. Resolve the deployment source to an immutable 40-character commit SHA.
+5. 调用 IaC Runner `/deploy` endpoint with `wait=false`:
    ```json
    {
      "env": "staging",
-     "ref": "main",
+     "ref": "0123456789abcdef0123456789abcdef01234567",
+     "source_ref": "main",
      "triggered_by": "github-actions",
      "wait": false
    }
    ```
-5. GitHub Actions 使用签名请求轮询 `/deploy/status`，避免 Cloudflare
+6. GitHub Actions uses timestamped nonce HMAC requests for `/deploy` and
+   `/deploy/status`; the public response includes only status, counts, and
+   diagnostics, never child stdout/stderr.
+7. GitHub Actions 使用签名请求轮询 `/deploy/status`，避免 Cloudflare
    长连接 524。
-6. IaC Runner checkout ref 并执行 `invoke {service}.sync` for all platform services
-7. GitHub Actions fails when any service sync fails.
+8. IaC Runner checkout the exact commit SHA 并执行 `invoke {service}.sync` for all platform services
+9. GitHub Actions fails when any service sync fails.
 
 ### Production 手动部署
 
 **触发条件**:
-- GitHub Actions 手动触发
-- 提供 staging tag (如 `v1.2.4`) + 确认字段 `confirm="deploy"`
+- GitHub Actions manual dispatch only.
+- The job is bound to the `production` GitHub Environment so environment
+  protection rules can require approval.
+- Provide a semver release tag such as `v1.2.4`; production does not accept
+  arbitrary branches or raw refs.
 
 **工作流**:
-1. 验证 staging tag 存在
-2. 提取 minor version 并 +1: `v1.2.4` → `v1.3.0`
-3. 创建 production tag
-4. 调用 IaC Runner `/deploy` endpoint with `wait=false` and poll `/deploy/status`:
+1. Verify the semver tag exists.
+2. Resolve the tag to an immutable commit SHA.
+3. 调用 IaC Runner `/deploy` endpoint with `wait=false` and poll `/deploy/status`:
    ```json
    {
      "env": "production",
-     "ref": "v1.3.0",
+     "ref": "0123456789abcdef0123456789abcdef01234567",
+     "source_ref": "v1.2.4",
      "triggered_by": "manual-promotion",
      "wait": false
    }
    ```
-5. 创建 GitHub Release
+4. Create or update the GitHub Release through the release process.
 
 ### Hotfix 流程
 

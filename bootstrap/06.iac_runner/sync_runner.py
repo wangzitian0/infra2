@@ -23,8 +23,8 @@ WORKSPACE = Path("/workspace")
 GIT_REPO_URL = os.environ["GIT_REPO_URL"]
 GIT_BRANCH = os.environ.get("GIT_BRANCH", "main")
 DEPLOY_TIMEOUT = int(os.environ.get("DEPLOY_TIMEOUT", "600"))
-DEFAULT_VAULT_ROOT_TOKEN_OP_REF = "op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token"
 MAX_RESULT_OUTPUT_CHARS = int(os.environ.get("MAX_RESULT_OUTPUT_CHARS", "4000"))
+EXACT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 REPO_NAME = Path(urlparse(GIT_REPO_URL).path).stem
 
@@ -71,9 +71,6 @@ ALL_SERVICES = [
     "finance_report/redis",
     "finance_report/app",
 ]
-
-_VAULT_ROOT_TOKEN_CACHE: str | None = None
-
 
 def _tail_text(value: str, limit: int = MAX_RESULT_OUTPUT_CHARS) -> str:
     if len(value) <= limit:
@@ -177,6 +174,17 @@ class ServiceSyncResult:
             data["diagnostic"] = diagnose_failure(self.stderr, self.stdout)
         return data
 
+    def to_public_dict(self) -> dict:
+        data = {
+            "service": self.service,
+            "task": self.task,
+            "success": self.success,
+            "skipped": self.skipped,
+        }
+        if not self.success and not self.skipped:
+            data["diagnostic"] = diagnose_failure(self.stderr, self.stdout)
+        return data
+
 
 @dataclass
 class SyncResult:
@@ -228,6 +236,29 @@ class SyncResult:
             "results": [result.to_dict() for result in self.results],
         }
 
+    def to_public_dict(self) -> dict:
+        failure_summary = [
+            {
+                "service": result.service,
+                "task": result.task,
+                **diagnose_failure(result.stderr, result.stdout),
+            }
+            for result in self.results
+            if not result.success
+        ]
+        return {
+            "success": self.success,
+            "env": self.env,
+            "ref": self.ref,
+            "requested_services": self.requested_services,
+            "succeeded": self.succeeded,
+            "failed": self.failed,
+            "skipped": self.skipped,
+            "error": self.error,
+            "failure_summary": failure_summary,
+            "results": [result.to_public_dict() for result in self.results],
+        }
+
 
 @contextmanager
 def file_lock(lock_path: Path, description: str):
@@ -258,6 +289,33 @@ def run_git_command(args: list[str], repo_path: Path, description: str) -> bool:
         logger.error(f"Git {description} failed: {result.stderr}")
         return False
     return True
+
+
+def resolve_checkout_ref(repo_path: Path, target_ref: str) -> str | None:
+    """Resolve a deploy ref to an immutable commit SHA after fetch."""
+    candidates = []
+    if EXACT_COMMIT_RE.fullmatch(target_ref):
+        candidates.append(target_ref)
+    else:
+        candidates.extend(
+            [
+                f"refs/remotes/origin/{target_ref}^{{commit}}",
+                f"refs/tags/{target_ref}^{{commit}}",
+                f"{target_ref}^{{commit}}",
+            ]
+        )
+
+    for candidate in candidates:
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", candidate],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    return None
 
 
 def update_repo(ref: str | None = None) -> bool:
@@ -291,54 +349,35 @@ def update_repo(ref: str | None = None) -> bool:
         ):
             return False
 
-        if not run_git_command(["checkout", target_ref], repo_path, "checkout"):
+        checkout_ref = resolve_checkout_ref(repo_path, target_ref)
+        if not checkout_ref:
+            logger.error("Unable to resolve deploy ref to a commit: %s", target_ref)
             return False
 
         if not run_git_command(
-            ["reset", "--hard", target_ref], repo_path, "reset to target"
+            ["checkout", "--detach", checkout_ref], repo_path, "checkout"
         ):
             return False
 
-        logger.info(f"Repo checked out to {target_ref}")
+        if not run_git_command(
+            ["reset", "--hard", checkout_ref], repo_path, "reset to target"
+        ):
+            return False
+
+        logger.info("Repo checked out to %s (%s)", target_ref, checkout_ref[:12])
         return True
 
 
 def resolve_vault_root_token(env: dict[str, str]) -> str | None:
-    """Resolve the Vault root token for infrastructure sync subprocesses."""
-    global _VAULT_ROOT_TOKEN_CACHE
-
+    """Resolve the Vault token for infrastructure sync subprocesses."""
     if token := env.get("VAULT_ROOT_TOKEN"):
         return token
 
     if token := env.get("VAULT_APP_TOKEN"):
         return token
 
-    if _VAULT_ROOT_TOKEN_CACHE:
-        return _VAULT_ROOT_TOKEN_CACHE
-
-    if not env.get("OP_SERVICE_ACCOUNT_TOKEN"):
-        logger.warning("OP_SERVICE_ACCOUNT_TOKEN is not configured")
-        return None
-
-    op_ref = env.get("VAULT_ROOT_TOKEN_OP_REF") or DEFAULT_VAULT_ROOT_TOKEN_OP_REF
-    result = subprocess.run(
-        ["op", "read", op_ref],
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=30,
-    )
-    if result.returncode != 0:
-        logger.error("Failed to resolve Vault root token via 1Password")
-        return None
-
-    token = result.stdout.strip()
-    if not token:
-        logger.error("1Password returned an empty Vault root token")
-        return None
-
-    _VAULT_ROOT_TOKEN_CACHE = token
-    return token
+    logger.warning("Neither VAULT_ROOT_TOKEN nor VAULT_APP_TOKEN is configured")
+    return None
 
 
 def deploy_env_overrides(deploy_env: str) -> dict[str, str]:

@@ -92,12 +92,12 @@ IaC Runner supports **GitOps version-based deployments** via GitHub Actions work
 
 **Staging (Automatic)**:
 ```
-Push to main → deploy-platform.yml → Deploy `main` to Staging
+Push to main → deploy-platform.yml → Resolve commit SHA → Deploy to Staging
 ```
 
 **Production (Manual)**:
 ```
-Select release ref → deploy-platform.yml → Deploy to Production
+Select semver release tag → deploy-platform.yml → Resolve commit SHA → Deploy to Production
 ```
 
 **Hotfix (Manual)**:
@@ -114,14 +114,12 @@ Create from prod tag → v1.3.1 → Deploy to Production (no main merge required
    git push origin main
    ```
 
-2. **GitHub Actions auto-tags and deploys**:
-   - Reads latest tag (e.g., `v1.2.3`)
-   - Increments patch: `v1.2.4`
-   - Creates git tag
-   - Calls `/deploy` endpoint with `{"env":"staging","tag":"v1.2.4"}`
+2. **GitHub Actions resolves and deploys**:
+   - Resolves `main` to the pushed commit SHA
+   - Calls `/deploy` endpoint with `{"env":"staging","ref":"<40-char-sha>","source_ref":"main"}`
 
 3. **IaC Runner deploys to staging**:
-   - Checks out tag `v1.2.4`
+   - Checks out the exact commit SHA
    - Runs `invoke {service}.sync` for all platform services
    - Each service compares config hash and deploys only if changed
 
@@ -131,7 +129,8 @@ Create from prod tag → v1.3.1 → Deploy to Production (no main merge required
      -f env="production" \
      -f ref="v1.2.4"
    ```
-   - Calls `/deploy` endpoint with `{"env":"production","ref":"v1.2.4"}`
+   - Requires the `production` GitHub Environment and a semver tag
+   - Resolves the tag to a commit SHA before calling `/deploy`
 
 ## Endpoints
 
@@ -139,26 +138,34 @@ Create from prod tag → v1.3.1 → Deploy to Production (no main merge required
 |----------|--------|-------------|
 | `/health` | GET | Health check |
 | `/webhook` | POST | GitHub webhook receiver (change-based sync) |
-| `/sync` | POST | Manual sync trigger (legacy) |
-| `/deploy` | POST | Version-based deployment (GitOps) |
+| `/sync` | POST | Manual sync trigger (legacy, disabled by default) |
+| `/deploy` | POST | SHA-based deployment (GitOps) |
 
 ### Version-Based Deployment
 
 ```bash
-# Deploy specific version to staging
-PAYLOAD='{"env":"staging","tag":"v1.2.4","triggered_by":"github-actions"}'
-SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac 'YOUR_SECRET' | awk '{print $2}')
+# Deploy a resolved commit to staging
+PAYLOAD='{"env":"staging","ref":"0123456789abcdef0123456789abcdef01234567","source_ref":"main","triggered_by":"github-actions","wait":false}'
+TIMESTAMP="$(date +%s)"
+NONCE="$(openssl rand -hex 16)"
+SIGNATURE=$(printf '%s' "${TIMESTAMP}.${NONCE}.${PAYLOAD}" | openssl dgst -sha256 -hmac 'YOUR_SECRET' | awk '{print $2}')
 curl -X POST https://iac.{domain}/deploy \
   -H "Content-Type: application/json" \
   -H "X-Hub-Signature-256: sha256=$SIGNATURE" \
+  -H "X-IAC-Timestamp: $TIMESTAMP" \
+  -H "X-IAC-Nonce: $NONCE" \
   -d "$PAYLOAD"
 
-# Deploy specific version to production
-PAYLOAD='{"env":"production","tag":"v1.3.0","triggered_by":"manual-promotion"}'
-SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac 'YOUR_SECRET' | awk '{print $2}')
+# Deploy a resolved commit to production
+PAYLOAD='{"env":"production","ref":"0123456789abcdef0123456789abcdef01234567","source_ref":"v1.3.0","triggered_by":"manual-promotion","wait":false}'
+TIMESTAMP="$(date +%s)"
+NONCE="$(openssl rand -hex 16)"
+SIGNATURE=$(printf '%s' "${TIMESTAMP}.${NONCE}.${PAYLOAD}" | openssl dgst -sha256 -hmac 'YOUR_SECRET' | awk '{print $2}')
 curl -X POST https://iac.{domain}/deploy \
   -H "Content-Type: application/json" \
   -H "X-Hub-Signature-256: sha256=$SIGNATURE" \
+  -H "X-IAC-Timestamp: $TIMESTAMP" \
+  -H "X-IAC-Nonce: $NONCE" \
   -d "$PAYLOAD"
 ```
 
