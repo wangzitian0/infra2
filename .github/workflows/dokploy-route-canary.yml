@@ -90,7 +90,7 @@ jobs:
           canary_host="${CANARY_HOST_INPUT:-route-canary-${GITHUB_RUN_ID}.zitian.party}"
           python tools/dokploy_route_canary.py \
             --host "$canary_host" \
-            --environment-id "$ENVIRONMENT_ID" \
+            --environment-id="$ENVIRONMENT_ID" \
             --project "$PROJECT" \
             --env "$ENV_NAME" \
             --compose-name "$COMPOSE_NAME" \
