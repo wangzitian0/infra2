@@ -19,6 +19,7 @@
 | `console.py` | Rich CLI output | `header()`, `success()`, `error()`, `prompt_action()` |
 | `deployer.py` | Deployment base class + task helpers | `Deployer`, `make_tasks()` |
 | `dokploy.py` | Dokploy API client | `DokployClient`, `deploy_compose_service()` |
+| `dokploy_route_canary.py` | Dynamic route canary | `run_route_canary()`, `render_canary_compose()` |
 | `config.py` | Legacy compatibility wrapper | `Config` |
 
 ## Usage Patterns

@@ -1,0 +1,98 @@
+name: Dokploy Route Canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment_id:
+        description: "Dokploy Environment ID to create the canary compose in"
+        required: true
+      project:
+        description: "Dokploy project name"
+        required: true
+        default: "platform"
+      env:
+        description: "Dokploy environment name hint"
+        required: false
+        default: "staging"
+      host:
+        description: "Public host for the canary; defaults to route-canary-<run>.zitian.party"
+        required: false
+        default: ""
+      compose_name:
+        description: "Dokploy compose name"
+        required: false
+        default: "dokploy-route-canary"
+      timeout_seconds:
+        description: "Per-stage timeout"
+        required: false
+        default: "90"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dokploy-route-canary-${{ github.event.inputs.project }}-${{ github.event.inputs.env }}
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    name: Run dynamic route canary
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+      INFRA2_WATCHDOG_SSH_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
+      INFRA2_WATCHDOG_SSH_USER: ${{ secrets.INFRA2_WATCHDOG_SSH_USER }}
+      INFRA2_WATCHDOG_SSH_PORT: ${{ vars.INFRA2_WATCHDOG_SSH_PORT }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install runtime dependencies
+        run: python -m pip install httpx python-dotenv rich
+
+      - name: Configure SSH key
+        env:
+          INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${INFRA2_WATCHDOG_SSH_PRIVATE_KEY:-}" ]]; then
+            echo "No SSH key configured; canary will skip Docker container/label inspection."
+            exit 0
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_canary
+          chmod 600 ~/.ssh/infra2_canary
+          echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_canary" >> "$GITHUB_ENV"
+
+      - name: Run canary
+        env:
+          CANARY_HOST_INPUT: ${{ github.event.inputs.host }}
+          COMPOSE_NAME: ${{ github.event.inputs.compose_name }}
+          ENVIRONMENT_ID: ${{ github.event.inputs.environment_id }}
+          PROJECT: ${{ github.event.inputs.project }}
+          ENV_NAME: ${{ github.event.inputs.env }}
+          TIMEOUT_SECONDS: ${{ github.event.inputs.timeout_seconds }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
+            echo "::error::DOKPLOY_API_KEY secret is required for Dokploy Route Canary."
+            exit 1
+          fi
+
+          canary_host="${CANARY_HOST_INPUT:-route-canary-${GITHUB_RUN_ID}.zitian.party}"
+          python tools/dokploy_route_canary.py \
+            --host "$canary_host" \
+            --environment-id "$ENVIRONMENT_ID" \
+            --project "$PROJECT" \
+            --env "$ENV_NAME" \
+            --compose-name "$COMPOSE_NAME" \
+            --dokploy-host "cloud.zitian.party" \
+            --timeout-seconds "$TIMEOUT_SECONDS"

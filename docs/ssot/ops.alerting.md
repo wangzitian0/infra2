@@ -269,6 +269,40 @@ Dry-run locally without sending Feishu:
 INFRA_PROBE_DRY_RUN=1 uv run python tools/infra_probe_runner.py --once --json
 ```
 
+### SOP-007: Dokploy dynamic route canary
+
+Application PR previews must not be the first place that discovers platform
+route materialization failures. The platform canary in
+[`tools/dokploy_route_canary.py`](../../tools/dokploy_route_canary.py) deploys a
+minimal two-service compose using the same routing shape as app previews: one
+public web route and one higher-priority same-host `/api` route on
+`dokploy-network`.
+
+The canary fails fast by assigning failures to one of these domains:
+
+- `dokploy-control-plane`: compose create/update or deploy request failed.
+- `dokploy-worker-or-deployment-record`: Dokploy accepted the request but no new
+  `running`/`done` deployment record appeared.
+- `docker-runtime`: expected containers or Traefik labels were not visible on
+  the VPS when SSH inspection is configured.
+- `traefik-public-route`: deployment and containers exist, but the public web
+  and API routes did not both return 2xx/3xx.
+
+Manual platform proof:
+
+```bash
+python tools/dokploy_route_canary.py \
+  --host route-canary-$(date +%s).zitian.party \
+  --environment-id "$DOKPLOY_ENVIRONMENT_ID" \
+  --project platform \
+  --env staging \
+  --dokploy-host cloud.zitian.party
+```
+
+The `Dokploy Route Canary` GitHub workflow wraps the same tool for manual
+operator runs. It requires `DOKPLOY_API_KEY`; SSH inspection is optional and uses
+the existing watchdog SSH secrets when configured.
+
 ---
 
 ## 6. 验证与测试 (The Proof)
@@ -279,6 +313,7 @@ INFRA_PROBE_DRY_RUN=1 uv run python tools/infra_probe_runner.py --once --json
 | **Reusable SigNoz log error rule payload** | `libs/tests/test_alerting.py` | ✅ Implemented |
 | **Out-of-band host and bridge watchdog contract** | `libs/tests/test_out_of_band_watchdog.py` | ✅ Implemented |
 | **In-band infra service probes** | `libs/tests/test_infra_probes.py` | ✅ Implemented |
+| **Dokploy dynamic route canary contract** | `libs/tests/test_dokploy_route_canary.py` | ✅ Implemented |
 | **Backup freshness alert payload** | `libs/tests/test_backup_verification.py` | ✅ Implemented |
 | **告警通道连通性** | `uv run invoke alerting.test-feishu` | Manual live gate |
 
