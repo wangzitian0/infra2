@@ -192,5 +192,5 @@ def test_canary_workflow_is_manual_and_fast_failing() -> None:
     assert "DOKPLOY_API_KEY secret is required" in workflow
     assert "No SSH key configured; canary will skip Docker container/label inspection" in workflow
     assert "python tools/dokploy_route_canary.py" in workflow
-    assert "--environment-id \"$ENVIRONMENT_ID\"" in workflow
+    assert "--environment-id=\"$ENVIRONMENT_ID\"" in workflow
     assert "--dokploy-host \"cloud.zitian.party\"" in workflow
