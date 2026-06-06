@@ -13,6 +13,7 @@ Standalone `invoke` namespaces loaded by `tools/loader.py`.
 |-----------|-------|---------|
 | `env` | `tools/env_tool.py` | Remote env/secret SSOT operations |
 | `dokploy` | `tools/dokploy_env.py` | Dokploy project/environment helpers |
+| `dokploy_route_canary.py` | `tools/dokploy_route_canary.py` | Fast-fail Dokploy worker, Docker, Traefik, and public route probe |
 | `local` | `tools/local_init.py` | Local CLI checks and bootstrap helpers |
 | `vault-audit` | `tools/vault_audit.py` | Read-only Vault app-token self-refresh audit |
 
@@ -50,6 +51,22 @@ invoke dokploy.env-list --project=platform
 
 # Ensure staging environment exists
 invoke dokploy.env-ensure --project=platform --env=staging --description="staging env"
+```
+
+## dokploy_route_canary.py
+
+Dynamic route materialization proof for the Dokploy platform. It deploys a
+minimal same-host web/API compose and returns JSON that classifies failures as
+control plane, deployment record/worker, Docker runtime, or public Traefik route
+failures.
+
+```bash
+python tools/dokploy_route_canary.py \
+  --host route-canary-$(date +%s).zitian.party \
+  --environment-id "$DOKPLOY_ENVIRONMENT_ID" \
+  --project platform \
+  --env staging \
+  --dokploy-host cloud.zitian.party
 ```
 
 ## local (local readiness + bootstrap)

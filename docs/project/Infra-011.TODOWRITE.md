@@ -14,6 +14,7 @@
 | Infra-011.5 | Compose-owned Traefik routing is not mixed with Dokploy-generated domain routing. | `libs/tests/test_domain_routing_policy.py` |
 | Infra-011.6 | IaC Runner sync ensures every runtime secret field consumed by custom service templates before deploy. | `libs/tests/test_deployer.py` |
 | Infra-011.7 | 1Password Connect bootstrap uses the canonical `infra2.0` credentials/token pair, stable `credential` field lookup, and bearer-auth initialization before health probes. | `libs/tests/test_bootstrap_health.py`, `libs/tests/test_vault_unsealer.py` |
+| Infra-011.9 | Dokploy dynamic route canary classifies platform deploy failures before app PR previews depend on them. | `libs/tests/test_dokploy_route_canary.py` |
 
 ## Issue Mapping
 
@@ -44,5 +45,6 @@
 - [x] Prefer IaC Runner scoped Vault app token for sync secret reads.
 - [x] Pin 1Password Connect bootstrap to the canonical `infra2.0` credentials/token pair.
 - [x] Make Vault unsealer health initialize 1Password Connect with bearer auth before checking dependency status.
+- [x] Add Dokploy dynamic route canary with fast-fail deployment, Docker, Traefik, and public route diagnostics.
 - [x] Run full lint/test suite.
 - [x] Open PR.
