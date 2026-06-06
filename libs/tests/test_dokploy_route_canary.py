@@ -7,6 +7,7 @@ from pathlib import Path
 
 from libs.dokploy_route_canary import (
     RouteCanaryConfig,
+    render_github_summary,
     render_canary_compose,
     run_route_canary,
 )
@@ -188,9 +189,40 @@ def test_canary_workflow_is_manual_and_fast_failing() -> None:
     workflow = (ROOT / ".github/workflows/dokploy-route-canary.yml").read_text()
 
     assert "workflow_dispatch" in workflow
+    assert "schedule:" in workflow
+    assert "push:" in workflow
+    assert "branches: [main]" in workflow
     assert "timeout-minutes: 8" in workflow
     assert "DOKPLOY_API_KEY secret is required" in workflow
     assert "No SSH key configured; canary will skip Docker container/label inspection" in workflow
     assert "python tools/dokploy_route_canary.py" in workflow
-    assert "--environment-id=\"$ENVIRONMENT_ID\"" in workflow
+    assert "GITHUB_STEP_SUMMARY" in workflow
+    assert "--environment-id=\"$environment_id\"" in workflow
     assert "--dokploy-host \"cloud.zitian.party\"" in workflow
+
+
+def test_canary_github_summary_lists_failure_domain_and_phase_evidence() -> None:
+    """Infra-011.9: canary failures are readable without parsing raw JSON logs."""
+    clock = FakeClock()
+    client = FakeDokploy(deployments=[[{"deploymentId": "old", "status": "done"}]])
+    report = run_route_canary(
+        RouteCanaryConfig(
+            host="route-canary.example.com",
+            environment_id="env-1",
+            timeout_seconds=10,
+            interval_seconds=5,
+        ),
+        client,
+        sleeper=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+
+    summary = render_github_summary(report)
+
+    assert "## Dokploy Route Canary" in summary
+    assert "- Status: `fail`" in summary
+    assert "- Failure domain: `dokploy-worker-or-deployment-record`" in summary
+    assert "| compose-upsert | pass |" in summary
+    assert "| deploy-trigger | pass |" in summary
+    assert "| deployment-record | fail |" in summary
+    assert "deployment_count" in summary

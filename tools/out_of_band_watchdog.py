@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import os
 import re
 import subprocess
@@ -25,7 +26,7 @@ infra2-public-entrypoint|https://cloud.zitian.party|200,302
 DEFAULT_SSH_TARGETS = """\
 infra2-ssh|echo infra2-ssh-ok|infra2-ssh-ok
 infra2-docker|docker info >/dev/null && echo docker-ok|docker-ok
-infra2-docker-health|sh -lc 'bad="$(docker ps --filter health=unhealthy --filter health=starting --filter status=restarting --format "{{.Names}} {{.Status}}")"; if [ -z "$bad" ]; then echo docker-health-ok; else echo "$bad"; exit 1; fi'|docker-health-ok
+infra2-docker-health|sh -lc 'bad="$(docker ps --filter health=unhealthy --filter health=starting --filter status=restarting --format "{{.Names}}")"; if [ -z "$bad" ]; then echo docker-health-ok; else for container in $bad; do docker inspect "$container" --format "name={{.Name}} status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} image={{.Config.Image}}"; done; exit 1; fi'|docker-health-ok
 infra2-alert-bridge|docker exec platform-alerting python -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8080/health", timeout=3).read(); print("healthy")'|healthy
 """
 
@@ -151,6 +152,7 @@ def run_ssh_checks(
 
     results: list[CheckResult] = []
     for target in targets:
+        target_command = _decode_ssh_command(target.command)
         command = [
             "ssh",
             "-i",
@@ -166,7 +168,7 @@ def run_ssh_checks(
             "-o",
             "UserKnownHostsFile=/dev/null",
             f"{config.user}@{config.host}",
-            target.command,
+            target_command,
         ]
         try:
             completed = subprocess.run(
@@ -308,6 +310,12 @@ def _parse_statuses(raw: str) -> set[int]:
     if not statuses:
         raise ValueError("At least one expected HTTP status is required")
     return statuses
+
+
+def _decode_ssh_command(command: str) -> str:
+    if not command.startswith("base64:"):
+        return command
+    return base64.b64decode(command.removeprefix("base64:")).decode("utf-8")
 
 
 def _github_run_url(env: Mapping[str, str]) -> str:

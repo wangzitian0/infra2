@@ -10,6 +10,11 @@ name: Infra2 Out-of-Band Watchdog
         required: false
         type: boolean
         default: false
+      ssh_targets_override:
+        description: "Optional newline-separated name|command|expected_text SSH targets for manual diagnostics"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -35,7 +40,7 @@ jobs:
       INFRA2_WATCHDOG_SSH_USER: ${{ secrets.INFRA2_WATCHDOG_SSH_USER }}
       INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
       INFRA2_WATCHDOG_SSH_PORT: ${{ vars.INFRA2_WATCHDOG_SSH_PORT }}
-      INFRA2_WATCHDOG_SSH_TARGETS: ${{ vars.INFRA2_WATCHDOG_SSH_TARGETS }}
+      INFRA2_WATCHDOG_SSH_TARGETS: ${{ github.event_name == 'workflow_dispatch' && inputs.ssh_targets_override != '' && inputs.ssh_targets_override || vars.INFRA2_WATCHDOG_SSH_TARGETS }}
       WATCHDOG_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
 
     steps:

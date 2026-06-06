@@ -300,8 +300,16 @@ python tools/dokploy_route_canary.py \
 ```
 
 The `Dokploy Route Canary` GitHub workflow wraps the same tool for manual
-operator runs. It requires `DOKPLOY_API_KEY`; SSH inspection is optional and uses
-the existing watchdog SSH secrets when configured.
+operator runs, hourly scheduled proof, and main-branch changes to the canary
+implementation. It requires `DOKPLOY_API_KEY`; scheduled and push runs also
+require the `DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID` repository variable. SSH
+inspection is optional and uses the existing watchdog SSH secrets when
+configured.
+
+Every run writes a GitHub step summary with the canary status, failure domain,
+compose ID, public URL, and each phase's evidence. App staging and preview gates
+should treat a failing canary as a platform failure before spending time on
+application readiness or browser E2E.
 
 ---
 
