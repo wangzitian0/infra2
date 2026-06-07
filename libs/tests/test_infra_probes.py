@@ -479,8 +479,10 @@ def test_probe_runner_posts_cloudflare_watchdog_heartbeat(
     def fake_urlopen(request, *, timeout):
         captured["url"] = request.full_url
         captured["authorization"] = request.get_header("Authorization")
+        captured["accept"] = request.get_header("Accept")
         captured["content_type"] = request.get_header("Content-type")
         captured["timeout"] = timeout
+        captured["user_agent"] = request.get_header("User-agent")
         captured["payload"] = json.loads(request.data.decode("utf-8"))
         return FakeResponse()
 
@@ -504,9 +506,11 @@ def test_probe_runner_posts_cloudflare_watchdog_heartbeat(
 
     assert captured == {
         "url": "https://watchdog.example/heartbeat",
+        "accept": probes.HTTP_PROBE_HEADERS["Accept"],
         "authorization": "Bearer heartbeat-token",
         "content_type": "application/json",
         "timeout": 5.0,
+        "user_agent": probes.HTTP_PROBE_HEADERS["User-Agent"],
         "payload": {
             "detail": "probe loop completed",
             "env": "staging",

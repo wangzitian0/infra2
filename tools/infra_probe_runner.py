@@ -14,6 +14,7 @@ from typing import NamedTuple
 from urllib.request import Request, urlopen
 
 from libs.infra_probes import (
+    HTTP_PROBE_HEADERS,
     build_probe_alert_payload,
     failed_results,
     parse_probe_specs,
@@ -314,7 +315,7 @@ def _post_heartbeat(*, ok: bool, detail: str = "") -> None:
         "detail": detail or ("probe loop completed" if ok else "probe loop failed"),
         "timestamp": int(time.time()),
     }
-    headers = {"Content-Type": "application/json"}
+    headers = {**HTTP_PROBE_HEADERS, "Content-Type": "application/json"}
     token = os.getenv("INFRA_PROBE_HEARTBEAT_TOKEN", "").strip()
     if token:
         headers["Authorization"] = f"Bearer {token}"
