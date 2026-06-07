@@ -249,7 +249,26 @@ container outside an active deployment window.
 
 Infra service probes are configured in
 [`platform/12.alerting/compose.yaml`](../../platform/12.alerting/compose.yaml)
-under `INFRA_PROBE_SPECS`.
+under `INFRA_PROBE_SPECS`. The default probe loop interval is 10 minutes
+(`INFRA_PROBE_INTERVAL_SECONDS=600`) to avoid repeating the same unresolved
+failure every five minutes while keeping outage detection reasonably fresh.
+In-band probes must prefer Docker-network targets for service health. Public
+Cloudflare-routed domains are route checks, not core service-health checks, and
+must use a stable probe `User-Agent` so Browser Integrity Check does not produce
+Cloudflare 1010 false positives. If a future public-route probe observes
+`error code: 1010`, it is classified as `probe-client-blocked` rather than
+plain service down.
+
+The probe runner is stateful. It sends an alert when a failure first appears,
+when the failure fingerprint changes, when the configured renotify interval is
+reached (`INFRA_PROBE_RENOTIFY_SECONDS`, default 3600 seconds), and when a
+previously firing probe group recovers. Successful runs stay quiet unless they
+close a previously active failure.
+
+Public route probes live under `PUBLIC_ROUTE_PROBE_SPECS` and emit
+`InfraPublicRouteProbeFailed`; service-health probes emit
+`InfraServiceProbeFailed`. This keeps Cloudflare/Traefik route failures
+separate from Docker-network service failures.
 
 Spec format:
 
