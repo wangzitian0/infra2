@@ -253,6 +253,12 @@ Dockerfile `COPY`/`ADD` source files. This prevents code-backed infra services
 from skipping redeploys when source code or Vault templates change without a
 compose/env text change.
 
+Dokploy accepting a deploy request is not sufficient proof that runtime changed.
+After each generic compose deploy, the deployer records the existing deployment
+IDs, requires a new `running`/`done` deployment record, retries once with
+`compose.redeploy` when `compose.deploy` is a no-op, and fails the sync if both
+attempts leave the deployment list unchanged.
+
 ### 4.5 服务映射规则
 
 | 变更路径 | 触发任务 | 说明 |

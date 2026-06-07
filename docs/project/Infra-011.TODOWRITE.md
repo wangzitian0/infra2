@@ -15,6 +15,7 @@
 | Infra-011.6 | IaC Runner sync ensures every runtime secret field consumed by custom service templates before deploy. | `libs/tests/test_deployer.py` |
 | Infra-011.7 | 1Password Connect bootstrap uses the canonical `infra2.0` credentials/token pair, stable `credential` field lookup, and bearer-auth initialization before health probes. | `libs/tests/test_bootstrap_health.py`, `libs/tests/test_vault_unsealer.py` |
 | Infra-011.9 | Dokploy dynamic route canary classifies platform deploy failures before app PR previews depend on them, and the out-of-band watchdog pages worker/deployment-record failures independently of app CI. | `libs/tests/test_dokploy_route_canary.py`, `libs/tests/test_out_of_band_watchdog.py` |
+| Infra-011.11 | Generic Dokploy deployer sync retries no-op `compose.deploy` calls with `compose.redeploy` and fails fast when no new runtime deployment record appears. | `libs/tests/test_deployer.py` |
 
 ## Issue Mapping
 
@@ -47,6 +48,7 @@
 - [x] Make Vault unsealer health initialize 1Password Connect with bearer auth before checking dependency status.
 - [x] Add Dokploy dynamic route canary with fast-fail deployment, Docker, Traefik, and public route diagnostics.
 - [x] Wire Dokploy route canary into the GitHub out-of-band watchdog alert path.
+- [x] Fail generic deployer syncs when Dokploy accepts a request but does not create a new runtime deployment record.
 - [x] Add Cloudflare Workers watchdog for production/staging public routes and probe-runner heartbeat.
 - [x] Add signal ownership inventory and watchdog consistency audit.
 - [x] Run full lint/test suite.
