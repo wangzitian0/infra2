@@ -48,6 +48,8 @@ class DokployLike(Protocol):
 
     def deploy_compose(self, compose_id: str) -> dict: ...
 
+    def redeploy_compose(self, compose_id: str) -> dict: ...
+
     def get_compose(self, compose_id: str) -> dict: ...
 
 
@@ -224,13 +226,43 @@ def run_route_canary(
     )
     steps.append(deployment)
     if deployment.status != "pass":
-        return RouteCanaryReport(
-            "fail",
-            "dokploy-worker-or-deployment-record",
+        before_ids = _deployment_ids(_safe_compose(client, compose_id))
+        started = monotonic()
+        try:
+            client.redeploy_compose(compose_id)
+            steps.append(
+                _step(
+                    "redeploy-trigger",
+                    "pass",
+                    "redeploy request accepted after missing deployment record",
+                    started,
+                    monotonic,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            return fail(
+                "dokploy-control-plane",
+                _step("redeploy-trigger", "fail", _safe_detail(exc), started, monotonic),
+            )
+
+        deployment = _wait_for_new_deployment(
+            client,
             compose_id,
-            public_url,
-            steps,
+            before_ids,
+            timeout_seconds=config.timeout_seconds,
+            interval_seconds=config.interval_seconds,
+            sleeper=sleeper,
+            monotonic=monotonic,
         )
+        steps.append(deployment)
+        if deployment.status != "pass":
+            return RouteCanaryReport(
+                "fail",
+                "dokploy-worker-or-deployment-record",
+                compose_id,
+                public_url,
+                steps,
+            )
 
     if config.ssh_host:
         docker_step = _probe_docker_containers(

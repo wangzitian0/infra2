@@ -176,6 +176,10 @@ class DokployClient:
     def deploy_compose(self, compose_id: str) -> dict:
         """Trigger deployment for compose application"""
         return self._request("POST", "compose.deploy", json={"composeId": compose_id})
+
+    def redeploy_compose(self, compose_id: str) -> dict:
+        """Trigger redeployment for compose application"""
+        return self._request("POST", "compose.redeploy", json={"composeId": compose_id})
     
     def get_compose(self, compose_id: str) -> dict:
         """Get compose details"""

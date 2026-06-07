@@ -34,6 +34,7 @@ class FakeDokploy:
         self.get_calls = 0
         self.updated = False
         self.deployed = False
+        self.redeployed = False
 
     def find_compose_by_name(self, *_args, **_kwargs) -> dict | None:
         return None
@@ -48,6 +49,10 @@ class FakeDokploy:
     def deploy_compose(self, _compose_id: str) -> dict:
         self.deployed = True
         return {"message": "Deployment queued"}
+
+    def redeploy_compose(self, _compose_id: str) -> dict:
+        self.redeployed = True
+        return {"message": "Redeployment queued"}
 
     def get_compose(self, _compose_id: str) -> dict:
         index = min(self.get_calls, len(self.deployments) - 1)
@@ -98,6 +103,47 @@ def test_canary_fails_fast_when_deploy_record_never_changes() -> None:
     assert report.failure_domain == "dokploy-worker-or-deployment-record"
     assert report.steps[-1].name == "deployment-record"
     assert "did not produce a new running/done deployment" in report.steps[-1].detail
+    assert client.redeployed is True
+
+
+def test_canary_retries_redeploy_when_initial_deploy_has_no_record() -> None:
+    """Infra-011.9: compose.redeploy is the fallback for Dokploy deploy no-ops."""
+    clock = FakeClock()
+    client = FakeDokploy(
+        deployments=[
+            [],
+            [],
+            [],
+            [],
+            [{"deploymentId": "new", "status": "done", "createdAt": "2026-01-01"}],
+        ]
+    )
+    config = RouteCanaryConfig(
+        host="route-canary.example.com",
+        environment_id="env-1",
+        timeout_seconds=5,
+        interval_seconds=5,
+    )
+
+    report = run_route_canary(
+        config,
+        client,
+        http_get=lambda _url, _timeout: (404, "not found"),
+        sleeper=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+
+    assert client.deployed is True
+    assert client.redeployed is True
+    assert report.failure_domain == "traefik-public-route"
+    assert [step.name for step in report.steps] == [
+        "compose-upsert",
+        "deploy-trigger",
+        "deployment-record",
+        "redeploy-trigger",
+        "deployment-record",
+        "public-routes",
+    ]
 
 
 def test_canary_classifies_public_route_failure_after_deployment() -> None:
@@ -193,7 +239,11 @@ def test_canary_workflow_is_manual_and_fast_failing() -> None:
     assert "push:" in workflow
     assert "branches: [main]" in workflow
     assert "timeout-minutes: 8" in workflow
+    assert 'FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"' in workflow
     assert "DOKPLOY_API_KEY secret is required" in workflow
+    assert "required for manual canary runs" in workflow
+    assert "skipping scheduled/push route canary" in workflow
+    assert "Status: skipped" in workflow
     assert "No SSH key configured; canary will skip Docker container/label inspection" in workflow
     assert "python tools/dokploy_route_canary.py" in workflow
     assert "GITHUB_STEP_SUMMARY" in workflow
