@@ -40,6 +40,9 @@ on:
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 concurrency:
   group: dokploy-route-canary-${{ github.event.inputs.project }}-${{ github.event.inputs.env }}
   cancel-in-progress: false
@@ -105,8 +108,19 @@ jobs:
 
           environment_id="${ENVIRONMENT_ID_INPUT:-${DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID:-}}"
           if [[ -z "$environment_id" ]]; then
-            echo "::error::DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID repository variable is required for scheduled/push canary runs."
-            exit 1
+            if [[ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ]]; then
+              echo "::error::DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID repository variable or workflow input is required for manual canary runs."
+              exit 1
+            fi
+            echo "::notice::DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID repository variable is not configured; skipping scheduled/push route canary before platform mutation."
+            {
+              echo "## Dokploy Route Canary"
+              echo ""
+              echo "- Status: skipped"
+              echo "- Reason: DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID is not configured"
+              echo "- Action: configure the repository variable or run workflow_dispatch with environment_id"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
 
           canary_host="${CANARY_HOST_INPUT:-${DOKPLOY_ROUTE_CANARY_HOST:-route-canary-${GITHUB_RUN_ID}.zitian.party}}"
