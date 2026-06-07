@@ -148,8 +148,8 @@ def run_worker_status_check(
     env: Mapping[str, str], timeout: float
 ) -> list[CheckResult]:
     """Check authenticated Cloudflare Worker cron/KV-backed watchdog status."""
-    url = env.get(
-        "INFRA2_WATCHDOG_WORKER_STATUS_URL", DEFAULT_WORKER_STATUS_URL
+    url = (
+        env.get("INFRA2_WATCHDOG_WORKER_STATUS_URL") or DEFAULT_WORKER_STATUS_URL
     ).strip()
     token = env.get("INFRA2_WATCHDOG_WORKER_STATUS_TOKEN", "").strip()
     if not url:
