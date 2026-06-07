@@ -115,6 +115,49 @@ class FakeContext:
         return SimpleNamespace(ok=True, stdout="", stderr="")
 
 
+class FakeDokployTokenDeploy:
+    def __init__(self, deployment_snapshots: list[list[dict]]) -> None:
+        self.compose_id = "compose-iac-runner"
+        self.deployment_snapshots = list(deployment_snapshots)
+        self.deploy_calls = 0
+        self.redeploy_calls = 0
+        self.updated_env: dict[str, str] = {}
+
+    def find_compose_by_name(self, *_args, **_kwargs) -> dict:
+        return {
+            "composeId": self.compose_id,
+            "env": "VAULT_APP_TOKEN=hvs.old-token\nENV=production\n",
+        }
+
+    def update_compose_env(self, compose_id, *, env_vars=None, env_str=None):
+        assert compose_id == self.compose_id
+        assert env_str is None
+        self.updated_env.update(env_vars or {})
+        return {"ok": True}
+
+    def deploy_compose(self, compose_id):
+        assert compose_id == self.compose_id
+        self.deploy_calls += 1
+        return {"ok": True}
+
+    def redeploy_compose(self, compose_id):
+        assert compose_id == self.compose_id
+        self.redeploy_calls += 1
+        return {"ok": True}
+
+    def get_compose(self, compose_id):
+        assert compose_id == self.compose_id
+        if self.deployment_snapshots:
+            return {"deployments": self.deployment_snapshots.pop(0)}
+        return {"deployments": []}
+
+
+def _install_fake_dokploy(monkeypatch, client: FakeDokployTokenDeploy) -> None:
+    dokploy_module = types.ModuleType("libs.dokploy")
+    dokploy_module.get_dokploy = lambda *_, **__: client
+    monkeypatch.setitem(sys.modules, "libs.dokploy", dokploy_module)
+
+
 def test_policy_names_and_accessor_paths_are_env_scoped() -> None:
     """AC7.5.5: Vault app-token identity includes project, env, and service."""
     assert (
@@ -269,3 +312,83 @@ def test_setup_tokens_rejects_unknown_project_or_service(monkeypatch) -> None:
 
     with pytest.raises(exit_cls):
         tasks.setup_tokens.body(fake, project="finance_report", service="missing")
+
+
+def test_configure_dokploy_token_retries_redeploy_until_runtime_record(
+    monkeypatch,
+) -> None:
+    """AC7.5.5: token injection is successful only after runtime apply proof."""
+    tasks, _exit_cls = _load_vault_tasks(monkeypatch)
+    client = FakeDokployTokenDeploy(
+        [
+            [{"deploymentId": "old", "status": "done"}],
+            [{"deploymentId": "old", "status": "done"}],
+            [{"deploymentId": "old", "status": "done"}],
+            [
+                {"deploymentId": "old", "status": "done"},
+                {"deploymentId": "new", "status": "done"},
+            ],
+        ]
+    )
+    _install_fake_dokploy(monkeypatch, client)
+    monkeypatch.setattr(
+        "libs.common.get_env",
+        lambda: {"ENV": "production", "INTERNAL_DOMAIN": "zitian.party"},
+    )
+    monkeypatch.setenv("DOKPLOY_DEPLOYMENT_RECORD_TIMEOUT_SECONDS", "0")
+    monkeypatch.setattr(tasks.time, "sleep", lambda _seconds: None)
+
+    result = tasks._configure_dokploy_token(
+        FakeContext(),
+        service="iac_runner",
+        token="hvs.new-token",
+        project="bootstrap",
+    )
+
+    assert result == {"configured": True, "previous_token": "hvs.old-token"}
+    assert client.updated_env == {"VAULT_APP_TOKEN": "hvs.new-token"}
+    assert client.deploy_calls == 1
+    assert client.redeploy_calls == 1
+
+
+def test_setup_tokens_does_not_track_accessor_when_dokploy_runtime_apply_fails(
+    monkeypatch,
+) -> None:
+    """AC7.5.5: a Dokploy env update without runtime proof must fail closed."""
+    tasks, exit_cls = _load_vault_tasks(monkeypatch)
+    fake = FakeContext()
+    client = FakeDokployTokenDeploy(
+        [
+            [{"deploymentId": "old", "status": "done"}],
+            [{"deploymentId": "old", "status": "done"}],
+            [{"deploymentId": "old", "status": "done"}],
+            [{"deploymentId": "old", "status": "done"}],
+        ]
+    )
+    _install_fake_dokploy(monkeypatch, client)
+
+    monkeypatch.setenv("VAULT_ROOT_TOKEN", "root-token")
+    monkeypatch.setenv("DEPLOY_ENV", "production")
+    monkeypatch.setenv("DOKPLOY_DEPLOYMENT_RECORD_TIMEOUT_SECONDS", "0")
+    monkeypatch.setattr(tasks.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        tasks,
+        "get_env",
+        lambda: {"ENV": "production", "INTERNAL_DOMAIN": "zitian.party"},
+    )
+    monkeypatch.setattr(
+        "libs.common.get_env",
+        lambda: {"ENV": "production", "INTERNAL_DOMAIN": "zitian.party"},
+    )
+
+    with pytest.raises(exit_cls):
+        tasks.setup_tokens.body(fake, project="bootstrap", service="iac_runner")
+
+    commands = "\n".join(fake.commands)
+    assert (
+        "vault kv put secret/bootstrap/production/vault_token_accessors/bootstrap/iac_runner"
+        not in commands
+    )
+    assert "vault token revoke -accessor old-accessor" not in commands
+    assert client.deploy_calls == 1
+    assert client.redeploy_calls == 1

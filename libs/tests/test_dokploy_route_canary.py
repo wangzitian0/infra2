@@ -104,7 +104,7 @@ def test_canary_fails_fast_when_deploy_record_never_changes() -> None:
     assert report.status == "fail"
     assert report.failure_domain == "dokploy-worker-or-deployment-record"
     assert report.steps[-1].name == "deployment-record"
-    assert "did not produce a new running/done deployment" in report.steps[-1].detail
+    assert "did not produce a new done deployment" in report.steps[-1].detail
     assert client.redeployed is True
 
 
@@ -137,6 +137,7 @@ def test_canary_retries_redeploy_when_initial_deploy_has_no_record() -> None:
 
     assert client.deployed is True
     assert client.redeployed is True
+    assert client.updated is True
     assert report.failure_domain == "traefik-public-route"
     assert [step.name for step in report.steps] == [
         "compose-upsert",
@@ -146,6 +147,96 @@ def test_canary_retries_redeploy_when_initial_deploy_has_no_record() -> None:
         "deployment-record",
         "public-routes",
     ]
+
+
+def test_canary_does_not_treat_transient_running_deployment_as_proof() -> None:
+    """Infra-011.9: async deployment must reach done before public route probing."""
+    clock = FakeClock()
+    client = FakeDokploy(
+        deployments=[
+            [],
+            [{"deploymentId": "new", "status": "running", "createdAt": "2026-01-01"}],
+            [{"deploymentId": "new", "status": "error", "createdAt": "2026-01-01"}],
+            [{"deploymentId": "new", "status": "error", "createdAt": "2026-01-01"}],
+            [
+                {"deploymentId": "new", "status": "error", "createdAt": "2026-01-01"},
+                {
+                    "deploymentId": "retry",
+                    "status": "running",
+                    "createdAt": "2026-01-02",
+                },
+            ],
+            [
+                {"deploymentId": "new", "status": "error", "createdAt": "2026-01-01"},
+                {"deploymentId": "retry", "status": "error", "createdAt": "2026-01-02"},
+            ],
+        ]
+    )
+    config = RouteCanaryConfig(
+        host="route-canary.example.com",
+        environment_id="env-1",
+        timeout_seconds=15,
+        interval_seconds=5,
+    )
+
+    report = run_route_canary(
+        config,
+        client,
+        http_get=lambda _url, _timeout: (200, "ok"),
+        sleeper=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+
+    assert report.status == "fail"
+    assert report.failure_domain == "dokploy-worker-or-deployment-record"
+    assert report.steps[-1].data["latest_status"] == "error"
+    assert "public-routes" not in [step.name for step in report.steps]
+
+
+def test_canary_normalizes_created_compose_to_raw_source_type() -> None:
+    """Infra-011.9: new run-scoped compose must not keep Dokploy's github default."""
+    clock = FakeClock()
+    client = FakeDokploy(
+        deployments=[
+            [],
+            [{"deploymentId": "new", "status": "done", "createdAt": "2026-01-01"}],
+        ]
+    )
+    captured = {}
+
+    def capture_update(compose_id, compose_file=None, env=None, source_type=None):
+        captured["compose_id"] = compose_id
+        captured["compose_file"] = compose_file
+        captured["env"] = env
+        captured["source_type"] = source_type
+        return FakeDokploy.update_compose(
+            client,
+            compose_id,
+            compose_file=compose_file,
+            env=env,
+            source_type=source_type,
+        )
+
+    client.update_compose = capture_update
+
+    report = run_route_canary(
+        RouteCanaryConfig(
+            host="route-canary.example.com",
+            environment_id="env-1",
+            timeout_seconds=15,
+            interval_seconds=5,
+        ),
+        client,
+        http_get=lambda _url, _timeout: (200, "ok"),
+        sleeper=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+
+    assert report.status == "pass"
+    assert captured["compose_id"] == client.compose_id
+    assert captured["source_type"] == "raw"
+    assert "container_name: dokploy-route-canary-web" in captured["compose_file"]
+    assert "CANARY_HOST=route-canary.example.com" in captured["env"]
 
 
 def test_canary_classifies_public_route_failure_after_deployment() -> None:
@@ -188,7 +279,7 @@ def test_canary_passes_after_deployment_containers_and_public_routes() -> None:
     client = FakeDokploy(
         deployments=[
             [],
-            [{"deploymentId": "new", "status": "running", "createdAt": "2026-01-01"}],
+            [{"deploymentId": "new", "status": "done", "createdAt": "2026-01-01"}],
         ]
     )
     config = RouteCanaryConfig(
@@ -318,9 +409,11 @@ def test_canary_workflow_is_manual_and_fast_failing() -> None:
     assert "GITHUB_STEP_SUMMARY" in workflow
     assert '--environment-id="$environment_id"' in workflow
     assert '--dokploy-host "cloud.zitian.party"' in workflow
-    assert "route-canary.zitian.party" in workflow
-    assert "route-canary-${GITHUB_RUN_ID}.zitian.party" not in workflow
     assert '--nonce "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in workflow
+    assert "route-canary-${GITHUB_RUN_ID}.zitian.party" in workflow
+    assert "defaults to dokploy-route-canary-<run>" in workflow
+    assert "dokploy-route-canary-${GITHUB_RUN_ID}" in workflow
+    assert 'default: "dokploy-route-canary"' not in workflow
 
 
 def test_canary_github_summary_lists_failure_domain_and_phase_evidence() -> None:

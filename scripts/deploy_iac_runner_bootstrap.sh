@@ -43,16 +43,25 @@ for required_path in "$code_dir/.git" "$compose_file" "$traefik_override"; do
 done
 
 echo "Updating IaC Runner bootstrap source to $INFRA2_DEPLOY_SHA"
-git -C "$code_dir" fetch --tags --prune origin
+git -C "$code_dir" fetch --tags --prune origin '+refs/heads/*:refs/remotes/origin/*'
 git -C "$code_dir" checkout -f "$INFRA2_DEPLOY_SHA" -- bootstrap/06.iac_runner
 echo "IaC Runner bootstrap source HEAD: $(git -C "$code_dir" rev-parse --short HEAD)"
 
+env_file="$(mktemp)"
+next_env_file="$(mktemp)"
+cleanup() {
+  rm -f "$env_file" "$next_env_file"
+}
+trap cleanup EXIT
+
 echo "Persisting IaC Runner Dokploy settings"
-docker exec \
+dokploy_update_output="$(
+  docker exec \
   -e "INFRA2_DEPLOY_SHA=$INFRA2_DEPLOY_SHA" \
   -e "INFRA2_DOKPLOY_APP_NAME=$project" \
   -i iac-runner \
-  sh -lc 'set -a; . /secrets/.env; set +a; python -' <<'PY'
+  sh -lc 'if [ -f /secrets/.env ]; then set -a; . /secrets/.env; set +a; fi; python -' <<'PY'
+import base64
 import json
 import os
 import urllib.parse
@@ -64,7 +73,7 @@ api_key = os.environ.get("DOKPLOY_API_KEY", "")
 internal_domain = os.environ.get("INTERNAL_DOMAIN", "")
 
 if not api_key:
-    raise SystemExit("DOKPLOY_API_KEY is required in rendered IaC Runner secrets")
+    raise SystemExit("DOKPLOY_API_KEY is required in IaC Runner env or rendered secrets")
 
 
 def unique(items):
@@ -208,20 +217,44 @@ print(
     f"autoDeploy={confirmed.get('autoDeploy')} "
     f"git_sha={get_env_value(confirmed_env, 'GIT_SHA')}"
 )
+print(
+    "INFRA2_CONFIRMED_ENV_B64="
+    + base64.b64encode(confirmed_env.encode()).decode()
+)
 PY
+)"
 
-env_file="$(mktemp)"
-next_env_file="$(mktemp)"
-cleanup() {
-  rm -f "$env_file" "$next_env_file"
-}
-trap cleanup EXIT
+printf '%s\n' "$dokploy_update_output" \
+  | sed '/^INFRA2_CONFIRMED_ENV_B64=/d'
 
-docker inspect iac-runner --format '{{range .Config.Env}}{{println .}}{{end}}' \
-  > "$env_file"
-grep -v '^GIT_SHA=' "$env_file" > "$next_env_file" || true
-printf 'GIT_SHA=%.7s\n' "$INFRA2_DEPLOY_SHA" >> "$next_env_file"
-mv "$next_env_file" "$env_file"
+confirmed_env_b64="$(
+  printf '%s\n' "$dokploy_update_output" \
+    | sed -n 's/^INFRA2_CONFIRMED_ENV_B64=//p' \
+    | tail -n1
+)"
+if [ -z "$confirmed_env_b64" ]; then
+  echo "Dokploy compose update did not return confirmed env" >&2
+  exit 1
+fi
+printf '%s' "$confirmed_env_b64" | base64 -d > "$env_file"
+
+if ! grep -q '^VAULT_APP_TOKEN=' "$env_file"; then
+  echo "Dokploy compose env is missing VAULT_APP_TOKEN; refusing to recreate IaC Runner" >&2
+  exit 1
+fi
+if ! grep -q '^DOKPLOY_API_KEY=' "$env_file"; then
+  current_dokploy_api_key="$(
+    docker inspect iac-runner --format '{{range .Config.Env}}{{println .}}{{end}}' \
+      | sed -n 's/^DOKPLOY_API_KEY=//p' \
+      | tail -n1
+  )"
+  if [ -n "$current_dokploy_api_key" ]; then
+    printf 'DOKPLOY_API_KEY=%s\n' "$current_dokploy_api_key" >> "$env_file"
+    echo "Recovered DOKPLOY_API_KEY from current container env for bootstrap rebuild"
+  else
+    echo "Dokploy compose env and current container env are missing DOKPLOY_API_KEY; continuing because Vault-rendered secrets may provide it at runtime"
+  fi
+fi
 
 echo "Rebuilding and recreating IaC Runner compose project $project"
 docker compose \

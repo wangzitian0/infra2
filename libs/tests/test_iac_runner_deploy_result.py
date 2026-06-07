@@ -254,7 +254,12 @@ def test_deploy_wait_string_false_keeps_async_path(monkeypatch) -> None:
     fake_flask.request = types.SimpleNamespace(
         headers=_signed_headers(monkeypatch),
         data=b"",
-        json={"env": "staging", "ref": DEPLOY_SHA, "wait": "false", "triggered_by": "ci"},
+        json={
+            "env": "staging",
+            "ref": DEPLOY_SHA,
+            "wait": "false",
+            "triggered_by": "ci",
+        },
     )
     monkeypatch.setitem(sys.modules, "flask", fake_flask)
     webhook_server = _load_module(
@@ -773,7 +778,10 @@ def test_deploy_platform_uses_sha_and_nonce_signed_runner_requests() -> None:
     workflow = DEPLOY_PLATFORM_WORKFLOW.read_text(encoding="utf-8")
 
     assert 'tags: ["v*"]' not in workflow
-    assert "name: ${{ github.event_name == 'workflow_dispatch' && inputs.env || 'staging' }}" in workflow
+    assert (
+        "name: ${{ github.event_name == 'workflow_dispatch' && inputs.env || 'staging' }}"
+        in workflow
+    )
     assert "Resolve Deployment Commit" in workflow
     assert "Production deploys require a semver tag like v1.2.3." in workflow
     assert 'DEPLOY_SHA="$GITHUB_SHA"' in workflow
@@ -837,11 +845,12 @@ def test_iac_runner_bootstrap_deploy_script_is_scoped_to_runner_source() -> None
     """Infra-011.8: self-update preserves Dokploy drift outside runner source."""
     script = BOOTSTRAP_DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
-    assert "docker inspect iac-runner --format" in script
+    assert "docker inspect iac-runner" in script
     assert (
         'git -C "$code_dir" checkout -f "$INFRA2_DEPLOY_SHA" -- bootstrap/06.iac_runner'
         in script
     )
+    assert "refs/heads/*:refs/remotes/origin/*" in script
     assert "docker compose \\" in script
     assert '-p "$project"' in script
     assert "--force-recreate" in script
@@ -858,9 +867,26 @@ def test_iac_runner_bootstrap_deploy_script_persists_dokploy_ownership() -> None
     assert '"autoDeploy": False' in script
     assert '"GIT_SHA"' in script
     assert "INFRA2_DOKPLOY_APP_NAME" in script
-    assert "DOKPLOY_API_KEY is required in rendered IaC Runner secrets" in script
+    assert "DOKPLOY_API_KEY is required in IaC Runner env or rendered secrets" in script
     assert "Selected Dokploy API base" in script
     assert "Dokploy compose before update" in script
     assert "Dokploy compose env before update" in script
     assert "Dokploy compose after update" in script
     assert "IaC Runner health attempt" in script
+
+
+def test_iac_runner_bootstrap_deploy_script_uses_confirmed_dokploy_env() -> None:
+    """Infra-011.8: token repair rebuilds with Dokploy's latest compose env."""
+    script = BOOTSTRAP_DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    assert "INFRA2_CONFIRMED_ENV_B64=" in script
+    assert "base64.b64encode(confirmed_env.encode()).decode()" in script
+    assert 'base64 -d > "$env_file"' in script
+    assert (
+        "docker inspect iac-runner --format '{{range .Config.Env}}{{println .}}{{end}}' \\\n  > \"$env_file\""
+        not in script
+    )
+    assert "Dokploy compose env is missing VAULT_APP_TOKEN" in script
+    assert "Recovered DOKPLOY_API_KEY from current container env" in script
+    assert "current container env are missing DOKPLOY_API_KEY" in script
+    assert "if [ -f /secrets/.env ]; then" in script

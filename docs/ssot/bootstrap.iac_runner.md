@@ -480,7 +480,8 @@ invoke vault.setup-tokens
 ```
 
 **Token 自动注入**:
-- `invoke vault.setup-tokens` 自动在 Dokploy 中为 IaC Runner 配置 `VAULT_APP_TOKEN`
+- `invoke vault.setup-tokens` 自动在 Dokploy 中为 IaC Runner 配置
+  `VAULT_APP_TOKEN`，并要求 Dokploy 产生新的 runtime deployment record
 - Vault Agent 使用此 token 拉取 bootstrap/iac_runner 密钥
 - Sync subprocesses use the same scoped token as `VAULT_ROOT_TOKEN` so deployers
   can read and repair `platform/{env}/*` and `finance_report/{env}/*` runtime
@@ -639,12 +640,12 @@ docker exec iac-runner env | grep VAULT_APP_TOKEN
 docker exec iac-runner curl -H "X-Vault-Token: $VAULT_APP_TOKEN" \
   https://vault.{domain}/v1/secret/data/bootstrap/production/iac_runner
 
-# 3. 重新生成 token
+# 3. 重新生成 token；该命令必须看到 Dokploy runtime deployment record
 export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token')
 invoke vault.setup-tokens
 
-# 4. 重启容器
-docker restart iac-runner
+# 4. 如果 Dokploy 接受请求但没有重建 runtime，用外部 bootstrap 重建
+INFRA2_DEPLOY_SHA=$(git rev-parse HEAD) bash scripts/deploy_iac_runner_bootstrap.sh
 ```
 
 ### 7.4 更新 IaC Runner
@@ -656,7 +657,8 @@ When `bootstrap/06.iac_runner/**` changes on `main`, GitHub Actions runs
 `/deploy` call. The script resolves the live Dokploy compose project from the
 `iac-runner` container label, checks out only `bootstrap/06.iac_runner` at the
 merged SHA in the Dokploy code checkout, rebuilds the compose project with
-`GIT_SHA=<short_sha>`, recreates the runner, and waits for Docker health.
+`GIT_SHA=<short_sha>`, recreates the runner with the confirmed Dokploy compose
+env instead of the previous container env, and waits for Docker health.
 
 Generic deployer config hashes include compose text, deploy env values, local
 bind-mounted files referenced by compose, Dockerfiles, and Dockerfile
@@ -853,7 +855,11 @@ IaC Runner 是 bootstrap 服务，不能依赖自身自动修复。Post-merge wo
 - GitHub Actions 收到 Cloudflare `524`：不要使用 public route 上的
   `wait=true` 长请求；应使用 `/deploy` + `/deploy/status` 短请求轮询。
 - Dokploy deployment log 出现 `Compose file not found`：`composePath` 必须是 `bootstrap/06.iac_runner/compose.yaml`。
-- `iac-runner-vault-agent` 出现 `token file validation failed`：Dokploy 中的 `VAULT_APP_TOKEN` 已失效，运行 `VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token') invoke vault.setup-tokens` 重新生成 periodic token。
+- `iac-runner-vault-agent` 出现 `token file validation failed`：运行
+  `VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token') invoke vault.setup-tokens`
+  重新生成 periodic token；如果 Dokploy compose env 已更新但容器仍使用旧
+  token，必须通过外部 IaC Runner bootstrap 重建流程重建 compose，单纯
+  `docker restart` 不会更新容器 env。
 - `iac-runner` 出现 `Secrets file not found after 60s`：通常是 Vault Agent 未渲染 `/vault/secrets/.env`，先看 sidecar token 状态。
 - Docker 启动失败并提示 `error mounting "/root/.ssh/id_ed25519"`：不要挂载单个 SSH key 文件；挂载 `${SSH_DIR_PATH:-/root/.ssh}` 到 `/host_ssh`。
 
