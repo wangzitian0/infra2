@@ -366,8 +366,8 @@ Required GitHub variables for Dokploy liveness:
 - `DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID`
 - `DOKPLOY_ROUTE_CANARY_PROJECT`: optional, defaults to `platform`
 - `DOKPLOY_ROUTE_CANARY_ENV`: optional, defaults to `staging`
-- `DOKPLOY_ROUTE_CANARY_HOST`: optional, defaults to a run-scoped
-  `route-canary-watchdog-<run>.zitian.party` host
+- `DOKPLOY_ROUTE_CANARY_HOST`: optional, defaults to the stable
+  `route-canary-watchdog.zitian.party` host
 - `DOKPLOY_ROUTE_CANARY_DOKPLOY_HOST`: optional, defaults to
   `cloud.zitian.party`
 - `DOKPLOY_ROUTE_CANARY_COMPOSE_NAME`: optional, defaults to
@@ -476,7 +476,7 @@ Manual platform proof:
 
 ```bash
 python tools/dokploy_route_canary.py \
-  --host route-canary-$(date +%s).zitian.party \
+  --host route-canary.zitian.party \
   --environment-id="$DOKPLOY_ENVIRONMENT_ID" \
   --project platform \
   --env staging \
@@ -486,7 +486,15 @@ python tools/dokploy_route_canary.py \
 The `Dokploy Route Canary` GitHub workflow wraps the same tool for manual
 operator runs, hourly scheduled proof, and main-branch changes to the canary
 implementation. It requires `DOKPLOY_API_KEY`; scheduled and push runs also
-read `DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID` from repository variables. Missing
+read `DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID` from repository variables. By default
+the GitHub workflow reuses `route-canary.zitian.party` with the stable
+`dokploy-route-canary` compose, and the out-of-band watchdog reuses
+`route-canary-watchdog.zitian.party` with `dokploy-route-canary-watchdog`. The
+stable host/compose pairing prevents a fixed compose from carrying stale labels
+for a different run-scoped host. Each workflow run still injects a non-sensitive
+`infra2.route-canary.nonce` label so Dokploy must materialize a fresh deployment
+record; an accepted deploy/redeploy without a new record remains a hard
+`dokploy-worker-or-deployment-record` failure. Missing
 environment configuration is a fail-closed `dokploy-canary-configuration`
 result, never a skipped success, because an unconfigured scheduled canary cannot
 protect app previews. Manual runs use the same rule unless `environment_id` is

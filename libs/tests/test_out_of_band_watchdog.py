@@ -175,6 +175,48 @@ def test_dokploy_route_canary_check_fails_closed_without_config() -> None:
     ]
 
 
+def test_dokploy_route_canary_check_uses_stable_default_host_and_compose() -> None:
+    """Infra-011.9: default canaries must not rotate host under a fixed compose."""
+    watchdog = _load_watchdog()
+    captured = {}
+
+    def fake_runner(config, client):
+        captured["config"] = config
+        captured["client"] = client
+        return SimpleNamespace(
+            status="pass",
+            failure_domain="",
+            compose_id="cmp-canary",
+            public_url=f"https://{config.host}",
+            steps=[],
+        )
+
+    results = watchdog.run_dokploy_route_canary_check(
+        {
+            "DOKPLOY_API_KEY": "secret",
+            "DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID": "env-1",
+            "GITHUB_RUN_ID": "123",
+        },
+        ssh_config=None,
+        runner=fake_runner,
+        client_factory=lambda *, host: {"host": host},
+    )
+
+    assert results == [
+        watchdog.CheckResult(
+            "infra2-dokploy-route-canary",
+            True,
+            (
+                "status=pass failure_domain=none compose_id=cmp-canary "
+                "public_url=https://route-canary-watchdog.zitian.party"
+            ),
+        )
+    ]
+    assert captured["config"].host == "route-canary-watchdog.zitian.party"
+    assert captured["config"].compose_name == "dokploy-route-canary-watchdog"
+    assert captured["config"].nonce == "123"
+
+
 def test_dokploy_route_canary_check_reports_worker_failure_domain() -> None:
     """Infra-011.9: worker/deployment-record failures page through watchdog."""
     watchdog = _load_watchdog()
