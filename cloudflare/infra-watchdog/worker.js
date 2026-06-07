@@ -175,6 +175,17 @@ async function notifyIfNeeded(env, failures, nowMs) {
 }
 
 async function sendFeishu(env, text) {
+  const mode = String(env.ALERT_DELIVERY_MODE || "feishu_webhook").trim();
+  if (mode === "feishu_app") {
+    return sendFeishuApp(env, text);
+  }
+  if (mode !== "feishu_webhook") {
+    throw new Error(`Unsupported ALERT_DELIVERY_MODE: ${mode}`);
+  }
+  return sendFeishuWebhook(env, text);
+}
+
+async function sendFeishuWebhook(env, text) {
   const webhookUrl = String(env.FEISHU_WEBHOOK_URL || "");
   if (!webhookUrl) {
     throw new Error("FEISHU_WEBHOOK_URL is required");
@@ -186,6 +197,43 @@ async function sendFeishu(env, text) {
   });
   if (!response.ok) {
     throw new Error(`Feishu delivery failed: HTTP ${response.status}`);
+  }
+}
+
+async function sendFeishuApp(env, text) {
+  const appId = String(env.FEISHU_APP_ID || "");
+  const appSecret = String(env.FEISHU_APP_SECRET || "");
+  const chatId = String(env.FEISHU_CHAT_ID || "");
+  const apiBase = String(env.FEISHU_API_BASE || "https://open.feishu.cn").replace(/\/+$/, "");
+  if (!appId || !appSecret || !chatId) {
+    throw new Error("FEISHU_APP_ID, FEISHU_APP_SECRET, and FEISHU_CHAT_ID are required");
+  }
+
+  const tokenResponse = await fetch(`${apiBase}/open-apis/auth/v3/tenant_access_token/internal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+  });
+  const tokenBody = await tokenResponse.json();
+  if (!tokenResponse.ok || tokenBody.code !== 0 || !tokenBody.tenant_access_token) {
+    throw new Error(`Feishu tenant token failed: HTTP ${tokenResponse.status}; code=${tokenBody.code}`);
+  }
+
+  const messageResponse = await fetch(`${apiBase}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${tokenBody.tenant_access_token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      receive_id: chatId,
+      msg_type: "text",
+      content: JSON.stringify({ text }),
+    }),
+  });
+  const messageBody = await messageResponse.json();
+  if (!messageResponse.ok || messageBody.code !== 0) {
+    throw new Error(`Feishu app delivery failed: HTTP ${messageResponse.status}; code=${messageBody.code}`);
   }
 }
 

@@ -135,8 +135,15 @@ stale-secret health check needs separate remediation.
 
 Required Cloudflare Worker secrets:
 
-- `FEISHU_WEBHOOK_URL`
+- `FEISHU_WEBHOOK_URL` for webhook mode, or `FEISHU_APP_SECRET` for app bot mode
 - `HEARTBEAT_TOKEN`
+
+For app bot mode, configure Worker vars:
+
+- `ALERT_DELIVERY_MODE=feishu_app`
+- `FEISHU_APP_ID`
+- `FEISHU_CHAT_ID`
+- `FEISHU_API_BASE`: optional, defaults to `https://open.feishu.cn`
 
 Required Cloudflare Worker KV binding:
 

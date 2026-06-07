@@ -15,13 +15,30 @@ runner heartbeat freshness.
 
 ## Required Secrets
 
+For Feishu custom bot webhook mode:
+
 ```bash
 wrangler secret put FEISHU_WEBHOOK_URL
+```
+
+For Feishu Open Platform app bot mode:
+
+```bash
+wrangler secret put FEISHU_APP_SECRET
+```
+
+`FEISHU_WEBHOOK_URL` must be a Feishu custom bot webhook when
+`ALERT_DELIVERY_MODE=feishu_webhook`. `FEISHU_APP_SECRET` is required when
+`ALERT_DELIVERY_MODE=feishu_app`.
+
+Heartbeat:
+
+```bash
 wrangler secret put HEARTBEAT_TOKEN
 ```
 
-`FEISHU_WEBHOOK_URL` must be a Feishu custom bot webhook. `HEARTBEAT_TOKEN` must
-match `INFRA_PROBE_HEARTBEAT_TOKEN` in the platform alerting deployment.
+`HEARTBEAT_TOKEN` must match `INFRA_PROBE_HEARTBEAT_TOKEN` in the platform
+alerting deployment.
 
 ## Required KV
 
@@ -58,3 +75,11 @@ Then redeploy platform alerting for each environment.
 - `WATCHDOG_RENOTIFY_SECONDS`: defaults to `3600`.
 - `WATCHDOG_TARGETS_JSON`: JSON array overriding public route targets.
 - `WATCHDOG_HEARTBEATS_JSON`: JSON array overriding heartbeat checks.
+- `ALERT_DELIVERY_MODE`: `feishu_webhook` or `feishu_app`.
+- `FEISHU_APP_ID`: required for app bot mode.
+- `FEISHU_CHAT_ID`: required for app bot mode.
+- `FEISHU_API_BASE`: optional, defaults to `https://open.feishu.cn`.
+
+The live deployment currently checks production heartbeat only. Staging public
+routes are checked, but staging heartbeat should be enabled only after the
+staging alerting compose is confirmed to recreate its probe runner reliably.

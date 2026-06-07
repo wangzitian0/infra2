@@ -268,7 +268,8 @@ def _load_env_file(path: Path) -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        os.environ.setdefault(key, value.strip().strip('"').strip("'"))
+        if not os.environ.get(key):
+            os.environ[key] = value.strip().strip('"').strip("'")
 
 
 if __name__ == "__main__":

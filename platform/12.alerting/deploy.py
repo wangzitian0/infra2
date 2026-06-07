@@ -19,6 +19,23 @@ class AlertingDeployer(Deployer):
     service_name = "feishu-alert-bridge"
 
     @classmethod
+    def compose_env_base(cls, env=None):
+        """Include probe heartbeat runtime env in Dokploy compose variables."""
+        e = env or cls.env()
+        result = super().compose_env_base(e)
+        op_secrets = get_secrets(
+            project=cls.project_name(e),
+            service=cls.service,
+            env=e.get("ENV", "production"),
+            credential_type="root_vars",
+        )
+        for key in ("INFRA_PROBE_HEARTBEAT_URL", "INFRA_PROBE_HEARTBEAT_TOKEN"):
+            value = op_secrets.get(key)
+            if value:
+                result[key] = value
+        return result
+
+    @classmethod
     def pre_compose(cls, c):
         """Sync 1Password alerting root vars into Vault runtime secrets."""
         if not cls._prepare_dirs(c):
@@ -78,6 +95,8 @@ class AlertingDeployer(Deployer):
             "FEISHU_API_BASE",
             "BRIDGE_BASIC_AUTH_USERNAME",
             "BRIDGE_BASIC_AUTH_PASSWORD",
+            "INFRA_PROBE_HEARTBEAT_URL",
+            "INFRA_PROBE_HEARTBEAT_TOKEN",
         ]
         values = {key: op_secrets.get(key) for key in keys}
         values["ALERT_DELIVERY_MODE"] = mode

@@ -366,3 +366,22 @@ def test_probe_runner_heartbeat_is_configured_in_alerting_compose() -> None:
     assert "INFRA_PROBE_HEARTBEAT_TOKEN: ${INFRA_PROBE_HEARTBEAT_TOKEN:-}" in compose
     assert "INFRA_PROBE_HEARTBEAT_ENV: ${ENV:-production}" in compose
     assert "INFRA_PROBE_HEARTBEAT_NAME: platform-alerting-probes${ENV_SUFFIX}" in compose
+
+
+def test_probe_runner_env_file_overrides_empty_compose_defaults(monkeypatch, tmp_path) -> None:
+    """Infra-011.2: heartbeat secrets can come from Vault-rendered /secrets/.env."""
+    runner = _load_probe_runner()
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        'INFRA_PROBE_HEARTBEAT_URL="https://watchdog.example/heartbeat"\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_URL", "")
+
+    runner._load_env_file(env_file)
+
+    assert (
+        runner.os.environ["INFRA_PROBE_HEARTBEAT_URL"]
+        == "https://watchdog.example/heartbeat"
+    )
