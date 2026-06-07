@@ -1,6 +1,6 @@
 # Infra-011 TODOWRITE
 
-**Project**: P1 Reliability Hardening  
+**Project**: Reliability and CI/CD Stage Contract
 **Status**: In Progress
 
 ## Acceptance Criteria
@@ -14,8 +14,15 @@
 | Infra-011.5 | Compose-owned Traefik routing is not mixed with Dokploy-generated domain routing. | `libs/tests/test_domain_routing_policy.py` |
 | Infra-011.6 | IaC Runner sync ensures every runtime secret field consumed by custom service templates before deploy. | `libs/tests/test_deployer.py` |
 | Infra-011.7 | 1Password Connect bootstrap uses the canonical `infra2.0` credentials/token pair, stable `credential` field lookup, and bearer-auth initialization before health probes. | `libs/tests/test_bootstrap_health.py`, `libs/tests/test_vault_unsealer.py` |
+| Infra-011.8 | Post-merge deployments externally rebuild IaC Runner when runner bootstrap files change, then call `/deploy` only after public health recovers. | `libs/tests/test_iac_runner_deploy_result.py`, `.github/workflows/deploy-platform.yml` |
 | Infra-011.9 | Dokploy dynamic route canary classifies missing canary configuration and platform deploy failures before app PR previews depend on them, and the out-of-band watchdog pages worker/deployment-record failures independently of app CI. | `libs/tests/test_dokploy_route_canary.py`, `libs/tests/test_out_of_band_watchdog.py` |
+| Infra-011.10 | IaC Runner deploy control accepts only immutable SHAs, uses timestamped nonce signatures, redacts public deploy responses, and prevents root-token resolution through 1Password. | `libs/tests/test_iac_runner_deploy_result.py` |
 | Infra-011.11 | Generic Dokploy deployer sync retries no-op `compose.deploy` calls with `compose.redeploy` and fails fast when no new runtime deployment record appears. | `libs/tests/test_deployer.py` |
+| Infra-011.12 | CI/CD, watchdog, canary, and probe outputs separate environment from pipeline stage and share a sparse Env x Stage result schema. | `libs/tests/test_pipeline_stage_contract.py`, `docs/ssot/ops.pipeline.md`, `docs/ssot/ops.alerting.md` |
+| Infra-011.13 | External dependencies fail in preflight before expensive stages. | `libs/tests/test_pipeline_stage_contract.py`, `libs/tests/test_cloudflare_watchdog.py`, `libs/tests/test_out_of_band_watchdog.py`, `libs/tests/test_dokploy_route_canary.py` |
+| Infra-011.14 | Long-running stages publish soft budget, hard deadline, elapsed duration, current stage age, and budget breach classification. | `libs/tests/test_pipeline_stage_contract.py`, `libs/tests/test_iac_runner_deploy_result.py` |
+| Infra-011.15 | Cross-stage disagreements are deterministic, measurable records rather than operator interpretation. | `libs/tests/test_pipeline_stage_contract.py`, `libs/tests/test_infra_probes.py`, `libs/tests/test_cloudflare_watchdog.py` |
+| Infra-011.16 | CI/CD acceleration is evidence-gated through the Env x Stage matrix and does not weaken production full-sync or environment protection. | `libs/tests/test_pipeline_stage_contract.py`, `docs/ssot/ops.pipeline.md` |
 
 ## Issue Mapping
 
@@ -28,6 +35,7 @@
 - #187: IaC Runner deploy failed after health recovery because repo `platform/` shadowed Python stdlib `platform`.
 - #189: IaC Runner deploy sync lacks Vault automation token after stdlib shadow fix.
 - #191: IaC Runner sync should use its scoped Vault app token.
+- TBD: Env x Stage contract and cross-stage consistency tracking.
 
 ## TODO
 
@@ -53,3 +61,16 @@
 - [x] Add signal ownership inventory and watchdog consistency audit.
 - [x] Run full lint/test suite.
 - [x] Open PR.
+
+## Redesigned TODO
+
+- [ ] Define the shared Env x Stage result schema in Pipeline and Alerting SSOT.
+- [ ] Add contract tests for stage names, failure domains, duration fields, deadline fields, external dependency flags, and suppression reasons.
+- [ ] Add `config-preflight` classification for Cloudflare Worker JSON/KV/secret/delivery-mode failures.
+- [ ] Add GitHub fallback watchdog preflight classification for missing SSH and Feishu configuration.
+- [ ] Add deploy workflow stage summary with resolve, bootstrap-detect, bootstrap-update, IaC health preflight, deploy start, and status poll durations.
+- [ ] Add IaC Runner deploy status fields for current stage, stage age, per-service elapsed time, skipped reason, and budget breach classification.
+- [ ] Extend infra probe heartbeat payload with probe group summaries so Cloudflare can distinguish runner liveness from probe failures.
+- [ ] Extend route canary phase evidence with deadline and budget-breach fields.
+- [ ] Define and test cross-stage disagreement records for internal health vs public route, heartbeat vs probe result, canary vs app readiness, and GitHub fallback vs Cloudflare route checks.
+- [ ] Use Env x Stage evidence to propose safe acceleration only after fallback coverage is proven; keep production full-sync/manual protection unchanged by default.
