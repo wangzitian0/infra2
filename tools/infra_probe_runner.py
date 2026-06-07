@@ -11,6 +11,7 @@ import traceback
 import time
 from pathlib import Path
 from typing import NamedTuple
+from urllib.request import Request, urlopen
 
 from libs.infra_probes import (
     build_probe_alert_payload,
@@ -63,6 +64,7 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001 - looped probes must keep running.
             print(f"infra probe iteration failed: {exc}", flush=True)
             traceback.print_exc()
+            _post_heartbeat(ok=False, detail=f"iteration failed: {exc}")
             exit_code = 1
         if not args.loop:
             return exit_code
@@ -111,6 +113,7 @@ def run_once(
     if as_json:
         print(json.dumps(json_results, indent=2))
     if not dry_run:
+        _post_heartbeat(ok=not any_failures)
         _save_state(state_path, state)
     return 1 if any_failures else 0
 
@@ -220,6 +223,41 @@ def _save_state(path: Path, state: dict) -> None:
         path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
     except OSError as exc:
         print(f"infra probe state write failed: {exc}", flush=True)
+
+
+def _post_heartbeat(*, ok: bool, detail: str = "") -> None:
+    heartbeat_url = os.getenv("INFRA_PROBE_HEARTBEAT_URL", "").strip()
+    if not heartbeat_url:
+        return
+
+    payload = {
+        "env": os.getenv("INFRA_PROBE_HEARTBEAT_ENV")
+        or os.getenv("ENV")
+        or os.getenv("DEPLOY_ENV")
+        or "production",
+        "name": os.getenv("INFRA_PROBE_HEARTBEAT_NAME", "infra-probe-runner"),
+        "ok": ok,
+        "detail": detail or ("probe loop completed" if ok else "probe loop failed"),
+        "timestamp": int(time.time()),
+    }
+    headers = {"Content-Type": "application/json"}
+    token = os.getenv("INFRA_PROBE_HEARTBEAT_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = Request(
+        heartbeat_url,
+        data=json.dumps(payload, sort_keys=True).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urlopen(  # noqa: S310 - operator-configured watchdog endpoint.
+            request,
+            timeout=float(os.getenv("INFRA_PROBE_HEARTBEAT_TIMEOUT", "5")),
+        ) as response:
+            response.read(1024)
+    except OSError as exc:
+        print(f"infra probe heartbeat failed: {exc}", flush=True)
 
 
 def _load_env_file(path: Path) -> None:

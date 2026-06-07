@@ -36,18 +36,21 @@ SigNoz Alertmanager webhook
 ```
 
 Whole-host and alerting-stack failure detection is out-of-band because the
-infra2 host can take SigNoz and `platform/12.alerting` down with it:
+infra2 host can take SigNoz and `platform/12.alerting` down with it. The
+primary out-of-band path is Cloudflare Workers Cron because it is external to
+the VPS, low-cost at this probe volume, and does not consume GitHub Actions
+minutes:
 
 ```text
-GitHub Actions schedule (external to infra2, every 30 minutes)
-  -> public infra2 endpoint checks
-  -> SSH bridge container health check
+Cloudflare Workers Cron (external to infra2, every 10 minutes)
+  -> production and staging public route checks
+  -> platform-alerting-probes heartbeat freshness checks
   -> Feishu/Lark webhook directly
 ```
 
-This path is intentionally limited to host reachability and alerting bridge
-availability. All service-level alerts continue to use the in-band path through
-SigNoz and `platform/12.alerting`.
+The existing GitHub Actions watchdog remains a fallback/manual diagnostic path
+for SSH-based host checks. All service-level alerts continue to use the in-band
+path through SigNoz and `platform/12.alerting`.
 
 Code-owned infra probes run from `platform/12.alerting` as
 `platform-alerting-probes${ENV_SUFFIX}`. The probe runner checks service health
@@ -113,7 +116,9 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
 | Cross-cutting | Vault app tokens and rendered env | missing, malformed, invalid, non-renewable, low TTL, or rendered `<no value>` fields | P0/P1 | Docker healthcheck + manual gate: `vault-audit.self-refresh` |
 | Cross-cutting | Backup freshness | latest off-host backup is missing, stale, empty, or missing checksum | P1 | Live contract: backup manifest verifier |
 | Cross-cutting | OTEL ingestion | expected app logs/traces absent after deployment | P1 | Manual gate: `signoz.shared.query-logs` |
-| Cross-cutting | Infra2 host reachability | public infra2 endpoints or external SSH bridge health check fail | P0 | GitHub Actions out-of-band watchdog |
+| Cross-cutting | Infra2 host reachability | production or staging public infra2 endpoints fail from Cloudflare | P0/P1 | Cloudflare Workers out-of-band watchdog |
+| Cross-cutting | Infra probe runner heartbeat | `platform-alerting-probes${ENV_SUFFIX}` stops posting heartbeat or reports unhealthy | P0/P1 | Cloudflare Workers out-of-band watchdog |
+| Cross-cutting | SSH host diagnostics | external SSH bridge health check fails | P0 | GitHub Actions fallback watchdog |
 
 ---
 
@@ -206,11 +211,72 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
    uv run python -m invoke alerting.shared.test-feishu --message="Finance report alerting path live"
    ```
 
-### SOP-005: Out-of-band infra2 watchdog
+### SOP-005: Cloudflare out-of-band infra2 watchdog
+
+The primary out-of-band watchdog lives in
+[`cloudflare/infra-watchdog`](../../cloudflare/infra-watchdog/). It runs every
+10 minutes from Cloudflare Workers Cron and alerts Feishu directly instead of
+routing through the bridge it is meant to verify.
+
+Default coverage:
+
+- Production public routes:
+  `cloud`, `vault`, `minio`, `sso`, and `signoz`.
+- Staging public routes:
+  `cloud-staging`, `vault-staging`, `minio-staging`, `sso-staging`, and
+  `signoz-staging`.
+- Production heartbeat:
+  `platform-alerting-probes`.
+- Staging heartbeat:
+  `platform-alerting-probes-staging`.
+
+Required Cloudflare Worker secrets:
+
+- `FEISHU_WEBHOOK_URL`: Feishu custom bot webhook URL.
+- `HEARTBEAT_TOKEN`: shared token expected by the `/heartbeat` endpoint.
+
+Required Cloudflare Worker KV:
+
+- `WATCHDOG_STATE`: stores heartbeat timestamps and alert dedupe state.
+
+Default Worker vars:
+
+- `WATCHDOG_ENVIRONMENTS=production,staging`
+- `WATCHDOG_HTTP_TIMEOUT_MS=8000`
+- `WATCHDOG_RENOTIFY_SECONDS=3600`
+
+Deployment:
+
+```bash
+cd cloudflare/infra-watchdog
+wrangler kv namespace create WATCHDOG_STATE
+wrangler kv namespace create WATCHDOG_STATE --preview
+wrangler secret put FEISHU_WEBHOOK_URL
+wrangler secret put HEARTBEAT_TOKEN
+wrangler deploy
+```
+
+Configure the in-band probe runner to publish heartbeat after deployment:
+
+```bash
+uv run invoke env.set INFRA_PROBE_HEARTBEAT_URL=https://infra2-cloudflare-watchdog.<account>.workers.dev/heartbeat --project=platform --env=production --service=alerting --credential-type=root_vars
+uv run invoke env.set INFRA_PROBE_HEARTBEAT_TOKEN=<token> --project=platform --env=production --service=alerting --credential-type=root_vars
+uv run invoke env.set INFRA_PROBE_HEARTBEAT_URL=https://infra2-cloudflare-watchdog.<account>.workers.dev/heartbeat --project=platform --env=staging --service=alerting --credential-type=root_vars
+uv run invoke env.set INFRA_PROBE_HEARTBEAT_TOKEN=<token> --project=platform --env=staging --service=alerting --credential-type=root_vars
+uv run invoke alerting.setup
+DEPLOY_ENV=staging uv run invoke alerting.setup
+```
+
+The Worker is stateful. It sends an alert when a failure first appears, when the
+failure fingerprint changes, when `WATCHDOG_RENOTIFY_SECONDS` is reached, and
+when the previously failing watchdog recovers. Successful checks stay quiet.
+
+### SOP-005B: GitHub fallback out-of-band watchdog
 
 The watchdog lives in GitHub Actions so it remains outside the infra2 host. It
 runs every 30 minutes and alerts Feishu directly instead of routing through the
-bridge it is meant to verify.
+bridge it is meant to verify. This path is retained for SSH-based host
+diagnostics and manual dispatch.
 
 Required GitHub secrets:
 
@@ -264,6 +330,12 @@ when the failure fingerprint changes, when the configured renotify interval is
 reached (`INFRA_PROBE_RENOTIFY_SECONDS`, default 3600 seconds), and when a
 previously firing probe group recovers. Successful runs stay quiet unless they
 close a previously active failure.
+
+When `INFRA_PROBE_HEARTBEAT_URL` is configured, the probe runner posts a
+heartbeat to the Cloudflare watchdog after each non-dry-run iteration. The
+heartbeat payload includes the deploy environment, runner name, success flag,
+detail, and local timestamp. Heartbeat delivery failures are logged but do not
+block in-band probe alert delivery.
 
 Public route probes live under `PUBLIC_ROUTE_PROBE_SPECS` and emit
 `InfraPublicRouteProbeFailed`; service-health probes emit
@@ -339,6 +411,7 @@ application readiness or browser E2E.
 | **Feishu payload contract** | `libs/tests/test_alerting.py` | ✅ Implemented |
 | **Reusable SigNoz log error rule payload** | `libs/tests/test_alerting.py` | ✅ Implemented |
 | **Out-of-band host and bridge watchdog contract** | `libs/tests/test_out_of_band_watchdog.py` | ✅ Implemented |
+| **Cloudflare out-of-band watchdog contract** | `libs/tests/test_cloudflare_watchdog.py` | ✅ Implemented |
 | **In-band infra service probes** | `libs/tests/test_infra_probes.py` | ✅ Implemented |
 | **Dokploy dynamic route canary contract** | `libs/tests/test_dokploy_route_canary.py` | ✅ Implemented |
 | **Backup freshness alert payload** | `libs/tests/test_backup_verification.py` | ✅ Implemented |

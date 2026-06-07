@@ -123,16 +123,35 @@ result in a Feishu group message.
 ## Out-of-band Watchdog
 
 The bridge remains internal only. Whole-host and bridge-down detection is handled
-by `.github/workflows/out-of-band-watchdog.yml`, which runs every 30 minutes from
-GitHub Actions and sends Feishu directly when infra2 or the bridge cannot be
-trusted.
+primarily by `cloudflare/infra-watchdog`, which runs every 10 minutes from
+Cloudflare Workers Cron and sends Feishu directly when infra2, public routing,
+or the in-band probe runner cannot be trusted. `.github/workflows/out-of-band-watchdog.yml`
+is retained as a 30-minute SSH fallback/manual diagnostic path.
 
 The bridge waits up to 300 seconds for `/secrets/.env` at startup, but it does
 not require the vault-agent sidecar to stay Docker-healthy after the file is
 rendered. This keeps alert delivery available even when vault-agent's own
 stale-secret health check needs separate remediation.
 
-Required repository secrets:
+Required Cloudflare Worker secrets:
+
+- `FEISHU_WEBHOOK_URL`
+- `HEARTBEAT_TOKEN`
+
+Required Cloudflare Worker KV binding:
+
+- `WATCHDOG_STATE`
+
+The in-band probe runner publishes heartbeat to the Worker when these alerting
+environment variables are configured:
+
+- `INFRA_PROBE_HEARTBEAT_URL`
+- `INFRA_PROBE_HEARTBEAT_TOKEN`
+- `INFRA_PROBE_HEARTBEAT_ENV`: defaults to `ENV` or `production`
+- `INFRA_PROBE_HEARTBEAT_NAME`: defaults to
+  `platform-alerting-probes${ENV_SUFFIX}`
+
+Required GitHub repository secrets for fallback SSH diagnostics:
 
 - `INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE`: `feishu_webhook` or `feishu_app`
 - `INFRA2_WATCHDOG_SSH_HOST`
@@ -156,9 +175,10 @@ Optional repository variables:
 - `INFRA2_WATCHDOG_SSH_TARGETS`: newline-separated `name|command|expected_text`
 - `INFRA2_WATCHDOG_SSH_PORT`: defaults to `22`
 
-Default checks cover the public Dokploy entrypoint, SSH reachability, Docker
-daemon reachability, and the `platform-alerting` in-container `/health` endpoint
-via SSH.
+Cloudflare defaults cover production and staging public routes plus production
+and staging probe-runner heartbeat freshness. GitHub fallback checks cover the
+public Dokploy entrypoint, SSH reachability, Docker daemon reachability, and the
+`platform-alerting` in-container `/health` endpoint via SSH.
 IaC Runner, MinIO, Postgres, Redis, and application dependency health remain
 service-level signals handled in-band through SigNoz and this bridge.
 
@@ -191,3 +211,6 @@ Dry-run:
 ```bash
 INFRA_PROBE_DRY_RUN=1 uv run python tools/infra_probe_runner.py --once --json
 ```
+
+Heartbeat dry-run is intentionally disabled: `INFRA_PROBE_DRY_RUN=1` does not
+write alert state or post heartbeat.

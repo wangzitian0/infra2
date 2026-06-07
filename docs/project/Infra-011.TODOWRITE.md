@@ -8,7 +8,7 @@
 | AC | Description | Proof |
 |----|-------------|-------|
 | Infra-011.1 | Deploy workflow reports the real IaC Runner sync result instead of async acceptance. | `libs/tests/test_iac_runner_deploy_result.py` |
-| Infra-011.2 | Infra service probes and out-of-band Docker health checks stay quiet on success, alert on unhealthy/starting/restarting containers, default probe loops to a 10-minute cadence, keep Cloudflare route blocks separate from service-down failures, dedupe unchanged failures, renotify on interval, and send recovery notifications. | `libs/tests/test_infra_probes.py`, `libs/tests/test_out_of_band_watchdog.py` |
+| Infra-011.2 | Infra service probes and out-of-band Docker health checks stay quiet on success, alert on unhealthy/starting/restarting containers, default probe loops to a 10-minute cadence, keep Cloudflare route blocks separate from service-down failures, dedupe unchanged failures, renotify on interval, send recovery notifications, and feed a Cloudflare Workers watchdog for production/staging public route and heartbeat checks. | `libs/tests/test_infra_probes.py`, `libs/tests/test_cloudflare_watchdog.py`, `libs/tests/test_out_of_band_watchdog.py` |
 | Infra-011.3 | Vault Agent Docker health avoids mtime false-unhealthy, rejects unresolved template values, and audit keeps stale-file detection. | `libs/tests/test_vault_self_refresh_audit.py` |
 | Infra-011.4 | Backup inventory, archive/checksum generation, and freshness manifest verification are code-enforced. | `libs/tests/test_backup_verification.py` |
 | Infra-011.5 | Compose-owned Traefik routing is not mixed with Dokploy-generated domain routing. | `libs/tests/test_domain_routing_policy.py` |
@@ -46,5 +46,6 @@
 - [x] Pin 1Password Connect bootstrap to the canonical `infra2.0` credentials/token pair.
 - [x] Make Vault unsealer health initialize 1Password Connect with bearer auth before checking dependency status.
 - [x] Add Dokploy dynamic route canary with fast-fail deployment, Docker, Traefik, and public route diagnostics.
+- [x] Add Cloudflare Workers watchdog for production/staging public routes and probe-runner heartbeat.
 - [x] Run full lint/test suite.
 - [x] Open PR.
