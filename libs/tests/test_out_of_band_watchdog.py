@@ -113,13 +113,14 @@ def test_worker_status_check_accepts_fresh_nonempty_status(monkeypatch) -> None:
     def fake_urlopen(request, *, timeout):
         captured["authorization"] = request.get_header("Authorization")
         captured["timeout"] = timeout
+        captured["url"] = request.full_url
         return FakeResponse()
 
     monkeypatch.setattr(watchdog, "urlopen", fake_urlopen)
 
     results = watchdog.run_worker_status_check(
         {
-            "INFRA2_WATCHDOG_WORKER_STATUS_URL": "https://worker.example/status",
+            "INFRA2_WATCHDOG_WORKER_STATUS_URL": "",
             "INFRA2_WATCHDOG_WORKER_STATUS_TOKEN": "status-token",
         },
         timeout=3,
@@ -132,7 +133,11 @@ def test_worker_status_check_accepts_fresh_nonempty_status(monkeypatch) -> None:
             "worker last-run fresh: age=1800s",
         )
     ]
-    assert captured == {"authorization": "Bearer status-token", "timeout": 3}
+    assert captured == {
+        "authorization": "Bearer status-token",
+        "timeout": 3,
+        "url": watchdog.DEFAULT_WORKER_STATUS_URL,
+    }
 
 
 def test_custom_ssh_targets_preserve_mandatory_docker_health() -> None:
