@@ -343,3 +343,11 @@ signals:
     primary_owner: github
     severity: critical
     cadence: 1d
+
+  - signal_id: global.infra2-dokploy-route-canary.github
+    environment: global
+    component: dokploy
+    signal: infra2-dokploy-route-canary
+    primary_owner: github
+    severity: critical
+    cadence: 1d

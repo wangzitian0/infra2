@@ -14,6 +14,7 @@ Standalone `invoke` namespaces loaded by `tools/loader.py`.
 | `env` | `tools/env_tool.py` | Remote env/secret SSOT operations |
 | `dokploy` | `tools/dokploy_env.py` | Dokploy project/environment helpers |
 | `dokploy_route_canary.py` | `tools/dokploy_route_canary.py` | Fast-fail Dokploy worker, Docker, Traefik, and public route probe |
+| `out_of_band_watchdog.py` | `tools/out_of_band_watchdog.py` | GitHub-hosted direct Feishu watchdog for host, bridge, Worker, and Dokploy route-canary liveness |
 | `local` | `tools/local_init.py` | Local CLI checks and bootstrap helpers |
 | `vault-audit` | `tools/vault_audit.py` | Read-only Vault app-token self-refresh audit |
 
@@ -67,6 +68,16 @@ python tools/dokploy_route_canary.py \
   --project platform \
   --env staging \
   --dokploy-host cloud.zitian.party
+```
+
+## out_of_band_watchdog.py
+
+Direct Feishu watchdog intended to run outside the infra2 host from GitHub
+Actions. It verifies public host reachability, Cloudflare Worker self-health,
+SSH diagnostics, and the Dokploy route canary.
+
+```bash
+INFRA2_WATCHDOG_DRY_RUN=1 uv run python tools/out_of_band_watchdog.py
 ```
 
 ## local (local readiness + bootstrap)

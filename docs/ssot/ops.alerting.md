@@ -338,7 +338,8 @@ state.
 The watchdog lives in GitHub Actions so it remains outside the infra2 host. It
 runs daily and alerts Feishu directly instead of routing through the
 bridge it is meant to verify. This path is retained for SSH-based host
-diagnostics, Cloudflare Worker self-health audit, and manual dispatch.
+diagnostics, Cloudflare Worker self-health audit, Dokploy route-canary liveness,
+and manual dispatch.
 
 Required GitHub secrets:
 
@@ -347,6 +348,7 @@ Required GitHub secrets:
 - `INFRA2_WATCHDOG_SSH_USER`
 - `INFRA2_WATCHDOG_SSH_PRIVATE_KEY`
 - `INFRA2_WATCHDOG_WORKER_STATUS_TOKEN`
+- `DOKPLOY_API_KEY`
 
 For `feishu_webhook` mode:
 
@@ -358,6 +360,26 @@ For `feishu_app` mode:
 - `INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET`
 - `INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID`
 - `INFRA2_OUT_OF_BAND_FEISHU_API_BASE`: optional, defaults to `https://open.feishu.cn`
+
+Required GitHub variables for Dokploy liveness:
+
+- `DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID`
+- `DOKPLOY_ROUTE_CANARY_PROJECT`: optional, defaults to `platform`
+- `DOKPLOY_ROUTE_CANARY_ENV`: optional, defaults to `staging`
+- `DOKPLOY_ROUTE_CANARY_HOST`: optional, defaults to a run-scoped
+  `route-canary-watchdog-<run>.zitian.party` host
+- `DOKPLOY_ROUTE_CANARY_DOKPLOY_HOST`: optional, defaults to
+  `cloud.zitian.party`
+- `DOKPLOY_ROUTE_CANARY_COMPOSE_NAME`: optional, defaults to
+  `dokploy-route-canary-watchdog`
+- `DOKPLOY_ROUTE_CANARY_TIMEOUT_SECONDS`: optional, defaults to `90`
+- `DOKPLOY_ROUTE_CANARY_INTERVAL_SECONDS`: optional, defaults to `5`
+
+The out-of-band watchdog treats missing Dokploy canary configuration as an
+alert gap. When the canary classifies
+`dokploy-worker-or-deployment-record`, the failure is reported through the
+direct Feishu out-of-band route before application PR previews or staging
+deploys spend time on app readiness.
 
 Optional GitHub variables:
 
