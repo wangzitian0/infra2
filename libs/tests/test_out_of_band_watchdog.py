@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import sys
 from pathlib import Path
@@ -28,6 +29,7 @@ def test_workflow_runs_every_30_minutes_and_can_be_dispatched() -> None:
 
     assert workflow["on"]["schedule"] == [{"cron": "*/30 * * * *"}]
     assert "workflow_dispatch" in workflow["on"]
+    assert "ssh_targets_override" in workflow["on"]["workflow_dispatch"]["inputs"]
     assert workflow["permissions"] == {"contents": "read"}
 
 
@@ -41,6 +43,7 @@ def test_workflow_alerts_directly_and_does_not_call_the_bridge() -> None:
     assert "http://platform-alerting" not in text
     assert "/signoz/webhook" not in text
     assert "tools/out_of_band_watchdog.py" in text
+    assert "inputs.ssh_targets_override" in text
 
 
 def test_default_targets_cover_public_host_and_bridge_health() -> None:
@@ -63,6 +66,9 @@ def test_default_targets_cover_public_host_and_bridge_health() -> None:
     assert "health=unhealthy" in ssh_targets[2].command
     assert "health=starting" in ssh_targets[2].command
     assert "status=restarting" in ssh_targets[2].command
+    assert "docker inspect" in ssh_targets[2].command
+    assert "{{.Config.Image}}" in ssh_targets[2].command
+    assert "{{.State.Status}}" in ssh_targets[2].command
     assert ssh_targets[2].expected_text == "docker-health-ok"
     assert "docker exec platform-alerting" in ssh_targets[3].command
     assert "127.0.0.1:8080/health" in ssh_targets[3].command
@@ -80,6 +86,15 @@ def test_custom_ssh_targets_preserve_mandatory_docker_health() -> None:
 
     assert "infra2-docker-health" in names
     assert "infra2-custom" in names
+
+
+def test_base64_ssh_target_commands_support_manual_diagnostics() -> None:
+    """Infra-011.9: Manual SSH diagnostics can include shell separators safely."""
+    watchdog = _load_watchdog()
+    command = "echo dokploy; docker logs --tail 20 dokploy 2>&1 | tail -20"
+    encoded = base64.b64encode(command.encode("utf-8")).decode("ascii")
+
+    assert watchdog._decode_ssh_command(f"base64:{encoded}") == command
 
 
 def test_iac_runner_is_not_a_default_whole_host_health_check() -> None:

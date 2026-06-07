@@ -507,3 +507,39 @@ def _one_line(value: str) -> str:
 
 def report_to_json(report: RouteCanaryReport) -> str:
     return json.dumps(report.to_dict(), indent=2, sort_keys=True)
+
+
+def render_github_summary(report: RouteCanaryReport) -> str:
+    """Render a compact GitHub step summary for the canary proof."""
+    lines = [
+        "## Dokploy Route Canary",
+        "",
+        f"- Status: `{report.status}`",
+        f"- Failure domain: `{report.failure_domain or 'none'}`",
+        f"- Compose ID: `{report.compose_id or 'unknown'}`",
+        f"- Public URL: {report.public_url}",
+        "",
+        "| Phase | Status | Detail | Evidence |",
+        "| --- | --- | --- | --- |",
+    ]
+    for step in report.steps:
+        evidence = json.dumps(step.data, sort_keys=True) if step.data else "{}"
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _md_cell(step.name),
+                    _md_cell(step.status),
+                    _md_cell(step.detail),
+                    _md_cell(evidence[:500]),
+                ]
+            )
+            + " |"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _md_cell(value: object) -> str:
+    text = str(value).replace("\n", " ")
+    return text.replace("|", "\\|")

@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
 from libs.dokploy import get_dokploy  # noqa: E402
 from libs.dokploy_route_canary import (  # noqa: E402
     RouteCanaryConfig,
+    render_github_summary,
     report_to_json,
     run_route_canary,
 )
@@ -58,6 +59,9 @@ def main() -> int:
     client = get_dokploy(host=args.dokploy_host or None)
     report = run_route_canary(config, client)
     print(report_to_json(report))
+    if summary_path := os.getenv("GITHUB_STEP_SUMMARY"):
+        with open(summary_path, "a", encoding="utf-8") as summary:
+            summary.write(render_github_summary(report))
     return 0 if report.status == "pass" else 1
 
 
