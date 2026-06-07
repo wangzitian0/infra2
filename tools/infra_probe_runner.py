@@ -25,8 +25,10 @@ from libs.infra_probes import (
 DEFAULT_PROBE_SPECS = """
 alert-bridge-http|http|http://platform-alerting:8080/health|200|critical|5
 """
-DEFAULT_PROBE_INTERVAL_SECONDS = 600
-DEFAULT_RENOTIFY_SECONDS = 3600
+DEFAULT_PROBE_INTERVAL_SECONDS = 60
+DEFAULT_RENOTIFY_SECONDS = 1800
+DEFAULT_FAILURE_THRESHOLD = 3
+DEFAULT_RECOVERY_THRESHOLD = 2
 DEFAULT_STATE_FILE = "/tmp/infra_probe_runner_state.json"
 
 
@@ -52,6 +54,12 @@ def main() -> int:
     renotify_seconds = int(
         os.getenv("INFRA_PROBE_RENOTIFY_SECONDS", str(DEFAULT_RENOTIFY_SECONDS))
     )
+    failure_threshold = int(
+        os.getenv("INFRA_PROBE_FAILURE_THRESHOLD", str(DEFAULT_FAILURE_THRESHOLD))
+    )
+    recovery_threshold = int(
+        os.getenv("INFRA_PROBE_RECOVERY_THRESHOLD", str(DEFAULT_RECOVERY_THRESHOLD))
+    )
     state_path = Path(os.getenv("INFRA_PROBE_STATE_FILE", DEFAULT_STATE_FILE))
 
     while True:
@@ -59,6 +67,8 @@ def main() -> int:
             exit_code = run_once(
                 as_json=args.json,
                 renotify_seconds=renotify_seconds,
+                failure_threshold=failure_threshold,
+                recovery_threshold=recovery_threshold,
                 state_path=state_path,
             )
         except Exception as exc:  # noqa: BLE001 - looped probes must keep running.
@@ -75,14 +85,34 @@ def run_once(
     *,
     as_json: bool = False,
     renotify_seconds: int | None = None,
+    failure_threshold: int | None = None,
+    recovery_threshold: int | None = None,
     state_path: Path | None = None,
 ) -> int:
     groups = _probe_groups()
-    state_path = state_path or Path(os.getenv("INFRA_PROBE_STATE_FILE", DEFAULT_STATE_FILE))
+    state_path = state_path or Path(
+        os.getenv("INFRA_PROBE_STATE_FILE", DEFAULT_STATE_FILE)
+    )
     renotify_seconds = (
         renotify_seconds
         if renotify_seconds is not None
-        else int(os.getenv("INFRA_PROBE_RENOTIFY_SECONDS", str(DEFAULT_RENOTIFY_SECONDS)))
+        else int(
+            os.getenv("INFRA_PROBE_RENOTIFY_SECONDS", str(DEFAULT_RENOTIFY_SECONDS))
+        )
+    )
+    failure_threshold = (
+        failure_threshold
+        if failure_threshold is not None
+        else int(
+            os.getenv("INFRA_PROBE_FAILURE_THRESHOLD", str(DEFAULT_FAILURE_THRESHOLD))
+        )
+    )
+    recovery_threshold = (
+        recovery_threshold
+        if recovery_threshold is not None
+        else int(
+            os.getenv("INFRA_PROBE_RECOVERY_THRESHOLD", str(DEFAULT_RECOVERY_THRESHOLD))
+        )
     )
     state = _load_state(state_path)
     now = time.time()
@@ -104,16 +134,27 @@ def run_once(
         )
         if dry_run and failures:
             _send_payload(payload)
-        elif _should_send(group.name, results, state, now, renotify_seconds):
+        elif _should_send(
+            group.name,
+            results,
+            state,
+            now,
+            renotify_seconds,
+            failure_threshold,
+            recovery_threshold,
+        ):
+            if _maintenance_active(now):
+                continue
             _send_payload(payload)
             _record_sent(group.name, results, state, now)
-        elif not failures:
-            _record_resolved(group.name, state)
 
     if as_json:
         print(json.dumps(json_results, indent=2))
     if not dry_run:
-        _post_heartbeat(ok=not any_failures)
+        if _maintenance_active(now):
+            _post_heartbeat(ok=True, detail="probe loop suppressed during maintenance")
+        else:
+            _post_heartbeat(ok=not any_failures)
         _save_state(state_path, state)
     return 1 if any_failures else 0
 
@@ -163,13 +204,36 @@ def _should_send(
     state: dict,
     now: float,
     renotify_seconds: int,
+    failure_threshold: int,
+    recovery_threshold: int,
 ) -> bool:
     failures = failed_results(results)
-    group_state = state.setdefault("groups", {}).get(group_name, {})
+    group_state = state.setdefault("groups", {}).setdefault(group_name, {})
     if not failures:
-        return bool(group_state.get("active"))
+        group_state["failure_count"] = 0
+        if not group_state.get("active"):
+            _record_resolved(group_name, state)
+            return False
+        recovery_count = int(group_state.get("recovery_count") or 0) + 1
+        group_state["recovery_count"] = recovery_count
+        if recovery_count < max(1, recovery_threshold):
+            return False
+        _record_resolved(group_name, state)
+        return True
 
     fingerprint = _failure_fingerprint(results)
+    pending_fingerprint = str(group_state.get("pending_fingerprint") or "")
+    failure_count = (
+        int(group_state.get("failure_count") or 0) + 1
+        if fingerprint == pending_fingerprint
+        else 1
+    )
+    group_state["pending_fingerprint"] = fingerprint
+    group_state["failure_count"] = failure_count
+    group_state["recovery_count"] = 0
+    if failure_count < max(1, failure_threshold) and not group_state.get("active"):
+        return False
+
     last_fingerprint = str(group_state.get("fingerprint") or "")
     last_alert_at = float(group_state.get("last_alert_at") or 0)
     return (
@@ -184,6 +248,11 @@ def _record_sent(group_name: str, results: list, state: dict, now: float) -> Non
     state.setdefault("groups", {})[group_name] = {
         "active": bool(failures),
         "fingerprint": _failure_fingerprint(results) if failures else "",
+        "pending_fingerprint": _failure_fingerprint(results) if failures else "",
+        "failure_count": int(
+            state.get("groups", {}).get(group_name, {}).get("failure_count") or 0
+        ),
+        "recovery_count": 0,
         "last_alert_at": now,
     }
 
@@ -192,6 +261,9 @@ def _record_resolved(group_name: str, state: dict) -> None:
     state.setdefault("groups", {})[group_name] = {
         "active": False,
         "fingerprint": "",
+        "pending_fingerprint": "",
+        "failure_count": 0,
+        "recovery_count": 0,
         "last_alert_at": 0,
     }
 
@@ -206,7 +278,9 @@ def _failure_fingerprint(results: list) -> str:
         }
         for result in failed_results(results)
     ]
-    encoded = json.dumps(failures, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    encoded = json.dumps(failures, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -258,6 +332,17 @@ def _post_heartbeat(*, ok: bool, detail: str = "") -> None:
             response.read(1024)
     except OSError as exc:
         print(f"infra probe heartbeat failed: {exc}", flush=True)
+
+
+def _maintenance_active(now: float | None = None) -> bool:
+    raw_until = os.getenv("INFRA_PROBE_MAINTENANCE_UNTIL", "").strip()
+    if not raw_until:
+        return False
+    try:
+        until = float(raw_until)
+    except ValueError:
+        return False
+    return (time.time() if now is None else now) < until
 
 
 def _load_env_file(path: Path) -> None:

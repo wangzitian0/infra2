@@ -1,0 +1,345 @@
+version: 1
+owners:
+  - internal
+  - cloudflare
+  - github
+  - excluded
+signals:
+  - signal_id: production.dokploy.internal-http
+    environment: production
+    component: dokploy
+    signal: dokploy-internal-http
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: staging.dokploy.internal-http
+    environment: staging
+    component: dokploy
+    signal: dokploy-internal-http
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: production.vault.internal-http
+    environment: production
+    component: vault
+    signal: vault-internal-http
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+    expected: "200,429,472,473"
+
+  - signal_id: staging.vault.internal-http
+    environment: staging
+    component: vault
+    signal: vault-internal-http
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+    expected: "200,429,472,473"
+
+  - signal_id: production.minio.internal-http
+    environment: production
+    component: minio
+    signal: minio-internal-http
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: staging.minio.internal-http
+    environment: staging
+    component: minio
+    signal: minio-internal-http
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: production.authentik.internal-http
+    environment: production
+    component: authentik
+    signal: authentik-internal-http
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: staging.authentik.internal-http
+    environment: staging
+    component: authentik
+    signal: authentik-internal-http
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: production.signoz.internal-http
+    environment: production
+    component: signoz
+    signal: signoz-internal-http
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: staging.signoz.internal-http
+    environment: staging
+    component: signoz
+    signal: signoz-internal-http
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: production.alerting.bridge-http
+    environment: production
+    component: alerting
+    signal: alert-bridge-http
+    primary_owner: internal
+    secondary_owner: github
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: staging.alerting.bridge-http
+    environment: staging
+    component: alerting
+    signal: alert-bridge-http
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: production.postgres.tcp
+    environment: production
+    component: postgres
+    signal: platform-postgres-tcp
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: staging.postgres.tcp
+    environment: staging
+    component: postgres
+    signal: platform-postgres-tcp
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: production.redis.tcp
+    environment: production
+    component: redis
+    signal: platform-redis-tcp
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: staging.redis.tcp
+    environment: staging
+    component: redis
+    signal: platform-redis-tcp
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: production.clickhouse.http
+    environment: production
+    component: clickhouse
+    signal: clickhouse-http
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: staging.clickhouse.http
+    environment: staging
+    component: clickhouse
+    signal: clickhouse-http
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: production.dokploy.public-route
+    environment: production
+    component: dokploy
+    signal: dokploy-public-route
+    primary_owner: cloudflare
+    severity: critical
+    cadence: 30m
+    expected: "200,302"
+    url: https://cloud.zitian.party
+
+  - signal_id: production.vault.public-route
+    environment: production
+    component: vault
+    signal: vault-public-route
+    primary_owner: cloudflare
+    severity: critical
+    cadence: 30m
+    expected: "200,429,472,473"
+    url: https://vault.zitian.party/v1/sys/health
+
+  - signal_id: production.minio.public-route
+    environment: production
+    component: minio
+    signal: minio-public-route
+    primary_owner: cloudflare
+    severity: warning
+    cadence: 30m
+    expected: "200"
+    url: https://minio.zitian.party/minio/health/live
+
+  - signal_id: production.authentik.public-route
+    environment: production
+    component: authentik
+    signal: authentik-public-route
+    primary_owner: cloudflare
+    severity: critical
+    cadence: 30m
+    expected: "200,204,302"
+    url: https://sso.zitian.party/-/health/live/
+
+  - signal_id: production.signoz.public-route
+    environment: production
+    component: signoz
+    signal: signoz-public-route
+    primary_owner: cloudflare
+    severity: critical
+    cadence: 30m
+    expected: "200,302"
+    url: https://signoz.zitian.party
+
+  - signal_id: staging.minio.public-route
+    environment: staging
+    component: minio
+    signal: minio-public-route
+    primary_owner: cloudflare
+    severity: warning
+    cadence: 30m
+    expected: "200"
+    url: https://minio-staging.zitian.party/minio/health/live
+
+  - signal_id: staging.authentik.public-route
+    environment: staging
+    component: authentik
+    signal: authentik-public-route
+    primary_owner: cloudflare
+    severity: warning
+    cadence: 30m
+    expected: "200,204,302"
+    url: https://sso-staging.zitian.party/-/health/live/
+
+  - signal_id: staging.signoz.public-route
+    environment: staging
+    component: signoz
+    signal: signoz-public-route
+    primary_owner: cloudflare
+    severity: warning
+    cadence: 30m
+    expected: "200,302"
+    url: https://signoz-staging.zitian.party
+
+  - signal_id: staging.dokploy.public-route
+    environment: staging
+    component: dokploy
+    signal: dokploy-public-route
+    primary_owner: excluded
+    severity: warning
+    url: https://cloud-staging.zitian.party
+    exclusion_reason: cloud-staging currently returns HTTP 404.
+    revalidation_condition: Enable after cloud-staging returns an intentional health status.
+
+  - signal_id: staging.vault.public-route
+    environment: staging
+    component: vault
+    signal: vault-public-route
+    primary_owner: excluded
+    severity: warning
+    url: https://vault-staging.zitian.party/v1/sys/health
+    exclusion_reason: vault-staging currently returns HTTP 404.
+    revalidation_condition: Enable after vault-staging exposes an intentional health status.
+
+  - signal_id: production.alerting-probes.heartbeat
+    environment: production
+    component: alerting
+    signal: platform-alerting-probes
+    primary_owner: cloudflare
+    severity: critical
+    cadence: 30m
+    stale_threshold: 90m
+
+  - signal_id: staging.alerting-probes.heartbeat
+    environment: staging
+    component: alerting
+    signal: platform-alerting-probes-staging
+    primary_owner: cloudflare
+    severity: warning
+    cadence: 30m
+    stale_threshold: 90m
+
+  - signal_id: global.infra2-public-entrypoint.github
+    environment: global
+    component: host
+    signal: infra2-public-entrypoint
+    primary_owner: github
+    severity: critical
+    cadence: 1d
+
+  - signal_id: global.cloudflare-worker-health.github
+    environment: global
+    component: cloudflare-watchdog
+    signal: cloudflare-worker-health
+    primary_owner: github
+    severity: critical
+    cadence: 1d
+
+  - signal_id: global.cloudflare-worker-status.github
+    environment: global
+    component: cloudflare-watchdog
+    signal: cloudflare-worker-status
+    primary_owner: github
+    severity: critical
+    cadence: 1d
+
+  - signal_id: global.infra2-ssh.github
+    environment: global
+    component: host
+    signal: infra2-ssh
+    primary_owner: github
+    severity: critical
+    cadence: 1d
+
+  - signal_id: global.infra2-docker.github
+    environment: global
+    component: docker
+    signal: infra2-docker
+    primary_owner: github
+    severity: critical
+    cadence: 1d
+
+  - signal_id: global.infra2-docker-health.github
+    environment: global
+    component: docker
+    signal: infra2-docker-health
+    primary_owner: github
+    severity: critical
+    cadence: 1d
+
+  - signal_id: global.infra2-alert-bridge.github
+    environment: global
+    component: alerting
+    signal: infra2-alert-bridge
+    primary_owner: github
+    severity: critical
+    cadence: 1d

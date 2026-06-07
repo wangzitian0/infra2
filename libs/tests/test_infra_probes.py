@@ -44,7 +44,9 @@ def test_probe_specs_parse_http_tcp_and_command() -> None:
 
 
 def test_http_probe_matches_expected_status() -> None:
-    spec = parse_probe_specs("minio|http|https://minio.example/minio/health/live|200")[0]
+    spec = parse_probe_specs("minio|http|https://minio.example/minio/health/live|200")[
+        0
+    ]
 
     result = run_probe(spec, http_get=lambda _url, _timeout: (200, "ok"))
 
@@ -160,14 +162,28 @@ def test_probe_runner_loop_catches_iteration_errors(monkeypatch) -> None:
     assert calls == [True, True]
 
 
-def test_probe_runner_defaults_to_ten_minute_interval() -> None:
-    """#183: repeated infra probe alerts must not fire every five minutes by default."""
+def test_probe_runner_defaults_to_fast_probe_bounded_notification() -> None:
+    """#209: internal probes are fast, but notifications use thresholds."""
     runner = _load_probe_runner()
     compose = (ROOT / "platform/12.alerting/compose.yaml").read_text(encoding="utf-8")
 
-    assert runner.DEFAULT_PROBE_INTERVAL_SECONDS == 600
-    assert "INFRA_PROBE_INTERVAL_SECONDS: ${INFRA_PROBE_INTERVAL_SECONDS:-600}" in compose
-    assert "INFRA_PROBE_RENOTIFY_SECONDS: ${INFRA_PROBE_RENOTIFY_SECONDS:-3600}" in compose
+    assert runner.DEFAULT_PROBE_INTERVAL_SECONDS == 60
+    assert runner.DEFAULT_FAILURE_THRESHOLD == 3
+    assert runner.DEFAULT_RECOVERY_THRESHOLD == 2
+    assert runner.DEFAULT_RENOTIFY_SECONDS == 1800
+    assert (
+        "INFRA_PROBE_INTERVAL_SECONDS: ${INFRA_PROBE_INTERVAL_SECONDS:-60}" in compose
+    )
+    assert (
+        "INFRA_PROBE_FAILURE_THRESHOLD: ${INFRA_PROBE_FAILURE_THRESHOLD:-3}" in compose
+    )
+    assert (
+        "INFRA_PROBE_RECOVERY_THRESHOLD: ${INFRA_PROBE_RECOVERY_THRESHOLD:-2}"
+        in compose
+    )
+    assert (
+        "INFRA_PROBE_RENOTIFY_SECONDS: ${INFRA_PROBE_RENOTIFY_SECONDS:-1800}" in compose
+    )
 
 
 def test_in_band_probe_compose_uses_internal_network_targets() -> None:
@@ -192,22 +208,11 @@ def test_in_band_probe_compose_uses_internal_network_targets() -> None:
     assert "http://platform-signoz${ENV_SUFFIX}:8080/api/v1/health" in probe_block
 
 
-def test_public_route_probe_compose_is_separate_from_service_health() -> None:
-    """#183: Cloudflare-routed domains are public-route probes, not service probes."""
+def test_public_route_probe_compose_is_not_enabled_by_default() -> None:
+    """#209: public-route truth is primarily owned by Cloudflare."""
     compose = (ROOT / "platform/12.alerting/compose.yaml").read_text(encoding="utf-8")
-    public_block = compose.split("PUBLIC_ROUTE_PROBE_SPECS: |", 1)[1].split(
-        "volumes:", 1
-    )[0]
 
-    assert "dokploy-public-route|http|https://cloud.${INTERNAL_DOMAIN}" in public_block
-    assert (
-        "vault-public-route|http|https://vault.${INTERNAL_DOMAIN}/v1/sys/health"
-        in public_block
-    )
-    assert "minio-public-route|http|https://minio.${INTERNAL_DOMAIN}" in public_block
-    assert "authentik-public-route|http|https://sso.${INTERNAL_DOMAIN}" in public_block
-    assert "signoz-public-route|http|https://signoz.${INTERNAL_DOMAIN}" in public_block
-    assert "|warning|5" in public_block
+    assert "PUBLIC_ROUTE_PROBE_SPECS" not in compose
 
 
 def test_probe_runner_dedupes_unchanged_failures_and_sends_recovery(
@@ -234,9 +239,33 @@ def test_probe_runner_dedupes_unchanged_failures_and_sends_recovery(
     monkeypatch.setattr(runner, "run_probes", fake_run_probes)
     state_path = tmp_path / "probe-state.json"
 
-    assert runner.run_once(state_path=state_path, renotify_seconds=3600) == 1
-    assert runner.run_once(state_path=state_path, renotify_seconds=3600) == 1
-    assert runner.run_once(state_path=state_path, renotify_seconds=3600) == 0
+    assert (
+        runner.run_once(
+            state_path=state_path,
+            renotify_seconds=3600,
+            failure_threshold=1,
+            recovery_threshold=1,
+        )
+        == 1
+    )
+    assert (
+        runner.run_once(
+            state_path=state_path,
+            renotify_seconds=3600,
+            failure_threshold=1,
+            recovery_threshold=1,
+        )
+        == 1
+    )
+    assert (
+        runner.run_once(
+            state_path=state_path,
+            renotify_seconds=3600,
+            failure_threshold=1,
+            recovery_threshold=1,
+        )
+        == 0
+    )
 
     assert [payload["status"] for payload in posted] == ["firing", "resolved"]
     assert posted[0]["commonLabels"]["alertname"] == "InfraServiceProbeFailed"
@@ -266,14 +295,40 @@ def test_probe_runner_renotifies_after_interval(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(runner.time, "time", lambda: next(timestamps))
     state_path = tmp_path / "probe-state.json"
 
-    assert runner.run_once(state_path=state_path, renotify_seconds=600) == 1
-    assert runner.run_once(state_path=state_path, renotify_seconds=600) == 1
-    assert runner.run_once(state_path=state_path, renotify_seconds=600) == 1
+    assert (
+        runner.run_once(
+            state_path=state_path,
+            renotify_seconds=600,
+            failure_threshold=1,
+            recovery_threshold=1,
+        )
+        == 1
+    )
+    assert (
+        runner.run_once(
+            state_path=state_path,
+            renotify_seconds=600,
+            failure_threshold=1,
+            recovery_threshold=1,
+        )
+        == 1
+    )
+    assert (
+        runner.run_once(
+            state_path=state_path,
+            renotify_seconds=600,
+            failure_threshold=1,
+            recovery_threshold=1,
+        )
+        == 1
+    )
 
     assert [payload["status"] for payload in posted] == ["firing", "firing"]
 
 
-def test_probe_runner_posts_public_route_alerts_separately(monkeypatch, tmp_path) -> None:
+def test_probe_runner_posts_public_route_alerts_separately(
+    monkeypatch, tmp_path
+) -> None:
     """#183: public-route failures have a distinct alert name and state bucket."""
     runner = _load_probe_runner()
     posted: list[dict] = []
@@ -297,14 +352,116 @@ def test_probe_runner_posts_public_route_alerts_separately(monkeypatch, tmp_path
 
     monkeypatch.setattr(runner, "run_probes", fake_run_probes)
 
-    assert runner.run_once(state_path=tmp_path / "probe-state.json") == 1
+    assert (
+        runner.run_once(
+            state_path=tmp_path / "probe-state.json",
+            failure_threshold=1,
+            recovery_threshold=1,
+        )
+        == 1
+    )
 
     assert len(posted) == 1
     assert posted[0]["commonLabels"]["alertname"] == "InfraPublicRouteProbeFailed"
     assert posted[0]["commonLabels"]["severity"] == "warning"
 
 
-def test_probe_runner_posts_cloudflare_watchdog_heartbeat(monkeypatch, tmp_path) -> None:
+def test_probe_runner_requires_consecutive_failures_before_alerting(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """#209: fast internal probing must not produce alert noise on one failure."""
+    runner = _load_probe_runner()
+    posted: list[dict] = []
+
+    monkeypatch.setenv("INFRA_PROBE_SPECS", "vault|http|http://vault|200")
+    monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
+    monkeypatch.setattr(
+        runner,
+        "post_alert_bridge_payload",
+        lambda _url, payload, **_kwargs: posted.append(payload),
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_probes",
+        lambda specs: [
+            probes.run_probe(specs[0], http_get=lambda *_args: (503, "sealed"))
+        ],
+    )
+    state_path = tmp_path / "probe-state.json"
+
+    assert runner.run_once(state_path=state_path, failure_threshold=3) == 1
+    assert runner.run_once(state_path=state_path, failure_threshold=3) == 1
+    assert posted == []
+    assert runner.run_once(state_path=state_path, failure_threshold=3) == 1
+
+    assert [payload["status"] for payload in posted] == ["firing"]
+
+
+def test_probe_runner_requires_consecutive_recoveries_before_resolving(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """#209: one passing probe should not resolve a flapping incident."""
+    runner = _load_probe_runner()
+    posted: list[dict] = []
+    outcomes = [(503, "down"), (503, "down"), (200, "ok"), (200, "ok")]
+
+    monkeypatch.setenv("INFRA_PROBE_SPECS", "vault|http|http://vault|200")
+    monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
+    monkeypatch.setattr(
+        runner,
+        "post_alert_bridge_payload",
+        lambda _url, payload, **_kwargs: posted.append(payload),
+    )
+
+    def fake_run_probes(specs):
+        status, body = outcomes.pop(0)
+        return [probes.run_probe(specs[0], http_get=lambda *_args: (status, body))]
+
+    monkeypatch.setattr(runner, "run_probes", fake_run_probes)
+    state_path = tmp_path / "probe-state.json"
+
+    assert (
+        runner.run_once(
+            state_path=state_path,
+            failure_threshold=2,
+            recovery_threshold=2,
+        )
+        == 1
+    )
+    assert (
+        runner.run_once(
+            state_path=state_path,
+            failure_threshold=2,
+            recovery_threshold=2,
+        )
+        == 1
+    )
+    assert (
+        runner.run_once(
+            state_path=state_path,
+            failure_threshold=2,
+            recovery_threshold=2,
+        )
+        == 0
+    )
+    assert [payload["status"] for payload in posted] == ["firing"]
+    assert (
+        runner.run_once(
+            state_path=state_path,
+            failure_threshold=2,
+            recovery_threshold=2,
+        )
+        == 0
+    )
+
+    assert [payload["status"] for payload in posted] == ["firing", "resolved"]
+
+
+def test_probe_runner_posts_cloudflare_watchdog_heartbeat(
+    monkeypatch, tmp_path
+) -> None:
     """Infra-011.2: the external watchdog can detect a stopped probe runner."""
     runner = _load_probe_runner()
     captured = {}
@@ -329,7 +486,9 @@ def test_probe_runner_posts_cloudflare_watchdog_heartbeat(monkeypatch, tmp_path)
 
     monkeypatch.setenv("INFRA_PROBE_SPECS", "vault|http|http://vault|200")
     monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
-    monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_URL", "https://watchdog.example/heartbeat")
+    monkeypatch.setenv(
+        "INFRA_PROBE_HEARTBEAT_URL", "https://watchdog.example/heartbeat"
+    )
     monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_TOKEN", "heartbeat-token")
     monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_ENV", "staging")
     monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_NAME", "platform-alerting-probes-staging")
@@ -365,10 +524,14 @@ def test_probe_runner_heartbeat_is_configured_in_alerting_compose() -> None:
     assert "INFRA_PROBE_HEARTBEAT_URL: ${INFRA_PROBE_HEARTBEAT_URL:-}" in compose
     assert "INFRA_PROBE_HEARTBEAT_TOKEN: ${INFRA_PROBE_HEARTBEAT_TOKEN:-}" in compose
     assert "INFRA_PROBE_HEARTBEAT_ENV: ${ENV:-production}" in compose
-    assert "INFRA_PROBE_HEARTBEAT_NAME: platform-alerting-probes${ENV_SUFFIX}" in compose
+    assert (
+        "INFRA_PROBE_HEARTBEAT_NAME: platform-alerting-probes${ENV_SUFFIX}" in compose
+    )
 
 
-def test_probe_runner_env_file_overrides_empty_compose_defaults(monkeypatch, tmp_path) -> None:
+def test_probe_runner_env_file_overrides_empty_compose_defaults(
+    monkeypatch, tmp_path
+) -> None:
     """Infra-011.2: heartbeat secrets can come from Vault-rendered /secrets/.env."""
     runner = _load_probe_runner()
     env_file = tmp_path / ".env"

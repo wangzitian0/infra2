@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import re
 import subprocess
@@ -21,7 +22,12 @@ from libs.alerting import deliver_feishu_app_text, deliver_feishu_text  # noqa: 
 
 DEFAULT_HTTP_TARGETS = """\
 infra2-public-entrypoint|https://cloud.zitian.party|200,302
+cloudflare-worker-health|https://infra2-cloudflare-watchdog.wangzitian-ai.workers.dev/health|200
 """
+
+DEFAULT_WORKER_STATUS_URL = (
+    "https://infra2-cloudflare-watchdog.wangzitian-ai.workers.dev/status"
+)
 
 DEFAULT_SSH_TARGETS = """\
 infra2-ssh|echo infra2-ssh-ok|infra2-ssh-ok
@@ -138,6 +144,111 @@ def run_http_checks(targets: list[HttpTarget], timeout: float) -> list[CheckResu
     return results
 
 
+def run_worker_status_check(
+    env: Mapping[str, str], timeout: float
+) -> list[CheckResult]:
+    """Check authenticated Cloudflare Worker cron/KV-backed watchdog status."""
+    url = env.get(
+        "INFRA2_WATCHDOG_WORKER_STATUS_URL", DEFAULT_WORKER_STATUS_URL
+    ).strip()
+    token = env.get("INFRA2_WATCHDOG_WORKER_STATUS_TOKEN", "").strip()
+    if not url:
+        return []
+    if not token:
+        return [
+            CheckResult(
+                "cloudflare-worker-status",
+                False,
+                "INFRA2_WATCHDOG_WORKER_STATUS_TOKEN is missing",
+            )
+        ]
+
+    request = Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "infra2-out-of-band-watchdog/1.0",
+        },
+        method="GET",
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:  # noqa: S310
+            status = response.status
+            body = response.read(4096).decode("utf-8", errors="replace")
+    except HTTPError as exc:
+        detail = exc.read(512).decode("utf-8", errors="replace")
+        return [
+            CheckResult(
+                "cloudflare-worker-status",
+                False,
+                f"HTTP {exc.code}; body={_one_line(detail)}",
+            )
+        ]
+    except (OSError, URLError) as exc:
+        return [
+            CheckResult(
+                "cloudflare-worker-status",
+                False,
+                f"GET {url} failed: {exc}",
+            )
+        ]
+
+    if status != 200:
+        return [
+            CheckResult(
+                "cloudflare-worker-status",
+                False,
+                f"HTTP {status}; expected 200",
+            )
+        ]
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return [
+            CheckResult(
+                "cloudflare-worker-status",
+                False,
+                "status response is invalid JSON",
+            )
+        ]
+
+    last_run = payload.get("lastRun") if isinstance(payload, dict) else {}
+    if not isinstance(last_run, dict):
+        last_run = {}
+    route_count = int(last_run.get("routeTargetCount") or 0)
+    heartbeat_count = int(last_run.get("heartbeatTargetCount") or 0)
+    age_seconds = last_run.get("ageSeconds")
+    if payload.get("ok") is not True:
+        return [
+            CheckResult(
+                "cloudflare-worker-status",
+                False,
+                (
+                    f"worker status unhealthy: age={age_seconds} "
+                    f"routes={route_count} heartbeats={heartbeat_count}"
+                ),
+            )
+        ]
+    if route_count <= 0 or heartbeat_count <= 0:
+        return [
+            CheckResult(
+                "cloudflare-worker-status",
+                False,
+                (
+                    "worker effective config is empty: "
+                    f"routes={route_count} heartbeats={heartbeat_count}"
+                ),
+            )
+        ]
+    return [
+        CheckResult(
+            "cloudflare-worker-status",
+            True,
+            f"worker last-run fresh: age={age_seconds}s",
+        )
+    ]
+
+
 def run_ssh_checks(
     config: SshConfig | None, targets: list[SshTarget], timeout: float = 20.0
 ) -> list[CheckResult]:
@@ -241,6 +352,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
     ssh_config = load_ssh_config(current_env)
 
     results = run_http_checks(http_targets, timeout)
+    results.extend(run_worker_status_check(current_env, timeout))
     results.extend(run_ssh_checks(ssh_config, ssh_targets))
 
     for result in results:

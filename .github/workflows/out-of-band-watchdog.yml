@@ -2,7 +2,7 @@ name: Infra2 Out-of-Band Watchdog
 
 "on":
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "17 2 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -36,6 +36,8 @@ jobs:
       INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
       INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
       INFRA2_WATCHDOG_HTTP_TARGETS: ${{ vars.INFRA2_WATCHDOG_HTTP_TARGETS }}
+      INFRA2_WATCHDOG_WORKER_STATUS_URL: ${{ vars.INFRA2_WATCHDOG_WORKER_STATUS_URL }}
+      INFRA2_WATCHDOG_WORKER_STATUS_TOKEN: ${{ secrets.INFRA2_WATCHDOG_WORKER_STATUS_TOKEN }}
       INFRA2_WATCHDOG_SSH_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
       INFRA2_WATCHDOG_SSH_USER: ${{ secrets.INFRA2_WATCHDOG_SSH_USER }}
       INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}

@@ -11,19 +11,21 @@ WRANGLER = WORKER_DIR / "wrangler.toml"
 README = WORKER_DIR / "README.md"
 
 
-def test_cloudflare_watchdog_runs_every_ten_minutes_with_kv_state() -> None:
+def test_cloudflare_watchdog_runs_every_thirty_minutes_with_kv_state() -> None:
     """Infra-011.2: Cloudflare watchdog is stateful and lower cost than Actions."""
     config = WRANGLER.read_text(encoding="utf-8")
 
-    assert 'crons = ["*/10 * * * *"]' in config
+    assert 'crons = ["*/30 * * * *"]' in config
     assert 'binding = "WATCHDOG_STATE"' in config
     assert 'WATCHDOG_ENVIRONMENTS = "production,staging"' in config
+    assert 'WATCHDOG_RENOTIFY_SECONDS = "7200"' in config
+    assert 'WATCHDOG_STATUS_MAX_AGE_SECONDS = "7200"' in config
     assert "FEISHU_WEBHOOK_URL" not in config
     assert "HEARTBEAT_TOKEN" not in config
 
 
-def test_worker_default_targets_cover_production_and_staging_routes() -> None:
-    """Infra-011.2: prod and staging public routes are explicit defaults."""
+def test_worker_default_targets_cover_enabled_public_routes_only() -> None:
+    """Infra-011.2: unavailable staging routes must be explicit exclusions."""
     source = WORKER.read_text(encoding="utf-8")
 
     for host in [
@@ -32,8 +34,6 @@ def test_worker_default_targets_cover_production_and_staging_routes() -> None:
         "https://minio.zitian.party/minio/health/live",
         "https://sso.zitian.party/-/health/live/",
         "https://signoz.zitian.party",
-        "https://cloud-staging.zitian.party",
-        "https://vault-staging.zitian.party/v1/sys/health",
         "https://minio-staging.zitian.party/minio/health/live",
         "https://sso-staging.zitian.party/-/health/live/",
         "https://signoz-staging.zitian.party",
@@ -43,6 +43,8 @@ def test_worker_default_targets_cover_production_and_staging_routes() -> None:
     assert '"production"' in source
     assert '"staging"' in source
     assert "[200, 429, 472, 473]" in source
+    assert "https://cloud-staging.zitian.party" not in source
+    assert "https://vault-staging.zitian.party/v1/sys/health" not in source
 
 
 def test_worker_heartbeat_endpoint_and_staleness_checks_are_required() -> None:
@@ -58,6 +60,22 @@ def test_worker_heartbeat_endpoint_and_staleness_checks_are_required() -> None:
     assert "heartbeat stale" in source
     assert "heartbeat missing" in source
     assert "heartbeat reports unhealthy" in source
+    assert "heartbeat timestamp is in the future" in source
+
+
+def test_worker_exposes_authenticated_status_for_github_audit() -> None:
+    """#209: GitHub audit must detect Worker cron/KV/effective-config blindness."""
+    source = WORKER.read_text(encoding="utf-8")
+
+    assert 'url.pathname === "/status"' in source
+    assert "WATCHDOG_STATUS_TOKEN" in source
+    assert '"watchdog:last-run"' in source
+    assert "routeTargetCount" in source
+    assert "heartbeatTargetCount" in source
+    assert "deliveryError" in source
+    assert "watchdog delivery failed" in source
+    assert "effective public route target list is empty" in source
+    assert "effective heartbeat target list is empty" in source
 
 
 def test_worker_dedupes_renotifies_and_sends_recovery_to_feishu() -> None:
@@ -93,6 +111,7 @@ def test_cloudflare_watchdog_docs_include_deploy_and_secret_contract() -> None:
     assert "wrangler secret put FEISHU_WEBHOOK_URL" in readme
     assert "wrangler secret put FEISHU_APP_SECRET" in readme
     assert "wrangler secret put HEARTBEAT_TOKEN" in readme
+    assert "wrangler secret put WATCHDOG_STATUS_TOKEN" in readme
     assert "wrangler kv namespace create WATCHDOG_STATE" in readme
     assert "INFRA_PROBE_HEARTBEAT_URL" in readme
     assert "INFRA_PROBE_HEARTBEAT_TOKEN" in readme
