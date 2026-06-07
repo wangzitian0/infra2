@@ -45,6 +45,54 @@ wrangler secret put WATCHDOG_STATUS_TOKEN
 alerting deployment. `WATCHDOG_STATUS_TOKEN` is required for authenticated
 GitHub audit checks of `/status`.
 
+## 1Password-backed Secret Sync
+
+The Cloudflare Worker API token and watchdog status token are stored in
+1Password item `Infra2/bootstrap/cloudflare-worker`:
+
+- `CLOUDFLARE_WORKER_API_TOKEN`
+- `WATCHDOG_STATUS_TOKEN`
+
+If `WATCHDOG_STATUS_TOKEN` does not exist yet, create it in 1Password first:
+
+```bash
+env -u OP_SERVICE_ACCOUNT_TOKEN op item edit \
+  'bootstrap/cloudflare-worker' \
+  --vault=Infra2 \
+  "WATCHDOG_STATUS_TOKEN[password]=$(openssl rand -base64 48)"
+```
+
+Then sync the 1Password value to Cloudflare and GitHub without printing it:
+
+```bash
+status_token="$(
+  env -u OP_SERVICE_ACCOUNT_TOKEN op item get \
+    'bootstrap/cloudflare-worker' \
+    --vault=Infra2 \
+    --fields label=WATCHDOG_STATUS_TOKEN \
+    --reveal
+)"
+worker_api_token="$(
+  env -u OP_SERVICE_ACCOUNT_TOKEN op item get \
+    'bootstrap/cloudflare-worker' \
+    --vault=Infra2 \
+    --fields label=CLOUDFLARE_WORKER_API_TOKEN \
+    --reveal
+)"
+
+printf '%s' "$status_token" | \
+  CLOUDFLARE_API_TOKEN="$worker_api_token" wrangler secret put WATCHDOG_STATUS_TOKEN
+
+printf '%s' "$status_token" | \
+  gh secret set INFRA2_WATCHDOG_WORKER_STATUS_TOKEN --repo wangzitian0/infra2
+
+unset status_token worker_api_token
+```
+
+Use `env -u OP_SERVICE_ACCOUNT_TOKEN` when the local shell has a stale deleted
+1Password service-account token and the interactive 1Password session should be
+used instead.
+
 ## Required KV
 
 ```bash

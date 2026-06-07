@@ -249,6 +249,44 @@ Required Cloudflare Worker secrets for both delivery modes:
 - `WATCHDOG_STATUS_TOKEN`: shared token expected by the authenticated `/status`
   endpoint used by the GitHub audit watchdog.
 
+1Password source of truth for the Worker API and status-check secrets:
+
+- Vault: `Infra2`
+- Item: `bootstrap/cloudflare-worker`
+- Fields: `CLOUDFLARE_WORKER_API_TOKEN`, `WATCHDOG_STATUS_TOKEN`
+
+CLI sync from 1Password to Cloudflare and GitHub:
+
+```bash
+status_token="$(
+  env -u OP_SERVICE_ACCOUNT_TOKEN op item get \
+    'bootstrap/cloudflare-worker' \
+    --vault=Infra2 \
+    --fields label=WATCHDOG_STATUS_TOKEN \
+    --reveal
+)"
+worker_api_token="$(
+  env -u OP_SERVICE_ACCOUNT_TOKEN op item get \
+    'bootstrap/cloudflare-worker' \
+    --vault=Infra2 \
+    --fields label=CLOUDFLARE_WORKER_API_TOKEN \
+    --reveal
+)"
+
+printf '%s' "$status_token" | \
+  (cd cloudflare/infra-watchdog && \
+    CLOUDFLARE_API_TOKEN="$worker_api_token" \
+    wrangler secret put WATCHDOG_STATUS_TOKEN)
+
+printf '%s' "$status_token" | \
+  gh secret set INFRA2_WATCHDOG_WORKER_STATUS_TOKEN --repo wangzitian0/infra2
+
+unset status_token worker_api_token
+```
+
+`env -u OP_SERVICE_ACCOUNT_TOKEN` intentionally bypasses a stale deleted service
+account token when the local interactive `op` session is valid.
+
 Required Cloudflare Worker KV:
 
 - `WATCHDOG_STATE`: stores heartbeat timestamps and alert dedupe state.

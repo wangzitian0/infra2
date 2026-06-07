@@ -139,6 +139,37 @@ Required Cloudflare Worker secrets:
 - `HEARTBEAT_TOKEN`
 - `WATCHDOG_STATUS_TOKEN`
 
+`WATCHDOG_STATUS_TOKEN` is stored in 1Password item
+`Infra2/bootstrap/cloudflare-worker` and is synced to both Cloudflare Worker
+secrets and GitHub Actions secrets:
+
+```bash
+status_token="$(
+  env -u OP_SERVICE_ACCOUNT_TOKEN op item get \
+    'bootstrap/cloudflare-worker' \
+    --vault=Infra2 \
+    --fields label=WATCHDOG_STATUS_TOKEN \
+    --reveal
+)"
+worker_api_token="$(
+  env -u OP_SERVICE_ACCOUNT_TOKEN op item get \
+    'bootstrap/cloudflare-worker' \
+    --vault=Infra2 \
+    --fields label=CLOUDFLARE_WORKER_API_TOKEN \
+    --reveal
+)"
+
+printf '%s' "$status_token" | \
+  (cd ../../cloudflare/infra-watchdog && \
+    CLOUDFLARE_API_TOKEN="$worker_api_token" \
+    wrangler secret put WATCHDOG_STATUS_TOKEN)
+
+printf '%s' "$status_token" | \
+  gh secret set INFRA2_WATCHDOG_WORKER_STATUS_TOKEN --repo wangzitian0/infra2
+
+unset status_token worker_api_token
+```
+
 For app bot mode, configure Worker vars:
 
 - `ALERT_DELIVERY_MODE=feishu_app`
