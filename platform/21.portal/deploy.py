@@ -17,6 +17,7 @@ class PortalDeployer(Deployer):
     service = "portal"
     compose_path = "platform/21.portal/compose.yaml"
     data_path = "/data/platform/portal"
+    secret_key = ""
     uid = "1000"
     gid = "1000"
 

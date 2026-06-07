@@ -258,3 +258,32 @@ def test_authentik_sync_secret_hook_repairs_bootstrap_fields(monkeypatch) -> Non
     assert stores["authentik"].values["secret_key"]
     assert stores["authentik"].values["bootstrap_password"]
     assert stores["authentik"].values["bootstrap_email"] == "admin@example.test"
+
+
+def test_base_deployer_creates_missing_vault_secret_path(monkeypatch) -> None:
+    """Infra-011.6: sync repairs an absent Vault path before compose deploy."""
+    from libs.deployer import Deployer
+    from libs.env import VaultSecrets
+
+    class MissingPathSecrets(FakeSecrets):
+        def get(self, key):
+            raise VaultSecrets.VaultSecretNotFoundError("missing path")
+
+    secrets = MissingPathSecrets()
+
+    class DummyDeployer(Deployer):
+        service = "clickhouse"
+        secret_key = "password"
+
+    monkeypatch.setattr(DummyDeployer, "secrets", classmethod(lambda cls: secrets))
+
+    assert DummyDeployer.ensure_runtime_secrets() is True
+    assert secrets.set_calls
+    assert secrets.set_calls[0][0] == "password"
+
+
+def test_portal_deployer_declares_no_runtime_secret_path() -> None:
+    """Infra-011.6: portal sync must not read a Vault path it does not consume."""
+    module = _load_deploy_module("platform/21.portal/deploy.py", "portal_deploy_test")
+
+    assert module.PortalDeployer.secret_key == ""

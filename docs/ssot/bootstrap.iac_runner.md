@@ -154,6 +154,12 @@ to hit a 524 timeout. Failed deploy result responses must include a bounded
 `next_action`. Full child stdout/stderr is tailed to keep GitHub Actions logs
 diagnostic instead of noisy.
 
+IaC Runner sync must repair missing runtime Vault paths before deployment when
+the service declares a `secret_key` and the scoped token can create/update that
+path. Services that do not consume a runtime Vault template must explicitly set
+an empty `secret_key` so full platform sync does not fail on an unused
+`secret/data/{project}/{env}/{service}` path.
+
 ### 3.2 版本驱动 GitOps 部署（GitHub Actions）
 
 **语义化版本**: `v{major}.{minor}.{patch}`

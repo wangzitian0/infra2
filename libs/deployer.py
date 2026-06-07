@@ -22,7 +22,7 @@ from libs.console import (
     env_vars,
     run_with_status,
 )
-from libs.env import generate_password, get_secrets, verify_vault_token
+from libs.env import VaultSecrets, generate_password, get_secrets, verify_vault_token
 
 if TYPE_CHECKING:
     from invoke import Context
@@ -341,7 +341,10 @@ class Deployer:
         secrets_backend = cls.secrets()
 
         if cls.secret_key:
-            val = secrets_backend.get(cls.secret_key)
+            try:
+                val = secrets_backend.get(cls.secret_key)
+            except VaultSecrets.VaultSecretNotFoundError:
+                val = None
             if not val:
                 val = generate_password(24)
                 if secrets_backend.set(cls.secret_key, val):
