@@ -6,6 +6,7 @@ import importlib.util
 import subprocess
 from pathlib import Path
 
+import libs.infra_probes as probes
 from libs.infra_probes import (
     build_probe_alert_payload,
     failed_results,
@@ -85,12 +86,58 @@ def test_failed_probes_build_signoz_compatible_payload() -> None:
     assert payload["alerts"][0]["annotations"]["observed"] == "503:sealed"
 
 
+def test_cloudflare_1010_failures_are_classified_as_probe_client_blocked() -> None:
+    """#183: Cloudflare browser-signature blocks are not reported as service down."""
+    spec = parse_probe_specs("signoz|http|https://signoz.example|200")[0]
+    result = run_probe(spec, http_get=lambda *_args: (403, "error code: 1010"))
+
+    payload = build_probe_alert_payload([result])
+
+    assert payload["alerts"][0]["labels"]["failure_domain"] == "probe-client-blocked"
+    assert payload["alerts"][0]["annotations"]["observed"] == "403:error code: 1010"
+
+
+def test_http_probe_sends_stable_browser_compatible_headers(monkeypatch) -> None:
+    """#183: public-route probes must not trip Cloudflare Browser Integrity Check."""
+    captured = {}
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return b"ok"
+
+    def fake_urlopen(request, *, timeout):
+        captured["user_agent"] = request.get_header("User-agent")
+        captured["accept"] = request.get_header("Accept")
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(probes, "urlopen", fake_urlopen)
+    spec = parse_probe_specs("route|http|https://cloud.example|200|critical|3")[0]
+
+    result = probes.run_probe(spec)
+
+    assert result.ok is True
+    assert captured == {
+        "user_agent": probes.HTTP_PROBE_HEADERS["User-Agent"],
+        "accept": probes.HTTP_PROBE_HEADERS["Accept"],
+        "timeout": 3.0,
+    }
+
+
 def test_probe_runner_loop_catches_iteration_errors(monkeypatch) -> None:
     """#183: looped runner keeps future probes alive after one failed iteration."""
     runner = _load_probe_runner()
     calls = []
 
-    def fake_run_once(*, as_json):
+    def fake_run_once(*, as_json, **_kwargs):
         calls.append(as_json)
         if len(calls) == 1:
             raise RuntimeError("bridge unavailable")
@@ -110,3 +157,147 @@ def test_probe_runner_loop_catches_iteration_errors(monkeypatch) -> None:
         assert exc.code == 0
 
     assert calls == [True, True]
+
+
+def test_probe_runner_defaults_to_ten_minute_interval() -> None:
+    """#183: repeated infra probe alerts must not fire every five minutes by default."""
+    runner = _load_probe_runner()
+    compose = (ROOT / "platform/12.alerting/compose.yaml").read_text(encoding="utf-8")
+
+    assert runner.DEFAULT_PROBE_INTERVAL_SECONDS == 600
+    assert "INFRA_PROBE_INTERVAL_SECONDS: ${INFRA_PROBE_INTERVAL_SECONDS:-600}" in compose
+    assert "INFRA_PROBE_RENOTIFY_SECONDS: ${INFRA_PROBE_RENOTIFY_SECONDS:-3600}" in compose
+
+
+def test_in_band_probe_compose_uses_internal_network_targets() -> None:
+    """#183: in-band probes must not route through Cloudflare public domains."""
+    compose = (ROOT / "platform/12.alerting/compose.yaml").read_text(encoding="utf-8")
+    probe_block = compose.split("INFRA_PROBE_SPECS: |", 1)[1].split(
+        "PUBLIC_ROUTE_PROBE_SPECS:", 1
+    )[0]
+
+    assert "https://cloud.${INTERNAL_DOMAIN}" not in probe_block
+    assert "https://vault.${INTERNAL_DOMAIN}" not in probe_block
+    assert "https://minio.${INTERNAL_DOMAIN}" not in probe_block
+    assert "https://sso.${INTERNAL_DOMAIN}" not in probe_block
+    assert "https://signoz.${INTERNAL_DOMAIN}" not in probe_block
+    assert "http://dokploy:3000" in probe_block
+    assert "http://vault:8200/v1/sys/health" in probe_block
+    assert "http://platform-minio${ENV_SUFFIX}:9000/minio/health/live" in probe_block
+    assert (
+        "http://platform-authentik-server${ENV_SUFFIX}:9000/-/health/live/"
+        in probe_block
+    )
+    assert "http://platform-signoz${ENV_SUFFIX}:8080/api/v1/health" in probe_block
+
+
+def test_public_route_probe_compose_is_separate_from_service_health() -> None:
+    """#183: Cloudflare-routed domains are public-route probes, not service probes."""
+    compose = (ROOT / "platform/12.alerting/compose.yaml").read_text(encoding="utf-8")
+    public_block = compose.split("PUBLIC_ROUTE_PROBE_SPECS: |", 1)[1].split(
+        "volumes:", 1
+    )[0]
+
+    assert "dokploy-public-route|http|https://cloud.${INTERNAL_DOMAIN}" in public_block
+    assert (
+        "vault-public-route|http|https://vault.${INTERNAL_DOMAIN}/v1/sys/health"
+        in public_block
+    )
+    assert "minio-public-route|http|https://minio.${INTERNAL_DOMAIN}" in public_block
+    assert "authentik-public-route|http|https://sso.${INTERNAL_DOMAIN}" in public_block
+    assert "signoz-public-route|http|https://signoz.${INTERNAL_DOMAIN}" in public_block
+    assert "|warning|5" in public_block
+
+
+def test_probe_runner_dedupes_unchanged_failures_and_sends_recovery(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """#183: repeated unchanged probe failures are quiet until recovery or renotify."""
+    runner = _load_probe_runner()
+    posted: list[dict] = []
+    outcomes = [(503, "sealed"), (503, "sealed"), (200, "ok")]
+
+    monkeypatch.setenv("INFRA_PROBE_SPECS", "vault|http|http://vault|200")
+    monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
+    monkeypatch.setattr(
+        runner,
+        "post_alert_bridge_payload",
+        lambda _url, payload, **_kwargs: posted.append(payload),
+    )
+
+    def fake_run_probes(specs):
+        status, body = outcomes.pop(0)
+        return [probes.run_probe(specs[0], http_get=lambda *_args: (status, body))]
+
+    monkeypatch.setattr(runner, "run_probes", fake_run_probes)
+    state_path = tmp_path / "probe-state.json"
+
+    assert runner.run_once(state_path=state_path, renotify_seconds=3600) == 1
+    assert runner.run_once(state_path=state_path, renotify_seconds=3600) == 1
+    assert runner.run_once(state_path=state_path, renotify_seconds=3600) == 0
+
+    assert [payload["status"] for payload in posted] == ["firing", "resolved"]
+    assert posted[0]["commonLabels"]["alertname"] == "InfraServiceProbeFailed"
+    assert posted[1]["commonLabels"]["alertname"] == "InfraServiceProbeFailed"
+
+
+def test_probe_runner_renotifies_after_interval(monkeypatch, tmp_path) -> None:
+    """#183: unresolved failures renotify only after the configured interval."""
+    runner = _load_probe_runner()
+    posted: list[dict] = []
+
+    monkeypatch.setenv("INFRA_PROBE_SPECS", "vault|http|http://vault|200")
+    monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
+    monkeypatch.setattr(
+        runner,
+        "post_alert_bridge_payload",
+        lambda _url, payload, **_kwargs: posted.append(payload),
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_probes",
+        lambda specs: [
+            probes.run_probe(specs[0], http_get=lambda *_args: (503, "sealed"))
+        ],
+    )
+    timestamps = iter([100.0, 699.0, 701.0])
+    monkeypatch.setattr(runner.time, "time", lambda: next(timestamps))
+    state_path = tmp_path / "probe-state.json"
+
+    assert runner.run_once(state_path=state_path, renotify_seconds=600) == 1
+    assert runner.run_once(state_path=state_path, renotify_seconds=600) == 1
+    assert runner.run_once(state_path=state_path, renotify_seconds=600) == 1
+
+    assert [payload["status"] for payload in posted] == ["firing", "firing"]
+
+
+def test_probe_runner_posts_public_route_alerts_separately(monkeypatch, tmp_path) -> None:
+    """#183: public-route failures have a distinct alert name and state bucket."""
+    runner = _load_probe_runner()
+    posted: list[dict] = []
+
+    monkeypatch.setenv("INFRA_PROBE_SPECS", "vault|http|http://vault|200")
+    monkeypatch.setenv(
+        "PUBLIC_ROUTE_PROBE_SPECS",
+        "vault-public-route|http|https://vault.example/v1/sys/health|200|warning|5",
+    )
+    monkeypatch.setattr(
+        runner,
+        "post_alert_bridge_payload",
+        lambda _url, payload, **_kwargs: posted.append(payload),
+    )
+
+    def fake_run_probes(specs):
+        spec = specs[0]
+        if "public-route" in spec.name:
+            return [probes.run_probe(spec, http_get=lambda *_args: (521, "down"))]
+        return [probes.run_probe(spec, http_get=lambda *_args: (200, "ok"))]
+
+    monkeypatch.setattr(runner, "run_probes", fake_run_probes)
+
+    assert runner.run_once(state_path=tmp_path / "probe-state.json") == 1
+
+    assert len(posted) == 1
+    assert posted[0]["commonLabels"]["alertname"] == "InfraPublicRouteProbeFailed"
+    assert posted[0]["commonLabels"]["severity"] == "warning"

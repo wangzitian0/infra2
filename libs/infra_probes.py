@@ -14,6 +14,11 @@ from urllib.request import Request, urlopen
 
 
 DEFAULT_TIMEOUT_SECONDS = 5.0
+HTTP_PROBE_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; infra2-probe/1.0; +https://zitian.party)",
+    "Accept": "text/html,application/json,text/plain,*/*",
+}
+PROBE_CLIENT_BLOCKED_MARKERS = ("error code: 1010",)
 
 
 @dataclass(frozen=True)
@@ -103,17 +108,23 @@ def failed_results(results: list[ProbeResult]) -> list[ProbeResult]:
     return [result for result in results if not result.ok]
 
 
-def build_probe_alert_payload(results: list[ProbeResult]) -> dict:
+def build_probe_alert_payload(
+    results: list[ProbeResult],
+    *,
+    alert_name: str = "InfraServiceProbeFailed",
+    external_url: str = "infra2://platform/12.alerting/infra-probes",
+) -> dict:
     failures = failed_results(results)
     status = "firing" if failures else "resolved"
     alerts = [
         {
             "status": status,
             "labels": {
-                "alertname": "InfraServiceProbeFailed",
+                "alertname": alert_name,
                 "service": result.spec.name,
                 "severity": result.spec.severity,
                 "probe_kind": result.spec.kind,
+                "failure_domain": _failure_domain(result),
             },
             "annotations": {
                 "summary": f"{result.spec.name} probe failed",
@@ -127,7 +138,7 @@ def build_probe_alert_payload(results: list[ProbeResult]) -> dict:
     return {
         "status": status,
         "commonLabels": {
-            "alertname": "InfraServiceProbeFailed",
+            "alertname": alert_name,
             "severity": severity,
             "team": "infra",
         },
@@ -136,9 +147,9 @@ def build_probe_alert_payload(results: list[ProbeResult]) -> dict:
             if failures
             else "All infra service probes recovered",
         },
-        "groupLabels": {"alertname": "InfraServiceProbeFailed"},
+        "groupLabels": {"alertname": alert_name},
         "alerts": alerts,
-        "externalURL": "infra2://platform/12.alerting/infra-probes",
+        "externalURL": external_url,
     }
 
 
@@ -173,7 +184,7 @@ def _run_http(
     if http_get:
         status, body = http_get(spec.target, spec.timeout_seconds)
     else:
-        request = Request(spec.target, method="GET")
+        request = Request(spec.target, headers=HTTP_PROBE_HEADERS, method="GET")
         try:
             with urlopen(request, timeout=spec.timeout_seconds) as response:  # noqa: S310
                 status = response.status
@@ -228,3 +239,11 @@ def _matches_expected(spec: ProbeSpec, observed: str) -> bool:
         status = observed.split(":", 1)[0]
         return status in {item.strip() for item in spec.expected.split(",")}
     return spec.expected in observed
+
+
+def _failure_domain(result: ProbeResult) -> str:
+    observed = result.observed.lower()
+    summary = result.summary.lower()
+    if any(marker in observed or marker in summary for marker in PROBE_CLIENT_BLOCKED_MARKERS):
+        return "probe-client-blocked"
+    return "service-or-route"
