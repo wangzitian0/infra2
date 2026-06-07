@@ -201,9 +201,19 @@ def run_route_canary(
                 source_type="raw",
             )
             compose_id = str(created.get("composeId") or "")
+            if compose_id:
+                client.update_compose(
+                    compose_id,
+                    compose_file=compose_file,
+                    env=env,
+                    source_type="raw",
+                )
             detail = f"created compose {compose_id}"
         if not compose_id:
-            return fail("dokploy-control-plane", CanaryStep("compose-upsert", "fail", "missing composeId"))
+            return fail(
+                "dokploy-control-plane",
+                CanaryStep("compose-upsert", "fail", "missing composeId"),
+            )
         steps.append(_step("compose-upsert", "pass", detail, started, monotonic))
     except Exception as exc:  # noqa: BLE001 - canary must classify API failures.
         return fail(
@@ -215,7 +225,11 @@ def run_route_canary(
     started = monotonic()
     try:
         client.deploy_compose(compose_id)
-        steps.append(_step("deploy-trigger", "pass", "deploy request accepted", started, monotonic))
+        steps.append(
+            _step(
+                "deploy-trigger", "pass", "deploy request accepted", started, monotonic
+            )
+        )
     except Exception as exc:  # noqa: BLE001
         return fail(
             "dokploy-control-plane",
@@ -249,7 +263,9 @@ def run_route_canary(
         except Exception as exc:  # noqa: BLE001
             return fail(
                 "dokploy-control-plane",
-                _step("redeploy-trigger", "fail", _safe_detail(exc), started, monotonic),
+                _step(
+                    "redeploy-trigger", "fail", _safe_detail(exc), started, monotonic
+                ),
             )
 
         deployment = _wait_for_new_deployment(
@@ -280,7 +296,9 @@ def run_route_canary(
         )
         steps.append(docker_step)
         if docker_step.status != "pass":
-            return RouteCanaryReport("fail", "docker-runtime", compose_id, public_url, steps)
+            return RouteCanaryReport(
+                "fail", "docker-runtime", compose_id, public_url, steps
+            )
 
     public_step = _probe_public_routes(
         public_url,
@@ -292,7 +310,9 @@ def run_route_canary(
     )
     steps.append(public_step)
     if public_step.status != "pass":
-        return RouteCanaryReport("fail", "traefik-public-route", compose_id, public_url, steps)
+        return RouteCanaryReport(
+            "fail", "traefik-public-route", compose_id, public_url, steps
+        )
 
     return RouteCanaryReport("pass", "", compose_id, public_url, steps)
 
@@ -319,7 +339,9 @@ def _wait_for_new_deployment(
         new_ids = sorted(current_ids - previous_ids)
         last_summary = {
             "composeStatus": data.get("composeStatus") or data.get("status") or "",
-            "deployment_count": len(deployments) if isinstance(deployments, list) else 0,
+            "deployment_count": len(deployments)
+            if isinstance(deployments, list)
+            else 0,
             "new_deployment_ids": new_ids,
             "attempts": attempts,
         }
@@ -335,11 +357,11 @@ def _wait_for_new_deployment(
                     monotonic,
                     {**last_summary, "latest_status": latest_status},
                 )
-            if latest_status in {"running", "done"}:
+            if latest_status == "done":
                 return _step(
                     "deployment-record",
                     "pass",
-                    "new deployment reached running/done",
+                    "new deployment reached done",
                     started,
                     monotonic,
                     {**last_summary, "latest_status": latest_status},
@@ -348,7 +370,7 @@ def _wait_for_new_deployment(
     return _step(
         "deployment-record",
         "fail",
-        "deploy request did not produce a new running/done deployment record",
+        "deploy request did not produce a new done deployment record",
         started,
         monotonic,
         last_summary,
@@ -367,9 +389,7 @@ def _probe_docker_containers(
     slug = safe_slug(config.compose_name)
     names = [f"{slug}-web", f"{slug}-api"]
     command = (
-        "docker ps --filter name='"
-        + slug
-        + "' --format '{{.Names}} {{.Status}}' "
+        "docker ps --filter name='" + slug + "' --format '{{.Names}} {{.Status}}' "
         "&& docker inspect "
         + " ".join(names)
         + " --format '{{.Name}} {{json .Config.Labels}}'"
@@ -393,10 +413,17 @@ def _probe_docker_containers(
             elif "traefik.http.routers." not in output:
                 last_detail = "containers exist but Traefik labels were not visible"
             elif f"Host(`{config.host}`)" not in output:
-                last_detail = "containers exist but Traefik labels do not match the canary host"
+                last_detail = (
+                    "containers exist but Traefik labels do not match the canary host"
+                )
             elif "PathPrefix(`/api`)" not in output:
-                last_detail = "containers exist but API PathPrefix label was not visible"
-            elif config.nonce and f"infra2.route-canary.nonce\":\"{config.nonce}" not in output:
+                last_detail = (
+                    "containers exist but API PathPrefix label was not visible"
+                )
+            elif (
+                config.nonce
+                and f'infra2.route-canary.nonce":"{config.nonce}' not in output
+            ):
                 last_detail = "containers exist but canary nonce label was not visible"
             else:
                 return _step(
@@ -444,7 +471,14 @@ def _probe_public_routes(
             "api_body": api[1][:120],
         }
         if 200 <= web[0] < 400 and 200 <= api[0] < 400:
-            return _step("public-routes", "pass", "web and API routes returned 2xx/3xx", started, monotonic, last)
+            return _step(
+                "public-routes",
+                "pass",
+                "web and API routes returned 2xx/3xx",
+                started,
+                monotonic,
+                last,
+            )
         sleeper(interval_seconds)
     return _step(
         "public-routes",
@@ -535,11 +569,15 @@ def _latest_deployment(
     candidates = [
         item
         for item in deployments
-        if isinstance(item, dict) and str(item.get("deploymentId") or "") in deployment_ids
+        if isinstance(item, dict)
+        and str(item.get("deploymentId") or "") in deployment_ids
     ]
     if not candidates:
         return {}
-    return max(candidates, key=lambda item: str(item.get("createdAt") or item.get("startedAt") or ""))
+    return max(
+        candidates,
+        key=lambda item: str(item.get("createdAt") or item.get("startedAt") or ""),
+    )
 
 
 def _step(

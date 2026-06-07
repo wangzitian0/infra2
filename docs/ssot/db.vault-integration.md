@@ -117,8 +117,12 @@ Use **periodic tokens** (`-period=168h`) for all services:
 - Policies must read only `secret/data/<project>/<env>/<service>` paths. Do not
   use `+` wildcards across environments for app tokens.
 - `vault.setup-tokens` writes the policy, creates the periodic token, injects it
-  into the matching Dokploy compose env, tracks the new token accessor, and
-  revokes the previously tracked accessor after successful Dokploy update.
+  into the matching Dokploy compose env, waits for a new Dokploy runtime
+  deployment record, tracks the new token accessor, and revokes the previously
+  tracked accessor only after runtime apply proof.
+- A Dokploy env update without a new `done` deployment record is a
+  failed rotation. The task must not track the new accessor or revoke the old
+  token because running containers may still hold the previous `VAULT_APP_TOKEN`.
 - If the previous token was not tracked yet, the setup task can derive its
   accessor from the old Dokploy `VAULT_APP_TOKEN` via `lookup-self` and revoke it
   without printing the token.

@@ -371,8 +371,9 @@ Required GitHub variables for Dokploy liveness:
 - `DOKPLOY_ROUTE_CANARY_DOKPLOY_HOST`: optional, defaults to
   `cloud.zitian.party`
 - `DOKPLOY_ROUTE_CANARY_COMPOSE_NAME`: optional, defaults to
-  `dokploy-route-canary-watchdog`
-- `DOKPLOY_ROUTE_CANARY_TIMEOUT_SECONDS`: optional, defaults to `90`
+  `dokploy-route-canary-watchdog-<run>` so overlapping runs cannot overwrite
+  each other's Traefik labels.
+- `DOKPLOY_ROUTE_CANARY_TIMEOUT_SECONDS`: optional, defaults to `180`
 - `DOKPLOY_ROUTE_CANARY_INTERVAL_SECONDS`: optional, defaults to `5`
 
 The out-of-band watchdog treats missing Dokploy canary configuration as an
@@ -466,7 +467,7 @@ The canary fails fast by assigning failures to one of these domains:
   the run did not prove the platform.
 - `dokploy-control-plane`: compose create/update or deploy request failed.
 - `dokploy-worker-or-deployment-record`: Dokploy accepted the request but no new
-  `running`/`done` deployment record appeared.
+  `done` deployment record appeared.
 - `docker-runtime`: expected containers or Traefik labels were not visible on
   the VPS when SSH inspection is configured.
 - `traefik-public-route`: deployment and containers exist, but the public web
@@ -499,7 +500,10 @@ environment configuration is a fail-closed `dokploy-canary-configuration`
 result, never a skipped success, because an unconfigured scheduled canary cannot
 protect app previews. Manual runs use the same rule unless `environment_id` is
 provided as a workflow input or repository variable. SSH inspection is optional
-and uses the existing watchdog SSH secrets when configured.
+and uses the existing watchdog SSH secrets when configured. The workflow default
+compose name is `dokploy-route-canary-<run>`, matching the run-scoped default
+host, so a concurrent canary cannot update a shared compose and leave an older
+run probing a host whose labels were replaced.
 
 Every run writes a GitHub step summary with the canary status, failure domain,
 compose ID, public URL, and each phase's evidence. App staging and preview gates

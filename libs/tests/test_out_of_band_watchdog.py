@@ -152,6 +152,46 @@ def test_worker_status_check_accepts_fresh_nonempty_status(monkeypatch) -> None:
     }
 
 
+def test_worker_status_check_reports_last_run_failure_context(monkeypatch) -> None:
+    """#209: unhealthy Worker status must expose whether cron checks failed."""
+    watchdog = _load_watchdog()
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return (
+                b'{"ok":false,"lastRun":{"ok":false,"ageSeconds":890,'
+                b'"failureCount":2,"routeTargetCount":8,'
+                b'"heartbeatTargetCount":2,'
+                b'"deliveryError":"feishu delivery failed"}}'
+            )
+
+    monkeypatch.setattr(watchdog, "urlopen", lambda *_args, **_kwargs: FakeResponse())
+
+    results = watchdog.run_worker_status_check(
+        {"INFRA2_WATCHDOG_WORKER_STATUS_TOKEN": "status-token"},
+        timeout=3,
+    )
+
+    assert results == [
+        watchdog.CheckResult(
+            "cloudflare-worker-status",
+            False,
+            (
+                "worker status unhealthy: age=890 last_run_ok=False failures=2 "
+                "routes=8 heartbeats=2 delivery_error=feishu delivery failed"
+            ),
+        )
+    ]
+
+
 def test_dokploy_route_canary_check_fails_closed_without_config() -> None:
     """Infra-011.9: missing canary config is an alert, not a silent gap."""
     watchdog = _load_watchdog()
@@ -175,8 +215,8 @@ def test_dokploy_route_canary_check_fails_closed_without_config() -> None:
     ]
 
 
-def test_dokploy_route_canary_check_uses_stable_default_host_and_compose() -> None:
-    """Infra-011.9: default canaries must not rotate host under a fixed compose."""
+def test_dokploy_route_canary_check_uses_run_scoped_default_host_and_compose() -> None:
+    """Infra-011.9: default OOB canaries must not overwrite another run's labels."""
     watchdog = _load_watchdog()
     captured = {}
 
@@ -208,12 +248,12 @@ def test_dokploy_route_canary_check_uses_stable_default_host_and_compose() -> No
             True,
             (
                 "status=pass failure_domain=none compose_id=cmp-canary "
-                "public_url=https://route-canary-watchdog.zitian.party"
+                "public_url=https://route-canary-watchdog-123.zitian.party"
             ),
         )
     ]
-    assert captured["config"].host == "route-canary-watchdog.zitian.party"
-    assert captured["config"].compose_name == "dokploy-route-canary-watchdog"
+    assert captured["config"].host == "route-canary-watchdog-123.zitian.party"
+    assert captured["config"].compose_name == "dokploy-route-canary-watchdog-123"
     assert captured["config"].nonce == "123"
 
 
@@ -274,7 +314,40 @@ def test_dokploy_route_canary_check_reports_worker_failure_domain() -> None:
     ]
     assert captured["host"] == "cloud.zitian.party"
     assert captured["config"].ssh_host == "vps.example.com"
+    assert captured["config"].compose_name == "dokploy-route-canary-watchdog-123"
     assert captured["config"].timeout_seconds == 30
+
+
+def test_dokploy_route_canary_check_uses_isolated_default_name_and_timeout() -> None:
+    """Infra-011.9: OOB canary defaults avoid route-label races and slow deploys."""
+    watchdog = _load_watchdog()
+    captured = {}
+
+    def fake_runner(config, client):
+        captured["config"] = config
+        captured["client"] = client
+        return SimpleNamespace(
+            status="pass",
+            failure_domain="",
+            compose_id="cmp-canary",
+            public_url="https://route-canary-watchdog-manual.zitian.party",
+            steps=[],
+        )
+
+    results = watchdog.run_dokploy_route_canary_check(
+        {
+            "DOKPLOY_API_KEY": "secret",
+            "DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID": "env-1",
+        },
+        ssh_config=None,
+        runner=fake_runner,
+        client_factory=lambda *, host: object(),
+    )
+
+    assert results[0].ok is True
+    assert captured["config"].host == "route-canary-watchdog-manual.zitian.party"
+    assert captured["config"].compose_name == "dokploy-route-canary-watchdog-manual"
+    assert captured["config"].timeout_seconds == 180
 
 
 def test_custom_ssh_targets_preserve_mandatory_docker_health() -> None:

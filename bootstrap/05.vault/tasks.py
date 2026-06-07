@@ -5,6 +5,7 @@ Uses libs/ system for consistent environment and console utilities.
 
 import json
 import os
+import time
 
 from invoke import task
 from libs.deployer import Deployer
@@ -726,12 +727,14 @@ path "secret/data/{target.project}/{env_name}/{target.service}" {{
                 configure_result = _configure_dokploy_token(
                     c, target.service, token, target.dokploy_project
                 )
+                configure_failed = False
                 if isinstance(configure_result, dict):
                     dokploy_configured = bool(configure_result.get("configured"))
                     previous_dokploy_token = configure_result.get("previous_token")
+                    configure_failed = bool(configure_result.get("failed"))
                 else:
                     dokploy_configured = bool(configure_result)
-                if not dokploy_configured and strict_dokploy:
+                if not dokploy_configured and (strict_dokploy or configure_failed):
                     failed_services.append(
                         (target.project, target.service, "dokploy_config_failed")
                     )
@@ -832,10 +835,9 @@ def _configure_dokploy_token(_c, service: str, token: str, project: str = "platf
             client.update_compose_env(compose_id, env_vars={"VAULT_APP_TOKEN": token})
             info("   Updated environment variables")
 
-            # Trigger redeploy to apply changes
-            info("   Triggering redeploy...")
-            client.deploy_compose(compose_id)
-            success("   Auto-configured in Dokploy and redeployed")
+            info("   Triggering redeploy and waiting for runtime deployment record...")
+            _deploy_compose_with_record_check(client, compose_id)
+            success("   Auto-configured in Dokploy and runtime redeploy recorded")
             return {"configured": True, "previous_token": previous_token}
         else:
             warning(
@@ -845,4 +847,79 @@ def _configure_dokploy_token(_c, service: str, token: str, project: str = "platf
     except Exception as exc:
         warning(f"   Auto-config failed: {exc}")
         info("   Manual setup: Add VAULT_APP_TOKEN in Dokploy UI")
-        return {"configured": False, "previous_token": None}
+        return {"configured": False, "previous_token": None, "failed": True}
+
+
+def _deploy_compose_with_record_check(client: Any, compose_id: str) -> None:
+    """Apply a Dokploy env update and fail if runtime deployment stays stale."""
+    timeout = int(os.getenv("DOKPLOY_DEPLOYMENT_RECORD_TIMEOUT_SECONDS", "90"))
+    interval = int(os.getenv("DOKPLOY_DEPLOYMENT_RECORD_INTERVAL_SECONDS", "5"))
+
+    before_ids = _deployment_ids(_safe_compose(client, compose_id))
+    client.deploy_compose(compose_id)
+    if _wait_for_new_deployment_record(
+        client, compose_id, before_ids, timeout, interval
+    ):
+        return
+
+    warning(
+        "   Dokploy deploy did not produce a new deployment record; retrying compose.redeploy"
+    )
+    before_ids = _deployment_ids(_safe_compose(client, compose_id))
+    client.redeploy_compose(compose_id)
+    if _wait_for_new_deployment_record(
+        client, compose_id, before_ids, timeout, interval
+    ):
+        return
+
+    raise RuntimeError(
+        "Dokploy deploy/redeploy did not produce a new deployment record; "
+        "VAULT_APP_TOKEN may be updated in Dokploy env but not applied to running containers"
+    )
+
+
+def _safe_compose(client: Any, compose_id: str) -> dict[str, Any]:
+    try:
+        data = client.get_compose(compose_id)
+    except Exception:  # noqa: BLE001 - setup must classify stale Dokploy state.
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _deployment_ids(compose: dict[str, Any]) -> set[str]:
+    deployments = compose.get("deployments")
+    if not isinstance(deployments, list):
+        return set()
+    return {
+        str(deployment.get("deploymentId") or deployment.get("id") or "")
+        for deployment in deployments
+        if isinstance(deployment, dict)
+        and (deployment.get("deploymentId") or deployment.get("id"))
+    }
+
+
+def _wait_for_new_deployment_record(
+    client: Any,
+    compose_id: str,
+    previous_ids: set[str],
+    timeout_seconds: int,
+    interval_seconds: int,
+) -> bool:
+    deadline = time.monotonic() + max(0, timeout_seconds)
+    while True:
+        compose = _safe_compose(client, compose_id)
+        deployments = compose.get("deployments")
+        new_ids = _deployment_ids(compose) - previous_ids
+        if new_ids and isinstance(deployments, list):
+            for deployment in deployments:
+                deployment_id = str(
+                    deployment.get("deploymentId") or deployment.get("id") or ""
+                )
+                status = str(deployment.get("status") or "")
+                if deployment_id in new_ids and status == "error":
+                    return False
+                if deployment_id in new_ids and status == "done":
+                    return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(max(1, interval_seconds))

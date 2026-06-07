@@ -220,6 +220,9 @@ def run_worker_status_check(
     route_count = int(last_run.get("routeTargetCount") or 0)
     heartbeat_count = int(last_run.get("heartbeatTargetCount") or 0)
     age_seconds = last_run.get("ageSeconds")
+    last_run_ok = last_run.get("ok")
+    failure_count = last_run.get("failureCount")
+    delivery_error = last_run.get("deliveryError") or "none"
     if payload.get("ok") is not True:
         return [
             CheckResult(
@@ -227,7 +230,9 @@ def run_worker_status_check(
                 False,
                 (
                     f"worker status unhealthy: age={age_seconds} "
-                    f"routes={route_count} heartbeats={heartbeat_count}"
+                    f"last_run_ok={last_run_ok} failures={failure_count} "
+                    f"routes={route_count} heartbeats={heartbeat_count} "
+                    f"delivery_error={_one_line(str(delivery_error))}"
                 ),
             )
         ]
@@ -353,17 +358,18 @@ def run_dokploy_route_canary_check(
             )
         ]
 
+    run_id = env.get("GITHUB_RUN_ID", "manual").strip() or "manual"
     config = RouteCanaryConfig(
         host=env.get("DOKPLOY_ROUTE_CANARY_HOST", "").strip()
-        or "route-canary-watchdog.zitian.party",
+        or f"route-canary-watchdog-{run_id}.zitian.party",
         environment_id=environment_id,
         project=env.get("DOKPLOY_ROUTE_CANARY_PROJECT", "").strip() or "platform",
         env=env.get("DOKPLOY_ROUTE_CANARY_ENV", "").strip() or "staging",
         compose_name=env.get("DOKPLOY_ROUTE_CANARY_COMPOSE_NAME", "").strip()
-        or "dokploy-route-canary-watchdog",
-        nonce=env.get("GITHUB_RUN_ID", "").strip() or "manual",
+        or f"dokploy-route-canary-watchdog-{run_id}",
+        nonce=run_id,
         timeout_seconds=int(
-            env.get("DOKPLOY_ROUTE_CANARY_TIMEOUT_SECONDS", "") or "90"
+            env.get("DOKPLOY_ROUTE_CANARY_TIMEOUT_SECONDS", "") or "180"
         ),
         interval_seconds=int(
             env.get("DOKPLOY_ROUTE_CANARY_INTERVAL_SECONDS", "") or "5"

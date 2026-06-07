@@ -74,6 +74,9 @@
    Detection reads the GitHub push event's `added`/`modified`/`removed` file
    lists instead of diffing the merge commit, so squash, merge-commit, and
    rebase-style main updates all use the same source of truth.
+   The script reads the confirmed Dokploy compose env back through the Dokploy
+   API and uses that as the `docker compose --env-file` source, so token repairs
+   are not lost by rebuilding from an old running container environment.
 3. Run IaC Runner `/health` after the external bootstrap update.
 4. Resolve the deployment source to an immutable 40-character commit SHA.
 5. 调用 IaC Runner `/deploy` endpoint with `wait=false`:
@@ -255,7 +258,7 @@ compose/env text change.
 
 Dokploy accepting a deploy request is not sufficient proof that runtime changed.
 After each generic compose deploy, the deployer records the existing deployment
-IDs, requires a new `running`/`done` deployment record, retries once with
+IDs, requires a new `done` deployment record, retries once with
 `compose.redeploy` when `compose.deploy` is a no-op, and fails the sync if both
 attempts leave the deployment list unchanged.
 
