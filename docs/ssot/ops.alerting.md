@@ -227,12 +227,20 @@ Default coverage:
   `signoz-staging`.
 - Production heartbeat:
   `platform-alerting-probes`.
-- Staging heartbeat:
-  `platform-alerting-probes-staging`.
+- Staging heartbeat is staged in the contract but must remain disabled in
+  `WATCHDOG_HEARTBEATS_JSON` until the staging alerting compose reliably
+  recreates `platform-alerting-probes-staging`.
 
-Required Cloudflare Worker secrets:
+Required Cloudflare Worker secrets for webhook mode:
 
 - `FEISHU_WEBHOOK_URL`: Feishu custom bot webhook URL.
+
+Required Cloudflare Worker secrets for app bot mode:
+
+- `FEISHU_APP_SECRET`: Feishu app secret.
+
+Required Cloudflare Worker secrets for both delivery modes:
+
 - `HEARTBEAT_TOKEN`: shared token expected by the `/heartbeat` endpoint.
 
 Required Cloudflare Worker KV:
@@ -244,6 +252,10 @@ Default Worker vars:
 - `WATCHDOG_ENVIRONMENTS=production,staging`
 - `WATCHDOG_HTTP_TIMEOUT_MS=8000`
 - `WATCHDOG_RENOTIFY_SECONDS=3600`
+- `ALERT_DELIVERY_MODE=feishu_webhook` or `feishu_app`
+- `FEISHU_APP_ID`: required for app bot mode
+- `FEISHU_CHAT_ID`: required for app bot mode
+- `FEISHU_API_BASE`: optional, defaults to `https://open.feishu.cn`
 
 Deployment:
 

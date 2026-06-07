@@ -1,6 +1,7 @@
 name = "infra2-cloudflare-watchdog"
 main = "worker.js"
 compatibility_date = "2026-06-01"
+account_id = "6e27b6853de0131bea033d235e0a1139"
 workers_dev = true
 
 [triggers]
@@ -10,8 +11,26 @@ crons = ["*/10 * * * *"]
 WATCHDOG_ENVIRONMENTS = "production,staging"
 WATCHDOG_HTTP_TIMEOUT_MS = "8000"
 WATCHDOG_RENOTIFY_SECONDS = "3600"
+ALERT_DELIVERY_MODE = "feishu_app"
+WATCHDOG_TARGETS_JSON = """
+[
+  {"environment":"production","name":"dokploy-public-route","url":"https://cloud.zitian.party","statuses":[200,302],"severity":"critical"},
+  {"environment":"production","name":"vault-public-route","url":"https://vault.zitian.party/v1/sys/health","statuses":[200,429,472,473],"severity":"critical"},
+  {"environment":"production","name":"minio-public-route","url":"https://minio.zitian.party/minio/health/live","statuses":[200],"severity":"warning"},
+  {"environment":"production","name":"authentik-public-route","url":"https://sso.zitian.party/-/health/live/","statuses":[200,204,302],"severity":"critical"},
+  {"environment":"production","name":"signoz-public-route","url":"https://signoz.zitian.party","statuses":[200,302],"severity":"critical"},
+  {"environment":"staging","name":"minio-public-route","url":"https://minio-staging.zitian.party/minio/health/live","statuses":[200],"severity":"warning"},
+  {"environment":"staging","name":"authentik-public-route","url":"https://sso-staging.zitian.party/-/health/live/","statuses":[200,204,302],"severity":"warning"},
+  {"environment":"staging","name":"signoz-public-route","url":"https://signoz-staging.zitian.party","statuses":[200,302],"severity":"warning"}
+]
+"""
+WATCHDOG_HEARTBEATS_JSON = """
+[
+  {"environment":"production","name":"platform-alerting-probes","maxAgeSeconds":1800,"severity":"critical"}
+]
+"""
 
 [[kv_namespaces]]
 binding = "WATCHDOG_STATE"
-id = "replace-with-watchdog-state-kv-namespace-id"
-preview_id = "replace-with-watchdog-state-preview-kv-namespace-id"
+id = "2b2eebc2a53c475797f92269e4d96248"
+preview_id = "64cb09c404f242d28dfb8861b3b63899"

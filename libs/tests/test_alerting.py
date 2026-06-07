@@ -227,6 +227,12 @@ def test_alerting_platform_service_contract_files_exist() -> None:
     deploy = (base / "deploy.py").read_text(encoding="utf-8")
     assert 'credential_type="root_vars"' in deploy
     assert "Synced alerting runtime secrets from 1Password to Vault" in deploy
+    assert "INFRA_PROBE_HEARTBEAT_URL" in deploy
+    assert "INFRA_PROBE_HEARTBEAT_TOKEN" in deploy
+
+    ctmpl = (base / "secrets.ctmpl").read_text(encoding="utf-8")
+    assert "INFRA_PROBE_HEARTBEAT_URL" in ctmpl
+    assert "INFRA_PROBE_HEARTBEAT_TOKEN" in ctmpl
 
 
 def test_alerting_ssot_catalog_includes_dokploy_control_plane() -> None:

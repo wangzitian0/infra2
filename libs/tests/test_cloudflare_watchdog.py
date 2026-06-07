@@ -73,11 +73,25 @@ def test_worker_dedupes_renotifies_and_sends_recovery_to_feishu() -> None:
     assert "Cloudflare Workers Cron -> Feishu direct" in source
 
 
+def test_worker_supports_existing_feishu_app_bot_mode() -> None:
+    """Infra-011.2: Cloudflare watchdog can reuse platform alerting app bot secrets."""
+    source = WORKER.read_text(encoding="utf-8")
+
+    assert "ALERT_DELIVERY_MODE" in source
+    assert "feishu_app" in source
+    assert "FEISHU_APP_ID" in source
+    assert "FEISHU_APP_SECRET" in source
+    assert "FEISHU_CHAT_ID" in source
+    assert "/open-apis/auth/v3/tenant_access_token/internal" in source
+    assert "/open-apis/im/v1/messages?receive_id_type=chat_id" in source
+
+
 def test_cloudflare_watchdog_docs_include_deploy_and_secret_contract() -> None:
     """Infra-011.2: setup is documented without committing credentials."""
     readme = README.read_text(encoding="utf-8")
 
     assert "wrangler secret put FEISHU_WEBHOOK_URL" in readme
+    assert "wrangler secret put FEISHU_APP_SECRET" in readme
     assert "wrangler secret put HEARTBEAT_TOKEN" in readme
     assert "wrangler kv namespace create WATCHDOG_STATE" in readme
     assert "INFRA_PROBE_HEARTBEAT_URL" in readme
