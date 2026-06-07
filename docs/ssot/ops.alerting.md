@@ -462,6 +462,8 @@ public web route and one higher-priority same-host `/api` route on
 
 The canary fails fast by assigning failures to one of these domains:
 
+- `dokploy-canary-configuration`: required canary configuration is missing, so
+  the run did not prove the platform.
 - `dokploy-control-plane`: compose create/update or deploy request failed.
 - `dokploy-worker-or-deployment-record`: Dokploy accepted the request but no new
   `running`/`done` deployment record appeared.
@@ -485,8 +487,9 @@ The `Dokploy Route Canary` GitHub workflow wraps the same tool for manual
 operator runs, hourly scheduled proof, and main-branch changes to the canary
 implementation. It requires `DOKPLOY_API_KEY`; scheduled and push runs also
 read `DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID` from repository variables. Missing
-environment configuration is reported as a skipped scheduled/push canary rather
-than a platform-route failure. Manual runs fail fast unless `environment_id` is
+environment configuration is a fail-closed `dokploy-canary-configuration`
+result, never a skipped success, because an unconfigured scheduled canary cannot
+protect app previews. Manual runs use the same rule unless `environment_id` is
 provided as a workflow input or repository variable. SSH inspection is optional
 and uses the existing watchdog SSH secrets when configured.
 

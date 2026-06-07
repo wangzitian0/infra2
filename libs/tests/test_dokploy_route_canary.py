@@ -198,14 +198,16 @@ def test_canary_passes_after_deployment_containers_and_public_routes() -> None:
         interval_seconds=5,
     )
 
-    def fake_command(_command: str, _timeout: float) -> subprocess.CompletedProcess[str]:
+    def fake_command(
+        _command: str, _timeout: float
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(
             args=["ssh"],
             returncode=0,
             stdout=(
                 "route-canary-test-web Up\n"
                 "route-canary-test-api Up\n"
-                "/route-canary-test-web {\"traefik.http.routers.route-canary-test-web.rule\":\"ok\"}"
+                '/route-canary-test-web {"traefik.http.routers.route-canary-test-web.rule":"ok"}'
             ),
             stderr="",
         )
@@ -241,14 +243,20 @@ def test_canary_workflow_is_manual_and_fast_failing() -> None:
     assert "timeout-minutes: 8" in workflow
     assert 'FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"' in workflow
     assert "DOKPLOY_API_KEY secret is required" in workflow
-    assert "required for manual canary runs" in workflow
-    assert "skipping scheduled/push route canary" in workflow
-    assert "Status: skipped" in workflow
-    assert "No SSH key configured; canary will skip Docker container/label inspection" in workflow
+    assert "workflow_dispatch environment_id input is required" in workflow
+    assert "dokploy-canary-configuration" in workflow
+    assert r"Status: \`fail\`" in workflow
+    assert r"Failure domain: \`dokploy-canary-configuration\`" in workflow
+    assert "Status: skipped" not in workflow
+    assert "skipping scheduled/push route canary" not in workflow
+    assert (
+        "No SSH key configured; canary will skip Docker container/label inspection"
+        in workflow
+    )
     assert "python tools/dokploy_route_canary.py" in workflow
     assert "GITHUB_STEP_SUMMARY" in workflow
-    assert "--environment-id=\"$environment_id\"" in workflow
-    assert "--dokploy-host \"cloud.zitian.party\"" in workflow
+    assert '--environment-id="$environment_id"' in workflow
+    assert '--dokploy-host "cloud.zitian.party"' in workflow
 
 
 def test_canary_github_summary_lists_failure_domain_and_phase_evidence() -> None:
