@@ -12,12 +12,16 @@ path "secret/data/bootstrap/+/iac_runner" {
   capabilities = ["read", "list"]
 }
 
-# Platform secrets for syncing all platform services
+# Platform secrets for syncing all platform services.
+# Sync tasks may repair missing runtime fields before deploying; deletion stays
+# reserved for operator/root-token maintenance.
 path "secret/data/platform/+/*" {
-  capabilities = ["read", "list"]
+  capabilities = ["create", "read", "update", "list"]
 }
 
-# Finance Report secrets for syncing app services
+# Finance Report secrets for syncing app services.
+# Sync tasks may repair missing runtime fields before deploying; deletion stays
+# reserved for operator/root-token maintenance.
 path "secret/data/finance_report/+/*" {
-  capabilities = ["read", "list"]
+  capabilities = ["create", "read", "update", "list"]
 }

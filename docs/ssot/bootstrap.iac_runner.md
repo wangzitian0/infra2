@@ -465,7 +465,7 @@ invoke env.set GIT_REPO_URL=https://github.com/wangzitian0/infra2.git \
 
 ### 6.2 Vault Token
 
-**Token 类型**: App Token（只读权限）
+**Token 类型**: Scoped deploy App Token
 
 **生成命令**:
 ```bash
@@ -475,7 +475,11 @@ invoke vault.setup-tokens
 
 **Token 自动注入**:
 - `invoke vault.setup-tokens` 自动在 Dokploy 中为 IaC Runner 配置 `VAULT_APP_TOKEN`
-- Vault Agent 使用此 token 拉取密钥
+- Vault Agent 使用此 token 拉取 bootstrap/iac_runner 密钥
+- Sync subprocesses use the same scoped token as `VAULT_ROOT_TOKEN` so deployers
+  can read and repair `platform/{env}/*` and `finance_report/{env}/*` runtime
+  secret fields before deployment. The token must not grant `delete`, and it
+  must not mutate bootstrap root credentials.
 
 ### 6.3 环境变量
 
@@ -483,7 +487,7 @@ invoke vault.setup-tokens
 | Variable | Source | 说明 |
 |----------|--------|------|
 | `VAULT_ADDR` | 手动配置 | `https://vault.{domain}` |
-| `VAULT_APP_TOKEN` | `invoke vault.setup-tokens` | Vault 只读 token |
+| `VAULT_APP_TOKEN` | `invoke vault.setup-tokens` | Scoped deploy token |
 | `INTERNAL_DOMAIN` | 手动配置 | 内部域名 |
 | `DEPLOY_ENV` | 手动配置 | `production` / `staging` |
 
@@ -679,7 +683,8 @@ curl https://iac.{domain}/health
 
 | 资源 | 权限 | 实现方式 |
 |------|------|---------|
-| **Vault 密钥** | 只读 | App Token（`vault.setup-tokens` 生成）|
+| **Runtime Vault service secrets** | Read + create/update only | Scoped deploy App Token (`vault.setup-tokens`) |
+| **Bootstrap/root credentials** | Read-only for iac_runner config | Scoped deploy App Token; root credentials are operator-only |
 | **Docker Socket** | 只读 | `ro` mount（`/var/run/docker.sock:/var/run/docker.sock:ro`）|
 | **Host 文件系统** | 无写入权限 | 仅 workspace 目录可写 |
 | **Bootstrap 服务** | 排除自动同步 | 代码中硬编码过滤规则 |
