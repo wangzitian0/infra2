@@ -22,6 +22,27 @@ class FakeSecrets:
         return True
 
 
+class FakeDokployDeployments:
+    def __init__(self, deployment_snapshots):
+        self.deployment_snapshots = list(deployment_snapshots)
+        self.deploy_calls = 0
+        self.redeploy_calls = 0
+
+    def deploy_compose(self, compose_id):
+        assert compose_id == "compose-1"
+        self.deploy_calls += 1
+
+    def redeploy_compose(self, compose_id):
+        assert compose_id == "compose-1"
+        self.redeploy_calls += 1
+
+    def get_compose(self, compose_id):
+        assert compose_id == "compose-1"
+        if self.deployment_snapshots:
+            return {"deployments": self.deployment_snapshots.pop(0)}
+        return {"deployments": []}
+
+
 def _load_deploy_module(relative_path: str, module_name: str):
     path = ROOT / relative_path
     spec = importlib.util.spec_from_file_location(module_name, path)
@@ -101,6 +122,63 @@ services:
 
     assert before != after_app_change
     assert after_app_change != after_mount_change
+
+
+def test_deploy_compose_redeploys_when_dokploy_accepts_noop_deploy(monkeypatch):
+    """Infra-011.11: deploy sync must fail fast on missing runtime deployment records."""
+    import libs.deployer as deployer
+    from libs.deployer import Deployer
+
+    monkeypatch.setattr(deployer.time, "sleep", lambda _seconds: None)
+    client = FakeDokployDeployments(
+        [
+            [{"deploymentId": "old", "status": "done"}],
+            [{"deploymentId": "old", "status": "done"}],
+            [{"deploymentId": "old", "status": "done"}],
+            [
+                {"deploymentId": "new", "status": "done"},
+                {"deploymentId": "old", "status": "done"},
+            ],
+        ]
+    )
+
+    Deployer._deploy_compose_with_record_check(
+        client,
+        "compose-1",
+        timeout_seconds=0,
+        interval_seconds=1,
+    )
+
+    assert client.deploy_calls == 1
+    assert client.redeploy_calls == 1
+
+
+def test_deploy_compose_fails_when_redeploy_has_no_runtime_record(monkeypatch):
+    """Infra-011.11: deploy sync fails instead of reporting success on stale runtime."""
+    import pytest
+    import libs.deployer as deployer
+    from libs.deployer import Deployer
+
+    monkeypatch.setattr(deployer.time, "sleep", lambda _seconds: None)
+    client = FakeDokployDeployments(
+        [
+            [{"deploymentId": "old", "status": "done"}],
+            [{"deploymentId": "old", "status": "done"}],
+            [{"deploymentId": "old", "status": "done"}],
+            [{"deploymentId": "old", "status": "done"}],
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="did not produce a new deployment record"):
+        Deployer._deploy_compose_with_record_check(
+            client,
+            "compose-1",
+            timeout_seconds=0,
+            interval_seconds=1,
+        )
+
+    assert client.deploy_calls == 1
+    assert client.redeploy_calls == 1
 
 
 class TestDeployerVaultTokenPreflight:

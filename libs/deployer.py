@@ -10,6 +10,7 @@ import os
 import hashlib
 import json
 import shlex
+import time
 from invoke import task
 
 from libs.common import get_env, validate_env, service_domain
@@ -272,6 +273,8 @@ class Deployer:
     subdomain: str = None  # e.g., "sso" for sso.{INTERNAL_DOMAIN}
     service_port: int = None  # Container port
     service_name: str = None  # For multi-service composes
+    deployment_record_timeout_seconds: int = 60
+    deployment_record_interval_seconds: int = 3
 
     @classmethod
     def env(cls) -> dict[str, str | None]:
@@ -516,7 +519,7 @@ class Deployer:
 
         # Deploy
         info(f"Deploying compose {compose_id}...")
-        client.deploy_compose(compose_id)
+        cls._deploy_compose_with_record_check(client, compose_id)
 
         # Configure domain if specified
         if cls.subdomain and cls.service_port:
@@ -537,7 +540,7 @@ class Deployer:
                     success(f"Domain configured: https://{domain_host}")
                     # Redeploy to apply domain labels
                     info("Redeploying to apply domain labels...")
-                    client.deploy_compose(compose_id)
+                    cls._deploy_compose_with_record_check(client, compose_id)
                     success("Domain labels updated")
                 elif result["skipped"] > 0:
                     info(f"Domain already configured: {domain_host}")
@@ -549,6 +552,101 @@ class Deployer:
 
         success(f"Deployed {cls.service} (composeId: {compose_id})")
         return compose_id
+
+    @classmethod
+    def _deploy_compose_with_record_check(
+        cls,
+        client: Any,
+        compose_id: str,
+        *,
+        timeout_seconds: int | None = None,
+        interval_seconds: int | None = None,
+    ) -> None:
+        """Trigger deploy and fail fast if Dokploy does not record runtime work."""
+        timeout = int(
+            os.getenv(
+                "DOKPLOY_DEPLOYMENT_RECORD_TIMEOUT_SECONDS",
+                str(
+                    timeout_seconds
+                    if timeout_seconds is not None
+                    else cls.deployment_record_timeout_seconds
+                ),
+            )
+        )
+        interval = int(
+            os.getenv(
+                "DOKPLOY_DEPLOYMENT_RECORD_INTERVAL_SECONDS",
+                str(
+                    interval_seconds
+                    if interval_seconds is not None
+                    else cls.deployment_record_interval_seconds
+                ),
+            )
+        )
+
+        before_ids = cls._deployment_ids(client.get_compose(compose_id))
+        client.deploy_compose(compose_id)
+        if cls._wait_for_new_deployment_record(
+            client, compose_id, before_ids, timeout, interval
+        ):
+            return
+
+        warning(
+            "Dokploy deploy did not produce a new deployment record; retrying with compose.redeploy"
+        )
+        before_ids = cls._deployment_ids(client.get_compose(compose_id))
+        client.redeploy_compose(compose_id)
+        if cls._wait_for_new_deployment_record(
+            client, compose_id, before_ids, timeout, interval
+        ):
+            return
+
+        raise RuntimeError(
+            "Dokploy deploy/redeploy did not produce a new deployment record; "
+            "runtime may still be running stale code"
+        )
+
+    @staticmethod
+    def _deployment_ids(compose: dict) -> set[str]:
+        deployments = compose.get("deployments")
+        if not isinstance(deployments, list):
+            return set()
+        return {
+            str(deployment.get("deploymentId") or deployment.get("id") or "")
+            for deployment in deployments
+            if deployment.get("deploymentId") or deployment.get("id")
+        }
+
+    @classmethod
+    def _wait_for_new_deployment_record(
+        cls,
+        client: Any,
+        compose_id: str,
+        previous_ids: set[str],
+        timeout_seconds: int,
+        interval_seconds: int,
+    ) -> bool:
+        deadline = time.monotonic() + max(0, timeout_seconds)
+        while True:
+            compose = client.get_compose(compose_id)
+            deployments = compose.get("deployments")
+            current_ids = cls._deployment_ids(compose)
+            new_ids = current_ids - previous_ids
+            if new_ids and isinstance(deployments, list):
+                for deployment in deployments:
+                    deployment_id = str(
+                        deployment.get("deploymentId") or deployment.get("id") or ""
+                    )
+                    if deployment_id not in new_ids:
+                        continue
+                    status = str(deployment.get("status") or "").lower()
+                    if status == "error":
+                        raise RuntimeError("Dokploy deployment record entered error")
+                    if status in {"running", "done", "success", "successful"}:
+                        return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(max(1, interval_seconds))
 
     @classmethod
     def post_compose(cls, c: "Context", shared_tasks: Any) -> bool:
