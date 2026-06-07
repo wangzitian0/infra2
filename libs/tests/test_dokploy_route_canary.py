@@ -69,6 +69,7 @@ def test_canary_compose_uses_same_host_web_and_api_routes() -> None:
         host="route-canary.example.com",
         environment_id="env-1",
         compose_name="route-canary-test",
+        nonce="nonce-1",
     )
 
     compose = render_canary_compose(config)
@@ -78,6 +79,7 @@ def test_canary_compose_uses_same_host_web_and_api_routes() -> None:
     assert "Host(`route-canary.example.com`)" in compose
     assert "PathPrefix(`/api`)" in compose
     assert "priority=100" in compose
+    assert "infra2.route-canary.nonce=nonce-1" in compose
     assert "dokploy-network" in compose
 
 
@@ -207,7 +209,12 @@ def test_canary_passes_after_deployment_containers_and_public_routes() -> None:
             stdout=(
                 "route-canary-test-web Up\n"
                 "route-canary-test-api Up\n"
-                '/route-canary-test-web {"traefik.http.routers.route-canary-test-web.rule":"ok"}'
+                "/route-canary-test-web "
+                '{"traefik.http.routers.route-canary-test-web.rule":'
+                '"Host(`route-canary.example.com`)"}\n'
+                "/route-canary-test-api "
+                '{"traefik.http.routers.route-canary-test-api.rule":'
+                '"Host(`route-canary.example.com`) && PathPrefix(`/api`)"}'
             ),
             stderr="",
         )
@@ -230,6 +237,60 @@ def test_canary_passes_after_deployment_containers_and_public_routes() -> None:
         "docker-containers",
         "public-routes",
     ]
+
+
+def test_canary_fails_docker_phase_when_labels_are_stale() -> None:
+    """Infra-011.9: stale Traefik labels must fail before public 404 polling."""
+    clock = FakeClock()
+    client = FakeDokploy(
+        deployments=[
+            [],
+            [{"deploymentId": "new", "status": "done", "createdAt": "2026-01-01"}],
+        ]
+    )
+    config = RouteCanaryConfig(
+        host="route-canary.example.com",
+        environment_id="env-1",
+        compose_name="route-canary-test",
+        ssh_host="vps.example.com",
+        timeout_seconds=10,
+        interval_seconds=5,
+    )
+    public_calls = []
+
+    def fake_command(
+        _command: str, _timeout: float
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=["ssh"],
+            returncode=0,
+            stdout=(
+                "route-canary-test-web Up\n"
+                "route-canary-test-api Up\n"
+                "/route-canary-test-web "
+                '{"traefik.http.routers.route-canary-test-web.rule":'
+                '"Host(`old-route-canary.example.com`)"}\n'
+                "/route-canary-test-api "
+                '{"traefik.http.routers.route-canary-test-api.rule":'
+                '"Host(`old-route-canary.example.com`) && PathPrefix(`/api`)"}'
+            ),
+            stderr="",
+        )
+
+    report = run_route_canary(
+        config,
+        client,
+        http_get=lambda url, _timeout: public_calls.append(url) or (200, "ok"),
+        command_runner=fake_command,
+        sleeper=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+
+    assert report.status == "fail"
+    assert report.failure_domain == "docker-runtime"
+    assert report.steps[-1].name == "docker-containers"
+    assert "do not match the canary host" in report.steps[-1].detail
+    assert public_calls == []
 
 
 def test_canary_workflow_is_manual_and_fast_failing() -> None:
@@ -257,6 +318,9 @@ def test_canary_workflow_is_manual_and_fast_failing() -> None:
     assert "GITHUB_STEP_SUMMARY" in workflow
     assert '--environment-id="$environment_id"' in workflow
     assert '--dokploy-host "cloud.zitian.party"' in workflow
+    assert "route-canary.zitian.party" in workflow
+    assert "route-canary-${GITHUB_RUN_ID}.zitian.party" not in workflow
+    assert '--nonce "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"' in workflow
 
 
 def test_canary_github_summary_lists_failure_domain_and_phase_evidence() -> None:

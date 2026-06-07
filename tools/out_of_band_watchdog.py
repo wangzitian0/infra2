@@ -353,15 +353,15 @@ def run_dokploy_route_canary_check(
             )
         ]
 
-    run_id = env.get("GITHUB_RUN_ID", "manual").strip() or "manual"
     config = RouteCanaryConfig(
         host=env.get("DOKPLOY_ROUTE_CANARY_HOST", "").strip()
-        or f"route-canary-watchdog-{run_id}.zitian.party",
+        or "route-canary-watchdog.zitian.party",
         environment_id=environment_id,
         project=env.get("DOKPLOY_ROUTE_CANARY_PROJECT", "").strip() or "platform",
         env=env.get("DOKPLOY_ROUTE_CANARY_ENV", "").strip() or "staging",
         compose_name=env.get("DOKPLOY_ROUTE_CANARY_COMPOSE_NAME", "").strip()
         or "dokploy-route-canary-watchdog",
+        nonce=env.get("GITHUB_RUN_ID", "").strip() or "manual",
         timeout_seconds=int(
             env.get("DOKPLOY_ROUTE_CANARY_TIMEOUT_SECONDS", "") or "90"
         ),

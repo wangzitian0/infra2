@@ -67,6 +67,7 @@ class RouteCanaryConfig:
     env: str | None = None
     compose_name: str = "dokploy-route-canary"
     image: str = CANARY_IMAGE
+    nonce: str = ""
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
     interval_seconds: int = DEFAULT_INTERVAL_SECONDS
     ssh_host: str = ""
@@ -126,6 +127,7 @@ def render_canary_compose(config: RouteCanaryConfig) -> str:
       - "traefik.http.routers.{router_slug}-web.tls.certresolver=letsencrypt"
       - "traefik.http.routers.{router_slug}-web.service={router_slug}-web"
       - "traefik.http.services.{router_slug}-web.loadbalancer.server.port=80"
+      - "infra2.route-canary.nonce={config.nonce}"
   api:
     image: {config.image}
     container_name: {router_slug}-api
@@ -141,6 +143,7 @@ def render_canary_compose(config: RouteCanaryConfig) -> str:
       - "traefik.http.routers.{router_slug}-api.tls.certresolver=letsencrypt"
       - "traefik.http.routers.{router_slug}-api.service={router_slug}-api"
       - "traefik.http.services.{router_slug}-api.loadbalancer.server.port=80"
+      - "infra2.route-canary.nonce={config.nonce}"
 
 networks:
   dokploy-network:
@@ -168,7 +171,11 @@ def run_route_canary(
 
     started = monotonic()
     compose_file = render_canary_compose(config)
-    env = f"CANARY_HOST={config.host}\nCANARY_IMAGE={config.image}\n"
+    env = (
+        f"CANARY_HOST={config.host}\n"
+        f"CANARY_IMAGE={config.image}\n"
+        f"CANARY_DEPLOY_NONCE={config.nonce}\n"
+    )
     try:
         existing = client.find_compose_by_name(
             config.compose_name,
@@ -268,6 +275,7 @@ def run_route_canary(
         docker_step = _probe_docker_containers(
             config,
             command_runner=command_runner,
+            sleeper=sleeper,
             monotonic=monotonic,
         )
         steps.append(docker_step)
@@ -351,9 +359,11 @@ def _probe_docker_containers(
     config: RouteCanaryConfig,
     *,
     command_runner: CommandRunner | None,
+    sleeper: Callable[[float], None],
     monotonic: Callable[[], float],
 ) -> CanaryStep:
     started = monotonic()
+    deadline = started + config.timeout_seconds
     slug = safe_slug(config.compose_name)
     names = [f"{slug}-web", f"{slug}-api"]
     command = (
@@ -364,29 +374,49 @@ def _probe_docker_containers(
         + " ".join(names)
         + " --format '{{.Name}} {{json .Config.Labels}}'"
     )
-    result = _run_ssh(config, command, command_runner=command_runner)
-    output = (result.stdout + result.stderr).strip()
-    if result.returncode != 0:
-        return _step("docker-containers", "fail", _one_line(output), started, monotonic)
-    missing = [name for name in names if name not in output]
-    if missing:
-        return _step(
-            "docker-containers",
-            "fail",
-            f"missing containers: {','.join(missing)}",
-            started,
-            monotonic,
-            {"output": _one_line(output)},
-        )
-    if "traefik.http.routers." not in output:
-        return _step(
-            "docker-containers",
-            "fail",
-            "containers exist but Traefik labels were not visible",
-            started,
-            monotonic,
-        )
-    return _step("docker-containers", "pass", "containers and labels visible", started, monotonic)
+    attempts = 0
+    last_detail = ""
+    last_data: dict[str, object] = {}
+
+    while monotonic() <= deadline:
+        attempts += 1
+        result = _run_ssh(config, command, command_runner=command_runner)
+        output = (result.stdout + result.stderr).strip()
+        output_line = _one_line(output)
+        last_data = {"attempts": attempts, "output": output_line}
+        if result.returncode != 0:
+            last_detail = output_line or "docker inspection command failed"
+        else:
+            missing = [name for name in names if name not in output]
+            if missing:
+                last_detail = f"missing containers: {','.join(missing)}"
+            elif "traefik.http.routers." not in output:
+                last_detail = "containers exist but Traefik labels were not visible"
+            elif f"Host(`{config.host}`)" not in output:
+                last_detail = "containers exist but Traefik labels do not match the canary host"
+            elif "PathPrefix(`/api`)" not in output:
+                last_detail = "containers exist but API PathPrefix label was not visible"
+            elif config.nonce and f"infra2.route-canary.nonce\":\"{config.nonce}" not in output:
+                last_detail = "containers exist but canary nonce label was not visible"
+            else:
+                return _step(
+                    "docker-containers",
+                    "pass",
+                    "containers and exact Traefik labels visible",
+                    started,
+                    monotonic,
+                    {"attempts": attempts},
+                )
+        sleeper(config.interval_seconds)
+
+    return _step(
+        "docker-containers",
+        "fail",
+        last_detail or "containers and Traefik labels did not become visible",
+        started,
+        monotonic,
+        last_data,
+    )
 
 
 def _probe_public_routes(

@@ -25,7 +25,7 @@ on:
         required: false
         default: "staging"
       host:
-        description: "Public host for the canary; defaults to route-canary-<run>.zitian.party"
+        description: "Public host for the canary; defaults to route-canary.zitian.party"
         required: false
         default: ""
       compose_name:
@@ -120,7 +120,7 @@ jobs:
             exit 1
           fi
 
-          canary_host="${CANARY_HOST_INPUT:-${DOKPLOY_ROUTE_CANARY_HOST:-route-canary-${GITHUB_RUN_ID}.zitian.party}}"
+          canary_host="${CANARY_HOST_INPUT:-${DOKPLOY_ROUTE_CANARY_HOST:-route-canary.zitian.party}}"
           compose_name="${COMPOSE_NAME_INPUT:-${DOKPLOY_ROUTE_CANARY_COMPOSE_NAME:-dokploy-route-canary}}"
           project="${PROJECT_INPUT:-${DOKPLOY_ROUTE_CANARY_PROJECT:-platform}}"
           env_name="${ENV_NAME_INPUT:-${DOKPLOY_ROUTE_CANARY_ENV:-staging}}"
@@ -134,4 +134,5 @@ jobs:
             --env "$env_name" \
             --compose-name "$compose_name" \
             --dokploy-host "cloud.zitian.party" \
+            --nonce "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --timeout-seconds "$timeout_seconds"

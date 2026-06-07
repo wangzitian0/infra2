@@ -63,7 +63,7 @@ failures.
 
 ```bash
 python tools/dokploy_route_canary.py \
-  --host route-canary-$(date +%s).zitian.party \
+  --host route-canary.zitian.party \
   --environment-id="$DOKPLOY_ENVIRONMENT_ID" \
   --project platform \
   --env staging \

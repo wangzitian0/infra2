@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,6 +31,11 @@ def main() -> int:
     parser.add_argument("--compose-name", default="dokploy-route-canary")
     parser.add_argument("--dokploy-host", default="")
     parser.add_argument("--image", default="traefik/whoami:v1.10.3")
+    parser.add_argument(
+        "--nonce",
+        default=os.getenv("DOKPLOY_ROUTE_CANARY_NONCE", ""),
+        help="Non-sensitive deploy nonce label used to force materialized canary deploys",
+    )
     parser.add_argument("--timeout-seconds", type=int, default=90)
     parser.add_argument("--interval-seconds", type=int, default=5)
     parser.add_argument("--ssh-host", default=os.getenv("INFRA2_WATCHDOG_SSH_HOST", ""))
@@ -49,6 +55,7 @@ def main() -> int:
         env=args.env,
         compose_name=args.compose_name,
         image=args.image,
+        nonce=args.nonce or str(int(time.time())),
         timeout_seconds=args.timeout_seconds,
         interval_seconds=args.interval_seconds,
         ssh_host=args.ssh_host,
