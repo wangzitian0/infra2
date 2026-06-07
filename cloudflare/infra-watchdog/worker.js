@@ -4,8 +4,6 @@ const DEFAULT_TARGETS = [
   ["production", "minio-public-route", "https://minio.zitian.party/minio/health/live", [200], "warning"],
   ["production", "authentik-public-route", "https://sso.zitian.party/-/health/live/", [200, 204, 302], "critical"],
   ["production", "signoz-public-route", "https://signoz.zitian.party", [200, 302], "critical"],
-  ["staging", "dokploy-public-route", "https://cloud-staging.zitian.party", [200, 302], "warning"],
-  ["staging", "vault-public-route", "https://vault-staging.zitian.party/v1/sys/health", [200, 429, 472, 473], "warning"],
   ["staging", "minio-public-route", "https://minio-staging.zitian.party/minio/health/live", [200], "warning"],
   ["staging", "authentik-public-route", "https://sso-staging.zitian.party/-/health/live/", [200, 204, 302], "warning"],
   ["staging", "signoz-public-route", "https://signoz-staging.zitian.party", [200, 302], "warning"],
@@ -21,13 +19,13 @@ const DEFAULT_HEARTBEATS = [
   {
     environment: "production",
     name: "platform-alerting-probes",
-    maxAgeSeconds: 1800,
+    maxAgeSeconds: 5400,
     severity: "critical",
   },
   {
     environment: "staging",
     name: "platform-alerting-probes-staging",
-    maxAgeSeconds: 1800,
+    maxAgeSeconds: 5400,
     severity: "warning",
   },
 ];
@@ -41,6 +39,9 @@ export default {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/health") {
       return jsonResponse({ ok: true });
+    }
+    if (request.method === "GET" && url.pathname === "/status") {
+      return statusResponse(request, env);
     }
     if (request.method === "POST" && url.pathname === "/heartbeat") {
       return recordHeartbeat(request, env);
@@ -57,10 +58,45 @@ async function runWatchdog(env, nowMs = Date.now()) {
 
   const routeResults = await Promise.all(targets.map((target) => checkHttpTarget(target, timeoutMs)));
   const heartbeatResults = await checkHeartbeats(env, heartbeats, nowMs);
-  const failures = routeResults.concat(heartbeatResults).filter((result) => !result.ok);
+  const configResults = checkEffectiveConfig(targets, heartbeats);
+  const failures = routeResults.concat(heartbeatResults, configResults).filter((result) => !result.ok);
+  const fingerprint = failures.length > 0 ? await failureFingerprint(failures) : "";
 
-  await notifyIfNeeded(env, failures, nowMs);
-  return { failures, routeResults, heartbeatResults };
+  let deliveryError = "";
+  try {
+    await notifyIfNeeded(env, failures, nowMs);
+  } catch (error) {
+    deliveryError = oneLine(error && error.message ? error.message : String(error));
+  }
+  await saveLastRun(env, {
+    ranAt: nowMs,
+    ok: failures.length === 0 && !deliveryError,
+    routeTargetCount: targets.length,
+    heartbeatTargetCount: heartbeats.length,
+    failureCount: failures.length,
+    failureFingerprint: fingerprint,
+    deliveryError,
+  });
+  if (deliveryError) {
+    throw new Error(`watchdog delivery failed: ${deliveryError}`);
+  }
+  return { failures, routeResults, heartbeatResults, configResults };
+}
+
+function checkEffectiveConfig(targets, heartbeats) {
+  const configTarget = {
+    environment: "global",
+    name: "cloudflare-watchdog-effective-config",
+    severity: "critical",
+  };
+  const results = [];
+  if (targets.length === 0) {
+    results.push(failResult(configTarget, "effective public route target list is empty"));
+  }
+  if (heartbeats.length === 0) {
+    results.push(failResult(configTarget, "effective heartbeat target list is empty"));
+  }
+  return results;
 }
 
 async function checkHttpTarget(target, timeoutMs) {
@@ -108,6 +144,10 @@ async function checkHeartbeats(env, heartbeats, nowMs) {
       continue;
     }
     const ageSeconds = Math.floor((nowMs - Number(value.receivedAt || 0)) / 1000);
+    if (ageSeconds < -300) {
+      results.push(failResult(heartbeat, `heartbeat timestamp is in the future: ${ageSeconds}s old`));
+      continue;
+    }
     if (value.ok === false) {
       results.push(failResult(heartbeat, `heartbeat reports unhealthy: ${oneLine(value.detail || "")}`));
       continue;
@@ -149,10 +189,46 @@ async function recordHeartbeat(request, env) {
   return jsonResponse({ ok: true, key: heartbeatKey(environment, name) });
 }
 
+async function statusResponse(request, env) {
+  const expectedToken = String(env.WATCHDOG_STATUS_TOKEN || "");
+  if (!expectedToken) {
+    return jsonResponse({ ok: false, error: "WATCHDOG_STATUS_TOKEN is not configured" }, 500);
+  }
+  const actualToken = request.headers.get("Authorization") || "";
+  if (actualToken !== `Bearer ${expectedToken}`) {
+    return jsonResponse({ ok: false, error: "unauthorized" }, 401);
+  }
+  if (!env.WATCHDOG_STATE) {
+    return jsonResponse({ ok: false, error: "WATCHDOG_STATE KV binding is missing" }, 500);
+  }
+  const nowMs = Date.now();
+  const maxAgeSeconds = Number(env.WATCHDOG_STATUS_MAX_AGE_SECONDS || 7200);
+  const lastRun = await loadState(env, "watchdog:last-run");
+  const alertState = await loadState(env, "alert-state:cloudflare-watchdog");
+  const ranAt = Number(lastRun.ranAt || 0);
+  const ageSeconds = ranAt > 0 ? Math.floor((nowMs - ranAt) / 1000) : null;
+  const stale = ageSeconds === null || ageSeconds > maxAgeSeconds || ageSeconds < -300;
+  return jsonResponse({
+    ok: !stale && lastRun.ok !== false,
+    lastRun: {
+      ageSeconds,
+      ok: lastRun.ok !== false,
+      routeTargetCount: Number(lastRun.routeTargetCount || 0),
+      heartbeatTargetCount: Number(lastRun.heartbeatTargetCount || 0),
+      failureCount: Number(lastRun.failureCount || 0),
+      deliveryError: oneLine(lastRun.deliveryError || ""),
+    },
+    alertState: {
+      active: Boolean(alertState.active),
+      lastAlertAt: Number(alertState.lastAlertAt || 0),
+    },
+  });
+}
+
 async function notifyIfNeeded(env, failures, nowMs) {
   const stateKey = "alert-state:cloudflare-watchdog";
   const state = await loadState(env, stateKey);
-  const renotifyMs = Number(env.WATCHDOG_RENOTIFY_SECONDS || 3600) * 1000;
+  const renotifyMs = Number(env.WATCHDOG_RENOTIFY_SECONDS || 7200) * 1000;
 
   if (failures.length === 0) {
     if (state.active) {
@@ -279,6 +355,10 @@ async function saveState(env, key, state) {
     return;
   }
   await env.WATCHDOG_STATE.put(key, JSON.stringify(state));
+}
+
+async function saveLastRun(env, state) {
+  await saveState(env, "watchdog:last-run", state);
 }
 
 async function failureFingerprint(failures) {

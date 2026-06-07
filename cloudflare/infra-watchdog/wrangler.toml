@@ -5,12 +5,13 @@ account_id = "6e27b6853de0131bea033d235e0a1139"
 workers_dev = true
 
 [triggers]
-crons = ["*/10 * * * *"]
+crons = ["*/30 * * * *"]
 
 [vars]
 WATCHDOG_ENVIRONMENTS = "production,staging"
 WATCHDOG_HTTP_TIMEOUT_MS = "8000"
-WATCHDOG_RENOTIFY_SECONDS = "3600"
+WATCHDOG_RENOTIFY_SECONDS = "7200"
+WATCHDOG_STATUS_MAX_AGE_SECONDS = "7200"
 ALERT_DELIVERY_MODE = "feishu_app"
 WATCHDOG_TARGETS_JSON = """
 [
@@ -26,7 +27,8 @@ WATCHDOG_TARGETS_JSON = """
 """
 WATCHDOG_HEARTBEATS_JSON = """
 [
-  {"environment":"production","name":"platform-alerting-probes","maxAgeSeconds":1800,"severity":"critical"}
+  {"environment":"production","name":"platform-alerting-probes","maxAgeSeconds":5400,"severity":"critical"},
+  {"environment":"staging","name":"platform-alerting-probes-staging","maxAgeSeconds":5400,"severity":"warning"}
 ]
 """
 

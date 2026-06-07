@@ -123,10 +123,10 @@ result in a Feishu group message.
 ## Out-of-band Watchdog
 
 The bridge remains internal only. Whole-host and bridge-down detection is handled
-primarily by `cloudflare/infra-watchdog`, which runs every 10 minutes from
+primarily by `cloudflare/infra-watchdog`, which runs every 30 minutes from
 Cloudflare Workers Cron and sends Feishu directly when infra2, public routing,
 or the in-band probe runner cannot be trusted. `.github/workflows/out-of-band-watchdog.yml`
-is retained as a 30-minute SSH fallback/manual diagnostic path.
+is retained as a daily Worker/VPS audit and manual diagnostic path.
 
 The bridge waits up to 300 seconds for `/secrets/.env` at startup, but it does
 not require the vault-agent sidecar to stay Docker-healthy after the file is
@@ -137,6 +137,38 @@ Required Cloudflare Worker secrets:
 
 - `FEISHU_WEBHOOK_URL` for webhook mode, or `FEISHU_APP_SECRET` for app bot mode
 - `HEARTBEAT_TOKEN`
+- `WATCHDOG_STATUS_TOKEN`
+
+`WATCHDOG_STATUS_TOKEN` is stored in 1Password item
+`Infra2/bootstrap/cloudflare-worker` and is synced to both Cloudflare Worker
+secrets and GitHub Actions secrets:
+
+```bash
+status_token="$(
+  env -u OP_SERVICE_ACCOUNT_TOKEN op item get \
+    'bootstrap/cloudflare-worker' \
+    --vault=Infra2 \
+    --fields label=WATCHDOG_STATUS_TOKEN \
+    --reveal
+)"
+worker_api_token="$(
+  env -u OP_SERVICE_ACCOUNT_TOKEN op item get \
+    'bootstrap/cloudflare-worker' \
+    --vault=Infra2 \
+    --fields label=CLOUDFLARE_WORKER_API_TOKEN \
+    --reveal
+)"
+
+printf '%s' "$status_token" | \
+  (cd ../../cloudflare/infra-watchdog && \
+    CLOUDFLARE_API_TOKEN="$worker_api_token" \
+    wrangler secret put WATCHDOG_STATUS_TOKEN)
+
+printf '%s' "$status_token" | \
+  gh secret set INFRA2_WATCHDOG_WORKER_STATUS_TOKEN --repo wangzitian0/infra2
+
+unset status_token worker_api_token
+```
 
 For app bot mode, configure Worker vars:
 
@@ -161,6 +193,7 @@ environment variables are configured:
 Required GitHub repository secrets for fallback SSH diagnostics:
 
 - `INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE`: `feishu_webhook` or `feishu_app`
+- `INFRA2_WATCHDOG_WORKER_STATUS_TOKEN`
 - `INFRA2_WATCHDOG_SSH_HOST`
 - `INFRA2_WATCHDOG_SSH_USER`
 - `INFRA2_WATCHDOG_SSH_PRIVATE_KEY`
@@ -179,13 +212,16 @@ For `feishu_app` mode:
 Optional repository variables:
 
 - `INFRA2_WATCHDOG_HTTP_TARGETS`: newline-separated `name|url|status_csv`
+- `INFRA2_WATCHDOG_WORKER_STATUS_URL`: defaults to the deployed Worker
+  `/status` endpoint.
 - `INFRA2_WATCHDOG_SSH_TARGETS`: newline-separated `name|command|expected_text`
 - `INFRA2_WATCHDOG_SSH_PORT`: defaults to `22`
 
-Cloudflare defaults cover production and staging public routes plus production
-and staging probe-runner heartbeat freshness. GitHub fallback checks cover the
-public Dokploy entrypoint, SSH reachability, Docker daemon reachability, and the
-`platform-alerting` in-container `/health` endpoint via SSH.
+Cloudflare defaults cover production public routes, selected staging public
+routes, and production/staging probe-runner heartbeat freshness. GitHub fallback
+checks cover the public Dokploy entrypoint, Cloudflare Worker `/health`,
+Cloudflare Worker `/status`, SSH reachability, Docker daemon reachability, and
+the `platform-alerting` in-container `/health` endpoint via SSH.
 IaC Runner, MinIO, Postgres, Redis, and application dependency health remain
 service-level signals handled in-band through SigNoz and this bridge.
 
@@ -195,13 +231,13 @@ service-level signals handled in-band through SigNoz and this bridge.
 from inside the Dokploy network. Failures are converted into SigNoz-compatible
 payloads and posted to the bridge.
 
-Default probe coverage:
+Default internal probe coverage:
 
-- Dokploy public entrypoint
-- Vault health endpoint
-- MinIO live endpoint
-- Authentik health endpoint
-- SigNoz frontend/query path
+- Dokploy internal HTTP endpoint
+- Vault internal health endpoint
+- MinIO internal live endpoint
+- Authentik internal health endpoint
+- SigNoz internal frontend/query path
 - Alert bridge `/health`
 - platform Postgres TCP readiness
 - platform Redis TCP readiness

@@ -23,11 +23,11 @@ def _load_watchdog():
     return module
 
 
-def test_workflow_runs_every_30_minutes_and_can_be_dispatched() -> None:
-    """Infra-007.1: out-of-band watchdog is a 30-minute external schedule."""
+def test_workflow_runs_daily_and_can_be_dispatched() -> None:
+    """#209: GitHub watchdog is a daily audit with manual dispatch."""
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 
-    assert workflow["on"]["schedule"] == [{"cron": "*/30 * * * *"}]
+    assert workflow["on"]["schedule"] == [{"cron": "17 2 * * *"}]
     assert "workflow_dispatch" in workflow["on"]
     assert "ssh_targets_override" in workflow["on"]["workflow_dispatch"]["inputs"]
     assert workflow["permissions"] == {"contents": "read"}
@@ -51,8 +51,12 @@ def test_default_targets_cover_public_host_and_bridge_health() -> None:
     watchdog = _load_watchdog()
 
     http_targets = watchdog.parse_http_targets("")
-    assert [target.name for target in http_targets] == ["infra2-public-entrypoint"]
+    assert [target.name for target in http_targets] == [
+        "infra2-public-entrypoint",
+        "cloudflare-worker-health",
+    ]
     assert http_targets[0].url == "https://cloud.zitian.party"
+    assert http_targets[1].url.endswith("/health")
 
     ssh_targets = watchdog.parse_ssh_targets("")
     assert [target.name for target in ssh_targets] == [
@@ -75,13 +79,67 @@ def test_default_targets_cover_public_host_and_bridge_health() -> None:
     assert ssh_targets[3].expected_text == "healthy"
 
 
+def test_worker_status_check_detects_missing_token_and_empty_config() -> None:
+    """#209: GitHub audit must verify Worker cron/KV-backed effective config."""
+    watchdog = _load_watchdog()
+
+    assert watchdog.run_worker_status_check({}, timeout=1)[0] == watchdog.CheckResult(
+        "cloudflare-worker-status",
+        False,
+        "INFRA2_WATCHDOG_WORKER_STATUS_TOKEN is missing",
+    )
+
+
+def test_worker_status_check_accepts_fresh_nonempty_status(monkeypatch) -> None:
+    """#209: authenticated Worker status is a first-class audit signal."""
+    watchdog = _load_watchdog()
+    captured = {}
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return (
+                b'{"ok":true,"lastRun":{"ageSeconds":1800,'
+                b'"routeTargetCount":8,"heartbeatTargetCount":2}}'
+            )
+
+    def fake_urlopen(request, *, timeout):
+        captured["authorization"] = request.get_header("Authorization")
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(watchdog, "urlopen", fake_urlopen)
+
+    results = watchdog.run_worker_status_check(
+        {
+            "INFRA2_WATCHDOG_WORKER_STATUS_URL": "https://worker.example/status",
+            "INFRA2_WATCHDOG_WORKER_STATUS_TOKEN": "status-token",
+        },
+        timeout=3,
+    )
+
+    assert results == [
+        watchdog.CheckResult(
+            "cloudflare-worker-status",
+            True,
+            "worker last-run fresh: age=1800s",
+        )
+    ]
+    assert captured == {"authorization": "Bearer status-token", "timeout": 3}
+
+
 def test_custom_ssh_targets_preserve_mandatory_docker_health() -> None:
     """Infra-011.2: GitHub variable drift must not remove Docker health checks."""
     watchdog = _load_watchdog()
 
-    ssh_targets = watchdog.parse_ssh_targets(
-        "infra2-custom|echo custom-ok|custom-ok"
-    )
+    ssh_targets = watchdog.parse_ssh_targets("infra2-custom|echo custom-ok|custom-ok")
     names = [target.name for target in ssh_targets]
 
     assert "infra2-docker-health" in names
@@ -149,6 +207,13 @@ def test_main_sends_feishu_only_when_a_check_fails(monkeypatch) -> None:
         ],
     )
     monkeypatch.setattr(watchdog, "run_ssh_checks", lambda _config, _targets: [])
+    monkeypatch.setattr(
+        watchdog,
+        "run_worker_status_check",
+        lambda _env, _timeout: [
+            watchdog.CheckResult("cloudflare-worker-status", True, "fresh")
+        ],
+    )
     monkeypatch.setattr(
         watchdog,
         "deliver_out_of_band_alert",

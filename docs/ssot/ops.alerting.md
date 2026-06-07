@@ -42,15 +42,15 @@ the VPS, low-cost at this probe volume, and does not consume GitHub Actions
 minutes:
 
 ```text
-Cloudflare Workers Cron (external to infra2, every 10 minutes)
-  -> production and staging public route checks
+Cloudflare Workers Cron (external to infra2, every 30 minutes)
+  -> production and selected staging public route checks
   -> platform-alerting-probes heartbeat freshness checks
   -> Feishu/Lark webhook directly
 ```
 
-The existing GitHub Actions watchdog remains a fallback/manual diagnostic path
-for SSH-based host checks. All service-level alerts continue to use the in-band
-path through SigNoz and `platform/12.alerting`.
+The existing GitHub Actions watchdog remains a daily audit/manual diagnostic path
+for Cloudflare Worker self-health and SSH-based host checks. All service-level
+alerts continue to use the in-band path through SigNoz and `platform/12.alerting`.
 
 Code-owned infra probes run from `platform/12.alerting` as
 `platform-alerting-probes${ENV_SUFFIX}`. The probe runner checks service health
@@ -215,21 +215,25 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
 
 The primary out-of-band watchdog lives in
 [`cloudflare/infra-watchdog`](../../cloudflare/infra-watchdog/). It runs every
-10 minutes from Cloudflare Workers Cron and alerts Feishu directly instead of
+30 minutes from Cloudflare Workers Cron and alerts Feishu directly instead of
 routing through the bridge it is meant to verify.
+
+Watchdog ownership is tracked per signal, not per component, in
+[`watchdog-signals.yaml`](watchdog-signals.yaml). A component can have multiple
+signals when they measure different failure domains; for example, MinIO internal
+health is owned by the internal watchdog, while MinIO public-route health is
+owned by the Cloudflare watchdog.
 
 Default coverage:
 
 - Production public routes:
   `cloud`, `vault`, `minio`, `sso`, and `signoz`.
 - Staging public routes:
-  `cloud-staging`, `vault-staging`, `minio-staging`, `sso-staging`, and
-  `signoz-staging`.
-- Production heartbeat:
-  `platform-alerting-probes`.
-- Staging heartbeat is staged in the contract but must remain disabled in
-  `WATCHDOG_HEARTBEATS_JSON` until the staging alerting compose reliably
-  recreates `platform-alerting-probes-staging`.
+  `minio-staging`, `sso-staging`, and `signoz-staging`.
+- Explicit staging public-route exclusions:
+  `cloud-staging` and `vault-staging` while they return HTTP 404.
+- Production and staging heartbeats:
+  `platform-alerting-probes` and `platform-alerting-probes-staging`.
 
 Required Cloudflare Worker secrets for webhook mode:
 
@@ -242,6 +246,46 @@ Required Cloudflare Worker secrets for app bot mode:
 Required Cloudflare Worker secrets for both delivery modes:
 
 - `HEARTBEAT_TOKEN`: shared token expected by the `/heartbeat` endpoint.
+- `WATCHDOG_STATUS_TOKEN`: shared token expected by the authenticated `/status`
+  endpoint used by the GitHub audit watchdog.
+
+1Password source of truth for the Worker API and status-check secrets:
+
+- Vault: `Infra2`
+- Item: `bootstrap/cloudflare-worker`
+- Fields: `CLOUDFLARE_WORKER_API_TOKEN`, `WATCHDOG_STATUS_TOKEN`
+
+CLI sync from 1Password to Cloudflare and GitHub:
+
+```bash
+status_token="$(
+  env -u OP_SERVICE_ACCOUNT_TOKEN op item get \
+    'bootstrap/cloudflare-worker' \
+    --vault=Infra2 \
+    --fields label=WATCHDOG_STATUS_TOKEN \
+    --reveal
+)"
+worker_api_token="$(
+  env -u OP_SERVICE_ACCOUNT_TOKEN op item get \
+    'bootstrap/cloudflare-worker' \
+    --vault=Infra2 \
+    --fields label=CLOUDFLARE_WORKER_API_TOKEN \
+    --reveal
+)"
+
+printf '%s' "$status_token" | \
+  (cd cloudflare/infra-watchdog && \
+    CLOUDFLARE_API_TOKEN="$worker_api_token" \
+    wrangler secret put WATCHDOG_STATUS_TOKEN)
+
+printf '%s' "$status_token" | \
+  gh secret set INFRA2_WATCHDOG_WORKER_STATUS_TOKEN --repo wangzitian0/infra2
+
+unset status_token worker_api_token
+```
+
+`env -u OP_SERVICE_ACCOUNT_TOKEN` intentionally bypasses a stale deleted service
+account token when the local interactive `op` session is valid.
 
 Required Cloudflare Worker KV:
 
@@ -251,7 +295,8 @@ Default Worker vars:
 
 - `WATCHDOG_ENVIRONMENTS=production,staging`
 - `WATCHDOG_HTTP_TIMEOUT_MS=8000`
-- `WATCHDOG_RENOTIFY_SECONDS=3600`
+- `WATCHDOG_RENOTIFY_SECONDS=7200`
+- `WATCHDOG_STATUS_MAX_AGE_SECONDS=7200`
 - `ALERT_DELIVERY_MODE=feishu_webhook` or `feishu_app`
 - `FEISHU_APP_ID`: required for app bot mode
 - `FEISHU_CHAT_ID`: required for app bot mode
@@ -265,6 +310,7 @@ wrangler kv namespace create WATCHDOG_STATE
 wrangler kv namespace create WATCHDOG_STATE --preview
 wrangler secret put FEISHU_WEBHOOK_URL
 wrangler secret put HEARTBEAT_TOKEN
+wrangler secret put WATCHDOG_STATUS_TOKEN
 wrangler deploy
 ```
 
@@ -281,14 +327,18 @@ DEPLOY_ENV=staging uv run invoke alerting.setup
 
 The Worker is stateful. It sends an alert when a failure first appears, when the
 failure fingerprint changes, when `WATCHDOG_RENOTIFY_SECONDS` is reached, and
-when the previously failing watchdog recovers. Successful checks stay quiet.
+when the previously failing watchdog recovers. Successful checks stay quiet. It
+also writes `watchdog:last-run` to KV after scheduled runs so GitHub can detect
+Worker cron or KV-backed state blindness; `/health` remains public and minimal,
+while `/status` is bearer-token protected and returns only non-secret summary
+state.
 
 ### SOP-005B: GitHub fallback out-of-band watchdog
 
 The watchdog lives in GitHub Actions so it remains outside the infra2 host. It
-runs every 30 minutes and alerts Feishu directly instead of routing through the
+runs daily and alerts Feishu directly instead of routing through the
 bridge it is meant to verify. This path is retained for SSH-based host
-diagnostics and manual dispatch.
+diagnostics, Cloudflare Worker self-health audit, and manual dispatch.
 
 Required GitHub secrets:
 
@@ -296,6 +346,7 @@ Required GitHub secrets:
 - `INFRA2_WATCHDOG_SSH_HOST`
 - `INFRA2_WATCHDOG_SSH_USER`
 - `INFRA2_WATCHDOG_SSH_PRIVATE_KEY`
+- `INFRA2_WATCHDOG_WORKER_STATUS_TOKEN`
 
 For `feishu_webhook` mode:
 
@@ -311,10 +362,13 @@ For `feishu_app` mode:
 Optional GitHub variables:
 
 - `INFRA2_WATCHDOG_HTTP_TARGETS`: newline-separated `name|url|status_csv`
+- `INFRA2_WATCHDOG_WORKER_STATUS_URL`: defaults to the deployed Worker
+  `/status` endpoint.
 - `INFRA2_WATCHDOG_SSH_TARGETS`: newline-separated `name|command|expected_text`
 - `INFRA2_WATCHDOG_SSH_PORT`: defaults to `22`
 
-Defaults check the public Dokploy entrypoint, SSH reachability, Docker daemon
+Defaults check the public Dokploy entrypoint, Cloudflare Worker `/health`,
+Cloudflare Worker authenticated `/status`, SSH reachability, Docker daemon
 reachability, and the `platform-alerting` in-container `/health` endpoint via
 SSH. IaC Runner, MinIO, Postgres, Redis, and application dependency probes are
 service-level signals and remain in-band alerts owned by the bridge/SigNoz path.
@@ -327,19 +381,22 @@ container outside an active deployment window.
 
 Infra service probes are configured in
 [`platform/12.alerting/compose.yaml`](../../platform/12.alerting/compose.yaml)
-under `INFRA_PROBE_SPECS`. The default probe loop interval is 10 minutes
-(`INFRA_PROBE_INTERVAL_SECONDS=600`) to avoid repeating the same unresolved
-failure every five minutes while keeping outage detection reasonably fresh.
+under `INFRA_PROBE_SPECS`. The default probe loop interval is 60 seconds
+(`INFRA_PROBE_INTERVAL_SECONDS=60`) for fast internal detection. Notification is
+bounded separately: the default firing threshold is three consecutive failures
+(`INFRA_PROBE_FAILURE_THRESHOLD=3`), the default recovery threshold is two
+consecutive successes (`INFRA_PROBE_RECOVERY_THRESHOLD=2`), and unchanged active
+failures renotify no more often than every 30 minutes
+(`INFRA_PROBE_RENOTIFY_SECONDS=1800`).
 In-band probes must prefer Docker-network targets for service health. Public
 Cloudflare-routed domains are route checks, not core service-health checks, and
-must use a stable probe `User-Agent` so Browser Integrity Check does not produce
-Cloudflare 1010 false positives. If a future public-route probe observes
-`error code: 1010`, it is classified as `probe-client-blocked` rather than
-plain service down.
+are primarily owned by the Cloudflare watchdog. If a future optional public-route
+probe observes `error code: 1010`, it is classified as `probe-client-blocked`
+rather than plain service down.
 
 The probe runner is stateful. It sends an alert when a failure first appears,
 when the failure fingerprint changes, when the configured renotify interval is
-reached (`INFRA_PROBE_RENOTIFY_SECONDS`, default 3600 seconds), and when a
+reached (`INFRA_PROBE_RENOTIFY_SECONDS`, default 1800 seconds), and when a
 previously firing probe group recovers. Successful runs stay quiet unless they
 close a previously active failure.
 
@@ -350,9 +407,9 @@ detail, and local timestamp. Heartbeat delivery failures are logged but do not
 block in-band probe alert delivery.
 
 Public route probes live under `PUBLIC_ROUTE_PROBE_SPECS` and emit
-`InfraPublicRouteProbeFailed`; service-health probes emit
-`InfraServiceProbeFailed`. This keeps Cloudflare/Traefik route failures
-separate from Docker-network service failures.
+`InfraPublicRouteProbeFailed` only when explicitly configured; service-health
+probes emit `InfraServiceProbeFailed`. This keeps Cloudflare/Traefik route
+failures separate from Docker-network service failures.
 
 Spec format:
 

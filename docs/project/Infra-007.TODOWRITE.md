@@ -9,13 +9,13 @@
 - Feishu alerting bridge added under `platform/12.alerting` to convert SigNoz Alertmanager webhook payloads into Feishu custom bot text messages. This work is not bound to a GitHub issue because no issue number was provided; open PR check on 2026-06-03 found no competing infra2 PRs.
 - Alert coverage catalog added to `docs/ssot/ops.alerting.md`; shared app log-error rule automation is exposed as `alerting.shared.ensure-log-error-rule`.
 - `vault.setup-tokens` now includes `platform/alerting`, matching the existing vault self-refresh inventory row for `platform/12.alerting`.
-- Out-of-band watchdog scope: GitHub Actions runs every 30 minutes outside the infra2 host, verifies public infra2 reachability and the internal alert bridge health via SSH, and sends Feishu directly when the in-band bridge path cannot be trusted.
+- Out-of-band watchdog scope: GitHub Actions runs daily outside the infra2 host, verifies Cloudflare Worker self-health, public infra2 reachability, and internal alert bridge health via SSH, and sends Feishu directly when the in-band bridge path cannot be trusted.
 
 ### Acceptance Criteria
 
 | AC | Description | Proof |
 |----|-------------|-------|
-| Infra-007.1 | Out-of-band watchdog runs on a 30-minute GitHub Actions schedule and can be manually dispatched. | `.github/workflows/out-of-band-watchdog.yml`, `libs/tests/test_out_of_band_watchdog.py` |
+| Infra-007.1 | Out-of-band watchdog runs on a daily GitHub Actions schedule and can be manually dispatched. | `.github/workflows/out-of-band-watchdog.yml`, `libs/tests/test_out_of_band_watchdog.py` |
 | Infra-007.2 | Host-level checks execute outside infra2 and alert through a direct Feishu webhook rather than the infra2 bridge. | `tools/out_of_band_watchdog.py`, `libs/tests/test_out_of_band_watchdog.py` |
 | Infra-007.3 | Alert bridge health is checked from the external workflow via SSH without exposing the bridge publicly. | `.github/workflows/out-of-band-watchdog.yml`, `tools/out_of_band_watchdog.py` |
 
