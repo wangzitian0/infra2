@@ -5,8 +5,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 from libs.deployer import Deployer, make_tasks
-from libs.console import success, info, warning, run_with_status, error
-from libs.env import generate_password
+from libs.console import success, info, run_with_status, error
 
 shared_tasks = sys.modules.get("platform.11.signoz.shared")
 
@@ -94,17 +93,9 @@ class SigNozDeployer(Deployer):
             if tmp_path and os.path.exists(tmp_path):
                 os.unlink(tmp_path)
         
-        # Get or generate JWT secret from Vault
+        if not cls.ensure_runtime_secrets(c):
+            return None
         jwt_secret = secrets_backend.get(cls.secret_key)
-        if not jwt_secret:
-            jwt_secret = generate_password(32)
-            if secrets_backend.set(cls.secret_key, jwt_secret):
-                warning(f"Generated new JWT secret in Vault: {cls.secret_key}")
-            else:
-                # Fallback: generate locally if Vault write fails
-                warning("Failed to store JWT secret in Vault, using local generation")
-        else:
-            info(f"Vault secret exists: {cls.secret_key}")
         
         success("pre_compose complete")
         domain_suffix = e.get("ENV_DOMAIN_SUFFIX", "")
