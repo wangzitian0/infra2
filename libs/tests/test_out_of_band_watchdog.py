@@ -6,6 +6,7 @@ import base64
 import importlib.util
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 
@@ -44,6 +45,17 @@ def test_workflow_alerts_directly_and_does_not_call_the_bridge() -> None:
     assert "/signoz/webhook" not in text
     assert "tools/out_of_band_watchdog.py" in text
     assert "inputs.ssh_targets_override" in text
+
+
+def test_workflow_configures_dokploy_route_canary_signal() -> None:
+    """Infra-011.9: out-of-band watchdog also probes Dokploy route liveness."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "DOKPLOY_API_KEY" in text
+    assert "DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID" in text
+    assert "DOKPLOY_ROUTE_CANARY_DOKPLOY_HOST" in text
+    assert "DOKPLOY_ROUTE_CANARY_TIMEOUT_SECONDS" in text
+    assert "python -m pip install httpx python-dotenv rich" in text
 
 
 def test_default_targets_cover_public_host_and_bridge_health() -> None:
@@ -140,6 +152,89 @@ def test_worker_status_check_accepts_fresh_nonempty_status(monkeypatch) -> None:
     }
 
 
+def test_dokploy_route_canary_check_fails_closed_without_config() -> None:
+    """Infra-011.9: missing canary config is an alert, not a silent gap."""
+    watchdog = _load_watchdog()
+
+    assert watchdog.run_dokploy_route_canary_check({}, ssh_config=None) == [
+        watchdog.CheckResult(
+            "infra2-dokploy-route-canary",
+            False,
+            "DOKPLOY_API_KEY is missing",
+        )
+    ]
+    assert watchdog.run_dokploy_route_canary_check(
+        {"DOKPLOY_API_KEY": "secret"},
+        ssh_config=None,
+    ) == [
+        watchdog.CheckResult(
+            "infra2-dokploy-route-canary",
+            False,
+            "DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID is missing",
+        )
+    ]
+
+
+def test_dokploy_route_canary_check_reports_worker_failure_domain() -> None:
+    """Infra-011.9: worker/deployment-record failures page through watchdog."""
+    watchdog = _load_watchdog()
+    captured = {}
+
+    def fake_runner(config, client):
+        captured["config"] = config
+        captured["client"] = client
+        return SimpleNamespace(
+            status="fail",
+            failure_domain="dokploy-worker-or-deployment-record",
+            compose_id="cmp-canary",
+            public_url="https://route-canary.example.com",
+            steps=[
+                SimpleNamespace(
+                    name="deployment-record",
+                    status="fail",
+                    detail="deploy request did not produce a new record",
+                )
+            ],
+        )
+
+    def fake_client_factory(*, host):
+        captured["host"] = host
+        return object()
+
+    results = watchdog.run_dokploy_route_canary_check(
+        {
+            "DOKPLOY_API_KEY": "secret",
+            "DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID": "env-1",
+            "DOKPLOY_ROUTE_CANARY_HOST": "route-canary.example.com",
+            "DOKPLOY_ROUTE_CANARY_TIMEOUT_SECONDS": "30",
+            "GITHUB_RUN_ID": "123",
+        },
+        ssh_config=watchdog.SshConfig(
+            host="vps.example.com",
+            user="root",
+            port=22,
+            key_path="/tmp/key",
+        ),
+        runner=fake_runner,
+        client_factory=fake_client_factory,
+    )
+
+    assert results == [
+        watchdog.CheckResult(
+            "infra2-dokploy-route-canary",
+            False,
+            (
+                "status=fail failure_domain=dokploy-worker-or-deployment-record "
+                "compose_id=cmp-canary public_url=https://route-canary.example.com "
+                "failed_steps=deployment-record:fail:deploy request did not produce a new record"
+            ),
+        )
+    ]
+    assert captured["host"] == "cloud.zitian.party"
+    assert captured["config"].ssh_host == "vps.example.com"
+    assert captured["config"].timeout_seconds == 30
+
+
 def test_custom_ssh_targets_preserve_mandatory_docker_health() -> None:
     """Infra-011.2: GitHub variable drift must not remove Docker health checks."""
     watchdog = _load_watchdog()
@@ -217,6 +312,13 @@ def test_main_sends_feishu_only_when_a_check_fails(monkeypatch) -> None:
         "run_worker_status_check",
         lambda _env, _timeout: [
             watchdog.CheckResult("cloudflare-worker-status", True, "fresh")
+        ],
+    )
+    monkeypatch.setattr(
+        watchdog,
+        "run_dokploy_route_canary_check",
+        lambda _env, ssh_config: [
+            watchdog.CheckResult("infra2-dokploy-route-canary", True, "pass")
         ],
     )
     monkeypatch.setattr(

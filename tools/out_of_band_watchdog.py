@@ -19,6 +19,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from libs.alerting import deliver_feishu_app_text, deliver_feishu_text  # noqa: E402
+from libs.dokploy import get_dokploy  # noqa: E402
+from libs.dokploy_route_canary import RouteCanaryConfig, run_route_canary  # noqa: E402
 
 DEFAULT_HTTP_TARGETS = """\
 infra2-public-entrypoint|https://cloud.zitian.party|200,302
@@ -324,6 +326,88 @@ def run_ssh_checks(
     return results
 
 
+def run_dokploy_route_canary_check(
+    env: Mapping[str, str],
+    *,
+    ssh_config: SshConfig | None,
+    runner=run_route_canary,
+    client_factory=get_dokploy,
+) -> list[CheckResult]:
+    """Run the Dokploy route canary as an out-of-band alert signal."""
+    if not env.get("DOKPLOY_API_KEY", "").strip():
+        return [
+            CheckResult(
+                "infra2-dokploy-route-canary",
+                False,
+                "DOKPLOY_API_KEY is missing",
+            )
+        ]
+
+    environment_id = env.get("DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID", "").strip()
+    if not environment_id:
+        return [
+            CheckResult(
+                "infra2-dokploy-route-canary",
+                False,
+                "DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID is missing",
+            )
+        ]
+
+    run_id = env.get("GITHUB_RUN_ID", "manual").strip() or "manual"
+    config = RouteCanaryConfig(
+        host=env.get("DOKPLOY_ROUTE_CANARY_HOST", "").strip()
+        or f"route-canary-watchdog-{run_id}.zitian.party",
+        environment_id=environment_id,
+        project=env.get("DOKPLOY_ROUTE_CANARY_PROJECT", "").strip() or "platform",
+        env=env.get("DOKPLOY_ROUTE_CANARY_ENV", "").strip() or "staging",
+        compose_name=env.get("DOKPLOY_ROUTE_CANARY_COMPOSE_NAME", "").strip()
+        or "dokploy-route-canary-watchdog",
+        timeout_seconds=int(
+            env.get("DOKPLOY_ROUTE_CANARY_TIMEOUT_SECONDS", "") or "90"
+        ),
+        interval_seconds=int(
+            env.get("DOKPLOY_ROUTE_CANARY_INTERVAL_SECONDS", "") or "5"
+        ),
+        ssh_host=ssh_config.host if ssh_config else "",
+        ssh_user=ssh_config.user if ssh_config else "root",
+        ssh_port=ssh_config.port if ssh_config else 22,
+        ssh_key_path=ssh_config.key_path if ssh_config else "",
+    )
+    try:
+        report = runner(
+            config,
+            client_factory(
+                host=env.get("DOKPLOY_ROUTE_CANARY_DOKPLOY_HOST", "").strip()
+                or "cloud.zitian.party"
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 - watchdog must turn exceptions into alerts.
+        return [
+            CheckResult(
+                "infra2-dokploy-route-canary",
+                False,
+                f"canary raised {type(exc).__name__}: {_one_line(str(exc))}",
+            )
+        ]
+
+    detail = (
+        f"status={report.status} failure_domain={report.failure_domain or 'none'} "
+        f"compose_id={report.compose_id or 'unknown'} public_url={report.public_url}"
+    )
+    if report.status == "pass":
+        return [CheckResult("infra2-dokploy-route-canary", True, detail)]
+
+    if report.steps:
+        failed_steps = [
+            f"{step.name}:{step.status}:{_one_line(step.detail)}"
+            for step in report.steps
+            if step.status != "pass"
+        ]
+        if failed_steps:
+            detail = f"{detail} failed_steps={' ; '.join(failed_steps)}"
+    return [CheckResult("infra2-dokploy-route-canary", False, detail)]
+
+
 def format_failure_message(results: list[CheckResult], *, run_url: str) -> str:
     """Build a Feishu message for failed out-of-band checks."""
     lines = [
@@ -353,6 +437,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
 
     results = run_http_checks(http_targets, timeout)
     results.extend(run_worker_status_check(current_env, timeout))
+    results.extend(run_dokploy_route_canary_check(current_env, ssh_config=ssh_config))
     results.extend(run_ssh_checks(ssh_config, ssh_targets))
 
     for result in results:
