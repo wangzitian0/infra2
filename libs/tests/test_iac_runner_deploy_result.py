@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 IAC_RUNNER = ROOT / "bootstrap/06.iac_runner"
 DEPLOY_PLATFORM_WORKFLOW = ROOT / ".github/workflows/deploy-platform.yml"
 BOOTSTRAP_DEPLOY_SCRIPT = ROOT / "scripts/deploy_iac_runner_bootstrap.sh"
+IAC_RUNNER_VAULT_POLICY = IAC_RUNNER / "vault-policy.hcl"
 DEPLOY_SHA = "a" * 40
 _nonce_counter = 0
 
@@ -146,6 +147,22 @@ def test_sync_result_classifies_missing_python_dependency(monkeypatch) -> None:
             "requirements.txt, then rerun the deployment."
         ),
     }
+
+
+def test_iac_runner_policy_can_repair_service_runtime_secrets() -> None:
+    """Infra-011.6: deploy sync can create/update missing runtime secret fields."""
+    policy = IAC_RUNNER_VAULT_POLICY.read_text(encoding="utf-8")
+
+    for path in (
+        'path "secret/data/platform/+/*"',
+        'path "secret/data/finance_report/+/*"',
+    ):
+        block = policy.split(path, 1)[1].split("}", 1)[0]
+        assert '"create"' in block
+        assert '"read"' in block
+        assert '"update"' in block
+        assert '"list"' in block
+        assert '"delete"' not in block
 
 
 def test_sync_result_truncates_large_service_output(monkeypatch) -> None:

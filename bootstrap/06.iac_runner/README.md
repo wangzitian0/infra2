@@ -60,7 +60,10 @@ export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token'
 invoke vault.setup-tokens
 ```
 
-This creates a read-only token for IaC Runner and auto-configures it in Dokploy.
+This creates a scoped deployment token for IaC Runner and auto-configures it in
+Dokploy. The token can read and repair platform/finance_report service runtime
+secret fields during sync, but it cannot delete secrets or mutate bootstrap root
+credentials.
 
 ### 3. Configure GitHub Webhook
 
