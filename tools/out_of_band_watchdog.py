@@ -361,12 +361,12 @@ def run_dokploy_route_canary_check(
     run_id = env.get("GITHUB_RUN_ID", "manual").strip() or "manual"
     config = RouteCanaryConfig(
         host=env.get("DOKPLOY_ROUTE_CANARY_HOST", "").strip()
-        or f"route-canary-watchdog-{run_id}.zitian.party",
+        or "route-canary-watchdog.zitian.party",
         environment_id=environment_id,
         project=env.get("DOKPLOY_ROUTE_CANARY_PROJECT", "").strip() or "platform",
         env=env.get("DOKPLOY_ROUTE_CANARY_ENV", "").strip() or "staging",
         compose_name=env.get("DOKPLOY_ROUTE_CANARY_COMPOSE_NAME", "").strip()
-        or f"dokploy-route-canary-watchdog-{run_id}",
+        or "dokploy-route-canary-watchdog",
         nonce=run_id,
         timeout_seconds=int(
             env.get("DOKPLOY_ROUTE_CANARY_TIMEOUT_SECONDS", "") or "180"
@@ -378,6 +378,7 @@ def run_dokploy_route_canary_check(
         ssh_user=ssh_config.user if ssh_config else "root",
         ssh_port=ssh_config.port if ssh_config else 22,
         ssh_key_path=ssh_config.key_path if ssh_config else "",
+        repair_stale_compose=True,
     )
     try:
         report = runner(

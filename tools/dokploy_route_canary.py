@@ -25,7 +25,9 @@ from libs.dokploy_route_canary import (  # noqa: E402
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", required=True, help="Public canary host")
-    parser.add_argument("--environment-id", required=True, help="Dokploy environment ID")
+    parser.add_argument(
+        "--environment-id", required=True, help="Dokploy environment ID"
+    )
     parser.add_argument("--project", default="platform")
     parser.add_argument("--env", default=None)
     parser.add_argument("--compose-name", default="dokploy-route-canary")
@@ -36,16 +38,25 @@ def main() -> int:
         default=os.getenv("DOKPLOY_ROUTE_CANARY_NONCE", ""),
         help="Non-sensitive deploy nonce label used to force materialized canary deploys",
     )
+    parser.add_argument(
+        "--repair-stale-compose",
+        action="store_true",
+        help="Delete and recreate only guarded route-canary compose assets after deploy/redeploy no-op",
+    )
     parser.add_argument("--timeout-seconds", type=int, default=90)
     parser.add_argument("--interval-seconds", type=int, default=5)
     parser.add_argument("--ssh-host", default=os.getenv("INFRA2_WATCHDOG_SSH_HOST", ""))
-    parser.add_argument("--ssh-user", default=os.getenv("INFRA2_WATCHDOG_SSH_USER", "root"))
+    parser.add_argument(
+        "--ssh-user", default=os.getenv("INFRA2_WATCHDOG_SSH_USER", "root")
+    )
     parser.add_argument(
         "--ssh-port",
         type=int,
         default=int(os.getenv("INFRA2_WATCHDOG_SSH_PORT", "22") or "22"),
     )
-    parser.add_argument("--ssh-key-path", default=os.getenv("INFRA2_WATCHDOG_SSH_KEY_PATH", ""))
+    parser.add_argument(
+        "--ssh-key-path", default=os.getenv("INFRA2_WATCHDOG_SSH_KEY_PATH", "")
+    )
     args = parser.parse_args()
 
     config = RouteCanaryConfig(
@@ -62,6 +73,7 @@ def main() -> int:
         ssh_user=args.ssh_user,
         ssh_port=args.ssh_port,
         ssh_key_path=args.ssh_key_path,
+        repair_stale_compose=args.repair_stale_compose,
     )
     client = get_dokploy(host=args.dokploy_host or None)
     report = run_route_canary(config, client)

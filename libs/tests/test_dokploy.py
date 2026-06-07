@@ -20,14 +20,41 @@ class TestDokployClient:
             assert providers == [{"provider": "github", "gitProviderId": "123"}]
             mock_request.assert_called_with("GET", "settings.gitProvider.all")
 
-    @patch("libs.dokploy.DokployClient.get_compose")
-    def test_get_compose_deployments(self, mock_get_compose):
+    @patch("libs.dokploy.DokployClient._request")
+    def test_get_compose_deployments(self, mock_request):
         with patch.dict(os.environ, {"DOKPLOY_API_KEY": "test-key"}):
             client = DokployClient()
-            mock_get_compose.return_value = {"deployments": [{"deploymentId": "d1"}]}
-            
+            mock_request.return_value = [{"deploymentId": "d1"}]
+
             deployments = client.get_compose_deployments("c1")
-            
+
+            assert deployments == [{"deploymentId": "d1"}]
+            mock_request.assert_called_with(
+                "GET", "deployment.allByCompose?composeId=c1"
+            )
+
+    @patch("libs.dokploy.DokployClient._request")
+    def test_get_compose_deployments_accepts_wrapped_response(self, mock_request):
+        with patch.dict(os.environ, {"DOKPLOY_API_KEY": "test-key"}):
+            client = DokployClient()
+            mock_request.return_value = {"deployments": [{"deploymentId": "d1"}]}
+
+            deployments = client.get_compose_deployments("c1")
+
+            assert deployments == [{"deploymentId": "d1"}]
+
+    @patch("libs.dokploy.DokployClient.get_compose")
+    @patch("libs.dokploy.DokployClient._request")
+    def test_get_compose_deployments_falls_back_to_compose_snapshot(
+        self, mock_request, mock_get_compose
+    ):
+        with patch.dict(os.environ, {"DOKPLOY_API_KEY": "test-key"}):
+            client = DokployClient()
+            mock_request.side_effect = RuntimeError("endpoint unavailable")
+            mock_get_compose.return_value = {"deployments": [{"deploymentId": "d1"}]}
+
+            deployments = client.get_compose_deployments("c1")
+
             assert deployments == [{"deploymentId": "d1"}]
             mock_get_compose.assert_called_with("c1")
 
@@ -35,10 +62,13 @@ class TestDokployClient:
     def test_get_latest_deployment(self, mock_get_depls):
         with patch.dict(os.environ, {"DOKPLOY_API_KEY": "test-key"}):
             client = DokployClient()
-            mock_get_depls.return_value = [{"deploymentId": "d1"}, {"deploymentId": "d2"}]
-            
+            mock_get_depls.return_value = [
+                {"deploymentId": "d1"},
+                {"deploymentId": "d2"},
+            ]
+
             latest = client.get_latest_deployment("c1")
-            
+
             assert latest == {"deploymentId": "d1"}
 
     @patch("libs.dokploy.DokployClient.get_compose")
@@ -46,28 +76,28 @@ class TestDokployClient:
     def test_get_deployment_log_path(self, mock_list_projects, mock_get_compose):
         with patch.dict(os.environ, {"DOKPLOY_API_KEY": "test-key"}):
             client = DokployClient()
-            mock_list_projects.return_value = [{
-                "environments": [{
-                    "compose": [{"composeId": "c1"}]
-                }]
-            }]
+            mock_list_projects.return_value = [
+                {"environments": [{"compose": [{"composeId": "c1"}]}]}
+            ]
             mock_get_compose.return_value = {
                 "deployments": [{"deploymentId": "target", "logPath": "/path/to/log"}]
             }
-            
+
             log_path = client.get_deployment_log_path("target")
-            
+
             assert log_path == "/path/to/log"
 
     @patch("libs.dokploy.DokployClient.get_compose_deployments")
     def test_get_deployment_log_path_with_hints(self, mock_get_depls):
         with patch.dict(os.environ, {"DOKPLOY_API_KEY": "test-key"}):
             client = DokployClient()
-            mock_get_depls.return_value = [{"deploymentId": "target", "logPath": "/hinted/path"}]
-            
+            mock_get_depls.return_value = [
+                {"deploymentId": "target", "logPath": "/hinted/path"}
+            ]
+
             # Using compose_id hint should trigger optimized path
             log_path = client.get_deployment_log_path("target", compose_id="c1")
-            
+
             assert log_path == "/hinted/path"
             mock_get_depls.assert_called_with("c1")
 

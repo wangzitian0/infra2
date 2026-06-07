@@ -50,6 +50,10 @@ class DokployLike(Protocol):
 
     def redeploy_compose(self, compose_id: str) -> dict: ...
 
+    def delete_compose(
+        self, compose_id: str, *, delete_volumes: bool = False
+    ) -> dict: ...
+
     def get_compose(self, compose_id: str) -> dict: ...
 
 
@@ -75,6 +79,7 @@ class RouteCanaryConfig:
     ssh_port: int = 22
     ssh_key_path: str = ""
     delete_after: bool = False
+    repair_stale_compose: bool = False
 
 
 @dataclass(frozen=True)
@@ -221,7 +226,7 @@ def run_route_canary(
             _step("compose-upsert", "fail", _safe_detail(exc), started, monotonic),
         )
 
-    before_ids = _deployment_ids(_safe_compose(client, compose_id))
+    before_ids = _deployment_ids(_safe_deployments(client, compose_id))
     started = monotonic()
     try:
         client.deploy_compose(compose_id)
@@ -247,7 +252,7 @@ def run_route_canary(
     )
     steps.append(deployment)
     if deployment.status != "pass":
-        before_ids = _deployment_ids(_safe_compose(client, compose_id))
+        before_ids = _deployment_ids(_safe_deployments(client, compose_id))
         started = monotonic()
         try:
             client.redeploy_compose(compose_id)
@@ -279,13 +284,80 @@ def run_route_canary(
         )
         steps.append(deployment)
         if deployment.status != "pass":
-            return RouteCanaryReport(
-                "fail",
-                "dokploy-worker-or-deployment-record",
-                compose_id,
-                public_url,
-                steps,
-            )
+            if config.repair_stale_compose:
+                repair_started = monotonic()
+                try:
+                    compose_id = _recreate_canary_compose(
+                        config,
+                        client,
+                        compose_id,
+                        compose_file=compose_file,
+                        env=env,
+                    )
+                    steps.append(
+                        _step(
+                            "compose-recreate",
+                            "pass",
+                            f"recreated stale canary compose {compose_id}",
+                            repair_started,
+                            monotonic,
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    return fail(
+                        "dokploy-control-plane",
+                        _step(
+                            "compose-recreate",
+                            "fail",
+                            _safe_detail(exc),
+                            repair_started,
+                            monotonic,
+                        ),
+                    )
+
+                before_ids = _deployment_ids(_safe_deployments(client, compose_id))
+                repair_started = monotonic()
+                try:
+                    client.deploy_compose(compose_id)
+                    steps.append(
+                        _step(
+                            "repair-deploy-trigger",
+                            "pass",
+                            "deploy request accepted after stale canary recreate",
+                            repair_started,
+                            monotonic,
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    return fail(
+                        "dokploy-control-plane",
+                        _step(
+                            "repair-deploy-trigger",
+                            "fail",
+                            _safe_detail(exc),
+                            repair_started,
+                            monotonic,
+                        ),
+                    )
+
+                deployment = _wait_for_new_deployment(
+                    client,
+                    compose_id,
+                    before_ids,
+                    timeout_seconds=config.timeout_seconds,
+                    interval_seconds=config.interval_seconds,
+                    sleeper=sleeper,
+                    monotonic=monotonic,
+                )
+                steps.append(deployment)
+            if deployment.status != "pass":
+                return RouteCanaryReport(
+                    "fail",
+                    "dokploy-worker-or-deployment-record",
+                    compose_id,
+                    public_url,
+                    steps,
+                )
 
     if config.ssh_host:
         docker_step = _probe_docker_containers(
@@ -317,6 +389,42 @@ def run_route_canary(
     return RouteCanaryReport("pass", "", compose_id, public_url, steps)
 
 
+def _recreate_canary_compose(
+    config: RouteCanaryConfig,
+    client: DokployLike,
+    compose_id: str,
+    *,
+    compose_file: str,
+    env: str,
+) -> str:
+    if not _is_repairable_canary_asset(config):
+        raise ValueError(
+            "stale compose repair is restricted to route-canary hosts and dokploy-route-canary compose names"
+        )
+    delete_compose = getattr(client, "delete_compose", None)
+    if not callable(delete_compose):
+        raise ValueError("Dokploy client does not support compose.delete")
+    delete_compose(compose_id, delete_volumes=False)
+    created = client.create_compose(
+        config.environment_id,
+        config.compose_name,
+        compose_file=compose_file,
+        env=env,
+        app_name=config.compose_name,
+        source_type="raw",
+    )
+    new_compose_id = str(created.get("composeId") or "")
+    if not new_compose_id:
+        raise ValueError("compose.delete repair created no composeId")
+    return new_compose_id
+
+
+def _is_repairable_canary_asset(config: RouteCanaryConfig) -> bool:
+    return safe_slug(config.host).startswith("route-canary") and safe_slug(
+        config.compose_name
+    ).startswith("dokploy-route-canary")
+
+
 def _wait_for_new_deployment(
     client: DokployLike,
     compose_id: str,
@@ -334,14 +442,12 @@ def _wait_for_new_deployment(
     while monotonic() <= deadline:
         attempts += 1
         data = _safe_compose(client, compose_id)
-        deployments = data.get("deployments")
-        current_ids = _deployment_ids(data)
+        deployments = _safe_deployments(client, compose_id, fallback_compose=data)
+        current_ids = _deployment_ids(deployments)
         new_ids = sorted(current_ids - previous_ids)
         last_summary = {
             "composeStatus": data.get("composeStatus") or data.get("status") or "",
-            "deployment_count": len(deployments)
-            if isinstance(deployments, list)
-            else 0,
+            "deployment_count": len(deployments),
             "new_deployment_ids": new_ids,
             "attempts": attempts,
         }
@@ -357,11 +463,11 @@ def _wait_for_new_deployment(
                     monotonic,
                     {**last_summary, "latest_status": latest_status},
                 )
-            if latest_status == "done":
+            if latest_status in {"running", "done", "success", "successful"}:
                 return _step(
                     "deployment-record",
                     "pass",
-                    "new deployment reached done",
+                    "new deployment reached running/done",
                     started,
                     monotonic,
                     {**last_summary, "latest_status": latest_status},
@@ -370,7 +476,7 @@ def _wait_for_new_deployment(
     return _step(
         "deployment-record",
         "fail",
-        "deploy request did not produce a new done deployment record",
+        "deploy request did not produce a new running/done deployment record",
         started,
         monotonic,
         last_summary,
@@ -549,14 +655,38 @@ def _safe_compose(client: DokployLike, compose_id: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _deployment_ids(compose: dict) -> set[str]:
+def _safe_deployments(
+    client: DokployLike,
+    compose_id: str,
+    *,
+    fallback_compose: dict | None = None,
+) -> list[dict]:
+    get_compose_deployments = getattr(client, "get_compose_deployments", None)
+    if callable(get_compose_deployments):
+        try:
+            deployments = get_compose_deployments(compose_id)
+            if isinstance(deployments, list):
+                return [item for item in deployments if isinstance(item, dict)]
+        except Exception:  # noqa: BLE001
+            pass
+    compose = (
+        fallback_compose
+        if fallback_compose is not None
+        else _safe_compose(client, compose_id)
+    )
     deployments = compose.get("deployments")
-    if not isinstance(deployments, list):
-        return set()
+    return (
+        [item for item in deployments if isinstance(item, dict)]
+        if isinstance(deployments, list)
+        else []
+    )
+
+
+def _deployment_ids(deployments: list[dict]) -> set[str]:
     return {
-        str(item.get("deploymentId"))
+        str(item.get("deploymentId") or item.get("id"))
         for item in deployments
-        if isinstance(item, dict) and item.get("deploymentId")
+        if item.get("deploymentId") or item.get("id")
     }
 
 
@@ -570,7 +700,7 @@ def _latest_deployment(
         item
         for item in deployments
         if isinstance(item, dict)
-        and str(item.get("deploymentId") or "") in deployment_ids
+        and str(item.get("deploymentId") or item.get("id") or "") in deployment_ids
     ]
     if not candidates:
         return {}

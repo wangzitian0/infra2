@@ -371,8 +371,7 @@ Required GitHub variables for Dokploy liveness:
 - `DOKPLOY_ROUTE_CANARY_DOKPLOY_HOST`: optional, defaults to
   `cloud.zitian.party`
 - `DOKPLOY_ROUTE_CANARY_COMPOSE_NAME`: optional, defaults to
-  `dokploy-route-canary-watchdog-<run>` so overlapping runs cannot overwrite
-  each other's Traefik labels.
+  `dokploy-route-canary-watchdog`
 - `DOKPLOY_ROUTE_CANARY_TIMEOUT_SECONDS`: optional, defaults to `180`
 - `DOKPLOY_ROUTE_CANARY_INTERVAL_SECONDS`: optional, defaults to `5`
 
@@ -467,7 +466,7 @@ The canary fails fast by assigning failures to one of these domains:
   the run did not prove the platform.
 - `dokploy-control-plane`: compose create/update or deploy request failed.
 - `dokploy-worker-or-deployment-record`: Dokploy accepted the request but no new
-  `done` deployment record appeared.
+  `running`/`done` deployment record appeared.
 - `docker-runtime`: expected containers or Traefik labels were not visible on
   the VPS when SSH inspection is configured.
 - `traefik-public-route`: deployment and containers exist, but the public web
@@ -494,16 +493,25 @@ the GitHub workflow reuses `route-canary.zitian.party` with the stable
 stable host/compose pairing prevents a fixed compose from carrying stale labels
 for a different run-scoped host. Each workflow run still injects a non-sensitive
 `infra2.route-canary.nonce` label so Dokploy must materialize a fresh deployment
-record; an accepted deploy/redeploy without a new record remains a hard
-`dokploy-worker-or-deployment-record` failure. Missing
+record. Deployment record proof reads Dokploy's compose deployment listing API
+first and uses the compose detail's embedded deployment snapshot only as a
+compatibility fallback, because the compose detail payload can lag the runtime
+deployment history. An accepted deploy/redeploy without a new record remains a
+hard `dokploy-worker-or-deployment-record` failure unless the caller explicitly
+enables stale canary repair. Stale repair is restricted to hosts whose slug
+starts with `route-canary` and compose names whose slug starts with
+`dokploy-route-canary`; it deletes the canary compose without volumes,
+recreates it from the same rendered compose, and still requires a fresh
+deployment record before probing Docker or public routes. Missing
 environment configuration is a fail-closed `dokploy-canary-configuration`
 result, never a skipped success, because an unconfigured scheduled canary cannot
 protect app previews. Manual runs use the same rule unless `environment_id` is
 provided as a workflow input or repository variable. SSH inspection is optional
-and uses the existing watchdog SSH secrets when configured. The workflow default
-compose name is `dokploy-route-canary-<run>`, matching the run-scoped default
-host, so a concurrent canary cannot update a shared compose and leave an older
-run probing a host whose labels were replaced.
+and uses the existing watchdog SSH secrets when configured. The GitHub workflow
+uses its concurrency group to serialize the stable canary compose per
+project/environment; live run-scoped compose creation currently does not
+reliably materialize Dokploy deployment records, so run-scoped names are not the
+default guard path.
 
 Every run writes a GitHub step summary with the canary status, failure domain,
 compose ID, public URL, and each phase's evidence. App staging and preview gates
