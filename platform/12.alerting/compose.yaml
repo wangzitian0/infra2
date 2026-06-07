@@ -124,6 +124,10 @@ services:
       INFRA_PROBE_INTERVAL_SECONDS: ${INFRA_PROBE_INTERVAL_SECONDS:-600}
       INFRA_PROBE_RENOTIFY_SECONDS: ${INFRA_PROBE_RENOTIFY_SECONDS:-3600}
       INFRA_PROBE_STATE_FILE: /tmp/infra_probe_runner_state.json
+      INFRA_PROBE_HEARTBEAT_URL: ${INFRA_PROBE_HEARTBEAT_URL:-}
+      INFRA_PROBE_HEARTBEAT_TOKEN: ${INFRA_PROBE_HEARTBEAT_TOKEN:-}
+      INFRA_PROBE_HEARTBEAT_ENV: ${ENV:-production}
+      INFRA_PROBE_HEARTBEAT_NAME: platform-alerting-probes${ENV_SUFFIX}
       INFRA_PROBE_SPECS: |
         dokploy-internal-http|http|http://dokploy:3000|200,302|critical|5
         vault-internal-http|http|http://vault:8200/v1/sys/health|200,429,472,473|critical|5

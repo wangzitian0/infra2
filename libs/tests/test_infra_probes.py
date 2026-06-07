@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 from pathlib import Path
 
@@ -301,3 +302,67 @@ def test_probe_runner_posts_public_route_alerts_separately(monkeypatch, tmp_path
     assert len(posted) == 1
     assert posted[0]["commonLabels"]["alertname"] == "InfraPublicRouteProbeFailed"
     assert posted[0]["commonLabels"]["severity"] == "warning"
+
+
+def test_probe_runner_posts_cloudflare_watchdog_heartbeat(monkeypatch, tmp_path) -> None:
+    """Infra-011.2: the external watchdog can detect a stopped probe runner."""
+    runner = _load_probe_runner()
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return b"ok"
+
+    def fake_urlopen(request, *, timeout):
+        captured["url"] = request.full_url
+        captured["authorization"] = request.get_header("Authorization")
+        captured["content_type"] = request.get_header("Content-type")
+        captured["timeout"] = timeout
+        captured["payload"] = json.loads(request.data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setenv("INFRA_PROBE_SPECS", "vault|http|http://vault|200")
+    monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
+    monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_URL", "https://watchdog.example/heartbeat")
+    monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_TOKEN", "heartbeat-token")
+    monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_ENV", "staging")
+    monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_NAME", "platform-alerting-probes-staging")
+    monkeypatch.setattr(
+        runner,
+        "run_probes",
+        lambda specs: [probes.run_probe(specs[0], http_get=lambda *_args: (200, "ok"))],
+    )
+    monkeypatch.setattr(runner, "urlopen", fake_urlopen)
+    monkeypatch.setattr(runner.time, "time", lambda: 12345)
+
+    assert runner.run_once(state_path=tmp_path / "probe-state.json") == 0
+
+    assert captured == {
+        "url": "https://watchdog.example/heartbeat",
+        "authorization": "Bearer heartbeat-token",
+        "content_type": "application/json",
+        "timeout": 5.0,
+        "payload": {
+            "detail": "probe loop completed",
+            "env": "staging",
+            "name": "platform-alerting-probes-staging",
+            "ok": True,
+            "timestamp": 12345,
+        },
+    }
+
+
+def test_probe_runner_heartbeat_is_configured_in_alerting_compose() -> None:
+    """Infra-011.2: prod/staging alerting deployments can publish heartbeats."""
+    compose = (ROOT / "platform/12.alerting/compose.yaml").read_text(encoding="utf-8")
+
+    assert "INFRA_PROBE_HEARTBEAT_URL: ${INFRA_PROBE_HEARTBEAT_URL:-}" in compose
+    assert "INFRA_PROBE_HEARTBEAT_TOKEN: ${INFRA_PROBE_HEARTBEAT_TOKEN:-}" in compose
+    assert "INFRA_PROBE_HEARTBEAT_ENV: ${ENV:-production}" in compose
+    assert "INFRA_PROBE_HEARTBEAT_NAME: platform-alerting-probes${ENV_SUFFIX}" in compose
