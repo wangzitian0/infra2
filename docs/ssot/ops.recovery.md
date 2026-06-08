@@ -144,6 +144,35 @@ BACKUP_REMOTE=r2:infra2 uv run python tools/backup_runner.py \
 `rclone` remote credentials must live on the host or in 1Password-managed
 runtime configuration. They must not be committed to this repository.
 
+### SOP-006: On-host scheduled backup runner (logical dumps)
+
+`tools/host_backup.sh` is the on-host scheduled backup runner. Unlike the
+inventory archiver, it produces **restorable logical backups**:
+
+- Postgres services: `pg_dumpall` via `docker exec` (crash-consistent).
+- Redis services: `redis-cli SAVE` (best-effort) then archive `dump.rdb`.
+- Other data paths: gzip tar.
+
+It writes a `tools/backup_verification.py`-compatible manifest and, when
+`BACKUP_REMOTE` (an rclone target) is set, uploads each archive off-host. Local
+retention keeps the most recent `BACKUP_KEEP` (default 7) run directories.
+
+Scheduled on the host via crontab:
+
+```cron
+30 3 * * * /usr/local/sbin/infra2-host-backup.sh >> /var/log/infra2-backup.log 2>&1
+45 3 * * * ENV_SUFFIX=-staging /usr/local/sbin/infra2-host-backup.sh >> /var/log/infra2-backup-staging.log 2>&1
+```
+
+> **OFF-HOST STATUS**: on-host logical backups are live and scheduled, but
+> off-host upload is **inactive until R2 S3 credentials are provisioned**.
+> A single-VPS host loss currently loses both data and on-host backups. To
+> activate off-host durability: create a Cloudflare R2 access key/secret, store
+> it in 1Password (`bootstrap/cloudflare` or a dedicated `bootstrap/r2` item),
+> install `rclone` + an `r2:` remote on the host, then set `BACKUP_REMOTE=r2:infra2`
+> in the cron entries. The off-host manifest is then verified with SOP-004.
+
+
 ---
 
 ## 5. 验证与测试 (The Proof)

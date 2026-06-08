@@ -140,6 +140,8 @@ services:
         platform-postgres-tcp|tcp|platform-postgres${ENV_SUFFIX}:5432|connected|critical|5
         platform-redis-tcp|tcp|platform-redis${ENV_SUFFIX}:6379|connected|critical|5
         clickhouse-http|http|http://platform-clickhouse${ENV_SUFFIX}:8123/ping|200|critical|5
+        op-connect-http|http|http://op-connect-api:8080/health|200|critical|5
+        iac-runner-http|http|http://iac-runner:8080/health|200|warning|5
     volumes:
       - secrets:/secrets:ro
     networks:
