@@ -248,13 +248,14 @@ def test_dokploy_route_canary_check_uses_run_scoped_default_host_and_compose() -
             True,
             (
                 "status=pass failure_domain=none compose_id=cmp-canary "
-                "public_url=https://route-canary-watchdog-123.zitian.party"
+                "public_url=https://route-canary-watchdog.zitian.party"
             ),
         )
     ]
-    assert captured["config"].host == "route-canary-watchdog-123.zitian.party"
-    assert captured["config"].compose_name == "dokploy-route-canary-watchdog-123"
+    assert captured["config"].host == "route-canary-watchdog.zitian.party"
+    assert captured["config"].compose_name == "dokploy-route-canary-watchdog"
     assert captured["config"].nonce == "123"
+    assert captured["config"].repair_stale_compose is True
 
 
 def test_dokploy_route_canary_check_reports_worker_failure_domain() -> None:
@@ -314,12 +315,12 @@ def test_dokploy_route_canary_check_reports_worker_failure_domain() -> None:
     ]
     assert captured["host"] == "cloud.zitian.party"
     assert captured["config"].ssh_host == "vps.example.com"
-    assert captured["config"].compose_name == "dokploy-route-canary-watchdog-123"
+    assert captured["config"].compose_name == "dokploy-route-canary-watchdog"
     assert captured["config"].timeout_seconds == 30
 
 
-def test_dokploy_route_canary_check_uses_isolated_default_name_and_timeout() -> None:
-    """Infra-011.9: OOB canary defaults avoid route-label races and slow deploys."""
+def test_dokploy_route_canary_check_uses_stable_default_name_and_timeout() -> None:
+    """Infra-011.9: OOB canary defaults match the stable guarded test asset."""
     watchdog = _load_watchdog()
     captured = {}
 
@@ -330,7 +331,7 @@ def test_dokploy_route_canary_check_uses_isolated_default_name_and_timeout() -> 
             status="pass",
             failure_domain="",
             compose_id="cmp-canary",
-            public_url="https://route-canary-watchdog-manual.zitian.party",
+            public_url="https://route-canary-watchdog.zitian.party",
             steps=[],
         )
 
@@ -345,8 +346,8 @@ def test_dokploy_route_canary_check_uses_isolated_default_name_and_timeout() -> 
     )
 
     assert results[0].ok is True
-    assert captured["config"].host == "route-canary-watchdog-manual.zitian.party"
-    assert captured["config"].compose_name == "dokploy-route-canary-watchdog-manual"
+    assert captured["config"].host == "route-canary-watchdog.zitian.party"
+    assert captured["config"].compose_name == "dokploy-route-canary-watchdog"
     assert captured["config"].timeout_seconds == 180
 
 

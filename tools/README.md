@@ -67,8 +67,13 @@ python tools/dokploy_route_canary.py \
   --environment-id="$DOKPLOY_ENVIRONMENT_ID" \
   --project platform \
   --env staging \
-  --dokploy-host cloud.zitian.party
+  --dokploy-host cloud.zitian.party \
+  --repair-stale-compose
 ```
+
+`--repair-stale-compose` is restricted to `route-canary*` hosts and
+`dokploy-route-canary*` compose names. GitHub canary runs default to the stable
+canary host/compose and rely on workflow concurrency to avoid overlap.
 
 ## out_of_band_watchdog.py
 

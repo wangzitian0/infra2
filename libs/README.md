@@ -91,6 +91,7 @@ db_pass = config.get_secret("POSTGRES_PASSWORD")
 - `check_service()` uses the `CONTAINERS` mapping; SigNoz runs as `platform-signoz`.
 - Non-production requires `DATA_PATH` or `ENV_SUFFIX` unless `ALLOW_SHARED_DATA_PATH=1` is set.
 - `DokployClient.update_compose_env()` parses basic `KEY=VALUE` lines only (no quoted/escaped/multiline values).
+- Dokploy deployment proof uses `deployment.allByCompose` before falling back to embedded compose snapshots.
 - Dokploy API errors include method + endpoint context via `httpx` exceptions.
 - `VaultSecrets` reads `VAULT_ROOT_TOKEN` and `VAULT_ADDR` (or falls back to `https://vault.$INTERNAL_DOMAIN`).
 

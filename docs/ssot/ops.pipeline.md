@@ -258,9 +258,11 @@ compose/env text change.
 
 Dokploy accepting a deploy request is not sufficient proof that runtime changed.
 After each generic compose deploy, the deployer records the existing deployment
-IDs, requires a new `done` deployment record, retries once with
-`compose.redeploy` when `compose.deploy` is a no-op, and fails the sync if both
-attempts leave the deployment list unchanged.
+IDs from Dokploy's compose deployment listing API, requires a new
+`running`/`done` deployment record, retries once with `compose.redeploy` when
+`compose.deploy` is a no-op, and fails the sync if both attempts leave the
+deployment list unchanged. The compose detail's embedded deployment snapshot is
+only a compatibility fallback.
 
 ### 4.5 服务映射规则
 

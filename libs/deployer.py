@@ -584,7 +584,9 @@ class Deployer:
             )
         )
 
-        before_ids = cls._deployment_ids(client.get_compose(compose_id))
+        before_ids = cls._deployment_ids(
+            cls._get_compose_deployments(client, compose_id)
+        )
         client.deploy_compose(compose_id)
         if cls._wait_for_new_deployment_record(
             client, compose_id, before_ids, timeout, interval
@@ -594,7 +596,9 @@ class Deployer:
         warning(
             "Dokploy deploy did not produce a new deployment record; retrying with compose.redeploy"
         )
-        before_ids = cls._deployment_ids(client.get_compose(compose_id))
+        before_ids = cls._deployment_ids(
+            cls._get_compose_deployments(client, compose_id)
+        )
         client.redeploy_compose(compose_id)
         if cls._wait_for_new_deployment_record(
             client, compose_id, before_ids, timeout, interval
@@ -607,15 +611,28 @@ class Deployer:
         )
 
     @staticmethod
-    def _deployment_ids(compose: dict) -> set[str]:
-        deployments = compose.get("deployments")
-        if not isinstance(deployments, list):
-            return set()
+    def _deployment_ids(deployments: list[dict]) -> set[str]:
         return {
             str(deployment.get("deploymentId") or deployment.get("id") or "")
             for deployment in deployments
             if deployment.get("deploymentId") or deployment.get("id")
         }
+
+    @staticmethod
+    def _get_compose_deployments(client: Any, compose_id: str) -> list[dict]:
+        get_compose_deployments = getattr(client, "get_compose_deployments", None)
+        if callable(get_compose_deployments):
+            try:
+                deployments = get_compose_deployments(compose_id)
+            except Exception:  # noqa: BLE001 - keep compose snapshot as compatibility fallback.
+                deployments = client.get_compose(compose_id).get("deployments")
+        else:
+            deployments = client.get_compose(compose_id).get("deployments")
+        return (
+            [deployment for deployment in deployments if isinstance(deployment, dict)]
+            if isinstance(deployments, list)
+            else []
+        )
 
     @classmethod
     def _wait_for_new_deployment_record(
@@ -628,9 +645,8 @@ class Deployer:
     ) -> bool:
         deadline = time.monotonic() + max(0, timeout_seconds)
         while True:
-            compose = client.get_compose(compose_id)
-            deployments = compose.get("deployments")
-            current_ids = cls._deployment_ids(compose)
+            deployments = cls._get_compose_deployments(client, compose_id)
+            current_ids = cls._deployment_ids(deployments)
             new_ids = current_ids - previous_ids
             if new_ids and isinstance(deployments, list):
                 for deployment in deployments:

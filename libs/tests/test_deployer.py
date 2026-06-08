@@ -43,6 +43,24 @@ class FakeDokployDeployments:
         return {"deployments": []}
 
 
+class FakeDokployDeploymentApi(FakeDokployDeployments):
+    def __init__(self, compose_snapshots, deployment_api_snapshots):
+        super().__init__(compose_snapshots)
+        self.deployment_api_snapshots = list(deployment_api_snapshots)
+
+    def get_compose_deployments(self, compose_id):
+        assert compose_id == "compose-1"
+        if self.deployment_api_snapshots:
+            return self.deployment_api_snapshots.pop(0)
+        return []
+
+
+class FakeDokployDeploymentApiFailure(FakeDokployDeployments):
+    def get_compose_deployments(self, compose_id):
+        assert compose_id == "compose-1"
+        raise RuntimeError("deployment endpoint unavailable")
+
+
 def _load_deploy_module(relative_path: str, module_name: str):
     path = ROOT / relative_path
     spec = importlib.util.spec_from_file_location(module_name, path)
@@ -151,6 +169,64 @@ def test_deploy_compose_redeploys_when_dokploy_accepts_noop_deploy(monkeypatch):
 
     assert client.deploy_calls == 1
     assert client.redeploy_calls == 1
+
+
+def test_deploy_compose_uses_deployment_api_when_compose_snapshot_is_stale(monkeypatch):
+    """Infra-011.11: deploy proof must use deployment.allByCompose when available."""
+    import libs.deployer as deployer
+    from libs.deployer import Deployer
+
+    monkeypatch.setattr(deployer.time, "sleep", lambda _seconds: None)
+    client = FakeDokployDeploymentApi(
+        compose_snapshots=[
+            [{"deploymentId": "old", "status": "done"}],
+            [{"deploymentId": "old", "status": "done"}],
+        ],
+        deployment_api_snapshots=[
+            [{"deploymentId": "old", "status": "done"}],
+            [
+                {"deploymentId": "old", "status": "done"},
+                {"deploymentId": "new", "status": "running"},
+            ],
+        ],
+    )
+
+    Deployer._deploy_compose_with_record_check(
+        client,
+        "compose-1",
+        timeout_seconds=0,
+        interval_seconds=1,
+    )
+
+    assert client.deploy_calls == 1
+    assert client.redeploy_calls == 0
+
+
+def test_deploy_compose_falls_back_when_deployment_api_fails(monkeypatch):
+    """Infra-011.11: deploy proof keeps compose snapshot as compatibility fallback."""
+    import libs.deployer as deployer
+    from libs.deployer import Deployer
+
+    monkeypatch.setattr(deployer.time, "sleep", lambda _seconds: None)
+    client = FakeDokployDeploymentApiFailure(
+        [
+            [{"deploymentId": "old", "status": "done"}],
+            [
+                {"deploymentId": "old", "status": "done"},
+                {"deploymentId": "new", "status": "running"},
+            ],
+        ]
+    )
+
+    Deployer._deploy_compose_with_record_check(
+        client,
+        "compose-1",
+        timeout_seconds=0,
+        interval_seconds=1,
+    )
+
+    assert client.deploy_calls == 1
+    assert client.redeploy_calls == 0
 
 
 def test_deploy_compose_fails_when_redeploy_has_no_runtime_record(monkeypatch):
