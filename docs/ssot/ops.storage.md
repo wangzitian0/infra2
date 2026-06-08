@@ -12,7 +12,7 @@
 | **Postgres 数据目录** | `platform/01.postgres/compose.yaml` | `${DATA_PATH}` (e.g., `/data/platform/postgres${ENV_SUFFIX}`) |
 | **Redis 数据目录** | `platform/02.redis/compose.yaml` | `${DATA_PATH}` (e.g., `/data/platform/redis${ENV_SUFFIX}`) |
 | **Vault 数据目录** | `bootstrap/05.vault/compose.yaml` | `/data/bootstrap/vault` |
-| **备份归档** | **Cloudflare R2** | 异地冷备（规划中） |
+| **备份归档** | **Cloudflare R2** | 异地冷备（off-host）。清单见 [`ops.backup-inventory.yaml`](./ops.backup-inventory.yaml)，调度见 `.github/workflows/backup.yml`，验证见 [`ops.recovery.md`](./ops.recovery.md) SOP-004/005 |
 
 ---
 

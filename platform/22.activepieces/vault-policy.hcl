@@ -1,9 +1,11 @@
-# Activepieces needs access to its own secrets
+# Activepieces reads its own rendered secrets at runtime via vault-agent.
+# Writes/rotation are performed by the IaC runner and root-token setup, not by
+# this service token, so the runtime policy is read-only (least privilege).
 path "secret/data/platform/{{env}}/activepieces" {
-  capabilities = ["create", "read", "update", "delete", "list"]
+  capabilities = ["read", "list"]
 }
 path "secret/metadata/platform/{{env}}/activepieces" {
-  capabilities = ["list", "read", "delete"]
+  capabilities = ["list", "read"]
 }
 
 # Activepieces needs to read Postgres and Redis credentials

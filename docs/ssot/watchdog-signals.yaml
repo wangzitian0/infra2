@@ -161,6 +161,42 @@ signals:
     cadence: 60s
     alert_threshold: 3 consecutive failures
 
+  - signal_id: production.1password.internal-http
+    environment: production
+    component: 1password-connect
+    signal: op-connect-http
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: staging.1password.internal-http
+    environment: staging
+    component: 1password-connect
+    signal: op-connect-http
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: production.iac_runner.internal-http
+    environment: production
+    component: iac-runner
+    signal: iac-runner-http
+    primary_owner: internal
+    severity: warning
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: staging.iac_runner.internal-http
+    environment: staging
+    component: iac-runner
+    signal: iac-runner-http
+    primary_owner: internal
+    severity: warning
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
   - signal_id: staging.clickhouse.http
     environment: staging
     component: clickhouse

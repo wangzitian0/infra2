@@ -93,9 +93,9 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
 
 | Layer | Component | Signal | Severity | Status |
 |------|-----------|--------|----------|--------|
-| L1 Bootstrap | 1Password Connect | `/health` is not active or sync is not active | P0 | Planned |
+| L1 Bootstrap | 1Password Connect | `/health` is not active or sync is not active | P0 | Live via infra probe (`op-connect-http`) |
 | L1 Bootstrap | Vault | sealed, unreachable, or token validation fails | P0 | Live via infra probe + vault audit |
-| L1 Bootstrap | IaC Runner | `/health` fails before deployment webhook calls | P1 | Planned |
+| L1 Bootstrap | IaC Runner | `/health` fails before deployment webhook calls | P1 | Live via infra probe (`iac-runner-http`) |
 | L1 Bootstrap | Dokploy | deployment control-plane API/UI is unreachable or deployment webhooks fail; app health alerts remain app-owned | P1 | Live via infra probe |
 | Cross-cutting | Docker container health | any running container is `unhealthy`, `health: starting`, or `Restarting` outside a deployment window | P0/P1 | Live via out-of-band watchdog SSH check |
 | L2 Platform | platform Postgres | TCP readiness fails or restart loop | P0 | Live via infra probe |

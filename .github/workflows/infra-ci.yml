@@ -121,6 +121,26 @@ jobs:
           cd ${{ github.workspace }}
           uv run python -P -m pytest libs/tests -q
 
+      - name: Gate watchdog signal consistency
+        run: |
+          cd ${{ github.workspace }}
+          uv run python tools/watchdog_consistency_audit.py
+
+      - name: Gate backup inventory covers registered data paths
+        run: |
+          cd ${{ github.workspace }}
+          uv run python -c "
+          from libs.backup_verification import load_backup_inventory
+          entries = load_backup_inventory()
+          assert entries, 'Backup inventory must not be empty'
+          ids = [e.service_id for e in entries]
+          assert len(ids) == len(set(ids)), 'Duplicate backup service_id'
+          for e in entries:
+              assert e.data_path.startswith('/data/'), f'{e.service_id} data_path must live under /data/'
+              assert e.method, f'{e.service_id} missing backup method'
+          print(f'✅ Backup inventory covers {len(ids)} services')
+          "
+
   test-1password-healthcheck:
     name: Test 1Password Healthcheck
     runs-on: ubuntu-latest

@@ -829,14 +829,41 @@ class Deployer:
         # Deploy
         try:
             compose_id = cls.composing(c, env_vars_dict)
-            success(f"{cls.service}: deployed with hash {local_hash}")
-            return {
-                "action": "updated" if remote_hash else "created",
-                "details": f"composeId: {compose_id}",
-            }
         except Exception as exc:
             error(f"Deploy failed: {exc}")
             return {"action": "failed", "details": str(exc)}
+
+        # Post-deploy verification: confirm Dokploy's effective compose env now
+        # carries the intended IAC_CONFIG_HASH. This fails closed on the stale-env
+        # failure mode where a deploy is accepted but the effective config does
+        # not advance to the deployed revision.
+        try:
+            effective_hash = cls.get_remote_config_hash()
+        except Exception as exc:  # noqa: BLE001 - verification must not crash the task.
+            error(f"Post-deploy verification could not read effective config: {exc}")
+            return {
+                "action": "failed",
+                "details": f"Post-deploy verification failed: {exc}",
+            }
+        if effective_hash != local_hash:
+            error(
+                "Post-deploy verification failed: effective IAC_CONFIG_HASH is stale "
+                f"(expected {local_hash}, got {effective_hash or 'none'})"
+            )
+            return {
+                "action": "failed",
+                "details": (
+                    "Effective remote config is stale after deploy "
+                    f"(expected {local_hash}, got {effective_hash or 'none'}); "
+                    "runtime may still be running prior config"
+                ),
+            }
+
+        success(f"{cls.service}: deployed with hash {local_hash}")
+        return {
+            "action": "updated" if remote_hash else "created",
+            "details": f"composeId: {compose_id}",
+        }
 
 
 def make_tasks(deployer_cls: type[Deployer], shared_tasks: Any) -> dict:
