@@ -58,8 +58,8 @@ invoke dokploy.env-ensure --project=platform --env=staging --description="stagin
 
 Dynamic route materialization proof for the Dokploy platform. It deploys a
 minimal same-host web/API compose and returns JSON that classifies failures as
-control plane, deployment record/worker, Docker runtime, or public Traefik route
-failures.
+control plane, compose source-type drift, deployment record/worker, Docker
+runtime, or public Traefik route failures.
 
 ```bash
 python tools/dokploy_route_canary.py \
@@ -72,7 +72,8 @@ python tools/dokploy_route_canary.py \
 ```
 
 `--repair-stale-compose` is restricted to `route-canary*` hosts and
-`dokploy-route-canary*` compose names. GitHub canary runs default to the stable
+`dokploy-route-canary*` compose names. Repaired composes are normalized back to
+`sourceType=raw` before redeploying. GitHub canary runs default to the stable
 canary host/compose and rely on workflow concurrency to avoid overlap.
 
 ## out_of_band_watchdog.py

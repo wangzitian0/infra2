@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 from libs.dokploy_route_canary import (
     RouteCanaryConfig,
+    _http_get,
     render_github_summary,
     render_canary_compose,
     run_route_canary,
@@ -32,18 +34,32 @@ class FakeDokploy:
         self.compose_id = "cmp-canary"
         self.deployments = deployments or [[]]
         self.get_calls = 0
+        self.source_type = "raw"
+        self.compose_status = "done"
         self.updated = False
+        self.update_calls: list[dict] = []
         self.deployed = False
         self.redeployed = False
 
     def find_compose_by_name(self, *_args, **_kwargs) -> dict | None:
         return None
 
-    def create_compose(self, *_args, **_kwargs) -> dict:
+    def create_compose(self, *_args, **kwargs) -> dict:
+        self.source_type = kwargs.get("source_type") or self.source_type
         return {"composeId": self.compose_id}
 
-    def update_compose(self, *_args, **_kwargs) -> dict:
+    def update_compose(self, compose_id, compose_file=None, env=None, source_type=None):
         self.updated = True
+        if source_type:
+            self.source_type = source_type
+        self.update_calls.append(
+            {
+                "compose_id": compose_id,
+                "compose_file": compose_file,
+                "env": env,
+                "source_type": source_type,
+            }
+        )
         return {"ok": True}
 
     def deploy_compose(self, _compose_id: str) -> dict:
@@ -58,7 +74,10 @@ class FakeDokploy:
         index = min(self.get_calls, len(self.deployments) - 1)
         self.get_calls += 1
         return {
-            "composeStatus": "done",
+            "composeStatus": self.compose_status,
+            "composeType": "docker-compose",
+            "sourceType": self.source_type,
+            "appName": "dokploy-route-canary",
             "deployments": self.deployments[index],
         }
 
@@ -95,12 +114,14 @@ class FakeRepairableDokploy(FakeDokployDeploymentApi):
         )
         self.create_calls = 0
         self.deleted: list[tuple[str, bool]] = []
+        self.source_type = "github"
 
     def find_compose_by_name(self, *_args, **_kwargs) -> dict | None:
         return {"composeId": "cmp-stale", "name": "dokploy-route-canary"}
 
     def create_compose(self, *_args, **_kwargs) -> dict:
         self.create_calls += 1
+        self.source_type = "github"
         return {"composeId": "cmp-recreated"}
 
     def delete_compose(self, compose_id: str, *, delete_volumes: bool = False) -> dict:
@@ -329,6 +350,8 @@ def test_canary_repairs_guarded_stale_compose_after_deploy_noop() -> None:
     assert report.compose_id == "cmp-recreated"
     assert client.deleted == [("cmp-stale", False)]
     assert client.create_calls == 1
+    assert client.update_calls[-1]["compose_id"] == "cmp-recreated"
+    assert client.update_calls[-1]["source_type"] == "raw"
     assert [step.name for step in report.steps] == [
         "compose-upsert",
         "deploy-trigger",
@@ -340,6 +363,69 @@ def test_canary_repairs_guarded_stale_compose_after_deploy_noop() -> None:
         "deployment-record",
         "public-routes",
     ]
+
+
+def test_canary_fails_fast_with_source_type_evidence_for_github_compose() -> None:
+    """Infra-011.9: provider drift is classified before opaque worker polling."""
+    clock = FakeClock()
+    client = FakeDokploy(
+        deployments=[
+            [
+                {
+                    "deploymentId": "old",
+                    "status": "error",
+                    "logPath": "/etc/dokploy/logs/canary/error.log",
+                    "createdAt": "2026-01-01",
+                    "errorMessage": "Github Provider not found",
+                }
+            ]
+        ]
+    )
+    client.source_type = "github"
+    client.compose_status = "error"
+
+    def create_keeps_github(*_args, **_kwargs):
+        return {"composeId": client.compose_id}
+
+    def update_keeps_github(compose_id, compose_file=None, env=None, source_type=None):
+        client.updated = True
+        client.update_calls.append(
+            {
+                "compose_id": compose_id,
+                "compose_file": compose_file,
+                "env": env,
+                "source_type": source_type,
+            }
+        )
+        return {"ok": True}
+
+    client.create_compose = create_keeps_github
+    client.update_compose = update_keeps_github
+    config = RouteCanaryConfig(
+        host="route-canary.example.com",
+        environment_id="env-1",
+        timeout_seconds=15,
+        interval_seconds=5,
+    )
+
+    report = run_route_canary(
+        config,
+        client,
+        sleeper=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+
+    assert report.status == "fail"
+    assert report.failure_domain == "dokploy-compose-source-type"
+    assert report.steps[2].name == "deployment-record"
+    assert report.steps[2].data["sourceType"] == "github"
+    assert report.steps[2].data["composeStatus"] == "error"
+    assert report.steps[2].data["latest_deployment_status"] == "error"
+    assert report.steps[2].data["latest_deployment_logPath"].endswith("error.log")
+    summary = render_github_summary(report)
+    assert "dokploy-compose-source-type" in summary
+    assert "sourceType" in summary
+    assert "latest_deployment_logPath" in summary
 
 
 def test_canary_repair_refuses_non_canary_assets() -> None:
@@ -401,6 +487,22 @@ def test_canary_classifies_public_route_failure_after_deployment() -> None:
     assert report.steps[-1].name == "public-routes"
     assert report.steps[-1].data["web_status"] == 404
     assert report.steps[-1].data["api_status"] == 404
+
+
+def test_canary_public_route_timeout_becomes_probe_evidence() -> None:
+    """Infra-011.9: public route read timeouts must not crash before summary output."""
+    with patch(
+        "libs.dokploy_route_canary.urlopen",
+        side_effect=TimeoutError("The read operation timed out"),
+    ):
+        status, body = _http_get(
+            "https://route-canary.example.com/",
+            timeout=0.1,
+            http_get=None,
+        )
+
+    assert status == 0
+    assert "timed out" in body
 
 
 def test_canary_passes_after_deployment_containers_and_public_routes() -> None:

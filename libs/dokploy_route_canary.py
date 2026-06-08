@@ -189,6 +189,7 @@ def run_route_canary(
         )
         if existing:
             compose_id = str(existing["composeId"])
+            previous_source_type = str(existing.get("sourceType") or "")
             client.update_compose(
                 compose_id,
                 compose_file=compose_file,
@@ -197,6 +198,7 @@ def run_route_canary(
             )
             detail = f"updated compose {compose_id}"
         else:
+            previous_source_type = ""
             created = client.create_compose(
                 config.environment_id,
                 config.compose_name,
@@ -219,7 +221,20 @@ def run_route_canary(
                 "dokploy-control-plane",
                 CanaryStep("compose-upsert", "fail", "missing composeId"),
             )
-        steps.append(_step("compose-upsert", "pass", detail, started, monotonic))
+        steps.append(
+            _step(
+                "compose-upsert",
+                "pass",
+                detail,
+                started,
+                monotonic,
+                {
+                    "compose_id": compose_id,
+                    "requested_sourceType": "raw",
+                    "previous_sourceType": previous_source_type,
+                },
+            )
+        )
     except Exception as exc:  # noqa: BLE001 - canary must classify API failures.
         return fail(
             "dokploy-control-plane",
@@ -353,7 +368,7 @@ def run_route_canary(
             if deployment.status != "pass":
                 return RouteCanaryReport(
                     "fail",
-                    "dokploy-worker-or-deployment-record",
+                    _deployment_failure_domain(steps),
                     compose_id,
                     public_url,
                     steps,
@@ -416,6 +431,12 @@ def _recreate_canary_compose(
     new_compose_id = str(created.get("composeId") or "")
     if not new_compose_id:
         raise ValueError("compose.delete repair created no composeId")
+    client.update_compose(
+        new_compose_id,
+        compose_file=compose_file,
+        env=env,
+        source_type="raw",
+    )
     return new_compose_id
 
 
@@ -446,11 +467,24 @@ def _wait_for_new_deployment(
         current_ids = _deployment_ids(deployments)
         new_ids = sorted(current_ids - previous_ids)
         last_summary = {
+            **_compose_evidence(data),
             "composeStatus": data.get("composeStatus") or data.get("status") or "",
             "deployment_count": len(deployments),
             "new_deployment_ids": new_ids,
             "attempts": attempts,
         }
+        latest_any = _latest_deployment(deployments, current_ids)
+        last_summary.update(_deployment_evidence(latest_any))
+        source_type = str(data.get("sourceType") or "")
+        if source_type and source_type != "raw":
+            return _step(
+                "deployment-record",
+                "fail",
+                f"compose sourceType is {source_type}, expected raw",
+                started,
+                monotonic,
+                last_summary,
+            )
         if new_ids:
             latest = _latest_deployment(deployments, set(new_ids))
             latest_status = str(latest.get("status") or "unknown")
@@ -461,7 +495,11 @@ def _wait_for_new_deployment(
                     "new deployment entered error",
                     started,
                     monotonic,
-                    {**last_summary, "latest_status": latest_status},
+                    {
+                        **last_summary,
+                        **_deployment_evidence(latest),
+                        "latest_status": latest_status,
+                    },
                 )
             if latest_status in {"running", "done", "success", "successful"}:
                 return _step(
@@ -470,7 +508,11 @@ def _wait_for_new_deployment(
                     "new deployment reached running/done",
                     started,
                     monotonic,
-                    {**last_summary, "latest_status": latest_status},
+                    {
+                        **last_summary,
+                        **_deployment_evidence(latest),
+                        "latest_status": latest_status,
+                    },
                 )
         sleeper(interval_seconds)
     return _step(
@@ -481,6 +523,43 @@ def _wait_for_new_deployment(
         monotonic,
         last_summary,
     )
+
+
+def _deployment_failure_domain(steps: list[CanaryStep]) -> str:
+    for step in reversed(steps):
+        if step.name != "deployment-record" or step.status != "fail":
+            continue
+        source_type = str(step.data.get("sourceType") or "")
+        if source_type and source_type != "raw":
+            return "dokploy-compose-source-type"
+    return "dokploy-worker-or-deployment-record"
+
+
+def _compose_evidence(data: dict) -> dict[str, object]:
+    return {
+        key: data.get(key)
+        for key in ("sourceType", "composeType", "appName")
+        if data.get(key)
+    }
+
+
+def _deployment_evidence(deployment: dict[str, object]) -> dict[str, object]:
+    if not deployment:
+        return {}
+    mapping = {
+        "deploymentId": deployment.get("deploymentId") or deployment.get("id"),
+        "status": deployment.get("status"),
+        "logPath": deployment.get("logPath"),
+        "createdAt": deployment.get("createdAt"),
+        "startedAt": deployment.get("startedAt"),
+        "finishedAt": deployment.get("finishedAt"),
+        "errorMessage": _one_line(str(deployment.get("errorMessage") or "")),
+    }
+    return {
+        f"latest_deployment_{key}": value
+        for key, value in mapping.items()
+        if value
+    }
 
 
 def _probe_docker_containers(
@@ -612,6 +691,8 @@ def _http_get(
         return exc.code, exc.read(512).decode("utf-8", errors="replace")
     except URLError as exc:
         return 0, str(exc.reason)
+    except TimeoutError as exc:
+        return 0, _one_line(str(exc) or "request timed out")
 
 
 def _run_ssh(
