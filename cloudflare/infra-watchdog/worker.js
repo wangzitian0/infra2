@@ -7,6 +7,10 @@ const DEFAULT_TARGETS = [
   ["staging", "minio-public-route", "https://minio-staging.zitian.party/minio/health/live", [200], "warning"],
   ["staging", "authentik-public-route", "https://sso-staging.zitian.party/-/health/live/", [200, 204, 302], "warning"],
   ["staging", "signoz-public-route", "https://signoz-staging.zitian.party", [200, 302], "warning"],
+  ["production", "finance-report-web-public-route", "https://report.zitian.party/", [200, 302, 307, 308], "critical"],
+  ["production", "finance-report-api-public-route", "https://report.zitian.party/api/health", [200], "critical"],
+  ["staging", "finance-report-web-public-route", "https://report-staging.zitian.party/", [200, 302, 307, 308], "warning"],
+  ["staging", "finance-report-api-public-route", "https://report-staging.zitian.party/api/health", [200], "warning"],
 ].map(([environment, name, url, statuses, severity]) => ({
   environment,
   name,

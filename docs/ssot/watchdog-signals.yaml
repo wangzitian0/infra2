@@ -270,6 +270,46 @@ signals:
     exclusion_reason: vault-staging currently returns HTTP 404.
     revalidation_condition: Enable after vault-staging exposes an intentional health status.
 
+  - signal_id: production.finance-report-web.public-route
+    environment: production
+    component: finance-report-web
+    signal: finance-report-web-public-route
+    primary_owner: cloudflare
+    severity: critical
+    cadence: 30m
+    expected: "200,302,307,308"
+    url: https://report.zitian.party/
+
+  - signal_id: production.finance-report-api.public-route
+    environment: production
+    component: finance-report-api
+    signal: finance-report-api-public-route
+    primary_owner: cloudflare
+    severity: critical
+    cadence: 30m
+    expected: "200"
+    url: https://report.zitian.party/api/health
+
+  - signal_id: staging.finance-report-web.public-route
+    environment: staging
+    component: finance-report-web
+    signal: finance-report-web-public-route
+    primary_owner: cloudflare
+    severity: warning
+    cadence: 30m
+    expected: "200,302,307,308"
+    url: https://report-staging.zitian.party/
+
+  - signal_id: staging.finance-report-api.public-route
+    environment: staging
+    component: finance-report-api
+    signal: finance-report-api-public-route
+    primary_owner: cloudflare
+    severity: warning
+    cadence: 30m
+    expected: "200"
+    url: https://report-staging.zitian.party/api/health
+
   - signal_id: production.alerting-probes.heartbeat
     environment: production
     component: alerting

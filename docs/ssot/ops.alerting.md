@@ -112,7 +112,8 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
 | L3 Finance Report | fr-postgres | app database health fails | P0 | Planned |
 | L3 Finance Report | fr-redis | app cache health fails | P1 | Planned |
 | L3 Finance Report | fr-app backend | OTEL ERROR/FATAL log count is above zero over 5 minutes | P1 | First live instance via shared rule automation |
-| L3 Finance Report | fr-app frontend | frontend HTTP health fails | P1 | Planned |
+| L3 Finance Report | fr-app public route | staging/production `report[-staging].zitian.party/` (web) or `/api/health` (API) fails from Cloudflare | P0 prod / P1 staging | Live via Cloudflare Workers out-of-band watchdog |
+| L3 Finance Report | fr-app frontend | frontend HTTP health fails | P1 | Live via Cloudflare Workers out-of-band watchdog (public web route) |
 | Cross-cutting | Vault app tokens and rendered env | missing, malformed, invalid, non-renewable, low TTL, or rendered `<no value>` fields | P0/P1 | Docker healthcheck + manual gate: `vault-audit.self-refresh` |
 | Cross-cutting | Backup freshness | latest off-host backup is missing, stale, empty, or missing checksum | P1 | Live contract: backup manifest verifier |
 | Cross-cutting | OTEL ingestion | expected app logs/traces absent after deployment | P1 | Manual gate: `signoz.shared.query-logs` |
