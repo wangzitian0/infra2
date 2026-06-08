@@ -28,10 +28,11 @@ services:
       test:
         - CMD-SHELL
         - |
+          # vault token lookup
           test -s /vault/secrets/.env &&
           ! grep -q "<no value>" /vault/secrets/.env &&
-          VAULT_TOKEN="$$(cat /vault/token)" vault token lookup >/dev/null
-      interval: 10s
+          wget -q -T 3 --header="X-Vault-Token: $$(cat /vault/token)" "$$VAULT_ADDR/v1/auth/token/lookup-self" -O /dev/null
+      interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s

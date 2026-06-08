@@ -149,7 +149,7 @@ CI enforces these settings on all `vault-agent.hcl` files.
 
 Vault-agent compose services must:
 - Remove stale `/vault/secrets/.env` before starting `vault agent`.
-- Fail healthcheck when `vault token lookup` fails for `VAULT_APP_TOKEN`.
+- Fail healthcheck when the token lookup (via direct API query `/v1/auth/token/lookup-self` or the CLI tool) fails for `VAULT_APP_TOKEN`.
 - Fail healthcheck when `/vault/secrets/.env` is missing or empty.
 - Fail healthcheck when `/vault/secrets/.env` contains Vault template fallback
   text such as `<no value>`.
