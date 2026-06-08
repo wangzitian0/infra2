@@ -37,6 +37,10 @@ def test_worker_default_targets_cover_enabled_public_routes_only() -> None:
         "https://minio-staging.zitian.party/minio/health/live",
         "https://sso-staging.zitian.party/-/health/live/",
         "https://signoz-staging.zitian.party",
+        "https://report.zitian.party/",
+        "https://report.zitian.party/api/health",
+        "https://report-staging.zitian.party/",
+        "https://report-staging.zitian.party/api/health",
     ]:
         assert host in source
 

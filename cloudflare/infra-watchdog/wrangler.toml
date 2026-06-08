@@ -22,7 +22,11 @@ WATCHDOG_TARGETS_JSON = """
   {"environment":"production","name":"signoz-public-route","url":"https://signoz.zitian.party","statuses":[200,302],"severity":"critical"},
   {"environment":"staging","name":"minio-public-route","url":"https://minio-staging.zitian.party/minio/health/live","statuses":[200],"severity":"warning"},
   {"environment":"staging","name":"authentik-public-route","url":"https://sso-staging.zitian.party/-/health/live/","statuses":[200,204,302],"severity":"warning"},
-  {"environment":"staging","name":"signoz-public-route","url":"https://signoz-staging.zitian.party","statuses":[200,302],"severity":"warning"}
+  {"environment":"staging","name":"signoz-public-route","url":"https://signoz-staging.zitian.party","statuses":[200,302],"severity":"warning"},
+  {"environment":"production","name":"finance-report-web-public-route","url":"https://report.zitian.party/","statuses":[200,302,307,308],"severity":"critical"},
+  {"environment":"production","name":"finance-report-api-public-route","url":"https://report.zitian.party/api/health","statuses":[200],"severity":"critical"},
+  {"environment":"staging","name":"finance-report-web-public-route","url":"https://report-staging.zitian.party/","statuses":[200,302,307,308],"severity":"warning"},
+  {"environment":"staging","name":"finance-report-api-public-route","url":"https://report-staging.zitian.party/api/health","statuses":[200],"severity":"warning"}
 ]
 """
 WATCHDOG_HEARTBEATS_JSON = """
