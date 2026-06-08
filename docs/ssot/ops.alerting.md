@@ -466,12 +466,16 @@ The canary fails fast by assigning failures to one of these domains:
 - `dokploy-canary-configuration`: required canary configuration is missing, so
   the run did not prove the platform.
 - `dokploy-control-plane`: compose create/update or deploy request failed.
+- `dokploy-compose-source-type`: the canary compose is not using raw compose
+  source, so Dokploy may route deployment through a Git provider instead of the
+  rendered canary compose.
 - `dokploy-worker-or-deployment-record`: Dokploy accepted the request but no new
   `running`/`done` deployment record appeared.
 - `docker-runtime`: expected containers or Traefik labels were not visible on
   the VPS when SSH inspection is configured.
 - `traefik-public-route`: deployment and containers exist, but the public web
-  and API routes did not both return 2xx/3xx.
+  and API routes did not both return 2xx/3xx; public read timeouts are recorded
+  as route probe evidence instead of crashing before summary output.
 
 Manual platform proof:
 
@@ -502,8 +506,9 @@ hard `dokploy-worker-or-deployment-record` failure unless the caller explicitly
 enables stale canary repair. Stale repair is restricted to hosts whose slug
 starts with `route-canary` and compose names whose slug starts with
 `dokploy-route-canary`; it deletes the canary compose without volumes,
-recreates it from the same rendered compose, and still requires a fresh
-deployment record before probing Docker or public routes. Missing
+recreates it from the same rendered compose, immediately updates the recreated
+compose back to `sourceType=raw`, and still requires a fresh deployment record
+before probing Docker or public routes. Missing
 environment configuration is a fail-closed `dokploy-canary-configuration`
 result, never a skipped success, because an unconfigured scheduled canary cannot
 protect app previews. Manual runs use the same rule unless `environment_id` is
@@ -519,8 +524,12 @@ compose ID, public URL, and each phase's evidence. App staging and preview gates
 should treat a failing canary as a platform failure before spending time on
 application readiness or browser E2E.
 When Dokploy accepts `compose.deploy` but does not expose a deployment record,
-the canary retries once with `compose.redeploy` before classifying the platform
-as `dokploy-worker-or-deployment-record`.
+the canary retries once with `compose.redeploy` before classifying the platform.
+Deployment-record evidence includes non-secret compose source/status fields and
+the latest deployment ID, status, log path, and truncated error message when
+Dokploy exposes them. This keeps provider drift such as `Github Provider not
+found` diagnosable from the workflow summary instead of requiring an immediate
+VPS log dive.
 
 ---
 
