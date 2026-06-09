@@ -447,7 +447,7 @@ async function failureFingerprint(failures) {
       failures.map((failure) => ({
         environment: failure.environment,
         name: failure.name,
-        detail: failure.detail,
+        failureDomain: failure.failure_domain || "",
       })),
     ),
   );
