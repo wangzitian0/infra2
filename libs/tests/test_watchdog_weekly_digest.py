@@ -71,6 +71,7 @@ def test_build_digest_message_contains_runbook_and_counts() -> None:
     assert "[WATCHDOG DIGEST]" in message
     assert "Runs: 7 | Success: 6 | Failure: 1" in message
     assert "Success rate: 85.71%" in message
+    assert "Failure rate: 14.29%" in message
     assert "Runbook:" in message
 
 

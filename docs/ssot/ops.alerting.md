@@ -417,11 +417,14 @@ When out-of-band Feishu delivery raises an exception, the watchdog emits a
 `watchdog.delivery.failure` structured event, attempts GitHub fallback issue
 creation (label `watchdog-alert-fallback`), and exits with failure so CI/logs
 retain an auditable fallback signal.
+Per-check structured logs include `attempt_count` and `duration_ms` to separate
+single-shot failures from retry-recovered transients and to expose slow checks.
 
 Weekly digest is handled by `.github/workflows/watchdog-weekly-digest.yml`
 (cron Monday UTC). It summarizes the last 7 days of
 `out-of-band-watchdog.yml` workflow runs and sends a compact reliability digest
-to Feishu through the same direct delivery mode.
+to Feishu through the same direct delivery mode, including success/failure rate
+and recent failed-run links.
 Default SSH checks are mandatory: `INFRA2_WATCHDOG_SSH_TARGETS` can add checks or
 override a check by name, but it must not remove `infra2-docker-health`. That
 check fails on any Docker `unhealthy`, `health: starting`, or `Restarting`

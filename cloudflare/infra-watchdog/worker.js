@@ -138,6 +138,7 @@ async function runWatchdog(env, nowMs = Date.now()) {
       severity: result.severity,
       failure_domain: result.failure_domain || "",
       attempt_count: Number(result.attempt_count || 1),
+      duration_ms: Number(result.duration_ms || 0),
       detail: result.detail,
     });
   }
@@ -201,6 +202,7 @@ function checkEffectiveConfig(targets, heartbeats) {
 }
 
 async function checkHttpTarget(target, timeoutMs) {
+  const started = Date.now();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -214,7 +216,12 @@ async function checkHttpTarget(target, timeoutMs) {
       },
     });
     if (target.statuses.includes(response.status)) {
-      return okResult(target, `HTTP ${response.status}`, _failure_domain_for_http_target(target));
+      return okResult(
+        target,
+        `HTTP ${response.status}`,
+        _failure_domain_for_http_target(target),
+        Date.now() - started,
+      );
     }
 
     const body = await safeBody(response);
@@ -222,12 +229,14 @@ async function checkHttpTarget(target, timeoutMs) {
       target,
       `HTTP ${response.status}; expected ${target.statuses.join(",")}; body=${body}`,
       _failure_domain_for_http_target(target),
+      Date.now() - started,
     );
   } catch (error) {
     return failResult(
       target,
       `fetch failed: ${oneLine(error && error.message ? error.message : String(error))}`,
       _failure_domain_for_http_target(target),
+      Date.now() - started,
     );
   } finally {
     clearTimeout(timeout);
@@ -235,9 +244,12 @@ async function checkHttpTarget(target, timeoutMs) {
 }
 
 async function checkHttpTargetWithRetry(target, timeoutMs, maxAttempts, retryDelayMs) {
+  let totalDurationMs = 0;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const result = await checkHttpTarget(target, timeoutMs);
+    totalDurationMs += Number(result.duration_ms || 0);
     result.attempt_count = attempt;
+    result.duration_ms = totalDurationMs;
     if (result.ok || attempt >= maxAttempts) {
       return result;
     }
@@ -614,7 +626,7 @@ function filterByEnvironment(items, environments) {
   return items.filter((item) => environments.has(item.environment));
 }
 
-function okResult(target, detail, failureDomain = "") {
+function okResult(target, detail, failureDomain = "", durationMs = 0) {
   return {
     environment: target.environment,
     name: target.name,
@@ -623,10 +635,11 @@ function okResult(target, detail, failureDomain = "") {
     detail,
     failure_domain: failureDomain,
     attempt_count: 1,
+    duration_ms: Number(durationMs || 0),
   };
 }
 
-function failResult(target, detail, failureDomain = "") {
+function failResult(target, detail, failureDomain = "", durationMs = 0) {
   return {
     environment: target.environment,
     name: target.name,
@@ -635,6 +648,7 @@ function failResult(target, detail, failureDomain = "") {
     detail: oneLine(detail),
     failure_domain: failureDomain,
     attempt_count: 1,
+    duration_ms: Number(durationMs || 0),
   };
 }
 
