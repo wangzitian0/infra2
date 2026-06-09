@@ -214,18 +214,18 @@ def test_worker_status_check_reports_last_run_failure_context(monkeypatch) -> No
         timeout=3,
     )
 
-    assert results == [
-        watchdog.CheckResult(
-            "cloudflare-worker-status",
-            False,
-            (
-                "worker status unhealthy: age=890 last_run_ok=False failures=2 "
-                "routes=8 heartbeats=2 delivery_error=feishu delivery failed"
-            ),
-            "cloudflare-worker-health",
-            attempt_count=2,
-        )
-    ]
+    assert len(results) == 1
+    result = results[0]
+    assert result.name == "cloudflare-worker-status"
+    assert result.ok is False
+    assert (
+        result.detail
+        == "worker status unhealthy: age=890 last_run_ok=False failures=2 "
+        "routes=8 heartbeats=2 delivery_error=feishu delivery failed"
+    )
+    assert result.failure_domain == "cloudflare-worker-health"
+    assert result.attempt_count == 2
+    assert isinstance(result.duration_ms, int)
 
 
 def test_dokploy_route_canary_check_fails_closed_without_config() -> None:
@@ -593,9 +593,14 @@ def test_main_structured_check_logs_include_attempt_count(monkeypatch) -> None:
 
     assert watchdog.main({"WATCHDOG_DRY_RUN": "0"}) == 0
     check_events = [row for row in emitted if row.get("event") == "watchdog.check"]
+    run_complete_events = [
+        row for row in emitted if row.get("event") == "watchdog.run.complete"
+    ]
     assert len(check_events) == 1
+    assert len(run_complete_events) == 1
     assert check_events[0]["attempt_count"] == 2
     assert check_events[0]["duration_ms"] == 123
+    assert isinstance(run_complete_events[0]["run_duration_ms"], int)
 
 
 def test_main_records_delivery_failure_event_instead_of_crashing(monkeypatch) -> None:
@@ -644,6 +649,7 @@ def test_main_records_delivery_failure_event_instead_of_crashing(monkeypatch) ->
     assert len(delivery_events) == 1
     assert delivery_events[0]["status"] == "fail"
     assert delivery_events[0]["fallback_issue_url"].endswith("/issues/999")
+    assert isinstance(delivery_events[0]["run_duration_ms"], int)
 
 
 def test_out_of_band_delivery_supports_existing_feishu_app_mode(monkeypatch) -> None:

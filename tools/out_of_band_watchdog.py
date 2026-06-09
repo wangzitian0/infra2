@@ -604,6 +604,7 @@ def format_failure_message(results: list[CheckResult], *, run_url: str) -> str:
 
 def main(env: Mapping[str, str] | None = None) -> int:
     """Run watchdog checks and send Feishu directly on failure."""
+    run_started = time.monotonic()
     current_env = env or os.environ
     http_targets = parse_http_targets(
         current_env.get("INFRA2_WATCHDOG_HTTP_TARGETS", "")
@@ -665,6 +666,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
                 "event": "watchdog.run.complete",
                 "status": "ok",
                 "failure_count": 0,
+                "run_duration_ms": _elapsed_ms(run_started),
             }
         )
         return 0
@@ -678,6 +680,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
                 "status": "fail",
                 "failure_count": len(failures),
                 "dry_run": True,
+                "run_duration_ms": _elapsed_ms(run_started),
             }
         )
         return 1
@@ -695,6 +698,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
                 "failure_count": len(failures),
                 "error": _redact(_one_line(str(exc))),
                 "fallback_issue_url": fallback_issue_url or "",
+                "run_duration_ms": _elapsed_ms(run_started),
             }
         )
         return 1
@@ -704,6 +708,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
             "status": "fail",
             "failure_count": len(failures),
             "dry_run": False,
+            "run_duration_ms": _elapsed_ms(run_started),
         }
     )
     return 1

@@ -55,6 +55,7 @@ export default {
 };
 
 async function runWatchdog(env, nowMs = Date.now()) {
+  const runStartedMs = Date.now();
   const environments = enabledEnvironments(env);
   let targets;
   let heartbeats;
@@ -105,6 +106,7 @@ async function runWatchdog(env, nowMs = Date.now()) {
        status: "fail",
        failureCount: failures.length,
        error: deliveryError,
+       run_duration_ms: Math.max(0, Date.now() - runStartedMs),
      });
      throw new Error(`watchdog delivery failed: ${deliveryError}`);
    }
@@ -165,6 +167,7 @@ async function runWatchdog(env, nowMs = Date.now()) {
       status: "fail",
       failureCount: failures.length,
       error: deliveryError,
+      run_duration_ms: Math.max(0, Date.now() - runStartedMs),
     });
     throw new Error(`watchdog delivery failed: ${deliveryError}`);
   }
@@ -177,6 +180,7 @@ async function runWatchdog(env, nowMs = Date.now()) {
     failureCount: failures.length,
     failureFingerprint: fingerprint,
     deliveryError,
+    run_duration_ms: Math.max(0, Date.now() - runStartedMs),
   });
   return { failures, routeResults, heartbeatResults, configResults };
 }
