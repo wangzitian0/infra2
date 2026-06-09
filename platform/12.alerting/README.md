@@ -224,7 +224,7 @@ Cloudflare Worker `/status`, the Dokploy route canary, SSH reachability, Docker
 daemon reachability, and the `platform-alerting` in-container `/health`
 endpoint via SSH.
 Worker config-preflight failures are surfaced separately so malformed JSON or
-missing KV/config cannot look like a public route outage.
+other config-parse errors cannot look like a public route outage.
 IaC Runner, MinIO, Postgres, Redis, and application dependency health remain
 service-level signals handled in-band through SigNoz and this bridge.
 

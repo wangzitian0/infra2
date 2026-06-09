@@ -240,7 +240,7 @@ Default coverage:
   `/status`, Dokploy route canary, SSH reachability, Docker daemon reachability,
   and the `platform-alerting` in-container `/health` endpoint.
 - Cloudflare Worker config-preflight failures are reported separately so invalid
-  JSON or missing KV/config does not masquerade as a route outage.
+  JSON or other config-parse errors do not masquerade as a route outage.
 
 Required Cloudflare Worker secrets for webhook mode:
 
