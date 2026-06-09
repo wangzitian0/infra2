@@ -13,6 +13,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/out-of-band-watchdog.yml"
 WATCHDOG = ROOT / "tools/out_of_band_watchdog.py"
+ALERTING_README = ROOT / "platform/12.alerting/README.md"
+ALERTING_SSOT = ROOT / "docs/ssot/ops.alerting.md"
 
 
 def _load_watchdog():
@@ -91,6 +93,30 @@ def test_default_targets_cover_public_host_and_bridge_health() -> None:
     assert ssh_targets[3].expected_text == "healthy"
 
 
+def test_ssh_checks_report_missing_configuration_as_configuration_failure() -> None:
+    """Infra-011.9: missing SSH config should not masquerade as host downtime."""
+    watchdog = _load_watchdog()
+
+    results = watchdog.run_ssh_checks(None, watchdog.parse_ssh_targets(""))
+
+    assert results == [
+        watchdog.CheckResult("infra2-ssh", False, "SSH watchdog config is missing", "configuration"),
+        watchdog.CheckResult("infra2-docker", False, "SSH watchdog config is missing", "configuration"),
+        watchdog.CheckResult(
+            "infra2-docker-health",
+            False,
+            "SSH watchdog config is missing",
+            "configuration",
+        ),
+        watchdog.CheckResult(
+            "infra2-alert-bridge",
+            False,
+            "SSH watchdog config is missing",
+            "configuration",
+        ),
+    ]
+
+
 def test_worker_status_check_detects_missing_token_and_empty_config() -> None:
     """#209: GitHub audit must verify Worker cron/KV-backed effective config."""
     watchdog = _load_watchdog()
@@ -99,6 +125,7 @@ def test_worker_status_check_detects_missing_token_and_empty_config() -> None:
         "cloudflare-worker-status",
         False,
         "INFRA2_WATCHDOG_WORKER_STATUS_TOKEN is missing",
+        "configuration",
     )
 
 
@@ -188,6 +215,7 @@ def test_worker_status_check_reports_last_run_failure_context(monkeypatch) -> No
                 "worker status unhealthy: age=890 last_run_ok=False failures=2 "
                 "routes=8 heartbeats=2 delivery_error=feishu delivery failed"
             ),
+            "cloudflare-worker-health",
         )
     ]
 
@@ -201,6 +229,7 @@ def test_dokploy_route_canary_check_fails_closed_without_config() -> None:
             "infra2-dokploy-route-canary",
             False,
             "DOKPLOY_API_KEY is missing",
+            "configuration",
         )
     ]
     assert watchdog.run_dokploy_route_canary_check(
@@ -211,6 +240,7 @@ def test_dokploy_route_canary_check_fails_closed_without_config() -> None:
             "infra2-dokploy-route-canary",
             False,
             "DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID is missing",
+            "configuration",
         )
     ]
 
@@ -311,6 +341,7 @@ def test_dokploy_route_canary_check_reports_worker_failure_domain() -> None:
                 "compose_id=cmp-canary public_url=https://route-canary.example.com "
                 "failed_steps=deployment-record:fail:deploy request did not produce a new record"
             ),
+            "dokploy-worker-or-deployment-record",
         )
     ]
     assert captured["host"] == "cloud.zitian.party"
@@ -392,11 +423,13 @@ def test_failure_message_is_out_of_band_and_redacts_secrets() -> None:
             name="infra2-iac-runner",
             ok=False,
             detail="GET https://iac.zitian.party/health failed: timed out",
+            failure_domain="host-diagnostics",
         ),
         watchdog.CheckResult(
             name="infra2-alert-bridge",
             ok=False,
             detail="ssh command did not contain expected text: secret-token",
+            failure_domain="alert-bridge",
         ),
     ]
 
@@ -404,8 +437,8 @@ def test_failure_message_is_out_of_band_and_redacts_secrets() -> None:
 
     assert "[OUT-OF-BAND] Infra2 watchdog failed" in message
     assert "Route: GitHub Actions -> Feishu direct" in message
-    assert "infra2-iac-runner" in message
-    assert "infra2-alert-bridge" in message
+    assert "[host-diagnostics] infra2-iac-runner" in message
+    assert "[alert-bridge] infra2-alert-bridge" in message
     assert "https://github/run/1" in message
     assert "secret-token" not in message
 
@@ -527,3 +560,9 @@ def test_webhook_mode_error_mentions_primary_and_fallback_env_names() -> None:
 
     assert "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL" in message
     assert "FEISHU_WEBHOOK_URL" in message
+
+
+def test_docs_state_that_github_fallback_includes_route_canary() -> None:
+    """Infra-011.9: docs must match the code-owned fallback watchdog scope."""
+    assert "Dokploy route canary" in ALERTING_README.read_text(encoding="utf-8")
+    assert "Dokploy route canary" in ALERTING_SSOT.read_text(encoding="utf-8")

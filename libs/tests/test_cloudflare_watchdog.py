@@ -80,6 +80,8 @@ def test_worker_exposes_authenticated_status_for_github_audit() -> None:
     assert "watchdog delivery failed" in source
     assert "effective public route target list is empty" in source
     assert "effective heartbeat target list is empty" in source
+    assert "cloudflare-watchdog-config-preflight" in source
+    assert "config-preflight failed" in source
 
 
 def test_worker_dedupes_renotifies_and_sends_recovery_to_feishu() -> None:

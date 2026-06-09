@@ -66,6 +66,7 @@ class CheckResult:
     name: str
     ok: bool
     detail: str
+    failure_domain: str = ""
 
 
 def parse_http_targets(raw: str) -> list[HttpTarget]:
@@ -132,16 +133,33 @@ def run_http_checks(targets: list[HttpTarget], timeout: float) -> list[CheckResu
             status = exc.code
         except (OSError, URLError) as exc:
             results.append(
-                CheckResult(target.name, False, f"GET {target.url} failed: {exc}")
+                CheckResult(
+                    target.name,
+                    False,
+                    f"GET {target.url} failed: {exc}",
+                    _failure_domain_for_http_target(target.name),
+                )
             )
             continue
 
         if status in target.expected_statuses:
-            results.append(CheckResult(target.name, True, f"HTTP {status}"))
+            results.append(
+                CheckResult(
+                    target.name,
+                    True,
+                    f"HTTP {status}",
+                    _failure_domain_for_http_target(target.name),
+                )
+            )
         else:
             expected = ",".join(str(code) for code in sorted(target.expected_statuses))
             results.append(
-                CheckResult(target.name, False, f"HTTP {status}; expected {expected}")
+                CheckResult(
+                    target.name,
+                    False,
+                    f"HTTP {status}; expected {expected}",
+                    _failure_domain_for_http_target(target.name),
+                )
             )
     return results
 
@@ -162,6 +180,7 @@ def run_worker_status_check(
                 "cloudflare-worker-status",
                 False,
                 "INFRA2_WATCHDOG_WORKER_STATUS_TOKEN is missing",
+                "configuration",
             )
         ]
 
@@ -184,6 +203,7 @@ def run_worker_status_check(
                 "cloudflare-worker-status",
                 False,
                 f"HTTP {exc.code}; body={_one_line(detail)}",
+                "cloudflare-worker-health",
             )
         ]
     except (OSError, URLError) as exc:
@@ -192,6 +212,7 @@ def run_worker_status_check(
                 "cloudflare-worker-status",
                 False,
                 f"GET {url} failed: {exc}",
+                "cloudflare-worker-health",
             )
         ]
 
@@ -201,6 +222,7 @@ def run_worker_status_check(
                 "cloudflare-worker-status",
                 False,
                 f"HTTP {status}; expected 200",
+                "cloudflare-worker-health",
             )
         ]
     try:
@@ -211,6 +233,7 @@ def run_worker_status_check(
                 "cloudflare-worker-status",
                 False,
                 "status response is invalid JSON",
+                "cloudflare-worker-health",
             )
         ]
 
@@ -234,6 +257,7 @@ def run_worker_status_check(
                     f"routes={route_count} heartbeats={heartbeat_count} "
                     f"delivery_error={_one_line(str(delivery_error))}"
                 ),
+                "cloudflare-worker-health",
             )
         ]
     if route_count <= 0 or heartbeat_count <= 0:
@@ -245,6 +269,7 @@ def run_worker_status_check(
                     "worker effective config is empty: "
                     f"routes={route_count} heartbeats={heartbeat_count}"
                 ),
+                "cloudflare-worker-health",
             )
         ]
     return [
@@ -264,7 +289,12 @@ def run_ssh_checks(
         return []
     if config is None:
         return [
-            CheckResult(target.name, False, "SSH watchdog config is missing")
+            CheckResult(
+                target.name,
+                False,
+                "SSH watchdog config is missing",
+                "configuration",
+            )
             for target in targets
         ]
 
@@ -297,11 +327,23 @@ def run_ssh_checks(
                 timeout=timeout,
             )
         except subprocess.TimeoutExpired:
-            results.append(CheckResult(target.name, False, "ssh command timed out"))
+            results.append(
+                CheckResult(
+                    target.name,
+                    False,
+                    "ssh command timed out",
+                    _failure_domain_for_ssh_target(target.name),
+                )
+            )
             continue
         except OSError as exc:
             results.append(
-                CheckResult(target.name, False, f"ssh command failed: {exc}")
+                CheckResult(
+                    target.name,
+                    False,
+                    f"ssh command failed: {exc}",
+                    _failure_domain_for_ssh_target(target.name),
+                )
             )
             continue
         output = (completed.stdout + completed.stderr).strip()
@@ -311,6 +353,7 @@ def run_ssh_checks(
                     target.name,
                     False,
                     f"ssh exited {completed.returncode}: {_one_line(output)}",
+                    _failure_domain_for_ssh_target(target.name),
                 )
             )
             continue
@@ -320,12 +363,16 @@ def run_ssh_checks(
                     target.name,
                     False,
                     f"ssh output did not contain expected text: {_one_line(output)}",
+                    _failure_domain_for_ssh_target(target.name),
                 )
             )
             continue
         results.append(
             CheckResult(
-                target.name, True, f"ssh output contained {target.expected_text}"
+                target.name,
+                True,
+                f"ssh output contained {target.expected_text}",
+                _failure_domain_for_ssh_target(target.name),
             )
         )
     return results
@@ -345,6 +392,7 @@ def run_dokploy_route_canary_check(
                 "infra2-dokploy-route-canary",
                 False,
                 "DOKPLOY_API_KEY is missing",
+                "configuration",
             )
         ]
 
@@ -355,6 +403,7 @@ def run_dokploy_route_canary_check(
                 "infra2-dokploy-route-canary",
                 False,
                 "DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID is missing",
+                "configuration",
             )
         ]
 
@@ -394,6 +443,7 @@ def run_dokploy_route_canary_check(
                 "infra2-dokploy-route-canary",
                 False,
                 f"canary raised {type(exc).__name__}: {_one_line(str(exc))}",
+                "dokploy-control-plane",
             )
         ]
 
@@ -412,7 +462,14 @@ def run_dokploy_route_canary_check(
         ]
         if failed_steps:
             detail = f"{detail} failed_steps={' ; '.join(failed_steps)}"
-    return [CheckResult("infra2-dokploy-route-canary", False, detail)]
+    return [
+        CheckResult(
+            "infra2-dokploy-route-canary",
+            False,
+            detail,
+            report.failure_domain or "dokploy-control-plane",
+        )
+    ]
 
 
 def format_failure_message(results: list[CheckResult], *, run_url: str) -> str:
@@ -428,7 +485,8 @@ def format_failure_message(results: list[CheckResult], *, run_url: str) -> str:
     lines.append("Failures:")
     for result in results:
         if not result.ok:
-            lines.append(f"- {result.name}: {_redact(result.detail)}")
+            domain = f"[{result.failure_domain}] " if result.failure_domain else ""
+            lines.append(f"- {domain}{result.name}: {_redact(result.detail)}")
     return "\n".join(lines)
 
 
@@ -499,6 +557,26 @@ def deliver_out_of_band_alert(env: Mapping[str, str], message: str) -> None:
             "is required for feishu_webhook mode"
         )
     deliver_feishu_text(webhook_url, message)
+
+
+def _failure_domain_for_http_target(name: str) -> str:
+    if name == "cloudflare-worker-health":
+        return "cloudflare-worker-health"
+    if name == "infra2-public-entrypoint":
+        return "host-reachability"
+    if name.endswith("public-route"):
+        return "public-route"
+    return "http-target"
+
+
+def _failure_domain_for_ssh_target(name: str) -> str:
+    if name == "infra2-ssh":
+        return "host-reachability"
+    if name in {"infra2-docker", "infra2-docker-health"}:
+        return "docker-runtime"
+    if name == "infra2-alert-bridge":
+        return "alert-bridge"
+    return "host-diagnostics"
 
 
 def _effective_lines(raw: str) -> list[str]:

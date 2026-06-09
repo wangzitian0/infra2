@@ -235,6 +235,12 @@ Default coverage:
   `cloud-staging` and `vault-staging` while they return HTTP 404.
 - Production and staging heartbeats:
   `platform-alerting-probes` and `platform-alerting-probes-staging`.
+- GitHub fallback watchdog coverage:
+  public Dokploy entrypoint, Cloudflare Worker `/health`, Cloudflare Worker
+  `/status`, Dokploy route canary, SSH reachability, Docker daemon reachability,
+  and the `platform-alerting` in-container `/health` endpoint.
+- Cloudflare Worker config-preflight failures are reported separately so invalid
+  JSON or other config-parse errors do not masquerade as a route outage.
 
 Required Cloudflare Worker secrets for webhook mode:
 
