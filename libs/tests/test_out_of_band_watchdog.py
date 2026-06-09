@@ -563,7 +563,7 @@ def test_http_checks_retry_transient_failure(monkeypatch) -> None:
 
 
 def test_main_structured_check_logs_include_attempt_count(monkeypatch) -> None:
-    """Infra-012.4: structured check logs include attempt_count/duration/timestamp."""
+    """Infra-012.4: structured check logs include attempt_count and timestamp."""
     watchdog = _load_watchdog()
     emitted: list[dict] = []
 
@@ -571,9 +571,7 @@ def test_main_structured_check_logs_include_attempt_count(monkeypatch) -> None:
         watchdog,
         "run_http_checks",
         lambda _targets, _timeout, **_kwargs: [
-            watchdog.CheckResult(
-                "infra2-iac-runner", True, "HTTP 200", attempt_count=2, duration_ms=123
-            )
+            watchdog.CheckResult("infra2-iac-runner", True, "HTTP 200", attempt_count=2)
         ],
     )
     monkeypatch.setattr(watchdog, "run_ssh_checks", lambda _config, _targets: [])
@@ -595,7 +593,6 @@ def test_main_structured_check_logs_include_attempt_count(monkeypatch) -> None:
     check_events = [row for row in emitted if row.get("event") == "watchdog.check"]
     assert len(check_events) == 1
     assert check_events[0]["attempt_count"] == 2
-    assert check_events[0]["duration_ms"] == 123
 
 
 def test_main_records_delivery_failure_event_instead_of_crashing(monkeypatch) -> None:

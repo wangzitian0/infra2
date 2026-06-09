@@ -109,7 +109,6 @@ def build_digest_message(summary: Mapping[str, Any], repository: str) -> str:
             f"Other: {summary['other_count']}"
         ),
         f"Success rate: {summary['success_rate_pct']}%",
-        f"Failure rate: {round(100.0 - float(summary['success_rate_pct']), 2)}%",
     ]
     failed_urls = summary.get("failed_run_urls", [])
     if isinstance(failed_urls, list) and failed_urls:

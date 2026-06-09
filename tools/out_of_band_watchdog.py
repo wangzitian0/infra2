@@ -70,7 +70,6 @@ class CheckResult:
     detail: str
     failure_domain: str = ""
     attempt_count: int = 1
-    duration_ms: int = 0
 
 
 def parse_http_targets(raw: str) -> list[HttpTarget]:
@@ -134,10 +133,8 @@ def run_http_checks(
     retry_delay = max(0.0, retry_delay_seconds)
     for target in targets:
         result: CheckResult | None = None
-        total_duration_ms = 0
         for attempt in range(1, attempts + 1):
             result = _run_http_check_once(target, timeout)
-            total_duration_ms += max(0, result.duration_ms)
             if result.ok:
                 detail = result.detail
                 if attempt > 1:
@@ -148,7 +145,6 @@ def run_http_checks(
                     detail,
                     result.failure_domain,
                     attempt_count=attempt,
-                    duration_ms=total_duration_ms,
                 )
                 break
             if attempt < attempts and retry_delay > 0:
@@ -161,7 +157,6 @@ def run_http_checks(
                 result.detail,
                 result.failure_domain,
                 attempt_count=attempts,
-                duration_ms=total_duration_ms,
             )
         results.append(result)
     return results
@@ -204,7 +199,6 @@ def run_worker_status_check(
                     result.detail,
                     result.failure_domain,
                     attempt_count=attempt,
-                    duration_ms=result.duration_ms,
                 )
                 for result in last_results
             ]
@@ -217,14 +211,12 @@ def run_worker_status_check(
             result.detail,
             result.failure_domain,
             attempt_count=attempts,
-            duration_ms=result.duration_ms,
         )
         for result in last_results
     ]
 
 
 def _run_worker_status_once(url: str, token: str, timeout: float) -> list[CheckResult]:
-    started = time.monotonic()
     request = Request(
         url,
         headers={
@@ -245,7 +237,6 @@ def _run_worker_status_once(url: str, token: str, timeout: float) -> list[CheckR
                 False,
                 f"HTTP {exc.code}; body={_one_line(detail)}",
                 "cloudflare-worker-health",
-                duration_ms=_elapsed_ms(started),
             )
         ]
     except (OSError, URLError) as exc:
@@ -255,7 +246,6 @@ def _run_worker_status_once(url: str, token: str, timeout: float) -> list[CheckR
                 False,
                 f"GET {url} failed: {exc}",
                 "cloudflare-worker-health",
-                duration_ms=_elapsed_ms(started),
             )
         ]
 
@@ -266,7 +256,6 @@ def _run_worker_status_once(url: str, token: str, timeout: float) -> list[CheckR
                 False,
                 f"HTTP {status}; expected 200",
                 "cloudflare-worker-health",
-                duration_ms=_elapsed_ms(started),
             )
         ]
     try:
@@ -278,7 +267,6 @@ def _run_worker_status_once(url: str, token: str, timeout: float) -> list[CheckR
                 False,
                 "status response is invalid JSON",
                 "cloudflare-worker-health",
-                duration_ms=_elapsed_ms(started),
             )
         ]
 
@@ -303,7 +291,6 @@ def _run_worker_status_once(url: str, token: str, timeout: float) -> list[CheckR
                     f"delivery_error={_one_line(str(delivery_error))}"
                 ),
                 "cloudflare-worker-health",
-                duration_ms=_elapsed_ms(started),
             )
         ]
     if route_count <= 0 or heartbeat_count <= 0:
@@ -316,7 +303,6 @@ def _run_worker_status_once(url: str, token: str, timeout: float) -> list[CheckR
                     f"routes={route_count} heartbeats={heartbeat_count}"
                 ),
                 "cloudflare-worker-health",
-                duration_ms=_elapsed_ms(started),
             )
         ]
     return [
@@ -324,13 +310,11 @@ def _run_worker_status_once(url: str, token: str, timeout: float) -> list[CheckR
             "cloudflare-worker-status",
             True,
             f"worker last-run fresh: age={age_seconds}s",
-            duration_ms=_elapsed_ms(started),
         )
     ]
 
 
 def _run_http_check_once(target: HttpTarget, timeout: float) -> CheckResult:
-    started = time.monotonic()
     request = Request(
         target.url,
         headers={"User-Agent": "infra2-out-of-band-watchdog/1.0"},
@@ -347,7 +331,6 @@ def _run_http_check_once(target: HttpTarget, timeout: float) -> CheckResult:
             False,
             f"GET {target.url} failed: {exc}",
             _failure_domain_for_http_target(target.name),
-            duration_ms=_elapsed_ms(started),
         )
 
     if status in target.expected_statuses:
@@ -356,7 +339,6 @@ def _run_http_check_once(target: HttpTarget, timeout: float) -> CheckResult:
             True,
             f"HTTP {status}",
             _failure_domain_for_http_target(target.name),
-            duration_ms=_elapsed_ms(started),
         )
 
     expected = ",".join(str(code) for code in sorted(target.expected_statuses))
@@ -365,7 +347,6 @@ def _run_http_check_once(target: HttpTarget, timeout: float) -> CheckResult:
         False,
         f"HTTP {status}; expected {expected}",
         _failure_domain_for_http_target(target.name),
-        duration_ms=_elapsed_ms(started),
     )
 
 
@@ -388,7 +369,6 @@ def run_ssh_checks(
 
     results: list[CheckResult] = []
     for target in targets:
-        started = time.monotonic()
         target_command = _decode_ssh_command(target.command)
         command = [
             "ssh",
@@ -422,7 +402,6 @@ def run_ssh_checks(
                     False,
                     "ssh command timed out",
                     _failure_domain_for_ssh_target(target.name),
-                    duration_ms=_elapsed_ms(started),
                 )
             )
             continue
@@ -433,7 +412,6 @@ def run_ssh_checks(
                     False,
                     f"ssh command failed: {exc}",
                     _failure_domain_for_ssh_target(target.name),
-                    duration_ms=_elapsed_ms(started),
                 )
             )
             continue
@@ -445,7 +423,6 @@ def run_ssh_checks(
                     False,
                     f"ssh exited {completed.returncode}: {_one_line(output)}",
                     _failure_domain_for_ssh_target(target.name),
-                    duration_ms=_elapsed_ms(started),
                 )
             )
             continue
@@ -456,7 +433,6 @@ def run_ssh_checks(
                     False,
                     f"ssh output did not contain expected text: {_one_line(output)}",
                     _failure_domain_for_ssh_target(target.name),
-                    duration_ms=_elapsed_ms(started),
                 )
             )
             continue
@@ -466,7 +442,6 @@ def run_ssh_checks(
                 True,
                 f"ssh output contained {target.expected_text}",
                 _failure_domain_for_ssh_target(target.name),
-                duration_ms=_elapsed_ms(started),
             )
         )
     return results
@@ -480,7 +455,6 @@ def run_dokploy_route_canary_check(
     client_factory=get_dokploy,
 ) -> list[CheckResult]:
     """Run the Dokploy route canary as an out-of-band alert signal."""
-    started = time.monotonic()
     if not env.get("DOKPLOY_API_KEY", "").strip():
         return [
             CheckResult(
@@ -488,7 +462,6 @@ def run_dokploy_route_canary_check(
                 False,
                 "DOKPLOY_API_KEY is missing",
                 "configuration",
-                duration_ms=_elapsed_ms(started),
             )
         ]
 
@@ -500,7 +473,6 @@ def run_dokploy_route_canary_check(
                 False,
                 "DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID is missing",
                 "configuration",
-                duration_ms=_elapsed_ms(started),
             )
         ]
 
@@ -541,7 +513,6 @@ def run_dokploy_route_canary_check(
                 False,
                 f"canary raised {type(exc).__name__}: {_one_line(str(exc))}",
                 "dokploy-control-plane",
-                duration_ms=_elapsed_ms(started),
             )
         ]
 
@@ -550,14 +521,7 @@ def run_dokploy_route_canary_check(
         f"compose_id={report.compose_id or 'unknown'} public_url={report.public_url}"
     )
     if report.status == "pass":
-        return [
-            CheckResult(
-                "infra2-dokploy-route-canary",
-                True,
-                detail,
-                duration_ms=_elapsed_ms(started),
-            )
-        ]
+        return [CheckResult("infra2-dokploy-route-canary", True, detail)]
 
     if report.steps:
         failed_steps = [
@@ -573,7 +537,6 @@ def run_dokploy_route_canary_check(
             False,
             detail,
             report.failure_domain or "dokploy-control-plane",
-            duration_ms=_elapsed_ms(started),
         )
     ]
 
@@ -651,7 +614,6 @@ def main(env: Mapping[str, str] | None = None) -> int:
                 "status": "ok" if result.ok else "fail",
                 "failure_domain": result.failure_domain,
                 "attempt_count": result.attempt_count,
-                "duration_ms": result.duration_ms,
                 "detail": _redact(result.detail),
             }
         )
@@ -905,10 +867,6 @@ def _emit_structured_log(payload: Mapping[str, object]) -> None:
     body = dict(payload)
     body.setdefault("timestamp", int(time.time()))
     print(json.dumps(body, ensure_ascii=True, sort_keys=True))
-
-
-def _elapsed_ms(started: float) -> int:
-    return int(max(0.0, time.monotonic() - started) * 1000)
 
 
 if __name__ == "__main__":
