@@ -250,6 +250,7 @@ def _run_deployment(env: str, ref: str, triggered_by: str, services: list[str] |
             "ref": ref,
             "triggered_by": triggered_by,
             "error": str(exc),
+            "requested_services": services,
         }
     with _deploy_state_lock:
         _recent_deploys[key] = (time.monotonic(), response)
@@ -351,6 +352,21 @@ def manual_sync():
     return jsonify({"status": "accepted", "services": list(services)})
 
 
+def _normalize_services(services: list[str] | None) -> list[str]:
+    if services is None:
+        return []
+    return sorted(services)
+
+
+def _is_cache_match(recent: dict, requested_services: list[str] | None) -> bool:
+    cached_services = None
+    if "result" in recent and isinstance(recent["result"], dict):
+        cached_services = recent["result"].get("requested_services")
+    if cached_services is None:
+        cached_services = recent.get("requested_services")
+    return _normalize_services(cached_services) == _normalize_services(requested_services)
+
+
 @app.route("/deploy", methods=["POST"])
 def version_deploy():
     if not verify_iac_request():
@@ -385,7 +401,7 @@ def version_deploy():
         key = _deployment_key(env, ref)
         with _deploy_state_lock:
             recent = _recent_result(key)
-            if recent:
+            if recent and _is_cache_match(recent, services):
                 status_code = 200 if recent.get("status") == "completed" else 500
                 return jsonify({**recent, "cached": True}), status_code
             if key in _in_flight_deploys:
@@ -406,7 +422,7 @@ def version_deploy():
     key = _deployment_key(env, ref)
     with _deploy_state_lock:
         recent = _recent_result(key)
-        if recent:
+        if recent and _is_cache_match(recent, services):
             return jsonify({**recent, "cached": True}), 200
         if key in _in_flight_deploys:
             return jsonify(_in_progress_response(env, ref, triggered_by, True)), 202

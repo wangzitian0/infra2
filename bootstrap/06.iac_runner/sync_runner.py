@@ -478,7 +478,7 @@ def get_changed_services_from_files(changed_files: list[str]) -> set[str]:
         elif parts[0] == "bootstrap" and len(parts) >= 2:
             service_dir = parts[1]
             if "." in service_dir:
-                service = service_dir.split(".", 1)[1]
+                service = service_dir.split(".", 1)[1].replace("_", "-")
                 services.add(f"bootstrap/{service}")
         elif parts[0] == "libs":
             services.add("__all__")
@@ -503,6 +503,7 @@ def sync_services(
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
+                timeout=30,
             )
             if res.returncode == 0:
                 current_head = res.stdout.strip()
@@ -527,6 +528,7 @@ def sync_services(
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
+                timeout=30,
             )
             new_head = res_new.stdout.strip() if res_new.returncode == 0 else None
             
@@ -536,6 +538,7 @@ def sync_services(
                     cwd=repo_path,
                     capture_output=True,
                     text=True,
+                    timeout=120,
                 )
                 if res_diff.returncode == 0:
                     changed_files = res_diff.stdout.splitlines()
