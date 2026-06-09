@@ -177,16 +177,43 @@ async function recordHeartbeat(request, env) {
   const payload = await request.json();
   const environment = safeId(payload.env || payload.environment || "production");
   const name = safeId(payload.name || "infra-probe-runner");
+  const key = heartbeatKey(environment, name);
+  const now = Date.now();
   const value = {
     environment,
     name,
     ok: payload.ok !== false,
     detail: String(payload.detail || ""),
     timestamp: Number(payload.timestamp || 0),
-    receivedAt: Date.now(),
+    receivedAt: now,
   };
-  await env.WATCHDOG_STATE.put(heartbeatKey(environment, name), JSON.stringify(value));
-  return jsonResponse({ ok: true, key: heartbeatKey(environment, name) });
+
+  // Throttle KV writes to stay within the Cloudflare KV daily put() limit.
+  // The probe runner posts heartbeats far more often than the staleness window
+  // requires; writing on every post exhausts the daily quota and then every
+  // put() throws, which silently breaks heartbeat tracking and triggers false
+  // "stale heartbeat" alerts. Reads are cheap, so read-then-maybe-write:
+  // always persist a status change immediately, otherwise write at most once
+  // per minWriteInterval (well under the staleness threshold).
+  const minWriteIntervalMs = Number(env.WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS || 600) * 1000;
+  let shouldWrite = true;
+  const existingRaw = await env.WATCHDOG_STATE.get(key);
+  if (existingRaw) {
+    try {
+      const existing = JSON.parse(existingRaw);
+      const ageMs = now - Number(existing.receivedAt || 0);
+      const statusUnchanged = (existing.ok !== false) === value.ok;
+      if (statusUnchanged && ageMs >= 0 && ageMs < minWriteIntervalMs) {
+        shouldWrite = false;
+      }
+    } catch (_error) {
+      shouldWrite = true;
+    }
+  }
+  if (shouldWrite) {
+    await env.WATCHDOG_STATE.put(key, JSON.stringify(value));
+  }
+  return jsonResponse({ ok: true, key, persisted: shouldWrite });
 }
 
 async function statusResponse(request, env) {
