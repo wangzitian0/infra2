@@ -9,6 +9,7 @@ services:
       - OPENCLAW_LOG_LEVEL=${OPENCLAW_LOG_LEVEL:-${LOG_LEVEL:-info}}
       - OPENCLAW_DIAGNOSTICS=${OPENCLAW_DIAGNOSTICS:-}
       - OPENCLAW_SKIP_STARTUP_MODEL_PREWARM=${OPENCLAW_SKIP_STARTUP_MODEL_PREWARM:-1}
+      - OPENCLAW_SKIP_CRON=${OPENCLAW_SKIP_CRON:-1}
       - OPENCLAW_GATEWAY_TOKEN
       - OPENCLAW_GATEWAY_BIND
       - OPENCLAW_GATEWAY_PORT
@@ -74,6 +75,43 @@ services:
         ensure_plugin brave @openclaw/brave-plugin
 
         exec node openclaw.mjs gateway --allow-unconfigured
+
+  tianclaw-cron-runner:
+    image: ghcr.io/openclaw/openclaw:2026.5.18
+    restart: always
+    volumes:
+      - openclaw-discord-data:/home/node/.openclaw
+      - ./cron-runner.mjs:/usr/local/bin/tianclaw-cron-runner.mjs:ro
+    environment:
+      - XDG_CONFIG_HOME=/home/node/.openclaw
+      - HOME=/home/node
+      - NODE_ENV=production
+      - TZ=Asia/Singapore
+      - OPENCLAW_GATEWAY_TOKEN
+      - OPENCLAW_GATEWAY_PORT
+      - TIANCLAW_CRON_RUNNER_ENABLED=${TIANCLAW_CRON_RUNNER_ENABLED:-true}
+      - TIANCLAW_CRON_RUNNER_INTERVAL_MS=${TIANCLAW_CRON_RUNNER_INTERVAL_MS:-30000}
+      - TIANCLAW_CRON_RUNNER_GATEWAY_URL=${TIANCLAW_CRON_RUNNER_GATEWAY_URL:-ws://openclaw:${OPENCLAW_GATEWAY_PORT:-18789}}
+      - TIANCLAW_CRON_RUNNER_CLI_TIMEOUT_MS=${TIANCLAW_CRON_RUNNER_CLI_TIMEOUT_MS:-45000}
+    depends_on:
+      openclaw:
+        condition: service_healthy
+    networks:
+      - dokploy-network
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'node /usr/local/bin/tianclaw-cron-runner.mjs' >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    command:
+      - node
+      - /usr/local/bin/tianclaw-cron-runner.mjs
 
   tianclaw-git-sync:
     image: alpine:3.19
