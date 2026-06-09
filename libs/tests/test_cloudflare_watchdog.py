@@ -92,7 +92,9 @@ def test_worker_dedupes_renotifies_and_sends_recovery_to_feishu() -> None:
     assert "WATCHDOG_RENOTIFY_SECONDS" in source
     assert "failureFingerprint" in source
     assert "failureDomain: failure.failure_domain || \"\"" in source
-    assert "detail: failure.detail" not in source
+    assert "failure_domain: failureDomain" in source
+    assert "_failure_domain_for_http_target" in source
+    assert "_failure_domain_for_heartbeat" in source
     assert "formatResolvedMessage" in source
     assert "Infra2 Cloudflare watchdog failed" in source
     assert "Infra2 Cloudflare watchdog recovered" in source
