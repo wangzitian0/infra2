@@ -95,6 +95,8 @@ def test_worker_dedupes_renotifies_and_sends_recovery_to_feishu() -> None:
     assert "failure_domain: failureDomain" in source
     assert "_failure_domain_for_http_target" in source
     assert "_failure_domain_for_heartbeat" in source
+    assert 'return "public-route";' in source
+    assert 'return "heartbeat";' in source
     assert "formatResolvedMessage" in source
     assert "Infra2 Cloudflare watchdog failed" in source
     assert "Infra2 Cloudflare watchdog recovered" in source

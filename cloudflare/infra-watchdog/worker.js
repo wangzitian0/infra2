@@ -565,11 +565,17 @@ function heartbeatKey(environment, name) {
 }
 
 function _failure_domain_for_http_target(target) {
-  return `http:${target.name}`;
+  if (target.name === "infra2-public-entrypoint") {
+    return "host-reachability";
+  }
+  if (target.name === "cloudflare-worker-health") {
+    return "worker-health";
+  }
+  return "public-route";
 }
 
 function _failure_domain_for_heartbeat(heartbeat) {
-  return `heartbeat:${heartbeat.environment}:${heartbeat.name}`;
+  return "heartbeat";
 }
 
 function safeId(value) {
