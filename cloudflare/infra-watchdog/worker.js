@@ -109,12 +109,31 @@ async function runWatchdog(env, nowMs = Date.now()) {
    };
   }
   const timeoutMs = Number(env.WATCHDOG_HTTP_TIMEOUT_MS || 8000);
+  const maxAttempts = Math.max(1, Number(env.WATCHDOG_RETRY_MAX_ATTEMPTS || 2));
+  const retryDelayMs = Math.max(0, Number(env.WATCHDOG_RETRY_DELAY_MS || 60000));
 
-  const routeResults = await Promise.all(targets.map((target) => checkHttpTarget(target, timeoutMs)));
+  const routeResults = await Promise.all(
+    targets.map((target) => checkHttpTargetWithRetry(target, timeoutMs, maxAttempts, retryDelayMs)),
+  );
   const heartbeatResults = await checkHeartbeats(env, heartbeats, nowMs);
   const configResults = checkEffectiveConfig(targets, heartbeats);
-  const failures = routeResults.concat(heartbeatResults, configResults).filter((result) => !result.ok);
+  const allResults = routeResults.concat(heartbeatResults, configResults);
+  const failures = allResults.filter((result) => !result.ok);
   const fingerprint = failures.length > 0 ? await failureFingerprint(failures) : "";
+
+  for (const result of allResults) {
+    logWatchdogResult({
+      event: "watchdog.check",
+      timestamp: nowMs,
+      environment: result.environment,
+      name: result.name,
+      status: result.ok ? "ok" : "fail",
+      severity: result.severity,
+      failure_domain: result.failure_domain || "",
+      attempt_count: Number(result.attempt_count || 1),
+      detail: result.detail,
+    });
+  }
 
   let deliveryError = "";
   try {
@@ -134,6 +153,16 @@ async function runWatchdog(env, nowMs = Date.now()) {
   if (deliveryError) {
     throw new Error(`watchdog delivery failed: ${deliveryError}`);
   }
+  logWatchdogResult({
+    event: "watchdog.run",
+    timestamp: nowMs,
+    status: failures.length === 0 ? "ok" : "fail",
+    routeTargetCount: targets.length,
+    heartbeatTargetCount: heartbeats.length,
+    failureCount: failures.length,
+    failureFingerprint: fingerprint,
+    deliveryError,
+  });
   return { failures, routeResults, heartbeatResults, configResults };
 }
 
@@ -172,6 +201,20 @@ async function checkHttpTarget(target, timeoutMs) {
     });
     if (target.statuses.includes(response.status)) {
       return okResult(target, `HTTP ${response.status}`, _failure_domain_for_http_target(target));
+    }
+
+    async function checkHttpTargetWithRetry(target, timeoutMs, maxAttempts, retryDelayMs) {
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const result = await checkHttpTarget(target, timeoutMs);
+        result.attempt_count = attempt;
+        if (result.ok || attempt >= maxAttempts) {
+          return result;
+        }
+        if (retryDelayMs > 0) {
+          await sleep(retryDelayMs);
+        }
+      }
+      return failResult(target, "retry loop exhausted", _failure_domain_for_http_target(target));
     }
     const body = await safeBody(response);
     return failResult(
@@ -538,6 +581,7 @@ function okResult(target, detail, failureDomain = "") {
     ok: true,
     detail,
     failure_domain: failureDomain,
+    attempt_count: 1,
   };
 }
 
@@ -549,7 +593,16 @@ function failResult(target, detail, failureDomain = "") {
     ok: false,
     detail: oneLine(detail),
     failure_domain: failureDomain,
+    attempt_count: 1,
   };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function logWatchdogResult(payload) {
+  console.log(JSON.stringify(payload));
 }
 
 async function safeBody(response) {

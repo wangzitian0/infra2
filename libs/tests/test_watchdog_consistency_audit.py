@@ -27,7 +27,7 @@ def test_watchdog_signal_inventory_has_required_ownership_fields() -> None:
     inventory = yaml.safe_load(INVENTORY.read_text(encoding="utf-8"))
     signals = inventory["signals"]
 
-    assert inventory["version"] == 1
+    assert inventory["version"] == 2
     assert {"internal", "cloudflare", "github", "excluded"} == set(inventory["owners"])
     assert len({signal["signal_id"] for signal in signals}) == len(signals)
 

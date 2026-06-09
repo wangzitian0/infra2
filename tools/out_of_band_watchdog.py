@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
@@ -117,55 +118,43 @@ def load_ssh_config(env: Mapping[str, str]) -> SshConfig | None:
     )
 
 
-def run_http_checks(targets: list[HttpTarget], timeout: float) -> list[CheckResult]:
-    """Run public endpoint checks from outside infra2."""
+def run_http_checks(
+    targets: list[HttpTarget],
+    timeout: float,
+    *,
+    max_attempts: int = 2,
+    retry_delay_seconds: float = 60.0,
+) -> list[CheckResult]:
+    """Run public endpoint checks from outside infra2 with bounded retries."""
     results: list[CheckResult] = []
+    attempts = max(1, max_attempts)
+    retry_delay = max(0.0, retry_delay_seconds)
     for target in targets:
-        request = Request(
-            target.url,
-            headers={"User-Agent": "infra2-out-of-band-watchdog/1.0"},
-            method="GET",
-        )
-        try:
-            with urlopen(request, timeout=timeout) as response:  # noqa: S310
-                status = response.status
-        except HTTPError as exc:
-            status = exc.code
-        except (OSError, URLError) as exc:
-            results.append(
-                CheckResult(
-                    target.name,
-                    False,
-                    f"GET {target.url} failed: {exc}",
-                    _failure_domain_for_http_target(target.name),
-                )
-            )
-            continue
-
-        if status in target.expected_statuses:
-            results.append(
-                CheckResult(
-                    target.name,
-                    True,
-                    f"HTTP {status}",
-                    _failure_domain_for_http_target(target.name),
-                )
-            )
-        else:
-            expected = ",".join(str(code) for code in sorted(target.expected_statuses))
-            results.append(
-                CheckResult(
-                    target.name,
-                    False,
-                    f"HTTP {status}; expected {expected}",
-                    _failure_domain_for_http_target(target.name),
-                )
-            )
+        result: CheckResult | None = None
+        for attempt in range(1, attempts + 1):
+            result = _run_http_check_once(target, timeout)
+            if result.ok:
+                if attempt > 1:
+                    result = CheckResult(
+                        result.name,
+                        True,
+                        f"{result.detail}; recovered_on_attempt={attempt}",
+                        result.failure_domain,
+                    )
+                break
+            if attempt < attempts and retry_delay > 0:
+                time.sleep(retry_delay)
+        assert result is not None
+        results.append(result)
     return results
 
 
 def run_worker_status_check(
-    env: Mapping[str, str], timeout: float
+    env: Mapping[str, str],
+    timeout: float,
+    *,
+    max_attempts: int = 2,
+    retry_delay_seconds: float = 60.0,
 ) -> list[CheckResult]:
     """Check authenticated Cloudflare Worker cron/KV-backed watchdog status."""
     url = (
@@ -184,6 +173,19 @@ def run_worker_status_check(
             )
         ]
 
+    attempts = max(1, max_attempts)
+    retry_delay = max(0.0, retry_delay_seconds)
+    last_results: list[CheckResult] = []
+    for attempt in range(1, attempts + 1):
+        last_results = _run_worker_status_once(url, token, timeout)
+        if all(result.ok for result in last_results):
+            return last_results
+        if attempt < attempts and retry_delay > 0:
+            time.sleep(retry_delay)
+    return last_results
+
+
+def _run_worker_status_once(url: str, token: str, timeout: float) -> list[CheckResult]:
     request = Request(
         url,
         headers={
@@ -279,6 +281,42 @@ def run_worker_status_check(
             f"worker last-run fresh: age={age_seconds}s",
         )
     ]
+
+
+def _run_http_check_once(target: HttpTarget, timeout: float) -> CheckResult:
+    request = Request(
+        target.url,
+        headers={"User-Agent": "infra2-out-of-band-watchdog/1.0"},
+        method="GET",
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:  # noqa: S310
+            status = response.status
+    except HTTPError as exc:
+        status = exc.code
+    except (OSError, URLError) as exc:
+        return CheckResult(
+            target.name,
+            False,
+            f"GET {target.url} failed: {exc}",
+            _failure_domain_for_http_target(target.name),
+        )
+
+    if status in target.expected_statuses:
+        return CheckResult(
+            target.name,
+            True,
+            f"HTTP {status}",
+            _failure_domain_for_http_target(target.name),
+        )
+
+    expected = ",".join(str(code) for code in sorted(target.expected_statuses))
+    return CheckResult(
+        target.name,
+        False,
+        f"HTTP {status}; expected {expected}",
+        _failure_domain_for_http_target(target.name),
+    )
 
 
 def run_ssh_checks(
@@ -498,27 +536,85 @@ def main(env: Mapping[str, str] | None = None) -> int:
     )
     ssh_targets = parse_ssh_targets(current_env.get("INFRA2_WATCHDOG_SSH_TARGETS", ""))
     timeout = float(current_env.get("INFRA2_WATCHDOG_HTTP_TIMEOUT", "10"))
+    retry_max_attempts = int(current_env.get("INFRA2_WATCHDOG_RETRY_MAX_ATTEMPTS", "2"))
+    retry_delay_seconds = float(
+        current_env.get("INFRA2_WATCHDOG_RETRY_DELAY_SECONDS", "60")
+    )
     ssh_config = load_ssh_config(current_env)
 
-    results = run_http_checks(http_targets, timeout)
-    results.extend(run_worker_status_check(current_env, timeout))
+    _emit_structured_log(
+        {
+            "event": "watchdog.run.start",
+            "timeout_seconds": timeout,
+            "retry_max_attempts": max(1, retry_max_attempts),
+            "retry_delay_seconds": max(0.0, retry_delay_seconds),
+            "http_target_count": len(http_targets),
+            "ssh_target_count": len(ssh_targets),
+        }
+    )
+
+    results = run_http_checks(
+        http_targets,
+        timeout,
+        max_attempts=retry_max_attempts,
+        retry_delay_seconds=retry_delay_seconds,
+    )
+    results.extend(
+        run_worker_status_check(
+            current_env,
+            timeout,
+            max_attempts=retry_max_attempts,
+            retry_delay_seconds=retry_delay_seconds,
+        )
+    )
     results.extend(run_dokploy_route_canary_check(current_env, ssh_config=ssh_config))
     results.extend(run_ssh_checks(ssh_config, ssh_targets))
-
     for result in results:
+        _emit_structured_log(
+            {
+                "event": "watchdog.check",
+                "name": result.name,
+                "status": "ok" if result.ok else "fail",
+                "failure_domain": result.failure_domain,
+                "detail": _redact(result.detail),
+            }
+        )
         status = "OK" if result.ok else "FAIL"
         print(f"{status} {result.name}: {_redact(result.detail)}")
 
     failures = [result for result in results if not result.ok]
     if not failures:
+        _emit_structured_log(
+            {
+                "event": "watchdog.run.complete",
+                "status": "ok",
+                "failure_count": 0,
+            }
+        )
         return 0
 
     message = format_failure_message(failures, run_url=_github_run_url(current_env))
     if current_env.get("WATCHDOG_DRY_RUN") == "1":
         print(message)
+        _emit_structured_log(
+            {
+                "event": "watchdog.run.complete",
+                "status": "fail",
+                "failure_count": len(failures),
+                "dry_run": True,
+            }
+        )
         return 1
 
     deliver_out_of_band_alert(current_env, message)
+    _emit_structured_log(
+        {
+            "event": "watchdog.run.complete",
+            "status": "fail",
+            "failure_count": len(failures),
+            "dry_run": False,
+        }
+    )
     return 1
 
 
@@ -625,6 +721,10 @@ def _redact(value: str) -> str:
         redacted,
     )
     return redacted
+
+
+def _emit_structured_log(payload: Mapping[str, object]) -> None:
+    print(json.dumps(payload, ensure_ascii=True, sort_keys=True))
 
 
 if __name__ == "__main__":

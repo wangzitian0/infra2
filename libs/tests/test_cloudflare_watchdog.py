@@ -20,6 +20,8 @@ def test_cloudflare_watchdog_runs_every_thirty_minutes_with_kv_state() -> None:
     assert 'WATCHDOG_ENVIRONMENTS = "production,staging"' in config
     assert 'WATCHDOG_RENOTIFY_SECONDS = "7200"' in config
     assert 'WATCHDOG_STATUS_MAX_AGE_SECONDS = "7200"' in config
+    assert 'WATCHDOG_RETRY_MAX_ATTEMPTS = "2"' in config
+    assert 'WATCHDOG_RETRY_DELAY_MS = "60000"' in config
     assert "FEISHU_WEBHOOK_URL" not in config
     assert "HEARTBEAT_TOKEN" not in config
 
@@ -91,12 +93,18 @@ def test_worker_dedupes_renotifies_and_sends_recovery_to_feishu() -> None:
     assert "alert-state:cloudflare-watchdog" in source
     assert "WATCHDOG_RENOTIFY_SECONDS" in source
     assert "failureFingerprint" in source
+    assert "checkHttpTargetWithRetry" in source
+    assert "WATCHDOG_RETRY_MAX_ATTEMPTS" in source
+    assert "WATCHDOG_RETRY_DELAY_MS" in source
+    assert 'event: "watchdog.check"' in source
+    assert 'event: "watchdog.run"' in source
     assert "failureDomain: failure.failure_domain || \"\"" in source
     assert "failure_domain: failureDomain" in source
     assert "_failure_domain_for_http_target" in source
     assert "_failure_domain_for_heartbeat" in source
     assert 'return "public-route";' in source
     assert 'return "heartbeat";' in source
+    assert "detail: failure.detail" not in source
     assert "formatResolvedMessage" in source
     assert "Infra2 Cloudflare watchdog failed" in source
     assert "Infra2 Cloudflare watchdog recovered" in source

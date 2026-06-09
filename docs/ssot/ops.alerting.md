@@ -337,11 +337,13 @@ DEPLOY_ENV=staging uv run invoke alerting.setup
 
 The Worker is stateful. It sends an alert when a failure first appears, when the
 failure fingerprint changes, when `WATCHDOG_RENOTIFY_SECONDS` is reached, and
-when the previously failing watchdog recovers. Successful checks stay quiet. It
-also writes `watchdog:last-run` to KV after scheduled runs so GitHub can detect
-Worker cron or KV-backed state blindness; `/health` remains public and minimal,
-while `/status` is bearer-token protected and returns only non-secret summary
-state.
+when the previously failing watchdog recovers. Successful checks stay quiet on
+the alert channel. HTTP route checks retry using
+`WATCHDOG_RETRY_MAX_ATTEMPTS`/`WATCHDOG_RETRY_DELAY_MS` before escalating. Each
+scheduled run writes structured execution logs and `watchdog:last-run` to KV so
+GitHub can detect Worker cron or KV-backed state blindness; `/health` remains
+public and minimal, while `/status` is bearer-token protected and returns only
+non-secret summary state.
 
 ### SOP-005B: GitHub fallback out-of-band watchdog
 
@@ -396,6 +398,8 @@ Optional GitHub variables:
 - `INFRA2_WATCHDOG_HTTP_TARGETS`: newline-separated `name|url|status_csv`
 - `INFRA2_WATCHDOG_WORKER_STATUS_URL`: defaults to the deployed Worker
   `/status` endpoint.
+- `INFRA2_WATCHDOG_RETRY_MAX_ATTEMPTS`: defaults to `2`.
+- `INFRA2_WATCHDOG_RETRY_DELAY_SECONDS`: defaults to `60`.
 - `INFRA2_WATCHDOG_SSH_TARGETS`: newline-separated `name|command|expected_text`
 - `INFRA2_WATCHDOG_SSH_PORT`: defaults to `22`
 
