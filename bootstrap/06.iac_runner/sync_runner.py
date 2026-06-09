@@ -461,6 +461,30 @@ def run_invoke_task(
         }
 
 
+def get_changed_services_from_files(changed_files: list[str]) -> set[str]:
+    services = set()
+    for file_path in changed_files:
+        parts = file_path.split("/")
+        if parts[0] == "platform" and len(parts) >= 2:
+            service_dir = parts[1]
+            if "." in service_dir:
+                service = service_dir.split(".", 1)[1]
+                services.add(f"platform/{service}")
+        elif parts[0] == "finance_report" and len(parts) >= 3:
+            service_dir = parts[2]
+            if "." in service_dir:
+                service = service_dir.split(".", 1)[1]
+                services.add(f"finance_report/{service}")
+        elif parts[0] == "bootstrap" and len(parts) >= 2:
+            service_dir = parts[1]
+            if "." in service_dir:
+                service = service_dir.split(".", 1)[1].replace("_", "-")
+                services.add(f"bootstrap/{service}")
+        elif parts[0] == "libs":
+            services.add("__all__")
+    return services
+
+
 def sync_services(
     services: set[str], ref: str | None = None, deploy_env: str = "staging"
 ) -> SyncResult:
@@ -470,6 +494,19 @@ def sync_services(
         logger.info(
             f"Starting sync for services: {services} (env={deploy_env}, ref={ref})"
         )
+
+        repo_path = WORKSPACE / REPO_NAME
+        current_head = None
+        if repo_path.exists():
+            res = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if res.returncode == 0:
+                current_head = res.stdout.strip()
 
         if not update_repo(ref=ref):
             logger.error("Failed to update repo, aborting sync")
@@ -481,11 +518,39 @@ def sync_services(
                 error="Failed to update repo",
             )
 
-        repo_path = WORKSPACE / REPO_NAME
-
         if "__all__" in services:
             services = set(ALL_SERVICES)
             logger.info("Syncing all services due to libs/ change")
+        elif not services:
+            # If services set is empty, determine changes dynamically via git diff
+            res_new = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            new_head = res_new.stdout.strip() if res_new.returncode == 0 else None
+            
+            if current_head and new_head and current_head != new_head:
+                res_diff = subprocess.run(
+                    ["git", "diff", "--name-only", current_head, new_head],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                if res_diff.returncode == 0:
+                    changed_files = res_diff.stdout.splitlines()
+                    services = get_changed_services_from_files(changed_files)
+                    logger.info("Detected changed services via git diff: %s", services)
+                    if "__all__" in services:
+                        services = set(ALL_SERVICES)
+            
+            if not services:
+                # If still empty (fresh clone or no detected changes), fallback to all
+                services = set(ALL_SERVICES)
+                logger.info("No changes detected or fresh clone; syncing all services")
 
         results: list[ServiceSyncResult] = []
         for service in sorted(services):
@@ -554,14 +619,19 @@ def sync_services(
         return sync_result
 
 
-def sync_services_by_version(env: str, ref: str, triggered_by: str) -> SyncResult:
-    """Deploy all platform services to a specific environment using a git ref."""
+def sync_services_by_version(
+    env: str, ref: str, triggered_by: str, services: list[str] | None = None
+) -> SyncResult:
+    """Deploy targeted platform services to a specific environment using a git ref."""
     logger.info("=== Deployment Started ===")
     logger.info(f"Environment: {env}")
     logger.info(f"Ref: {ref}")
     logger.info(f"Triggered by: {triggered_by}")
+    if services:
+        logger.info(f"Targeted Services: {services}")
 
-    result = sync_services(set(ALL_SERVICES), ref=ref, deploy_env=env)
+    target_services = set(services) if services else set()
+    result = sync_services(target_services, ref=ref, deploy_env=env)
 
     logger.info(
         "=== Deployment Complete: "

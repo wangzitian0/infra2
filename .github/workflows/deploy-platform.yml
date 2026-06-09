@@ -25,6 +25,11 @@ on:
         description: 'Git Reference (branch/tag)'
         required: true
         default: 'main'
+      force_redeploy_all:
+        description: 'Force redeploy all services (skip change detection)'
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -59,10 +64,16 @@ jobs:
             fi
           fi
           
+          FORCE_REDEPLOY_ALL="false"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            FORCE_REDEPLOY_ALL="${{ inputs.force_redeploy_all }}"
+          fi
+          
           echo "env=$ENV" >> "$GITHUB_OUTPUT"
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "force_redeploy_all=$FORCE_REDEPLOY_ALL" >> "$GITHUB_OUTPUT"
           
-          echo "🚀 Deploying $REF to $ENV"
+          echo "🚀 Deploying $REF to $ENV (force_redeploy_all=$FORCE_REDEPLOY_ALL)"
 
       - name: Resolve Deployment Commit
         id: deploy-ref
@@ -290,7 +301,15 @@ jobs:
             --arg ref "$REF" \
             --arg source_ref "$SOURCE_REF" \
             --arg triggered_by "${{ github.actor }}" \
-            '{env: $env, ref: $ref, source_ref: $source_ref, triggered_by: $triggered_by, wait: false}')
+            --arg force "${{ steps.target.outputs.force_redeploy_all }}" \
+            '{
+              env: $env,
+              ref: $ref,
+              source_ref: $source_ref,
+              triggered_by: $triggered_by,
+              wait: false,
+              services: (if $force == "true" then ["__all__"] else [] end)
+            }')
           DEPLOY_BODY="$(mktemp)"
 
           echo "Starting IaC Runner deployment for ${SOURCE_REF} (${SHORT_SHA})..."

@@ -890,3 +890,88 @@ def test_iac_runner_bootstrap_deploy_script_uses_confirmed_dokploy_env() -> None
     assert "Recovered DOKPLOY_API_KEY from current container env" in script
     assert "current container env are missing DOKPLOY_API_KEY" in script
     assert "if [ -f /secrets/.env ]; then" in script
+
+
+def test_deploy_cache_reuses_only_when_requested_services_match(monkeypatch) -> None:
+    """Verify that cached deployment results are only returned when requested services match."""
+    monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
+    sync_runner = _load_module(
+        "sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch
+    )
+    fake_flask = types.ModuleType("flask")
+
+    class FakeFlask:
+        def __init__(self, _name):
+            pass
+
+        def route(self, *_args, **_kwargs):
+            return lambda func: func
+
+    fake_flask.Flask = FakeFlask
+    fake_flask.jsonify = lambda payload: payload
+    fake_flask.request = types.SimpleNamespace()
+    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+    webhook_server = _load_module(
+        "webhook_server_under_test", IAC_RUNNER / "webhook_server.py", monkeypatch
+    )
+
+    # --- Scenario A: Cache Mismatch ---
+    # Cache has ["platform/postgres"], request is for ["platform/redis"]
+    webhook_server._recent_deploys.clear()
+    key = webhook_server._deployment_key("staging", DEPLOY_SHA)
+    cached_postgres = sync_runner.SyncResult(
+        env="staging",
+        ref=DEPLOY_SHA,
+        requested_services=["platform/postgres"],
+        results=[
+            sync_runner.ServiceSyncResult(
+                service="platform/postgres",
+                task="postgres.sync",
+                success=True,
+                skipped=False,
+            )
+        ],
+    )
+    response_postgres = webhook_server._completed_response("staging", DEPLOY_SHA, "ci", cached_postgres)
+    webhook_server._recent_deploys[key] = (time.monotonic(), response_postgres)
+
+    fake_flask.request.headers = _signed_headers(monkeypatch)
+    fake_flask.request.data = b""
+    fake_flask.request.json = {"env": "staging", "ref": DEPLOY_SHA, "wait": True, "triggered_by": "ci", "services": ["platform/redis"]}
+
+    started = []
+    def fake_sync_services_by_version(env, ref, triggered_by, services):
+        started.append((env, ref, services))
+        return sync_runner.SyncResult(
+            env=env,
+            ref=ref,
+            requested_services=services or [],
+            results=[
+                sync_runner.ServiceSyncResult(
+                    service="platform/redis",
+                    task="redis.sync",
+                    success=True,
+                )
+            ],
+        )
+
+    monkeypatch.setattr(sync_runner, "sync_services_by_version", fake_sync_services_by_version)
+
+    body, status_code = webhook_server.version_deploy()
+    assert "cached" not in body
+    assert started == [("staging", DEPLOY_SHA, ["platform/redis"])]
+
+    # --- Scenario B: Cache Match ---
+    # Cache has ["platform/postgres"], request is for ["platform/postgres"]
+    webhook_server._recent_deploys.clear()
+    webhook_server._recent_deploys[key] = (time.monotonic(), response_postgres)
+
+    fake_flask.request.headers = _signed_headers(monkeypatch)
+    fake_flask.request.data = b""
+    fake_flask.request.json = {"env": "staging", "ref": DEPLOY_SHA, "wait": True, "triggered_by": "ci", "services": ["platform/postgres"]}
+
+    started.clear()
+    body2, status_code2 = webhook_server.version_deploy()
+    assert body2.get("cached") is True
+    assert not started  # No new deployment triggered
+

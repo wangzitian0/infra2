@@ -234,12 +234,12 @@ def _completed_response(env: str, ref: str, triggered_by: str, result) -> dict:
     }
 
 
-def _run_deployment(env: str, ref: str, triggered_by: str) -> None:
+def _run_deployment(env: str, ref: str, triggered_by: str, services: list[str] | None = None) -> None:
     from sync_runner import sync_services_by_version
 
     key = _deployment_key(env, ref)
     try:
-        result = sync_services_by_version(env, ref, triggered_by)
+        result = sync_services_by_version(env, ref, triggered_by, services)
         response = _completed_response(env, ref, triggered_by, result)
     except Exception as exc:
         logger.exception("Deployment failed before producing a sync result")
@@ -250,6 +250,7 @@ def _run_deployment(env: str, ref: str, triggered_by: str) -> None:
             "ref": ref,
             "triggered_by": triggered_by,
             "error": str(exc),
+            "requested_services": services,
         }
     with _deploy_state_lock:
         _recent_deploys[key] = (time.monotonic(), response)
@@ -351,6 +352,21 @@ def manual_sync():
     return jsonify({"status": "accepted", "services": list(services)})
 
 
+def _normalize_services(services: list[str] | None) -> list[str]:
+    if services is None:
+        return []
+    return sorted(services)
+
+
+def _is_cache_match(recent: dict, requested_services: list[str] | None) -> bool:
+    cached_services = None
+    if "result" in recent and isinstance(recent["result"], dict):
+        cached_services = recent["result"].get("requested_services")
+    if cached_services is None:
+        cached_services = recent.get("requested_services")
+    return _normalize_services(cached_services) == _normalize_services(requested_services)
+
+
 @app.route("/deploy", methods=["POST"])
 def version_deploy():
     if not verify_iac_request():
@@ -374,20 +390,25 @@ def version_deploy():
     if env not in ("staging", "production"):
         return jsonify({"error": "Invalid env (must be staging or production)"}), 400
 
+    services = payload.get("services")
+    if services is not None:
+        if not isinstance(services, list) or not all(isinstance(s, str) for s in services):
+            return jsonify({"error": "services must be a list of strings"}), 400
+
     logger.info(f"Deployment: {ref} to {env} by {triggered_by}")
 
     if wait:
         key = _deployment_key(env, ref)
         with _deploy_state_lock:
             recent = _recent_result(key)
-            if recent:
+            if recent and _is_cache_match(recent, services):
                 status_code = 200 if recent.get("status") == "completed" else 500
                 return jsonify({**recent, "cached": True}), status_code
             if key in _in_flight_deploys:
                 return jsonify(_in_progress_response(env, ref, triggered_by, True)), 202
             _in_flight_deploys.add(key)
 
-        _run_deployment(env, ref, triggered_by)
+        _run_deployment(env, ref, triggered_by, services)
         response = _recent_result(key) or {
             "status": "failed",
             "env": env,
@@ -401,13 +422,16 @@ def version_deploy():
     key = _deployment_key(env, ref)
     with _deploy_state_lock:
         recent = _recent_result(key)
-        if recent:
+        if recent and _is_cache_match(recent, services):
             return jsonify({**recent, "cached": True}), 200
         if key in _in_flight_deploys:
             return jsonify(_in_progress_response(env, ref, triggered_by, True)), 202
         _in_flight_deploys.add(key)
 
-    thread = threading.Thread(target=_run_deployment, args=(env, ref, triggered_by))
+    if services is not None:
+        thread = threading.Thread(target=_run_deployment, args=(env, ref, triggered_by, services))
+    else:
+        thread = threading.Thread(target=_run_deployment, args=(env, ref, triggered_by))
     thread.daemon = True
     thread.start()
 
