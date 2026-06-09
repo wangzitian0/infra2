@@ -595,6 +595,41 @@ def test_main_structured_check_logs_include_attempt_count(monkeypatch) -> None:
     assert check_events[0]["attempt_count"] == 2
 
 
+def test_main_uses_default_retry_values_when_env_is_blank(monkeypatch) -> None:
+    """Blank retry env vars must not crash watchdog execution."""
+    watchdog = _load_watchdog()
+    captured: dict = {}
+
+    def fake_run_http_checks(_targets, _timeout, **kwargs):
+        captured["kwargs"] = kwargs
+        return [watchdog.CheckResult("infra2-iac-runner", True, "HTTP 200")]
+
+    monkeypatch.setattr(watchdog, "run_http_checks", fake_run_http_checks)
+    monkeypatch.setattr(watchdog, "run_ssh_checks", lambda _config, _targets: [])
+    monkeypatch.setattr(
+        watchdog,
+        "run_worker_status_check",
+        lambda _env, _timeout, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        watchdog,
+        "run_dokploy_route_canary_check",
+        lambda _env, ssh_config: [],
+    )
+
+    result = watchdog.main(
+        {
+            "INFRA2_WATCHDOG_RETRY_MAX_ATTEMPTS": "",
+            "INFRA2_WATCHDOG_RETRY_DELAY_SECONDS": "",
+            "WATCHDOG_DRY_RUN": "0",
+        }
+    )
+
+    assert result == 0
+    assert captured["kwargs"]["max_attempts"] == 2
+    assert captured["kwargs"]["retry_delay_seconds"] == 60.0
+
+
 def test_main_records_delivery_failure_event_instead_of_crashing(monkeypatch) -> None:
     """Infra-012.5: delivery failures must emit fallback diagnostic event."""
     watchdog = _load_watchdog()
