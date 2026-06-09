@@ -419,9 +419,6 @@ creation (label `watchdog-alert-fallback`), and exits with failure so CI/logs
 retain an auditable fallback signal.
 Per-check structured logs include `attempt_count` and `duration_ms` to separate
 single-shot failures from retry-recovered transients and to expose slow checks.
-Run-level events (`watchdog.run` / `watchdog.run.complete` /
-`watchdog.delivery.failure`) include `run_duration_ms` for end-to-end latency
-observability.
 
 Weekly digest is handled by `.github/workflows/watchdog-weekly-digest.yml`
 (cron Monday UTC). It summarizes the last 7 days of
