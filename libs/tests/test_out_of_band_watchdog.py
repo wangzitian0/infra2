@@ -34,7 +34,7 @@ def test_workflow_runs_daily_and_can_be_dispatched() -> None:
     assert workflow["on"]["schedule"] == [{"cron": "17 2 * * *"}]
     assert "workflow_dispatch" in workflow["on"]
     assert "ssh_targets_override" in workflow["on"]["workflow_dispatch"]["inputs"]
-    assert workflow["permissions"] == {"contents": "read"}
+    assert workflow["permissions"] == {"contents": "read", "issues": "write"}
 
 
 def test_workflow_alerts_directly_and_does_not_call_the_bridge() -> None:
@@ -447,6 +447,8 @@ def test_failure_message_is_out_of_band_and_redacts_secrets() -> None:
     assert "Route: GitHub Actions -> Feishu direct" in message
     assert "[host-diagnostics] infra2-iac-runner" in message
     assert "[alert-bridge] infra2-alert-bridge" in message
+    assert "Action:" in message
+    assert "Runbook:" in message
     assert "https://github/run/1" in message
     assert "secret-token" not in message
 
@@ -624,6 +626,11 @@ def test_main_records_delivery_failure_event_instead_of_crashing(monkeypatch) ->
         lambda _env, _message: (_ for _ in ()).throw(RuntimeError("feishu down")),
     )
     monkeypatch.setattr(
+        watchdog,
+        "create_delivery_fallback_issue",
+        lambda _env, **_kwargs: "https://github.com/wangzitian0/infra2/issues/999",
+    )
+    monkeypatch.setattr(
         watchdog, "_emit_structured_log", lambda payload: emitted.append(dict(payload))
     )
 
@@ -633,6 +640,7 @@ def test_main_records_delivery_failure_event_instead_of_crashing(monkeypatch) ->
     ]
     assert len(delivery_events) == 1
     assert delivery_events[0]["status"] == "fail"
+    assert delivery_events[0]["fallback_issue_url"].endswith("/issues/999")
 
 
 def test_out_of_band_delivery_supports_existing_feishu_app_mode(monkeypatch) -> None:
@@ -699,7 +707,26 @@ def test_emit_structured_log_adds_timestamp(capsys) -> None:
     assert isinstance(payload["timestamp"], int)
 
 
+def test_create_delivery_fallback_issue_returns_none_without_token() -> None:
+    """Infra-012.12: fallback issue creation requires GitHub token and repo."""
+    watchdog = _load_watchdog()
+    issue_url = watchdog.create_delivery_fallback_issue(
+        {},
+        failures=[
+            watchdog.CheckResult(
+                "infra2-public-entrypoint",
+                False,
+                "connection refused",
+                "host-reachability",
+            )
+        ],
+        error="feishu down",
+    )
+    assert issue_url is None
+
+
 def test_docs_state_that_github_fallback_includes_route_canary() -> None:
     """Infra-011.9: docs must match the code-owned fallback watchdog scope."""
     assert "Dokploy route canary" in ALERTING_README.read_text(encoding="utf-8")
     assert "Dokploy route canary" in ALERTING_SSOT.read_text(encoding="utf-8")
+    assert "watchdog-weekly-digest.yml" in ALERTING_README.read_text(encoding="utf-8")

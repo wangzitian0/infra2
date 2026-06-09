@@ -403,6 +403,10 @@ Optional GitHub variables:
 - `INFRA2_WATCHDOG_RETRY_DELAY_SECONDS`: defaults to `60`.
 - `INFRA2_WATCHDOG_SSH_TARGETS`: newline-separated `name|command|expected_text`
 - `INFRA2_WATCHDOG_SSH_PORT`: defaults to `22`
+- `INFRA2_WATCHDOG_ENABLE_FALLBACK_ISSUE`: defaults to `1`; if Feishu delivery
+  fails, open a GitHub issue fallback.
+- `INFRA2_WATCHDOG_FALLBACK_ISSUE_LABEL`: defaults to
+  `watchdog-alert-fallback`.
 
 Defaults check the public Dokploy entrypoint, Cloudflare Worker `/health`,
 Cloudflare Worker authenticated `/status`, SSH reachability, Docker daemon
@@ -410,8 +414,14 @@ reachability, and the `platform-alerting` in-container `/health` endpoint via
 SSH. IaC Runner, MinIO, Postgres, Redis, and application dependency probes are
 service-level signals and remain in-band alerts owned by the bridge/SigNoz path.
 When out-of-band Feishu delivery raises an exception, the watchdog emits a
-`watchdog.delivery.failure` structured event and exits with failure so CI/logs
+`watchdog.delivery.failure` structured event, attempts GitHub fallback issue
+creation (label `watchdog-alert-fallback`), and exits with failure so CI/logs
 retain an auditable fallback signal.
+
+Weekly digest is handled by `.github/workflows/watchdog-weekly-digest.yml`
+(cron Monday UTC). It summarizes the last 7 days of
+`out-of-band-watchdog.yml` workflow runs and sends a compact reliability digest
+to Feishu through the same direct delivery mode.
 Default SSH checks are mandatory: `INFRA2_WATCHDOG_SSH_TARGETS` can add checks or
 override a check by name, but it must not remove `infra2-docker-health`. That
 check fails on any Docker `unhealthy`, `health: starting`, or `Restarting`
