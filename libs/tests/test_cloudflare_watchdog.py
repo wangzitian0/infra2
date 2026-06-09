@@ -120,3 +120,15 @@ def test_cloudflare_watchdog_docs_include_deploy_and_secret_contract() -> None:
     assert "INFRA_PROBE_HEARTBEAT_URL" in readme
     assert "INFRA_PROBE_HEARTBEAT_TOKEN" in readme
     assert "production,staging" in readme
+
+
+def test_worker_heartbeat_throttles_kv_writes_to_avoid_daily_limit() -> None:
+    """Heartbeat writes must be throttled so the KV daily put() limit isn't hit."""
+    source = WORKER.read_text(encoding="utf-8")
+
+    # Read-then-maybe-write: a status change persists immediately, otherwise the
+    # write is throttled by a configurable minimum interval.
+    assert "WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS" in source
+    assert "shouldWrite" in source
+    assert "statusUnchanged" in source
+    assert "const existingRaw = await env.WATCHDOG_STATE.get(key)" in source
