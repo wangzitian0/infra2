@@ -234,12 +234,12 @@ def _completed_response(env: str, ref: str, triggered_by: str, result) -> dict:
     }
 
 
-def _run_deployment(env: str, ref: str, triggered_by: str) -> None:
+def _run_deployment(env: str, ref: str, triggered_by: str, services: list[str] | None = None) -> None:
     from sync_runner import sync_services_by_version
 
     key = _deployment_key(env, ref)
     try:
-        result = sync_services_by_version(env, ref, triggered_by)
+        result = sync_services_by_version(env, ref, triggered_by, services)
         response = _completed_response(env, ref, triggered_by, result)
     except Exception as exc:
         logger.exception("Deployment failed before producing a sync result")
@@ -374,6 +374,11 @@ def version_deploy():
     if env not in ("staging", "production"):
         return jsonify({"error": "Invalid env (must be staging or production)"}), 400
 
+    services = payload.get("services")
+    if services is not None:
+        if not isinstance(services, list) or not all(isinstance(s, str) for s in services):
+            return jsonify({"error": "services must be a list of strings"}), 400
+
     logger.info(f"Deployment: {ref} to {env} by {triggered_by}")
 
     if wait:
@@ -387,7 +392,7 @@ def version_deploy():
                 return jsonify(_in_progress_response(env, ref, triggered_by, True)), 202
             _in_flight_deploys.add(key)
 
-        _run_deployment(env, ref, triggered_by)
+        _run_deployment(env, ref, triggered_by, services)
         response = _recent_result(key) or {
             "status": "failed",
             "env": env,
@@ -407,7 +412,10 @@ def version_deploy():
             return jsonify(_in_progress_response(env, ref, triggered_by, True)), 202
         _in_flight_deploys.add(key)
 
-    thread = threading.Thread(target=_run_deployment, args=(env, ref, triggered_by))
+    if services is not None:
+        thread = threading.Thread(target=_run_deployment, args=(env, ref, triggered_by, services))
+    else:
+        thread = threading.Thread(target=_run_deployment, args=(env, ref, triggered_by))
     thread.daemon = True
     thread.start()
 
