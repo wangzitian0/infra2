@@ -220,8 +220,11 @@ Optional repository variables:
 Cloudflare defaults cover production public routes, selected staging public
 routes, and production/staging probe-runner heartbeat freshness. GitHub fallback
 checks cover the public Dokploy entrypoint, Cloudflare Worker `/health`,
-Cloudflare Worker `/status`, SSH reachability, Docker daemon reachability, and
-the `platform-alerting` in-container `/health` endpoint via SSH.
+Cloudflare Worker `/status`, the Dokploy route canary, SSH reachability, Docker
+daemon reachability, and the `platform-alerting` in-container `/health`
+endpoint via SSH.
+Worker config-preflight failures are surfaced separately so malformed JSON or
+missing KV/config cannot look like a public route outage.
 IaC Runner, MinIO, Postgres, Redis, and application dependency health remain
 service-level signals handled in-band through SigNoz and this bridge.
 

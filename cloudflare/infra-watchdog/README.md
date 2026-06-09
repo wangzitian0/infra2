@@ -15,6 +15,8 @@ runner heartbeat freshness.
   internal alert bridge.
 - Uses Workers KV to record heartbeat state, Worker last-run state, dedupe
   unchanged failures, renotify, and send one recovery message.
+- Classifies malformed JSON or missing KV/config as a separate config-preflight
+  failure so configuration drift does not look like a route outage.
 
 ## Required Secrets
 

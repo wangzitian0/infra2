@@ -56,8 +56,57 @@ export default {
 
 async function runWatchdog(env, nowMs = Date.now()) {
   const environments = enabledEnvironments(env);
-  const targets = filterByEnvironment(parseJsonList(env.WATCHDOG_TARGETS_JSON, DEFAULT_TARGETS), environments);
-  const heartbeats = filterByEnvironment(parseJsonList(env.WATCHDOG_HEARTBEATS_JSON, DEFAULT_HEARTBEATS), environments);
+  let targets;
+  let heartbeats;
+  try {
+   targets = filterByEnvironment(
+     parseJsonList(env.WATCHDOG_TARGETS_JSON, DEFAULT_TARGETS),
+     environments,
+   );
+   heartbeats = filterByEnvironment(
+     parseJsonList(env.WATCHDOG_HEARTBEATS_JSON, DEFAULT_HEARTBEATS),
+     environments,
+   );
+  } catch (error) {
+   const configFailure = failResult(
+     {
+       environment: "global",
+       name: "cloudflare-watchdog-config-preflight",
+       severity: "critical",
+     },
+     `config-preflight failed: ${oneLine(
+       error && error.message ? error.message : String(error),
+     )}`,
+   );
+   const failures = [configFailure];
+   const fingerprint = await failureFingerprint(failures);
+   let deliveryError = "";
+   try {
+     await notifyIfNeeded(env, failures, nowMs);
+   } catch (deliveryExc) {
+     deliveryError = oneLine(
+       deliveryExc && deliveryExc.message ? deliveryExc.message : String(deliveryExc),
+     );
+   }
+   await saveLastRun(env, {
+     ranAt: nowMs,
+     ok: false,
+     routeTargetCount: 0,
+     heartbeatTargetCount: 0,
+     failureCount: 1,
+     failureFingerprint: fingerprint,
+     deliveryError,
+   });
+   if (deliveryError) {
+     throw new Error(`watchdog delivery failed: ${deliveryError}`);
+   }
+   return {
+     failures,
+     routeResults: [],
+     heartbeatResults: [],
+     configResults: failures,
+   };
+  }
   const timeoutMs = Number(env.WATCHDOG_HTTP_TIMEOUT_MS || 8000);
 
   const routeResults = await Promise.all(targets.map((target) => checkHttpTarget(target, timeoutMs)));
