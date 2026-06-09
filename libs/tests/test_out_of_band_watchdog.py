@@ -87,6 +87,10 @@ def test_default_targets_cover_public_host_and_bridge_health() -> None:
     assert "health=unhealthy" in ssh_targets[2].command
     assert "health=starting" in ssh_targets[2].command
     assert "status=restarting" in ssh_targets[2].command
+    # Docker ANDs filters of different keys, so the three conditions must be
+    # issued as independent `docker ps` queries to behave as an OR. Otherwise a
+    # plain running+unhealthy container is silently missed.
+    assert ssh_targets[2].command.count("docker ps --filter") == 3
     assert "docker inspect" in ssh_targets[2].command
     assert "{{.Config.Image}}" in ssh_targets[2].command
     assert "{{.State.Status}}" in ssh_targets[2].command

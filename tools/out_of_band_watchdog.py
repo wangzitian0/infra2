@@ -36,7 +36,7 @@ DEFAULT_WORKER_STATUS_URL = (
 DEFAULT_SSH_TARGETS = """\
 infra2-ssh|echo infra2-ssh-ok|infra2-ssh-ok
 infra2-docker|docker info >/dev/null && echo docker-ok|docker-ok
-infra2-docker-health|sh -lc 'bad="$(docker ps --filter health=unhealthy --filter health=starting --filter status=restarting --format "{{.Names}}")"; if [ -z "$bad" ]; then echo docker-health-ok; else for container in $bad; do docker inspect "$container" --format "name={{.Name}} status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} image={{.Config.Image}}"; done; exit 1; fi'|docker-health-ok
+infra2-docker-health|sh -lc 'bad="$(docker ps --filter health=unhealthy --format "{{.Names}}"; docker ps --filter health=starting --format "{{.Names}}"; docker ps --filter status=restarting --format "{{.Names}}")"; if [ -z "$bad" ]; then echo docker-health-ok; else seen=""; for container in $bad; do case " $seen " in *" $container "*) continue;; esac; seen="$seen $container"; docker inspect "$container" --format "name={{.Name}} status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} image={{.Config.Image}}"; done; exit 1; fi'|docker-health-ok
 infra2-alert-bridge|docker exec platform-alerting python -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8080/health", timeout=3).read(); print("healthy")'|healthy
 """
 
