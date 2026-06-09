@@ -91,6 +91,12 @@ def test_worker_dedupes_renotifies_and_sends_recovery_to_feishu() -> None:
     assert "alert-state:cloudflare-watchdog" in source
     assert "WATCHDOG_RENOTIFY_SECONDS" in source
     assert "failureFingerprint" in source
+    assert "failureDomain: failure.failure_domain || \"\"" in source
+    assert "failure_domain: failureDomain" in source
+    assert "_failure_domain_for_http_target" in source
+    assert "_failure_domain_for_heartbeat" in source
+    assert 'return "public-route";' in source
+    assert 'return "heartbeat";' in source
     assert "formatResolvedMessage" in source
     assert "Infra2 Cloudflare watchdog failed" in source
     assert "Infra2 Cloudflare watchdog recovered" in source
@@ -113,6 +119,7 @@ def test_worker_supports_existing_feishu_app_bot_mode() -> None:
 def test_cloudflare_watchdog_docs_include_deploy_and_secret_contract() -> None:
     """Infra-011.2: setup is documented without committing credentials."""
     readme = README.read_text(encoding="utf-8")
+    ssot = (ROOT / "docs/ssot/ops.alerting.md").read_text(encoding="utf-8")
 
     assert "wrangler secret put FEISHU_WEBHOOK_URL" in readme
     assert "wrangler secret put FEISHU_APP_SECRET" in readme
@@ -122,6 +129,8 @@ def test_cloudflare_watchdog_docs_include_deploy_and_secret_contract() -> None:
     assert "INFRA_PROBE_HEARTBEAT_URL" in readme
     assert "INFRA_PROBE_HEARTBEAT_TOKEN" in readme
     assert "production,staging" in readme
+    assert "stable identity plus failure domain" in readme
+    assert "stable failure identity plus failure domain" in ssot
 
 
 def test_worker_heartbeat_throttles_kv_writes_to_avoid_daily_limit() -> None:

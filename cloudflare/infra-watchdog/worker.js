@@ -77,6 +77,7 @@ async function runWatchdog(env, nowMs = Date.now()) {
      `config-preflight failed: ${oneLine(
        error && error.message ? error.message : String(error),
      )}`,
+     "config-preflight",
    );
    const failures = [configFailure];
    const fingerprint = await failureFingerprint(failures);
@@ -144,10 +145,14 @@ function checkEffectiveConfig(targets, heartbeats) {
   };
   const results = [];
   if (targets.length === 0) {
-    results.push(failResult(configTarget, "effective public route target list is empty"));
+    results.push(
+      failResult(configTarget, "effective public route target list is empty", "config-preflight"),
+    );
   }
   if (heartbeats.length === 0) {
-    results.push(failResult(configTarget, "effective heartbeat target list is empty"));
+    results.push(
+      failResult(configTarget, "effective heartbeat target list is empty", "config-preflight"),
+    );
   }
   return results;
 }
@@ -166,12 +171,20 @@ async function checkHttpTarget(target, timeoutMs) {
       },
     });
     if (target.statuses.includes(response.status)) {
-      return okResult(target, `HTTP ${response.status}`);
+      return okResult(target, `HTTP ${response.status}`, _failure_domain_for_http_target(target));
     }
     const body = await safeBody(response);
-    return failResult(target, `HTTP ${response.status}; expected ${target.statuses.join(",")}; body=${body}`);
+    return failResult(
+      target,
+      `HTTP ${response.status}; expected ${target.statuses.join(",")}; body=${body}`,
+      _failure_domain_for_http_target(target),
+    );
   } catch (error) {
-    return failResult(target, `fetch failed: ${oneLine(error && error.message ? error.message : String(error))}`);
+    return failResult(
+      target,
+      `fetch failed: ${oneLine(error && error.message ? error.message : String(error))}`,
+      _failure_domain_for_http_target(target),
+    );
   } finally {
     clearTimeout(timeout);
   }
@@ -179,37 +192,75 @@ async function checkHttpTarget(target, timeoutMs) {
 
 async function checkHeartbeats(env, heartbeats, nowMs) {
   if (!env.WATCHDOG_STATE) {
-    return heartbeats.map((heartbeat) => failResult(heartbeat, "WATCHDOG_STATE KV binding is missing"));
+    return heartbeats.map((heartbeat) =>
+      failResult(
+        heartbeat,
+        "WATCHDOG_STATE KV binding is missing",
+        _failure_domain_for_heartbeat(heartbeat),
+      ),
+    );
   }
 
   const results = [];
   for (const heartbeat of heartbeats) {
     const raw = await env.WATCHDOG_STATE.get(heartbeatKey(heartbeat.environment, heartbeat.name));
     if (!raw) {
-      results.push(failResult(heartbeat, "heartbeat missing"));
+      results.push(
+        failResult(heartbeat, "heartbeat missing", _failure_domain_for_heartbeat(heartbeat)),
+      );
       continue;
     }
     let value;
     try {
       value = JSON.parse(raw);
     } catch (_error) {
-      results.push(failResult(heartbeat, "heartbeat payload is invalid JSON"));
+      results.push(
+        failResult(
+          heartbeat,
+          "heartbeat payload is invalid JSON",
+          _failure_domain_for_heartbeat(heartbeat),
+        ),
+      );
       continue;
     }
     const ageSeconds = Math.floor((nowMs - Number(value.receivedAt || 0)) / 1000);
     if (ageSeconds < -300) {
-      results.push(failResult(heartbeat, `heartbeat timestamp is in the future: ${ageSeconds}s old`));
+      results.push(
+        failResult(
+          heartbeat,
+          `heartbeat timestamp is in the future: ${ageSeconds}s old`,
+          _failure_domain_for_heartbeat(heartbeat),
+        ),
+      );
       continue;
     }
     if (value.ok === false) {
-      results.push(failResult(heartbeat, `heartbeat reports unhealthy: ${oneLine(value.detail || "")}`));
+      results.push(
+        failResult(
+          heartbeat,
+          `heartbeat reports unhealthy: ${oneLine(value.detail || "")}`,
+          _failure_domain_for_heartbeat(heartbeat),
+        ),
+      );
       continue;
     }
     if (ageSeconds > Number(heartbeat.maxAgeSeconds || 1800)) {
-      results.push(failResult(heartbeat, `heartbeat stale: ${ageSeconds}s old`));
+      results.push(
+        failResult(
+          heartbeat,
+          `heartbeat stale: ${ageSeconds}s old`,
+          _failure_domain_for_heartbeat(heartbeat),
+        ),
+      );
       continue;
     }
-    results.push(okResult(heartbeat, `heartbeat fresh: ${ageSeconds}s old`));
+    results.push(
+      okResult(
+        heartbeat,
+        `heartbeat fresh: ${ageSeconds}s old`,
+        _failure_domain_for_heartbeat(heartbeat),
+      ),
+    );
   }
   return results;
 }
@@ -447,7 +498,7 @@ async function failureFingerprint(failures) {
       failures.map((failure) => ({
         environment: failure.environment,
         name: failure.name,
-        detail: failure.detail,
+        failureDomain: failure.failure_domain || "",
       })),
     ),
   );
@@ -479,23 +530,25 @@ function filterByEnvironment(items, environments) {
   return items.filter((item) => environments.has(item.environment));
 }
 
-function okResult(target, detail) {
+function okResult(target, detail, failureDomain = "") {
   return {
     environment: target.environment,
     name: target.name,
     severity: target.severity || "warning",
     ok: true,
     detail,
+    failure_domain: failureDomain,
   };
 }
 
-function failResult(target, detail) {
+function failResult(target, detail, failureDomain = "") {
   return {
     environment: target.environment,
     name: target.name,
     severity: target.severity || "warning",
     ok: false,
     detail: oneLine(detail),
+    failure_domain: failureDomain,
   };
 }
 
@@ -509,6 +562,20 @@ async function safeBody(response) {
 
 function heartbeatKey(environment, name) {
   return `heartbeat:${environment}:${name}`;
+}
+
+function _failure_domain_for_http_target(target) {
+  if (target.name === "infra2-public-entrypoint") {
+    return "host-reachability";
+  }
+  if (target.name === "cloudflare-worker-health") {
+    return "worker-health";
+  }
+  return "public-route";
+}
+
+function _failure_domain_for_heartbeat(heartbeat) {
+  return "heartbeat";
 }
 
 function safeId(value) {

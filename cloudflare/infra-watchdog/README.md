@@ -18,6 +18,9 @@ runner heartbeat freshness.
 - Classifies malformed JSON or other config-parse errors as a separate
   config-preflight failure so configuration drift does not look like a route
   outage.
+- Dedupe is keyed on stable identity plus failure domain, not volatile details
+  like heartbeat age, so the same fault renotifies only on the configured
+  interval.
 
 ## Required Secrets
 

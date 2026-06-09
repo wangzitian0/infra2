@@ -241,6 +241,9 @@ Default coverage:
   and the `platform-alerting` in-container `/health` endpoint.
 - Cloudflare Worker config-preflight failures are reported separately so invalid
   JSON or other config-parse errors do not masquerade as a route outage.
+- Cloudflare alert dedupe keys on stable failure identity plus failure domain;
+  volatile fields like heartbeat age stay in the alert body but do not create a
+  new incident fingerprint every cron tick.
 
 Required Cloudflare Worker secrets for webhook mode:
 

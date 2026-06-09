@@ -225,6 +225,9 @@ daemon reachability, and the `platform-alerting` in-container `/health`
 endpoint via SSH.
 Worker config-preflight failures are surfaced separately so malformed JSON or
 other config-parse errors cannot look like a public route outage.
+Cloudflare alert dedupe keys on stable failure identity plus failure domain, so
+heartbeat age or other volatile details do not turn the same incident into a
+fresh alert every cron tick.
 IaC Runner, MinIO, Postgres, Redis, and application dependency health remain
 service-level signals handled in-band through SigNoz and this bridge.
 
