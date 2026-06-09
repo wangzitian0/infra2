@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Mapping
 from urllib.error import HTTPError, URLError
@@ -555,6 +556,12 @@ def format_failure_message(results: list[CheckResult], *, run_url: str) -> str:
         if not result.ok:
             domain = f"[{result.failure_domain}] " if result.failure_domain else ""
             lines.append(f"- {domain}{result.name}: {_redact(result.detail)}")
+            lines.append(
+                f"  Action: {_suggested_action_for_failure(result.name, result.failure_domain)}"
+            )
+            lines.append(
+                f"  Runbook: {_runbook_url_for_failure(result.failure_domain)}"
+            )
     return "\n".join(lines)
 
 
@@ -640,12 +647,16 @@ def main(env: Mapping[str, str] | None = None) -> int:
     try:
         deliver_out_of_band_alert(current_env, message)
     except Exception as exc:  # noqa: BLE001 - watchdog must not fail silently.
+        fallback_issue_url = create_delivery_fallback_issue(
+            current_env, failures=failures, error=str(exc)
+        )
         _emit_structured_log(
             {
                 "event": "watchdog.delivery.failure",
                 "status": "fail",
                 "failure_count": len(failures),
                 "error": _redact(_one_line(str(exc))),
+                "fallback_issue_url": fallback_issue_url or "",
             }
         )
         return 1
@@ -715,6 +726,93 @@ def _failure_domain_for_ssh_target(name: str) -> str:
     if name == "infra2-alert-bridge":
         return "alert-bridge"
     return "host-diagnostics"
+
+
+def _suggested_action_for_failure(name: str, failure_domain: str) -> str:
+    if failure_domain == "host-reachability":
+        return "verify VPS reachability and DNS from an external network (curl + traceroute)"
+    if failure_domain == "docker-runtime":
+        return "SSH into infra2 and run `docker ps` / `docker inspect` for unhealthy containers"
+    if failure_domain == "alert-bridge":
+        return (
+            "check `platform-alerting` container logs and /health from inside the host"
+        )
+    if failure_domain == "cloudflare-worker-health":
+        return "call worker /status with WATCHDOG_STATUS_TOKEN and verify last-run freshness"
+    if (
+        failure_domain == "dokploy-control-plane"
+        or name == "infra2-dokploy-route-canary"
+    ):
+        return "check Dokploy API and route canary deploy logs for rollout/network failures"
+    return "inspect the failed check detail and verify target service health manually"
+
+
+def _runbook_url_for_failure(failure_domain: str) -> str:
+    anchor = "#out-of-band-watchdog"
+    if failure_domain == "alert-bridge":
+        anchor = "#alerting-bridge"
+    elif failure_domain in {"host-reachability", "docker-runtime"}:
+        anchor = "#verification"
+    return (
+        "https://github.com/wangzitian0/infra2/blob/main/platform/12.alerting/README.md"
+        f"{anchor}"
+    )
+
+
+def create_delivery_fallback_issue(
+    env: Mapping[str, str], *, failures: list[CheckResult], error: str
+) -> str | None:
+    """Create a GitHub issue fallback when Feishu delivery fails."""
+    enabled = env.get("INFRA2_WATCHDOG_ENABLE_FALLBACK_ISSUE", "1").strip().lower()
+    if enabled in {"0", "false", "no"}:
+        return None
+    token = env.get("GITHUB_TOKEN", "").strip()
+    repository = env.get("GITHUB_REPOSITORY", "").strip()
+    if not token or not repository or "/" not in repository:
+        return None
+
+    owner, repo = repository.split("/", 1)
+    run_url = _github_run_url(env)
+    now_iso = datetime.now(UTC).isoformat()
+    labels = [
+        env.get("INFRA2_WATCHDOG_FALLBACK_ISSUE_LABEL", "watchdog-alert-fallback")
+    ]
+    body_lines = [
+        "Feishu delivery failed for out-of-band watchdog alert.",
+        f"- Time: {now_iso}",
+        f"- Error: {_redact(_one_line(error))}",
+    ]
+    if run_url:
+        body_lines.append(f"- Run: {run_url}")
+    body_lines.append("")
+    body_lines.append("Failed checks:")
+    for failure in failures:
+        body_lines.append(
+            f"- [{failure.failure_domain or 'unknown'}] {failure.name}: {_redact(_one_line(failure.detail))}"
+        )
+    payload = {
+        "title": "[watchdog-alert-fallback] out-of-band delivery failure",
+        "body": "\n".join(body_lines),
+        "labels": labels,
+    }
+    request = Request(
+        f"https://api.github.com/repos/{owner}/{repo}/issues",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "infra2-out-of-band-watchdog/1.0",
+            "Content-Type": "application/json",
+        },
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=10) as response:  # noqa: S310
+            response_body = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, OSError, URLError, json.JSONDecodeError):
+        return None
+    html_url = response_body.get("html_url")
+    return str(html_url) if isinstance(html_url, str) and html_url else None
 
 
 def _effective_lines(raw: str) -> list[str]:

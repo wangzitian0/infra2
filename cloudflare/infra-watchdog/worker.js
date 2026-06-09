@@ -217,19 +217,6 @@ async function checkHttpTarget(target, timeoutMs) {
       return okResult(target, `HTTP ${response.status}`, _failure_domain_for_http_target(target));
     }
 
-    async function checkHttpTargetWithRetry(target, timeoutMs, maxAttempts, retryDelayMs) {
-      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-        const result = await checkHttpTarget(target, timeoutMs);
-        result.attempt_count = attempt;
-        if (result.ok || attempt >= maxAttempts) {
-          return result;
-        }
-        if (retryDelayMs > 0) {
-          await sleep(retryDelayMs);
-        }
-      }
-      return failResult(target, "retry loop exhausted", _failure_domain_for_http_target(target));
-    }
     const body = await safeBody(response);
     return failResult(
       target,
@@ -245,6 +232,20 @@ async function checkHttpTarget(target, timeoutMs) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function checkHttpTargetWithRetry(target, timeoutMs, maxAttempts, retryDelayMs) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const result = await checkHttpTarget(target, timeoutMs);
+    result.attempt_count = attempt;
+    if (result.ok || attempt >= maxAttempts) {
+      return result;
+    }
+    if (retryDelayMs > 0) {
+      await sleep(retryDelayMs);
+    }
+  }
+  return failResult(target, "retry loop exhausted", _failure_domain_for_http_target(target));
 }
 
 async function checkHeartbeats(env, heartbeats, nowMs) {
@@ -510,9 +511,35 @@ function formatFailureMessage(failures) {
     "Failures:",
   ];
   for (const failure of failures) {
-    lines.push(`- ${failure.environment}/${failure.name}: ${failure.detail}`);
+    const failureDomain = failure.failure_domain || "unknown";
+    lines.push(`- ${failure.environment}/${failure.name} [${failureDomain}]: ${failure.detail}`);
+    lines.push(`  Action: ${suggestedActionForDomain(failureDomain, failure.name)}`);
+    lines.push(`  Runbook: ${runbookUrlForDomain(failureDomain)}`);
   }
   return lines.join("\n");
+}
+
+function suggestedActionForDomain(failureDomain, name) {
+  switch (failureDomain) {
+    case "public-route":
+      return `curl -I "${name.includes("finance-report-api") ? "https://report.zitian.party/api/health" : "https://cloud.zitian.party"}" from an external network to verify edge routing`;
+    case "heartbeat":
+      return "check platform-alerting probe runner logs and heartbeat publish environment variables";
+    case "config-preflight":
+      return "validate WATCHDOG_TARGETS_JSON / WATCHDOG_HEARTBEATS_JSON format and redeploy worker";
+    default:
+      return "inspect watchdog /status and last-run payload, then verify target service health";
+  }
+}
+
+function runbookUrlForDomain(failureDomain) {
+  const anchorByDomain = {
+    "public-route": "#out-of-band-watchdog",
+    heartbeat: "#infra-service-probes",
+    "config-preflight": "#out-of-band-watchdog",
+  };
+  const anchor = anchorByDomain[failureDomain] || "#out-of-band-watchdog";
+  return `https://github.com/wangzitian0/infra2/blob/main/platform/12.alerting/README.md${anchor}`;
 }
 
 function formatResolvedMessage() {
