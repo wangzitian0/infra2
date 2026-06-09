@@ -68,6 +68,7 @@ class CheckResult:
     ok: bool
     detail: str
     failure_domain: str = ""
+    attempt_count: int = 1
 
 
 def parse_http_targets(raw: str) -> list[HttpTarget]:
@@ -134,17 +135,28 @@ def run_http_checks(
         for attempt in range(1, attempts + 1):
             result = _run_http_check_once(target, timeout)
             if result.ok:
+                detail = result.detail
                 if attempt > 1:
-                    result = CheckResult(
-                        result.name,
-                        True,
-                        f"{result.detail}; recovered_on_attempt={attempt}",
-                        result.failure_domain,
-                    )
+                    detail = f"{result.detail}; recovered_on_attempt={attempt}"
+                result = CheckResult(
+                    result.name,
+                    True,
+                    detail,
+                    result.failure_domain,
+                    attempt_count=attempt,
+                )
                 break
             if attempt < attempts and retry_delay > 0:
                 time.sleep(retry_delay)
         assert result is not None
+        if not result.ok:
+            result = CheckResult(
+                result.name,
+                result.ok,
+                result.detail,
+                result.failure_domain,
+                attempt_count=attempts,
+            )
         results.append(result)
     return results
 
@@ -179,10 +191,28 @@ def run_worker_status_check(
     for attempt in range(1, attempts + 1):
         last_results = _run_worker_status_once(url, token, timeout)
         if all(result.ok for result in last_results):
-            return last_results
+            return [
+                CheckResult(
+                    result.name,
+                    result.ok,
+                    result.detail,
+                    result.failure_domain,
+                    attempt_count=attempt,
+                )
+                for result in last_results
+            ]
         if attempt < attempts and retry_delay > 0:
             time.sleep(retry_delay)
-    return last_results
+    return [
+        CheckResult(
+            result.name,
+            result.ok,
+            result.detail,
+            result.failure_domain,
+            attempt_count=attempts,
+        )
+        for result in last_results
+    ]
 
 
 def _run_worker_status_once(url: str, token: str, timeout: float) -> list[CheckResult]:
@@ -576,6 +606,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
                 "name": result.name,
                 "status": "ok" if result.ok else "fail",
                 "failure_domain": result.failure_domain,
+                "attempt_count": result.attempt_count,
                 "detail": _redact(result.detail),
             }
         )
@@ -606,7 +637,18 @@ def main(env: Mapping[str, str] | None = None) -> int:
         )
         return 1
 
-    deliver_out_of_band_alert(current_env, message)
+    try:
+        deliver_out_of_band_alert(current_env, message)
+    except Exception as exc:  # noqa: BLE001 - watchdog must not fail silently.
+        _emit_structured_log(
+            {
+                "event": "watchdog.delivery.failure",
+                "status": "fail",
+                "failure_count": len(failures),
+                "error": _redact(_one_line(str(exc))),
+            }
+        )
+        return 1
     _emit_structured_log(
         {
             "event": "watchdog.run.complete",
@@ -724,7 +766,9 @@ def _redact(value: str) -> str:
 
 
 def _emit_structured_log(payload: Mapping[str, object]) -> None:
-    print(json.dumps(payload, ensure_ascii=True, sort_keys=True))
+    body = dict(payload)
+    body.setdefault("timestamp", int(time.time()))
+    print(json.dumps(body, ensure_ascii=True, sort_keys=True))
 
 
 if __name__ == "__main__":

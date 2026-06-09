@@ -343,7 +343,8 @@ the alert channel. HTTP route checks retry using
 scheduled run writes structured execution logs and `watchdog:last-run` to KV so
 GitHub can detect Worker cron or KV-backed state blindness; `/health` remains
 public and minimal, while `/status` is bearer-token protected and returns only
-non-secret summary state.
+non-secret summary state. If delivery fails, the worker emits a
+`watchdog.delivery.failure` structured event instead of failing silently.
 
 ### SOP-005B: GitHub fallback out-of-band watchdog
 
@@ -408,6 +409,9 @@ Cloudflare Worker authenticated `/status`, SSH reachability, Docker daemon
 reachability, and the `platform-alerting` in-container `/health` endpoint via
 SSH. IaC Runner, MinIO, Postgres, Redis, and application dependency probes are
 service-level signals and remain in-band alerts owned by the bridge/SigNoz path.
+When out-of-band Feishu delivery raises an exception, the watchdog emits a
+`watchdog.delivery.failure` structured event and exits with failure so CI/logs
+retain an auditable fallback signal.
 Default SSH checks are mandatory: `INFRA2_WATCHDOG_SSH_TARGETS` can add checks or
 override a check by name, but it must not remove `infra2-docker-health`. That
 check fails on any Docker `unhealthy`, `health: starting`, or `Restarting`

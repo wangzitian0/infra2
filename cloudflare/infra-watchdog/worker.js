@@ -99,6 +99,13 @@ async function runWatchdog(env, nowMs = Date.now()) {
      deliveryError,
    });
    if (deliveryError) {
+     logWatchdogResult({
+       event: "watchdog.delivery.failure",
+       timestamp: nowMs,
+       status: "fail",
+       failureCount: failures.length,
+       error: deliveryError,
+     });
      throw new Error(`watchdog delivery failed: ${deliveryError}`);
    }
    return {
@@ -151,6 +158,13 @@ async function runWatchdog(env, nowMs = Date.now()) {
     deliveryError,
   });
   if (deliveryError) {
+    logWatchdogResult({
+      event: "watchdog.delivery.failure",
+      timestamp: nowMs,
+      status: "fail",
+      failureCount: failures.length,
+      error: deliveryError,
+    });
     throw new Error(`watchdog delivery failed: ${deliveryError}`);
   }
   logWatchdogResult({

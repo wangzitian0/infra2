@@ -98,7 +98,8 @@ def test_worker_dedupes_renotifies_and_sends_recovery_to_feishu() -> None:
     assert "WATCHDOG_RETRY_DELAY_MS" in source
     assert 'event: "watchdog.check"' in source
     assert 'event: "watchdog.run"' in source
-    assert "failureDomain: failure.failure_domain || \"\"" in source
+    assert 'event: "watchdog.delivery.failure"' in source
+    assert 'failureDomain: failure.failure_domain || ""' in source
     assert "failure_domain: failureDomain" in source
     assert "_failure_domain_for_http_target" in source
     assert "_failure_domain_for_heartbeat" in source

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -222,6 +223,7 @@ def test_worker_status_check_reports_last_run_failure_context(monkeypatch) -> No
                 "routes=8 heartbeats=2 delivery_error=feishu delivery failed"
             ),
             "cloudflare-worker-health",
+            attempt_count=2,
         )
     ]
 
@@ -555,6 +557,82 @@ def test_http_checks_retry_transient_failure(monkeypatch) -> None:
     assert len(results) == 1
     assert results[0].ok is True
     assert "recovered_on_attempt=2" in results[0].detail
+    assert results[0].attempt_count == 2
+
+
+def test_main_structured_check_logs_include_attempt_count(monkeypatch) -> None:
+    """Infra-012.4: structured check logs include attempt_count and timestamp."""
+    watchdog = _load_watchdog()
+    emitted: list[dict] = []
+
+    monkeypatch.setattr(
+        watchdog,
+        "run_http_checks",
+        lambda _targets, _timeout, **_kwargs: [
+            watchdog.CheckResult("infra2-iac-runner", True, "HTTP 200", attempt_count=2)
+        ],
+    )
+    monkeypatch.setattr(watchdog, "run_ssh_checks", lambda _config, _targets: [])
+    monkeypatch.setattr(
+        watchdog,
+        "run_worker_status_check",
+        lambda _env, _timeout, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        watchdog,
+        "run_dokploy_route_canary_check",
+        lambda _env, ssh_config: [],
+    )
+    monkeypatch.setattr(
+        watchdog, "_emit_structured_log", lambda payload: emitted.append(dict(payload))
+    )
+
+    assert watchdog.main({"WATCHDOG_DRY_RUN": "0"}) == 0
+    check_events = [row for row in emitted if row.get("event") == "watchdog.check"]
+    assert len(check_events) == 1
+    assert check_events[0]["attempt_count"] == 2
+
+
+def test_main_records_delivery_failure_event_instead_of_crashing(monkeypatch) -> None:
+    """Infra-012.5: delivery failures must emit fallback diagnostic event."""
+    watchdog = _load_watchdog()
+    emitted: list[dict] = []
+
+    monkeypatch.setattr(
+        watchdog,
+        "run_http_checks",
+        lambda _targets, _timeout, **_kwargs: [
+            watchdog.CheckResult(
+                "infra2-public-entrypoint", False, "connection refused"
+            )
+        ],
+    )
+    monkeypatch.setattr(watchdog, "run_ssh_checks", lambda _config, _targets: [])
+    monkeypatch.setattr(
+        watchdog,
+        "run_worker_status_check",
+        lambda _env, _timeout, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        watchdog,
+        "run_dokploy_route_canary_check",
+        lambda _env, ssh_config: [],
+    )
+    monkeypatch.setattr(
+        watchdog,
+        "deliver_out_of_band_alert",
+        lambda _env, _message: (_ for _ in ()).throw(RuntimeError("feishu down")),
+    )
+    monkeypatch.setattr(
+        watchdog, "_emit_structured_log", lambda payload: emitted.append(dict(payload))
+    )
+
+    assert watchdog.main({"WATCHDOG_DRY_RUN": "0"}) == 1
+    delivery_events = [
+        row for row in emitted if row.get("event") == "watchdog.delivery.failure"
+    ]
+    assert len(delivery_events) == 1
+    assert delivery_events[0]["status"] == "fail"
 
 
 def test_out_of_band_delivery_supports_existing_feishu_app_mode(monkeypatch) -> None:
@@ -606,6 +684,19 @@ def test_webhook_mode_error_mentions_primary_and_fallback_env_names() -> None:
 
     assert "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL" in message
     assert "FEISHU_WEBHOOK_URL" in message
+
+
+def test_emit_structured_log_adds_timestamp(capsys) -> None:
+    """Infra-012.4: structured log helper injects timestamp when omitted."""
+    watchdog = _load_watchdog()
+
+    watchdog._emit_structured_log({"event": "watchdog.check", "name": "probe-a"})
+    line = capsys.readouterr().out.strip()
+    payload = json.loads(line)
+
+    assert payload["event"] == "watchdog.check"
+    assert payload["name"] == "probe-a"
+    assert isinstance(payload["timestamp"], int)
 
 
 def test_docs_state_that_github_fallback_includes_route_canary() -> None:
