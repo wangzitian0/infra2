@@ -1,4 +1,4 @@
-version: 1
+version: 2
 owners:
   - internal
   - cloudflare
@@ -13,6 +13,10 @@ signals:
     severity: critical
     cadence: 60s
     alert_threshold: 3 consecutive failures
+    retry_count: 2
+    renotify_window_sec: 3600
+    failure_domain_whitelist: [host-reachability, network, resource]
+    expected_sla_pct: 99.9
 
   - signal_id: staging.dokploy.internal-http
     environment: staging

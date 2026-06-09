@@ -43,6 +43,8 @@ def test_workflow_alerts_directly_and_does_not_call_the_bridge() -> None:
     assert "INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE" in text
     assert "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL" in text
     assert "INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET" in text
+    assert "INFRA2_WATCHDOG_RETRY_MAX_ATTEMPTS" in text
+    assert "INFRA2_WATCHDOG_RETRY_DELAY_SECONDS" in text
     assert "http://platform-alerting" not in text
     assert "/signoz/webhook" not in text
     assert "tools/out_of_band_watchdog.py" in text
@@ -100,8 +102,12 @@ def test_ssh_checks_report_missing_configuration_as_configuration_failure() -> N
     results = watchdog.run_ssh_checks(None, watchdog.parse_ssh_targets(""))
 
     assert results == [
-        watchdog.CheckResult("infra2-ssh", False, "SSH watchdog config is missing", "configuration"),
-        watchdog.CheckResult("infra2-docker", False, "SSH watchdog config is missing", "configuration"),
+        watchdog.CheckResult(
+            "infra2-ssh", False, "SSH watchdog config is missing", "configuration"
+        ),
+        watchdog.CheckResult(
+            "infra2-docker", False, "SSH watchdog config is missing", "configuration"
+        ),
         watchdog.CheckResult(
             "infra2-docker-health",
             False,
@@ -451,7 +457,7 @@ def test_main_sends_feishu_only_when_a_check_fails(monkeypatch) -> None:
     monkeypatch.setattr(
         watchdog,
         "run_http_checks",
-        lambda _targets, _timeout: [
+        lambda _targets, _timeout, **_kwargs: [
             watchdog.CheckResult("infra2-iac-runner", True, "HTTP 200")
         ],
     )
@@ -459,7 +465,7 @@ def test_main_sends_feishu_only_when_a_check_fails(monkeypatch) -> None:
     monkeypatch.setattr(
         watchdog,
         "run_worker_status_check",
-        lambda _env, _timeout: [
+        lambda _env, _timeout, **_kwargs: [
             watchdog.CheckResult("cloudflare-worker-status", True, "fresh")
         ],
     )
@@ -490,7 +496,7 @@ def test_main_sends_feishu_only_when_a_check_fails(monkeypatch) -> None:
     monkeypatch.setattr(
         watchdog,
         "run_http_checks",
-        lambda _targets, _timeout: [
+        lambda _targets, _timeout, **_kwargs: [
             watchdog.CheckResult("infra2-iac-runner", False, "connection refused")
         ],
     )
@@ -509,6 +515,46 @@ def test_main_sends_feishu_only_when_a_check_fails(monkeypatch) -> None:
     )
     assert len(sent_messages) == 1
     assert "OUT-OF-BAND" in sent_messages[0]
+
+
+def test_http_checks_retry_transient_failure(monkeypatch) -> None:
+    """Infra-012.1: transient HTTP failure should recover within retry window."""
+    watchdog = _load_watchdog()
+    target = watchdog.HttpTarget(
+        name="infra2-public-entrypoint",
+        url="https://cloud.zitian.party",
+        expected_statuses={200},
+    )
+    attempts = {"value": 0}
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def flaky_urlopen(*_args, **_kwargs):
+        attempts["value"] += 1
+        if attempts["value"] == 1:
+            raise watchdog.URLError("temporary dns failure")
+        return FakeResponse()
+
+    monkeypatch.setattr(watchdog, "urlopen", flaky_urlopen)
+    monkeypatch.setattr(watchdog.time, "sleep", lambda _seconds: None)
+
+    results = watchdog.run_http_checks(
+        [target],
+        timeout=1.0,
+        max_attempts=2,
+        retry_delay_seconds=0,
+    )
+
+    assert len(results) == 1
+    assert results[0].ok is True
+    assert "recovered_on_attempt=2" in results[0].detail
 
 
 def test_out_of_band_delivery_supports_existing_feishu_app_mode(monkeypatch) -> None:

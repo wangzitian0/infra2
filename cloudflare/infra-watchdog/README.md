@@ -131,6 +131,8 @@ Then redeploy platform alerting for each environment.
 - `WATCHDOG_ENVIRONMENTS`: comma-separated list, defaults to
   `production,staging`.
 - `WATCHDOG_HTTP_TIMEOUT_MS`: defaults to `8000`.
+- `WATCHDOG_RETRY_MAX_ATTEMPTS`: defaults to `2`.
+- `WATCHDOG_RETRY_DELAY_MS`: defaults to `60000` (retry after one minute).
 - `WATCHDOG_RENOTIFY_SECONDS`: defaults to `7200`.
 - `WATCHDOG_STATUS_MAX_AGE_SECONDS`: defaults to `7200`.
 - `WATCHDOG_TARGETS_JSON`: JSON array overriding public route targets.
