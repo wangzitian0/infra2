@@ -513,16 +513,19 @@ function formatFailureMessage(failures) {
   for (const failure of failures) {
     const failureDomain = failure.failure_domain || "unknown";
     lines.push(`- ${failure.environment}/${failure.name} [${failureDomain}]: ${failure.detail}`);
-    lines.push(`  Action: ${suggestedActionForDomain(failureDomain, failure.name)}`);
+    lines.push(`  Action: ${suggestedActionForFailure(failure)}`);
     lines.push(`  Runbook: ${runbookUrlForDomain(failureDomain)}`);
   }
   return lines.join("\n");
 }
 
-function suggestedActionForDomain(failureDomain, name) {
+function suggestedActionForFailure(failure) {
+  const failureDomain = failure.failure_domain || "";
+  const name = failure.name || "";
+  const url = failure.url || "";
   switch (failureDomain) {
     case "public-route":
-      return `curl -I "${name.includes("finance-report-api") ? "https://report.zitian.party/api/health" : "https://cloud.zitian.party"}" from an external network to verify edge routing`;
+      return `curl -I "${url || "https://cloud.zitian.party"}" from an external network to verify edge routing`;
     case "heartbeat":
       return "check platform-alerting probe runner logs and heartbeat publish environment variables";
     case "config-preflight":
@@ -618,6 +621,7 @@ function okResult(target, detail, failureDomain = "") {
   return {
     environment: target.environment,
     name: target.name,
+    url: target.url || "",
     severity: target.severity || "warning",
     ok: true,
     detail,
@@ -630,6 +634,7 @@ function failResult(target, detail, failureDomain = "") {
   return {
     environment: target.environment,
     name: target.name,
+    url: target.url || "",
     severity: target.severity || "warning",
     ok: false,
     detail: oneLine(detail),
