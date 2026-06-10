@@ -1,0 +1,122 @@
+# Infra2 SSOT manifest
+#
+# Machine-readable registry for topic ownership and proof anchors.
+# The README remains the human navigation index; this file is the lintable
+# contract used by tests so SSOT entries, project references, and code-owned
+# proof paths do not drift silently.
+
+version: 1
+entries:
+  core:
+    owner: docs/ssot/core.md
+    description: Repository architecture, layers, environments, variables, and networks.
+  core.environments:
+    owner: docs/ssot/core.environments.md
+    description: Environment taxonomy, isolation, and naming.
+
+  bootstrap.nodep:
+    owner: docs/ssot/bootstrap.nodep.md
+    description: Bootstrap components including Dokploy, 1Password, and Vault.
+  bootstrap.vars_and_secrets:
+    owner: docs/ssot/bootstrap.vars_and_secrets.md
+    description: Variable and secret source-of-truth contract.
+  bootstrap.dns_and_cert:
+    owner: docs/ssot/bootstrap.dns_and_cert.md
+    description: DNS and certificate automation.
+  bootstrap.iac_runner:
+    owner: docs/ssot/bootstrap.iac_runner.md
+    description: IaC Runner GitOps automation and Vault-Agent pattern.
+    proofs:
+      - libs/tests/test_iac_runner_deploy_result.py
+
+  platform.domain:
+    owner: docs/ssot/platform.domain.md
+    description: Domain architecture, Traefik routing, and Dokploy routing rules.
+    proofs:
+      - libs/tests/test_domain_routing_policy.py
+  platform.sso:
+    owner: docs/ssot/platform.sso.md
+    description: Authentik SSO ownership and integration contract.
+  platform.automation:
+    owner: docs/ssot/platform.automation.md
+    description: Deployer automation and CLI conventions.
+    proofs:
+      - libs/tests/test_deployer.py
+      - libs/tests/test_dokploy.py
+  platform.ai:
+    owner: docs/ssot/platform.ai.md
+    description: AI provider and OpenRouter integration.
+  platform.openpanel:
+    owner: docs/ssot/platform.openpanel.md
+    description: OpenPanel analytics deployment and integration contract.
+    proofs:
+      - platform/24.openpanel/compose.yaml
+      - platform/24.openpanel/deploy.py
+
+  db.overview:
+    owner: docs/ssot/db.overview.md
+    description: Database overview and Vault integration.
+  db.vault:
+    owner: docs/ssot/db.vault-integration.md
+    description: Per-app Vault token database integration.
+  db.platform_pg:
+    owner: docs/ssot/db.platform_pg.md
+    description: Platform PostgreSQL.
+  db.business_pg:
+    owner: docs/ssot/db.business_pg.md
+    description: Business PostgreSQL planning.
+  db.redis:
+    owner: docs/ssot/db.redis.md
+    description: Redis cache layer.
+  db.clickhouse:
+    owner: docs/ssot/db.clickhouse.md
+    description: ClickHouse storage for observability and analytics.
+  db.arangodb:
+    owner: docs/ssot/db.arangodb.md
+    description: Planned graph database layer.
+  vault.self_refresh_inventory:
+    owner: docs/ssot/vault-self-refresh-inventory.yaml
+    description: Vault app-token self-refresh audit inventory.
+    proofs:
+      - libs/tests/test_vault_self_refresh_audit.py
+
+  ops.pipeline:
+    owner: docs/ssot/ops.pipeline.md
+    description: CI/CD, GitOps, and deploy pipeline contract.
+    proofs:
+      - libs/tests/test_iac_runner_deploy_result.py
+  ops.e2e:
+    owner: docs/ssot/ops.e2e-regressions.md
+    description: Deployment verification and E2E regression strategy.
+  ops.recovery:
+    owner: docs/ssot/ops.recovery.md
+    description: Recovery, Vault unseal, and incident operations.
+  ops.storage:
+    owner: docs/ssot/ops.storage.md
+    description: Storage and R2 backup policy.
+  ops.backup_inventory:
+    owner: docs/ssot/ops.backup-inventory.yaml
+    description: Persistent data backup coverage inventory.
+    proofs:
+      - libs/tests/test_backup_verification.py
+  ops.obs:
+    owner: docs/ssot/ops.observability.md
+    description: SigNoz, logs, traces, and monitoring.
+  ops.alerting:
+    owner: docs/ssot/ops.alerting.md
+    description: Alerting rules, watchdog routing, and on-call signals.
+    proofs:
+      - libs/tests/test_alerting.py
+      - libs/tests/test_cloudflare_watchdog.py
+      - libs/tests/test_out_of_band_watchdog.py
+      - libs/tests/test_watchdog_consistency_audit.py
+  ops.availability_ledger:
+    owner: docs/ssot/ops.availability-ledger.md
+    description: Availability ledger, positive proof, and R2 cold archive.
+    proofs:
+      - libs/tests/test_availability_ledger.py
+  watchdog.signals:
+    owner: docs/ssot/watchdog-signals.yaml
+    description: Active watchdog signal inventory and ownership.
+    proofs:
+      - libs/tests/test_watchdog_consistency_audit.py

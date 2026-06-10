@@ -10,6 +10,15 @@ Track top issues discovered during documentation engineering.
 - [x] L0-L2 链接可达性/跳数报告（本地脚本）
 - [x] PageRank/入度分析：用于调整 L1/L2 入口排序
 - [x] 缩短不可达路径：补齐 Bootstrap 子目录与 E2E 子目录的入口链接
+- [x] SSOT owner/proof 治理：新增 `docs/ssot/MANIFEST.yaml`，并用测试校验 README 索引、owner 文件、proof anchor、Project SSOT 链接不漂移
+
+## Latest Findings (2026-06-10)
+
+**SSOT Governance**
+- Added machine-readable SSOT manifest.
+- Added tests for manifest owner/proof reachability.
+- Added tests for README SSOT key parity with manifest.
+- Added tests for Project docs linking only to existing SSOT files.
 
 ## Latest Findings (2025-12-31)
 

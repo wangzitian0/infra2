@@ -21,6 +21,10 @@
 - 遇到问题查 **SSOT**（本目录）了解技术细节
 - 需要修改基础设施时看对应模块的 README
 
+**机器可读治理**：
+- [MANIFEST.yaml](./MANIFEST.yaml) 是 SSOT key、owner 文件、code/test proof anchor 的机器可读清单。
+- 新增或移动 SSOT 文件时，必须同步更新本索引和 `MANIFEST.yaml`。
+
 ---
 
 ## 相关文档
@@ -38,6 +42,7 @@
 | 文件 | SSOT Key | 关键内容 |
 |------|----------|----------|
 | [core.md](./core.md) | `core` | 架构 + 目录 + 环境 + 变量 + 网络 |
+| [core.environments.md](./core.environments.md) | `core.environments` | 环境分类、隔离与命名 |
 
 ---
 
@@ -91,6 +96,7 @@
 | [ops.observability.md](./ops.observability.md) | `ops.obs` | SigNoz、日志、监控 |
 | [ops.alerting.md](./ops.alerting.md) | `ops.alerting` | 告警规则、值班 |
 | [ops.availability-ledger.md](./ops.availability-ledger.md) | `ops.availability_ledger` | 可用率账本、正向证明、R2 冷归档 |
+| [watchdog-signals.yaml](./watchdog-signals.yaml) | `watchdog.signals` | Active watchdog signal inventory and ownership |
 
 ---
 
