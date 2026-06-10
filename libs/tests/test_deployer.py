@@ -4,6 +4,8 @@ from unittest.mock import MagicMock
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -97,6 +99,70 @@ def test_preserve_runtime_env_keeps_explicit_new_vault_app_token() -> None:
     assert result.splitlines() == ["ENV=production", "VAULT_APP_TOKEN=hvs.new"]
 
 
+def test_parse_env_text_ignores_comments_blanks_and_malformed_lines() -> None:
+    from libs.deployer import _parse_env_text
+
+    assert _parse_env_text("\n# comment\nA=1\nINVALID\nB=two=parts\n") == {
+        "A": "1",
+        "B": "two=parts",
+    }
+
+
+def test_data_path_for_env_requires_isolation_for_non_production(monkeypatch) -> None:
+    from libs.deployer import Deployer
+
+    class DummyDeployer(Deployer):
+        data_path = "/data/app"
+
+    monkeypatch.delenv("ALLOW_SHARED_DATA_PATH", raising=False)
+
+    with pytest.raises(ValueError, match="Non-production requires DATA_PATH"):
+        DummyDeployer.data_path_for_env({"ENV": "staging", "PROJECT": "platform"})
+
+
+def test_data_path_for_env_allows_explicit_suffix_and_override(monkeypatch) -> None:
+    from libs.deployer import Deployer
+
+    class DummyDeployer(Deployer):
+        data_path = "/data/app"
+
+    monkeypatch.delenv("ALLOW_SHARED_DATA_PATH", raising=False)
+
+    assert (
+        DummyDeployer.data_path_for_env(
+            {"ENV": "staging", "PROJECT": "platform", "ENV_SUFFIX": "-staging"}
+        )
+        == "/data/app-staging"
+    )
+    assert (
+        DummyDeployer.data_path_for_env(
+            {"ENV": "staging", "PROJECT": "platform", "DATA_PATH": "/data/custom"}
+        )
+        == "/data/custom"
+    )
+
+
+def test_compose_env_base_filters_empty_optional_values() -> None:
+    from libs.deployer import Deployer
+
+    class DummyDeployer(Deployer):
+        data_path = "/data/app"
+
+    result = DummyDeployer.compose_env_base(
+        {
+            "ENV": "production",
+            "INTERNAL_DOMAIN": "zitian.party",
+            "ENV_DOMAIN_SUFFIX": None,
+        }
+    )
+
+    assert result == {
+        "ENV": "production",
+        "INTERNAL_DOMAIN": "zitian.party",
+        "DATA_PATH": "/data/app",
+    }
+
+
 def test_config_hash_includes_compose_local_mounts_and_docker_copy_sources(
     tmp_path, monkeypatch
 ) -> None:
@@ -140,6 +206,49 @@ services:
 
     assert before != after_app_change
     assert after_app_change != after_mount_change
+
+
+def test_compose_artifact_files_handles_json_copy_and_bind_mounts(tmp_path) -> None:
+    from libs.deployer import _compose_artifact_files
+
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    (app_dir / "main.py").write_text("print('hello')\n", encoding="utf-8")
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("enabled: true\n", encoding="utf-8")
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(
+        'FROM python:3.12-slim\nCOPY ["app/main.py", "/app/main.py"]\n',
+        encoding="utf-8",
+    )
+    compose = tmp_path / "compose.yaml"
+    compose_content = """
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - type: bind
+        source: ./config.yaml
+        target: /etc/app/config.yaml
+      - type: volume
+        source: named-volume
+        target: /data
+"""
+    compose.write_text(compose_content, encoding="utf-8")
+
+    files = _compose_artifact_files(str(compose), compose_content)
+
+    assert files == sorted({dockerfile, app_dir / "main.py", config_file})
+
+
+def test_compose_artifact_files_ignores_invalid_yaml(tmp_path) -> None:
+    from libs.deployer import _compose_artifact_files
+
+    compose = tmp_path / "compose.yaml"
+
+    assert _compose_artifact_files(str(compose), "services: [") == []
 
 
 def test_deploy_compose_redeploys_when_dokploy_accepts_noop_deploy(monkeypatch):
@@ -255,6 +364,81 @@ def test_deploy_compose_fails_when_redeploy_has_no_runtime_record(monkeypatch):
 
     assert client.deploy_calls == 1
     assert client.redeploy_calls == 1
+
+
+def test_deployment_ids_accepts_id_or_deployment_id() -> None:
+    from libs.deployer import Deployer
+
+    assert Deployer._deployment_ids(
+        [{"deploymentId": "deploy-1"}, {"id": "deploy-2"}, {"deploymentId": ""}, {}]
+    ) == {"deploy-1", "deploy-2"}
+
+
+def test_get_compose_deployments_filters_malformed_records() -> None:
+    from libs.deployer import Deployer
+
+    class Client:
+        def get_compose_deployments(self, compose_id):
+            assert compose_id == "compose-1"
+            return [{"deploymentId": "ok"}, "bad", None]
+
+    assert Deployer._get_compose_deployments(Client(), "compose-1") == [
+        {"deploymentId": "ok"}
+    ]
+
+
+def test_wait_for_new_deployment_record_fails_on_error_status(monkeypatch) -> None:
+    import libs.deployer as deployer
+    from libs.deployer import Deployer
+
+    monkeypatch.setattr(deployer.time, "monotonic", lambda: 100.0)
+
+    class Client:
+        def get_compose_deployments(self, compose_id):
+            return [{"deploymentId": "new", "status": "error"}]
+
+    with pytest.raises(RuntimeError, match="entered error"):
+        Deployer._wait_for_new_deployment_record(
+            Client(), "compose-1", {"old"}, timeout_seconds=0, interval_seconds=1
+        )
+
+
+def test_wait_for_new_deployment_record_accepts_success_status(monkeypatch) -> None:
+    import libs.deployer as deployer
+    from libs.deployer import Deployer
+
+    monkeypatch.setattr(deployer.time, "monotonic", lambda: 100.0)
+
+    class Client:
+        def get_compose_deployments(self, compose_id):
+            return [{"id": "new", "status": "successful"}]
+
+    assert (
+        Deployer._wait_for_new_deployment_record(
+            Client(), "compose-1", {"old"}, timeout_seconds=0, interval_seconds=1
+        )
+        is True
+    )
+
+
+def test_wait_for_new_deployment_record_times_out_on_unknown_status(
+    monkeypatch,
+) -> None:
+    import libs.deployer as deployer
+    from libs.deployer import Deployer
+
+    monkeypatch.setattr(deployer.time, "monotonic", lambda: 100.0)
+
+    class Client:
+        def get_compose_deployments(self, compose_id):
+            return [{"deploymentId": "new", "status": "queued"}]
+
+    assert (
+        Deployer._wait_for_new_deployment_record(
+            Client(), "compose-1", {"old"}, timeout_seconds=0, interval_seconds=1
+        )
+        is False
+    )
 
 
 class TestDeployerVaultTokenPreflight:
