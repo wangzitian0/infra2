@@ -341,10 +341,36 @@ async function recordHeartbeat(request, env) {
     return jsonResponse({ ok: false, error: "WATCHDOG_STATE KV binding is missing" }, 500);
   }
 
-  const payload = await request.json();
-  const environment = safeId(payload.env || payload.environment || "production");
-  const name = safeId(payload.name || "infra-probe-runner");
-  const key = heartbeatKey(environment, name);
+  let payload;
+  try {
+    payload = await request.json();
+  } catch (_error) {
+    payload = {};
+  }
+  // request.json() also accepts valid JSON that is not an object (null, a
+  // string, a number, an array); normalize so the field access below cannot
+  // throw on `payload.env` etc.
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+    payload = {};
+  }
+  let environment;
+  let name;
+  let key;
+  try {
+    environment = safeId(payload.env || payload.environment || "production");
+    name = safeId(payload.name || "infra-probe-runner");
+    key = heartbeatKey(environment, name);
+  } catch (error) {
+    // A malformed env/name must not bubble up as an unhandled 500/CF-1101;
+    // degrade visibly with the same queryable event used for storage failures.
+    logWatchdogResult({
+      event: "watchdog.heartbeat.error",
+      timestamp: Date.now(),
+      status: "fail",
+      error: oneLine(error && error.message ? error.message : String(error)),
+    });
+    return jsonResponse({ ok: true, persisted: false, degraded: true });
+  }
   const now = Date.now();
   const value = {
     environment,
@@ -364,21 +390,37 @@ async function recordHeartbeat(request, env) {
   // per minWriteInterval (well under the staleness threshold).
   const minWriteIntervalMs = Number(env.WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS || 600) * 1000;
   let shouldWrite = true;
-  const existingRaw = await env.WATCHDOG_STATE.get(key);
-  if (existingRaw) {
-    try {
-      const existing = JSON.parse(existingRaw);
-      const ageMs = now - Number(existing.receivedAt || 0);
-      const statusUnchanged = (existing.ok !== false) === value.ok;
-      if (statusUnchanged && ageMs >= 0 && ageMs < minWriteIntervalMs) {
-        shouldWrite = false;
+  // Fail-safe: a watcher must distinguish its own storage failure from a target
+  // failure. If KV get/put throws (e.g. the daily quota is exhausted), log a
+  // queryable structured event and degrade gracefully (HTTP 200) instead of
+  // throwing an unhandled exception (HTTP 500 / CF 1101) that is invisible
+  // unless someone is live-tailing the worker.
+  try {
+    const existingRaw = await env.WATCHDOG_STATE.get(key);
+    if (existingRaw) {
+      try {
+        const existing = JSON.parse(existingRaw);
+        const ageMs = now - Number(existing.receivedAt || 0);
+        const statusUnchanged = (existing.ok !== false) === value.ok;
+        if (statusUnchanged && ageMs >= 0 && ageMs < minWriteIntervalMs) {
+          shouldWrite = false;
+        }
+      } catch (_error) {
+        shouldWrite = true;
       }
-    } catch (_error) {
-      shouldWrite = true;
     }
-  }
-  if (shouldWrite) {
-    await env.WATCHDOG_STATE.put(key, JSON.stringify(value));
+    if (shouldWrite) {
+      await env.WATCHDOG_STATE.put(key, JSON.stringify(value));
+    }
+  } catch (error) {
+    logWatchdogResult({
+      event: "watchdog.heartbeat.error",
+      timestamp: now,
+      status: "fail",
+      key,
+      error: oneLine(error && error.message ? error.message : String(error)),
+    });
+    return jsonResponse({ ok: true, key, persisted: false, degraded: true });
   }
   return jsonResponse({ ok: true, key, persisted: shouldWrite });
 }
