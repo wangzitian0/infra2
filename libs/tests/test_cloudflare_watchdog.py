@@ -128,6 +128,27 @@ def test_worker_supports_existing_feishu_app_bot_mode() -> None:
     assert "/open-apis/im/v1/messages?receive_id_type=chat_id" in source
 
 
+def test_worker_escalates_to_email_when_feishu_delivery_fails() -> None:
+    """A Feishu outage must not silently swallow an alert: email is the
+    independent secondary channel, sent only when Feishu delivery fails."""
+    source = WORKER.read_text(encoding="utf-8")
+    config = WRANGLER.read_text(encoding="utf-8")
+
+    # Alerts go through the dual-channel wrapper, not raw sendFeishu.
+    assert "async function deliverAlert(env, text, kind)" in source
+    assert "deliverAlert(env, formatFailureMessage(failures)" in source
+    assert "deliverAlert(env, formatResolvedMessage()" in source
+    # Email is sent inside the Feishu-failure catch (escalation, not duplicate).
+    assert "async function sendEmail(env, subject, text)" in source
+    assert "https://api.resend.com/emails" in source
+    assert 'event: "watchdog.delivery.escalated"' in source
+    assert "all alert channels failed" in source
+    # Config: recipient + sender in wrangler, RESEND_API_KEY is a secret.
+    assert "ALERT_EMAIL_TO" in config
+    assert "wangzitian.ai@gmail.com" in config
+    assert "RESEND_API_KEY" in source
+
+
 def test_cloudflare_watchdog_docs_include_deploy_and_secret_contract() -> None:
     """Infra-011.2: setup is documented without committing credentials."""
     readme = README.read_text(encoding="utf-8")

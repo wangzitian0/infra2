@@ -51,6 +51,20 @@ wrangler secret put WATCHDOG_STATUS_TOKEN
 alerting deployment. `WATCHDOG_STATUS_TOKEN` is required for authenticated
 GitHub audit checks of `/status`.
 
+Secondary alert channel (email via Resend — used only when Feishu delivery
+fails, so a Feishu outage cannot silently swallow an alert):
+
+```bash
+wrangler secret put RESEND_API_KEY
+```
+
+`ALERT_EMAIL_TO` / `ALERT_EMAIL_FROM` are set in `wrangler.toml`; the sender
+domain must be verified in Resend. If `RESEND_API_KEY` (or `ALERT_EMAIL_TO`) is
+unset, the email escalation is skipped — a `watchdog.delivery.escalation_unavailable`
+event is logged and the original Feishu delivery failure is recorded as before
+(the alert is not silently swallowed, and no spurious "all channels failed" is
+raised).
+
 ## 1Password-backed Secret Sync
 
 The Cloudflare Worker API token and watchdog status token are stored in
