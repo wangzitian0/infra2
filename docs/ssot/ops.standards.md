@@ -63,7 +63,42 @@
 
 ---
 
+## 5. 资源治理 (Resource Governance)
+
+> **核心**: 单台 VPS 上 prod / staging / preview / playground 共存。**每个容器必须声明资源限额**，否则一个失控/泄漏的容器能吃爆整机（实证:2026-06 prefect 占 3G、零限额下内存 27/31G、Dokploy 控制面超时）。CI 不在本机（GitHub runner），不参与本机配额。
+
+### 5.1 隔离原则
+
+隔离的轴 = 风险的轴。**控制/平台面**（Dokploy/Vault/SigNoz/Authentik/MinIO/Prefect…）有内建多租户 → 一份 + HA + 逻辑租户即可；**数据/工作负载面**（app 容器 + 其逻辑库/bucket）→ per-(env×app) 隔离。staging 与 prod **故意两套**(staging 是升级/IaC 变更的金丝雀,挂了也比 prod 直接挂强)，但 staging 跑**最低资源 tier**。
+
+### 5.2 资源 tier(两个独立旋钮:预算 ≠ 优先级)
+
+| tier | `mem_limit`(天花板) | `mem_reservation`(保底) | `cpu_shares`(竞争权重) | OOM 取舍 |
+|------|--------------------|------------------------|----------------------|----------|
+| **prod** | 充足,**整机 ≤ 50%** | 设(保证 floor) | 1024 | 最后(受保护) |
+| **staging** | **最低,够跑即可** | 不设 | 512 | 中 |
+| **preview** | 紧,临时 | 不设 | 256 | 早 |
+| **playground** | 宽松上限(防吃爆) | 不设 | 128 | 最早 |
+
+要点:
+- **天花板必须设在观测峰值之上**——限到峰值以下会触发 OOM 重启循环,比不限更糟。先给带余量的天花板防失控,观察后再收紧。
+- **prod ≤ 50% 是封顶**(防 prod 泄漏吃爆全机),配 `reservation` 保底;overcommit(各 tier 上限之和 > 100%)允许,只要 **reservation 之和 ≤ 整机**。
+- `cpu_shares` 是相对权重,**零 OOM 风险**,可放心按 tier 设。
+
+### 5.3 落地约定
+
+- 限额写进 **compose 字段**(`mem_limit`/`mem_reservation`/`cpu_shares`),由 env 变量驱动、prod 默认 baked、staging/preview 部署时 override 到更低:
+  ```yaml
+  mem_limit: ${SVC_MEM_LIMIT:-<prod天花板>}
+  cpu_shares: ${TIER_CPU_SHARES:-1024}   # staging 部署设 512, preview 256
+  ```
+- **白名单**: 新增服务的 compose **必须**带 `mem_limit` + `cpu_shares`。
+- **黑名单**: 禁止无限额服务上 prod;禁止把天花板设到观测峰值以下。
+
+---
+
 ## Used by
 
 - [AGENTS.md](https://github.com/wangzitian0/infra2/blob/main/AGENTS.md)
 - [docs/ssot/README.md](./README.md)
+- [docs/ssot/ops.observability.md](./ops.observability.md)

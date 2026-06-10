@@ -64,6 +64,9 @@ services:
     pull_policy: always
     container_name: finance_report-backend${ENV_SUFFIX}
     restart: always
+    # ops.standards §5: preview/staging deploys override these lower via env.
+    mem_limit: ${APP_BACKEND_MEM_LIMIT:-768m}
+    cpu_shares: ${TIER_CPU_SHARES:-1024}
     logging:
       driver: json-file
       options:
@@ -149,6 +152,8 @@ services:
     pull_policy: always
     container_name: finance_report-frontend${ENV_SUFFIX}
     restart: always
+    mem_limit: ${APP_FRONTEND_MEM_LIMIT:-768m}
+    cpu_shares: ${TIER_CPU_SHARES:-1024}
     logging:
       driver: json-file
       options:
