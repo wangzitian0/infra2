@@ -660,6 +660,10 @@ def setup_tokens(c, project=None, service=None, deploy=True, revoke_old=True):
   capabilities = ["read"]
 }}
 
+path "auth/token/renew-self" {{
+  capabilities = ["update"]
+}}
+
 path "secret/data/{target.project}/{env_name}/{target.service}" {{
   capabilities = ["read", "list"]
 }}"""

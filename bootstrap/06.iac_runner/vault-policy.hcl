@@ -25,3 +25,7 @@ path "secret/data/platform/+/*" {
 path "secret/data/finance_report/+/*" {
   capabilities = ["create", "read", "update", "list"]
 }
+
+path "auth/token/renew-self" {
+  capabilities = ["update"]
+}
