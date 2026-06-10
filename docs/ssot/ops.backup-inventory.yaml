@@ -52,6 +52,10 @@ services:
     data_path: /data/platform/activepieces
     method: filesystem_archive
     restore_command: restore Activepieces persistent data while service is stopped.
+  - service_id: platform/openpanel
+    data_path: /data/platform/openpanel
+    method: filesystem_archive
+    restore_command: restore OpenPanel persistent config/data while service is stopped.
   - service_id: finance_report/postgres
     data_path: /data/finance_report/postgres
     method: pg_dump_plus_data_archive

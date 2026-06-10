@@ -89,6 +89,18 @@ services:
       - platform-prefect-server${ENV_SUFFIX}
       - platform-prefect-services${ENV_SUFFIX}
       - platform-prefect-worker${ENV_SUFFIX}
+  - id: platform/openpanel
+    project: platform
+    dokploy_service: openpanel
+    compose_path: platform/24.openpanel/compose.yaml
+    vault_agent_config_path: platform/24.openpanel/vault-agent.hcl
+    secret_template_path: platform/24.openpanel/secrets.ctmpl
+    vault_path_template: secret/data/platform/{env}/openpanel
+    vault_agent_container: platform-openpanel-vault-agent${ENV_SUFFIX}
+    app_containers:
+      - platform-openpanel-api${ENV_SUFFIX}
+      - platform-openpanel-dashboard${ENV_SUFFIX}
+      - platform-openpanel-worker${ENV_SUFFIX}
   - id: finance_report/postgres
     project: finance_report
     dokploy_service: postgres

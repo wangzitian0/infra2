@@ -21,6 +21,8 @@ CONTAINERS = {
     "wealthfolio": "finance-wealthfolio",
     "clickhouse": "platform-clickhouse",
     "signoz": "platform-signoz",
+    "openpanel-api": "platform-openpanel-api",
+    "openpanel-dashboard": "platform-openpanel-dashboard",
 }
 
 # Service subdomain mapping (subdomain prefix -> description)
