@@ -30,7 +30,7 @@ ALERT_DELIVERY_MODE = "feishu_app"
 # fails, so a Feishu outage cannot silently swallow an alert. RESEND_API_KEY is a
 # wrangler secret. Sender domain must be verified in Resend.
 ALERT_EMAIL_TO = "wangzitian.ai@gmail.com"
-ALERT_EMAIL_FROM = "watchdog@zitian.party"
+ALERT_EMAIL_FROM = "watchdog@mail.zitian.party"
 WATCHDOG_TARGETS_JSON = """
 [
   {"environment":"production","name":"dokploy-public-route","url":"https://cloud.zitian.party","statuses":[200,302],"severity":"critical"},
