@@ -136,6 +136,15 @@ jobs:
           path: coverage/infra2-coverage.xml
           if-no-files-found: error
 
+      - name: Upload infra coverage to Coveralls
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: coverallsapp/github-action@v2
+        continue-on-error: true
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          format: cobertura
+          file: coverage/infra2-coverage.xml
+
       - name: Gate watchdog signal consistency
         run: |
           cd ${{ github.workspace }}
