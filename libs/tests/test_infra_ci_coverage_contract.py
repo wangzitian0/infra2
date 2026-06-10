@@ -1,0 +1,25 @@
+"""Coverage visibility contracts for infra CI."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_infra_ci_publishes_coverage_context_without_blocking_delivery() -> None:
+    """Infra-012.13: infra CI publishes coverage before enforcing thresholds."""
+    workflow = (ROOT / ".github/workflows/infra-ci.yml").read_text(encoding="utf-8")
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+    assert "pytest-cov" in pyproject
+    assert 'source = ["libs", "tools"]' in pyproject
+    assert "uv run python -P -m pytest libs/tests -q" in workflow
+    assert "--cov=libs" in workflow
+    assert "--cov=tools" in workflow
+    assert "--cov-report=xml:coverage/infra2-coverage.xml" in workflow
+    assert "--cov-fail-under=0" in workflow
+    assert "Upload infra coverage context" in workflow
+    assert "infra2-coverage-context" in workflow
+    assert "if-no-files-found: error" in workflow

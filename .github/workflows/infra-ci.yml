@@ -121,7 +121,20 @@ jobs:
       - name: Run infra unit tests
         run: |
           cd ${{ github.workspace }}
-          uv run python -P -m pytest libs/tests -q
+          mkdir -p coverage
+          uv run python -P -m pytest libs/tests -q \
+            --cov=libs \
+            --cov=tools \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage/infra2-coverage.xml \
+            --cov-fail-under=0
+
+      - name: Upload infra coverage context
+        uses: actions/upload-artifact@v4
+        with:
+          name: infra2-coverage-context
+          path: coverage/infra2-coverage.xml
+          if-no-files-found: error
 
       - name: Gate watchdog signal consistency
         run: |

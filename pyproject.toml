@@ -7,6 +7,7 @@ dependencies = [
     # E2E testing dependencies
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
+    "pytest-cov>=7.0.0",
     "playwright>=1.40.0",
     "httpx>=0.25.0",
     "python-dotenv>=1.0.0",
@@ -29,6 +30,17 @@ markers = [
     "database: Database connection tests",
     "e2e: full end-to-end tests",
 ]
+
+[tool.coverage.run]
+source = ["libs", "tools"]
+omit = [
+    "libs/tests/**",
+    "e2e_regressions/tests/**",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
 
 [tool.setuptools.packages.find]
 where = ["."]
