@@ -1,5 +1,6 @@
 services:
   vault-agent:
+    init: true  # tini as PID1 reaps healthcheck ssl_client zombies
     image: hashicorp/vault:1.15
     container_name: platform-prefect-vault-agent${ENV_SUFFIX}
     restart: always
