@@ -115,6 +115,30 @@ cd cloudflare/infra-watchdog
 wrangler deploy
 ```
 
+> Merging `worker.js` to `main` does **not** deploy the worker. Run
+> `wrangler deploy` after merge, otherwise the deployed worker drifts behind the
+> repo (this is how an undeployed KV-throttle fix once let the worker exhaust the
+> daily KV quota and emit false stale-heartbeat alerts).
+
+### Observability (queryable logs)
+
+`[observability]` is enabled in `wrangler.toml`, so `console.log` output is
+persisted as Workers Logs (free-tier allocation) and is queryable in the
+Cloudflare dashboard after the fact — not only via live `wrangler tail`.
+Heartbeat storage failures emit a queryable `watchdog.heartbeat.error` event.
+
+### Free-quota safety
+
+The worker must never trip the Cloudflare KV free-tier limit (1000 puts/day),
+because a quota trip silently kills heartbeat tracking. Heartbeat writes are
+throttled by `WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS` (set to `900` in
+`wrangler.toml`; the worker falls back to `600` if the variable is unset).
+Worst-case daily puts (`heartbeat keys * ceil(86400/interval) + cron lastRun and
+alert-state puts`) stay well under the limit, and
+`tests/test_cloudflare_watchdog.py` asserts this budget. If
+KV `put()` still fails, `recordHeartbeat` degrades to HTTP 200 with a logged
+error instead of an unhandled 500/1101.
+
 Set the probe runner heartbeat endpoint after deployment:
 
 ```bash

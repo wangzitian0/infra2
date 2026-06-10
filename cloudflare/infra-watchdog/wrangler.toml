@@ -4,6 +4,13 @@ compatibility_date = "2026-06-01"
 account_id = "6e27b6853de0131bea033d235e0a1139"
 workers_dev = true
 
+# Persist console.log output as queryable Workers Logs (free-tier allocation),
+# so watchdog/heartbeat failures are diagnosable after the fact instead of only
+# via live `wrangler tail`.
+[observability]
+enabled = true
+head_sampling_rate = 1
+
 [triggers]
 crons = ["*/30 * * * *"]
 
@@ -14,6 +21,10 @@ WATCHDOG_RETRY_MAX_ATTEMPTS = "2"
 WATCHDOG_RETRY_DELAY_MS = "60000"
 WATCHDOG_RENOTIFY_SECONDS = "7200"
 WATCHDOG_STATUS_MAX_AGE_SECONDS = "7200"
+# Heartbeat KV writes are throttled to at most one per this interval per key.
+# Worst-case daily puts = (heartbeat keys * ceil(86400/interval)) + cron lastRun
+# and alert-state puts, which must stay well under the KV free-tier 1000/day.
+WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS = "900"
 ALERT_DELIVERY_MODE = "feishu_app"
 WATCHDOG_TARGETS_JSON = """
 [

@@ -196,3 +196,50 @@ def test_worker_exposes_token_protected_ledger_endpoint() -> None:
     # Reuses the same bearer token as /status; never public.
     assert "WATCHDOG_STATUS_TOKEN" in source
     assert "window_days" in source
+
+
+def test_worker_logs_are_queryable_via_observability() -> None:
+    """Requirement: watchdog logs must be queryable after the fact, not tail-only."""
+    config = WRANGLER.read_text(encoding="utf-8")
+
+    assert "[observability]" in config
+    assert "enabled = true" in config
+
+
+def test_worker_heartbeat_interval_is_explicit_and_within_kv_budget() -> None:
+    """Requirement: the watchdog must never trip the Cloudflare KV free quota."""
+    import json
+    import math
+    import tomllib
+
+    config = tomllib.loads(WRANGLER.read_text(encoding="utf-8"))
+    variables = config["vars"]
+
+    interval_seconds = int(variables["WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS"])
+    assert interval_seconds >= 600
+
+    heartbeats = json.loads(variables["WATCHDOG_HEARTBEATS_JSON"])
+    cron_runs_per_day = 48  # every 30 minutes
+    # Worst case: every heartbeat key forces one write per throttle interval, plus
+    # one lastRun put and one alert-state put per cron run. Ceil the per-key
+    # writes so a non-divisible interval is not under-counted.
+    heartbeat_puts = len(heartbeats) * math.ceil(86400 / interval_seconds)
+    cron_puts = cron_runs_per_day * 2
+    worst_case_daily_puts = heartbeat_puts + cron_puts
+
+    kv_free_daily_put_limit = 1000
+    assert worst_case_daily_puts < kv_free_daily_put_limit * 0.5, (
+        f"worst-case KV puts/day={worst_case_daily_puts} too close to "
+        f"free-tier limit {kv_free_daily_put_limit}"
+    )
+
+
+def test_worker_heartbeat_handler_is_failsafe_on_kv_errors() -> None:
+    """A watcher's own storage failure must degrade visibly, not throw 500/1101."""
+    source = WORKER.read_text(encoding="utf-8")
+
+    assert 'event: "watchdog.heartbeat.error"' in source
+    assert "degraded: true" in source
+    # request body parsing must not throw on malformed input either.
+    assert "payload = await request.json();" in source
+    assert "payload = {};" in source
