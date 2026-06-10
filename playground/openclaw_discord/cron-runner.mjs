@@ -41,11 +41,12 @@ async function runLoopOnce() {
     if (!due) continue;
     if (runnerState.slots[job.id] === due.slotKey) continue;
 
-    runnerState.slots[job.id] = due.slotKey;
-    stateChanged = true;
-    writeJsonAtomic(runnerStatePath, runnerState);
-
     const result = triggerJob(job.id);
+    if (result.ok) {
+      runnerState.slots[job.id] = due.slotKey;
+      stateChanged = true;
+      writeJsonAtomic(runnerStatePath, runnerState);
+    }
     logEvent({
       type: result.ok ? "triggered" : "trigger_failed",
       jobId: job.id,
@@ -149,12 +150,16 @@ function zonedParts(date, timeZone) {
 }
 
 function triggerJob(jobId) {
-  const args = ["cron", "run", jobId, "--url", gatewayUrl, "--timeout", String(cliTimeoutMs)];
+  const args = ["cron", "run", jobId, "--timeout", String(cliTimeoutMs)];
   if (process.env.OPENCLAW_GATEWAY_TOKEN) args.push("--token", process.env.OPENCLAW_GATEWAY_TOKEN);
   const result = spawnSync("openclaw", args, {
     encoding: "utf8",
     timeout: cliTimeoutMs + 5_000,
-    env: process.env,
+    env: {
+      ...process.env,
+      OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS || "1",
+      OPENCLAW_GATEWAY_URL: gatewayUrl,
+    },
   });
   return {
     ok: result.status === 0,
