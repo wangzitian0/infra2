@@ -47,6 +47,10 @@ services:
     image: prefecthq/prefect:3-latest
     container_name: platform-prefect-server${ENV_SUFFIX}
     restart: unless-stopped
+    # ops.standards §5 resource governance: ceiling with headroom over observed
+    # ~3G; staging/preview deploys override these lower via env.
+    mem_limit: ${PREFECT_SERVER_MEM_LIMIT:-4g}
+    cpu_shares: ${TIER_CPU_SHARES:-1024}
     depends_on:
       vault-agent:
         condition: service_healthy
@@ -112,6 +116,8 @@ services:
     image: prefecthq/prefect:3-latest
     container_name: platform-prefect-services${ENV_SUFFIX}
     restart: unless-stopped
+    mem_limit: ${PREFECT_SERVICES_MEM_LIMIT:-1g}
+    cpu_shares: ${TIER_CPU_SHARES:-1024}
     depends_on:
       prefect-server:
         condition: service_healthy
@@ -155,6 +161,8 @@ services:
     image: prefecthq/prefect:3-latest
     container_name: platform-prefect-worker${ENV_SUFFIX}
     restart: on-failure
+    mem_limit: ${PREFECT_WORKER_MEM_LIMIT:-1g}
+    cpu_shares: ${TIER_CPU_SHARES:-1024}
     depends_on:
       prefect-server:
         condition: service_healthy
