@@ -468,7 +468,7 @@ async function notifyIfNeeded(env, failures, nowMs) {
 
   if (failures.length === 0) {
     if (state.active) {
-      await sendFeishu(env, formatResolvedMessage());
+      await deliverAlert(env, formatResolvedMessage(), "recovered");
       await saveState(env, stateKey, { active: false, fingerprint: "", lastAlertAt: nowMs });
     }
     return;
@@ -481,7 +481,7 @@ async function notifyIfNeeded(env, failures, nowMs) {
     nowMs - Number(state.lastAlertAt || 0) >= renotifyMs;
 
   if (shouldSend) {
-    await sendFeishu(env, formatFailureMessage(failures));
+    await deliverAlert(env, formatFailureMessage(failures), "failure");
     await saveState(env, stateKey, { active: true, fingerprint, lastAlertAt: nowMs });
   }
 }
@@ -546,6 +546,80 @@ async function sendFeishuApp(env, text) {
   const messageBody = await messageResponse.json();
   if (!messageResponse.ok || messageBody.code !== 0) {
     throw new Error(`Feishu app delivery failed: HTTP ${messageResponse.status}; code=${messageBody.code}`);
+  }
+}
+
+async function deliverAlert(env, text, kind) {
+  // Feishu is the primary channel; email is an independent secondary channel so
+  // a Feishu outage cannot silently swallow an alert. Email is sent only when
+  // Feishu delivery fails (escalation), to avoid duplicate noise on every alert.
+  try {
+    await sendFeishu(env, text);
+  } catch (feishuError) {
+    const ts = Date.now();
+    const fe = oneLine(feishuError && feishuError.message ? feishuError.message : String(feishuError));
+    logWatchdogResult({
+      event: "watchdog.delivery.failure",
+      timestamp: ts,
+      kind,
+      channel: "feishu",
+      status: "fail",
+      error: fe,
+    });
+    const emailConfigured =
+      String(env.ALERT_EMAIL_TO || "").trim() !== "" && String(env.RESEND_API_KEY || "").trim() !== "";
+    if (!emailConfigured) {
+      // No secondary channel configured: the Feishu failure stands as the
+      // delivery failure (escalation unavailable, recorded for querying).
+      logWatchdogResult({
+        event: "watchdog.delivery.escalation_unavailable",
+        timestamp: ts,
+        kind,
+        channel: "email",
+      });
+      throw feishuError;
+    }
+    try {
+      await sendEmail(env, `[infra2 watchdog] ${kind}`, `${text}\n\n(primary Feishu delivery failed: ${fe})`);
+      logWatchdogResult({
+        event: "watchdog.delivery.escalated",
+        timestamp: ts,
+        kind,
+        channel: "email",
+        status: "ok",
+      });
+    } catch (emailError) {
+      const ee = oneLine(emailError && emailError.message ? emailError.message : String(emailError));
+      logWatchdogResult({
+        event: "watchdog.delivery.failure",
+        timestamp: ts,
+        kind,
+        channel: "email",
+        status: "fail",
+        error: ee,
+      });
+      throw new Error(`all alert channels failed: feishu=${fe}; email=${ee}`);
+    }
+  }
+}
+
+async function sendEmail(env, subject, text) {
+  const to = String(env.ALERT_EMAIL_TO || "").trim();
+  const apiKey = String(env.RESEND_API_KEY || "").trim();
+  if (!to || !apiKey) {
+    throw new Error("email channel not configured (ALERT_EMAIL_TO / RESEND_API_KEY)");
+  }
+  const from = String(env.ALERT_EMAIL_FROM || "watchdog@zitian.party").trim();
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ from, to: [to], subject, text }),
+  });
+  if (!response.ok) {
+    throw new Error(`Resend delivery failed: HTTP ${response.status}: ${oneLine(await safeBody(response))}`);
   }
 }
 
