@@ -244,6 +244,10 @@ Default coverage:
 - Cloudflare alert dedupe keys on stable failure identity plus failure domain;
   volatile fields like heartbeat age stay in the alert body but do not create a
   new incident fingerprint every cron tick.
+- Alert, watchdog, probe, and canary outputs that feed delivery decisions should
+  use the shared Env x Stage contract in `libs/pipeline_stage_contract.py` so
+  `stage`, `duration_ms`, `deadline_ms`, `failure_domain`,
+  `external_dependency`, and suppression/skip reasons stay comparable.
 
 Required Cloudflare Worker secrets for webhook mode:
 
@@ -587,6 +591,7 @@ VPS log dive.
 | **Availability ledger aggregation (正例+反例)** | `libs/tests/test_availability_ledger.py` | ✅ Implemented |
 | **Worker ledger + `/ledger` + R2 archive contract** | `libs/tests/test_cloudflare_watchdog.py` | ✅ Implemented |
 | **Weekly positive stability report** | `libs/tests/test_stability_report.py` | ✅ Implemented |
+| **Env x Stage failure-domain and disagreement contract** | `libs/tests/test_pipeline_stage_contract.py` | ✅ Implemented |
 | **告警通道连通性** | `uv run invoke alerting.test-feishu` | Manual live gate |
 
 ---

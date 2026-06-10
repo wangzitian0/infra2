@@ -64,8 +64,8 @@
 
 ## Redesigned TODO
 
-- [ ] Define the shared Env x Stage result schema in Pipeline and Alerting SSOT.
-- [ ] Add contract tests for stage names, failure domains, duration fields, deadline fields, external dependency flags, and suppression reasons.
+- [x] Define the shared Env x Stage result schema in Pipeline and Alerting SSOT.
+- [x] Add contract tests for stage names, failure domains, duration fields, deadline fields, external dependency flags, and suppression reasons.
 - [ ] Add `config-preflight` classification for Cloudflare Worker JSON/KV/secret/delivery-mode failures.
 - [ ] Add GitHub fallback watchdog preflight classification for missing SSH and Feishu configuration.
 - [ ] Add deploy workflow stage summary with resolve, bootstrap-detect, bootstrap-update, IaC health preflight, deploy start, and status poll durations.
@@ -74,3 +74,10 @@
 - [ ] Extend route canary phase evidence with deadline and budget-breach fields.
 - [ ] Define and test cross-stage disagreement records for internal health vs public route, heartbeat vs probe result, canary vs app readiness, and GitHub fallback vs Cloudflare route checks.
 - [ ] Use Env x Stage evidence to propose safe acceleration only after fallback coverage is proven; keep production full-sync/manual protection unchanged by default.
+
+## 2026-06-10 Env x Stage Contract Drift Fix
+
+- Added `libs/pipeline_stage_contract.py` as the code-owned contract for Env x Stage evidence records.
+- Added `libs/tests/test_pipeline_stage_contract.py` to prove required fields, preflight classification, budget classification, safe acceleration rules, and deterministic disagreement records.
+- Extended SSOT governance so Infra project AC proof table paths fail CI when they point at missing tests, tools, workflows, or code anchors.
+- Remaining work is producer migration: deploy workflow summaries, IaC Runner status payloads, route canary phase deadlines, and watchdog/probe records should emit the shared contract shape.

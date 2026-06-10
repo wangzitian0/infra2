@@ -17,10 +17,21 @@ README = SSOT_DIR / "README.md"
 
 README_ROW_RE = re.compile(r"\|\s*\[[^\]]+\]\(\./([^)]+)\)\s*\|\s*`([^`]+)`\s*\|")
 MD_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+BACKTICK_PATH_RE = re.compile(r"`([^`]+)`")
+PROOF_PATH_PREFIXES = (
+    ".github/",
+    "bootstrap/",
+    "cloudflare/",
+    "docs/ssot/",
+    "libs/",
+    "platform/",
+    "scripts/",
+    "tools/",
+)
 
 
 def _strip_anchor(path: str) -> str:
-    return path.split("#", 1)[0]
+    return path.split("#", 1)[0].split("::", 1)[0]
 
 
 def _load_manifest() -> dict:
@@ -90,6 +101,57 @@ def test_project_ssot_links_target_existing_files() -> None:
                 continue
             if not target_path.exists():
                 missing.append(f"{path.relative_to(ROOT)} -> {target}")
+
+    assert missing == []
+
+
+def test_project_ac_proof_paths_target_existing_files() -> None:
+    """Project AC proof table paths must not point at absent anchors."""
+    missing: list[str] = []
+
+    for path in sorted(PROJECT_DIR.glob("*.md")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if "| Infra-" not in line:
+                continue
+            for target in BACKTICK_PATH_RE.findall(line):
+                if not target.startswith(PROOF_PATH_PREFIXES):
+                    continue
+                if " " in target or "\n" in target:
+                    continue
+
+                matches = list(ROOT.glob(_strip_anchor(target))) if "*" in target else []
+                if matches:
+                    continue
+                if not (ROOT / _strip_anchor(target)).exists():
+                    missing.append(f"{path.relative_to(ROOT)} -> {target}")
+
+    assert missing == []
+
+
+def test_redesigned_pipeline_validation_command_targets_existing_files() -> None:
+    """Infra-011 validation commands must stay runnable as proof files move."""
+    missing: list[str] = []
+    path = PROJECT_DIR / "Infra-011.reliability_hardening.md"
+
+    for target in BACKTICK_PATH_RE.findall(path.read_text(encoding="utf-8")):
+        if not target.startswith(PROOF_PATH_PREFIXES):
+            continue
+        if " " in target or "\n" in target:
+            continue
+        matches = list(ROOT.glob(_strip_anchor(target))) if "*" in target else []
+        if matches:
+            continue
+        if not (ROOT / _strip_anchor(target)).exists():
+            missing.append(f"{path.relative_to(ROOT)} -> {target}")
+
+    for line in path.read_text(encoding="utf-8").splitlines():
+        target = line.strip().rstrip("\\")
+        if not target.startswith(PROOF_PATH_PREFIXES):
+            continue
+        if " " in target or "\n" in target:
+            continue
+        if not (ROOT / _strip_anchor(target)).exists():
+            missing.append(f"{path.relative_to(ROOT)} -> {target}")
 
     assert missing == []
 

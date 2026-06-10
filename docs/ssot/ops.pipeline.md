@@ -288,6 +288,43 @@ only a compatibility fallback.
 - Other bootstrap services remain manual because they are first-install and
   disaster-recovery dependencies.
 
+### 4.6 Env x Stage Result Contract
+
+`libs/pipeline_stage_contract.py` owns the shared sparse Env x Stage evidence
+schema for CI, CD, route canary, watchdog, and probe outputs. Producers must
+emit comparable records instead of one-off log text when a stage result is used
+for deployment decisions, alert routing, or acceleration.
+
+Required fields:
+
+| Field | Purpose |
+|-------|---------|
+| `source` | Producer name, for example `deploy-platform.yml` or `cloudflare-watchdog`. |
+| `environment` | One of `local`, `pr`, `pr-preview`, `staging`, `production`. |
+| `stage` | Shared stage name such as `config-preflight`, `deploy-status`, `route-canary`, or `watchdog`. |
+| `target` | Service, route, variable, compose, or provider target being checked. |
+| `status` | One of `pass`, `fail`, `skip`, `warn`, `running`. |
+| `duration_ms` / `deadline_ms` | Speed evidence used before tightening timeouts or skipping work. |
+| `failure_domain` | Required for failed stages; `none` only when the stage did not fail. |
+| `external_dependency` | Marks provider/config/control-plane failures before expensive stages start. |
+| `suppressed_reason` / `skipped_reason` | Required for skipped stages so acceleration is auditable. |
+
+Acceleration rule:
+
+- Production skips are not considered safe acceleration.
+- Non-production skips can count as acceleration only when the skipped stage is
+  explicitly eligible and the record carries `skipped_reason` or
+  `suppressed_reason`.
+- Stage duration soft/hard breaches are classified before any timeout is reduced.
+
+Consistency rule:
+
+- Cross-stage contradictions are recorded as disagreement kinds rather than
+  operator interpretation. Initial covered cases include internal health passing
+  while the public route fails, heartbeat freshness disagreeing with public
+  route status, and route-canary deployment-record failures while fallback
+  watchdog evidence passes.
+
 ---
 
 ## 5. 设计约束 (Dos & Don'ts)
@@ -316,6 +353,7 @@ only a compatibility fallback.
 | **Staging 自动部署** | Push to main → 检查 tag 创建 → 验证 IaC Runner logs | ⏳ Pending PR merge |
 | **Production 手动部署** | 手动触发 workflow → 检查 tag + Release → 验证 production | ⏳ Pending PR merge |
 | **Config hash 幂等性** | 相同配置重复部署应 skip | ⏳ Pending PR merge |
+| **Env x Stage schema / speed / consistency contract** | `libs/tests/test_pipeline_stage_contract.py` | ✅ Implemented |
 
 ---
 
