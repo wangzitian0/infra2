@@ -16,7 +16,7 @@ class OpenPanelDeployer(Deployer):
     data_path = "/data/platform/openpanel"
     uid = "1000"
     gid = "1000"
-    secret_key = "encryption_key"
+    secret_key = "cookie_secret"
 
     # Domain configuration - None to use compose.yaml Traefik labels
     subdomain = None
@@ -39,20 +39,23 @@ class OpenPanelDeployer(Deployer):
             warning("Redis password not found in Vault")
             return False
 
+        # get_secrets raises VaultSecretNotFoundError when the path has never
+        # been written; create it idempotently so .get() below is safe on first
+        # deploy.
         openpanel_secrets = get_secrets(project, "openpanel", env_name)
 
-        encryption_key = openpanel_secrets.get("encryption_key")
-        if not encryption_key:
+        cookie_secret = openpanel_secrets.get("cookie_secret")
+        if not cookie_secret:
             import secrets as py_secrets
 
-            # OpenPanel encryption key must be 32-byte hex string (64 characters)
-            encryption_key = py_secrets.token_hex(32)
-            if not openpanel_secrets.set("encryption_key", encryption_key):
-                error("Failed to store encryption key in Vault")
+            # OpenPanel COOKIE_SECRET: opaque random session signing key.
+            cookie_secret = py_secrets.token_hex(32)
+            if not openpanel_secrets.set("cookie_secret", cookie_secret):
+                error("Failed to store cookie_secret in Vault")
                 return False
-            warning("Generated new encryption key in Vault")
+            warning("Generated new cookie_secret in Vault")
         else:
-            info("Encryption key exists in Vault")
+            info("cookie_secret exists in Vault")
 
         # Check or set resend_api_key placeholder
         resend_api_key = openpanel_secrets.get("resend_api_key")
@@ -121,21 +124,11 @@ class OpenPanelDeployer(Deployer):
         else:
             success("Database 'openpanel' created in Postgres")
 
-        # Create ClickHouse database (idempotent)
-        clickhouse_container = with_env_suffix("platform-clickhouse", e)
-        result = c.run(
-            f"ssh root@{e['VPS_HOST']} \"docker exec {clickhouse_container} clickhouse-client -q 'CREATE DATABASE IF NOT EXISTS openpanel;'\"",
-            warn=True,
-            hide=True,
-        )
-        if result.failed:
-            stderr = result.stderr or ""
-            fatal(
-                "Failed to create 'openpanel' database in ClickHouse",
-                f"Error: {stderr}",
-            )
-        else:
-            success("Database 'openpanel' created/verified in ClickHouse")
+        # ClickHouse: OpenPanel runs its own dedicated, version-matched
+        # ClickHouse (op-ch in compose.yaml) because the shared
+        # platform-clickhouse is pinned to 25.5 by SigNoz while OpenPanel v2
+        # requires 25.10. The op-ch container self-creates the `openpanel`
+        # database via clickhouse/init-db.sh, so no provisioning is needed here.
 
         if not cls.ensure_runtime_secrets(c):
             fatal("Failed to ensure OpenPanel runtime secrets")
