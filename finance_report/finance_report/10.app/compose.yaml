@@ -35,6 +35,9 @@ services:
           exit 1
         fi
         echo "$$VAULT_APP_TOKEN" > /vault/token
+        # token_file auth does not renew; keep the periodic token alive in-band
+        # (renew-self every 6h). Requires renew-self capability in the token policy.
+        ( while true; do sleep 21600; VAULT_TOKEN="$$(cat /vault/token)" vault write -f auth/token/renew-self >/dev/null 2>&1 || true; done ) &
         exec vault agent -config=/etc/vault/vault-agent.hcl
     environment:
       VAULT_ADDR: ${VAULT_ADDR}

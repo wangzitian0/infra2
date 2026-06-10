@@ -12,3 +12,7 @@ path "secret/metadata/finance_report/{{env}}/redis" {
 path "auth/token/lookup-self" {
   capabilities = ["read"]
 }
+
+path "auth/token/renew-self" {
+  capabilities = ["update"]
+}

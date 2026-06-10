@@ -8,3 +8,7 @@ path "secret/metadata/platform/{{env}}/postgres" {
 path "auth/token/lookup-self" {
   capabilities = ["read"]
 }
+
+path "auth/token/renew-self" {
+  capabilities = ["update"]
+}
