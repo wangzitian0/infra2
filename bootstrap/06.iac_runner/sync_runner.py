@@ -47,6 +47,7 @@ SERVICE_TASK_MAP = {
     "platform/portal": "portal.sync",
     "platform/activepieces": "activepieces.sync",
     "platform/prefect": "prefect.sync",
+    "platform/openpanel": "openpanel.sync",
     "bootstrap/vault": None,
     "bootstrap/1password": None,
     "bootstrap/iac-runner": None,
@@ -67,10 +68,12 @@ ALL_SERVICES = [
     "platform/portal",
     "platform/activepieces",
     "platform/prefect",
+    "platform/openpanel",
     "finance_report/postgres",
     "finance_report/redis",
     "finance_report/app",
 ]
+
 
 def _tail_text(value: str, limit: int = MAX_RESULT_OUTPUT_CHARS) -> str:
     if len(value) <= limit:
@@ -531,7 +534,7 @@ def sync_services(
                 timeout=30,
             )
             new_head = res_new.stdout.strip() if res_new.returncode == 0 else None
-            
+
             if current_head and new_head and current_head != new_head:
                 res_diff = subprocess.run(
                     ["git", "diff", "--name-only", current_head, new_head],
@@ -546,7 +549,7 @@ def sync_services(
                     logger.info("Detected changed services via git diff: %s", services)
                     if "__all__" in services:
                         services = set(ALL_SERVICES)
-            
+
             if not services:
                 # If still empty (fresh clone or no detected changes), fallback to all
                 services = set(ALL_SERVICES)

@@ -1,0 +1,218 @@
+services:
+  vault-agent:
+    image: hashicorp/vault:1.15
+    container_name: platform-openpanel-vault-agent${ENV_SUFFIX}
+    restart: always
+    entrypoint:
+      - sh
+      - -c
+      - |
+        rm -f /vault/secrets/.env /vault/.token /home/vault/.vault-token 2>/dev/null || true
+        if [ -z "$$VAULT_APP_TOKEN" ]; then
+          echo "VAULT_APP_TOKEN is required"
+          exit 1
+        fi
+        echo "$$VAULT_APP_TOKEN" > /vault/token
+        exec vault agent -config=/etc/vault/vault-agent.hcl
+    environment:
+      VAULT_ADDR: ${VAULT_ADDR}
+      VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:-}
+      ENV: ${ENV}
+    volumes:
+      - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
+      - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
+      - secrets:/vault/secrets
+    networks:
+      - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - |
+          # vault token lookup
+          test -s /vault/secrets/.env &&
+          ! grep -q "<no value>" /vault/secrets/.env &&
+          wget -q -T 3 --header="X-Vault-Token: $$(cat /vault/token)" "$$VAULT_ADDR/v1/auth/token/lookup-self" -O /dev/null
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  op-api:
+    image: openpanel/api:latest
+    container_name: platform-openpanel-api${ENV_SUFFIX}
+    restart: unless-stopped
+    depends_on:
+      vault-agent:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - |
+        # Wait for secrets file to be rendered by vault-agent
+        MAX_WAIT=60; WAITED=0
+        while [ ! -f /secrets/.env ] && [ $$WAITED -lt $$MAX_WAIT ]; do
+          echo "Waiting for secrets... ($$WAITED/$$MAX_WAIT)"
+          sleep 2
+          WAITED=$$((WAITED+2))
+        done
+        [ -f /secrets/.env ] || { echo "FATAL: Secrets timeout after $${MAX_WAIT}s. Check vault-agent logs."; exit 1; }
+        set -a
+        . /secrets/.env
+        set +a
+
+        # Wait for postgres to be ready
+        node -e "const net = require('net'); const check = () => { const s = net.createConnection(5432, 'platform-postgres${ENV_SUFFIX}').on('connect', () => { s.destroy(); process.exit(0); }).on('error', () => { console.log('Waiting for postgres...'); setTimeout(check, 1000); }); }; check();"
+
+        # Wait for clickhouse to be ready
+        node -e "const net = require('net'); const check = () => { const s = net.createConnection(8123, 'platform-clickhouse${ENV_SUFFIX}').on('connect', () => { s.destroy(); process.exit(0); }).on('error', () => { console.log('Waiting for clickhouse...'); setTimeout(check, 1000); }); }; check();"
+
+        exec node dist/index.js
+    environment:
+      PORT: 3333
+      DASHBOARD_URL: https://openpanel${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
+      API_URL: https://openpanel${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}/api
+      OPENPANEL_ALLOW_REGISTRATION: "false"
+      NEXT_PUBLIC_SELF_HOSTED: "true"
+      SELF_HOSTED: "true"
+    volumes:
+      - secrets:/secrets:ro
+    networks:
+      - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.openpanel-api${ENV_DOMAIN_SUFFIX}.rule=Host(`openpanel${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.openpanel-api${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
+      - "traefik.http.routers.openpanel-api${ENV_DOMAIN_SUFFIX}.tls=true"
+      - "traefik.http.routers.openpanel-api${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.openpanel-api${ENV_DOMAIN_SUFFIX}.service=openpanel-api${ENV_DOMAIN_SUFFIX}"
+      - "traefik.http.services.openpanel-api${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=3333"
+      # Strip /api prefix before forwarding to the container port 3333
+      - "traefik.http.middlewares.openpanel-api-strip${ENV_DOMAIN_SUFFIX}.stripprefix.prefixes=/api"
+      - "traefik.http.routers.openpanel-api${ENV_DOMAIN_SUFFIX}.middlewares=openpanel-api-strip${ENV_DOMAIN_SUFFIX}@docker"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3333/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  op-dashboard:
+    image: openpanel/dashboard:latest
+    container_name: platform-openpanel-dashboard${ENV_SUFFIX}
+    restart: unless-stopped
+    depends_on:
+      op-api:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - |
+        # Wait for secrets file to be rendered by vault-agent
+        MAX_WAIT=60; WAITED=0
+        while [ ! -f /secrets/.env ] && [ $$WAITED -lt $$MAX_WAIT ]; do
+          echo "Waiting for secrets... ($$WAITED/$$MAX_WAIT)"
+          sleep 2
+          WAITED=$$((WAITED+2))
+        done
+        [ -f /secrets/.env ] || { echo "FATAL: Secrets timeout after $${MAX_WAIT}s. Check vault-agent logs."; exit 1; }
+        set -a
+        . /secrets/.env
+        set +a
+
+        # Wait for op-api to be ready
+        node -e "const net = require('net'); const check = () => { const s = net.createConnection(3333, 'platform-openpanel-api${ENV_SUFFIX}').on('connect', () => { s.destroy(); process.exit(0); }).on('error', () => { console.log('Waiting for openpanel api...'); setTimeout(check, 1000); }); }; check();"
+
+        exec node .output/server/index.mjs
+    environment:
+      PORT: 3000
+      NEXT_PUBLIC_API_URL: https://openpanel${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}/api
+      NEXT_PUBLIC_DASHBOARD_URL: https://openpanel${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
+      API_URL: https://openpanel${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}/api
+      DASHBOARD_URL: https://openpanel${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
+      NEXT_PUBLIC_SELF_HOSTED: "true"
+      SELF_HOSTED: "true"
+    volumes:
+      - secrets:/secrets:ro
+    networks:
+      - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.openpanel-dashboard${ENV_DOMAIN_SUFFIX}.rule=Host(`openpanel${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`)"
+      - "traefik.http.routers.openpanel-dashboard${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
+      - "traefik.http.routers.openpanel-dashboard${ENV_DOMAIN_SUFFIX}.tls=true"
+      - "traefik.http.routers.openpanel-dashboard${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.openpanel-dashboard${ENV_DOMAIN_SUFFIX}.service=openpanel-dashboard${ENV_DOMAIN_SUFFIX}"
+      - "traefik.http.services.openpanel-dashboard${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=3000"
+    healthcheck:
+      test: ["CMD", "curl", "-I", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  op-worker:
+    image: openpanel/worker:latest
+    container_name: platform-openpanel-worker${ENV_SUFFIX}
+    restart: unless-stopped
+    depends_on:
+      op-api:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - |
+        # Wait for secrets file to be rendered by vault-agent
+        MAX_WAIT=60; WAITED=0
+        while [ ! -f /secrets/.env ] && [ $$WAITED -lt $$MAX_WAIT ]; do
+          echo "Waiting for secrets... ($$WAITED/$$MAX_WAIT)"
+          sleep 2
+          WAITED=$$((WAITED+2))
+        done
+        [ -f /secrets/.env ] || { echo "FATAL: Secrets timeout after $${MAX_WAIT}s. Check vault-agent logs."; exit 1; }
+        set -a
+        . /secrets/.env
+        set +a
+
+        # Wait for op-api to be ready
+        node -e "const net = require('net'); const check = () => { const s = net.createConnection(3333, 'platform-openpanel-api${ENV_SUFFIX}').on('connect', () => { s.destroy(); process.exit(0); }).on('error', () => { console.log('Waiting for openpanel api...'); setTimeout(check, 1000); }); }; check();"
+
+        exec node dist/index.js
+    environment:
+      NEXT_PUBLIC_SELF_HOSTED: "true"
+      SELF_HOSTED: "true"
+    volumes:
+      - secrets:/secrets:ro
+    networks:
+      - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+volumes:
+  secrets:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=10m,mode=0755"
+
+networks:
+  dokploy-network:
+    external: true
