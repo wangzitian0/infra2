@@ -1,5 +1,7 @@
 # infra2
 
+[![Coverage Status](https://coveralls.io/repos/github/wangzitian0/infra2/badge.svg?branch=main)](https://coveralls.io/github/wangzitian0/infra2?branch=main)
+
 基础设施自动化工作区：平台引导、服务部署、文档管理。
 
 ## 🚀 Quick Start
