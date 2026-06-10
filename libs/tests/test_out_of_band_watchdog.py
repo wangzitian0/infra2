@@ -87,6 +87,10 @@ def test_default_targets_cover_public_host_and_bridge_health() -> None:
     assert "health=unhealthy" in ssh_targets[2].command
     assert "health=starting" in ssh_targets[2].command
     assert "status=restarting" in ssh_targets[2].command
+    # Docker ANDs filters of different keys, so the three conditions must be
+    # issued as independent `docker ps` queries to behave as an OR. Otherwise a
+    # plain running+unhealthy container is silently missed.
+    assert ssh_targets[2].command.count("docker ps --filter") == 3
     assert "docker inspect" in ssh_targets[2].command
     assert "{{.Config.Image}}" in ssh_targets[2].command
     assert "{{.State.Status}}" in ssh_targets[2].command
@@ -593,6 +597,41 @@ def test_main_structured_check_logs_include_attempt_count(monkeypatch) -> None:
     check_events = [row for row in emitted if row.get("event") == "watchdog.check"]
     assert len(check_events) == 1
     assert check_events[0]["attempt_count"] == 2
+
+
+def test_main_uses_default_retry_values_when_env_is_blank(monkeypatch) -> None:
+    """Blank retry env vars must not crash watchdog execution."""
+    watchdog = _load_watchdog()
+    captured: dict = {}
+
+    def fake_run_http_checks(_targets, _timeout, **kwargs):
+        captured["kwargs"] = kwargs
+        return [watchdog.CheckResult("infra2-iac-runner", True, "HTTP 200")]
+
+    monkeypatch.setattr(watchdog, "run_http_checks", fake_run_http_checks)
+    monkeypatch.setattr(watchdog, "run_ssh_checks", lambda _config, _targets: [])
+    monkeypatch.setattr(
+        watchdog,
+        "run_worker_status_check",
+        lambda _env, _timeout, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        watchdog,
+        "run_dokploy_route_canary_check",
+        lambda _env, ssh_config: [],
+    )
+
+    result = watchdog.main(
+        {
+            "INFRA2_WATCHDOG_RETRY_MAX_ATTEMPTS": "",
+            "INFRA2_WATCHDOG_RETRY_DELAY_SECONDS": "",
+            "WATCHDOG_DRY_RUN": "0",
+        }
+    )
+
+    assert result == 0
+    assert captured["kwargs"]["max_attempts"] == 2
+    assert captured["kwargs"]["retry_delay_seconds"] == 60.0
 
 
 def test_main_records_delivery_failure_event_instead_of_crashing(monkeypatch) -> None:
