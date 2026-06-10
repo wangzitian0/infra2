@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from libs.alerting import deliver_feishu_app_text, deliver_feishu_text  # noqa: E402
+from libs.alerting import deliver_out_of_band_text  # noqa: E402
 
 WORKFLOW_FILE = "out-of-band-watchdog.yml"
 DEFAULT_REPOSITORY = "wangzitian0/infra2"
@@ -122,33 +122,8 @@ def build_digest_message(summary: Mapping[str, Any], repository: str) -> str:
 
 
 def deliver_digest(env: Mapping[str, str], message: str) -> None:
-    """Deliver digest via existing Feishu webhook/app modes."""
-    mode = (
-        env.get("INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE")
-        or env.get("ALERT_DELIVERY_MODE")
-        or "feishu_webhook"
-    ).strip()
-    if mode == "feishu_app":
-        deliver_feishu_app_text(
-            app_id=env.get("INFRA2_OUT_OF_BAND_FEISHU_APP_ID")
-            or env.get("FEISHU_APP_ID", ""),
-            app_secret=env.get("INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET")
-            or env.get("FEISHU_APP_SECRET", ""),
-            chat_id=env.get("INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID")
-            or env.get("FEISHU_CHAT_ID", ""),
-            api_base=env.get("INFRA2_OUT_OF_BAND_FEISHU_API_BASE")
-            or env.get("FEISHU_API_BASE", "https://open.feishu.cn"),
-            text=message,
-        )
-        return
-    webhook_url = (
-        env.get("INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL")
-        or env.get("FEISHU_WEBHOOK_URL")
-        or ""
-    ).strip()
-    if not webhook_url:
-        raise ValueError("Feishu webhook URL is required for weekly digest delivery")
-    deliver_feishu_text(webhook_url, message)
+    """Deliver digest via the shared out-of-band Feishu webhook/app path."""
+    deliver_out_of_band_text(env, message)
 
 
 def main(env: Mapping[str, str] | None = None) -> int:

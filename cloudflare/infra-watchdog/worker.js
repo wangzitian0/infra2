@@ -47,6 +47,9 @@ export default {
     if (request.method === "GET" && url.pathname === "/status") {
       return statusResponse(request, env);
     }
+    if (request.method === "GET" && url.pathname === "/ledger") {
+      return ledgerResponse(request, env);
+    }
     if (request.method === "POST" && url.pathname === "/heartbeat") {
       return recordHeartbeat(request, env);
     }
@@ -141,6 +144,8 @@ async function runWatchdog(env, nowMs = Date.now()) {
       detail: result.detail,
     });
   }
+
+  await recordLedger(env, allResults, nowMs);
 
   let deliveryError = "";
   try {
@@ -577,6 +582,102 @@ async function saveState(env, key, state) {
 
 async function saveLastRun(env, state) {
   await saveState(env, "watchdog:last-run", state);
+}
+
+const LEDGER_RETENTION_DAYS = 21;
+const R2_LEDGER_PREFIX = "watchdog-ledger/";
+
+function utcDateKey(ms) {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+function ledgerKey(date) {
+  return `ledger:${date}`;
+}
+
+// Records this run's per-signal success/failure into a single rolling daily
+// rollup key. One read + one write per cron run keeps the Cloudflare KV free
+// tier (1000 put/day) safe; writing one key per signal per run would blow the
+// quota and silently break every put(). Positive proof (success counts) is the
+// point: it makes uptime% queryable, not just failures.
+async function recordLedger(env, results, nowMs) {
+  if (!env.WATCHDOG_STATE) {
+    return;
+  }
+  const date = utcDateKey(nowMs);
+  const key = ledgerKey(date);
+  const existing = await loadState(env, key);
+  const isNewDay = !existing.date;
+  const signals = existing.signals && typeof existing.signals === "object" ? existing.signals : {};
+  for (const result of results) {
+    const id = `${result.environment}:${result.name}`;
+    const entry = signals[id] || { ok: 0, fail: 0, severity: result.severity || "", lastDomain: "" };
+    if (result.ok) {
+      entry.ok += 1;
+    } else {
+      entry.fail += 1;
+      entry.lastDomain = result.failure_domain || entry.lastDomain || "";
+    }
+    entry.severity = result.severity || entry.severity || "";
+    signals[id] = entry;
+  }
+  await saveState(env, key, {
+    date,
+    updatedAt: nowMs,
+    runs: Number(existing.runs || 0) + 1,
+    signals,
+  });
+  // On the first run of a new day, yesterday's rollup is finalized: archive it
+  // off-host to R2 (the single off-host store, S3 standard) for long-term
+  // retention beyond the KV hot window, then prune the day that aged out. Both
+  // happen once per day. Guarded so a missing R2 binding is a no-op, not a
+  // crash, which keeps deploys safe before the bucket is bound.
+  if (isNewDay) {
+    if (env.LEDGER_BUCKET) {
+      const prevDate = utcDateKey(nowMs - 86400000);
+      const prevRecord = await loadState(env, ledgerKey(prevDate));
+      if (prevRecord.date) {
+        await env.LEDGER_BUCKET.put(
+          `${R2_LEDGER_PREFIX}${prevDate}.json`,
+          JSON.stringify(prevRecord),
+          { httpMetadata: { contentType: "application/json" } },
+        );
+      }
+    }
+    const pruneDate = utcDateKey(nowMs - LEDGER_RETENTION_DAYS * 86400000);
+    if (env.WATCHDOG_STATE.delete) {
+      await env.WATCHDOG_STATE.delete(ledgerKey(pruneDate));
+    }
+  }
+}
+
+async function ledgerResponse(request, env) {
+  const expectedToken = String(env.WATCHDOG_STATUS_TOKEN || "");
+  if (!expectedToken) {
+    return jsonResponse({ ok: false, error: "WATCHDOG_STATUS_TOKEN is not configured" }, 500);
+  }
+  if ((request.headers.get("Authorization") || "") !== `Bearer ${expectedToken}`) {
+    return jsonResponse({ ok: false, error: "unauthorized" }, 401);
+  }
+  if (!env.WATCHDOG_STATE) {
+    return jsonResponse({ ok: false, error: "WATCHDOG_STATE KV binding is missing" }, 500);
+  }
+  const nowMs = Date.now();
+  const days = [];
+  for (let offset = 0; offset < LEDGER_RETENTION_DAYS; offset += 1) {
+    const date = utcDateKey(nowMs - offset * 86400000);
+    const record = await loadState(env, ledgerKey(date));
+    if (record.date) {
+      days.push(record);
+    }
+  }
+  return jsonResponse({
+    ok: true,
+    as_of: utcDateKey(nowMs),
+    generatedAt: nowMs,
+    window_days: LEDGER_RETENTION_DAYS,
+    ledger: days,
+  });
 }
 
 async function failureFingerprint(failures) {

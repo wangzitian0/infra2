@@ -33,6 +33,9 @@ jobs:
       INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
       INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
       WATCHDOG_DIGEST_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
+      INFRA2_STABILITY_REPORT_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
+      INFRA2_WATCHDOG_LEDGER_URL: ${{ vars.INFRA2_WATCHDOG_LEDGER_URL }}
+      INFRA2_WATCHDOG_WORKER_STATUS_TOKEN: ${{ secrets.INFRA2_WATCHDOG_WORKER_STATUS_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -47,3 +50,7 @@ jobs:
 
       - name: Build and send digest
         run: python tools/watchdog_weekly_digest.py
+
+      - name: Build and send positive stability report
+        if: env.INFRA2_WATCHDOG_LEDGER_URL != ''
+        run: python tools/stability_report.py

@@ -155,3 +155,44 @@ def test_worker_heartbeat_throttles_kv_writes_to_avoid_daily_limit() -> None:
     assert "shouldWrite" in source
     assert "statusUnchanged" in source
     assert "const existingRaw = await env.WATCHDOG_STATE.get(key)" in source
+
+
+def test_worker_records_availability_ledger_with_positive_proof() -> None:
+    """Infra-012.4: every run records per-signal success+failure for uptime%."""
+    source = WORKER.read_text(encoding="utf-8")
+
+    # One aggregated rollup write per run (positive proof = success counts), not
+    # one key per signal, so the KV free tier stays safe.
+    assert "async function recordLedger(env, results, nowMs)" in source
+    assert "await recordLedger(env, allResults, nowMs)" in source
+    assert "entry.ok += 1" in source
+    assert "entry.fail += 1" in source
+    # Single rolling daily key + bounded retention.
+    assert "function ledgerKey(date)" in source
+    assert "const LEDGER_RETENTION_DAYS = 21" in source
+    assert "WATCHDOG_STATE.delete" in source
+
+
+def test_worker_archives_finalized_day_to_r2_off_host() -> None:
+    """ops.availability_ledger: cold archive to R2 (single off-host store, S3)."""
+    source = WORKER.read_text(encoding="utf-8")
+    config = WRANGLER.read_text(encoding="utf-8")
+
+    # Guarded R2 write so a missing binding is a no-op, not a deploy/runtime crash.
+    assert "if (env.LEDGER_BUCKET)" in source
+    assert "env.LEDGER_BUCKET.put(" in source
+    assert "watchdog-ledger/" in source
+    # R2 binding declared in wrangler, reusing the existing off-host backup bucket.
+    assert 'binding = "LEDGER_BUCKET"' in config
+    assert 'bucket_name = "infra2"' in config
+
+
+def test_worker_exposes_token_protected_ledger_endpoint() -> None:
+    """Infra-012: GitHub jobs read the ledger over a bearer-protected route."""
+    source = WORKER.read_text(encoding="utf-8")
+
+    assert 'url.pathname === "/ledger"' in source
+    assert "async function ledgerResponse(request, env)" in source
+    # Reuses the same bearer token as /status; never public.
+    assert "WATCHDOG_STATUS_TOKEN" in source
+    assert "window_days" in source

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -400,6 +401,47 @@ def _post_json(
         message = decoded.get("msg") or decoded.get("message") or "unknown error"
         raise FeishuDeliveryError(f"Feishu OpenAPI rejected message: {message}")
     return decoded
+
+
+def deliver_out_of_band_text(
+    env: Mapping[str, str], text: str, *, timeout: float = 10.0
+) -> dict[str, Any]:
+    """Deliver text through the out-of-band Feishu webhook/app path.
+
+    Shared by the weekly digest, the positive stability report, and the Google
+    Drive sync token-expiry alert so every out-of-band sender selects the
+    delivery mode identically. Prefers ``INFRA2_OUT_OF_BAND_*`` settings (used in
+    GitHub Actions) and falls back to the generic ``ALERT_DELIVERY_MODE`` /
+    ``FEISHU_*`` names.
+    """
+    mode = (
+        env.get("INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE")
+        or env.get("ALERT_DELIVERY_MODE")
+        or "feishu_webhook"
+    ).strip()
+    if mode == "feishu_app":
+        return deliver_feishu_app_text(
+            app_id=env.get("INFRA2_OUT_OF_BAND_FEISHU_APP_ID")
+            or env.get("FEISHU_APP_ID", ""),
+            app_secret=env.get("INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET")
+            or env.get("FEISHU_APP_SECRET", ""),
+            chat_id=env.get("INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID")
+            or env.get("FEISHU_CHAT_ID", ""),
+            api_base=env.get("INFRA2_OUT_OF_BAND_FEISHU_API_BASE")
+            or env.get("FEISHU_API_BASE", "https://open.feishu.cn"),
+            text=text,
+            timeout=timeout,
+        )
+    webhook_url = (
+        env.get("INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL")
+        or env.get("FEISHU_WEBHOOK_URL")
+        or ""
+    ).strip()
+    if not webhook_url:
+        raise InvalidFeishuAppConfig(
+            "Feishu webhook URL or app credentials are required for out-of-band delivery"
+        )
+    return deliver_feishu_text(webhook_url, text, timeout=timeout)
 
 
 def _required(name: str, value: str) -> str:
