@@ -57,7 +57,9 @@ class OpenPanelDeployer(Deployer):
         # Check or set resend_api_key placeholder
         resend_api_key = openpanel_secrets.get("resend_api_key")
         if not resend_api_key:
-            openpanel_secrets.set("resend_api_key", "placeholder")
+            if not openpanel_secrets.set("resend_api_key", "placeholder"):
+                error("Failed to store placeholder resend_api_key in Vault")
+                return False
             warning("Set placeholder resend_api_key in Vault")
 
         return True

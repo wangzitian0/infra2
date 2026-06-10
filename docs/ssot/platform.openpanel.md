@@ -11,7 +11,7 @@
 |------|----------------|------|
 | **服务定义** | `platform/24.openpanel/compose.yaml` | 资源与容器拓扑声明 |
 | **部署任务** | `platform/24.openpanel/deploy.py` | Invoke 自动化部署流程入口 |
-| **运行时密钥** | **Vault** (`secret/platform/<env>/openpanel`) | ClickHouse, Postgres, Redis 及 Resend 密钥 |
+| **运行时密钥** | **Vault** (`secret/platform/<env>/openpanel`) | 仅 `encryption_key` 与 `resend_api_key`。Postgres 口令读自 `secret/platform/<env>/postgres` (`root_password`)，Redis 口令读自 `secret/platform/<env>/redis` (`password`)，ClickHouse 走无鉴权 HTTP 端口、不存凭据 |
 | **外部路由** | Dokploy / Traefik ingress | 域名解析与 /api 路径 Stripping 配置 |
 
 ### Code as SSOT 索引
@@ -48,7 +48,7 @@ graph TD
 
 - **无本地数据库冗余**：不部署 OpenPanel 默认自带的 Redis/Postgres/ClickHouse 容器，使用全局共享存储，为 VPS 节省超过 2GB 内存并方便集中备份。
 - **Traefik 做 API Stripping**：OpenPanel Dashboard 与 API 挂在同一个域名下，通过 Traefik 路由匹配。Traefik 将 `/api` 前缀去掉后，转发到 `op-api` 端口 `3333`。
-- **Vault-Init 密钥注入**：密钥由 Vault-Agent 渲染至共享 tmpfs 卷 `/vault/secrets/env`，服务在 Entrypoint 中 source 并加载该文件。
+- **Vault-Init 密钥注入**：密钥由 Vault-Agent 渲染至共享 tmpfs 卷 `/vault/secrets/.env`；应用容器以只读方式挂载于 `/secrets/.env`，并在 Entrypoint 中 source 加载该文件。
 
 ---
 
@@ -75,8 +75,9 @@ graph TD
 
 - **触发条件**：新增 OpenPanel 服务
 - **步骤**：
-    1. 在 Vault 中存入 OpenPanel 专属密钥：
-       - `secret/platform/<env>/openpanel` 内配置 `PASSWORD_POSTGRES`, `PASSWORD_CLICKHOUSE`, `RESEND_API_KEY` 等。
+    1. 确保 Vault 中存在依赖密钥（`invoke openpanel.setup` 会自动校验并补齐）：
+       - `secret/platform/<env>/openpanel`：`encryption_key`（32 字节 hex，缺失时自动生成）、`resend_api_key`（可选，缺失时写入 `placeholder`）。
+       - 依赖项复用既有路径：`secret/platform/<env>/postgres` 的 `root_password`、`secret/platform/<env>/redis` 的 `password`。
     2. 运行 `invoke openpanel.setup`：
        - 此脚本将自动在 `platform-postgres` 和 `platform-clickhouse` 中创建 `openpanel` 数据库。
        - 之后，脚本将在 Dokploy 中上线服务容器。

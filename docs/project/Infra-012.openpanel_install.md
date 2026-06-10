@@ -45,4 +45,6 @@ OpenPanel is an open-source product analytics platform that provides tracking an
 - [ ] E2E tracking check validates event ingestion into ClickHouse
 
 ## References
-- [Plan: openpanel_deployment_plan.md](../../../brain/a1dfd236-0d99-48b3-a734-2510a41f9996/openpanel_deployment_plan.md)
+- SSOT: [docs/ssot/platform.openpanel.md](../ssot/platform.openpanel.md)
+- Service directory: [platform/24.openpanel/](../../platform/24.openpanel/)
+- Upstream: [OpenPanel self-hosting docs](https://openpanel.dev/docs/self-hosting)

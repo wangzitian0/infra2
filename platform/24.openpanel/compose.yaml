@@ -18,6 +18,8 @@ services:
       VAULT_ADDR: ${VAULT_ADDR}
       VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:-}
       ENV: ${ENV}
+      # Required by secrets.ctmpl to render environment-suffixed dependency hostnames
+      ENV_SUFFIX: ${ENV_SUFFIX:-}
     volumes:
       - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
       - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
@@ -66,11 +68,11 @@ services:
         . /secrets/.env
         set +a
 
-        # Wait for postgres to be ready
-        node -e "const net = require('net'); const check = () => { const s = net.createConnection(5432, 'platform-postgres${ENV_SUFFIX}').on('connect', () => { s.destroy(); process.exit(0); }).on('error', () => { console.log('Waiting for postgres...'); setTimeout(check, 1000); }); }; check();"
+        # Wait for postgres to be ready (fail fast after DEP_MAX_WAIT seconds)
+        node -e "const net = require('net'); const max = 60; let n = 0; const check = () => { if (n++ >= max) { console.error('FATAL: postgres unreachable after ' + max + 's'); process.exit(1); } const s = net.createConnection(5432, 'platform-postgres${ENV_SUFFIX}').on('connect', () => { s.destroy(); process.exit(0); }).on('error', () => { console.log('Waiting for postgres... (' + n + '/' + max + ')'); setTimeout(check, 1000); }); }; check();"
 
-        # Wait for clickhouse to be ready
-        node -e "const net = require('net'); const check = () => { const s = net.createConnection(8123, 'platform-clickhouse${ENV_SUFFIX}').on('connect', () => { s.destroy(); process.exit(0); }).on('error', () => { console.log('Waiting for clickhouse...'); setTimeout(check, 1000); }); }; check();"
+        # Wait for clickhouse to be ready (fail fast after DEP_MAX_WAIT seconds)
+        node -e "const net = require('net'); const max = 60; let n = 0; const check = () => { if (n++ >= max) { console.error('FATAL: clickhouse unreachable after ' + max + 's'); process.exit(1); } const s = net.createConnection(8123, 'platform-clickhouse${ENV_SUFFIX}').on('connect', () => { s.destroy(); process.exit(0); }).on('error', () => { console.log('Waiting for clickhouse... (' + n + '/' + max + ')'); setTimeout(check, 1000); }); }; check();"
 
         exec node dist/index.js
     environment:
@@ -130,8 +132,8 @@ services:
         . /secrets/.env
         set +a
 
-        # Wait for op-api to be ready
-        node -e "const net = require('net'); const check = () => { const s = net.createConnection(3333, 'platform-openpanel-api${ENV_SUFFIX}').on('connect', () => { s.destroy(); process.exit(0); }).on('error', () => { console.log('Waiting for openpanel api...'); setTimeout(check, 1000); }); }; check();"
+        # Wait for op-api to be ready (fail fast after max attempts)
+        node -e "const net = require('net'); const max = 60; let n = 0; const check = () => { if (n++ >= max) { console.error('FATAL: op-api unreachable after ' + max + 's'); process.exit(1); } const s = net.createConnection(3333, 'platform-openpanel-api${ENV_SUFFIX}').on('connect', () => { s.destroy(); process.exit(0); }).on('error', () => { console.log('Waiting for openpanel api... (' + n + '/' + max + ')'); setTimeout(check, 1000); }); }; check();"
 
         exec node .output/server/index.mjs
     environment:
@@ -189,8 +191,8 @@ services:
         . /secrets/.env
         set +a
 
-        # Wait for op-api to be ready
-        node -e "const net = require('net'); const check = () => { const s = net.createConnection(3333, 'platform-openpanel-api${ENV_SUFFIX}').on('connect', () => { s.destroy(); process.exit(0); }).on('error', () => { console.log('Waiting for openpanel api...'); setTimeout(check, 1000); }); }; check();"
+        # Wait for op-api to be ready (fail fast after max attempts)
+        node -e "const net = require('net'); const max = 60; let n = 0; const check = () => { if (n++ >= max) { console.error('FATAL: op-api unreachable after ' + max + 's'); process.exit(1); } const s = net.createConnection(3333, 'platform-openpanel-api${ENV_SUFFIX}').on('connect', () => { s.destroy(); process.exit(0); }).on('error', () => { console.log('Waiting for openpanel api... (' + n + '/' + max + ')'); setTimeout(check, 1000); }); }; check();"
 
         exec node dist/index.js
     environment:
