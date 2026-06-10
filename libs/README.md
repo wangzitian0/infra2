@@ -20,6 +20,7 @@
 | `deployer.py` | Deployment base class + task helpers | `Deployer`, `make_tasks()` |
 | `dokploy.py` | Dokploy API client | `DokployClient`, `deploy_compose_service()` |
 | `dokploy_route_canary.py` | Dynamic route canary | `run_route_canary()`, `render_canary_compose()` |
+| `pipeline_stage_contract.py` | Env x Stage delivery evidence contract | `make_stage_result()`, `acceleration_allowed()`, `detect_disagreement()` |
 | `config.py` | Legacy compatibility wrapper | `Config` |
 
 ## Usage Patterns
