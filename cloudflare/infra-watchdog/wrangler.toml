@@ -42,3 +42,11 @@ WATCHDOG_HEARTBEATS_JSON = """
 binding = "WATCHDOG_STATE"
 id = "2b2eebc2a53c475797f92269e4d96248"
 preview_id = "64cb09c404f242d28dfb8861b3b63899"
+
+# Off-host cold archive of the availability ledger. Reuses the existing R2
+# backup bucket (the single off-host store, S3 standard); the Worker writes one
+# finalized day per object under watchdog-ledger/. The worker code is guarded,
+# so deploys stay safe even before the bucket exists.
+[[r2_buckets]]
+binding = "LEDGER_BUCKET"
+bucket_name = "infra2"

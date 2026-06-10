@@ -427,6 +427,19 @@ override a check by name, but it must not remove `infra2-docker-health`. That
 check fails on any Docker `unhealthy`, `health: starting`, or `Restarting`
 container outside an active deployment window.
 
+### SOP-005C: Availability ledger and positive proof
+
+Failure-only alerts cannot prove uptime, and the in-band SigNoz store cannot
+measure its own host's availability (it shares the single VPS it would report
+on). The availability ledger therefore lives **outside** the VPS: the Cloudflare
+Worker records per-signal success + failure each run into Cloudflare KV (hot, 21
+days) and archives finalized days to Cloudflare R2 (cold, long-term, the single
+off-host store). `tools/stability_report.py` reads `/ledger` and sends Lark a
+weekly positive-proof summary. Full contract, KV budget math, and the R2 vs
+Google Drive decision are owned by
+[`ops.availability-ledger.md`](./ops.availability-ledger.md). The weekly report
+requires `INFRA2_WATCHDOG_LEDGER_URL`.
+
 ### SOP-006: Infra service probes
 
 Infra service probes are configured in
@@ -571,6 +584,9 @@ VPS log dive.
 | **In-band infra service probes** | `libs/tests/test_infra_probes.py` | ✅ Implemented |
 | **Dokploy dynamic route canary contract** | `libs/tests/test_dokploy_route_canary.py` | ✅ Implemented |
 | **Backup freshness alert payload** | `libs/tests/test_backup_verification.py` | ✅ Implemented |
+| **Availability ledger aggregation (正例+反例)** | `libs/tests/test_availability_ledger.py` | ✅ Implemented |
+| **Worker ledger + `/ledger` + R2 archive contract** | `libs/tests/test_cloudflare_watchdog.py` | ✅ Implemented |
+| **Weekly positive stability report** | `libs/tests/test_stability_report.py` | ✅ Implemented |
 | **告警通道连通性** | `uv run invoke alerting.test-feishu` | Manual live gate |
 
 ---

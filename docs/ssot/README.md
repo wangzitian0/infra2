@@ -89,6 +89,7 @@
 | [ops.backup-inventory.yaml](./ops.backup-inventory.yaml) | `ops.backup_inventory` | Persistent data backup coverage inventory |
 | [ops.observability.md](./ops.observability.md) | `ops.obs` | SigNoz、日志、监控 |
 | [ops.alerting.md](./ops.alerting.md) | `ops.alerting` | 告警规则、值班 |
+| [ops.availability-ledger.md](./ops.availability-ledger.md) | `ops.availability_ledger` | 可用率账本、正向证明、R2 冷归档 |
 
 ---
 
