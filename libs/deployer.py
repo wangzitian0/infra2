@@ -31,7 +31,18 @@ if TYPE_CHECKING:
 
 __all__ = ["Deployer", "make_tasks", "discover_services"]
 
-RUNTIME_ENV_KEYS_TO_PRESERVE = {"VAULT_APP_TOKEN"}
+# Runtime-only secrets injected into Dokploy env out-of-band (by
+# bootstrap/05.vault setup-tokens / setup-approle), not present in the
+# git-derived desired env. They must survive a redeploy that regenerates the
+# env, otherwise the vault-agent loses its credentials and crash-loops.
+# VAULT_APP_TOKEN = legacy token-file auth; VAULT_ROLE_ID/VAULT_SECRET_ID =
+# AppRole auth (#257/#259). Omitting the AppRole pair silently wiped it on every
+# deploy of a migrated service.
+RUNTIME_ENV_KEYS_TO_PRESERVE = {
+    "VAULT_APP_TOKEN",
+    "VAULT_ROLE_ID",
+    "VAULT_SECRET_ID",
+}
 
 
 def discover_services() -> dict[str, str]:
