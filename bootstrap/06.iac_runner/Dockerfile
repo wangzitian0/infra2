@@ -17,6 +17,18 @@ RUN curl -sSfLo /tmp/op.zip https://cache.agilebits.com/dist/1P/op2/pkg/v2.30.0/
     && chmod +x /usr/local/bin/op \
     && rm /tmp/op.zip
 
+# Install Vault CLI (pinned to the running server version). The vault.* invoke tasks
+# (bootstrap/05.vault setup-tokens / setup-approle) provision service credentials via
+# `c.run("vault ...")`; without the CLI in this image those tasks fail their root-token
+# validation and silently never provision, leaving services without VAULT_ROLE_ID /
+# VAULT_SECRET_ID after a recreate.
+RUN curl -sSfLo /tmp/vault.zip https://releases.hashicorp.com/vault/1.15.4/vault_1.15.4_linux_amd64.zip \
+    && unzip -d /tmp /tmp/vault.zip \
+    && mv /tmp/vault /usr/local/bin/vault \
+    && chmod +x /usr/local/bin/vault \
+    && rm /tmp/vault.zip \
+    && vault version
+
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
