@@ -105,6 +105,10 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
 | L2 Platform | Authentik | health endpoint fails | P0 | Live via infra probe |
 | L2 Platform | SigNoz | frontend/query path fails | P0 | Live via infra probe |
 | L2 Platform | Alert Bridge | `/health` fails or Feishu delivery errors | P0 | Live via infra probe; out-of-band bridge container health watchdog is also defined |
+| L2 Platform | OpenPanel API | `/healthcheck` fails (analytics event ingestion endpoint) | P1 | Live via infra probe (`openpanel-api-http`) |
+| L2 Platform | OpenPanel ClickHouse | `/ping` fails (OpenPanel event store, separate from platform ClickHouse) | P1 | Live via infra probe (`openpanel-ch-http`) |
+| L2 Platform | OpenPanel Worker | `/healthcheck` fails (event processing queue worker) | P1 | Live via infra probe (`openpanel-worker-http`) |
+| L2 Platform | OpenPanel Dashboard | `/api/healthcheck` fails (analytics UI) | P2 | Live via infra probe (`openpanel-dashboard-http`) |
 | L2 Platform | Portal | Homer frontend unavailable | P2 | Planned |
 | L2 Platform | Activepieces | `/api/v1/flags` unavailable | P1 | Planned |
 | L2 Platform | Prefect | server health port missing or worker stopped | P1 | Planned |
