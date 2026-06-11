@@ -928,3 +928,188 @@ def _wait_for_new_deployment_record(
         if time.monotonic() >= deadline:
             return False
         time.sleep(max(1, interval_seconds))
+
+
+# ---------------------------------------------------------------------------
+# AppRole auth setup (replaces token_file periodic tokens; see infra2 #257)
+# ---------------------------------------------------------------------------
+
+# The AppRole-issued token is renewed within token_ttl and re-authenticated
+# (fresh login) at token_max_ttl, so it never decays the way the old token_file
+# periodic tokens did.
+APPROLE_TOKEN_TTL = "24h"
+APPROLE_TOKEN_MAX_TTL = "168h"
+
+
+@task(
+    help={
+        "project": "Limit setup to one project, e.g. finance_report.",
+        "service": "Limit setup to one service, e.g. app.",
+        "deploy": "Update Dokploy env (VAULT_ROLE_ID/VAULT_SECRET_ID) and redeploy.",
+    }
+)
+def setup_approle(c, project=None, service=None, deploy=True):
+    """Enable AppRole + per-service role/policy/secret-id, injected into Dokploy.
+
+    Replaces the token_file periodic-token model: each service's vault-agent logs
+    in with role_id/secret_id and natively renews/re-auths its token (#257).
+    """
+    import io
+
+    header("Vault AppRole Setup", "Enabling approle + per-service roles")
+
+    root_token = os.getenv("VAULT_ROOT_TOKEN")
+    if not root_token:
+        error("VAULT_ROOT_TOKEN not set")
+        info(
+            "Get from: op read 'op://Infra2/bootstrap/vault/Root Token/Root Token' "
+            "then: export VAULT_ROOT_TOKEN=<token>"
+        )
+        return
+
+    e = get_env()
+    vault_addr = e.get("VAULT_ADDR", f"https://vault.{e['INTERNAL_DOMAIN']}")
+    env_name = e.get("ENV", "production")
+    venv = _vault_env(vault_addr, root_token)
+    success(f"Using Vault: {vault_addr} (env={env_name})")
+
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    root_dir = os.path.dirname(os.path.dirname(current_dir))
+    target_project = normalize_selector(project, label="project")
+    target_service = normalize_selector(service, label="service")
+    targets = _select_token_targets(
+        _vault_token_targets(root_dir), target_project, target_service
+    )
+    if not targets:
+        from invoke.exceptions import Exit
+
+        raise Exit("No matching AppRole targets", code=1)
+
+    if not c.run("vault token lookup", env=venv, hide=True, warn=True).ok:
+        from invoke.exceptions import Exit
+
+        raise Exit("VAULT_ROOT_TOKEN is invalid or expired", code=1)
+
+    listed = c.run("vault auth list -format=json", env=venv, hide=True, warn=True)
+    if listed.ok and "approle/" in json.loads(listed.stdout):
+        info("approle auth already enabled")
+    else:
+        if not c.run("vault auth enable approle", env=venv, hide=True, warn=True).ok:
+            from invoke.exceptions import Exit
+
+            raise Exit("Failed to enable approle auth", code=1)
+        success("approle auth enabled")
+
+    failed = []
+    current_project = None
+    for target in targets:
+        if target.project != current_project:
+            print(f"\n--- {target.project} ---")
+            current_project = target.project
+
+        policy = vault_policy_name(target.project, env_name, target.service)
+        role = policy  # one approle role per policy/service/env
+        policy_path = os.path.join(
+            target.project_dir, target.service_dir, "vault-policy.hcl"
+        )
+        if os.path.exists(policy_path):
+            policy_rules = open(policy_path).read().replace("{{env}}", env_name)
+        else:
+            policy_rules = (
+                f'path "secret/data/{target.project}/{env_name}/{target.service}" {{\n'
+                f'  capabilities = ["read", "list"]\n}}'
+            )
+            warning(f"No policy file for {target.service}, using default read-only")
+
+        if not c.run(
+            f"vault policy write {policy} -",
+            env=venv,
+            in_stream=io.StringIO(policy_rules),
+            hide=True,
+            warn=True,
+        ).ok:
+            error(f"Failed to write policy {policy}")
+            failed.append((target.project, target.service, "policy_write_failed"))
+            continue
+
+        if not c.run(
+            f"vault write auth/approle/role/{role} "
+            f"token_policies={policy} token_no_default_policy=true "
+            f"token_ttl={APPROLE_TOKEN_TTL} token_max_ttl={APPROLE_TOKEN_MAX_TTL} "
+            f"secret_id_num_uses=0 secret_id_ttl=0",
+            env=venv,
+            hide=True,
+            warn=True,
+        ).ok:
+            error(f"Failed to write approle role {role}")
+            failed.append((target.project, target.service, "role_write_failed"))
+            continue
+
+        role_id_res = c.run(
+            f"vault read -format=json auth/approle/role/{role}/role-id",
+            env=venv,
+            hide=True,
+            warn=True,
+        )
+        secret_id_res = c.run(
+            f"vault write -f -format=json auth/approle/role/{role}/secret-id",
+            env=venv,
+            hide=True,
+            warn=True,
+        )
+        if not role_id_res.ok or not secret_id_res.ok:
+            error(f"Failed to obtain role-id/secret-id for {role}")
+            failed.append((target.project, target.service, "credential_failed"))
+            continue
+        role_id = json.loads(role_id_res.stdout)["data"]["role_id"]
+        secret_id = json.loads(secret_id_res.stdout)["data"]["secret_id"]
+        success(f"   Role {role}: role_id + secret_id ready")
+
+        if deploy:
+            if not _configure_dokploy_approle(
+                c, target.service, role_id, secret_id, target.dokploy_project
+            ):
+                failed.append((target.project, target.service, "dokploy_config_failed"))
+
+    if failed:
+        error("Some services failed:")
+        for proj, svc, reason in failed:
+            error(f"  - {proj}/{svc}: {reason}")
+        from invoke.exceptions import Exit
+
+        raise Exit("AppRole setup failed for some services", code=1)
+
+    success("AppRole setup complete!")
+
+
+def _configure_dokploy_approle(
+    _c, service: str, role_id: str, secret_id: str, project: str = "platform"
+) -> bool:
+    """Inject VAULT_ROLE_ID/VAULT_SECRET_ID into Dokploy env and redeploy."""
+    try:
+        from libs.dokploy import get_dokploy
+        from libs.common import get_env
+
+        e = get_env()
+        domain = e.get("INTERNAL_DOMAIN")
+        env_name = e.get("ENV", "production")
+        host = f"cloud.{domain}" if domain else None
+        client = get_dokploy(host=host)
+
+        compose = client.find_compose_by_name(service, project, env_name=env_name)
+        if not compose:
+            warning(f"   Service '{service}' not found in Dokploy project '{project}'")
+            return False
+        compose_id = compose["composeId"]
+        info("   Configuring approle credentials in Dokploy...")
+        client.update_compose_env(
+            compose_id,
+            env_vars={"VAULT_ROLE_ID": role_id, "VAULT_SECRET_ID": secret_id},
+        )
+        info("   Triggering redeploy and waiting for runtime deployment record...")
+        _deploy_compose_with_record_check(client, compose_id)
+        success("   Auto-configured in Dokploy and runtime redeploy recorded")
+        return True
+    except Exception as exc:  # noqa: BLE001 - report and let caller mark failure.
+        error(f"   Dokploy approle config failed: {exc}")
+        return False
