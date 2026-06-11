@@ -195,6 +195,37 @@ services:
     labels:
       - "traefik.enable=false"
 
+  # Container-breakdown watch: alert when ANY container is crash-looping /
+  # unhealthy, WITH the cause pulled from its logs (e.g. missing Vault creds).
+  # The HTTP probes catch "service down"; this catches "down BECAUSE x" — the
+  # signal that was missing during the finance_report Vault outage. Read-only
+  # docker.sock to read container state + log tails; never writes/execs.
+  container-breakdown-watch:
+    image: platform-alerting-feishu-bridge:${IAC_CONFIG_HASH:-latest}
+    container_name: platform-alerting-breakdown-watch${ENV_SUFFIX}
+    restart: unless-stopped
+    depends_on:
+      - feishu-alert-bridge
+    command: ["python", "/app/tools/container_breakdown_watch.py", "--loop"]
+    environment:
+      ALERT_BRIDGE_URL: http://platform-alerting${ENV_SUFFIX}:8080/signoz/webhook
+      ALERTING_ENV_FILE: /secrets/.env
+      BREAKDOWN_INTERVAL_SECONDS: ${BREAKDOWN_INTERVAL_SECONDS:-60}
+      BREAKDOWN_RENOTIFY_SECONDS: ${BREAKDOWN_RENOTIFY_SECONDS:-1800}
+      BREAKDOWN_LOG_TAIL: ${BREAKDOWN_LOG_TAIL:-25}
+    volumes:
+      - secrets:/secrets:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    labels:
+      - "traefik.enable=false"
+
 volumes:
   secrets:
     driver_opts:
