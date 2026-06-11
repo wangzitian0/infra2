@@ -141,6 +141,24 @@ persisted as Workers Logs (free-tier allocation) and is queryable in the
 Cloudflare dashboard after the fact — not only via live `wrangler tail`.
 Heartbeat storage failures emit a queryable `watchdog.heartbeat.error` event.
 
+### Availability ledger & R2 cold archive
+
+Every run records a single rolling daily rollup (`ledger:<date>` in KV) of
+per-signal success/failure counts — positive proof that makes uptime%
+queryable, not just failures. Finalized (past) days are cold-archived off-host
+to R2 (`watchdog-ledger/<date>.json` in bucket `infra2`) for retention beyond
+the KV hot window.
+
+The archive is **reconciled idempotently on every run** (`reconcileArchives`),
+not written once at the day rollover. The old one-shot lost a whole day's
+archive silently if that single run hiccupped (an R2 blip, the `.date` migration
+boundary, or a thrown `put`). The per-run reconciler `head()`-checks the last
+`ARCHIVE_BACKFILL_DAYS` finalized days and writes only the ones missing, so it
+retries until it sticks and backfills any gap. A write failure emits a queryable
+`watchdog.ledger.archive` `status: "fail"` event instead of being swallowed, and
+never crashes the run. Verify the archive positively with
+`wrangler r2 object get infra2/watchdog-ledger/<yesterday>.json --pipe`.
+
 ### Free-quota safety
 
 The worker must never trip the Cloudflare KV free-tier limit (1000 puts/day),

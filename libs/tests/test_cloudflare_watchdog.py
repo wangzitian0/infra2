@@ -200,12 +200,34 @@ def test_worker_archives_finalized_day_to_r2_off_host() -> None:
     config = WRANGLER.read_text(encoding="utf-8")
 
     # Guarded R2 write so a missing binding is a no-op, not a deploy/runtime crash.
-    assert "if (env.LEDGER_BUCKET)" in source
+    assert "if (!env.LEDGER_BUCKET)" in source
     assert "env.LEDGER_BUCKET.put(" in source
     assert "watchdog-ledger/" in source
     # R2 binding declared in wrangler, reusing the existing off-host backup bucket.
     assert 'binding = "LEDGER_BUCKET"' in config
     assert 'bucket_name = "infra2"' in config
+
+
+def test_worker_self_heals_missing_r2_archives_idempotently() -> None:
+    """ops.availability_ledger: cold archive is reconciled every run (self-heal).
+
+    A one-shot "archive yesterday on the first run of a new day" silently loses a
+    whole day if that single run hiccups (an R2 blip, the .date migration
+    boundary, a thrown put). The archive must instead be reconciled idempotently
+    on every run -- retried until it sticks, backfilling any gap -- and a write
+    failure must surface as a queryable structured event, never be swallowed.
+    """
+    source = WORKER.read_text(encoding="utf-8")
+
+    # Per-run reconciliation independent of isNewDay.
+    assert "async function reconcileArchives(env, nowMs)" in source
+    assert "await reconcileArchives(env, nowMs)" in source
+    # Existence check before write => idempotent backfill, puts only when missing.
+    assert "env.LEDGER_BUCKET.head(" in source
+    # Write failures are observable via the same structured-log channel, not silent.
+    assert 'event: "watchdog.ledger.archive"' in source
+    # Reconciliation must NOT be gated solely on the day rollover anymore.
+    assert "if (isNewDay) {\n    if (env.LEDGER_BUCKET) {" not in source
 
 
 def test_worker_exposes_token_protected_ledger_endpoint() -> None:
