@@ -138,7 +138,11 @@ services:
       BATCH_INTERVAL: "10000"
       ALLOW_REGISTRATION: "false"
       ALLOW_INVITATION: "true"
-      CLICKHOUSE_URL: http://op-ch:8123/openpanel
+      # Use the env-suffixed container name, NOT the bare `op-ch` compose service
+      # alias: on the shared external dokploy-network the `op-ch` alias is claimed
+      # by BOTH prod and staging op-ch, so it resolves to two IPs and prod writes
+      # can land on staging's ClickHouse. The container_name is unique per env.
+      CLICKHOUSE_URL: http://platform-openpanel-ch${ENV_SUFFIX}:8123/openpanel
       DASHBOARD_URL: https://openpanel${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
       API_URL: https://openpanel${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}/api
       NEXT_PUBLIC_DASHBOARD_URL: https://openpanel${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
