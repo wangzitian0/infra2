@@ -47,9 +47,14 @@ def test_inventory_paths_exist_and_match_vault_agent_contract() -> None:
 
         compose = yaml.safe_load((ROOT / service.compose_path).read_text())
         vault_agent = compose["services"]["vault-agent"]
-        assert service.vault_token_env_key in str(vault_agent.get("environment", {}))
+        agent_env = str(vault_agent.get("environment", {}))
+        for env_key in service.auth_env_keys:
+            assert env_key in agent_env, f"{service.id}: vault-agent missing {env_key}"
         assert service.rendered_secret_path in str(vault_agent)
-        assert "vault token lookup" in str(vault_agent.get("healthcheck", {}))
+        # Healthcheck must validate the live agent token via Vault lookup-self,
+        # not merely that a file exists. Functional marker so it holds for both
+        # static-token and AppRole agents (only their comment text differs).
+        assert "lookup-self" in str(vault_agent.get("healthcheck", {}))
         assert "<no value>" in str(vault_agent.get("healthcheck", {}))
         assert "stat -c %Y" not in str(vault_agent.get("healthcheck", {}))
         assert "VAULT_AGENT_MAX_SECRET_AGE_SECONDS" not in str(
