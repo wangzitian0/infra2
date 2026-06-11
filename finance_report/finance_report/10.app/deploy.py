@@ -46,6 +46,19 @@ class AppDeployer(Deployer):
         # Ensure MinIO bucket exists with proper security configuration
         cls._ensure_minio_bucket(c)
 
+        # OpenPanel PV tracking (model B: one project per environment). Client ids
+        # are PUBLIC web client ids (they ship in the frontend JS), so mapping them
+        # here is config, not a secret. Unknown env => empty => Analytics no-op.
+        # Preview (per-PR) is wired separately in the GitHub pr-preview lifecycle.
+        openpanel_clients = {
+            "production": "28bfa625-8751-4424-9514-29c967f77550",
+            "staging": "62d5cfe0-2480-4b6e-b76f-8eabbcaf698f",
+        }
+        env_name = env_vars.get("ENV", "production")
+        client_id = openpanel_clients.get(env_name, "")
+        env_vars["OPENPANEL_CLIENT_ID"] = client_id
+        env_vars["OPENPANEL_ENVIRONMENT"] = env_name if client_id else ""
+
         return env_vars
 
     @classmethod
