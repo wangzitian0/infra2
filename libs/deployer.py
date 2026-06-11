@@ -38,11 +38,14 @@ __all__ = ["Deployer", "make_tasks", "discover_services"]
 # VAULT_APP_TOKEN = legacy token-file auth; VAULT_ROLE_ID/VAULT_SECRET_ID =
 # AppRole auth (#257/#259). Omitting the AppRole pair silently wiped it on every
 # deploy of a migrated service.
-RUNTIME_ENV_KEYS_TO_PRESERVE = {
+# Ordered (not a set) so the preserved keys append deterministically — set
+# iteration order would vary the generated env line order and churn the config
+# hash, causing spurious redeploys.
+RUNTIME_ENV_KEYS_TO_PRESERVE = (
     "VAULT_APP_TOKEN",
     "VAULT_ROLE_ID",
     "VAULT_SECRET_ID",
-}
+)
 
 
 def discover_services() -> dict[str, str]:
