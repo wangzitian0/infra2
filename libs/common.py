@@ -23,6 +23,7 @@ CONTAINERS = {
     "signoz": "platform-signoz",
     "openpanel-api": "platform-openpanel-api",
     "openpanel-dashboard": "platform-openpanel-dashboard",
+    "openpanel-ch": "platform-openpanel-ch",
 }
 
 # Service subdomain mapping (subdomain prefix -> description)

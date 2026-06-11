@@ -1,3 +1,19 @@
+# OpenPanel — product analytics (self-hosted, upstream lindesvard/openpanel:2).
+#
+# Image contract (validated against upstream self-hosting compose + a live deploy):
+#   - op-api listens on :3000 and MUST run DB migrations (`pnpm migrate:deploy`)
+#     before `pnpm start`; skipping migrations leaves an empty schema.
+#   - Secrets are consumed as process env (DATABASE_URL, DATABASE_URL_DIRECT,
+#     REDIS_URL, COOKIE_SECRET, RESEND_API_KEY); non-secrets via `environment:`.
+#   - Traefik strips /api -> op-api:3000, everything else -> op-dashboard:3000,
+#     mirroring upstream's Caddy `handle_path /api*` routing.
+#
+# Dedicated ClickHouse (op-ch): the shared platform-clickhouse is pinned to 25.5
+# by SigNoz (its owner — SigNoz v0.128 still ships 25.5.6), but OpenPanel v2
+# targets ClickHouse 25.10 (DateTime64 TTL + newer query settings) and fails on
+# 25.5. The two requirements are mutually exclusive, so OpenPanel runs its own
+# version-matched ClickHouse. This intentionally overrides the original
+# "zero-redundant ClickHouse" decision; see docs/ssot/platform.openpanel.md.
 services:
   vault-agent:
     init: true  # tini as PID1 reaps healthcheck ssl_client zombies
@@ -49,12 +65,44 @@ services:
       retries: 3
       start_period: 10s
 
+  # Dedicated ClickHouse, version-matched to OpenPanel v2 (see header note).
+  op-ch:
+    image: clickhouse/clickhouse-server:25.10.2.65
+    container_name: platform-openpanel-ch${ENV_SUFFIX}
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_SKIP_USER_SETUP: "1"
+    volumes:
+      - op-ch-data:/var/lib/clickhouse
+      - ./clickhouse/clickhouse-config.xml:/etc/clickhouse-server/config.d/op-config.xml:ro
+      - ./clickhouse/clickhouse-user-config.xml:/etc/clickhouse-server/users.d/op-user-config.xml:ro
+      - ./clickhouse/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
+    networks:
+      - dokploy-network
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   op-api:
-    image: openpanel/api:latest
+    image: lindesvard/openpanel-api:2
     container_name: platform-openpanel-api${ENV_SUFFIX}
     restart: unless-stopped
     depends_on:
       vault-agent:
+        condition: service_healthy
+      op-ch:
         condition: service_healthy
     entrypoint:
       - sh
@@ -72,20 +120,27 @@ services:
         . /secrets/.env
         set +a
 
-        # Wait for postgres to be ready (fail fast after DEP_MAX_WAIT seconds)
+        # Wait for shared postgres to be ready (fail fast after max attempts)
         node -e "const net = require('net'); const max = 60; let n = 0; const check = () => { if (n++ >= max) { console.error('FATAL: postgres unreachable after ' + max + 's'); process.exit(1); } const s = net.createConnection(5432, 'platform-postgres${ENV_SUFFIX}').on('connect', () => { s.destroy(); process.exit(0); }).on('error', () => { console.log('Waiting for postgres... (' + n + '/' + max + ')'); setTimeout(check, 1000); }); }; check();"
 
-        # Wait for clickhouse to be ready (fail fast after DEP_MAX_WAIT seconds)
-        node -e "const net = require('net'); const max = 60; let n = 0; const check = () => { if (n++ >= max) { console.error('FATAL: clickhouse unreachable after ' + max + 's'); process.exit(1); } const s = net.createConnection(8123, 'platform-clickhouse${ENV_SUFFIX}').on('connect', () => { s.destroy(); process.exit(0); }).on('error', () => { console.log('Waiting for clickhouse... (' + n + '/' + max + ')'); setTimeout(check, 1000); }); }; check();"
-
-        exec node dist/index.js
-    environment:
-      PORT: 3333
+        # Apply DB migrations (Postgres via Prisma + ClickHouse), then start the API
+        echo 'Running migrations...'
+        CI=true pnpm -r run migrate:deploy
+        exec pnpm start
+    environment: &op-env
+      NODE_ENV: production
+      SELF_HOSTED: "true"
+      NEXT_PUBLIC_SELF_HOSTED: "true"
+      BATCH_SIZE: "5000"
+      BATCH_INTERVAL: "10000"
+      ALLOW_REGISTRATION: "false"
+      ALLOW_INVITATION: "true"
+      CLICKHOUSE_URL: http://op-ch:8123/openpanel
       DASHBOARD_URL: https://openpanel${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
       API_URL: https://openpanel${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}/api
-      OPENPANEL_ALLOW_REGISTRATION: "false"
-      NEXT_PUBLIC_SELF_HOSTED: "true"
-      SELF_HOSTED: "true"
+      NEXT_PUBLIC_DASHBOARD_URL: https://openpanel${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
+      NEXT_PUBLIC_API_URL: https://openpanel${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}/api
+      EMAIL_SENDER: ""
     volumes:
       - secrets:/secrets:ro
     networks:
@@ -101,20 +156,21 @@ services:
       - "traefik.http.routers.openpanel-api${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
       - "traefik.http.routers.openpanel-api${ENV_DOMAIN_SUFFIX}.tls=true"
       - "traefik.http.routers.openpanel-api${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.openpanel-api${ENV_DOMAIN_SUFFIX}.priority=20"
       - "traefik.http.routers.openpanel-api${ENV_DOMAIN_SUFFIX}.service=openpanel-api${ENV_DOMAIN_SUFFIX}"
-      - "traefik.http.services.openpanel-api${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=3333"
-      # Strip /api prefix before forwarding to the container port 3333
+      - "traefik.http.services.openpanel-api${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=3000"
+      # Strip /api prefix before forwarding to op-api:3000
       - "traefik.http.middlewares.openpanel-api-strip${ENV_DOMAIN_SUFFIX}.stripprefix.prefixes=/api"
       - "traefik.http.routers.openpanel-api${ENV_DOMAIN_SUFFIX}.middlewares=openpanel-api-strip${ENV_DOMAIN_SUFFIX}@docker"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3333/healthcheck"]
+      test: ["CMD", "curl", "-f", "http://localhost:3000/healthcheck"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 30s
+      retries: 5
+      start_period: 120s
 
   op-dashboard:
-    image: openpanel/dashboard:latest
+    image: lindesvard/openpanel-dashboard:2
     container_name: platform-openpanel-dashboard${ENV_SUFFIX}
     restart: unless-stopped
     depends_on:
@@ -124,7 +180,6 @@ services:
       - sh
       - -c
       - |
-        # Wait for secrets file to be rendered by vault-agent
         MAX_WAIT=60; WAITED=0
         while [ ! -f /secrets/.env ] && [ $$WAITED -lt $$MAX_WAIT ]; do
           echo "Waiting for secrets... ($$WAITED/$$MAX_WAIT)"
@@ -135,19 +190,8 @@ services:
         set -a
         . /secrets/.env
         set +a
-
-        # Wait for op-api to be ready (fail fast after max attempts)
-        node -e "const net = require('net'); const max = 60; let n = 0; const check = () => { if (n++ >= max) { console.error('FATAL: op-api unreachable after ' + max + 's'); process.exit(1); } const s = net.createConnection(3333, 'platform-openpanel-api${ENV_SUFFIX}').on('connect', () => { s.destroy(); process.exit(0); }).on('error', () => { console.log('Waiting for openpanel api... (' + n + '/' + max + ')'); setTimeout(check, 1000); }); }; check();"
-
         exec node .output/server/index.mjs
-    environment:
-      PORT: 3000
-      NEXT_PUBLIC_API_URL: https://openpanel${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}/api
-      NEXT_PUBLIC_DASHBOARD_URL: https://openpanel${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
-      API_URL: https://openpanel${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}/api
-      DASHBOARD_URL: https://openpanel${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
-      NEXT_PUBLIC_SELF_HOSTED: "true"
-      SELF_HOSTED: "true"
+    environment: *op-env
     volumes:
       - secrets:/secrets:ro
     networks:
@@ -163,17 +207,18 @@ services:
       - "traefik.http.routers.openpanel-dashboard${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
       - "traefik.http.routers.openpanel-dashboard${ENV_DOMAIN_SUFFIX}.tls=true"
       - "traefik.http.routers.openpanel-dashboard${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.openpanel-dashboard${ENV_DOMAIN_SUFFIX}.priority=10"
       - "traefik.http.routers.openpanel-dashboard${ENV_DOMAIN_SUFFIX}.service=openpanel-dashboard${ENV_DOMAIN_SUFFIX}"
       - "traefik.http.services.openpanel-dashboard${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=3000"
     healthcheck:
-      test: ["CMD", "curl", "-I", "-f", "http://localhost:3000"]
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/healthcheck"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 30s
+      retries: 5
+      start_period: 60s
 
   op-worker:
-    image: openpanel/worker:latest
+    image: lindesvard/openpanel-worker:2
     container_name: platform-openpanel-worker${ENV_SUFFIX}
     restart: unless-stopped
     depends_on:
@@ -183,7 +228,6 @@ services:
       - sh
       - -c
       - |
-        # Wait for secrets file to be rendered by vault-agent
         MAX_WAIT=60; WAITED=0
         while [ ! -f /secrets/.env ] && [ $$WAITED -lt $$MAX_WAIT ]; do
           echo "Waiting for secrets... ($$WAITED/$$MAX_WAIT)"
@@ -194,14 +238,8 @@ services:
         set -a
         . /secrets/.env
         set +a
-
-        # Wait for op-api to be ready (fail fast after max attempts)
-        node -e "const net = require('net'); const max = 60; let n = 0; const check = () => { if (n++ >= max) { console.error('FATAL: op-api unreachable after ' + max + 's'); process.exit(1); } const s = net.createConnection(3333, 'platform-openpanel-api${ENV_SUFFIX}').on('connect', () => { s.destroy(); process.exit(0); }).on('error', () => { console.log('Waiting for openpanel api... (' + n + '/' + max + ')'); setTimeout(check, 1000); }); }; check();"
-
         exec node dist/index.js
-    environment:
-      NEXT_PUBLIC_SELF_HOSTED: "true"
-      SELF_HOSTED: "true"
+    environment: *op-env
     volumes:
       - secrets:/secrets:ro
     networks:
@@ -211,6 +249,12 @@ services:
       options:
         max-size: "5m"
         max-file: "2"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 
 volumes:
   secrets:
@@ -218,6 +262,7 @@ volumes:
       type: tmpfs
       device: tmpfs
       o: "size=10m,mode=0755"
+  op-ch-data:
 
 networks:
   dokploy-network:
