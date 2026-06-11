@@ -21,7 +21,11 @@ RUNNING_STATUS = "running"
 
 @dataclass(frozen=True)
 class StuckDeploy:
-    """A compose whose latest deployment has been `running` past the ceiling."""
+    """A compose's oldest running deployment that has exceeded the ceiling.
+
+    When several running records linger, find_stuck_deploys reports the OLDEST
+    (the one blocking the single-concurrency FIFO queue), not the latest.
+    """
 
     compose_id: str
     compose_name: str

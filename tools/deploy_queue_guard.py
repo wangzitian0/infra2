@@ -56,7 +56,13 @@ DEFAULT_RENOTIFY = 1800
 
 
 def _load_env_file(path: Path) -> None:
-    """Source a KEY="value" env file into os.environ (no override of real env)."""
+    """Source a KEY="value" env file into os.environ.
+
+    EMPTY values are skipped so an env file rendered before Vault has populated a
+    secret (e.g. DOKPLOY_API_KEY="") does not poison os.environ — a later
+    non-empty render is then picked up on the next reload. Already-set non-empty
+    keys are not overridden.
+    """
     if not path.exists():
         return
     for raw in path.read_text(encoding="utf-8").splitlines():
@@ -66,7 +72,7 @@ def _load_env_file(path: Path) -> None:
         key, _, value = line.partition("=")
         key = key.strip()
         value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
+        if key and value and key not in os.environ:
             os.environ[key] = value
 
 
@@ -110,7 +116,14 @@ def _post_alert(payload: dict) -> None:
     from libs.infra_probes import post_alert_bridge_payload
 
     try:
-        post_alert_bridge_payload(bridge_url, payload)
+        # The bridge enforces Basic Auth when BRIDGE_BASIC_AUTH_* is set; pass it
+        # or these alerts get 401'd and silently dropped.
+        post_alert_bridge_payload(
+            bridge_url,
+            payload,
+            username=os.environ.get("BRIDGE_BASIC_AUTH_USERNAME", ""),
+            password=os.environ.get("BRIDGE_BASIC_AUTH_PASSWORD", ""),
+        )
     except Exception as exc:  # alerting is best-effort; never crash the loop
         logger.error("alert bridge delivery failed: %s", exc)
 
@@ -209,7 +222,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    _load_env_file(Path(os.environ.get("ALERTING_ENV_FILE", "/secrets/.env")))
+    env_path = Path(os.environ.get("ALERTING_ENV_FILE", "/secrets/.env"))
+    _load_env_file(env_path)
     ceiling = _env_int("DEPLOY_GUARD_CEILING_SECONDS", DEFAULT_CEILING)
     interval = _env_int("DEPLOY_GUARD_INTERVAL_SECONDS", DEFAULT_INTERVAL)
     grace = _env_int("DEPLOY_GUARD_GRACE_SECONDS", DEFAULT_GRACE)
@@ -247,8 +261,10 @@ def main(argv: list[str] | None = None) -> int:
 
     while True:
         try:
-            # Rebuilt each iteration (cheap, reads env) so the sidecar idles
-            # rather than crashlooping until DOKPLOY_API_KEY is provisioned.
+            # Reload secrets + rebuild the client each iteration (cheap) so the
+            # sidecar idles rather than crashlooping, and PICKS UP a DOKPLOY_API_KEY
+            # that Vault renders after the container started.
+            _load_env_file(env_path)
             client = _make_client()
             run_once(
                 client,
