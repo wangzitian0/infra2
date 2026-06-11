@@ -769,3 +769,158 @@ def test_docs_state_that_github_fallback_includes_route_canary() -> None:
     assert "Dokploy route canary" in ALERTING_README.read_text(encoding="utf-8")
     assert "Dokploy route canary" in ALERTING_SSOT.read_text(encoding="utf-8")
     assert "watchdog-weekly-digest.yml" in ALERTING_README.read_text(encoding="utf-8")
+
+
+def _dokploy_projects_fixture():
+    return [
+        {
+            "name": "finance-report",
+            "environments": [
+                {
+                    "name": "production",
+                    "compose": [
+                        {"name": "backend", "composeStatus": "error"},
+                        {"name": "frontend", "composeStatus": "done"},
+                    ],
+                    "applications": [
+                        {"name": "worker", "applicationStatus": "running"},
+                    ],
+                },
+                {
+                    "name": "staging",
+                    "compose": [
+                        {"name": "backend", "composeStatus": "error"},
+                        {"name": "frontend", "composeStatus": "idle"},
+                    ],
+                },
+            ],
+        }
+    ]
+
+
+def test_dokploy_status_check_skips_silently_without_api_key() -> None:
+    """Infra-011.9: a missing key is already flagged by route-canary, no dup."""
+    watchdog = _load_watchdog()
+
+    def factory(*, host):  # pragma: no cover - must not be called
+        raise AssertionError("client_factory must not run without an API key")
+
+    assert watchdog.run_dokploy_status_check({}, client_factory=factory) == []
+
+
+def test_dokploy_status_check_flags_error_and_ignores_idle_done_running() -> None:
+    """Infra-011.9: composeStatus=error is an authoritative alert source."""
+    watchdog = _load_watchdog()
+    captured = {}
+
+    def factory(*, host):
+        captured["host"] = host
+        return SimpleNamespace(list_projects=lambda: _dokploy_projects_fixture())
+
+    results = watchdog.run_dokploy_status_check(
+        {"DOKPLOY_API_KEY": "secret"},
+        client_factory=factory,
+    )
+
+    assert captured["host"] == "cloud.zitian.party"
+    names = {result.name: result for result in results}
+    assert set(names) == {
+        "dokploy-status:finance-report/production/backend",
+        "dokploy-status:finance-report/staging/backend",
+    }
+    for result in results:
+        assert result.ok is False
+        assert result.failure_domain == "dokploy-deploy-status"
+        assert result.detail == "composeStatus=error"
+
+
+def test_dokploy_status_check_maps_prod_to_p1_and_staging_to_p2() -> None:
+    """Infra-011.9: prod deploy errors page louder than staging/preview."""
+    watchdog = _load_watchdog()
+
+    prod = "dokploy-status:finance-report/production/backend"
+    staging = "dokploy-status:finance-report/staging/backend"
+    assert watchdog._severity_for(prod, "dokploy-deploy-status") == "P1"
+    assert watchdog._severity_for(staging, "dokploy-deploy-status") == "P2"
+    assert (
+        watchdog._severity_for(
+            "dokploy-status:app/env-pr-7/backend", "dokploy-deploy-status"
+        )
+        == "P2"
+    )
+
+
+def test_dokploy_status_check_turns_client_exception_into_alert() -> None:
+    """Infra-011.9: control-plane query errors must become alerts, not crashes."""
+    watchdog = _load_watchdog()
+
+    def factory(*, host):
+        raise RuntimeError("dokploy api 503")
+
+    results = watchdog.run_dokploy_status_check(
+        {"DOKPLOY_API_KEY": "secret"},
+        client_factory=factory,
+    )
+
+    assert results == [
+        watchdog.CheckResult(
+            "infra2-dokploy-status",
+            False,
+            "dokploy status query raised RuntimeError: dokploy api 503",
+            "dokploy-control-plane",
+        )
+    ]
+
+
+def test_format_failure_message_shows_max_severity_and_per_line_tags() -> None:
+    """Infra-011.9: header carries the worst severity, each line its own tag."""
+    watchdog = _load_watchdog()
+    results = [
+        watchdog.CheckResult(
+            name="dokploy-status:app/staging/backend",
+            ok=False,
+            detail="composeStatus=error",
+            failure_domain="dokploy-deploy-status",
+            severity="P2",
+        ),
+        watchdog.CheckResult(
+            name="infra2-ssh",
+            ok=False,
+            detail="ssh exited 255",
+            failure_domain="host-reachability",
+            severity="P0",
+        ),
+        watchdog.CheckResult(
+            name="infra2-dokploy-route-canary",
+            ok=False,
+            detail="status=fail",
+            failure_domain="dokploy-control-plane",
+            severity="P1",
+        ),
+    ]
+
+    message = watchdog.format_failure_message(results, run_url="")
+
+    assert "Severity: P0" in message
+    assert "- [P0] [host-reachability] infra2-ssh:" in message
+    assert "- [P1] [dokploy-control-plane] infra2-dokploy-route-canary:" in message
+    assert "- [P2] [dokploy-deploy-status] dokploy-status:app/staging/backend:" in (
+        message
+    )
+
+
+def test_docker_health_command_covers_created_and_exited_containers() -> None:
+    """Infra-011.9: docker-health net must catch crashed/never-started containers."""
+    watchdog = _load_watchdog()
+
+    docker_health = next(
+        target
+        for target in watchdog.parse_ssh_targets("")
+        if target.name == "infra2-docker-health"
+    )
+
+    assert "status=created" in docker_health.command
+    assert "status=exited" in docker_health.command
+    # Exit code 0 (clean one-shot completion) must be excluded from alerts.
+    assert '[ "$code" = "0" ]' in docker_health.command
+    assert "{{.State.ExitCode}}" in docker_health.command
