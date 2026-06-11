@@ -59,6 +59,71 @@ class AlertingDeployer(Deployer):
         return super().sync(c, force=force)
 
     @classmethod
+    def verify_runtime_applied(cls, c, env_vars):
+        """Confirm the running probe runner actually carries every probe declared
+        in the source INFRA_PROBE_SPECS. Closes the gap where a deploy records the
+        intended hash but Dokploy never recreated the container, leaving stale
+        probe specs while the catalog claims the probes are 'Live'."""
+        import time
+
+        import yaml
+
+        from libs.console import warning
+        from libs.probe_specs import missing_probe_names
+
+        e = cls.env()
+        host = e.get("VPS_HOST")
+        if not host:
+            warning("verify_runtime_applied: VPS_HOST unset; skipping runtime check")
+            return None
+
+        try:
+            compose = yaml.safe_load(cls.get_compose_content(c)) or {}
+        except Exception as exc:  # noqa: BLE001 - never crash the deploy on a parse issue
+            warning(f"verify_runtime_applied: compose parse failed ({exc}); skipping")
+            return None
+        source_specs = (
+            compose.get("services", {})
+            .get("infra-probe-runner", {})
+            .get("environment", {})
+            .get("INFRA_PROBE_SPECS", "")
+        )
+        if not source_specs:
+            return None  # nothing declared to verify
+
+        ssh_user = e.get("VPS_SSH_USER") or "root"
+        suffix = e.get("ENV_SUFFIX", "")
+        container = f"platform-alerting-probes{suffix}"
+
+        # Retry briefly: a just-recreated container may still be starting.
+        last_err = ""
+        for attempt in range(3):
+            result = c.run(
+                f"ssh {ssh_user}@{host} "
+                f"'docker exec {container} printenv INFRA_PROBE_SPECS'",
+                warn=True,
+                hide=True,
+            )
+            if not result.failed:
+                missing = missing_probe_names(source_specs, result.stdout or "")
+                if not missing:
+                    success(f"Runtime verified: {container} carries all source probes")
+                    return None
+                last_err = (
+                    f"{container} is missing {len(missing)} probe(s) from the deployed "
+                    f"INFRA_PROBE_SPECS ({', '.join(missing)}) — container did not pick "
+                    "up the new config (likely not recreated)"
+                )
+            else:
+                last_err = (
+                    f"could not read INFRA_PROBE_SPECS from {container}: "
+                    f"{(result.stderr or 'docker exec failed').strip()}"
+                )
+            if attempt < 2:
+                time.sleep(5)
+        return last_err
+
+    @classmethod
     def _sync_1password_to_vault(cls) -> bool:
         e = cls.env()
         env_name = e.get("ENV", "production")
