@@ -73,7 +73,10 @@ services:
     environment:
       CLICKHOUSE_SKIP_USER_SETUP: "1"
     volumes:
-      - op-ch-data:/var/lib/clickhouse
+      # Durable host bind mount (uid 101 = clickhouse), matching platform/03.clickhouse.
+      # A Dokploy-managed named volume is recreated with a new hash on redeploy and
+      # silently wipes the event schema; the bind mount survives redeploys.
+      - ${DATA_PATH}/op-ch:/var/lib/clickhouse
       - ./clickhouse/clickhouse-config.xml:/etc/clickhouse-server/config.d/op-config.xml:ro
       - ./clickhouse/clickhouse-user-config.xml:/etc/clickhouse-server/users.d/op-user-config.xml:ro
       - ./clickhouse/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
@@ -262,7 +265,6 @@ volumes:
       type: tmpfs
       device: tmpfs
       o: "size=10m,mode=0755"
-  op-ch-data:
 
 networks:
   dokploy-network:
