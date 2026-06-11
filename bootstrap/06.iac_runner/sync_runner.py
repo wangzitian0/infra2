@@ -465,27 +465,17 @@ def run_invoke_task(
 
 
 def get_changed_services_from_files(changed_files: list[str]) -> set[str]:
-    services = set()
-    for file_path in changed_files:
-        parts = file_path.split("/")
-        if parts[0] == "platform" and len(parts) >= 2:
-            service_dir = parts[1]
-            if "." in service_dir:
-                service = service_dir.split(".", 1)[1]
-                services.add(f"platform/{service}")
-        elif parts[0] == "finance_report" and len(parts) >= 3:
-            service_dir = parts[2]
-            if "." in service_dir:
-                service = service_dir.split(".", 1)[1]
-                services.add(f"finance_report/{service}")
-        elif parts[0] == "bootstrap" and len(parts) >= 2:
-            service_dir = parts[1]
-            if "." in service_dir:
-                service = service_dir.split(".", 1)[1].replace("_", "-")
-                services.add(f"bootstrap/{service}")
-        elif parts[0] == "libs":
-            services.add("__all__")
-    return services
+    """Map changed files to affected services via the deploy dependency graph.
+
+    Affected = a changed file is under the service's own directory OR matches a
+    declared extra dependency (docs/ssot/deploy-dependencies.yaml). Deploy
+    tooling such as libs/ and tools/ fans out to NOTHING — this replaces the old
+    `libs/ -> __all__` catch-all that redeployed every service on any
+    shared-tooling change (the over-fan-out behind the recurring mass redeploys).
+    """
+    from libs.deploy_dependencies import match_changed_services
+
+    return match_changed_services(changed_files)
 
 
 def sync_services(

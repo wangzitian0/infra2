@@ -1,0 +1,34 @@
+# Deploy dependency manifest (SSOT for fan-out + config-hash).
+#
+# Every service is IMPLICITLY deploy-dependent on its own directory. List here
+# only EXTRA build/config artifacts a service bakes in (shared code, contracts,
+# pinned upstream files) whose change must (a) fan out to that service and
+# (b) change its content hash.
+#
+# Principle: fan-out follows BUILD/CONFIG dependencies, NOT runtime connections.
+#   - A shared Postgres/Redis/ClickHouse CONFIG change must NOT redeploy its
+#     consumers — they reconnect at runtime. Do not list them.
+#   - Only declare a dependency the service literally embeds (build context,
+#     a copied contract file, a pinned config).
+#   - libs/ and tools/ are deploy tooling — no service RUNTIME-depends on them,
+#     so by default they fan out to nothing (the iac-runner re-checks-out new
+#     code itself). The exception is a service that COPIES them into its image at
+#     BUILD time: that service bakes the code in and MUST be declared below.
+#
+# Format:
+#   services:
+#     <project>/<service>:
+#       depends_on:
+#         - <repo-relative glob>     # e.g. common/contracts/analytics.py
+#
+# Globs are fnmatch-style against repo-relative changed-file paths.
+version: 1
+services:
+  # platform/alerting's Dockerfile does `COPY libs /app/libs` and
+  # `COPY tools /app/tools` with build context = repo root, so it bakes both
+  # trees into its image. A change to either must redeploy it; without this
+  # entry alerting would silently run stale tooling.
+  platform/alerting:
+    depends_on:
+      - libs/**
+      - tools/**

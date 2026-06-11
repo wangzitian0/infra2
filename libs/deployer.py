@@ -229,6 +229,44 @@ def _artifact_hash_payload(compose_path: str, compose_content: str) -> str:
     return "\n".join(lines)
 
 
+def _dependency_hash_payload(compose_path: str) -> str:
+    """Digest of a service's DECLARED extra build/config dependencies.
+
+    Empty unless the service lists `depends_on` globs in deploy-dependencies.yaml,
+    so this is a no-op for services that only depend on their own directory.
+    """
+    import glob as _glob
+    from libs.deploy_dependencies import (
+        extra_dependency_globs,
+        service_key_from_path,
+    )
+
+    key = service_key_from_path(compose_path)
+    if not key:
+        return ""
+    globs = extra_dependency_globs(key)
+    if not globs:
+        return ""
+
+    root = Path.cwd().resolve()
+    matched: set[Path] = set()
+    for pattern in globs:
+        for hit in _glob.glob(str(root / pattern), recursive=True):
+            p = Path(hit)
+            if p.is_file():
+                matched.add(p.resolve())
+
+    lines: list[str] = []
+    for path in sorted(matched):
+        try:
+            label = str(path.relative_to(root))
+        except ValueError:
+            label = str(path)
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        lines.append(f"dep:{label}:{digest}")
+    return "\n".join(lines)
+
+
 def _parse_env_text(env_text: str) -> dict[str, str]:
     env: dict[str, str] = {}
     for line in env_text.splitlines():
@@ -715,9 +753,17 @@ class Deployer:
 
     @classmethod
     def compute_local_config_hash(cls, c: "Context", env_vars: dict[str, str]) -> str:
-        """Compute hash of local compose + env vars."""
+        """Compute hash of local compose + env vars + declared shared deps."""
         compose_content = cls.get_compose_content(c)
         artifact_payload = _artifact_hash_payload(cls.compose_path, compose_content)
+        # Fold declared cross-service dependencies into the hash so a change to a
+        # shared artifact this service bakes in (a contract, pinned config) flips
+        # its hash — keeping the iac-runner fan-out and the hash gate in agreement.
+        # Only appended when non-empty, so services that declare no extra deps
+        # keep their existing hash (no spurious redeploy on rollout).
+        dependency_payload = _dependency_hash_payload(cls.compose_path)
+        if dependency_payload:
+            artifact_payload = f"{artifact_payload}\n{dependency_payload}"
         return _compute_config_hash(compose_content, env_vars, artifact_payload)
 
     @classmethod

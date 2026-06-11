@@ -9,6 +9,52 @@ from libs.console import header, success, error, info, console, warning
 from libs.dokploy import get_dokploy
 
 
+# Services intentionally left on Dokploy-native autoDeploy because they are NOT
+# managed by the iac-runner. Every iac-managed compose must be OFF so the
+# iac-runner (content config-hash gate) is the single deploy trigger.
+AUTODEPLOY_ALLOWLIST = {
+    "1password-connect",
+    "vault",
+    "wealthfolio",
+    "TianClaws",
+    "openclaw",
+}
+
+
+@task(name="audit-autodeploy")
+def audit_autodeploy(c, host: str | None = None):
+    """Fail if any compose has Dokploy autoDeploy=true outside the allowlist.
+
+    Necessity guard for single-source deploys: the iac-runner must be the only
+    trigger, so Dokploy-native autoDeploy must be off on every iac-managed
+    compose.
+    """
+    from invoke.exceptions import Exit
+
+    from libs.deploy_dependencies import autodeploy_violations
+
+    header("Dokploy autoDeploy audit", "IaC must be the single deploy trigger")
+    client = get_dokploy(host=host)
+    composes = [
+        compose
+        for project in client.list_projects()
+        for env in project.get("environments", [])
+        for compose in env.get("compose", [])
+    ]
+    violations = autodeploy_violations(composes, AUTODEPLOY_ALLOWLIST)
+    if violations:
+        error(
+            "autoDeploy is ON for non-allowlisted composes",
+            "\n".join(f"  - {name}" for name in violations),
+        )
+        raise Exit(
+            "Set autoDeploy=false (iac-runner is the single trigger), or add to "
+            "AUTODEPLOY_ALLOWLIST if intentionally Dokploy-native.",
+            code=1,
+        )
+    success(f"OK: {len(composes)} composes, only allowlisted use autoDeploy")
+
+
 @task
 def env_list(c, project: str = "platform", host: str | None = None):
     """List environments for a Dokploy project."""
