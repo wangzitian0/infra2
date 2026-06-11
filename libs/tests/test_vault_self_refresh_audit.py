@@ -184,6 +184,22 @@ def test_vault_agent_log_classifier_detects_refresh_errors_and_redacts() -> None
     assert "should-not-leak" not in result.evidence["log_excerpt"]
 
 
+def test_vault_agent_log_classifier_detects_approle_missing_creds() -> None:
+    """AppRole services crash-loop with this message (not the legacy
+    VAULT_APP_TOKEN one) when role_id/secret_id are unset/wiped; the audit must
+    catch it."""
+    result = classify_vault_agent_logs(
+        _service(),
+        "VAULT_ROLE_ID and VAULT_SECRET_ID are required",
+    )
+
+    assert result.status == "fail"
+    assert (
+        "VAULT_ROLE_ID and VAULT_SECRET_ID are required"
+        in result.evidence["matched_patterns"]
+    )
+
+
 def test_container_classifier_checks_state_health_restarts_and_mounts() -> None:
     """#166: live container state is classified without mutating containers."""
     service = _service()
