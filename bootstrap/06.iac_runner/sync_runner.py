@@ -478,6 +478,31 @@ def get_changed_services_from_files(changed_files: list[str]) -> set[str]:
     return match_changed_services(changed_files)
 
 
+def _log_fanout_decision(changed_files: list[str], services: set[str]) -> None:
+    """Log WHY each service was selected and which changed files fanned out to
+    nothing, so a no-op deploy is debuggable (correctly-skipped vs under-deployed).
+    """
+    from libs.deploy_dependencies import explain_fanout
+
+    decision = explain_fanout(changed_files)
+    logger.info(
+        "Fan-out: %d changed file(s) -> %d service(s): %s",
+        len(changed_files),
+        len(decision.selected),
+        services,
+    )
+    for service, reason in sorted(decision.selected.items()):
+        logger.info("  selected %s: %s", service, reason)
+    if decision.dropped:
+        # Expected for pure tooling/shared changes; surfaced so an UNEXPECTED
+        # drop (a service that should have been baked in) is visible in the log.
+        logger.info(
+            "  %d changed file(s) fanned out to nothing (tooling/shared): %s",
+            len(decision.dropped),
+            ", ".join(sorted(decision.dropped)),
+        )
+
+
 def sync_services(
     services: set[str], ref: str | None = None, deploy_env: str = "staging"
 ) -> SyncResult:
@@ -536,7 +561,7 @@ def sync_services(
                 if res_diff.returncode == 0:
                     changed_files = res_diff.stdout.splitlines()
                     services = get_changed_services_from_files(changed_files)
-                    logger.info("Detected changed services via git diff: %s", services)
+                    _log_fanout_decision(changed_files, services)
                     if "__all__" in services:
                         services = set(ALL_SERVICES)
 

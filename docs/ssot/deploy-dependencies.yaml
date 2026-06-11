@@ -22,6 +22,12 @@
 #         - <repo-relative glob>     # e.g. common/contracts/analytics.py
 #
 # Globs are fnmatch-style against repo-relative changed-file paths.
+#
+# Enforcement: `tools/deploy_guard_audit.py` (infra-ci "Gate deploy fan-out
+# coverage" + the scheduled deploy-guard-audit workflow) fails if any service
+# COPYs a shared tree (libs/tools/common) into its image without declaring it
+# here. The iac-runner logs the per-run fan-out decision (selected services +
+# reasons + changed files that fanned out to nothing).
 version: 1
 services:
   # platform/alerting's Dockerfile does `COPY libs /app/libs` and

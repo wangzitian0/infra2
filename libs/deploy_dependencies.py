@@ -18,10 +18,16 @@ replaces the old `libs/ -> __all__` catch-all that redeployed everything.
 from __future__ import annotations
 
 import fnmatch
+from dataclasses import dataclass, field
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = _ROOT / "docs" / "ssot" / "deploy-dependencies.yaml"
+
+# Shared trees that fan out to NOTHING by default (deploy tooling / shared code).
+# A service that COPYs one of these into its image at build time bakes the code
+# in and MUST declare it in the manifest, or a change silently leaves it stale.
+SHARED_TREES = ("libs", "tools", "common")
 
 
 def service_key_from_path(file_path: str) -> str | None:
@@ -43,7 +49,9 @@ def service_key_from_path(file_path: str) -> str | None:
     return None
 
 
-def load_dependency_manifest(path: Path | str = DEFAULT_MANIFEST) -> dict[str, list[str]]:
+def load_dependency_manifest(
+    path: Path | str = DEFAULT_MANIFEST,
+) -> dict[str, list[str]]:
     """Return {service_key: [extra dependency globs]} from the manifest.
 
     The own-directory dependency is implicit and NOT listed here. Missing file or
@@ -63,7 +71,9 @@ def load_dependency_manifest(path: Path | str = DEFAULT_MANIFEST) -> dict[str, l
     return result
 
 
-def extra_dependency_globs(service_key: str, manifest: dict[str, list[str]] | None = None) -> list[str]:
+def extra_dependency_globs(
+    service_key: str, manifest: dict[str, list[str]] | None = None
+) -> list[str]:
     """Declared extra dependency globs for one service (excludes its own dir)."""
     m = load_dependency_manifest() if manifest is None else manifest
     return list(m.get(service_key, []))
@@ -93,9 +103,7 @@ def match_changed_services(
     return affected
 
 
-def autodeploy_violations(
-    composes, allowlist: set[str] | None = None
-) -> list[str]:
+def autodeploy_violations(composes, allowlist: set[str] | None = None) -> list[str]:
     """Names of composes with Dokploy `autoDeploy=true` that are not allowlisted.
 
     Necessity guard: IaC (the iac-runner) must be the single deploy trigger, so
@@ -110,3 +118,100 @@ def autodeploy_violations(
         for c in composes
         if c.get("autoDeploy") and c.get("name") not in allow
     )
+
+
+# --- Observability -----------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FanoutDecision:
+    """Explained fan-out: which services were selected and why, plus drops.
+
+    `selected` maps each affected service to a human-readable reason. `dropped`
+    lists changed files that fanned out to NOTHING (tooling/shared paths no
+    service bakes in) — the signal that distinguishes "correctly skipped" from
+    "silently under-deployed" when debugging a no-op run.
+    """
+
+    selected: dict[str, str]
+    dropped: list[str] = field(default_factory=list)
+
+
+def explain_fanout(
+    changed_files, manifest: dict[str, list[str]] | None = None
+) -> FanoutDecision:
+    """Like match_changed_services, but records WHY each service was selected.
+
+    Reasons are stable strings: "own-dir (<file>)" or "declared dep (<file>)".
+    Own-dir selection wins over a declared-dep reason for the same service.
+    """
+    files = list(changed_files)
+    if manifest is None:
+        manifest = load_dependency_manifest()
+
+    selected: dict[str, str] = {}
+    matched: set[str] = set()
+    for file_path in files:
+        key = service_key_from_path(file_path)
+        if key:
+            selected.setdefault(key, f"own-dir ({file_path})")
+            matched.add(file_path)
+    for service_key, globs in manifest.items():
+        hits = [f for f in files if any(fnmatch.fnmatch(f, g) for g in globs)]
+        if hits:
+            selected.setdefault(service_key, f"declared dep ({hits[0]})")
+            matched.update(hits)
+
+    dropped = [f for f in files if f not in matched]
+    return FanoutDecision(selected=selected, dropped=dropped)
+
+
+def dockerfile_baked_shared_trees(dockerfile_text: str) -> set[str]:
+    """Top-level SHARED_TREES a Dockerfile COPY/ADDs from the build context.
+
+    Detects `COPY libs /app/libs`, `ADD tools/x .`, etc. Multi-stage copies
+    (`COPY --from=...`) are ignored: they pull from a prior image layer, not the
+    repo build context, so they create no source-tree deploy dependency.
+    """
+    trees: set[str] = set()
+    for raw in dockerfile_text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        instr = parts[0].upper()
+        if instr not in {"COPY", "ADD"}:
+            continue
+        operands = parts[1:]
+        flags = [p for p in operands if p.startswith("--")]
+        if any(f.startswith("--from") for f in flags):
+            continue  # copies from another build stage, not the context
+        positional = [p for p in operands if not p.startswith("--")]
+        sources = positional[:-1] if len(positional) >= 2 else positional
+        for src in sources:
+            top = src.lstrip("./").split("/")[0]
+            if top in SHARED_TREES:
+                trees.add(top)
+    return trees
+
+
+def fanout_coverage_violations(
+    service_dockerfiles: dict[str, str], manifest: dict[str, list[str]] | None = None
+) -> list[str]:
+    """Services that bake a shared tree into their image but don't declare it.
+
+    A violation is an under-fan-out landmine: the Dockerfile COPYs a shared tree
+    (libs/tools/common) so the service runs that code, yet no manifest glob would
+    fan a change in that tree out to it — a change would silently leave the
+    service running stale baked-in code. Returns sorted "service_key: tree".
+    """
+    if manifest is None:
+        manifest = load_dependency_manifest()
+    violations: list[str] = []
+    for service_key, text in service_dockerfiles.items():
+        globs = manifest.get(service_key, [])
+        for tree in dockerfile_baked_shared_trees(text):
+            probe = f"{tree}/__changed_probe__"
+            if not any(fnmatch.fnmatch(probe, g) for g in globs):
+                violations.append(f"{service_key}: {tree}")
+    return sorted(violations)
