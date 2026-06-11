@@ -136,6 +136,23 @@ class OpenPanelDeployer(Deployer):
         # platform-clickhouse is pinned to 25.5 by SigNoz while OpenPanel v2
         # requires 25.10. The op-ch container self-creates the `openpanel`
         # database via clickhouse/init-db.sh, so no provisioning is needed here.
+        #
+        # op-ch data lives on a durable host bind mount (${DATA_PATH}/op-ch) rather
+        # than a Dokploy named volume, which gets recreated with a new hash on
+        # redeploy and silently wipes the event schema. Create the dir with
+        # ClickHouse ownership (uid/gid 101) before compose so the server can write.
+        data_path = cls.data_path_for_env(e)
+        ch_dir_result = c.run(
+            f"ssh root@{e['VPS_HOST']} 'mkdir -p {data_path}/op-ch && chown -R 101:101 {data_path}/op-ch'",
+            warn=True,
+            hide=True,
+        )
+        if ch_dir_result.failed:
+            fatal(
+                "Failed to prepare durable op-ch data dir",
+                f"Path: {data_path}/op-ch\nError: {ch_dir_result.stderr or ''}",
+            )
+        success(f"Prepared durable op-ch data dir at {data_path}/op-ch (uid/gid 101)")
 
         if not cls.ensure_runtime_secrets(c):
             fatal("Failed to ensure OpenPanel runtime secrets")
