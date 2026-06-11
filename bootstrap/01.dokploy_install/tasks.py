@@ -2,6 +2,9 @@
 Dokploy installation automation tasks.
 Bootstrap layer - manual server provisioning, no Vault dependency.
 """
+import io
+from pathlib import Path
+
 from invoke import task
 from libs.common import get_env
 from libs.console import header, success, error, warning, info, prompt_action, run_with_status
@@ -131,23 +134,73 @@ def version_check(c):
         error("Unable to determine version", "Dokploy may not be installed")
 
 
+@task(name="install-deploy-watchdog")
+def install_deploy_watchdog(c):
+    """Install the deploy-queue watchdog (clears stalled BullMQ deploy jobs).
+
+    The Dokploy "deployments" queue is single-concurrency FIFO with no execution
+    timeout; an orphaned/stalled job (expired lock) blocks ALL deploys until
+    cleared by hand. This installs the watchdog script to /usr/local/sbin and a
+    per-minute root cron that clears such jobs. Idempotent.
+    """
+    header("Deploy-queue watchdog", "Installing stalled-job guard")
+
+    e = get_env()
+    vps_host = e.get("VPS_HOST")
+    vps_user = e.get("VPS_SSH_USER") or "root"
+    if not vps_host:
+        error("Missing VPS_HOST", "Set in 1Password item init/env_vars")
+        return False
+
+    remote = "/usr/local/sbin/dokploy-deploy-queue-watchdog.sh"
+    script = Path(__file__).parent / "dokploy-deploy-queue-watchdog.sh"
+    target = f"{vps_user}@{vps_host}"
+
+    # Upload script + install per-minute cron (idempotent) in one remote run.
+    remote_cmd = (
+        "set -e\n"
+        f"cat > {remote} <<'WATCHDOG_EOF'\n"
+        f"{script.read_text()}\n"
+        "WATCHDOG_EOF\n"
+        f"chmod +x {remote}\n"
+        "( crontab -l 2>/dev/null | grep -v dokploy-deploy-queue-watchdog; "
+        f"echo '* * * * * {remote}' ) | crontab -\n"
+        "echo WATCHDOG_INSTALLED\n"
+    )
+    result = c.run(
+        f"ssh {target} bash -s",
+        in_stream=io.StringIO(remote_cmd),
+        warn=True,
+        hide=True,
+    )
+    if not result.ok or "WATCHDOG_INSTALLED" not in (result.stdout or ""):
+        error("Failed to install deploy-queue watchdog", result.stderr or "")
+        return False
+
+    success("Deploy-queue watchdog installed (per-minute cron)")
+    return True
+
+
 @task
 def setup(c, version=DOKPLOY_VERSION):
     """Full setup: install + verify + next steps guidance.
-    
+
     Args:
         version: Dokploy version to install (default: v0.25.11)
     """
     header("Dokploy Setup", "Complete installation workflow")
-    
+
     # Step 1: Install
     if not install(c, version=version):
         return
-    
+
     # Step 2: Verify
     if not verify(c):
         return
-    
+
+    # Step 2b: Install the deploy-queue watchdog (resilience guard)
+    install_deploy_watchdog(c)
+
     # Step 3: Next steps
     e = get_env()
     vps_host = e.get("VPS_HOST")
