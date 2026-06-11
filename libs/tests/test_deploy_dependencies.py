@@ -7,6 +7,9 @@ must flag non-allowlisted Dokploy-native triggers.
 
 from libs.deploy_dependencies import (
     autodeploy_violations,
+    dockerfile_baked_shared_trees,
+    explain_fanout,
+    fanout_coverage_violations,
     load_dependency_manifest,
     match_changed_services,
     service_key_from_path,
@@ -99,3 +102,71 @@ def test_autodeploy_violations():
     assert autodeploy_violations(composes, set()) == ["openpanel", "vault"]
     # all off -> clean
     assert autodeploy_violations([{"name": "x", "autoDeploy": False}], allow) == []
+
+
+# --- Observability -----------------------------------------------------------
+
+
+def test_explain_fanout_records_reasons_and_drops():
+    manifest = {"platform/alerting": ["libs/**", "tools/**"]}
+    decision = explain_fanout(
+        [
+            "platform/24.openpanel/compose.yaml",  # own-dir
+            "libs/deployer.py",                     # declared dep of alerting; drop for openpanel
+            "docs/notes.md",                        # owned by nobody -> dropped
+        ],
+        manifest=manifest,
+    )
+    assert decision.selected["platform/openpanel"].startswith("own-dir")
+    assert decision.selected["platform/alerting"].startswith("declared dep")
+    # libs/ matched alerting's declared dep, so only the truly-ownerless file drops
+    assert decision.dropped == ["docs/notes.md"]
+
+
+def test_explain_fanout_agrees_with_match_changed_services():
+    files = ["platform/24.openpanel/compose.yaml", "libs/x.py"]
+    manifest = {"platform/alerting": ["libs/**"]}
+    assert set(explain_fanout(files, manifest=manifest).selected) == match_changed_services(
+        files, manifest=manifest
+    )
+
+
+def test_dockerfile_baked_shared_trees():
+    dockerfile = (
+        "FROM python:3.11-slim\n"
+        "COPY platform/12.alerting/app.py /app/app.py\n"  # service's own file, ignored
+        "COPY libs /app/libs\n"                            # shared tree -> libs
+        "ADD ./tools /app/tools\n"                         # shared tree -> tools
+        "COPY --from=builder /out/bin /usr/bin/bin\n"      # multi-stage, ignored
+        "# COPY common /app/common\n"                      # comment, ignored
+    )
+    assert dockerfile_baked_shared_trees(dockerfile) == {"libs", "tools"}
+
+
+def test_fanout_coverage_violations_flags_undeclared_baked_tree():
+    # bakes libs/ but declares nothing -> under-fan-out landmine
+    dockerfiles = {"platform/ghost": "FROM x\nCOPY libs /app/libs\n"}
+    assert fanout_coverage_violations(dockerfiles, manifest={}) == ["platform/ghost: libs"]
+    # declaring the tree clears the violation
+    assert fanout_coverage_violations(
+        dockerfiles, manifest={"platform/ghost": ["libs/**"]}
+    ) == []
+
+
+def test_shipped_manifest_has_no_fanout_coverage_violations():
+    # The real alerting Dockerfile bakes libs/+tools/ and the shipped manifest
+    # declares them; this locks the repo against regressing that coverage.
+    import yaml
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    dockerfiles = {}
+    for service_root in ("platform", "finance_report", "bootstrap"):
+        base = root / service_root
+        if not base.is_dir():
+            continue
+        for df in base.rglob("Dockerfile*"):
+            key = service_key_from_path(df.relative_to(root).as_posix())
+            if key:
+                dockerfiles[key] = df.read_text(encoding="utf-8", errors="replace")
+    assert fanout_coverage_violations(dockerfiles) == []
