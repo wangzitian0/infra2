@@ -35,6 +35,9 @@ ERROR_LOG_PATTERNS = (
     "connection refused",
     "context deadline exceeded",
     "VAULT_APP_TOKEN is required",
+    # AppRole-auth services (#257/#259) crash-loop with this instead of the
+    # legacy VAULT_APP_TOKEN message when their role_id/secret_id are unset/wiped.
+    "VAULT_ROLE_ID and VAULT_SECRET_ID are required",
 )
 
 
