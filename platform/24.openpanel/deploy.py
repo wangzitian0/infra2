@@ -39,12 +39,19 @@ class OpenPanelDeployer(Deployer):
             warning("Redis password not found in Vault")
             return False
 
-        # get_secrets raises VaultSecretNotFoundError when the path has never
-        # been written; create it idempotently so .get() below is safe on first
-        # deploy.
         openpanel_secrets = get_secrets(project, "openpanel", env_name)
 
-        cookie_secret = openpanel_secrets.get("cookie_secret")
+        # On first deploy the `.../openpanel` path does not exist yet, and
+        # VaultSecrets.get() raises VaultSecretNotFoundError instead of returning
+        # None. Treat "path missing" as "secret absent" so the set() calls below
+        # create the path idempotently.
+        def _read(key):
+            try:
+                return openpanel_secrets.get(key)
+            except openpanel_secrets.VaultSecretNotFoundError:
+                return None
+
+        cookie_secret = _read("cookie_secret")
         if not cookie_secret:
             import secrets as py_secrets
 
@@ -58,7 +65,7 @@ class OpenPanelDeployer(Deployer):
             info("cookie_secret exists in Vault")
 
         # Check or set resend_api_key placeholder
-        resend_api_key = openpanel_secrets.get("resend_api_key")
+        resend_api_key = _read("resend_api_key")
         if not resend_api_key:
             if not openpanel_secrets.set("resend_api_key", "placeholder"):
                 error("Failed to store placeholder resend_api_key in Vault")
