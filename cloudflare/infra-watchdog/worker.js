@@ -702,6 +702,10 @@ async function saveLastRun(env, state) {
 
 const LEDGER_RETENTION_DAYS = 21;
 const R2_LEDGER_PREFIX = "watchdog-ledger/";
+// How many recent finalized days reconcileArchives() re-checks each run. Big
+// enough to self-heal a multi-day R2 outage at the 30-min cron cadence, small
+// enough that the per-run head() cost stays negligible.
+const ARCHIVE_BACKFILL_DAYS = 3;
 
 function utcDateKey(ms) {
   return new Date(ms).toISOString().slice(0, 10);
@@ -743,26 +747,59 @@ async function recordLedger(env, results, nowMs) {
     runs: Number(existing.runs || 0) + 1,
     signals,
   });
-  // On the first run of a new day, yesterday's rollup is finalized: archive it
-  // off-host to R2 (the single off-host store, S3 standard) for long-term
-  // retention beyond the KV hot window, then prune the day that aged out. Both
-  // happen once per day. Guarded so a missing R2 binding is a no-op, not a
-  // crash, which keeps deploys safe before the bucket is bound.
-  if (isNewDay) {
-    if (env.LEDGER_BUCKET) {
-      const prevDate = utcDateKey(nowMs - 86400000);
-      const prevRecord = await loadState(env, ledgerKey(prevDate));
-      if (prevRecord.date) {
-        await env.LEDGER_BUCKET.put(
-          `${R2_LEDGER_PREFIX}${prevDate}.json`,
-          JSON.stringify(prevRecord),
-          { httpMetadata: { contentType: "application/json" } },
-        );
-      }
-    }
+  // Cold-archive finalized days off-host to R2 every run, idempotently, rather
+  // than as a one-shot at the day rollover. A single hiccup on that one run --
+  // an R2 blip, the .date migration boundary, a thrown put -- used to lose a
+  // whole day's archive silently and forever. Reconciling every run instead
+  // retries until it sticks, backfills any gap, and surfaces a write failure as
+  // a queryable event instead of swallowing it.
+  await reconcileArchives(env, nowMs);
+  // On the first run of a new day, prune the day that aged out of the KV hot
+  // window. Once per day is enough and keeps the per-key delete budget tiny.
+  if (isNewDay && env.WATCHDOG_STATE.delete) {
     const pruneDate = utcDateKey(nowMs - LEDGER_RETENTION_DAYS * 86400000);
-    if (env.WATCHDOG_STATE.delete) {
-      await env.WATCHDOG_STATE.delete(ledgerKey(pruneDate));
+    await env.WATCHDOG_STATE.delete(ledgerKey(pruneDate));
+  }
+}
+
+// Idempotently ensure every finalized (past) day still in the KV hot window has
+// its off-host R2 cold archive. Bounded and cheap: a head() existence check per
+// recent day, a put only when the object is actually missing. Fully guarded so
+// a missing binding is a no-op and a transient R2 failure is logged-and-retried
+// next run rather than crashing the watchdog or vanishing silently.
+async function reconcileArchives(env, nowMs) {
+  if (!env.LEDGER_BUCKET) {
+    return;
+  }
+  const scanDays = Math.min(LEDGER_RETENTION_DAYS, ARCHIVE_BACKFILL_DAYS);
+  for (let dayOffset = 1; dayOffset <= scanDays; dayOffset += 1) {
+    const date = utcDateKey(nowMs - dayOffset * 86400000);
+    const record = await loadState(env, ledgerKey(date));
+    if (!record.date) {
+      continue;
+    }
+    const objectKey = `${R2_LEDGER_PREFIX}${date}.json`;
+    try {
+      if (await env.LEDGER_BUCKET.head(objectKey)) {
+        continue;
+      }
+      await env.LEDGER_BUCKET.put(objectKey, JSON.stringify(record), {
+        httpMetadata: { contentType: "application/json" },
+      });
+      logWatchdogResult({
+        event: "watchdog.ledger.archive",
+        timestamp: nowMs,
+        status: "ok",
+        date,
+      });
+    } catch (error) {
+      logWatchdogResult({
+        event: "watchdog.ledger.archive",
+        timestamp: nowMs,
+        status: "fail",
+        date,
+        error: oneLine(error && error.message ? error.message : String(error)),
+      });
     }
   }
 }
