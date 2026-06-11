@@ -19,6 +19,9 @@ services:
   - id: platform/postgres
     project: platform
     dokploy_service: postgres
+    # Migrated to AppRole auth (#257/#259): vault-agent uses VAULT_ROLE_ID +
+    # VAULT_SECRET_ID, not a static VAULT_APP_TOKEN.
+    auth_method: approle
     compose_path: platform/01.postgres/compose.yaml
     vault_agent_config_path: platform/01.postgres/vault-agent.hcl
     secret_template_path: platform/01.postgres/secrets.ctmpl
@@ -119,6 +122,9 @@ services:
   - id: finance_report/postgres
     project: finance_report
     dokploy_service: postgres
+    # Migrated to AppRole auth (#257/#259): vault-agent uses VAULT_ROLE_ID +
+    # VAULT_SECRET_ID, not a static VAULT_APP_TOKEN.
+    auth_method: approle
     compose_path: finance_report/finance_report/01.postgres/compose.yaml
     vault_agent_config_path: finance_report/finance_report/01.postgres/vault-agent.hcl
     secret_template_path: finance_report/finance_report/01.postgres/secrets.ctmpl
