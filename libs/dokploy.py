@@ -199,6 +199,29 @@ class DokployClient:
             json={"composeId": compose_id, "deleteVolumes": delete_volumes},
         )
 
+    def cancel_compose_deployment(self, compose_id: str) -> dict:
+        """Cancel the running deployment for a compose (Dokploy-native).
+
+        Use this instead of raw `bull:deployments:*` Redis surgery: Dokploy owns
+        the queue and lifecycle, so cancelling through its own API keeps the
+        BullMQ bookkeeping and the deployment DB record consistent.
+        """
+        return self._request(
+            "POST", "compose.cancelDeployment", json={"composeId": compose_id}
+        )
+
+    def kill_compose_build(self, compose_id: str) -> dict:
+        """Kill the stuck build process for a compose deployment."""
+        return self._request(
+            "POST", "compose.killBuild", json={"composeId": compose_id}
+        )
+
+    def clean_compose_queues(self, compose_id: str) -> dict:
+        """Drain pending BullMQ deploy jobs for a compose."""
+        return self._request(
+            "POST", "compose.cleanQueues", json={"composeId": compose_id}
+        )
+
     def get_compose(self, compose_id: str) -> dict:
         """Get compose details"""
         return self._request("GET", f"compose.one?composeId={compose_id}")
