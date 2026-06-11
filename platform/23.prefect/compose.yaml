@@ -48,7 +48,12 @@ services:
       start_period: 10s
 
   prefect-server:
-    image: prefecthq/prefect:3-latest
+    # Pinned by digest (prefect 3.7.4 / prefect-redis 0.2.11). The :3-latest tag
+    # had drifted: the host cached a Jan-2026 image with prefect-redis 0.2.8,
+    # whose Redis-messaging consumer leaked ephemeral consumer groups and
+    # busy-polled while idle. 0.2.11 ships the ephemeral-group cleanup + batch
+    # ack. Pinning the digest stops the tag from silently going stale again.
+    image: prefecthq/prefect:3-latest@sha256:c10cc349f947da083a1cfb36c031f85806befe67a285a8e54a753226ddd505ec
     container_name: platform-prefect-server${ENV_SUFFIX}
     restart: unless-stopped
     # ops.standards §5 resource governance: ceiling with headroom over observed
@@ -117,7 +122,12 @@ services:
       start_period: 60s
 
   prefect-services:
-    image: prefecthq/prefect:3-latest
+    # Pinned by digest (prefect 3.7.4 / prefect-redis 0.2.11). The :3-latest tag
+    # had drifted: the host cached a Jan-2026 image with prefect-redis 0.2.8,
+    # whose Redis-messaging consumer leaked ephemeral consumer groups and
+    # busy-polled while idle. 0.2.11 ships the ephemeral-group cleanup + batch
+    # ack. Pinning the digest stops the tag from silently going stale again.
+    image: prefecthq/prefect:3-latest@sha256:c10cc349f947da083a1cfb36c031f85806befe67a285a8e54a753226ddd505ec
     container_name: platform-prefect-services${ENV_SUFFIX}
     restart: unless-stopped
     mem_limit: ${PREFECT_SERVICES_MEM_LIMIT:-1g}
@@ -162,7 +172,12 @@ services:
         max-file: "2"
 
   prefect-worker:
-    image: prefecthq/prefect:3-latest
+    # Pinned by digest (prefect 3.7.4 / prefect-redis 0.2.11). The :3-latest tag
+    # had drifted: the host cached a Jan-2026 image with prefect-redis 0.2.8,
+    # whose Redis-messaging consumer leaked ephemeral consumer groups and
+    # busy-polled while idle. 0.2.11 ships the ephemeral-group cleanup + batch
+    # ack. Pinning the digest stops the tag from silently going stale again.
+    image: prefecthq/prefect:3-latest@sha256:c10cc349f947da083a1cfb36c031f85806befe67a285a8e54a753226ddd505ec
     container_name: platform-prefect-worker${ENV_SUFFIX}
     restart: on-failure
     mem_limit: ${PREFECT_WORKER_MEM_LIMIT:-1g}
