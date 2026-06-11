@@ -49,7 +49,9 @@ def service_key_from_path(file_path: str) -> str | None:
     return None
 
 
-def load_dependency_manifest(path: Path | str = DEFAULT_MANIFEST) -> dict[str, list[str]]:
+def load_dependency_manifest(
+    path: Path | str = DEFAULT_MANIFEST,
+) -> dict[str, list[str]]:
     """Return {service_key: [extra dependency globs]} from the manifest.
 
     The own-directory dependency is implicit and NOT listed here. Missing file or
@@ -69,7 +71,9 @@ def load_dependency_manifest(path: Path | str = DEFAULT_MANIFEST) -> dict[str, l
     return result
 
 
-def extra_dependency_globs(service_key: str, manifest: dict[str, list[str]] | None = None) -> list[str]:
+def extra_dependency_globs(
+    service_key: str, manifest: dict[str, list[str]] | None = None
+) -> list[str]:
     """Declared extra dependency globs for one service (excludes its own dir)."""
     m = load_dependency_manifest() if manifest is None else manifest
     return list(m.get(service_key, []))
@@ -99,9 +103,7 @@ def match_changed_services(
     return affected
 
 
-def autodeploy_violations(
-    composes, allowlist: set[str] | None = None
-) -> list[str]:
+def autodeploy_violations(composes, allowlist: set[str] | None = None) -> list[str]:
     """Names of composes with Dokploy `autoDeploy=true` that are not allowlisted.
 
     Necessity guard: IaC (the iac-runner) must be the single deploy trigger, so
