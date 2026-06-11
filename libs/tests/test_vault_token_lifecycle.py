@@ -392,3 +392,55 @@ def test_setup_tokens_does_not_track_accessor_when_dokploy_runtime_apply_fails(
     assert "vault token revoke -accessor old-accessor" not in commands
     assert client.deploy_calls == 1
     assert client.redeploy_calls == 1
+
+
+def _policy_paths() -> set[str]:
+    """Extract the `path "..."` globs granted by the IaC Runner Vault policy."""
+    import re
+
+    policy = (ROOT / "bootstrap" / "06.iac_runner" / "vault-policy.hcl").read_text(encoding="utf-8")
+    return set(re.findall(r'path\s+"([^"]+)"', policy))
+
+
+def _policy_matches(glob: str, path: str) -> bool:
+    """Minimal Vault ACL match: `+` = exactly one segment, `*` = trailing segments."""
+    g, p = glob.split("/"), path.split("/")
+    for i, seg in enumerate(g):
+        if seg == "*":
+            return True
+        if i >= len(p):
+            return False
+        if seg != "+" and seg != p[i]:
+            return False
+    return len(g) == len(p)
+
+
+def test_policy_grants_tracked_accessor_path():
+    """Regression: the IaC Runner policy must cover the tracked-accessor KV path the
+    token-lifecycle code reads/writes. A missing grant makes the runner token hit
+    `permission denied`, so token refresh silently fails and recreated services lose
+    their VAULT_ROLE_ID / VAULT_SECRET_ID (prod outage)."""
+    # accessor_kv_path -> secret/bootstrap/<env>/vault_token_accessors/<project>/<service>;
+    # KV v2 data operations resolve under secret/data/.
+    cli_path = accessor_kv_path("finance_report", "production", "app")
+    data_path = cli_path.replace("secret/", "secret/data/", 1)
+    meta_path = cli_path.replace("secret/", "secret/metadata/", 1)
+
+    paths = _policy_paths()
+    assert any(_policy_matches(g, data_path) for g in paths), (
+        f"no policy grant covers accessor data path {data_path}"
+    )
+    assert any(_policy_matches(g, meta_path) for g in paths), (
+        f"no policy grant covers accessor metadata (list) path {meta_path}"
+    )
+
+
+def test_policy_grants_metadata_list_for_service_secrets():
+    """KV v2 LIST resolves to secret/metadata/, so a `list` on secret/data/ is a no-op;
+    the policy must grant metadata for the service trees the runner enumerates."""
+    paths = _policy_paths()
+    for svc in (
+        "secret/metadata/finance_report/production/app",
+        "secret/metadata/platform/production/alerting",
+    ):
+        assert any(_policy_matches(g, svc) for g in paths), f"no metadata list grant for {svc}"
