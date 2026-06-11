@@ -147,6 +147,10 @@ services:
         clickhouse-http|http|http://platform-clickhouse${ENV_SUFFIX}:8123/ping|200|critical|5
         op-connect-http|http|http://op-connect-api:8080/health|200|critical|5
         iac-runner-http|http|http://iac-runner:8080/health|200|warning|5
+        openpanel-api-http|http|http://platform-openpanel-api:3000/healthcheck|200|warning|5
+        openpanel-ch-http|http|http://platform-openpanel-ch:8123/ping|200|warning|5
+        openpanel-worker-http|http|http://platform-openpanel-worker:3000/healthcheck|200|warning|5
+        openpanel-dashboard-http|http|http://platform-openpanel-dashboard:3000/api/healthcheck|200|warning|5
     volumes:
       - secrets:/secrets:ro
     networks:
