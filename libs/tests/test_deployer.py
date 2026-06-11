@@ -137,6 +137,25 @@ def test_preserve_runtime_env_keeps_explicit_new_vault_app_token() -> None:
     assert result.splitlines() == ["ENV=production", "VAULT_APP_TOKEN=hvs.new"]
 
 
+def test_preserve_runtime_env_keeps_existing_approle_creds() -> None:
+    """Infra-011.3: AppRole creds (VAULT_ROLE_ID / VAULT_SECRET_ID) injected out-of-band
+    must survive a redeploy that regenerates the git-derived env, or the migrated
+    vault-agent loses them and crash-loops."""
+    from libs.deployer import _preserve_runtime_env
+
+    result = _preserve_runtime_env(
+        "ENV=production\nINTERNAL_DOMAIN=zitian.party",
+        "ENV=old\nVAULT_ROLE_ID=role-abc\nVAULT_SECRET_ID=secret-xyz\nSTALE=value",
+    )
+
+    assert result.splitlines() == [
+        "ENV=production",
+        "INTERNAL_DOMAIN=zitian.party",
+        "VAULT_ROLE_ID=role-abc",
+        "VAULT_SECRET_ID=secret-xyz",
+    ]
+
+
 def test_parse_env_text_ignores_comments_blanks_and_malformed_lines() -> None:
     from libs.deployer import _parse_env_text
 
