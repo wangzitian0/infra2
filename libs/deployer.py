@@ -940,11 +940,37 @@ class Deployer:
                 ),
             }
 
+        # Runtime-applied verification (closed loop): the hash check above only
+        # proves Dokploy RECORDED the intended config. Let services additionally
+        # assert that the actually-running container reflects it, catching the
+        # failure mode where a deploy is accepted but the container was never
+        # recreated (so it keeps running prior config while the catalog says
+        # "Live"). Default is a no-op; only services that override it pay the cost.
+        runtime_error = cls.verify_runtime_applied(c, env_vars_dict)
+        if runtime_error:
+            error(f"{cls.service}: runtime verification failed: {runtime_error}")
+            return {
+                "action": "failed",
+                "details": f"Runtime verification failed: {runtime_error}",
+            }
+
         success(f"{cls.service}: deployed with hash {local_hash}")
         return {
             "action": "updated" if remote_hash else "created",
             "details": f"composeId: {compose_id}",
         }
+
+    @classmethod
+    def verify_runtime_applied(
+        cls, c: "Context", env_vars: dict[str, str]
+    ) -> str | None:
+        """Optional per-service check that the RUNNING container reflects the
+        just-deployed config (not merely that Dokploy recorded the intended
+        hash). Return an error string to fail the deploy, or None to pass.
+
+        Default: no-op. Override in services where "recorded" can silently differ
+        from "running" (e.g. env-literal changes Dokploy may not recreate on)."""
+        return None
 
 
 def make_tasks(deployer_cls: type[Deployer], shared_tasks: Any) -> dict:
