@@ -61,6 +61,9 @@ jobs:
           OPENCLAW_GATEWAY_TOKEN: dummy-openclaw-gateway-token
           GOG_KEYRING_PASSWORD: dummy-keyring-password
 
+      - name: Lint platform image pins (no bare :latest)
+        run: python3 tools/lint_platform_image_pins.py
+
   test-deployer-logic:
     name: Test Deployer Hash Logic
     runs-on: ubuntu-latest
