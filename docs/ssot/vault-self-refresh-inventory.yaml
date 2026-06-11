@@ -29,6 +29,9 @@ services:
   - id: platform/redis
     project: platform
     dokploy_service: redis
+    # Migrated to AppRole auth (#257/#259): vault-agent uses VAULT_ROLE_ID +
+    # VAULT_SECRET_ID, not a static VAULT_APP_TOKEN.
+    auth_method: approle
     compose_path: platform/02.redis/compose.yaml
     vault_agent_config_path: platform/02.redis/vault-agent.hcl
     secret_template_path: platform/02.redis/secrets.ctmpl
@@ -39,6 +42,9 @@ services:
   - id: platform/minio
     project: platform
     dokploy_service: minio
+    # Migrated to AppRole auth (#257/#259): vault-agent uses VAULT_ROLE_ID +
+    # VAULT_SECRET_ID, not a static VAULT_APP_TOKEN.
+    auth_method: approle
     compose_path: platform/03.minio/compose.yaml
     vault_agent_config_path: platform/03.minio/vault-agent.hcl
     secret_template_path: platform/03.minio/secrets.ctmpl
@@ -60,6 +66,9 @@ services:
   - id: platform/alerting
     project: platform
     dokploy_service: alerting
+    # Migrated to AppRole auth (#257/#259): vault-agent uses VAULT_ROLE_ID +
+    # VAULT_SECRET_ID, not a static VAULT_APP_TOKEN.
+    auth_method: approle
     compose_path: platform/12.alerting/compose.yaml
     vault_agent_config_path: platform/12.alerting/vault-agent.hcl
     secret_template_path: platform/12.alerting/secrets.ctmpl
@@ -70,6 +79,9 @@ services:
   - id: platform/activepieces
     project: platform
     dokploy_service: activepieces
+    # Migrated to AppRole auth (#257/#259): vault-agent uses VAULT_ROLE_ID +
+    # VAULT_SECRET_ID, not a static VAULT_APP_TOKEN.
+    auth_method: approle
     compose_path: platform/22.activepieces/compose.yaml
     vault_agent_config_path: platform/22.activepieces/vault-agent.hcl
     secret_template_path: platform/22.activepieces/secrets.ctmpl
@@ -117,6 +129,9 @@ services:
   - id: finance_report/redis
     project: finance_report
     dokploy_service: redis
+    # Migrated to AppRole auth (#257/#259): vault-agent uses VAULT_ROLE_ID +
+    # VAULT_SECRET_ID, not a static VAULT_APP_TOKEN.
+    auth_method: approle
     compose_path: finance_report/finance_report/02.redis/compose.yaml
     vault_agent_config_path: finance_report/finance_report/02.redis/vault-agent.hcl
     secret_template_path: finance_report/finance_report/02.redis/secrets.ctmpl

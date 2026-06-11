@@ -2,9 +2,11 @@ vault {
   address = "${VAULT_ADDR}"
 }
 auto_auth {
-  method "token_file" {
+  method "approle" {
     config = {
-      token_file_path = "/vault/token"
+      role_id_file_path                   = "/vault/role_id"
+      secret_id_file_path                 = "/vault/secret_id"
+      remove_secret_id_file_after_reading = false
     }
   }
 
