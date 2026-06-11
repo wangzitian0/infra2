@@ -42,7 +42,7 @@ services:
           # vault token lookup
           test -s /vault/secrets/.env &&
           ! grep -q "<no value>" /vault/secrets/.env &&
-          wget -q -T 3 --header="X-Vault-Token: $$(cat /vault/token)" "$$VAULT_ADDR/v1/auth/token/lookup-self" -O /dev/null
+          wget -q -T 3 --header="X-Vault-Token: $$(cat /vault/.token)" "$$VAULT_ADDR/v1/auth/token/lookup-self" -O /dev/null
       interval: 30s
       timeout: 5s
       retries: 3

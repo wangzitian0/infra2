@@ -80,6 +80,9 @@ services:
   - id: platform/prefect
     project: platform
     dokploy_service: prefect
+    # Migrated to AppRole auth (#257/#259): vault-agent uses VAULT_ROLE_ID +
+    # VAULT_SECRET_ID, not a static VAULT_APP_TOKEN.
+    auth_method: approle
     compose_path: platform/23.prefect/compose.yaml
     vault_agent_config_path: platform/23.prefect/vault-agent.hcl
     secret_template_path: platform/23.prefect/secrets.ctmpl
