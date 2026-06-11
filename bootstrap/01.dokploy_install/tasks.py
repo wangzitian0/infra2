@@ -160,7 +160,9 @@ def install_deploy_watchdog(c):
     remote_cmd = (
         "set -e\n"
         f"cat > {remote} <<'WATCHDOG_EOF'\n"
-        f"{script.read_text()}\n"
+        # script.read_text() already ends with a newline; no extra one, so the
+        # written file is byte-identical to the repo script.
+        f"{script.read_text()}"
         "WATCHDOG_EOF\n"
         f"chmod +x {remote}\n"
         "( crontab -l 2>/dev/null | grep -v dokploy-deploy-queue-watchdog; "
