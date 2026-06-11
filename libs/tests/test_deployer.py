@@ -138,7 +138,7 @@ def test_preserve_runtime_env_keeps_explicit_new_vault_app_token() -> None:
 
 
 def test_preserve_runtime_env_keeps_existing_approle_creds() -> None:
-    """Infra-011.3: AppRole creds (VAULT_ROLE_ID/SECRET_ID) injected out-of-band
+    """Infra-011.3: AppRole creds (VAULT_ROLE_ID / VAULT_SECRET_ID) injected out-of-band
     must survive a redeploy that regenerates the git-derived env, or the migrated
     vault-agent loses them and crash-loops."""
     from libs.deployer import _preserve_runtime_env
