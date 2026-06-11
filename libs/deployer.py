@@ -474,6 +474,15 @@ class Deployer:
             cls.service, project_name, env_name=env_name
         )
 
+        # autoDeploy=False on every path. These services are deployed by the
+        # iac-runner, which already does change detection via the content
+        # config-hash gate (compose + env + mounted/build artifacts) — a more
+        # precise "minimal restart" than Dokploy's path-based redeploy. Dokploy
+        # defaults new composes to autoDeploy=true (with empty watchPaths =>
+        # redeploy-on-every-push), which double-triggers with the iac-runner and
+        # floods the single-concurrency deploy queue. Keep the iac-runner as the
+        # single GitOps trigger; re-assert on update so a manual toggle can't
+        # regress it.
         if existing:
             compose_id = existing["composeId"]
             info("Updating existing compose service")
@@ -487,6 +496,7 @@ class Deployer:
                 branch=GITHUB_BRANCH,
                 composePath=cls.compose_path,
                 env=_preserve_runtime_env(env_str, existing_env),
+                autoDeploy=False,
             )
         else:
             info("Creating new compose service with GitHub provider")
@@ -501,6 +511,7 @@ class Deployer:
                 branch=GITHUB_BRANCH,
                 composePath=cls.compose_path,
                 env=env_str,
+                autoDeploy=False,
             )
             compose_id = result["composeId"]
             # Dokploy initializes new GitHub compose records with default source
@@ -515,6 +526,7 @@ class Deployer:
                 branch=GITHUB_BRANCH,
                 composePath=cls.compose_path,
                 env=env_str,
+                autoDeploy=False,
             )
 
         # Deploy
