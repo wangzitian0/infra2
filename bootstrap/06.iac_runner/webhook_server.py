@@ -126,38 +126,24 @@ def validate_deploy_ref(ref: str | None) -> str | None:
 
 
 def get_changed_services(commits: list[dict]) -> set[str]:
-    services = set()
-
-    for commit in commits:
+    """Map a push's changed files to affected services via the deploy dependency
+    graph — the SAME matcher used by the git-diff path, so both routes apply the
+    manifest (own dir + declared deps) and neither uses a `libs/ -> __all__`
+    catch-all. Importing sync_runner also puts the checked-out repo on sys.path
+    so `libs.deploy_dependencies` resolves.
+    """
+    files = [
+        file_path
+        for commit in commits
         for file_path in (
             commit.get("added", [])
             + commit.get("modified", [])
             + commit.get("removed", [])
-        ):
-            parts = file_path.split("/")
+        )
+    ]
+    from sync_runner import get_changed_services_from_files
 
-            if parts[0] == "platform" and len(parts) >= 2:
-                service_dir = parts[1]
-                if "." in service_dir:
-                    service = service_dir.split(".", 1)[1]
-                    services.add(f"platform/{service}")
-
-            elif parts[0] == "finance_report" and len(parts) >= 3:
-                service_dir = parts[2]
-                if "." in service_dir:
-                    service = service_dir.split(".", 1)[1]
-                    services.add(f"finance_report/{service}")
-
-            elif parts[0] == "bootstrap" and len(parts) >= 2:
-                service_dir = parts[1]
-                if "." in service_dir:
-                    service = service_dir.split(".", 1)[1]
-                    services.add(f"bootstrap/{service}")
-
-            elif parts[0] == "libs":
-                services.add("__all__")
-
-    return services
+    return get_changed_services_from_files(files)
 
 
 def parse_bool(value) -> bool:

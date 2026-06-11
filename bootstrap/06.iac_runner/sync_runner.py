@@ -28,6 +28,14 @@ EXACT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 REPO_NAME = Path(urlparse(GIT_REPO_URL).path).stem
 
+# The iac-runner image bakes only this directory (build context = here), so
+# `libs/` is NOT importable from /app. The dependency matcher + manifest live in
+# the checked-out repo; put it on the path so the lazy
+# `from libs.deploy_dependencies import ...` calls resolve (after update_repo()).
+_CHECKOUT_PATH = str(WORKSPACE / REPO_NAME)
+if _CHECKOUT_PATH not in sys.path:
+    sys.path.insert(0, _CHECKOUT_PATH)
+
 WORKSPACE_LOCK_FILE = Path("/tmp/workspace.lock")
 DEPLOYMENT_LOCK_FILE = Path("/tmp/deployment.lock")
 INVOKE_BOOTSTRAP = (
@@ -473,18 +481,44 @@ def get_changed_services_from_files(changed_files: list[str]) -> set[str]:
     `libs/ -> __all__` catch-all that redeployed every service on any
     shared-tooling change (the over-fan-out behind the recurring mass redeploys).
     """
-    from libs.deploy_dependencies import match_changed_services
+    try:
+        from libs.deploy_dependencies import match_changed_services
 
-    return match_changed_services(changed_files)
+        return match_changed_services(changed_files)
+    except Exception as exc:  # checked-out libs/ not importable yet
+        logger.warning(
+            "deploy_dependencies unavailable (%s); own-dir-only fan-out", exc
+        )
+        return _own_dir_services(changed_files)
+
+
+def _own_dir_services(changed_files: list[str]) -> set[str]:
+    """Self-contained own-directory fan-out (no manifest, no catch-all) used as a
+    safe fallback when the checked-out libs/ is not importable. libs/ and tools/
+    map to nothing."""
+    services: set[str] = set()
+    for file_path in changed_files:
+        parts = file_path.split("/")
+        if parts[0] == "platform" and len(parts) >= 2 and "." in parts[1]:
+            services.add(f"platform/{parts[1].split('.', 1)[1]}")
+        elif parts[0] == "finance_report" and len(parts) >= 3 and "." in parts[2]:
+            services.add(f"finance_report/{parts[2].split('.', 1)[1]}")
+        elif parts[0] == "bootstrap" and len(parts) >= 2 and "." in parts[1]:
+            services.add(f"bootstrap/{parts[1].split('.', 1)[1].replace('_', '-')}")
+    return services
 
 
 def _log_fanout_decision(changed_files: list[str], services: set[str]) -> None:
     """Log WHY each service was selected and which changed files fanned out to
     nothing, so a no-op deploy is debuggable (correctly-skipped vs under-deployed).
     """
-    from libs.deploy_dependencies import explain_fanout
+    try:
+        from libs.deploy_dependencies import explain_fanout
 
-    decision = explain_fanout(changed_files)
+        decision = explain_fanout(changed_files)
+    except Exception as exc:  # logging is best-effort; never fail the sync
+        logger.warning("fan-out explain unavailable (%s)", exc)
+        return
     logger.info(
         "Fan-out: %d changed file(s) -> %d service(s): %s",
         len(changed_files),
