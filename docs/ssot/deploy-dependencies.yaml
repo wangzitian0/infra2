@@ -10,8 +10,10 @@
 #     consumers — they reconnect at runtime. Do not list them.
 #   - Only declare a dependency the service literally embeds (build context,
 #     a copied contract file, a pinned config).
-#   - libs/ and tools/ are deploy tooling — no service runtime-depends on them,
-#     so they fan out to nothing (the iac-runner re-checks-out new code itself).
+#   - libs/ and tools/ are deploy tooling — no service RUNTIME-depends on them,
+#     so by default they fan out to nothing (the iac-runner re-checks-out new
+#     code itself). The exception is a service that COPIES them into its image at
+#     BUILD time: that service bakes the code in and MUST be declared below.
 #
 # Format:
 #   services:
@@ -21,8 +23,12 @@
 #
 # Globs are fnmatch-style against repo-relative changed-file paths.
 version: 1
-services: {}
-  # Example (uncomment + adapt when a real shared dependency exists):
-  # platform/openpanel:
-  #   depends_on:
-  #     - common/contracts/analytics.py
+services:
+  # platform/alerting's Dockerfile does `COPY libs /app/libs` and
+  # `COPY tools /app/tools` with build context = repo root, so it bakes both
+  # trees into its image. A change to either must redeploy it; without this
+  # entry alerting would silently run stale tooling.
+  platform/alerting:
+    depends_on:
+      - libs/**
+      - tools/**

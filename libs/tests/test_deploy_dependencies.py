@@ -7,6 +7,7 @@ must flag non-allowlisted Dokploy-native triggers.
 
 from libs.deploy_dependencies import (
     autodeploy_violations,
+    load_dependency_manifest,
     match_changed_services,
     service_key_from_path,
 )
@@ -68,6 +69,22 @@ def test_declared_dependency_glob():
         ["common/clickhouse/users.xml"], manifest=manifest
     ) == {"platform/signoz"}
     assert match_changed_services(["common/clickhouse/readme.md"], manifest=manifest) == set()
+
+
+def test_shipped_manifest_fans_libs_and_tools_to_alerting():
+    # platform/alerting's Dockerfile bakes libs/ and tools/ into its image, so a
+    # change to either MUST redeploy it. This guards against the manifest being
+    # emptied back to a no-op (which would let alerting run stale tooling).
+    manifest = load_dependency_manifest()
+    assert "platform/alerting" in match_changed_services(["libs/deployer.py"], manifest=manifest)
+    assert "platform/alerting" in match_changed_services(
+        ["tools/dokploy_env.py"], manifest=manifest
+    )
+    # ...but a libs/ change still does NOT fan out to a service that does not
+    # bake it in.
+    assert "platform/openpanel" not in match_changed_services(
+        ["libs/deployer.py"], manifest=manifest
+    )
 
 
 def test_autodeploy_violations():
