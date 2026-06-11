@@ -814,7 +814,30 @@ class Deployer:
 
         # Compute local hash
         local_hash = cls.compute_local_config_hash(c, env_vars_dict)
-        remote_hash = cls.get_remote_config_hash()
+
+        # Read the remote (deployed) hash. FAIL CLOSED: reading it hits the
+        # Dokploy API, which can error/time out exactly when the host is under
+        # load. Treating that failure as "no remote config -> redeploy" forms a
+        # positive feedback loop (more jam -> more API errors -> more forced
+        # redeploys -> more jam). When the remote state is unreadable, skip and
+        # alert instead of deploying. (`--force` still proceeds deliberately.)
+        try:
+            remote_hash = cls.get_remote_config_hash()
+        except Exception as exc:  # noqa: BLE001 - any lookup failure must fail closed
+            if not force:
+                warning(
+                    f"{cls.service}: remote config hash unreadable ({exc}); "
+                    "skipping deploy (fail-closed) to avoid load-amplifying redeploys"
+                )
+                return {
+                    "action": "skipped",
+                    "details": f"Remote config unreadable; fail-closed: {exc}",
+                }
+            warning(
+                f"{cls.service}: remote config unreadable ({exc}); "
+                "proceeding because --force was requested"
+            )
+            remote_hash = None
 
         info(f"Local config hash: {local_hash}")
         info(f"Remote config hash: {remote_hash or 'not found'}")
