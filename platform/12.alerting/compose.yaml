@@ -163,6 +163,38 @@ services:
     labels:
       - "traefik.enable=false"
 
+  # Deploy-queue guard sidecar: observe deploys stuck `running` past the ceiling
+  # via Dokploy's API and alert; opt-in remediation kills them through Dokploy's
+  # own compose.killBuild/cancelDeployment/cleanQueues (never raw Redis).
+  # Remediation is OFF by default — set DEPLOY_GUARD_REMEDIATE=1 to arm it.
+  deploy-queue-guard:
+    image: platform-alerting-feishu-bridge:${IAC_CONFIG_HASH:-latest}
+    container_name: platform-alerting-deploy-guard${ENV_SUFFIX}
+    restart: unless-stopped
+    depends_on:
+      - feishu-alert-bridge
+    command: ["python", "/app/tools/deploy_queue_guard.py", "--loop"]
+    environment:
+      DOKPLOY_URL: ${DOKPLOY_URL:-http://dokploy:3000/api}
+      ALERT_BRIDGE_URL: http://platform-alerting${ENV_SUFFIX}:8080/signoz/webhook
+      ALERTING_ENV_FILE: /secrets/.env
+      DEPLOY_GUARD_CEILING_SECONDS: ${DEPLOY_GUARD_CEILING_SECONDS:-1800}
+      DEPLOY_GUARD_INTERVAL_SECONDS: ${DEPLOY_GUARD_INTERVAL_SECONDS:-60}
+      DEPLOY_GUARD_REMEDIATE: ${DEPLOY_GUARD_REMEDIATE:-0}
+      DEPLOY_GUARD_GRACE_SECONDS: ${DEPLOY_GUARD_GRACE_SECONDS:-20}
+      DEPLOY_GUARD_RENOTIFY_SECONDS: ${DEPLOY_GUARD_RENOTIFY_SECONDS:-1800}
+    volumes:
+      - secrets:/secrets:ro
+    networks:
+      - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    labels:
+      - "traefik.enable=false"
+
 volumes:
   secrets:
     driver_opts:

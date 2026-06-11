@@ -136,14 +136,16 @@ def version_check(c):
 
 @task(name="install-deploy-watchdog")
 def install_deploy_watchdog(c):
-    """Install the deploy-queue watchdog (clears stalled BullMQ deploy jobs).
+    """Install the deploy-queue watchdog (observe-only stalled-job detector).
 
     The Dokploy "deployments" queue is single-concurrency FIFO with no execution
-    timeout; an orphaned/stalled job (expired lock) blocks ALL deploys until
-    cleared by hand. This installs the watchdog script to /usr/local/sbin and a
-    per-minute root cron that clears such jobs. Idempotent.
+    timeout; an orphaned/stalled job (expired lock) blocks ALL deploys. This
+    installs the watchdog script to /usr/local/sbin and a per-minute root cron
+    that DETECTS and logs such jobs. It does not mutate the queue — remediation
+    is owned by the deploy-queue-guard sidecar (platform/12.alerting), which acts
+    through Dokploy's own API. Idempotent.
     """
-    header("Deploy-queue watchdog", "Installing stalled-job guard")
+    header("Deploy-queue watchdog", "Installing observe-only stalled-job detector")
 
     e = get_env()
     vps_host = e.get("VPS_HOST")
