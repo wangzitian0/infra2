@@ -54,9 +54,18 @@ class VaultService:
     app_secret_mount_path: str = "/secrets/.env"
     max_rendered_secret_age_seconds: int = 900
     min_token_ttl_hours: int = 48
+    # "token" = static VAULT_APP_TOKEN; "approle" = VAULT_ROLE_ID + VAULT_SECRET_ID.
+    auth_method: str = "token"
 
     def vault_path(self, env: str) -> str:
         return self.vault_path_template.format(env=env)
+
+    @property
+    def auth_env_keys(self) -> tuple[str, ...]:
+        """Env keys the vault-agent must carry for this service's auth method."""
+        if self.auth_method == "approle":
+            return ("VAULT_ROLE_ID", "VAULT_SECRET_ID")
+        return (self.vault_token_env_key,)
 
 
 @dataclass

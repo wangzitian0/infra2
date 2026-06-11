@@ -124,6 +124,10 @@ services:
   - id: finance_report/app
     project: finance_report
     dokploy_service: app
+    # Pilot of the AppRole auth migration (#257/#259): the vault-agent
+    # authenticates with VAULT_ROLE_ID + VAULT_SECRET_ID, not a static
+    # VAULT_APP_TOKEN.
+    auth_method: approle
     compose_path: finance_report/finance_report/10.app/compose.yaml
     vault_agent_config_path: finance_report/finance_report/10.app/vault-agent.hcl
     secret_template_path: finance_report/finance_report/10.app/secrets.ctmpl
