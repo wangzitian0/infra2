@@ -10,6 +10,44 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_make_tasks_sync_surfaces_failed_action_as_nonzero_exit() -> None:
+    """A 'failed' action must raise (non-zero exit) so the iac-runner sees a real
+    failure instead of a green '✅ sync completed' — the silent-deploy root cause."""
+    from invoke.exceptions import Exit
+    from libs.deployer import Deployer, make_tasks
+
+    class FailingDeployer(Deployer):
+        service = "demo"
+
+        @classmethod
+        def sync(cls, c, force=False):
+            return {"action": "failed", "details": "1Password to Vault sync failed"}
+
+    tasks = make_tasks(FailingDeployer, MagicMock())
+    with pytest.raises(Exit):
+        tasks["sync"].body(MagicMock(), force=False)
+
+
+def test_make_tasks_sync_keeps_skipped_action_as_success() -> None:
+    """'skipped' — including the deliberate fail-closed skip — stays a success
+    (no raise), preserving the load-shedding safety net unchanged."""
+    from libs.deployer import Deployer, make_tasks
+
+    class SkippingDeployer(Deployer):
+        service = "demo"
+
+        @classmethod
+        def sync(cls, c, force=False):
+            return {
+                "action": "skipped",
+                "details": "Remote config unreadable; fail-closed",
+            }
+
+    tasks = make_tasks(SkippingDeployer, MagicMock())
+    result = tasks["sync"].body(MagicMock())
+    assert result["action"] == "skipped"
+
+
 class FakeSecrets:
     def __init__(self, values=None):
         self.values = dict(values or {})
