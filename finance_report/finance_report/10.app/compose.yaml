@@ -170,6 +170,15 @@ services:
     environment:
       NEXT_PUBLIC_API_URL: https://report${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}/api
       NEXT_PUBLIC_APP_URL: https://report${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
+      # OpenPanel PV tracking (model B: one project per env). The per-env client id
+      # and environment name are injected by deploy.py as plain runtime env, read
+      # server-side at request time (NOT build-time NEXT_PUBLIC, so they survive
+      # the promote-not-rebuild shared image). Empty client id => a complete no-op.
+      OPENPANEL_CLIENT_ID: ${OPENPANEL_CLIENT_ID:-}
+      # Single (prod-only) OpenPanel instance — no env suffix; envs are separated
+      # by project/client id (model B), not by OpenPanel instance.
+      OPENPANEL_API_URL: https://openpanel.${INTERNAL_DOMAIN}/api
+      OPENPANEL_ENVIRONMENT: ${OPENPANEL_ENVIRONMENT:-}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:3000" ]
       start_period: 30s
