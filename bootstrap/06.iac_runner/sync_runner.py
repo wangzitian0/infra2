@@ -143,6 +143,21 @@ def diagnose_failure(stderr: str, stdout: str = "") -> dict[str, str]:
             "next_action": "Check the IaC Runner Vault policy and target env secret path.",
         }
 
+    if "Service Account" in combined or (
+        "1Password" in combined and "sync failed" in combined
+    ):
+        return {
+            "error_kind": "onepassword_auth_failed",
+            "summary": _first_matching_line(
+                combined, ("Service Account", "1Password to Vault sync failed")
+            ),
+            "next_action": (
+                "OP_SERVICE_ACCOUNT_TOKEN is invalid (e.g. the 1Password service "
+                "account was deleted). Recreate the service account, update the "
+                "iac-runner's OP_SERVICE_ACCOUNT_TOKEN secret, and redeploy it."
+            ),
+        }
+
     if "Timeout after" in combined:
         return {
             "error_kind": "invoke_timeout",

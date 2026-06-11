@@ -1020,8 +1020,23 @@ def make_tasks(deployer_cls: type[Deployer], shared_tasks: Any) -> dict:
 
     @task
     def sync(c, force=False):
-        """Sync IaC state - deploy only if config changed"""
-        return deployer_cls.sync(c, force=force)
+        """Sync IaC state - deploy only if config changed.
+
+        A FAILED action exits non-zero so the caller (the iac-runner) sees a real
+        failure instead of a green "✅ sync completed". A 'skipped' action — incl.
+        the deliberate fail-closed skip when the remote hash is unreadable — stays
+        a success (exit 0): that safety net is preserved unchanged.
+        """
+        result = deployer_cls.sync(c, force=force)
+        if isinstance(result, dict) and result.get("action") == "failed":
+            from invoke.exceptions import Exit
+
+            raise Exit(
+                f"{deployer_cls.service} sync failed: "
+                f"{result.get('details', 'unknown')}",
+                code=1,
+            )
+        return result
 
     return {
         "status": status,

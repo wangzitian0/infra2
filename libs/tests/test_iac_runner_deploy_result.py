@@ -149,6 +149,28 @@ def test_sync_result_classifies_missing_python_dependency(monkeypatch) -> None:
     }
 
 
+def test_sync_result_classifies_onepassword_service_account_deleted(
+    monkeypatch,
+) -> None:
+    """A deleted 1Password service account (op 403) gets an actionable diagnostic
+    instead of a generic failure — the silent-deploy root cause we hit."""
+    sync_runner = _load_module(
+        "sync_runner_op_auth_under_test",
+        IAC_RUNNER / "sync_runner.py",
+        monkeypatch,
+    )
+
+    diagnostic = sync_runner.diagnose_failure(
+        "[ERROR] (403) Forbidden (Service Account Deleted): "
+        "The Service Account used in this integration has been deleted.\n"
+        "alerting sync failed: 1Password to Vault sync failed"
+    )
+
+    assert diagnostic["error_kind"] == "onepassword_auth_failed"
+    assert "Service Account" in diagnostic["summary"]
+    assert "OP_SERVICE_ACCOUNT_TOKEN" in diagnostic["next_action"]
+
+
 def test_iac_runner_policy_can_repair_service_runtime_secrets() -> None:
     """Infra-011.6: deploy sync can create/update missing runtime secret fields."""
     policy = IAC_RUNNER_VAULT_POLICY.read_text(encoding="utf-8")
@@ -932,14 +954,23 @@ def test_deploy_cache_reuses_only_when_requested_services_match(monkeypatch) -> 
             )
         ],
     )
-    response_postgres = webhook_server._completed_response("staging", DEPLOY_SHA, "ci", cached_postgres)
+    response_postgres = webhook_server._completed_response(
+        "staging", DEPLOY_SHA, "ci", cached_postgres
+    )
     webhook_server._recent_deploys[key] = (time.monotonic(), response_postgres)
 
     fake_flask.request.headers = _signed_headers(monkeypatch)
     fake_flask.request.data = b""
-    fake_flask.request.json = {"env": "staging", "ref": DEPLOY_SHA, "wait": True, "triggered_by": "ci", "services": ["platform/redis"]}
+    fake_flask.request.json = {
+        "env": "staging",
+        "ref": DEPLOY_SHA,
+        "wait": True,
+        "triggered_by": "ci",
+        "services": ["platform/redis"],
+    }
 
     started = []
+
     def fake_sync_services_by_version(env, ref, triggered_by, services):
         started.append((env, ref, services))
         return sync_runner.SyncResult(
@@ -955,7 +986,9 @@ def test_deploy_cache_reuses_only_when_requested_services_match(monkeypatch) -> 
             ],
         )
 
-    monkeypatch.setattr(sync_runner, "sync_services_by_version", fake_sync_services_by_version)
+    monkeypatch.setattr(
+        sync_runner, "sync_services_by_version", fake_sync_services_by_version
+    )
 
     body, status_code = webhook_server.version_deploy()
     assert "cached" not in body
@@ -968,10 +1001,15 @@ def test_deploy_cache_reuses_only_when_requested_services_match(monkeypatch) -> 
 
     fake_flask.request.headers = _signed_headers(monkeypatch)
     fake_flask.request.data = b""
-    fake_flask.request.json = {"env": "staging", "ref": DEPLOY_SHA, "wait": True, "triggered_by": "ci", "services": ["platform/postgres"]}
+    fake_flask.request.json = {
+        "env": "staging",
+        "ref": DEPLOY_SHA,
+        "wait": True,
+        "triggered_by": "ci",
+        "services": ["platform/postgres"],
+    }
 
     started.clear()
     body2, status_code2 = webhook_server.version_deploy()
     assert body2.get("cached") is True
     assert not started  # No new deployment triggered
-
