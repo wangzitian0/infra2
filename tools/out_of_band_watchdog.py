@@ -36,7 +36,7 @@ DEFAULT_WORKER_STATUS_URL = (
 DEFAULT_SSH_TARGETS = """\
 infra2-ssh|echo infra2-ssh-ok|infra2-ssh-ok
 infra2-docker|docker info >/dev/null && echo docker-ok|docker-ok
-infra2-docker-health|sh -lc 'bad="$(docker ps --filter health=unhealthy --format "{{.Names}}"; docker ps --filter health=starting --format "{{.Names}}"; docker ps --filter status=restarting --format "{{.Names}}")"; if [ -z "$bad" ]; then echo docker-health-ok; else seen=""; for container in $bad; do case " $seen " in *" $container "*) continue;; esac; seen="$seen $container"; docker inspect "$container" --format "name={{.Name}} status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} image={{.Config.Image}}"; done; exit 1; fi'|docker-health-ok
+infra2-docker-health|sh -lc 'bad="$(docker ps --filter health=unhealthy --format "{{.Names}}"; docker ps --filter health=starting --format "{{.Names}}"; docker ps --filter status=restarting --format "{{.Names}}"; docker ps -a --filter status=created --format "{{.Names}}"; docker ps -a --filter status=exited --format "{{.Names}}")"; seen=""; flagged=""; for container in $bad; do case " $seen " in *" $container "*) continue;; esac; seen="$seen $container"; line="$(docker inspect "$container" --format "name={{.Name}} status={{.State.Status}} exit_code={{.State.ExitCode}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} image={{.Config.Image}}")"; status="$(docker inspect "$container" --format "{{.State.Status}}")"; code="$(docker inspect "$container" --format "{{.State.ExitCode}}")"; if [ "$status" = "exited" ] && [ "$code" = "0" ]; then continue; fi; flagged="$flagged\\n$line"; done; if [ -z "$flagged" ]; then echo docker-health-ok; else printf "%b" "$flagged"; echo; exit 1; fi'|docker-health-ok
 infra2-alert-bridge|docker exec platform-alerting python -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8080/health", timeout=3).read(); print("healthy")'|healthy
 """
 
@@ -70,6 +70,7 @@ class CheckResult:
     detail: str
     failure_domain: str = ""
     attempt_count: int = 1
+    severity: str = "P1"
 
 
 def parse_http_targets(raw: str) -> list[HttpTarget]:
@@ -541,27 +542,133 @@ def run_dokploy_route_canary_check(
     ]
 
 
+def run_dokploy_status_check(
+    env: Mapping[str, str],
+    *,
+    client_factory=get_dokploy,
+) -> list[CheckResult]:
+    """Consume Dokploy's authoritative per-compose/app status as an alert source.
+
+    A missing DOKPLOY_API_KEY is already surfaced by the route-canary check, so
+    skip silently here to avoid double-flagging. Any compose/application whose
+    status is exactly ``error`` (case-insensitive) is reported as a failure;
+    ``idle``/``done``/``running`` (and anything else) are not alerts.
+    """
+    if not env.get("DOKPLOY_API_KEY", "").strip():
+        return []
+
+    host = env.get("DOKPLOY_STATUS_HOST", "").strip() or "cloud.zitian.party"
+    try:
+        projects = client_factory(host=host).list_projects()
+        results: list[CheckResult] = []
+        for project in projects or []:
+            project_name = project.get("name", "unknown")
+            for environment in project.get("environments", []) or []:
+                env_name = environment.get("name", "unknown")
+                for compose in environment.get("compose", []) or []:
+                    results.extend(
+                        _dokploy_status_failure(
+                            project_name,
+                            env_name,
+                            compose.get("name", "unknown"),
+                            compose.get("composeStatus"),
+                            "composeStatus",
+                        )
+                    )
+                for application in environment.get("applications", []) or []:
+                    results.extend(
+                        _dokploy_status_failure(
+                            project_name,
+                            env_name,
+                            application.get("name", "unknown"),
+                            application.get("applicationStatus"),
+                            "applicationStatus",
+                        )
+                    )
+    except Exception as exc:  # noqa: BLE001 - watchdog must turn errors into alerts.
+        return [
+            CheckResult(
+                "infra2-dokploy-status",
+                False,
+                f"dokploy status query raised {type(exc).__name__}: "
+                f"{_one_line(str(exc))}",
+                "dokploy-control-plane",
+            )
+        ]
+    return results
+
+
+def _dokploy_status_failure(
+    project_name: str,
+    env_name: str,
+    unit_name: str,
+    status: object,
+    status_field: str,
+) -> list[CheckResult]:
+    if not isinstance(status, str) or status.strip().lower() != "error":
+        return []
+    return [
+        CheckResult(
+            f"dokploy-status:{project_name}/{env_name}/{unit_name}",
+            False,
+            f"{status_field}=error",
+            "dokploy-deploy-status",
+        )
+    ]
+
+
+def _severity_for(name: str, failure_domain: str) -> str:
+    """Map a failure to a P0/P1/P2 severity ladder.
+
+    P0 — host/alerting itself at risk; P1 — prod or control-plane degraded;
+    P2 — non-prod / single-container diagnostics.
+    """
+    if failure_domain in {
+        "host-reachability",
+        "docker-runtime",
+        "alert-bridge",
+        "configuration",
+    }:
+        return "P0"
+    if failure_domain in {"cloudflare-worker-health", "dokploy-control-plane"}:
+        return "P1"
+    if failure_domain in {"dokploy-deploy-status", "public-route"}:
+        lowered = name.lower()
+        if "staging" in lowered or "-pr-" in lowered or "preview" in lowered:
+            return "P2"
+        return "P1"
+    return "P2"
+
+
+_SEVERITY_ORDER = {"P0": 0, "P1": 1, "P2": 2}
+
+
 def format_failure_message(results: list[CheckResult], *, run_url: str) -> str:
     """Build a Feishu message for failed out-of-band checks."""
+    failures = [result for result in results if not result.ok]
+    highest = min(
+        (result.severity for result in failures),
+        key=lambda severity: _SEVERITY_ORDER.get(severity, len(_SEVERITY_ORDER)),
+        default="P1",
+    )
     lines = [
         "[OUT-OF-BAND] Infra2 watchdog failed",
-        "Severity: P0",
+        f"Severity: {highest}",
         "Scope: host reachability / alert bridge availability",
         "Route: GitHub Actions -> Feishu direct",
     ]
     if run_url:
         lines.append(f"Run: {run_url}")
     lines.append("Failures:")
-    for result in results:
-        if not result.ok:
-            domain = f"[{result.failure_domain}] " if result.failure_domain else ""
-            lines.append(f"- {domain}{result.name}: {_redact(result.detail)}")
-            lines.append(
-                f"  Action: {_suggested_action_for_failure(result.name, result.failure_domain)}"
-            )
-            lines.append(
-                f"  Runbook: {_runbook_url_for_failure(result.failure_domain)}"
-            )
+    for result in failures:
+        domain = f"[{result.failure_domain}] " if result.failure_domain else ""
+        lines.append(
+            f"- [{result.severity}] {domain}{result.name}: {_redact(result.detail)}"
+        )
+        lines.append(
+            f"  Action: {_suggested_action_for_failure(result.name, result.failure_domain)}"
+        )
+        lines.append(f"  Runbook: {_runbook_url_for_failure(result.failure_domain)}")
     return "\n".join(lines)
 
 
@@ -605,7 +712,19 @@ def main(env: Mapping[str, str] | None = None) -> int:
         )
     )
     results.extend(run_dokploy_route_canary_check(current_env, ssh_config=ssh_config))
+    results.extend(run_dokploy_status_check(current_env))
     results.extend(run_ssh_checks(ssh_config, ssh_targets))
+    results = [
+        CheckResult(
+            result.name,
+            result.ok,
+            result.detail,
+            result.failure_domain,
+            attempt_count=result.attempt_count,
+            severity=_severity_for(result.name, result.failure_domain),
+        )
+        for result in results
+    ]
     for result in results:
         _emit_structured_log(
             {
