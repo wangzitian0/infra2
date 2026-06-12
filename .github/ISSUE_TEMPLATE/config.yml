@@ -1,0 +1,6 @@
+# Four issue types tailored to infra2 (infrastructure / deploy pipeline / platform):
+#   Issue    — an infra defect (not a live outage)
+#   Task     — committed infra work (deploy-path changes = one PR each)
+#   Idea     — a platform/pipeline proposal (check it's not over-engineering)
+#   Incident — a prod/staging failure (root cause + detection gap + follow-ups)
+blank_issues_enabled: false

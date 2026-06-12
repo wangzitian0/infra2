@@ -1,0 +1,86 @@
+name: "Task — infra work"
+description: "A scoped infrastructure change with acceptance criteria."
+title: "[task] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For **committed infra work**. Anchor to an `Infra-0xx` track or parent issue,
+        update the owning SSOT (`docs/ssot/`), and frame it **MECE**.
+        ⚠️ **Deploy-path rule**: changes to `deployer.py` / `sync_runner.py` / the
+        deploy flow MUST be **one PR each, deployed one at a time** — a bug there can
+        break the ability to deploy anything (including the revert), and batching
+        makes "which change broke the deploy?" unanswerable.
+  - type: textarea
+    id: goal
+    attributes:
+      label: "Goal — what & why"
+      placeholder: |
+        What:
+        Why (the outcome / value):
+    validations:
+      required: true
+  - type: input
+    id: anchor
+    attributes:
+      label: "Parent track / tracking issue"
+      placeholder: "Infra-0xx · or #<issue>"
+    validations:
+      required: true
+  - type: dropdown
+    id: deploy_path
+    attributes:
+      label: "Is this a deploy-path change?"
+      description: "Touches deployer.py / sync_runner.py / Dokploy trigger / Vault provisioning?"
+      options:
+        - "No — config / docs / a service compose / non-deploy code"
+        - "Yes — deploy-path: must be its own PR, deployed alone, warn-before-fail"
+    validations:
+      required: true
+  - type: textarea
+    id: ac
+    attributes:
+      label: "Acceptance criteria (testable)"
+      description: "Concrete pass/fail checks. Register AC IDs in the infra registry where applicable."
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: breakdown
+    attributes:
+      label: "MECE breakdown · out-of-scope · dependencies · SSOT to update"
+      placeholder: |
+        Slices (mutually exclusive, collectively exhaustive):
+        - ...
+        Out of scope:
+        - ...
+        Depends on:
+        - ...
+        SSOT doc(s) to update: docs/ssot/ops.pipeline.md / ops.standards.md / ...
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: "Priority"
+      options:
+        - "critical — blocks deploys / prod / data-correctness / security"
+        - "high — blocks a core path or near-term milestone"
+        - "medium — important but not blocking immediate delivery"
+        - "low — cleanup / polish / opportunistic"
+    validations:
+      required: true
+  - type: textarea
+    id: dod
+    attributes:
+      label: "Definition of done"
+      value: |
+        - [ ] Tests / coverage updated; failing-first where applicable
+        - [ ] Owning SSOT doc updated
+        - [ ] If deploy-path: deployed alone and verified live (reconcile drift first)
+        - [ ] CI-passing PR is the deliverable; reviewed and merged
+    validations:
+      required: false
