@@ -172,6 +172,37 @@ Scheduled on the host via crontab:
 > install `rclone` + an `r2:` remote on the host, then set `BACKUP_REMOTE=r2:infra2`
 > in the cron entries. The off-host manifest is then verified with SOP-004.
 
+### SOP-007: 服务因 vault-agent 缺凭证崩溃 (re-provision AppRole)
+
+- **触发条件**: 某服务的 vault-agent 反复 `Restarting`,日志 `VAULT_ROLE_ID and
+  VAULT_SECRET_ID are required`(旧 token_file 服务则是 `VAULT_APP_TOKEN is
+  required`);它的 app 容器停在 `created`/`unhealthy`,公网路由 404。最常见于:
+  服务被 recreate(一次部署 / AppRole 迁移落地)后,Dokploy 项目 env 里少了这两个 key。
+- **先确认不是应用的锅**: backend 没启动 → 迁移没跑 → DB/ODS 安全。证据:该服务
+  `…/10.app/.env`(或对应目录)缺 `VAULT_ROLE_ID`/`VAULT_SECRET_ID`;iac-runner
+  sync 日志出现 `vault_permission_denied`。
+- **恢复**(在 iac-runner 里跑——它已带 vault CLI(#289)且能从 1Password 取 root token):
+    ```bash
+    ssh root@<VPS_HOST>
+    docker exec iac-runner sh -c '
+      set -a; . /secrets/.env 2>/dev/null; set +a
+      export VAULT_ROOT_TOKEN=$(op read "op://Infra2/<vault-root-token-item>/Token")
+      cd /workspace/infra2
+      BOOT="import platform, runpy, sys; sys.path.insert(0, \".\"); runpy.run_module(\"invoke\", run_name=\"__main__\")"
+      python3 -P -c "$BOOT" vault.setup-approle --project <project> --service <service> --deploy
+    '
+    ```
+  `setup-approle --deploy` 会:幂等启用 approle → 建/取 role + 签发 secret-id → 写回
+  Dokploy 项目 env(#294 的 `RUNTIME_ENV_KEYS_TO_PRESERVE` 保证之后重部署不再抹掉)→
+  触发重部署。**全程不要 echo/打印 token。**
+- **兜底**(Dokploy 重部署没产生新 deployment record / 高负载): 直接把 role-id +
+  fresh secret-id 写进该服务 `.env`,`docker compose -p <proj> -f <compose> up -d`
+  重建(creds `secret_id_ttl=0` 不过期)。
+- **验证**: vault-agent `healthy` → app 容器起 → `/api/health` 200 → 迁移落地。
+- **关联**: 根因 #290(provisioning 链脆弱);creds 持久化 #294;vault CLI 入镜像
+  #289;policy 缺口 #287。**收尾目标(高优)**: 把这条 playbook 自动化成不依赖人肉
+  root token 的可重放 provisioning,见 #290。
+
 
 ---
 
@@ -183,6 +214,7 @@ Scheduled on the host via crontab:
 | **Backup archive + checksum runner** | `tools/backup_runner.py` | ✅ Implemented |
 | **Backup freshness/checksum manifest** | `tools/backup_verification.py` | ✅ Implemented |
 | **Vault Unseal 流程** | `vault status` | ✅ Manual |
+| **vault-agent 凭证 re-provision (SOP-007)** | `vault.setup-approle --deploy` | ✅ Manual |
 
 ---
 
