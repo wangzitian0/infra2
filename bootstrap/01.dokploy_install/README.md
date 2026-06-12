@@ -9,9 +9,9 @@
 ssh root@<VPS_IP>
 
 # 2. 执行安装脚本（指定版本）
-# ⚠️ CRITICAL: v0.26.2 有严重的部署不可用问题
-# 推荐使用 v0.25.11
-curl -sSL https://dokploy.com/install.sh | DOKPLOY_VERSION=v0.25.11 sh
+# 推荐使用 v0.29.8（修复 v0.25.11 的预览容器泄露 + dokploy-server schedule 执行；
+# v0.26.x 曾有部署问题，v0.29.8 已验证可用）
+curl -sSL https://dokploy.com/install.sh | DOKPLOY_VERSION=v0.29.8 sh
 
 # 如果需要安装最新版本（风险自负）
 # curl -sSL https://dokploy.com/install.sh | sh

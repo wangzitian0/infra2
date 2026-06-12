@@ -48,10 +48,6 @@ services:
     data_path: /data/platform/portal
     method: config_archive
     restore_command: restore portal config.yml.
-  - service_id: platform/activepieces
-    data_path: /data/platform/activepieces
-    method: filesystem_archive
-    restore_command: restore Activepieces persistent data while service is stopped.
   - service_id: platform/openpanel
     data_path: /data/platform/openpanel
     method: filesystem_archive
@@ -64,7 +60,3 @@ services:
     data_path: /data/finance_report/redis
     method: redis_rdb_archive
     restore_command: stop Redis, restore dump.rdb, then start Redis.
-  - service_id: finance/wealthfolio
-    data_path: /data/finance/wealthfolio
-    method: sqlite_filesystem_archive
-    restore_command: restore wealthfolio.db and restart service.

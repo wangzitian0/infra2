@@ -10,17 +10,20 @@ from libs.common import get_env
 from libs.console import header, success, error, warning, info, prompt_action, run_with_status
 
 
-DOKPLOY_VERSION = "v0.25.11"  # ⚠️ v0.26.2 has critical deployment issues
+DOKPLOY_VERSION = "v0.29.8"  # fixes v0.25.11 preview compose.delete container leak + dokploy-server schedule execution
 
 
 @task
 def install(c, version=DOKPLOY_VERSION):
     """Install Dokploy on VPS with specified version.
-    
+
     Args:
-        version: Dokploy version to install (default: v0.25.11)
-    
-    ⚠️ WARNING: v0.26.2 has known deployment failures. Use v0.25.11.
+        version: Dokploy version to install (default: v0.29.8)
+
+    ⚠️ WARNING: v0.26.x had deployment failures; v0.29.8 is verified good.
+    To UPGRADE a running host (not a fresh install) see install_dokploy.sh:
+    pre-pull the image, then scale 0 -> update --image -> scale 1 (host-mode
+    port; rolling --update-order deadlocks swarm port reservation).
     """
     header("Dokploy Installation", f"Installing Dokploy {version}")
     
@@ -37,7 +40,7 @@ def install(c, version=DOKPLOY_VERSION):
     
     if version == "v0.26.2":
         warning("⚠️  v0.26.2 has known deployment issues!")
-        warning("Consider using v0.25.11 instead")
+        warning("Consider using v0.29.8 instead")
         prompt_action("Confirm installation", [
             f"You are about to install {version}",
             "This version is known to have issues",
@@ -129,7 +132,7 @@ def version_check(c):
         info(f"Dokploy image: {image}")
         if "0.26.2" in image:
             warning("⚠️  Running v0.26.2 which has known issues")
-            warning("Consider reinstalling with v0.25.11")
+            warning("Consider reinstalling with v0.29.8")
     else:
         error("Unable to determine version", "Dokploy may not be installed")
 
@@ -190,7 +193,7 @@ def setup(c, version=DOKPLOY_VERSION):
     """Full setup: install + verify + next steps guidance.
 
     Args:
-        version: Dokploy version to install (default: v0.25.11)
+        version: Dokploy version to install (default: v0.29.8)
     """
     header("Dokploy Setup", "Complete installation workflow")
 
