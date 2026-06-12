@@ -1,0 +1,50 @@
+name: "Idea — infra proposal"
+description: "A proposal for the platform / pipeline / observability. Not yet committed work."
+title: "[idea] "
+labels: ["idea"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A **low-bar** place to capture an infra proposal. No acceptance criteria
+        required — the point is to decide whether it's worth a **Task**.
+        Infra leans toward **lean monitoring + simple deploys**; a new gate/lock/guard
+        is often over-engineering. Be honest about value vs cost.
+  - type: textarea
+    id: idea
+    attributes:
+      label: "The idea, in one or two lines"
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: "What problem / pain does it address?"
+      placeholder: "Today ... which costs us ..."
+    validations:
+      required: true
+  - type: textarea
+    id: existing
+    attributes:
+      label: "Does an existing mechanism already cover this?"
+      description: "Check before building: cloudflare watchdog, infra probes, deploy-queue guard, hash-gate, container-breakdown watch, periodic report. Could you extend one instead of adding another?"
+      placeholder: "Overlaps with ... / not covered because ..."
+    validations:
+      required: true
+  - type: textarea
+    id: roi
+    attributes:
+      label: "Value vs cost (rough ROI)"
+      description: "Why it might be worth it, the cost / risk, and — honestly — whether it could be over-engineering (a deploy-path gate, a new lock, an aggressive poller)."
+      placeholder: |
+        Value:
+        Cost / risk:
+        Over-engineering check:
+    validations:
+      required: false
+  - type: textarea
+    id: questions
+    attributes:
+      label: "Open questions / what a decision needs"
+    validations:
+      required: false

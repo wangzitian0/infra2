@@ -1,0 +1,106 @@
+name: "Incident — production / staging failure"
+description: "An outage, breakage, or drift in a running environment (Vault, Dokploy, a platform service, the deploy pipeline)."
+title: "[incident] "
+labels: ["incident", "priority: critical"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For **a failure that already happened in a running environment**. infra2 is
+        deploy-from-git + hash-gate (drift-prone), so most incidents trace to a
+        config / policy / deploy change, not the app. Capture it while fresh — the
+        highest-value fields are the **root cause (not the symptom)** and the
+        **detection gap**.
+  - type: input
+    id: summary
+    attributes:
+      label: "One-line summary — what broke, when"
+      placeholder: "prod report API 404 from <time> to <time> — vault-agent crash-looping"
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: "Severity"
+      options:
+        - "P0 — outage / data loss / security"
+        - "P1 — major degradation"
+        - "P2 — partial / single service or env"
+        - "P3 — minor / cosmetic"
+    validations:
+      required: true
+  - type: dropdown
+    id: status
+    attributes:
+      label: "Status"
+      options:
+        - "investigating"
+        - "mitigated"
+        - "resolved"
+    validations:
+      required: true
+  - type: input
+    id: blast
+    attributes:
+      label: "Affected env + services"
+      placeholder: "env: prod / staging · services: vault, dokploy, <platform service>, deploy pipeline"
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: "Impact + source-of-truth check"
+      description: "Who/what was affected and for how long — and confirm the irreplaceable state survived."
+      placeholder: |
+        Affected: ...
+        Window: <start> → <end> (duration)
+        Source-of-truth intact? Vault (unseal keys / KV), 1Password, MinIO, postgres data — yes/no + evidence
+    validations:
+      required: true
+  - type: textarea
+    id: timeline
+    attributes:
+      label: "Timeline — detection → diagnosis → mitigation → resolution"
+      placeholder: |
+        - <t> detected via cloudflare watchdog / probe / log / user report
+        - <t> diagnosed: ...
+        - <t> mitigated by ...
+        - <t> resolved
+    validations:
+      required: true
+  - type: textarea
+    id: root_cause
+    attributes:
+      label: "Root cause — the real trigger, not the symptom"
+      description: "Trace it to the change that caused it (a PR, a policy/secret change, a Dokploy/Vault action), not the visible 404 / crash-loop."
+    validations:
+      required: true
+  - type: textarea
+    id: ruled_out
+    attributes:
+      label: "What it was NOT — rule-outs"
+      description: "What you confirmed was not the cause (e.g. 'not the app code', 'migrations never ran, DB safe'). Saves the next person the dead ends."
+    validations:
+      required: false
+  - type: textarea
+    id: remediation
+    attributes:
+      label: "Immediate remediation — how it was fixed / mitigated"
+    validations:
+      required: true
+  - type: textarea
+    id: detection_gap
+    attributes:
+      label: "Detection gap — caught how, and how to catch it sooner"
+      description: "Did the watchdog / probe / log-alert catch it, or was it silent until a user noticed? What signal was missing or late?"
+    validations:
+      required: true
+  - type: textarea
+    id: followups
+    attributes:
+      label: "Follow-ups / prevention (link the issues)"
+      placeholder: |
+        - [ ] #... durable fix
+        - [ ] #... detection / alerting
+    validations:
+      required: true

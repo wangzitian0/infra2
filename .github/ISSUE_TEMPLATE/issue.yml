@@ -1,0 +1,58 @@
+name: "Issue — infra defect"
+description: "An infrastructure component is misbehaving (not a live outage — use Incident for that)."
+title: "[issue] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For **an infra defect that needs fixing** but is not a live outage (use
+        **Incident** for outages). For planned work use **Task**, for a proposal **Idea**.
+  - type: input
+    id: where
+    attributes:
+      label: "Component + environment"
+      placeholder: "component: vault-agent / dokploy / iac-runner / <platform service> / CI · env: prod / staging / local"
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: "What's wrong — observed vs expected"
+      placeholder: |
+        Observed:
+        Expected:
+        Evidence (container logs / Dokploy deploy log / Vault response / run URL):
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: "How to reproduce / where to look"
+      placeholder: |
+        1. ...
+        2. ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: "Severity"
+      options:
+        - "blocks deploys / prod / data-correctness / security"
+        - "degraded but workable"
+        - "minor / cosmetic"
+    validations:
+      required: true
+  - type: textarea
+    id: fix
+    attributes:
+      label: "Minimal fix + acceptance criteria (if known)"
+      placeholder: |
+        Minimal path:
+        Out of scope:
+        Acceptance:
+        - [ ] ...
+    validations:
+      required: false
