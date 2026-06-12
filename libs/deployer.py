@@ -320,6 +320,11 @@ class Deployer:
     chmod: str = "755"  # Override to "700" for sensitive services like PostgreSQL
     secret_key: str = "password"
     env_var_name: str = ""
+    # Set True for services that only exist in production. Observability/analytics
+    # (signoz, clickhouse, openpanel) have no prod-correctness blast radius and all
+    # environments ship their data to the single prod instance, so a staging copy
+    # is pure cost — sync() skips these on non-production envs.
+    prod_only: bool = False
 
     # Domain configuration (optional)
     subdomain: str = None  # e.g., "sso" for sso.{INTERNAL_DOMAIN}
@@ -832,6 +837,12 @@ class Deployer:
 
         # Prepare env vars (without full pre_compose side effects)
         e = cls.env()
+        if cls.prod_only and e.get("ENV", "production") != "production":
+            info(f"{cls.service} is prod-only; skipping {e.get('ENV')} sync")
+            return {
+                "action": "skipped",
+                "details": f"prod-only service; not deployed to {e.get('ENV')}",
+            }
         if missing := validate_env():
             return {"action": "failed", "details": f"Missing env: {', '.join(missing)}"}
 

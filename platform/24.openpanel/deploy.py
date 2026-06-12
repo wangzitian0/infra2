@@ -14,6 +14,8 @@ class OpenPanelDeployer(Deployer):
     service = "openpanel"
     compose_path = "platform/24.openpanel/compose.yaml"
     data_path = "/data/platform/openpanel"
+    # Analytics — single prod instance (model B), no staging copy.
+    prod_only = True
     uid = "1000"
     gid = "1000"
     secret_key = "cookie_secret"

@@ -14,6 +14,8 @@ class ClickHouseDeployer(Deployer):
     service = "clickhouse"
     compose_path = "platform/03.clickhouse/compose.yaml"
     data_path = "/data/platform/clickhouse"
+    # Backs SigNoz (observability) — single prod instance, no staging copy.
+    prod_only = True
     uid = "101"
     gid = "101"
     

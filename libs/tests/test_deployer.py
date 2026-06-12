@@ -48,6 +48,36 @@ def test_make_tasks_sync_keeps_skipped_action_as_success() -> None:
     assert result["action"] == "skipped"
 
 
+def test_sync_skips_prod_only_service_on_non_production() -> None:
+    """prod_only services (observability/analytics: signoz, clickhouse, openpanel)
+    are never deployed to non-production envs — sync() short-circuits to 'skipped'
+    before any vault/dokploy work, so a staging copy is never created."""
+    from libs.deployer import Deployer
+
+    class ObsDeployer(Deployer):
+        service = "signoz"
+        prod_only = True
+
+        @classmethod
+        def env(cls):
+            return {"ENV": "staging"}
+
+    skipped = ObsDeployer.sync(MagicMock(), force=False)
+    assert skipped["action"] == "skipped"
+    assert "prod-only" in skipped["details"]
+
+    # On production the prod-only short-circuit must NOT fire (it deploys normally;
+    # here it proceeds past the check and fails later on missing test env, proving
+    # the skip is non-production-only — not a blanket skip).
+    class ObsDeployerProd(ObsDeployer):
+        @classmethod
+        def env(cls):
+            return {"ENV": "production"}
+
+    prod = ObsDeployerProd.sync(MagicMock(), force=False)
+    assert not (prod["action"] == "skipped" and "prod-only" in prod.get("details", ""))
+
+
 class FakeSecrets:
     def __init__(self, values=None):
         self.values = dict(values or {})

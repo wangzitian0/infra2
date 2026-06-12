@@ -14,6 +14,8 @@ class SigNozDeployer(Deployer):
     service = "signoz"
     compose_path = "platform/11.signoz/compose.yaml"
     data_path = "/data/platform/signoz"
+    # Observability — single prod instance; all envs ship here. No staging copy.
+    prod_only = True
     
     # Domain configuration via Dokploy API
     subdomain = "signoz"
