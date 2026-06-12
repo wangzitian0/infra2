@@ -22,4 +22,8 @@
         <replica>replica1</replica>
         <cluster>openpanel_cluster</cluster>
     </macros>
+    <!-- Rightsize for the shared 8-core host (76 containers): cap the background
+         merge pool (default 16) so ClickHouse merges do not saturate the box.
+         Validated to start cleanly on clickhouse-server:25.10.2.65. -->
+    <background_pool_size>4</background_pool_size>
 </clickhouse>

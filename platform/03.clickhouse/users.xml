@@ -5,6 +5,9 @@
             <max_memory_usage>10000000000</max_memory_usage>
             <use_uncompressed_cache>0</use_uncompressed_cache>
             <load_balancing>random</load_balancing>
+            <!-- Rightsize: cap per-query parallelism (default auto = 8 = all
+                 cores) on the shared 8-core host. Validated on 25.5.6. -->
+            <max_threads>2</max_threads>
         </default>
     </profiles>
 
