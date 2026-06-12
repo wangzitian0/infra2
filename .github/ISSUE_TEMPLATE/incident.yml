@@ -1,7 +1,7 @@
 name: "Incident — production / staging failure"
 description: "An outage, breakage, or drift in a running environment (Vault, Dokploy, a platform service, the deploy pipeline)."
 title: "[incident] "
-labels: ["incident", "priority: critical"]
+labels: ["incident"]
 body:
   - type: markdown
     attributes:
