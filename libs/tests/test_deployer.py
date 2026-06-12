@@ -611,45 +611,6 @@ def test_minio_sync_secret_hook_repairs_root_user(monkeypatch) -> None:
     assert secrets.values["root_password"] == "existing"
 
 
-def test_activepieces_sync_secret_hook_repairs_all_runtime_fields(monkeypatch) -> None:
-    """Infra-011: sync must ensure every Activepieces secrets.ctmpl field."""
-    module = _load_deploy_module(
-        "platform/22.activepieces/deploy.py", "activepieces_deploy_test"
-    )
-    stores = {
-        "postgres": FakeSecrets({"root_password": "pg"}),
-        "redis": FakeSecrets({"password": "redis"}),
-        "activepieces": FakeSecrets({"encryption_key": "abc"}),
-    }
-
-    monkeypatch.setattr(
-        module.ActivepiecesDeployer,
-        "env",
-        classmethod(
-            lambda cls: {
-                "ENV": "staging",
-                "PROJECT": "platform",
-                "INTERNAL_DOMAIN": "zitian.party",
-                "ENV_DOMAIN_SUFFIX": "-staging",
-            }
-        ),
-    )
-    monkeypatch.setattr(
-        module,
-        "get_secrets",
-        lambda _project, service, _env: stores[service],
-    )
-
-    assert module.ActivepiecesDeployer.ensure_runtime_secrets() is True
-
-    assert stores["activepieces"].values["encryption_key"] == "abc"
-    assert stores["activepieces"].values["jwt_secret"]
-    assert (
-        stores["activepieces"].values["frontend_url"]
-        == "https://automate-staging.zitian.party"
-    )
-
-
 def test_authentik_sync_secret_hook_repairs_bootstrap_fields(monkeypatch) -> None:
     """Infra-011: sync must keep Authentik bootstrap template fields complete."""
     module = _load_deploy_module(

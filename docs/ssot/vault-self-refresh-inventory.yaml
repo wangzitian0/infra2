@@ -82,19 +82,6 @@ services:
     vault_agent_container: platform-alerting-vault-agent${ENV_SUFFIX}
     app_containers:
       - platform-alerting${ENV_SUFFIX}
-  - id: platform/activepieces
-    project: platform
-    dokploy_service: activepieces
-    # Migrated to AppRole auth (#257/#259): vault-agent uses VAULT_ROLE_ID +
-    # VAULT_SECRET_ID, not a static VAULT_APP_TOKEN.
-    auth_method: approle
-    compose_path: platform/22.activepieces/compose.yaml
-    vault_agent_config_path: platform/22.activepieces/vault-agent.hcl
-    secret_template_path: platform/22.activepieces/secrets.ctmpl
-    vault_path_template: secret/data/platform/{env}/activepieces
-    vault_agent_container: platform-activepieces-vault-agent${ENV_SUFFIX}
-    app_containers:
-      - platform-activepieces${ENV_SUFFIX}
   - id: platform/prefect
     project: platform
     dokploy_service: prefect

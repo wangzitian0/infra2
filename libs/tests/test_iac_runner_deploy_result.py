@@ -96,15 +96,15 @@ def test_sync_result_includes_actionable_failure_summary(monkeypatch) -> None:
     result = sync_runner.SyncResult(
         env="staging",
         ref="main",
-        requested_services=["platform/activepieces"],
+        requested_services=["platform/prefect"],
         results=[
             sync_runner.ServiceSyncResult(
-                service="platform/activepieces",
-                task="activepieces.sync",
+                service="platform/prefect",
+                task="prefect.sync",
                 success=False,
                 stderr=(
                     "libs.env.VaultSecrets.VaultSecretNotFoundError:\n"
-                    "❌ Secret not found: platform/staging/activepieces\n"
+                    "❌ Secret not found: platform/staging/prefect\n"
                 ),
             )
         ],
@@ -114,12 +114,12 @@ def test_sync_result_includes_actionable_failure_summary(monkeypatch) -> None:
 
     assert payload["failure_summary"] == [
         {
-            "service": "platform/activepieces",
-            "task": "activepieces.sync",
+            "service": "platform/prefect",
+            "task": "prefect.sync",
             "error_kind": "vault_secret_missing",
-            "summary": "Vault secret path is missing: platform/staging/activepieces",
+            "summary": "Vault secret path is missing: platform/staging/prefect",
             "next_action": (
-                "Create or repair secret/data/platform/staging/activepieces "
+                "Create or repair secret/data/platform/staging/prefect "
                 "before rerunning deploy."
             ),
         }
