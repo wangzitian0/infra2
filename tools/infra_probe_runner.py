@@ -82,6 +82,27 @@ def main() -> int:
         time.sleep(interval)
 
 
+def _deploy_env() -> str:
+    """Resolve the deploy environment with the same precedence the heartbeat uses
+    (the runner sets INFRA_PROBE_HEARTBEAT_ENV, not always ENV), normalized."""
+    return (
+        os.getenv("INFRA_PROBE_HEARTBEAT_ENV")
+        or os.getenv("ENV")
+        or os.getenv("DEPLOY_ENV")
+        or "production"
+    ).strip().lower()
+
+
+def _host_specs_for_env(specs: list) -> list:
+    """Host `resource` probes describe the single shared host, so only the
+    production runner should run them — otherwise the prod and staging runners
+    (co-located on that host) both alert on the same CPU/mem/disk threshold.
+    """
+    if _deploy_env() == "production":
+        return specs
+    return [spec for spec in specs if spec.kind != "resource"]
+
+
 def run_once(
     *,
     as_json: bool = False,
@@ -122,7 +143,7 @@ def run_once(
     dry_run = os.getenv("INFRA_PROBE_DRY_RUN", "0") == "1"
 
     for group in groups:
-        specs = parse_probe_specs(group.raw_specs)
+        specs = _host_specs_for_env(parse_probe_specs(group.raw_specs))
         results = run_probes(specs)
         failures = failed_results(results)
         any_failures = any_failures or bool(failures)
@@ -306,10 +327,7 @@ def _post_heartbeat(*, ok: bool, detail: str = "") -> None:
         return
 
     payload = {
-        "env": os.getenv("INFRA_PROBE_HEARTBEAT_ENV")
-        or os.getenv("ENV")
-        or os.getenv("DEPLOY_ENV")
-        or "production",
+        "env": _deploy_env(),
         "name": os.getenv("INFRA_PROBE_HEARTBEAT_NAME", "infra-probe-runner"),
         "ok": ok,
         "detail": detail or ("probe loop completed" if ok else "probe loop failed"),

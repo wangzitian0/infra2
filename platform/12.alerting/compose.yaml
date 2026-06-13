@@ -156,8 +156,20 @@ services:
         openpanel-ch-http|http|http://platform-openpanel-ch:8123/ping|200|warning|5
         openpanel-worker-http|http|http://platform-openpanel-worker:3000/healthcheck|200|warning|5
         openpanel-dashboard-http|http|http://platform-openpanel-dashboard:3000/api/healthcheck|200|warning|5
+        # Host resource backstop — out-of-band from SigNoz, so it still fires when
+        # the host is starved (the dockerd-busy-loop class of incident). `expected`
+        # is the % ceiling; reads host-global /proc + the bind-mounted host root.
+        # Runs on the PRODUCTION runner only (the host is shared) — see
+        # infra_probe_runner._host_specs_for_env.
+        host-cpu|resource|cpu|80|warning|5
+        host-mem|resource|mem|80|warning|5
+        host-disk|resource|disk:/hostfs|80|critical|5
     volumes:
       - secrets:/secrets:ro
+      # A dedicated empty host dir (Docker auto-creates it) that lives on the host
+      # root filesystem: statvfs on it reports the HOST disk usage without exposing
+      # any host files (binding `/` would expose SSH keys/configs). Read-only.
+      - /var/lib/infra2-disk-probe:/hostfs:ro
     networks:
       - dokploy-network
     logging:
