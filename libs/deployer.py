@@ -813,11 +813,15 @@ class Deployer:
         """
         from pathlib import Path
 
-        try:
-            compose_text = Path(cls.compose_path).read_text(encoding="utf-8")
-        except OSError:
-            return  # cannot read compose; do not block the deploy on a read error
-        if "VAULT_ROLE_ID" not in compose_text:
+        # Read the compose WITHOUT swallowing errors: it is a required,
+        # version-controlled artifact (already read for the config hash), so an
+        # unreadable compose is a real problem — failing closed beats skipping the
+        # preflight and re-opening the foot-gun.
+        compose_text = Path(cls.compose_path).read_text(encoding="utf-8")
+        if (
+            "VAULT_ROLE_ID" not in compose_text
+            and "VAULT_SECRET_ID" not in compose_text
+        ):
             return  # service does not use AppRole auth
 
         env = _parse_env_text(effective_env)

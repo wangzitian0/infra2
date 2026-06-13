@@ -770,3 +770,35 @@ def test_approle_preflight_fails_closed_when_creds_missing(tmp_path, monkeypatch
     except ValueError as exc:
         assert "vault.setup-approle" in str(exc)
         assert "finance_report" in str(exc)
+
+
+def test_approle_preflight_propagates_unreadable_compose(tmp_path):
+    """An unreadable compose must NOT silently skip the preflight (fail closed)."""
+    import pytest
+    from libs.deployer import Deployer
+
+    class D(Deployer):
+        service = "x"
+        compose_path = str(tmp_path / "missing.yaml")
+        data_path = "/data/x"
+
+    with pytest.raises(OSError):
+        D._assert_approle_creds_present("FOO=1")
+
+
+def test_approle_preflight_detects_secret_id_only_compose(tmp_path, monkeypatch):
+    """A compose that references only VAULT_SECRET_ID is still an AppRole service."""
+    import pytest
+    from libs.deployer import Deployer
+
+    cf = tmp_path / "compose.yaml"
+    cf.write_text("environment:\n  - VAULT_SECRET_ID=${VAULT_SECRET_ID:-}\n")
+
+    class D(Deployer):
+        service = "app"
+        compose_path = str(cf)
+        data_path = "/data/x"
+
+    monkeypatch.setattr(D, "env", classmethod(lambda cls: {"ENV": "staging"}))
+    with pytest.raises(ValueError, match="VAULT_ROLE_ID|VAULT_SECRET_ID"):
+        D._assert_approle_creds_present("")
