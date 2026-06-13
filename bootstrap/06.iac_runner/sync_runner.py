@@ -147,10 +147,15 @@ def diagnose_failure(stderr: str, stdout: str = "") -> dict[str, str]:
     ):
         return {
             "error_kind": "dokploy_auth_failed",
-            "summary": "Dokploy rejected the IaC Runner API key (likely empty/invalid DOKPLOY_API_KEY).",
+            "summary": (
+                "Dokploy deploy could not resolve a GitHub provider — either an "
+                "empty/invalid DOKPLOY_API_KEY or no GitHub provider configured."
+            ),
             "next_action": (
-                "Verify the runner's DOKPLOY_API_KEY is populated (its Dokploy compose "
-                "env can be wiped on redeploy). Restore it and redeploy the runner."
+                "Check in order: (1) the runner's DOKPLOY_API_KEY is populated — its "
+                "Dokploy compose env can be wiped on redeploy; (2) a GitHub provider "
+                "exists in Dokploy (github.githubProviders). Fix whichever is missing "
+                "and redeploy the runner."
             ),
         }
 

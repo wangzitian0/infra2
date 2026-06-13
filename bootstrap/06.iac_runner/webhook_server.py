@@ -266,7 +266,7 @@ def health():
         # wiped on redeploy, after which every deploy fails with a cryptic "No
         # GitHub provider found". Surfacing it here makes the container unhealthy
         # immediately instead of silently accepting deploys it cannot complete.
-        "dokploy_api_key": bool(os.environ.get("DOKPLOY_API_KEY")),
+        "dokploy_api_key": bool(os.environ.get("DOKPLOY_API_KEY", "").strip()),
     }
     checks.update(_dependency_checks())
 
