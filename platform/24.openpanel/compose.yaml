@@ -70,6 +70,10 @@ services:
     image: clickhouse/clickhouse-server:25.10.2.65
     container_name: platform-openpanel-ch${ENV_SUFFIX}
     restart: unless-stopped
+    # cgroup hard cap on the shared, swapless 8-core host. Sits ABOVE ClickHouse's
+    # own max_server_memory_usage (2 GiB, in clickhouse-config.xml) so CH rejects an
+    # oversized query/merge before the kernel OOM-kills the container (or a neighbor).
+    mem_limit: 2560m
     environment:
       CLICKHOUSE_SKIP_USER_SETUP: "1"
     volumes:

@@ -709,9 +709,7 @@ def test_await_effective_config_hash_times_out_when_unadvanced(monkeypatch):
     monkeypatch.setattr(deployer.time, "sleep", lambda _s: None)
     clock = iter([0.0, 999.0])  # deadline=60; next check is past it
     monkeypatch.setattr(deployer.time, "monotonic", lambda: next(clock))
-    monkeypatch.setattr(
-        D, "get_remote_config_hash", classmethod(lambda cls: "stale")
-    )
+    monkeypatch.setattr(D, "get_remote_config_hash", classmethod(lambda cls: "stale"))
 
     assert D._await_effective_config_hash("expected") == "stale"
 
@@ -802,3 +800,74 @@ def test_approle_preflight_detects_secret_id_only_compose(tmp_path, monkeypatch)
     monkeypatch.setattr(D, "env", classmethod(lambda cls: {"ENV": "staging"}))
     with pytest.raises(ValueError, match="VAULT_ROLE_ID|VAULT_SECRET_ID"):
         D._assert_approle_creds_present("")
+
+
+def test_await_effective_config_hash_tolerates_a_transient_read(monkeypatch):
+    """A single flaky Dokploy read must NOT abort an otherwise-good deploy: the poll
+    multiplies reads, so it retries past a blip and matches once the hash settles."""
+    import libs.deployer as deployer
+    from libs.deployer import Deployer
+
+    class D(Deployer):
+        service = "x"
+        compose_path = "x/compose.yaml"
+        data_path = "/data/x"
+
+    monkeypatch.setattr(deployer.time, "sleep", lambda _s: None)
+    calls = {"n": 0}
+
+    def flaky(_cls):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("compose.one 503")  # transient blip
+        return "expected"
+
+    monkeypatch.setattr(D, "get_remote_config_hash", classmethod(flaky))
+    assert D._await_effective_config_hash("expected") == "expected"
+    assert calls["n"] == 2  # blip tolerated, retried, then matched
+
+
+def test_await_effective_config_hash_raises_only_if_whole_window_failed(monkeypatch):
+    """If no clean read EVER lands in the window, surface the last error (don't
+    silently pass) — but only at the deadline, never on a single read."""
+    import libs.deployer as deployer
+    from libs.deployer import Deployer
+
+    class D(Deployer):
+        service = "x"
+        compose_path = "x/compose.yaml"
+        data_path = "/data/x"
+
+    monkeypatch.setattr(deployer.time, "sleep", lambda _s: None)
+    clock = iter([0.0, 0.0, 999.0])  # deadline=60; second check is past it
+    monkeypatch.setattr(deployer.time, "monotonic", lambda: next(clock))
+
+    def always_boom(_cls):
+        raise RuntimeError("compose.one down")
+
+    monkeypatch.setattr(D, "get_remote_config_hash", classmethod(always_boom))
+    with pytest.raises(RuntimeError, match="compose.one down"):
+        D._await_effective_config_hash("expected")
+
+
+def test_record_timeout_and_interval_honor_env_overrides(monkeypatch):
+    """Operator knobs widen BOTH the deploy-record wait and the hash poll (they used
+    to diverge: the poll ignored the env override)."""
+    from libs.deployer import Deployer
+
+    class D(Deployer):
+        service = "x"
+        compose_path = "x/compose.yaml"
+        data_path = "/data/x"
+        deployment_record_timeout_seconds = 60
+        deployment_record_interval_seconds = 3
+
+    monkeypatch.delenv("DOKPLOY_DEPLOYMENT_RECORD_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("DOKPLOY_DEPLOYMENT_RECORD_INTERVAL_SECONDS", raising=False)
+    assert D._resolve_record_timeout() == 60
+    assert D._resolve_record_interval() == 3
+
+    monkeypatch.setenv("DOKPLOY_DEPLOYMENT_RECORD_TIMEOUT_SECONDS", "240")
+    monkeypatch.setenv("DOKPLOY_DEPLOYMENT_RECORD_INTERVAL_SECONDS", "9")
+    assert D._resolve_record_timeout() == 240
+    assert D._resolve_record_interval() == 9

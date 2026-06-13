@@ -127,20 +127,28 @@ def run_once(
     the number of containers alerted on."""
     now = time.monotonic()
     breakdowns = sweep(client, log_tail)
+    # last_alerted maps container -> (last_alert_monotonic, the breakdown we alerted on)
     fresh = [
         b
         for b in breakdowns
-        if now - last_alerted.get(b.container, -renotify - 1) >= renotify
+        if now - last_alerted.get(b.container, (-renotify - 1, None))[0] >= renotify
     ]
     if fresh:
         for b in fresh:
             logger.warning("BREAKDOWN %s (%s): %s", b.container, b.state, b.reason)
-            last_alerted[b.container] = now
+            last_alerted[b.container] = (now, b)
         _post_alert(build_breakdown_alert_payload(fresh))
-    # let recovered containers re-alert immediately next time
+    # Recovered = previously-alerted containers no longer broken. Resolve them with the
+    # ORIGINAL breakdown (same state, hence same label set) so the resolved alert
+    # matches the firing instance and the page actually clears — a stub state like
+    # "recovered" forms a different label set and never resolves the original. Then
+    # forget them so they can re-alert if they break again.
     live = {b.container for b in breakdowns}
+    recovered = [rec for name, (_, rec) in last_alerted.items() if name not in live]
     for name in [n for n in last_alerted if n not in live]:
         last_alerted.pop(name, None)
+    if recovered:
+        _post_alert(build_breakdown_alert_payload(recovered, firing=False))
     return len(fresh)
 
 
@@ -150,12 +158,32 @@ def main() -> None:
     args = parser.parse_args()
 
     _load_env_file(Path(os.environ.get("ALERTING_ENV_FILE", "/secrets/.env")))
+
+    # breakdown-watch reads the WHOLE shared Docker engine (no per-env container
+    # filter), so a per-env copy double-fires on the same container and mis-attributes
+    # the env. Run it as a prod-only singleton: one watcher covers every container on
+    # the box. Non-prod copies stay alive (so the service doesn't crash-loop) but never
+    # sweep or alert.
+    env_name = os.environ.get("ENV", "production")
+    if env_name != "production":
+        logger.info(
+            "breakdown-watch is prod-only (one watcher sees the whole shared engine); "
+            "skipping sweeps on env=%s",
+            env_name,
+        )
+        if args.loop:
+            while True:
+                time.sleep(3600)
+        return
+
     sock = os.environ.get("DOCKER_SOCK", "/var/run/docker.sock")
     interval = int(os.environ.get("BREAKDOWN_INTERVAL_SECONDS", DEFAULT_INTERVAL))
     renotify = int(os.environ.get("BREAKDOWN_RENOTIFY_SECONDS", DEFAULT_RENOTIFY))
     log_tail = int(os.environ.get("BREAKDOWN_LOG_TAIL", DEFAULT_LOG_TAIL))
 
-    last_alerted: dict[str, float] = {}
+    # container -> (last_alert_monotonic, breakdown we alerted on, kept so the
+    # resolved alert can reuse the original state/labels)
+    last_alerted: dict = {}
     client = _docker_client(sock)
     while True:
         try:
