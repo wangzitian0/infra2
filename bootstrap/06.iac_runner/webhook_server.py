@@ -262,6 +262,11 @@ def health():
         "git_repo_url": bool(GIT_REPO_URL),
         "webhook_secret": bool(WEBHOOK_SECRET),
         "op_service_account_token": bool(os.environ.get("OP_SERVICE_ACCOUNT_TOKEN")),
+        # Fail closed when DOKPLOY_API_KEY is empty: its Dokploy compose env can be
+        # wiped on redeploy, after which every deploy fails with a cryptic "No
+        # GitHub provider found". Surfacing it here makes the container unhealthy
+        # immediately instead of silently accepting deploys it cannot complete.
+        "dokploy_api_key": bool(os.environ.get("DOKPLOY_API_KEY")),
     }
     checks.update(_dependency_checks())
 

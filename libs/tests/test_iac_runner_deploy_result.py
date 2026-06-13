@@ -171,6 +171,28 @@ def test_sync_result_classifies_onepassword_service_account_deleted(
     assert "OP_SERVICE_ACCOUNT_TOKEN" in diagnostic["next_action"]
 
 
+def test_sync_result_classifies_dokploy_auth_over_vault_red_herring(
+    monkeypatch,
+) -> None:
+    """A wiped DOKPLOY_API_KEY surfaces as 'No GitHub provider found'. Even when
+    unrelated 'permission denied'/'vault' strings share the output, it must route
+    to dokploy_auth_failed — not be mis-classified as vault_permission_denied
+    (the red herring that masked the empty key for a full investigation)."""
+    sync_runner = _load_module(
+        "sync_runner_dokploy_auth_under_test",
+        IAC_RUNNER / "sync_runner.py",
+        monkeypatch,
+    )
+
+    diagnostic = sync_runner.diagnose_failure(
+        "WARNING: vault token lookup: permission denied on capabilities-self\n"
+        "alerting sync failed: No GitHub provider found"
+    )
+
+    assert diagnostic["error_kind"] == "dokploy_auth_failed"
+    assert "DOKPLOY_API_KEY" in diagnostic["next_action"]
+
+
 def test_iac_runner_policy_can_repair_service_runtime_secrets() -> None:
     """Infra-011.6: deploy sync can create/update missing runtime secret fields."""
     policy = IAC_RUNNER_VAULT_POLICY.read_text(encoding="utf-8")

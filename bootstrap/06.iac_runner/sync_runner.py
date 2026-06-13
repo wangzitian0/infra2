@@ -133,7 +133,28 @@ def diagnose_failure(stderr: str, stdout: str = "") -> dict[str, str]:
             "next_action": "Check IaC Runner VAULT_APP_TOKEN rendering and token handoff to child tasks.",
         }
 
-    if "permission denied" in combined.lower() and "vault" in combined.lower():
+    # Dokploy auth must be checked BEFORE the generic Vault rule below: a failed
+    # Dokploy API call surfaces as "No GitHub provider found" (the provider lookup
+    # silently swallows the 401), while unrelated "permission denied"/"vault"
+    # strings elsewhere in the output would otherwise mis-route this to
+    # vault_permission_denied — exactly the red herring that masked an empty
+    # DOKPLOY_API_KEY on the runner.
+    lower = combined.lower()
+    if (
+        "no github provider" in lower
+        or "no git provider" in lower
+        or ("dokploy" in lower and ("unauthorized" in lower or "401" in lower))
+    ):
+        return {
+            "error_kind": "dokploy_auth_failed",
+            "summary": "Dokploy rejected the IaC Runner API key (likely empty/invalid DOKPLOY_API_KEY).",
+            "next_action": (
+                "Verify the runner's DOKPLOY_API_KEY is populated (its Dokploy compose "
+                "env can be wiped on redeploy). Restore it and redeploy the runner."
+            ),
+        }
+
+    if "permission denied" in lower and "vault" in lower:
         return {
             "error_kind": "vault_permission_denied",
             "summary": "Vault rejected the token for the requested path.",
