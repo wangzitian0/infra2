@@ -88,11 +88,14 @@ def _ls_remote_rows(
     except (OSError, subprocess.SubprocessError) as exc:
         # str(exc) for CalledProcessError/TimeoutExpired embeds the FULL command —
         # including the raw repo arg, which may carry an authenticated URL/token.
-        # Redact the exception text too, not just the surrounding message.
+        # Redact the exception text too, not just the surrounding message — and use
+        # `from None` to suppress chaining: the original exception keeps the raw repo
+        # URL in its args, which would still leak via __cause__/traceback output even
+        # though our message is redacted.
         raise ValueError(
             f"git ls-remote failed for {remote_ref!r} in {_redact_repo(repo)}: "
             f"{_redact_repo(str(exc))}"
-        ) from exc
+        ) from None
     rows: list[tuple[str, str]] = []
     for line in (result.stdout or "").strip().splitlines():
         sha, _, name = line.partition("\t")

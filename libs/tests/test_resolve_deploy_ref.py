@@ -179,3 +179,16 @@ def test_timeout_error_text_does_not_leak_repo_credentials():
     with pytest.raises(ValueError) as ei:
         r.resolve_to_sha("main", repo=authed, runner=runner)
     assert "ghp_secrettoken" not in str(ei.value)
+
+
+def test_wrapped_git_error_suppresses_exception_chaining():
+    # `from None`: the original CalledProcessError keeps the unredacted repo URL in its
+    # args, so it must NOT be attached as __cause__ — otherwise traceback/chained output
+    # would re-leak the token even though our message is redacted (Copilot CR).
+    authed = "https://ghp_secrettoken@github.com/x/y.git"
+    exc = subprocess.CalledProcessError(128, ["git", "ls-remote", authed])
+    runner = FakeRunner(raises=exc)
+    with pytest.raises(ValueError) as ei:
+        r.resolve_to_sha("main", repo=authed, runner=runner)
+    assert ei.value.__cause__ is None
+    assert ei.value.__suppress_context__ is True
