@@ -609,8 +609,17 @@ def test_host_resource_specs_gated_to_production(monkeypatch) -> None:
         "vault|http|http://vault|200\nhost-cpu|resource|cpu|80"
     )
 
-    monkeypatch.setenv("ENV", "production")
+    # the runner sets INFRA_PROBE_HEARTBEAT_ENV (not always ENV) — gate on it.
+    monkeypatch.delenv("ENV", raising=False)
+    monkeypatch.delenv("DEPLOY_ENV", raising=False)
+
+    monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_ENV", "production")
     assert {s.kind for s in runner._host_specs_for_env(specs)} == {"http", "resource"}
 
-    monkeypatch.setenv("ENV", "staging")
+    monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_ENV", "staging")
+    assert {s.kind for s in runner._host_specs_for_env(specs)} == {"http"}
+
+    # case-insensitive + ENV fallback when the heartbeat var is unset
+    monkeypatch.delenv("INFRA_PROBE_HEARTBEAT_ENV", raising=False)
+    monkeypatch.setenv("ENV", "Staging")
     assert {s.kind for s in runner._host_specs_for_env(specs)} == {"http"}
