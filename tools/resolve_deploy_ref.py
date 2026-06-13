@@ -24,9 +24,19 @@ import sys
 
 FINANCE_REPORT_REPO = "https://github.com/wangzitian0/finance_report.git"
 
-_SHA_RE = re.compile(r"\A[0-9a-f]{7,40}\Z")
+_SHA_RE = re.compile(r"\A[0-9a-fA-F]{7,40}\Z")
 _TAG_RE = re.compile(r"\Av\d+\.\d+\.\d+\Z")
 _RELEASE_BRANCH_RE = re.compile(r"\Arelease/\d+\.\d+\Z")
+
+# git ls-remote is a network op; cap it so a stalled DNS/connection surfaces as a
+# wrapped ValueError instead of hanging the resolver (and any deploy pipeline).
+_LS_REMOTE_TIMEOUT_SECONDS = 30
+
+
+def _redact_repo(repo: str) -> str:
+    """Redact ``user:pass@`` / ``<token>@`` userinfo so an authenticated repo URL
+    cannot leak credentials into error messages or logs."""
+    return re.sub(r"(://)[^/@\s]+@", r"\1<redacted>@", repo)
 
 
 def classify_ref(ref: str) -> str:
@@ -73,10 +83,11 @@ def _ls_remote_rows(
             capture_output=True,
             text=True,
             check=True,
+            timeout=_LS_REMOTE_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise ValueError(
-            f"git ls-remote failed for {remote_ref!r} in {repo}: {exc}"
+            f"git ls-remote failed for {remote_ref!r} in {_redact_repo(repo)}: {exc}"
         ) from exc
     rows: list[tuple[str, str]] = []
     for line in (result.stdout or "").strip().splitlines():
@@ -113,20 +124,24 @@ def resolve_to_sha(
 ) -> str:
     """Resolve a deploy surface input to a commit sha.
 
-    A bare ``<sha>`` is returned verbatim — the caller already addressed a commit and
-    may use the short form ``classify_ref`` accepts (this is intentionally not expanded
-    to a full sha). main / release/x.y / vX.Y.Z are resolved against ``repo`` via
+    A bare ``<sha>`` is returned as-is apart from lowercasing — the caller already
+    addressed a commit and may use the short or upper-case form ``classify_ref``
+    accepts; it is lowercased (image tags use the lowercase sha) but not expanded to a
+    full sha. main / release/x.y / vX.Y.Z are resolved against ``repo`` via
     ``git ls-remote``, with annotated tags peeled to the underlying commit. Raises
     ValueError if the ref shape is unknown, the ref is absent in repo, or git fails.
     """
     kind = classify_ref(ref)
     cleaned = ref.strip()
     if kind == "sha":
-        return cleaned
+        # image tags use the lowercase sha; normalize so DEADBEEF == deadbeef.
+        return cleaned.lower()
     sha = _resolve_remote_sha(repo, kind, cleaned, runner=runner)
     if not sha:
         remote_ref = _remote_ref_for(kind, cleaned)
-        raise ValueError(f"deploy ref {ref!r} ({remote_ref}) not found in {repo}")
+        raise ValueError(
+            f"deploy ref {ref!r} ({remote_ref}) not found in {_redact_repo(repo)}"
+        )
     return sha
 
 
