@@ -105,14 +105,18 @@ def subdomains() -> dict[str, str]:
     }
 
 
-def _class_attr(tree: ast.AST, attr_name: str) -> str | int | bool | None:
-    """Return the literal value of a top-level class attribute, or None.
+def _class_attr(tree: ast.Module, attr_name: str) -> str | int | bool | None:
+    """Return the literal value of the Deployer subclass's class attribute.
+
+    Only TOP-LEVEL classes that subclass `Deployer` are considered, so a helper
+    or nested class that happens to declare the same attribute name cannot shadow
+    the registry (matches the docstring's "the Deployer class" guarantee).
 
     Handles str / int / bool constants. `x = None` and non-literal values
     (calls, names) read back as None — the attribute is treated as unset.
     """
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ClassDef):
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef) or not _is_deployer_class(node):
             continue
         for stmt in node.body:
             if not isinstance(stmt, ast.Assign):
@@ -126,3 +130,13 @@ def _class_attr(tree: ast.AST, attr_name: str) -> str | int | bool | None:
             ):
                 return stmt.value.value
     return None
+
+
+def _is_deployer_class(node: ast.ClassDef) -> bool:
+    """True if the class subclasses a `*Deployer` base (e.g. `class X(Deployer)`)."""
+    for base in node.bases:
+        if isinstance(base, ast.Name) and base.id.endswith("Deployer"):
+            return True
+        if isinstance(base, ast.Attribute) and base.attr.endswith("Deployer"):
+            return True
+    return False

@@ -72,9 +72,12 @@ def _all_services_literal() -> list[str]:
         if isinstance(node, ast.Assign) and any(
             isinstance(t, ast.Name) and t.id == "ALL_SERVICES" for t in node.targets
         ):
-            return [
-                elt.value
-                for elt in node.value.elts  # type: ignore[attr-defined]
-                if isinstance(elt, ast.Constant)
-            ]
+            value = node.value
+            assert isinstance(value, (ast.List, ast.Tuple)), (
+                "ALL_SERVICES must remain a list/tuple literal of string constants "
+                "for this audit to verify it statically against the registry; it is "
+                f"now a {type(value).__name__}. If the shape changed intentionally, "
+                "update _all_services_literal() to match."
+            )
+            return [elt.value for elt in value.elts if isinstance(elt, ast.Constant)]
     raise AssertionError("ALL_SERVICES not found in sync_runner.py")
