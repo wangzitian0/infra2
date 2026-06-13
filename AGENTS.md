@@ -26,6 +26,8 @@
 - 要改基础设施/服务 → Layer README（[bootstrap](bootstrap/README.md), [platform](platform/README.md), [tools](tools/README.md)）→ [SSOT](docs/ssot/README.md)
 - 要找规范/权威定义 → [SSOT](docs/ssot/README.md)
 - 要找当前任务 → [Project](docs/project/README.md)
+- 要改监控/告警目标 → 派生自服务注册表（`libs/deployer.py::discover_services` + 各 `deploy.py` 的 `prod_only`），**禁止**手维护与 IaC 平行的服务清单。
+  一致性校验见 [`tools/watchdog_consistency_audit.py`](tools/watchdog_consistency_audit.py)；信号真源 [`docs/ssot/watchdog-signals.yaml`](docs/ssot/watchdog-signals.yaml)。
 
 **互引原则**
 - 0/1 级入口之间必须互相引用，避免单点入口遗失。
