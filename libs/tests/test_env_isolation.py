@@ -30,10 +30,13 @@ SUFFIXABLE = (
 # prod_only services (signoz, clickhouse, openpanel) run as a single shared
 # instance for all envs — no suffix is correct, so they are NOT in SUFFIXABLE.
 
-# `platform-<svc>` used as a host (followed by ':' port or '/') where the service
-# name is NOT immediately followed by ${ENV_SUFFIX}.
+# `platform-<svc>` used as a host where the service name is NOT immediately
+# followed by ${ENV_SUFFIX}. `(?![\w-])` ensures <svc> is a complete token (so
+# `platform-postgres` does not match inside `platform-postgres-vault-agent`),
+# which also lets us catch bare host-only refs (no `:port`/`/path`), e.g.
+# `SOME_HOST: platform-redis`, not just URL/DSN forms.
 _HOST_REF = re.compile(
-    r"platform-(?:" + "|".join(SUFFIXABLE) + r")(?!\$\{ENV_SUFFIX\})[:/]"
+    r"platform-(?:" + "|".join(SUFFIXABLE) + r")(?![\w-])(?!\$\{ENV_SUFFIX\})"
 )
 
 
@@ -70,8 +73,15 @@ def test_lint_detects_missing_suffix_and_allows_correct() -> None:
     # the exact #161 bug (staging would hit prod Authentik):
     assert _HOST_REF.search("http://platform-authentik-server:9000/auth")
     assert _HOST_REF.search("@platform-postgres:5432/prefect")
-    # correct (env-suffixed) and prod_only shared services must NOT match:
+    # bare host-only refs (no :port or /path) must also be caught:
+    assert _HOST_REF.search("PREFECT_REDIS_MESSAGING_HOST: platform-redis")
+    assert _HOST_REF.search("PREFECT_API_URL: platform-prefect-server")
+    # correct (env-suffixed) forms must NOT match — incl. bare host-only:
     assert not _HOST_REF.search("http://platform-authentik-server${ENV_SUFFIX}:9000/")
     assert not _HOST_REF.search("@platform-postgres${ENV_SUFFIX}:5432/prefect")
-    assert not _HOST_REF.search("http://platform-signoz:8080/api/v1/health")  # prod_only
-    assert not _HOST_REF.search("http://platform-clickhouse:8123/ping")  # prod_only
+    assert not _HOST_REF.search("PREFECT_REDIS_MESSAGING_HOST: platform-redis${ENV_SUFFIX}")
+    # a longer container name must not match on a shorter service prefix:
+    assert not _HOST_REF.search("container_name: platform-postgres-vault-agent${ENV_SUFFIX}")
+    # prod_only shared services (no suffix is correct) must NOT match:
+    assert not _HOST_REF.search("http://platform-signoz:8080/api/v1/health")
+    assert not _HOST_REF.search("http://platform-clickhouse:8123/ping")
