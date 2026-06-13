@@ -25,6 +25,7 @@
 - [docs/README.md](../README.md) - 文档索引
 
 ## Active Projects
+- [Infra-013: Service Registry as Single Source of Truth](./Infra-013.service_registry_ssot.md) - **In Progress**
 - [Infra-009: Finance Report Deployment](./Infra-009.finance_report_deploy.md) - **In Progress**
 - [Infra-008: Platform Multi-Environment (Staging)](./Infra-008.platform_multi_env.md) - **In Progress**
 - [Infra-007: SigNoz Observability Platform](./Infra-007.signoz_install.md) - **In Progress**
