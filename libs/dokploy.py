@@ -252,9 +252,16 @@ class DokployClient:
                         # would reintroduce the "hash reads as none" bug and hide
                         # real API/auth failures from callers that handle them.
                         compose_id = compose.get("composeId")
-                        if compose_id:
-                            return self.get_compose(compose_id)
-                        return compose
+                        if not compose_id:
+                            # Same hazard, fail closed: a matched compose with no
+                            # composeId can't be re-fetched, so returning the
+                            # truncated object would read IAC_CONFIG_HASH as "none"
+                            # and reintroduce the exact bug this re-fetch fixes.
+                            raise RuntimeError(
+                                f"Dokploy compose {name!r} matched but has no "
+                                "composeId; cannot fetch its full env."
+                            )
+                        return self.get_compose(compose_id)
         return None
 
     def get_default_environment_id(self, project_name: str) -> str | None:

@@ -38,6 +38,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from libs.container_breakdown import (  # noqa: E402
+    Breakdown,
     build_breakdown_alert_payload,
     find_breakdown_containers,
 )
@@ -137,10 +138,25 @@ def run_once(
             logger.warning("BREAKDOWN %s (%s): %s", b.container, b.state, b.reason)
             last_alerted[b.container] = now
         _post_alert(build_breakdown_alert_payload(fresh))
-    # let recovered containers re-alert immediately next time
+    # Recovered = previously-alerted containers no longer broken. Emit a RESOLVED
+    # alert so the Feishu page auto-clears (a self-healed container otherwise leaves a
+    # stuck firing page), then forget them so they can re-alert if they break again.
     live = {b.container for b in breakdowns}
-    for name in [n for n in last_alerted if n not in live]:
+    recovered = [n for n in last_alerted if n not in live]
+    for name in recovered:
         last_alerted.pop(name, None)
+    if recovered:
+        _post_alert(
+            build_breakdown_alert_payload(
+                [
+                    Breakdown(
+                        container=n, state="recovered", reason="recovered", detail=""
+                    )
+                    for n in recovered
+                ],
+                firing=False,
+            )
+        )
     return len(fresh)
 
 
@@ -150,6 +166,24 @@ def main() -> None:
     args = parser.parse_args()
 
     _load_env_file(Path(os.environ.get("ALERTING_ENV_FILE", "/secrets/.env")))
+
+    # breakdown-watch reads the WHOLE shared Docker engine (no per-env container
+    # filter), so a per-env copy double-fires on the same container and mis-attributes
+    # the env. Run it as a prod-only singleton: one watcher covers every container on
+    # the box. Non-prod copies stay alive (so the service doesn't crash-loop) but never
+    # sweep or alert.
+    env_name = os.environ.get("ENV", "production")
+    if env_name != "production":
+        logger.info(
+            "breakdown-watch is prod-only (one watcher sees the whole shared engine); "
+            "skipping sweeps on env=%s",
+            env_name,
+        )
+        if args.loop:
+            while True:
+                time.sleep(3600)
+        return
+
     sock = os.environ.get("DOCKER_SOCK", "/var/run/docker.sock")
     interval = int(os.environ.get("BREAKDOWN_INTERVAL_SECONDS", DEFAULT_INTERVAL))
     renotify = int(os.environ.get("BREAKDOWN_RENOTIFY_SECONDS", DEFAULT_RENOTIFY))

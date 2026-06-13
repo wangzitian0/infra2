@@ -213,6 +213,9 @@ services:
       - feishu-alert-bridge
     command: ["python", "/app/tools/container_breakdown_watch.py", "--loop"]
     environment:
+      # prod-only singleton: the watcher reads the whole shared Docker engine, so only
+      # the prod copy sweeps (non-prod copies no-op — see container_breakdown_watch.main).
+      ENV: ${ENV:-production}
       ALERT_BRIDGE_URL: http://platform-alerting${ENV_SUFFIX}:8080/signoz/webhook
       ALERTING_ENV_FILE: /secrets/.env
       BREAKDOWN_INTERVAL_SECONDS: ${BREAKDOWN_INTERVAL_SECONDS:-60}

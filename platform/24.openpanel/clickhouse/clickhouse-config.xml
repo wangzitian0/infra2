@@ -28,4 +28,15 @@
          The per-query max_threads cap (users.d/op-user-config.xml) is the safe
          CPU lever; background-merge tuning needs the free-entries setting lowered
          in tandem and is intentionally left at default. -->
+
+    <!-- Hard server-wide memory cap (absolute bytes). Without this, ClickHouse
+         defaults max_server_memory_usage to ~90% of TOTAL host RAM — i.e. op-ch
+         believes it owns almost the whole shared 8-core box. With no swap (by
+         choice), a single heavy merge/query then trips the kernel OOM killer,
+         which can kill an unrelated container (Dokploy, prod). Cap op-ch's own
+         accounting at 2 GiB so it rejects/spills oversized work instead of
+         growing into the host. The compose mem_limit (2.5g) is the cgroup
+         backstop above this; keep mem_limit > this value so CH fails its own
+         query before the kernel OOM-kills the container. -->
+    <max_server_memory_usage>2147483648</max_server_memory_usage>
 </clickhouse>

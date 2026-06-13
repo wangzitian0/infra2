@@ -7,7 +7,12 @@ import httpx
 import pytest
 
 from libs import dokploy
-from libs.dokploy import DokployClient, deploy_compose_service, ensure_project, get_dokploy
+from libs.dokploy import (
+    DokployClient,
+    deploy_compose_service,
+    ensure_project,
+    get_dokploy,
+)
 
 
 class FakeResponse:
@@ -87,7 +92,9 @@ class TestDokployClient:
         with pytest.raises(ValueError, match="DOKPLOY_API_KEY not set"):
             DokployClient(base_url="https://cloud.example.test/api")
 
-    def test_request_merges_headers_and_returns_empty_body(self, monkeypatch, dokploy_env):
+    def test_request_merges_headers_and_returns_empty_body(
+        self, monkeypatch, dokploy_env
+    ):
         fake = FakeHttpClient(FakeResponse(content=b""))
         monkeypatch.setattr(dokploy.httpx, "Client", lambda timeout: fake)
         client = DokployClient(base_url="https://cloud.example.test/api")
@@ -121,11 +128,15 @@ class TestDokployClient:
 
     def test_request_wraps_transport_errors(self, monkeypatch, dokploy_env):
         request = httpx.Request("GET", "https://cloud.example.test/api/project.all")
-        fake = FakeHttpClient(request_error=httpx.ConnectTimeout("timeout", request=request))
+        fake = FakeHttpClient(
+            request_error=httpx.ConnectTimeout("timeout", request=request)
+        )
         monkeypatch.setattr(dokploy.httpx, "Client", lambda timeout: fake)
         client = DokployClient(base_url="https://cloud.example.test/api")
 
-        with pytest.raises(httpx.RequestError, match="Error while performing Dokploy API request"):
+        with pytest.raises(
+            httpx.RequestError, match="Error while performing Dokploy API request"
+        ):
             client._request("GET", "project.all")
 
     @patch("libs.dokploy.DokployClient._request")
@@ -318,6 +329,24 @@ class TestDokployClient:
         with pytest.raises(RuntimeError, match="compose.one 503"):
             client.find_compose_by_name("app", "platform", env_name="staging")
 
+    def test_find_compose_by_name_fails_closed_when_composeId_missing(
+        self, dokploy_env
+    ):
+        """A matched compose with no composeId can't be re-fetched; returning the
+        truncated object (no `env`) would read IAC_CONFIG_HASH as 'none' and
+        reintroduce the very bug the re-fetch fixes. Fail closed instead."""
+        client = DokployClient()
+        client.list_projects = lambda: [
+            {
+                "name": "platform",
+                "environments": [
+                    {"name": "staging", "compose": [{"name": "app"}]}  # no composeId
+                ],
+            }
+        ]
+        with pytest.raises(RuntimeError, match="no .*composeId"):
+            client.find_compose_by_name("app", "platform", env_name="staging")
+
     def test_get_environment_id_falls_back_for_production_only(self, dokploy_env):
         client = DokployClient()
         client.list_projects = lambda: [
@@ -330,7 +359,9 @@ class TestDokployClient:
         assert client.get_environment_id("platform", "production") == "env-default"
         assert client.get_environment_id("platform", "preview") is None
 
-    def test_ensure_domains_skips_conflicts_and_records_create_errors(self, dokploy_env):
+    def test_ensure_domains_skips_conflicts_and_records_create_errors(
+        self, dokploy_env
+    ):
         client = DokployClient()
         client.get_compose = lambda compose_id: {
             "domains": [
@@ -373,9 +404,9 @@ class TestDokployClient:
         client = DokployClient()
         client.get_compose_env = lambda compose_id: "A=1\n# comment\nB=old\nINVALID"
         calls = []
-        client.update_compose = lambda compose_id, env: calls.append((compose_id, env)) or {
-            "composeId": compose_id
-        }
+        client.update_compose = lambda compose_id, env: (
+            calls.append((compose_id, env)) or {"composeId": compose_id}
+        )
 
         result = client.update_compose_env("compose-1", env_vars={"B": "new", "C": "3"})
 
@@ -384,7 +415,9 @@ class TestDokployClient:
 
     def test_get_github_provider_id_falls_back_to_existing_compose(self, dokploy_env):
         client = DokployClient()
-        client.list_git_providers = lambda: (_ for _ in ()).throw(RuntimeError("api down"))
+        client.list_git_providers = lambda: (_ for _ in ()).throw(
+            RuntimeError("api down")
+        )
         client.list_projects = lambda: [
             {
                 "environments": [

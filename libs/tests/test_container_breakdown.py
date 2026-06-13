@@ -12,7 +12,7 @@ from libs.container_breakdown import (
 )
 
 
-def test_broken_state_flags_restarting_and_unhealthy_only():
+def test_broken_state_flags_restarting_unhealthy_exited_and_dead():
     assert (
         broken_state({"State": "restarting", "Status": "Restarting (1) 3s ago"})
         == "restarting"
@@ -21,6 +21,14 @@ def test_broken_state_flags_restarting_and_unhealthy_only():
         broken_state({"State": "running", "Status": "Up 2 hours (unhealthy)"})
         == "unhealthy"
     )
+    # crashed-and-stopped (gave up retrying) — the steadier failure that the
+    # restarting-only check used to miss
+    assert (
+        broken_state({"State": "exited", "Status": "Exited (137) 5 minutes ago"})
+        == "exited"
+    )
+    assert broken_state({"State": "dead", "Status": "Dead"}) == "dead"
+    # healthy / clean intentional stop are NOT breakdowns
     assert broken_state({"State": "running", "Status": "Up 2 hours (healthy)"}) is None
     assert broken_state({"State": "exited", "Status": "Exited (0) 1h ago"}) is None
 
@@ -123,3 +131,23 @@ def test_run_once_respects_renotify_window(monkeypatch):
     # second sweep within window is suppressed
     assert w.run_once(client=None, log_tail=25, last_alerted=last, renotify=1800) == 0
     assert len(posted) == 1
+
+
+def test_run_once_emits_resolved_alert_on_recovery(monkeypatch):
+    import tools.container_breakdown_watch as w
+
+    breakdown = Breakdown(
+        container="vault-agent", state="restarting", reason="r", detail="d"
+    )
+    sweeps = [[breakdown], []]  # broken, then recovered
+    monkeypatch.setattr(w, "sweep", lambda client, tail: sweeps.pop(0))
+    posted: list = []
+    monkeypatch.setattr(w, "_post_alert", lambda payload: posted.append(payload))
+
+    last: dict = {}
+    w.run_once(client=None, log_tail=25, last_alerted=last, renotify=1800)  # fires
+    w.run_once(client=None, log_tail=25, last_alerted=last, renotify=1800)  # recovers
+
+    assert [p["status"] for p in posted] == ["firing", "resolved"]
+    # the recovered container is forgotten so it can re-alert if it breaks again
+    assert "vault-agent" not in last

@@ -643,26 +643,8 @@ class Deployer:
         interval_seconds: int | None = None,
     ) -> None:
         """Trigger deploy and fail fast if Dokploy does not record runtime work."""
-        timeout = int(
-            os.getenv(
-                "DOKPLOY_DEPLOYMENT_RECORD_TIMEOUT_SECONDS",
-                str(
-                    timeout_seconds
-                    if timeout_seconds is not None
-                    else cls.deployment_record_timeout_seconds
-                ),
-            )
-        )
-        interval = int(
-            os.getenv(
-                "DOKPLOY_DEPLOYMENT_RECORD_INTERVAL_SECONDS",
-                str(
-                    interval_seconds
-                    if interval_seconds is not None
-                    else cls.deployment_record_interval_seconds
-                ),
-            )
-        )
+        timeout = cls._resolve_record_timeout(timeout_seconds)
+        interval = cls._resolve_record_interval(interval_seconds)
 
         before_ids = cls._deployment_ids(
             cls._get_compose_deployments(client, compose_id)
@@ -782,6 +764,39 @@ class Deployer:
         return None
 
     @classmethod
+    def _resolve_record_timeout(cls, timeout_seconds: int | None = None) -> int:
+        """Deployment-record / hash-poll timeout, honoring the env override.
+
+        Shared by the deploy-record wait and the post-deploy hash poll so an operator
+        who raises DOKPLOY_DEPLOYMENT_RECORD_TIMEOUT_SECONDS to tolerate a slow Dokploy
+        widens both windows, not just one.
+        """
+        return int(
+            os.getenv(
+                "DOKPLOY_DEPLOYMENT_RECORD_TIMEOUT_SECONDS",
+                str(
+                    timeout_seconds
+                    if timeout_seconds is not None
+                    else cls.deployment_record_timeout_seconds
+                ),
+            )
+        )
+
+    @classmethod
+    def _resolve_record_interval(cls, interval_seconds: int | None = None) -> int:
+        """Deployment-record / hash-poll interval, honoring the env override."""
+        return int(
+            os.getenv(
+                "DOKPLOY_DEPLOYMENT_RECORD_INTERVAL_SECONDS",
+                str(
+                    interval_seconds
+                    if interval_seconds is not None
+                    else cls.deployment_record_interval_seconds
+                ),
+            )
+        )
+
+    @classmethod
     def _await_effective_config_hash(cls, expected_hash: str) -> str | None:
         """Poll Dokploy's effective IAC_CONFIG_HASH until it matches `expected_hash`
         or the deployment timeout elapses, returning the last value read.
@@ -791,14 +806,31 @@ class Deployer:
         hash or none). Polling avoids a false "stale config" verdict on that
         settling delay while still surfacing a genuinely-unadvanced config (the
         returned hash will still differ from `expected_hash` once the window
-        elapses). Read errors propagate to the caller.
+        elapses).
+
+        A transient read error (one flaky Dokploy `compose.one`) does NOT abort the
+        deploy: polling multiplies the number of reads, so each is an independent
+        chance to hit a blip. A read error is tolerated like a non-matching read and
+        retried until the deadline; only if no clean read ever lands in the whole
+        window is the last error surfaced. The timeout/interval honor the same env
+        overrides as the deploy-record wait.
         """
-        deadline = time.monotonic() + cls.deployment_record_timeout_seconds
-        interval = max(1, cls.deployment_record_interval_seconds)
+        deadline = time.monotonic() + cls._resolve_record_timeout()
+        interval = max(1, cls._resolve_record_interval())
+        last_value: str | None = None
+        last_error: Exception | None = None
         while True:
-            effective_hash = cls.get_remote_config_hash()
-            if effective_hash == expected_hash or time.monotonic() >= deadline:
-                return effective_hash
+            try:
+                last_value = cls.get_remote_config_hash()
+                last_error = None
+            except Exception as exc:  # transient Dokploy read; tolerate within window
+                last_error = exc
+            if last_value == expected_hash:
+                return last_value
+            if time.monotonic() >= deadline:
+                if last_value is None and last_error is not None:
+                    raise last_error
+                return last_value
             time.sleep(interval)
 
     @classmethod

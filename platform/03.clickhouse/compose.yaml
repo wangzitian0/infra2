@@ -55,6 +55,12 @@ services:
     image: clickhouse/clickhouse-server:25.5.6
     container_name: platform-clickhouse${ENV_SUFFIX}
     restart: unless-stopped
+    # cgroup hard cap on the shared, swapless host. signoz-ch only had a per-QUERY
+    # max_memory_usage (users.xml, 10 GiB) — nothing bounded server-wide RSS, so a
+    # burst of concurrent queries/merges could still grow into the host and trip the
+    # OOM killer. This is the container backstop; sized larger than op-ch because
+    # signoz ingestion is the heavier consumer.
+    mem_limit: 3584m
     depends_on:
       init-clickhouse:
         condition: service_completed_successfully

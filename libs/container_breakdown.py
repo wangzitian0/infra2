@@ -58,11 +58,12 @@ def container_name(entry: dict) -> str:
 
 
 def broken_state(entry: dict) -> str | None:
-    """Return ``"restarting"``/``"unhealthy"`` if the container is broken, else None.
+    """Return the broken-state label (``"restarting"``/``"unhealthy"``/``"exited"``/
+    ``"dead"``) if the container is broken, else None.
 
     ``entry`` is a Docker Engine ``/containers/json`` element. ``State`` is the
-    lifecycle string ("running"/"restarting"/...); ``Status`` carries health
-    ("... (unhealthy)").
+    lifecycle string ("running"/"restarting"/"exited"/"dead"/...); ``Status`` carries
+    health ("... (unhealthy)") and the exit code ("Exited (137) ...").
     """
     state = str(entry.get("State", "")).lower()
     status = str(entry.get("Status", "")).lower()
@@ -70,6 +71,15 @@ def broken_state(entry: dict) -> str | None:
         return "restarting"
     if "unhealthy" in status:
         return "unhealthy"
+    # A container that crashed and STOPPED (restart exhausted / restart:no) is a
+    # steadier, more dangerous failure than active crash-looping — nothing is
+    # retrying it, and the brief "restarting" window above is easy to miss at a 60s
+    # sample. Flag non-zero exits and dead; a clean "Exited (0)" intentional stop is
+    # ignored.
+    if state == "dead":
+        return "dead"
+    if state == "exited" and "exited (0)" not in status:
+        return "exited"
     return None
 
 
