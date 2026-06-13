@@ -155,3 +155,27 @@ def test_error_messages_do_not_leak_repo_credentials():
         r.resolve_to_sha("v9.9.9", repo=authed, runner=runner)
     assert "ghp_secrettoken" not in str(exc.value)
     assert "<redacted>@" in str(exc.value)
+
+
+def test_subprocess_error_text_does_not_leak_repo_credentials():
+    # CalledProcessError/TimeoutExpired str() embeds the FULL command — including the
+    # authenticated repo URL. The wrapped ValueError must redact the exception text
+    # too, not just the surrounding message (Copilot CR).
+    authed = "https://ghp_secrettoken@github.com/wangzitian0/finance_report.git"
+    exc = subprocess.CalledProcessError(
+        128, ["git", "ls-remote", authed, "refs/heads/main"]
+    )
+    runner = FakeRunner(raises=exc)
+    with pytest.raises(ValueError) as ei:
+        r.resolve_to_sha("main", repo=authed, runner=runner)
+    assert "ghp_secrettoken" not in str(ei.value)
+    assert "<redacted>@" in str(ei.value)
+
+
+def test_timeout_error_text_does_not_leak_repo_credentials():
+    authed = "https://ghp_secrettoken@github.com/wangzitian0/finance_report.git"
+    exc = subprocess.TimeoutExpired(["git", "ls-remote", authed], 30)
+    runner = FakeRunner(raises=exc)
+    with pytest.raises(ValueError) as ei:
+        r.resolve_to_sha("main", repo=authed, runner=runner)
+    assert "ghp_secrettoken" not in str(ei.value)

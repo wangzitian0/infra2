@@ -86,8 +86,12 @@ def _ls_remote_rows(
             timeout=_LS_REMOTE_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.SubprocessError) as exc:
+        # str(exc) for CalledProcessError/TimeoutExpired embeds the FULL command —
+        # including the raw repo arg, which may carry an authenticated URL/token.
+        # Redact the exception text too, not just the surrounding message.
         raise ValueError(
-            f"git ls-remote failed for {remote_ref!r} in {_redact_repo(repo)}: {exc}"
+            f"git ls-remote failed for {remote_ref!r} in {_redact_repo(repo)}: "
+            f"{_redact_repo(str(exc))}"
         ) from exc
     rows: list[tuple[str, str]] = []
     for line in (result.stdout or "").strip().splitlines():
