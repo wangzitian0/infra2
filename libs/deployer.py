@@ -771,6 +771,26 @@ class Deployer:
         return None
 
     @classmethod
+    def _await_effective_config_hash(cls, expected_hash: str) -> str | None:
+        """Poll Dokploy's effective IAC_CONFIG_HASH until it matches `expected_hash`
+        or the deployment timeout elapses, returning the last value read.
+
+        Dokploy applies the compose-env update asynchronously, so a read taken
+        immediately after deploy can lag the deployed revision (returning a stale
+        hash or none). Polling avoids a false "stale config" verdict on that
+        settling delay while still surfacing a genuinely-unadvanced config (the
+        returned hash will still differ from `expected_hash` once the window
+        elapses). Read errors propagate to the caller.
+        """
+        deadline = time.monotonic() + cls.deployment_record_timeout_seconds
+        interval = max(1, cls.deployment_record_interval_seconds)
+        while True:
+            effective_hash = cls.get_remote_config_hash()
+            if effective_hash == expected_hash or time.monotonic() >= deadline:
+                return effective_hash
+            time.sleep(interval)
+
+    @classmethod
     def compute_local_config_hash(cls, c: "Context", env_vars: dict[str, str]) -> str:
         """Compute hash of local compose + env vars + declared shared deps."""
         compose_content = cls.get_compose_content(c)
@@ -943,8 +963,13 @@ class Deployer:
         # carries the intended IAC_CONFIG_HASH. This fails closed on the stale-env
         # failure mode where a deploy is accepted but the effective config does
         # not advance to the deployed revision.
+        #
+        # Dokploy applies the compose-env update asynchronously, so the effective
+        # hash can briefly lag the deploy call by a few seconds. Poll until it
+        # advances rather than false-failing on that settling delay; still fails
+        # closed if it never advances within the window.
         try:
-            effective_hash = cls.get_remote_config_hash()
+            effective_hash = cls._await_effective_config_hash(local_hash)
         except Exception as exc:  # noqa: BLE001 - verification must not crash the task.
             error(f"Post-deploy verification could not read effective config: {exc}")
             return {

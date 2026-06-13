@@ -673,3 +673,44 @@ def test_portal_deployer_declares_no_runtime_secret_path() -> None:
     module = _load_deploy_module("platform/21.portal/deploy.py", "portal_deploy_test")
 
     assert module.PortalDeployer.secret_key == ""
+
+
+def test_await_effective_config_hash_retries_until_settled(monkeypatch):
+    """Async Dokploy settling: a stale/none first read must be retried, not
+    treated as a failure, once the effective hash advances."""
+    import libs.deployer as deployer
+    from libs.deployer import Deployer
+
+    class D(Deployer):
+        service = "x"
+        compose_path = "x/compose.yaml"
+        data_path = "/data/x"
+
+    monkeypatch.setattr(deployer.time, "sleep", lambda _s: None)
+    reads = iter([None, "stale", "expected"])
+    monkeypatch.setattr(
+        D, "get_remote_config_hash", classmethod(lambda cls: next(reads))
+    )
+
+    assert D._await_effective_config_hash("expected") == "expected"
+
+
+def test_await_effective_config_hash_times_out_when_unadvanced(monkeypatch):
+    """Fails closed: if the effective hash never advances within the window, the
+    last (stale) value is returned so the caller reports failure."""
+    import libs.deployer as deployer
+    from libs.deployer import Deployer
+
+    class D(Deployer):
+        service = "x"
+        compose_path = "x/compose.yaml"
+        data_path = "/data/x"
+
+    monkeypatch.setattr(deployer.time, "sleep", lambda _s: None)
+    clock = iter([0.0, 999.0])  # deadline=60; next check is past it
+    monkeypatch.setattr(deployer.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(
+        D, "get_remote_config_hash", classmethod(lambda cls: "stale")
+    )
+
+    assert D._await_effective_config_hash("expected") == "stale"
