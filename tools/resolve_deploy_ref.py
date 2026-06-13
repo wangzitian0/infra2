@@ -59,36 +59,73 @@ def _remote_ref_for(kind: str, cleaned: str) -> str:
     }[kind]
 
 
-def _ls_remote_sha(repo: str, remote_ref: str, *, runner=subprocess.run) -> str | None:
-    """Return the sha ``remote_ref`` points to in ``repo``, or None if absent."""
-    result = runner(
-        ["git", "ls-remote", repo, remote_ref],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    output = (result.stdout or "").strip()
-    if not output:
-        return None
-    return output.splitlines()[0].split("\t", 1)[0].strip() or None
+def _ls_remote_rows(
+    repo: str, remote_ref: str, *, runner=subprocess.run
+) -> list[tuple[str, str]]:
+    """Return ``[(sha, ref_name), ...]`` from ``git ls-remote repo remote_ref``.
+
+    Subprocess failures (git missing, network/auth, non-zero exit) are wrapped as
+    ValueError so callers get a stable error contract instead of a raw traceback.
+    """
+    try:
+        result = runner(
+            ["git", "ls-remote", repo, remote_ref],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ValueError(
+            f"git ls-remote failed for {remote_ref!r} in {repo}: {exc}"
+        ) from exc
+    rows: list[tuple[str, str]] = []
+    for line in (result.stdout or "").strip().splitlines():
+        sha, _, name = line.partition("\t")
+        if sha.strip() and name.strip():
+            rows.append((sha.strip(), name.strip()))
+    return rows
+
+
+def _resolve_remote_sha(
+    repo: str, kind: str, cleaned: str, *, runner=subprocess.run
+) -> str | None:
+    """Resolve a non-sha kind to a commit sha via ls-remote.
+
+    Annotated tags are peeled to their underlying commit (``refs/tags/<tag>^{}``):
+    finance_report ships annotated tags, so the bare tag ref would otherwise return
+    the tag-object sha, not the commit used as the published image tag.
+    """
+    remote_ref = _remote_ref_for(kind, cleaned)
+    rows = _ls_remote_rows(repo, remote_ref, runner=runner)
+    if kind == "tag":
+        peeled = remote_ref + "^{}"
+        for sha, name in rows:
+            if name == peeled:  # annotated tag -> underlying commit
+                return sha
+    for sha, name in rows:
+        if name == remote_ref:  # branch, lightweight tag, or fallback
+            return sha
+    return None
 
 
 def resolve_to_sha(
     ref: str, *, repo: str = FINANCE_REPORT_REPO, runner=subprocess.run
 ) -> str:
-    """Resolve a deploy surface input to a full commit sha.
+    """Resolve a deploy surface input to a commit sha.
 
-    A bare ``<sha>`` is returned verbatim (the caller already addressed a commit).
-    main / release/x.y / vX.Y.Z are resolved against ``repo`` via ``git ls-remote``.
-    Raises ValueError if the ref shape is unknown or the ref does not exist in repo.
+    A bare ``<sha>`` is returned verbatim — the caller already addressed a commit and
+    may use the short form ``classify_ref`` accepts (this is intentionally not expanded
+    to a full sha). main / release/x.y / vX.Y.Z are resolved against ``repo`` via
+    ``git ls-remote``, with annotated tags peeled to the underlying commit. Raises
+    ValueError if the ref shape is unknown, the ref is absent in repo, or git fails.
     """
     kind = classify_ref(ref)
     cleaned = ref.strip()
     if kind == "sha":
         return cleaned
-    remote_ref = _remote_ref_for(kind, cleaned)
-    sha = _ls_remote_sha(repo, remote_ref, runner=runner)
+    sha = _resolve_remote_sha(repo, kind, cleaned, runner=runner)
     if not sha:
+        remote_ref = _remote_ref_for(kind, cleaned)
         raise ValueError(f"deploy ref {ref!r} ({remote_ref}) not found in {repo}")
     return sha
 

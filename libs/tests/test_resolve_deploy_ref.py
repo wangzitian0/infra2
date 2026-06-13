@@ -64,24 +64,53 @@ def test_resolve_main_uses_refs_heads_main():
     assert runner.calls[0][-1] == "refs/heads/main"
 
 
-def test_resolve_release_branch_and_tag_target_the_right_ref():
+def test_resolve_release_branch_targets_the_right_ref():
     runner = FakeRunner(
         stdout="2222222222222222222222222222222222222222\trefs/heads/release/1.2\n"
     )
     assert r.resolve_to_sha("release/1.2", runner=runner) == "2" * 40
     assert runner.calls[0][-1] == "refs/heads/release/1.2"
 
+
+def test_resolve_annotated_tag_peels_to_underlying_commit():
+    # An annotated tag: ls-remote lists the tag OBJECT sha and the peeled ^{} commit.
+    # The resolver must return the commit, not the tag-object sha (finance_report
+    # ships annotated tags, e.g. v0.1.7).
     runner = FakeRunner(
-        stdout="3333333333333333333333333333333333333333\trefs/tags/v1.2.3\n"
+        stdout=(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/tags/v1.2.3\n"
+            "3333333333333333333333333333333333333333\trefs/tags/v1.2.3^{}\n"
+        )
     )
     assert r.resolve_to_sha("v1.2.3", runner=runner) == "3" * 40
-    assert runner.calls[0][-1] == "refs/tags/v1.2.3"
+
+
+def test_resolve_lightweight_tag_uses_the_bare_ref():
+    # A lightweight tag has no ^{} row; the bare ref already points at the commit.
+    runner = FakeRunner(
+        stdout="4444444444444444444444444444444444444444\trefs/tags/v1.2.3\n"
+    )
+    assert r.resolve_to_sha("v1.2.3", runner=runner) == "4" * 40
 
 
 def test_resolve_missing_ref_raises():
     runner = FakeRunner(stdout="")  # ls-remote found nothing
     with pytest.raises(ValueError, match="not found"):
         r.resolve_to_sha("v9.9.9", runner=runner)
+
+
+def test_resolve_wraps_git_failure_as_value_error():
+    # A failing `git ls-remote` (non-zero exit) must surface as ValueError, not a raw
+    # CalledProcessError, so the CLI gives a stable, actionable error.
+    runner = FakeRunner(raises=subprocess.CalledProcessError(128, ["git", "ls-remote"]))
+    with pytest.raises(ValueError, match="git ls-remote failed"):
+        r.resolve_to_sha("main", runner=runner)
+
+
+def test_resolve_wraps_missing_git_as_value_error():
+    runner = FakeRunner(raises=FileNotFoundError("git not installed"))
+    with pytest.raises(ValueError, match="git ls-remote failed"):
+        r.resolve_to_sha("main", runner=runner)
 
 
 def test_resolve_unknown_shape_raises_before_any_git_call():
