@@ -34,6 +34,8 @@ class FakeRunner:
         ("v10.0.1", "tag"),
         ("abc1234", "sha"),
         ("a" * 40, "sha"),
+        ("DEADBEEF", "sha"),  # uppercase hex (copy/paste) is accepted
+        ("AbC1234", "sha"),
         ("  main  ", "branch"),
     ],
 )
@@ -118,3 +120,38 @@ def test_resolve_unknown_shape_raises_before_any_git_call():
     with pytest.raises(ValueError, match="unrecognized"):
         r.resolve_to_sha("develop", runner=runner)
     assert runner.calls == []
+
+
+def test_resolve_lowercases_an_uppercase_sha():
+    # image tags use the lowercase sha, so DEADBEEF must normalize to deadbeef.
+    runner = FakeRunner(stdout="should-not-be-used")
+    assert r.resolve_to_sha("DEADBEEF", runner=runner) == "deadbeef"
+    assert runner.calls == []  # still no remote lookup for a bare sha
+
+
+def test_resolve_timeout_is_wrapped_as_value_error():
+    runner = FakeRunner(raises=subprocess.TimeoutExpired(["git", "ls-remote"], 30))
+    with pytest.raises(ValueError, match="git ls-remote failed"):
+        r.resolve_to_sha("main", runner=runner)
+
+
+def test_redact_repo_strips_embedded_credentials():
+    assert (
+        r._redact_repo("https://ghp_secret@github.com/x/y.git")
+        == "https://<redacted>@github.com/x/y.git"
+    )
+    assert (
+        r._redact_repo("https://user:pass@github.com/x/y.git")
+        == "https://<redacted>@github.com/x/y.git"
+    )
+    # an unauthenticated URL is left untouched
+    assert r._redact_repo("https://github.com/x/y.git") == "https://github.com/x/y.git"
+
+
+def test_error_messages_do_not_leak_repo_credentials():
+    runner = FakeRunner(stdout="")  # ref not found
+    authed = "https://ghp_secrettoken@github.com/wangzitian0/finance_report.git"
+    with pytest.raises(ValueError) as exc:
+        r.resolve_to_sha("v9.9.9", repo=authed, runner=runner)
+    assert "ghp_secrettoken" not in str(exc.value)
+    assert "<redacted>@" in str(exc.value)
