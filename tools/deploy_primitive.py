@@ -53,9 +53,15 @@ def deploy(
       audited override (H5). staging_validated is supplied by the caller that checked a
       staging deploy of this exact sha ran.
     """
-    sha = resolve_to_sha(code, repo=repo) if repo else resolve_to_sha(code)
+    # Explicit None checks: an empty string is a caller error, not a silent fallback.
+    if not domain or any(c.isspace() for c in domain):
+        raise ValueError(
+            f"invalid domain {domain!r}: must be non-empty with no whitespace "
+            "(it is interpolated into a line-based compose env file)."
+        )
+    sha = resolve_to_sha(code, repo=repo) if repo is not None else resolve_to_sha(code)
     cfg = env_config(env)
-    data = data or cfg.data_default
+    data = data if data is not None else cfg.data_default
 
     if cfg.dynamic:
         raise ValueError(

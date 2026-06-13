@@ -44,7 +44,8 @@ def test_prod_refuses_unvalidated_digest_promote_not_rebuild():
     client = FakeDokploy()
     with pytest.raises(ValueError, match="requires a staging deploy"):
         dp.deploy("prod", "deadbeef", domain="zitian.party", client=client)
-    # nothing was deployed
+    # the gate prevents ANY side effect: neither env mutation nor deploy
+    assert client.updated == []
     assert client.deployed == []
 
 
@@ -72,6 +73,8 @@ def test_preview_is_rejected_as_dynamic():
     client = FakeDokploy()
     with pytest.raises(ValueError, match="per-PR dynamic env"):
         dp.deploy("preview", "deadbeef", domain="zitian.party", client=client)
+    # the gate prevents ANY side effect: neither env mutation nor deploy
+    assert client.updated == []
     assert client.deployed == []
 
 
@@ -87,3 +90,21 @@ def test_sha_is_lowercased_via_the_resolver():
     client = FakeDokploy()
     plan = dp.deploy("staging", "DEADBEEF", domain="zitian.party", client=client)
     assert plan.sha == "deadbeef"
+
+
+def test_domain_with_newline_is_rejected_before_any_side_effect():
+    # a newline in domain would corrupt the line-based compose env / inject a var
+    client = FakeDokploy()
+    with pytest.raises(ValueError, match="invalid domain"):
+        dp.deploy("staging", "deadbeef", domain="zitian.party\nINJECT=1", client=client)
+    assert client.updated == []
+    assert client.deployed == []
+
+
+def test_empty_data_override_is_honored_not_silently_defaulted():
+    # data="" is an explicit caller value, not a fallback trigger (is-None check)
+    client = FakeDokploy()
+    plan = dp.deploy(
+        "staging", "deadbeef", domain="zitian.party", client=client, data=""
+    )
+    assert plan.data == ""
