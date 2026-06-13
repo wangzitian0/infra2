@@ -243,6 +243,17 @@ class DokployClient:
                     continue
                 for compose in env.get("compose", []):
                     if compose.get("name") == name:
+                        # `project.all` returns a TRUNCATED compose (no `env` /
+                        # source fields). Re-fetch the full object via compose.one
+                        # so callers that read env — e.g. get_remote_config_hash's
+                        # IAC_CONFIG_HASH post-deploy check — see real values
+                        # instead of a spurious "none".
+                        compose_id = compose.get("composeId")
+                        if compose_id:
+                            try:
+                                return self.get_compose(compose_id)
+                            except Exception:
+                                return compose
                         return compose
         return None
 

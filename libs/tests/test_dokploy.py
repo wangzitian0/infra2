@@ -285,12 +285,17 @@ class TestDokployClient:
             }
         ]
 
-        assert (
-            client.find_compose_by_name("app", "platform", env_name="staging")[
-                "composeId"
-            ]
-            == "staging"
-        )
+        # find_compose_by_name re-fetches the full compose via compose.one,
+        # because project.all returns a truncated object without `env`.
+        client.get_compose = lambda cid: {
+            "composeId": cid,
+            "env": "IAC_CONFIG_HASH=abc123",
+        }
+
+        result = client.find_compose_by_name("app", "platform", env_name="staging")
+        assert result["composeId"] == "staging"
+        # full object (with env), not the truncated project.all entry
+        assert result["env"] == "IAC_CONFIG_HASH=abc123"
 
     def test_get_environment_id_falls_back_for_production_only(self, dokploy_env):
         client = DokployClient()
