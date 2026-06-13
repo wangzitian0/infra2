@@ -22,8 +22,10 @@
         <replica>replica1</replica>
         <cluster>openpanel_cluster</cluster>
     </macros>
-    <!-- Rightsize for the shared 8-core host (76 containers): cap the background
-         merge pool (default 16) so ClickHouse merges do not saturate the box.
-         Validated to start cleanly on clickhouse-server:25.10.2.65. -->
-    <background_pool_size>4</background_pool_size>
+    <!-- NOTE: do NOT cap background_pool_size here. ClickHouse rejects startup
+         (Code 36) when number_of_free_entries_in_pool_to_execute_mutation (20)
+         exceeds background_pool_size * background_merges_mutations_concurrency_ratio.
+         The per-query max_threads cap (users.d/op-user-config.xml) is the safe
+         CPU lever; background-merge tuning needs the free-entries setting lowered
+         in tandem and is intentionally left at default. -->
 </clickhouse>
