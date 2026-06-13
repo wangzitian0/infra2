@@ -95,9 +95,14 @@ class AlertingDeployer(Deployer):
         suffix = e.get("ENV_SUFFIX", "")
         container = f"platform-alerting-probes{suffix}"
 
-        # Retry briefly: a just-recreated container may still be starting.
+        # Poll against a deadline: Dokploy recreates the container asynchronously,
+        # so the new specs can take up to ~a minute to appear (longer under load).
+        # A fixed 3 tries (~10s) raced the recreate and failed deploys whenever it
+        # lagged; poll until the container carries the new specs or the window
+        # elapses.
+        deadline = time.monotonic() + 90
         last_err = ""
-        for attempt in range(3):
+        while True:
             result = c.run(
                 f"ssh {ssh_user}@{host} "
                 f"'docker exec {container} printenv INFRA_PROBE_SPECS'",
@@ -119,9 +124,9 @@ class AlertingDeployer(Deployer):
                     f"could not read INFRA_PROBE_SPECS from {container}: "
                     f"{(result.stderr or 'docker exec failed').strip()}"
                 )
-            if attempt < 2:
-                time.sleep(5)
-        return last_err
+            if time.monotonic() >= deadline:
+                return last_err
+            time.sleep(5)
 
     @classmethod
     def _sync_1password_to_vault(cls) -> bool:
