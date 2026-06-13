@@ -133,12 +133,16 @@ class TestDokployClient:
         # Setup valid client
         with patch.dict(os.environ, {"DOKPLOY_API_KEY": "test-key"}):
             client = DokployClient()
-            mock_request.return_value = [{"provider": "github", "gitProviderId": "123"}]
+            mock_request.return_value = [
+                {"githubId": "123", "gitProvider": {"providerType": "github"}}
+            ]
 
             providers = client.list_git_providers()
 
-            assert providers == [{"provider": "github", "gitProviderId": "123"}]
-            mock_request.assert_called_with("GET", "settings.gitProvider.all")
+            assert providers == [
+                {"githubId": "123", "gitProvider": {"providerType": "github"}}
+            ]
+            mock_request.assert_called_with("GET", "github.githubProviders")
 
     @patch("libs.dokploy.DokployClient._request")
     def test_get_compose_deployments(self, mock_request):
@@ -364,6 +368,24 @@ class TestDokployClient:
         ]
 
         assert client.get_github_provider_id() == "github-provider"
+
+    def test_get_github_provider_id_reads_github_providers_endpoint(self, dokploy_env):
+        """Method 1 must return the `githubId` from the github.githubProviders
+        shape. The old code queried the wrong endpoint and read the wrong field,
+        so it silently fell through even when a configured provider existed —
+        which broke every deploy with 'No GitHub provider found'."""
+        client = DokployClient()
+        client.list_git_providers = lambda: [
+            {
+                "githubId": "126refcRlCoWj6pmPXElU",
+                "gitProvider": {"providerType": "github", "name": "Infra2-linker"},
+            }
+        ]
+        client.list_projects = lambda: (_ for _ in ()).throw(
+            AssertionError("Method 2 should not be reached when a provider exists")
+        )
+
+        assert client.get_github_provider_id() == "126refcRlCoWj6pmPXElU"
 
 
 class TestGetDokployFactory:

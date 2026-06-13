@@ -494,21 +494,29 @@ class DokployClient:
 
     # Git Provider endpoints
     def list_git_providers(self) -> list[dict]:
-        """List all configured git providers"""
-        return self._request("GET", "settings.gitProvider.all")
+        """List configured GitHub providers.
+
+        Dokploy exposes these at `github.githubProviders`; each entry is
+        `{"githubId": ..., "gitProvider": {"providerType": "github", ...}}`.
+        The previously-used `settings.gitProvider.all` path 404s on current
+        Dokploy, so Method 1 below always fell through to the fragile compose
+        inference — which then broke too once `project.all` stopped returning
+        per-compose `githubId`. Querying the authoritative endpoint fixes both.
+        """
+        return self._request("GET", "github.githubProviders")
 
     def get_github_provider_id(self) -> str | None:
-        """Get GitHub provider ID by querying API or inferring from existing services."""
-        # Method 1: Query API directly
+        """Return the Dokploy `githubId` used to bind a compose to GitHub source."""
+        # Method 1: query the GitHub providers directly (authoritative).
         try:
-            providers = self.list_git_providers()
-            for p in providers:
-                if p.get("provider") == "github":
-                    return p.get("gitProviderId")
+            for p in self.list_git_providers():
+                github_id = p.get("githubId")
+                if github_id:
+                    return github_id
         except Exception:
             pass
 
-        # Method 2: Infer from existing services
+        # Method 2: fall back to a compose that is already bound to GitHub.
         try:
             projects = self.list_projects()
             for proj in projects:
