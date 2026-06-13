@@ -285,12 +285,38 @@ class TestDokployClient:
             }
         ]
 
-        assert (
-            client.find_compose_by_name("app", "platform", env_name="staging")[
-                "composeId"
-            ]
-            == "staging"
-        )
+        # find_compose_by_name re-fetches the full compose via compose.one,
+        # because project.all returns a truncated object without `env`.
+        client.get_compose = lambda cid: {
+            "composeId": cid,
+            "env": "IAC_CONFIG_HASH=abc123",
+        }
+
+        result = client.find_compose_by_name("app", "platform", env_name="staging")
+        assert result["composeId"] == "staging"
+        # full object (with env), not the truncated project.all entry
+        assert result["env"] == "IAC_CONFIG_HASH=abc123"
+
+    def test_find_compose_by_name_propagates_get_compose_errors(self, dokploy_env):
+        """A compose.one failure must propagate, not silently fall back to the
+        truncated project.all object — that would reintroduce the 'hash reads as
+        none' bug and hide real API/auth errors from callers."""
+        client = DokployClient()
+        client.list_projects = lambda: [
+            {
+                "name": "platform",
+                "environments": [
+                    {"name": "staging", "compose": [{"name": "app", "composeId": "s"}]}
+                ],
+            }
+        ]
+
+        def boom(_cid):
+            raise RuntimeError("compose.one 503")
+
+        client.get_compose = boom
+        with pytest.raises(RuntimeError, match="compose.one 503"):
+            client.find_compose_by_name("app", "platform", env_name="staging")
 
     def test_get_environment_id_falls_back_for_production_only(self, dokploy_env):
         client = DokployClient()

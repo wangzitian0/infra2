@@ -243,6 +243,17 @@ class DokployClient:
                     continue
                 for compose in env.get("compose", []):
                     if compose.get("name") == name:
+                        # `project.all` returns a TRUNCATED compose (no `env` /
+                        # source fields). Re-fetch the full object via compose.one
+                        # so callers that read env — e.g. get_remote_config_hash's
+                        # IAC_CONFIG_HASH post-deploy check — see real values
+                        # instead of a spurious "none". Let get_compose errors
+                        # propagate: silently falling back to the truncated object
+                        # would reintroduce the "hash reads as none" bug and hide
+                        # real API/auth failures from callers that handle them.
+                        compose_id = compose.get("composeId")
+                        if compose_id:
+                            return self.get_compose(compose_id)
                         return compose
         return None
 
