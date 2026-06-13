@@ -82,6 +82,16 @@ def main() -> int:
         time.sleep(interval)
 
 
+def _host_specs_for_env(specs: list) -> list:
+    """Host `resource` probes describe the single shared host, so only the
+    production runner should run them — otherwise the prod and staging runners
+    (co-located on that host) both alert on the same CPU/mem/disk threshold.
+    """
+    if os.getenv("ENV", "production") == "production":
+        return specs
+    return [spec for spec in specs if spec.kind != "resource"]
+
+
 def run_once(
     *,
     as_json: bool = False,
@@ -122,7 +132,7 @@ def run_once(
     dry_run = os.getenv("INFRA_PROBE_DRY_RUN", "0") == "1"
 
     for group in groups:
-        specs = parse_probe_specs(group.raw_specs)
+        specs = _host_specs_for_env(parse_probe_specs(group.raw_specs))
         results = run_probes(specs)
         failures = failed_results(results)
         any_failures = any_failures or bool(failures)

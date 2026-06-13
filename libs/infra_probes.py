@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import json
+import os
 import shlex
 import socket
 import subprocess
@@ -88,6 +89,8 @@ def run_probe(
             observed = _run_tcp(spec, tcp_connect=tcp_connect)
         elif spec.kind == "command":
             observed = _run_command(spec, command_runner=command_runner)
+        elif spec.kind == "resource":
+            observed = _run_resource(spec)
         else:
             raise ValueError(f"Unsupported probe kind: {spec.kind}")
         ok = _matches_expected(spec, observed)
@@ -232,12 +235,79 @@ def _run_command(
     return result.stdout.strip()
 
 
+def _run_resource(spec: ProbeSpec, *, sample_seconds: float = 0.4) -> str:
+    """Return host resource usage as a percentage string for cpu | mem | disk:<path>.
+
+    Reads host-global /proc (loadavg/meminfo/stat are not namespaced, so they
+    report the host even from inside a container) and statvfs for disk. The
+    deploy must bind-mount the host root for `disk:<path>` to see real host usage.
+    """
+    target = spec.target.strip()
+    if target == "cpu":
+        usage = _cpu_percent(sample_seconds)
+    elif target == "mem":
+        usage = _mem_percent()
+    elif target.startswith("disk:"):
+        usage = _disk_percent(target.split(":", 1)[1] or "/")
+    else:
+        raise ValueError(f"Unsupported resource target: {target!r}")
+    return f"{usage:.1f}"
+
+
+def _cpu_percent(sample_seconds: float) -> float:
+    def snapshot() -> tuple[int, int]:
+        with open("/proc/stat", encoding="utf-8") as handle:
+            fields = handle.readline().split()
+        values = [int(x) for x in fields[1:]]
+        idle = values[3] + (values[4] if len(values) > 4 else 0)  # idle + iowait
+        return sum(values), idle
+
+    total0, idle0 = snapshot()
+    time.sleep(max(0.05, sample_seconds))
+    total1, idle1 = snapshot()
+    total_delta = total1 - total0
+    if total_delta <= 0:
+        return 0.0
+    busy = (1.0 - (idle1 - idle0) / total_delta) * 100.0
+    return max(0.0, min(100.0, busy))
+
+
+def _mem_percent() -> float:
+    info: dict[str, int] = {}
+    with open("/proc/meminfo", encoding="utf-8") as handle:
+        for line in handle:
+            key, _, rest = line.partition(":")
+            parts = rest.split()
+            if parts:
+                info[key.strip()] = int(parts[0])  # kB
+    total = info.get("MemTotal", 0)
+    available = info.get("MemAvailable", info.get("MemFree", 0))
+    if total <= 0:
+        return 0.0
+    return max(0.0, min(100.0, (total - available) / total * 100.0))
+
+
+def _disk_percent(path: str) -> float:
+    stat = os.statvfs(path)
+    total = stat.f_blocks * stat.f_frsize
+    available = stat.f_bavail * stat.f_frsize
+    if total <= 0:
+        return 0.0
+    return max(0.0, min(100.0, (total - available) / total * 100.0))
+
+
 def _matches_expected(spec: ProbeSpec, observed: str) -> bool:
     if not spec.expected:
         return True
     if spec.kind == "http":
         status = observed.split(":", 1)[0]
         return status in {item.strip() for item in spec.expected.split(",")}
+    if spec.kind == "resource":
+        # expected is a percentage ceiling; pass while usage stays at or below it.
+        try:
+            return float(observed) <= float(spec.expected)
+        except ValueError:
+            return False
     return spec.expected in observed
 
 

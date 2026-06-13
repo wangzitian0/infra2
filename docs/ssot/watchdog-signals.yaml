@@ -165,6 +165,38 @@ signals:
     cadence: 60s
     alert_threshold: 3 consecutive failures
 
+  # Host resource backstop (out-of-band from SigNoz). Production runner only —
+  # the host is shared, so it is checked once. expected = % ceiling.
+  - signal_id: production.host.cpu
+    environment: production
+    component: host
+    signal: host-cpu
+    primary_owner: internal
+    severity: warning
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+    expected: "<=80% CPU"
+
+  - signal_id: production.host.mem
+    environment: production
+    component: host
+    signal: host-mem
+    primary_owner: internal
+    severity: warning
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+    expected: "<=80% memory"
+
+  - signal_id: production.host.disk
+    environment: production
+    component: host
+    signal: host-disk
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+    expected: "<=80% disk"
+
   - signal_id: production.1password.internal-http
     environment: production
     component: 1password-connect

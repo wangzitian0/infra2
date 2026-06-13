@@ -559,3 +559,58 @@ def test_probe_runner_env_file_overrides_empty_compose_defaults(
         runner.os.environ["INFRA_PROBE_HEARTBEAT_URL"]
         == "https://watchdog.example/heartbeat"
     )
+
+
+def test_resource_probe_threshold_pass_fail() -> None:
+    """A `resource` probe passes while usage <= the % ceiling, fails above it."""
+    spec = parse_probe_specs("host-cpu|resource|cpu|80")[0]
+    assert probes._matches_expected(spec, "12.5") is True
+    assert probes._matches_expected(spec, "80.0") is True
+    assert probes._matches_expected(spec, "80.1") is False
+    assert probes._matches_expected(spec, "97") is False
+    # non-numeric observed must fail closed
+    assert probes._matches_expected(spec, "ValueError") is False
+
+
+def test_resource_disk_probe_returns_percent() -> None:
+    """disk:<path> reports a 0-100 usage percentage (statvfs, portable)."""
+    spec = parse_probe_specs("host-disk|resource|disk:/|80")[0]
+    observed = probes._run_resource(spec)
+    value = float(observed)
+    assert 0.0 <= value <= 100.0
+
+
+def test_resource_unknown_target_raises() -> None:
+    spec = parse_probe_specs("bad|resource|gpu|80")[0]
+    try:
+        probes._run_resource(spec)
+    except ValueError as exc:
+        assert "gpu" in str(exc)
+    else:
+        raise AssertionError("expected ValueError for unknown resource target")
+
+
+def test_cpu_and_mem_percent_when_proc_available() -> None:
+    """On Linux (/proc present) cpu/mem report a 0-100 percentage."""
+    import os
+
+    if not os.path.exists("/proc/stat") or not os.path.exists("/proc/meminfo"):
+        return  # /proc not available (e.g. macOS dev box) — covered on Linux CI
+    cpu = float(probes._run_resource(parse_probe_specs("c|resource|cpu|80")[0]))
+    mem = float(probes._run_resource(parse_probe_specs("m|resource|mem|80")[0]))
+    assert 0.0 <= cpu <= 100.0
+    assert 0.0 <= mem <= 100.0
+
+
+def test_host_resource_specs_gated_to_production(monkeypatch) -> None:
+    """Resource probes run on the production runner only (shared host)."""
+    runner = _load_probe_runner()
+    specs = parse_probe_specs(
+        "vault|http|http://vault|200\nhost-cpu|resource|cpu|80"
+    )
+
+    monkeypatch.setenv("ENV", "production")
+    assert {s.kind for s in runner._host_specs_for_env(specs)} == {"http", "resource"}
+
+    monkeypatch.setenv("ENV", "staging")
+    assert {s.kind for s in runner._host_specs_for_env(specs)} == {"http"}
