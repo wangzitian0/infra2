@@ -76,3 +76,7 @@ temp/
 .site/
 docs/.site/
 
+# Cloudflare Wrangler local cache/state
+.wrangler/
+**/.wrangler/
+
