@@ -540,10 +540,21 @@ class Deployer:
         # floods the single-concurrency deploy queue. Keep the iac-runner as the
         # single GitOps trigger; re-assert on update so a manual toggle can't
         # regress it.
+        # Resolve the env that will actually be deployed (existing composes
+        # preserve runtime creds like VAULT_ROLE_ID from Dokploy), then fail
+        # closed if an AppRole compose would ship without its role/secret — the
+        # #257/#290 foot-gun where the vault-agent crash-loops on
+        # "VAULT_ROLE_ID and VAULT_SECRET_ID are required".
         if existing:
             compose_id = existing["composeId"]
-            info("Updating existing compose service")
             existing_env = client.get_compose(compose_id).get("env")
+            effective_env = _preserve_runtime_env(env_str, existing_env)
+        else:
+            effective_env = env_str
+        cls._assert_approle_creds_present(effective_env)
+
+        if existing:
+            info("Updating existing compose service")
             client.update_compose(
                 compose_id,
                 source_type="github",
@@ -552,7 +563,7 @@ class Deployer:
                 owner=GITHUB_OWNER,
                 branch=GITHUB_BRANCH,
                 composePath=cls.compose_path,
-                env=_preserve_runtime_env(env_str, existing_env),
+                env=effective_env,
                 autoDeploy=False,
             )
         else:
@@ -567,7 +578,7 @@ class Deployer:
                 owner=GITHUB_OWNER,
                 branch=GITHUB_BRANCH,
                 composePath=cls.compose_path,
-                env=env_str,
+                env=effective_env,
                 autoDeploy=False,
             )
             compose_id = result["composeId"]
@@ -789,6 +800,48 @@ class Deployer:
             if effective_hash == expected_hash or time.monotonic() >= deadline:
                 return effective_hash
             time.sleep(interval)
+
+    @classmethod
+    def _assert_approle_creds_present(cls, effective_env: str) -> None:
+        """Fail closed if this service's compose uses Vault AppRole auth but the
+        env about to be deployed lacks role/secret creds.
+
+        Prevents the #257/#290 foot-gun: an AppRole config change (token_file ->
+        approle) lands without VAULT_ROLE_ID/VAULT_SECRET_ID, so the vault-agent
+        crash-loops on "VAULT_ROLE_ID and VAULT_SECRET_ID are required" and the
+        service never starts. Run `vault.setup-approle` first.
+        """
+        from pathlib import Path
+
+        # Read the compose WITHOUT swallowing errors: it is a required,
+        # version-controlled artifact (already read for the config hash), so an
+        # unreadable compose is a real problem — failing closed beats skipping the
+        # preflight and re-opening the foot-gun.
+        compose_text = Path(cls.compose_path).read_text(encoding="utf-8")
+        if (
+            "VAULT_ROLE_ID" not in compose_text
+            and "VAULT_SECRET_ID" not in compose_text
+        ):
+            return  # service does not use AppRole auth
+
+        env = _parse_env_text(effective_env)
+        missing = [
+            key
+            for key in ("VAULT_ROLE_ID", "VAULT_SECRET_ID")
+            if not (env.get(key) or "").strip()
+        ]
+        if not missing:
+            return
+
+        e = cls.env()
+        raise ValueError(
+            f"{cls.service}: compose uses Vault AppRole auth but "
+            f"{', '.join(missing)} is missing from the deploy env — the vault-agent "
+            "would crash-loop on 'VAULT_ROLE_ID and VAULT_SECRET_ID are required'. "
+            f"Run `DEPLOY_ENV={e.get('ENV', 'production')} invoke vault.setup-approle "
+            f"--project {cls.project_name(e)} --service {cls.service} --deploy` before "
+            "deploying."
+        )
 
     @classmethod
     def compute_local_config_hash(cls, c: "Context", env_vars: dict[str, str]) -> str:
