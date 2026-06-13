@@ -38,7 +38,6 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from libs.container_breakdown import (  # noqa: E402
-    Breakdown,
     build_breakdown_alert_payload,
     find_breakdown_containers,
 )
@@ -128,35 +127,28 @@ def run_once(
     the number of containers alerted on."""
     now = time.monotonic()
     breakdowns = sweep(client, log_tail)
+    # last_alerted maps container -> (last_alert_monotonic, the breakdown we alerted on)
     fresh = [
         b
         for b in breakdowns
-        if now - last_alerted.get(b.container, -renotify - 1) >= renotify
+        if now - last_alerted.get(b.container, (-renotify - 1, None))[0] >= renotify
     ]
     if fresh:
         for b in fresh:
             logger.warning("BREAKDOWN %s (%s): %s", b.container, b.state, b.reason)
-            last_alerted[b.container] = now
+            last_alerted[b.container] = (now, b)
         _post_alert(build_breakdown_alert_payload(fresh))
-    # Recovered = previously-alerted containers no longer broken. Emit a RESOLVED
-    # alert so the Feishu page auto-clears (a self-healed container otherwise leaves a
-    # stuck firing page), then forget them so they can re-alert if they break again.
+    # Recovered = previously-alerted containers no longer broken. Resolve them with the
+    # ORIGINAL breakdown (same state, hence same label set) so the resolved alert
+    # matches the firing instance and the page actually clears — a stub state like
+    # "recovered" forms a different label set and never resolves the original. Then
+    # forget them so they can re-alert if they break again.
     live = {b.container for b in breakdowns}
-    recovered = [n for n in last_alerted if n not in live]
-    for name in recovered:
+    recovered = [rec for name, (_, rec) in last_alerted.items() if name not in live]
+    for name in [n for n in last_alerted if n not in live]:
         last_alerted.pop(name, None)
     if recovered:
-        _post_alert(
-            build_breakdown_alert_payload(
-                [
-                    Breakdown(
-                        container=n, state="recovered", reason="recovered", detail=""
-                    )
-                    for n in recovered
-                ],
-                firing=False,
-            )
-        )
+        _post_alert(build_breakdown_alert_payload(recovered, firing=False))
     return len(fresh)
 
 
@@ -189,7 +181,9 @@ def main() -> None:
     renotify = int(os.environ.get("BREAKDOWN_RENOTIFY_SECONDS", DEFAULT_RENOTIFY))
     log_tail = int(os.environ.get("BREAKDOWN_LOG_TAIL", DEFAULT_LOG_TAIL))
 
-    last_alerted: dict[str, float] = {}
+    # container -> (last_alert_monotonic, breakdown we alerted on, kept so the
+    # resolved alert can reuse the original state/labels)
+    last_alerted: dict = {}
     client = _docker_client(sock)
     while True:
         try:

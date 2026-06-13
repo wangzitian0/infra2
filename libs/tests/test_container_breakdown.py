@@ -149,5 +149,13 @@ def test_run_once_emits_resolved_alert_on_recovery(monkeypatch):
     w.run_once(client=None, log_tail=25, last_alerted=last, renotify=1800)  # recovers
 
     assert [p["status"] for p in posted] == ["firing", "resolved"]
+    # the resolved alert must carry the ORIGINAL state label so its label set matches
+    # the firing instance — a stub "recovered" state would never resolve the page
+    # (Copilot CR)
+    assert (
+        posted[1]["alerts"][0]["labels"]["state"]
+        == posted[0]["alerts"][0]["labels"]["state"]
+        == "restarting"
+    )
     # the recovered container is forgotten so it can re-alert if it breaks again
     assert "vault-agent" not in last
