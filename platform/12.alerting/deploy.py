@@ -124,9 +124,10 @@ class AlertingDeployer(Deployer):
                     f"could not read INFRA_PROBE_SPECS from {container}: "
                     f"{(result.stderr or 'docker exec failed').strip()}"
                 )
-            if time.monotonic() >= deadline:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 return last_err
-            time.sleep(5)
+            time.sleep(min(5.0, remaining))
 
     @classmethod
     def _sync_1password_to_vault(cls) -> bool:

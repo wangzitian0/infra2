@@ -238,8 +238,8 @@ def _run_command(
 def _run_resource(spec: ProbeSpec, *, sample_seconds: float = 0.4) -> str:
     """Return host resource usage as a percentage string for cpu | mem | disk:<path>.
 
-    Reads host-global /proc (loadavg/meminfo/stat are not namespaced, so they
-    report the host even from inside a container) and statvfs for disk.
+    Reads host-global /proc (/proc/stat and /proc/meminfo are not namespaced, so
+    they report the host even from inside a container) and statvfs for disk.
     `disk:<path>` reports usage of the filesystem backing <path>; statvfs needs
     only ANY path on the target filesystem, so the deploy bind-mounts a small
     dedicated host directory (not the host root) into the container.
