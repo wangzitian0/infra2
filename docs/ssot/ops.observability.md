@@ -76,9 +76,11 @@ graph LR
 **前置条件**:
 - SigNoz 已部署并健康（`invoke signoz.status`）
 - 应用部署在 `dokploy-network` Docker 网络中
-- OTLP 端点：`platform-signoz-otel-collector${ENV_SUFFIX}:4317` (gRPC) 或 `:4318` (HTTP)
+- OTLP 端点（所有环境）：`platform-signoz-otel-collector:4317` (gRPC) 或 `:4318` (HTTP)
 
 > **注意**: OTLP 端口仅在 Docker 网络内可访问，不对外暴露。
+
+> **单一全局实例**: SigNoz 是 `prod_only` 的单实例（`platform/11.signoz/deploy.py`）。preview / staging / production **全部**把遥测打到上面这个**无后缀** collector，靠 `deployment.environment` 资源属性区分环境——没有 per-env collector（容器名里的 `${ENV_SUFFIX}` 只在生产部署，恒为空）。环境标识规则见 [core.environments.md](core.environments.md#telemetry-identity)。
 
 **验证连通性**:
 ```bash
@@ -95,7 +97,7 @@ from opentelemetry.sdk.resources import Resource
 
 resource = Resource.create({"service.name": "my-service"})
 provider = TracerProvider(resource=resource)
-exporter = OTLPSpanExporter(endpoint="http://platform-signoz-otel-collector${ENV_SUFFIX}:4318/v1/traces")
+exporter = OTLPSpanExporter(endpoint="http://platform-signoz-otel-collector:4318/v1/traces")
 provider.add_span_processor(BatchSpanProcessor(exporter))
 trace.set_tracer_provider(provider)
 
@@ -108,9 +110,11 @@ with tracer.start_as_current_span("my-span"):
 
 | 变量 | 说明 | 示例 |
 |------|------|------|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP 端点（HTTP） | `http://platform-signoz-otel-collector${ENV_SUFFIX}:4318` |
-| `OTEL_SERVICE_NAME` | 服务名 | `my-app` |
-| `OTEL_RESOURCE_ATTRIBUTES` | 资源属性 | `deployment.environment=prod` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP 端点（HTTP，所有环境无后缀） | `http://platform-signoz-otel-collector:4318` |
+| `OTEL_SERVICE_NAME` | 服务名 | `finance-report-backend` |
+| `OTEL_RESOURCE_ATTRIBUTES` | 资源属性（**单一变量**，逗号分隔；同时含表层别名 + 底层 commit） | `deployment.environment=production,service.version=<short commit sha>`（别名也可为 `staging` / `pr-<N>`） |
+
+> 表层别名与底层 commit 由 infra2 在部署时签发，应用只消费。规则见 [core.environments.md](core.environments.md#telemetry-identity)。
 
 ---
 
@@ -156,8 +160,8 @@ ${DATA_PATH}/
 ### 5.3 访问地址
 
 - **Web UI**: `https://signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`
-- **OTLP gRPC**: `platform-signoz-otel-collector${ENV_SUFFIX}:4317` (Docker 网络内)
-- **OTLP HTTP**: `platform-signoz-otel-collector${ENV_SUFFIX}:4318` (Docker 网络内)
+- **OTLP gRPC**: `platform-signoz-otel-collector:4317` (Docker 网络内)
+- **OTLP HTTP**: `platform-signoz-otel-collector:4318` (Docker 网络内)
 
 ### 5.4 容量规划
 
@@ -190,7 +194,7 @@ ${DATA_PATH}/
 - **解决**: `invoke clickhouse.pre-compose` 重新初始化
 
 ### 问题 2: OTLP 数据未显示
-- **检查**: `docker logs platform-signoz-otel-collector${ENV_SUFFIX}`
+- **检查**: `docker logs platform-signoz-otel-collector`
 - **常见原因**: ClickHouse 连接失败、数据格式错误
 - **解决**: 检查 `otel-collector-config.yaml` 的 exporter 配置
 

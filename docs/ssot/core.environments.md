@@ -280,6 +280,18 @@ invoke fr-app.setup       # 域名: report.zitian.party
 | Staging | `secret/data/{project}/staging/{service}` | `secret/data/finance_report/staging/app` |
 | Production | `secret/data/{project}/production/{service}` | `secret/data/finance_report/production/app` |
 
+<a id="telemetry-identity"></a>
+### 4.5 遥测标识隔离 (Telemetry identity)
+
+可观测性是**单一全局实例**（SigNoz / OpenPanel，`prod_only`）：所有环境都打到同一套，**靠标识区分**，不靠 per-env 实例。标识分两层——底层不可变 key + 表层人读别名：
+
+| 层 | 字段 | 取值 | 说明 |
+|----|------|------|------|
+| **底层（不可变 key）** | `service.version` | **short commit SHA** | 与 deploy primitive 的 `IMAGE_TAG` 同值；一个 commit = 一个镜像 = 一条遥测流（Axiom A，可复现）。OpenPanel 用同值作 property。 |
+| **表层（展示/过滤）** | `deployment.environment` | `production` / `staging` / `pr-<N>` / `commit-<sha>` / `tag-<x>` / `main` | 按触发来源派生的别名；OpenPanel 则用单一 `preview` project + 该别名 property。 |
+
+**签发归 infra2**：infra2 在部署时从触发上下文（PR 号 / tag / branch / commit）派生 `{short-sha, 表层别名}` 并注入 `service.version` + `deployment.environment`；应用只**消费**这些变量并对缺失做 fast-fail（不得自行定义环境）。OTLP 端点见 [ops.observability.md](ops.observability.md#41-应用接入-otlp)。
+
 ---
 
 ## 5. 测试门禁 (Quality Gates)
