@@ -166,9 +166,12 @@ services:
         host-disk|resource|disk:/hostfs|80|critical|5
     volumes:
       - secrets:/secrets:ro
-      # A dedicated empty host dir (Docker auto-creates it) that lives on the host
-      # root filesystem: statvfs on it reports the HOST disk usage without exposing
-      # any host files (binding `/` would expose SSH keys/configs). Read-only.
+      # A dedicated empty host dir (Docker auto-creates it). statvfs reports usage
+      # of the FILESYSTEM BACKING this dir — on this single-root-partition host
+      # that is the host root (incl. /var/lib/docker, where a runaway writer fills
+      # space). Mounting a dedicated dir instead of `/` avoids exposing host files
+      # (SSH keys/configs). Read-only. If /var is split out on some host, point
+      # this at a path on the filesystem you want to watch.
       - /var/lib/infra2-disk-probe:/hostfs:ro
     networks:
       - dokploy-network
