@@ -105,12 +105,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--code",
         required=True,
-        help="app code surface: a branch/tag (e.g. main) or a full 40-hex sha",
+        help="app code surface: main | release/x.y | vX.Y.Z | <sha>",
     )
     parser.add_argument(
         "--iac-ref",
         required=True,
-        help="infra2 ref pinning the IaC: a branch/tag or a full 40-hex sha",
+        help="infra2 ref pinning the IaC: main | release/x.y | vX.Y.Z | <sha>",
     )
     parser.add_argument(
         "--domain", required=True, help="base domain, e.g. zitian.party"
@@ -147,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
         if not _SHA_RE.match(value):
             print(
                 f"{label} resolved to {value!r}, which is not a full 40-hex commit sha; "
-                "pass a branch/tag or a full sha",
+                "expected main | release/x.y | vX.Y.Z | <sha>",
                 file=sys.stderr,
             )
             return 2
