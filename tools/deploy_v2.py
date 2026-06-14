@@ -39,6 +39,10 @@ from tools.preview_lifecycle import up as _preview_up
 
 _APP_SERVICE = "finance_report/app"
 _INFRA2_REPO = "https://github.com/wangzitian0/infra2"
+# Dokploy's github source clones a branch/tag ref (`git clone -b`), NOT a commit sha — a
+# raw sha fails "Remote branch <sha> not found" (finance_report#342). So the preview
+# template is cloned from a ref name; iac_ref stays the recorded identity on the target.
+_INFRA2_DEFAULT_BRANCH = "main"
 
 
 def resolve_data_lane(target: DeployTarget) -> str:
@@ -92,6 +96,7 @@ def deploy_v2(
     staging_validated: bool = False,
     break_glass: bool = False,
     code_reviewed: bool | None = None,
+    iac_branch: str | None = None,
     timeout: int = 600,
 ) -> DeployV2Result:
     """Validate and execute a deploy_v2 target.
@@ -118,14 +123,18 @@ def deploy_v2(
         )
 
     if env_config(target.env).dynamic:  # preview
-        # iac_ref pins the infra2 ref Dokploy pulls the preview compose template from.
+        # Dokploy pulls the preview compose template from infra2 by cloning a branch/tag
+        # ref — NOT the iac_ref sha (that fails "Remote branch <sha> not found", #342). The
+        # template tracks `iac_branch` (default: infra2 main); iac_ref remains the recorded
+        # identity on the target. Per-commit template pinning would need a tag/branch at
+        # that commit (follow-up).
         result = _preview_up(
             alias_kind,
             alias_value,
             code=target.code_version,
             domain=domain,
             client=client,
-            branch=target.iac_ref,
+            branch=iac_branch or _INFRA2_DEFAULT_BRANCH,
             wait=wait,
             health_timeout=timeout,
         )

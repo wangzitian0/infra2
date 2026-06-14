@@ -67,7 +67,7 @@ def calls(monkeypatch):
 # --- routing ---------------------------------------------------------------
 
 
-def test_preview_routes_to_lifecycle_with_iac_ref_as_branch(calls):
+def test_preview_routes_to_lifecycle_cloning_a_branch_ref(calls):
     res = deploy_v2(
         service="finance_report/app",
         env="preview",
@@ -81,9 +81,27 @@ def test_preview_routes_to_lifecycle_with_iac_ref_as_branch(calls):
     assert isinstance(res, DeployV2Result)
     assert res.backend == "preview-lifecycle"
     assert res.target.sub_domain == "report-pr-7"
-    assert calls["preview"]["branch"] == SHA_IAC  # iac_ref pins the source ref
+    # Dokploy clones a branch/tag ref, not the iac_ref sha (#342): default is infra2 main,
+    # while iac_ref stays the recorded identity on the target.
+    assert calls["preview"]["branch"] == "main"
+    assert res.target.iac_ref == SHA_IAC
     assert calls["preview"]["code"] == SHA_CODE
     assert calls["fixed"] is None
+
+
+def test_preview_iac_branch_override(calls):
+    deploy_v2(
+        service="finance_report/app",
+        env="preview",
+        code_version=SHA_CODE,
+        iac_ref=SHA_IAC,
+        alias_kind="pr",
+        alias_value=7,
+        client=object(),
+        domain="zitian.party",
+        iac_branch="release/1.2",
+    )
+    assert calls["preview"]["branch"] == "release/1.2"  # clone a specific infra2 ref
 
 
 @pytest.mark.parametrize("env", ["staging", "prod"])
