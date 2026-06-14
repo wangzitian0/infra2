@@ -51,6 +51,9 @@ class ConvergenceFakeDokploy:
     def get_environment_id(self, project, env_name=None):
         return self._environment_id
 
+    def ensure_environment(self, project, env_name, description=""):
+        return {"environmentId": self._environment_id, "name": env_name}, False
+
     def find_compose_by_name(self, name, project_name=None, env_name=None):
         # The source env's app compose supplies the AppRole creds previews reuse.
         if name == "app" and env_name == "staging":

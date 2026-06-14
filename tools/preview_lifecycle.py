@@ -227,11 +227,19 @@ def up(
 
     existing = _find_compose(client, alias.compose_name)
     if not existing:
-        environment_id = client.get_environment_id(PREVIEW_PROJECT, PREVIEW_ENVIRONMENT)
+        # Self-provision the preview environment (idempotent). The fixed envs
+        # (staging/prod) are pre-provisioned by convention, but preview is DYNAMIC — its
+        # composes are created and destroyed per alias — so the lifecycle owns its parent
+        # environment too. This makes a fresh box / first-ever preview reproducible with
+        # no out-of-band `invoke dokploy_env.env-ensure` step (the missing-env gap that
+        # blocked the first live canary). PREVIEW_PROJECT/PREVIEW_ENVIRONMENT are
+        # constants, so there is no typo risk in creating-if-absent.
+        env_obj, _ = client.ensure_environment(PREVIEW_PROJECT, PREVIEW_ENVIRONMENT)
+        environment_id = env_obj.get("environmentId")
         if not environment_id:
             raise RuntimeError(
-                f"Dokploy environment {PREVIEW_ENVIRONMENT!r} not found in project "
-                f"{PREVIEW_PROJECT!r}; create it once before deploying previews."
+                f"could not ensure Dokploy environment "
+                f"{PREVIEW_PROJECT!r}/{PREVIEW_ENVIRONMENT!r}"
             )
         # Teardown-convergence invariant (#921 / D8): the Dokploy record name AND the
         # appName (the docker project `compose.delete` prunes by) are the SAME alias key,
