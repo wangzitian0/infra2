@@ -316,11 +316,11 @@ signals:
     environment: staging
     component: signoz
     signal: signoz-public-route
-    primary_owner: cloudflare
+    primary_owner: excluded
     severity: warning
-    cadence: 30m
-    expected: "200,302"
     url: https://signoz-staging.zitian.party
+    exclusion_reason: SigNoz is a single global instance (prod_only); there is no staging deployment by design. All environments ship telemetry to the one collector and are separated by the deployment.environment attribute, so signoz-staging.zitian.party never exists and always 404s.
+    revalidation_condition: Do not re-enable — signoz is global-by-design. Remove this signal only if SigNoz ever becomes a per-environment deployment.
 
   - signal_id: staging.dokploy.public-route
     environment: staging
