@@ -38,7 +38,6 @@ def test_worker_default_targets_cover_enabled_public_routes_only() -> None:
         "https://signoz.zitian.party",
         "https://minio-staging.zitian.party/minio/health/live",
         "https://sso-staging.zitian.party/-/health/live/",
-        "https://signoz-staging.zitian.party",
         "https://report.zitian.party/",
         "https://report.zitian.party/api/health",
         "https://report-staging.zitian.party/",
@@ -51,6 +50,9 @@ def test_worker_default_targets_cover_enabled_public_routes_only() -> None:
     assert "[200, 429, 472, 473]" in source
     assert "https://cloud-staging.zitian.party" not in source
     assert "https://vault-staging.zitian.party/v1/sys/health" not in source
+    # signoz is a single global instance (prod_only); there is no staging
+    # deployment by design, so signoz-staging.zitian.party must not be probed.
+    assert "https://signoz-staging.zitian.party" not in source
 
 
 def test_worker_heartbeat_endpoint_and_staleness_checks_are_required() -> None:
