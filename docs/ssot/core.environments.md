@@ -292,6 +292,39 @@ invoke fr-app.setup       # 域名: report.zitian.party
 
 **签发归 infra2**：infra2 在部署时从触发上下文（PR 号 / tag / branch / commit）派生 `{short-sha, 表层别名}` 并注入 `service.version` + `deployment.environment`；应用只**消费**这些变量并对缺失做 fast-fail（不得自行定义环境）。OTLP 端点见 [ops.observability.md](ops.observability.md#41-应用接入-otlp)。
 
+对 **preview** 多别名而言，`deployment.environment` 的取值就是别名 token 本身——`main` / `pr-<N>` / `commit-<sha7>`（见 §4.6）。同一份签发逻辑由 `tools/preview_lifecycle.py` 在 `up` 时通过 `ENV` 注入到 compose（vault-agent 与遥测共同消费），与 `tools/deploy_env_config.py::preview_alias` 派生的 `env_suffix` 保持同源。
+
+---
+
+<a id="manual-deploy-targets"></a>
+### 4.6 手动部署目标 (Manual deploy targets)
+
+> **部署策略真理**：prod / staging / preview **三者都是手动部署**（manual，无 auto-follow-main）。
+> CI 是开发期质量门禁（lint + 单测 + E2E），**不**触发任何环境部署。每次上线都是显式动作
+> （`tools/deploy_primitive.py` 或 `tools/preview_lifecycle.py`），由人选择「部署哪个 commit、到哪个目标」。
+
+| 目标 | 部署方式 | 入口 | 数据 | 域名 | 生命周期 |
+|------|---------|------|------|------|---------|
+| **prod** | 手动 | `deploy_primitive --env prod`（要求该 digest 先过 staging，promote-not-rebuild） | 真实 prod 数据 | `report.<domain>` | 长期 |
+| **staging** | 手动 | `deploy_primitive --env staging` | staging 数据 | `report-staging.<domain>` | 长期（≈ 略领先 prod 的同构环境） |
+| **preview** | 手动 | `preview_lifecycle up`（多别名，见下） | **每栈各自的临时数据库**（ephemeral） | `report-<alias>.<domain>` | 比 CI 长，**显式 teardown** 前一直存在 |
+
+**preview 多别名模型**（每个别名 = 一套独立的 Dokploy compose 栈）：
+
+| 别名 kind | alias token | ENV_SUFFIX / ENV_DOMAIN_SUFFIX | 域名 | compose 名 (appName slug) | `deployment.environment` |
+|-----------|-------------|--------------------------------|------|---------------------------|--------------------------|
+| `main` | `main` | `-main` | `report-main.<domain>` | `finance-report-preview-main` | `main` |
+| `pr` | `pr-<N>` | `-pr-<N>` | `report-pr-<N>.<domain>` | `finance-report-preview-pr-<N>` | `pr-<N>` |
+| `commit` | `commit-<sha7>` | `-commit-<sha7>` | `report-commit-<sha7>.<domain>` | `finance-report-preview-commit-<sha7>` | `commit-<sha7>` |
+
+真源：`tools/deploy_env_config.py::preview_alias(kind, value)`（纯函数，确定性，单测覆盖）。
+
+**preview 关键特性**：
+1. **多别名共存**：`main` / `pr-<N>` / `commit-<sha7>` 各自一套独立 compose 栈，互不冲突，也不与 staging/prod 撞容器名或 Host() 规则（靠唯一的 `ENV_SUFFIX`）。
+2. **临时数据库**：preview compose 模板（`finance_report/finance_report/preview/compose.yaml`）内置自己的 `db`（postgres）服务，数据落在**命名卷**（无 host bind mount）。`DATABASE_URL` 在 backend entrypoint 中、source 完 Vault 渲染的 `/secrets/.env` 之后被覆盖指向这个本地库——因此 preview **绝不读写**共享的 staging/prod 数据库；其它 app secret（AI keys、S3）仍由 Vault 提供，preview 完整可用。迁移在 backend 启动时对新库执行（`alembic upgrade head`）。
+3. **生命周期长于 CI**：preview 栈在显式 teardown 前一直存活。`preview_lifecycle down --kind ... --value ...` 通过 `delete_compose(delete_volumes=True)` 销毁该别名的 compose **并删除其临时 DB 命名卷**，不留残余。
+4. **路由零额外工作**：`*.zitian.party` 通配 DNS + 通配证书已就绪；任何 `report-<alias>` 主机只要 compose 里有对应 Traefik router label 就自动路由，无需新建 DNS/证书。
+
 ---
 
 ## 5. 测试门禁 (Quality Gates)
@@ -532,9 +565,10 @@ time invoke fr-app.setup
 
 ### 11.2 Preview Environments
 
-为每个 feature branch 自动创建预览环境：
-- `report-feature-dark-mode.zitian.party`
+多别名 preview 已落地（§4.6）：`main` / `pr-<N>` / `commit-<sha7>` 三类别名各自一套
+带临时数据库的独立 compose 栈，由 `tools/preview_lifecycle.py` 手动 up/down。未来可在此
+基础上扩展 feature-branch 别名（如 `report-feature-dark-mode.zitian.party`）。
 
 ---
 
-*Last updated: 2026-01-20*
+*Last updated: 2026-06-15*

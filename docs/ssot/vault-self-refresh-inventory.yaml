@@ -149,3 +149,18 @@ services:
     vault_agent_container: finance_report-app-vault-agent${ENV_SUFFIX}
     app_containers:
       - finance_report-backend${ENV_SUFFIX}
+  - id: finance_report/preview
+    project: finance_report
+    dokploy_service: app
+    # Multi-alias ephemeral PREVIEW (feat/preview-env-multi-alias). Same AppRole
+    # auth as the app; the secrets template reads the SOURCE env's app secrets
+    # (PREVIEW_SECRET_ENV, default staging) since an alias has no Vault path of
+    # its own — hence the {env} here resolves to that source env, not the alias.
+    auth_method: approle
+    compose_path: finance_report/finance_report/preview/compose.yaml
+    vault_agent_config_path: finance_report/finance_report/preview/vault-agent.hcl
+    secret_template_path: finance_report/finance_report/preview/secrets.ctmpl
+    vault_path_template: secret/data/finance_report/{env}/app
+    vault_agent_container: finance_report-app-vault-agent${ENV_SUFFIX}
+    app_containers:
+      - finance_report-backend${ENV_SUFFIX}

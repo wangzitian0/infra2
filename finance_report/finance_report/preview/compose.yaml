@@ -1,0 +1,249 @@
+# Finance Report — PREVIEW (multi-alias, ephemeral) compose template
+#
+# Used by `python -m tools.preview_lifecycle` to stand up ONE throwaway preview
+# stack per alias (main / pr-<N> / commit-<sha7>). Each alias gets its OWN copy of
+# this compose as a distinct Dokploy compose, with a unique ENV_SUFFIX so container
+# names + Traefik Host() rules never collide with each other or with staging/prod.
+#
+# How preview differs from the staging/prod app compose (10.app/compose.yaml):
+#   1. It bundles its OWN throwaway `postgres` service (the `db` service below) on a
+#      NAMED volume — NO host bind mount. `delete_compose(delete_volumes=True)` at
+#      teardown removes that volume, so the database is genuinely ephemeral and never
+#      touches the shared staging/prod DB or any /data host path.
+#   2. The backend's DATABASE_URL is OVERRIDDEN to point at that local `db` service,
+#      AFTER sourcing the Vault-rendered /secrets/.env (so Vault still supplies the
+#      OTHER app secrets — AI keys, S3 — and only the DB is local/ephemeral).
+#   3. Migrations still run on backend startup (`alembic upgrade head`), now against
+#      the fresh local DB — every preview boot starts from an empty, migrated schema.
+#
+# Everything else (vault-agent, frontend, Traefik labels, healthchecks) mirrors the
+# staging/prod template so a preview is a faithful, functional copy of the app.
+#
+# Env vars supplied by tools.preview_lifecycle (see deploy_primitive for the shared
+# set): IMAGE_TAG, GIT_COMMIT_SHA, ENV_SUFFIX, ENV_DOMAIN_SUFFIX, NEXT_PUBLIC_APP_URL,
+# INTERNAL_DOMAIN, IAC_CONFIG_HASH, VAULT_ADDR, VAULT_ROLE_ID, VAULT_SECRET_ID, plus
+# the ephemeral-DB knobs PREVIEW_DB_USER / PREVIEW_DB_PASSWORD / PREVIEW_DB_NAME.
+services:
+  vault-agent:
+    init: true  # tini as PID1 reaps healthcheck ssl_client zombies
+    image: hashicorp/vault:1.15
+    container_name: finance_report-app-vault-agent${ENV_SUFFIX}
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    entrypoint:
+      - sh
+      - -c
+      - |
+        rm -f /vault/secrets/.env /vault/.token /vault/role_id /vault/secret_id 2>/dev/null || true
+        if [ -z "$$VAULT_ROLE_ID" ] || [ -z "$$VAULT_SECRET_ID" ]; then
+          echo "VAULT_ROLE_ID and VAULT_SECRET_ID are required"
+          exit 1
+        fi
+        echo "$$VAULT_ROLE_ID" > /vault/role_id
+        echo "$$VAULT_SECRET_ID" > /vault/secret_id
+        exec vault agent -config=/etc/vault/vault-agent.hcl
+    environment:
+      VAULT_ADDR: ${VAULT_ADDR}
+      VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
+      VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
+      ENV: ${ENV}
+      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      # The ctmpl reads PREVIEW_SECRET_ENV to pick which env's Vault app-secrets path
+      # to render (secret/data/finance_report/<PREVIEW_SECRET_ENV>/app). Must be passed
+      # into THIS container — the renderer — or the template silently falls back to its
+      # "staging" default and any override from preview_lifecycle is ignored.
+      PREVIEW_SECRET_ENV: ${PREVIEW_SECRET_ENV:-staging}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - |
+          test -s /vault/secrets/.env &&
+          ! grep -q "<no value>" /vault/secrets/.env &&
+          wget -q -T 3 --header="X-Vault-Token: $$(cat /vault/.token)" "$$VAULT_ADDR/v1/auth/token/lookup-self" -O /dev/null
+      interval: 30s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
+      - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
+      - secrets:/vault/secrets
+    networks:
+      - dokploy-network
+
+  # Ephemeral, throwaway PostgreSQL — local to THIS preview stack only.
+  # NOTE: data lives on the NAMED `preview_db` volume below (no host bind mount), so
+  # teardown via delete_compose(delete_volumes=True) destroys it completely. This is
+  # NOT the shared staging/prod DB; nothing here persists past an explicit teardown.
+  db:
+    image: postgres:16-alpine
+    container_name: finance_report-preview-db${ENV_SUFFIX}
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    environment:
+      POSTGRES_USER: ${PREVIEW_DB_USER:-preview}
+      POSTGRES_PASSWORD: ${PREVIEW_DB_PASSWORD:-preview}
+      POSTGRES_DB: ${PREVIEW_DB_NAME:-finance_report}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}
+      start_period: 20s
+      interval: 10s
+      retries: 10
+      timeout: 5s
+    volumes:
+      - preview_db:/var/lib/postgresql/data
+    networks:
+      - dokploy-network
+    labels:
+      - "traefik.enable=false"
+
+  backend:
+    image: ghcr.io/wangzitian0/finance_report-backend:${IMAGE_TAG:-latest}
+    pull_policy: always
+    container_name: finance_report-backend${ENV_SUFFIX}
+    restart: always
+    mem_limit: ${APP_BACKEND_MEM_LIMIT:-768m}
+    cpu_shares: ${TIER_CPU_SHARES:-1024}
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    depends_on:
+      vault-agent:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    environment:
+      DEBUG: ${DEBUG:-false}
+      GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
+      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      # The ephemeral-DB DSN the entrypoint forces AFTER sourcing Vault secrets.
+      # asyncpg driver, pointing at the local `db` service (NOT finance_report-postgres*).
+      PREVIEW_DATABASE_URL: postgresql+asyncpg://${PREVIEW_DB_USER:-preview}:${PREVIEW_DB_PASSWORD:-preview}@finance_report-preview-db${ENV_SUFFIX}:5432/${PREVIEW_DB_NAME:-finance_report}
+    entrypoint:
+      - sh
+      - -c
+      - |
+        cd /app
+        export PYTHONPATH=/app
+
+        echo "🔍 [CHECKPOINT-1] Waiting for Vault secrets to be rendered..."
+        while [ ! -f /secrets/.env ]; do
+          echo "  ⏳ Secrets not ready yet, retrying..."
+          sleep 1
+        done
+        echo "✅ [CHECKPOINT-1] Secrets file ready at /secrets/.env"
+
+        set -a
+        . /secrets/.env
+        set +a
+
+        # PREVIEW OVERRIDE: Vault rendered a DATABASE_URL for the shared
+        # finance_report-postgres; replace it with this stack's OWN ephemeral DB so
+        # preview never reads/writes the shared staging/prod database. Done AFTER
+        # sourcing /secrets/.env so the override always wins; the rest of the Vault
+        # secrets (AI keys, S3) are kept so the app is fully functional.
+        export DATABASE_URL="$$PREVIEW_DATABASE_URL"
+        echo "✅ [CHECKPOINT-1b] DATABASE_URL overridden to the ephemeral preview DB"
+
+        echo "🔍 [CHECKPOINT-2] Starting database migrations (fresh ephemeral DB)..."
+        max_retries=10
+        retry_interval=5
+        attempt=1
+        until alembic upgrade head; do
+          if [ "$$attempt" -ge "$$max_retries" ]; then
+            echo "❌ [CHECKPOINT-2] CRITICAL: Migrations failed after $$attempt attempts"
+            exit 1
+          fi
+          echo "  ⚠️  Migration attempt $$attempt/$$max_retries failed. Retrying in $$retry_interval s..."
+          attempt=$$((attempt + 1))
+          sleep $$retry_interval
+        done
+
+        echo "✅ [CHECKPOINT-2] Migrations completed successfully"
+        echo "🔍 [CHECKPOINT-3] Starting uvicorn on port 8000..."
+        exec uvicorn src.main:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      start_period: ${BACKEND_HEALTHCHECK_START_PERIOD:-60s}
+      interval: 10s
+      retries: 3
+      timeout: 5s
+    volumes:
+      - secrets:/secrets:ro
+    networks:
+      - dokploy-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.finance-report-api${ENV_DOMAIN_SUFFIX}.rule=Host(`report${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.finance-report-api${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
+      - "traefik.http.routers.finance-report-api${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.finance-report-api${ENV_DOMAIN_SUFFIX}.service=finance-report-api${ENV_DOMAIN_SUFFIX}"
+      - "traefik.http.services.finance-report-api${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=8000"
+      - "traefik.http.middlewares.finance-report-api-strip${ENV_DOMAIN_SUFFIX}.stripprefix.prefixes=/api"
+      - "traefik.http.routers.finance-report-api${ENV_DOMAIN_SUFFIX}.middlewares=finance-report-api-strip${ENV_DOMAIN_SUFFIX}@docker"
+
+  frontend:
+    image: ghcr.io/wangzitian0/finance_report-frontend:${IMAGE_TAG:-latest}
+    pull_policy: always
+    container_name: finance_report-frontend${ENV_SUFFIX}
+    restart: always
+    mem_limit: ${APP_FRONTEND_MEM_LIMIT:-768m}
+    cpu_shares: ${TIER_CPU_SHARES:-1024}
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      NEXT_PUBLIC_API_URL: https://report${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
+      NEXT_PUBLIC_APP_URL: https://report${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
+      OPENPANEL_CLIENT_ID: ${OPENPANEL_CLIENT_ID:-}
+      OPENPANEL_API_URL: https://openpanel.${INTERNAL_DOMAIN}/api
+      OPENPANEL_ENVIRONMENT: ${OPENPANEL_ENVIRONMENT:-}
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:3000" ]
+      start_period: 30s
+      interval: 30s
+      retries: 5
+      timeout: 10s
+    networks:
+      - dokploy-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.finance-report-web${ENV_DOMAIN_SUFFIX}.rule=Host(`report${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`)"
+      - "traefik.http.routers.finance-report-web${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
+      - "traefik.http.routers.finance-report-web${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.finance-report-web${ENV_DOMAIN_SUFFIX}.service=finance-report-web${ENV_DOMAIN_SUFFIX}"
+      - "traefik.http.services.finance-report-web${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=3000"
+      - "traefik.http.routers.finance-report-web${ENV_DOMAIN_SUFFIX}.priority=1"
+
+volumes:
+  secrets:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=10m,mode=0755"
+  # Throwaway DB data. A NAMED volume (not a host bind mount) so Dokploy's
+  # delete_compose(delete_volumes=True) at teardown removes it entirely.
+  preview_db: {}
+
+networks:
+  dokploy-network:
+    external: true

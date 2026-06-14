@@ -19,6 +19,7 @@ No deploy is performed here — like the resolver, this is pure, importable conf
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 
 # data default per env. Non-prod defaults to `staging` data (operator choice); prod is
@@ -98,3 +99,117 @@ def for_env_suffix(env: str, *, number: int | str | None = None) -> str:
 def with_compose_id(env: str, compose_id: str) -> EnvConfig:
     """Bind a runtime compose_id (used for the dynamic preview env)."""
     return replace(env_config(env), compose_id=compose_id)
+
+
+# ---------------------------------------------------------------------------
+# Preview alias model (multi-alias, manually-deployed PREVIEW environment)
+# ---------------------------------------------------------------------------
+#
+# The `preview` env above is a single *taxonomy* row: it says "preview is a
+# dynamic, per-alias env on staging-default data". This section owns the next
+# level down — the deterministic mapping from a concrete preview *alias*
+# (kind, value) to the names/suffixes/URLs a single Dokploy compose stack uses.
+#
+# Three alias kinds coexist, each its OWN compose stack + OWN ephemeral DB:
+#   main            -> report-main.<domain>        (the tip of main, on demand)
+#   pr-<N>          -> report-pr-<N>.<domain>       (a specific PR)
+#   commit-<sha7>   -> report-commit-<sha7>.<domain> (any commit, pinned)
+#
+# This is PURE config: no Dokploy calls, no resolution. preview_lifecycle.py
+# turns the slug/suffix/url here into actual create_compose/deploy calls, and
+# resolve_deploy_ref.py turns `code` into the sha that a `commit` alias pins.
+# The `deployment_environment` label mirrors the telemetry identity contract in
+# docs/ssot/core.environments.md §4.5 (display values pr-<N> / commit-<sha> / main).
+
+# A Dokploy compose appName / container suffix must be DNS/label-safe. PR numbers
+# and 7-char shas already are; we still validate so a bad alias fails fast (a bad
+# suffix would silently produce an unroutable Host() rule or a name collision).
+_PR_VALUE_RE = re.compile(r"\A[1-9][0-9]*\Z")  # a positive PR number, no leading zero
+_SHA7_RE = re.compile(r"\A[0-9a-f]{7,40}\Z")  # a (lowercased) commit sha, >=7 hex
+
+PREVIEW_KINDS = ("main", "pr", "commit")
+
+# the Dokploy project + environment the preview stacks live under (kept distinct
+# from staging/prod composes; the lifecycle find-or-creates this environment).
+PREVIEW_PROJECT = "finance_report"
+PREVIEW_ENVIRONMENT = "preview"
+# every preview compose name/appName shares this prefix so they are easy to find,
+# list, and bulk-reason-about, and never collide with the staging/prod composes.
+_PREVIEW_SLUG_PREFIX = "finance-report-preview"
+
+
+@dataclass(frozen=True)
+class PreviewAlias:
+    """A single preview stack's deterministic identity.
+
+    kind/value are the human surface (``pr`` / ``5``); everything else is derived
+    once, here, so the lifecycle, the compose env, the Traefik Host() rule, and the
+    telemetry label all agree by construction instead of being re-formatted per call.
+    """
+
+    kind: str
+    value: str
+    alias: str  # the canonical alias token: main | pr-<N> | commit-<sha7>
+    env_suffix: (
+        str  # ENV_SUFFIX / ENV_DOMAIN_SUFFIX, e.g. -main / -pr-5 / -commit-1ab32d5
+    )
+    domain_suffix: str  # same value; named separately to mirror the two compose vars
+    compose_name: str  # Dokploy compose display name + appName slug
+    deployment_environment: str  # telemetry display value (core.environments §4.5)
+
+    def app_url(self, *, domain: str) -> str:
+        """Concrete public URL for this alias: https://report<suffix>.<domain>."""
+        return f"https://report{self.env_suffix}.{domain}"
+
+
+def _normalize_alias(kind: str, value: int | str | None) -> tuple[str, str]:
+    """Validate (kind, value) and return the (kind, canonical-value) pair.
+
+    `main` ignores value. `pr` requires a positive integer. `commit` requires a
+    hex sha (>=7 chars) and is truncated to the 7-char short form used everywhere
+    else (image tag, telemetry service.version). Raises ValueError on bad input —
+    an invalid alias must fail loudly, never silently produce an unroutable stack.
+    """
+    if kind == "main":
+        return "main", ""
+    if kind == "pr":
+        text = str(value).strip()
+        if not _PR_VALUE_RE.match(text):
+            raise ValueError(
+                f"preview pr alias needs a positive PR number, got {value!r}"
+            )
+        return "pr", text
+    if kind == "commit":
+        text = str(value).strip().lower()
+        if not _SHA7_RE.match(text):
+            raise ValueError(
+                f"preview commit alias needs a hex commit sha (>=7 chars), got {value!r}"
+            )
+        return "commit", text[:7]  # short sha — matches IMAGE_TAG / service.version
+    raise ValueError(
+        f"unknown preview kind {kind!r}: expected one of {list(PREVIEW_KINDS)}"
+    )
+
+
+def preview_alias(kind: str, value: int | str | None = None) -> PreviewAlias:
+    """Map a preview (kind, value) to its full deterministic identity.
+
+    Pure and total over the validated surface; the single source the lifecycle and
+    the tests both derive from. Examples:
+
+        preview_alias("main")          -> alias main,            suffix -main
+        preview_alias("pr", 5)         -> alias pr-5,            suffix -pr-5
+        preview_alias("commit", sha)   -> alias commit-1ab32d5,  suffix -commit-1ab32d5
+    """
+    norm_kind, norm_value = _normalize_alias(kind, value)
+    alias = norm_kind if norm_kind == "main" else f"{norm_kind}-{norm_value}"
+    suffix = f"-{alias}"
+    return PreviewAlias(
+        kind=norm_kind,
+        value=norm_value,
+        alias=alias,
+        env_suffix=suffix,
+        domain_suffix=suffix,
+        compose_name=f"{_PREVIEW_SLUG_PREFIX}-{alias}",
+        deployment_environment=alias,
+    )
