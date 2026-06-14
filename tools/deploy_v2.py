@@ -19,9 +19,15 @@ join this front door when that second deploy path is unified; see
 
 from __future__ import annotations
 
+import argparse
+import json
+import sys
 from dataclasses import dataclass
 
+import httpx  # Dokploy transport errors from libs.dokploy surface as httpx exceptions
+
 from tools.deploy_contract import (
+    _SHA_RE,
     DeployTarget,
     make_deploy_target,
     service_spec,
@@ -32,6 +38,7 @@ from tools.deploy_primitive import deploy as _deploy_fixed
 from tools.preview_lifecycle import up as _preview_up
 
 _APP_SERVICE = "finance_report/app"
+_INFRA2_REPO = "https://github.com/wangzitian0/infra2"
 
 
 def resolve_data_lane(target: DeployTarget) -> str:
@@ -152,3 +159,114 @@ def deploy_v2(
         "iac_ref": target.iac_ref,
     }
     return DeployV2Result(target, data_lane, "deploy-primitive", detail)
+
+
+def _resolve_refs(code: str, iac_ref: str) -> tuple[str, str]:
+    """Resolve the surface inputs to 40-hex shas (code vs app repo, iac_ref vs infra2).
+
+    Raises ``ValueError`` if either resolves to something that is not a full 40-hex sha,
+    so the CLI fails fast here rather than late inside the contract validation.
+    """
+    from tools.resolve_deploy_ref import resolve_to_sha
+
+    code_sha = resolve_to_sha(code)
+    iac_sha = resolve_to_sha(iac_ref, repo=_INFRA2_REPO)
+    for label, value in (("--code", code_sha), ("--iac-ref", iac_sha)):
+        if not _SHA_RE.match(value):
+            raise ValueError(
+                f"{label} resolved to {value!r}, not a full 40-hex commit sha; "
+                "pass a branch/tag or a full sha"
+            )
+    return code_sha, iac_sha
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entry for the unified front door — the seam a deploy workflow invokes.
+
+    Resolves the surface refs, builds the Dokploy client, runs ``deploy_v2``, and prints
+    the result as one JSON line. This is the importable handle the App-repo deploy
+    workflows route through during the cutover (finance_report#883), replacing the
+    per-env bash. Dormant until a workflow calls it; no caller is wired here.
+    """
+    parser = argparse.ArgumentParser(description="unified deploy_v2 front door")
+    parser.add_argument("--service", default=_APP_SERVICE, help="service key")
+    parser.add_argument("--env", required=True, choices=["preview", "staging", "prod"])
+    parser.add_argument(
+        "--code", required=True, help="app code: a branch/tag (e.g. main) or 40-hex sha"
+    )
+    parser.add_argument(
+        "--iac-ref", required=True, help="infra2 ref: a branch/tag or 40-hex sha"
+    )
+    parser.add_argument(
+        "--domain", required=True, help="base domain, e.g. zitian.party"
+    )
+    parser.add_argument(
+        "--alias-kind", choices=["main", "pr", "commit"], help="preview alias kind"
+    )
+    parser.add_argument("--alias-value", default=None, help="preview alias value")
+    parser.add_argument("--no-wait", action="store_true", help="do not health-check")
+    parser.add_argument(
+        "--staging-validated",
+        action="store_true",
+        help="assert this code already passed staging (required for prod)",
+    )
+    parser.add_argument(
+        "--break-glass", action="store_true", help="bypass staging-first (emergency)"
+    )
+    parser.add_argument(
+        "--code-reviewed",
+        action="store_true",
+        help="positive RL-DATA-1 signal — required for any prod-data deploy",
+    )
+    parser.add_argument("--timeout", type=int, default=600, help="health-check seconds")
+    args = parser.parse_args(argv)
+
+    try:
+        code_sha, iac_sha = _resolve_refs(args.code, args.iac_ref)
+    except (ValueError, RuntimeError) as exc:
+        print(f"deploy_v2 ref resolution failed: {exc}", file=sys.stderr)
+        return 2
+
+    # Imported lazily so importing the module (and its unit tests) needs no Dokploy creds.
+    from libs.dokploy import get_dokploy
+
+    client = get_dokploy(host=f"cloud.{args.domain}")
+    try:
+        result = deploy_v2(
+            service=args.service,
+            env=args.env,
+            code_version=code_sha,
+            iac_ref=iac_sha,
+            client=client,
+            domain=args.domain,
+            alias_kind=args.alias_kind,
+            alias_value=args.alias_value,
+            wait=not args.no_wait,
+            staging_validated=args.staging_validated,
+            break_glass=args.break_glass,
+            # store_true yields False when omitted; pass True only when explicitly set so
+            # RL-DATA-1 stays deny-by-default for prod data.
+            code_reviewed=True if args.code_reviewed else None,
+            timeout=args.timeout,
+        )
+    except (ValueError, RuntimeError, TimeoutError, httpx.HTTPError) as exc:
+        print(f"deploy_v2 failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(
+        json.dumps(
+            {
+                "service": result.target.service,
+                "env": result.target.env,
+                "sub_domain": result.target.sub_domain,
+                "data_lane": result.data_lane,
+                "backend": result.backend,
+                "detail": result.detail,
+            }
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

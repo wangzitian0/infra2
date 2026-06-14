@@ -216,3 +216,91 @@ def test_enforce_returns_data_lane():
         service="finance_report/app", env="prod", code_version=SHA_CODE, iac_ref=SHA_IAC
     )
     assert enforce_data_lane_red_lines(t, code_reviewed=True) == "prod"
+
+
+# --- CLI entry (the cutover seam) ------------------------------------------
+
+
+@pytest.fixture
+def cli(monkeypatch):
+    """Drive deploy_v2.main with refs/client/backend faked — no resolve, no Dokploy."""
+    import json
+
+    from tools.deploy_contract import make_deploy_target
+
+    rec = {}
+    monkeypatch.setattr(dv2, "_resolve_refs", lambda code, iac: (SHA_CODE, SHA_IAC))
+
+    import libs.dokploy as dk
+
+    monkeypatch.setattr(dk, "get_dokploy", lambda host: f"client@{host}")
+
+    def fake_deploy_v2(**kw):
+        rec.update(kw)
+        target = make_deploy_target(
+            service=kw["service"],
+            env=kw["env"],
+            code_version=kw["code_version"],
+            iac_ref=kw["iac_ref"],
+            alias_kind=kw.get("alias_kind"),
+            alias_value=kw.get("alias_value"),
+        )
+        return DeployV2Result(target, "staging", "deploy-primitive", {"sha": SHA_CODE})
+
+    monkeypatch.setattr(dv2, "deploy_v2", fake_deploy_v2)
+    return rec, json
+
+
+def test_cli_resolves_and_dispatches(cli, capsys):
+    rec, json = cli
+    rc = dv2.main(
+        ["--env", "staging", "--code", "main", "--iac-ref", "main", "--domain", "zp.io"]
+    )
+    assert rc == 0
+    assert rec["env"] == "staging"
+    assert rec["code_version"] == SHA_CODE and rec["iac_ref"] == SHA_IAC
+    assert rec["client"] == "client@cloud.zp.io"  # host = cloud.<domain>
+    out = json.loads(capsys.readouterr().out)
+    assert out["env"] == "staging" and out["backend"] == "deploy-primitive"
+
+
+def test_cli_code_reviewed_flag_maps_to_true_else_none(cli):
+    rec, _ = cli
+    dv2.main(["--env", "staging", "--code", "m", "--iac-ref", "m", "--domain", "zp.io"])
+    assert rec["code_reviewed"] is None  # omitted stays deny-by-default
+    dv2.main(
+        [
+            "--env",
+            "prod",
+            "--code",
+            "m",
+            "--iac-ref",
+            "m",
+            "--domain",
+            "zp.io",
+            "--staging-validated",
+            "--code-reviewed",
+        ]
+    )
+    assert rec["code_reviewed"] is True  # explicit positive signal
+
+
+def test_cli_fails_fast_on_unresolvable_ref(monkeypatch, capsys):
+    def boom(code, iac):
+        raise ValueError("not a full 40-hex commit sha")
+
+    monkeypatch.setattr(dv2, "_resolve_refs", boom)
+    rc = dv2.main(
+        [
+            "--env",
+            "staging",
+            "--code",
+            "deadbeef",
+            "--iac-ref",
+            "m",
+            "--domain",
+            "zp.io",
+        ]
+    )
+    assert rc == 2
+    assert "ref resolution failed" in capsys.readouterr().err
