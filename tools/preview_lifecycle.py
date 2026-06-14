@@ -65,6 +65,45 @@ class PreviewResult:
 # the preview secrets.ctmpl reads secret/data/finance_report/<PREVIEW_SECRET_ENV>/app.
 _PREVIEW_SECRET_ENV = "staging"
 
+# The source env's app compose to read AppRole creds from (its name in Dokploy).
+_SOURCE_APP_COMPOSE = "app"
+# The runtime AppRole creds the preview vault-agent logs in with. Preview reads the source
+# env's secret path, so it reuses that env's role verbatim — the same creds staging itself
+# runs with (injected once by `invoke setup-approle`); see _source_app_vault_creds.
+_VAULT_CRED_KEYS = ("VAULT_ADDR", "VAULT_ROLE_ID", "VAULT_SECRET_ID")
+
+
+def _source_app_vault_creds(client, source_env: str) -> dict[str, str]:
+    """Read the AppRole creds the ``source_env`` app compose runs with.
+
+    Previews reuse the source env's AppRole (they read its secret path via
+    ``PREVIEW_SECRET_ENV``), exactly the creds staging runs with — set once on the source
+    compose by ``invoke setup-approle``. We copy them onto the preview compose at deploy
+    time because a throwaway alias is recreated each ``up`` (and deleted on ``down``), so
+    it can never rely on a manual one-time injection persisting the way a fixed env does.
+    """
+    comp = client.find_compose_by_name(
+        _SOURCE_APP_COMPOSE, PREVIEW_PROJECT, env_name=source_env
+    )
+    if not comp:
+        raise RuntimeError(
+            f"cannot source preview Vault creds: no {_SOURCE_APP_COMPOSE!r} compose in "
+            f"{PREVIEW_PROJECT}/{source_env}"
+        )
+    env = client.get_compose_env(comp["composeId"]) or ""
+    creds = {}
+    for line in env.splitlines():
+        key, _, value = line.partition("=")
+        if key in _VAULT_CRED_KEYS and value:
+            creds[key] = value
+    missing = [k for k in _VAULT_CRED_KEYS if k not in creds]
+    if missing:
+        raise RuntimeError(
+            f"{source_env} {_SOURCE_APP_COMPOSE!r} compose is missing Vault creds "
+            f"{missing}; run `invoke setup-approle --project finance_report` first"
+        )
+    return creds
+
 
 def _validate_domain(domain: str) -> str:
     """Reject a malformed domain (empty or containing whitespace).
@@ -161,6 +200,10 @@ def up(
     alias = preview_alias(kind, value)
     sha = resolve_to_sha(code, repo=repo) if repo is not None else resolve_to_sha(code)
     env_vars = _preview_env_vars(alias, sha=sha, domain=domain, _now=_now)
+    # Inject the runtime AppRole creds the preview vault-agent logs in with — the same
+    # role the source env runs with. Without them vault-agent crash-loops and the app
+    # never becomes healthy. Merged before the compose env is pushed below.
+    env_vars.update(_source_app_vault_creds(client, _PREVIEW_SECRET_ENV))
 
     # Find-or-create THIS alias's compose by its deterministic name. The GitHub source
     # fields make Dokploy pull the preview compose template (+ its mounted vault files)

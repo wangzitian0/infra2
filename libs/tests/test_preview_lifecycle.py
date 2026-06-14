@@ -46,7 +46,19 @@ class FakeDokploy:
 
     def find_compose_by_name(self, name, project_name=None, env_name=None):
         self.found.append((name, project_name, env_name))
+        # The source env's app compose supplies the AppRole creds previews reuse.
+        if name == "app" and env_name == "staging":
+            return {"composeId": "cmp-source-app"}
         return self._existing
+
+    def get_compose_env(self, compose_id):
+        if compose_id == "cmp-source-app":
+            return (
+                "VAULT_ADDR=https://vault.test\n"
+                "VAULT_ROLE_ID=rid-test\n"
+                "VAULT_SECRET_ID=sid-test\n"
+            )
+        return ""
 
     def create_compose(self, environment_id, name, **kwargs):
         self.created.append({"environment_id": environment_id, "name": name, **kwargs})
@@ -144,9 +156,19 @@ def test_up_env_has_short_sha_suffix_and_ephemeral_db_knobs():
     assert env["PREVIEW_DB_NAME"] == "finance_report"
     # app secrets are read from a fixed source env (preview has no per-alias Vault path)
     assert env["PREVIEW_SECRET_ENV"] == "staging"
-    # runtime AppRole creds are NOT computed by the lifecycle here (injected separately)
-    assert "VAULT_ROLE_ID" not in env
-    assert "VAULT_SECRET_ID" not in env
+
+
+def test_up_injects_source_env_vault_creds():
+    # The preview vault-agent logs in with the SOURCE env's AppRole creds (the same role
+    # staging runs with), read off that env's app compose and merged into the preview env.
+    client = FakeDokploy(existing=None)
+    pl.up("pr", 5, code="main", domain="zitian.party", client=client, http_get=_ok_get)
+    _cid, env = client.env_updates[0]
+    assert env["VAULT_ADDR"] == "https://vault.test"
+    assert env["VAULT_ROLE_ID"] == "rid-test"
+    assert env["VAULT_SECRET_ID"] == "sid-test"
+    # it read them from the source env's app compose, not the preview alias
+    assert ("app", "finance_report", "staging") in client.found
 
 
 # --- up: update path (idempotent re-deploy of an alias) --------------------------
@@ -173,7 +195,8 @@ def test_up_updates_existing_compose_in_place():
     assert cid == "cmp-existing"
     assert env_vars["ENV"] == "main"
     assert env_vars["ENV_SUFFIX"] == "-main"
-    assert "VAULT_ROLE_ID" not in env_vars  # never set/overwritten by the lifecycle
+    # the source env's AppRole creds are injected on every up (merged on redeploy)
+    assert env_vars["VAULT_ROLE_ID"] == "rid-test"
     assert client.deployed == ["cmp-existing"]
     assert result.compose_id == "cmp-existing"
     assert result.url == "https://report-main.zitian.party"
@@ -182,10 +205,9 @@ def test_up_updates_existing_compose_in_place():
 def test_up_looks_up_compose_by_deterministic_preview_name():
     client = FakeDokploy(existing=None)
     pl.up("pr", 7, code="main", domain="z.p", client=client, http_get=_ok_get)
-    name, project, env = client.found[0]
-    assert name == "finance-report-preview-pr-7"
-    assert project == "finance_report"
-    assert env == "preview"
+    # the alias is looked up by its deterministic name in the preview env (alongside the
+    # source-app creds lookup, which is a separate find)
+    assert ("finance-report-preview-pr-7", "finance_report", "preview") in client.found
 
 
 # --- up: ordering + gates --------------------------------------------------------
