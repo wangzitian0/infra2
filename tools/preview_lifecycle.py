@@ -122,11 +122,6 @@ def _preview_env_vars(
     }
 
 
-def _env_str(env_vars: dict[str, str]) -> str:
-    """Render env vars as the simple KEY=VALUE blob Dokploy stores (same as deployer)."""
-    return "\n".join(f"{k}={v}" for k, v in env_vars.items() if v is not None)
-
-
 def _find_compose(client, name: str):
     """Return the existing preview compose dict for ``name``, or None."""
     return client.find_compose_by_name(
@@ -166,7 +161,6 @@ def up(
     alias = preview_alias(kind, value)
     sha = resolve_to_sha(code, repo=repo) if repo is not None else resolve_to_sha(code)
     env_vars = _preview_env_vars(alias, sha=sha, domain=domain, _now=_now)
-    env_blob = _env_str(env_vars)
 
     # Find-or-create THIS alias's compose by its deterministic name. The GitHub source
     # fields make Dokploy pull the preview compose template (+ its mounted vault files)
@@ -189,14 +183,7 @@ def up(
     )
 
     existing = _find_compose(client, alias.compose_name)
-    if existing:
-        compose_id = existing["composeId"]
-        # Re-assert the source fields, then MERGE the env so runtime AppRole creds
-        # (VAULT_ROLE_ID / VAULT_SECRET_ID / VAULT_ADDR) injected once at setup survive
-        # a redeploy — same preserve-runtime-creds reason libs.deployer merges env.
-        client.update_compose(compose_id, **source_fields)
-        client.update_compose_env(compose_id, env_vars=env_vars)
-    else:
+    if not existing:
         environment_id = client.get_environment_id(PREVIEW_PROJECT, PREVIEW_ENVIRONMENT)
         if not environment_id:
             raise RuntimeError(
@@ -212,10 +199,21 @@ def up(
             environment_id=environment_id,
             name=alias.compose_name,
             app_name=alias.compose_name,
-            env=env_blob,
-            **source_fields,
         )
         compose_id = created["composeId"]
+    else:
+        compose_id = existing["composeId"]
+
+    # Configure source + env on BOTH paths. Dokploy's compose.create persists ONLY the
+    # basic fields — it silently drops the github source (githubId/owner/repository/
+    # branch/composePath) and the env blob — so a first-ever preview deploy would land
+    # source-less and env-less and fail at deploy time ("Github Provider not found" / all
+    # compose vars blank → IMAGE_TAG defaults to :latest). The github source + env only
+    # stick via these follow-up compose.update / compose.update-env calls, which also
+    # re-assert them on a redeploy. MERGE the env so runtime AppRole creds
+    # (VAULT_ROLE_ID / VAULT_SECRET_ID / VAULT_ADDR) injected at setup survive a redeploy.
+    client.update_compose(compose_id, **source_fields)
+    client.update_compose_env(compose_id, env_vars=env_vars)
 
     client.deploy_compose(compose_id)
 

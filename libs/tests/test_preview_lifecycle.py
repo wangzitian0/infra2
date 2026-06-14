@@ -87,20 +87,26 @@ def test_up_creates_compose_when_absent_and_deploys():
         http_get=_ok_get,
         _now=lambda: 1000,
     )
-    # one compose created with the deterministic alias name + GitHub source template
+    # one compose created with the deterministic alias name — BASIC fields only.
+    # Dokploy's compose.create silently drops source/env, so they must NOT be relied on
+    # here; passing them to create is the bug that left a first-ever preview source-less.
     assert len(client.created) == 1
     created = client.created[0]
     assert created["name"] == "finance-report-preview-pr-5"
     assert created["app_name"] == "finance-report-preview-pr-5"
     assert created["environment_id"] == "env-preview"
-    assert created["source_type"] == "github"
-    assert (
-        created["composePath"] == "finance_report/finance_report/preview/compose.yaml"
-    )
-    assert created["autoDeploy"] is False
+    assert "source_type" not in created  # applied via update_compose, not create
+    # the github source is applied with a follow-up update_compose (compose.create drops it)
+    assert len(client.updated) == 1
+    upd = client.updated[0]
+    assert upd["composeId"] == "cmp-new"
+    assert upd["source_type"] == "github"
+    assert upd["composePath"] == "finance_report/finance_report/preview/compose.yaml"
+    assert upd["autoDeploy"] is False
+    # env applied via update_compose_env (also dropped by compose.create)
+    assert len(client.env_updates) == 1 and client.env_updates[0][0] == "cmp-new"
     # then deployed
     assert client.deployed == ["cmp-new"]
-    assert client.updated == []
     # result identity
     assert result.action == "up"
     assert result.alias == "pr-5"
@@ -110,7 +116,7 @@ def test_up_creates_compose_when_absent_and_deploys():
     assert result.healthy is True
 
 
-def test_up_env_blob_has_short_sha_suffix_and_ephemeral_db_knobs():
+def test_up_env_has_short_sha_suffix_and_ephemeral_db_knobs():
     client = FakeDokploy(existing=None)
     pl.up(
         "commit",
@@ -121,23 +127,24 @@ def test_up_env_blob_has_short_sha_suffix_and_ephemeral_db_knobs():
         http_get=_ok_get,
         _now=lambda: 1000,
     )
-    env = client.created[0]["env"]
-    assert f"IMAGE_TAG={SHORT_SHA}" in env
-    assert f"GIT_COMMIT_SHA={SHORT_SHA}" in env
-    assert "ENV_SUFFIX=-commit-1ab32d5" in env
-    assert "ENV_DOMAIN_SUFFIX=-commit-1ab32d5" in env
-    assert "ENV=commit-1ab32d5" in env  # telemetry deployment.environment label
-    assert "NEXT_PUBLIC_APP_URL=https://report-commit-1ab32d5.zitian.party" in env
-    assert "INTERNAL_DOMAIN=zitian.party" in env
+    # env is applied via update_compose_env (compose.create drops the env blob), so it is
+    # asserted on the env_update, not on create.
+    _cid, env = client.env_updates[0]
+    assert env["IMAGE_TAG"] == SHORT_SHA
+    assert env["GIT_COMMIT_SHA"] == SHORT_SHA
+    assert env["ENV_SUFFIX"] == "-commit-1ab32d5"
+    assert env["ENV_DOMAIN_SUFFIX"] == "-commit-1ab32d5"
+    assert env["ENV"] == "commit-1ab32d5"  # telemetry deployment.environment label
+    assert env["NEXT_PUBLIC_APP_URL"] == "https://report-commit-1ab32d5.zitian.party"
+    assert env["INTERNAL_DOMAIN"] == "zitian.party"
     # cache-bust is keyed on the RESOLVED sha (short form), not the alias token
-    assert f"IAC_CONFIG_HASH=preview-{SHORT_SHA}-1000000" in env
+    assert env["IAC_CONFIG_HASH"] == f"preview-{SHORT_SHA}-1000000"
     # ephemeral DB knobs the compose template reads to override DATABASE_URL
-    assert "PREVIEW_DB_USER=preview" in env
-    assert "PREVIEW_DB_NAME=finance_report" in env
+    assert env["PREVIEW_DB_USER"] == "preview"
+    assert env["PREVIEW_DB_NAME"] == "finance_report"
     # app secrets are read from a fixed source env (preview has no per-alias Vault path)
-    assert "PREVIEW_SECRET_ENV=staging" in env
-    # runtime AppRole creds are NEVER embedded by the lifecycle (supplied once on the
-    # Dokploy compose env and preserved across redeploys)
+    assert env["PREVIEW_SECRET_ENV"] == "staging"
+    # runtime AppRole creds are NOT computed by the lifecycle here (injected separately)
     assert "VAULT_ROLE_ID" not in env
     assert "VAULT_SECRET_ID" not in env
 
