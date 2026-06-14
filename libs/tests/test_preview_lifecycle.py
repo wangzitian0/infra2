@@ -46,7 +46,19 @@ class FakeDokploy:
 
     def find_compose_by_name(self, name, project_name=None, env_name=None):
         self.found.append((name, project_name, env_name))
+        # The source env's app compose supplies the AppRole creds previews reuse.
+        if name == "app" and env_name == "staging":
+            return {"composeId": "cmp-source-app"}
         return self._existing
+
+    def get_compose_env(self, compose_id):
+        if compose_id == "cmp-source-app":
+            return (
+                "VAULT_ADDR=https://vault.test\n"
+                "VAULT_ROLE_ID=rid-test\n"
+                "VAULT_SECRET_ID=sid-test\n"
+            )
+        return ""
 
     def create_compose(self, environment_id, name, **kwargs):
         self.created.append({"environment_id": environment_id, "name": name, **kwargs})
@@ -87,20 +99,27 @@ def test_up_creates_compose_when_absent_and_deploys():
         http_get=_ok_get,
         _now=lambda: 1000,
     )
-    # one compose created with the deterministic alias name + GitHub source template
+    # one compose created with the deterministic alias name — BASIC fields only.
+    # Dokploy's compose.create silently drops source/env, so they must NOT be relied on
+    # here; passing them to create is the bug that left a first-ever preview source-less.
     assert len(client.created) == 1
     created = client.created[0]
     assert created["name"] == "finance-report-preview-pr-5"
     assert created["app_name"] == "finance-report-preview-pr-5"
     assert created["environment_id"] == "env-preview"
+    # created as github source from the start (never a raw/empty compose); the github
+    # binding is still re-applied via update_compose since compose.create drops it.
     assert created["source_type"] == "github"
-    assert (
-        created["composePath"] == "finance_report/finance_report/preview/compose.yaml"
-    )
-    assert created["autoDeploy"] is False
+    assert len(client.updated) == 1
+    upd = client.updated[0]
+    assert upd["composeId"] == "cmp-new"
+    assert upd["source_type"] == "github"
+    assert upd["composePath"] == "finance_report/finance_report/preview/compose.yaml"
+    assert upd["autoDeploy"] is False
+    # env applied via update_compose_env (also dropped by compose.create)
+    assert len(client.env_updates) == 1 and client.env_updates[0][0] == "cmp-new"
     # then deployed
     assert client.deployed == ["cmp-new"]
-    assert client.updated == []
     # result identity
     assert result.action == "up"
     assert result.alias == "pr-5"
@@ -110,7 +129,7 @@ def test_up_creates_compose_when_absent_and_deploys():
     assert result.healthy is True
 
 
-def test_up_env_blob_has_short_sha_suffix_and_ephemeral_db_knobs():
+def test_up_env_has_short_sha_suffix_and_ephemeral_db_knobs():
     client = FakeDokploy(existing=None)
     pl.up(
         "commit",
@@ -121,25 +140,36 @@ def test_up_env_blob_has_short_sha_suffix_and_ephemeral_db_knobs():
         http_get=_ok_get,
         _now=lambda: 1000,
     )
-    env = client.created[0]["env"]
-    assert f"IMAGE_TAG={SHORT_SHA}" in env
-    assert f"GIT_COMMIT_SHA={SHORT_SHA}" in env
-    assert "ENV_SUFFIX=-commit-1ab32d5" in env
-    assert "ENV_DOMAIN_SUFFIX=-commit-1ab32d5" in env
-    assert "ENV=commit-1ab32d5" in env  # telemetry deployment.environment label
-    assert "NEXT_PUBLIC_APP_URL=https://report-commit-1ab32d5.zitian.party" in env
-    assert "INTERNAL_DOMAIN=zitian.party" in env
+    # env is applied via update_compose_env (compose.create drops the env blob), so it is
+    # asserted on the env_update, not on create.
+    _cid, env = client.env_updates[0]
+    assert env["IMAGE_TAG"] == SHORT_SHA
+    assert env["GIT_COMMIT_SHA"] == SHORT_SHA
+    assert env["ENV_SUFFIX"] == "-commit-1ab32d5"
+    assert env["ENV_DOMAIN_SUFFIX"] == "-commit-1ab32d5"
+    assert env["ENV"] == "commit-1ab32d5"  # telemetry deployment.environment label
+    assert env["NEXT_PUBLIC_APP_URL"] == "https://report-commit-1ab32d5.zitian.party"
+    assert env["INTERNAL_DOMAIN"] == "zitian.party"
     # cache-bust is keyed on the RESOLVED sha (short form), not the alias token
-    assert f"IAC_CONFIG_HASH=preview-{SHORT_SHA}-1000000" in env
+    assert env["IAC_CONFIG_HASH"] == f"preview-{SHORT_SHA}-1000000"
     # ephemeral DB knobs the compose template reads to override DATABASE_URL
-    assert "PREVIEW_DB_USER=preview" in env
-    assert "PREVIEW_DB_NAME=finance_report" in env
+    assert env["PREVIEW_DB_USER"] == "preview"
+    assert env["PREVIEW_DB_NAME"] == "finance_report"
     # app secrets are read from a fixed source env (preview has no per-alias Vault path)
-    assert "PREVIEW_SECRET_ENV=staging" in env
-    # runtime AppRole creds are NEVER embedded by the lifecycle (supplied once on the
-    # Dokploy compose env and preserved across redeploys)
-    assert "VAULT_ROLE_ID" not in env
-    assert "VAULT_SECRET_ID" not in env
+    assert env["PREVIEW_SECRET_ENV"] == "staging"
+
+
+def test_up_injects_source_env_vault_creds():
+    # The preview vault-agent logs in with the SOURCE env's AppRole creds (the same role
+    # staging runs with), read off that env's app compose and merged into the preview env.
+    client = FakeDokploy(existing=None)
+    pl.up("pr", 5, code="main", domain="zitian.party", client=client, http_get=_ok_get)
+    _cid, env = client.env_updates[0]
+    assert env["VAULT_ADDR"] == "https://vault.test"
+    assert env["VAULT_ROLE_ID"] == "rid-test"
+    assert env["VAULT_SECRET_ID"] == "sid-test"
+    # it read them from the source env's app compose, not the preview alias
+    assert ("app", "finance_report", "staging") in client.found
 
 
 # --- up: update path (idempotent re-deploy of an alias) --------------------------
@@ -166,7 +196,8 @@ def test_up_updates_existing_compose_in_place():
     assert cid == "cmp-existing"
     assert env_vars["ENV"] == "main"
     assert env_vars["ENV_SUFFIX"] == "-main"
-    assert "VAULT_ROLE_ID" not in env_vars  # never set/overwritten by the lifecycle
+    # the source env's AppRole creds are injected on every up (merged on redeploy)
+    assert env_vars["VAULT_ROLE_ID"] == "rid-test"
     assert client.deployed == ["cmp-existing"]
     assert result.compose_id == "cmp-existing"
     assert result.url == "https://report-main.zitian.party"
@@ -175,10 +206,9 @@ def test_up_updates_existing_compose_in_place():
 def test_up_looks_up_compose_by_deterministic_preview_name():
     client = FakeDokploy(existing=None)
     pl.up("pr", 7, code="main", domain="z.p", client=client, http_get=_ok_get)
-    name, project, env = client.found[0]
-    assert name == "finance-report-preview-pr-7"
-    assert project == "finance_report"
-    assert env == "preview"
+    # the alias is looked up by its deterministic name in the preview env (alongside the
+    # source-app creds lookup, which is a separate find)
+    assert ("finance-report-preview-pr-7", "finance_report", "preview") in client.found
 
 
 # --- up: ordering + gates --------------------------------------------------------

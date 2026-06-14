@@ -52,7 +52,15 @@ class ConvergenceFakeDokploy:
         return self._environment_id
 
     def find_compose_by_name(self, name, project_name=None, env_name=None):
+        # The source env's app compose supplies the AppRole creds previews reuse.
+        if name == "app" and env_name == "staging":
+            return {"composeId": "cmp-source-app"}
         return self.records.get(name)
+
+    def get_compose_env(self, compose_id):
+        if compose_id == "cmp-source-app":
+            return "VAULT_ADDR=https://v\nVAULT_ROLE_ID=r\nVAULT_SECRET_ID=s\n"
+        return ""
 
     # --- write side --------------------------------------------------------
     def create_compose(self, environment_id, name, *, app_name, **kwargs):

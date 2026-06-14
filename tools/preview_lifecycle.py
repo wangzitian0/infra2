@@ -65,6 +65,45 @@ class PreviewResult:
 # the preview secrets.ctmpl reads secret/data/finance_report/<PREVIEW_SECRET_ENV>/app.
 _PREVIEW_SECRET_ENV = "staging"
 
+# The source env's app compose to read AppRole creds from (its name in Dokploy).
+_SOURCE_APP_COMPOSE = "app"
+# The runtime AppRole creds the preview vault-agent logs in with. Preview reads the source
+# env's secret path, so it reuses that env's role verbatim — the same creds staging itself
+# runs with (injected once by `invoke setup-approle`); see _source_app_vault_creds.
+_VAULT_CRED_KEYS = ("VAULT_ADDR", "VAULT_ROLE_ID", "VAULT_SECRET_ID")
+
+
+def _source_app_vault_creds(client, source_env: str) -> dict[str, str]:
+    """Read the AppRole creds the ``source_env`` app compose runs with.
+
+    Previews reuse the source env's AppRole (they read its secret path via
+    ``PREVIEW_SECRET_ENV``), exactly the creds staging runs with — set once on the source
+    compose by ``invoke setup-approle``. We copy them onto the preview compose at deploy
+    time because a throwaway alias is recreated each ``up`` (and deleted on ``down``), so
+    it can never rely on a manual one-time injection persisting the way a fixed env does.
+    """
+    comp = client.find_compose_by_name(
+        _SOURCE_APP_COMPOSE, PREVIEW_PROJECT, env_name=source_env
+    )
+    if not comp:
+        raise RuntimeError(
+            f"cannot source preview Vault creds: no {_SOURCE_APP_COMPOSE!r} compose in "
+            f"{PREVIEW_PROJECT}/{source_env}"
+        )
+    env = client.get_compose_env(comp["composeId"]) or ""
+    creds = {}
+    for line in env.splitlines():
+        key, _, value = line.partition("=")
+        if key in _VAULT_CRED_KEYS and value:
+            creds[key] = value
+    missing = [k for k in _VAULT_CRED_KEYS if k not in creds]
+    if missing:
+        raise RuntimeError(
+            f"{source_env} {_SOURCE_APP_COMPOSE!r} compose is missing Vault creds "
+            f"{missing}; run `invoke setup-approle --project finance_report` first"
+        )
+    return creds
+
 
 def _validate_domain(domain: str) -> str:
     """Reject a malformed domain (empty or containing whitespace).
@@ -122,11 +161,6 @@ def _preview_env_vars(
     }
 
 
-def _env_str(env_vars: dict[str, str]) -> str:
-    """Render env vars as the simple KEY=VALUE blob Dokploy stores (same as deployer)."""
-    return "\n".join(f"{k}={v}" for k, v in env_vars.items() if v is not None)
-
-
 def _find_compose(client, name: str):
     """Return the existing preview compose dict for ``name``, or None."""
     return client.find_compose_by_name(
@@ -166,7 +200,10 @@ def up(
     alias = preview_alias(kind, value)
     sha = resolve_to_sha(code, repo=repo) if repo is not None else resolve_to_sha(code)
     env_vars = _preview_env_vars(alias, sha=sha, domain=domain, _now=_now)
-    env_blob = _env_str(env_vars)
+    # Inject the runtime AppRole creds the preview vault-agent logs in with — the same
+    # role the source env runs with. Without them vault-agent crash-loops and the app
+    # never becomes healthy. Merged before the compose env is pushed below.
+    env_vars.update(_source_app_vault_creds(client, _PREVIEW_SECRET_ENV))
 
     # Find-or-create THIS alias's compose by its deterministic name. The GitHub source
     # fields make Dokploy pull the preview compose template (+ its mounted vault files)
@@ -189,14 +226,7 @@ def up(
     )
 
     existing = _find_compose(client, alias.compose_name)
-    if existing:
-        compose_id = existing["composeId"]
-        # Re-assert the source fields, then MERGE the env so runtime AppRole creds
-        # (VAULT_ROLE_ID / VAULT_SECRET_ID / VAULT_ADDR) injected once at setup survive
-        # a redeploy — same preserve-runtime-creds reason libs.deployer merges env.
-        client.update_compose(compose_id, **source_fields)
-        client.update_compose_env(compose_id, env_vars=env_vars)
-    else:
+    if not existing:
         environment_id = client.get_environment_id(PREVIEW_PROJECT, PREVIEW_ENVIRONMENT)
         if not environment_id:
             raise RuntimeError(
@@ -208,14 +238,30 @@ def up(
         # so `down` creates-under and prunes-by one key — never the divergent pair that
         # leaked orphans in infra2#310. Keep these two identical; see
         # libs/tests/test_preview_teardown_convergence.py.
+        # Create as github source from the start (Dokploy accepts this and keeps
+        # sourceType) so the compose is never momentarily a raw compose with an empty
+        # composeFile. The github *binding* (githubId/owner/repository/branch/composePath)
+        # still has to be re-applied below — compose.create drops everything but sourceType.
         created = client.create_compose(
             environment_id=environment_id,
             name=alias.compose_name,
             app_name=alias.compose_name,
-            env=env_blob,
-            **source_fields,
+            source_type="github",
         )
         compose_id = created["composeId"]
+    else:
+        compose_id = existing["composeId"]
+
+    # Configure source + env on BOTH paths. Dokploy's compose.create persists ONLY the
+    # basic fields — it silently drops the github source (githubId/owner/repository/
+    # branch/composePath) and the env blob — so a first-ever preview deploy would land
+    # source-less and env-less and fail at deploy time ("Github Provider not found" / all
+    # compose vars blank → IMAGE_TAG defaults to :latest). The github source + env only
+    # stick via these follow-up compose.update / compose.update-env calls, which also
+    # re-assert them on a redeploy. MERGE the env so runtime AppRole creds
+    # (VAULT_ROLE_ID / VAULT_SECRET_ID / VAULT_ADDR) injected at setup survive a redeploy.
+    client.update_compose(compose_id, **source_fields)
+    client.update_compose_env(compose_id, env_vars=env_vars)
 
     client.deploy_compose(compose_id)
 
