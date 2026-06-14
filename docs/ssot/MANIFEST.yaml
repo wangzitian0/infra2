@@ -13,6 +13,8 @@ entries:
   core.environments:
     owner: docs/ssot/core.environments.md
     description: Environment taxonomy, isolation, and naming.
+    proofs:
+      - libs/tests/test_deploy_contract.py
 
   bootstrap.nodep:
     owner: docs/ssot/bootstrap.nodep.md

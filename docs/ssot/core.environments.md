@@ -327,6 +327,45 @@ invoke fr-app.setup       # 域名: report.zitian.party
 
 ---
 
+<a id="deploy-v2-contract"></a>
+### 4.7 部署原语契约 (deploy_v2 — 五轴坐标)
+
+一次部署的**身份**由且仅由五个正交轴确定——每个轴独立（谁也推不出谁），合起来对
+`preview / staging / prod` 三类目标都充分。真源：`tools/deploy_contract.py`（纯函数，单测覆盖）。
+
+```
+deploy(service, env, sub_domain, code_version, iac_ref)
+```
+
+| 轴 | 含义 | 来源（复用既有轴） |
+|----|------|--------------------|
+| `service` | 部署哪个已注册服务 | `deploy_contract.ServiceSpec` 注册表 |
+| `env` | `staging` \| `prod` \| `preview` | `deploy_env_config.env_config` |
+| `sub_domain` | 栈实例标签：staging/prod 被 env 钉定；preview 取别名 | env 后缀 + `preview_alias`（§4.6） |
+| `code_version` | app 代码的 commit sha（promote-not-rebuild：同码可去任意 env） | `resolve_deploy_ref`（执行时解析） |
+| `iac_ref` | infra2 的 commit sha，钉死 compose/env/secret 路径 | `deploy_contract`（40 位 hex） |
+
+**为什么 `service` 与 `iac_ref` 各自独立**：镜像来自 *app* repo（`code_version`），compose/env
+接线来自 *infra2* repo（`iac_ref`），两者各自漂移；且 infra2 多服务，"部署谁"是独立维度。
+`sub_domain` 是栈实例标签——正是它让 `report-main` / `report-pr-N` / `report-commit-<sha>` 三个
+preview 并存且可按名寻址（§4.6）。
+
+**`data` 不是第六个输入轴**：它是*派生*的（`EnvConfig.data_default`，可被 `iac_ref` 处的 IaC 钉定），
+只出现在红线谓词里。
+
+**校验谓词**（`deploy_contract.validate_deploy_target`，部署前 fail-closed）：
+1. `env ∈ {staging, prod}` ⇒ `sub_domain` = `base` + 该 env 后缀（禁自定义）。
+2. `env = preview` ⇒ `sub_domain` 匹配 `base-(main|pr-<N>|commit-<sha7>)` 且不等于任何 staging/prod 规范域。
+3. `service.prod_only ∧ env ≠ prod` ⇒ 非法；`service.env_shared` ⇒ 无 preview、无后缀。
+4. `code_version` / `iac_ref` 必须为 40 位小写 hex。
+5. 红线（依赖解析 `iac_ref` 读出 data_lane）：`env=prod ⇒ data_lane=prod`；未评审 PR sha 不上 prod 数据。
+
+> **现状边界**：契约层已就位（本节 + `deploy_contract.py`）。`service` 注册表当前只含
+> `finance_report/app`；平台服务（经 `libs/deployer.py` 部署）在统一前门分派两条部署路径时并入。
+> 谓词 5 的 data_lane 强制随数据轴（finance_report#893）落地。
+
+---
+
 ## 5. 测试门禁 (Quality Gates)
 
 ### 5.1 Local → PR (Test)
