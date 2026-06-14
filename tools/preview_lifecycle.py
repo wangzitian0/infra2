@@ -238,10 +238,15 @@ def up(
         # so `down` creates-under and prunes-by one key — never the divergent pair that
         # leaked orphans in infra2#310. Keep these two identical; see
         # libs/tests/test_preview_teardown_convergence.py.
+        # Create as github source from the start (Dokploy accepts this and keeps
+        # sourceType) so the compose is never momentarily a raw compose with an empty
+        # composeFile. The github *binding* (githubId/owner/repository/branch/composePath)
+        # still has to be re-applied below — compose.create drops everything but sourceType.
         created = client.create_compose(
             environment_id=environment_id,
             name=alias.compose_name,
             app_name=alias.compose_name,
+            source_type="github",
         )
         compose_id = created["composeId"]
     else:

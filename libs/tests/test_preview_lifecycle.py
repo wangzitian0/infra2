@@ -107,8 +107,9 @@ def test_up_creates_compose_when_absent_and_deploys():
     assert created["name"] == "finance-report-preview-pr-5"
     assert created["app_name"] == "finance-report-preview-pr-5"
     assert created["environment_id"] == "env-preview"
-    assert "source_type" not in created  # applied via update_compose, not create
-    # the github source is applied with a follow-up update_compose (compose.create drops it)
+    # created as github source from the start (never a raw/empty compose); the github
+    # binding is still re-applied via update_compose since compose.create drops it.
+    assert created["source_type"] == "github"
     assert len(client.updated) == 1
     upd = client.updated[0]
     assert upd["composeId"] == "cmp-new"
