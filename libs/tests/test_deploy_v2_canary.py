@@ -44,6 +44,9 @@ def spies(monkeypatch):
 
     def fake_deploy_v2(**kw):
         rec["deploy"] = kw
+        # Mirror the real backend: preview_lifecycle.up(wait=False) returns healthy=None,
+        # so the spy must too — otherwise the wait=False path can't be exercised.
+        healthy = True if kw.get("wait", True) else None
         return _DV2Result(
             target=_fake_target(),
             data_lane="staging",
@@ -53,7 +56,7 @@ def spies(monkeypatch):
                 "compose_id": "cmp",
                 "sha": kw["code_version"],
                 "url": f"https://report-pr-999.{kw['domain']}",
-                "healthy": True,
+                "healthy": healthy,
             },
         )
 
@@ -115,6 +118,23 @@ def test_teardown_runs_even_when_deploy_raises(monkeypatch):
             iac_ref=SHA_IAC,
         )
     assert rec["down"] == ("pr", 999)  # cleanup still ran
+
+
+def test_no_wait_reports_unknown_health_but_still_tears_down(spies):
+    # --no-wait: the deploy is fire-and-forget, so health is unknown (ok/healthy None),
+    # but teardown still runs by default so the canary never leaks its ephemeral stack.
+    res = run_canary(
+        client=object(),
+        domain="zitian.party",
+        code_version=SHA_CODE,
+        iac_ref=SHA_IAC,
+        wait=False,
+    )
+    assert res.ok is None
+    assert res.healthy is None
+    assert res.torn_down is True
+    assert spies["deploy"]["wait"] is False
+    assert spies["down"]["value"] == 999
 
 
 def test_custom_pr_number(spies):
