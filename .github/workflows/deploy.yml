@@ -1,0 +1,154 @@
+name: Deploy (deploy_v2)
+
+# The infra2-owned deploy entrypoint for the finance_report app (Infra-009,
+# finance_report#883: "infra2 owns every deploy"). Wraps `python -m tools.deploy_v2` —
+# the unified 5-axis front door — so any of preview / staging / prod can be deployed
+# through the SAME mechanism, by hand today and (next) triggered by App-repo CI via
+# repository_dispatch.
+#
+# This replaces the per-env App-repo bash (tools/dokploy_deploy.sh). It is manual-only
+# for now (operator-triggered): merging it changes no automated behavior, and running it
+# is the live acceptance test for the unified path on a real fixed env (stronger than the
+# throwaway-preview canary in deploy-v2-canary.yml).
+#
+# prod safety: RL-DATA-1 is deny-by-default in deploy_v2 — a prod deploy must pass BOTH
+# staging_validated=true (staging-first) and code_reviewed=true (reviewed code on prod
+# data), or the front door fails closed before any side effect.
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: "Target env"
+        required: true
+        type: choice
+        options: [preview, staging, prod]
+      code:
+        description: "App code surface: main | release/x.y | vX.Y.Z | <sha>"
+        required: false
+        default: "main"
+      iac_ref:
+        description: "infra2 ref surface: main | release/x.y | vX.Y.Z | <sha>"
+        required: false
+        default: "main"
+      domain:
+        description: "Base domain"
+        required: false
+        default: "zitian.party"
+      alias_kind:
+        description: "preview only — alias kind (main | pr | commit)"
+        required: false
+        type: choice
+        options: ["", main, pr, commit]
+        default: ""
+      alias_value:
+        description: "preview only — alias value (PR number / commit sha)"
+        required: false
+        default: ""
+      staging_validated:
+        description: "prod only — assert this code already passed staging"
+        required: false
+        type: boolean
+        default: false
+      code_reviewed:
+        description: "prod only — positive RL-DATA-1 review signal (required for prod data)"
+        required: false
+        type: boolean
+        default: false
+      break_glass:
+        description: "prod only — bypass staging-first (emergency)"
+        required: false
+        type: boolean
+        default: false
+      no_wait:
+        description: "do not health-check after deploy"
+        required: false
+        type: boolean
+        default: false
+      timeout:
+        description: "health-check seconds"
+        required: false
+        default: "600"
+
+permissions:
+  contents: read
+
+concurrency:
+  # One in-flight deploy per env; never let two deploys race the same env's compose.
+  group: deploy-v2-${{ github.event.inputs.env }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy_v2 ${{ github.event.inputs.env }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+      INTERNAL_DOMAIN: ${{ github.event.inputs.domain || 'zitian.party' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install runtime dependencies
+        run: python -m pip install httpx python-dotenv rich
+
+      - name: Run deploy_v2
+        env:
+          ENV_INPUT: ${{ github.event.inputs.env }}
+          CODE_INPUT: ${{ github.event.inputs.code || 'main' }}
+          IAC_REF_INPUT: ${{ github.event.inputs.iac_ref || 'main' }}
+          DOMAIN_INPUT: ${{ github.event.inputs.domain || 'zitian.party' }}
+          ALIAS_KIND_INPUT: ${{ github.event.inputs.alias_kind || '' }}
+          ALIAS_VALUE_INPUT: ${{ github.event.inputs.alias_value || '' }}
+          STAGING_VALIDATED_INPUT: ${{ github.event.inputs.staging_validated }}
+          CODE_REVIEWED_INPUT: ${{ github.event.inputs.code_reviewed }}
+          BREAK_GLASS_INPUT: ${{ github.event.inputs.break_glass }}
+          NO_WAIT_INPUT: ${{ github.event.inputs.no_wait }}
+          TIMEOUT_INPUT: ${{ github.event.inputs.timeout || '600' }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
+            echo "::error::DOKPLOY_API_KEY secret is required to deploy."
+            exit 1
+          fi
+
+          args=(--service finance_report/app
+                --env "$ENV_INPUT"
+                --code "$CODE_INPUT"
+                --iac-ref "$IAC_REF_INPUT"
+                --domain "$DOMAIN_INPUT"
+                --timeout "$TIMEOUT_INPUT")
+          [[ -n "$ALIAS_KIND_INPUT" ]] && args+=(--alias-kind "$ALIAS_KIND_INPUT")
+          [[ -n "$ALIAS_VALUE_INPUT" ]] && args+=(--alias-value "$ALIAS_VALUE_INPUT")
+          [[ "$STAGING_VALIDATED_INPUT" == "true" ]] && args+=(--staging-validated)
+          [[ "$CODE_REVIEWED_INPUT" == "true" ]] && args+=(--code-reviewed)
+          [[ "$BREAK_GLASS_INPUT" == "true" ]] && args+=(--break-glass)
+          [[ "$NO_WAIT_INPUT" == "true" ]] && args+=(--no-wait)
+
+          echo "deploy_v2 ${args[*]}"
+          set +e
+          out="$(python -m tools.deploy_v2 "${args[@]}")"
+          rc=$?
+          set -e
+
+          echo "deploy_v2 output: $out"
+          {
+            echo "## Deploy (deploy_v2) — $ENV_INPUT"
+            echo ""
+            echo '```json'
+            echo "$out"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::deploy_v2 $ENV_INPUT failed (exit $rc)."
+            exit $rc
+          fi
+          echo "deploy_v2 $ENV_INPUT succeeded."
