@@ -175,7 +175,7 @@ def _resolve_refs(code: str, iac_ref: str) -> tuple[str, str]:
         if not _SHA_RE.match(value):
             raise ValueError(
                 f"{label} resolved to {value!r}, not a full 40-hex commit sha; "
-                "pass a branch/tag or a full sha"
+                "expected main | release/x.y | vX.Y.Z | <sha>"
             )
     return code_sha, iac_sha
 
@@ -192,10 +192,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--service", default=_APP_SERVICE, help="service key")
     parser.add_argument("--env", required=True, choices=["preview", "staging", "prod"])
     parser.add_argument(
-        "--code", required=True, help="app code: a branch/tag (e.g. main) or 40-hex sha"
+        "--code",
+        required=True,
+        help="app code surface: main | release/x.y | vX.Y.Z | <sha>",
     )
     parser.add_argument(
-        "--iac-ref", required=True, help="infra2 ref: a branch/tag or 40-hex sha"
+        "--iac-ref",
+        required=True,
+        help="infra2 ref surface: main | release/x.y | vX.Y.Z | <sha>",
     )
     parser.add_argument(
         "--domain", required=True, help="base domain, e.g. zitian.party"
