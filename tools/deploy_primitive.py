@@ -8,9 +8,13 @@ Assembles the two pure axes — resolve_deploy_ref (code -> sha) and deploy_env_
 
 This is the first piece with side effects: it mutates a Dokploy compose's env and
 triggers a deploy. The Dokploy client is injected so it is unit-testable without a live
-control plane. Step 4a adds an opt-in rollout wait (wait=True) and a CLI entry so a
-workflow can drive it directly; the data-axis side effects (P3/#893) are still layered
-on later. This owns assembly + trigger + the gates + (optionally) the rollout poll.
+control plane. Step 4a added an opt-in rollout wait (wait=True) and a CLI entry; step 4b
+brings the primitive to behavior parity with the App-repo bash dokploy_deploy.sh it
+replaces — IAC_CONFIG_HASH cache-bust, static infra keys, model-override passthrough, a
+Vault-token preflight (verify_vault), and a post-deploy effective-config check
+(verify_config). The data-axis side effects (P3/#893) are still layered on later. This
+owns assembly + trigger + the gates + readiness/parity; the verify_* flags are off by
+default so the assembly unit tests need no live Dokploy/Vault, and the CLI turns them on.
 """
 
 from __future__ import annotations
@@ -83,6 +87,90 @@ def wait_for_rollout(
         _sleep(max(1, interval))
 
 
+def _env_value(env_str: str, key: str) -> str | None:
+    """Read one KEY=VALUE from a Dokploy compose env blob (same simple line format
+    update_compose_env writes). Returns None if absent."""
+    for line in (env_str or "").split("\n"):
+        line = line.strip()
+        if line.startswith(f"{key}=") and not line.startswith("#"):
+            return line.split("=", 1)[1].strip()
+    return None
+
+
+def preflight_vault_token(client, compose_id: str, domain: str, *, min_ttl_hours: int = 48):
+    """Fail closed before deploy if the compose's VAULT_APP_TOKEN is present but invalid
+    or expiring within min_ttl_hours. The token is gated only when present — a compose
+    with no VAULT_APP_TOKEN is left alone (not every compose uses Vault).
+
+    Mirrors the bash primitive's verify_vault_app_token preflight and infra2's own
+    Deployer.verify_vault_app_token (both gate a deploy on token TTL). Reuses the
+    class-free libs.env.verify_vault_token. NOTE — unlike the App-repo bash primitive,
+    this does NOT auto-repair an expiring token; it fails closed with a clear message,
+    matching infra2's native Deployer.sync convention ("regenerate it before deploying").
+    """
+    from libs.env import verify_vault_token
+
+    token = _env_value(client.get_compose_env(compose_id), "VAULT_APP_TOKEN")
+    if not token:
+        return  # no token in this compose env -> nothing to gate on
+    result = verify_vault_token(
+        token, addr=f"https://vault.{domain}", min_ttl_hours=min_ttl_hours
+    )
+    if not result.get("valid"):
+        raise RuntimeError(
+            f"VAULT_APP_TOKEN preflight failed for compose {compose_id}: "
+            f"{result.get('error') or 'invalid token'}. Regenerate it "
+            "(`invoke vault.setup-tokens` for this environment) before deploying."
+        )
+
+
+def verify_effective_config_hash(
+    client,
+    compose_id: str,
+    expected_hash: str,
+    *,
+    timeout: int = 600,
+    interval: int = 5,
+    _sleep=time.sleep,
+    _now=time.monotonic,
+) -> str:
+    """Poll the compose's effective IAC_CONFIG_HASH until it matches expected_hash, then
+    return it; raise RuntimeError if it never advances within the window. Always returns
+    the matched hash on success (never None) — a non-advance is an error, not a value.
+
+    This is the post-deploy "did the config actually roll out" gate. Dokploy applies the
+    env update asynchronously, so the effective hash can briefly lag the deploy call;
+    polling avoids a false-stale verdict on that settling delay while still failing
+    closed if it never advances. A transient read error is tolerated like a non-match and
+    retried — polling gives each read an independent chance to clear a Dokploy blip; only
+    if no clean read ever lands is the last error surfaced. Mirrors
+    libs.deployer._await_effective_config_hash (compose-id-based rather than by service).
+    """
+    deadline = _now() + max(0, timeout)
+    last_value: str | None = None
+    last_error: Exception | None = None
+    while True:
+        try:
+            last_value = _env_value(client.get_compose_env(compose_id), "IAC_CONFIG_HASH")
+            last_error = None
+        except Exception as exc:  # transient Dokploy read; tolerate within window
+            last_error = exc
+        if last_value == expected_hash:
+            return last_value
+        if _now() >= deadline:
+            if last_error is not None and last_value is None:
+                raise RuntimeError(
+                    f"post-deploy config verify could not read effective config for "
+                    f"compose {compose_id}: {last_error}"
+                )
+            raise RuntimeError(
+                f"post-deploy config verify failed: effective IAC_CONFIG_HASH "
+                f"{last_value!r} never advanced to {expected_hash!r} for compose "
+                f"{compose_id} within {timeout}s (deploy may not have taken)."
+            )
+        _sleep(max(1, interval))
+
+
 def deploy(
     env: str,
     code: str,
@@ -95,6 +183,10 @@ def deploy(
     repo: str | None = None,
     wait: bool = False,
     timeout: int = 600,
+    model_overrides: dict[str, str] | None = None,
+    verify_vault: bool = False,
+    verify_config: bool = False,
+    _now=time.time,
 ) -> DeployPlan:
     """Deploy a commit to an environment.
 
@@ -113,6 +205,19 @@ def deploy(
     a terminal-good status (raising on rollout error / timeout) — the readiness gate the
     App-repo bash primitive used to own. Default False keeps the pure-assembly callers
     (and the unit tests) side-effect-free beyond the env-update + deploy trigger.
+
+    Parity with the bash dokploy_deploy.sh this replaces (P2 step 4b):
+    - IAC_CONFIG_HASH=deploy-<sha>-<ts> is always set as a cache-bust so a same-digest
+      promote (staging->prod, promote-not-rebuild) is never a Dokploy no-op.
+    - the static infra keys (COMPOSE_PROFILES/TRAEFIK_ENABLE/INTERNAL_DOMAIN) are
+      re-asserted against drift.
+    - model_overrides (PRIMARY_MODEL/OCR_MODEL/VISION_MODEL, supplied by the staging-E2E
+      caller) are merged in when present.
+    - verify_vault=True gates the deploy on the compose's VAULT_APP_TOKEN TTL (>=48h).
+    - verify_config=True confirms post-deploy that the effective IAC_CONFIG_HASH advanced
+      to the one we pushed (fail-closed on a deploy that did not take).
+    The verify_* flags default False so the assembly unit tests need no live Dokploy/Vault;
+    the CLI enables them so a real workflow deploy gets the full bash-equivalent behavior.
     """
     # Explicit None checks: an empty string is a caller error, not a silent fallback.
     if not domain or any(c.isspace() for c in domain):
@@ -136,15 +241,39 @@ def deploy(
             "this exact digest, or break_glass=True as an audited override (H5)."
         )
 
+    # Fail closed BEFORE any mutation if the compose's Vault token can't carry the deploy.
+    if verify_vault:
+        preflight_vault_token(client, cfg.compose_id, domain)
+
+    # The registry publishes images under the 7-char short sha (`git rev-parse --short`,
+    # and the promote path's `${sha:0:7}`); pushing the full 40-char sha as IMAGE_TAG
+    # would make Dokploy pull a tag that was never published. The canonical full sha
+    # stays in DeployPlan.sha as the commit identity; only the image-addressable env
+    # carries the short form (GIT_COMMIT_SHA matches what CI bakes as a build-arg).
+    image_tag = sha[:7]
+    # IAC_CONFIG_HASH is a per-deploy cache-bust: it changes every call so a same-digest
+    # promote still forces a real redeploy (promote-not-rebuild must never no-op).
+    # Millisecond resolution so two deploys to the same compose within the same wall
+    # second (e.g. a retry) still differ — whole-second granularity could collide and
+    # re-introduce the very no-op this guards against.
+    config_hash = f"deploy-{image_tag}-{int(_now() * 1000)}"
     env_vars = {
-        "IMAGE_TAG": sha,
-        "GIT_COMMIT_SHA": sha,
+        "IMAGE_TAG": image_tag,
+        "GIT_COMMIT_SHA": image_tag,
         "NEXT_PUBLIC_APP_URL": cfg.app_url(domain=domain),
         "ENV_SUFFIX": cfg.env_suffix,
         "ENV_DOMAIN_SUFFIX": cfg.env_suffix,
+        "COMPOSE_PROFILES": "app",
+        "TRAEFIK_ENABLE": "true",
+        "INTERNAL_DOMAIN": domain,
+        "IAC_CONFIG_HASH": config_hash,
     }
+    if model_overrides:
+        # only non-empty overrides (an unset override must not blank the running model)
+        env_vars.update({k: v for k, v in model_overrides.items() if v})
+
     # update_compose_env merges with the existing compose env (keeps runtime-injected
-    # secrets/AppRole creds); we only override the digest + URL + suffix.
+    # secrets/AppRole creds); we only override the digest + URL + suffix + infra keys.
     # Snapshot deployment ids BEFORE triggering so wait_for_rollout watches the new one.
     before_ids = (
         _deployment_ids(client.get_compose_deployments(cfg.compose_id)) if wait else set()
@@ -153,6 +282,11 @@ def deploy(
     client.deploy_compose(cfg.compose_id)
     if wait:
         wait_for_rollout(client, cfg.compose_id, before_ids, timeout=timeout)
+    # Confirm the effective config advanced to what we pushed (deploy actually took).
+    if verify_config:
+        verify_effective_config_hash(
+            client, cfg.compose_id, config_hash, timeout=timeout
+        )
 
     return DeployPlan(
         env=env, sha=sha, compose_id=cfg.compose_id, data=data, env_vars=env_vars
@@ -188,7 +322,27 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--no-wait", action="store_true", help="do not block on rollout")
     parser.add_argument("--timeout", type=int, default=600, help="rollout wait seconds")
+    parser.add_argument(
+        "--skip-vault-check",
+        action="store_true",
+        help="skip the VAULT_APP_TOKEN TTL preflight (default: on)",
+    )
+    parser.add_argument(
+        "--no-verify-config",
+        action="store_true",
+        help="skip the post-deploy effective-config check (default: on)",
+    )
     args = parser.parse_args(argv)
+
+    # Model overrides come from the same env the staging-E2E workflow already exports,
+    # so switching the caller to this CLI needs no new wiring (parity with the bash).
+    import os
+
+    model_overrides = {
+        "PRIMARY_MODEL": os.getenv("DEPLOY_PRIMARY_MODEL_OVERRIDE", ""),
+        "OCR_MODEL": os.getenv("DEPLOY_OCR_MODEL_OVERRIDE", ""),
+        "VISION_MODEL": os.getenv("DEPLOY_VISION_MODEL_OVERRIDE", ""),
+    }
 
     # Imported lazily so importing the primitive (and its unit tests) needs no Dokploy creds.
     from libs.dokploy import get_dokploy
@@ -205,6 +359,9 @@ def main(argv: list[str] | None = None) -> int:
             repo=args.repo,
             wait=not args.no_wait,
             timeout=args.timeout,
+            model_overrides=model_overrides,
+            verify_vault=not args.skip_vault_check,
+            verify_config=not args.no_verify_config,
         )
     except (ValueError, RuntimeError, TimeoutError) as exc:
         print(f"deploy failed: {exc}", file=sys.stderr)
