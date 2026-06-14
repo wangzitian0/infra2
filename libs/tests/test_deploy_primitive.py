@@ -215,18 +215,22 @@ def test_deploy_sets_cache_bust_and_static_infra_keys():
     )
     # IAC_CONFIG_HASH is the per-deploy cache-bust (short sha, forces redeploy even on
     # the same digest)
-    assert plan.env_vars["IAC_CONFIG_HASH"] == f"deploy-{SHORT_SHA}-1000"
+    assert plan.env_vars["IAC_CONFIG_HASH"] == f"deploy-{SHORT_SHA}-1000000"
     assert plan.env_vars["COMPOSE_PROFILES"] == "app"
     assert plan.env_vars["TRAEFIK_ENABLE"] == "true"
     assert plan.env_vars["INTERNAL_DOMAIN"] == "zitian.party"
 
 
-def test_cache_bust_differs_per_deploy_for_same_digest():
-    # promote-not-rebuild deploys the same sha repeatedly; the hash must still change.
+def test_cache_bust_differs_for_two_deploys_in_the_same_second():
+    # promote-not-rebuild deploys the same sha repeatedly; the hash must still change,
+    # even for two deploys within the same wall second (whole-second granularity would
+    # collide here and re-introduce a no-op — ms resolution must keep them distinct).
     c1 = FakeDokploy()
     c2 = FakeDokploy()
-    h1 = dp.deploy("staging", "deadbeef", domain="z.p", client=c1, _now=lambda: 1).env_vars
-    h2 = dp.deploy("staging", "deadbeef", domain="z.p", client=c2, _now=lambda: 2).env_vars
+    h1 = dp.deploy("staging", FULL_SHA, domain="z.p", client=c1, _now=lambda: 1.2).env_vars
+    h2 = dp.deploy("staging", FULL_SHA, domain="z.p", client=c2, _now=lambda: 1.8).env_vars
+    assert h1["IAC_CONFIG_HASH"] == f"deploy-{SHORT_SHA}-1200"
+    assert h2["IAC_CONFIG_HASH"] == f"deploy-{SHORT_SHA}-1800"
     assert h1["IAC_CONFIG_HASH"] != h2["IAC_CONFIG_HASH"]
 
 
@@ -325,5 +329,5 @@ def test_deploy_verify_config_confirms_pushed_hash_rolled_out():
         "staging", FULL_SHA, domain="zitian.party", client=client,
         verify_config=True, _now=lambda: 1000,
     )
-    assert plan.env_vars["IAC_CONFIG_HASH"] == f"deploy-{SHORT_SHA}-1000"
+    assert plan.env_vars["IAC_CONFIG_HASH"] == f"deploy-{SHORT_SHA}-1000000"
     assert client.deployed == ["A6V-hbJlgHMwgPDoTDnhH"]

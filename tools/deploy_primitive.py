@@ -98,15 +98,15 @@ def _env_value(env_str: str, key: str) -> str | None:
 
 
 def preflight_vault_token(client, compose_id: str, domain: str, *, min_ttl_hours: int = 48):
-    """Fail closed before deploy if the compose's VAULT_APP_TOKEN is missing-but-expected
-    cannot be verified, or is invalid / expiring within min_ttl_hours.
+    """Fail closed before deploy if the compose's VAULT_APP_TOKEN is present but invalid
+    or expiring within min_ttl_hours. The token is gated only when present — a compose
+    with no VAULT_APP_TOKEN is left alone (not every compose uses Vault).
 
     Mirrors the bash primitive's verify_vault_app_token preflight and infra2's own
     Deployer.verify_vault_app_token (both gate a deploy on token TTL). Reuses the
     class-free libs.env.verify_vault_token. NOTE — unlike the App-repo bash primitive,
     this does NOT auto-repair an expiring token; it fails closed with a clear message,
     matching infra2's native Deployer.sync convention ("regenerate it before deploying").
-    A compose with no VAULT_APP_TOKEN is left alone (not every compose uses Vault).
     """
     from libs.env import verify_vault_token
 
@@ -133,9 +133,10 @@ def verify_effective_config_hash(
     interval: int = 5,
     _sleep=time.sleep,
     _now=time.monotonic,
-) -> str | None:
+) -> str:
     """Poll the compose's effective IAC_CONFIG_HASH until it matches expected_hash, then
-    return it; raise RuntimeError if it never advances within the window.
+    return it; raise RuntimeError if it never advances within the window. Always returns
+    the matched hash on success (never None) — a non-advance is an error, not a value.
 
     This is the post-deploy "did the config actually roll out" gate. Dokploy applies the
     env update asynchronously, so the effective hash can briefly lag the deploy call;
@@ -252,7 +253,10 @@ def deploy(
     image_tag = sha[:7]
     # IAC_CONFIG_HASH is a per-deploy cache-bust: it changes every call so a same-digest
     # promote still forces a real redeploy (promote-not-rebuild must never no-op).
-    config_hash = f"deploy-{image_tag}-{int(_now())}"
+    # Millisecond resolution so two deploys to the same compose within the same wall
+    # second (e.g. a retry) still differ — whole-second granularity could collide and
+    # re-introduce the very no-op this guards against.
+    config_hash = f"deploy-{image_tag}-{int(_now() * 1000)}"
     env_vars = {
         "IMAGE_TAG": image_tag,
         "GIT_COMMIT_SHA": image_tag,
