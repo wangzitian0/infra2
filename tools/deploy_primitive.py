@@ -55,8 +55,11 @@ def wait_for_rollout(
     """Poll until a NEW Dokploy deployment record reaches a terminal-good status.
 
     Raises RuntimeError if the new record errors, TimeoutError if none finishes in the
-    window. Mirrors libs.deployer._wait_for_new_deployment_record — P2 step 5 collapses
-    the two duplicate rollout pollers (D5) into one once deploy logic lands in infra2.
+    window. Close cousin of libs.deployer._wait_for_new_deployment_record, but NOT
+    identical: that one returns a bool and treats `running` as success (a health check
+    follows it), whereas this owns readiness itself — it keeps polling past `running`
+    until a terminal-good status and raises TimeoutError on the deadline. P2 step 5
+    reconciles the two pollers (D5) when deploy logic fully lands in infra2.
     """
     deadline = _now() + max(0, timeout)
     while True:
@@ -162,8 +165,10 @@ def main(argv: list[str] | None = None) -> int:
         python -m tools.deploy_primitive --env staging --code main --domain zitian.party
 
     Resolves code->sha, assembles the env, triggers the Dokploy deploy, and (unless
-    --no-wait) blocks on rollout. This is the single deploy seam P2 step 4b-d switches
-    the App-repo staging/prod/preview callers onto.
+    --no-wait) blocks on rollout. This is the deploy seam P2 step 4b/4d switches the
+    App-repo staging and prod callers onto. Preview is NOT deployed through here: it is
+    a per-PR dynamic env that deploy() rejects, and step 4c migrates it to an image-free
+    pull via its own lifecycle rather than this fixed-compose CLI.
     """
     parser = argparse.ArgumentParser(description="commit-addressed deploy primitive")
     parser.add_argument("--env", required=True, help="staging | prod (not preview)")
