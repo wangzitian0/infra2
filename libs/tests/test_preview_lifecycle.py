@@ -47,6 +47,10 @@ class FakeDokploy:
 
     def ensure_environment(self, project, env_name, description=""):
         self.ensured.append((project, env_name))
+        # Mirror the real client: it raises ValueError when the project is absent (it does
+        # NOT return an env with environmentId=None). environment_id=None models that.
+        if self._environment_id is None:
+            raise ValueError(f"Project '{project}' not found in Dokploy")
         return {"environmentId": self._environment_id, "name": env_name}, False
 
     def find_compose_by_name(self, name, project_name=None, env_name=None):

@@ -234,7 +234,17 @@ def up(
         # no out-of-band `invoke dokploy_env.env-ensure` step (the missing-env gap that
         # blocked the first live canary). PREVIEW_PROJECT/PREVIEW_ENVIRONMENT are
         # constants, so there is no typo risk in creating-if-absent.
-        env_obj, _ = client.ensure_environment(PREVIEW_PROJECT, PREVIEW_ENVIRONMENT)
+        try:
+            env_obj, _ = client.ensure_environment(
+                PREVIEW_PROJECT, PREVIEW_ENVIRONMENT
+            )
+        except ValueError as exc:
+            # ensure_environment raises ValueError when the PROJECT itself is absent —
+            # re-raise as a consistent fail-closed RuntimeError instead of leaking it.
+            raise RuntimeError(
+                f"could not ensure Dokploy environment "
+                f"{PREVIEW_PROJECT!r}/{PREVIEW_ENVIRONMENT!r}: {exc}"
+            ) from exc
         environment_id = env_obj.get("environmentId")
         if not environment_id:
             raise RuntimeError(
