@@ -168,7 +168,13 @@ services:
       backend:
         condition: service_healthy
     environment:
-      NEXT_PUBLIC_API_URL: https://report${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}/api
+      # Origin only — NO trailing /api. The front end already prefixes every
+      # request path with /api (lib/api.ts), and Traefik strips that /api before
+      # forwarding to the backend (see api-strip middleware above). A /api suffix
+      # here would make the client build /api/api/... → 404 if this value is ever
+      # baked into the bundle. The shipped image (ci.yml) deliberately bakes this
+      # empty for same-origin; keeping the runtime value origin-only stays consistent.
+      NEXT_PUBLIC_API_URL: https://report${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
       NEXT_PUBLIC_APP_URL: https://report${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
       # OpenPanel PV tracking (model B: one project per env). The per-env client id
       # and environment name are injected by deploy.py as plain runtime env, read
