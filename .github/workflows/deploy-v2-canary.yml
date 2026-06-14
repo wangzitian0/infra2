@@ -1,0 +1,114 @@
+name: deploy_v2 Acceptance Canary
+
+# The acceptance gate for the unified deploy primitive (Infra-009, finance_report#883).
+# Exercises the WHOLE deploy_v2 path against real Dokploy: stand up a throwaway preview
+# alias (default pr-999) via the unified front door, wait for HTTP 200, then tear it (and
+# its ephemeral DB) back down. A green run here is the live proof that deploy_v2 deploys —
+# the thing the trio (#341/#342/#343) could only unit-test with mocked backends.
+#
+# Manual + scheduled. NOT wired to push: this performs a live deploy, so it is operator-
+# triggered (or a low-frequency soak) — never on every commit.
+
+on:
+  workflow_dispatch:
+    inputs:
+      code:
+        description: "App code surface to deploy: a branch/tag (e.g. main) or full 40-hex sha"
+        required: false
+        default: "main"
+      iac_ref:
+        description: "infra2 ref pinning the IaC: a branch/tag or full 40-hex sha"
+        required: false
+        default: "main"
+      domain:
+        description: "Base domain"
+        required: false
+        default: "zitian.party"
+      pr:
+        description: "Canary PR alias number (reserved; no real PR collides)"
+        required: false
+        default: "999"
+      timeout:
+        description: "Health-check seconds"
+        required: false
+        default: "600"
+  schedule:
+    # Low-frequency live soak so a regression in the deploy path surfaces out of band.
+    - cron: "37 6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  # Serialize: the canary owns the reserved pr-999 alias; never run two at once.
+  group: deploy-v2-canary
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    name: deploy_v2 live canary
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+      INTERNAL_DOMAIN: ${{ github.event.inputs.domain || 'zitian.party' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install runtime dependencies
+        run: python -m pip install httpx python-dotenv rich
+
+      - name: Run deploy_v2 canary
+        env:
+          CODE_INPUT: ${{ github.event.inputs.code || 'main' }}
+          IAC_REF_INPUT: ${{ github.event.inputs.iac_ref || 'main' }}
+          DOMAIN_INPUT: ${{ github.event.inputs.domain || 'zitian.party' }}
+          PR_INPUT: ${{ github.event.inputs.pr || '999' }}
+          TIMEOUT_INPUT: ${{ github.event.inputs.timeout || '600' }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
+            echo "::error::DOKPLOY_API_KEY secret is required for the deploy_v2 canary."
+            exit 1
+          fi
+
+          # The canary prints a single JSON line on success; capture it so we can assert
+          # the stack was actually torn down (no leaked ephemeral stack) before passing.
+          set +e
+          out="$(python -m tools.deploy_v2_canary \
+            --code "$CODE_INPUT" \
+            --iac-ref "$IAC_REF_INPUT" \
+            --domain "$DOMAIN_INPUT" \
+            --pr "$PR_INPUT" \
+            --timeout "$TIMEOUT_INPUT")"
+          rc=$?
+          set -e
+
+          echo "canary output: $out"
+          {
+            echo "## deploy_v2 Acceptance Canary"
+            echo ""
+            echo '```json'
+            echo "$out"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::deploy_v2 canary failed (exit $rc) — the unified deploy path did not go green."
+            exit $rc
+          fi
+
+          # Belt-and-braces: even on exit 0, refuse to pass if teardown did not run, so a
+          # canary can never leave its ephemeral stack behind.
+          if ! echo "$out" | python -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("torn_down") else 1)'; then
+            echo "::error::canary did not tear down its stack (torn_down != true) — possible leak."
+            exit 1
+          fi
+          echo "deploy_v2 acceptance canary is GREEN — the unified path deploys and converges."

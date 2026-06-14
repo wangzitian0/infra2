@@ -203,6 +203,11 @@ def up(
                 f"Dokploy environment {PREVIEW_ENVIRONMENT!r} not found in project "
                 f"{PREVIEW_PROJECT!r}; create it once before deploying previews."
             )
+        # Teardown-convergence invariant (#921 / D8): the Dokploy record name AND the
+        # appName (the docker project `compose.delete` prunes by) are the SAME alias key,
+        # so `down` creates-under and prunes-by one key — never the divergent pair that
+        # leaked orphans in infra2#310. Keep these two identical; see
+        # libs/tests/test_preview_teardown_convergence.py.
         created = client.create_compose(
             environment_id=environment_id,
             name=alias.compose_name,
