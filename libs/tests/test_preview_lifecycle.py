@@ -296,3 +296,31 @@ def test_wait_for_health_returns_false_on_timeout():
         _now=iter([0, 700]).__next__,
     )
     assert healthy is False
+
+
+# --- main(): domain validated BEFORE the Dokploy client is built -----------------
+
+
+def _no_dokploy(monkeypatch):
+    """Fail the test if main() ever tries to build a Dokploy client."""
+
+    def _boom(*_args, **_kwargs):  # pragma: no cover - only hit on regression
+        raise AssertionError("get_dokploy must not be called for a malformed domain")
+
+    monkeypatch.setattr("libs.dokploy.get_dokploy", _boom)
+
+
+@pytest.mark.parametrize("action", ["up", "down"])
+def test_main_rejects_bad_domain_before_building_client(action, monkeypatch, capsys):
+    # A whitespace-bearing domain must be rejected up front for BOTH up and down, so the
+    # malformed domain never reaches get_dokploy(host=f"cloud.{domain}").
+    _no_dokploy(monkeypatch)
+    argv = [action, "--kind", "pr", "--value", "5", "--domain", "z.p\nINJECT=1"]
+    if action == "up":
+        argv += ["--code", "main"]
+
+    rc = pl.main(argv)
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "invalid domain" in err

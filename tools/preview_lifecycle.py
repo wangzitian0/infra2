@@ -66,6 +66,18 @@ class PreviewResult:
 _PREVIEW_SECRET_ENV = "staging"
 
 
+def _validate_domain(domain: str) -> str:
+    """Reject a malformed domain (empty or containing whitespace).
+
+    Whitespace in the domain would corrupt the Dokploy host (cloud.<domain>) and the
+    Traefik Host() rules / env blob, so it is rejected up front for BOTH up and down.
+    Returns the validated domain unchanged so callers can use the result inline.
+    """
+    if not domain or any(c.isspace() for c in domain):
+        raise ValueError(f"invalid domain {domain!r}: non-empty, no whitespace")
+    return domain
+
+
 def _preview_env_vars(
     alias: PreviewAlias, *, sha: str, domain: str, _now=time.time
 ) -> dict[str, str]:
@@ -149,8 +161,7 @@ def up(
     and — when wait=True — polls https://report-<alias>.<domain>/api/health until 200.
     Idempotent: re-running an alias updates and redeploys the same compose in place.
     """
-    if not domain or any(c.isspace() for c in domain):
-        raise ValueError(f"invalid domain {domain!r}: non-empty, no whitespace")
+    _validate_domain(domain)
 
     alias = preview_alias(kind, value)
     sha = resolve_to_sha(code, repo=repo) if repo is not None else resolve_to_sha(code)
@@ -337,6 +348,16 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     args = parser.parse_args(argv)
+
+    # Validate the domain BEFORE it is used to build the Dokploy host, so a malformed
+    # domain is rejected up front for both `up` and `down` (the client host is derived
+    # from it; up()/down() also re-validate, but the client must not be built from a bad
+    # domain in the first place).
+    try:
+        _validate_domain(args.domain)
+    except ValueError as exc:
+        print(f"preview {args.action} failed: {exc}", file=sys.stderr)
+        return 2
 
     # Imported lazily so importing the module (and its unit tests) needs no Dokploy creds.
     from libs.dokploy import get_dokploy

@@ -52,6 +52,11 @@ services:
       VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
       ENV: ${ENV}
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      # The ctmpl reads PREVIEW_SECRET_ENV to pick which env's Vault app-secrets path
+      # to render (secret/data/finance_report/<PREVIEW_SECRET_ENV>/app). Must be passed
+      # into THIS container — the renderer — or the template silently falls back to its
+      # "staging" default and any override from preview_lifecycle is ignored.
+      PREVIEW_SECRET_ENV: ${PREVIEW_SECRET_ENV:-staging}
     healthcheck:
       test:
         - CMD-SHELL
