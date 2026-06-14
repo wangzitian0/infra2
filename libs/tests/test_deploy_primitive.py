@@ -6,15 +6,22 @@ import pytest
 
 from tools import deploy_primitive as dp
 
+# A realistic full commit sha and its 7-char short form (the tag images are published
+# under). resolve_to_sha returns a full sha; IMAGE_TAG must be the short form.
+FULL_SHA = "1af32e6daf17e2c58383dd2c0bfaea13bc11e517"
+SHORT_SHA = "1af32e6"
+
 
 class FakeDokploy:
     """Records the compose env-update + deploy calls instead of hitting Dokploy."""
 
-    def __init__(self, deployments=None):
+    def __init__(self, deployments=None, env_str=None):
         self.updated: list[tuple[str, dict]] = []
         self.deployed: list[str] = []
         # list, or callable(self) -> list, used by wait_for_rollout's rollout poll.
         self._deployments = deployments
+        # str/callable override for get_compose_env; if None, reflect the last push.
+        self._env_str = env_str
 
     def update_compose_env(self, compose_id, env_vars=None, env_str=None):
         self.updated.append((compose_id, dict(env_vars or {})))
@@ -28,19 +35,29 @@ class FakeDokploy:
         d = self._deployments
         return d(self) if callable(d) else (d or [])
 
+    def get_compose_env(self, compose_id):
+        if self._env_str is not None:
+            e = self._env_str
+            return e(self) if callable(e) else e
+        # reflect the last pushed env as a KEY=VALUE blob (effective-config verify reads it)
+        if self.updated:
+            return "\n".join(f"{k}={v}" for k, v in self.updated[-1][1].items())
+        return ""
+
 
 def test_staging_deploy_assembles_axes_and_triggers():
     client = FakeDokploy()
-    plan = dp.deploy("staging", "deadbeef", domain="zitian.party", client=client)
+    plan = dp.deploy("staging", FULL_SHA, domain="zitian.party", client=client)
 
-    assert plan.sha == "deadbeef"
+    # the plan keeps the canonical full sha as the commit identity...
+    assert plan.sha == FULL_SHA
     assert plan.compose_id == "A6V-hbJlgHMwgPDoTDnhH"
     assert plan.data == "staging"
-    # the digest + URL + suffix are pushed; update_compose_env merges the rest
+    # ...but the pushed env uses the short, image-addressable form (registry tag).
     cid, env = client.updated[0]
     assert cid == "A6V-hbJlgHMwgPDoTDnhH"
-    assert env["IMAGE_TAG"] == "deadbeef"
-    assert env["GIT_COMMIT_SHA"] == "deadbeef"
+    assert env["IMAGE_TAG"] == SHORT_SHA
+    assert env["GIT_COMMIT_SHA"] == SHORT_SHA
     assert env["NEXT_PUBLIC_APP_URL"] == "https://report-staging.zitian.party"
     assert env["ENV_SUFFIX"] == "-staging"
     assert client.deployed == ["A6V-hbJlgHMwgPDoTDnhH"]
@@ -186,3 +203,127 @@ def test_deploy_without_wait_does_not_poll_deployments():
     client = FakeDokploy(deployments=lambda self: calls.append(1) or [])
     dp.deploy("staging", "deadbeef", domain="zitian.party", client=client)
     assert calls == []
+
+
+# --- bash-parity: env keys, cache-bust, model overrides (P2 step 4b) -------------
+
+
+def test_deploy_sets_cache_bust_and_static_infra_keys():
+    client = FakeDokploy()
+    plan = dp.deploy(
+        "staging", FULL_SHA, domain="zitian.party", client=client, _now=lambda: 1000
+    )
+    # IAC_CONFIG_HASH is the per-deploy cache-bust (short sha, forces redeploy even on
+    # the same digest)
+    assert plan.env_vars["IAC_CONFIG_HASH"] == f"deploy-{SHORT_SHA}-1000"
+    assert plan.env_vars["COMPOSE_PROFILES"] == "app"
+    assert plan.env_vars["TRAEFIK_ENABLE"] == "true"
+    assert plan.env_vars["INTERNAL_DOMAIN"] == "zitian.party"
+
+
+def test_cache_bust_differs_per_deploy_for_same_digest():
+    # promote-not-rebuild deploys the same sha repeatedly; the hash must still change.
+    c1 = FakeDokploy()
+    c2 = FakeDokploy()
+    h1 = dp.deploy("staging", "deadbeef", domain="z.p", client=c1, _now=lambda: 1).env_vars
+    h2 = dp.deploy("staging", "deadbeef", domain="z.p", client=c2, _now=lambda: 2).env_vars
+    assert h1["IAC_CONFIG_HASH"] != h2["IAC_CONFIG_HASH"]
+
+
+def test_model_overrides_merged_only_when_non_empty():
+    client = FakeDokploy()
+    plan = dp.deploy(
+        "staging",
+        "deadbeef",
+        domain="zitian.party",
+        client=client,
+        model_overrides={"PRIMARY_MODEL": "gpt-x", "OCR_MODEL": "", "VISION_MODEL": None},
+    )
+    assert plan.env_vars["PRIMARY_MODEL"] == "gpt-x"
+    # empty/None overrides must not blank the running model
+    assert "OCR_MODEL" not in plan.env_vars
+    assert "VISION_MODEL" not in plan.env_vars
+
+
+# --- bash-parity: vault preflight ------------------------------------------------
+
+
+def test_preflight_vault_token_skips_when_compose_has_no_token():
+    # a compose with no VAULT_APP_TOKEN is left alone (not every compose uses Vault)
+    client = FakeDokploy(env_str="IMAGE_TAG=abc\nFOO=bar")
+    dp.preflight_vault_token(client, "cmp", "zitian.party")  # must not raise / not call vault
+
+
+def test_preflight_vault_token_raises_on_expiring_token(monkeypatch):
+    import libs.env as env_mod
+
+    monkeypatch.setattr(
+        env_mod, "verify_vault_token",
+        lambda token, addr=None, min_ttl_hours=24: {"valid": False, "error": "TTL too low"},
+    )
+    client = FakeDokploy(env_str="VAULT_APP_TOKEN=hvs.deadbeef")
+    with pytest.raises(RuntimeError, match="VAULT_APP_TOKEN preflight failed"):
+        dp.preflight_vault_token(client, "cmp", "zitian.party")
+
+
+def test_deploy_verify_vault_gates_before_any_mutation(monkeypatch):
+    import libs.env as env_mod
+
+    monkeypatch.setattr(
+        env_mod, "verify_vault_token",
+        lambda token, addr=None, min_ttl_hours=24: {"valid": False, "error": "expired"},
+    )
+    client = FakeDokploy(env_str="VAULT_APP_TOKEN=hvs.x")
+    with pytest.raises(RuntimeError, match="preflight failed"):
+        dp.deploy("staging", "deadbeef", domain="z.p", client=client, verify_vault=True)
+    # gate runs before mutation: neither env-update nor deploy happened
+    assert client.updated == []
+    assert client.deployed == []
+
+
+# --- bash-parity: post-deploy effective-config verify ----------------------------
+
+
+def test_verify_effective_config_hash_returns_on_match():
+    client = FakeDokploy(env_str="IAC_CONFIG_HASH=deploy-abc-1\nX=y")
+    got = dp.verify_effective_config_hash(
+        client, "cmp", "deploy-abc-1", _sleep=lambda _s: None, _now=_clock(0)
+    )
+    assert got == "deploy-abc-1"
+
+
+def test_verify_effective_config_hash_raises_if_never_advances():
+    client = FakeDokploy(env_str="IAC_CONFIG_HASH=deploy-OLD-0")
+    with pytest.raises(RuntimeError, match="never advanced"):
+        dp.verify_effective_config_hash(
+            client, "cmp", "deploy-NEW-1", timeout=600,
+            _sleep=lambda _s: None, _now=_clock(0, 700),
+        )
+
+
+def test_verify_effective_config_hash_tolerates_transient_read_error():
+    # first read raises, second returns the match -> must not fail on the blip
+    calls = {"n": 0}
+
+    def flaky(_self):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("Dokploy compose.one blip")
+        return "IAC_CONFIG_HASH=deploy-abc-1"
+
+    client = FakeDokploy(env_str=flaky)
+    got = dp.verify_effective_config_hash(
+        client, "cmp", "deploy-abc-1", _sleep=lambda _s: None, _now=_clock(0, 1, 2)
+    )
+    assert got == "deploy-abc-1"
+
+
+def test_deploy_verify_config_confirms_pushed_hash_rolled_out():
+    # the reflecting fake echoes the pushed env back, so the effective hash matches.
+    client = FakeDokploy()
+    plan = dp.deploy(
+        "staging", FULL_SHA, domain="zitian.party", client=client,
+        verify_config=True, _now=lambda: 1000,
+    )
+    assert plan.env_vars["IAC_CONFIG_HASH"] == f"deploy-{SHORT_SHA}-1000"
+    assert client.deployed == ["A6V-hbJlgHMwgPDoTDnhH"]
