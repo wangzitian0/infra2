@@ -151,6 +151,15 @@ def test_env_shared_no_preview_and_no_suffix():
         )
 
 
+@pytest.mark.parametrize("spec", [SIGNOZ, VAULT])
+def test_no_preview_instance_error_not_masked_by_missing_alias(spec):
+    # A prod_only / env_shared service has no preview slot at all. sub_domain_for must
+    # report THAT (the real, unfixable reason) rather than failing first on a missing
+    # alias_kind — which a caller could never satisfy anyway.
+    with pytest.raises(ValueError, match="no preview instances"):
+        sub_domain_for(spec, "preview")  # alias_kind omitted on purpose
+
+
 def test_backing_service_pins_like_stack_not_routed():
     assert REPORT_PG.web_facing is False
     validate_deploy_target(

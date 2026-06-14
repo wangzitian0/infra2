@@ -96,6 +96,7 @@ def test_staging_prod_route_to_fixed_primitive(calls, env):
         client=object(),
         domain="zitian.party",
         staging_validated=True,  # allow prod
+        code_reviewed=True,  # prod data needs the explicit RL-DATA-1 signal
     )
     assert res.backend == "deploy-primitive"
     assert calls["fixed"]["env"] == env
@@ -174,19 +175,38 @@ def test_resolve_data_lane_by_env():
     assert resolve_data_lane(preview) == "staging"  # preview defaults to staging data
 
 
-def test_red_line_unreviewed_code_not_on_prod_data(calls):
+@pytest.mark.parametrize("code_reviewed", [False, None])
+def test_red_line_prod_data_fails_closed_without_positive_review(calls, code_reviewed):
+    # RL-DATA-1 is deny-by-default: an explicit False AND an omitted/None signal both
+    # fail closed, so prod data is unreachable unless review is positively asserted.
+    kwargs = dict(
+        service="finance_report/app",
+        env="prod",
+        code_version=SHA_CODE,
+        iac_ref=SHA_IAC,
+        client=object(),
+        domain="zitian.party",
+        staging_validated=True,
+    )
+    if code_reviewed is not None:
+        kwargs["code_reviewed"] = code_reviewed
     with pytest.raises(ValueError, match="RL-DATA-1"):
-        deploy_v2(
-            service="finance_report/app",
-            env="prod",
-            code_version=SHA_CODE,
-            iac_ref=SHA_IAC,
-            client=object(),
-            domain="zitian.party",
-            staging_validated=True,
-            code_reviewed=False,
-        )
+        deploy_v2(**kwargs)
     assert calls["fixed"] is None
+
+
+def test_prod_data_allowed_with_positive_review(calls):
+    res = deploy_v2(
+        service="finance_report/app",
+        env="prod",
+        code_version=SHA_CODE,
+        iac_ref=SHA_IAC,
+        client=object(),
+        domain="zitian.party",
+        staging_validated=True,
+        code_reviewed=True,
+    )
+    assert res.backend == "deploy-primitive" and calls["fixed"]["env"] == "prod"
 
 
 def test_enforce_returns_data_lane():

@@ -29,7 +29,9 @@ import json
 import sys
 from dataclasses import dataclass
 
-from tools.deploy_contract import DeployTarget
+import httpx  # transport errors from libs.dokploy surface as httpx exceptions
+
+from tools.deploy_contract import _SHA_RE, DeployTarget
 from tools.deploy_v2 import deploy_v2
 from tools.preview_lifecycle import down
 
@@ -100,9 +102,15 @@ def run_canary(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="deploy_v2 acceptance canary")
-    parser.add_argument("--code", required=True, help="app code surface: main | <sha>")
     parser.add_argument(
-        "--iac-ref", required=True, help="infra2 ref pinning the IaC: branch | <sha>"
+        "--code",
+        required=True,
+        help="app code surface: a branch/tag (e.g. main) or a full 40-hex sha",
+    )
+    parser.add_argument(
+        "--iac-ref",
+        required=True,
+        help="infra2 ref pinning the IaC: a branch/tag or a full 40-hex sha",
     )
     parser.add_argument(
         "--domain", required=True, help="base domain, e.g. zitian.party"
@@ -132,6 +140,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"canary ref resolution failed: {exc}", file=sys.stderr)
         return 2
 
+    # Fail fast on a non-40-hex resolution (e.g. a short sha passed through unchanged):
+    # deploy_v2's contract requires exactly 40-hex, so reject here with a targeted message
+    # rather than letting it surface late as an opaque contract error mid-deploy.
+    for label, value in (("--code", code_sha), ("--iac-ref", iac_sha)):
+        if not _SHA_RE.match(value):
+            print(
+                f"{label} resolved to {value!r}, which is not a full 40-hex commit sha; "
+                "pass a branch/tag or a full sha",
+                file=sys.stderr,
+            )
+            return 2
+
     # Imported lazily so importing the module (and its unit tests) needs no Dokploy creds.
     from libs.dokploy import get_dokploy
 
@@ -147,7 +167,9 @@ def main(argv: list[str] | None = None) -> int:
             teardown=not args.keep,
             timeout=args.timeout,
         )
-    except (ValueError, RuntimeError, TimeoutError) as exc:
+    except (ValueError, RuntimeError, TimeoutError, httpx.HTTPError) as exc:
+        # httpx.HTTPError covers Dokploy transport/auth/API failures from libs.dokploy —
+        # an acceptance gate must exit cleanly (code 1 + one line), not dump a traceback.
         print(f"canary failed: {exc}", file=sys.stderr)
         return 1
 

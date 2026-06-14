@@ -353,16 +353,21 @@ preview 并存且可按名寻址（§4.6）。
 **`data` 不是第六个输入轴**：它是*派生*的（`EnvConfig.data_default`，可被 `iac_ref` 处的 IaC 钉定），
 只出现在红线谓词里。
 
-**校验谓词**（`deploy_contract.validate_deploy_target`，部署前 fail-closed）：
+**契约谓词**（`deploy_contract.validate_deploy_target`，部署前 fail-closed）——只校验契约轴：
 1. `env ∈ {staging, prod}` ⇒ `sub_domain` = `base` + 该 env 后缀（禁自定义）。
 2. `env = preview` ⇒ `sub_domain` 匹配 `base-(main|pr-<N>|commit-<sha7>)` 且不等于任何 staging/prod 规范域。
 3. `service.prod_only ∧ env ≠ prod` ⇒ 非法；`service.env_shared` ⇒ 无 preview、无后缀。
 4. `code_version` / `iac_ref` 必须为 40 位小写 hex。
-5. 红线（依赖解析 `iac_ref` 读出 data_lane）：`env=prod ⇒ data_lane=prod`；未评审 PR sha 不上 prod 数据。
+
+**红线谓词**（§5 data-lane，由执行层 `deploy_v2.enforce_data_lane_red_lines` 强制，*不*在
+`validate_deploy_target` 内）：
+5. `env=prod ⇒ data_lane=prod`；RL-DATA-1 未评审代码不上 prod 数据——deny-by-default：
+   `code_reviewed` 必须显式为 `True`，缺省（`None`）与 `False` 均 fail-closed。
 
 > **现状边界**：契约层已就位（本节 + `deploy_contract.py`）。`service` 注册表当前只含
 > `finance_report/app`；平台服务（经 `libs/deployer.py` 部署）在统一前门分派两条部署路径时并入。
-> 谓词 5 的 data_lane 强制随数据轴（finance_report#893）落地。
+> 谓词 5 现以 deny-by-default 把守；供给 `code_reviewed=True` 的完整 GitHub 评审门禁随数据轴
+> （finance_report#893）落地。
 
 ---
 

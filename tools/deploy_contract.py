@@ -93,6 +93,12 @@ def sub_domain_for(
     """
     cfg = env_config(env)
     if cfg.dynamic:  # preview
+        # Surface the structural reason first: a prod-only / env-shared service has no
+        # preview slot at all, so report that rather than masking it behind a missing
+        # alias_kind (which a caller cannot satisfy anyway).
+        if spec.prod_only or spec.env_shared:
+            kind = "prod_only" if spec.prod_only else "env_shared"
+            raise ValueError(f"{spec.key} has no preview instances ({kind})")
         if alias_kind is None:
             raise ValueError("preview requires an alias_kind (main | pr | commit)")
         return (
@@ -153,7 +159,15 @@ def make_deploy_target(
 
 
 def validate_deploy_target(target: DeployTarget, spec: ServiceSpec) -> None:
-    """Enforce the SSOT §4.7 / §5 predicates. Raises ``ValueError`` on the first miss."""
+    """Enforce the SSOT §4.7 *contract* predicates. Raises ``ValueError`` on first miss.
+
+    This validates the contract axes only — service registration, 40-hex sha shapes for
+    ``code_version``/``iac_ref``, env legality, and the ``sub_domain`` ↔ env/preview-slot
+    derivation. It does NOT enforce the §5 data-lane red lines (``env=prod => data_lane``;
+    RL-DATA-1 unreviewed-sha-never-on-prod-data): those derive from ``iac_ref`` and live in
+    the execution layer — ``deploy_v2.enforce_data_lane_red_lines`` — and become fully
+    data-aware when the data axis lands (finance_report#893).
+    """
     if spec.key != target.service:
         raise ValueError(
             f"spec.key {spec.key!r} does not match service {target.service!r}"

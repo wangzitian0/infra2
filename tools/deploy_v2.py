@@ -45,16 +45,21 @@ def enforce_data_lane_red_lines(
     """Fail closed on the data red lines, returning the resolved data_lane.
 
     - ``env=prod`` must run on prod data (taxonomy consistency).
-    - RL-DATA-1: unreviewed code (a PR sha) must never run on prod data. The review
-      signal is not available in this pure layer; a caller that knows it passes
-      ``code_reviewed=False`` to enforce. Full GitHub-review gating lands with the data
-      axis (finance_report#893).
+    - RL-DATA-1: code may touch prod data only with a *positive* review signal. This is
+      deny-by-default: ``code_reviewed`` must be explicitly ``True`` for any prod-data
+      target; the ``None`` default (signal absent) and ``False`` both fail closed, so a
+      caller cannot reach prod data by simply omitting the argument. Full GitHub-review
+      gating that supplies the ``True`` signal lands with the data axis
+      (finance_report#893); until then prod-data deploys must pass it explicitly.
     """
     data_lane = resolve_data_lane(target)
     if target.env == "prod" and data_lane != "prod":
         raise ValueError(f"env=prod must use prod data, got data_lane={data_lane!r}")
-    if data_lane == "prod" and code_reviewed is False:
-        raise ValueError("unreviewed code may not run on prod data (RL-DATA-1)")
+    if data_lane == "prod" and code_reviewed is not True:
+        raise ValueError(
+            "prod data requires an explicit code-reviewed signal (RL-DATA-1); "
+            f"got code_reviewed={code_reviewed!r}"
+        )
     return data_lane
 
 
@@ -105,7 +110,7 @@ def deploy_v2(
             "is wired (platform services join when the deployer path is unified)."
         )
 
-    if env_config(env).dynamic:  # preview
+    if env_config(target.env).dynamic:  # preview
         # iac_ref pins the infra2 ref Dokploy pulls the preview compose template from.
         result = _preview_up(
             alias_kind,
