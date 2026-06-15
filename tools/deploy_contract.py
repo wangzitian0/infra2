@@ -284,31 +284,109 @@ def _is_valid_preview_sub_domain(spec: ServiceSpec, sub_domain: str) -> bool:
 
 @dataclass(frozen=True)
 class DeployTypeSpec:
-    """Static config a deploy ``type`` resolves to. env/alias/gates derive from here."""
+    """The COMPLETE per-type contract: a deploy ``type`` fully declares what it accepts.
 
-    key: str  # the type token, e.g. "prod" | "preview/pr"
-    env: str  # underlying env regime (data-lane / secrets / lifecycle) — derived, not input
-    alias_kind: str | None = (
-        None  # preview alias kind (main|pr|commit); None = fixed env
-    )
-    requires_review: bool = (
-        False  # RL-DATA-1: prod-data types require code_reviewed=True
-    )
+    A caller (this app, or any other app) reads its type's spec to know exactly which
+    parameters to pass — env/alias derive from the type, ``accepted_forms`` says which
+    version ref-forms are legal, and the gate flags say which red lines apply. Wrong input
+    fast-fails against this spec.
+
+    Fields:
+        key:          the type token (e.g. "prod" | "preview/pr").
+        env:          derived env regime (data-lane / secrets / lifecycle).
+        alias_kind:   preview alias kind (main|pr|commit|tag); None for fixed envs.
+        accepted_forms: classify_ref forms this type accepts — ``branch`` (main) / ``sha``
+            / ``tag`` (vX.Y.Z) / ``release-branch`` (release/x.y). The image REFERENCE a
+            form resolves to is the App's contract (resolve_deploy_ref), not gated here;
+            this only gates which surface inputs are legal for the type.
+        requires_review: RL-DATA-1 — caller must assert code_reviewed=True.
+        requires_staging_first: promote-not-rebuild — caller must assert staging_validated
+            (or break_glass).
+    """
+
+    key: str
+    env: str
+    alias_kind: str | None = None
+    accepted_forms: frozenset = field(default_factory=frozenset)
+    requires_review: bool = False
+    requires_staging_first: bool = False
 
 
-# The closed set of deploy types. Adding a scenario = adding one entry here (open-closed);
-# existing types are untouched. `canary` is an EXPLICIT type (guardrail: never an emergent
-# property of "empty params") — it is a preview deploy whose execution adds health+teardown.
+# The two image-addressing classes (which the FORM, not the type, decides):
+#   code refs  (main / commit sha)      -> the App publishes a short-sha image
+#   release refs (vX.Y.Z / release/x.y) -> the App publishes/retains a tag image
+_CODE_FORMS = frozenset({"branch", "sha"})
+_RELEASE_FORMS = frozenset({"tag", "release-branch"})
+
+# The closed set of deploy types — each a complete contract. Adding a scenario = one entry
+# (open-closed). Per-type usage examples (the homework other apps copy):
+#
+#   preview/main   : deploy_v2(type="preview/main",  service=S, version="main",   iac_ref=I, domain=D)
+#   preview/pr     : deploy_v2(type="preview/pr",    service=S, version=<sha>,    iac_ref=I, domain=D, alias_value=7)
+#   preview/commit : deploy_v2(type="preview/commit",service=S, version=<sha>,    iac_ref=I, domain=D, alias_value=<sha7>)
+#   staging        : deploy_v2(type="staging",       service=S, version="main",   iac_ref=I, domain=D)   # or version="v1.2.3"
+#   prod           : deploy_v2(type="prod",          service=S, version="v1.2.3", iac_ref=I, domain=D,
+#                              staging_validated=True, code_reviewed=True)         # gates required
+#   canary         : run_canary(...)  # = type "canary" (a self-test preview), code refs only
 DEPLOY_TYPES: dict[str, DeployTypeSpec] = {
-    "staging": DeployTypeSpec("staging", env="staging"),
-    "prod": DeployTypeSpec("prod", env="prod", requires_review=True),
-    "preview/main": DeployTypeSpec("preview/main", env="preview", alias_kind="main"),
-    "preview/pr": DeployTypeSpec("preview/pr", env="preview", alias_kind="pr"),
-    "preview/commit": DeployTypeSpec(
-        "preview/commit", env="preview", alias_kind="commit"
+    "preview/main": DeployTypeSpec(
+        "preview/main",
+        env="preview",
+        alias_kind="main",
+        accepted_forms=frozenset({"branch"}),  # the report-main slot tracks main only
     ),
-    "canary": DeployTypeSpec("canary", env="preview", alias_kind="pr"),
+    "preview/pr": DeployTypeSpec(
+        "preview/pr",
+        env="preview",
+        alias_kind="pr",
+        accepted_forms=frozenset({"sha"}),  # the PR's head commit
+    ),
+    "preview/commit": DeployTypeSpec(
+        "preview/commit",
+        env="preview",
+        alias_kind="commit",
+        accepted_forms=frozenset({"sha"}),
+    ),
+    "staging": DeployTypeSpec(
+        "staging",
+        env="staging",
+        accepted_forms=_CODE_FORMS | _RELEASE_FORMS,  # universal soak: code OR release
+    ),
+    "prod": DeployTypeSpec(
+        "prod",
+        env="prod",
+        accepted_forms=_RELEASE_FORMS,  # releases only — never main / bare sha
+        requires_review=True,
+        requires_staging_first=True,
+    ),
+    # canary = an explicit self-test preview (infra2 mechanism probe), code refs only.
+    "canary": DeployTypeSpec(
+        "canary",
+        env="preview",
+        alias_kind="pr",
+        accepted_forms=_CODE_FORMS,
+    ),
 }
+
+
+def validate_ref_form(deploy_type: str, ref: str) -> str:
+    """Fail-closed if ``ref``'s surface form is not accepted by the type; return the form.
+
+    Gates which surface inputs a type accepts (e.g. ``prod`` accepts only release forms
+    ``vX.Y.Z`` / ``release/x.y``, never ``main`` or a bare sha). The form is pure
+    pattern-matching (classify_ref); the image reference it resolves to is the App's
+    contract, not decided here.
+    """
+    from tools.resolve_deploy_ref import classify_ref
+
+    spec = deploy_type_spec(deploy_type)
+    form = classify_ref(ref)
+    if form not in spec.accepted_forms:
+        raise ValueError(
+            f"deploy type {deploy_type!r} does not accept a {form!r} ref ({ref!r}); "
+            f"accepted forms: {sorted(spec.accepted_forms)}"
+        )
+    return form
 
 
 def deploy_type_spec(deploy_type: str) -> DeployTypeSpec:

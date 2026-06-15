@@ -21,6 +21,7 @@ from tools.deploy_contract import (
     service_spec,
     sub_domain_for,
     validate_deploy_target,
+    validate_ref_form,
 )
 
 SHA_A = "a" * 40
@@ -267,6 +268,49 @@ def test_alias_value_rejected_for_types_without_a_slot(deploy_type):
             iac_ref=SHA_B,
             alias_value=7,
         )
+
+
+# --- per-type contract: accepted ref forms + gates -------------------------
+
+_SHA40 = "a" * 40
+
+
+@pytest.mark.parametrize(
+    "deploy_type,ref,ok",
+    [
+        # prod: releases only — accepts tag / release-branch, rejects main + bare sha
+        ("prod", "v1.2.3", True),
+        ("prod", "release/1.2", True),
+        ("prod", "main", False),
+        ("prod", _SHA40, False),
+        # preview/pr: a commit sha only — rejects main and a release tag
+        ("preview/pr", _SHA40, True),
+        ("preview/pr", "main", False),
+        ("preview/pr", "v1.2.3", False),
+        # preview/main: only main
+        ("preview/main", "main", True),
+        ("preview/main", _SHA40, False),
+        # staging: universal soak — accepts code AND release forms
+        ("staging", "main", True),
+        ("staging", _SHA40, True),
+        ("staging", "v1.2.3", True),
+        ("staging", "release/1.2", True),
+    ],
+)
+def test_validate_ref_form_per_type(deploy_type, ref, ok):
+    if ok:
+        validate_ref_form(deploy_type, ref)  # no raise
+    else:
+        with pytest.raises(ValueError, match="does not accept"):
+            validate_ref_form(deploy_type, ref)
+
+
+def test_prod_is_the_only_gated_type():
+    assert deploy_type_spec("prod").requires_review is True
+    assert deploy_type_spec("prod").requires_staging_first is True
+    for key, spec in DEPLOY_TYPES.items():
+        if key != "prod":
+            assert not spec.requires_review and not spec.requires_staging_first
 
 
 def test_only_prod_type_requires_review():
