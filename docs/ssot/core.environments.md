@@ -390,9 +390,11 @@ preview 并存且可按名寻址（§4.6）。
 3. **fail-closed by construction**：未知 type 拒；每个 type 的 spec 声明自己的必填项；`canary` 是**显式
    type**，绝不让"参数全空"隐式触发。
 
-**业务待定（TBD，占位）**：`version` 按 type 的解释——preview = code sha；prod = release tag
-（release 镜像长期保留的是 `:vX.Y.Z`，sha 镜像会被剪，见 finance_report#883）；亦可业务自定 version。
-当前契约把 `version` 原样当 `code_version` 透传，按 type 的 version 寻址语义与 canary 执行默认值待业务定义后落地。
+**业务待定（TBD，占位 — *尚未实现*）**：`version` *未来*按 type 解释——preview = code sha；
+prod = release tag（release 镜像长期保留的是 `:vX.Y.Z`，sha 镜像会被剪，见 finance_report#883）；
+亦可业务自定 version。**当前契约仍只接受 40 位 commit sha**：`make_target` 把 `version` 原样透传到
+`code_version`，由 `validate_deploy_target` 强制 40-hex——所以 **tag（如 `v1.2.3`）现在会被拒**。
+按 type 的 version 寻址语义与 canary 执行默认值，待业务定义后落地。
 
 ---
 

@@ -293,11 +293,24 @@ def make_target(
     """Type-first builder: ``type`` drives env + sub_domain derivation, then validates.
 
     The five-axis :class:`DeployTarget` is the DERIVED identity; the type-first surface is
-    ``(type, service, version, iac_ref [, alias_value])``. ``version`` is carried as the
-    code_version for now — per-type version interpretation (sha vs tag) is business-TBD
-    (§4.7). Fails closed on an unknown type or any contract violation.
+    ``(type, service, version, iac_ref [, alias_value])``.
+
+    ``version`` — CURRENTLY a 40-hex commit sha (forwarded to ``code_version``, which
+    ``validate_deploy_target`` enforces). Tags (e.g. ``v1.2.3``) are NOT yet accepted —
+    the per-type version interpretation (sha for preview, release tag for prod) is
+    business-TBD (§4.7.1).
+
+    ``alias_value`` is only meaningful for the per-instance preview types
+    (``preview/pr`` / ``preview/commit`` / ``canary``). For fixed envs and ``preview/main``
+    (which carry no alias value) it is rejected, so the discriminated-union surface stays
+    fail-closed rather than silently ignoring a caller mistake.
     """
     spec = deploy_type_spec(deploy_type)
+    if alias_value is not None and spec.alias_kind in (None, "main"):
+        raise ValueError(
+            f"deploy type {deploy_type!r} takes no alias_value "
+            f"(alias_kind={spec.alias_kind!r})"
+        )
     return make_deploy_target(
         service=service,
         env=spec.env,

@@ -223,6 +223,20 @@ def test_type_first_preview_aliases(deploy_type, alias_value, expected):
     assert t.sub_domain == expected
 
 
+@pytest.mark.parametrize("deploy_type", ["staging", "prod", "preview/main"])
+def test_alias_value_rejected_for_types_without_a_slot(deploy_type):
+    # fixed envs + preview/main carry no alias value — passing one is a caller mistake,
+    # rejected rather than silently ignored (keeps the union surface fail-closed).
+    with pytest.raises(ValueError, match="takes no alias_value"):
+        make_target(
+            deploy_type,
+            service="finance_report/app",
+            version=SHA_A,
+            iac_ref=SHA_B,
+            alias_value=7,
+        )
+
+
 def test_only_prod_type_requires_review():
     # RL-DATA-1 gate derives from the type, not a loose flag.
     assert deploy_type_spec("prod").requires_review is True
