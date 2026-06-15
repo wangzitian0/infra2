@@ -37,12 +37,21 @@ class FakeDokploy:
         self.deployed: list[str] = []
         self.deleted: list[tuple[str, bool]] = []
         self.found: list[tuple] = []
+        self.ensured: list[tuple] = []
 
     def get_github_provider_id(self):
         return self._github_id
 
     def get_environment_id(self, project, env_name=None):
         return self._environment_id
+
+    def ensure_environment(self, project, env_name, description=""):
+        self.ensured.append((project, env_name))
+        # Mirror the real client: it raises ValueError when the project is absent (it does
+        # NOT return an env with environmentId=None). environment_id=None models that.
+        if self._environment_id is None:
+            raise ValueError(f"Project '{project}' not found in Dokploy")
+        return {"environmentId": self._environment_id, "name": env_name}, False
 
     def find_compose_by_name(self, name, project_name=None, env_name=None):
         self.found.append((name, project_name, env_name))
@@ -159,6 +168,14 @@ def test_up_env_has_short_sha_suffix_and_ephemeral_db_knobs():
     assert env["PREVIEW_SECRET_ENV"] == "staging"
 
 
+def test_up_self_provisions_the_preview_environment():
+    # The dynamic preview env is created-if-absent (idempotent) so a first-ever preview on
+    # a fresh box needs no out-of-band env-ensure step.
+    client = FakeDokploy(existing=None)
+    pl.up("pr", 5, code="main", domain="zitian.party", client=client, http_get=_ok_get)
+    assert ("finance_report", "preview") in client.ensured
+
+
 def test_up_injects_source_env_vault_creds():
     # The preview vault-agent logs in with the SOURCE env's AppRole creds (the same role
     # staging runs with), read off that env's app compose and merged into the preview env.
@@ -265,9 +282,11 @@ def test_up_fails_closed_without_github_provider():
     assert client.deployed == []
 
 
-def test_up_fails_when_preview_environment_missing():
+def test_up_fails_closed_if_environment_cannot_be_ensured():
+    # ensure_environment yields no id (e.g. the project itself is absent) -> fail closed,
+    # never try to create a compose in a non-existent environment.
     client = FakeDokploy(existing=None, environment_id=None)
-    with pytest.raises(RuntimeError, match="environment 'preview' not found"):
+    with pytest.raises(RuntimeError, match="could not ensure"):
         pl.up("pr", 5, code="main", domain="z.p", client=client)
     assert client.created == []
 
