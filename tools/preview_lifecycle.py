@@ -129,10 +129,10 @@ def _preview_env_vars(
     Vault app secrets to render, and the ephemeral-DB knobs point DATABASE_URL at the
     stack's own local postgres.
 
-    NOTE: VAULT_ADDR / VAULT_ROLE_ID / VAULT_SECRET_ID are NOT set here — they are
-    runtime AppRole creds that must be supplied on the Dokploy compose env once (and are
-    preserved across redeploys), exactly like staging/prod. The lifecycle never logs or
-    embeds them.
+    NOTE: VAULT_ADDR / VAULT_ROLE_ID / VAULT_SECRET_ID are NOT set here — ``up`` injects
+    them separately via ``_source_app_vault_creds`` (read from the source env's app compose
+    each deploy, since a throwaway alias can't rely on a one-time injection persisting).
+    Keeping them out of this pure assembler means it never logs or embeds the creds.
     """
     image_tag = sha[:7]  # registry publishes images under the 7-char short sha
     config_hash = f"preview-{image_tag}-{int(_now() * 1000)}"  # per-deploy cache-bust
@@ -235,9 +235,7 @@ def up(
         # blocked the first live canary). PREVIEW_PROJECT/PREVIEW_ENVIRONMENT are
         # constants, so there is no typo risk in creating-if-absent.
         try:
-            env_obj, _ = client.ensure_environment(
-                PREVIEW_PROJECT, PREVIEW_ENVIRONMENT
-            )
+            env_obj, _ = client.ensure_environment(PREVIEW_PROJECT, PREVIEW_ENVIRONMENT)
         except ValueError as exc:
             # ensure_environment raises ValueError when the PROJECT itself is absent —
             # re-raise as a consistent fail-closed RuntimeError instead of leaking it.
@@ -251,11 +249,13 @@ def up(
                 f"could not ensure Dokploy environment "
                 f"{PREVIEW_PROJECT!r}/{PREVIEW_ENVIRONMENT!r}"
             )
-        # Teardown-convergence invariant (#921 / D8): the Dokploy record name AND the
-        # appName (the docker project `compose.delete` prunes by) are the SAME alias key,
-        # so `down` creates-under and prunes-by one key — never the divergent pair that
-        # leaked orphans in infra2#310. Keep these two identical; see
-        # libs/tests/test_preview_teardown_convergence.py.
+        # Teardown-convergence invariant (#921 / D8): the stable key is the compose
+        # *record name* (alias.compose_name). `up` creates the record under it and `down`
+        # finds by it, then tears down via `delete_compose(composeId)`. Dokploy assigns the
+        # docker appName as name + a random suffix (so name != appName in reality), but
+        # teardown routes through the composeId, so it prunes the right project regardless —
+        # it never keys off a bare docker project name, which is exactly the divergence that
+        # leaked orphans in infra2#310. See libs/tests/test_preview_teardown_convergence.py.
         # Create as github source from the start (Dokploy accepts this and keeps
         # sourceType) so the compose is never momentarily a raw compose with an empty
         # composeFile. The github *binding* (githubId/owner/repository/branch/composePath)

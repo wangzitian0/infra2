@@ -159,6 +159,13 @@ class DokployClient:
         if env:
             payload["env"] = env
 
+        # NOTE: Dokploy's compose.create persists ONLY the basic fields (name /
+        # environmentId / composeType / sourceType / appName / env). It SILENTLY DROPS the
+        # github source binding (githubId / owner / repository / branch / composePath) even
+        # when passed here, and it assigns its own appName (name + a random suffix). Callers
+        # that need a github source MUST re-assert it with a follow-up update_compose()
+        # (see tools/preview_lifecycle.up and libs/deployer); creating with source_type=
+        # "github" alone leaves the compose source-less ("Github Provider not found").
         return self._request("POST", "compose.create", json=payload)
 
     def update_compose(

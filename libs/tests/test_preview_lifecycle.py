@@ -26,11 +26,19 @@ class FakeDokploy:
     """Records the compose calls the preview lifecycle makes, no real Dokploy."""
 
     def __init__(
-        self, *, existing=None, environment_id="env-preview", github_id="gh-1"
+        self,
+        *,
+        existing=None,
+        environment_id="env-preview",
+        github_id="gh-1",
+        source_app=True,
+        source_creds=True,
     ):
         self._existing = existing  # dict returned by find_compose_by_name, or None
         self._environment_id = environment_id
         self._github_id = github_id
+        self._source_app = source_app  # is the source env's app compose present?
+        self._source_creds = source_creds  # does it carry the AppRole creds?
         self.created: list[dict] = []
         self.updated: list[dict] = []
         self.env_updates: list[tuple[str, dict]] = []
@@ -57,11 +65,13 @@ class FakeDokploy:
         self.found.append((name, project_name, env_name))
         # The source env's app compose supplies the AppRole creds previews reuse.
         if name == "app" and env_name == "staging":
-            return {"composeId": "cmp-source-app"}
+            return {"composeId": "cmp-source-app"} if self._source_app else None
         return self._existing
 
     def get_compose_env(self, compose_id):
         if compose_id == "cmp-source-app":
+            if not self._source_creds:
+                return "OTHER=x\n"  # compose exists but the AppRole creds are absent
             return (
                 "VAULT_ADDR=https://vault.test\n"
                 "VAULT_ROLE_ID=rid-test\n"
@@ -174,6 +184,23 @@ def test_up_self_provisions_the_preview_environment():
     client = FakeDokploy(existing=None)
     pl.up("pr", 5, code="main", domain="zitian.party", client=client, http_get=_ok_get)
     assert ("finance_report", "preview") in client.ensured
+
+
+def test_up_fails_closed_when_source_env_app_compose_missing():
+    # The source env (staging) has no `app` compose to read creds from -> fail closed,
+    # never deploy a preview whose vault-agent would crash-loop.
+    client = FakeDokploy(existing=None, source_app=False)
+    with pytest.raises(RuntimeError, match="cannot source preview Vault creds"):
+        pl.up("pr", 5, code="main", domain="z.p", client=client, http_get=_ok_get)
+    assert client.created == [] and client.deployed == []
+
+
+def test_up_fails_closed_when_source_env_has_no_vault_creds():
+    # The source compose exists but carries no VAULT_ROLE_ID/SECRET_ID -> fail closed.
+    client = FakeDokploy(existing=None, source_creds=False)
+    with pytest.raises(RuntimeError, match="missing Vault creds"):
+        pl.up("pr", 5, code="main", domain="z.p", client=client, http_get=_ok_get)
+    assert client.created == [] and client.deployed == []
 
 
 def test_up_injects_source_env_vault_creds():
