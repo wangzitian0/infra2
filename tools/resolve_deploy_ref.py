@@ -215,6 +215,24 @@ def resolve_image_ref(
     return ResolvedRef(sha=sha, image_ref=sha[:7], form=form)
 
 
+def resolve_pr(
+    pr_number, *, repo: str = FINANCE_REPORT_REPO, runner=subprocess.run
+) -> ResolvedRef:
+    """Resolve a PR number to its head commit image (``refs/pull/<N>/head``).
+
+    preview/pr's ``version_ref`` is a PR number (not a git ref classify_ref understands):
+    its slot is ``pr-<N>`` and its code is the PR head commit, pulled by short sha.
+    """
+    n = str(pr_number).strip()
+    if not (n.isdigit() and int(n) > 0):
+        raise ValueError(f"PR number must be a positive integer, got {pr_number!r}")
+    ref = f"refs/pull/{n}/head"
+    for sha, name in _ls_remote_rows(repo, ref, runner=runner):
+        if name == ref:
+            return ResolvedRef(sha=sha, image_ref=sha[:7], form="pr")
+    raise ValueError(f"PR #{n} head not found in {_redact_repo(repo)}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("ref", help="main | release/x.y | vX.Y.Z | <sha>")

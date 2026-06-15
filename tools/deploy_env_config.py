@@ -126,8 +126,9 @@ def with_compose_id(env: str, compose_id: str) -> EnvConfig:
 # suffix would silently produce an unroutable Host() rule or a name collision).
 _PR_VALUE_RE = re.compile(r"\A[1-9][0-9]*\Z")  # a positive PR number, no leading zero
 _SHA7_RE = re.compile(r"\A[0-9a-f]{7,40}\Z")  # a (lowercased) commit sha, >=7 hex
+_TAG_VALUE_RE = re.compile(r"\Av\d+\.\d+\.\d+\Z")  # a release tag vX.Y.Z
 
-PREVIEW_KINDS = ("main", "pr", "commit")
+PREVIEW_KINDS = ("main", "pr", "commit", "tag")
 
 # the Dokploy project + environment the preview stacks live under (kept distinct
 # from staging/prod composes; the lifecycle find-or-creates this environment).
@@ -186,6 +187,13 @@ def _normalize_alias(kind: str, value: int | str | None) -> tuple[str, str]:
                 f"preview commit alias needs a hex commit sha (>=7 chars), got {value!r}"
             )
         return "commit", text[:7]  # short sha — matches IMAGE_TAG / service.version
+    if kind == "tag":
+        text = str(value).strip()
+        if not _TAG_VALUE_RE.match(text):
+            raise ValueError(
+                f"preview tag alias needs a vX.Y.Z release tag, got {value!r}"
+            )
+        return "tag", text  # canonical (keeps dots, for the image ref); slug uses dashes
     raise ValueError(
         f"unknown preview kind {kind!r}: expected one of {list(PREVIEW_KINDS)}"
     )
@@ -202,7 +210,10 @@ def preview_alias(kind: str, value: int | str | None = None) -> PreviewAlias:
         preview_alias("commit", sha)   -> alias commit-1ab32d5,  suffix -commit-1ab32d5
     """
     norm_kind, norm_value = _normalize_alias(kind, value)
-    alias = norm_kind if norm_kind == "main" else f"{norm_kind}-{norm_value}"
+    # The URL/compose slug must be a single DNS label: a tag's dots become dashes
+    # (report-tag-v1-2-3). norm_value keeps the canonical tag (v1.2.3) for the image ref.
+    slug = norm_value.replace(".", "-") if norm_kind == "tag" else norm_value
+    alias = norm_kind if norm_kind == "main" else f"{norm_kind}-{slug}"
     suffix = f"-{alias}"
     return PreviewAlias(
         kind=norm_kind,

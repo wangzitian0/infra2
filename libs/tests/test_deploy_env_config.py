@@ -138,3 +138,24 @@ def test_preview_alias_is_frozen():
     a = ec.preview_alias("pr", 5)
     with pytest.raises(Exception):
         a.alias = "pr-6"  # type: ignore[misc]
+
+
+def test_preview_tag_alias_is_dns_safe():
+    from tools.deploy_env_config import preview_alias
+
+    a = preview_alias("tag", "v1.2.3")
+    assert a.value == "v1.2.3"  # canonical tag kept for the image ref
+    assert a.alias == "tag-v1-2-3"  # dots -> dashes for the single DNS label
+    assert a.env_suffix == "-tag-v1-2-3"
+    assert a.app_url(domain="zitian.party") == "https://report-tag-v1-2-3.zitian.party"
+
+
+def test_preview_tag_alias_rejects_non_tag():
+    import pytest
+
+    from tools.deploy_env_config import preview_alias
+
+    with pytest.raises(ValueError, match="vX.Y.Z release tag"):
+        preview_alias("tag", "1.2.3")  # missing leading v
+    with pytest.raises(ValueError, match="vX.Y.Z release tag"):
+        preview_alias("tag", "main")

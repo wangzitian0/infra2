@@ -228,3 +228,18 @@ def test_resolve_image_ref_release_branch_picks_latest_tag():
     rr = r.resolve_image_ref("release/0.1", runner=runner)
     # release/0.1 -> the line's highest tag -> pulled by that tag
     assert rr.image_ref == "v0.1.7" and rr.sha == "p7" and rr.form == "release-branch"
+
+
+def test_resolve_pr_uses_pull_head_short_sha():
+    runner = FakeRunner(stdout="9" * 40 + "\trefs/pull/7/head\n")
+    rr = r.resolve_pr(7, runner=runner)
+    assert rr.sha == "9" * 40 and rr.image_ref == "9999999" and rr.form == "pr"
+
+
+def test_resolve_pr_rejects_bad_number():
+    import pytest
+
+    with pytest.raises(ValueError, match="positive integer"):
+        r.resolve_pr("abc", runner=FakeRunner())
+    with pytest.raises(ValueError, match="positive integer"):
+        r.resolve_pr(0, runner=FakeRunner())
