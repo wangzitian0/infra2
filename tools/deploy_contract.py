@@ -319,15 +319,15 @@ _CODE_FORMS = frozenset({"branch", "sha"})
 _RELEASE_FORMS = frozenset({"tag", "release-branch"})
 
 # The closed set of deploy types — each a complete contract. Adding a scenario = one entry
-# (open-closed). Per-type usage examples (the homework other apps copy):
+# (open-closed). Per-type usage examples = the real CLI seam other apps copy (`--code` is
+# the surface ref `accepted_forms` gates; `--iac-ref`/`--domain` omitted for brevity):
 #
-#   preview/main   : deploy_v2(type="preview/main",  service=S, version="main",   iac_ref=I, domain=D)
-#   preview/pr     : deploy_v2(type="preview/pr",    service=S, version=<sha>,    iac_ref=I, domain=D, alias_value=7)
-#   preview/commit : deploy_v2(type="preview/commit",service=S, version=<sha>,    iac_ref=I, domain=D, alias_value=<sha7>)
-#   staging        : deploy_v2(type="staging",       service=S, version="main",   iac_ref=I, domain=D)   # or version="v1.2.3"
-#   prod           : deploy_v2(type="prod",          service=S, version="v1.2.3", iac_ref=I, domain=D,
-#                              staging_validated=True, code_reviewed=True)         # gates required
-#   canary         : run_canary(...)  # = type "canary" (a self-test preview), code refs only
+#   preview/main   : python -m tools.deploy_v2 --type preview/main   --code main
+#   preview/pr     : python -m tools.deploy_v2 --type preview/pr     --code <sha>   --alias-value 7
+#   preview/commit : python -m tools.deploy_v2 --type preview/commit --code <sha>   --alias-value <sha7>
+#   staging        : python -m tools.deploy_v2 --type staging        --code main          # or --code v1.2.3
+#   prod           : python -m tools.deploy_v2 --type prod           --code v1.2.3  --staging-validated --code-reviewed
+#   canary         : python -m tools.deploy_v2_canary ...            # the self-test orchestration, code refs only
 DEPLOY_TYPES: dict[str, DeployTypeSpec] = {
     "preview/main": DeployTypeSpec(
         "preview/main",
