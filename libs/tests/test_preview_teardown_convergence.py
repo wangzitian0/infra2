@@ -47,6 +47,7 @@ class ConvergenceFakeDokploy:
         self._github_id = github_id
         self.records: dict[str, dict] = {}  # name -> {composeId, appName(suffixed)}
         self.docker_projects: dict[str, str] = {}  # assigned appName -> composeId
+        self.volumes: dict[str, str] = {}  # assigned appName -> composeId (ephemeral DB)
         self._seq = 0
 
     # --- read side ---------------------------------------------------------
@@ -80,6 +81,7 @@ class ConvergenceFakeDokploy:
         assigned_app_name = f"{name}-{self._seq:02d}sfx"
         self.records[name] = {"composeId": compose_id, "appName": assigned_app_name}
         self.docker_projects[assigned_app_name] = compose_id
+        self.volumes[assigned_app_name] = compose_id  # the alias's ephemeral DB volume
         return {"composeId": compose_id}
 
     def update_compose(self, compose_id, **kwargs):
@@ -93,11 +95,14 @@ class ConvergenceFakeDokploy:
 
     def delete_compose(self, compose_id, *, delete_volumes=False):
         # Dokploy deletes by composeId and prunes the docker project under the appName IT
-        # assigned — so teardown is agnostic to the name/appName divergence.
+        # assigned — so teardown is agnostic to the name/appName divergence. The
+        # project/containers come down ALWAYS; `delete_volumes` only additionally removes
+        # the named volume (the ephemeral DB), so model the two layers separately.
         for name, rec in list(self.records.items()):
             if rec["composeId"] == compose_id:
+                self.docker_projects.pop(rec["appName"], None)  # containers: always
                 if delete_volumes:
-                    self.docker_projects.pop(rec["appName"], None)
+                    self.volumes.pop(rec["appName"], None)  # volume: only when asked
                 del self.records[name]
                 break
 
@@ -147,6 +152,7 @@ def test_down_leaves_zero_orphans_despite_appname_suffix(kind, value):
 
     assert client.records == {}  # Dokploy record gone
     assert client.survivors() == {}  # no orphaned docker project — the #310 guarantee
+    assert client.volumes == {}  # ephemeral DB volume gone (down passes delete_volumes)
 
 
 def test_teardown_is_composeid_based_not_name_based():
