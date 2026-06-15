@@ -68,8 +68,11 @@ permissions:
   contents: read
 
 concurrency:
-  # One in-flight deploy per type; never let two deploys race the same compose.
-  group: deploy-v2-${{ github.event.inputs.deploy_type }}
+  # Key by the compose being deployed = type + per-instance alias_value. Fixed types
+  # (staging/prod) have an empty alias_value -> one group per env (one compose); per-
+  # instance types (preview/pr|commit) get a group per alias, so distinct previews don't
+  # serialize against each other while the same alias still does.
+  group: deploy-v2-${{ github.event.inputs.deploy_type }}-${{ github.event.inputs.alias_value }}
   cancel-in-progress: false
 
 jobs:
