@@ -400,3 +400,12 @@ def test_main_rejects_bad_domain_before_building_client(action, monkeypatch, cap
     assert rc == 2
     err = capsys.readouterr().err
     assert "invalid domain" in err
+
+
+def test_up_image_ref_overrides_short_sha_for_releases():
+    # a release pulls its retained TAG, not the (pruned) short sha
+    client = FakeDokploy(existing=None)
+    pl.up("main", None, code="main", domain="z.p", client=client,
+          http_get=_ok_get, image_ref="v1.2.3")
+    _cid, env = client.env_updates[0]
+    assert env["IMAGE_TAG"] == "v1.2.3" and env["GIT_COMMIT_SHA"] == "v1.2.3"

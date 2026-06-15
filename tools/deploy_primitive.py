@@ -181,6 +181,7 @@ def deploy(
     staging_validated: bool = False,
     break_glass: bool = False,
     repo: str | None = None,
+    image_ref: str | None = None,
     wait: bool = False,
     timeout: int = 600,
     model_overrides: dict[str, str] | None = None,
@@ -250,7 +251,10 @@ def deploy(
     # would make Dokploy pull a tag that was never published. The canonical full sha
     # stays in DeployPlan.sha as the commit identity; only the image-addressable env
     # carries the short form (GIT_COMMIT_SHA matches what CI bakes as a build-arg).
-    image_tag = sha[:7]
+    # IMAGE_TAG is whatever ref the artifact is PUBLISHED under: a release pulls its
+    # retained tag (image_ref="vX.Y.Z"), code pulls the short sha. image_ref is supplied by
+    # the resolver (resolve_image_ref); fall back to sha[:7] for direct/legacy callers.
+    image_tag = image_ref or sha[:7]
     # IAC_CONFIG_HASH is a per-deploy cache-bust: it changes every call so a same-digest
     # promote still forces a real redeploy (promote-not-rebuild must never no-op).
     # Millisecond resolution so two deploys to the same compose within the same wall
