@@ -220,3 +220,102 @@ def _pinned_sub_domain(spec: ServiceSpec, env: str) -> str:
 def _is_valid_preview_sub_domain(spec: ServiceSpec, sub_domain: str) -> bool:
     pattern = rf"\A{re.escape(spec.base_subdomain)}-(main|pr-[1-9][0-9]*|commit-[0-9a-f]{{7}})\Z"
     return re.match(pattern, sub_domain) is not None
+
+
+# ---------------------------------------------------------------------------
+# The deploy TYPE — the discriminant ("one primitive, N scenarios")
+# ---------------------------------------------------------------------------
+# `type` is the PRIMARY axis: it names the scenario and decides how the other axes are
+# interpreted and which are required (a discriminated union). The env regime
+# (data-lane / secrets / lifecycle) and the sub_domain are DERIVED from the type — `env`
+# is no longer a separate input axis, it is a property of the type. Per SSOT §4.7.
+#
+# Three framework guardrails (not business-specific — kept stable):
+#   1. type selects a STRATEGY/config, not a flat enum with embedded values. Per-instance
+#      data (a PR number) rides as `alias_value`, so the type set stays small.
+#   2. one common core + per-type config: resolve type -> spec ONCE, then shared code runs
+#      (no scattered `switch(type)`).
+#   3. fail-closed by construction: an unknown type is rejected; each type's spec declares
+#      what it requires.
+#
+# BUSINESS-TBD (left as placeholders, see §4.7): how `version` is interpreted per type
+# (code sha for previews, release tag for prod, or a business-defined version) and the
+# canary's execution defaults. The contract carries the version as-is for now.
+
+
+@dataclass(frozen=True)
+class DeployTypeSpec:
+    """Static config a deploy ``type`` resolves to. env/alias/gates derive from here."""
+
+    key: str  # the type token, e.g. "prod" | "preview/pr"
+    env: str  # underlying env regime (data-lane / secrets / lifecycle) — derived, not input
+    alias_kind: str | None = (
+        None  # preview alias kind (main|pr|commit); None = fixed env
+    )
+    requires_review: bool = (
+        False  # RL-DATA-1: prod-data types require code_reviewed=True
+    )
+
+
+# The closed set of deploy types. Adding a scenario = adding one entry here (open-closed);
+# existing types are untouched. `canary` is an EXPLICIT type (guardrail: never an emergent
+# property of "empty params") — it is a preview deploy whose execution adds health+teardown.
+DEPLOY_TYPES: dict[str, DeployTypeSpec] = {
+    "staging": DeployTypeSpec("staging", env="staging"),
+    "prod": DeployTypeSpec("prod", env="prod", requires_review=True),
+    "preview/main": DeployTypeSpec("preview/main", env="preview", alias_kind="main"),
+    "preview/pr": DeployTypeSpec("preview/pr", env="preview", alias_kind="pr"),
+    "preview/commit": DeployTypeSpec(
+        "preview/commit", env="preview", alias_kind="commit"
+    ),
+    "canary": DeployTypeSpec("canary", env="preview", alias_kind="pr"),
+}
+
+
+def deploy_type_spec(deploy_type: str) -> DeployTypeSpec:
+    """Resolve a deploy type to its spec. Raises ValueError for an unknown type (closed set)."""
+    try:
+        return DEPLOY_TYPES[deploy_type]
+    except KeyError:
+        raise ValueError(
+            f"unknown deploy type {deploy_type!r}: expected one of {sorted(DEPLOY_TYPES)}"
+        ) from None
+
+
+def make_target(
+    deploy_type: str,
+    *,
+    service: str,
+    version: str,
+    iac_ref: str,
+    alias_value=None,
+) -> DeployTarget:
+    """Type-first builder: ``type`` drives env + sub_domain derivation, then validates.
+
+    The five-axis :class:`DeployTarget` is the DERIVED identity; the type-first surface is
+    ``(type, service, version, iac_ref [, alias_value])``.
+
+    ``version`` — CURRENTLY a 40-hex commit sha (forwarded to ``code_version``, which
+    ``validate_deploy_target`` enforces). Tags (e.g. ``v1.2.3``) are NOT yet accepted —
+    the per-type version interpretation (sha for preview, release tag for prod) is
+    business-TBD (§4.7.1).
+
+    ``alias_value`` is only meaningful for the per-instance preview types
+    (``preview/pr`` / ``preview/commit`` / ``canary``). For fixed envs and ``preview/main``
+    (which carry no alias value) it is rejected, so the discriminated-union surface stays
+    fail-closed rather than silently ignoring a caller mistake.
+    """
+    spec = deploy_type_spec(deploy_type)
+    if alias_value is not None and spec.alias_kind in (None, "main"):
+        raise ValueError(
+            f"deploy type {deploy_type!r} takes no alias_value "
+            f"(alias_kind={spec.alias_kind!r})"
+        )
+    return make_deploy_target(
+        service=service,
+        env=spec.env,
+        code_version=version,
+        iac_ref=iac_ref,
+        alias_kind=spec.alias_kind,
+        alias_value=alias_value,
+    )

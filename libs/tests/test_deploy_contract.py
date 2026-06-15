@@ -10,10 +10,13 @@ from __future__ import annotations
 import pytest
 
 from tools.deploy_contract import (
+    DEPLOY_TYPES,
     SERVICES,
     DeployTarget,
     ServiceSpec,
+    deploy_type_spec,
     make_deploy_target,
+    make_target,
     service_spec,
     sub_domain_for,
     validate_deploy_target,
@@ -179,6 +182,71 @@ def test_wrong_subdomain_for_env_rejected():
 
 
 # --- serialization ---------------------------------------------------------
+
+
+# --- deploy type discriminant ---------------------------------------------
+
+
+def test_unknown_deploy_type_rejected():
+    with pytest.raises(ValueError, match="unknown deploy type"):
+        deploy_type_spec("prod-but-typo")
+
+
+def test_type_first_derives_env_and_sub_domain():
+    # `type` is the input; env + sub_domain are DERIVED (env is no longer a separate axis).
+    t = make_target(
+        "staging", service="finance_report/app", version=SHA_A, iac_ref=SHA_B
+    )
+    assert (t.env, t.sub_domain) == ("staging", "report-staging")
+    p = make_target("prod", service="finance_report/app", version=SHA_A, iac_ref=SHA_B)
+    assert (p.env, p.sub_domain) == ("prod", "report")
+
+
+@pytest.mark.parametrize(
+    "deploy_type,alias_value,expected",
+    [
+        ("preview/main", None, "report-main"),
+        ("preview/pr", 7, "report-pr-7"),
+        ("preview/commit", "1ab32d5", "report-commit-1ab32d5"),
+        ("canary", 999, "report-pr-999"),  # canary is an explicit type -> a pr preview
+    ],
+)
+def test_type_first_preview_aliases(deploy_type, alias_value, expected):
+    t = make_target(
+        deploy_type,
+        service="finance_report/app",
+        version=SHA_A,
+        iac_ref=SHA_B,
+        alias_value=alias_value,
+    )
+    assert t.env == "preview"
+    assert t.sub_domain == expected
+
+
+@pytest.mark.parametrize("deploy_type", ["staging", "prod", "preview/main"])
+def test_alias_value_rejected_for_types_without_a_slot(deploy_type):
+    # fixed envs + preview/main carry no alias value — passing one is a caller mistake,
+    # rejected rather than silently ignored (keeps the union surface fail-closed).
+    with pytest.raises(ValueError, match="takes no alias_value"):
+        make_target(
+            deploy_type,
+            service="finance_report/app",
+            version=SHA_A,
+            iac_ref=SHA_B,
+            alias_value=7,
+        )
+
+
+def test_only_prod_type_requires_review():
+    # RL-DATA-1 gate derives from the type, not a loose flag.
+    assert deploy_type_spec("prod").requires_review is True
+    assert all(not s.requires_review for k, s in DEPLOY_TYPES.items() if k != "prod")
+
+
+def test_type_is_fail_closed_like_the_axes():
+    # an unknown type never reaches a backend (same fail-closed contract as the axes)
+    with pytest.raises(ValueError):
+        make_target("staging", service="nope/svc", version=SHA_A, iac_ref=SHA_B)
 
 
 def test_to_dict():
