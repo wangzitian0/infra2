@@ -12,8 +12,8 @@ name: deploy_v2 Acceptance Canary
 on:
   workflow_dispatch:
     inputs:
-      code:
-        description: "App code surface to deploy: a branch/tag (e.g. main) or full 40-hex sha"
+      version_ref:
+        description: "Code surface to canary: main | release/x.y | vX.Y.Z | full 40-hex sha"
         required: false
         default: "main"
       iac_ref:
@@ -24,10 +24,6 @@ on:
         description: "Base domain"
         required: false
         default: "zitian.party"
-      pr:
-        description: "Canary PR alias number (reserved; no real PR collides)"
-        required: false
-        default: "999"
       timeout:
         description: "Health-check seconds"
         required: false
@@ -66,10 +62,9 @@ jobs:
 
       - name: Run deploy_v2 canary
         env:
-          CODE_INPUT: ${{ github.event.inputs.code || 'main' }}
+          VERSION_REF_INPUT: ${{ github.event.inputs.version_ref || 'main' }}
           IAC_REF_INPUT: ${{ github.event.inputs.iac_ref || 'main' }}
           DOMAIN_INPUT: ${{ github.event.inputs.domain || 'zitian.party' }}
-          PR_INPUT: ${{ github.event.inputs.pr || '999' }}
           TIMEOUT_INPUT: ${{ github.event.inputs.timeout || '600' }}
         run: |
           set -euo pipefail
@@ -83,10 +78,9 @@ jobs:
           # the stack was actually torn down (no leaked ephemeral stack) before passing.
           set +e
           out="$(python -m tools.deploy_v2_canary \
-            --code "$CODE_INPUT" \
+            --version-ref "$VERSION_REF_INPUT" \
             --iac-ref "$IAC_REF_INPUT" \
             --domain "$DOMAIN_INPUT" \
-            --pr "$PR_INPUT" \
             --timeout "$TIMEOUT_INPUT")"
           rc=$?
           set -e

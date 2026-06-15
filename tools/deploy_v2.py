@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Unified deploy front door: validate the 5-axis contract, then dispatch.
+"""Unified deploy front door: resolve the coordinate, validate, then dispatch.
 
 ``deploy_v2(...)`` is the single entrypoint for the deploy_v2 coordinate
-``(service, env, sub_domain, code_version, iac_ref)``. It builds + validates the
-:class:`~tools.deploy_contract.DeployTarget` (so no illegal target reaches a backend),
-enforces the data-lane red lines, then routes to the existing, already-tested backend:
+``(service, type, version_ref, iac_ref)``. ``type`` is the discriminant: it interprets
+``version_ref`` (PR# / sha / tag / branch -> a resolved sha + the image_ref to pull),
+fails closed on a form it does not accept, derives the env + sub_domain, and declares its
+gates. It builds + validates the :class:`~tools.deploy_contract.DeployTarget` (so no
+illegal target reaches a backend), enforces the gates + data-lane red lines, then routes
+to the existing, already-tested backend — passing the resolved ``image_ref``:
 
-    env = preview        -> preview_lifecycle.up   (iac_ref pins the GitHub source ref)
-    env = staging | prod -> deploy_primitive.deploy (the fixed-compose promote path)
+    type -> preview/*    -> preview_lifecycle.up   (iac_ref pins the GitHub source ref)
+    type -> staging|prod -> deploy_primitive.deploy (the fixed-compose promote path)
 
 Scope today: the finance_report **app** service — the only service these two primitives
 deploy. Platform services (via ``libs/deployer`` + the iac_runner ``/deploy`` webhook)
@@ -29,20 +32,80 @@ import httpx  # Dokploy transport errors from libs.dokploy surface as httpx exce
 from tools.deploy_contract import (
     _SHA_RE,
     DeployTarget,
-    make_deploy_target,
+    deploy_type_spec,
+    make_target,
     service_spec,
     validate_deploy_target,
+    validate_ref_form,
 )
 from tools.deploy_env_config import env_config
 from tools.deploy_primitive import deploy as _deploy_fixed
 from tools.preview_lifecycle import up as _preview_up
+from tools.resolve_deploy_ref import (
+    classify_ref,
+    resolve_image_ref,
+    resolve_pr,
+    resolve_to_sha,
+)
 
 _APP_SERVICE = "finance_report/app"
+_APP_REPO = "https://github.com/wangzitian0/finance_report.git"
 _INFRA2_REPO = "https://github.com/wangzitian0/infra2"
 # Dokploy's github source clones a branch/tag ref (`git clone -b`), NOT a commit sha — a
-# raw sha fails "Remote branch <sha> not found" (finance_report#342). So the preview
-# template is cloned from a ref name; iac_ref stays the recorded identity on the target.
+# raw sha fails "Remote branch <sha> not found" (finance_report#342). So when iac_ref is a
+# sha we clone the default branch; a branch/tag iac_ref is cloned verbatim (this is what
+# dissolves the old separate `iac_branch` input — the iac_ref surface now drives the clone).
 _INFRA2_DEFAULT_BRANCH = "main"
+# The canary runs arbitrary code on a fixed throwaway preview slot no real PR reuses.
+_CANARY_PR = 999
+
+
+def _default_main(version_ref) -> str:
+    """A ``branch`` / ``canary`` version_ref defaults to the main tip when omitted."""
+    return (str(version_ref).strip() if version_ref is not None else "") or "main"
+
+
+def _resolve_for_type(spec, version_ref, *, repo: str):
+    """Resolve a type's ``version_ref`` surface to ``(ResolvedRef, alias_value)``.
+
+    The ``type`` decides how ``version_ref`` is read (a discriminated union), and the
+    matrix (``accepted_forms``) fails closed on a form the type does not take:
+
+    - ``canary``          — any ref form, code OR release (default main); runs on the
+                            fixed ``pr-<_CANARY_PR>`` slot (it is a deploy-path probe, so
+                            it stays maximally flexible).
+    - ``preview/pr``      — ``version_ref`` IS a PR number (``resolve_pr`` -> PR-head image);
+                            its slot is that number.
+    - ``preview/branch``  — a branch tip (default main); slot ``branch-<name>``.
+    - everything else     — ``version_ref`` is a git ref: validate its form against the
+                            type, then ``resolve_image_ref``. The slot is the tag
+                            (``preview/tag``), the short sha (``preview/commit``), or absent
+                            (fixed staging+prod).
+    """
+    if spec.key == "canary":
+        ref = _default_main(version_ref)
+        validate_ref_form(spec.key, classify_ref(ref))
+        return resolve_image_ref(ref, repo=repo), _CANARY_PR
+    if spec.alias_kind == "pr":
+        return resolve_pr(version_ref, repo=repo), version_ref
+    # `branch` defaults to the main tip; the other ref types require an explicit version_ref.
+    ref = _default_main(version_ref) if spec.alias_kind == "branch" else str(version_ref).strip()
+    validate_ref_form(spec.key, classify_ref(ref))
+    resolved = resolve_image_ref(ref, repo=repo)
+    # A bare short sha resolves to itself (not a 40-hex commit) — reject with a surface-level
+    # message instead of letting it surface late as an opaque code_version contract error.
+    if not _SHA_RE.match(resolved.sha):
+        raise ValueError(
+            f"version_ref {version_ref!r} resolved to {resolved.sha!r}, not a full commit "
+            "sha — pass main, a release branch, a tag vX.Y.Z, or a full 40-hex sha"
+        )
+    alias_value = {
+        "branch": ref,  # the branch name -> slot branch-<name>
+        "commit": resolved.sha,  # preview_alias truncates to the 7-char short sha
+        "tag": ref,
+        None: None,  # fixed staging / prod carry no preview slot
+    }[spec.alias_kind]
+    return resolved, alias_value
 
 
 def resolve_data_lane(target: DeployTarget) -> str:
@@ -85,36 +148,59 @@ class DeployV2Result:
 def deploy_v2(
     *,
     service: str,
-    env: str,
-    code_version: str,
+    deploy_type: str,
+    version_ref,
     iac_ref: str,
     client,
     domain: str,
-    alias_kind: str | None = None,
-    alias_value=None,
     wait: bool = True,
     staging_validated: bool = False,
     break_glass: bool = False,
     code_reviewed: bool | None = None,
-    iac_branch: str | None = None,
     timeout: int = 600,
+    repo: str = _APP_REPO,
 ) -> DeployV2Result:
-    """Validate and execute a deploy_v2 target.
+    """Execute one deploy_v2 coordinate ``(service, type, version_ref, iac_ref)``.
 
-    For preview, pass ``alias_kind`` (main | pr | commit) and ``alias_value``. Raises
-    ``ValueError`` for any contract / red-line / unsupported-service violation BEFORE any
-    side effect; backend errors (rollout / health) propagate from the backend.
+    The ``type`` is the discriminant: it interprets ``version_ref`` (a PR# / sha / tag /
+    branch — :func:`_resolve_for_type`), fails closed on a form it does not accept, and
+    declares its gates. ``version_ref`` resolves to the commit identity (``sha``) AND the
+    published ``image_ref`` the backend pulls (a short sha for code, a retained tag for a
+    release). ``iac_ref`` (a branch/tag/sha of infra2) pins the IaC and, when cloneable,
+    the preview compose template.
+
+    Raises ``ValueError`` for any contract / form / gate / red-line / unsupported-service
+    violation BEFORE any side effect; backend errors (rollout / health) propagate.
     """
-    target = make_deploy_target(
+    spec = deploy_type_spec(deploy_type)
+    resolved, alias_value = _resolve_for_type(spec, version_ref, repo=repo)
+
+    # iac_ref: the recorded identity is its sha; the preview clone uses the ref verbatim
+    # when it is cloneable (branch/tag), else the default branch (a sha can't be cloned, #342).
+    iac_form = classify_ref(iac_ref)
+    iac_sha = resolve_to_sha(iac_ref, repo=_INFRA2_REPO)
+    clone_ref = _INFRA2_DEFAULT_BRANCH if iac_form == "sha" else iac_ref.strip()
+
+    target = make_target(
+        deploy_type,
         service=service,
-        env=env,
-        code_version=code_version,
-        iac_ref=iac_ref,
-        alias_kind=alias_kind,
+        version=resolved.sha,
+        iac_ref=iac_sha,
         alias_value=alias_value,
     )
     validate_deploy_target(target, service_spec(service))  # defensive re-check
     data_lane = enforce_data_lane_red_lines(target, code_reviewed=code_reviewed)
+
+    # Gate: prod promotes code already validated on staging. The policy is owned by the
+    # env (single source: env_config(...).requires_staging_first), not re-declared on the
+    # type; break_glass is the audited emergency bypass.
+    if env_config(spec.env).requires_staging_first and not (
+        staging_validated or break_glass
+    ):
+        raise ValueError(
+            f"deploy type {deploy_type!r} requires a prior staging deploy "
+            "(pass staging_validated, or break_glass for an emergency)"
+        )
 
     if service != _APP_SERVICE:
         raise ValueError(
@@ -122,19 +208,15 @@ def deploy_v2(
             "is wired (platform services join when the deployer path is unified)."
         )
 
-    if env_config(target.env).dynamic:  # preview
-        # Dokploy pulls the preview compose template from infra2 by cloning a branch/tag
-        # ref — NOT the iac_ref sha (that fails "Remote branch <sha> not found", #342). The
-        # template tracks `iac_branch` (default: infra2 main); iac_ref remains the recorded
-        # identity on the target. Per-commit template pinning would need a tag/branch at
-        # that commit (follow-up).
+    if env_config(target.env).dynamic:  # preview (incl. canary)
         result = _preview_up(
-            alias_kind,
+            spec.alias_kind,
             alias_value,
-            code=target.code_version,
+            code=resolved.sha,
+            image_ref=resolved.image_ref,
             domain=domain,
             client=client,
-            branch=iac_branch or _INFRA2_DEFAULT_BRANCH,
+            branch=clone_ref,
             wait=wait,
             health_timeout=timeout,
         )
@@ -142,19 +224,20 @@ def deploy_v2(
             "alias": result.alias,
             "compose_id": result.compose_id,
             "sha": result.sha,
+            "image_ref": resolved.image_ref,
             "url": result.url,
             "healthy": result.healthy,
         }
         return DeployV2Result(target, data_lane, "preview-lifecycle", detail)
 
-    # staging | prod: the fixed-compose promote path. iac_ref is carried on the target
-    # for the record; source-ref pinning of the fixed composes is the remaining seam
-    # (preview already pins it via the GitHub source branch above).
+    # staging | prod: the fixed-compose promote path. The backend pulls image_ref (a tag
+    # for a release, the short sha for code); iac_ref is carried on the target for the record.
     plan = _deploy_fixed(
         target.env,
-        target.code_version,
+        resolved.sha,
         domain=domain,
         client=client,
+        image_ref=resolved.image_ref,
         wait=wait,
         timeout=timeout,
         staging_validated=staging_validated,
@@ -163,6 +246,7 @@ def deploy_v2(
     detail = {
         "env": plan.env,
         "sha": plan.sha,
+        "image_ref": resolved.image_ref,
         "compose_id": plan.compose_id,
         "data": plan.data,
         "iac_ref": target.iac_ref,
@@ -170,53 +254,37 @@ def deploy_v2(
     return DeployV2Result(target, data_lane, "deploy-primitive", detail)
 
 
-def _resolve_refs(code: str, iac_ref: str) -> tuple[str, str]:
-    """Resolve the surface inputs to 40-hex shas (code vs app repo, iac_ref vs infra2).
-
-    Raises ``ValueError`` if either resolves to something that is not a full 40-hex sha,
-    so the CLI fails fast here rather than late inside the contract validation.
-    """
-    from tools.resolve_deploy_ref import resolve_to_sha
-
-    code_sha = resolve_to_sha(code)
-    iac_sha = resolve_to_sha(iac_ref, repo=_INFRA2_REPO)
-    for label, value in (("--code", code_sha), ("--iac-ref", iac_sha)):
-        if not _SHA_RE.match(value):
-            raise ValueError(
-                f"{label} resolved to {value!r}, not a full 40-hex commit sha; "
-                "expected main | release/x.y | vX.Y.Z | <sha>"
-            )
-    return code_sha, iac_sha
-
-
 def main(argv: list[str] | None = None) -> int:
     """CLI entry for the unified front door — the seam a deploy workflow invokes.
 
-    Resolves the surface refs, builds the Dokploy client, runs ``deploy_v2``, and prints
-    the result as one JSON line. This is the importable handle the App-repo deploy
-    workflows route through during the cutover (finance_report#883), replacing the
-    per-env bash. Dormant until a workflow calls it; no caller is wired here.
+    Builds the Dokploy client, runs ``deploy_v2`` (which resolves the version_ref/iac_ref
+    surfaces itself), and prints the result as one JSON line. This is the importable handle
+    the App-repo deploy workflows route through during the cutover (finance_report#883),
+    replacing the per-env bash. Dormant until a workflow calls it; no caller is wired here.
     """
     parser = argparse.ArgumentParser(description="unified deploy_v2 front door")
     parser.add_argument("--service", default=_APP_SERVICE, help="service key")
-    parser.add_argument("--env", required=True, choices=["preview", "staging", "prod"])
     parser.add_argument(
-        "--code",
+        "--type",
         required=True,
-        help="app code surface: main | release/x.y | vX.Y.Z | <sha>",
+        dest="deploy_type",
+        help="deploy type: staging | prod | preview/main | preview/pr | preview/commit "
+        "| preview/tag | canary",
+    )
+    parser.add_argument(
+        "--version-ref",
+        required=True,
+        help="version surface, interpreted by --type: a PR# (preview/pr), a release tag "
+        "vX.Y.Z (prod / preview/tag), a sha (preview/commit), main, or release/x.y",
     )
     parser.add_argument(
         "--iac-ref",
         required=True,
-        help="infra2 ref surface: main | release/x.y | vX.Y.Z | <sha>",
+        help="infra2 ref pinning the IaC: main | release/x.y | vX.Y.Z | <sha>",
     )
     parser.add_argument(
         "--domain", required=True, help="base domain, e.g. zitian.party"
     )
-    parser.add_argument(
-        "--alias-kind", choices=["main", "pr", "commit"], help="preview alias kind"
-    )
-    parser.add_argument("--alias-value", default=None, help="preview alias value")
     parser.add_argument("--no-wait", action="store_true", help="do not health-check")
     parser.add_argument(
         "--staging-validated",
@@ -234,12 +302,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=int, default=600, help="health-check seconds")
     args = parser.parse_args(argv)
 
-    try:
-        code_sha, iac_sha = _resolve_refs(args.code, args.iac_ref)
-    except (ValueError, RuntimeError) as exc:
-        print(f"deploy_v2 ref resolution failed: {exc}", file=sys.stderr)
-        return 2
-
     # Imported lazily so importing the module (and its unit tests) needs no Dokploy creds.
     from libs.dokploy import get_dokploy
 
@@ -247,13 +309,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = deploy_v2(
             service=args.service,
-            env=args.env,
-            code_version=code_sha,
-            iac_ref=iac_sha,
+            deploy_type=args.deploy_type,
+            version_ref=args.version_ref,
+            iac_ref=args.iac_ref,
             client=client,
             domain=args.domain,
-            alias_kind=args.alias_kind,
-            alias_value=args.alias_value,
             wait=not args.no_wait,
             staging_validated=args.staging_validated,
             break_glass=args.break_glass,

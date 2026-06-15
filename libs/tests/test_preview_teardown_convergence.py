@@ -116,7 +116,7 @@ def _ok_get(url, timeout):
     return 200, "ok"
 
 
-_ALIASES = [("main", None), ("pr", 7), ("commit", "1ab32d5")]
+_ALIASES = [("branch", "main"), ("pr", 7), ("commit", "1ab32d5")]
 
 
 @pytest.mark.parametrize("kind,value", _ALIASES)

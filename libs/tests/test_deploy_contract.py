@@ -10,7 +10,6 @@ from __future__ import annotations
 import pytest
 
 from tools.deploy_contract import (
-    DEPLOY_TYPES,
     SERVICES,
     DeployTarget,
     ServiceSpec,
@@ -54,7 +53,10 @@ def test_sub_domain_for_reuses_env_config_and_preview_alias():
         sub_domain_for(REPORT, "preview", alias_kind="pr", alias_value=5)
         == "report-pr-5"
     )
-    assert sub_domain_for(REPORT, "preview", alias_kind="main") == "report-main"
+    assert (
+        sub_domain_for(REPORT, "preview", alias_kind="branch", alias_value="main")
+        == "report-branch-main"
+    )
     assert (
         sub_domain_for(REPORT, "preview", alias_kind="commit", alias_value="1ab32d5e")
         == "report-commit-1ab32d5"
@@ -72,7 +74,7 @@ def test_env_shared_carries_no_suffix():
 @pytest.mark.parametrize(
     "kind,value,expected",
     [
-        ("main", None, "report-main"),
+        ("branch", "main", "report-branch-main"),
         ("pr", 123, "report-pr-123"),
         ("commit", "1ab32d5e9f", "report-commit-1ab32d5"),
     ],
@@ -83,7 +85,7 @@ def test_preview_slots(kind, value, expected):
 
 
 def test_preview_main_and_same_commit_are_distinct_slots():
-    a = _target("finance_report/app", "preview", alias_kind="main")
+    a = _target("finance_report/app", "preview", alias_kind="branch", alias_value="main")
     b = _target(
         "finance_report/app", "preview", alias_kind="commit", alias_value="1ab32d5"
     )
@@ -205,7 +207,7 @@ def test_type_first_derives_env_and_sub_domain():
 @pytest.mark.parametrize(
     "deploy_type,alias_value,expected",
     [
-        ("preview/main", None, "report-main"),
+        ("preview/branch", "main", "report-branch-main"),
         ("preview/pr", 7, "report-pr-7"),
         ("preview/commit", "1ab32d5", "report-commit-1ab32d5"),
         ("canary", 999, "report-pr-999"),  # canary is an explicit type -> a pr preview
@@ -223,10 +225,10 @@ def test_type_first_preview_aliases(deploy_type, alias_value, expected):
     assert t.sub_domain == expected
 
 
-@pytest.mark.parametrize("deploy_type", ["staging", "prod", "preview/main"])
-def test_alias_value_rejected_for_types_without_a_slot(deploy_type):
-    # fixed envs + preview/main carry no alias value — passing one is a caller mistake,
-    # rejected rather than silently ignored (keeps the union surface fail-closed).
+@pytest.mark.parametrize("deploy_type", ["staging", "prod"])
+def test_alias_value_rejected_for_fixed_envs(deploy_type):
+    # only the fixed envs (staging/prod) carry no alias value — passing one is a caller
+    # mistake, rejected rather than silently ignored (keeps the union surface fail-closed).
     with pytest.raises(ValueError, match="takes no alias_value"):
         make_target(
             deploy_type,
@@ -237,10 +239,11 @@ def test_alias_value_rejected_for_types_without_a_slot(deploy_type):
         )
 
 
-def test_only_prod_type_requires_review():
-    # RL-DATA-1 gate derives from the type, not a loose flag.
-    assert deploy_type_spec("prod").requires_review is True
-    assert all(not s.requires_review for k, s in DEPLOY_TYPES.items() if k != "prod")
+def test_gates_are_not_re_declared_on_the_type():
+    # CF1: requires_staging_first lives on the env (single source), not on the type spec —
+    # so the type cannot drift from the env it derives from.
+    assert not hasattr(deploy_type_spec("prod"), "requires_staging_first")
+    assert not hasattr(deploy_type_spec("prod"), "requires_review")
 
 
 def test_type_is_fail_closed_like_the_axes():

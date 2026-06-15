@@ -1,8 +1,9 @@
-"""Infra-009: unified deploy front door (deploy_v2) routing + red-line proof.
+"""Infra-009: unified deploy front door (deploy_v2) — the (type × version_ref) matrix.
 
-Tests routing/validation/data-lane only — the backends (preview_lifecycle.up,
-deploy_primitive.deploy) are already covered by their own suites and are monkeypatched
-here to recorders, so NO Dokploy/HTTP call happens.
+Tests routing / form-gating / image_ref threading / gates / data-lane red lines. The
+network resolvers (resolve_image_ref / resolve_pr / resolve_to_sha) and the backends
+(preview_lifecycle.up, deploy_primitive.deploy) are monkeypatched, so NO git/Dokploy/HTTP
+call happens — classify_ref stays real, so form validation is exercised for real.
 """
 
 from __future__ import annotations
@@ -18,9 +19,34 @@ from tools.deploy_v2 import (
     enforce_data_lane_red_lines,
     resolve_data_lane,
 )
+from tools.resolve_deploy_ref import ResolvedRef, classify_ref
 
 SHA_CODE = "c" * 40
 SHA_IAC = "d" * 40
+
+
+def _fake_resolve_image_ref(ref, **_kw):
+    """Resolve like the real one (form via real classify_ref) but with no network.
+
+    A release pulls its tag (image_ref == the tag); code pulls the short sha. A bare sha
+    passes through as-is (mirrors resolve_to_sha — short shas are NOT expanded), so the
+    front door's full-sha guard (CF4) is exercised for real.
+    """
+    form = classify_ref(ref)
+    if form == "tag":
+        return ResolvedRef(sha=SHA_CODE, image_ref=ref.strip(), form=form)
+    if form == "release-branch":
+        return ResolvedRef(sha=SHA_CODE, image_ref="v9.9.9", form=form)
+    if form == "sha":
+        s = ref.strip().lower()
+        return ResolvedRef(sha=s, image_ref=s[:7], form=form)
+    return ResolvedRef(sha=SHA_CODE, image_ref=SHA_CODE[:7], form=form)
+
+
+def _fake_resolve_pr(pr, **_kw):
+    if not (str(pr).strip().isdigit() and int(pr) > 0):
+        raise ValueError(f"PR number must be a positive integer, got {pr!r}")
+    return ResolvedRef(sha=SHA_CODE, image_ref=SHA_CODE[:7], form="pr")
 
 
 @dataclass
@@ -32,28 +58,30 @@ class _PreviewResult:
     healthy: bool | None
 
 
+@dataclass
+class _Plan:
+    env: str
+    sha: str
+    compose_id: str
+    data: str
+    env_vars: dict
+
+
 @pytest.fixture
 def calls(monkeypatch):
-    """Record backend invocations instead of hitting Dokploy."""
+    """Record backend invocations + stub the resolvers — no git, no Dokploy."""
     rec = {"preview": None, "fixed": None}
 
     def fake_up(kind, value, **kw):
         rec["preview"] = {"kind": kind, "value": value, **kw}
+        alias = "main" if kind == "main" else f"{kind}-{value}"
         return _PreviewResult(
-            alias=f"{kind}" if kind == "main" else f"{kind}-{value}",
+            alias=alias,
             compose_id="cmp-preview",
             sha=kw["code"],
             url=f"https://report-x.{kw['domain']}",
             healthy=True,
         )
-
-    @dataclass
-    class _Plan:
-        env: str
-        sha: str
-        compose_id: str
-        data: str
-        env_vars: dict
 
     def fake_deploy(env, code, **kw):
         rec["fixed"] = {"env": env, "code": code, **kw}
@@ -61,179 +89,234 @@ def calls(monkeypatch):
 
     monkeypatch.setattr(dv2, "_preview_up", fake_up)
     monkeypatch.setattr(dv2, "_deploy_fixed", fake_deploy)
+    monkeypatch.setattr(dv2, "resolve_image_ref", _fake_resolve_image_ref)
+    monkeypatch.setattr(dv2, "resolve_pr", _fake_resolve_pr)
+    monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
     return rec
 
 
-# --- routing ---------------------------------------------------------------
-
-
-def test_preview_routes_to_lifecycle_cloning_a_branch_ref(calls):
-    res = deploy_v2(
+def _deploy(**over):
+    base = dict(
         service="finance_report/app",
-        env="preview",
-        code_version=SHA_CODE,
-        iac_ref=SHA_IAC,
-        alias_kind="pr",
-        alias_value=7,
+        iac_ref="main",
         client=object(),
         domain="zitian.party",
     )
-    assert isinstance(res, DeployV2Result)
-    assert res.backend == "preview-lifecycle"
-    assert res.target.sub_domain == "report-pr-7"
-    # Dokploy clones a branch/tag ref, not the iac_ref sha (#342): default is infra2 main,
-    # while iac_ref stays the recorded identity on the target.
-    assert calls["preview"]["branch"] == "main"
-    assert res.target.iac_ref == SHA_IAC
-    assert calls["preview"]["code"] == SHA_CODE
-    assert calls["fixed"] is None
+    base.update(over)
+    return deploy_v2(**base)
 
 
-def test_preview_iac_branch_override(calls):
-    deploy_v2(
-        service="finance_report/app",
-        env="preview",
-        code_version=SHA_CODE,
-        iac_ref=SHA_IAC,
-        alias_kind="pr",
-        alias_value=7,
-        client=object(),
-        domain="zitian.party",
-        iac_branch="release/1.2",
-    )
-    assert calls["preview"]["branch"] == "release/1.2"  # clone a specific infra2 ref
+# --- prod: release-only, pulls the TAG (the headline deliverable) ----------
 
 
-@pytest.mark.parametrize("env", ["staging", "prod"])
-def test_staging_prod_route_to_fixed_primitive(calls, env):
-    res = deploy_v2(
-        service="finance_report/app",
-        env=env,
-        code_version=SHA_CODE,
-        iac_ref=SHA_IAC,
-        client=object(),
-        domain="zitian.party",
-        staging_validated=True,  # allow prod
-        code_reviewed=True,  # prod data needs the explicit RL-DATA-1 signal
+def test_prod_tag_routes_fixed_and_pulls_the_tag_not_the_sha(calls):
+    res = _deploy(
+        deploy_type="prod",
+        version_ref="v1.2.3",
+        staging_validated=True,
+        code_reviewed=True,
     )
     assert res.backend == "deploy-primitive"
-    assert calls["fixed"]["env"] == env
-    assert calls["fixed"]["code"] == SHA_CODE
-    assert res.detail["iac_ref"] == SHA_IAC
+    assert calls["fixed"]["env"] == "prod"
+    assert calls["fixed"]["code"] == SHA_CODE  # identity is the commit
+    # the WHOLE point: prod pulls the retained tag, not the pruned short sha
+    assert calls["fixed"]["image_ref"] == "v1.2.3"
+    assert res.detail["image_ref"] == "v1.2.3"
     assert calls["preview"] is None
 
 
-# --- validation fires before any backend ----------------------------------
+def test_prod_release_branch_pulls_latest_tag(calls):
+    res = _deploy(
+        deploy_type="prod",
+        version_ref="release/0.1",
+        staging_validated=True,
+        code_reviewed=True,
+    )
+    assert calls["fixed"]["image_ref"] == "v9.9.9"  # the line's latest tag
+    assert res.backend == "deploy-primitive"
 
 
-def test_unknown_service_rejected_before_dispatch(calls):
-    with pytest.raises(ValueError, match="unknown service"):
-        deploy_v2(
-            service="platform/postgres",
-            env="prod",
-            code_version=SHA_CODE,
-            iac_ref=SHA_IAC,
-            client=object(),
-            domain="zitian.party",
+@pytest.mark.parametrize("bad", ["main", "deadbeef", "c" * 40])
+def test_prod_rejects_code_forms_fail_closed(calls, bad):
+    with pytest.raises(ValueError, match="does not accept"):
+        _deploy(
+            deploy_type="prod",
+            version_ref=bad,
             staging_validated=True,
+            code_reviewed=True,
         )
+    assert calls["fixed"] is None  # fails before any backend
+
+
+# --- staging: mirrors prod but permissive (code OR release) ----------------
+
+
+@pytest.mark.parametrize(
+    "version_ref,expect_image",
+    [("main", SHA_CODE[:7]), ("c" * 40, SHA_CODE[:7]), ("v1.2.3", "v1.2.3")],
+)
+def test_staging_accepts_code_and_release(calls, version_ref, expect_image):
+    res = _deploy(deploy_type="staging", version_ref=version_ref)
+    assert res.backend == "deploy-primitive"
+    assert calls["fixed"]["env"] == "staging"
+    assert calls["fixed"]["image_ref"] == expect_image
+
+
+# --- preview slots: main / pr / commit / tag ------------------------------
+
+
+def test_preview_branch(calls):
+    res = _deploy(deploy_type="preview/branch", version_ref="main")
+    assert res.backend == "preview-lifecycle"
+    assert res.target.sub_domain == "report-branch-main"
+    assert calls["preview"]["kind"] == "branch" and calls["preview"]["value"] == "main"
+    assert calls["preview"]["image_ref"] == SHA_CODE[:7]
+
+
+def test_preview_branch_defaults_version_ref_to_main(calls):
+    # CF2: branch is definitionally a tip — version_ref omitted defaults to main
+    res = _deploy(deploy_type="preview/branch", version_ref="")
+    assert res.target.sub_domain == "report-branch-main"
+
+
+def test_preview_pr_uses_resolve_pr_and_pr_slot(calls):
+    res = _deploy(deploy_type="preview/pr", version_ref=7)
+    assert res.target.sub_domain == "report-pr-7"
+    assert calls["preview"]["kind"] == "pr" and calls["preview"]["value"] == 7
+    assert calls["preview"]["code"] == SHA_CODE
+
+
+def test_preview_pr_rejects_non_numeric(calls):
+    with pytest.raises(ValueError, match="PR number"):
+        _deploy(deploy_type="preview/pr", version_ref="main")
+    assert calls["preview"] is None
+
+
+def test_preview_commit_slot_is_short_sha(calls):
+    res = _deploy(deploy_type="preview/commit", version_ref="c" * 40)
+    assert res.target.sub_domain == "report-commit-ccccccc"
+    assert calls["preview"]["kind"] == "commit"
+
+
+def test_preview_commit_rejects_a_branch(calls):
+    # CF3: branch and commit are now distinct types — commit takes ONLY a sha
+    with pytest.raises(ValueError, match="does not accept a 'branch'"):
+        _deploy(deploy_type="preview/commit", version_ref="main")
+    assert calls["preview"] is None
+
+
+def test_preview_commit_rejects_short_sha_with_surface_message(calls):
+    # CF4: a short sha resolves to itself (not a full commit) -> clear, version_ref-level error
+    with pytest.raises(ValueError, match="not a full commit sha"):
+        _deploy(deploy_type="preview/commit", version_ref="abc1234")
+    assert calls["preview"] is None
+
+
+def test_preview_tag_slot_is_dns_safe_and_pulls_tag(calls):
+    res = _deploy(deploy_type="preview/tag", version_ref="v1.2.3")
+    assert res.target.sub_domain == "report-tag-v1-2-3"
+    assert calls["preview"]["image_ref"] == "v1.2.3"  # release image, not a sha
+
+
+# --- canary: any code, fixed reserved slot --------------------------------
+
+
+def test_canary_runs_code_on_the_reserved_slot(calls):
+    res = _deploy(deploy_type="canary", version_ref="main")
+    assert res.backend == "preview-lifecycle"
+    assert calls["preview"]["kind"] == "pr"
+    assert calls["preview"]["value"] == dv2._CANARY_PR
+    assert res.target.sub_domain == f"report-pr-{dv2._CANARY_PR}"
+
+
+def test_canary_defaults_version_ref_to_main(calls):
+    _deploy(deploy_type="canary", version_ref="")
+    assert calls["preview"]["code"] == SHA_CODE  # resolved 'main'
+
+
+# --- iac_ref drives the clone (iac_branch dissolved) ----------------------
+
+
+def test_iac_branch_ref_is_cloned_verbatim(calls):
+    _deploy(deploy_type="preview/pr", version_ref=7, iac_ref="release/1.2")
+    assert calls["preview"]["branch"] == "release/1.2"
+
+
+def test_iac_sha_falls_back_to_default_branch(calls):
+    # a sha can't be `git clone -b`'d (#342) -> default branch; iac_ref stays the record
+    res = _deploy(deploy_type="preview/pr", version_ref=7, iac_ref="d" * 40)
+    assert calls["preview"]["branch"] == "main"
+    assert res.target.iac_ref == SHA_IAC
+
+
+# --- gates ------------------------------------------------------------------
+
+
+def test_prod_requires_staging_first(calls):
+    with pytest.raises(ValueError, match="requires a prior staging"):
+        _deploy(deploy_type="prod", version_ref="v1.2.3", code_reviewed=True)
+    assert calls["fixed"] is None
+
+
+def test_prod_break_glass_bypasses_staging_first(calls):
+    res = _deploy(
+        deploy_type="prod",
+        version_ref="v1.2.3",
+        break_glass=True,
+        code_reviewed=True,
+    )
+    assert res.backend == "deploy-primitive"
+
+
+@pytest.mark.parametrize("code_reviewed", [False, None])
+def test_prod_data_fails_closed_without_positive_review(calls, code_reviewed):
+    kwargs = dict(deploy_type="prod", version_ref="v1.2.3", staging_validated=True)
+    if code_reviewed is not None:
+        kwargs["code_reviewed"] = code_reviewed
+    with pytest.raises(ValueError, match="RL-DATA-1"):
+        _deploy(**kwargs)
+    assert calls["fixed"] is None
+
+
+def test_unknown_type_rejected(calls):
+    with pytest.raises(ValueError, match="unknown deploy type"):
+        _deploy(deploy_type="bogus", version_ref="main")
     assert calls["fixed"] is None and calls["preview"] is None
 
 
-def test_bad_sha_rejected_before_dispatch(calls):
-    with pytest.raises(ValueError, match="code_version"):
-        deploy_v2(
-            service="finance_report/app",
-            env="staging",
-            code_version="main",
-            iac_ref=SHA_IAC,
-            client=object(),
-            domain="zitian.party",
-        )
+def test_unknown_service_rejected(calls):
+    with pytest.raises(ValueError, match="unknown service"):
+        _deploy(service="platform/postgres", deploy_type="staging", version_ref="main")
     assert calls["fixed"] is None
 
 
-def test_preview_without_alias_rejected(calls):
-    with pytest.raises(ValueError, match="preview requires an alias"):
-        deploy_v2(
-            service="finance_report/app",
-            env="preview",
-            code_version=SHA_CODE,
-            iac_ref=SHA_IAC,
-            client=object(),
-            domain="zitian.party",
-        )
-    assert calls["preview"] is None
-
-
-# --- data lane / red lines -------------------------------------------------
+# --- data lane / red-line helpers (unchanged contract) ---------------------
 
 
 def test_resolve_data_lane_by_env():
     from tools.deploy_contract import make_deploy_target
 
-    prod = make_deploy_target(
-        service="finance_report/app", env="prod", code_version=SHA_CODE, iac_ref=SHA_IAC
-    )
-    staging = make_deploy_target(
-        service="finance_report/app",
-        env="staging",
-        code_version=SHA_CODE,
-        iac_ref=SHA_IAC,
-    )
-    preview = make_deploy_target(
-        service="finance_report/app",
-        env="preview",
-        code_version=SHA_CODE,
-        iac_ref=SHA_IAC,
-        alias_kind="main",
-    )
-    assert resolve_data_lane(prod) == "prod"
-    assert resolve_data_lane(staging) == "staging"
-    assert resolve_data_lane(preview) == "staging"  # preview defaults to staging data
+    def t(env, **kw):
+        return make_deploy_target(
+            service="finance_report/app",
+            env=env,
+            code_version=SHA_CODE,
+            iac_ref=SHA_IAC,
+            **kw,
+        )
 
-
-@pytest.mark.parametrize("code_reviewed", [False, None])
-def test_red_line_prod_data_fails_closed_without_positive_review(calls, code_reviewed):
-    # RL-DATA-1 is deny-by-default: an explicit False AND an omitted/None signal both
-    # fail closed, so prod data is unreachable unless review is positively asserted.
-    kwargs = dict(
-        service="finance_report/app",
-        env="prod",
-        code_version=SHA_CODE,
-        iac_ref=SHA_IAC,
-        client=object(),
-        domain="zitian.party",
-        staging_validated=True,
-    )
-    if code_reviewed is not None:
-        kwargs["code_reviewed"] = code_reviewed
-    with pytest.raises(ValueError, match="RL-DATA-1"):
-        deploy_v2(**kwargs)
-    assert calls["fixed"] is None
-
-
-def test_prod_data_allowed_with_positive_review(calls):
-    res = deploy_v2(
-        service="finance_report/app",
-        env="prod",
-        code_version=SHA_CODE,
-        iac_ref=SHA_IAC,
-        client=object(),
-        domain="zitian.party",
-        staging_validated=True,
-        code_reviewed=True,
-    )
-    assert res.backend == "deploy-primitive" and calls["fixed"]["env"] == "prod"
+    assert resolve_data_lane(t("prod")) == "prod"
+    assert resolve_data_lane(t("staging")) == "staging"
+    assert resolve_data_lane(t("preview", alias_kind="branch", alias_value="main")) == "staging"
 
 
 def test_enforce_returns_data_lane():
     from tools.deploy_contract import make_deploy_target
 
-    t = make_deploy_target(
+    target = make_deploy_target(
         service="finance_report/app", env="prod", code_version=SHA_CODE, iac_ref=SHA_IAC
     )
-    assert enforce_data_lane_red_lines(t, code_reviewed=True) == "prod"
+    assert enforce_data_lane_red_lines(target, code_reviewed=True) == "prod"
 
 
 # --- CLI entry (the cutover seam) ------------------------------------------
@@ -241,27 +324,20 @@ def test_enforce_returns_data_lane():
 
 @pytest.fixture
 def cli(monkeypatch):
-    """Drive deploy_v2.main with refs/client/backend faked — no resolve, no Dokploy."""
+    """Drive deploy_v2.main with client + deploy_v2 faked — no resolve, no Dokploy."""
     import json
 
-    from tools.deploy_contract import make_deploy_target
+    from tools.deploy_contract import make_target
 
     rec = {}
-    monkeypatch.setattr(dv2, "_resolve_refs", lambda code, iac: (SHA_CODE, SHA_IAC))
-
     import libs.dokploy as dk
 
     monkeypatch.setattr(dk, "get_dokploy", lambda host: f"client@{host}")
 
     def fake_deploy_v2(**kw):
         rec.update(kw)
-        target = make_deploy_target(
-            service=kw["service"],
-            env=kw["env"],
-            code_version=kw["code_version"],
-            iac_ref=kw["iac_ref"],
-            alias_kind=kw.get("alias_kind"),
-            alias_value=kw.get("alias_value"),
+        target = make_target(
+            kw["deploy_type"], service=kw["service"], version=SHA_CODE, iac_ref=SHA_IAC
         )
         return DeployV2Result(target, "staging", "deploy-primitive", {"sha": SHA_CODE})
 
@@ -269,14 +345,15 @@ def cli(monkeypatch):
     return rec, json
 
 
-def test_cli_resolves_and_dispatches(cli, capsys):
+def test_cli_passes_surface_through(cli, capsys):
     rec, json = cli
     rc = dv2.main(
-        ["--env", "staging", "--code", "main", "--iac-ref", "main", "--domain", "zp.io"]
+        ["--type", "staging", "--version-ref", "main", "--iac-ref", "main",
+         "--domain", "zp.io"]
     )
     assert rc == 0
-    assert rec["env"] == "staging"
-    assert rec["code_version"] == SHA_CODE and rec["iac_ref"] == SHA_IAC
+    assert rec["deploy_type"] == "staging"
+    assert rec["version_ref"] == "main" and rec["iac_ref"] == "main"
     assert rec["client"] == "client@cloud.zp.io"  # host = cloud.<domain>
     out = json.loads(capsys.readouterr().out)
     assert out["env"] == "staging" and out["backend"] == "deploy-primitive"
@@ -284,41 +361,25 @@ def test_cli_resolves_and_dispatches(cli, capsys):
 
 def test_cli_code_reviewed_flag_maps_to_true_else_none(cli):
     rec, _ = cli
-    dv2.main(["--env", "staging", "--code", "m", "--iac-ref", "m", "--domain", "zp.io"])
+    dv2.main(["--type", "staging", "--version-ref", "m", "--iac-ref", "m", "--domain", "zp.io"])
     assert rec["code_reviewed"] is None  # omitted stays deny-by-default
     dv2.main(
-        [
-            "--env",
-            "prod",
-            "--code",
-            "m",
-            "--iac-ref",
-            "m",
-            "--domain",
-            "zp.io",
-            "--staging-validated",
-            "--code-reviewed",
-        ]
+        ["--type", "prod", "--version-ref", "v1.0.0", "--iac-ref", "m", "--domain",
+         "zp.io", "--staging-validated", "--code-reviewed"]
     )
     assert rec["code_reviewed"] is True  # explicit positive signal
 
 
-def test_cli_fails_fast_on_unresolvable_ref(monkeypatch, capsys):
-    def boom(code, iac):
-        raise ValueError("not a full 40-hex commit sha")
+def test_cli_reports_deploy_failure(monkeypatch, capsys):
+    def boom(**kw):
+        raise ValueError("does not accept a 'branch' version_ref")
 
-    monkeypatch.setattr(dv2, "_resolve_refs", boom)
+    import libs.dokploy as dk
+
+    monkeypatch.setattr(dk, "get_dokploy", lambda host: object())
+    monkeypatch.setattr(dv2, "deploy_v2", boom)
     rc = dv2.main(
-        [
-            "--env",
-            "staging",
-            "--code",
-            "deadbeef",
-            "--iac-ref",
-            "m",
-            "--domain",
-            "zp.io",
-        ]
+        ["--type", "prod", "--version-ref", "main", "--iac-ref", "m", "--domain", "zp.io"]
     )
-    assert rc == 2
-    assert "ref resolution failed" in capsys.readouterr().err
+    assert rc == 1
+    assert "deploy_v2 failed" in capsys.readouterr().err

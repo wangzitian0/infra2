@@ -222,8 +222,8 @@ def test_up_injects_source_env_vault_creds():
 def test_up_updates_existing_compose_in_place():
     client = FakeDokploy(existing={"composeId": "cmp-existing"})
     result = pl.up(
+        "branch",
         "main",
-        None,
         code="main",
         domain="zitian.party",
         client=client,
@@ -238,13 +238,13 @@ def test_up_updates_existing_compose_in_place():
     assert len(client.env_updates) == 1
     cid, env_vars = client.env_updates[0]
     assert cid == "cmp-existing"
-    assert env_vars["ENV"] == "main"
-    assert env_vars["ENV_SUFFIX"] == "-main"
+    assert env_vars["ENV"] == "branch-main"
+    assert env_vars["ENV_SUFFIX"] == "-branch-main"
     # the source env's AppRole creds are injected on every up (merged on redeploy)
     assert env_vars["VAULT_ROLE_ID"] == "rid-test"
     assert client.deployed == ["cmp-existing"]
     assert result.compose_id == "cmp-existing"
-    assert result.url == "https://report-main.zitian.party"
+    assert result.url == "https://report-branch-main.zitian.party"
 
 
 def test_up_looks_up_compose_by_deterministic_preview_name():
@@ -400,3 +400,12 @@ def test_main_rejects_bad_domain_before_building_client(action, monkeypatch, cap
     assert rc == 2
     err = capsys.readouterr().err
     assert "invalid domain" in err
+
+
+def test_up_image_ref_overrides_short_sha_for_releases():
+    # a release pulls its retained TAG, not the (pruned) short sha
+    client = FakeDokploy(existing=None)
+    pl.up("branch", "main", code="main", domain="z.p", client=client,
+          http_get=_ok_get, image_ref="v1.2.3")
+    _cid, env = client.env_updates[0]
+    assert env["IMAGE_TAG"] == "v1.2.3" and env["GIT_COMMIT_SHA"] == "v1.2.3"

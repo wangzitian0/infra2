@@ -192,3 +192,66 @@ def test_wrapped_git_error_suppresses_exception_chaining():
         r.resolve_to_sha("main", repo=authed, runner=runner)
     assert ei.value.__cause__ is None
     assert ei.value.__suppress_context__ is True
+
+
+# --- resolve_image_ref: form decides the image (sha7 for code, tag for release) ---
+
+
+def test_resolve_image_ref_sha_uses_short_sha():
+    rr = r.resolve_image_ref("a" * 40, runner=FakeRunner(raises=AssertionError("no git")))
+    assert (rr.sha, rr.image_ref, rr.form) == ("a" * 40, "aaaaaaa", "sha")
+
+
+def test_resolve_image_ref_main_uses_short_sha():
+    runner = FakeRunner(stdout="1" * 40 + "\trefs/heads/main\n")
+    rr = r.resolve_image_ref("main", runner=runner)
+    assert rr.image_ref == "1111111" and rr.sha == "1" * 40 and rr.form == "branch"
+
+
+def test_resolve_image_ref_tag_uses_the_tag():
+    runner = FakeRunner(
+        stdout="tagobj\trefs/tags/v1.2.3\n" + "3" * 40 + "\trefs/tags/v1.2.3^{}\n"
+    )
+    rr = r.resolve_image_ref("v1.2.3", runner=runner)
+    # release artifacts are pulled BY TAG (the retained image), sha stays the identity
+    assert rr.image_ref == "v1.2.3" and rr.sha == "3" * 40 and rr.form == "tag"
+
+
+def test_resolve_image_ref_release_branch_picks_latest_tag():
+    runner = FakeRunner(
+        stdout=(
+            "s5\trefs/tags/v0.1.5\n"
+            "s7\trefs/tags/v0.1.7\n"
+            "p7\trefs/tags/v0.1.7^{}\n"
+        )
+    )
+    rr = r.resolve_image_ref("release/0.1", runner=runner)
+    # release/0.1 -> the line's highest tag -> pulled by that tag
+    assert rr.image_ref == "v0.1.7" and rr.sha == "p7" and rr.form == "release-branch"
+
+
+def test_resolve_image_ref_release_branch_unresolvable_tag_fails_fast():
+    # the tag is listed by the v0.1.* glob but resolving it individually returns nothing —
+    # we must fail fast, never let the tag string masquerade as `sha` (Copilot review).
+    class PerRefRunner:
+        def __call__(self, cmd, **kwargs):
+            out = "s7\trefs/tags/v0.1.7\n" if cmd[-1].endswith("*") else ""
+            return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    with pytest.raises(ValueError, match="did not resolve to a commit"):
+        r.resolve_image_ref("release/0.1", runner=PerRefRunner())
+
+
+def test_resolve_pr_uses_pull_head_short_sha():
+    runner = FakeRunner(stdout="9" * 40 + "\trefs/pull/7/head\n")
+    rr = r.resolve_pr(7, runner=runner)
+    assert rr.sha == "9" * 40 and rr.image_ref == "9999999" and rr.form == "pr"
+
+
+def test_resolve_pr_rejects_bad_number():
+    import pytest
+
+    with pytest.raises(ValueError, match="positive integer"):
+        r.resolve_pr("abc", runner=FakeRunner())
+    with pytest.raises(ValueError, match="positive integer"):
+        r.resolve_pr(0, runner=FakeRunner())

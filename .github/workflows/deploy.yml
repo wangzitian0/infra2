@@ -2,9 +2,9 @@ name: Deploy (deploy_v2)
 
 # The infra2-owned deploy entrypoint for the finance_report app (Infra-009,
 # finance_report#883: "infra2 owns every deploy"). Wraps `python -m tools.deploy_v2` —
-# the unified 5-axis front door — so any of preview / staging / prod can be deployed
-# through the SAME mechanism, by hand today and (next) triggered by App-repo CI via
-# repository_dispatch.
+# the unified (service, type, version_ref, iac_ref) front door — so any scenario (staging /
+# prod / preview-main|pr|commit|tag) deploys through the SAME mechanism, by hand today and
+# (next) triggered by App-repo CI via repository_dispatch.
 #
 # This replaces the per-env App-repo bash (tools/dokploy_deploy.sh). It is manual-only
 # for now (operator-triggered): merging it changes no automated behavior, and running it
@@ -18,13 +18,13 @@ name: Deploy (deploy_v2)
 on:
   workflow_dispatch:
     inputs:
-      env:
-        description: "Target env"
+      type:
+        description: "Deploy type (the scenario)"
         required: true
         type: choice
-        options: [preview, staging, prod]
-      code:
-        description: "App code surface: main | release/x.y | vX.Y.Z | <sha>"
+        options: [staging, prod, preview/branch, preview/pr, preview/commit, preview/tag]
+      version_ref:
+        description: "Version surface, interpreted by type: PR# (preview/pr) | tag vX.Y.Z (prod / preview/tag) | sha (preview/commit) | main | release/x.y"
         required: false
         default: "main"
       iac_ref:
@@ -35,16 +35,6 @@ on:
         description: "Base domain"
         required: false
         default: "zitian.party"
-      alias_kind:
-        description: "preview only — alias kind (main | pr | commit)"
-        required: false
-        type: choice
-        options: ["", main, pr, commit]
-        default: ""
-      alias_value:
-        description: "preview only — alias value (PR number / commit sha)"
-        required: false
-        default: ""
       staging_validated:
         description: "prod only — assert this code already passed staging"
         required: false
@@ -74,13 +64,13 @@ permissions:
   contents: read
 
 concurrency:
-  # One in-flight deploy per env; never let two deploys race the same env's compose.
-  group: deploy-v2-${{ github.event.inputs.env }}
+  # One in-flight deploy per type; never let two deploys race the same compose/slot.
+  group: deploy-v2-${{ github.event.inputs.type }}
   cancel-in-progress: false
 
 jobs:
   deploy:
-    name: deploy_v2 ${{ github.event.inputs.env }}
+    name: deploy_v2 ${{ github.event.inputs.type }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -100,12 +90,10 @@ jobs:
 
       - name: Run deploy_v2
         env:
-          ENV_INPUT: ${{ github.event.inputs.env }}
-          CODE_INPUT: ${{ github.event.inputs.code || 'main' }}
+          TYPE_INPUT: ${{ github.event.inputs.type }}
+          VERSION_REF_INPUT: ${{ github.event.inputs.version_ref || 'main' }}
           IAC_REF_INPUT: ${{ github.event.inputs.iac_ref || 'main' }}
           DOMAIN_INPUT: ${{ github.event.inputs.domain || 'zitian.party' }}
-          ALIAS_KIND_INPUT: ${{ github.event.inputs.alias_kind || '' }}
-          ALIAS_VALUE_INPUT: ${{ github.event.inputs.alias_value || '' }}
           STAGING_VALIDATED_INPUT: ${{ github.event.inputs.staging_validated }}
           CODE_REVIEWED_INPUT: ${{ github.event.inputs.code_reviewed }}
           BREAK_GLASS_INPUT: ${{ github.event.inputs.break_glass }}
@@ -120,13 +108,11 @@ jobs:
           fi
 
           args=(--service finance_report/app
-                --env "$ENV_INPUT"
-                --code "$CODE_INPUT"
+                --type "$TYPE_INPUT"
+                --version-ref "$VERSION_REF_INPUT"
                 --iac-ref "$IAC_REF_INPUT"
                 --domain "$DOMAIN_INPUT"
                 --timeout "$TIMEOUT_INPUT")
-          [[ -n "$ALIAS_KIND_INPUT" ]] && args+=(--alias-kind "$ALIAS_KIND_INPUT")
-          [[ -n "$ALIAS_VALUE_INPUT" ]] && args+=(--alias-value "$ALIAS_VALUE_INPUT")
           [[ "$STAGING_VALIDATED_INPUT" == "true" ]] && args+=(--staging-validated)
           [[ "$CODE_REVIEWED_INPUT" == "true" ]] && args+=(--code-reviewed)
           [[ "$BREAK_GLASS_INPUT" == "true" ]] && args+=(--break-glass)
@@ -140,7 +126,7 @@ jobs:
 
           echo "deploy_v2 output: $out"
           {
-            echo "## Deploy (deploy_v2) — $ENV_INPUT"
+            echo "## Deploy (deploy_v2) — $TYPE_INPUT"
             echo ""
             echo '```json'
             echo "$out"
@@ -148,7 +134,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [[ $rc -ne 0 ]]; then
-            echo "::error::deploy_v2 $ENV_INPUT failed (exit $rc)."
+            echo "::error::deploy_v2 $TYPE_INPUT failed (exit $rc)."
             exit $rc
           fi
-          echo "deploy_v2 $ENV_INPUT succeeded."
+          echo "deploy_v2 $TYPE_INPUT succeeded."

@@ -118,7 +118,12 @@ def _validate_domain(domain: str) -> str:
 
 
 def _preview_env_vars(
-    alias: PreviewAlias, *, sha: str, domain: str, _now=time.time
+    alias: PreviewAlias,
+    *,
+    sha: str,
+    domain: str,
+    image_ref: str | None = None,
+    _now=time.time,
 ) -> dict[str, str]:
     """Assemble the Dokploy compose env for one preview alias.
 
@@ -134,7 +139,8 @@ def _preview_env_vars(
     each deploy, since a throwaway alias can't rely on a one-time injection persisting).
     Keeping them out of this pure assembler means it never logs or embeds the creds.
     """
-    image_tag = sha[:7]  # registry publishes images under the 7-char short sha
+    # IMAGE_TAG is the published ref: a release tag (image_ref="vX.Y.Z") or the short sha.
+    image_tag = image_ref or sha[:7]
     config_hash = f"preview-{image_tag}-{int(_now() * 1000)}"  # per-deploy cache-bust
     return {
         "IMAGE_TAG": image_tag,
@@ -175,6 +181,7 @@ def up(
     code: str,
     domain: str,
     client,
+    image_ref: str | None = None,
     github_id: str | None = None,
     repo_owner: str = "wangzitian0",
     repo_name: str = "infra2",
@@ -199,7 +206,9 @@ def up(
 
     alias = preview_alias(kind, value)
     sha = resolve_to_sha(code, repo=repo) if repo is not None else resolve_to_sha(code)
-    env_vars = _preview_env_vars(alias, sha=sha, domain=domain, _now=_now)
+    env_vars = _preview_env_vars(
+        alias, sha=sha, domain=domain, image_ref=image_ref, _now=_now
+    )
     # Inject the runtime AppRole creds the preview vault-agent logs in with — the same
     # role the source env runs with. Without them vault-agent crash-loops and the app
     # never becomes healthy. Merged before the compose env is pushed below.
@@ -394,9 +403,13 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="action", required=True)
 
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--kind", required=True, choices=["main", "pr", "commit"])
     common.add_argument(
-        "--value", default=None, help="PR number or commit sha (omit for main)"
+        "--kind", required=True, choices=["branch", "pr", "commit", "tag"]
+    )
+    common.add_argument(
+        "--value",
+        default=None,
+        help="branch name (default main) / PR number / commit sha / tag vX.Y.Z",
     )
     common.add_argument(
         "--domain", required=True, help="base domain, e.g. zitian.party"
