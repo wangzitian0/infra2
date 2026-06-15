@@ -230,6 +230,18 @@ def test_resolve_image_ref_release_branch_picks_latest_tag():
     assert rr.image_ref == "v0.1.7" and rr.sha == "p7" and rr.form == "release-branch"
 
 
+def test_resolve_image_ref_release_branch_unresolvable_tag_fails_fast():
+    # the tag is listed by the v0.1.* glob but resolving it individually returns nothing —
+    # we must fail fast, never let the tag string masquerade as `sha` (Copilot review).
+    class PerRefRunner:
+        def __call__(self, cmd, **kwargs):
+            out = "s7\trefs/tags/v0.1.7\n" if cmd[-1].endswith("*") else ""
+            return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    with pytest.raises(ValueError, match="did not resolve to a commit"):
+        r.resolve_image_ref("release/0.1", runner=PerRefRunner())
+
+
 def test_resolve_pr_uses_pull_head_short_sha():
     runner = FakeRunner(stdout="9" * 40 + "\trefs/pull/7/head\n")
     rr = r.resolve_pr(7, runner=runner)

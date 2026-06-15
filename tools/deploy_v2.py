@@ -71,8 +71,9 @@ def _resolve_for_type(spec, version_ref, *, repo: str):
     The ``type`` decides how ``version_ref`` is read (a discriminated union), and the
     matrix (``accepted_forms``) fails closed on a form the type does not take:
 
-    - ``canary``          — any code form (default main); runs on the fixed
-                            ``pr-<_CANARY_PR>`` slot.
+    - ``canary``          — any ref form, code OR release (default main); runs on the
+                            fixed ``pr-<_CANARY_PR>`` slot (it is a deploy-path probe, so
+                            it stays maximally flexible).
     - ``preview/pr``      — ``version_ref`` IS a PR number (``resolve_pr`` -> PR-head image);
                             its slot is that number.
     - ``preview/branch``  — a branch tip (default main); slot ``branch-<name>``.

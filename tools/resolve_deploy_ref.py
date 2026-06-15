@@ -210,7 +210,13 @@ def resolve_image_ref(
                 f"no vX.Y.<n> release tag found on {cleaned!r} in {_redact_repo(repo)}"
             )
         sha = _resolve_remote_sha(repo, "tag", tag, runner=runner)
-        return ResolvedRef(sha=sha or tag, image_ref=tag, form=form)
+        if not sha:
+            # the tag was listed but did not resolve to a commit — fail fast rather than
+            # letting the tag string masquerade as `sha` and leak into contract validation.
+            raise ValueError(
+                f"release tag {tag!r} did not resolve to a commit in {_redact_repo(repo)}"
+            )
+        return ResolvedRef(sha=sha, image_ref=tag, form=form)
     sha = resolve_to_sha(ref, repo=repo, runner=runner)  # branch (main) / sha
     return ResolvedRef(sha=sha, image_ref=sha[:7], form=form)
 
