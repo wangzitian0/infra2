@@ -369,6 +369,31 @@ preview 并存且可按名寻址（§4.6）。
 > 谓词 5 现以 deny-by-default 把守；供给 `code_reviewed=True` 的完整 GitHub 评审门禁随数据轴
 > （finance_report#893）落地。
 
+### 4.7.1 `type` 判别式（一个原语，N 场景）
+
+`env` **不再是独立输入轴**——它是 `type` 的属性。`type` 是**首要轴**（判别式）：它命名场景，
+并决定其余轴**怎么解释、哪些必填**（discriminated union）。五轴 `DeployTarget` 是*派生*的身份；
+输入面是 `(type, service, version, iac_ref[, alias_value])`，`env` / `sub_domain` 从 `type` 推出。
+
+封闭的 type 集合（`deploy_contract.DEPLOY_TYPES`，未知 type 直接拒）：
+
+| type | 派生 env | alias | 门控 |
+|------|---------|-------|------|
+| `staging` | staging | — | — |
+| `prod` | prod | — | `requires_review`（RL-DATA-1） |
+| `preview/main` · `preview/pr` · `preview/commit` | preview | main/pr/commit | — |
+| `canary` | preview | pr（保留位） | —（执行层加 health+teardown） |
+
+**三条框架护栏（与业务无关，保持稳定）**：
+1. **type 选策略/配置，不是内嵌值的扁平枚举**：每实例数据（PR 号）走 `alias_value`，type 集合保持小。
+2. **公共内核 + per-type 配置**：入口 resolve `type → spec` 一次，后续公共代码跑；禁散落 `switch(type)`。
+3. **fail-closed by construction**：未知 type 拒；每个 type 的 spec 声明自己的必填项；`canary` 是**显式
+   type**，绝不让"参数全空"隐式触发。
+
+**业务待定（TBD，占位）**：`version` 按 type 的解释——preview = code sha；prod = release tag
+（release 镜像长期保留的是 `:vX.Y.Z`，sha 镜像会被剪，见 finance_report#883）；亦可业务自定 version。
+当前契约把 `version` 原样当 `code_version` 透传，按 type 的 version 寻址语义与 canary 执行默认值待业务定义后落地。
+
 ---
 
 ## 5. 测试门禁 (Quality Gates)
