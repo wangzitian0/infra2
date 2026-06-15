@@ -22,7 +22,7 @@ on:
         description: "Deploy type (the scenario)"
         required: true
         type: choice
-        options: [staging, prod, preview/main, preview/pr, preview/commit, preview/tag]
+        options: [staging, prod, preview/branch, preview/pr, preview/commit, preview/tag]
       version_ref:
         description: "Version surface, interpreted by type: PR# (preview/pr) | tag vX.Y.Z (prod / preview/tag) | sha (preview/commit) | main | release/x.y"
         required: false

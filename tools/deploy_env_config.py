@@ -127,8 +127,12 @@ def with_compose_id(env: str, compose_id: str) -> EnvConfig:
 _PR_VALUE_RE = re.compile(r"\A[1-9][0-9]*\Z")  # a positive PR number, no leading zero
 _SHA7_RE = re.compile(r"\A[0-9a-f]{7,40}\Z")  # a (lowercased) commit sha, >=7 hex
 _TAG_VALUE_RE = re.compile(r"\Av\d+\.\d+\.\d+\Z")  # a release tag vX.Y.Z
+_BRANCH_VALUE_RE = re.compile(r"\A[A-Za-z0-9._/-]+\Z")  # a git branch name (e.g. main)
 
-PREVIEW_KINDS = ("main", "pr", "commit", "tag")
+# Every preview kind is <kind>-<value>; there is no bare special case, so any downstream
+# (telemetry label, URL, compose name) parses a slot the same way. `branch` (default main)
+# replaces the old bare `main` so the main-tip preview is report-branch-main.
+PREVIEW_KINDS = ("branch", "pr", "commit", "tag")
 
 # the Dokploy project + environment the preview stacks live under (kept distinct
 # from staging/prod composes; the lifecycle find-or-creates this environment).
@@ -166,13 +170,18 @@ class PreviewAlias:
 def _normalize_alias(kind: str, value: int | str | None) -> tuple[str, str]:
     """Validate (kind, value) and return the (kind, canonical-value) pair.
 
-    `main` ignores value. `pr` requires a positive integer. `commit` requires a
-    hex sha (>=7 chars) and is truncated to the 7-char short form used everywhere
-    else (image tag, telemetry service.version). Raises ValueError on bad input —
-    an invalid alias must fail loudly, never silently produce an unroutable stack.
+    `branch` takes a branch name (default `main`). `pr` requires a positive integer.
+    `commit` requires a hex sha (>=7 chars) and is truncated to the 7-char short form
+    used everywhere else (image tag, telemetry service.version). Raises ValueError on bad
+    input — an invalid alias must fail loudly, never silently produce an unroutable stack.
     """
-    if kind == "main":
-        return "main", ""
+    if kind == "branch":
+        text = (str(value).strip() if value is not None else "") or "main"
+        if not _BRANCH_VALUE_RE.match(text):
+            raise ValueError(
+                f"preview branch alias needs a branch name, got {value!r}"
+            )
+        return "branch", text
     if kind == "pr":
         text = str(value).strip()
         if not _PR_VALUE_RE.match(text):
@@ -203,17 +212,22 @@ def preview_alias(kind: str, value: int | str | None = None) -> PreviewAlias:
     """Map a preview (kind, value) to its full deterministic identity.
 
     Pure and total over the validated surface; the single source the lifecycle and
-    the tests both derive from. Examples:
+    the tests both derive from. Every alias is uniformly ``<kind>-<slug>``. Examples:
 
-        preview_alias("main")          -> alias main,            suffix -main
-        preview_alias("pr", 5)         -> alias pr-5,            suffix -pr-5
-        preview_alias("commit", sha)   -> alias commit-1ab32d5,  suffix -commit-1ab32d5
+        preview_alias("branch", "main") -> alias branch-main,     suffix -branch-main
+        preview_alias("pr", 5)          -> alias pr-5,            suffix -pr-5
+        preview_alias("commit", sha)    -> alias commit-1ab32d5,  suffix -commit-1ab32d5
+        preview_alias("tag", "v1.2.3")  -> alias tag-v1-2-3,      suffix -tag-v1-2-3
     """
     norm_kind, norm_value = _normalize_alias(kind, value)
-    # The URL/compose slug must be a single DNS label: a tag's dots become dashes
-    # (report-tag-v1-2-3). norm_value keeps the canonical tag (v1.2.3) for the image ref.
-    slug = norm_value.replace(".", "-") if norm_kind == "tag" else norm_value
-    alias = norm_kind if norm_kind == "main" else f"{norm_kind}-{slug}"
+    # The URL/compose slug must be a single DNS label: a tag's/branch's dots and slashes
+    # become dashes (tag-v1-2-3, branch-main). norm_value keeps the canonical value
+    # (v1.2.3 / main) for the image ref + telemetry.
+    if norm_kind in ("tag", "branch"):
+        slug = norm_value.lower().replace(".", "-").replace("/", "-")
+    else:
+        slug = norm_value
+    alias = f"{norm_kind}-{slug}"
     suffix = f"-{alias}"
     return PreviewAlias(
         kind=norm_kind,

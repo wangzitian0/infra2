@@ -24,7 +24,7 @@ comes from the app repo (``code_version``) while the compose/env wiring comes fr
 (``iac_ref``) — two refs that drift independently; and infra2 is multi-service, so what to
 deploy is its own dimension. ``sub_domain`` is the stack-instance label: pinned by ``env``
 for staging/prod, free (the preview alias) for preview — this is what lets the coexisting
-``report-main`` / ``report-pr-N`` / ``report-commit-<sha>`` previews be addressed by name.
+``report-branch-main`` / ``report-pr-N`` / ``report-commit-<sha>`` previews be addressed by name.
 
 SSOT: docs/ssot/core.environments.md §4.7.
 """
@@ -88,7 +88,7 @@ def sub_domain_for(
     """The canonical ``sub_domain`` label for a target.
 
     staging/prod are pinned by ``env`` (``base`` + the env suffix); preview takes the
-    alias (``main`` / ``pr-<N>`` / ``commit-<sha7>``). ``env_shared`` services carry no
+    alias (``branch-<name>`` / ``pr-<N>`` / ``commit-<sha7>`` / ``tag-<slug>``). ``env_shared`` services carry no
     suffix on any env.
     """
     cfg = env_config(env)
@@ -100,7 +100,7 @@ def sub_domain_for(
             kind = "prod_only" if spec.prod_only else "env_shared"
             raise ValueError(f"{spec.key} has no preview instances ({kind})")
         if alias_kind is None:
-            raise ValueError("preview requires an alias_kind (main | pr | commit)")
+            raise ValueError("preview requires an alias_kind (branch | pr | commit | tag)")
         return (
             f"{spec.base_subdomain}{preview_alias(alias_kind, alias_value).env_suffix}"
         )
@@ -140,8 +140,8 @@ def make_deploy_target(
 ) -> DeployTarget:
     """Build and validate a :class:`DeployTarget`, deriving the canonical sub_domain.
 
-    For preview, pass ``alias_kind`` (``main`` | ``pr`` | ``commit``) and ``alias_value``.
-    Fails closed on any contract violation.
+    For preview, pass ``alias_kind`` (``branch`` | ``pr`` | ``commit`` | ``tag``) and
+    ``alias_value``. Fails closed on any contract violation.
     """
     spec = service_spec(service)
     sub_domain = sub_domain_for(
@@ -192,7 +192,7 @@ def validate_deploy_target(target: DeployTarget, spec: ServiceSpec) -> None:
         if not _is_valid_preview_sub_domain(spec, target.sub_domain):
             raise ValueError(
                 f"sub_domain {target.sub_domain!r} is not a valid preview slot for "
-                f"{spec.base_subdomain!r} (expected {spec.base_subdomain}-main / "
+                f"{spec.base_subdomain!r} (expected {spec.base_subdomain}-branch-<name> / "
                 f"-pr-<N> / -commit-<sha7>)"
             )
         for env_name in ("staging", "prod"):
@@ -218,10 +218,11 @@ def _pinned_sub_domain(spec: ServiceSpec, env: str) -> str:
 
 
 def _is_valid_preview_sub_domain(spec: ServiceSpec, sub_domain: str) -> bool:
-    # a preview slot: -main / -pr-<N> / -commit-<sha7> / -tag-<v1-2-3> (tag dots -> dashes).
+    # a preview slot is uniformly <kind>-<value>:
+    #   -branch-<name> / -pr-<N> / -commit-<sha7> / -tag-<v1-2-3> (dots/slashes -> dashes).
     pattern = (
         rf"\A{re.escape(spec.base_subdomain)}-"
-        r"(main|pr-[1-9][0-9]*|commit-[0-9a-f]{7}|tag-v[0-9]+-[0-9]+-[0-9]+)\Z"
+        r"(branch-[a-z0-9-]+|pr-[1-9][0-9]*|commit-[0-9a-f]{7}|tag-v[0-9]+-[0-9]+-[0-9]+)\Z"
     )
     return re.match(pattern, sub_domain) is not None
 
@@ -261,15 +262,14 @@ class DeployTypeSpec:
     key: str  # the type token, e.g. "prod" | "preview/pr"
     env: str  # underlying env regime (data-lane / secrets / lifecycle) — derived, not input
     alias_kind: str | None = (
-        None  # preview alias kind (main|pr|commit|tag); None = fixed env
+        None  # preview alias kind (branch|pr|commit|tag); None = fixed env
     )
     accepted_forms: tuple[str, ...] = ()  # version_ref forms this type accepts (matrix row)
-    requires_review: bool = (
-        False  # RL-DATA-1: prod-data types require code_reviewed=True
-    )
-    requires_staging_first: bool = (
-        False  # prod: must promote code already validated on staging (or break_glass)
-    )
+
+    # NOTE: the gates are NOT re-declared here — they derive from the type's env, the single
+    # source of truth: staging-first is ``env_config(env).requires_staging_first`` and the
+    # RL-DATA-1 review gate keys on ``data_lane == "prod"`` (also env-derived). Adding a
+    # bool here would be a second, drift-prone copy of a policy the env already owns.
 
 
 # The form vocabulary (resolve_deploy_ref.classify_ref outputs + the PR-number form).
@@ -282,33 +282,26 @@ _ALL_REF_FORMS = _CODE_FORMS + _RELEASE_FORMS
 # property of "empty params") — it is a preview deploy whose execution adds health+teardown.
 #
 # accepted_forms encodes the (type × form) matrix:
-#   staging  — any form (it mirrors prod but is permissive: code OR release).
-#   prod     — RELEASE forms only (tag / release-branch); a code ref fails closed.
-#   preview/main   — the main branch tip.
-#   preview/pr     — a PR number (resolve_pr -> the PR head image).
-#   preview/commit — a pinned commit (a sha, or a branch tip pinned at deploy time).
-#   preview/tag    — a release tag, previewed under report-tag-<slug>.
+#   staging        — any form (it mirrors prod but is permissive: code OR release).
+#   prod           — RELEASE forms only (tag / release-branch); a code ref fails closed.
+#   preview/branch — a branch tip (default main) -> report-branch-<name>.
+#   preview/pr     — a PR number (resolve_pr -> the PR head image) -> report-pr-<N>.
+#   preview/commit — a pinned commit sha -> report-commit-<sha7>.
+#   preview/tag    — a release tag -> report-tag-<slug>.
 #   canary         — any code form; runs on a fixed throwaway pr-<N> slot (self-test probe).
+# Every preview slot is uniformly <kind>-<value>; `branch` (not a bare `main`) is what makes
+# that uniform — so downstream slot parsing/generation never special-cases the main tip.
 DEPLOY_TYPES: dict[str, DeployTypeSpec] = {
     "staging": DeployTypeSpec("staging", env="staging", accepted_forms=_ALL_REF_FORMS),
-    "prod": DeployTypeSpec(
-        "prod",
-        env="prod",
-        accepted_forms=_RELEASE_FORMS,
-        requires_review=True,
-        requires_staging_first=True,
-    ),
-    "preview/main": DeployTypeSpec(
-        "preview/main", env="preview", alias_kind="main", accepted_forms=("branch",)
+    "prod": DeployTypeSpec("prod", env="prod", accepted_forms=_RELEASE_FORMS),
+    "preview/branch": DeployTypeSpec(
+        "preview/branch", env="preview", alias_kind="branch", accepted_forms=("branch",)
     ),
     "preview/pr": DeployTypeSpec(
         "preview/pr", env="preview", alias_kind="pr", accepted_forms=("pr",)
     ),
     "preview/commit": DeployTypeSpec(
-        "preview/commit",
-        env="preview",
-        alias_kind="commit",
-        accepted_forms=_CODE_FORMS,
+        "preview/commit", env="preview", alias_kind="commit", accepted_forms=("sha",)
     ),
     "preview/tag": DeployTypeSpec(
         "preview/tag", env="preview", alias_kind="tag", accepted_forms=("tag",)
@@ -363,17 +356,16 @@ def make_target(
     ``deploy_v2`` (``resolve_image_ref`` / ``resolve_pr`` + ``validate_ref_form``); by the
     time a target is built the ref is already a sha and the image_ref is decided.
 
-    ``alias_value`` is only meaningful for the per-instance preview types
-    (``preview/pr`` / ``preview/commit`` / ``preview/tag`` / ``canary``). For fixed envs and
-    ``preview/main``
-    (which carry no alias value) it is rejected, so the discriminated-union surface stays
-    fail-closed rather than silently ignoring a caller mistake.
+    ``alias_value`` is meaningful for every preview type (``preview/branch`` carries the
+    branch name, ``preview/pr`` the number, ``preview/commit`` the sha, ``preview/tag`` the
+    tag, ``canary`` its reserved slot). Only the fixed envs (``staging`` / ``prod``,
+    ``alias_kind=None``) reject it, so the discriminated-union surface stays fail-closed
+    rather than silently ignoring a caller mistake.
     """
     spec = deploy_type_spec(deploy_type)
-    if alias_value is not None and spec.alias_kind in (None, "main"):
+    if alias_value is not None and spec.alias_kind is None:
         raise ValueError(
-            f"deploy type {deploy_type!r} takes no alias_value "
-            f"(alias_kind={spec.alias_kind!r})"
+            f"deploy type {deploy_type!r} takes no alias_value (it is a fixed env)"
         )
     return make_deploy_target(
         service=service,

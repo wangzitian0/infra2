@@ -28,13 +28,18 @@ SHA_IAC = "d" * 40
 def _fake_resolve_image_ref(ref, **_kw):
     """Resolve like the real one (form via real classify_ref) but with no network.
 
-    A release pulls its tag (image_ref == the tag); code pulls the short sha.
+    A release pulls its tag (image_ref == the tag); code pulls the short sha. A bare sha
+    passes through as-is (mirrors resolve_to_sha — short shas are NOT expanded), so the
+    front door's full-sha guard (CF4) is exercised for real.
     """
     form = classify_ref(ref)
     if form == "tag":
         return ResolvedRef(sha=SHA_CODE, image_ref=ref.strip(), form=form)
     if form == "release-branch":
         return ResolvedRef(sha=SHA_CODE, image_ref="v9.9.9", form=form)
+    if form == "sha":
+        s = ref.strip().lower()
+        return ResolvedRef(sha=s, image_ref=s[:7], form=form)
     return ResolvedRef(sha=SHA_CODE, image_ref=SHA_CODE[:7], form=form)
 
 
@@ -160,12 +165,18 @@ def test_staging_accepts_code_and_release(calls, version_ref, expect_image):
 # --- preview slots: main / pr / commit / tag ------------------------------
 
 
-def test_preview_main(calls):
-    res = _deploy(deploy_type="preview/main", version_ref="main")
+def test_preview_branch(calls):
+    res = _deploy(deploy_type="preview/branch", version_ref="main")
     assert res.backend == "preview-lifecycle"
-    assert res.target.sub_domain == "report-main"
-    assert calls["preview"]["kind"] == "main" and calls["preview"]["value"] is None
+    assert res.target.sub_domain == "report-branch-main"
+    assert calls["preview"]["kind"] == "branch" and calls["preview"]["value"] == "main"
     assert calls["preview"]["image_ref"] == SHA_CODE[:7]
+
+
+def test_preview_branch_defaults_version_ref_to_main(calls):
+    # CF2: branch is definitionally a tip — version_ref omitted defaults to main
+    res = _deploy(deploy_type="preview/branch", version_ref="")
+    assert res.target.sub_domain == "report-branch-main"
 
 
 def test_preview_pr_uses_resolve_pr_and_pr_slot(calls):
@@ -185,6 +196,20 @@ def test_preview_commit_slot_is_short_sha(calls):
     res = _deploy(deploy_type="preview/commit", version_ref="c" * 40)
     assert res.target.sub_domain == "report-commit-ccccccc"
     assert calls["preview"]["kind"] == "commit"
+
+
+def test_preview_commit_rejects_a_branch(calls):
+    # CF3: branch and commit are now distinct types — commit takes ONLY a sha
+    with pytest.raises(ValueError, match="does not accept a 'branch'"):
+        _deploy(deploy_type="preview/commit", version_ref="main")
+    assert calls["preview"] is None
+
+
+def test_preview_commit_rejects_short_sha_with_surface_message(calls):
+    # CF4: a short sha resolves to itself (not a full commit) -> clear, version_ref-level error
+    with pytest.raises(ValueError, match="not a full commit sha"):
+        _deploy(deploy_type="preview/commit", version_ref="abc1234")
+    assert calls["preview"] is None
 
 
 def test_preview_tag_slot_is_dns_safe_and_pulls_tag(calls):
@@ -282,7 +307,7 @@ def test_resolve_data_lane_by_env():
 
     assert resolve_data_lane(t("prod")) == "prod"
     assert resolve_data_lane(t("staging")) == "staging"
-    assert resolve_data_lane(t("preview", alias_kind="main")) == "staging"
+    assert resolve_data_lane(t("preview", alias_kind="branch", alias_value="main")) == "staging"
 
 
 def test_enforce_returns_data_lane():

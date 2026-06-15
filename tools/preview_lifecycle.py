@@ -403,9 +403,13 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="action", required=True)
 
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--kind", required=True, choices=["main", "pr", "commit"])
     common.add_argument(
-        "--value", default=None, help="PR number or commit sha (omit for main)"
+        "--kind", required=True, choices=["branch", "pr", "commit", "tag"]
+    )
+    common.add_argument(
+        "--value",
+        default=None,
+        help="branch name (default main) / PR number / commit sha / tag vX.Y.Z",
     )
     common.add_argument(
         "--domain", required=True, help="base domain, e.g. zitian.party"

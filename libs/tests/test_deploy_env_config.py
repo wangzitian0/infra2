@@ -66,15 +66,20 @@ def test_every_non_dynamic_env_has_a_compose_id():
 # --- preview alias model (multi-alias preview env) -------------------------------
 
 
-def test_preview_alias_main():
-    a = ec.preview_alias("main")
-    assert a.kind == "main"
-    assert a.alias == "main"
-    assert a.env_suffix == "-main"
-    assert a.domain_suffix == "-main"
-    assert a.compose_name == "finance-report-preview-main"
-    assert a.deployment_environment == "main"
-    assert a.app_url(domain="zitian.party") == "https://report-main.zitian.party"
+def test_preview_alias_branch_main():
+    a = ec.preview_alias("branch", "main")
+    assert a.kind == "branch"
+    assert a.value == "main"
+    assert a.alias == "branch-main"  # uniform <kind>-<value>, no bare special case
+    assert a.env_suffix == "-branch-main"
+    assert a.domain_suffix == "-branch-main"
+    assert a.compose_name == "finance-report-preview-branch-main"
+    assert a.deployment_environment == "branch-main"
+    assert a.app_url(domain="zitian.party") == "https://report-branch-main.zitian.party"
+
+
+def test_preview_alias_branch_defaults_to_main():
+    assert ec.preview_alias("branch").alias == "branch-main"
 
 
 def test_preview_alias_pr():
@@ -121,17 +126,18 @@ def test_preview_alias_commit_rejects_non_sha(bad):
 
 def test_preview_alias_unknown_kind_raises():
     with pytest.raises(ValueError, match="unknown preview kind"):
-        ec.preview_alias("branch", "main")
+        ec.preview_alias("release", "v1.0.0")
 
 
 def test_preview_aliases_are_unique_per_kind_value():
-    # the three coexisting kinds must never collide on suffix / compose name
+    # the coexisting kinds must never collide on suffix / compose name
     names = {
-        ec.preview_alias("main").compose_name,
+        ec.preview_alias("branch", "main").compose_name,
         ec.preview_alias("pr", 5).compose_name,
         ec.preview_alias("commit", "1ab32d5").compose_name,
+        ec.preview_alias("tag", "v1.2.3").compose_name,
     }
-    assert len(names) == 3
+    assert len(names) == 4
 
 
 def test_preview_alias_is_frozen():

@@ -30,6 +30,7 @@ from dataclasses import dataclass
 import httpx  # Dokploy transport errors from libs.dokploy surface as httpx exceptions
 
 from tools.deploy_contract import (
+    _SHA_RE,
     DeployTarget,
     deploy_type_spec,
     make_target,
@@ -59,31 +60,46 @@ _INFRA2_DEFAULT_BRANCH = "main"
 _CANARY_PR = 999
 
 
+def _default_main(version_ref) -> str:
+    """A ``branch`` / ``canary`` version_ref defaults to the main tip when omitted."""
+    return (str(version_ref).strip() if version_ref is not None else "") or "main"
+
+
 def _resolve_for_type(spec, version_ref, *, repo: str):
     """Resolve a type's ``version_ref`` surface to ``(ResolvedRef, alias_value)``.
 
     The ``type`` decides how ``version_ref`` is read (a discriminated union), and the
     matrix (``accepted_forms``) fails closed on a form the type does not take:
 
-    - ``canary``         — any code form; runs on the fixed ``pr-<_CANARY_PR>`` slot.
-    - ``preview/pr``     — ``version_ref`` IS a PR number (``resolve_pr`` -> PR-head image);
-                           its slot is that number.
-    - everything else    — ``version_ref`` is a git ref: validate its form against the type,
-                           then ``resolve_image_ref``. The preview slot value is the tag
-                           (``preview/tag``), the short sha (``preview/commit``), or absent
-                           (``preview/main`` / fixed staging+prod).
+    - ``canary``          — any code form (default main); runs on the fixed
+                            ``pr-<_CANARY_PR>`` slot.
+    - ``preview/pr``      — ``version_ref`` IS a PR number (``resolve_pr`` -> PR-head image);
+                            its slot is that number.
+    - ``preview/branch``  — a branch tip (default main); slot ``branch-<name>``.
+    - everything else     — ``version_ref`` is a git ref: validate its form against the
+                            type, then ``resolve_image_ref``. The slot is the tag
+                            (``preview/tag``), the short sha (``preview/commit``), or absent
+                            (fixed staging+prod).
     """
     if spec.key == "canary":
-        ref = (str(version_ref).strip() if version_ref is not None else "") or "main"
+        ref = _default_main(version_ref)
         validate_ref_form(spec.key, classify_ref(ref))
         return resolve_image_ref(ref, repo=repo), _CANARY_PR
     if spec.alias_kind == "pr":
         return resolve_pr(version_ref, repo=repo), version_ref
-    ref = str(version_ref).strip()
+    # `branch` defaults to the main tip; the other ref types require an explicit version_ref.
+    ref = _default_main(version_ref) if spec.alias_kind == "branch" else str(version_ref).strip()
     validate_ref_form(spec.key, classify_ref(ref))
     resolved = resolve_image_ref(ref, repo=repo)
+    # A bare short sha resolves to itself (not a 40-hex commit) — reject with a surface-level
+    # message instead of letting it surface late as an opaque code_version contract error.
+    if not _SHA_RE.match(resolved.sha):
+        raise ValueError(
+            f"version_ref {version_ref!r} resolved to {resolved.sha!r}, not a full commit "
+            "sha — pass main, a release branch, a tag vX.Y.Z, or a full 40-hex sha"
+        )
     alias_value = {
-        "main": None,
+        "branch": ref,  # the branch name -> slot branch-<name>
         "commit": resolved.sha,  # preview_alias truncates to the 7-char short sha
         "tag": ref,
         None: None,  # fixed staging / prod carry no preview slot
@@ -174,9 +190,12 @@ def deploy_v2(
     validate_deploy_target(target, service_spec(service))  # defensive re-check
     data_lane = enforce_data_lane_red_lines(target, code_reviewed=code_reviewed)
 
-    # Gate: prod promotes code already validated on staging — declared by the type, checked
-    # here (break_glass is the audited emergency bypass).
-    if spec.requires_staging_first and not (staging_validated or break_glass):
+    # Gate: prod promotes code already validated on staging. The policy is owned by the
+    # env (single source: env_config(...).requires_staging_first), not re-declared on the
+    # type; break_glass is the audited emergency bypass.
+    if env_config(spec.env).requires_staging_first and not (
+        staging_validated or break_glass
+    ):
         raise ValueError(
             f"deploy type {deploy_type!r} requires a prior staging deploy "
             "(pass staging_validated, or break_glass for an emergency)"
