@@ -218,7 +218,11 @@ def _pinned_sub_domain(spec: ServiceSpec, env: str) -> str:
 
 
 def _is_valid_preview_sub_domain(spec: ServiceSpec, sub_domain: str) -> bool:
-    pattern = rf"\A{re.escape(spec.base_subdomain)}-(main|pr-[1-9][0-9]*|commit-[0-9a-f]{{7}})\Z"
+    # a preview slot: -main / -pr-<N> / -commit-<sha7> / -tag-<v1-2-3> (tag dots -> dashes).
+    pattern = (
+        rf"\A{re.escape(spec.base_subdomain)}-"
+        r"(main|pr-[1-9][0-9]*|commit-[0-9a-f]{7}|tag-v[0-9]+-[0-9]+-[0-9]+)\Z"
+    )
     return re.match(pattern, sub_domain) is not None
 
 
@@ -245,30 +249,73 @@ def _is_valid_preview_sub_domain(spec: ServiceSpec, sub_domain: str) -> bool:
 
 @dataclass(frozen=True)
 class DeployTypeSpec:
-    """Static config a deploy ``type`` resolves to. env/alias/gates derive from here."""
+    """Static config a deploy ``type`` resolves to. env/alias/gates derive from here.
+
+    ``accepted_forms`` is the type's slice of the (type × version_ref-form) matrix: the
+    version_ref *forms* this type will accept, so a wrong combination (``prod`` + ``main``)
+    fails closed instead of silently pulling a code image onto prod. Forms are the
+    ``resolve_deploy_ref.classify_ref`` outputs (``branch`` / ``sha`` / ``tag`` /
+    ``release-branch``) plus ``pr`` (a PR number, resolved via ``resolve_pr``).
+    """
 
     key: str  # the type token, e.g. "prod" | "preview/pr"
     env: str  # underlying env regime (data-lane / secrets / lifecycle) — derived, not input
     alias_kind: str | None = (
-        None  # preview alias kind (main|pr|commit); None = fixed env
+        None  # preview alias kind (main|pr|commit|tag); None = fixed env
     )
+    accepted_forms: tuple[str, ...] = ()  # version_ref forms this type accepts (matrix row)
     requires_review: bool = (
         False  # RL-DATA-1: prod-data types require code_reviewed=True
     )
+    requires_staging_first: bool = (
+        False  # prod: must promote code already validated on staging (or break_glass)
+    )
 
+
+# The form vocabulary (resolve_deploy_ref.classify_ref outputs + the PR-number form).
+_CODE_FORMS = ("branch", "sha")  # an app commit: main tip / a pinned sha -> short-sha image
+_RELEASE_FORMS = ("tag", "release-branch")  # a retained release image: vX.Y.Z / its line
+_ALL_REF_FORMS = _CODE_FORMS + _RELEASE_FORMS
 
 # The closed set of deploy types. Adding a scenario = adding one entry here (open-closed);
 # existing types are untouched. `canary` is an EXPLICIT type (guardrail: never an emergent
 # property of "empty params") — it is a preview deploy whose execution adds health+teardown.
+#
+# accepted_forms encodes the (type × form) matrix:
+#   staging  — any form (it mirrors prod but is permissive: code OR release).
+#   prod     — RELEASE forms only (tag / release-branch); a code ref fails closed.
+#   preview/main   — the main branch tip.
+#   preview/pr     — a PR number (resolve_pr -> the PR head image).
+#   preview/commit — a pinned commit (a sha, or a branch tip pinned at deploy time).
+#   preview/tag    — a release tag, previewed under report-tag-<slug>.
+#   canary         — any code form; runs on a fixed throwaway pr-<N> slot (self-test probe).
 DEPLOY_TYPES: dict[str, DeployTypeSpec] = {
-    "staging": DeployTypeSpec("staging", env="staging"),
-    "prod": DeployTypeSpec("prod", env="prod", requires_review=True),
-    "preview/main": DeployTypeSpec("preview/main", env="preview", alias_kind="main"),
-    "preview/pr": DeployTypeSpec("preview/pr", env="preview", alias_kind="pr"),
-    "preview/commit": DeployTypeSpec(
-        "preview/commit", env="preview", alias_kind="commit"
+    "staging": DeployTypeSpec("staging", env="staging", accepted_forms=_ALL_REF_FORMS),
+    "prod": DeployTypeSpec(
+        "prod",
+        env="prod",
+        accepted_forms=_RELEASE_FORMS,
+        requires_review=True,
+        requires_staging_first=True,
     ),
-    "canary": DeployTypeSpec("canary", env="preview", alias_kind="pr"),
+    "preview/main": DeployTypeSpec(
+        "preview/main", env="preview", alias_kind="main", accepted_forms=("branch",)
+    ),
+    "preview/pr": DeployTypeSpec(
+        "preview/pr", env="preview", alias_kind="pr", accepted_forms=("pr",)
+    ),
+    "preview/commit": DeployTypeSpec(
+        "preview/commit",
+        env="preview",
+        alias_kind="commit",
+        accepted_forms=_CODE_FORMS,
+    ),
+    "preview/tag": DeployTypeSpec(
+        "preview/tag", env="preview", alias_kind="tag", accepted_forms=("tag",)
+    ),
+    "canary": DeployTypeSpec(
+        "canary", env="preview", alias_kind="pr", accepted_forms=_ALL_REF_FORMS
+    ),
 }
 
 
@@ -280,6 +327,21 @@ def deploy_type_spec(deploy_type: str) -> DeployTypeSpec:
         raise ValueError(
             f"unknown deploy type {deploy_type!r}: expected one of {sorted(DEPLOY_TYPES)}"
         ) from None
+
+
+def validate_ref_form(deploy_type: str, form: str) -> None:
+    """Fail closed when a deploy type is handed a version_ref form it does not accept.
+
+    This is the (type × form) matrix made enforceable: ``prod`` + a ``branch``/``sha`` ref
+    raises here rather than letting a code image reach prod. ``form`` is a
+    ``classify_ref`` output or ``pr``.
+    """
+    spec = deploy_type_spec(deploy_type)
+    if form not in spec.accepted_forms:
+        raise ValueError(
+            f"deploy type {deploy_type!r} does not accept a {form!r} version_ref "
+            f"(accepts {list(spec.accepted_forms)})"
+        )
 
 
 def make_target(
@@ -295,13 +357,15 @@ def make_target(
     The five-axis :class:`DeployTarget` is the DERIVED identity; the type-first surface is
     ``(type, service, version, iac_ref [, alias_value])``.
 
-    ``version`` — CURRENTLY a 40-hex commit sha (forwarded to ``code_version``, which
-    ``validate_deploy_target`` enforces). Tags (e.g. ``v1.2.3``) are NOT yet accepted —
-    the per-type version interpretation (sha for preview, release tag for prod) is
-    business-TBD (§4.7.1).
+    ``version`` is the RESOLVED 40-hex commit identity (forwarded to ``code_version``,
+    which ``validate_deploy_target`` enforces). The polymorphic ``version_ref`` surface
+    (PR# / sha / tag / branch) and its per-type form gating live one layer up in
+    ``deploy_v2`` (``resolve_image_ref`` / ``resolve_pr`` + ``validate_ref_form``); by the
+    time a target is built the ref is already a sha and the image_ref is decided.
 
     ``alias_value`` is only meaningful for the per-instance preview types
-    (``preview/pr`` / ``preview/commit`` / ``canary``). For fixed envs and ``preview/main``
+    (``preview/pr`` / ``preview/commit`` / ``preview/tag`` / ``canary``). For fixed envs and
+    ``preview/main``
     (which carry no alias value) it is rejected, so the discriminated-union surface stays
     fail-closed rather than silently ignoring a caller mistake.
     """

@@ -2,24 +2,25 @@
 """deploy_v2 canary — the acceptance gate for the unified deploy primitive.
 
 Exercises the WHOLE deploy_v2 path end to end against a real Dokploy: stand up a
-throwaway preview alias via the unified front door, wait for it to serve 200 at its
-public URL, then tear it (and its ephemeral DB) back down. A green canary is the proof
-that ``deploy_v2(service, env, sub_domain, code_version, iac_ref)`` actually deploys —
-not just that the contract validates.
+throwaway preview alias via the unified front door (the ``canary`` deploy type), wait for
+it to serve 200 at its public URL, then tear it (and its ephemeral DB) back down. A green
+canary is the proof that ``deploy_v2(service, type, version_ref, iac_ref)`` actually
+deploys — not just that the contract validates.
 
-It deploys the ``finance_report/app`` service to ``env=preview`` under a dedicated PR
-alias (default ``pr-999`` — a number no real PR will reuse), so it never touches
-staging/prod or a real PR's stack.
+It deploys the ``finance_report/app`` service with ``type=canary``, which runs the chosen
+code on a dedicated, reserved preview slot (``pr-<_CANARY_PR>`` — a number no real PR will
+reuse), so it never touches staging/prod or a real PR's stack.
 
-    run_canary(...)  -> deploy_v2(preview, pr-<N>) -> health 200 -> down (delete volumes)
+    run_canary(...)  -> deploy_v2(type=canary, version_ref) -> health 200 -> down (delete volumes)
 
-The orchestration takes the same injected Dokploy client as the rest of the family, so
-its logic is unit-testable with a fake (NO live calls in tests). The LIVE run needs real
+The orchestration takes the same injected Dokploy client as the rest of the family, so its
+logic is unit-testable with a fake (NO live calls in tests). The LIVE run needs real
 Dokploy access and is operator-driven:
 
-    python -m tools.deploy_v2_canary --code main --iac-ref <infra2-sha> --domain zitian.party
+    python -m tools.deploy_v2_canary --version-ref main --iac-ref main --domain zitian.party
 
-Add ``--keep`` to leave the stack up for inspection (skips teardown).
+``--version-ref`` accepts any code surface (main | release/x.y | vX.Y.Z | <sha>); the
+canary always runs it on the reserved slot. Add ``--keep`` to leave the stack up.
 """
 
 from __future__ import annotations
@@ -31,13 +32,11 @@ from dataclasses import dataclass
 
 import httpx  # transport errors from libs.dokploy surface as httpx exceptions
 
-from tools.deploy_contract import _SHA_RE, DeployTarget
-from tools.deploy_v2 import deploy_v2
+from tools.deploy_contract import DeployTarget
+from tools.deploy_v2 import _CANARY_PR, deploy_v2
 from tools.preview_lifecycle import down
 
 _APP_SERVICE = "finance_report/app"
-# A reserved PR number for the canary alias — high enough that no real PR collides.
-_CANARY_PR = 999
 
 
 @dataclass(frozen=True)
@@ -54,30 +53,28 @@ def run_canary(
     *,
     client,
     domain: str,
-    code_version: str,
-    iac_ref: str,
-    pr_number: int = _CANARY_PR,
+    version_ref: str = "main",
+    iac_ref: str = "main",
     wait: bool = True,
     teardown: bool = True,
     timeout: int = 600,
 ) -> CanaryResult:
-    """Deploy the canary preview alias, assert health, then tear it down.
+    """Deploy the canary slot, assert health, then tear it down.
 
-    ``code_version`` and ``iac_ref`` must be resolved 40-hex shas (the CLI resolves the
-    surface inputs). Raises whatever deploy_v2 raises on a contract/red-line violation, or
-    TimeoutError from the backend if the stack never goes healthy. Teardown runs in a
-    ``finally`` so a failed/unhealthy deploy still cleans up its ephemeral stack.
+    ``version_ref`` is any code surface (main | release/x.y | vX.Y.Z | <sha>); ``iac_ref``
+    pins infra2. deploy_v2 resolves both. Raises whatever deploy_v2 raises on a
+    contract/red-line violation, or TimeoutError from the backend if the stack never goes
+    healthy. Teardown runs in a ``finally`` so a failed/unhealthy deploy still cleans up
+    its ephemeral stack.
     """
     torn_down = False
     res = None
     try:
         res = deploy_v2(
             service=_APP_SERVICE,
-            env="preview",
-            code_version=code_version,
+            deploy_type="canary",
+            version_ref=version_ref,
             iac_ref=iac_ref,
-            alias_kind="pr",
-            alias_value=pr_number,
             client=client,
             domain=domain,
             wait=wait,
@@ -85,7 +82,7 @@ def run_canary(
         )
     finally:
         if teardown:
-            down("pr", pr_number, domain=domain, client=client)
+            down("pr", _CANARY_PR, domain=domain, client=client)
             torn_down = True
 
     healthy = res.detail.get("healthy")
@@ -103,23 +100,17 @@ def run_canary(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="deploy_v2 acceptance canary")
     parser.add_argument(
-        "--code",
-        required=True,
-        help="app code surface: main | release/x.y | vX.Y.Z | <sha>",
+        "--version-ref",
+        default="main",
+        help="app code surface to canary: main | release/x.y | vX.Y.Z | <sha>",
     )
     parser.add_argument(
         "--iac-ref",
-        required=True,
+        default="main",
         help="infra2 ref pinning the IaC: main | release/x.y | vX.Y.Z | <sha>",
     )
     parser.add_argument(
         "--domain", required=True, help="base domain, e.g. zitian.party"
-    )
-    parser.add_argument(
-        "--pr",
-        type=int,
-        default=_CANARY_PR,
-        help=f"canary PR alias (default {_CANARY_PR})",
     )
     parser.add_argument(
         "--keep", action="store_true", help="leave the stack up (no teardown)"
@@ -127,30 +118,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-wait", action="store_true", help="do not health-check")
     parser.add_argument("--timeout", type=int, default=600, help="health-check seconds")
     args = parser.parse_args(argv)
-
-    # Resolve the surface inputs to shas: code against the app repo, iac_ref against infra2.
-    from tools.resolve_deploy_ref import resolve_to_sha
-
-    try:
-        code_sha = resolve_to_sha(args.code)
-        iac_sha = resolve_to_sha(
-            args.iac_ref, repo="https://github.com/wangzitian0/infra2"
-        )
-    except (ValueError, RuntimeError) as exc:
-        print(f"canary ref resolution failed: {exc}", file=sys.stderr)
-        return 2
-
-    # Fail fast on a non-40-hex resolution (e.g. a short sha passed through unchanged):
-    # deploy_v2's contract requires exactly 40-hex, so reject here with a targeted message
-    # rather than letting it surface late as an opaque contract error mid-deploy.
-    for label, value in (("--code", code_sha), ("--iac-ref", iac_sha)):
-        if not _SHA_RE.match(value):
-            print(
-                f"{label} resolved to {value!r}, which is not a full 40-hex commit sha; "
-                "expected main | release/x.y | vX.Y.Z | <sha>",
-                file=sys.stderr,
-            )
-            return 2
 
     # Imported lazily so importing the module (and its unit tests) needs no Dokploy creds.
     from libs.dokploy import get_dokploy
@@ -160,9 +127,8 @@ def main(argv: list[str] | None = None) -> int:
         result = run_canary(
             client=client,
             domain=args.domain,
-            code_version=code_sha,
-            iac_ref=iac_sha,
-            pr_number=args.pr,
+            version_ref=args.version_ref,
+            iac_ref=args.iac_ref,
             wait=not args.no_wait,
             teardown=not args.keep,
             timeout=args.timeout,
