@@ -54,7 +54,7 @@ def spies(monkeypatch):
             detail={
                 "alias": "pr-999",
                 "compose_id": "cmp",
-                "sha": kw["code_version"],
+                "sha": kw["version"],
                 "url": f"https://report-pr-999.{kw['domain']}",
                 "healthy": healthy,
             },
@@ -75,11 +75,9 @@ def test_canary_deploys_preview_then_tears_down(spies):
     assert res.ok is True
     assert res.alias == "pr-999"
     assert res.torn_down is True
-    # deployed the canary preview alias via the unified front door...
-    assert spies["deploy"]["env"] == "preview"
-    assert (
-        spies["deploy"]["alias_kind"] == "pr" and spies["deploy"]["alias_value"] == 999
-    )
+    # deployed via the explicit `canary` type (env + alias derive from it)...
+    assert spies["deploy"]["deploy_type"] == "canary"
+    assert spies["deploy"]["alias_value"] == 999
     # ...then tore that same alias down.
     assert spies["down"]["kind"] == "pr"
     assert spies["down"]["value"] == 999

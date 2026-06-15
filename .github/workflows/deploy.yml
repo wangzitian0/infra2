@@ -18,11 +18,11 @@ name: Deploy (deploy_v2)
 on:
   workflow_dispatch:
     inputs:
-      env:
-        description: "Target env"
+      deploy_type:
+        description: "Deploy type (env + alias derive from it)"
         required: true
         type: choice
-        options: [preview, staging, prod]
+        options: [staging, prod, preview/main, preview/pr, preview/commit, canary]
       code:
         description: "App code surface: main | release/x.y | vX.Y.Z | <sha>"
         required: false
@@ -35,14 +35,8 @@ on:
         description: "Base domain"
         required: false
         default: "zitian.party"
-      alias_kind:
-        description: "preview only — alias kind (main | pr | commit)"
-        required: false
-        type: choice
-        options: ["", main, pr, commit]
-        default: ""
       alias_value:
-        description: "preview only — alias value (PR number / commit sha)"
+        description: "preview/pr | preview/commit only — PR number / commit sha"
         required: false
         default: ""
       staging_validated:
@@ -74,13 +68,13 @@ permissions:
   contents: read
 
 concurrency:
-  # One in-flight deploy per env; never let two deploys race the same env's compose.
-  group: deploy-v2-${{ github.event.inputs.env }}
+  # One in-flight deploy per type; never let two deploys race the same compose.
+  group: deploy-v2-${{ github.event.inputs.deploy_type }}
   cancel-in-progress: false
 
 jobs:
   deploy:
-    name: deploy_v2 ${{ github.event.inputs.env }}
+    name: deploy_v2 ${{ github.event.inputs.deploy_type }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -100,11 +94,10 @@ jobs:
 
       - name: Run deploy_v2
         env:
-          ENV_INPUT: ${{ github.event.inputs.env }}
+          DEPLOY_TYPE_INPUT: ${{ github.event.inputs.deploy_type }}
           CODE_INPUT: ${{ github.event.inputs.code || 'main' }}
           IAC_REF_INPUT: ${{ github.event.inputs.iac_ref || 'main' }}
           DOMAIN_INPUT: ${{ github.event.inputs.domain || 'zitian.party' }}
-          ALIAS_KIND_INPUT: ${{ github.event.inputs.alias_kind || '' }}
           ALIAS_VALUE_INPUT: ${{ github.event.inputs.alias_value || '' }}
           STAGING_VALIDATED_INPUT: ${{ github.event.inputs.staging_validated }}
           CODE_REVIEWED_INPUT: ${{ github.event.inputs.code_reviewed }}
@@ -120,12 +113,11 @@ jobs:
           fi
 
           args=(--service finance_report/app
-                --env "$ENV_INPUT"
+                --type "$DEPLOY_TYPE_INPUT"
                 --code "$CODE_INPUT"
                 --iac-ref "$IAC_REF_INPUT"
                 --domain "$DOMAIN_INPUT"
                 --timeout "$TIMEOUT_INPUT")
-          [[ -n "$ALIAS_KIND_INPUT" ]] && args+=(--alias-kind "$ALIAS_KIND_INPUT")
           [[ -n "$ALIAS_VALUE_INPUT" ]] && args+=(--alias-value "$ALIAS_VALUE_INPUT")
           [[ "$STAGING_VALIDATED_INPUT" == "true" ]] && args+=(--staging-validated)
           [[ "$CODE_REVIEWED_INPUT" == "true" ]] && args+=(--code-reviewed)
@@ -140,7 +132,7 @@ jobs:
 
           echo "deploy_v2 output: $out"
           {
-            echo "## Deploy (deploy_v2) — $ENV_INPUT"
+            echo "## Deploy (deploy_v2) — $DEPLOY_TYPE_INPUT"
             echo ""
             echo '```json'
             echo "$out"
@@ -148,7 +140,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [[ $rc -ne 0 ]]; then
-            echo "::error::deploy_v2 $ENV_INPUT failed (exit $rc)."
+            echo "::error::deploy_v2 $DEPLOY_TYPE_INPUT failed (exit $rc)."
             exit $rc
           fi
-          echo "deploy_v2 $ENV_INPUT succeeded."
+          echo "deploy_v2 $DEPLOY_TYPE_INPUT succeeded."

@@ -28,8 +28,10 @@ import httpx  # Dokploy transport errors from libs.dokploy surface as httpx exce
 
 from tools.deploy_contract import (
     _SHA_RE,
+    DEPLOY_TYPES,
     DeployTarget,
-    make_deploy_target,
+    deploy_type_spec,
+    make_target,
     service_spec,
     validate_deploy_target,
 )
@@ -84,13 +86,12 @@ class DeployV2Result:
 
 def deploy_v2(
     *,
+    deploy_type: str,
     service: str,
-    env: str,
-    code_version: str,
+    version: str,
     iac_ref: str,
     client,
     domain: str,
-    alias_kind: str | None = None,
     alias_value=None,
     wait: bool = True,
     staging_validated: bool = False,
@@ -99,22 +100,30 @@ def deploy_v2(
     iac_branch: str | None = None,
     timeout: int = 600,
 ) -> DeployV2Result:
-    """Validate and execute a deploy_v2 target.
+    """Validate and execute a deploy by its ``type`` (the discriminant — #350).
 
-    For preview, pass ``alias_kind`` (main | pr | commit) and ``alias_value``. Raises
-    ``ValueError`` for any contract / red-line / unsupported-service violation BEFORE any
-    side effect; backend errors (rollout / health) propagate from the backend.
+    ``deploy_type`` is the primary axis (``staging`` | ``prod`` | ``preview/main`` |
+    ``preview/pr`` | ``preview/commit`` | ``canary``). env + alias derive from it; for the
+    per-instance preview types pass ``alias_value`` (the PR number / commit sha). Raises
+    ``ValueError`` for any unknown-type / contract / red-line / unsupported-service
+    violation BEFORE any side effect; backend errors (rollout / health) propagate.
     """
-    target = make_deploy_target(
+    spec = deploy_type_spec(deploy_type)  # fail-closed on unknown type
+    target = make_target(
+        deploy_type,
         service=service,
-        env=env,
-        code_version=code_version,
+        version=version,
         iac_ref=iac_ref,
-        alias_kind=alias_kind,
         alias_value=alias_value,
     )
     validate_deploy_target(target, service_spec(service))  # defensive re-check
     data_lane = enforce_data_lane_red_lines(target, code_reviewed=code_reviewed)
+    # The type's review requirement and the data-lane red line are the same gate stated at
+    # two levels — assert they agree so a future type/env drift can't open a hole.
+    if spec.requires_review and code_reviewed is not True:
+        raise ValueError(
+            f"deploy type {deploy_type!r} requires code_reviewed=True (RL-DATA-1)"
+        )
 
     if service != _APP_SERVICE:
         raise ValueError(
@@ -122,14 +131,14 @@ def deploy_v2(
             "is wired (platform services join when the deployer path is unified)."
         )
 
-    if env_config(target.env).dynamic:  # preview
+    if env_config(target.env).dynamic:  # preview (env derived from the type)
         # Dokploy pulls the preview compose template from infra2 by cloning a branch/tag
         # ref — NOT the iac_ref sha (that fails "Remote branch <sha> not found", #342). The
         # template tracks `iac_branch` (default: infra2 main); iac_ref remains the recorded
         # identity on the target. Per-commit template pinning would need a tag/branch at
         # that commit (follow-up).
         result = _preview_up(
-            alias_kind,
+            spec.alias_kind,
             alias_value,
             code=target.code_version,
             domain=domain,
@@ -199,7 +208,13 @@ def main(argv: list[str] | None = None) -> int:
     """
     parser = argparse.ArgumentParser(description="unified deploy_v2 front door")
     parser.add_argument("--service", default=_APP_SERVICE, help="service key")
-    parser.add_argument("--env", required=True, choices=["preview", "staging", "prod"])
+    parser.add_argument(
+        "--type",
+        dest="deploy_type",
+        required=True,
+        choices=sorted(DEPLOY_TYPES),
+        help="deploy type (env + alias derive from it)",
+    )
     parser.add_argument(
         "--code",
         required=True,
@@ -214,9 +229,10 @@ def main(argv: list[str] | None = None) -> int:
         "--domain", required=True, help="base domain, e.g. zitian.party"
     )
     parser.add_argument(
-        "--alias-kind", choices=["main", "pr", "commit"], help="preview alias kind"
+        "--alias-value",
+        default=None,
+        help="preview per-instance value (PR number / commit sha) for preview/pr|commit",
     )
-    parser.add_argument("--alias-value", default=None, help="preview alias value")
     parser.add_argument("--no-wait", action="store_true", help="do not health-check")
     parser.add_argument(
         "--staging-validated",
@@ -246,13 +262,12 @@ def main(argv: list[str] | None = None) -> int:
     client = get_dokploy(host=f"cloud.{args.domain}")
     try:
         result = deploy_v2(
+            deploy_type=args.deploy_type,
             service=args.service,
-            env=args.env,
-            code_version=code_sha,
+            version=code_sha,
             iac_ref=iac_sha,
             client=client,
             domain=args.domain,
-            alias_kind=args.alias_kind,
             alias_value=args.alias_value,
             wait=not args.no_wait,
             staging_validated=args.staging_validated,

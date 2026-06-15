@@ -72,11 +72,10 @@ def run_canary(
     res = None
     try:
         res = deploy_v2(
+            deploy_type="canary",
             service=_APP_SERVICE,
-            env="preview",
-            code_version=code_version,
+            version=code_version,
             iac_ref=iac_ref,
-            alias_kind="pr",
             alias_value=pr_number,
             client=client,
             domain=domain,

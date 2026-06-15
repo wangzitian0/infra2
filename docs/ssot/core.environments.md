@@ -375,6 +375,9 @@ preview 并存且可按名寻址（§4.6）。
 并决定其余轴**怎么解释、哪些必填**（discriminated union）。五轴 `DeployTarget` 是*派生*的身份；
 输入面是 `(type, service, version, iac_ref[, alias_value])`，`env` / `sub_domain` 从 `type` 推出。
 
+执行层已统一到这一个面：`deploy_v2(deploy_type, …)`、CLI `--type`、`deploy.yml` 的 `deploy_type`
+输入、canary（= `type=canary`）全部走 `type`——不再有 `env`+`alias_kind` 的第二套输入面。
+
 封闭的 type 集合（`deploy_contract.DEPLOY_TYPES`，未知 type 直接拒）：
 
 | type | 派生 env | alias | 门控 |
