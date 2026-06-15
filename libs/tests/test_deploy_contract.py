@@ -14,6 +14,7 @@ from tools.deploy_contract import (
     SERVICES,
     DeployTarget,
     ServiceSpec,
+    compose_id_for,
     deploy_type_spec,
     make_deploy_target,
     make_target,
@@ -182,6 +183,37 @@ def test_wrong_subdomain_for_env_rejected():
 
 
 # --- serialization ---------------------------------------------------------
+
+
+# --- the canary service + per-(service,env) compose ids --------------------
+
+
+def test_canary_is_a_registered_service_not_a_type():
+    spec = service_spec("finance_report/canary")
+    assert spec.base_subdomain == "canary" and spec.web_facing is True
+
+
+def test_compose_id_for_app_falls_back_to_env_config():
+    # the app's fixed-env compose ids still live in deploy_env_config
+    assert compose_id_for("finance_report/app", "staging") == "A6V-hbJlgHMwgPDoTDnhH"
+    assert compose_id_for("finance_report/app", "prod") == "lNn9gVS1Zyw79Jzw5dlbu"
+
+
+def test_compose_id_for_unprovisioned_service_fails_closed():
+    # canary has no fixed compose provisioned yet -> fail closed, not a cryptic later error
+    with pytest.raises(ValueError, match="no compose provisioned"):
+        compose_id_for("finance_report/canary", "staging")
+
+
+def test_compose_id_for_dynamic_env_rejected():
+    with pytest.raises(ValueError, match="dynamic"):
+        compose_id_for("finance_report/app", "preview")
+
+
+def test_per_service_compose_ids_carry_on_the_spec():
+    # a service can carry its own fixed-env compose ids (multi-service generalization)
+    s = ServiceSpec("x/y", "y", web_facing=True, compose_ids={"staging": "cmp-y-stg"})
+    assert s.compose_ids["staging"] == "cmp-y-stg"
 
 
 # --- deploy type discriminant ---------------------------------------------

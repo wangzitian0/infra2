@@ -32,7 +32,7 @@ SSOT: docs/ssot/core.environments.md §4.7.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from tools.deploy_env_config import env_config, preview_alias
 
@@ -60,6 +60,11 @@ class ServiceSpec:
     web_facing: bool
     prod_only: bool = False
     env_shared: bool = False
+    # Fixed-env Dokploy compose ids, per env (e.g. {"staging": "...", "prod": "..."}).
+    # The dynamic preview env has no fixed compose (it is created per alias), so it never
+    # appears here. The finance_report app keeps its ids in deploy_env_config for now; a
+    # multi-service like `finance_report/canary` carries its own here.
+    compose_ids: dict = field(default_factory=dict)
 
 
 # Seed registry. Today the deploy primitive (tools/deploy_primitive.py) covers exactly
@@ -68,6 +73,16 @@ class ServiceSpec:
 SERVICES: dict[str, ServiceSpec] = {
     "finance_report/app": ServiceSpec(
         key="finance_report/app", base_subdomain="report", web_facing=True
+    ),
+    # The canary is a first-class SERVICE, not a deploy type: a trivial 200-returning
+    # probe with NO data/vault/DB deps, deployable to every env via the normal types.
+    # Deploying it validates the deploy MECHANISM (resolve → contract → backend → route →
+    # 200) for an env without touching the real app stack — the only way to get a
+    # repeatable canary in the fixed staging/prod envs. Its fixed-env compose ids are
+    # filled in once the per-env canary composes are provisioned (empty = not yet, and
+    # compose_id_for fails closed). web_facing so it gets a Traefik route to probe.
+    "finance_report/canary": ServiceSpec(
+        key="finance_report/canary", base_subdomain="canary", web_facing=True
     ),
 }
 
@@ -80,6 +95,30 @@ def service_spec(service: str) -> ServiceSpec:
         raise ValueError(
             f"unknown service {service!r}: expected one of {sorted(SERVICES)}"
         ) from None
+
+
+def compose_id_for(service: str, env: str) -> str:
+    """The fixed Dokploy compose id for a ``(service, env)``. Fail-closed if absent.
+
+    The finance_report app keeps its ids in ``deploy_env_config`` (env_config(env)
+    .compose_id); other services carry their own in ``ServiceSpec.compose_ids``. Raises
+    ValueError for a dynamic env (preview has no fixed compose) or an unprovisioned
+    ``(service, env)`` — so deploying e.g. the canary to a not-yet-provisioned env fails
+    closed with a clear message rather than a cryptic Dokploy error.
+    """
+    spec = service_spec(service)
+    cfg = env_config(env)  # also validates env is known
+    if cfg.dynamic:
+        raise ValueError(f"{env!r} is dynamic (per-alias); it has no fixed compose id")
+    compose_id = spec.compose_ids.get(env)
+    if compose_id is None and service == "finance_report/app":
+        compose_id = cfg.compose_id  # the app's ids still live in env_config
+    if not compose_id:
+        raise ValueError(
+            f"no compose provisioned for service {service!r} in env {env!r}; "
+            "provision the fixed compose before deploying"
+        )
+    return compose_id
 
 
 def sub_domain_for(
