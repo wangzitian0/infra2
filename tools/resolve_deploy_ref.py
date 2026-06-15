@@ -21,6 +21,7 @@ import argparse
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 
 FINANCE_REPORT_REPO = "https://github.com/wangzitian0/finance_report.git"
 
@@ -150,6 +151,68 @@ def resolve_to_sha(
             f"deploy ref {ref!r} ({remote_ref}) not found in {_redact_repo(repo)}"
         )
     return sha
+
+
+@dataclass(frozen=True)
+class ResolvedRef:
+    """What a surface ref resolves to: its commit identity AND what image to pull.
+
+    The IMAGE_REF (not the type) is decided by the FORM:
+      code  (``branch`` main / ``sha``)        -> the short-sha image  (App publishes :<sha7>)
+      release (``tag`` vX.Y.Z / ``release-branch`` release/x.y) -> the tag image (retained)
+    ``sha`` is always the full/given commit (the canonical identity); ``image_ref`` is what
+    Dokploy is told to pull. This is the App's publish contract — deploy_v2 just consumes
+    ``image_ref`` and never re-derives sha-vs-tag.
+    """
+
+    sha: str  # commit identity (full for resolved refs; as-given for a bare sha)
+    image_ref: str  # what to pull: <sha7> for code, the tag for release
+    form: str  # classify_ref form: branch | sha | tag | release-branch
+
+
+def _latest_release_tag(
+    repo: str, release_branch: str, *, runner=subprocess.run
+) -> str | None:
+    """The highest ``vMAJOR.MINOR.<patch>`` tag on a ``release/MAJOR.MINOR`` line, or None."""
+    m = _RELEASE_BRANCH_RE.match(release_branch.strip())
+    prefix = f"v{release_branch.strip()[len('release/') :]}."  # release/0.1 -> v0.1.
+    if not m:
+        return None
+    patches: list[tuple[int, str]] = []
+    for _sha, name in _ls_remote_rows(repo, f"refs/tags/{prefix}*", runner=runner):
+        tagname = name.removesuffix("^{}").rpartition("/")[2]  # refs/tags/vX.Y.Z -> vX.Y.Z
+        rest = tagname[len(prefix) :]
+        if tagname.startswith(prefix) and rest.isdigit():
+            patches.append((int(rest), tagname))
+    return max(patches)[1] if patches else None
+
+
+def resolve_image_ref(
+    ref: str, *, repo: str = FINANCE_REPORT_REPO, runner=subprocess.run
+) -> ResolvedRef:
+    """Resolve a surface ref to its (sha identity, image_ref, form).
+
+    - ``tag`` (vX.Y.Z)         -> image_ref = the tag (the App's retained release image).
+    - ``release-branch``       -> resolve to the line's LATEST tag -> image_ref = that tag.
+    - ``branch`` (main)/``sha`` -> image_ref = the 7-char short sha (App's :<sha7> image).
+    """
+    form = classify_ref(ref)
+    cleaned = ref.strip()
+    if form == "tag":
+        sha = _resolve_remote_sha(repo, "tag", cleaned, runner=runner)
+        if not sha:
+            raise ValueError(f"tag {cleaned!r} not found in {_redact_repo(repo)}")
+        return ResolvedRef(sha=sha, image_ref=cleaned, form=form)
+    if form == "release-branch":
+        tag = _latest_release_tag(repo, cleaned, runner=runner)
+        if not tag:
+            raise ValueError(
+                f"no vX.Y.<n> release tag found on {cleaned!r} in {_redact_repo(repo)}"
+            )
+        sha = _resolve_remote_sha(repo, "tag", tag, runner=runner)
+        return ResolvedRef(sha=sha or tag, image_ref=tag, form=form)
+    sha = resolve_to_sha(ref, repo=repo, runner=runner)  # branch (main) / sha
+    return ResolvedRef(sha=sha, image_ref=sha[:7], form=form)
 
 
 def main(argv: list[str] | None = None) -> int:
