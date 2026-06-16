@@ -311,16 +311,19 @@ invoke fr-app.setup       # 域名: report.zitian.party
 
 **preview 多别名模型**（每个别名 = 一套独立的 Dokploy compose 栈）：
 
+每个别名统一是 `<kind>-<value>`（没有裸特例），下游（telemetry label / URL / compose 名）解析方式一致：
+
 | 别名 kind | alias token | ENV_SUFFIX / ENV_DOMAIN_SUFFIX | 域名 | compose 名 (appName slug) | `deployment.environment` |
 |-----------|-------------|--------------------------------|------|---------------------------|--------------------------|
-| `main` | `main` | `-main` | `report-main.<domain>` | `finance-report-preview-main` | `main` |
+| `branch` | `branch-<name>` | `-branch-<name>` | `report-branch-<name>.<domain>` | `finance-report-preview-branch-<name>` | `branch-<name>` |
 | `pr` | `pr-<N>` | `-pr-<N>` | `report-pr-<N>.<domain>` | `finance-report-preview-pr-<N>` | `pr-<N>` |
 | `commit` | `commit-<sha7>` | `-commit-<sha7>` | `report-commit-<sha7>.<domain>` | `finance-report-preview-commit-<sha7>` | `commit-<sha7>` |
+| `tag` | `tag-<v1-2-3>` | `-tag-<v1-2-3>` | `report-tag-<v1-2-3>.<domain>` | `finance-report-preview-tag-<v1-2-3>` | `tag-<v1-2-3>` |
 
-真源：`tools/deploy_env_config.py::preview_alias(kind, value)`（纯函数，确定性，单测覆盖）。
+`branch` 默认 `main`（→ `branch-main`，取代旧的裸 `main` 槽）；`tag` 的点变横线做 DNS-safe slug（`v1.2.3` → `tag-v1-2-3`），镜像/遥测仍保留规范值 `v1.2.3`。真源：`tools/deploy_env_config.py::preview_alias(kind, value)`（纯函数，确定性，单测覆盖）。
 
 **preview 关键特性**：
-1. **多别名共存**：`main` / `pr-<N>` / `commit-<sha7>` 各自一套独立 compose 栈，互不冲突，也不与 staging/prod 撞容器名或 Host() 规则（靠唯一的 `ENV_SUFFIX`）。
+1. **多别名共存**：`branch-<name>` / `pr-<N>` / `commit-<sha7>` / `tag-<v>` 各自一套独立 compose 栈，互不冲突，也不与 staging/prod 撞容器名或 Host() 规则（靠唯一的 `ENV_SUFFIX`）。
 2. **临时数据库**：preview compose 模板（`finance_report/finance_report/preview/compose.yaml`）内置自己的 `db`（postgres）服务，数据落在**命名卷**（无 host bind mount）。`DATABASE_URL` 在 backend entrypoint 中、source 完 Vault 渲染的 `/secrets/.env` 之后被覆盖指向这个本地库——因此 preview **绝不读写**共享的 staging/prod 数据库；其它 app secret（AI keys、S3）仍由 Vault 提供，preview 完整可用。迁移在 backend 启动时对新库执行（`alembic upgrade head`）。
 3. **生命周期长于 CI**：preview 栈在显式 teardown 前一直存活。`preview_lifecycle down --kind ... --value ...` 通过 `delete_compose(delete_volumes=True)` 销毁该别名的 compose **并删除其临时 DB 命名卷**，不留残余。
 4. **路由零额外工作**：`*.zitian.party` 通配 DNS + 通配证书已就绪；任何 `report-<alias>` 主机只要 compose 里有对应 Traefik router label 就自动路由，无需新建 DNS/证书。
@@ -328,73 +331,75 @@ invoke fr-app.setup       # 域名: report.zitian.party
 ---
 
 <a id="deploy-v2-contract"></a>
-### 4.7 部署原语契约 (deploy_v2 — 五轴坐标)
+### 4.7 部署原语契约 (deploy_v2 — 坐标 `(service, type, version_ref, iac_ref)`)
 
-一次部署的**身份**由且仅由五个正交轴确定——每个轴独立（谁也推不出谁），合起来对
-`preview / staging / prod` 三类目标都充分。真源：`tools/deploy_contract.py`（纯函数，单测覆盖）。
+一次部署的**身份**由且仅由**四个正交轴**确定——每个轴独立（谁也推不出谁），合起来对
+`preview / staging / prod` 各类目标都充分。`type` 是判别式，`env` / `sub_domain` 由它**派生**，不是输入轴。
+真源：`tools/deploy_contract.py` + `tools/deploy_v2.py`（纯函数，单测覆盖）。
 
 ```
-deploy(service, env, sub_domain, code_version, iac_ref)
+deploy_v2(service, type, version_ref, iac_ref)
 ```
 
-| 轴 | 含义 | 来源（复用既有轴） |
-|----|------|--------------------|
+| 轴 | 含义 | 来源 |
+|----|------|------|
 | `service` | 部署哪个已注册服务 | `deploy_contract.ServiceSpec` 注册表 |
-| `env` | `staging` \| `prod` \| `preview` | `deploy_env_config.env_config` |
-| `sub_domain` | 栈实例标签：staging/prod 被 env 钉定；preview 取别名 | env 后缀 + `preview_alias`（§4.6） |
-| `code_version` | app 代码的 commit sha（promote-not-rebuild：同码可去任意 env） | `resolve_deploy_ref`（执行时解析） |
-| `iac_ref` | infra2 的 commit sha，钉死 compose/env/secret 路径 | `deploy_contract`（40 位 hex） |
+| `type` | 判别式：场景 + 解释其余轴、决定哪些必填（discriminated union）| `deploy_contract.DEPLOY_TYPES` |
+| `version_ref` | 多态版本面，由 `type` 解释：PR 号 / sha / tag `vX.Y.Z` / 分支（默认 main）/ `release/x.y` | `resolve_deploy_ref`（执行时解析） |
+| `iac_ref` | infra2 的 ref（分支/tag/sha），钉死 compose/env/secret，并驱动 preview clone | `deploy_v2`（解析为 40-hex 身份） |
 
-**为什么 `service` 与 `iac_ref` 各自独立**：镜像来自 *app* repo（`code_version`），compose/env
-接线来自 *infra2* repo（`iac_ref`），两者各自漂移；且 infra2 多服务，"部署谁"是独立维度。
-`sub_domain` 是栈实例标签——正是它让 `report-main` / `report-pr-N` / `report-commit-<sha>` 三个
-preview 并存且可按名寻址（§4.6）。
+**`version_ref` 解析成两样东西**（App 发布契约，`resolve_deploy_ref.resolve_image_ref` / `resolve_pr`）：
+commit `sha`（身份）+ `image_ref`（要拉的已发布镜像）——**code 拉短 sha 镜像，release 拉长期保留的 tag `:vX.Y.Z`**
+（sha 镜像会被剪，故 prod 必须按 tag 寻址）。`deploy_v2` 只透传 `image_ref` 给后端，不再自己判 sha-vs-tag。
 
-**`data` 不是第六个输入轴**：它是*派生*的（`EnvConfig.data_default`，可被 `iac_ref` 处的 IaC 钉定），
-只出现在红线谓词里。
+**为什么 `service` 与 `iac_ref` 各自独立**：镜像来自 *app* repo（`version_ref`），compose/env 接线来自
+*infra2* repo（`iac_ref`），两者各自漂移；且 infra2 多服务，"部署谁"是独立维度。
 
-**契约谓词**（`deploy_contract.validate_deploy_target`，部署前 fail-closed）——只校验契约轴：
-1. `env ∈ {staging, prod}` ⇒ `sub_domain` = `base` + 该 env 后缀（禁自定义）。
-2. `env = preview` ⇒ `sub_domain` 匹配 `base-(main|pr-<N>|commit-<sha7>)` 且不等于任何 staging/prod 规范域。
-3. `service.prod_only ∧ env ≠ prod` ⇒ 非法；`service.env_shared` ⇒ 无 preview、无后缀。
-4. `code_version` / `iac_ref` 必须为 40 位小写 hex。
+**`env` / `sub_domain` / `data` 都不是输入轴**：`env` 与 `sub_domain` 由 `type`(+`version_ref` 派生的槽)推出；
+`data` 由 `EnvConfig.data_default` 派生（可被 `iac_ref` 处的 IaC 钉定），只出现在红线谓词里。
 
-**红线谓词**（§5 data-lane，由执行层 `deploy_v2.enforce_data_lane_red_lines` 强制，*不*在
-`validate_deploy_target` 内）：
-5. `env=prod ⇒ data_lane=prod`；RL-DATA-1 未评审代码不上 prod 数据——deny-by-default：
-   `code_reviewed` 必须显式为 `True`，缺省（`None`）与 `False` 均 fail-closed。
+**契约谓词**（`deploy_contract` + `deploy_v2`，部署前 fail-closed）：
+1. `type` 必须在 `DEPLOY_TYPES` 内（未知即拒）。
+2. `version_ref` 的**形态**必须被该 `type` 接受（`accepted_forms` 矩阵）——例如 `prod` 只收 release 形态
+   （`tag` / `release-branch`），传 `main`/`sha` 当场 fail-closed（`validate_ref_form`）。
+3. 固定 env（staging/prod）`sub_domain` = `base` + env 后缀；preview `sub_domain` 统一为 `base-<kind>-<value>`
+   （`branch-<name>` / `pr-<N>` / `commit-<sha7>` / `tag-<slug>`），且不等于任何 staging/prod 规范域。
+4. `service.prod_only ∧ env ≠ prod` ⇒ 非法；`service.env_shared` ⇒ 无 preview、无后缀。
+5. `version_ref` 解析出的 `sha` 与 `iac_ref` 必须为 40 位小写 hex（短 sha 解析不成完整 commit 会带 surface 级报错）。
 
-> **现状边界**：契约层已就位（本节 + `deploy_contract.py`）。`service` 注册表当前只含
-> `finance_report/app`；平台服务（经 `libs/deployer.py` 部署）在统一前门分派两条部署路径时并入。
-> 谓词 5 现以 deny-by-default 把守；供给 `code_reviewed=True` 的完整 GitHub 评审门禁随数据轴
-> （finance_report#893）落地。
+**门控（单一真相源，不在 type 上重复声明）**：
+- **staging-first**：`env_config(env).requires_staging_first`（即 prod）⇒ 需 `staging_validated`（或 `break_glass` 审计旁路）。
+- **RL-DATA-1**（§5 data-lane，执行层 `deploy_v2.enforce_data_lane_red_lines`）：`env=prod ⇒ data_lane=prod`；
+  未评审代码不上 prod 数据——deny-by-default：`code_reviewed` 必须显式为 `True`，缺省(`None`)与 `False` 均 fail-closed。
+
+> **现状边界**：`service` 注册表当前只含 `finance_report/app` 且只有它接进 `deploy_v2` 前门；平台服务
+> （经 `libs/deployer.py` + iac_runner `/deploy` webhook 部署）在统一前门分派两条部署路径时并入（phase 2）。
+> 完整 GitHub 评审门禁（供给 `code_reviewed=True`）随数据轴（finance_report#893）落地。
 
 ### 4.7.1 `type` 判别式（一个原语，N 场景）
 
-`env` **不再是独立输入轴**——它是 `type` 的属性。`type` 是**首要轴**（判别式）：它命名场景，
-并决定其余轴**怎么解释、哪些必填**（discriminated union）。五轴 `DeployTarget` 是*派生*的身份；
-输入面是 `(type, service, version, iac_ref[, alias_value])`，`env` / `sub_domain` 从 `type` 推出。
+封闭的 type 集合（`deploy_contract.DEPLOY_TYPES`，未知 type 直接拒）。每个 type 声明它的
+`accepted_forms`（接受哪些 `version_ref` 形态 = 矩阵那一行）+ alias 槽；`env` 由 type 派生，门控由 env 派生：
 
-封闭的 type 集合（`deploy_contract.DEPLOY_TYPES`，未知 type 直接拒）：
-
-| type | 派生 env | alias | 门控 |
-|------|---------|-------|------|
-| `staging` | staging | — | — |
-| `prod` | prod | — | `requires_review`（RL-DATA-1） |
-| `preview/main` · `preview/pr` · `preview/commit` | preview | main/pr/commit | — |
-| `canary` | preview | pr（保留位） | —（执行层加 health+teardown） |
+| type | 派生 env | alias 槽 | 接受的 version_ref 形态 |
+|------|---------|---------|--------------------------|
+| `staging` | staging | — | 全部（branch / sha / tag / release-branch）|
+| `prod` | prod | — | **仅 release**（tag / release-branch）|
+| `preview/branch` | preview | `branch-<name>`（默认 main）| branch |
+| `preview/pr` | preview | `pr-<N>` | PR 号 |
+| `preview/commit` | preview | `commit-<sha7>` | sha |
+| `preview/tag` | preview | `tag-<slug>` | tag |
+| `canary` | preview | `pr-<保留位>` | 全部（探针，最大灵活）|
 
 **三条框架护栏（与业务无关，保持稳定）**：
-1. **type 选策略/配置，不是内嵌值的扁平枚举**：每实例数据（PR 号）走 `alias_value`，type 集合保持小。
+1. **type 选策略/配置，不是内嵌值的扁平枚举**：每实例数据（分支名/PR 号/sha/tag）走 `version_ref`+派生槽，type 集合保持小。
 2. **公共内核 + per-type 配置**：入口 resolve `type → spec` 一次，后续公共代码跑；禁散落 `switch(type)`。
-3. **fail-closed by construction**：未知 type 拒；每个 type 的 spec 声明自己的必填项；`canary` 是**显式
-   type**，绝不让"参数全空"隐式触发。
+3. **fail-closed by construction**：未知 type 拒；形态不匹配当场拒；`canary` 是**显式 type**，绝不让"参数全空"隐式触发。
 
-**业务待定（TBD，占位 — *尚未实现*）**：`version` *未来*按 type 解释——preview = code sha；
-prod = release tag（release 镜像长期保留的是 `:vX.Y.Z`，sha 镜像会被剪，见 finance_report#883）；
-亦可业务自定 version。**当前契约仍只接受 40 位 commit sha**：`make_target` 把 `version` 原样透传到
-`code_version`，由 `validate_deploy_target` 强制 40-hex——所以 **tag（如 `v1.2.3`）现在会被拒**。
-按 type 的 version 寻址语义与 canary 执行默认值，待业务定义后落地。
+**version 寻址语义（已落地，不再是 TBD）**：`version_ref` 按 `type` 解释——preview/pr 是 PR 号（`resolve_pr` →
+PR head 镜像）；preview/commit 是 sha；preview/tag 与 prod 是 release tag（拉长期保留的 `:vX.Y.Z`）；
+preview/branch、staging、canary 接受分支（默认 main）。`image_ref` 由**形态**决定（code→短 sha、release→tag），
+不由 type 决定。`make_target` 仍接收**已解析的 40-hex sha**作为身份；多态的 `version_ref` 在上一层 `deploy_v2` 解析。
 
 ---
 

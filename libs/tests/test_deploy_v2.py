@@ -383,3 +383,32 @@ def test_cli_reports_deploy_failure(monkeypatch, capsys):
     )
     assert rc == 1
     assert "deploy_v2 failed" in capsys.readouterr().err
+
+
+# --- prod parity: Vault-TTL preflight + config verification + model overrides ----
+
+
+def test_fixed_deploy_verifies_vault_and_config_by_default(calls):
+    # parity with the retired bash dokploy_deploy.sh: the unified path must KEEP the
+    # VAULT_APP_TOKEN TTL preflight + post-deploy IAC_CONFIG_HASH check (default-ON).
+    _deploy(deploy_type="staging", version_ref="main")
+    assert calls["fixed"]["verify_vault"] is True
+    assert calls["fixed"]["verify_config"] is True
+    assert "model_overrides" in calls["fixed"]  # threaded through (env-sourced)
+
+
+def test_fixed_deploy_verify_can_be_disabled(calls):
+    _deploy(deploy_type="staging", version_ref="main", verify_vault=False, verify_config=False)
+    assert calls["fixed"]["verify_vault"] is False
+    assert calls["fixed"]["verify_config"] is False
+
+
+def test_cli_verify_flags_default_on_and_flip(cli):
+    rec, _ = cli
+    dv2.main(["--type", "staging", "--version-ref", "main", "--iac-ref", "main", "--domain", "zp.io"])
+    assert rec["verify_vault"] is True and rec["verify_config"] is True
+    dv2.main(
+        ["--type", "staging", "--version-ref", "main", "--iac-ref", "main", "--domain",
+         "zp.io", "--skip-vault-check", "--no-verify-config"]
+    )
+    assert rec["verify_vault"] is False and rec["verify_config"] is False

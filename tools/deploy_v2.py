@@ -40,6 +40,7 @@ from tools.deploy_contract import (
 )
 from tools.deploy_env_config import env_config
 from tools.deploy_primitive import deploy as _deploy_fixed
+from tools.deploy_primitive import model_overrides_from_env
 from tools.preview_lifecycle import up as _preview_up
 from tools.resolve_deploy_ref import (
     classify_ref,
@@ -157,6 +158,8 @@ def deploy_v2(
     staging_validated: bool = False,
     break_glass: bool = False,
     code_reviewed: bool | None = None,
+    verify_vault: bool = True,
+    verify_config: bool = True,
     timeout: int = 600,
     repo: str = _APP_REPO,
 ) -> DeployV2Result:
@@ -232,6 +235,9 @@ def deploy_v2(
 
     # staging | prod: the fixed-compose promote path. The backend pulls image_ref (a tag
     # for a release, the short sha for code); iac_ref is carried on the target for the record.
+    # verify_vault / verify_config / model_overrides give the unified path PARITY with the
+    # old bash dokploy_deploy.sh — default-ON so a token-TTL/effective-config regression
+    # fails closed instead of being silently dropped on the way to prod.
     plan = _deploy_fixed(
         target.env,
         resolved.sha,
@@ -242,6 +248,9 @@ def deploy_v2(
         timeout=timeout,
         staging_validated=staging_validated,
         break_glass=break_glass,
+        verify_vault=verify_vault,
+        verify_config=verify_config,
+        model_overrides=model_overrides_from_env(),
     )
     detail = {
         "env": plan.env,
@@ -268,7 +277,7 @@ def main(argv: list[str] | None = None) -> int:
         "--type",
         required=True,
         dest="deploy_type",
-        help="deploy type: staging | prod | preview/main | preview/pr | preview/commit "
+        help="deploy type: staging | prod | preview/branch | preview/pr | preview/commit "
         "| preview/tag | canary",
     )
     parser.add_argument(
@@ -299,6 +308,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="positive RL-DATA-1 signal — required for any prod-data deploy",
     )
+    parser.add_argument(
+        "--skip-vault-check",
+        action="store_true",
+        help="skip the VAULT_APP_TOKEN TTL preflight (default: verify, fixed envs only)",
+    )
+    parser.add_argument(
+        "--no-verify-config",
+        action="store_true",
+        help="skip the post-deploy effective IAC_CONFIG_HASH check (default: verify)",
+    )
     parser.add_argument("--timeout", type=int, default=600, help="health-check seconds")
     args = parser.parse_args(argv)
 
@@ -320,6 +339,8 @@ def main(argv: list[str] | None = None) -> int:
             # store_true yields False when omitted; pass True only when explicitly set so
             # RL-DATA-1 stays deny-by-default for prod data.
             code_reviewed=True if args.code_reviewed else None,
+            verify_vault=not args.skip_vault_check,
+            verify_config=not args.no_verify_config,
             timeout=args.timeout,
         )
     except (ValueError, RuntimeError, TimeoutError, httpx.HTTPError) as exc:

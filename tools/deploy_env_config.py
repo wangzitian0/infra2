@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Per-environment deploy config — the ``env`` axis of deploy(env, code, data).
+"""Per-environment deploy config — the env REGIME each deploy_v2 ``type`` derives.
 
-The deploy primitive (finance_report#883) is parameterized by three axes:
+deploy_v2's coordinate is ``(service, type, version_ref, iac_ref)``; ``env`` is NOT an
+input axis — it is derived from ``type`` (e.g. ``prod`` -> env ``prod``, ``preview/*`` ->
+env ``preview``). This module owns that derived env regime and what it implies:
 
-    code  -> resolve_deploy_ref.py        (a surface input -> a commit sha)
-    env   -> THIS module                  (which compose, URL, suffix, data default)
-    data  -> (P3/#893)                    (empty / staging / anonymized prod snapshot)
+    type     -> deploy_contract.DEPLOY_TYPES (which env a type maps to)
+    env      -> THIS module                  (which compose, URL, suffix, data default, gates)
+    data     -> (P3/#893)                    (empty / staging / anonymized prod snapshot)
 
-This module owns the ``env`` axis: each deploy environment maps to the Dokploy compose
+This module owns the env regime: each deploy environment maps to the Dokploy compose
 it targets, its public URL pattern, the container/domain suffix, the default data
 source, and prod gating. Single source so the deploy primitive, docs, and the contract
 test all derive from here instead of re-stating per-env values across workflows.
@@ -110,16 +112,18 @@ def with_compose_id(env: str, compose_id: str) -> EnvConfig:
 # level down — the deterministic mapping from a concrete preview *alias*
 # (kind, value) to the names/suffixes/URLs a single Dokploy compose stack uses.
 #
-# Three alias kinds coexist, each its OWN compose stack + OWN ephemeral DB:
-#   main            -> report-main.<domain>        (the tip of main, on demand)
+# Four alias kinds coexist, each its OWN compose stack + OWN ephemeral DB. Every alias is
+# uniformly <kind>-<value> (no bare special case), so downstream parses them the same way:
+#   branch-<name>   -> report-branch-<name>.<domain> (a branch tip, default main, on demand)
 #   pr-<N>          -> report-pr-<N>.<domain>       (a specific PR)
-#   commit-<sha7>   -> report-commit-<sha7>.<domain> (any commit, pinned)
+#   commit-<sha7>   -> report-commit-<sha7>.<domain> (a pinned commit)
+#   tag-<v1-2-3>    -> report-tag-<v1-2-3>.<domain>  (a release tag, DNS-safe slug)
 #
 # This is PURE config: no Dokploy calls, no resolution. preview_lifecycle.py
 # turns the slug/suffix/url here into actual create_compose/deploy calls, and
 # resolve_deploy_ref.py turns `code` into the sha that a `commit` alias pins.
 # The `deployment_environment` label mirrors the telemetry identity contract in
-# docs/ssot/core.environments.md §4.5 (display values pr-<N> / commit-<sha> / main).
+# docs/ssot/core.environments.md §4.5 (values branch-<name> / pr-<N> / commit-<sha7> / tag-<slug>).
 
 # A Dokploy compose appName / container suffix must be DNS/label-safe. PR numbers
 # and 7-char shas already are; we still validate so a bad alias fails fast (a bad
