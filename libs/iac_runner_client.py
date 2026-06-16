@@ -134,7 +134,8 @@ def poll_platform_deploy_status(
         {"env": env, "ref": ref, "triggered_by": triggered_by},
         separators=(",", ":"),
     ).encode()
-    terminal_excluded = {"running", "pending", "in_progress", "queued"}
+    # non-terminal statuses from /deploy/status (terminal = "completed" / "failed").
+    terminal_excluded = {"running", "pending", "in_progress", "queued", "accepted"}
     last: dict = {}
     for _ in range(max(1, attempts)):
         headers = _signed_headers(secret, payload, now=now, nonce=nonce_factory())

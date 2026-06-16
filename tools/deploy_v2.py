@@ -30,7 +30,10 @@ from dataclasses import dataclass
 
 import httpx  # Dokploy transport errors from libs.dokploy surface as httpx exceptions
 
-from libs.iac_runner_client import trigger_platform_deploy
+from libs.iac_runner_client import (
+    poll_platform_deploy_status,
+    trigger_platform_deploy,
+)
 from tools.deploy_contract import (
     _SHA_RE,
     DeployTarget,
@@ -159,6 +162,7 @@ def _deploy_platform(
     secret: str | None,
     triggered_by: str,
     code_reviewed: bool | None,
+    wait: bool,
 ) -> DeployV2Result:
     """Route a platform (iac_pinned) service to the iac_runner ``/deploy`` webhook.
 
@@ -188,25 +192,32 @@ def _deploy_platform(
     env = "production" if type_spec.env == "prod" else "staging"
     # iac_runner's SERVICE_TASK_MAP keys on the FULL service key (e.g. "platform/redis"),
     # NOT a shortname — pass the registry key verbatim or it skips as "no sync task configured".
-    # Fire (wait=False): the webhook deploys asynchronously, so the signed POST returns
-    # promptly instead of risking the 60s timeout on a slow rollout. Synchronous wait
-    # (poll_platform_deploy_status) is a follow-up once the iac_runner status vocabulary is
-    # confirmed live.
+    # We always FIRE the trigger with wait=False (the signed POST returns promptly, no 60s
+    # timeout on a slow rollout); when the caller wants to wait we poll /deploy/status until
+    # it settles — terminal success is "completed", failure is "failed" (verified live).
+    url = runner_url or os.getenv("IAC_RUNNER_URL", "")
+    sec = secret or os.getenv("IAC_WEBHOOK_SECRET", "")
     response = trigger_platform_deploy(
         env=env,
         ref=iac_sha,
         services=[service],
-        base_url=runner_url or os.getenv("IAC_RUNNER_URL", ""),
-        secret=secret or os.getenv("IAC_WEBHOOK_SECRET", ""),
+        base_url=url,
+        secret=sec,
         triggered_by=triggered_by,
         wait=False,
     )
-    detail = {
-        "env": env,
-        "ref": iac_sha,
-        "services": [service],
-        "iac_runner": response,
-    }
+    detail = {"env": env, "ref": iac_sha, "services": [service], "iac_runner": response}
+    if wait:
+        final = poll_platform_deploy_status(
+            env=env, ref=iac_sha, base_url=url, secret=sec, triggered_by=triggered_by
+        )
+        detail["iac_runner_final"] = final
+        status = str(final.get("status", "")).lower()
+        if status != "completed":  # "failed" / anything non-success
+            raise RuntimeError(
+                f"platform deploy of {service} to {env} ended {status!r}: "
+                f"{final.get('details') or final}"
+            )
     return DeployV2Result(target, data_lane, "iac-runner", detail)
 
 
@@ -256,6 +267,7 @@ def deploy_v2(
             secret=iac_webhook_secret,
             triggered_by=triggered_by,
             code_reviewed=code_reviewed,
+            wait=wait,
         )
 
     spec = deploy_type_spec(deploy_type)

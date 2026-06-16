@@ -418,11 +418,15 @@ def test_cli_verify_flags_default_on_and_flip(cli):
 # --- platform services route to the iac_runner webhook (iac_pinned) ---------
 
 
-def _platform(monkeypatch, **over):
+def _platform(monkeypatch, *, poll_status="completed", **over):
     sent = {}
     monkeypatch.setattr(
         dv2, "trigger_platform_deploy",
-        lambda **kw: sent.update(kw) or {"status": "success", "deployment_id": "d1"},
+        lambda **kw: sent.update(kw) or {"status": "accepted", "deployment_id": "d1"},
+    )
+    monkeypatch.setattr(
+        dv2, "poll_platform_deploy_status",
+        lambda **kw: {"status": poll_status, "deployment_id": "d1"},
     )
     monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
     base = dict(
@@ -439,7 +443,7 @@ def test_platform_service_routes_to_iac_runner(monkeypatch):
     assert sent["env"] == "staging"
     assert sent["ref"] == SHA_IAC  # deploy ref IS the iac_ref sha
     assert sent["services"] == ["platform/redis"]
-    assert res.detail["iac_runner"]["status"] == "success"
+    assert res.detail["iac_runner"]["status"] == "accepted"
     assert res.target.code_version == SHA_IAC  # platform version identity = the iac commit
 
 
@@ -470,3 +474,13 @@ def test_platform_ignores_version_ref(monkeypatch):
     monkeypatch.setattr(dv2, "resolve_pr", boom)
     sent, _res = _platform(monkeypatch, version_ref="whatever-garbage")
     assert sent["ref"] == SHA_IAC
+
+
+def test_platform_wait_polls_and_records_final(monkeypatch):
+    _sent, res = _platform(monkeypatch, poll_status="completed")
+    assert res.detail["iac_runner_final"]["status"] == "completed"
+
+
+def test_platform_wait_raises_on_failed_deploy(monkeypatch):
+    with pytest.raises(RuntimeError, match="ended 'failed'"):
+        _platform(monkeypatch, poll_status="failed")
