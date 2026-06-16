@@ -23,6 +23,12 @@ name: Deploy (deploy_v2)
 on:
   workflow_dispatch:
     inputs:
+      service:
+        description: "Service (default app; platform/* routes to the iac_runner webhook, staging/prod only)"
+        required: false
+        type: choice
+        options: [finance_report/app, platform/redis]
+        default: finance_report/app
       type:
         description: "Deploy type (the scenario)"
         required: true
@@ -86,9 +92,13 @@ jobs:
   # scheduled/post-merge canary for the reserved slot. skip_canary is the emergency bypass.
   preflight_canary:
     name: preflight canary
+    # Only the APP has a preview canary; a platform (iac_pinned) deploy is gated by
+    # iac_runner's own checks, so skip the app canary for platform services.
     if: >-
       ${{ (github.event.inputs.type == 'staging' || github.event.inputs.type == 'prod')
-          && github.event.inputs.skip_canary != 'true' }}
+          && github.event.inputs.skip_canary != 'true'
+          && (github.event.inputs.service == 'finance_report/app'
+              || github.event.inputs.service == '') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -139,6 +149,9 @@ jobs:
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
       INTERNAL_DOMAIN: ${{ github.event.inputs.domain || 'zitian.party' }}
+      # platform (iac_pinned) services trigger the iac_runner webhook instead of Dokploy.
+      IAC_WEBHOOK_SECRET: ${{ secrets.IAC_WEBHOOK_SECRET }}
+      IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -153,6 +166,7 @@ jobs:
 
       - name: Run deploy_v2
         env:
+          SERVICE_INPUT: ${{ github.event.inputs.service || 'finance_report/app' }}
           TYPE_INPUT: ${{ github.event.inputs.type }}
           VERSION_REF_INPUT: ${{ github.event.inputs.version_ref || 'main' }}
           IAC_REF_INPUT: ${{ github.event.inputs.iac_ref || 'main' }}
@@ -165,12 +179,19 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
+          # App needs the Dokploy key; a platform (iac_pinned) service needs the iac_runner
+          # webhook secret instead. Require the right one for the chosen service.
+          if [[ "$SERVICE_INPUT" == platform/* ]]; then
+            if [[ -z "${IAC_WEBHOOK_SECRET:-}" || -z "${IAC_RUNNER_URL:-}" ]]; then
+              echo "::error::IAC_WEBHOOK_SECRET and IAC_RUNNER_URL are required for a platform deploy."
+              exit 1
+            fi
+          elif [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
             echo "::error::DOKPLOY_API_KEY secret is required to deploy."
             exit 1
           fi
 
-          args=(--service finance_report/app
+          args=(--service "$SERVICE_INPUT"
                 --type "$TYPE_INPUT"
                 --version-ref "$VERSION_REF_INPUT"
                 --iac-ref "$IAC_REF_INPUT"

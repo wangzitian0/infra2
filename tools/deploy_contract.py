@@ -54,6 +54,10 @@ class ServiceSpec:
         prod_only: Only deployable to ``prod`` (e.g. clickhouse/signoz/openpanel).
         env_shared: One endpoint shared across envs — no env suffix, no preview
             instances (e.g. vault/sso/signoz/minio).
+        iac_pinned: A platform service whose artifact is the IaC-pinned stack at
+            ``iac_ref`` (no app code version). ``deploy_v2`` routes these to the iac_runner
+            ``/deploy`` webhook instead of the app backends, and ``version_ref`` is unused —
+            the deploy ref IS ``iac_ref``. See SSOT §4.7.2.
     """
 
     key: str
@@ -61,14 +65,19 @@ class ServiceSpec:
     web_facing: bool
     prod_only: bool = False
     env_shared: bool = False
+    iac_pinned: bool = False
 
 
-# Seed registry. Today the deploy primitive (tools/deploy_primitive.py) covers exactly
-# the finance_report app stack; platform services deploy via libs/deployer.py and join
-# this registry when the unified front door dispatches across both paths (next phase).
+# Seed registry. The finance_report app stack deploys via the in-process backends
+# (deploy_primitive / preview_lifecycle); platform services are ``iac_pinned`` and route to
+# the iac_runner /deploy webhook (libs/iac_runner_client). Platform services are registered
+# per-batch as they migrate onto deploy_v2 (SSOT §4.7.2) — redis is the first.
 SERVICES: dict[str, ServiceSpec] = {
     "finance_report/app": ServiceSpec(
         key="finance_report/app", base_subdomain="report", web_facing=True
+    ),
+    "platform/redis": ServiceSpec(
+        key="platform/redis", base_subdomain="redis", web_facing=False, iac_pinned=True
     ),
 }
 
