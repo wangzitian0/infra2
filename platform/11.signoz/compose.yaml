@@ -53,7 +53,19 @@ services:
       retries: 5
       start_period: 60s
     labels:
+      # SigNoz Web UI route. Moved from Dokploy-generated domain to explicit
+      # compose-owned labels (Infra-014): once the otel-collector below owns a
+      # compose Traefik router, the whole compose file must own its routing
+      # (deploy.py subdomain=None), per the single-source routing policy in
+      # docs/ssot/platform.domain.md / test_domain_routing_policy.py. Same domain
+      # as before: signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN} → :8080.
       - "traefik.enable=true"
+      - "traefik.http.routers.signoz${ENV_DOMAIN_SUFFIX}.rule=Host(`signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`)"
+      - "traefik.http.routers.signoz${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
+      - "traefik.http.routers.signoz${ENV_DOMAIN_SUFFIX}.tls=true"
+      - "traefik.http.routers.signoz${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.signoz${ENV_DOMAIN_SUFFIX}.service=signoz${ENV_DOMAIN_SUFFIX}"
+      - "traefik.http.services.signoz${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=8080"
 
   otel-collector:
     image: signoz/signoz-otel-collector:v0.129.12
@@ -88,7 +100,43 @@ services:
       timeout: 5s
       retries: 3
     labels:
-      - "traefik.enable=false"
+      # Public browser-OTLP ingest for the finance_report frontend (Infra-014).
+      #
+      # The collector stays Docker-network-only for backend gRPC/HTTP (4317/4318 are
+      # `expose`d, never published). The ONLY public surface is the single ingest
+      # domain otel.${INTERNAL_DOMAIN}, terminated at Traefik and forwarded to
+      # :4318 (OTLP HTTP). Browsers cannot reach the internal collector, so this is
+      # the one path FE spans take. Architecture: ONE shared collector for every
+      # env (SigNoz is prod_only / no ENV_SUFFIX); envs are split downstream by the
+      # deployment.environment resource attribute, NOT by per-env routes.
+      #
+      # Two guards keep this from being an open relay, enforced UPSTREAM at Traefik
+      # so the collector never trusts the raw internet (the receiver only adds CORS,
+      # see otel-collector-config.yaml):
+      #   1. Static bearer token — the router rule carries a Header() matcher, so the
+      #      route ONLY matches when the browser sends the exact
+      #      `Authorization: Bearer <token>`. A wrong/absent token never matches this
+      #      router → Traefik 404s (no backend contact). The token is a NON-secret
+      #      publishable ingest key (it ships to the browser) sourced from Vault at
+      #      secret/platform/<env>/signoz key `otel_ingest_token`, injected by
+      #      deploy.py as ${OTEL_INGEST_TOKEN}. Open-source Traefik has no static-token
+      #      middleware (JWT middleware is Enterprise-only), so the Header() rule is the
+      #      idiomatic equivalent and mirrors how openpanel-api scopes its router.
+      #   2. Rate limit — caps burst abuse of the public key (per source IP).
+      # Keep the CORS allowlist in otel-collector-config.yaml in sync with the FE origins.
+      - "traefik.enable=true"
+      - "traefik.http.routers.otel-ingest.rule=Host(`otel.${INTERNAL_DOMAIN}`) && HeadersRegexp(`Authorization`, `^Bearer ${OTEL_INGEST_TOKEN}$`)"
+      - "traefik.http.routers.otel-ingest.entrypoints=websecure"
+      - "traefik.http.routers.otel-ingest.tls=true"
+      - "traefik.http.routers.otel-ingest.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.otel-ingest.priority=20"
+      - "traefik.http.routers.otel-ingest.service=otel-ingest"
+      - "traefik.http.services.otel-ingest.loadbalancer.server.port=4318"
+      - "traefik.http.routers.otel-ingest.middlewares=otel-ingest-ratelimit@docker"
+      # Rate-limit the public ingest key: 50 req/s sustained, 100 burst, per client IP.
+      - "traefik.http.middlewares.otel-ingest-ratelimit.ratelimit.average=50"
+      - "traefik.http.middlewares.otel-ingest-ratelimit.ratelimit.period=1s"
+      - "traefik.http.middlewares.otel-ingest-ratelimit.ratelimit.burst=100"
 
 networks:
   dokploy-network:

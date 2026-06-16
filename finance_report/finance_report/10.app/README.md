@@ -57,9 +57,52 @@ Stored at: `secret/data/finance_report/<env>/app`
 | `FALLBACK_MODELS` | Comma-separated fallback model list |
 | `AI_DAILY_LIMIT_USD` | Daily AI budget setting consumed by the app configuration |
 | `NEXT_PUBLIC_APP_URL` | Frontend URL used by backend-generated links |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | SigNoz OTLP HTTP endpoint |
-| `OTEL_SERVICE_NAME` | OTEL service name for logs |
-| `OTEL_RESOURCE_ATTRIBUTES` | OTEL resource attributes (e.g., environment) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | SigNoz OTLP HTTP endpoint (optional Vault override; otherwise rendered — see Observability) |
+| `OTEL_SERVICE_NAME` | OTEL service name (optional Vault override) |
+| `OTEL_RESOURCE_ATTRIBUTES` | OTEL resource attributes (optional Vault override) |
+
+## Observability Wiring (Infra-014)
+
+Backend and browser frontend both emit OpenTelemetry traces to the single shared
+SigNoz collector; OpenPanel analytics uses a per-environment client-id. None of this
+is hand-set per env — it is injected as config-as-code at deploy time. The shared
+image stays environment-agnostic (promote-not-rebuild): FE OTLP and OpenPanel values
+are runtime env, not build-time baked.
+
+### Backend OTEL_* — rendered by `secrets.ctmpl` (`10.app/` and `preview/`)
+
+Templated deterministically from the deploy context (a Vault value at
+`secret/data/finance_report/<env>/app`, if set, still wins as an escape hatch):
+
+| Var | Rendered default |
+|-----|------------------|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://platform-signoz-otel-collector:4318` (Docker-internal; all envs, no suffix) |
+| `OTEL_SERVICE_NAME` | `finance-report-backend` |
+| `OTEL_RESOURCE_ATTRIBUTES` | `deployment.environment=<alias>,service.version=<git sha>` |
+
+`<git sha>` comes from `GIT_COMMIT_SHA` passed into the vault-agent container by the
+deploy primitive (`unknown` fallback). For `preview/`, `<alias>` is the per-alias ENV
+(`main` / `pr-<N>` / `commit-<sha7>`), not the secrets-source env — preview spans stay
+filterable by environment while still sourcing app secrets from `PREVIEW_SECRET_ENV`.
+
+### Frontend NEXT_PUBLIC_OTEL_* — runtime env in `compose.yaml` (`10.app/` and `preview/`)
+
+The browser cannot reach the Docker-internal collector, so FE OTLP goes through the
+single public ingest domain (see SigNoz / `ops.observability.md`):
+
+| Var | Value |
+|-----|-------|
+| `NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT` | `https://otel.${INTERNAL_DOMAIN}/v1/traces` (CORS-restricted + static bearer token, rate-limited at Traefik) |
+| `NEXT_PUBLIC_DEPLOYMENT_ENVIRONMENT` | `${ENV}` (mirrors the backend `deployment.environment` so FE/BE spans correlate) |
+| `NEXT_PUBLIC_GIT_SHA` | `${GIT_COMMIT_SHA}` |
+
+### OpenPanel `OPENPANEL_CLIENT_ID` — per-env, selected in `deploy.py`
+
+`deploy.py` `openpanel_clients` maps `ENV` → client-id (production / staging /
+preview); `OPENPANEL_CLIENT_ID` is injected as runtime env in both compose files. The
+`preview` id is a placeholder until the real OpenPanel project is minted (see Infra-014
+RUNBOOK). Analytics queries use the shipped `common/observability/openpanel_query.py`
+CLI with `secret/platform/<env>/openpanel/api_key`.
 
 ## Quick Start
 
