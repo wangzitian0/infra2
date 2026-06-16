@@ -14,6 +14,11 @@ name: Deploy (deploy_v2)
 # prod safety: RL-DATA-1 is deny-by-default in deploy_v2 — a prod deploy must pass BOTH
 # staging_validated=true (staging-first) and code_reviewed=true (reviewed code on prod
 # data), or the front door fails closed before any side effect.
+#
+# Pre-deploy canary GATE (staging/prod): before touching a real fixed env, the preflight_canary
+# job canaries the EXACT (version_ref, iac_ref) on the throwaway slot; the real deploy job runs
+# only if that canary is green (or skipped for preview types / skip_canary). A broken deploy
+# path is caught on a disposable stack, never on real prod data. skip_canary=true bypasses it.
 
 on:
   workflow_dispatch:
@@ -50,6 +55,11 @@ on:
         required: false
         type: boolean
         default: false
+      skip_canary:
+        description: "skip the pre-deploy canary gate (staging/prod only; emergency)"
+        required: false
+        type: boolean
+        default: false
       no_wait:
         description: "do not health-check after deploy"
         required: false
@@ -69,8 +79,61 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Pre-deploy gate: canary the EXACT (version_ref, iac_ref) about to ship to a fixed env on
+  # the throwaway pr-<N> slot. Green proves the deploy path + this artifact actually deploy
+  # before we touch real staging/prod data. Only gates staging/prod (preview types already
+  # ARE throwaway deploys). Shares the canary concurrency group so it never races the
+  # scheduled/post-merge canary for the reserved slot. skip_canary is the emergency bypass.
+  preflight_canary:
+    name: preflight canary
+    if: >-
+      ${{ (github.event.inputs.type == 'staging' || github.event.inputs.type == 'prod')
+          && github.event.inputs.skip_canary != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: deploy-v2-canary
+      cancel-in-progress: false
+    env:
+      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+      INTERNAL_DOMAIN: ${{ github.event.inputs.domain || 'zitian.party' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install runtime dependencies
+        run: python -m pip install httpx python-dotenv rich
+      - name: Canary the artifact before the real deploy
+        env:
+          VERSION_REF_INPUT: ${{ github.event.inputs.version_ref || 'main' }}
+          IAC_REF_INPUT: ${{ github.event.inputs.iac_ref || 'main' }}
+          DOMAIN_INPUT: ${{ github.event.inputs.domain || 'zitian.party' }}
+          TIMEOUT_INPUT: ${{ github.event.inputs.timeout || '600' }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
+            echo "::error::DOKPLOY_API_KEY secret is required for the preflight canary."
+            exit 1
+          fi
+          echo "Preflighting $VERSION_REF_INPUT (iac $IAC_REF_INPUT) on the canary slot..."
+          python -m tools.deploy_v2_canary \
+            --version-ref "$VERSION_REF_INPUT" \
+            --iac-ref "$IAC_REF_INPUT" \
+            --domain "$DOMAIN_INPUT" \
+            --timeout "$TIMEOUT_INPUT"
+
   deploy:
     name: deploy_v2 ${{ github.event.inputs.type }}
+    needs: [preflight_canary]
+    # proceed when the canary passed, OR when it was skipped (preview types / skip_canary) —
+    # but NEVER when it failed: a red canary means the deploy path is broken, so abort.
+    if: >-
+      ${{ always()
+          && (needs.preflight_canary.result == 'success'
+              || needs.preflight_canary.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:

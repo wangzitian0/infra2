@@ -30,7 +30,10 @@ on:
       - "tools/resolve_deploy_ref.py"
       - "tools/preview_lifecycle.py"
       - "libs/dokploy.py"
-      - "finance_report/finance_report/preview/compose.yaml"
+      # the WHOLE preview template is cloned + mounted at deploy time (compose.yaml AND
+      # vault-agent.hcl / secrets.ctmpl / vault-policy.hcl) — any of them changes the live
+      # deploy, so re-canary on any of them, not just the compose file.
+      - "finance_report/finance_report/preview/**"
       - ".github/workflows/deploy-v2-canary.yml"
   workflow_dispatch:
     inputs:
