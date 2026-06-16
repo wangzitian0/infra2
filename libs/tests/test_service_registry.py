@@ -18,11 +18,11 @@ def test_reader_extracts_known_deployer_facts() -> None:
 
     signoz = attrs["platform/signoz"]
     assert signoz.prod_only is True
-    # Infra-014: SigNoz routing is compose-owned (explicit Traefik labels for the Web
-    # UI + the otel-collector public ingest), so Dokploy domain generation is disabled
-    # (subdomain=None) to keep routing single-source. authentik below still covers the
-    # string-subdomain reader path.
-    assert signoz.subdomain is None
+    # Infra-014 follow-up: SigNoz routing is Dokploy-managed again. The base flow
+    # registers the Web UI domain from subdomain="signoz", and deploy.py registers the
+    # second otel-collector ingest domain via an extra ensure_domains call. No
+    # hand-written Traefik labels, so domain generation stays enabled.
+    assert signoz.subdomain == "signoz"
 
     authentik = attrs["platform/authentik"]
     assert authentik.prod_only is False

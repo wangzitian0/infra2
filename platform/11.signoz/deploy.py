@@ -7,7 +7,7 @@ from tempfile import NamedTemporaryFile
 
 from libs.deployer import Deployer, make_tasks
 from libs.console import success, info, run_with_status, error, warning
-from libs.common import generate_password
+from libs.common import service_domain
 
 shared_tasks = sys.modules.get("platform.11.signoz.shared")
 
@@ -19,19 +19,23 @@ class SigNozDeployer(Deployer):
     # Observability — single prod instance; all envs ship here. No staging copy.
     prod_only = True
 
-    # Routing is compose-owned (explicit Traefik labels in compose.yaml for both the
-    # signoz Web UI and the otel-collector public ingest, Infra-014), so Dokploy domain
-    # generation MUST be disabled to keep routing single-source (subdomain=None) — see
-    # docs/ssot/platform.domain.md and libs/tests/test_domain_routing_policy.py.
-    subdomain = None
+    # Routing is Dokploy-managed (Infra-014 follow-up): the base deployer flow
+    # registers the SigNoz Web UI domain (signoz.<domain> → signoz:8080) from these
+    # attributes, and composing() below registers the SECOND domain (otel.<domain> →
+    # otel-collector:4318) for the public browser-OTLP ingest. No hand-written Traefik
+    # labels in compose.yaml — see docs/ssot/platform.domain.md and
+    # libs/tests/test_domain_routing_policy.py.
+    subdomain = "signoz"
     service_port = 8080  # SigNoz unified container port
     service_name = "signoz"
 
+    # Public browser-OTLP ingest domain: otel.<domain> → otel-collector:4318.
+    otel_ingest_subdomain = "otel"
+    otel_ingest_service_name = "otel-collector"
+    otel_ingest_port = 4318
+
     # SigNoz specific secret
     secret_key = "jwt_secret"
-    # Infra-014: Vault key (under secret/platform/<env>/signoz) holding the static
-    # bearer token that gates the public browser-OTLP ingest domain otel.<domain>.
-    otel_ingest_token_key = "otel_ingest_token"
 
     @classmethod
     def pre_compose(cls, c):
@@ -103,22 +107,6 @@ class SigNozDeployer(Deployer):
             return None
         jwt_secret = secrets_backend.get(cls.secret_key)
 
-        # Infra-014: static bearer token for the public browser-OTLP ingest domain
-        # otel.${INTERNAL_DOMAIN}. NON-secret publishable ingest key (it is shipped to
-        # the browser as NEXT_PUBLIC_*), but we keep it in Vault so it can be rotated
-        # without a code change. Auto-provision on first deploy, mirroring the
-        # jwt_secret flow above. Consumed by the otel-collector Traefik Header() rule.
-        otel_ingest_token = secrets_backend.get(cls.otel_ingest_token_key)
-        if not otel_ingest_token:
-            otel_ingest_token = generate_password(32)
-            if secrets_backend.set(cls.otel_ingest_token_key, otel_ingest_token):
-                warning(
-                    f"Generated new OTLP ingest token in Vault: {cls.otel_ingest_token_key}"
-                )
-            else:
-                error("Failed to store OTLP ingest token in Vault")
-                return None
-
         success("pre_compose complete")
         domain_suffix = e.get("ENV_DOMAIN_SUFFIX", "")
         info(
@@ -126,13 +114,60 @@ class SigNozDeployer(Deployer):
         )
         info("OTLP endpoints: 4317 (gRPC), 4318 (HTTP)")
         info(
-            f"Public browser-OTLP ingest: https://otel.{e.get('INTERNAL_DOMAIN', 'localhost')}/v1/traces"
+            f"Public browser-OTLP ingest (CORS-gated, no bearer): "
+            f"https://otel.{e.get('INTERNAL_DOMAIN', 'localhost')}/v1/traces"
         )
 
         result = cls.compose_env_base(e)
         result["SIGNOZ_JWT_SECRET"] = jwt_secret
-        result["OTEL_INGEST_TOKEN"] = otel_ingest_token
         return result
+
+    @classmethod
+    def composing(cls, c, env_vars):
+        """Deploy via the base flow, then register the SECOND Dokploy-managed domain.
+
+        The base composing() registers ONE domain (signoz.<domain> → signoz:8080) from
+        cls.subdomain/service_port/service_name. The public browser-OTLP ingest needs a
+        second domain on the same compose (otel.<domain> → otel-collector:4318), so we
+        add an extra ensure_domains() call here. This keeps routing Dokploy-managed (no
+        hand-written Traefik labels) and is idempotent — ensure_domains skips domains
+        that already exist.
+        """
+        compose_id = super().composing(c, env_vars)
+
+        e = cls.env()
+        otel_host = service_domain(cls.otel_ingest_subdomain, e)
+        if not otel_host:
+            warning("OTLP ingest domain skipped: INTERNAL_DOMAIN missing")
+            return compose_id
+
+        from libs.dokploy import get_dokploy
+
+        domain = e.get("INTERNAL_DOMAIN")
+        client = get_dokploy(host=f"cloud.{domain}" if domain else None)
+
+        info(f"Ensuring OTLP ingest domain: {otel_host}")
+        result = client.ensure_domains(
+            compose_id=compose_id,
+            desired_domains=[
+                {"host": otel_host, "port": cls.otel_ingest_port, "https": True}
+            ],
+            service_name=cls.otel_ingest_service_name,
+        )
+        if result["created"] > 0:
+            success(f"OTLP ingest domain configured: https://{otel_host}")
+            info("Redeploying to apply domain labels...")
+            cls._deploy_compose_with_record_check(client, compose_id)
+            success("OTLP ingest domain labels updated")
+        elif result["skipped"] > 0:
+            info(f"OTLP ingest domain already configured: {otel_host}")
+        for conflict in result["conflicts"]:
+            warning(
+                f"Domain conflict: {conflict['host']} exists with port "
+                f"{conflict['existing_port']}, need {conflict['desired_port']}"
+            )
+
+        return compose_id
 
 
 if shared_tasks:
