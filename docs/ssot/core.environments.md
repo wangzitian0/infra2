@@ -301,21 +301,27 @@ invoke fr-app.setup       # 域名: report.zitian.party
 
 > **触发真理**：唯一**自动**的目标是 `report-branch-main`（main 预览）—— main 一合并就重新部署，
 > 它就是「永远看到 main 现在长啥样」的活环境。**所有 staging / prod 都是手动**，且部署 **release tag**：
-> staging 的目标是和 prod **一模一样**，所以钉**同一个 tag**（promote-not-rebuild，不是部 main sha）。
+> staging 的目标是和 prod **一模一样**，所以钉**同一个 tag**（promote-not-rebuild，不是部署 main sha）。
 > 其余 preview 别名（pr / commit / tag）按需手动起。统一入口是 `tools/deploy_v2.py`（§4.7）。
 > （`report-branch-main` 的自动触发点在 **app 仓库 CI**：app main push → repository_dispatch 调 infra2 的
 > `deploy.yml`；接线为待办。）
 
-| 目标 | 触发 | 部署什么 | 入口 | 数据 | 域名 | 生命周期 |
+下表「入口」列是**示意**（说明用哪个 type/服务）；可运行命令还需 `--iac-ref <ref> --domain <domain>`，
+**prod 另需 `--staging-validated --code-reviewed`**（deploy_v2 对 prod 数据 deny-by-default，缺了直接 fail-closed）。
+
+| 目标 | 触发 | 部署什么 | 入口（示意）| 数据 | 域名 | 生命周期 |
 |------|------|---------|------|------|------|---------|
 | **report-branch-main**（preview）| **自动**（main 合并即发）| main 尖端 | `deploy_v2 --type preview/branch` | 临时 DB | `report-branch-main.<domain>` | 显式 teardown 前 |
-| **其余 preview**（pr/commit/tag）| 手动按需 | PR# / sha / tag | `deploy_v2 --type preview/{pr,commit,tag}` | 临时 DB | 显式 teardown 前 |
-| **staging** | **手动** | **release tag**（钉和 prod 同一个）| `deploy_v2 --type staging --version-ref vX.Y.Z` | staging 数据 | 长期（同构 prod）|
-| **prod** | **手动** | **同一个 release tag**（promote-not-rebuild）| `deploy_v2 --type prod --version-ref vX.Y.Z` | 真实 prod 数据 | 长期 |
+| **其余 preview**（pr/commit/tag）| 手动按需 | PR# / sha / tag | `deploy_v2 --type preview/{pr,commit,tag}` | 临时 DB | `report-{pr-N,commit-sha7,tag-slug}.<domain>` | 显式 teardown 前 |
+| **staging** | **手动** | **release tag**（钉和 prod 同一个）| `deploy_v2 --type staging --version-ref vX.Y.Z` | staging 数据 | `report-staging.<domain>` | 长期（同构 prod）|
+| **prod** | **手动** | **同一个 release tag**（promote-not-rebuild）| `deploy_v2 --type prod --version-ref vX.Y.Z --staging-validated --code-reviewed` | 真实 prod 数据 | `report.<domain>` | 长期 |
 
-> **平台服务**（iac_pinned）无 preview，只有 staging / prod，**同样手动**；它们的「版本」是 `iac_ref`，
-> staging≡prod 同样靠钉**同一个 infra2 release tag**（`deploy_v2 --service platform/X --type staging --iac-ref vX.Y.Z`）。
-> 经 iac_runner webhook 部署（§4.7.2）。CI（lint + 单测 + E2E）**不**触发任何 staging/prod 部署。
+> **平台服务**（iac_pinned）无 preview，只有 staging / prod。
+> **目标态**：和 app 一样**手动 + 钉 tag** —— 它们的「版本」是 `iac_ref`，staging≡prod 靠钉**同一个 infra2
+> release tag**（`deploy_v2 --service platform/X --type staging --iac-ref vX.Y.Z`），经 iac_runner webhook（§4.7.2）。
+> **现状（cutover 未做）**：平台**仍**由 `.github/workflows/deploy-platform.yml` 在 main push 时**自动**部署，
+> 且 deploy_v2 平台前门刚落地、尚未接管（§4.7「现状边界」）。cutover = 删掉那个 auto-push、改走上面的手动 deploy_v2。
+> CI（lint + 单测 + E2E）**不**触发任何 staging/prod 部署。
 
 **preview 多别名模型**（每个别名 = 一套独立的 Dokploy compose 栈）：
 
