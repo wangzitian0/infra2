@@ -142,12 +142,16 @@ finance_report 同时上报**后端**与**浏览器前端**两条遥测链路，
 
 ### 4.4 公网浏览器 OTLP ingest：`otel.${INTERNAL_DOMAIN}`（Infra-014）
 
-collector 的 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一公网面是单一 ingest 域名 `otel.${INTERNAL_DOMAIN}`，在 Traefik 终止后转发到 `:4318`（OTLP HTTP）。两道闸在 **Traefik 上游**强制（collector 自身只加 CORS）：
+collector 的 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一公网面是单一 ingest 域名 `otel.${INTERNAL_DOMAIN}`，转发到 `:4318`（OTLP HTTP）。该域名是 **Dokploy 托管**的（无手写 Traefik 标签）：`SigNozDeployer` 的 `composing()` 通过额外的 `client.ensure_domains(..., service_name="otel-collector")` 调用注册它（Web UI 域名 `signoz.<domain>` → `signoz:8080` 仍由基类流程从 `subdomain="signoz"` 注册）。
 
-1. **静态 bearer token**：otel-collector 的 Traefik router 携带 `Header()` 匹配（`HeadersRegexp(Authorization, ^Bearer <token>$)`），token 错/缺则 router 不匹配 → Traefik 404，后端永不被触达。开源版 Traefik 无静态-token 中间件（JWT 中间件为企业版），故用 `Header()` 规则等价实现，与 `openpanel-api` 的 router 收敛方式一致。token 为**可发布的 ingest key**（会下发到浏览器），存于 Vault `secret/platform/<env>/signoz` 键 `otel_ingest_token`，由 `platform/11.signoz/deploy.py` 注入为 `${OTEL_INGEST_TOKEN}`，首次部署自动生成。
-2. **限流**：`ratelimit` 中间件按来源 IP 限制公网 key 的突发滥用（50 req/s，burst 100）。
+公网 ingest **没有 bearer token**：浏览器无法保管秘密，下发到页面的静态 token 不构成凭据，因此 #360 的 `HeadersRegexp(Authorization, ^Bearer <token>$)` 匹配器与 Vault `otel_ingest_token` 已删除。改由两道**应用层**闸守护：
 
-`otel.${INTERNAL_DOMAIN}` 落在 Cloudflare 泛域名 `*.${INTERNAL_DOMAIN} → VPS_HOST` 之内，无需新增显式 DNS 记录（见 [platform.domain.md](platform.domain.md)）。CORS 允许来源在 `platform/11.signoz/otel-collector-config.yaml` 的 OTLP HTTP receiver 上声明，必须与 report FE 域名保持同步。
+1. **CORS 允许列表**：`platform/11.signoz/otel-collector-config.yaml` 的 OTLP HTTP receiver 仅对已知 report FE 域名回显 CORS，必须与 FE 域名保持同步。
+2. **collector 限额**：pipeline 上的 `memory_limiter` 在突发下软限内存、提前拒绝数据，避免被未鉴权的公网 ingest 打爆。
+
+> **TODO（Infra-014）**：边缘按来源 IP 限流仍待补（应通过 **Dokploy 托管**的 Traefik ratelimit 中间件实现，**禁止**手写 compose 标签）。
+
+`otel.${INTERNAL_DOMAIN}` 落在 Cloudflare 泛域名 `*.${INTERNAL_DOMAIN} → VPS_HOST` 之内，无需新增显式 DNS 记录（见 [platform.domain.md](platform.domain.md)）。
 
 ### 4.5 查询遥测与分析数据（已发布 CLI，勿重造）
 
@@ -200,7 +204,7 @@ ${DATA_PATH}/
 - **Web UI**: `https://signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`
 - **OTLP gRPC**: `platform-signoz-otel-collector:4317` (Docker 网络内)
 - **OTLP HTTP**: `platform-signoz-otel-collector:4318` (Docker 网络内)
-- **公网浏览器 OTLP ingest**: `https://otel.${INTERNAL_DOMAIN}/v1/traces` (bearer token + 限流 + CORS，见 4.4)
+- **公网浏览器 OTLP ingest**: `https://otel.${INTERNAL_DOMAIN}/v1/traces` (Dokploy 托管域名；CORS + collector 限额，无 bearer，见 4.4)
 
 ### 5.4 容量规划
 

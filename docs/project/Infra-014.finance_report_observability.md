@@ -31,11 +31,16 @@ Architecture is fixed and intentionally minimal:
   distinguished downstream by the `deployment.environment` resource attribute, not by
   per-env collectors or per-env routes. See
   [core.environments.md](../ssot/core.environments.md) telemetry-identity rules.
-- **One public ingest domain.** `otel.${INTERNAL_DOMAIN}` is the only public surface,
-  terminated at Traefik and forwarded to `:4318`. It is guarded by (1) a static bearer
-  token enforced as a router `Header()` match (open-source Traefik has no static-token
-  middleware; the JWT middleware is Enterprise-only) and (2) a rate-limit middleware.
-  The collector itself only adds a CORS allowlist for the known FE origins.
+- **One public ingest domain, Dokploy-managed.** `otel.${INTERNAL_DOMAIN}` is the only
+  public surface, forwarded to `:4318`. Both this domain and the SigNoz Web UI domain
+  are registered through Dokploy (no hand-written Traefik labels in `compose.yaml`):
+  the base deployer flow registers the Web UI from `subdomain="signoz"`, and
+  `SigNozDeployer.composing()` registers the second domain via an extra
+  `ensure_domains(..., service_name="otel-collector")` call. There is **no bearer
+  token** — a browser cannot hold a secret, so the page-shipped token of the original
+  #360 design was not a credential. Public ingest is instead protected by a CORS
+  allowlist for the known FE origins plus collector-side limits (`memory_limiter`); an
+  edge per-IP rate limit remains a documented TODO (as a Dokploy-managed middleware).
 - **Promote-not-rebuild image.** FE OTLP config (`NEXT_PUBLIC_OTEL_*`) and OpenPanel
   client-ids are injected as runtime env read server-side, not baked at build time, so
   the same image is environment-agnostic across promotions.
@@ -46,10 +51,10 @@ Architecture is fixed and intentionally minimal:
 - [x] Frontend `NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT` /
       `NEXT_PUBLIC_DEPLOYMENT_ENVIRONMENT` / `NEXT_PUBLIC_GIT_SHA` in compose
       (app + preview).
-- [x] Public ingest domain `otel.${INTERNAL_DOMAIN}`: Traefik router on the
-      otel-collector with a bearer-token `Header()` match + rate-limit middleware,
-      Vault-sourced token (`secret/platform/<env>/signoz` → `otel_ingest_token`),
-      and a CORS allowlist on the OTLP HTTP receiver.
+- [x] Public ingest domain `otel.${INTERNAL_DOMAIN}`: Dokploy-managed domain on the
+      otel-collector (`:4318`), registered via `SigNozDeployer.composing()`; protected
+      by a CORS allowlist + collector `memory_limiter` (no bearer token). The SigNoz
+      Web UI domain is restored to Dokploy management (`subdomain="signoz"`).
 - [x] OpenPanel per-env client-ids — add `preview` to the `openpanel_clients` map
       (placeholder UUID + RUNBOOK to mint the real project).
 - [x] SSOT + module docs updated (`ops.observability.md`, `platform.openpanel.md`,
@@ -63,14 +68,14 @@ Architecture is fixed and intentionally minimal:
 | AC | Description | Proof |
 |----|-------------|-------|
 | Infra-014.1 | Backend telemetry reaches the single shared SigNoz collector per env: `secrets.ctmpl` (app + preview) renders non-empty `OTEL_EXPORTER_OTLP_ENDPOINT` (`http://platform-signoz-otel-collector:4318`), `OTEL_SERVICE_NAME` (`finance-report-backend`), and `OTEL_RESOURCE_ATTRIBUTES` carrying `deployment.environment=<alias>,service.version=<git sha>`, with a Vault escape hatch that still wins when set. Preview renders the per-alias ENV (`main`/`pr-<N>`/`commit-<sha7>`), not the secrets-source env. | `finance_report/finance_report/10.app/secrets.ctmpl`, `finance_report/finance_report/preview/secrets.ctmpl`, `docs/ssot/ops.observability.md` |
-| Infra-014.2 | The browser frontend ingests OTLP through exactly one public domain `otel.${INTERNAL_DOMAIN}` → `platform-signoz-otel-collector:4318`, gated by a static bearer token (Traefik router `Header()` match, token from Vault `secret/platform/<env>/signoz` key `otel_ingest_token`) and a rate-limit middleware, with a CORS allowlist on the OTLP HTTP receiver covering the report FE origins; the internal gRPC receiver stays unpublished. | `platform/11.signoz/compose.yaml`, `platform/11.signoz/deploy.py`, `platform/11.signoz/otel-collector-config.yaml`, `finance_report/finance_report/10.app/compose.yaml`, `finance_report/finance_report/preview/compose.yaml` |
+| Infra-014.2 | The browser frontend ingests OTLP through exactly one public domain `otel.${INTERNAL_DOMAIN}` → `platform-signoz-otel-collector:4318`. The domain is **Dokploy-managed** (registered by `SigNozDeployer.composing()` via `ensure_domains(..., service_name="otel-collector")`; no hand-written Traefik router/service/middleware labels in `compose.yaml`), and so is the SigNoz Web UI domain (`subdomain="signoz"` → `signoz:8080`). There is **no bearer token**: public ingest is gated by a CORS allowlist on the OTLP HTTP receiver covering the report FE origins plus a collector `memory_limiter`; the internal gRPC receiver stays unpublished. | `platform/11.signoz/compose.yaml`, `platform/11.signoz/deploy.py`, `platform/11.signoz/otel-collector-config.yaml`, `finance_report/finance_report/10.app/compose.yaml`, `finance_report/finance_report/preview/compose.yaml` |
 | Infra-014.3 | OpenPanel analytics has a per-env client-id for production, staging and preview: the `openpanel_clients` map resolves a client-id for `env_name=preview` (placeholder until minted), and `OPENPANEL_CLIENT_ID` is injected as runtime env in app + preview compose. | `finance_report/finance_report/10.app/deploy.py`, `finance_report/finance_report/10.app/compose.yaml`, `finance_report/finance_report/preview/compose.yaml`, `docs/ssot/platform.openpanel.md` |
 | Infra-014.4 | Both analytics and telemetry are queryable via the already-shipped CLIs: SigNoz logs/traces via `invoke signoz.shared.query-logs` / `invoke signoz.shared.list-services`, and OpenPanel events via the app repo's `common/observability/openpanel_query.py` (using `secret/platform/<env>/openpanel/api_key`). Documented, not reimplemented. | `platform/11.signoz/shared_tasks.py` (`query_logs`, `list_services`), `docs/ssot/ops.observability.md`, `docs/ssot/platform.openpanel.md` |
 
 ## Deliverables
 - Per-env backend `OTEL_*` rendering in both `secrets.ctmpl` files.
 - Per-env frontend `NEXT_PUBLIC_OTEL_*` in both compose files.
-- Public ingest route + token + rate-limit + CORS on SigNoz.
+- Public ingest domain (Dokploy-managed) + CORS allowlist + collector `memory_limiter` on SigNoz (no bearer).
 - `preview` OpenPanel client-id mapping in `deploy.py`.
 - Updated SSOT docs and the app module README.
 
@@ -81,9 +86,10 @@ Architecture is fixed and intentionally minimal:
 | Date | Change |
 |------|--------|
 | 2026-06-16 | Initialized project; config-as-code wiring + public ingest route + docs. |
+| 2026-06-16 | Follow-up: both domains Dokploy-managed (dropped hand-written Traefik routers); removed unusable browser bearer; ingest now CORS allowlist + collector `memory_limiter`. |
 
 ## Verification
-- [ ] `docker compose -f platform/11.signoz/compose.yaml config` (CI `validate-compose`) passes with `OTEL_INGEST_TOKEN`/`INTERNAL_DOMAIN` set.
+- [ ] `docker compose -f platform/11.signoz/compose.yaml config` (CI `validate-compose`) passes with `INTERNAL_DOMAIN` set.
 - [ ] `ruff check platform/ finance_report/` passes (CI `lint-python`).
 - [ ] `mkdocs build --config-file docs/mkdocs.yml` builds with this page in nav.
 - [ ] Post-merge RUNBOOK executed (Vault token + OpenPanel client-id + redeploy) — see PR body.
