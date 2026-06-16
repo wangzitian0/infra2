@@ -179,3 +179,82 @@ def test_run_canary_teardown_failure_does_not_mask_deploy_error(monkeypatch, cap
     with pytest.raises(RuntimeError, match="composeStatus=error"):
         run_canary(client=object(), domain="z.p", version_ref="main")
     assert "teardown failed" in capsys.readouterr().err
+
+
+# --- probe alerting: failure classification + out-of-band delivery ----------
+
+
+def test_failure_domain_classification():
+    assert canary.failure_domain(httpx.HTTPError("x")) == "deploy-v2-control-plane"
+    assert canary.failure_domain(TimeoutError()) == "deploy-v2-health"
+    assert canary.failure_domain(RuntimeError("composeStatus=error")) == "deploy-v2-health"
+    assert canary.failure_domain(ValueError("bad ref")) == "deploy-v2-configuration"
+
+
+class _Args:
+    version_ref = "main"
+    iac_ref = "main"
+    domain = "z.p"
+
+
+def test_alert_failure_is_best_effort(monkeypatch, capsys):
+    import libs.alerting as al
+
+    def boom(env, text, **kw):
+        raise RuntimeError("no webhook configured")
+
+    monkeypatch.setattr(al, "deliver_out_of_band_text", boom)
+    # must NOT raise — alerting can never crash the probe
+    canary.alert_failure({}, domain="deploy-v2-health", detail="x", args=_Args())
+    assert "alert delivery failed" in capsys.readouterr().err
+
+
+def _main_with(monkeypatch, run_impl):
+    import libs.alerting as al
+    import libs.dokploy as dk
+
+    monkeypatch.setattr(dk, "get_dokploy", lambda host: object())
+    monkeypatch.setattr(canary, "run_canary", run_impl)
+    sent = {}
+    monkeypatch.setattr(
+        al, "deliver_out_of_band_text", lambda env, text, **kw: sent.update(text=text)
+    )
+    return sent
+
+
+def test_main_alerts_out_of_band_on_failure(monkeypatch):
+    def boom(**kw):
+        raise httpx.HTTPError("502 Bad Gateway")
+
+    sent = _main_with(monkeypatch, boom)
+    rc = canary.main(
+        ["--version-ref", "main", "--iac-ref", "main", "--domain", "z.p", "--alert-on-failure"]
+    )
+    assert rc == 1
+    assert "deploy-v2-control-plane" in sent["text"]  # classified + paged
+
+
+def test_main_no_alert_without_flag(monkeypatch):
+    def boom(**kw):
+        raise httpx.HTTPError("502")
+
+    sent = _main_with(monkeypatch, boom)
+    rc = canary.main(["--version-ref", "main", "--iac-ref", "main", "--domain", "z.p"])
+    assert rc == 1 and "text" not in sent  # PR-style run: no out-of-band page
+
+
+def test_main_treats_leak_as_cleanup_failure(monkeypatch):
+    from tools.deploy_v2_canary import CanaryResult
+
+    def leaked(**kw):
+        return CanaryResult(
+            ok=True, target=_fake_target(), alias="pr-999", url="u",
+            healthy=True, torn_down=False,
+        )
+
+    sent = _main_with(monkeypatch, leaked)
+    rc = canary.main(
+        ["--version-ref", "main", "--iac-ref", "main", "--domain", "z.p", "--alert-on-failure"]
+    )
+    assert rc == 1
+    assert "deploy-v2-cleanup" in sent["text"]  # healthy but leaked -> still a failure

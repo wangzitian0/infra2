@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from dataclasses import dataclass
@@ -125,6 +126,49 @@ def run_canary(
     )
 
 
+def failure_domain(exc: Exception) -> str:
+    """Classify an EXCEPTION-path canary failure into a domain (route-canary-style taxonomy).
+
+    Lets an alert say WHERE the deploy path broke. The full domain set (exact returned values):
+    - ``deploy-v2-control-plane``  — Dokploy API / transport failure (httpx).
+    - ``deploy-v2-health``         — deploy errored (composeStatus=error) or never converged.
+    - ``deploy-v2-configuration``  — a bad ref / form / contract violation before any deploy.
+    - ``deploy-v2-cleanup``        — healthy but the stack leaked (torn_down=false). NOT
+                                     returned here (no exception) — ``main`` assigns it from
+                                     the result. This function covers only the exception path.
+    """
+    if isinstance(exc, httpx.HTTPError):
+        return "deploy-v2-control-plane"
+    if isinstance(exc, (TimeoutError, RuntimeError)):
+        return "deploy-v2-health"
+    return "deploy-v2-configuration"  # ValueError: bad version_ref / form / contract
+
+
+def alert_failure(env, *, domain: str, detail: str, args) -> None:
+    """Best-effort out-of-band alert that infra2's deploy-path probe is RED.
+
+    Uses the SAME out-of-band Feishu path the watchdog uses (survives infra2 being down).
+    NEVER raises — a missing webhook or a delivery error must not change the probe's exit
+    code. A red deploy canary means the shared deploy_v2 path is broken, so a real
+    staging/prod deploy would likely fail the same way.
+    """
+    from libs.alerting import deliver_out_of_band_text
+
+    text = (
+        "🔴 deploy_v2 canary FAILED — infra2 deploy-path probe is RED\n"
+        f"failure_domain: {domain}\n"
+        f"version_ref={args.version_ref} iac_ref={args.iac_ref} domain={args.domain}\n"
+        f"detail: {detail}\n"
+        "→ the shared deploy_v2 path is broken; a real staging/prod deploy would likely "
+        "fail the same way."
+    )
+    try:
+        deliver_out_of_band_text(env, text)
+        print("out-of-band alert delivered", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 — alerting must never crash the probe
+        print(f"WARNING: out-of-band alert delivery failed: {exc}", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="deploy_v2 acceptance canary")
     parser.add_argument(
@@ -145,12 +189,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--no-wait", action="store_true", help="do not health-check")
     parser.add_argument("--timeout", type=int, default=600, help="health-check seconds")
+    parser.add_argument(
+        "--alert-on-failure",
+        action="store_true",
+        help="on failure, send an out-of-band Feishu alert (the deploy-path probe is RED). "
+        "Use for the post-merge/scheduled probe; omit on PRs (a PR failure is CI feedback, "
+        "not an infra incident).",
+    )
     args = parser.parse_args(argv)
 
     # Imported lazily so importing the module (and its unit tests) needs no Dokploy creds.
     from libs.dokploy import get_dokploy
 
     client = get_dokploy(host=f"cloud.{args.domain}")
+    domain, detail, rc = None, None, 0
     try:
         result = run_canary(
             client=client,
@@ -163,22 +215,30 @@ def main(argv: list[str] | None = None) -> int:
         )
     except (ValueError, RuntimeError, TimeoutError, httpx.HTTPError) as exc:
         # httpx.HTTPError covers Dokploy transport/auth/API failures from libs.dokploy —
-        # an acceptance gate must exit cleanly (code 1 + one line), not dump a traceback.
-        print(f"canary failed: {exc}", file=sys.stderr)
-        return 1
-
-    print(
-        json.dumps(
-            {
-                "ok": result.ok,
-                "alias": result.alias,
-                "url": result.url,
-                "healthy": result.healthy,
-                "torn_down": result.torn_down,
-            }
+        # the probe must exit cleanly (code 1 + one line), not dump a traceback.
+        domain, detail, rc = failure_domain(exc), str(exc), 1
+        print(f"canary failed [{domain}]: {exc}", file=sys.stderr)
+    else:
+        print(
+            json.dumps(
+                {
+                    "ok": result.ok,
+                    "alias": result.alias,
+                    "url": result.url,
+                    "healthy": result.healthy,
+                    "torn_down": result.torn_down,
+                }
+            )
         )
-    )
-    return 0 if result.ok or args.no_wait else 1
+        if not (result.ok or args.no_wait):  # deployed but never went healthy
+            domain, detail, rc = "deploy-v2-health", f"healthy={result.healthy}", 1
+        elif not (result.torn_down or args.keep):  # healthy but leaked its stack
+            domain = "deploy-v2-cleanup"
+            detail, rc = f"torn_down={result.torn_down} (possible leak)", 1
+
+    if rc != 0 and args.alert_on_failure:
+        alert_failure(os.environ, domain=domain, detail=detail, args=args)
+    return rc
 
 
 if __name__ == "__main__":
