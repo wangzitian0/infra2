@@ -6,10 +6,32 @@ name: deploy_v2 Acceptance Canary
 # its ephemeral DB) back down. A green run here is the live proof that deploy_v2 deploys —
 # the thing the trio (#341/#342/#343) could only unit-test with mocked backends.
 #
-# Manual + scheduled. NOT wired to push: this performs a live deploy, so it is operator-
-# triggered (or a low-frequency soak) — never on every commit.
+# Three triggers:
+#  - push to main, PATH-FILTERED to the deploy tooling: a post-merge smoke test. A merge that
+#    changes how we deploy (deploy_v2 / backends / resolver / Dokploy client / preview template)
+#    immediately re-proves the whole path still deploys end-to-end against real Dokploy. It
+#    canaries main/main (the push event carries no inputs, so the `|| 'main'` fallbacks apply).
+#    This CANNOT block the merge (it already landed) — it is an early-warning alarm that the
+#    deploy path is broken BEFORE someone attempts a real staging/prod deploy.
+#  - schedule: a low-frequency live soak so an out-of-band regression (Dokploy drift) surfaces.
+#  - workflow_dispatch: operator-driven, any ref.
+# The reserved pr-<N> slot + concurrency group serialize runs; #355 made it fast-fail on a
+# broken deploy and tear down cleanly, so a post-merge run is cheap and self-cleaning.
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "tools/deploy_v2.py"
+      - "tools/deploy_v2_canary.py"
+      - "tools/deploy_primitive.py"
+      - "tools/deploy_contract.py"
+      - "tools/deploy_env_config.py"
+      - "tools/resolve_deploy_ref.py"
+      - "tools/preview_lifecycle.py"
+      - "libs/dokploy.py"
+      - "finance_report/finance_report/preview/compose.yaml"
+      - ".github/workflows/deploy-v2-canary.yml"
   workflow_dispatch:
     inputs:
       version_ref:
