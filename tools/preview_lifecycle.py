@@ -36,6 +36,8 @@ from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+import httpx  # the injected Dokploy client raises httpx errors on a transient API blip
+
 from tools.deploy_env_config import (
     PREVIEW_ENVIRONMENT,
     PREVIEW_PROJECT,
@@ -295,11 +297,21 @@ def up(
     healthy: bool | None = None
     url = alias.app_url(domain=domain)
     if wait:
+
+        def _deploy_status():
+            # Best-effort: a transient API blip returns None (keep waiting on HTTP); only a
+            # definitive "error" status short-circuits the wait.
+            try:
+                return (client.get_compose(compose_id) or {}).get("composeStatus")
+            except httpx.HTTPError:
+                return None
+
         healthy = _wait_for_health(
             f"{url}/api/health",
             timeout=health_timeout,
             interval=health_interval,
             http_get=http_get,
+            deploy_status=_deploy_status,
             _sleep=_sleep,
             _now=_monotonic,
         )
@@ -379,17 +391,26 @@ def _wait_for_health(
     timeout: int,
     interval: int,
     http_get=None,
+    deploy_status=None,
     _sleep=time.sleep,
     _now=time.monotonic,
 ) -> bool:
     """Poll ``health_url`` until it returns HTTP 200, or the deadline passes.
 
-    Returns True on the first 200, False if the window elapses first. Side-effect free
-    apart from the injected getter, so tests drive it with a fake clock + fake getter.
+    Returns True on the first 200, False if the window elapses first. If ``deploy_status``
+    is given and reports ``"error"``, raise immediately — the deploy itself failed (e.g. an
+    unpublished image or a build error), so the stack can NEVER become healthy and waiting
+    out the full timeout only hides the real reason. Side-effect free apart from the
+    injected getter/status, so tests drive it with a fake clock + fake getter.
     """
     getter = http_get or _http_get
     deadline = _now() + max(0, timeout)
     while True:
+        if deploy_status is not None and deploy_status() == "error":
+            raise RuntimeError(
+                f"deploy failed (Dokploy composeStatus=error) before {health_url} became "
+                "healthy — check the Dokploy deploy log (image not published / build error?)"
+            )
         status, _ = getter(health_url, 10)
         if status == 200:
             return True

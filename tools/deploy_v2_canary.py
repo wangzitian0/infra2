@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from dataclasses import dataclass
 
 import httpx  # transport errors from libs.dokploy surface as httpx exceptions
@@ -37,6 +38,31 @@ from tools.deploy_v2 import _CANARY_PR, deploy_v2
 from tools.preview_lifecycle import down
 
 _APP_SERVICE = "finance_report/app"
+
+
+def _best_effort_down(*, domain: str, client, attempts: int = 3, _sleep=time.sleep) -> bool:
+    """Tear the canary slot down, retrying transient control-plane errors.
+
+    NEVER raises — teardown runs in a ``finally`` and must not mask a deploy error or crash
+    the probe. Returns True if it cleaned up; on ultimate failure it returns False AND logs a
+    loud warning, so a leaked stack is surfaced (not silent — the very gap that orphaned a
+    pr-999 compose when Dokploy 502'd mid-teardown).
+    """
+    last = None
+    for i in range(attempts):
+        try:
+            down("pr", _CANARY_PR, domain=domain, client=client)
+            return True
+        except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+            last = exc
+            if i < attempts - 1:
+                _sleep(2**i)
+    print(
+        f"WARNING: canary teardown failed after {attempts} attempts ({last}); "
+        f"possible leaked stack pr-{_CANARY_PR} — clean it up manually",
+        file=sys.stderr,
+    )
+    return False
 
 
 @dataclass(frozen=True)
@@ -81,9 +107,11 @@ def run_canary(
             timeout=timeout,
         )
     finally:
+        # Best-effort, never-raising teardown: if the deploy above raised (e.g. fast-fail on
+        # an unpublished image), its error still propagates after we clean up — and a flaky
+        # control plane can't leave the slot leaked silently.
         if teardown:
-            down("pr", _CANARY_PR, domain=domain, client=client)
-            torn_down = True
+            torn_down = _best_effort_down(domain=domain, client=client)
 
     healthy = res.detail.get("healthy")
     ok = bool(healthy) if wait else None

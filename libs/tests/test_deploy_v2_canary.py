@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import httpx
 import pytest
 
 import tools.deploy_v2_canary as canary
@@ -123,3 +124,58 @@ def test_version_ref_forwarded(spies):
     run_canary(client=object(), domain="zitian.party", version_ref="v2.0.0")
     assert spies["deploy"]["version_ref"] == "v2.0.0"
     assert spies["down"]["value"] == _CANARY_PR  # slot stays fixed regardless of code
+
+
+# --- best-effort teardown (resilience to a flaky control plane) -------------
+
+
+def test_best_effort_down_retries_then_succeeds(monkeypatch):
+    calls = {"n": 0}
+
+    def flaky(kind, value, **kw):
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise httpx.HTTPError("transient 502")
+
+    monkeypatch.setattr(canary, "down", flaky)
+    ok = canary._best_effort_down(
+        domain="z.p", client=object(), _sleep=lambda *_: None
+    )
+    assert ok is True and calls["n"] == 2
+
+
+def test_best_effort_down_warns_and_returns_false_on_persistent_failure(
+    monkeypatch, capsys
+):
+    calls = {"n": 0}
+
+    def boom(kind, value, **kw):
+        calls["n"] += 1
+        raise httpx.HTTPError("502 persists")
+
+    monkeypatch.setattr(canary, "down", boom)
+    ok = canary._best_effort_down(
+        domain="z.p", client=object(), attempts=3, _sleep=lambda *_: None
+    )
+    assert ok is False
+    assert calls["n"] == 3  # exhausted retries
+    err = capsys.readouterr().err
+    assert "teardown failed" in err and f"pr-{_CANARY_PR}" in err  # loud leak warning
+
+
+def test_run_canary_teardown_failure_does_not_mask_deploy_error(monkeypatch, capsys):
+    # deploy fast-fails (e.g. composeStatus=error) AND teardown can't clean up: the canary
+    # must surface the DEPLOY error (the real cause), not the teardown error, and warn.
+    def boom_deploy(**kw):
+        raise RuntimeError("deploy failed (composeStatus=error)")
+
+    def boom_down(kind, value, **kw):
+        raise httpx.HTTPError("502")
+
+    monkeypatch.setattr(canary, "deploy_v2", boom_deploy)
+    monkeypatch.setattr(canary, "down", boom_down)
+    monkeypatch.setattr(canary.time, "sleep", lambda *_: None)
+
+    with pytest.raises(RuntimeError, match="composeStatus=error"):
+        run_canary(client=object(), domain="z.p", version_ref="main")
+    assert "teardown failed" in capsys.readouterr().err

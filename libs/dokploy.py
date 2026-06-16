@@ -7,6 +7,7 @@ Requires DOKPLOY_API_KEY in environment (generate from /settings/profile).
 
 from __future__ import annotations
 import os
+import time
 import httpx
 from dotenv import load_dotenv
 from libs.common import normalize_env_name as _common_normalize_env_name
@@ -48,8 +49,25 @@ class DokployClient:
                 "DOKPLOY_API_KEY not set. Generate from Dokploy /settings/profile or store in 1Password"
             )
 
-    def _request(self, method: str, endpoint: str, **kwargs) -> dict | list:
-        """Make authenticated request to Dokploy API"""
+    # Gateway blips (the dokploy-traefik in front of the API returns these when the backend
+    # is briefly unresponsive). Safe to retry ONLY on idempotent GETs — a 502/503/504 means
+    # the gateway never relayed a response, but for a POST the backend may still have acted.
+    _TRANSIENT_STATUS = (502, 503, 504)
+
+    def _request(
+        self,
+        method: str,
+        endpoint: str,
+        *,
+        _retries: int = 2,
+        _sleep=time.sleep,
+        **kwargs,
+    ) -> dict | list:
+        """Make authenticated request to Dokploy API.
+
+        Transient gateway errors (502/503/504) and connection errors on a GET are retried
+        with backoff — a flaky control plane should self-heal rather than fail a read.
+        """
         headers = {
             "accept": "application/json",
             "content-type": "application/json",
@@ -57,24 +75,38 @@ class DokployClient:
             **kwargs.pop("headers", {}),
         }
         url = f"{self.base_url}/{endpoint}"
-        try:
-            with httpx.Client(timeout=30.0) as client:
-                resp = client.request(method, url, headers=headers, **kwargs)
-                resp.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise httpx.HTTPStatusError(
-                f"Dokploy API request failed for {method} {url}: "
-                f"status code {exc.response.status_code} {exc.response.reason_phrase}",
-                request=exc.request,
-                response=exc.response,
-            ) from exc
-        except httpx.RequestError as exc:
-            raise httpx.RequestError(
-                f"Error while performing Dokploy API request {method} {url}: {exc}",
-                request=exc.request,
-            ) from exc
-
-        return resp.json() if resp.content else {}
+        is_get = method.upper() == "GET"
+        attempt = 0
+        while True:
+            try:
+                with httpx.Client(timeout=30.0) as client:
+                    resp = client.request(method, url, headers=headers, **kwargs)
+                    resp.raise_for_status()
+                return resp.json() if resp.content else {}
+            except httpx.HTTPStatusError as exc:
+                if (
+                    is_get
+                    and exc.response.status_code in self._TRANSIENT_STATUS
+                    and attempt < _retries
+                ):
+                    attempt += 1
+                    _sleep(2**attempt)
+                    continue
+                raise httpx.HTTPStatusError(
+                    f"Dokploy API request failed for {method} {url}: "
+                    f"status code {exc.response.status_code} {exc.response.reason_phrase}",
+                    request=exc.request,
+                    response=exc.response,
+                ) from exc
+            except httpx.RequestError as exc:
+                if is_get and attempt < _retries:
+                    attempt += 1
+                    _sleep(2**attempt)
+                    continue
+                raise httpx.RequestError(
+                    f"Error while performing Dokploy API request {method} {url}: {exc}",
+                    request=exc.request,
+                ) from exc
 
     # Project endpoints
     def list_projects(self) -> list[dict]:
