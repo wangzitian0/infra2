@@ -285,8 +285,9 @@ def test_unknown_type_rejected(calls):
 
 
 def test_unknown_service_rejected(calls):
+    # platform/postgres is now a KNOWN (derived) service — use one with no deploy.py
     with pytest.raises(ValueError, match="unknown service"):
-        _deploy(service="platform/postgres", deploy_type="staging", version_ref="main")
+        _deploy(service="platform/does-not-exist", deploy_type="staging", version_ref="main")
     assert calls["fixed"] is None
 
 

@@ -260,3 +260,20 @@ def test_to_dict():
         "code_version": SHA_A,
         "iac_ref": SHA_B,
     }
+
+
+def test_platform_specs_are_derived_from_service_registry():
+    # Infra-013: every non-app service is DERIVED from its deploy.py (service_registry),
+    # never hand-copied. prod_only must equal the Deployer's declared value.
+    from libs.service_registry import service_attrs
+
+    from tools.deploy_contract import all_service_keys, service_spec
+
+    reg = service_attrs()
+    assert set(all_service_keys()) == set(reg) | {"finance_report/app"}
+    for sid, meta in reg.items():
+        if sid == "finance_report/app":
+            continue
+        spec = service_spec(sid)
+        assert spec.iac_pinned is True
+        assert spec.prod_only == meta.prod_only  # derived, not a parallel hand-list
