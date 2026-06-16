@@ -24,15 +24,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from dataclasses import dataclass
 
 import httpx  # Dokploy transport errors from libs.dokploy surface as httpx exceptions
 
+from libs.iac_runner_client import trigger_platform_deploy
 from tools.deploy_contract import (
     _SHA_RE,
     DeployTarget,
     deploy_type_spec,
+    make_deploy_target,
     make_target,
     service_spec,
     validate_deploy_target,
@@ -142,8 +145,61 @@ def enforce_data_lane_red_lines(
 class DeployV2Result:
     target: DeployTarget
     data_lane: str
-    backend: str  # "preview-lifecycle" | "deploy-primitive"
+    backend: str  # "preview-lifecycle" | "deploy-primitive" | "iac-runner"
     detail: dict
+
+
+def _deploy_platform(
+    service: str,
+    spec,
+    deploy_type: str,
+    iac_ref: str,
+    *,
+    runner_url: str | None,
+    secret: str | None,
+    triggered_by: str,
+    wait: bool,
+) -> DeployV2Result:
+    """Route a platform (iac_pinned) service to the iac_runner ``/deploy`` webhook.
+
+    We do NOT re-implement the platform deploy — ``Deployer.sync`` is Context/os.environ
+    coupled — we trigger the SAME signed webhook ``deploy-platform.yml`` uses, so the deploy
+    is byte-for-byte iac_runner's. ``version_ref`` is unused: a platform artifact IS the
+    ``iac_ref``-pinned stack, so the deploy ref (and the recorded version identity) is the
+    resolved infra2 sha. Platform services have no preview — only ``staging`` / ``prod``.
+    """
+    type_spec = deploy_type_spec(deploy_type)
+    if type_spec.env not in ("staging", "prod"):
+        raise ValueError(
+            f"platform service {service!r} deploys to staging/prod only "
+            f"(type {deploy_type!r} -> env {type_spec.env!r}); iac-pinned services have no preview"
+        )
+    iac_sha = resolve_to_sha(iac_ref, repo=_INFRA2_REPO)
+    # The record: a platform service's version identity IS the infra2 commit (no app code).
+    target = make_deploy_target(
+        service=service, env=type_spec.env, code_version=iac_sha, iac_ref=iac_sha
+    )
+    validate_deploy_target(target, spec)  # enforces prod_only / env legality
+    data_lane = resolve_data_lane(target)
+
+    env = "production" if type_spec.env == "prod" else "staging"
+    short = service.split("/", 1)[1]  # platform/redis -> redis
+    response = trigger_platform_deploy(
+        env=env,
+        ref=iac_sha,
+        services=[short],
+        base_url=runner_url or os.getenv("IAC_RUNNER_URL", ""),
+        secret=secret or os.getenv("IAC_WEBHOOK_SECRET", ""),
+        triggered_by=triggered_by,
+        wait=wait,
+    )
+    detail = {
+        "env": env,
+        "ref": iac_sha,
+        "services": [short],
+        "iac_runner": response,
+    }
+    return DeployV2Result(target, data_lane, "iac-runner", detail)
 
 
 def deploy_v2(
@@ -162,6 +218,9 @@ def deploy_v2(
     verify_config: bool = True,
     timeout: int = 600,
     repo: str = _APP_REPO,
+    iac_runner_url: str | None = None,
+    iac_webhook_secret: str | None = None,
+    triggered_by: str = "deploy_v2",
 ) -> DeployV2Result:
     """Execute one deploy_v2 coordinate ``(service, type, version_ref, iac_ref)``.
 
@@ -174,7 +233,23 @@ def deploy_v2(
 
     Raises ``ValueError`` for any contract / form / gate / red-line / unsupported-service
     violation BEFORE any side effect; backend errors (rollout / health) propagate.
+
+    A platform (``iac_pinned``) service routes to the iac_runner webhook instead, ignoring
+    ``version_ref`` (its artifact is the ``iac_ref``-pinned stack) — see :func:`_deploy_platform`.
     """
+    svc_spec = service_spec(service)
+    if svc_spec.iac_pinned:  # platform service -> iac_runner /deploy webhook
+        return _deploy_platform(
+            service,
+            svc_spec,
+            deploy_type,
+            iac_ref,
+            runner_url=iac_runner_url,
+            secret=iac_webhook_secret,
+            triggered_by=triggered_by,
+            wait=wait,
+        )
+
     spec = deploy_type_spec(deploy_type)
     resolved, alias_value = _resolve_for_type(spec, version_ref, repo=repo)
 
@@ -321,10 +396,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=int, default=600, help="health-check seconds")
     args = parser.parse_args(argv)
 
-    # Imported lazily so importing the module (and its unit tests) needs no Dokploy creds.
-    from libs.dokploy import get_dokploy
+    # Platform (iac_pinned) services route to the iac_runner webhook and never touch the
+    # Dokploy client — don't build it (and don't require DOKPLOY_API_KEY) for them.
+    client = None
+    if not service_spec(args.service).iac_pinned:
+        # Imported lazily so importing the module (and its unit tests) needs no Dokploy creds.
+        from libs.dokploy import get_dokploy
 
-    client = get_dokploy(host=f"cloud.{args.domain}")
+        client = get_dokploy(host=f"cloud.{args.domain}")
     try:
         result = deploy_v2(
             service=args.service,

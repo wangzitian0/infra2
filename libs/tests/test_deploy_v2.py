@@ -412,3 +412,52 @@ def test_cli_verify_flags_default_on_and_flip(cli):
          "zp.io", "--skip-vault-check", "--no-verify-config"]
     )
     assert rec["verify_vault"] is False and rec["verify_config"] is False
+
+
+# --- platform services route to the iac_runner webhook (iac_pinned) ---------
+
+
+def _platform(monkeypatch, **over):
+    sent = {}
+    monkeypatch.setattr(
+        dv2, "trigger_platform_deploy",
+        lambda **kw: sent.update(kw) or {"status": "success", "deployment_id": "d1"},
+    )
+    monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
+    base = dict(
+        service="platform/redis", deploy_type="staging", version_ref="ignored",
+        iac_ref="main", client=object(), domain="zitian.party",
+    )
+    base.update(over)
+    return sent, deploy_v2(**base)
+
+
+def test_platform_service_routes_to_iac_runner(monkeypatch):
+    sent, res = _platform(monkeypatch)
+    assert res.backend == "iac-runner"
+    assert sent["env"] == "staging"
+    assert sent["ref"] == SHA_IAC  # deploy ref IS the iac_ref sha
+    assert sent["services"] == ["redis"]
+    assert res.detail["iac_runner"]["status"] == "success"
+    assert res.target.code_version == SHA_IAC  # platform version identity = the iac commit
+
+
+def test_platform_prod_maps_to_env_production(monkeypatch):
+    sent, _res = _platform(monkeypatch, deploy_type="prod", version_ref="")
+    assert sent["env"] == "production"
+
+
+def test_platform_rejects_preview_type(monkeypatch):
+    with pytest.raises(ValueError, match="staging/prod only"):
+        _platform(monkeypatch, deploy_type="preview/pr", version_ref=5)
+
+
+def test_platform_ignores_version_ref(monkeypatch):
+    # version_ref must NOT be resolved for an iac-pinned service
+    def boom(*a, **k):
+        raise AssertionError("platform must not resolve version_ref")
+
+    monkeypatch.setattr(dv2, "resolve_image_ref", boom)
+    monkeypatch.setattr(dv2, "resolve_pr", boom)
+    sent, _res = _platform(monkeypatch, version_ref="whatever-garbage")
+    assert sent["ref"] == SHA_IAC
