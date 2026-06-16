@@ -158,7 +158,6 @@ def _deploy_platform(
     runner_url: str | None,
     secret: str | None,
     triggered_by: str,
-    wait: bool,
 ) -> DeployV2Result:
     """Route a platform (iac_pinned) service to the iac_runner ``/deploy`` webhook.
 
@@ -184,6 +183,10 @@ def _deploy_platform(
 
     env = "production" if type_spec.env == "prod" else "staging"
     short = service.split("/", 1)[1]  # platform/redis -> redis
+    # Fire (wait=False): the webhook accepts + deploys asynchronously, so the signed POST
+    # returns promptly instead of risking the 60s timeout on a slow rollout. Synchronous
+    # wait (poll_platform_deploy_status) is a follow-up once the iac_runner status vocabulary
+    # is confirmed live; ``wait`` is accepted for signature parity but not yet blocked on.
     response = trigger_platform_deploy(
         env=env,
         ref=iac_sha,
@@ -191,7 +194,7 @@ def _deploy_platform(
         base_url=runner_url or os.getenv("IAC_RUNNER_URL", ""),
         secret=secret or os.getenv("IAC_WEBHOOK_SECRET", ""),
         triggered_by=triggered_by,
-        wait=wait,
+        wait=False,
     )
     detail = {
         "env": env,
@@ -247,7 +250,6 @@ def deploy_v2(
             runner_url=iac_runner_url,
             secret=iac_webhook_secret,
             triggered_by=triggered_by,
-            wait=wait,
         )
 
     spec = deploy_type_spec(deploy_type)
