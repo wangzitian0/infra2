@@ -50,6 +50,34 @@ class FakeHttpClient:
         return self.response
 
 
+def _status_error(code: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("GET", "https://cloud.example.test/api/x")
+    response = httpx.Response(code, request=request)
+    return httpx.HTTPStatusError(str(code), request=request, response=response)
+
+
+class _SequencedHttpClient:
+    """Returns the next queued FakeResponse per request() call (drives retry tests).
+
+    The patched ``httpx.Client(...)`` factory hands back this same instance on every
+    ``with`` block, so calls accumulate across _request's retry attempts.
+    """
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.calls = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def request(self, method, url, **kwargs):
+        self.calls.append((method, url))
+        return self._responses[len(self.calls) - 1]
+
+
 @pytest.fixture
 def dokploy_env(monkeypatch):
     monkeypatch.setenv("DOKPLOY_API_KEY", "test-key")
@@ -138,6 +166,50 @@ class TestDokployClient:
             httpx.RequestError, match="Error while performing Dokploy API request"
         ):
             client._request("GET", "project.all")
+
+    def test_request_retries_transient_5xx_get_then_succeeds(
+        self, monkeypatch, dokploy_env
+    ):
+        # a 502/503/504 gateway blip on a GET self-heals on retry (the red-herring failure
+        # mode that surfaced when the canary polled compose.one)
+        fake = _SequencedHttpClient(
+            [
+                FakeResponse(status_error=_status_error(502)),
+                FakeResponse({"ok": True}),
+            ]
+        )
+        monkeypatch.setattr(dokploy.httpx, "Client", lambda timeout: fake)
+        client = DokployClient(base_url="https://cloud.example.test/api")
+
+        result = client._request("GET", "compose.one", _sleep=lambda *_: None)
+        assert result == {"ok": True}
+        assert len(fake.calls) == 2  # retried once
+
+    def test_request_gives_up_after_retries(self, monkeypatch, dokploy_env):
+        fake = _SequencedHttpClient(
+            [FakeResponse(status_error=_status_error(503)) for _ in range(5)]
+        )
+        monkeypatch.setattr(dokploy.httpx, "Client", lambda timeout: fake)
+        client = DokployClient(base_url="https://cloud.example.test/api")
+
+        with pytest.raises(httpx.HTTPStatusError, match="status code 503"):
+            client._request("GET", "compose.one", _sleep=lambda *_: None)
+        assert len(fake.calls) == 3  # 1 attempt + 2 retries
+
+    def test_request_does_not_retry_post_on_5xx(self, monkeypatch, dokploy_env):
+        # a POST may have reached the backend before the gateway 502'd — never double-act
+        fake = _SequencedHttpClient(
+            [
+                FakeResponse(status_error=_status_error(502)),
+                FakeResponse({"ok": True}),
+            ]
+        )
+        monkeypatch.setattr(dokploy.httpx, "Client", lambda timeout: fake)
+        client = DokployClient(base_url="https://cloud.example.test/api")
+
+        with pytest.raises(httpx.HTTPStatusError, match="status code 502"):
+            client._request("POST", "compose.create", _sleep=lambda *_: None)
+        assert len(fake.calls) == 1  # not retried
 
     @patch("libs.dokploy.DokployClient._request")
     def test_list_git_providers(self, mock_request):

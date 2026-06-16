@@ -93,6 +93,9 @@ class ConvergenceFakeDokploy:
     def deploy_compose(self, compose_id):
         return {}
 
+    def get_compose(self, compose_id):
+        return {"composeId": compose_id, "composeStatus": "done"}
+
     def delete_compose(self, compose_id, *, delete_volumes=False):
         # Dokploy deletes by composeId and prunes the docker project under the appName IT
         # assigned — so teardown is agnostic to the name/appName divergence. The

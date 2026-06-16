@@ -33,7 +33,9 @@ class FakeDokploy:
         github_id="gh-1",
         source_app=True,
         source_creds=True,
+        compose_status="done",
     ):
+        self._compose_status = compose_status  # Dokploy deploy status the wait polls
         self._existing = existing  # dict returned by find_compose_by_name, or None
         self._environment_id = environment_id
         self._github_id = github_id
@@ -95,6 +97,9 @@ class FakeDokploy:
         self.deployed.append(compose_id)
         return {}
 
+    def get_compose(self, compose_id):
+        return {"composeId": compose_id, "composeStatus": self._compose_status}
+
     def delete_compose(self, compose_id, *, delete_volumes=False):
         self.deleted.append((compose_id, delete_volumes))
         return {}
@@ -102,6 +107,30 @@ class FakeDokploy:
 
 def _ok_get(url, timeout):
     return 200, "ok"
+
+
+def test_up_fast_fails_when_dokploy_reports_deploy_error():
+    # an unpublished image / build failure -> Dokploy composeStatus=error -> bail at once,
+    # NOT wait out the full health timeout (the 10-min hang the live canary hit).
+    client = FakeDokploy(existing=None, compose_status="error")
+    polls = {"n": 0}
+
+    def never_healthy(url, timeout):
+        polls["n"] += 1
+        return 0, "down"
+
+    with pytest.raises(RuntimeError, match="composeStatus=error"):
+        pl.up(
+            "pr",
+            5,
+            code="main",
+            domain="z.p",
+            client=client,
+            http_get=never_healthy,
+            health_timeout=600,
+            health_interval=10,
+        )
+    assert polls["n"] == 0  # failed before the first HTTP health poll — no 600s wait
 
 
 # --- up: create path -------------------------------------------------------------
