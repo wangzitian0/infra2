@@ -5,15 +5,21 @@ receivers:
       # (platform-signoz-otel-collector:4317). NOT publicly exposed; left unchanged.
       grpc:
         endpoint: 0.0.0.0:4317
-      # HTTP (4318): used by the internal backend AND, via the public ingest domain
-      # otel.zitian.party (Traefik), by the browser frontend (Infra-014).
+      # HTTP (4318): used by the internal backend AND, via the public Dokploy-managed
+      # ingest domain otel.zitian.party, by the browser frontend (Infra-014).
       # The browser sends cross-origin XHR/fetch with a preflight, so the receiver
-      # MUST echo CORS for our known app origins (and localhost dev). The static
-      # Authorization bearer token + rate-limit that keep the public endpoint from
-      # being open are enforced UPSTREAM at Traefik (headers/ratelimit middlewares;
-      # see platform/11.signoz/README.md and ops.observability.md) so the collector
-      # never has to trust the raw internet — Traefik only forwards already-checked,
-      # same-allowlist requests. Keep this CORS list in sync with that allowlist.
+      # MUST echo CORS for our known app origins (and localhost dev). There is NO
+      # bearer token: a browser cannot keep a secret.
+      # SECURITY POSTURE — be precise: CORS is NOT authentication. It only governs
+      # which *browser* origins may read responses cross-origin; it does NOT stop a
+      # non-browser client (curl/script) from POSTing OTLP straight to this endpoint.
+      # This is therefore an intentionally *unauthenticated public ingest*; abuse is
+      # bounded by the collector limits below (memory_limiter) and the edge rate-limit
+      # TODO, NOT by access control. Keep the CORS list in sync with the FE origins.
+      # See platform/11.signoz/README.md and ops.observability.md.
+      # TODO(Infra-014): add edge per-IP rate limiting (e.g. a Dokploy/Traefik
+      # ratelimit middleware managed via Dokploy, NOT a hand-written compose label) to
+      # cap burst abuse of the unauthenticated public ingest.
       http:
         endpoint: 0.0.0.0:4318
         cors:
@@ -33,6 +39,14 @@ processors:
   batch:
     send_batch_size: 10000
     timeout: 10s
+  # Protect the collector from OOM under burst from the unauthenticated public ingest.
+  # Soft-limits memory and starts refusing data before the process is killed; this is
+  # the lightweight collector-side limit that, together with the CORS allowlist,
+  # replaces the removed Traefik bearer/rate-limit guard.
+  memory_limiter:
+    check_interval: 5s
+    limit_percentage: 80
+    spike_limit_percentage: 25
 
 exporters:
   # SigNoz-specific exporters
@@ -54,13 +68,13 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [batch]
+      processors: [memory_limiter, batch]
       exporters: [clickhousetraces]
     metrics:
       receivers: [otlp]
-      processors: [batch]
+      processors: [memory_limiter, batch]
       exporters: [signozclickhousemetrics]
     logs:
       receivers: [otlp]
-      processors: [batch]
+      processors: [memory_limiter, batch]
       exporters: [clickhouselogsexporter]

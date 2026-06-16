@@ -67,18 +67,26 @@ invoke signoz.status
 
 ## Domain
 
-**Web UI**: `https://signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`
+**Web UI**: `https://signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}` → `signoz:8080`
 
 **Public browser-OTLP ingest** (Infra-014): `https://otel.${INTERNAL_DOMAIN}/v1/traces`
 → `otel-collector:4318`. This is the only public surface of the collector (4317/4318
-stay Docker-network-only). It is gated by a static bearer token (Traefik router
-`Header()` match; token in Vault `secret/platform/<env>/signoz` key `otel_ingest_token`,
-injected as `OTEL_INGEST_TOKEN`) plus a rate-limit middleware, with a CORS allowlist on
-the OTLP HTTP receiver (see `otel-collector-config.yaml` and `docs/ssot/ops.observability.md`).
+stay Docker-network-only). There is **no bearer token**: a browser cannot keep a secret,
+so a static token shipped to the page is not a credential. **Note the posture precisely:
+CORS is _not_ authentication** — it only restricts which *browser* origins may read the
+response cross-origin; it does **not** stop a non-browser client (curl/script) from POSTing
+OTLP directly. This is an intentionally **unauthenticated public ingest**; abuse is bounded
+by the collector limits (`memory_limiter`) in `otel-collector-config.yaml` and the edge
+rate-limit TODO — not by access control. Keep the CORS allowlist in sync with the FE
+origins. Edge per-IP rate limiting is a documented TODO (to be added as a Dokploy-managed
+Traefik middleware, never a hand-written compose label). See `docs/ssot/ops.observability.md`.
 
-Both routes are **compose-owned** Traefik labels in `compose.yaml`; Dokploy domain
-generation is disabled (`subdomain=None` in `deploy.py`) to keep routing single-source
-per `docs/ssot/platform.domain.md`.
+Both domains are **Dokploy-managed** (no hand-written Traefik labels in `compose.yaml`):
+`SigNozDeployer` registers the Web UI domain from `subdomain="signoz"` /
+`service_port=8080` / `service_name="signoz"` via the base flow, and its `composing()`
+override registers the second domain (`otel.<domain>` → `otel-collector:4318`) with an
+extra `client.ensure_domains(..., service_name="otel-collector")` call. This keeps
+routing single-source per `docs/ssot/platform.domain.md`.
 
 ## Data Path
 
