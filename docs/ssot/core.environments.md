@@ -297,17 +297,25 @@ invoke fr-app.setup       # 域名: report.zitian.party
 ---
 
 <a id="manual-deploy-targets"></a>
-### 4.6 手动部署目标 (Manual deploy targets)
+### 4.6 部署目标与触发 (Deploy targets & triggers)
 
-> **部署策略真理**：prod / staging / preview **三者都是手动部署**（manual，无 auto-follow-main）。
-> CI 是开发期质量门禁（lint + 单测 + E2E），**不**触发任何环境部署。每次上线都是显式动作
-> （`tools/deploy_primitive.py` 或 `tools/preview_lifecycle.py`），由人选择「部署哪个 commit、到哪个目标」。
+> **触发真理**：唯一**自动**的目标是 `report-branch-main`（main 预览）—— main 一合并就重新部署，
+> 它就是「永远看到 main 现在长啥样」的活环境。**所有 staging / prod 都是手动**，且部署 **release tag**：
+> staging 的目标是和 prod **一模一样**，所以钉**同一个 tag**（promote-not-rebuild，不是部 main sha）。
+> 其余 preview 别名（pr / commit / tag）按需手动起。统一入口是 `tools/deploy_v2.py`（§4.7）。
+> （`report-branch-main` 的自动触发点在 **app 仓库 CI**：app main push → repository_dispatch 调 infra2 的
+> `deploy.yml`；接线为待办。）
 
-| 目标 | 部署方式 | 入口 | 数据 | 域名 | 生命周期 |
-|------|---------|------|------|------|---------|
-| **prod** | 手动 | `deploy_primitive --env prod`（要求该 digest 先过 staging，promote-not-rebuild） | 真实 prod 数据 | `report.<domain>` | 长期 |
-| **staging** | 手动 | `deploy_primitive --env staging` | staging 数据 | `report-staging.<domain>` | 长期（≈ 略领先 prod 的同构环境） |
-| **preview** | 手动 | `preview_lifecycle up`（多别名，见下） | **每栈各自的临时数据库**（ephemeral） | `report-<alias>.<domain>` | 比 CI 长，**显式 teardown** 前一直存在 |
+| 目标 | 触发 | 部署什么 | 入口 | 数据 | 域名 | 生命周期 |
+|------|------|---------|------|------|------|---------|
+| **report-branch-main**（preview）| **自动**（main 合并即发）| main 尖端 | `deploy_v2 --type preview/branch` | 临时 DB | `report-branch-main.<domain>` | 显式 teardown 前 |
+| **其余 preview**（pr/commit/tag）| 手动按需 | PR# / sha / tag | `deploy_v2 --type preview/{pr,commit,tag}` | 临时 DB | 显式 teardown 前 |
+| **staging** | **手动** | **release tag**（钉和 prod 同一个）| `deploy_v2 --type staging --version-ref vX.Y.Z` | staging 数据 | 长期（同构 prod）|
+| **prod** | **手动** | **同一个 release tag**（promote-not-rebuild）| `deploy_v2 --type prod --version-ref vX.Y.Z` | 真实 prod 数据 | 长期 |
+
+> **平台服务**（iac_pinned）无 preview，只有 staging / prod，**同样手动**；它们的「版本」是 `iac_ref`，
+> staging≡prod 同样靠钉**同一个 infra2 release tag**（`deploy_v2 --service platform/X --type staging --iac-ref vX.Y.Z`）。
+> 经 iac_runner webhook 部署（§4.7.2）。CI（lint + 单测 + E2E）**不**触发任何 staging/prod 部署。
 
 **preview 多别名模型**（每个别名 = 一套独立的 Dokploy compose 栈）：
 
