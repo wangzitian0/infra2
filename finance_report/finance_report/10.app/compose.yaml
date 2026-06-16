@@ -44,6 +44,9 @@ services:
       VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
       VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
       ENV: ${ENV}
+      # Consumed by secrets.ctmpl to template OTEL_RESOURCE_ATTRIBUTES'
+      # service.version=<sha> (Infra-014). Short image sha; "unknown" fallback.
+      GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
     healthcheck:
       test:
@@ -185,6 +188,17 @@ services:
       # by project/client id (model B), not by OpenPanel instance.
       OPENPANEL_API_URL: https://openpanel.${INTERNAL_DOMAIN}/api
       OPENPANEL_ENVIRONMENT: ${OPENPANEL_ENVIRONMENT:-}
+      # Browser → SigNoz traces (Infra-014). The browser cannot reach the
+      # Docker-internal collector, so FE OTLP goes through the ONE public ingest
+      # domain otel.${INTERNAL_DOMAIN} (CORS-restricted + static bearer token,
+      # rate-limited) → Traefik → platform-signoz-otel-collector:4318. Like
+      # OPENPANEL_*, these are injected as plain runtime env read server-side at
+      # request time (NOT build-time NEXT_PUBLIC baked into the shared image), so a
+      # promote-not-rebuild image stays env-agnostic. deployment.environment + git
+      # sha mirror the backend's OTEL_RESOURCE_ATTRIBUTES so FE/BE spans correlate.
+      NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT: https://otel.${INTERNAL_DOMAIN}/v1/traces
+      NEXT_PUBLIC_DEPLOYMENT_ENVIRONMENT: ${ENV}
+      NEXT_PUBLIC_GIT_SHA: ${GIT_COMMIT_SHA:-unknown}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:3000" ]
       start_period: 30s

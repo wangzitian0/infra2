@@ -53,6 +53,12 @@ class AppDeployer(Deployer):
         openpanel_clients = {
             "production": "28bfa625-8751-4424-9514-29c967f77550",
             "staging": "62d5cfe0-2480-4b6e-b76f-8eabbcaf698f",
+            # Infra-014: single shared "preview" OpenPanel project for all preview
+            # aliases (per-alias separation is via the deployment.environment/property,
+            # not a per-alias project). Placeholder until the real client id is minted.
+            # TODO: real preview client-id (mint a "preview" project in OpenPanel, then
+            # replace this UUID — see Infra-014 RUNBOOK).
+            "preview": "00000000-0000-0000-0000-000000000000",
         }
         env_name = env_vars.get("ENV", "production")
         client_id = openpanel_clients.get(env_name, "")

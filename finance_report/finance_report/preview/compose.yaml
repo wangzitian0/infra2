@@ -51,6 +51,9 @@ services:
       VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
       VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
       ENV: ${ENV}
+      # Consumed by this dir's secrets.ctmpl to render this alias's
+      # OTEL_RESOURCE_ATTRIBUTES service.version=<sha> (Infra-014).
+      GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
       # The ctmpl reads PREVIEW_SECRET_ENV to pick which env's Vault app-secrets path
       # to render (secret/data/finance_report/<PREVIEW_SECRET_ENV>/app). Must be passed
@@ -217,6 +220,12 @@ services:
       OPENPANEL_CLIENT_ID: ${OPENPANEL_CLIENT_ID:-}
       OPENPANEL_API_URL: https://openpanel.${INTERNAL_DOMAIN}/api
       OPENPANEL_ENVIRONMENT: ${OPENPANEL_ENVIRONMENT:-}
+      # Browser → SigNoz traces (Infra-014). Same public ingest path as staging/prod
+      # (otel.${INTERNAL_DOMAIN}); deployment.environment carries this alias's ENV
+      # token (main / pr-<N> / commit-<sha7>) so preview FE spans are filterable.
+      NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT: https://otel.${INTERNAL_DOMAIN}/v1/traces
+      NEXT_PUBLIC_DEPLOYMENT_ENVIRONMENT: ${ENV}
+      NEXT_PUBLIC_GIT_SHA: ${GIT_COMMIT_SHA:-unknown}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:3000" ]
       start_period: 30s
