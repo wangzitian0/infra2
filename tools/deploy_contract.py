@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""The deploy_v2 coordinate: deploy(service, env, sub_domain, code_version, iac_ref).
+"""The deploy_v2 contract layer behind the coordinate (service, type, version_ref, iac_ref).
 
-This is the contract layer that names a deploy's full identity. It does NOT deploy —
-it is pure/importable, the single thing the deploy front door and the webhook validate
-against before any side effect.
+This names a deploy's full identity. It does NOT deploy — it is pure/importable, the single
+thing the deploy front door and the webhook validate against before any side effect.
 
-It layers the two new axes (``service``, ``iac_ref``) and a unified ``sub_domain`` over
-the existing Infra-009 axes, reusing them rather than restating:
+The INPUT coordinate is 4 axes ``(service, type, version_ref, iac_ref)`` (see
+``deploy_v2`` + SSOT §4.7); ``env`` / ``sub_domain`` are DERIVED from ``type`` and the
+resolved slot, NOT inputs. The DERIVED identity this module builds is ``DeployTarget``:
 
     service       -> THIS module (ServiceSpec registry)
-    env           -> deploy_env_config.env_config        (staging | prod | preview)
-    sub_domain    -> deploy_env_config (env suffix) + preview_alias (preview slot)
-    code_version  -> resolve_deploy_ref (a commit sha; resolved at execution)
+    type          -> DEPLOY_TYPES (the discriminant; derives env + alias slot + accepted_forms)
+    env           -> deploy_env_config.env_config        (staging | prod | preview; from type)
+    sub_domain    -> deploy_env_config (env suffix) + preview_alias (preview slot, <kind>-<value>)
+    code_version  -> the resolved commit sha (deploy_v2 resolves version_ref -> sha + image_ref)
     iac_ref       -> THIS module (a 40-hex infra2 commit pinning the IaC)
 
 ``data`` is NOT a sixth input axis: it is derived (``EnvConfig.data_default``, optionally
@@ -111,7 +112,7 @@ def sub_domain_for(
 
 @dataclass(frozen=True)
 class DeployTarget:
-    """A fully-specified deploy_v2 request — the five orthogonal axes."""
+    """The DERIVED identity of a deploy_v2 request (built from the 4-axis input coordinate)."""
 
     service: str
     env: str  # staging | prod | preview

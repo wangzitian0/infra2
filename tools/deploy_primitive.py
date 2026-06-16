@@ -297,6 +297,22 @@ def deploy(
     )
 
 
+def model_overrides_from_env() -> dict[str, str]:
+    """Model overrides supplied via ``DEPLOY_*_MODEL_OVERRIDE`` env vars.
+
+    The staging-E2E promotion path sets these to pin which models prod runs; empty values
+    are dropped by ``deploy`` (only non-empty overrides are applied). Shared by this CLI and
+    the unified ``deploy_v2`` front door so both threads them identically.
+    """
+    import os
+
+    return {
+        "PRIMARY_MODEL": os.getenv("DEPLOY_PRIMARY_MODEL_OVERRIDE", ""),
+        "OCR_MODEL": os.getenv("DEPLOY_OCR_MODEL_OVERRIDE", ""),
+        "VISION_MODEL": os.getenv("DEPLOY_VISION_MODEL_OVERRIDE", ""),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry so a workflow can call the primitive directly:
 
@@ -340,13 +356,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Model overrides come from the same env the staging-E2E workflow already exports,
     # so switching the caller to this CLI needs no new wiring (parity with the bash).
-    import os
-
-    model_overrides = {
-        "PRIMARY_MODEL": os.getenv("DEPLOY_PRIMARY_MODEL_OVERRIDE", ""),
-        "OCR_MODEL": os.getenv("DEPLOY_OCR_MODEL_OVERRIDE", ""),
-        "VISION_MODEL": os.getenv("DEPLOY_VISION_MODEL_OVERRIDE", ""),
-    }
+    model_overrides = model_overrides_from_env()
 
     # Imported lazily so importing the primitive (and its unit tests) needs no Dokploy creds.
     from libs.dokploy import get_dokploy
