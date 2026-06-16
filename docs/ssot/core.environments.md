@@ -320,7 +320,7 @@ invoke fr-app.setup       # 域名: report.zitian.party
 | `commit` | `commit-<sha7>` | `-commit-<sha7>` | `report-commit-<sha7>.<domain>` | `finance-report-preview-commit-<sha7>` | `commit-<sha7>` |
 | `tag` | `tag-<v1-2-3>` | `-tag-<v1-2-3>` | `report-tag-<v1-2-3>.<domain>` | `finance-report-preview-tag-<v1-2-3>` | `tag-<v1-2-3>` |
 
-`branch` 默认 `main`（→ `branch-main`，取代旧的裸 `main` 槽）；`tag` 的点变横线做 DNS-safe slug（`v1.2.3` → `tag-v1-2-3`），镜像/遥测仍保留规范值 `v1.2.3`。真源：`tools/deploy_env_config.py::preview_alias(kind, value)`（纯函数，确定性，单测覆盖）。
+`branch` 默认 `main`（→ `branch-main`，取代旧的裸 `main` 槽）；`tag` 的点变横线做 DNS-safe slug（`v1.2.3` → `tag-v1-2-3`）。注意区分：**镜像** `IMAGE_TAG` 用规范值 `v1.2.3`（`preview_alias.value`），而 **URL / 遥测 `deployment.environment`** 用 slug `tag-v1-2-3`（即上表那一列）——过滤遥测时按 `tag-v1-2-3`。真源：`tools/deploy_env_config.py::preview_alias(kind, value)`（纯函数，确定性，单测覆盖）。
 
 **preview 关键特性**：
 1. **多别名共存**：`branch-<name>` / `pr-<N>` / `commit-<sha7>` / `tag-<v>` 各自一套独立 compose 栈，互不冲突，也不与 staging/prod 撞容器名或 Host() 规则（靠唯一的 `ENV_SUFFIX`）。
@@ -335,7 +335,8 @@ invoke fr-app.setup       # 域名: report.zitian.party
 
 一次部署的**身份**由且仅由**四个正交轴**确定——每个轴独立（谁也推不出谁），合起来对
 `preview / staging / prod` 各类目标都充分。`type` 是判别式，`env` / `sub_domain` 由它**派生**，不是输入轴。
-真源：`tools/deploy_contract.py` + `tools/deploy_v2.py`（纯函数，单测覆盖）。
+契约/校验层 `tools/deploy_contract.py` 是**纯函数**（无副作用，单测覆盖）；`tools/deploy_v2.py` 是**执行前门**
+（解析 + 分派到 `preview_lifecycle` / `deploy_primitive`，有副作用），两者都有单测。
 
 ```
 deploy_v2(service, type, version_ref, iac_ref)
