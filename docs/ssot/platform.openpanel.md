@@ -97,6 +97,22 @@ graph TD
     2. 连接到专属 `op-ch` 重置 `openpanel` 数据库（或删除 `op-ch-data` 卷）。
     3. 重跑容器，`op-api` 会在启动时自动重新应用迁移。
 
+### SOP-003: 应用接入 — 按环境 client-id（Model B，Infra-014）
+
+OpenPanel 是**单实例**；环境隔离靠**每个环境一个 project / client-id**（Model B），而非每环境一套实例。finance_report 在 `finance_report/finance_report/10.app/deploy.py` 的 `openpanel_clients` 映射中按 `ENV` 选取 client-id，并以运行时 env `OPENPANEL_CLIENT_ID` 注入（app + preview compose）：
+
+| 环境 | OpenPanel project / client-id | 状态 |
+|------|-------------------------------|------|
+| `production` | `28bfa625-…f77550` | 已签发 |
+| `staging` | `62d5cfe0-…af698f` | 已签发 |
+| `preview`（所有 preview 别名共用一个 project） | `00000000-…000000`（占位） | **待签发**：在 OpenPanel 新建 "preview" project，取其 client-id 替换占位 UUID（见 Infra-014 RUNBOOK） |
+
+> preview 各别名（`main` / `pr-<N>` / `commit-<sha7>`）共用同一个 `preview` project；别名维度的区分依赖事件属性 / `deployment.environment`，不再拆分 project。
+
+### SOP-004: 查询分析数据（已发布 CLI）
+
+OpenPanel 事件分析由 app 仓库已发布的查询 CLI `common/observability/openpanel_query.py` 完成，使用 OpenPanel query API token，存于 Vault `secret/platform/<env>/openpanel/api_key`。本仓库不重新实现查询逻辑。遥测（traces/logs）查询见 [ops.observability.md](ops.observability.md) 的 `invoke signoz.shared.query-logs` / `list-services`。
+
 ---
 
 ## 5. 验证与测试 (The Proof)

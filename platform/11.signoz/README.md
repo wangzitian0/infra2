@@ -67,9 +67,18 @@ invoke signoz.status
 
 ## Domain
 
-**URL**: `https://signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`
+**Web UI**: `https://signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`
 
-Configured via Dokploy domain settings in `deploy.py` (compose.yaml only enables Traefik).
+**Public browser-OTLP ingest** (Infra-014): `https://otel.${INTERNAL_DOMAIN}/v1/traces`
+→ `otel-collector:4318`. This is the only public surface of the collector (4317/4318
+stay Docker-network-only). It is gated by a static bearer token (Traefik router
+`Header()` match; token in Vault `secret/platform/<env>/signoz` key `otel_ingest_token`,
+injected as `OTEL_INGEST_TOKEN`) plus a rate-limit middleware, with a CORS allowlist on
+the OTLP HTTP receiver (see `otel-collector-config.yaml` and `docs/ssot/ops.observability.md`).
+
+Both routes are **compose-owned** Traefik labels in `compose.yaml`; Dokploy domain
+generation is disabled (`subdomain=None` in `deploy.py`) to keep routing single-source
+per `docs/ssot/platform.domain.md`.
 
 ## Data Path
 

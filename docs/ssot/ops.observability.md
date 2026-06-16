@@ -116,6 +116,44 @@ with tracer.start_as_current_span("my-span"):
 
 > 表层别名与底层 commit 由 infra2 在部署时签发，应用只消费。规则见 [core.environments.md](core.environments.md#telemetry-identity)。
 
+### 4.3 finance_report 接入（BE + 浏览器 FE，Infra-014）
+
+finance_report 同时上报**后端**与**浏览器前端**两条遥测链路，全部落到上面那个唯一共享 collector，靠 `deployment.environment` 区分环境。注入方式为 config-as-code，应用只消费、不硬编码。
+
+**后端（Docker 网络内，OTLP HTTP）**：由 `finance_report/finance_report/10.app/secrets.ctmpl`（及 `preview/secrets.ctmpl`）按环境渲染：
+
+| 变量 | 渲染值 | 说明 |
+|------|--------|------|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://platform-signoz-otel-collector:4318` | 所有环境无后缀；Vault 若显式设置则覆盖（escape hatch） |
+| `OTEL_SERVICE_NAME` | `finance-report-backend` | 同上可被 Vault 覆盖 |
+| `OTEL_RESOURCE_ATTRIBUTES` | `deployment.environment=<alias>,service.version=<git sha>` | preview 渲染**本别名** ENV（`main`/`pr-<N>`/`commit-<sha7>`），而非密钥来源环境 |
+
+`<git sha>` 来自 compose 注入容器的 `GIT_COMMIT_SHA`（镜像短 sha，空则 `unknown`）。
+
+**浏览器前端（公网 OTLP ingest）**：浏览器无法访问 Docker 内部 collector，因此 FE span 只能走**唯一公网入口** `otel.${INTERNAL_DOMAIN}`（见 4.4）。在 `compose.yaml` 以运行时（非 build-time）env 注入：
+
+| 变量 | 渲染值 |
+|------|--------|
+| `NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT` | `https://otel.${INTERNAL_DOMAIN}/v1/traces` |
+| `NEXT_PUBLIC_DEPLOYMENT_ENVIRONMENT` | `${ENV}`（与 BE `deployment.environment` 对齐，FE/BE span 可关联） |
+| `NEXT_PUBLIC_GIT_SHA` | `${GIT_COMMIT_SHA}` |
+
+> **Promote-not-rebuild**：FE OTLP 与 OpenPanel 配置均为运行时 env（非 `NEXT_PUBLIC` build-time 烘焙），同一镜像在各环境提升时保持环境无关。
+
+### 4.4 公网浏览器 OTLP ingest：`otel.${INTERNAL_DOMAIN}`（Infra-014）
+
+collector 的 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一公网面是单一 ingest 域名 `otel.${INTERNAL_DOMAIN}`，在 Traefik 终止后转发到 `:4318`（OTLP HTTP）。两道闸在 **Traefik 上游**强制（collector 自身只加 CORS）：
+
+1. **静态 bearer token**：otel-collector 的 Traefik router 携带 `Header()` 匹配（`HeadersRegexp(Authorization, ^Bearer <token>$)`），token 错/缺则 router 不匹配 → Traefik 404，后端永不被触达。开源版 Traefik 无静态-token 中间件（JWT 中间件为企业版），故用 `Header()` 规则等价实现，与 `openpanel-api` 的 router 收敛方式一致。token 为**可发布的 ingest key**（会下发到浏览器），存于 Vault `secret/platform/<env>/signoz` 键 `otel_ingest_token`，由 `platform/11.signoz/deploy.py` 注入为 `${OTEL_INGEST_TOKEN}`，首次部署自动生成。
+2. **限流**：`ratelimit` 中间件按来源 IP 限制公网 key 的突发滥用（50 req/s，burst 100）。
+
+`otel.${INTERNAL_DOMAIN}` 落在 Cloudflare 泛域名 `*.${INTERNAL_DOMAIN} → VPS_HOST` 之内，无需新增显式 DNS 记录（见 [platform.domain.md](platform.domain.md)）。CORS 允许来源在 `platform/11.signoz/otel-collector-config.yaml` 的 OTLP HTTP receiver 上声明，必须与 report FE 域名保持同步。
+
+### 4.5 查询遥测与分析数据（已发布 CLI，勿重造）
+
+- **SigNoz logs / traces**：`invoke signoz.shared.query-logs [--service-name=finance-report-backend --limit=20]`、`invoke signoz.shared.list-services`（见 `platform/11.signoz/shared_tasks.py`）。SigNoz API key 存于 Vault `secret/platform/<env>/signoz`。
+- **OpenPanel 事件分析**：app 仓库已发布查询 CLI `common/observability/openpanel_query.py`，使用 `secret/platform/<env>/openpanel/api_key`。本仓库**不重新实现**，仅引用。
+
 ---
 
 ## 5. 运维指南
@@ -162,6 +200,7 @@ ${DATA_PATH}/
 - **Web UI**: `https://signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`
 - **OTLP gRPC**: `platform-signoz-otel-collector:4317` (Docker 网络内)
 - **OTLP HTTP**: `platform-signoz-otel-collector:4318` (Docker 网络内)
+- **公网浏览器 OTLP ingest**: `https://otel.${INTERNAL_DOMAIN}/v1/traces` (bearer token + 限流 + CORS，见 4.4)
 
 ### 5.4 容量规划
 
