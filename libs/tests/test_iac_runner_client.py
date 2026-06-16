@@ -121,3 +121,15 @@ def test_poll_times_out_if_never_settles():
             interval=0, sleep=lambda *_: None, nonce_factory=lambda: "nonce123",
             transport=transport,
         )
+
+
+def test_poll_validates_inputs_before_post():
+    _, transport = _capture()
+    with pytest.raises(ValueError, match="40-hex"):
+        poll_platform_deploy_status(
+            env="staging", ref="main", base_url="u", secret=SECRET, transport=transport
+        )
+    with pytest.raises(ValueError, match="SECRET"):
+        poll_platform_deploy_status(
+            env="staging", ref=SHA, base_url="u", secret="", transport=transport
+        )

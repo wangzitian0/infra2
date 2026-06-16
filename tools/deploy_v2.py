@@ -158,6 +158,7 @@ def _deploy_platform(
     runner_url: str | None,
     secret: str | None,
     triggered_by: str,
+    code_reviewed: bool | None,
 ) -> DeployV2Result:
     """Route a platform (iac_pinned) service to the iac_runner ``/deploy`` webhook.
 
@@ -179,7 +180,10 @@ def _deploy_platform(
         service=service, env=type_spec.env, code_version=iac_sha, iac_ref=iac_sha
     )
     validate_deploy_target(target, spec)  # enforces prod_only / env legality
-    data_lane = resolve_data_lane(target)
+    # RL-DATA-1 applies to platform prod too: a prod deploy must carry an explicit
+    # code_reviewed signal (deny-by-default), same as the app path — a prod platform service
+    # (e.g. postgres) sits on real prod data.
+    data_lane = enforce_data_lane_red_lines(target, code_reviewed=code_reviewed)
 
     env = "production" if type_spec.env == "prod" else "staging"
     # iac_runner's SERVICE_TASK_MAP keys on the FULL service key (e.g. "platform/redis"),
@@ -251,6 +255,7 @@ def deploy_v2(
             runner_url=iac_runner_url,
             secret=iac_webhook_secret,
             triggered_by=triggered_by,
+            code_reviewed=code_reviewed,
         )
 
     spec = deploy_type_spec(deploy_type)
@@ -399,15 +404,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=int, default=600, help="health-check seconds")
     args = parser.parse_args(argv)
 
-    # Platform (iac_pinned) services route to the iac_runner webhook and never touch the
-    # Dokploy client — don't build it (and don't require DOKPLOY_API_KEY) for them.
-    client = None
-    if not service_spec(args.service).iac_pinned:
-        # Imported lazily so importing the module (and its unit tests) needs no Dokploy creds.
-        from libs.dokploy import get_dokploy
-
-        client = get_dokploy(host=f"cloud.{args.domain}")
     try:
+        # Platform (iac_pinned) services route to the iac_runner webhook and never touch the
+        # Dokploy client — don't build it (or require DOKPLOY_API_KEY) for them. Inside the
+        # try so an unknown service surfaces as the clean one-line error, not a traceback.
+        client = None
+        if not service_spec(args.service).iac_pinned:
+            # Imported lazily so importing the module needs no Dokploy creds.
+            from libs.dokploy import get_dokploy
+
+            client = get_dokploy(host=f"cloud.{args.domain}")
         result = deploy_v2(
             service=args.service,
             deploy_type=args.deploy_type,

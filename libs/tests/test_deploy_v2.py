@@ -443,8 +443,16 @@ def test_platform_service_routes_to_iac_runner(monkeypatch):
 
 
 def test_platform_prod_maps_to_env_production(monkeypatch):
-    sent, _res = _platform(monkeypatch, deploy_type="prod", version_ref="")
+    sent, _res = _platform(
+        monkeypatch, deploy_type="prod", version_ref="", code_reviewed=True
+    )
     assert sent["env"] == "production"
+
+
+def test_platform_prod_requires_code_reviewed(monkeypatch):
+    # RL-DATA-1 is deny-by-default for platform prod too (postgres/etc. sit on prod data)
+    with pytest.raises(ValueError, match="RL-DATA-1"):
+        _platform(monkeypatch, deploy_type="prod", version_ref="")
 
 
 def test_platform_rejects_preview_type(monkeypatch):

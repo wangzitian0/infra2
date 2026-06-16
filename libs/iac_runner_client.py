@@ -52,6 +52,18 @@ def _new_nonce() -> str:
     return os.urandom(16).hex()
 
 
+def _validate_request(env: str, ref: str, secret: str, base_url: str) -> None:
+    """Fail closed BEFORE signing/posting — never sign with an empty secret or bad target."""
+    if env not in _VALID_ENVS:
+        raise ValueError(f"env must be one of {_VALID_ENVS}, got {env!r}")
+    if not _SHA40_RE.match(ref or ""):
+        raise ValueError(f"ref must be a 40-hex commit sha, got {ref!r}")
+    if not secret:
+        raise ValueError("IAC_WEBHOOK_SECRET is required to sign the request")
+    if not base_url:
+        raise ValueError("iac_runner base_url is required")
+
+
 def trigger_platform_deploy(
     *,
     env: str,
@@ -73,14 +85,7 @@ def trigger_platform_deploy(
     webhook's JSON response. Raises ``ValueError`` for a bad env/ref/secret before any POST,
     and ``httpx.HTTPError`` on transport / non-2xx. ``transport`` is injected for tests.
     """
-    if env not in _VALID_ENVS:
-        raise ValueError(f"env must be one of {_VALID_ENVS}, got {env!r}")
-    if not _SHA40_RE.match(ref or ""):
-        raise ValueError(f"ref must be a 40-hex commit sha, got {ref!r}")
-    if not secret:
-        raise ValueError("IAC_WEBHOOK_SECRET is required to sign the deploy request")
-    if not base_url:
-        raise ValueError("iac_runner base_url is required")
+    _validate_request(env, ref, secret, base_url)
 
     payload = json.dumps(
         {
@@ -121,9 +126,10 @@ def poll_platform_deploy_status(
     """Poll ``/deploy/status`` until the deploy reaches a terminal state (mirrors the bash loop).
 
     Returns the final status dict. A terminal status is anything other than ``running`` /
-    ``pending`` / ``in_progress``. Raises ``TimeoutError`` if it never settles within
-    ``attempts``.
+    ``pending`` / ``in_progress``. Raises ``ValueError`` for a bad env/ref/secret/base_url
+    BEFORE any request, and ``TimeoutError`` if it never settles within ``attempts``.
     """
+    _validate_request(env, ref, secret, base_url)
     payload = json.dumps(
         {"env": env, "ref": ref, "triggered_by": triggered_by},
         separators=(",", ":"),
