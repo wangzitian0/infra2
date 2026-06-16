@@ -78,18 +78,25 @@ concurrency:
 jobs:
   canary:
     name: deploy_v2 live canary
+    # Skip FORK PRs: they get no secrets, so the live deploy can't run — skip (not fail) to
+    # avoid noisy red checks for external contributors. Same-repo PRs + push/cron/manual run.
+    if: >-
+      ${{ github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
       INTERNAL_DOMAIN: ${{ github.event.inputs.domain || 'zitian.party' }}
       # out-of-band Feishu delivery (same secrets the watchdog uses) — a red probe pages.
-      INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
-      INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
-      INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
-      INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
-      INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
-      INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+      # Injected ONLY for non-PR events: a PR run never uses --alert-on-failure, so do not
+      # expose alerting credentials to PR code (smaller blast radius).
+      INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE || '' }}
+      INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL || '' }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID || '' }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET || '' }}
+      INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID || '' }}
+      INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE || '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

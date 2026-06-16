@@ -127,12 +127,15 @@ def run_canary(
 
 
 def failure_domain(exc: Exception) -> str:
-    """Classify a canary failure into a domain (mirrors the route-canary taxonomy).
+    """Classify an EXCEPTION-path canary failure into a domain (route-canary-style taxonomy).
 
-    Lets an alert say WHERE the deploy path broke, not just that it did:
-    - control-plane: Dokploy API / transport failure.
-    - health: deploy errored (composeStatus=error) or never converged.
-    - configuration: a bad ref / form / contract violation before any deploy.
+    Lets an alert say WHERE the deploy path broke. The full domain set (exact returned values):
+    - ``deploy-v2-control-plane``  — Dokploy API / transport failure (httpx).
+    - ``deploy-v2-health``         — deploy errored (composeStatus=error) or never converged.
+    - ``deploy-v2-configuration``  — a bad ref / form / contract violation before any deploy.
+    - ``deploy-v2-cleanup``        — healthy but the stack leaked (torn_down=false). NOT
+                                     returned here (no exception) — ``main`` assigns it from
+                                     the result. This function covers only the exception path.
     """
     if isinstance(exc, httpx.HTTPError):
         return "deploy-v2-control-plane"
