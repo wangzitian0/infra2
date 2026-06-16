@@ -6,7 +6,15 @@ name: deploy_v2 Acceptance Canary
 # its ephemeral DB) back down. A green run here is the live proof that deploy_v2 deploys —
 # the thing the trio (#341/#342/#343) could only unit-test with mocked backends.
 #
-# Three triggers:
+# This is infra2's DEPLOY-PATH self-probe (sibling of dokploy-route-canary, the routing
+# probe). Green => infra2's deploy machinery is OK; red => it is broken. Like the route
+# canary it runs on GitHub Actions (external — survives infra2 itself being down) and, on a
+# non-PR failure, alerts out-of-band via the SAME Feishu path the watchdog uses.
+#
+# Four triggers:
+#  - pull_request, PATH-FILTERED to the deploy tooling: a PRE-MERGE probe — prove the change
+#    still deploys before it lands. A PR failure is CI feedback to the author (NO out-of-band
+#    alert — `--alert-on-failure` is omitted on PRs).
 #  - push to main, PATH-FILTERED to the deploy tooling: a post-merge smoke test. A merge that
 #    changes how we deploy (deploy_v2 / backends / resolver / Dokploy client / preview template)
 #    immediately re-proves the whole path still deploys end-to-end against real Dokploy. It
@@ -21,7 +29,7 @@ name: deploy_v2 Acceptance Canary
 on:
   push:
     branches: [main]
-    paths:
+    paths: &deploy_tooling_paths
       - "tools/deploy_v2.py"
       - "tools/deploy_v2_canary.py"
       - "tools/deploy_primitive.py"
@@ -35,6 +43,8 @@ on:
       # deploy, so re-canary on any of them, not just the compose file.
       - "finance_report/finance_report/preview/**"
       - ".github/workflows/deploy-v2-canary.yml"
+  pull_request:
+    paths: *deploy_tooling_paths
   workflow_dispatch:
     inputs:
       version_ref:
@@ -73,6 +83,13 @@ jobs:
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
       INTERNAL_DOMAIN: ${{ github.event.inputs.domain || 'zitian.party' }}
+      # out-of-band Feishu delivery (same secrets the watchdog uses) — a red probe pages.
+      INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
+      INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
+      INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -91,6 +108,7 @@ jobs:
           IAC_REF_INPUT: ${{ github.event.inputs.iac_ref || 'main' }}
           DOMAIN_INPUT: ${{ github.event.inputs.domain || 'zitian.party' }}
           TIMEOUT_INPUT: ${{ github.event.inputs.timeout || '600' }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
 
@@ -99,6 +117,11 @@ jobs:
             exit 1
           fi
 
+          # Out-of-band alert ONLY on a non-PR failure: post-merge/scheduled red = an infra
+          # incident (page); a PR red is CI feedback to the author (no page).
+          alert_args=()
+          [[ "$EVENT_NAME" != "pull_request" ]] && alert_args+=(--alert-on-failure)
+
           # The canary prints a single JSON line on success; capture it so we can assert
           # the stack was actually torn down (no leaked ephemeral stack) before passing.
           set +e
@@ -106,7 +129,8 @@ jobs:
             --version-ref "$VERSION_REF_INPUT" \
             --iac-ref "$IAC_REF_INPUT" \
             --domain "$DOMAIN_INPUT" \
-            --timeout "$TIMEOUT_INPUT")"
+            --timeout "$TIMEOUT_INPUT" \
+            "${alert_args[@]}")"
           rc=$?
           set -e
 
