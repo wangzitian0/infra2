@@ -514,6 +514,99 @@ IaC Runner `/health` must report `op_service_account_token=true`. It checks the
 actual runner process environment, not only the rendered `/secrets/.env` file, so
 a stale process that did not reload Vault Agent output is degraded.
 
+### 6.4 Vault AppRole 迁移设计（Planned, #257/#259）
+
+> **Status**: Design (counterfactual-verified). IaC Runner is the **last** service
+> still on the legacy `token_file` static-`VAULT_APP_TOKEN` model; the other 11
+> prod services are already on AppRole. This section is the canonical design for
+> finishing the migration. **Do not implement without honoring the P0 invariants below.**
+
+#### 6.4.1 为什么 IaC Runner 不能照搬其它服务的机械迁移
+
+普通服务的 vault-agent 只渲染**自己**的 secret，迁 AppRole 就是换 `auth_method`。IaC
+Runner 有两个**不同**的 Vault 凭证需求，必须分开处理：
+
+| 凭证 | 用途 | 范围 |
+|------|------|------|
+| **Sidecar agent token** | 渲染 runner 自己的 secret（`secret/data/bootstrap/{env}/iac_runner`） | 窄：只读自身 |
+| **Deploy credential** | 传给 `invoke *.sync` 子进程作 `VAULT_ROOT_TOKEN`，让它们读写 `secret/data/{platform,finance_report}/{env}/*` | 宽但有界：跨服务 KV create/read/update（**无 delete、无 root**） |
+
+今天后者就是静态 `VAULT_APP_TOKEN`（`sync_runner.py::resolve_vault_root_token`
+回落到它）。它会衰减、且是长寿明文。
+
+#### 6.4.2 目标设计
+
+- **Sidecar**：迁 AppRole，窄角色（仅读自身 secret）。`role_id`/`secret_id` 在容器
+  启动时由 entrypoint **从 1Password 读出**（`op read`，凭 `OP_SERVICE_ACCOUNT_TOKEN`）
+  写入 `/vault/role_id`、`/vault/secret_id`；agent 登录后原生续期。
+- **Deploy credential**：复用已有的 **`VAULT_ROOT_TOKEN_OP_REF`** 解析路径，但其指向
+  一份**有界的 deployer AppRole 登录材料**（存于 1Password），而非 root。`resolve_vault_root_token`
+  改为：从 OP 取 deployer `role_id`/`secret_id` → AppRole login → 拿到一枚**短 TTL、
+  有界 policy** 的 token，作为 `VAULT_ROOT_TOKEN` 传给子进程。删除 `VAULT_APP_TOKEN` 回落。
+- 两者**唯一静态根都是 `OP_SERVICE_ACCOUNT_TOKEN`**——它零依赖、可 0 帧启动。Vault 里
+  没有任何 IaC Runner 静态依赖物，更没有"自己签发又自己轮换"的凭证。
+
+#### 6.4.3 最小权限 policy（deployer）
+
+```hcl
+# 跨服务 secret 同步——不可约的核心（runner 职责就是给所有服务同步 secret）
+path "secret/data/platform/+/*"        { capabilities = ["create","read","update"] }   # 无 delete
+path "secret/data/finance_report/+/*"  { capabilities = ["create","read","update"] }
+path "secret/metadata/platform/+/*"        { capabilities = ["read","list"] }
+path "secret/metadata/finance_report/+/*"  { capabilities = ["read","list"] }
+path "secret/data/bootstrap/+/iac_runner"  { capabilities = ["read"] }                  # 自身配置
+path "auth/token/lookup-self"          { capabilities = ["read"] }
+```
+
+相对今天的 policy，迁移后可**砍掉**两条（见 6.4.5 v2）：
+- `secret/data/bootstrap/+/vault_token_accessors/*`（CRUD）——这是**追踪/轮换旧静态
+  token 的账本**（`libs/vault_tokens.py`，仅 root 的 `vault.setup-tokens`/`setup-approle`
+  使用，**`.sync` 部署路径不调用它**）。全员 AppRole 后无静态 token 可追踪 → 冗余。
+- `auth/token/renew-self`（update）——AppRole 由 agent 原生续期，app 不需自 renew。
+
+> **依据**：`.sync → ensure_runtime_secrets` 实测只做 KV `get`/`set`（缺失则
+> `generate_password` 写回），**无铸 token、无写 policy/role、无 root 操作**，故上述
+> 有界 policy 充分。
+
+#### 6.4.4 P0 不变量（红线，迁移**必须**保持）
+
+1. **断环**：`SERVICE_TASK_MAP` 中 `bootstrap/{vault,1password,iac-runner}` 永远是
+   `None`——IaC Runner **不部署/不轮换它自己、不部署 Vault/1Password**。这是现有的
+   断环设计，迁移不得破坏。
+2. **不自指轮换**：IaC Runner 的 `role_id`/`secret_id` **绝不能**被纳入它自己的
+   `.sync`/accessor 轮换（`vault_token_accessors` 里不得有 `iac_runner`）。否则凭证过期时
+   要靠它自己刷新，而它已进不去 Vault → 死锁。
+3. **OP 扎根**：唯一允许的静态根是 `OP_SERVICE_ACCOUNT_TOKEN`（0 帧启动、零依赖）。
+   IaC Runner 身份不得扎根在"Vault 签发且需 IaC Runner 在线才能 provision/refresh"的
+   凭证上。`secret_id` 取 `secret_id_ttl=0 secret_id_num_uses=0`（永不过期）或从 OP 现取。
+4. **无 delete / 无 root**：deployer token 不得有 `delete`，不得改 bootstrap root 凭证。
+
+#### 6.4.5 反事实论证（无致命反例）
+
+| 攻击场景 | 结论 |
+|----------|------|
+| Vault 全擦/重 bootstrap | 系统固有；secret_id/role 由带外 root 重建，runbook 处理。非本设计引入 |
+| `.sync` 需要 root（铸 token / 写 policy） | **否**：`ensure_runtime_secrets` 仅 KV 读写，有界 policy 足够 |
+| app 拿不到 agent 的 token（共享卷问题） | **消解**：app 经 OP 自取部署凭证，不依赖 agent token sink，无需共享 |
+| accessor grant 砍掉后 sync 失败 | accessor 仅 root bootstrap 使用，`.sync` 不碰；v2 砍前再坐实，v1 保留 |
+| Dokploy/bootstrap 循环依赖 | **无环**：bootstrap 层（含 dokploy）全部排除自部署 |
+| `OP_SERVICE_ACCOUNT_TOKEN` 成 SPOF | 今天 app 也已依赖它读 op；非新增故障，带外管理 |
+
+#### 6.4.6 两阶段灰度
+
+- **v1（认证方式切换，policy 不变）**：sidecar `token_file → approle`；app 部署凭证
+  `VAULT_APP_TOKEN → OP-sourced bounded AppRole login`；保留现有 policy（含 accessors）。
+  先在 staging 验证一个完整 GitOps 部署链路（webhook → `.sync` → 服务 healthy）。
+- **v2（权限收敛）**：坐实 `.sync` 不依赖 `vault_token_accessors` 后，砍掉该 grant 与
+  `renew-self`，并清退 `libs/vault_tokens.py` 静态 token 账本相关代码。
+- iac-runner 是 bootstrap 服务、改坏会瘫掉部署链，**全程用外部 bootstrap 重建流程
+  （`scripts/deploy_iac_runner_bootstrap.sh`）而非 `/deploy` 自部署**（见 §5.2、§7.4），
+  并准备好回滚（恢复 `VAULT_APP_TOKEN` env + token_file compose）。
+
+> **紧迫性低、风险最高**：IaC Runner 走 bootstrap 部署、不经 preflight，且 sidecar 的
+> in-band `renew-self` 循环使其 token 不像被 preflight 拦的那些一样衰减 → 它**不是**部署
+> 误拦的来源。因此本迁移应作为**独立、设计完备、可回滚**的变更推进，不与其它服务捆绑。
+
 ---
 
 ## 7. 部署与维护
@@ -996,5 +1089,5 @@ docker logs iac-runner --tail 50
 
 ---
 
-**Last updated**: 2025-01-24  
+**Last updated**: 2026-06-16 (added §6.4 Vault AppRole migration design)  
 **Maintained by**: @wangzitian0
