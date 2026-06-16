@@ -182,15 +182,16 @@ def _deploy_platform(
     data_lane = resolve_data_lane(target)
 
     env = "production" if type_spec.env == "prod" else "staging"
-    short = service.split("/", 1)[1]  # platform/redis -> redis
-    # Fire (wait=False): the webhook accepts + deploys asynchronously, so the signed POST
-    # returns promptly instead of risking the 60s timeout on a slow rollout. Synchronous
-    # wait (poll_platform_deploy_status) is a follow-up once the iac_runner status vocabulary
-    # is confirmed live; ``wait`` is accepted for signature parity but not yet blocked on.
+    # iac_runner's SERVICE_TASK_MAP keys on the FULL service key (e.g. "platform/redis"),
+    # NOT a shortname — pass the registry key verbatim or it skips as "no sync task configured".
+    # Fire (wait=False): the webhook deploys asynchronously, so the signed POST returns
+    # promptly instead of risking the 60s timeout on a slow rollout. Synchronous wait
+    # (poll_platform_deploy_status) is a follow-up once the iac_runner status vocabulary is
+    # confirmed live.
     response = trigger_platform_deploy(
         env=env,
         ref=iac_sha,
-        services=[short],
+        services=[service],
         base_url=runner_url or os.getenv("IAC_RUNNER_URL", ""),
         secret=secret or os.getenv("IAC_WEBHOOK_SECRET", ""),
         triggered_by=triggered_by,
@@ -199,7 +200,7 @@ def _deploy_platform(
     detail = {
         "env": env,
         "ref": iac_sha,
-        "services": [short],
+        "services": [service],
         "iac_runner": response,
     }
     return DeployV2Result(target, data_lane, "iac-runner", detail)

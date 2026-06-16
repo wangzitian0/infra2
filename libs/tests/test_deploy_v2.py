@@ -437,7 +437,7 @@ def test_platform_service_routes_to_iac_runner(monkeypatch):
     assert res.backend == "iac-runner"
     assert sent["env"] == "staging"
     assert sent["ref"] == SHA_IAC  # deploy ref IS the iac_ref sha
-    assert sent["services"] == ["redis"]
+    assert sent["services"] == ["platform/redis"]
     assert res.detail["iac_runner"]["status"] == "success"
     assert res.target.code_version == SHA_IAC  # platform version identity = the iac commit
 
