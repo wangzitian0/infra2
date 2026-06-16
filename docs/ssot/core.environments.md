@@ -402,6 +402,53 @@ PR head 镜像）；preview/commit 是 sha；preview/tag 与 prod 是 release ta
 preview/branch、staging、canary 接受分支（默认 main）。`image_ref` 由**形态**决定（code→短 sha、release→tag），
 不由 type 决定。`make_target` 仍接收**已解析的 40-hex sha**作为身份；多态的 `version_ref` 在上一层 `deploy_v2` 解析。
 
+### 4.7.2 完备性论证（为什么这 4 轴足够，平台服务无需新轴）
+
+**命题**：坐标 `(service, type, version_ref, iac_ref)` 足以表达本仓库里的**每一次部署**——app 与平台服务都不需要第五个轴。
+
+**关键引理 —— `iac_ref` 钉死「怎么部署」的一切**：给定一个 infra2 commit，该 commit 完全确定每个服务的
+compose、env、secret 路径、**外部镜像 tag**、Traefik 路由 label、多容器编排。即「HOW」全在 `iac_ref` 里。
+
+**于是四轴各管一件正交的事**：
+
+| 轴 | 它定 | app | 平台服务 |
+|----|------|-----|----------|
+| `iac_ref` | **HOW**（IaC：compose/env/secret/镜像 pin/路由，全部）| infra2 commit | infra2 commit |
+| `service` | **WHICH**（部署哪个已注册服务）| `finance_report/app` | `platform/redis` … |
+| `type` | **哪种 env 制度**（派生 env + preview 槽 + 门控）| 7 种 | `staging` / `prod`（env_shared/prod_only 无 preview）|
+| `version_ref` | **哪个 app-code 制品** | 代码面（PR/sha/tag/branch）| **空**——平台制品 = `iac_ref` 钉的栈，无独立代码版本 |
+
+**∴ 任一次部署 = 这个四元组里的一个点。** `version_ref` 对平台服务**优雅退化为空**（坐标不需要新增轴）。
+
+> **实现注**：「退化为空」是*坐标*层面的结论，不是当前 contract 的现状。今天 `make_target(version=...)`
+> 与 `DeployTarget.code_version` 仍强制 40-hex sha（`deploy_v2` 总是 `version_ref → sha`），这是为 app 设计的。
+> 接平台服务时需要一个**小的 contract 调整**让 `version_ref` 可缺省——例如平台服务以其 `iac_ref` 的 sha 作
+> `code_version` 身份，或加一条 no-version 路径。这是 **impl 调整，不是新增坐标轴**（见下「execution」步）。
+
+**反例排查（之前扫描标的「gap」其实都不是坐标 gap，全在 `iac_ref` 或 per-service deployer 里）**：
+
+| 担心的「gap」 | 实际归属（非坐标轴）|
+|---------------|--------------------|
+| 平台服务无 code version | `version_ref` 为空；制品由 `iac_ref` 钉死 |
+| `secret_key` / vault 路径 | IaC（`iac_ref`）+ per-service deployer |
+| openpanel 自带 op-ch，版本 ≠ 平台 clickhouse | 两个镜像 tag 各 pin 在各自 compose（`iac_ref`）；坐标只选「部署 openpanel 这个服务」|
+| minio 双端点 / SSO 路由 label | compose 里的 Traefik label（`iac_ref`）|
+| 多容器编排 | 服务 compose（`iac_ref`）|
+
+**结论**：坐标在**设计层面已完备**。"让 v2 完备支持平台服务" = 三件**机械**活，**都不改坐标**：
+
+1. **registry**：把平台服务登记进 `deploy_contract.ServiceSpec`（纯元数据；`prod_only` / `env_shared` /
+   `web_facing` 已是现成字段）。
+2. **routing**：`deploy_v2` 按 `service` 分派后端——app → `deploy_primitive` / `preview_lifecycle`；
+   platform → 既有 `libs/deployer` / iac_runner `/deploy`（per-service 逻辑已存在，原样复用）。
+3. **execution**：平台后端就是现有的 `Deployer.sync` / iac_runner，不重写；外加上面那条**小 contract 调整**
+   让 `version_ref` 对平台可缺省（impl 层，非新轴）。
+
+这三件是**逐服务迁移**时做的（每个服务验证自己的子域、secret、健康检查后接进来），**不是设计缺口**。
+迁移顺序按复杂度：`redis`（最简——无域名、非 prod_only、secret 逻辑标准：`secret_key="password"` 走
+vault-init/vault-agent，无定制）→ `postgres` → `authentik` →
+`minio` → … → `openpanel`（prod_only + 内嵌 op-ch，最复杂）。
+
 ---
 
 ## 5. 测试门禁 (Quality Gates)
