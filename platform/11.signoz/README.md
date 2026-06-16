@@ -72,11 +72,14 @@ invoke signoz.status
 **Public browser-OTLP ingest** (Infra-014): `https://otel.${INTERNAL_DOMAIN}/v1/traces`
 → `otel-collector:4318`. This is the only public surface of the collector (4317/4318
 stay Docker-network-only). There is **no bearer token**: a browser cannot keep a secret,
-so a static token shipped to the page is not a credential. The endpoint is gated by the
-**CORS allowlist + collector limits** (`memory_limiter`) in `otel-collector-config.yaml`
-— keep the allowlist in sync with the FE origins. Edge per-IP rate limiting is a
-documented TODO (to be added as a Dokploy-managed Traefik middleware, never a
-hand-written compose label). See `docs/ssot/ops.observability.md`.
+so a static token shipped to the page is not a credential. **Note the posture precisely:
+CORS is _not_ authentication** — it only restricts which *browser* origins may read the
+response cross-origin; it does **not** stop a non-browser client (curl/script) from POSTing
+OTLP directly. This is an intentionally **unauthenticated public ingest**; abuse is bounded
+by the collector limits (`memory_limiter`) in `otel-collector-config.yaml` and the edge
+rate-limit TODO — not by access control. Keep the CORS allowlist in sync with the FE
+origins. Edge per-IP rate limiting is a documented TODO (to be added as a Dokploy-managed
+Traefik middleware, never a hand-written compose label). See `docs/ssot/ops.observability.md`.
 
 Both domains are **Dokploy-managed** (no hand-written Traefik labels in `compose.yaml`):
 `SigNozDeployer` registers the Web UI domain from `subdomain="signoz"` /

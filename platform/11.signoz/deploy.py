@@ -166,6 +166,17 @@ class SigNozDeployer(Deployer):
                 f"Domain conflict: {conflict['host']} exists with port "
                 f"{conflict['existing_port']}, need {conflict['desired_port']}"
             )
+        # ensure_domains() reports create failures in `errors` rather than raising;
+        # surface them loudly (and fail) so otel.<domain> is never left silently
+        # unconfigured — otherwise FE telemetry would drop with no deploy-time signal.
+        errors = result.get("errors") or []
+        for err in errors:
+            error(f"OTLP ingest domain error for {otel_host}: {err}")
+        if errors:
+            raise RuntimeError(
+                f"Failed to configure OTLP ingest domain {otel_host}: "
+                f"{len(errors)} error(s) — see log above."
+            )
 
         return compose_id
 

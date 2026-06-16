@@ -9,10 +9,14 @@ receivers:
       # ingest domain otel.zitian.party, by the browser frontend (Infra-014).
       # The browser sends cross-origin XHR/fetch with a preflight, so the receiver
       # MUST echo CORS for our known app origins (and localhost dev). There is NO
-      # bearer token: a browser cannot keep a secret, so the public endpoint is gated
-      # by this CORS allowlist + the collector limits below (memory_limiter), NOT by an
-      # upstream Traefik header/auth matcher. Keep this CORS list in sync with the FE
-      # origins. See platform/11.signoz/README.md and ops.observability.md.
+      # bearer token: a browser cannot keep a secret.
+      # SECURITY POSTURE — be precise: CORS is NOT authentication. It only governs
+      # which *browser* origins may read responses cross-origin; it does NOT stop a
+      # non-browser client (curl/script) from POSTing OTLP straight to this endpoint.
+      # This is therefore an intentionally *unauthenticated public ingest*; abuse is
+      # bounded by the collector limits below (memory_limiter) and the edge rate-limit
+      # TODO, NOT by access control. Keep the CORS list in sync with the FE origins.
+      # See platform/11.signoz/README.md and ops.observability.md.
       # TODO(Infra-014): add edge per-IP rate limiting (e.g. a Dokploy/Traefik
       # ratelimit middleware managed via Dokploy, NOT a hand-written compose label) to
       # cap burst abuse of the unauthenticated public ingest.

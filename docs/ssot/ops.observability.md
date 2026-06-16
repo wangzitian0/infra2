@@ -144,9 +144,13 @@ finance_report 同时上报**后端**与**浏览器前端**两条遥测链路，
 
 collector 的 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一公网面是单一 ingest 域名 `otel.${INTERNAL_DOMAIN}`，转发到 `:4318`（OTLP HTTP）。该域名是 **Dokploy 托管**的（无手写 Traefik 标签）：`SigNozDeployer` 的 `composing()` 通过额外的 `client.ensure_domains(..., service_name="otel-collector")` 调用注册它（Web UI 域名 `signoz.<domain>` → `signoz:8080` 仍由基类流程从 `subdomain="signoz"` 注册）。
 
-公网 ingest **没有 bearer token**：浏览器无法保管秘密，下发到页面的静态 token 不构成凭据，因此 #360 的 `HeadersRegexp(Authorization, ^Bearer <token>$)` 匹配器与 Vault `otel_ingest_token` 已删除。改由两道**应用层**闸守护：
+公网 ingest **没有 bearer token**：浏览器无法保管秘密，下发到页面的静态 token 不构成凭据，因此 #360 的 `HeadersRegexp(Authorization, ^Bearer <token>$)` 匹配器与 Vault `otel_ingest_token` 已删除。
 
-1. **CORS 允许列表**：`platform/11.signoz/otel-collector-config.yaml` 的 OTLP HTTP receiver 仅对已知 report FE 域名回显 CORS，必须与 FE 域名保持同步。
+> ⚠️ **CORS 不是鉴权**：CORS 只约束*浏览器*跨域读取响应的来源，**并不能**阻止非浏览器客户端（curl/脚本）直接 POST OTLP 到该端点。因此这是一个**有意为之的、未鉴权的公网 ingest**；它的滥用边界由 collector 限额与边缘限流（TODO）兜底，而非访问控制。
+
+当前由两道**应用层**措施约束（注意：是“约束滥用”而非“鉴权”）：
+
+1. **CORS 允许列表**：`platform/11.signoz/otel-collector-config.yaml` 的 OTLP HTTP receiver 仅对已知 report FE 域名回显 CORS，必须与 FE 域名保持同步（仅影响浏览器）。
 2. **collector 限额**：pipeline 上的 `memory_limiter` 在突发下软限内存、提前拒绝数据，避免被未鉴权的公网 ingest 打爆。
 
 > **TODO（Infra-014）**：边缘按来源 IP 限流仍待补（应通过 **Dokploy 托管**的 Traefik ratelimit 中间件实现，**禁止**手写 compose 标签）。
