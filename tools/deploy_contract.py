@@ -34,7 +34,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 
+from libs import service_registry
 from tools.deploy_env_config import env_config, preview_alias
 
 _SHA_RE = re.compile(r"\A[0-9a-f]{40}\Z")  # a resolved, image-addressable commit sha
@@ -68,28 +70,59 @@ class ServiceSpec:
     iac_pinned: bool = False
 
 
-# Seed registry. The finance_report app stack deploys via the in-process backends
-# (deploy_primitive / preview_lifecycle); platform services are ``iac_pinned`` and route to
-# the iac_runner /deploy webhook (libs/iac_runner_client). Platform services are registered
-# per-batch as they migrate onto deploy_v2 (SSOT §4.7.2) — redis is the first.
+# The finance_report APP has a BESPOKE deploy_v2 backend (Dokploy preview_lifecycle /
+# deploy_primitive), so its spec is stated explicitly here. EVERY OTHER service is
+# ``iac_pinned`` and routes to the iac_runner /deploy webhook — and its facts (subdomain,
+# prod_only) are DERIVED from its deploy.py Deployer class via libs.service_registry, the
+# single source of truth (Infra-013: never hand-copy service facts into a parallel list).
+_APP_KEY = "finance_report/app"
+
 SERVICES: dict[str, ServiceSpec] = {
-    "finance_report/app": ServiceSpec(
-        key="finance_report/app", base_subdomain="report", web_facing=True
-    ),
-    "platform/redis": ServiceSpec(
-        key="platform/redis", base_subdomain="redis", web_facing=False, iac_pinned=True
-    ),
+    _APP_KEY: ServiceSpec(key=_APP_KEY, base_subdomain="report", web_facing=True),
 }
 
 
+@lru_cache(maxsize=1)
+def _iac_pinned_specs() -> dict[str, ServiceSpec]:
+    """Every non-app service, derived from the IaC Deployer classes (service_registry).
+
+    These route to the iac_runner webhook; their subdomain / prod_only come straight from
+    the deploy.py the iac_runner already syncs, so deploy_v2 can never drift from the deploy
+    fan-out (no per-service hand-registration — all platform + app-backing services at once).
+    """
+    out: dict[str, ServiceSpec] = {}
+    for sid, meta in service_registry.service_attrs().items():
+        if sid in SERVICES:  # the app's bespoke spec wins
+            continue
+        out[sid] = ServiceSpec(
+            key=sid,
+            base_subdomain=meta.subdomain or meta.service,
+            web_facing=meta.subdomain is not None,
+            prod_only=meta.prod_only,
+            iac_pinned=True,
+        )
+    return out
+
+
+def all_service_keys() -> list[str]:
+    """Every deployable service deploy_v2 knows — the app + every iac_runner-synced service."""
+    return sorted({*SERVICES, *_iac_pinned_specs()})
+
+
 def service_spec(service: str) -> ServiceSpec:
-    """Return the ServiceSpec for a service key. Raises ValueError if unregistered."""
-    try:
+    """Return the ServiceSpec for a service key. Raises ValueError if unknown.
+
+    The app is explicit; every other service is derived from libs.service_registry (its
+    deploy.py), so the registry is never a hand-maintained copy.
+    """
+    if service in SERVICES:
         return SERVICES[service]
-    except KeyError:
+    spec = _iac_pinned_specs().get(service)
+    if spec is None:
         raise ValueError(
-            f"unknown service {service!r}: expected one of {sorted(SERVICES)}"
-        ) from None
+            f"unknown service {service!r}: expected one of {all_service_keys()}"
+        )
+    return spec
 
 
 def sub_domain_for(

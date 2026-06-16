@@ -24,10 +24,8 @@ on:
   workflow_dispatch:
     inputs:
       service:
-        description: "Service (default app; platform/* routes to the iac_runner webhook, staging/prod only)"
+        description: "Service key (default app; any service_registry key, e.g. platform/redis — non-app routes to the iac_runner webhook, staging/prod only)"
         required: false
-        type: choice
-        options: [finance_report/app, platform/redis]
         default: finance_report/app
       type:
         description: "Deploy type (the scenario)"
