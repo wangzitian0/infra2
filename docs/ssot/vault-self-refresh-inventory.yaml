@@ -100,6 +100,9 @@ services:
   - id: platform/openpanel
     project: platform
     dokploy_service: openpanel
+    # Migrated to AppRole auth (#257/#259): vault-agent uses VAULT_ROLE_ID +
+    # VAULT_SECRET_ID, not a static VAULT_APP_TOKEN.
+    auth_method: approle
     compose_path: platform/24.openpanel/compose.yaml
     vault_agent_config_path: platform/24.openpanel/vault-agent.hcl
     secret_template_path: platform/24.openpanel/secrets.ctmpl
