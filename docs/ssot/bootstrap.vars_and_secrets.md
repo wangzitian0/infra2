@@ -47,6 +47,22 @@ CLI 命令 `invoke env.*` 和 `get_secrets()` 函数通过 `--type` 参数区分
 - Bootstrap 阶段全部在 1Password（因为 Vault 尚未部署）
 - 路径无 env 层：`{project}/{service}`
 
+
+### 1.4 凭证同步方向（1Password ↔ Vault）
+
+`root_vars`(1Password) 与 `app_vars`(Vault) 按**源头**决定同步方向，互不重叠、不形成双写环：
+
+| 凭证类别 | 源头 (SSOT) | 同步方向 | 触发方式 | 示例 |
+|---------|------------|---------|---------|------|
+| **人配置的第三方凭证**（人去外部系统申请/填写） | 1Password (`root_vars`) | 1Password → Vault | 部署时**自动**（服务 `deploy.py` 的 `_sync_1password_to_vault`） | alerting 的飞书 `FEISHU_*`、桥接 basic-auth、心跳 token |
+| **机器生成、人偶尔登录的 Web UI 密码** | Vault (`app_vars`，`generate_password`) | Vault → 1Password | **手动**（见 §3.5） | authentik / openpanel 的 admin `bootstrap_password` |
+| **纯机器运行时 secret** | Vault (`app_vars`) | 不同步（仅 Vault） | — | DB / Redis 连接串、各服务 `secret_key` / `cookie_secret` |
+
+**原则**：机器运行时**必须**读到的 → 自动同步进 Vault；人**偶尔**才用的（登录 / 灾难恢复）→ 手动同步或直接放 1Password。
+
+> **为什么 iac-runner 需要 `OP_SERVICE_ACCOUNT_TOKEN`**
+> iac-runner 自身读 Vault 走 AppRole（Dokploy 注入的 `VAULT_ROLE_ID` / `VAULT_SECRET_ID`，**不用** `op`）。它需要 `op` 的**唯一**原因是：它执行平台部署任务，其中"1Password → Vault 自动同步"这一步要用 `op` 读 1Password。因此 op 依赖**收敛到最小**——全仓只有 `platform/12.alerting` 一个服务真正触发此同步。**新增服务若没有"人配置的第三方凭证"，应直接 `env.set --type=app_vars` 写 Vault，不要引入 1Password 依赖。**
+
 ---
 
 ## 2. 1Password Vault 结构
