@@ -138,6 +138,12 @@ services:
       #   performed via the backend API, so the frontend does not need this variable.
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      # BE->OpenPanel (server-side product analytics). Same non-secret per-env
+      # client-id the frontend uses (injected by deploy_primitive from
+      # tools/openpanel_clients.py); empty => backend analytics is a no-op.
+      OPENPANEL_CLIENT_ID: ${OPENPANEL_CLIENT_ID:-}
+      OPENPANEL_API_URL: https://openpanel.${INTERNAL_DOMAIN}/api
+      OPENPANEL_ENVIRONMENT: ${OPENPANEL_ENVIRONMENT:-}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       start_period: ${BACKEND_HEALTHCHECK_START_PERIOD:-60s}

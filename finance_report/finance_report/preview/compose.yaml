@@ -137,6 +137,11 @@ services:
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      # BE->OpenPanel: preview shares the one preview project (injected by
+      # preview_lifecycle from tools/openpanel_clients.py); empty => no-op.
+      OPENPANEL_CLIENT_ID: ${OPENPANEL_CLIENT_ID:-}
+      OPENPANEL_API_URL: https://openpanel.${INTERNAL_DOMAIN}/api
+      OPENPANEL_ENVIRONMENT: ${OPENPANEL_ENVIRONMENT:-}
       # The ephemeral-DB DSN the entrypoint forces AFTER sourcing Vault secrets.
       # asyncpg driver, pointing at the local `db` service (NOT finance_report-postgres*).
       PREVIEW_DATABASE_URL: postgresql+asyncpg://${PREVIEW_DB_USER:-preview}:${PREVIEW_DB_PASSWORD:-preview}@finance_report-preview-db${ENV_SUFFIX}:5432/${PREVIEW_DB_NAME:-finance_report}
