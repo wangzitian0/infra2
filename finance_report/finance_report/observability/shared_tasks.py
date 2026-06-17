@@ -29,6 +29,7 @@ from libs.observability_dashboards import (
     build_dashboard_import_payload,
     load_alert_definitions,
     load_dashboard,
+    load_openpanel_analytics,
 )
 
 
@@ -65,6 +66,19 @@ def print_dashboard(c):
     payload = build_dashboard_import_payload()
     print(json.dumps(payload, indent=2, sort_keys=True))
     return payload
+
+
+@task
+def print_openpanel_analytics(c):
+    """Validate + print the OpenPanel analytics intent (funnels + events board).
+
+    OpenPanel has no write API/MCP for funnels/dashboards, so there is no `apply`
+    here — this validates the checked-in spec and prints it for the SOP-006 manual
+    build runbook. Querying these views on-demand is via the OpenPanel MCP / CLI.
+    """
+    spec = load_openpanel_analytics()
+    print(json.dumps(spec, indent=2, sort_keys=True))
+    return spec
 
 
 @task

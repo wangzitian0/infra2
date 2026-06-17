@@ -113,6 +113,35 @@ OpenPanel 是**单实例**；环境隔离靠**每个环境一个 project / clien
 
 OpenPanel 事件分析由 app 仓库已发布的查询 CLI `common/observability/openpanel_query.py` 完成，使用 OpenPanel query API token，存于 Vault `secret/platform/<env>/openpanel/api_key`。本仓库不重新实现查询逻辑。遥测（traces/logs）查询见 [ops.observability.md](ops.observability.md) 的 `invoke signoz.shared.query-logs` / `list-services`。
 
+### SOP-005: 查询通道 — MCP（按需问 FE/BE 问题）
+
+> 目标（EPIC-024 原始诉求）：**后期直接通过 OpenPanel / SigNoz 查前端/后端问题**。两边都有官方 MCP server，自托管均支持自定义 URL。**这是"能自动化的"查询通道**；funnel/看板的"创建"不能自动化（见 SOP-006）。
+
+| MCP | 能力 | 自托管接入 |
+|-----|------|-----------|
+| **OpenPanel** (`api.openpanel.dev/mcp`，self-host `https://openpanel.${INTERNAL_DOMAIN}/mcp`) | **只读**（`get_events` / `get_chart` / 事件写入），**不能建 funnel/看板** | token = base64(`clientId:clientSecret`)；**需 `read` 或 `root` 类型 client**（现有 finance-* 是 `write` 型，用不了 MCP → 见 SOP-006 步骤 0 先建一个 read client），存 Vault `secret/platform/<env>/openpanel/mcp_token` |
+| **SigNoz** (`SigNoz/signoz-mcp-server`，self-host) | **可读写**（`signoz_create_dashboard` / `create_alert` / 查询 traces·logs·metrics） | `SIGNOZ_URL=https://signoz.${INTERNAL_DOMAIN}` + `SIGNOZ-API-KEY`（复用 Vault `secret/platform/signoz` 的 api_key） |
+
+MCP client 配置（占位 token 走 Vault，**勿提交明文**）：
+```jsonc
+{
+  "mcpServers": {
+    "openpanel": { "url": "https://openpanel.${INTERNAL_DOMAIN}/mcp?token=${OPENPANEL_MCP_TOKEN}" },
+    "signoz":    { "url": "https://signoz.${INTERNAL_DOMAIN}/mcp", "headers": { "SIGNOZ-API-KEY": "${SIGNOZ_API_KEY}" } }
+  }
+}
+```
+
+### SOP-006: 基线 funnel + 事件板（OpenPanel 无写 API → 手动建）
+
+> OpenPanel 的 funnel/看板**只能在 UI 里建**（REST 与 MCP 都没有创建 report/dashboard 的能力，仅 `/track`+读取）。声明式 intent 固化在 `finance_report/finance_report/observability/openpanel_analytics.json`（`invoke fr-observability.shared.print-openpanel-analytics` 校验+打印），本 SOP 是其**手动 apply**。事件名必须与 FE `ANALYTICS_EVENTS`（`apps/frontend/src/lib/analytics.ts`）+ BE `src/analytics.py` 一致。
+
+0. **（前置，给 MCP 用）** OpenPanel → Settings → API Clients → 新建一个 **`read`** client → 复制其 MCP token → 存 Vault `secret/platform/<env>/openpanel/mcp_token`。
+1. 登录 `https://openpanel.${INTERNAL_DOMAIN}`，选对应环境 project（`finance-production` / `finance-staging` / `finance-preview`）。
+2. **建漏斗** "Upload → Report"：新建 Report → 图表类型 **Funnel** → 依次加 3 步事件 `upload_started` → `upload_succeeded` → `report_generated`，conversion window 设 **24h**，breakdown 选 `deployment.environment`，保存到一个 dashboard。
+3. **建事件板** "Key product events"：同一 dashboard 加若干 Report，覆盖 `screen_view / signup / upload_started / upload_succeeded / upload_failed / report_generated / review_approved`，breakdown `deployment.environment`。
+4. 验证：跑一遍真实 upload→report 流程，确认漏斗三步都有计数（事件由 FE 与 BE `report_generated` 同时上报，见 SOP-003）。
+
 ---
 
 ## 5. 验证与测试 (The Proof)

@@ -17,10 +17,46 @@ from libs.observability_dashboards import (
     build_dashboard_import_payload,
     load_alert_definitions,
     load_dashboard,
+    load_openpanel_analytics,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
 OBS_DIR = ROOT / "finance_report" / "finance_report" / "observability"
+
+
+def test_openpanel_analytics_spec_is_valid_and_funnel_is_well_formed() -> None:
+    """D: the OpenPanel analytics intent (funnels + events board) parses, the activation
+    funnel has >=2 ordered steps, and the events board is non-empty. (OpenPanel has no
+    write API/MCP, so this spec is the source of truth for the SOP-006 manual build.)"""
+    spec = load_openpanel_analytics()
+    funnel = spec["funnels"][0]
+    assert funnel["name"] == "Upload → Report"
+    assert funnel["steps"] == ["upload_started", "upload_succeeded", "report_generated"]
+    assert spec["events_board"]["events"]
+
+
+def test_openpanel_funnel_steps_match_the_fe_event_taxonomy() -> None:
+    """The funnel steps + board events must be real event names — guard against a typo
+    drifting from the FE ANALYTICS_EVENTS / BE emitter taxonomy. (Names are asserted
+    against the documented canonical set; the FE source lives in the app repo.)"""
+    canonical = {
+        "screen_view",
+        "signup",
+        "upload_started",
+        "upload_succeeded",
+        "upload_failed",
+        "report_generated",
+        "review_approved",
+    }
+    spec = load_openpanel_analytics()
+    used = set(spec["funnels"][0]["steps"]) | set(spec["events_board"]["events"])
+    assert used <= canonical, f"unknown event name(s): {used - canonical}"
+
+
+def test_invalid_openpanel_analytics_raises() -> None:
+    """A missing/malformed spec fails loudly instead of silently."""
+    with pytest.raises(ObservabilityDefinitionError):
+        load_openpanel_analytics(OBS_DIR / "does-not-exist-openpanel.json")
 
 
 def test_definition_files_are_checked_in_and_parse() -> None:
