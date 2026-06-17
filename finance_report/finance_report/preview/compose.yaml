@@ -229,6 +229,8 @@ services:
       OPENPANEL_CLIENT_ID: ${OPENPANEL_CLIENT_ID:-}
       OPENPANEL_API_URL: https://openpanel.${INTERNAL_DOMAIN}/api
       OPENPANEL_ENVIRONMENT: ${OPENPANEL_ENVIRONMENT:-}
+      # OpenPanel web SDK script served by the SELF-HOSTED instance (not the cloud CDN).
+      OPENPANEL_SCRIPT_URL: https://openpanel.${INTERNAL_DOMAIN}/op1.js
       # Browser → SigNoz traces (Infra-014). Same public ingest path as staging/prod
       # (otel.${INTERNAL_DOMAIN}); deployment.environment carries this alias's ENV
       # token (main / pr-<N> / commit-<sha7>) so preview FE spans are filterable.

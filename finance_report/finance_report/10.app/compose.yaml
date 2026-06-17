@@ -198,6 +198,9 @@ services:
       # by project/client id (model B), not by OpenPanel instance.
       OPENPANEL_API_URL: https://openpanel.${INTERNAL_DOMAIN}/api
       OPENPANEL_ENVIRONMENT: ${OPENPANEL_ENVIRONMENT:-}
+      # OpenPanel web SDK script served by the SELF-HOSTED instance (not the
+      # openpanel.dev cloud CDN) so the browser loads analytics from our own domain.
+      OPENPANEL_SCRIPT_URL: https://openpanel.${INTERNAL_DOMAIN}/op1.js
       # Browser → SigNoz traces (Infra-014). The browser cannot reach the
       # Docker-internal collector, so FE OTLP goes through the ONE public ingest
       # domain otel.${INTERNAL_DOMAIN} (CORS-gated + collector memory_limiter; NO
