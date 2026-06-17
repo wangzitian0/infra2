@@ -131,7 +131,7 @@ GitHub push to main
 ```bash
 cd /path/to/infra2
 
-# 1. 生成 VAULT_APP_TOKEN
+# 1. 注入 AppRole 凭证 (VAULT_ROLE_ID/VAULT_SECRET_ID)
 export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/.../Token')
 invoke vault.setup-approle
 

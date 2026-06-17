@@ -27,9 +27,9 @@
    - **解决**: 在 Dockerfile 中添加 `unzip` 到 apt-get install
    - **验证**: Docker build 成功完成
 
-4. **Vault Token 配置**
+4. **Vault AppRole 配置**
    - 运行 `invoke vault.setup-approle` 注入 AppRole 凭证 (`VAULT_ROLE_ID`/`VAULT_SECRET_ID`)
-   - Token 自动注入到 Dokploy 环境变量
+   - AppRole 凭证自动注入到 Dokploy 环境变量
 
 5. **IaC Runner 部署验证**
    - 容器健康检查通过

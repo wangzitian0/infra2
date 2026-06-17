@@ -10,7 +10,7 @@ Track top issues discovered during the project.
 - [ ] `platform/24.openpanel/deploy.py`: Ensure databases are created before starting OpenPanel
 - [ ] `platform/24.openpanel/compose.yaml`: Configure Traefik labels correctly for path stripping
 - [ ] `docs/ssot/platform.openpanel.md`: Document integration architecture and variables
-- [ ] **staging OpenPanel** `platform-openpanel-vault-agent-staging` crash-loops with `VAULT_APP_TOKEN is required`: the staging app token was never provisioned (OpenPanel was prod-only before). Run `vault.setup-approle` for staging openpanel, then it can run isolated (see #268). Currently `docker stop`-ped to clear the alias collision during the prod fix.
+- [ ] **staging OpenPanel** `platform-openpanel-vault-agent-staging` crash-loops with `VAULT_ROLE_ID and VAULT_SECRET_ID are required`: the staging AppRole creds were never provisioned (OpenPanel was prod-only before). Run `vault.setup-approle` for staging openpanel, then it can run isolated (see #268). Currently `docker stop`-ped to clear the alias collision during the prod fix.
 
 ## Resolved — "deployed but not usable" incident (2026-06-11)
 

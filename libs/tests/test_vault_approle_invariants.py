@@ -16,6 +16,7 @@ list), so a newly-added vault-agent service is automatically held to the same in
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -44,8 +45,9 @@ def test_vault_agent_uses_approle_not_token_file(hcl: Path) -> None:
     """Drift guard: the `token_file` model was retired in #369. Every vault-agent must
     auto_auth via AppRole, and `type = "token_file"` must never come back."""
     text = hcl.read_text(encoding="utf-8")
-    # match the auth-method config, not a stray mention in a migration comment.
-    normalized = text.replace(" ", "")
+    # match the auth-method config, not a stray mention in a migration comment. Strip ALL
+    # whitespace (spaces/tabs/newlines) so a reformatted `type =\n"token_file"` can't slip past.
+    normalized = re.sub(r"\s+", "", text)
     assert 'type="token_file"' not in normalized and 'method"token_file"' not in normalized, (
         f"{hcl.relative_to(REPO_ROOT)} reintroduced token_file auth — retired in #369; "
         "use AppRole (role_id + secret_id)."
@@ -87,5 +89,14 @@ def test_vault_agent_entrypoint_fails_fast_on_missing_creds(compose: str) -> Non
         f"{compose} vault-agent entrypoint is missing a fail-fast guard for {missing} — a "
         "missing value would deadlock the healthcheck instead of erroring fast."
     )
-    # the guards must abort the container, not merely warn.
-    assert "exit 1" in text, f"{compose}: cred guards must `exit 1`."
+    # Each guard must ABORT, not merely warn: assert `exit 1` lives inside the guard's own
+    # block (check → its closing `fi`), so an unrelated `exit 1` elsewhere can't mask a
+    # guard that stopped exiting.
+    for name, check in _REQUIRED_GUARDS.items():
+        idx = text.find(check)
+        closing = re.search(r"\bfi\b", text[idx:])
+        block = text[idx : idx + (closing.end() if closing else 200)]
+        assert "exit 1" in block, (
+            f"{compose}: the {name} fail-fast guard is present but its block does not "
+            "`exit 1` — it would not abort the container on a missing value."
+        )
