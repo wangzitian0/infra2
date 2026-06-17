@@ -38,7 +38,7 @@ _LEGACY_ENDPOINT = "https://otel.zitian.party/v1/traces"
 _LEGACY_CORS_ORIGINS = [
     "https://report.zitian.party",
     "https://report-staging.zitian.party",
-    "https://report-main.zitian.party",
+    "https://report-branch-main.zitian.party",
     "https://report-pr-*.zitian.party",
     "https://report-commit-*.zitian.party",
     "http://localhost:3000",
@@ -141,3 +141,16 @@ def test_compose_files_parse_and_consume_injected_endpoint():
         )
         # The fallback default must equal the legacy effective value once interpolated.
         assert "https://otel.${INTERNAL_DOMAIN}/v1/traces}" in value
+
+
+def test_raw_collector_config_template_is_valid_yaml():
+    """#368 CR: the *unrendered* template must itself parse as YAML — the CORS
+    placeholder is an inline scalar (`allowed_origins: ${OTEL_CORS_ALLOWED_ORIGINS}`),
+    not a column-0 token that breaks editor/CI YAML validation."""
+    import yaml
+
+    path = ROOT / "platform/11.signoz/otel-collector-config.yaml"
+    doc = yaml.safe_load(path.read_text())
+    cors = doc["receivers"]["otlp"]["protocols"]["http"]["cors"]
+    # Before rendering, the placeholder is just a scalar value (not a list yet).
+    assert cors["allowed_origins"] == "${OTEL_CORS_ALLOWED_ORIGINS}"

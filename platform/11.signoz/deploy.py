@@ -58,12 +58,14 @@ class SigNozDeployer(Deployer):
         content = content.replace("${ENV_SUFFIX}", e.get("ENV_SUFFIX") or "")
 
         domain = e.get("INTERNAL_DOMAIN") or "localhost"
-        # Render as a YAML list nested under `allowed_origins:` (12-space indent to
-        # match the receivers.otlp.protocols.http.cors block).
-        origins_block = "\n".join(
-            f"            - {origin}" for origin in cors_allowed_origins(domain=domain)
-        )
-        return content.replace("${OTEL_CORS_ALLOWED_ORIGINS}", origins_block)
+        # Render as a YAML *flow* sequence on the `allowed_origins:` line — e.g.
+        # ["https://report.zitian.party", ...]. Inline so the raw, unrendered template
+        # is itself valid YAML (the placeholder is just a scalar value until replaced),
+        # which keeps editors / YAML lints happy. Flow lists are valid YAML the
+        # collector parses identically to a block list.
+        origins = cors_allowed_origins(domain=domain)
+        flow_seq = "[" + ", ".join(f'"{origin}"' for origin in origins) + "]"
+        return content.replace("${OTEL_CORS_ALLOWED_ORIGINS}", flow_seq)
 
     @classmethod
     def _deliver_collector_config(cls, c, e) -> bool:

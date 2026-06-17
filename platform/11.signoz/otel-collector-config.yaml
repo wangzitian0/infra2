@@ -28,9 +28,10 @@ receivers:
           # cannot drift from the actual app domains. The placeholder below is replaced
           # by SigNozDeployer._render_collector_config (see platform/11.signoz/deploy.py).
           # Effective list (prod/staging from EnvConfig + preview aliases + local dev):
-          #   report / report-staging / report-main / report-pr-* / report-commit-* / localhost:3000
-          allowed_origins:
-${OTEL_CORS_ALLOWED_ORIGINS}
+          #   report / report-staging / report-branch-main / report-pr-* / report-commit-* / localhost:3000
+          # Rendered as a YAML flow sequence so the raw template is itself valid YAML
+          # (the placeholder is a scalar until _render_collector_config substitutes it).
+          allowed_origins: ${OTEL_CORS_ALLOWED_ORIGINS}
           allowed_headers:
             - "*"
           max_age: 7200

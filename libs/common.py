@@ -194,17 +194,20 @@ OTLP_TRACES_PATH = "/v1/traces"
 
 
 def otel_ingest_endpoint(env: dict | None = None) -> str:
-    """Build the public browser-OTLP traces endpoint, once, from service_domain().
+    """Build the public browser-OTLP traces endpoint, once.
 
-    Returns ``https://<otel-domain>/v1/traces`` (e.g.
+    Returns ``https://<otel-subdomain>.<domain>/v1/traces`` (e.g.
     ``https://otel.zitian.party/v1/traces``), or ``""`` when INTERNAL_DOMAIN is
-    unset. This is the SINGLE construction point: compose files consume the
-    injected value and deploy.py reuses this instead of a second literal.
+    unset. The ingest is a SINGLE shared instance, so the domain is **never**
+    env-suffixed (always ``otel.<domain>``, not ``otel-staging.<domain>``) — built
+    directly from INTERNAL_DOMAIN, not via the suffix-applying ``service_domain``.
+    This is the SINGLE construction point: compose files consume the injected value
+    and deploy.py reuses this instead of a literal.
     """
-    host = service_domain(OTEL_INGEST_SUBDOMAIN, env)
-    if not host:
+    domain = (env or {}).get("INTERNAL_DOMAIN")
+    if not domain:
         return ""
-    return f"https://{host}{OTLP_TRACES_PATH}"
+    return f"https://{OTEL_INGEST_SUBDOMAIN}.{domain}{OTLP_TRACES_PATH}"
 
 
 def check_service(c: "Context", service: str, health_cmd: str) -> dict:

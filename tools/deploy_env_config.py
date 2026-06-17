@@ -284,9 +284,11 @@ def cors_allowed_origins(*, domain: str) -> list[str]:
     for env_name in ("prod", "staging"):
         cfg = _ENVIRONMENTS[env_name]
         origins.append(cfg.app_url(domain=domain))
-    # Preview branch aliases (e.g. report-main) — a concrete public URL each.
+    # Preview branch aliases — a concrete public URL each. The branch-tip alias is
+    # `branch-<name>` => report-branch-<name>.<domain> (matches PreviewAlias.app_url),
+    # e.g. report-branch-main, NOT report-main.
     for branch in _PREVIEW_CORS_BRANCHES:
-        origins.append(f"https://report-{branch}.{domain}")
+        origins.append(f"https://report-branch-{branch}.{domain}")
     # Preview pr/commit aliases — wildcard, since the value is per-deploy.
     for kind in _PREVIEW_CORS_WILDCARD_KINDS:
         origins.append(f"https://report-{kind}-*.{domain}")
