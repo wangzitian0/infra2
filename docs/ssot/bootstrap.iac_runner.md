@@ -469,24 +469,26 @@ invoke env.set GIT_REPO_URL=https://github.com/wangzitian0/infra2.git \
   --project=bootstrap --service=iac_runner
 ```
 
-### 6.2 Vault Token
+### 6.2 Vault 凭证（AppRole）
 
-**Token 类型**: Scoped deploy App Token
+**认证方式**: AppRole（单一有界 role；no static `VAULT_APP_TOKEN`）— 详见 §6.4。
 
-**生成命令**:
+**生成 / 注入命令**:
 ```bash
 export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token')
-invoke vault.setup-tokens
+invoke vault.setup-approle --project=bootstrap --service=iac_runner
 ```
 
-**Token 自动注入**:
-- `invoke vault.setup-tokens` 自动在 Dokploy 中为 IaC Runner 配置
-  `VAULT_APP_TOKEN`，并要求 Dokploy 产生新的 runtime deployment record
-- Vault Agent 使用此 token 拉取 bootstrap/iac_runner 密钥
-- Sync subprocesses use the same scoped token as `VAULT_ROOT_TOKEN` so deployers
-  can read and repair `platform/{env}/*` and `finance_report/{env}/*` runtime
-  secret fields before deployment. The token must not grant `delete`, and it
-  must not mutate bootstrap root credentials.
+**凭证注入与使用**:
+- `invoke vault.setup-approle` 生成 `role_id`/`secret_id`（`secret_id_ttl=0` 永不过期），
+  注入 Dokploy compose env（`VAULT_ROLE_ID`/`VAULT_SECRET_ID`），并要求 Dokploy 产生新的
+  runtime deployment record。凭证**不进 1Password、不进 Vault**。
+- Vault Agent sidecar 以 AppRole 登录并原生续期，拉取 `bootstrap/{env}/iac_runner` 密钥。
+- Sync subprocesses get `VAULT_ROOT_TOKEN` from an in-container
+  `auth/approle/login` (`resolve_vault_root_token`) — a short-TTL bounded token so
+  deployers can read and repair `platform/{env}/*` and `finance_report/{env}/*`
+  runtime secret fields before deployment. The token must not grant `delete`, and
+  it must not mutate bootstrap root credentials.
 
 ### 6.3 环境变量
 
@@ -494,7 +496,7 @@ invoke vault.setup-tokens
 | Variable | Source | 说明 |
 |----------|--------|------|
 | `VAULT_ADDR` | 手动配置 | `https://vault.{domain}` |
-| `VAULT_APP_TOKEN` | `invoke vault.setup-tokens` | Scoped deploy token |
+| `VAULT_ROLE_ID` / `VAULT_SECRET_ID` | `invoke vault.setup-approle` | AppRole login material (bounded; `secret_id_ttl=0`) |
 | `INTERNAL_DOMAIN` | 手动配置 | 内部域名 |
 | `DEPLOY_ENV` | 手动配置 | `production` / `staging` |
 
@@ -504,7 +506,7 @@ invoke vault.setup-tokens
 | `WEBHOOK_SECRET` | Vault | GitHub webhook 验证密钥 |
 | `GIT_REPO_URL` | Vault | Git 仓库地址 |
 | `OP_SERVICE_ACCOUNT_TOKEN` | Vault | Required 1Password service account token used by IaC Runner subprocesses to read Infra2 through `op` CLI |
-| `VAULT_ROOT_TOKEN_OP_REF` | Vault | Optional 1Password reference for the Vault root token; defaults to `op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token` |
+| `VAULT_ROOT_TOKEN_OP_REF` | — | **Not implemented / removed by the §6.4 AppRole migration.** `resolve_vault_root_token` never read it; the deploy credential now comes from an in-container AppRole login (Dokploy-env `VAULT_ROLE_ID`/`VAULT_SECRET_ID`), not from 1Password. |
 
 `VAULT_ROOT_TOKEN` must not be stored in GitHub Actions. IaC Runner resolves it
 inside the container via 1Password only for sync subprocesses, then passes it as
@@ -516,35 +518,66 @@ a stale process that did not reload Vault Agent output is degraded.
 
 ### 6.4 Vault AppRole 迁移设计（Planned, #257/#259）
 
-> **Status**: Design (counterfactual-verified). IaC Runner is the **last** service
-> still on the legacy `token_file` static-`VAULT_APP_TOKEN` model; the other 11
-> prod services are already on AppRole. This section is the canonical design for
-> finishing the migration. **Do not implement without honoring the P0 invariants below.**
+> **Status**: Design (counterfactual-verified; **revised 2026-06-17** to honor the
+> secrets SSOT — deployer creds live in Dokploy env, **never** in 1Password, and a
+> **single bounded AppRole** replaces the earlier two-role/`op read` draft; see §6.4.2).
+> IaC Runner is the **last** service still on the legacy `token_file`
+> static-`VAULT_APP_TOKEN` model; the other 11 prod services are already on AppRole.
+> This section is the canonical design for finishing the migration (#369).
+> **Do not implement without honoring the P0 invariants below.**
 
 #### 6.4.1 为什么 IaC Runner 不能照搬其它服务的机械迁移
 
 普通服务的 vault-agent 只渲染**自己**的 secret，迁 AppRole 就是换 `auth_method`。IaC
-Runner 有两个**不同**的 Vault 凭证需求，必须分开处理：
+Runner 有两个**不同**的 Vault 凭证**用途**（注意：用途不同，但 §6.4.2 用**一个有界
+AppRole** 同时满足，无需两个角色）：
 
-| 凭证 | 用途 | 范围 |
+| 凭证用途 | 作用 | 范围 |
 |------|------|------|
-| **Sidecar agent token** | 渲染 runner 自己的 secret（`secret/data/bootstrap/{env}/iac_runner`） | 窄：只读自身 |
-| **Deploy credential** | 传给 `invoke *.sync` 子进程作 `VAULT_ROOT_TOKEN`，让它们读写 `secret/data/{platform,finance_report}/{env}/*` | 宽但有界：跨服务 KV create/read/update（**无 delete、无 root**） |
+| **Sidecar 渲染** | vault-agent 渲染 runner 自己的 secret（`secret/data/bootstrap/{env}/iac_runner`） | 只读自身 |
+| **Deploy 凭证** | 传给 `invoke *.sync` 子进程作 `VAULT_ROOT_TOKEN`，让它们读写 `secret/data/{platform,finance_report}/{env}/*` | 宽但有界：跨服务 KV create/read/update（**无 delete、无 root**） |
 
 今天后者就是静态 `VAULT_APP_TOKEN`（`sync_runner.py::resolve_vault_root_token`
 回落到它）。它会衰减、且是长寿明文。
 
-#### 6.4.2 目标设计
+#### 6.4.2 目标设计（SSOT 正解：单一有界 AppRole + Dokploy env 注入）
 
-- **Sidecar**：迁 AppRole，窄角色（仅读自身 secret）。`role_id`/`secret_id` 在容器
-  启动时由 entrypoint **从 1Password 读出**（`op read`，凭 `OP_SERVICE_ACCOUNT_TOKEN`）
-  写入 `/vault/role_id`、`/vault/secret_id`；agent 登录后原生续期。
-- **Deploy credential**：复用已有的 **`VAULT_ROOT_TOKEN_OP_REF`** 解析路径，但其指向
-  一份**有界的 deployer AppRole 登录材料**（存于 1Password），而非 root。`resolve_vault_root_token`
-  改为：从 OP 取 deployer `role_id`/`secret_id` → AppRole login → 拿到一枚**短 TTL、
-  有界 policy** 的 token，作为 `VAULT_ROOT_TOKEN` 传给子进程。删除 `VAULT_APP_TOKEN` 回落。
-- 两者**唯一静态根都是 `OP_SERVICE_ACCOUNT_TOKEN`**——它零依赖、可 0 帧启动。Vault 里
-  没有任何 IaC Runner 静态依赖物，更没有"自己签发又自己轮换"的凭证。
+> **设计修正（2026-06-17，本次）**：本节早先草案把 deployer 登录材料**存入 1Password
+> 并在运行时 `op read`**（并声称复用 `VAULT_ROOT_TOKEN_OP_REF`）。这**违反 secrets SSOT**：
+> **1Password 只装两类东西——①0 依赖启动根（Vault root/unseal、OP Connect token、Dokploy
+> API key、Cloudflare token）；②web 登录才能产出的 admin 密码（如 signoz admin）**。deployer
+> 凭证两者都不是——它是"进 Vault 的钥匙"，归宿与其余 11 个服务的 AppRole 凭证**完全一致**：
+> **Dokploy compose env**（由 `setup-approle` 注入，既不进 OP 也不进 Vault）。另外
+> `VAULT_ROOT_TOKEN_OP_REF` 解析路径**从未实现**（`resolve_vault_root_token` 只读 env），
+> 故不存在"复用"；本次按正解实现，且**全程不引入 OP 运行时读**。
+
+**一个有界 AppRole，两处使用**：IaC Runner 复用其余 11 个服务的既有模式——
+`invoke vault.setup-approle --project=bootstrap --service=iac_runner` 把
+`VAULT_ROLE_ID`/`VAULT_SECRET_ID` 注入 Dokploy compose env（既不进 OP 也不进 Vault），
+该 role 绑定 §6.4.3 的有界 policy。容器内两处使用同一对凭证、但**各自独立登录、互不共享 token**：
+
+| 使用点 | 怎么用这对 role_id/secret_id | 产出 |
+|--------|------------------------------|------|
+| **vault-agent sidecar** | `auth_method "approle"`，读 `/vault/role_id`、`/vault/secret_id` 自动登录并原生续期 | sink token 渲染 runner 自身配置 |
+| **`resolve_vault_root_token`** | 从**进程 env** 读 `VAULT_ROLE_ID`/`VAULT_SECRET_ID` → 每次部署现场 `vault write auth/approle/login` | 一枚**短 TTL、有界** token，作 `VAULT_ROOT_TOKEN` 传子进程 |
+
+- **Sidecar**：`auth_method` `token_file → approle`，与 openpanel 等**完全同构**。
+- **Deploy 凭证**：`resolve_vault_root_token` 改为每次部署用 `VAULT_ROLE_ID`/`VAULT_SECRET_ID`
+  现场 `auth/approle/login` 拿一枚短 TTL token，**不**复用 sidecar 的 sink token（规避共享卷
+  token 问题），并**删除 `VAULT_APP_TOKEN` 回落**。
+- **不 `op read`**：现有测试 Infra-011.10「runner 不得从 OP 解析 root token」的精神
+  **完整保留**——凭证来自 Dokploy env 而非 OP，登录产出的也是有界（非 root）token。
+- **0 帧根仍是 OP**：这对 AppRole 凭证由操作员持 OP 里的 Vault root token 跑 `setup-approle`
+  生成并注入；`secret_id_ttl=0 secret_id_num_uses=0` 永不过期。Vault 里没有任何 IaC Runner
+  "自签发又自轮换"的凭证。
+
+> **为何不用两个角色（窄 sidecar + 宽 deployer）？** 两角色能把 sidecar 的 sink token 也收
+> 窄（只读自身），是更强的最小权限；但它需扩展 `setup-approle` 注入第二对 env、给
+> `RUNTIME_ENV_KEYS_TO_PRESERVE`（`libs/deployer.py`）加 `VAULT_DEPLOYER_*`，**否则每次重部署
+> 会丢失 deployer 凭证、致部署中断**（见 §6.4.5 场景 ③），并新增一份窄 policy 文件。单角色与
+> 今天的单一 `VAULT_APP_TOKEN` **同构、blast radius 持平**（今天那枚静态 token 同样是宽的），
+> 却额外获得 AppRole 的"不衰减 + 每次部署现签子 token"。故 **v1 采用单角色**；若日后要把 sink
+> token 也收窄，再作为**附加**的最小权限强化推进，不阻塞本次迁移。
 
 #### 6.4.3 最小权限 policy（deployer）
 
@@ -576,27 +609,46 @@ path "auth/token/lookup-self"          { capabilities = ["read"] }
 2. **不自指轮换**：IaC Runner 的 `role_id`/`secret_id` **绝不能**被纳入它自己的
    `.sync`/accessor 轮换（`vault_token_accessors` 里不得有 `iac_runner`）。否则凭证过期时
    要靠它自己刷新，而它已进不去 Vault → 死锁。
-3. **OP 扎根**：唯一允许的静态根是 `OP_SERVICE_ACCOUNT_TOKEN`（0 帧启动、零依赖）。
+3. **OP 扎根（带外注入）**：AppRole 的 `role_id`/`secret_id` 由操作员持 OP 里的 Vault
+   root token 运行 `setup-approle` 生成、注入 **Dokploy compose env**——**不进 OP、不进
+   Vault**（与其余 11 个服务一致），`secret_id_ttl=0 secret_id_num_uses=0` 永不过期。
    IaC Runner 身份不得扎根在"Vault 签发且需 IaC Runner 在线才能 provision/refresh"的
-   凭证上。`secret_id` 取 `secret_id_ttl=0 secret_id_num_uses=0`（永不过期）或从 OP 现取。
+   凭证上；唯一静态根是 OP（操作员带外重建）。**绝不**把 deployer 凭证存进 OP（它非 0 帧
+   根、非 web admin 密码）或运行时 `op read`。
 4. **无 delete / 无 root**：deployer token 不得有 `delete`，不得改 bootstrap root 凭证。
 
-#### 6.4.5 反事实论证（无致命反例）
+#### 6.4.5 反事实论证（聚焦循环依赖；逐场景给出恢复链或反例）
 
-| 攻击场景 | 结论 |
-|----------|------|
-| Vault 全擦/重 bootstrap | 系统固有；secret_id/role 由带外 root 重建，runbook 处理。非本设计引入 |
-| `.sync` 需要 root（铸 token / 写 policy） | **否**：`ensure_runtime_secrets` 仅 KV 读写，有界 policy 足够 |
-| app 拿不到 agent 的 token（共享卷问题） | **消解**：app 经 OP 自取部署凭证，不依赖 agent token sink，无需共享 |
-| accessor grant 砍掉后 sync 失败 | accessor 仅 root bootstrap 使用，`.sync` 不碰；v2 砍前再坐实，v1 保留 |
-| Dokploy/bootstrap 循环依赖 | **无环**：bootstrap 层（含 dokploy）全部排除自部署 |
-| `OP_SERVICE_ACCOUNT_TOKEN` 成 SPOF | 今天 app 也已依赖它读 op；非新增故障，带外管理 |
+> 单角色设计**不引入任何新循环依赖**：provision/恢复拓扑与今天的 token_file 完全一致
+> （操作员 + OP root → `setup-approle` → Dokploy env），只换认证机制（静态 token → approle 登录）。
+
+| # | 反事实场景 | 可恢复？恢复链 / 反例 |
+|---|-----------|----------------------|
+| ① | **0 帧冷启动**（全新 VPS、Vault 未初始化） | ✅ 操作员带外：装 Dokploy（OP 里 Dokploy key）→ bootstrap Vault（root/unseal 入 OP）→ 装 OP Connect → `setup-approle --service=iac_runner` 注入 `VAULT_ROLE_ID/SECRET_ID` 到 Dokploy env → `env.set` 写 runner 自身 secret → 部署 runner。**任何一步都不需要 runner 已在运行** |
+| ② | **Vault 全擦/重 bootstrap**（secret_id 失效） | ✅ 操作员持 OP root 重 bootstrap Vault，再跑 `setup-approle --service=iac_runner` 重注入。`SERVICE_TASK_MAP["bootstrap/iac-runner"]=None` + deploy-platform.yml 把 `bootstrap/06.iac_runner/**` 路由到外部重建脚本 → **runner 永不自部署/自轮换**，重建者是操作员，不是 runner |
+| ③ | **Dokploy 重部署丢 env** | ✅ 单角色只用 `VAULT_ROLE_ID/SECRET_ID`，已在 `RUNTIME_ENV_KEYS_TO_PRESERVE`（`libs/deployer.py:44`）内、跨重部署保留；万一丢失，操作员 `setup-approle` 带外重注入，非死锁。**⚠️ 若改两角色，必须把 `VAULT_DEPLOYER_*` 也加入该列表，否则丢凭证致部署中断——这是放弃两角色的关键原因** |
+| ④ | **secret_id 衰减 / kill-token**（#257 验收项） | ✅ `secret_id_ttl=0` 永不过期；sidecar agent 被 revoke 后凭 role_id/secret_id 自动重登录；deploy 凭证**每次部署现场新登录** → 杀 token 后下一次部署自愈，比 token_file 更强 |
+| ⑤ | **Vault 封存时走登录路径** | ✅ 优雅降级：`auth/approle/login` 失败 → `resolve_vault_root_token` 返回 None、该次 `.sync` 以明确 `vault_login_failed` 诊断失败，webhook server 进程不崩；sidecar 维持今天 `exit_on_err` 的重启语义，非新循环 |
+| ⑥ | **deployer 登录是否需要只有 runner 自己 `.sync` 才能 provision 的东西？** | ✅ **否**：role 与 secret_id 由操作员 `setup-approle` 带外建；`auth/approle/login` 是免认证端点，不需任何 runner 写入的 secret。deployer 角色的存在**不**依赖任何一次部署 |
+| ⑦ | **`.sync` 需要 root（铸 token / 写 policy）** | ✅ **否**：`ensure_runtime_secrets`（`libs/deployer.py`）仅 KV `get/set`（缺失则 `generate_password` 写回），有界 policy 足够 |
+| ⑧ | **`setup-approle` 自身是否经 runner webhook？** | ✅ **否**：它是操作员机器上的 invoke 任务，`_configure_dokploy_approle` 直连 Dokploy API，不 POST runner `/webhook` 或 `/deploy` → 被迁移的服务自身无环 |
+| ⑨ | **`deploy_iac_runner_bootstrap.sh` 是否自部署 / 依赖被迁移破坏的读？** | ✅ 外部重建（SSH 直建 compose，不走 `/deploy`）。**⚠️ 但脚本现在预检 `VAULT_APP_TOKEN`（约 line 241），迁移后该 env 消失 → 必须改成预检 `VAULT_ROLE_ID/VAULT_SECRET_ID`，否则部署 runner 的工具本身被卡死** |
+| ⑩ | **`OP_SERVICE_ACCOUNT_TOKEN` 成 SPOF** | ✅ 不变甚至更轻：今天 `.sync` 已用它读 signoz admin（category②）；本设计 deploy 凭证**不再**经 OP，反而比草案的 `op read` 方案减少了一处 OP 运行时依赖 |
+| ⑪ | app 拿不到 agent 的 token（共享卷问题） | ✅ **消解**：deploy 凭证由 `resolve_vault_root_token` 独立 approle 登录现签，**不**复用 sidecar 的 sink token，无需共享卷 |
+| ⑫ | accessor grant 砍掉后 sync 失败 | accessor 仅 root bootstrap 用，`.sync` 不碰；v2 砍前再坐实，v1 保留 |
 
 #### 6.4.6 两阶段灰度
 
-- **v1（认证方式切换，policy 不变）**：sidecar `token_file → approle`；app 部署凭证
-  `VAULT_APP_TOKEN → OP-sourced bounded AppRole login`；保留现有 policy（含 accessors）。
-  先在 staging 验证一个完整 GitOps 部署链路（webhook → `.sync` → 服务 healthy）。
+- **v1（认证方式切换，policy 不变）**：
+  1. sidecar `vault-agent.hcl` `token_file → approle`（读 `/vault/role_id`、`/vault/secret_id`）；
+  2. `compose.yaml` vault-agent 块：entrypoint 从 `VAULT_ROLE_ID`/`VAULT_SECRET_ID` 写入 tmpfs、
+     去掉 in-band `renew-self` 循环、去掉 `VAULT_APP_TOKEN`，healthcheck 指向 sink token；
+  3. `sync_runner.py::resolve_vault_root_token` 改为 `VAULT_ROLE_ID`/`VAULT_SECRET_ID` →
+     `auth/approle/login` → 短 TTL token，**删除 `VAULT_APP_TOKEN` 回落**，并修 lines 125/129 诊断文案；
+  4. `setup-approle --project=bootstrap --service=iac_runner` 注入凭证（policy 文件已存在且有界）；
+  5. `scripts/deploy_iac_runner_bootstrap.sh` 预检 `VAULT_APP_TOKEN` → `VAULT_ROLE_ID`/`VAULT_SECRET_ID`；
+  6. `vault-self-refresh-inventory.yaml` iac_runner `auth_method: approle`；
+  7. 保留现有 policy（含 accessors）。先在 staging 验证完整 GitOps 链路（webhook → `.sync` → 服务 healthy）。
 - **v2（权限收敛）**：坐实 `.sync` 不依赖 `vault_token_accessors` 后，砍掉该 grant 与
   `renew-self`，并清退 `libs/vault_tokens.py` 静态 token 账本相关代码。
 - iac-runner 是 bootstrap 服务、改坏会瘫掉部署链，**全程用外部 bootstrap 重建流程
@@ -627,9 +679,9 @@ invoke env.set WEBHOOK_SECRET=$(openssl rand -hex 32) \
 invoke env.set GIT_REPO_URL=https://github.com/wangzitian0/infra2.git \
   --project=bootstrap --service=iac_runner
 
-# 2. 生成 Vault token
+# 2. 生成并注入 AppRole 凭证（role_id/secret_id → Dokploy env）
 export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token')
-invoke vault.setup-tokens
+invoke vault.setup-approle --project=bootstrap --service=iac_runner
 
 # 3. 部署服务
 invoke iac-runner.setup
@@ -726,16 +778,15 @@ echo "X-Hub-Signature-256: sha256=$SIGNATURE"
 
 **排查步骤**:
 ```bash
-# 1. 检查 VAULT_APP_TOKEN 是否存在
-docker exec iac-runner env | grep VAULT_APP_TOKEN
+# 1. 检查 AppRole 凭证是否存在
+docker exec iac-runner env | grep -E 'VAULT_ROLE_ID|VAULT_SECRET_ID'
 
-# 2. 手动测试 Vault 连接
-docker exec iac-runner curl -H "X-Vault-Token: $VAULT_APP_TOKEN" \
-  https://vault.{domain}/v1/secret/data/bootstrap/production/iac_runner
+# 2. 验证 sidecar 已登录并渲染（approle sink token）
+docker exec iac-runner-vault-agent sh -c 'test -s /vault/.token && echo token-present'
 
-# 3. 重新生成 token；该命令必须看到 Dokploy runtime deployment record
+# 3. 重新注入 AppRole 凭证；该命令必须看到 Dokploy runtime deployment record
 export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token')
-invoke vault.setup-tokens
+invoke vault.setup-approle --project=bootstrap --service=iac_runner
 
 # 4. 如果 Dokploy 接受请求但没有重建 runtime，用外部 bootstrap 重建
 INFRA2_DEPLOY_SHA=$(git rev-parse HEAD) bash scripts/deploy_iac_runner_bootstrap.sh
@@ -784,8 +835,8 @@ curl https://iac.{domain}/health
 
 | 资源 | 权限 | 实现方式 |
 |------|------|---------|
-| **Runtime Vault service secrets** | Read + create/update only | Scoped deploy App Token (`vault.setup-tokens`) |
-| **Bootstrap/root credentials** | Read-only for iac_runner config | Scoped deploy App Token; root credentials are operator-only |
+| **Runtime Vault service secrets** | Read + create/update only | Bounded AppRole login (`vault.setup-approle`) |
+| **Bootstrap/root credentials** | Read-only for iac_runner config | Bounded AppRole token; root credentials are operator-only |
 | **Docker Socket** | 只读 | `ro` mount（`/var/run/docker.sock:/var/run/docker.sock:ro`）|
 | **Host 文件系统** | 无写入权限 | 仅 workspace 目录可写 |
 | **Bootstrap 服务** | 排除自动同步 | 代码中硬编码过滤规则 |
@@ -879,14 +930,14 @@ flowchart LR
     Platform["Platform Services"]
 
     1P -->|bootstrap secrets| Vault
-    Vault -->|app token| IaC
-    Dokploy -->|container management| IaC
+    Dokploy -->|AppRole role_id/secret_id + container mgmt| IaC
+    Vault -->|secrets via AppRole login| IaC
     IaC -->|invoke sync| Platform
 ```
 
 **上游依赖**（IaC Runner 依赖这些服务）:
-- **Vault**: 提供密钥存储和 App Token
-- **Dokploy**: 提供容器编排和 API
+- **Vault**: 提供密钥存储；IaC Runner 以 AppRole 登录获取
+- **Dokploy**: 提供容器编排和 API，并持有注入的 AppRole `role_id`/`secret_id`
 - **1Password**: 间接依赖（通过 op CLI 读取 bootstrap secrets）
 
 **下游消费**（这些服务由 IaC Runner 管理）:
@@ -948,10 +999,10 @@ IaC Runner 是 bootstrap 服务，不能依赖自身自动修复。Post-merge wo
 - GitHub Actions 收到 Cloudflare `524`：不要使用 public route 上的
   `wait=true` 长请求；应使用 `/deploy` + `/deploy/status` 短请求轮询。
 - Dokploy deployment log 出现 `Compose file not found`：`composePath` 必须是 `bootstrap/06.iac_runner/compose.yaml`。
-- `iac-runner-vault-agent` 出现 `token file validation failed`：运行
-  `VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token') invoke vault.setup-tokens`
-  重新生成 periodic token；如果 Dokploy compose env 已更新但容器仍使用旧
-  token，必须通过外部 IaC Runner bootstrap 重建流程重建 compose，单纯
+- `iac-runner-vault-agent` 出现 `VAULT_ROLE_ID and VAULT_SECRET_ID are required` 或 approle 登录失败：运行
+  `VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token') invoke vault.setup-approle --project=bootstrap --service=iac_runner`
+  重新注入 role_id/secret_id；如果 Dokploy compose env 已更新但容器仍使用旧
+  凭证，必须通过外部 IaC Runner bootstrap 重建流程重建 compose，单纯
   `docker restart` 不会更新容器 env。
 - `iac-runner` 出现 `Secrets file not found after 60s`：通常是 Vault Agent 未渲染 `/vault/secrets/.env`，先看 sidecar token 状态。
 - Docker 启动失败并提示 `error mounting "/root/.ssh/id_ed25519"`：不要挂载单个 SSH key 文件；挂载 `${SSH_DIR_PATH:-/root/.ssh}` 到 `/host_ssh`。
@@ -1089,5 +1140,5 @@ docker logs iac-runner --tail 50
 
 ---
 
-**Last updated**: 2026-06-16 (added §6.4 Vault AppRole migration design)  
+**Last updated**: 2026-06-17 (§6.4 revised to secrets-SSOT — single bounded AppRole, Dokploy-env creds, no 1Password storage; expanded circular-dependency counterfactuals)  
 **Maintained by**: @wangzitian0
