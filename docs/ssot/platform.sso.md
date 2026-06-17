@@ -28,12 +28,13 @@
 | **AUTHENTIK_APP_TOKEN** | `secret/platform/<env>/<service>/sso_*` | 单应用 | 服务 SSO 配置（未来） |
 
 ```
-Vault Token Hierarchy          Authentik Token Hierarchy
-─────────────────────          ─────────────────────────
+Vault Auth Hierarchy           Authentik Token Hierarchy
+────────────────────           ─────────────────────────
 VAULT_ROOT_TOKEN               AUTHENTIK_ROOT_TOKEN
   ├─ vault-policy-X              ├─ create-proxy-app
-  └─ VAULT_APP_TOKEN             └─ AUTHENTIK_APP_TOKEN
-      (per-service)                  (per-service)
+  └─ VAULT_ROLE_ID +             └─ AUTHENTIK_APP_TOKEN
+     VAULT_SECRET_ID                 (per-service)
+     (AppRole, per-service)
 ```
 
 ---

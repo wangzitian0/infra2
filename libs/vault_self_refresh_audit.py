@@ -465,8 +465,6 @@ def inventory_compose_paths(path: Path | str = DEFAULT_INVENTORY_PATH) -> set[st
 def discover_vault_agent_compose_paths(root: Path = REPO_ROOT) -> set[str]:
     paths: set[str] = set()
     for compose_path in root.rglob("compose*.yaml"):
-        if "compose-with-vault.yaml" in str(compose_path):
-            continue
         text = compose_path.read_text(encoding="utf-8")
         if re.search(r"(?m)^  vault-agent:", text):
             paths.add(str(compose_path.relative_to(root)))
