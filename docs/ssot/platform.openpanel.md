@@ -105,7 +105,7 @@ OpenPanel 是**单实例**；环境隔离靠**每个环境一个 project / clien
 |------|-------------------------------|------|
 | `production` | `28bfa625-…f77550` | 已签发 |
 | `staging` | `62d5cfe0-…af698f` | 已签发 |
-| `preview`（所有 preview 别名共用一个 project） | `00000000-…000000`（占位） | **待签发**：在 OpenPanel 新建 "preview" project，取其 client-id 替换占位 UUID（见 Infra-014 RUNBOOK） |
+| `preview`（所有 preview 别名共用一个 project） | `6e8f9d85-…f22dd` | 已签发（project `finance-preview` / client "preview web"，`#375`） |
 
 > preview 各别名（`main` / `pr-<N>` / `commit-<sha7>`）共用同一个 `preview` project；别名维度的区分依赖事件属性 / `deployment.environment`，不再拆分 project。
 

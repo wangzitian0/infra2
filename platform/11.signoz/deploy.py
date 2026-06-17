@@ -38,6 +38,54 @@ class SigNozDeployer(Deployer):
     secret_key = "jwt_secret"
 
     @classmethod
+    def _deliver_collector_config(cls, c, e) -> bool:
+        """Render + upload otel-collector-config.yaml to the host (idempotent).
+
+        The collector mounts this file read-only, so it must be on the host BEFORE
+        the container is (re)created. Called from BOTH pre_compose (first setup) AND
+        composing — so `sync`/redeploys ship config changes too (#372): `sync` skips
+        pre_compose's side effects but always runs composing.
+        """
+        host = e.get("VPS_HOST")
+        if not host:
+            error("Missing VPS_HOST")
+            return False
+        data_path = cls.data_path_for_env(e)
+        template_path = Path(__file__).with_name("otel-collector-config.yaml")
+        if not template_path.exists():
+            error("Missing otel-collector config template", str(template_path))
+            return False
+        env_suffix = e.get("ENV_SUFFIX") or ""
+        config_path = f"{data_path}/otel-collector-config.yaml"
+        tmp_path = None
+        try:
+            config_content = template_path.read_text().replace(
+                "${ENV_SUFFIX}", env_suffix
+            )
+            with NamedTemporaryFile("w", delete=False, encoding="utf-8") as tmp:
+                tmp.write(config_content)
+                tmp_path = tmp.name
+            if not run_with_status(
+                c,
+                f"scp {tmp_path} root@{host}:{config_path}",
+                "Upload otel-collector config",
+            ).ok:
+                return False
+            if not run_with_status(
+                c,
+                f"ssh root@{host} 'chmod 644 {config_path}'",
+                "Set otel-collector config permissions",
+            ).ok:
+                return False
+        except OSError as exc:
+            error("Failed to prepare otel-collector config", str(exc))
+            return False
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+        return True
+
+    @classmethod
     def pre_compose(cls, c):
         """Prepare directories and secrets for SigNoz."""
         if not cls._prepare_dirs(c):
@@ -65,43 +113,10 @@ class SigNozDeployer(Deployer):
         if not result.ok:
             return None
 
-        template_path = Path(__file__).with_name("otel-collector-config.yaml")
-        if not template_path.exists():
-            error("Missing otel-collector config template", str(template_path))
+        # #372: config delivery is shared with composing() so `sync`/redeploys
+        # (which skip pre_compose's side effects) also ship collector-config changes.
+        if not cls._deliver_collector_config(c, e):
             return None
-
-        env_suffix = e.get("ENV_SUFFIX") or ""
-        config_path = f"{data_path}/otel-collector-config.yaml"
-
-        tmp_path = None
-        try:
-            config_content = template_path.read_text()
-            config_content = config_content.replace("${ENV_SUFFIX}", env_suffix)
-            with NamedTemporaryFile("w", delete=False, encoding="utf-8") as tmp:
-                tmp.write(config_content)
-                tmp_path = tmp.name
-
-            result = run_with_status(
-                c,
-                f"scp {tmp_path} root@{host}:{config_path}",
-                "Upload otel-collector config",
-            )
-            if not result.ok:
-                return None
-
-            result = run_with_status(
-                c,
-                f"ssh root@{host} 'chmod 644 {config_path}'",
-                "Set otel-collector config permissions",
-            )
-            if not result.ok:
-                return None
-        except OSError as exc:
-            error("Failed to prepare otel-collector config", str(exc))
-            return None
-        finally:
-            if tmp_path and os.path.exists(tmp_path):
-                os.unlink(tmp_path)
 
         if not cls.ensure_runtime_secrets(c):
             return None
@@ -133,9 +148,14 @@ class SigNozDeployer(Deployer):
         hand-written Traefik labels) and is idempotent — ensure_domains skips domains
         that already exist.
         """
+        e = cls.env()
+        # #372: ship the collector config to the host BEFORE the (re)deploy so
+        # `sync`/redeploys actually apply config changes (the container mounts it
+        # read-only; sync skips pre_compose, so deliver it here too).
+        if not cls._deliver_collector_config(c, e):
+            raise RuntimeError("Failed to deliver otel-collector config to host")
         compose_id = super().composing(c, env_vars)
 
-        e = cls.env()
         otel_host = service_domain(cls.otel_ingest_subdomain, e)
         if not otel_host:
             warning("OTLP ingest domain skipped: INTERNAL_DOMAIN missing")

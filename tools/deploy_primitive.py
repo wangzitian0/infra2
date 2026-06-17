@@ -26,6 +26,7 @@ import time
 from dataclasses import dataclass
 
 from tools.deploy_env_config import env_config
+from tools.openpanel_clients import openpanel_env
 from tools.resolve_deploy_ref import resolve_to_sha
 
 
@@ -97,7 +98,9 @@ def _env_value(env_str: str, key: str) -> str | None:
     return None
 
 
-def preflight_vault_token(client, compose_id: str, domain: str, *, min_ttl_hours: int = 48):
+def preflight_vault_token(
+    client, compose_id: str, domain: str, *, min_ttl_hours: int = 48
+):
     """Fail closed before deploy if the compose's VAULT_APP_TOKEN is present but invalid
     or expiring within min_ttl_hours. The token is gated only when present — a compose
     with no VAULT_APP_TOKEN is left alone (not every compose uses Vault).
@@ -151,7 +154,9 @@ def verify_effective_config_hash(
     last_error: Exception | None = None
     while True:
         try:
-            last_value = _env_value(client.get_compose_env(compose_id), "IAC_CONFIG_HASH")
+            last_value = _env_value(
+                client.get_compose_env(compose_id), "IAC_CONFIG_HASH"
+            )
             last_error = None
         except Exception as exc:  # transient Dokploy read; tolerate within window
             last_error = exc
@@ -272,6 +277,12 @@ def deploy(
         "INTERNAL_DOMAIN": domain,
         "IAC_CONFIG_HASH": config_hash,
     }
+    # #372: the finance_report app frontend reads OPENPANEL_CLIENT_ID at runtime
+    # (server layout -> <Analytics>). This fixed-compose path never ran the app's
+    # pre_compose, so the per-env client id was dropped and analytics never started.
+    # Inject it here (single source: tools.openpanel_clients) for the fixed envs
+    # this path handles (staging/production); empty for any env without a project.
+    env_vars.update(openpanel_env(env))
     if model_overrides:
         # only non-empty overrides (an unset override must not blank the running model)
         env_vars.update({k: v for k, v in model_overrides.items() if v})
@@ -280,7 +291,9 @@ def deploy(
     # secrets/AppRole creds); we only override the digest + URL + suffix + infra keys.
     # Snapshot deployment ids BEFORE triggering so wait_for_rollout watches the new one.
     before_ids = (
-        _deployment_ids(client.get_compose_deployments(cfg.compose_id)) if wait else set()
+        _deployment_ids(client.get_compose_deployments(cfg.compose_id))
+        if wait
+        else set()
     )
     client.update_compose_env(cfg.compose_id, env_vars=env_vars)
     client.deploy_compose(cfg.compose_id)
@@ -326,10 +339,18 @@ def main(argv: list[str] | None = None) -> int:
     """
     parser = argparse.ArgumentParser(description="commit-addressed deploy primitive")
     parser.add_argument("--env", required=True, help="staging | prod (not preview)")
-    parser.add_argument("--code", required=True, help="main | release/x.y | vX.Y.Z | <sha>")
-    parser.add_argument("--domain", required=True, help="base domain, e.g. zitian.party")
-    parser.add_argument("--data", default=None, help="override the env's default data source")
-    parser.add_argument("--repo", default=None, help="git remote to resolve code against")
+    parser.add_argument(
+        "--code", required=True, help="main | release/x.y | vX.Y.Z | <sha>"
+    )
+    parser.add_argument(
+        "--domain", required=True, help="base domain, e.g. zitian.party"
+    )
+    parser.add_argument(
+        "--data", default=None, help="override the env's default data source"
+    )
+    parser.add_argument(
+        "--repo", default=None, help="git remote to resolve code against"
+    )
     parser.add_argument(
         "--staging-validated",
         action="store_true",
@@ -340,7 +361,9 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="audited override of the staging-first gate (H5)",
     )
-    parser.add_argument("--no-wait", action="store_true", help="do not block on rollout")
+    parser.add_argument(
+        "--no-wait", action="store_true", help="do not block on rollout"
+    )
     parser.add_argument("--timeout", type=int, default=600, help="rollout wait seconds")
     parser.add_argument(
         "--skip-vault-check",
