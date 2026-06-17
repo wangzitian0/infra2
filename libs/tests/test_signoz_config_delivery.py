@@ -63,3 +63,36 @@ def test_composing_fails_closed_when_config_delivery_fails():
     ):
         with pytest.raises(RuntimeError, match="otel-collector config"):
             D.composing(mock.MagicMock(), {})
+
+
+def test_otel_collector_config_has_durable_exporter_queue() -> None:
+    """#369: the OTel collector must retry + persist its sending_queue to disk so a
+    transient ClickHouse outage or a collector restart retains telemetry instead of
+    dropping the in-flight batch (it was memory-only with no retry before)."""
+    import yaml
+    from pathlib import Path
+
+    cfg = yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / "platform/11.signoz/otel-collector-config.yaml")
+        .read_text(encoding="utf-8")
+    )
+    assert "file_storage" in cfg["extensions"], "file_storage extension missing"
+    assert "file_storage" in cfg["service"]["extensions"], "file_storage not enabled"
+    for name in ("clickhousetraces", "signozclickhousemetrics", "clickhouselogsexporter"):
+        exp = cfg["exporters"][name]
+        assert exp["retry_on_failure"]["enabled"] is True, f"{name}: retry_on_failure off"
+        assert exp["sending_queue"]["enabled"] is True, f"{name}: sending_queue off"
+        assert exp["sending_queue"]["storage"] == "file_storage", f"{name}: queue not on disk"
+
+
+def test_otel_queue_dir_is_mounted_and_provisioned() -> None:
+    """#369: the disk-queue dir must be bind-mounted into the collector AND pre-created +
+    chowned to the collector uid (10001) on every deploy path, or the non-root collector
+    crash-loops on the file_storage extension."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    compose = (root / "platform/11.signoz/compose.yaml").read_text(encoding="utf-8")
+    assert "${DATA_PATH}/otel-queue:/var/lib/otelcol/file_storage" in compose
+    deploy = (root / "platform/11.signoz/deploy.py").read_text(encoding="utf-8")
+    assert "otel-queue" in deploy and "chown -R 10001:0" in deploy

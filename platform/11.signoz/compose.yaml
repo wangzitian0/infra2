@@ -75,6 +75,10 @@ services:
       - ENV_SUFFIX=${ENV_SUFFIX}
     volumes:
       - ${DATA_PATH}/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+      # Disk-backed exporter sending_queue (#369): survives collector restarts so a
+      # ClickHouse blip / collector redeploy retains in-flight telemetry. The host dir
+      # is pre-created + chowned to the collector uid (10001) in SigNozDeployer.
+      - ${DATA_PATH}/otel-queue:/var/lib/otelcol/file_storage
     expose:
       - "4317"
       - "4318"

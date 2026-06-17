@@ -50,22 +50,44 @@ processors:
     spike_limit_percentage: 25
 
 exporters:
-  # SigNoz-specific exporters
+  # SigNoz-specific exporters. retry_on_failure + a disk-backed sending_queue
+  # (file_storage extension) make a transient ClickHouse outage or a collector
+  # restart RETAIN telemetry instead of dropping the in-flight batch — previously
+  # the batch was memory-only and lost after the 10s timeout (#369 obs-hardening).
   clickhousetraces:
     datasource: tcp://platform-clickhouse${ENV_SUFFIX}:9000?database=signoz_traces
+    retry_on_failure:
+      enabled: true
+    sending_queue:
+      enabled: true
+      storage: file_storage
 
   signozclickhousemetrics:
     dsn: tcp://platform-clickhouse${ENV_SUFFIX}:9000
+    retry_on_failure:
+      enabled: true
+    sending_queue:
+      enabled: true
+      storage: file_storage
 
   clickhouselogsexporter:
     dsn: tcp://platform-clickhouse${ENV_SUFFIX}:9000
+    retry_on_failure:
+      enabled: true
+    sending_queue:
+      enabled: true
+      storage: file_storage
 
 extensions:
   health_check:
     endpoint: 0.0.0.0:13133
+  # Disk-backed queue directory (bind-mounted from the host, owned by the collector
+  # uid 10001) — persists the exporter sending_queue across collector restarts.
+  file_storage:
+    directory: /var/lib/otelcol/file_storage
 
 service:
-  extensions: [health_check]
+  extensions: [health_check, file_storage]
   pipelines:
     traces:
       receivers: [otlp]
