@@ -10,7 +10,7 @@
       "description": "deployment.environment (production / staging / pr-N)",
       "multiSelect": true,
       "showALLOption": true,
-      "queryValue": "SELECT DISTINCT stringTagMap['deployment.environment'] FROM signoz_logs.distributed_logs"
+      "queryValue": "SELECT DISTINCT resources_string['deployment.environment'] FROM signoz_logs.distributed_logs_v2 WHERE resources_string['deployment.environment'] != ''"
     }
   },
   "widgets": [
