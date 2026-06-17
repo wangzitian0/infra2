@@ -3,6 +3,7 @@ hand-maintained service lists must stay equal to it (fail-closed on drift)."""
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 from libs import service_registry as reg
@@ -38,11 +39,23 @@ def test_all_services_matches_discover_services() -> None:
 
 
 def test_sync_runner_service_set_is_derived_not_hand_listed() -> None:
-    """sync_runner no longer hand-maintains ALL_SERVICES / SERVICE_TASK_MAP — they are derived
-    from libs.deployer.discover_services (Infra-013), so a hand-list can't drift. The two
-    registry scanners (deployer.discover_services and service_registry) must agree, so the
-    derivation can never silently omit a service."""
-    assert set(discover_services()) == set(reg.all_services())
+    """sync_runner must DERIVE its service set (Infra-013), never hand-maintain it. Statically
+    assert there is NO module-level ALL_SERVICES / SERVICE_TASK_MAP assignment and that the
+    lazy accessors exist — so reintroducing a hardcoded list fails this test (the drift guard)."""
+    tree = ast.parse(
+        (REPO_ROOT / "bootstrap/06.iac_runner/sync_runner.py").read_text(encoding="utf-8")
+    )
+    module_assignments = {
+        target.id
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+    assert "ALL_SERVICES" not in module_assignments, "sync_runner reintroduced a hand-list"
+    assert "SERVICE_TASK_MAP" not in module_assignments, "sync_runner reintroduced a hand-list"
+    functions = {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
+    assert {"_all_services", "_service_task_map"} <= functions
 
 
 def test_shared_services_are_the_prod_only_set() -> None:

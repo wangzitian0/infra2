@@ -635,8 +635,9 @@ def sync_services(
                 logger.info("No changes detected or fresh clone; syncing all services")
 
         results: list[ServiceSyncResult] = []
+        task_map = _service_task_map()  # discovered once; reused for every service below
         for service in sorted(services):
-            task_name = _service_task_map().get(service)
+            task_name = task_map.get(service)
 
             if task_name is None:
                 logger.info(f"Skipping {service} (no sync task configured)")

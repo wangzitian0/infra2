@@ -826,6 +826,8 @@ def test_deploy_platform_no_longer_triggers_platform_service_deploys() -> None:
     # the auto-deploy push paths (quoted as they appear in a YAML paths list) are gone
     assert '"platform/**"' not in workflow
     assert '"finance_report/**"' not in workflow
+    assert '"libs/**"' not in workflow
+    assert '"finance/**"' not in workflow
 
 
 def test_iac_runner_all_services_include_alerting_bridge(monkeypatch) -> None:
