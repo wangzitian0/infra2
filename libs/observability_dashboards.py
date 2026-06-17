@@ -78,7 +78,9 @@ def _load_json(path: Path) -> Any:
         ) from exc
 
 
-def load_alert_definitions(path: Path = ALERT_RULES_FILE) -> list[LogErrorAlertDefinition]:
+def load_alert_definitions(
+    path: Path = ALERT_RULES_FILE,
+) -> list[LogErrorAlertDefinition]:
     """Load and validate the checked-in log-error alert definitions."""
     data = _load_json(path)
     rules = data.get("rules") if isinstance(data, dict) else None
