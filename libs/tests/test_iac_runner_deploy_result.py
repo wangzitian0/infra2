@@ -17,6 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 IAC_RUNNER = ROOT / "bootstrap/06.iac_runner"
 DEPLOY_PLATFORM_WORKFLOW = ROOT / ".github/workflows/deploy-platform.yml"
+DEPLOY_REPORT_MAIN_WORKFLOW = ROOT / ".github/workflows/deploy-report-main.yml"
 BOOTSTRAP_DEPLOY_SCRIPT = ROOT / "scripts/deploy_iac_runner_bootstrap.sh"
 IAC_RUNNER_VAULT_POLICY = IAC_RUNNER / "vault-policy.hcl"
 DEPLOY_SHA = "a" * 40
@@ -828,6 +829,24 @@ def test_deploy_platform_no_longer_triggers_platform_service_deploys() -> None:
     assert '"finance_report/**"' not in workflow
     assert '"libs/**"' not in workflow
     assert '"finance/**"' not in workflow
+
+
+def test_report_branch_main_auto_target_is_fully_wired() -> None:
+    """Infra-015: report-branch-main is the ONE auto target. The infra2 RECEIVER must fire on
+    the cross-repo repository_dispatch (not manual-only) and deploy app main via deploy_v2.
+    The app-repo SENDER lives in finance_report; here we lock the receiver half so a future edit
+    cannot silently revert it to a manual-only / TODO stub."""
+    workflow = DEPLOY_REPORT_MAIN_WORKFLOW.read_text(encoding="utf-8")
+
+    # receiver fires on the cross-repo dispatch the app-repo sender emits
+    assert "repository_dispatch" in workflow
+    assert "deploy-report-main" in workflow
+    # and deploys app main through the unified front door
+    assert "--service finance_report/app" in workflow
+    assert "--type preview/branch" in workflow
+    # the sender half is wired (finance_report#1173) — the old "manual-only / remaining half" TODO is gone
+    assert "fires only on manual dispatch" not in workflow
+    assert "remaining" not in workflow
 
 
 def test_iac_runner_all_services_include_alerting_bridge(monkeypatch) -> None:
