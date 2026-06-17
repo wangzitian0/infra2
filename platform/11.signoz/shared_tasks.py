@@ -3,7 +3,13 @@
 import re
 import json
 from invoke import task
-from libs.common import check_service, get_env, service_domain, with_env_suffix
+from libs.common import (
+    OTLP_TRACES_PATH,
+    check_service,
+    get_env,
+    service_domain,
+    with_env_suffix,
+)
 
 CLICKHOUSE_INGESTION_DELAY_SECONDS = 2
 DEFAULT_API_KEY_NAME = "infra-automation"
@@ -81,7 +87,7 @@ from opentelemetry.sdk.resources import Resource
 
 resource = Resource.create({{"service.name": "{service_name}", "deployment.environment": "test"}})
 provider = TracerProvider(resource=resource)
-exporter = OTLPSpanExporter(endpoint="http://{collector}:4318/v1/traces", timeout=10)
+exporter = OTLPSpanExporter(endpoint="http://{collector}:4318{OTLP_TRACES_PATH}", timeout=10)
 provider.add_span_processor(BatchSpanProcessor(exporter))
 trace.set_tracer_provider(provider)
 
