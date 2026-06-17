@@ -23,14 +23,15 @@ receivers:
       http:
         endpoint: 0.0.0.0:4318
         cors:
-          allowed_origins:
-            - https://report.zitian.party
-            - https://report-staging.zitian.party
-            # preview aliases: report-main / report-pr-<N> / report-commit-<sha7>
-            - https://report-main.zitian.party
-            - https://report-pr-*.zitian.party
-            - https://report-commit-*.zitian.party
-            - http://localhost:3000
+          # #368: this list is NOT hand-maintained — it is RENDERED at deploy time
+          # from the FE origins in tools/deploy_env_config.cors_allowed_origins so it
+          # cannot drift from the actual app domains. The placeholder below is replaced
+          # by SigNozDeployer._render_collector_config (see platform/11.signoz/deploy.py).
+          # Effective list (prod/staging from EnvConfig + preview aliases + local dev):
+          #   report / report-staging / report-branch-main / report-pr-* / report-commit-* / localhost:3000
+          # Rendered as a YAML flow sequence so the raw template is itself valid YAML
+          # (the placeholder is a scalar until _render_collector_config substitutes it).
+          allowed_origins: ${OTEL_CORS_ALLOWED_ORIGINS}
           allowed_headers:
             - "*"
           max_age: 7200

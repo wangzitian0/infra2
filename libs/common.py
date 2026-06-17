@@ -175,6 +175,41 @@ def service_domain(subdomain: str, env: dict | None = None) -> str:
     return _build_domain(subdomain, e.get("ENV", "production"), domain)
 
 
+# --------------------------------------------------------------------------- #
+# Public browser-OTLP ingest endpoint — ONE source (#368)
+# --------------------------------------------------------------------------- #
+# The browser frontend exports OTLP traces to a single public Dokploy-managed
+# ingest domain (Infra-014). The subdomain, the OTLP HTTP traces path, and the
+# way the full endpoint is assembled used to be duplicated across two compose
+# files and platform/11.signoz/deploy.py (which had its own literal separate
+# from service_domain()). They now live here, once, and every consumer derives
+# the endpoint from this single source instead of re-constructing the URL.
+#
+#   - OTEL_INGEST_SUBDOMAIN — the `otel` subdomain (NOT env-suffixed; the ingest
+#     domain is shared across envs, like signoz/sso/minio). SigNoz's deploy.py
+#     registers this Dokploy domain and otel_ingest_endpoint() builds the FE URL.
+#   - OTLP_TRACES_PATH — the standard OTLP/HTTP traces signal path.
+OTEL_INGEST_SUBDOMAIN = "otel"
+OTLP_TRACES_PATH = "/v1/traces"
+
+
+def otel_ingest_endpoint(env: dict | None = None) -> str:
+    """Build the public browser-OTLP traces endpoint, once.
+
+    Returns ``https://<otel-subdomain>.<domain>/v1/traces`` (e.g.
+    ``https://otel.zitian.party/v1/traces``), or ``""`` when INTERNAL_DOMAIN is
+    unset. The ingest is a SINGLE shared instance, so the domain is **never**
+    env-suffixed (always ``otel.<domain>``, not ``otel-staging.<domain>``) — built
+    directly from INTERNAL_DOMAIN, not via the suffix-applying ``service_domain``.
+    This is the SINGLE construction point: compose files consume the injected value
+    and deploy.py reuses this instead of a literal.
+    """
+    domain = (env or {}).get("INTERNAL_DOMAIN")
+    if not domain:
+        return ""
+    return f"https://{OTEL_INGEST_SUBDOMAIN}.{domain}{OTLP_TRACES_PATH}"
+
+
 def check_service(c: "Context", service: str, health_cmd: str) -> dict:
     """Check if a Docker service is healthy.
 

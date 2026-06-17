@@ -196,7 +196,10 @@ services:
       # request time (NOT build-time NEXT_PUBLIC baked into the shared image), so a
       # promote-not-rebuild image stays env-agnostic. deployment.environment + git
       # sha mirror the backend's OTEL_RESOURCE_ATTRIBUTES so FE/BE spans correlate.
-      NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT: https://otel.${INTERNAL_DOMAIN}/v1/traces
+      # #368: the endpoint is built ONCE in tools.deploy_env_config.otel_env and
+      # injected by the deploy paths — consumed here, not re-constructed. The
+      # ${INTERNAL_DOMAIN}-based default keeps the value identical if unset.
+      NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT: ${NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT:-https://otel.${INTERNAL_DOMAIN}/v1/traces}
       NEXT_PUBLIC_DEPLOYMENT_ENVIRONMENT: ${ENV}
       NEXT_PUBLIC_GIT_SHA: ${GIT_COMMIT_SHA:-unknown}
     healthcheck:

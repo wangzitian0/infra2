@@ -223,7 +223,9 @@ services:
       # Browser → SigNoz traces (Infra-014). Same public ingest path as staging/prod
       # (otel.${INTERNAL_DOMAIN}); deployment.environment carries this alias's ENV
       # token (main / pr-<N> / commit-<sha7>) so preview FE spans are filterable.
-      NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT: https://otel.${INTERNAL_DOMAIN}/v1/traces
+      # #368: endpoint built ONCE in tools.deploy_env_config.otel_env and injected by
+      # the deploy path — consumed here, not re-constructed (same default as 10.app).
+      NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT: ${NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT:-https://otel.${INTERNAL_DOMAIN}/v1/traces}
       NEXT_PUBLIC_DEPLOYMENT_ENVIRONMENT: ${ENV}
       NEXT_PUBLIC_GIT_SHA: ${GIT_COMMIT_SHA:-unknown}
     healthcheck:
