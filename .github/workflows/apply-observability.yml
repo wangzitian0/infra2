@@ -1,0 +1,58 @@
+name: Apply Observability (alerts + dashboard) IaC
+
+# GitOps apply for the finance_report SigNoz config-as-code: when the checked-in
+# alert/dashboard definitions change on main, reconcile them into live SigNoz.
+# Idempotent (apply tasks look up by name/title), so re-runs are safe.
+#
+# Required secret: SIGNOZ_API_KEY (a SigNoz ADMIN api key; read by the apply path
+# via the SIGNOZ_API_KEY env fallback in platform/12.alerting/shared_tasks.py).
+# The Feishu alert channel is found-by-name when it already exists, so no Feishu
+# secrets are needed for the steady-state apply.
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "finance_report/finance_report/observability/**"
+      - "libs/observability_dashboards.py"
+      - ".github/workflows/apply-observability.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apply-observability
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    name: reconcile SigNoz alerts + dashboard
+    runs-on: ubuntu-latest
+    env:
+      ENV: production
+      INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
+      SIGNOZ_API_KEY: ${{ secrets.SIGNOZ_API_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Preflight — SIGNOZ_API_KEY present
+        run: |
+          if [ -z "${SIGNOZ_API_KEY}" ]; then
+            echo "::error::SIGNOZ_API_KEY secret is not set — cannot apply observability config."
+            exit 1
+          fi
+
+      - name: Apply alert rules (idempotent)
+        run: uv run python -m invoke fr-observability.shared.apply-alerts
+
+      - name: Apply dashboard (idempotent)
+        run: uv run python -m invoke fr-observability.shared.apply-dashboard

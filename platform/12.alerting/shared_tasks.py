@@ -31,6 +31,8 @@ def _deploy_env(env: dict[str, str | None]) -> str:
 
 
 def _signoz_context():
+    import os
+
     from libs.console import error
     from libs.env import get_secrets
 
@@ -41,10 +43,18 @@ def _signoz_context():
         error("Cannot determine SigNoz domain")
         return None
 
-    signoz_secrets = get_secrets("platform", "signoz", deploy_env)
-    api_key = signoz_secrets.get("api_key")
+    # SIGNOZ_API_KEY env wins over Vault so the config-as-code apply can run from CI
+    # (GitOps apply-on-merge) without a Vault AppRole on the runner; Vault stays the
+    # source for on-VPS/local runs.
+    api_key = os.getenv("SIGNOZ_API_KEY", "").strip()
     if not api_key:
-        error("Missing SigNoz api_key in Vault; run signoz.shared.create-api-key first")
+        signoz_secrets = get_secrets("platform", "signoz", deploy_env)
+        api_key = signoz_secrets.get("api_key")
+    if not api_key:
+        error(
+            "Missing SigNoz api_key: set SIGNOZ_API_KEY or store it in Vault "
+            "(run signoz.shared.create-api-key first)"
+        )
         return None
 
     return {"env": env, "deploy_env": deploy_env, "domain": signoz_domain, "api_key": api_key}
