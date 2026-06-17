@@ -82,13 +82,36 @@ def test_dashboard_has_full_backend_red_and_fe_page_load() -> None:
         assert wid in widgets, f"missing RED widget {wid}"
     assert "fe-page-load" in widgets
 
-    # the percentile widgets actually request the right aggregate on durationNano
+    # the latency widgets request the right aggregate on durationNano (p50/p95/p99)
     def _agg(wid: str) -> tuple[str, str]:
         q = widgets[wid]["query"]["builder"]["queryData"][0]
         return q["aggregateOperator"], q["aggregateAttribute"]["key"]
 
     assert _agg("be-latency-p50") == ("p50", "durationNano")
+    assert _agg("be-latency-p95") == ("p95", "durationNano")
     assert _agg("be-latency-p99") == ("p99", "durationNano")
+
+    # fe-page-load is p75 of documentLoad span duration
+    assert _agg("fe-page-load") == ("p75", "durationNano")
+    page_load_filters = widgets["fe-page-load"]["query"]["builder"]["queryData"][0]["filters"]["items"]
+    assert any(f["key"]["key"] == "name" and f["value"] == "documentLoad" for f in page_load_filters)
+
+    # the error-rate panel counts only SERVER spans (matches its description)
+    err_filters = widgets["be-error-rate-5xx"]["query"]["builder"]["queryData"][0]["filters"]["items"]
+    assert any(f["key"]["key"] == "kind_string" and f["value"] == "Server" for f in err_filters)
+    assert any(f["key"]["key"] == "hasError" for f in err_filters)
+
+
+def test_every_widget_is_filterable_by_deployment_environment() -> None:
+    """The deployment_environment dropdown only filters a panel if the panel's query
+    references it — assert EVERY widget carries the `$deployment_environment` filter so
+    the dashboard variable is real, not decorative (CR #391)."""
+    for w in load_dashboard()["widgets"]:
+        items = w["query"]["builder"]["queryData"][0]["filters"]["items"]
+        assert any(
+            f["key"]["key"] == "deployment.environment" and f["value"] == "$deployment_environment"
+            for f in items
+        ), f"widget {w['id']} is not filterable by deployment_environment"
 
 
 def test_env_variable_query_targets_the_live_v2_logs_schema() -> None:
