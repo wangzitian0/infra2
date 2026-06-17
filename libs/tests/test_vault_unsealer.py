@@ -31,6 +31,10 @@ class _Response:
     def json(self) -> dict:
         return self._payload
 
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
 
 class _Client:
     def __init__(self, responses: dict[str, _Response]):
@@ -135,3 +139,57 @@ def test_unsealer_health_initializes_connect_before_health_probe(monkeypatch) ->
         "http://op-connect-api:8080/v1/vaults/vault-id/items/item-id",
         "http://op-connect-api:8080/health",
     ]
+
+
+def test_unsealer_health_reports_unhealthy_when_vault_sealed(monkeypatch) -> None:
+    """A sealed Vault (HTTP 503) must surface as unhealthy (return 1) — so a stuck seal shows
+    up as an unhealthy unsealer container, not a silent deadlock of every downstream service
+    waiting on Vault secrets. (Connect auth is healthy here; only Vault is sealed.)"""
+    unsealer = _load_unsealer(monkeypatch)
+    responses = {
+        "http://op-connect-api:8080/v1/vaults/vault-id/items/item-id": _Response(200),
+        "http://op-connect-api:8080/health": _Response(
+            200,
+            {
+                "dependencies": [
+                    {"service": "sqlite", "status": "ACTIVE"},
+                    {"service": "sync", "status": "ACTIVE"},
+                    {"service": "1Password", "status": "ACTIVE"},
+                ]
+            },
+        ),
+        "http://vault:8200/v1/sys/health": _Response(503, {"sealed": True}),
+    }
+    monkeypatch.setattr(unsealer.httpx, "Client", lambda **_kwargs: _Client(responses))
+
+    assert unsealer.health_check() == 1
+
+
+def test_unseal_aborts_when_insufficient_keys(monkeypatch) -> None:
+    """When fewer than 3 unseal keys are present in 1Password, unseal() must log the shortfall
+    and return WITHOUT submitting any key — it never partial-unseals or crashes. The sealed
+    state then surfaces via the healthcheck (test above). Locks the missing-keys safety path."""
+    unsealer = _load_unsealer(monkeypatch)
+
+    class _UnsealClient(_Client):
+        def __init__(self, responses: dict[str, _Response]):
+            super().__init__(responses)
+            self.posts: list[str] = []
+
+        def post(self, url: str, **_kwargs) -> _Response:
+            self.posts.append(url)
+            return _Response(200, {"sealed": False})
+
+    client = _UnsealClient(
+        {
+            "http://vault:8200/v1/sys/health": _Response(503, {"sealed": True}),
+            "http://op-connect-api:8080/v1/vaults/vault-id/items/item-id": _Response(
+                200, {"fields": [{"label": "Unseal Key 1", "value": "k1"}]}  # only 1 key
+            ),
+        }
+    )
+    monkeypatch.setattr(unsealer.httpx, "Client", lambda **_kwargs: client)
+
+    unsealer.unseal()  # must not raise
+
+    assert client.posts == []  # never attempted to submit an unseal key
