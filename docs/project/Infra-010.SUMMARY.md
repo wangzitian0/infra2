@@ -25,7 +25,7 @@
 **IaC Runner 问题**：
 - **根因**：compose.yaml 缺少 vault-agent sidecar，容器无法获取 `GIT_REPO_URL` 环境变量
 - **已修复**：创建 PR #74 (已关闭)，添加 vault-agent.hcl, secrets.ctmpl, vault-policy.hcl
-- **待部署**：需手动执行 `invoke vault.setup-tokens && invoke iac-runner.setup`
+- **待部署**：需手动执行 `invoke vault.setup-approle && invoke iac-runner.setup`
 
 ---
 
@@ -131,9 +131,9 @@ GitHub push to main
 ```bash
 cd /path/to/infra2
 
-# 1. 生成 VAULT_APP_TOKEN
+# 1. 注入 AppRole 凭证 (VAULT_ROLE_ID/VAULT_SECRET_ID)
 export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/.../Token')
-invoke vault.setup-tokens
+invoke vault.setup-approle
 
 # 2. 应用新 compose.yaml (包含 vault-agent sidecar)
 invoke iac-runner.setup

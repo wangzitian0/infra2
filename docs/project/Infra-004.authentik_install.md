@@ -79,10 +79,10 @@ Automatically configures `https://sso.{INTERNAL_DOMAIN}` via Dokploy API after d
 ## Deployment Commands
 
 ```bash
-# 1. Generate Tokens (One-time)
+# 1. Provision AppRole creds (One-time)
 export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token') # item: bootstrap/vault/Root Token
 # If field name is Token, use: op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token
-invoke vault.setup-tokens
+invoke vault.setup-approle
 
 # 2. Deploy Services
 invoke postgres.setup
