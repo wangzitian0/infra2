@@ -135,12 +135,13 @@ def test_compose_files_parse_and_consume_injected_endpoint():
         assert doc, f"{path} did not parse"
         env = doc["services"]["frontend"]["environment"]
         value = env["NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT"]
-        # Consumes the injected var (single source), with the identical fallback default.
-        assert value.startswith("${NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT:-"), (
-            f"{path} re-constructs the endpoint instead of consuming the injected one"
+        # Consumes ONLY the injected var (single source: libs.common via otel_env).
+        assert value == "${NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT:-}", (
+            f"{path} must consume the injected endpoint with an empty default, not "
+            "re-construct an otel.<domain>/v1/traces literal"
         )
-        # The fallback default must equal the legacy effective value once interpolated.
-        assert "https://otel.${INTERNAL_DOMAIN}/v1/traces}" in value
+        # No inline reconstruction of the subdomain/path that libs.common owns.
+        assert "otel." not in value and "/v1/traces" not in value
 
 
 def test_raw_collector_config_template_is_valid_yaml():
