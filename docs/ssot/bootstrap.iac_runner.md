@@ -652,8 +652,8 @@ path "auth/token/lookup-self"          { capabilities = ["read"] }
 - **v2（权限收敛）—— 已完成（#369）**：砍掉 `vault_token_accessors` grant 与 `renew-self`，删除
   `setup-tokens` 任务与 `libs/vault_tokens.py` 静态 token 账本代码（仅保留 AppRole 复用的
   `policy_name`/`normalize_selector`/`VaultTokenTarget`），并从 `RUNTIME_ENV_KEYS_TO_PRESERVE` 移除
-  `VAULT_APP_TOKEN`。**范围外（独立任务）**：其它 11 个服务 policy 的 `renew-self`、ClickHouse 旧
-  `compose-with-vault.yaml`、以及 no-op 的 `VAULT_APP_TOKEN` 部署预检。
+  `VAULT_APP_TOKEN`。**这些后续现已完成 / 定型**：其它服务 policy 的 `renew-self` 已全部清理；ClickHouse 旧
+  token_file 变体（含 `compose-with-vault.yaml`）已在 #384 删除；`VAULT_APP_TOKEN` 部署预检有意保留为残留 token 的安全网。
 - iac-runner 是 bootstrap 服务、改坏会瘫掉部署链，**全程用外部 bootstrap 重建流程
   （`scripts/deploy_iac_runner_bootstrap.sh`）而非 `/deploy` 自部署**（见 §5.2、§7.4），
   并准备好回滚（恢复 `VAULT_APP_TOKEN` env + token_file compose）。
