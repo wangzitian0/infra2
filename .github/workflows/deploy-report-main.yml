@@ -8,8 +8,8 @@ name: Auto-deploy report-branch-main
 # also manually dispatchable here. It deploys app `main` to the report-branch-main preview slot
 # through the unified deploy_v2 front door.
 #
-# NOTE: the APP-repo SENDER (app main push -> repository_dispatch into infra2) is the remaining
-# cross-repo half — see #370. Until it's wired, this fires only on manual dispatch.
+# The APP-repo SENDER half is wired in finance_report `.github/workflows/notify-infra2-report-main.yml`
+# (finance_report#1173): app `main` push -> repository_dispatch into infra2. See Infra-015.
 
 on:
   repository_dispatch:

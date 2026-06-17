@@ -79,6 +79,7 @@ nav:
           - Alerting: ssot/ops.alerting.md
   - Projects:
       - Portfolio: project/README.md
+      - Infra-015: project/Infra-015.deploy_v2_front_door.md
       - Infra-014: project/Infra-014.finance_report_observability.md
       - Infra-011: project/Infra-011.reliability_hardening.md
       - Infra-006: project/Infra-006.documentation_engineering.md
