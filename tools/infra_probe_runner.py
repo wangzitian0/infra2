@@ -64,6 +64,14 @@ def main() -> int:
     state_path = Path(os.getenv("INFRA_PROBE_STATE_FILE", DEFAULT_STATE_FILE))
 
     while True:
+        # Liveness-first heartbeat (#369): prove the runner is alive at the START of
+        # every iteration, BEFORE running probes. Crash/OOM/hang during a probe cycle
+        # then surfaces as heartbeat staleness within one interval — independent of how
+        # long the probe cycle takes. The post-probe heartbeat below still carries the
+        # ok/failure status. Heartbeat writes are throttled watchdog-side, so the extra
+        # ping per loop costs no KV quota.
+        if args.loop:
+            _post_heartbeat(ok=True, detail="probe loop iteration starting")
         try:
             exit_code = run_once(
                 as_json=args.json,

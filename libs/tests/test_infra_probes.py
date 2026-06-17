@@ -623,3 +623,35 @@ def test_host_resource_specs_gated_to_production(monkeypatch) -> None:
     monkeypatch.delenv("INFRA_PROBE_HEARTBEAT_ENV", raising=False)
     monkeypatch.setenv("ENV", "Staging")
     assert {s.kind for s in runner._host_specs_for_env(specs)} == {"http"}
+
+
+def test_probe_runner_posts_liveness_heartbeat_before_probes(monkeypatch) -> None:
+    """#369: the looped runner emits a liveness heartbeat at the START of each iteration,
+    BEFORE running probes — so a crash/hang during a probe cycle surfaces as heartbeat
+    staleness within one interval, not only after a full (possibly slow) cycle."""
+    runner = _load_probe_runner()
+    events: list = []
+
+    def fake_run_once(*, as_json, **_kwargs):
+        events.append("run_once")
+        return 0
+
+    def fake_post_heartbeat(*, ok, detail=""):
+        events.append(("hb", detail))
+
+    def fake_sleep(_seconds):
+        raise SystemExit(0)
+
+    monkeypatch.setattr(runner, "run_once", fake_run_once)
+    monkeypatch.setattr(runner, "_post_heartbeat", fake_post_heartbeat)
+    monkeypatch.setattr(runner.time, "sleep", fake_sleep)
+    monkeypatch.setattr("sys.argv", ["infra_probe_runner.py", "--loop", "--json"])
+
+    try:
+        runner.main()
+    except SystemExit:
+        pass
+
+    assert events[0] == ("hb", "probe loop iteration starting")
+    assert "run_once" in events
+    assert events.index(("hb", "probe loop iteration starting")) < events.index("run_once")

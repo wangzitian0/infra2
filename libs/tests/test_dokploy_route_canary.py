@@ -673,3 +673,32 @@ def test_canary_github_summary_lists_failure_domain_and_phase_evidence() -> None
     assert "| deploy-trigger | pass |" in summary
     assert "| deployment-record | fail |" in summary
     assert "deployment_count" in summary
+
+
+def test_route_canary_alert_failure_pages_out_of_band(monkeypatch) -> None:
+    """#369: a non-pass route canary pages out-of-band (Feishu) instead of dying
+    silently in the hourly workflow log (the ~23h blind spot)."""
+    import libs.alerting as al
+    import tools.dokploy_route_canary as rc
+    from types import SimpleNamespace
+
+    sent = {}
+    monkeypatch.setattr(
+        al, "deliver_out_of_band_text", lambda env, text, **kw: sent.update(text=text)
+    )
+    rc._alert_failure(SimpleNamespace(status="fail", failure_domain="dokploy-routing"))
+    assert "route canary FAILED" in sent["text"]
+    assert "dokploy-routing" in sent["text"]
+
+
+def test_route_canary_alert_failure_never_raises(monkeypatch) -> None:
+    """Alerting must never change the probe's exit code."""
+    import libs.alerting as al
+    import tools.dokploy_route_canary as rc
+    from types import SimpleNamespace
+
+    def boom(*_a, **_k):
+        raise RuntimeError("feishu down")
+
+    monkeypatch.setattr(al, "deliver_out_of_band_text", boom)
+    rc._alert_failure(SimpleNamespace(status="fail", failure_domain=None))  # must not raise

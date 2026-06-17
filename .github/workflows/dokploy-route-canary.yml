@@ -98,6 +98,16 @@ jobs:
           PROJECT_INPUT: ${{ github.event.inputs.project || '' }}
           ENV_NAME_INPUT: ${{ github.event.inputs.env || '' }}
           TIMEOUT_SECONDS_INPUT: ${{ github.event.inputs.timeout_seconds || '' }}
+          EVENT_NAME: ${{ github.event_name }}
+          # out-of-band Feishu delivery (same secrets the watchdog uses) — a red route
+          # canary pages instead of dying silently in the hourly workflow log (#369).
+          # Injected ONLY for non-PR events (a PR run never uses --alert-on-failure).
+          INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE || '' }}
+          INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL || '' }}
+          INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID || '' }}
+          INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET || '' }}
+          INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID || '' }}
+          INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE || '' }}
         run: |
           set -euo pipefail
 
@@ -126,6 +136,11 @@ jobs:
           env_name="${ENV_NAME_INPUT:-${DOKPLOY_ROUTE_CANARY_ENV:-staging}}"
           timeout_seconds="${TIMEOUT_SECONDS_INPUT:-${DOKPLOY_ROUTE_CANARY_TIMEOUT_SECONDS:-90}}"
 
+          # Out-of-band alert ONLY on a non-PR failure: a scheduled/post-merge red route
+          # canary is an infra incident (page); a PR red is CI feedback to the author.
+          alert_args=()
+          [[ "$EVENT_NAME" != "pull_request" ]] && alert_args+=(--alert-on-failure)
+
           echo "Canary summary will be written to $GITHUB_STEP_SUMMARY"
           python tools/dokploy_route_canary.py \
             --host "$canary_host" \
@@ -136,4 +151,5 @@ jobs:
             --dokploy-host "cloud.zitian.party" \
             --nonce "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --timeout-seconds "$timeout_seconds" \
-            --repair-stale-compose
+            --repair-stale-compose \
+            "${alert_args[@]}"

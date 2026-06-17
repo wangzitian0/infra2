@@ -82,6 +82,18 @@ class SigNozDeployer(Deployer):
             error("Missing VPS_HOST")
             return False
         data_path = cls.data_path_for_env(e)
+        # Persistent disk-queue dir for the collector's exporter sending_queue (#369).
+        # Must exist + be writable by the non-root collector (uid 10001) BEFORE the
+        # container starts, on EVERY deploy path — `sync` skips pre_compose but always
+        # runs composing → this helper. Without it Docker auto-creates the bind dir
+        # root-owned and the collector crash-loops on the file_storage extension.
+        if not run_with_status(
+            c,
+            f"ssh root@{host} 'mkdir -p {data_path}/otel-queue && "
+            f"chown -R 10001:0 {data_path}/otel-queue && chmod 770 {data_path}/otel-queue'",
+            "Prepare OTel collector disk-queue directory",
+        ).ok:
+            return False
         template_path = Path(__file__).with_name("otel-collector-config.yaml")
         if not template_path.exists():
             error("Missing otel-collector config template", str(template_path))
