@@ -45,6 +45,7 @@ from tools.deploy_env_config import (
     otel_env,
     preview_alias,
 )
+from tools.openpanel_clients import openpanel_env
 from tools.resolve_deploy_ref import resolve_to_sha
 
 # The infra2 repo + path Dokploy pulls the preview compose template from (same source
@@ -151,6 +152,13 @@ def _preview_env_vars(
         "NEXT_PUBLIC_APP_URL": alias.app_url(domain=domain),
         # #368: FE OTLP endpoint from the ONE source (consumed, not re-built in compose).
         **otel_env(domain=domain),
+        # #375: every preview alias (main / pr-<N> / commit-<sha7>) shares the single
+        # "preview" OpenPanel project; inject its client-id at runtime so preview
+        # analytics actually emits (alias granularity rides deployment.environment, not
+        # a per-alias project). staging/prod get this via deploy_primitive; preview was
+        # the missing path — without it OPENPANEL_CLIENT_ID stayed empty and analytics
+        # silently no-op'd on every preview.
+        **openpanel_env("preview"),
         "ENV_SUFFIX": alias.env_suffix,
         "ENV_DOMAIN_SUFFIX": alias.domain_suffix,
         # ENV is the alias display label so the telemetry identity contract

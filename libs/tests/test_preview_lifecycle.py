@@ -269,6 +269,14 @@ def test_up_updates_existing_compose_in_place():
     assert cid == "cmp-existing"
     assert env_vars["ENV"] == "branch-main"
     assert env_vars["ENV_SUFFIX"] == "-branch-main"
+    # #375: every preview alias shares the one "preview" OpenPanel project, injected at
+    # runtime so preview analytics actually emits (was missing — only deploy_primitive
+    # had it). Non-empty client-id + canonical environment, mirroring staging/prod.
+    from tools.openpanel_clients import openpanel_env
+
+    assert env_vars["OPENPANEL_CLIENT_ID"] == openpanel_env("preview")["OPENPANEL_CLIENT_ID"]
+    assert env_vars["OPENPANEL_CLIENT_ID"]  # non-empty: the preview project is issued
+    assert env_vars["OPENPANEL_ENVIRONMENT"] == "preview"
     # the source env's AppRole creds are injected on every up (merged on redeploy)
     assert env_vars["VAULT_ROLE_ID"] == "rid-test"
     assert client.deployed == ["cmp-existing"]

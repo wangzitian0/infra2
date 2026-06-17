@@ -190,8 +190,9 @@ services:
       OPENPANEL_ENVIRONMENT: ${OPENPANEL_ENVIRONMENT:-}
       # Browser → SigNoz traces (Infra-014). The browser cannot reach the
       # Docker-internal collector, so FE OTLP goes through the ONE public ingest
-      # domain otel.${INTERNAL_DOMAIN} (CORS-restricted + static bearer token,
-      # rate-limited) → Traefik → platform-signoz-otel-collector:4318. Like
+      # domain otel.${INTERNAL_DOMAIN} (CORS-gated + collector memory_limiter; NO
+      # bearer token — a browser can't hold a secret, see ops.observability.md §4.4)
+      # → Traefik → platform-signoz-otel-collector:4318. Like
       # OPENPANEL_*, these are injected as plain runtime env read server-side at
       # request time (NOT build-time NEXT_PUBLIC baked into the shared image), so a
       # promote-not-rebuild image stays env-agnostic. deployment.environment + git
