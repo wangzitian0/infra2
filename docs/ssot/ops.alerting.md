@@ -115,7 +115,7 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
 | L3 Finance | Wealthfolio | HTTP health check fails | P2 | Planned |
 | L3 Finance Report | fr-postgres | app database health fails | P0 | Planned |
 | L3 Finance Report | fr-redis | app cache health fails | P1 | Planned |
-| L3 Finance Report | fr-app backend | OTEL ERROR/FATAL log count is above zero over 5 minutes | P1 | First live instance via shared rule automation |
+| L3 Finance Report | fr-app backend | OTEL ERROR/FATAL log count is above zero over 5 minutes | P1 | Defined as code (`FinanceReportBackendErrorLogs`) in `finance_report/finance_report/observability/alert_rules.json`; applied via `fr-observability.shared.apply-alerts` |
 | L3 Finance Report | fr-app public route | staging/production `report[-staging].zitian.party/` (web) or `/api/health` (API) fails from Cloudflare | P0 prod / P1 staging | Live via Cloudflare Workers out-of-band watchdog |
 | L3 Finance Report | fr-app frontend | frontend HTTP health fails | P1 | Live via Cloudflare Workers out-of-band watchdog (public web route) |
 | Cross-cutting | Vault app tokens and rendered env | missing, malformed, invalid, non-renewable, low TTL, or rendered `<no value>` fields | P0/P1 | Docker healthcheck + manual gate: `vault-audit.self-refresh` |
@@ -215,6 +215,34 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
    ```bash
    uv run python -m invoke alerting.shared.test-feishu --message="Finance report alerting path live"
    ```
+
+### SOP-004B: Apply finance_report alert + dashboard as code (#373)
+
+The finance_report SigNoz objects are checked in under
+[`finance_report/finance_report/observability/`](../../finance_report/finance_report/observability/):
+`alert_rules.json` holds `FinanceReportBackendErrorLogs` (the alert name the app
+references in `apps/backend/src/observability.py`) and `dashboard.json` holds the
+baseline backend+frontend dashboard. Both are applied idempotently rather than
+clicked into the UI. The rule routes through the shared internal bridge channel
+(`infra2-feishu-alerts-<env>`) to Lark/Feishu; the Feishu webhook secret stays in
+1Password `platform/{env}/alerting` and is mirrored to Vault
+`secret/platform/{env}/alerting` at deploy time — it is never written into the
+SigNoz channel or this repo.
+
+1. Ensure the bridge, SigNoz API key, and Feishu channel exist (SOP-004 steps 1–3).
+2. Apply the definitions:
+   ```bash
+   uv run python -m invoke fr-observability.shared.apply-alerts
+   uv run python -m invoke fr-observability.shared.apply-dashboard
+   ```
+3. Inspect payloads offline without touching SigNoz:
+   ```bash
+   uv run python -m invoke fr-observability.shared.print-alerts
+   uv run python -m invoke fr-observability.shared.print-dashboard
+   ```
+4. Post-merge live gate: emit a synthetic backend ERROR log, confirm
+   `FinanceReportBackendErrorLogs` fires into the Lark group, and confirm the
+   "Finance Report — Backend & Frontend" dashboard renders.
 
 ### SOP-005: Cloudflare out-of-band infra2 watchdog
 
@@ -587,6 +615,7 @@ VPS log dive.
 |----------|-----------------------|--------|
 | **Feishu payload contract** | `libs/tests/test_alerting.py` | ✅ Implemented |
 | **Reusable SigNoz log error rule payload** | `libs/tests/test_alerting.py` | ✅ Implemented |
+| **finance_report alert + dashboard config-as-code (#373)** | `libs/tests/test_observability_dashboards.py` | ✅ Implemented |
 | **Out-of-band host and bridge watchdog contract** | `libs/tests/test_out_of_band_watchdog.py` | ✅ Implemented |
 | **Cloudflare out-of-band watchdog contract** | `libs/tests/test_cloudflare_watchdog.py` | ✅ Implemented |
 | **In-band infra service probes** | `libs/tests/test_infra_probes.py` | ✅ Implemented |
