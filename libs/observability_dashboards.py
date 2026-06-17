@@ -30,6 +30,7 @@ FINANCE_REPORT_OBSERVABILITY_DIR = (
 )
 ALERT_RULES_FILE = FINANCE_REPORT_OBSERVABILITY_DIR / "alert_rules.json"
 DASHBOARD_FILE = FINANCE_REPORT_OBSERVABILITY_DIR / "dashboard.json"
+OPENPANEL_ANALYTICS_FILE = FINANCE_REPORT_OBSERVABILITY_DIR / "openpanel_analytics.json"
 
 
 class ObservabilityDefinitionError(Exception):
@@ -160,3 +161,43 @@ def load_dashboard(path: Path = DASHBOARD_FILE) -> dict[str, Any]:
 def build_dashboard_import_payload(path: Path = DASHBOARD_FILE) -> dict[str, Any]:
     """Wrap a dashboard definition in the SigNoz /api/v1/dashboards body."""
     return {"data": load_dashboard(path)}
+
+
+def load_openpanel_analytics(path: Path = OPENPANEL_ANALYTICS_FILE) -> dict[str, Any]:
+    """Load + validate the checked-in OpenPanel analytics intent (funnels + events board).
+
+    OpenPanel has no write API/MCP for funnels/dashboards, so this is config-as-code
+    *intent* (applied manually per the SOP-006 runbook) rather than an auto-applied
+    artifact. Validation keeps the spec well-formed and the funnel non-degenerate so the
+    runbook and any future query tooling have a trustworthy source.
+    """
+    data = _load_json(path)
+    if not isinstance(data, dict):
+        raise ObservabilityDefinitionError(f"OpenPanel analytics must be a JSON object: {path}")
+
+    funnels = data.get("funnels")
+    if not isinstance(funnels, list) or not funnels:
+        raise ObservabilityDefinitionError(f"OpenPanel analytics needs a non-empty 'funnels' list: {path}")
+    for funnel in funnels:
+        steps = funnel.get("steps") if isinstance(funnel, dict) else None
+        if not isinstance(steps, list) or len(steps) < 2:
+            raise ObservabilityDefinitionError(
+                f"Each funnel needs a name and >=2 steps: {path}"
+            )
+        if not all(isinstance(step, str) and step.strip() for step in steps):
+            raise ObservabilityDefinitionError(
+                f"Each funnel step must be a non-empty string: {path}"
+            )
+        if not str(funnel.get("name") or "").strip():
+            raise ObservabilityDefinitionError(f"Each funnel needs a name: {path}")
+
+    board = data.get("events_board")
+    if not isinstance(board, dict) or not isinstance(board.get("events"), list) or not board["events"]:
+        raise ObservabilityDefinitionError(
+            f"OpenPanel analytics needs an 'events_board' with a non-empty 'events' list: {path}"
+        )
+    if not all(isinstance(event, str) and event.strip() for event in board["events"]):
+        raise ObservabilityDefinitionError(
+            f"Each events_board event must be a non-empty string: {path}"
+        )
+    return data
