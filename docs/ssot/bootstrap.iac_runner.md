@@ -469,24 +469,26 @@ invoke env.set GIT_REPO_URL=https://github.com/wangzitian0/infra2.git \
   --project=bootstrap --service=iac_runner
 ```
 
-### 6.2 Vault Token
+### 6.2 Vault 凭证（AppRole）
 
-**Token 类型**: Scoped deploy App Token
+**认证方式**: AppRole（单一有界 role；no static `VAULT_APP_TOKEN`）— 详见 §6.4。
 
-**生成命令**:
+**生成 / 注入命令**:
 ```bash
 export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token')
-invoke vault.setup-tokens
+invoke vault.setup-approle --project=bootstrap --service=iac_runner
 ```
 
-**Token 自动注入**:
-- `invoke vault.setup-tokens` 自动在 Dokploy 中为 IaC Runner 配置
-  `VAULT_APP_TOKEN`，并要求 Dokploy 产生新的 runtime deployment record
-- Vault Agent 使用此 token 拉取 bootstrap/iac_runner 密钥
-- Sync subprocesses use the same scoped token as `VAULT_ROOT_TOKEN` so deployers
-  can read and repair `platform/{env}/*` and `finance_report/{env}/*` runtime
-  secret fields before deployment. The token must not grant `delete`, and it
-  must not mutate bootstrap root credentials.
+**凭证注入与使用**:
+- `invoke vault.setup-approle` 生成 `role_id`/`secret_id`（`secret_id_ttl=0` 永不过期），
+  注入 Dokploy compose env（`VAULT_ROLE_ID`/`VAULT_SECRET_ID`），并要求 Dokploy 产生新的
+  runtime deployment record。凭证**不进 1Password、不进 Vault**。
+- Vault Agent sidecar 以 AppRole 登录并原生续期，拉取 `bootstrap/{env}/iac_runner` 密钥。
+- Sync subprocesses get `VAULT_ROOT_TOKEN` from an in-container
+  `auth/approle/login` (`resolve_vault_root_token`) — a short-TTL bounded token so
+  deployers can read and repair `platform/{env}/*` and `finance_report/{env}/*`
+  runtime secret fields before deployment. The token must not grant `delete`, and
+  it must not mutate bootstrap root credentials.
 
 ### 6.3 环境变量
 
@@ -494,7 +496,7 @@ invoke vault.setup-tokens
 | Variable | Source | 说明 |
 |----------|--------|------|
 | `VAULT_ADDR` | 手动配置 | `https://vault.{domain}` |
-| `VAULT_APP_TOKEN` | `invoke vault.setup-tokens` | Scoped deploy token |
+| `VAULT_ROLE_ID` / `VAULT_SECRET_ID` | `invoke vault.setup-approle` | AppRole login material (bounded; `secret_id_ttl=0`) |
 | `INTERNAL_DOMAIN` | 手动配置 | 内部域名 |
 | `DEPLOY_ENV` | 手动配置 | `production` / `staging` |
 
@@ -677,9 +679,9 @@ invoke env.set WEBHOOK_SECRET=$(openssl rand -hex 32) \
 invoke env.set GIT_REPO_URL=https://github.com/wangzitian0/infra2.git \
   --project=bootstrap --service=iac_runner
 
-# 2. 生成 Vault token
+# 2. 生成并注入 AppRole 凭证（role_id/secret_id → Dokploy env）
 export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token')
-invoke vault.setup-tokens
+invoke vault.setup-approle --project=bootstrap --service=iac_runner
 
 # 3. 部署服务
 invoke iac-runner.setup
@@ -776,16 +778,15 @@ echo "X-Hub-Signature-256: sha256=$SIGNATURE"
 
 **排查步骤**:
 ```bash
-# 1. 检查 VAULT_APP_TOKEN 是否存在
-docker exec iac-runner env | grep VAULT_APP_TOKEN
+# 1. 检查 AppRole 凭证是否存在
+docker exec iac-runner env | grep -E 'VAULT_ROLE_ID|VAULT_SECRET_ID'
 
-# 2. 手动测试 Vault 连接
-docker exec iac-runner curl -H "X-Vault-Token: $VAULT_APP_TOKEN" \
-  https://vault.{domain}/v1/secret/data/bootstrap/production/iac_runner
+# 2. 验证 sidecar 已登录并渲染（approle sink token）
+docker exec iac-runner-vault-agent sh -c 'test -s /vault/.token && echo token-present'
 
-# 3. 重新生成 token；该命令必须看到 Dokploy runtime deployment record
+# 3. 重新注入 AppRole 凭证；该命令必须看到 Dokploy runtime deployment record
 export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token')
-invoke vault.setup-tokens
+invoke vault.setup-approle --project=bootstrap --service=iac_runner
 
 # 4. 如果 Dokploy 接受请求但没有重建 runtime，用外部 bootstrap 重建
 INFRA2_DEPLOY_SHA=$(git rev-parse HEAD) bash scripts/deploy_iac_runner_bootstrap.sh
@@ -834,8 +835,8 @@ curl https://iac.{domain}/health
 
 | 资源 | 权限 | 实现方式 |
 |------|------|---------|
-| **Runtime Vault service secrets** | Read + create/update only | Scoped deploy App Token (`vault.setup-tokens`) |
-| **Bootstrap/root credentials** | Read-only for iac_runner config | Scoped deploy App Token; root credentials are operator-only |
+| **Runtime Vault service secrets** | Read + create/update only | Bounded AppRole login (`vault.setup-approle`) |
+| **Bootstrap/root credentials** | Read-only for iac_runner config | Bounded AppRole token; root credentials are operator-only |
 | **Docker Socket** | 只读 | `ro` mount（`/var/run/docker.sock:/var/run/docker.sock:ro`）|
 | **Host 文件系统** | 无写入权限 | 仅 workspace 目录可写 |
 | **Bootstrap 服务** | 排除自动同步 | 代码中硬编码过滤规则 |
@@ -929,14 +930,14 @@ flowchart LR
     Platform["Platform Services"]
 
     1P -->|bootstrap secrets| Vault
-    Vault -->|app token| IaC
-    Dokploy -->|container management| IaC
+    Dokploy -->|AppRole role_id/secret_id + container mgmt| IaC
+    Vault -->|secrets via AppRole login| IaC
     IaC -->|invoke sync| Platform
 ```
 
 **上游依赖**（IaC Runner 依赖这些服务）:
-- **Vault**: 提供密钥存储和 App Token
-- **Dokploy**: 提供容器编排和 API
+- **Vault**: 提供密钥存储；IaC Runner 以 AppRole 登录获取
+- **Dokploy**: 提供容器编排和 API，并持有注入的 AppRole `role_id`/`secret_id`
 - **1Password**: 间接依赖（通过 op CLI 读取 bootstrap secrets）
 
 **下游消费**（这些服务由 IaC Runner 管理）:
@@ -998,10 +999,10 @@ IaC Runner 是 bootstrap 服务，不能依赖自身自动修复。Post-merge wo
 - GitHub Actions 收到 Cloudflare `524`：不要使用 public route 上的
   `wait=true` 长请求；应使用 `/deploy` + `/deploy/status` 短请求轮询。
 - Dokploy deployment log 出现 `Compose file not found`：`composePath` 必须是 `bootstrap/06.iac_runner/compose.yaml`。
-- `iac-runner-vault-agent` 出现 `token file validation failed`：运行
-  `VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token') invoke vault.setup-tokens`
-  重新生成 periodic token；如果 Dokploy compose env 已更新但容器仍使用旧
-  token，必须通过外部 IaC Runner bootstrap 重建流程重建 compose，单纯
+- `iac-runner-vault-agent` 出现 `VAULT_ROLE_ID and VAULT_SECRET_ID are required` 或 approle 登录失败：运行
+  `VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token') invoke vault.setup-approle --project=bootstrap --service=iac_runner`
+  重新注入 role_id/secret_id；如果 Dokploy compose env 已更新但容器仍使用旧
+  凭证，必须通过外部 IaC Runner bootstrap 重建流程重建 compose，单纯
   `docker restart` 不会更新容器 env。
 - `iac-runner` 出现 `Secrets file not found after 60s`：通常是 Vault Agent 未渲染 `/vault/secrets/.env`，先看 sidecar token 状态。
 - Docker 启动失败并提示 `error mounting "/root/.ssh/id_ed25519"`：不要挂载单个 SSH key 文件；挂载 `${SSH_DIR_PATH:-/root/.ssh}` 到 `/host_ssh`。

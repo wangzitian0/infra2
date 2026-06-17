@@ -8,19 +8,20 @@ services:
       - sh
       - -c
       - |
-        rm -f /vault/secrets/.env /vault/.token /home/vault/.vault-token 2>/dev/null || true
-        if [ -z "$$VAULT_APP_TOKEN" ]; then
-          echo "VAULT_APP_TOKEN is required"
+        rm -f /vault/secrets/.env /vault/.token /vault/role_id /vault/secret_id /vault/token /home/vault/.vault-token 2>/dev/null || true
+        if [ -z "$$VAULT_ROLE_ID" ] || [ -z "$$VAULT_SECRET_ID" ]; then
+          echo "VAULT_ROLE_ID and VAULT_SECRET_ID are required"
           exit 1
         fi
-        echo "$$VAULT_APP_TOKEN" > /vault/token
-        # token_file auth does not renew; keep the periodic token alive in-band
-        # (renew-self every 6h). Requires renew-self capability in the token policy.
-        ( while true; do sleep 21600; VAULT_TOKEN="$$(cat /vault/token)" vault write -f auth/token/renew-self >/dev/null 2>&1 || true; done ) &
+        echo "$$VAULT_ROLE_ID" > /vault/role_id
+        echo "$$VAULT_SECRET_ID" > /vault/secret_id
+        # AppRole auto_auth: vault-agent logs in and renews/re-auths the token
+        # natively. No token_file decay, no manual renew-self loop.
         exec vault agent -config=/etc/vault/vault-agent.hcl
     environment:
       VAULT_ADDR: ${VAULT_ADDR}
-      VAULT_APP_TOKEN: ${VAULT_APP_TOKEN:-}
+      VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
+      VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
       ENV: ${ENV:-production}
     volumes:
       - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
@@ -35,7 +36,7 @@ services:
           # vault token lookup
           test -s /vault/secrets/.env &&
           ! grep -q "<no value>" /vault/secrets/.env &&
-          wget -q -T 3 --header="X-Vault-Token: $$(cat /vault/token)" "$$VAULT_ADDR/v1/auth/token/lookup-self" -O /dev/null
+          wget -q -T 3 --header="X-Vault-Token: $$(cat /vault/.token)" "$$VAULT_ADDR/v1/auth/token/lookup-self" -O /dev/null
       interval: 30s
       timeout: 5s
       retries: 3
@@ -120,7 +121,8 @@ services:
       - WEBHOOK_PORT=8080
       - GIT_BRANCH=${GIT_BRANCH:-main}
       - VAULT_ADDR=${VAULT_ADDR}
-      - VAULT_APP_TOKEN=${VAULT_APP_TOKEN:-}
+      - VAULT_ROLE_ID=${VAULT_ROLE_ID:-}
+      - VAULT_SECRET_ID=${VAULT_SECRET_ID:-}
       - DOKPLOY_API_KEY=${DOKPLOY_API_KEY:-}
       - INTERNAL_DOMAIN=${INTERNAL_DOMAIN}
       - VPS_HOST=${VPS_HOST:-}

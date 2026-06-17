@@ -238,8 +238,9 @@ if [ -z "$confirmed_env_b64" ]; then
 fi
 printf '%s' "$confirmed_env_b64" | base64 -d > "$env_file"
 
-if ! grep -q '^VAULT_APP_TOKEN=' "$env_file"; then
-  echo "Dokploy compose env is missing VAULT_APP_TOKEN; refusing to recreate IaC Runner" >&2
+if ! grep -q '^VAULT_ROLE_ID=' "$env_file" || ! grep -q '^VAULT_SECRET_ID=' "$env_file"; then
+  echo "Dokploy compose env is missing VAULT_ROLE_ID/VAULT_SECRET_ID; refusing to recreate IaC Runner" >&2
+  echo "Run: invoke vault.setup-approle --project=bootstrap --service=iac_runner" >&2
   exit 1
 fi
 if ! grep -q '^DOKPLOY_API_KEY=' "$env_file"; then

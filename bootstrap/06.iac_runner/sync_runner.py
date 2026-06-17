@@ -4,6 +4,7 @@ Sync Runner - executes invoke sync tasks for changed services.
 """
 
 import fcntl
+import json
 import logging
 import os
 import re
@@ -122,7 +123,11 @@ def diagnose_failure(stderr: str, stdout: str = "") -> dict[str, str]:
         return {
             "error_kind": "vault_token_missing",
             "summary": "Child invoke task could not find VAULT_ROOT_TOKEN.",
-            "next_action": "Check IaC Runner VAULT_APP_TOKEN rendering and token handoff to child tasks.",
+            "next_action": (
+                "Check the IaC Runner AppRole login: VAULT_ROLE_ID/VAULT_SECRET_ID "
+                "must be present in the runner env and `vault write auth/approle/login` "
+                "must succeed (re-run setup-approle if the secret_id was wiped)."
+            ),
         }
 
     # Dokploy auth must be checked BEFORE the generic Vault rule below: a failed
@@ -409,15 +414,75 @@ def update_repo(ref: str | None = None) -> bool:
         return True
 
 
+def _approle_login(env: dict[str, str], role_id: str, secret_id: str) -> str | None:
+    """Exchange AppRole role_id/secret_id for a short-TTL bounded Vault token.
+
+    secret_id is passed on stdin (`secret_id=-`), never argv, so it cannot leak
+    via the process table. VAULT_TOKEN is stripped so the login is unauthenticated.
+    """
+    if not env.get("VAULT_ADDR"):
+        logger.error("VAULT_ADDR not set; cannot perform AppRole login")
+        return None
+
+    login_env = {key: value for key, value in env.items() if key != "VAULT_TOKEN"}
+    try:
+        result = subprocess.run(
+            [
+                "vault",
+                "write",
+                "-format=json",
+                "auth/approle/login",
+                f"role_id={role_id}",
+                "secret_id=-",
+            ],
+            input=secret_id,
+            capture_output=True,
+            text=True,
+            env=login_env,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.error("AppRole login subprocess failed: %s", exc)
+        return None
+
+    if result.returncode != 0:
+        logger.error("AppRole login failed: %s", result.stderr.strip())
+        return None
+
+    try:
+        token = json.loads(result.stdout)["auth"]["client_token"]
+    except (ValueError, KeyError, TypeError) as exc:
+        logger.error("AppRole login returned an unparseable response: %s", exc)
+        return None
+
+    logger.info("AppRole login succeeded; bounded deploy token acquired")
+    return token
+
+
 def resolve_vault_root_token(env: dict[str, str]) -> str | None:
-    """Resolve the Vault token for infrastructure sync subprocesses."""
+    """Resolve the Vault token for infrastructure sync subprocesses.
+
+    Order:
+      1. An explicit VAULT_ROOT_TOKEN (operator/manual override; tests).
+      2. AppRole login with the Dokploy-injected VAULT_ROLE_ID/VAULT_SECRET_ID,
+         yielding a short-TTL bounded token (no delete, no root — see
+         bootstrap/06.iac_runner/vault-policy.hcl).
+
+    The legacy static VAULT_APP_TOKEN fallback is removed: iac-runner is on
+    AppRole (docs/ssot/bootstrap.iac_runner.md §6.4). The credential is never read
+    from 1Password — role_id/secret_id come from Dokploy env, not `op read`.
+    """
     if token := env.get("VAULT_ROOT_TOKEN"):
         return token
 
-    if token := env.get("VAULT_APP_TOKEN"):
-        return token
+    role_id = env.get("VAULT_ROLE_ID")
+    secret_id = env.get("VAULT_SECRET_ID")
+    if role_id and secret_id:
+        return _approle_login(env, role_id, secret_id)
 
-    logger.warning("Neither VAULT_ROOT_TOKEN nor VAULT_APP_TOKEN is configured")
+    logger.warning(
+        "No VAULT_ROOT_TOKEN and no VAULT_ROLE_ID/VAULT_SECRET_ID for AppRole login"
+    )
     return None
 
 
@@ -449,13 +514,17 @@ def safe_invoke_env_summary(env: dict[str, str]) -> str:
         "ENV_SUFFIX",
         "ENV_DOMAIN_SUFFIX",
         "VAULT_ROOT_TOKEN",
-        "VAULT_APP_TOKEN",
+        "VAULT_ROLE_ID",
+        "VAULT_SECRET_ID",
         "OP_SERVICE_ACCOUNT_TOKEN",
     ]
+    # role_id/secret_id are secret-equivalent (the AppRole login material), so
+    # mask them alongside tokens — never print their values.
+    secret_suffixes = ("TOKEN", "ROLE_ID", "SECRET_ID")
     parts = []
     for key in keys:
         value = env.get(key)
-        if key.endswith("TOKEN"):
+        if key.endswith(secret_suffixes):
             value = "set" if value else "unset"
         parts.append(f"{key}={value if value is not None else 'unset'}")
     return " ".join(parts)

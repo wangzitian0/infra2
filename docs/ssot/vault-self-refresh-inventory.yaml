@@ -9,11 +9,12 @@ services:
   - id: bootstrap/iac_runner
     project: bootstrap
     dokploy_service: iac_runner
-    # auth_method intentionally left as the default (token_file): IaC Runner is the
-    # LAST service still on static VAULT_APP_TOKEN. Migration is a DESIGNED change
-    # (the app's deploy credential is load-bearing, and P0 anti-cycle invariants
-    # apply) — see docs/ssot/bootstrap.iac_runner.md §6.4. Do NOT flip this to
-    # approle without that design's two-phase rollout + OP-rooting + anti-cycle guard.
+    # Migrated to AppRole auth (#369, completing #257/#259): vault-agent uses
+    # VAULT_ROLE_ID + VAULT_SECRET_ID (Dokploy-injected, NOT 1Password), and the
+    # deploy credential is a per-deploy `auth/approle/login` (no static
+    # VAULT_APP_TOKEN). Single bounded AppRole; P0 anti-cycle invariants preserved
+    # — see docs/ssot/bootstrap.iac_runner.md §6.4.
+    auth_method: approle
     compose_path: bootstrap/06.iac_runner/compose.yaml
     vault_agent_config_path: bootstrap/06.iac_runner/vault-agent.hcl
     secret_template_path: bootstrap/06.iac_runner/secrets.ctmpl

@@ -648,8 +648,16 @@ def test_run_invoke_task_materializes_staging_isolation_env(
 
 
 def test_run_invoke_task_logs_safe_child_env(monkeypatch, tmp_path) -> None:
-    """#161: child env diagnostics expose presence, never token values."""
-    monkeypatch.setenv("VAULT_APP_TOKEN", "scoped-app-token")
+    """#161: child env diagnostics expose presence, never secret values.
+
+    AppRole creds (role_id/secret_id) are secret-equivalent and must be masked
+    just like tokens.
+    """
+    monkeypatch.delenv("VAULT_ROOT_TOKEN", raising=False)
+    monkeypatch.delenv("VAULT_APP_TOKEN", raising=False)
+    monkeypatch.setenv("VAULT_ADDR", "https://vault.example")
+    monkeypatch.setenv("VAULT_ROLE_ID", "role-abc")
+    monkeypatch.setenv("VAULT_SECRET_ID", "secret-xyz")
     sync_runner = _load_module(
         "sync_runner_safe_env_under_test",
         IAC_RUNNER / "sync_runner.py",
@@ -658,6 +666,12 @@ def test_run_invoke_task_logs_safe_child_env(monkeypatch, tmp_path) -> None:
     captured = {}
 
     def fake_run(args, **kwargs):
+        if args[:3] == ["vault", "write", "-format=json"]:
+            return types.SimpleNamespace(
+                returncode=0,
+                stdout='{"auth": {"client_token": "bounded-deploy-token"}}',
+                stderr="",
+            )
         captured["env"] = kwargs["env"]
         return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
 
@@ -669,9 +683,11 @@ def test_run_invoke_task_logs_safe_child_env(monkeypatch, tmp_path) -> None:
     summary = sync_runner.safe_invoke_env_summary(captured["env"])
     assert "DEPLOY_ENV=staging" in summary
     assert "ENV_SUFFIX=-staging" in summary
-    assert "VAULT_APP_TOKEN=set" in summary
+    assert "VAULT_ROLE_ID=set" in summary
+    assert "VAULT_SECRET_ID=set" in summary
     assert "VAULT_ROOT_TOKEN=set" in summary
-    assert "scoped-app-token" not in summary
+    assert "role-abc" not in summary
+    assert "secret-xyz" not in summary
 
 
 def test_run_invoke_task_materializes_production_without_suffix(
@@ -742,20 +758,39 @@ def test_run_invoke_task_keeps_existing_vault_root_token(monkeypatch, tmp_path) 
     assert captured["kwargs"]["env"]["VAULT_ROOT_TOKEN"] == "existing-root"
 
 
-def test_run_invoke_task_uses_scoped_vault_app_token(monkeypatch, tmp_path) -> None:
-    """#191: IaC Runner uses its scoped Vault app token for sync reads."""
+def test_run_invoke_task_logs_in_with_approle(monkeypatch, tmp_path) -> None:
+    """#369 / Infra-011.11: deploy credential is an AppRole login, not a static token.
+
+    iac-runner reads VAULT_ROLE_ID/VAULT_SECRET_ID (Dokploy-injected env) and runs
+    `vault write auth/approle/login` to mint a short-TTL bounded token, handed to
+    the child as VAULT_ROOT_TOKEN. secret_id goes via stdin, never argv; the path
+    never touches 1Password.
+    """
     monkeypatch.delenv("VAULT_ROOT_TOKEN", raising=False)
-    monkeypatch.setenv("VAULT_APP_TOKEN", "scoped-app-token")
+    monkeypatch.delenv("VAULT_APP_TOKEN", raising=False)
+    monkeypatch.setenv("VAULT_ADDR", "https://vault.example")
+    monkeypatch.setenv("VAULT_ROLE_ID", "role-abc")
+    monkeypatch.setenv("VAULT_SECRET_ID", "secret-xyz")
     sync_runner = _load_module(
-        "sync_runner_app_token_under_test",
+        "sync_runner_approle_under_test",
         IAC_RUNNER / "sync_runner.py",
         monkeypatch,
     )
-    captured = {}
+    captured = {"calls": []}
 
     def fake_run(args, **kwargs):
-        captured.setdefault("calls", []).append(args)
-        captured["kwargs"] = kwargs
+        captured["calls"].append(args)
+        if args[:2] == ["op", "read"]:
+            raise AssertionError("AppRole login must not read from 1Password")
+        if args[:3] == ["vault", "write", "-format=json"]:
+            captured["login_args"] = args
+            captured["login_input"] = kwargs.get("input")
+            return types.SimpleNamespace(
+                returncode=0,
+                stdout='{"auth": {"client_token": "bounded-deploy-token"}}',
+                stderr="",
+            )
+        captured["invoke_env"] = kwargs["env"]
         return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
 
     monkeypatch.setattr(sync_runner.subprocess, "run", fake_run)
@@ -763,10 +798,47 @@ def test_run_invoke_task_uses_scoped_vault_app_token(monkeypatch, tmp_path) -> N
     result = sync_runner.run_invoke_task("postgres.sync", tmp_path, "staging")
 
     assert result["success"] is True
-    assert captured["calls"] == [
-        [sys.executable, "-P", "-c", sync_runner.INVOKE_BOOTSTRAP, "postgres.sync"]
-    ]
-    assert captured["kwargs"]["env"]["VAULT_ROOT_TOKEN"] == "scoped-app-token"
+    login_args = captured["login_args"]
+    assert "auth/approle/login" in login_args
+    assert "role_id=role-abc" in login_args
+    # secret_id is passed via stdin (secret_id=-), never exposed in argv.
+    assert "secret_id=-" in login_args
+    assert all("secret-xyz" not in part for part in login_args)
+    assert captured["login_input"] == "secret-xyz"
+    # The minted bounded token is handed to the child as VAULT_ROOT_TOKEN.
+    assert captured["invoke_env"]["VAULT_ROOT_TOKEN"] == "bounded-deploy-token"
+
+
+def test_run_invoke_task_drops_vault_app_token_fallback(monkeypatch, tmp_path) -> None:
+    """#369 / Infra-011.12: the legacy VAULT_APP_TOKEN fallback is removed.
+
+    A leftover VAULT_APP_TOKEN with no AppRole creds must NOT become the child's
+    VAULT_ROOT_TOKEN, and must not trigger a Vault login.
+    """
+    monkeypatch.delenv("VAULT_ROOT_TOKEN", raising=False)
+    monkeypatch.delenv("VAULT_ROLE_ID", raising=False)
+    monkeypatch.delenv("VAULT_SECRET_ID", raising=False)
+    monkeypatch.setenv("VAULT_APP_TOKEN", "scoped-app-token")
+    sync_runner = _load_module(
+        "sync_runner_no_fallback_under_test",
+        IAC_RUNNER / "sync_runner.py",
+        monkeypatch,
+    )
+    captured = {"calls": []}
+
+    def fake_run(args, **kwargs):
+        captured["calls"].append(args)
+        if args[:1] == ["vault"]:
+            raise AssertionError("No AppRole creds -> no Vault login expected")
+        captured["invoke_env"] = kwargs["env"]
+        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(sync_runner.subprocess, "run", fake_run)
+
+    result = sync_runner.run_invoke_task("postgres.sync", tmp_path, "staging")
+
+    assert result["success"] is True
+    assert "VAULT_ROOT_TOKEN" not in captured["invoke_env"]
 
 
 def test_run_invoke_task_does_not_resolve_vault_root_token_from_1password(
@@ -926,7 +998,7 @@ def test_iac_runner_bootstrap_deploy_script_uses_confirmed_dokploy_env() -> None
         "docker inspect iac-runner --format '{{range .Config.Env}}{{println .}}{{end}}' \\\n  > \"$env_file\""
         not in script
     )
-    assert "Dokploy compose env is missing VAULT_APP_TOKEN" in script
+    assert "Dokploy compose env is missing VAULT_ROLE_ID/VAULT_SECRET_ID" in script
     assert "Recovered DOKPLOY_API_KEY from current container env" in script
     assert "current container env are missing DOKPLOY_API_KEY" in script
     assert "if [ -f /secrets/.env ]; then" in script
