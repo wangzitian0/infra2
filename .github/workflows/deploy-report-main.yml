@@ -1,0 +1,59 @@
+name: Auto-deploy report-branch-main
+
+# The ONE auto deploy target (SSOT §4.6): the main preview re-deploys whenever app `main`
+# moves, so report-branch-main is always "what main looks like right now". Everything else
+# (staging / prod) is manual + a pinned release tag.
+#
+# Triggered by the APP repo on its main push via repository_dispatch (type=deploy-report-main);
+# also manually dispatchable here. It deploys app `main` to the report-branch-main preview slot
+# through the unified deploy_v2 front door.
+#
+# NOTE: the APP-repo SENDER (app main push -> repository_dispatch into infra2) is the remaining
+# cross-repo half — see #370. Until it's wired, this fires only on manual dispatch.
+
+on:
+  repository_dispatch:
+    types: [deploy-report-main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  # Serialize report-branch-main deploys; never run two against the same preview slot.
+  group: deploy-v2-preview-branch-main
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: deploy report-branch-main
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+      INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install runtime dependencies
+        run: python -m pip install httpx python-dotenv rich
+
+      - name: Deploy report-branch-main
+        run: |
+          set -euo pipefail
+          if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
+            echo "::error::DOKPLOY_API_KEY secret is required."
+            exit 1
+          fi
+          python -m tools.deploy_v2 \
+            --service finance_report/app \
+            --type preview/branch \
+            --version-ref main \
+            --iac-ref main \
+            --domain "${INTERNAL_DOMAIN}"

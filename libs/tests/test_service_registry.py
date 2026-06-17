@@ -3,7 +3,6 @@ hand-maintained service lists must stay equal to it (fail-closed on drift)."""
 
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 
 from libs import service_registry as reg
@@ -38,14 +37,12 @@ def test_all_services_matches_discover_services() -> None:
     assert set(reg.all_services()) == set(discover_services())
 
 
-def test_sync_runner_all_services_is_derivable() -> None:
-    """sync_runner.ALL_SERVICES is a hand-copied list of the registry — it must
-    equal the derived set, so adding a service can't silently omit fan-out."""
-    hardcoded = _all_services_literal()
-    assert set(hardcoded) == set(reg.all_services()), (
-        "ALL_SERVICES in bootstrap/06.iac_runner/sync_runner.py drifted from the "
-        "service registry; regenerate it from libs.service_registry.all_services()"
-    )
+def test_sync_runner_service_set_is_derived_not_hand_listed() -> None:
+    """sync_runner no longer hand-maintains ALL_SERVICES / SERVICE_TASK_MAP — they are derived
+    from libs.deployer.discover_services (Infra-013), so a hand-list can't drift. The two
+    registry scanners (deployer.discover_services and service_registry) must agree, so the
+    derivation can never silently omit a service."""
+    assert set(discover_services()) == set(reg.all_services())
 
 
 def test_shared_services_are_the_prod_only_set() -> None:
@@ -66,22 +63,3 @@ def test_services_in_env_excludes_prod_only_off_production() -> None:
     assert production == set(reg.all_services())
 
 
-def _all_services_literal() -> list[str]:
-    """Extract the ALL_SERVICES list literal from sync_runner.py via AST."""
-    source = (REPO_ROOT / "bootstrap/06.iac_runner/sync_runner.py").read_text(
-        encoding="utf-8"
-    )
-    tree = ast.parse(source)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and any(
-            isinstance(t, ast.Name) and t.id == "ALL_SERVICES" for t in node.targets
-        ):
-            value = node.value
-            assert isinstance(value, (ast.List, ast.Tuple)), (
-                "ALL_SERVICES must remain a list/tuple literal of string constants "
-                "for this audit to verify it statically against the registry; it is "
-                f"now a {type(value).__name__}. If the shape changed intentionally, "
-                "update _all_services_literal() to match."
-            )
-            return [elt.value for elt in value.elts if isinstance(elt, ast.Constant)]
-    raise AssertionError("ALL_SERVICES not found in sync_runner.py")

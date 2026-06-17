@@ -12,7 +12,9 @@
 | **Docs Workflow** | [`.github/workflows/docs-site.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/docs-site.yml) | Pages 构建与发布 |
 | **MkDocs 配置** | [`docs/mkdocs.yml`](../mkdocs.yml) | 站点结构与导航 |
 | **依赖列表** | [`docs/requirements.txt`](../requirements.txt) | Python 依赖 |
-| **Platform Deployment** | [`.github/workflows/deploy-platform.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy-platform.yml) | Post-merge staging deploy and manual production deploy |
+| **IaC Runner Bootstrap** | [`.github/workflows/deploy-platform.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy-platform.yml) | Updates the iac_runner container itself when its bootstrap changes. (Platform SERVICE deploys moved to `deploy.yml`/`deploy_v2` — manual + pinned tag, §4.6.) |
+| **Deploy (deploy_v2)** | [`.github/workflows/deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) | Manual unified deploy front door (app + platform, staging/prod, pinned tag) |
+| **Auto-deploy report-branch-main** | [`.github/workflows/deploy-report-main.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy-report-main.yml) | The ONE auto target: main preview re-deploys on app main push |
 
 ---
 
