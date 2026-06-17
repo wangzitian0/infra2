@@ -1,6 +1,7 @@
 """SigNoz deployment - observability platform"""
 
 import os
+import shlex
 import sys
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -87,10 +88,16 @@ class SigNozDeployer(Deployer):
         # container starts, on EVERY deploy path — `sync` skips pre_compose but always
         # runs composing → this helper. Without it Docker auto-creates the bind dir
         # root-owned and the collector crash-loops on the file_storage extension.
+        # shlex.quote the path/host so a DATA_PATH/VPS_HOST with spaces or shell
+        # metacharacters can't break or reinterpret the remote command.
+        queue_dir = shlex.quote(f"{data_path}/otel-queue")
+        remote_cmd = (
+            f"mkdir -p {queue_dir} && chown -R 10001:0 {queue_dir} "
+            f"&& chmod 770 {queue_dir}"
+        )
         if not run_with_status(
             c,
-            f"ssh root@{host} 'mkdir -p {data_path}/otel-queue && "
-            f"chown -R 10001:0 {data_path}/otel-queue && chmod 770 {data_path}/otel-queue'",
+            f"ssh {shlex.quote(f'root@{host}')} {shlex.quote(remote_cmd)}",
             "Prepare OTel collector disk-queue directory",
         ).ok:
             return False

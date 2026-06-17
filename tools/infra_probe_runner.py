@@ -62,6 +62,9 @@ def main() -> int:
         os.getenv("INFRA_PROBE_RECOVERY_THRESHOLD", str(DEFAULT_RECOVERY_THRESHOLD))
     )
     state_path = Path(os.getenv("INFRA_PROBE_STATE_FILE", DEFAULT_STATE_FILE))
+    # Mirror run_once's gate: dry-run must not emit heartbeat/state (no misleading
+    # liveness signal during local/debug runs).
+    dry_run = os.getenv("INFRA_PROBE_DRY_RUN", "0") == "1"
 
     while True:
         # Liveness-first heartbeat (#369): prove the runner is alive at the START of
@@ -70,7 +73,7 @@ def main() -> int:
         # long the probe cycle takes. The post-probe heartbeat below still carries the
         # ok/failure status. Heartbeat writes are throttled watchdog-side, so the extra
         # ping per loop costs no KV quota.
-        if args.loop:
+        if args.loop and not dry_run:
             _post_heartbeat(ok=True, detail="probe loop iteration starting")
         try:
             exit_code = run_once(
