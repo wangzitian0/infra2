@@ -841,6 +841,89 @@ def test_run_invoke_task_drops_vault_app_token_fallback(monkeypatch, tmp_path) -
     assert "VAULT_ROOT_TOKEN" not in captured["invoke_env"]
 
 
+def _approle_env(monkeypatch, *, with_addr: bool = True) -> None:
+    monkeypatch.delenv("VAULT_ROOT_TOKEN", raising=False)
+    monkeypatch.delenv("VAULT_APP_TOKEN", raising=False)
+    monkeypatch.setenv("VAULT_ROLE_ID", "role-abc")
+    monkeypatch.setenv("VAULT_SECRET_ID", "secret-xyz")
+    if with_addr:
+        monkeypatch.setenv("VAULT_ADDR", "https://vault.example")
+    else:
+        monkeypatch.delenv("VAULT_ADDR", raising=False)
+
+
+def test_run_invoke_task_approle_login_failure_yields_no_root_token(
+    monkeypatch, tmp_path
+) -> None:
+    """#369: a failed AppRole login (sealed Vault / bad creds) returns None — the child
+    gets NO VAULT_ROOT_TOKEN rather than a bogus one (it then fails closed with a clear
+    'VAULT_ROOT_TOKEN not set' diagnostic instead of deploying with a broken token)."""
+    _approle_env(monkeypatch)
+    sync_runner = _load_module(
+        "sync_runner_login_fail", IAC_RUNNER / "sync_runner.py", monkeypatch
+    )
+    captured = {}
+
+    def fake_run(args, **kwargs):
+        if args[:3] == ["vault", "write", "-format=json"]:
+            return types.SimpleNamespace(
+                returncode=2, stdout="", stderr="Error: Vault is sealed"
+            )
+        captured["invoke_env"] = kwargs["env"]
+        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(sync_runner.subprocess, "run", fake_run)
+
+    sync_runner.run_invoke_task("postgres.sync", tmp_path, "staging")
+    assert "VAULT_ROOT_TOKEN" not in captured["invoke_env"]
+
+
+def test_run_invoke_task_approle_login_skipped_without_vault_addr(
+    monkeypatch, tmp_path
+) -> None:
+    """#369: with role/secret but no VAULT_ADDR, login is not even attempted (returns None);
+    no Vault subprocess is spawned and the child gets no VAULT_ROOT_TOKEN."""
+    _approle_env(monkeypatch, with_addr=False)
+    sync_runner = _load_module(
+        "sync_runner_no_addr", IAC_RUNNER / "sync_runner.py", monkeypatch
+    )
+    captured = {}
+
+    def fake_run(args, **kwargs):
+        if args[:1] == ["vault"]:
+            raise AssertionError("must not attempt AppRole login without VAULT_ADDR")
+        captured["invoke_env"] = kwargs["env"]
+        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(sync_runner.subprocess, "run", fake_run)
+
+    sync_runner.run_invoke_task("postgres.sync", tmp_path, "staging")
+    assert "VAULT_ROOT_TOKEN" not in captured["invoke_env"]
+
+
+def test_run_invoke_task_approle_login_unparseable_response_yields_no_root_token(
+    monkeypatch, tmp_path
+) -> None:
+    """#369: a 0-exit login whose JSON lacks auth.client_token is handled, not crashed —
+    returns None so the child gets no token."""
+    _approle_env(monkeypatch)
+    sync_runner = _load_module(
+        "sync_runner_bad_json", IAC_RUNNER / "sync_runner.py", monkeypatch
+    )
+    captured = {}
+
+    def fake_run(args, **kwargs):
+        if args[:3] == ["vault", "write", "-format=json"]:
+            return types.SimpleNamespace(returncode=0, stdout="not-json", stderr="")
+        captured["invoke_env"] = kwargs["env"]
+        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(sync_runner.subprocess, "run", fake_run)
+
+    sync_runner.run_invoke_task("postgres.sync", tmp_path, "staging")
+    assert "VAULT_ROOT_TOKEN" not in captured["invoke_env"]
+
+
 def test_run_invoke_task_does_not_resolve_vault_root_token_from_1password(
     monkeypatch, tmp_path
 ) -> None:

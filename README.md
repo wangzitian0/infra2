@@ -161,11 +161,11 @@ invoke env.set PASSWORD=$(openssl rand -base64 24) --project=finance_report --en
 # DATABASE_URL, REDIS_URL, S3_*, OPENROUTER_API_KEY
 # 见 docs/project/Infra-009.finance_report_deploy.md
 
-# 4. 生成 Vault tokens
-invoke vault.setup-tokens --project=finance_report
+# 4. 生成 Vault AppRole 凭证（role_id/secret_id → Dokploy env）
+invoke vault.setup-approle --project=finance_report
 
 # Targeted staging repair for the app sidecar
-DEPLOY_ENV=staging invoke vault.setup-tokens --project=finance_report --service=app
+DEPLOY_ENV=staging invoke vault.setup-approle --project=finance_report --service=app
 
 # 5. 部署服务
 invoke fr-postgres.setup
