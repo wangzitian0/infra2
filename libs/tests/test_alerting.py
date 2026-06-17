@@ -19,6 +19,7 @@ from libs.alerting import (
     build_signoz_channel_payload,
     build_signoz_log_alert_rule_payload,
     deliver_feishu_app_text,
+    feishu_host_reachable,
     find_signoz_channel_id,
     find_signoz_rule_id,
     format_signoz_alert,
@@ -27,6 +28,42 @@ from libs.alerting import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_feishu_host_reachable_false_on_empty_or_unparseable_url() -> None:
+    """'lark 畅通' probe helper: empty / hostless URL is never reachable, never raises."""
+    assert feishu_host_reachable("") is False
+    assert feishu_host_reachable("   ") is False
+    assert feishu_host_reachable("not a url") is False
+
+
+def test_feishu_host_reachable_does_a_tcp_connect_no_message(monkeypatch) -> None:
+    """It proves reachability via a plain TCP connect to (host, 443) — it never POSTs
+    (so the probe can run every minute without spamming the real Lark channel)."""
+    import socket
+
+    calls = []
+
+    class _Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def _fake_create_connection(addr, timeout=None):
+        calls.append(addr)
+        return _Conn()
+
+    monkeypatch.setattr(socket, "create_connection", _fake_create_connection)
+    assert feishu_host_reachable("https://open.feishu.cn/open-apis/bot/v2/hook/x") is True
+    assert calls == [("open.feishu.cn", 443)]
+
+    def _boom(addr, timeout=None):
+        raise OSError("refused")
+
+    monkeypatch.setattr(socket, "create_connection", _boom)
+    assert feishu_host_reachable("https://open.feishu.cn/open-apis/bot/v2/hook/x") is False
 
 
 def test_feishu_webhook_validation_is_https_and_host_scoped() -> None:

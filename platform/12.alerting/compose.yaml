@@ -150,7 +150,13 @@ services:
         # prod instance from ALL envs (no ${ENV_SUFFIX}), matching openpanel below. Adding a
         # -staging suffix targets a host that never exists -> a permanent false-positive alert.
         signoz-internal-http|http|http://platform-signoz:8080/api/v1/health|200|critical|5
+        # otel 畅通: the OTLP ingest pipeline itself (collector health_check ext :13133),
+        # distinct from the signoz query svc above. prod_only single instance (no suffix).
+        otel-collector-http|http|http://platform-signoz-otel-collector:13133|200|critical|5
         alert-bridge-http|http|http://platform-alerting${ENV_SUFFIX}:8080/health|200|critical|5
+        # lark 畅通: bridge config valid AND Feishu host reachable (TCP 443), checked
+        # without posting to the real channel (see app.py /health/feishu).
+        lark-delivery-http|http|http://platform-alerting${ENV_SUFFIX}:8080/health/feishu|200|critical|5
         platform-postgres-tcp|tcp|platform-postgres${ENV_SUFFIX}:5432|connected|critical|5
         platform-redis-tcp|tcp|platform-redis${ENV_SUFFIX}:6379|connected|critical|5
         clickhouse-http|http|http://platform-clickhouse:8123/ping|200|critical|5

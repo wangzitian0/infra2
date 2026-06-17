@@ -13,6 +13,7 @@ from libs.alerting import (
     AlertingError,
     deliver_feishu_app_text,
     deliver_feishu_text,
+    feishu_host_reachable,
     format_signoz_alert,
     redacted_app_config,
     redacted_url,
@@ -36,15 +37,33 @@ class AlertBridgeHandler(BaseHTTPRequestHandler):
     server_version = "Infra2FeishuAlertBridge/1.0"
 
     def do_GET(self) -> None:
-        if self.path != "/health":
-            self._json(404, {"status": "not_found"})
+        if self.path == "/health":
+            try:
+                metadata = _validate_delivery_config()
+            except AlertingError as exc:
+                self._json(503, {"status": "degraded", "error": str(exc)})
+                return
+            self._json(200, {"status": "ok", **metadata})
             return
-        try:
-            metadata = _validate_delivery_config()
-        except AlertingError as exc:
-            self._json(503, {"status": "degraded", "error": str(exc)})
+        if self.path == "/health/feishu":
+            # "lark 畅通" readiness: config valid AND the Feishu host is reachable over
+            # the network — WITHOUT posting to the real alert channel, so an automated
+            # probe can run every minute without spamming. The actual error→alert→message
+            # delivery is exercised once, manually.
+            try:
+                metadata = _validate_delivery_config()
+            except AlertingError as exc:
+                self._json(503, {"status": "degraded", "error": str(exc)})
+                return
+            if not _feishu_reachable():
+                self._json(
+                    503,
+                    {"status": "unreachable", "detail": "feishu host TCP 443", **metadata},
+                )
+                return
+            self._json(200, {"status": "ok", "reachable": True, **metadata})
             return
-        self._json(200, {"status": "ok", **metadata})
+        self._json(404, {"status": "not_found"})
 
     def do_POST(self) -> None:
         if self.path != "/signoz/webhook":
@@ -109,6 +128,18 @@ def main() -> None:
 
 def _delivery_mode() -> str:
     return os.getenv("ALERT_DELIVERY_MODE", "feishu_webhook").strip()
+
+
+def _feishu_reachable() -> bool:
+    """TCP-reachability of the configured Feishu host (no message sent)."""
+    mode = _delivery_mode()
+    if mode == "feishu_webhook":
+        return feishu_host_reachable(os.getenv("FEISHU_WEBHOOK_URL", ""))
+    if mode == "feishu_app":
+        return feishu_host_reachable(
+            os.getenv("FEISHU_API_BASE", "https://open.feishu.cn")
+        )
+    return False
 
 
 def _validate_delivery_config() -> dict[str, Any]:

@@ -73,6 +73,18 @@ def test_dashboard_covers_backend_and_frontend_signals() -> None:
     assert "finance-report-frontend" in raw
 
 
+def test_env_variable_query_targets_the_live_v2_logs_schema() -> None:
+    """The deployment.environment dropdown must query the table/columns that actually
+    exist on the SigNoz instance (logs v2: distributed_logs_v2 + resources_string),
+    not the retired v1 schema (distributed_logs + stringTagMap) which UNKNOWN_TABLEs."""
+    query = load_dashboard()["variables"]["deployment_environment"]["queryValue"]
+    assert "distributed_logs_v2" in query
+    assert "resources_string" in query
+    # the retired v1 identifiers must not reappear
+    assert "stringTagMap" not in query
+    assert "signoz_logs.distributed_logs " not in query + " "
+
+
 def test_dashboard_import_payload_wraps_in_data_envelope() -> None:
     """#373: dashboard apply body matches the SigNoz /api/v1/dashboards envelope."""
     payload = build_dashboard_import_payload()

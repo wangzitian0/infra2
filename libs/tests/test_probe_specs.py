@@ -1,6 +1,30 @@
 """Tests for the runtime probe-spec verification helpers."""
 
+from pathlib import Path
+
+from libs.infra_probes import parse_probe_specs
 from libs.probe_specs import missing_probe_names, parse_probe_names
+
+_ALERTING_COMPOSE = (
+    Path(__file__).resolve().parents[2] / "platform/12.alerting/compose.yaml"
+)
+
+
+def test_otel_and_lark_flow_probes_are_declared():
+    """otel 畅通 + lark 畅通 must be AUTOMATED probes: the alerting container's
+    INFRA_PROBE_SPECS declares the OTLP-ingest collector health and the Feishu
+    delivery readiness, distinct from the signoz-query and bridge-process probes."""
+    text = _ALERTING_COMPOSE.read_text(encoding="utf-8")
+    names = parse_probe_names(text)
+    assert "otel-collector-http" in names, "otel ingest pipeline must be probed"
+    assert "lark-delivery-http" in names, "lark delivery readiness must be probed"
+    # both are well-formed, critical specs (parse the actual spec lines)
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("otel-collector-http|", "lark-delivery-http|")):
+            spec = parse_probe_specs(stripped)[0]
+            assert spec.kind == "http"
+            assert spec.severity == "critical"
 
 
 def test_parse_probe_names_extracts_first_field():

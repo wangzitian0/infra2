@@ -351,6 +351,26 @@ def validate_feishu_api_base(api_base: str) -> str:
     return candidate
 
 
+def feishu_host_reachable(url: str, timeout: float = 3.0) -> bool:
+    """Best-effort TCP reachability check to the Feishu/Lark host (port 443).
+
+    Proves the bridge can *reach* Feishu without POSTing anything — so a
+    "lark 畅通" probe can run every minute without spamming the real alert
+    channel. Returns True iff a TCP connection to (host, 443) opens. Never
+    raises; an unparseable/empty URL or any socket error returns False.
+    """
+    import socket
+
+    host = urlparse((url or "").strip()).hostname
+    if not host:
+        return False
+    try:
+        with socket.create_connection((host, 443), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def redacted_url(url: str) -> str:
     """Return a webhook URL without the secret token."""
     parsed = urlparse(url)
