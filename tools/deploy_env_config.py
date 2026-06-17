@@ -182,9 +182,7 @@ def _normalize_alias(kind: str, value: int | str | None) -> tuple[str, str]:
     if kind == "branch":
         text = (str(value).strip() if value is not None else "") or "main"
         if not _BRANCH_VALUE_RE.match(text):
-            raise ValueError(
-                f"preview branch alias needs a branch name, got {value!r}"
-            )
+            raise ValueError(f"preview branch alias needs a branch name, got {value!r}")
         return "branch", text
     if kind == "pr":
         text = str(value).strip()
@@ -206,7 +204,10 @@ def _normalize_alias(kind: str, value: int | str | None) -> tuple[str, str]:
             raise ValueError(
                 f"preview tag alias needs a vX.Y.Z release tag, got {value!r}"
             )
-        return "tag", text  # canonical (keeps dots, for the image ref); slug uses dashes
+        return (
+            "tag",
+            text,
+        )  # canonical (keeps dots, for the image ref); slug uses dashes
     raise ValueError(
         f"unknown preview kind {kind!r}: expected one of {list(PREVIEW_KINDS)}"
     )
@@ -242,3 +243,76 @@ def preview_alias(kind: str, value: int | str | None = None) -> PreviewAlias:
         compose_name=f"{_PREVIEW_SLUG_PREFIX}-{alias}",
         deployment_environment=alias,
     )
+
+
+# ---------------------------------------------------------------------------
+# OTLP-collector CORS allowed-origins — derived from the FE origins (#368)
+# ---------------------------------------------------------------------------
+#
+# The browser frontend POSTs OTLP traces to the public ingest domain
+# (otel.<domain>), so the collector must echo CORS for exactly the FE origins.
+# That allow-list used to be a hand-maintained literal in
+# platform/11.signoz/otel-collector-config.yaml — which can silently drift from
+# the FE domains it is supposed to mirror. It is now DERIVED here from the same
+# env URL patterns + preview alias convention the deploy paths already use, and
+# the collector config is rendered from this single source at deploy time.
+#
+# Local browser dev origin (the Next.js dev server). Not an infra-deployed env,
+# so it is named here rather than synthesized from an EnvConfig.
+_LOCAL_DEV_ORIGIN = "http://localhost:3000"
+
+# Preview kinds that get a *wildcard* CORS origin (report-<kind>-*.<domain>).
+# A wildcard is required because the concrete value (PR number / commit sha) is
+# only known per-deploy. `branch-main` is enumerated explicitly below (the only
+# branch alias with a public, CORS-eligible URL today) rather than wildcarded.
+_PREVIEW_CORS_WILDCARD_KINDS = ("pr", "commit")
+# Branch aliases with a public, CORS-eligible preview URL (currently just main).
+_PREVIEW_CORS_BRANCHES = ("main",)
+
+
+def cors_allowed_origins(*, domain: str) -> list[str]:
+    """The OTLP collector's CORS allow-list, derived from the FE origins.
+
+    Single source: fixed envs (staging/prod) come from their ``app_url_pattern``;
+    preview aliases contribute their wildcard / branch origins; plus the local dev
+    origin. Order is stable (fixed envs, then branch, then wildcard kinds, then
+    local) so the rendered config is deterministic. This mirrors exactly the FE
+    domains so the allow-list can never drift from them.
+    """
+    origins: list[str] = []
+    # Fixed, non-dynamic envs (prod first, then staging) — straight from their URL pattern.
+    for env_name in ("prod", "staging"):
+        cfg = _ENVIRONMENTS[env_name]
+        origins.append(cfg.app_url(domain=domain))
+    # Preview branch aliases (e.g. report-main) — a concrete public URL each.
+    for branch in _PREVIEW_CORS_BRANCHES:
+        origins.append(f"https://report-{branch}.{domain}")
+    # Preview pr/commit aliases — wildcard, since the value is per-deploy.
+    for kind in _PREVIEW_CORS_WILDCARD_KINDS:
+        origins.append(f"https://report-{kind}-*.{domain}")
+    origins.append(_LOCAL_DEV_ORIGIN)
+    return origins
+
+
+def otel_ingest_endpoint(*, domain: str) -> str:
+    """The public browser-OTLP traces endpoint for FE compose env (#368).
+
+    Built from the SAME subdomain + path constants SigNoz's deploy.py uses
+    (libs.common), so the FE endpoint and the ingest domain SigNoz registers can
+    never disagree. The ingest domain is shared across envs (no env suffix), so
+    this is independent of the deploy env — only the base domain varies.
+    """
+    from libs.common import OTEL_INGEST_SUBDOMAIN, OTLP_TRACES_PATH
+
+    return f"https://{OTEL_INGEST_SUBDOMAIN}.{domain}{OTLP_TRACES_PATH}"
+
+
+def otel_env(*, domain: str) -> dict[str, str]:
+    """The OTLP compose-env contribution injected by every FE deploy path (#368).
+
+    Single source for ``NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT`` so the two compose
+    files consume the value instead of each re-constructing the URL inline.
+    """
+    return {
+        "NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT": otel_ingest_endpoint(domain=domain)
+    }

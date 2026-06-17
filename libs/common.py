@@ -175,6 +175,38 @@ def service_domain(subdomain: str, env: dict | None = None) -> str:
     return _build_domain(subdomain, e.get("ENV", "production"), domain)
 
 
+# --------------------------------------------------------------------------- #
+# Public browser-OTLP ingest endpoint — ONE source (#368)
+# --------------------------------------------------------------------------- #
+# The browser frontend exports OTLP traces to a single public Dokploy-managed
+# ingest domain (Infra-014). The subdomain, the OTLP HTTP traces path, and the
+# way the full endpoint is assembled used to be duplicated across two compose
+# files and platform/11.signoz/deploy.py (which had its own literal separate
+# from service_domain()). They now live here, once, and every consumer derives
+# the endpoint from this single source instead of re-constructing the URL.
+#
+#   - OTEL_INGEST_SUBDOMAIN — the `otel` subdomain (NOT env-suffixed; the ingest
+#     domain is shared across envs, like signoz/sso/minio). SigNoz's deploy.py
+#     registers this Dokploy domain and otel_ingest_endpoint() builds the FE URL.
+#   - OTLP_TRACES_PATH — the standard OTLP/HTTP traces signal path.
+OTEL_INGEST_SUBDOMAIN = "otel"
+OTLP_TRACES_PATH = "/v1/traces"
+
+
+def otel_ingest_endpoint(env: dict | None = None) -> str:
+    """Build the public browser-OTLP traces endpoint, once, from service_domain().
+
+    Returns ``https://<otel-domain>/v1/traces`` (e.g.
+    ``https://otel.zitian.party/v1/traces``), or ``""`` when INTERNAL_DOMAIN is
+    unset. This is the SINGLE construction point: compose files consume the
+    injected value and deploy.py reuses this instead of a second literal.
+    """
+    host = service_domain(OTEL_INGEST_SUBDOMAIN, env)
+    if not host:
+        return ""
+    return f"https://{host}{OTLP_TRACES_PATH}"
+
+
 def check_service(c: "Context", service: str, health_cmd: str) -> dict:
     """Check if a Docker service is healthy.
 

@@ -42,6 +42,7 @@ from tools.deploy_env_config import (
     PREVIEW_ENVIRONMENT,
     PREVIEW_PROJECT,
     PreviewAlias,
+    otel_env,
     preview_alias,
 )
 from tools.resolve_deploy_ref import resolve_to_sha
@@ -148,6 +149,8 @@ def _preview_env_vars(
         "IMAGE_TAG": image_tag,
         "GIT_COMMIT_SHA": image_tag,
         "NEXT_PUBLIC_APP_URL": alias.app_url(domain=domain),
+        # #368: FE OTLP endpoint from the ONE source (consumed, not re-built in compose).
+        **otel_env(domain=domain),
         "ENV_SUFFIX": alias.env_suffix,
         "ENV_DOMAIN_SUFFIX": alias.domain_suffix,
         # ENV is the alias display label so the telemetry identity contract

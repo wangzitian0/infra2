@@ -7,7 +7,11 @@ from tempfile import NamedTemporaryFile
 
 from libs.deployer import Deployer, make_tasks
 from libs.console import success, info, run_with_status, error, warning
-from libs.common import service_domain
+from libs.common import (
+    OTEL_INGEST_SUBDOMAIN,
+    otel_ingest_endpoint,
+    service_domain,
+)
 
 shared_tasks = sys.modules.get("platform.11.signoz.shared")
 
@@ -30,12 +34,36 @@ class SigNozDeployer(Deployer):
     service_name = "signoz"
 
     # Public browser-OTLP ingest domain: otel.<domain> → otel-collector:4318.
-    otel_ingest_subdomain = "otel"
+    # The subdomain + the FE endpoint live in libs.common (#368, ONE source).
+    otel_ingest_subdomain = OTEL_INGEST_SUBDOMAIN
     otel_ingest_service_name = "otel-collector"
     otel_ingest_port = 4318
 
     # SigNoz specific secret
     secret_key = "jwt_secret"
+
+    @classmethod
+    def _render_collector_config(cls, e) -> str:
+        """Render otel-collector-config.yaml from its template (#368/#372).
+
+        Substitutes ``${ENV_SUFFIX}`` (clickhouse DSN target) and the
+        ``${OTEL_CORS_ALLOWED_ORIGINS}`` block, which is DERIVED from the FE origins
+        (tools.deploy_env_config.cors_allowed_origins) so the CORS allow-list can
+        never drift from the actual app domains it must mirror.
+        """
+        from tools.deploy_env_config import cors_allowed_origins
+
+        template_path = Path(__file__).with_name("otel-collector-config.yaml")
+        content = template_path.read_text()
+        content = content.replace("${ENV_SUFFIX}", e.get("ENV_SUFFIX") or "")
+
+        domain = e.get("INTERNAL_DOMAIN") or "localhost"
+        # Render as a YAML list nested under `allowed_origins:` (12-space indent to
+        # match the receivers.otlp.protocols.http.cors block).
+        origins_block = "\n".join(
+            f"            - {origin}" for origin in cors_allowed_origins(domain=domain)
+        )
+        return content.replace("${OTEL_CORS_ALLOWED_ORIGINS}", origins_block)
 
     @classmethod
     def _deliver_collector_config(cls, c, e) -> bool:
@@ -44,7 +72,8 @@ class SigNozDeployer(Deployer):
         The collector mounts this file read-only, so it must be on the host BEFORE
         the container is (re)created. Called from BOTH pre_compose (first setup) AND
         composing — so `sync`/redeploys ship config changes too (#372): `sync` skips
-        pre_compose's side effects but always runs composing.
+        pre_compose's side effects but always runs composing. The rendered content
+        derives its CORS allow-list from the FE origins (#368).
         """
         host = e.get("VPS_HOST")
         if not host:
@@ -55,13 +84,10 @@ class SigNozDeployer(Deployer):
         if not template_path.exists():
             error("Missing otel-collector config template", str(template_path))
             return False
-        env_suffix = e.get("ENV_SUFFIX") or ""
         config_path = f"{data_path}/otel-collector-config.yaml"
         tmp_path = None
         try:
-            config_content = template_path.read_text().replace(
-                "${ENV_SUFFIX}", env_suffix
-            )
+            config_content = cls._render_collector_config(e)
             with NamedTemporaryFile("w", delete=False, encoding="utf-8") as tmp:
                 tmp.write(config_content)
                 tmp_path = tmp.name
@@ -128,10 +154,9 @@ class SigNozDeployer(Deployer):
             f"Frontend will be available at: https://signoz{domain_suffix}.{e.get('INTERNAL_DOMAIN', 'localhost')}"
         )
         info("OTLP endpoints: 4317 (gRPC), 4318 (HTTP)")
-        info(
-            f"Public browser-OTLP ingest (CORS-gated, no bearer): "
-            f"https://otel.{e.get('INTERNAL_DOMAIN', 'localhost')}/v1/traces"
-        )
+        # #368: same single source as the FE compose endpoint — no second literal.
+        ingest_endpoint = otel_ingest_endpoint(e) or "(INTERNAL_DOMAIN unset)"
+        info(f"Public browser-OTLP ingest (CORS-gated, no bearer): {ingest_endpoint}")
 
         result = cls.compose_env_base(e)
         result["SIGNOZ_JWT_SECRET"] = jwt_secret
