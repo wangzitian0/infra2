@@ -159,7 +159,9 @@ def test_wait_for_rollout_returns_when_a_new_record_reaches_done():
 def test_wait_for_rollout_raises_on_a_new_record_error():
     client = FakeDokploy(deployments=[{"id": "new", "status": "error"}])
     with pytest.raises(RuntimeError, match="rollout entered error"):
-        dp.wait_for_rollout(client, "cmp", {"old"}, _sleep=lambda _s: None, _now=_clock(0))
+        dp.wait_for_rollout(
+            client, "cmp", {"old"}, _sleep=lambda _s: None, _now=_clock(0)
+        )
 
 
 def test_wait_for_rollout_times_out_if_no_new_record_finishes():
@@ -167,7 +169,11 @@ def test_wait_for_rollout_times_out_if_no_new_record_finishes():
     client = FakeDokploy(deployments=[{"id": "new", "status": "running"}])
     with pytest.raises(TimeoutError, match="did not finish"):
         dp.wait_for_rollout(
-            client, "cmp", {"old"}, timeout=600, _sleep=lambda _s: None,
+            client,
+            "cmp",
+            {"old"},
+            timeout=600,
+            _sleep=lambda _s: None,
             _now=_clock(0, 700),
         )
 
@@ -177,7 +183,11 @@ def test_wait_for_rollout_ignores_pre_existing_records():
     client = FakeDokploy(deployments=[{"id": "old", "status": "done"}])
     with pytest.raises(TimeoutError):
         dp.wait_for_rollout(
-            client, "cmp", {"old"}, timeout=600, _sleep=lambda _s: None,
+            client,
+            "cmp",
+            {"old"},
+            timeout=600,
+            _sleep=lambda _s: None,
             _now=_clock(0, 700),
         )
 
@@ -227,8 +237,12 @@ def test_cache_bust_differs_for_two_deploys_in_the_same_second():
     # collide here and re-introduce a no-op — ms resolution must keep them distinct).
     c1 = FakeDokploy()
     c2 = FakeDokploy()
-    h1 = dp.deploy("staging", FULL_SHA, domain="z.p", client=c1, _now=lambda: 1.2).env_vars
-    h2 = dp.deploy("staging", FULL_SHA, domain="z.p", client=c2, _now=lambda: 1.8).env_vars
+    h1 = dp.deploy(
+        "staging", FULL_SHA, domain="z.p", client=c1, _now=lambda: 1.2
+    ).env_vars
+    h2 = dp.deploy(
+        "staging", FULL_SHA, domain="z.p", client=c2, _now=lambda: 1.8
+    ).env_vars
     assert h1["IAC_CONFIG_HASH"] == f"deploy-{SHORT_SHA}-1200"
     assert h2["IAC_CONFIG_HASH"] == f"deploy-{SHORT_SHA}-1800"
     assert h1["IAC_CONFIG_HASH"] != h2["IAC_CONFIG_HASH"]
@@ -241,7 +255,11 @@ def test_model_overrides_merged_only_when_non_empty():
         "deadbeef",
         domain="zitian.party",
         client=client,
-        model_overrides={"PRIMARY_MODEL": "gpt-x", "OCR_MODEL": "", "VISION_MODEL": None},
+        model_overrides={
+            "PRIMARY_MODEL": "gpt-x",
+            "OCR_MODEL": "",
+            "VISION_MODEL": None,
+        },
     )
     assert plan.env_vars["PRIMARY_MODEL"] == "gpt-x"
     # empty/None overrides must not blank the running model
@@ -255,15 +273,21 @@ def test_model_overrides_merged_only_when_non_empty():
 def test_preflight_vault_token_skips_when_compose_has_no_token():
     # a compose with no VAULT_APP_TOKEN is left alone (not every compose uses Vault)
     client = FakeDokploy(env_str="IMAGE_TAG=abc\nFOO=bar")
-    dp.preflight_vault_token(client, "cmp", "zitian.party")  # must not raise / not call vault
+    dp.preflight_vault_token(
+        client, "cmp", "zitian.party"
+    )  # must not raise / not call vault
 
 
 def test_preflight_vault_token_raises_on_expiring_token(monkeypatch):
     import libs.env as env_mod
 
     monkeypatch.setattr(
-        env_mod, "verify_vault_token",
-        lambda token, addr=None, min_ttl_hours=24: {"valid": False, "error": "TTL too low"},
+        env_mod,
+        "verify_vault_token",
+        lambda token, addr=None, min_ttl_hours=24: {
+            "valid": False,
+            "error": "TTL too low",
+        },
     )
     client = FakeDokploy(env_str="VAULT_APP_TOKEN=hvs.deadbeef")
     with pytest.raises(RuntimeError, match="VAULT_APP_TOKEN preflight failed"):
@@ -274,7 +298,8 @@ def test_deploy_verify_vault_gates_before_any_mutation(monkeypatch):
     import libs.env as env_mod
 
     monkeypatch.setattr(
-        env_mod, "verify_vault_token",
+        env_mod,
+        "verify_vault_token",
         lambda token, addr=None, min_ttl_hours=24: {"valid": False, "error": "expired"},
     )
     client = FakeDokploy(env_str="VAULT_APP_TOKEN=hvs.x")
@@ -300,8 +325,12 @@ def test_verify_effective_config_hash_raises_if_never_advances():
     client = FakeDokploy(env_str="IAC_CONFIG_HASH=deploy-OLD-0")
     with pytest.raises(RuntimeError, match="never advanced"):
         dp.verify_effective_config_hash(
-            client, "cmp", "deploy-NEW-1", timeout=600,
-            _sleep=lambda _s: None, _now=_clock(0, 700),
+            client,
+            "cmp",
+            "deploy-NEW-1",
+            timeout=600,
+            _sleep=lambda _s: None,
+            _now=_clock(0, 700),
         )
 
 
@@ -326,8 +355,38 @@ def test_deploy_verify_config_confirms_pushed_hash_rolled_out():
     # the reflecting fake echoes the pushed env back, so the effective hash matches.
     client = FakeDokploy()
     plan = dp.deploy(
-        "staging", FULL_SHA, domain="zitian.party", client=client,
-        verify_config=True, _now=lambda: 1000,
+        "staging",
+        FULL_SHA,
+        domain="zitian.party",
+        client=client,
+        verify_config=True,
+        _now=lambda: 1000,
     )
     assert plan.env_vars["IAC_CONFIG_HASH"] == f"deploy-{SHORT_SHA}-1000000"
     assert client.deployed == ["A6V-hbJlgHMwgPDoTDnhH"]
+
+
+def test_staging_deploy_injects_openpanel_client_id():
+    """#372: the per-env OpenPanel client id reaches the compose env on the live
+    deploy_v2/deploy_primitive path (it previously only lived in the unused
+    pre_compose, so analytics never started)."""
+    from tools.openpanel_clients import OPENPANEL_CLIENTS
+
+    client = FakeDokploy()
+    dp.deploy("staging", FULL_SHA, domain="zitian.party", client=client)
+    _, env = client.updated[0]
+    assert env["OPENPANEL_CLIENT_ID"] == OPENPANEL_CLIENTS["staging"]
+    assert env["OPENPANEL_ENVIRONMENT"] == "staging"
+
+
+def test_prod_deploy_injects_openpanel_client_id_normalizing_prod_alias():
+    """`prod` (deploy_v2 naming) maps to the `production` OpenPanel project."""
+    from tools.openpanel_clients import OPENPANEL_CLIENTS
+
+    client = FakeDokploy()
+    dp.deploy(
+        "prod", FULL_SHA, domain="zitian.party", client=client, staging_validated=True
+    )
+    _, env = client.updated[0]
+    assert env["OPENPANEL_CLIENT_ID"] == OPENPANEL_CLIENTS["production"]
+    assert env["OPENPANEL_ENVIRONMENT"] == "production"

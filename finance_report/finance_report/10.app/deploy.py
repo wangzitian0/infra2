@@ -2,6 +2,7 @@ import sys
 
 from libs.deployer import Deployer, make_tasks
 from libs.console import header, success, info, warning
+from tools.openpanel_clients import openpanel_env
 
 shared_tasks = sys.modules.get("finance_report.10.app.shared")
 
@@ -47,23 +48,11 @@ class AppDeployer(Deployer):
         cls._ensure_minio_bucket(c)
 
         # OpenPanel PV tracking (model B: one project per environment). Client ids
-        # are PUBLIC web client ids (they ship in the frontend JS), so mapping them
-        # here is config, not a secret. Unknown env => empty => Analytics no-op.
-        # Preview (per-PR) is wired separately in the GitHub pr-preview lifecycle.
-        openpanel_clients = {
-            "production": "28bfa625-8751-4424-9514-29c967f77550",
-            "staging": "62d5cfe0-2480-4b6e-b76f-8eabbcaf698f",
-            # Infra-014: single shared "preview" OpenPanel project for all preview
-            # aliases (per-alias separation is via the deployment.environment/property,
-            # not a per-alias project). Placeholder until the real client id is minted.
-            # TODO: real preview client-id (mint a "preview" project in OpenPanel, then
-            # replace this UUID — see Infra-014 RUNBOOK).
-            "preview": "00000000-0000-0000-0000-000000000000",
-        }
-        env_name = env_vars.get("ENV", "production")
-        client_id = openpanel_clients.get(env_name, "")
-        env_vars["OPENPANEL_CLIENT_ID"] = client_id
-        env_vars["OPENPANEL_ENVIRONMENT"] = env_name if client_id else ""
+        # are PUBLIC web client ids (config, not secret); unknown env => empty =>
+        # Analytics no-op. #372: the map is the single source in tools.openpanel_clients
+        # so the live deploy_v2 path (tools/deploy_primitive) injects the same values
+        # — this legacy pre_compose path no longer owns a duplicate literal.
+        env_vars.update(openpanel_env(env_vars.get("ENV", "production")))
 
         return env_vars
 
