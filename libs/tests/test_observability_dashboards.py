@@ -73,6 +73,24 @@ def test_dashboard_covers_backend_and_frontend_signals() -> None:
     assert "finance-report-frontend" in raw
 
 
+def test_dashboard_has_full_backend_red_and_fe_page_load() -> None:
+    """The baseline rounds out to RED for the backend (Rate / Errors / Duration
+    p50·p95·p99) plus a FE page-load widget, not just error+p95."""
+    widgets = {w["id"]: w for w in load_dashboard()["widgets"]}
+    # Rate, Errors, and the three Duration percentiles
+    for wid in ("be-throughput", "be-error-rate-5xx", "be-latency-p50", "be-latency-p95", "be-latency-p99"):
+        assert wid in widgets, f"missing RED widget {wid}"
+    assert "fe-page-load" in widgets
+
+    # the percentile widgets actually request the right aggregate on durationNano
+    def _agg(wid: str) -> tuple[str, str]:
+        q = widgets[wid]["query"]["builder"]["queryData"][0]
+        return q["aggregateOperator"], q["aggregateAttribute"]["key"]
+
+    assert _agg("be-latency-p50") == ("p50", "durationNano")
+    assert _agg("be-latency-p99") == ("p99", "durationNano")
+
+
 def test_env_variable_query_targets_the_live_v2_logs_schema() -> None:
     """The deployment.environment dropdown must query the table/columns that actually
     exist on the SigNoz instance (logs v2: distributed_logs_v2 + resources_string),
