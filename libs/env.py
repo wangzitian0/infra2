@@ -229,7 +229,7 @@ class VaultSecrets:
                         f"\n❌ Permission denied accessing: {self.path}\n"
                         f"Token lacks read permission to this path.\n"
                         f"Check token: vault token lookup\n"
-                        f"Fix: Regenerate token with correct policy (invoke vault.setup-tokens)"
+                        f"Fix: Regenerate token with correct policy (invoke vault.setup-approle)"
                     )
                 elif resp.status_code == 503:
                     raise self.VaultConnectionError(

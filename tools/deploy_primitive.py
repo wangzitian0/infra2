@@ -123,7 +123,7 @@ def preflight_vault_token(
         raise RuntimeError(
             f"VAULT_APP_TOKEN preflight failed for compose {compose_id}: "
             f"{result.get('error') or 'invalid token'}. Regenerate it "
-            "(`invoke vault.setup-tokens` for this environment) before deploying."
+            "(`invoke vault.setup-approle` for this environment) before deploying."
         )
 
 

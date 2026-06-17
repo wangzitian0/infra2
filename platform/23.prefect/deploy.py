@@ -76,7 +76,7 @@ class PrefectDeployer(Deployer):
         )
 
         success("pre_compose complete - vault-init will fetch secrets at runtime")
-        info("\nNote: VAULT_APP_TOKEN auto-configured via 'invoke vault.setup-tokens'")
+        info("\nNote: AppRole creds (VAULT_ROLE_ID/VAULT_SECRET_ID) auto-configured via 'invoke vault.setup-approle'")
         return result
 
     @classmethod

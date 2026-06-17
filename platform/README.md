@@ -47,7 +47,7 @@ platform/{nn}.{service}/
 
 1. **Vault ready**: `invoke vault.status` should return healthy
 2. **Enable KV engine**: `vault secrets enable -path=secret kv-v2` (one-time)
-3. **Setup tokens**: `export VAULT_ROOT_TOKEN=<token> && invoke vault.setup-tokens`
+3. **Setup AppRole**: `export VAULT_ROOT_TOKEN=<token> && invoke vault.setup-approle`
 
 ## Environments
 

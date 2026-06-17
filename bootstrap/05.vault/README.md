@@ -18,11 +18,11 @@ invoke vault.deploy
 invoke vault.init
 invoke vault.unseal
 invoke vault.status
-invoke vault.setup-tokens
+invoke vault.setup-approle
 ```
 
 > CLI 输出统一使用 `libs.console`，避免直接 `print`。
-> `vault.setup-tokens` 默认只输出掩码 token；如需完整 token 用于录入 1Password，先设置 `VAULT_SHOW_TOKENS=1`。
+> `vault.setup-approle` 为每个服务创建 `{project, env, service}` 作用域的 AppRole，把 `role_id`/`secret_id`（`secret_id_ttl=0` 永不过期）注入 Dokploy env，不打印任何 secret。
 > Generated app tokens are scoped by `{project, env, service}` and previous
 > tracked accessors are revoked after successful Dokploy update.
 
@@ -93,10 +93,9 @@ DEPLOY_ENV=staging invoke vault.setup-approle --project=finance_report --service
 - AppRole 凭证缺失会在部署期 **fail-closed**（`libs.deployer._assert_approle_creds_present` 检查
   `VAULT_ROLE_ID`/`VAULT_SECRET_ID`/`VAULT_ADDR`），避免 vault-agent 起不来导致服务卡死。
 
-> **例外（旧 token_file 模型）**：仅 IaC Runner 仍用周期 token —— 它是部署凭证的发行方，迁移到
-> AppRole 是有 P0 反环依赖约束的设计内变更（见 `docs/ssot/bootstrap.iac_runner.md` §6.4）。它通过
-> `invoke vault.setup-tokens` 生成只读 periodic token 并写入 Dokploy env `VAULT_APP_TOKEN`，自身在
-> 容器内每 6h `renew-self` 续命。该路径仅供 IaC Runner，不要用于新服务。
+> **IaC Runner**：也已迁到 AppRole（#369，完成 #257/#259）。它额外用一枚**有界、非 root**的
+> deployer token（每次部署 `auth/approle/login` 现签）传给 `.sync` 子进程读写跨服务 secret，
+> 设计有 P0 反环依赖约束，见 `docs/ssot/bootstrap.iac_runner.md` §6.4。
 
 ### 5. 应用接入 Vault（vault-init）
 

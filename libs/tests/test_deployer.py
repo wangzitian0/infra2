@@ -140,42 +140,17 @@ def _load_deploy_module(relative_path: str, module_name: str):
     return module
 
 
-def test_preserve_runtime_env_keeps_existing_vault_app_token() -> None:
-    """Infra-011.3: deployer updates must not erase injected Vault app tokens."""
-    from libs.deployer import _preserve_runtime_env
-
-    result = _preserve_runtime_env(
-        "ENV=production\nINTERNAL_DOMAIN=zitian.party",
-        "ENV=old\nVAULT_APP_TOKEN=hvs.existing\nSTALE=value",
-    )
-
-    assert result.splitlines() == [
-        "ENV=production",
-        "INTERNAL_DOMAIN=zitian.party",
-        "VAULT_APP_TOKEN=hvs.existing",
-    ]
-
-
-def test_preserve_runtime_env_keeps_explicit_new_vault_app_token() -> None:
-    from libs.deployer import _preserve_runtime_env
-
-    result = _preserve_runtime_env(
-        "ENV=production\nVAULT_APP_TOKEN=hvs.new",
-        "VAULT_APP_TOKEN=hvs.existing",
-    )
-
-    assert result.splitlines() == ["ENV=production", "VAULT_APP_TOKEN=hvs.new"]
-
-
 def test_preserve_runtime_env_keeps_existing_approle_creds() -> None:
-    """Infra-011.3: AppRole creds (VAULT_ROLE_ID / VAULT_SECRET_ID) injected out-of-band
-    must survive a redeploy that regenerates the git-derived env, or the migrated
-    vault-agent loses them and crash-loops."""
+    """Infra-011.3 / #369: AppRole creds (VAULT_ROLE_ID / VAULT_SECRET_ID) injected
+    out-of-band must survive a redeploy that regenerates the git-derived env, or the
+    migrated vault-agent loses them and crash-loops. The legacy static VAULT_APP_TOKEN
+    is no longer preserved (it is cleaned up on the next redeploy)."""
     from libs.deployer import _preserve_runtime_env
 
     result = _preserve_runtime_env(
         "ENV=production\nINTERNAL_DOMAIN=zitian.party",
-        "ENV=old\nVAULT_ROLE_ID=role-abc\nVAULT_SECRET_ID=secret-xyz\nSTALE=value",
+        "ENV=old\nVAULT_ROLE_ID=role-abc\nVAULT_SECRET_ID=secret-xyz\n"
+        "VAULT_APP_TOKEN=hvs.legacy\nSTALE=value",
     )
 
     assert result.splitlines() == [
@@ -184,6 +159,7 @@ def test_preserve_runtime_env_keeps_existing_approle_creds() -> None:
         "VAULT_ROLE_ID=role-abc",
         "VAULT_SECRET_ID=secret-xyz",
     ]
+    assert "VAULT_APP_TOKEN" not in result
 
 
 def test_parse_env_text_ignores_comments_blanks_and_malformed_lines() -> None:

@@ -1,5 +1,5 @@
 # Policy for platform alerting bridge.
-# Scoped by vault.setup-tokens to the target deployment environment.
+# Scoped by vault.setup-approle to the target deployment environment.
 path "secret/data/platform/{{env}}/alerting" {
   capabilities = ["read"]
 }

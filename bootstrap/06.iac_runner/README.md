@@ -53,17 +53,17 @@ invoke env.set GIT_REPO_URL=https://github.com/wangzitian0/infra2.git --project=
 
 Vault path: `secret/data/bootstrap/production/iac_runner`
 
-### 2. Generate VAULT_APP_TOKEN
+### 2. Provision the AppRole credentials
 
 ```bash
 export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token')
-invoke vault.setup-tokens
+invoke vault.setup-approle
 ```
 
-This creates a scoped deployment token for IaC Runner and auto-configures it in
-Dokploy. The token can read and repair platform/finance_report service runtime
-secret fields during sync, but it cannot delete secrets or mutate bootstrap root
-credentials.
+This creates a `{bootstrap, env, iac_runner}` AppRole and injects `VAULT_ROLE_ID`/`VAULT_SECRET_ID`
+into Dokploy. The runner reads/repairs platform/finance_report service runtime secret fields
+during sync (via a per-deploy AppRole login), but cannot delete secrets or mutate bootstrap
+root credentials. See docs/ssot/bootstrap.iac_runner.md §6.4.
 
 ### 3. Configure GitHub Webhook
 
@@ -276,13 +276,13 @@ RUN apt-get update && apt-get install -y \
 - `iac-runner` logs show `ERROR: Secrets file not found after 60s`
 - `https://iac.{domain}/health` returns 404 because the app container is not serving traffic
 
-**Cause**: Missing, expired, or invalid `VAULT_APP_TOKEN`. The Vault Agent renews valid periodic tokens, but it cannot recover once the token stored in Dokploy is already invalid.
+**Cause**: Missing or invalid AppRole credentials (`VAULT_ROLE_ID`/`VAULT_SECRET_ID`) in the Dokploy env. The Vault Agent logs in and re-authenticates via AppRole on its own, but cannot recover if the injected `role_id`/`secret_id` are absent or wrong.
 
 **Solution**:
 ```bash
 # Regenerate token
 export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token')
-invoke vault.setup-tokens
+invoke vault.setup-approle
 
 # Restart container
 docker restart iac-runner

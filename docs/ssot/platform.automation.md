@@ -179,7 +179,7 @@ invoke fr-redis.shared.status
 invoke fr-app.shared.status
 
 # Vault token 配置（需指定 project 参数）
-invoke vault.setup-tokens --project=finance_report
+invoke vault.setup-approle --project=finance_report
 ```
 
 **约束**:
