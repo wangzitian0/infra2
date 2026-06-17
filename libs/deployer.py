@@ -922,6 +922,15 @@ class Deployer:
             return {"valid": True, "error": None, "details": "No existing deployment"}
 
         env_str = existing.get("env", "")
+        # AppRole services authenticate via VAULT_ROLE_ID/VAULT_SECRET_ID. A vestigial
+        # VAULT_APP_TOKEN left in Dokploy is unused and would expire un-renewed, so gating
+        # on it would hard-block an AppRole deploy. Skip the legacy token check for them.
+        if "VAULT_ROLE_ID=" in env_str and "VAULT_SECRET_ID=" in env_str:
+            return {
+                "valid": True,
+                "error": None,
+                "details": "AppRole auth; legacy VAULT_APP_TOKEN preflight skipped",
+            }
         token = None
         for line in env_str.split("\n"):
             if line.startswith("VAULT_APP_TOKEN="):
@@ -971,7 +980,8 @@ class Deployer:
                     "action": "failed",
                     "details": (
                         f"VAULT_APP_TOKEN issue: {token_status.get('details', 'unknown')}. "
-                        "Run `invoke vault.setup-approle` for this environment before syncing."
+                        "This is a legacy static token; remove it from the service's Dokploy "
+                        "env (services authenticate via AppRole now — `invoke vault.setup-approle`)."
                     ),
                 }
             elif token_status.get("ttl_hours", 999) < 48:
@@ -979,7 +989,8 @@ class Deployer:
                     "action": "failed",
                     "details": (
                         f"VAULT_APP_TOKEN expires in {token_status['ttl_hours']}h. "
-                        "Regenerate it with `invoke vault.setup-approle` before syncing."
+                        "It is a legacy static token; remove it from the Dokploy env "
+                        "(AppRole services don't use it)."
                     ),
                 }
         except Exception as exc:

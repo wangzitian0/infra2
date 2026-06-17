@@ -571,6 +571,36 @@ class TestDeployerVaultTokenPreflight:
         assert "Could not verify VAULT_APP_TOKEN" in result["details"]
         assert "Vault unavailable" in result["details"]
 
+    def test_verify_vault_app_token_skips_for_approle_service(self, monkeypatch):
+        """#369: a vestigial VAULT_APP_TOKEN on an AppRole service must not gate deploys —
+        it would expire un-renewed and hard-block a redeploy that would clean it up."""
+        import libs.deployer as deployer
+        import libs.dokploy as dokploy
+
+        dummy = self._deployer()
+
+        class _Client:
+            def find_compose_by_name(self, *_a, **_k):
+                return {"env": "VAULT_ROLE_ID=r\nVAULT_SECRET_ID=s\nVAULT_APP_TOKEN=hvs.stale"}
+
+        monkeypatch.setattr(dokploy, "get_dokploy", lambda **_k: _Client())
+        monkeypatch.setattr(
+            dummy,
+            "env",
+            classmethod(
+                lambda cls: {"ENV": "production", "INTERNAL_DOMAIN": "zitian.party"}
+            ),
+        )
+
+        def _boom(*_a, **_k):
+            raise AssertionError("AppRole service must not hit verify_vault_token")
+
+        monkeypatch.setattr(deployer, "verify_vault_token", _boom)
+
+        status = dummy.verify_vault_app_token()
+        assert status["valid"] is True
+        assert "AppRole" in status["details"]
+
 
 def test_minio_sync_secret_hook_repairs_root_user(monkeypatch) -> None:
     """Infra-011: sync must ensure all MinIO template fields, not only password."""

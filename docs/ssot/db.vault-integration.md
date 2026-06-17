@@ -144,15 +144,15 @@ CI enforces these settings on all `vault-agent.hcl` files.
 
 Vault-agent compose services must:
 - Remove stale `/vault/secrets/.env` before starting `vault agent`.
-- Fail healthcheck when the token lookup (via direct API query `/v1/auth/token/lookup-self` or the CLI tool) fails for `VAULT_APP_TOKEN`.
+- Fail healthcheck when the vault-agent's AppRole sink-token lookup (`/v1/auth/token/lookup-self`) fails.
 - Fail healthcheck when `/vault/secrets/.env` is missing or empty.
 - Fail healthcheck when `/vault/secrets/.env` contains Vault template fallback
   text such as `<no value>`.
 - Not use rendered-file mtime freshness in Docker healthchecks.
 
-This prevents a previously rendered secrets file from masking an expired token.
-Deploy automation must treat an invalid or short-lived `VAULT_APP_TOKEN` as a
-hard preflight failure instead of continuing with a redeploy.
+This prevents a previously rendered secrets file from masking a broken vault-agent
+(e.g. a failing AppRole login). The deploy preflight skips the legacy `VAULT_APP_TOKEN`
+TTL gate for AppRole services, so a vestigial token never hard-blocks a redeploy.
 
 Rendered-file freshness remains a P1 audit signal, not a Docker container health
 contract. Vault Agent templates may not rewrite a static secret file when the
@@ -170,9 +170,10 @@ active compose file with a `vault-agent` service must have exactly one row unles
 the compose file is explicitly a non-deployed alternate.
 
 The audit must check:
-- Dokploy service env includes a non-empty `VAULT_APP_TOKEN`.
-- Vault token lookup reports `valid=true`, `renewable=true`, and TTL above the
-  configured floor.
+- Dokploy service env includes the service's auth credentials (AppRole: a non-empty
+  `VAULT_ROLE_ID` + `VAULT_SECRET_ID`).
+- The vault-agent's sink token lookup reports `valid=true` (AppRole tokens are
+  renewed / re-issued natively by the agent — there is no static token TTL to floor).
 - `/vault/secrets/.env` exists in the vault-agent container, is readable,
   non-empty, contains no unresolved template values such as `<no value>`, and
   is fresher than `max_rendered_secret_age_seconds` as an audit signal.
@@ -193,7 +194,7 @@ extend the inventory and keep these tests passing.
 
 ### SOP: Token Expired
 
-**Symptom**: Container stuck in "Created" state, logs show "token validation failed"
+**Symptom**: Container stuck in "Created" state, logs show "VAULT_ROLE_ID and VAULT_SECRET_ID are required" or an AppRole login failure
 
 **Fix**:
 ```bash

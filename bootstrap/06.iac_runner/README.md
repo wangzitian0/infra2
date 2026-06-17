@@ -280,9 +280,9 @@ RUN apt-get update && apt-get install -y \
 
 **Solution**:
 ```bash
-# Regenerate token
+# Recreate the AppRole (policy + role_id/secret_id) and reinject into Dokploy
 export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token')
-invoke vault.setup-approle
+invoke vault.setup-approle --project=bootstrap --service=iac_runner
 
 # Restart container
 docker restart iac-runner
