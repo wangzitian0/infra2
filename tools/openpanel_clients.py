@@ -19,8 +19,10 @@ from __future__ import annotations
 OPENPANEL_CLIENTS: dict[str, str] = {
     "production": "28bfa625-8751-4424-9514-29c967f77550",
     "staging": "62d5cfe0-2480-4b6e-b76f-8eabbcaf698f",
-    # TODO(#375): mint a real "preview" OpenPanel project and replace this placeholder.
-    "preview": "00000000-0000-0000-0000-000000000000",
+    # #375: the "preview" OpenPanel project (project id `finance-preview`,
+    # client "preview web") — all preview aliases (main / pr-N / commit-<sha7>)
+    # share this one project; alias granularity lives in event attributes.
+    "preview": "6e8f9d85-4456-4dcb-bc2b-7b68298f22dd",
 }
 
 
