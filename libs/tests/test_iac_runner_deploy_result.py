@@ -13,6 +13,8 @@ import types
 from contextlib import contextmanager
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[2]
 IAC_RUNNER = ROOT / "bootstrap/06.iac_runner"
@@ -836,17 +838,27 @@ def test_report_branch_main_auto_target_is_fully_wired() -> None:
     the cross-repo repository_dispatch (not manual-only) and deploy app main via deploy_v2.
     The app-repo SENDER lives in finance_report; here we lock the receiver half so a future edit
     cannot silently revert it to a manual-only / TODO stub."""
-    workflow = DEPLOY_REPORT_MAIN_WORKFLOW.read_text(encoding="utf-8")
+    spec = yaml.safe_load(DEPLOY_REPORT_MAIN_WORKFLOW.read_text(encoding="utf-8"))
 
-    # receiver fires on the cross-repo dispatch the app-repo sender emits
-    assert "repository_dispatch" in workflow
-    assert "deploy-report-main" in workflow
-    # and deploys app main through the unified front door
-    assert "--service finance_report/app" in workflow
-    assert "--type preview/branch" in workflow
-    # the sender half is wired (finance_report#1173) — the old "manual-only / remaining half" TODO is gone
-    assert "fires only on manual dispatch" not in workflow
-    assert "remaining" not in workflow
+    # receiver fires on the cross-repo dispatch the app-repo sender emits. Assert on the
+    # PARSED trigger set, not a raw substring a comment / the workflow name could satisfy.
+    # PyYAML parses the `on:` key as the boolean True (YAML 1.1), so accept either.
+    triggers = spec.get("on", spec.get(True))
+    trigger_names = set(triggers) if isinstance(triggers, (dict, list)) else {triggers}
+    assert "repository_dispatch" in trigger_names, (
+        "receiver must be an AUTO target (repository_dispatch), not manual-only"
+    )
+
+    # and deploys app main through the unified front door — assert on the actual run
+    # scripts of the steps, not the whole file (robust to comments / unrelated wording).
+    run_scripts = "\n".join(
+        step["run"]
+        for job in spec["jobs"].values()
+        for step in job.get("steps", [])
+        if isinstance(step, dict) and isinstance(step.get("run"), str)
+    )
+    assert "--service finance_report/app" in run_scripts
+    assert "--type preview/branch" in run_scripts
 
 
 def test_iac_runner_all_services_include_alerting_bridge(monkeypatch) -> None:

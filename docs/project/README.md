@@ -16,6 +16,7 @@
 
 ## Global TODOWRITE
 - [Infra-001.TODOWRITE.md](./Infra-001.TODOWRITE.md) - Legacy/global issues
+- [Infra-015.TODOWRITE.md](./Infra-015.TODOWRITE.md) - deploy_v2 front door residuals (sender #1173 + archive)
 
 ## Related
 - [README.md](../../README.md) - 工程入口
@@ -25,6 +26,7 @@
 - [docs/README.md](../README.md) - 文档索引
 
 ## Active Projects
+- [Infra-015: deploy_v2 Unified Front Door](./Infra-015.deploy_v2_front_door.md) - **Impl complete; sender #1173 pending → archive**
 - [Infra-013: Service Registry as Single Source of Truth](./Infra-013.service_registry_ssot.md) - **In Progress**
 - [Infra-009: Finance Report Deployment](./Infra-009.finance_report_deploy.md) - **In Progress**
 - [Infra-008: Platform Multi-Environment (Staging)](./Infra-008.platform_multi_env.md) - **In Progress**

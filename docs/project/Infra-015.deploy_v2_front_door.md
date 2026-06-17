@@ -1,6 +1,6 @@
 # Infra-015: deploy_v2 — the unified, trustworthy deploy front door
 
-**Status**: Done
+**Status**: Implementation complete & live-verified; companion finance_report#1173 (app-repo sender) pending merge — archive (merge record + [TODOWRITE](./Infra-015.TODOWRITE.md)) once it lands
 **Owner**: Infra
 **Priority**: P0
 **Root issue**: finance_report#1072 (commit-addressed deploy primitive & delivery pipeline)
