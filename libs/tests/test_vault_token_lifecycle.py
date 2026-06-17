@@ -351,6 +351,63 @@ def test_configure_dokploy_token_retries_redeploy_until_runtime_record(
     assert client.redeploy_calls == 1
 
 
+def test_configure_dokploy_approle_injects_creds_and_redeploys(monkeypatch) -> None:
+    """#257: AppRole injection (VAULT_ROLE_ID/VAULT_SECRET_ID) succeeds only after a runtime
+    apply proof — same shared spine (`_redeploy_with_vault_creds`) and record-wait as the
+    token path. This path previously had no direct unit test."""
+    tasks, _exit_cls = _load_vault_tasks(monkeypatch)
+    client = FakeDokployTokenDeploy(
+        [
+            [{"deploymentId": "old", "status": "done"}],
+            [{"deploymentId": "old", "status": "done"}],
+            [{"deploymentId": "old", "status": "done"}],
+            [
+                {"deploymentId": "old", "status": "done"},
+                {"deploymentId": "new", "status": "done"},
+            ],
+        ]
+    )
+    _install_fake_dokploy(monkeypatch, client)
+    monkeypatch.setattr(
+        "libs.common.get_env",
+        lambda: {"ENV": "production", "INTERNAL_DOMAIN": "zitian.party"},
+    )
+    monkeypatch.setenv("DOKPLOY_DEPLOYMENT_RECORD_TIMEOUT_SECONDS", "0")
+    monkeypatch.setattr(tasks.time, "sleep", lambda _seconds: None)
+
+    ok = tasks._configure_dokploy_approle(
+        FakeContext(), "redis", "role-123", "secret-456", "platform"
+    )
+
+    assert ok is True
+    assert client.updated_env == {
+        "VAULT_ROLE_ID": "role-123",
+        "VAULT_SECRET_ID": "secret-456",
+    }
+    assert client.deploy_calls == 1
+    assert client.redeploy_calls == 1
+
+
+def test_configure_dokploy_approle_returns_false_when_service_absent(monkeypatch) -> None:
+    """#257: a service not registered in Dokploy fails closed (False), not a crash."""
+    tasks, _exit_cls = _load_vault_tasks(monkeypatch)
+
+    class _NoCompose:
+        def find_compose_by_name(self, *_a, **_k):
+            return None
+
+    _install_fake_dokploy(monkeypatch, _NoCompose())
+    monkeypatch.setattr(
+        "libs.common.get_env",
+        lambda: {"ENV": "production", "INTERNAL_DOMAIN": "zitian.party"},
+    )
+
+    ok = tasks._configure_dokploy_approle(
+        FakeContext(), "ghost", "r", "s", "platform"
+    )
+    assert ok is False
+
+
 def test_setup_tokens_does_not_track_accessor_when_dokploy_runtime_apply_fails(
     monkeypatch,
 ) -> None:
