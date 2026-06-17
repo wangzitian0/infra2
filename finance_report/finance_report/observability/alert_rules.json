@@ -1,0 +1,14 @@
+{
+  "$comment": "Config-as-code SigNoz alert rules for finance_report (#373). The app references the alert name FinanceReportBackendErrorLogs in apps/backend/src/observability.py; this file is the reviewable source of truth. Applied idempotently by `invoke fr-observability.shared.apply-alerts`, which routes the rule to the shared Feishu/Lark bridge channel. The full SigNoz v2 threshold payload is derived from this shape by libs/observability_dashboards.py + libs/alerting.py.",
+  "rules": [
+    {
+      "alert_name": "FinanceReportBackendErrorLogs",
+      "service_name": "finance-report-backend",
+      "severity": "error",
+      "threshold": 0,
+      "eval_window": "5m0s",
+      "frequency": "1m",
+      "summary": "finance-report-backend emitted ERROR/FATAL logs in the last 5 minutes. Runbook: docs/ssot/ops.alerting.md SOP-004."
+    }
+  ]
+}

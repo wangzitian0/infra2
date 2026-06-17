@@ -1,0 +1,161 @@
+{
+  "title": "Finance Report — Backend & Frontend",
+  "description": "Baseline observability dashboard for finance_report (#373). Covers backend error rate + latency and browser frontend web-vitals + exceptions, sourced from the shared SigNoz collector. Applied via `invoke fr-observability.shared.apply-dashboard`. Services are distinguished by service.name; environments by deployment.environment.",
+  "tags": ["finance-report", "infra2", "config-as-code"],
+  "version": "v4",
+  "variables": {
+    "deployment_environment": {
+      "type": "QUERY",
+      "name": "deployment_environment",
+      "description": "deployment.environment (production / staging / pr-N)",
+      "multiSelect": true,
+      "showALLOption": true,
+      "queryValue": "SELECT DISTINCT stringTagMap['deployment.environment'] FROM signoz_logs.distributed_logs"
+    }
+  },
+  "widgets": [
+    {
+      "id": "be-error-rate",
+      "title": "Backend ERROR/FATAL log rate",
+      "description": "Count of finance-report-backend ERROR/FATAL logs (matches the FinanceReportBackendErrorLogs alert).",
+      "panelTypes": "graph",
+      "query": {
+        "queryType": "builder",
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "logs",
+              "queryName": "A",
+              "aggregateOperator": "count",
+              "expression": "A",
+              "disabled": false,
+              "stepInterval": 60,
+              "filters": {
+                "op": "AND",
+                "items": [
+                  {
+                    "key": {"key": "service.name", "dataType": "string", "type": "resource"},
+                    "op": "=",
+                    "value": "finance-report-backend"
+                  },
+                  {
+                    "key": {"key": "severity_text", "dataType": "string", "type": "tag"},
+                    "op": "in",
+                    "value": ["ERROR", "FATAL"]
+                  }
+                ]
+              },
+              "legend": "errors"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "be-latency-p95",
+      "title": "Backend request latency p95 (ms)",
+      "description": "p95 span duration for finance-report-backend HTTP server spans.",
+      "panelTypes": "graph",
+      "query": {
+        "queryType": "builder",
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "traces",
+              "queryName": "A",
+              "aggregateOperator": "p95",
+              "aggregateAttribute": {"key": "durationNano", "dataType": "float64", "type": "tag"},
+              "expression": "A",
+              "disabled": false,
+              "stepInterval": 60,
+              "filters": {
+                "op": "AND",
+                "items": [
+                  {
+                    "key": {"key": "service.name", "dataType": "string", "type": "resource"},
+                    "op": "=",
+                    "value": "finance-report-backend"
+                  }
+                ]
+              },
+              "legend": "p95 latency"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "fe-web-vitals",
+      "title": "Frontend web-vitals p75 (LCP/CLS/INP)",
+      "description": "p75 of browser web-vital measurements reported by finance-report-frontend, grouped by metric name.",
+      "panelTypes": "graph",
+      "query": {
+        "queryType": "builder",
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "traces",
+              "queryName": "A",
+              "aggregateOperator": "p75",
+              "aggregateAttribute": {"key": "web_vital.value", "dataType": "float64", "type": "tag"},
+              "expression": "A",
+              "disabled": false,
+              "stepInterval": 60,
+              "filters": {
+                "op": "AND",
+                "items": [
+                  {
+                    "key": {"key": "service.name", "dataType": "string", "type": "resource"},
+                    "op": "=",
+                    "value": "finance-report-frontend"
+                  }
+                ]
+              },
+              "groupBy": [
+                {"key": "web_vital.name", "dataType": "string", "type": "tag"}
+              ],
+              "legend": "{{web_vital.name}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "fe-exceptions",
+      "title": "Frontend exceptions",
+      "description": "Count of browser exception events reported by finance-report-frontend.",
+      "panelTypes": "graph",
+      "query": {
+        "queryType": "builder",
+        "builder": {
+          "queryData": [
+            {
+              "dataSource": "traces",
+              "queryName": "A",
+              "aggregateOperator": "count",
+              "expression": "A",
+              "disabled": false,
+              "stepInterval": 60,
+              "filters": {
+                "op": "AND",
+                "items": [
+                  {
+                    "key": {"key": "service.name", "dataType": "string", "type": "resource"},
+                    "op": "=",
+                    "value": "finance-report-frontend"
+                  },
+                  {
+                    "key": {"key": "name", "dataType": "string", "type": "tag"},
+                    "op": "=",
+                    "value": "exception"
+                  }
+                ]
+              },
+              "legend": "exceptions"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
