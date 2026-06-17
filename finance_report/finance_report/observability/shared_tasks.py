@@ -75,6 +75,7 @@ def apply_alerts(c, dry_run=False):
     existing rule with the same alert name is left untouched.
     """
     from libs.console import error, success
+    from libs.alerting import find_signoz_rule_id
 
     alerting = _alerting_shared()
     definitions = load_alert_definitions()
@@ -89,10 +90,15 @@ def apply_alerts(c, dry_run=False):
         error("Cannot apply alert rules without a SigNoz channel id")
         return False
 
+    # List existing rules ONCE, then match locally — avoids an N+1 GET /api/v1/rules
+    # per definition as the rule set grows.
+    existing_rules = alerting._signoz_request(
+        c, method="GET", path="/api/v1/rules"
+    ).get("data")
+
     all_ok = True
     for definition in definitions:
-        existing = alerting._find_rule(c, definition.alert_name)
-        if existing:
+        if find_signoz_rule_id(existing_rules, definition.alert_name):
             success(f"SigNoz alert rule already exists: {definition.alert_name}")
             continue
         payload = definition.to_signoz_payload([channel_id])

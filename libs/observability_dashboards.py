@@ -109,13 +109,21 @@ def load_alert_definitions(
             raw.get("summary")
             or f"{service_name} emitted ERROR/FATAL logs in the last 5 minutes"
         )
+        raw_threshold = raw.get("threshold", 0)
+        try:
+            threshold = int(raw_threshold)
+        except (TypeError, ValueError) as exc:
+            raise ObservabilityDefinitionError(
+                f"Invalid 'threshold' {raw_threshold!r} for alert '{alert_name}' in "
+                f"{path}: must be an integer."
+            ) from exc
         definitions.append(
             LogErrorAlertDefinition(
                 alert_name=alert_name,
                 service_name=service_name,
                 summary=summary,
                 severity=str(raw.get("severity") or "error"),
-                threshold=int(raw.get("threshold", 0)),
+                threshold=threshold,
                 eval_window=str(raw.get("eval_window") or "5m0s"),
                 frequency=str(raw.get("frequency") or "1m"),
             )

@@ -8,7 +8,7 @@
       "threshold": 0,
       "eval_window": "5m0s",
       "frequency": "1m",
-      "summary": "finance-report-backend emitted ERROR/FATAL logs in the last 5 minutes. Runbook: docs/ssot/ops.alerting.md SOP-004."
+      "summary": "finance-report-backend emitted ERROR/FATAL logs in the last 5 minutes. Runbook: docs/ssot/ops.alerting.md SOP-004B."
     }
   ]
 }

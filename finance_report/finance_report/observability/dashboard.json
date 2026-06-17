@@ -53,9 +53,10 @@
     },
     {
       "id": "be-latency-p95",
-      "title": "Backend request latency p95 (ms)",
-      "description": "p95 span duration for finance-report-backend HTTP server spans.",
+      "title": "Backend request latency p95",
+      "description": "p95 span duration (durationNano) for finance-report-backend HTTP server spans.",
       "panelTypes": "graph",
+      "yAxisUnit": "ns",
       "query": {
         "queryType": "builder",
         "builder": {

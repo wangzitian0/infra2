@@ -88,6 +88,21 @@ def test_invalid_definitions_raise() -> None:
         load_dashboard(OBS_DIR / "does-not-exist.json")
 
 
+def test_non_integer_threshold_raises_definition_error(tmp_path) -> None:
+    """#373 review: a malformed `threshold` raises ObservabilityDefinitionError
+    (not a raw ValueError) so bad definitions fail with a clear, catchable error."""
+    import json
+
+    bad = tmp_path / "alert_rules.json"
+    bad.write_text(
+        json.dumps(
+            {"rules": [{"alert_name": "X", "service_name": "svc", "threshold": "oops"}]}
+        )
+    )
+    with pytest.raises(ObservabilityDefinitionError, match="threshold"):
+        load_alert_definitions(bad)
+
+
 def test_apply_tasks_are_invoke_tasks() -> None:
     """#373: invoke exposes apply + print tasks for alerts and dashboard."""
     fake_invoke = types.ModuleType("invoke")
