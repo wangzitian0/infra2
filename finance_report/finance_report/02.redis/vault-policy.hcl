@@ -1,5 +1,5 @@
 # Policy for finance_report redis service
-# Scoped by vault.setup-tokens to the target deployment environment.
+# Scoped by vault.setup-approle to the target deployment environment.
 path "secret/data/finance_report/{{env}}/redis" {
   capabilities = ["read"]
 }

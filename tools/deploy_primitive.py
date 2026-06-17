@@ -101,19 +101,21 @@ def _env_value(env_str: str, key: str) -> str | None:
 def preflight_vault_token(
     client, compose_id: str, domain: str, *, min_ttl_hours: int = 48
 ):
-    """Fail closed before deploy if the compose's VAULT_APP_TOKEN is present but invalid
-    or expiring within min_ttl_hours. The token is gated only when present — a compose
-    with no VAULT_APP_TOKEN is left alone (not every compose uses Vault).
+    """Fail closed before deploy if the compose's legacy VAULT_APP_TOKEN is present but
+    invalid or expiring within min_ttl_hours. The token is gated only when present — a
+    compose with no VAULT_APP_TOKEN is left alone (not every compose uses Vault).
 
-    Mirrors the bash primitive's verify_vault_app_token preflight and infra2's own
-    Deployer.verify_vault_app_token (both gate a deploy on token TTL). Reuses the
-    class-free libs.env.verify_vault_token. NOTE — unlike the App-repo bash primitive,
-    this does NOT auto-repair an expiring token; it fails closed with a clear message,
-    matching infra2's native Deployer.sync convention ("regenerate it before deploying").
+    AppRole services (VAULT_ROLE_ID/VAULT_SECRET_ID present) are skipped: post-migration a
+    vestigial VAULT_APP_TOKEN can linger in Dokploy and expire un-renewed, so gating on it
+    would hard-block an AppRole deploy that would otherwise clean it up. Reuses the
+    class-free libs.env.verify_vault_token. This does NOT auto-repair; it fails closed.
     """
     from libs.env import verify_vault_token
 
-    token = _env_value(client.get_compose_env(compose_id), "VAULT_APP_TOKEN")
+    env_text = client.get_compose_env(compose_id)
+    if _env_value(env_text, "VAULT_ROLE_ID") and _env_value(env_text, "VAULT_SECRET_ID"):
+        return  # AppRole auth -> any leftover VAULT_APP_TOKEN is unused; do not gate on it
+    token = _env_value(env_text, "VAULT_APP_TOKEN")
     if not token:
         return  # no token in this compose env -> nothing to gate on
     result = verify_vault_token(
@@ -122,8 +124,8 @@ def preflight_vault_token(
     if not result.get("valid"):
         raise RuntimeError(
             f"VAULT_APP_TOKEN preflight failed for compose {compose_id}: "
-            f"{result.get('error') or 'invalid token'}. Regenerate it "
-            "(`invoke vault.setup-tokens` for this environment) before deploying."
+            f"{result.get('error') or 'invalid token'}. This is a legacy static token; "
+            "remove it from the service's Dokploy env (services authenticate via AppRole now)."
         )
 
 

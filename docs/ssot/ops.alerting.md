@@ -160,7 +160,7 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
 2. 写入 1Password root vars:
    ```bash
    uv run invoke env.set FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/<token> --project=platform --env=production --service=alerting --credential-type=root_vars
-   uv run invoke vault.setup-tokens --project=platform --service=alerting
+   uv run invoke vault.setup-approle --project=platform --service=alerting
    ```
 3. 部署 bridge:
    ```bash
@@ -188,7 +188,7 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
    uv run invoke env.set FEISHU_APP_ID=cli_xxx --project=platform --env=production --service=alerting --credential-type=root_vars
    uv run invoke env.set FEISHU_APP_SECRET=<secret> --project=platform --env=production --service=alerting --credential-type=root_vars
    uv run invoke env.set FEISHU_CHAT_ID=<chat_id> --project=platform --env=production --service=alerting --credential-type=root_vars
-   uv run invoke vault.setup-tokens --project=platform --service=alerting
+   uv run invoke vault.setup-approle --project=platform --service=alerting
    uv run invoke alerting.setup
    uv run invoke alerting.test-feishu --message="Infra2 alert test"
    ```
@@ -197,7 +197,7 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
 
 1. Ensure the alert bridge is deployed and healthy:
    ```bash
-   uv run python -m invoke vault.setup-tokens --project=platform --service=alerting
+   uv run python -m invoke vault.setup-approle --project=platform --service=alerting
    uv run python -m invoke alerting.setup
    uv run python -m invoke alerting.status
    ```

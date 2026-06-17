@@ -132,14 +132,13 @@ invoke local.bootstrap  # 校验 1Password 的 init/env_vars（不生成本地 .
 ### 3.3 Vault 认证约定
 
 运行时服务通过 **AppRole** 认证（`role_id` + `secret_id`）；旧的 `VAULT_APP_TOKEN` 周期 token
-模型已退役，仅 IaC Runner 作为设计内例外保留（见 `docs/ssot/bootstrap.iac_runner.md` §6.4）。
+模型已全面退役（含 IaC Runner，#369；见 `docs/ssot/bootstrap.iac_runner.md` §6.4）。
 
 | 变量名 | 权限 | 用途 | 存储位置 |
 |--------|------|------|----------|
-| `VAULT_ROOT_TOKEN` | Read + Write | `invoke vault.setup-approle`/`setup-tokens` 生成/管理策略与凭证 | 1Password `op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token`（或 `/Token`；item: `bootstrap/vault/Root Token`） |
+| `VAULT_ROOT_TOKEN` | Read + Write | `invoke vault.setup-approle` 生成/管理策略与 AppRole | 1Password `op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token`（或 `/Token`；item: `bootstrap/vault/Root Token`） |
 | `VAULT_ROLE_ID` + `VAULT_SECRET_ID` | AppRole 登录凭证 (per-project, per-env, per-service) | 运行时 vault-agent 用 approle 登录读取密钥 | Dokploy 服务环境变量（`setup-approle` 注入） |
 | `VAULT_ADDR` | — | vault-agent 连接地址（非敏感，但**必须存在**，否则 agent 卡住） | Dokploy 项目级 env |
-| `VAULT_APP_TOKEN` *(legacy)* | Read-Only periodic token | **仅 IaC Runner**：运行时读密钥，自身 6h `renew-self` 续命 | Dokploy 服务环境变量（`setup-tokens`） |
 
 ### 3.4 App 接入 Vault（vault-init）
 

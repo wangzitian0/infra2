@@ -140,42 +140,17 @@ def _load_deploy_module(relative_path: str, module_name: str):
     return module
 
 
-def test_preserve_runtime_env_keeps_existing_vault_app_token() -> None:
-    """Infra-011.3: deployer updates must not erase injected Vault app tokens."""
-    from libs.deployer import _preserve_runtime_env
-
-    result = _preserve_runtime_env(
-        "ENV=production\nINTERNAL_DOMAIN=zitian.party",
-        "ENV=old\nVAULT_APP_TOKEN=hvs.existing\nSTALE=value",
-    )
-
-    assert result.splitlines() == [
-        "ENV=production",
-        "INTERNAL_DOMAIN=zitian.party",
-        "VAULT_APP_TOKEN=hvs.existing",
-    ]
-
-
-def test_preserve_runtime_env_keeps_explicit_new_vault_app_token() -> None:
-    from libs.deployer import _preserve_runtime_env
-
-    result = _preserve_runtime_env(
-        "ENV=production\nVAULT_APP_TOKEN=hvs.new",
-        "VAULT_APP_TOKEN=hvs.existing",
-    )
-
-    assert result.splitlines() == ["ENV=production", "VAULT_APP_TOKEN=hvs.new"]
-
-
 def test_preserve_runtime_env_keeps_existing_approle_creds() -> None:
-    """Infra-011.3: AppRole creds (VAULT_ROLE_ID / VAULT_SECRET_ID) injected out-of-band
-    must survive a redeploy that regenerates the git-derived env, or the migrated
-    vault-agent loses them and crash-loops."""
+    """Infra-011.3 / #369: AppRole creds (VAULT_ROLE_ID / VAULT_SECRET_ID) injected
+    out-of-band must survive a redeploy that regenerates the git-derived env, or the
+    migrated vault-agent loses them and crash-loops. The legacy static VAULT_APP_TOKEN
+    is no longer preserved (it is cleaned up on the next redeploy)."""
     from libs.deployer import _preserve_runtime_env
 
     result = _preserve_runtime_env(
         "ENV=production\nINTERNAL_DOMAIN=zitian.party",
-        "ENV=old\nVAULT_ROLE_ID=role-abc\nVAULT_SECRET_ID=secret-xyz\nSTALE=value",
+        "ENV=old\nVAULT_ROLE_ID=role-abc\nVAULT_SECRET_ID=secret-xyz\n"
+        "VAULT_APP_TOKEN=hvs.legacy\nSTALE=value",
     )
 
     assert result.splitlines() == [
@@ -184,6 +159,7 @@ def test_preserve_runtime_env_keeps_existing_approle_creds() -> None:
         "VAULT_ROLE_ID=role-abc",
         "VAULT_SECRET_ID=secret-xyz",
     ]
+    assert "VAULT_APP_TOKEN" not in result
 
 
 def test_parse_env_text_ignores_comments_blanks_and_malformed_lines() -> None:
@@ -594,6 +570,36 @@ class TestDeployerVaultTokenPreflight:
         assert result["action"] == "failed"
         assert "Could not verify VAULT_APP_TOKEN" in result["details"]
         assert "Vault unavailable" in result["details"]
+
+    def test_verify_vault_app_token_skips_for_approle_service(self, monkeypatch):
+        """#369: a vestigial VAULT_APP_TOKEN on an AppRole service must not gate deploys —
+        it would expire un-renewed and hard-block a redeploy that would clean it up."""
+        import libs.deployer as deployer
+        import libs.dokploy as dokploy
+
+        dummy = self._deployer()
+
+        class _Client:
+            def find_compose_by_name(self, *_a, **_k):
+                return {"env": "VAULT_ROLE_ID=r\nVAULT_SECRET_ID=s\nVAULT_APP_TOKEN=hvs.stale"}
+
+        monkeypatch.setattr(dokploy, "get_dokploy", lambda **_k: _Client())
+        monkeypatch.setattr(
+            dummy,
+            "env",
+            classmethod(
+                lambda cls: {"ENV": "production", "INTERNAL_DOMAIN": "zitian.party"}
+            ),
+        )
+
+        def _boom(*_a, **_k):
+            raise AssertionError("AppRole service must not hit verify_vault_token")
+
+        monkeypatch.setattr(deployer, "verify_vault_token", _boom)
+
+        status = dummy.verify_vault_app_token()
+        assert status["valid"] is True
+        assert "AppRole" in status["details"]
 
 
 def test_minio_sync_secret_hook_repairs_root_user(monkeypatch) -> None:

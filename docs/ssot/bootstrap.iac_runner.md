@@ -591,11 +591,11 @@ path "secret/data/bootstrap/+/iac_runner"  { capabilities = ["read"] }          
 path "auth/token/lookup-self"          { capabilities = ["read"] }
 ```
 
-相对今天的 policy，迁移后可**砍掉**两条（见 6.4.5 v2）：
-- `secret/data/bootstrap/+/vault_token_accessors/*`（CRUD）——这是**追踪/轮换旧静态
-  token 的账本**（`libs/vault_tokens.py`，仅 root 的 `vault.setup-tokens`/`setup-approle`
-  使用，**`.sync` 部署路径不调用它**）。全员 AppRole 后无静态 token 可追踪 → 冗余。
-- `auth/token/renew-self`（update）——AppRole 由 agent 原生续期，app 不需自 renew。
+**v2（#369）已砍掉**以下两条（上面的 policy 块即收敛后的最终形态）：
+- `secret/data/bootstrap/+/vault_token_accessors/*`（CRUD）——曾是**追踪/轮换旧静态
+  token 的账本**（`libs/vault_tokens.py`，仅旧 `setup-tokens` 任务用，**`.sync` 部署路径从不调用它**）。
+  全员 AppRole 后无静态 token 可追踪 → 已连同 `setup-tokens` 任务一并删除。
+- `auth/token/renew-self`（update）——AppRole 由 agent 原生续期/重登录，app 不需自 renew。
 
 > **依据**：`.sync → ensure_runtime_secrets` 实测只做 KV `get`/`set`（缺失则
 > `generate_password` 写回），**无铸 token、无写 policy/role、无 root 操作**，故上述
@@ -635,7 +635,7 @@ path "auth/token/lookup-self"          { capabilities = ["read"] }
 | ⑨ | **`deploy_iac_runner_bootstrap.sh` 是否自部署 / 依赖被迁移破坏的读？** | ✅ 外部重建（SSH 直建 compose，不走 `/deploy`）。**⚠️ 但脚本现在预检 `VAULT_APP_TOKEN`（约 line 241），迁移后该 env 消失 → 必须改成预检 `VAULT_ROLE_ID/VAULT_SECRET_ID`，否则部署 runner 的工具本身被卡死** |
 | ⑩ | **`OP_SERVICE_ACCOUNT_TOKEN` 成 SPOF** | ✅ 不变甚至更轻：今天 `.sync` 已用它读 signoz admin（category②）；本设计 deploy 凭证**不再**经 OP，反而比草案的 `op read` 方案减少了一处 OP 运行时依赖 |
 | ⑪ | app 拿不到 agent 的 token（共享卷问题） | ✅ **消解**：deploy 凭证由 `resolve_vault_root_token` 独立 approle 登录现签，**不**复用 sidecar 的 sink token，无需共享卷 |
-| ⑫ | accessor grant 砍掉后 sync 失败 | accessor 仅 root bootstrap 用，`.sync` 不碰；v2 砍前再坐实，v1 保留 |
+| ⑫ | accessor grant 砍掉后 sync 失败 | ✅ **v2（#369）已砍**：accessor 仅 root bootstrap 用，`.sync` 不碰；砍后全套 libs 测试 + 一次 staging `.sync` 通过验证 |
 
 #### 6.4.6 两阶段灰度
 
@@ -649,8 +649,11 @@ path "auth/token/lookup-self"          { capabilities = ["read"] }
   5. `scripts/deploy_iac_runner_bootstrap.sh` 预检 `VAULT_APP_TOKEN` → `VAULT_ROLE_ID`/`VAULT_SECRET_ID`；
   6. `vault-self-refresh-inventory.yaml` iac_runner `auth_method: approle`；
   7. 保留现有 policy（含 accessors）。先在 staging 验证完整 GitOps 链路（webhook → `.sync` → 服务 healthy）。
-- **v2（权限收敛）**：坐实 `.sync` 不依赖 `vault_token_accessors` 后，砍掉该 grant 与
-  `renew-self`，并清退 `libs/vault_tokens.py` 静态 token 账本相关代码。
+- **v2（权限收敛）—— 已完成（#369）**：砍掉 `vault_token_accessors` grant 与 `renew-self`，删除
+  `setup-tokens` 任务与 `libs/vault_tokens.py` 静态 token 账本代码（仅保留 AppRole 复用的
+  `policy_name`/`normalize_selector`/`VaultTokenTarget`），并从 `RUNTIME_ENV_KEYS_TO_PRESERVE` 移除
+  `VAULT_APP_TOKEN`。**范围外（独立任务）**：其它 11 个服务 policy 的 `renew-self`、ClickHouse 旧
+  `compose-with-vault.yaml`、以及 no-op 的 `VAULT_APP_TOKEN` 部署预检。
 - iac-runner 是 bootstrap 服务、改坏会瘫掉部署链，**全程用外部 bootstrap 重建流程
   （`scripts/deploy_iac_runner_bootstrap.sh`）而非 `/deploy` 自部署**（见 §5.2、§7.4），
   并准备好回滚（恢复 `VAULT_APP_TOKEN` env + token_file compose）。

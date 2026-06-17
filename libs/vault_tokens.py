@@ -1,16 +1,16 @@
-"""Vault app-token lifecycle helpers."""
+"""Vault per-service naming helpers (shared by the AppRole setup path).
+
+The legacy static-token *ledger* (accessor bookkeeping, periodic-token output
+masking) was retired once every service moved to AppRole auth — see
+docs/ssot/bootstrap.iac_runner.md §6.4. Only the project/service/policy naming
+helpers remain, reused by `bootstrap/05.vault/tasks.py::setup_approle`.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-import os
 
 from libs.common import normalize_env_name
-
-
-TOKEN_PERIOD_HOURS = 168
-TOKEN_PERIOD = f"{TOKEN_PERIOD_HOURS}h"
-ACCESSOR_KV_PREFIX = "secret/bootstrap"
 
 
 @dataclass(frozen=True)
@@ -35,37 +35,6 @@ def normalize_selector(value: str | None, *, label: str) -> str | None:
 
 
 def policy_name(project: str, env: str, service: str) -> str:
-    """Return the per-environment Vault policy name for an app token."""
+    """Return the per-environment Vault policy name for a service's AppRole."""
     env_name = normalize_env_name(env)
     return f"{project}-{env_name}-{service}"
-
-
-def display_name(project: str, env: str, service: str) -> str:
-    """Return a human-readable token display name with full ownership."""
-    env_name = normalize_env_name(env)
-    return f"{project}/{env_name}/{service}"
-
-
-def accessor_kv_path(project: str, env: str, service: str) -> str:
-    """Return the Vault KV v2 CLI path used to track the active accessor."""
-    env_name = normalize_env_name(env)
-    return f"{ACCESSOR_KV_PREFIX}/{env_name}/vault_token_accessors/{project}/{service}"
-
-
-def mask_token(token: str) -> str:
-    """Mask a Vault token for console output."""
-    if not token:
-        return "<empty>"
-    if len(token) <= 10:
-        return "***"
-    return f"{token[:6]}...{token[-4:]}"
-
-
-def should_show_tokens() -> bool:
-    """Whether operator explicitly requested full token output."""
-    return os.getenv("VAULT_SHOW_TOKENS") == "1"
-
-
-def token_for_output(token: str) -> str:
-    """Return the token in a form safe for normal logs."""
-    return token if should_show_tokens() else mask_token(token)

@@ -31,18 +31,16 @@ if TYPE_CHECKING:
 
 __all__ = ["Deployer", "make_tasks", "discover_services"]
 
-# Runtime-only secrets injected into Dokploy env out-of-band (by
-# bootstrap/05.vault setup-tokens / setup-approle), not present in the
-# git-derived desired env. They must survive a redeploy that regenerates the
-# env, otherwise the vault-agent loses its credentials and crash-loops.
-# VAULT_APP_TOKEN = legacy token-file auth; VAULT_ROLE_ID/VAULT_SECRET_ID =
-# AppRole auth (#257/#259). Omitting the AppRole pair silently wiped it on every
-# deploy of a migrated service.
+# Runtime-only AppRole credentials injected into Dokploy env out-of-band (by
+# bootstrap/05.vault setup-approle), not present in the git-derived desired env.
+# They must survive a redeploy that regenerates the env, otherwise the
+# vault-agent loses its credentials and crash-loops (#257/#259/#369). The legacy
+# static VAULT_APP_TOKEN was dropped here in #369's v2 cleanup once every service
+# was on AppRole — leaving it out also lets a redeploy clean up any vestigial copy.
 # Ordered (not a set) so the preserved keys append deterministically — set
 # iteration order would vary the generated env line order and churn the config
 # hash, causing spurious redeploys.
 RUNTIME_ENV_KEYS_TO_PRESERVE = (
-    "VAULT_APP_TOKEN",
     "VAULT_ROLE_ID",
     "VAULT_SECRET_ID",
 )
@@ -468,7 +466,7 @@ class Deployer:
 
         env_vars("DOKPLOY ENV (vault-init)", result)
         success("pre_compose complete - vault-init will fetch secrets at runtime")
-        info("\nNote: VAULT_APP_TOKEN auto-configured via 'invoke vault.setup-tokens'")
+        info("\nNote: AppRole creds (VAULT_ROLE_ID/VAULT_SECRET_ID) auto-configured via 'invoke vault.setup-approle'")
         return result
 
     @classmethod
@@ -924,6 +922,15 @@ class Deployer:
             return {"valid": True, "error": None, "details": "No existing deployment"}
 
         env_str = existing.get("env", "")
+        # AppRole services authenticate via VAULT_ROLE_ID/VAULT_SECRET_ID. A vestigial
+        # VAULT_APP_TOKEN left in Dokploy is unused and would expire un-renewed, so gating
+        # on it would hard-block an AppRole deploy. Skip the legacy token check for them.
+        if "VAULT_ROLE_ID=" in env_str and "VAULT_SECRET_ID=" in env_str:
+            return {
+                "valid": True,
+                "error": None,
+                "details": "AppRole auth; legacy VAULT_APP_TOKEN preflight skipped",
+            }
         token = None
         for line in env_str.split("\n"):
             if line.startswith("VAULT_APP_TOKEN="):
@@ -973,7 +980,8 @@ class Deployer:
                     "action": "failed",
                     "details": (
                         f"VAULT_APP_TOKEN issue: {token_status.get('details', 'unknown')}. "
-                        "Run `invoke vault.setup-tokens` for this environment before syncing."
+                        "This is a legacy static token; remove it from the service's Dokploy "
+                        "env (services authenticate via AppRole now — `invoke vault.setup-approle`)."
                     ),
                 }
             elif token_status.get("ttl_hours", 999) < 48:
@@ -981,7 +989,8 @@ class Deployer:
                     "action": "failed",
                     "details": (
                         f"VAULT_APP_TOKEN expires in {token_status['ttl_hours']}h. "
-                        "Regenerate it with `invoke vault.setup-tokens` before syncing."
+                        "It is a legacy static token; remove it from the Dokploy env "
+                        "(AppRole services don't use it)."
                     ),
                 }
         except Exception as exc:

@@ -278,6 +278,21 @@ def test_preflight_vault_token_skips_when_compose_has_no_token():
     )  # must not raise / not call vault
 
 
+def test_preflight_vault_token_skips_for_approle_service(monkeypatch):
+    # #369: an AppRole service (VAULT_ROLE_ID/VAULT_SECRET_ID present) must NOT be gated
+    # on a vestigial VAULT_APP_TOKEN — it would expire un-renewed and hard-block deploys.
+    import libs.env as env_mod
+
+    def _boom(*_a, **_k):
+        raise AssertionError("AppRole service must not hit the VAULT_APP_TOKEN check")
+
+    monkeypatch.setattr(env_mod, "verify_vault_token", _boom)
+    client = FakeDokploy(
+        env_str="VAULT_ROLE_ID=role-x\nVAULT_SECRET_ID=secret-y\nVAULT_APP_TOKEN=hvs.stale"
+    )
+    dp.preflight_vault_token(client, "cmp", "zitian.party")  # must not raise / not call vault
+
+
 def test_preflight_vault_token_raises_on_expiring_token(monkeypatch):
     import libs.env as env_mod
 

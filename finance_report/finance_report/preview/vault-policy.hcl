@@ -7,7 +7,7 @@
 # uses its own ephemeral DB and no shared Redis (DATABASE_URL is overridden locally).
 #
 # NOTE: the {{env}} placeholder here must be bound at provisioning time to the SOURCE
-# secret env (staging by default), e.g. via `invoke vault.setup-tokens` for the preview
+# secret env (staging by default), e.g. via `invoke vault.setup-approle` for the preview
 # AppRole. This is a one-time LIVE setup; see the PR caveats.
 path "secret/data/finance_report/{{env}}/app" {
   capabilities = ["read"]

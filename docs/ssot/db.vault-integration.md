@@ -97,38 +97,33 @@ graph TD
 
 ---
 
-## 6. Token Management
+## 6. AppRole Auth Management
 
-### Token Type
+### Auth method
 
-Use **periodic tokens** (`-period=168h`) for all services:
-- Renewable indefinitely by vault-agent
-- 7-day window covers weekends/holidays
-- Any valid token is renewed by vault-agent at runtime; deploy cycles only verify
-  and fail fast when the stored Dokploy token is missing, invalid, non-renewable,
-  or below the TTL floor.
+All services authenticate to Vault via **AppRole** (the legacy static
+`VAULT_APP_TOKEN` periodic-token model was retired in #369 — see
+docs/ssot/bootstrap.iac_runner.md §6.4):
+- The vault-agent sidecar logs in with `role_id`/`secret_id` and renews /
+  re-authenticates natively — no static token to renew or rotate.
+- `secret_id_ttl=0` (non-expiring); deploy cycles fail-closed if
+  `VAULT_ROLE_ID`/`VAULT_SECRET_ID`/`VAULT_ADDR` are missing from the Dokploy env.
 
-### Token Ownership
+### Ownership
 
-`VAULT_APP_TOKEN` lifecycle is owned by infra2:
-- Token identity is `{project, env, service}`.
+The AppRole lifecycle is owned by infra2:
+- AppRole identity is `{project, env, service}`.
 - Policy names include the deployment environment, for example
   `finance_report-staging-app`.
 - Policies must read only `secret/data/<project>/<env>/<service>` paths. Do not
-  use `+` wildcards across environments for app tokens.
-- `vault.setup-tokens` writes the policy, creates the periodic token, injects it
-  into the matching Dokploy compose env, waits for a new Dokploy runtime
-  deployment record, tracks the new token accessor, and revokes the previously
-  tracked accessor only after runtime apply proof.
-- A Dokploy env update without a new `done` deployment record is a
-  failed rotation. The task must not track the new accessor or revoke the old
-  token because running containers may still hold the previous `VAULT_APP_TOKEN`.
-- If the previous token was not tracked yet, the setup task can derive its
-  accessor from the old Dokploy `VAULT_APP_TOKEN` via `lookup-self` and revoke it
-  without printing the token.
+  use `+` wildcards across environments for app policies.
+- `vault.setup-approle` writes the policy, creates the per-service AppRole role,
+  mints a non-expiring `role_id`/`secret_id`, injects them into the matching
+  Dokploy compose env as `VAULT_ROLE_ID`/`VAULT_SECRET_ID`, and waits for a new
+  Dokploy runtime deployment record before reporting success.
 
-Finance Report CI/CD is only a consumer. It may preflight `VAULT_APP_TOKEN`, but
-it must not hold `VAULT_ROOT_TOKEN` or mutate Vault policies/tokens.
+Finance Report CI/CD is only a consumer. It must not hold `VAULT_ROOT_TOKEN` or
+mutate Vault policies/roles.
 
 ### Required vault-agent.hcl Settings
 
@@ -149,15 +144,15 @@ CI enforces these settings on all `vault-agent.hcl` files.
 
 Vault-agent compose services must:
 - Remove stale `/vault/secrets/.env` before starting `vault agent`.
-- Fail healthcheck when the token lookup (via direct API query `/v1/auth/token/lookup-self` or the CLI tool) fails for `VAULT_APP_TOKEN`.
+- Fail healthcheck when the vault-agent's AppRole sink-token lookup (`/v1/auth/token/lookup-self`) fails.
 - Fail healthcheck when `/vault/secrets/.env` is missing or empty.
 - Fail healthcheck when `/vault/secrets/.env` contains Vault template fallback
   text such as `<no value>`.
 - Not use rendered-file mtime freshness in Docker healthchecks.
 
-This prevents a previously rendered secrets file from masking an expired token.
-Deploy automation must treat an invalid or short-lived `VAULT_APP_TOKEN` as a
-hard preflight failure instead of continuing with a redeploy.
+This prevents a previously rendered secrets file from masking a broken vault-agent
+(e.g. a failing AppRole login). The deploy preflight skips the legacy `VAULT_APP_TOKEN`
+TTL gate for AppRole services, so a vestigial token never hard-blocks a redeploy.
 
 Rendered-file freshness remains a P1 audit signal, not a Docker container health
 contract. Vault Agent templates may not rewrite a static secret file when the
@@ -175,9 +170,10 @@ active compose file with a `vault-agent` service must have exactly one row unles
 the compose file is explicitly a non-deployed alternate.
 
 The audit must check:
-- Dokploy service env includes a non-empty `VAULT_APP_TOKEN`.
-- Vault token lookup reports `valid=true`, `renewable=true`, and TTL above the
-  configured floor.
+- Dokploy service env includes the service's auth credentials (AppRole: a non-empty
+  `VAULT_ROLE_ID` + `VAULT_SECRET_ID`).
+- The vault-agent's sink token lookup reports `valid=true` (AppRole tokens are
+  renewed / re-issued natively by the agent — there is no static token TTL to floor).
 - `/vault/secrets/.env` exists in the vault-agent container, is readable,
   non-empty, contains no unresolved template values such as `<no value>`, and
   is fresher than `max_rendered_secret_age_seconds` as an audit signal.
@@ -198,12 +194,12 @@ extend the inventory and keep these tests passing.
 
 ### SOP: Token Expired
 
-**Symptom**: Container stuck in "Created" state, logs show "token validation failed"
+**Symptom**: Container stuck in "Created" state, logs show "VAULT_ROLE_ID and VAULT_SECRET_ID are required" or an AppRole login failure
 
 **Fix**:
 ```bash
 export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token')
-DEPLOY_ENV=staging invoke vault.setup-tokens --project=finance_report --service=app
+DEPLOY_ENV=staging invoke vault.setup-approle --project=finance_report --service=app
 invoke fr-app.shared.status  # verify
 ```
 
@@ -228,7 +224,7 @@ set -euo pipefail
 cd /path/to/infra2
 if ! DEPLOY_ENV=staging invoke vault-audit.self-refresh --env=staging --service=finance_report/app; then
   export VAULT_ROOT_TOKEN="$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token')"
-  DEPLOY_ENV=staging invoke vault.setup-tokens --project=finance_report --service=app
+  DEPLOY_ENV=staging invoke vault.setup-approle --project=finance_report --service=app
 fi
 ```
 

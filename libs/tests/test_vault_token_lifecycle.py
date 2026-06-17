@@ -9,14 +9,8 @@ import sys
 from types import SimpleNamespace
 import types
 
-import pytest
 
-from libs.vault_tokens import (
-    accessor_kv_path,
-    display_name,
-    mask_token,
-    policy_name,
-)
+from libs.vault_tokens import policy_name
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -158,17 +152,10 @@ def _install_fake_dokploy(monkeypatch, client: FakeDokployTokenDeploy) -> None:
     monkeypatch.setitem(sys.modules, "libs.dokploy", dokploy_module)
 
 
-def test_policy_names_and_accessor_paths_are_env_scoped() -> None:
-    """AC7.5.5: Vault app-token identity includes project, env, and service."""
+def test_policy_names_are_env_scoped() -> None:
+    """AC7.5.5: the per-service AppRole policy name includes project, env, and service."""
     assert (
         policy_name("finance_report", "staging", "app") == "finance_report-staging-app"
-    )
-    assert (
-        display_name("finance_report", "staging", "app") == "finance_report/staging/app"
-    )
-    assert (
-        accessor_kv_path("finance_report", "staging", "app")
-        == "secret/bootstrap/staging/vault_token_accessors/finance_report/app"
     )
 
 
@@ -184,8 +171,8 @@ def test_finance_report_vault_policies_are_env_scoped() -> None:
         assert "{{env}}" in policy, policy_path
 
 
-def test_setup_tokens_includes_alerting_bridge_target(monkeypatch) -> None:
-    """Infra-007 alerting: vault token setup can target the alerting bridge."""
+def test_vault_token_targets_includes_alerting_bridge(monkeypatch) -> None:
+    """Infra-007 alerting: AppRole target discovery includes the alerting bridge."""
     tasks, _exit_cls = _load_vault_tasks(monkeypatch)
     targets = tasks._vault_token_targets(str(ROOT))
 
@@ -195,160 +182,6 @@ def test_setup_tokens_includes_alerting_bridge_target(monkeypatch) -> None:
         and target.service_dir == "12.alerting"
         for target in targets
     )
-
-
-def test_mask_token_never_returns_full_secret_by_default() -> None:
-    """AC7.5.5: setup-token output is safe for logs unless explicitly requested."""
-    token = "hvs.new-secret-token-value"
-    masked = mask_token(token)
-
-    assert masked != token
-    assert "secret-token" not in masked
-
-
-def test_setup_tokens_can_target_one_service_and_revokes_old_accessor(
-    monkeypatch, capsys
-) -> None:
-    """AC7.5.5: token repair is targeted and revokes the previous tracked accessor."""
-    tasks, _exit_cls = _load_vault_tasks(monkeypatch)
-    fake = FakeContext()
-
-    monkeypatch.setenv("VAULT_ROOT_TOKEN", "root-token")
-    monkeypatch.setenv("DEPLOY_ENV", "staging")
-    monkeypatch.delenv("VAULT_SHOW_TOKENS", raising=False)
-    monkeypatch.setattr(
-        tasks,
-        "get_env",
-        lambda: {"ENV": "staging", "INTERNAL_DOMAIN": "zitian.party"},
-    )
-    monkeypatch.setattr(
-        tasks, "_configure_dokploy_token", lambda *_args, **_kwargs: True
-    )
-
-    tasks.setup_tokens.body(fake, project="finance_report", service="app")
-
-    commands = "\n".join(fake.commands)
-    assert "-period=168h" in commands
-    assert "-policy=finance_report-staging-app" in commands
-    assert "-display-name=finance_report/staging/app" in commands
-    assert "finance_report-staging-postgres" not in commands
-    assert "vault token revoke -accessor old-accessor" in commands
-    assert (
-        "vault kv put secret/bootstrap/staging/vault_token_accessors/finance_report/app"
-        in commands
-    )
-
-    output = capsys.readouterr().out
-    assert "hvs.new-secret-token-value" not in output
-    assert "hvs.ne...alue" in output
-
-
-def test_setup_tokens_does_not_revoke_old_accessor_when_dokploy_update_fails(
-    monkeypatch,
-) -> None:
-    """AC7.5.5: failed Dokploy injection must not break the currently running token."""
-    tasks, exit_cls = _load_vault_tasks(monkeypatch)
-    fake = FakeContext()
-
-    monkeypatch.setenv("VAULT_ROOT_TOKEN", "root-token")
-    monkeypatch.setenv("DEPLOY_ENV", "staging")
-    monkeypatch.setattr(
-        tasks,
-        "get_env",
-        lambda: {"ENV": "staging", "INTERNAL_DOMAIN": "zitian.party"},
-    )
-    monkeypatch.setattr(
-        tasks, "_configure_dokploy_token", lambda *_args, **_kwargs: False
-    )
-
-    with pytest.raises(exit_cls):
-        tasks.setup_tokens.body(fake, project="finance_report", service="app")
-
-    commands = "\n".join(fake.commands)
-    assert "vault token revoke -accessor old-accessor" not in commands
-
-
-def test_setup_tokens_revokes_existing_dokploy_token_when_accessor_is_not_tracked(
-    monkeypatch,
-) -> None:
-    """AC7.5.5: first managed rotation can revoke the previous Dokploy token."""
-    tasks, _exit_cls = _load_vault_tasks(monkeypatch)
-    fake = FakeContext(tracked_accessor=None)
-
-    monkeypatch.setenv("VAULT_ROOT_TOKEN", "root-token")
-    monkeypatch.setenv("DEPLOY_ENV", "staging")
-    monkeypatch.setattr(
-        tasks,
-        "get_env",
-        lambda: {"ENV": "staging", "INTERNAL_DOMAIN": "zitian.party"},
-    )
-    monkeypatch.setattr(
-        tasks,
-        "_configure_dokploy_token",
-        lambda *_args, **_kwargs: {
-            "configured": True,
-            "previous_token": "old-dokploy-token",
-        },
-    )
-
-    tasks.setup_tokens.body(fake, project="finance_report", service="app")
-
-    commands = "\n".join(fake.commands)
-    assert "vault token revoke -accessor old-dokploy-accessor" in commands
-    assert "old-dokploy-token" not in commands
-
-
-def test_setup_tokens_rejects_unknown_project_or_service(monkeypatch) -> None:
-    """AC7.5.5: targeted repair fails closed for bad selectors."""
-    tasks, exit_cls = _load_vault_tasks(monkeypatch)
-    fake = FakeContext()
-
-    monkeypatch.setenv("VAULT_ROOT_TOKEN", "root-token")
-    monkeypatch.setattr(
-        tasks,
-        "get_env",
-        lambda: {"ENV": "staging", "INTERNAL_DOMAIN": "zitian.party"},
-    )
-
-    with pytest.raises(exit_cls):
-        tasks.setup_tokens.body(fake, project="finance_report", service="missing")
-
-
-def test_configure_dokploy_token_retries_redeploy_until_runtime_record(
-    monkeypatch,
-) -> None:
-    """AC7.5.5: token injection is successful only after runtime apply proof."""
-    tasks, _exit_cls = _load_vault_tasks(monkeypatch)
-    client = FakeDokployTokenDeploy(
-        [
-            [{"deploymentId": "old", "status": "done"}],
-            [{"deploymentId": "old", "status": "done"}],
-            [{"deploymentId": "old", "status": "done"}],
-            [
-                {"deploymentId": "old", "status": "done"},
-                {"deploymentId": "new", "status": "done"},
-            ],
-        ]
-    )
-    _install_fake_dokploy(monkeypatch, client)
-    monkeypatch.setattr(
-        "libs.common.get_env",
-        lambda: {"ENV": "production", "INTERNAL_DOMAIN": "zitian.party"},
-    )
-    monkeypatch.setenv("DOKPLOY_DEPLOYMENT_RECORD_TIMEOUT_SECONDS", "0")
-    monkeypatch.setattr(tasks.time, "sleep", lambda _seconds: None)
-
-    result = tasks._configure_dokploy_token(
-        FakeContext(),
-        service="iac_runner",
-        token="hvs.new-token",
-        project="bootstrap",
-    )
-
-    assert result == {"configured": True, "previous_token": "hvs.old-token"}
-    assert client.updated_env == {"VAULT_APP_TOKEN": "hvs.new-token"}
-    assert client.deploy_calls == 1
-    assert client.redeploy_calls == 1
 
 
 def test_configure_dokploy_approle_injects_creds_and_redeploys(monkeypatch) -> None:
@@ -408,49 +241,6 @@ def test_configure_dokploy_approle_returns_false_when_service_absent(monkeypatch
     assert ok is False
 
 
-def test_setup_tokens_does_not_track_accessor_when_dokploy_runtime_apply_fails(
-    monkeypatch,
-) -> None:
-    """AC7.5.5: a Dokploy env update without runtime proof must fail closed."""
-    tasks, exit_cls = _load_vault_tasks(monkeypatch)
-    fake = FakeContext()
-    client = FakeDokployTokenDeploy(
-        [
-            [{"deploymentId": "old", "status": "done"}],
-            [{"deploymentId": "old", "status": "done"}],
-            [{"deploymentId": "old", "status": "done"}],
-            [{"deploymentId": "old", "status": "done"}],
-        ]
-    )
-    _install_fake_dokploy(monkeypatch, client)
-
-    monkeypatch.setenv("VAULT_ROOT_TOKEN", "root-token")
-    monkeypatch.setenv("DEPLOY_ENV", "production")
-    monkeypatch.setenv("DOKPLOY_DEPLOYMENT_RECORD_TIMEOUT_SECONDS", "0")
-    monkeypatch.setattr(tasks.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(
-        tasks,
-        "get_env",
-        lambda: {"ENV": "production", "INTERNAL_DOMAIN": "zitian.party"},
-    )
-    monkeypatch.setattr(
-        "libs.common.get_env",
-        lambda: {"ENV": "production", "INTERNAL_DOMAIN": "zitian.party"},
-    )
-
-    with pytest.raises(exit_cls):
-        tasks.setup_tokens.body(fake, project="bootstrap", service="iac_runner")
-
-    commands = "\n".join(fake.commands)
-    assert (
-        "vault kv put secret/bootstrap/production/vault_token_accessors/bootstrap/iac_runner"
-        not in commands
-    )
-    assert "vault token revoke -accessor old-accessor" not in commands
-    assert client.deploy_calls == 1
-    assert client.redeploy_calls == 1
-
-
 def _policy_paths() -> set[str]:
     """Extract the `path "..."` globs granted by the IaC Runner Vault policy."""
     import re
@@ -470,26 +260,6 @@ def _policy_matches(glob: str, path: str) -> bool:
         if seg != "+" and seg != p[i]:
             return False
     return len(g) == len(p)
-
-
-def test_policy_grants_tracked_accessor_path():
-    """Regression: the IaC Runner policy must cover the tracked-accessor KV path the
-    token-lifecycle code reads/writes. A missing grant makes the runner token hit
-    `permission denied`, so token refresh silently fails and recreated services lose
-    their VAULT_ROLE_ID / VAULT_SECRET_ID (prod outage)."""
-    # accessor_kv_path -> secret/bootstrap/<env>/vault_token_accessors/<project>/<service>;
-    # KV v2 data operations resolve under secret/data/.
-    cli_path = accessor_kv_path("finance_report", "production", "app")
-    data_path = cli_path.replace("secret/", "secret/data/", 1)
-    meta_path = cli_path.replace("secret/", "secret/metadata/", 1)
-
-    paths = _policy_paths()
-    assert any(_policy_matches(g, data_path) for g in paths), (
-        f"no policy grant covers accessor data path {data_path}"
-    )
-    assert any(_policy_matches(g, meta_path) for g in paths), (
-        f"no policy grant covers accessor metadata (list) path {meta_path}"
-    )
 
 
 def test_policy_grants_metadata_list_for_service_secrets():
