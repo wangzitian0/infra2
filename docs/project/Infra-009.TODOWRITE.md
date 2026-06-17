@@ -37,5 +37,5 @@ Main documentation is in finance_report repository:
 - Documented OTEL keys in finance_report app README
 - Added `IAC_CONFIG_HASH` to finance_report app compose for restart-safe updates
 - Replaced unsupported template helpers in finance_report app secrets template
-- Scoped finance_report Vault app-token policies by environment and added targeted token repair/revoke tracking for `vault.setup-tokens`
+- Scoped finance_report Vault app-token policies by environment and added targeted token repair/revoke tracking for `vault.setup-tokens`. _(Historical: this static-token machinery was retired in #369 — every service is now on AppRole.)_
 - First app alert path: `finance-report-backend` -> OTEL -> SigNoz `FinanceReportBackendErrorLogs` -> `platform/12.alerting` -> Feishu/Lark

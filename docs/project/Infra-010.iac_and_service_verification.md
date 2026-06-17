@@ -28,7 +28,7 @@
    - **验证**: Docker build 成功完成
 
 4. **Vault Token 配置**
-   - 运行 `invoke vault.setup-tokens` 生成 `VAULT_APP_TOKEN`
+   - 运行 `invoke vault.setup-approle` 注入 AppRole 凭证 (`VAULT_ROLE_ID`/`VAULT_SECRET_ID`)
    - Token 自动注入到 Dokploy 环境变量
 
 5. **IaC Runner 部署验证**
@@ -240,7 +240,7 @@ bootstrap/**/deploy.py → <service>.sync
 ### 新服务 SOP 核心步骤
 
 1. **代码结构验证** - 7个必需文件
-2. **Vault Secrets 配置** - env.set + setup-tokens
+2. **Vault Secrets 配置** - env.set + setup-approle
 3. **IaC 集成验证** - discover_services()
 4. **部署验证** - invoke setup + status
 5. **线上健康检查** - curl health endpoint
@@ -257,7 +257,7 @@ bootstrap/**/deploy.py → <service>.sync
 1. **问题诊断**: 识别 `FileNotFoundError: 'op'` 根因
 2. **PR #101**: 添加 1Password CLI 安装脚本到 Dockerfile
 3. **PR #102**: 添加 unzip 依赖到 Dockerfile
-4. **Vault 配置**: 运行 `invoke vault.setup-tokens` 生成 VAULT_APP_TOKEN
+4. **Vault 配置**: 运行 `invoke vault.setup-approle` 注入 AppRole 凭证
 5. **部署验证**: 所有健康检查通过
 
 ### 文档完善

@@ -8,7 +8,7 @@
 - OTEL collector config now rendered to `${DATA_PATH}/otel-collector-config.yaml` during `signoz.pre-compose` to avoid `${ENV_SUFFIX}` placeholders in runtime config.
 - Feishu alerting bridge added under `platform/12.alerting` to convert SigNoz Alertmanager webhook payloads into Feishu custom bot text messages. This work is not bound to a GitHub issue because no issue number was provided; open PR check on 2026-06-03 found no competing infra2 PRs.
 - Alert coverage catalog added to `docs/ssot/ops.alerting.md`; shared app log-error rule automation is exposed as `alerting.shared.ensure-log-error-rule`.
-- `vault.setup-tokens` now includes `platform/alerting`, matching the existing vault self-refresh inventory row for `platform/12.alerting`.
+- `vault.setup-tokens` now includes `platform/alerting`, matching the existing vault self-refresh inventory row for `platform/12.alerting`. _(Historical: the `setup-tokens` task was retired in #369; alerting is now provisioned via `vault.setup-approle`.)_
 - Out-of-band watchdog scope: GitHub Actions runs daily outside the infra2 host, verifies Cloudflare Worker self-health, public infra2 reachability, and internal alert bridge health via SSH, and sends Feishu directly when the in-band bridge path cannot be trusted.
 
 ### Acceptance Criteria
