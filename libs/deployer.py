@@ -862,18 +862,32 @@ class Deployer:
             for key in ("VAULT_ROLE_ID", "VAULT_SECRET_ID")
             if not (env.get(key) or "").strip()
         ]
-        if not missing:
-            return
+        if missing:
+            e = cls.env()
+            raise ValueError(
+                f"{cls.service}: compose uses Vault AppRole auth but "
+                f"{', '.join(missing)} is missing from the deploy env — the vault-agent "
+                "would crash-loop on 'VAULT_ROLE_ID and VAULT_SECRET_ID are required'. "
+                f"Run `DEPLOY_ENV={e.get('ENV', 'production')} invoke vault.setup-approle "
+                f"--project {cls.project_name(e)} --service {cls.service} --deploy` before "
+                "deploying."
+            )
 
-        e = cls.env()
-        raise ValueError(
-            f"{cls.service}: compose uses Vault AppRole auth but "
-            f"{', '.join(missing)} is missing from the deploy env — the vault-agent "
-            "would crash-loop on 'VAULT_ROLE_ID and VAULT_SECRET_ID are required'. "
-            f"Run `DEPLOY_ENV={e.get('ENV', 'production')} invoke vault.setup-approle "
-            f"--project {cls.project_name(e)} --service {cls.service} --deploy` before "
-            "deploying."
-        )
+        # Role/secret are present — also require VAULT_ADDR. The compose declares
+        # `VAULT_ADDR: ${VAULT_ADDR}` with NO default, and the vault-agent entrypoint only
+        # guards ROLE_ID/SECRET_ID, so a missing VAULT_ADDR slips through to runtime where
+        # the agent hangs reaching an empty address and the service deadlocks on its
+        # healthcheck (~6 min) with no clear cause. Fail fast here, symmetric with the
+        # creds — the preview path already guards VAULT_ADDR (preview_lifecycle
+        # ``_VAULT_CRED_KEYS``); this closes the same gap on the fixed staging/prod path.
+        if not (env.get("VAULT_ADDR") or "").strip():
+            raise ValueError(
+                f"{cls.service}: compose uses Vault AppRole auth but VAULT_ADDR is missing "
+                "from the deploy env — the vault-agent would hang reaching an empty Vault "
+                "address and the service would deadlock on its healthcheck. Set VAULT_ADDR "
+                "(e.g. https://vault.<INTERNAL_DOMAIN>) on the compose/project env before "
+                "deploying."
+            )
 
     @classmethod
     def compute_local_config_hash(cls, c: "Context", env_vars: dict[str, str]) -> str:

@@ -73,44 +73,46 @@ vault operator unseal <key3>
 
 或通过 Web UI 解封。
 
-### 4. 生成服务 Token（Vault-Init）
+### 4. 注入服务认证凭证（AppRole，Vault-Init）
+
+服务运行时通过 **AppRole** 认证 Vault：`invoke vault.setup-approle` 为每个服务生成
+`role_id` + `secret_id`，并注入 Dokploy env `VAULT_ROLE_ID`/`VAULT_SECRET_ID`。
 
 ```bash
 export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token') # item: bootstrap/vault/Root Token
-# 如果字段名是 Token，则改为: op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token
-invoke vault.setup-tokens
-```
-
-```bash
-# For staging tokens
-DEPLOY_ENV=staging invoke vault.setup-tokens
-```
-
-```bash
-# Targeted staging repair for the Finance Report app sidecar
-DEPLOY_ENV=staging invoke vault.setup-tokens --project=finance_report --service=app
+# 全部服务（按 deploy.py 注册派生）
+invoke vault.setup-approle --deploy
+# 单个服务 / staging 修复
+DEPLOY_ENV=staging invoke vault.setup-approle --project=finance_report --service=app --deploy
 ```
 
 说明：
-- `vault.setup-tokens` 会自动为服务生成只读 periodic token，并尝试写入 Dokploy 环境变量 `VAULT_APP_TOKEN`。
-- Policy name, token display name, and accessor tracking include the target environment.
-- Targeted repair fails closed if the matching Dokploy compose cannot be updated; in that case the old accessor is not revoked.
+- `vault.setup-approle` 为每个 `{project, env, service}` 写策略 + approle role，取 `role_id`/`secret_id`
+  并自动注入 Dokploy（`--deploy`），随后等待运行时部署记录。
+- vault-agent 用 approle 自身续期，无需周期 token 续命。
+- AppRole 凭证缺失会在部署期 **fail-closed**（`libs.deployer._assert_approle_creds_present` 检查
+  `VAULT_ROLE_ID`/`VAULT_SECRET_ID`/`VAULT_ADDR`），避免 vault-agent 起不来导致服务卡死。
+
+> **例外（旧 token_file 模型）**：仅 IaC Runner 仍用周期 token —— 它是部署凭证的发行方，迁移到
+> AppRole 是有 P0 反环依赖约束的设计内变更（见 `docs/ssot/bootstrap.iac_runner.md` §6.4）。它通过
+> `invoke vault.setup-tokens` 生成只读 periodic token 并写入 Dokploy env `VAULT_APP_TOKEN`，自身在
+> 容器内每 6h `renew-self` 续命。该路径仅供 IaC Runner，不要用于新服务。
 
 ### 5. 应用接入 Vault（vault-init）
 
 **目标**：运行时从 Vault 拉取密钥，不在磁盘持久化。
 
 流程：
-1. 在 Vault 写入 `secret/data/platform/<env>/<service>`（KV v2）。
-2. 运行 `DEPLOY_ENV=<env> invoke vault.setup-tokens --project=<project> --service=<service>` 为服务生成只读 token。
-3. Dokploy 服务环境变量设置 `VAULT_APP_TOKEN`（可自动注入）。
-4. Compose 加 `vault-init` 容器，拉取 Vault 并写入 `/secrets/.env`。
-5. 应用容器通过 `env_file: /secrets/.env` 或启动脚本 `source /secrets/.env` 读取。
+1. 在 Vault 写入 `secret/data/<project>/<env>/<service>`（KV v2）。
+2. 运行 `DEPLOY_ENV=<env> invoke vault.setup-approle --project=<project> --service=<service> --deploy`
+   为服务生成 approle role 并注入 `VAULT_ROLE_ID`/`VAULT_SECRET_ID`。
+3. Compose 加 `vault-agent` sidecar（approle 模板见 `docs/onboarding/07.new-service-sop.md`），拉取 Vault 并写入 `/vault/secrets/.env`。
+4. 应用容器通过 `env_file` 或启动脚本读取渲染出的 `.env`。
 
 要点：
-- `VAULT_ADDR` 可放在 Dokploy 项目级 env。
-- `VAULT_APP_TOKEN` 必须是 per-project/per-env/per-service 的只读 token。
-- `/secrets` 使用 `tmpfs`，避免落盘。
+- `VAULT_ADDR` 放在 Dokploy 项目级 env（非敏感，但 **必须存在** —— 缺失会让 vault-agent 卡住，部署期已 fail-closed）。
+- `VAULT_ROLE_ID`/`VAULT_SECRET_ID` 必须是 per-project/per-env/per-service 的 approle 凭证。
+- `/vault/secrets` 使用 `tmpfs`，避免落盘。
 
 ## 常见问题 / Troubleshooting
 

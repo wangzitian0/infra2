@@ -129,29 +129,33 @@ invoke local.bootstrap  # 校验 1Password 的 init/env_vars（不生成本地 .
 | 3 | Connect 可用 | `vault.setup` | Vault 服务 |
 | 4+ | Vault 可用 | platform 服务 | 生产服务 |
 
-### 3.3 Vault Token 约定
+### 3.3 Vault 认证约定
+
+运行时服务通过 **AppRole** 认证（`role_id` + `secret_id`）；旧的 `VAULT_APP_TOKEN` 周期 token
+模型已退役，仅 IaC Runner 作为设计内例外保留（见 `docs/ssot/bootstrap.iac_runner.md` §6.4）。
 
 | 变量名 | 权限 | 用途 | 存储位置 |
 |--------|------|------|----------|
-| `VAULT_ROOT_TOKEN` | Read + Write | `invoke vault.setup-tokens` 生成/管理策略与 token | 1Password `op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token`（或 `/Token`；item: `bootstrap/vault/Root Token`） |
-| `VAULT_APP_TOKEN` | Read-Only (per-project, per-env, per-service) | 运行时读取密钥；由 vault-agent 续期 | Dokploy 服务环境变量 |
+| `VAULT_ROOT_TOKEN` | Read + Write | `invoke vault.setup-approle`/`setup-tokens` 生成/管理策略与凭证 | 1Password `op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token`（或 `/Token`；item: `bootstrap/vault/Root Token`） |
+| `VAULT_ROLE_ID` + `VAULT_SECRET_ID` | AppRole 登录凭证 (per-project, per-env, per-service) | 运行时 vault-agent 用 approle 登录读取密钥 | Dokploy 服务环境变量（`setup-approle` 注入） |
+| `VAULT_ADDR` | — | vault-agent 连接地址（非敏感，但**必须存在**，否则 agent 卡住） | Dokploy 项目级 env |
+| `VAULT_APP_TOKEN` *(legacy)* | Read-Only periodic token | **仅 IaC Runner**：运行时读密钥，自身 6h `renew-self` 续命 | Dokploy 服务环境变量（`setup-tokens`） |
 
 ### 3.4 App 接入 Vault（vault-init）
 
 **核心原则**：应用容器不直接持久化密钥，运行时由 `vault-agent` 读取 Vault 并写入 `tmpfs`。
 
 步骤：
-1. **准备 Vault 密钥**：写入 `secret/data/platform/<env>/<service>`（KV v2）。
-2. **生成 Token**：`export VAULT_ROOT_TOKEN=<token> && DEPLOY_ENV=<env> invoke vault.setup-tokens --project=<project> --service=<service>`。
-3. **注入运行时变量**：Dokploy 服务环境变量里设置 `VAULT_APP_TOKEN`（由 setup-tokens 自动注入）。
-4. **Compose 接入**：增加 `vault-agent` sidecar，读取 Vault 并渲染到 `/secrets/.env`。
-5. **应用读取**：主容器 entrypoint 中 `source /secrets/.env`。
+1. **准备 Vault 密钥**：写入 `secret/data/<project>/<env>/<service>`（KV v2）。
+2. **生成 AppRole**：`export VAULT_ROOT_TOKEN=<token> && DEPLOY_ENV=<env> invoke vault.setup-approle --project=<project> --service=<service> --deploy`。
+3. **注入运行时凭证**：`setup-approle --deploy` 自动写 Dokploy env `VAULT_ROLE_ID`/`VAULT_SECRET_ID` 并触发 redeploy。
+4. **Compose 接入**：增加 `vault-agent` sidecar（approle 模板见 `docs/onboarding/07.new-service-sop.md`），读取 Vault 并渲染到 `/vault/secrets/.env`。
+5. **应用读取**：主容器 entrypoint 中读取渲染出的 `.env`。
 
 约束：
-- `VAULT_ADDR` 仅是地址，可放在项目级 env（非敏感）。
-- `VAULT_APP_TOKEN` 必须绑定 `{project, env, service}`，不能跨环境复用。
-- 默认输出必须 mask app token；只有设置 `VAULT_SHOW_TOKENS=1` 才能显式打印完整 token。
-- `/secrets` 需要挂载 `tmpfs`，避免磁盘落地。
+- `VAULT_ADDR` 仅是地址，可放在项目级 env（非敏感）；**必须存在**，缺失会让 vault-agent 卡死（部署期 fail-closed）。
+- `VAULT_ROLE_ID`/`VAULT_SECRET_ID` 必须绑定 `{project, env, service}`，不能跨环境复用。
+- `/vault/secrets` 需要挂载 `tmpfs`，避免磁盘落地。
 
 ### 3.5 Web UI 密码同步到 1Password
 

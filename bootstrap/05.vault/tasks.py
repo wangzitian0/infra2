@@ -652,8 +652,7 @@ def setup_tokens(c, project=None, service=None, deploy=True, revoke_old=True):
         )
 
         if os.path.exists(policy_path):
-            with open(policy_path, "r") as f:
-                policy_rules = f.read().replace("{{env}}", env_name)
+            policy_rules = _read_policy_file(policy_path, env_name)
             info(f"Loaded tailored policy from {target.service_dir}/vault-policy.hcl")
         else:
             policy_rules = f"""path "auth/token/lookup-self" {{
@@ -817,37 +816,60 @@ def _env_value(env_text: str, key: str) -> str | None:
     return None
 
 
+def _read_policy_file(policy_path: str, env_name: str) -> str:
+    """Read a service's vault-policy.hcl, substituting ``{{env}}``. The one bit shared by
+    the token (setup_tokens) and AppRole (setup_approle) paths — each keeps its own default
+    policy (token needs renew-self; AppRole doesn't) and its own surrounding logging."""
+    with open(policy_path) as f:
+        return f.read().replace("{{env}}", env_name)
+
+
+def _redeploy_with_vault_creds(
+    service: str, env_vars: dict[str, str], project: str
+) -> dict[str, Any] | None:
+    """Shared spine for injecting Vault creds into a Dokploy service and redeploying.
+
+    Finds the ``service`` compose in ``project``, merges ``env_vars`` into its runtime env,
+    triggers a redeploy, and waits for the new deployment record. Returns the *pre-update*
+    compose dict (so callers can read the previous env), or ``None`` if the service is not
+    registered in Dokploy. Raises on Dokploy/API errors — callers own how to report them.
+    Backs both ``_configure_dokploy_token`` (VAULT_APP_TOKEN) and
+    ``_configure_dokploy_approle`` (VAULT_ROLE_ID/VAULT_SECRET_ID).
+    """
+    from libs.dokploy import get_dokploy
+    from libs.common import get_env
+
+    e = get_env()
+    domain = e.get("INTERNAL_DOMAIN")
+    env_name = e.get("ENV", "production")
+    host = f"cloud.{domain}" if domain else None
+    client = get_dokploy(host=host)
+
+    compose = client.find_compose_by_name(service, project, env_name=env_name)
+    if not compose:
+        return None
+    compose_id = compose["composeId"]
+    client.update_compose_env(compose_id, env_vars=env_vars)
+    info("   Triggering redeploy and waiting for runtime deployment record...")
+    _deploy_compose_with_record_check(client, compose_id)
+    return compose
+
+
 def _configure_dokploy_token(_c, service: str, token: str, project: str = "platform"):
     """Auto-configure VAULT_APP_TOKEN in Dokploy"""
     try:
-        from libs.dokploy import get_dokploy
-        from libs.common import get_env
-
-        e = get_env()
-        domain = e.get("INTERNAL_DOMAIN")
-        env_name = e.get("ENV", "production")
-        host = f"cloud.{domain}" if domain else None
-        client = get_dokploy(host=host)
-
-        # Find compose service
-        compose = client.find_compose_by_name(service, project, env_name=env_name)
-        if compose:
-            compose_id = compose["composeId"]
-            previous_token = _env_value(str(compose.get("env", "")), "VAULT_APP_TOKEN")
-            info("   Configuring in Dokploy...")
-
-            client.update_compose_env(compose_id, env_vars={"VAULT_APP_TOKEN": token})
-            info("   Updated environment variables")
-
-            info("   Triggering redeploy and waiting for runtime deployment record...")
-            _deploy_compose_with_record_check(client, compose_id)
-            success("   Auto-configured in Dokploy and runtime redeploy recorded")
-            return {"configured": True, "previous_token": previous_token}
-        else:
+        compose = _redeploy_with_vault_creds(
+            service, {"VAULT_APP_TOKEN": token}, project
+        )
+        if compose is None:
             warning(
                 f"   Service '{service}' not found in Dokploy project '{project}', manual setup required"
             )
             return {"configured": False, "previous_token": None}
+        # `compose` is the pre-update snapshot, so its env still holds the old token.
+        previous_token = _env_value(str(compose.get("env", "")), "VAULT_APP_TOKEN")
+        success("   Auto-configured in Dokploy and runtime redeploy recorded")
+        return {"configured": True, "previous_token": previous_token}
     except Exception as exc:
         warning(f"   Auto-config failed: {exc}")
         info("   Manual setup: Add VAULT_APP_TOKEN in Dokploy UI")
@@ -1012,7 +1034,7 @@ def setup_approle(c, project=None, service=None, deploy=True):
             target.project_dir, target.service_dir, "vault-policy.hcl"
         )
         if os.path.exists(policy_path):
-            policy_rules = open(policy_path).read().replace("{{env}}", env_name)
+            policy_rules = _read_policy_file(policy_path, env_name)
         else:
             policy_rules = (
                 f'path "secret/data/{target.project}/{env_name}/{target.service}" {{\n'
@@ -1086,27 +1108,14 @@ def _configure_dokploy_approle(
 ) -> bool:
     """Inject VAULT_ROLE_ID/VAULT_SECRET_ID into Dokploy env and redeploy."""
     try:
-        from libs.dokploy import get_dokploy
-        from libs.common import get_env
-
-        e = get_env()
-        domain = e.get("INTERNAL_DOMAIN")
-        env_name = e.get("ENV", "production")
-        host = f"cloud.{domain}" if domain else None
-        client = get_dokploy(host=host)
-
-        compose = client.find_compose_by_name(service, project, env_name=env_name)
-        if not compose:
+        compose = _redeploy_with_vault_creds(
+            service,
+            {"VAULT_ROLE_ID": role_id, "VAULT_SECRET_ID": secret_id},
+            project,
+        )
+        if compose is None:
             warning(f"   Service '{service}' not found in Dokploy project '{project}'")
             return False
-        compose_id = compose["composeId"]
-        info("   Configuring approle credentials in Dokploy...")
-        client.update_compose_env(
-            compose_id,
-            env_vars={"VAULT_ROLE_ID": role_id, "VAULT_SECRET_ID": secret_id},
-        )
-        info("   Triggering redeploy and waiting for runtime deployment record...")
-        _deploy_compose_with_record_check(client, compose_id)
         success("   Auto-configured in Dokploy and runtime redeploy recorded")
         return True
     except Exception as exc:  # noqa: BLE001 - report and let caller mark failure.

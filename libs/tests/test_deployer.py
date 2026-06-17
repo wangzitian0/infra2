@@ -739,7 +739,33 @@ def test_approle_preflight_passes_when_creds_present(tmp_path):
         compose_path = str(cf)
         data_path = "/data/x"
 
-    D._assert_approle_creds_present("VAULT_ROLE_ID=r\nVAULT_SECRET_ID=s")  # no raise
+    # VAULT_ADDR is required too (see test below); include it so this stays a happy path.
+    D._assert_approle_creds_present(
+        "VAULT_ROLE_ID=r\nVAULT_SECRET_ID=s\nVAULT_ADDR=https://vault.example"
+    )  # no raise
+
+
+def test_approle_preflight_requires_vault_addr(tmp_path):
+    """#257 follow-up: an AppRole service with role/secret but NO VAULT_ADDR must fail
+    fast at deploy time — otherwise the vault-agent hangs on an empty address and the
+    service deadlocks on its healthcheck (the compose has no `${VAULT_ADDR:-}` default and
+    the entrypoint guards only role/secret)."""
+    import pytest
+    from libs.deployer import Deployer
+
+    cf = tmp_path / "compose.yaml"
+    cf.write_text(
+        "environment:\n  - VAULT_ROLE_ID=${VAULT_ROLE_ID:-}\n"
+        "  - VAULT_SECRET_ID=${VAULT_SECRET_ID:-}\n  - VAULT_ADDR=${VAULT_ADDR}\n"
+    )
+
+    class D(Deployer):
+        service = "x"
+        compose_path = str(cf)
+        data_path = "/data/x"
+
+    with pytest.raises(ValueError, match="VAULT_ADDR"):
+        D._assert_approle_creds_present("VAULT_ROLE_ID=r\nVAULT_SECRET_ID=s")  # addr absent
 
 
 def test_approle_preflight_fails_closed_when_creds_missing(tmp_path, monkeypatch):
