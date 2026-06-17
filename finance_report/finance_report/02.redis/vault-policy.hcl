@@ -8,11 +8,7 @@ path "secret/metadata/finance_report/{{env}}/redis" {
   capabilities = ["read", "list"]
 }
 
-# Required for vault-agent token_file auth to validate the token
+# Required for the vault-agent healthcheck token lookup (AppRole auth)
 path "auth/token/lookup-self" {
   capabilities = ["read"]
-}
-
-path "auth/token/renew-self" {
-  capabilities = ["update"]
 }
