@@ -59,6 +59,35 @@ def test_invalid_openpanel_analytics_raises() -> None:
         load_openpanel_analytics(OBS_DIR / "does-not-exist-openpanel.json")
 
 
+def test_openpanel_malformed_funnel_step_or_event_raise(tmp_path) -> None:
+    """CR (#394): a funnel step / board event that isn't a non-empty string fails closed with
+    ObservabilityDefinitionError instead of a later TypeError in callers."""
+    import json
+
+    base = {
+        "funnels": [{"name": "f", "steps": ["a", "b"]}],
+        "events_board": {"events": ["a"]},
+    }
+
+    def _write(obj):
+        path = tmp_path / "openpanel.json"
+        path.write_text(json.dumps(obj), encoding="utf-8")
+        return path
+
+    for obj in (
+        {**base, "funnels": [{"name": "f", "steps": ["a", None]}]},   # null step
+        {**base, "funnels": [{"name": "f", "steps": ["a", ""]}]},     # blank step
+        {**base, "funnels": [{"name": "f", "steps": ["a", {}]}]},     # non-string step
+        {**base, "events_board": {"events": [None]}},                  # null event
+        {**base, "events_board": {"events": [""]}},                    # blank event
+    ):
+        with pytest.raises(ObservabilityDefinitionError):
+            load_openpanel_analytics(_write(obj))
+
+    # the well-formed base still loads
+    assert load_openpanel_analytics(_write(base))["funnels"][0]["name"] == "f"
+
+
 def test_definition_files_are_checked_in_and_parse() -> None:
     """#373: alert + dashboard definitions exist and are valid JSON."""
     assert ALERT_RULES_FILE.exists()

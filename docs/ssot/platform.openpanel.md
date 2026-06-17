@@ -119,8 +119,8 @@ OpenPanel 事件分析由 app 仓库已发布的查询 CLI `common/observability
 
 | MCP | 能力 | 自托管接入 |
 |-----|------|-----------|
-| **OpenPanel** (`api.openpanel.dev/mcp`，self-host `https://openpanel.${INTERNAL_DOMAIN}/mcp`) | **只读**（`get_events` / `get_chart` / 事件写入），**不能建 funnel/看板** | token = base64(`clientId:clientSecret`)；**需 `read` 或 `root` 类型 client**（现有 finance-* 是 `write` 型，用不了 MCP → 见 SOP-006 步骤 0 先建一个 read client），存 Vault `secret/platform/<env>/openpanel/mcp_token` |
-| **SigNoz** (`SigNoz/signoz-mcp-server`，self-host) | **可读写**（`signoz_create_dashboard` / `create_alert` / 查询 traces·logs·metrics） | `SIGNOZ_URL=https://signoz.${INTERNAL_DOMAIN}` + `SIGNOZ-API-KEY`（复用 Vault `secret/platform/signoz` 的 api_key） |
+| **OpenPanel** (`api.openpanel.dev/mcp`，self-host `https://openpanel.${INTERNAL_DOMAIN}/mcp`) | **读分析 + `/track` 写事件**（`get_events` / `get_chart` 查询 + 事件上报；**不能**建 funnel/看板） | token = base64(`clientId:clientSecret`)；**需 `read` 或 `root` 类型 client**（现有 finance-* 是 `write` 型，用不了 MCP → 见 SOP-006 步骤 0 先建一个 read client），存 Vault `secret/platform/<env>/openpanel/mcp_token` |
+| **SigNoz** (`SigNoz/signoz-mcp-server`，self-host) | **可读写**（`signoz_create_dashboard` / `create_alert` / 查询 traces·logs·metrics） | `SIGNOZ_URL=https://signoz.${INTERNAL_DOMAIN}` + `SIGNOZ-API-KEY`（复用 Vault `secret/platform/<env>/signoz` 的 api_key） |
 
 MCP client 配置（占位 token 走 Vault，**勿提交明文**）：
 ```jsonc

@@ -184,6 +184,10 @@ def load_openpanel_analytics(path: Path = OPENPANEL_ANALYTICS_FILE) -> dict[str,
             raise ObservabilityDefinitionError(
                 f"Each funnel needs a name and >=2 steps: {path}"
             )
+        if not all(isinstance(step, str) and step.strip() for step in steps):
+            raise ObservabilityDefinitionError(
+                f"Each funnel step must be a non-empty string: {path}"
+            )
         if not str(funnel.get("name") or "").strip():
             raise ObservabilityDefinitionError(f"Each funnel needs a name: {path}")
 
@@ -191,5 +195,9 @@ def load_openpanel_analytics(path: Path = OPENPANEL_ANALYTICS_FILE) -> dict[str,
     if not isinstance(board, dict) or not isinstance(board.get("events"), list) or not board["events"]:
         raise ObservabilityDefinitionError(
             f"OpenPanel analytics needs an 'events_board' with a non-empty 'events' list: {path}"
+        )
+    if not all(isinstance(event, str) and event.strip() for event in board["events"]):
+        raise ObservabilityDefinitionError(
+            f"Each events_board event must be a non-empty string: {path}"
         )
     return data
