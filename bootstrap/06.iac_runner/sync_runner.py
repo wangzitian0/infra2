@@ -44,40 +44,32 @@ INVOKE_BOOTSTRAP = (
     "runpy.run_module('invoke', run_name='__main__')"
 )
 
-SERVICE_TASK_MAP = {
-    "platform/postgres": "postgres.sync",
-    "platform/redis": "redis.sync",
-    "platform/clickhouse": "clickhouse.sync",
-    "platform/minio": "minio.sync",
-    "platform/authentik": "authentik.sync",
-    "platform/signoz": "signoz.sync",
-    "platform/alerting": "alerting.sync",
-    "platform/portal": "portal.sync",
-    "platform/prefect": "prefect.sync",
-    "platform/openpanel": "openpanel.sync",
+# The bootstrap/* layer has no deploy.py (it's not a deploy.py-driven service), so its
+# explicit "no sync task" entries are stated here; everything else is DERIVED.
+_BOOTSTRAP_TASKS = {
     "bootstrap/vault": None,
     "bootstrap/1password": None,
     "bootstrap/iac-runner": None,
-    "finance_report/postgres": "fr-postgres.sync",
-    "finance_report/redis": "fr-redis.sync",
-    "finance_report/app": "fr-app.sync",
 }
 
-ALL_SERVICES = [
-    "platform/postgres",
-    "platform/redis",
-    "platform/clickhouse",
-    "platform/minio",
-    "platform/authentik",
-    "platform/signoz",
-    "platform/alerting",
-    "platform/portal",
-    "platform/prefect",
-    "platform/openpanel",
-    "finance_report/postgres",
-    "finance_report/redis",
-    "finance_report/app",
-]
+
+def _service_task_map() -> dict[str, "str | None"]:
+    """service_id -> invoke sync task, DERIVED from libs.deployer.discover_services (the single
+    source) instead of a hand-maintained parallel list (Infra-013, same as deploy_contract).
+
+    Lazy import: in the iac-runner image `libs/` is on sys.path only AFTER update_repo() checks
+    the repo out, and every caller runs post-checkout, so this resolves at call time.
+    """
+    from libs.deployer import discover_services
+
+    return {**discover_services(), **_BOOTSTRAP_TASKS}
+
+
+def _all_services() -> list[str]:
+    """Every deployable service_id (= libs.deployer.discover_services keys), sorted."""
+    from libs.deployer import discover_services
+
+    return sorted(discover_services())
 
 
 def _tail_text(value: str, limit: int = MAX_RESULT_OUTPUT_CHARS) -> str:
@@ -609,7 +601,7 @@ def sync_services(
             )
 
         if "__all__" in services:
-            services = set(ALL_SERVICES)
+            services = set(_all_services())
             logger.info("Syncing all services due to libs/ change")
         elif not services:
             # If services set is empty, determine changes dynamically via git diff
@@ -635,16 +627,17 @@ def sync_services(
                     services = get_changed_services_from_files(changed_files)
                     _log_fanout_decision(changed_files, services)
                     if "__all__" in services:
-                        services = set(ALL_SERVICES)
+                        services = set(_all_services())
 
             if not services:
                 # If still empty (fresh clone or no detected changes), fallback to all
-                services = set(ALL_SERVICES)
+                services = set(_all_services())
                 logger.info("No changes detected or fresh clone; syncing all services")
 
         results: list[ServiceSyncResult] = []
+        task_map = _service_task_map()  # discovered once; reused for every service below
         for service in sorted(services):
-            task_name = SERVICE_TASK_MAP.get(service)
+            task_name = task_map.get(service)
 
             if task_name is None:
                 logger.info(f"Skipping {service} (no sync task configured)")

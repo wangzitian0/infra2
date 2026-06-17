@@ -12,7 +12,9 @@
 | **Docs Workflow** | [`.github/workflows/docs-site.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/docs-site.yml) | Pages 构建与发布 |
 | **MkDocs 配置** | [`docs/mkdocs.yml`](../mkdocs.yml) | 站点结构与导航 |
 | **依赖列表** | [`docs/requirements.txt`](../requirements.txt) | Python 依赖 |
-| **Platform Deployment** | [`.github/workflows/deploy-platform.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy-platform.yml) | Post-merge staging deploy and manual production deploy |
+| **IaC Runner Bootstrap** | [`.github/workflows/deploy-platform.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy-platform.yml) | Updates the iac_runner container itself when its bootstrap changes. (Platform SERVICE deploys moved to `deploy.yml`/`deploy_v2` — manual + pinned tag, §4.6.) |
+| **Deploy (deploy_v2)** | [`.github/workflows/deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) | Manual unified deploy front door (app + platform, staging/prod, pinned tag) |
+| **Auto-deploy report-branch-main** | [`.github/workflows/deploy-report-main.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy-report-main.yml) | The ONE auto target: main preview re-deploys on app main push |
 
 ---
 
@@ -34,16 +36,23 @@
 
 ## 3. GitOps 版本部署流水线 (Version Deployment Pipeline)
 
+> **⚠️ 触发模型已变（#370 cutover）**：平台服务部署现在**统一走 `deploy_v2`**（`deploy.yml` /
+> `deploy-report-main.yml`），**手动 + 钉 release tag**（report-branch-main 是唯一自动档）——见
+> [core.environments §4.6](./core.environments.md#46-部署目标与触发)。`deploy-platform.yml` **不再触发服务部署**，
+> 只剩 iac_runner 自更新。下面的签名 `/deploy` webhook 机制**仍然适用**——只是改由 `deploy_v2`
+> （`libs/iac_runner_client`）触发，不再由 `deploy-platform.yml` 自动推送。本节里仍写 `deploy-platform.yml`
+> 触发 `/deploy` 的描述是**迁移前的旧模型**，按上面这条理解。
+
 ### 架构概览
 
 ```
-┌─────────────┐     deploy-platform.yml     ┌──────────────┐     /deploy    ┌─────────────┐
+┌─────────────┐  deploy_v2 (manual + tag)   ┌──────────────┐     /deploy    ┌─────────────┐
 │   GitHub    │ ────────────────────────▶  │ exact SHA    │ ──────────────▶│ IaC Runner  │
 │  (main)     │                             │              │                │  (staging)  │
 └─────────────┘                             └──────────────┘                └─────────────┘
                                                                                     │
                                                                                     ▼
-┌─────────────┐     deploy-platform.yml     ┌──────────────┐     /deploy    ┌─────────────┐
+┌─────────────┐  deploy_v2 (manual + tag)   ┌──────────────┐     /deploy    ┌─────────────┐
 │   Manual    │ ────────────────────────▶  │ tag → SHA    │ ──────────────▶│ IaC Runner  │
 │  (promote)  │                             │  (manual)    │                │ (production)│
 └─────────────┘                             └──────────────┘                └─────────────┘
@@ -138,10 +147,14 @@ git commit -m "fix: critical issue"
 git tag v1.3.1
 git push origin v1.3.1
 
-# 手动触发 production 部署
-gh workflow run deploy-platform.yml \
-  -f env="production" \
-  -f ref="v1.3.1"
+# 手动触发 production 部署（统一走 deploy_v2，钉 tag）
+gh workflow run deploy.yml \
+  -f service="finance_report/app" \
+  -f type="prod" \
+  -f version_ref="v1.3.1" \
+  -f iac_ref="v1.3.1" \
+  -f staging_validated=true \
+  -f code_reviewed=true
 ```
 
 ---

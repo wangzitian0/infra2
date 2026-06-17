@@ -802,38 +802,32 @@ def test_run_invoke_task_does_not_resolve_vault_root_token_from_1password(
 
 
 def test_deploy_platform_triggers_on_iac_runner_bootstrap_changes() -> None:
-    """Infra-011.8: runner source changes must enter the deploy workflow."""
+    """Infra-011.8: runner source changes enter the bootstrap-update workflow (via push paths)."""
     workflow = DEPLOY_PLATFORM_WORKFLOW.read_text(encoding="utf-8")
 
     assert '"bootstrap/06.iac_runner/**"' in workflow
-    assert "Detect IaC Runner bootstrap changes" in workflow
-    assert "Deploy IaC Runner bootstrap changes" in workflow
     assert "scripts/deploy_iac_runner_bootstrap.sh" in workflow
-    assert "/compare/${before}...${after}" in workflow
-    assert ".files[]?.filename" in workflow
-    assert "Changed files from GitHub API" in workflow
-    assert "files_url=$files_url" in workflow
-    assert "$GITHUB_EVENT_PATH" not in workflow
-    assert "git diff-tree" not in workflow
+    assert "Deploy IaC Runner bootstrap changes" in workflow
+    assert "Check IaC Runner health" in workflow
 
 
-def test_deploy_platform_uses_sha_and_nonce_signed_runner_requests() -> None:
-    """Infra-011.10: Actions resolves refs before calling IaC Runner."""
+def test_deploy_platform_no_longer_triggers_platform_service_deploys() -> None:
+    """#370 cutover: deploy-platform.yml updates ONLY the iac_runner bootstrap; platform
+    SERVICE deploys moved to deploy_v2. The old signed /deploy trigger + the platform/** /
+    finance_report/** auto-deploy push paths must be gone."""
     workflow = DEPLOY_PLATFORM_WORKFLOW.read_text(encoding="utf-8")
 
-    assert 'tags: ["v*"]' not in workflow
-    assert (
-        "name: ${{ github.event_name == 'workflow_dispatch' && inputs.env || 'staging' }}"
-        in workflow
-    )
-    assert "Resolve Deployment Commit" in workflow
-    assert "Production deploys require a semver tag like v1.2.3." in workflow
-    assert 'DEPLOY_SHA="$GITHUB_SHA"' in workflow
-    assert "X-IAC-Timestamp: $timestamp" in workflow
-    assert "X-IAC-Nonce: $nonce" in workflow
-    assert "${timestamp}.${nonce}.${payload}" in workflow
-    assert 'cat "$DEPLOY_BODY"' not in workflow
-    assert 'cat "$STATUS_BODY"' not in workflow
+    # the removed [B] trigger CODE (these strings only ever lived in that step, never a comment)
+    assert "send_signed_json" not in workflow
+    assert "/deploy/status" not in workflow
+    assert "X-IAC-Nonce" not in workflow
+    assert "X-Hub-Signature-256" not in workflow
+    assert "- name: Trigger IaC Runner" not in workflow
+    # the auto-deploy push paths (quoted as they appear in a YAML paths list) are gone
+    assert '"platform/**"' not in workflow
+    assert '"finance_report/**"' not in workflow
+    assert '"libs/**"' not in workflow
+    assert '"finance/**"' not in workflow
 
 
 def test_iac_runner_all_services_include_alerting_bridge(monkeypatch) -> None:
@@ -842,8 +836,8 @@ def test_iac_runner_all_services_include_alerting_bridge(monkeypatch) -> None:
         "sync_runner_alerting_under_test", IAC_RUNNER / "sync_runner.py", monkeypatch
     )
 
-    assert sync_runner.SERVICE_TASK_MAP["platform/alerting"] == "alerting.sync"
-    assert "platform/alerting" in sync_runner.ALL_SERVICES
+    assert sync_runner._service_task_map()["platform/alerting"] == "alerting.sync"
+    assert "platform/alerting" in sync_runner._all_services()
 
 
 def test_iac_runner_service_map_matches_discovered_deployers(monkeypatch) -> None:
@@ -855,22 +849,24 @@ def test_iac_runner_service_map_matches_discovered_deployers(monkeypatch) -> Non
     )
     discovered = discover_services()
 
+    # SERVICE_TASK_MAP / ALL_SERVICES are now DERIVED from discover_services (Infra-013), so
+    # every deploy.py service is wired by construction; assert via the lazy accessors.
+    task_map = sync_runner._service_task_map()
+    all_services = sync_runner._all_services()
     for service, task in discovered.items():
-        assert sync_runner.SERVICE_TASK_MAP.get(service) == task
-        assert service in sync_runner.ALL_SERVICES
+        assert task_map.get(service) == task
+        assert service in all_services
 
 
 def test_iac_runner_bootstrap_self_update_runs_before_health_check() -> None:
-    """Infra-011.8: Actions updates stale runner code before polling /deploy."""
+    """Infra-011.8: Actions updates stale runner code before checking its health."""
     workflow = DEPLOY_PLATFORM_WORKFLOW.read_text(encoding="utf-8")
 
     self_update = workflow.index("Deploy IaC Runner bootstrap changes")
     health_check = workflow.index("Check IaC Runner health")
-    trigger_deploy = workflow.index("Trigger IaC Runner")
 
-    assert self_update < health_check < trigger_deploy
+    assert self_update < health_check
     assert "INFRA2_WATCHDOG_SSH_PRIVATE_KEY" in workflow
-    assert "steps.runner-changes.outputs.changed == 'true'" in workflow
 
 
 def test_iac_runner_public_health_check_retries_with_diagnostics() -> None:
