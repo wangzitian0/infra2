@@ -13,6 +13,10 @@ services:
           echo "VAULT_ROLE_ID and VAULT_SECRET_ID are required"
           exit 1
         fi
+        if [ -z "$$VAULT_ADDR" ]; then
+          echo "VAULT_ADDR is required"
+          exit 1
+        fi
         echo "$$VAULT_ROLE_ID" > /vault/role_id
         echo "$$VAULT_SECRET_ID" > /vault/secret_id
         # AppRole auto_auth: vault-agent logs in and renews/re-auths the token
