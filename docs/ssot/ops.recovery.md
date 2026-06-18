@@ -172,6 +172,35 @@ Scheduled on the host via crontab:
 > install `rclone` + an `r2:` remote on the host, then set `BACKUP_REMOTE=r2:infra2`
 > in the cron entries. The off-host manifest is then verified with SOP-004.
 
+### SOP-006A: Off-host restore rehearsal
+
+Backups are not considered durable until the latest off-host artifact has been
+restored into a disposable target and checked. Use
+`tools/backup_restore_rehearsal.py` for the finance_report production database
+rehearsal:
+
+```bash
+uv run python tools/backup_restore_rehearsal.py \
+  --manifest /data/backups/infra2/manifest.json \
+  --service-id finance_report/postgres \
+  --target-container finance_report-postgres-restore-rehearsal
+```
+
+Safety rules:
+
+- The manifest must pass the same off-host freshness/checksum checks as SOP-004.
+- The target container name must contain `rehearsal`, `restore`, or `throwaway`
+  unless an operator deliberately uses the explicit override in code.
+- The default invariants run `SELECT 1` and
+  `SELECT count(*) >= 1 FROM pg_database` after restore; add stronger
+  service-specific invariants with `--invariant-sql`.
+
+Recommended schedule after the rehearsal target is provisioned:
+
+```cron
+15 4 * * 0 BACKUP_REMOTE=r2:infra2 /usr/local/sbin/infra2-backup-restore-rehearsal.sh >> /var/log/infra2-backup-restore-rehearsal.log 2>&1
+```
+
 ### SOP-007: 服务因 vault-agent 缺凭证崩溃 (re-provision AppRole)
 
 - **触发条件**: 某服务的 vault-agent 反复 `Restarting`,日志 `VAULT_ROLE_ID and
@@ -213,6 +242,7 @@ Scheduled on the host via crontab:
 | **Backup inventory covers DATA_PATH** | `libs/tests/test_backup_verification.py` | ✅ Implemented |
 | **Backup archive + checksum runner** | `tools/backup_runner.py` | ✅ Implemented |
 | **Backup freshness/checksum manifest** | `tools/backup_verification.py` | ✅ Implemented |
+| **Off-host restore rehearsal** | `tools/backup_restore_rehearsal.py` + `libs/tests/test_backup_verification.py` | ✅ Implemented |
 | **Vault Unseal 流程** | `vault status` | ✅ Manual |
 | **vault-agent 凭证 re-provision (SOP-007)** | `vault.setup-approle --deploy` | ✅ Manual |
 

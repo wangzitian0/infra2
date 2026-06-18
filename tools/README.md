@@ -14,6 +14,7 @@ Standalone `invoke` namespaces loaded by `tools/loader.py`.
 | `env` | `tools/env_tool.py` | Remote env/secret SSOT operations |
 | `dokploy` | `tools/dokploy_env.py` | Dokploy project/environment helpers |
 | `dokploy_route_canary.py` | `tools/dokploy_route_canary.py` | Fast-fail Dokploy worker, Docker, Traefik, and public route probe |
+| `backup_restore_rehearsal.py` | `tools/backup_restore_rehearsal.py` | Restore the latest verified off-host backup into an explicitly throwaway Postgres target |
 | `out_of_band_watchdog.py` | `tools/out_of_band_watchdog.py` | GitHub-hosted direct Feishu watchdog for host, bridge, Worker, and Dokploy route-canary liveness |
 | `local` | `tools/local_init.py` | Local CLI checks and bootstrap helpers |
 | `vault-audit` | `tools/vault_audit.py` | Read-only Vault app-token self-refresh audit |
@@ -75,6 +76,23 @@ python tools/dokploy_route_canary.py \
 `dokploy-route-canary*` compose names. Repaired composes are normalized back to
 `sourceType=raw` before redeploying. GitHub canary runs default to the stable
 canary host/compose and rely on workflow concurrency to avoid overlap.
+
+## backup_restore_rehearsal.py
+
+Guarded restore rehearsal for off-host backup artifacts. The command verifies the
+manifest freshness/checksum contract, refuses live-looking targets by default,
+downloads remote artifacts through `rclone copyto`, restores into the rehearsal
+container, and runs an invariant SQL check.
+
+```bash
+uv run python tools/backup_restore_rehearsal.py \
+  --manifest /var/backups/finance_report/backup-manifest.json \
+  --service-id finance_report/postgres \
+  --target-container finance-report-postgres-rehearsal \
+  --download-dir /tmp/restore-rehearsal \
+  --database finance_report \
+  --invariant-sql "select count(*) from alembic_version"
+```
 
 ## out_of_band_watchdog.py
 
