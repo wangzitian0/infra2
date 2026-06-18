@@ -19,7 +19,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from libs.alerting import build_signoz_log_alert_rule_payload
+from libs.alerting import (
+    build_signoz_log_alert_rule_payload,
+    build_signoz_metric_alert_rule_payload,
+)
 
 # Repository root: libs/observability_dashboards.py -> repo root is parents[1].
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -68,6 +71,45 @@ class LogErrorAlertDefinition:
         )
 
 
+@dataclass(frozen=True)
+class MetricAlertDefinition:
+    """Declarative PromQL metric alert rule definition."""
+
+    alert_name: str
+    promql: str
+    summary: str
+    severity: str = "warning"
+    threshold: float = 0
+    threshold_unit: str = ""
+    op: str = "above"
+    match_type: str = "at_least_once"
+    eval_window: str = "5m0s"
+    frequency: str = "1m"
+    service_name: str = "finance-report-backend"
+    group_by: list[str] | None = None
+
+    def to_signoz_payload(self, channel_ids: list[str]) -> dict[str, Any]:
+        """Render this definition into a SigNoz metric threshold-rule payload."""
+        return build_signoz_metric_alert_rule_payload(
+            alert_name=self.alert_name,
+            promql=self.promql,
+            channel_ids=channel_ids,
+            summary=self.summary,
+            severity=self.severity,
+            threshold=self.threshold,
+            threshold_unit=self.threshold_unit,
+            op=self.op,
+            match_type=self.match_type,
+            eval_window=self.eval_window,
+            frequency=self.frequency,
+            service_name=self.service_name,
+            group_by=self.group_by,
+        )
+
+
+AlertDefinition = LogErrorAlertDefinition | MetricAlertDefinition
+
+
 def _load_json(path: Path) -> Any:
     if not path.exists():
         raise ObservabilityDefinitionError(f"Definition file is missing: {path}")
@@ -81,8 +123,8 @@ def _load_json(path: Path) -> Any:
 
 def load_alert_definitions(
     path: Path = ALERT_RULES_FILE,
-) -> list[LogErrorAlertDefinition]:
-    """Load and validate the checked-in log-error alert definitions."""
+) -> list[AlertDefinition]:
+    """Load and validate the checked-in alert definitions."""
     data = _load_json(path)
     rules = data.get("rules") if isinstance(data, dict) else None
     if not isinstance(rules, list) or not rules:
@@ -90,27 +132,60 @@ def load_alert_definitions(
             f"Alert definition must contain a non-empty 'rules' list: {path}"
         )
 
-    definitions: list[LogErrorAlertDefinition] = []
+    definitions: list[AlertDefinition] = []
     seen: set[str] = set()
     for raw in rules:
         if not isinstance(raw, dict):
             raise ObservabilityDefinitionError(f"Each rule must be an object: {path}")
         alert_name = str(raw.get("alert_name") or "").strip()
+        signal = str(raw.get("signal") or "logs").strip()
         service_name = str(raw.get("service_name") or "").strip()
-        if not alert_name or not service_name:
+        if not alert_name:
+            raise ObservabilityDefinitionError(f"Each rule needs alert_name: {path}")
+        if signal not in {"logs", "metrics"}:
             raise ObservabilityDefinitionError(
-                f"Each rule needs alert_name and service_name: {path}"
+                f"Invalid signal {signal!r} for alert '{alert_name}' in {path}"
+            )
+        if not service_name:
+            raise ObservabilityDefinitionError(
+                f"Alert '{alert_name}' needs service_name: {path}"
             )
         if alert_name in seen:
             raise ObservabilityDefinitionError(
                 f"Duplicate alert_name '{alert_name}' in {path}"
             )
         seen.add(alert_name)
-        summary = str(
-            raw.get("summary")
-            or f"{service_name} emitted ERROR/FATAL logs in the last 5 minutes"
-        )
         raw_threshold = raw.get("threshold", 0)
+        if signal == "metrics":
+            summary = _required_text(raw.get("summary"), "summary", alert_name, path)
+            promql = _required_text(raw.get("promql"), "promql", alert_name, path)
+            definitions.append(
+                MetricAlertDefinition(
+                    alert_name=alert_name,
+                    promql=promql,
+                    summary=summary,
+                    severity=str(raw.get("severity") or "warning"),
+                    threshold=_float_threshold(raw_threshold, alert_name, path),
+                    threshold_unit=str(raw.get("threshold_unit") or ""),
+                    op=str(raw.get("op") or "above"),
+                    match_type=str(raw.get("match_type") or "at_least_once"),
+                    eval_window=str(raw.get("eval_window") or "5m0s"),
+                    frequency=str(raw.get("frequency") or "1m"),
+                    service_name=service_name,
+                    group_by=_string_list(
+                        raw.get("group_by"), "group_by", alert_name, path
+                    ),
+                )
+            )
+            continue
+
+        summary = _required_text(
+            raw.get("summary")
+            or f"{service_name} emitted ERROR/FATAL logs in the last 5 minutes",
+            "summary",
+            alert_name,
+            path,
+        )
         try:
             threshold = int(raw_threshold)
         except (TypeError, ValueError) as exc:
@@ -130,6 +205,39 @@ def load_alert_definitions(
             )
         )
     return definitions
+
+
+def _required_text(value: Any, field: str, alert_name: str, path: Path) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ObservabilityDefinitionError(
+            f"Alert '{alert_name}' needs non-empty {field}: {path}"
+        )
+    return text
+
+
+def _float_threshold(value: Any, alert_name: str, path: Path) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ObservabilityDefinitionError(
+            f"Invalid 'threshold' {value!r} for alert '{alert_name}' in {path}: "
+            "must be a number."
+        ) from exc
+
+
+def _string_list(
+    value: Any, field: str, alert_name: str, path: Path
+) -> list[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list) or not all(
+        isinstance(item, str) and item.strip() for item in value
+    ):
+        raise ObservabilityDefinitionError(
+            f"Alert '{alert_name}' field {field} must be a list of strings: {path}"
+        )
+    return [item.strip() for item in value]
 
 
 def load_dashboard(path: Path = DASHBOARD_FILE) -> dict[str, Any]:
@@ -173,11 +281,15 @@ def load_openpanel_analytics(path: Path = OPENPANEL_ANALYTICS_FILE) -> dict[str,
     """
     data = _load_json(path)
     if not isinstance(data, dict):
-        raise ObservabilityDefinitionError(f"OpenPanel analytics must be a JSON object: {path}")
+        raise ObservabilityDefinitionError(
+            f"OpenPanel analytics must be a JSON object: {path}"
+        )
 
     funnels = data.get("funnels")
     if not isinstance(funnels, list) or not funnels:
-        raise ObservabilityDefinitionError(f"OpenPanel analytics needs a non-empty 'funnels' list: {path}")
+        raise ObservabilityDefinitionError(
+            f"OpenPanel analytics needs a non-empty 'funnels' list: {path}"
+        )
     for funnel in funnels:
         steps = funnel.get("steps") if isinstance(funnel, dict) else None
         if not isinstance(steps, list) or len(steps) < 2:
@@ -192,7 +304,11 @@ def load_openpanel_analytics(path: Path = OPENPANEL_ANALYTICS_FILE) -> dict[str,
             raise ObservabilityDefinitionError(f"Each funnel needs a name: {path}")
 
     board = data.get("events_board")
-    if not isinstance(board, dict) or not isinstance(board.get("events"), list) or not board["events"]:
+    if (
+        not isinstance(board, dict)
+        or not isinstance(board.get("events"), list)
+        or not board["events"]
+    ):
         raise ObservabilityDefinitionError(
             f"OpenPanel analytics needs an 'events_board' with a non-empty 'events' list: {path}"
         )

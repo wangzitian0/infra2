@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from libs.alerting import (
+    AlertingError,
     BasicAuth,
     InvalidWebhookUrl,
     MAX_MESSAGE_CHARS,
@@ -18,6 +19,7 @@ from libs.alerting import (
     build_feishu_text_payload,
     build_signoz_channel_payload,
     build_signoz_log_alert_rule_payload,
+    build_signoz_metric_alert_rule_payload,
     deliver_feishu_app_text,
     feishu_host_reachable,
     find_signoz_channel_id,
@@ -56,14 +58,18 @@ def test_feishu_host_reachable_does_a_tcp_connect_no_message(monkeypatch) -> Non
         return _Conn()
 
     monkeypatch.setattr(socket, "create_connection", _fake_create_connection)
-    assert feishu_host_reachable("https://open.feishu.cn/open-apis/bot/v2/hook/x") is True
+    assert (
+        feishu_host_reachable("https://open.feishu.cn/open-apis/bot/v2/hook/x") is True
+    )
     assert calls == [("open.feishu.cn", 443)]
 
     def _boom(addr, timeout=None):
         raise OSError("refused")
 
     monkeypatch.setattr(socket, "create_connection", _boom)
-    assert feishu_host_reachable("https://open.feishu.cn/open-apis/bot/v2/hook/x") is False
+    assert (
+        feishu_host_reachable("https://open.feishu.cn/open-apis/bot/v2/hook/x") is False
+    )
 
 
 def test_feishu_webhook_validation_is_https_and_host_scoped() -> None:
@@ -166,6 +172,56 @@ def test_log_error_alert_rule_uses_signoz_v2_threshold_schema() -> None:
     assert filters[0]["value"] == "example-backend"
     assert filters[1]["key"]["key"] == "severity_text"
     assert filters[1]["value"] == ["ERROR", "FATAL"]
+
+
+def test_metric_alert_rule_uses_signoz_v2_promql_schema() -> None:
+    """#1106: finance_report metric alerts render as SigNoz v2 threshold rules."""
+    payload = build_signoz_metric_alert_rule_payload(
+        alert_name="FinanceReportHigh5xxRate",
+        promql="sum(rate(http_server_request_count[5m]))",
+        channel_ids=["channel-1"],
+        summary="backend 5xx rate high",
+        severity="critical",
+        threshold=0.05,
+        threshold_unit="%",
+        match_type="all_times",
+    )
+
+    assert payload["schemaVersion"] == "v2alpha1"
+    assert payload["version"] == "v5"
+    assert payload["alertType"] == "METRICS_BASED_ALERT"
+    assert payload["condition"]["selectedQueryName"] == "A"
+    assert payload["condition"]["compositeQuery"]["queryType"] == "promql"
+    assert payload["condition"]["compositeQuery"]["promQueries"]["A"][
+        "query"
+    ].startswith("sum(rate(")
+    threshold = payload["condition"]["thresholds"]["spec"][0]
+    assert threshold["op"] == "1"
+    assert threshold["matchType"] == "2"
+    assert threshold["target"] == 0.05
+    assert threshold["targetUnit"] == "%"
+    assert threshold["channels"] == ["channel-1"]
+
+
+def test_metric_alert_rule_rejects_unknown_threshold_semantics() -> None:
+    """#1106 review: typos in SigNoz threshold semantics fail closed."""
+    with pytest.raises(AlertingError, match="threshold op"):
+        build_signoz_metric_alert_rule_payload(
+            alert_name="BadOp",
+            promql="sum(up)",
+            channel_ids=["channel-1"],
+            summary="bad op",
+            op="abvoe",
+        )
+
+    with pytest.raises(AlertingError, match="match type"):
+        build_signoz_metric_alert_rule_payload(
+            alert_name="BadMatch",
+            promql="sum(up)",
+            channel_ids=["channel-1"],
+            summary="bad match type",
+            match_type="sometiems",
+        )
 
 
 def test_signoz_api_response_helpers_find_channel_and_rule_ids() -> None:

@@ -179,7 +179,7 @@ finance_report 的 SigNoz 告警规则与仪表盘以代码形式签入
 
 | 文件 | 用途 |
 |------|------|
-| `alert_rules.json` | OTEL 错误日志告警，含 `FinanceReportBackendErrorLogs`（app `apps/backend/src/observability.py` 引用的告警名）。 |
+| `alert_rules.json` | OTEL 错误日志告警 + RED / business-anomaly metric alerts，含 `FinanceReportBackendErrorLogs`（app `apps/backend/src/observability.py` 引用的告警名）以及 `FinanceReportHigh5xxRate`、`FinanceReportP95LatencyHigh`、`FinanceReportStatementParseFailureSpike`、`FinanceReportReconciliationAnomaly`、`FinanceReportRateLimitSaturation`、`FinanceReportAsyncTaskFailures`。 |
 | `dashboard.json` | 基线仪表盘：后端错误率 + 延迟、浏览器前端 web-vitals + 异常。 |
 | `shared_tasks.py` | 幂等的 apply/print invoke 任务。 |
 
@@ -196,7 +196,7 @@ uv run python -m invoke fr-observability.shared.print-alerts
 uv run python -m invoke fr-observability.shared.print-dashboard
 ```
 
-`FinanceReportBackendErrorLogs` 经共享内部 bridge channel
+`FinanceReportBackendErrorLogs` and the `#1106` SLO/business-anomaly alerts 经共享内部 bridge channel
 （`infra2-feishu-alerts-<env>`）转发到 Lark/Feishu；Feishu webhook 密钥只在
 1Password `platform/{env}/alerting`，部署时镜像到 Vault，SigNoz channel 仅持有内部
 bridge URL（详见 [ops.alerting.md](./ops.alerting.md) SOP-004B）。仪表盘按 service.name

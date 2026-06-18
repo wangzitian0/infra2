@@ -75,11 +75,11 @@ def test_openpanel_malformed_funnel_step_or_event_raise(tmp_path) -> None:
         return path
 
     for obj in (
-        {**base, "funnels": [{"name": "f", "steps": ["a", None]}]},   # null step
-        {**base, "funnels": [{"name": "f", "steps": ["a", ""]}]},     # blank step
-        {**base, "funnels": [{"name": "f", "steps": ["a", {}]}]},     # non-string step
-        {**base, "events_board": {"events": [None]}},                  # null event
-        {**base, "events_board": {"events": [""]}},                    # blank event
+        {**base, "funnels": [{"name": "f", "steps": ["a", None]}]},  # null step
+        {**base, "funnels": [{"name": "f", "steps": ["a", ""]}]},  # blank step
+        {**base, "funnels": [{"name": "f", "steps": ["a", {}]}]},  # non-string step
+        {**base, "events_board": {"events": [None]}},  # null event
+        {**base, "events_board": {"events": [""]}},  # blank event
     ):
         with pytest.raises(ObservabilityDefinitionError):
             load_openpanel_analytics(_write(obj))
@@ -122,6 +122,52 @@ def test_alert_definition_renders_signoz_log_rule_routed_to_channel() -> None:
     assert filters[1]["value"] == ["ERROR", "FATAL"]
 
 
+def test_finance_report_slo_and_business_alert_rules_are_defined() -> None:
+    """#1106: SLO and business-anomaly alert rules are config-as-code."""
+    definitions = load_alert_definitions()
+    by_name = {d.alert_name: d for d in definitions}
+
+    expected = {
+        "FinanceReportHigh5xxRate": ("critical", 0.05, "%"),
+        "FinanceReportP95LatencyHigh": ("warning", 1500.0, "ms"),
+        "FinanceReportStatementParseFailureSpike": ("error", 3.0, "count"),
+        "FinanceReportReconciliationAnomaly": ("error", 0.0, "count"),
+        "FinanceReportRateLimitSaturation": ("warning", 10.0, "count"),
+        "FinanceReportAsyncTaskFailures": ("error", 0.0, "count"),
+    }
+    assert expected.keys() <= by_name.keys()
+
+    for alert_name, (severity, threshold, unit) in expected.items():
+        rule = by_name[alert_name]
+        assert rule.severity == severity
+        assert rule.threshold == threshold
+        assert rule.threshold_unit == unit
+        assert "SOP-004C" in rule.summary
+
+
+def test_metric_alert_definition_renders_signoz_v2_payload() -> None:
+    """#1106: metric alerts render to SigNoz v2 threshold rules routed to Lark."""
+    rule = {d.alert_name: d for d in load_alert_definitions()}[
+        "FinanceReportHigh5xxRate"
+    ]
+
+    payload = rule.to_signoz_payload(["chan-1"])
+
+    assert payload["alert"] == "FinanceReportHigh5xxRate"
+    assert payload["alertType"] == "METRICS_BASED_ALERT"
+    assert payload["schemaVersion"] == "v2alpha1"
+    assert payload["condition"]["compositeQuery"]["queryType"] == "promql"
+    assert (
+        "http_server_request_count"
+        in payload["condition"]["compositeQuery"]["promQueries"]["A"]["query"]
+    )
+    threshold = payload["condition"]["thresholds"]["spec"][0]
+    assert threshold["target"] == 0.05
+    assert threshold["targetUnit"] == "%"
+    assert threshold["channels"] == ["chan-1"]
+    assert payload["labels"]["service"] == "finance-report-backend"
+
+
 def test_dashboard_covers_backend_and_frontend_signals() -> None:
     """#373: dashboard covers BE error rate + latency and FE web-vitals + exceptions."""
     dashboard = load_dashboard()
@@ -143,7 +189,13 @@ def test_dashboard_has_full_backend_red_and_fe_page_load() -> None:
     p50·p95·p99) plus a FE page-load widget, not just error+p95."""
     widgets = {w["id"]: w for w in load_dashboard()["widgets"]}
     # Rate, Errors, and the three Duration percentiles
-    for wid in ("be-throughput", "be-error-rate-5xx", "be-latency-p50", "be-latency-p95", "be-latency-p99"):
+    for wid in (
+        "be-throughput",
+        "be-error-rate-5xx",
+        "be-latency-p50",
+        "be-latency-p95",
+        "be-latency-p99",
+    ):
         assert wid in widgets, f"missing RED widget {wid}"
     assert "fe-page-load" in widgets
 
@@ -158,12 +210,21 @@ def test_dashboard_has_full_backend_red_and_fe_page_load() -> None:
 
     # fe-page-load is p75 of documentLoad span duration
     assert _agg("fe-page-load") == ("p75", "durationNano")
-    page_load_filters = widgets["fe-page-load"]["query"]["builder"]["queryData"][0]["filters"]["items"]
-    assert any(f["key"]["key"] == "name" and f["value"] == "documentLoad" for f in page_load_filters)
+    page_load_filters = widgets["fe-page-load"]["query"]["builder"]["queryData"][0][
+        "filters"
+    ]["items"]
+    assert any(
+        f["key"]["key"] == "name" and f["value"] == "documentLoad"
+        for f in page_load_filters
+    )
 
     # the error-rate panel counts only SERVER spans (matches its description)
-    err_filters = widgets["be-error-rate-5xx"]["query"]["builder"]["queryData"][0]["filters"]["items"]
-    assert any(f["key"]["key"] == "kind_string" and f["value"] == "Server" for f in err_filters)
+    err_filters = widgets["be-error-rate-5xx"]["query"]["builder"]["queryData"][0][
+        "filters"
+    ]["items"]
+    assert any(
+        f["key"]["key"] == "kind_string" and f["value"] == "Server" for f in err_filters
+    )
     assert any(f["key"]["key"] == "hasError" for f in err_filters)
 
 
@@ -174,7 +235,8 @@ def test_every_widget_is_filterable_by_deployment_environment() -> None:
     for w in load_dashboard()["widgets"]:
         items = w["query"]["builder"]["queryData"][0]["filters"]["items"]
         assert any(
-            f["key"]["key"] == "deployment.environment" and f["value"] == "$deployment_environment"
+            f["key"]["key"] == "deployment.environment"
+            and f["value"] == "$deployment_environment"
             for f in items
         ), f"widget {w['id']} is not filterable by deployment_environment"
 
@@ -221,6 +283,97 @@ def test_non_integer_threshold_raises_definition_error(tmp_path) -> None:
         load_alert_definitions(bad)
 
 
+def test_metric_alert_requires_promql_and_numeric_threshold(tmp_path) -> None:
+    """#1106: malformed metric alert definitions fail before apply."""
+    import json
+
+    missing_promql = tmp_path / "missing_promql.json"
+    missing_promql.write_text(
+        json.dumps(
+            {
+                "rules": [
+                    {
+                        "signal": "metrics",
+                        "alert_name": "BadMetric",
+                        "service_name": "svc",
+                        "threshold": 1,
+                        "summary": "missing query",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ObservabilityDefinitionError, match="promql"):
+        load_alert_definitions(missing_promql)
+
+    bad_threshold = tmp_path / "bad_threshold.json"
+    bad_threshold.write_text(
+        json.dumps(
+            {
+                "rules": [
+                    {
+                        "signal": "metrics",
+                        "alert_name": "BadMetric",
+                        "service_name": "svc",
+                        "threshold": "oops",
+                        "promql": "sum(up)",
+                        "summary": "bad threshold",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ObservabilityDefinitionError, match="threshold"):
+        load_alert_definitions(bad_threshold)
+
+
+def test_metric_alert_requires_metric_specific_summary_and_service(tmp_path) -> None:
+    """#1106 review: metric rules cannot inherit log-oriented defaults."""
+    import json
+
+    missing_summary = tmp_path / "missing_summary.json"
+    missing_summary.write_text(
+        json.dumps(
+            {
+                "rules": [
+                    {
+                        "signal": "metrics",
+                        "alert_name": "BadMetric",
+                        "service_name": "svc",
+                        "threshold": 1,
+                        "promql": "sum(up)",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ObservabilityDefinitionError, match="summary"):
+        load_alert_definitions(missing_summary)
+
+    missing_service = tmp_path / "missing_service.json"
+    missing_service.write_text(
+        json.dumps(
+            {
+                "rules": [
+                    {
+                        "signal": "metrics",
+                        "alert_name": "BadMetric",
+                        "threshold": 1,
+                        "summary": "missing service",
+                        "promql": "sum(up)",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ObservabilityDefinitionError, match="service_name"):
+        load_alert_definitions(missing_service)
+
+
 def test_apply_tasks_are_invoke_tasks() -> None:
     """#373: invoke exposes apply + print tasks for alerts and dashboard."""
     fake_invoke = types.ModuleType("invoke")
@@ -245,5 +398,7 @@ def test_ssot_documents_alert_and_dashboard_apply_path() -> None:
     )
 
     assert "FinanceReportBackendErrorLogs" in alerting
+    assert "FinanceReportHigh5xxRate" in alerting
+    assert "SOP-004C" in alerting
     assert "fr-observability.shared.apply-alerts" in alerting
     assert "fr-observability.shared.apply-dashboard" in observability
