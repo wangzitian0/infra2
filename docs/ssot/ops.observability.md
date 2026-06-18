@@ -211,13 +211,13 @@ bridge URL（详见 [ops.alerting.md](./ops.alerting.md) SOP-004B）。仪表盘
 
 ```bash
 # 1. 部署存储层
-invoke clickhouse.setup
+python -m tools.deploy_v2 --service platform/clickhouse --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
 
 # 2. 部署应用层
-invoke signoz.setup
+python -m tools.deploy_v2 --service platform/signoz --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
 
 # 3. 部署告警 bridge
-invoke alerting.setup
+python -m tools.deploy_v2 --service platform/alerting --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
 
 # 4. 验证
 invoke clickhouse.status

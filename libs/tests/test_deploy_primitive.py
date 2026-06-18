@@ -1,4 +1,4 @@
-"""Tests for the deploy primitive deploy(env, code, data) (finance_report#883 P2 step 3)."""
+"""Tests for the internal fixed-compose app deploy backend used by deploy_v2."""
 
 from __future__ import annotations
 
@@ -101,14 +101,6 @@ def test_preview_is_rejected_as_dynamic():
     assert client.deployed == []
 
 
-def test_data_override_is_passed_through():
-    client = FakeDokploy()
-    plan = dp.deploy(
-        "staging", "deadbeef", domain="zitian.party", client=client, data="empty"
-    )
-    assert plan.data == "empty"
-
-
 def test_sha_is_lowercased_via_the_resolver():
     client = FakeDokploy()
     plan = dp.deploy("staging", "DEADBEEF", domain="zitian.party", client=client)
@@ -124,13 +116,16 @@ def test_domain_with_newline_is_rejected_before_any_side_effect():
     assert client.deployed == []
 
 
-def test_empty_data_override_is_honored_not_silently_defaulted():
-    # data="" is an explicit caller value, not a fallback trigger (is-None check)
+def test_data_lane_is_derived_from_env_config_not_caller_supplied():
     client = FakeDokploy()
-    plan = dp.deploy(
-        "staging", "deadbeef", domain="zitian.party", client=client, data=""
-    )
-    assert plan.data == ""
+    plan = dp.deploy("staging", "deadbeef", domain="zitian.party", client=client)
+    assert plan.data == "staging"
+
+
+def test_direct_cli_is_retired_by_default(capsys):
+    rc = dp.main(["--env", "staging", "--code", FULL_SHA, "--domain", "zitian.party"])
+    assert rc == 2
+    assert "deploy_v2 coordinate" in capsys.readouterr().err
 
 
 # --- rollout poll (P2 step 4a) ---------------------------------------------------

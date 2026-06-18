@@ -122,16 +122,18 @@ invoke local.phase
 
 ```bash
 # 完整部署
-invoke postgres.setup
+python -m tools.deploy_v2 --service platform/postgres --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
 
 # Staging
-DEPLOY_ENV=staging invoke postgres.setup
+python -m tools.deploy_v2 --service platform/postgres --type staging --iac-ref vX.Y.Z --domain zitian.party
 
 # 分步部署
 invoke postgres.pre-compose   # 创建目录、生成密码
 invoke postgres.composing      # 通过 Dokploy API 部署
 invoke postgres.post-compose   # 验证健康状态
 ```
+
+分步 `invoke` 任务只用于 bootstrap/repair 调试；常规 staging/prod 部署必须走 `deploy_v2`。
 
 ### SOP-002: 检查服务状态
 
@@ -168,10 +170,10 @@ invoke dokploy.env-ensure --project=platform --env=staging --description="stagin
 > **重要**: 非 platform 项目的 invoke 任务使用前缀避免命名冲突
 
 ```bash
-# finance_report 任务使用 fr- 前缀
-invoke fr-postgres.setup
-invoke fr-redis.setup
-invoke fr-app.setup
+# finance_report staging/prod deploys use deploy_v2, not the prefixed setup tasks
+python -m tools.deploy_v2 --service finance_report/postgres --type staging --iac-ref vX.Y.Z --domain zitian.party
+python -m tools.deploy_v2 --service finance_report/redis --type staging --iac-ref vX.Y.Z --domain zitian.party
+python -m tools.deploy_v2 --service finance_report/app --type staging --version-ref vX.Y.Z --iac-ref vX.Y.Z --domain zitian.party
 
 # 检查状态
 invoke fr-postgres.shared.status

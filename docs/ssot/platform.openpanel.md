@@ -79,12 +79,13 @@ graph TD
 
 - **触发条件**：新增 OpenPanel 服务
 - **步骤**：
-    1. 确保 Vault 中存在依赖密钥（`invoke openpanel.setup` 会自动校验并补齐）：
+    1. 确保 Vault 中存在依赖密钥（bootstrap/repair path may materialize missing generated values）：
        - `secret/platform/<env>/openpanel`：`cookie_secret`（会话签名密钥，缺失时自动生成）、`resend_api_key`（可选，缺失时写入 `placeholder`）。
        - 依赖项复用既有路径：`secret/platform/<env>/postgres` 的 `root_password`、`secret/platform/<env>/redis` 的 `password`。
-    2. 运行 `invoke openpanel.setup`：
-       - 此脚本将在共享 `platform-postgres` 中创建 `openpanel` 数据库；专属 `op-ch` 容器启动时经 init-db 自建 `openpanel` 库。
-       - 之后，脚本将在 Dokploy 中上线服务容器；`op-api` 启动时自动应用 Postgres + ClickHouse 迁移。
+    2. 通过 deploy_v2 部署：
+       `python -m tools.deploy_v2 --service platform/openpanel --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed`
+       - 共享 `platform-postgres` 中的 `openpanel` 数据库与专属 `op-ch` init-db 由 IaC/服务启动路径负责。
+       - `op-api` 启动时自动应用 Postgres + ClickHouse 迁移。
     3. 检查部署状态：`invoke openpanel.shared.status`。
 
 > **首次登录**：临时将 `ALLOW_REGISTRATION` 设为 `true`（compose `environment:`）以创建第一个管理员账号，建号后改回 `false` 并重启 `op-api`，关闭公开注册。

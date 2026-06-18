@@ -84,13 +84,13 @@ vault → clickhouse → signoz
 
 ```bash
 # 1. 部署 ClickHouse 存储层
-invoke clickhouse.setup
+python -m tools.deploy_v2 --service platform/clickhouse --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
 
 # 2. 验证 ClickHouse
 invoke clickhouse.status
 
 # 3. 部署 SigNoz 应用层
-invoke signoz.setup
+python -m tools.deploy_v2 --service platform/signoz --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
 
 # 4. 验证 SigNoz
 invoke signoz.status

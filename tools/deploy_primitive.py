@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
-"""The commit-addressed deploy primitive: deploy(env, code, data).
+"""Internal fixed-compose app deploy backend used by deploy_v2.
 
-Assembles the two pure axes — resolve_deploy_ref (code -> sha) and deploy_env_config
-(env -> compose/url/suffix/data-default) — and drives the existing Dokploy call layer
-(update the compose env to the digest, then deploy). One primitive, three configs
-(preview/staging/prod); finance_report#883 P2 step 3.
+This module is not the public deploy surface. ``deploy_v2(service, type, version_ref,
+iac_ref)`` resolves the coordinate, enforces the data-lane red lines, and then calls this
+backend for the finance_report app's fixed staging/prod composes. The only deploy
+identity this backend accepts directly is ``env`` plus a resolved app commit/image ref;
+the data lane is derived from ``deploy_env_config.EnvConfig.data_default`` for
+observability and is not caller-overridable.
 
-This is the first piece with side effects: it mutates a Dokploy compose's env and
-triggers a deploy. The Dokploy client is injected so it is unit-testable without a live
-control plane. Step 4a added an opt-in rollout wait (wait=True) and a CLI entry; step 4b
-brings the primitive to behavior parity with the App-repo bash dokploy_deploy.sh it
-replaces — IAC_CONFIG_HASH cache-bust, static infra keys, model-override passthrough, a
-Vault-token preflight (verify_vault), and a post-deploy effective-config check
-(verify_config). The data-axis side effects (P3/#893) are still layered on later. This
-owns assembly + trigger + the gates + readiness/parity; the verify_* flags are off by
-default so the assembly unit tests need no live Dokploy/Vault, and the CLI turns them on.
+The backend mutates a Dokploy compose's env and triggers a deploy. The Dokploy client is
+injected so it is unit-testable without a live control plane. It owns fixed-compose
+assembly + trigger + readiness/parity: IAC_CONFIG_HASH cache-bust, static infra keys,
+model-override passthrough, Vault-token preflight, rollout wait, and post-deploy
+effective-config verification.
 """
 
 from __future__ import annotations
@@ -35,7 +33,7 @@ class DeployPlan:
     env: str
     sha: str
     compose_id: str
-    data: str
+    data: str  # derived data_lane from EnvConfig, kept for deploy_v2 result detail
     env_vars: dict[str, str]
 
 
@@ -184,7 +182,6 @@ def deploy(
     *,
     domain: str,
     client,
-    data: str | None = None,
     staging_validated: bool = False,
     break_glass: bool = False,
     repo: str | None = None,
@@ -196,11 +193,11 @@ def deploy(
     verify_config: bool = False,
     _now=time.time,
 ) -> DeployPlan:
-    """Deploy a commit to an environment.
+    """Deploy a resolved app commit to a fixed app environment.
 
     code  -> resolve_deploy_ref (main / release/x.y / vX.Y.Z / <sha>) -> a commit sha.
     env   -> deploy_env_config (which compose, URL, suffix, default data).
-    data  -> defaults to the env's data_default (P3 owns the data side effects).
+    data  -> derived from the env's data_default; callers cannot override it here.
 
     Gating:
     - The dynamic preview env has no fixed compose; bind one via the preview lifecycle.
@@ -235,7 +232,7 @@ def deploy(
         )
     sha = resolve_to_sha(code, repo=repo) if repo is not None else resolve_to_sha(code)
     cfg = env_config(env)
-    data = data if data is not None else cfg.data_default
+    data_lane = cfg.data_default
 
     if cfg.dynamic:
         raise ValueError(
@@ -311,7 +308,7 @@ def deploy(
         )
 
     return DeployPlan(
-        env=env, sha=sha, compose_id=cfg.compose_id, data=data, env_vars=env_vars
+        env=env, sha=sha, compose_id=cfg.compose_id, data=data_lane, env_vars=env_vars
     )
 
 
@@ -332,26 +329,18 @@ def model_overrides_from_env() -> dict[str, str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry so a workflow can call the primitive directly:
+    """Retired direct CLI for the internal fixed-compose backend.
 
-        python -m tools.deploy_primitive --env staging --code main --domain zitian.party
-
-    Resolves code->sha, assembles the env, triggers the Dokploy deploy, and (unless
-    --no-wait) blocks on rollout. This is the deploy seam P2 step 4b/4d switches the
-    App-repo staging and prod callers onto. Preview is NOT deployed through here: it is
-    a per-PR dynamic env that deploy() rejects, and step 4c migrates it to an image-free
-    pull via its own lifecycle rather than this fixed-compose CLI.
+    Operational deploys must use ``python -m tools.deploy_v2`` so the full coordinate,
+    data-lane red lines, and service routing are enforced before this backend runs.
     """
-    parser = argparse.ArgumentParser(description="commit-addressed deploy primitive")
+    parser = argparse.ArgumentParser(description="internal fixed-compose deploy backend")
     parser.add_argument("--env", required=True, help="staging | prod (not preview)")
     parser.add_argument(
         "--code", required=True, help="main | release/x.y | vX.Y.Z | <sha>"
     )
     parser.add_argument(
         "--domain", required=True, help="base domain, e.g. zitian.party"
-    )
-    parser.add_argument(
-        "--data", default=None, help="override the env's default data source"
     )
     parser.add_argument(
         "--repo", default=None, help="git remote to resolve code against"
@@ -380,7 +369,20 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="skip the post-deploy effective-config check (default: on)",
     )
+    parser.add_argument(
+        "--allow-internal-direct-call",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args(argv)
+
+    if not args.allow_internal_direct_call:
+        print(
+            "deploy_primitive CLI is retired; use python -m tools.deploy_v2 so the "
+            "deploy_v2 coordinate and derived data_lane red lines are enforced.",
+            file=sys.stderr,
+        )
+        return 2
 
     # Model overrides come from the same env the staging-E2E workflow already exports,
     # so switching the caller to this CLI needs no new wiring (parity with the bash).
@@ -395,7 +397,6 @@ def main(argv: list[str] | None = None) -> int:
             args.code,
             domain=args.domain,
             client=get_dokploy(),
-            data=args.data,
             staging_validated=args.staging_validated,
             break_glass=args.break_glass,
             repo=args.repo,
@@ -415,7 +416,7 @@ def main(argv: list[str] | None = None) -> int:
                 "env": plan.env,
                 "sha": plan.sha,
                 "compose_id": plan.compose_id,
-                "data": plan.data,
+                "data_lane": plan.data,
             }
         )
     )

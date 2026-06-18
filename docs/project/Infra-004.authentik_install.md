@@ -85,9 +85,9 @@ export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root T
 invoke vault.setup-approle
 
 # 2. Deploy Services
-invoke postgres.setup
-invoke redis.setup
-invoke authentik.setup
+python -m tools.deploy_v2 --service platform/postgres --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
+python -m tools.deploy_v2 --service platform/redis --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
+python -m tools.deploy_v2 --service platform/authentik --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
 
 # 3. Get Admin Credentials
 vault kv get -field=bootstrap_password secret/platform/<env>/authentik
