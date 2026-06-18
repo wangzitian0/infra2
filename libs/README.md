@@ -7,6 +7,7 @@
 - `get_secrets` selects `OpSecrets` (1Password) or `VaultSecrets` (Vault) for SSOT reads/writes.
 - `Deployer` + `make_tasks` standardize service deploy flows (now via Dokploy API).
 - `dokploy` wraps the Dokploy REST API for compose deployments.
+- `backup_restore` verifies off-host backup manifests and builds guarded restore rehearsal plans.
 - `console` helpers keep CLI output consistent (Rich).
 - `Config` is a legacy wrapper around secrets (avoid for new code).
 
@@ -19,6 +20,7 @@
 | `console.py` | Rich CLI output | `header()`, `success()`, `error()`, `prompt_action()` |
 | `deployer.py` | Deployment base class + task helpers | `Deployer`, `make_tasks()` |
 | `dokploy.py` | Dokploy API client | `DokployClient`, `deploy_compose_service()` |
+| `backup_restore.py` | Off-host backup restore rehearsal helpers | `latest_artifact_for_service()`, `build_postgres_rehearsal_plan()`, `run_postgres_restore_rehearsal()` |
 | `dokploy_route_canary.py` | Dynamic route canary | `run_route_canary()`, `render_canary_compose()` |
 | `pipeline_stage_contract.py` | Env x Stage delivery evidence contract | `make_stage_result()`, `acceleration_allowed()`, `detect_disagreement()` |
 | `config.py` | Legacy compatibility wrapper | `Config` |

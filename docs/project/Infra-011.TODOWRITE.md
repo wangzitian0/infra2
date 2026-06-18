@@ -23,6 +23,7 @@
 | Infra-011.14 | Long-running stages publish soft budget, hard deadline, elapsed duration, current stage age, and budget breach classification. | `libs/tests/test_pipeline_stage_contract.py`, `libs/tests/test_iac_runner_deploy_result.py` |
 | Infra-011.15 | Cross-stage disagreements are deterministic, measurable records rather than operator interpretation. | `libs/tests/test_pipeline_stage_contract.py`, `libs/tests/test_infra_probes.py`, `libs/tests/test_cloudflare_watchdog.py` |
 | Infra-011.16 | CI/CD acceleration is evidence-gated through the Env x Stage matrix and does not weaken production full-sync or environment protection. | `libs/tests/test_pipeline_stage_contract.py`, `docs/ssot/ops.pipeline.md` |
+| Infra-011.17 | Off-host backup durability is rehearsed by restoring the latest verified artifact into an explicitly throwaway target and checking database invariants; live-looking production containers are refused by default. | `libs/tests/test_backup_verification.py`, `tools/backup_restore_rehearsal.py`, `docs/ssot/ops.recovery.md` |
 
 ## Issue Mapping
 
@@ -31,6 +32,7 @@
 - #168: Vault Agent rendered-file health contract.
 - #158: off-host backup inventory and restore proof path.
 - #162: external/synthetic and backup freshness alert coverage.
+- wangzitian0/finance_report#945: off-host restore rehearsal proof for finance production data durability.
 - #186: IaC Runner route ownership drift blocked main deploy health checks.
 - #187: IaC Runner deploy failed after health recovery because repo `platform/` shadowed Python stdlib `platform`.
 - #189: IaC Runner deploy sync lacks Vault automation token after stdlib shadow fix.
@@ -74,6 +76,11 @@
 - [ ] Extend route canary phase evidence with deadline and budget-breach fields.
 - [ ] Define and test cross-stage disagreement records for internal health vs public route, heartbeat vs probe result, canary vs app readiness, and GitHub fallback vs Cloudflare route checks.
 - [ ] Use Env x Stage evidence to propose safe acceleration only after fallback coverage is proven; keep production full-sync/manual protection unchanged by default.
+
+## 2026-06-18 Off-host Restore Rehearsal
+
+- Added `libs/backup_restore.py` and `tools/backup_restore_rehearsal.py` to turn verified backup manifests into guarded Postgres restore rehearsals.
+- Added AC Infra-011.17 and SSOT recovery SOP coverage for weekly throwaway-target restore checks.
 
 ## 2026-06-10 Env x Stage Contract Drift Fix
 
