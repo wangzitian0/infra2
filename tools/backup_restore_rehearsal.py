@@ -10,8 +10,10 @@ from pathlib import Path
 
 from libs.backup_restore import (
     assert_manifest_is_rehearsable,
+    assert_rehearsal_target,
     build_postgres_rehearsal_plan,
     materialize_artifact,
+    planned_artifact_path,
     run_postgres_restore_rehearsal,
 )
 from libs.backup_verification import load_backup_inventory
@@ -41,7 +43,13 @@ def main(argv: list[str] | None = None) -> int:
         manifest,
         now=int(time.time()),
     )
-    archive = materialize_artifact(artifact, Path(args.download_dir))
+    assert_rehearsal_target(args.target_container)
+    download_dir = Path(args.download_dir)
+    archive = (
+        planned_artifact_path(artifact, download_dir)
+        if args.dry_run
+        else materialize_artifact(artifact, download_dir)
+    )
     invariants = tuple(args.invariant_sql) or (
         "SELECT 1",
         "SELECT count(*) >= 1 FROM pg_database",

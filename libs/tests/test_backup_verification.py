@@ -24,6 +24,7 @@ from libs.backup_restore import (
     build_postgres_rehearsal_plan,
     latest_artifact_for_service,
     materialize_artifact,
+    planned_artifact_path,
 )
 
 
@@ -42,6 +43,15 @@ def _load_backup_runner():
 def _load_backup_verification_tool():
     path = ROOT / "tools/backup_verification.py"
     spec = importlib.util.spec_from_file_location("backup_verification_tool", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_backup_restore_rehearsal_tool():
+    path = ROOT / "tools/backup_restore_rehearsal.py"
+    spec = importlib.util.spec_from_file_location("backup_restore_rehearsal_tool", path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -259,6 +269,13 @@ def test_backup_restore_rehearsal_downloads_remote_artifact(tmp_path) -> None:
             str(tmp_path / "dump.sql.gz"),
         ]
     ]
+    assert (
+        planned_artifact_path(
+            {"remote_uri": "r2:infra2/finance_report/postgres/dump.sql.gz"},
+            tmp_path,
+        )
+        == tmp_path / "dump.sql.gz"
+    )
 
 
 def test_backup_restore_rehearsal_refuses_live_looking_targets(tmp_path) -> None:
@@ -306,15 +323,64 @@ def test_backup_restore_rehearsal_selects_latest_artifact() -> None:
                 },
                 {
                     "service_id": "finance_report/postgres",
-                    "created_at": "2026-01-02T00:00:00Z",
+                    "created_at": 1_800_000_000,
                 },
                 {
                     "service_id": "platform/postgres",
-                    "created_at": "2026-01-03T00:00:00Z",
+                    "created_at": "9999-01-03T00:00:00Z",
                 },
             ]
         },
         "finance_report/postgres",
     )
 
-    assert artifact["created_at"] == "2026-01-02T00:00:00Z"
+    assert artifact["created_at"] == 1_800_000_000
+
+
+def test_backup_restore_rehearsal_dry_run_has_no_download_side_effect(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """Infra-011.17 / #945: dry-run validates target and plans without rclone."""
+    tool = _load_backup_restore_rehearsal_tool()
+    entry = BackupEntry(
+        service_id="finance_report/postgres",
+        data_path="/data/finance_report/postgres",
+        method="pg_dump_plus_data_archive",
+        restore_command="restore",
+        remote="r2",
+        retention_days=30,
+        rpo_hours=24,
+    )
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text('{"artifacts":[]}', encoding="utf-8")
+    artifact = {
+        "remote_uri": "r2:infra2/finance_report/postgres/dump.sql.gz",
+        "method": "pg_dumpall_gz",
+    }
+
+    monkeypatch.setattr(tool, "load_backup_inventory", lambda: [entry])
+    monkeypatch.setattr(
+        tool, "assert_manifest_is_rehearsable", lambda *_args, **_kwargs: artifact
+    )
+
+    def fail_download(*_args, **_kwargs):
+        raise AssertionError("dry-run must not download artifacts")
+
+    monkeypatch.setattr(tool, "materialize_artifact", fail_download)
+
+    rc = tool.main(
+        [
+            "--manifest",
+            str(manifest_path),
+            "--target-container",
+            "finance-report-postgres-restore-rehearsal",
+            "--download-dir",
+            str(tmp_path / "downloads"),
+            "--dry-run",
+        ]
+    )
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert '"status": "planned"' in out
+    assert str(tmp_path / "downloads" / "dump.sql.gz") in out

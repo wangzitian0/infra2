@@ -15,7 +15,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from libs.backup_verification import BackupEntry, verify_backup_manifest
+from libs.backup_verification import (
+    BackupEntry,
+    _parse_timestamp,
+    verify_backup_manifest,
+)
 
 
 class BackupRestoreError(RuntimeError):
@@ -47,9 +51,7 @@ def latest_artifact_for_service(
     ]
     if not candidates:
         raise BackupRestoreError(f"manifest has no artifact for {service_id}")
-    return sorted(
-        candidates, key=lambda item: str(item.get("created_at") or ""), reverse=True
-    )[0]
+    return max(candidates, key=lambda item: _parse_timestamp(item.get("created_at")))
 
 
 def assert_manifest_is_rehearsable(
@@ -101,7 +103,7 @@ def materialize_artifact(
         raise BackupRestoreError(f"unsupported backup artifact URI: {remote_uri}")
 
     download_dir.mkdir(parents=True, exist_ok=True)
-    destination = download_dir / remote_uri.rsplit("/", 1)[-1]
+    destination = planned_artifact_path(artifact, download_dir)
     result = runner(
         ["rclone", "copyto", remote_uri, str(destination)],
         text=True,
@@ -113,6 +115,16 @@ def materialize_artifact(
             result.stderr.strip() or f"rclone download failed: {remote_uri}"
         )
     return destination
+
+
+def planned_artifact_path(artifact: dict[str, Any], download_dir: Path) -> Path:
+    """Return where an artifact would be read from or downloaded to."""
+    remote_uri = str(artifact.get("remote_uri") or "")
+    if remote_uri.startswith("local:"):
+        return Path(remote_uri.removeprefix("local:"))
+    if ":" not in remote_uri:
+        raise BackupRestoreError(f"unsupported backup artifact URI: {remote_uri}")
+    return download_dir / remote_uri.rsplit("/", 1)[-1]
 
 
 def build_postgres_rehearsal_plan(
