@@ -179,7 +179,9 @@ def build_signoz_log_alert_rule_payload(
                         "target": int(threshold),
                         "matchType": "1",
                         "op": "1",
-                        "channels": [channel_id for channel_id in channel_ids if channel_id],
+                        "channels": [
+                            channel_id for channel_id in channel_ids if channel_id
+                        ],
                         "targetUnit": "",
                     }
                 ],
@@ -252,6 +254,83 @@ def build_signoz_log_alert_rule_payload(
     }
 
 
+def build_signoz_metric_alert_rule_payload(
+    *,
+    alert_name: str,
+    promql: str,
+    channel_ids: list[str],
+    summary: str,
+    service_name: str = "finance-report-backend",
+    severity: str = "warning",
+    threshold: float = 0,
+    threshold_unit: str = "",
+    op: str = "above",
+    match_type: str = "at_least_once",
+    eval_window: str = "5m0s",
+    frequency: str = "1m",
+    group_by: list[str] | None = None,
+) -> dict[str, Any]:
+    """Build a SigNoz v2 threshold rule for PromQL-backed metric alerts."""
+    return {
+        "alert": _required("alert_name", alert_name),
+        "alertType": "METRICS_BASED_ALERT",
+        "ruleType": "threshold_rule",
+        "condition": {
+            "thresholds": {
+                "kind": "basic",
+                "spec": [
+                    {
+                        "name": severity,
+                        "target": float(threshold),
+                        "matchType": _signoz_match_type(match_type),
+                        "op": _signoz_threshold_op(op),
+                        "channels": [
+                            channel_id for channel_id in channel_ids if channel_id
+                        ],
+                        "targetUnit": threshold_unit,
+                    }
+                ],
+            },
+            "compositeQuery": {
+                "queryType": "promql",
+                "panelType": "graph",
+                "builderQueries": {},
+                "promQueries": {
+                    "A": {
+                        "name": "A",
+                        "query": _required("promql", promql),
+                        "legend": "",
+                        "disabled": False,
+                    }
+                },
+                "chQueries": {},
+            },
+            "selectedQueryName": "A",
+            "alertOnAbsent": False,
+            "requireMinPoints": True,
+        },
+        "evaluation": {
+            "kind": "rolling",
+            "spec": {"evalWindow": eval_window, "frequency": frequency},
+        },
+        "labels": {
+            "severity": severity,
+            "service": service_name,
+            "team": "infra",
+        },
+        "annotations": {"description": summary, "summary": summary},
+        "notificationSettings": {
+            "groupBy": group_by or [],
+            "renotify": {"enabled": False, "interval": "30m", "alertStates": []},
+            "usePolicy": False,
+        },
+        "version": SIGNOZ_ALERT_VERSION,
+        "schemaVersion": SIGNOZ_ALERT_SCHEMA_VERSION,
+        "source": "infra2/platform/12.alerting",
+        "disabled": False,
+    }
+
+
 def find_signoz_channel_id(channels_response: Any, channel_name: str) -> str | None:
     """Find a SigNoz notification channel id by name across known response shapes."""
     for channel in _iter_signoz_items(channels_response, collection_keys=("channels",)):
@@ -276,7 +355,9 @@ def find_signoz_rule_id(rules_response: Any, alert_name: str) -> str | None:
     return None
 
 
-def deliver_feishu_text(webhook_url: str, text: str, timeout: float = 10.0) -> dict[str, Any]:
+def deliver_feishu_text(
+    webhook_url: str, text: str, timeout: float = 10.0
+) -> dict[str, Any]:
     """Send a text message to Feishu and return the decoded response."""
     safe_url = validate_feishu_webhook_url(webhook_url)
     body = json.dumps(build_feishu_text_payload(text)).encode("utf-8")
@@ -488,6 +569,33 @@ def _signoz_attribute(key: str, data_type: str, attribute_type: str) -> dict[str
     }
 
 
+def _signoz_threshold_op(op: str) -> str:
+    mapping = {
+        "above": "1",
+        "below": "2",
+        "equal": "3",
+        "not_equal": "4",
+    }
+    try:
+        return mapping[op]
+    except KeyError as exc:
+        raise AlertingError(f"Unsupported SigNoz threshold op: {op!r}") from exc
+
+
+def _signoz_match_type(match_type: str) -> str:
+    mapping = {
+        "at_least_once": "1",
+        "all_times": "2",
+        "on_average": "3",
+        "in_total": "4",
+        "last": "5",
+    }
+    try:
+        return mapping[match_type]
+    except KeyError as exc:
+        raise AlertingError(f"Unsupported SigNoz match type: {match_type!r}") from exc
+
+
 def _iter_signoz_items(
     response: Any, *, collection_keys: tuple[str, ...]
 ) -> list[dict[str, Any]]:
@@ -513,4 +621,7 @@ def _iter_signoz_items(
 
 
 def _truncate_message(message: str) -> str:
-    return message[: MAX_MESSAGE_CHARS - len(TRUNCATION_SUFFIX)].rstrip() + TRUNCATION_SUFFIX
+    return (
+        message[: MAX_MESSAGE_CHARS - len(TRUNCATION_SUFFIX)].rstrip()
+        + TRUNCATION_SUFFIX
+    )

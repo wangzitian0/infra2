@@ -116,6 +116,8 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
 | L3 Finance Report | fr-postgres | app database health fails | P0 | Planned |
 | L3 Finance Report | fr-redis | app cache health fails | P1 | Planned |
 | L3 Finance Report | fr-app backend | OTEL ERROR/FATAL log count is above zero over 5 minutes | P1 | Defined as code (`FinanceReportBackendErrorLogs`) in `finance_report/finance_report/observability/alert_rules.json`; applied via `fr-observability.shared.apply-alerts` |
+| L3 Finance Report | fr-app backend | RED SLO signals: 5xx rate > 5% for 5m or p95 latency > 1500ms | P0/P1 | Defined as code (`FinanceReportHigh5xxRate`, `FinanceReportP95LatencyHigh`) in `finance_report/finance_report/observability/alert_rules.json`; applied via `fr-observability.shared.apply-alerts` |
+| L3 Finance Report | fr-app backend | Business anomaly signals: parse failure spike, reconciliation anomaly, rate-limit saturation, async parse task failure | P1/P2 | Defined as code (`FinanceReportStatementParseFailureSpike`, `FinanceReportReconciliationAnomaly`, `FinanceReportRateLimitSaturation`, `FinanceReportAsyncTaskFailures`) in `finance_report/finance_report/observability/alert_rules.json`; applied via `fr-observability.shared.apply-alerts` |
 | L3 Finance Report | fr-app public route | staging/production `report[-staging].zitian.party/` (web) or `/api/health` (API) fails from Cloudflare | P0 prod / P1 staging | Live via Cloudflare Workers out-of-band watchdog |
 | L3 Finance Report | fr-app frontend | frontend HTTP health fails | P1 | Live via Cloudflare Workers out-of-band watchdog (public web route) |
 | Cross-cutting | Vault app tokens and rendered env | missing, malformed, invalid, non-renewable, low TTL, or rendered `<no value>` fields | P0/P1 | Docker healthcheck + manual gate: `vault-audit.self-refresh` |
@@ -243,6 +245,32 @@ SigNoz channel or this repo.
 4. Post-merge live gate: emit a synthetic backend ERROR log, confirm
    `FinanceReportBackendErrorLogs` fires into the Lark group, and confirm the
    "Finance Report — Backend & Frontend" dashboard renders.
+
+### SOP-004C: Apply finance_report SLO and business-anomaly alert catalog (#1106)
+
+The finance_report alert catalog extends SOP-004B from one backend error-log rule
+to the production runtime-hardening alert set under root `#1073`:
+
+| Rule | Signal | Severity | Triage focus |
+|------|--------|----------|--------------|
+| `FinanceReportHigh5xxRate` | `http_server_request_count` 5xx rate > 5% for 5m | P0 | App outage or dependency failure; inspect deploy summary SigNoz pivots, backend logs, DB/Redis health, and recent release SHA. |
+| `FinanceReportP95LatencyHigh` | `http_server_request_duration_bucket` p95 > 1500ms | P1 | Slow backend path; inspect RED dashboard by `deployment.environment`, DB pool gauges, and recent statement parse/provider load. |
+| `FinanceReportStatementParseFailureSpike` | `finance_statement_parse_outcome{outcome=failed|rejected}` > 3 in 15m | P1 | Provider/parser regression; query by `statement_id`, `request_id`, model, and safe parse failure event. |
+| `FinanceReportReconciliationAnomaly` | `finance_reconciliation_match_outcome{outcome=failed|error|anomaly}` > 0 in 15m | P1 | Reconciliation correctness risk; inspect reconciliation audit logs and recent matching code changes. |
+| `FinanceReportRateLimitSaturation` | `finance_rate_limit_rejected` > 10 in 5m | P2 | Client burst or abuse; inspect auth/rate-limit warning logs before changing thresholds. |
+| `FinanceReportAsyncTaskFailures` | `finance_async_parse_failure` > 0 in 5m | P1 | Silent background-work risk; inspect async task logs/spans and statement final state. |
+
+Apply and inspect exactly like SOP-004B:
+
+```bash
+uv run python -m invoke fr-observability.shared.print-alerts
+uv run python -m invoke fr-observability.shared.apply-alerts
+```
+
+Merge/apply ordering: the config can be reviewed independently, but live apply
+should happen after the app emits all referenced metric names. The rate-limit and
+async-failure signals are introduced by the paired `#1107` and `#1108` app PRs;
+rules for missing metrics stay harmless but cannot fire until those deploy.
 
 ### SOP-005: Cloudflare out-of-band infra2 watchdog
 
