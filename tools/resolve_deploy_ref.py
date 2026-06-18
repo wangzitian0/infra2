@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Commit-addressed deploy surface resolver — the ``code`` axis of deploy(env, code, data).
+"""Commit-addressed app ref resolver for deploy_v2 ``version_ref`` inputs.
 
-The finance_report deploy primitive (finance_report#883) accepts a multi-input surface
-that all collapses to ONE commit sha — the published image tag Infra pulls:
+The finance_report app deploy surface accepts a multi-input ``version_ref`` that all
+collapses to ONE commit sha plus the published image ref deploy_v2 asks Infra to pull:
 
     main          -> finance_report main branch HEAD
     release/x.y   -> that release branch HEAD

@@ -20,13 +20,13 @@ SigNoz is deployed in two parts:
 
 ```bash
 # 1. Deploy ClickHouse storage
-invoke clickhouse.setup
+python -m tools.deploy_v2 --service platform/clickhouse --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
 
 # 2. Verify ClickHouse health
 invoke clickhouse.status
 
 # 3. Deploy SigNoz services
-invoke signoz.setup
+python -m tools.deploy_v2 --service platform/signoz --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
 
 # 4. Verify SigNoz health
 invoke signoz.status

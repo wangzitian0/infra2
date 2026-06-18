@@ -29,12 +29,12 @@ finance_report/
 ## Quick Start
 
 ```bash
-# 1. Deploy database layer
-invoke fr-postgres.setup
-invoke fr-redis.setup
+# 1. Deploy database layer through deploy_v2
+python -m tools.deploy_v2 --service finance_report/postgres --type staging --iac-ref vX.Y.Z --domain zitian.party
+python -m tools.deploy_v2 --service finance_report/redis --type staging --iac-ref vX.Y.Z --domain zitian.party
 
-# 2. Deploy application
-invoke fr-app.setup
+# 2. Deploy application through deploy_v2
+python -m tools.deploy_v2 --service finance_report/app --type staging --version-ref vX.Y.Z --iac-ref vX.Y.Z --domain zitian.party
 
 # 3. Verify
 invoke fr-postgres.shared.status

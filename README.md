@@ -74,7 +74,7 @@ infra2/
 
 示例：
 ```bash
-DEPLOY_ENV=staging invoke postgres.setup
+python -m tools.deploy_v2 --service platform/postgres --type staging --iac-ref vX.Y.Z --domain zitian.party
 ```
 
 ## 🛠️ 常用命令
@@ -103,15 +103,12 @@ invoke local.version
 ### 服务部署
 
 ```bash
-# Platform 服务
-invoke postgres.setup
-invoke redis.setup
-invoke authentik.setup
+# Platform / backing services deploy through deploy_v2 with a pinned infra2 ref.
+python -m tools.deploy_v2 --service platform/postgres --type staging --iac-ref vX.Y.Z --domain zitian.party
+python -m tools.deploy_v2 --service platform/redis --type staging --iac-ref vX.Y.Z --domain zitian.party
 
-# Finance Report 应用（使用 fr- 前缀避免命名冲突）
-invoke fr-postgres.setup
-invoke fr-redis.setup
-invoke fr-app.setup
+# Finance Report app deploys with both app version_ref and infra2 iac_ref pinned.
+python -m tools.deploy_v2 --service finance_report/app --type staging --version-ref vX.Y.Z --iac-ref vX.Y.Z --domain zitian.party
 ```
 
 ### 健康检查
@@ -168,9 +165,9 @@ invoke vault.setup-approle --project=finance_report
 DEPLOY_ENV=staging invoke vault.setup-approle --project=finance_report --service=app
 
 # 5. 部署服务
-invoke fr-postgres.setup
-invoke fr-redis.setup
-invoke fr-app.setup
+python -m tools.deploy_v2 --service finance_report/postgres --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
+python -m tools.deploy_v2 --service finance_report/redis --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
+python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref vX.Y.Z --iac-ref vX.Y.Z --domain zitian.party --staging-validated --code-reviewed
 
 # 6. 验证
 invoke fr-postgres.shared.status

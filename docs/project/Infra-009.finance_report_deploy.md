@@ -99,7 +99,7 @@ invoke env.set OPENROUTER_API_KEY=<YOUR_OPENROUTER_API_KEY> \
 
 ### MinIO Security Configuration
 
-MinIO bucket and user setup is **automated** via the `invoke fr-app.setup` command. The deployment script calls the shared `create_app_bucket` task from `platform/03.minio/shared_tasks.py`.
+MinIO bucket and user setup is automated by the finance_report app bootstrap/repair path. The current staging/prod deploy front door is `deploy_v2`; bucket creation reuses the shared `create_app_bucket` task from `platform/03.minio/shared_tasks.py` when bootstrap/repair needs to materialize missing storage.
 
 **What happens automatically:**
 1. Creates bucket `finance-report-statements`

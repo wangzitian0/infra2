@@ -57,10 +57,10 @@ redis ────┘
 ## Quick Start
 
 ```bash
-# Deploy all (in dependency order)
-invoke fr-postgres.setup
-invoke fr-redis.setup
-invoke fr-app.setup
+# Deploy all through deploy_v2 (in dependency order)
+python -m tools.deploy_v2 --service finance_report/postgres --type staging --iac-ref vX.Y.Z --domain zitian.party
+python -m tools.deploy_v2 --service finance_report/redis --type staging --iac-ref vX.Y.Z --domain zitian.party
+python -m tools.deploy_v2 --service finance_report/app --type staging --version-ref vX.Y.Z --iac-ref vX.Y.Z --domain zitian.party
 
 # Check status
 invoke fr-postgres.shared.status

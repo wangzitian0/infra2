@@ -37,9 +37,9 @@ Platform 支持 staging 与 production 并行，优先使用 Dokploy 的 Project
 | 2026-01-03 | Aligned ENV_DOMAIN_SUFFIX usage + portal Traefik labels |
 
 ## Verification
-- [ ] `DEPLOY_ENV=staging invoke postgres.setup` 成功部署
-- [ ] `DEPLOY_ENV=staging invoke redis.setup` 成功部署
-- [ ] `DEPLOY_ENV=staging invoke authentik.setup` 域名使用 `sso-staging.${INTERNAL_DOMAIN}`
+- [ ] `python -m tools.deploy_v2 --service platform/postgres --type staging --iac-ref vX.Y.Z --domain zitian.party` 成功部署
+- [ ] `python -m tools.deploy_v2 --service platform/redis --type staging --iac-ref vX.Y.Z --domain zitian.party` 成功部署
+- [ ] `python -m tools.deploy_v2 --service platform/authentik --type staging --iac-ref vX.Y.Z --domain zitian.party` 域名使用 `sso-staging.${INTERNAL_DOMAIN}`
 - [ ] `DEPLOY_ENV=production invoke portal.shared.status` 生产不受影响
 
 ## References

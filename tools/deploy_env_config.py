@@ -7,7 +7,7 @@ env ``preview``). This module owns that derived env regime and what it implies:
 
     type     -> deploy_contract.DEPLOY_TYPES (which env a type maps to)
     env      -> THIS module                  (which compose, URL, suffix, data default, gates)
-    data     -> (P3/#893)                    (empty / staging / anonymized prod snapshot)
+    data_lane -> EnvConfig.data_default       (derived; not a deploy_v2 input axis)
 
 This module owns the env regime: each deploy environment maps to the Dokploy compose
 it targets, its public URL pattern, the container/domain suffix, the default data
@@ -26,8 +26,8 @@ from dataclasses import dataclass, replace
 
 # data default per env. Non-prod defaults to `staging` data (operator choice); prod is
 # always real prod data. A PR sha never runs on prod data and prod data never leaves
-# prod un-anonymized (the G2 / RL-DATA red lines, finance_report#877) — those are
-# enforced at the data axis (P3), not here.
+# prod un-anonymized (the G2 / RL-DATA red lines, finance_report#877). deploy_v2 derives
+# data_lane from this value and enforces the red lines before any side effect.
 _DATA_STAGING = "staging"
 _DATA_PROD = "prod"
 

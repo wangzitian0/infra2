@@ -20,7 +20,7 @@ Secrets stored at: `secret/data/finance_report/<env>/redis`
 
 ```bash
 # Deploy
-invoke finance_report.redis.setup
+python -m tools.deploy_v2 --service finance_report/redis --type staging --iac-ref vX.Y.Z --domain zitian.party
 
 # Check status
 invoke finance_report.redis.status
