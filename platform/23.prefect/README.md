@@ -63,7 +63,7 @@ Use **Prefect projects** and **tags** for environment isolation:
 
 ```bash
 # 1. Deploy (requires postgres and vault to be up)
-invoke prefect.setup
+python -m tools.deploy_v2 --service platform/prefect --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
 
 # 2. Configure SSO (manual via Web UI)
 # Visit https://sso.zitian.party

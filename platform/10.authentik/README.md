@@ -41,10 +41,11 @@ Identity Provider for Single Sign-On across platform services using vault-init p
 invoke postgres.status
 invoke redis.status
 
-# Full setup
-invoke authentik.setup
+# Deploy through deploy_v2
+python -m tools.deploy_v2 --service platform/authentik --type staging --iac-ref vX.Y.Z --domain zitian.party
+python -m tools.deploy_v2 --service platform/authentik --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
 
-# Or step-by-step
+# Repair/debug only
 invoke authentik.pre-compose
 invoke authentik.composing
 invoke authentik.post-compose

@@ -22,10 +22,11 @@ Static homepage for platform services, powered by Homer. Protected by Authentik 
 ## Deployment
 
 ```bash
-# Full setup
-invoke portal.setup
+# Deploy through deploy_v2
+python -m tools.deploy_v2 --service platform/portal --type staging --iac-ref vX.Y.Z --domain zitian.party
+python -m tools.deploy_v2 --service platform/portal --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
 
-# Or step-by-step
+# Repair/debug only
 invoke portal.pre_compose
 invoke portal.composing
 invoke portal.post_compose
