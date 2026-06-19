@@ -1,15 +1,18 @@
 name: Auto-deploy report-branch-main
 
-# The ONE auto deploy target (SSOT §4.6): the main preview re-deploys whenever app `main`
-# moves, so report-branch-main is always "what main looks like right now". Everything else
-# (staging / prod) is manual + a pinned release tag.
+# The ONE auto deploy target (SSOT §4.6): the main preview re-deploys whenever
+# app `main` passes CI, using the exact successful SHA emitted by the app repo.
+# Everything else (staging / prod) is manual + a pinned release tag.
 #
-# Triggered by the APP repo on its main push via repository_dispatch (type=deploy-report-main);
-# also manually dispatchable here. It deploys app `main` to the report-branch-main preview slot
-# through the unified deploy_v2 front door.
+# Triggered by the APP repo after successful main CI via repository_dispatch
+# (type=deploy-report-main); also manually dispatchable here. Repository dispatch
+# validates the payload SHA against the app main tip and deploys the
+# report-branch-main preview slot through the unified deploy_v2 front door.
+# Manual dispatch keeps resolving current main.
 #
 # The APP-repo SENDER half is wired in finance_report `.github/workflows/notify-infra2-report-main.yml`
-# (finance_report#1173): app `main` push -> repository_dispatch into infra2. See Infra-015.
+# (finance_report#1173): successful app `main` CI -> repository_dispatch into
+# infra2. See Infra-015.
 
 on:
   repository_dispatch:
@@ -32,6 +35,7 @@ jobs:
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
       INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
+      DISPATCH_SHA: ${{ github.event.client_payload.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,9 +55,22 @@ jobs:
             echo "::error::DOKPLOY_API_KEY secret is required."
             exit 1
           fi
-          python -m tools.deploy_v2 \
+
+          if [[ "${GITHUB_EVENT_NAME}" == "repository_dispatch" && -z "${DISPATCH_SHA:-}" ]]; then
+            echo "::error::repository_dispatch deploy-report-main requires client_payload.sha."
+            exit 1
+          fi
+
+          deploy_args=(
             --service finance_report/app \
             --type preview/branch \
             --version-ref main \
             --iac-ref main \
             --domain "${INTERNAL_DOMAIN}"
+          )
+          if [[ -n "${DISPATCH_SHA:-}" ]]; then
+            deploy_args+=(--expected-sha "$DISPATCH_SHA")
+          fi
+
+          echo "Deploying report-branch-main with version_ref=main expected_sha=${DISPATCH_SHA:-<current-main>}"
+          python -m tools.deploy_v2 "${deploy_args[@]}"
