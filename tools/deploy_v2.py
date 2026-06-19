@@ -355,6 +355,7 @@ def _deploy_platform(
     triggered_by: str,
     code_reviewed: bool | None,
     wait: bool,
+    timeout: int,
 ) -> DeployV2Result:
     """Route a platform (iac_pinned) service to the iac_runner ``/deploy`` webhook.
 
@@ -401,7 +402,12 @@ def _deploy_platform(
     detail = {"env": env, "ref": iac_sha, "services": [service], "iac_runner": response}
     if wait:
         final = poll_platform_deploy_status(
-            env=env, ref=iac_sha, base_url=url, secret=sec, triggered_by=triggered_by
+            env=env,
+            ref=iac_sha,
+            base_url=url,
+            secret=sec,
+            triggered_by=triggered_by,
+            attempts=_poll_attempts_for_timeout(timeout),
         )
         detail["iac_runner_final"] = final
         status = str(final.get("status", "")).lower()
@@ -411,6 +417,94 @@ def _deploy_platform(
                 f"{final.get('details') or final}"
             )
     return DeployV2Result(target, data_lane, "iac-runner", detail)
+
+
+def _poll_attempts_for_timeout(timeout: int, interval: int = 10) -> int:
+    """Convert a seconds budget into iac_runner status poll attempts."""
+    return max(1, (max(1, int(timeout)) + interval - 1) // interval)
+
+
+def _deploy_platform_batch(
+    services: list[str],
+    deploy_type: str,
+    iac_ref: str,
+    *,
+    runner_url: str | None,
+    secret: str | None,
+    triggered_by: str,
+    code_reviewed: bool | None,
+    wait: bool,
+    timeout: int,
+) -> dict:
+    """Route multiple iac_pinned services through one deploy_v2/iac_runner call.
+
+    The normal public API remains single-service. This CLI helper exists for
+    post-merge reconcile fan-out so a manifest-wide input change produces one
+    terminal-status wait per environment, not one wait per service.
+    """
+    if not services:
+        raise ValueError("at least one service is required")
+    type_spec = deploy_type_spec(deploy_type)
+    if type_spec.env not in ("staging", "prod"):
+        raise ValueError(
+            f"iac_pinned batch deploys to staging/prod only "
+            f"(type {deploy_type!r} -> env {type_spec.env!r})"
+        )
+    iac_sha = resolve_to_sha(iac_ref, repo=_INFRA2_REPO)
+    targets: list[DeployTarget] = []
+    data_lanes: set[str] = set()
+    for service in services:
+        spec = service_spec(service)
+        if not spec.iac_pinned:
+            raise ValueError(
+                f"{service!r} is not iac_pinned; batch deploy only supports "
+                "platform/backing services"
+            )
+        target = make_deploy_target(
+            service=service, env=type_spec.env, code_version=iac_sha, iac_ref=iac_sha
+        )
+        validate_deploy_target(target, spec)
+        data_lanes.add(enforce_data_lane_red_lines(target, code_reviewed=code_reviewed))
+        targets.append(target)
+
+    env = "production" if type_spec.env == "prod" else "staging"
+    url = runner_url or os.getenv("IAC_RUNNER_URL", "")
+    sec = secret or os.getenv("IAC_WEBHOOK_SECRET", "")
+    response = trigger_platform_deploy(
+        env=env,
+        ref=iac_sha,
+        services=services,
+        base_url=url,
+        secret=sec,
+        triggered_by=triggered_by,
+        wait=False,
+    )
+    detail = {"env": env, "ref": iac_sha, "services": services, "iac_runner": response}
+    if wait:
+        final = poll_platform_deploy_status(
+            env=env,
+            ref=iac_sha,
+            base_url=url,
+            secret=sec,
+            triggered_by=triggered_by,
+            attempts=_poll_attempts_for_timeout(timeout),
+        )
+        detail["iac_runner_final"] = final
+        status = str(final.get("status", "")).lower()
+        if status != "completed":
+            raise RuntimeError(
+                f"platform batch deploy of {services} to {env} ended {status!r}: "
+                f"{final.get('details') or final}"
+            )
+
+    return {
+        "service": services,
+        "env": type_spec.env,
+        "sub_domain": {target.service: target.sub_domain for target in targets},
+        "data_lane": sorted(data_lanes),
+        "backend": "iac-runner",
+        "detail": detail,
+    }
 
 
 def deploy_v2(
@@ -466,6 +560,7 @@ def deploy_v2(
             triggered_by=triggered_by,
             code_reviewed=code_reviewed,
             wait=wait,
+            timeout=timeout,
         )
 
     spec = deploy_type_spec(deploy_type)
@@ -653,6 +748,22 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        service_names = [s.strip() for s in args.service.split(",") if s.strip()]
+        if len(service_names) > 1:
+            result = _deploy_platform_batch(
+                service_names,
+                args.deploy_type,
+                args.iac_ref,
+                runner_url=os.getenv("IAC_RUNNER_URL", ""),
+                secret=os.getenv("IAC_WEBHOOK_SECRET", ""),
+                triggered_by="deploy_v2",
+                code_reviewed=True if args.code_reviewed else None,
+                wait=not args.no_wait,
+                timeout=args.timeout,
+            )
+            print(json.dumps(result))
+            return 0
+
         # Platform (iac_pinned) services route to the iac_runner webhook and never touch the
         # Dokploy client — don't build it (or require DOKPLOY_API_KEY) for them. Inside the
         # try so an unknown service surfaces as the clean one-line error, not a traceback.

@@ -2,7 +2,9 @@ name: Auto-deploy report-branch-main
 
 # The ONE auto deploy target (SSOT §4.6): the main preview re-deploys whenever
 # app `main` passes CI, using the exact successful SHA emitted by the app repo.
-# Everything else (staging / prod) is manual + a pinned release tag.
+# App staging/prod fixed environments remain manual + pinned release tag.
+# IaC-pinned platform/backing services reconcile from infra2 main via
+# reconcile-iac-inputs.yml.
 #
 # Triggered by the APP repo after successful main CI via repository_dispatch
 # (type=deploy-report-main); also manually dispatchable here. Repository dispatch
