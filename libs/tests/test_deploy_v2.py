@@ -70,7 +70,7 @@ class _Plan:
 @pytest.fixture
 def calls(monkeypatch):
     """Record backend invocations + stub the resolvers — no git, no Dokploy."""
-    rec = {"preview": None, "fixed": None}
+    rec = {"preview": None, "fixed": None, "image_waits": []}
 
     def fake_up(kind, value, **kw):
         rec["preview"] = {"kind": kind, "value": value, **kw}
@@ -87,8 +87,19 @@ def calls(monkeypatch):
         rec["fixed"] = {"env": env, "code": code, **kw}
         return _Plan(env=env, sha=code, compose_id=f"cmp-{env}", data="x", env_vars={})
 
+    def fake_wait(spec, image_ref, **kw):
+        rec["image_waits"].append(
+            {
+                "service": spec.key,
+                "repositories": spec.image_repositories,
+                "image_ref": image_ref,
+                **kw,
+            }
+        )
+
     monkeypatch.setattr(dv2, "_preview_up", fake_up)
     monkeypatch.setattr(dv2, "_deploy_fixed", fake_deploy)
+    monkeypatch.setattr(dv2, "_wait_for_image_dependencies", fake_wait)
     monkeypatch.setattr(dv2, "resolve_image_ref", _fake_resolve_image_ref)
     monkeypatch.setattr(dv2, "resolve_pr", _fake_resolve_pr)
     monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
@@ -160,6 +171,7 @@ def test_staging_accepts_code_and_release(calls, version_ref, expect_image):
     assert res.backend == "deploy-primitive"
     assert calls["fixed"]["env"] == "staging"
     assert calls["fixed"]["image_ref"] == expect_image
+    assert calls["image_waits"][-1]["image_ref"] == expect_image
 
 
 # --- preview slots: main / pr / commit / tag ------------------------------
@@ -171,6 +183,10 @@ def test_preview_branch(calls):
     assert res.target.sub_domain == "report-branch-main"
     assert calls["preview"]["kind"] == "branch" and calls["preview"]["value"] == "main"
     assert calls["preview"]["image_ref"] == SHA_CODE[:7]
+    assert calls["image_waits"][-1]["repositories"] == (
+        "ghcr.io/wangzitian0/finance_report-backend",
+        "ghcr.io/wangzitian0/finance_report-frontend",
+    )
 
 
 def test_preview_branch_expected_sha_allows_matching_main(calls):
@@ -193,6 +209,31 @@ def test_preview_branch_expected_sha_rejects_mismatch_before_side_effect(calls):
         )
 
     assert calls["preview"] is None
+    assert calls["image_waits"] == []
+
+
+def test_image_readiness_failure_stops_before_preview_side_effect(calls, monkeypatch):
+    def boom(*_args, **_kw):
+        raise RuntimeError("required image artifacts")
+
+    monkeypatch.setattr(dv2, "_wait_for_image_dependencies", boom)
+
+    with pytest.raises(RuntimeError, match="required image artifacts"):
+        _deploy(deploy_type="preview/branch", version_ref="main")
+
+    assert calls["preview"] is None and calls["fixed"] is None
+
+
+def test_image_readiness_failure_stops_before_fixed_side_effect(calls, monkeypatch):
+    def boom(*_args, **_kw):
+        raise RuntimeError("required image artifacts")
+
+    monkeypatch.setattr(dv2, "_wait_for_image_dependencies", boom)
+
+    with pytest.raises(RuntimeError, match="required image artifacts"):
+        _deploy(deploy_type="staging", version_ref="main")
+
+    assert calls["preview"] is None and calls["fixed"] is None
 
 
 def test_preview_branch_defaults_version_ref_to_main(calls):
@@ -238,6 +279,7 @@ def test_preview_tag_slot_is_dns_safe_and_pulls_tag(calls):
     res = _deploy(deploy_type="preview/tag", version_ref="v1.2.3")
     assert res.target.sub_domain == "report-tag-v1-2-3"
     assert calls["preview"]["image_ref"] == "v1.2.3"  # release image, not a sha
+    assert calls["image_waits"][-1]["image_ref"] == "v1.2.3"
 
 
 # --- canary: any code, fixed reserved slot --------------------------------
@@ -309,7 +351,9 @@ def test_unknown_type_rejected(calls):
 def test_unknown_service_rejected(calls):
     # platform/postgres is now a KNOWN (derived) service — use one with no deploy.py
     with pytest.raises(ValueError, match="unknown service"):
-        _deploy(service="platform/does-not-exist", deploy_type="staging", version_ref="main")
+        _deploy(
+            service="platform/does-not-exist", deploy_type="staging", version_ref="main"
+        )
     assert calls["fixed"] is None
 
 
@@ -330,7 +374,10 @@ def test_resolve_data_lane_by_env():
 
     assert resolve_data_lane(t("prod")) == "prod"
     assert resolve_data_lane(t("staging")) == "staging"
-    assert resolve_data_lane(t("preview", alias_kind="branch", alias_value="main")) == "staging"
+    assert (
+        resolve_data_lane(t("preview", alias_kind="branch", alias_value="main"))
+        == "staging"
+    )
 
 
 def test_enforce_returns_data_lane():
@@ -371,24 +418,79 @@ def cli(monkeypatch):
 def test_cli_passes_surface_through(cli, capsys):
     rec, json = cli
     rc = dv2.main(
-        ["--type", "staging", "--version-ref", "main", "--iac-ref", "main",
-         "--domain", "zp.io"]
+        [
+            "--type",
+            "staging",
+            "--version-ref",
+            "main",
+            "--iac-ref",
+            "main",
+            "--domain",
+            "zp.io",
+        ]
     )
     assert rc == 0
     assert rec["deploy_type"] == "staging"
     assert rec["version_ref"] == "main" and rec["iac_ref"] == "main"
     assert rec["client"] == "client@cloud.zp.io"  # host = cloud.<domain>
+    assert rec["image_wait_seconds"] is None
+    assert rec["image_poll_seconds"] is None
     out = json.loads(capsys.readouterr().out)
     assert out["env"] == "staging" and out["backend"] == "deploy-primitive"
 
 
+def test_cli_passes_image_wait_overrides(cli):
+    rec, _json = cli
+    rc = dv2.main(
+        [
+            "--type",
+            "staging",
+            "--version-ref",
+            "main",
+            "--iac-ref",
+            "main",
+            "--domain",
+            "zp.io",
+            "--image-wait-seconds",
+            "42",
+            "--image-poll-seconds",
+            "3",
+        ]
+    )
+
+    assert rc == 0
+    assert rec["image_wait_seconds"] == 42
+    assert rec["image_poll_seconds"] == 3
+
+
 def test_cli_code_reviewed_flag_maps_to_true_else_none(cli):
     rec, _ = cli
-    dv2.main(["--type", "staging", "--version-ref", "m", "--iac-ref", "m", "--domain", "zp.io"])
+    dv2.main(
+        [
+            "--type",
+            "staging",
+            "--version-ref",
+            "m",
+            "--iac-ref",
+            "m",
+            "--domain",
+            "zp.io",
+        ]
+    )
     assert rec["code_reviewed"] is None  # omitted stays deny-by-default
     dv2.main(
-        ["--type", "prod", "--version-ref", "v1.0.0", "--iac-ref", "m", "--domain",
-         "zp.io", "--staging-validated", "--code-reviewed"]
+        [
+            "--type",
+            "prod",
+            "--version-ref",
+            "v1.0.0",
+            "--iac-ref",
+            "m",
+            "--domain",
+            "zp.io",
+            "--staging-validated",
+            "--code-reviewed",
+        ]
     )
     assert rec["code_reviewed"] is True  # explicit positive signal
 
@@ -402,7 +504,16 @@ def test_cli_reports_deploy_failure(monkeypatch, capsys):
     monkeypatch.setattr(dk, "get_dokploy", lambda host: object())
     monkeypatch.setattr(dv2, "deploy_v2", boom)
     rc = dv2.main(
-        ["--type", "prod", "--version-ref", "main", "--iac-ref", "m", "--domain", "zp.io"]
+        [
+            "--type",
+            "prod",
+            "--version-ref",
+            "main",
+            "--iac-ref",
+            "m",
+            "--domain",
+            "zp.io",
+        ]
     )
     assert rc == 1
     assert "deploy_v2 failed" in capsys.readouterr().err
@@ -421,18 +532,44 @@ def test_fixed_deploy_verifies_vault_and_config_by_default(calls):
 
 
 def test_fixed_deploy_verify_can_be_disabled(calls):
-    _deploy(deploy_type="staging", version_ref="main", verify_vault=False, verify_config=False)
+    _deploy(
+        deploy_type="staging",
+        version_ref="main",
+        verify_vault=False,
+        verify_config=False,
+    )
     assert calls["fixed"]["verify_vault"] is False
     assert calls["fixed"]["verify_config"] is False
 
 
 def test_cli_verify_flags_default_on_and_flip(cli):
     rec, _ = cli
-    dv2.main(["--type", "staging", "--version-ref", "main", "--iac-ref", "main", "--domain", "zp.io"])
+    dv2.main(
+        [
+            "--type",
+            "staging",
+            "--version-ref",
+            "main",
+            "--iac-ref",
+            "main",
+            "--domain",
+            "zp.io",
+        ]
+    )
     assert rec["verify_vault"] is True and rec["verify_config"] is True
     dv2.main(
-        ["--type", "staging", "--version-ref", "main", "--iac-ref", "main", "--domain",
-         "zp.io", "--skip-vault-check", "--no-verify-config"]
+        [
+            "--type",
+            "staging",
+            "--version-ref",
+            "main",
+            "--iac-ref",
+            "main",
+            "--domain",
+            "zp.io",
+            "--skip-vault-check",
+            "--no-verify-config",
+        ]
     )
     assert rec["verify_vault"] is False and rec["verify_config"] is False
 
@@ -443,17 +580,23 @@ def test_cli_verify_flags_default_on_and_flip(cli):
 def _platform(monkeypatch, *, poll_status="completed", **over):
     sent = {}
     monkeypatch.setattr(
-        dv2, "trigger_platform_deploy",
+        dv2,
+        "trigger_platform_deploy",
         lambda **kw: sent.update(kw) or {"status": "accepted", "deployment_id": "d1"},
     )
     monkeypatch.setattr(
-        dv2, "poll_platform_deploy_status",
+        dv2,
+        "poll_platform_deploy_status",
         lambda **kw: {"status": poll_status, "deployment_id": "d1"},
     )
     monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
     base = dict(
-        service="platform/redis", deploy_type="staging", version_ref="ignored",
-        iac_ref="main", client=object(), domain="zitian.party",
+        service="platform/redis",
+        deploy_type="staging",
+        version_ref="ignored",
+        iac_ref="main",
+        client=object(),
+        domain="zitian.party",
     )
     base.update(over)
     return sent, deploy_v2(**base)
@@ -466,7 +609,9 @@ def test_platform_service_routes_to_iac_runner(monkeypatch):
     assert sent["ref"] == SHA_IAC  # deploy ref IS the iac_ref sha
     assert sent["services"] == ["platform/redis"]
     assert res.detail["iac_runner"]["status"] == "accepted"
-    assert res.target.code_version == SHA_IAC  # platform version identity = the iac commit
+    assert (
+        res.target.code_version == SHA_IAC
+    )  # platform version identity = the iac commit
 
 
 def test_platform_prod_maps_to_env_production(monkeypatch):
@@ -498,6 +643,16 @@ def test_platform_ignores_version_ref(monkeypatch):
     assert sent["ref"] == SHA_IAC
 
 
+def test_platform_skips_app_image_readiness(monkeypatch):
+    def boom(*_args, **_kw):
+        raise AssertionError("platform deploys must not wait on app images")
+
+    monkeypatch.setattr(dv2, "_wait_for_image_dependencies", boom)
+    sent, res = _platform(monkeypatch)
+    assert sent["services"] == ["platform/redis"]
+    assert res.backend == "iac-runner"
+
+
 def test_platform_wait_polls_and_records_final(monkeypatch):
     _sent, res = _platform(monkeypatch, poll_status="completed")
     assert res.detail["iac_runner_final"]["status"] == "completed"
@@ -506,3 +661,57 @@ def test_platform_wait_polls_and_records_final(monkeypatch):
 def test_platform_wait_raises_on_failed_deploy(monkeypatch):
     with pytest.raises(RuntimeError, match="ended 'failed'"):
         _platform(monkeypatch, poll_status="failed")
+
+
+def test_wait_for_image_dependencies_retries_until_all_artifacts_exist(monkeypatch):
+    spec = dv2.service_spec("finance_report/app")
+    attempts = {"backend": 0, "frontend": 0}
+    sleeps = []
+
+    def exists(image, image_ref):
+        assert image_ref == "abcdef0"
+        if image.endswith("-backend"):
+            attempts["backend"] += 1
+            return True
+        attempts["frontend"] += 1
+        return attempts["frontend"] >= 2
+
+    monkeypatch.setattr(dv2, "_image_manifest_exists", exists)
+    monkeypatch.setattr(dv2.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    dv2._wait_for_image_dependencies(spec, "abcdef0", timeout=30, poll_seconds=1)
+
+    assert attempts == {"backend": 2, "frontend": 2}
+    assert sleeps == [1]
+
+
+def test_wait_for_image_dependencies_reports_missing_artifact(monkeypatch):
+    spec = dv2.service_spec("finance_report/app")
+
+    monkeypatch.setattr(dv2, "_image_manifest_exists", lambda *_args, **_kw: False)
+
+    with pytest.raises(RuntimeError, match="not published after 0s"):
+        dv2._wait_for_image_dependencies(spec, "abcdef0", timeout=0, poll_seconds=0)
+
+
+@pytest.mark.parametrize(
+    "timeout,poll_seconds",
+    [(float("nan"), 1), (float("inf"), 1), (1, float("nan")), (1, float("inf"))],
+)
+def test_wait_for_image_dependencies_rejects_non_finite_overrides(
+    timeout, poll_seconds
+):
+    spec = dv2.service_spec("finance_report/app")
+
+    with pytest.raises(ValueError, match="must be finite"):
+        dv2._wait_for_image_dependencies(
+            spec, "abcdef0", timeout=timeout, poll_seconds=poll_seconds
+        )
+
+
+def test_wait_for_image_dependencies_rejects_non_finite_env(monkeypatch):
+    spec = dv2.service_spec("finance_report/app")
+
+    monkeypatch.setenv("DEPLOY_V2_IMAGE_WAIT_SECONDS", "nan")
+    with pytest.raises(ValueError, match="must be finite"):
+        dv2._wait_for_image_dependencies(spec, "abcdef0")
