@@ -22,6 +22,10 @@ from libs.observability_dashboards import (
 
 ROOT = Path(__file__).resolve().parents[2]
 OBS_DIR = ROOT / "finance_report" / "finance_report" / "observability"
+APPLY_OBSERVABILITY_WORKFLOW = (
+    ROOT / ".github" / "workflows" / "apply-observability.yml"
+)
+SIGNOZ_ALERT_CANARY = ROOT / "tools" / "signoz_alert_rule_canary.py"
 
 
 def test_openpanel_analytics_spec_is_valid_and_funnel_is_well_formed() -> None:
@@ -145,8 +149,8 @@ def test_finance_report_slo_and_business_alert_rules_are_defined() -> None:
         assert "SOP-004C" in rule.summary
 
 
-def test_metric_alert_definition_renders_signoz_v2_payload() -> None:
-    """#1106: metric alerts render to SigNoz v2 threshold rules routed to Lark."""
+def test_metric_alert_definition_renders_signoz_v5_payload() -> None:
+    """#1106: metric alerts render to SigNoz v5 PromQL rules routed to Lark."""
     rule = {d.alert_name: d for d in load_alert_definitions()}[
         "FinanceReportHigh5xxRate"
     ]
@@ -154,14 +158,20 @@ def test_metric_alert_definition_renders_signoz_v2_payload() -> None:
     payload = rule.to_signoz_payload(["chan-1"])
 
     assert payload["alert"] == "FinanceReportHigh5xxRate"
-    assert payload["alertType"] == "METRICS_BASED_ALERT"
+    assert payload["alertType"] == "METRIC_BASED_ALERT"
+    assert payload["ruleType"] == "promql_rule"
     assert payload["schemaVersion"] == "v2alpha1"
-    assert payload["condition"]["compositeQuery"]["queryType"] == "promql"
+    composite = payload["condition"]["compositeQuery"]
+    assert composite["queryType"] == "promql"
+    assert "builderQueries" not in composite
+    assert "promQueries" not in composite
     assert (
         "http_server_request_count"
-        in payload["condition"]["compositeQuery"]["promQueries"]["A"]["query"]
+        in payload["condition"]["compositeQuery"]["queries"][0]["spec"]["query"]
     )
     threshold = payload["condition"]["thresholds"]["spec"][0]
+    assert threshold["op"] == "1"
+    assert threshold["matchType"] == "2"
     assert threshold["target"] == 0.05
     assert threshold["targetUnit"] == "%"
     assert threshold["channels"] == ["chan-1"]
@@ -374,20 +384,184 @@ def test_metric_alert_requires_metric_specific_summary_and_service(tmp_path) -> 
         load_alert_definitions(missing_service)
 
 
-def test_apply_tasks_are_invoke_tasks() -> None:
-    """#373: invoke exposes apply + print tasks for alerts and dashboard."""
+def _load_fr_observability_tasks(monkeypatch):
     fake_invoke = types.ModuleType("invoke")
     fake_invoke.task = lambda func=None, **_kwargs: func if func else (lambda f: f)
-    sys.modules.setdefault("invoke", fake_invoke)
+
+    exceptions_module = types.ModuleType("invoke.exceptions")
+
+    class Exit(Exception):
+        def __init__(self, message="", code=0):
+            super().__init__(message)
+            self.code = code
+
+    exceptions_module.Exit = Exit
+    monkeypatch.setitem(sys.modules, "invoke", fake_invoke)
+    monkeypatch.setitem(sys.modules, "invoke.exceptions", exceptions_module)
 
     path = OBS_DIR / "shared_tasks.py"
     spec = importlib.util.spec_from_file_location("fr_observability_under_test", path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module, Exit
+
+
+def test_apply_tasks_are_invoke_tasks(monkeypatch) -> None:
+    """#373: invoke exposes apply + print tasks for alerts and dashboard."""
+    module, _exit = _load_fr_observability_tasks(monkeypatch)
 
     for name in ("apply_alerts", "apply_dashboard", "print_alerts", "print_dashboard"):
         assert hasattr(module, name), name
+
+
+def test_apply_alerts_raises_nonzero_exit_when_rule_create_fails(monkeypatch) -> None:
+    """#1106 regression: SigNoz 400s must fail the GitHub apply workflow."""
+    module, Exit = _load_fr_observability_tasks(monkeypatch)
+
+    class Definition:
+        alert_name = "FinanceReportHigh5xxRate"
+
+        def to_signoz_payload(self, channel_ids):
+            return {"alert": self.alert_name, "channels": channel_ids}
+
+    calls = []
+
+    def fake_request(_c, *, method, path, payload=None):
+        calls.append((method, path, payload))
+        if method == "GET" and path == "/api/v1/rules":
+            return {"ok": True, "data": {"rules": []}, "status": 200, "body": "{}"}
+        return {
+            "ok": False,
+            "data": None,
+            "status": 400,
+            "body": "bad_data",
+        }
+
+    alerting = types.SimpleNamespace(
+        _ensure_signoz_channel=lambda _c: "chan-1",
+        _signoz_request=fake_request,
+    )
+    fake_console = types.ModuleType("libs.console")
+    fake_console.error = lambda *_args, **_kwargs: None
+    fake_console.success = lambda *_args, **_kwargs: None
+    monkeypatch.setitem(sys.modules, "platform.12.alerting.shared", alerting)
+    monkeypatch.setitem(sys.modules, "libs.console", fake_console)
+    monkeypatch.setattr(module, "load_alert_definitions", lambda: [Definition()])
+
+    with pytest.raises(Exit) as exc:
+        module.apply_alerts(object())
+
+    assert exc.value.code == 1
+    assert calls == [
+        ("GET", "/api/v1/rules", None),
+        (
+            "POST",
+            "/api/v1/rules",
+            {"alert": "FinanceReportHigh5xxRate", "channels": ["chan-1"]},
+        ),
+    ]
+
+
+def test_apply_dashboard_raises_nonzero_exit_when_list_fails(monkeypatch) -> None:
+    """#1106 regression: dashboard apply must not create duplicates after list errors."""
+    module, Exit = _load_fr_observability_tasks(monkeypatch)
+
+    calls = []
+
+    def fake_request(_c, *, method, path, payload=None):
+        calls.append((method, path, payload))
+        return {
+            "ok": False,
+            "data": None,
+            "status": 503,
+            "body": "unavailable",
+        }
+
+    fake_console = types.ModuleType("libs.console")
+    fake_console.error = lambda *_args, **_kwargs: None
+    fake_console.success = lambda *_args, **_kwargs: None
+    monkeypatch.setitem(
+        sys.modules,
+        "platform.12.alerting.shared",
+        types.SimpleNamespace(_signoz_request=fake_request),
+    )
+    monkeypatch.setitem(sys.modules, "libs.console", fake_console)
+    monkeypatch.setattr(module, "load_dashboard", lambda: {"title": "Dashboard"})
+
+    with pytest.raises(Exit) as exc:
+        module.apply_dashboard(object())
+
+    assert exc.value.code == 1
+    assert calls == [("GET", "/api/v1/dashboards", None)]
+
+
+def test_signoz_alert_canary_uses_disabled_v5_promql_payload() -> None:
+    """#1106 regression: live canary uses the same disabled v5 PromQL payload."""
+    spec = importlib.util.spec_from_file_location(
+        "signoz_alert_rule_canary_under_test", SIGNOZ_ALERT_CANARY
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    payload = module._build_canary_payload("CanarySigNozPromqlPayload-test", "chan-1")
+
+    assert payload["alert"] == "CanarySigNozPromqlPayload-test"
+    assert payload["disabled"] is True
+    assert payload["alertType"] == "METRIC_BASED_ALERT"
+    assert payload["ruleType"] == "promql_rule"
+    composite = payload["condition"]["compositeQuery"]
+    assert "promQueries" not in composite
+    assert composite["queries"][0]["type"] == "promql"
+    threshold = payload["condition"]["thresholds"]["spec"][0]
+    assert threshold["channels"] == ["chan-1"]
+    assert threshold["op"] == "1"
+    assert threshold["matchType"] == "2"
+    assert payload["labels"]["canary"] == "true"
+
+
+def test_signoz_alert_canary_retries_rule_id_resolution(monkeypatch) -> None:
+    """#1106 regression: canary cleanup should wait for the created rule to list."""
+    spec = importlib.util.spec_from_file_location(
+        "signoz_alert_rule_canary_under_test", SIGNOZ_ALERT_CANARY
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    calls = {"count": 0}
+
+    def fake_request(_base_url, _api_key, *, method, path, payload=None):
+        calls["count"] += 1
+        assert method == "GET"
+        assert path == "/api/v1/rules"
+        if calls["count"] == 1:
+            return {"ok": True, "data": {"rules": []}, "status": 200, "body": "{}"}
+        return {
+            "ok": True,
+            "data": {"rules": [{"alert": "Canary", "id": "rule-1"}]},
+            "status": 200,
+            "body": "{}",
+        }
+
+    monkeypatch.setattr(module, "_signoz_request", fake_request)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    assert (
+        module._resolve_rule_id("https://signoz.example", "key", "Canary") == "rule-1"
+    )
+    assert calls["count"] == 2
+
+
+def test_apply_observability_workflow_exposes_canary_mode() -> None:
+    """#1106 regression: CI can prove alert payloads before real catalog apply."""
+    workflow = APPLY_OBSERVABILITY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "mode:" in workflow
+    assert "- canary" in workflow
+    assert "tools/signoz_alert_rule_canary.py" in workflow
+    assert "inputs.mode == 'canary'" in workflow
+    assert "inputs.mode == 'apply'" in workflow
 
 
 def test_ssot_documents_alert_and_dashboard_apply_path() -> None:

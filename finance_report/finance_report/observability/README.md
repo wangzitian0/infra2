@@ -39,6 +39,11 @@ The metric rules are intentionally reviewed as config-as-code before live apply.
 `finance_async_parse_failure`; applying before those app PRs deploy is harmless
 but those two rules cannot fire until the metrics exist.
 
+Metric alerts render as SigNoz v5 PromQL rules (`METRIC_BASED_ALERT` +
+`promql_rule` with `condition.compositeQuery.queries`). The apply task must exit
+non-zero if SigNoz rejects any checked-in rule. The live SigNoz API still expects
+numeric threshold enums (`op` / `matchType`) inside that v5 envelope.
+
 ## Apply (post-merge)
 
 ```bash
@@ -53,14 +58,21 @@ uv run python -m invoke fr-observability.shared.apply-dashboard
 # Inspect payloads without touching SigNoz:
 uv run python -m invoke fr-observability.shared.print-alerts
 uv run python -m invoke fr-observability.shared.print-dashboard
+
+# Live canary without applying the catalog:
+uv run python tools/signoz_alert_rule_canary.py
 ```
 
 ## Verify (post-merge live gate)
 
-1. Emit a synthetic backend ERROR log; confirm `FinanceReportBackendErrorLogs`
+1. Run `apply-observability.yml` with `mode=canary`; it creates one disabled
+   temporary PromQL rule using the generated payload, verifies SigNoz stores the
+   v5 `queries[]` envelope, then deletes it.
+2. Emit a synthetic backend ERROR log; confirm `FinanceReportBackendErrorLogs`
    fires and a message lands in the Lark group.
-2. Use `fr-observability.shared.print-alerts` to verify the six `#1106` rules
-   render with a channel id and `schemaVersion=v2alpha1`.
-3. Open the SigNoz dashboard "Finance Report — Backend & Frontend" and confirm
+3. Use `fr-observability.shared.print-alerts` to verify the six `#1106` rules
+   render with a channel id, `schemaVersion=v2alpha1`, `METRIC_BASED_ALERT`,
+   `promql_rule`, and `condition.compositeQuery.queries`.
+4. Open the SigNoz dashboard "Finance Report — Backend & Frontend" and confirm
    the four widgets render for `finance-report-backend` and
    `finance-report-frontend`.

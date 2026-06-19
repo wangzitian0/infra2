@@ -1,5 +1,5 @@
 {
-  "$comment": "Config-as-code SigNoz alert rules for finance_report (#373/#1106). The app references FinanceReportBackendErrorLogs in apps/backend/src/observability.py; this file is the reviewable source of truth. Applied idempotently by `invoke fr-observability.shared.apply-alerts`, which routes rules to the shared Feishu/Lark bridge channel. The full SigNoz v2 threshold payload is derived from this shape by libs/observability_dashboards.py + libs/alerting.py.",
+  "$comment": "Config-as-code SigNoz alert rules for finance_report (#373/#1106). The app references FinanceReportBackendErrorLogs in apps/backend/src/observability.py; this file is the reviewable source of truth. Applied idempotently by `invoke fr-observability.shared.apply-alerts`, which routes rules to the shared Feishu/Lark bridge channel. The full SigNoz v5 log/PromQL payload is derived from this shape by libs/observability_dashboards.py + libs/alerting.py.",
   "rules": [
     {
       "signal": "logs",

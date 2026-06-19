@@ -174,8 +174,8 @@ def test_log_error_alert_rule_uses_signoz_v2_threshold_schema() -> None:
     assert filters[1]["value"] == ["ERROR", "FATAL"]
 
 
-def test_metric_alert_rule_uses_signoz_v2_promql_schema() -> None:
-    """#1106: finance_report metric alerts render as SigNoz v2 threshold rules."""
+def test_metric_alert_rule_uses_signoz_v5_promql_schema() -> None:
+    """#1106: finance_report metric alerts render as SigNoz v5 PromQL rules."""
     payload = build_signoz_metric_alert_rule_payload(
         alert_name="FinanceReportHigh5xxRate",
         promql="sum(rate(http_server_request_count[5m]))",
@@ -189,12 +189,24 @@ def test_metric_alert_rule_uses_signoz_v2_promql_schema() -> None:
 
     assert payload["schemaVersion"] == "v2alpha1"
     assert payload["version"] == "v5"
-    assert payload["alertType"] == "METRICS_BASED_ALERT"
+    assert payload["alertType"] == "METRIC_BASED_ALERT"
+    assert payload["ruleType"] == "promql_rule"
     assert payload["condition"]["selectedQueryName"] == "A"
-    assert payload["condition"]["compositeQuery"]["queryType"] == "promql"
-    assert payload["condition"]["compositeQuery"]["promQueries"]["A"][
-        "query"
-    ].startswith("sum(rate(")
+    composite = payload["condition"]["compositeQuery"]
+    assert composite["queryType"] == "promql"
+    assert "builderQueries" not in composite
+    assert "promQueries" not in composite
+    assert composite["queries"] == [
+        {
+            "type": "promql",
+            "spec": {
+                "name": "A",
+                "query": "sum(rate(http_server_request_count[5m]))",
+                "legend": "",
+                "disabled": False,
+            },
+        }
+    ]
     threshold = payload["condition"]["thresholds"]["spec"][0]
     assert threshold["op"] == "1"
     assert threshold["matchType"] == "2"

@@ -13,9 +13,20 @@ on:
     branches: ["main"]
     paths:
       - "finance_report/finance_report/observability/**"
+      - "libs/alerting.py"
       - "libs/observability_dashboards.py"
+      - "tools/signoz_alert_rule_canary.py"
       - ".github/workflows/apply-observability.yml"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Run a disabled SigNoz alert canary or apply the real catalog"
+        required: false
+        default: "apply"
+        type: choice
+        options:
+          - apply
+          - canary
 
 permissions:
   contents: read
@@ -51,8 +62,14 @@ jobs:
             exit 1
           fi
 
+      - name: Canary — SigNoz alert rule payload
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'canary' }}
+        run: uv run python tools/signoz_alert_rule_canary.py
+
       - name: Apply alert rules (idempotent)
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'apply' }}
         run: uv run python -m invoke fr-observability.shared.apply-alerts
 
       - name: Apply dashboard (idempotent)
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'apply' }}
         run: uv run python -m invoke fr-observability.shared.apply-dashboard

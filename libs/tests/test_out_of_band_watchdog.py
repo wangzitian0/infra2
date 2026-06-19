@@ -779,7 +779,11 @@ def _dokploy_projects_fixture():
                 {
                     "name": "production",
                     "compose": [
-                        {"name": "backend", "composeStatus": "error"},
+                        {
+                            "name": "backend",
+                            "composeId": "compose-prod-backend",
+                            "composeStatus": "error",
+                        },
                         {"name": "frontend", "composeStatus": "done"},
                     ],
                     "applications": [
@@ -789,7 +793,11 @@ def _dokploy_projects_fixture():
                 {
                     "name": "staging",
                     "compose": [
-                        {"name": "backend", "composeStatus": "error"},
+                        {
+                            "name": "backend",
+                            "composeId": "compose-staging-backend",
+                            "composeStatus": "error",
+                        },
                         {"name": "frontend", "composeStatus": "idle"},
                     ],
                 },
@@ -813,9 +821,21 @@ def test_dokploy_status_check_flags_error_and_ignores_idle_done_running() -> Non
     watchdog = _load_watchdog()
     captured = {}
 
+    class FakeClient:
+        def list_projects(self):
+            return _dokploy_projects_fixture()
+
+        def get_latest_deployment(self, compose_id):
+            return {
+                "deploymentId": f"deploy-{compose_id}",
+                "status": "error",
+                "logPath": f"/var/lib/dokploy/{compose_id}.log",
+                "errorMessage": "image pull failed",
+            }
+
     def factory(*, host):
         captured["host"] = host
-        return SimpleNamespace(list_projects=lambda: _dokploy_projects_fixture())
+        return FakeClient()
 
     results = watchdog.run_dokploy_status_check(
         {"DOKPLOY_API_KEY": "secret"},
@@ -831,7 +851,10 @@ def test_dokploy_status_check_flags_error_and_ignores_idle_done_running() -> Non
     for result in results:
         assert result.ok is False
         assert result.failure_domain == "dokploy-deploy-status"
-        assert result.detail == "composeStatus=error"
+        assert result.detail.startswith("composeStatus=error composeId=compose-")
+        assert "latest_deployment_status=error" in result.detail
+        assert "latest_deployment_logPath=/var/lib/dokploy/compose-" in result.detail
+        assert "latest_deployment_errorMessage=image pull failed" in result.detail
 
 
 def test_dokploy_status_check_maps_prod_to_p1_and_staging_to_p2() -> None:
