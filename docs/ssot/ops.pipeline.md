@@ -12,8 +12,9 @@
 | **Docs Workflow** | [`.github/workflows/docs-site.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/docs-site.yml) | Pages 构建与发布 |
 | **MkDocs 配置** | [`docs/mkdocs.yml`](../mkdocs.yml) | 站点结构与导航 |
 | **依赖列表** | [`docs/requirements.txt`](../requirements.txt) | Python 依赖 |
-| **IaC Runner Bootstrap** | [`.github/workflows/deploy-platform.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy-platform.yml) | Updates the iac_runner container itself when its bootstrap changes. (Platform SERVICE deploys moved to `deploy.yml`/`deploy_v2` — manual + pinned tag, §4.6.) |
-| **Deploy (deploy_v2)** | [`.github/workflows/deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) | Manual unified deploy front door (app + platform, staging/prod, pinned tag) |
+| **IaC Runner Bootstrap** | [`.github/workflows/deploy-platform.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy-platform.yml) | Updates the iac_runner container itself when its bootstrap changes. |
+| **IaC Input Reconcile** | [`.github/workflows/reconcile-iac-inputs.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/reconcile-iac-inputs.yml) | Main-push input-drift reconcile for `iac_pinned` services via `deploy_v2 -> iac_runner`; config hash decides no-op vs restart. |
+| **Deploy (deploy_v2)** | [`.github/workflows/deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) | Manual unified deploy front door (app + platform, staging/prod, pinned ref) |
 | **Auto-deploy report-branch-main** | [`.github/workflows/deploy-report-main.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy-report-main.yml) | The ONE auto target: main preview re-deploys on app main push |
 
 ---
@@ -36,25 +37,24 @@
 
 ## 3. GitOps 版本部署流水线 (Version Deployment Pipeline)
 
-> **⚠️ 触发模型已变（#370 cutover）**：平台服务部署现在**统一走 `deploy_v2`**（`deploy.yml` /
-> `deploy-report-main.yml`），**手动 + 钉 release tag**（report-branch-main 是唯一自动档）——见
-> [core.environments §4.6](./core.environments.md#46-部署目标与触发)。`deploy-platform.yml` **不再触发服务部署**，
-> 只剩 iac_runner 自更新。下面的签名 `/deploy` webhook 机制**仍然适用**——只是改由 `deploy_v2`
-> （`libs/iac_runner_client`）触发，不再由 `deploy-platform.yml` 自动推送。本节里仍写 `deploy-platform.yml`
-> 触发 `/deploy` 的描述是**迁移前的旧模型**，按上面这条理解。
+> **触发模型**：`deploy-platform.yml` 只更新 iac_runner 自身；普通 `iac_pinned`
+> 服务由 `reconcile-iac-inputs.yml` 在 `main` push 后自动做 input-drift
+> reconcile。该 workflow 不打开 Dokploy native `autoDeploy`，而是把受影响服务交给
+> `deploy_v2 -> iac_runner`，再由 Deployer config-hash gate 决定 no-op 还是重启。
+> `deploy.yml` 仍是 operator-triggered 的手动前门。
 
 ### 架构概览
 
 ```
-┌─────────────┐  deploy_v2 (manual + tag)   ┌──────────────┐     /deploy    ┌─────────────┐
-│   GitHub    │ ────────────────────────▶  │ exact SHA    │ ──────────────▶│ IaC Runner  │
-│  (main)     │                             │              │                │  (staging)  │
+┌─────────────┐  changed inputs + SHA       ┌──────────────┐     /deploy    ┌─────────────┐
+│   GitHub    │ ────────────────────────▶  │ deploy_v2    │ ──────────────▶│ IaC Runner  │
+│  (main)     │                             │ fan-out      │                │  (staging)  │
 └─────────────┘                             └──────────────┘                └─────────────┘
                                                                                     │
                                                                                     ▼
-┌─────────────┐  deploy_v2 (manual + tag)   ┌──────────────┐     /deploy    ┌─────────────┐
-│   Manual    │ ────────────────────────▶  │ tag → SHA    │ ──────────────▶│ IaC Runner  │
-│  (promote)  │                             │  (manual)    │                │ (production)│
+┌─────────────┐  reviewed main SHA          ┌──────────────┐     /deploy    ┌─────────────┐
+│   GitHub    │ ────────────────────────▶  │ deploy_v2    │ ──────────────▶│ IaC Runner  │
+│  (main)     │                             │ code-reviewed│                │ (production)│
 └─────────────┘                             └──────────────┘                └─────────────┘
 ```
 
@@ -62,73 +62,63 @@
 
 **语义化版本**: `v{major}.{minor}.{patch}`
 
-- **Patch**: Staging 迭代 (每次 push main 自动 +1)
-- **Minor**: Production 发布 (手动提升，从 staging tag promote)
+- **App release tags**: app staging/prod fixed environments use reviewed release
+  refs through `deploy.yml` / `deploy_v2`.
+- **IaC-pinned services**: platform/backing-service artifact identity is the
+  infra2 commit SHA. Main merges trigger reconcile; the config hash decides
+  whether a runtime restart is required.
 - **Major**: 架构变更 (罕见，手动)
 
-### Staging 自动部署
+### IaC input-drift reconcile
 
 **触发条件**:
 - Push 到 `main` 分支
-- Modified `bootstrap/06.iac_runner/**`, `platform/**`,
-  `finance_report/**`, `finance/**`, `libs/**`,
-  `scripts/deploy_iac_runner_bootstrap.sh`, or
-  `.github/workflows/deploy-platform.yml`
+- Modified `platform/**`, `finance_report/finance_report/**`, `libs/**`,
+  `tools/**`, `common/**`, `docs/ssot/deploy-dependencies.yaml`, or
+  `.github/workflows/reconcile-iac-inputs.yml`
 
 **工作流**:
-1. Detect whether `bootstrap/06.iac_runner/**` changed.
-2. If runner bootstrap changed, SSH to the VPS with the out-of-band watchdog
-   key and run `scripts/deploy_iac_runner_bootstrap.sh` before any public
-   `/deploy` request.
-   Detection reads the GitHub push event's `added`/`modified`/`removed` file
-   lists instead of diffing the merge commit, so squash, merge-commit, and
-   rebase-style main updates all use the same source of truth.
-   The script reads the confirmed Dokploy compose env back through the Dokploy
-   API and uses that as the `docker compose --env-file` source, so token repairs
-   are not lost by rebuilding from an old running container environment.
-3. Run IaC Runner `/health` after the external bootstrap update.
-4. Resolve the deployment source to an immutable 40-character commit SHA.
-5. 调用 IaC Runner `/deploy` endpoint with `wait=false`:
+1. Checkout with full history so the workflow can diff `${{ github.event.before }}`
+   to `${{ github.sha }}`.
+2. Run `tools.reconcile_iac_inputs` to compute changed files and fan-out with
+   `libs.deploy_dependencies.explain_fanout`.
+3. Drop non-`iac_pinned` services such as `finance_report/app`, because fixed app
+   deploys need an explicit app `version_ref`.
+4. For selected `iac_pinned` services, call `deploy_v2` with `iac_ref=GITHUB_SHA`.
+   Non-`prod_only` services reconcile staging first, then prod with
+   `--code-reviewed --staging-validated`; `prod_only` services reconcile prod only.
+5. iac_runner/Deployer compares local vs remote `IAC_CONFIG_HASH`; unchanged inputs
+   exit as a successful no-op, changed inputs deploy and verify the effective hash.
+6. The workflow writes changed files, selected services, dropped files, ignored
+   services, and deploy results to the GitHub step summary and artifact.
+
+每次 apply 仍调用 IaC Runner `/deploy` endpoint:
    ```json
    {
      "env": "staging",
      "ref": "0123456789abcdef0123456789abcdef01234567",
-     "source_ref": "main",
-     "triggered_by": "github-actions",
+     "services": ["platform/alerting"],
+     "triggered_by": "deploy_v2",
      "wait": false
    }
    ```
-6. GitHub Actions uses timestamped nonce HMAC requests for `/deploy` and
-   `/deploy/status`; the public response includes only status, counts, and
-   diagnostics, never child stdout/stderr.
-7. GitHub Actions 使用签名请求轮询 `/deploy/status`，避免 Cloudflare
-   长连接 524。
-8. IaC Runner checkout the exact commit SHA 并执行 `invoke {service}.sync` for all platform services
-9. GitHub Actions fails when any service sync fails.
 
-### Production 手动部署
+### Manual release deploys
 
 **触发条件**:
-- GitHub Actions manual dispatch only.
-- The job is bound to the `production` GitHub Environment so environment
-  protection rules can require approval.
-- Provide a semver release tag such as `v1.2.4`; production does not accept
-  arbitrary branches or raw refs.
+- `finance_report/app` staging/prod fixed environments remain manual release
+  deploys because they require an explicit app `version_ref`.
+- Operators may still manually dispatch `deploy.yml` for any app or platform
+  reconcile when a break/fix needs an explicit pinned ref.
 
 **工作流**:
-1. Verify the semver tag exists.
-2. Resolve the tag to an immutable commit SHA.
-3. 调用 IaC Runner `/deploy` endpoint with `wait=false` and poll `/deploy/status`:
-   ```json
-   {
-     "env": "production",
-     "ref": "0123456789abcdef0123456789abcdef01234567",
-     "source_ref": "v1.2.4",
-     "triggered_by": "manual-promotion",
-     "wait": false
-   }
-   ```
-4. Create or update the GitHub Release through the release process.
+1. Resolve the requested app `version_ref` and infra2 `iac_ref` to immutable
+   commit SHAs.
+2. Apply deploy_v2 red lines: prod requires `--staging-validated` and
+   `--code-reviewed`.
+3. Execute the same deploy_v2 front door used by automation.
+4. Create or update the GitHub Release through the release process when this is
+   a production app promotion.
 
 ### Hotfix 流程
 

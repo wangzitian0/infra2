@@ -309,10 +309,17 @@ python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref
 | **prod** | **手动** | **同一个 release tag**（promote-not-rebuild）| `deploy_v2 --type prod --version-ref vX.Y.Z --staging-validated --code-reviewed` | 真实 prod 数据 | `report.<domain>` | 长期 |
 
 > **平台服务**（iac_pinned）无 preview，只有 staging / prod。
-> **现状**：和 app 一样**手动 + 钉 tag** —— 它们的「版本」是 `iac_ref`，staging≡prod 靠钉**同一个 infra2
-> release tag**（`deploy_v2 --service platform/X --type staging --iac-ref vX.Y.Z`），经 iac_runner webhook（§4.7.2）。
-> `.github/workflows/deploy-platform.yml` 只保留 iac_runner bootstrap/self-update，不再在 main push 时自动部署平台服务。
-> CI（lint + 单测 + E2E）**不**触发任何 staging/prod 部署。
+> **触发模型**：`main` 合并后由 `.github/workflows/reconcile-iac-inputs.yml`
+> 自动执行 input-drift reconcile：changed files 经
+> `docs/ssot/deploy-dependencies.yaml` fan-out 到受影响的 `iac_pinned`
+> 服务，使用合并 commit SHA 作为 `iac_ref` 触发 `deploy_v2 -> iac_runner`。
+> 最终是否重启由 iac_runner/Deployer 的 config-hash gate 决定；hash
+> 未变即 no-op，不浪费 Dokploy 重启资源。
+> `.github/workflows/deploy-platform.yml` 只保留 iac_runner bootstrap/self-update，
+> 不负责普通平台服务部署；手动 `deploy.yml` 仍可用于 operator-triggered
+> pinned reconcile。
+> CI（lint + 单测 + E2E）本身**不**触发 staging/prod 部署；reconcile 是独立的
+> post-merge apply workflow。
 
 **preview 多别名模型**（每个别名 = 一套独立的 Dokploy compose 栈）：
 

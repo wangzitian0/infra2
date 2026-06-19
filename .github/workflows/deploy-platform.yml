@@ -3,10 +3,9 @@ name: IaC Runner Bootstrap
 # Updates the iac_runner CONTAINER ITSELF when its bootstrap code changes — a separate
 # lifecycle deploy_v2 cannot own (deploy_v2 depends on the runner being up).
 #
-# It NO LONGER deploys platform SERVICES: that moved to deploy_v2 (manual + pinned iac_ref
-# tag, see SSOT §4.6 and the #370 cutover). The old "Trigger IaC Runner" step + the
-# platform/** / finance_report/** / libs/** push paths are gone — a platform change no longer
-# auto-deploys; you deploy it deliberately via `deploy.yml` / `deploy_v2 --service platform/X`.
+# It NO LONGER deploys platform SERVICES: ordinary iac_pinned services reconcile through
+# reconcile-iac-inputs.yml -> deploy_v2 -> iac_runner. This workflow only handles the
+# runner lifecycle that deploy_v2 cannot own because deploy_v2 depends on the runner.
 
 on:
   push:

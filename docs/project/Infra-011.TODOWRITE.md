@@ -75,7 +75,7 @@
 - [ ] Extend infra probe heartbeat payload with probe group summaries so Cloudflare can distinguish runner liveness from probe failures.
 - [ ] Extend route canary phase evidence with deadline and budget-breach fields.
 - [ ] Define and test cross-stage disagreement records for internal health vs public route, heartbeat vs probe result, canary vs app readiness, and GitHub fallback vs Cloudflare route checks.
-- [ ] Use Env x Stage evidence to propose safe acceleration only after fallback coverage is proven; keep production full-sync/manual protection unchanged by default.
+- [ ] Use Env x Stage evidence to propose safe acceleration only after fallback coverage is proven; keep app production manual, and allow `iac_pinned` production reconcile only through reviewed-main fan-out plus deploy_v2/hash-gate evidence.
 
 ## 2026-06-18 Off-host Restore Rehearsal
 

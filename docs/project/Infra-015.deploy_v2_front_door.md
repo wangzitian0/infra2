@@ -43,12 +43,14 @@ hand-copied list — adding a platform service cannot drift the deploy registry.
 | Target | Trigger |
 |--------|---------|
 | **report-branch-main** | **auto** — app `main` push → `repository_dispatch` → `deploy-report-main.yml` |
-| staging / prod (app **and** platform) | **manual + pinned release tag** (staging pins the SAME tag as prod for parity; platform pins the `iac_ref` tag) |
+| app staging / prod | **manual + pinned release tag** (staging pins the SAME tag as prod for parity) |
+| `iac_pinned` staging / prod | **auto input-drift reconcile on infra2 main** via `reconcile-iac-inputs.yml`; manual `deploy.yml` remains the operator override |
 
 `deploy-platform.yml` is now **bootstrap-only**: it updates the iac_runner
 container itself when `bootstrap/06.iac_runner/**` changes — a lifecycle
 `deploy_v2` cannot own (it depends on the runner being up). It no longer
-auto-deploys platform services on push.
+deploys ordinary platform services on push; `reconcile-iac-inputs.yml` owns that
+input-drift trigger and still enters through `deploy_v2`.
 
 ## Scope (MECE, delivered as merged PRs)
 - [x] **Coordinate** — converged `(service, type, version_ref, iac_ref)` (#354);
