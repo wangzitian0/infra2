@@ -68,7 +68,7 @@ flowchart TB
 - **触发条件**：新服务上线
 - **步骤**：
     1. 添加 `compose.yaml` 与 `deploy.py`。
-    2. 通过 `deploy_v2 --service <service> --type staging|prod --iac-ref <ref>` 部署。
+    2. 通过 `python -m tools.deploy_v2 --service <service> --type staging|prod --iac-ref <ref>` 部署。
     3. 更新相关 SSOT 文档。
 
 ---
