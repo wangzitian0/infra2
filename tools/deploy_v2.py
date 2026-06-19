@@ -22,8 +22,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
+import time
 from dataclasses import dataclass
 
 import httpx  # Dokploy transport errors from libs.dokploy surface as httpx exceptions
@@ -63,6 +65,16 @@ _INFRA2_REPO = "https://github.com/wangzitian0/infra2"
 _INFRA2_DEFAULT_BRANCH = "main"
 # The canary runs arbitrary code on a fixed throwaway preview slot no real PR reuses.
 _CANARY_PR = 999
+_DEFAULT_IMAGE_WAIT_SECONDS = 300
+_DEFAULT_IMAGE_POLL_SECONDS = 10.0
+_IMAGE_MANIFEST_ACCEPT = ", ".join(
+    [
+        "application/vnd.oci.image.index.v1+json",
+        "application/vnd.oci.image.manifest.v1+json",
+        "application/vnd.docker.distribution.manifest.list.v2+json",
+        "application/vnd.docker.distribution.manifest.v2+json",
+    ]
+)
 
 
 def _default_main(version_ref) -> str:
@@ -94,7 +106,11 @@ def _resolve_for_type(spec, version_ref, *, repo: str):
     if spec.alias_kind == "pr":
         return resolve_pr(version_ref, repo=repo), version_ref
     # `branch` defaults to the main tip; the other ref types require an explicit version_ref.
-    ref = _default_main(version_ref) if spec.alias_kind == "branch" else str(version_ref).strip()
+    ref = (
+        _default_main(version_ref)
+        if spec.alias_kind == "branch"
+        else str(version_ref).strip()
+    )
     validate_ref_form(spec.key, classify_ref(ref))
     resolved = resolve_image_ref(ref, repo=repo)
     # A bare short sha resolves to itself (not a 40-hex commit) — reject with a surface-level
@@ -123,6 +139,172 @@ def _normalize_expected_sha(expected_sha: str | None) -> str | None:
     if not _SHA_RE.match(cleaned):
         raise ValueError("--expected-sha must be a full 40-hex commit sha")
     return cleaned
+
+
+def _env_number(name: str, default: float) -> float:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number, got {raw!r}") from exc
+    if not math.isfinite(value):
+        raise ValueError(f"{name} must be finite, got {raw!r}")
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative, got {value}")
+    return value
+
+
+def _registry_image_parts(image: str) -> tuple[str, str]:
+    registry, sep, repository = image.partition("/")
+    if not sep or not registry or not repository:
+        raise ValueError(
+            f"image repository must include registry and repository path, got {image!r}"
+        )
+    return registry, repository
+
+
+def _parse_bearer_authenticate(header: str) -> dict[str, str]:
+    scheme, _, rest = header.partition(" ")
+    if scheme.lower() != "bearer":
+        raise RuntimeError("registry did not return a Bearer authentication challenge")
+    params: dict[str, str] = {}
+    for item in rest.split(","):
+        key, sep, value = item.strip().partition("=")
+        if sep:
+            params[key] = value.strip().strip('"')
+    return params
+
+
+def _registry_bearer_token(client: httpx.Client, authenticate_header: str) -> str:
+    params = _parse_bearer_authenticate(authenticate_header)
+    realm = params.get("realm")
+    if not realm:
+        raise RuntimeError("registry Bearer challenge did not include a token realm")
+    token_params = {
+        key: value for key in ("service", "scope") if (value := params.get(key))
+    }
+    response = client.get(realm, params=token_params)
+    response.raise_for_status()
+    payload = response.json()
+    token = payload.get("token") or payload.get("access_token")
+    if not token:
+        raise RuntimeError("registry token response did not include a token")
+    return str(token)
+
+
+def _image_manifest_exists(
+    image: str, image_ref: str, *, client: httpx.Client | None = None
+) -> bool:
+    """Return whether ``image:image_ref`` exists in the registry.
+
+    The app images live in GHCR, but this uses the standard Docker Registry v2
+    manifest API. Public GHCR packages often answer the first request with a
+    Bearer challenge; in that case we fetch an anonymous pull token and retry.
+    """
+    registry, repository = _registry_image_parts(image)
+    url = f"https://{registry}/v2/{repository}/manifests/{image_ref}"
+    headers = {"Accept": _IMAGE_MANIFEST_ACCEPT}
+
+    def request(c: httpx.Client, *, token: str | None = None) -> httpx.Response:
+        req_headers = dict(headers)
+        if token:
+            req_headers["Authorization"] = f"Bearer {token}"
+        return c.get(url, headers=req_headers)
+
+    if client is None:
+        with httpx.Client(timeout=10.0, follow_redirects=True) as created:
+            return _image_manifest_exists(image, image_ref, client=created)
+
+    response = request(client)
+    if response.status_code == 401:
+        token = _registry_bearer_token(
+            client, response.headers.get("www-authenticate", "")
+        )
+        response = request(client, token=token)
+    if 200 <= response.status_code < 300:
+        return True
+    if response.status_code == 404:
+        return False
+    if response.status_code in (401, 403):
+        raise RuntimeError(
+            f"registry refused manifest check for {image}:{image_ref} "
+            f"(status {response.status_code})"
+        )
+    if response.status_code == 429 or response.status_code >= 500:
+        raise RuntimeError(
+            f"registry manifest check for {image}:{image_ref} is temporarily unavailable "
+            f"(status {response.status_code})"
+        )
+    raise RuntimeError(
+        f"registry manifest check for {image}:{image_ref} returned status "
+        f"{response.status_code}"
+    )
+
+
+def _wait_for_image_dependencies(
+    spec,
+    image_ref: str,
+    *,
+    timeout: float | None = None,
+    poll_seconds: float | None = None,
+) -> None:
+    """Wait until the service's declared image artifacts expose ``image_ref``.
+
+    This closes the race where ``main`` resolves to a commit before the app repo has
+    published all images for that commit. The check is before any Dokploy mutation, so a
+    missing artifact fails as an input/readiness problem rather than creating a broken
+    stack and paging on composeStatus=error.
+    """
+    repositories = tuple(getattr(spec, "image_repositories", ()) or ())
+    if not repositories:
+        return
+    max_wait = _env_number("DEPLOY_V2_IMAGE_WAIT_SECONDS", _DEFAULT_IMAGE_WAIT_SECONDS)
+    interval = _env_number("DEPLOY_V2_IMAGE_POLL_SECONDS", _DEFAULT_IMAGE_POLL_SECONDS)
+    if timeout is not None:
+        max_wait = float(timeout)
+    if poll_seconds is not None:
+        interval = float(poll_seconds)
+    if not math.isfinite(max_wait) or not math.isfinite(interval):
+        raise ValueError("image wait timeout and poll interval must be finite")
+    if max_wait < 0 or interval < 0:
+        raise ValueError("image wait timeout and poll interval must be non-negative")
+    if max_wait > 0 and interval == 0:
+        raise ValueError(
+            "image poll interval must be positive when image wait is enabled"
+        )
+
+    deadline = time.monotonic() + max_wait
+    last_missing: list[str] = []
+    last_errors: list[str] = []
+    while True:
+        missing: list[str] = []
+        errors: list[str] = []
+        for image in repositories:
+            try:
+                if not _image_manifest_exists(image, image_ref):
+                    missing.append(image)
+            except (RuntimeError, httpx.HTTPError) as exc:
+                errors.append(f"{image}: {exc}")
+        if not missing and not errors:
+            return
+        last_missing = missing
+        last_errors = errors
+        if time.monotonic() >= deadline:
+            parts = []
+            if last_missing:
+                parts.append(
+                    "missing " + ", ".join(f"{i}:{image_ref}" for i in last_missing)
+                )
+            if last_errors:
+                parts.append("errors " + "; ".join(last_errors))
+            detail = "; ".join(parts) or "unknown registry readiness state"
+            raise RuntimeError(
+                f"required image artifacts for {spec.key} image_ref {image_ref!r} "
+                f"not published after {max_wait:g}s: {detail}"
+            )
+        time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
 
 
 def resolve_data_lane(target: DeployTarget) -> str:
@@ -251,6 +433,8 @@ def deploy_v2(
     iac_runner_url: str | None = None,
     iac_webhook_secret: str | None = None,
     triggered_by: str = "deploy_v2",
+    image_wait_seconds: float | None = None,
+    image_poll_seconds: float | None = None,
 ) -> DeployV2Result:
     """Execute one deploy_v2 coordinate ``(service, type, version_ref, iac_ref)``.
 
@@ -328,6 +512,13 @@ def deploy_v2(
             "deploy_v2 only routes the finance_report app backends or iac_pinned "
             "services derived from libs.service_registry."
         )
+
+    _wait_for_image_dependencies(
+        svc_spec,
+        resolved.image_ref,
+        timeout=image_wait_seconds,
+        poll_seconds=image_poll_seconds,
+    )
 
     if env_config(target.env).dynamic:  # preview (incl. canary)
         result = _preview_up(
@@ -441,6 +632,24 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="optional full commit sha that version_ref must resolve to before deploy",
     )
+    parser.add_argument(
+        "--image-wait-seconds",
+        type=float,
+        default=None,
+        help=(
+            "seconds to wait for service image artifacts to publish "
+            "(default: DEPLOY_V2_IMAGE_WAIT_SECONDS or 300)"
+        ),
+    )
+    parser.add_argument(
+        "--image-poll-seconds",
+        type=float,
+        default=None,
+        help=(
+            "seconds between image artifact readiness checks "
+            "(default: DEPLOY_V2_IMAGE_POLL_SECONDS or 10)"
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -470,6 +679,8 @@ def main(argv: list[str] | None = None) -> int:
             verify_config=not args.no_verify_config,
             timeout=args.timeout,
             expected_sha=args.expected_sha,
+            image_wait_seconds=args.image_wait_seconds,
+            image_poll_seconds=args.image_poll_seconds,
         )
     except (ValueError, RuntimeError, TimeoutError, httpx.HTTPError) as exc:
         print(f"deploy_v2 failed: {exc}", file=sys.stderr)

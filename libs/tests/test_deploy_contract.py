@@ -85,7 +85,9 @@ def test_preview_slots(kind, value, expected):
 
 
 def test_preview_main_and_same_commit_are_distinct_slots():
-    a = _target("finance_report/app", "preview", alias_kind="branch", alias_value="main")
+    a = _target(
+        "finance_report/app", "preview", alias_kind="branch", alias_value="main"
+    )
     b = _target(
         "finance_report/app", "preview", alias_kind="commit", alias_value="1ab32d5"
     )
@@ -129,6 +131,13 @@ def test_unknown_service_rejected():
 
 def test_service_spec_lookup():
     assert service_spec("finance_report/app").base_subdomain == "report"
+
+
+def test_app_service_declares_image_artifact_dependencies():
+    assert service_spec("finance_report/app").image_repositories == (
+        "ghcr.io/wangzitian0/finance_report-backend",
+        "ghcr.io/wangzitian0/finance_report-frontend",
+    )
 
 
 # --- prod_only / env_shared (validate_deploy_target directly) --------------

@@ -60,6 +60,9 @@ class ServiceSpec:
             ``iac_ref`` (no app code version). ``deploy_v2`` routes these to the iac_runner
             ``/deploy`` webhook instead of the app backends, and ``version_ref`` is unused —
             the deploy ref IS ``iac_ref``. See SSOT §4.7.2.
+        image_repositories: Container image repositories that must already expose the
+            resolved ``image_ref`` before this service can be deployed. This is an artifact
+            readiness dependency, distinct from the build/config fan-out graph.
     """
 
     key: str
@@ -68,6 +71,7 @@ class ServiceSpec:
     prod_only: bool = False
     env_shared: bool = False
     iac_pinned: bool = False
+    image_repositories: tuple[str, ...] = ()
 
 
 # The finance_report APP has a BESPOKE deploy_v2 backend (Dokploy preview_lifecycle /
@@ -78,7 +82,15 @@ class ServiceSpec:
 _APP_KEY = "finance_report/app"
 
 SERVICES: dict[str, ServiceSpec] = {
-    _APP_KEY: ServiceSpec(key=_APP_KEY, base_subdomain="report", web_facing=True),
+    _APP_KEY: ServiceSpec(
+        key=_APP_KEY,
+        base_subdomain="report",
+        web_facing=True,
+        image_repositories=(
+            "ghcr.io/wangzitian0/finance_report-backend",
+            "ghcr.io/wangzitian0/finance_report-frontend",
+        ),
+    ),
 }
 
 
@@ -143,7 +155,9 @@ def sub_domain_for(
             kind = "prod_only" if spec.prod_only else "env_shared"
             raise ValueError(f"{spec.key} has no preview instances ({kind})")
         if alias_kind is None:
-            raise ValueError("preview requires an alias_kind (branch | pr | commit | tag)")
+            raise ValueError(
+                "preview requires an alias_kind (branch | pr | commit | tag)"
+            )
         return (
             f"{spec.base_subdomain}{preview_alias(alias_kind, alias_value).env_suffix}"
         )
@@ -308,7 +322,9 @@ class DeployTypeSpec:
     alias_kind: str | None = (
         None  # preview alias kind (branch|pr|commit|tag); None = fixed env
     )
-    accepted_forms: tuple[str, ...] = ()  # version_ref forms this type accepts (matrix row)
+    accepted_forms: tuple[
+        str, ...
+    ] = ()  # version_ref forms this type accepts (matrix row)
 
     # NOTE: the gates are NOT re-declared here — they derive from the type's env, the single
     # source of truth: staging-first is ``env_config(env).requires_staging_first`` and the
@@ -317,8 +333,14 @@ class DeployTypeSpec:
 
 
 # The form vocabulary (resolve_deploy_ref.classify_ref outputs + the PR-number form).
-_CODE_FORMS = ("branch", "sha")  # an app commit: main tip / a pinned sha -> short-sha image
-_RELEASE_FORMS = ("tag", "release-branch")  # a retained release image: vX.Y.Z / its line
+_CODE_FORMS = (
+    "branch",
+    "sha",
+)  # an app commit: main tip / a pinned sha -> short-sha image
+_RELEASE_FORMS = (
+    "tag",
+    "release-branch",
+)  # a retained release image: vX.Y.Z / its line
 _ALL_REF_FORMS = _CODE_FORMS + _RELEASE_FORMS
 
 # The closed set of deploy types. Adding a scenario = adding one entry here (open-closed);
