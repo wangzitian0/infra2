@@ -559,13 +559,19 @@ def run_dokploy_status_check(
 
     host = env.get("DOKPLOY_STATUS_HOST", "").strip() or "cloud.zitian.party"
     try:
-        projects = client_factory(host=host).list_projects()
+        client = client_factory(host=host)
+        projects = client.list_projects()
         results: list[CheckResult] = []
         for project in projects or []:
             project_name = project.get("name", "unknown")
             for environment in project.get("environments", []) or []:
                 env_name = environment.get("name", "unknown")
                 for compose in environment.get("compose", []) or []:
+                    evidence = (
+                        _dokploy_compose_error_evidence(client, compose)
+                        if _dokploy_status_is_error(compose.get("composeStatus"))
+                        else {}
+                    )
                     results.extend(
                         _dokploy_status_failure(
                             project_name,
@@ -573,6 +579,7 @@ def run_dokploy_status_check(
                             compose.get("name", "unknown"),
                             compose.get("composeStatus"),
                             "composeStatus",
+                            evidence,
                         )
                     )
                 for application in environment.get("applications", []) or []:
@@ -583,6 +590,7 @@ def run_dokploy_status_check(
                             application.get("name", "unknown"),
                             application.get("applicationStatus"),
                             "applicationStatus",
+                            {},
                         )
                     )
     except Exception as exc:  # noqa: BLE001 - watchdog must turn errors into alerts.
@@ -604,17 +612,68 @@ def _dokploy_status_failure(
     unit_name: str,
     status: object,
     status_field: str,
+    evidence: Mapping[str, object],
 ) -> list[CheckResult]:
-    if not isinstance(status, str) or status.strip().lower() != "error":
+    if not _dokploy_status_is_error(status):
         return []
+    detail_parts = [f"{status_field}=error"]
+    for key in (
+        "composeId",
+        "latest_deployment_id",
+        "latest_deployment_status",
+        "latest_deployment_logPath",
+        "latest_deployment_errorMessage",
+        "latest_deployment_error",
+    ):
+        value = evidence.get(key)
+        if value:
+            detail_parts.append(f"{key}={_one_line(str(value))}")
     return [
         CheckResult(
             f"dokploy-status:{project_name}/{env_name}/{unit_name}",
             False,
-            f"{status_field}=error",
+            " ".join(detail_parts),
             "dokploy-deploy-status",
         )
     ]
+
+
+def _dokploy_status_is_error(status: object) -> bool:
+    return isinstance(status, str) and status.strip().lower() == "error"
+
+
+def _dokploy_compose_error_evidence(
+    client: object, compose: Mapping[str, object]
+) -> dict[str, object]:
+    compose_id = str(compose.get("composeId") or compose.get("id") or "").strip()
+    if not compose_id:
+        return {}
+    evidence: dict[str, object] = {"composeId": compose_id}
+    get_latest_deployment = getattr(client, "get_latest_deployment", None)
+    if not callable(get_latest_deployment):
+        return evidence
+    try:
+        latest = get_latest_deployment(compose_id)
+    except Exception as exc:  # noqa: BLE001 - evidence must not mask status alerts.
+        evidence["latest_deployment_error"] = (
+            f"{type(exc).__name__}: {_one_line(str(exc))}"
+        )
+        return evidence
+    if isinstance(latest, Mapping):
+        evidence.update(_dokploy_deployment_evidence(latest))
+    return evidence
+
+
+def _dokploy_deployment_evidence(deployment: Mapping[str, object]) -> dict[str, object]:
+    mapping = {
+        "id": deployment.get("deploymentId") or deployment.get("id"),
+        "status": deployment.get("status"),
+        "logPath": deployment.get("logPath"),
+        "errorMessage": _one_line(str(deployment.get("errorMessage") or "")),
+    }
+    return {
+        f"latest_deployment_{key}": value for key, value in mapping.items() if value
+    }
 
 
 def _severity_for(name: str, failure_domain: str) -> str:

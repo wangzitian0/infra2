@@ -88,6 +88,8 @@ def apply_alerts(c, dry_run=False):
     Routes each rule to the shared Feishu/Lark bridge channel. Idempotent: an
     existing rule with the same alert name is left untouched.
     """
+    from invoke.exceptions import Exit
+
     from libs.console import error, success
     from libs.alerting import find_signoz_rule_id
 
@@ -102,13 +104,18 @@ def apply_alerts(c, dry_run=False):
     channel_id = alerting._ensure_signoz_channel(c)
     if not channel_id:
         error("Cannot apply alert rules without a SigNoz channel id")
-        return False
+        raise Exit("Cannot apply alert rules without a SigNoz channel id", code=1)
 
     # List existing rules ONCE, then match locally — avoids an N+1 GET /api/v1/rules
     # per definition as the rule set grows.
-    existing_rules = alerting._signoz_request(
-        c, method="GET", path="/api/v1/rules"
-    ).get("data")
+    listed = alerting._signoz_request(c, method="GET", path="/api/v1/rules")
+    if not listed["ok"]:
+        error(
+            "Failed to list SigNoz alert rules before apply",
+            f"status={listed['status']} body={listed['body'][:500]}",
+        )
+        raise Exit("Failed to list SigNoz alert rules before apply", code=1)
+    existing_rules = listed.get("data")
 
     all_ok = True
     for definition in definitions:
@@ -127,6 +134,8 @@ def apply_alerts(c, dry_run=False):
                 f"Failed to create SigNoz alert rule: {definition.alert_name}",
                 f"status={created['status']} body={created['body'][:500]}",
             )
+    if not all_ok:
+        raise Exit("Failed to create one or more SigNoz alert rules", code=1)
     return all_ok
 
 
@@ -137,6 +146,8 @@ def apply_dashboard(c):
     Looks up an existing dashboard by title and updates it in place; otherwise
     creates it. Idempotent.
     """
+    from invoke.exceptions import Exit
+
     from libs.console import error, success
 
     alerting = _alerting_shared()
@@ -144,6 +155,12 @@ def apply_dashboard(c):
     title = dashboard["title"]
 
     listed = alerting._signoz_request(c, method="GET", path="/api/v1/dashboards")
+    if not listed["ok"]:
+        error(
+            "Failed to list SigNoz dashboards before apply",
+            f"status={listed['status']} body={listed['body'][:500]}",
+        )
+        raise Exit("Failed to list SigNoz dashboards before apply", code=1)
     existing_uuid = _find_dashboard_uuid(listed.get("data"), title)
 
     payload = build_dashboard_import_payload()
@@ -168,7 +185,7 @@ def apply_dashboard(c):
         f"Failed to apply SigNoz dashboard: {title}",
         f"status={result['status']} body={result['body'][:500]}",
     )
-    return False
+    raise Exit(f"Failed to apply SigNoz dashboard: {title}", code=1)
 
 
 def _find_dashboard_uuid(dashboards_response, title: str) -> str | None:

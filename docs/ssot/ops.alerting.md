@@ -267,6 +267,24 @@ uv run python -m invoke fr-observability.shared.print-alerts
 uv run python -m invoke fr-observability.shared.apply-alerts
 ```
 
+The six metric rules must render as SigNoz v5 PromQL rules:
+`alertType=METRIC_BASED_ALERT`, `ruleType=promql_rule`, and
+`condition.compositeQuery.queries[]` with a `promql` query envelope. The current
+production SigNoz API still expects numeric threshold enums (`op=1` for above,
+`matchType=2` for all-times, etc.) even with the v5 query envelope. The apply task
+must fail the process when SigNoz rejects any checked-in rule; a partial apply is
+not a successful GitOps run.
+
+Before reconciling the real catalog, run the workflow canary:
+
+```bash
+gh workflow run apply-observability.yml --repo wangzitian0/infra2 \
+  --ref <branch-or-main> -f mode=canary
+```
+
+The canary creates one disabled temporary PromQL rule from the same payload
+builder, verifies SigNoz stores the v5 `queries[]` envelope, and deletes the rule.
+
 Merge/apply ordering: the config can be reviewed independently, but live apply
 should happen after the app emits all referenced metric names. The rate-limit and
 async-failure signals are introduced by the paired `#1107` and `#1108` app PRs;

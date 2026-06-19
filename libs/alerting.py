@@ -270,11 +270,11 @@ def build_signoz_metric_alert_rule_payload(
     frequency: str = "1m",
     group_by: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Build a SigNoz v2 threshold rule for PromQL-backed metric alerts."""
+    """Build a SigNoz v5 PromQL rule for metric alerts."""
     return {
         "alert": _required("alert_name", alert_name),
-        "alertType": "METRICS_BASED_ALERT",
-        "ruleType": "threshold_rule",
+        "alertType": "METRIC_BASED_ALERT",
+        "ruleType": "promql_rule",
         "condition": {
             "thresholds": {
                 "kind": "basic",
@@ -294,16 +294,18 @@ def build_signoz_metric_alert_rule_payload(
             "compositeQuery": {
                 "queryType": "promql",
                 "panelType": "graph",
-                "builderQueries": {},
-                "promQueries": {
-                    "A": {
-                        "name": "A",
-                        "query": _required("promql", promql),
-                        "legend": "",
-                        "disabled": False,
+                "unit": threshold_unit,
+                "queries": [
+                    {
+                        "type": "promql",
+                        "spec": {
+                            "name": "A",
+                            "query": _required("promql", promql),
+                            "legend": "",
+                            "disabled": False,
+                        },
                     }
-                },
-                "chQueries": {},
+                ],
             },
             "selectedQueryName": "A",
             "alertOnAbsent": False,
@@ -586,6 +588,7 @@ def _signoz_match_type(match_type: str) -> str:
     mapping = {
         "at_least_once": "1",
         "all_times": "2",
+        "all_the_times": "2",
         "on_average": "3",
         "in_total": "4",
         "last": "5",
