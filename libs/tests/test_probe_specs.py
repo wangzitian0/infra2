@@ -27,6 +27,30 @@ def test_otel_and_lark_flow_probes_are_declared():
             assert spec.severity == "critical"
 
 
+def test_synthetic_roundtrip_and_delivery_canaries_are_declared():
+    """Observability and alert delivery closure must be automated probes."""
+    text = _ALERTING_COMPOSE.read_text(encoding="utf-8")
+    names = parse_probe_names(text)
+
+    assert "signoz-roundtrip" in names
+    assert "openpanel-roundtrip" in names
+    assert "alert-delivery-canary" in names
+
+    specs = {
+        parse_probe_specs(line.strip())[0].name: parse_probe_specs(line.strip())[0]
+        for line in text.splitlines()
+        if line.strip().startswith(
+            ("signoz-roundtrip|", "openpanel-roundtrip|", "alert-delivery-canary|")
+        )
+    }
+    assert specs["signoz-roundtrip"].kind == "command"
+    assert specs["signoz-roundtrip"].severity == "critical"
+    assert specs["openpanel-roundtrip"].kind == "command"
+    assert specs["openpanel-roundtrip"].severity == "warning"
+    assert specs["alert-delivery-canary"].kind == "command"
+    assert specs["alert-delivery-canary"].severity == "critical"
+
+
 def test_parse_probe_names_extracts_first_field():
     specs = (
         "openpanel-api-http|http|http://platform-openpanel-api:3000/healthcheck|200|warning|5\n"
@@ -58,8 +82,8 @@ def test_missing_probe_names_empty_when_running_is_superset():
 def test_missing_probe_names_ignores_target_suffix_differences():
     # The name field (first column) is identical across envs even though the
     # target host carries ${ENV_SUFFIX}; verification keys on names, not targets.
-    source = "openpanel-ch-http|http|http://platform-openpanel-ch:8123/ping|200|warning|5\n"
-    running = (
-        "openpanel-ch-http|http|http://platform-openpanel-ch-staging:8123/ping|200|warning|5\n"
+    source = (
+        "openpanel-ch-http|http|http://platform-openpanel-ch:8123/ping|200|warning|5\n"
     )
+    running = "openpanel-ch-http|http|http://platform-openpanel-ch-staging:8123/ping|200|warning|5\n"
     assert missing_probe_names(source, running) == []

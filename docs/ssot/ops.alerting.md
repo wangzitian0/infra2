@@ -103,10 +103,10 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
 | L2 Platform | ClickHouse | `/ping` fails, disk pressure, or ingestion errors | P0 | Live via infra probe |
 | L2 Platform | MinIO | MinIO live endpoint is unavailable | P1 | Live via infra probe |
 | L2 Platform | Authentik | health endpoint fails | P0 | Live via infra probe |
-| L2 Platform | SigNoz | frontend/query path fails | P0 | Live via infra probe |
-| L2 Platform | Alert Bridge | `/health` fails or Feishu delivery errors | P0 | Live via infra probe; out-of-band bridge container health watchdog is also defined |
-| L2 Platform | OpenPanel API | `/healthcheck` fails (analytics event ingestion endpoint) | P1 | Live via infra probe (`openpanel-api-http`) |
-| L2 Platform | OpenPanel ClickHouse | `/ping` fails (OpenPanel event store, separate from platform ClickHouse) | P1 | Live via infra probe (`openpanel-ch-http`) |
+| L2 Platform | SigNoz | frontend/query path fails or synthetic OTLP log nonce cannot be queried back from ClickHouse | P0 | Live via infra probes (`signoz-internal-http`, `otel-collector-http`, `signoz-roundtrip`) |
+| L2 Platform | Alert Bridge | `/health` fails, Feishu host is unreachable, or low-frequency real-send proof fails | P0 | Live via infra probes (`alert-bridge-http`, `lark-delivery-http`, `alert-delivery-canary`); out-of-band bridge container health watchdog is also defined |
+| L2 Platform | OpenPanel API | `/healthcheck` fails or synthetic `/track` event nonce cannot be queried back | P1 | Live via infra probes (`openpanel-api-http`, `openpanel-roundtrip`) |
+| L2 Platform | OpenPanel ClickHouse | `/ping` fails (OpenPanel event store, separate from platform ClickHouse) | P1 | Live via infra probes (`openpanel-ch-http`, `openpanel-roundtrip`) |
 | L2 Platform | OpenPanel Worker | `/healthcheck` fails (event processing queue worker) | P1 | Live via infra probe (`openpanel-worker-http`) |
 | L2 Platform | OpenPanel Dashboard | `/api/healthcheck` fails (analytics UI) | P2 | Live via infra probe (`openpanel-dashboard-http`) |
 | L2 Platform | Portal | Homer frontend unavailable | P2 | Planned |
@@ -122,7 +122,7 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
 | L3 Finance Report | fr-app frontend | frontend HTTP health fails | P1 | Live via Cloudflare Workers out-of-band watchdog (public web route) |
 | Cross-cutting | Vault app tokens and rendered env | missing, malformed, invalid, non-renewable, low TTL, or rendered `<no value>` fields | P0/P1 | Docker healthcheck + manual gate: `vault-audit.self-refresh` |
 | Cross-cutting | Backup freshness | latest off-host backup is missing, stale, empty, or missing checksum | P1 | Live contract: backup manifest verifier |
-| Cross-cutting | OTEL ingestion | expected app logs/traces absent after deployment | P1 | Manual gate: `signoz.shared.query-logs` |
+| Cross-cutting | OTEL ingestion | expected app logs/traces absent after deployment | P1 | Infra synthetic path is live via `signoz-roundtrip`; app-specific post-deploy proof remains manual via `signoz.shared.query-logs` |
 | Cross-cutting | Infra2 host reachability | production or staging public infra2 endpoints fail from Cloudflare | P0/P1 | Cloudflare Workers out-of-band watchdog |
 | Cross-cutting | Infra probe runner heartbeat | `platform-alerting-probes${ENV_SUFFIX}` stops posting heartbeat or reports unhealthy | P0/P1 | Cloudflare Workers out-of-band watchdog |
 | Cross-cutting | SSH host diagnostics | external SSH bridge health check fails | P0 | GitHub Actions fallback watchdog |
@@ -512,12 +512,13 @@ Current closure boundary:
 
 - Closed-loop: public route watchdogs, probe-runner heartbeat, GitHub fallback
   watchdog checks, Dokploy route canary failures, deploy_v2 canary failures,
-  out-of-band Feishu delivery failures, and GitHub fallback issue creation are
-  machine-audited and visible in weekly recall review.
-- Not yet closed-loop: SigNoz/OpenPanel health probes prove process/API
-  readiness, but they do not yet emit a synthetic telemetry/event nonce and
-  query it back from SigNoz/OpenPanel storage. The alert bridge's manual
-  `test-feishu` proves real message delivery only when an operator runs it.
+  SigNoz synthetic OTLP log round-trips, OpenPanel synthetic `/track`
+  round-trips, alert bridge real-send canary failures, out-of-band Feishu
+  delivery failures, and GitHub fallback issue creation are machine-audited and
+  visible in weekly recall review.
+- Known external limit: if every external channel used by the watchdog and
+  Feishu/Lark delivery is unavailable at once, there is no third independent
+  human-notification channel in this repo.
 Default SSH checks are mandatory: `INFRA2_WATCHDOG_SSH_TARGETS` can add checks or
 override a check by name, but it must not remove `infra2-docker-health`. That
 check fails on any Docker `unhealthy`, `health: starting`, or `Restarting`
@@ -552,6 +553,18 @@ Cloudflare-routed domains are route checks, not core service-health checks, and
 are primarily owned by the Cloudflare watchdog. If a future optional public-route
 probe observes `error code: 1010`, it is classified as `probe-client-blocked`
 rather than plain service down.
+
+Synthetic closure probes are also part of `INFRA_PROBE_SPECS`:
+
+- `signoz-roundtrip`: writes a synthetic OTLP log to the SigNoz collector, then
+  queries `signoz_logs.distributed_logs_v2` in ClickHouse for the same nonce.
+- `openpanel-roundtrip`: writes a synthetic OpenPanel `/track` event using the
+  environment's finance client-id, then queries `openpanel.events` for the same
+  nonce.
+- `alert-delivery-canary`: posts a synthetic Alertmanager payload through the
+  alert bridge to Feishu/Lark on a bounded cadence. Default interval is 6 hours
+  (`ALERT_DELIVERY_CANARY_INTERVAL_SECONDS=21600`), so the probe proves real
+  delivery without posting every minute.
 
 The probe runner is stateful. It sends an alert when a failure first appears,
 when the failure fingerprint changes, when the configured renotify interval is
@@ -686,7 +699,9 @@ VPS log dive.
 | **Weekly watchdog recall digest** | `libs/tests/test_watchdog_weekly_digest.py` | ✅ Implemented |
 | **Weekly positive stability report** | `libs/tests/test_stability_report.py` | ✅ Implemented |
 | **Env x Stage failure-domain and disagreement contract** | `libs/tests/test_pipeline_stage_contract.py` | ✅ Implemented |
-| **告警通道连通性** | `uv run invoke alerting.test-feishu` | Manual live gate |
+| **SigNoz/OpenPanel synthetic round-trip probes** | `libs/tests/test_observability_roundtrip_probe.py` | ✅ Implemented |
+| **告警通道真实投递 canary** | `libs/tests/test_alert_delivery_canary.py` | ✅ Implemented |
+| **告警通道手动连通性** | `uv run invoke alerting.test-feishu` | Manual live gate |
 
 ---
 

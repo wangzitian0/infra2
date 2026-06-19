@@ -114,6 +114,12 @@ OpenPanel 是**单实例**；环境隔离靠**每个环境一个 project / clien
 
 OpenPanel 事件分析由 app 仓库已发布的查询 CLI `common/observability/openpanel_query.py` 完成，使用 OpenPanel query API token，存于 Vault `secret/platform/<env>/openpanel/api_key`。本仓库不重新实现查询逻辑。遥测（traces/logs）查询见 [ops.observability.md](ops.observability.md) 的 `invoke signoz.shared.query-logs` / `list-services`。
 
+`platform/12.alerting` 额外运行 `openpanel-roundtrip` synthetic probe：用
+同一份 per-env finance client-id 向 OpenPanel `/track` 写入
+`infra_observability_roundtrip_canary`，再从专属 ClickHouse 的
+`openpanel.events` 表按 nonce 查回。这只证明基础设施 ingest/storage 链路；
+产品分析查询与排障仍由 app 仓库的查询 CLI 或 MCP 通道负责。
+
 ### SOP-005: 查询通道 — MCP（按需问 FE/BE 问题）
 
 > 目标（EPIC-024 原始诉求）：**后期直接通过 OpenPanel / SigNoz 查前端/后端问题**。两边都有官方 MCP server，自托管均支持自定义 URL。**这是"能自动化的"查询通道**；funnel/看板的"创建"不能自动化（见 SOP-006）。

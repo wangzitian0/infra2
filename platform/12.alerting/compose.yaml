@@ -140,6 +140,11 @@ services:
       INFRA_PROBE_HEARTBEAT_TOKEN: ${INFRA_PROBE_HEARTBEAT_TOKEN:-}
       INFRA_PROBE_HEARTBEAT_ENV: ${ENV:-production}
       INFRA_PROBE_HEARTBEAT_NAME: platform-alerting-probes${ENV_SUFFIX}
+      OBS_ROUNDTRIP_STATE_FILE: /tmp/observability_roundtrip_probe_state.json
+      OBS_ROUNDTRIP_INTERVAL_SECONDS: ${OBS_ROUNDTRIP_INTERVAL_SECONDS:-300}
+      OBS_ROUNDTRIP_QUERY_WAIT_SECONDS: ${OBS_ROUNDTRIP_QUERY_WAIT_SECONDS:-30}
+      ALERT_DELIVERY_CANARY_STATE_FILE: /tmp/alert_delivery_canary_state.json
+      ALERT_DELIVERY_CANARY_INTERVAL_SECONDS: ${ALERT_DELIVERY_CANARY_INTERVAL_SECONDS:-21600}
       INFRA_PROBE_SPECS: |
         dokploy-internal-http|http|http://dokploy:3000|200,302|critical|5
         vault-internal-http|http|http://vault:8200/v1/sys/health|200,429,472,473|critical|5
@@ -153,10 +158,18 @@ services:
         # otel 畅通: the OTLP ingest pipeline itself (collector health_check ext :13133),
         # distinct from the signoz query svc above. prod_only single instance (no suffix).
         otel-collector-http|http|http://platform-signoz-otel-collector:13133|200|critical|5
+        # SigNoz round-trip: write a synthetic OTLP log through the collector, then
+        # query ClickHouse for the same nonce. This proves ingest + storage, not just
+        # process readiness.
+        signoz-roundtrip|command|python /app/tools/observability_roundtrip_probe.py signoz|roundtrip-ok|critical|45
         alert-bridge-http|http|http://platform-alerting${ENV_SUFFIX}:8080/health|200|critical|5
         # lark 畅通: bridge config valid AND Feishu host reachable (TCP 443), checked
         # without posting to the real channel (see app.py /health/feishu).
         lark-delivery-http|http|http://platform-alerting${ENV_SUFFIX}:8080/health/feishu|200|critical|5
+        # Low-frequency real-send proof: posts one synthetic alert through the bridge
+        # to Feishu on a bounded cadence, while suppressed runs still prove the canary
+        # process and state are healthy.
+        alert-delivery-canary|command|python /app/tools/alert_delivery_canary.py|delivery-canary-ok|critical|15
         platform-postgres-tcp|tcp|platform-postgres${ENV_SUFFIX}:5432|connected|critical|5
         platform-redis-tcp|tcp|platform-redis${ENV_SUFFIX}:6379|connected|critical|5
         clickhouse-http|http|http://platform-clickhouse:8123/ping|200|critical|5
@@ -166,6 +179,9 @@ services:
         openpanel-ch-http|http|http://platform-openpanel-ch:8123/ping|200|warning|5
         openpanel-worker-http|http|http://platform-openpanel-worker:3000/healthcheck|200|warning|5
         openpanel-dashboard-http|http|http://platform-openpanel-dashboard:3000/api/healthcheck|200|warning|5
+        # OpenPanel round-trip: write a synthetic /track event to the env-specific
+        # finance project, then query OpenPanel ClickHouse for the nonce.
+        openpanel-roundtrip|command|python /app/tools/observability_roundtrip_probe.py openpanel|roundtrip-ok|warning|45
         # Host resource backstop — out-of-band from SigNoz, so it still fires when
         # the host is starved (the dockerd-busy-loop class of incident). `expected`
         # is the % ceiling; reads host-global /proc + the bind-mounted host root.
