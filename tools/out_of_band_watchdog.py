@@ -781,6 +781,14 @@ def main(env: Mapping[str, str] | None = None) -> int:
         return 1
     _emit_structured_log(
         {
+            "event": "watchdog.delivery.success",
+            "status": "ok",
+            "failure_count": len(failures),
+            "route": "github-actions->feishu-direct",
+        }
+    )
+    _emit_structured_log(
+        {
             "event": "watchdog.run.complete",
             "status": "fail",
             "failure_count": len(failures),

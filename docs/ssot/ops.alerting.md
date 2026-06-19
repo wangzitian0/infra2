@@ -484,8 +484,22 @@ retain an auditable fallback signal.
 
 Weekly digest is handled by `.github/workflows/watchdog-weekly-digest.yml`
 (cron Monday UTC). It summarizes the last 7 days of
-`out-of-band-watchdog.yml` workflow runs and sends a compact reliability digest
-to Feishu through the same direct delivery mode.
+`out-of-band-watchdog.yml` workflow runs and reviews each run's structured
+watchdog logs. The digest reports alert recall evidence:
+`watchdog.delivery.success`, `watchdog.delivery.failure`, fallback issue URLs,
+missing delivery evidence, and failure-domain counts. It then sends the compact
+reliability digest to Feishu through the same direct delivery mode.
+
+Current closure boundary:
+
+- Closed-loop: public route watchdogs, probe-runner heartbeat, GitHub fallback
+  watchdog checks, Dokploy route canary failures, deploy_v2 canary failures,
+  out-of-band Feishu delivery failures, and GitHub fallback issue creation are
+  machine-audited and visible in weekly recall review.
+- Not yet closed-loop: SigNoz/OpenPanel health probes prove process/API
+  readiness, but they do not yet emit a synthetic telemetry/event nonce and
+  query it back from SigNoz/OpenPanel storage. The alert bridge's manual
+  `test-feishu` proves real message delivery only when an operator runs it.
 Default SSH checks are mandatory: `INFRA2_WATCHDOG_SSH_TARGETS` can add checks or
 override a check by name, but it must not remove `infra2-docker-health`. That
 check fails on any Docker `unhealthy`, `health: starting`, or `Restarting`
@@ -651,6 +665,7 @@ VPS log dive.
 | **Backup freshness alert payload** | `libs/tests/test_backup_verification.py` | ✅ Implemented |
 | **Availability ledger aggregation (正例+反例)** | `libs/tests/test_availability_ledger.py` | ✅ Implemented |
 | **Worker ledger + `/ledger` + R2 archive contract** | `libs/tests/test_cloudflare_watchdog.py` | ✅ Implemented |
+| **Weekly watchdog recall digest** | `libs/tests/test_watchdog_weekly_digest.py` | ✅ Implemented |
 | **Weekly positive stability report** | `libs/tests/test_stability_report.py` | ✅ Implemented |
 | **Env x Stage failure-domain and disagreement contract** | `libs/tests/test_pipeline_stage_contract.py` | ✅ Implemented |
 | **告警通道连通性** | `uv run invoke alerting.test-feishu` | Manual live gate |
