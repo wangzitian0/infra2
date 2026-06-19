@@ -113,6 +113,18 @@ def _resolve_for_type(spec, version_ref, *, repo: str):
     return resolved, alias_value
 
 
+def _normalize_expected_sha(expected_sha: str | None) -> str | None:
+    """Return a lowercase full expected commit sha, or fail before side effects."""
+    if expected_sha is None:
+        return None
+    cleaned = str(expected_sha).strip().lower()
+    if not cleaned:
+        return None
+    if not _SHA_RE.match(cleaned):
+        raise ValueError("--expected-sha must be a full 40-hex commit sha")
+    return cleaned
+
+
 def resolve_data_lane(target: DeployTarget) -> str:
     """The data source for a target — derived from the env, not a separate input axis."""
     return env_config(target.env).data_default
@@ -234,6 +246,7 @@ def deploy_v2(
     verify_vault: bool = True,
     verify_config: bool = True,
     timeout: int = 600,
+    expected_sha: str | None = None,
     repo: str = _APP_REPO,
     iac_runner_url: str | None = None,
     iac_webhook_secret: str | None = None,
@@ -255,7 +268,10 @@ def deploy_v2(
     ``version_ref`` (its artifact is the ``iac_ref``-pinned stack) — see :func:`_deploy_platform`.
     """
     svc_spec = service_spec(service)
+    normalized_expected_sha = _normalize_expected_sha(expected_sha)
     if svc_spec.iac_pinned:  # platform service -> iac_runner /deploy webhook
+        if normalized_expected_sha is not None:
+            raise ValueError("--expected-sha is only supported for app-backed deploys")
         return _deploy_platform(
             service,
             svc_spec,
@@ -270,6 +286,14 @@ def deploy_v2(
 
     spec = deploy_type_spec(deploy_type)
     resolved, alias_value = _resolve_for_type(spec, version_ref, repo=repo)
+    if (
+        normalized_expected_sha is not None
+        and resolved.sha.lower() != normalized_expected_sha
+    ):
+        raise ValueError(
+            f"version_ref {version_ref!r} resolved to {resolved.sha!r}, "
+            f"not expected sha {normalized_expected_sha!r}"
+        )
 
     # iac_ref: the recorded identity is its sha; the preview clone uses the ref verbatim
     # when it is cloneable (branch/tag), else the default branch (a sha can't be cloned, #342).
@@ -412,6 +436,11 @@ def main(argv: list[str] | None = None) -> int:
         help="skip the post-deploy effective IAC_CONFIG_HASH check (default: verify)",
     )
     parser.add_argument("--timeout", type=int, default=600, help="health-check seconds")
+    parser.add_argument(
+        "--expected-sha",
+        default=None,
+        help="optional full commit sha that version_ref must resolve to before deploy",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -440,6 +469,7 @@ def main(argv: list[str] | None = None) -> int:
             verify_vault=not args.skip_vault_check,
             verify_config=not args.no_verify_config,
             timeout=args.timeout,
+            expected_sha=args.expected_sha,
         )
     except (ValueError, RuntimeError, TimeoutError, httpx.HTTPError) as exc:
         print(f"deploy_v2 failed: {exc}", file=sys.stderr)

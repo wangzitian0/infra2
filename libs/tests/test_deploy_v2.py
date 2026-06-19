@@ -173,6 +173,28 @@ def test_preview_branch(calls):
     assert calls["preview"]["image_ref"] == SHA_CODE[:7]
 
 
+def test_preview_branch_expected_sha_allows_matching_main(calls):
+    res = _deploy(
+        deploy_type="preview/branch",
+        version_ref="main",
+        expected_sha=SHA_CODE,
+    )
+
+    assert res.target.code_version == SHA_CODE
+    assert calls["preview"]["code"] == SHA_CODE
+
+
+def test_preview_branch_expected_sha_rejects_mismatch_before_side_effect(calls):
+    with pytest.raises(ValueError, match="not expected sha"):
+        _deploy(
+            deploy_type="preview/branch",
+            version_ref="main",
+            expected_sha="e" * 40,
+        )
+
+    assert calls["preview"] is None
+
+
 def test_preview_branch_defaults_version_ref_to_main(calls):
     # CF2: branch is definitionally a tip — version_ref omitted defaults to main
     res = _deploy(deploy_type="preview/branch", version_ref="")
