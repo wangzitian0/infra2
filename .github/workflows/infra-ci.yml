@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Validate all compose.yaml files
         run: |
@@ -53,6 +53,11 @@ jobs:
           echo "✅ All compose files are valid"
         env:
           DATA_PATH: /tmp/infra2-data
+          ENV: ci
+          ENV_SUFFIX: -ci
+          ENV_DOMAIN_SUFFIX: ci
+          INTERNAL_DOMAIN: internal.example.test
+          VAULT_ADDR: http://vault.example.test:8200
           FEISHU_APP_ID: dummy-feishu-app-id
           FEISHU_APP_SECRET: dummy-feishu-app-secret
           FEISHU_VERIFICATION_TOKEN: dummy-feishu-verification-token
@@ -60,6 +65,9 @@ jobs:
           LLM_API_KEY: dummy-llm-api-key
           OPENCLAW_GATEWAY_TOKEN: dummy-openclaw-gateway-token
           GOG_KEYRING_PASSWORD: dummy-keyring-password
+          OP_CONNECT_TOKEN: dummy-op-connect-token
+          OP_VAULT_ID: dummy-op-vault-id
+          OP_ITEM_ID: dummy-op-item-id
 
       - name: Lint platform image pins (no bare :latest)
         run: python3 tools/lint_platform_image_pins.py
@@ -69,10 +77,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -133,7 +141,7 @@ jobs:
             --cov-fail-under=0
 
       - name: Upload infra coverage context
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: infra2-coverage-context
           path: coverage/infra2-coverage.xml
@@ -178,12 +186,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: '1.24.x'
+          cache: false
 
       - name: Build healthcheck binary
         run: |
@@ -196,14 +205,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Check vault-agent.hcl has required settings
         run: |
           set -e
           echo "🔍 Checking vault-agent.hcl files..."
           failed=0
-          for file in $(find . -name "vault-agent.hcl" -type f); do
+          while IFS= read -r -d '' file; do
             echo "Checking: $file"
             if ! grep -q "exit_on_err = true" "$file"; then
               echo "❌ Missing 'exit_on_err = true' in $file"
@@ -213,8 +222,8 @@ jobs:
               echo "❌ Missing 'exit_on_retry_failure = true' in $file"
               failed=1
             fi
-          done
-          for file in $(find . -name "compose.yaml" -type f); do
+          done < <(find . -name "vault-agent.hcl" -type f -print0)
+          while IFS= read -r -d '' file; do
             if ! grep -q "VAULT_APP_TOKEN" "$file"; then
               continue
             fi
@@ -235,7 +244,7 @@ jobs:
               echo "❌ Vault agent Docker healthcheck must not use rendered-file mtime freshness in $file"
               failed=1
             fi
-          done
+          done < <(find . -name "compose.yaml" -type f -print0)
           if [ $failed -eq 1 ]; then
             echo ""
             echo "⚠️  vault-agent.hcl files must have exit settings to prevent"
@@ -252,10 +261,10 @@ jobs:
     continue-on-error: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -267,15 +276,15 @@ jobs:
           set -e
           echo "🔍 Validating vault-policy.hcl files..."
           failed=0
-          for file in $(find . -name "vault-policy.hcl" -type f); do
+          while IFS= read -r -d '' file; do
             echo "Checking: $file"
-            if python3 -c "import hcl2, json; f=open('$file'); hcl2.load(f)" 2>&1; then
+            if FILE="$file" python3 -c 'import hcl2, os; hcl2.load(open(os.environ["FILE"]))' 2>&1; then
               echo "  ✅ Valid HCL"
             else
               echo "  ❌ Invalid HCL syntax"
               failed=1
             fi
-          done
+          done < <(find . -name "vault-policy.hcl" -type f -print0)
           if [ $failed -eq 1 ]; then
             echo ""
             echo "⚠️  Fix HCL syntax errors before merging."
@@ -288,10 +297,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -380,10 +389,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
