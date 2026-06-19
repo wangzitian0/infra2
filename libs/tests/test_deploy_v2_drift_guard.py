@@ -68,6 +68,8 @@ def test_deploy_v2_front_door_is_the_documented_deploy_path() -> None:
         _command("prefect"): "old platform prefect setup deploy command",
         _command("activepieces"): "old platform activepieces setup deploy command",
         "invoke <service>" + ".setup": "old generic service setup deploy command",
+        _phrase("v2 public ", "input"): "stale data-axis public-input wording",
+        _phrase("public ", "input"): "stale data-axis public-input wording",
         _phrase("data-axis side", " effects"): "future data-axis wording",
         _phrase("data axis", " lands"): "future data-axis wording",
         _phrase(
