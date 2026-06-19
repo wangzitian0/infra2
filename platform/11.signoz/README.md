@@ -48,10 +48,10 @@ Open-source observability platform for logs, metrics, and traces (OpenTelemetry-
 # Ensure ClickHouse is ready
 invoke clickhouse.status
 
-# Full setup
-invoke signoz.setup
+# Deploy through deploy_v2
+python -m tools.deploy_v2 --service platform/signoz --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
 
-# Or step-by-step
+# Repair/debug only
 invoke signoz.pre-compose
 invoke signoz.composing
 invoke signoz.post-compose

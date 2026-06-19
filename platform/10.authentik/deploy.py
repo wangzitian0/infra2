@@ -98,12 +98,12 @@ class AuthentikDeployer(Deployer):
         if not pg_secrets.get("root_password"):
             fatal(
                 "Postgres password not found in Vault",
-                "Run: export VAULT_ROOT_TOKEN=<token> && invoke postgres.setup",
+                "Deploy platform/postgres through deploy_v2 for this environment first.",
             )
         if not redis_secrets.get("password"):
             fatal(
                 "Redis password not found in Vault",
-                "Run: export VAULT_ROOT_TOKEN=<token> && invoke redis.setup",
+                "Deploy platform/redis through deploy_v2 for this environment first.",
             )
         success("Verified postgres and redis secrets in Vault")
 

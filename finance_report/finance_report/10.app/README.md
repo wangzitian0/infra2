@@ -108,7 +108,7 @@ CLI with `secret/platform/<env>/openpanel/api_key`.
 
 ```bash
 # Deploy (after postgres and redis are ready)
-invoke finance_report.app.setup
+python -m tools.deploy_v2 --service finance_report/app --type staging --version-ref vX.Y.Z --iac-ref vX.Y.Z --domain zitian.party
 
 # Check status
 invoke finance_report.app.status
@@ -119,7 +119,9 @@ open https://report.${INTERNAL_DOMAIN}
 
 ## Build Configuration
 
-For the standard deployment using pre-built images from `ghcr.io` (via `invoke finance_report.app.setup`), no additional build-time configuration is required. The images are built and pushed by GitHub Actions.
+For standard deployment, `deploy_v2` consumes pre-built images from `ghcr.io`; no
+additional build-time configuration is required. The images are built and pushed
+by GitHub Actions.
 
 Optional environment variables:
 - `IMAGE_TAG`: Docker image tag (default: `latest`)

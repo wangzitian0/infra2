@@ -60,27 +60,26 @@ platform/{nn}.{service}/
 
 Example:
 ```bash
-DEPLOY_ENV=staging invoke postgres.setup
+python -m tools.deploy_v2 --service platform/postgres --type staging --iac-ref vX.Y.Z --domain zitian.party
 ```
 
 ## Quick Start
 
 ```bash
-# Deploy all (in dependency order)
+# Deploy through the deploy_v2 front door (dependency order)
 # 1. Database tier
-invoke postgres.setup    # Database for authentik
-invoke redis.setup       # Cache for authentik
-invoke clickhouse.setup  # Storage for signoz
+python -m tools.deploy_v2 --service platform/postgres --type staging --iac-ref vX.Y.Z --domain zitian.party
+python -m tools.deploy_v2 --service platform/redis --type staging --iac-ref vX.Y.Z --domain zitian.party
+python -m tools.deploy_v2 --service platform/clickhouse --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
 
 # 2. Auth & Observability tier
-invoke authentik.setup   # SSO provider
-invoke signoz.setup      # Observability platform
-invoke alerting.setup    # Feishu alert bridge
+python -m tools.deploy_v2 --service platform/authentik --type staging --iac-ref vX.Y.Z --domain zitian.party
+python -m tools.deploy_v2 --service platform/signoz --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
+python -m tools.deploy_v2 --service platform/alerting --type staging --iac-ref vX.Y.Z --domain zitian.party
 
 # 3. Application tier
-invoke portal.setup        # Portal with SSO auth
-invoke activepieces.setup  # Automation platform with SSO auth
-invoke prefect.setup       # Workflow orchestration with SSO auth
+python -m tools.deploy_v2 --service platform/portal --type staging --iac-ref vX.Y.Z --domain zitian.party
+python -m tools.deploy_v2 --service platform/prefect --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
 
 # Check status
 invoke postgres.status
@@ -90,7 +89,6 @@ invoke authentik.status
 invoke signoz.status
 invoke alerting.status
 invoke portal.status
-invoke activepieces.status
 invoke prefect.status
 ```
 
@@ -115,7 +113,6 @@ clickhouse ──► signoz ──► alerting
 | signoz | clickhouse | Observability platform |
 | alerting | signoz, vault | Internal Feishu notification bridge |
 | portal | authentik | Protected by SSO |
-| activepieces | postgres, redis, authentik | Automation platform, protected by SSO |
 | prefect | postgres, authentik | Workflow orchestration, protected by SSO |
 
 ## Adding New Service
@@ -163,7 +160,8 @@ clickhouse ──► signoz ──► alerting
 
 4. Copy vault-agent config from existing service and adapt
 
-5. Run: `invoke new.setup`
+5. Register the service, then deploy through deploy_v2:
+   `python -m tools.deploy_v2 --service platform/new --type staging --iac-ref vX.Y.Z --domain zitian.party`
 
 ## SSO Protection
 

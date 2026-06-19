@@ -38,7 +38,7 @@ OpenPanel is a lightweight product analytics tool for tracking user actions and 
 
 ```bash
 # 1. Deploy (pre-provisions databases and sets up vault keys)
-invoke openpanel.setup
+python -m tools.deploy_v2 --service platform/openpanel --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
 
 # 2. Check status
 invoke openpanel.status

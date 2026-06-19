@@ -48,7 +48,7 @@ numeric threshold enums (`op` / `matchType`) inside that v5 envelope.
 
 ```bash
 # Prereqs: bridge deployed, SigNoz API key in Vault, channel ensured (SOP-004).
-uv run python -m invoke alerting.setup
+uv run python -m tools.deploy_v2 --service platform/alerting --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
 uv run python -m invoke signoz.shared.create-api-key
 
 # Apply finance_report definitions (idempotent):

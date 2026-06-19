@@ -31,7 +31,7 @@
 ### SOP-001: 部署/升级
 
 ```bash
-invoke postgres.setup
+python -m tools.deploy_v2 --service platform/postgres --type staging --iac-ref vX.Y.Z --domain zitian.party
 ```
 
 ### SOP-002: 查看状态

@@ -166,7 +166,7 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
    ```
 3. 部署 bridge:
    ```bash
-   uv run invoke alerting.setup
+   uv run python -m tools.deploy_v2 --service platform/alerting --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
    uv run invoke alerting.status
    ```
 4. 确保 SigNoz API key 存在，然后创建通知 channel:
@@ -191,7 +191,7 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
    uv run invoke env.set FEISHU_APP_SECRET=<secret> --project=platform --env=production --service=alerting --credential-type=root_vars
    uv run invoke env.set FEISHU_CHAT_ID=<chat_id> --project=platform --env=production --service=alerting --credential-type=root_vars
    uv run invoke vault.setup-approle --project=platform --service=alerting
-   uv run invoke alerting.setup
+   uv run python -m tools.deploy_v2 --service platform/alerting --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
    uv run invoke alerting.test-feishu --message="Infra2 alert test"
    ```
 
@@ -200,7 +200,7 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
 1. Ensure the alert bridge is deployed and healthy:
    ```bash
    uv run python -m invoke vault.setup-approle --project=platform --service=alerting
-   uv run python -m invoke alerting.setup
+   uv run python -m tools.deploy_v2 --service platform/alerting --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
    uv run python -m invoke alerting.status
    ```
 2. Ensure the SigNoz API key exists:
@@ -413,8 +413,8 @@ uv run invoke env.set INFRA_PROBE_HEARTBEAT_URL=https://infra2-cloudflare-watchd
 uv run invoke env.set INFRA_PROBE_HEARTBEAT_TOKEN=<token> --project=platform --env=production --service=alerting --credential-type=root_vars
 uv run invoke env.set INFRA_PROBE_HEARTBEAT_URL=https://infra2-cloudflare-watchdog.<account>.workers.dev/heartbeat --project=platform --env=staging --service=alerting --credential-type=root_vars
 uv run invoke env.set INFRA_PROBE_HEARTBEAT_TOKEN=<token> --project=platform --env=staging --service=alerting --credential-type=root_vars
-uv run invoke alerting.setup
-DEPLOY_ENV=staging uv run invoke alerting.setup
+uv run python -m tools.deploy_v2 --service platform/alerting --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
+uv run python -m tools.deploy_v2 --service platform/alerting --type staging --iac-ref vX.Y.Z --domain zitian.party
 ```
 
 The Worker is stateful. It sends an alert when a failure first appears, when the

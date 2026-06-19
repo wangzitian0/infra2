@@ -31,10 +31,11 @@ Shared PostgreSQL database for all platform applications using vault-init patter
 ## Deployment
 
 ```bash
-# Full setup (prepares dirs, ensures secrets, deploys)
-invoke postgres.setup
+# Deploy through deploy_v2
+python -m tools.deploy_v2 --service platform/postgres --type staging --iac-ref vX.Y.Z --domain zitian.party
+python -m tools.deploy_v2 --service platform/postgres --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
 
-# Or step-by-step
+# Repair/debug only
 invoke postgres.pre-compose  # Creates dirs, checks Vault secret
 invoke postgres.composing    # Deploys via Dokploy API
 invoke postgres.post-compose # Verifies health

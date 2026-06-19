@@ -9,15 +9,13 @@ gates. It builds + validates the :class:`~tools.deploy_contract.DeployTarget` (s
 illegal target reaches a backend), enforces the gates + data-lane red lines, then routes
 to the existing, already-tested backend — passing the resolved ``image_ref``:
 
-    type -> preview/*    -> preview_lifecycle.up   (iac_ref pins the GitHub source ref)
-    type -> staging|prod -> deploy_primitive.deploy (the fixed-compose promote path)
+    app + preview/*       -> preview_lifecycle.up   (iac_ref pins the source ref)
+    app + staging|prod    -> deploy_primitive.deploy (fixed-compose promote path)
+    iac_pinned + fixed env -> iac_runner /deploy webhook (platform/backing services)
 
-Scope today: the finance_report **app** service — the only service these two primitives
-deploy. Platform services (via ``libs/deployer`` + the iac_runner ``/deploy`` webhook)
-join this front door when that second deploy path is unified; see
-``docs/ssot/core.environments.md`` §4.7 "现状边界". This module performs the routing only
-— the side effects live in the backends, so it is exercised with monkeypatched backends
-(no live Dokploy).
+This module performs the routing only. Side effects live in the backends, so tests
+exercise it with monkeypatched Dokploy/iac_runner clients rather than live control-plane
+calls.
 """
 
 from __future__ import annotations
@@ -129,9 +127,9 @@ def enforce_data_lane_red_lines(
     - RL-DATA-1: code may touch prod data only with a *positive* review signal. This is
       deny-by-default: ``code_reviewed`` must be explicitly ``True`` for any prod-data
       target; the ``None`` default (signal absent) and ``False`` both fail closed, so a
-      caller cannot reach prod data by simply omitting the argument. Full GitHub-review
-      gating that supplies the ``True`` signal lands with the data axis
-      (finance_report#893); until then prod-data deploys must pass it explicitly.
+      caller cannot reach prod data by simply omitting the argument. Snapshot sync,
+      anonymization, and rehearsal remain finance_report#893 scope, but ``data_lane`` is
+      already derived here and is not a public deploy input.
     """
     data_lane = resolve_data_lane(target)
     if target.env == "prod" and data_lane != "prod":
@@ -302,8 +300,9 @@ def deploy_v2(
 
     if service != _APP_SERVICE:
         raise ValueError(
-            f"{service!r} cannot deploy via this front door yet; only {_APP_SERVICE} "
-            "is wired (platform services join when the deployer path is unified)."
+            f"{service!r} is not an app-backed service and is not marked iac_pinned; "
+            "deploy_v2 only routes the finance_report app backends or iac_pinned "
+            "services derived from libs.service_registry."
         )
 
     if env_config(target.env).dynamic:  # preview (incl. canary)
@@ -359,12 +358,10 @@ def deploy_v2(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry for the unified front door — the seam a deploy workflow invokes.
+    """CLI entry for the unified front door — the surface deploy workflows invoke.
 
     Builds the Dokploy client, runs ``deploy_v2`` (which resolves the version_ref/iac_ref
-    surfaces itself), and prints the result as one JSON line. This is the importable handle
-    the App-repo deploy workflows route through during the cutover (finance_report#883),
-    replacing the per-env bash. Dormant until a workflow calls it; no caller is wired here.
+    surfaces itself), and prints the result as one JSON line.
     """
     parser = argparse.ArgumentParser(description="unified deploy_v2 front door")
     parser.add_argument("--service", default=_APP_SERVICE, help="service key")
@@ -377,9 +374,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--version-ref",
-        required=True,
+        default="",
         help="version surface, interpreted by --type: a PR# (preview/pr), a release tag "
-        "vX.Y.Z (prod / preview/tag), a sha (preview/commit), main, or release/x.y",
+        "vX.Y.Z (prod / preview/tag), a sha (preview/commit), main, or release/x.y; "
+        "ignored for iac_pinned platform/backing services",
     )
     parser.add_argument(
         "--iac-ref",

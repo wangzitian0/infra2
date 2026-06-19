@@ -31,10 +31,11 @@ Shared Redis cache for all platform applications using vault-init pattern.
 ## Deployment
 
 ```bash
-# Full setup
-invoke redis.setup
+# Deploy through deploy_v2
+python -m tools.deploy_v2 --service platform/redis --type staging --iac-ref vX.Y.Z --domain zitian.party
+python -m tools.deploy_v2 --service platform/redis --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
 
-# Or step-by-step
+# Repair/debug only
 invoke redis.pre-compose
 invoke redis.composing
 invoke redis.post-compose

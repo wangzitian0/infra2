@@ -21,7 +21,7 @@ Secrets stored at: `secret/data/finance_report/<env>/postgres`
 
 ```bash
 # Deploy
-invoke finance_report.postgres.setup
+python -m tools.deploy_v2 --service finance_report/postgres --type staging --iac-ref vX.Y.Z --domain zitian.party
 
 # Check status
 invoke finance_report.postgres.status

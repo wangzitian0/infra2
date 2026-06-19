@@ -6,7 +6,7 @@
 
 ```bash
 # Deploy
-invoke minio.setup
+python -m tools.deploy_v2 --service platform/minio --type staging --iac-ref vX.Y.Z --domain zitian.party
 
 # Check status
 invoke minio.status

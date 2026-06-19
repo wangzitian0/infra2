@@ -38,10 +38,10 @@ Time-series database for observability data storage (logs, metrics, traces).
 ## Deployment
 
 ```bash
-# Full setup
-invoke clickhouse.setup
+# Deploy through deploy_v2
+python -m tools.deploy_v2 --service platform/clickhouse --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
 
-# Or step-by-step
+# Repair/debug only
 invoke clickhouse.pre-compose
 invoke clickhouse.composing
 invoke clickhouse.post-compose

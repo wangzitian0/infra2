@@ -207,9 +207,10 @@ def validate_deploy_target(target: DeployTarget, spec: ServiceSpec) -> None:
     This validates the contract axes only — service registration, 40-hex sha shapes for
     ``code_version``/``iac_ref``, env legality, and the ``sub_domain`` ↔ env/preview-slot
     derivation. It does NOT enforce the §5 data-lane red lines (``env=prod => data_lane``;
-    RL-DATA-1 unreviewed-sha-never-on-prod-data): those derive from ``iac_ref`` and live in
-    the execution layer — ``deploy_v2.enforce_data_lane_red_lines`` — and become fully
-    data-aware when the data axis lands (finance_report#893).
+    RL-DATA-1 unreviewed-sha-never-on-prod-data): those derive from the target env's
+    ``EnvConfig.data_default`` and live in the execution layer —
+    ``deploy_v2.enforce_data_lane_red_lines``. ``data_lane`` is derived, not a public
+    coordinate axis.
     """
     if spec.key != target.service:
         raise ValueError(
