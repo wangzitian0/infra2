@@ -190,6 +190,21 @@ environment variables are configured:
 - `INFRA_PROBE_HEARTBEAT_NAME`: defaults to
   `platform-alerting-probes${ENV_SUFFIX}`
 
+The same runner also owns synthetic closure probes:
+
+- `signoz-roundtrip`: writes an OTLP log and queries SigNoz ClickHouse for the
+  nonce.
+- `openpanel-roundtrip`: writes an OpenPanel `/track` event and queries
+  OpenPanel ClickHouse for the nonce.
+- `alert-delivery-canary`: sends a low-frequency real alert through the bridge
+  to Feishu/Lark.
+
+Optional tuning:
+
+- `OBS_ROUNDTRIP_INTERVAL_SECONDS`: defaults to `300`
+- `OBS_ROUNDTRIP_QUERY_WAIT_SECONDS`: defaults to `30`
+- `ALERT_DELIVERY_CANARY_INTERVAL_SECONDS`: defaults to `21600`
+
 Required GitHub repository secrets for fallback SSH diagnostics:
 
 - `INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE`: `feishu_webhook` or `feishu_app`
@@ -237,8 +252,9 @@ Cloudflare Worker `/status`, the Dokploy route canary, SSH reachability, Docker
 daemon reachability, and the `platform-alerting` in-container `/health`
 endpoint via SSH.
 The closed-loop boundary is explicit: host/route/canary/alert-delivery failures
-are machine-audited, while SigNoz/OpenPanel synthetic ingestion round-trips are
-still follow-up work beyond the current HTTP/process health probes.
+are machine-audited. SigNoz/OpenPanel now also have synthetic write-then-query
+round-trips, while app-specific post-deploy telemetry proof remains an
+operator/runbook query.
 Worker config-preflight failures are surfaced separately so malformed JSON or
 other config-parse errors cannot look like a public route outage.
 Cloudflare alert dedupe keys on stable failure identity plus failure domain, so
