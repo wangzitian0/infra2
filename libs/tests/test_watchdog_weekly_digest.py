@@ -65,13 +65,81 @@ def test_build_digest_message_contains_runbook_and_counts() -> None:
             "other_count": 0,
             "success_rate_pct": 85.71,
             "failed_run_urls": ["https://github.com/wangzitian0/infra2/actions/runs/1"],
+            "log_audit": {
+                "reviewed_run_count": 2,
+                "structured_event_run_count": 2,
+                "alertable_run_count": 1,
+                "delivery_success_run_count": 1,
+                "delivery_failure_run_count": 0,
+                "fallback_issue_run_count": 0,
+                "missing_alert_evidence_run_count": 0,
+                "alert_recall_evidence_pct": 100.0,
+                "failed_check_count": 2,
+                "failure_domain_counts": {"alert-bridge": 1, "docker-runtime": 1},
+                "log_fetch_error_count": 0,
+            },
         },
         repository="wangzitian0/infra2",
     )
     assert "[WATCHDOG DIGEST]" in message
     assert "Runs: 7 | Success: 6 | Failure: 1" in message
     assert "Success rate: 85.71%" in message
+    assert "Alert recall audit:" in message
+    assert "Alertable runs: 1 | Delivery success: 1 | Delivery failure: 0" in message
+    assert "Recall evidence: 100.0%" in message
+    assert "Failure domains: alert-bridge=1, docker-runtime=1" in message
     assert "Runbook:" in message
+
+
+def test_summarize_watchdog_log_events_counts_alert_recall_evidence() -> None:
+    """Infra-012.8: weekly digest reviews watchdog logs for alert recall evidence."""
+    digest = _load_module()
+    logs = {
+        "run-1": "\n".join(
+            [
+                'prefix {"event":"watchdog.check","name":"infra2-alert-bridge","status":"fail","failure_domain":"alert-bridge"}',
+                '{"event":"watchdog.delivery.success","status":"ok","failure_count":1}',
+                '{"event":"watchdog.run.complete","status":"fail","failure_count":1}',
+            ]
+        ),
+        "run-2": "\n".join(
+            [
+                '{"event":"watchdog.check","name":"infra2-docker","status":"fail","failure_domain":"docker-runtime"}',
+                '{"event":"watchdog.delivery.failure","status":"fail","fallback_issue_url":"https://github/issues/1"}',
+            ]
+        ),
+    }
+
+    audit = digest.summarize_watchdog_log_events(logs)
+
+    assert audit["reviewed_run_count"] == 2
+    assert audit["structured_event_run_count"] == 2
+    assert audit["alertable_run_count"] == 2
+    assert audit["delivery_success_run_count"] == 1
+    assert audit["delivery_failure_run_count"] == 1
+    assert audit["fallback_issue_run_count"] == 1
+    assert audit["missing_alert_evidence_run_count"] == 0
+    assert audit["alert_recall_evidence_pct"] == 100.0
+    assert audit["failed_check_count"] == 2
+    assert audit["failure_domain_counts"] == {
+        "alert-bridge": 1,
+        "docker-runtime": 1,
+    }
+
+
+def test_summarize_watchdog_log_events_flags_missing_alert_evidence() -> None:
+    """Infra-012.8: a failed run without delivery/fallback evidence is a recall gap."""
+    digest = _load_module()
+
+    audit = digest.summarize_watchdog_log_events(
+        {
+            "run-1": '{"event":"watchdog.check","status":"fail","failure_domain":"host-reachability"}',
+        }
+    )
+
+    assert audit["alertable_run_count"] == 1
+    assert audit["missing_alert_evidence_run_count"] == 1
+    assert audit["alert_recall_evidence_pct"] == 0.0
 
 
 def test_weekly_digest_workflow_schedule_and_dispatch_contract() -> None:

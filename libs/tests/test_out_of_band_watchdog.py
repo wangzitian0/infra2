@@ -682,6 +682,56 @@ def test_main_records_delivery_failure_event_instead_of_crashing(monkeypatch) ->
     assert delivery_events[0]["fallback_issue_url"].endswith("/issues/999")
 
 
+def test_main_records_delivery_success_event_for_weekly_recall_audit(monkeypatch) -> None:
+    """Infra-012.8: delivery success is logged so weekly digest can audit recall."""
+    watchdog = _load_watchdog()
+    emitted: list[dict] = []
+    delivered: list[str] = []
+
+    monkeypatch.setattr(
+        watchdog,
+        "run_http_checks",
+        lambda _targets, _timeout, **_kwargs: [
+            watchdog.CheckResult(
+                "infra2-public-entrypoint", False, "connection refused"
+            )
+        ],
+    )
+    monkeypatch.setattr(watchdog, "run_ssh_checks", lambda _config, _targets: [])
+    monkeypatch.setattr(
+        watchdog,
+        "run_worker_status_check",
+        lambda _env, _timeout, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        watchdog,
+        "run_dokploy_route_canary_check",
+        lambda _env, ssh_config: [],
+    )
+    monkeypatch.setattr(
+        watchdog,
+        "deliver_out_of_band_alert",
+        lambda _env, message: delivered.append(message),
+    )
+    monkeypatch.setattr(
+        watchdog, "_emit_structured_log", lambda payload: emitted.append(dict(payload))
+    )
+
+    assert watchdog.main({"WATCHDOG_DRY_RUN": "0"}) == 1
+    assert len(delivered) == 1
+    delivery_events = [
+        row for row in emitted if row.get("event") == "watchdog.delivery.success"
+    ]
+    assert delivery_events == [
+        {
+            "event": "watchdog.delivery.success",
+            "status": "ok",
+            "failure_count": 1,
+            "route": "github-actions->feishu-direct",
+        }
+    ]
+
+
 def test_out_of_band_delivery_supports_existing_feishu_app_mode(monkeypatch) -> None:
     """Infra-007.2: watchdog can reuse existing direct Feishu app credentials."""
     watchdog = _load_watchdog()
