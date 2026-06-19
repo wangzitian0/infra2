@@ -8,6 +8,7 @@ call happens — classify_ref stays real, so form validation is exercised for re
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 import pytest
@@ -612,6 +613,71 @@ def test_platform_service_routes_to_iac_runner(monkeypatch):
     assert (
         res.target.code_version == SHA_IAC
     )  # platform version identity = the iac commit
+
+
+def test_platform_wait_uses_timeout_budget_for_status_poll(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(
+        dv2,
+        "trigger_platform_deploy",
+        lambda **kw: {"status": "accepted", "deployment_id": "d1"},
+    )
+    monkeypatch.setattr(
+        dv2,
+        "poll_platform_deploy_status",
+        lambda **kw: seen.update(kw) or {"status": "completed", "deployment_id": "d1"},
+    )
+    monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
+
+    deploy_v2(
+        service="platform/redis",
+        deploy_type="staging",
+        version_ref="ignored",
+        iac_ref="main",
+        client=object(),
+        domain="zitian.party",
+        timeout=120,
+    )
+
+    assert seen["attempts"] == 12
+
+
+def test_platform_batch_cli_routes_services_once(monkeypatch, capsys):
+    sent = {}
+    monkeypatch.setattr(
+        dv2,
+        "trigger_platform_deploy",
+        lambda **kw: sent.update(kw) or {"status": "accepted", "deployment_id": "d1"},
+    )
+    monkeypatch.setattr(
+        dv2,
+        "poll_platform_deploy_status",
+        lambda **kw: {"status": "completed", "deployment_id": "d1"},
+    )
+    monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
+
+    rc = dv2.main(
+        [
+            "--service",
+            "platform/redis,platform/alerting",
+            "--type",
+            "staging",
+            "--version-ref",
+            "main",
+            "--iac-ref",
+            "main",
+            "--domain",
+            "zitian.party",
+            "--timeout",
+            "120",
+        ]
+    )
+
+    assert rc == 0
+    assert sent["services"] == ["platform/redis", "platform/alerting"]
+    output = json.loads(capsys.readouterr().out)
+    assert output["service"] == ["platform/redis", "platform/alerting"]
+    assert output["backend"] == "iac-runner"
 
 
 def test_platform_prod_maps_to_env_production(monkeypatch):

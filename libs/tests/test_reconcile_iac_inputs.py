@@ -73,6 +73,29 @@ def test_deploy_commands_use_deploy_v2_and_prod_review_signals() -> None:
     assert commands[1].argv[commands[1].argv.index("--iac-ref") + 1] == SHA
 
 
+def test_deploy_commands_batch_services_by_environment() -> None:
+    plan = build_plan(
+        [
+            "platform/12.alerting/compose.yaml",
+            "platform/23.prefect/compose.yaml",
+        ]
+    )
+    commands = build_deploy_commands(
+        plan,
+        iac_ref=SHA,
+        domain="zitian.party",
+        timeout=3600,
+        python_executable="python",
+    )
+
+    assert [command.deploy_type for command in commands] == ["staging", "prod"]
+    assert (
+        commands[0].argv[commands[0].argv.index("--service") + 1]
+        == "platform/alerting,platform/prefect"
+    )
+    assert commands[0].argv[commands[0].argv.index("--timeout") + 1] == "3600"
+
+
 def test_run_deploy_commands_stops_on_first_failure() -> None:
     plan = build_plan(
         [
@@ -108,6 +131,7 @@ def test_reconcile_workflow_contract() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
 
     assert workflow["on"]["push"]["branches"] == ["main"]
+    assert workflow["jobs"]["reconcile"]["timeout-minutes"] == 120
     paths = set(workflow["on"]["push"]["paths"])
     assert "platform/**" in paths
     assert "finance_report/finance_report/**" in paths
@@ -116,5 +140,6 @@ def test_reconcile_workflow_contract() -> None:
     assert "docs/ssot/deploy-dependencies.yaml" in paths
     assert "python -m tools.reconcile_iac_inputs" in text
     assert "IAC_WEBHOOK_SECRET is required" in text
+    assert "--timeout 3300" in text
     assert "fetch-depth: 0" in text
     assert "deploy_v2/iac_runner" in text

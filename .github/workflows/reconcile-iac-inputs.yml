@@ -43,7 +43,7 @@ jobs:
   reconcile:
     name: reconcile iac-pinned inputs
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 120
     env:
       IAC_WEBHOOK_SECRET: ${{ secrets.IAC_WEBHOOK_SECRET }}
       IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
@@ -92,7 +92,7 @@ jobs:
 
           args=(--after "$after"
                 --domain "$INTERNAL_DOMAIN"
-                --timeout 600
+                --timeout 3300
                 --output-json reconcile-result.json)
           [[ -n "$before" ]] && args+=(--before "$before")
           [[ "$dry_run" == "true" ]] && args+=(--dry-run)

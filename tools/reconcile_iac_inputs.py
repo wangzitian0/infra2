@@ -156,31 +156,34 @@ def build_deploy_commands(
         ("staging", plan.staging_services),
         ("prod", plan.prod_services),
     ):
-        for service in services:
-            argv = [
-                python_executable,
-                "-m",
-                "tools.deploy_v2",
-                "--service",
-                service,
-                "--type",
-                deploy_type,
-                "--version-ref",
-                "main",
-                "--iac-ref",
-                iac_ref,
-                "--domain",
-                domain,
-                "--timeout",
-                str(timeout),
-            ]
-            if deploy_type == "prod":
-                argv.append("--code-reviewed")
-                if service in plan.staging_services:
-                    argv.append("--staging-validated")
-            commands.append(
-                DeployCommand(service=service, deploy_type=deploy_type, argv=argv)
+        if not services:
+            continue
+        argv = [
+            python_executable,
+            "-m",
+            "tools.deploy_v2",
+            "--service",
+            ",".join(services),
+            "--type",
+            deploy_type,
+            "--version-ref",
+            "main",
+            "--iac-ref",
+            iac_ref,
+            "--domain",
+            domain,
+            "--timeout",
+            str(timeout),
+        ]
+        if deploy_type == "prod":
+            argv.append("--code-reviewed")
+            if set(services) & set(plan.staging_services):
+                argv.append("--staging-validated")
+        commands.append(
+            DeployCommand(
+                service=",".join(services), deploy_type=deploy_type, argv=argv
             )
+        )
     return commands
 
 
