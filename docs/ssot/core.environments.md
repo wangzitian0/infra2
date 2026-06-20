@@ -291,9 +291,11 @@ python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref
 <a id="manual-deploy-targets"></a>
 ### 4.6 部署目标与触发 (Deploy targets & triggers)
 
-> **触发真理**：唯一**自动**的目标是 `report-branch-main`（main 预览）—— main 一合并就重新部署，
-> 它就是「永远看到 main 现在长啥样」的活环境。**所有 staging / prod 都是手动**，且部署 **release tag**：
-> staging 的目标是和 prod **一模一样**，所以钉**同一个 tag**（promote-not-rebuild，不是部署 main sha）。
+> **触发真理**：`report-branch-main`（main 预览）随 main 合并自动重新部署 —— 它是「永远看到 main 现在长啥样」
+> 的活环境。**staging / prod 只部署 release tag（不可变镜像，不接受 branch/sha）**：staging 和 prod
+> **一模一样**，钉**同一个 tag**（promote-not-rebuild，不是部署 main sha）。release tag 一推送（`v*.*.*`），
+> **平台（iac_pinned）服务**经 `.github/workflows/reconcile-iac-inputs.yml` 自动晋升到 staging+prod（见下）；
+> **app 的 staging/prod** 仍是手动 `deploy_v2 --type {staging,prod} --version-ref vX.Y.Z`。
 > 其余 preview 别名（pr / commit / tag）按需手动起。统一入口是 `tools/deploy_v2.py`（§4.7）。
 > （`report-branch-main` 的自动触发点在 **app 仓库 CI**：app main push → repository_dispatch 调 infra2 的
 > `deploy.yml`；接线为待办。）
@@ -305,14 +307,14 @@ python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref
 |------|------|---------|------|------|------|---------|
 | **report-branch-main**（preview）| **自动**（main 合并即发）| main 尖端 | `deploy_v2 --type preview/branch` | 临时 DB | `report-branch-main.<domain>` | 显式 teardown 前 |
 | **其余 preview**（pr/commit/tag）| 手动按需 | PR# / sha / tag | `deploy_v2 --type preview/{pr,commit,tag}` | 临时 DB | `report-{pr-N,commit-sha7,tag-slug}.<domain>` | 显式 teardown 前 |
-| **staging** | **手动** | **release tag**（钉和 prod 同一个）| `deploy_v2 --type staging --version-ref vX.Y.Z` | staging 数据 | `report-staging.<domain>` | 长期（同构 prod）|
-| **prod** | **手动** | **同一个 release tag**（promote-not-rebuild）| `deploy_v2 --type prod --version-ref vX.Y.Z --staging-validated --code-reviewed` | 真实 prod 数据 | `report.<domain>` | 长期 |
+| **staging** | **手动**（app）| **release tag**（钉和 prod 同一个）| `deploy_v2 --type staging --version-ref vX.Y.Z` | staging 数据 | `report-staging.<domain>` | 长期（同构 prod）|
+| **prod** | **手动**（app）| **同一个 release tag**（promote-not-rebuild）| `deploy_v2 --type prod --version-ref vX.Y.Z --staging-validated --code-reviewed` | 真实 prod 数据 | `report.<domain>` | 长期 |
 
-> **平台服务**（iac_pinned）无 preview，只有 staging / prod。
-> **触发模型**：`main` 合并后由 `.github/workflows/reconcile-iac-inputs.yml`
-> 自动执行 input-drift reconcile：changed files 经
+> **平台服务**（iac_pinned）无 preview，只有 staging / prod，且**只接受 release tag 作为 `iac_ref`**。
+> **触发模型**：**release tag（`v*.*.*`）推送后**由 `.github/workflows/reconcile-iac-inputs.yml`
+> 自动执行 input-drift reconcile：diff 上一个 release tag → 本 tag，changed files 经
 > `docs/ssot/deploy-dependencies.yaml` fan-out 到受影响的 `iac_pinned`
-> 服务，使用合并 commit SHA 作为 `iac_ref` 触发 `deploy_v2 -> iac_runner`。
+> 服务，使用**该 tag** 作为 `iac_ref` 触发 `deploy_v2 -> iac_runner`（staging 与 prod 同一个 tag）。
 > 最终是否重启由 iac_runner/Deployer 的 config-hash gate 决定；hash
 > 未变即 no-op，不浪费 Dokploy 重启资源。
 > `.github/workflows/deploy-platform.yml` 只保留 iac_runner bootstrap/self-update，
@@ -358,8 +360,8 @@ deploy_v2(service, type, version_ref, iac_ref)
 |----|------|------|
 | `service` | 部署哪个已注册服务 | `deploy_contract.ServiceSpec` 注册表 |
 | `type` | 判别式：场景 + 解释其余轴、决定哪些必填（discriminated union）| `deploy_contract.DEPLOY_TYPES` |
-| `version_ref` | 多态版本面，由 `type` 解释：PR 号 / sha / tag `vX.Y.Z` / 分支（默认 main）/ `release/x.y` | `resolve_deploy_ref`（执行时解析） |
-| `iac_ref` | infra2 的 ref（分支/tag/sha），钉死 compose/env/secret，并驱动 preview clone | `deploy_v2`（解析为 40-hex 身份） |
+| `version_ref` | 多态版本面，由 `type` 解释：PR 号 / sha / tag `vX.Y.Z` / 分支（默认 main）；**staging/prod 只收 tag** | `resolve_deploy_ref`（执行时解析） |
+| `iac_ref` | infra2 的 ref（分支/tag/sha），钉死 compose/env/secret，并驱动 preview clone；**staging/prod 只收 tag** | `deploy_v2`（解析为 40-hex 身份） |
 
 **`version_ref` 解析成两样东西**（App 发布契约，`resolve_deploy_ref.resolve_image_ref` / `resolve_pr`）：
 commit `sha`（身份）+ `image_ref`（要拉的已发布镜像）——**code 拉短 sha 镜像，release 拉长期保留的 tag `:vX.Y.Z`**
@@ -375,8 +377,9 @@ commit `sha`（身份）+ `image_ref`（要拉的已发布镜像）——**code 
 
 **契约谓词**（`deploy_contract` + `deploy_v2`，部署前 fail-closed）：
 1. `type` 必须在 `DEPLOY_TYPES` 内（未知即拒）。
-2. `version_ref` 的**形态**必须被该 `type` 接受（`accepted_forms` 矩阵）——例如 `prod` 只收 release 形态
-   （`tag` / `release-branch`），传 `main`/`sha` 当场 fail-closed（`validate_ref_form`）。
+2. `version_ref` 的**形态**必须被该 `type` 接受（`accepted_forms` 矩阵）——`staging` / `prod` 只收 release
+   `tag`（`vX.Y.Z`），传 `main`/`sha` 当场 fail-closed（`validate_ref_form`）。固定 env 的 `iac_ref` 同样
+   只收 `tag`（`validate_iac_ref_form`）——branch/sha 的 IaC ref 进不了 staging/prod。
 3. 固定 env（staging/prod）`sub_domain` = `base` + env 后缀；preview `sub_domain` 统一为 `base-<kind>-<value>`
    （`branch-<name>` / `pr-<N>` / `commit-<sha7>` / `tag-<slug>`），且不等于任何 staging/prod 规范域。
 4. `service.prod_only ∧ env ≠ prod` ⇒ 非法；`service.env_shared` ⇒ 无 preview、无后缀。
@@ -401,8 +404,8 @@ commit `sha`（身份）+ `image_ref`（要拉的已发布镜像）——**code 
 
 | type | 派生 env | alias 槽 | 接受的 version_ref 形态 |
 |------|---------|---------|--------------------------|
-| `staging` | staging | — | 全部（branch / sha / tag / release-branch）|
-| `prod` | prod | — | **仅 release**（tag / release-branch）|
+| `staging` | staging | — | **仅 release tag**（`vX.Y.Z`；同 prod）|
+| `prod` | prod | — | **仅 release tag**（`vX.Y.Z`）|
 | `preview/branch` | preview | `branch-<name>`（默认 main）| branch |
 | `preview/pr` | preview | `pr-<N>` | PR 号 |
 | `preview/commit` | preview | `commit-<sha7>` | sha |

@@ -5,7 +5,6 @@ The finance_report app deploy surface accepts a multi-input ``version_ref`` that
 collapses to ONE commit sha plus the published image ref deploy_v2 asks Infra to pull:
 
     main          -> finance_report main branch HEAD
-    release/x.y   -> that release branch HEAD
     vX.Y.Z        -> that tag
     <sha>         -> itself (used verbatim)
 
@@ -27,7 +26,6 @@ FINANCE_REPORT_REPO = "https://github.com/wangzitian0/finance_report.git"
 
 _SHA_RE = re.compile(r"\A[0-9a-fA-F]{7,40}\Z")
 _TAG_RE = re.compile(r"\Av\d+\.\d+\.\d+\Z")
-_RELEASE_BRANCH_RE = re.compile(r"\Arelease/\d+\.\d+\Z")
 
 # git ls-remote is a network op; cap it so a stalled DNS/connection surfaces as a
 # wrapped ValueError instead of hanging the resolver (and any deploy pipeline).
@@ -41,7 +39,7 @@ def _redact_repo(repo: str) -> str:
 
 
 def classify_ref(ref: str) -> str:
-    """Classify a deploy surface input into one of: tag, release-branch, branch, sha.
+    """Classify a deploy surface input into one of: tag, branch, sha.
 
     Pure and side-effect free. Raises ValueError for shapes outside the surface.
     """
@@ -50,22 +48,18 @@ def classify_ref(ref: str) -> str:
         raise ValueError("deploy ref must be non-empty")
     if _TAG_RE.match(cleaned):
         return "tag"
-    if _RELEASE_BRANCH_RE.match(cleaned):
-        return "release-branch"
     if cleaned == "main":
         return "branch"
     if _SHA_RE.match(cleaned):
         return "sha"
     raise ValueError(
-        f"unrecognized deploy ref {ref!r}: expected 'main', 'release/x.y', "
-        "'vX.Y.Z', or a commit sha"
+        f"unrecognized deploy ref {ref!r}: expected 'main', 'vX.Y.Z', or a commit sha"
     )
 
 
 def _remote_ref_for(kind: str, cleaned: str) -> str:
     return {
         "branch": "refs/heads/main",
-        "release-branch": f"refs/heads/{cleaned}",
         "tag": f"refs/tags/{cleaned}",
     }[kind]
 
@@ -135,9 +129,9 @@ def resolve_to_sha(
     A bare ``<sha>`` is returned as-is apart from lowercasing — the caller already
     addressed a commit and may use the short or upper-case form ``classify_ref``
     accepts; it is lowercased (image tags use the lowercase sha) but not expanded to a
-    full sha. main / release/x.y / vX.Y.Z are resolved against ``repo`` via
-    ``git ls-remote``, with annotated tags peeled to the underlying commit. Raises
-    ValueError if the ref shape is unknown, the ref is absent in repo, or git fails.
+    full sha. main / vX.Y.Z are resolved against ``repo`` via ``git ls-remote``, with
+    annotated tags peeled to the underlying commit. Raises ValueError if the ref shape
+    is unknown, the ref is absent in repo, or git fails.
     """
     kind = classify_ref(ref)
     cleaned = ref.strip()
@@ -158,8 +152,8 @@ class ResolvedRef:
     """What a surface ref resolves to: its commit identity AND what image to pull.
 
     The IMAGE_REF (not the type) is decided by the FORM:
-      code  (``branch`` main / ``sha``)        -> the short-sha image  (App publishes :<sha7>)
-      release (``tag`` vX.Y.Z / ``release-branch`` release/x.y) -> the tag image (retained)
+      code  (``branch`` main / ``sha``)  -> the short-sha image  (App publishes :<sha7>)
+      release (``tag`` vX.Y.Z)            -> the tag image (retained)
     ``sha`` is always the full/given commit (the canonical identity); ``image_ref`` is what
     Dokploy is told to pull. This is the App's publish contract — deploy_v2 just consumes
     ``image_ref`` and never re-derives sha-vs-tag.
@@ -167,24 +161,7 @@ class ResolvedRef:
 
     sha: str  # commit identity (full for resolved refs; as-given for a bare sha)
     image_ref: str  # what to pull: <sha7> for code, the tag for release
-    form: str  # classify_ref form: branch | sha | tag | release-branch
-
-
-def _latest_release_tag(
-    repo: str, release_branch: str, *, runner=subprocess.run
-) -> str | None:
-    """The highest ``vMAJOR.MINOR.<patch>`` tag on a ``release/MAJOR.MINOR`` line, or None."""
-    m = _RELEASE_BRANCH_RE.match(release_branch.strip())
-    prefix = f"v{release_branch.strip()[len('release/') :]}."  # release/0.1 -> v0.1.
-    if not m:
-        return None
-    patches: list[tuple[int, str]] = []
-    for _sha, name in _ls_remote_rows(repo, f"refs/tags/{prefix}*", runner=runner):
-        tagname = name.removesuffix("^{}").rpartition("/")[2]  # refs/tags/vX.Y.Z -> vX.Y.Z
-        rest = tagname[len(prefix) :]
-        if tagname.startswith(prefix) and rest.isdigit():
-            patches.append((int(rest), tagname))
-    return max(patches)[1] if patches else None
+    form: str  # classify_ref form: branch | sha | tag
 
 
 def resolve_image_ref(
@@ -192,8 +169,7 @@ def resolve_image_ref(
 ) -> ResolvedRef:
     """Resolve a surface ref to its (sha identity, image_ref, form).
 
-    - ``tag`` (vX.Y.Z)         -> image_ref = the tag (the App's retained release image).
-    - ``release-branch``       -> resolve to the line's LATEST tag -> image_ref = that tag.
+    - ``tag`` (vX.Y.Z)          -> image_ref = the tag (the App's retained release image).
     - ``branch`` (main)/``sha`` -> image_ref = the 7-char short sha (App's :<sha7> image).
     """
     form = classify_ref(ref)
@@ -203,20 +179,6 @@ def resolve_image_ref(
         if not sha:
             raise ValueError(f"tag {cleaned!r} not found in {_redact_repo(repo)}")
         return ResolvedRef(sha=sha, image_ref=cleaned, form=form)
-    if form == "release-branch":
-        tag = _latest_release_tag(repo, cleaned, runner=runner)
-        if not tag:
-            raise ValueError(
-                f"no vX.Y.<n> release tag found on {cleaned!r} in {_redact_repo(repo)}"
-            )
-        sha = _resolve_remote_sha(repo, "tag", tag, runner=runner)
-        if not sha:
-            # the tag was listed but did not resolve to a commit — fail fast rather than
-            # letting the tag string masquerade as `sha` and leak into contract validation.
-            raise ValueError(
-                f"release tag {tag!r} did not resolve to a commit in {_redact_repo(repo)}"
-            )
-        return ResolvedRef(sha=sha, image_ref=tag, form=form)
     sha = resolve_to_sha(ref, repo=repo, runner=runner)  # branch (main) / sha
     return ResolvedRef(sha=sha, image_ref=sha[:7], form=form)
 
@@ -241,7 +203,7 @@ def resolve_pr(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("ref", help="main | release/x.y | vX.Y.Z | <sha>")
+    parser.add_argument("ref", help="main | vX.Y.Z | <sha>")
     parser.add_argument("--repo", default=FINANCE_REPORT_REPO)
     args = parser.parse_args(argv)
     try:

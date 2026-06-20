@@ -1,29 +1,23 @@
 name: Reconcile IaC Inputs
 
-# Main-branch input-drift reconcile for iac_pinned services.
-# Dokploy native autoDeploy stays disabled; this workflow is the GitOps trigger
-# that feeds changed inputs into deploy_v2/iac_runner, where the Deployer
-# config-hash gate decides no-op vs real redeploy.
+# Release-tag input-drift reconcile for iac_pinned services.
+# staging/prod deploy immutable release tags only (promote-not-rebuild), so this GitOps
+# trigger fires on a release tag push — NOT on every main push — and promotes that tag.
+# It diffs the previous release tag -> this tag, fans the changed iac_pinned services into
+# deploy_v2/iac_runner (pinned to the tag), where the Deployer config-hash gate decides
+# no-op vs real redeploy. Dokploy native autoDeploy stays disabled.
 
 "on":
   push:
-    branches: [main]
-    paths:
-      - "platform/**"
-      - "finance_report/finance_report/**"
-      - "libs/**"
-      - "tools/**"
-      - "common/**"
-      - "docs/ssot/deploy-dependencies.yaml"
-      - ".github/workflows/reconcile-iac-inputs.yml"
+    tags: ["v*.*.*"]
   workflow_dispatch:
     inputs:
       before:
-        description: "Optional base commit for changed-file detection"
+        description: "Optional base release tag for changed-file detection (defaults to the previous v*.*.* tag)"
         required: false
         default: ""
       after:
-        description: "Target infra2 commit SHA; defaults to this workflow ref"
+        description: "Target release tag to promote; defaults to this workflow ref"
         required: false
         default: ""
       dry_run:
@@ -65,21 +59,28 @@ jobs:
       - name: Reconcile changed IaC inputs
         env:
           EVENT_NAME: ${{ github.event_name }}
-          EVENT_BEFORE: ${{ github.event.before }}
+          REF_NAME: ${{ github.ref_name }}
           INPUT_BEFORE: ${{ inputs.before || '' }}
           INPUT_AFTER: ${{ inputs.after || '' }}
           INPUT_DRY_RUN: ${{ inputs.dry_run || false }}
         run: |
           set -euo pipefail
 
-          before="$EVENT_BEFORE"
-          after="$GITHUB_SHA"
+          # after = the release tag being promoted; before = the previous v*.*.* tag.
+          # staging/prod accept tags only, so reconcile always pins the tag (not a sha).
+          after="$REF_NAME"
           dry_run="false"
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            before="$INPUT_BEFORE"
-            after="${INPUT_AFTER:-$GITHUB_SHA}"
+            after="${INPUT_AFTER:-$REF_NAME}"
             dry_run="$INPUT_DRY_RUN"
           fi
+
+          before="${INPUT_BEFORE:-}"
+          if [[ -z "$before" ]]; then
+            # Most recent release tag strictly before `after` (empty on the first release).
+            before="$(git tag --list 'v*.*.*' --sort=-v:refname --merged "${after}^" 2>/dev/null | head -n1 || true)"
+          fi
+          echo "Promoting release tag '$after' (base '${before:-<none>}')"
 
           if [[ "$dry_run" != "true" && -z "${IAC_WEBHOOK_SECRET:-}" ]]; then
             echo "::error::IAC_WEBHOOK_SECRET is required for IaC input reconcile."

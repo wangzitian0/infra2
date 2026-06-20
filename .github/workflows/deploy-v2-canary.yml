@@ -48,7 +48,7 @@ on:
   workflow_dispatch:
     inputs:
       version_ref:
-        description: "Code surface to canary: main | release/x.y | vX.Y.Z | full 40-hex sha"
+        description: "Code surface to canary: main | vX.Y.Z | full 40-hex sha"
         required: false
         default: "main"
       iac_ref:
