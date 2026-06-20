@@ -67,6 +67,38 @@ def test_resolve_main_uses_refs_heads_main():
     assert runner.calls[0][-1] == "refs/heads/main"
 
 
+class _RealisticLsRemote:
+    """Models `git ls-remote` faithfully: the peeled `^{}` row for an annotated tag is
+    only emitted when that peeled ref is in the query args (an exact-ref query does NOT
+    return it). This is the behaviour the old FakeRunner hid, letting the v1.1.6
+    tag-object-sha bug ship green."""
+
+    def __init__(self, *, tag: str, tag_obj_sha: str, commit_sha: str):
+        self.tag_ref = f"refs/tags/{tag}"
+        self.peeled_ref = self.tag_ref + "^{}"
+        self.tag_obj_sha = tag_obj_sha
+        self.commit_sha = commit_sha
+        self.calls: list[list[str]] = []
+
+    def __call__(self, cmd, **_kwargs):
+        self.calls.append(cmd)
+        lines = []
+        if self.tag_ref in cmd:
+            lines.append(f"{self.tag_obj_sha}\t{self.tag_ref}")
+        if self.peeled_ref in cmd:  # only present when the peel is explicitly queried
+            lines.append(f"{self.commit_sha}\t{self.peeled_ref}")
+        return subprocess.CompletedProcess(cmd, 0, stdout="\n".join(lines) + "\n")
+
+
+def test_resolve_annotated_tag_returns_commit_not_tag_object():
+    # Regression: an annotated tag must resolve to its underlying COMMIT, never the
+    # tag-object sha. resolve_to_sha must query the peeled ref so the `^{}` row exists.
+    runner = _RealisticLsRemote(tag="v1.2.3", tag_obj_sha="a" * 40, commit_sha="b" * 40)
+    assert r.resolve_to_sha("v1.2.3", runner=runner) == "b" * 40
+    # the peel ref MUST be in the query, else the commit row never comes back
+    assert any("refs/tags/v1.2.3^{}" in call for call in runner.calls)
+
+
 def test_resolve_annotated_tag_peels_to_underlying_commit():
     # An annotated tag: ls-remote lists the tag OBJECT sha and the peeled ^{} commit.
     # The resolver must return the commit, not the tag-object sha (finance_report
@@ -191,7 +223,9 @@ def test_wrapped_git_error_suppresses_exception_chaining():
 
 
 def test_resolve_image_ref_sha_uses_short_sha():
-    rr = r.resolve_image_ref("a" * 40, runner=FakeRunner(raises=AssertionError("no git")))
+    rr = r.resolve_image_ref(
+        "a" * 40, runner=FakeRunner(raises=AssertionError("no git"))
+    )
     assert (rr.sha, rr.image_ref, rr.form) == ("a" * 40, "aaaaaaa", "sha")
 
 
