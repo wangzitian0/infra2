@@ -49,6 +49,14 @@ def test_signoz_roundtrip_posts_otlp_log_and_queries_nonce(monkeypatch) -> None:
     assert queries[0]["url"] == "http://clickhouse:8123"
     assert "signoz_logs.distributed_logs_v2" in queries[0]["query"]
     assert "nonce-1" in queries[0]["query"]
+    # distributed_logs_v2.timestamp is UInt64 nanoseconds. The time bound must be
+    # converted to nanoseconds; comparing the column against a bare DateTime64
+    # bound overflows in ClickHouse (Code 407) and 500s the probe on every cycle.
+    assert (
+        "timestamp >= toUnixTimestamp64Nano(now64(3) - INTERVAL 10 MINUTE)"
+        in queries[0]["query"]
+    )
+    assert "AND timestamp >= now64(3)" not in queries[0]["query"]
 
 
 def test_openpanel_roundtrip_tracks_event_and_queries_nonce(monkeypatch) -> None:
