@@ -297,8 +297,10 @@ python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref
 > **平台（iac_pinned）服务**经 `.github/workflows/reconcile-iac-inputs.yml` 自动晋升到 staging+prod（见下）；
 > **app 的 staging/prod** 仍是手动 `deploy_v2 --type {staging,prod} --version-ref vX.Y.Z`。
 > 其余 preview 别名（pr / commit / tag）按需手动起。统一入口是 `tools/deploy_v2.py`（§4.7）。
-> （`report-branch-main` 的自动触发点在 **app 仓库 CI**：app main push → repository_dispatch 调 infra2 的
-> `deploy.yml`；接线为待办。）
+> （`report-branch-main` 的自动触发点在 **app 仓库 CI**：app `main` CI 通过后，
+> `finance_report/.github/workflows/notify-infra2-report-main.yml`（#1173）发 `repository_dispatch`
+> 调 infra2 的 `deploy-report-main.yml`，校验 payload SHA 为 app main 尖端后经 `deploy_v2 --type preview/branch`
+> 部署。**此链路已接通并在线运行**——它是唯一的自动目标，与 staging/prod 的 tag 晋升、平台 reconcile 都无关。）
 
 下表「入口」列是**示意**（说明用哪个 type/服务）；可运行命令还需 `--iac-ref <ref> --domain <domain>`，
 **prod 另需 `--staging-validated --code-reviewed`**（deploy_v2 对 prod 数据 deny-by-default，缺了直接 fail-closed）。
