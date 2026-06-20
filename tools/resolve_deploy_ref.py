@@ -65,16 +65,16 @@ def _remote_ref_for(kind: str, cleaned: str) -> str:
 
 
 def _ls_remote_rows(
-    repo: str, remote_ref: str, *, runner=subprocess.run
+    repo: str, *remote_refs: str, runner=subprocess.run
 ) -> list[tuple[str, str]]:
-    """Return ``[(sha, ref_name), ...]`` from ``git ls-remote repo remote_ref``.
+    """Return ``[(sha, ref_name), ...]`` from ``git ls-remote repo <refs...>``.
 
     Subprocess failures (git missing, network/auth, non-zero exit) are wrapped as
     ValueError so callers get a stable error contract instead of a raw traceback.
     """
     try:
         result = runner(
-            ["git", "ls-remote", repo, remote_ref],
+            ["git", "ls-remote", repo, *remote_refs],
             capture_output=True,
             text=True,
             check=True,
@@ -88,7 +88,7 @@ def _ls_remote_rows(
         # URL in its args, which would still leak via __cause__/traceback output even
         # though our message is redacted.
         raise ValueError(
-            f"git ls-remote failed for {remote_ref!r} in {_redact_repo(repo)}: "
+            f"git ls-remote failed for {list(remote_refs)!r} in {_redact_repo(repo)}: "
             f"{_redact_repo(str(exc))}"
         ) from None
     rows: list[tuple[str, str]] = []
@@ -104,19 +104,24 @@ def _resolve_remote_sha(
 ) -> str | None:
     """Resolve a non-sha kind to a commit sha via ls-remote.
 
-    Annotated tags are peeled to their underlying commit (``refs/tags/<tag>^{}``):
-    finance_report ships annotated tags, so the bare tag ref would otherwise return
-    the tag-object sha, not the commit used as the published image tag.
+    A tag is resolved to its underlying COMMIT, never the wrapper object. An annotated
+    tag's exact ref returns the tag-object sha; only the peeled ref ``<ref>^{}`` yields
+    the commit — and ``git ls-remote`` only emits the ``^{}`` row when that ref is in the
+    query. So for a tag we ask for BOTH the ref and its peel and prefer the peel. (Asking
+    for the exact ref alone silently returned the tag object — the v1.1.6 deploy-identity
+    bug; infra2/finance_report both ship annotated tags.) A lightweight tag has no peel
+    row, so the plain row — already the commit — is used.
     """
     remote_ref = _remote_ref_for(kind, cleaned)
-    rows = _ls_remote_rows(repo, remote_ref, runner=runner)
-    if kind == "tag":
-        peeled = remote_ref + "^{}"
+    peeled = remote_ref + "^{}" if kind == "tag" else None
+    query = [remote_ref, peeled] if peeled else [remote_ref]
+    rows = _ls_remote_rows(repo, *query, runner=runner)
+    if peeled:
         for sha, name in rows:
-            if name == peeled:  # annotated tag -> underlying commit
+            if name == peeled:  # annotated tag -> underlying commit (preferred)
                 return sha
     for sha, name in rows:
-        if name == remote_ref:  # branch, lightweight tag, or fallback
+        if name == remote_ref:  # branch / lightweight tag
             return sha
     return None
 
