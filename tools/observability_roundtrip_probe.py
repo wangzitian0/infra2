@@ -103,7 +103,12 @@ def run_signoz_roundtrip(nonce: str) -> ProbeResult:
         "SELECT count() FROM signoz_logs.distributed_logs_v2 "
         f"WHERE resources_string['service.name'] = {_ch_string(SIGNOZ_SERVICE_NAME)} "
         f"AND body LIKE {_ch_string('%' + nonce + '%')} "
-        "AND timestamp >= now64(3) - INTERVAL 10 MINUTE"
+        # distributed_logs_v2.timestamp is UInt64 nanoseconds, not DateTime64.
+        # Comparing it against a DateTime64 bound makes ClickHouse coerce the
+        # nanosecond integer into a decimal and overflow (Code 407,
+        # DECIMAL_OVERFLOW) -> HTTP 500 -> the probe fails on every cycle.
+        # Convert the bound to nanoseconds so both sides are UInt64.
+        "AND timestamp >= toUnixTimestamp64Nano(now64(3) - INTERVAL 10 MINUTE)"
     )
     count = _wait_for_count(clickhouse_url, query)
     return ProbeResult(backend="signoz", nonce=nonce, count=count)
