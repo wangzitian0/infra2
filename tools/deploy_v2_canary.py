@@ -19,7 +19,7 @@ Dokploy access and is operator-driven:
 
     python -m tools.deploy_v2_canary --version-ref main --iac-ref main --domain zitian.party
 
-``--version-ref`` accepts any code surface (main | release/x.y | vX.Y.Z | <sha>); the
+``--version-ref`` accepts any code surface (main | vX.Y.Z | <sha>); the
 canary always runs it on the reserved slot. Add ``--keep`` to leave the stack up.
 """
 
@@ -88,7 +88,7 @@ def run_canary(
 ) -> CanaryResult:
     """Deploy the canary slot, assert health, then tear it down.
 
-    ``version_ref`` is any code surface (main | release/x.y | vX.Y.Z | <sha>); ``iac_ref``
+    ``version_ref`` is any code surface (main | vX.Y.Z | <sha>); ``iac_ref``
     pins infra2. deploy_v2 resolves both. Raises whatever deploy_v2 raises on a
     contract/red-line violation, or TimeoutError from the backend if the stack never goes
     healthy. Teardown runs in a ``finally`` so a failed/unhealthy deploy still cleans up
@@ -174,12 +174,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--version-ref",
         default="main",
-        help="app code surface to canary: main | release/x.y | vX.Y.Z | <sha>",
+        help="app code surface to canary: main | vX.Y.Z | <sha>",
     )
     parser.add_argument(
         "--iac-ref",
         default="main",
-        help="infra2 ref pinning the IaC: main | release/x.y | vX.Y.Z | <sha>",
+        help="infra2 ref pinning the IaC: main | vX.Y.Z | <sha>",
     )
     parser.add_argument(
         "--domain", required=True, help="base domain, e.g. zitian.party"

@@ -451,7 +451,7 @@ def main(argv: list[str] | None = None) -> int:
         "up", parents=[common], help="create/update + deploy an alias"
     )
     up_p.add_argument(
-        "--code", required=True, help="main | release/x.y | vX.Y.Z | <sha>"
+        "--code", required=True, help="main | vX.Y.Z | <sha>"
     )
     up_p.add_argument("--repo", default=None, help="git remote to resolve code against")
     up_p.add_argument("--no-wait", action="store_true", help="do not health-check")

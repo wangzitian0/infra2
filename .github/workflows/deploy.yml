@@ -33,11 +33,11 @@ on:
         type: choice
         options: [staging, prod, preview/branch, preview/pr, preview/commit, preview/tag]
       version_ref:
-        description: "Version surface, interpreted by type: PR# (preview/pr) | tag vX.Y.Z (prod / preview/tag) | sha (preview/commit) | main | release/x.y"
+        description: "Version surface, interpreted by type: PR# (preview/pr) | tag vX.Y.Z (prod / preview/tag) | sha (preview/commit) | main"
         required: false
         default: "main"
       iac_ref:
-        description: "infra2 ref surface: main | release/x.y | vX.Y.Z | <sha>"
+        description: "infra2 ref surface: main | vX.Y.Z | <sha>"
         required: false
         default: "main"
       domain:

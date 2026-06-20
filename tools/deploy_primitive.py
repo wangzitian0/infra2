@@ -195,7 +195,7 @@ def deploy(
 ) -> DeployPlan:
     """Deploy a resolved app commit to a fixed app environment.
 
-    code  -> resolve_deploy_ref (main / release/x.y / vX.Y.Z / <sha>) -> a commit sha.
+    code  -> resolve_deploy_ref (main / vX.Y.Z / <sha>) -> a commit sha.
     env   -> deploy_env_config (which compose, URL, suffix, default data).
     data  -> derived from the env's data_default; callers cannot override it here.
 
@@ -337,7 +337,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="internal fixed-compose deploy backend")
     parser.add_argument("--env", required=True, help="staging | prod (not preview)")
     parser.add_argument(
-        "--code", required=True, help="main | release/x.y | vX.Y.Z | <sha>"
+        "--code", required=True, help="main | vX.Y.Z | <sha>"
     )
     parser.add_argument(
         "--domain", required=True, help="base domain, e.g. zitian.party"

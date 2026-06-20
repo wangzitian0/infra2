@@ -36,8 +36,6 @@ def _fake_resolve_image_ref(ref, **_kw):
     form = classify_ref(ref)
     if form == "tag":
         return ResolvedRef(sha=SHA_CODE, image_ref=ref.strip(), form=form)
-    if form == "release-branch":
-        return ResolvedRef(sha=SHA_CODE, image_ref="v9.9.9", form=form)
     if form == "sha":
         s = ref.strip().lower()
         return ResolvedRef(sha=s, image_ref=s[:7], form=form)
@@ -108,9 +106,12 @@ def calls(monkeypatch):
 
 
 def _deploy(**over):
+    # Fixed envs accept a tag iac_ref only; preview/canary clone a live ref. Default the
+    # iac_ref to match the type so callers only pass it when the test is about iac_ref itself.
+    fixed = over.get("deploy_type") in ("staging", "prod")
     base = dict(
         service="finance_report/app",
-        iac_ref="main",
+        iac_ref="v0.0.0" if fixed else "main",
         client=object(),
         domain="zitian.party",
     )
@@ -137,20 +138,11 @@ def test_prod_tag_routes_fixed_and_pulls_the_tag_not_the_sha(calls):
     assert calls["preview"] is None
 
 
-def test_prod_release_branch_pulls_latest_tag(calls):
-    res = _deploy(
-        deploy_type="prod",
-        version_ref="release/0.1",
-        staging_validated=True,
-        code_reviewed=True,
-    )
-    assert calls["fixed"]["image_ref"] == "v9.9.9"  # the line's latest tag
-    assert res.backend == "deploy-primitive"
-
-
-@pytest.mark.parametrize("bad", ["main", "deadbeef", "c" * 40])
-def test_prod_rejects_code_forms_fail_closed(calls, bad):
-    with pytest.raises(ValueError, match="does not accept"):
+@pytest.mark.parametrize("bad", ["main", "deadbeef", "c" * 40, "release/0.1"])
+def test_prod_rejects_non_tag_version_ref_fail_closed(calls, bad):
+    # prod accepts a release TAG only; a code ref (or the retired release-branch form)
+    # fails closed before any backend. release/0.1 is now an unrecognized ref entirely.
+    with pytest.raises(ValueError, match="does not accept|unrecognized deploy ref"):
         _deploy(
             deploy_type="prod",
             version_ref=bad,
@@ -160,19 +152,22 @@ def test_prod_rejects_code_forms_fail_closed(calls, bad):
     assert calls["fixed"] is None  # fails before any backend
 
 
-# --- staging: mirrors prod but permissive (code OR release) ----------------
+# --- staging: mirrors prod — release TAG only (promote-not-rebuild) --------
 
 
-@pytest.mark.parametrize(
-    "version_ref,expect_image",
-    [("main", SHA_CODE[:7]), ("c" * 40, SHA_CODE[:7]), ("v1.2.3", "v1.2.3")],
-)
-def test_staging_accepts_code_and_release(calls, version_ref, expect_image):
-    res = _deploy(deploy_type="staging", version_ref=version_ref)
+def test_staging_accepts_tag_and_pulls_it(calls):
+    res = _deploy(deploy_type="staging", version_ref="v1.2.3")
     assert res.backend == "deploy-primitive"
     assert calls["fixed"]["env"] == "staging"
-    assert calls["fixed"]["image_ref"] == expect_image
-    assert calls["image_waits"][-1]["image_ref"] == expect_image
+    assert calls["fixed"]["image_ref"] == "v1.2.3"
+    assert calls["image_waits"][-1]["image_ref"] == "v1.2.3"
+
+
+@pytest.mark.parametrize("bad", ["main", "c" * 40, "release/0.1"])
+def test_staging_rejects_code_forms_fail_closed(calls, bad):
+    with pytest.raises(ValueError, match="does not accept|unrecognized deploy ref"):
+        _deploy(deploy_type="staging", version_ref=bad)
+    assert calls["fixed"] is None
 
 
 # --- preview slots: main / pr / commit / tag ------------------------------
@@ -232,7 +227,7 @@ def test_image_readiness_failure_stops_before_fixed_side_effect(calls, monkeypat
     monkeypatch.setattr(dv2, "_wait_for_image_dependencies", boom)
 
     with pytest.raises(RuntimeError, match="required image artifacts"):
-        _deploy(deploy_type="staging", version_ref="main")
+        _deploy(deploy_type="staging", version_ref="v1.2.3")
 
     assert calls["preview"] is None and calls["fixed"] is None
 
@@ -303,8 +298,8 @@ def test_canary_defaults_version_ref_to_main(calls):
 
 
 def test_iac_branch_ref_is_cloned_verbatim(calls):
-    _deploy(deploy_type="preview/pr", version_ref=7, iac_ref="release/1.2")
-    assert calls["preview"]["branch"] == "release/1.2"
+    _deploy(deploy_type="preview/pr", version_ref=7, iac_ref="v1.2.3")
+    assert calls["preview"]["branch"] == "v1.2.3"
 
 
 def test_iac_sha_falls_back_to_default_branch(calls):
@@ -312,6 +307,21 @@ def test_iac_sha_falls_back_to_default_branch(calls):
     res = _deploy(deploy_type="preview/pr", version_ref=7, iac_ref="d" * 40)
     assert calls["preview"]["branch"] == "main"
     assert res.target.iac_ref == SHA_IAC
+
+
+@pytest.mark.parametrize("bad_iac", ["main", "d" * 40])
+def test_fixed_env_rejects_non_tag_iac_ref(calls, bad_iac):
+    # staging/prod pin IaC to a release tag; a branch/sha iac_ref fails closed BEFORE any
+    # backend (the gap that let a main-sha reconcile auto-deploy platform to prod).
+    with pytest.raises(ValueError, match="requires a release-tag iac_ref"):
+        _deploy(
+            deploy_type="prod",
+            version_ref="v1.2.3",
+            iac_ref=bad_iac,
+            staging_validated=True,
+            code_reviewed=True,
+        )
+    assert calls["fixed"] is None
 
 
 # --- gates ------------------------------------------------------------------
@@ -526,7 +536,7 @@ def test_cli_reports_deploy_failure(monkeypatch, capsys):
 def test_fixed_deploy_verifies_vault_and_config_by_default(calls):
     # parity with the retired bash dokploy_deploy.sh: the unified path must KEEP the
     # VAULT_APP_TOKEN TTL preflight + post-deploy IAC_CONFIG_HASH check (default-ON).
-    _deploy(deploy_type="staging", version_ref="main")
+    _deploy(deploy_type="staging", version_ref="v1.2.3")
     assert calls["fixed"]["verify_vault"] is True
     assert calls["fixed"]["verify_config"] is True
     assert "model_overrides" in calls["fixed"]  # threaded through (env-sourced)
@@ -535,7 +545,7 @@ def test_fixed_deploy_verifies_vault_and_config_by_default(calls):
 def test_fixed_deploy_verify_can_be_disabled(calls):
     _deploy(
         deploy_type="staging",
-        version_ref="main",
+        version_ref="v1.2.3",
         verify_vault=False,
         verify_config=False,
     )
@@ -595,7 +605,7 @@ def _platform(monkeypatch, *, poll_status="completed", **over):
         service="platform/redis",
         deploy_type="staging",
         version_ref="ignored",
-        iac_ref="main",
+        iac_ref="v0.0.0",  # staging/prod pin IaC to a release tag
         client=object(),
         domain="zitian.party",
     )
@@ -633,7 +643,7 @@ def test_platform_wait_uses_timeout_budget_for_status_poll(monkeypatch):
         service="platform/redis",
         deploy_type="staging",
         version_ref="ignored",
-        iac_ref="main",
+        iac_ref="v0.0.0",
         client=object(),
         domain="zitian.party",
         timeout=120,
@@ -663,9 +673,9 @@ def test_platform_batch_cli_routes_services_once(monkeypatch, capsys):
             "--type",
             "staging",
             "--version-ref",
-            "main",
+            "v0.0.0",
             "--iac-ref",
-            "main",
+            "v0.0.0",
             "--domain",
             "zitian.party",
             "--timeout",

@@ -130,14 +130,11 @@ def test_reconcile_workflow_contract() -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     text = WORKFLOW.read_text(encoding="utf-8")
 
-    assert workflow["on"]["push"]["branches"] == ["main"]
+    # staging/prod deploy release tags only, so reconcile is tag-triggered (promote a tag),
+    # NOT main-push triggered (which would promote a moving sha).
+    assert workflow["on"]["push"]["tags"] == ["v*.*.*"]
+    assert "branches" not in workflow["on"]["push"]
     assert workflow["jobs"]["reconcile"]["timeout-minutes"] == 120
-    paths = set(workflow["on"]["push"]["paths"])
-    assert "platform/**" in paths
-    assert "finance_report/finance_report/**" in paths
-    assert "libs/**" in paths
-    assert "tools/**" in paths
-    assert "docs/ssot/deploy-dependencies.yaml" in paths
     assert "python -m tools.reconcile_iac_inputs" in text
     assert "IAC_WEBHOOK_SECRET is required" in text
     assert "--timeout 3300" in text

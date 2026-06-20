@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Reconcile IaC-pinned services whose deploy inputs changed.
+"""Reconcile IaC-pinned services whose deploy inputs changed between release tags.
 
-This is the post-merge automation layer for input-drift reconciliation:
-changed files -> deploy dependency fan-out -> deploy_v2/iac_runner per affected
-service -> Deployer config-hash gate decides no-op vs restart.
+This is the release-tag promotion layer for input-drift reconciliation: diff the
+previous release tag -> the promoted tag -> deploy dependency fan-out -> deploy_v2/
+iac_runner per affected service (pinned to the tag) -> Deployer config-hash gate decides
+no-op vs restart. staging/prod accept tags only, so the promoted ref is always a tag.
 """
 
 from __future__ import annotations
@@ -69,10 +70,11 @@ def is_zero_sha(value: str | None) -> bool:
 def changed_files_from_git(
     repo_root: Path, before: str | None, after: str
 ) -> list[str]:
-    """Return changed files for a GitHub push range.
+    """Return changed files between two release tags (``before``..``after``).
 
-    GitHub sends an all-zero `before` for the first push to a branch; in that
-    case diff the target commit itself instead of a nonexistent range.
+    ``before`` is the previous release tag; when it is empty/all-zero (the first
+    release has no predecessor) diff the tagged commit itself instead of a
+    nonexistent range.
     """
 
     if before and not is_zero_sha(before):
@@ -166,8 +168,11 @@ def build_deploy_commands(
             ",".join(services),
             "--type",
             deploy_type,
+            # iac_pinned services ignore version_ref (their artifact IS the iac_ref stack),
+            # but staging/prod accept tags only — pin both axes to the promoted release tag
+            # so the command is self-consistent and never carries a moving ref to a fixed env.
             "--version-ref",
-            "main",
+            iac_ref,
             "--iac-ref",
             iac_ref,
             "--domain",
@@ -263,9 +268,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="reconcile changed IaC service inputs")
     parser.add_argument("--repo-root", default=".", help="git repository root")
     parser.add_argument(
-        "--before", default="", help="base commit for changed-file detection"
+        "--before",
+        default="",
+        help="previous release tag (base for changed-file detection)",
     )
-    parser.add_argument("--after", required=True, help="target commit / iac_ref")
+    parser.add_argument(
+        "--after", required=True, help="release tag to promote (iac_ref)"
+    )
     parser.add_argument(
         "--domain", default=os.environ.get("INTERNAL_DOMAIN", "zitian.party")
     )

@@ -28,8 +28,6 @@ class FakeRunner:
     "ref, expected_kind",
     [
         ("main", "branch"),
-        ("release/1.2", "release-branch"),
-        ("release/10.4", "release-branch"),
         ("v1.2.3", "tag"),
         ("v10.0.1", "tag"),
         ("abc1234", "sha"),
@@ -44,7 +42,10 @@ def test_classify_ref_recognizes_the_surface(ref, expected_kind):
 
 
 @pytest.mark.parametrize(
-    "bad", ["", "   ", "develop", "release/1", "v1.2", "xyz", "1.2.3"]
+    "bad",
+    # release/x.y is retired: staging/prod deploy tags only, so it is no longer a
+    # recognized surface form.
+    ["", "   ", "develop", "release/1", "release/1.2", "v1.2", "xyz", "1.2.3"],
 )
 def test_classify_ref_rejects_unknown_shapes(bad):
     with pytest.raises(ValueError):
@@ -64,14 +65,6 @@ def test_resolve_main_uses_refs_heads_main():
     assert r.resolve_to_sha("main", runner=runner) == "1" * 40
     assert runner.calls[0][:2] == ["git", "ls-remote"]
     assert runner.calls[0][-1] == "refs/heads/main"
-
-
-def test_resolve_release_branch_targets_the_right_ref():
-    runner = FakeRunner(
-        stdout="2222222222222222222222222222222222222222\trefs/heads/release/1.2\n"
-    )
-    assert r.resolve_to_sha("release/1.2", runner=runner) == "2" * 40
-    assert runner.calls[0][-1] == "refs/heads/release/1.2"
 
 
 def test_resolve_annotated_tag_peels_to_underlying_commit():
@@ -215,31 +208,6 @@ def test_resolve_image_ref_tag_uses_the_tag():
     rr = r.resolve_image_ref("v1.2.3", runner=runner)
     # release artifacts are pulled BY TAG (the retained image), sha stays the identity
     assert rr.image_ref == "v1.2.3" and rr.sha == "3" * 40 and rr.form == "tag"
-
-
-def test_resolve_image_ref_release_branch_picks_latest_tag():
-    runner = FakeRunner(
-        stdout=(
-            "s5\trefs/tags/v0.1.5\n"
-            "s7\trefs/tags/v0.1.7\n"
-            "p7\trefs/tags/v0.1.7^{}\n"
-        )
-    )
-    rr = r.resolve_image_ref("release/0.1", runner=runner)
-    # release/0.1 -> the line's highest tag -> pulled by that tag
-    assert rr.image_ref == "v0.1.7" and rr.sha == "p7" and rr.form == "release-branch"
-
-
-def test_resolve_image_ref_release_branch_unresolvable_tag_fails_fast():
-    # the tag is listed by the v0.1.* glob but resolving it individually returns nothing —
-    # we must fail fast, never let the tag string masquerade as `sha` (Copilot review).
-    class PerRefRunner:
-        def __call__(self, cmd, **kwargs):
-            out = "s7\trefs/tags/v0.1.7\n" if cmd[-1].endswith("*") else ""
-            return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
-
-    with pytest.raises(ValueError, match="did not resolve to a commit"):
-        r.resolve_image_ref("release/0.1", runner=PerRefRunner())
 
 
 def test_resolve_pr_uses_pull_head_short_sha():

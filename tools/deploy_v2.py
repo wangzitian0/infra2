@@ -42,6 +42,7 @@ from tools.deploy_contract import (
     make_target,
     service_spec,
     validate_deploy_target,
+    validate_iac_ref_form,
     validate_ref_form,
 )
 from tools.deploy_env_config import env_config
@@ -118,7 +119,7 @@ def _resolve_for_type(spec, version_ref, *, repo: str):
     if not _SHA_RE.match(resolved.sha):
         raise ValueError(
             f"version_ref {version_ref!r} resolved to {resolved.sha!r}, not a full commit "
-            "sha — pass main, a release branch, a tag vX.Y.Z, or a full 40-hex sha"
+            "sha — pass main, a tag vX.Y.Z, or a full 40-hex sha"
         )
     alias_value = {
         "branch": ref,  # the branch name -> slot branch-<name>
@@ -547,6 +548,12 @@ def deploy_v2(
     """
     svc_spec = service_spec(service)
     normalized_expected_sha = _normalize_expected_sha(expected_sha)
+    # Fixed envs (staging/prod) pin their IaC to an immutable release tag, on BOTH the
+    # app-image axis (version_ref, gated per-type below) and the infra2-IaC axis (iac_ref,
+    # gated here BEFORE the platform/app branch so it covers both). A sha/branch iac_ref can
+    # no longer reach a fixed env — the gap that let a main-sha reconcile auto-deploy to prod.
+    # preview/canary keep an unrestricted iac_ref (they clone live refs).
+    validate_iac_ref_form(deploy_type, classify_ref(iac_ref))
     if svc_spec.iac_pinned:  # platform service -> iac_runner /deploy webhook
         if normalized_expected_sha is not None:
             raise ValueError("--expected-sha is only supported for app-backed deploys")
@@ -686,13 +693,13 @@ def main(argv: list[str] | None = None) -> int:
         "--version-ref",
         default="",
         help="version surface, interpreted by --type: a PR# (preview/pr), a release tag "
-        "vX.Y.Z (prod / preview/tag), a sha (preview/commit), main, or release/x.y; "
+        "vX.Y.Z (prod / preview/tag), a sha (preview/commit), or main; "
         "ignored for iac_pinned platform/backing services",
     )
     parser.add_argument(
         "--iac-ref",
         required=True,
-        help="infra2 ref pinning the IaC: main | release/x.y | vX.Y.Z | <sha>",
+        help="infra2 ref pinning the IaC: main | vX.Y.Z | <sha>",
     )
     parser.add_argument(
         "--domain", required=True, help="base domain, e.g. zitian.party"

@@ -313,8 +313,9 @@ class DeployTypeSpec:
     ``accepted_forms`` is the type's slice of the (type × version_ref-form) matrix: the
     version_ref *forms* this type will accept, so a wrong combination (``prod`` + ``main``)
     fails closed instead of silently pulling a code image onto prod. Forms are the
-    ``resolve_deploy_ref.classify_ref`` outputs (``branch`` / ``sha`` / ``tag`` /
-    ``release-branch``) plus ``pr`` (a PR number, resolved via ``resolve_pr``).
+    ``resolve_deploy_ref.classify_ref`` outputs (``branch`` / ``sha`` / ``tag``) plus
+    ``pr`` (a PR number, resolved via ``resolve_pr``). Fixed envs (``staging`` / ``prod``)
+    accept ``tag`` only — they deploy immutable release images, never a moving code ref.
     """
 
     key: str  # the type token, e.g. "prod" | "preview/pr"
@@ -337,10 +338,7 @@ _CODE_FORMS = (
     "branch",
     "sha",
 )  # an app commit: main tip / a pinned sha -> short-sha image
-_RELEASE_FORMS = (
-    "tag",
-    "release-branch",
-)  # a retained release image: vX.Y.Z / its line
+_RELEASE_FORMS = ("tag",)  # a retained, immutable release image: vX.Y.Z
 _ALL_REF_FORMS = _CODE_FORMS + _RELEASE_FORMS
 
 # The closed set of deploy types. Adding a scenario = adding one entry here (open-closed);
@@ -348,8 +346,9 @@ _ALL_REF_FORMS = _CODE_FORMS + _RELEASE_FORMS
 # property of "empty params") — it is a preview deploy whose execution adds health+teardown.
 #
 # accepted_forms encodes the (type × form) matrix:
-#   staging        — any form (it mirrors prod but is permissive: code OR release).
-#   prod           — RELEASE forms only (tag / release-branch); a code ref fails closed.
+#   staging        — RELEASE tag only; staging mirrors prod (promote-not-rebuild), so a
+#                    code ref (branch/sha) fails closed just like prod.
+#   prod           — RELEASE tag only (vX.Y.Z); a code ref fails closed.
 #   preview/branch — a branch tip (default main) -> report-branch-<name>.
 #   preview/pr     — a PR number (resolve_pr -> the PR head image) -> report-pr-<N>.
 #   preview/commit — a pinned commit sha -> report-commit-<sha7>.
@@ -359,7 +358,7 @@ _ALL_REF_FORMS = _CODE_FORMS + _RELEASE_FORMS
 # Every preview slot is uniformly <kind>-<value>; `branch` (not a bare `main`) is what makes
 # that uniform — so downstream slot parsing/generation never special-cases the main tip.
 DEPLOY_TYPES: dict[str, DeployTypeSpec] = {
-    "staging": DeployTypeSpec("staging", env="staging", accepted_forms=_ALL_REF_FORMS),
+    "staging": DeployTypeSpec("staging", env="staging", accepted_forms=_RELEASE_FORMS),
     "prod": DeployTypeSpec("prod", env="prod", accepted_forms=_RELEASE_FORMS),
     "preview/branch": DeployTypeSpec(
         "preview/branch", env="preview", alias_kind="branch", accepted_forms=("branch",)
@@ -401,6 +400,29 @@ def validate_ref_form(deploy_type: str, form: str) -> None:
         raise ValueError(
             f"deploy type {deploy_type!r} does not accept a {form!r} version_ref "
             f"(accepts {list(spec.accepted_forms)})"
+        )
+
+
+# Fixed envs pin their IaC to an immutable release tag, NOT a moving sha/branch. This is the
+# iac_ref counterpart to validate_ref_form: it is a separate axis from version_ref (a preview
+# legitimately clones a branch/sha iac_ref), so it keys on the type's env rather than the
+# version_ref form matrix.
+_TAG_ONLY_IAC_ENVS = ("staging", "prod")
+
+
+def validate_iac_ref_form(deploy_type: str, iac_form: str) -> None:
+    """Fail closed when a fixed env (staging/prod) is handed a non-tag ``iac_ref``.
+
+    ``iac_form`` is a ``classify_ref`` output. staging/prod must pin IaC to a release tag
+    (``vX.Y.Z``); a ``branch``/``sha`` iac_ref raises here rather than letting a moving
+    infra2 ref reach a fixed env. preview/canary accept any iac_ref form (they clone live
+    refs), so this is a no-op for them.
+    """
+    spec = deploy_type_spec(deploy_type)
+    if spec.env in _TAG_ONLY_IAC_ENVS and iac_form != "tag":
+        raise ValueError(
+            f"deploy type {deploy_type!r} (env {spec.env!r}) requires a release-tag "
+            f"iac_ref (vX.Y.Z), got a {iac_form!r} ref"
         )
 
 
