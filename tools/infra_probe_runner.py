@@ -31,6 +31,27 @@ DEFAULT_RENOTIFY_SECONDS = 1800
 DEFAULT_FAILURE_THRESHOLD = 3
 DEFAULT_RECOVERY_THRESHOLD = 2
 DEFAULT_STATE_FILE = "/tmp/infra_probe_runner_state.json"
+# A probe that has never once succeeded is treated as a broken/misconfigured probe, not a
+# real outage — routed to this distinct, warning-severity alert so it cannot page critical.
+MISCONFIGURED_ALERT_NAME = "InfraProbeMisconfigured"
+MISCONFIGURED_SEVERITY = "warning"
+
+
+def _log_send(stream_key: str, results: list, severity_override: str | None) -> None:
+    """Structured line on every real send, so the alerting loop is observable (it was a
+    black box — failures-only, nothing on a successful send)."""
+    failures = failed_results(results)
+    status = "firing" if failures else "resolved"
+    if severity_override:
+        severity = severity_override
+    else:
+        severity = failures[0].spec.severity if failures else "info"
+    names = ",".join(sorted(r.spec.name for r in failures)) or "-"
+    print(
+        f"probe-runner send stream={stream_key} status={status} "
+        f"severity={severity} failures={len(failures)} probes={names}",
+        flush=True,
+    )
 
 
 class ProbeGroup(NamedTuple):
@@ -97,11 +118,15 @@ def _deploy_env() -> str:
     """Resolve the deploy environment with the same precedence the heartbeat uses
     (the runner sets INFRA_PROBE_HEARTBEAT_ENV, not always ENV), normalized."""
     return (
-        os.getenv("INFRA_PROBE_HEARTBEAT_ENV")
-        or os.getenv("ENV")
-        or os.getenv("DEPLOY_ENV")
-        or "production"
-    ).strip().lower()
+        (
+            os.getenv("INFRA_PROBE_HEARTBEAT_ENV")
+            or os.getenv("ENV")
+            or os.getenv("DEPLOY_ENV")
+            or "production"
+        )
+        .strip()
+        .lower()
+    )
 
 
 def _host_specs_for_env(specs: list) -> list:
@@ -152,6 +177,7 @@ def run_once(
     any_failures = False
     json_results: dict[str, list[dict]] = {}
     dry_run = os.getenv("INFRA_PROBE_DRY_RUN", "0") == "1"
+    ever_succeeded = set(state.get("ever_succeeded", []))
 
     for group in groups:
         specs = _host_specs_for_env(parse_probe_specs(group.raw_specs))
@@ -160,27 +186,65 @@ def run_once(
         any_failures = any_failures or bool(failures)
         json_results[group.name] = [result.to_dict() for result in results]
 
-        payload = build_probe_alert_payload(
-            results,
-            alert_name=group.alert_name,
-            external_url=group.external_url,
-        )
-        if dry_run and failures:
-            _send_payload(payload)
-        elif _should_send(
-            group.name,
-            results,
-            state,
-            now,
-            renotify_seconds,
-            failure_threshold,
-            recovery_threshold,
-        ):
-            if _maintenance_active(now):
-                continue
-            _send_payload(payload)
-            _record_sent(group.name, results, state, now)
+        # Learn which probes have EVER passed (this cycle's passes included).
+        for result in results:
+            if result.ok:
+                ever_succeeded.add(result.spec.name)
 
+        # Split failures into two streams. ONLY `command` probes are eligible for the
+        # misconfigured lane: they run code (the round-trips) that can be broken by a bug
+        # so they may NEVER pass even against a healthy backend (the signoz-roundtrip
+        # 500-storm). A `command` probe that has never once succeeded is therefore far more
+        # likely a broken probe than an outage that began the instant the runner booted, so
+        # route it to a quiet warning-severity `InfraProbeMisconfigured` lane instead of
+        # paging critical. `http`/`tcp` liveness probes are NOT eligible — their failure is
+        # always a real target failure — and every command round-trip is backed by an
+        # `http` liveness probe that still carries the real-outage critical signal. Each
+        # stream dedups independently.
+        misconfig = [
+            r
+            for r in failures
+            if r.spec.kind == "command" and r.spec.name not in ever_succeeded
+        ]
+        misconfig_names = {r.spec.name for r in misconfig}
+        regression_results = [r for r in results if r.spec.name not in misconfig_names]
+
+        streams = (
+            (group.name, regression_results, group.alert_name, None),
+            (
+                f"{group.name}:misconfigured",
+                misconfig,
+                MISCONFIGURED_ALERT_NAME,
+                MISCONFIGURED_SEVERITY,
+            ),
+        )
+        for stream_key, stream_results, alert_name, severity_override in streams:
+            payload = build_probe_alert_payload(
+                stream_results,
+                alert_name=alert_name,
+                external_url=group.external_url,
+                severity_override=severity_override,
+            )
+            if dry_run:
+                if failed_results(stream_results):
+                    _send_payload(payload)
+                continue
+            if _should_send(
+                stream_key,
+                stream_results,
+                state,
+                now,
+                renotify_seconds,
+                failure_threshold,
+                recovery_threshold,
+            ):
+                if _maintenance_active(now):
+                    continue
+                _send_payload(payload)
+                _record_sent(stream_key, stream_results, state, now)
+                _log_send(stream_key, stream_results, severity_override)
+
+    state["ever_succeeded"] = sorted(ever_succeeded)
     if as_json:
         print(json.dumps(json_results, indent=2))
     if not dry_run:

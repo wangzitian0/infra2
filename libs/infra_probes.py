@@ -59,7 +59,9 @@ def parse_probe_specs(raw: str) -> list[ProbeSpec]:
         parts = [part.strip() for part in line.split("|")]
         if len(parts) < 3:
             raise ValueError(f"Invalid probe spec: {line}")
-        timeout = float(parts[5]) if len(parts) > 5 and parts[5] else DEFAULT_TIMEOUT_SECONDS
+        timeout = (
+            float(parts[5]) if len(parts) > 5 and parts[5] else DEFAULT_TIMEOUT_SECONDS
+        )
         specs.append(
             ProbeSpec(
                 name=parts[0],
@@ -94,13 +96,19 @@ def run_probe(
         else:
             raise ValueError(f"Unsupported probe kind: {spec.kind}")
         ok = _matches_expected(spec, observed)
-        summary = "probe passed" if ok else f"expected {spec.expected!r}, observed {observed!r}"
+        summary = (
+            "probe passed"
+            if ok
+            else f"expected {spec.expected!r}, observed {observed!r}"
+        )
     except Exception as exc:  # noqa: BLE001 - probes must classify all failures.
         observed = exc.__class__.__name__
         ok = False
         summary = str(exc) or observed
     elapsed_ms = int((time.monotonic() - started) * 1000)
-    return ProbeResult(spec=spec, ok=ok, summary=summary, observed=observed, elapsed_ms=elapsed_ms)
+    return ProbeResult(
+        spec=spec, ok=ok, summary=summary, observed=observed, elapsed_ms=elapsed_ms
+    )
 
 
 def run_probes(specs: list[ProbeSpec]) -> list[ProbeResult]:
@@ -116,7 +124,14 @@ def build_probe_alert_payload(
     *,
     alert_name: str = "InfraServiceProbeFailed",
     external_url: str = "infra2://platform/12.alerting/infra-probes",
+    severity_override: str | None = None,
 ) -> dict:
+    """Build an Alertmanager-shaped payload for the failing probes in ``results``.
+
+    ``severity_override`` forces the severity of every alert AND the group severity —
+    used to route "probe never succeeded" (misconfigured probe) failures to a low
+    severity so a broken probe cannot page critical like a real service outage.
+    """
     failures = failed_results(results)
     status = "firing" if failures else "resolved"
     alerts = [
@@ -125,7 +140,7 @@ def build_probe_alert_payload(
             "labels": {
                 "alertname": alert_name,
                 "service": result.spec.name,
-                "severity": result.spec.severity,
+                "severity": severity_override or result.spec.severity,
                 "probe_kind": result.spec.kind,
                 "failure_domain": _failure_domain(result),
             },
@@ -137,7 +152,10 @@ def build_probe_alert_payload(
         }
         for result in failures
     ]
-    severity = failures[0].spec.severity if failures else "info"
+    if severity_override:
+        severity = severity_override
+    else:
+        severity = failures[0].spec.severity if failures else "info"
     return {
         "status": status,
         "commonLabels": {
@@ -231,7 +249,9 @@ def _run_command(
             check=False,
         )
     if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "command failed")
+        raise RuntimeError(
+            result.stderr.strip() or result.stdout.strip() or "command failed"
+        )
     return result.stdout.strip()
 
 
@@ -316,6 +336,9 @@ def _matches_expected(spec: ProbeSpec, observed: str) -> bool:
 def _failure_domain(result: ProbeResult) -> str:
     observed = result.observed.lower()
     summary = result.summary.lower()
-    if any(marker in observed or marker in summary for marker in PROBE_CLIENT_BLOCKED_MARKERS):
+    if any(
+        marker in observed or marker in summary
+        for marker in PROBE_CLIENT_BLOCKED_MARKERS
+    ):
         return "probe-client-blocked"
     return "service-or-route"

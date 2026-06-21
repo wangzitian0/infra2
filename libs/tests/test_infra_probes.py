@@ -279,6 +279,91 @@ def test_probe_runner_dedupes_unchanged_failures_and_sends_recovery(
     assert posted[1]["commonLabels"]["alertname"] == "InfraServiceProbeFailed"
 
 
+def _result(spec, ok, observed="x"):
+    return probes.ProbeResult(
+        spec=spec, ok=ok, summary="s" if ok else "boom", observed=observed, elapsed_ms=1
+    )
+
+
+def test_never_green_command_probe_routes_to_misconfigured_warning(
+    monkeypatch, tmp_path
+) -> None:
+    """A `command` probe (code that can be broken) that has NEVER succeeded is a
+    misconfigured probe, not a real outage — route to InfraProbeMisconfigured at warning,
+    never page critical (the signoz-roundtrip 500-storm class)."""
+    runner = _load_probe_runner()
+    posted: list[dict] = []
+
+    monkeypatch.setenv("INFRA_PROBE_SPECS", "rt|command|do-roundtrip|ok|critical|5")
+    monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
+    monkeypatch.setattr(
+        runner, "post_alert_bridge_payload", lambda _u, p, **_k: posted.append(p)
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_probes",
+        lambda specs: [_result(specs[0], ok=False, observed="RuntimeError")],
+    )
+
+    assert runner.run_once(state_path=tmp_path / "s.json", failure_threshold=1) == 1
+    assert len(posted) == 1  # only the misconfigured stream; no critical page
+    assert posted[0]["commonLabels"]["alertname"] == "InfraProbeMisconfigured"
+    assert posted[0]["commonLabels"]["severity"] == "warning"
+    assert posted[0]["alerts"][0]["labels"]["severity"] == "warning"
+
+
+def test_once_green_command_probe_failure_is_a_real_regression(
+    monkeypatch, tmp_path
+) -> None:
+    """Once a command probe has succeeded, a later failure is a real regression — it keeps
+    its declared (critical) severity, not the misconfigured lane."""
+    runner = _load_probe_runner()
+    posted: list[dict] = []
+    oks = [True, False]
+
+    monkeypatch.setenv("INFRA_PROBE_SPECS", "rt|command|do-roundtrip|ok|critical|5")
+    monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
+    monkeypatch.setattr(
+        runner, "post_alert_bridge_payload", lambda _u, p, **_k: posted.append(p)
+    )
+    monkeypatch.setattr(
+        runner, "run_probes", lambda specs: [_result(specs[0], ok=oks.pop(0))]
+    )
+    state_path = tmp_path / "s.json"
+
+    assert runner.run_once(state_path=state_path, failure_threshold=1) == 0  # passes
+    assert posted == []
+    assert runner.run_once(state_path=state_path, failure_threshold=1) == 1  # regresses
+    firing = [p for p in posted if p["status"] == "firing"]
+    assert firing[0]["commonLabels"]["alertname"] == "InfraServiceProbeFailed"
+    assert firing[0]["commonLabels"]["severity"] == "critical"
+
+
+def test_never_green_http_probe_still_pages_critical(monkeypatch, tmp_path) -> None:
+    """An http/tcp liveness probe is NOT eligible for the misconfigured lane: its failure
+    is always a real target failure, so a service down at runner-boot still pages critical
+    (must not be silently downgraded to warning)."""
+    runner = _load_probe_runner()
+    posted: list[dict] = []
+
+    monkeypatch.setenv("INFRA_PROBE_SPECS", "vault|http|http://vault|200|critical|5")
+    monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
+    monkeypatch.setattr(
+        runner, "post_alert_bridge_payload", lambda _u, p, **_k: posted.append(p)
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_probes",
+        lambda specs: [
+            probes.run_probe(specs[0], http_get=lambda *_a: (503, "sealed"))
+        ],
+    )
+
+    assert runner.run_once(state_path=tmp_path / "s.json", failure_threshold=1) == 1
+    assert posted[0]["commonLabels"]["alertname"] == "InfraServiceProbeFailed"
+    assert posted[0]["commonLabels"]["severity"] == "critical"
+
+
 def test_probe_runner_renotifies_after_interval(monkeypatch, tmp_path) -> None:
     """#183: unresolved failures renotify only after the configured interval."""
     runner = _load_probe_runner()
@@ -605,9 +690,7 @@ def test_cpu_and_mem_percent_when_proc_available() -> None:
 def test_host_resource_specs_gated_to_production(monkeypatch) -> None:
     """Resource probes run on the production runner only (shared host)."""
     runner = _load_probe_runner()
-    specs = parse_probe_specs(
-        "vault|http|http://vault|200\nhost-cpu|resource|cpu|80"
-    )
+    specs = parse_probe_specs("vault|http|http://vault|200\nhost-cpu|resource|cpu|80")
 
     # the runner sets INFRA_PROBE_HEARTBEAT_ENV (not always ENV) — gate on it.
     monkeypatch.delenv("ENV", raising=False)
@@ -654,7 +737,9 @@ def test_probe_runner_posts_liveness_heartbeat_before_probes(monkeypatch) -> Non
 
     assert events[0] == ("hb", "probe loop iteration starting")
     assert "run_once" in events
-    assert events.index(("hb", "probe loop iteration starting")) < events.index("run_once")
+    assert events.index(("hb", "probe loop iteration starting")) < events.index(
+        "run_once"
+    )
 
 
 def test_probe_runner_skips_liveness_heartbeat_in_dry_run(monkeypatch) -> None:
