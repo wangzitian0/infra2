@@ -68,7 +68,13 @@ services:
         soft: 262144
         hard: 262144
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "localhost:8123/ping"]
+      # Write-path check, not a read-only /ping (which stays green on an unwritable
+      # data dir). Matches compose.yaml so both variants tell the same truth.
+      test:
+        - CMD-SHELL
+        - "clickhouse-client -n -q 'CREATE TABLE IF NOT EXISTS default.__hc (t DateTime)
+          ENGINE=MergeTree ORDER BY t TTL t + INTERVAL 10 MINUTE; INSERT INTO
+          default.__hc VALUES (now()); SELECT 1 FROM default.__hc LIMIT 1'"
       interval: 30s
       timeout: 5s
       retries: 3
