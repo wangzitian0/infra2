@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import shutil
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -39,6 +40,15 @@ REQUIRED_PYTHON_MODULES = {
     "rich": "rich",
 }
 REQUIRED_BINARIES = ("git", "op")
+# 1Password service-account health is FUNCTIONAL, not presence-only: a deleted/invalid SA
+# leaves OP_SERVICE_ACCOUNT_TOKEN set but op broken — the silent-green failure behind the
+# #284 outage. `op whoami` actually authenticates the SA token (fails on a deleted/invalid
+# SA, the real incident), without assuming vault-access semantics. Throttled (token validity
+# is slow-changing; don't call the 1Password API on every /health hit — same reasoning as
+# the vault-agent lookup throttle, #292).
+OP_HEALTH_TTL_SECONDS = int(os.environ.get("OP_HEALTHCHECK_TTL_SECONDS", "300"))
+_op_health_lock = threading.Lock()
+_op_health_cache: dict[str, object] = {"ok": False, "at": 0.0}
 
 _deploy_state_lock = threading.Lock()
 _in_flight_deploys: set[tuple[str, str]] = set()
@@ -254,6 +264,31 @@ def _dependency_checks() -> dict[str, bool]:
     return checks
 
 
+def op_service_account_works() -> bool:
+    """Functionally authenticate the 1Password SA token (`op whoami`), not merely check the
+    env var is present. Fail-closed; throttled to OP_HEALTH_TTL_SECONDS so /health doesn't
+    call the op API every cycle. The old bare-presence check reported healthy while a deleted
+    SA had silently broken op-gated deploys (#284) — token SET, op dead, green."""
+    if not os.environ.get("OP_SERVICE_ACCOUNT_TOKEN", "").strip():
+        return False
+    now = time.time()
+    with _op_health_lock:
+        if now - float(_op_health_cache["at"]) < OP_HEALTH_TTL_SECONDS:
+            return bool(_op_health_cache["ok"])
+    ok = False
+    try:
+        result = subprocess.run(
+            ["op", "whoami"], capture_output=True, timeout=10
+        )
+        ok = result.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        ok = False
+    with _op_health_lock:
+        _op_health_cache["ok"] = ok
+        _op_health_cache["at"] = now
+    return ok
+
+
 @app.route("/health", methods=["GET"])
 def health():
     checks = {
@@ -261,7 +296,7 @@ def health():
         "vault_secrets": SECRETS_FILE.exists() and SECRETS_FILE.stat().st_size > 0,
         "git_repo_url": bool(GIT_REPO_URL),
         "webhook_secret": bool(WEBHOOK_SECRET),
-        "op_service_account_token": bool(os.environ.get("OP_SERVICE_ACCOUNT_TOKEN")),
+        "op_service_account_token": op_service_account_works(),
         # Fail closed when DOKPLOY_API_KEY is empty: its Dokploy compose env can be
         # wiped on redeploy, after which every deploy fails with a cryptic "No
         # GitHub provider found". Surfacing it here makes the container unhealthy
