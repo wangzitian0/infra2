@@ -166,44 +166,10 @@ class OpenPanelDeployer(Deployer):
         )
         return result
 
-    @classmethod
-    def verify_runtime_applied(cls, c, env_vars):
-        """Deploy-time smoke: prove op-ch ClickHouse can actually WRITE its data dir.
-
-        The `SELECT 1` healthcheck stays green even when the data dir is unwritable, so a
-        permission/ownership regression silently breaks event ingestion (inserts + merges
-        fail) and is only caught ~30 min later by the runtime round-trip probe. This gate
-        exercises a real part-write (CREATE+INSERT into a MergeTree) so an ingestion-
-        breaking change fails the DEPLOY here, in the change pipeline, instead. Retries
-        briefly to let op-ch finish starting after `composing`.
-        """
-        import time
-
-        e = cls.env()
-        ch = with_env_suffix("platform-openpanel-ch", e)
-        sql = (
-            "CREATE TABLE IF NOT EXISTS openpanel.__deploy_writecheck (t DateTime) "
-            "ENGINE=MergeTree ORDER BY t; "
-            "INSERT INTO openpanel.__deploy_writecheck VALUES (now()); "
-            "SELECT count() FROM openpanel.__deploy_writecheck; "
-            "DROP TABLE openpanel.__deploy_writecheck;"
-        )
-        cmd = (
-            f"ssh root@{e['VPS_HOST']} "
-            f"\"docker exec {ch} clickhouse-client -n -q '{sql}'\""
-        )
-        last = ""
-        for attempt in range(5):
-            result = c.run(cmd, warn=True, hide=True)
-            if not result.failed:
-                success("op-ch write-check passed (ClickHouse data dir is writable)")
-                return None
-            last = (result.stderr or result.stdout or "").strip()
-            time.sleep(5)
-        return (
-            "op-ch write-check failed after retries — ClickHouse cannot write its data "
-            f"dir (likely an ownership/permission regression on {{DATA_PATH}}/op-ch): {last}"
-        )
+    # NOTE: no verify_runtime_applied write-check here. op-ch's healthcheck is now a real
+    # part-write (compose.yaml), and the api/worker `depends_on: op-ch: service_healthy`,
+    # so a deploy that leaves op-ch unwritable can never reach healthy — the healthcheck
+    # IS the deploy gate. One truthful check, not a separate smoke stacked on top.
 
     @classmethod
     def post_compose(cls, c, shared_tasks):

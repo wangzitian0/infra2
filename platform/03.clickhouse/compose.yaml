@@ -90,10 +90,20 @@ services:
         soft: 262144
         hard: 262144
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "localhost:8123/ping"]
+      # Write-path check, not a read-only /ping: a ping stays green even when the data
+      # dir is unwritable, so ClickHouse looks healthy while it can no longer store data.
+      # A real part-write makes an unwritable instance go UNHEALTHY (Dokploy restarts it)
+      # instead of silently dropping ingest. Tiny TTL'd table in `default` (isolated from
+      # signoz_* data), ~0.3s.
+      test:
+        - CMD-SHELL
+        - "clickhouse-client -n -q 'CREATE TABLE IF NOT EXISTS default.__hc (t DateTime)
+          ENGINE=MergeTree ORDER BY t TTL t + INTERVAL 10 MINUTE; INSERT INTO
+          default.__hc VALUES (now()); SELECT 1 FROM default.__hc LIMIT 1'"
       interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 30s
     labels:
       - "traefik.enable=false"
 

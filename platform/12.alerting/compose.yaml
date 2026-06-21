@@ -172,11 +172,15 @@ services:
         alert-delivery-canary|command|python /app/tools/alert_delivery_canary.py|delivery-canary-ok|critical|15
         platform-postgres-tcp|tcp|platform-postgres${ENV_SUFFIX}:5432|connected|critical|5
         platform-redis-tcp|tcp|platform-redis${ENV_SUFFIX}:6379|connected|critical|5
-        clickhouse-http|http|http://platform-clickhouse:8123/ping|200|critical|5
+        # ClickHouse liveness is no longer probed by a read-only /ping: it stays 200 even
+        # when the data dir is unwritable (read green / write dead). The truthful signals
+        # replace it — op-ch & platform-clickhouse now have WRITE-PATH healthchecks
+        # (unhealthy -> Dokploy restart), and signoz/openpanel-roundtrip are the alert path
+        # (they write+query, so they catch write-broken AND down). A /ping caught neither
+        # better than those, so it is removed rather than kept as dead compensation.
         op-connect-http|http|http://op-connect-api:8080/health|200|critical|5
         iac-runner-http|http|http://iac-runner:8080/health|200|warning|5
         openpanel-api-http|http|http://platform-openpanel-api:3000/healthcheck|200|warning|5
-        openpanel-ch-http|http|http://platform-openpanel-ch:8123/ping|200|warning|5
         openpanel-worker-http|http|http://platform-openpanel-worker:3000/healthcheck|200|warning|5
         openpanel-dashboard-http|http|http://platform-openpanel-dashboard:3000/api/healthcheck|200|warning|5
         # OpenPanel round-trip: write a synthetic /track event to the env-specific
