@@ -18,6 +18,12 @@ class OpenPanelDeployer(Deployer):
     prod_only = True
     uid = "1000"
     gid = "1000"
+    # The embedded op-ch ClickHouse (compose service op-ch) runs as uid 101 and owns its
+    # own data sub-tree. Without this, the base `chown -R 1000 {data_path}` in _prepare_dirs
+    # (run on every sync, right before composing) re-owns op-ch to 1000 and ClickHouse can
+    # no longer write — inserts and background merges fail with "Permission denied" while
+    # the `SELECT 1` healthcheck stays green (a silent ingestion outage).
+    data_subpath_uids = {"op-ch": ("101", "101")}
     secret_key = "cookie_secret"
 
     # Domain configuration - None to use compose.yaml Traefik labels
@@ -141,20 +147,9 @@ class OpenPanelDeployer(Deployer):
         #
         # op-ch data lives on a durable host bind mount (${DATA_PATH}/op-ch) rather
         # than a Dokploy named volume, which gets recreated with a new hash on
-        # redeploy and silently wipes the event schema. Create the dir with
-        # ClickHouse ownership (uid/gid 101) before compose so the server can write.
-        data_path = cls.data_path_for_env(e)
-        ch_dir_result = c.run(
-            f"ssh root@{e['VPS_HOST']} 'mkdir -p {data_path}/op-ch && chown -R 101:101 {data_path}/op-ch'",
-            warn=True,
-            hide=True,
-        )
-        if ch_dir_result.failed:
-            fatal(
-                "Failed to prepare durable op-ch data dir",
-                f"Path: {data_path}/op-ch\nError: {ch_dir_result.stderr or ''}",
-            )
-        success(f"Prepared durable op-ch data dir at {data_path}/op-ch (uid/gid 101)")
+        # redeploy and silently wipes the event schema. Its uid-101 ownership is
+        # declared via `data_subpath_uids` and (re-)applied by _prepare_dirs AFTER the
+        # blanket chown on every sync, so a redeploy cannot leave it unwritable.
 
         if not cls.ensure_runtime_secrets(c):
             fatal("Failed to ensure OpenPanel runtime secrets")
@@ -166,8 +161,49 @@ class OpenPanelDeployer(Deployer):
         )
 
         success("pre_compose complete - vault-init will fetch secrets at runtime")
-        info("\nNote: AppRole creds (VAULT_ROLE_ID/VAULT_SECRET_ID) auto-configured via 'invoke vault.setup-approle'")
+        info(
+            "\nNote: AppRole creds (VAULT_ROLE_ID/VAULT_SECRET_ID) auto-configured via 'invoke vault.setup-approle'"
+        )
         return result
+
+    @classmethod
+    def verify_runtime_applied(cls, c, env_vars):
+        """Deploy-time smoke: prove op-ch ClickHouse can actually WRITE its data dir.
+
+        The `SELECT 1` healthcheck stays green even when the data dir is unwritable, so a
+        permission/ownership regression silently breaks event ingestion (inserts + merges
+        fail) and is only caught ~30 min later by the runtime round-trip probe. This gate
+        exercises a real part-write (CREATE+INSERT into a MergeTree) so an ingestion-
+        breaking change fails the DEPLOY here, in the change pipeline, instead. Retries
+        briefly to let op-ch finish starting after `composing`.
+        """
+        import time
+
+        e = cls.env()
+        ch = with_env_suffix("platform-openpanel-ch", e)
+        sql = (
+            "CREATE TABLE IF NOT EXISTS openpanel.__deploy_writecheck (t DateTime) "
+            "ENGINE=MergeTree ORDER BY t; "
+            "INSERT INTO openpanel.__deploy_writecheck VALUES (now()); "
+            "SELECT count() FROM openpanel.__deploy_writecheck; "
+            "DROP TABLE openpanel.__deploy_writecheck;"
+        )
+        cmd = (
+            f"ssh root@{e['VPS_HOST']} "
+            f"\"docker exec {ch} clickhouse-client -n -q '{sql}'\""
+        )
+        last = ""
+        for attempt in range(5):
+            result = c.run(cmd, warn=True, hide=True)
+            if not result.failed:
+                success("op-ch write-check passed (ClickHouse data dir is writable)")
+                return None
+            last = (result.stderr or result.stdout or "").strip()
+            time.sleep(5)
+        return (
+            "op-ch write-check failed after retries — ClickHouse cannot write its data "
+            f"dir (likely an ownership/permission regression on {{DATA_PATH}}/op-ch): {last}"
+        )
 
     @classmethod
     def post_compose(cls, c, shared_tasks):
