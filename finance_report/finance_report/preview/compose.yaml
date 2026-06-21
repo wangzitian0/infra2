@@ -68,7 +68,7 @@ services:
       test:
         - CMD-SHELL
         - |
-          test -s /vault/secrets/.env && ! grep -q "<no value>" /vault/secrets/.env || exit 1
+          test -s /vault/secrets/.env && ! grep -q "<no value>" /vault/secrets/.env && test -s /vault/.token || exit 1
           # vault token lookup THROTTLED to ~5min (token TTL is hours) — no 30s hammer (#292)
           if [ -z "$$(find /tmp/.vault_hc -mmin -5 2>/dev/null)" ]; then
             wget -q -T 3 --header="X-Vault-Token: $$(cat /vault/.token)" "$$VAULT_ADDR/v1/auth/token/lookup-self" -O /dev/null || exit 1

@@ -44,7 +44,7 @@ services:
         - CMD-SHELL
         - |
           # local checks every cycle (fast): secrets rendered + no unresolved template.
-          test -s /vault/secrets/.env && ! grep -q "<no value>" /vault/secrets/.env || exit 1
+          test -s /vault/secrets/.env && ! grep -q "<no value>" /vault/secrets/.env && test -s /vault/.token || exit 1
           # vault token lookup THROTTLED to ~5min (token TTL is hours) so N vault-agents
           # do not hammer Vault every 30s (#292). The local checks above still fail fast.
           if [ -z "$$(find /tmp/.vault_hc -mmin -5 2>/dev/null)" ]; then
