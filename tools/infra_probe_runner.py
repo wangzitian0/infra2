@@ -191,6 +191,26 @@ def run_once(
             if result.ok:
                 ever_succeeded.add(result.spec.name)
 
+        # Cascade suppression: a probe whose declared `depends_on` is ALSO failing this
+        # cycle is a downstream symptom of that root — suppress its alert and page the root
+        # only (page the deepest failed node, not the cascade). E.g. signoz-roundtrip fails
+        # because the otel collector is down -> page the collector, mute the round-trip.
+        failed_names = {r.spec.name for r in failures}
+        cascaded = [
+            r
+            for r in failures
+            if r.spec.depends_on and r.spec.depends_on in failed_names
+        ]
+        cascaded_names = {r.spec.name for r in cascaded}
+        for r in cascaded:
+            print(
+                f"probe-runner cascade-suppressed probe={r.spec.name} "
+                f"root={r.spec.depends_on} (both failing)",
+                flush=True,
+            )
+        results = [r for r in results if r.spec.name not in cascaded_names]
+        failures = [r for r in failures if r.spec.name not in cascaded_names]
+
         # Split failures into two streams. ONLY `command` probes are eligible for the
         # misconfigured lane: they run code (the round-trips) that can be broken by a bug
         # so they may NEVER pass even against a healthy backend (the signoz-roundtrip

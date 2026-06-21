@@ -177,7 +177,9 @@ services:
         # SigNoz round-trip: write a synthetic OTLP log through the collector, then
         # query ClickHouse for the same nonce. This proves ingest + storage, not just
         # process readiness.
-        signoz-roundtrip|command|python /app/tools/observability_roundtrip_probe.py signoz|roundtrip-ok|critical|45
+        # depends_on signoz-internal-http (7th field): if SigNoz itself is down the round-trip
+        # also fails — cascade-suppress the round-trip symptom, page the signoz root only.
+        signoz-roundtrip|command|python /app/tools/observability_roundtrip_probe.py signoz|roundtrip-ok|critical|45|signoz-internal-http
         alert-bridge-http|http|http://platform-alerting${ENV_SUFFIX}:8080/health|200|critical|5
         # lark 畅通: bridge config valid AND Feishu host reachable (TCP 443), checked
         # without posting to the real channel (see app.py /health/feishu).
@@ -201,7 +203,9 @@ services:
         openpanel-dashboard-http|http|http://platform-openpanel-dashboard:3000/api/healthcheck|200|warning|5
         # OpenPanel round-trip: write a synthetic /track event to the env-specific
         # finance project, then query OpenPanel ClickHouse for the nonce.
-        openpanel-roundtrip|command|python /app/tools/observability_roundtrip_probe.py openpanel|roundtrip-ok|warning|45
+        # depends_on openpanel-api-http: if the API is down the round-trip cannot write —
+        # cascade-suppress the round-trip, page the api root only.
+        openpanel-roundtrip|command|python /app/tools/observability_roundtrip_probe.py openpanel|roundtrip-ok|warning|45|openpanel-api-http
         # Host resource backstop — out-of-band from SigNoz, so it still fires when
         # the host is starved (the dockerd-busy-loop class of incident). `expected`
         # is the % ceiling; reads host-global /proc + the bind-mounted host root.

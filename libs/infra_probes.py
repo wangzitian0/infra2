@@ -30,6 +30,10 @@ class ProbeSpec:
     expected: str = ""
     severity: str = "critical"
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
+    # Optional name of another probe this one depends on. If BOTH fail in the same cycle,
+    # this probe's failure is a cascade symptom of that root, so its alert is suppressed
+    # (page the root, not the dependents). Empty = independent.
+    depends_on: str = ""
 
 
 @dataclass(frozen=True)
@@ -49,7 +53,7 @@ class ProbeResult:
 def parse_probe_specs(raw: str) -> list[ProbeSpec]:
     """Parse newline-separated probe specs.
 
-    Format: name|kind|target|expected|severity|timeout_seconds
+    Format: name|kind|target|expected|severity|timeout_seconds|depends_on
     """
     specs: list[ProbeSpec] = []
     for raw_line in raw.splitlines():
@@ -70,6 +74,7 @@ def parse_probe_specs(raw: str) -> list[ProbeSpec]:
                 expected=parts[3] if len(parts) > 3 else "",
                 severity=parts[4] if len(parts) > 4 and parts[4] else "critical",
                 timeout_seconds=timeout,
+                depends_on=parts[6] if len(parts) > 6 and parts[6] else "",
             )
         )
     return specs
