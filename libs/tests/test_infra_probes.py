@@ -364,6 +364,55 @@ def test_never_green_http_probe_still_pages_critical(monkeypatch, tmp_path) -> N
     assert posted[0]["commonLabels"]["severity"] == "critical"
 
 
+def test_probe_spec_parses_depends_on_field() -> None:
+    assert parse_probe_specs("x|http|http://x|200|critical|5|y")[0].depends_on == "y"
+    assert (
+        parse_probe_specs("z|http|http://z|200")[0].depends_on == ""
+    )  # absent default
+
+
+def _two_probe_runner(monkeypatch, ok: dict):
+    """A runner with `root` and a `dep|...|root` probe, results driven by `ok` map."""
+    runner = _load_probe_runner()
+    posted: list[dict] = []
+    monkeypatch.setenv(
+        "INFRA_PROBE_SPECS",
+        "root|http|http://root|200|critical|5\ndep|http|http://dep|200|critical|5|root",
+    )
+    monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
+    monkeypatch.setattr(
+        runner, "post_alert_bridge_payload", lambda _u, p, **_k: posted.append(p)
+    )
+    monkeypatch.setattr(
+        runner, "run_probes", lambda specs: [_result(s, ok=ok[s.name]) for s in specs]
+    )
+    return runner, posted
+
+
+def test_cascade_suppresses_dependent_when_root_also_fails(
+    monkeypatch, tmp_path
+) -> None:
+    """A probe whose declared `depends_on` is ALSO failing is a cascade symptom — suppress
+    it and page only the root (page the deepest failed node, not the cascade)."""
+    runner, posted = _two_probe_runner(monkeypatch, {"root": False, "dep": False})
+    assert runner.run_once(state_path=tmp_path / "s.json", failure_threshold=1) == 1
+    firing = [p for p in posted if p["status"] == "firing"]
+    services = {a["labels"]["service"] for a in firing[0]["alerts"]}
+    assert services == {"root"}  # dep cascade-suppressed; only the root pages
+
+
+def test_cascade_does_not_suppress_when_root_is_healthy(monkeypatch, tmp_path) -> None:
+    """If the dependency is healthy, the dependent's failure is a real independent fault —
+    it must still page (never silently swallowed by the cascade rule)."""
+    runner, posted = _two_probe_runner(monkeypatch, {"root": True, "dep": False})
+    assert runner.run_once(state_path=tmp_path / "s.json", failure_threshold=1) == 1
+    firing = [p for p in posted if p["status"] == "firing"]
+    services = {a["labels"]["service"] for a in firing[0]["alerts"]}
+    assert services == {
+        "dep"
+    }  # not suppressed — root is fine, dep is a genuine failure
+
+
 def test_probe_runner_renotifies_after_interval(monkeypatch, tmp_path) -> None:
     """#183: unresolved failures renotify only after the configured interval."""
     runner = _load_probe_runner()
