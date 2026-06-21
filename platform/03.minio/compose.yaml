@@ -43,10 +43,14 @@ services:
       test:
         - CMD-SHELL
         - |
-          # vault token lookup
-          test -s /vault/secrets/.env &&
-          ! grep -q "<no value>" /vault/secrets/.env &&
-          wget -q -T 3 --header="X-Vault-Token: $$(cat /vault/.token)" "$$VAULT_ADDR/v1/auth/token/lookup-self" -O /dev/null
+          # local checks every cycle (fast): secrets rendered + no unresolved template.
+          test -s /vault/secrets/.env && ! grep -q "<no value>" /vault/secrets/.env || exit 1
+          # vault token lookup THROTTLED to ~5min (token TTL is hours) so N vault-agents
+          # do not hammer Vault every 30s (#292). The local checks above still fail fast.
+          if [ -z "$$(find /tmp/.vault_hc -mmin -5 2>/dev/null)" ]; then
+            wget -q -T 3 --header="X-Vault-Token: $$(cat /vault/.token)" "$$VAULT_ADDR/v1/auth/token/lookup-self" -O /dev/null || exit 1
+            touch /tmp/.vault_hc
+          fi
       interval: 30s
       timeout: 5s
       retries: 3
