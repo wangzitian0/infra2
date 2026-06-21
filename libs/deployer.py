@@ -317,6 +317,12 @@ class Deployer:
     gid: str = "999"
     chmod: str = "755"  # Override to "700" for sensitive services like PostgreSQL
     secret_key: str = "password"
+    # Sub-trees of data_path that must run as a DIFFERENT uid/gid than the service's
+    # blanket `chown -R {uid}`. Mapping `relative_subpath -> (uid, gid)`. _prepare_dirs
+    # re-asserts these AFTER the blanket chown so a service-managed island (e.g. an
+    # embedded ClickHouse running as uid 101 inside a uid-1000 service tree) is never
+    # clobbered back. Empty for almost every service.
+    data_subpath_uids: dict[str, tuple[str, str]] = {}
     env_var_name: str = ""
     # Set True for services that only exist in production. Observability/analytics
     # (signoz, clickhouse, openpanel) have no prod-correctness blast radius and all
@@ -441,6 +447,17 @@ class Deployer:
         run_with_status(
             c, f"ssh root@{host} 'chmod -R {cls.chmod} {data_path}'", "Set permissions"
         )
+        # Re-assert service-managed sub-tree ownership AFTER the blanket chown above, so a
+        # sub-island that must run as a different uid (e.g. op-ch ClickHouse = 101 inside
+        # the uid-1000 openpanel tree) is not clobbered back to {cls.uid}. _prepare_dirs
+        # runs on every sync (right before composing), so this must win every time.
+        for subpath, (sub_uid, sub_gid) in cls.data_subpath_uids.items():
+            run_with_status(
+                c,
+                f"ssh root@{host} 'mkdir -p {data_path}/{subpath} "
+                f"&& chown -R {sub_uid}:{sub_gid} {data_path}/{subpath}'",
+                f"Set ownership ({subpath} -> {sub_uid}:{sub_gid})",
+            )
         return True
 
     @classmethod
@@ -466,7 +483,9 @@ class Deployer:
 
         env_vars("DOKPLOY ENV (vault-init)", result)
         success("pre_compose complete - vault-init will fetch secrets at runtime")
-        info("\nNote: AppRole creds (VAULT_ROLE_ID/VAULT_SECRET_ID) auto-configured via 'invoke vault.setup-approle'")
+        info(
+            "\nNote: AppRole creds (VAULT_ROLE_ID/VAULT_SECRET_ID) auto-configured via 'invoke vault.setup-approle'"
+        )
         return result
 
     @classmethod

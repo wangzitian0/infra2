@@ -48,6 +48,49 @@ def test_make_tasks_sync_keeps_skipped_action_as_success() -> None:
     assert result["action"] == "skipped"
 
 
+def test_prepare_dirs_reasserts_subpath_ownership_after_blanket_chown(
+    monkeypatch,
+) -> None:
+    """A `data_subpath_uids` island (e.g. op-ch ClickHouse = 101) must be chowned AFTER
+    the blanket `chown -R {uid}`, so a uid-1000 service tree never clobbers its embedded
+    uid-101 ClickHouse back to 1000 — the silent openpanel ingestion outage."""
+    import libs.deployer as d
+
+    cmds: list[str] = []
+    monkeypatch.setattr(d, "validate_env", lambda: [])
+    monkeypatch.setattr(d, "run_with_status", lambda c, cmd, label: cmds.append(cmd))
+
+    class OPDeployer(d.Deployer):
+        service = "openpanel"
+        uid = "1000"
+        gid = "1000"
+        data_subpath_uids = {"op-ch": ("101", "101")}
+
+        @classmethod
+        def env(cls):
+            return {"ENV": "production", "VPS_HOST": "vps"}
+
+        @classmethod
+        def data_path_for_env(cls, e):
+            return "/data/platform/openpanel"
+
+    assert OPDeployer._prepare_dirs(MagicMock()) is True
+
+    blanket = next(
+        i
+        for i, cmd in enumerate(cmds)
+        if "chown -R 1000:1000 /data/platform/openpanel'" in cmd
+    )
+    opch = next(
+        i
+        for i, cmd in enumerate(cmds)
+        if "chown -R 101:101 /data/platform/openpanel/op-ch" in cmd
+    )
+    assert opch > blanket, (
+        "op-ch (uid 101) chown must run AFTER the blanket uid-1000 chown"
+    )
+
+
 def test_sync_skips_prod_only_service_on_non_production() -> None:
     """prod_only services (observability/analytics: signoz, clickhouse, openpanel)
     are never deployed to non-production envs — sync() short-circuits to 'skipped'
@@ -581,7 +624,9 @@ class TestDeployerVaultTokenPreflight:
 
         class _Client:
             def find_compose_by_name(self, *_a, **_k):
-                return {"env": "VAULT_ROLE_ID=r\nVAULT_SECRET_ID=s\nVAULT_APP_TOKEN=hvs.stale"}
+                return {
+                    "env": "VAULT_ROLE_ID=r\nVAULT_SECRET_ID=s\nVAULT_APP_TOKEN=hvs.stale"
+                }
 
         monkeypatch.setattr(dokploy, "get_dokploy", lambda **_k: _Client())
         monkeypatch.setattr(
@@ -771,7 +816,9 @@ def test_approle_preflight_requires_vault_addr(tmp_path):
         data_path = "/data/x"
 
     with pytest.raises(ValueError, match="VAULT_ADDR"):
-        D._assert_approle_creds_present("VAULT_ROLE_ID=r\nVAULT_SECRET_ID=s")  # addr absent
+        D._assert_approle_creds_present(
+            "VAULT_ROLE_ID=r\nVAULT_SECRET_ID=s"
+        )  # addr absent
 
 
 def test_approle_preflight_fails_closed_when_creds_missing(tmp_path, monkeypatch):
