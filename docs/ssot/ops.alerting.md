@@ -100,13 +100,13 @@ component/app -> OpenTelemetry Collector -> SigNoz -> platform/12.alerting -> Fe
 | Cross-cutting | Docker container health | any running container is `unhealthy`, `health: starting`, or `Restarting` outside a deployment window | P0/P1 | Live via out-of-band watchdog SSH check |
 | L2 Platform | platform Postgres | TCP readiness fails or restart loop | P0 | Live via infra probe |
 | L2 Platform | platform Redis | TCP readiness fails or restart loop | P1 | Live via infra probe |
-| L2 Platform | ClickHouse | `/ping` fails, disk pressure, or ingestion errors | P0 | Live via infra probe |
+| L2 Platform | ClickHouse | data dir unwritable / ingestion broken | P0 | Write-path healthcheck (compose → unhealthy → restart) + `signoz-roundtrip` (write+query) |
 | L2 Platform | MinIO | MinIO live endpoint is unavailable | P1 | Live via infra probe |
 | L2 Platform | Authentik | health endpoint fails | P0 | Live via infra probe |
 | L2 Platform | SigNoz | frontend/query path fails or synthetic OTLP log nonce cannot be queried back from ClickHouse | P0 | Live via infra probes (`signoz-internal-http`, `otel-collector-http`, `signoz-roundtrip`) |
 | L2 Platform | Alert Bridge | `/health` fails, Feishu host is unreachable, or low-frequency real-send proof fails | P0 | Live via infra probes (`alert-bridge-http`, `lark-delivery-http`, `alert-delivery-canary`); out-of-band bridge container health watchdog is also defined |
 | L2 Platform | OpenPanel API | `/healthcheck` fails or synthetic `/track` event nonce cannot be queried back | P1 | Live via infra probes (`openpanel-api-http`, `openpanel-roundtrip`) |
-| L2 Platform | OpenPanel ClickHouse | `/ping` fails (OpenPanel event store, separate from platform ClickHouse) | P1 | Live via infra probes (`openpanel-ch-http`, `openpanel-roundtrip`) |
+| L2 Platform | OpenPanel ClickHouse (op-ch) | data dir unwritable / event store broken | P1 | Write-path healthcheck (compose → unhealthy → restart) + `openpanel-roundtrip` (write+query) |
 | L2 Platform | OpenPanel Worker | `/healthcheck` fails (event processing queue worker) | P1 | Live via infra probe (`openpanel-worker-http`) |
 | L2 Platform | OpenPanel Dashboard | `/api/healthcheck` fails (analytics UI) | P2 | Live via infra probe (`openpanel-dashboard-http`) |
 | L2 Platform | Portal | Homer frontend unavailable | P2 | Planned |

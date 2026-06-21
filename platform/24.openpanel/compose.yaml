@@ -92,11 +92,21 @@ services:
     networks:
       - dokploy-network
     healthcheck:
-      test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1'"]
-      interval: 10s
+      # Write-path check, not `SELECT 1`: a read-only ping stays green even when the
+      # data dir is unwritable (the uid-ownership regression), so ClickHouse can no
+      # longer ingest while looking healthy. Exercise a real part-write so an unwritable
+      # op-ch goes UNHEALTHY (Dokploy restarts it) and a deploy that breaks writability
+      # never reaches healthy — making the dependent `service_healthy` gate the deploy
+      # gate. Tiny TTL'd table keeps it cheap (~0.3s).
+      test:
+        - CMD-SHELL
+        - "clickhouse-client -n -q 'CREATE TABLE IF NOT EXISTS default.__hc (t DateTime)
+          ENGINE=MergeTree ORDER BY t TTL t + INTERVAL 10 MINUTE; INSERT INTO
+          default.__hc VALUES (now()); SELECT 1 FROM default.__hc LIMIT 1'"
+      interval: 30s
       timeout: 5s
       retries: 5
-      start_period: 20s
+      start_period: 30s
     ulimits:
       nofile:
         soft: 262144

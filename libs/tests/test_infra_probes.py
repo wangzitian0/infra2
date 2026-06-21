@@ -205,14 +205,14 @@ def test_in_band_probe_compose_uses_internal_network_targets() -> None:
         "http://platform-authentik-server${ENV_SUFFIX}:9000/-/health/live/"
         in probe_block
     )
-    # signoz/clickhouse are prod_only (single shared instance — see
-    # platform/{11.signoz,03.clickhouse}/deploy.py). They are probed WITHOUT
-    # ${ENV_SUFFIX} from every env, matching openpanel. A -staging suffix would
-    # target a phantom host and fire a permanent false-positive alert.
+    # signoz is prod_only (single shared instance — see platform/11.signoz/deploy.py),
+    # probed WITHOUT ${ENV_SUFFIX} from every env. A -staging suffix would target a
+    # phantom host and fire a permanent false-positive alert.
+    # ClickHouse is no longer probed by a read-only /ping (it stays green on an
+    # unwritable data dir) — it has a write-path healthcheck + the roundtrip probes.
     assert "http://platform-signoz:8080/api/v1/health" in probe_block
-    assert "http://platform-clickhouse:8123/ping" in probe_block
+    assert "http://platform-clickhouse:8123/ping" not in probe_block
     assert "platform-signoz${ENV_SUFFIX}" not in probe_block
-    assert "platform-clickhouse${ENV_SUFFIX}" not in probe_block
 
 
 def test_public_route_probe_compose_is_not_enabled_by_default() -> None:

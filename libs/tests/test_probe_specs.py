@@ -82,8 +82,6 @@ def test_missing_probe_names_empty_when_running_is_superset():
 def test_missing_probe_names_ignores_target_suffix_differences():
     # The name field (first column) is identical across envs even though the
     # target host carries ${ENV_SUFFIX}; verification keys on names, not targets.
-    source = (
-        "openpanel-ch-http|http|http://platform-openpanel-ch:8123/ping|200|warning|5\n"
-    )
-    running = "openpanel-ch-http|http|http://platform-openpanel-ch-staging:8123/ping|200|warning|5\n"
+    source = "openpanel-api-http|http|http://platform-openpanel-api:3000/healthcheck|200|warning|5\n"
+    running = "openpanel-api-http|http|http://platform-openpanel-api-staging:3000/healthcheck|200|warning|5\n"
     assert missing_probe_names(source, running) == []

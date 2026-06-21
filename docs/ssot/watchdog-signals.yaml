@@ -156,14 +156,10 @@ signals:
     cadence: 60s
     alert_threshold: 3 consecutive failures
 
-  - signal_id: production.clickhouse.http
-    environment: production
-    component: clickhouse
-    signal: clickhouse-http
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
+  # ClickHouse liveness is no longer a read-only /ping probe: it stayed green on an
+  # unwritable data dir (read green / write dead). Replaced by a WRITE-PATH healthcheck
+  # (op-ch & platform-clickhouse compose -> unhealthy -> Dokploy restart) plus the
+  # signoz/openpanel-roundtrip signals (write+query) as the alert path.
 
   # Host resource backstop (out-of-band from SigNoz). Production runner only —
   # the host is shared, so it is checked once. expected = % ceiling.
@@ -230,15 +226,6 @@ signals:
     signal: iac-runner-http
     primary_owner: internal
     severity: warning
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: staging.clickhouse.http
-    environment: staging
-    component: clickhouse
-    signal: clickhouse-http
-    primary_owner: internal
-    severity: critical
     cadence: 60s
     alert_threshold: 3 consecutive failures
 

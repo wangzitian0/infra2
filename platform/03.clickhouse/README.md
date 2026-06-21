@@ -73,7 +73,7 @@ invoke clickhouse.status
   - Health: `echo ruok | nc localhost 2181`
 - **clickhouse**: Main database server
   - Port: 9000 (native), 8123 (HTTP) - internal only
-  - Health: `wget --spider -q localhost:8123/ping`
+  - Health: write-path check (`clickhouse-client` DDL+INSERT into a tiny TTL'd table) — a read-only `/ping` stays green on an unwritable data dir, so it is not used.
 
 ## Access
 
