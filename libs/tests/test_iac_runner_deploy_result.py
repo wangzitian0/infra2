@@ -18,7 +18,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 IAC_RUNNER = ROOT / "bootstrap/06.iac_runner"
-DEPLOY_PLATFORM_WORKFLOW = ROOT / ".github/workflows/deploy-platform.yml"
+DEPLOY_PLATFORM_WORKFLOW = ROOT / ".github/workflows/deploy.yml"
 DEPLOY_REPORT_MAIN_WORKFLOW = ROOT / ".github/workflows/deploy-report-main.yml"
 BOOTSTRAP_DEPLOY_SCRIPT = ROOT / "scripts/deploy_iac_runner_bootstrap.sh"
 IAC_RUNNER_VAULT_POLICY = IAC_RUNNER / "vault-policy.hcl"
@@ -970,7 +970,7 @@ def test_deploy_platform_triggers_on_iac_runner_bootstrap_changes() -> None:
 
 
 def test_deploy_platform_no_longer_triggers_platform_service_deploys() -> None:
-    """#370 cutover: deploy-platform.yml updates ONLY the iac_runner bootstrap; platform
+    """#370 cutover: deploy.yml updates ONLY the iac_runner bootstrap; platform
     SERVICE deploys moved to deploy_v2. The old signed /deploy trigger + the platform/** /
     finance_report/** auto-deploy push paths must be gone."""
     workflow = DEPLOY_PLATFORM_WORKFLOW.read_text(encoding="utf-8")

@@ -1,4 +1,4 @@
-"""Weekly digest for infra2 out-of-band watchdog workflow runs."""
+"""Weekly digest for infra2 out-of-band watchdog job runs."""
 
 from __future__ import annotations
 
@@ -19,8 +19,10 @@ if str(ROOT) not in sys.path:
 
 from libs.alerting import deliver_out_of_band_text  # noqa: E402
 
-WORKFLOW_FILE = "out-of-band-watchdog.yml"
+WORKFLOW_FILE = "ops-checks.yml"
+WATCHDOG_JOB_NAME = "Check infra2 host and alert bridge"
 DEFAULT_REPOSITORY = "wangzitian0/infra2"
+DIGEST_WINDOW_DAYS = 7
 
 
 def fetch_recent_runs(
@@ -28,23 +30,123 @@ def fetch_recent_runs(
     token: str,
     *,
     workflow_file: str = WORKFLOW_FILE,
+    watchdog_job_name: str = WATCHDOG_JOB_NAME,
+    per_page: int = 100,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch recent ops-checks runs that actually include the watchdog job."""
+    owner, repo = repository.split("/", 1)
+    current = now or datetime.now(UTC)
+    cutoff = current - timedelta(days=DIGEST_WINDOW_DAYS)
+    matching_runs: list[dict[str, Any]] = []
+    page = 1
+
+    while True:
+        request = Request(
+            (
+                f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/"
+                f"{workflow_file}/runs?per_page={per_page}&page={page}"
+            ),
+            headers=_github_headers(token),
+            method="GET",
+        )
+        with urlopen(request, timeout=15) as response:  # noqa: S310
+            payload = json.loads(response.read().decode("utf-8"))
+        runs = payload.get("workflow_runs")
+        page_runs = runs if isinstance(runs, list) else []
+        if not page_runs:
+            break
+
+        reached_cutoff = False
+        for run in page_runs:
+            created = _run_created_at(run)
+            if created is None:
+                continue
+            if created < cutoff:
+                reached_cutoff = True
+                continue
+            run_id = run.get("id") or run.get("databaseId")
+            if not run_id:
+                continue
+            if run_includes_job(
+                repository,
+                token,
+                run_id,
+                job_name=watchdog_job_name,
+            ):
+                matching_runs.append(run)
+
+        if reached_cutoff or len(page_runs) < per_page:
+            break
+        page += 1
+
+    return matching_runs
+
+
+def fetch_run_jobs(
+    repository: str,
+    token: str,
+    run_id: str | int,
+    *,
     per_page: int = 100,
 ) -> list[dict[str, Any]]:
-    """Fetch workflow runs for the target workflow from GitHub API."""
+    """Fetch jobs for one GitHub Actions workflow run."""
     owner, repo = repository.split("/", 1)
-    request = Request(
-        f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/{workflow_file}/runs?per_page={per_page}",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "infra2-watchdog-weekly-digest/1.0",
-        },
-        method="GET",
+    jobs: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        request = Request(
+            (
+                f"https://api.github.com/repos/{owner}/{repo}/actions/runs/"
+                f"{run_id}/jobs?per_page={per_page}&page={page}"
+            ),
+            headers=_github_headers(token),
+            method="GET",
+        )
+        with urlopen(request, timeout=15) as response:  # noqa: S310
+            payload = json.loads(response.read().decode("utf-8"))
+        page_jobs = payload.get("jobs")
+        if not isinstance(page_jobs, list) or not page_jobs:
+            break
+        jobs.extend(page_jobs)
+        if len(page_jobs) < per_page:
+            break
+        page += 1
+
+    return jobs
+
+
+def run_includes_job(
+    repository: str,
+    token: str,
+    run_id: str | int,
+    *,
+    job_name: str = WATCHDOG_JOB_NAME,
+) -> bool:
+    """Return whether a workflow run contains the out-of-band watchdog job."""
+    return any(
+        str(job.get("name") or "") == job_name
+        and str(job.get("conclusion") or "").lower() != "skipped"
+        for job in fetch_run_jobs(repository, token, run_id)
     )
-    with urlopen(request, timeout=15) as response:  # noqa: S310
-        payload = json.loads(response.read().decode("utf-8"))
-    runs = payload.get("workflow_runs")
-    return runs if isinstance(runs, list) else []
+
+
+def _github_headers(token: str) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "infra2-watchdog-weekly-digest/1.0",
+    }
+
+
+def _run_created_at(run: Mapping[str, Any]) -> datetime | None:
+    created_at = run.get("created_at")
+    if not isinstance(created_at, str):
+        return None
+    try:
+        return _parse_iso8601(created_at)
+    except ValueError:
+        return None
 
 
 def fetch_run_log(repository: str, token: str, run_id: str | int) -> str:
@@ -52,11 +154,7 @@ def fetch_run_log(repository: str, token: str, run_id: str | int) -> str:
     owner, repo = repository.split("/", 1)
     request = Request(
         f"https://api.github.com/repos/{owner}/{repo}/actions/runs/{run_id}/logs",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "infra2-watchdog-weekly-digest/1.0",
-        },
+        headers=_github_headers(token),
         method="GET",
     )
     with urlopen(request, timeout=20) as response:  # noqa: S310
@@ -115,7 +213,7 @@ def recent_weekly_runs(
 ) -> list[dict[str, Any]]:
     """Return workflow runs created inside the 7-day digest window."""
     current = now or datetime.now(UTC)
-    cutoff = current - timedelta(days=7)
+    cutoff = current - timedelta(days=DIGEST_WINDOW_DAYS)
     recent: list[dict[str, Any]] = []
     for run in runs:
         created_at = run.get("created_at")
@@ -135,7 +233,7 @@ def summarize_weekly_runs(
 ) -> dict[str, Any]:
     """Aggregate 7-day workflow run health summary."""
     current = now or datetime.now(UTC)
-    cutoff = current - timedelta(days=7)
+    cutoff = current - timedelta(days=DIGEST_WINDOW_DAYS)
     recent = recent_weekly_runs(runs, now=current)
     totals: dict[str, int] = {"success": 0, "failure": 0, "cancelled": 0, "other": 0}
     failed_urls: list[str] = []
@@ -342,8 +440,9 @@ def main(env: Mapping[str, str] | None = None) -> int:
         print("GITHUB_TOKEN is required for weekly digest generation")
         return 1
 
-    runs = fetch_recent_runs(repository, token)
-    summary = summarize_weekly_runs(runs)
+    now = datetime.now(UTC)
+    runs = fetch_recent_runs(repository, token, now=now)
+    summary = summarize_weekly_runs(runs, now=now)
     if current_env.get("WATCHDOG_DIGEST_REVIEW_LOGS", "1").strip().lower() not in {
         "0",
         "false",
@@ -353,7 +452,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
         logs = fetch_recent_run_logs(
             repository,
             token,
-            recent_weekly_runs(runs),
+            recent_weekly_runs(runs, now=now),
             max_logs=max_logs,
         )
         summary["log_audit"] = summarize_watchdog_log_events(logs)

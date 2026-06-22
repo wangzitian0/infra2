@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-WORKFLOW = ROOT / ".github/workflows/out-of-band-watchdog.yml"
+WORKFLOW = ROOT / ".github/workflows/ops-checks.yml"
 WATCHDOG = ROOT / "tools/out_of_band_watchdog.py"
 ALERTING_README = ROOT / "platform/12.alerting/README.md"
 ALERTING_SSOT = ROOT / "docs/ssot/ops.alerting.md"
@@ -31,10 +31,15 @@ def test_workflow_runs_daily_and_can_be_dispatched() -> None:
     """#209: GitHub watchdog is a daily audit with manual dispatch."""
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 
-    assert workflow["on"]["schedule"] == [{"cron": "17 2 * * *"}]
+    assert {"cron": "17 2 * * *"} in workflow["on"]["schedule"]
     assert "workflow_dispatch" in workflow["on"]
+    assert "out-of-band-watchdog" in workflow["on"]["workflow_dispatch"]["inputs"]["task"]["options"]
     assert "ssh_targets_override" in workflow["on"]["workflow_dispatch"]["inputs"]
-    assert workflow["permissions"] == {"contents": "read", "issues": "write"}
+    assert workflow["permissions"] == {
+        "contents": "read",
+        "issues": "write",
+        "actions": "read",
+    }
 
 
 def test_workflow_alerts_directly_and_does_not_call_the_bridge() -> None:
@@ -818,7 +823,7 @@ def test_docs_state_that_github_fallback_includes_route_canary() -> None:
     """Infra-011.9: docs must match the code-owned fallback watchdog scope."""
     assert "Dokploy route canary" in ALERTING_README.read_text(encoding="utf-8")
     assert "Dokploy route canary" in ALERTING_SSOT.read_text(encoding="utf-8")
-    assert "watchdog-weekly-digest.yml" in ALERTING_README.read_text(encoding="utf-8")
+    assert "ops-checks.yml" in ALERTING_README.read_text(encoding="utf-8")
 
 
 def _dokploy_projects_fixture():

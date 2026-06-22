@@ -1,0 +1,467 @@
+name: Ops Checks
+
+# Scheduled/manual operational checks:
+#   - Sufficiency: every service that bakes a shared tree (libs/tools/common)
+#     into its image declares it, so a change actually redeploys it.
+#   - Necessity:  the iac-runner is the single deploy trigger (no compose left on
+#     Dokploy-native autoDeploy outside the allowlist).
+#   - Dynamic route canary proves Dokploy/Traefik route creation.
+#   - Out-of-band watchdog and weekly digest prove alert delivery and recall.
+# Failing deploy guard / canary / watchdog checks deliver Feishu alerts via the
+# shared out-of-band channel.
+
+"on":
+  push:
+    branches: [main]
+    paths:
+      - "libs/dokploy*.py"
+      - "tools/dokploy_route_canary.py"
+      - "tools/deploy_v2.py"
+      - "tools/deploy_v2_canary.py"
+      - "tools/deploy_primitive.py"
+      - "tools/deploy_contract.py"
+      - "tools/deploy_env_config.py"
+      - "tools/resolve_deploy_ref.py"
+      - "tools/preview_lifecycle.py"
+      - "libs/dokploy.py"
+      - "finance_report/finance_report/preview/**"
+      - ".github/workflows/ops-checks.yml"
+      - "docs/ssot/ops.alerting.md"
+      - "docs/project/Infra-011.reliability_hardening.md"
+  pull_request:
+    paths:
+      - "tools/deploy_v2.py"
+      - "tools/deploy_v2_canary.py"
+      - "tools/deploy_primitive.py"
+      - "tools/deploy_contract.py"
+      - "tools/deploy_env_config.py"
+      - "tools/resolve_deploy_ref.py"
+      - "tools/preview_lifecycle.py"
+      - "libs/dokploy.py"
+      - "finance_report/finance_report/preview/**"
+      - ".github/workflows/ops-checks.yml"
+  schedule:
+    - cron: "17 * * * *"
+    - cron: "17 2 * * *"
+    - cron: "37 2 * * *"
+    - cron: "37 6 * * *"
+    - cron: "0 1 * * 1"
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "Ops check to run"
+        required: true
+        default: deploy-guard-audit
+        type: choice
+        options:
+          - deploy-guard-audit
+          - dokploy-route-canary
+          - deploy-v2-canary
+          - out-of-band-watchdog
+          - watchdog-weekly-digest
+          - all
+      dry_run:
+        description: "Run checks without sending Feishu notifications"
+        required: false
+        type: boolean
+        default: false
+      ssh_targets_override:
+        description: "Optional newline-separated name|command|expected_text SSH targets for manual diagnostics"
+        required: false
+        type: string
+        default: ""
+      environment_id:
+        description: "Dokploy Environment ID to create the canary compose in"
+        required: false
+        default: ""
+      project:
+        description: "Dokploy project name"
+        required: false
+        default: "platform"
+      env:
+        description: "Dokploy environment name hint"
+        required: false
+        default: "staging"
+      host:
+        description: "Public host for the canary; defaults to route-canary.zitian.party"
+        required: false
+        default: ""
+      compose_name:
+        description: "Dokploy compose name"
+        required: false
+        default: "dokploy-route-canary"
+      timeout_seconds:
+        description: "Per-stage timeout"
+        required: false
+        default: "90"
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+concurrency:
+  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 * * * *' && 'dokploy-route-canary-scheduled' || github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'infra2-deploy-guard-audit' || github.event_name == 'schedule' && github.event.schedule == '37 6 * * *' && 'deploy-v2-canary' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && inputs.task == 'dokploy-route-canary' && format('dokploy-route-canary-{0}-{1}', inputs.project, inputs.env) || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) || 'dokploy-route-canary-push' }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  audit:
+    name: Audit deploy dependency graph
+    if: ${{ (github.event_name == 'schedule' && github.event.schedule == '37 2 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'deploy-guard-audit' || inputs.task == 'all')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+      INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
+      INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
+      INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+      GITHUB_SERVER_URL: ${{ github.server_url }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      GITHUB_RUN_ID: ${{ github.run_id }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: python -m pip install invoke httpx python-dotenv rich PyYAML
+
+      - name: Audit deploy fan-out coverage (sufficiency)
+        run: python tools/deploy_guard_audit.py
+
+      - name: Audit single deploy trigger (necessity)
+        if: env.DOKPLOY_API_KEY != ''
+        run: python -m invoke dokploy.audit-autodeploy
+
+      - name: Alert on failure
+        if: failure() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        run: |
+          python - <<'PY'
+          import os
+          from tools.out_of_band_watchdog import deliver_out_of_band_alert
+
+          run_url = "/".join(
+              v for v in (
+                  os.environ.get("GITHUB_SERVER_URL"),
+                  os.environ.get("GITHUB_REPOSITORY"),
+                  "actions/runs",
+                  os.environ.get("GITHUB_RUN_ID"),
+              ) if v
+          )
+          deliver_out_of_band_alert(
+              os.environ,
+              "🚨 Infra2 deploy-guard audit failed.\n"
+              "A deploy dependency invariant is broken (under-fan-out coverage "
+              "or a non-allowlisted Dokploy autoDeploy). Services may run stale "
+              "code or deploy outside the iac-runner.\n"
+              f"Run: {run_url}",
+          )
+          PY
+
+  # Dokploy route canary jobs
+  canary:
+    name: Run dynamic route canary
+    if: ${{ github.event_name == 'push' || (github.event_name == 'schedule' && github.event.schedule == '17 * * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'dokploy-route-canary' || inputs.task == 'all')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+      INFRA2_WATCHDOG_SSH_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
+      INFRA2_WATCHDOG_SSH_USER: ${{ secrets.INFRA2_WATCHDOG_SSH_USER }}
+      INFRA2_WATCHDOG_SSH_PORT: ${{ vars.INFRA2_WATCHDOG_SSH_PORT }}
+      DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID: ${{ vars.DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID }}
+      DOKPLOY_ROUTE_CANARY_PROJECT: ${{ vars.DOKPLOY_ROUTE_CANARY_PROJECT }}
+      DOKPLOY_ROUTE_CANARY_ENV: ${{ vars.DOKPLOY_ROUTE_CANARY_ENV }}
+      DOKPLOY_ROUTE_CANARY_HOST: ${{ vars.DOKPLOY_ROUTE_CANARY_HOST }}
+      DOKPLOY_ROUTE_CANARY_COMPOSE_NAME: ${{ vars.DOKPLOY_ROUTE_CANARY_COMPOSE_NAME }}
+      DOKPLOY_ROUTE_CANARY_TIMEOUT_SECONDS: ${{ vars.DOKPLOY_ROUTE_CANARY_TIMEOUT_SECONDS }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install runtime dependencies
+        run: python -m pip install httpx python-dotenv rich
+
+      - name: Configure SSH key
+        env:
+          INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${INFRA2_WATCHDOG_SSH_PRIVATE_KEY:-}" ]]; then
+            echo "No SSH key configured; canary will skip Docker container/label inspection."
+            exit 0
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_canary
+          chmod 600 ~/.ssh/infra2_canary
+          echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_canary" >> "$GITHUB_ENV"
+
+      - name: Run canary
+        env:
+          CANARY_HOST_INPUT: ${{ github.event.inputs.host || '' }}
+          COMPOSE_NAME_INPUT: ${{ github.event.inputs.compose_name || '' }}
+          ENVIRONMENT_ID_INPUT: ${{ github.event.inputs.environment_id || '' }}
+          PROJECT_INPUT: ${{ github.event.inputs.project || '' }}
+          ENV_NAME_INPUT: ${{ github.event.inputs.env || '' }}
+          TIMEOUT_SECONDS_INPUT: ${{ github.event.inputs.timeout_seconds || '' }}
+          EVENT_NAME: ${{ github.event_name }}
+          # out-of-band Feishu delivery (same secrets the watchdog uses) — a red route
+          # canary pages instead of dying silently in the hourly workflow log (#369).
+          # Injected ONLY for non-PR events (a PR run never uses --alert-on-failure).
+          INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE || '' }}
+          INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL || '' }}
+          INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID || '' }}
+          INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET || '' }}
+          INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID || '' }}
+          INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE || '' }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
+            echo "::error::DOKPLOY_API_KEY secret is required for Dokploy Route Canary."
+            exit 1
+          fi
+
+          environment_id="${ENVIRONMENT_ID_INPUT:-${DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID:-}}"
+          if [[ -z "$environment_id" ]]; then
+            echo "::error::DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID repository variable or workflow_dispatch environment_id input is required. failure_domain=dokploy-canary-configuration"
+            {
+              echo "## Dokploy Route Canary"
+              echo ""
+              echo "- Status: \`fail\`"
+              echo "- Failure domain: \`dokploy-canary-configuration\`"
+              echo "- Reason: DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID is not configured"
+              echo "- Action: configure the repository variable or run workflow_dispatch with environment_id"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          canary_host="${CANARY_HOST_INPUT:-${DOKPLOY_ROUTE_CANARY_HOST:-route-canary.zitian.party}}"
+          compose_name="${COMPOSE_NAME_INPUT:-${DOKPLOY_ROUTE_CANARY_COMPOSE_NAME:-dokploy-route-canary}}"
+          project="${PROJECT_INPUT:-${DOKPLOY_ROUTE_CANARY_PROJECT:-platform}}"
+          env_name="${ENV_NAME_INPUT:-${DOKPLOY_ROUTE_CANARY_ENV:-staging}}"
+          timeout_seconds="${TIMEOUT_SECONDS_INPUT:-${DOKPLOY_ROUTE_CANARY_TIMEOUT_SECONDS:-90}}"
+
+          # Out-of-band alert ONLY on a non-PR failure: a scheduled/post-merge red route
+          # canary is an infra incident (page); a PR red is CI feedback to the author.
+          alert_args=()
+          [[ "$EVENT_NAME" != "pull_request" ]] && alert_args+=(--alert-on-failure)
+
+          echo "Canary summary will be written to $GITHUB_STEP_SUMMARY"
+          python tools/dokploy_route_canary.py \
+            --host "$canary_host" \
+            --environment-id="$environment_id" \
+            --project "$project" \
+            --env "$env_name" \
+            --compose-name "$compose_name" \
+            --dokploy-host "cloud.zitian.party" \
+            --nonce "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --timeout-seconds "$timeout_seconds" \
+            --repair-stale-compose \
+            "${alert_args[@]}"
+
+  # Out-of-band watchdog jobs
+  watchdog:
+    name: Check infra2 host and alert bridge
+    if: ${{ (github.event_name == 'schedule' && github.event.schedule == '17 2 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'out-of-band-watchdog' || inputs.task == 'all')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
+      INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
+      INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+      INFRA2_WATCHDOG_HTTP_TARGETS: ${{ vars.INFRA2_WATCHDOG_HTTP_TARGETS }}
+      INFRA2_WATCHDOG_WORKER_STATUS_URL: ${{ vars.INFRA2_WATCHDOG_WORKER_STATUS_URL }}
+      INFRA2_WATCHDOG_RETRY_MAX_ATTEMPTS: ${{ vars.INFRA2_WATCHDOG_RETRY_MAX_ATTEMPTS }}
+      INFRA2_WATCHDOG_RETRY_DELAY_SECONDS: ${{ vars.INFRA2_WATCHDOG_RETRY_DELAY_SECONDS }}
+      INFRA2_WATCHDOG_ENABLE_FALLBACK_ISSUE: ${{ vars.INFRA2_WATCHDOG_ENABLE_FALLBACK_ISSUE }}
+      INFRA2_WATCHDOG_FALLBACK_ISSUE_LABEL: ${{ vars.INFRA2_WATCHDOG_FALLBACK_ISSUE_LABEL }}
+      INFRA2_WATCHDOG_WORKER_STATUS_TOKEN: ${{ secrets.INFRA2_WATCHDOG_WORKER_STATUS_TOKEN }}
+      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+      DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID: ${{ vars.DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID }}
+      DOKPLOY_ROUTE_CANARY_PROJECT: ${{ vars.DOKPLOY_ROUTE_CANARY_PROJECT }}
+      DOKPLOY_ROUTE_CANARY_ENV: ${{ vars.DOKPLOY_ROUTE_CANARY_ENV }}
+      DOKPLOY_ROUTE_CANARY_HOST: ${{ vars.DOKPLOY_ROUTE_CANARY_HOST }}
+      DOKPLOY_ROUTE_CANARY_DOKPLOY_HOST: ${{ vars.DOKPLOY_ROUTE_CANARY_DOKPLOY_HOST }}
+      DOKPLOY_ROUTE_CANARY_COMPOSE_NAME: ${{ vars.DOKPLOY_ROUTE_CANARY_COMPOSE_NAME }}
+      DOKPLOY_ROUTE_CANARY_TIMEOUT_SECONDS: ${{ vars.DOKPLOY_ROUTE_CANARY_TIMEOUT_SECONDS }}
+      DOKPLOY_ROUTE_CANARY_INTERVAL_SECONDS: ${{ vars.DOKPLOY_ROUTE_CANARY_INTERVAL_SECONDS }}
+      INFRA2_WATCHDOG_SSH_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
+      INFRA2_WATCHDOG_SSH_USER: ${{ secrets.INFRA2_WATCHDOG_SSH_USER }}
+      INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
+      INFRA2_WATCHDOG_SSH_PORT: ${{ vars.INFRA2_WATCHDOG_SSH_PORT }}
+      INFRA2_WATCHDOG_SSH_TARGETS: ${{ github.event_name == 'workflow_dispatch' && inputs.ssh_targets_override != '' && inputs.ssh_targets_override || vars.INFRA2_WATCHDOG_SSH_TARGETS }}
+      WATCHDOG_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: python -m pip install httpx python-dotenv rich
+
+      - name: Configure SSH key
+        if: env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY != ''
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_watchdog
+          chmod 600 ~/.ssh/infra2_watchdog
+          echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_watchdog" >> "$GITHUB_ENV"
+
+      - name: Run watchdog
+        run: python tools/out_of_band_watchdog.py
+
+  # Watchdog weekly digest jobs
+  digest:
+    name: Build and send weekly digest
+    if: ${{ (github.event_name == 'schedule' && github.event.schedule == '0 1 * * 1') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'watchdog-weekly-digest' || inputs.task == 'all')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
+      INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
+      INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+      WATCHDOG_DIGEST_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
+      INFRA2_STABILITY_REPORT_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
+      INFRA2_WATCHDOG_LEDGER_URL: ${{ vars.INFRA2_WATCHDOG_LEDGER_URL }}
+      INFRA2_WATCHDOG_WORKER_STATUS_TOKEN: ${{ secrets.INFRA2_WATCHDOG_WORKER_STATUS_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: python -m pip install python-dotenv rich
+
+      - name: Build and send digest
+        run: python tools/watchdog_weekly_digest.py
+
+      - name: Build and send positive stability report
+        if: env.INFRA2_WATCHDOG_LEDGER_URL != ''
+        run: python tools/stability_report.py
+
+  # deploy_v2 acceptance canary jobs
+  deploy-v2-canary:
+    name: deploy_v2 live canary
+    # Skip FORK PRs: they get no secrets, so the live deploy can't run — skip (not fail) to
+    # avoid noisy red checks for external contributors. Same-repo PRs + push/cron/manual run.
+    if: >-
+      ${{ ((github.event_name == 'pull_request'
+            && github.event.pull_request.head.repo.full_name == github.repository)
+          || github.event_name == 'push'
+          || (github.event_name == 'schedule' && github.event.schedule == '37 6 * * *')
+          || (github.event_name == 'workflow_dispatch' && (inputs.task == 'deploy-v2-canary' || inputs.task == 'all'))) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+      INTERNAL_DOMAIN: zitian.party
+      # out-of-band Feishu delivery (same secrets the watchdog uses) — a red probe pages.
+      # Injected ONLY for non-PR events: a PR run never uses --alert-on-failure, so do not
+      # expose alerting credentials to PR code (smaller blast radius).
+      INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE || '' }}
+      INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL || '' }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID || '' }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET || '' }}
+      INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID || '' }}
+      INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE || '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install runtime dependencies
+        run: python -m pip install httpx python-dotenv rich
+
+      - name: Run deploy_v2 canary
+        env:
+          VERSION_REF_INPUT: main
+          IAC_REF_INPUT: main
+          DOMAIN_INPUT: zitian.party
+          TIMEOUT_INPUT: "600"
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
+            echo "::error::DOKPLOY_API_KEY secret is required for the deploy_v2 canary."
+            exit 1
+          fi
+
+          # Out-of-band alert ONLY on a non-PR failure: post-merge/scheduled red = an infra
+          # incident (page); a PR red is CI feedback to the author (no page).
+          alert_args=()
+          [[ "$EVENT_NAME" != "pull_request" ]] && alert_args+=(--alert-on-failure)
+
+          # The canary prints a single JSON line on success; capture it so we can assert
+          # the stack was actually torn down (no leaked ephemeral stack) before passing.
+          set +e
+          out="$(python -m tools.deploy_v2_canary \
+            --version-ref "$VERSION_REF_INPUT" \
+            --iac-ref "$IAC_REF_INPUT" \
+            --domain "$DOMAIN_INPUT" \
+            --timeout "$TIMEOUT_INPUT" \
+            "${alert_args[@]}")"
+          rc=$?
+          set -e
+
+          echo "canary output: $out"
+          {
+            echo "## deploy_v2 Acceptance Canary"
+            echo ""
+            echo '```json'
+            echo "$out"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::deploy_v2 canary failed (exit $rc) — the unified deploy path did not go green."
+            exit $rc
+          fi
+
+          # Belt-and-braces: even on exit 0, refuse to pass if teardown did not run, so a
+          # canary can never leave its ephemeral stack behind.
+          if ! echo "$out" | python -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("torn_down") else 1)'; then
+            echo "::error::canary did not tear down its stack (torn_down != true) — possible leak."
+            exit 1
+          fi
+          echo "deploy_v2 acceptance canary is GREEN — the unified path deploys and converges."

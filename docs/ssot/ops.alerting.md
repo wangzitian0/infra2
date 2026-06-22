@@ -500,13 +500,14 @@ When out-of-band Feishu delivery raises an exception, the watchdog emits a
 creation (label `watchdog-alert-fallback`), and exits with failure so CI/logs
 retain an auditable fallback signal.
 
-Weekly digest is handled by `.github/workflows/watchdog-weekly-digest.yml`
-(cron Monday UTC). It summarizes the last 7 days of
-`out-of-band-watchdog.yml` workflow runs and reviews each run's structured
-watchdog logs. The digest reports alert recall evidence:
-`watchdog.delivery.success`, `watchdog.delivery.failure`, fallback issue URLs,
-missing delivery evidence, and failure-domain counts. It then sends the compact
-reliability digest to Feishu through the same direct delivery mode.
+Weekly digest is handled by `.github/workflows/ops-checks.yml`
+(cron Monday UTC). It summarizes the last 7 days of ops-checks runs that include
+the out-of-band watchdog job (`Check infra2 host and alert bridge`) and skips
+route canary, deploy guard audit, deploy_v2 canary, and digest-only runs. It
+then reviews those watchdog runs' structured `watchdog.*` logs for alert recall
+evidence: `watchdog.delivery.success`, `watchdog.delivery.failure`, fallback
+issue URLs, missing delivery evidence, and failure-domain counts. It then sends
+the compact reliability digest to Feishu through the same direct delivery mode.
 
 Current closure boundary:
 

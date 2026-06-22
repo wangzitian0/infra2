@@ -317,7 +317,7 @@ python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref
 > 服务，使用**该 tag** 作为 `iac_ref` 触发 `deploy_v2 -> iac_runner`（staging 与 prod 同一个 tag）。
 > 最终是否重启由 iac_runner/Deployer 的 config-hash gate 决定；hash
 > 未变即 no-op，不浪费 Dokploy 重启资源。
-> `.github/workflows/deploy-platform.yml` 只保留 iac_runner bootstrap/self-update，
+> `.github/workflows/deploy.yml` 只保留 iac_runner bootstrap/self-update，
 > 不负责普通平台服务部署；手动 `deploy.yml` 仍可用于 operator-triggered
 > pinned reconcile。
 > CI（lint + 单测 + E2E）本身**不**触发 staging/prod 部署；reconcile 是独立的

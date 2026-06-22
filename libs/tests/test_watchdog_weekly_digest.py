@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "tools" / "watchdog_weekly_digest.py"
-WORKFLOW_PATH = ROOT / ".github/workflows/watchdog-weekly-digest.yml"
+WORKFLOW_PATH = ROOT / ".github/workflows/ops-checks.yml"
 
 
 def _load_module():
@@ -49,6 +51,87 @@ def test_summarize_weekly_runs_filters_old_runs() -> None:
     assert summary["failure_count"] == 1
     assert summary["success_rate_pct"] == 50.0
     assert summary["failed_run_urls"] == ["https://example/failure"]
+
+
+def test_fetch_recent_runs_filters_ops_checks_to_watchdog_jobs_and_paginates(monkeypatch) -> None:
+    """Infra-012.8: digest only selects watchdog job runs from ops-checks pages."""
+    digest = _load_module()
+    now = datetime(2026, 6, 9, 0, 0, tzinfo=UTC)
+    workflow_pages = {
+        "1": [
+            {
+                "id": 1,
+                "created_at": "2026-06-08T00:00:00Z",
+                "conclusion": "success",
+            },
+            {
+                "id": 2,
+                "created_at": "2026-06-07T00:00:00Z",
+                "conclusion": "success",
+            },
+        ],
+        "2": [
+            {
+                "id": 3,
+                "created_at": "2026-06-06T00:00:00Z",
+                "conclusion": "failure",
+            },
+            {
+                "id": 4,
+                "created_at": "2026-05-20T00:00:00Z",
+                "conclusion": "success",
+            },
+        ],
+    }
+    jobs_by_run = {
+        "1": [
+            {"name": "Run dynamic route canary", "conclusion": "success"},
+            {"name": digest.WATCHDOG_JOB_NAME, "conclusion": "skipped"},
+        ],
+        "2": [{"name": digest.WATCHDOG_JOB_NAME, "conclusion": "success"}],
+        "3": [{"name": digest.WATCHDOG_JOB_NAME, "conclusion": "failure"}],
+    }
+    requested_workflow_pages: list[str] = []
+    requested_job_runs: list[str] = []
+
+    class _Response:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps(self._payload).encode("utf-8")
+
+    def fake_urlopen(request, timeout):  # noqa: ANN001, ARG001
+        parsed = urlparse(request.full_url)
+        query = parse_qs(parsed.query)
+        page = query.get("page", ["1"])[0]
+        if parsed.path.endswith("/actions/workflows/ops-checks.yml/runs"):
+            requested_workflow_pages.append(page)
+            return _Response({"workflow_runs": workflow_pages.get(page, [])})
+        if "/actions/runs/" in parsed.path and parsed.path.endswith("/jobs"):
+            run_id = parsed.path.split("/actions/runs/", 1)[1].split("/", 1)[0]
+            requested_job_runs.append(run_id)
+            return _Response({"jobs": jobs_by_run[run_id]})
+        raise AssertionError(f"Unexpected URL: {request.full_url}")
+
+    monkeypatch.setattr(digest, "urlopen", fake_urlopen)
+
+    runs = digest.fetch_recent_runs(
+        "wangzitian0/infra2",
+        "token",
+        per_page=2,
+        now=now,
+    )
+
+    assert [run["id"] for run in runs] == [2, 3]
+    assert requested_workflow_pages == ["1", "2"]
+    assert requested_job_runs == ["1", "2", "3"]
 
 
 def test_build_digest_message_contains_runbook_and_counts() -> None:
@@ -146,6 +229,7 @@ def test_weekly_digest_workflow_schedule_and_dispatch_contract() -> None:
     """Infra-012.8: weekly digest workflow keeps fixed weekly schedule + manual dry-run."""
     workflow = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
 
-    assert workflow["on"]["schedule"] == [{"cron": "0 1 * * 1"}]
+    assert {"cron": "0 1 * * 1"} in workflow["on"]["schedule"]
     assert "workflow_dispatch" in workflow["on"]
+    assert "watchdog-weekly-digest" in workflow["on"]["workflow_dispatch"]["inputs"]["task"]["options"]
     assert "dry_run" in workflow["on"]["workflow_dispatch"]["inputs"]

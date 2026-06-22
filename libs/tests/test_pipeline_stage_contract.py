@@ -21,7 +21,7 @@ from libs.pipeline_stage_contract import (
 def test_env_stage_schema_serializes_required_fields() -> None:
     """Infra-011.12: producers share one sparse Env x Stage result shape."""
     result = make_stage_result(
-        source="deploy-platform.yml",
+        source="deploy.yml",
         environment=PipelineEnvironment.STAGING,
         stage=PipelineStage.DEPLOY_STATUS,
         target="platform/postgres",
@@ -33,7 +33,7 @@ def test_env_stage_schema_serializes_required_fields() -> None:
     payload = result.to_dict()
 
     assert payload == {
-        "source": "deploy-platform.yml",
+        "source": "deploy.yml",
         "environment": "staging",
         "stage": "deploy-status",
         "target": "platform/postgres",
@@ -67,7 +67,7 @@ def test_failed_stage_requires_failure_domain() -> None:
 def test_preflight_external_dependency_is_explicit() -> None:
     """Infra-011.13: provider/config failures are modeled before expensive work."""
     result = make_stage_result(
-        source="dokploy-route-canary.yml",
+        source="ops-checks.yml",
         environment="staging",
         stage="config-preflight",
         target="DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID",

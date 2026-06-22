@@ -128,8 +128,8 @@
 - `iac-runner` mounted `/root/.ssh/id_ed25519` directly; Docker created a directory when the host key path drifted, causing OCI mount failure.
 
 **Fixes in progress**:
-- `deploy-platform.yml` now serializes deployments, checks `/health` before `/deploy`, validates `IAC_WEBHOOK_SECRET`, and retries transient curl failures.
-- `infra-ci.yml` now watches `deploy-platform.yml` changes.
+- `deploy.yml` now serializes deployments, checks `/health` before `/deploy`, validates `IAC_WEBHOOK_SECRET`, and retries transient curl failures.
+- `infra-ci.yml` now watches `deploy.yml` changes.
 - `bootstrap/06.iac_runner/compose.yaml` mounts the host SSH directory at `/host_ssh` instead of bind-mounting a single key file.
 - SSOT and README paths were updated from `06.iac-runner` to `06.iac_runner`.
 

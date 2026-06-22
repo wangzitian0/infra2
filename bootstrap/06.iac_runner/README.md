@@ -95,12 +95,12 @@ IaC Runner supports **GitOps version-based deployments** via GitHub Actions work
 
 **Staging (Automatic)**:
 ```
-Push to main → deploy-platform.yml → Resolve commit SHA → Deploy to Staging
+Push to main → deploy.yml → Resolve commit SHA → Deploy to Staging
 ```
 
 **Production (Manual)**:
 ```
-Select semver release tag → deploy-platform.yml → Resolve commit SHA → Deploy to Production
+Select semver release tag → deploy.yml → Resolve commit SHA → Deploy to Production
 ```
 
 **Hotfix (Manual)**:
@@ -128,7 +128,7 @@ Create from prod tag → v1.3.1 → Deploy to Production (no main merge required
 
 4. **Manual production promotion**:
    ```bash
-   gh workflow run deploy-platform.yml \
+   gh workflow run deploy.yml \
      -f env="production" \
      -f ref="v1.2.4"
    ```
@@ -356,4 +356,4 @@ docker logs iac-runner-vault-agent --tail 10
 
 - [SSOT: IaC Runner](../../docs/ssot/bootstrap.iac_runner.md) - Comprehensive reference
 - [SSOT: Pipeline](../../docs/ssot/ops.pipeline.md) - CI/CD workflows
-- [GitHub Workflows](../../.github/workflows/) - deploy-platform.yml
+- [GitHub Workflows](../../.github/workflows/) - deploy.yml
