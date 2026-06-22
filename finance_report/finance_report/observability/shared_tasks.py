@@ -32,6 +32,12 @@ from libs.observability_dashboards import (
     load_openpanel_analytics,
 )
 
+# Label stamped on every rule this catalog owns, so `apply_alerts` can safely prune its own
+# drift (renamed/leftover managed rules) without ever touching a hand-made rule.
+MANAGED_ALERT_SOURCE = "infra2/finance_report-alerts"
+# Residue left by the alert-rule canary (tools/signoz_alert_rule_canary.py) is also ours.
+_CANARY_RULE_PREFIX = "CanarySigNozPromqlPayload-"
+
 
 def _alerting_shared():
     """Return the loaded platform/12.alerting shared-tasks module.
@@ -82,19 +88,27 @@ def print_openpanel_analytics(c):
 
 
 @task
-def apply_alerts(c, dry_run=False):
-    """Ensure every checked-in finance_report alert rule exists in SigNoz.
+def apply_alerts(c, dry_run=False, prune=False):
+    """Reconcile SigNoz alert rules to the checked-in catalog (declarative IaC).
 
-    Routes each rule to the shared Feishu/Lark bridge channel. Idempotent: an
-    existing rule with the same alert name is left untouched.
+    Two fixes over the old create-if-absent behaviour, which silently skipped any
+    existing rule (so an edited threshold never took effect) and never removed drift:
+
+    - **upsert**: every catalog rule is re-applied (delete + create) so a changed
+      definition actually lands. Routes each to the shared Feishu/Lark channel.
+    - **prune**: managed rules NOT in the catalog (our ``source`` label, or leftover
+      ``Canary*`` residue) are removed. **LOG-ONLY by default** — pass ``--prune`` to
+      actually delete (warn-before-fail; verify the would-prune list first). A rule
+      with no managed marker (e.g. hand-made in the UI) is never touched.
     """
     from invoke.exceptions import Exit
 
-    from libs.console import error, success
-    from libs.alerting import find_signoz_rule_id
+    from libs.console import error, info, success
+    from libs.alerting import find_signoz_rule_id, _iter_signoz_items
 
     alerting = _alerting_shared()
     definitions = load_alert_definitions()
+    catalog_names = {d.alert_name for d in definitions}
 
     if dry_run:
         payloads = [d.to_signoz_payload(["<channel-id>"]) for d in definitions]
@@ -106,8 +120,7 @@ def apply_alerts(c, dry_run=False):
         error("Cannot apply alert rules without a SigNoz channel id")
         raise Exit("Cannot apply alert rules without a SigNoz channel id", code=1)
 
-    # List existing rules ONCE, then match locally — avoids an N+1 GET /api/v1/rules
-    # per definition as the rule set grows.
+    # List existing rules ONCE, then match locally — avoids an N+1 GET /api/v1/rules.
     listed = alerting._signoz_request(c, method="GET", path="/api/v1/rules")
     if not listed["ok"]:
         error(
@@ -118,25 +131,92 @@ def apply_alerts(c, dry_run=False):
     existing_rules = listed.get("data")
 
     all_ok = True
+    # --- upsert: (re)write every catalog rule so a changed definition takes effect.
+    # delete-then-create with verified deletion; a failed create fails the apply loudly
+    # (CI non-zero) rather than silently leaving the old rule.
     for definition in definitions:
-        if find_signoz_rule_id(existing_rules, definition.alert_name):
-            success(f"SigNoz alert rule already exists: {definition.alert_name}")
-            continue
         payload = definition.to_signoz_payload([channel_id])
+        payload.setdefault("labels", {})["source"] = MANAGED_ALERT_SOURCE
+        existing_id = find_signoz_rule_id(existing_rules, definition.alert_name)
+        if existing_id and not _delete_signoz_rule(alerting, c, str(existing_id)):
+            all_ok = False
+            error(
+                f"Failed to remove existing rule before re-apply: {definition.alert_name}"
+            )
+            continue
         created = alerting._signoz_request(
             c, method="POST", path="/api/v1/rules", payload=payload
         )
         if created["ok"]:
-            success(f"SigNoz alert rule created: {definition.alert_name}")
+            success(
+                f"SigNoz alert rule {'updated' if existing_id else 'created'}: "
+                f"{definition.alert_name}"
+            )
         else:
             all_ok = False
             error(
-                f"Failed to create SigNoz alert rule: {definition.alert_name}",
+                f"Failed to apply SigNoz alert rule: {definition.alert_name}",
                 f"status={created['status']} body={created['body'][:500]}",
             )
+
+    # --- prune: managed rules that are no longer in the catalog. Log-only unless --prune.
+    for rule in _iter_signoz_items(existing_rules, collection_keys=("rules", "items")):
+        name = rule.get("alert") or rule.get("name")
+        if not name or name in catalog_names:
+            continue
+        labels = rule.get("labels") or {}
+        managed = (
+            labels.get("source") == MANAGED_ALERT_SOURCE
+            or labels.get("canary") == "true"
+            or str(name).startswith(_CANARY_RULE_PREFIX)
+        )
+        if not managed:
+            continue  # never touch a rule we do not own
+        rule_id = rule.get("id") or rule.get("ruleId")
+        if not prune:
+            info(f"would prune stale managed rule: {name} (run with --prune to delete)")
+            continue
+        if not rule_id:
+            all_ok = False
+            error(f"Cannot prune stale managed rule (missing id): {name}")
+            continue
+        if _delete_signoz_rule(alerting, c, str(rule_id)):
+            success(f"pruned stale managed rule: {name}")
+        else:
+            all_ok = False
+            error(f"Failed to prune stale managed rule: {name}")
+
     if not all_ok:
-        raise Exit("Failed to create one or more SigNoz alert rules", code=1)
+        raise Exit("Failed to reconcile one or more SigNoz alert rules", code=1)
     return all_ok
+
+
+def _delete_signoz_rule(alerting, c, rule_id: str) -> bool:
+    """Delete a SigNoz rule and VERIFY it is gone by re-listing.
+
+    SigNoz's DELETE is idempotent (200 even for a wrong/absent id), so trusting the
+    status code is exactly how the canary leaked rules. Try both API versions, then
+    confirm the id is actually absent.
+    """
+    from libs.alerting import _iter_signoz_items
+    from urllib.parse import quote
+
+    # Guard against a missing/placeholder id: without it the absence-check below would
+    # "verify" the deletion of a non-existent id and falsely report success.
+    if not rule_id or rule_id == "None":
+        return False
+    rid = quote(rule_id, safe="")
+    for path in (f"/api/v1/rules/{rid}", f"/api/v2/rules/{rid}"):
+        alerting._signoz_request(c, method="DELETE", path=path)
+    listed = alerting._signoz_request(c, method="GET", path="/api/v1/rules")
+    if not listed.get("ok"):
+        return False
+    return not any(
+        str(r.get("id") or r.get("ruleId")) == str(rule_id)
+        for r in _iter_signoz_items(
+            listed.get("data"), collection_keys=("rules", "items")
+        )
+    )
 
 
 @task

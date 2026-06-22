@@ -445,6 +445,7 @@ def test_apply_alerts_raises_nonzero_exit_when_rule_create_fails(monkeypatch) ->
     fake_console = types.ModuleType("libs.console")
     fake_console.error = lambda *_args, **_kwargs: None
     fake_console.success = lambda *_args, **_kwargs: None
+    fake_console.info = lambda *_args, **_kwargs: None
     monkeypatch.setitem(sys.modules, "platform.12.alerting.shared", alerting)
     monkeypatch.setitem(sys.modules, "libs.console", fake_console)
     monkeypatch.setattr(module, "load_alert_definitions", lambda: [Definition()])
@@ -458,9 +459,149 @@ def test_apply_alerts_raises_nonzero_exit_when_rule_create_fails(monkeypatch) ->
         (
             "POST",
             "/api/v1/rules",
-            {"alert": "FinanceReportHigh5xxRate", "channels": ["chan-1"]},
+            {
+                "alert": "FinanceReportHigh5xxRate",
+                "channels": ["chan-1"],
+                "labels": {"source": "infra2/finance_report-alerts"},
+            },
         ),
     ]
+
+
+class _Def:
+    alert_name = "FinanceReportHigh5xxRate"
+
+    def to_signoz_payload(self, channel_ids):
+        return {"alert": self.alert_name, "channels": channel_ids}
+
+
+def _patch_console(monkeypatch, **overrides):
+    fake = types.ModuleType("libs.console")
+    for name in ("error", "success", "info", "warning"):
+        setattr(fake, name, overrides.get(name, lambda *a, **k: None))
+    monkeypatch.setitem(sys.modules, "libs.console", fake)
+    return fake
+
+
+def _stateful_alerting(initial_rules, calls):
+    """A SigNoz mock that mutates state on DELETE/POST, so `_delete_signoz_rule`'s
+    verify-after-delete re-list reflects the deletion."""
+    rules = {str(r["id"]): dict(r) for r in initial_rules}
+
+    def fake_request(_c, *, method, path, payload=None):
+        calls.append((method, path, payload))
+        if method == "GET" and path == "/api/v1/rules":
+            return {
+                "ok": True,
+                "data": {"rules": list(rules.values())},
+                "status": 200,
+                "body": "{}",
+            }
+        if method == "DELETE" and path.startswith("/api/v1/rules/"):
+            rules.pop(path.rsplit("/", 1)[-1], None)
+            return {"ok": True, "data": None, "status": 200, "body": "{}"}
+        if method == "DELETE":  # v2 is idempotent-200 even for an absent id
+            return {"ok": True, "data": None, "status": 200, "body": "{}"}
+        if method == "POST" and path == "/api/v1/rules":
+            new_id = f"new-{payload['alert']}"
+            rules[new_id] = {
+                "id": new_id,
+                "alert": payload["alert"],
+                "labels": payload.get("labels", {}),
+            }
+            return {"ok": True, "data": {"id": new_id}, "status": 200, "body": "{}"}
+        return {"ok": False, "data": None, "status": 400, "body": "x"}
+
+    return types.SimpleNamespace(
+        _ensure_signoz_channel=lambda _c: "chan-1", _signoz_request=fake_request
+    )
+
+
+def test_apply_alerts_updates_existing_rule(monkeypatch) -> None:
+    """Declarative: an existing rule is deleted + recreated so a changed definition
+    actually takes effect (old behaviour silently skipped it)."""
+    module, _ = _load_fr_observability_tasks(monkeypatch)
+    calls = []
+    alerting = _stateful_alerting(
+        [{"id": "old-1", "alert": "FinanceReportHigh5xxRate", "labels": {}}], calls
+    )
+    _patch_console(monkeypatch)
+    monkeypatch.setitem(sys.modules, "platform.12.alerting.shared", alerting)
+    monkeypatch.setattr(module, "load_alert_definitions", lambda: [_Def()])
+
+    assert module.apply_alerts(object()) is True
+    pairs = [(m, p) for (m, p, _) in calls]
+    assert ("DELETE", "/api/v1/rules/old-1") in pairs  # existing removed
+    assert ("POST", "/api/v1/rules") in pairs  # then recreated => change applies
+
+
+def test_apply_alerts_prune_is_log_only_by_default(monkeypatch) -> None:
+    """Managed residue (canary leftover) is reported, NOT deleted, unless --prune."""
+    module, _ = _load_fr_observability_tasks(monkeypatch)
+    calls = []
+    alerting = _stateful_alerting(
+        [
+            {
+                "id": "canary-1",
+                "alert": "CanarySigNozPromqlPayload-99",
+                "labels": {"canary": "true"},
+            }
+        ],
+        calls,
+    )
+    infos = []
+    _patch_console(
+        monkeypatch, info=lambda *a, **k: infos.append(" ".join(str(x) for x in a))
+    )
+    monkeypatch.setitem(sys.modules, "platform.12.alerting.shared", alerting)
+    monkeypatch.setattr(module, "load_alert_definitions", lambda: [_Def()])
+
+    module.apply_alerts(object())  # prune defaults False
+    assert not any(m == "DELETE" and "canary-1" in p for (m, p, _) in calls)
+    assert any("would prune" in msg for msg in infos)
+
+
+def test_apply_alerts_prune_flag_deletes_only_managed_rules(monkeypatch) -> None:
+    """--prune deletes managed residue but never a hand-made (unmarked) rule."""
+    module, _ = _load_fr_observability_tasks(monkeypatch)
+    calls = []
+    alerting = _stateful_alerting(
+        [
+            {
+                "id": "canary-1",
+                "alert": "CanarySigNozPromqlPayload-99",
+                "labels": {"canary": "true"},
+            },
+            {"id": "human-1", "alert": "SomeoneHandMadeRule", "labels": {}},
+        ],
+        calls,
+    )
+    _patch_console(monkeypatch)
+    monkeypatch.setitem(sys.modules, "platform.12.alerting.shared", alerting)
+    monkeypatch.setattr(module, "load_alert_definitions", lambda: [_Def()])
+
+    module.apply_alerts(object(), prune=True)
+    deletes = [p for (m, p, _) in calls if m == "DELETE"]
+    assert any("canary-1" in p for p in deletes)  # managed residue pruned
+    assert not any("human-1" in p for p in deletes)  # hand-made rule untouched
+
+
+def test_apply_alerts_prune_fails_loudly_on_missing_rule_id(monkeypatch) -> None:
+    """CR: a managed stale rule with no id must NOT be reported deleted (the absence-check
+    would falsely 'verify' deleting `str(None)`); fail loud instead, never issue the DELETE."""
+    module, Exit = _load_fr_observability_tasks(monkeypatch)
+    calls = []
+    alerting = _stateful_alerting(
+        [{"id": None, "alert": "CanarySigNozPromqlPayload-7", "labels": {"canary": "true"}}],
+        calls,
+    )
+    _patch_console(monkeypatch)
+    monkeypatch.setitem(sys.modules, "platform.12.alerting.shared", alerting)
+    monkeypatch.setattr(module, "load_alert_definitions", lambda: [_Def()])
+
+    with pytest.raises(Exit):
+        module.apply_alerts(object(), prune=True)
+    assert not any(m == "DELETE" for (m, _p, _pl) in calls)  # never deleted a None id
 
 
 def test_apply_dashboard_raises_nonzero_exit_when_list_fails(monkeypatch) -> None:
