@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 WORKFLOW_REFERENCE_RE = re.compile(
-    r"(?<![\w/.-])(?:\./)?\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml"
+    r"(?<![\w-])(?:\.\./)*(?:\./)?\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml"
 )
 SCANNED_SUFFIXES = {
     ".md",
@@ -34,6 +34,27 @@ def _is_scanned(path: Path) -> bool:
     return path.is_file() and path.suffix in SCANNED_SUFFIXES
 
 
+def _normalize_workflow_reference(reference: str) -> str:
+    return reference[reference.index(".github/workflows/") :]
+
+
+def test_workflow_reference_matcher_accepts_relative_markdown_targets() -> None:
+    content = (
+        "[deploy](../../.github/workflows/deploy.yml)\n"
+        "[docs](./.github/workflows/docs.yml)\n"
+        "[infra-ci](/.github/workflows/infra-ci.yml)\n"
+    )
+    references = [
+        _normalize_workflow_reference(match.group(0))
+        for match in WORKFLOW_REFERENCE_RE.finditer(content)
+    ]
+    assert references == [
+        ".github/workflows/deploy.yml",
+        ".github/workflows/docs.yml",
+        ".github/workflows/infra-ci.yml",
+    ]
+
+
 def test_workflow_references_point_to_live_workflow_files() -> None:
     """Workflow docs/tests must not point at retired workflow files."""
     live_workflows = {
@@ -53,11 +74,9 @@ def test_workflow_references_point_to_live_workflow_files() -> None:
         except UnicodeDecodeError:
             continue
         for match in WORKFLOW_REFERENCE_RE.finditer(content):
-            reference = match.group(0).removeprefix("./")
+            reference = _normalize_workflow_reference(match.group(0))
             if reference not in live_workflows:
                 line_no = content.count("\n", 0, match.start()) + 1
-                missing.append(
-                    f"{path.relative_to(ROOT)}:{line_no}: {reference}"
-                )
+                missing.append(f"{path.relative_to(ROOT)}:{line_no}: {reference}")
 
-    assert missing == []
+    assert missing == [], "Missing workflow references:\n" + "\n".join(missing)
