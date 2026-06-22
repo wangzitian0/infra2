@@ -99,3 +99,21 @@ def test_op_health_throttles_the_op_call(monkeypatch):
     assert ws.op_service_account_works() is True  # runs op
     assert ws.op_service_account_works() is True  # cached within TTL
     assert len(n) == 1  # op called only once (throttled)
+
+
+def test_op_health_first_call_after_init_runs_op_not_default_cache(monkeypatch):
+    """The default cache must be stale so the FIRST /health after process start runs the real
+    op check, not serve the default ok=False — otherwise a fresh container whose monotonic
+    clock is < TTL would report a false 503 for up to the TTL window (Copilot CR #421)."""
+    monkeypatch.setenv("OP_SERVICE_ACCOUNT_TOKEN", "sa-token")
+    ws = _load(monkeypatch, "ws_op_firstcall")  # fresh module => real initializer
+    assert ws._op_health_cache["at"] == float("-inf")  # always-stale sentinel
+    calls = []
+    monkeypatch.setattr(
+        ws.subprocess,
+        "run",
+        lambda cmd, **_k: calls.append(cmd)
+        or subprocess.CompletedProcess(cmd, 0, b"{}", b""),
+    )
+    assert ws.op_service_account_works() is True
+    assert calls  # op actually ran on the first call (not the default cached False)

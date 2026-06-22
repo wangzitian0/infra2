@@ -48,7 +48,10 @@ REQUIRED_BINARIES = ("git", "op")
 # the vault-agent lookup throttle, #292).
 OP_HEALTHCHECK_TTL_SECONDS = int(os.environ.get("OP_HEALTHCHECK_TTL_SECONDS", "300"))
 _op_health_lock = threading.Lock()
-_op_health_cache: dict[str, object] = {"ok": False, "at": 0.0}
+# `at` starts at -inf (always stale under monotonic time) so the FIRST /health after process
+# start runs the real op check instead of serving the default ok=False — otherwise a fresh
+# container whose monotonic clock is < TTL would report a false 503 for up to the TTL window.
+_op_health_cache: dict[str, object] = {"ok": False, "at": float("-inf")}
 
 _deploy_state_lock = threading.Lock()
 _in_flight_deploys: set[tuple[str, str]] = set()
