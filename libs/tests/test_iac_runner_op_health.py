@@ -48,7 +48,7 @@ def _load(monkeypatch, name: str):
 def test_op_health_runs_a_real_op_call_and_passes_on_success(monkeypatch):
     monkeypatch.setenv("OP_SERVICE_ACCOUNT_TOKEN", "sa-token")
     ws = _load(monkeypatch, "ws_op_ok")
-    ws._op_health_cache["at"] = 0.0  # bypass throttle
+    ws._op_health_cache["at"] = float("-inf")  # reliably stale under any clock
 
     calls = []
 
@@ -66,7 +66,7 @@ def test_op_health_fails_closed_when_op_errors(monkeypatch):
     """Deleted/invalid SA: token present, op returns non-zero -> health False (NOT green)."""
     monkeypatch.setenv("OP_SERVICE_ACCOUNT_TOKEN", "sa-token")
     ws = _load(monkeypatch, "ws_op_broken")
-    ws._op_health_cache["at"] = 0.0
+    ws._op_health_cache["at"] = float("-inf")
     monkeypatch.setattr(
         ws.subprocess,
         "run",
@@ -88,7 +88,7 @@ def test_op_health_throttles_the_op_call(monkeypatch):
     """Token validity is slow-changing — don't call the 1Password API on every /health hit."""
     monkeypatch.setenv("OP_SERVICE_ACCOUNT_TOKEN", "sa-token")
     ws = _load(monkeypatch, "ws_op_throttle")
-    ws._op_health_cache.update({"ok": False, "at": 0.0})
+    ws._op_health_cache.update({"ok": False, "at": float("-inf")})
     n = []
 
     def fake_run(cmd, **_k):
@@ -99,3 +99,21 @@ def test_op_health_throttles_the_op_call(monkeypatch):
     assert ws.op_service_account_works() is True  # runs op
     assert ws.op_service_account_works() is True  # cached within TTL
     assert len(n) == 1  # op called only once (throttled)
+
+
+def test_op_health_first_call_after_init_runs_op_not_default_cache(monkeypatch):
+    """The default cache must be stale so the FIRST /health after process start runs the real
+    op check, not serve the default ok=False — otherwise a fresh container whose monotonic
+    clock is < TTL would report a false 503 for up to the TTL window (Copilot CR #421)."""
+    monkeypatch.setenv("OP_SERVICE_ACCOUNT_TOKEN", "sa-token")
+    ws = _load(monkeypatch, "ws_op_firstcall")  # fresh module => real initializer
+    assert ws._op_health_cache["at"] == float("-inf")  # always-stale sentinel
+    calls = []
+    monkeypatch.setattr(
+        ws.subprocess,
+        "run",
+        lambda cmd, **_k: calls.append(cmd)
+        or subprocess.CompletedProcess(cmd, 0, b"{}", b""),
+    )
+    assert ws.op_service_account_works() is True
+    assert calls  # op actually ran on the first call (not the default cached False)
