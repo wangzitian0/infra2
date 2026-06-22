@@ -46,7 +46,7 @@ REQUIRED_BINARIES = ("git", "op")
 # SA, the real incident), without assuming vault-access semantics. Throttled (token validity
 # is slow-changing; don't call the 1Password API on every /health hit — same reasoning as
 # the vault-agent lookup throttle, #292).
-OP_HEALTH_TTL_SECONDS = int(os.environ.get("OP_HEALTHCHECK_TTL_SECONDS", "300"))
+OP_HEALTHCHECK_TTL_SECONDS = int(os.environ.get("OP_HEALTHCHECK_TTL_SECONDS", "300"))
 _op_health_lock = threading.Lock()
 _op_health_cache: dict[str, object] = {"ok": False, "at": 0.0}
 
@@ -266,14 +266,16 @@ def _dependency_checks() -> dict[str, bool]:
 
 def op_service_account_works() -> bool:
     """Functionally authenticate the 1Password SA token (`op whoami`), not merely check the
-    env var is present. Fail-closed; throttled to OP_HEALTH_TTL_SECONDS so /health doesn't
-    call the op API every cycle. The old bare-presence check reported healthy while a deleted
-    SA had silently broken op-gated deploys (#284) — token SET, op dead, green."""
+    env var is present. Fail-closed; throttled to OP_HEALTHCHECK_TTL_SECONDS so /health
+    doesn't call the op API every cycle. The old bare-presence check reported healthy while a
+    deleted SA had silently broken op-gated deploys (#284) — token SET, op dead, green."""
     if not os.environ.get("OP_SERVICE_ACCOUNT_TOKEN", "").strip():
         return False
-    now = time.time()
+    # monotonic clock for the TTL interval (matches _recent_result) — wall-clock jumps must
+    # not cause extra op calls or an unexpectedly long cache window.
+    now = time.monotonic()
     with _op_health_lock:
-        if now - float(_op_health_cache["at"]) < OP_HEALTH_TTL_SECONDS:
+        if now - float(_op_health_cache["at"]) < OP_HEALTHCHECK_TTL_SECONDS:
             return bool(_op_health_cache["ok"])
     ok = False
     try:
