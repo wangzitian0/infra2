@@ -413,6 +413,69 @@ def test_cascade_does_not_suppress_when_root_is_healthy(monkeypatch, tmp_path) -
     }  # not suppressed — root is fine, dep is a genuine failure
 
 
+def test_cascade_cycle_is_not_suppressed_fail_closed(monkeypatch, tmp_path) -> None:
+    """A depends_on CYCLE (A->B->A) where both fail has no root — neither is suppressed
+    (fail closed → both alert). Otherwise a cycle of all-failing probes silently swallows
+    every page."""
+    runner = _load_probe_runner()
+    posted: list[dict] = []
+    monkeypatch.setenv(
+        "INFRA_PROBE_SPECS",
+        "A|http|http://a|200|critical|5|B\nB|http|http://b|200|critical|5|A",
+    )
+    monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
+    monkeypatch.setattr(
+        runner, "post_alert_bridge_payload", lambda _u, p, **_k: posted.append(p)
+    )
+    ok = {"A": False, "B": False}
+    monkeypatch.setattr(
+        runner, "run_probes", lambda specs: [_result(s, ok=ok[s.name]) for s in specs]
+    )
+    assert runner.run_once(state_path=tmp_path / "s.json", failure_threshold=1) == 1
+    firing = [p for p in posted if p["status"] == "firing"]
+    services = {a["labels"]["service"] for a in firing[0]["alerts"]}
+    assert services == {"A", "B"}  # cycle has no root → neither suppressed
+
+
+def test_cascade_chain_suppresses_middle_and_pages_deepest_root(
+    monkeypatch, tmp_path
+) -> None:
+    """A->B->C (C has no dep), all failing: A and B are symptoms, only deepest root C pages."""
+    runner = _load_probe_runner()
+    posted: list[dict] = []
+    monkeypatch.setenv(
+        "INFRA_PROBE_SPECS",
+        "A|http|http://a|200|critical|5|B\n"
+        "B|http|http://b|200|critical|5|C\n"
+        "C|http|http://c|200|critical|5",
+    )
+    monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
+    monkeypatch.setattr(
+        runner, "post_alert_bridge_payload", lambda _u, p, **_k: posted.append(p)
+    )
+    ok = {"A": False, "B": False, "C": False}
+    monkeypatch.setattr(
+        runner, "run_probes", lambda specs: [_result(s, ok=ok[s.name]) for s in specs]
+    )
+    assert runner.run_once(state_path=tmp_path / "s.json", failure_threshold=1) == 1
+    firing = [p for p in posted if p["status"] == "firing"]
+    services = {a["labels"]["service"] for a in firing[0]["alerts"]}
+    assert services == {"C"}  # A, B suppressed as cascade symptoms; root C pages
+
+
+def test_resolve_failing_root_returns_deepest_node_and_terminates() -> None:
+    """The suppression log must name the true root (deepest failing node), not the immediate
+    depends_on — A->B->C resolves to C — and must terminate on a cycle."""
+    runner = _load_probe_runner()
+    chain = {"A": "B", "B": "C"}  # A->B->C, C is the root
+    failed = {"A", "B", "C"}
+    assert runner._resolve_failing_root("A", chain, failed) == "C"
+    assert runner._resolve_failing_root("B", chain, failed) == "C"
+    assert runner._resolve_failing_root("C", chain, failed) == "C"
+    cycle = {"A": "B", "B": "A"}  # must not loop forever
+    assert runner._resolve_failing_root("A", cycle, {"A", "B"}) in {"A", "B"}
+
+
 def test_probe_runner_renotifies_after_interval(monkeypatch, tmp_path) -> None:
     """#183: unresolved failures renotify only after the configured interval."""
     runner = _load_probe_runner()
