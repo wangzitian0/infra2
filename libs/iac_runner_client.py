@@ -3,7 +3,7 @@
 
 ``deploy_v2`` routes platform (iac-pinned) services HERE rather than re-implementing their
 deploy: ``Deployer.sync`` is deeply invoke/Context + ``os.environ`` coupled, so the faithful
-move is to trigger the SAME signed webhook ``deploy-platform.yml`` already uses. A platform
+move is to trigger the SAME signed webhook ``deploy.yml`` already uses. A platform
 deploy via ``deploy_v2`` is therefore byte-for-byte the deploy iac_runner performs today —
 fidelity by construction, not by replication.
 

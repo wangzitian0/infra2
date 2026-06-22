@@ -10,7 +10,7 @@ One front door for every deploy in infra2 — app and platform, every environmen
 addressed by a single coordinate and routed to the right backend, with the gates
 (prod data lane, staging-first, prod-only, vault/config parity) enforced in one
 place instead of scattered across bash and per-workflow YAML. After this EPIC,
-`deploy-platform.yml` no longer deploys services; `deploy_v2` is the sole path.
+`deploy.yml` no longer deploys services; `deploy_v2` is the sole path.
 
 ## The coordinate
 ```
@@ -46,7 +46,7 @@ hand-copied list — adding a platform service cannot drift the deploy registry.
 | app staging / prod | **manual + pinned release tag** (staging pins the SAME tag as prod for parity) |
 | `iac_pinned` staging / prod | **auto input-drift reconcile on infra2 main** via `reconcile-iac-inputs.yml`; manual `deploy.yml` remains the operator override |
 
-`deploy-platform.yml` is now **bootstrap-only**: it updates the iac_runner
+`deploy.yml` is now **bootstrap-only**: it updates the iac_runner
 container itself when `bootstrap/06.iac_runner/**` changes — a lifecycle
 `deploy_v2` cannot own (it depends on the runner being up). It no longer
 deploys ordinary platform services on push; `reconcile-iac-inputs.yml` owns that
@@ -67,7 +67,7 @@ input-drift trigger and still enters through `deploy_v2`.
   from `discover_services()` (#371).
 - [x] **Trigger model SSOT fix** — §4.6 env→trigger model corrected (#366); it was
   the stale section that originally misled the design.
-- [x] **Cutover** — `deploy-platform.yml` reduced to iac_runner bootstrap;
+- [x] **Cutover** — `deploy.yml` reduced to iac_runner bootstrap;
   `deploy_v2` is the sole platform path; report-branch-main auto **receiver**
   added (#371, closes #370).
 - [x] **report-branch-main sender** — app `main` push dispatches into infra2

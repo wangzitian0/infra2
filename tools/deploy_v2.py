@@ -361,7 +361,7 @@ def _deploy_platform(
     """Route a platform (iac_pinned) service to the iac_runner ``/deploy`` webhook.
 
     We do NOT re-implement the platform deploy — ``Deployer.sync`` is Context/os.environ
-    coupled — we trigger the SAME signed webhook ``deploy-platform.yml`` uses, so the deploy
+    coupled — we trigger the SAME signed webhook ``deploy.yml`` uses, so the deploy
     is byte-for-byte iac_runner's. ``version_ref`` is unused: a platform artifact IS the
     ``iac_ref``-pinned stack, so the deploy ref (and the recorded version identity) is the
     resolved infra2 sha. Platform services have no preview — only ``staging`` / ``prod``.

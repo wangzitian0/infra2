@@ -67,7 +67,7 @@ flowchart TB
 
 ### SOP-002: 查看每周正向稳定性报告
 
-- 自动：`watchdog-weekly-digest.yml`（周一 UTC）跑 `stability_report.py`，读 `/ledger` → Lark。
+- 自动：`ops-checks.yml`（周一 UTC）跑 `stability_report.py`，读 `/ledger` → Lark。
 - 本地 dry-run：
   ```bash
   INFRA2_STABILITY_REPORT_DRY_RUN=1 python tools/stability_report.py --input ledger.json

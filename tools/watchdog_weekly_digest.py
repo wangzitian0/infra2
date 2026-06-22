@@ -19,7 +19,7 @@ if str(ROOT) not in sys.path:
 
 from libs.alerting import deliver_out_of_band_text  # noqa: E402
 
-WORKFLOW_FILE = "out-of-band-watchdog.yml"
+WORKFLOW_FILE = "ops-checks.yml"
 DEFAULT_REPOSITORY = "wangzitian0/infra2"
 
 

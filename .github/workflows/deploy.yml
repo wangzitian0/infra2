@@ -9,7 +9,7 @@ name: Deploy (deploy_v2)
 # This replaces the per-env App-repo bash (tools/dokploy_deploy.sh). It is manual-only
 # for now (operator-triggered): merging it changes no automated behavior, and running it
 # is the live acceptance test for the unified path on a real fixed env (stronger than the
-# throwaway-preview canary in deploy-v2-canary.yml).
+# throwaway-preview canary in ops-checks.yml).
 #
 # prod safety: RL-DATA-1 is deny-by-default in deploy_v2 — a prod deploy must pass BOTH
 # staging_validated=true (staging-first) and code_reviewed=true (reviewed code on prod
@@ -21,15 +21,22 @@ name: Deploy (deploy_v2)
 # path is caught on a disposable stack, never on real prod data. skip_canary=true bypasses it.
 
 on:
+  push:
+    branches: ["main"]
+    paths:
+      - "bootstrap/06.iac_runner/**"
+      - "scripts/deploy_iac_runner_bootstrap.sh"
+      - ".github/workflows/deploy.yml"
   workflow_dispatch:
     inputs:
       service:
-        description: "Service key (default app; any service_registry key, e.g. platform/redis — non-app routes to the iac_runner webhook, staging/prod only)"
+        description: "Service key. Use bootstrap/iac-runner to run the IaC Runner bootstrap update."
         required: false
         default: finance_report/app
       type:
         description: "Deploy type (the scenario)"
-        required: true
+        required: false
+        default: staging
         type: choice
         options: [staging, prod, preview/branch, preview/pr, preview/commit, preview/tag]
       version_ref:
@@ -64,11 +71,6 @@ on:
         required: false
         type: boolean
         default: false
-      no_wait:
-        description: "do not health-check after deploy"
-        required: false
-        type: boolean
-        default: false
       timeout:
         description: "health-check seconds"
         required: false
@@ -79,7 +81,7 @@ permissions:
 
 concurrency:
   # One in-flight deploy per type; never let two deploys race the same compose/slot.
-  group: deploy-v2-${{ github.event.inputs.type }}
+  group: ${{ (github.event_name == 'push' || inputs.service == 'bootstrap/iac-runner') && 'iac-runner-bootstrap' || format('deploy-v2-{0}', github.event.inputs.type) }}
   cancel-in-progress: false
 
 jobs:
@@ -93,7 +95,9 @@ jobs:
     # Only the APP has a preview canary; a platform (iac_pinned) deploy is gated by
     # iac_runner's own checks, so skip the app canary for platform services.
     if: >-
-      ${{ (github.event.inputs.type == 'staging' || github.event.inputs.type == 'prod')
+      ${{ github.event_name == 'workflow_dispatch'
+          && inputs.service != 'bootstrap/iac-runner'
+          && (github.event.inputs.type == 'staging' || github.event.inputs.type == 'prod')
           && github.event.inputs.skip_canary != 'true'
           && (github.event.inputs.service == 'finance_report/app'
               || github.event.inputs.service == '') }}
@@ -140,6 +144,8 @@ jobs:
     # but NEVER when it failed: a red canary means the deploy path is broken, so abort.
     if: >-
       ${{ always()
+          && github.event_name == 'workflow_dispatch'
+          && inputs.service != 'bootstrap/iac-runner'
           && (needs.preflight_canary.result == 'success'
               || needs.preflight_canary.result == 'skipped') }}
     runs-on: ubuntu-latest
@@ -172,7 +178,6 @@ jobs:
           STAGING_VALIDATED_INPUT: ${{ github.event.inputs.staging_validated }}
           CODE_REVIEWED_INPUT: ${{ github.event.inputs.code_reviewed }}
           BREAK_GLASS_INPUT: ${{ github.event.inputs.break_glass }}
-          NO_WAIT_INPUT: ${{ github.event.inputs.no_wait }}
           TIMEOUT_INPUT: ${{ github.event.inputs.timeout || '600' }}
         run: |
           set -euo pipefail
@@ -198,8 +203,6 @@ jobs:
           [[ "$STAGING_VALIDATED_INPUT" == "true" ]] && args+=(--staging-validated)
           [[ "$CODE_REVIEWED_INPUT" == "true" ]] && args+=(--code-reviewed)
           [[ "$BREAK_GLASS_INPUT" == "true" ]] && args+=(--break-glass)
-          [[ "$NO_WAIT_INPUT" == "true" ]] && args+=(--no-wait)
-
           echo "deploy_v2 ${args[*]}"
           set +e
           out="$(python -m tools.deploy_v2 "${args[@]}")"
@@ -220,3 +223,91 @@ jobs:
             exit $rc
           fi
           echo "deploy_v2 $TYPE_INPUT succeeded."
+
+  # IaC runner bootstrap jobs
+  bootstrap:
+    name: update iac_runner bootstrap
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.service == 'bootstrap/iac-runner') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure SSH key for IaC Runner bootstrap update
+        env:
+          INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${INFRA2_WATCHDOG_SSH_PRIVATE_KEY:-}" ]]; then
+            echo "::error::INFRA2_WATCHDOG_SSH_PRIVATE_KEY is required to update the IaC Runner bootstrap."
+            exit 1
+          fi
+
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_bootstrap
+          chmod 600 ~/.ssh/infra2_bootstrap
+
+      - name: Deploy IaC Runner bootstrap changes
+        env:
+          INFRA2_WATCHDOG_SSH_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
+          INFRA2_WATCHDOG_SSH_USER: ${{ secrets.INFRA2_WATCHDOG_SSH_USER }}
+          INFRA2_WATCHDOG_SSH_PORT: ${{ vars.INFRA2_WATCHDOG_SSH_PORT }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${INFRA2_WATCHDOG_SSH_HOST:-}" ]]; then
+            echo "::error::INFRA2_WATCHDOG_SSH_HOST is required."
+            exit 1
+          fi
+          if [[ -z "${INFRA2_WATCHDOG_SSH_USER:-}" ]]; then
+            echo "::error::INFRA2_WATCHDOG_SSH_USER is required."
+            exit 1
+          fi
+
+          ssh_port="${INFRA2_WATCHDOG_SSH_PORT:-22}"
+          ssh \
+            -i ~/.ssh/infra2_bootstrap \
+            -p "$ssh_port" \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            "${INFRA2_WATCHDOG_SSH_USER}@${INFRA2_WATCHDOG_SSH_HOST}" \
+            "INFRA2_DEPLOY_SHA='${GITHUB_SHA}' bash -s" \
+            < scripts/deploy_iac_runner_bootstrap.sh
+
+      - name: Check IaC Runner health
+        env:
+          IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
+        run: |
+          set -euo pipefail
+
+          health_url="${IAC_RUNNER_URL%/}/health"
+          body="$(mktemp)"
+          last_status=""
+
+          for attempt in $(seq 1 12); do
+            : > "$body"
+            status="$(curl -sS -o "$body" -w "%{http_code}" \
+              --connect-timeout 10 \
+              --max-time 20 \
+              "$health_url" || true)"
+            last_status="$status"
+
+            echo "IaC Runner public health attempt ${attempt}/12: url=$health_url status=$status"
+            if [[ -s "$body" ]]; then
+              sed 's/^/  /' "$body" || true
+            else
+              echo "  <empty body>"
+            fi
+
+            if [[ "$status" == "200" ]]; then
+              rm -f "$body"
+              exit 0
+            fi
+
+            sleep 10
+          done
+
+          rm -f "$body"
+          echo "::error::IaC Runner public health stayed unhealthy after 12 attempts. Last HTTP status: $last_status. Check Traefik/Dokploy routing, Cloudflare propagation, VAULT_APP_TOKEN, and iac-runner container health."
+          exit 1

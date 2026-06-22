@@ -10,7 +10,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "tools" / "watchdog_weekly_digest.py"
-WORKFLOW_PATH = ROOT / ".github/workflows/watchdog-weekly-digest.yml"
+WORKFLOW_PATH = ROOT / ".github/workflows/ops-checks.yml"
 
 
 def _load_module():
@@ -146,6 +146,7 @@ def test_weekly_digest_workflow_schedule_and_dispatch_contract() -> None:
     """Infra-012.8: weekly digest workflow keeps fixed weekly schedule + manual dry-run."""
     workflow = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
 
-    assert workflow["on"]["schedule"] == [{"cron": "0 1 * * 1"}]
+    assert {"cron": "0 1 * * 1"} in workflow["on"]["schedule"]
     assert "workflow_dispatch" in workflow["on"]
+    assert "watchdog-weekly-digest" in workflow["on"]["workflow_dispatch"]["inputs"]["task"]["options"]
     assert "dry_run" in workflow["on"]["workflow_dispatch"]["inputs"]

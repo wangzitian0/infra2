@@ -8,7 +8,7 @@ under-fan-out landmine — a change to it would not redeploy the service, leavin
 it running stale baked-in code (the class of bug behind #267's alerting gap).
 
 Exits non-zero on violation, so it serves as both a PR gate (infra-ci) and a
-scheduled monitor (deploy-guard-audit workflow alerts on the non-zero exit).
+scheduled monitor (ops-checks deploy-guard-audit task alerts on the non-zero exit).
 """
 
 from __future__ import annotations

@@ -12,7 +12,7 @@
 | **Service Code** | [`bootstrap/06.iac_runner/`](../../bootstrap/06.iac_runner/) | 服务实现、Dockerfile |
 | **Deployment** | [`bootstrap/06.iac_runner/deploy.py`](../../bootstrap/06.iac_runner/deploy.py) | 部署脚本 |
 | **Secrets** | `secret/data/bootstrap/production/iac_runner` (Vault) | WEBHOOK_SECRET, GIT_REPO_URL |
-| **GitHub Workflows** | [`.github/workflows/deploy-platform.yml`](../../.github/workflows/deploy-platform.yml) | 触发 IaC Runner 的 CI/CD 流程 |
+| **GitHub Workflows** | [`.github/workflows/deploy.yml`](../../.github/workflows/deploy.yml) | 触发 IaC Runner 的 CI/CD 流程 |
 | **Component README** | [`bootstrap/06.iac_runner/README.md`](../../bootstrap/06.iac_runner/README.md) | 操作手册 |
 
 ---
@@ -49,7 +49,7 @@ flowchart TB
 
     subgraph "CI/CD Layer"
         GitHub["GitHub<br/>(代码仓库)"]
-        Actions["GitHub Actions<br/>(deploy-platform.yml)"]
+        Actions["GitHub Actions<br/>(deploy.yml)"]
     end
 
     subgraph "Infrastructure Layer - Bootstrap (L1)"
@@ -432,7 +432,7 @@ curl -X POST https://iac.{domain}/sync \
 - IaC Runner must not restart itself from inside its own `/deploy` request,
   because that can kill the request handler before GitHub Actions receives a
   terminal deployment result.
-- `deploy-platform.yml` detects `bootstrap/06.iac_runner/**` changes on
+- `deploy.yml` detects `bootstrap/06.iac_runner/**` changes on
   `main` from the GitHub compare/commit API file list, SSHes to the VPS with
   the out-of-band watchdog key, updates only the runner source path in the
   Dokploy compose checkout, persists the target `GIT_SHA` and
@@ -625,7 +625,7 @@ path "auth/token/lookup-self"          { capabilities = ["read"] }
 | # | 反事实场景 | 可恢复？恢复链 / 反例 |
 |---|-----------|----------------------|
 | ① | **0 帧冷启动**（全新 VPS、Vault 未初始化） | ✅ 操作员带外：装 Dokploy（OP 里 Dokploy key）→ bootstrap Vault（root/unseal 入 OP）→ 装 OP Connect → `setup-approle --service=iac_runner` 注入 `VAULT_ROLE_ID/SECRET_ID` 到 Dokploy env → `env.set` 写 runner 自身 secret → 部署 runner。**任何一步都不需要 runner 已在运行** |
-| ② | **Vault 全擦/重 bootstrap**（secret_id 失效） | ✅ 操作员持 OP root 重 bootstrap Vault，再跑 `setup-approle --service=iac_runner` 重注入。`SERVICE_TASK_MAP["bootstrap/iac-runner"]=None` + deploy-platform.yml 把 `bootstrap/06.iac_runner/**` 路由到外部重建脚本 → **runner 永不自部署/自轮换**，重建者是操作员，不是 runner |
+| ② | **Vault 全擦/重 bootstrap**（secret_id 失效） | ✅ 操作员持 OP root 重 bootstrap Vault，再跑 `setup-approle --service=iac_runner` 重注入。`SERVICE_TASK_MAP["bootstrap/iac-runner"]=None` + deploy.yml 把 `bootstrap/06.iac_runner/**` 路由到外部重建脚本 → **runner 永不自部署/自轮换**，重建者是操作员，不是 runner |
 | ③ | **Dokploy 重部署丢 env** | ✅ 单角色只用 `VAULT_ROLE_ID/SECRET_ID`，已在 `RUNTIME_ENV_KEYS_TO_PRESERVE`（`libs/deployer.py:44`）内、跨重部署保留；万一丢失，操作员 `setup-approle` 带外重注入，非死锁。**⚠️ 若改两角色，必须把 `VAULT_DEPLOYER_*` 也加入该列表，否则丢凭证致部署中断——这是放弃两角色的关键原因** |
 | ④ | **secret_id 衰减 / kill-token**（#257 验收项） | ✅ `secret_id_ttl=0` 永不过期；sidecar agent 被 revoke 后凭 role_id/secret_id 自动重登录；deploy 凭证**每次部署现场新登录** → 杀 token 后下一次部署自愈，比 token_file 更强 |
 | ⑤ | **Vault 封存时走登录路径** | ✅ 优雅降级：`auth/approle/login` 失败 → `resolve_vault_root_token` 返回 None、该次 `.sync` 以明确 `vault_login_failed` 诊断失败，webhook server 进程不崩；sidecar 维持今天 `exit_on_err` 的重启语义，非新循环 |
@@ -1029,7 +1029,7 @@ invoke check-env
 **快速回滚步骤**:
 ```bash
 # 方式 1: 回滚 Git tag（推荐）
-gh workflow run deploy-platform.yml \
+gh workflow run deploy.yml \
   -f env="production" \
   -f ref="v1.2.3"  # 使用之前的稳定版本
 
@@ -1139,7 +1139,7 @@ docker logs iac-runner --tail 50
 
 ### 14.3 GitHub Workflows
 
-- [deploy-platform.yml](../../.github/workflows/deploy-platform.yml) - Post-merge platform deployment
+- [deploy.yml](../../.github/workflows/deploy.yml) - Post-merge platform deployment
 
 ---
 

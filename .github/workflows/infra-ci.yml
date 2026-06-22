@@ -12,10 +12,9 @@ on:
       - 'docs/ssot/**'
       - 'docs/project/**'
       - '.github/workflows/infra-ci.yml'
-      - '.github/workflows/deploy-platform.yml'
+      - '.github/workflows/deploy.yml'
       - '.github/workflows/reconcile-iac-inputs.yml'
-      - '.github/workflows/out-of-band-watchdog.yml'
-      - '.github/workflows/watchdog-weekly-digest.yml'
+      - '.github/workflows/ops-checks.yml'
   push:
     branches: [main]
     paths:
@@ -28,10 +27,9 @@ on:
       - 'docs/ssot/**'
       - 'docs/project/**'
       - '.github/workflows/infra-ci.yml'
-      - '.github/workflows/deploy-platform.yml'
+      - '.github/workflows/deploy.yml'
       - '.github/workflows/reconcile-iac-inputs.yml'
-      - '.github/workflows/out-of-band-watchdog.yml'
-      - '.github/workflows/watchdog-weekly-digest.yml'
+      - '.github/workflows/ops-checks.yml'
 
 permissions:
   contents: read

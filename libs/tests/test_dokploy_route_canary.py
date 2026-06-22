@@ -618,7 +618,7 @@ def test_canary_fails_docker_phase_when_labels_are_stale() -> None:
 
 def test_canary_workflow_is_manual_and_fast_failing() -> None:
     """Infra-011.9: operators can run the platform canary without app CI."""
-    workflow = (ROOT / ".github/workflows/dokploy-route-canary.yml").read_text()
+    workflow = (ROOT / ".github/workflows/ops-checks.yml").read_text()
 
     assert "workflow_dispatch" in workflow
     assert "schedule:" in workflow

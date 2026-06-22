@@ -9,10 +9,10 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **Docs Workflow** | [`.github/workflows/docs-site.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/docs-site.yml) | Pages 构建与发布 |
+| **Docs Workflow** | [`.github/workflows/docs.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/docs.yml) | Pages 构建与发布 |
 | **MkDocs 配置** | [`docs/mkdocs.yml`](../mkdocs.yml) | 站点结构与导航 |
 | **依赖列表** | [`docs/requirements.txt`](../requirements.txt) | Python 依赖 |
-| **IaC Runner Bootstrap** | [`.github/workflows/deploy-platform.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy-platform.yml) | Updates the iac_runner container itself when its bootstrap changes. |
+| **IaC Runner Bootstrap** | [`.github/workflows/deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) | Updates the iac_runner container itself when its bootstrap changes. |
 | **IaC Input Reconcile** | [`.github/workflows/reconcile-iac-inputs.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/reconcile-iac-inputs.yml) | Main-push input-drift reconcile for `iac_pinned` services via `deploy_v2 -> iac_runner`; config hash decides no-op vs restart. |
 | **Deploy (deploy_v2)** | [`.github/workflows/deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) | Manual unified deploy front door (app + platform, staging/prod, pinned ref) |
 | **Auto-deploy report-branch-main** | [`.github/workflows/deploy-report-main.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy-report-main.yml) | The ONE auto target: main preview re-deploys on app main push |
@@ -37,7 +37,7 @@
 
 ## 3. GitOps 版本部署流水线 (Version Deployment Pipeline)
 
-> **触发模型**：`deploy-platform.yml` 只更新 iac_runner 自身；普通 `iac_pinned`
+> **触发模型**：`deploy.yml` 只更新 iac_runner 自身；普通 `iac_pinned`
 > 服务由 `reconcile-iac-inputs.yml` 在 `main` push 后自动做 input-drift
 > reconcile。该 workflow 不打开 Dokploy native `autoDeploy`，而是把受影响服务交给
 > `deploy_v2 -> iac_runner`，再由 Deployer config-hash gate 决定 no-op 还是重启。
@@ -302,7 +302,7 @@ Required fields:
 
 | Field | Purpose |
 |-------|---------|
-| `source` | Producer name, for example `deploy-platform.yml` or `cloudflare-watchdog`. |
+| `source` | Producer name, for example `deploy.yml` or `cloudflare-watchdog`. |
 | `environment` | One of `local`, `pr`, `pr-preview`, `staging`, `production`. |
 | `stage` | Shared stage name such as `config-preflight`, `deploy-status`, `route-canary`, or `watchdog`. |
 | `target` | Service, route, variable, compose, or provider target being checked. |
@@ -352,7 +352,7 @@ Consistency rule:
 | 行为描述 | 验证方式 | 状态 |
 |----------|----------|------|
 | **文档站构建成功** | `mkdocs build --config-file docs/mkdocs.yml` | ✅ Manual |
-| **Pages 发布成功** | GitHub Actions `docs-site` workflow | ✅ Manual |
+| **Pages 发布成功** | GitHub Actions `Docs` workflow | ✅ Manual |
 | **Staging 自动部署** | Push to main → 检查 tag 创建 → 验证 IaC Runner logs | ⏳ Pending PR merge |
 | **Production 手动部署** | 手动触发 workflow → 检查 tag + Release → 验证 production | ⏳ Pending PR merge |
 | **Config hash 幂等性** | 相同配置重复部署应 skip | ⏳ Pending PR merge |
@@ -366,7 +366,7 @@ Consistency rule:
 
 ```bash
 # 检查 GitHub Actions logs
-gh run list --workflow=deploy-platform.yml
+gh run list --workflow=deploy.yml
 gh run view <run-id> --log
 
 # 检查 IaC Runner logs
@@ -388,7 +388,7 @@ gh secret list --repo wangzitian0/infra2 | grep IAC
 
 ```bash
 # 检查 workflow 输入
-gh run list --workflow=deploy-platform.yml
+gh run list --workflow=deploy.yml
 gh run view <run-id> --log
 
 # 验证 staging tag 存在
