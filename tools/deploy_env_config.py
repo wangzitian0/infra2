@@ -14,8 +14,8 @@ it targets, its public URL pattern, the container/domain suffix, the default dat
 source, and prod gating. Single source so the deploy primitive, docs, and the contract
 test all derive from here instead of re-stating per-env values across workflows.
 
-The compose ids are mirrored from the App-repo workflows (deploy.yml /
-deploy.yml) and become the sole copy once P2 step 5 removes them there.
+The staging and production compose ids are mirrored from the App-repo deploy.yml
+workflow and become the sole copy once P2 step 5 removes them there.
 No deploy is performed here — like the resolver, this is pure, importable config.
 """
 
