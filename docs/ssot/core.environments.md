@@ -568,7 +568,7 @@ invoke test.cleanup --pr-number=123
 ### 8.1 Finance Report Test 环境
 
 ```bash
-# .github/workflows/pr-deploy.yml
+# Finance Report app repo preview workflow (conceptual)
 name: Deploy PR to Test
 on:
   pull_request:
