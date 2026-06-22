@@ -48,7 +48,7 @@ def _load(monkeypatch, name: str):
 def test_op_health_runs_a_real_op_call_and_passes_on_success(monkeypatch):
     monkeypatch.setenv("OP_SERVICE_ACCOUNT_TOKEN", "sa-token")
     ws = _load(monkeypatch, "ws_op_ok")
-    ws._op_health_cache["at"] = 0.0  # bypass throttle
+    ws._op_health_cache["at"] = float("-inf")  # reliably stale under any clock
 
     calls = []
 
@@ -66,7 +66,7 @@ def test_op_health_fails_closed_when_op_errors(monkeypatch):
     """Deleted/invalid SA: token present, op returns non-zero -> health False (NOT green)."""
     monkeypatch.setenv("OP_SERVICE_ACCOUNT_TOKEN", "sa-token")
     ws = _load(monkeypatch, "ws_op_broken")
-    ws._op_health_cache["at"] = 0.0
+    ws._op_health_cache["at"] = float("-inf")
     monkeypatch.setattr(
         ws.subprocess,
         "run",
@@ -88,7 +88,7 @@ def test_op_health_throttles_the_op_call(monkeypatch):
     """Token validity is slow-changing — don't call the 1Password API on every /health hit."""
     monkeypatch.setenv("OP_SERVICE_ACCOUNT_TOKEN", "sa-token")
     ws = _load(monkeypatch, "ws_op_throttle")
-    ws._op_health_cache.update({"ok": False, "at": 0.0})
+    ws._op_health_cache.update({"ok": False, "at": float("-inf")})
     n = []
 
     def fake_run(cmd, **_k):
