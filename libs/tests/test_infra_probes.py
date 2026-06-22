@@ -463,6 +463,19 @@ def test_cascade_chain_suppresses_middle_and_pages_deepest_root(
     assert services == {"C"}  # A, B suppressed as cascade symptoms; root C pages
 
 
+def test_resolve_failing_root_returns_deepest_node_and_terminates() -> None:
+    """The suppression log must name the true root (deepest failing node), not the immediate
+    depends_on — A->B->C resolves to C — and must terminate on a cycle."""
+    runner = _load_probe_runner()
+    chain = {"A": "B", "B": "C"}  # A->B->C, C is the root
+    failed = {"A", "B", "C"}
+    assert runner._resolve_failing_root("A", chain, failed) == "C"
+    assert runner._resolve_failing_root("B", chain, failed) == "C"
+    assert runner._resolve_failing_root("C", chain, failed) == "C"
+    cycle = {"A": "B", "B": "A"}  # must not loop forever
+    assert runner._resolve_failing_root("A", cycle, {"A", "B"}) in {"A", "B"}
+
+
 def test_probe_runner_renotifies_after_interval(monkeypatch, tmp_path) -> None:
     """#183: unresolved failures renotify only after the configured interval."""
     runner = _load_probe_runner()

@@ -76,6 +76,22 @@ def _cascades_to_failing_root(
     return True  # reached a failing node with no failing dependency = the root
 
 
+def _resolve_failing_root(
+    name: str, dep_of: dict[str, str], failed_names: set[str]
+) -> str:
+    """The deepest failing node `name`'s depends_on chain reaches — the actual root being
+    paged. Only meaningful for a cascade symptom (caller guarantees a root exists). For
+    A->B->C this returns C, not the immediate dependency B."""
+    seen = {name}
+    root = name
+    cur = dep_of.get(name)
+    while cur and cur in failed_names and cur not in seen:
+        root = cur
+        seen.add(cur)
+        cur = dep_of.get(cur)
+    return root
+
+
 class ProbeGroup(NamedTuple):
     name: str
     raw_specs: str
@@ -229,9 +245,10 @@ def run_once(
         ]
         cascaded_names = {r.spec.name for r in cascaded}
         for r in cascaded:
+            root = _resolve_failing_root(r.spec.name, dep_of, failed_names)
             print(
                 f"probe-runner cascade-suppressed probe={r.spec.name} "
-                f"root={r.spec.depends_on} (both failing)",
+                f"depends_on={r.spec.depends_on} root={root} (cascade symptom)",
                 flush=True,
             )
         results = [r for r in results if r.spec.name not in cascaded_names]
