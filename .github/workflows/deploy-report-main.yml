@@ -12,7 +12,7 @@ name: Auto-deploy report-branch-main
 # report-branch-main preview slot through the unified deploy_v2 front door.
 # Manual dispatch keeps resolving current main.
 #
-# The APP-repo SENDER half is wired in finance_report `.github/workflows/notify-infra2-report-main.yml`
+# The APP-repo SENDER half is wired by the finance_report `notify-infra2.yml`
 # (finance_report#1173): successful app `main` CI -> repository_dispatch into
 # infra2. See Infra-015.
 
