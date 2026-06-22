@@ -54,6 +54,28 @@ def _log_send(stream_key: str, results: list, severity_override: str | None) -> 
     )
 
 
+def _cascades_to_failing_root(
+    name: str, dep_of: dict[str, str], failed_names: set[str]
+) -> bool:
+    """True if `name` is a cascade symptom to suppress: its `depends_on` chain leads to a
+    failing ROOT. False — i.e. keep alerting — when the immediate dependency is healthy (a
+    real independent failure) OR the chain forms a cycle (no root → fail closed). A probe
+    with no `depends_on` is itself a root and is never suppressed.
+    """
+    cur = dep_of.get(name)
+    if not cur:
+        return False  # no dependency -> this IS a root, always page
+    seen = {name}
+    while cur:
+        if cur not in failed_names:
+            return False  # dependency healthy -> independent failure, do not suppress
+        if cur in seen:
+            return False  # cycle -> no real root -> fail closed (alert)
+        seen.add(cur)
+        cur = dep_of.get(cur)
+    return True  # reached a failing node with no failing dependency = the root
+
+
 class ProbeGroup(NamedTuple):
     name: str
     raw_specs: str
@@ -191,15 +213,19 @@ def run_once(
             if result.ok:
                 ever_succeeded.add(result.spec.name)
 
-        # Cascade suppression: a probe whose declared `depends_on` is ALSO failing this
-        # cycle is a downstream symptom of that root — suppress its alert and page the root
-        # only (page the deepest failed node, not the cascade). E.g. signoz-roundtrip fails
-        # because the otel collector is down -> page the collector, mute the round-trip.
+        # Cascade suppression: a probe whose declared `depends_on` chain reaches a failing
+        # ROOT is a downstream symptom — suppress its alert and page the root only (page the
+        # deepest failed node, not the cascade). E.g. signoz-roundtrip fails because the otel
+        # collector is down -> page the collector, mute the round-trip.
+        # A `depends_on` CYCLE (incl. self-dependency) has no root, so its members are NOT
+        # suppressed (fail closed -> alert) — otherwise a cycle of all-failing probes would
+        # silently swallow every page.
         failed_names = {r.spec.name for r in failures}
+        dep_of = {r.spec.name: r.spec.depends_on for r in failures if r.spec.depends_on}
         cascaded = [
             r
             for r in failures
-            if r.spec.depends_on and r.spec.depends_on in failed_names
+            if _cascades_to_failing_root(r.spec.name, dep_of, failed_names)
         ]
         cascaded_names = {r.spec.name for r in cascaded}
         for r in cascaded:
