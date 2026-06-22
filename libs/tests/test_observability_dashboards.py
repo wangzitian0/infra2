@@ -586,6 +586,24 @@ def test_apply_alerts_prune_flag_deletes_only_managed_rules(monkeypatch) -> None
     assert not any("human-1" in p for p in deletes)  # hand-made rule untouched
 
 
+def test_apply_alerts_prune_fails_loudly_on_missing_rule_id(monkeypatch) -> None:
+    """CR: a managed stale rule with no id must NOT be reported deleted (the absence-check
+    would falsely 'verify' deleting `str(None)`); fail loud instead, never issue the DELETE."""
+    module, Exit = _load_fr_observability_tasks(monkeypatch)
+    calls = []
+    alerting = _stateful_alerting(
+        [{"id": None, "alert": "CanarySigNozPromqlPayload-7", "labels": {"canary": "true"}}],
+        calls,
+    )
+    _patch_console(monkeypatch)
+    monkeypatch.setitem(sys.modules, "platform.12.alerting.shared", alerting)
+    monkeypatch.setattr(module, "load_alert_definitions", lambda: [_Def()])
+
+    with pytest.raises(Exit):
+        module.apply_alerts(object(), prune=True)
+    assert not any(m == "DELETE" for (m, _p, _pl) in calls)  # never deleted a None id
+
+
 def test_apply_dashboard_raises_nonzero_exit_when_list_fails(monkeypatch) -> None:
     """#1106 regression: dashboard apply must not create duplicates after list errors."""
     module, Exit = _load_fr_observability_tasks(monkeypatch)

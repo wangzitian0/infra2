@@ -176,6 +176,10 @@ def apply_alerts(c, dry_run=False, prune=False):
         if not prune:
             info(f"would prune stale managed rule: {name} (run with --prune to delete)")
             continue
+        if not rule_id:
+            all_ok = False
+            error(f"Cannot prune stale managed rule (missing id): {name}")
+            continue
         if _delete_signoz_rule(alerting, c, str(rule_id)):
             success(f"pruned stale managed rule: {name}")
         else:
@@ -197,6 +201,10 @@ def _delete_signoz_rule(alerting, c, rule_id: str) -> bool:
     from libs.alerting import _iter_signoz_items
     from urllib.parse import quote
 
+    # Guard against a missing/placeholder id: without it the absence-check below would
+    # "verify" the deletion of a non-existent id and falsely report success.
+    if not rule_id or rule_id == "None":
+        return False
     rid = quote(rule_id, safe="")
     for path in (f"/api/v1/rules/{rid}", f"/api/v2/rules/{rid}"):
         alerting._signoz_request(c, method="DELETE", path=path)
