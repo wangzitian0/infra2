@@ -96,7 +96,6 @@ entries:
       - libs/tests/test_iac_runner_deploy_result.py
       - libs/tests/test_pipeline_stage_contract.py
       - libs/tests/test_reconcile_iac_inputs.py
-      - libs/tests/test_reconcile_iac_inputs.py
   ops.e2e:
     owner: docs/ssot/ops.e2e-regressions.md
     description: Deployment verification and E2E regression strategy.

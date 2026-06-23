@@ -19,9 +19,9 @@
 |------|----------------|------|
 | **IaC Input Reconcile** | [`reconcile-iac-inputs.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/reconcile-iac-inputs.yml) | **Release-tag** 触发(`push: tags: v*.*.*`):diff 上一 tag→本 tag,把 changed `iac_pinned` 服务以**该 tag** 为 `iac_ref` fan-out 给 `deploy_v2 → iac_runner`;config-hash gate 决定 no-op vs 重启。**不是 main-push、不是 sha。** |
 | **Deploy 前门 (`deploy_v2`)** | [`tools/deploy_v2.py`](https://github.com/wangzitian0/infra2/blob/main/tools/deploy_v2.py) · [`deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) | 统一部署坐标 `(service, type, version_ref, iac_ref)`;app + 平台、staging/prod、pinned ref。 |
-| **IaC Runner Bootstrap (L0)** | [`deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) · [`scripts/deploy_iac_runner_bootstrap.sh`](https://github.com/wangzitian0/infra2/blob/main/scripts/deploy_iac_runner_bootstrap.sh) | **带外**自更新:`bootstrap/06.iac_runner/**` 变更时,Actions 在 VPS 上重建 runner 自身(跟 merged SHA),**独立 cadence**。 |
+| **IaC Runner Bootstrap (L1)** | [`deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) · [`scripts/deploy_iac_runner_bootstrap.sh`](https://github.com/wangzitian0/infra2/blob/main/scripts/deploy_iac_runner_bootstrap.sh) | **带外**自更新:`bootstrap/06.iac_runner/**` 变更时,Actions 在 VPS 上重建 runner 自身(跟 merged SHA),**独立 cadence**。 |
 | **Auto-deploy report-branch-main** | [`deploy-report-main.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy-report-main.yml) | **唯一**自动目标:app main push → main 预览重部署。 |
-| **Observability config apply** | [`apply-observability.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/apply-observability.yml) | 告警规则 / 看板,声明式 reconcile。**当前 merge 即 apply**(见 §4「未收口项」)。 |
+| **Observability config apply** | [`apply-observability.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/apply-observability.yml) | 告警规则 / 看板,声明式 reconcile。**当前 merge 即 apply**(见 §3.4 未收口项)。 |
 | **Docs site** | [`docs.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/docs.yml) · [`docs/mkdocs.yml`](../mkdocs.yml) | MkDocs → GitHub Pages。 |
 
 ---
@@ -44,7 +44,7 @@
 | **app staging** | **手动**(app)| release tag(钉和 prod 同一个)| `deploy_v2 --type staging --version-ref vX.Y.Z` | staging 数据 | 长期(同构 prod)|
 | **app prod** | **手动**(app)| **同一个 release tag** | `deploy_v2 --type prod --version-ref vX.Y.Z --staging-validated --code-reviewed` | 真实 prod 数据 | 长期 |
 | **平台服务**(iac_pinned)staging+prod | **release tag 推送**(`v*.*.*`)| **该 tag** 作 `iac_ref` | `reconcile-iac-inputs.yml` → `deploy_v2 → iac_runner` | — | 长期 |
-| **L0 bootstrap**(iac-runner)| `bootstrap/06.iac_runner/**` 变更 | merged SHA | 带外 self-update(`deploy.yml`)| — | 独立 cadence |
+| **L1 Bootstrap**(iac-runner)| `bootstrap/06.iac_runner/**` 变更 | merged SHA | 带外 self-update(`deploy.yml`)| — | 独立 cadence |
 
 > **平台服务**(iac_pinned)无 preview,只有 staging/prod,且**只接受 release tag 作 `iac_ref`**。release tag
 > 推送后 `reconcile-iac-inputs.yml` 自动:diff 上一 release tag → 本 tag,changed files 经
@@ -69,15 +69,16 @@ semver 当**风险信号**:一眼知道这次发版多险、prod 前要不要多
 
 ### 3.2 分层 cadence(为什么不是「一个 tag 部署一切」)
 
-infra2 有天然分层,**不同层有意走不同 cadence**——这不是 drift,是**自举决定的结构**:
+infra2 有天然分层(层级编号沿用 [core.md#层级定义](./core.md#层级定义):**L1 Bootstrap / L2 Platform**),
+**不同层/同层不同面有意走不同 cadence**——这不是 drift,是**自举决定的结构**:
 
 | 层 | 内容 | 部署触发 | 跟什么版本 |
 |----|------|---------|-----------|
-| **L0 Bootstrap** | iac-runner / Vault / Dokploy(部署引擎自己)| **带外自更新**(它就是执行 reconcile 的人,不能等自己的 tag)| merged SHA |
-| **L1 平台服务** | postgres / redis / signoz / alerting / openpanel … | **release tag → reconcile** | release tag |
-| **L2 可观测性配置** | 告警规则 / 看板 / 探针 spec | **当前 merge 即 apply**(目标:折进 tag reconcile,见 §3.4)| merge SHA(目标:tag)|
+| **L1 Bootstrap** | iac-runner / Vault / Dokploy(部署引擎自己)| **带外自更新**(它就是执行 reconcile 的人,不能等自己的 tag)| merged SHA |
+| **L2 Platform · 服务** | postgres / redis / signoz / alerting / openpanel … | **release tag → reconcile** | release tag |
+| **L2 Platform · 配置** | 告警规则 / 看板 / 探针 spec | **当前 merge 即 apply**(目标:折进 tag reconcile,见 §3.4)| merge SHA(目标:tag)|
 
-→ **「最近 tag」是 L1 的权威 live 版本**;L0/L2 的版本错位**必须可见**(§3.5),不静默、也不叫 drift。
+→ **「最近 tag」是 L2 Platform·服务 的权威 live 版本**;L1 Bootstrap 与 L2·配置 的版本错位**必须可见**(§3.5),不静默、也不叫 drift。
 
 ### 3.3 晋升与 soak(promotion)
 
@@ -95,8 +96,8 @@ release tag 同时晋升 staging + prod(同一 tag,promote-not-rebuild)。安全
 
 ### 3.5 各层 running vs tag/main 可见性(目标态)
 
-一条 check 显示 `L0=sha_x | L1=v1.1.10 | L2=sha_y` vs `main` —— 任何版本错位**永远可见**,主动判断「要不要发布」,
-而不是被动追平或靠手查。
+一条 check 显示 `L1-Boot=sha_x | L2-服务=v1.1.10 | L2-配置=sha_y` vs `main` —— 任何版本错位**永远可见**,
+主动判断「要不要发布」,而不是被动追平或靠手查。
 
 ---
 
@@ -119,7 +120,7 @@ prod red lines 由 `deploy_v2` 强制(deny-by-default):`--staging-validated` + `
 
 > **详细参考**: [bootstrap.iac_runner SSOT](./bootstrap.iac_runner.md)
 
-IaC Runner 是 **L0 Bootstrap 层**组件,自动化部署 **L1 Platform 层**服务。
+IaC Runner 是 **L1 Bootstrap 层**组件,自动化部署 **L2 Platform 层**服务(层级编号见 [core.md#层级定义](./core.md#层级定义))。
 
 post-merge 部署被 GitHub Actions `concurrency` 串行化,调 IaC Runner 前先 `/health` preflight(bootstrap drift
 在任何签名 `/deploy` 前先 fail)。Actions 用短签名 `/deploy` 启动、再轮询签名 `/deploy/status`——**绿 workflow =
@@ -133,6 +134,7 @@ IaC Runner 报告了完成的服务 sync 结果,不只是请求被接受**。不
 | `/webhook` | POST | GitHub webhook(change-based sync)|
 | `/deploy` | POST | 版本部署;`wait=true` 为 legacy 直等 |
 | `/deploy/status` | POST | 签名状态轮询,取真实 sync 结果 |
+| `/sync` | POST | legacy 手动同步;默认关闭,由 `ENABLE_LEGACY_SYNC` gate 开启 |
 
 ### 5.2 服务映射规则(fan-out)
 
@@ -175,7 +177,7 @@ IaC Runner 报告了完成的服务 sync 结果,不只是请求被接受**。不
 ### ✅ 推荐
 - staging/prod **只部署 release tag**;prod 从 staging 已验证的**同一 tag** promote(promote-not-rebuild)。
 - 用语义化版本;semver 当风险信号。
-- 平台层「什么是 live」= 最近 release tag;L0/L2 错位走可见性视图(§3.5),不当 drift。
+- 平台层「什么是 live」= 最近 release tag;L1 Bootstrap 与 L2·配置 的错位走可见性视图(§3.5),不当 drift。
 
 ### ⛔ 禁止
 - 禁止部署 untagged commit / branch / sha 到 staging/prod。
