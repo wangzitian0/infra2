@@ -12,7 +12,10 @@ entries:
     description: Repository architecture, layers, environments, variables, and networks.
   core.environments:
     owner: docs/ssot/core.environments.md
-    description: Environment taxonomy, isolation, and naming.
+    description: >-
+      Environment DEFINITIONS — taxonomy, isolation, naming, preview-alias model,
+      telemetry identity, and the deploy_v2 four-axis coordinate contract (§4.7).
+      Deploy TRIGGERS / what-is-live / release model are owned by ops.pipeline.
     proofs:
       - libs/tests/test_deploy_contract.py
       - libs/tests/test_reconcile_iac_inputs.py
@@ -85,10 +88,14 @@ entries:
 
   ops.pipeline:
     owner: docs/ssot/ops.pipeline.md
-    description: CI/CD, GitOps, and deploy pipeline contract.
+    description: >-
+      Delivery contract (single owner) — CI/CD, environment TRIGGER model,
+      tag-driven reconcile, deploy_v2 front door, and the RELEASE model
+      (infra2 = independently-released artifact; tag = the live platform version).
     proofs:
       - libs/tests/test_iac_runner_deploy_result.py
       - libs/tests/test_pipeline_stage_contract.py
+      - libs/tests/test_reconcile_iac_inputs.py
       - libs/tests/test_reconcile_iac_inputs.py
   ops.e2e:
     owner: docs/ssot/ops.e2e-regressions.md

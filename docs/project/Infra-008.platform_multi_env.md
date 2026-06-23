@@ -4,6 +4,9 @@
 **Owner**: Infra  
 **Priority**: P1
 
+> **契约归属 (SSOT)**: 多环境的**触发 / 发布**模型由 [docs/ssot/ops.pipeline.md](../ssot/ops.pipeline.md) 拥有,
+> 环境**定义**由 [core.environments.md](../ssot/core.environments.md) 拥有。本 EPIC 只追踪交付,不重述契约。
+
 ## Goal
 Platform 支持 staging 与 production 并行，优先使用 Dokploy 的 Project/Environment/Service 分层，环境差异通过环境变量配置。
 
