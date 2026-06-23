@@ -291,37 +291,11 @@ python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref
 <a id="manual-deploy-targets"></a>
 ### 4.6 部署目标与触发 (Deploy targets & triggers)
 
-> **触发真理**：`report-branch-main`（main 预览）随 main 合并自动重新部署 —— 它是「永远看到 main 现在长啥样」
-> 的活环境。**staging / prod 只部署 release tag（不可变镜像，不接受 branch/sha）**：staging 和 prod
-> **一模一样**，钉**同一个 tag**（promote-not-rebuild，不是部署 main sha）。release tag 一推送（`v*.*.*`），
-> **平台（iac_pinned）服务**经 `.github/workflows/reconcile-iac-inputs.yml` 自动晋升到 staging+prod（见下）；
-> **app 的 staging/prod** 仍是手动 `deploy_v2 --type {staging,prod} --version-ref vX.Y.Z`。
-> 其余 preview 别名（pr / commit / tag）按需手动起。统一入口是 `tools/deploy_v2.py`（§4.7）。
-> （`report-branch-main` 的自动触发点在 **app 仓库 CI**：app main push → repository_dispatch 调 infra2 的
-> `deploy.yml`；接线为待办。）
-
-下表「入口」列是**示意**（说明用哪个 type/服务）；可运行命令还需 `--iac-ref <ref> --domain <domain>`，
-**prod 另需 `--staging-validated --code-reviewed`**（deploy_v2 对 prod 数据 deny-by-default，缺了直接 fail-closed）。
-
-| 目标 | 触发 | 部署什么 | 入口（示意）| 数据 | 域名 | 生命周期 |
-|------|------|---------|------|------|------|---------|
-| **report-branch-main**（preview）| **自动**（main 合并即发）| main 尖端 | `deploy_v2 --type preview/branch` | 临时 DB | `report-branch-main.<domain>` | 显式 teardown 前 |
-| **其余 preview**（pr/commit/tag）| 手动按需 | PR# / sha / tag | `deploy_v2 --type preview/{pr,commit,tag}` | 临时 DB | `report-{pr-N,commit-sha7,tag-slug}.<domain>` | 显式 teardown 前 |
-| **staging** | **手动**（app）| **release tag**（钉和 prod 同一个）| `deploy_v2 --type staging --version-ref vX.Y.Z` | staging 数据 | `report-staging.<domain>` | 长期（同构 prod）|
-| **prod** | **手动**（app）| **同一个 release tag**（promote-not-rebuild）| `deploy_v2 --type prod --version-ref vX.Y.Z --staging-validated --code-reviewed` | 真实 prod 数据 | `report.<domain>` | 长期 |
-
-> **平台服务**（iac_pinned）无 preview，只有 staging / prod，且**只接受 release tag 作为 `iac_ref`**。
-> **触发模型**：**release tag（`v*.*.*`）推送后**由 `.github/workflows/reconcile-iac-inputs.yml`
-> 自动执行 input-drift reconcile：diff 上一个 release tag → 本 tag，changed files 经
-> `docs/ssot/deploy-dependencies.yaml` fan-out 到受影响的 `iac_pinned`
-> 服务，使用**该 tag** 作为 `iac_ref` 触发 `deploy_v2 -> iac_runner`（staging 与 prod 同一个 tag）。
-> 最终是否重启由 iac_runner/Deployer 的 config-hash gate 决定；hash
-> 未变即 no-op，不浪费 Dokploy 重启资源。
-> `.github/workflows/deploy.yml` 只保留 iac_runner bootstrap/self-update，
-> 不负责普通平台服务部署；手动 `deploy.yml` 仍可用于 operator-triggered
-> pinned reconcile。
-> CI（lint + 单测 + E2E）本身**不**触发 staging/prod 部署；reconcile 是独立的
-> post-merge apply workflow。
+> **部署触发模型已收敛到单一 owner**:见 [ops.pipeline §2「部署目标与触发」](./ops.pipeline.md#2-部署目标与触发-deploy-targets--triggers)
+> + [§3「发布机制」](./ops.pipeline.md#3-发布机制-release-model--infra2-是独立产物)。
+> 一句话:`report-branch-main` 随 main 自动重部署;**staging/prod 只部署 release tag**(staging 与 prod 钉同一 tag,
+> promote-not-rebuild);平台 `iac_pinned` 服务由 `reconcile-iac-inputs.yml` 在 **tag 推送**时晋升。
+> 本节只保留**环境定义**侧的 preview 多别名模型;「什么触发什么」不要在这里重述(那正是它和 ops.pipeline 漂移过的原因)。
 
 **preview 多别名模型**（每个别名 = 一套独立的 Dokploy compose 栈）：
 

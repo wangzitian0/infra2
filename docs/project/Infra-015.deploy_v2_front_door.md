@@ -5,6 +5,10 @@
 **Priority**: P0
 **Root issue**: finance_report#1072 (commit-addressed deploy primitive & delivery pipeline)
 
+> **契约归属 (SSOT)**: 交付 / 触发 / 发布模型由 [docs/ssot/ops.pipeline.md](../ssot/ops.pipeline.md) 拥有;
+> deploy_v2 四轴坐标契约由 [core.environments §4.7](../ssot/core.environments.md) 拥有。
+> **本 EPIC 只追踪「把它建出来」,不重述契约**(重述正是 SSOT 漂移之源)。
+
 ## Goal
 One front door for every deploy in infra2 — app and platform, every environment —
 addressed by a single coordinate and routed to the right backend, with the gates

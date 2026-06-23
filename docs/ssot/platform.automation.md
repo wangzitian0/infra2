@@ -1,7 +1,8 @@
 # Platform Automation SSOT
 
 > **SSOT Key**: `platform.automation`  
-> **核心定义**: Platform 模块的自动化采用 Deployer 模式 + Invoke tasks。
+> **核心定义**: Platform 模块的自动化采用 Deployer 模式 + Invoke tasks（**怎么跑一次部署**的 SOP）。
+> **触发 / 发布 / 什么是 live** 不归这里——由 [ops.pipeline.md](./ops.pipeline.md) 拥有;本文只讲服务 deployer 机制与 SOP。
 
 ---
 
