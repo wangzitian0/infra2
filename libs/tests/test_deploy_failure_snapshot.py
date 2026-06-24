@@ -99,3 +99,45 @@ def test_emit_never_raises_even_if_client_explodes(tmp_path):
     )
     assert snap["compose_id"] == "compose-1"
     assert "dokploy-api-unreachable" in summary.read_text(encoding="utf-8")
+
+
+# --- CR follow-ups (PR #428) ----------------------------------------------------
+
+
+def test_classify_normalizes_status_case():
+    # Dokploy may return capitalized states; classification must not fall through.
+    assert dfs.classify("ERROR", []) == "dokploy-deployment-error"
+    assert (
+        dfs.classify("Running", [{"status": "DONE", "startedAt": "1"}])
+        == "platform-ok-app-failure"
+    )
+    assert (
+        dfs.classify("running", [{"status": "Error", "startedAt": "1"}])
+        == "dokploy-deployment-error"
+    )
+
+
+def test_latest_deployment_falls_back_when_startedat_missing():
+    # No startedAt: must still pick the most recent by createdAt, not the wrong record.
+    deployments = [
+        {"status": "done", "createdAt": "2026-01-01T00:00:00Z", "errorMessage": ""},
+        {
+            "status": "error",
+            "createdAt": "2026-01-02T00:00:00Z",
+            "errorMessage": "newer failed",
+        },
+    ]
+    assert dfs._latest_deployment(deployments)["errorMessage"] == "newer failed"
+
+
+def test_render_markdown_escapes_pipes_and_newlines():
+    snapshot = {
+        "compose_id": "c1",
+        "latest_deployment_error": "boom | with pipe\nand newline",
+        "platform_failure_domain": "dokploy-deployment-error",
+    }
+    md = dfs.render_markdown(snapshot)
+    # the raw pipe/newline must not break the single-row table cell
+    assert "boom \\| with pipe and newline" in md
+    # every table row stays on one physical line (header sep + 3 field rows)
+    assert all(line.count("|") >= 2 for line in md.splitlines() if line.startswith("|"))

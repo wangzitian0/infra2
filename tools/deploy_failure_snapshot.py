@@ -36,16 +36,30 @@ _SNAPSHOT_FIELDS = (
 )
 
 
+def _deployment_timestamp(deployment: dict) -> str:
+    """A sortable timestamp for a Dokploy deployment record.
+
+    Dokploy records vary in which timestamp field they carry, so fall back across
+    the known variants rather than keying on ``startedAt`` alone (which can be
+    absent and would then pick the wrong "latest" record).
+    """
+    for field in ("startedAt", "createdAt", "updatedAt", "finishedAt"):
+        value = deployment.get(field)
+        if value:
+            return str(value)
+    return ""
+
+
 def _latest_deployment(deployments: list[dict]) -> dict:
     if not deployments:
         return {}
-    return sorted(
-        deployments, key=lambda d: str(d.get("startedAt") or ""), reverse=True
-    )[0]
+    return sorted(deployments, key=_deployment_timestamp, reverse=True)[0]
 
 
 def classify(compose_status: str, deployments: list[dict]) -> str:
     """Classify the platform failure domain from compose + deployment state."""
+    # Normalize case: Dokploy may return `Running`/`DONE`/`ERROR` — compare lower.
+    compose_status = str(compose_status or "").lower()
     latest_status = str(_latest_deployment(deployments).get("status") or "").lower()
     if compose_status == "error" or latest_status == "error":
         return "dokploy-deployment-error"
@@ -85,6 +99,21 @@ def build_snapshot(client, compose_id: str) -> dict:
     }
 
 
+def _md_cell(value: object) -> str:
+    """Escape a value for a single Markdown table cell.
+
+    Dokploy error messages can contain ``|`` or newlines, which would otherwise
+    break the table layout in the GitHub step summary.
+    """
+    return (
+        str(value)
+        .replace("\\", "\\\\")
+        .replace("|", "\\|")
+        .replace("\r", " ")
+        .replace("\n", " ")
+    )
+
+
 def render_markdown(snapshot: dict) -> str:
     """Render the snapshot as a GitHub step-summary Markdown table."""
     lines = [
@@ -95,7 +124,7 @@ def render_markdown(snapshot: dict) -> str:
     ]
     for key in _SNAPSHOT_FIELDS:
         if key in snapshot:
-            lines.append(f"| `{key}` | {snapshot[key]} |")
+            lines.append(f"| `{key}` | {_md_cell(snapshot[key])} |")
     return "\n".join(lines) + "\n"
 
 
