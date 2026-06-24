@@ -24,6 +24,7 @@ import time
 from dataclasses import dataclass
 
 from tools.deploy_env_config import env_config, otel_env
+from tools.deploy_failure_snapshot import emit_failure_snapshot
 from tools.openpanel_clients import openpanel_env
 from tools.resolve_deploy_ref import resolve_to_sha
 
@@ -111,7 +112,9 @@ def preflight_vault_token(
     from libs.env import verify_vault_token
 
     env_text = client.get_compose_env(compose_id)
-    if _env_value(env_text, "VAULT_ROLE_ID") and _env_value(env_text, "VAULT_SECRET_ID"):
+    if _env_value(env_text, "VAULT_ROLE_ID") and _env_value(
+        env_text, "VAULT_SECRET_ID"
+    ):
         return  # AppRole auth -> any leftover VAULT_APP_TOKEN is unused; do not gate on it
     token = _env_value(env_text, "VAULT_APP_TOKEN")
     if not token:
@@ -298,14 +301,23 @@ def deploy(
         else set()
     )
     client.update_compose_env(cfg.compose_id, env_vars=env_vars)
-    client.deploy_compose(cfg.compose_id)
-    if wait:
-        wait_for_rollout(client, cfg.compose_id, before_ids, timeout=timeout)
-    # Confirm the effective config advanced to what we pushed (deploy actually took).
-    if verify_config:
-        verify_effective_config_hash(
-            client, cfg.compose_id, config_hash, timeout=timeout
-        )
+    try:
+        client.deploy_compose(cfg.compose_id)
+        if wait:
+            wait_for_rollout(client, cfg.compose_id, before_ids, timeout=timeout)
+        # Confirm the effective config advanced to what we pushed (deploy actually took).
+        if verify_config:
+            verify_effective_config_hash(
+                client, cfg.compose_id, config_hash, timeout=timeout
+            )
+    except Exception:
+        # #768: on a failed rollout/verify, surface the platform-layer state (Dokploy
+        # compose status, latest deployment error, platform-vs-app failure domain) into
+        # the step summary so triage separates a platform failure from an app failure
+        # without SSH. Best-effort — emit_failure_snapshot never raises — then re-raise
+        # the original deploy error unchanged.
+        emit_failure_snapshot(client, cfg.compose_id)
+        raise
 
     return DeployPlan(
         env=env, sha=sha, compose_id=cfg.compose_id, data=data_lane, env_vars=env_vars
@@ -334,11 +346,11 @@ def main(argv: list[str] | None = None) -> int:
     Operational deploys must use ``python -m tools.deploy_v2`` so the full coordinate,
     data-lane red lines, and service routing are enforced before this backend runs.
     """
-    parser = argparse.ArgumentParser(description="internal fixed-compose deploy backend")
-    parser.add_argument("--env", required=True, help="staging | prod (not preview)")
-    parser.add_argument(
-        "--code", required=True, help="main | vX.Y.Z | <sha>"
+    parser = argparse.ArgumentParser(
+        description="internal fixed-compose deploy backend"
     )
+    parser.add_argument("--env", required=True, help="staging | prod (not preview)")
+    parser.add_argument("--code", required=True, help="main | vX.Y.Z | <sha>")
     parser.add_argument(
         "--domain", required=True, help="base domain, e.g. zitian.party"
     )
