@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/ops-checks.yml"
 WATCHDOG = ROOT / "tools/out_of_band_watchdog.py"
 ALERTING_README = ROOT / "platform/12.alerting/README.md"
-ALERTING_SSOT = ROOT / "docs/ssot/ops.alerting.md"
+ALERTING_SSOT = ROOT / "docs/ssot/ops.observability.md"
 
 
 def _load_watchdog():

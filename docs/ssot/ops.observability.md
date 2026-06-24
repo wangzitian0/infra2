@@ -150,7 +150,7 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 | L1 Bootstrap | 1Password Connect | `/health` not active or sync not active | P0 | Live (`op-connect-http`) |
 | L1 Bootstrap | Vault | sealed / unreachable / token validation fails | P0 | Live probe + vault audit |
 | L1 Bootstrap | IaC Runner | `/health` fails before deploy webhook | P1 | Live (`iac-runner-http`) |
-| L1 Bootstrap | Dokploy | control-plane API/UI unreachable or deploy webhooks fail | P1 | Live probe |
+| L1 Bootstrap | Dokploy | deployment control-plane API/UI unreachable or deploy webhooks fail; app health alerts remain app-owned | P1 | Live probe |
 | Cross-cutting | Docker container health | any container `unhealthy`/`starting`/`Restarting` outside a deploy window | P0/P1 | Out-of-band watchdog SSH |
 | L2 Platform | platform Postgres | TCP readiness fails / restart loop | P0 | Live probe |
 | L2 Platform | platform Redis | TCP readiness fails / restart loop | P1 | Live probe |
@@ -212,7 +212,7 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 ### SOP-003: 接入飞书 App Bot 通道
 开放平台启用机器人 + 发布 `im:message` 权限 + 拿 `chat_id`,写 1Password root vars(`ALERT_DELIVERY_MODE=feishu_app`、`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_CHAT_ID`)→ setup-approle → deploy_v2 → `alerting.test-feishu`。
 
-### SOP-004 / 004B / 004C: 应用 OTEL 错误告警 + finance_report 告警目录 config-as-code(#373 / #1106)
+### SOP-004 / SOP-004B / SOP-004C: 应用 OTEL 错误告警 + finance_report 告警目录 config-as-code(#373 / #1106)
 1. bridge 健康 + SigNoz API key + Feishu channel(SOP-002/004 步骤)。
 2. 应用定义(幂等):
    ```bash
@@ -226,7 +226,7 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 > **注**:`apply_alerts` 现为声明式 reconcile(upsert + 默认只 log 的 prune),见 [ops.pipeline.md](./ops.pipeline.md)。
 
 ### SOP-005: Cloudflare 带外 watchdog(主,边缘 30min)
-活在 [`cloudflare/infra-watchdog`](../../cloudflare/infra-watchdog/),**直发 Feishu**(不经它要验证的 bridge)。归属按信号记于 [`watchdog-signals.yaml`](watchdog-signals.yaml)。默认覆盖:prod 公网路由 `cloud/vault/minio/sso/signoz` + report web/api;staging 选定路由;prod/staging probe-runner heartbeat 新鲜度。Worker 有状态:首现/指纹变/`WATCHDOG_RENOTIFY_SECONDS`/恢复时发,成功静默;dedupe 按稳定失败身份 + failure_domain;config-preflight 失败单独报(不冒充路由故障);投递失败发 `watchdog.delivery.failure` 结构化事件不静默。
+活在 [`cloudflare/infra-watchdog`](../../cloudflare/infra-watchdog/),**直发 Feishu**(不经它要验证的 bridge)。归属按信号记于 [`watchdog-signals.yaml`](watchdog-signals.yaml)。默认覆盖:prod 公网路由 `cloud/vault/minio/sso/signoz` + report web/api;staging 选定路由;prod/staging probe-runner heartbeat 新鲜度。Worker 有状态:首现/指纹变/`WATCHDOG_RENOTIFY_SECONDS`/恢复时发,成功静默;dedupe keys on **stable failure identity plus failure domain**(稳定失败身份 + 失败域);config-preflight 失败单独报(不冒充路由故障);投递失败发 `watchdog.delivery.failure` 结构化事件不静默。
 - secrets:webhook 模式 `FEISHU_WEBHOOK_URL`;app 模式 `FEISHU_APP_SECRET`;两者 `HEARTBEAT_TOKEN`、`WATCHDOG_STATUS_TOKEN`(源 1Password `Infra2/bootstrap/cloudflare-worker`)。
 - KV `WATCHDOG_STATE`;vars `WATCHDOG_ENVIRONMENTS=production,staging`、`WATCHDOG_RENOTIFY_SECONDS=7200` 等。
 - 部署:`cd cloudflare/infra-watchdog && wrangler kv namespace create WATCHDOG_STATE && wrangler secret put ... && wrangler deploy`;再配 probe runner heartbeat:`env.set INFRA_PROBE_HEARTBEAT_URL=.../heartbeat` + `INFRA_PROBE_HEARTBEAT_TOKEN`(prod+staging)→ deploy_v2。
@@ -239,7 +239,7 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 配在 `platform/12.alerting/compose.yaml` 的 `INFRA_PROBE_SPECS`。循环 `INFRA_PROBE_INTERVAL_SECONDS=60`(快检);通知分离:`FAILURE_THRESHOLD=3`、`RECOVERY_THRESHOLD=2`、`RENOTIFY_SECONDS=1800`。优先 Docker 网络目标(公网路由归 Cloudflare watchdog;`error code: 1010` 归类 `probe-client-blocked`)。spec 格式 `name|kind|target|expected|severity|timeout|depends_on`;kind=http/tcp/command。`depends_on` 链命中失败 root → 级联抑制(环路 fail-closed,见 `tools/infra_probe_runner.py`)。dry-run:`INFRA_PROBE_DRY_RUN=1 uv run python tools/infra_probe_runner.py --once --json`。
 > ⚠️ **`alert-delivery-canary` 现为 6h 合成告警 = 错位(报告当告警)**;目标态见 §6 天级日报(#425 T3)。
 
-### SOP-007: Dokploy 动态 route canary(小时级)
+### SOP-007: Dokploy route canary(动态,小时级)
 `tools/dokploy_route_canary.py` 部署一个最小双服务 compose(同 app preview 路由形状:一个公网 web + 一个高优先 `/api`),失败归类到 `dokploy-{canary-configuration,control-plane,compose-source-type,worker-or-deployment-record}` / `docker-runtime` / `traefik-public-route`。`ops-checks.yml` 每小时跑(stable host/compose);缺配置 = fail-closed `dokploy-canary-configuration`(不当跳过成功)。app staging/preview gate 应把 canary 失败当平台失败,先于 app readiness。
 
 ### SOP-008: 账本冷归档 + 周报

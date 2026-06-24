@@ -342,7 +342,7 @@ def test_alerting_platform_service_contract_files_exist() -> None:
 
 def test_alerting_ssot_catalog_includes_dokploy_control_plane() -> None:
     """Infra-007 alerting: Dokploy control-plane alerts are explicitly cataloged."""
-    ssot = (ROOT / "docs/ssot/ops.alerting.md").read_text(encoding="utf-8")
+    ssot = (ROOT / "docs/ssot/ops.observability.md").read_text(encoding="utf-8")
 
     assert "Dokploy" in ssot
     assert "deployment control-plane" in ssot
