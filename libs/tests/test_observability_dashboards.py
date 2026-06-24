@@ -707,7 +707,7 @@ def test_apply_observability_workflow_exposes_canary_mode() -> None:
 
 def test_ssot_documents_alert_and_dashboard_apply_path() -> None:
     """#373: ops docs document how the alert + dashboard are applied."""
-    alerting = (ROOT / "docs/ssot/ops.alerting.md").read_text(encoding="utf-8")
+    alerting = (ROOT / "docs/ssot/ops.observability.md").read_text(encoding="utf-8")
     observability = (ROOT / "docs/ssot/ops.observability.md").read_text(
         encoding="utf-8"
     )

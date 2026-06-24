@@ -93,9 +93,7 @@
 | [ops.recovery.md](./ops.recovery.md) | `ops.recovery` | 故障恢复、Vault Unseal |
 | [ops.storage.md](./ops.storage.md) | `ops.storage` | 备份策略、R2 同步 |
 | [ops.backup-inventory.yaml](./ops.backup-inventory.yaml) | `ops.backup_inventory` | Persistent data backup coverage inventory |
-| [ops.observability.md](./ops.observability.md) | `ops.obs` | SigNoz、日志、监控 |
-| [ops.alerting.md](./ops.alerting.md) | `ops.alerting` | 告警规则、值班 |
-| [ops.availability-ledger.md](./ops.availability-ledger.md) | `ops.availability_ledger` | 可用率账本、正向证明、R2 冷归档 |
+| [ops.observability.md](./ops.observability.md) | `ops.obs` | 可观测性单一 owner：采集(SigNoz/日志/链路)+ 告警(规则/分级/watchdog)+ 报告(可用率账本)+ 时间尺度分层 |
 | [watchdog-signals.yaml](./watchdog-signals.yaml) | `watchdog.signals` | Active watchdog signal inventory and ownership |
 
 ---

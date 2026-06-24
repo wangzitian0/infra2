@@ -154,7 +154,7 @@ def test_worker_escalates_to_email_when_feishu_delivery_fails() -> None:
 def test_cloudflare_watchdog_docs_include_deploy_and_secret_contract() -> None:
     """Infra-011.2: setup is documented without committing credentials."""
     readme = README.read_text(encoding="utf-8")
-    ssot = (ROOT / "docs/ssot/ops.alerting.md").read_text(encoding="utf-8")
+    ssot = (ROOT / "docs/ssot/ops.observability.md").read_text(encoding="utf-8")
 
     assert "wrangler secret put FEISHU_WEBHOOK_URL" in readme
     assert "wrangler secret put FEISHU_APP_SECRET" in readme
