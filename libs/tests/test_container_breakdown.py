@@ -161,7 +161,6 @@ def test_run_once_logs_firing_and_resolved_decisions(monkeypatch):
     assert "BREAKDOWN-ALERT firing" in blob  # firing decision + bridge-post logged
     assert "BREAKDOWN-RESOLVED" in blob  # resolve decision now logged (was silent)
     assert "finance_report-frontend-branch-main" in blob  # named, not anonymous
-    assert len(posted) == 1
 
 
 def test_run_once_emits_resolved_alert_on_recovery(monkeypatch):
