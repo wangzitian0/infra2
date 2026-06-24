@@ -130,6 +130,7 @@ def test_run_once_respects_renotify_window(monkeypatch):
     assert w.run_once(client=None, log_tail=25, last_alerted=last, renotify=1800) == 1
     # second sweep within window is suppressed
     assert w.run_once(client=None, log_tail=25, last_alerted=last, renotify=1800) == 0
+    assert len(posted) == 1  # only one POST across both sweeps (renotify contract)
 
 
 def test_run_once_logs_firing_and_resolved_decisions(monkeypatch):

@@ -144,7 +144,7 @@ def run_once(
             last_alerted[b.container] = (now, b)
         _post_alert(build_breakdown_alert_payload(fresh))
         logger.warning(
-            "BREAKDOWN-ALERT firing count=%d -> bridge: %s",
+            "BREAKDOWN-ALERT firing count=%d -> posting to bridge: %s",
             len(fresh),
             ",".join(sorted(b.container for b in fresh)),
         )
@@ -159,7 +159,7 @@ def run_once(
         last_alerted.pop(name, None)
     if recovered:
         logger.warning(
-            "BREAKDOWN-RESOLVED count=%d -> bridge: %s",
+            "BREAKDOWN-RESOLVED count=%d -> posting to bridge: %s",
             len(recovered),
             ",".join(sorted(rec.container for rec in recovered)),
         )
