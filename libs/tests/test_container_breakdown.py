@@ -130,6 +130,35 @@ def test_run_once_respects_renotify_window(monkeypatch):
     assert w.run_once(client=None, log_tail=25, last_alerted=last, renotify=1800) == 1
     # second sweep within window is suppressed
     assert w.run_once(client=None, log_tail=25, last_alerted=last, renotify=1800) == 0
+
+
+def test_run_once_logs_firing_and_resolved_decisions(monkeypatch, caplog):
+    """The watcher must log WHICH container it fired/resolved on (the 07:33 case: a brief
+    fire->resolve was only attributable by forensic IP->container reconstruction). Firing was
+    already logged; resolve + the bridge-post were not."""
+    import tools.container_breakdown_watch as w
+
+    bd = Breakdown(
+        container="finance_report-frontend-branch-main",
+        state="unhealthy",
+        reason="r",
+        detail="d",
+    )
+    monkeypatch.setattr(w, "_post_alert", lambda payload: None)
+    last: dict = {}
+
+    monkeypatch.setattr(w, "sweep", lambda client, tail: [bd])  # broken -> fires
+    with caplog.at_level("WARNING"):
+        w.run_once(client=None, log_tail=25, last_alerted=last, renotify=1800)
+    assert "BREAKDOWN-ALERT firing" in caplog.text
+    assert "finance_report-frontend-branch-main" in caplog.text
+
+    caplog.clear()
+    monkeypatch.setattr(w, "sweep", lambda client, tail: [])  # recovered -> resolves
+    with caplog.at_level("WARNING"):
+        w.run_once(client=None, log_tail=25, last_alerted=last, renotify=1800)
+    assert "BREAKDOWN-RESOLVED" in caplog.text
+    assert "finance_report-frontend-branch-main" in caplog.text
     assert len(posted) == 1
 
 

@@ -95,6 +95,16 @@ class AlertBridgeHandler(BaseHTTPRequestHandler):
             self._json(502, {"status": "delivery_failed", "error": str(exc)})
             return
 
+        # Record WHAT was delivered, not just that a POST arrived — so "what did the bridge
+        # forward to Feishu at <time>?" is one grep, not a forensic dig (the 07:33 case).
+        labels = payload.get("commonLabels", {}) if isinstance(payload, dict) else {}
+        print(
+            f"alert-bridge delivered status={payload.get('status', '?')} "
+            f"alertname={labels.get('alertname', '?')} "
+            f"severity={labels.get('severity', '?')} "
+            f"alerts={len(payload.get('alerts', []) or [])}",
+            flush=True,
+        )
         self._json(202, {"status": "accepted", "feishu": response})
 
     def log_message(self, fmt: str, *args: Any) -> None:

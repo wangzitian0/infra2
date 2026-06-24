@@ -46,6 +46,11 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
 )
 logger = logging.getLogger("container-breakdown-watch")
+# httpx/httpcore log every 60s Docker-socket poll at INFO ("GET /containers/json 200"),
+# which drowns the actual BREAKDOWN decisions in the container log (the reason a 07:33-style
+# "what did it alert on?" needed a forensic dig). Keep only their warnings.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 DEFAULT_INTERVAL = 60
 DEFAULT_RENOTIFY = 1800
@@ -138,6 +143,11 @@ def run_once(
             logger.warning("BREAKDOWN %s (%s): %s", b.container, b.state, b.reason)
             last_alerted[b.container] = (now, b)
         _post_alert(build_breakdown_alert_payload(fresh))
+        logger.warning(
+            "BREAKDOWN-ALERT firing count=%d -> bridge: %s",
+            len(fresh),
+            ",".join(sorted(b.container for b in fresh)),
+        )
     # Recovered = previously-alerted containers no longer broken. Resolve them with the
     # ORIGINAL breakdown (same state, hence same label set) so the resolved alert
     # matches the firing instance and the page actually clears — a stub state like
@@ -148,6 +158,11 @@ def run_once(
     for name in [n for n in last_alerted if n not in live]:
         last_alerted.pop(name, None)
     if recovered:
+        logger.warning(
+            "BREAKDOWN-RESOLVED count=%d -> bridge: %s",
+            len(recovered),
+            ",".join(sorted(rec.container for rec in recovered)),
+        )
         _post_alert(build_breakdown_alert_payload(recovered, firing=False))
     return len(fresh)
 
