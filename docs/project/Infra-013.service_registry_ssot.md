@@ -50,6 +50,11 @@ the service class, then ride along the generated skeleton — not scattered in y
   - Fix `platform/23.prefect/compose.yaml:114` (missing suffix → prod Authentik).
   - Lint: any `platform-<svc>` compose reference that should carry `${ENV_SUFFIX}`
     but does not → CI fails.
+  - [x] First slice landed: `INFRA_PROBE_SPECS` env-suffix is now registry-derived —
+    `libs/tests/test_service_registry_downstream.py` fails CI if a `prod_only` service's
+    probe carries `${ENV_SUFFIX}` (the documented permanent-false-positive trap) or a
+    per-env service's probe omits it. (prefect compose fix + the general compose-ref lint
+    still pending.)
 - [ ] **P3 — derive skeletons for backup / vault-refresh / DNS** (PR 5)
   - Generate the service-list skeleton; keep hand-authored external annotations.
 - [ ] **P3 — de-dup ENV_SUFFIX logic** (PR 6)
@@ -74,10 +79,12 @@ the service class, then ride along the generated skeleton — not scattered in y
 | Date | Change |
 |------|--------|
 | 2026-06-14 | Initialized project; PR 1 delivers the base library + ALL_SERVICES audit |
+| 2026-06-24 | P2 first slice: `probe_container_bases()` accessor + INFRA_PROBE_SPECS env-suffix lint vs registry `prod_only`. Reframed P1 for probe specs: they carry irreducible per-probe truth (health paths, expected codes, severities, cascade deps, command round-trips), so the registry is made the ENFORCED source for the shared `prod_only`/suffix fact rather than generating the file (matches the Out-of-scope note). |
 
 ## Verification ("The Proof")
 - [x] `pytest libs/tests/test_service_registry.py` — registry derives, ALL_SERVICES matches
 - [ ] `pytest libs/tests/test_watchdog_consistency_audit.py` stays green per PR
+- [x] `pytest libs/tests/test_service_registry_downstream.py` — INFRA_PROBE_SPECS env-suffix == registry `prod_only` (first fail-closed audit binding a downstream list to the registry)
 - [ ] Each later PR adds a fail-closed audit proving its list == registry-derived
 
 ## References
