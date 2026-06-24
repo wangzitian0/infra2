@@ -1,17 +1,22 @@
 # Infra2 SSOT manifest
 #
-# Machine-readable registry for topic ownership and proof anchors.
-# The README remains the human navigation index; this file is the lintable
-# contract used by tests so SSOT entries, project references, and code-owned
-# proof paths do not drift silently.
+# Machine-readable registry for topic ownership and proof anchors. This is the SINGLE source
+# for the human SSOT index too: docs/ssot/README.md's topic tables are GENERATED from the
+# `summary` fields below (tools/gen_ssot_index.py; test_ssot_index_generated_matches_committed
+# locks generated == committed). Edit a topic's index text here, not in README.
+#
+# `summary` is the short human index line (the README "关键内容" column). `description` is the
+# longer machine/contract description. Category/grouping is derived from the key prefix.
 
 version: 1
 entries:
   core:
     owner: docs/ssot/core.md
+    summary: 架构 + 目录 + 环境 + 变量 + 网络
     description: Repository architecture, layers, environments, variables, and networks.
   core.environments:
     owner: docs/ssot/core.environments.md
+    summary: 环境分类、隔离与命名
     description: >-
       Environment DEFINITIONS — taxonomy, isolation, naming, preview-alias model,
       telemetry identity, and the deploy_v2 four-axis coordinate contract (§4.7).
@@ -22,38 +27,47 @@ entries:
 
   bootstrap.nodep:
     owner: docs/ssot/bootstrap.nodep.md
+    summary: Bootstrap 组件（Dokploy、1Password、Vault）
     description: Bootstrap components including Dokploy, 1Password, and Vault.
   bootstrap.vars_and_secrets:
     owner: docs/ssot/bootstrap.vars_and_secrets.md
+    summary: 变量与密钥管理、.env 结构
     description: Variable and secret source-of-truth contract.
   bootstrap.dns_and_cert:
     owner: docs/ssot/bootstrap.dns_and_cert.md
+    summary: DNS 与证书自动化
     description: DNS and certificate automation.
   bootstrap.iac_runner:
     owner: docs/ssot/bootstrap.iac_runner.md
+    summary: IaC Runner GitOps 自动化、Vault-Agent 模式
     description: IaC Runner GitOps automation and Vault-Agent pattern.
     proofs:
       - libs/tests/test_iac_runner_deploy_result.py
 
   platform.domain:
     owner: docs/ssot/platform.domain.md
+    summary: 域名架构、Traefik 路由、Dokploy 配置规范
     description: Domain architecture, Traefik routing, and Dokploy routing rules.
     proofs:
       - libs/tests/test_domain_routing_policy.py
   platform.sso:
     owner: docs/ssot/platform.sso.md
+    summary: Authentik SSO
     description: Authentik SSO ownership and integration contract.
   platform.automation:
     owner: docs/ssot/platform.automation.md
+    summary: Deployer 自动化
     description: Deployer automation and CLI conventions.
     proofs:
       - libs/tests/test_deployer.py
       - libs/tests/test_dokploy.py
   platform.ai:
     owner: docs/ssot/platform.ai.md
+    summary: AI 接入、OpenRouter
     description: AI provider and OpenRouter integration.
   platform.openpanel:
     owner: docs/ssot/platform.openpanel.md
+    summary: OpenPanel 产品分析部署
     description: OpenPanel analytics deployment and integration contract.
     proofs:
       - platform/24.openpanel/compose.yaml
@@ -61,33 +75,42 @@ entries:
 
   db.overview:
     owner: docs/ssot/db.overview.md
+    summary: 数据库总览、Vault 机制
     description: Database overview and Vault integration.
   db.vault:
     owner: docs/ssot/db.vault-integration.md
+    summary: Per-App Token、故障排查
     description: Per-app Vault token database integration.
   db.platform_pg:
     owner: docs/ssot/db.platform_pg.md
+    summary: Platform PG (L1)
     description: Platform PostgreSQL.
   db.business_pg:
     owner: docs/ssot/db.business_pg.md
+    summary: Business PG (规划中)
     description: Business PostgreSQL planning.
   db.redis:
     owner: docs/ssot/db.redis.md
+    summary: Redis 缓存
     description: Redis cache layer.
   db.clickhouse:
     owner: docs/ssot/db.clickhouse.md
+    summary: ClickHouse (SigNoz Storage)
     description: ClickHouse storage for observability and analytics.
   db.arangodb:
     owner: docs/ssot/db.arangodb.md
+    summary: ArangoDB Graph (规划中)
     description: Planned graph database layer.
   vault.self_refresh_inventory:
     owner: docs/ssot/vault-self-refresh-inventory.yaml
+    summary: Vault app-token self-refresh audit inventory
     description: Vault app-token self-refresh audit inventory.
     proofs:
       - libs/tests/test_vault_self_refresh_audit.py
 
   ops.pipeline:
     owner: docs/ssot/ops.pipeline.md
+    summary: CI/CD 流程、GitOps
     description: >-
       Delivery contract (single owner) — CI/CD, environment TRIGGER model,
       tag-driven reconcile, deploy_v2 front door, and the RELEASE model
@@ -98,20 +121,25 @@ entries:
       - libs/tests/test_reconcile_iac_inputs.py
   ops.e2e:
     owner: docs/ssot/ops.e2e-regressions.md
+    summary: 部署验证、E2E 测试
     description: Deployment verification and E2E regression strategy.
   ops.recovery:
     owner: docs/ssot/ops.recovery.md
+    summary: 故障恢复、Vault Unseal
     description: Recovery, Vault unseal, and incident operations.
   ops.storage:
     owner: docs/ssot/ops.storage.md
+    summary: 备份策略、R2 同步
     description: Storage and R2 backup policy.
   ops.backup_inventory:
     owner: docs/ssot/ops.backup-inventory.yaml
+    summary: Persistent data backup coverage inventory
     description: Persistent data backup coverage inventory.
     proofs:
       - libs/tests/test_backup_verification.py
   ops.obs:
     owner: docs/ssot/ops.observability.md
+    summary: 可观测性单一 owner：采集(SigNoz/日志/链路)+ 告警(规则/分级/watchdog)+ 报告(可用率账本)+ 时间尺度分层
     description: >-
       Observability (single owner) — telemetry collection (SigNoz/logs/traces),
       alerting (rules, severity, watchdog routing, on-call), reporting (availability
@@ -126,6 +154,7 @@ entries:
       - libs/tests/test_observability_dashboards.py
   watchdog.signals:
     owner: docs/ssot/watchdog-signals.yaml
+    summary: Active watchdog signal inventory and ownership
     description: Active watchdog signal inventory and ownership.
     proofs:
       - libs/tests/test_watchdog_consistency_audit.py
