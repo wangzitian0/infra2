@@ -4,6 +4,11 @@ services:
     image: hashicorp/vault:1.15
     container_name: iac-runner-vault-agent
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
     entrypoint:
       - sh
       - -c
@@ -62,6 +67,11 @@ services:
     image: bootstrap-iac_runner-bkewyn-iac-runner:${GIT_SHA:-latest}
     container_name: iac-runner
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
     depends_on:
       - vault-agent
     entrypoint:

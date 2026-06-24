@@ -90,6 +90,18 @@ def test_critical_bootstrap_services_have_health_restart_logging_and_pinned_imag
                 assert expected_part in healthcheck
 
 
+def test_iac_runner_services_have_log_rotation():
+    """L0 iac-runner was the one compose missing log rotation -> unbounded json-file growth.
+    Lock json-file + max-size + max-file on both its services. (It builds from source with a
+    ${GIT_SHA} image, so it does not fit the pinned-image critical-services test above.)"""
+    compose = _compose("bootstrap/06.iac_runner/compose.yaml")
+    for name in ("vault-agent", "iac-runner"):
+        logging = compose["services"][name].get("logging", {})
+        assert logging.get("driver") == "json-file", name
+        assert logging.get("options", {}).get("max-size"), name
+        assert logging.get("options", {}).get("max-file"), name
+
+
 def test_1password_deploy_initializes_authenticated_connect_sync() -> None:
     """Infra-011.2: Connect deploy must not stop at unauthenticated /health."""
     tasks = (ROOT / "bootstrap/04.1password/tasks.py").read_text(encoding="utf-8")

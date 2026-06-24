@@ -130,7 +130,38 @@ def test_run_once_respects_renotify_window(monkeypatch):
     assert w.run_once(client=None, log_tail=25, last_alerted=last, renotify=1800) == 1
     # second sweep within window is suppressed
     assert w.run_once(client=None, log_tail=25, last_alerted=last, renotify=1800) == 0
-    assert len(posted) == 1
+    assert len(posted) == 1  # only one POST across both sweeps (renotify contract)
+
+
+def test_run_once_logs_firing_and_resolved_decisions(monkeypatch):
+    """The watcher must log WHICH container it fired/resolved on (the 07:33 case: a brief
+    fire->resolve was only attributable by forensic IP->container reconstruction). Firing was
+    already logged; resolve + the bridge-post were not. Capture logger.warning directly (the
+    module calls logging.basicConfig, so caplog is unreliable here)."""
+    import tools.container_breakdown_watch as w
+
+    bd = Breakdown(
+        container="finance_report-frontend-branch-main",
+        state="unhealthy",
+        reason="r",
+        detail="d",
+    )
+    monkeypatch.setattr(w, "_post_alert", lambda payload: None)
+    logs: list[str] = []
+    monkeypatch.setattr(
+        w.logger, "warning", lambda msg, *a: logs.append(msg % a if a else msg)
+    )
+    last: dict = {}
+
+    monkeypatch.setattr(w, "sweep", lambda client, tail: [bd])  # broken -> fires
+    w.run_once(client=None, log_tail=25, last_alerted=last, renotify=1800)
+    monkeypatch.setattr(w, "sweep", lambda client, tail: [])  # recovered -> resolves
+    w.run_once(client=None, log_tail=25, last_alerted=last, renotify=1800)
+
+    blob = "\n".join(logs)
+    assert "BREAKDOWN-ALERT firing" in blob  # firing decision + bridge-post logged
+    assert "BREAKDOWN-RESOLVED" in blob  # resolve decision now logged (was silent)
+    assert "finance_report-frontend-branch-main" in blob  # named, not anonymous
 
 
 def test_run_once_emits_resolved_alert_on_recovery(monkeypatch):
