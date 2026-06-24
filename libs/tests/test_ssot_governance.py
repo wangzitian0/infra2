@@ -164,8 +164,8 @@ def test_code_owned_ssot_entries_have_test_or_code_proofs() -> None:
         "platform.automation",
         "platform.domain",
         "platform.openpanel",
-        "ops.alerting",
-        "ops.availability_ledger",
+        # ops.alerting + ops.availability_ledger folded into ops.obs (single owner).
+        "ops.obs",
         "ops.backup_inventory",
         "ops.pipeline",
         "vault.self_refresh_inventory",

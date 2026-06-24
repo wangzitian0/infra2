@@ -112,20 +112,18 @@ entries:
       - libs/tests/test_backup_verification.py
   ops.obs:
     owner: docs/ssot/ops.observability.md
-    description: SigNoz, logs, traces, and monitoring.
-  ops.alerting:
-    owner: docs/ssot/ops.alerting.md
-    description: Alerting rules, watchdog routing, and on-call signals.
+    description: >-
+      Observability (single owner) — telemetry collection (SigNoz/logs/traces),
+      alerting (rules, severity, watchdog routing, on-call), reporting (availability
+      ledger / positive proof), and the cadence-tier model (minute/hour/day/month;
+      alert vs report). Absorbs the former ops.alerting and ops.availability_ledger.
     proofs:
       - libs/tests/test_alerting.py
       - libs/tests/test_cloudflare_watchdog.py
       - libs/tests/test_out_of_band_watchdog.py
       - libs/tests/test_watchdog_consistency_audit.py
-  ops.availability_ledger:
-    owner: docs/ssot/ops.availability-ledger.md
-    description: Availability ledger, positive proof, and R2 cold archive.
-    proofs:
       - libs/tests/test_availability_ledger.py
+      - libs/tests/test_observability_dashboards.py
   watchdog.signals:
     owner: docs/ssot/watchdog-signals.yaml
     description: Active watchdog signal inventory and ownership.
