@@ -105,6 +105,20 @@ def subdomains() -> dict[str, str]:
     }
 
 
+def probe_container_bases() -> dict[str, ServiceMeta]:
+    """Compose container base name (``{layer}-{service|service_name}``, BEFORE any
+    ``${ENV_SUFFIX}``) -> ServiceMeta, so a probe / route / DNS target host can be resolved
+    back to the registry instead of trusting a hand-copied parallel list. Both ``service``
+    and ``service_name`` map (multi-service composes name the container after service_name).
+    """
+    bases: dict[str, ServiceMeta] = {}
+    for meta in service_attrs().values():
+        for name in (meta.service, meta.service_name):
+            if name:
+                bases[f"{meta.layer}-{name}"] = meta
+    return bases
+
+
 def _class_attr(tree: ast.Module, attr_name: str) -> str | int | bool | None:
     """Return the literal value of the Deployer subclass's class attribute.
 
