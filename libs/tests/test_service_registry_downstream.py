@@ -57,7 +57,6 @@ def test_infra_probe_specs_env_suffix_matches_registry_prod_only() -> None:
     rows = _probe_spec_lines()
     assert rows, "INFRA_PROBE_SPECS block not found / empty (parser drift?)"
 
-    bases = service_registry.probe_container_bases()
     problems: list[str] = []
     checked = 0
     for row in rows:
@@ -66,7 +65,9 @@ def test_infra_probe_specs_env_suffix_matches_registry_prod_only() -> None:
         if kind == "command":
             continue  # round-trips/canaries don't target a single registry container
         host = _target_host(kind, target)
-        meta = bases.get(host.replace(_SUFFIX, ""))
+        # resolve_container_host handles sub-container names (signoz-otel-collector ->
+        # signoz) via longest -prefix, so the enforcement isn't silently skipped for them.
+        meta = service_registry.resolve_container_host(host)
         if meta is None:
             continue  # bootstrap svc (dokploy/vault/...) — outside the platform registry scan
         checked += 1

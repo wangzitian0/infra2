@@ -106,10 +106,10 @@ def subdomains() -> dict[str, str]:
 
 
 def probe_container_bases() -> dict[str, ServiceMeta]:
-    """Compose container base name (``{layer}-{service|service_name}``, BEFORE any
-    ``${ENV_SUFFIX}``) -> ServiceMeta, so a probe / route / DNS target host can be resolved
-    back to the registry instead of trusting a hand-copied parallel list. Both ``service``
-    and ``service_name`` map (multi-service composes name the container after service_name).
+    """Exact compose container base name (``{layer}-{service|service_name}``, BEFORE any
+    ``${ENV_SUFFIX}``) -> ServiceMeta. Both ``service`` and ``service_name`` map. This is the
+    EXACT-match index; to resolve a real probe/route/DNS host (which may be a longer
+    sub-container name) use :func:`resolve_container_host`, not a bare ``.get`` on this dict.
     """
     bases: dict[str, ServiceMeta] = {}
     for meta in service_attrs().values():
@@ -117,6 +117,26 @@ def probe_container_bases() -> dict[str, ServiceMeta]:
             if name:
                 bases[f"{meta.layer}-{name}"] = meta
     return bases
+
+
+def resolve_container_host(host: str) -> ServiceMeta | None:
+    """Resolve a compose container hostname (with or without ``${ENV_SUFFIX}``) to its
+    ServiceMeta, so a probe / route / DNS target can be bound back to the registry.
+
+    Tries an exact base match first, then the longest registry base that is a ``-``-delimited
+    prefix — so multi-container sub-services (``platform-signoz-otel-collector``,
+    ``platform-openpanel-api``, ``platform-authentik-server``) resolve to their PARENT service's
+    deploy facts, which they share (same compose, same env, same ``prod_only``). The ``-``
+    boundary prevents ``platform-redis`` from spuriously matching ``platform-redisX``. Returns
+    None for hosts outside the platform/finance_report registry scan (e.g. bootstrap dokploy /
+    vault) so callers can knowingly skip them rather than mis-resolve.
+    """
+    base = host.replace("${ENV_SUFFIX}", "")
+    bases = probe_container_bases()
+    if base in bases:
+        return bases[base]
+    candidates = [name for name in bases if base.startswith(f"{name}-")]
+    return bases[max(candidates, key=len)] if candidates else None
 
 
 def _class_attr(tree: ast.Module, attr_name: str) -> str | int | bool | None:
