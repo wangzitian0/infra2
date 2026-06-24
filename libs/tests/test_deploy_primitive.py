@@ -285,7 +285,9 @@ def test_preflight_vault_token_skips_for_approle_service(monkeypatch):
     client = FakeDokploy(
         env_str="VAULT_ROLE_ID=role-x\nVAULT_SECRET_ID=secret-y\nVAULT_APP_TOKEN=hvs.stale"
     )
-    dp.preflight_vault_token(client, "cmp", "zitian.party")  # must not raise / not call vault
+    dp.preflight_vault_token(
+        client, "cmp", "zitian.party"
+    )  # must not raise / not call vault
 
 
 def test_preflight_vault_token_raises_on_expiring_token(monkeypatch):
@@ -400,3 +402,27 @@ def test_prod_deploy_injects_openpanel_client_id_normalizing_prod_alias():
     _, env = client.updated[0]
     assert env["OPENPANEL_CLIENT_ID"] == OPENPANEL_CLIENTS["production"]
     assert env["OPENPANEL_ENVIRONMENT"] == "production"
+
+
+def test_deploy_emits_platform_snapshot_on_failure(monkeypatch):
+    """#768: a failed deploy emits the platform-health snapshot (keyed on the resolved
+    compose id) and re-raises the original error unchanged."""
+    emitted: list[str] = []
+    monkeypatch.setattr(
+        dp,
+        "emit_failure_snapshot",
+        lambda client, compose_id: emitted.append(compose_id),
+    )
+
+    class _Boom(FakeDokploy):
+        def deploy_compose(self, compose_id):
+            raise RuntimeError("dokploy 500")
+
+    with pytest.raises(RuntimeError, match="dokploy 500"):
+        dp.deploy(
+            "staging", FULL_SHA, domain="zitian.party", client=_Boom(), wait=False
+        )
+
+    # snapshot emitted exactly once, keyed on the staging compose id resolved by env_config
+    assert len(emitted) == 1
+    assert emitted[0]
