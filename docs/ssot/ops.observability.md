@@ -4,7 +4,7 @@
 > **核心定义**: infra2 可观测性的**唯一 owner**——遥测采集(logs/metrics/traces)、**告警**(规则/分级/飞书路由)、
 > **报告/可用率账本**(正向证明),以及把这三者统一起来的**时间尺度分层模型**。
 >
-> 收敛自原 `ops.alerting` + `ops.availability-ledger`(已并入本文)。`watchdog-signals.yaml` 作为信号数据
+> 收敛自原 SSOT key `ops.alerting` + `ops.availability_ledger`(已并入本文)。`watchdog-signals.yaml` 作为信号数据
 > registry 保留;遥测**标识**(env identity)归 [core.environments.md](./core.environments.md#telemetry-identity)。
 >
 > **第一性原理(本文的脊梁)**:**告警 = 事件驱动**(真出事才发);**报告 = 时间驱动**(周期发)。
@@ -21,7 +21,7 @@
 | **告警 - 规则** | **SigNoz Alert Manager** + `finance_report/finance_report/observability/alert_rules.json`(config-as-code) | 告警规则 |
 | **告警 - 通知** | [platform/12.alerting](../../platform/12.alerting/) | SigNoz webhook → Feishu custom bot / app bot bridge;in-band probe runner |
 | **告警 - 密钥源头** | 1Password `platform/{env}/alerting` → 运行时镜像 Vault `secret/platform/{env}/alerting` | Feishu 凭据 + 可选 bridge basic auth |
-| **带外 watchdog** | [`cloudflare/infra-watchdog`](../../cloudflare/infra-watchdog/)(主,边缘 30min)+ `ops-checks.yml`(GitHub 兜底,日级) | 整机/整栈失联检测 |
+| **带外 watchdog** | [`cloudflare/infra-watchdog`](../../cloudflare/infra-watchdog/)(主,边缘 30min)+ [`.github/workflows/ops-checks.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/ops-checks.yml)(GitHub 兜底,日级) | 整机/整栈失联检测 |
 | **信号清单** | [`watchdog-signals.yaml`](watchdog-signals.yaml) | 按信号(非组件)追踪 watchdog 归属 |
 | **报告 - 账本** | Cloudflare KV(热 21 天)+ R2(冷长期)·`libs/availability_ledger.py`(聚合)·`tools/stability_report.py`(周报) | 正向证明 |
 | **部署指南** | [Infra-007](../project/Infra-007.signoz_install.md) | SigNoz 安装 |
