@@ -21,7 +21,8 @@ THIS = Path(__file__).name
 _DOC_PATH_RE = re.compile(r"docs/(?:ssot|project)/[\w./-]+\.(?:md|ya?ml)")
 _AC_RE = re.compile(r"Infra-0\d+\.\d+")
 # concrete (non-glob, no-space) file paths cited in backticks, with a known source extension.
-_PROOF_PATH_RE = re.compile(r"`([\w./-]+\.(?:py|ya?ml|js|json|sh|hcl))`")
+# Includes md + ctmpl: EPIC AC rows cite doc and secret-template proofs too (e.g. Infra-014).
+_PROOF_PATH_RE = re.compile(r"`([\w./-]+\.(?:py|ya?ml|js|json|sh|hcl|md|ctmpl))`")
 # A proof path is checkable only if it's repo-relative under a known infra2 top-level dir —
 # bare filenames (`infra-ci.yml`) are ambiguous and cross-repo paths (`common/...` is the app
 # repo) can't be resolved here, so they are out of scope rather than false failures.
@@ -52,7 +53,9 @@ def test_code_doc_path_references_resolve() -> None:
 
 def _defined_ac_ids() -> set[str]:
     defined: set[str] = set()
-    for path in (ROOT / "docs/project").glob("Infra-*.md"):
+    # rglob so archived EPICs under docs/project/archive/ count as defining their ACs too —
+    # else a test citing an archived AC would falsely look orphaned.
+    for path in (ROOT / "docs/project").rglob("Infra-*.md"):
         defined |= set(_AC_RE.findall(path.read_text(encoding="utf-8", errors="ignore")))
     return defined
 
@@ -77,7 +80,7 @@ def test_ac_proof_file_paths_in_epics_exist() -> None:
     """Concrete (non-glob) proof file paths cited in EPIC AC tables must exist — no proof-rot
     where an AC points at a renamed/deleted test or tool."""
     missing: list[str] = []
-    for doc in (ROOT / "docs/project").glob("Infra-*.md"):
+    for doc in (ROOT / "docs/project").rglob("Infra-*.md"):  # incl. archive/
         for line in doc.read_text(encoding="utf-8", errors="ignore").splitlines():
             if not _AC_RE.search(line):
                 continue  # only AC rows carry proof references
