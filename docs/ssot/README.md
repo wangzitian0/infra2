@@ -37,6 +37,8 @@
 
 ---
 
+<!-- BEGIN GENERATED SSOT INDEX (tools/gen_ssot_index.py) -->
+
 ## Core - 核心 (必读)
 
 | 文件 | SSOT Key | 关键内容 |
@@ -97,6 +99,8 @@
 | [watchdog-signals.yaml](./watchdog-signals.yaml) | `watchdog.signals` | Active watchdog signal inventory and ownership |
 
 ---
+
+<!-- END GENERATED SSOT INDEX -->
 
 ## 维护约定 (Template)
 
