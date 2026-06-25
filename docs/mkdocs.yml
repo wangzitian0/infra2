@@ -51,23 +51,33 @@ nav:
       - Secrets: onboarding/04.secrets.md
       - SSO: onboarding/05.sso.md
       - Observability (Planned): onboarding/06.observability.md
+  # SSOT nav must list every MANIFEST topic — locked by
+  # libs/tests/test_mkdocs_nav_manifest.py. Add a topic here when you add it to MANIFEST.
   - SSOT:
       - Index: ssot/README.md
-      - Core: ssot/core.md
-      - Bootstrap: ssot/bootstrap.nodep.md
-      - Vars & Secrets: ssot/bootstrap.vars_and_secrets.md
+      - Core:
+          - Architecture: ssot/core.md
+          - Environments: ssot/core.environments.md
+      - Bootstrap:
+          - No-Dep: ssot/bootstrap.nodep.md
+          - Vars & Secrets: ssot/bootstrap.vars_and_secrets.md
+          - DNS & Cert: ssot/bootstrap.dns_and_cert.md
+          - IaC Runner: ssot/bootstrap.iac_runner.md
       - Platform:
-          - Automation: ssot/platform.automation.md
+          - Domain: ssot/platform.domain.md
           - SSO: ssot/platform.sso.md
+          - Automation: ssot/platform.automation.md
           - AI (Planned): ssot/platform.ai.md
+          - OpenPanel: ssot/platform.openpanel.md
       - Data:
           - Overview: ssot/db.overview.md
           - Vault Integration: ssot/db.vault-integration.md
           - Platform PG: ssot/db.platform_pg.md
           - Business PG (Planned): ssot/db.business_pg.md
           - Redis: ssot/db.redis.md
-          - ClickHouse (Planned): ssot/db.clickhouse.md
+          - ClickHouse: ssot/db.clickhouse.md
           - ArangoDB (Planned): ssot/db.arangodb.md
+          - Vault Self-Refresh: ssot/vault-self-refresh-inventory.yaml
       - Ops:
           - Standards: ssot/ops.standards.md
           - Pipeline: ssot/ops.pipeline.md
@@ -75,8 +85,8 @@ nav:
           - Recovery: ssot/ops.recovery.md
           - Storage: ssot/ops.storage.md
           - Backup Inventory: ssot/ops.backup-inventory.yaml
-          - Observability (Planned): ssot/ops.observability.md
-          - Alerting: ssot/ops.alerting.md
+          - Observability: ssot/ops.observability.md
+          - Watchdog Signals: ssot/watchdog-signals.yaml
   - Projects:
       - Portfolio: project/README.md
       - Infra-015: project/Infra-015.deploy_v2_front_door.md
