@@ -1,0 +1,52 @@
+name: DNS drift report
+
+# T3 reconciler: daily intent↔reality check for DNS. Compares the DNS tooling's intended
+# records against what Cloudflare actually serves and posts a report to a DEDICATED Lark group
+# (separate from the out-of-band alert channel). Read-only on Cloudflare; report-only (never
+# gates). A record hand-changed in the Cloudflare UI has no PR, so only a periodic reconcile
+# like this can catch it (#280).
+#
+# REQUIRED secrets/vars for it to actually broadcast (until set, the job no-ops cleanly):
+#   secret CF_API_TOKEN              Cloudflare read token (Zone:DNS:Read)
+#   secret DNS_DRIFT_FEISHU_WEBHOOK_URL  custom-bot webhook of the dedicated Lark group
+#   secret CF_ZONE_ID  or  var CF_ZONE_NAME
+#   var    INTERNAL_DOMAIN           e.g. zitian.party
+
+"on":
+  schedule:
+    - cron: "0 1 * * *" # daily ~09:00 China time — a morning report
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dns-drift-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Compare DNS intent vs Cloudflare reality
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+      CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
+      CF_ZONE_NAME: ${{ vars.CF_ZONE_NAME }}
+      INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN }}
+      CF_RECORDS: ${{ vars.CF_RECORDS }}
+      DNS_DRIFT_FEISHU_WEBHOOK_URL: ${{ secrets.DNS_DRIFT_FEISHU_WEBHOOK_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: python -m pip install httpx python-dotenv rich PyYAML invoke
+
+      - name: Run DNS drift report
+        run: python tools/dns_drift_report.py
