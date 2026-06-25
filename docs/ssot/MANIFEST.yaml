@@ -85,10 +85,6 @@ entries:
     owner: docs/ssot/db.platform_pg.md
     summary: Platform PG (L1)
     description: Platform PostgreSQL.
-  db.business_pg:
-    owner: docs/ssot/db.business_pg.md
-    summary: Business PG (规划中)
-    description: Business PostgreSQL planning.
   db.redis:
     owner: docs/ssot/db.redis.md
     summary: Redis 缓存
@@ -97,10 +93,6 @@ entries:
     owner: docs/ssot/db.clickhouse.md
     summary: ClickHouse (SigNoz Storage)
     description: ClickHouse storage for observability and analytics.
-  db.arangodb:
-    owner: docs/ssot/db.arangodb.md
-    summary: ArangoDB Graph (规划中)
-    description: Planned graph database layer.
   vault.self_refresh_inventory:
     owner: docs/ssot/vault-self-refresh-inventory.yaml
     summary: Vault app-token self-refresh audit inventory
