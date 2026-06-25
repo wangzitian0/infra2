@@ -20,7 +20,10 @@ Config (env, wired from GitHub secrets/vars in .github/workflows/dns-drift-repor
   CF_API_TOKEN, CF_ZONE_ID | CF_ZONE_NAME   Cloudflare read access
   INTERNAL_DOMAIN                            e.g. zitian.party
   CF_RECORDS (optional)                      comma list override; else DEFAULT_RECORDS
-  DNS_DRIFT_FEISHU_WEBHOOK_URL               the dedicated Lark group's custom-bot webhook
+  Delivery (one of):
+    app bot  — DNS_DRIFT_FEISHU_{APP_ID,APP_SECRET,CHAT_ID}[, API_BASE]: send via the existing
+               infra2 Feishu app bot to the 'infra2 reports' group it was added to (preferred).
+    webhook  — DNS_DRIFT_FEISHU_WEBHOOK_URL: a custom-bot webhook.
 """
 
 from __future__ import annotations
@@ -83,8 +86,8 @@ def format_report(drift: DnsDrift, domain: str, n_expected: int, n_actual: int) 
     return "\n".join(lines)
 
 
-def post_to_lark(webhook: str, text: str) -> None:
-    """Post to a Feishu/Lark custom-bot webhook (the dedicated drift group)."""
+def _post_to_webhook(webhook: str, text: str) -> None:
+    """Post to a Feishu/Lark custom-bot webhook."""
     resp = httpx.post(
         webhook, json={"msg_type": "text", "content": {"text": text}}, timeout=15.0
     )
@@ -95,9 +98,42 @@ def post_to_lark(webhook: str, text: str) -> None:
         raise RuntimeError(f"Lark webhook rejected the message: {body}")
 
 
+def delivery_mode() -> str | None:
+    """Which delivery is configured: 'app' (bot in a named group, by chat_id) preferred over
+    'webhook'. App mode reuses the existing infra2 Feishu app bot, so the report lands in the
+    'infra2 reports' group it was added to."""
+    if (
+        os.environ.get("DNS_DRIFT_FEISHU_CHAT_ID")
+        and os.environ.get("DNS_DRIFT_FEISHU_APP_ID")
+        and os.environ.get("DNS_DRIFT_FEISHU_APP_SECRET")
+    ):
+        return "app"
+    if os.environ.get("DNS_DRIFT_FEISHU_WEBHOOK_URL", "").strip():
+        return "webhook"
+    return None
+
+
+def deliver(text: str) -> None:
+    """Send the report via whichever Feishu delivery is configured (app bot or webhook)."""
+    if delivery_mode() == "app":
+        from libs.alerting import deliver_feishu_app_text
+
+        deliver_feishu_app_text(
+            app_id=os.environ["DNS_DRIFT_FEISHU_APP_ID"],
+            app_secret=os.environ["DNS_DRIFT_FEISHU_APP_SECRET"],
+            chat_id=os.environ["DNS_DRIFT_FEISHU_CHAT_ID"],
+            text=text,
+            api_base=os.environ.get("DNS_DRIFT_FEISHU_API_BASE", "https://open.feishu.cn"),
+        )
+    else:
+        _post_to_webhook(os.environ["DNS_DRIFT_FEISHU_WEBHOOK_URL"].strip(), text)
+
+
 def _expected_records(dns) -> list[str]:
     domain = os.environ["INTERNAL_DOMAIN"]
-    override = os.environ.get("CF_RECORDS")
+    # CF_RECORDS may arrive quoted (op stores it as "cloud,op,..."); strip wrapping quotes
+    # before splitting, else the first/last name keep a stray quote and falsely look MISSING.
+    override = os.environ.get("CF_RECORDS", "").strip().strip('"').strip("'")
     names = [r.strip() for r in override.split(",") if r.strip()] if override else list(
         dns.DEFAULT_RECORDS
     )
@@ -120,25 +156,26 @@ def _actual_records(dns) -> list[str]:
 
 
 def main() -> int:
-    webhook = os.environ.get("DNS_DRIFT_FEISHU_WEBHOOK_URL", "").strip()
     have_zone = bool(os.environ.get("CF_ZONE_ID") or os.environ.get("CF_ZONE_NAME"))
     # No-op cleanly ONLY when not fully configured (so the job is never a noisy red before the
     # secrets exist). Validate everything the live path needs up front — including the values
-    # read later (INTERNAL_DOMAIN, the zone) — so a partial config can't raise mid-run.
+    # read later (INTERNAL_DOMAIN, the zone, a delivery target) — so a partial config can't
+    # raise mid-run.
     if not (
         os.environ.get("CF_API_TOKEN")
-        and webhook
+        and delivery_mode()
         and os.environ.get("INTERNAL_DOMAIN")
         and have_zone
     ):
         print(
-            "dns-drift-report: not fully configured (need CF_API_TOKEN, "
-            "DNS_DRIFT_FEISHU_WEBHOOK_URL, INTERNAL_DOMAIN, and CF_ZONE_ID|CF_ZONE_NAME) — "
+            "dns-drift-report: not fully configured (need CF_API_TOKEN, INTERNAL_DOMAIN, "
+            "CF_ZONE_ID|CF_ZONE_NAME, and a delivery target — either "
+            "DNS_DRIFT_FEISHU_{APP_ID,APP_SECRET,CHAT_ID} or DNS_DRIFT_FEISHU_WEBHOOK_URL) — "
             "skipping.",
             file=sys.stderr,
         )
         return 0  # not-yet-configured is not a failure
-    # Fully configured below: any Cloudflare/Lark error propagates (non-zero) on purpose, so a
+    # Fully configured below: any Cloudflare/Feishu error propagates (non-zero) on purpose, so a
     # broken-but-configured reconciler is a visible red rather than a silent green.
 
     dns = _dns_tasks()
@@ -147,7 +184,7 @@ def main() -> int:
     drift = compute_drift(expected, actual)
     report = format_report(drift, os.environ.get("INTERNAL_DOMAIN", "?"), len(expected), len(actual))
     print(report)
-    post_to_lark(webhook, report)  # daily delivery self-proves the path, drift or not
+    deliver(report)  # daily delivery self-proves the path, drift or not
     return 0
 
 

@@ -7,10 +7,12 @@ name: DNS drift report
 # like this can catch it (#280).
 #
 # REQUIRED secrets/vars for it to actually broadcast (until set, the job no-ops cleanly):
-#   secret CF_API_TOKEN              Cloudflare read token (Zone:DNS:Read)
-#   secret DNS_DRIFT_FEISHU_WEBHOOK_URL  custom-bot webhook of the dedicated Lark group
+#   secret CF_API_TOKEN              Cloudflare read token (ideally Zone:DNS:Read only)
 #   secret CF_ZONE_ID  or  var CF_ZONE_NAME
-#   var    INTERNAL_DOMAIN           e.g. zitian.party
+#   var    INTERNAL_DOMAIN           e.g. zitian.party  (+ optional var CF_RECORDS)
+#   Delivery — app bot (preferred): reuses the existing infra2 Feishu app secrets; set
+#     var DNS_DRIFT_FEISHU_CHAT_ID to the 'infra2 reports' group chat_id. Or set
+#     secret DNS_DRIFT_FEISHU_WEBHOOK_URL for a custom-bot webhook instead.
 
 "on":
   schedule:
@@ -35,6 +37,11 @@ jobs:
       CF_ZONE_NAME: ${{ vars.CF_ZONE_NAME }}
       INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN }}
       CF_RECORDS: ${{ vars.CF_RECORDS }}
+      # Delivery to the 'infra2 reports' group via the existing infra2 Feishu app bot.
+      DNS_DRIFT_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
+      DNS_DRIFT_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
+      DNS_DRIFT_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+      DNS_DRIFT_FEISHU_CHAT_ID: ${{ vars.DNS_DRIFT_FEISHU_CHAT_ID }}
       DNS_DRIFT_FEISHU_WEBHOOK_URL: ${{ secrets.DNS_DRIFT_FEISHU_WEBHOOK_URL }}
     steps:
       - name: Checkout

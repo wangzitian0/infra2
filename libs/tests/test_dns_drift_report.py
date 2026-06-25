@@ -50,3 +50,19 @@ def test_format_report_flags_missing_and_confirms_in_sync() -> None:
 
     ok = m.format_report(m.compute_drift({"a.x"}, {"a.x"}), "x", 1, 1)
     assert "✅ in sync" in ok
+
+
+def test_delivery_mode_prefers_app_then_webhook(monkeypatch) -> None:
+    m = _mod()
+    for k in ("DNS_DRIFT_FEISHU_APP_ID", "DNS_DRIFT_FEISHU_APP_SECRET",
+              "DNS_DRIFT_FEISHU_CHAT_ID", "DNS_DRIFT_FEISHU_WEBHOOK_URL"):
+        monkeypatch.delenv(k, raising=False)
+    assert m.delivery_mode() is None  # nothing configured -> no-op
+
+    monkeypatch.setenv("DNS_DRIFT_FEISHU_WEBHOOK_URL", "https://hook")
+    assert m.delivery_mode() == "webhook"
+
+    monkeypatch.setenv("DNS_DRIFT_FEISHU_APP_ID", "a")
+    monkeypatch.setenv("DNS_DRIFT_FEISHU_APP_SECRET", "s")
+    monkeypatch.setenv("DNS_DRIFT_FEISHU_CHAT_ID", "oc_x")
+    assert m.delivery_mode() == "app"  # app bot preferred over webhook
