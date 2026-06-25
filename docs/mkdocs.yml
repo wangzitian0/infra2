@@ -85,6 +85,7 @@ nav:
           - Recovery: ssot/ops.recovery.md
           - Storage: ssot/ops.storage.md
           - Backup Inventory: ssot/ops.backup-inventory.yaml
+          - Deploy Dependencies: ssot/deploy-dependencies.yaml
           - Observability: ssot/ops.observability.md
           - Watchdog Signals: ssot/watchdog-signals.yaml
   - Projects:

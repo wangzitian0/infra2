@@ -90,11 +90,13 @@
 
 | 文件 | SSOT Key | 关键内容 |
 |------|----------|----------|
+| [ops.standards.md](./ops.standards.md) | `ops.standards` | 命名/标签规范、资源评估、防御性运维守则 |
 | [ops.pipeline.md](./ops.pipeline.md) | `ops.pipeline` | CI/CD 流程、GitOps |
 | [ops.e2e-regressions.md](./ops.e2e-regressions.md) | `ops.e2e` | 部署验证、E2E 测试 |
 | [ops.recovery.md](./ops.recovery.md) | `ops.recovery` | 故障恢复、Vault Unseal |
 | [ops.storage.md](./ops.storage.md) | `ops.storage` | 备份策略、R2 同步 |
 | [ops.backup-inventory.yaml](./ops.backup-inventory.yaml) | `ops.backup_inventory` | Persistent data backup coverage inventory |
+| [deploy-dependencies.yaml](./deploy-dependencies.yaml) | `ops.deploy_dependencies` | 部署扇出 + content-hash 依赖清单 |
 | [ops.observability.md](./ops.observability.md) | `ops.obs` | 可观测性单一 owner：采集(SigNoz/日志/链路)+ 告警(规则/分级/watchdog)+ 报告(可用率账本)+ 时间尺度分层 |
 | [watchdog-signals.yaml](./watchdog-signals.yaml) | `watchdog.signals` | Active watchdog signal inventory and ownership |
 
