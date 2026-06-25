@@ -65,7 +65,9 @@ def compute_drift(expected: set[str], actual: set[str]) -> DnsDrift:
     """Pure diff. `missing` (intent not realized) is the signal; `unmanaged` is info —
     other mechanisms (platform routing, manual) legitimately create records, so an extra
     record is reported, not treated as a failure."""
-    return DnsDrift(missing=sorted(expected - actual), unmanaged=sorted(actual - expected))
+    return DnsDrift(
+        missing=sorted(expected - actual), unmanaged=sorted(actual - expected)
+    )
 
 
 def format_report(drift: DnsDrift, domain: str, n_expected: int, n_actual: int) -> str:
@@ -74,22 +76,33 @@ def format_report(drift: DnsDrift, domain: str, n_expected: int, n_actual: int) 
         f"intent {n_expected} records · cloudflare {n_actual} A/CNAME records",
     ]
     if drift.missing:
-        lines.append(f"🔴 MISSING in Cloudflare ({len(drift.missing)}) — intent NOT realized:")
+        lines.append(
+            f"🔴 MISSING in Cloudflare ({len(drift.missing)}) — intent NOT realized:"
+        )
         lines += [f"  · {r}" for r in drift.missing]
     if drift.unmanaged:
-        lines.append(f"ℹ️ unmanaged ({len(drift.unmanaged)}) — in Cloudflare, not in DNS intent:")
+        lines.append(
+            f"ℹ️ unmanaged ({len(drift.unmanaged)}) — in Cloudflare, not in DNS intent:"
+        )
         lines += [f"  · {r}" for r in drift.unmanaged]
     if drift.in_sync and not drift.unmanaged:
         lines.append("✅ in sync — every intended record exists; nothing unmanaged.")
     elif drift.in_sync:
-        lines.append("✅ every intended record exists (unmanaged ones are informational).")
+        lines.append(
+            "✅ every intended record exists (unmanaged ones are informational)."
+        )
     return "\n".join(lines)
 
 
 def _post_to_webhook(webhook: str, text: str) -> None:
     """Post to a Feishu/Lark custom-bot webhook."""
+    from libs.alerting import validate_feishu_webhook_url
+
+    # Validate the URL is an allowed Feishu/Lark host before posting (same SSRF guard the rest
+    # of the codebase uses), so an injected/typo'd webhook can't be POSTed to.
+    url = validate_feishu_webhook_url(webhook)
     resp = httpx.post(
-        webhook, json={"msg_type": "text", "content": {"text": text}}, timeout=15.0
+        url, json={"msg_type": "text", "content": {"text": text}}, timeout=15.0
     )
     resp.raise_for_status()
     body = resp.json()
@@ -115,7 +128,8 @@ def delivery_mode() -> str | None:
 
 def deliver(text: str) -> None:
     """Send the report via whichever Feishu delivery is configured (app bot or webhook)."""
-    if delivery_mode() == "app":
+    mode = delivery_mode()
+    if mode == "app":
         from libs.alerting import deliver_feishu_app_text
 
         deliver_feishu_app_text(
@@ -123,10 +137,14 @@ def deliver(text: str) -> None:
             app_secret=os.environ["DNS_DRIFT_FEISHU_APP_SECRET"],
             chat_id=os.environ["DNS_DRIFT_FEISHU_CHAT_ID"],
             text=text,
-            api_base=os.environ.get("DNS_DRIFT_FEISHU_API_BASE", "https://open.feishu.cn"),
+            api_base=os.environ.get(
+                "DNS_DRIFT_FEISHU_API_BASE", "https://open.feishu.cn"
+            ),
         )
-    else:
+    elif mode == "webhook":
         _post_to_webhook(os.environ["DNS_DRIFT_FEISHU_WEBHOOK_URL"].strip(), text)
+    else:
+        raise RuntimeError("no Feishu delivery configured (app creds or webhook)")
 
 
 def _expected_records(dns) -> list[str]:
@@ -134,8 +152,10 @@ def _expected_records(dns) -> list[str]:
     # CF_RECORDS may arrive quoted (op stores it as "cloud,op,..."); strip wrapping quotes
     # before splitting, else the first/last name keep a stray quote and falsely look MISSING.
     override = os.environ.get("CF_RECORDS", "").strip().strip('"').strip("'")
-    names = [r.strip() for r in override.split(",") if r.strip()] if override else list(
-        dns.DEFAULT_RECORDS
+    names = (
+        [r.strip() for r in override.split(",") if r.strip()]
+        if override
+        else list(dns.DEFAULT_RECORDS)
     )
     return [dns._normalize_record(name, domain) for name in names]
 
@@ -147,7 +167,9 @@ def _actual_records(dns) -> list[str]:
             client, os.environ.get("CF_ZONE_ID"), os.environ.get("CF_ZONE_NAME")
         )
         if not zone:
-            raise RuntimeError("could not resolve Cloudflare zone (CF_ZONE_ID / CF_ZONE_NAME)")
+            raise RuntimeError(
+                "could not resolve Cloudflare zone (CF_ZONE_ID / CF_ZONE_NAME)"
+            )
         # one page (per_page=100) is enough for this zone; add pagination if it grows.
         result = dns._cf_request(
             client, "GET", f"/zones/{zone}/dns_records", params={"per_page": 100}
@@ -182,7 +204,9 @@ def main() -> int:
     expected = set(_expected_records(dns))
     actual = set(_actual_records(dns))
     drift = compute_drift(expected, actual)
-    report = format_report(drift, os.environ.get("INTERNAL_DOMAIN", "?"), len(expected), len(actual))
+    report = format_report(
+        drift, os.environ.get("INTERNAL_DOMAIN", "?"), len(expected), len(actual)
+    )
     print(report)
     deliver(report)  # daily delivery self-proves the path, drift or not
     return 0
