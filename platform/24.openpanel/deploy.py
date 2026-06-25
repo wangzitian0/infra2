@@ -4,6 +4,7 @@ import sys
 import os
 from libs.deployer import Deployer, make_tasks
 from libs.common import with_env_suffix
+from libs.env import VAULT_ROOT_TOKEN_OP_REF
 from libs.console import success, warning, info, error
 from libs.env import get_secrets
 
@@ -99,7 +100,7 @@ class OpenPanelDeployer(Deployer):
             fatal(
                 "VAULT_ROOT_TOKEN not set",
                 "Required for: 1) Reading postgres/redis passwords, 2) Storing openpanel secrets\n"
-                "   Get token: op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token' "
+                f"   Get token: op read '{VAULT_ROOT_TOKEN_OP_REF}' "
                 "(or /Token; item: bootstrap/vault/Root Token)\n"
                 "   Then: export VAULT_ROOT_TOKEN=<token>",
             )

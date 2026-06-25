@@ -12,6 +12,7 @@ Storage in Vault:
 import os
 from invoke import task
 from libs.common import check_service, get_env, service_domain
+from libs.env import VAULT_ROOT_TOKEN_OP_REF
 from libs.console import header, success, error, warning, info
 
 
@@ -49,7 +50,7 @@ def create_root_token(c):
         error("VAULT_ROOT_TOKEN not set")
         info("Vault admin token needed to store Authentik root token")
         info(
-            "Get from: op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token' "
+            f"Get from: op read '{VAULT_ROOT_TOKEN_OP_REF}' "
             "(or /Token; item: bootstrap/vault/Root Token)"
         )
         info("Then: export VAULT_ROOT_TOKEN=<token>")
