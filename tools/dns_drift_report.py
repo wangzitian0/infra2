@@ -8,8 +8,11 @@ hand-added/removed in the Cloudflare UI with no PR, so no internal test can catc
 
 Properties (by design):
   * READ-ONLY on Cloudflare — GET only; the single side effect is the Lark message.
-  * REPORT, not gate — always exits 0; it never blocks anything. A report's own delivery
-    self-proves the path (cadence-tier model, #425), so it posts daily even when in-sync.
+  * REPORT, not gate — it gates nothing (no deploy/PR depends on it). Finding DRIFT is reported,
+    never an error; it posts daily even when in-sync (delivery self-proves the path, #425). Exit
+    semantics, kept honest: no-op exit 0 only when NOT fully configured; a fully-configured run
+    that can't read Cloudflare or post to Lark exits non-zero, so a BROKEN reconciler is visible
+    (a silently-green broken reconciler would be exactly the lie this is meant to catch).
   * SINGLE-SOURCED intent — reuses DEFAULT_RECORDS + _normalize_record + the CF client from the
     DNS tooling itself, so it checks the same records the tooling manages, not a third copy.
 
@@ -102,28 +105,41 @@ def _expected_records(dns) -> list[str]:
 
 
 def _actual_records(dns) -> list[str]:
-    client = dns._cloudflare_client(os.environ["CF_API_TOKEN"])
-    zone = dns._resolve_zone_id(
-        client, os.environ.get("CF_ZONE_ID"), os.environ.get("CF_ZONE_NAME")
-    )
-    if not zone:
-        raise RuntimeError("could not resolve Cloudflare zone (CF_ZONE_ID / CF_ZONE_NAME)")
-    # one page (per_page=100) is enough for this zone; revisit with pagination if it grows.
-    result = dns._cf_request(
-        client, "GET", f"/zones/{zone}/dns_records", params={"per_page": 100}
-    )
+    # Context-manage the client like the DNS tooling does, so the connection isn't leaked.
+    with dns._cloudflare_client(os.environ["CF_API_TOKEN"]) as client:
+        zone = dns._resolve_zone_id(
+            client, os.environ.get("CF_ZONE_ID"), os.environ.get("CF_ZONE_NAME")
+        )
+        if not zone:
+            raise RuntimeError("could not resolve Cloudflare zone (CF_ZONE_ID / CF_ZONE_NAME)")
+        # one page (per_page=100) is enough for this zone; add pagination if it grows.
+        result = dns._cf_request(
+            client, "GET", f"/zones/{zone}/dns_records", params={"per_page": 100}
+        )
     return [r["name"] for r in (result or []) if r.get("type") in ("A", "CNAME")]
 
 
 def main() -> int:
     webhook = os.environ.get("DNS_DRIFT_FEISHU_WEBHOOK_URL", "").strip()
-    if not os.environ.get("CF_API_TOKEN") or not webhook:
+    have_zone = bool(os.environ.get("CF_ZONE_ID") or os.environ.get("CF_ZONE_NAME"))
+    # No-op cleanly ONLY when not fully configured (so the job is never a noisy red before the
+    # secrets exist). Validate everything the live path needs up front — including the values
+    # read later (INTERNAL_DOMAIN, the zone) — so a partial config can't raise mid-run.
+    if not (
+        os.environ.get("CF_API_TOKEN")
+        and webhook
+        and os.environ.get("INTERNAL_DOMAIN")
+        and have_zone
+    ):
         print(
-            "dns-drift-report: not configured (need CF_API_TOKEN + "
-            "DNS_DRIFT_FEISHU_WEBHOOK_URL) — skipping.",
+            "dns-drift-report: not fully configured (need CF_API_TOKEN, "
+            "DNS_DRIFT_FEISHU_WEBHOOK_URL, INTERNAL_DOMAIN, and CF_ZONE_ID|CF_ZONE_NAME) — "
+            "skipping.",
             file=sys.stderr,
         )
-        return 0  # report-only: never a noisy red before the secrets are wired
+        return 0  # not-yet-configured is not a failure
+    # Fully configured below: any Cloudflare/Lark error propagates (non-zero) on purpose, so a
+    # broken-but-configured reconciler is a visible red rather than a silent green.
 
     dns = _dns_tasks()
     expected = set(_expected_records(dns))
