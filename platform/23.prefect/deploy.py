@@ -4,6 +4,7 @@ import sys
 import os
 from libs.deployer import Deployer, make_tasks
 from libs.common import with_env_suffix
+from libs.env import VAULT_ROOT_TOKEN_OP_REF
 from libs.console import success, info, fatal
 from libs.env import get_secrets
 
@@ -36,7 +37,7 @@ class PrefectDeployer(Deployer):
             fatal(
                 "VAULT_ROOT_TOKEN not set",
                 "Required for reading postgres password\n"
-                "   Get token: op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token'\n"
+                f"   Get token: op read '{VAULT_ROOT_TOKEN_OP_REF}'\n"
                 "   Then: export VAULT_ROOT_TOKEN=<token>",
             )
 

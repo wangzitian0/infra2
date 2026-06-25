@@ -25,6 +25,11 @@ import httpx
 
 CredentialType = Literal["bootstrap", "root_vars", "app_vars"]
 
+# Single source for the 1Password locator of the Vault root token. It was hand-copied into
+# every "how to get the token" help string across deploy.py/shared_tasks (with the field name
+# drifting — some said /Token, some /Root Token); rotate the item here, not in N places.
+VAULT_ROOT_TOKEN_OP_REF = "op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token"
+
 __all__ = [
     "OpSecrets",
     "VaultSecrets",
@@ -32,6 +37,7 @@ __all__ = [
     "generate_password",
     "verify_vault_token",
     "CredentialType",
+    "VAULT_ROOT_TOKEN_OP_REF",
 ]
 
 
@@ -198,7 +204,7 @@ class VaultSecrets:
             raise self.VaultAuthError(
                 "\n❌ VAULT_ROOT_TOKEN not set\n"
                 "Fix: export VAULT_ROOT_TOKEN=<admin-token>\n"
-                "Get from: op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token'\n"
+                f"Get from: op read '{VAULT_ROOT_TOKEN_OP_REF}'\n"
                 "(item: bootstrap/vault/Root Token)"
             )
 
