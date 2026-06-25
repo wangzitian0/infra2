@@ -26,14 +26,40 @@ _PROBE_EXEMPT = {
 }
 
 
+def _probe_spec_rows() -> list[str]:
+    """The `name|kind|target|...` rows of the INFRA_PROBE_SPECS block-scalar ONLY.
+
+    Bounded by the block's indentation — must NOT scan the rest of the compose file, or
+    `platform-*` in later container_name:/env fields would count as false coverage and mask a
+    genuinely unprobed service (Copilot CR).
+    """
+    lines = SPECS.read_text(encoding="utf-8").splitlines()
+    rows: list[str] = []
+    grabbing = False
+    block_indent = 0
+    for line in lines:
+        if not grabbing:
+            if "INFRA_PROBE_SPECS:" in line and line.rstrip().endswith("|"):
+                grabbing = True
+                block_indent = len(line) - len(line.lstrip())
+            continue
+        if line.strip() == "":
+            continue
+        if len(line) - len(line.lstrip()) <= block_indent:
+            break  # dedented out of the block scalar
+        row = line.strip()
+        if not row.startswith("#") and "|" in row:
+            rows.append(row)
+    return rows
+
+
 def _covered_service_ids() -> set[str]:
-    block = SPECS.read_text(encoding="utf-8").split("INFRA_PROBE_SPECS:", 1)[1]
-    hosts = set(re.findall(r"(platform-[\w-]+)", block))
     covered: set[str] = set()
-    for host in hosts:
-        meta = service_registry.resolve_container_host(host)
-        if meta is not None:
-            covered.add(meta.service_id)
+    for row in _probe_spec_rows():
+        for host in re.findall(r"platform-[\w-]+", row):
+            meta = service_registry.resolve_container_host(host)
+            if meta is not None:
+                covered.add(meta.service_id)
     return covered
 
 
