@@ -59,6 +59,19 @@ def test_format_report_flags_drift_and_confirms_in_sync() -> None:
     assert "✅ every comparable service matches release v1.2.3" in ok
 
 
+def test_format_report_surfaces_errors_and_does_not_call_them_drift() -> None:
+    """A compute failure must be surfaced (not silently skipped) AND must not be counted as
+    drift — else a run looks healthy while it never actually checked the service."""
+    m = _drift_mod()
+    Row = m.Row
+    out = m.format_report(
+        "v1.2.3", [Row("platform/z", "error", note="compute error: boom")]
+    )
+    assert "⚠️ ERROR platform/z" in out  # surfaced loudly
+    assert "DRIFT 0" in out  # an error is NOT drift
+    assert "🔴 DRIFT" not in out
+
+
 def test_deliver_infra2_report_noops_when_unconfigured(monkeypatch) -> None:
     from libs.alerting import deliver_infra2_report
 

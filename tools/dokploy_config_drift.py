@@ -124,7 +124,11 @@ def _env_vars(dep: type[Deployer]) -> dict[str, str]:
     live-secret fetch in compose_env_base can't differ between the disk and git computations)."""
     e = dep.env()
     ev = dep.compose_env_base(e)
-    ev["VAULT_ADDR"] = e.get("VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN')}")
+    # Mirror libs.deployer's VAULT_ADDR default EXACTLY (INTERNAL_DOMAIN or 'localhost') — a
+    # divergence here would compute a different expected hash than the deploy and false-DRIFT.
+    ev["VAULT_ADDR"] = e.get(
+        "VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}"
+    )
     return ev
 
 
@@ -153,7 +157,7 @@ def _set_env(env_name: str) -> None:
 @dataclass
 class Row:
     service: str
-    verdict: str  # in_sync | DRIFT | not_deployed | cache_bust | structural
+    verdict: str  # in_sync | DRIFT | error | not_deployed | cache_bust | structural | env_unavailable
     expected: str | None = None
     deployed: str | None = None
     note: str = ""
@@ -247,8 +251,8 @@ def scan(tag: str) -> list[Row]:
             continue
         try:
             exp, missing = expected_hash_at(dep, c, tag, env_vars)
-        except Exception as exc:  # noqa: BLE001
-            rows.append(Row(sid, "DRIFT", deployed=dep_hash, note=f"compute error: {exc}"))
+        except Exception as exc:  # noqa: BLE001 — a tool/runtime failure is NOT drift; keep them
+            rows.append(Row(sid, "error", deployed=dep_hash, note=f"compute error: {exc}"))
             continue
         if missing:
             rows.append(Row(sid, "structural", deployed=dep_hash, note=f"{len(missing)} input(s) absent at {tag}"))
@@ -262,13 +266,19 @@ def scan(tag: str) -> list[Row]:
 def format_report(tag: str, rows: list[Row]) -> str:
     drift = [r for r in rows if r.verdict == "DRIFT"]
     n = lambda v: sum(1 for r in rows if r.verdict == v)  # noqa: E731
+    errors = [r for r in rows if r.verdict == "error"]
     lines = [
         f"📋 [Infra2] config-drift · production vs release {tag}",
-        f"in sync {n('in_sync')} · DRIFT {len(drift)} · not deployed {n('not_deployed')} "
-        f"· structural {n('structural')} · env-skip {n('env_unavailable')} · n/a(app) {n('cache_bust')}",
+        f"in sync {n('in_sync')} · DRIFT {len(drift)} · error {len(errors)} · "
+        f"not deployed {n('not_deployed')} · structural {n('structural')} · "
+        f"env-skip {n('env_unavailable')} · n/a(app) {n('cache_bust')}",
     ]
     for r in drift:
         lines.append(f"🔴 DRIFT {r.service}: deployed≠release (expected={r.expected} deployed={r.deployed})")
+    for r in errors:
+        # Surface tool/runtime failures loudly — a silently-skipped service must not let the run
+        # look healthy (a "0 drift" that actually never checked N services is the lie to avoid).
+        lines.append(f"⚠️ ERROR {r.service}: could not compute expected hash ({r.note})")
     for r in rows:
         if r.verdict == "not_deployed":
             lines.append(f"  · not deployed: {r.service}")
