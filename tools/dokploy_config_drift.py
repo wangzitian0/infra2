@@ -171,6 +171,9 @@ def self_check() -> int:
             continue
         try:
             ev = _env_vars(dep)
+        except Exception:  # noqa: BLE001 — env needs op (e.g. alerting); not a faithfulness failure
+            continue
+        try:
             disk = dep.compute_local_config_hash(c, ev)
             via_git, missing = expected_hash_at(dep, c, "HEAD", ev)
         except Exception as exc:  # noqa: BLE001
@@ -238,7 +241,12 @@ def scan(tag: str) -> list[Row]:
             rows.append(Row(sid, "cache_bust", deployed=dep_hash, note="app deploy_v2 path"))
             continue
         try:
-            exp, missing = expected_hash_at(dep, c, tag, _env_vars(dep))
+            env_vars = _env_vars(dep)
+        except Exception as exc:  # noqa: BLE001 — env needs op (e.g. alerting's token); skip, don't false-DRIFT
+            rows.append(Row(sid, "env_unavailable", deployed=dep_hash, note=f"env needs op: {exc}"))
+            continue
+        try:
+            exp, missing = expected_hash_at(dep, c, tag, env_vars)
         except Exception as exc:  # noqa: BLE001
             rows.append(Row(sid, "DRIFT", deployed=dep_hash, note=f"compute error: {exc}"))
             continue
@@ -251,10 +259,33 @@ def scan(tag: str) -> list[Row]:
     return rows
 
 
+def format_report(tag: str, rows: list[Row]) -> str:
+    drift = [r for r in rows if r.verdict == "DRIFT"]
+    n = lambda v: sum(1 for r in rows if r.verdict == v)  # noqa: E731
+    lines = [
+        f"📋 [Infra2] config-drift · production vs release {tag}",
+        f"in sync {n('in_sync')} · DRIFT {len(drift)} · not deployed {n('not_deployed')} "
+        f"· structural {n('structural')} · env-skip {n('env_unavailable')} · n/a(app) {n('cache_bust')}",
+    ]
+    for r in drift:
+        lines.append(f"🔴 DRIFT {r.service}: deployed≠release (expected={r.expected} deployed={r.deployed})")
+    for r in rows:
+        if r.verdict == "not_deployed":
+            lines.append(f"  · not deployed: {r.service}")
+        elif r.verdict == "structural":
+            lines.append(f"  · structural: {r.service} ({r.note})")
+        elif r.verdict == "env_unavailable":
+            lines.append(f"  · env-skip: {r.service} (needs op to recompute)")
+    if not drift:
+        lines.append(f"✅ every comparable service matches release {tag}.")
+    return "\n".join(lines)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--self-check", action="store_true", help="prove git path == disk at HEAD")
     parser.add_argument("--strict", action="store_true", help="exit 1 if any real DRIFT")
+    parser.add_argument("--report", action="store_true", help="post the report to the infra2 reports Lark group")
     args = parser.parse_args()
 
     if args.self_check:
@@ -262,22 +293,18 @@ def main() -> int:
 
     tag = _latest_release_tag()
     rows = scan(tag)
+    report = format_report(tag, rows)
+    print(report)
+
+    if args.report:
+        from libs.alerting import deliver_infra2_report
+
+        # Post daily even when in-sync: the report's own delivery self-proves the path (#425),
+        # so a broken reconciler is distinguishable from "no drift".
+        delivered = deliver_infra2_report(report)
+        print(f"\n[report delivered: {delivered}]", file=sys.stderr)
+
     drift = [r for r in rows if r.verdict == "DRIFT"]
-    n = lambda v: sum(1 for r in rows if r.verdict == v)  # noqa: E731
-    print(f"📋 Dokploy config-drift · production vs release {tag} (read-only)\n")
-    print(
-        f"  in sync: {n('in_sync')} · DRIFT: {len(drift)} · not deployed: {n('not_deployed')} "
-        f"· structural: {n('structural')} · n/a(app): {n('cache_bust')}"
-    )
-    for r in drift:
-        print(f"  ⚠️ DRIFT {r.service}: expected={r.expected} deployed={r.deployed} {r.note}")
-    for r in rows:
-        if r.verdict == "structural":
-            print(f"  · structural {r.service}: {r.note}")
-        elif r.verdict == "not_deployed":
-            print(f"  · not deployed {r.service}")
-    if not drift:
-        print(f"\n  ✅ every comparable service matches release {tag}.")
     return 1 if (args.strict and drift) else 0
 
 
