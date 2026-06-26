@@ -1,6 +1,6 @@
 import sys
 
-from libs.deployer import Deployer, make_tasks
+from libs.deploy.deployer import Deployer, make_tasks
 
 shared_tasks = sys.modules.get("finance_report.01.postgres.shared")
 

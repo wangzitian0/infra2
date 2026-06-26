@@ -17,9 +17,6 @@ effective-config verification.
 
 from __future__ import annotations
 
-import argparse
-import json
-import sys
 import time
 from dataclasses import dataclass
 
@@ -59,7 +56,7 @@ def wait_for_rollout(
     """Poll until a NEW Dokploy deployment record reaches a terminal-good status.
 
     Raises RuntimeError if the new record errors, TimeoutError if none finishes in the
-    window. Close cousin of libs.deployer._wait_for_new_deployment_record, but NOT
+    window. Close cousin of libs.deploy.deployer._wait_for_new_deployment_record, but NOT
     identical: that one returns a bool and treats `running` as success (a health check
     follows it), whereas this owns readiness itself — it keeps polling past `running`
     until a terminal-good status and raises TimeoutError on the deadline. P2 step 5
@@ -150,7 +147,7 @@ def verify_effective_config_hash(
     closed if it never advances. A transient read error is tolerated like a non-match and
     retried — polling gives each read an independent chance to clear a Dokploy blip; only
     if no clean read ever lands is the last error surfaced. Mirrors
-    libs.deployer._await_effective_config_hash (compose-id-based rather than by service).
+    libs.deploy.deployer._await_effective_config_hash (compose-id-based rather than by service).
     """
     deadline = _now() + max(0, timeout)
     last_value: str | None = None
@@ -346,8 +343,8 @@ def model_overrides_from_env() -> dict[str, str]:
     """Model overrides supplied via ``DEPLOY_*_MODEL_OVERRIDE`` env vars.
 
     The staging-E2E promotion path sets these to pin which models prod runs; empty values
-    are dropped by ``deploy`` (only non-empty overrides are applied). Shared by this CLI and
-    the unified ``deploy_v2`` front door so both threads them identically.
+    are dropped by ``deploy`` (only non-empty overrides are applied). Consumed by the
+    unified ``deploy_v2`` front door so the promote path threads them identically.
     """
     import os
 
@@ -356,102 +353,3 @@ def model_overrides_from_env() -> dict[str, str]:
         "OCR_MODEL": os.getenv("DEPLOY_OCR_MODEL_OVERRIDE", ""),
         "VISION_MODEL": os.getenv("DEPLOY_VISION_MODEL_OVERRIDE", ""),
     }
-
-
-def main(argv: list[str] | None = None) -> int:
-    """Retired direct CLI for the internal fixed-compose backend.
-
-    Operational deploys must use ``python -m tools.deploy_v2`` so the full coordinate,
-    data-lane red lines, and service routing are enforced before this backend runs.
-    """
-    parser = argparse.ArgumentParser(
-        description="internal fixed-compose deploy backend"
-    )
-    parser.add_argument("--env", required=True, help="staging | prod (not preview)")
-    parser.add_argument("--code", required=True, help="main | vX.Y.Z | <sha>")
-    parser.add_argument(
-        "--domain", required=True, help="base domain, e.g. zitian.party"
-    )
-    parser.add_argument(
-        "--repo", default=None, help="git remote to resolve code against"
-    )
-    parser.add_argument(
-        "--staging-validated",
-        action="store_true",
-        help="assert this exact digest passed staging (required for prod)",
-    )
-    parser.add_argument(
-        "--break-glass",
-        action="store_true",
-        help="audited override of the staging-first gate (H5)",
-    )
-    parser.add_argument(
-        "--no-wait", action="store_true", help="do not block on rollout"
-    )
-    parser.add_argument("--timeout", type=int, default=600, help="rollout wait seconds")
-    parser.add_argument(
-        "--skip-vault-check",
-        action="store_true",
-        help="skip the VAULT_APP_TOKEN TTL preflight (default: on)",
-    )
-    parser.add_argument(
-        "--no-verify-config",
-        action="store_true",
-        help="skip the post-deploy effective-config check (default: on)",
-    )
-    parser.add_argument(
-        "--allow-internal-direct-call",
-        action="store_true",
-        help=argparse.SUPPRESS,
-    )
-    args = parser.parse_args(argv)
-
-    if not args.allow_internal_direct_call:
-        print(
-            "deploy_primitive CLI is retired; use python -m tools.deploy_v2 so the "
-            "deploy_v2 coordinate and derived data_lane red lines are enforced.",
-            file=sys.stderr,
-        )
-        return 2
-
-    # Model overrides come from the same env the staging-E2E workflow already exports,
-    # so switching the caller to this CLI needs no new wiring (parity with the bash).
-    model_overrides = model_overrides_from_env()
-
-    # Imported lazily so importing the primitive (and its unit tests) needs no Dokploy creds.
-    from libs.dokploy import get_dokploy
-
-    try:
-        plan = deploy(
-            args.env,
-            args.code,
-            domain=args.domain,
-            client=get_dokploy(),
-            staging_validated=args.staging_validated,
-            break_glass=args.break_glass,
-            repo=args.repo,
-            wait=not args.no_wait,
-            timeout=args.timeout,
-            model_overrides=model_overrides,
-            verify_vault=not args.skip_vault_check,
-            verify_config=not args.no_verify_config,
-        )
-    except (ValueError, RuntimeError, TimeoutError) as exc:
-        print(f"deploy failed: {exc}", file=sys.stderr)
-        return 2
-
-    print(
-        json.dumps(
-            {
-                "env": plan.env,
-                "sha": plan.sha,
-                "compose_id": plan.compose_id,
-                "data_lane": plan.data,
-            }
-        )
-    )
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -2,7 +2,7 @@
 
 Tests routing / form-gating / image_ref threading / gates / data-lane red lines. The
 network resolvers (resolve_image_ref / resolve_pr / resolve_to_sha) and the backends
-(preview_lifecycle.up, deploy_primitive.deploy) are monkeypatched, so NO git/Dokploy/HTTP
+(libs.deploy.preview.up, libs.deploy.promote.deploy) are monkeypatched, so NO git/Dokploy/HTTP
 call happens — classify_ref stays real, so form validation is exercised for real.
 """
 
@@ -551,6 +551,120 @@ def test_fixed_deploy_verify_can_be_disabled(calls):
     )
     assert calls["fixed"]["verify_vault"] is False
     assert calls["fixed"]["verify_config"] is False
+
+
+# --- teardown: the --down flag folds in the retired preview-lifecycle `down` ------
+
+
+def _fake_down_result(kind, value, *, domain, client):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        action="down",
+        alias=f"{kind}-{value}",
+        compose_id="cmp-1",
+        url=f"https://report-{kind}-{value}.{domain}",
+    )
+
+
+def test_cli_down_tears_down_the_selected_preview_alias(monkeypatch, capsys):
+    # --down resolves the SAME alias (kind from --type, value from --version-ref) and
+    # routes to the preview backend's down(); it never resolves a ref or deploys.
+    rec = {}
+
+    def fake_down(kind, value, *, domain, client):
+        rec.update(kind=kind, value=value, domain=domain, client=client)
+        return _fake_down_result(kind, value, domain=domain, client=client)
+
+    import libs.dokploy as dk
+
+    monkeypatch.setattr(dk, "get_dokploy", lambda host: f"client@{host}")
+    monkeypatch.setattr(dv2, "_preview_down", fake_down)
+    # deploy_v2 must NOT be called on the teardown path.
+    monkeypatch.setattr(
+        dv2,
+        "deploy_v2",
+        lambda **kw: pytest.fail("deploy_v2 must not run for --down"),
+    )
+
+    rc = dv2.main(
+        [
+            "--type",
+            "preview/pr",
+            "--version-ref",
+            "5",
+            "--iac-ref",
+            "main",
+            "--domain",
+            "zp.io",
+            "--down",
+        ]
+    )
+
+    assert rc == 0
+    assert rec == {
+        "kind": "pr",
+        "value": "5",
+        "domain": "zp.io",
+        "client": "client@cloud.zp.io",
+    }
+    out = json.loads(capsys.readouterr().out)
+    assert out["action"] == "down" and out["alias"] == "pr-5"
+
+
+def test_cli_down_rejects_a_fixed_env(monkeypatch, capsys):
+    # staging/prod have no ephemeral alias to remove — --down must fail closed.
+    import libs.dokploy as dk
+
+    monkeypatch.setattr(
+        dk,
+        "get_dokploy",
+        lambda host: pytest.fail("must not build a client for an invalid --down"),
+    )
+    rc = dv2.main(
+        [
+            "--type",
+            "staging",
+            "--version-ref",
+            "v1.2.3",
+            "--iac-ref",
+            "v1.2.3",
+            "--domain",
+            "zp.io",
+            "--down",
+        ]
+    )
+    assert rc == 1
+    assert "--down only tears down preview" in capsys.readouterr().err
+
+
+def test_cli_down_rejects_a_malformed_domain(monkeypatch, capsys):
+    # a whitespace/empty domain would corrupt cloud.<domain>; --down must reject it
+    # before building the Dokploy client — the same guard the preview backend applies on up.
+    import libs.dokploy as dk
+
+    monkeypatch.setattr(
+        dk,
+        "get_dokploy",
+        lambda host: pytest.fail(
+            "must not build a client for a malformed --down domain"
+        ),
+    )
+    rc = dv2.main(
+        [
+            "--type",
+            "preview/branch",
+            "--version-ref",
+            "main",
+            "--iac-ref",
+            "main",
+            "--domain",
+            "bad domain",
+            "--down",
+        ]
+    )
+    assert rc == 1
+    assert "invalid domain" in capsys.readouterr().err
 
 
 def test_cli_verify_flags_default_on_and_flip(cli):

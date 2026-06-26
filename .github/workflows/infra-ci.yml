@@ -98,7 +98,7 @@ jobs:
           python -c "
           import sys
           sys.path.insert(0, 'libs')
-          from deployer import _compute_config_hash
+          from deploy.deployer import _compute_config_hash
           
           # Test hash stability with different order
           hash1 = _compute_config_hash('test: true', {'A': '1', 'B': '2'})
@@ -118,7 +118,7 @@ jobs:
           python -c "
           import sys
           sys.path.insert(0, 'libs')
-          from deployer import discover_services
+          from deploy.deployer import discover_services
           
           services = discover_services()
           print(f'Discovered {len(services)} services:')
@@ -338,8 +338,8 @@ jobs:
               spec = importlib.util.spec_from_file_location('deploy', deploy_file)
               module = importlib.util.module_from_spec(spec)
 
-              # Import libs.deployer to get Deployer class
-              from libs.deployer import Deployer
+              # Import libs.deploy.deployer to get Deployer class
+              from libs.deploy.deployer import Deployer
 
               # Execute the module
               spec.loader.exec_module(module)

@@ -8,7 +8,7 @@ import os
 import time
 
 from invoke import task
-from libs.deployer import Deployer
+from libs.deploy.deployer import Deployer
 from libs.common import get_env
 from libs.console import (
     header,

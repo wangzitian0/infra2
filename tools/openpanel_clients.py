@@ -4,8 +4,8 @@ OpenPanel uses one project per environment (model B). The client id is a
 **non-secret per-env value**, but it must reach the app frontend container's env
 so `<Analytics>` renders. There are two deploy paths and both must inject it:
 
-- legacy `libs.deployer` path — `finance_report/.../10.app/deploy.py:pre_compose`
-- the live `deploy_v2` fixed-compose path — `tools/deploy_primitive.deploy`
+- legacy `libs.deploy.deployer` path — `finance_report/.../10.app/deploy.py:pre_compose`
+- the live `deploy_v2` fixed-compose path — `libs/deploy/promote.deploy`
 
 `10.app` is not an importable module name (leading digit), so this map lives
 here in `tools/` and both paths import it — keeping one source of truth instead

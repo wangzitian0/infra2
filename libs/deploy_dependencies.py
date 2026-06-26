@@ -2,7 +2,7 @@
 
 Single source of truth for two things that must agree:
   1. The iac-runner change-detection fan-out (`sync_runner`), and
-  2. The Deployer content config-hash (`libs/deployer`).
+  2. The Deployer content config-hash (`libs/deploy/deployer`).
 
 A service is deploy-dependent on its OWN directory (implicit) plus any EXTRA
 build/config artifacts it declares in `docs/ssot/deploy-dependencies.yaml`.

@@ -6,7 +6,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from invoke import task
 
-from libs.deployer import Deployer, make_tasks
+from libs.deploy.deployer import Deployer, make_tasks
 from libs.console import env_vars, error, run_with_status, success, header
 
 # Get shared_tasks from sys.modules (loaded by tools/loader.py)

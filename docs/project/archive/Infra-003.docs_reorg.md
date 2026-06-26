@@ -118,5 +118,5 @@ Project closed on 2025-12-30; list retained for record.
 - [x] `tools/local_init.py`: CLI 安装/提示输出统一改为 `libs.console` 风格。
 - [x] `README.md` + `docs/README.md` + `docs/onboarding/README.md` + `docs/ssot/README.md`: 统一命令示例为 `invoke` 并提示 `uv run invoke` 备用。
 - [x] `docs/ssot/bootstrap.vars_and_secrets.md` + `README.md`: env CLI 示例补齐 `--service` 与说明。
-- [x] `libs/deployer.py` + `bootstrap/04.1password/tasks.py` + `bootstrap/05.vault/tasks.py` + `platform/10.authentik/deploy.py`: CLI 日志文案统一为 pre/post-compose。
+- [x] `libs/deploy/deployer.py` + `bootstrap/04.1password/tasks.py` + `bootstrap/05.vault/tasks.py` + `platform/10.authentik/deploy.py`: CLI 日志文案统一为 pre/post-compose。
 - [x] `docs/ssot/platform.automation.md` + `docs/ssot/platform.sso.md` + `platform/*/README.md`: 统一 pre/post-compose 命名展示。

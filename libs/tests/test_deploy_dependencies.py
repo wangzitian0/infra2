@@ -31,7 +31,7 @@ def test_service_key_from_path_layouts():
         == "bootstrap/dokploy-install"
     )
     # tooling / shared / root paths own no service
-    assert service_key_from_path("libs/deployer.py") is None
+    assert service_key_from_path("libs/deploy/deployer.py") is None
     assert service_key_from_path("tools/x.py") is None
     assert service_key_from_path("common/foo.py") is None
     assert service_key_from_path("moon.yml") is None
@@ -39,7 +39,7 @@ def test_service_key_from_path_layouts():
 
 def test_libs_change_fans_out_to_nothing():
     # The whole point: a shared-tooling change must NOT redeploy every service.
-    assert match_changed_services(["libs/deployer.py"], manifest={}) == set()
+    assert match_changed_services(["libs/deploy/deployer.py"], manifest={}) == set()
     assert match_changed_services(["tools/dokploy_env.py"], manifest={}) == set()
 
 
@@ -89,7 +89,7 @@ def test_shipped_manifest_fans_libs_and_tools_to_alerting():
     # emptied back to a no-op (which would let alerting run stale tooling).
     manifest = load_dependency_manifest()
     assert "platform/alerting" in match_changed_services(
-        ["libs/deployer.py"], manifest=manifest
+        ["libs/deploy/deployer.py"], manifest=manifest
     )
     assert "platform/alerting" in match_changed_services(
         ["tools/dokploy_env.py"], manifest=manifest
@@ -97,7 +97,7 @@ def test_shipped_manifest_fans_libs_and_tools_to_alerting():
     # ...but a libs/ change still does NOT fan out to a service that does not
     # bake it in.
     assert "platform/openpanel" not in match_changed_services(
-        ["libs/deployer.py"], manifest=manifest
+        ["libs/deploy/deployer.py"], manifest=manifest
     )
 
 
@@ -123,7 +123,7 @@ def test_explain_fanout_records_reasons_and_drops():
     decision = explain_fanout(
         [
             "platform/24.openpanel/compose.yaml",  # own-dir
-            "libs/deployer.py",  # declared dep of alerting; drop for openpanel
+            "libs/deploy/deployer.py",  # declared dep of alerting; drop for openpanel
             "docs/notes.md",  # owned by nobody -> dropped
         ],
         manifest=manifest,

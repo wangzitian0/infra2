@@ -5,7 +5,7 @@ GitOps webhook service for automatic infrastructure sync.
 """
 
 import sys
-from libs.deployer import Deployer, make_tasks
+from libs.deploy.deployer import Deployer, make_tasks
 
 shared_tasks = sys.modules.get("bootstrap.06.iac_runner.shared")
 

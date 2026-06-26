@@ -4,12 +4,12 @@
 The preview env (deploy_env_config.py) is a *family* of throwaway stacks, one per
 alias — ``main`` / ``pr-<N>`` / ``commit-<sha7>`` — each its OWN Dokploy compose with
 its OWN ephemeral database (finance_report/finance_report/preview/compose.yaml). This
-module is the manual entrypoint that creates, deploys, health-checks, and tears those
-stacks down. Unlike staging/prod (a fixed compose driven by deploy_primitive.deploy),
+module is the importable library that creates, deploys, health-checks, and tears those
+stacks down. Unlike staging/prod (a fixed compose driven by libs.deploy.promote.deploy),
 preview is dynamic: the compose for an alias is found-or-created here by a deterministic
 name, so any number of aliases coexist and outlive a CI run until explicitly torn down.
 
-Design seams (mirroring deploy_primitive / resolve_deploy_ref):
+Design seams (mirroring libs.deploy.promote / resolve_deploy_ref):
 - code -> sha           : resolve_deploy_ref.resolve_to_sha (the App image tag to pull)
 - (kind, value) -> ids  : deploy_env_config.preview_alias (suffix / url / slug / label)
 - side effects          : the injected Dokploy client (create/update/deploy/delete)
@@ -18,19 +18,16 @@ Design seams (mirroring deploy_primitive / resolve_deploy_ref):
 Everything with side effects takes an injected client/getter so the orchestration is
 unit-testable with a mock — NO live Dokploy/HTTP call happens in tests. The compose
 template is pulled from infra2 via Dokploy's GitHub source (sourceType="github",
-composePath=...), the same mechanism libs.deployer uses, so the relative vault-agent
+composePath=...), the same mechanism libs.deploy.deployer uses, so the relative vault-agent
 files the template mounts (vault-agent.hcl / secrets.ctmpl) exist on the Dokploy host.
 
-CLI:
-    python -m tools.preview_lifecycle up   --kind pr --value 5 --code main --domain zitian.party
-    python -m tools.preview_lifecycle down --kind pr --value 5 --domain zitian.party
+This is a pure importable backend — the operator surface is the deploy_v2 CLI:
+    python -m tools.deploy_v2 --type preview/pr --version-ref 5 --iac-ref main --domain zitian.party
+    python -m tools.deploy_v2 --type preview/pr --version-ref 5 --iac-ref main --domain zitian.party --down
 """
 
 from __future__ import annotations
 
-import argparse
-import json
-import sys
 import time
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
@@ -49,7 +46,7 @@ from tools.openpanel_clients import openpanel_env
 from tools.resolve_deploy_ref import resolve_to_sha
 
 # The infra2 repo + path Dokploy pulls the preview compose template from (same source
-# mechanism as libs.deployer; the compose mounts ./vault-agent.hcl + ./secrets.ctmpl,
+# mechanism as libs.deploy.deployer; the compose mounts ./vault-agent.hcl + ./secrets.ctmpl,
 # which only exist when Dokploy clones the repo rather than uploading a raw blob).
 _PREVIEW_COMPOSE_PATH = "finance_report/finance_report/preview/compose.yaml"
 
@@ -131,7 +128,7 @@ def _preview_env_vars(
 ) -> dict[str, str]:
     """Assemble the Dokploy compose env for one preview alias.
 
-    Mirrors deploy_primitive.deploy's shared keys (IMAGE_TAG/GIT_COMMIT_SHA short-sha,
+    Mirrors libs.deploy.promote.deploy's shared keys (IMAGE_TAG/GIT_COMMIT_SHA short-sha,
     NEXT_PUBLIC_APP_URL, ENV_SUFFIX/ENV_DOMAIN_SUFFIX, COMPOSE_PROFILES, TRAEFIK_ENABLE,
     INTERNAL_DOMAIN, IAC_CONFIG_HASH cache-bust) and adds the preview-only bits: ENV is
     the alias display label (telemetry consumes it), PREVIEW_SECRET_ENV picks which env's
@@ -155,7 +152,7 @@ def _preview_env_vars(
         # #375: every preview alias (main / pr-<N> / commit-<sha7>) shares the single
         # "preview" OpenPanel project; inject its client-id at runtime so preview
         # analytics actually emits (alias granularity rides deployment.environment, not
-        # a per-alias project). staging/prod get this via deploy_primitive; preview was
+        # a per-alias project). staging/prod get this via libs.deploy.promote; preview was
         # the missing path — without it OPENPANEL_CLIENT_ID stayed empty and analytics
         # silently no-op'd on every preview.
         **openpanel_env("preview"),
@@ -428,87 +425,3 @@ def _wait_for_health(
         if _now() >= deadline:
             return False
         _sleep(max(1, interval))
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="multi-alias preview lifecycle")
-    sub = parser.add_subparsers(dest="action", required=True)
-
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument(
-        "--kind", required=True, choices=["branch", "pr", "commit", "tag"]
-    )
-    common.add_argument(
-        "--value",
-        default=None,
-        help="branch name (default main) / PR number / commit sha / tag vX.Y.Z",
-    )
-    common.add_argument(
-        "--domain", required=True, help="base domain, e.g. zitian.party"
-    )
-
-    up_p = sub.add_parser(
-        "up", parents=[common], help="create/update + deploy an alias"
-    )
-    up_p.add_argument(
-        "--code", required=True, help="main | vX.Y.Z | <sha>"
-    )
-    up_p.add_argument("--repo", default=None, help="git remote to resolve code against")
-    up_p.add_argument("--no-wait", action="store_true", help="do not health-check")
-    up_p.add_argument("--timeout", type=int, default=600, help="health-check seconds")
-
-    sub.add_parser(
-        "down", parents=[common], help="tear down an alias + its ephemeral DB"
-    )
-
-    args = parser.parse_args(argv)
-
-    # Validate the domain BEFORE it is used to build the Dokploy host, so a malformed
-    # domain is rejected up front for both `up` and `down` (the client host is derived
-    # from it; up()/down() also re-validate, but the client must not be built from a bad
-    # domain in the first place).
-    try:
-        _validate_domain(args.domain)
-    except ValueError as exc:
-        print(f"preview {args.action} failed: {exc}", file=sys.stderr)
-        return 2
-
-    # Imported lazily so importing the module (and its unit tests) needs no Dokploy creds.
-    from libs.dokploy import get_dokploy
-
-    client = get_dokploy(host=f"cloud.{args.domain}")
-    try:
-        if args.action == "up":
-            result = up(
-                args.kind,
-                args.value,
-                code=args.code,
-                domain=args.domain,
-                client=client,
-                wait=not args.no_wait,
-                health_timeout=args.timeout,
-                repo=args.repo,
-            )
-        else:
-            result = down(args.kind, args.value, domain=args.domain, client=client)
-    except (ValueError, RuntimeError, TimeoutError) as exc:
-        print(f"preview {args.action} failed: {exc}", file=sys.stderr)
-        return 2
-
-    print(
-        json.dumps(
-            {
-                "action": result.action,
-                "alias": result.alias,
-                "compose_id": result.compose_id,
-                "sha": result.sha,
-                "url": result.url,
-                "healthy": result.healthy,
-            }
-        )
-    )
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

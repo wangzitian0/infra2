@@ -19,7 +19,7 @@
 ### Code as SSOT 索引
 
 - **任务加载器**：参见 `tasks.py`
-- **部署基类**：参见 `libs/deployer.py`
+- **部署基类**：参见 `libs/deploy/deployer.py`
 
 ---
 

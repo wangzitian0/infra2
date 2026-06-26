@@ -284,7 +284,7 @@ python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref
 
 **签发归 infra2**：infra2 在部署时从触发上下文（PR 号 / tag / branch / commit）派生 `{short-sha, 表层别名}` 并注入 `service.version` + `deployment.environment`；应用只**消费**这些变量并对缺失做 fast-fail（不得自行定义环境）。OTLP 端点见 [ops.observability.md](ops.observability.md#41-应用接入-otlp)。
 
-对 **preview** 多别名而言，`deployment.environment` 的取值就是别名 token 本身——`main` / `pr-<N>` / `commit-<sha7>`（见 §4.6）。同一份签发逻辑由 `tools/preview_lifecycle.py` 在 `up` 时通过 `ENV` 注入到 compose（vault-agent 与遥测共同消费），与 `tools/deploy_env_config.py::preview_alias` 派生的 `env_suffix` 保持同源。
+对 **preview** 多别名而言，`deployment.environment` 的取值就是别名 token 本身——`main` / `pr-<N>` / `commit-<sha7>`（见 §4.6）。同一份签发逻辑由 `libs/deploy/preview` 后端（经 `tools/deploy_v2 --type preview/*` 触发，非直接调用）在 `up` 时通过 `ENV` 注入到 compose（vault-agent 与遥测共同消费），与 `tools/deploy_env_config.py::preview_alias` 派生的 `env_suffix` 保持同源。
 
 ---
 
@@ -681,7 +681,7 @@ time python -m tools.deploy_v2 \
 ### 11.2 Preview Environments
 
 多别名 preview 已落地（§4.6）：`main` / `pr-<N>` / `commit-<sha7>` 三类别名各自一套
-带临时数据库的独立 compose 栈，由 `tools/preview_lifecycle.py` 手动 up/down。未来可在此
+带临时数据库的独立 compose 栈，经 `tools/deploy_v2` 操作（`--type preview/*` 拉起、`--down` 拆除，路由到 `libs/deploy/preview` 后端）。未来可在此
 基础上扩展 feature-branch 别名（如 `report-feature-dark-mode.zitian.party`）。
 
 ---

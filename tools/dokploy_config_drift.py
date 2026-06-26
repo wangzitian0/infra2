@@ -12,7 +12,7 @@ How the expected hash is computed WITHOUT a worktree (main-worktree only):
      (_compose_artifact_files + the declared dependency globs) — no re-implementation, so the
      file set can't diverge from the deploy.
   2. Read those files' CONTENT at the target ref via ``git cat-file --batch`` (in memory).
-  3. Feed (compose, env, items) to libs.deployer.config_hash_from_items — the SAME pure function
+  3. Feed (compose, env, items) to libs.deploy.deployer.config_hash_from_items — the SAME pure function
      compute_local_config_hash uses, now path-independent (so a ref's content reproduces the
      iac-runner's hash exactly).
 
@@ -40,7 +40,7 @@ import glob as _glob  # noqa: E402
 
 from invoke import Context  # noqa: E402
 
-from libs.deployer import (  # noqa: E402
+from libs.deploy.deployer import (  # noqa: E402
     Deployer,
     _compose_artifact_files,
     _repo_rel,
@@ -55,7 +55,9 @@ from libs import service_registry  # noqa: E402
 
 def _load_deployer(service_id: str) -> type[Deployer] | None:
     layer, name = service_id.split("/", 1)
-    base = ROOT / ("platform" if layer == "platform" else "finance_report/finance_report")
+    base = ROOT / (
+        "platform" if layer == "platform" else "finance_report/finance_report"
+    )
     deploy_py = next(base.glob(f"*.{name}/deploy.py"), None)
     if deploy_py is None:
         return None
@@ -64,12 +66,18 @@ def _load_deployer(service_id: str) -> type[Deployer] | None:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     for _, obj in inspect.getmembers(module, inspect.isclass):
-        if issubclass(obj, Deployer) and obj is not Deployer and obj.__module__ == spec.name:
+        if (
+            issubclass(obj, Deployer)
+            and obj is not Deployer
+            and obj.__module__ == spec.name
+        ):
             return obj
     return None
 
 
-def _hash_input_paths(dep: type[Deployer], c: Context) -> tuple[str, list[str], list[str]]:
+def _hash_input_paths(
+    dep: type[Deployer], c: Context
+) -> tuple[str, list[str], list[str]]:
     """Repo-relative (compose_path, artifact_paths, dep_paths) for a service, enumerated on disk
     with the REAL deploy enumeration (so the file set matches what the deploy would hash)."""
     compose_content = dep.get_compose_content(c)
@@ -81,7 +89,7 @@ def _hash_input_paths(dep: type[Deployer], c: Context) -> tuple[str, list[str], 
     for pattern in extra_dependency_globs(key) if key else []:
         for hit in _glob.glob(str(ROOT / pattern), recursive=True):
             p = Path(hit)
-            # Same exclusion as libs.deployer._dependency_items_from_disk: transient
+            # Same exclusion as libs.deploy.deployer._dependency_items_from_disk: transient
             # __pycache__/.pyc/.pyo are not in git and absent on a clean checkout.
             if (
                 p.is_file()
@@ -124,7 +132,7 @@ def _env_vars(dep: type[Deployer]) -> dict[str, str]:
     live-secret fetch in compose_env_base can't differ between the disk and git computations)."""
     e = dep.env()
     ev = dep.compose_env_base(e)
-    # Mirror libs.deployer's VAULT_ADDR default EXACTLY (INTERNAL_DOMAIN or 'localhost') — a
+    # Mirror libs.deploy.deployer's VAULT_ADDR default EXACTLY (INTERNAL_DOMAIN or 'localhost') — a
     # divergence here would compute a different expected hash than the deploy and false-DRIFT.
     ev["VAULT_ADDR"] = e.get(
         "VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}"
@@ -139,13 +147,17 @@ def expected_hash_at(
     are hash-input files that don't exist at `ref` (a structural change → can't compare)."""
     compose_path, artifact_paths, dep_paths = _hash_input_paths(dep, c)
     contents = contents_at_ref(ref, [compose_path, *artifact_paths, *dep_paths])
-    missing = [p for p in (compose_path, *artifact_paths, *dep_paths) if p not in contents]
+    missing = [
+        p for p in (compose_path, *artifact_paths, *dep_paths) if p not in contents
+    ]
     if compose_path in missing:
         return None, missing
     compose_content = contents[compose_path].decode("utf-8", "replace")
     artifact_items = [(p, contents[p]) for p in artifact_paths if p in contents]
     dep_items = [(p, contents[p]) for p in dep_paths if p in contents]
-    return config_hash_from_items(compose_content, env_vars, artifact_items, dep_items), missing
+    return config_hash_from_items(
+        compose_content, env_vars, artifact_items, dep_items
+    ), missing
 
 
 def _set_env(env_name: str) -> None:
@@ -191,13 +203,19 @@ def self_check() -> int:
         print("❌ self-check FAILED (git path != disk at HEAD):")
         print("\n".join(f"  {b}" for b in bad))
         return 1
-    print("✅ self-check passed: git-content hash == disk hash for every service at HEAD.")
+    print(
+        "✅ self-check passed: git-content hash == disk hash for every service at HEAD."
+    )
     return 0
 
 
 def _latest_release_tag() -> str:
     tags = subprocess.run(
-        ["git", "tag", "--sort=-creatordate"], cwd=ROOT, capture_output=True, text=True, check=True
+        ["git", "tag", "--sort=-creatordate"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.splitlines()
     for t in tags:
         if t.startswith("v") and t[1:2].isdigit():
@@ -220,7 +238,11 @@ def _deployed_hashes() -> dict[str, str]:
                 d = client._request("GET", f"compose.one?composeId={cp['composeId']}")
                 env_str = d.get("env") or ""
                 ich = next(
-                    (ln.split("=", 1)[1] for ln in env_str.splitlines() if ln.startswith("IAC_CONFIG_HASH=")),
+                    (
+                        ln.split("=", 1)[1]
+                        for ln in env_str.splitlines()
+                        if ln.startswith("IAC_CONFIG_HASH=")
+                    ),
                     None,
                 )
                 if ich:
@@ -242,20 +264,38 @@ def scan(tag: str) -> list[Row]:
             rows.append(Row(sid, "not_deployed"))
             continue
         if dep_hash.startswith("deploy-"):
-            rows.append(Row(sid, "cache_bust", deployed=dep_hash, note="app deploy_v2 path"))
+            rows.append(
+                Row(sid, "cache_bust", deployed=dep_hash, note="app deploy_v2 path")
+            )
             continue
         try:
             env_vars = _env_vars(dep)
         except Exception as exc:  # noqa: BLE001 — env needs op (e.g. alerting's token); skip, don't false-DRIFT
-            rows.append(Row(sid, "env_unavailable", deployed=dep_hash, note=f"env needs op: {exc}"))
+            rows.append(
+                Row(
+                    sid,
+                    "env_unavailable",
+                    deployed=dep_hash,
+                    note=f"env needs op: {exc}",
+                )
+            )
             continue
         try:
             exp, missing = expected_hash_at(dep, c, tag, env_vars)
         except Exception as exc:  # noqa: BLE001 — a tool/runtime failure is NOT drift; keep them
-            rows.append(Row(sid, "error", deployed=dep_hash, note=f"compute error: {exc}"))
+            rows.append(
+                Row(sid, "error", deployed=dep_hash, note=f"compute error: {exc}")
+            )
             continue
         if missing:
-            rows.append(Row(sid, "structural", deployed=dep_hash, note=f"{len(missing)} input(s) absent at {tag}"))
+            rows.append(
+                Row(
+                    sid,
+                    "structural",
+                    deployed=dep_hash,
+                    note=f"{len(missing)} input(s) absent at {tag}",
+                )
+            )
         elif exp == dep_hash:
             rows.append(Row(sid, "in_sync", exp, dep_hash))
         else:
@@ -274,7 +314,9 @@ def format_report(tag: str, rows: list[Row]) -> str:
         f"env-skip {n('env_unavailable')} · n/a(app) {n('cache_bust')}",
     ]
     for r in drift:
-        lines.append(f"🔴 DRIFT {r.service}: deployed≠release (expected={r.expected} deployed={r.deployed})")
+        lines.append(
+            f"🔴 DRIFT {r.service}: deployed≠release (expected={r.expected} deployed={r.deployed})"
+        )
     for r in errors:
         # Surface tool/runtime failures loudly — a silently-skipped service must not let the run
         # look healthy (a "0 drift" that actually never checked N services is the lie to avoid).
@@ -293,9 +335,17 @@ def format_report(tag: str, rows: list[Row]) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--self-check", action="store_true", help="prove git path == disk at HEAD")
-    parser.add_argument("--strict", action="store_true", help="exit 1 if any real DRIFT")
-    parser.add_argument("--report", action="store_true", help="post the report to the infra2 reports Lark group")
+    parser.add_argument(
+        "--self-check", action="store_true", help="prove git path == disk at HEAD"
+    )
+    parser.add_argument(
+        "--strict", action="store_true", help="exit 1 if any real DRIFT"
+    )
+    parser.add_argument(
+        "--report",
+        action="store_true",
+        help="post the report to the infra2 reports Lark group",
+    )
     args = parser.parse_args()
 
     if args.self_check:

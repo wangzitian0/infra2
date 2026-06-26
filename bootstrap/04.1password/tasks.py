@@ -3,6 +3,7 @@
 Uses libs/ system for consistent environment and console utilities.
 Bootstrap layer uses 1Password for secrets, not Vault.
 """
+
 import json
 import sys
 import time
@@ -17,7 +18,7 @@ from libs.console import (
     prompt_action,
     run_with_status,
 )
-from libs.deployer import Deployer, make_tasks
+from libs.deploy.deployer import Deployer, make_tasks
 
 shared_tasks = sys.modules.get("bootstrap.04.1password.shared")
 
@@ -27,13 +28,14 @@ CONNECT_TOKEN_ITEM = "infra2.0 Access Token: infra2.0"
 
 class OnePasswordDeployer(Deployer):
     """1Password Connect deployer using libs/ system"""
+
     service = "1password"
     compose_path = "bootstrap/04.1password/compose.yaml"
     data_path = "/data/bootstrap/1password"
     uid = "999"
     gid = "999"
     chmod = "700"
-    
+
     # Domain configuration via Dokploy API
     subdomain = "op"
     service_port = 8080
@@ -70,8 +72,8 @@ class OnePasswordDeployer(Deployer):
             "read -r token; "
             "docker run --rm -i --network dokploy-network curlimages/curl:8.10.1 "
             f"-sS --max-time {timeout} "
-            "-H \"Authorization: Bearer ${token}\" "
-            f"\"http://op-connect-api:8080{path}\""
+            '-H "Authorization: Bearer ${token}" '
+            f'"http://op-connect-api:8080{path}"'
         )
         return c.run(
             "op item get "
@@ -151,43 +153,48 @@ class OnePasswordDeployer(Deployer):
     def composing(cls, c, env_vars: dict = None) -> bool:
         """Deploy in Dokploy (automated)"""
         if not isinstance(env_vars, dict):
-             from libs.common import get_env
-             env_vars = get_env()
-        
-        # Import shared constants    
+            from libs.common import get_env
+
+            env_vars = get_env()
+
+        # Import shared constants
         from libs.const import GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH
-             
+
         e = cls.env()
         header("1Password composing", "Deploy in Dokploy (automated)")
-        
+
         try:
             from libs.dokploy import ensure_project, get_dokploy
-            
+
             # Ensure project exists
-            domain = env_vars.get('INTERNAL_DOMAIN')
+            domain = env_vars.get("INTERNAL_DOMAIN")
             host = f"cloud.{domain}" if domain else None
-            
-            project_id, env_id = ensure_project("bootstrap", "Bootstrap infrastructure services", host=host)
+
+            project_id, env_id = ensure_project(
+                "bootstrap", "Bootstrap infrastructure services", host=host
+            )
             if not env_id:
                 error("Failed to get environment ID")
                 return False
-            
+
             info(f"Project: bootstrap (env: {env_id})")
-            
+
             # Deploy compose using GitHub provider
             client = get_dokploy(host=host)
             existing = client.find_compose_by_name("1password-connect", "bootstrap")
-            
+
             # GitHub repository info
             compose_path = cls.compose_path
-            
+
             # Get GitHub provider ID
             github_id = client.get_github_provider_id()
             if not github_id:
-                raise ValueError("No GitHub provider configured in Dokploy. Please add one in Settings -> Git Providers.")
-                
+                raise ValueError(
+                    "No GitHub provider configured in Dokploy. Please add one in Settings -> Git Providers."
+                )
+
             info(f"Using GitHub provider: {github_id}")
-            
+
             if existing:
                 compose_id = existing["composeId"]
                 info("Updating existing compose service")
@@ -214,20 +221,22 @@ class OnePasswordDeployer(Deployer):
                     composePath=compose_path,
                 )
                 compose_id = result["composeId"]
-            
+
             # Update environment variables
             info("Updating environment variables (from libs)")
-            env_content = "\n".join([f"{k}={v}" for k, v in env_vars.items() if v is not None])
+            env_content = "\n".join(
+                [f"{k}={v}" for k, v in env_vars.items() if v is not None]
+            )
             client.update_compose(compose_id, env=env_content)
-            
+
             info(f"Deploying compose (ID: {compose_id})")
             client.deploy_compose(compose_id)
-            
+
             # Configure domain via Dokploy API (using ensure_domains for idempotency)
             if cls.subdomain and cls.service_port:
                 domain_host = f"{cls.subdomain}.{domain}"
                 info(f"Ensuring domain: {domain_host}")
-                
+
                 desired_domains = [
                     {"host": domain_host, "port": cls.service_port, "https": True}
                 ]
@@ -236,28 +245,31 @@ class OnePasswordDeployer(Deployer):
                     desired_domains=desired_domains,
                     service_name=cls.service_name,
                 )
-                
+
                 if result["created"] > 0:
                     success(f"Domain configured: https://{domain_host}")
                     client.deploy_compose(compose_id)
                 elif result["skipped"] > 0:
                     info(f"Domain already configured: {domain_host}")
-            
+
             success("1Password Connect deployment triggered")
             warning("Wait 1-2 minutes for containers to start")
             return True
-            
+
         except Exception as ex:
             error(f"Deployment failed: {ex}")
             warning("Falling back to manual deployment")
-            prompt_action("Deploy in Dokploy manually", [
-                f"Access: https://cloud.{e['INTERNAL_DOMAIN']}",
-                "Project: bootstrap",
-                f"Compose: {cls.compose_path}",
-                "Click Deploy"
-            ])
+            prompt_action(
+                "Deploy in Dokploy manually",
+                [
+                    f"Access: https://cloud.{e['INTERNAL_DOMAIN']}",
+                    "Project: bootstrap",
+                    f"Compose: {cls.compose_path}",
+                    "Click Deploy",
+                ],
+            )
             return False
-    
+
     @classmethod
     def post_compose(cls, c, shared_tasks=None) -> bool:
         """Verify deployment"""
@@ -313,4 +325,8 @@ def fix_permissions(c):
     """Fix database permission issues"""
     e = get_env()
     ssh_user = e.get("VPS_SSH_USER") or "root"
-    run_with_status(c, f"ssh {ssh_user}@{e['VPS_HOST']} 'chmod 750 /data/bootstrap/1password'", "Fix permissions")
+    run_with_status(
+        c,
+        f"ssh {ssh_user}@{e['VPS_HOST']} 'chmod 750 /data/bootstrap/1password'",
+        "Fix permissions",
+    )

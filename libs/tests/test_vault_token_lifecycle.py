@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def _install_task_stubs(monkeypatch):
     invoke_module = types.ModuleType("invoke")
     exceptions_module = types.ModuleType("invoke.exceptions")
-    deployer_module = types.ModuleType("libs.deployer")
+    deployer_module = types.ModuleType("libs.deploy.deployer")
     console_module = types.ModuleType("libs.console")
 
     class Exit(Exception):
@@ -50,7 +50,7 @@ def _install_task_stubs(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "invoke", invoke_module)
     monkeypatch.setitem(sys.modules, "invoke.exceptions", exceptions_module)
-    monkeypatch.setitem(sys.modules, "libs.deployer", deployer_module)
+    monkeypatch.setitem(sys.modules, "libs.deploy.deployer", deployer_module)
     monkeypatch.setitem(sys.modules, "libs.console", console_module)
     return Exit
 
@@ -221,7 +221,9 @@ def test_configure_dokploy_approle_injects_creds_and_redeploys(monkeypatch) -> N
     assert client.redeploy_calls == 1
 
 
-def test_configure_dokploy_approle_returns_false_when_service_absent(monkeypatch) -> None:
+def test_configure_dokploy_approle_returns_false_when_service_absent(
+    monkeypatch,
+) -> None:
     """#257: a service not registered in Dokploy fails closed (False), not a crash."""
     tasks, _exit_cls = _load_vault_tasks(monkeypatch)
 
@@ -235,9 +237,7 @@ def test_configure_dokploy_approle_returns_false_when_service_absent(monkeypatch
         lambda: {"ENV": "production", "INTERNAL_DOMAIN": "zitian.party"},
     )
 
-    ok = tasks._configure_dokploy_approle(
-        FakeContext(), "ghost", "r", "s", "platform"
-    )
+    ok = tasks._configure_dokploy_approle(FakeContext(), "ghost", "r", "s", "platform")
     assert ok is False
 
 
@@ -245,7 +245,9 @@ def _policy_paths() -> set[str]:
     """Extract the `path "..."` globs granted by the IaC Runner Vault policy."""
     import re
 
-    policy = (ROOT / "bootstrap" / "06.iac_runner" / "vault-policy.hcl").read_text(encoding="utf-8")
+    policy = (ROOT / "bootstrap" / "06.iac_runner" / "vault-policy.hcl").read_text(
+        encoding="utf-8"
+    )
     return set(re.findall(r'path\s+"([^"]+)"', policy))
 
 
@@ -270,4 +272,6 @@ def test_policy_grants_metadata_list_for_service_secrets():
         "secret/metadata/finance_report/production/app",
         "secret/metadata/platform/production/alerting",
     ):
-        assert any(_policy_matches(g, svc) for g in paths), f"no metadata list grant for {svc}"
+        assert any(_policy_matches(g, svc) for g in paths), (
+            f"no metadata list grant for {svc}"
+        )

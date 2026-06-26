@@ -7,7 +7,7 @@ import ast
 from pathlib import Path
 
 from libs import service_registry as reg
-from libs.deployer import discover_services
+from libs.deploy.deployer import discover_services
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -43,7 +43,9 @@ def test_sync_runner_service_set_is_derived_not_hand_listed() -> None:
     assert there is NO module-level ALL_SERVICES / SERVICE_TASK_MAP assignment and that the
     lazy accessors exist — so reintroducing a hardcoded list fails this test (the drift guard)."""
     tree = ast.parse(
-        (REPO_ROOT / "bootstrap/06.iac_runner/sync_runner.py").read_text(encoding="utf-8")
+        (REPO_ROOT / "bootstrap/06.iac_runner/sync_runner.py").read_text(
+            encoding="utf-8"
+        )
     )
     module_assignments = {
         target.id
@@ -52,8 +54,12 @@ def test_sync_runner_service_set_is_derived_not_hand_listed() -> None:
         for target in node.targets
         if isinstance(target, ast.Name)
     }
-    assert "ALL_SERVICES" not in module_assignments, "sync_runner reintroduced a hand-list"
-    assert "SERVICE_TASK_MAP" not in module_assignments, "sync_runner reintroduced a hand-list"
+    assert "ALL_SERVICES" not in module_assignments, (
+        "sync_runner reintroduced a hand-list"
+    )
+    assert "SERVICE_TASK_MAP" not in module_assignments, (
+        "sync_runner reintroduced a hand-list"
+    )
     functions = {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
     assert {"_all_services", "_service_task_map"} <= functions
 
@@ -74,5 +80,3 @@ def test_services_in_env_excludes_prod_only_off_production() -> None:
     assert reg.shared_services() & staging == set()
     assert reg.shared_services() <= production
     assert production == set(reg.all_services())
-
-

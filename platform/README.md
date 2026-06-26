@@ -122,7 +122,7 @@ clickhouse ──► signoz ──► alerting
 2. Create `deploy.py`:
    ```python
    import sys
-   from libs.deployer import Deployer, make_tasks
+   from libs.deploy.deployer import Deployer, make_tasks
    
    shared_tasks = sys.modules.get("platform.XX.new.shared")
    

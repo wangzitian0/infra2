@@ -14,7 +14,7 @@ def test_make_tasks_sync_surfaces_failed_action_as_nonzero_exit() -> None:
     """A 'failed' action must raise (non-zero exit) so the iac-runner sees a real
     failure instead of a green '✅ sync completed' — the silent-deploy root cause."""
     from invoke.exceptions import Exit
-    from libs.deployer import Deployer, make_tasks
+    from libs.deploy.deployer import Deployer, make_tasks
 
     class FailingDeployer(Deployer):
         service = "demo"
@@ -31,7 +31,7 @@ def test_make_tasks_sync_surfaces_failed_action_as_nonzero_exit() -> None:
 def test_make_tasks_sync_keeps_skipped_action_as_success() -> None:
     """'skipped' — including the deliberate fail-closed skip — stays a success
     (no raise), preserving the load-shedding safety net unchanged."""
-    from libs.deployer import Deployer, make_tasks
+    from libs.deploy.deployer import Deployer, make_tasks
 
     class SkippingDeployer(Deployer):
         service = "demo"
@@ -54,7 +54,7 @@ def test_prepare_dirs_reasserts_subpath_ownership_after_blanket_chown(
     """A `data_subpath_uids` island (e.g. op-ch ClickHouse = 101) must be chowned AFTER
     the blanket `chown -R {uid}`, so a uid-1000 service tree never clobbers its embedded
     uid-101 ClickHouse back to 1000 — the silent openpanel ingestion outage."""
-    import libs.deployer as d
+    import libs.deploy.deployer as d
 
     cmds: list[str] = []
     monkeypatch.setattr(d, "validate_env", lambda: [])
@@ -95,7 +95,7 @@ def test_sync_skips_prod_only_service_on_non_production() -> None:
     """prod_only services (observability/analytics: signoz, clickhouse, openpanel)
     are never deployed to non-production envs — sync() short-circuits to 'skipped'
     before any vault/dokploy work, so a staging copy is never created."""
-    from libs.deployer import Deployer
+    from libs.deploy.deployer import Deployer
 
     class ObsDeployer(Deployer):
         service = "signoz"
@@ -188,7 +188,7 @@ def test_preserve_runtime_env_keeps_existing_approle_creds() -> None:
     out-of-band must survive a redeploy that regenerates the git-derived env, or the
     migrated vault-agent loses them and crash-loops. The legacy static VAULT_APP_TOKEN
     is no longer preserved (it is cleaned up on the next redeploy)."""
-    from libs.deployer import _preserve_runtime_env
+    from libs.deploy.deployer import _preserve_runtime_env
 
     result = _preserve_runtime_env(
         "ENV=production\nINTERNAL_DOMAIN=zitian.party",
@@ -206,7 +206,7 @@ def test_preserve_runtime_env_keeps_existing_approle_creds() -> None:
 
 
 def test_parse_env_text_ignores_comments_blanks_and_malformed_lines() -> None:
-    from libs.deployer import _parse_env_text
+    from libs.deploy.deployer import _parse_env_text
 
     assert _parse_env_text("\n# comment\nA=1\nINVALID\nB=two=parts\n") == {
         "A": "1",
@@ -215,7 +215,7 @@ def test_parse_env_text_ignores_comments_blanks_and_malformed_lines() -> None:
 
 
 def test_data_path_for_env_requires_isolation_for_non_production(monkeypatch) -> None:
-    from libs.deployer import Deployer
+    from libs.deploy.deployer import Deployer
 
     class DummyDeployer(Deployer):
         data_path = "/data/app"
@@ -227,7 +227,7 @@ def test_data_path_for_env_requires_isolation_for_non_production(monkeypatch) ->
 
 
 def test_data_path_for_env_allows_explicit_suffix_and_override(monkeypatch) -> None:
-    from libs.deployer import Deployer
+    from libs.deploy.deployer import Deployer
 
     class DummyDeployer(Deployer):
         data_path = "/data/app"
@@ -249,7 +249,7 @@ def test_data_path_for_env_allows_explicit_suffix_and_override(monkeypatch) -> N
 
 
 def test_compose_env_base_filters_empty_optional_values() -> None:
-    from libs.deployer import Deployer
+    from libs.deploy.deployer import Deployer
 
     class DummyDeployer(Deployer):
         data_path = "/data/app"
@@ -273,7 +273,7 @@ def test_config_hash_includes_compose_local_mounts_and_docker_copy_sources(
     tmp_path, monkeypatch
 ) -> None:
     """Infra-011.8: local image/template source changes must force redeploy."""
-    from libs.deployer import Deployer
+    from libs.deploy.deployer import Deployer
 
     app_dir = tmp_path / "app"
     app_dir.mkdir()
@@ -315,7 +315,7 @@ services:
 
 
 def test_compose_artifact_files_handles_json_copy_and_bind_mounts(tmp_path) -> None:
-    from libs.deployer import _compose_artifact_files
+    from libs.deploy.deployer import _compose_artifact_files
 
     app_dir = tmp_path / "app"
     app_dir.mkdir()
@@ -350,7 +350,7 @@ services:
 
 
 def test_compose_artifact_files_ignores_invalid_yaml(tmp_path) -> None:
-    from libs.deployer import _compose_artifact_files
+    from libs.deploy.deployer import _compose_artifact_files
 
     compose = tmp_path / "compose.yaml"
 
@@ -359,8 +359,8 @@ def test_compose_artifact_files_ignores_invalid_yaml(tmp_path) -> None:
 
 def test_deploy_compose_redeploys_when_dokploy_accepts_noop_deploy(monkeypatch):
     """Infra-011.11: deploy sync must fail fast on missing runtime deployment records."""
-    import libs.deployer as deployer
-    from libs.deployer import Deployer
+    import libs.deploy.deployer as deployer
+    from libs.deploy.deployer import Deployer
 
     monkeypatch.setattr(deployer.time, "sleep", lambda _seconds: None)
     client = FakeDokployDeployments(
@@ -388,8 +388,8 @@ def test_deploy_compose_redeploys_when_dokploy_accepts_noop_deploy(monkeypatch):
 
 def test_deploy_compose_uses_deployment_api_when_compose_snapshot_is_stale(monkeypatch):
     """Infra-011.11: deploy proof must use deployment.allByCompose when available."""
-    import libs.deployer as deployer
-    from libs.deployer import Deployer
+    import libs.deploy.deployer as deployer
+    from libs.deploy.deployer import Deployer
 
     monkeypatch.setattr(deployer.time, "sleep", lambda _seconds: None)
     client = FakeDokployDeploymentApi(
@@ -419,8 +419,8 @@ def test_deploy_compose_uses_deployment_api_when_compose_snapshot_is_stale(monke
 
 def test_deploy_compose_falls_back_when_deployment_api_fails(monkeypatch):
     """Infra-011.11: deploy proof keeps compose snapshot as compatibility fallback."""
-    import libs.deployer as deployer
-    from libs.deployer import Deployer
+    import libs.deploy.deployer as deployer
+    from libs.deploy.deployer import Deployer
 
     monkeypatch.setattr(deployer.time, "sleep", lambda _seconds: None)
     client = FakeDokployDeploymentApiFailure(
@@ -447,8 +447,8 @@ def test_deploy_compose_falls_back_when_deployment_api_fails(monkeypatch):
 def test_deploy_compose_fails_when_redeploy_has_no_runtime_record(monkeypatch):
     """Infra-011.11: deploy sync fails instead of reporting success on stale runtime."""
     import pytest
-    import libs.deployer as deployer
-    from libs.deployer import Deployer
+    import libs.deploy.deployer as deployer
+    from libs.deploy.deployer import Deployer
 
     monkeypatch.setattr(deployer.time, "sleep", lambda _seconds: None)
     client = FakeDokployDeployments(
@@ -473,7 +473,7 @@ def test_deploy_compose_fails_when_redeploy_has_no_runtime_record(monkeypatch):
 
 
 def test_deployment_ids_accepts_id_or_deployment_id() -> None:
-    from libs.deployer import Deployer
+    from libs.deploy.deployer import Deployer
 
     assert Deployer._deployment_ids(
         [{"deploymentId": "deploy-1"}, {"id": "deploy-2"}, {"deploymentId": ""}, {}]
@@ -481,7 +481,7 @@ def test_deployment_ids_accepts_id_or_deployment_id() -> None:
 
 
 def test_get_compose_deployments_filters_malformed_records() -> None:
-    from libs.deployer import Deployer
+    from libs.deploy.deployer import Deployer
 
     class Client:
         def get_compose_deployments(self, compose_id):
@@ -494,8 +494,8 @@ def test_get_compose_deployments_filters_malformed_records() -> None:
 
 
 def test_wait_for_new_deployment_record_fails_on_error_status(monkeypatch) -> None:
-    import libs.deployer as deployer
-    from libs.deployer import Deployer
+    import libs.deploy.deployer as deployer
+    from libs.deploy.deployer import Deployer
 
     monkeypatch.setattr(deployer.time, "monotonic", lambda: 100.0)
 
@@ -510,8 +510,8 @@ def test_wait_for_new_deployment_record_fails_on_error_status(monkeypatch) -> No
 
 
 def test_wait_for_new_deployment_record_accepts_success_status(monkeypatch) -> None:
-    import libs.deployer as deployer
-    from libs.deployer import Deployer
+    import libs.deploy.deployer as deployer
+    from libs.deploy.deployer import Deployer
 
     monkeypatch.setattr(deployer.time, "monotonic", lambda: 100.0)
 
@@ -530,8 +530,8 @@ def test_wait_for_new_deployment_record_accepts_success_status(monkeypatch) -> N
 def test_wait_for_new_deployment_record_times_out_on_unknown_status(
     monkeypatch,
 ) -> None:
-    import libs.deployer as deployer
-    from libs.deployer import Deployer
+    import libs.deploy.deployer as deployer
+    from libs.deploy.deployer import Deployer
 
     monkeypatch.setattr(deployer.time, "monotonic", lambda: 100.0)
 
@@ -551,7 +551,7 @@ class TestDeployerVaultTokenPreflight:
     """Deployment sync must fail before touching runtime when Vault tokens are bad."""
 
     def _deployer(self):
-        from libs.deployer import Deployer
+        from libs.deploy.deployer import Deployer
 
         class DummyDeployer(Deployer):
             service = "app"
@@ -563,7 +563,7 @@ class TestDeployerVaultTokenPreflight:
         return DummyDeployer
 
     def test_sync_fails_when_vault_token_is_invalid(self, monkeypatch):
-        import libs.deployer as deployer
+        import libs.deploy.deployer as deployer
 
         dummy = self._deployer()
         monkeypatch.setattr(deployer, "validate_env", lambda: [])
@@ -580,7 +580,7 @@ class TestDeployerVaultTokenPreflight:
         assert "Token invalid" in result["details"]
 
     def test_sync_fails_when_vault_token_ttl_is_low(self, monkeypatch):
-        import libs.deployer as deployer
+        import libs.deploy.deployer as deployer
 
         dummy = self._deployer()
         monkeypatch.setattr(deployer, "validate_env", lambda: [])
@@ -596,7 +596,7 @@ class TestDeployerVaultTokenPreflight:
         assert "expires in 12h" in result["details"]
 
     def test_sync_fails_when_vault_token_cannot_be_verified(self, monkeypatch):
-        import libs.deployer as deployer
+        import libs.deploy.deployer as deployer
 
         dummy = self._deployer()
         monkeypatch.setattr(deployer, "validate_env", lambda: [])
@@ -617,7 +617,7 @@ class TestDeployerVaultTokenPreflight:
     def test_verify_vault_app_token_skips_for_approle_service(self, monkeypatch):
         """#369: a vestigial VAULT_APP_TOKEN on an AppRole service must not gate deploys —
         it would expire un-renewed and hard-block a redeploy that would clean it up."""
-        import libs.deployer as deployer
+        import libs.deploy.deployer as deployer
         import libs.dokploy as dokploy
 
         dummy = self._deployer()
@@ -699,7 +699,7 @@ def test_authentik_sync_secret_hook_repairs_bootstrap_fields(monkeypatch) -> Non
 
 def test_base_deployer_creates_missing_vault_secret_path(monkeypatch) -> None:
     """Infra-011.6: sync repairs an absent Vault path before compose deploy."""
-    from libs.deployer import Deployer
+    from libs.deploy.deployer import Deployer
     from libs.env import VaultSecrets
 
     class MissingPathSecrets(FakeSecrets):
@@ -729,8 +729,8 @@ def test_portal_deployer_declares_no_runtime_secret_path() -> None:
 def test_await_effective_config_hash_retries_until_settled(monkeypatch):
     """Async Dokploy settling: a stale/none first read must be retried, not
     treated as a failure, once the effective hash advances."""
-    import libs.deployer as deployer
-    from libs.deployer import Deployer
+    import libs.deploy.deployer as deployer
+    from libs.deploy.deployer import Deployer
 
     class D(Deployer):
         service = "x"
@@ -749,8 +749,8 @@ def test_await_effective_config_hash_retries_until_settled(monkeypatch):
 def test_await_effective_config_hash_times_out_when_unadvanced(monkeypatch):
     """Fails closed: if the effective hash never advances within the window, the
     last (stale) value is returned so the caller reports failure."""
-    import libs.deployer as deployer
-    from libs.deployer import Deployer
+    import libs.deploy.deployer as deployer
+    from libs.deploy.deployer import Deployer
 
     class D(Deployer):
         service = "x"
@@ -766,7 +766,7 @@ def test_await_effective_config_hash_times_out_when_unadvanced(monkeypatch):
 
 
 def test_approle_preflight_passes_for_non_approle_compose(tmp_path):
-    from libs.deployer import Deployer
+    from libs.deploy.deployer import Deployer
 
     cf = tmp_path / "compose.yaml"
     cf.write_text("services:\n  x:\n    image: foo\n")
@@ -780,7 +780,7 @@ def test_approle_preflight_passes_for_non_approle_compose(tmp_path):
 
 
 def test_approle_preflight_passes_when_creds_present(tmp_path):
-    from libs.deployer import Deployer
+    from libs.deploy.deployer import Deployer
 
     cf = tmp_path / "compose.yaml"
     cf.write_text("environment:\n  - VAULT_ROLE_ID=${VAULT_ROLE_ID:-}\n")
@@ -802,7 +802,7 @@ def test_approle_preflight_requires_vault_addr(tmp_path):
     service deadlocks on its healthcheck (the compose has no `${VAULT_ADDR:-}` default and
     the entrypoint guards only role/secret)."""
     import pytest
-    from libs.deployer import Deployer
+    from libs.deploy.deployer import Deployer
 
     cf = tmp_path / "compose.yaml"
     cf.write_text(
@@ -823,7 +823,7 @@ def test_approle_preflight_requires_vault_addr(tmp_path):
 
 def test_approle_preflight_fails_closed_when_creds_missing(tmp_path, monkeypatch):
     import pytest
-    from libs.deployer import Deployer
+    from libs.deploy.deployer import Deployer
 
     cf = tmp_path / "compose.yaml"
     cf.write_text(
@@ -852,7 +852,7 @@ def test_approle_preflight_fails_closed_when_creds_missing(tmp_path, monkeypatch
 def test_approle_preflight_propagates_unreadable_compose(tmp_path):
     """An unreadable compose must NOT silently skip the preflight (fail closed)."""
     import pytest
-    from libs.deployer import Deployer
+    from libs.deploy.deployer import Deployer
 
     class D(Deployer):
         service = "x"
@@ -866,7 +866,7 @@ def test_approle_preflight_propagates_unreadable_compose(tmp_path):
 def test_approle_preflight_detects_secret_id_only_compose(tmp_path, monkeypatch):
     """A compose that references only VAULT_SECRET_ID is still an AppRole service."""
     import pytest
-    from libs.deployer import Deployer
+    from libs.deploy.deployer import Deployer
 
     cf = tmp_path / "compose.yaml"
     cf.write_text("environment:\n  - VAULT_SECRET_ID=${VAULT_SECRET_ID:-}\n")
@@ -884,8 +884,8 @@ def test_approle_preflight_detects_secret_id_only_compose(tmp_path, monkeypatch)
 def test_await_effective_config_hash_tolerates_a_transient_read(monkeypatch):
     """A single flaky Dokploy read must NOT abort an otherwise-good deploy: the poll
     multiplies reads, so it retries past a blip and matches once the hash settles."""
-    import libs.deployer as deployer
-    from libs.deployer import Deployer
+    import libs.deploy.deployer as deployer
+    from libs.deploy.deployer import Deployer
 
     class D(Deployer):
         service = "x"
@@ -909,8 +909,8 @@ def test_await_effective_config_hash_tolerates_a_transient_read(monkeypatch):
 def test_await_effective_config_hash_raises_only_if_whole_window_failed(monkeypatch):
     """If no clean read EVER lands in the window, surface the last error (don't
     silently pass) — but only at the deadline, never on a single read."""
-    import libs.deployer as deployer
-    from libs.deployer import Deployer
+    import libs.deploy.deployer as deployer
+    from libs.deploy.deployer import Deployer
 
     class D(Deployer):
         service = "x"
@@ -932,7 +932,7 @@ def test_await_effective_config_hash_raises_only_if_whole_window_failed(monkeypa
 def test_record_timeout_and_interval_honor_env_overrides(monkeypatch):
     """Operator knobs widen BOTH the deploy-record wait and the hash poll (they used
     to diverge: the poll ignored the env override)."""
-    from libs.deployer import Deployer
+    from libs.deploy.deployer import Deployer
 
     class D(Deployer):
         service = "x"

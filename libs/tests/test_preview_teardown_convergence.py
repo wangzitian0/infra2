@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import pytest
 
-import tools.preview_lifecycle as pl
+import libs.deploy.preview as pl
 
 
 class ConvergenceFakeDokploy:
@@ -47,7 +47,9 @@ class ConvergenceFakeDokploy:
         self._github_id = github_id
         self.records: dict[str, dict] = {}  # name -> {composeId, appName(suffixed)}
         self.docker_projects: dict[str, str] = {}  # assigned appName -> composeId
-        self.volumes: dict[str, str] = {}  # assigned appName -> composeId (ephemeral DB)
+        self.volumes: dict[
+            str, str
+        ] = {}  # assigned appName -> composeId (ephemeral DB)
         self._seq = 0
 
     # --- read side ---------------------------------------------------------

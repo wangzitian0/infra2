@@ -64,7 +64,7 @@ vps_host = init.get("VPS_HOST")
 
 ### Deployer-based tasks
 ```python
-from libs.deployer import Deployer, make_tasks
+from libs.deploy.deployer import Deployer, make_tasks
 ```
 
 ### Config (legacy wrapper)

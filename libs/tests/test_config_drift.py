@@ -10,7 +10,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-from libs.deployer import config_hash_from_items
+from libs.deploy.deployer import config_hash_from_items
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -30,11 +30,18 @@ def test_config_hash_is_pure_and_path_independent() -> None:
     assert len(h1) == 12  # sha256[:12]
 
     # content change flips the hash
-    assert config_hash_from_items(compose, env, [("libs/a.py", b"print(2)")], deps) != h1
+    assert (
+        config_hash_from_items(compose, env, [("libs/a.py", b"print(2)")], deps) != h1
+    )
     # env change flips the hash
-    assert config_hash_from_items(compose, {**env, "ENV": "staging"}, artifact, deps) != h1
+    assert (
+        config_hash_from_items(compose, {**env, "ENV": "staging"}, artifact, deps) != h1
+    )
     # a dependency change flips the hash (the cross-service fold)
-    assert config_hash_from_items(compose, env, artifact, [("libs/dep.py", b"changed")]) != h1
+    assert (
+        config_hash_from_items(compose, env, artifact, [("libs/dep.py", b"changed")])
+        != h1
+    )
 
 
 def _drift_mod():
@@ -81,4 +88,6 @@ def test_deliver_infra2_report_noops_when_unconfigured(monkeypatch) -> None:
         "INFRA2_REPORTS_FEISHU_CHAT_ID",
     ):
         monkeypatch.delenv(k, raising=False)
-    assert deliver_infra2_report("hi") is False  # not configured -> clean no-op, no raise
+    assert (
+        deliver_infra2_report("hi") is False
+    )  # not configured -> clean no-op, no raise

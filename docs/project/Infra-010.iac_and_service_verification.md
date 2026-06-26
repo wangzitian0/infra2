@@ -229,7 +229,7 @@ curl https://iac.zitian.party/health
 
 ### 服务发现机制
 
-`libs/deployer.py` 中的 `discover_services()` 基于文件系统：
+`libs/deploy/deployer.py` 中的 `discover_services()` 基于文件系统：
 ```python
 # 扫描规则
 platform/**/deploy.py → <service>.sync

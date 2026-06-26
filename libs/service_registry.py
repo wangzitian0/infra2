@@ -10,7 +10,7 @@ This module reads the Deployer attributes ONCE (via AST, no import side effects)
 and exposes `get_*`-style accessors so every downstream config can be DERIVED
 from, or audited against, the registry instead of hand-maintained.
 
-Scope of the scan mirrors `libs.deployer.discover_services` (the `platform` and
+Scope of the scan mirrors `libs.deploy.deployer.discover_services` (the `platform` and
 `finance_report` layers) so `all_services()` is an exact superset-free match of
 the deploy fan-out list.
 """
@@ -23,7 +23,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# (layer name, layer path) — mirrors libs.deployer.discover_services.
+# (layer name, layer path) — mirrors libs.deploy.deployer.discover_services.
 _LAYERS: dict[str, Path] = {
     "platform": REPO_ROOT / "platform",
     "finance_report": REPO_ROOT / "finance_report" / "finance_report",
@@ -77,7 +77,7 @@ def service_attrs() -> dict[str, ServiceMeta]:
 
 
 def all_services() -> list[str]:
-    """Every service_id, sorted. Equals libs.deployer.discover_services keys."""
+    """Every service_id, sorted. Equals libs.deploy.deployer.discover_services keys."""
     return sorted(service_attrs())
 
 
@@ -98,11 +98,7 @@ def shared_services() -> set[str]:
 
 def subdomains() -> dict[str, str]:
     """Service_id -> public subdomain, only for services that declare one."""
-    return {
-        m.service_id: m.subdomain
-        for m in service_attrs().values()
-        if m.subdomain
-    }
+    return {m.service_id: m.subdomain for m in service_attrs().values() if m.subdomain}
 
 
 def probe_container_bases() -> dict[str, ServiceMeta]:
