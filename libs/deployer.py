@@ -295,7 +295,15 @@ def _dependency_items_from_disk(compose_path: str) -> list[tuple[str, bytes]]:
     for pattern in globs:
         for hit in _glob.glob(str(_REPO_ROOT / pattern), recursive=True):
             p = Path(hit)
-            if p.is_file():
+            # Exclude transient __pycache__/.pyc/.pyo (mirrors _iter_path_files). The iac-runner
+            # deploys from a CLEAN git checkout that has none, so its hash already ignores them;
+            # without this exclusion a dev machine (which has compiled .pyc) computes a DIFFERENT
+            # hash than the iac-runner for any dep-baking service — non-reproducible by accident.
+            if (
+                p.is_file()
+                and "__pycache__" not in p.parts
+                and not p.name.endswith((".pyc", ".pyo"))
+            ):
                 matched.add(p.resolve())
 
     return [(_repo_rel(path), path.read_bytes()) for path in sorted(matched)]
