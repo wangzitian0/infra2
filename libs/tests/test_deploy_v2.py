@@ -638,6 +638,35 @@ def test_cli_down_rejects_a_fixed_env(monkeypatch, capsys):
     assert "--down only tears down preview" in capsys.readouterr().err
 
 
+def test_cli_down_rejects_a_malformed_domain(monkeypatch, capsys):
+    # a whitespace/empty domain would corrupt cloud.<domain>; --down must reject it
+    # before building the Dokploy client — the same guard the preview backend applies on up.
+    import libs.dokploy as dk
+
+    monkeypatch.setattr(
+        dk,
+        "get_dokploy",
+        lambda host: pytest.fail(
+            "must not build a client for a malformed --down domain"
+        ),
+    )
+    rc = dv2.main(
+        [
+            "--type",
+            "preview/branch",
+            "--version-ref",
+            "main",
+            "--iac-ref",
+            "main",
+            "--domain",
+            "bad domain",
+            "--down",
+        ]
+    )
+    assert rc == 1
+    assert "invalid domain" in capsys.readouterr().err
+
+
 def test_cli_verify_flags_default_on_and_flip(cli):
     rec, _ = cli
     dv2.main(

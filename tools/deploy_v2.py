@@ -48,6 +48,7 @@ from tools.deploy_contract import (
 from tools.deploy_env_config import env_config
 from libs.deploy.promote import deploy as _deploy_fixed
 from libs.deploy.promote import model_overrides_from_env
+from libs.deploy.preview import _validate_domain
 from libs.deploy.preview import down as _preview_down
 from libs.deploy.preview import up as _preview_up
 from tools.resolve_deploy_ref import (
@@ -794,11 +795,15 @@ def main(argv: list[str] | None = None) -> int:
             )
             from libs.dokploy import get_dokploy
 
+            # Reject a malformed domain before it reaches the Dokploy host string — the
+            # same guard the preview backend applies on `up` (whitespace/empty would
+            # corrupt cloud.<domain>).
+            domain = _validate_domain(args.domain)
             down_result = _preview_down(
                 spec.alias_kind,
                 alias_value,
-                domain=args.domain,
-                client=get_dokploy(host=f"cloud.{args.domain}"),
+                domain=domain,
+                client=get_dokploy(host=f"cloud.{domain}"),
             )
             print(
                 json.dumps(
