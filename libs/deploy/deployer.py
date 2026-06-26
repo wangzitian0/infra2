@@ -48,7 +48,7 @@ RUNTIME_ENV_KEYS_TO_PRESERVE = (
 
 def discover_services() -> dict[str, str]:
     """Discover deployable services based on deploy.py files."""
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     service_map: dict[str, str] = {}
 
     layers = {
@@ -228,7 +228,7 @@ def _compose_artifact_files(compose_path: str, compose_content: str) -> list[Pat
     return sorted(set(files))
 
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _repo_rel(path: Path) -> str:
