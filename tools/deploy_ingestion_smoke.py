@@ -111,9 +111,14 @@ def _poll(counter, query: str, *, attempts: int, interval: float, sleeper) -> in
     return count
 
 
+def _resolve_clickhouse_url(clickhouse_url: str | None) -> str:
+    """Single owner of the ClickHouse URL: explicit arg, else the canary's env."""
+    return clickhouse_url or os.getenv("SIGNOZ_CLICKHOUSE_URL", DEFAULT_CLICKHOUSE_URL)
+
+
 def verify_deploy_ingestion(
     *,
-    clickhouse_url: str,
+    clickhouse_url: str | None = None,
     service_name: str,
     environment: str,
     expected_version: str | None,
@@ -125,9 +130,10 @@ def verify_deploy_ingestion(
 ) -> list[str]:
     """Verify the deployed version's logs and traces are queryable; classify failures."""
     if counter is None:
+        resolved_url = _resolve_clickhouse_url(clickhouse_url)
 
         def counter(query: str) -> int:
-            return _count(clickhouse_url, query)
+            return _count(resolved_url, query)
 
     passed: list[str] = []
     for kind, build in (("logs", _logs_count_query), ("traces", _traces_count_query)):
@@ -186,7 +192,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-version", default=None)
     parser.add_argument(
         "--clickhouse-url",
-        default=os.getenv("SIGNOZ_CLICKHOUSE_URL", DEFAULT_CLICKHOUSE_URL),
+        default=None,
+        help="override the ClickHouse URL (default: SIGNOZ_CLICKHOUSE_URL env, "
+        f"else {DEFAULT_CLICKHOUSE_URL})",
     )
     parser.add_argument("--window-minutes", type=int, default=DEFAULT_WINDOW_MINUTES)
     args = parser.parse_args(argv)

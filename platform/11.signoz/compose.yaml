@@ -83,13 +83,7 @@ services:
       - "4317"
       - "4318"
     networks:
-      dokploy-network:
-        aliases:
-          # Vendor-neutral alias so applications can target the OTLP collector
-          # without naming SigNoz. Apps set OTEL_EXPORTER_OTLP_ENDPOINT to
-          # http://platform-otel-collector:4318 and stay backend-agnostic; the
-          # real container name (platform-signoz-otel-collector) still resolves.
-          - platform-otel-collector${ENV_SUFFIX}
+      - dokploy-network
     logging:
       driver: json-file
       options:

@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 from dataclasses import dataclass
@@ -321,11 +320,10 @@ def deploy(
         if verify_ingestion:
             from tools.deploy_ingestion_smoke import verify_deploy_ingestion
 
+            # ClickHouse URL resolution lives in deploy_ingestion_smoke (single owner,
+            # reusing the round-trip canary's env) — do not re-read it here.
             deploy_environment = {"prod": "production"}.get(env.strip().lower(), env)
             verify_deploy_ingestion(
-                clickhouse_url=os.getenv(
-                    "SIGNOZ_CLICKHOUSE_URL", "http://platform-clickhouse:8123"
-                ),
                 service_name="finance-report-backend",
                 environment=deploy_environment,
                 expected_version=image_tag,
