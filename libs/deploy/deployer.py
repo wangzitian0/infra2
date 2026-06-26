@@ -537,6 +537,30 @@ class Deployer:
         from libs.dokploy import get_dokploy, ensure_project
         from libs.const import GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH
 
+        # Resolve branch dynamically to support deploying non-main commits/tags
+        branch = GITHUB_BRANCH
+        try:
+            import subprocess
+            tag_res = subprocess.run(
+                ["git", "describe", "--tags", "--exact-match"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if tag_res.returncode == 0 and tag_res.stdout.strip():
+                branch = tag_res.stdout.strip()
+            else:
+                sha_res = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if sha_res.returncode == 0 and sha_res.stdout.strip():
+                    branch = sha_res.stdout.strip()
+        except Exception:
+            pass
+
         e = cls.env()
         header(f"{cls.service} composing", "Deploying via Dokploy API (GitHub)")
         # Deploy via API
@@ -608,7 +632,7 @@ class Deployer:
                 githubId=github_id,
                 repository=GITHUB_REPO,
                 owner=GITHUB_OWNER,
-                branch=GITHUB_BRANCH,
+                branch=branch,
                 composePath=cls.compose_path,
                 env=effective_env,
                 autoDeploy=False,
@@ -623,7 +647,7 @@ class Deployer:
                 githubId=github_id,
                 repository=GITHUB_REPO,
                 owner=GITHUB_OWNER,
-                branch=GITHUB_BRANCH,
+                branch=branch,
                 composePath=cls.compose_path,
                 env=effective_env,
                 autoDeploy=False,
@@ -638,7 +662,7 @@ class Deployer:
                 githubId=github_id,
                 repository=GITHUB_REPO,
                 owner=GITHUB_OWNER,
-                branch=GITHUB_BRANCH,
+                branch=branch,
                 composePath=cls.compose_path,
                 env=env_str,
                 autoDeploy=False,
