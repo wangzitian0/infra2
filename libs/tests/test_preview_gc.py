@@ -79,6 +79,10 @@ def _projects():
                             "name": "finance-report-preview-tag-v1-2-3",
                             "composeId": "tag",
                         },
+                        {
+                            "name": "finance-report-preview-commit-1ab32d5",
+                            "composeId": "commit",
+                        },
                     ],
                 },
             ],
@@ -98,6 +102,7 @@ def test_collect_only_preview_env_composes() -> None:
         "pr777": "pr-777",
         "canary": "pr-999",
         "tag": "tag-v1-2-3",
+        "commit": "commit-1ab32d5",
     }
 
 
@@ -115,10 +120,12 @@ def test_failsafe_keeps_prs_when_open_set_unknown_but_still_reaps_bare_slug() ->
     assert {c.compose_id for c, _ in orphans} == {"mainslug"}
 
 
-def test_canary_slot_is_never_reaped() -> None:
+def test_canary_and_valid_kinds_are_never_reaped() -> None:
     assert preview_gc.orphan_reason("pr-999", open_pr_numbers=set()) is None
     assert preview_gc.orphan_reason("branch-main", open_pr_numbers=set()) is None
     assert preview_gc.orphan_reason("tag-v1-2-3", open_pr_numbers=set()) is None
+    # commit-<sha7> is a supported preview kind — must never be treated as an orphan.
+    assert preview_gc.orphan_reason("commit-1ab32d5", open_pr_numbers=set()) is None
 
 
 def test_fetch_open_prs_paginates_and_failsafes() -> None:

@@ -12,8 +12,8 @@ no app-repo dispatch — it pulls the desired set itself.
 
 Reaped, conservatively, are only two unambiguous orphan classes:
   1. **Pre-rename bare-slug aliases** — a preview alias with no current kind prefix
-     (``branch-``/``pr-``/``tag-``), e.g. the bare ``main`` slot the model replaced
-     with ``branch-main``. The deterministic-name ``down`` can no longer reach it.
+     (``branch-``/``pr-``/``commit-``/``tag-``), e.g. the bare ``main`` slot the model
+     replaced with ``branch-main``. The deterministic-name ``down`` can't reach it.
   2. **``pr-<n>`` previews for CLOSED PRs** — a leaked PR teardown.
 
 Everything else (``branch-main``, the reserved canary ``pr-<_CANARY_PR>`` slot,
@@ -42,8 +42,9 @@ if str(ROOT) not in sys.path:
 from libs.common import normalize_env_name  # noqa: E402
 from tools.deploy_env_config import (  # noqa: E402
     PREVIEW_ENVIRONMENT,
+    PREVIEW_KINDS,
     PREVIEW_PROJECT,
-    _PREVIEW_SLUG_PREFIX,
+    preview_alias,
 )
 from tools.deploy_v2 import _CANARY_PR  # noqa: E402
 
@@ -52,12 +53,16 @@ ALWAYS_KEEP_ALIASES = frozenset({"branch-main"})
 # The reserved canary slot (deploy_v2_canary stands it up/tears it down hourly);
 # never reap it even when PR 999 is obviously not "open".
 CANARY_ALIAS = f"pr-{_CANARY_PR}"
-# Every alias the current model emits is `<kind>-<slug>`; an alias with no known
-# kind prefix (e.g. the bare `main` slug from before the branch-main rename) is a
-# pre-rename orphan the deterministic-name `down` can no longer reach.
-VALID_KIND_PREFIXES = ("branch-", "pr-", "tag-")
+# Every current alias is `<kind>-<slug>` for a known kind (branch/pr/commit/tag);
+# an alias with no known kind prefix (e.g. the bare `main` slug from before the
+# branch-main rename) is a pre-rename orphan the deterministic-name `down` can no
+# longer reach. Derived from the public PREVIEW_KINDS so a new kind can't silently
+# be misclassified as an orphan.
+VALID_KIND_PREFIXES = tuple(f"{kind}-" for kind in PREVIEW_KINDS)
 APP_REPO = "wangzitian0/finance_report"
-_COMPOSE_PREFIX = f"{_PREVIEW_SLUG_PREFIX}-"
+# The compose-name prefix ("finance-report-preview-"), derived from the canonical
+# builder (every compose_name is "<prefix>-<alias>") rather than a private constant.
+_COMPOSE_PREFIX = preview_alias("pr", 1).compose_name.removesuffix("pr-1")
 
 
 @dataclass(frozen=True)

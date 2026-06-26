@@ -498,9 +498,11 @@ jobs:
             echo "::error::DOKPLOY_API_KEY secret is required for preview GC."
             exit 1
           fi
-          # Dry-run mode on manual dispatch with dry_run=true; otherwise apply.
-          if [[ "${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}" == "true" ]]; then
-            python -m tools.preview_gc
-          else
+          # Only the scheduled cron deletes; a manual dispatch is always dry-run
+          # (report only) so an accidental run can never be destructive.
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
             python -m tools.preview_gc --apply
+          else
+            echo "manual dispatch -> dry-run only (the scheduled cron applies)."
+            python -m tools.preview_gc
           fi
