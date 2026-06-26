@@ -1016,10 +1016,14 @@ def test_report_branch_main_auto_target_is_fully_wired() -> None:
     )
     assert "--service finance_report/app" in run_scripts
     assert "--type preview/branch" in run_scripts
-    assert "DISPATCH_SHA: ${{ github.event.client_payload.sha }}" in DEPLOY_REPORT_MAIN_WORKFLOW.read_text(
-        encoding="utf-8"
+    assert (
+        "DISPATCH_SHA: ${{ github.event.client_payload.sha }}"
+        in DEPLOY_REPORT_MAIN_WORKFLOW.read_text(encoding="utf-8")
     )
-    assert "repository_dispatch deploy-report-main requires client_payload.sha" in run_scripts
+    assert (
+        "repository_dispatch deploy-report-main requires client_payload.sha"
+        in run_scripts
+    )
     assert "--version-ref main" in run_scripts
     assert 'deploy_args+=(--expected-sha "$DISPATCH_SHA")' in run_scripts
 
@@ -1036,7 +1040,7 @@ def test_iac_runner_all_services_include_alerting_bridge(monkeypatch) -> None:
 
 def test_iac_runner_service_map_matches_discovered_deployers(monkeypatch) -> None:
     """Infra-011.8: every deploy.py service must be wired into GitOps."""
-    from libs.deployer import discover_services
+    from libs.deploy.deployer import discover_services
 
     sync_runner = _load_module(
         "sync_runner_discovery_under_test", IAC_RUNNER / "sync_runner.py", monkeypatch

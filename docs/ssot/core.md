@@ -21,7 +21,7 @@
 ### Code as SSOT 索引
 
 - **任务加载器**：参见 [`tasks.py`](https://github.com/wangzitian0/infra2/blob/main/tasks.py)
-- **部署基类**：参见 [`libs/deployer.py`](https://github.com/wangzitian0/infra2/blob/main/libs/deployer.py)
+- **部署基类**：参见 [`libs/deploy/deployer.py`](https://github.com/wangzitian0/infra2/blob/main/libs/deploy/deployer.py)
 - **环境变量/密钥**：参见 [`libs/env.py`](https://github.com/wangzitian0/infra2/blob/main/libs/env.py)
 
 ---

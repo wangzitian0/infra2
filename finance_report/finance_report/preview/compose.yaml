@@ -1,6 +1,7 @@
 # Finance Report — PREVIEW (multi-alias, ephemeral) compose template
 #
-# Used by `python -m tools.preview_lifecycle` to stand up ONE throwaway preview
+# Used by `python -m tools.deploy_v2 --type preview/*` (backend: libs/deploy/preview.py)
+# to stand up ONE throwaway preview
 # stack per alias (main / pr-<N> / commit-<sha7>). Each alias gets its OWN copy of
 # this compose as a distinct Dokploy compose, with a unique ENV_SUFFIX so container
 # names + Traefik Host() rules never collide with each other or with staging/prod.
@@ -19,7 +20,7 @@
 # Everything else (vault-agent, frontend, Traefik labels, healthchecks) mirrors the
 # staging/prod template so a preview is a faithful, functional copy of the app.
 #
-# Env vars supplied by tools.preview_lifecycle (see deploy_primitive for the shared
+# Env vars supplied by libs.deploy.preview (see libs.deploy.promote for the shared
 # set): IMAGE_TAG, GIT_COMMIT_SHA, ENV_SUFFIX, ENV_DOMAIN_SUFFIX, NEXT_PUBLIC_APP_URL,
 # INTERNAL_DOMAIN, IAC_CONFIG_HASH, VAULT_ADDR, VAULT_ROLE_ID, VAULT_SECRET_ID, plus
 # the ephemeral-DB knobs PREVIEW_DB_USER / PREVIEW_DB_PASSWORD / PREVIEW_DB_NAME.

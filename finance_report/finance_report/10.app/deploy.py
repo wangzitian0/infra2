@@ -1,6 +1,6 @@
 import sys
 
-from libs.deployer import Deployer, make_tasks
+from libs.deploy.deployer import Deployer, make_tasks
 from libs.console import header, success, info, warning
 from tools.openpanel_clients import openpanel_env
 
@@ -50,7 +50,7 @@ class AppDeployer(Deployer):
         # OpenPanel PV tracking (model B: one project per environment). Client ids
         # are PUBLIC web client ids (config, not secret); unknown env => empty =>
         # Analytics no-op. #372: the map is the single source in tools.openpanel_clients
-        # so the live deploy_v2 path (tools/deploy_primitive) injects the same values
+        # so the live deploy_v2 path (libs/deploy/promote) injects the same values
         # — this legacy pre_compose path no longer owns a duplicate literal.
         env_vars.update(openpanel_env(env_vars.get("ENV", "production")))
 

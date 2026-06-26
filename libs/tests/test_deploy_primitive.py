@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from tools import deploy_primitive as dp
+from libs.deploy import promote as dp
 
 # A realistic full commit sha and its 7-char short form (the tag images are published
 # under). resolve_to_sha returns a full sha; IMAGE_TAG must be the short form.
@@ -120,12 +120,6 @@ def test_data_lane_is_derived_from_env_config_not_caller_supplied():
     client = FakeDokploy()
     plan = dp.deploy("staging", "deadbeef", domain="zitian.party", client=client)
     assert plan.data == "staging"
-
-
-def test_direct_cli_is_retired_by_default(capsys):
-    rc = dp.main(["--env", "staging", "--code", FULL_SHA, "--domain", "zitian.party"])
-    assert rc == 2
-    assert "deploy_v2 coordinate" in capsys.readouterr().err
 
 
 # --- rollout poll (P2 step 4a) ---------------------------------------------------

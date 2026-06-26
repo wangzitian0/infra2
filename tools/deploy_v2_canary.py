@@ -36,12 +36,14 @@ import httpx  # transport errors from libs.dokploy surface as httpx exceptions
 
 from tools.deploy_contract import DeployTarget
 from tools.deploy_v2 import _CANARY_PR, deploy_v2
-from tools.preview_lifecycle import down
+from libs.deploy.preview import down
 
 _APP_SERVICE = "finance_report/app"
 
 
-def _best_effort_down(*, domain: str, client, attempts: int = 3, _sleep=time.sleep) -> bool:
+def _best_effort_down(
+    *, domain: str, client, attempts: int = 3, _sleep=time.sleep
+) -> bool:
     """Tear the canary slot down, retrying transient control-plane errors.
 
     NEVER raises — teardown runs in a ``finally`` and must not mask a deploy error or crash

@@ -22,7 +22,7 @@ Main documentation is in finance_report repository:
       pure (kind,value) -> {env_suffix, domain_suffix, app_url, compose slug, telemetry label}.
 - [x] Preview compose template with bundled ephemeral postgres + DATABASE_URL override:
       `finance_report/finance_report/preview/compose.yaml`.
-- [x] Manual lifecycle CLI `tools/preview_lifecycle.py` (`up` / `down`) over the existing
+- [x] Manual lifecycle CLI `libs/deploy/preview.py` (`up` / `down`) over the existing
       Dokploy client (find-or-create compose, deploy, health-check; teardown deletes volumes).
 - [x] Unit tests (mocked Dokploy + HTTP): `libs/tests/test_deploy_env_config.py` (alias model),
       `libs/tests/test_preview_lifecycle.py` (orchestration call order/args).

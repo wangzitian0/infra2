@@ -2,7 +2,7 @@
 
 import sys
 import os
-from libs.deployer import Deployer, make_tasks
+from libs.deploy.deployer import Deployer, make_tasks
 from libs.common import with_env_suffix
 from libs.env import VAULT_ROOT_TOKEN_OP_REF
 from libs.console import success, info, fatal
@@ -77,7 +77,9 @@ class PrefectDeployer(Deployer):
         )
 
         success("pre_compose complete - vault-init will fetch secrets at runtime")
-        info("\nNote: AppRole creds (VAULT_ROLE_ID/VAULT_SECRET_ID) auto-configured via 'invoke vault.setup-approle'")
+        info(
+            "\nNote: AppRole creds (VAULT_ROLE_ID/VAULT_SECRET_ID) auto-configured via 'invoke vault.setup-approle'"
+        )
         return result
 
     @classmethod

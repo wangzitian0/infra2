@@ -55,20 +55,20 @@ _BOOTSTRAP_TASKS = {
 
 
 def _service_task_map() -> dict[str, "str | None"]:
-    """service_id -> invoke sync task, DERIVED from libs.deployer.discover_services (the single
+    """service_id -> invoke sync task, DERIVED from libs.deploy.deployer.discover_services (the single
     source) instead of a hand-maintained parallel list (Infra-013, same as deploy_contract).
 
     Lazy import: in the iac-runner image `libs/` is on sys.path only AFTER update_repo() checks
     the repo out, and every caller runs post-checkout, so this resolves at call time.
     """
-    from libs.deployer import discover_services
+    from libs.deploy.deployer import discover_services
 
     return {**discover_services(), **_BOOTSTRAP_TASKS}
 
 
 def _all_services() -> list[str]:
-    """Every deployable service_id (= libs.deployer.discover_services keys), sorted."""
-    from libs.deployer import discover_services
+    """Every deployable service_id (= libs.deploy.deployer.discover_services keys), sorted."""
+    from libs.deploy.deployer import discover_services
 
     return sorted(discover_services())
 
@@ -704,7 +704,9 @@ def sync_services(
                 logger.info("No changes detected or fresh clone; syncing all services")
 
         results: list[ServiceSyncResult] = []
-        task_map = _service_task_map()  # discovered once; reused for every service below
+        task_map = (
+            _service_task_map()
+        )  # discovered once; reused for every service below
         for service in sorted(services):
             task_name = task_map.get(service)
 

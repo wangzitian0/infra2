@@ -338,8 +338,8 @@ jobs:
               spec = importlib.util.spec_from_file_location('deploy', deploy_file)
               module = importlib.util.module_from_spec(spec)
 
-              # Import libs.deployer to get Deployer class
-              from libs.deployer import Deployer
+              # Import libs.deploy.deployer to get Deployer class
+              from libs.deploy.deployer import Deployer
 
               # Execute the module
               spec.loader.exec_module(module)

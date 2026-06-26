@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from libs.deployer import Deployer, make_tasks
+from libs.deploy.deployer import Deployer, make_tasks
 from libs.console import success, info, run_with_status, error, warning
 from libs.common import (
     OTEL_INGEST_SUBDOMAIN,

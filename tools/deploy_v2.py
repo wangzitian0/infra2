@@ -9,8 +9,8 @@ gates. It builds + validates the :class:`~tools.deploy_contract.DeployTarget` (s
 illegal target reaches a backend), enforces the gates + data-lane red lines, then routes
 to the existing, already-tested backend — passing the resolved ``image_ref``:
 
-    app + preview/*       -> preview_lifecycle.up   (iac_ref pins the source ref)
-    app + staging|prod    -> deploy_primitive.deploy (fixed-compose promote path)
+    app + preview/*       -> libs.deploy.preview.up   (iac_ref pins the source ref)
+    app + staging|prod    -> libs.deploy.promote.deploy (fixed-compose promote path)
     iac_pinned + fixed env -> iac_runner /deploy webhook (platform/backing services)
 
 This module performs the routing only. Side effects live in the backends, so tests
@@ -46,9 +46,10 @@ from tools.deploy_contract import (
     validate_ref_form,
 )
 from tools.deploy_env_config import env_config
-from tools.deploy_primitive import deploy as _deploy_fixed
-from tools.deploy_primitive import model_overrides_from_env
-from tools.preview_lifecycle import up as _preview_up
+from libs.deploy.promote import deploy as _deploy_fixed
+from libs.deploy.promote import model_overrides_from_env
+from libs.deploy.preview import down as _preview_down
+from libs.deploy.preview import up as _preview_up
 from tools.resolve_deploy_ref import (
     classify_ref,
     resolve_image_ref,
@@ -708,6 +709,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--no-wait", action="store_true", help="do not health-check")
     parser.add_argument(
+        "--down",
+        action="store_true",
+        help="tear down the preview/* alias selected by --type/--version-ref (and its "
+        "ephemeral DB) instead of deploying; valid only for preview types",
+    )
+    parser.add_argument(
         "--staging-validated",
         action="store_true",
         help="assert this code already passed staging (required for prod)",
@@ -764,6 +771,47 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        # Teardown: the operator command the retired preview-lifecycle CLI exposed as
+        # its `down` subcommand, now folded into this front door.
+        # deploy_v2's coordinate covers preview UP and the staging/prod promote, but not
+        # tearing a preview alias back down — this flag closes that gap by resolving the
+        # SAME alias (alias_kind from --type, value from --version-ref, exactly as `up`
+        # reads them) and calling the preview backend's idempotent down(). Preview is always
+        # a Dokploy stack (never iac_pinned), so it builds the Dokploy client directly.
+        if args.down:
+            spec = deploy_type_spec(args.deploy_type)
+            if spec.env != "preview":
+                raise ValueError(
+                    f"--down only tears down preview/* aliases; type {args.deploy_type!r} "
+                    f"-> env {spec.env!r} has no ephemeral alias to remove"
+                )
+            # Mirror `up`'s value read: branch defaults to the main tip; pr/commit/tag take
+            # --version-ref verbatim (preview_alias normalizes a commit to its short sha).
+            alias_value = (
+                _default_main(args.version_ref)
+                if spec.alias_kind == "branch"
+                else args.version_ref
+            )
+            from libs.dokploy import get_dokploy
+
+            down_result = _preview_down(
+                spec.alias_kind,
+                alias_value,
+                domain=args.domain,
+                client=get_dokploy(host=f"cloud.{args.domain}"),
+            )
+            print(
+                json.dumps(
+                    {
+                        "action": down_result.action,
+                        "alias": down_result.alias,
+                        "compose_id": down_result.compose_id,
+                        "url": down_result.url,
+                    }
+                )
+            )
+            return 0
+
         service_names = [s.strip() for s in args.service.split(",") if s.strip()]
         if len(service_names) > 1:
             result = _deploy_platform_batch(

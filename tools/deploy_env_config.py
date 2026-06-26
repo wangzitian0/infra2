@@ -119,7 +119,7 @@ def with_compose_id(env: str, compose_id: str) -> EnvConfig:
 #   commit-<sha7>   -> report-commit-<sha7>.<domain> (a pinned commit)
 #   tag-<v1-2-3>    -> report-tag-<v1-2-3>.<domain>  (a release tag, DNS-safe slug)
 #
-# This is PURE config: no Dokploy calls, no resolution. preview_lifecycle.py
+# This is PURE config: no Dokploy calls, no resolution. libs/deploy/preview.py
 # turns the slug/suffix/url here into actual create_compose/deploy calls, and
 # resolve_deploy_ref.py turns `code` into the sha that a `commit` alias pins.
 # The `deployment_environment` label mirrors the telemetry identity contract in

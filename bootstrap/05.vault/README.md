@@ -90,7 +90,7 @@ DEPLOY_ENV=staging invoke vault.setup-approle --project=finance_report --service
 - `vault.setup-approle` 为每个 `{project, env, service}` 写策略 + approle role，取 `role_id`/`secret_id`
   并自动注入 Dokploy（`--deploy`），随后等待运行时部署记录。
 - vault-agent 用 approle 自身续期，无需周期 token 续命。
-- AppRole 凭证缺失会在部署期 **fail-closed**（`libs.deployer._assert_approle_creds_present` 检查
+- AppRole 凭证缺失会在部署期 **fail-closed**（`libs.deploy.deployer._assert_approle_creds_present` 检查
   `VAULT_ROLE_ID`/`VAULT_SECRET_ID`/`VAULT_ADDR`），避免 vault-agent 起不来导致服务卡死。
 
 > **IaC Runner**：也已迁到 AppRole（#369，完成 #257/#259）。它额外用一枚**有界、非 root**的

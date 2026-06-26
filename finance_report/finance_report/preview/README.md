@@ -19,16 +19,17 @@ OWN ephemeral database. Any number coexist; they outlive a CI run until torn dow
 
 ## Lifecycle (manual)
 
-Driven by `tools/preview_lifecycle.py` (over the existing `libs/dokploy.py` client):
+Driven by the `tools/deploy_v2.py` front door, which routes preview to the
+`libs/deploy/preview.py` backend (over the existing `libs/dokploy.py` client):
 
 ```bash
 # Stand up / update + deploy an alias, then health-check report-<alias>/api/health
-python -m tools.preview_lifecycle up --kind pr --value 5 --code main --domain zitian.party
-python -m tools.preview_lifecycle up --kind commit --value 1ab32d5 --code 1ab32d5 --domain zitian.party
-python -m tools.preview_lifecycle up --kind main --code main --domain zitian.party
+python -m tools.deploy_v2 --type preview/pr --version-ref 5 --iac-ref main --domain zitian.party
+python -m tools.deploy_v2 --type preview/commit --version-ref 1ab32d5 --iac-ref main --domain zitian.party
+python -m tools.deploy_v2 --type preview/branch --version-ref main --iac-ref main --domain zitian.party
 
 # Tear down an alias AND destroy its ephemeral DB volume
-python -m tools.preview_lifecycle down --kind pr --value 5 --domain zitian.party
+python -m tools.deploy_v2 --type preview/pr --version-ref 5 --iac-ref main --domain zitian.party --down
 ```
 
 The alias → {env_suffix, domain, compose slug, telemetry label} mapping is the pure,

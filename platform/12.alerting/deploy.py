@@ -2,7 +2,7 @@
 
 import sys
 
-from libs.deployer import Deployer, make_tasks
+from libs.deploy.deployer import Deployer, make_tasks
 from libs.env import get_secrets
 from libs.console import error, info, success
 

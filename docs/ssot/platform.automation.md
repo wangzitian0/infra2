@@ -21,7 +21,7 @@
 ### Code as SSOT 索引
 
 - **任务加载器**: [`tasks.py`](https://github.com/wangzitian0/infra2/blob/main/tasks.py)
-- **基类**: [`libs/deployer.py`](https://github.com/wangzitian0/infra2/blob/main/libs/deployer.py)
+- **基类**: [`libs/deploy/deployer.py`](https://github.com/wangzitian0/infra2/blob/main/libs/deploy/deployer.py)
 - **公共函数**: [`libs/common.py`](https://github.com/wangzitian0/infra2/blob/main/libs/common.py)
 
 ---

@@ -1,6 +1,7 @@
 """PostgreSQL deployment with vault-init"""
+
 import sys
-from libs.deployer import Deployer, make_tasks
+from libs.deploy.deployer import Deployer, make_tasks
 
 shared_tasks = sys.modules.get("platform.01.postgres.shared")
 

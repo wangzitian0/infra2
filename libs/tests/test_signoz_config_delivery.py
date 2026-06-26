@@ -37,7 +37,7 @@ def test_composing_delivers_collector_config():
         # delivery runs BEFORE super().composing(); stub the base to a sentinel so
         # we don't hit Dokploy and can assert delivery happened first.
         mock.patch(
-            "libs.deployer.Deployer.composing",
+            "libs.deploy.deployer.Deployer.composing",
             classmethod(
                 lambda cls, c, env_vars: (_ for _ in ()).throw(
                     RuntimeError("stop-after-deliver")
@@ -73,16 +73,26 @@ def test_otel_collector_config_has_durable_exporter_queue() -> None:
     from pathlib import Path
 
     cfg = yaml.safe_load(
-        (Path(__file__).resolve().parents[2] / "platform/11.signoz/otel-collector-config.yaml")
-        .read_text(encoding="utf-8")
+        (
+            Path(__file__).resolve().parents[2]
+            / "platform/11.signoz/otel-collector-config.yaml"
+        ).read_text(encoding="utf-8")
     )
     assert "file_storage" in cfg["extensions"], "file_storage extension missing"
     assert "file_storage" in cfg["service"]["extensions"], "file_storage not enabled"
-    for name in ("clickhousetraces", "signozclickhousemetrics", "clickhouselogsexporter"):
+    for name in (
+        "clickhousetraces",
+        "signozclickhousemetrics",
+        "clickhouselogsexporter",
+    ):
         exp = cfg["exporters"][name]
-        assert exp["retry_on_failure"]["enabled"] is True, f"{name}: retry_on_failure off"
+        assert exp["retry_on_failure"]["enabled"] is True, (
+            f"{name}: retry_on_failure off"
+        )
         assert exp["sending_queue"]["enabled"] is True, f"{name}: sending_queue off"
-        assert exp["sending_queue"]["storage"] == "file_storage", f"{name}: queue not on disk"
+        assert exp["sending_queue"]["storage"] == "file_storage", (
+            f"{name}: queue not on disk"
+        )
 
 
 def test_otel_queue_dir_is_mounted_and_provisioned() -> None:

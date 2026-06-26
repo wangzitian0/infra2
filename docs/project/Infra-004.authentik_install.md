@@ -11,7 +11,7 @@ Install Authentik SSO for identity management on platform services with improved
 
 ## Scope
 
-- [x] Create deployment automation framework (libs/deployer.py)
+- [x] Create deployment automation framework (libs/deploy/deployer.py)
 - [x] Deploy PostgreSQL (01.postgres) with vault-init
 - [x] Deploy Redis (02.redis) with vault-init
 - [x] Deploy Authentik (10.authentik) with vault-init

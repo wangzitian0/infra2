@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from tools import preview_lifecycle as pl
+from libs.deploy import preview as pl
 
 # resolve_to_sha is patched in every test so no `git ls-remote` runs.
 FULL_SHA = "1af32e6daf17e2c58383dd2c0bfaea13bc11e517"
@@ -274,7 +274,10 @@ def test_up_updates_existing_compose_in_place():
     # had it). Non-empty client-id + canonical environment, mirroring staging/prod.
     from tools.openpanel_clients import openpanel_env
 
-    assert env_vars["OPENPANEL_CLIENT_ID"] == openpanel_env("preview")["OPENPANEL_CLIENT_ID"]
+    assert (
+        env_vars["OPENPANEL_CLIENT_ID"]
+        == openpanel_env("preview")["OPENPANEL_CLIENT_ID"]
+    )
     assert env_vars["OPENPANEL_CLIENT_ID"]  # non-empty: the preview project is issued
     assert env_vars["OPENPANEL_ENVIRONMENT"] == "preview"
     # the source env's AppRole creds are injected on every up (merged on redeploy)
@@ -411,38 +414,17 @@ def test_wait_for_health_returns_false_on_timeout():
     assert healthy is False
 
 
-# --- main(): domain validated BEFORE the Dokploy client is built -----------------
-
-
-def _no_dokploy(monkeypatch):
-    """Fail the test if main() ever tries to build a Dokploy client."""
-
-    def _boom(*_args, **_kwargs):  # pragma: no cover - only hit on regression
-        raise AssertionError("get_dokploy must not be called for a malformed domain")
-
-    monkeypatch.setattr("libs.dokploy.get_dokploy", _boom)
-
-
-@pytest.mark.parametrize("action", ["up", "down"])
-def test_main_rejects_bad_domain_before_building_client(action, monkeypatch, capsys):
-    # A whitespace-bearing domain must be rejected up front for BOTH up and down, so the
-    # malformed domain never reaches get_dokploy(host=f"cloud.{domain}").
-    _no_dokploy(monkeypatch)
-    argv = [action, "--kind", "pr", "--value", "5", "--domain", "z.p\nINJECT=1"]
-    if action == "up":
-        argv += ["--code", "main"]
-
-    rc = pl.main(argv)
-
-    assert rc == 2
-    err = capsys.readouterr().err
-    assert "invalid domain" in err
-
-
 def test_up_image_ref_overrides_short_sha_for_releases():
     # a release pulls its retained TAG, not the (pruned) short sha
     client = FakeDokploy(existing=None)
-    pl.up("branch", "main", code="main", domain="z.p", client=client,
-          http_get=_ok_get, image_ref="v1.2.3")
+    pl.up(
+        "branch",
+        "main",
+        code="main",
+        domain="z.p",
+        client=client,
+        http_get=_ok_get,
+        image_ref="v1.2.3",
+    )
     _cid, env = client.env_updates[0]
     assert env["IMAGE_TAG"] == "v1.2.3" and env["GIT_COMMIT_SHA"] == "v1.2.3"
