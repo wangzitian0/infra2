@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 
+import httpx
 import pytest
 
 from libs.iac_runner_client import (
@@ -24,11 +25,18 @@ SHA = "a" * 40
 
 
 class _FakeResp:
-    def __init__(self, payload):
+    def __init__(self, payload, status_code=200):
         self._payload = payload
+        self.status_code = status_code
         self.content = b"x"
 
     def raise_for_status(self):
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError(
+                f"{self.status_code}",
+                request=httpx.Request("POST", "http://x/deploy/status"),
+                response=httpx.Response(self.status_code),
+            )
         return None
 
     def json(self):
@@ -41,7 +49,12 @@ def _capture(responses=None):
 
     def transport(url, *, content, headers, timeout):
         calls.append({"url": url, "content": content, "headers": headers})
-        return _FakeResp(seq.pop(0) if len(seq) > 1 else seq[0])
+        # each item is either a payload dict or a (payload, status_code) tuple
+        item = seq.pop(0) if len(seq) > 1 else seq[0]
+        if isinstance(item, tuple):
+            payload, code = item
+            return _FakeResp(payload, status_code=code)
+        return _FakeResp(item)
 
     return calls, transport
 
@@ -116,6 +129,49 @@ def test_poll_returns_on_terminal_status():
 def test_poll_times_out_if_never_settles():
     _calls, transport = _capture([{"status": "running"}])
     with pytest.raises(TimeoutError, match="did not settle"):
+        poll_platform_deploy_status(
+            env="staging", ref=SHA, base_url="u", secret=SECRET, attempts=3,
+            interval=0, sleep=lambda *_: None, nonce_factory=lambda: "nonce123",
+            transport=transport,
+        )
+
+
+def test_poll_tolerates_transient_not_found_then_settles():
+    # 404 {"status":"not_found"} right after firing (wait=False) = deploy not visible yet
+    # or runner restarted and lost in-memory state. Must keep polling, not crash on the
+    # first miss — this is exactly the v1.1.16 reconcile failure.
+    _calls, transport = _capture(
+        [
+            ({"status": "not_found"}, 404),
+            ({"status": "not_found"}, 404),
+            ({"status": "completed"}, 200),
+        ]
+    )
+    res = poll_platform_deploy_status(
+        env="staging", ref=SHA, base_url="u", secret=SECRET, attempts=10,
+        interval=0, sleep=lambda *_: None, nonce_factory=lambda: "nonce123",
+        transport=transport,
+    )
+    assert res["status"] == "completed"
+
+
+def test_poll_times_out_if_only_not_found():
+    # a deploy that never becomes visible exhausts the budget as TimeoutError (the same
+    # contract as a stuck "running"), not an immediate raise.
+    _calls, transport = _capture([({"status": "not_found"}, 404)])
+    with pytest.raises(TimeoutError, match="did not settle"):
+        poll_platform_deploy_status(
+            env="staging", ref=SHA, base_url="u", secret=SECRET, attempts=3,
+            interval=0, sleep=lambda *_: None, nonce_factory=lambda: "nonce123",
+            transport=transport,
+        )
+
+
+def test_poll_raises_on_genuine_routing_404():
+    # a 404 WITHOUT a not_found body (e.g. wrong URL / HTML 404) is a real error, not
+    # the runner's transient not_found — it must still surface via raise_for_status().
+    _calls, transport = _capture([({"error": "Not Found"}, 404)])
+    with pytest.raises(httpx.HTTPStatusError):
         poll_platform_deploy_status(
             env="staging", ref=SHA, base_url="u", secret=SECRET, attempts=3,
             interval=0, sleep=lambda *_: None, nonce_factory=lambda: "nonce123",

@@ -52,6 +52,15 @@ def _new_nonce() -> str:
     return os.urandom(16).hex()
 
 
+def _safe_json(resp) -> dict:
+    """Best-effort JSON body as a dict; {} on empty/non-JSON/non-object (e.g. an HTML 404)."""
+    try:
+        data = resp.json() if getattr(resp, "content", None) else {}
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def _validate_request(env: str, ref: str, secret: str, base_url: str) -> None:
     """Fail closed BEFORE signing/posting — never sign with an empty secret or bad target."""
     if env not in _VALID_ENVS:
@@ -145,6 +154,18 @@ def poll_platform_deploy_status(
             headers=headers,
             timeout=timeout,
         )
+        # iac_runner answers 404 {"status":"not_found"} when the deploy isn't visible
+        # yet: the trigger's in-flight entry hasn't registered, or the runner restarted
+        # and lost its in-memory deploy state. That's a TRANSIENT miss right after firing
+        # (wait=False), not a terminal failure — a single 404 must not crash the whole
+        # reconcile, so we treat it as non-terminal and keep polling. A genuine routing
+        # 404 (no JSON body / different status) still surfaces via raise_for_status().
+        if getattr(resp, "status_code", None) == 404:
+            body = _safe_json(resp)
+            if str(body.get("status", "")).lower() == "not_found":
+                last = body
+                sleep(interval)
+                continue
         resp.raise_for_status()
         last = resp.json() if resp.content else {}
         if str(last.get("status", "")).lower() not in terminal_excluded:
