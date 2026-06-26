@@ -522,6 +522,7 @@ def deploy_v2(
     code_reviewed: bool | None = None,
     verify_vault: bool = True,
     verify_config: bool = True,
+    verify_ingestion: bool = False,
     timeout: int = 600,
     expected_sha: str | None = None,
     repo: str = _APP_REPO,
@@ -661,6 +662,7 @@ def deploy_v2(
         break_glass=break_glass,
         verify_vault=verify_vault,
         verify_config=verify_config,
+        verify_ingestion=verify_ingestion,
         model_overrides=model_overrides_from_env(),
     )
     detail = {
@@ -727,6 +729,13 @@ def main(argv: list[str] | None = None) -> int:
         "--no-verify-config",
         action="store_true",
         help="skip the post-deploy effective IAC_CONFIG_HASH check (default: verify)",
+    )
+    parser.add_argument(
+        "--verify-ingestion",
+        action="store_true",
+        help="after health, prove the deployed service.version ingests logs+traces into "
+        "SigNoz (zero-ingestion vs stale-image); needs ClickHouse network access "
+        "(default: off)",
     )
     parser.add_argument("--timeout", type=int, default=600, help="health-check seconds")
     parser.add_argument(
@@ -795,6 +804,7 @@ def main(argv: list[str] | None = None) -> int:
             code_reviewed=True if args.code_reviewed else None,
             verify_vault=not args.skip_vault_check,
             verify_config=not args.no_verify_config,
+            verify_ingestion=args.verify_ingestion,
             timeout=args.timeout,
             expected_sha=args.expected_sha,
             image_wait_seconds=args.image_wait_seconds,

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from dataclasses import dataclass
@@ -194,6 +195,7 @@ def deploy(
     model_overrides: dict[str, str] | None = None,
     verify_vault: bool = False,
     verify_config: bool = False,
+    verify_ingestion: bool = False,
     _now=time.time,
 ) -> DeployPlan:
     """Deploy a resolved app commit to a fixed app environment.
@@ -309,6 +311,24 @@ def deploy(
         if verify_config:
             verify_effective_config_hash(
                 client, cfg.compose_id, config_hash, timeout=timeout
+            )
+        # Opt-in: prove the just-deployed service.version actually ingests into SigNoz
+        # (logs+traces), not merely that the rollout/config advanced. This is the
+        # platform-side home of the deployed-version ingestion proof — the app emits
+        # OTLP and is backend-agnostic; infra2 owns confirming it landed. Default OFF
+        # because it depends on Docker-network ClickHouse access + telemetry flush
+        # timing; enable per-workflow once validated for the env.
+        if verify_ingestion:
+            from tools.deploy_ingestion_smoke import verify_deploy_ingestion
+
+            deploy_environment = {"prod": "production"}.get(env.strip().lower(), env)
+            verify_deploy_ingestion(
+                clickhouse_url=os.getenv(
+                    "SIGNOZ_CLICKHOUSE_URL", "http://platform-clickhouse:8123"
+                ),
+                service_name="finance-report-backend",
+                environment=deploy_environment,
+                expected_version=image_tag,
             )
     except Exception:
         # #768: on a failed rollout/verify, surface the platform-layer state (Dokploy
