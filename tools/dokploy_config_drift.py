@@ -119,7 +119,18 @@ def contents_at_ref(ref: str, paths: list[str]) -> dict[str, bytes]:
     return out
 
 
-def expected_hash_at(dep: type[Deployer], c: Context, ref: str) -> tuple[str | None, list[str]]:
+def _env_vars(dep: type[Deployer]) -> dict[str, str]:
+    """The non-secret base env the deploy folds into the hash (computed ONCE per service so a
+    live-secret fetch in compose_env_base can't differ between the disk and git computations)."""
+    e = dep.env()
+    ev = dep.compose_env_base(e)
+    ev["VAULT_ADDR"] = e.get("VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN')}")
+    return ev
+
+
+def expected_hash_at(
+    dep: type[Deployer], c: Context, ref: str, env_vars: dict[str, str]
+) -> tuple[str | None, list[str]]:
     """(hash, missing_paths) — the config hash recomputed from `ref`'s content. missing_paths
     are hash-input files that don't exist at `ref` (a structural change → can't compare)."""
     compose_path, artifact_paths, dep_paths = _hash_input_paths(dep, c)
@@ -128,9 +139,6 @@ def expected_hash_at(dep: type[Deployer], c: Context, ref: str) -> tuple[str | N
     if compose_path in missing:
         return None, missing
     compose_content = contents[compose_path].decode("utf-8", "replace")
-    e = dep.env()
-    env_vars = dep.compose_env_base(e)
-    env_vars["VAULT_ADDR"] = e.get("VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN')}")
     artifact_items = [(p, contents[p]) for p in artifact_paths if p in contents]
     dep_items = [(p, contents[p]) for p in dep_paths if p in contents]
     return config_hash_from_items(compose_content, env_vars, artifact_items, dep_items), missing
@@ -162,11 +170,9 @@ def self_check() -> int:
         if dep is None:
             continue
         try:
-            e = dep.env()
-            ev = dep.compose_env_base(e)
-            ev["VAULT_ADDR"] = e.get("VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN')}")
+            ev = _env_vars(dep)
             disk = dep.compute_local_config_hash(c, ev)
-            via_git, missing = expected_hash_at(dep, c, "HEAD")
+            via_git, missing = expected_hash_at(dep, c, "HEAD", ev)
         except Exception as exc:  # noqa: BLE001
             bad.append(f"{sid}: ERR {exc}")
             continue
@@ -232,7 +238,7 @@ def scan(tag: str) -> list[Row]:
             rows.append(Row(sid, "cache_bust", deployed=dep_hash, note="app deploy_v2 path"))
             continue
         try:
-            exp, missing = expected_hash_at(dep, c, tag)
+            exp, missing = expected_hash_at(dep, c, tag, _env_vars(dep))
         except Exception as exc:  # noqa: BLE001
             rows.append(Row(sid, "DRIFT", deployed=dep_hash, note=f"compute error: {exc}"))
             continue
