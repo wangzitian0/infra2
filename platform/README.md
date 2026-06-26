@@ -41,7 +41,7 @@ platform/{nn}.{service}/
 - [Alerting Bridge](./12.alerting/README.md) - SigNoz to Feishu alert delivery
 - [Portal](./21.portal/README.md) - Internal dashboard
 - [Activepieces](./22.activepieces/README.md) - Workflow automation
-- [Perfect](./23.prefect/README.md) - Workflow orchestration (Prefect)
+- [Prefect](./23.prefect/README.md) - Workflow orchestration (Prefect)
 
 ## Prerequisites
 
