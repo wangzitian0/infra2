@@ -78,6 +78,31 @@ class _SequencedHttpClient:
         return self._responses[len(self.calls) - 1]
 
 
+class _SequencedRaisingClient:
+    """Like _SequencedHttpClient, but a queued Exception is RAISED at request() time.
+
+    Drives the RequestError (read-timeout / connect) retry path, where the failure
+    surfaces from ``client.request(...)`` itself rather than ``raise_for_status()``.
+    """
+
+    def __init__(self, items):
+        self._items = list(items)
+        self.calls = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def request(self, method, url, **kwargs):
+        self.calls.append((method, url))
+        item = self._items[len(self.calls) - 1]
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+
 @pytest.fixture
 def dokploy_env(monkeypatch):
     monkeypatch.setenv("DOKPLOY_API_KEY", "test-key")
@@ -210,6 +235,69 @@ class TestDokployClient:
         with pytest.raises(httpx.HTTPStatusError, match="status code 502"):
             client._request("POST", "compose.create", _sleep=lambda *_: None)
         assert len(fake.calls) == 1  # not retried
+
+    def test_request_retries_idempotent_post_on_read_timeout(
+        self, monkeypatch, dokploy_env
+    ):
+        # a read-timeout from a churning control plane (#252) self-heals on a POST the
+        # caller marked idempotent — re-applying a set-desired-state write is a no-op
+        request = httpx.Request("POST", "https://cloud.example.test/api/compose.update")
+        fake = _SequencedRaisingClient(
+            [
+                httpx.ReadTimeout("timed out", request=request),
+                FakeResponse({"ok": True}),
+            ]
+        )
+        monkeypatch.setattr(dokploy.httpx, "Client", lambda timeout: fake)
+        client = DokployClient(base_url="https://cloud.example.test/api")
+
+        result = client._request(
+            "POST", "compose.update", idempotent=True, _sleep=lambda *_: None
+        )
+        assert result == {"ok": True}
+        assert len(fake.calls) == 2  # retried once after the read-timeout
+
+    def test_request_does_not_retry_non_idempotent_post_on_read_timeout(
+        self, monkeypatch, dokploy_env
+    ):
+        # compose.create may have acted server-side before the timeout — never repeat it
+        request = httpx.Request("POST", "https://cloud.example.test/api/compose.create")
+        fake = _SequencedRaisingClient(
+            [
+                httpx.ReadTimeout("timed out", request=request),
+                FakeResponse({"ok": True}),
+            ]
+        )
+        monkeypatch.setattr(dokploy.httpx, "Client", lambda timeout: fake)
+        client = DokployClient(base_url="https://cloud.example.test/api")
+
+        with pytest.raises(
+            httpx.RequestError, match="Error while performing Dokploy API request"
+        ):
+            client._request("POST", "compose.create", _sleep=lambda *_: None)
+        assert len(fake.calls) == 1  # not retried
+
+    def test_update_compose_threads_idempotent_so_it_retries(
+        self, monkeypatch, dokploy_env
+    ):
+        # the public update_compose path is what marks the write idempotent — prove the
+        # read-timeout that used to hard-fail the route-canary now self-heals end to end
+        request = httpx.Request("POST", "https://cloud.example.test/api/compose.update")
+        fake = _SequencedRaisingClient(
+            [
+                httpx.ReadTimeout("timed out", request=request),
+                FakeResponse({"composeId": "c1"}),
+            ]
+        )
+        monkeypatch.setattr(dokploy.httpx, "Client", lambda timeout: fake)
+        monkeypatch.setattr(dokploy.time, "sleep", lambda *_: None)
+        client = DokployClient(base_url="https://cloud.example.test/api")
+
+        result = client.update_compose("c1", compose_file="services: {}")
+        assert result == {"composeId": "c1"}
+        assert (
+            len(fake.calls) == 2
+        )  # update_compose passed idempotent=True → retried once
 
     @patch("libs.dokploy.DokployClient._request")
     def test_list_git_providers(self, mock_request):
