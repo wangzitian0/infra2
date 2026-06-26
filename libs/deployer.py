@@ -228,25 +228,56 @@ def _compose_artifact_files(compose_path: str, compose_content: str) -> list[Pat
     return sorted(set(files))
 
 
-def _artifact_hash_payload(compose_path: str, compose_content: str) -> str:
-    root = Path.cwd().resolve()
-    lines: list[str] = []
-    for path in _compose_artifact_files(compose_path, compose_content):
-        try:
-            label = str(path.relative_to(root))
-        except ValueError:
-            label = str(path)
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        lines.append(f"{label}:{digest}")
-    return "\n".join(lines)
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _dependency_hash_payload(compose_path: str) -> str:
-    """Digest of a service's DECLARED extra build/config dependencies.
+def _repo_rel(path: Path) -> str:
+    """Repo-relative label for a file, anchored at the REPO ROOT (not ``Path.cwd()``), so the
+    config hash is reproducible from any working directory / checkout — the property the
+    config-drift reconciler needs to recompute a service's hash at an arbitrary git ref. An
+    out-of-tree path keeps its absolute form (never happens for in-repo artifacts/deps)."""
+    try:
+        return str(path.resolve().relative_to(_REPO_ROOT))
+    except ValueError:
+        return str(path)
 
-    Empty unless the service lists `depends_on` globs in deploy-dependencies.yaml,
-    so this is a no-op for services that only depend on their own directory.
+
+def config_hash_from_items(
+    compose_content: str,
+    env_vars: dict[str, str],
+    artifact_items: list[tuple[str, bytes]],
+    dep_items: list[tuple[str, bytes]],
+) -> str:
+    """Pure config hash from explicit inputs — no filesystem / cwd access in here.
+
+    ``artifact_items`` / ``dep_items`` are ``(repo-relative-label, content-bytes)`` pairs
+    (artifact in discovery order; deps caller-sorted). Because labels are repo-relative and
+    content is passed in, feeding the SAME (compose, env, files) yields the SAME hash whether
+    the files were gathered from disk (the deploy path) or from a git ref (the drift
+    reconciler) — there is no second, divergent implementation to disagree with the deploy.
     """
+    art = [f"{lbl}:{hashlib.sha256(c).hexdigest()}" for lbl, c in artifact_items]
+    deps = [f"dep:{lbl}:{hashlib.sha256(c).hexdigest()}" for lbl, c in dep_items]
+    payload = "\n".join(art)
+    if deps:
+        payload = f"{payload}\n" + "\n".join(deps)
+    return _compute_config_hash(compose_content, env_vars, payload)
+
+
+def _artifact_items_from_disk(
+    compose_path: str, compose_content: str
+) -> list[tuple[str, bytes]]:
+    """(repo-relative label, content) for each compose build-context file, on disk."""
+    return [
+        (_repo_rel(path), path.read_bytes())
+        for path in _compose_artifact_files(compose_path, compose_content)
+    ]
+
+
+def _dependency_items_from_disk(compose_path: str) -> list[tuple[str, bytes]]:
+    """(repo-relative label, content) for a service's DECLARED extra build/config dependencies,
+    sorted by path. Empty unless the service lists `depends_on` globs in deploy-dependencies.yaml
+    (a no-op for services that only depend on their own directory)."""
     import glob as _glob
     from libs.deploy_dependencies import (
         extra_dependency_globs,
@@ -255,28 +286,27 @@ def _dependency_hash_payload(compose_path: str) -> str:
 
     key = service_key_from_path(compose_path)
     if not key:
-        return ""
+        return []
     globs = extra_dependency_globs(key)
     if not globs:
-        return ""
+        return []
 
-    root = Path.cwd().resolve()
     matched: set[Path] = set()
     for pattern in globs:
-        for hit in _glob.glob(str(root / pattern), recursive=True):
+        for hit in _glob.glob(str(_REPO_ROOT / pattern), recursive=True):
             p = Path(hit)
-            if p.is_file():
+            # Exclude transient __pycache__/.pyc/.pyo (mirrors _iter_path_files). The iac-runner
+            # deploys from a CLEAN git checkout that has none, so its hash already ignores them;
+            # without this exclusion a dev machine (which has compiled .pyc) computes a DIFFERENT
+            # hash than the iac-runner for any dep-baking service — non-reproducible by accident.
+            if (
+                p.is_file()
+                and "__pycache__" not in p.parts
+                and not p.name.endswith((".pyc", ".pyo"))
+            ):
                 matched.add(p.resolve())
 
-    lines: list[str] = []
-    for path in sorted(matched):
-        try:
-            label = str(path.relative_to(root))
-        except ValueError:
-            label = str(path)
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        lines.append(f"dep:{label}:{digest}")
-    return "\n".join(lines)
+    return [(_repo_rel(path), path.read_bytes()) for path in sorted(matched)]
 
 
 def _parse_env_text(env_text: str) -> dict[str, str]:
@@ -908,18 +938,21 @@ class Deployer:
 
     @classmethod
     def compute_local_config_hash(cls, c: "Context", env_vars: dict[str, str]) -> str:
-        """Compute hash of local compose + env vars + declared shared deps."""
+        """Compute hash of local compose + env vars + declared shared deps.
+
+        Thin adapter: gather the compose/build-context/dependency files from disk (repo-relative
+        labels) and delegate to the path-independent :func:`config_hash_from_items`. Declared
+        cross-service dependencies are folded in so a change to a shared artifact this service
+        bakes in (a contract, pinned config) flips its hash — keeping the iac-runner fan-out and
+        the hash gate in agreement.
+        """
         compose_content = cls.get_compose_content(c)
-        artifact_payload = _artifact_hash_payload(cls.compose_path, compose_content)
-        # Fold declared cross-service dependencies into the hash so a change to a
-        # shared artifact this service bakes in (a contract, pinned config) flips
-        # its hash — keeping the iac-runner fan-out and the hash gate in agreement.
-        # Only appended when non-empty, so services that declare no extra deps
-        # keep their existing hash (no spurious redeploy on rollout).
-        dependency_payload = _dependency_hash_payload(cls.compose_path)
-        if dependency_payload:
-            artifact_payload = f"{artifact_payload}\n{dependency_payload}"
-        return _compute_config_hash(compose_content, env_vars, artifact_payload)
+        return config_hash_from_items(
+            compose_content,
+            env_vars,
+            _artifact_items_from_disk(cls.compose_path, compose_content),
+            _dependency_items_from_disk(cls.compose_path),
+        )
 
     @classmethod
     def verify_vault_app_token(cls) -> dict:

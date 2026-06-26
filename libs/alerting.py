@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -420,6 +421,32 @@ def deliver_feishu_app_text(
         headers={"Authorization": f"Bearer {access_token}"},
         timeout=timeout,
     )
+
+
+def deliver_infra2_report(text: str, env: "Mapping[str, str] | None" = None) -> bool:
+    """Post a daily-report message to the shared 'infra2 reports' Lark group via the infra2
+    Feishu app bot. The single delivery entry every periodic REPORT reconciler uses (DNS drift,
+    config drift, …) so the channel + credentials live in one place, not per-tool.
+
+    Reads ``INFRA2_REPORTS_FEISHU_{APP_ID,APP_SECRET,CHAT_ID}`` (+ optional ``_API_BASE``).
+    Returns True if delivered, False if not configured (so a not-yet-wired reconciler no-ops
+    cleanly instead of erroring). A configured-but-failing delivery raises (a broken report
+    path must be visible, not silently green).
+    """
+    e = os.environ if env is None else env
+    app_id = e.get("INFRA2_REPORTS_FEISHU_APP_ID", "")
+    app_secret = e.get("INFRA2_REPORTS_FEISHU_APP_SECRET", "")
+    chat_id = e.get("INFRA2_REPORTS_FEISHU_CHAT_ID", "")
+    if not (app_id and app_secret and chat_id):
+        return False
+    deliver_feishu_app_text(
+        app_id=app_id,
+        app_secret=app_secret,
+        chat_id=chat_id,
+        text=text,
+        api_base=e.get("INFRA2_REPORTS_FEISHU_API_BASE", "https://open.feishu.cn"),
+    )
+    return True
 
 
 def validate_feishu_api_base(api_base: str) -> str:
