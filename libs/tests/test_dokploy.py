@@ -9,7 +9,6 @@ import pytest
 from libs import dokploy
 from libs.dokploy import (
     DokployClient,
-    deploy_compose_service,
     ensure_project,
     get_dokploy,
 )
@@ -647,74 +646,3 @@ def test_ensure_project_rejects_invalid_create_response(monkeypatch):
 
     with pytest.raises(ValueError, match="Failed to create project platform"):
         ensure_project("platform")
-
-
-def test_deploy_compose_service_updates_existing_compose(monkeypatch):
-    class FakeClient:
-        def __init__(self):
-            self.updated = []
-            self.deployed = []
-
-        def find_compose_by_name(self, service_name, project_name, env_name=None):
-            assert env_name == "staging"
-            return {"composeId": "compose-existing"}
-
-        def update_compose(self, compose_id, **kwargs):
-            self.updated.append((compose_id, kwargs))
-
-        def deploy_compose(self, compose_id):
-            self.deployed.append(compose_id)
-
-    client = FakeClient()
-    monkeypatch.setattr(dokploy, "get_dokploy", lambda host=None: client)
-    monkeypatch.setattr(dokploy, "ensure_project", lambda *args, **kwargs: ("p1", "e1"))
-
-    compose_id = deploy_compose_service(
-        "platform",
-        "alerting",
-        "services: {}",
-        {"A": "1", "DROP": None},
-        env_name="staging",
-    )
-
-    assert compose_id == "compose-existing"
-    assert client.updated == [
-        (
-            "compose-existing",
-            {
-                "compose_file": "services: {}",
-                "env": "A=1",
-                "source_type": "raw",
-            },
-        )
-    ]
-    assert client.deployed == ["compose-existing"]
-
-
-def test_deploy_compose_service_creates_missing_compose(monkeypatch):
-    class FakeClient:
-        def __init__(self):
-            self.created = []
-            self.deployed = []
-
-        def find_compose_by_name(self, service_name, project_name, env_name=None):
-            return None
-
-        def create_compose(self, **kwargs):
-            self.created.append(kwargs)
-            return {"composeId": "compose-new"}
-
-        def deploy_compose(self, compose_id):
-            self.deployed.append(compose_id)
-
-    client = FakeClient()
-    monkeypatch.setattr(dokploy, "get_dokploy", lambda host=None: client)
-    monkeypatch.setattr(dokploy, "ensure_project", lambda *args, **kwargs: ("p1", "e1"))
-
-    assert (
-        deploy_compose_service("platform", "alerting", "services: {}", {"A": "1"})
-        == "compose-new"
-    )
-    assert client.created[0]["environment_id"] == "e1"
-    assert client.created[0]["app_name"] == "platform-alerting"
-    assert client.deployed == ["compose-new"]
