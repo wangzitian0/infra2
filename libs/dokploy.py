@@ -50,8 +50,11 @@ class DokployClient:
             )
 
     # Gateway blips (the dokploy-traefik in front of the API returns these when the backend
-    # is briefly unresponsive). Safe to retry ONLY on idempotent GETs — a 502/503/504 means
-    # the gateway never relayed a response, but for a POST the backend may still have acted.
+    # is briefly unresponsive). Safe to retry on a GET — and on a POST the caller marks
+    # ``idempotent`` (a set-desired-state write like ``compose.update``, where re-applying
+    # the same payload is a no-op even if the first attempt already acted). A 502/503/504 or
+    # a read-timeout means the gateway never relayed a response; for a NON-idempotent POST
+    # (create/deploy/delete) the backend may still have acted, so those are never retried.
     _TRANSIENT_STATUS = (502, 503, 504)
 
     def _request(
@@ -61,12 +64,15 @@ class DokployClient:
         *,
         _retries: int = 2,
         _sleep=time.sleep,
+        idempotent: bool = False,
         **kwargs,
     ) -> dict | list:
         """Make authenticated request to Dokploy API.
 
-        Transient gateway errors (502/503/504) and connection errors on a GET are retried
-        with backoff — a flaky control plane should self-heal rather than fail a read.
+        Transient gateway errors (502/503/504) and connection errors (incl. read-timeouts
+        from a churning control plane, see #252) are retried with backoff when the request
+        is safe to repeat: any GET, or a POST the caller marks ``idempotent``. A flaky
+        control plane should self-heal rather than hard-fail the caller.
         """
         headers = {
             "accept": "application/json",
@@ -75,7 +81,7 @@ class DokployClient:
             **kwargs.pop("headers", {}),
         }
         url = f"{self.base_url}/{endpoint}"
-        is_get = method.upper() == "GET"
+        retryable = method.upper() == "GET" or idempotent
         attempt = 0
         while True:
             try:
@@ -85,7 +91,7 @@ class DokployClient:
                 return resp.json() if resp.content else {}
             except httpx.HTTPStatusError as exc:
                 if (
-                    is_get
+                    retryable
                     and exc.response.status_code in self._TRANSIENT_STATUS
                     and attempt < _retries
                 ):
@@ -99,7 +105,7 @@ class DokployClient:
                     response=exc.response,
                 ) from exc
             except httpx.RequestError as exc:
-                if is_get and attempt < _retries:
+                if retryable and attempt < _retries:
                     attempt += 1
                     _sleep(2**attempt)
                     continue
@@ -222,7 +228,10 @@ class DokployClient:
         # Merge extra args (e.g. repository, branch, githubId)
         payload.update(kwargs)
 
-        return self._request("POST", "compose.update", json=payload)
+        # compose.update sets the compose row to a fixed desired state, so a retry after a
+        # read-timeout re-applies the same payload — safe to retry on a churning control
+        # plane (#252), unlike compose.create/deploy/delete.
+        return self._request("POST", "compose.update", json=payload, idempotent=True)
 
     def deploy_compose(self, compose_id: str) -> dict:
         """Trigger deployment for compose application"""
