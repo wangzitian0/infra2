@@ -19,7 +19,7 @@
 | `common.py` | Shared environment helpers | `get_env()`, `validate_env()`, `check_service()` |
 | `console.py` | Rich CLI output | `header()`, `success()`, `error()`, `prompt_action()` |
 | `deployer.py` | Deployment base class + task helpers | `Deployer`, `make_tasks()` |
-| `dokploy.py` | Dokploy API client | `DokployClient`, `deploy_compose_service()` |
+| `dokploy.py` | Dokploy API client | `DokployClient`, `get_dokploy()` |
 | `backup_restore.py` | Off-host backup restore rehearsal helpers | `latest_artifact_for_service()`, `build_postgres_rehearsal_plan()`, `run_postgres_restore_rehearsal()` |
 | `dokploy_route_canary.py` | Dynamic route canary | `run_route_canary()`, `render_canary_compose()` |
 | `pipeline_stage_contract.py` | Env x Stage delivery evidence contract | `make_stage_result()`, `acceleration_allowed()`, `detect_disagreement()` |
