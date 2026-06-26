@@ -46,6 +46,7 @@ name: Ops Checks
     - cron: "37 2 * * *"
     - cron: "37 6 * * *"
     - cron: "0 1 * * 1"
+    - cron: "47 * * * *" # hourly Dokploy preview-orphan GC (offset from route-canary)
   workflow_dispatch:
     inputs:
       task:
@@ -57,6 +58,7 @@ name: Ops Checks
           - deploy-guard-audit
           - dokploy-route-canary
           - deploy-v2-canary
+          - preview-gc
           - out-of-band-watchdog
           - watchdog-weekly-digest
           - all
@@ -101,7 +103,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 * * * *' && 'dokploy-route-canary-scheduled' || github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'infra2-deploy-guard-audit' || github.event_name == 'schedule' && github.event.schedule == '37 6 * * *' && 'deploy-v2-canary' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && inputs.task == 'dokploy-route-canary' && format('dokploy-route-canary-{0}-{1}', inputs.project, inputs.env) || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) || 'dokploy-route-canary-push' }}
+  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 * * * *' && 'dokploy-route-canary-scheduled' || github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'infra2-deploy-guard-audit' || github.event_name == 'schedule' && github.event.schedule == '37 6 * * *' && 'deploy-v2-canary' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-gc' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && inputs.task == 'dokploy-route-canary' && format('dokploy-route-canary-{0}-{1}', inputs.project, inputs.env) || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) || 'dokploy-route-canary-push' }}
   cancel-in-progress: false
 
 env:
@@ -465,3 +467,42 @@ jobs:
             exit 1
           fi
           echo "deploy_v2 acceptance canary is GREEN — the unified path deploys and converges."
+
+  preview-gc:
+    name: Garbage-collect orphaned Dokploy previews
+    if: ${{ (github.event_name == 'schedule' && github.event.schedule == '47 * * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'preview-gc' || inputs.task == 'all')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+      INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
+      # github.token reads the (public) app repo's open PRs; a dedicated PAT can
+      # override it. Absent/blocked => GC fail-safes to bare-slug orphans only.
+      PREVIEW_GC_GH_TOKEN: ${{ secrets.PREVIEW_GC_GH_TOKEN || github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install runtime dependencies
+        run: python -m pip install httpx python-dotenv rich
+
+      - name: Reconcile and reap orphaned previews
+        run: |
+          set -euo pipefail
+          if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
+            echo "::error::DOKPLOY_API_KEY secret is required for preview GC."
+            exit 1
+          fi
+          # Only the scheduled cron deletes; a manual dispatch is always dry-run
+          # (report only) so an accidental run can never be destructive.
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            python -m tools.preview_gc --apply
+          else
+            echo "manual dispatch -> dry-run only (the scheduled cron applies)."
+            python -m tools.preview_gc
+          fi
