@@ -22,7 +22,6 @@ SPECS = ROOT / "platform/12.alerting/compose.yaml"
 # service_id -> reason it has no INFRA_PROBE_SPECS entry. Keep justified.
 _PROBE_EXEMPT = {
     "platform/portal": "static homer dashboard — no liveness endpoint to probe",
-    "platform/prefect": "infra probe is a known gap, tracked in infra2#171",
 }
 
 

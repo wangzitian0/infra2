@@ -10,5 +10,5 @@ def status(c):
     return check_service(
         c,
         "prefect-server",
-        "python -c \"import urllib.request as u; exit(0 if u.urlopen(\\\"http://localhost:4200/api/health\\\", timeout=1).read().strip() == b\\\"true\\\" else 1)\"",
+        "python -c \"import urllib.request as u, sys; sys.exit(0 if u.urlopen(\\\"http://localhost:4200/api/health\\\", timeout=1).read().strip() == b\\\"true\\\" else 1)\"",
     )
