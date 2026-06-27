@@ -101,13 +101,23 @@ def assert_after_on_main(
         capture_output=True,
         text=True,
     )
-    if ancestor.returncode != 0:
+    # `git merge-base --is-ancestor`: 0 = ancestor (on-main, ok), 1 = NOT an ancestor
+    # (genuinely off-main), anything else (typically 128) = git error, almost always a
+    # missing/unresolvable base ref. Keep these distinct — conflating an unresolvable
+    # base with "off-main" sends operators the wrong way (the base just was not fetched).
+    if ancestor.returncode == 0:
+        return sha
+    if ancestor.returncode == 1:
         raise SystemExit(
             f"::error::refusing to reconcile {after!r} ({sha[:12]}): not reachable from "
             f"{base}. Release tags must be cut on reviewed main (Infra-011 invariant). "
             f"Re-cut the tag on main, or pass --dry-run to plan only."
         )
-    return sha
+    raise SystemExit(
+        f"::error::cannot verify provenance of {after!r}: base ref {base!r} is "
+        f"unresolvable ({ancestor.stderr.strip() or 'git error'}). Ensure it exists, e.g. "
+        f"`git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main`."
+    )
 
 
 def changed_files_from_git(

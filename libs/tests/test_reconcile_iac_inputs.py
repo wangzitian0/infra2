@@ -216,6 +216,22 @@ def test_guard_rejects_unresolvable_ref() -> None:
         assert_after_on_main("v9.9.9", ROOT, runner=runner)
 
 
+def test_guard_distinguishes_unresolvable_base_from_off_main() -> None:
+    # merge-base --is-ancestor exits 128 when the base ref (origin/main) is missing.
+    # That must NOT be reported as "off-main" — it means the base was not fetched.
+    def runner(argv, **_kwargs):
+        if argv[:2] == ["git", "rev-parse"]:
+            return subprocess.CompletedProcess(argv, 0, "b" * 40 + "\n", "")
+        if argv[:3] == ["git", "merge-base", "--is-ancestor"]:
+            return subprocess.CompletedProcess(
+                argv, 128, "", "fatal: Not a valid object name origin/main"
+            )
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    with pytest.raises(SystemExit, match="unresolvable"):
+        assert_after_on_main("v1.1.17", ROOT, runner=runner)
+
+
 def test_reconcile_workflow_contract() -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     text = WORKFLOW.read_text(encoding="utf-8")
@@ -233,4 +249,6 @@ def test_reconcile_workflow_contract() -> None:
     # release decoupling: prod is an explicit promotion, never an automatic tag-push deploy.
     assert "promote_prod" in workflow["on"]["workflow_dispatch"]["inputs"]
     assert "--promote-prod" in text
-    assert "origin/main" in text  # provenance guard fetches origin/main
+    # the provenance guard relies on origin/main being resolvable in a tag-push checkout;
+    # lock the exact fetch step so a future workflow edit can't silently break the guard.
+    assert "refs/remotes/origin/main" in text
