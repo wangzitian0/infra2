@@ -46,7 +46,7 @@ name: Ops Checks
     - cron: "37 2 * * *"
     - cron: "37 6 * * *"
     - cron: "0 1 * * 1"
-    - cron: "47 * * * *" # hourly Dokploy preview-orphan GC (offset from route-canary)
+    - cron: "47 * * * *" # hourly Dokploy preview leak detection (offset from route-canary)
   workflow_dispatch:
     inputs:
       task:
@@ -58,7 +58,7 @@ name: Ops Checks
           - deploy-guard-audit
           - dokploy-route-canary
           - deploy-v2-canary
-          - preview-gc
+          - preview-leak-check
           - out-of-band-watchdog
           - watchdog-weekly-digest
           - all
@@ -103,7 +103,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 * * * *' && 'dokploy-route-canary-scheduled' || github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'infra2-deploy-guard-audit' || github.event_name == 'schedule' && github.event.schedule == '37 6 * * *' && 'deploy-v2-canary' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-gc' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && inputs.task == 'dokploy-route-canary' && format('dokploy-route-canary-{0}-{1}', inputs.project, inputs.env) || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) || 'dokploy-route-canary-push' }}
+  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 * * * *' && 'dokploy-route-canary-scheduled' || github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'infra2-deploy-guard-audit' || github.event_name == 'schedule' && github.event.schedule == '37 6 * * *' && 'deploy-v2-canary' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-leak-check' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && inputs.task == 'dokploy-route-canary' && format('dokploy-route-canary-{0}-{1}', inputs.project, inputs.env) || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) || 'dokploy-route-canary-push' }}
   cancel-in-progress: false
 
 env:
@@ -468,17 +468,26 @@ jobs:
           fi
           echo "deploy_v2 acceptance canary is GREEN — the unified path deploys and converges."
 
-  preview-gc:
-    name: Garbage-collect orphaned Dokploy previews
-    if: ${{ (github.event_name == 'schedule' && github.event.schedule == '47 * * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'preview-gc' || inputs.task == 'all')) }}
+  preview-leak-check:
+    name: Detect leaked Dokploy previews
+    if: ${{ (github.event_name == 'schedule' && github.event.schedule == '47 * * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'preview-leak-check' || inputs.task == 'all')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
       INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
       # github.token reads the (public) app repo's open PRs; a dedicated PAT can
-      # override it. Absent/blocked => GC fail-safes to bare-slug orphans only.
-      PREVIEW_GC_GH_TOKEN: ${{ secrets.PREVIEW_GC_GH_TOKEN || github.token }}
+      # override it. Absent/blocked => only bare-slug leaks are flagged (fail-safe).
+      PREVIEW_LEAK_GH_TOKEN: ${{ secrets.PREVIEW_LEAK_GH_TOKEN || github.token }}
+      INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
+      INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
+      INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+      GITHUB_SERVER_URL: ${{ github.server_url }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      GITHUB_RUN_ID: ${{ github.run_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -491,18 +500,42 @@ jobs:
       - name: Install runtime dependencies
         run: python -m pip install httpx python-dotenv rich
 
-      - name: Reconcile and reap orphaned previews
+      - name: Detect leaked previews
         run: |
           set -euo pipefail
           if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
-            echo "::error::DOKPLOY_API_KEY secret is required for preview GC."
+            echo "::error::DOKPLOY_API_KEY secret is required for the preview leak check."
             exit 1
           fi
-          # Only the scheduled cron deletes; a manual dispatch is always dry-run
-          # (report only) so an accidental run can never be destructive.
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            python -m tools.preview_gc --apply
-          else
-            echo "manual dispatch -> dry-run only (the scheduled cron applies)."
-            python -m tools.preview_gc
-          fi
+          # Detect only — NEVER deletes from CI. A leak exits non-zero so the
+          # alert step below fires; remediation is a manual SOP step
+          # (`python -m tools.preview_leak_check --remediate`), see
+          # docs/ssot/ops.pipeline.md#preview.
+          python -m tools.preview_leak_check
+
+      - name: Alert on leaked previews
+        if: failure() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        run: |
+          python - <<'PY'
+          import os
+          from tools.out_of_band_watchdog import deliver_out_of_band_alert
+
+          run_url = "/".join(
+              v for v in (
+                  os.environ.get("GITHUB_SERVER_URL"),
+                  os.environ.get("GITHUB_REPOSITORY"),
+                  "actions/runs",
+                  os.environ.get("GITHUB_RUN_ID"),
+              ) if v
+          )
+          deliver_out_of_band_alert(
+              os.environ,
+              "🚨 Dokploy preview LEAK detected.\n"
+              "A preview stack outlived its lifecycle (a 1:1 teardown was skipped "
+              "or failed). This is an exception, not routine — root-cause the "
+              "teardown, then remediate per the SOP "
+              "(docs/ssot/ops.pipeline.md#preview): "
+              "`python -m tools.preview_leak_check --remediate`.\n"
+              f"Run (see leak list): {run_url}",
+          )
+          PY
