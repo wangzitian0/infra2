@@ -235,6 +235,26 @@ def build_deploy_commands(
     return commands
 
 
+def commands_to_apply(
+    commands: Sequence[DeployCommand],
+    *,
+    dry_run: bool,
+    promote_prod: bool,
+) -> list[DeployCommand]:
+    """Pick which deploy commands actually run, per the release-decoupling闸门.
+
+    A release tag push **auto-applies staging** (soak); **prod is an explicit,
+    separately-triggered promotion** (``--promote-prod``), never automatic — so
+    'cutting a tag' stops meaning 'touch prod'. ``--dry-run`` applies nothing
+    (plan only). The complement (commands NOT selected) is surfaced as a plan so
+    operators see the deferred prod promotion.
+    """
+    if dry_run:
+        return []
+    wanted = "prod" if promote_prod else "staging"
+    return [command for command in commands if command.deploy_type == wanted]
+
+
 def run_deploy_commands(
     commands: Sequence[DeployCommand],
     *,
@@ -326,6 +346,15 @@ def main(argv: list[str] | None = None) -> int:
         "--dry-run", action="store_true", help="plan only; do not deploy"
     )
     parser.add_argument(
+        "--promote-prod",
+        action="store_true",
+        help=(
+            "explicitly promote prod (production deploys). Default applies STAGING "
+            "only; prod is a separate, deliberate promotion — a tag push never "
+            "auto-deploys prod."
+        ),
+    )
+    parser.add_argument(
         "--changed-file",
         action="append",
         default=[],
@@ -352,13 +381,22 @@ def main(argv: list[str] | None = None) -> int:
         domain=args.domain,
         timeout=args.timeout,
     )
+    applied = commands_to_apply(
+        commands, dry_run=args.dry_run, promote_prod=args.promote_prod
+    )
+    deferred = [command for command in commands if command not in applied]
     results: list[dict] = []
-    if not args.dry_run and commands:
-        results = run_deploy_commands(commands)
+    if applied:
+        results = run_deploy_commands(applied)
 
     payload = {
         "plan": plan.to_dict(),
         "commands": [command.to_dict() for command in commands],
+        # what actually ran this invocation vs what is left for a deliberate next step
+        # (prod promotion, or — in dry-run — everything is just a plan).
+        "applied": [command.to_dict() for command in applied],
+        "deferred": [command.to_dict() for command in deferred],
+        "promote_prod": args.promote_prod,
         "results": results,
         "dry_run": args.dry_run,
     }

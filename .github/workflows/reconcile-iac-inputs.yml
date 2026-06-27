@@ -25,6 +25,11 @@ name: Reconcile IaC Inputs
         required: false
         type: boolean
         default: false
+      promote_prod:
+        description: "Explicitly promote PROD (production deploys). A tag push never auto-deploys prod — only staging soaks automatically."
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -69,6 +74,7 @@ jobs:
           INPUT_BEFORE: ${{ inputs.before || '' }}
           INPUT_AFTER: ${{ inputs.after || '' }}
           INPUT_DRY_RUN: ${{ inputs.dry_run || false }}
+          INPUT_PROMOTE_PROD: ${{ inputs.promote_prod || false }}
         run: |
           set -euo pipefail
 
@@ -76,9 +82,14 @@ jobs:
           # staging/prod accept tags only, so reconcile always pins the tag (not a sha).
           after="$REF_NAME"
           dry_run="false"
+          # Release decoupling: a tag push auto-applies STAGING only (soak). Prod is an
+          # explicit, deliberate promotion via workflow_dispatch (promote_prod=true) —
+          # a tag push NEVER auto-deploys prod.
+          promote_prod="false"
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             after="${INPUT_AFTER:-$REF_NAME}"
             dry_run="$INPUT_DRY_RUN"
+            promote_prod="$INPUT_PROMOTE_PROD"
           fi
 
           before="${INPUT_BEFORE:-}"
@@ -103,6 +114,7 @@ jobs:
                 --output-json reconcile-result.json)
           [[ -n "$before" ]] && args+=(--before "$before")
           [[ "$dry_run" == "true" ]] && args+=(--dry-run)
+          [[ "$promote_prod" == "true" ]] && args+=(--promote-prod)
 
           python -m tools.reconcile_iac_inputs "${args[@]}"
 

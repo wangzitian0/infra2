@@ -166,6 +166,22 @@ jobs:
           cd ${{ github.workspace }}
           uv run python tools/deploy_guard_audit.py
 
+      # Shift-left: surface what this PR would re-deploy once released, and prove the
+      # reconcile plan BUILDS on these changes (deploy-dependencies fan-out + service
+      # contracts resolve) — so 'release-time only' failures fail here, in the PR, instead.
+      # --dry-run never deploys and is exempt from the origin/main provenance guard.
+      - name: Gate reconcile plan builds for changed files
+        if: github.event_name == 'pull_request'
+        run: |
+          cd ${{ github.workspace }}
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          mapfile -t files < <(git diff --name-only origin/main...HEAD)
+          args=(--after HEAD --dry-run)
+          for f in "${files[@]}"; do
+            [[ -n "$f" ]] && args+=(--changed-file "$f")
+          done
+          uv run python -m tools.reconcile_iac_inputs "${args[@]}"
+
       - name: Gate backup inventory covers registered data paths
         run: |
           cd ${{ github.workspace }}
