@@ -231,6 +231,32 @@ git fetch --tags && git tag -l "v*.*.*" | sort -V | tail -5
 
 ---
 
+## 10. Preview 生命周期回收 & 泄露处置 SOP
+
+**生命周期是严格 1:1**:infra2 起一个 preview,就负责在它的 PR 关闭时把它拆掉(`preview_lifecycle down`)。preview 是被**强势管理**的资源,**不靠定期 GC 兜底**——残留的 preview 是**异常**(teardown 被跳过或失败),不是常态。
+
+**泄露 = 告警,不是静默清理。** 每小时的 `ops-checks` job `preview-leak-check`(`47 * * * *`)只**检测**:列出 `finance_report/preview` 下的 compose,把两类无歧义的孤儿判为泄露——
+
+1. **pre-rename 裸 slug**(无 `branch-/pr-/commit-/tag-` 前缀,如改名前遗留的 `main`);
+2. **已关闭 PR 的 `pr-<n>`**(1:1 teardown 漏了)。
+
+保留:`branch-main`、canary `pr-999`、`tag-*`、所有有效 kind。拉不到 open-PR 列表时,只判裸-slug(fail-safe)。**检测到泄露 → job 失败 → 飞书告警**。它**从不**在 CI 里删东西。
+
+### 泄露告警处置 SOP
+
+收到 `🚨 Dokploy preview LEAK detected` 飞书告警时:
+
+1. **看清单**:打开告警里的 run,`Detect leaked previews` step 列出了泄露的 compose 名 + 原因。
+2. **确认确实是泄露**:对应 PR 已关?是改名遗留的裸 slug?(别误删正在用的 branch-main / canary / 开放 PR 的预览。)
+3. **根因 1:1 为什么没收**:查那个 PR 关闭时的 teardown 是否 fire/成功——**修因比扫尾重要**(否则会反复泄露)。
+4. **处置(手动、确定性)**:确认后在能访问 Dokploy 的机器上跑:
+   ```bash
+   python -m tools.preview_leak_check --remediate   # 删掉已确认的泄露 compose(含 volume)
+   ```
+   `--remediate` 是**唯一**会删除的入口,只人工按本 SOP 跑;cron 永远不删。
+
+---
+
 ## Used by
 
 - [docs/ssot/README.md](./README.md)

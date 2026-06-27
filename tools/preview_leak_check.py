@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-"""Garbage-collect orphaned Dokploy preview stacks (infra2-owned, reconcile-based).
+"""Detect (and, on demand, remediate) leaked Dokploy preview stacks — infra2-owned.
 
-Preview stacks leak because teardown is imperative: a per-alias ``preview_lifecycle
-down`` can be skipped (the bare ``main`` slot left a ``finance-report-preview-main``
-compose running for weeks after the rename to ``branch-main``) or fail mid-flight
-(infra2#310). Rather than trust every teardown to fire, this is the declarative
-backstop: list the preview composes Dokploy actually runs (under
-``finance_report``/``preview``), compute what *should* exist, and reap the
-difference. It is infra2's own concern (Dokploy is an infra mechanism) and needs
-no app-repo dispatch — it pulls the desired set itself.
+The lifecycle contract is **strict 1:1**: infra2 stands a preview up and tears it
+down when its PR closes. A leftover preview is therefore an *exception* (a teardown
+that was skipped or failed — e.g. the bare ``main`` slot stranded after the
+``branch-main`` rename, or a mid-flight failure, infra2#310), NOT a routine state
+to be silently swept by a periodic GC. So this tool **detects and ALERTS**; it does
+not delete on a schedule. Remediation is a deliberate, SOP-driven manual step
+(``--remediate``) — see docs/ssot/ops.pipeline.md#preview.
 
-Reaped, conservatively, are only two unambiguous orphan classes:
+A preview is flagged as leaked when it is one of two unambiguous orphan classes:
   1. **Pre-rename bare-slug aliases** — a preview alias with no current kind prefix
      (``branch-``/``pr-``/``commit-``/``tag-``), e.g. the bare ``main`` slot the model
      replaced with ``branch-main``. The deterministic-name ``down`` can't reach it.
@@ -18,11 +17,14 @@ Reaped, conservatively, are only two unambiguous orphan classes:
 
 Everything else (``branch-main``, the reserved canary ``pr-<_CANARY_PR>`` slot,
 ``tag-*``, any non-preview compose) is left untouched. Fail-safe: if the open-PR
-set can't be fetched, PR reaping is skipped (bare-slug orphans still go, since they
-don't depend on PR state). Dry-run by default; pass ``--apply`` to actually delete.
+set can't be fetched, PR leaks are not flagged (bare-slug orphans still are, since
+they don't depend on PR state).
 
-Run on the hourly ops-checks cron so convergence is bounded regardless of when a
-leak happens.
+Modes:
+- default (cron): **detect only**. Exit non-zero if any leak is found, so the
+  ops-checks job fails and fires the out-of-band (Feishu) alert. Never deletes.
+- ``--remediate``: delete the flagged leaks. Run by an operator following the SOP
+  after an alert, once the leak is confirmed and root-caused.
 """
 
 from __future__ import annotations
@@ -156,7 +158,7 @@ def fetch_open_pr_numbers(
             headers={
                 "Authorization": f"Bearer {token}",
                 "Accept": "application/vnd.github+json",
-                "User-Agent": "infra2-preview-gc/1.0",
+                "User-Agent": "infra2-preview-leak-check/1.0",
             },
         )
         try:
@@ -175,64 +177,72 @@ def fetch_open_pr_numbers(
     return numbers
 
 
-def reap(
-    client, orphans: list[tuple[PreviewCompose, str]], *, apply: bool
-) -> list[str]:
-    """Delete (or, in dry-run, describe) each orphan; return human log lines."""
+def remediate(client, leaks: list[tuple[PreviewCompose, str]]) -> list[str]:
+    """Delete each confirmed leak (the SOP-driven manual step); return log lines."""
     lines: list[str] = []
-    for c, why in orphans:
-        if apply:
-            client.delete_compose(c.compose_id, delete_volumes=True)
-            lines.append(f"REAPED {c.compose_name} — {why}")
-        else:
-            lines.append(f"DRY-RUN would reap {c.compose_name} — {why}")
+    for c, why in leaks:
+        client.delete_compose(c.compose_id, delete_volumes=True)
+        lines.append(f"REMEDIATED {c.compose_name} — {why}")
     return lines
 
 
-def run(
-    client, *, token: str | None, apply: bool, opener=urllib.request.urlopen
-) -> dict:
+def detect(client, *, token: str | None, opener=urllib.request.urlopen) -> dict:
+    """Detect leaked previews (no mutation). Pure: lists, classifies, reports."""
     projects = client.list_projects()
     composes = collect_preview_composes(projects)
     open_prs = fetch_open_pr_numbers(token, opener=opener)
-    orphans = select_orphans(composes, open_pr_numbers=open_prs)
-    log = reap(client, orphans, apply=apply)
+    leaks = select_orphans(composes, open_pr_numbers=open_prs)
     return {
         "preview_composes_seen": len(composes),
         "open_pr_fetch": "ok"
         if open_prs is not None
-        else "unavailable (PR reap skipped)",
-        "reaped" if apply else "would_reap": len(orphans),
-        "log": log,
+        else "unavailable (PR leaks not flagged)",
+        "leaks": leaks,
     }
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--apply",
+        "--remediate",
         action="store_true",
-        help="actually delete orphans (default: dry-run, only report)",
+        help="DELETE the detected leaks (SOP-driven manual step). Default: detect "
+        "only — report and exit non-zero on a leak so the cron alerts.",
     )
     parser.add_argument(
         "--token",
-        default=os.getenv("PREVIEW_GC_GH_TOKEN") or os.getenv("GH_PAT"),
+        default=os.getenv("PREVIEW_LEAK_GH_TOKEN") or os.getenv("GH_PAT"),
         help="GitHub token to read the app repo's open PRs (default: env "
-        "PREVIEW_GC_GH_TOKEN / GH_PAT). Absent -> PR reap skipped, fail-safe.",
+        "PREVIEW_LEAK_GH_TOKEN / GH_PAT). Absent -> PR leaks not flagged, fail-safe.",
     )
     args = parser.parse_args(argv)
 
     from libs.dokploy import get_dokploy
 
-    result = run(get_dokploy(), token=args.token, apply=args.apply)
+    result = detect(get_dokploy(), token=args.token)
+    leaks = result["leaks"]
+    if leaks and args.remediate:
+        result["log"] = remediate(get_dokploy(), leaks)
+    else:
+        result["log"] = [f"LEAK {c.compose_name} — {why}" for c, why in leaks]
     for line in result["log"]:
         print(line)
     print(
         json.dumps(
-            {k: v for k, v in result.items() if k != "log"},
+            {
+                "preview_composes_seen": result["preview_composes_seen"],
+                "open_pr_fetch": result["open_pr_fetch"],
+                "leaks": len(leaks),
+                "remediated": bool(leaks and args.remediate),
+            },
             sort_keys=True,
         )
     )
+    # Detect mode: a leak is an exception -> exit non-zero so the ops-checks job
+    # fails and fires the out-of-band alert. Remediate mode: we just deleted the
+    # confirmed leaks, so report success.
+    if leaks and not args.remediate:
+        return 1
     return 0
 
 
