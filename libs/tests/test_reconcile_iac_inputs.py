@@ -6,13 +6,17 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 from tools.reconcile_iac_inputs import (
     MANIFEST_PATH,
+    assert_after_on_main,
     build_deploy_commands,
     build_plan,
+    commands_to_apply,
     is_zero_sha,
+    main,
     run_deploy_commands,
 )
 
@@ -126,6 +130,108 @@ def test_zero_sha_detection() -> None:
     assert not is_zero_sha(SHA)
 
 
+def _fake_git(*, on_main: bool, resolved: str = "b" * 40):
+    """Fake git: ``rev-parse`` resolves a ref to a sha; ``merge-base --is-ancestor``
+    returns 0 (reachable from origin/main) or 1 (off-main)."""
+
+    def runner(argv, **_kwargs):
+        if argv[:2] == ["git", "rev-parse"]:
+            return subprocess.CompletedProcess(argv, 0, resolved + "\n", "")
+        if argv[:3] == ["git", "merge-base", "--is-ancestor"]:
+            return subprocess.CompletedProcess(argv, 0 if on_main else 1, "", "")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    return runner
+
+
+def test_guard_rejects_off_main_tag() -> None:
+    # the v1.1.16 incident: a release tag cut on an unmerged feature branch must be
+    # refused before any real staging/prod deploy. Enforces the Infra-011 invariant
+    # "iac_pinned prod reconcile only from reviewed main" fail-closed.
+    with pytest.raises(SystemExit, match="not reachable from"):
+        assert_after_on_main("v1.1.16", ROOT, runner=_fake_git(on_main=False))
+
+
+def test_guard_accepts_on_main_tag() -> None:
+    # a tag reachable from origin/main promotes normally (no raise).
+    assert_after_on_main("v1.1.17", ROOT, runner=_fake_git(on_main=True))
+
+
+def _alerting_commands():
+    plan = build_plan(["platform/12.alerting/compose.yaml"])
+    return build_deploy_commands(
+        plan, iac_ref=SHA, domain="zitian.party", timeout=600
+    )
+
+
+def test_default_applies_staging_only() -> None:
+    # release decoupling: a tag push auto-applies staging (soak), never prod.
+    applied = commands_to_apply(
+        _alerting_commands(), dry_run=False, promote_prod=False
+    )
+    assert [c.deploy_type for c in applied] == ["staging"]
+
+
+def test_promote_prod_applies_prod_only() -> None:
+    # prod is a separate, explicit promotion step.
+    applied = commands_to_apply(
+        _alerting_commands(), dry_run=False, promote_prod=True
+    )
+    assert [c.deploy_type for c in applied] == ["prod"]
+
+
+def test_dry_run_applies_nothing() -> None:
+    commands = _alerting_commands()
+    assert commands_to_apply(commands, dry_run=True, promote_prod=False) == []
+    assert commands_to_apply(commands, dry_run=True, promote_prod=True) == []
+
+
+def test_main_dry_run_plans_without_deploying(capsys) -> None:
+    # the PR shift-left gate: --dry-run builds the plan (fan-out resolves) but applies
+    # nothing and skips the on-main guard, so a PR can preview release impact safely.
+    rc = main(
+        [
+            "--after",
+            "HEAD",
+            "--dry-run",
+            "--changed-file",
+            "platform/12.alerting/compose.yaml",
+        ]
+    )
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert out["dry_run"] is True
+    assert out["applied"] == []
+    assert out["results"] == []
+    assert "platform/alerting" in out["plan"]["services"]
+
+
+def test_guard_rejects_unresolvable_ref() -> None:
+    def runner(argv, **_kwargs):
+        if argv[:2] == ["git", "rev-parse"]:
+            return subprocess.CompletedProcess(argv, 128, "", "unknown revision")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    with pytest.raises(SystemExit, match="cannot resolve"):
+        assert_after_on_main("v9.9.9", ROOT, runner=runner)
+
+
+def test_guard_distinguishes_unresolvable_base_from_off_main() -> None:
+    # merge-base --is-ancestor exits 128 when the base ref (origin/main) is missing.
+    # That must NOT be reported as "off-main" — it means the base was not fetched.
+    def runner(argv, **_kwargs):
+        if argv[:2] == ["git", "rev-parse"]:
+            return subprocess.CompletedProcess(argv, 0, "b" * 40 + "\n", "")
+        if argv[:3] == ["git", "merge-base", "--is-ancestor"]:
+            return subprocess.CompletedProcess(
+                argv, 128, "", "fatal: Not a valid object name origin/main"
+            )
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    with pytest.raises(SystemExit, match="unresolvable"):
+        assert_after_on_main("v1.1.17", ROOT, runner=runner)
+
+
 def test_reconcile_workflow_contract() -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     text = WORKFLOW.read_text(encoding="utf-8")
@@ -140,3 +246,9 @@ def test_reconcile_workflow_contract() -> None:
     assert "--timeout 3300" in text
     assert "fetch-depth: 0" in text
     assert "deploy_v2/iac_runner" in text
+    # release decoupling: prod is an explicit promotion, never an automatic tag-push deploy.
+    assert "promote_prod" in workflow["on"]["workflow_dispatch"]["inputs"]
+    assert "--promote-prod" in text
+    # the provenance guard relies on origin/main being resolvable in a tag-push checkout;
+    # lock the exact fetch step so a future workflow edit can't silently break the guard.
+    assert "refs/remotes/origin/main" in text
