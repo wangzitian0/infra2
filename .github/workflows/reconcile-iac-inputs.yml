@@ -56,6 +56,12 @@ jobs:
       - name: Install runtime dependencies
         run: python -m pip install httpx python-dotenv pyyaml rich
 
+      # A tag-push checkout has the full history (fetch-depth: 0) but no origin/main
+      # remote-tracking ref. The reconcile guard (assert_after_on_main) refuses any tag
+      # not reachable from origin/main, so make that ref resolvable here.
+      - name: Fetch origin/main for provenance guard
+        run: git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+
       - name: Reconcile changed IaC inputs
         env:
           EVENT_NAME: ${{ github.event_name }}

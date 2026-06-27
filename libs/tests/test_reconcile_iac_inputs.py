@@ -6,10 +6,12 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 from tools.reconcile_iac_inputs import (
     MANIFEST_PATH,
+    assert_after_on_main,
     build_deploy_commands,
     build_plan,
     is_zero_sha,
@@ -124,6 +126,43 @@ def test_run_deploy_commands_stops_on_first_failure() -> None:
 def test_zero_sha_detection() -> None:
     assert is_zero_sha("0" * 40)
     assert not is_zero_sha(SHA)
+
+
+def _fake_git(*, on_main: bool, resolved: str = "b" * 40):
+    """Fake git: ``rev-parse`` resolves a ref to a sha; ``merge-base --is-ancestor``
+    returns 0 (reachable from origin/main) or 1 (off-main)."""
+
+    def runner(argv, **_kwargs):
+        if argv[:2] == ["git", "rev-parse"]:
+            return subprocess.CompletedProcess(argv, 0, resolved + "\n", "")
+        if argv[:3] == ["git", "merge-base", "--is-ancestor"]:
+            return subprocess.CompletedProcess(argv, 0 if on_main else 1, "", "")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    return runner
+
+
+def test_guard_rejects_off_main_tag() -> None:
+    # the v1.1.16 incident: a release tag cut on an unmerged feature branch must be
+    # refused before any real staging/prod deploy. Enforces the Infra-011 invariant
+    # "iac_pinned prod reconcile only from reviewed main" fail-closed.
+    with pytest.raises(SystemExit, match="not reachable from"):
+        assert_after_on_main("v1.1.16", ROOT, runner=_fake_git(on_main=False))
+
+
+def test_guard_accepts_on_main_tag() -> None:
+    # a tag reachable from origin/main promotes normally (no raise).
+    assert_after_on_main("v1.1.17", ROOT, runner=_fake_git(on_main=True))
+
+
+def test_guard_rejects_unresolvable_ref() -> None:
+    def runner(argv, **_kwargs):
+        if argv[:2] == ["git", "rev-parse"]:
+            return subprocess.CompletedProcess(argv, 128, "", "unknown revision")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    with pytest.raises(SystemExit, match="cannot resolve"):
+        assert_after_on_main("v9.9.9", ROOT, runner=runner)
 
 
 def test_reconcile_workflow_contract() -> None:

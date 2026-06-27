@@ -67,6 +67,49 @@ def is_zero_sha(value: str | None) -> bool:
     return bool(value) and set(value.strip()) == {"0"}
 
 
+def assert_after_on_main(
+    after: str,
+    repo_root: Path,
+    *,
+    base: str = "origin/main",
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> str:
+    """Fail-closed provenance guard: the promoted tag MUST be reachable from main.
+
+    A ``v*.*.*`` tag push drives a REAL staging/prod deploy, so the tagged commit must
+    be on reviewed ``origin/main``. This enforces the Infra-011 invariant — *iac_pinned
+    production reconcile may run automatically only from reviewed infra2 main* — in code,
+    and blocks the v1.1.16 incident where a release tag cut on an unmerged, off-main
+    feature branch promoted a pre-refactor ref straight to prod. ``--dry-run`` callers
+    skip this (plan-only, no deploy). Returns the resolved 40-hex commit.
+    """
+    resolved = runner(
+        ["git", "rev-parse", "--verify", f"{after}^{{commit}}"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    if resolved.returncode != 0:
+        raise SystemExit(
+            f"::error::cannot resolve {after!r} to a commit "
+            f"({resolved.stderr.strip() or 'unknown revision'})."
+        )
+    sha = resolved.stdout.strip()
+    ancestor = runner(
+        ["git", "merge-base", "--is-ancestor", sha, base],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    if ancestor.returncode != 0:
+        raise SystemExit(
+            f"::error::refusing to reconcile {after!r} ({sha[:12]}): not reachable from "
+            f"{base}. Release tags must be cut on reviewed main (Infra-011 invariant). "
+            f"Re-cut the tag on main, or pass --dry-run to plan only."
+        )
+    return sha
+
+
 def changed_files_from_git(
     repo_root: Path, before: str | None, after: str
 ) -> list[str]:
@@ -292,6 +335,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     repo_root = Path(args.repo_root).resolve()
+    # Fail-closed BEFORE planning/deploying: an apply run must promote a tag that is
+    # reachable from reviewed main (Infra-011). dry-run is plan-only, so it may inspect
+    # any ref (e.g. preview a not-yet-merged tag).
+    if not args.dry_run:
+        assert_after_on_main(args.after, repo_root)
     changed_files = (
         list(args.changed_file)
         if args.changed_file

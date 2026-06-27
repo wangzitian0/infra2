@@ -51,6 +51,9 @@
 > [`deploy-dependencies.yaml`](./deploy-dependencies.yaml) fan-out 到受影响 `iac_pinned` 服务,以**该 tag** 触发
 > `deploy_v2 → iac_runner`(staging 与 prod 同一 tag);是否重启由 Deployer config-hash gate 定(hash 未变即 no-op)。
 > CI(lint + 单测 + E2E)**不**触发 staging/prod 部署;reconcile 是独立的 tag-triggered apply。
+> **来源守卫**:apply 前 `assert_after_on_main` fail-closed 校验该 tag reachable from `origin/main`;
+> off-main / 未合并 tag 直接拒绝(见 §6)。这把「打 tag」与「能动 prod」绑定到 reviewed main——
+> 在 feature 分支打 tag 不再等于动 prod(解耦的第一步)。
 
 ---
 
@@ -181,6 +184,10 @@ IaC Runner 报告了完成的服务 sync 结果,不只是请求被接受**。不
 
 ### ⛔ 禁止
 - 禁止部署 untagged commit / branch / sha 到 staging/prod。
+- **禁止部署 off-main tag**:能驱动 staging/prod 部署的 tag,其 commit **必须 reachable from `origin/main`**。
+  reconcile 入口由 `assert_after_on_main` **fail-closed** 强制(Infra-011 不变式:*iac_pinned prod
+  reconcile 只能来自 reviewed main*)。在未合并 feature 分支上打 release tag 不会再打穿 prod
+  (v1.1.16 事故根因)。`--dry-run` 仅做 plan,豁免此校验。
 - 禁止跳过 staging 直接 prod。
 - 禁止手改 production 服务配置(必须经 GitOps)。
 - 禁止手推 `gh-pages`(统一 Actions 发布)。
@@ -211,6 +218,7 @@ gh workflow run deploy.yml -f service="finance_report/app" -f type="prod" \
 | **Config hash 幂等性** | 相同配置重复部署应 no-op | ✅ |
 | **Env×Stage schema/speed/consistency** | `libs/tests/test_pipeline_stage_contract.py` | ✅ |
 | **deploy_v2 prod fail-closed** | 缺 `--staging-validated/--code-reviewed` → 拒绝 | ✅ |
+| **off-main tag 来源守卫** | `assert_after_on_main` 拒绝非 `origin/main` 祖先的 tag → `libs/tests/test_reconcile_iac_inputs.py` | ✅ |
 
 ---
 
