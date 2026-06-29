@@ -85,6 +85,7 @@ nav:
           - Backup Inventory: ssot/ops.backup-inventory.yaml
           - Deploy Dependencies: ssot/deploy-dependencies.yaml
           - Delivery Stages: ssot/delivery-stages.yaml
+          - CI Gate Inventory: ssot/ci-gate-inventory.yaml
           - Observability: ssot/ops.observability.md
           - Watchdog Signals: ssot/watchdog-signals.yaml
   - Projects:

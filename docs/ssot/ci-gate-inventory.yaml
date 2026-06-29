@@ -1,0 +1,61 @@
+# Infra CI gate inventory — every gate is one coordinate (stage, task_category) -> workflow:job.
+# Gate ids carry the `infra_ci.` prefix (structurally disjoint from app's `ci.*`, so the two
+# repos' inventories cannot overlap). `stage` references docs/ssot/delivery-stages.yaml
+# (single owner); stages are NOT redefined here. Validated by tools/ci_gate_audit.py.
+#
+# Phase 1 (shadow): .github/workflows/infra-ci.yml is fully covered below. Other CI
+# workflows (ops-checks, reconcile-iac-inputs, apply-observability, drift reports) are the
+# unregistered backlog — the audit runs report-only until they are covered, then flips
+# fail-closed (Phase 2).
+version: 1
+repo_prefix: infra_ci.
+gates:
+  - id: infra_ci.compose_validate
+    stage: github_ci.merge_authority
+    task_category: compose_validate
+    workflow: .github/workflows/infra-ci.yml
+    job: validate-compose
+    blocks_merge: true
+    failure_semantics: A compose file is invalid or pins a bare :latest image.
+  - id: infra_ci.deployer_logic
+    stage: github_ci.merge_authority
+    task_category: deployer_contract
+    workflow: .github/workflows/infra-ci.yml
+    job: test-deployer-logic
+    blocks_merge: true
+    failure_semantics: Deployer config-hash idempotency, service discovery, or unit tests fail.
+  - id: infra_ci.op_healthcheck
+    stage: github_ci.merge_authority
+    task_category: secret_preflight
+    workflow: .github/workflows/infra-ci.yml
+    job: test-1password-healthcheck
+    blocks_merge: true
+    failure_semantics: The 1Password healthcheck binary fails to build or pass.
+  - id: infra_ci.vault_agent
+    stage: github_ci.merge_authority
+    task_category: vault_agent
+    workflow: .github/workflows/infra-ci.yml
+    job: validate-vault-agent
+    blocks_merge: true
+    failure_semantics: vault-agent.hcl is missing required settings.
+  - id: infra_ci.vault_policy
+    stage: github_ci.merge_authority
+    task_category: vault_policy
+    workflow: .github/workflows/infra-ci.yml
+    job: validate-vault-policy
+    blocks_merge: true
+    failure_semantics: vault-policy.hcl syntax is invalid.
+  - id: infra_ci.deployer_classes
+    stage: github_ci.merge_authority
+    task_category: deployer_contract
+    workflow: .github/workflows/infra-ci.yml
+    job: validate-deployers
+    blocks_merge: true
+    failure_semantics: A Deployer subclass violates the deployer contract.
+  - id: infra_ci.lint_python
+    stage: github_ci.merge_authority
+    task_category: static_contract
+    workflow: .github/workflows/infra-ci.yml
+    job: lint-python
+    blocks_merge: true
+    failure_semantics: Python lint (ruff) fails.

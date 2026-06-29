@@ -182,6 +182,14 @@ jobs:
           done
           uv run python -m tools.reconcile_iac_inputs "${args[@]}"
 
+      # Infra-016 #461: coordinate-ized CI gate inventory drift audit. Report-only for now
+      # (Phase 1) — schema errors & dangling gates are still hard; unregistered jobs are the
+      # backlog. Flip to `--enforce` (blocking) once every CI workflow is covered (Phase 2).
+      - name: Gate CI inventory drift (report-only)
+        run: |
+          cd ${{ github.workspace }}
+          uv run python -m tools.ci_gate_audit
+
       - name: Gate backup inventory covers registered data paths
         run: |
           cd ${{ github.workspace }}
