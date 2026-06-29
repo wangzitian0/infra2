@@ -56,3 +56,10 @@ def test_unregistered_job_detected() -> None:
     # cover only one job of infra-ci.yml -> the other jobs are unregistered
     r = audit_gates([_gate()], root=ROOT, prefix="infra_ci.", known_ci_workflows=(INFRA_CI,))
     assert any("infra-ci.yml" in u for u in r["unregistered_jobs"])
+
+
+def test_empty_workflow_does_not_crash() -> None:
+    # a gate with empty `workflow` resolves to the repo root dir; the audit must report it
+    # (dangling + schema error), not crash with IsADirectoryError.
+    r = audit_gates([_gate(workflow="")], root=ROOT, prefix="infra_ci.", known_ci_workflows=())
+    assert r["dangling_gates"] and r["schema_errors"]

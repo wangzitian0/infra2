@@ -29,7 +29,10 @@ KNOWN_CI_WORKFLOWS = (".github/workflows/infra-ci.yml",)
 
 
 def _workflow_jobs(path: Path) -> list[str]:
-    if not path.exists():
+    # Non-file (missing, or a bare/empty `workflow:` resolving to the repo root dir) → no
+    # jobs, so the gate surfaces as dangling/schema_error and the audit exits 1 cleanly
+    # rather than crashing with IsADirectoryError.
+    if not path.is_file():
         return []
     wf = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     return list((wf.get("jobs") or {}).keys())
