@@ -11,11 +11,13 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
+import httpx
 import pytest
 
 import tools.deploy_v2 as dv2
 from tools.deploy_v2 import (
     DeployV2Result,
+    assert_iac_ref_on_main,
     deploy_v2,
     enforce_data_lane_red_lines,
     resolve_data_lane,
@@ -24,6 +26,15 @@ from tools.resolve_deploy_ref import ResolvedRef, classify_ref
 
 SHA_CODE = "c" * 40
 SHA_IAC = "d" * 40
+
+
+@pytest.fixture(autouse=True)
+def _stub_iac_on_main_guard(monkeypatch):
+    # The #465 on-main guard calls GitHub's compare API. Stub it module-wide so routing
+    # tests (app and platform) never network; the guard's own behavior is covered by the
+    # assert_iac_ref_on_main unit tests, which call the real imported function (a local name
+    # unaffected by this monkeypatch on the dv2 module attribute).
+    monkeypatch.setattr(dv2, "assert_iac_ref_on_main", lambda *a, **k: None)
 
 
 def _fake_resolve_image_ref(ref, **_kw):
@@ -117,6 +128,65 @@ def _deploy(**over):
     )
     base.update(over)
     return deploy_v2(**base)
+
+
+# --- #465: app→infra on-main compatibility guard (assert_iac_ref_on_main) ---
+
+
+class _CmpResp:
+    def __init__(self, status, code=200):
+        self._status = status
+        self.status_code = code
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError(
+                "err",
+                request=httpx.Request("GET", "http://x"),
+                response=httpx.Response(self.status_code),
+            )
+
+    def json(self):
+        return {"status": self._status}
+
+
+def _cmp_transport(status, code=200):
+    def transport(url, **_kw):
+        return _CmpResp(status, code)
+
+    return transport
+
+
+@pytest.mark.parametrize("status", ["behind", "identical"])
+def test_iac_ref_on_main_accepts_reachable(status):
+    # tag reachable from infra2 main -> ok (no raise)
+    assert_iac_ref_on_main("v1.2.3", "prod", token="", transport=_cmp_transport(status))
+
+
+@pytest.mark.parametrize("status", ["ahead", "diverged"])
+def test_iac_ref_off_main_refused(status):
+    with pytest.raises(ValueError, match="not on infra2 main"):
+        assert_iac_ref_on_main("v1.2.3", "prod", token="", transport=_cmp_transport(status))
+
+
+def test_iac_ref_on_main_exempt_for_preview():
+    # preview/canary clone live refs -> the API is never called
+    called = []
+
+    def transport(url, **_kw):
+        called.append(url)
+        return _CmpResp("behind")
+
+    assert_iac_ref_on_main("main", "preview/branch", token="", transport=transport)
+    assert called == []
+
+
+def test_iac_ref_on_main_fail_closed_on_api_error():
+    # a transport/API failure must raise (fail-closed), not let an unverified ref through
+    with pytest.raises(httpx.HTTPStatusError):
+        assert_iac_ref_on_main(
+            "v1.2.3", "prod", token="", transport=_cmp_transport("behind", code=502)
+        )
 
 
 # --- prod: release-only, pulls the TAG (the headline deliverable) ----------

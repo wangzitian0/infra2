@@ -426,6 +426,12 @@ def validate_iac_ref_form(deploy_type: str, iac_form: str) -> None:
         )
 
 
+def is_tag_only_iac_env(deploy_type: str) -> bool:
+    """True for fixed envs (staging/prod) whose iac_ref must be a release tag — and, per
+    ``deploy_v2.assert_iac_ref_on_main``, an *on-main* one. False for preview/canary."""
+    return deploy_type_spec(deploy_type).env in _TAG_ONLY_IAC_ENVS
+
+
 def make_target(
     deploy_type: str,
     *,
