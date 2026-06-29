@@ -117,6 +117,10 @@ jobs:
     timeout-minutes: 10
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+      # The necessity audit (dokploy.audit-autodeploy) queries the Dokploy API at
+      # cloud.<INTERNAL_DOMAIN>. Without this the client falls back to cloud.localhost
+      # -> Connection refused -> a nightly false-positive page (03:55 deploy-guard).
+      INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
       INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
       INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
       INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
