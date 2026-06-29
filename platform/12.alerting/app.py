@@ -11,10 +11,10 @@ from typing import Any
 
 from libs.alerting import (
     AlertingError,
-    deliver_feishu_app_text,
-    deliver_feishu_text,
+    build_feishu_alert_card,
+    deliver_feishu_app_card,
+    deliver_feishu_card,
     feishu_host_reachable,
-    format_signoz_alert,
     redacted_app_config,
     redacted_url,
     validate_feishu_api_base,
@@ -58,7 +58,11 @@ class AlertBridgeHandler(BaseHTTPRequestHandler):
             if not _feishu_reachable():
                 self._json(
                     503,
-                    {"status": "unreachable", "detail": "feishu host TCP 443", **metadata},
+                    {
+                        "status": "unreachable",
+                        "detail": "feishu host TCP 443",
+                        **metadata,
+                    },
                 )
                 return
             self._json(200, {"status": "ok", "reachable": True, **metadata})
@@ -89,8 +93,8 @@ class AlertBridgeHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            text = format_signoz_alert(payload)
-            response = _deliver(text)
+            card = build_feishu_alert_card(payload)
+            response = _deliver(card)
         except AlertingError as exc:
             self._json(502, {"status": "delivery_failed", "error": str(exc)})
             return
@@ -189,16 +193,16 @@ def _parse_content_length(raw_value: str | None) -> int:
     return content_length
 
 
-def _deliver(text: str) -> dict[str, Any]:
+def _deliver(card: dict[str, Any]) -> dict[str, Any]:
     mode = _delivery_mode()
     if mode == "feishu_webhook":
-        return deliver_feishu_text(os.getenv("FEISHU_WEBHOOK_URL", ""), text)
+        return deliver_feishu_card(os.getenv("FEISHU_WEBHOOK_URL", ""), card)
     if mode == "feishu_app":
-        return deliver_feishu_app_text(
+        return deliver_feishu_app_card(
             app_id=os.getenv("FEISHU_APP_ID", ""),
             app_secret=os.getenv("FEISHU_APP_SECRET", ""),
             chat_id=os.getenv("FEISHU_CHAT_ID", ""),
-            text=text,
+            card=card,
             api_base=os.getenv("FEISHU_API_BASE", "https://open.feishu.cn"),
         )
     raise AlertingError(f"Unsupported ALERT_DELIVERY_MODE: {mode}")

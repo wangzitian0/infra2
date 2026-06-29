@@ -15,7 +15,10 @@ from libs.alerting import (
     BasicAuth,
     InvalidWebhookUrl,
     MAX_MESSAGE_CHARS,
+    build_feishu_alert_card,
+    build_feishu_app_card_payload,
     build_feishu_app_message_payload,
+    build_feishu_card_payload,
     build_feishu_text_payload,
     build_signoz_channel_payload,
     build_signoz_log_alert_rule_payload,
@@ -125,6 +128,71 @@ def test_alertmanager_payload_is_rendered_as_feishu_text() -> None:
 
     feishu_payload = build_feishu_text_payload(text)
     assert feishu_payload == {"msg_type": "text", "content": {"text": text}}
+
+
+def _sample_alert_payload(**over) -> dict:
+    payload = {
+        "status": "firing",
+        "commonLabels": {"alertname": "ExampleBackendDown", "severity": "critical"},
+        "commonAnnotations": {"summary": "Production API health check failed"},
+        "externalURL": "https://signoz.zitian.party",
+        "alerts": [
+            {
+                "labels": {
+                    "alertname": "ExampleBackendDown",
+                    "instance": "example-backend",
+                },
+                "annotations": {"summary": "GET /api/health returned 503"},
+            }
+        ],
+    }
+    payload.update(over)
+    return payload
+
+
+def test_alert_card_has_severity_colored_header_fields_and_signoz_button() -> None:
+    """A firing critical alert renders a red-headed interactive card with a SigNoz button."""
+    card = build_feishu_alert_card(_sample_alert_payload())
+
+    assert card["header"]["template"] == "red"
+    title = card["header"]["title"]["content"]
+    assert "[FIRING] ExampleBackendDown" in title and "🔴" in title
+
+    blob = json.dumps(card, ensure_ascii=False)
+    assert "**Status**" in blob and "FIRING" in blob
+    assert "**Severity**" in blob and "critical" in blob
+    assert "example-backend" in blob  # per-alert instance line
+    assert "Production API health check failed" in blob  # summary
+
+    # the only action button links to SigNoz
+    actions = [e for e in card["elements"] if e.get("tag") == "action"]
+    assert actions and actions[0]["actions"][0]["url"] == "https://signoz.zitian.party"
+
+
+def test_alert_card_resolved_is_green_and_nonhttp_url_has_no_button() -> None:
+    """Resolved → green header + ✅; a non-http externalURL (e.g. infra2://) drops the button."""
+    card = build_feishu_alert_card(
+        _sample_alert_payload(
+            status="resolved", externalURL="infra2://platform/12.alerting"
+        )
+    )
+
+    assert card["header"]["template"] == "green"
+    assert "✅" in card["header"]["title"]["content"]
+    assert "[RESOLVED]" in card["header"]["title"]["content"]
+    assert not [e for e in card["elements"] if e.get("tag") == "action"]
+
+
+def test_card_payloads_use_interactive_msg_type() -> None:
+    card = build_feishu_alert_card(_sample_alert_payload())
+
+    webhook = build_feishu_card_payload(card)
+    assert webhook == {"msg_type": "interactive", "card": card}
+
+    app = build_feishu_app_card_payload("oc_test", card)
+    assert app["receive_id"] == "oc_test"
+    assert app["msg_type"] == "interactive"
+    assert json.loads(app["content"]) == card  # content is a JSON string
 
 
 def test_signoz_channel_payload_targets_internal_bridge_with_optional_basic_auth() -> (
