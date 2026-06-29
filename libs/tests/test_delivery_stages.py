@@ -8,7 +8,9 @@ from libs.ci_gate_schema import load_delivery_stages
 
 ROOT = Path(__file__).resolve().parents[2]
 STAGES = load_delivery_stages(ROOT / "docs/ssot/delivery-stages.yaml")
-_ID = re.compile(r"\A[a-z][a-z_]*\.[a-z_]+\Z")
+# multi-segment ids allowed (e.g. github_ci.merge_authority, and future a.b.c) — aligns
+# with libs.ci_gate_schema.GATE_ID_RE so the stage vocab and gate ids share one grammar.
+_ID = re.compile(r"\A[a-z][a-z_]*(?:\.[a-z_]+)+\Z")
 
 
 def test_stage_ids_well_formed_and_unique() -> None:
