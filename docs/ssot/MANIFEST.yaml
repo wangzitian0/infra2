@@ -153,6 +153,15 @@ entries:
     proofs:
       - libs/tests/test_delivery_stages.py
       - libs/tests/test_ci_gate_schema.py
+  ops.ci_gate_inventory:
+    owner: docs/ssot/ci-gate-inventory.yaml
+    summary: infra CI gate 坐标清单（(stage,task_category)→workflow:job）
+    description: >-
+      Coordinate-ized inventory of infra CI gates, validated fail-closed against the shared
+      schema and the actual workflows by tools/ci_gate_audit.py. Gate ids carry the infra_ci.
+      prefix so the app and infra inventories cannot overlap.
+    proofs:
+      - libs/tests/test_ci_gate_audit.py
   ops.obs:
     owner: docs/ssot/ops.observability.md
     summary: 可观测性单一 owner：采集(SigNoz/日志/链路)+ 告警(规则/分级/watchdog)+ 报告(可用率账本)+ 时间尺度分层
