@@ -20,6 +20,8 @@ import json
 import sys
 from urllib.parse import quote
 
+from tools.deploy_env_config import PREVIEW_KINDS
+
 DEFAULT_SCHEDULE_NAME = "finance-report-vps-host-hygiene"
 DEFAULT_CRON_EXPRESSION = "17 3,9,15,21 * * *"
 DEFAULT_TIMEZONE = "Asia/Singapore"
@@ -27,11 +29,18 @@ DEFAULT_TIMEZONE = "Asia/Singapore"
 # "server" type (with a null serverId) is accepted by schedule.create but never
 # executes the command — that silent no-op is what let host garbage accumulate.
 DEFAULT_SCHEDULE_TYPE = "dokploy-server"
-# Preview containers are owned by infra2's preview lifecycle (compose.delete);
-# generic hygiene only EXCLUDES them. This pattern must stay in sync with the
-# preview compose naming (finance_report/preview aliases).
+# Preview containers are owned by infra2's preview lifecycle; generic hygiene only
+# EXCLUDES them, never prunes them. The pattern is derived from the canonical
+# sources so it can't silently drift from real container names:
+#   - service names: the `container_name`s in finance_report/finance_report/preview/
+#     compose.yaml — finance_report-{backend,frontend,preview-db,app-vault-agent}
+#   - kind: PREVIEW_KINDS (branch/pr/commit/tag), the alias kinds preview_alias emits
+# Full name = finance_report-<service><ENV_SUFFIX>, ENV_SUFFIX = -<kind>-<slug>
+# (e.g. finance_report-backend-pr-5, finance_report-preview-db-branch-main).
+_PREVIEW_SERVICES = ("backend", "frontend", "preview-db", "app-vault-agent")
 PR_PREVIEW_CONTAINER_PATTERN = (
-    "^finance-report-(backend|frontend|db|minio)-pr-[0-9]+(-[a-z0-9]+)?$"
+    rf"^finance_report-({'|'.join(_PREVIEW_SERVICES)})"
+    rf"-({'|'.join(PREVIEW_KINDS)})-[a-z0-9][a-z0-9-]*$"
 )
 
 

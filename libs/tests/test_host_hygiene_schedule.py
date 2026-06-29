@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 
@@ -35,6 +36,43 @@ def test_script_prunes_generic_host_garbage_and_excludes_previews() -> None:
     # previews are infra2-owned elsewhere — hygiene only EXCLUDES them, never prunes
     assert hh.PR_PREVIEW_CONTAINER_PATTERN in script
     assert 'grep -Ev "$PR_PREVIEW_CONTAINER_PATTERN"' in script
+
+
+def test_preview_exclusion_pattern_matches_real_container_names() -> None:
+    """The exclusion regex must actually match the real preview container names
+    (finance_report-<service><ENV_SUFFIX>) across every alias kind, or generic
+    hygiene would prune live previews."""
+    rx = re.compile(hh.PR_PREVIEW_CONTAINER_PATTERN)
+    # service container_names from finance_report/preview/compose.yaml × alias kinds
+    must_match = [
+        "finance_report-backend-pr-84",
+        "finance_report-frontend-pr-84",
+        "finance_report-preview-db-pr-84",
+        "finance_report-app-vault-agent-pr-84",
+        "finance_report-backend-branch-main",
+        "finance_report-frontend-commit-1ab32d5",
+        "finance_report-preview-db-tag-v1-2-3",
+    ]
+    for name in must_match:
+        assert rx.match(name), f"preview container not excluded: {name}"
+    # non-preview containers must NOT be excluded (they stay eligible for hygiene)
+    must_not_match = [
+        "finance_report-postgres",  # shared platform service, not a preview
+        "finance_report-backend-staging",  # fixed env, not a preview alias kind
+        "some-random-stopped-container",
+        "finance_report-backend",  # no ENV_SUFFIX
+    ]
+    for name in must_not_match:
+        assert not rx.match(name), f"non-preview wrongly excluded: {name}"
+
+
+def test_preview_exclusion_pattern_covers_every_alias_kind() -> None:
+    # derived from the canonical PREVIEW_KINDS — a new kind can't silently fall out
+    from tools.deploy_env_config import PREVIEW_KINDS
+
+    rx = re.compile(hh.PR_PREVIEW_CONTAINER_PATTERN)
+    for kind in PREVIEW_KINDS:
+        assert rx.match(f"finance_report-backend-{kind}-x"), kind
 
 
 def test_script_runs_real_commands_when_not_dry_run() -> None:
