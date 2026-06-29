@@ -83,6 +83,156 @@ def build_feishu_app_message_payload(chat_id: str, text: str) -> dict[str, Any]:
     }
 
 
+# Feishu/Lark interactive-card header colour by status/severity (lark card "template").
+_CARD_TEMPLATE_BY_SEVERITY = {
+    "critical": "red",
+    "error": "red",
+    "warning": "orange",
+    "info": "blue",
+}
+_CARD_EMOJI_BY_SEVERITY = {
+    "critical": "🔴",
+    "error": "🔴",
+    "warning": "🟠",
+    "info": "🔵",
+}
+
+
+def _card_header(status: str, severity: str) -> tuple[str, str]:
+    """Return (template_colour, emoji) for the card header by status/severity."""
+    if status == "resolved":
+        return "green", "✅"
+    return (
+        _CARD_TEMPLATE_BY_SEVERITY.get(severity, "red"),
+        _CARD_EMOJI_BY_SEVERITY.get(severity, "🚨"),
+    )
+
+
+def build_feishu_alert_card(payload: dict[str, Any]) -> dict[str, Any]:
+    """Render a SigNoz/Alertmanager payload as a Feishu interactive card.
+
+    A colour-headed card (red/orange/blue by severity, green when resolved) with
+    status/severity/count fields, the summary, the per-alert lines, and an
+    "Open in SigNoz" button — far more readable in Lark than the flat text form.
+    """
+    status = str(payload.get("status") or "unknown").lower()
+    common_labels = _dict(payload.get("commonLabels"))
+    common_annotations = _dict(payload.get("commonAnnotations"))
+    group_labels = _dict(payload.get("groupLabels"))
+    alerts = payload.get("alerts")
+    if not isinstance(alerts, list):
+        alerts = []
+
+    alert_name = (
+        common_labels.get("alertname")
+        or group_labels.get("alertname")
+        or "SigNoz alert"
+    )
+    severity = str(common_labels.get("severity") or "unknown").lower()
+    summary = common_annotations.get("summary") or common_annotations.get("info") or ""
+    template, emoji = _card_header(status, severity)
+
+    elements: list[dict[str, Any]] = [
+        {
+            "tag": "div",
+            "fields": [
+                {
+                    "is_short": True,
+                    "text": {
+                        "tag": "lark_md",
+                        "content": f"**Status**\n{status.upper()}",
+                    },
+                },
+                {
+                    "is_short": True,
+                    "text": {"tag": "lark_md", "content": f"**Severity**\n{severity}"},
+                },
+                {
+                    "is_short": True,
+                    "text": {"tag": "lark_md", "content": f"**Alerts**\n{len(alerts)}"},
+                },
+            ],
+        }
+    ]
+    if summary:
+        elements.append(
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": f"**Summary**\n{_one_line(summary)}",
+                },
+            }
+        )
+
+    detail_lines: list[str] = []
+    for index, alert in enumerate(alerts[:MAX_ALERT_LINES], start=1):
+        if not isinstance(alert, dict):
+            continue
+        labels = _dict(alert.get("labels"))
+        annotations = _dict(alert.get("annotations"))
+        instance = labels.get("instance") or labels.get("service") or labels.get("job")
+        alert_summary = annotations.get("summary") or annotations.get("description")
+        line = f"**{index}.** {labels.get('alertname') or alert_name}"
+        if instance:
+            line += f" · `{instance}`"
+        if alert_summary:
+            line += f"\n{_one_line(alert_summary)}"
+        detail_lines.append(line)
+    if len(alerts) > MAX_ALERT_LINES:
+        detail_lines.append(f"…and {len(alerts) - MAX_ALERT_LINES} more alerts")
+    if detail_lines:
+        elements.append({"tag": "hr"})
+        elements.append(
+            {
+                "tag": "div",
+                "text": {"tag": "lark_md", "content": "\n".join(detail_lines)},
+            }
+        )
+
+    external_url = payload.get("externalURL")
+    if isinstance(external_url, str) and external_url.startswith("http"):
+        elements.append(
+            {
+                "tag": "action",
+                "actions": [
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "Open in SigNoz"},
+                        "url": external_url,
+                        "type": "primary",
+                    }
+                ],
+            }
+        )
+
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": template,
+            "title": {
+                "tag": "plain_text",
+                "content": f"{emoji} [{status.upper()}] {alert_name}",
+            },
+        },
+        "elements": elements,
+    }
+
+
+def build_feishu_card_payload(card: dict[str, Any]) -> dict[str, Any]:
+    """Build a Feishu custom-bot interactive-card payload."""
+    return {"msg_type": "interactive", "card": card}
+
+
+def build_feishu_app_card_payload(chat_id: str, card: dict[str, Any]) -> dict[str, Any]:
+    """Build a Feishu OpenAPI interactive-card message payload."""
+    return {
+        "receive_id": chat_id,
+        "msg_type": "interactive",
+        "content": json.dumps(card, ensure_ascii=False),
+    }
+
+
 def format_signoz_alert(payload: dict[str, Any]) -> str:
     """Convert an Alertmanager/SigNoz webhook payload into readable text."""
     status = str(payload.get("status") or "unknown").upper()
@@ -361,9 +511,26 @@ def find_signoz_rule_id(rules_response: Any, alert_name: str) -> str | None:
 def deliver_feishu_text(
     webhook_url: str, text: str, timeout: float = 10.0
 ) -> dict[str, Any]:
-    """Send a text message to Feishu and return the decoded response."""
+    """Send a text message to Feishu (custom bot) and return the decoded response."""
+    return _deliver_feishu_webhook(
+        webhook_url, build_feishu_text_payload(text), timeout=timeout
+    )
+
+
+def deliver_feishu_card(
+    webhook_url: str, card: dict[str, Any], timeout: float = 10.0
+) -> dict[str, Any]:
+    """Send an interactive card to Feishu (custom bot) and return the decoded response."""
+    return _deliver_feishu_webhook(
+        webhook_url, build_feishu_card_payload(card), timeout=timeout
+    )
+
+
+def _deliver_feishu_webhook(
+    webhook_url: str, payload: dict[str, Any], *, timeout: float
+) -> dict[str, Any]:
     safe_url = validate_feishu_webhook_url(webhook_url)
-    body = json.dumps(build_feishu_text_payload(text)).encode("utf-8")
+    body = json.dumps(payload).encode("utf-8")
     request = Request(
         safe_url,
         data=body,
@@ -398,10 +565,47 @@ def deliver_feishu_app_text(
     timeout: float = 10.0,
 ) -> dict[str, Any]:
     """Send a text message to a Feishu chat using app bot OpenAPI."""
+    safe_chat_id = _required("FEISHU_CHAT_ID", chat_id)
+    return _deliver_feishu_app_message(
+        app_id=app_id,
+        app_secret=app_secret,
+        message_payload=build_feishu_app_message_payload(safe_chat_id, text),
+        api_base=api_base,
+        timeout=timeout,
+    )
+
+
+def deliver_feishu_app_card(
+    *,
+    app_id: str,
+    app_secret: str,
+    chat_id: str,
+    card: dict[str, Any],
+    api_base: str = "https://open.feishu.cn",
+    timeout: float = 10.0,
+) -> dict[str, Any]:
+    """Send an interactive card to a Feishu chat using app bot OpenAPI."""
+    safe_chat_id = _required("FEISHU_CHAT_ID", chat_id)
+    return _deliver_feishu_app_message(
+        app_id=app_id,
+        app_secret=app_secret,
+        message_payload=build_feishu_app_card_payload(safe_chat_id, card),
+        api_base=api_base,
+        timeout=timeout,
+    )
+
+
+def _deliver_feishu_app_message(
+    *,
+    app_id: str,
+    app_secret: str,
+    message_payload: dict[str, Any],
+    api_base: str,
+    timeout: float,
+) -> dict[str, Any]:
     base = validate_feishu_api_base(api_base)
     safe_app_id = _required("FEISHU_APP_ID", app_id)
     safe_app_secret = _required("FEISHU_APP_SECRET", app_secret)
-    safe_chat_id = _required("FEISHU_CHAT_ID", chat_id)
 
     token_response = _post_json(
         f"{base}/open-apis/auth/v3/tenant_access_token/internal",
@@ -417,7 +621,7 @@ def deliver_feishu_app_text(
 
     return _post_json(
         f"{base}/open-apis/im/v1/messages?receive_id_type=chat_id",
-        build_feishu_app_message_payload(safe_chat_id, text),
+        message_payload,
         headers={"Authorization": f"Bearer {access_token}"},
         timeout=timeout,
     )
