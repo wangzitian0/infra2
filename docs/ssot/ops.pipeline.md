@@ -299,6 +299,21 @@ git fetch --tags && git tag -l "v*.*.*" | sort -V | tail -5
 
 ---
 
+<a id="host-hygiene"></a>
+
+## 11. VPS 通用宿主机 GC(host hygiene)— infra2 拥有
+
+**部署环境的 GC 归 infra2。** 共享 VPS 宿主机的通用垃圾回收(老的已停容器、builder/image/network 缓存、journald、超大 Docker json-log、磁盘告警)由 infra2 拥有,不在 app 仓库。
+
+- **机制**:`tools/host_hygiene_schedule.py` 在 Dokploy 里 provision 一个 `dokploy-server` 类型的 Schedule Job(`finance-report-vps-host-hygiene`,cron `17 3,9,15,21 * * *`)。**这个 Dokploy schedule 本身是执行器**(在宿主机上按 cron 跑那段 hygiene 脚本);该工具是**权威 provisioner**。
+- **强势管理(不漂移)**:`ops-checks` 每天(`27 4 * * *`)跑 `host_hygiene_schedule --ensure`(幂等)重新声明这个 schedule,确保它不会被静默删改;失败 → 飞书告警。
+- **绝不碰 preview**:preview 由 infra2 的事件驱动 teardown(§10)回收;host hygiene 只用 `PR_PREVIEW_CONTAINER_PATTERN` **排除** preview 容器,从不删它们。
+- **类型铁律**:schedule 必须是 `dokploy-server`;遗留的 `server` 类型(serverId 为 null)会被 `schedule.create` 接受但**永不执行**——这个静默 no-op 正是以前宿主机垃圾堆积的根因。
+
+手动一次性 ensure(或排障):`python -m tools.host_hygiene_schedule --ensure --server-id null`(需 `DOKPLOY_API_KEY`)。
+
+---
+
 ## Used by
 
 - [docs/ssot/README.md](./README.md)
