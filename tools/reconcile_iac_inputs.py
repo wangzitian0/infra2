@@ -67,6 +67,59 @@ def is_zero_sha(value: str | None) -> bool:
     return bool(value) and set(value.strip()) == {"0"}
 
 
+def assert_after_on_main(
+    after: str,
+    repo_root: Path,
+    *,
+    base: str = "origin/main",
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> str:
+    """Fail-closed provenance guard: the promoted tag MUST be reachable from main.
+
+    A ``v*.*.*`` tag push drives a REAL staging/prod deploy, so the tagged commit must
+    be on reviewed ``origin/main``. This enforces the Infra-011 invariant — *iac_pinned
+    production reconcile may run automatically only from reviewed infra2 main* — in code,
+    and blocks the v1.1.16 incident where a release tag cut on an unmerged, off-main
+    feature branch promoted a pre-refactor ref straight to prod. ``--dry-run`` callers
+    skip this (plan-only, no deploy). Returns the resolved 40-hex commit.
+    """
+    resolved = runner(
+        ["git", "rev-parse", "--verify", f"{after}^{{commit}}"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    if resolved.returncode != 0:
+        raise SystemExit(
+            f"::error::cannot resolve {after!r} to a commit "
+            f"({resolved.stderr.strip() or 'unknown revision'})."
+        )
+    sha = resolved.stdout.strip()
+    ancestor = runner(
+        ["git", "merge-base", "--is-ancestor", sha, base],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    # `git merge-base --is-ancestor`: 0 = ancestor (on-main, ok), 1 = NOT an ancestor
+    # (genuinely off-main), anything else (typically 128) = git error, almost always a
+    # missing/unresolvable base ref. Keep these distinct — conflating an unresolvable
+    # base with "off-main" sends operators the wrong way (the base just was not fetched).
+    if ancestor.returncode == 0:
+        return sha
+    if ancestor.returncode == 1:
+        raise SystemExit(
+            f"::error::refusing to reconcile {after!r} ({sha[:12]}): not reachable from "
+            f"{base}. Release tags must be cut on reviewed main (Infra-011 invariant). "
+            f"Re-cut the tag on main, or pass --dry-run to plan only."
+        )
+    raise SystemExit(
+        f"::error::cannot verify provenance of {after!r}: base ref {base!r} is "
+        f"unresolvable ({ancestor.stderr.strip() or 'git error'}). Ensure it exists, e.g. "
+        f"`git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main`."
+    )
+
+
 def changed_files_from_git(
     repo_root: Path, before: str | None, after: str
 ) -> list[str]:
@@ -192,6 +245,26 @@ def build_deploy_commands(
     return commands
 
 
+def commands_to_apply(
+    commands: Sequence[DeployCommand],
+    *,
+    dry_run: bool,
+    promote_prod: bool,
+) -> list[DeployCommand]:
+    """Pick which deploy commands actually run, per the release-decoupling闸门.
+
+    A release tag push **auto-applies staging** (soak); **prod is an explicit,
+    separately-triggered promotion** (``--promote-prod``), never automatic — so
+    'cutting a tag' stops meaning 'touch prod'. ``--dry-run`` applies nothing
+    (plan only). The complement (commands NOT selected) is surfaced as a plan so
+    operators see the deferred prod promotion.
+    """
+    if dry_run:
+        return []
+    wanted = "prod" if promote_prod else "staging"
+    return [command for command in commands if command.deploy_type == wanted]
+
+
 def run_deploy_commands(
     commands: Sequence[DeployCommand],
     *,
@@ -283,6 +356,15 @@ def main(argv: list[str] | None = None) -> int:
         "--dry-run", action="store_true", help="plan only; do not deploy"
     )
     parser.add_argument(
+        "--promote-prod",
+        action="store_true",
+        help=(
+            "explicitly promote prod (production deploys). Default applies STAGING "
+            "only; prod is a separate, deliberate promotion — a tag push never "
+            "auto-deploys prod."
+        ),
+    )
+    parser.add_argument(
         "--changed-file",
         action="append",
         default=[],
@@ -292,6 +374,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     repo_root = Path(args.repo_root).resolve()
+    # Fail-closed BEFORE planning/deploying: an apply run must promote a tag that is
+    # reachable from reviewed main (Infra-011). dry-run is plan-only, so it may inspect
+    # any ref (e.g. preview a not-yet-merged tag).
+    if not args.dry_run:
+        assert_after_on_main(args.after, repo_root)
     changed_files = (
         list(args.changed_file)
         if args.changed_file
@@ -304,13 +391,22 @@ def main(argv: list[str] | None = None) -> int:
         domain=args.domain,
         timeout=args.timeout,
     )
+    applied = commands_to_apply(
+        commands, dry_run=args.dry_run, promote_prod=args.promote_prod
+    )
+    deferred = [command for command in commands if command not in applied]
     results: list[dict] = []
-    if not args.dry_run and commands:
-        results = run_deploy_commands(commands)
+    if applied:
+        results = run_deploy_commands(applied)
 
     payload = {
         "plan": plan.to_dict(),
         "commands": [command.to_dict() for command in commands],
+        # what actually ran this invocation vs what is left for a deliberate next step
+        # (prod promotion, or — in dry-run — everything is just a plan).
+        "applied": [command.to_dict() for command in applied],
+        "deferred": [command.to_dict() for command in deferred],
+        "promote_prod": args.promote_prod,
         "results": results,
         "dry_run": args.dry_run,
     }
