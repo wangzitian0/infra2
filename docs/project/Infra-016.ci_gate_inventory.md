@@ -160,6 +160,12 @@ prod-CI-touching work — de-risked by `3a` being additive and `3b` being a prov
 - Both inventories `$ref`/reference one `delivery-stages.yaml`; no local `stages:` block
   remains in either.
 
+## Tracking
+
+- **Root epic:** infra2#459 — CI verification → coordinate contracts.
+- **Sub-issues:** infra2#460 (contracts), infra2#461 (infra inventory+audit), finance_report#1491 (app align + retire mirror-asserts), finance_report#1492 (cross-repo non-overlap+view).
+- **Consolidates:** finance_report#1435 (CI over-mirrored root cause), finance_report#876 (App/Infra boundary), infra2#280 (delivery hardening).
+
 ## PR Links
 
 _(to be filled as slices land)_
