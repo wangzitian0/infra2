@@ -143,6 +143,16 @@ entries:
       build/config artifacts a service bakes in (shared code, contracts, pinned files).
     proofs:
       - libs/tests/test_deploy_dependencies.py
+  ops.delivery_stages:
+    owner: docs/ssot/delivery-stages.yaml
+    summary: 交付管线 stage 词汇（单一所有者；app+infra CI 共享）
+    description: >-
+      Authoritative delivery-pipeline stage vocabulary shared by both repos' CI gate
+      inventories. Single owner = infra; neither repo redefines stages locally. The
+      CI analogue of the deploy_v2 coordinate's discriminant axis.
+    proofs:
+      - libs/tests/test_delivery_stages.py
+      - libs/tests/test_ci_gate_schema.py
   ops.obs:
     owner: docs/ssot/ops.observability.md
     summary: 可观测性单一 owner：采集(SigNoz/日志/链路)+ 告警(规则/分级/watchdog)+ 报告(可用率账本)+ 时间尺度分层
