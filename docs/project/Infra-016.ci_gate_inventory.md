@@ -95,6 +95,62 @@ contract, app declares its gates inside it*.
   completeness, but are **not** force-fit into the PR merge matrix — coordinate-izing
   must not imply they gate merges.
 
+## Implementation plan — incremental, reversible, machine-verified
+
+### Engineering principles (govern every step)
+
+1. **Contract before instances** — the schema and stage vocabulary land before any gate is written against them.
+2. **Audit ratchet: report-only → fail-closed.** A drift audit ships first as non-blocking (prints diffs, exits 0), and only flips to blocking once the inventory is clean. No single step turns CI red on existing work.
+3. **One step = one PR, system stays green, independently revertible.** Every PR is a no-op or additive to runtime behavior until the ratchet closes.
+4. **Acceptance is machine-decidable** — an audit exit code, a test, or a CI gate. Never "looks complete".
+5. **Cross-repo changes (touching app) come last,** paired and behind a compat transition proven to be a no-op.
+6. **Non-overlap is structural, not runtime.** Each gate id is namespaced by its owning repo (`infra_ci.*` vs app's `ci.*/preview.*/…`). Each repo's audit asserts *all its gates carry its own prefix*, so two repos **cannot** register the same id — "no overlap" becomes a single-repo, machine-decidable check needing no cross-repo lookup. The cross-repo *view* (D5) runs in the **app repo**, which already vendors `infra2` as a submodule and can read both inventories locally.
+
+### Phase overview
+
+| Phase | PR(s) | Lands | Acceptance gate (machine-decidable) | Rollback |
+|-------|-------|-------|-------------------------------------|----------|
+| **0 Contracts** | infra ×1 | `ci_gate_schema` + `delivery-stages.yaml` + MANIFEST | schema validates a good/bad fixture; stages unique+ordered+named; MANIFEST guard green | revert PR (additive) |
+| **1 Inventory (shadow)** | infra ×1 | infra `ci-gate-inventory.yaml` (23 jobs) + `ci_gate_audit --report` non-blocking | every entry validates; `dangling_gates==[]` (test-enforced); `unregistered_jobs` listed as backlog | drop audit step |
+| **2 Fail-closed (ratchet closes)** | infra ×1 | backfill gaps; audit `exit 1`; blocking infra-ci step | `unregistered_jobs==[]` **and** `dangling_gates==[]`; negative tests prove red; blocking gate present | flip audit back to report-only (1 line) |
+| **3 App alignment** | app ×2 | 3a: shared schema + app-side audit; 3b: app references `delivery-stages.yaml` | app audit fail-closed green; **(gate_id→stage) byte-identical before/after 3b** (no-op migration test); app has no local `stages:` | 3a/3b independently revertible |
+| **4 Non-overlap + view** | app ×1 | `ci_chain_view.py` (join on stage) + cross-repo prefix-disjoint guard | view covers 100% of both inventories (count match); duplicate id → guard red; matrix rendered into docs | revert PR |
+
+### Per-phase Definition of Done
+
+**Phase 0 — Contracts (infra only, zero behavior change).**
+- `libs/ci_gate_schema.py` (pydantic) loads; `test_ci_gate_schema` accepts a valid gate fixture and rejects one missing a required field / with an unknown stage.
+- `docs/ssot/delivery-stages.yaml`: stage ids unique, carry an explicit `order`, match `^[a-z]+\.[a-z_]+$`; `test_delivery_stages` enforces all three.
+- `MANIFEST.yaml` gains owner entries for both files; the existing MANIFEST-consistency guard stays green. *Accept = the three tests + MANIFEST guard pass.*
+
+**Phase 1 — Infra inventory in shadow.**
+- Reverse-engineer the 23 infra CI jobs (`infra-ci` 7, `ops-checks` 6, reconcile dry-run gate, apply-observability, drift reports) into `docs/ssot/ci-gate-inventory.yaml`, each conforming to the schema.
+- `tools/ci_gate_audit.py --report` emits `{dangling_gates, unregistered_jobs, gaps}` JSON, exit 0, wired **non-blocking** in `infra-ci.yml`.
+- *Accept = (a) every entry passes schema; (b) `dangling_gates == []` is hard-enforced by a test even in shadow (a listed gate must point at a real `workflow:job`); (c) `unregistered_jobs` may be non-empty and is printed as the gap backlog.*
+
+**Phase 2 — Infra audit fail-closed (the done line for infra).**
+- Backfill until `unregistered_jobs == []`.
+- Flip audit to `exit 1` on any drift; make the `infra-ci.yml` step **blocking**.
+- `test_ci_gate_audit` carries negatives: remove a job → exit 1; add an unlisted job → exit 1; gate with stage ∉ vocab → exit 1; gate id without the `infra_ci.` prefix → exit 1.
+- *Accept = `unregistered_jobs==[] && dangling_gates==[]`, all four negative tests red-on-drift, blocking step present. Proven by a broken fixture in the test suite, not by inspection.*
+
+**Phase 3 — App alignment (cross-repo, highest risk, compat transition).**
+- *3a (additive):* app vendors the shared `ci_gate_schema` (via the infra2 submodule it already has) and gains its own `ci_gate_audit` (app has none today); app keeps its local stages. Accept = app audit fail-closed green.
+- *3b (source-swap):* replace app's embedded `stages:` block with a reference to `delivery-stages.yaml`; assert app's used stages ⊆ the shared vocab.
+- *Accept = a **no-op migration test**: the set of `(gate_id → stage)` is byte-identical before and after 3b — only the *source* of the vocabulary changed, never a value. This makes the riskiest step provably behavior-preserving.*
+
+**Phase 4 — Cross-repo non-overlap + chain view.**
+- In the **app repo** (where `infra2` is a submodule), `tools/ci_chain_view.py` joins both inventories on the stage axis into one `stage × task_category` matrix; a guard asserts the two gate-id sets are prefix-disjoint.
+- *Accept = the rendered matrix covers 100% of both inventories' gates (gate count == sum); a constructed duplicate id makes the guard red; the matrix is embedded into `ci-cd.md` / `ops.pipeline.md` as the single high-level review surface.*
+
+### Critical path & risk
+
+`0 → 1 → 2` is entirely inside infra and ships the whole coordinate-ized review surface
+**without touching app**; Phase 2 is the infra done line. `3` is the only cross-repo,
+prod-CI-touching work — de-risked by `3a` being additive and `3b` being a proven no-op.
+`4` is pure read-time aggregation. Any phase reverts independently; the ratchet (principle
+2) guarantees the merge-blocking behavior appears only when the inventory is already clean.
+
 ## Verification
 
 - Deleting/renaming a CI job without updating the inventory → `ci_gate_audit` red.
