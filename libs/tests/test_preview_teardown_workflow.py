@@ -15,8 +15,10 @@ def _load() -> dict:
 
 
 def test_teardown_receives_app_dispatch_on_pr_close() -> None:
-    # YAML parses `on:` as the boolean True key.
-    triggers = _load()[True]
+    # PyYAML 1.1 coerces the bare `on:` key to boolean True; tolerate both so the
+    # contract holds regardless of loader version.
+    data = _load()
+    triggers = data.get("on", data.get(True))
     assert triggers["repository_dispatch"]["types"] == ["preview-teardown"]
     # also manually runnable with a pr_number
     assert "pr_number" in triggers["workflow_dispatch"]["inputs"]
