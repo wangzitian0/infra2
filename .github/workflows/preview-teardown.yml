@@ -1,0 +1,108 @@
+name: Preview teardown (PR close)
+
+# infra2 OWNS the strict 1:1 PR-preview lifecycle. The APP no longer tears its own
+# previews down: when a PR closes, the app repo emits a vendor-neutral signal
+# (repository_dispatch type=preview-teardown, client_payload.pr_number) and this
+# workflow performs the authoritative teardown through the unified deploy_v2 front
+# door — the app never touches the Dokploy API.
+#
+# This is the event-driven half of the lifecycle. The scheduled SAFETY NET is the
+# hourly ops-checks `preview-leak-check` job, which DETECTS (never auto-deletes) any
+# preview a close event missed and fires the out-of-band alert. So a missed/failed
+# teardown is surfaced, not silently swept.
+#
+# Sender: the finance_report app repo's PR-close workflow (`preview.yml`), via INFRA2_PAT.
+
+on:
+  repository_dispatch:
+    types: [preview-teardown]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number whose preview alias to tear down"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  # Serialize teardowns per PR; never run two against the same preview alias.
+  group: preview-teardown-${{ github.event.client_payload.pr_number || github.event.inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  teardown:
+    name: tear down PR preview
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+      INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
+      PR_NUMBER: ${{ github.event.client_payload.pr_number || github.event.inputs.pr_number }}
+      INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
+      INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
+      INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+      GITHUB_SERVER_URL: ${{ github.server_url }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      GITHUB_RUN_ID: ${{ github.run_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install runtime dependencies
+        run: python -m pip install httpx python-dotenv rich
+
+      - name: Tear down the PR preview alias
+        run: |
+          set -euo pipefail
+          if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
+            echo "::error::DOKPLOY_API_KEY secret is required for preview teardown."
+            exit 1
+          fi
+          if [[ ! "${PR_NUMBER:-}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::preview-teardown requires a positive integer pr_number (got '${PR_NUMBER:-}')."
+            exit 1
+          fi
+          # Idempotent: down() is a no-op if the alias is already gone, so a
+          # duplicate/late close event is safe.
+          python -m tools.deploy_v2 \
+            --service finance_report/app \
+            --type preview/pr \
+            --version-ref "${PR_NUMBER}" \
+            --iac-ref main \
+            --domain "${INTERNAL_DOMAIN}" \
+            --down
+
+      - name: Alert on teardown failure
+        if: failure()
+        run: |
+          python - <<'PY'
+          import os
+          from tools.out_of_band_watchdog import deliver_out_of_band_alert
+
+          run_url = "/".join(
+              v for v in (
+                  os.environ.get("GITHUB_SERVER_URL"),
+                  os.environ.get("GITHUB_REPOSITORY"),
+                  "actions/runs",
+                  os.environ.get("GITHUB_RUN_ID"),
+              ) if v
+          )
+          pr = os.environ.get("PR_NUMBER", "?")
+          deliver_out_of_band_alert(
+              os.environ,
+              "🚨 PR preview teardown FAILED.\n"
+              f"The 1:1 teardown for PR #{pr} did not complete — this preview may "
+              "now be leaking. The hourly preview-leak-check will also flag it, but "
+              "investigate + remediate per docs/ssot/ops.pipeline.md#preview.\n"
+              f"Run: {run_url}",
+          )
+          PY
