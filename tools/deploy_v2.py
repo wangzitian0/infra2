@@ -38,6 +38,7 @@ from tools.deploy_contract import (
     _SHA_RE,
     DeployTarget,
     deploy_type_spec,
+    is_tag_only_iac_env,
     make_deploy_target,
     make_target,
     service_spec,
@@ -78,6 +79,51 @@ _IMAGE_MANIFEST_ACCEPT = ", ".join(
         "application/vnd.docker.distribution.manifest.v2+json",
     ]
 )
+
+
+def _infra2_owner_name(repo: str) -> str:
+    """`https://github.com/wangzitian0/infra2[.git]` -> `wangzitian0/infra2`."""
+    return repo.rstrip("/").removesuffix(".git").split("github.com/")[-1]
+
+
+def assert_iac_ref_on_main(
+    iac_ref: str,
+    deploy_type: str,
+    *,
+    repo: str = _INFRA2_REPO,
+    token: str | None = None,
+    transport=httpx.get,
+) -> None:
+    """Fail-closed: a fixed-env (staging/prod) ``iac_ref`` must be an ON-MAIN release tag —
+    its commit reachable from infra2 ``main``.
+
+    The app-side twin of reconcile's ``assert_after_on_main``, closing the third app↔infra
+    boundary line (#465): the app may only run a reviewed, *released* infra version, never an
+    off-main/feature-branch tag. Uses GitHub's compare API (``main...<ref>``): status
+    ``behind``/``identical`` means reachable from main; ``ahead``/``diverged`` is off-main and
+    refused. preview/canary are exempt (they clone live refs). Any transport/API failure is
+    fail-closed (it raises rather than letting an unverified ref through). ``transport`` and
+    ``token`` are injected for tests.
+    """
+    if not is_tag_only_iac_env(deploy_type):
+        return
+    url = (
+        f"https://api.github.com/repos/{_infra2_owner_name(repo)}"
+        f"/compare/main...{iac_ref.strip()}"
+    )
+    headers = {"Accept": "application/vnd.github+json"}
+    tok = token if token is not None else os.getenv("GITHUB_TOKEN", "").strip()
+    if tok:
+        headers["Authorization"] = f"Bearer {tok}"
+    resp = transport(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+    status = (resp.json() or {}).get("status")
+    if status not in ("behind", "identical"):
+        raise ValueError(
+            f"iac_ref {iac_ref!r} is not on infra2 main (compare status={status!r}); "
+            f"staging/prod require an on-main release tag (#465 — the app-side twin of the "
+            f"reconcile off-main guard). Re-cut/use a tag on main."
+        )
 
 
 def _default_main(version_ref) -> str:
@@ -557,6 +603,9 @@ def deploy_v2(
     # no longer reach a fixed env — the gap that let a main-sha reconcile auto-deploy to prod.
     # preview/canary keep an unrestricted iac_ref (they clone live refs).
     validate_iac_ref_form(deploy_type, classify_ref(iac_ref))
+    # #465: a fixed-env iac_ref must also be ON infra2 main (not just tag-shaped) — the app
+    # only runs reviewed, released infra. Covers both the platform and app branches below.
+    assert_iac_ref_on_main(iac_ref, deploy_type)
     if svc_spec.iac_pinned:  # platform service -> iac_runner /deploy webhook
         if normalized_expected_sha is not None:
             raise ValueError("--expected-sha is only supported for app-backed deploys")
