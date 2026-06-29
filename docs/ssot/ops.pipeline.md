@@ -271,7 +271,9 @@ git fetch --tags && git tag -l "v*.*.*" | sort -V | tail -5
 
 ## 10. Preview 生命周期回收 & 泄露处置 SOP
 
-**生命周期是严格 1:1**:infra2 起一个 preview,就负责在它的 PR 关闭时把它拆掉(`preview_lifecycle down`)。preview 是被**强势管理**的资源,**不靠定期 GC 兜底**——残留的 preview 是**异常**(teardown 被跳过或失败),不是常态。
+**生命周期是严格 1:1**:infra2 起一个 preview,就负责在它的 PR 关闭时把它拆掉。preview 是被**强势管理**的资源,**不靠定期 GC 兜底**——残留的 preview 是**异常**(teardown 被跳过或失败),不是常态。
+
+**事件驱动的拆除归 infra2**(app 不碰 Dokploy):PR 关闭时,app repo 发一个中立信号(`repository_dispatch` type `preview-teardown`,`client_payload.pr_number`),`preview-teardown.yml` 收到后走统一前门 `deploy_v2 --type preview/pr --version-ref <n> --down`(幂等)做权威拆除;失败 → 飞书告警(泄露将至)。app 侧不再自己拆。
 
 **泄露 = 告警,不是静默清理。** 每小时的 `ops-checks` job `preview-leak-check`(`47 * * * *`)只**检测**:列出 `finance_report/preview` 下的 compose,把两类无歧义的孤儿判为泄露——
 
