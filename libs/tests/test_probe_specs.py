@@ -27,28 +27,32 @@ def test_otel_and_lark_flow_probes_are_declared():
             assert spec.severity == "critical"
 
 
-def test_synthetic_roundtrip_and_delivery_canaries_are_declared():
-    """Observability and alert delivery closure must be automated probes."""
+def test_synthetic_roundtrip_canaries_are_declared():
+    """Observability round-trip closure must be automated probes.
+
+    The 6h real-send ``alert-delivery-canary`` was retired (#425 T3): proving the
+    bridge→Feishu path with a periodic *alert* is the anti-pattern #425 forbids. The
+    path is now covered by ``lark-delivery-http`` (config + reachability, no real post),
+    the out-of-band watchdog's bridge /health check, and the daily reports' delivery.
+    """
     text = _ALERTING_COMPOSE.read_text(encoding="utf-8")
     names = parse_probe_names(text)
 
     assert "signoz-roundtrip" in names
     assert "openpanel-roundtrip" in names
-    assert "alert-delivery-canary" in names
+    # quiet delivery readiness stays (no channel noise); the real-send canary is gone.
+    assert "lark-delivery-http" in names
+    assert "alert-delivery-canary" not in names
 
     specs = {
         parse_probe_specs(line.strip())[0].name: parse_probe_specs(line.strip())[0]
         for line in text.splitlines()
-        if line.strip().startswith(
-            ("signoz-roundtrip|", "openpanel-roundtrip|", "alert-delivery-canary|")
-        )
+        if line.strip().startswith(("signoz-roundtrip|", "openpanel-roundtrip|"))
     }
     assert specs["signoz-roundtrip"].kind == "command"
     assert specs["signoz-roundtrip"].severity == "critical"
     assert specs["openpanel-roundtrip"].kind == "command"
     assert specs["openpanel-roundtrip"].severity == "warning"
-    assert specs["alert-delivery-canary"].kind == "command"
-    assert specs["alert-delivery-canary"].severity == "critical"
 
 
 def test_parse_probe_names_extracts_first_field():

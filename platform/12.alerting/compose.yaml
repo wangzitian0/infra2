@@ -159,8 +159,6 @@ services:
       OBS_ROUNDTRIP_STATE_FILE: /tmp/observability_roundtrip_probe_state.json
       OBS_ROUNDTRIP_INTERVAL_SECONDS: ${OBS_ROUNDTRIP_INTERVAL_SECONDS:-300}
       OBS_ROUNDTRIP_QUERY_WAIT_SECONDS: ${OBS_ROUNDTRIP_QUERY_WAIT_SECONDS:-30}
-      ALERT_DELIVERY_CANARY_STATE_FILE: /tmp/alert_delivery_canary_state.json
-      ALERT_DELIVERY_CANARY_INTERVAL_SECONDS: ${ALERT_DELIVERY_CANARY_INTERVAL_SECONDS:-21600}
       INFRA_PROBE_SPECS: |
         dokploy-internal-http|http|http://dokploy:3000|200,302|critical|5
         vault-internal-http|http|http://vault:8200/v1/sys/health|200,429,472,473|critical|5
@@ -185,10 +183,12 @@ services:
         # lark 畅通: bridge config valid AND Feishu host reachable (TCP 443), checked
         # without posting to the real channel (see app.py /health/feishu).
         lark-delivery-http|http|http://platform-alerting${ENV_SUFFIX}:8080/health/feishu|200|critical|5
-        # Low-frequency real-send proof: posts one synthetic alert through the bridge
-        # to Feishu on a bounded cadence, while suppressed runs still prove the canary
-        # process and state are healthy.
-        alert-delivery-canary|command|python /app/tools/alert_delivery_canary.py|delivery-canary-ok|critical|15
+        # NOTE: the 6h real-send `alert-delivery-canary` was retired (#425 T3): it posted a
+        # synthetic *alert* every 6h purely to prove the bridge→Feishu path — a periodic
+        # alert (the anti-pattern #425 forbids). The path is now covered without channel
+        # noise by `lark-delivery-http` (config valid + Feishu reachable, no real post),
+        # the out-of-band watchdog's independent bridge /health check, the daily reports'
+        # own Feishu delivery, and real alerts when they fire.
         platform-postgres-tcp|tcp|platform-postgres${ENV_SUFFIX}:5432|connected|critical|5
         platform-redis-tcp|tcp|platform-redis${ENV_SUFFIX}:6379|connected|critical|5
         # ClickHouse liveness is no longer probed by a read-only /ping: it stays 200 even
