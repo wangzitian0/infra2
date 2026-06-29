@@ -269,6 +269,8 @@ git fetch --tags && git tag -l "v*.*.*" | sort -V | tail -5
 
 ---
 
+<a id="preview"></a>
+
 ## 10. Preview 生命周期回收 & 泄露处置 SOP
 
 **生命周期是严格 1:1**:infra2 起一个 preview,就负责在它的 PR 关闭时把它拆掉。preview 是被**强势管理**的资源,**不靠定期 GC 兜底**——残留的 preview 是**异常**(teardown 被跳过或失败),不是常态。
