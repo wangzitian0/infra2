@@ -196,8 +196,12 @@ The same runner also owns synthetic closure probes:
   nonce.
 - `openpanel-roundtrip`: writes an OpenPanel `/track` event and queries
   OpenPanel ClickHouse for the nonce.
-- `alert-delivery-canary`: sends a low-frequency real alert through the bridge
-  to Feishu/Lark.
+
+The 6h real-send `alert-delivery-canary` was retired (#425 T3) — proving the
+bridge→Feishu path with a periodic *alert* is the anti-pattern #425 forbids. The
+path is now covered without channel noise by `lark-delivery-http` (bridge config
+valid + Feishu reachable, no real post), the out-of-band watchdog's independent
+bridge `/health` check, the daily reports' own Feishu delivery, and real alerts.
 
 Optional tuning:
 

@@ -158,7 +158,7 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 | L2 Platform | MinIO | live endpoint unavailable | P1 | Live probe |
 | L2 Platform | Authentik | health endpoint fails | P0 | Live probe |
 | L2 Platform | SigNoz | frontend/query fails or synthetic OTLP nonce cannot be queried back | P0 | `signoz-internal-http`, `otel-collector-http`, `signoz-roundtrip` |
-| L2 Platform | Alert Bridge | `/health` fails / Feishu unreachable / delivery proof fails | P0 | `alert-bridge-http`, `lark-delivery-http`, `alert-delivery-canary` + out-of-band bridge health |
+| L2 Platform | Alert Bridge | `/health` fails / Feishu unreachable | P0 | `alert-bridge-http`, `lark-delivery-http` + out-of-band bridge health |
 | L2 Platform | OpenPanel API | `/healthcheck` fails or synthetic `/track` nonce not queryable | P1 | `openpanel-api-http`, `openpanel-roundtrip` |
 | L2 Platform | OpenPanel ClickHouse (op-ch) | data dir unwritable / event store broken | P1 | Write-path healthcheck + `openpanel-roundtrip` |
 | L2 Platform | OpenPanel Worker / Dashboard | `/healthcheck` / `/api/healthcheck` fails | P1 / P2 | Live probes |
@@ -189,7 +189,7 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 - **周报**:`tools/stability_report.py`(弱 CLI)读 `/ledger` → Lark 正向证明,需 `INFRA2_WATCHDOG_LEDGER_URL`。
 - **禁止**:per-signal-per-run 建 KV 键 · 把 `fail>0` 计入 100%/perfect · 信任畸形 day/signal 抬高可用率。
 
-> **天级日报(目标态,#425 T3)**:统一健康日报(探针绿/红、今日 fire/resolve、备份新鲜度、drift)发 Feishu,**其送达即投递自证**,顶替现 6h 合成 `alert-delivery-canary`;"投递真断了"的硬信号留给独立带外 watchdog。
+> **天级日报(目标态,#425 T3)**:统一健康日报(探针绿/红、今日 fire/resolve、备份新鲜度、drift)发 Feishu,**其送达即投递自证**;"投递真断了"的硬信号留给独立带外 watchdog。6h 合成 `alert-delivery-canary` 已退役(它把投递自证做成了周期性告警);当前 bridge→Feishu 路径由 `lark-delivery-http`(配置有效 + Feishu 可达,不真发)、带外 watchdog 的 bridge `/health`、日报自身投递、以及真实告警共同覆盖。
 
 ---
 
@@ -237,7 +237,7 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 
 ### SOP-006: In-band 服务探针(分钟级)
 配在 `platform/12.alerting/compose.yaml` 的 `INFRA_PROBE_SPECS`。循环 `INFRA_PROBE_INTERVAL_SECONDS=60`(快检);通知分离:`FAILURE_THRESHOLD=3`、`RECOVERY_THRESHOLD=2`、`RENOTIFY_SECONDS=1800`。优先 Docker 网络目标(公网路由归 Cloudflare watchdog;`error code: 1010` 归类 `probe-client-blocked`)。spec 格式 `name|kind|target|expected|severity|timeout|depends_on`;kind=http/tcp/command。`depends_on` 链命中失败 root → 级联抑制(环路 fail-closed,见 `tools/infra_probe_runner.py`)。dry-run:`INFRA_PROBE_DRY_RUN=1 uv run python tools/infra_probe_runner.py --once --json`。
-> ⚠️ **`alert-delivery-canary` 现为 6h 合成告警 = 错位(报告当告警)**;目标态见 §6 天级日报(#425 T3)。
+> ✅ **`alert-delivery-canary` 已退役(#425 T3)**:它把"投递自证"做成了 6h 周期性告警(报告当告警),是 #425 禁止的反模式。bridge→Feishu 路径现由 `lark-delivery-http` + 带外 watchdog 的 bridge `/health` + 日报投递 + 真实告警覆盖,告警频道不再被合成事件刷屏。
 
 ### SOP-007: Dokploy route canary(动态,小时级)
 `tools/dokploy_route_canary.py` 部署一个最小双服务 compose(同 app preview 路由形状:一个公网 web + 一个高优先 `/api`),失败归类到 `dokploy-{canary-configuration,control-plane,compose-source-type,worker-or-deployment-record}` / `docker-runtime` / `traefik-public-route`。`ops-checks.yml` 每小时跑(stable host/compose);缺配置 = fail-closed `dokploy-canary-configuration`(不当跳过成功)。app staging/preview gate 应把 canary 失败当平台失败,先于 app readiness。
@@ -269,7 +269,7 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 | Worker 账本 + `/ledger` + R2 归档 | `libs/tests/test_cloudflare_watchdog.py` | ✅ |
 | 周 watchdog recall digest / 周正向稳定性报告 | `test_watchdog_weekly_digest.py`, `test_stability_report.py` | ✅ |
 | Env×Stage failure-domain / disagreement 契约 | `libs/tests/test_pipeline_stage_contract.py` | ✅ |
-| synthetic round-trip / 投递 canary | `test_observability_roundtrip_probe.py`, `test_alert_delivery_canary.py` | ✅ |
+| synthetic round-trip | `test_observability_roundtrip_probe.py` | ✅ |
 | 告警通道手动连通 | `uv run invoke alerting.test-feishu` | Manual gate |
 
 ---
