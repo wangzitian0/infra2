@@ -47,6 +47,7 @@ name: Ops Checks
     - cron: "37 6 * * *"
     - cron: "0 1 * * 1"
     - cron: "47 * * * *" # hourly Dokploy preview leak detection (offset from route-canary)
+    - cron: "27 4 * * *" # daily re-ensure of the VPS host-hygiene Dokploy schedule
   workflow_dispatch:
     inputs:
       task:
@@ -59,6 +60,7 @@ name: Ops Checks
           - dokploy-route-canary
           - deploy-v2-canary
           - preview-leak-check
+          - host-hygiene-schedule
           - out-of-band-watchdog
           - watchdog-weekly-digest
           - all
@@ -103,7 +105,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 * * * *' && 'dokploy-route-canary-scheduled' || github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'infra2-deploy-guard-audit' || github.event_name == 'schedule' && github.event.schedule == '37 6 * * *' && 'deploy-v2-canary' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-leak-check' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && inputs.task == 'dokploy-route-canary' && format('dokploy-route-canary-{0}-{1}', inputs.project, inputs.env) || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) || 'dokploy-route-canary-push' }}
+  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 * * * *' && 'dokploy-route-canary-scheduled' || github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'infra2-deploy-guard-audit' || github.event_name == 'schedule' && github.event.schedule == '37 6 * * *' && 'deploy-v2-canary' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-leak-check' || github.event_name == 'schedule' && github.event.schedule == '27 4 * * *' && 'infra2-host-hygiene-schedule' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && inputs.task == 'dokploy-route-canary' && format('dokploy-route-canary-{0}-{1}', inputs.project, inputs.env) || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) || 'dokploy-route-canary-push' }}
   cancel-in-progress: false
 
 env:
@@ -541,5 +543,70 @@ jobs:
               "(docs/ssot/ops.pipeline.md#preview): "
               "`python -m tools.preview_leak_check --remediate`.\n"
               f"Run (see leak list): {run_url}",
+          )
+          PY
+
+  host-hygiene-schedule:
+    name: Ensure VPS host-hygiene schedule
+    if: ${{ (github.event_name == 'schedule' && github.event.schedule == '27 4 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'host-hygiene-schedule' || inputs.task == 'all')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+      INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
+      INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
+      INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
+      INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+      GITHUB_SERVER_URL: ${{ github.server_url }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      GITHUB_RUN_ID: ${{ github.run_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install runtime dependencies
+        run: python -m pip install httpx python-dotenv rich
+
+      - name: Re-ensure the host-hygiene Dokploy schedule
+        run: |
+          set -euo pipefail
+          if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
+            echo "::error::DOKPLOY_API_KEY secret is required to ensure the host-hygiene schedule."
+            exit 1
+          fi
+          # Idempotent: re-asserts the dokploy-server schedule so it can't silently
+          # drift/disappear. The schedule itself is the on-host executor.
+          python -m tools.host_hygiene_schedule --ensure --server-id null
+
+      - name: Alert on failure
+        if: failure() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        run: |
+          python - <<'PY'
+          import os
+          from tools.out_of_band_watchdog import deliver_out_of_band_alert
+
+          run_url = "/".join(
+              v for v in (
+                  os.environ.get("GITHUB_SERVER_URL"),
+                  os.environ.get("GITHUB_REPOSITORY"),
+                  "actions/runs",
+                  os.environ.get("GITHUB_RUN_ID"),
+              ) if v
+          )
+          deliver_out_of_band_alert(
+              os.environ,
+              "🚨 VPS host-hygiene schedule could not be ensured.\n"
+              "The generic host GC (docker/journald/disk prune) may not be "
+              "provisioned on the VPS — host disk can fill silently. Check the "
+              "Dokploy schedule 'finance-report-vps-host-hygiene'.\n"
+              f"Run: {run_url}",
           )
           PY
