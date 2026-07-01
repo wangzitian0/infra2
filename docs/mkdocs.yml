@@ -80,6 +80,7 @@ nav:
           - Standards: ssot/ops.standards.md
           - Pipeline: ssot/ops.pipeline.md
           - E2E: ssot/ops.e2e-regressions.md
+          - Test Coverage: ssot/ops.test_coverage.md
           - Recovery: ssot/ops.recovery.md
           - Storage: ssot/ops.storage.md
           - Backup Inventory: ssot/ops.backup-inventory.yaml
