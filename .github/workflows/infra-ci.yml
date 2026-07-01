@@ -156,6 +156,11 @@ jobs:
           format: cobertura
           file: coverage/infra2-coverage.xml
 
+      - name: Gate coverage regression
+        run: |
+          cd ${{ github.workspace }}
+          uv run python tools/coverage_regression_audit.py
+
       - name: Gate watchdog signal consistency
         run: |
           cd ${{ github.workspace }}

@@ -121,6 +121,15 @@ entries:
     owner: docs/ssot/ops.e2e-regressions.md
     summary: 部署验证、E2E 测试
     description: Deployment verification and E2E regression strategy.
+  ops.test_coverage:
+    owner: docs/ssot/ops.test_coverage.md
+    summary: libs/tools 单测覆盖率 no-regression 门禁
+    description: >-
+      Line-coverage no-regression gate for libs/tools, committed baseline in
+      coverage-baseline.json. Independent of Coveralls, which stays main-only
+      and non-blocking (badge/trend reporting only).
+    proofs:
+      - libs/tests/test_coverage_regression.py
   ops.recovery:
     owner: docs/ssot/ops.recovery.md
     summary: 故障恢复、Vault Unseal

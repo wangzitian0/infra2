@@ -49,6 +49,8 @@ htmlcov/
 .hypothesis/
 playwright-report/
 test-results/
+# docs/ssot/coverage-baseline.json is intentionally tracked (coverage no-regression floor)
+/coverage/
 
 # Environment variables
 .env
