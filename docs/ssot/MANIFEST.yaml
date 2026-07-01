@@ -130,6 +130,7 @@ entries:
       and non-blocking (badge/trend reporting only).
     proofs:
       - libs/tests/test_coverage_regression.py
+      - libs/tests/test_coverage_regression_audit_cli.py
   ops.recovery:
     owner: docs/ssot/ops.recovery.md
     summary: 故障恢复、Vault Unseal

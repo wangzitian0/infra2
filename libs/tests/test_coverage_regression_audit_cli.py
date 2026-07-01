@@ -56,17 +56,40 @@ def test_missing_coverage_xml_exits_nonzero(
     assert "required coverage artifact is missing" in capsys.readouterr().err
 
 
-def test_first_run_with_no_baseline_exits_zero(
+def test_missing_baseline_without_update_flag_exits_nonzero(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """A missing baseline means it was deleted/not checked out, not a fresh repo —
+    docs/ssot/coverage-baseline.json is committed, so this must fail loud rather
+    than silently disable the gate."""
     xml_path = _cobertura(tmp_path, covered=50, valid=100)
 
     exit_code = main(
         ["--coverage-xml", str(xml_path), "--baseline", str(tmp_path / "b.json")]
     )
 
+    assert exit_code == 1
+    assert "no baseline found" in capsys.readouterr().err
+
+
+def test_update_baseline_establishes_baseline_when_none_exists(
+    tmp_path: Path,
+) -> None:
+    xml_path = _cobertura(tmp_path, covered=50, valid=100)
+    baseline_path = tmp_path / "b.json"
+
+    exit_code = main(
+        [
+            "--coverage-xml",
+            str(xml_path),
+            "--baseline",
+            str(baseline_path),
+            "--update-baseline",
+        ]
+    )
+
     assert exit_code == 0
-    assert "no committed baseline yet" in capsys.readouterr().out
+    assert json.loads(baseline_path.read_text(encoding="utf-8"))["lines_covered"] == 50
 
 
 def test_regression_against_baseline_exits_nonzero(

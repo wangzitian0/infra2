@@ -55,6 +55,7 @@ git add docs/ssot/coverage-baseline.json
 | 行为描述 | 测试文件 | 状态 |
 |----------|----------|------|
 | 覆盖率比对逻辑（解析/加载/写入/判定退化） | `libs/tests/test_coverage_regression.py` | ✅ Implemented |
+| CLI 接线（缺基线即失败、`--update-baseline` 复用同一判定） | `libs/tests/test_coverage_regression_audit_cli.py` | ✅ Implemented |
 | CI 门禁接线 | `.github/workflows/infra-ci.yml`「Gate coverage regression」 | ✅ Implemented |
 
 ---

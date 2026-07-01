@@ -52,11 +52,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"coverage_regression_audit: {exc}", file=sys.stderr)
         return 1
 
+    if baseline is None and not args.update_baseline:
+        print(
+            f"coverage_regression_audit: no baseline found at {args.baseline}, but "
+            "docs/ssot/coverage-baseline.json is a committed file in this repo — a "
+            "missing baseline here means it was deleted or not checked out, not a "
+            "genuine first run. Re-run with --update-baseline only if creating a "
+            "baseline for the first time is actually intended.",
+            file=sys.stderr,
+        )
+        return 1
+
     ok, message = check_no_regression(current, baseline)
     print(f"coverage_regression_audit: {message}")
 
     if args.update_baseline:
-        if baseline is not None and current["line_rate"] + 1e-6 < baseline["line_rate"]:
+        if not ok:
             print(
                 "coverage_regression_audit: refusing --update-baseline on a regression; "
                 "fix coverage first",
