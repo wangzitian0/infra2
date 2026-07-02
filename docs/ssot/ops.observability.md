@@ -162,7 +162,7 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 | L2 Platform | OpenPanel API | `/healthcheck` fails or synthetic `/track` nonce not queryable | P1 | `openpanel-api-http`, `openpanel-roundtrip` |
 | L2 Platform | OpenPanel ClickHouse (op-ch) | data dir unwritable / event store broken | P1 | Write-path healthcheck + `openpanel-roundtrip` |
 | L2 Platform | OpenPanel Worker / Dashboard | `/healthcheck` / `/api/healthcheck` fails | P1 / P2 | Live probes |
-| L2 Platform | Portal / Activepieces / Prefect | frontend / flags / server-health unavailable | P2 / P1 / P1 | Planned |
+| L2 Platform | Portal / Prefect | frontend / server-health unavailable | P2 / P1 | Planned |
 | L3 Finance Report | fr-postgres / fr-redis | app db / cache health fails | P0 / P1 | Planned |
 | L3 Finance Report | fr-app backend | OTEL ERROR/FATAL > 0 over 5m | P1 | code (`FinanceReportBackendErrorLogs`) |
 | L3 Finance Report | fr-app backend | RED SLO: 5xx > 5% 5m / p95 > 1500ms | P0/P1 | code (`FinanceReportHigh5xxRate`, `FinanceReportP95LatencyHigh`) |

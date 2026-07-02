@@ -21,7 +21,6 @@ if TYPE_CHECKING:
         run_with_status,
     )
     from libs.deploy.deployer import Deployer, make_tasks
-    from libs.config import Config
 
 __all__ = [
     # env
@@ -46,8 +45,6 @@ __all__ = [
     # deployer
     "Deployer",
     "make_tasks",
-    # config
-    "Config",
 ]
 
 
@@ -79,8 +76,4 @@ def __getattr__(name):
         from libs.deploy import deployer
 
         return getattr(deployer, name)
-    elif name == "Config":
-        from libs import config
-
-        return getattr(config, name)
     raise AttributeError(f"module 'libs' has no attribute {name!r}")

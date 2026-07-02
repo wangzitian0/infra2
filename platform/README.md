@@ -15,7 +15,7 @@ Platform services use **vault-init pattern**:
 |-------|----------|----------|
 | `01-09` | **Databases** | `01.postgres`, `02.redis`, `03.clickhouse`, `03.minio` |
 | `10-19` | **Auth, Observability & Alerting** | `10.authentik`, `11.signoz`, `12.alerting` |
-| `20-29` | **Portal & Applications** | `21.portal`, `22.activepieces`, `23.prefect` |
+| `20-29` | **Portal & Applications** | `21.portal`, `23.prefect` |
 
 ## Service Directory
 
@@ -32,15 +32,14 @@ platform/{nn}.{service}/
 
 ## Service Index
 
-- [Postgres](./01.postgres/README.md) - Database for Authentik, Activepieces, Prefect
-- [Redis](./02.redis/README.md) - Cache for Authentik, Activepieces; Messaging for Prefect (DB 1)
+- [Postgres](./01.postgres/README.md) - Database for Authentik, Prefect
+- [Redis](./02.redis/README.md) - Cache for Authentik; Messaging for Prefect (DB 1)
 - [ClickHouse](./03.clickhouse/README.md) - SigNoz storage
 - [MinIO](./03.minio/README.md) - S3-compatible object storage
 - [Authentik](./10.authentik/README.md) - SSO provider
 - [SigNoz](./11.signoz/README.md) - Observability platform
 - [Alerting Bridge](./12.alerting/README.md) - SigNoz to Feishu alert delivery
 - [Portal](./21.portal/README.md) - Internal dashboard
-- [Activepieces](./22.activepieces/README.md) - Workflow automation
 - [Prefect](./23.prefect/README.md) - Workflow orchestration (Prefect)
 
 ## Prerequisites
@@ -106,8 +105,8 @@ clickhouse ──► signoz ──► alerting
 
 | Service | Dependencies | Notes |
 |---------|--------------|-------|
-| postgres | vault | Database for authentik, activepieces, prefect |
-| redis | vault | Cache for authentik, activepieces |
+| postgres | vault | Database for authentik, prefect |
+| redis | vault | Cache for authentik |
 | clickhouse | - | Storage for signoz |
 | authentik | postgres, redis | SSO provider |
 | signoz | clickhouse | Observability platform |
