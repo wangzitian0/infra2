@@ -243,7 +243,8 @@ Recommended schedule after the rehearsal target is provisioned:
 | **Backup archive + checksum runner** | `tools/backup_runner.py` | ✅ Implemented |
 | **Backup freshness/checksum manifest** | `tools/backup_verification.py` | ✅ Implemented |
 | **Off-host restore rehearsal** | `tools/backup_restore_rehearsal.py` + `libs/tests/test_backup_verification.py` | ✅ Implemented |
-| **Vault Unseal 流程** | `vault status` | ✅ Manual |
+| **Vault Unseal 流程（自动）** | `bootstrap/05.vault/unsealer.py` 常驻自动解封;契约由 `libs/tests/test_vault_unsealer.py`(过期 Connect token 拒绝 / sync 非 ACTIVE / sealed 报不健康 / key 不足中止)+ `libs/tests/test_bootstrap_health.py`(healthcheck 接线)覆盖 | ✅ Automated |
+| **Vault Unseal 流程（手动兜底,SOP-001）** | `vault status` + `vault operator unseal` | ✅ Manual |
 | **vault-agent 凭证 re-provision (SOP-007)** | `vault.setup-approle --deploy` | ✅ Manual |
 
 ---

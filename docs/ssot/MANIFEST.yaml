@@ -29,10 +29,14 @@ entries:
     owner: docs/ssot/bootstrap.nodep.md
     summary: Bootstrap 组件（Dokploy、1Password、Vault）
     description: Bootstrap components including Dokploy, 1Password, and Vault.
+    proofs:
+      - libs/tests/test_bootstrap_health.py
   bootstrap.vars_and_secrets:
     owner: docs/ssot/bootstrap.vars_and_secrets.md
     summary: 变量与密钥管理、.env 结构
     description: Variable and secret source-of-truth contract.
+    proofs:
+      - libs/tests/test_env.py
   bootstrap.dns_and_cert:
     owner: docs/ssot/bootstrap.dns_and_cert.md
     summary: DNS 与证书自动化
@@ -81,6 +85,9 @@ entries:
     owner: docs/ssot/db.vault-integration.md
     summary: Per-App Token、故障排查
     description: Per-app Vault token database integration.
+    proofs:
+      - libs/tests/test_vault_self_refresh_audit.py
+      - libs/tests/test_vault_approle_invariants.py
   db.platform_pg:
     owner: docs/ssot/db.platform_pg.md
     summary: Platform PG (L1)
@@ -127,6 +134,8 @@ entries:
     owner: docs/ssot/ops.e2e-regressions.md
     summary: 部署验证、E2E 测试
     description: Deployment verification and E2E regression strategy.
+    proofs:
+      - e2e_regressions/tests/bootstrap/network_layer/test_network.py
   ops.test_coverage:
     owner: docs/ssot/ops.test_coverage.md
     summary: libs/tools 单测覆盖率 no-regression 门禁
@@ -141,6 +150,9 @@ entries:
     owner: docs/ssot/ops.recovery.md
     summary: 故障恢复、Vault Unseal
     description: Recovery, Vault unseal, and incident operations.
+    proofs:
+      - libs/tests/test_vault_unsealer.py
+      - libs/tests/test_backup_verification.py
   ops.storage:
     owner: docs/ssot/ops.storage.md
     summary: 备份策略、R2 同步
