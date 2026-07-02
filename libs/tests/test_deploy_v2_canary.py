@@ -13,7 +13,7 @@ import httpx
 import pytest
 
 import tools.deploy_v2_canary as canary
-from tools.deploy_contract import make_target
+from libs.deploy_contract import make_target
 from tools.deploy_v2_canary import _CANARY_PR, run_canary
 
 SHA_CODE = "e" * 40

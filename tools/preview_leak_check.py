@@ -42,7 +42,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from libs.common import normalize_env_name  # noqa: E402
-from tools.deploy_env_config import (  # noqa: E402
+from libs.deploy_env_config import (  # noqa: E402
     PREVIEW_ENVIRONMENT,
     PREVIEW_KINDS,
     PREVIEW_PROJECT,

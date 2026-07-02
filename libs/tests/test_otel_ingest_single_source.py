@@ -6,7 +6,7 @@ collector CORS allow-list were hardcoded/duplicated across two compose files,
 and ``otel-collector-config.yaml`` (a hand-maintained list). These tests pin that:
 
   * the endpoint is built once (libs.common) and reused by deploy.py + both deploy paths,
-  * the CORS allow-list is DERIVED from the FE origins (tools.deploy_env_config),
+  * the CORS allow-list is DERIVED from the FE origins (libs.deploy_env_config),
   * the rendered collector config + both compose files stay byte-for-behaviour identical
     to the pre-#368 effective values (endpoint + CORS origins unchanged).
 """
@@ -23,7 +23,7 @@ from libs.common import (
     OTLP_TRACES_PATH,
     otel_ingest_endpoint,
 )
-from tools.deploy_env_config import (
+from libs.deploy_env_config import (
     cors_allowed_origins,
     otel_env,
     otel_ingest_endpoint as cfg_otel_ingest_endpoint,
@@ -72,7 +72,7 @@ def test_endpoint_empty_without_domain():
 
 
 def test_config_endpoint_helper_matches_common_source():
-    # tools.deploy_env_config builds from the SAME libs.common constants.
+    # libs.deploy_env_config builds from the SAME libs.common constants.
     assert cfg_otel_ingest_endpoint(domain=DOMAIN) == _LEGACY_ENDPOINT
 
 

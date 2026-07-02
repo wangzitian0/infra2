@@ -315,6 +315,23 @@ git fetch --tags && git tag -l "v*.*.*" | sort -V | tail -5
 
 ---
 
+## 12. Config-drift T3 reconcile(prod ↔ release tag)
+
+> 治理弧线(T1 生成 / T2 强制 / T3 检测 / T4 隔离)中针对 **Dokploy 配置漂移**的 T3 检测器。
+> 回答一个问题:**线上 production 跑的配置,还是最新 release tag 声明的那份吗?**
+
+- **机制**:`tools/dokploy_config_drift.py` 对每个 iac_pinned 服务,把线上 Dokploy env 里的
+  `IAC_CONFIG_HASH` 与**从最新 release tag 重算**的 expected hash 比对(`contents_at_ref` 直接
+  `git cat-file` 读 tag 内容,不做 checkout)。结论按行分类:`in_sync / DRIFT / error /
+  not_deployed / structural / env_unavailable`。
+- **载体**:[`.github/workflows/config-drift-report.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/config-drift-report.yml)
+  ——**日报,report-only,绝不 remediate**(修复 = 正常走 release/reconcile,见 §2/§3;这符合
+  §"告警 vs 报告"的天级=报告铁律,归 [ops.obs](./ops.observability.md) 的 cadence 分层)。
+- **反静默铁律**:工具查不了的服务必须以 `error` 行大声出现在报告里——"0 drift 但其实跳过了
+  N 个服务"正是这个工具要消灭的谎言;每次运行前先 `--self-check`(fixture 自证)。
+
+---
+
 ## Used by
 
 - [docs/ssot/README.md](./README.md)

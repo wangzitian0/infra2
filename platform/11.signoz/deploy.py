@@ -49,10 +49,10 @@ class SigNozDeployer(Deployer):
 
         Substitutes ``${ENV_SUFFIX}`` (clickhouse DSN target) and the
         ``${OTEL_CORS_ALLOWED_ORIGINS}`` block, which is DERIVED from the FE origins
-        (tools.deploy_env_config.cors_allowed_origins) so the CORS allow-list can
+        (libs.deploy_env_config.cors_allowed_origins) so the CORS allow-list can
         never drift from the actual app domains it must mirror.
         """
-        from tools.deploy_env_config import cors_allowed_origins
+        from libs.deploy_env_config import cors_allowed_origins
 
         template_path = Path(__file__).with_name("otel-collector-config.yaml")
         content = template_path.read_text()

@@ -5,7 +5,7 @@
 ``(service, type, version_ref, iac_ref)``. ``type`` is the discriminant: it interprets
 ``version_ref`` (PR# / sha / tag / branch -> a resolved sha + the image_ref to pull),
 fails closed on a form it does not accept, derives the env + sub_domain, and declares its
-gates. It builds + validates the :class:`~tools.deploy_contract.DeployTarget` (so no
+gates. It builds + validates the :class:`~libs.deploy_contract.DeployTarget` (so no
 illegal target reaches a backend), enforces the gates + data-lane red lines, then routes
 to the existing, already-tested backend — passing the resolved ``image_ref``:
 
@@ -34,7 +34,7 @@ from libs.iac_runner_client import (
     poll_platform_deploy_status,
     trigger_platform_deploy,
 )
-from tools.deploy_contract import (
+from libs.deploy_contract import (
     _SHA_RE,
     DeployTarget,
     deploy_type_spec,
@@ -46,7 +46,7 @@ from tools.deploy_contract import (
     validate_iac_ref_form,
     validate_ref_form,
 )
-from tools.deploy_env_config import env_config
+from libs.deploy_env_config import env_config
 from libs.deploy.promote import deploy as _deploy_fixed
 from libs.deploy.promote import model_overrides_from_env
 from libs.deploy.preview import _validate_domain

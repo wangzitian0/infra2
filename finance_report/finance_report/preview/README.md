@@ -33,7 +33,7 @@ python -m tools.deploy_v2 --type preview/pr --version-ref 5 --iac-ref main --dom
 ```
 
 The alias → {env_suffix, domain, compose slug, telemetry label} mapping is the pure,
-unit-tested `tools/deploy_env_config.py::preview_alias(kind, value)`.
+unit-tested `libs/deploy_env_config.py::preview_alias(kind, value)`.
 
 ## Ephemeral DB
 

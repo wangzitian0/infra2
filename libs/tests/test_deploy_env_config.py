@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from tools import deploy_env_config as ec
+from libs import deploy_env_config as ec
 
 
 def test_staging_config():
@@ -147,7 +147,7 @@ def test_preview_alias_is_frozen():
 
 
 def test_preview_tag_alias_is_dns_safe():
-    from tools.deploy_env_config import preview_alias
+    from libs.deploy_env_config import preview_alias
 
     a = preview_alias("tag", "v1.2.3")
     assert a.value == "v1.2.3"  # canonical tag kept for the image ref
@@ -159,7 +159,7 @@ def test_preview_tag_alias_is_dns_safe():
 def test_preview_tag_alias_rejects_non_tag():
     import pytest
 
-    from tools.deploy_env_config import preview_alias
+    from libs.deploy_env_config import preview_alias
 
     with pytest.raises(ValueError, match="vX.Y.Z release tag"):
         preview_alias("tag", "1.2.3")  # missing leading v

@@ -442,7 +442,7 @@ def test_unknown_service_rejected(calls):
 
 
 def test_resolve_data_lane_by_env():
-    from tools.deploy_contract import make_deploy_target
+    from libs.deploy_contract import make_deploy_target
 
     def t(env, **kw):
         return make_deploy_target(
@@ -462,7 +462,7 @@ def test_resolve_data_lane_by_env():
 
 
 def test_enforce_returns_data_lane():
-    from tools.deploy_contract import make_deploy_target
+    from libs.deploy_contract import make_deploy_target
 
     target = make_deploy_target(
         service="finance_report/app", env="prod", code_version=SHA_CODE, iac_ref=SHA_IAC
@@ -478,7 +478,7 @@ def cli(monkeypatch):
     """Drive deploy_v2.main with client + deploy_v2 faked — no resolve, no Dokploy."""
     import json
 
-    from tools.deploy_contract import make_target
+    from libs.deploy_contract import make_target
 
     rec = {}
     import libs.dokploy as dk

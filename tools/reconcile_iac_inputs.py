@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from libs.deploy_dependencies import explain_fanout
-from tools.deploy_contract import all_service_keys, service_spec
+from libs.deploy_contract import all_service_keys, service_spec
 
 MANIFEST_PATH = "docs/ssot/deploy-dependencies.yaml"
 

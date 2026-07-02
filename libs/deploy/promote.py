@@ -20,7 +20,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from tools.deploy_env_config import env_config, otel_env
+from libs.deploy_env_config import env_config, otel_env
 from tools.deploy_failure_snapshot import emit_failure_snapshot
 from tools.openpanel_clients import openpanel_env
 from tools.resolve_deploy_ref import resolve_to_sha
@@ -283,7 +283,7 @@ def deploy(
     # Inject it here (single source: tools.openpanel_clients) for the fixed envs
     # this path handles (staging/production); empty for any env without a project.
     env_vars.update(openpanel_env(env))
-    # #368: FE OTLP endpoint built ONCE (tools.deploy_env_config.otel_env) and injected
+    # #368: FE OTLP endpoint built ONCE (libs.deploy_env_config.otel_env) and injected
     # here so the compose consumes it instead of re-constructing the otel.<domain> URL.
     env_vars.update(otel_env(domain=domain))
     if model_overrides:

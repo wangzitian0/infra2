@@ -34,7 +34,7 @@ from dataclasses import dataclass
 
 import httpx  # transport errors from libs.dokploy surface as httpx exceptions
 
-from tools.deploy_contract import DeployTarget
+from libs.deploy_contract import DeployTarget
 from tools.deploy_v2 import _CANARY_PR, deploy_v2
 from libs.deploy.preview import down
 

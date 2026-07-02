@@ -35,7 +35,7 @@ from urllib.request import Request, urlopen
 
 import httpx  # the injected Dokploy client raises httpx errors on a transient API blip
 
-from tools.deploy_env_config import (
+from libs.deploy_env_config import (
     PREVIEW_ENVIRONMENT,
     PREVIEW_PROJECT,
     PreviewAlias,
