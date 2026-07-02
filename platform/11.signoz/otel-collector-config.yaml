@@ -24,7 +24,7 @@ receivers:
         endpoint: 0.0.0.0:4318
         cors:
           # #368: this list is NOT hand-maintained — it is RENDERED at deploy time
-          # from the FE origins in tools/deploy_env_config.cors_allowed_origins so it
+          # from the FE origins in libs/deploy_env_config.cors_allowed_origins so it
           # cannot drift from the actual app domains. The placeholder below is replaced
           # by SigNozDeployer._render_collector_config (see platform/11.signoz/deploy.py).
           # Effective list (prod/staging from EnvConfig + preview aliases + local dev):

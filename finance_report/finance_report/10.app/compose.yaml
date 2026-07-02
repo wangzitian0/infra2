@@ -213,7 +213,7 @@ services:
       # request time (NOT build-time NEXT_PUBLIC baked into the shared image), so a
       # promote-not-rebuild image stays env-agnostic. deployment.environment + git
       # sha mirror the backend's OTEL_RESOURCE_ATTRIBUTES so FE/BE spans correlate.
-      # #368: the endpoint is built ONCE in tools.deploy_env_config.otel_env (single
+      # #368: the endpoint is built ONCE in libs.deploy_env_config.otel_env (single
       # source: libs.common.otel_ingest_endpoint) and injected by every deploy path
       # (deploy_primitive for staging/prod, preview_lifecycle for preview). Consumed
       # here, never re-constructed — no inline otel.<domain>/v1/traces literal. Empty

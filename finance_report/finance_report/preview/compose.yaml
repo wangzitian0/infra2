@@ -238,7 +238,7 @@ services:
       # Browser → SigNoz traces (Infra-014). Same public ingest path as staging/prod
       # (otel.${INTERNAL_DOMAIN}); deployment.environment carries this alias's ENV
       # token (main / pr-<N> / commit-<sha7>) so preview FE spans are filterable.
-      # #368: endpoint built ONCE in tools.deploy_env_config.otel_env (single source:
+      # #368: endpoint built ONCE in libs.deploy_env_config.otel_env (single source:
       # libs.common.otel_ingest_endpoint) and injected by preview_lifecycle — consumed
       # here, never re-constructed. Empty when unset → FE OTel SDK config-gates to no-op.
       NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT: ${NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT:-}

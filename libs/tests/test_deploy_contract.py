@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from tools.deploy_contract import (
+from libs.deploy_contract import (
     SERVICES,
     DeployTarget,
     ServiceSpec,
@@ -276,7 +276,7 @@ def test_platform_specs_are_derived_from_service_registry():
     # never hand-copied. prod_only must equal the Deployer's declared value.
     from libs.service_registry import service_attrs
 
-    from tools.deploy_contract import all_service_keys, service_spec
+    from libs.deploy_contract import all_service_keys, service_spec
 
     reg = service_attrs()
     assert set(all_service_keys()) == set(reg) | {"finance_report/app"}

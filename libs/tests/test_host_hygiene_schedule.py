@@ -68,7 +68,7 @@ def test_preview_exclusion_pattern_matches_real_container_names() -> None:
 
 def test_preview_exclusion_pattern_covers_every_alias_kind() -> None:
     # derived from the canonical PREVIEW_KINDS — a new kind can't silently fall out
-    from tools.deploy_env_config import PREVIEW_KINDS
+    from libs.deploy_env_config import PREVIEW_KINDS
 
     rx = re.compile(hh.PR_PREVIEW_CONTAINER_PATTERN)
     for kind in PREVIEW_KINDS:

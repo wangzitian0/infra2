@@ -299,14 +299,14 @@ def cors_allowed_origins(*, domain: str) -> list[str]:
 def otel_ingest_endpoint(*, domain: str) -> str:
     """The public browser-OTLP traces endpoint for FE compose env (#368).
 
-    Built from the SAME subdomain + path constants SigNoz's deploy.py uses
-    (libs.common), so the FE endpoint and the ingest domain SigNoz registers can
-    never disagree. The ingest domain is shared across envs (no env suffix), so
-    this is independent of the deploy env — only the base domain varies.
+    Delegates to libs.common.otel_ingest_endpoint (the single construction
+    point SigNoz's deploy.py also uses), so the FE endpoint and the ingest
+    domain SigNoz registers can never disagree. The ingest domain is shared
+    across envs (no env suffix) — only the base domain varies.
     """
-    from libs.common import OTEL_INGEST_SUBDOMAIN, OTLP_TRACES_PATH
+    from libs.common import otel_ingest_endpoint as _build
 
-    return f"https://{OTEL_INGEST_SUBDOMAIN}.{domain}{OTLP_TRACES_PATH}"
+    return _build({"INTERNAL_DOMAIN": domain})
 
 
 def otel_env(*, domain: str) -> dict[str, str]:

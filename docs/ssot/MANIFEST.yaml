@@ -114,12 +114,15 @@ entries:
     summary: CI/CD 流程、GitOps
     description: >-
       Delivery contract (single owner) — CI/CD, environment TRIGGER model,
-      tag-driven reconcile, deploy_v2 front door, and the RELEASE model
-      (infra2 = independently-released artifact; tag = the live platform version).
+      tag-driven reconcile, deploy_v2 front door, the RELEASE model
+      (infra2 = independently-released artifact; tag = the live platform version),
+      and the T3 config-drift reconcile (§12: prod IAC_CONFIG_HASH vs release tag,
+      daily report-only via config-drift-report.yml).
     proofs:
       - libs/tests/test_iac_runner_deploy_result.py
       - libs/tests/test_pipeline_stage_contract.py
       - libs/tests/test_reconcile_iac_inputs.py
+      - libs/tests/test_dokploy_config_drift.py
   ops.e2e:
     owner: docs/ssot/ops.e2e-regressions.md
     summary: 部署验证、E2E 测试

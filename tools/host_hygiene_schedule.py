@@ -20,7 +20,7 @@ import json
 import sys
 from urllib.parse import quote
 
-from tools.deploy_env_config import PREVIEW_KINDS
+from libs.deploy_env_config import PREVIEW_KINDS
 
 DEFAULT_SCHEDULE_NAME = "finance-report-vps-host-hygiene"
 DEFAULT_CRON_EXPRESSION = "17 3,9,15,21 * * *"
