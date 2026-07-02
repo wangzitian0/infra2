@@ -1,21 +1,40 @@
 # Infra2 CLI Tools
 
-Standalone `invoke` namespaces loaded by `tools/loader.py`.
+`tools/` holds two kinds of entry points — both are **entry points only**;
+reusable logic belongs in `libs/` (see the division-of-labor note below):
 
-## Runner
+1. **Invoke namespaces** — interactive CLI tasks loaded by `tools/loader.py`
+   (`invoke <namespace>.<task>`).
+2. **Standalone scripts** — non-interactive entry points run by CI gates,
+   scheduled workflows, or as long-running sidecars (`python tools/<script>.py`).
+   Examples: `deploy_v2.py` (deploy front door), `deploy_guard_audit.py` /
+   `lint_platform_image_pins.py` / `coverage_regression_audit.py` (infra-ci
+   gates), `reconcile_iac_inputs.py` (tag reconcile), `out_of_band_watchdog.py`
+   / `watchdog_weekly_digest.py` (scheduled watchdogs), `deploy_queue_guard.py`
+   (alerting-stack sidecar), `dns_drift_report.py` / `dokploy_config_drift.py`
+   (drift reports).
+
+## Division of labor (`libs/` vs `tools/`)
+
+- **`libs/`** — importable, unit-testable logic (no `__main__`, no argv).
+- **`tools/`** — thin entry points: argv parsing, env wiring, exit codes.
+  A tool that grows real logic should push it down into `libs/` so it gets
+  covered by `libs/tests` (pattern: `tools/deploy_guard_audit.py` →
+  `libs/deploy_dependencies.py`; `tools/lint_platform_image_pins.py` →
+  `libs/image_pins.py`). Several older scripts still carry embedded logic —
+  treat that as debt to sink, not a pattern to copy.
+
+## Runner (invoke namespaces)
 
 - Use `invoke` inside an activated venv, or prefix with `uv run` when using uv.
 - List all tasks: `invoke --list` (未激活虚拟环境时用 `uv run invoke --list`).
 
-## Namespaces
+## Invoke namespaces
 
 | Namespace | Entry | Purpose |
 |-----------|-------|---------|
 | `env` | `tools/env_tool.py` | Remote env/secret SSOT operations |
 | `dokploy` | `tools/dokploy_env.py` | Dokploy project/environment helpers |
-| `dokploy_route_canary.py` | `tools/dokploy_route_canary.py` | Fast-fail Dokploy worker, Docker, Traefik, and public route probe |
-| `backup_restore_rehearsal.py` | `tools/backup_restore_rehearsal.py` | Restore the latest verified off-host backup into an explicitly throwaway Postgres target |
-| `out_of_band_watchdog.py` | `tools/out_of_band_watchdog.py` | GitHub-hosted direct Feishu watchdog for host, bridge, Worker, and Dokploy route-canary liveness |
 | `local` | `tools/local_init.py` | Local CLI checks and bootstrap helpers |
 | `vault-audit` | `tools/vault_audit.py` | Read-only Vault app-token self-refresh audit |
 

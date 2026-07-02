@@ -53,6 +53,10 @@
 ### Rule 5: 传播冷却 (Cooldown Period)
 在部署 DNS 或证书后，必须在健康检查前加入等待窗口（建议 60s+），以应对解析延迟。
 
+### Rule 6: 镜像必须钉版本 (No Bare `:latest`)
+platform compose 中的镜像禁止裸 `:latest`——上游静默漂移且不可复现（#253/#255 prefect 卡死的根因类别）。至少钉具体版本，推荐钉 digest（`image: repo:tag@sha256:...`）。
+- **机械守卫**：`tools/lint_platform_image_pins.py`（infra-ci 阻断）；逻辑在 `libs/image_pins.py`，proof `libs/tests/test_image_pins.py`。
+
 ---
 
 ## 4. 变量与密钥链条守则
