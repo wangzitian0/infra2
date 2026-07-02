@@ -9,7 +9,6 @@
 - `dokploy` wraps the Dokploy REST API for compose deployments.
 - `backup_restore` verifies off-host backup manifests and builds guarded restore rehearsal plans.
 - `console` helpers keep CLI output consistent (Rich).
-- `Config` is a legacy wrapper around secrets (avoid for new code).
 
 ## Module Map
 
@@ -23,7 +22,6 @@
 | `backup_restore.py` | Off-host backup restore rehearsal helpers | `latest_artifact_for_service()`, `build_postgres_rehearsal_plan()`, `run_postgres_restore_rehearsal()` |
 | `dokploy_route_canary.py` | Dynamic route canary | `run_route_canary()`, `render_canary_compose()` |
 | `pipeline_stage_contract.py` | Env x Stage delivery evidence contract | `make_stage_result()`, `acceleration_allowed()`, `detect_disagreement()` |
-| `config.py` | Legacy compatibility wrapper | `Config` |
 
 ## Usage Patterns
 
@@ -65,14 +63,6 @@ vps_host = init.get("VPS_HOST")
 ### Deployer-based tasks
 ```python
 from libs.deploy.deployer import Deployer, make_tasks
-```
-
-### Config (legacy wrapper)
-```python
-from libs.config import Config
-
-config = Config(project="platform", env="production", service="postgres")
-db_pass = config.get_secret("POSTGRES_PASSWORD")
 ```
 
 ## CLI Output Conventions

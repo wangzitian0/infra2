@@ -11,7 +11,6 @@ class PipelineEnvironment(StrEnum):
 
     LOCAL = "local"
     PR = "pr"
-    PR_PREVIEW = "pr-preview"
     STAGING = "staging"
     PRODUCTION = "production"
 
@@ -223,12 +222,17 @@ def validate_stage_result(result: StageResult) -> None:
         raise ValueError("duration_ms must be non-negative")
     if result.deadline_ms < 0:
         raise ValueError("deadline_ms must be non-negative")
-    if result.status == StageStatus.FAIL and result.failure_domain == FailureDomain.NONE:
+    if (
+        result.status == StageStatus.FAIL
+        and result.failure_domain == FailureDomain.NONE
+    ):
         raise ValueError("failed stages must include failure_domain")
     if result.status == StageStatus.SKIP and not (
         result.skipped_reason or result.suppressed_reason
     ):
-        raise ValueError("skipped stages must include skipped_reason or suppressed_reason")
+        raise ValueError(
+            "skipped stages must include skipped_reason or suppressed_reason"
+        )
     if result.current_stage_age_ms < 0:
         raise ValueError("current_stage_age_ms must be non-negative")
 
@@ -260,15 +264,18 @@ def detect_disagreement(results: list[StageResult]) -> DisagreementKind:
         results, PipelineStage.ROUTE_CANARY
     ):
         return DisagreementKind.HEARTBEAT_PUBLIC_ROUTE
-    if _has_fail(results, FailureDomain.DOKPLOY_WORKER_OR_DEPLOYMENT_RECORD) and _has_pass(
-        results, PipelineStage.WATCHDOG
-    ):
+    if _has_fail(
+        results, FailureDomain.DOKPLOY_WORKER_OR_DEPLOYMENT_RECORD
+    ) and _has_pass(results, PipelineStage.WATCHDOG):
         return DisagreementKind.FALLBACK_PUBLIC_ROUTE
     return DisagreementKind.NONE
 
 
 def _has_pass(results: list[StageResult], stage: PipelineStage) -> bool:
-    return any(result.stage == stage and result.status == StageStatus.PASS for result in results)
+    return any(
+        result.stage == stage and result.status == StageStatus.PASS
+        for result in results
+    )
 
 
 def _has_fail(results: list[StageResult], domain: FailureDomain) -> bool:

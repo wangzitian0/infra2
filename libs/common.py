@@ -245,28 +245,3 @@ def check_service(c: "Context", service: str, health_cmd: str) -> dict:
 
     error(f"{container}: not ready")
     return {"is_ready": False, "details": "Unhealthy"}
-
-
-def parse_env_file(path: str) -> list[str]:
-    """Parse .env file and return list of keys"""
-    if not os.path.exists(path):
-        return []
-
-    keys = []
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                key = line.split("=", 1)[0].strip()
-                if key.lower().startswith("export "):
-                    key = key[7:]
-                keys.append(key)
-    return keys
-
-
-# Re-export generate_password for backward compatibility
-def generate_password(length: int = 24) -> str:
-    """Generate secure random password (re-exported from libs.env)"""
-    from libs.env import generate_password as _gen
-
-    return _gen(length)
