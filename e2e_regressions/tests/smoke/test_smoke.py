@@ -3,6 +3,7 @@ End-to-end smoke tests covering deployment completion scenarios.
 
 These tests verify the complete deployment stack is operational.
 """
+
 import pytest
 import httpx
 from playwright.async_api import Page
@@ -29,14 +30,16 @@ async def test_minio_health(config: TestConfig):
     async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
         # Console should return 200 (HTML login page)
         console_resp = await client.get(config.MINIO_CONSOLE_URL)
-        assert console_resp.status_code == 200, \
+        assert console_resp.status_code == 200, (
             f"MinIO Console returned {console_resp.status_code}"
-        
+        )
+
         # S3 API health check
         api_health_url = f"{config.MINIO_API_URL}/minio/health/live"
         api_resp = await client.get(api_health_url)
-        assert api_resp.status_code == 200, \
+        assert api_resp.status_code == 200, (
             f"MinIO API health check returned {api_resp.status_code}"
+        )
 
 
 @pytest.mark.smoke
@@ -68,12 +71,12 @@ async def test_deployment_routing(config: TestConfig):
     async with httpx.AsyncClient(verify=False) as client:
         for url, name in services_domains:
             service_domain = urlparse(url).hostname
-            assert service_domain.endswith(internal_domain), \
+            assert service_domain.endswith(internal_domain), (
                 f"{name} should be on domain {internal_domain}, got {service_domain}"
+            )
 
             response = await client.get(url, timeout=10.0)
-            assert response.status_code < 500, \
-                f"{name} returned {response.status_code}"
+            assert response.status_code < 500, f"{name} returned {response.status_code}"
 
 
 @pytest.mark.e2e
@@ -90,15 +93,24 @@ async def test_deployment_security_headers(page: Page, config: TestConfig):
     ]
 
     found_security_headers = sum(1 for h in security_headers if h in headers_lower)
-    assert found_security_headers >= 0, "Dokploy should have some security headers configured"
+    # >= 1, not >= 0: a count can never be negative, so >= 0 was a tautology that
+    # stayed green even with zero security headers configured.
+    assert found_security_headers >= 1, (
+        f"Dokploy should send at least one of {security_headers}, got none "
+        f"(headers: {sorted(headers_lower)})"
+    )
 
 
 @pytest.mark.e2e
 async def test_deployment_error_pages(page: Page, config: TestConfig):
     """Verify error pages are working (404, etc)."""
-    await page.goto(f"{config.DOKPLOY_URL}/does-not-exist-xyz", wait_until="domcontentloaded")
+    await page.goto(
+        f"{config.DOKPLOY_URL}/does-not-exist-xyz", wait_until="domcontentloaded"
+    )
     title = await page.title()
-    assert title is not None, "Error page should load"
+    # page.title() returns "" (never None) when nothing rendered, so a
+    # not-None check was near-tautological; require actual content.
+    assert title, "Error page should render a non-empty title"
 
 
 @pytest.mark.e2e
@@ -109,10 +121,12 @@ async def test_deployment_certificate_validation(config: TestConfig):
             try:
                 await client.get(url, timeout=10.0)
             except httpx.SSLError as e:
-                assert "self" in str(e).lower() or "untrusted" in str(e).lower(), \
+                assert "self" in str(e).lower() or "untrusted" in str(e).lower(), (
                     f"SSL error (not self-signed): {e}"
-            except Exception:
-                assert True
+                )
+            # No catch-all: a timeout/DNS/connection failure here means the
+            # service is unreachable and must fail the test — the previous
+            # `except Exception: assert True` let a down service read green.
 
 
 @pytest.mark.e2e
@@ -143,10 +157,12 @@ async def test_deployment_performance_baseline(config: TestConfig):
             }
 
         for name, timing in metrics.items():
-            assert timing["avg_ms"] < 5000, \
+            assert timing["avg_ms"] < 5000, (
                 f"{name} average response time too high: {timing['avg_ms']:.0f}ms"
-            assert timing["max_ms"] < 10000, \
+            )
+            assert timing["max_ms"] < 10000, (
                 f"{name} max response time too high: {timing['max_ms']:.0f}ms"
+            )
 
 
 @pytest.mark.e2e
@@ -159,5 +175,4 @@ async def test_deployment_data_persistence(page: Page, config: TestConfig):
     await page.reload(wait_until="networkidle")
 
     second_load_title = await page.title()
-    assert first_load_title == second_load_title, \
-        "Dokploy should load consistently"
+    assert first_load_title == second_load_title, "Dokploy should load consistently"

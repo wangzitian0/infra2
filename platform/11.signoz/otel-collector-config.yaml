@@ -15,7 +15,8 @@ receivers:
       # non-browser client (curl/script) from POSTing OTLP straight to this endpoint.
       # This is therefore an intentionally *unauthenticated public ingest*; abuse is
       # bounded by the collector limits below (memory_limiter) and the edge rate-limit
-      # TODO, NOT by access control. Keep the CORS list in sync with the FE origins.
+      # TODO(Infra-014) below, NOT by access control. Keep the CORS list in sync with
+      # the FE origins.
       # See platform/11.signoz/README.md and ops.observability.md.
       # TODO(Infra-014): add edge per-IP rate limiting (e.g. a Dokploy/Traefik
       # ratelimit middleware managed via Dokploy, NOT a hand-written compose label) to
