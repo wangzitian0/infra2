@@ -52,6 +52,9 @@ test-results/
 # docs/ssot/coverage-baseline.json is intentionally tracked (coverage no-regression floor)
 /coverage/
 
+# Ad-hoc agent/debug run logs at the repo root
+/run_log*.txt
+
 # Environment variables
 .env
 .env.local
