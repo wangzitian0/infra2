@@ -105,7 +105,10 @@ entries:
     summary: 命名/标签规范、资源评估、防御性运维守则
     description: >-
       Infrastructure naming and labeling conventions, resource-assessment priority,
-      and defensive operations standards.
+      and defensive operations standards (including the no-bare-:latest image-pin
+      rule enforced by tools/lint_platform_image_pins.py in infra-ci).
+    proofs:
+      - libs/tests/test_image_pins.py
   ops.pipeline:
     owner: docs/ssot/ops.pipeline.md
     summary: CI/CD 流程、GitOps
@@ -187,6 +190,8 @@ entries:
       - libs/tests/test_watchdog_consistency_audit.py
       - libs/tests/test_availability_ledger.py
       - libs/tests/test_observability_dashboards.py
+      - libs/tests/test_deploy_queue.py
+      - libs/tests/test_deploy_queue_guard.py
   watchdog.signals:
     owner: docs/ssot/watchdog-signals.yaml
     summary: Active watchdog signal inventory and ownership
