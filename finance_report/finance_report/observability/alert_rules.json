@@ -50,7 +50,7 @@
       "match_type": "in_total",
       "eval_window": "15m0s",
       "frequency": "1m",
-      "promql": "sum(increase(finance_statement_parse_outcome{outcome=~\"failed|rejected\"}[15m]))",
+      "promql": "sum(increase(finance_statement_parse_outcome{outcome=~\"failure|rejected\"}[15m]))",
       "summary": "finance_report statement parse failures exceeded 3 in 15 minutes. Severity P1. Runbook: docs/ssot/ops.alerting.md SOP-004C."
     },
     {
