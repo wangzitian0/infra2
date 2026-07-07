@@ -1,0 +1,182 @@
+# TrueAlpha Application (web + llm)
+#
+# v1 deploy model: iac_pinned via deploy_v2 -> iac_runner -> `invoke ta-app.sync`.
+# Images are built and pushed to GHCR by the truealpha app repo's CI; this compose
+# pulls ${IMAGE_TAG:-latest}. Version-pinned staging/prod promotion (the
+# finance_report promote path) is deliberately deferred until the app has real
+# mart data to protect.
+#
+# The app repo owns the DB schema DDL (db/migrations, idempotent SQL) — see
+# ../01.postgres/README.md for the bootstrap command.
+services:
+  vault-agent:
+    init: true  # tini as PID1 reaps healthcheck ssl_client zombies
+    image: hashicorp/vault:1.15
+    container_name: truealpha-app-vault-agent${ENV_SUFFIX}
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    entrypoint:
+      - sh
+      - -c
+      - |
+        rm -f /vault/secrets/.env /vault/.token /vault/role_id /vault/secret_id 2>/dev/null || true
+        if [ -z "$$VAULT_ROLE_ID" ] || [ -z "$$VAULT_SECRET_ID" ]; then
+          echo "VAULT_ROLE_ID and VAULT_SECRET_ID are required"
+          exit 1
+        fi
+        if [ -z "$$VAULT_ADDR" ]; then
+          echo "VAULT_ADDR is required"
+          exit 1
+        fi
+        echo "$$VAULT_ROLE_ID" > /vault/role_id
+        echo "$$VAULT_SECRET_ID" > /vault/secret_id
+        # AppRole auto_auth: vault-agent logs in and renews/re-auths the token
+        # natively. No token_file decay, no manual renew loop.
+        exec vault agent -config=/etc/vault/vault-agent.hcl
+    environment:
+      VAULT_ADDR: ${VAULT_ADDR}
+      VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
+      VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
+      ENV: ${ENV}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - |
+          test -s /vault/secrets/.env && ! grep -q "<no value>" /vault/secrets/.env && test -s /vault/.token || exit 1
+          # vault token lookup THROTTLED to ~5min (token TTL is hours) — no 30s hammer (#292)
+          if [ -z "$$(find /tmp/.vault_hc -mmin -5 2>/dev/null)" ]; then
+            wget -q -T 3 --header="X-Vault-Token: $$(cat /vault/.token)" "$$VAULT_ADDR/v1/auth/token/lookup-self" -O /dev/null || exit 1
+            touch /tmp/.vault_hc
+          fi
+      interval: 30s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
+      - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
+      - secrets:/vault/secrets
+    networks:
+      - dokploy-network
+
+  llm:
+    image: ghcr.io/wangzitian0/truealpha-llm-service:${IMAGE_TAG:-latest}
+    pull_policy: always
+    container_name: truealpha-llm${ENV_SUFFIX}
+    restart: always
+    mem_limit: ${APP_LLM_MEM_LIMIT:-512m}
+    cpu_shares: ${TIER_CPU_SHARES:-1024}
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    depends_on:
+      vault-agent:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - |
+        # Wait for secrets file to be rendered by vault-agent
+        while [ ! -f /secrets/.env ]; do
+          echo "Waiting for secrets..."
+          sleep 1
+        done
+        set -a
+        . /secrets/.env
+        set +a
+        exec uvicorn llm_service.main:app --host 0.0.0.0 --port 8000
+    environment:
+      GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
+      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+    healthcheck:
+      # python stdlib probe: the uv-based slim image ships no curl/wget
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)" ]
+      start_period: 30s
+      interval: 10s
+      retries: 3
+      timeout: 5s
+    volumes:
+      - secrets:/secrets:ro
+    networks:
+      - dokploy-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.rule=Host(`truealpha${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
+      - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.service=truealpha-api${ENV_DOMAIN_SUFFIX}"
+      - "traefik.http.services.truealpha-api${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=8000"
+      # Strip /api prefix before forwarding to the llm-service
+      - "traefik.http.middlewares.truealpha-api-strip${ENV_DOMAIN_SUFFIX}.stripprefix.prefixes=/api"
+      - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.middlewares=truealpha-api-strip${ENV_DOMAIN_SUFFIX}@docker"
+
+  web:
+    image: ghcr.io/wangzitian0/truealpha-app-web:${IMAGE_TAG:-latest}
+    pull_policy: always
+    container_name: truealpha-web${ENV_SUFFIX}
+    restart: always
+    mem_limit: ${APP_WEB_MEM_LIMIT:-512m}
+    cpu_shares: ${TIER_CPU_SHARES:-1024}
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    depends_on:
+      vault-agent:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - |
+        # The web app reads the mart schema directly (truealpha init.md rule 5):
+        # DATABASE_URL comes from Vault like the llm-service's, no API hop.
+        while [ ! -f /secrets/.env ]; do
+          echo "Waiting for secrets..."
+          sleep 1
+        done
+        set -a
+        . /secrets/.env
+        set +a
+        exec node server.js
+    environment:
+      GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+    healthcheck:
+      # busybox wget ships with the alpine runtime image
+      test: [ "CMD", "wget", "-q", "-T", "3", "-O", "/dev/null", "http://localhost:3000" ]
+      start_period: 30s
+      interval: 30s
+      retries: 5
+      timeout: 10s
+    volumes:
+      - secrets:/secrets:ro
+    networks:
+      - dokploy-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.truealpha-web${ENV_DOMAIN_SUFFIX}.rule=Host(`truealpha${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`)"
+      - "traefik.http.routers.truealpha-web${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
+      - "traefik.http.routers.truealpha-web${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.truealpha-web${ENV_DOMAIN_SUFFIX}.service=truealpha-web${ENV_DOMAIN_SUFFIX}"
+      - "traefik.http.services.truealpha-web${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=3000"
+      # Lower priority than the /api route
+      - "traefik.http.routers.truealpha-web${ENV_DOMAIN_SUFFIX}.priority=1"
+
+volumes:
+  secrets:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=10m,mode=0755"
+
+networks:
+  dokploy-network:
+    external: true

@@ -27,6 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 _LAYERS: dict[str, Path] = {
     "platform": REPO_ROOT / "platform",
     "finance_report": REPO_ROOT / "finance_report" / "finance_report",
+    "truealpha": REPO_ROOT / "truealpha" / "truealpha",
 }
 
 PRODUCTION = "production"

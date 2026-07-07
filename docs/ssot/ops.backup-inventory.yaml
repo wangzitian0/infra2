@@ -60,3 +60,7 @@ services:
     data_path: /data/finance_report/redis
     method: redis_rdb_archive
     restore_command: stop Redis, restore dump.rdb, then start Redis.
+  - service_id: truealpha/postgres
+    data_path: /data/truealpha/postgres
+    method: pg_dump_plus_data_archive
+    restore_command: restore latest truealpha pg_dump, then reattach DATA_PATH if needed.
