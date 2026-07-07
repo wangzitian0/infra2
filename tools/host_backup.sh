@@ -41,6 +41,7 @@ platform/minio|path|/data/platform/minio${SUFFIX}
 platform/authentik|path|/data/platform/authentik${SUFFIX}
 finance_report/postgres|pg|finance_report-postgres${SUFFIX}
 finance_report/redis|redis|finance_report-redis${SUFFIX}|/data/finance_report/redis${SUFFIX}
+truealpha/postgres|pg|truealpha-postgres${SUFFIX}
 EOF
 )
 

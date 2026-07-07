@@ -173,3 +173,28 @@ services:
     vault_agent_container: finance_report-app-vault-agent${ENV_SUFFIX}
     app_containers:
       - finance_report-backend${ENV_SUFFIX}
+  - id: truealpha/postgres
+    project: truealpha
+    dokploy_service: postgres
+    # AppRole auth from day one (same model as finance_report post-#257/#259).
+    auth_method: approle
+    compose_path: truealpha/truealpha/01.postgres/compose.yaml
+    vault_agent_config_path: truealpha/truealpha/01.postgres/vault-agent.hcl
+    secret_template_path: truealpha/truealpha/01.postgres/secrets.ctmpl
+    vault_path_template: secret/data/truealpha/{env}/postgres
+    vault_agent_container: truealpha-postgres-vault-agent${ENV_SUFFIX}
+    app_containers:
+      - truealpha-postgres${ENV_SUFFIX}
+  - id: truealpha/app
+    project: truealpha
+    dokploy_service: app
+    # AppRole auth from day one (same model as finance_report post-#257/#259).
+    auth_method: approle
+    compose_path: truealpha/truealpha/10.app/compose.yaml
+    vault_agent_config_path: truealpha/truealpha/10.app/vault-agent.hcl
+    secret_template_path: truealpha/truealpha/10.app/secrets.ctmpl
+    vault_path_template: secret/data/truealpha/{env}/app
+    vault_agent_container: truealpha-app-vault-agent${ENV_SUFFIX}
+    app_containers:
+      - truealpha-llm${ENV_SUFFIX}
+      - truealpha-web${ENV_SUFFIX}

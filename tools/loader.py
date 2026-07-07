@@ -65,14 +65,15 @@ def _load_tasks_into_collection(
     return len(collection.tasks) > before
 
 
-def _load_project(ns, root, project_name, use_prefix=False):
+def _load_project(ns, root, project_name, prefix=""):
     """Load all services from a project directory
 
     Args:
         ns: Root namespace collection
         root: Root directory path
         project_name: Name of the project (e.g., 'platform', 'finance_report')
-        use_prefix: If True, prefix task names with project name to avoid conflicts
+        prefix: Optional task-name prefix (e.g. 'fr-') to avoid conflicts with
+            platform services. Must match discover_services() in libs/deploy/deployer.py.
     """
     project_dir = root / project_name
     if not project_dir.exists():
@@ -83,8 +84,8 @@ def _load_project(ns, root, project_name, use_prefix=False):
             continue
 
         name = comp_dir.name.split(".")[-1]
-        # Prefix service name with project name if needed (e.g., fr-postgres)
-        task_name = f"fr-{name}" if use_prefix else name
+        # Prefix service name if needed (e.g., fr-postgres, ta-postgres)
+        task_name = f"{prefix}{name}"
         coll = Collection()
         loaded = False
 
@@ -167,9 +168,10 @@ def load_all():
     for project in ["bootstrap", "platform", "finance"]:
         _load_project(ns, root, project)
 
-    # Load finance_report (nested structure: finance_report/finance_report/)
-    # Use prefix to avoid conflicts with platform/postgres, platform/redis
-    _load_project(ns, root / "finance_report", "finance_report", use_prefix=True)
+    # Load app layers (nested structure: <app>/<app>/)
+    # Prefixes avoid conflicts with platform/postgres, platform/redis
+    _load_project(ns, root / "finance_report", "finance_report", prefix="fr-")
+    _load_project(ns, root / "truealpha", "truealpha", prefix="ta-")
 
     # Load tools
     _load_tools(ns, root)

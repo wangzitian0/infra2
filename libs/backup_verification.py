@@ -213,6 +213,8 @@ def _service_id_from_deploy_path(relative_path: Path) -> str:
         return f"bootstrap/{parts[1].split('.', 1)[1].replace('-', '_')}"
     if parts[0] == "finance_report" and len(parts) >= 3:
         return f"finance_report/{parts[2].split('.', 1)[1]}"
+    if parts[0] == "truealpha" and len(parts) >= 3:
+        return f"truealpha/{parts[2].split('.', 1)[1]}"
     if parts[0] == "finance" and len(parts) >= 2:
         return f"finance/{parts[1]}"
     return "/".join(parts[:-1])

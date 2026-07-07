@@ -54,6 +54,7 @@ def discover_services() -> dict[str, str]:
     layers = {
         "platform": root / "platform",
         "finance_report": root / "finance_report" / "finance_report",
+        "truealpha": root / "truealpha" / "truealpha",
     }
 
     for layer, layer_path in layers.items():
@@ -74,7 +75,9 @@ def discover_services() -> dict[str, str]:
                 continue
 
             key = f"{layer}/{service_name}"
-            task_prefix = "fr-" if layer == "finance_report" else ""
+            # App layers get prefixed task names (tools/loader.py uses the same
+            # prefixes) to avoid colliding with platform/postgres etc.
+            task_prefix = {"finance_report": "fr-", "truealpha": "ta-"}.get(layer, "")
             service_map[key] = f"{task_prefix}{service_name}.sync"
 
     return service_map

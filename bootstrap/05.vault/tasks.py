@@ -399,6 +399,15 @@ def _vault_token_targets(root_dir: str) -> list[VaultTokenTarget]:
             },
             "finance_report",
         ),
+        (
+            "truealpha",
+            os.path.join(root_dir, "truealpha", "truealpha"),
+            {
+                "postgres": "01.postgres",
+                "app": "10.app",
+            },
+            "truealpha",
+        ),
     ]
 
     targets: list[VaultTokenTarget] = []
