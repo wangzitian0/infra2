@@ -95,8 +95,10 @@ services:
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
     healthcheck:
-      # python stdlib probe: the uv-based slim image ships no curl/wget
-      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)" ]
+      # python stdlib probe: the uv-based slim image ships no curl/wget.
+      # 127.0.0.1, not localhost: alpine/slim images often resolve localhost to
+      # ::1 first, and the server only listens on IPv4 -> spurious refused conns.
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)" ]
       start_period: 30s
       interval: 10s
       retries: 3
@@ -150,8 +152,10 @@ services:
       HOSTNAME: 0.0.0.0
       PORT: "3000"
     healthcheck:
-      # busybox wget ships with the alpine runtime image
-      test: [ "CMD", "wget", "-q", "-T", "3", "-O", "/dev/null", "http://localhost:3000" ]
+      # busybox wget ships with the alpine runtime image. 127.0.0.1, not
+      # localhost: busybox wget doesn't fall back across address families, and
+      # alpine resolves localhost to ::1 first while node only listens on IPv4.
+      test: [ "CMD", "wget", "-q", "-T", "3", "-O", "/dev/null", "http://127.0.0.1:3000" ]
       start_period: 30s
       interval: 30s
       retries: 5

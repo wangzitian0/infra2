@@ -31,6 +31,11 @@ path "secret/data/finance_report/+/*" {
   capabilities = ["create", "read", "update", "list"]
 }
 
+# TrueAlpha secrets for syncing app services (same rationale as finance_report).
+path "secret/data/truealpha/+/*" {
+  capabilities = ["create", "read", "update", "list"]
+}
+
 # KV v2 LIST resolves to the secret/metadata/ path, not secret/data/, so the `list`
 # capabilities above are no-ops for actual enumeration. Grant metadata read/list for the
 # service-secret paths the runner lists.
@@ -38,5 +43,8 @@ path "secret/metadata/platform/+/*" {
   capabilities = ["read", "list"]
 }
 path "secret/metadata/finance_report/+/*" {
+  capabilities = ["read", "list"]
+}
+path "secret/metadata/truealpha/+/*" {
   capabilities = ["read", "list"]
 }
