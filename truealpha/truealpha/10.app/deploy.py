@@ -1,3 +1,4 @@
+import shutil
 import sys
 
 from libs.common import get_env
@@ -60,6 +61,20 @@ class AppDeployer(Deployer):
             cls._ensure_never_expires(c, bucket_name)
             return
 
+        if shutil.which("docker") is None:
+            # The iac-runner deploys through the Dokploy API and has no docker
+            # CLI/socket, so create_app_bucket (docker exec ... mc) can never
+            # work from a deploy — that silent degradation is how the first
+            # truealpha staging deploys "succeeded" with no bucket. Point at
+            # the host-side path instead of warning vaguely.
+            warning(f"docker CLI unavailable — cannot provision bucket '{bucket_name}' from this deploy")
+            info(
+                "Run ONCE on the VPS host: VAULT_TOKEN=... bash "
+                "truealpha/truealpha/10.app/provision_bucket.sh <staging|production>, "
+                "then restart the app vault-agent."
+            )
+            return
+
         header("MinIO Bucket Setup", f"Creating raw-archive bucket: {bucket_name}")
         # lifecycle_days=0 means create_app_bucket ADDS no expiry rule — the raw
         # archive is the append-only, immutable source-of-record (point-in-time
@@ -99,6 +114,9 @@ class AppDeployer(Deployer):
         an ILM policy attached would silently keep deleting raw objects. The
         raw archive must never expire; clearing the rules makes that true
         regardless of the bucket's history."""
+        if shutil.which("docker") is None:
+            info("docker CLI unavailable — lifecycle check runs host-side via provision_bucket.sh")
+            return
         env_suffix = get_env().get("ENV_SUFFIX", "")
         container = f"platform-minio{env_suffix}"
         result = c.run(

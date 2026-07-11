@@ -28,6 +28,21 @@ class PostgresDeployer(Deployer):
     service_port = 5432
     service_name = "postgres"
 
+    # Host-loopback port per env (the ingestion runtime runs as HOST processes
+    # next to moomoo OpenD, and cannot route into the dokploy overlay). Fixed
+    # ports for the long-lived envs so host .env files stay stable; anything
+    # else (preview lanes) gets an ephemeral port.
+    _HOST_PORTS = {"staging": "127.0.0.1:15432", "production": "127.0.0.1:15433"}
+
+    @classmethod
+    def pre_compose(cls, c) -> dict | None:
+        env_vars = super().pre_compose(c)
+        if env_vars is None:
+            return None
+        deploy_env = env_vars.get("DEPLOY_ENV", "") or env_vars.get("ENV", "")
+        env_vars["TA_POSTGRES_HOST_PORT"] = cls._HOST_PORTS.get(deploy_env, "127.0.0.1:0")
+        return env_vars
+
 
 if shared_tasks:
     _tasks = make_tasks(PostgresDeployer, shared_tasks)

@@ -25,6 +25,16 @@ def test_service_key_from_path_layouts():
         service_key_from_path("finance_report/finance_report/10.app/compose.yaml")
         == "finance_report/app"
     )
+    # the missing truealpha branch made v1.1.23's reconcile drop
+    # truealpha/truealpha/10.app/* changes on the floor (no auto-promotion)
+    assert (
+        service_key_from_path("truealpha/truealpha/10.app/secrets.ctmpl")
+        == "truealpha/app"
+    )
+    assert (
+        service_key_from_path("truealpha/truealpha/01.postgres/compose.yaml")
+        == "truealpha/postgres"
+    )
     # bootstrap dirs use dashes in the service key
     assert (
         service_key_from_path("bootstrap/01.dokploy_install/x.sh")
