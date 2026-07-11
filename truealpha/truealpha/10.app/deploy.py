@@ -1,5 +1,6 @@
 import sys
 
+from libs.common import get_env
 from libs.console import header, info, success, warning
 from libs.deploy.deployer import Deployer, make_tasks
 
@@ -35,7 +36,10 @@ class AppDeployer(Deployer):
     @classmethod
     def _ensure_minio_bucket(cls, c):
         minio_shared = sys.modules.get("platform.03.minio.shared")
-        create_app_bucket = getattr(minio_shared, "create_app_bucket", None) if minio_shared else None
+        if not minio_shared:
+            warning("MinIO shared tasks module not loaded; skipping bucket creation")
+            return
+        create_app_bucket = getattr(minio_shared, "create_app_bucket", None)
         if not create_app_bucket:
             warning("MinIO shared task create_app_bucket not found; skipping bucket creation")
             return
@@ -52,12 +56,14 @@ class AppDeployer(Deployer):
 
         if existing_access_key and existing_secret_key:
             info("MinIO credentials already exist in Vault, skipping bucket creation")
+            # The never-expire invariant must hold for pre-existing buckets too.
+            cls._ensure_never_expires(c, bucket_name)
             return
 
         header("MinIO Bucket Setup", f"Creating raw-archive bucket: {bucket_name}")
-        # lifecycle_days=0 is load-bearing: the raw archive is the append-only,
-        # immutable source-of-record (point-in-time replay reads it forever) —
-        # NEVER auto-expire objects, unlike report/statement buckets.
+        # lifecycle_days=0 means create_app_bucket ADDS no expiry rule — the raw
+        # archive is the append-only, immutable source-of-record (point-in-time
+        # replay reads it forever), unlike report/statement buckets.
         minio_result = create_app_bucket(
             c,
             bucket_name=bucket_name,
@@ -71,6 +77,7 @@ class AppDeployer(Deployer):
         if not minio_result:
             warning("MinIO bucket creation failed, please configure manually")
             return
+        cls._ensure_never_expires(c, bucket_name)
 
         for key, value in (
             ("S3_ACCESS_KEY", minio_result["access_key"]),
@@ -82,6 +89,30 @@ class AppDeployer(Deployer):
                     success(f"Vault: {key} stored")
                 else:
                     warning(f"Failed to store {key} in Vault")
+
+    @classmethod
+    def _ensure_never_expires(cls, c, bucket_name):
+        """Remove ALL lifecycle rules from the raw-archive bucket.
+
+        create_app_bucket(lifecycle_days=0) only refrains from ADDING an expiry
+        rule — it never removes one, so a bucket that predates this deploy with
+        an ILM policy attached would silently keep deleting raw objects. The
+        raw archive must never expire; clearing the rules makes that true
+        regardless of the bucket's history."""
+        env_suffix = get_env().get("ENV_SUFFIX", "")
+        container = f"platform-minio{env_suffix}"
+        result = c.run(
+            f"docker exec {container} mc ilm rm --all --force local/{bucket_name}",
+            hide=True,
+            warn=True,
+        )
+        output = f"{result.stdout or ''} {result.stderr or ''}".lower()
+        if result.ok:
+            success(f"Lifecycle rules cleared on '{bucket_name}' — raw archive never expires")
+        elif "does not exist" in output or "no lifecycle" in output:
+            info(f"No lifecycle rules on '{bucket_name}' — raw archive never expires")
+        else:
+            warning(f"Could not clear lifecycle rules on '{bucket_name}', verify manually: {result.stderr}")
 
 
 if shared_tasks:
