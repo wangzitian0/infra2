@@ -48,10 +48,20 @@ docker exec "$MINIO" sh -c '. /secrets/.env && mc alias set local http://localho
 echo "== bucket (private, never-expire)"
 M mc mb "local/$BUCKET" --ignore-existing
 M mc anonymous set none "local/$BUCKET"
-M mc ilm rm --all --force "local/$BUCKET" 2>&1 | tail -1 || true
+# never-expire is load-bearing: only the "no lifecycle configured" case may
+# pass — any other ilm failure means the raw archive could still be expiring.
+ILM_OUT=$(M mc ilm rm --all --force "local/$BUCKET" 2>&1) || {
+  if ! echo "$ILM_OUT" | grep -qi "lifecycle configuration does not exist"; then
+    echo "FATAL: could not clear lifecycle rules: $ILM_OUT" >&2
+    exit 1
+  fi
+}
+echo never-expire-ok
 
 echo "== app user (secret rotates on every run)"
-SECRET=$(head -c 24 /dev/urandom | base64 | tr -d "/+=" | head -c 32)
+# 24 random bytes -> exactly 32 base64 chars (no padding); swap +/ for the
+# URL-safe pair instead of deleting (deletion shortens the secret).
+SECRET=$(head -c 24 /dev/urandom | base64 | tr '+/' '-_')
 if ! M mc admin user add local "$APP_USER" "$SECRET" >/dev/null 2>&1; then
   M mc admin user remove local "$APP_USER" >/dev/null 2>&1 || true
   M mc admin user add local "$APP_USER" "$SECRET" >/dev/null
@@ -67,8 +77,21 @@ cat > "$TMP_POLICY" <<POL
 POL
 docker cp "$TMP_POLICY" "$MINIO:/tmp/${POLICY}.json"
 rm -f "$TMP_POLICY"
-M mc admin policy create local "$POLICY" "/tmp/${POLICY}.json" 2>&1 | tail -1 || true
-M mc admin policy attach local "$POLICY" --user "$APP_USER" 2>&1 | tail -1 || true
+# The app user is useless without this policy — fail loudly on anything except
+# the idempotent already-exists/already-attached cases.
+CREATE_OUT=$(M mc admin policy create local "$POLICY" "/tmp/${POLICY}.json" 2>&1) || {
+  if ! echo "$CREATE_OUT" | grep -qiE "already exists"; then
+    echo "FATAL: policy create failed: $CREATE_OUT" >&2
+    exit 1
+  fi
+}
+ATTACH_OUT=$(M mc admin policy attach local "$POLICY" --user "$APP_USER" 2>&1) || {
+  if ! echo "$ATTACH_OUT" | grep -qiE "already|in effect"; then
+    echo "FATAL: policy attach failed: $ATTACH_OUT" >&2
+    exit 1
+  fi
+}
+echo policy-ok
 
 echo "== vault ($VAULT_PATH)"
 docker exec -e VAULT_TOKEN="$VAULT_TOKEN" -e VAULT_ADDR=http://127.0.0.1:8200 vault \
