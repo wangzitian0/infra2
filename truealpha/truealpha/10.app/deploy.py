@@ -1,5 +1,7 @@
 import sys
 
+from libs.common import get_env
+from libs.console import header, info, success, warning
 from libs.deploy.deployer import Deployer, make_tasks
 
 shared_tasks = sys.modules.get("truealpha.10.app.shared")
@@ -19,6 +21,98 @@ class AppDeployer(Deployer):
     subdomain = None
     service_port = 3000
     service_name = "web"
+
+    @classmethod
+    def pre_compose(cls, c) -> dict | None:
+        env_vars = super().pre_compose(c)
+        if env_vars is None:
+            return None
+        # Raw-archive bucket (truealpha runtime contract: immutable source
+        # bytes live in S3-compatible storage; Postgres raw.fetches keeps
+        # checksums + pointers). Same pattern as finance_report's bucket.
+        cls._ensure_minio_bucket(c)
+        return env_vars
+
+    @classmethod
+    def _ensure_minio_bucket(cls, c):
+        minio_shared = sys.modules.get("platform.03.minio.shared")
+        if not minio_shared:
+            warning("MinIO shared tasks module not loaded; skipping bucket creation")
+            return
+        create_app_bucket = getattr(minio_shared, "create_app_bucket", None)
+        if not create_app_bucket:
+            warning("MinIO shared task create_app_bucket not found; skipping bucket creation")
+            return
+
+        secrets = cls.secrets()
+        bucket_name = secrets.get("S3_BUCKET") or "truealpha-raw"
+        existing_access_key = secrets.get("S3_ACCESS_KEY")
+        existing_secret_key = secrets.get("S3_SECRET_KEY")
+
+        if bool(existing_access_key) ^ bool(existing_secret_key):
+            warning("Partial MinIO credentials found in Vault; generating a new access/secret pair")
+            existing_access_key = None
+            existing_secret_key = None
+
+        if existing_access_key and existing_secret_key:
+            info("MinIO credentials already exist in Vault, skipping bucket creation")
+            # The never-expire invariant must hold for pre-existing buckets too.
+            cls._ensure_never_expires(c, bucket_name)
+            return
+
+        header("MinIO Bucket Setup", f"Creating raw-archive bucket: {bucket_name}")
+        # lifecycle_days=0 means create_app_bucket ADDS no expiry rule — the raw
+        # archive is the append-only, immutable source-of-record (point-in-time
+        # replay reads it forever), unlike report/statement buckets.
+        minio_result = create_app_bucket(
+            c,
+            bucket_name=bucket_name,
+            access_key=existing_access_key,
+            secret_key=existing_secret_key,
+            enable_encryption=True,
+            lifecycle_days=0,
+            enable_versioning=False,
+            public_download=False,
+        )
+        if not minio_result:
+            warning("MinIO bucket creation failed, please configure manually")
+            return
+        cls._ensure_never_expires(c, bucket_name)
+
+        for key, value in (
+            ("S3_ACCESS_KEY", minio_result["access_key"]),
+            ("S3_SECRET_KEY", minio_result["secret_key"]),
+            ("S3_BUCKET", bucket_name),
+        ):
+            if not secrets.get(key):
+                if secrets.set(key, value):
+                    success(f"Vault: {key} stored")
+                else:
+                    warning(f"Failed to store {key} in Vault")
+
+    @classmethod
+    def _ensure_never_expires(cls, c, bucket_name):
+        """Remove ALL lifecycle rules from the raw-archive bucket.
+
+        create_app_bucket(lifecycle_days=0) only refrains from ADDING an expiry
+        rule — it never removes one, so a bucket that predates this deploy with
+        an ILM policy attached would silently keep deleting raw objects. The
+        raw archive must never expire; clearing the rules makes that true
+        regardless of the bucket's history."""
+        env_suffix = get_env().get("ENV_SUFFIX", "")
+        container = f"platform-minio{env_suffix}"
+        result = c.run(
+            f"docker exec {container} mc ilm rm --all --force local/{bucket_name}",
+            hide=True,
+            warn=True,
+        )
+        output = f"{result.stdout or ''} {result.stderr or ''}".lower()
+        if result.ok:
+            success(f"Lifecycle rules cleared on '{bucket_name}' — raw archive never expires")
+        elif "does not exist" in output or "no lifecycle" in output:
+            info(f"No lifecycle rules on '{bucket_name}' — raw archive never expires")
+        else:
+            warning(f"Could not clear lifecycle rules on '{bucket_name}', verify manually: {result.stderr}")
 
 
 if shared_tasks:
