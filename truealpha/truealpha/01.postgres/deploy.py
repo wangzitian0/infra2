@@ -35,13 +35,16 @@ class PostgresDeployer(Deployer):
     _HOST_PORTS = {"staging": "127.0.0.1:15432", "production": "127.0.0.1:15433"}
 
     @classmethod
-    def pre_compose(cls, c) -> dict | None:
-        env_vars = super().pre_compose(c)
-        if env_vars is None:
-            return None
-        deploy_env = env_vars.get("DEPLOY_ENV", "") or env_vars.get("ENV", "")
-        env_vars["TA_POSTGRES_HOST_PORT"] = cls._HOST_PORTS.get(deploy_env, "127.0.0.1:0")
-        return env_vars
+    def compose_env_base(cls, env: dict | None = None) -> dict[str, str]:
+        # Injected here, NOT in pre_compose: the iac-runner's sync path builds
+        # the Dokploy env straight from compose_env_base ("without full
+        # pre_compose side effects"), so a pre_compose override never reaches a
+        # real deploy — the v1.1.24 rollout shipped an ephemeral port because
+        # of exactly that. compose_env_base flows through BOTH sync and the
+        # manual pre_compose/setup tasks.
+        base = super().compose_env_base(env)
+        base["TA_POSTGRES_HOST_PORT"] = cls._HOST_PORTS.get(base.get("ENV", ""), "127.0.0.1:0")
+        return base
 
 
 if shared_tasks:
