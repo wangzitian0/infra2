@@ -35,6 +35,27 @@ class AppDeployer(Deployer):
         return env_vars
 
     @classmethod
+    def ensure_runtime_secrets(cls, c=None) -> bool:
+        """Sync-path S3 readiness check.
+
+        The iac-runner's sync NEVER calls pre_compose (it builds env straight
+        from compose_env_base), so _ensure_minio_bucket above only runs in the
+        manual pre-compose/setup tasks — a real deploy would silently ship an
+        app with no S3 credentials. This hook IS called by sync; it cannot
+        provision (no docker CLI in the runner) but it can refuse to be silent."""
+        if not super().ensure_runtime_secrets(c):
+            return False
+        secrets = cls.secrets()
+        if not (secrets.get("S3_ACCESS_KEY") and secrets.get("S3_SECRET_KEY")):
+            warning("S3 credentials missing in Vault — the raw archive is not provisioned for this env")
+            info(
+                "Run ONCE on the VPS host: VAULT_TOKEN=... bash "
+                "truealpha/truealpha/10.app/provision_bucket.sh <staging|production>, "
+                "then restart the app vault-agent."
+            )
+        return True
+
+    @classmethod
     def _ensure_minio_bucket(cls, c):
         minio_shared = sys.modules.get("platform.03.minio.shared")
         if not minio_shared:
