@@ -36,6 +36,7 @@ def service_key_from_path(file_path: str) -> str | None:
     Mirrors the layout used by the iac-runner SERVICE_TASK_MAP / ALL_SERVICES:
     platform/<NN>.<svc>/...        -> platform/<svc>
     finance_report/finance_report/<NN>.<svc>/... -> finance_report/<svc>
+    truealpha/truealpha/<NN>.<svc>/... -> truealpha/<svc>
     bootstrap/<NN>.<svc>/...       -> bootstrap/<svc-with-dashes>
     Anything else (libs/, tools/, docs/, repo root) -> None (no own-dir owner).
     """
@@ -44,6 +45,8 @@ def service_key_from_path(file_path: str) -> str | None:
         return f"platform/{parts[1].split('.', 1)[1]}"
     if parts[0] == "finance_report" and len(parts) >= 3 and "." in parts[2]:
         return f"finance_report/{parts[2].split('.', 1)[1]}"
+    if parts[0] == "truealpha" and len(parts) >= 3 and "." in parts[2]:
+        return f"truealpha/{parts[2].split('.', 1)[1]}"
     if parts[0] == "bootstrap" and len(parts) >= 2 and "." in parts[1]:
         return f"bootstrap/{parts[1].split('.', 1)[1].replace('_', '-')}"
     return None

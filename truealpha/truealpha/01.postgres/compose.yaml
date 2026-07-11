@@ -89,6 +89,13 @@ services:
       interval: 30s
       retries: 5
       timeout: 5s
+    # Host-loopback publish for the host-side ingestion runtime: moomoo OpenD
+    # only listens on the HOST's 127.0.0.1, so sweeps must run as host
+    # processes — and dokploy-network is a swarm overlay the host cannot
+    # route into. deploy.py injects a per-env port (staging 15432,
+    # production 15433) so both stacks can coexist on one box.
+    ports:
+      - "${TA_POSTGRES_HOST_PORT:-127.0.0.1:0}:5432"
     volumes:
       - secrets:/secrets:ro
       - ${DATA_PATH}:/var/lib/postgresql/data
