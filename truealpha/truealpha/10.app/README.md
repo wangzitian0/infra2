@@ -8,8 +8,9 @@ Two containers from the truealpha app repo's GHCR images
   Vault-rendered `DATABASE_URL`; there is no web→llm API hop.
 - **llm** — FastAPI at the same host under `PathPrefix(/api)` (stripped). Scope is
   LLM-call orchestration only: MCP endpoint first, `/chat` later (Tier 3).
-- **data-engine is NOT deployed here** — Phase -1 sampling runs locally; Dagster
-  scheduling arrives with the app's Phase 3 and will get its own service dir.
+- **data-engine is deployed separately** from `../20.data_engine/` so real-source
+  scheduling, Vault scope, host-only OpenD access, resources, and promotion identity
+  remain independent from the web/LLM serving plane.
 
 ## v1 deploy model (deliberate simplification)
 

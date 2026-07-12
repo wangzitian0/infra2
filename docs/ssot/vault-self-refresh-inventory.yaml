@@ -198,3 +198,15 @@ services:
     app_containers:
       - truealpha-llm${ENV_SUFFIX}
       - truealpha-web${ENV_SUFFIX}
+  - id: truealpha/data_engine
+    project: truealpha
+    dokploy_service: data_engine
+    auth_method: approle
+    compose_path: truealpha/truealpha/20.data_engine/compose.yaml
+    vault_agent_config_path: truealpha/truealpha/20.data_engine/vault-agent.hcl
+    secret_template_path: truealpha/truealpha/20.data_engine/secrets.ctmpl
+    vault_path_template: secret/data/truealpha/{env}/data_engine
+    vault_agent_container: truealpha-data-engine-vault-agent${ENV_SUFFIX}
+    app_containers:
+      - truealpha-dagster-webserver${ENV_SUFFIX}
+      - truealpha-dagster-daemon${ENV_SUFFIX}
