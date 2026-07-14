@@ -8,9 +8,16 @@ path itself still needs a real smoke test (see the PR body).
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from libs.deploy import preview as pl
+
+COMPOSE_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "finance_report/finance_report/preview/compose.yaml"
+)
 
 # resolve_to_sha is patched in every test so no `git ls-remote` runs.
 FULL_SHA = "1af32e6daf17e2c58383dd2c0bfaea13bc11e517"
@@ -428,3 +435,38 @@ def test_up_image_ref_overrides_short_sha_for_releases():
     )
     _cid, env = client.env_updates[0]
     assert env["IMAGE_TAG"] == "v1.2.3" and env["GIT_COMMIT_SHA"] == "v1.2.3"
+
+
+def test_preview_entrypoint_overrides_environment_to_match_otel_tag():
+    """Regression test: every preview boot borrows PREVIEW_SECRET_ENV's (default
+    "staging") Vault secrets, which bake in ENVIRONMENT=staging — while
+    OTEL_RESOURCE_ATTRIBUTES is correctly templated per-alias by secrets.ctmpl
+    (deployment.environment=<this alias's ENV token>). Nothing overrode
+    ENVIRONMENT the way DATABASE_URL already is, so the app's
+    #1828 telemetry-tag-consistency guard (config.py::
+    _require_telemetry_contract_in_deployed_envs) compared a borrowed "staging"
+    against the correct per-alias tag and failed closed on every single preview
+    boot (finance_report#1851 investigation) -- alembic migrations crash-looped
+    10/10 attempts, the container never went healthy, and Dokploy's compose-up
+    call timed out with no output. ENV: ${ENV} must be passed into the backend
+    service, and the entrypoint must export ENVIRONMENT="$ENV" AFTER sourcing
+    /secrets/.env, mirroring the existing DATABASE_URL override exactly.
+    """
+    source = COMPOSE_PATH.read_text(encoding="utf-8")
+    backend_start = source.index("\n  backend:")
+    frontend_start = source.index("\n  frontend:")
+    backend_block = source[backend_start:frontend_start]
+
+    assert "ENV: ${ENV}" in backend_block, (
+        "backend service must receive ENV so the entrypoint can override "
+        "ENVIRONMENT with it"
+    )
+    database_url_idx = backend_block.index(
+        'export DATABASE_URL="$$PREVIEW_DATABASE_URL"'
+    )
+    environment_idx = backend_block.index('export ENVIRONMENT="$$ENV"')
+    assert environment_idx > database_url_idx, (
+        "ENVIRONMENT override must come AFTER `. /secrets/.env` is sourced "
+        "(same ordering requirement as the DATABASE_URL override), or Vault's "
+        "borrowed staging value would win"
+    )
