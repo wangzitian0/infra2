@@ -168,6 +168,36 @@ services:
       - "traefik.http.middlewares.finance-report-api-strip${ENV_DOMAIN_SUFFIX}.stripprefix.prefixes=/api"
       - "traefik.http.routers.finance-report-api${ENV_DOMAIN_SUFFIX}.middlewares=finance-report-api-strip${ENV_DOMAIN_SUFFIX}@docker"
 
+  prefect-worker:
+    # Durable-parse worker (EPIC-019). Runs the SAME promoted image as
+    # `backend` (promote-not-rebuild): the "default" Prefect work pool is
+    # process-type (flow runs execute as plain OS processes inside whichever
+    # container the worker is), so this image already has the flow's code
+    # and dependencies — no separate worker image/build.
+    image: ghcr.io/wangzitian0/finance_report-backend:${IMAGE_TAG:-latest}
+    pull_policy: always
+    container_name: finance_report-prefect-worker${ENV_SUFFIX}
+    restart: always
+    mem_limit: ${APP_WORKER_MEM_LIMIT:-512m}
+    cpu_shares: ${TIER_CPU_SHARES:-1024}
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    depends_on:
+      vault-agent:
+        condition: service_healthy
+    entrypoint:
+      - /bin/bash
+      - scripts/prefect_worker_entrypoint.sh
+    environment:
+      GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
+    volumes:
+      - secrets:/secrets:ro
+    networks:
+      - dokploy-network
+
   frontend:
     image: ghcr.io/wangzitian0/finance_report-frontend:${IMAGE_TAG:-latest}
     pull_policy: always
