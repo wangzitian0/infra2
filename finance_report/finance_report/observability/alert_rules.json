@@ -9,7 +9,7 @@
       "threshold": 0,
       "eval_window": "5m0s",
       "frequency": "1m",
-      "summary": "finance-report-backend emitted ERROR/FATAL logs in the last 5 minutes. Runbook: docs/ssot/ops.alerting.md SOP-004B."
+      "summary": "finance-report-backend emitted ERROR/FATAL logs in the last 5 minutes. Runbook: docs/ssot/ops.observability.md SOP-004B."
     },
     {
       "signal": "metrics",
@@ -23,7 +23,7 @@
       "eval_window": "5m0s",
       "frequency": "1m",
       "promql": "sum(rate(http_server_request_count{service_name=\"finance-report-backend\",http_response_status_code_class=\"5xx\"}[5m])) / clamp_min(sum(rate(http_server_request_count{service_name=\"finance-report-backend\"}[5m])), 1)",
-      "summary": "finance_report backend 5xx rate is above 5% for 5 minutes. Severity P0. Runbook: docs/ssot/ops.alerting.md SOP-004C."
+      "summary": "finance_report backend 5xx rate is above 5% for 5 minutes. Severity P0. Runbook: docs/ssot/ops.observability.md SOP-004C."
     },
     {
       "signal": "metrics",
@@ -37,7 +37,7 @@
       "eval_window": "5m0s",
       "frequency": "1m",
       "promql": "histogram_quantile(0.95, sum(rate(http_server_request_duration_bucket{service_name=\"finance-report-backend\"}[5m])) by (le))",
-      "summary": "finance_report backend p95 request latency is above 1500ms. Severity P1. Runbook: docs/ssot/ops.alerting.md SOP-004C."
+      "summary": "finance_report backend p95 request latency is above 1500ms. Severity P1. Runbook: docs/ssot/ops.observability.md SOP-004C."
     },
     {
       "signal": "metrics",
@@ -51,7 +51,7 @@
       "eval_window": "15m0s",
       "frequency": "1m",
       "promql": "sum(increase(finance_statement_parse_outcome{outcome=~\"failure|rejected\"}[15m]))",
-      "summary": "finance_report statement parse failures exceeded 3 in 15 minutes. Severity P1. Runbook: docs/ssot/ops.alerting.md SOP-004C."
+      "summary": "finance_report statement parse failures exceeded 3 in 15 minutes. Severity P1. Runbook: docs/ssot/ops.observability.md SOP-004C."
     },
     {
       "signal": "metrics",
@@ -65,7 +65,7 @@
       "eval_window": "15m0s",
       "frequency": "1m",
       "promql": "sum(increase(finance_reconciliation_match_outcome{outcome=~\"failed|error|anomaly\"}[15m]))",
-      "summary": "finance_report reconciliation anomaly or failure was observed. Severity P1. Runbook: docs/ssot/ops.alerting.md SOP-004C."
+      "summary": "finance_report reconciliation anomaly or failure was observed. Severity P1. Runbook: docs/ssot/ops.observability.md SOP-004C."
     },
     {
       "signal": "metrics",
@@ -79,7 +79,7 @@
       "eval_window": "5m0s",
       "frequency": "1m",
       "promql": "sum(increase(finance_rate_limit_rejected{service_name=\"finance-report-backend\"}[5m]))",
-      "summary": "finance_report rate-limit rejections exceeded 10 in 5 minutes. Severity P2. Runbook: docs/ssot/ops.alerting.md SOP-004C."
+      "summary": "finance_report rate-limit rejections exceeded 10 in 5 minutes. Severity P2. Runbook: docs/ssot/ops.observability.md SOP-004C."
     },
     {
       "signal": "metrics",
@@ -93,7 +93,7 @@
       "eval_window": "5m0s",
       "frequency": "1m",
       "promql": "sum(increase(finance_async_parse_failure{service_name=\"finance-report-backend\"}[5m]))",
-      "summary": "finance_report async statement parse task failure was observed. Severity P1. Runbook: docs/ssot/ops.alerting.md SOP-004C."
+      "summary": "finance_report async statement parse task failure was observed. Severity P1. Runbook: docs/ssot/ops.observability.md SOP-004C."
     }
   ]
 }

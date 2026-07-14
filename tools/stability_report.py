@@ -29,6 +29,14 @@ if str(ROOT) not in sys.path:
 from libs.alerting import deliver_out_of_band_text  # noqa: E402
 from libs.availability_ledger import build_report_message, summarize_ledger  # noqa: E402
 
+# Mirrors out_of_band_watchdog.DEFAULT_WORKER_STATUS_URL: the ledger lives on the
+# same public Worker at a sibling route, so it needs no separate operator-configured
+# secret to have a working default (finance_report#1851 G4 — a required config that
+# has no default silently no-ops instead of failing loud; #1653/#1654/#1655/infra2#402).
+DEFAULT_LEDGER_URL = (
+    "https://infra2-cloudflare-watchdog.wangzitian-ai.workers.dev/ledger"
+)
+
 
 def fetch_ledger(url: str, token: str, *, timeout: float = 20.0) -> dict[str, Any]:
     headers = {"Accept": "application/json"}
@@ -43,7 +51,9 @@ def run(env: Mapping[str, str], *, input_path: str | None) -> int:
     if input_path:
         ledger = json.loads(Path(input_path).read_text())
     else:
-        ledger_url = (env.get("INFRA2_WATCHDOG_LEDGER_URL") or "").strip()
+        ledger_url = (
+            env.get("INFRA2_WATCHDOG_LEDGER_URL") or DEFAULT_LEDGER_URL
+        ).strip()
         if not ledger_url:
             print("INFRA2_WATCHDOG_LEDGER_URL or --input is required", file=sys.stderr)
             return 2
@@ -61,7 +71,9 @@ def run(env: Mapping[str, str], *, input_path: str | None) -> int:
 
 def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", help="Local ledger JSON instead of the Worker endpoint.")
+    parser.add_argument(
+        "--input", help="Local ledger JSON instead of the Worker endpoint."
+    )
     args = parser.parse_args(argv)
     return run(env or os.environ, input_path=args.input)
 
