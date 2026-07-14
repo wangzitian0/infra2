@@ -8,8 +8,28 @@ const DEFAULT_TARGETS = [
   ["staging", "authentik-public-route", "https://sso-staging.zitian.party/-/health/live/", [200, 204, 302], "warning"],
   ["production", "finance-report-web-public-route", "https://report.zitian.party/", [200, 302, 307, 308], "critical"],
   ["production", "finance-report-api-public-route", "https://report.zitian.party/api/health", [200], "critical"],
+  // finance_report#1653: `?full=1` asserts every DEPENDENCY_MANIFEST.required_for(tier)
+  // dependency is present (not just DB+S3 liveness). Without this, a required dep
+  // (e.g. workflow_engine/Prefect) can be down for days — the plain /api/health above
+  // stays 200 the whole time — and the only thing that catches it is the next deploy's
+  // smoke test failing closed. This target makes that detection out-of-band, on the
+  // same 30-minute cadence as every other route here.
+  [
+    "production",
+    "finance-report-api-full-health-route",
+    "https://report.zitian.party/api/health?full=1",
+    [200],
+    "critical",
+  ],
   ["staging", "finance-report-web-public-route", "https://report-staging.zitian.party/", [200, 302, 307, 308], "warning"],
   ["staging", "finance-report-api-public-route", "https://report-staging.zitian.party/api/health", [200], "warning"],
+  [
+    "staging",
+    "finance-report-api-full-health-route",
+    "https://report-staging.zitian.party/api/health?full=1",
+    [200],
+    "warning",
+  ],
 ].map(([environment, name, url, statuses, severity]) => ({
   environment,
   name,
