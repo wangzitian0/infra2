@@ -55,6 +55,26 @@ def test_worker_default_targets_cover_enabled_public_routes_only() -> None:
     assert "https://signoz-staging.zitian.party" not in source
 
 
+def test_worker_probes_finance_report_full_dependency_health() -> None:
+    """finance_report#1653 / finance_report#1851 G1: a required-dependency outage
+    (e.g. the 10-day Prefect crash-loop) must be caught out-of-band within one
+    30-minute cycle, not only at the next deploy's smoke test. The plain
+    /api/health target only asserts DB+S3 liveness; ?full=1 asserts every
+    DEPENDENCY_MANIFEST.required_for(tier) dependency is present."""
+    source = WORKER.read_text(encoding="utf-8")
+
+    assert "https://report.zitian.party/api/health?full=1" in source
+    assert "https://report-staging.zitian.party/api/health?full=1" in source
+    assert "finance-report-api-full-health-route" in source
+    # Prod required-dep absence is a P0 SLA breach (Axiom E ¶2); staging is a warning.
+    prod_idx = source.index("https://report.zitian.party/api/health?full=1")
+    prod_block = source[prod_idx : prod_idx + 200]
+    assert '"critical"' in prod_block
+    staging_idx = source.index("https://report-staging.zitian.party/api/health?full=1")
+    staging_block = source[staging_idx : staging_idx + 200]
+    assert '"warning"' in staging_block
+
+
 def test_worker_heartbeat_endpoint_and_staleness_checks_are_required() -> None:
     """Infra-011.2: the external watchdog detects the probe runner going stale."""
     source = WORKER.read_text(encoding="utf-8")
