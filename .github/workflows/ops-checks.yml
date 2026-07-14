@@ -380,7 +380,13 @@ jobs:
         run: python tools/watchdog_weekly_digest.py
 
       - name: Build and send positive stability report
-        if: env.INFRA2_WATCHDOG_LEDGER_URL != ''
+        # finance_report#1851 G4: this step used to be gated on
+        # `env.INFRA2_WATCHDOG_LEDGER_URL != ''`, which silently skipped it every
+        # week since the variable was never set (no code path ever surfaced that
+        # gap — the containing job stayed green). stability_report.py now falls
+        # back to DEFAULT_LEDGER_URL when the var is absent, so this step always
+        # runs and any real misconfiguration fails the job loudly instead of
+        # skipping quietly.
         run: python tools/stability_report.py
 
   # deploy_v2 acceptance canary jobs
