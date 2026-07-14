@@ -141,6 +141,10 @@ services:
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      # This alias's ENV token (main / pr-<N> / commit-<sha7>); the entrypoint uses
+      # it to override ENVIRONMENT AFTER sourcing Vault secrets (see CHECKPOINT-1c) —
+      # mirrors the existing DATABASE_URL override for the same reason.
+      ENV: ${ENV}
       # BE->OpenPanel: preview shares the one preview project (injected by
       # preview_lifecycle from tools/openpanel_clients.py); empty => no-op.
       OPENPANEL_CLIENT_ID: ${OPENPANEL_CLIENT_ID:-}
@@ -174,6 +178,17 @@ services:
         # secrets (AI keys, S3) are kept so the app is fully functional.
         export DATABASE_URL="$$PREVIEW_DATABASE_URL"
         echo "✅ [CHECKPOINT-1b] DATABASE_URL overridden to the ephemeral preview DB"
+
+        # PREVIEW OVERRIDE: Vault rendered ENVIRONMENT from the borrowed
+        # PREVIEW_SECRET_ENV bucket (e.g. "staging" secrets), same as DATABASE_URL
+        # above. Unlike DATABASE_URL, nothing overrode it, so Settings.environment
+        # silently read "staging" for every preview while OTEL_RESOURCE_ATTRIBUTES
+        # (templated per-alias by secrets.ctmpl) correctly said deployment.environment=
+        # this alias's ENV token — a latent mismatch the #1828 telemetry-tag-consistency
+        # guard (config.py::_require_telemetry_contract_in_deployed_envs) turned into a
+        # hard boot failure. Override to this alias's own ENV so the two agree.
+        export ENVIRONMENT="$$ENV"
+        echo "✅ [CHECKPOINT-1c] ENVIRONMENT overridden to this alias's ENV token"
 
         echo "🔍 [CHECKPOINT-2] Starting database migrations (fresh ephemeral DB)..."
         max_retries=10
