@@ -170,10 +170,10 @@ services:
 
   prefect-worker:
     # Durable-parse worker (EPIC-019). Runs the SAME promoted image as
-    # `backend` (promote-not-rebuild): the "default" Prefect work pool is
-    # process-type (flow runs execute as plain OS processes inside whichever
-    # container the worker is), so this image already has the flow's code
-    # and dependencies — no separate worker image/build.
+    # `backend` (promote-not-rebuild): the dedicated "finance-report" Prefect
+    # work pool is process-type (flow runs execute as plain OS processes
+    # inside whichever container the worker is), so this image already has
+    # the flow's code and dependencies — no separate worker image/build.
     image: ghcr.io/wangzitian0/finance_report-backend:${IMAGE_TAG:-latest}
     pull_policy: always
     container_name: finance_report-prefect-worker${ENV_SUFFIX}
@@ -197,6 +197,21 @@ services:
       - secrets:/secrets:ro
     networks:
       - dokploy-network
+    # Override the backend image's baked-in HEALTHCHECK (curls :8000, the
+    # API's own port) — this container runs no HTTP server, so that probe
+    # always fails and the platform's breakdown-watch alerting pages
+    # "critical" every cycle on a container that is actually fine (found via
+    # a live Feishu alert flood, 2026-07-15). Probe the actual worker process
+    # (PID 1 after the entrypoint's `exec`) instead.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - |
+          tr '\0' ' ' < /proc/1/cmdline | grep -q 'prefect worker start' || exit 1
+      start_period: ${BACKEND_HEALTHCHECK_START_PERIOD:-60s}
+      interval: 30s
+      retries: 3
+      timeout: 5s
 
   frontend:
     image: ghcr.io/wangzitian0/finance_report-frontend:${IMAGE_TAG:-latest}
