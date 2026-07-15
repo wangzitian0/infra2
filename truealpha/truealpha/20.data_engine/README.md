@@ -22,7 +22,10 @@ reached through an SSH tunnel when needed. Postgres uses its existing loopback p
 
 ## Required Vault Fields
 
-Store these under `secret/truealpha/<environment>/data_engine`:
+The Vault KV v2 API/template path is
+`secret/data/truealpha/<environment>/data_engine`. With the Vault CLI, use the
+logical path `secret/truealpha/<environment>/data_engine` (the CLI inserts the
+`data/` segment).
 
 - `DATA_ENGINE_IMAGE_DIGEST`: full `sha256:<64 hex>` digest from the accepted image workflow.
 - `RELEASE_MANIFEST_ID`: content-addressed `release-manifest:<64 hex>` identifier.
@@ -37,7 +40,7 @@ DEPLOY_ENV=staging invoke vault.setup-approle --project=truealpha --service=data
 python -m tools.deploy_v2 \
   --service truealpha/data_engine \
   --type staging \
-  --iac-ref vX.Y.Z \
+  --iac-ref "$(git rev-parse HEAD)" \
   --domain zitian.party \
   --code-reviewed
 DEPLOY_ENV=staging invoke ta-data_engine.shared.status

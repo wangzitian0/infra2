@@ -10,7 +10,7 @@
 |---|---|
 | Service topology and network boundary | `truealpha/truealpha/20.data_engine/compose.yaml` |
 | Deployment inputs and runtime verification | `truealpha/truealpha/20.data_engine/deploy.py` |
-| Runtime secrets | `secret/truealpha/<environment>/data_engine` |
+| Runtime secrets (KV v2 API/template path) | `secret/data/truealpha/<environment>/data_engine` |
 | PostgreSQL environment endpoint | `truealpha/truealpha/01.postgres/deploy.py` |
 | Application capture contracts and assets | `wangzitian0/truealpha` data-engine image |
 

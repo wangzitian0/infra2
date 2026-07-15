@@ -17,6 +17,16 @@ def _load_deploy_module():
     return module
 
 
+def _load_shared_tasks_module():
+    spec = importlib.util.spec_from_file_location(
+        "truealpha_data_engine_shared_tasks", SERVICE_DIR / "shared_tasks.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class _Secrets:
     def __init__(self, values):
         self.values = values
@@ -44,6 +54,15 @@ def test_service_is_registry_discovered_and_not_public():
     assert metadata.project == "truealpha"
     assert metadata.subdomain is None
     assert metadata.service_name == "dagster-webserver"
+
+
+def test_status_health_commands_are_safe_for_remote_single_quote_wrapper():
+    module = _load_shared_tasks_module()
+
+    assert "'" not in module.WEBSERVER_HEALTH_COMMAND
+    assert "'" not in module.DAEMON_HEALTH_COMMAND
+    assert '\\"http://127.0.0.1:\\"' in module.WEBSERVER_HEALTH_COMMAND
+    assert "\\$DATABASE_URL" in module.DAEMON_HEALTH_COMMAND
 
 
 def test_compose_pins_one_digest_and_keeps_dagster_on_host_loopback():
