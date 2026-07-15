@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from infra2_sdk.deploy import DeployOperation, DeployType
 from infra2_sdk.refs import ResolvedRef
@@ -35,6 +36,59 @@ def payload(**overrides) -> dict:
     }
     data.update(overrides)
     return data
+
+
+def production_payload(**overrides) -> dict:
+    data = payload(
+        deploy_type="prod",
+        evidence={
+            "source_run_url": f"https://github.com/{APP_REPO}/actions/runs/100",
+            "source_run_id": "100",
+            "staging_run_url": f"https://github.com/{APP_REPO}/actions/runs/101",
+            "reviewed_change_url": f"https://github.com/{APP_REPO}/pull/10",
+        },
+    )
+    data.update(overrides)
+    return data
+
+
+def successful_run(run_id: int) -> dict:
+    run = {
+        "status": "completed",
+        "conclusion": "success",
+        "head_sha": SHA,
+        "html_url": f"https://github.com/{APP_REPO}/actions/runs/{run_id}",
+        "repository": {"full_name": APP_REPO},
+    }
+    if run_id == 100:
+        run.update(
+            {
+                "event": "push",
+                "head_branch": "v1.2.3",
+                "path": ".github/workflows/deploy.yml",
+                "display_title": "Release Images v1.2.3",
+            }
+        )
+    else:
+        run.update(
+            {
+                "event": "workflow_dispatch",
+                "head_branch": "main",
+                "path": ".github/workflows/deploy.yml",
+                "display_title": "Deploy Staging v1.2.3",
+            }
+        )
+    return run
+
+
+def merged_pull() -> dict:
+    return {
+        "state": "closed",
+        "merged_at": "2026-07-15T00:00:00Z",
+        "merge_commit_sha": SHA,
+        "html_url": f"https://github.com/{APP_REPO}/pull/10",
+        "base": {"ref": "main", "repo": {"full_name": APP_REPO}},
+    }
 
 
 def resolved(*args, **kwargs) -> ResolvedRef:
@@ -141,19 +195,11 @@ def test_remove_skips_remote_ref_resolution() -> None:
 
 
 def test_production_requires_repo_scoped_staging_and_review_urls() -> None:
-    production = payload(
-        deploy_type="prod",
-        evidence={
-            "source_run_url": f"https://github.com/{APP_REPO}/actions/runs/100",
-            "source_run_id": "100",
-            "staging_run_url": f"https://github.com/{APP_REPO}/actions/runs/101",
-            "reviewed_change_url": f"https://github.com/{APP_REPO}/pull/10",
-        },
-    )
+    production = production_payload()
     receiver.validate_request_authority(
         receiver.parse_request(production),
         sender="wangzitian0",
-        allow_production=True,
+        production_evidence_verifier=lambda request: None,
         resolve_image=resolved,
     )
     production["evidence"]["reviewed_change_url"] = (
@@ -163,27 +209,150 @@ def test_production_requires_repo_scoped_staging_and_review_urls() -> None:
         receiver.validate_request_authority(
             receiver.parse_request(production),
             sender="wangzitian0",
-            allow_production=True,
+            production_evidence_verifier=lambda request: None,
             resolve_image=resolved,
         )
 
 
-def test_production_request_is_disabled_until_remote_evidence_is_verified() -> None:
-    production = payload(
-        deploy_type="prod",
-        evidence={
-            "source_run_url": f"https://github.com/{APP_REPO}/actions/runs/100",
-            "source_run_id": "100",
-            "staging_run_url": f"https://github.com/{APP_REPO}/actions/runs/101",
-            "reviewed_change_url": f"https://github.com/{APP_REPO}/pull/10",
-        },
+def test_production_evidence_is_verified_from_github() -> None:
+    responses = {
+        f"/repos/{APP_REPO}/actions/runs/100": successful_run(100),
+        f"/repos/{APP_REPO}/actions/runs/101": successful_run(101),
+        f"/repos/{APP_REPO}/pulls/10": merged_pull(),
+    }
+    calls = []
+
+    def fetch(path: str) -> dict:
+        calls.append(path)
+        return responses[path]
+
+    receiver.verify_production_evidence(
+        receiver.parse_request(production_payload()),
+        fetch_json=fetch,
     )
-    with pytest.raises(ValueError, match="production app deploy requests are disabled"):
-        receiver.validate_request_authority(
-            receiver.parse_request(production),
-            sender="wangzitian0",
-            resolve_image=resolved,
+
+    assert calls == list(responses)
+
+
+@pytest.mark.parametrize(
+    "path,replacement,error",
+    [
+        ("actions/runs/100", {"conclusion": "failure"}, "source run.*success"),
+        ("actions/runs/101", {"head_sha": "b" * 40}, "staging run.*head_sha"),
+        (
+            "actions/runs/100",
+            {"repository": {"full_name": "wangzitian0/truealpha"}},
+            "source run.*repository",
+        ),
+        (
+            "actions/runs/100",
+            {"path": ".github/workflows/infra-ci.yml"},
+            "source run.*workflow",
+        ),
+        (
+            "actions/runs/101",
+            {"event": "push"},
+            "staging run.*event",
+        ),
+        ("pulls/10", {"merged_at": None}, "reviewed pull request.*merged"),
+        (
+            "pulls/10",
+            {"merge_commit_sha": "b" * 40},
+            "reviewed pull request.*merge_commit_sha",
+        ),
+        (
+            "pulls/10",
+            {"base": {"ref": "release", "repo": {"full_name": APP_REPO}}},
+            "reviewed pull request.*base",
+        ),
+    ],
+)
+def test_production_evidence_rejects_untrusted_remote_state(
+    path, replacement, error
+) -> None:
+    responses = {
+        f"/repos/{APP_REPO}/actions/runs/100": successful_run(100),
+        f"/repos/{APP_REPO}/actions/runs/101": successful_run(101),
+        f"/repos/{APP_REPO}/pulls/10": merged_pull(),
+    }
+    response_path = next(key for key in responses if path in key)
+    responses[response_path] = {**responses[response_path], **replacement}
+
+    with pytest.raises(ValueError, match=error):
+        receiver.verify_production_evidence(
+            receiver.parse_request(production_payload()),
+            fetch_json=responses.__getitem__,
         )
+
+
+@pytest.mark.parametrize(
+    "field,url",
+    [
+        (
+            "source_run_url",
+            f"https://github.com/{APP_REPO}/actions/runs/100/attempts/2",
+        ),
+        (
+            "staging_run_url",
+            f"https://github.com/{APP_REPO}/actions/runs/101?check_suite_focus=true",
+        ),
+        ("reviewed_change_url", f"https://github.com/{APP_REPO}/pull/10/files"),
+    ],
+)
+def test_production_evidence_requires_canonical_urls(field, url) -> None:
+    request_payload = production_payload()
+    request_payload["evidence"][field] = url
+
+    with pytest.raises(ValueError, match=field):
+        receiver.verify_production_evidence(
+            receiver.parse_request(request_payload),
+            fetch_json=lambda path: {},
+        )
+
+
+def test_github_evidence_fetch_uses_read_only_api_token(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+
+    def get(url, **kwargs):
+        calls.append((url, kwargs))
+        return httpx.Response(
+            200,
+            json={"status": "completed"},
+            request=httpx.Request("GET", url),
+        )
+
+    monkeypatch.setattr(receiver.httpx, "get", get)
+
+    assert receiver._fetch_github_json("/repos/example/app/actions/runs/1") == {
+        "status": "completed"
+    }
+    url, kwargs = calls[0]
+    assert url == "https://api.github.com/repos/example/app/actions/runs/1"
+    assert kwargs["headers"]["Authorization"] == "Bearer test-token"
+    assert kwargs["follow_redirects"] is False
+
+
+@pytest.mark.parametrize(
+    "response,error",
+    [
+        (httpx.Response(403, text="secret response"), "HTTP 403"),
+        (httpx.Response(200, content=b"{"), "JSONDecodeError"),
+        (httpx.Response(200, json=[]), "must be an object"),
+    ],
+)
+def test_github_evidence_fetch_fails_closed_without_leaking_response(
+    monkeypatch, response, error
+) -> None:
+    def get(url, **kwargs):
+        response.request = httpx.Request("GET", url)
+        return response
+
+    monkeypatch.setattr(receiver.httpx, "get", get)
+
+    with pytest.raises(ValueError, match=error) as exc_info:
+        receiver._fetch_github_json("/repos/example/app/actions/runs/1")
+    assert "secret response" not in str(exc_info.value)
 
 
 def test_iac_ref_is_latest_merged_release_for_fixed_envs(tmp_path) -> None:
@@ -217,22 +386,13 @@ def test_plan_builds_staging_and_production_deploy_v2_args(tmp_path) -> None:
     assert staging.iac_ref == "v1.1.28"
     assert staging.deploy_v2_args()[-2:] == ["--expected-sha", SHA]
 
-    production_payload = payload(
-        deploy_type="prod",
-        evidence={
-            "source_run_url": f"https://github.com/{APP_REPO}/actions/runs/100",
-            "source_run_id": "100",
-            "staging_run_url": f"https://github.com/{APP_REPO}/actions/runs/101",
-            "reviewed_change_url": f"https://github.com/{APP_REPO}/pull/10",
-        },
-    )
     production = receiver.make_plan(
-        production_payload,
+        production_payload(),
         sender="wangzitian0",
         domain="zitian.party",
         timeout=600,
         repo_root=tmp_path,
-        allow_production=True,
+        production_evidence_verifier=lambda request: None,
         resolve_image=resolved,
         runner=tags,
     )
@@ -293,17 +453,15 @@ def test_plan_cli_reads_payload_from_environment(monkeypatch, capsys, tmp_path) 
     )
 
 
-def test_cli_cannot_enable_production_requests(monkeypatch, capsys, tmp_path) -> None:
-    request = payload(
-        deploy_type="prod",
-        evidence={
-            "source_run_url": f"https://github.com/{APP_REPO}/actions/runs/100",
-            "source_run_id": "100",
-            "staging_run_url": f"https://github.com/{APP_REPO}/actions/runs/101",
-            "reviewed_change_url": f"https://github.com/{APP_REPO}/pull/10",
-        },
-    )
-    monkeypatch.setenv("APP_DEPLOY_REQUEST_JSON", json.dumps(request))
+def test_cli_fails_closed_when_production_evidence_is_unavailable(
+    monkeypatch, capsys, tmp_path
+) -> None:
+    monkeypatch.setenv("APP_DEPLOY_REQUEST_JSON", json.dumps(production_payload()))
+
+    def unavailable(request) -> None:
+        raise ValueError("remote verification unavailable")
+
+    monkeypatch.setattr(receiver, "verify_production_evidence", unavailable)
 
     result = receiver_cli.main(
         [
@@ -318,4 +476,4 @@ def test_cli_cannot_enable_production_requests(monkeypatch, capsys, tmp_path) ->
     )
 
     assert result == 1
-    assert "production app deploy requests are disabled" in capsys.readouterr().err
+    assert "remote verification unavailable" in capsys.readouterr().err

@@ -13,10 +13,13 @@ def workflow() -> dict:
 
 
 def test_receiver_has_only_the_versioned_repository_dispatch_trigger() -> None:
-    triggers = workflow()["on"]
+    definition = workflow()
+    triggers = definition["on"]
     assert triggers == {
         "repository_dispatch": {"types": ["app-deploy-request"]},
     }
+    assert definition["permissions"] == {"actions": "read", "contents": "read"}
+    assert definition["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
 
 
 def test_receiver_validates_before_canary_and_deploy() -> None:

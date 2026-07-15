@@ -24,7 +24,7 @@
 | `dokploy.py` | Dokploy API client | `DokployClient`, `get_dokploy()` |
 | `backup_restore.py` | Off-host backup restore rehearsal helpers | `latest_artifact_for_service()`, `build_postgres_rehearsal_plan()`, `run_postgres_restore_rehearsal()` |
 | `dokploy_route_canary.py` | Dynamic route canary | `run_route_canary()`, `render_canary_compose()` |
-| `app_deploy_request.py` | Fail-closed App request validation and deploy planning | `validate_request_authority()`, `make_plan()` |
+| `app_deploy_request.py` | Fail-closed App request validation, Production evidence verification, and deploy planning | `verify_production_evidence()`, `validate_request_authority()`, `make_plan()` |
 | `pipeline_stage_contract.py` | Compatibility import for `infra2_sdk.delivery` | `make_stage_result()`, `acceleration_allowed()`, `detect_disagreement()` |
 
 ## Usage Patterns
@@ -90,6 +90,7 @@ from libs.deploy.deployer import Deployer, make_tasks
 - `DokployClient.update_compose_env()` parses basic `KEY=VALUE` lines only (no quoted/escaped/multiline values).
 - Dokploy deployment proof uses `deployment.allByCompose` before falling back to embedded compose snapshots.
 - Dokploy API errors include method + endpoint context via `httpx` exceptions.
+- Production App requests use read-only GitHub API metadata to bind approved source/staging workflows and the merged review commit to the requested source SHA.
 - `VaultSecrets` reads `VAULT_ROOT_TOKEN` and `VAULT_ADDR` (or falls back to `https://vault.$INTERNAL_DOMAIN`).
 
 ## References

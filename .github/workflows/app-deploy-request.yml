@@ -1,12 +1,13 @@
 name: App deploy request
 
 # Cross-repository receiver for the infra2-sdk DeployRequest v1 contract. Applications
-# request a deployment; only infra2 holds Dokploy credentials and executes deploy_v2.
+# request a deployment; infra2 verifies Production evidence and alone executes deploy_v2.
 on:
   repository_dispatch:
     types: [app-deploy-request]
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -16,6 +17,7 @@ concurrency:
 env:
   APP_DEPLOY_REQUEST_JSON: ${{ toJSON(github.event.client_payload) }}
   APP_DEPLOY_REQUEST_SENDER: ${{ github.event.sender.login }}
+  GITHUB_TOKEN: ${{ github.token }}
   INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
 
 jobs:

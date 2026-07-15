@@ -22,7 +22,7 @@
 |------|----------------|------|
 | **IaC Input Reconcile** | [`reconcile-iac-inputs.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/reconcile-iac-inputs.yml) | **Release-tag** 触发(`push: tags: v*.*.*`):diff 上一 tag→本 tag,把 changed `iac_pinned` 服务以**该 tag** 为 `iac_ref` fan-out 给 `deploy_v2 → iac_runner`;config-hash gate 决定 no-op vs 重启。**不是 main-push、不是 sha。** |
 | **Deploy 前门 (`deploy_v2`)** | [`tools/deploy_v2.py`](https://github.com/wangzitian0/infra2/blob/main/tools/deploy_v2.py) · [`deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) | 统一部署坐标 `(service, type, version_ref, iac_ref)`;app + 平台、staging/prod、pinned ref。 |
-| **App Deploy Request Receiver** | [`app-deploy-request.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/app-deploy-request.yml) · [`libs/app_deploy_request.py`](https://github.com/wangzitian0/infra2/blob/main/libs/app_deploy_request.py) | SDK `DeployRequest v1` 的跨仓库 preview/staging 入口；验证 sender/repo/ref/SHA/evidence，固定环境选择最新 on-main infra release tag，再调用 `deploy_v2`。跨仓库 prod 暂时 deny-all。 |
+| **App Deploy Request Receiver** | [`app-deploy-request.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/app-deploy-request.yml) · [`libs/app_deploy_request.py`](https://github.com/wangzitian0/infra2/blob/main/libs/app_deploy_request.py) | SDK `DeployRequest v1` 的跨仓库部署入口；验证 sender/repo/ref/SHA/evidence，prod 额外远端验证 run/review 状态，固定环境选择最新 on-main infra release tag，再调用 `deploy_v2`。 |
 | **IaC Runner Bootstrap (L1)** | [`deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) · [`scripts/deploy_iac_runner_bootstrap.sh`](https://github.com/wangzitian0/infra2/blob/main/scripts/deploy_iac_runner_bootstrap.sh) | **带外**自更新:`bootstrap/06.iac_runner/**` 变更时,Actions 在 VPS 上重建 runner 自身(跟 merged SHA),**独立 cadence**。 |
 | **Auto-deploy report-branch-main** | [`deploy-report-main.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy-report-main.yml) | **唯一**自动目标:app main push → main 预览重部署。 |
 | **Observability config apply** | [`apply-observability.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/apply-observability.yml) | 告警规则 / 看板,声明式 reconcile。**当前 merge 即 apply**(见 §3.4 未收口项)。 |
@@ -147,15 +147,19 @@ App 不再 checkout/执行 infra2。发送 `repository_dispatch` type `app-deplo
 遵循固定版本 `infra2_sdk.deploy.DeployRequest`。Receiver 在任何副作用前 fail-closed 验证：
 
 1. GitHub sender allowlist 与 `service -> source_repository` 绑定。
-2. evidence URL 必须属于源 App；prod 同时要求 staging run 与 reviewed PR 证据。
+2. evidence URL 必须是源 App 的 canonical GitHub URL；prod 同时要求 source/staging run 均
+   `completed/success`、仓库与 `head_sha` 精确匹配。Run 还必须匹配该 service 明确批准的
+   workflow path、event 与 versioned title，防止普通 CI run 冒充部署证据。Reviewed PR 必须
+   合入批准的 base branch，且 `merge_commit_sha == source_sha`。任一 GitHub API 请求或字段
+   校验失败即 fail-closed。
 3. `version_ref` 必须在源仓库解析到 payload 的完整 `source_sha`。
 4. staging/prod 的 `iac_ref` 由 infra2 选择为 `HEAD` 已包含的最新 `vX.Y.Z`，App 不再钉 infra submodule。
 5. 固定环境先跑同坐标 canary；通过后才调用既有 `deploy_v2`，Dokploy/Vault 凭据只存在于 infra2。
 
-当前阶段 receiver 与旧 App submodule 流程并存；只有对应 App PR 完成 staging proof 后才删除旧入口。
-跨仓库 prod 请求当前 **deny-all**：在 receiver 能通过 GitHub API 验证 source/staging run
-成功且对应 SHA 一致、reviewed PR 已合并前，`allow_production=False` 不可由 CLI 覆盖；生产仍走既有
-手动 `deploy_v2` 前门。这是显式安全闸门，不以 URL 形状冒充远端 evidence 状态。
+当前阶段 receiver 与 Finance Report 的旧 submodule 流程并存；只有 App cutover PR 同时覆盖
+staging/prod/rollback 且验证通过后才删除旧入口。Production 没有 CLI bypass；receiver 通过只读
+GitHub API 取得远端事实后，才可附加既有 `--staging-validated --code-reviewed` red-line
+acknowledgements。URL 形状本身不构成 evidence。
 
 ---
 
