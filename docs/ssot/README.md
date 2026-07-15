@@ -97,7 +97,7 @@
 | [ops.storage.md](./ops.storage.md) | `ops.storage` | 备份策略、R2 同步 |
 | [ops.backup-inventory.yaml](./ops.backup-inventory.yaml) | `ops.backup_inventory` | Persistent data backup coverage inventory |
 | [deploy-dependencies.yaml](./deploy-dependencies.yaml) | `ops.deploy_dependencies` | 部署扇出 + content-hash 依赖清单 |
-| [delivery-stages.yaml](./delivery-stages.yaml) | `ops.delivery_stages` | 交付管线 stage 词汇（单一所有者；app+infra CI 共享） |
+| [delivery-stages.yaml](./delivery-stages.yaml) | `ops.delivery_stages` | SDK 版本化交付管线 stage 词汇（app+infra CI 共享） |
 | [ci-gate-inventory.yaml](./ci-gate-inventory.yaml) | `ops.ci_gate_inventory` | infra CI gate 坐标清单（(stage,task_category)→workflow:job） |
 | [ops.observability.md](./ops.observability.md) | `ops.obs` | 可观测性单一 owner：采集(SigNoz/日志/链路)+ 告警(规则/分级/watchdog)+ 报告(可用率账本)+ 时间尺度分层 |
 | [watchdog-signals.yaml](./watchdog-signals.yaml) | `watchdog.signals` | Active watchdog signal inventory and ownership |

@@ -11,6 +11,8 @@
 > - **infra2 是发布型产物**——**一个 git tag = 一个平台发布候选**:推送即**自动晋升 staging**,
 >   **prod 需显式 promote**后才成为权威 live 版本(打 tag ≠ 动 prod,§3.3)。
 >   `main` 领先于最近 tag = **未发布**(正常,不是 drift)。
+> - **infra2-sdk 是协议产物**——App 与 infra2 各自固定 SDK SemVer；workspace submodule
+>   只提供统一 checkout，不决定运行或部署版本。
 
 ---
 
@@ -20,6 +22,7 @@
 |------|----------------|------|
 | **IaC Input Reconcile** | [`reconcile-iac-inputs.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/reconcile-iac-inputs.yml) | **Release-tag** 触发(`push: tags: v*.*.*`):diff 上一 tag→本 tag,把 changed `iac_pinned` 服务以**该 tag** 为 `iac_ref` fan-out 给 `deploy_v2 → iac_runner`;config-hash gate 决定 no-op vs 重启。**不是 main-push、不是 sha。** |
 | **Deploy 前门 (`deploy_v2`)** | [`tools/deploy_v2.py`](https://github.com/wangzitian0/infra2/blob/main/tools/deploy_v2.py) · [`deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) | 统一部署坐标 `(service, type, version_ref, iac_ref)`;app + 平台、staging/prod、pinned ref。 |
+| **App Deploy Request Receiver** | [`app-deploy-request.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/app-deploy-request.yml) · [`libs/app_deploy_request.py`](https://github.com/wangzitian0/infra2/blob/main/libs/app_deploy_request.py) | SDK `DeployRequest v1` 的跨仓库 preview/staging 入口；验证 sender/repo/ref/SHA/evidence，固定环境选择最新 on-main infra release tag，再调用 `deploy_v2`。跨仓库 prod 暂时 deny-all。 |
 | **IaC Runner Bootstrap (L1)** | [`deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) · [`scripts/deploy_iac_runner_bootstrap.sh`](https://github.com/wangzitian0/infra2/blob/main/scripts/deploy_iac_runner_bootstrap.sh) | **带外**自更新:`bootstrap/06.iac_runner/**` 变更时,Actions 在 VPS 上重建 runner 自身(跟 merged SHA),**独立 cadence**。 |
 | **Auto-deploy report-branch-main** | [`deploy-report-main.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy-report-main.yml) | **唯一**自动目标:app main push → main 预览重部署。 |
 | **Observability config apply** | [`apply-observability.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/apply-observability.yml) | 告警规则 / 看板,声明式 reconcile。**当前 merge 即 apply**(见 §3.4 未收口项)。 |
@@ -138,6 +141,22 @@ staging。(RC tag `v*.*.*-rc.N` + soak 窗口仍为目标态,见 §3.4。)
 
 prod red lines 由 `deploy_v2` 强制(deny-by-default):`--staging-validated` + `--code-reviewed`,否则 fail-closed。
 
+### 4.1 App DeployRequest event boundary
+
+App 不再 checkout/执行 infra2。发送 `repository_dispatch` type `app-deploy-request`，payload
+遵循固定版本 `infra2_sdk.deploy.DeployRequest`。Receiver 在任何副作用前 fail-closed 验证：
+
+1. GitHub sender allowlist 与 `service -> source_repository` 绑定。
+2. evidence URL 必须属于源 App；prod 同时要求 staging run 与 reviewed PR 证据。
+3. `version_ref` 必须在源仓库解析到 payload 的完整 `source_sha`。
+4. staging/prod 的 `iac_ref` 由 infra2 选择为 `HEAD` 已包含的最新 `vX.Y.Z`，App 不再钉 infra submodule。
+5. 固定环境先跑同坐标 canary；通过后才调用既有 `deploy_v2`，Dokploy/Vault 凭据只存在于 infra2。
+
+当前阶段 receiver 与旧 App submodule 流程并存；只有对应 App PR 完成 staging proof 后才删除旧入口。
+跨仓库 prod 请求当前 **deny-all**：在 receiver 能通过 GitHub API 验证 source/staging run
+成功且对应 SHA 一致、reviewed PR 已合并前，`allow_production=False` 不可由 CLI 覆盖；生产仍走既有
+手动 `deploy_v2` 前门。这是显式安全闸门，不以 URL 形状冒充远端 evidence 状态。
+
 ---
 
 ## 5. IaC Runner 集成
@@ -184,7 +203,8 @@ IaC Runner 报告了完成的服务 sync 结果,不只是请求被接受**。不
 
 ### 5.4 Env × Stage Result Contract
 
-`libs/pipeline_stage_contract.py` 拥有 CI/CD、route canary、watchdog、probe 共享的稀疏 Env×Stage 证据 schema。
+`infra2_sdk.delivery` 拥有 CI/CD、route canary、watchdog、probe 共享的稀疏 Env×Stage 证据 schema；
+`libs/pipeline_stage_contract.py` 在迁移期只做兼容 re-export。
 当 stage 结果用于部署决策/告警路由/加速时,producer 必须发可比记录而非一次性日志。
 
 必填:`source` · `environment`(`local`/`pr`/`pr-preview`/`staging`/`production`)· `stage` · `target` ·
@@ -250,6 +270,8 @@ gh workflow run deploy.yml -f service="finance_report/app" -f type="prod" \
 | **tag 不自动 prod(staging/prod 拆分)** | tag 推送只 apply staging;prod 需 `--promote-prod` → `commands_to_apply` 测试 | ✅ |
 | **libs/tools 单测覆盖率不退化** | `infra-ci.yml`「Gate coverage regression」→ 详见 [`ops.test_coverage.md`](./ops.test_coverage.md)（Coveralls 独立于此,只做 main 徽章展示,不卡 PR） | ✅ |
 | **测试提前(PR dry-run plan)** | PR CI `Gate reconcile plan builds`:dry-run 出 fan-out plan,不部署 → `.github/workflows/infra-ci.yml` | ✅ |
+| **SDK pin/mirror 一致** | `libs/tests/test_sdk_contract_adoption.py` | ✅ |
+| **App request fail-closed** | `libs/tests/test_app_deploy_request.py` + `test_app_deploy_request_workflow.py` | ✅ |
 
 ---
 

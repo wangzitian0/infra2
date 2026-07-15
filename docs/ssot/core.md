@@ -17,6 +17,7 @@
 | **层级定义** | [Repo Root](https://github.com/wangzitian0/infra2/tree/main) | Bootstrap, Platform, Libs, Tools |
 | **变量契约** | 远端 SSOT + `.env.example` | 运行时配置入口 |
 | **自动化入口** | [`tasks.py`](https://github.com/wangzitian0/infra2/blob/main/tasks.py) | Invoke 任务加载与执行 |
+| **跨仓库代码契约** | [`infra2-sdk`](https://github.com/wangzitian0/infra2-sdk/releases) | 应用与 infra 固定版本消费的无副作用协议包 |
 
 ### Code as SSOT 索引
 
@@ -115,11 +116,26 @@ flowchart TB
 
 - **模式 A**: 上层模块只能依赖下层模块的**显式交付物**（Vault KV 或 Dokploy 环境变量），禁止隐式依赖。
 - **模式 B**: 环境之间 (Staging vs Prod) 必须在 Data 层及以上进行物理隔离。
+- **模式 C**: 跨仓库代码共享必须通过固定版本的 `infra2-sdk`；App 只向 infra2 发部署请求，不执行 infra2 源码。
 
 ### ⛔ 禁止模式 (Blacklist)
 
 - **反模式 A**: **禁止** 循环依赖 (如 Bootstrap 依赖 Platform 的 Vault)。
 - **反模式 B**: **禁止** 跨环境直接访问数据库 (如 Prod App 连 Staging DB)。
+- **反模式 C**: **禁止**把 workspace submodule 当作 Python/运行时依赖，或形成 `infra2 -> app -> infra2` 递归引用。
+
+### 3.1 Repository dependency boundary
+
+三种依赖必须分开：
+
+| 关系 | 载体 | 版本语义 |
+|---|---|---|
+| 跨仓库代码契约 | `infra2-sdk` wheel/tag | 每个消费者独立固定并逐步升级 |
+| 部署控制 | `DeployRequest` event → infra2 receiver | infra2 验证后选择 released IaC tag 并执行 `deploy_v2` |
+| 统一开发入口 | `repos/{infra2-sdk,finance_report,truealpha}` submodules（目标态） | 最近通过集成验证的 workspace 组合，不代表 live 版本 |
+
+正式生产身份仍是 infra2 release tag、SDK SemVer 和 App image ref/digest；`repos/`
+指针不得进入 deploy config hash、package discovery 或常规服务 fan-out。
 
 ---
 
@@ -282,6 +298,8 @@ platform/
 |----------|-----------------------|--------|
 | **目录结构完整性** | `test_structure.py` (Backlog) | ⏳ Backlog |
 | **DNS 规则一致性** | [`test_network.py`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/tests/bootstrap/network_layer/test_network.py) | ✅ Critical |
+| **SDK 契约采用** | `libs/tests/test_sdk_contract_adoption.py` | ✅ Critical |
+| **App 请求边界** | `libs/tests/test_app_deploy_request.py` | ✅ Critical |
 
 ---
 

@@ -1,6 +1,9 @@
-# Infra2 Shared Libraries
+# Infra2 Internal Libraries
 
-> **Purpose**: Internal libraries used by deploy scripts and CLI tools.
+> **Purpose**: Internal libraries used by deploy scripts and CLI tools. Stable
+> cross-repository contracts live in
+> [`infra2-sdk`](https://github.com/wangzitian0/infra2-sdk); compatibility imports remain
+> here while consumers migrate.
 
 ## At a Glance
 
@@ -21,7 +24,8 @@
 | `dokploy.py` | Dokploy API client | `DokployClient`, `get_dokploy()` |
 | `backup_restore.py` | Off-host backup restore rehearsal helpers | `latest_artifact_for_service()`, `build_postgres_rehearsal_plan()`, `run_postgres_restore_rehearsal()` |
 | `dokploy_route_canary.py` | Dynamic route canary | `run_route_canary()`, `render_canary_compose()` |
-| `pipeline_stage_contract.py` | Env x Stage delivery evidence contract | `make_stage_result()`, `acceleration_allowed()`, `detect_disagreement()` |
+| `app_deploy_request.py` | Fail-closed App request validation and deploy planning | `validate_request_authority()`, `make_plan()` |
+| `pipeline_stage_contract.py` | Compatibility import for `infra2_sdk.delivery` | `make_stage_result()`, `acceleration_allowed()`, `detect_disagreement()` |
 
 ## Usage Patterns
 

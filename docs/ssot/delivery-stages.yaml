@@ -1,29 +1,31 @@
-# Authoritative delivery-pipeline STAGE vocabulary — single owner: infra (infra2).
-# Both repos' ci-gate-inventory reference these ids by `stage:`; NEITHER repo redefines
-# stages locally. Adding/renaming a stage is an infra-owned contract change.
+# Compatibility mirror of infra2-sdk v0.1.0 `infra2_sdk/data/stages.yaml`.
+# The released SDK is the cross-repository machine contract. This local copy keeps infra
+# manifests reviewable and is equality-guarded by test_sdk_contract_adoption.py; do not edit
+# one without releasing/adopting a new SDK version.
 version: 1
+sdk_version: 0.1.0
 stages:
   local.advisory:
     order: 0
     definition: Developer-local feedback that aids iteration but does not block merge.
   github_ci.merge_authority:
     order: 1
-    definition: GitHub CI proof required before code merges or a post-merge consumer trusts the SHA.
+    definition: GitHub CI proof required before code merges or a consumer trusts the SHA.
   preview.runtime:
     order: 2
     definition: PR preview runtime proof outside the merge-authority CI job set.
   staging.release_validation:
     order: 3
-    definition: Staging validation of a release tag before any prod promotion.
+    definition: Staging validation of a release tag before any production promotion.
   staging.provider_regression:
     order: 4
-    definition: Staging regression against real external providers (slower, scheduled/gated).
+    definition: Staging regression against real external providers.
   prod.release_integrity:
     order: 5
     definition: Production release integrity and post-deploy runtime proof.
   ops.scheduled_cleanup:
     order: 6
-    definition: Scheduled operational reconcile/cleanup/drift detection (non-merge-gating).
+    definition: Scheduled operational reconcile, cleanup, and drift detection.
   manual.adjudication:
     order: 7
-    definition: Human adjudication or manually-triggered evidence gates.
+    definition: Human adjudication or manually triggered evidence gates.

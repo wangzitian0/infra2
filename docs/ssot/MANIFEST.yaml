@@ -184,14 +184,15 @@ entries:
       - libs/tests/test_deploy_dependencies.py
   ops.delivery_stages:
     owner: docs/ssot/delivery-stages.yaml
-    summary: 交付管线 stage 词汇（单一所有者；app+infra CI 共享）
+    summary: SDK 版本化交付管线 stage 词汇（app+infra CI 共享）
     description: >-
-      Authoritative delivery-pipeline stage vocabulary shared by both repos' CI gate
-      inventories. Single owner = infra; neither repo redefines stages locally. The
-      CI analogue of the deploy_v2 coordinate's discriminant axis.
+      Compatibility mirror of the versioned infra2-sdk delivery-pipeline stage vocabulary
+      shared by App and infra CI gate inventories. The SDK release owns the machine contract;
+      the local SSOT mirror records the adopted version and is equality-guarded.
     proofs:
       - libs/tests/test_delivery_stages.py
       - libs/tests/test_ci_gate_schema.py
+      - libs/tests/test_sdk_contract_adoption.py
   ops.ci_gate_inventory:
     owner: docs/ssot/ci-gate-inventory.yaml
     summary: infra CI gate 坐标清单（(stage,task_category)→workflow:job）
