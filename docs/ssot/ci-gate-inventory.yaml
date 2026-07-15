@@ -1,7 +1,8 @@
 # Infra CI gate inventory — every gate is one coordinate (stage, task_category) -> workflow:job.
 # Gate ids carry the `infra_ci.` prefix (structurally disjoint from app's `ci.*`, so the two
-# repos' inventories cannot overlap). `stage` references docs/ssot/delivery-stages.yaml
-# (single owner); stages are NOT redefined here. Validated by tools/ci_gate_audit.py.
+# repos' inventories cannot overlap). `stage` references the infra2-sdk delivery vocabulary;
+# docs/ssot/delivery-stages.yaml is the pinned local mirror, not a second definition.
+# Validated by tools/ci_gate_audit.py.
 #
 # Phase 1 (shadow): .github/workflows/infra-ci.yml is fully covered below. Other CI
 # workflows (ops-checks, reconcile-iac-inputs, apply-observability, drift reports) are the

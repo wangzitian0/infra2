@@ -1,0 +1,129 @@
+name: App deploy request
+
+# Cross-repository receiver for the infra2-sdk DeployRequest v1 contract. Applications
+# request a deployment; only infra2 holds Dokploy credentials and executes deploy_v2.
+on:
+  repository_dispatch:
+    types: [app-deploy-request]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-deploy-${{ github.event.client_payload.service }}-${{ github.event.client_payload.deploy_type }}
+  cancel-in-progress: false
+
+env:
+  APP_DEPLOY_REQUEST_JSON: ${{ toJSON(github.event.client_payload) }}
+  APP_DEPLOY_REQUEST_SENDER: ${{ github.event.sender.login }}
+  INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
+
+jobs:
+  validate:
+    name: validate request contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout released infra context
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install receiver dependencies
+        run: python -m pip install -e .
+      - name: Validate and display the side-effect-free plan
+        run: |
+          set -euo pipefail
+          plan="$(python -m tools.app_deploy_request plan \
+            --sender "$APP_DEPLOY_REQUEST_SENDER" \
+            --domain "$INTERNAL_DOMAIN" \
+            --repo-root .)"
+          printf '%s\n' "$plan" | python -m json.tool
+
+  preflight_canary:
+    name: preflight requested artifact
+    needs: [validate]
+    if: >-
+      ${{ needs.validate.result == 'success'
+          && github.event.client_payload.operation != 'remove'
+          && (github.event.client_payload.deploy_type == 'staging'
+              || github.event.client_payload.deploy_type == 'prod') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: deploy-v2-canary
+      cancel-in-progress: false
+    env:
+      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+    steps:
+      - name: Checkout released infra context
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install receiver dependencies
+        run: python -m pip install -e .
+      - name: Canary the exact app and IaC coordinates
+        run: |
+          set -euo pipefail
+          if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
+            echo "::error::DOKPLOY_API_KEY is required for the deploy preflight."
+            exit 1
+          fi
+          plan="$(python -m tools.app_deploy_request plan \
+            --sender "$APP_DEPLOY_REQUEST_SENDER" \
+            --domain "$INTERNAL_DOMAIN" \
+            --repo-root .)"
+          version_ref="$(printf '%s' "$plan" | python -c 'import json,sys; print(json.load(sys.stdin)["request"]["version_ref"])')"
+          iac_ref="$(printf '%s' "$plan" | python -c 'import json,sys; print(json.load(sys.stdin)["iac_ref"])')"
+          python -m tools.deploy_v2_canary \
+            --version-ref "$version_ref" \
+            --iac-ref "$iac_ref" \
+            --domain "$INTERNAL_DOMAIN" \
+            --timeout 600
+
+  deploy:
+    name: execute validated request
+    needs: [validate, preflight_canary]
+    if: >-
+      ${{ always()
+          && needs.validate.result == 'success'
+          && (needs.preflight_canary.result == 'success'
+              || needs.preflight_canary.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+      IAC_WEBHOOK_SECRET: ${{ secrets.IAC_WEBHOOK_SECRET }}
+      IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
+    steps:
+      - name: Checkout released infra context
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install receiver dependencies
+        run: python -m pip install -e .
+      - name: Execute through deploy_v2
+        run: |
+          set -euo pipefail
+          if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
+            echo "::error::DOKPLOY_API_KEY is required to deploy an application."
+            exit 1
+          fi
+          python -m tools.app_deploy_request execute \
+            --sender "$APP_DEPLOY_REQUEST_SENDER" \
+            --domain "$INTERNAL_DOMAIN" \
+            --repo-root .
