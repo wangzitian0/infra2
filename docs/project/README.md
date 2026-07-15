@@ -26,7 +26,6 @@
 - [docs/README.md](../README.md) - 文档索引
 
 ## Active Projects
-- [Infra-018: Repository Boundary Decoupling](./Infra-018.repository_boundary_decoupling.md) - **Implementation complete; compatibility cleanup pending**
 - [Infra-017: TrueAlpha Dagster Capture Runtime](./Infra-017.truealpha_dagster_capture.md) - **In Progress**
 - [Infra-015: deploy_v2 Unified Front Door](./Infra-015.deploy_v2_front_door.md) - **Impl complete; sender #1173 pending → archive**
 - [Infra-013: Service Registry as Single Source of Truth](./Infra-013.service_registry_ssot.md) - **In Progress**
@@ -40,6 +39,7 @@
 - [Infra-004: Authentik Installation](./Infra-004.authentik_install.md) - **In Progress**
 
 ## Archived Projects
+- [Infra-018: Repository Boundary Decoupling](./archive/Infra-018.repository_boundary_decoupling.md) - **Archived**
 - [Infra-001: Bootstrap Base Setup](./archive/Infra-001.bootstrap_setup.md) - **Archived**
 - [Infra-002: 1Password + Vault Installation](./archive/Infra-002.1password_vault_install.md) - **Archived**
 - [Infra-003: Documentation Reorganization](./archive/Infra-003.docs_reorg.md) - **Archived**

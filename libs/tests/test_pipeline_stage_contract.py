@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from libs.pipeline_stage_contract import (
+from infra2_sdk.delivery import (
     BudgetStatus,
     DisagreementKind,
     FailureDomain,

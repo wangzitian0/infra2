@@ -208,7 +208,7 @@ IaC Runner 报告了完成的服务 sync 结果,不只是请求被接受**。不
 ### 5.4 Env × Stage Result Contract
 
 `infra2_sdk.delivery` 拥有 CI/CD、route canary、watchdog、probe 共享的稀疏 Env×Stage 证据 schema；
-`libs/pipeline_stage_contract.py` 在迁移期只做兼容 re-export。
+infra2 与 App producer 都直接从各自固定版本的 SDK 导入，不保留源码级 compatibility re-export。
 当 stage 结果用于部署决策/告警路由/加速时,producer 必须发可比记录而非一次性日志。
 
 必填:`source` · `environment`(`local`/`pr`/`pr-preview`/`staging`/`production`)· `stage` · `target` ·

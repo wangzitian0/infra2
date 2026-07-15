@@ -8,7 +8,8 @@ reusable logic belongs in `libs/` (see the division-of-labor note below):
 2. **Standalone scripts** — non-interactive entry points run by CI gates,
    scheduled workflows, or as long-running sidecars (`python tools/<script>.py`).
    Examples: `deploy_v2.py` (deploy front door), `deploy_guard_audit.py` /
-   `lint_platform_image_pins.py` / `coverage_regression_audit.py` (infra-ci
+   `ci_gate_audit.py` / `lint_platform_image_pins.py` /
+   `coverage_regression_audit.py` (infra-ci
    gates), `reconcile_iac_inputs.py` (tag reconcile), `out_of_band_watchdog.py`
    / `watchdog_weekly_digest.py` (scheduled watchdogs), `deploy_queue_guard.py`
    (alerting-stack sidecar), `dns_drift_report.py` / `dokploy_config_drift.py`
@@ -20,6 +21,10 @@ source authority and immutable coordinates, remotely verifies Production run/rev
 and selects the released IaC ref; the tool only wires argv/env and invokes the existing deploy
 front door. There is no CLI bypass for Production evidence. Dokploy/Vault mutation stays in
 infra2.
+
+`ci_gate_audit.py` imports the released `infra2_sdk.ci` schema directly and validates
+the infra-owned gate inventory against live workflow jobs. No local compatibility schema
+or application source checkout participates in the audit.
 
 ## Division of labor (`libs/` vs `tools/`)
 
