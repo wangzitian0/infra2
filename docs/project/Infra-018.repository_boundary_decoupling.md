@@ -35,7 +35,7 @@ workspace submodules first.
 ## PR Links
 
 - infra2-sdk: https://github.com/wangzitian0/infra2-sdk/pull/1
-- infra2: None yet.
+- infra2: https://github.com/wangzitian0/infra2/pull/488
 
 ## Change Log
 
