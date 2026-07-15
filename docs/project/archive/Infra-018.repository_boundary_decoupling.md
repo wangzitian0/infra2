@@ -32,6 +32,7 @@ Infra2 consumers import SDK contracts directly; the temporary local re-export mo
 - infra2 SDK adoption and receiver: https://github.com/wangzitian0/infra2/pull/488
 - infra2 Production evidence: https://github.com/wangzitian0/infra2/pull/489
 - infra2 unified workspace: https://github.com/wangzitian0/infra2/pull/490
+- infra2 compatibility retirement and archive: https://github.com/wangzitian0/infra2/pull/491
 - TrueAlpha boundary migration: https://github.com/wangzitian0/truealpha/pull/217
 - Finance Report SDK request preparation: https://github.com/wangzitian0/finance_report/pull/1878
 - Finance Report receiver cutover: https://github.com/wangzitian0/finance_report/pull/1880
