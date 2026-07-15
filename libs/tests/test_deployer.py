@@ -10,6 +10,22 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_discovered_service_tasks_exist_in_root_invoke_collection() -> None:
+    """Every GitOps task name must match Invoke's normalized CLI namespace."""
+    from libs.deploy.deployer import discover_services
+    from tools.loader import ns
+
+    task_names = ns.task_names
+    invoke_task_names = set(task_names() if callable(task_names) else task_names)
+    missing = {
+        service: task_name
+        for service, task_name in discover_services().items()
+        if task_name not in invoke_task_names
+    }
+
+    assert missing == {}
+
+
 def test_make_tasks_sync_surfaces_failed_action_as_nonzero_exit() -> None:
     """A 'failed' action must raise (non-zero exit) so the iac-runner sees a real
     failure instead of a green '✅ sync completed' — the silent-deploy root cause."""
