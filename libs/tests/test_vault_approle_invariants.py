@@ -27,7 +27,11 @@ from libs.vault_self_refresh_audit import (
     load_inventory,
 )
 
-VAULT_AGENT_HCLS = sorted(REPO_ROOT.rglob("vault-agent.hcl"))
+VAULT_AGENT_HCLS = sorted(
+    path
+    for path in REPO_ROOT.rglob("vault-agent.hcl")
+    if path.relative_to(REPO_ROOT).parts[0] != "repos"
+)
 VAULT_AGENT_COMPOSES = sorted(discover_vault_agent_compose_paths())
 
 

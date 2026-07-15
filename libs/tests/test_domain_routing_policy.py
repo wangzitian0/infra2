@@ -36,7 +36,9 @@ def _deploy_paths() -> list[Path]:
     return [
         path
         for path in ROOT.rglob("deploy.py")
-        if ".venv" not in path.parts and "__pycache__" not in path.parts
+        if path.relative_to(ROOT).parts[0] != "repos"
+        and ".venv" not in path.parts
+        and "__pycache__" not in path.parts
     ]
 
 

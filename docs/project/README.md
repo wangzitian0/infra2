@@ -26,7 +26,7 @@
 - [docs/README.md](../README.md) - 文档索引
 
 ## Active Projects
-- [Infra-018: Repository Boundary Decoupling](./Infra-018.repository_boundary_decoupling.md) - **In Progress**
+- [Infra-018: Repository Boundary Decoupling](./Infra-018.repository_boundary_decoupling.md) - **Implementation complete; compatibility cleanup pending**
 - [Infra-017: TrueAlpha Dagster Capture Runtime](./Infra-017.truealpha_dagster_capture.md) - **In Progress**
 - [Infra-015: deploy_v2 Unified Front Door](./Infra-015.deploy_v2_front_door.md) - **Impl complete; sender #1173 pending → archive**
 - [Infra-013: Service Registry as Single Source of Truth](./Infra-013.service_registry_ssot.md) - **In Progress**
