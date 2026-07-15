@@ -36,6 +36,7 @@ submodule before the remaining edge is removed.
 
 - infra2-sdk: https://github.com/wangzitian0/infra2-sdk/pull/1
 - infra2: https://github.com/wangzitian0/infra2/pull/488
+- infra2 Production evidence: https://github.com/wangzitian0/infra2/pull/489
 - TrueAlpha: https://github.com/wangzitian0/truealpha/pull/217
 - Finance Report SDK request preparation: https://github.com/wangzitian0/finance_report/pull/1878
 
