@@ -78,7 +78,10 @@ def discover_services() -> dict[str, str]:
             # App layers get prefixed task names (tools/loader.py uses the same
             # prefixes) to avoid colliding with platform/postgres etc.
             task_prefix = {"finance_report": "fr-", "truealpha": "ta-"}.get(layer, "")
-            service_map[key] = f"{task_prefix}{service_name}.sync"
+            # Invoke exposes collection underscores as dashes on its CLI. The runner
+            # executes these values verbatim, so discovery must return the CLI name.
+            task_name = service_name.replace("_", "-")
+            service_map[key] = f"{task_prefix}{task_name}.sync"
 
     return service_map
 

@@ -14,3 +14,10 @@ Track deployment and evidence gaps until the Staging capture gate is accepted.
 - [ ] Verify the S3 API endpoint is authenticated and no administrative interface is exposed by this service.
 - [ ] Run the two scheduled TOPT cycles, identical retry, changed vintage, and failure injection.
 - [ ] Add Production definitions only after the approved catalog/universe/release exists.
+- [ ] Publish the task-name normalization hotfix as `v1.1.30`, rerun the full Staging reconcile, and only then consider Production promotion.
+
+## Deployment Evidence
+
+- 2026-07-16: `v1.1.29` Staging reconcile run `29433249921` deployed
+  `platform/alerting` and `truealpha/app`, then failed closed before Production because
+  discovery emitted `ta-data_engine.sync` while Invoke exposes `ta-data-engine.sync`.
