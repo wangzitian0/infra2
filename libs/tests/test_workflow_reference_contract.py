@@ -24,6 +24,7 @@ IGNORED_TOP_LEVEL_DIRS = {
     ".venv",
     "e2e_regressions",
     "playground",
+    "repos",
 }
 
 
@@ -53,6 +54,12 @@ def test_workflow_reference_matcher_accepts_relative_markdown_targets() -> None:
         ".github/workflows/docs.yml",
         ".github/workflows/infra-ci.yml",
     ]
+
+
+def test_workspace_submodules_are_outside_infra_workflow_discovery() -> None:
+    workspace_readme = ROOT / "repos" / "README.md"
+    assert workspace_readme.is_file()
+    assert not _is_scanned(workspace_readme)
 
 
 def test_workflow_references_point_to_live_workflow_files() -> None:

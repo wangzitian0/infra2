@@ -38,6 +38,8 @@ infra2/
 ├── bootstrap/        # L1 - 基础层 (1Password, Vault)
 ├── platform/         # L2 - 平台层 (PostgreSQL, Redis, Authentik)
 ├── finance_report/   # L3 - 应用层 (Finance Report)
+├── truealpha/        # L3 - 应用层 (TrueAlpha IaC)
+├── repos/            # 统一开发 workspace (git submodules)
 ├── e2e_regressions/  # E2E 测试
 ├── libs/             # infra 内部库 (env, deployer, console)
 ├── tools/            # CLI 工具 (env, local)
@@ -47,9 +49,11 @@ infra2/
 ```
 
 跨仓库稳定契约由固定版本
-[`infra2-sdk`](https://github.com/wangzitian0/infra2-sdk/releases) 提供。未来的 `repos/`
+[`infra2-sdk`](https://github.com/wangzitian0/infra2-sdk/releases) 提供。`repos/`
 submodules 只作为统一开发 workspace；生产部署仍由 infra tag、SDK SemVer 和 App image
-版本独立确定。详见 [Core repository boundary](docs/ssot/core.md#31-repository-dependency-boundary)。
+版本独立确定。使用 `git submodule update --init --recursive` 初始化该 workspace。
+详见 [Workspace repositories](repos/README.md) 和
+[Core repository boundary](docs/ssot/core.md#31-repository-dependency-boundary)。
 
 ## 📚 文档入口
 

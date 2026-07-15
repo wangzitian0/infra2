@@ -91,6 +91,7 @@ from libs.deploy.deployer import Deployer, make_tasks
 - Dokploy deployment proof uses `deployment.allByCompose` before falling back to embedded compose snapshots.
 - Dokploy API errors include method + endpoint context via `httpx` exceptions.
 - Production App requests use read-only GitHub API metadata to bind approved source/staging workflows and the merged review commit to the requested source SHA.
+- Infra contract and filesystem-discovery tests exclude `repos/`; workspace submodules own their own workflows and invariants.
 - `VaultSecrets` reads `VAULT_ROOT_TOKEN` and `VAULT_ADDR` (or falls back to `https://vault.$INTERNAL_DOMAIN`).
 
 ## References

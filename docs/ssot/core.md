@@ -132,10 +132,12 @@ flowchart TB
 |---|---|---|
 | 跨仓库代码契约 | `infra2-sdk` wheel/tag | 每个消费者独立固定并逐步升级 |
 | 部署控制 | `DeployRequest` event → infra2 receiver | infra2 验证后选择 released IaC tag 并执行 `deploy_v2` |
-| 统一开发入口 | `repos/{infra2-sdk,finance_report,truealpha}` submodules（目标态） | 最近通过集成验证的 workspace 组合，不代表 live 版本 |
+| 统一开发入口 | `repos/{infra2-sdk,finance_report,truealpha}` submodules | 最近通过集成验证的 workspace 组合，不代表 live 版本 |
 
 正式生产身份仍是 infra2 release tag、SDK SemVer 和 App image ref/digest；`repos/`
-指针不得进入 deploy config hash、package discovery 或常规服务 fan-out。
+指针不得进入 deploy config hash、package discovery 或常规服务 fan-out。开发者通过
+`git submodule update --init --recursive` 取得该组合；更新指针只表示 workspace
+集成基线升级，不会触发发布或部署。
 
 ---
 

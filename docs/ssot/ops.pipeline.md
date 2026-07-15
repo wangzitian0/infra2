@@ -156,9 +156,9 @@ App 不再 checkout/执行 infra2。发送 `repository_dispatch` type `app-deplo
 4. staging/prod 的 `iac_ref` 由 infra2 选择为 `HEAD` 已包含的最新 `vX.Y.Z`，App 不再钉 infra submodule。
 5. 固定环境先跑同坐标 canary；通过后才调用既有 `deploy_v2`，Dokploy/Vault 凭据只存在于 infra2。
 
-当前阶段 receiver 与 Finance Report 的旧 submodule 流程并存；只有 App cutover PR 同时覆盖
-staging/prod/rollback 且验证通过后才删除旧入口。Production 没有 CLI bypass；receiver 通过只读
-GitHub API 取得远端事实后，才可附加既有 `--staging-validated --code-reviewed` red-line
+Finance Report 的 staging/prod/rollback 已全部 cut over 到 receiver，App 仓库不再
+checkout 或执行 infra2 源码。Production 没有 CLI bypass；receiver 通过只读 GitHub API
+取得远端事实后，才可附加既有 `--staging-validated --code-reviewed` red-line
 acknowledgements。URL 形状本身不构成 evidence。
 
 ---
