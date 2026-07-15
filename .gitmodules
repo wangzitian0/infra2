@@ -1,9 +1,9 @@
 [submodule "repos/infra2-sdk"]
 	path = repos/infra2-sdk
-	url = git@github.com:wangzitian0/infra2-sdk.git
+	url = https://github.com/wangzitian0/infra2-sdk.git
 [submodule "repos/finance_report"]
 	path = repos/finance_report
-	url = git@github.com:wangzitian0/finance_report.git
+	url = https://github.com/wangzitian0/finance_report.git
 [submodule "repos/truealpha"]
 	path = repos/truealpha
-	url = git@github.com:wangzitian0/truealpha.git
+	url = https://github.com/wangzitian0/truealpha.git
