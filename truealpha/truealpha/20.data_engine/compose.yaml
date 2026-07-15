@@ -1,0 +1,148 @@
+x-dagster-service: &dagster-service
+  image: ghcr.io/wangzitian0/truealpha-data-engine@${DATA_ENGINE_IMAGE_DIGEST:?DATA_ENGINE_IMAGE_DIGEST is required}
+  pull_policy: always
+  restart: always
+  mem_limit: ${DATA_ENGINE_MEM_LIMIT:-768m}
+  cpu_shares: ${TIER_CPU_SHARES:-1024}
+  depends_on:
+    vault-agent:
+      condition: service_healthy
+  entrypoint: ["/bin/sh", "/opt/truealpha/dagster-entrypoint.sh"]
+  environment:
+    APP_ENV: ${ENV}
+    GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
+    MOOMOO_OPEND_HOST: 127.0.0.1
+    MOOMOO_OPEND_PORT: "11111"
+    MOOMOO_LEDGER_BACKEND: postgres
+    TRUEALPHA_RELEASE_MANIFEST_ID: ${RELEASE_MANIFEST_ID:?RELEASE_MANIFEST_ID is required}
+    TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST: ${DATA_ENGINE_IMAGE_DIGEST:?DATA_ENGINE_IMAGE_DIGEST is required}
+    TRUEALPHA_CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:?CONFIGURATION_SHA256 is required}
+    TRUEALPHA_CAPTURE_APPROVED_BY: ${CAPTURE_APPROVED_BY:?CAPTURE_APPROVED_BY is required}
+  volumes:
+    - ./dagster-entrypoint.sh:/opt/truealpha/dagster-entrypoint.sh:ro
+    - secrets:/secrets:ro
+    - ${DATA_PATH}:/var/lib/dagster
+  # OpenD deliberately listens only on host 127.0.0.1. Host networking reaches
+  # that boundary without publishing OpenD or adding a bridge-facing proxy.
+  network_mode: host
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+  labels:
+    - "traefik.enable=false"
+
+services:
+  vault-agent:
+    init: true
+    image: hashicorp/vault:1.15
+    container_name: truealpha-data-engine-vault-agent${ENV_SUFFIX}
+    restart: always
+    mem_limit: ${DATA_ENGINE_VAULT_MEM_LIMIT:-128m}
+    cpu_shares: ${TIER_CPU_SHARES:-1024}
+    entrypoint:
+      - sh
+      - -c
+      - |
+        rm -f /vault/secrets/.env /vault/.token /vault/role_id /vault/secret_id 2>/dev/null || true
+        if [ -z "$$VAULT_ROLE_ID" ] || [ -z "$$VAULT_SECRET_ID" ]; then
+          echo "VAULT_ROLE_ID and VAULT_SECRET_ID are required"
+          exit 1
+        fi
+        if [ -z "$$VAULT_ADDR" ]; then
+          echo "VAULT_ADDR is required"
+          exit 1
+        fi
+        echo "$$VAULT_ROLE_ID" > /vault/role_id
+        echo "$$VAULT_SECRET_ID" > /vault/secret_id
+        exec vault agent -config=/etc/vault/vault-agent.hcl
+    environment:
+      VAULT_ADDR: ${VAULT_ADDR}
+      VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
+      VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
+      ENV: ${ENV}
+      TA_POSTGRES_PORT: ${TA_POSTGRES_PORT}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - |
+          test -s /vault/secrets/.env && ! grep -q "<no value>" /vault/secrets/.env && test -s /vault/.token || exit 1
+          if [ -z "$$(find /tmp/.vault_hc -mmin -5 2>/dev/null)" ]; then
+            wget -q -T 3 --header="X-Vault-Token: $$(cat /vault/.token)" "$$VAULT_ADDR/v1/auth/token/lookup-self" -O /dev/null || exit 1
+            touch /tmp/.vault_hc
+          fi
+      interval: 30s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
+      - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
+      - secrets:/vault/secrets
+    networks:
+      - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    labels:
+      - "traefik.enable=false"
+
+  dagster-webserver:
+    <<: *dagster-service
+    container_name: truealpha-dagster-webserver${ENV_SUFFIX}
+    command:
+      - dagster-webserver
+      - -m
+      - data_engine.dagster_defs
+      - --host
+      - 127.0.0.1
+      - --port
+      - ${DAGSTER_WEBSERVER_PORT}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ['DAGSTER_WEBSERVER_PORT'] + '/server_info', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    environment:
+      APP_ENV: ${ENV}
+      DAGSTER_WEBSERVER_PORT: ${DAGSTER_WEBSERVER_PORT}
+      GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
+      MOOMOO_OPEND_HOST: 127.0.0.1
+      MOOMOO_OPEND_PORT: "11111"
+      MOOMOO_LEDGER_BACKEND: postgres
+      TRUEALPHA_RELEASE_MANIFEST_ID: ${RELEASE_MANIFEST_ID:?RELEASE_MANIFEST_ID is required}
+      TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST: ${DATA_ENGINE_IMAGE_DIGEST:?DATA_ENGINE_IMAGE_DIGEST is required}
+      TRUEALPHA_CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:?CONFIGURATION_SHA256 is required}
+      TRUEALPHA_CAPTURE_APPROVED_BY: ${CAPTURE_APPROVED_BY:?CAPTURE_APPROVED_BY is required}
+
+  dagster-daemon:
+    <<: *dagster-service
+    container_name: truealpha-dagster-daemon${ENV_SUFFIX}
+    command: ["dagster-daemon", "run", "-m", "data_engine.dagster_defs"]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - . /secrets/.env && export DAGSTER_POSTGRES_URL="$${DATABASE_URL}?options=-csearch_path%3Ddagster" && dagster-daemon liveness-check
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  secrets:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=10m,mode=0755"
+
+networks:
+  dokploy-network:
+    external: true

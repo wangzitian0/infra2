@@ -64,3 +64,7 @@ services:
     data_path: /data/truealpha/postgres
     method: pg_dump_plus_data_archive
     restore_command: restore latest truealpha pg_dump, then reattach DATA_PATH if needed.
+  - service_id: truealpha/data_engine
+    data_path: /data/truealpha/dagster
+    method: dagster_artifact_archive
+    restore_command: restore optional Dagster compute logs/IO artifacts; authoritative run metadata and raw evidence recover from Postgres and S3.

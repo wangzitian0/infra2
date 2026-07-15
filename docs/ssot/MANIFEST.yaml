@@ -24,6 +24,17 @@ entries:
     proofs:
       - libs/tests/test_deploy_contract.py
       - libs/tests/test_reconcile_iac_inputs.py
+  core.truealpha_runtime:
+    owner: docs/ssot/core.truealpha_runtime.md
+    summary: TrueAlpha Dagster artifact binding, environment isolation, and host-only OpenD boundary
+    description: >-
+      TrueAlpha data-engine deployment contract: digest-pinned Dagster roles,
+      per-environment state and credentials, loopback-only OpenD/Postgres/UI access,
+      persistent metadata, resource limits, and runtime-applied verification.
+    proofs:
+      - libs/tests/test_truealpha_data_engine.py
+      - truealpha/truealpha/20.data_engine/compose.yaml
+      - truealpha/truealpha/20.data_engine/deploy.py
 
   bootstrap.nodep:
     owner: docs/ssot/bootstrap.nodep.md
