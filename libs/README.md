@@ -90,7 +90,7 @@ from libs.deploy.deployer import Deployer, make_tasks
 - Dokploy API errors include method + endpoint context via `httpx` exceptions.
 - Production App requests use read-only GitHub API metadata to bind approved source/staging workflows and the merged review commit to the requested source SHA.
 - Infra contract and filesystem-discovery tests exclude `repos/`; workspace submodules own their own workflows and invariants.
-- `discover_services()` returns Invoke's CLI-normalized task names: service underscores become dashes (for example, `truealpha/data_engine` maps to `ta-data-engine.sync`).
+- `discover_services()` returns Invoke's CLI-normalized task names: service underscores become dashes (for example, `truealpha/data_engine` maps to `ta-data-engine.sync`), with a regression test against Invoke's `Collection.task_names` API.
 - `VaultSecrets` reads `VAULT_ROOT_TOKEN` and `VAULT_ADDR` (or falls back to `https://vault.$INTERNAL_DOMAIN`).
 
 ## References

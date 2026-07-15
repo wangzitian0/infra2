@@ -15,10 +15,12 @@ def test_discovered_service_tasks_exist_in_root_invoke_collection() -> None:
     from libs.deploy.deployer import discover_services
     from tools.loader import ns
 
+    task_names = ns.task_names
+    invoke_task_names = set(task_names() if callable(task_names) else task_names)
     missing = {
         service: task_name
         for service, task_name in discover_services().items()
-        if task_name not in ns.task_names
+        if task_name not in invoke_task_names
     }
 
     assert missing == {}

@@ -21,3 +21,5 @@ Track deployment and evidence gaps until the Staging capture gate is accepted.
 - 2026-07-16: `v1.1.29` Staging reconcile run `29433249921` deployed
   `platform/alerting` and `truealpha/app`, then failed closed before Production because
   discovery emitted `ta-data_engine.sync` while Invoke exposes `ta-data-engine.sync`.
+- 2026-07-16: Addressed the High review finding in the task-discovery regression test
+  while retaining compatibility with Invoke 2.2.1, where `Collection.task_names` is a property.
