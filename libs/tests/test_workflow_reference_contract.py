@@ -57,7 +57,9 @@ def test_workflow_reference_matcher_accepts_relative_markdown_targets() -> None:
 
 
 def test_workspace_submodules_are_outside_infra_workflow_discovery() -> None:
-    assert not _is_scanned(ROOT / "repos" / "example" / "README.md")
+    workspace_readme = ROOT / "repos" / "README.md"
+    assert workspace_readme.is_file()
+    assert not _is_scanned(workspace_readme)
 
 
 def test_workflow_references_point_to_live_workflow_files() -> None:
