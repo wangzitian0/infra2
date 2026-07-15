@@ -18,8 +18,11 @@ def test_infra_pins_the_expected_sdk_release() -> None:
 
 def test_local_stage_mirror_matches_the_released_sdk() -> None:
     document = yaml.safe_load(LOCAL_STAGES.read_text(encoding="utf-8"))
+    local_stages = load_delivery_stages(LOCAL_STAGES)
+    released_stages = load_delivery_stages()
+
     assert str(document["sdk_version"]) == version("infra2-sdk")
-    assert load_delivery_stages(LOCAL_STAGES) == load_delivery_stages()
+    assert local_stages == released_stages
 
 
 def test_retired_compatibility_modules_stay_removed() -> None:
