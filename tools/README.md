@@ -16,8 +16,9 @@ reusable logic belongs in `libs/` (see the division-of-labor note below):
 
 `app_deploy_request.py` is the thin cross-repository adapter in front of `deploy_v2`.
 `libs/app_deploy_request.py` deserializes `infra2_sdk.deploy.DeployRequest`, validates
-source authority and immutable coordinates, and selects the released IaC ref; the tool only
-wires argv/env and invokes the existing deploy front door. Dokploy/Vault mutation stays in
+source authority and immutable coordinates, remotely verifies Production run/review evidence,
+and selects the released IaC ref; the tool only wires argv/env and invokes the existing deploy
+front door. There is no CLI bypass for Production evidence. Dokploy/Vault mutation stays in
 infra2.
 
 ## Division of labor (`libs/` vs `tools/`)
