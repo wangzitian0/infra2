@@ -24,7 +24,7 @@ Snapshot (both repos, latest `main`): **18 workflows · 61 jobs · 373 steps.**
 | **Gate coordinate inventory** | ✅ `ci-gate-inventory.yaml` — 38 gates, 8 stages × 20 task_categories | ❌ none |
 | Test→stage matrix | ✅ `test-execution-matrix.yaml` | ❌ none |
 | Delivery gates | ✅ `delivery-gates.yaml` | ❌ none |
-| Env×Stage **result** contract | (app CI emits) | ✅ `libs/pipeline_stage_contract.py` (§5.4) |
+| Env×Stage **result** contract | (app CI emits) | ✅ `infra2_sdk.delivery` (§5.4) |
 | Fail-closed audit (inventory↔workflow) | ❌ none | ❌ none |
 
 The app gate schema is already richer than `deploy_v2`'s four axes — each gate carries
@@ -41,14 +41,14 @@ missing drift audit to *both* sides.
 
 The single principle that prevents overlap:
 
-> **Contracts (schema + shared vocabulary) have exactly one owner — infra. Gate
+> **Contracts (schema + shared vocabulary) have exactly one owner — `infra2-sdk`. Gate
 > *instances* are owned by whoever runs them, and no gate is listed in both inventories.**
 
 | Asset | Single owner | The other side |
 |---|---|---|
-| Delivery **stage vocabulary** (`local.* / github_ci.* / preview.* / staging.* / prod.* / ops.* / manual.*`) | **infra** — promoted into `docs/ssot/delivery-stages.yaml` | app *references* it |
-| Gate inventory **schema** (the gate object's fields) | **infra** | app *conforms* |
-| **Env×Stage result** contract (`pipeline_stage_contract`) | **infra** (already) | app *emits* into it |
+| Delivery **stage vocabulary** (`local.* / github_ci.* / preview.* / staging.* / prod.* / ops.* / manual.*`) | **infra2-sdk** | infra keeps an equality-guarded SSOT mirror; app imports the SDK |
+| Gate inventory **schema** (the gate object's fields) | **infra2-sdk** | infra and app *conform* |
+| **Env×Stage result** contract (`infra2_sdk.delivery`) | **infra2-sdk** | infra and app *emit* into it |
 | **`deploy_v2` coordinate** (`service, type, version_ref, iac_ref`) | **infra** (already, §4) | app *calls* |
 | **app gate instances** (backend / frontend / AC / coverage gates) | **app** (`ci-gate-inventory.yaml`) | infra never lists them |
 | **infra gate instances** (compose / vault / deployer / reconcile / preview-leak) | **infra** (new `ci-gate-inventory.yaml`) | app never lists them |
@@ -58,15 +58,14 @@ Three non-overlap invariants (enforced by audit, §3):
 
 1. **Every gate appears in exactly one inventory.** An app gate never appears in infra's
    inventory, and vice versa. No "transitional duplicate" survives across the line.
-2. **The `stage` axis is the only shared vocabulary, and it is single-owner (infra).**
-   Both inventories reference the same `delivery-stages.yaml`; neither redefines stages
-   locally. (Today app embeds its own `stages:` block — that moves to infra and app
-   references it.)
+2. **The `stage` axis is the only shared vocabulary, and it is single-owner (`infra2-sdk`).**
+   Both inventories validate against their pinned SDK version; infra's
+   `delivery-stages.yaml` is an equality-guarded SSOT mirror, not a second machine contract.
 3. **Cross-repo views are produced by joining on the shared stage axis, never by
    copying.** The full delivery-chain matrix is a *read-time join* of the two
    inventories, not a third hand-maintained list.
 
-Why infra owns the contracts: `infra2` is the delivery platform/artifact — it defines the
+Why infra publishes the contracts through `infra2-sdk`: `infra2` is the delivery platform/artifact — it defines the
 *shape* of the pipeline (stages, deploy coordinate, result schema). The app is a consumer
 that fills in its own gates. This mirrors the established **App emits artifact / Infra
 consumes** boundary in `AGENTS.md`; here the same arrow means *infra defines the pipeline
@@ -76,7 +75,7 @@ contract, app declares its gates inside it*.
 
 | ID | Deliverable | Notes |
 |----|-------------|-------|
-| **D1** | `docs/ssot/delivery-stages.yaml` — authoritative stage vocabulary (single owner). | App's `ci-gate-inventory.yaml` drops its embedded `stages:` block and references this. Cross-repo PR pair. |
+| **D1** | `infra2_sdk.ci` stage vocabulary plus `docs/ssot/delivery-stages.yaml` mirror. | App pins the SDK; infra equality-checks the local SSOT mirror against that release. |
 | **D2** | `docs/ssot/ci-gate-inventory.yaml` (infra) — coordinate-ize the ~23 CI/validation jobs (`infra-ci` 7, `ops-checks` 6, reconcile dry-run gate, apply-observability, drift reports). Same schema as app. | infra `task_category` values: `compose_validate, vault_policy, vault_agent, deployer_contract, secret_preflight, op_healthcheck, reconcile_plan, preview_leak, drift_report, …` |
 | **D3** | `tools/ci_gate_audit.py` — **fail-closed** drift audit, wired into `infra-ci.yml` (like `deploy_guard_audit.py`). | Bidirectional: every inventory gate's `workflow:job` exists; every CI job is registered by exactly one gate; stage/category in the shared vocab; **no gate in both inventories**. The same audit ships to the app repo (both sides currently lack it). |
 | **D4** | `MANIFEST.yaml` owner entry + a short `ops.pipeline.md` section linking the inventory and stating the app/infra line. | SSOT-first: register the new owner, point the narrative at the coordinate file. |
@@ -86,8 +85,8 @@ contract, app declares its gates inside it*.
 
 - **No copying app gates into infra's inventory** (or vice versa) — that would re-create
   the overlap this EPIC removes.
-- **No second definition of the stage vocabulary** in infra's inventory — reference
-  `delivery-stages.yaml` only.
+- **No second machine definition of the stage vocabulary** in either inventory — import
+  the pinned SDK and keep infra's documented mirror equality-guarded.
 - **No rewrite of GHA workflows.** The inventory is SSOT + audit-checked against the
   existing workflows; matrix-generation of jobs from the inventory is a *later, optional*
   step, not part of this EPIC.
@@ -104,13 +103,13 @@ contract, app declares its gates inside it*.
 3. **One step = one PR, system stays green, independently revertible.** Every PR is a no-op or additive to runtime behavior until the ratchet closes.
 4. **Acceptance is machine-decidable** — an audit exit code, a test, or a CI gate. Never "looks complete".
 5. **Cross-repo changes (touching app) come last,** paired and behind a compat transition proven to be a no-op.
-6. **Non-overlap is structural, not runtime.** Each gate id is namespaced by its owning repo (`infra_ci.*` vs app's `ci.*/preview.*/…`). Each repo's audit asserts *all its gates carry its own prefix*, so two repos **cannot** register the same id — "no overlap" becomes a single-repo, machine-decidable check needing no cross-repo lookup. The cross-repo *view* (D5) runs in the **app repo**, which already vendors `infra2` as a submodule and can read both inventories locally.
+6. **Non-overlap is structural, not runtime.** Each gate id is namespaced by its owning repo (`infra_ci.*` vs app's `ci.*/preview.*/…`). Each repo's audit asserts *all its gates carry its own prefix*, so two repos **cannot** register the same id — "no overlap" becomes a single-repo, machine-decidable check needing no cross-repo lookup. Cross-repo views consume versioned contract artifacts and explicit inventory inputs; App repositories never vendor infra2 source.
 
 ### Phase overview
 
 | Phase | PR(s) | Lands | Acceptance gate (machine-decidable) | Rollback |
 |-------|-------|-------|-------------------------------------|----------|
-| **0 Contracts** | infra ×1 | `ci_gate_schema` + `delivery-stages.yaml` + MANIFEST | schema validates a good/bad fixture; stages unique+ordered+named; MANIFEST guard green | revert PR (additive) |
+| **0 Contracts** | infra ×1 | SDK CI schema + `delivery-stages.yaml` + MANIFEST | schema validates a good/bad fixture; stages unique+ordered+named; MANIFEST guard green | revert PR (additive) |
 | **1 Inventory (shadow)** | infra ×1 | infra `ci-gate-inventory.yaml` (23 jobs) + `ci_gate_audit --report` non-blocking | every entry validates; `dangling_gates==[]` (test-enforced); `unregistered_jobs` listed as backlog | drop audit step |
 | **2 Fail-closed (ratchet closes)** | infra ×1 | backfill gaps; audit `exit 1`; blocking infra-ci step | `unregistered_jobs==[]` **and** `dangling_gates==[]`; negative tests prove red; blocking gate present | flip audit back to report-only (1 line) |
 | **3 App alignment** | app ×2 | 3a: shared schema + app-side audit; 3b: app references `delivery-stages.yaml` | app audit fail-closed green; **(gate_id→stage) byte-identical before/after 3b** (no-op migration test); app has no local `stages:` | 3a/3b independently revertible |
@@ -119,7 +118,7 @@ contract, app declares its gates inside it*.
 ### Per-phase Definition of Done
 
 **Phase 0 — Contracts (infra only, zero behavior change).**
-- `libs/ci_gate_schema.py` (pydantic) loads; `test_ci_gate_schema` accepts a valid gate fixture and rejects one missing a required field / with an unknown stage.
+- `infra2_sdk.ci` loads; `test_ci_gate_schema` accepts a valid gate fixture and rejects one missing a required field / with an unknown stage.
 - `docs/ssot/delivery-stages.yaml`: stage ids unique, carry an explicit `order`, match `^[a-z]+\.[a-z_]+$`; `test_delivery_stages` enforces all three.
 - `MANIFEST.yaml` gains owner entries for both files; the existing MANIFEST-consistency guard stays green. *Accept = the three tests + MANIFEST guard pass.*
 
@@ -135,12 +134,12 @@ contract, app declares its gates inside it*.
 - *Accept = `unregistered_jobs==[] && dangling_gates==[]`, all four negative tests red-on-drift, blocking step present. Proven by a broken fixture in the test suite, not by inspection.*
 
 **Phase 3 — App alignment (cross-repo, highest risk, compat transition).**
-- *3a (additive):* app vendors the shared `ci_gate_schema` (via the infra2 submodule it already has) and gains its own `ci_gate_audit` (app has none today); app keeps its local stages. Accept = app audit fail-closed green.
+- *3a (additive):* app pins the released `infra2-sdk` CI schema and gains its own `ci_gate_audit`; app keeps its local stages. Accept = app audit fail-closed green.
 - *3b (source-swap):* replace app's embedded `stages:` block with a reference to `delivery-stages.yaml`; assert app's used stages ⊆ the shared vocab.
 - *Accept = a **no-op migration test**: the set of `(gate_id → stage)` is byte-identical before and after 3b — only the *source* of the vocabulary changed, never a value. This makes the riskiest step provably behavior-preserving.*
 
 **Phase 4 — Cross-repo non-overlap + chain view.**
-- In the **app repo** (where `infra2` is a submodule), `tools/ci_chain_view.py` joins both inventories on the stage axis into one `stage × task_category` matrix; a guard asserts the two gate-id sets are prefix-disjoint.
+- In the **app repo**, `tools/ci_chain_view.py` joins explicit App and infra inventory inputs on the SDK-owned stage axis into one `stage × task_category` matrix; a guard asserts the two gate-id sets are prefix-disjoint.
 - *Accept = the rendered matrix covers 100% of both inventories' gates (gate count == sum); a constructed duplicate id makes the guard red; the matrix is embedded into `ci-cd.md` / `ops.pipeline.md` as the single high-level review surface.*
 
 ### Critical path & risk

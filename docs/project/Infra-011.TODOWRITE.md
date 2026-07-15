@@ -84,7 +84,7 @@
 
 ## 2026-06-10 Env x Stage Contract Drift Fix
 
-- Added `libs/pipeline_stage_contract.py` as the code-owned contract for Env x Stage evidence records.
+- Added the Env x Stage evidence contract, later published as `infra2_sdk.delivery`; the original local compatibility module was retired by Infra-018.
 - Added `libs/tests/test_pipeline_stage_contract.py` to prove required fields, preflight classification, budget classification, safe acceleration rules, and deterministic disagreement records.
 - Extended SSOT governance so Infra project AC proof table paths fail CI when they point at missing tests, tools, workflows, or code anchors.
 - Remaining work is producer migration: deploy workflow summaries, IaC Runner status payloads, route canary phase deadlines, and watchdog/probe records should emit the shared contract shape.

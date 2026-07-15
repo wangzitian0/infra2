@@ -4,12 +4,12 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from libs.ci_gate_schema import load_delivery_stages
+from infra2_sdk.ci import load_delivery_stages
 
 ROOT = Path(__file__).resolve().parents[2]
 STAGES = load_delivery_stages(ROOT / "docs/ssot/delivery-stages.yaml")
 # multi-segment ids allowed (e.g. github_ci.merge_authority, and future a.b.c) — aligns
-# with libs.ci_gate_schema.GATE_ID_RE so the stage vocab and gate ids share one grammar.
+# with infra2_sdk.ci.GATE_ID_RE so the stage vocab and gate ids share one grammar.
 _ID = re.compile(r"\A[a-z][a-z_]*(?:\.[a-z_]+)+\Z")
 
 
