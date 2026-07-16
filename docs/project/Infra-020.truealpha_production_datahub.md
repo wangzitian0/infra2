@@ -46,7 +46,8 @@ Production shadow canary.
 
 ## Verification
 
-- [ ] `uv run python tools/check_delivery_governance.py` accepts the queued batch.
+- [ ] From the `repos/truealpha` checkout, `uv run python tools/check_delivery_governance.py`
+      accepts the queued batch.
 - [ ] The manual Production command records all 84 TOPT obligations without a schedule.
 - [ ] Read-only status and trace queries reconcile with append-only persisted evidence.
 - [ ] Downstream credentials cannot read `raw`/`staging` or return raw bytes.
