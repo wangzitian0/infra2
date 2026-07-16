@@ -3,6 +3,8 @@
 > **Purpose**: Internal libraries used by deploy scripts and CLI tools. Stable
 > cross-repository contracts live in
 > [`infra2-sdk`](https://github.com/wangzitian0/infra2-sdk) and are imported directly.
+> The infra2 release pin is `v0.3.0`; adoption and Canary installation are
+> equality-guarded by `libs/tests/test_sdk_contract_adoption.py`.
 
 ## At a Glance
 

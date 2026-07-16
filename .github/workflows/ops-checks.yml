@@ -24,6 +24,9 @@ name: Ops Checks
       - "tools/resolve_deploy_ref.py"
       - "tools/preview_lifecycle.py"
       - "libs/dokploy.py"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "repos/infra2-sdk"
       - "finance_report/finance_report/preview/**"
       - ".github/workflows/ops-checks.yml"
       - "docs/ssot/ops.alerting.md"
@@ -38,6 +41,9 @@ name: Ops Checks
       - "tools/resolve_deploy_ref.py"
       - "tools/preview_lifecycle.py"
       - "libs/dokploy.py"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "repos/infra2-sdk"
       - "finance_report/finance_report/preview/**"
       - ".github/workflows/ops-checks.yml"
   schedule:
@@ -424,7 +430,9 @@ jobs:
           python-version: "3.11"
 
       - name: Install runtime dependencies
-        run: python -m pip install httpx python-dotenv rich
+        run: |
+          sdk_requirement="$(python -c 'import tomllib; print(next(value for value in tomllib.load(open("pyproject.toml", "rb"))["project"]["dependencies"] if value.startswith("infra2-sdk @ ")))')"
+          python -m pip install httpx python-dotenv rich "$sdk_requirement"
 
       - name: Run deploy_v2 canary
         env:

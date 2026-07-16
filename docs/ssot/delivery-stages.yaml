@@ -1,9 +1,9 @@
-# Compatibility mirror of infra2-sdk v0.1.0 `infra2_sdk/data/stages.yaml`.
+# Compatibility mirror of infra2-sdk v0.3.0 `infra2_sdk/data/stages.yaml`.
 # The released SDK is the cross-repository machine contract. This local copy keeps infra
 # manifests reviewable and is equality-guarded by test_sdk_contract_adoption.py; do not edit
 # one without releasing/adopting a new SDK version.
 version: 1
-sdk_version: 0.1.0
+sdk_version: 0.3.0
 stages:
   local.advisory:
     order: 0

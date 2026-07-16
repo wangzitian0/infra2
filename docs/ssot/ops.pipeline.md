@@ -210,6 +210,10 @@ IaC Runner 报告了完成的服务 sync 结果,不只是请求被接受**。不
 `infra2_sdk.delivery` 拥有 CI/CD、route canary、watchdog、probe 共享的稀疏 Env×Stage 证据 schema；
 infra2 与 App producer 都直接从各自固定版本的 SDK 导入，不保留源码级 compatibility re-export。
 当 stage 结果用于部署决策/告警路由/加速时,producer 必须发可比记录而非一次性日志。
+infra2 当前固定 `infra2-sdk==0.3.0` 的不可变 release wheel；`deploy_v2_canary` 是首个
+真实 producer：健康路径把 `StageResult` 写入 job summary JSON，失败路径把同一记录放入
+带外告警，并将控制面/配置/运行时/清理故障映射为 SDK 标准 failure domain。成功证据的
+`target` 必须记录已解析 code/IaC SHA；禁用健康检查的 `--no-wait` 只能记录带原因的 `skip`。
 
 必填:`source` · `environment`(`local`/`pr`/`pr-preview`/`staging`/`production`)· `stage` · `target` ·
 `status`(`pass`/`fail`/`skip`/`warn`/`running`)· `duration_ms`/`deadline_ms` · `failure_domain`(失败必填)·

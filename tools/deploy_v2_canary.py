@@ -33,12 +33,30 @@ import time
 from dataclasses import dataclass
 
 import httpx  # transport errors from libs.dokploy surface as httpx exceptions
+from infra2_sdk.delivery import (
+    FailureDomain,
+    StageResult,
+    StageStatus,
+    make_stage_result,
+)
 
 from libs.deploy_contract import DeployTarget
 from tools.deploy_v2 import _CANARY_PR, deploy_v2
 from libs.deploy.preview import down
 
 _APP_SERVICE = "finance_report/app"
+
+_SDK_FAILURE_DOMAIN = {
+    "deploy-v2-control-plane": FailureDomain.DOKPLOY_CONTROL_PLANE,
+    "deploy-v2-health": FailureDomain.DOCKER_RUNTIME,
+    "deploy-v2-configuration": FailureDomain.CONFIGURATION,
+    "deploy-v2-cleanup": FailureDomain.RESOURCE,
+}
+
+_EXTERNAL_FAILURE_DOMAINS = {
+    "deploy-v2-control-plane",
+    "deploy-v2-configuration",
+}
 
 
 def _best_effort_down(
@@ -146,7 +164,53 @@ def failure_domain(exc: Exception) -> str:
     return "deploy-v2-configuration"  # ValueError: bad version_ref / form / contract
 
 
-def alert_failure(env, *, domain: str, detail: str, args) -> None:
+def make_canary_stage_result(
+    *,
+    domain: str | None,
+    status: str | StageStatus,
+    args,
+    duration_ms: int,
+    evidence_url: str = "",
+    resolved_target: DeployTarget | None = None,
+    skipped_reason: str = "",
+) -> StageResult:
+    """Build machine-readable canary evidence using the released SDK contract."""
+    status_value = StageStatus(status)
+    failure = (
+        _SDK_FAILURE_DOMAIN.get(domain or "", FailureDomain.UNKNOWN)
+        if status_value == StageStatus.FAIL
+        else FailureDomain.NONE
+    )
+    target = (
+        f"{resolved_target.service}@{resolved_target.code_version};"
+        f"iac@{resolved_target.iac_ref}"
+        if resolved_target is not None
+        else f"{_APP_SERVICE}@{args.version_ref};iac@{args.iac_ref}"
+    )
+    return make_stage_result(
+        source="tools.deploy_v2_canary",
+        environment="pr",
+        stage="deploy-smoke",
+        target=target,
+        status=status_value,
+        duration_ms=duration_ms,
+        failure_domain=failure,
+        external_dependency=(domain or "") in _EXTERNAL_FAILURE_DOMAINS,
+        skipped_reason=skipped_reason,
+        evidence_url=evidence_url,
+    )
+
+
+def _run_url(env) -> str:
+    server = env.get("GITHUB_SERVER_URL", "").rstrip("/")
+    repository = env.get("GITHUB_REPOSITORY", "").strip("/")
+    run_id = env.get("GITHUB_RUN_ID", "").strip()
+    if not all((server, repository, run_id)):
+        return ""
+    return f"{server}/{repository}/actions/runs/{run_id}"
+
+
+def alert_failure(env, *, domain: str, detail: str, args, duration_ms: int = 0) -> None:
     """Best-effort out-of-band alert that infra2's deploy-path probe is RED.
 
     Uses the SAME out-of-band Feishu path the watchdog uses (survives infra2 being down).
@@ -156,9 +220,17 @@ def alert_failure(env, *, domain: str, detail: str, args) -> None:
     """
     from libs.alerting import deliver_out_of_band_text
 
+    evidence = make_canary_stage_result(
+        domain=domain,
+        status=StageStatus.FAIL,
+        args=args,
+        duration_ms=duration_ms,
+        evidence_url=_run_url(env),
+    )
     text = (
         "🔴 deploy_v2 canary FAILED — infra2 deploy-path probe is RED\n"
         f"failure_domain: {domain}\n"
+        f"stage_result: {json.dumps(evidence.to_dict(), sort_keys=True)}\n"
         f"version_ref={args.version_ref} iac_ref={args.iac_ref} domain={args.domain}\n"
         f"detail: {detail}\n"
         "→ the shared deploy_v2 path is broken; a real staging/prod deploy would likely "
@@ -205,6 +277,8 @@ def main(argv: list[str] | None = None) -> int:
 
     client = get_dokploy(host=f"cloud.{args.domain}")
     domain, detail, rc = None, None, 0
+    started = time.monotonic()
+    result = None
     try:
         result = run_canary(
             client=client,
@@ -221,6 +295,31 @@ def main(argv: list[str] | None = None) -> int:
         domain, detail, rc = failure_domain(exc), str(exc), 1
         print(f"canary failed [{domain}]: {exc}", file=sys.stderr)
     else:
+        if not (result.ok or args.no_wait):  # deployed but never went healthy
+            domain, detail, rc = "deploy-v2-health", f"healthy={result.healthy}", 1
+        elif not (result.torn_down or args.keep):  # healthy but leaked its stack
+            domain = "deploy-v2-cleanup"
+            detail, rc = f"torn_down={result.torn_down} (possible leak)", 1
+
+        duration_ms = round((time.monotonic() - started) * 1000)
+        if rc != 0:
+            stage_status = StageStatus.FAIL
+            skipped_reason = ""
+        elif args.no_wait:
+            stage_status = StageStatus.SKIP
+            skipped_reason = "health check disabled by --no-wait"
+        else:
+            stage_status = StageStatus.PASS
+            skipped_reason = ""
+        stage_result = make_canary_stage_result(
+            domain=domain,
+            status=stage_status,
+            args=args,
+            duration_ms=duration_ms,
+            evidence_url=_run_url(os.environ),
+            resolved_target=result.target,
+            skipped_reason=skipped_reason,
+        )
         print(
             json.dumps(
                 {
@@ -229,17 +328,20 @@ def main(argv: list[str] | None = None) -> int:
                     "url": result.url,
                     "healthy": result.healthy,
                     "torn_down": result.torn_down,
+                    "stage_result": stage_result.to_dict(),
                 }
             )
         )
-        if not (result.ok or args.no_wait):  # deployed but never went healthy
-            domain, detail, rc = "deploy-v2-health", f"healthy={result.healthy}", 1
-        elif not (result.torn_down or args.keep):  # healthy but leaked its stack
-            domain = "deploy-v2-cleanup"
-            detail, rc = f"torn_down={result.torn_down} (possible leak)", 1
 
     if rc != 0 and args.alert_on_failure:
-        alert_failure(os.environ, domain=domain, detail=detail, args=args)
+        duration_ms = round((time.monotonic() - started) * 1000)
+        alert_failure(
+            os.environ,
+            domain=domain,
+            detail=detail,
+            args=args,
+            duration_ms=duration_ms,
+        )
     return rc
 
 

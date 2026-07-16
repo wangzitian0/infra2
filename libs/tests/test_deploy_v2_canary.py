@@ -7,10 +7,12 @@ gate and is operator-driven (see the module docstring).
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 import httpx
 import pytest
+from infra2_sdk.delivery import FailureDomain, PipelineStage, StageStatus
 
 import tools.deploy_v2_canary as canary
 from libs.deploy_contract import make_target
@@ -138,9 +140,7 @@ def test_best_effort_down_retries_then_succeeds(monkeypatch):
             raise httpx.HTTPError("transient 502")
 
     monkeypatch.setattr(canary, "down", flaky)
-    ok = canary._best_effort_down(
-        domain="z.p", client=object(), _sleep=lambda *_: None
-    )
+    ok = canary._best_effort_down(domain="z.p", client=object(), _sleep=lambda *_: None)
     assert ok is True and calls["n"] == 2
 
 
@@ -187,8 +187,62 @@ def test_run_canary_teardown_failure_does_not_mask_deploy_error(monkeypatch, cap
 def test_failure_domain_classification():
     assert canary.failure_domain(httpx.HTTPError("x")) == "deploy-v2-control-plane"
     assert canary.failure_domain(TimeoutError()) == "deploy-v2-health"
-    assert canary.failure_domain(RuntimeError("composeStatus=error")) == "deploy-v2-health"
+    assert (
+        canary.failure_domain(RuntimeError("composeStatus=error")) == "deploy-v2-health"
+    )
     assert canary.failure_domain(ValueError("bad ref")) == "deploy-v2-configuration"
+
+
+def test_run_url_requires_complete_github_identity():
+    assert canary._run_url({}) == ""
+    assert canary._run_url({"GITHUB_SERVER_URL": "https://github.com"}) == ""
+    assert (
+        canary._run_url(
+            {
+                "GITHUB_SERVER_URL": "https://github.com",
+                "GITHUB_REPOSITORY": "owner/repo",
+                "GITHUB_RUN_ID": "123",
+            }
+        )
+        == "https://github.com/owner/repo/actions/runs/123"
+    )
+
+
+@pytest.mark.parametrize(
+    ("domain", "expected", "external_dependency"),
+    [
+        ("deploy-v2-control-plane", FailureDomain.DOKPLOY_CONTROL_PLANE, True),
+        ("deploy-v2-health", FailureDomain.DOCKER_RUNTIME, False),
+        ("deploy-v2-configuration", FailureDomain.CONFIGURATION, True),
+        ("deploy-v2-cleanup", FailureDomain.RESOURCE, False),
+    ],
+)
+def test_failure_stage_result_uses_sdk_contract(domain, expected, external_dependency):
+    result = canary.make_canary_stage_result(
+        domain=domain,
+        status=StageStatus.FAIL,
+        args=_Args(),
+        duration_ms=123,
+        evidence_url="https://github.com/example/actions/runs/1",
+    )
+
+    assert result.stage == PipelineStage.DEPLOY_SMOKE
+    assert result.failure_domain == expected
+    assert result.external_dependency is external_dependency
+    assert result.duration_ms == 123
+    assert result.evidence_url.endswith("/1")
+
+
+def test_stage_result_uses_resolved_deployment_coordinate():
+    result = canary.make_canary_stage_result(
+        domain=None,
+        status=StageStatus.PASS,
+        args=_Args(),
+        duration_ms=123,
+        resolved_target=_fake_target(),
+    )
+
+    assert result.target == f"finance_report/app@{SHA_CODE};iac@{SHA_IAC}"
 
 
 class _Args:
@@ -228,10 +282,22 @@ def test_main_alerts_out_of_band_on_failure(monkeypatch):
 
     sent = _main_with(monkeypatch, boom)
     rc = canary.main(
-        ["--version-ref", "main", "--iac-ref", "main", "--domain", "z.p", "--alert-on-failure"]
+        [
+            "--version-ref",
+            "main",
+            "--iac-ref",
+            "main",
+            "--domain",
+            "z.p",
+            "--alert-on-failure",
+        ]
     )
     assert rc == 1
     assert "deploy-v2-control-plane" in sent["text"]  # classified + paged
+    marker = "stage_result: "
+    payload = json.loads(sent["text"].split(marker, 1)[1].splitlines()[0])
+    assert payload["status"] == "fail"
+    assert payload["failure_domain"] == "dokploy-control-plane"
 
 
 def test_main_no_alert_without_flag(monkeypatch):
@@ -243,18 +309,60 @@ def test_main_no_alert_without_flag(monkeypatch):
     assert rc == 1 and "text" not in sent  # PR-style run: no out-of-band page
 
 
+def test_main_no_wait_emits_skip_evidence(monkeypatch, capsys):
+    import libs.dokploy as dk
+
+    monkeypatch.setattr(dk, "get_dokploy", lambda host: object())
+    monkeypatch.setattr(
+        canary,
+        "run_canary",
+        lambda **kw: canary.CanaryResult(
+            ok=None,
+            target=_fake_target(),
+            alias="pr-999",
+            url="u",
+            healthy=None,
+            torn_down=True,
+        ),
+    )
+
+    rc = canary.main(
+        ["--version-ref", "main", "--iac-ref", "main", "--domain", "z.p", "--no-wait"]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert payload["stage_result"]["status"] == "skip"
+    assert (
+        payload["stage_result"]["skipped_reason"]
+        == "health check disabled by --no-wait"
+    )
+
+
 def test_main_treats_leak_as_cleanup_failure(monkeypatch):
     from tools.deploy_v2_canary import CanaryResult
 
     def leaked(**kw):
         return CanaryResult(
-            ok=True, target=_fake_target(), alias="pr-999", url="u",
-            healthy=True, torn_down=False,
+            ok=True,
+            target=_fake_target(),
+            alias="pr-999",
+            url="u",
+            healthy=True,
+            torn_down=False,
         )
 
     sent = _main_with(monkeypatch, leaked)
     rc = canary.main(
-        ["--version-ref", "main", "--iac-ref", "main", "--domain", "z.p", "--alert-on-failure"]
+        [
+            "--version-ref",
+            "main",
+            "--iac-ref",
+            "main",
+            "--domain",
+            "z.p",
+            "--alert-on-failure",
+        ]
     )
     assert rc == 1
     assert "deploy-v2-cleanup" in sent["text"]  # healthy but leaked -> still a failure

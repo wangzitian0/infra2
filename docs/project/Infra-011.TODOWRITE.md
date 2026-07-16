@@ -18,7 +18,7 @@
 | Infra-011.9 | Dokploy dynamic route canary classifies missing canary configuration and platform deploy failures before app PR previews depend on them, and the out-of-band watchdog pages worker/deployment-record failures independently of app CI. | `libs/tests/test_dokploy_route_canary.py`, `libs/tests/test_out_of_band_watchdog.py` |
 | Infra-011.10 | IaC Runner deploy control accepts only immutable SHAs, uses timestamped nonce signatures, redacts public deploy responses, and prevents root-token resolution through 1Password. | `libs/tests/test_iac_runner_deploy_result.py` |
 | Infra-011.11 | Generic Dokploy deployer sync retries no-op `compose.deploy` calls with `compose.redeploy` and fails fast when no new runtime deployment record appears. | `libs/tests/test_deployer.py` |
-| Infra-011.12 | CI/CD, watchdog, canary, and probe outputs separate environment from pipeline stage and share a sparse Env x Stage result schema. | `libs/tests/test_pipeline_stage_contract.py`, `docs/ssot/ops.pipeline.md`, `docs/ssot/ops.alerting.md` |
+| Infra-011.12 | CI/CD, watchdog, canary, and probe outputs separate environment from pipeline stage and share a sparse Env x Stage result schema; deploy_v2 Canary is the first live producer. | `libs/tests/test_pipeline_stage_contract.py`, `libs/tests/test_deploy_v2_canary.py`, `docs/ssot/ops.pipeline.md`, `docs/ssot/ops.alerting.md` |
 | Infra-011.13 | External dependencies fail in preflight before expensive stages. | `libs/tests/test_pipeline_stage_contract.py`, `libs/tests/test_cloudflare_watchdog.py`, `libs/tests/test_out_of_band_watchdog.py`, `libs/tests/test_dokploy_route_canary.py` |
 | Infra-011.14 | Long-running stages publish soft budget, hard deadline, elapsed duration, current stage age, and budget breach classification. | `libs/tests/test_pipeline_stage_contract.py`, `libs/tests/test_iac_runner_deploy_result.py` |
 | Infra-011.15 | Cross-stage disagreements are deterministic, measurable records rather than operator interpretation. | `libs/tests/test_pipeline_stage_contract.py`, `libs/tests/test_infra_probes.py`, `libs/tests/test_cloudflare_watchdog.py` |
@@ -87,4 +87,11 @@
 - Added the Env x Stage evidence contract, later published as `infra2_sdk.delivery`; the original local compatibility module was retired by Infra-018.
 - Added `libs/tests/test_pipeline_stage_contract.py` to prove required fields, preflight classification, budget classification, safe acceleration rules, and deterministic disagreement records.
 - Extended SSOT governance so Infra project AC proof table paths fail CI when they point at missing tests, tools, workflows, or code anchors.
-- Remaining work is producer migration: deploy workflow summaries, IaC Runner status payloads, route canary phase deadlines, and watchdog/probe records should emit the shared contract shape.
+- `deploy_v2_canary` now emits the released `infra2-sdk v0.3.0` shape on healthy output and failure alerts. Remaining producer migration is deploy workflow summaries, IaC Runner status payloads, route canary phase deadlines, and watchdog/probe records.
+
+## 2026-07-16 SDK v0.3.0 Canary Adoption
+
+- Upgraded infra2 from the immutable `infra2-sdk v0.1.0` wheel to `v0.3.0` and equality-guarded the local delivery-stage mirror.
+- Made deploy_v2 Canary success and fail-path alerts emit SDK `StageResult` evidence with standard failure domains and duration/run URL evidence.
+- Hardened review findings: no-wait evidence is a reasoned skip, successful evidence records resolved code/IaC SHAs, and workflow contract tests parse YAML structure instead of slicing text.
+- Kept alerting low-noise: no periodic synthetic page was restored; healthy delivery remains proven by readiness probes and report delivery.
