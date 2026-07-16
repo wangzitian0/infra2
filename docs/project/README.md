@@ -28,6 +28,7 @@
 
 ## Active Projects
 - [Infra-019: Workspace Harness Control Plane](./Infra-019.harness_control_plane.md) - **In Progress**
+- [Infra-020: TrueAlpha Production DataHub](./Infra-020.truealpha_production_datahub.md) - **In Progress**
 - [Infra-017: TrueAlpha Dagster Capture Runtime](./Infra-017.truealpha_dagster_capture.md) - **In Progress**
 - [Infra-015: deploy_v2 Unified Front Door](./Infra-015.deploy_v2_front_door.md) - **Impl complete; sender #1173 pending → archive**
 - [Infra-013: Service Registry as Single Source of Truth](./Infra-013.service_registry_ssot.md) - **In Progress**
