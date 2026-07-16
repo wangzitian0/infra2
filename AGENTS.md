@@ -1,6 +1,22 @@
-# 基础设施 AI Agent 行为准则
+# Infra2 Harness 与基础设施 AI Agent 行为准则
 
 > **禁令**：除非明确指定，否则 AI 不可以自动修改本文件。AI 不可以执行合流 (Merge PR) 操作。
+
+## Harness 作用域与优先级
+
+本仓库同时是 `infra2` 的实现/部署控制面和多仓库开发 workspace。机器清单见
+[`harness/repos.yaml`](harness/repos.yaml)，架构边界见
+[`docs/ssot/core.harness.md`](docs/ssot/core.harness.md)。
+
+1. **Harness focus**：本文件直接治理根目录的 `infra2` 工作；workspace 重点是
+   `infra2`、`infra2-sdk` 与通用协作偏好。
+2. **App 自治**：`repos/finance_report` 与 `repos/truealpha` 只是 workspace checkout。
+   进入 App 后，必须先读其本地 `AGENTS.md` 与架构文档；App 本地规则优先，harness
+   不复制、不分发、不强制同步 App policy。
+3. **偏好不是跨仓库命令**：GitHub、协作与软件设计默认偏好位于
+   [`harness/workspace/`](harness/workspace/)。目标仓库有更具体规则时，以目标仓库为准。
+4. **依赖边界**：submodule 只表示开发快照，不是 package、runtime、deployment 或
+   config-hash 依赖。稳定跨仓库代码契约只通过已发布的 `infra2-sdk` 版本传递。
 
 ## 🧭 Wiki 入口地图（0级/1级）
 

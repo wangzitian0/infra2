@@ -1,0 +1,56 @@
+schema_version: 1
+workspace:
+  id: infra2-harness
+  focus:
+    - infra2
+    - infra2-sdk
+  preferences:
+    - harness/workspace/coordination.md
+    - harness/workspace/github.md
+    - harness/workspace/software-design.md
+
+repositories:
+  - id: infra2
+    path: .
+    checkout: root
+    role: infrastructure-control-plane
+    governance: local
+    source: https://github.com/wangzitian0/infra2
+    release_identity: infra2-release-tag
+    authority:
+      - AGENTS.md
+      - docs/ssot/core.md
+      - docs/ssot/core.harness.md
+
+  - id: infra2-sdk
+    path: repos/infra2-sdk
+    checkout: submodule
+    role: cross-repository-contract
+    governance: coordinated
+    source: https://github.com/wangzitian0/infra2-sdk
+    release_identity: sdk-semver
+    authority:
+      - README.md
+      - pyproject.toml
+
+  - id: finance-report
+    path: repos/finance_report
+    checkout: submodule
+    role: external-application
+    governance: autonomous
+    source: https://github.com/wangzitian0/finance_report
+    release_identity: app-image-ref-or-digest
+    authority:
+      - AGENTS.md
+      - README.md
+
+  - id: truealpha
+    path: repos/truealpha
+    checkout: submodule
+    role: external-application
+    governance: autonomous
+    source: https://github.com/wangzitian0/truealpha
+    release_identity: app-image-ref-or-digest
+    authority:
+      - AGENTS.md
+      - init.md

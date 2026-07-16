@@ -58,6 +58,7 @@ nav:
       - Core:
           - Architecture: ssot/core.md
           - Environments: ssot/core.environments.md
+          - Workspace Harness: ssot/core.harness.md
           - TrueAlpha Runtime: ssot/core.truealpha_runtime.md
       - Bootstrap:
           - No-Dep: ssot/bootstrap.nodep.md
@@ -92,6 +93,7 @@ nav:
           - Watchdog Signals: ssot/watchdog-signals.yaml
   - Projects:
       - Portfolio: project/README.md
+      - Infra-019: project/Infra-019.harness_control_plane.md
       - Infra-015: project/Infra-015.deploy_v2_front_door.md
       - Infra-014: project/Infra-014.finance_report_observability.md
       - Infra-011: project/Infra-011.reliability_hardening.md
