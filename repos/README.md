@@ -7,6 +7,11 @@ repositories:
 - `finance_report`: Finance Report application source.
 - `truealpha`: TrueAlpha application source.
 
+The workspace harness focuses on `infra2`, `infra2-sdk`, and shared collaboration/design
+preferences. `finance_report` and `truealpha` remain autonomous: their local agent rules,
+architecture, CI gates, and release processes are authoritative and are not synchronized
+from this repository. See [`harness/repos.yaml`](../harness/repos.yaml).
+
 Initialize or refresh the pinned workspace snapshot from the infra2 root:
 
 ```bash

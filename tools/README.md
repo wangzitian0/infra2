@@ -26,6 +26,10 @@ infra2.
 the infra-owned gate inventory against live workflow jobs. No local compatibility schema
 or application source checkout participates in the audit.
 
+`harness.py` is the read-only workspace front door. It validates
+`harness/repos.yaml`, referenced authority files, the infra2/infra2-sdk focus, and the
+autonomous App boundary. It never updates submodules or application policy.
+
 ## Division of labor (`libs/` vs `tools/`)
 
 - **`libs/`** — importable, unit-testable logic (no `__main__`, no argv).
@@ -57,6 +61,16 @@ or application source checkout participates in the audit.
 - Write operations use `KEY=VALUE` (quote values with spaces)
 - Output uses `libs.console` helpers; avoid raw `print` in new tasks.
 - Omit `--service` for environment-level (`{project}/{env}`) values.
+
+## harness.py
+
+```bash
+# Human-readable result
+uv run python -m tools.harness check
+
+# Machine-readable result
+uv run python -m tools.harness check --json
+```
 
 ## env (remote secrets)
 

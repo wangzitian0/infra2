@@ -45,6 +45,7 @@
 |------|----------|----------|
 | [core.md](./core.md) | `core` | 架构 + 目录 + 环境 + 变量 + 网络 |
 | [core.environments.md](./core.environments.md) | `core.environments` | 环境分类、隔离与命名 |
+| [core.harness.md](./core.harness.md) | `core.harness` | Workspace harness scope, repository autonomy, and coordination boundary |
 | [core.truealpha_runtime.md](./core.truealpha_runtime.md) | `core.truealpha_runtime` | TrueAlpha Dagster artifact binding, environment isolation, and host-only OpenD boundary |
 
 ---

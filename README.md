@@ -1,8 +1,23 @@
-# infra2
+# infra2 workspace harness
 
 [![Coverage Status](https://coveralls.io/repos/github/wangzitian0/infra2/badge.svg?branch=main)](https://coveralls.io/github/wangzitian0/infra2?branch=main)
 
-基础设施自动化工作区：平台引导、服务部署、文档管理。
+`infra2` 基础设施实现与部署控制面，以及 `infra2-sdk` 和自主 App 的统一开发
+workspace。Harness 只拥有 infra2、SDK 协作边界和 workspace 通用偏好；App 保持
+独立治理与发布。
+
+## Workspace Harness
+
+```bash
+# 初始化 workspace checkout
+git submodule update --init --recursive
+
+# 只读验证仓库角色、authority 路径与自治边界
+uv run python -m tools.harness check
+```
+
+入口见 [harness/README.md](harness/README.md)，架构真源见
+[Harness Control Plane SSOT](docs/ssot/core.harness.md)。
 
 ## 🚀 Quick Start
 
@@ -35,6 +50,7 @@ invoke --list
 
 ```
 infra2/
+├── harness/          # Workspace 清单与通用协作/设计偏好
 ├── bootstrap/        # L1 - 基础层 (1Password, Vault)
 ├── platform/         # L2 - 平台层 (PostgreSQL, Redis, Authentik)
 ├── finance_report/   # L3 - 应用层 (Finance Report)
@@ -52,7 +68,8 @@ infra2/
 [`infra2-sdk`](https://github.com/wangzitian0/infra2-sdk/releases) 提供。`repos/`
 submodules 只作为统一开发 workspace；生产部署仍由 infra tag、SDK SemVer 和 App image
 版本独立确定。使用 `git submodule update --init --recursive` 初始化该 workspace。
-详见 [Workspace repositories](repos/README.md) 和
+App 的本地规范、CI 与发布流程保持自治。详见 [Workspace Harness](harness/README.md)、
+[Workspace repositories](repos/README.md) 和
 [Core repository boundary](docs/ssot/core.md#31-repository-dependency-boundary)。
 
 ## 📚 文档入口

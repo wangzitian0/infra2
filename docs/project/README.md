@@ -17,6 +17,7 @@
 ## Global TODOWRITE
 - [Infra-001.TODOWRITE.md](./Infra-001.TODOWRITE.md) - Legacy/global issues
 - [Infra-015.TODOWRITE.md](./Infra-015.TODOWRITE.md) - deploy_v2 front door residuals (sender #1173 + archive)
+- [Infra-019.TODOWRITE.md](./Infra-019.TODOWRITE.md) - workspace harness follow-ups
 
 ## Related
 - [README.md](../../README.md) - 工程入口
@@ -26,6 +27,7 @@
 - [docs/README.md](../README.md) - 文档索引
 
 ## Active Projects
+- [Infra-019: Workspace Harness Control Plane](./Infra-019.harness_control_plane.md) - **In Progress**
 - [Infra-017: TrueAlpha Dagster Capture Runtime](./Infra-017.truealpha_dagster_capture.md) - **In Progress**
 - [Infra-015: deploy_v2 Unified Front Door](./Infra-015.deploy_v2_front_door.md) - **Impl complete; sender #1173 pending → archive**
 - [Infra-013: Service Registry as Single Source of Truth](./Infra-013.service_registry_ssot.md) - **In Progress**
@@ -45,4 +47,4 @@
 - [Infra-003: Documentation Reorganization](./archive/Infra-003.docs_reorg.md) - **Archived**
 
 ---
-*Last updated: 2026-07-15*
+*Last updated: 2026-07-16*

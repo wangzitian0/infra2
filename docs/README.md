@@ -14,6 +14,7 @@
 - **SSOT 技术参考**：[docs/ssot/README.md](./ssot/README.md)
 - **项目进度**：[docs/project/README.md](./project/README.md)
 - **AI 行为准则**：[AGENTS.md](../AGENTS.md)
+- **Workspace Harness**：`harness/README.md`
 
 > 文档命令示例默认使用 `invoke`；未激活虚拟环境时请使用 `uv run invoke`。
 
