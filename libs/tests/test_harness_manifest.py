@@ -54,6 +54,7 @@ def _workspace(tmp_path: Path) -> dict:
     (tmp_path / "AGENTS.md").write_text("authority", encoding="utf-8")
     app = tmp_path / "repos" / "app"
     app.mkdir(parents=True)
+    (app / ".git").write_text("gitdir: fixture", encoding="utf-8")
     (app / "AGENTS.md").write_text("authority", encoding="utf-8")
     return _valid_manifest()
 
@@ -78,12 +79,25 @@ def test_missing_checkout_is_warning_but_manifest_remains_valid(tmp_path: Path) 
     manifest = _workspace(tmp_path)
     app = tmp_path / "repos" / "app"
     (app / "AGENTS.md").unlink()
+    (app / ".git").unlink()
     app.rmdir()
 
     result = validate_manifest(tmp_path, manifest)
 
     assert result.ok
     assert [warning.code for warning in result.warnings] == ["checkout-missing"]
+
+
+def test_empty_submodule_directory_is_uninitialized_warning(tmp_path: Path) -> None:
+    manifest = _workspace(tmp_path)
+    app = tmp_path / "repos" / "app"
+    (app / "AGENTS.md").unlink()
+    (app / ".git").unlink()
+
+    result = validate_manifest(tmp_path, manifest)
+
+    assert result.ok
+    assert [warning.code for warning in result.warnings] == ["checkout-uninitialized"]
 
 
 def test_missing_checkout_does_not_skip_authority_schema(tmp_path: Path) -> None:

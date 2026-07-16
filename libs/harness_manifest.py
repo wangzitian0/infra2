@@ -227,6 +227,18 @@ def validate_manifest(root: Path, manifest: dict[str, Any]) -> CheckResult:
                 )
             )
             continue
+        if (
+            repository["checkout"] == "submodule"
+            and not (checkout_path / ".git").exists()
+        ):
+            findings.append(
+                Finding(
+                    "warning",
+                    "checkout-uninitialized",
+                    f"{repository_id} submodule is not initialized: {relative}",
+                )
+            )
+            continue
         for authority_path in authority:
             resolved = _inside(checkout_path, authority_path)
             if resolved is None or not resolved.is_file():
