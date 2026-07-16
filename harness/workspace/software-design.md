@@ -13,6 +13,8 @@ domain semantics and may impose stronger constraints.
   instances and implementation policy.
 - Keep human workflow preferences out of `infra2-sdk`. They belong in this harness or
   the owning repository, not in runtime wire contracts.
+- Keep reusable TUI management in `oh-my-code-agent`; repository-specific commands and
+  product policy stay with the owning repository.
 - Never make workspace submodules package, runtime, deployment, or configuration-hash
   dependencies.
 

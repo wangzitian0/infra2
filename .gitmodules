@@ -7,3 +7,6 @@
 [submodule "repos/truealpha"]
 	path = repos/truealpha
 	url = https://github.com/wangzitian0/truealpha.git
+[submodule "oh-my-code-agent"]
+	path = oh-my-code-agent
+	url = git@github.com:wangzitian0/oh-my-code-agent.git

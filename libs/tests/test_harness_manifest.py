@@ -64,8 +64,14 @@ def test_committed_inventory_is_valid_and_apps_are_autonomous() -> None:
     result = validate_manifest(ROOT, manifest)
 
     assert result.ok, result.to_dict()
-    assert result.repository_count == 4
+    assert result.repository_count == 5
     assert manifest["workspace"]["focus"] == ["infra2", "infra2-sdk"]
+    tooling = next(
+        repo for repo in manifest["repositories"] if repo["id"] == "oh-my-code-agent"
+    )
+    assert tooling["path"] == "oh-my-code-agent"
+    assert tooling["role"] == "workspace-tooling"
+    assert tooling["governance"] == "coordinated"
     apps = [
         repo
         for repo in manifest["repositories"]

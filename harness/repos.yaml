@@ -33,6 +33,16 @@ repositories:
       - README.md
       - pyproject.toml
 
+  - id: oh-my-code-agent
+    path: oh-my-code-agent
+    checkout: submodule
+    role: workspace-tooling
+    governance: coordinated
+    source: git@github.com:wangzitian0/oh-my-code-agent.git
+    release_identity: tool-release-or-pinned-commit
+    authority:
+      - README.md
+
   - id: finance-report
     path: repos/finance_report
     checkout: submodule

@@ -13,6 +13,8 @@
 
 ## Follow-Ups
 
+- [x] Add root-level `oh-my-code-agent` submodule as coordinated workspace TUI tooling.
+
 - [ ] Add read-only `harness status` for pinned checkout, remote head, and release identity.
 - [ ] Add an infra2-sdk-local contributor/agent guide through an independent SDK PR.
 - [ ] Decide whether workspace preference changes need their own version identifier.

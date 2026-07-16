@@ -13,9 +13,11 @@
 2. **App 自治**：`repos/finance_report` 与 `repos/truealpha` 只是 workspace checkout。
    进入 App 后，必须先读其本地 `AGENTS.md` 与架构文档；App 本地规则优先，harness
    不复制、不分发、不强制同步 App policy。
-3. **偏好不是跨仓库命令**：GitHub、协作与软件设计默认偏好位于
+3. **Workspace tooling**：根目录 `oh-my-code-agent/` 是独立 submodule，用于逐步承载
+   各类 TUI 管理。它独立迭代，不得成为 infra 或 App 的 runtime/source 依赖。
+4. **偏好不是跨仓库命令**：GitHub、协作与软件设计默认偏好位于
    [`harness/workspace/`](harness/workspace/)。目标仓库有更具体规则时，以目标仓库为准。
-4. **依赖边界**：submodule 只表示开发快照，不是 package、runtime、deployment 或
+5. **依赖边界**：submodule 只表示开发快照，不是 package、runtime、deployment 或
    config-hash 依赖。稳定跨仓库代码契约只通过已发布的 `infra2-sdk` 版本传递。
 
 ## 🧭 Wiki 入口地图（0级/1级）
