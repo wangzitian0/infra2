@@ -233,6 +233,18 @@ def test_failure_stage_result_uses_sdk_contract(domain, expected, external_depen
     assert result.evidence_url.endswith("/1")
 
 
+def test_stage_result_uses_resolved_deployment_coordinate():
+    result = canary.make_canary_stage_result(
+        domain=None,
+        status=StageStatus.PASS,
+        args=_Args(),
+        duration_ms=123,
+        resolved_target=_fake_target(),
+    )
+
+    assert result.target == f"finance_report/app@{SHA_CODE};iac@{SHA_IAC}"
+
+
 class _Args:
     version_ref = "main"
     iac_ref = "main"
@@ -295,6 +307,36 @@ def test_main_no_alert_without_flag(monkeypatch):
     sent = _main_with(monkeypatch, boom)
     rc = canary.main(["--version-ref", "main", "--iac-ref", "main", "--domain", "z.p"])
     assert rc == 1 and "text" not in sent  # PR-style run: no out-of-band page
+
+
+def test_main_no_wait_emits_skip_evidence(monkeypatch, capsys):
+    import libs.dokploy as dk
+
+    monkeypatch.setattr(dk, "get_dokploy", lambda host: object())
+    monkeypatch.setattr(
+        canary,
+        "run_canary",
+        lambda **kw: canary.CanaryResult(
+            ok=None,
+            target=_fake_target(),
+            alias="pr-999",
+            url="u",
+            healthy=None,
+            torn_down=True,
+        ),
+    )
+
+    rc = canary.main(
+        ["--version-ref", "main", "--iac-ref", "main", "--domain", "z.p", "--no-wait"]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert payload["stage_result"]["status"] == "skip"
+    assert (
+        payload["stage_result"]["skipped_reason"]
+        == "health check disabled by --no-wait"
+    )
 
 
 def test_main_treats_leak_as_cleanup_failure(monkeypatch):

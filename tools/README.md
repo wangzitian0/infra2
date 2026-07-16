@@ -127,8 +127,10 @@ canary host/compose and rely on workflow concurrency to avoid overlap.
 End-to-end proof for the unified deploy primitive. It deploys Finance Report to
 the reserved `pr-999` slot, verifies public health, and tears the stack and
 ephemeral database down in `finally`. Success output and failure alerts include
-an `infra2_sdk.delivery.StageResult`; scheduled/post-merge failures page through
-the out-of-band Feishu path, while PR failures remain CI-only.
+an `infra2_sdk.delivery.StageResult` whose target contains the resolved code and
+IaC SHAs; `--no-wait` is recorded as `skip`, never as a smoke pass.
+Scheduled/post-merge failures page through the out-of-band Feishu path, while
+PR failures remain CI-only.
 
 ```bash
 uv run python -m tools.deploy_v2_canary \

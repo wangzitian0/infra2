@@ -93,4 +93,5 @@
 
 - Upgraded infra2 from the immutable `infra2-sdk v0.1.0` wheel to `v0.3.0` and equality-guarded the local delivery-stage mirror.
 - Made deploy_v2 Canary success and fail-path alerts emit SDK `StageResult` evidence with standard failure domains and duration/run URL evidence.
+- Hardened review findings: no-wait evidence is a reasoned skip, successful evidence records resolved code/IaC SHAs, and workflow contract tests parse YAML structure instead of slicing text.
 - Kept alerting low-noise: no periodic synthetic page was restored; healthy delivery remains proven by readiness probes and report delivery.

@@ -171,6 +171,8 @@ def make_canary_stage_result(
     args,
     duration_ms: int,
     evidence_url: str = "",
+    resolved_target: DeployTarget | None = None,
+    skipped_reason: str = "",
 ) -> StageResult:
     """Build machine-readable canary evidence using the released SDK contract."""
     status_value = StageStatus(status)
@@ -179,15 +181,22 @@ def make_canary_stage_result(
         if status_value == StageStatus.FAIL
         else FailureDomain.NONE
     )
+    target = (
+        f"{resolved_target.service}@{resolved_target.code_version};"
+        f"iac@{resolved_target.iac_ref}"
+        if resolved_target is not None
+        else f"{_APP_SERVICE}@{args.version_ref};iac@{args.iac_ref}"
+    )
     return make_stage_result(
         source="tools.deploy_v2_canary",
         environment="pr",
         stage="deploy-smoke",
-        target=f"{_APP_SERVICE}@{args.version_ref}",
+        target=target,
         status=status_value,
         duration_ms=duration_ms,
         failure_domain=failure,
         external_dependency=(domain or "") in _EXTERNAL_FAILURE_DOMAINS,
+        skipped_reason=skipped_reason,
         evidence_url=evidence_url,
     )
 
@@ -293,12 +302,23 @@ def main(argv: list[str] | None = None) -> int:
             detail, rc = f"torn_down={result.torn_down} (possible leak)", 1
 
         duration_ms = round((time.monotonic() - started) * 1000)
+        if rc != 0:
+            stage_status = StageStatus.FAIL
+            skipped_reason = ""
+        elif args.no_wait:
+            stage_status = StageStatus.SKIP
+            skipped_reason = "health check disabled by --no-wait"
+        else:
+            stage_status = StageStatus.PASS
+            skipped_reason = ""
         stage_result = make_canary_stage_result(
             domain=domain,
-            status=StageStatus.PASS if rc == 0 else StageStatus.FAIL,
+            status=stage_status,
             args=args,
             duration_ms=duration_ms,
             evidence_url=_run_url(os.environ),
+            resolved_target=result.target,
+            skipped_reason=skipped_reason,
         )
         print(
             json.dumps(
