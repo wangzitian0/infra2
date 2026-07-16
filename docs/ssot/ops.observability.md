@@ -243,6 +243,12 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 ### SOP-007: Dokploy route canary(动态,小时级)
 `tools/dokploy_route_canary.py` 部署一个最小双服务 compose(同 app preview 路由形状:一个公网 web + 一个高优先 `/api`),失败归类到 `dokploy-{canary-configuration,control-plane,compose-source-type,worker-or-deployment-record}` / `docker-runtime` / `traefik-public-route`。`ops-checks.yml` 每小时跑(stable host/compose);缺配置 = fail-closed `dokploy-canary-configuration`(不当跳过成功)。app staging/preview gate 应把 canary 失败当平台失败,先于 app readiness。
 
+### SOP-007B: deploy_v2 Canary(日级/变更触发)
+`tools/deploy_v2_canary.py` 只使用保留的 `pr-999` 预览位，健康检查后必须清理 stack 与临时 DB。
+成功保持静默，仅在 GitHub summary 输出 `infra2-sdk v0.3.0` `StageResult`；非 PR 失败才经带外
+Feishu page，且告警携带同一结构化记录。不得通过破坏 production 数据或恢复周期性
+`alert-delivery-canary` 来制造失败；Feishu 正向投递仍由日报送达自证。
+
 ### SOP-008: 账本冷归档 + 周报
 - R2:确认桶 `infra2` + `wrangler.toml` `[[r2_buckets]] binding=LEDGER_BUCKET` → `wrangler deploy`;跨天后 R2 `watchdog-ledger/` 出现昨日 JSON。
 - 周报:`ops-checks.yml`(周一 UTC)跑 `stability_report.py` 读 `/ledger` → Lark;本地 `INFRA2_STABILITY_REPORT_DRY_RUN=1 python tools/stability_report.py --input ledger.json`。

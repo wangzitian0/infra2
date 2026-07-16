@@ -122,6 +122,21 @@ python tools/dokploy_route_canary.py \
 `sourceType=raw` before redeploying. GitHub canary runs default to the stable
 canary host/compose and rely on workflow concurrency to avoid overlap.
 
+## deploy_v2_canary.py
+
+End-to-end proof for the unified deploy primitive. It deploys Finance Report to
+the reserved `pr-999` slot, verifies public health, and tears the stack and
+ephemeral database down in `finally`. Success output and failure alerts include
+an `infra2_sdk.delivery.StageResult`; scheduled/post-merge failures page through
+the out-of-band Feishu path, while PR failures remain CI-only.
+
+```bash
+uv run python -m tools.deploy_v2_canary \
+  --version-ref main \
+  --iac-ref main \
+  --domain zitian.party
+```
+
 ## backup_restore_rehearsal.py
 
 Guarded restore rehearsal for off-host backup artifacts. The command verifies the

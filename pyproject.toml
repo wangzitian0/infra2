@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     # Cross-repository wire/data contracts. Pin the immutable release artifact;
     # workspace submodules are never runtime dependencies.
-    "infra2-sdk @ https://github.com/wangzitian0/infra2-sdk/releases/download/v0.1.0/infra2_sdk-0.1.0-py3-none-any.whl",
+    "infra2-sdk @ https://github.com/wangzitian0/infra2-sdk/releases/download/v0.3.0/infra2_sdk-0.3.0-py3-none-any.whl",
     # E2E testing dependencies
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
