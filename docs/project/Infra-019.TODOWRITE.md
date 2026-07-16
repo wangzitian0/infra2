@@ -14,6 +14,10 @@
 ## Follow-Ups
 
 - [x] Add root-level `oh-my-code-agent` submodule as coordinated workspace TUI tooling.
+- [x] Pin `oh-my-code-agent` to its design-complete main head (`5b8ae03`) and switch the
+      submodule URL to HTTPS so `git submodule update --init` works without SSH keys.
+      Design revision PR: wangzitian0/oh-my-code-agent#4 (plugin-based adapters,
+      Claude Code + Codex first-party, isolated launch first); re-pin after it merges.
 
 - [ ] Add read-only `harness status` for pinned checkout, remote head, and release identity.
 - [ ] Add an infra2-sdk-local contributor/agent guide through an independent SDK PR.
