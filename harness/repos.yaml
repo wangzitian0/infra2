@@ -38,7 +38,7 @@ repositories:
     checkout: submodule
     role: workspace-tooling
     governance: coordinated
-    source: git@github.com:wangzitian0/oh-my-code-agent.git
+    source: https://github.com/wangzitian0/oh-my-code-agent
     release_identity: tool-release-or-pinned-commit
     authority:
       - README.md
