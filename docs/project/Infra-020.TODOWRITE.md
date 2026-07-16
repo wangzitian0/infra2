@@ -14,7 +14,7 @@ DataHub slice.
       the #271 Production consumer; the current scopes allow only Local/CI consumers
       or D3 in Staging.
 - [ ] TrueAlpha #205 / D5: accept the append-only capture-control handoff; do not
-      duplicate its migration or control-plane paths while PR #266 is active.
+      duplicate its migration or control-plane paths while TrueAlpha PR #266 is active.
 - [ ] TrueAlpha #207 / D6: publish accepted confidence and indexed-provenance
       persistence before trusted metadata and trace claims.
 - [ ] TrueAlpha #171: prove the bounded TOPT Staging capture before Production source
