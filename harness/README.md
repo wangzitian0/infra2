@@ -7,6 +7,8 @@ their ownership models.
 
 - `infra2` is the infrastructure implementation and deployment control plane.
 - `infra2-sdk` is the versioned, side-effect-free cross-repository contract.
+- `oh-my-code-agent` is the independently versioned workspace tooling repository for
+  managing TUI integrations over time.
 - Workspace guides record shared preferences for GitHub, coordination, and software
   design.
 - `finance_report` and `truealpha` are autonomous application repositories. Their
@@ -37,4 +39,5 @@ an autonomous App is an App decision, not a harness synchronization task.
 
 The harness owns coordination metadata, not cross-repository source coupling. Production
 identities remain independent: infra2 release tag, infra2-sdk SemVer, and application
-image ref or digest. See [Harness Control Plane SSOT](../docs/ssot/core.harness.md).
+image ref or digest. Workspace tooling uses its own release or pinned commit. See
+[Harness Control Plane SSOT](../docs/ssot/core.harness.md).

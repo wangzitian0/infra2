@@ -13,6 +13,7 @@ ALLOWED_CHECKOUTS = {"root", "submodule"}
 ALLOWED_ROLES = {
     "infrastructure-control-plane",
     "cross-repository-contract",
+    "workspace-tooling",
     "external-application",
 }
 ALLOWED_GOVERNANCE = {"local", "coordinated", "autonomous"}
@@ -190,6 +191,7 @@ def validate_manifest(root: Path, manifest: dict[str, Any]) -> CheckResult:
         expected_governance = {
             "infrastructure-control-plane": "local",
             "cross-repository-contract": "coordinated",
+            "workspace-tooling": "coordinated",
             "external-application": "autonomous",
         }.get(role)
         if expected_governance is not None and governance != expected_governance:

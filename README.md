@@ -2,9 +2,9 @@
 
 [![Coverage Status](https://coveralls.io/repos/github/wangzitian0/infra2/badge.svg?branch=main)](https://coveralls.io/github/wangzitian0/infra2?branch=main)
 
-`infra2` 基础设施实现与部署控制面，以及 `infra2-sdk` 和自主 App 的统一开发
-workspace。Harness 只拥有 infra2、SDK 协作边界和 workspace 通用偏好；App 保持
-独立治理与发布。
+`infra2` 基础设施实现与部署控制面，以及 `infra2-sdk`、workspace tooling 和自主
+App 的统一开发 workspace。Harness 只拥有 infra2、SDK 协作边界和 workspace 通用
+偏好；App 与 tooling sub-repo 保持独立仓库和发布节奏。
 
 ## Workspace Harness
 
@@ -51,6 +51,7 @@ invoke --list
 ```
 infra2/
 ├── harness/          # Workspace 清单与通用协作/设计偏好
+├── oh-my-code-agent/ # Workspace TUI 管理 (git submodule)
 ├── bootstrap/        # L1 - 基础层 (1Password, Vault)
 ├── platform/         # L2 - 平台层 (PostgreSQL, Redis, Authentik)
 ├── finance_report/   # L3 - 应用层 (Finance Report)
@@ -71,6 +72,9 @@ submodules 只作为统一开发 workspace；生产部署仍由 infra tag、SDK 
 App 的本地规范、CI 与发布流程保持自治。详见 [Workspace Harness](harness/README.md)、
 [Workspace repositories](repos/README.md) 和
 [Core repository boundary](docs/ssot/core.md#31-repository-dependency-boundary)。
+
+根目录 [`oh-my-code-agent`](oh-my-code-agent/README.md) 是独立的 workspace tooling
+sub-repo，后续统一承载各类 TUI 管理；它不进入 infra/App runtime dependency graph。
 
 ## 📚 文档入口
 
