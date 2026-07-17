@@ -370,10 +370,13 @@ commit `sha`（身份）+ `image_ref`（要拉的已发布镜像）——**code 
 - **RL-DATA-1**（§5 data-lane，执行层 `deploy_v2.enforce_data_lane_red_lines`）：`env=prod ⇒ data_lane=prod`；
   未评审代码不上 prod 数据——deny-by-default：`code_reviewed` 必须显式为 `True`，缺省(`None`)与 `False` 均 fail-closed。
 
-> **现状边界**：`finance_report/app` 走 app 后端（`deploy_primitive` / `preview_lifecycle`）；
-> `iac_pinned` 服务从 `libs.service_registry` 派生并走 iac_runner `/deploy` webhook。完整 GitHub 评审信号
-> （供给 `code_reviewed=True`）可继续增强；snapshot-sync / anonymization / rehearsal 属于 finance_report#893，
-> 但 `data_lane` 已是派生值，不是 deploy_v2 输入轴。
+> **现状边界**：`libs.deploy_contract.SERVICES` 中注册的 bespoke app（`finance_report/app`；
+> `truealpha/app` 自 #500 起）走 app 后端（`deploy_primitive` / `preview_lifecycle`）；`iac_pinned`
+> 服务从 `libs.service_registry` 派生并走 iac_runner `/deploy` webhook。`truealpha/app` 目前只接
+> `staging`（`ServiceSpec.supports_preview=False`：`preview_lifecycle` 仍是 finance_report 专属形状，
+> 未泛化；`prod` 尚无 Dokploy compose）。完整 GitHub 评审信号（供给 `code_reviewed=True`）可继续增强；
+> snapshot-sync / anonymization / rehearsal 属于 finance_report#893，但 `data_lane` 已是派生值，
+> 不是 deploy_v2 输入轴。
 
 ### 4.7.1 `type` 判别式（一个原语，N 场景）
 

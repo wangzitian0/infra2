@@ -3,10 +3,11 @@
 
 This module is not the public deploy surface. ``deploy_v2(service, type, version_ref,
 iac_ref)`` resolves the coordinate, enforces the data-lane red lines, and then calls this
-backend for the finance_report app's fixed staging/prod composes. The only deploy
-identity this backend accepts directly is ``env`` plus a resolved app commit/image ref;
-the data lane is derived from ``deploy_env_config.EnvConfig.data_default`` for
-observability and is not caller-overridable.
+backend for a bespoke app's fixed staging/prod composes (``libs.deploy_contract.SERVICES``
+— finance_report and, since #500, truealpha/app). The only deploy identity this backend
+accepts directly is ``service`` + ``env`` plus a resolved app commit/image ref; the data
+lane is derived from ``deploy_env_config.EnvConfig.data_default`` for observability and is
+not caller-overridable.
 
 The backend mutates a Dokploy compose's env and triggers a deploy. The Dokploy client is
 injected so it is unit-testable without a live control plane. It owns fixed-compose
@@ -20,7 +21,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from libs.deploy_env_config import env_config, otel_env
+from libs.deploy_env_config import app_compose_env_config, otel_env
 from tools.deploy_failure_snapshot import emit_failure_snapshot
 from tools.openpanel_clients import openpanel_env
 from tools.resolve_deploy_ref import resolve_to_sha
@@ -182,6 +183,7 @@ def deploy(
     *,
     domain: str,
     client,
+    service: str = "finance_report/app",
     staging_validated: bool = False,
     break_glass: bool = False,
     repo: str | None = None,
@@ -233,13 +235,18 @@ def deploy(
             "(it is interpolated into a line-based compose env file)."
         )
     sha = resolve_to_sha(code, repo=repo) if repo is not None else resolve_to_sha(code)
-    cfg = env_config(env)
+    cfg = app_compose_env_config(service, env)
     data_lane = cfg.data_default
 
     if cfg.dynamic:
         raise ValueError(
             f"{env!r} is a per-PR dynamic env with no fixed compose; bind a compose_id "
             "via the preview lifecycle instead of calling deploy() directly."
+        )
+    if cfg.compose_id is None:
+        raise ValueError(
+            f"{service!r} has no Dokploy compose registered for env {env!r} "
+            "(libs.deploy_env_config._APP_COMPOSE_OVERRIDES) — nothing to deploy to."
         )
     if cfg.requires_staging_first and not staging_validated and not break_glass:
         raise ValueError(
@@ -278,14 +285,16 @@ def deploy(
         "INTERNAL_DOMAIN": domain,
         "IAC_CONFIG_HASH": config_hash,
     }
+    from libs.deploy_contract import service_spec
     from libs.service_identity import ServiceIdentity
 
+    svc_spec = service_spec(service)
     deploy_environment = {"prod": "production"}.get(env.strip().lower(), env)
     identity = ServiceIdentity.build(
-        "finance_report/app",
+        service,
         deploy_environment,
-        component="app",
-        service_name="finance-report-backend",
+        component=svc_spec.identity_component,
+        service_name=svc_spec.resolved_identity_service_name(),
         version=image_tag,
         iac_ref=iac_ref,
     )
@@ -335,7 +344,7 @@ def deploy(
             # ClickHouse URL resolution lives in deploy_ingestion_smoke (single owner,
             # reusing the round-trip canary's env) — do not re-read it here.
             verify_deploy_ingestion(
-                service_name="finance-report-backend",
+                service_name=identity.service_name,
                 environment=deploy_environment,
                 expected_version=image_tag,
             )

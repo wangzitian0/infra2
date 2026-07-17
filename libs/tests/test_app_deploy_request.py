@@ -123,7 +123,7 @@ def test_authority_rejects_sender_service_and_repository() -> None:
         )
     with pytest.raises(ValueError, match="not enabled"):
         receiver.validate_request_authority(
-            receiver.parse_request(payload(service="truealpha/app")),
+            receiver.parse_request(payload(service="unregistered_app/app")),
             sender="wangzitian0",
             resolve_image=resolved,
         )

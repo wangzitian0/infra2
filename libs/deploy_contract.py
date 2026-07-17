@@ -63,6 +63,15 @@ class ServiceSpec:
         image_repositories: Container image repositories that must already expose the
             resolved ``image_ref`` before this service can be deployed. This is an artifact
             readiness dependency, distinct from the build/config fan-out graph.
+        identity_service_name: The ``service.name`` telemetry label
+            (``libs.service_identity.ServiceIdentity``) this app's deploy identity carries.
+            Defaults to ``<service-part-of-key>`` with underscores dashed, matching the
+            registry key unless the app's compose already established a different label.
+        identity_component: The ``component`` telemetry label. Defaults to ``"app"``.
+        supports_preview: Whether ``libs.deploy.preview`` (still finance_report-shaped,
+            #500) can serve this service's preview/canary deploy types. False fails a
+            preview/canary target closed instead of silently running finance_report's
+            preview internals (compose path, DB name, ...) against a different app.
     """
 
     key: str
@@ -72,14 +81,25 @@ class ServiceSpec:
     env_shared: bool = False
     iac_pinned: bool = False
     image_repositories: tuple[str, ...] = ()
+    identity_service_name: str = ""
+    identity_component: str = "app"
+    supports_preview: bool = True
+
+    def resolved_identity_service_name(self) -> str:
+        if self.identity_service_name:
+            return self.identity_service_name
+        return self.key.split("/", 1)[-1].replace("_", "-")
 
 
-# The finance_report APP has a BESPOKE deploy_v2 backend (Dokploy preview_lifecycle /
-# deploy_primitive), so its spec is stated explicitly here. EVERY OTHER service is
-# ``iac_pinned`` and routes to the iac_runner /deploy webhook — and its facts (subdomain,
-# prod_only) are DERIVED from its deploy.py Deployer class via libs.service_registry, the
-# single source of truth (Infra-013: never hand-copy service facts into a parallel list).
+# finance_report and truealpha/app have a BESPOKE deploy_v2 backend (fixed-compose
+# promote path via libs.deploy.promote; finance_report additionally supports the preview
+# lifecycle via libs.deploy.preview — truealpha/app does not yet, #500). EVERY OTHER
+# service is ``iac_pinned`` and routes to the iac_runner /deploy webhook — and its facts
+# (subdomain, prod_only) are DERIVED from its deploy.py Deployer class via
+# libs.service_registry, the single source of truth (Infra-013: never hand-copy service
+# facts into a parallel list).
 _APP_KEY = "finance_report/app"
+_TRUEALPHA_APP_KEY = "truealpha/app"
 
 SERVICES: dict[str, ServiceSpec] = {
     _APP_KEY: ServiceSpec(
@@ -90,6 +110,24 @@ SERVICES: dict[str, ServiceSpec] = {
             "ghcr.io/wangzitian0/finance_report-backend",
             "ghcr.io/wangzitian0/finance_report-frontend",
         ),
+        identity_service_name="finance-report-backend",
+    ),
+    # #500: version-pinned staging promotion (finance_report's fixed-compose path,
+    # generalized). Preview/canary are NOT wired for this service yet — its compose has
+    # no preview stack, and truealpha's sender (truealpha#333) only ever emits staging
+    # requests today; production is blocked sender-side pending infra2 evidence support,
+    # and this service has no Dokploy prod compose yet either (verified live 2026-07-18:
+    # the truealpha Dokploy project's `production` environment has zero composes).
+    _TRUEALPHA_APP_KEY: ServiceSpec(
+        key=_TRUEALPHA_APP_KEY,
+        base_subdomain="truealpha",
+        web_facing=True,
+        image_repositories=(
+            "ghcr.io/wangzitian0/truealpha-app-web",
+            "ghcr.io/wangzitian0/truealpha-llm-service",
+        ),
+        identity_service_name="truealpha-app",
+        supports_preview=False,
     ),
 }
 

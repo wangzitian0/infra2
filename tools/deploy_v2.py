@@ -36,6 +36,7 @@ from libs.iac_runner_client import (
 )
 from libs.deploy_contract import (
     _SHA_RE,
+    SERVICES,
     DeployTarget,
     deploy_type_spec,
     is_tag_only_iac_env,
@@ -664,11 +665,12 @@ def deploy_v2(
             "(pass staging_validated, or break_glass for an emergency)"
         )
 
-    if service != _APP_SERVICE:
+    if service not in SERVICES:
         raise ValueError(
             f"{service!r} is not an app-backed service and is not marked iac_pinned; "
-            "deploy_v2 only routes the finance_report app backends or iac_pinned "
-            "services derived from libs.service_registry."
+            "deploy_v2 only routes services explicitly registered as app-backed "
+            "(libs.deploy_contract.SERVICES) or iac_pinned services derived from "
+            "libs.service_registry."
         )
 
     _wait_for_image_dependencies(
@@ -679,6 +681,12 @@ def deploy_v2(
     )
 
     if env_config(target.env).dynamic:  # preview (incl. canary)
+        if not svc_spec.supports_preview:
+            raise ValueError(
+                f"{service!r} does not support preview/canary deploys yet "
+                "(libs.deploy_contract.ServiceSpec.supports_preview=False) — "
+                "libs.deploy.preview is still finance_report-shaped, #500."
+            )
         result = _preview_up(
             spec.alias_kind,
             alias_value,
@@ -711,6 +719,7 @@ def deploy_v2(
         resolved.sha,
         domain=domain,
         client=client,
+        service=service,
         image_ref=resolved.image_ref,
         iac_ref=target.iac_ref,
         wait=wait,

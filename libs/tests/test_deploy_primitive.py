@@ -75,6 +75,51 @@ def test_staging_deploy_assembles_axes_and_triggers():
     assert client.deployed == ["A6V-hbJlgHMwgPDoTDnhH"]
 
 
+def test_truealpha_staging_deploy_resolves_its_own_compose_and_identity():
+    # #500: a second bespoke app's fixed-compose deploy, generalized from the
+    # finance_report-only path above. Same shape, different service/compose/identity —
+    # proves the generalization didn't just special-case finance_report's literals.
+    client = FakeDokploy()
+    plan = dp.deploy(
+        "staging",
+        FULL_SHA,
+        domain="zitian.party",
+        client=client,
+        service="truealpha/app",
+        iac_ref="b" * 40,
+    )
+
+    assert plan.compose_id == "w4zo_fm9d2PnUY8ULzNO7"
+    cid, env = client.updated[0]
+    assert cid == "w4zo_fm9d2PnUY8ULzNO7"
+    assert env["IMAGE_TAG"] == SHORT_SHA
+    assert env["NEXT_PUBLIC_APP_URL"] == "https://truealpha-staging.zitian.party"
+    assert env["ENV_SUFFIX"] == "-staging"
+    assert env["INFRA_SERVICE_ID"] == "truealpha/app"
+    # the two truealpha images (app-web, llm-service) share one IMAGE_TAG by design
+    # (confirmed against the live compose: both read ${IMAGE_TAG:-latest}) — nothing
+    # else to assert here since promote.py pushes a single compose-level env, not
+    # per-image tags.
+
+
+def test_truealpha_prod_has_no_compose_yet_and_fails_closed():
+    # #500 scope: truealpha/app's Dokploy `production` environment has no compose
+    # (verified live 2026-07-18) — deploying there must fail closed, not silently no-op
+    # or fall back to finance_report's prod compose.
+    client = FakeDokploy()
+    with pytest.raises(ValueError, match="no Dokploy compose registered"):
+        dp.deploy(
+            "prod",
+            FULL_SHA,
+            domain="zitian.party",
+            client=client,
+            service="truealpha/app",
+            staging_validated=True,
+            iac_ref="b" * 40,
+        )
+    assert client.updated == []  # fails BEFORE any mutation
+
+
 def test_prod_refuses_unvalidated_digest_promote_not_rebuild():
     client = FakeDokploy()
     with pytest.raises(ValueError, match="requires a staging deploy"):
