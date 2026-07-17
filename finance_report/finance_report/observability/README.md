@@ -16,6 +16,11 @@ objects. Definitions are JSON; provisioning is a post-merge `invoke` apply step
 | `dashboard.json` | Baseline dashboard: backend error rate + latency, frontend web-vitals + exceptions. |
 | `shared_tasks.py` | Idempotent apply/print invoke tasks. |
 
+The catalog has one top-level `service_id` and environment. Every generated SigNoz
+rule receives the same low-cardinality `ServiceIdentity v1` labels, and log/metric
+queries explicitly select `deployment.environment.name=production` so staging or
+preview traffic cannot page a production rule.
+
 ## How the alert reaches Lark/Feishu
 
 The rules route to the shared bridge channel, not to Feishu directly:

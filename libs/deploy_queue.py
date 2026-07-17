@@ -16,7 +16,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from libs.service_identity import ServiceIdentity
+
 RUNNING_STATUS = "running"
+
+
+@dataclass(frozen=True)
+class ComposeDeployments:
+    """A Dokploy compose bound to its canonical operational identity."""
+
+    compose_id: str
+    compose_name: str
+    service_id: str
+    environment: str
+    deployments: tuple[dict, ...]
 
 
 @dataclass(frozen=True)
@@ -31,6 +44,8 @@ class StuckDeploy:
     compose_name: str
     deployment_id: str
     age_seconds: float
+    service_id: str = ""
+    environment: str = "production"
 
 
 def parse_epoch_seconds(value) -> float | None:
@@ -79,14 +94,14 @@ def is_running(deployment: dict) -> bool:
 def find_stuck_deploys(composes, now_epoch: float, ceiling_seconds: float):
     """Return one StuckDeploy per compose whose running deploy exceeds the ceiling.
 
-    `composes`: iterable of (compose_id, compose_name, [deployment dicts]). When a
+    `composes`: iterable of ComposeDeployments. When a
     compose has several running records (stale ones can linger), the OLDEST that
     exceeds the ceiling is reported — that is the one blocking the FIFO queue.
     """
     stuck: list[StuckDeploy] = []
-    for compose_id, compose_name, deployments in composes:
+    for compose in composes:
         oldest: StuckDeploy | None = None
-        for deployment in deployments:
+        for deployment in compose.deployments:
             if not is_running(deployment):
                 continue
             start = deployment_start_epoch(deployment)
@@ -97,10 +112,12 @@ def find_stuck_deploys(composes, now_epoch: float, ceiling_seconds: float):
                 continue
             if oldest is None or age > oldest.age_seconds:
                 oldest = StuckDeploy(
-                    compose_id=compose_id,
-                    compose_name=compose_name,
+                    compose_id=compose.compose_id,
+                    compose_name=compose.compose_name,
                     deployment_id=str(deployment.get("deploymentId", "")),
                     age_seconds=age,
+                    service_id=compose.service_id,
+                    environment=compose.environment,
                 )
         if oldest is not None:
             stuck.append(oldest)
@@ -116,27 +133,36 @@ def build_deploy_guard_alert_payload(
 ) -> dict:
     """Alertmanager/SigNoz-shaped payload for the alert bridge (`format_signoz_alert`)."""
     status = "firing" if firing else "resolved"
-    alerts = [
-        {
-            "status": status,
-            "labels": {
-                "alertname": "DeployQueueStuck",
-                "service": s.compose_name,
-                "severity": "critical",
-                "failure_domain": "deploy-queue",
-            },
-            "annotations": {
-                "summary": f"{s.compose_name} deploy stuck running {int(s.age_seconds)}s",
-                "description": action_note
-                or (
-                    f"deployment {s.deployment_id} has been running > ceiling; "
-                    "queue is single-concurrency FIFO so this blocks all deploys"
-                ),
-                "observed": f"compose={s.compose_id} age={int(s.age_seconds)}s",
-            },
-        }
-        for s in stuck
-    ]
+    alerts = []
+    for s in stuck:
+        identity = ServiceIdentity.build(
+            s.service_id or "infra/unregistered",
+            s.environment,
+            component="deploy-queue",
+            service_name=(
+                s.service_id.split("/", 1)[-1] if s.service_id else "unregistered"
+            ),
+        )
+        alerts.append(
+            {
+                "status": status,
+                "labels": {
+                    "alertname": "DeployQueueStuck",
+                    **identity.alert_labels(
+                        severity="critical", failure_domain="deploy-queue"
+                    ),
+                },
+                "annotations": {
+                    "summary": f"{s.compose_name} deploy stuck running {int(s.age_seconds)}s",
+                    "description": action_note
+                    or (
+                        f"deployment {s.deployment_id} has been running > ceiling; "
+                        "queue is single-concurrency FIFO so this blocks all deploys"
+                    ),
+                    "observed": f"compose={s.compose_id} age={int(s.age_seconds)}s",
+                },
+            }
+        )
     summary = (
         f"{len(stuck)} deploy(s) stuck running past the ceiling"
         if stuck
@@ -146,6 +172,8 @@ def build_deploy_guard_alert_payload(
         "status": status,
         "commonLabels": {
             "alertname": "DeployQueueStuck",
+            "identity_schema": "v1",
+            "managed_by": "infra2",
             "severity": "critical",
             "team": "infra",
         },

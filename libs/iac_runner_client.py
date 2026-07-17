@@ -25,6 +25,7 @@ import time
 import httpx
 
 _SHA40_RE = re.compile(r"\A[0-9a-f]{40}\Z")
+_DEPLOYMENT_ID_RE = re.compile(r"\A[0-9a-f]{16}\Z")
 _VALID_ENVS = ("staging", "production")
 
 
@@ -95,6 +96,11 @@ def trigger_platform_deploy(
     and ``httpx.HTTPError`` on transport / non-2xx. ``transport`` is injected for tests.
     """
     _validate_request(env, ref, secret, base_url)
+    if not all(isinstance(service, str) for service in services):
+        raise ValueError("services must be a non-empty list of non-empty strings")
+    normalized_services = sorted({service.strip() for service in services})
+    if not normalized_services or any(not service for service in normalized_services):
+        raise ValueError("services must be a non-empty list of non-empty strings")
 
     payload = json.dumps(
         {
@@ -102,7 +108,7 @@ def trigger_platform_deploy(
             "ref": ref,
             "triggered_by": triggered_by,
             "wait": wait,
-            "services": list(services),
+            "services": normalized_services,
         },
         separators=(",", ":"),
     ).encode()
@@ -121,6 +127,8 @@ def poll_platform_deploy_status(
     *,
     env: str,
     ref: str,
+    services: list[str] | None = None,
+    deployment_id: str | None = None,
     base_url: str,
     secret: str,
     triggered_by: str = "deploy_v2",
@@ -139,8 +147,28 @@ def poll_platform_deploy_status(
     BEFORE any request, and ``TimeoutError`` if it never settles within ``attempts``.
     """
     _validate_request(env, ref, secret, base_url)
+    if services is not None and not all(
+        isinstance(service, str) for service in services
+    ):
+        raise ValueError("services must be a non-empty list of non-empty strings")
+    normalized_services = (
+        sorted({service.strip() for service in services})
+        if services is not None
+        else None
+    )
+    if normalized_services is not None and (
+        not normalized_services or any(not service for service in normalized_services)
+    ):
+        raise ValueError("services must be a non-empty list of non-empty strings")
+    if deployment_id is not None and not _DEPLOYMENT_ID_RE.match(deployment_id):
+        raise ValueError("deployment_id must be 16 lowercase hex characters")
+    status_coordinate = {"env": env, "ref": ref, "triggered_by": triggered_by}
+    if normalized_services is not None:
+        status_coordinate["services"] = normalized_services
+    if deployment_id is not None:
+        status_coordinate["deployment_id"] = deployment_id
     payload = json.dumps(
-        {"env": env, "ref": ref, "triggered_by": triggered_by},
+        status_coordinate,
         separators=(",", ":"),
     ).encode()
     # non-terminal statuses from /deploy/status (terminal = "completed" / "failed").

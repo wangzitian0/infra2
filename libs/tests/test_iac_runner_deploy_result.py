@@ -650,6 +650,32 @@ def test_run_invoke_task_materializes_staging_isolation_env(
     assert invoke_env["ENV_DOMAIN_SUFFIX"] == "-staging"
 
 
+def test_run_invoke_task_propagates_exact_deploy_ref(monkeypatch, tmp_path) -> None:
+    """Infra-011.19: child deployers record the exact checked-out revision."""
+    sync_runner = _load_module(
+        "sync_runner_deploy_ref_under_test",
+        IAC_RUNNER / "sync_runner.py",
+        monkeypatch,
+    )
+    captured = {}
+
+    def fake_run(args, **kwargs):
+        captured["env"] = kwargs["env"]
+        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(sync_runner.subprocess, "run", fake_run)
+
+    result = sync_runner.run_invoke_task(
+        "postgres.sync", tmp_path, "staging", DEPLOY_SHA.upper()
+    )
+
+    assert result["success"] is True
+    assert captured["env"]["IAC_DEPLOY_REF"] == DEPLOY_SHA
+    assert f"IAC_DEPLOY_REF={DEPLOY_SHA}" in sync_runner.safe_invoke_env_summary(
+        captured["env"]
+    )
+
+
 def test_run_invoke_task_logs_safe_child_env(monkeypatch, tmp_path) -> None:
     """#161: child env diagnostics expose presence, never secret values.
 
@@ -1156,7 +1182,8 @@ def test_deploy_cache_reuses_only_when_requested_services_match(monkeypatch) -> 
     # --- Scenario A: Cache Mismatch ---
     # Cache has ["platform/postgres"], request is for ["platform/redis"]
     webhook_server._recent_deploys.clear()
-    key = webhook_server._deployment_key("staging", DEPLOY_SHA)
+    postgres_services = ["platform/postgres"]
+    key = webhook_server._deployment_key("staging", DEPLOY_SHA, postgres_services)
     cached_postgres = sync_runner.SyncResult(
         env="staging",
         ref=DEPLOY_SHA,
@@ -1171,7 +1198,7 @@ def test_deploy_cache_reuses_only_when_requested_services_match(monkeypatch) -> 
         ],
     )
     response_postgres = webhook_server._completed_response(
-        "staging", DEPLOY_SHA, "ci", cached_postgres
+        "staging", DEPLOY_SHA, "ci", cached_postgres, postgres_services
     )
     webhook_server._recent_deploys[key] = (time.monotonic(), response_postgres)
 
@@ -1229,3 +1256,87 @@ def test_deploy_cache_reuses_only_when_requested_services_match(monkeypatch) -> 
     body2, status_code2 = webhook_server.version_deploy()
     assert body2.get("cached") is True
     assert not started  # No new deployment triggered
+
+
+def test_deployment_identity_includes_normalized_service_set(monkeypatch) -> None:
+    """Infra-011.19: same env/ref with different services must be distinct operations."""
+    monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
+    fake_flask = types.ModuleType("flask")
+
+    class FakeFlask:
+        def __init__(self, _name):
+            pass
+
+        def route(self, *_args, **_kwargs):
+            return lambda func: func
+
+    fake_flask.Flask = FakeFlask
+    fake_flask.jsonify = lambda payload: payload
+    fake_flask.request = types.SimpleNamespace()
+    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+    webhook_server = _load_module(
+        "webhook_server_identity_under_test",
+        IAC_RUNNER / "webhook_server.py",
+        monkeypatch,
+    )
+
+    postgres = webhook_server._deployment_key(
+        "staging", DEPLOY_SHA, ["platform/postgres"]
+    )
+    redis = webhook_server._deployment_key(
+        "staging", DEPLOY_SHA, ["platform/redis"]
+    )
+    batch_a = webhook_server._deployment_key(
+        "staging", DEPLOY_SHA, ["platform/redis", "platform/postgres"]
+    )
+    batch_b = webhook_server._deployment_key(
+        "staging", DEPLOY_SHA, [" platform/postgres ", "platform/redis"]
+    )
+
+    assert postgres != redis
+    assert webhook_server._deployment_id(postgres) != webhook_server._deployment_id(redis)
+    assert batch_a == batch_b
+    assert webhook_server._deployment_id(batch_a) == webhook_server._deployment_id(batch_b)
+
+
+def test_status_fails_closed_when_legacy_coordinate_is_ambiguous(monkeypatch) -> None:
+    """Infra-011.19: old env/ref-only polling must never return another service result."""
+    monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
+    fake_flask = types.ModuleType("flask")
+
+    class FakeFlask:
+        def __init__(self, _name):
+            pass
+
+        def route(self, *_args, **_kwargs):
+            return lambda func: func
+
+    fake_flask.Flask = FakeFlask
+    fake_flask.jsonify = lambda payload: payload
+    fake_flask.request = types.SimpleNamespace(
+        headers=_signed_headers(monkeypatch),
+        data=b"",
+        json={"env": "staging", "ref": DEPLOY_SHA, "triggered_by": "ci"},
+    )
+    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+    webhook_server = _load_module(
+        "webhook_server_ambiguous_status_under_test",
+        IAC_RUNNER / "webhook_server.py",
+        monkeypatch,
+    )
+    postgres = webhook_server._deployment_key(
+        "staging", DEPLOY_SHA, ["platform/postgres"]
+    )
+    redis = webhook_server._deployment_key(
+        "staging", DEPLOY_SHA, ["platform/redis"]
+    )
+    webhook_server._in_flight_deploys.update({postgres, redis})
+
+    body, status_code = webhook_server.deployment_status()
+
+    assert status_code == 409
+    assert "Ambiguous deployment" in body["error"]
+    assert set(body["candidate_deployment_ids"]) == {
+        webhook_server._deployment_id(postgres),
+        webhook_server._deployment_id(redis),
+    }

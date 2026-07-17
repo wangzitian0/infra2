@@ -170,8 +170,11 @@ acknowledgements。URL 形状本身不构成 evidence。
 IaC Runner 是 **L1 Bootstrap 层**组件,自动化部署 **L2 Platform 层**服务(层级编号见 [core.md#层级定义](./core.md#层级定义))。
 
 post-merge 部署被 GitHub Actions `concurrency` 串行化,调 IaC Runner 前先 `/health` preflight(bootstrap drift
-在任何签名 `/deploy` 前先 fail)。Actions 用短签名 `/deploy` 启动、再轮询签名 `/deploy/status`——**绿 workflow =
-IaC Runner 报告了完成的服务 sync 结果,不只是请求被接受**。不走公网 Cloudflare 的 `wait=true`(会在 sync 完成前 524)。
+在任何签名 `/deploy` 前先 fail)。Actions 用短签名 `/deploy` 启动,取得绑定完整操作坐标的 opaque
+`deployment_id`,再用该 ID 轮询签名 `/deploy/status`——**绿 workflow = IaC Runner 报告了同一个服务集合的
+完成 sync 结果,不只是请求被接受**。操作坐标是 `(env, exact_ref, normalized_service_set)`:服务集合是身份的一部分,
+不是日志附属字段;同一 release 并发部署不同服务不得互相命中 cache / in-flight / status。
+不走公网 Cloudflare 的 `wait=true`(会在 sync 完成前 524)。
 
 ### 5.1 Endpoints
 
@@ -180,7 +183,7 @@ IaC Runner 报告了完成的服务 sync 结果,不只是请求被接受**。不
 | `/health` | GET | 健康检查(含 vault / op / dokploy_api_key 功能性 fail-closed)|
 | `/webhook` | POST | GitHub webhook(change-based sync)|
 | `/deploy` | POST | 版本部署;`wait=true` 为 legacy 直等 |
-| `/deploy/status` | POST | 签名状态轮询,取真实 sync 结果 |
+| `/deploy/status` | POST | 用 `/deploy` 返回的 `deployment_id` 签名轮询同一操作的真实 sync 结果 |
 | `/sync` | POST | legacy 手动同步;默认关闭,由 `ENABLE_LEGACY_SYNC` gate 开启 |
 
 ### 5.2 服务映射规则(fan-out)
@@ -188,7 +191,7 @@ IaC Runner 报告了完成的服务 sync 结果,不只是请求被接受**。不
 | 变更路径 | 触发 | 说明 |
 |---------|------|------|
 | `platform/<nn>.<svc>/*` | `<svc>.sync` | 自动同步该平台服务 |
-| `libs/*` | **全平台服务** | 公共库变更,全量同步 |
+| `libs/*` / `tools/*` | **仅声明依赖的服务** | 由 `deploy-dependencies.yaml` fan-out;纯工具变化不部署 |
 | `bootstrap/06.iac_runner/*` | **带外 bootstrap 更新** | Actions 在 `/deploy` 前重建 runner |
 | `bootstrap/*` | **Skipped** | 其余 bootstrap 是首装/灾备依赖,保持手动 |
 | `finance_report/*` · `finance/*` | **Skipped** | 走应用独立 CI |
@@ -196,11 +199,22 @@ IaC Runner 报告了完成的服务 sync 结果,不只是请求被接受**。不
 **为什么 runner bootstrap 走带外**:IaC Runner 不能在自己正被 Actions 轮询的 `/deploy` 请求里重启自己;Actions
 从容器外拥有自更新步骤(更新 Dokploy compose checkout → 重建 runner 镜像 → 等 health → 再 `/deploy`)。
 
-### 5.3 幂等性保证(config-hash gate)
+### 5.3 两平面配置身份 + 幂等性保证
 
-每个服务 `sync` 用 config hash:`SHA256(compose.yaml + env vars + local artifacts)` vs Dokploy 存的 `IAC_CONFIG_HASH`,
-仅 hash 不匹配时重部署。local artifacts 含 compose 引用的 bind-mount 文件、Dockerfile 及其 `COPY`/`ADD` 源——
-防止代码/Vault 模板变了但 compose 文本没变时被跳过。
+配置身份拆成两个正交平面,禁止再用一个 hash 同时回答两个问题:
+
+- `IAC_CONFIG_HASH`:**runtime fingerprint**,覆盖 compose、实际运行 env、local artifacts 与声明依赖;
+  只服务于同一环境的幂等/no-op 与 secret/runtime-config 变化触发。
+- `IAC_SOURCE_CONFIG_HASH`:带 schema 版本的 **source fingerprint**,只覆盖 release 可重算的源码、
+  非秘密部署坐标、local artifacts 与声明依赖;`IAC_DEPLOY_REF`(exact 40-char SHA)证明该 fingerprint
+  来自哪一个不可变 revision。
+
+运行时 secret / 1Password 值不得进入 source fingerprint。否则 GitHub drift job 无法取得相同输入,
+会把“检测器缺 secret”误报成“生产未部署”。每个服务 `sync` 同时写入两种 fingerprint 和 exact ref;
+runtime hash 不匹配才重部署,source hash/ref 由 T3 drift 检测。local artifacts 含 compose 引用的
+bind-mount 文件、Dockerfile 及其 `COPY`/`ADD` 源,防止代码/Vault 模板变了但 compose 文本没变时被跳过。
+runtime hash 相同但 source identity 缺失/非法时执行一次 migration reconcile;source identity 已有效且
+fingerprint 未变时保留其原 deploy ref,不因无关的新 release 重启服务。
 
 **Dokploy 接受 deploy 请求 ≠ runtime 真变了**:每次 generic compose deploy 后,Deployer 记录现有 deployment IDs,
 要求出现新的 `running`/`done` 记录,`compose.deploy` 为 no-op 时用 `compose.redeploy` 重试一次,两次都没新记录则 sync 失败。
@@ -350,12 +364,15 @@ git fetch --tags && git tag -l "v*.*.*" | sort -V | tail -5
 > 治理弧线(T1 生成 / T2 强制 / T3 检测 / T4 隔离)中针对 **Dokploy 配置漂移**的 T3 检测器。
 > 回答一个问题:**线上 production 跑的配置,还是最新 release tag 声明的那份吗?**
 
-- **机制**:`tools/dokploy_config_drift.py` 对每个 iac_pinned 服务,把线上 Dokploy env 里的
-  `IAC_CONFIG_HASH` 与**从最新 release tag 重算**的 expected hash 比对(`contents_at_ref` 直接
-  `git cat-file` 读 tag 内容,不做 checkout)。结论按行分类:`in_sync / DRIFT / error /
-  not_deployed / structural / env_unavailable`。
+- **机制**:`tools/dokploy_config_drift.py` 对每个 iac_pinned 服务先证明线上
+  `IAC_SOURCE_CONFIG_HASH` 能由其 `IAC_DEPLOY_REF` 重算,再与最新 release tag 的 expected source hash
+  比较(`contents_at_ref` 直接 `git cat-file` 读 revision 内容,不做 checkout)。服务在新 release 中输入
+  未变化时允许保留旧 deploy ref,避免无意义重启;ref 不是“必须等于最新 tag”的重部署开关。runtime secret 只进入
+  `IAC_CONFIG_HASH`,不参与 release fidelity。旧部署缺 source identity 时分类为 `legacy_identity`,
+  不伪装成 DRIFT;下次正常 release/reconcile 会迁移。
 - **载体**:[`.github/workflows/config-drift-report.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/config-drift-report.yml)
-  ——**日报,report-only,绝不 remediate**(修复 = 正常走 release/reconcile,见 §2/§3;这符合
+  ——**日报,strict detection,绝不自动 remediate**:真实 drift / detector error / structural mismatch
+  使 workflow 失败并保留报告(修复仍正常走 release/reconcile,见 §2/§3;这符合
   §"告警 vs 报告"的天级=报告铁律,归 [ops.obs](./ops.observability.md) 的 cadence 分层)。
 - **反静默铁律**:工具查不了的服务必须以 `error` 行大声出现在报告里——"0 drift 但其实跳过了
   N 个服务"正是这个工具要消灭的谎言;每次运行前先 `--self-check`(fixture 自证)。

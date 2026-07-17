@@ -172,6 +172,11 @@ jobs:
           cd ${{ github.workspace }}
           uv run python tools/watchdog_consistency_audit.py
 
+      - name: Gate cross-plane service identity
+        run: |
+          cd ${{ github.workspace }}
+          uv run python tools/service_identity_audit.py
+
       - name: Gate deploy fan-out coverage
         run: |
           cd ${{ github.workspace }}

@@ -114,7 +114,12 @@ class _FakeClient:
 
 
 def _projects(*composes):
-    return [{"environments": [{"compose": list(composes)}]}]
+    return [
+        {
+            "name": "platform",
+            "environments": [{"name": "production", "compose": list(composes)}],
+        }
+    ]
 
 
 def test_list_composes_isolates_per_compose_failure() -> None:
@@ -130,12 +135,12 @@ def test_list_composes_isolates_per_compose_failure() -> None:
 
     out = guard._list_composes(client)
 
-    assert [(cid, name) for cid, name, _ in out] == [
+    assert [(item.compose_id, item.compose_name) for item in out] == [
         ("c1", "svc-one"),
         ("c2", "svc-two"),
     ]
-    assert out[0][2] == []  # failed fetch degrades to empty, sweep continues
-    assert out[1][2] == [{"status": "running"}]
+    assert out[0].deployments == ()  # failed fetch degrades to empty
+    assert out[1].deployments == ({"status": "running"},)
 
 
 # ---------------------------------------------------------------------------

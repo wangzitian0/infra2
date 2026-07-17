@@ -10,6 +10,8 @@ from typing import Any
 
 import yaml
 
+from libs.service_identity import ServiceIdentity
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INVENTORY_PATH = REPO_ROOT / "docs/ssot/ops.backup-inventory.yaml"
@@ -42,7 +44,9 @@ class BackupCheck:
         return asdict(self)
 
 
-def load_backup_inventory(path: Path | str = DEFAULT_INVENTORY_PATH) -> list[BackupEntry]:
+def load_backup_inventory(
+    path: Path | str = DEFAULT_INVENTORY_PATH,
+) -> list[BackupEntry]:
     data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     defaults = data.get("defaults", {})
     entries: list[BackupEntry] = []
@@ -106,10 +110,39 @@ def verify_backup_manifest(
 
 def build_backup_alert_payload(report: dict[str, Any]) -> dict[str, Any]:
     failures = [check for check in report["checks"] if check["status"] != "pass"]
+    alerts = []
+    for check in failures:
+        identity = ServiceIdentity.build(
+            check["service_id"],
+            "production",
+            component="backup",
+        )
+        alerts.append(
+            {
+                "status": "firing",
+                "labels": {
+                    "alertname": "InfraBackupVerificationFailed",
+                    **identity.alert_labels(
+                        severity=(
+                            "critical"
+                            if check["severity"] in {"P0", "P1"}
+                            else check["severity"]
+                        ),
+                        failure_domain="backup",
+                    ),
+                },
+                "annotations": {
+                    "summary": check["summary"],
+                    "description": str(check["evidence"]),
+                },
+            }
+        )
     return {
         "status": "firing" if failures else "resolved",
         "commonLabels": {
             "alertname": "InfraBackupVerificationFailed",
+            "identity_schema": "v1",
+            "managed_by": "infra2",
             "severity": "critical" if failures else "info",
             "team": "infra",
         },
@@ -119,21 +152,7 @@ def build_backup_alert_payload(report: dict[str, Any]) -> dict[str, Any]:
             else "All backup verification checks passed",
         },
         "groupLabels": {"alertname": "InfraBackupVerificationFailed"},
-        "alerts": [
-            {
-                "status": "firing",
-                "labels": {
-                    "alertname": "InfraBackupVerificationFailed",
-                    "service": check["service_id"],
-                    "severity": check["severity"],
-                },
-                "annotations": {
-                    "summary": check["summary"],
-                    "description": str(check["evidence"]),
-                },
-            }
-            for check in failures
-        ],
+        "alerts": alerts,
         "externalURL": "infra2://docs/ssot/ops.backup-inventory.yaml",
     }
 
@@ -172,7 +191,9 @@ def _verify_artifact(
         return _check(entry, "fail", "P1", "backup artifact is not off-host", evidence)
     if len(checksum) != 64:
         return _check(entry, "fail", "P1", "backup checksum is missing", evidence)
-    return _check(entry, "pass", "P1", "backup artifact is fresh and verifiable", evidence)
+    return _check(
+        entry, "pass", "P1", "backup artifact is fresh and verifiable", evidence
+    )
 
 
 def _check(
@@ -198,9 +219,14 @@ def _class_string_attr(tree: ast.AST, attr_name: str) -> str | None:
         for stmt in node.body:
             if not isinstance(stmt, ast.Assign):
                 continue
-            if not any(isinstance(target, ast.Name) and target.id == attr_name for target in stmt.targets):
+            if not any(
+                isinstance(target, ast.Name) and target.id == attr_name
+                for target in stmt.targets
+            ):
                 continue
-            if isinstance(stmt.value, ast.Constant) and isinstance(stmt.value.value, str):
+            if isinstance(stmt.value, ast.Constant) and isinstance(
+                stmt.value.value, str
+            ):
                 return stmt.value.value
     return None
 
@@ -226,7 +252,9 @@ def _parse_timestamp(value: Any) -> int:
     if isinstance(value, float):
         return int(value)
     if not isinstance(value, str) or not value.strip():
-        raise BackupManifestError("created_at must be a Unix timestamp or ISO-8601 string")
+        raise BackupManifestError(
+            "created_at must be a Unix timestamp or ISO-8601 string"
+        )
     candidate = value.strip()
     if candidate.isdigit():
         return int(candidate)

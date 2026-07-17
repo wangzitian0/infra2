@@ -17,6 +17,18 @@
 ### 标准标签 (Tagging)
 - 对外服务必须配置 Traefik labels（`traefik.enable`, router rule, entrypoints, tls）。
 - 内部服务必须显式 `traefik.enable=false`，避免误暴露。
+- 服务身份只有一个版本化契约：`libs/service_identity.py` 的 `v1`。canonical
+  坐标为 `service_id=<namespace>/<service>`、`environment`、`component`，发布
+  坐标为 `service.version` / `iac_ref`；`managed_by=infra2` 标识签发者。
+- IaC/Dokploy 使用 `INFRA_*`，OpenTelemetry 使用 semantic conventions
+  (`service.namespace`, `service.name`, `service.version`,
+  `deployment.environment.name`)，告警使用对应 snake_case 低基数 labels，Docker
+  显式标签使用 `party.zitian.infra.*`。迁移期只允许额外双写旧
+  `deployment.environment`，禁止另建服务名映射。
+- Docker 观察器优先读取 `party.zitian.infra.*`；旧容器只可由 Compose 自动标签和
+  registry 解析，无法唯一解析必须标为 `infra/unregistered`，不得猜测归属。
+- `service_id/environment/component/severity/failure_domain` 可参与告警路由和去重；
+  container ID、nonce、时间戳、错误详情只能放 annotations/log body，禁止成为 label。
 
 ---
 

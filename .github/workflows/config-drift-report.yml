@@ -1,8 +1,8 @@
 name: Config drift report
 
 # T3 reconciler (#280 prod-fidelity / #274 residual): daily, is each prod service running the
-# config the release tag specifies? Compares the deployed IAC_CONFIG_HASH (Dokploy) vs the hash
-# recomputed from the release tag's source (the SAME path-independent algorithm the deploy uses).
+# config the release tag specifies? Verifies deployed IAC_SOURCE_CONFIG_HASH provenance against
+# IAC_DEPLOY_REF, then compares that secret-free identity with the release source.
 # READ-ONLY (git object reads + Dokploy GETs); REPORT-only — posts daily to the 'infra2 reports'
 # Lark group even when in sync, so the report's delivery self-proves the path (#425), and a real
 # DRIFT is flagged loudly in the same report.
@@ -12,9 +12,7 @@ name: Config drift report
 #   var    INTERNAL_DOMAIN                        e.g. zitian.party
 #   secret INFRA2_REPORTS_FEISHU_APP_ID / _APP_SECRET   (the infra2 Feishu app bot)
 #   var    INFRA2_REPORTS_FEISHU_CHAT_ID          the 'infra2 reports' group chat_id
-# Full coverage of services whose env folds an op secret (e.g. alerting) additionally needs op;
-# without it those rows report `env-skip` (not a false DRIFT) — the 11 self-contained services
-# still compare exactly.
+# Runtime secrets are deliberately excluded from this detector; it needs no 1Password grant.
 
 "on":
   schedule:
@@ -58,4 +56,4 @@ jobs:
         run: python tools/dokploy_config_drift.py --self-check
 
       - name: Report config drift to infra2 reports
-        run: python tools/dokploy_config_drift.py --report
+        run: python tools/dokploy_config_drift.py --report --strict

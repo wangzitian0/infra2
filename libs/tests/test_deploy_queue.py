@@ -1,6 +1,7 @@
 """Tests for deploy-queue stuck detection (Dokploy-API observability layer)."""
 
 from libs.deploy_queue import (
+    ComposeDeployments,
     build_deploy_guard_alert_payload,
     deployment_start_epoch,
     find_stuck_deploys,
@@ -9,6 +10,16 @@ from libs.deploy_queue import (
 )
 
 NOW = 1_000_000.0  # fixed epoch for deterministic ages
+
+
+def _compose(compose_id, name, deployments, service_id="platform/alerting"):
+    return ComposeDeployments(
+        compose_id=compose_id,
+        compose_name=name,
+        service_id=service_id,
+        environment="production",
+        deployments=tuple(deployments),
+    )
 
 
 def test_parse_epoch_seconds_variants():
@@ -44,19 +55,19 @@ def test_is_running_is_case_insensitive():
 def test_find_stuck_only_flags_running_past_ceiling():
     composes = [
         # running 600s, ceiling 300 -> STUCK
-        (
+        _compose(
             "c1",
             "platform/app",
             [{"status": "running", "deploymentId": "d1", "startedAt": NOW - 600}],
         ),
         # running only 100s -> not stuck
-        (
+        _compose(
             "c2",
             "platform/redis",
             [{"status": "running", "deploymentId": "d2", "startedAt": NOW - 100}],
         ),
         # done long ago -> never stuck
-        (
+        _compose(
             "c3",
             "platform/db",
             [{"status": "done", "deploymentId": "d3", "startedAt": NOW - 9999}],
@@ -70,7 +81,7 @@ def test_find_stuck_only_flags_running_past_ceiling():
 
 def test_find_stuck_reports_oldest_running_per_compose():
     composes = [
-        (
+        _compose(
             "c1",
             "platform/app",
             [
@@ -88,7 +99,7 @@ def test_find_stuck_reports_oldest_running_per_compose():
 
 def test_find_stuck_skips_deploys_without_parseable_start():
     composes = [
-        (
+        _compose(
             "c1",
             "x",
             [{"status": "running", "deploymentId": "d", "startedAt": "garbage"}],
@@ -99,7 +110,7 @@ def test_find_stuck_skips_deploys_without_parseable_start():
 
 def test_alert_payload_shape_matches_bridge_contract():
     composes = [
-        (
+        _compose(
             "c1",
             "platform/app",
             [{"status": "running", "deploymentId": "d1", "startedAt": NOW - 600}],
@@ -113,7 +124,9 @@ def test_alert_payload_shape_matches_bridge_contract():
     assert payload["commonLabels"]["severity"] == "critical"
     assert isinstance(payload["alerts"], list) and len(payload["alerts"]) == 1
     alert = payload["alerts"][0]
-    assert alert["labels"]["service"] == "platform/app"
+    assert alert["labels"]["service_id"] == "platform/alerting"
+    assert alert["labels"]["environment"] == "production"
+    assert alert["labels"]["identity_schema"] == "v1"
     assert "stuck running" in alert["annotations"]["summary"]
 
 

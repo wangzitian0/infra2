@@ -6,6 +6,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from libs import service_registry as reg
 from libs.deploy.deployer import discover_services
 
@@ -31,6 +33,48 @@ def test_reader_extracts_known_deployer_facts() -> None:
     postgres = attrs["platform/postgres"]
     assert postgres.prod_only is False
     assert postgres.subdomain is None
+
+    app = attrs["finance_report/app"]
+    assert app.telemetry_service_name == "finance-report-backend"
+    assert app.telemetry_component == "backend"
+
+
+def test_registry_builds_cross_plane_identity_from_deployer_facts() -> None:
+    identity = reg.service_identity(
+        "finance_report/app",
+        "staging",
+        component="backend",
+        version="abc1234",
+        iac_ref="a" * 40,
+    )
+
+    assert identity.service_id == "finance_report/app"
+    assert identity.namespace == "finance-report"
+    assert identity.service_name == "finance-report-backend"
+    assert identity.component == "backend"
+
+
+def test_monitoring_components_resolve_to_canonical_service_ids() -> None:
+    assert reg.service_id_for_component("alerting") == "platform/alerting"
+    assert reg.service_id_for_component("vault") == "bootstrap/vault"
+    assert reg.service_id_for_component("finance-report-api") == "finance_report/app"
+    assert (
+        reg.service_id_for_component("postgres", signal="platform-postgres-tcp")
+        == "platform/postgres"
+    )
+
+    with pytest.raises(ValueError, match="does not resolve"):
+        reg.service_id_for_component("postgres")
+
+
+def test_dokploy_coordinates_resolve_inside_project_namespace() -> None:
+    assert reg.service_id_for_dokploy("platform", "postgres") == "platform/postgres"
+    assert (
+        reg.service_id_for_dokploy("finance_report", "postgres")
+        == "finance_report/postgres"
+    )
+    assert reg.service_id_for_dokploy("bootstrap", "vault") == "bootstrap/vault"
+    assert reg.service_id_for_dokploy("manual", "postgres") is None
 
 
 def test_all_services_matches_discover_services() -> None:

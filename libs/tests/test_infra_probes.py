@@ -434,7 +434,7 @@ def test_cascade_cycle_is_not_suppressed_fail_closed(monkeypatch, tmp_path) -> N
     assert runner.run_once(state_path=tmp_path / "s.json", failure_threshold=1) == 1
     firing = [p for p in posted if p["status"] == "firing"]
     services = {a["labels"]["service"] for a in firing[0]["alerts"]}
-    assert services == {"A", "B"}  # cycle has no root → neither suppressed
+    assert services == {"a", "b"}  # canonical labels; neither is suppressed
 
 
 def test_cascade_chain_suppresses_middle_and_pages_deepest_root(
@@ -460,7 +460,7 @@ def test_cascade_chain_suppresses_middle_and_pages_deepest_root(
     assert runner.run_once(state_path=tmp_path / "s.json", failure_threshold=1) == 1
     firing = [p for p in posted if p["status"] == "firing"]
     services = {a["labels"]["service"] for a in firing[0]["alerts"]}
-    assert services == {"C"}  # A, B suppressed as cascade symptoms; root C pages
+    assert services == {"c"}  # canonical label; root C pages
 
 
 def test_resolve_failing_root_returns_deepest_node_and_terminates() -> None:

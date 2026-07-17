@@ -34,6 +34,9 @@ python -m tools.deploy_v2 --type preview/pr --version-ref 5 --iac-ref main --dom
 
 The alias → {env_suffix, domain, compose slug, telemetry label} mapping is the pure,
 unit-tested `libs/deploy_env_config.py::preview_alias(kind, value)`.
+The same preview backend signs `ServiceIdentity v1` (`service_id=finance_report/app`,
+environment=alias, version=image tag, iac_ref=exact infra2 SHA) and passes it through
+Vault Agent to OTEL; application secrets cannot redefine those coordinates.
 
 ## Ephemeral DB
 

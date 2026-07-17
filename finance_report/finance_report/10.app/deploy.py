@@ -19,6 +19,8 @@ class AppDeployer(Deployer):
     subdomain = None
     service_port = 3000
     service_name = "frontend"
+    telemetry_service_name = "finance-report-backend"
+    telemetry_component = "backend"
 
     @classmethod
     def pre_compose(cls, c) -> dict | None:

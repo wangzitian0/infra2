@@ -16,19 +16,23 @@ from libs import service_registry
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKER = ROOT / "cloudflare/infra-watchdog/worker.js"
-# ["production", "minio-public-route", "https://minio.zitian.party/...", [200], "critical"],
-_ROW_RE = re.compile(r'\[\s*"(\w+)"\s*,\s*"([\w-]+)"\s*,\s*"(https?://[^"]+)"')
+# ["production", "minio-public-route", "platform/minio", "https://...", ...],
+_ROW_RE = re.compile(
+    r'\[\s*"(\w+)"\s*,\s*"([\w-]+)"\s*,\s*"([\w/-]+)"\s*,\s*"(https?://[^"]+)"'
+)
 
 
-def _public_routes() -> list[tuple[str, str, str]]:
-    """(env, route_name, host_subdomain) for every *-public-route worker target."""
-    rows: list[tuple[str, str, str]] = []
-    for env, name, url in _ROW_RE.findall(WORKER.read_text(encoding="utf-8")):
+def _public_routes() -> list[tuple[str, str, str, str]]:
+    """(env, route_name, service_id, host_subdomain) for public-route targets."""
+    rows: list[tuple[str, str, str, str]] = []
+    for env, name, service_id, url in _ROW_RE.findall(
+        WORKER.read_text(encoding="utf-8")
+    ):
         if not name.endswith("-public-route"):
             continue
         host = url.split("://", 1)[1].split("/", 1)[0]
         subdomain = host.split(".", 1)[0]  # `minio` / `minio-staging` / `sso`
-        rows.append((env, name, subdomain))
+        rows.append((env, name, service_id, subdomain))
     return rows
 
 
@@ -48,12 +52,16 @@ def test_staging_public_routes_are_not_prod_only_services() -> None:
     by_sub = _subdomain_to_meta()
     problems: list[str] = []
     checked = 0
-    for env, name, subdomain in routes:
+    for env, name, service_id, subdomain in routes:
         base = subdomain.removesuffix("-staging")
         meta = by_sub.get(base)
         if meta is None:
             continue  # bootstrap route (dokploy/vault) — outside the platform registry scan
         checked += 1
+        if service_id != meta.service_id:
+            problems.append(
+                f"{env} {name}: service_id={service_id} but registry={meta.service_id}"
+            )
         if env != "production" and meta.prod_only:
             problems.append(
                 f"{env} {name}: '{meta.service_id}' is prod_only (single shared instance) — a "

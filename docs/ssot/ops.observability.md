@@ -96,20 +96,20 @@ graph LR
 
 前置:SigNoz 已部署健康;应用在 `dokploy-network`;端点 `platform-signoz-otel-collector:4317`(gRPC)/`:4318`(HTTP),**仅 Docker 网络内、不对外暴露**。
 
-> **单一全局实例**:SigNoz 是 `prod_only` 单实例。preview/staging/production **全部**打到这个**无后缀** collector,靠 `deployment.environment` 区分环境(无 per-env collector)。标识规则见 [core.environments.md](core.environments.md#telemetry-identity)。
+> **单一全局实例**:SigNoz 是 `prod_only` 单实例。preview/staging/production **全部**打到这个**无后缀** collector,靠 `deployment.environment.name` 区分环境(无 per-env collector)。标识规则见 [core.environments.md](core.environments.md#telemetry-identity)。
 
 | 变量 | 说明 | 示例 |
 |------|------|------|
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP HTTP 端点(所有环境无后缀) | `http://platform-signoz-otel-collector:4318` |
 | `OTEL_SERVICE_NAME` | 服务名 | `finance-report-backend` |
-| `OTEL_RESOURCE_ATTRIBUTES` | 表层别名 + 底层 commit(单一变量,逗号分隔) | `deployment.environment=production,service.version=<short sha>` |
+| `OTEL_RESOURCE_ATTRIBUTES` | `ServiceIdentity` 渲染的完整资源身份 | `deployment.environment.name=production,infra.service.id=finance_report/app,service.version=<version>,infra.iac.ref=<sha>` |
 
 > 表层别名与底层 commit 由 infra2 部署时签发,应用只消费、对缺失 fast-fail。
 
 ### 4.3 finance_report 接入(BE + 浏览器 FE,Infra-014)
 
 后端(Docker 网络内 OTLP HTTP)由 `10.app/secrets.ctmpl` / `preview/secrets.ctmpl` 按环境渲染
-`OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_SERVICE_NAME=finance-report-backend` / `OTEL_RESOURCE_ATTRIBUTES=deployment.environment=<alias>,service.version=<git sha>`(preview 渲染本别名 `main`/`pr-<N>`/`commit-<sha7>`);`<git sha>` 来自 compose 注入的 `GIT_COMMIT_SHA`。
+`OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_SERVICE_NAME=finance-report-backend` / 由部署入口签发的 `OTEL_RESOURCE_ATTRIBUTES`。Vault template 只转交进程环境；不得从 Vault secret 覆盖服务、环境、版本或 IaC 身份。迁移期 payload 同时含 `deployment.environment.name=<alias>` 与旧 `deployment.environment=<alias>`。
 
 浏览器前端走**唯一公网 ingest** `otel.${INTERNAL_DOMAIN}`(§4.4),运行时(非 build-time)env 注入
 `NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT=https://otel.${INTERNAL_DOMAIN}/v1/traces`、`NEXT_PUBLIC_DEPLOYMENT_ENVIRONMENT=${ENV}`、`NEXT_PUBLIC_GIT_SHA=${GIT_COMMIT_SHA}`(promote-not-rebuild:同一镜像跨环境提升保持环境无关)。
@@ -227,7 +227,7 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 > **注**:`apply_alerts` 现为声明式 reconcile(upsert + 默认只 log 的 prune),见 [ops.pipeline.md](./ops.pipeline.md)。
 
 ### SOP-005: Cloudflare 带外 watchdog(主,边缘 30min)
-活在 [`cloudflare/infra-watchdog`](../../cloudflare/infra-watchdog/),**直发 Feishu**(不经它要验证的 bridge)。归属按信号记于 [`watchdog-signals.yaml`](watchdog-signals.yaml)。默认覆盖:prod 公网路由 `cloud/vault/minio/sso/signoz` + report web/api;staging 选定路由;prod/staging probe-runner heartbeat 新鲜度。Worker 有状态:首现/指纹变/`WATCHDOG_RENOTIFY_SECONDS`/恢复时发,成功静默;dedupe keys on **stable failure identity plus failure domain**(稳定失败身份 + 失败域);config-preflight 失败单独报(不冒充路由故障);投递失败发 `watchdog.delivery.failure` 结构化事件不静默。
+活在 [`cloudflare/infra-watchdog`](../../cloudflare/infra-watchdog/),**直发 Feishu**(不经它要验证的 bridge)。归属按信号记于 [`watchdog-signals.yaml`](watchdog-signals.yaml)。默认覆盖:prod 公网路由 `cloud/vault/minio/sso/signoz` + report web/api;staging 选定路由;prod/staging probe-runner heartbeat 新鲜度。每个 target 携带 registry 校验的 `service_id`;结构化事件写 `identity_schema=v1` / `managed_by=infra2`,dedupe keys on **stable failure identity plus failure domain**，具体 fingerprint 使用 `(environment, service_id, signal, failure_domain)`。config-preflight 失败单独报(不冒充路由故障);投递失败发 `watchdog.delivery.failure` 结构化事件不静默。
 - secrets:webhook 模式 `FEISHU_WEBHOOK_URL`;app 模式 `FEISHU_APP_SECRET`;两者 `HEARTBEAT_TOKEN`、`WATCHDOG_STATUS_TOKEN`(源 1Password `Infra2/bootstrap/cloudflare-worker`)。
 - KV `WATCHDOG_STATE`;vars `WATCHDOG_ENVIRONMENTS=production,staging`、`WATCHDOG_RENOTIFY_SECONDS=7200` 等。
 - 部署:`cd cloudflare/infra-watchdog && wrangler kv namespace create WATCHDOG_STATE && wrangler secret put ... && wrangler deploy`;再配 probe runner heartbeat:`env.set INFRA_PROBE_HEARTBEAT_URL=.../heartbeat` + `INFRA_PROBE_HEARTBEAT_TOKEN`(prod+staging)→ deploy_v2。
@@ -237,7 +237,7 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 > **已知外部极限**:若 watchdog 与 Feishu/Lark 用的所有外部通道**同时**不可用,本仓库**没有第三条独立人工通知通道**(#425 月级/兜底范畴)。
 
 ### SOP-006: In-band 服务探针(分钟级)
-配在 `platform/12.alerting/compose.yaml` 的 `INFRA_PROBE_SPECS`。循环 `INFRA_PROBE_INTERVAL_SECONDS=60`(快检);通知分离:`FAILURE_THRESHOLD=3`、`RECOVERY_THRESHOLD=2`、`RENOTIFY_SECONDS=1800`。优先 Docker 网络目标(公网路由归 Cloudflare watchdog;`error code: 1010` 归类 `probe-client-blocked`)。spec 格式 `name|kind|target|expected|severity|timeout|depends_on`;kind=http/tcp/command。`depends_on` 链命中失败 root → 级联抑制(环路 fail-closed,见 `tools/infra_probe_runner.py`)。dry-run:`INFRA_PROBE_DRY_RUN=1 uv run python tools/infra_probe_runner.py --once --json`。
+配在 `platform/12.alerting/compose.yaml` 的 `INFRA_PROBE_SPECS`。循环 `INFRA_PROBE_INTERVAL_SECONDS=60`(快检);通知分离:`FAILURE_THRESHOLD=3`、`RECOVERY_THRESHOLD=2`、`RENOTIFY_SECONDS=1800`。优先 Docker 网络目标(公网路由归 Cloudflare watchdog;`error code: 1010` 归类 `probe-client-blocked`)。spec 格式 `name|kind|target|expected|severity|timeout|depends_on|service_id`;kind=http/tcp/command。第八字段强制绑定 registry；`watchdog_consistency_audit.py` 校验 compose↔inventory 双向集合相等以及 internal/Cloudflare `service_id` 一致。`depends_on` 链命中失败 root → 级联抑制(环路 fail-closed,见 `tools/infra_probe_runner.py`)。dry-run:`INFRA_PROBE_DRY_RUN=1 uv run python tools/infra_probe_runner.py --once --json`。
 > ✅ **`alert-delivery-canary` 已退役(#425 T3)**:它把"投递自证"做成了 6h 周期性告警(报告当告警),是 #425 禁止的反模式。bridge→Feishu 路径现由 `lark-delivery-http` + 带外 watchdog 的 bridge `/health` + 日报投递 + 真实告警覆盖,告警频道不再被合成事件刷屏。
 
 ### SOP-007: Dokploy route canary(动态,小时级)
@@ -278,6 +278,7 @@ Feishu page，且告警携带同一结构化记录。不得通过破坏 producti
 | 周 watchdog recall digest / 周正向稳定性报告 | `test_watchdog_weekly_digest.py`, `test_stability_report.py` | ✅ |
 | Env×Stage failure-domain / disagreement 契约 | `libs/tests/test_pipeline_stage_contract.py` | ✅ |
 | synthetic round-trip | `test_observability_roundtrip_probe.py` | ✅ |
+| IaC/runtime/telemetry/alert 身份契约 | `tools/service_identity_audit.py`, `libs/tests/test_service_identity*.py` | ✅ |
 | 告警通道手动连通 | `uv run invoke alerting.test-feishu` | Manual gate |
 
 ---

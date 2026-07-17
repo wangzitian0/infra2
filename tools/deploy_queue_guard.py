@@ -40,6 +40,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from libs.deploy_queue import (  # noqa: E402
+    ComposeDeployments,
     build_deploy_guard_alert_payload,
     find_stuck_deploys,
 )
@@ -90,10 +91,14 @@ def _make_client():
 
 
 def _list_composes(client):
-    """[(compose_id, compose_name, [deployments])] across all projects."""
+    """Typed compose deployments with identity resolved at topology ingestion."""
+    from libs.service_registry import service_id_for_dokploy
+
     out = []
     for project in client.list_projects():
+        project_name = project.get("name", "")
         for env in project.get("environments", []):
+            environment = (env.get("name") or "production").strip().lower()
             for compose in env.get("compose", []):
                 compose_id = compose.get("composeId")
                 if not compose_id:
@@ -104,7 +109,23 @@ def _list_composes(client):
                 except Exception as exc:  # one compose must not abort the sweep
                     logger.warning("deployments fetch failed for %s: %s", name, exc)
                     deployments = []
-                out.append((compose_id, name, deployments))
+                service_id = service_id_for_dokploy(project_name, name) or ""
+                if not service_id:
+                    logger.warning(
+                        "unregistered Dokploy compose identity: project=%s env=%s compose=%s",
+                        project_name,
+                        environment,
+                        name,
+                    )
+                out.append(
+                    ComposeDeployments(
+                        compose_id=compose_id,
+                        compose_name=name,
+                        service_id=service_id,
+                        environment=environment,
+                        deployments=tuple(deployments),
+                    )
+                )
     return out
 
 

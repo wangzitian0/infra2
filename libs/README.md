@@ -10,6 +10,7 @@
 
 - `get_secrets` selects `OpSecrets` (1Password) or `VaultSecrets` (Vault) for SSOT reads/writes.
 - `Deployer` + `make_tasks` standardize service deploy flows (now via Dokploy API).
+- `iac_runner_client` signs exact operation requests and polls by deployment ID.
 - `dokploy` wraps the Dokploy REST API for compose deployments.
 - `backup_restore` verifies off-host backup manifests and builds guarded restore rehearsal plans.
 - `console` helpers keep CLI output consistent (Rich).
@@ -22,6 +23,7 @@
 | `common.py` | Shared environment helpers | `get_env()`, `validate_env()`, `check_service()` |
 | `console.py` | Rich CLI output | `header()`, `success()`, `error()`, `prompt_action()` |
 | `deployer.py` | Deployment base class + task helpers | `Deployer`, `make_tasks()` |
+| `iac_runner_client.py` | Signed IaC Runner operation client | `trigger_platform_deploy()`, `poll_platform_deploy_status()` |
 | `dokploy.py` | Dokploy API client | `DokployClient`, `get_dokploy()` |
 | `backup_restore.py` | Off-host backup restore rehearsal helpers | `latest_artifact_for_service()`, `build_postgres_rehearsal_plan()`, `run_postgres_restore_rehearsal()` |
 | `dokploy_route_canary.py` | Dynamic route canary | `run_route_canary()`, `render_canary_compose()` |
@@ -90,6 +92,9 @@ from libs.deploy.deployer import Deployer, make_tasks
 - Non-production requires `DATA_PATH` or `ENV_SUFFIX` unless `ALLOW_SHARED_DATA_PATH=1` is set.
 - `DokployClient.update_compose_env()` parses basic `KEY=VALUE` lines only (no quoted/escaped/multiline values).
 - Dokploy deployment proof uses `deployment.allByCompose` before falling back to embedded compose snapshots.
+- Deployer identity has two planes: runtime `IAC_CONFIG_HASH` for idempotence, and versioned secret-free `IAC_SOURCE_CONFIG_HASH` plus exact `IAC_DEPLOY_REF` for release provenance.
+- Operational service identity is a third, metadata-only plane rendered by `service_identity.py`: registry-owned `service_id`/environment/component maps consistently to `INFRA_*`, OTEL resources, Docker labels and alert labels. It does not enter config hashes; missing/stale identity triggers one reconcile and post-deploy proof.
+- `service_registry.py` resolves Dokploy project/compose and legacy Docker container coordinates. Ambiguous or unknown runtime objects remain `infra/unregistered`; callers must not guess.
 - Dokploy API errors include method + endpoint context via `httpx` exceptions.
 - Production App requests use read-only GitHub API metadata to bind approved source/staging workflows and the merged review commit to the requested source SHA.
 - Infra contract and filesystem-discovery tests exclude `repos/`; workspace submodules own their own workflows and invariants.

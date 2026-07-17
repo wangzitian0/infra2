@@ -39,6 +39,11 @@ uv run invoke alerting.status
 `alerting.pre-compose`, the deployer mirrors those fields into
 `secret/platform/{env}/alerting` so the vault-agent can render runtime secrets.
 
+The probe heartbeat URL/token are runtime-only config inputs: they participate in
+`IAC_CONFIG_HASH` so rotation reconciles the service, but are excluded from the
+secret-independent `IAC_SOURCE_CONFIG_HASH`. The drift workflow therefore does not
+need 1Password access and cannot mistake a missing CI secret for production drift.
+
 The bridge is internal only:
 
 ```text
@@ -266,6 +271,12 @@ other config-parse errors cannot look like a public route outage.
 Cloudflare alert dedupe keys on stable failure identity plus failure domain, so
 heartbeat age or other volatile details do not turn the same incident into a
 fresh alert every cron tick.
+Every internal probe, Cloudflare target, SigNoz rule, deploy-queue alert and
+container-breakdown alert uses `ServiceIdentity v1` labels. The stable routing
+coordinate is `(environment, service_id, component, failure_domain)`; volatile
+container IDs and error details stay in annotations. Legacy containers are
+resolved from Compose labels through the service registry and surface as
+`infra/unregistered` when no unique match exists.
 IaC Runner, MinIO, Postgres, Redis, and application dependency health remain
 service-level signals handled in-band through SigNoz and this bridge.
 

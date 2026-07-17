@@ -275,16 +275,20 @@ python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref
 <a id="telemetry-identity"></a>
 ### 4.5 遥测标识隔离 (Telemetry identity)
 
-可观测性是**单一全局实例**（SigNoz / OpenPanel，`prod_only`）：所有环境都打到同一套，**靠标识区分**，不靠 per-env 实例。标识分两层——底层不可变 key + 表层人读别名：
+可观测性是**单一全局实例**（SigNoz / OpenPanel，`prod_only`）：所有环境都打到同一套，**靠标识区分**，不靠 per-env 实例。身份由 `libs/service_identity.py` 一次签发并映射到 IaC、运行时、遥测和告警：
 
-| 层 | 字段 | 取值 | 说明 |
-|----|------|------|------|
-| **底层（不可变 key）** | `service.version` | **short commit SHA** | 与 deploy primitive 的 `IMAGE_TAG` 同值；一个 commit = 一个镜像 = 一条遥测流（Axiom A，可复现）。OpenPanel 用同值作 property。 |
-| **表层（展示/过滤）** | `deployment.environment` | `production` / `staging` / `pr-<N>` / `commit-<sha>` / `tag-<x>` / `main` | 按触发来源派生的别名；OpenPanel 则用单一 `preview` project + 该别名 property。 |
+| 语义 | canonical 字段 | 示例 |
+|------|----------------|------|
+| 服务坐标 | `infra.service.id` / `service.namespace` / `service.name` | `finance_report/app` / `finance-report` / `finance-report-backend` |
+| 运行组件 | `infra.component` | `backend` / `worker` / `vault-agent` |
+| 环境别名 | `deployment.environment.name` | `production` / `staging` / `pr-123` / `tag-v1-2-3` |
+| 应用版本 | `service.version` | immutable image tag 或 commit SHA |
+| IaC 版本 | `infra.iac.ref` | exact 40-character infra2 commit SHA |
+| 契约所有权 | `infra.identity.schema=v1`, `infra.managed_by=infra2` | 固定值 |
 
-**签发归 infra2**：infra2 在部署时从触发上下文（PR 号 / tag / branch / commit）派生 `{short-sha, 表层别名}` 并注入 `service.version` + `deployment.environment`；应用只**消费**这些变量并对缺失做 fast-fail（不得自行定义环境）。OTLP 端点见 [ops.observability.md](ops.observability.md#41-应用接入-otlp)。
+**签发归 infra2**：Deployer / fixed promote / preview 三个入口从 registry 和已验证部署坐标构建 `ServiceIdentity`；应用与 Vault Agent 只消费签发值，不得从 secret 或自身默认值重定义身份。标准字段是 `deployment.environment.name`；迁移期双写旧 `deployment.environment`，查询和新告警必须使用 `.name`。身份 metadata 不进入运行配置 hash，远端缺失/错误则触发一次 reconcile；部署后校验关键 `INFRA_*` 字段，避免永久重启抖动。OTLP 端点见 [ops.observability.md](ops.observability.md#41-应用接入-otlp)。
 
-对 **preview** 多别名而言，`deployment.environment` 的取值就是别名 token 本身——`main` / `pr-<N>` / `commit-<sha7>`（见 §4.6）。同一份签发逻辑由 `libs/deploy/preview` 后端（经 `tools/deploy_v2 --type preview/*` 触发，非直接调用）在 `up` 时通过 `ENV` 注入到 compose（vault-agent 与遥测共同消费），与 `libs/deploy_env_config.py::preview_alias` 派生的 `env_suffix` 保持同源。
+对 **preview** 多别名而言，`deployment.environment.name` 的取值就是 alias token（见 §4.6）。同一份签发逻辑由 `libs/deploy/preview` 后端（经 `tools/deploy_v2 --type preview/*` 触发，非直接调用）注入 compose（vault-agent 与遥测共同消费），与 `libs/deploy_env_config.py::preview_alias` 派生的 `env_suffix` 保持同源。
 
 ---
 

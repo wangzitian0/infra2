@@ -52,6 +52,11 @@ services:
       # service.version=<sha> (Infra-014). Short image sha; "unknown" fallback.
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-finance-report-backend}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
+      INFRA_SERVICE_ID: ${INFRA_SERVICE_ID:-finance_report/app}
+      INFRA_ENVIRONMENT: ${INFRA_ENVIRONMENT:-${ENV:-production}}
+      INFRA_IAC_REF: ${INFRA_IAC_REF:-}
     healthcheck:
       test:
         - CMD-SHELL
@@ -141,6 +146,11 @@ services:
       #   performed via the backend API, so the frontend does not need this variable.
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      INFRA_SERVICE_ID: ${INFRA_SERVICE_ID:-finance_report/app}
+      INFRA_COMPONENT: backend
+      INFRA_ENVIRONMENT: ${INFRA_ENVIRONMENT:-${ENV:-production}}
+      INFRA_SERVICE_VERSION: ${INFRA_SERVICE_VERSION:-${GIT_COMMIT_SHA:-unknown}}
+      INFRA_IAC_REF: ${INFRA_IAC_REF:-}
       # BE->OpenPanel (server-side product analytics). Same non-secret per-env
       # client-id the frontend uses (injected by deploy_primitive from
       # tools/openpanel_clients.py); empty => backend analytics is a no-op.

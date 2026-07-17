@@ -32,6 +32,24 @@ _LAYERS: dict[str, Path] = {
 
 PRODUCTION = "production"
 
+_EXTERNAL_COMPONENT_IDS = {
+    "1password-connect": "bootstrap/1password",
+    "cloudflare-watchdog": "infra/cloudflare-watchdog",
+    "docker": "infra/docker",
+    "dokploy": "bootstrap/dokploy",
+    "finance-report-api": "finance_report/app",
+    "finance-report-web": "finance_report/app",
+    "host": "infra/host",
+    "iac-runner": "bootstrap/iac-runner",
+    "vault": "bootstrap/vault",
+}
+
+_BOOTSTRAP_COMPOSE_IDS = {
+    "1password-connect": "bootstrap/1password",
+    "iac_runner": "bootstrap/iac-runner",
+    "vault": "bootstrap/vault",
+}
+
 
 @dataclass(frozen=True)
 class ServiceMeta:
@@ -44,6 +62,8 @@ class ServiceMeta:
     subdomain: str | None  # public subdomain, e.g. "sso"; None = no public route
     service_port: int | None  # container port for routing
     service_name: str | None  # compose service name (multi-service composes)
+    telemetry_service_name: str | None  # OTEL service.name override
+    telemetry_component: str | None  # OTEL infra.component override
     project: str  # Dokploy project, defaults to "platform"
 
 
@@ -72,6 +92,8 @@ def service_attrs() -> dict[str, ServiceMeta]:
                 subdomain=_class_attr(tree, "subdomain"),
                 service_port=_class_attr(tree, "service_port"),
                 service_name=_class_attr(tree, "service_name"),
+                telemetry_service_name=_class_attr(tree, "telemetry_service_name"),
+                telemetry_component=_class_attr(tree, "telemetry_component"),
                 project=_class_attr(tree, "project") or "platform",
             )
     return result
@@ -102,6 +124,76 @@ def subdomains() -> dict[str, str]:
     return {m.service_id: m.subdomain for m in service_attrs().values() if m.subdomain}
 
 
+def service_identity(
+    service_id: str,
+    environment: str,
+    *,
+    component: str | None = None,
+    version: str = "",
+    iac_ref: str = "",
+):
+    """Build the canonical cross-plane identity from registry-owned facts."""
+    from libs.service_identity import ServiceIdentity
+
+    meta = service_attrs().get(service_id)
+    if meta is None:
+        raise ValueError(f"unknown registered service_id: {service_id}")
+    return ServiceIdentity.build(
+        service_id,
+        environment,
+        component=component or meta.service,
+        service_name=meta.telemetry_service_name or meta.service,
+        version=version,
+        iac_ref=iac_ref,
+    )
+
+
+def service_id_for_component(component: str, *, signal: str = "") -> str:
+    """Resolve monitoring component aliases to one canonical service ID."""
+    normalized = component.strip().lower().replace("_", "-")
+    if normalized in _EXTERNAL_COMPONENT_IDS:
+        return _EXTERNAL_COMPONENT_IDS[normalized]
+
+    attrs = service_attrs()
+    candidates = [
+        meta.service_id
+        for meta in attrs.values()
+        if meta.service.replace("_", "-") == normalized
+    ]
+    if len(candidates) == 1:
+        return candidates[0]
+
+    signal_prefix = signal.strip().lower().split("-", 1)[0]
+    scoped = [item for item in candidates if item.split("/", 1)[0] == signal_prefix]
+    if len(scoped) == 1:
+        return scoped[0]
+    raise ValueError(
+        f"component {component!r} does not resolve to one service_id "
+        f"(signal={signal!r}, candidates={sorted(candidates)})"
+    )
+
+
+def service_id_for_dokploy(project: str, compose_name: str) -> str | None:
+    """Resolve a Dokploy project/compose coordinate without guessing globally.
+
+    Compose names such as ``app`` and ``postgres`` are intentionally resolved
+    inside their project namespace. Unknown manually-created composes return
+    ``None`` so monitoring can surface them as unregistered rather than assign
+    a false identity.
+    """
+    canonical_project = (project or "").strip().lower().replace("-", "_")
+    canonical_compose = (compose_name or "").strip().lower()
+    if canonical_project == "bootstrap":
+        return _BOOTSTRAP_COMPOSE_IDS.get(canonical_compose)
+
+    matches = [
+        meta.service_id
+        for meta in service_attrs().values()
+        if meta.project == canonical_project and meta.service == canonical_compose
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 def probe_container_bases() -> dict[str, ServiceMeta]:
     """Exact compose container base name (``{layer}-{service|service_name}``, BEFORE any
     ``${ENV_SUFFIX}``) -> ServiceMeta. Both ``service`` and ``service_name`` map. This is the
@@ -129,6 +221,9 @@ def resolve_container_host(host: str) -> ServiceMeta | None:
     vault) so callers can knowingly skip them rather than mis-resolve.
     """
     base = host.replace("${ENV_SUFFIX}", "")
+    base = base.replace("finance-report-", "finance_report-")
+    for suffix in ("-staging", "-preview"):
+        base = base.replace(suffix, "")
     bases = probe_container_bases()
     if base in bases:
         return bases[base]

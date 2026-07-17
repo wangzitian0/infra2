@@ -186,6 +186,7 @@ def deploy(
     break_glass: bool = False,
     repo: str | None = None,
     image_ref: str | None = None,
+    iac_ref: str = "",
     wait: bool = False,
     timeout: int = 600,
     model_overrides: dict[str, str] | None = None,
@@ -277,6 +278,20 @@ def deploy(
         "INTERNAL_DOMAIN": domain,
         "IAC_CONFIG_HASH": config_hash,
     }
+    from libs.service_identity import ServiceIdentity
+
+    deploy_environment = {"prod": "production"}.get(env.strip().lower(), env)
+    identity = ServiceIdentity.build(
+        "finance_report/app",
+        deploy_environment,
+        component="app",
+        service_name="finance-report-backend",
+        version=image_tag,
+        iac_ref=iac_ref,
+    )
+    env_vars.update(identity.deploy_env())
+    env_vars["OTEL_SERVICE_NAME"] = identity.service_name
+    env_vars["OTEL_RESOURCE_ATTRIBUTES"] = identity.otel_resource_attributes()
     # #372: the finance_report app frontend reads OPENPANEL_CLIENT_ID at runtime
     # (server layout -> <Analytics>). This fixed-compose path never ran the app's
     # pre_compose, so the per-env client id was dropped and analytics never started.
@@ -319,7 +334,6 @@ def deploy(
 
             # ClickHouse URL resolution lives in deploy_ingestion_smoke (single owner,
             # reusing the round-trip canary's env) — do not re-read it here.
-            deploy_environment = {"prod": "production"}.get(env.strip().lower(), env)
             verify_deploy_ingestion(
                 service_name="finance-report-backend",
                 environment=deploy_environment,

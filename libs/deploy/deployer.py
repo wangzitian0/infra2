@@ -9,6 +9,7 @@ from pathlib import Path
 import os
 import hashlib
 import json
+import re
 import shlex
 import time
 from invoke import task
@@ -44,6 +45,9 @@ RUNTIME_ENV_KEYS_TO_PRESERVE = (
     "VAULT_ROLE_ID",
     "VAULT_SECRET_ID",
 )
+
+SOURCE_CONFIG_HASH_VERSION = "v1"
+EXACT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 
 def discover_services() -> dict[str, str]:
@@ -370,8 +374,13 @@ class Deployer:
     subdomain: str = None  # e.g., "sso" for sso.{INTERNAL_DOMAIN}
     service_port: int = None  # Container port
     service_name: str = None  # For multi-service composes
+    telemetry_service_name: str = None  # OpenTelemetry service.name override
+    telemetry_component: str = None  # OpenTelemetry infra.component override
     deployment_record_timeout_seconds: int = 60
     deployment_record_interval_seconds: int = 3
+    # Keys supplied by a runtime secret backend must affect deployment
+    # idempotence, but cannot be reconstructed from a release in read-only CI.
+    runtime_only_config_keys: frozenset[str] = frozenset()
 
     @classmethod
     def env(cls) -> dict[str, str | None]:
@@ -424,6 +433,29 @@ class Deployer:
         if e.get("ENV_SUFFIX"):
             base["ENV_SUFFIX"] = e.get("ENV_SUFFIX")
         return {k: v for k, v in base.items() if v is not None}
+
+    @classmethod
+    def source_config_env_base(cls, env: dict | None = None) -> dict[str, str]:
+        """Return release-recomputable env inputs for source config identity."""
+        if cls.runtime_only_config_keys:
+            raise NotImplementedError(
+                f"{cls.__name__} declares runtime-only config and must implement "
+                "source_config_env_base without reading its secret backend"
+            )
+        result = cls.compose_env_base(env)
+        return result
+
+    @classmethod
+    def config_env_with_vault_addr(
+        cls, env_vars: dict[str, str], env: dict | None = None
+    ) -> dict[str, str]:
+        """Apply the shared VAULT_ADDR default used by both config identities."""
+        e = env or cls.env()
+        result = dict(env_vars)
+        result["VAULT_ADDR"] = e.get(
+            "VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}"
+        )
+        return result
 
     @classmethod
     def secrets(cls):
@@ -547,6 +579,7 @@ class Deployer:
         branch = GITHUB_BRANCH
         try:
             import subprocess
+
             tag_res = subprocess.run(
                 ["git", "describe", "--tags", "--exact-match"],
                 capture_output=True,
@@ -815,8 +848,8 @@ class Deployer:
         return False
 
     @classmethod
-    def get_remote_config_hash(cls) -> str | None:
-        """Get config hash stored in Dokploy compose description/env."""
+    def get_remote_config_identity(cls) -> dict[str, str | None]:
+        """Read the config identity stored in Dokploy's effective compose env."""
         from libs.dokploy import get_dokploy
 
         e = cls.env()
@@ -831,14 +864,44 @@ class Deployer:
         )
 
         if not existing:
-            return None
+            return {
+                "runtime_hash": None,
+                "source_hash": None,
+                "deploy_ref": None,
+                "identity_schema": None,
+                "managed_by": None,
+                "service_id": None,
+                "environment": None,
+            }
 
-        # Hash is stored in env as IAC_CONFIG_HASH
         env_str = existing.get("env", "")
+        values: dict[str, str] = {}
         for line in env_str.split("\n"):
-            if line.startswith("IAC_CONFIG_HASH="):
-                return line.split("=", 1)[1].strip()
-        return None
+            key, separator, value = line.partition("=")
+            if separator and key in {
+                "IAC_CONFIG_HASH",
+                "IAC_SOURCE_CONFIG_HASH",
+                "IAC_DEPLOY_REF",
+                "INFRA_IDENTITY_SCHEMA",
+                "INFRA_MANAGED_BY",
+                "INFRA_SERVICE_ID",
+                "INFRA_ENVIRONMENT",
+            }:
+                values[key] = value.strip()
+        return {
+            "runtime_hash": values.get("IAC_CONFIG_HASH"),
+            "source_hash": values.get("IAC_SOURCE_CONFIG_HASH"),
+            "deploy_ref": values.get("IAC_DEPLOY_REF"),
+            "identity_schema": values.get("INFRA_IDENTITY_SCHEMA"),
+            "managed_by": values.get("INFRA_MANAGED_BY"),
+            "service_id": values.get("INFRA_SERVICE_ID"),
+            "environment": values.get("INFRA_ENVIRONMENT"),
+        }
+
+    @classmethod
+    def get_remote_config_hash(cls) -> str | None:
+        """Backward-compatible accessor for the runtime idempotence hash."""
+        return cls.get_remote_config_identity()["runtime_hash"]
 
     @classmethod
     def _resolve_record_timeout(cls, timeout_seconds: int | None = None) -> int:
@@ -1088,13 +1151,57 @@ class Deployer:
             }
 
         # Build env vars
-        env_vars_dict = cls.compose_env_base(e)
-        env_vars_dict["VAULT_ADDR"] = e.get(
-            "VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}"
+        env_vars_dict = cls.config_env_with_vault_addr(cls.compose_env_base(e), e)
+        source_env_vars = cls.config_env_with_vault_addr(
+            cls.source_config_env_base(e), e
         )
 
-        # Compute local hash
+        # Runtime identity drives deploy idempotence; source identity is secret-free
+        # and can be independently reconstructed from the immutable release.
         local_hash = cls.compute_local_config_hash(c, env_vars_dict)
+        source_hash = (
+            f"{SOURCE_CONFIG_HASH_VERSION}:"
+            f"{cls.compute_local_config_hash(c, source_env_vars)}"
+        )
+        deploy_ref = (os.getenv("IAC_DEPLOY_REF") or "").strip().lower()
+        if not deploy_ref:
+            try:
+                import subprocess
+
+                result = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=10,
+                )
+                deploy_ref = (
+                    result.stdout.strip().lower() if result.returncode == 0 else ""
+                )
+            except (OSError, subprocess.SubprocessError):
+                deploy_ref = ""
+        if not EXACT_COMMIT_RE.fullmatch(deploy_ref):
+            return {
+                "action": "failed",
+                "details": "Deployment identity requires an exact 40-character IAC_DEPLOY_REF",
+            }
+        from libs.deploy_dependencies import service_key_from_path
+        from libs.service_identity import ServiceIdentity
+
+        service_id = service_key_from_path(cls.compose_path)
+        if not service_id:
+            return {
+                "action": "failed",
+                "details": f"Could not derive service identity from {cls.compose_path}",
+            }
+        runtime_identity = ServiceIdentity.build(
+            service_id,
+            e.get("ENV", "production"),
+            component=cls.service,
+            service_name=cls.telemetry_service_name or cls.service,
+            version=deploy_ref,
+            iac_ref=deploy_ref,
+        )
 
         # Read the remote (deployed) hash. FAIL CLOSED: reading it hits the
         # Dokploy API, which can error/time out exactly when the host is under
@@ -1103,7 +1210,8 @@ class Deployer:
         # redeploys -> more jam). When the remote state is unreadable, skip and
         # alert instead of deploying. (`--force` still proceeds deliberately.)
         try:
-            remote_hash = cls.get_remote_config_hash()
+            remote_identity = cls.get_remote_config_identity()
+            remote_hash = remote_identity["runtime_hash"]
         except Exception as exc:  # noqa: BLE001 - any lookup failure must fail closed
             if not force:
                 warning(
@@ -1118,20 +1226,55 @@ class Deployer:
                 f"{cls.service}: remote config unreadable ({exc}); "
                 "proceeding because --force was requested"
             )
+            remote_identity = {
+                "runtime_hash": None,
+                "source_hash": None,
+                "deploy_ref": None,
+                "identity_schema": None,
+                "managed_by": None,
+                "service_id": None,
+                "environment": None,
+            }
             remote_hash = None
 
         info(f"Local config hash: {local_hash}")
         info(f"Remote config hash: {remote_hash or 'not found'}")
 
-        if not force and local_hash == remote_hash:
+        remote_ref = remote_identity["deploy_ref"] or ""
+        expected_deploy_identity = runtime_identity.deploy_env()
+        remote_source_identity_valid = remote_identity[
+            "source_hash"
+        ] == source_hash and bool(EXACT_COMMIT_RE.fullmatch(remote_ref))
+        remote_service_identity_valid = all(
+            remote_identity.get(remote_key) == expected_deploy_identity[env_key]
+            for remote_key, env_key in (
+                ("identity_schema", "INFRA_IDENTITY_SCHEMA"),
+                ("managed_by", "INFRA_MANAGED_BY"),
+                ("service_id", "INFRA_SERVICE_ID"),
+                ("environment", "INFRA_ENVIRONMENT"),
+            )
+        )
+        if (
+            not force
+            and local_hash == remote_hash
+            and remote_source_identity_valid
+            and remote_service_identity_valid
+        ):
             success(f"{cls.service}: config unchanged, skipping deploy")
-            return {"action": "skipped", "details": "Config hash matches"}
+            return {
+                "action": "skipped",
+                "details": "Runtime and source config identities match",
+            }
 
         # Config changed or force - do full deploy
         if remote_hash is None:
             info("No remote config found, creating new deployment")
         elif force:
             warning("Force sync requested")
+        elif local_hash == remote_hash:
+            info(
+                "Runtime config unchanged but release identity is missing or stale; reconciling"
+            )
         else:
             info(f"Config changed ({remote_hash} -> {local_hash}), deploying")
 
@@ -1139,8 +1282,25 @@ class Deployer:
         if not cls._prepare_dirs(c):
             return {"action": "failed", "details": "Failed to prepare directories"}
 
-        # Add hash to env vars
+        # Persist both config planes and the exact checked-out revision. These are
+        # deliberately excluded from their own hash inputs above.
         env_vars_dict["IAC_CONFIG_HASH"] = local_hash
+        env_vars_dict["IAC_SOURCE_CONFIG_HASH"] = source_hash
+        env_vars_dict["IAC_DEPLOY_REF"] = deploy_ref
+        env_vars_dict.update(runtime_identity.deploy_env())
+        if cls.telemetry_service_name:
+            telemetry_identity = ServiceIdentity.build(
+                service_id,
+                e.get("ENV", "production"),
+                component=cls.telemetry_component or cls.service,
+                service_name=cls.telemetry_service_name,
+                version=deploy_ref,
+                iac_ref=deploy_ref,
+            )
+            env_vars_dict["OTEL_SERVICE_NAME"] = telemetry_identity.service_name
+            env_vars_dict["OTEL_RESOURCE_ATTRIBUTES"] = (
+                telemetry_identity.otel_resource_attributes()
+            )
 
         # Deploy
         try:
@@ -1178,6 +1338,45 @@ class Deployer:
                     f"(expected {local_hash}, got {effective_hash or 'none'}); "
                     "runtime may still be running prior config"
                 ),
+            }
+
+        try:
+            effective_identity = cls.get_remote_config_identity()
+        except Exception as exc:  # noqa: BLE001 - identity proof is fail-closed.
+            error(f"Post-deploy identity verification failed: {exc}")
+            return {
+                "action": "failed",
+                "details": f"Post-deploy identity verification failed: {exc}",
+            }
+        identity_mismatches = []
+        if effective_identity["source_hash"] != source_hash:
+            identity_mismatches.append(
+                "IAC_SOURCE_CONFIG_HASH "
+                f"expected {source_hash}, got {effective_identity['source_hash'] or 'none'}"
+            )
+        if deploy_ref and effective_identity["deploy_ref"] != deploy_ref:
+            identity_mismatches.append(
+                "IAC_DEPLOY_REF "
+                f"expected {deploy_ref}, got {effective_identity['deploy_ref'] or 'none'}"
+            )
+        for remote_key, env_key in (
+            ("identity_schema", "INFRA_IDENTITY_SCHEMA"),
+            ("managed_by", "INFRA_MANAGED_BY"),
+            ("service_id", "INFRA_SERVICE_ID"),
+            ("environment", "INFRA_ENVIRONMENT"),
+        ):
+            expected_value = expected_deploy_identity[env_key]
+            if effective_identity.get(remote_key) != expected_value:
+                identity_mismatches.append(
+                    f"{env_key} expected {expected_value}, "
+                    f"got {effective_identity.get(remote_key) or 'none'}"
+                )
+        if identity_mismatches:
+            details = "; ".join(identity_mismatches)
+            error(f"Post-deploy identity verification failed: {details}")
+            return {
+                "action": "failed",
+                "details": f"Effective remote identity is stale after deploy: {details}",
             }
 
         # Runtime-applied verification (closed loop): the hash check above only
