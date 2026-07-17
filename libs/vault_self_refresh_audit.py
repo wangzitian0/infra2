@@ -60,9 +60,6 @@ class VaultService:
     # "token" = static VAULT_APP_TOKEN; "approle" = VAULT_ROLE_ID + VAULT_SECRET_ID.
     auth_method: str = "token"
 
-    def vault_path(self, env: str) -> str:
-        return self.vault_path_template.format(env=env)
-
     @property
     def auth_env_keys(self) -> tuple[str, ...]:
         """Env keys the vault-agent must carry for this service's auth method."""
