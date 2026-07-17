@@ -5,8 +5,9 @@ on:
     paths:
       - 'bootstrap/**'
       - 'platform/**'
-      - 'finance_report/**'
-      - 'truealpha/**'
+      - 'repos/finance_report/**'
+      - 'repos/truealpha/**'
+      - 'repos/infra2-sdk/**'
       - 'libs/**'
       - 'tools/**'
       - 'cloudflare/**'
@@ -21,8 +22,9 @@ on:
     paths:
       - 'bootstrap/**'
       - 'platform/**'
-      - 'finance_report/**'
-      - 'truealpha/**'
+      - 'repos/finance_report/**'
+      - 'repos/truealpha/**'
+      - 'repos/infra2-sdk/**'
       - 'libs/**'
       - 'tools/**'
       - 'cloudflare/**'
