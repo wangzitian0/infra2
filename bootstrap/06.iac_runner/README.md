@@ -1,6 +1,6 @@
 # IaC Runner
 
-GitOps-style webhook service that syncs infrastructure when main branch changes.
+GitOps deployment control plane for syncing reviewed, immutable revisions to Dokploy.
 
 ## How It Works
 
@@ -11,18 +11,20 @@ GitOps-style webhook service that syncs infrastructure when main branch changes.
 └─────────────┘                  └──────────────┘                   └─────────────┘
 ```
 
-1. Developer pushes to `main` branch
-2. GitHub sends webhook to `https://iac.{domain}/webhook`
-3. IaC Runner parses changed files to identify affected services
-4. Runs `invoke {service}.sync` for each changed service
-5. Sync task compares config hash and only redeploys if changed
+1. GitHub resolves an approved source/tag to an exact 40-character commit SHA.
+2. `/deploy` normalizes the requested service set and returns an opaque deployment ID.
+3. IaC Runner checks out that exact SHA and runs each selected `invoke {service}.sync`.
+4. The caller polls `/deploy/status` with the same deployment ID and service set.
+5. Completion means the exact operation produced terminal per-service results.
 
 ## Idempotency
 
-The `sync` task uses config hashing:
-- Computes SHA256 of `compose.yaml + env vars`
-- Stores hash as `IAC_CONFIG_HASH` in Dokploy env
-- Skips deploy if hash matches (no changes)
+The `sync` task uses two independent identities:
+
+- `IAC_CONFIG_HASH` includes effective runtime inputs, including declared runtime secrets, and controls idempotent deploy/no-op behavior.
+- `IAC_SOURCE_CONFIG_HASH` is versioned and secret-independent; `IAC_DEPLOY_REF` records the exact revision that produced it.
+
+A deployment skips only when the runtime hash matches and a valid source identity already exists. Missing legacy identity triggers one migration reconcile.
 
 ## Architecture
 
@@ -143,6 +145,7 @@ Create from prod tag → v1.3.1 → Deploy to Production (no main merge required
 | `/webhook` | POST | GitHub webhook receiver (change-based sync) |
 | `/sync` | POST | Manual sync trigger (legacy, disabled by default) |
 | `/deploy` | POST | SHA-based deployment (GitOps) |
+| `/deploy/status` | POST | Poll the exact deployment ID returned by `/deploy` |
 
 ### Version-Based Deployment
 
@@ -194,13 +197,13 @@ curl -X POST https://iac.{domain}/sync \
 
 ## Scope
 
-IaC Runner **ONLY manages `platform` project services**.
+IaC Runner manages deployer-discovered, explicitly selected services. Bootstrap remains out of band to avoid circular self-management.
 
 | Project | Management Method |
 |---------|------------------|
 | **Bootstrap** (1Password, Vault, IaC Runner) | Manual deployment (avoid circular deps) |
 | **Platform** (postgres, redis, authentik, etc.) | Auto-sync via IaC Runner |
-| **Apps** (finance_report, wealthfolio) | Own GitHub CI/CD pipelines |
+| **Apps** | App CI selects released IaC services through the shared deploy front door |
 
 ## Service Mapping
 
@@ -208,7 +211,7 @@ IaC Runner **ONLY manages `platform` project services**.
 |--------------|-------------|-------|
 | `platform/01.postgres/*` | `postgres.sync` | Auto-sync |
 | `platform/10.authentik/*` | `authentik.sync` | Auto-sync |
-| `libs/*` | All platform services | Full platform sync |
+| `libs/*`, `tools/*` | Declared dependents only | `deploy-dependencies.yaml`; unrelated tooling is no-op |
 | `bootstrap/*` | Skipped | Manual only |
 | `finance_report/*` | Skipped | Use finance_report CI |
 | `finance/*` | Skipped | Use app-specific CI |

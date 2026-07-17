@@ -193,6 +193,7 @@ def test_up_env_has_short_sha_suffix_and_ephemeral_db_knobs():
         domain="zitian.party",
         client=client,
         http_get=_ok_get,
+        iac_ref="b" * 40,
         _now=lambda: 1000,
     )
     # env is applied via update_compose_env (compose.create drops the env blob), so it is
@@ -212,6 +213,14 @@ def test_up_env_has_short_sha_suffix_and_ephemeral_db_knobs():
     assert env["PREVIEW_DB_NAME"] == "finance_report"
     # app secrets are read from a fixed source env (preview has no per-alias Vault path)
     assert env["PREVIEW_SECRET_ENV"] == "staging"
+    assert env["INFRA_IDENTITY_SCHEMA"] == "v1"
+    assert env["INFRA_SERVICE_ID"] == "finance_report/app"
+    assert env["INFRA_ENVIRONMENT"] == "commit-1ab32d5"
+    assert env["INFRA_SERVICE_VERSION"] == SHORT_SHA
+    assert env["INFRA_IAC_REF"] == "b" * 40
+    assert (
+        "deployment.environment.name=commit-1ab32d5" in env["OTEL_RESOURCE_ATTRIBUTES"]
+    )
 
 
 def test_up_self_provisions_the_preview_environment():

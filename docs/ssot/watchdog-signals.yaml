@@ -229,6 +229,152 @@ signals:
     cadence: 60s
     alert_threshold: 3 consecutive failures
 
+  # Derived identity for every entry below is validated against the service
+  # registry and the eighth INFRA_PROBE_SPECS field by the consistency audit.
+  - signal_id: production.prefect.internal-http
+    environment: production
+    component: prefect
+    signal: prefect-internal-http
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: staging.prefect.internal-http
+    environment: staging
+    component: prefect
+    signal: prefect-internal-http
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: production.signoz.otel-collector-http
+    environment: production
+    component: signoz
+    signal: otel-collector-http
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: staging.signoz.otel-collector-http
+    environment: staging
+    component: signoz
+    signal: otel-collector-http
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: production.signoz.roundtrip
+    environment: production
+    component: signoz
+    signal: signoz-roundtrip
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: staging.signoz.roundtrip
+    environment: staging
+    component: signoz
+    signal: signoz-roundtrip
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: production.alerting.lark-delivery-http
+    environment: production
+    component: alerting
+    signal: lark-delivery-http
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: staging.alerting.lark-delivery-http
+    environment: staging
+    component: alerting
+    signal: lark-delivery-http
+    primary_owner: internal
+    severity: critical
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: production.openpanel.api-http
+    environment: production
+    component: openpanel
+    signal: openpanel-api-http
+    primary_owner: internal
+    severity: warning
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: staging.openpanel.api-http
+    environment: staging
+    component: openpanel
+    signal: openpanel-api-http
+    primary_owner: internal
+    severity: warning
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: production.openpanel.worker-http
+    environment: production
+    component: openpanel
+    signal: openpanel-worker-http
+    primary_owner: internal
+    severity: warning
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: staging.openpanel.worker-http
+    environment: staging
+    component: openpanel
+    signal: openpanel-worker-http
+    primary_owner: internal
+    severity: warning
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: production.openpanel.dashboard-http
+    environment: production
+    component: openpanel
+    signal: openpanel-dashboard-http
+    primary_owner: internal
+    severity: warning
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: staging.openpanel.dashboard-http
+    environment: staging
+    component: openpanel
+    signal: openpanel-dashboard-http
+    primary_owner: internal
+    severity: warning
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: production.openpanel.roundtrip
+    environment: production
+    component: openpanel
+    signal: openpanel-roundtrip
+    primary_owner: internal
+    severity: warning
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
+  - signal_id: staging.openpanel.roundtrip
+    environment: staging
+    component: openpanel
+    signal: openpanel-roundtrip
+    primary_owner: internal
+    severity: warning
+    cadence: 60s
+    alert_threshold: 3 consecutive failures
+
   - signal_id: production.dokploy.public-route
     environment: production
     component: dokploy

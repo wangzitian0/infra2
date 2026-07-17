@@ -124,6 +124,7 @@ def _preview_env_vars(
     sha: str,
     domain: str,
     image_ref: str | None = None,
+    iac_ref: str = "",
     _now=time.time,
 ) -> dict[str, str]:
     """Assemble the Dokploy compose env for one preview alias.
@@ -143,7 +144,7 @@ def _preview_env_vars(
     # IMAGE_TAG is the published ref: a release tag (image_ref="vX.Y.Z") or the short sha.
     image_tag = image_ref or sha[:7]
     config_hash = f"preview-{image_tag}-{int(_now() * 1000)}"  # per-deploy cache-bust
-    return {
+    env_vars = {
         "IMAGE_TAG": image_tag,
         "GIT_COMMIT_SHA": image_tag,
         "NEXT_PUBLIC_APP_URL": alias.app_url(domain=domain),
@@ -175,6 +176,20 @@ def _preview_env_vars(
         "PREVIEW_DB_PASSWORD": "preview",
         "PREVIEW_DB_NAME": "finance_report",
     }
+    from libs.service_identity import ServiceIdentity
+
+    identity = ServiceIdentity.build(
+        "finance_report/app",
+        alias.deployment_environment,
+        component="app",
+        service_name="finance-report-backend",
+        version=image_tag,
+        iac_ref=iac_ref,
+    )
+    env_vars.update(identity.deploy_env())
+    env_vars["OTEL_SERVICE_NAME"] = identity.service_name
+    env_vars["OTEL_RESOURCE_ATTRIBUTES"] = identity.otel_resource_attributes()
+    return env_vars
 
 
 def _find_compose(client, name: str):
@@ -192,6 +207,7 @@ def up(
     domain: str,
     client,
     image_ref: str | None = None,
+    iac_ref: str = "",
     github_id: str | None = None,
     repo_owner: str = "wangzitian0",
     repo_name: str = "infra2",
@@ -217,7 +233,12 @@ def up(
     alias = preview_alias(kind, value)
     sha = resolve_to_sha(code, repo=repo) if repo is not None else resolve_to_sha(code)
     env_vars = _preview_env_vars(
-        alias, sha=sha, domain=domain, image_ref=image_ref, _now=_now
+        alias,
+        sha=sha,
+        domain=domain,
+        image_ref=image_ref,
+        iac_ref=iac_ref,
+        _now=_now,
     )
     # Inject the runtime AppRole creds the preview vault-agent logs in with — the same
     # role the source env runs with. Without them vault-agent crash-loops and the app

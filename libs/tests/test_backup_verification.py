@@ -146,7 +146,8 @@ def test_backup_failures_build_alert_payload() -> None:
 
     assert payload["status"] == "firing"
     assert payload["commonLabels"]["alertname"] == "InfraBackupVerificationFailed"
-    assert payload["alerts"][0]["labels"]["service"] == entry.service_id
+    assert payload["alerts"][0]["labels"]["service_id"] == entry.service_id
+    assert payload["alerts"][0]["labels"]["failure_domain"] == "backup"
 
 
 def test_backup_runner_creates_archive_and_checksum(tmp_path) -> None:

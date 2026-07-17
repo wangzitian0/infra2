@@ -742,6 +742,85 @@ def test_portal_deployer_declares_no_runtime_secret_path() -> None:
     assert module.PortalDeployer.secret_key == ""
 
 
+def test_alerting_source_identity_does_not_read_runtime_secrets(monkeypatch) -> None:
+    """Infra-011.19: release drift must be reproducible without 1Password access."""
+    module = _load_deploy_module(
+        "platform/12.alerting/deploy.py", "alerting_source_identity_test"
+    )
+    monkeypatch.setattr(
+        module,
+        "get_secrets",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("source identity must not fetch runtime secrets")
+        ),
+    )
+    env = {
+        "ENV": "production",
+        "INTERNAL_DOMAIN": "example.test",
+        "DATA_PATH": "/data/platform/alerting",
+    }
+
+    source_env = module.AlertingDeployer.source_config_env_base(env)
+
+    assert source_env["ENV"] == "production"
+    assert "INFRA_PROBE_HEARTBEAT_URL" not in source_env
+    assert "INFRA_PROBE_HEARTBEAT_TOKEN" not in source_env
+
+
+def test_remote_config_identity_reads_cross_plane_service_coordinates(
+    monkeypatch,
+) -> None:
+    from libs.deploy.deployer import Deployer
+    import libs.dokploy as dokploy
+
+    class DummyDeployer(Deployer):
+        service = "alerting"
+
+    class Client:
+        def find_compose_by_name(self, *_args, **_kwargs):
+            return {
+                "env": "\n".join(
+                    (
+                        "IAC_CONFIG_HASH=runtime",
+                        "IAC_SOURCE_CONFIG_HASH=v1:source",
+                        f"IAC_DEPLOY_REF={'a' * 40}",
+                        "INFRA_IDENTITY_SCHEMA=v1",
+                        "INFRA_MANAGED_BY=infra2",
+                        "INFRA_SERVICE_ID=platform/alerting",
+                        "INFRA_ENVIRONMENT=staging",
+                    )
+                )
+            }
+
+    monkeypatch.setattr(dokploy, "get_dokploy", lambda **_kwargs: Client())
+    monkeypatch.setattr(
+        DummyDeployer,
+        "env",
+        classmethod(lambda cls: {"ENV": "staging", "INTERNAL_DOMAIN": "example.test"}),
+    )
+
+    assert DummyDeployer.get_remote_config_identity() == {
+        "runtime_hash": "runtime",
+        "source_hash": "v1:source",
+        "deploy_ref": "a" * 40,
+        "identity_schema": "v1",
+        "managed_by": "infra2",
+        "service_id": "platform/alerting",
+        "environment": "staging",
+    }
+
+
+def test_runtime_only_config_requires_explicit_secret_free_source_builder() -> None:
+    """Future secret-bearing deployers must not silently fetch secrets in drift CI."""
+    from libs.deploy.deployer import Deployer
+
+    class UnsafeDeployer(Deployer):
+        runtime_only_config_keys = frozenset({"TOKEN"})
+
+    with pytest.raises(NotImplementedError, match="source_config_env_base"):
+        UnsafeDeployer.source_config_env_base({"ENV": "production"})
+
+
 def test_await_effective_config_hash_retries_until_settled(monkeypatch):
     """Async Dokploy settling: a stale/none first read must be retried, not
     treated as a failure, once the effective hash advances."""

@@ -133,6 +133,14 @@ For local development builds, see the [finance_report repository](https://github
 - Backend: `GET /health` on port 8000
 - Frontend: `GET /` on port 3000
 
+## Operational Identity
+
+`deploy_v2` signs `ServiceIdentity v1` for `finance_report/app`. Vault Agent only
+forwards the signed `OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES`; Vault cannot
+override service, environment, application version, or exact IaC ref. New telemetry
+uses `deployment.environment.name` and temporarily dual-writes the legacy
+`deployment.environment` attribute during migration.
+
 ## Connection Strings
 
 Connection strings are constructed dynamically by vault-agent using the ENV_SUFFIX pattern:

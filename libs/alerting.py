@@ -315,8 +315,18 @@ def build_signoz_log_alert_rule_payload(
     threshold: int = 0,
     eval_window: str = "5m0s",
     frequency: str = "1m",
+    service_id: str = "",
+    environment: str = "production",
 ) -> dict[str, Any]:
     """Build a SigNoz v2 threshold rule for OTEL log error count alerts."""
+    from libs.service_identity import ServiceIdentity
+
+    identity = ServiceIdentity.build(
+        service_id or f"infra/{service_name}",
+        environment,
+        component=service_name,
+        service_name=service_name,
+    )
     return {
         "alert": _required("alert_name", alert_name),
         "alertType": "LOGS_BASED_ALERT",
@@ -360,6 +370,16 @@ def build_signoz_log_alert_rule_payload(
                                     "value": service_name,
                                 },
                                 {
+                                    "id": "deployment.environment.name--string--resource",
+                                    "key": _signoz_attribute(
+                                        "deployment.environment.name",
+                                        "string",
+                                        "resource",
+                                    ),
+                                    "op": "=",
+                                    "value": identity.environment,
+                                },
+                                {
                                     "id": "severity_text--string--tag",
                                     "key": _signoz_attribute(
                                         "severity_text", "string", "tag"
@@ -391,7 +411,10 @@ def build_signoz_log_alert_rule_payload(
             "kind": "rolling",
             "spec": {"evalWindow": eval_window, "frequency": frequency},
         },
-        "labels": {"severity": severity, "service": service_name, "team": "infra"},
+        "labels": {
+            **identity.alert_labels(severity=severity),
+            "team": "infra",
+        },
         "annotations": {"description": summary, "summary": summary},
         "notificationSettings": {
             "groupBy": [],
@@ -420,8 +443,18 @@ def build_signoz_metric_alert_rule_payload(
     eval_window: str = "5m0s",
     frequency: str = "1m",
     group_by: list[str] | None = None,
+    service_id: str = "",
+    environment: str = "production",
 ) -> dict[str, Any]:
     """Build a SigNoz v5 PromQL rule for metric alerts."""
+    from libs.service_identity import ServiceIdentity
+
+    identity = ServiceIdentity.build(
+        service_id or f"infra/{service_name}",
+        environment,
+        component=service_name,
+        service_name=service_name,
+    )
     return {
         "alert": _required("alert_name", alert_name),
         "alertType": "METRIC_BASED_ALERT",
@@ -467,8 +500,7 @@ def build_signoz_metric_alert_rule_payload(
             "spec": {"evalWindow": eval_window, "frequency": frequency},
         },
         "labels": {
-            "severity": severity,
-            "service": service_name,
+            **identity.alert_labels(severity=severity),
             "team": "infra",
         },
         "annotations": {"description": summary, "summary": summary},

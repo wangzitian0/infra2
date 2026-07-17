@@ -24,6 +24,8 @@
 | Infra-011.15 | Cross-stage disagreements are deterministic, measurable records rather than operator interpretation. | `libs/tests/test_pipeline_stage_contract.py`, `libs/tests/test_infra_probes.py`, `libs/tests/test_cloudflare_watchdog.py` |
 | Infra-011.16 | CI/CD acceleration is evidence-gated through the Env x Stage matrix and does not weaken production full-sync or environment protection. | `libs/tests/test_pipeline_stage_contract.py`, `docs/ssot/ops.pipeline.md` |
 | Infra-011.17 | Off-host backup durability is rehearsed by restoring the latest verified artifact into an explicitly throwaway target and checking database invariants; live-looking production containers are refused by default. | `libs/tests/test_backup_verification.py`, `tools/backup_restore_rehearsal.py`, `docs/ssot/ops.recovery.md` |
+| Infra-011.18 | AI merge authority is fail-closed and bound to the current PR head, merge-authority CI, resolved review, complete change contracts, safety proof, and owner approval; ordinary merge remains decoupled from staging, while merge-triggered apply paths require explicit high-risk approval. | `AGENTS.md`, `docs/ssot/ops.pipeline.md`, `docs/ssot/delivery-stages.yaml`, `docs/ssot/ci-gate-inventory.yaml` |
+| Infra-011.19 | IaC deployment operations bind environment, exact ref, and normalized service set to one opaque ID; release fidelity uses exact deploy ref plus a secret-independent source fingerprint, while runtime fingerprint remains the idempotence gate. | `libs/tests/test_iac_runner_client.py`, `libs/tests/test_iac_runner_deploy_result.py`, `libs/tests/test_deployer.py`, `libs/tests/test_dokploy_config_drift.py`, `docs/ssot/ops.pipeline.md` |
 
 ## Issue Mapping
 
@@ -95,3 +97,17 @@
 - Made deploy_v2 Canary success and fail-path alerts emit SDK `StageResult` evidence with standard failure domains and duration/run URL evidence.
 - Hardened review findings: no-wait evidence is a reasoned skip, successful evidence records resolved code/IaC SHAs, and workflow contract tests parse YAML structure instead of slicing text.
 - Kept alerting low-noise: no periodic synthetic page was restored; healthy delivery remains proven by readiness probes and report delivery.
+
+## 2026-07-16 AI Merge Authority
+
+- Replaced the unconditional AI merge ban with a fail-closed gate bound to owner approval of the current PR head.
+- Required exact-head merge-authority CI, resolved review threads, complete documentation and safety contracts, and post-merge verification before tag or promotion.
+- Removed the stale rule that required staging before every ordinary merge; staging remains mandatory for release promotion, while merge-triggered apply paths require separate explicit approval.
+
+## 2026-07-17 Deployment and Configuration Identity
+
+- Made the normalized service set part of the IaC Runner operation key and use the trigger-returned deployment ID for status polling; legacy env/ref-only polling fails closed when ambiguous.
+- Split versioned, release-recomputable source identity from runtime/secret config identity and persist the exact checked-out SHA. Runtime-only config requires an explicit secret-free source builder.
+- Config drift now proves source fingerprint provenance against its stored deploy ref, compares the fingerprint with the latest release, and is strict on real drift/detector/structural failures. Pre-migration deployments are reported as `legacy_identity` without false drift.
+- Proof: `uv run python -m pytest -q libs/tests` (`916 passed`); focused regression (`106 passed`); Ruff, compileall, workflow YAML parsing, and `git diff --check` passed.
+- Rollout remains pending: after merge/release, each selected service backfills `IAC_SOURCE_CONFIG_HASH`/`IAC_DEPLOY_REF` on its next normal reconcile; legacy rows remain explicit and non-blocking, so no mass restart is required. The scheduled clean-checkout `--self-check` is the release proof. Local self-check is intentionally invalid while hash-input files differ from `HEAD`.

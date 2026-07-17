@@ -96,6 +96,21 @@ def test_trigger_builds_signed_payload_and_posts_to_deploy():
     assert h["X-Hub-Signature-256"] == _sign(SECRET, "1700000000", "n" * 16, c["content"])
 
 
+def test_trigger_normalizes_service_set_before_signing():
+    calls, transport = _capture()
+
+    trigger_platform_deploy(
+        env="staging",
+        ref=SHA,
+        services=[" redis ", "postgres", "redis"],
+        base_url="https://iac.example",
+        secret=SECRET,
+        transport=transport,
+    )
+
+    assert json.loads(calls[0]["content"])["services"] == ["postgres", "redis"]
+
+
 @pytest.mark.parametrize(
     "kw,match",
     [
@@ -117,13 +132,21 @@ def test_trigger_validates_inputs_before_post(kw, match):
 
 
 def test_poll_returns_on_terminal_status():
-    _calls, transport = _capture([{"status": "running"}, {"status": "success"}])
+    calls, transport = _capture([{"status": "running"}, {"status": "success"}])
     res = poll_platform_deploy_status(
-        env="staging", ref=SHA, base_url="u", secret=SECRET,
+        env="staging", ref=SHA, services=["redis"], deployment_id="a" * 16,
+        base_url="u", secret=SECRET,
         interval=0, sleep=lambda *_: None, nonce_factory=lambda: "nonce123",
         transport=transport,
     )
     assert res["status"] == "success"
+    assert json.loads(calls[0]["content"]) == {
+        "env": "staging",
+        "ref": SHA,
+        "triggered_by": "deploy_v2",
+        "services": ["redis"],
+        "deployment_id": "a" * 16,
+    }
 
 
 def test_poll_times_out_if_never_settles():
@@ -188,4 +211,9 @@ def test_poll_validates_inputs_before_post():
     with pytest.raises(ValueError, match="SECRET"):
         poll_platform_deploy_status(
             env="staging", ref=SHA, base_url="u", secret="", transport=transport
+        )
+    with pytest.raises(ValueError, match="deployment_id"):
+        poll_platform_deploy_status(
+            env="staging", ref=SHA, deployment_id="not-an-id",
+            base_url="u", secret=SECRET, transport=transport,
         )

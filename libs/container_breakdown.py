@@ -22,6 +22,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from libs.service_identity import DOCKER_LABEL_PREFIX, ServiceIdentity
+from libs.service_registry import resolve_container_host
+
 # (substring, human-readable cause) — ordered, first match wins. These are the
 # concrete breakdown signals seen in the finance_report outage + adjacent ones.
 BREAKDOWN_PATTERNS: tuple[tuple[str, str], ...] = (
@@ -47,6 +50,9 @@ class Breakdown:
     state: str  # "restarting" | "unhealthy"
     reason: str  # human-readable cause
     detail: str  # the matched (or last) log line
+    service_id: str = ""
+    component: str = "container"
+    environment: str = "production"
 
 
 def container_name(entry: dict) -> str:
@@ -99,6 +105,38 @@ def classify_reason(logs: str) -> tuple[str, str]:
     return "crash-loop / unhealthy (no logs captured)", ""
 
 
+def container_identity(entry: dict) -> tuple[str, str, str]:
+    """Resolve service_id/component/environment from Docker-owned metadata.
+
+    Canonical reverse-DNS labels win. Existing containers remain observable via
+    Compose's automatic service label plus the registry's container-host index.
+    Unknown containers are deliberately kept unregistered, never guessed.
+    """
+    labels = entry.get("Labels") or {}
+    service_id = str(labels.get(f"{DOCKER_LABEL_PREFIX}.service-id", ""))
+    component = str(
+        labels.get(f"{DOCKER_LABEL_PREFIX}.component")
+        or labels.get("com.docker.compose.service")
+        or "container"
+    )
+    environment = str(labels.get(f"{DOCKER_LABEL_PREFIX}.environment", ""))
+    name = container_name(entry)
+
+    if not service_id:
+        meta = resolve_container_host(name)
+        service_id = meta.service_id if meta else ""
+    if not environment:
+        project = str(labels.get("com.docker.compose.project", ""))
+        coordinate = f"{project}/{name}".lower()
+        if "staging" in coordinate:
+            environment = "staging"
+        elif "preview" in coordinate or "pr-" in coordinate:
+            environment = "preview"
+        else:
+            environment = "production"
+    return service_id, component, environment
+
+
 def find_breakdown_containers(containers, logs_fn) -> list[Breakdown]:
     """Flag broken containers and attach the cause.
 
@@ -111,12 +149,16 @@ def find_breakdown_containers(containers, logs_fn) -> list[Breakdown]:
         if not state:
             continue
         reason, detail = classify_reason(logs_fn(str(entry.get("Id", ""))))
+        service_id, component, environment = container_identity(entry)
         found.append(
             Breakdown(
                 container=container_name(entry),
                 state=state,
                 reason=reason,
                 detail=detail,
+                service_id=service_id,
+                component=component,
+                environment=environment,
             )
         )
     return found
@@ -130,28 +172,39 @@ def build_breakdown_alert_payload(
 ) -> dict:
     """Alertmanager/SigNoz-shaped payload for the alert bridge (``format_signoz_alert``)."""
     status = "firing" if firing else "resolved"
-    alerts = [
-        {
-            "status": status,
-            "labels": {
-                "alertname": "ContainerBreakdown",
-                "service": b.container,
-                "severity": "critical",
-                "failure_domain": "runtime",
-                "state": b.state,
-            },
-            "annotations": {
-                "summary": f"{b.container} {b.state} — {b.reason}",
-                "description": b.reason,
-                "observed": f"state={b.state} log={b.detail}",
-            },
-        }
-        for b in breakdowns
-    ]
+    alerts = []
+    for b in breakdowns:
+        identity = ServiceIdentity.build(
+            b.service_id or "infra/unregistered",
+            b.environment,
+            component=b.component,
+            service_name=(
+                b.service_id.split("/", 1)[-1] if b.service_id else "unregistered"
+            ),
+        )
+        alerts.append(
+            {
+                "status": status,
+                "labels": {
+                    "alertname": "ContainerBreakdown",
+                    **identity.alert_labels(
+                        severity="critical", failure_domain="runtime"
+                    ),
+                    "state": b.state,
+                },
+                "annotations": {
+                    "summary": f"{b.container} {b.state} — {b.reason}",
+                    "description": b.reason,
+                    "observed": f"state={b.state} log={b.detail}",
+                },
+            }
+        )
     return {
         "status": status,
         "commonLabels": {
             "alertname": "ContainerBreakdown",
+            "identity_schema": "v1",
+            "managed_by": "infra2",
             "severity": "critical",
             "team": "infra",
         },

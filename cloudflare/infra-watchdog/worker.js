@@ -1,13 +1,13 @@
 const DEFAULT_TARGETS = [
-  ["production", "dokploy-public-route", "https://cloud.zitian.party", [200, 302], "critical"],
-  ["production", "vault-public-route", "https://vault.zitian.party/v1/sys/health", [200, 429, 472, 473], "critical"],
-  ["production", "minio-public-route", "https://minio.zitian.party/minio/health/live", [200], "warning"],
-  ["production", "authentik-public-route", "https://sso.zitian.party/-/health/live/", [200, 204, 302], "critical"],
-  ["production", "signoz-public-route", "https://signoz.zitian.party", [200, 302], "critical"],
-  ["staging", "minio-public-route", "https://minio-staging.zitian.party/minio/health/live", [200], "warning"],
-  ["staging", "authentik-public-route", "https://sso-staging.zitian.party/-/health/live/", [200, 204, 302], "warning"],
-  ["production", "finance-report-web-public-route", "https://report.zitian.party/", [200, 302, 307, 308], "critical"],
-  ["production", "finance-report-api-public-route", "https://report.zitian.party/api/health", [200], "critical"],
+  ["production", "dokploy-public-route", "bootstrap/dokploy", "https://cloud.zitian.party", [200, 302], "critical"],
+  ["production", "vault-public-route", "bootstrap/vault", "https://vault.zitian.party/v1/sys/health", [200, 429, 472, 473], "critical"],
+  ["production", "minio-public-route", "platform/minio", "https://minio.zitian.party/minio/health/live", [200], "warning"],
+  ["production", "authentik-public-route", "platform/authentik", "https://sso.zitian.party/-/health/live/", [200, 204, 302], "critical"],
+  ["production", "signoz-public-route", "platform/signoz", "https://signoz.zitian.party", [200, 302], "critical"],
+  ["staging", "minio-public-route", "platform/minio", "https://minio-staging.zitian.party/minio/health/live", [200], "warning"],
+  ["staging", "authentik-public-route", "platform/authentik", "https://sso-staging.zitian.party/-/health/live/", [200, 204, 302], "warning"],
+  ["production", "finance-report-web-public-route", "finance_report/app", "https://report.zitian.party/", [200, 302, 307, 308], "critical"],
+  ["production", "finance-report-api-public-route", "finance_report/app", "https://report.zitian.party/api/health", [200], "critical"],
   // finance_report#1653: `?full=1` asserts every DEPENDENCY_MANIFEST.required_for(tier)
   // dependency is present (not just DB+S3 liveness). Without this, a required dep
   // (e.g. workflow_engine/Prefect) can be down for days — the plain /api/health above
@@ -17,22 +17,25 @@ const DEFAULT_TARGETS = [
   [
     "production",
     "finance-report-api-full-health-route",
+    "finance_report/app",
     "https://report.zitian.party/api/health?full=1",
     [200],
     "critical",
   ],
-  ["staging", "finance-report-web-public-route", "https://report-staging.zitian.party/", [200, 302, 307, 308], "warning"],
-  ["staging", "finance-report-api-public-route", "https://report-staging.zitian.party/api/health", [200], "warning"],
+  ["staging", "finance-report-web-public-route", "finance_report/app", "https://report-staging.zitian.party/", [200, 302, 307, 308], "warning"],
+  ["staging", "finance-report-api-public-route", "finance_report/app", "https://report-staging.zitian.party/api/health", [200], "warning"],
   [
     "staging",
     "finance-report-api-full-health-route",
+    "finance_report/app",
     "https://report-staging.zitian.party/api/health?full=1",
     [200],
     "warning",
   ],
-].map(([environment, name, url, statuses, severity]) => ({
+].map(([environment, name, service_id, url, statuses, severity]) => ({
   environment,
   name,
+  service_id,
   url,
   statuses,
   severity,
@@ -42,12 +45,14 @@ const DEFAULT_HEARTBEATS = [
   {
     environment: "production",
     name: "platform-alerting-probes",
+    service_id: "platform/alerting",
     maxAgeSeconds: 5400,
     severity: "critical",
   },
   {
     environment: "staging",
     name: "platform-alerting-probes-staging",
+    service_id: "platform/alerting",
     maxAgeSeconds: 5400,
     severity: "warning",
   },
@@ -93,7 +98,8 @@ async function runWatchdog(env, nowMs = Date.now()) {
    const configFailure = failResult(
      {
        environment: "global",
-       name: "cloudflare-watchdog-config-preflight",
+      name: "cloudflare-watchdog-config-preflight",
+      service_id: "infra/cloudflare-watchdog",
        severity: "critical",
      },
      `config-preflight failed: ${oneLine(
@@ -156,6 +162,9 @@ async function runWatchdog(env, nowMs = Date.now()) {
       timestamp: nowMs,
       environment: result.environment,
       name: result.name,
+      service_id: result.service_id,
+      identity_schema: "v1",
+      managed_by: "infra2",
       status: result.ok ? "ok" : "fail",
       severity: result.severity,
       failure_domain: result.failure_domain || "",
@@ -858,6 +867,7 @@ async function failureFingerprint(failures) {
       failures.map((failure) => ({
         environment: failure.environment,
         name: failure.name,
+        serviceId: failure.service_id || "infra/unregistered",
         failureDomain: failure.failure_domain || "",
       })),
     ),
@@ -894,6 +904,7 @@ function okResult(target, detail, failureDomain = "") {
   return {
     environment: target.environment,
     name: target.name,
+    service_id: target.service_id || "infra/unregistered",
     url: target.url || "",
     severity: target.severity || "warning",
     ok: true,
@@ -907,6 +918,7 @@ function failResult(target, detail, failureDomain = "") {
   return {
     environment: target.environment,
     name: target.name,
+    service_id: target.service_id || "infra/unregistered",
     url: target.url || "",
     severity: target.severity || "warning",
     ok: false,

@@ -453,6 +453,8 @@ def _deploy_platform(
         final = poll_platform_deploy_status(
             env=env,
             ref=iac_sha,
+            services=[service],
+            deployment_id=response.get("deployment_id"),
             base_url=url,
             secret=sec,
             triggered_by=triggered_by,
@@ -533,6 +535,8 @@ def _deploy_platform_batch(
         final = poll_platform_deploy_status(
             env=env,
             ref=iac_sha,
+            services=services,
+            deployment_id=response.get("deployment_id"),
             base_url=url,
             secret=sec,
             triggered_by=triggered_by,
@@ -680,6 +684,7 @@ def deploy_v2(
             alias_value,
             code=resolved.sha,
             image_ref=resolved.image_ref,
+            iac_ref=target.iac_ref,
             domain=domain,
             client=client,
             branch=clone_ref,
@@ -707,6 +712,7 @@ def deploy_v2(
         domain=domain,
         client=client,
         image_ref=resolved.image_ref,
+        iac_ref=target.iac_ref,
         wait=wait,
         timeout=timeout,
         staging_validated=staging_validated,

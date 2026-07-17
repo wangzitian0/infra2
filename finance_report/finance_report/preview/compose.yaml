@@ -60,6 +60,11 @@ services:
       # OTEL_RESOURCE_ATTRIBUTES service.version=<sha> (Infra-014).
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-finance-report-backend}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
+      INFRA_SERVICE_ID: ${INFRA_SERVICE_ID:-finance_report/app}
+      INFRA_ENVIRONMENT: ${INFRA_ENVIRONMENT:-${ENV:-preview}}
+      INFRA_IAC_REF: ${INFRA_IAC_REF:-}
       # The ctmpl reads PREVIEW_SECRET_ENV to pick which env's Vault app-secrets path
       # to render (secret/data/finance_report/<PREVIEW_SECRET_ENV>/app). Must be passed
       # into THIS container — the renderer — or the template silently falls back to its
@@ -141,6 +146,11 @@ services:
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      INFRA_SERVICE_ID: ${INFRA_SERVICE_ID:-finance_report/app}
+      INFRA_COMPONENT: backend
+      INFRA_ENVIRONMENT: ${INFRA_ENVIRONMENT:-${ENV:-preview}}
+      INFRA_SERVICE_VERSION: ${INFRA_SERVICE_VERSION:-${GIT_COMMIT_SHA:-unknown}}
+      INFRA_IAC_REF: ${INFRA_IAC_REF:-}
       # This alias's ENV token (main / pr-<N> / commit-<sha7>); the entrypoint uses
       # it to override ENVIRONMENT AFTER sourcing Vault secrets (see CHECKPOINT-1c) —
       # mirrors the existing DATABASE_URL override for the same reason.

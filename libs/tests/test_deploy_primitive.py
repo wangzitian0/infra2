@@ -47,7 +47,13 @@ class FakeDokploy:
 
 def test_staging_deploy_assembles_axes_and_triggers():
     client = FakeDokploy()
-    plan = dp.deploy("staging", FULL_SHA, domain="zitian.party", client=client)
+    plan = dp.deploy(
+        "staging",
+        FULL_SHA,
+        domain="zitian.party",
+        client=client,
+        iac_ref="b" * 40,
+    )
 
     # the plan keeps the canonical full sha as the commit identity...
     assert plan.sha == FULL_SHA
@@ -60,6 +66,12 @@ def test_staging_deploy_assembles_axes_and_triggers():
     assert env["GIT_COMMIT_SHA"] == SHORT_SHA
     assert env["NEXT_PUBLIC_APP_URL"] == "https://report-staging.zitian.party"
     assert env["ENV_SUFFIX"] == "-staging"
+    assert env["INFRA_IDENTITY_SCHEMA"] == "v1"
+    assert env["INFRA_SERVICE_ID"] == "finance_report/app"
+    assert env["INFRA_ENVIRONMENT"] == "staging"
+    assert env["INFRA_SERVICE_VERSION"] == SHORT_SHA
+    assert env["INFRA_IAC_REF"] == "b" * 40
+    assert "deployment.environment.name=staging" in env["OTEL_RESOURCE_ATTRIBUTES"]
     assert client.deployed == ["A6V-hbJlgHMwgPDoTDnhH"]
 
 

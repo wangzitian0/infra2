@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Dokploy config-drift reconciler — is each prod service running the config the RELEASE
-specifies? (#280 prod-fidelity / #274 residual.)
+"""Dokploy config-drift detector — is prod running the exact release identity?
 
-Signal: the per-service config fingerprint the deploy machinery itself uses to decide whether
-to redeploy — the deployed ``IAC_CONFIG_HASH`` (read from Dokploy) vs the hash recomputed from
-the release tag's source. Equal = the running config IS what the release specifies; unequal =
-drift (a release that didn't reach prod, a manual Dokploy edit, a rollback).
+The runtime ``IAC_CONFIG_HASH`` remains the deploy idempotence signal and may include secrets.
+Drift uses the separately persisted, versioned ``IAC_SOURCE_CONFIG_HASH`` plus
+``IAC_DEPLOY_REF``. Both are reconstructible from an immutable release without granting CI
+access to runtime secrets.
 
 How the expected hash is computed WITHOUT a worktree (main-worktree only):
   1. Enumerate WHICH files feed a service's hash using the REAL deploy enumeration on disk
@@ -42,6 +41,8 @@ from invoke import Context  # noqa: E402
 
 from libs.deploy.deployer import (  # noqa: E402
     Deployer,
+    EXACT_COMMIT_RE,
+    SOURCE_CONFIG_HASH_VERSION,
     _compose_artifact_files,
     _repo_rel,
     config_hash_from_items,
@@ -127,17 +128,10 @@ def contents_at_ref(ref: str, paths: list[str]) -> dict[str, bytes]:
     return out
 
 
-def _env_vars(dep: type[Deployer]) -> dict[str, str]:
-    """The non-secret base env the deploy folds into the hash (computed ONCE per service so a
-    live-secret fetch in compose_env_base can't differ between the disk and git computations)."""
+def _source_env_vars(dep: type[Deployer]) -> dict[str, str]:
+    """Build the secret-independent env plane used for release identity."""
     e = dep.env()
-    ev = dep.compose_env_base(e)
-    # Mirror libs.deploy.deployer's VAULT_ADDR default EXACTLY (INTERNAL_DOMAIN or 'localhost') — a
-    # divergence here would compute a different expected hash than the deploy and false-DRIFT.
-    ev["VAULT_ADDR"] = e.get(
-        "VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}"
-    )
-    return ev
+    return dep.config_env_with_vault_addr(dep.source_config_env_base(e), e)
 
 
 def expected_hash_at(
@@ -169,10 +163,19 @@ def _set_env(env_name: str) -> None:
 @dataclass
 class Row:
     service: str
-    verdict: str  # in_sync | DRIFT | error | not_deployed | cache_bust | structural | env_unavailable
+    verdict: str
     expected: str | None = None
     deployed: str | None = None
     note: str = ""
+    expected_ref: str | None = None
+    deployed_ref: str | None = None
+
+
+@dataclass(frozen=True)
+class DeployedIdentity:
+    runtime_hash: str | None = None
+    source_hash: str | None = None
+    deploy_ref: str | None = None
 
 
 def self_check() -> int:
@@ -186,8 +189,9 @@ def self_check() -> int:
         if dep is None:
             continue
         try:
-            ev = _env_vars(dep)
-        except Exception:  # noqa: BLE001 — env needs op (e.g. alerting); not a faithfulness failure
+            ev = _source_env_vars(dep)
+        except Exception as exc:  # noqa: BLE001
+            bad.append(f"{sid}: source env unavailable: {exc}")
             continue
         try:
             disk = dep.compute_local_config_hash(c, ev)
@@ -223,11 +227,24 @@ def _latest_release_tag() -> str:
     raise SystemExit("no v* release tag found")
 
 
-def _deployed_hashes() -> dict[str, str]:
+def _commit_at_ref(ref: str) -> str:
+    value = subprocess.run(
+        ["git", "rev-parse", f"{ref}^{{commit}}"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip().lower()
+    if not EXACT_COMMIT_RE.fullmatch(value):
+        raise RuntimeError(f"{ref} did not resolve to an exact commit SHA")
+    return value
+
+
+def _deployed_identities() -> dict[str, DeployedIdentity]:
     from libs.dokploy import DokployClient
 
     client = DokployClient()
-    out: dict[str, str] = {}
+    out: dict[str, DeployedIdentity] = {}
     for p in client.list_projects():
         if p.get("name") not in ("platform", "finance_report"):
             continue
@@ -237,69 +254,176 @@ def _deployed_hashes() -> dict[str, str]:
             for cp in env.get("compose") or []:
                 d = client._request("GET", f"compose.one?composeId={cp['composeId']}")
                 env_str = d.get("env") or ""
-                ich = next(
-                    (
-                        ln.split("=", 1)[1]
-                        for ln in env_str.splitlines()
-                        if ln.startswith("IAC_CONFIG_HASH=")
-                    ),
-                    None,
-                )
-                if ich:
-                    out[f"{p['name']}/{cp['name']}"] = ich
+                values = {}
+                for line in env_str.splitlines():
+                    key, separator, value = line.partition("=")
+                    if separator and key in {
+                        "IAC_CONFIG_HASH",
+                        "IAC_SOURCE_CONFIG_HASH",
+                        "IAC_DEPLOY_REF",
+                    }:
+                        values[key] = value.strip()
+                if values:
+                    out[f"{p['name']}/{cp['name']}"] = DeployedIdentity(
+                        runtime_hash=values.get("IAC_CONFIG_HASH"),
+                        source_hash=values.get("IAC_SOURCE_CONFIG_HASH"),
+                        deploy_ref=values.get("IAC_DEPLOY_REF"),
+                    )
     return out
 
 
 def scan(tag: str) -> list[Row]:
     c = Context()
     _set_env("production")
-    deployed = _deployed_hashes()
+    deployed = _deployed_identities()
+    expected_ref = _commit_at_ref(tag)
     rows: list[Row] = []
     for sid in service_registry.all_services():
         dep = _load_deployer(sid)
         if dep is None:
             continue
-        dep_hash = deployed.get(sid)
-        if dep_hash is None:
+        identity = deployed.get(sid)
+        if identity is None:
             rows.append(Row(sid, "not_deployed"))
             continue
-        if dep_hash.startswith("deploy-"):
-            rows.append(
-                Row(sid, "cache_bust", deployed=dep_hash, note="app deploy_v2 path")
-            )
-            continue
-        try:
-            env_vars = _env_vars(dep)
-        except Exception as exc:  # noqa: BLE001 — env needs op (e.g. alerting's token); skip, don't false-DRIFT
+        if (identity.runtime_hash or "").startswith("deploy-"):
             rows.append(
                 Row(
                     sid,
-                    "env_unavailable",
-                    deployed=dep_hash,
-                    note=f"env needs op: {exc}",
+                    "cache_bust",
+                    deployed=identity.runtime_hash,
+                    note="app deploy_v2 path",
                 )
             )
             continue
         try:
+            env_vars = _source_env_vars(dep)
             exp, missing = expected_hash_at(dep, c, tag, env_vars)
-        except Exception as exc:  # noqa: BLE001 — a tool/runtime failure is NOT drift; keep them
+        except Exception as exc:  # noqa: BLE001 — detector failure is not drift
             rows.append(
-                Row(sid, "error", deployed=dep_hash, note=f"compute error: {exc}")
+                Row(
+                    sid,
+                    "error",
+                    deployed=identity.source_hash,
+                    note=f"compute error: {exc}",
+                    expected_ref=expected_ref,
+                    deployed_ref=identity.deploy_ref,
+                )
             )
             continue
+        versioned_expected = f"{SOURCE_CONFIG_HASH_VERSION}:{exp}" if exp else None
         if missing:
             rows.append(
                 Row(
                     sid,
                     "structural",
-                    deployed=dep_hash,
+                    expected=versioned_expected,
+                    deployed=identity.source_hash,
                     note=f"{len(missing)} input(s) absent at {tag}",
+                    expected_ref=expected_ref,
+                    deployed_ref=identity.deploy_ref,
                 )
             )
-        elif exp == dep_hash:
-            rows.append(Row(sid, "in_sync", exp, dep_hash))
+            continue
+        if not identity.source_hash or not identity.deploy_ref:
+            legacy_note = "source identity not deployed yet"
+            if identity.runtime_hash == exp:
+                legacy_note += "; legacy runtime hash matches release source"
+            rows.append(
+                Row(
+                    sid,
+                    "legacy_identity",
+                    expected=versioned_expected,
+                    deployed=identity.source_hash,
+                    note=legacy_note,
+                    expected_ref=expected_ref,
+                    deployed_ref=identity.deploy_ref,
+                )
+            )
+            continue
+        if not identity.source_hash.startswith(f"{SOURCE_CONFIG_HASH_VERSION}:"):
+            rows.append(
+                Row(
+                    sid,
+                    "error",
+                    expected=versioned_expected,
+                    deployed=identity.source_hash,
+                    note="unsupported source config hash version",
+                    expected_ref=expected_ref,
+                    deployed_ref=identity.deploy_ref,
+                )
+            )
+            continue
+        if not EXACT_COMMIT_RE.fullmatch(identity.deploy_ref):
+            rows.append(
+                Row(
+                    sid,
+                    "error",
+                    expected=versioned_expected,
+                    deployed=identity.source_hash,
+                    note="deployed ref is not an exact commit SHA",
+                    expected_ref=expected_ref,
+                    deployed_ref=identity.deploy_ref,
+                )
+            )
+            continue
+        try:
+            provenance_hash, provenance_missing = expected_hash_at(
+                dep, c, identity.deploy_ref, env_vars
+            )
+        except Exception as exc:  # noqa: BLE001
+            rows.append(
+                Row(
+                    sid,
+                    "error",
+                    expected=versioned_expected,
+                    deployed=identity.source_hash,
+                    note=f"could not verify deployed ref provenance: {exc}",
+                    expected_ref=expected_ref,
+                    deployed_ref=identity.deploy_ref,
+                )
+            )
+            continue
+        provenance_identity = (
+            f"{SOURCE_CONFIG_HASH_VERSION}:{provenance_hash}"
+            if provenance_hash
+            else None
+        )
+        if provenance_missing or provenance_identity != identity.source_hash:
+            rows.append(
+                Row(
+                    sid,
+                    "DRIFT",
+                    expected=versioned_expected,
+                    deployed=identity.source_hash,
+                    note="stored source identity does not match its deployed ref",
+                    expected_ref=expected_ref,
+                    deployed_ref=identity.deploy_ref,
+                )
+            )
+            continue
+        if identity.source_hash == versioned_expected:
+            rows.append(
+                Row(
+                    sid,
+                    "in_sync",
+                    versioned_expected,
+                    identity.source_hash,
+                    expected_ref=expected_ref,
+                    deployed_ref=identity.deploy_ref,
+                )
+            )
         else:
-            rows.append(Row(sid, "DRIFT", exp, dep_hash))
+            rows.append(
+                Row(
+                    sid,
+                    "DRIFT",
+                    versioned_expected,
+                    identity.source_hash,
+                    expected_ref=expected_ref,
+                    deployed_ref=identity.deploy_ref,
+                )
+            )
     return rows
 
 
@@ -307,15 +431,18 @@ def format_report(tag: str, rows: list[Row]) -> str:
     drift = [r for r in rows if r.verdict == "DRIFT"]
     n = lambda v: sum(1 for r in rows if r.verdict == v)  # noqa: E731
     errors = [r for r in rows if r.verdict == "error"]
+    structural = [r for r in rows if r.verdict == "structural"]
     lines = [
         f"📋 [Infra2] config-drift · production vs release {tag}",
         f"in sync {n('in_sync')} · DRIFT {len(drift)} · error {len(errors)} · "
         f"not deployed {n('not_deployed')} · structural {n('structural')} · "
-        f"env-skip {n('env_unavailable')} · n/a(app) {n('cache_bust')}",
+        f"legacy {n('legacy_identity')} · n/a(app) {n('cache_bust')}",
     ]
     for r in drift:
         lines.append(
-            f"🔴 DRIFT {r.service}: deployed≠release (expected={r.expected} deployed={r.deployed})"
+            f"🔴 DRIFT {r.service}: deployed≠release "
+            f"(expected={r.expected}@{r.expected_ref} "
+            f"deployed={r.deployed}@{r.deployed_ref})"
         )
     for r in errors:
         # Surface tool/runtime failures loudly — a silently-skipped service must not let the run
@@ -328,9 +455,16 @@ def format_report(tag: str, rows: list[Row]) -> str:
             lines.append(f"  · structural: {r.service} ({r.note})")
         elif r.verdict == "env_unavailable":
             lines.append(f"  · env-skip: {r.service} (needs op to recompute)")
-    if not drift:
+        elif r.verdict == "legacy_identity":
+            lines.append(f"  · legacy identity: {r.service} ({r.note})")
+    if n("in_sync") and not drift and not errors and not structural:
         lines.append(f"✅ every comparable service matches release {tag}.")
     return "\n".join(lines)
+
+
+def strict_blockers(rows: list[Row]) -> list[Row]:
+    """Rows that make a strict drift run fail closed."""
+    return [r for r in rows if r.verdict in {"DRIFT", "error", "structural"}]
 
 
 def main() -> int:
@@ -364,8 +498,7 @@ def main() -> int:
         delivered = deliver_infra2_report(report)
         print(f"\n[report delivered: {delivered}]", file=sys.stderr)
 
-    drift = [r for r in rows if r.verdict == "DRIFT"]
-    return 1 if (args.strict and drift) else 0
+    return 1 if (args.strict and strict_blockers(rows)) else 0
 
 
 if __name__ == "__main__":

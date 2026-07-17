@@ -13,6 +13,11 @@ from typing import Any
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from libs.service_registry import service_id_for_component  # noqa: E402
+
 INVENTORY = ROOT / "docs/ssot/watchdog-signals.yaml"
 COMPOSE = ROOT / "platform/12.alerting/compose.yaml"
 WRANGLER = ROOT / "cloudflare/infra-watchdog/wrangler.toml"
@@ -37,8 +42,8 @@ def audit() -> list[str]:
     errors: list[str] = []
     errors.extend(_validate_inventory(signals))
 
-    internal_specs = _compose_probe_names()
-    worker_targets, worker_heartbeats = _worker_keys()
+    internal_specs = _compose_probe_specs()
+    worker_targets, worker_heartbeats, worker_identities = _worker_keys()
     github_signals = _github_signal_names()
 
     expected_internal = _signals_by_owner(signals, "internal")
@@ -58,6 +63,37 @@ def audit() -> list[str]:
             },
         )
     )
+    expected_internal_keys = {
+        (signal["environment"], signal["signal"]) for signal in expected_internal
+    }
+    configured_internal_keys = {
+        (environment, name)
+        for name in internal_specs
+        for environment in (
+            ("production",) if name.startswith("host-") else ("production", "staging")
+        )
+    }
+    for key in sorted(configured_internal_keys - expected_internal_keys):
+        errors.append(f"configured internal probe lacks inventory entry: {key}")
+
+    for signal in expected_internal:
+        name = signal["signal"]
+        if name not in internal_specs:
+            continue
+        try:
+            expected_service_id = service_id_for_component(
+                signal["component"], signal=name
+            )
+        except ValueError as exc:
+            errors.append(
+                f"cannot resolve service identity for {signal['signal_id']}: {exc}"
+            )
+            continue
+        if internal_specs[name] != expected_service_id:
+            errors.append(
+                f"internal probe service_id mismatch for {name}: "
+                f"expected {expected_service_id}, got {internal_specs[name] or 'missing'}"
+            )
 
     cloudflare_expected_keys = {
         (signal["environment"], signal["signal"])
@@ -82,6 +118,19 @@ def audit() -> list[str]:
     inventory_cloudflare = cloudflare_expected_keys | heartbeat_expected_keys
     for key in sorted(configured_cloudflare - inventory_cloudflare):
         errors.append(f"configured Cloudflare signal lacks inventory entry: {key}")
+    for signal in expected_cloudflare:
+        key = (signal["environment"], signal["signal"])
+        try:
+            expected_service_id = service_id_for_component(
+                signal["component"], signal=signal["signal"]
+            )
+        except ValueError:
+            continue
+        if worker_identities.get(key) != expected_service_id:
+            errors.append(
+                f"Cloudflare signal service_id mismatch for {key}: expected "
+                f"{expected_service_id}, got {worker_identities.get(key) or 'missing'}"
+            )
 
     for signal in expected_github:
         if signal["signal"] not in github_signals:
@@ -125,6 +174,12 @@ def _validate_inventory(signals: list[dict[str, Any]]) -> list[str]:
         owner = signal.get("primary_owner")
         if owner not in VALID_OWNERS:
             errors.append(f"invalid primary_owner for {signal_id}: {owner}")
+        try:
+            service_id_for_component(
+                str(signal.get("component", "")), signal=str(signal.get("signal", ""))
+            )
+        except ValueError as exc:
+            errors.append(f"unresolvable service identity for {signal_id}: {exc}")
     return errors
 
 
@@ -144,19 +199,23 @@ def _load_inventory() -> dict[str, Any]:
     return yaml.safe_load(INVENTORY.read_text(encoding="utf-8"))
 
 
-def _compose_probe_names() -> set[str]:
+def _compose_probe_specs() -> dict[str, str]:
     compose = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
     raw_specs = compose["services"]["infra-probe-runner"]["environment"][
         "INFRA_PROBE_SPECS"
     ]
-    return {
-        line.split("|", 1)[0].strip()
-        for line in raw_specs.splitlines()
-        if line.strip() and not line.strip().startswith("#")
-    }
+    specs: dict[str, str] = {}
+    for line in raw_specs.splitlines():
+        if not line.strip() or line.strip().startswith("#"):
+            continue
+        fields = [field.strip() for field in line.split("|")]
+        specs[fields[0]] = fields[7] if len(fields) > 7 else ""
+    return specs
 
 
-def _worker_keys() -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
+def _worker_keys() -> tuple[
+    set[tuple[str, str]], set[tuple[str, str]], dict[tuple[str, str], str]
+]:
     config = tomllib.loads(WRANGLER.read_text(encoding="utf-8"))
     vars_config = config.get("vars", {})
     targets = json.loads(vars_config.get("WATCHDOG_TARGETS_JSON", "[]"))
@@ -165,7 +224,11 @@ def _worker_keys() -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
     heartbeat_keys = {
         (heartbeat["environment"], heartbeat["name"]) for heartbeat in heartbeats
     }
-    return target_keys, heartbeat_keys
+    identities = {
+        (item["environment"], item["name"]): str(item.get("service_id", ""))
+        for item in targets + heartbeats
+    }
+    return target_keys, heartbeat_keys, identities
 
 
 def _github_signal_names() -> set[str]:

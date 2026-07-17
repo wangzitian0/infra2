@@ -8,7 +8,7 @@ reusable logic belongs in `libs/` (see the division-of-labor note below):
 2. **Standalone scripts** — non-interactive entry points run by CI gates,
    scheduled workflows, or as long-running sidecars (`python tools/<script>.py`).
    Examples: `deploy_v2.py` (deploy front door), `deploy_guard_audit.py` /
-   `ci_gate_audit.py` / `lint_platform_image_pins.py` /
+   `ci_gate_audit.py` / `service_identity_audit.py` / `lint_platform_image_pins.py` /
    `coverage_regression_audit.py` (infra-ci
    gates), `reconcile_iac_inputs.py` (tag reconcile), `out_of_band_watchdog.py`
    / `watchdog_weekly_digest.py` (scheduled watchdogs), `deploy_queue_guard.py`
@@ -29,6 +29,17 @@ or application source checkout participates in the audit.
 `harness.py` is the read-only workspace front door. It validates
 `harness/repos.yaml`, referenced authority files, the infra2/infra2-sdk focus, and the
 autonomous App boundary. It never updates submodules or application policy.
+
+`dokploy_config_drift.py` is read-only and compares production's versioned,
+secret-independent source fingerprint with the latest release. It first verifies that
+the stored fingerprint can be reproduced from `IAC_DEPLOY_REF`; runtime secrets remain
+only in the deploy idempotence hash. `--strict` fails on real drift, detector errors, and
+structural mismatches while reporting pre-migration identity separately.
+
+`service_identity_audit.py` is the blocking cross-plane identity gate. It validates
+every registry service, all deployment entry points, checked-in alert catalogs,
+and the complete internal/Cloudflare watchdog mapping. `watchdog_consistency_audit.py`
+also enforces compose↔inventory equality and registry-derived `service_id` values.
 
 ## Division of labor (`libs/` vs `tools/`)
 

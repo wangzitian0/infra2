@@ -507,12 +507,29 @@ def deploy_env_overrides(deploy_env: str) -> dict[str, str]:
     }
 
 
+def resolve_checkout_head(repo_path: Path) -> str | None:
+    """Resolve an exact checkout identity without raising on an absent workspace."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except OSError:
+        return None
+    value = result.stdout.strip().lower() if result.returncode == 0 else ""
+    return value if EXACT_COMMIT_RE.fullmatch(value) else None
+
+
 def safe_invoke_env_summary(env: dict[str, str]) -> str:
     """Summarize child env without logging secret values."""
     keys = [
         "DEPLOY_ENV",
         "ENV_SUFFIX",
         "ENV_DOMAIN_SUFFIX",
+        "IAC_DEPLOY_REF",
         "VAULT_ROOT_TOKEN",
         "VAULT_ROLE_ID",
         "VAULT_SECRET_ID",
@@ -531,7 +548,10 @@ def safe_invoke_env_summary(env: dict[str, str]) -> str:
 
 
 def run_invoke_task(
-    task_name: str, repo_path: Path, deploy_env: str = "staging"
+    task_name: str,
+    repo_path: Path,
+    deploy_env: str = "staging",
+    deploy_ref: str | None = None,
 ) -> dict:
     """Run an invoke task with timeout and return result."""
     logger.info(
@@ -542,6 +562,10 @@ def run_invoke_task(
         **os.environ,
         **deploy_env_overrides(deploy_env),
     }
+    if deploy_ref:
+        if not EXACT_COMMIT_RE.fullmatch(deploy_ref):
+            raise ValueError("deploy_ref must be an exact 40-character commit SHA")
+        env_vars["IAC_DEPLOY_REF"] = deploy_ref.lower()
     if vault_root_token := resolve_vault_root_token(env_vars):
         env_vars["VAULT_ROOT_TOKEN"] = vault_root_token
     logger.info("Invoke child env: %s", safe_invoke_env_summary(env_vars))
@@ -647,17 +671,7 @@ def sync_services(
         )
 
         repo_path = WORKSPACE / REPO_NAME
-        current_head = None
-        if repo_path.exists():
-            res = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=repo_path,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            if res.returncode == 0:
-                current_head = res.stdout.strip()
+        current_head = resolve_checkout_head(repo_path) if repo_path.exists() else None
 
         if not update_repo(ref=ref):
             logger.error("Failed to update repo, aborting sync")
@@ -669,23 +683,30 @@ def sync_services(
                 error="Failed to update repo",
             )
 
+        resolved_head = resolve_checkout_head(repo_path)
+        if ref and EXACT_COMMIT_RE.fullmatch(ref):
+            if resolved_head != ref.lower():
+                logger.error(
+                    "Checked-out HEAD does not match requested ref: expected=%s actual=%s",
+                    ref.lower(),
+                    resolved_head or "unavailable",
+                )
+                return SyncResult(
+                    env=deploy_env,
+                    ref=ref,
+                    requested_services=requested_services,
+                    repo_updated=False,
+                    error="Checked-out HEAD does not match requested exact ref",
+                )
+
         if "__all__" in services:
             services = set(_all_services())
             logger.info("Syncing all services due to libs/ change")
         elif not services:
             # If services set is empty, determine changes dynamically via git diff
-            res_new = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=repo_path,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            new_head = res_new.stdout.strip() if res_new.returncode == 0 else None
-
-            if current_head and new_head and current_head != new_head:
+            if current_head and resolved_head and current_head != resolved_head:
                 res_diff = subprocess.run(
-                    ["git", "diff", "--name-only", current_head, new_head],
+                    ["git", "diff", "--name-only", current_head, resolved_head],
                     cwd=repo_path,
                     capture_output=True,
                     text=True,
@@ -722,7 +743,12 @@ def sync_services(
                 )
                 continue
 
-            result = run_invoke_task(task_name, repo_path, deploy_env)
+            if resolved_head:
+                result = run_invoke_task(
+                    task_name, repo_path, deploy_env, resolved_head
+                )
+            else:
+                result = run_invoke_task(task_name, repo_path, deploy_env)
             service_result = ServiceSyncResult(
                 service=service,
                 task=task_name,

@@ -52,6 +52,8 @@ class LogErrorAlertDefinition:
     alert_name: str
     service_name: str
     summary: str
+    service_id: str
+    environment: str
     severity: str = "error"
     threshold: int = 0
     eval_window: str = "5m0s"
@@ -68,6 +70,8 @@ class LogErrorAlertDefinition:
             threshold=self.threshold,
             eval_window=self.eval_window,
             frequency=self.frequency,
+            service_id=self.service_id,
+            environment=self.environment,
         )
 
 
@@ -78,6 +82,8 @@ class MetricAlertDefinition:
     alert_name: str
     promql: str
     summary: str
+    service_id: str
+    environment: str
     severity: str = "warning"
     threshold: float = 0
     threshold_unit: str = ""
@@ -104,6 +110,8 @@ class MetricAlertDefinition:
             frequency=self.frequency,
             service_name=self.service_name,
             group_by=self.group_by,
+            service_id=self.service_id,
+            environment=self.environment,
         )
 
 
@@ -133,6 +141,8 @@ def load_alert_definitions(
         )
 
     definitions: list[AlertDefinition] = []
+    service_id = str(data.get("service_id") or "").strip()
+    environment = str(data.get("environment") or "").strip()
     seen: set[str] = set()
     for raw in rules:
         if not isinstance(raw, dict):
@@ -159,13 +169,17 @@ def load_alert_definitions(
         if signal == "metrics":
             summary = _required_text(raw.get("summary"), "summary", alert_name, path)
             promql = _required_text(raw.get("promql"), "promql", alert_name, path)
+            threshold = _float_threshold(raw_threshold, alert_name, path)
+            _require_alert_identity(service_id, environment, path)
             definitions.append(
                 MetricAlertDefinition(
                     alert_name=alert_name,
                     promql=promql,
                     summary=summary,
+                    service_id=service_id,
+                    environment=environment,
                     severity=str(raw.get("severity") or "warning"),
-                    threshold=_float_threshold(raw_threshold, alert_name, path),
+                    threshold=threshold,
                     threshold_unit=str(raw.get("threshold_unit") or ""),
                     op=str(raw.get("op") or "above"),
                     match_type=str(raw.get("match_type") or "at_least_once"),
@@ -193,11 +207,14 @@ def load_alert_definitions(
                 f"Invalid 'threshold' {raw_threshold!r} for alert '{alert_name}' in "
                 f"{path}: must be an integer."
             ) from exc
+        _require_alert_identity(service_id, environment, path)
         definitions.append(
             LogErrorAlertDefinition(
                 alert_name=alert_name,
                 service_name=service_name,
                 summary=summary,
+                service_id=service_id,
+                environment=environment,
                 severity=str(raw.get("severity") or "error"),
                 threshold=threshold,
                 eval_window=str(raw.get("eval_window") or "5m0s"),
@@ -205,6 +222,13 @@ def load_alert_definitions(
             )
         )
     return definitions
+
+
+def _require_alert_identity(service_id: str, environment: str, path: Path) -> None:
+    if not service_id or not environment:
+        raise ObservabilityDefinitionError(
+            f"Alert definition needs top-level service_id and environment: {path}"
+        )
 
 
 def _required_text(value: Any, field: str, alert_name: str, path: Path) -> str:

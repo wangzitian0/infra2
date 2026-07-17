@@ -31,6 +31,7 @@ RECENT_DEPLOY_TTL_SECONDS = int(os.environ.get("RECENT_DEPLOY_TTL_SECONDS", "600
 SIGNATURE_TTL_SECONDS = int(os.environ.get("SIGNATURE_TTL_SECONDS", "300"))
 MAX_REQUEST_BODY_BYTES = int(os.environ.get("MAX_REQUEST_BODY_BYTES", "65536"))
 EXACT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+DEPLOYMENT_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 REQUIRED_PYTHON_MODULES = {
     "flask": "flask",
     "httpx": "httpx",
@@ -54,8 +55,9 @@ _op_health_lock = threading.Lock()
 _op_health_cache: dict[str, object] = {"ok": False, "at": float("-inf")}
 
 _deploy_state_lock = threading.Lock()
-_in_flight_deploys: set[tuple[str, str]] = set()
-_recent_deploys: dict[tuple[str, str], tuple[float, dict]] = {}
+DeploymentKey = tuple[str, str, tuple[str, ...]]
+_in_flight_deploys: set[DeploymentKey] = set()
+_recent_deploys: dict[DeploymentKey, tuple[float, dict]] = {}
 _seen_nonces: dict[str, float] = {}
 _nonce_lock = threading.Lock()
 if hasattr(app, "config"):
@@ -182,15 +184,27 @@ def run_sync(services: set[str]):
     thread.start()
 
 
-def _deployment_key(env: str, ref: str) -> tuple[str, str]:
-    return (env, ref)
+def _normalize_services(services: list[str] | None) -> tuple[str, ...]:
+    """Canonical service-set identity; omitted services means the all-services operation."""
+    if services is None:
+        return ("__all__",)
+    return tuple(sorted({service.strip() for service in services}))
 
 
-def _deployment_id(key: tuple[str, str]) -> str:
-    return hashlib.sha256(f"{key[0]}:{key[1]}".encode()).hexdigest()[:16]
+def _deployment_key(
+    env: str, ref: str, services: list[str] | None = None
+) -> DeploymentKey:
+    return (env, ref, _normalize_services(services))
 
 
-def _recent_result(key: tuple[str, str]) -> dict | None:
+def _deployment_id(key: DeploymentKey) -> str:
+    service_identity = ",".join(key[2])
+    return hashlib.sha256(
+        f"{key[0]}:{key[1]}:{service_identity}".encode()
+    ).hexdigest()[:16]
+
+
+def _recent_result(key: DeploymentKey) -> dict | None:
     item = _recent_deploys.get(key)
     if not item:
         return None
@@ -202,15 +216,20 @@ def _recent_result(key: tuple[str, str]) -> dict | None:
 
 
 def _in_progress_response(
-    env: str, ref: str, triggered_by: str = "unknown", duplicate: bool = False
+    env: str,
+    ref: str,
+    triggered_by: str = "unknown",
+    duplicate: bool = False,
+    services: list[str] | None = None,
 ) -> dict:
-    key = _deployment_key(env, ref)
+    key = _deployment_key(env, ref, services)
     response = {
         "status": "in_progress",
         "deployment_id": _deployment_id(key),
         "env": env,
         "ref": ref,
         "triggered_by": triggered_by,
+        "requested_services": list(key[2]),
         "status_url": "/deploy/status",
     }
     if duplicate:
@@ -218,8 +237,14 @@ def _in_progress_response(
     return response
 
 
-def _completed_response(env: str, ref: str, triggered_by: str, result) -> dict:
-    key = _deployment_key(env, ref)
+def _completed_response(
+    env: str,
+    ref: str,
+    triggered_by: str,
+    result,
+    services: list[str] | None = None,
+) -> dict:
+    key = _deployment_key(env, ref, services)
     result_payload = (
         result.to_public_dict() if hasattr(result, "to_public_dict") else result.to_dict()
     )
@@ -229,6 +254,7 @@ def _completed_response(env: str, ref: str, triggered_by: str, result) -> dict:
         "env": env,
         "ref": ref,
         "triggered_by": triggered_by,
+        "requested_services": list(key[2]),
         "result": result_payload,
     }
 
@@ -236,10 +262,10 @@ def _completed_response(env: str, ref: str, triggered_by: str, result) -> dict:
 def _run_deployment(env: str, ref: str, triggered_by: str, services: list[str] | None = None) -> None:
     from sync_runner import sync_services_by_version
 
-    key = _deployment_key(env, ref)
+    key = _deployment_key(env, ref, services)
     try:
         result = sync_services_by_version(env, ref, triggered_by, services)
-        response = _completed_response(env, ref, triggered_by, result)
+        response = _completed_response(env, ref, triggered_by, result, services)
     except Exception as exc:
         logger.exception("Deployment failed before producing a sync result")
         response = {
@@ -249,7 +275,7 @@ def _run_deployment(env: str, ref: str, triggered_by: str, services: list[str] |
             "ref": ref,
             "triggered_by": triggered_by,
             "error": str(exc),
-            "requested_services": services,
+            "requested_services": list(key[2]),
         }
     with _deploy_state_lock:
         _recent_deploys[key] = (time.monotonic(), response)
@@ -383,19 +409,13 @@ def manual_sync():
     return jsonify({"status": "accepted", "services": list(services)})
 
 
-def _normalize_services(services: list[str] | None) -> list[str]:
-    if services is None:
-        return []
-    return sorted(services)
-
-
-def _is_cache_match(recent: dict, requested_services: list[str] | None) -> bool:
-    cached_services = None
-    if "result" in recent and isinstance(recent["result"], dict):
-        cached_services = recent["result"].get("requested_services")
-    if cached_services is None:
-        cached_services = recent.get("requested_services")
-    return _normalize_services(cached_services) == _normalize_services(requested_services)
+def _keys_for_legacy_status(env: str, ref: str) -> list[DeploymentKey]:
+    """Find old-client candidates; more than one is ambiguous and must fail closed."""
+    active_recent = {
+        key for key in list(_recent_deploys) if _recent_result(key) is not None
+    }
+    keys = set(_in_flight_deploys) | active_recent
+    return sorted(key for key in keys if key[:2] == (env, ref))
 
 
 @app.route("/deploy", methods=["POST"])
@@ -425,18 +445,22 @@ def version_deploy():
     if services is not None:
         if not isinstance(services, list) or not all(isinstance(s, str) for s in services):
             return jsonify({"error": "services must be a list of strings"}), 400
+        if not services or any(not service.strip() for service in services):
+            return jsonify({"error": "services must be a non-empty list of non-empty strings"}), 400
 
     logger.info(f"Deployment: {ref} to {env} by {triggered_by}")
 
     if wait:
-        key = _deployment_key(env, ref)
+        key = _deployment_key(env, ref, services)
         with _deploy_state_lock:
             recent = _recent_result(key)
-            if recent and _is_cache_match(recent, services):
+            if recent:
                 status_code = 200 if recent.get("status") == "completed" else 500
                 return jsonify({**recent, "cached": True}), status_code
             if key in _in_flight_deploys:
-                return jsonify(_in_progress_response(env, ref, triggered_by, True)), 202
+                return jsonify(
+                    _in_progress_response(env, ref, triggered_by, True, services)
+                ), 202
             _in_flight_deploys.add(key)
 
         _run_deployment(env, ref, triggered_by, services)
@@ -450,13 +474,15 @@ def version_deploy():
         status_code = 200 if response.get("status") == "completed" else 500
         return jsonify(response), status_code
 
-    key = _deployment_key(env, ref)
+    key = _deployment_key(env, ref, services)
     with _deploy_state_lock:
         recent = _recent_result(key)
-        if recent and _is_cache_match(recent, services):
+        if recent:
             return jsonify({**recent, "cached": True}), 200
         if key in _in_flight_deploys:
-            return jsonify(_in_progress_response(env, ref, triggered_by, True)), 202
+            return jsonify(
+                _in_progress_response(env, ref, triggered_by, True, services)
+            ), 202
         _in_flight_deploys.add(key)
 
     if services is not None:
@@ -466,7 +492,9 @@ def version_deploy():
     thread.daemon = True
     thread.start()
 
-    return jsonify({**_in_progress_response(env, ref, triggered_by), "wait": False}), 202
+    return jsonify(
+        {**_in_progress_response(env, ref, triggered_by, services=services), "wait": False}
+    ), 202
 
 
 @app.route("/deploy/status", methods=["POST"])
@@ -480,18 +508,54 @@ def deployment_status():
     env = payload.get("env", "staging")
     ref = validate_deploy_ref(payload.get("ref") or payload.get("tag"))
     triggered_by = payload.get("triggered_by", "unknown")
+    deployment_id = payload.get("deployment_id")
     if not ref:
         return jsonify({"error": "Ref must be an exact 40-character commit SHA"}), 400
     if env not in ("staging", "production"):
         return jsonify({"error": "Invalid env (must be staging or production)"}), 400
 
-    key = _deployment_key(env, ref)
+    services = payload.get("services")
+    if services is not None:
+        if not isinstance(services, list) or not all(isinstance(s, str) for s in services):
+            return jsonify({"error": "services must be a list of strings"}), 400
+        if not services or any(not service.strip() for service in services):
+            return jsonify({"error": "services must be a non-empty list of non-empty strings"}), 400
+    if deployment_id is not None and (
+        not isinstance(deployment_id, str) or not DEPLOYMENT_ID_RE.fullmatch(deployment_id)
+    ):
+        return jsonify({"error": "deployment_id must be 16 lowercase hex characters"}), 400
+
     with _deploy_state_lock:
+        if services is not None:
+            key = _deployment_key(env, ref, services)
+        else:
+            candidates = _keys_for_legacy_status(env, ref)
+            if len(candidates) > 1:
+                return jsonify(
+                    {
+                        "error": "Ambiguous deployment; deployment_id and services are required",
+                        "candidate_deployment_ids": [_deployment_id(item) for item in candidates],
+                    }
+                ), 409
+            key = candidates[0] if candidates else _deployment_key(env, ref)
+
+        expected_id = _deployment_id(key)
+        if deployment_id is not None and deployment_id != expected_id:
+            return jsonify(
+                {
+                    "error": "deployment_id does not match env/ref/services",
+                    "expected_deployment_id": expected_id,
+                }
+            ), 409
         recent = _recent_result(key)
         if recent:
             return jsonify(recent), 200
         if key in _in_flight_deploys:
-            return jsonify(_in_progress_response(env, ref, triggered_by)), 200
+            return jsonify(
+                _in_progress_response(
+                    env, ref, triggered_by, services=list(key[2])
+                )
+            ), 200
 
     return jsonify(
         {

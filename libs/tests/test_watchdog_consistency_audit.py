@@ -71,7 +71,11 @@ def test_watchdog_consistency_audit_rejects_undocumented_exclusions(
 def test_watchdog_consistency_audit_rejects_empty_worker_targets(monkeypatch) -> None:
     """#209: bad JSON overrides must not silently remove every Worker target."""
     audit = _load_audit()
-    monkeypatch.setattr(audit, "_worker_keys", lambda: (set(), {("production", "x")}))
+    monkeypatch.setattr(
+        audit,
+        "_worker_keys",
+        lambda: (set(), {("production", "x")}, {}),
+    )
 
     assert any(
         "effective Cloudflare Worker target list is empty" in error

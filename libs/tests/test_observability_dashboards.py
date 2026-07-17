@@ -123,7 +123,10 @@ def test_alert_definition_renders_signoz_log_rule_routed_to_channel() -> None:
     query = payload["condition"]["compositeQuery"]["builderQueries"]["A"]
     filters = query["filters"]["items"]
     assert filters[0]["value"] == "finance-report-backend"
-    assert filters[1]["value"] == ["ERROR", "FATAL"]
+    assert filters[1]["key"]["key"] == "deployment.environment.name"
+    assert filters[1]["value"] == "production"
+    assert filters[2]["value"] == ["ERROR", "FATAL"]
+    assert payload["labels"]["service_id"] == "finance_report/app"
 
 
 def test_finance_report_slo_and_business_alert_rules_are_defined() -> None:
@@ -592,7 +595,13 @@ def test_apply_alerts_prune_fails_loudly_on_missing_rule_id(monkeypatch) -> None
     module, Exit = _load_fr_observability_tasks(monkeypatch)
     calls = []
     alerting = _stateful_alerting(
-        [{"id": None, "alert": "CanarySigNozPromqlPayload-7", "labels": {"canary": "true"}}],
+        [
+            {
+                "id": None,
+                "alert": "CanarySigNozPromqlPayload-7",
+                "labels": {"canary": "true"},
+            }
+        ],
         calls,
     )
     _patch_console(monkeypatch)

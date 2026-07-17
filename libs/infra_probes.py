@@ -34,6 +34,7 @@ class ProbeSpec:
     # this probe's failure is a cascade symptom of that root, so its alert is suppressed
     # (page the root, not the dependents). Empty = independent.
     depends_on: str = ""
+    service_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -53,7 +54,7 @@ class ProbeResult:
 def parse_probe_specs(raw: str) -> list[ProbeSpec]:
     """Parse newline-separated probe specs.
 
-    Format: name|kind|target|expected|severity|timeout_seconds|depends_on
+    Format: name|kind|target|expected|severity|timeout_seconds|depends_on|service_id
     """
     specs: list[ProbeSpec] = []
     for raw_line in raw.splitlines():
@@ -75,6 +76,7 @@ def parse_probe_specs(raw: str) -> list[ProbeSpec]:
                 severity=parts[4] if len(parts) > 4 and parts[4] else "critical",
                 timeout_seconds=timeout,
                 depends_on=parts[6] if len(parts) > 6 and parts[6] else "",
+                service_id=parts[7] if len(parts) > 7 and parts[7] else "",
             )
         )
     return specs
@@ -139,16 +141,30 @@ def build_probe_alert_payload(
     """
     failures = failed_results(results)
     status = "firing" if failures else "resolved"
+    environment = os.getenv("INFRA_ENVIRONMENT") or os.getenv("ENV") or "production"
+
+    def labels_for(result: ProbeResult) -> dict[str, str]:
+        from libs.service_identity import ServiceIdentity
+
+        fallback_service = result.spec.name.split("-", 1)[0].replace("_", "-").lower()
+        identity = ServiceIdentity.build(
+            result.spec.service_id or f"infra/{fallback_service}",
+            environment,
+            component=result.spec.name.replace("_", "-"),
+        )
+        return {
+            "alertname": alert_name,
+            **identity.alert_labels(
+                severity=severity_override or result.spec.severity,
+                failure_domain=_failure_domain(result),
+            ),
+            "probe_kind": result.spec.kind,
+        }
+
     alerts = [
         {
             "status": status,
-            "labels": {
-                "alertname": alert_name,
-                "service": result.spec.name,
-                "severity": severity_override or result.spec.severity,
-                "probe_kind": result.spec.kind,
-                "failure_domain": _failure_domain(result),
-            },
+            "labels": labels_for(result),
             "annotations": {
                 "summary": f"{result.spec.name} probe failed",
                 "description": result.summary,
@@ -167,6 +183,9 @@ def build_probe_alert_payload(
             "alertname": alert_name,
             "severity": severity,
             "team": "infra",
+            "identity_schema": "v1",
+            "managed_by": "infra2",
+            "environment": environment,
         },
         "commonAnnotations": {
             "summary": f"{len(failures)} infra service probe(s) failed"

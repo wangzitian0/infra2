@@ -11,7 +11,14 @@ from __future__ import annotations
 
 import subprocess
 
-from tools.dokploy_config_drift import Row, contents_at_ref, format_report
+import tools.dokploy_config_drift as drift
+from tools.dokploy_config_drift import (
+    DeployedIdentity,
+    Row,
+    contents_at_ref,
+    format_report,
+    strict_blockers,
+)
 
 
 def test_format_report_all_in_sync_says_green() -> None:
@@ -85,3 +92,89 @@ def test_contents_at_ref_reads_tracked_file_and_omits_missing() -> None:
 
 def test_contents_at_ref_empty_paths_is_noop() -> None:
     assert contents_at_ref("HEAD", []) == {}
+
+
+def _stub_single_service_scan(monkeypatch, identity, hashes_by_ref):
+    class DummyDeployer:
+        pass
+
+    monkeypatch.setattr(
+        drift.service_registry, "all_services", lambda: ["platform/example"]
+    )
+    monkeypatch.setattr(drift, "_load_deployer", lambda _sid: DummyDeployer)
+    monkeypatch.setattr(
+        drift, "_deployed_identities", lambda: {"platform/example": identity}
+    )
+    monkeypatch.setattr(drift, "_commit_at_ref", lambda _tag: "a" * 40)
+    monkeypatch.setattr(drift, "_source_env_vars", lambda _dep: {"ENV": "production"})
+    monkeypatch.setattr(
+        drift,
+        "expected_hash_at",
+        lambda _dep, _context, ref, _env: (hashes_by_ref[ref], []),
+    )
+    return drift.scan("v1.2.3")[0]
+
+
+def test_scan_accepts_older_deploy_ref_when_source_identity_is_unchanged(
+    monkeypatch,
+) -> None:
+    old_ref = "b" * 40
+    row = _stub_single_service_scan(
+        monkeypatch,
+        DeployedIdentity(
+            runtime_hash="runtime",
+            source_hash="v1:same",
+            deploy_ref=old_ref,
+        ),
+        {"v1.2.3": "same", old_ref: "same"},
+    )
+
+    assert row.verdict == "in_sync"
+    assert row.deployed_ref == old_ref
+
+
+def test_scan_detects_source_identity_that_does_not_match_its_own_ref(
+    monkeypatch,
+) -> None:
+    old_ref = "b" * 40
+    row = _stub_single_service_scan(
+        monkeypatch,
+        DeployedIdentity(
+            runtime_hash="runtime",
+            source_hash="v1:current",
+            deploy_ref=old_ref,
+        ),
+        {"v1.2.3": "current", old_ref: "different"},
+    )
+
+    assert row.verdict == "DRIFT"
+    assert "does not match its deployed ref" in row.note
+
+
+def test_scan_classifies_pre_migration_identity_without_false_drift(
+    monkeypatch,
+) -> None:
+    row = _stub_single_service_scan(
+        monkeypatch,
+        DeployedIdentity(runtime_hash="same"),
+        {"v1.2.3": "same"},
+    )
+
+    assert row.verdict == "legacy_identity"
+    assert not strict_blockers([row])
+
+
+def test_strict_blockers_fail_on_detector_and_structural_errors() -> None:
+    rows = [
+        Row("platform/a", "in_sync"),
+        Row("platform/b", "DRIFT"),
+        Row("platform/c", "error"),
+        Row("platform/d", "structural"),
+        Row("platform/e", "legacy_identity"),
+    ]
+
+    assert [row.service for row in strict_blockers(rows)] == [
+        "platform/b",
+        "platform/c",
+        "platform/d",
+    ]

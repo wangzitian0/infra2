@@ -238,8 +238,12 @@ def test_log_error_alert_rule_uses_signoz_v2_threshold_schema() -> None:
     assert filters[0]["key"]["key"] == "service.name"
     assert filters[0]["key"]["type"] == "resource"
     assert filters[0]["value"] == "example-backend"
-    assert filters[1]["key"]["key"] == "severity_text"
-    assert filters[1]["value"] == ["ERROR", "FATAL"]
+    assert filters[1]["key"]["key"] == "deployment.environment.name"
+    assert filters[1]["value"] == "production"
+    assert filters[2]["key"]["key"] == "severity_text"
+    assert filters[2]["value"] == ["ERROR", "FATAL"]
+    assert payload["labels"]["service_id"] == "infra/example-backend"
+    assert payload["labels"]["environment"] == "production"
 
 
 def test_metric_alert_rule_uses_signoz_v5_promql_schema() -> None:

@@ -46,6 +46,16 @@ the service class, then ride along the generated skeleton — not scattered in y
     probe data). Generate INFRA_PROBE_SPECS + watchdog-signals.yaml skeleton +
     wrangler targets via `get_probe_targets(env)` / `get_public_routes(env)`; CI
     asserts `generated == committed`. Kills the original drift class structurally.
+  - [x] Identity slice: all internal specs and Cloudflare targets carry canonical
+    `service_id`; the audit derives the expected value from registry and checks
+    compose↔inventory in both directions. Irreducible endpoint data remains local.
+- [x] **P1.1 — cross-plane identity contract**
+  - `ServiceIdentity v1` renders one registry-owned coordinate into deploy env,
+    OTEL resources, Docker labels/adapters and low-cardinality alert labels.
+  - Deployer/fixed-promote/preview sign the identity; missing legacy runtime
+    identity triggers one reconcile without entering the idempotence hash.
+  - Probes, SigNoz rules, deploy-queue, container-breakdown and Cloudflare
+    watchdog carry the same `service_id` + environment coordinate.
 - [ ] **P2 — fix prefect ${ENV_SUFFIX} bug + compose lint** (PR 4, parallel)
   - Fix `platform/23.prefect/compose.yaml:114` (missing suffix → prod Authentik).
   - Lint: any `platform-<svc>` compose reference that should carry `${ENV_SUFFIX}`
@@ -80,10 +90,13 @@ the service class, then ride along the generated skeleton — not scattered in y
 |------|--------|
 | 2026-06-14 | Initialized project; PR 1 delivers the base library + ALL_SERVICES audit |
 | 2026-06-24 | P2 first slice: `probe_container_bases()` accessor + INFRA_PROBE_SPECS env-suffix lint vs registry `prod_only`. Reframed P1 for probe specs: they carry irreducible per-probe truth (health paths, expected codes, severities, cascade deps, command round-trips), so the registry is made the ENFORCED source for the shared `prod_only`/suffix fact rather than generating the file (matches the Out-of-scope note). |
+| 2026-07-17 | Added versioned cross-plane `ServiceIdentity`; deployment entry points sign it, runtime monitoring resolves it, telemetry and alerts use it, and CI audits registry/alert/watchdog agreement. The bidirectional watchdog audit exposed and registered 16 previously untracked internal env×signal entries. |
 
 ## Verification ("The Proof")
 - [x] `pytest libs/tests/test_service_registry.py` — registry derives, ALL_SERVICES matches
-- [ ] `pytest libs/tests/test_watchdog_consistency_audit.py` stays green per PR
+- [x] `python tools/watchdog_consistency_audit.py` — bidirectional signal coverage + registry-derived service identity
+- [x] `python tools/service_identity_audit.py` — deploy/runtime/telemetry/alert boundary contract
+- [x] `pytest libs/tests/test_service_identity.py libs/tests/test_service_identity_audit.py`
 - [x] `pytest libs/tests/test_service_registry_downstream.py` — INFRA_PROBE_SPECS env-suffix == registry `prod_only` (first fail-closed audit binding a downstream list to the registry)
 - [ ] Each later PR adds a fail-closed audit proving its list == registry-derived
 

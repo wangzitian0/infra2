@@ -33,23 +33,23 @@ ALERT_EMAIL_TO = "wangzitian.ai@gmail.com"
 ALERT_EMAIL_FROM = "watchdog@mail.zitian.party"
 WATCHDOG_TARGETS_JSON = """
 [
-  {"environment":"production","name":"dokploy-public-route","url":"https://cloud.zitian.party","statuses":[200,302],"severity":"critical"},
-  {"environment":"production","name":"vault-public-route","url":"https://vault.zitian.party/v1/sys/health","statuses":[200,429,472,473],"severity":"critical"},
-  {"environment":"production","name":"minio-public-route","url":"https://minio.zitian.party/minio/health/live","statuses":[200],"severity":"warning"},
-  {"environment":"production","name":"authentik-public-route","url":"https://sso.zitian.party/-/health/live/","statuses":[200,204,302],"severity":"critical"},
-  {"environment":"production","name":"signoz-public-route","url":"https://signoz.zitian.party","statuses":[200,302],"severity":"critical"},
-  {"environment":"staging","name":"minio-public-route","url":"https://minio-staging.zitian.party/minio/health/live","statuses":[200],"severity":"warning"},
-  {"environment":"staging","name":"authentik-public-route","url":"https://sso-staging.zitian.party/-/health/live/","statuses":[200,204,302],"severity":"warning"},
-  {"environment":"production","name":"finance-report-web-public-route","url":"https://report.zitian.party/","statuses":[200,302,307,308],"severity":"critical"},
-  {"environment":"production","name":"finance-report-api-public-route","url":"https://report.zitian.party/api/health","statuses":[200],"severity":"critical"},
-  {"environment":"staging","name":"finance-report-web-public-route","url":"https://report-staging.zitian.party/","statuses":[200,302,307,308],"severity":"warning"},
-  {"environment":"staging","name":"finance-report-api-public-route","url":"https://report-staging.zitian.party/api/health","statuses":[200],"severity":"warning"}
+  {"environment":"production","name":"dokploy-public-route","service_id":"bootstrap/dokploy","url":"https://cloud.zitian.party","statuses":[200,302],"severity":"critical"},
+  {"environment":"production","name":"vault-public-route","service_id":"bootstrap/vault","url":"https://vault.zitian.party/v1/sys/health","statuses":[200,429,472,473],"severity":"critical"},
+  {"environment":"production","name":"minio-public-route","service_id":"platform/minio","url":"https://minio.zitian.party/minio/health/live","statuses":[200],"severity":"warning"},
+  {"environment":"production","name":"authentik-public-route","service_id":"platform/authentik","url":"https://sso.zitian.party/-/health/live/","statuses":[200,204,302],"severity":"critical"},
+  {"environment":"production","name":"signoz-public-route","service_id":"platform/signoz","url":"https://signoz.zitian.party","statuses":[200,302],"severity":"critical"},
+  {"environment":"staging","name":"minio-public-route","service_id":"platform/minio","url":"https://minio-staging.zitian.party/minio/health/live","statuses":[200],"severity":"warning"},
+  {"environment":"staging","name":"authentik-public-route","service_id":"platform/authentik","url":"https://sso-staging.zitian.party/-/health/live/","statuses":[200,204,302],"severity":"warning"},
+  {"environment":"production","name":"finance-report-web-public-route","service_id":"finance_report/app","url":"https://report.zitian.party/","statuses":[200,302,307,308],"severity":"critical"},
+  {"environment":"production","name":"finance-report-api-public-route","service_id":"finance_report/app","url":"https://report.zitian.party/api/health","statuses":[200],"severity":"critical"},
+  {"environment":"staging","name":"finance-report-web-public-route","service_id":"finance_report/app","url":"https://report-staging.zitian.party/","statuses":[200,302,307,308],"severity":"warning"},
+  {"environment":"staging","name":"finance-report-api-public-route","service_id":"finance_report/app","url":"https://report-staging.zitian.party/api/health","statuses":[200],"severity":"warning"}
 ]
 """
 WATCHDOG_HEARTBEATS_JSON = """
 [
-  {"environment":"production","name":"platform-alerting-probes","maxAgeSeconds":5400,"severity":"critical"},
-  {"environment":"staging","name":"platform-alerting-probes-staging","maxAgeSeconds":5400,"severity":"warning"}
+  {"environment":"production","name":"platform-alerting-probes","service_id":"platform/alerting","maxAgeSeconds":5400,"severity":"critical"},
+  {"environment":"staging","name":"platform-alerting-probes-staging","service_id":"platform/alerting","maxAgeSeconds":5400,"severity":"warning"}
 ]
 """
 

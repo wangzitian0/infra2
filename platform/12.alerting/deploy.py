@@ -17,6 +17,9 @@ class AlertingDeployer(Deployer):
     subdomain = None
     service_port = 8080
     service_name = "feishu-alert-bridge"
+    runtime_only_config_keys = frozenset(
+        {"INFRA_PROBE_HEARTBEAT_URL", "INFRA_PROBE_HEARTBEAT_TOKEN"}
+    )
 
     @classmethod
     def compose_env_base(cls, env=None):
@@ -34,6 +37,12 @@ class AlertingDeployer(Deployer):
             if value:
                 result[key] = value
         return result
+
+    @classmethod
+    def source_config_env_base(cls, env=None):
+        """Build release identity without reading runtime heartbeat secrets."""
+        e = env or cls.env()
+        return super().compose_env_base(e)
 
     @classmethod
     def pre_compose(cls, c):

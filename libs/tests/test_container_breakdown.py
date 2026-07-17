@@ -7,6 +7,7 @@ from libs.container_breakdown import (
     broken_state,
     build_breakdown_alert_payload,
     classify_reason,
+    container_identity,
     container_name,
     find_breakdown_containers,
 )
@@ -60,6 +61,32 @@ def test_classify_reason_handles_no_logs():
     assert detail == ""
 
 
+def test_container_identity_prefers_canonical_labels_then_registry_fallback():
+    labeled = {
+        "Names": ["/anything"],
+        "Labels": {
+            "party.zitian.infra.service-id": "finance_report/app",
+            "party.zitian.infra.component": "backend",
+            "party.zitian.infra.environment": "staging",
+        },
+    }
+    assert container_identity(labeled) == (
+        "finance_report/app",
+        "backend",
+        "staging",
+    )
+
+    legacy = {
+        "Names": ["/platform-alerting-deploy-guard-staging"],
+        "Labels": {"com.docker.compose.service": "deploy-queue-guard"},
+    }
+    assert container_identity(legacy) == (
+        "platform/alerting",
+        "deploy-queue-guard",
+        "staging",
+    )
+
+
 def test_find_breakdown_containers_filters_and_attaches_reason():
     containers = [
         {
@@ -96,6 +123,9 @@ def test_build_alert_payload_shape_is_alertmanager_like():
         state="restarting",
         reason="Vault creds missing",
         detail="...required",
+        service_id="finance_report/app",
+        component="vault-agent",
+        environment="staging",
     )
     payload = build_breakdown_alert_payload([bd])
 
@@ -104,7 +134,9 @@ def test_build_alert_payload_shape_is_alertmanager_like():
     assert payload["commonLabels"]["severity"] == "critical"
     assert len(payload["alerts"]) == 1
     alert = payload["alerts"][0]
-    assert alert["labels"]["service"] == "vault-agent"
+    assert alert["labels"]["service_id"] == "finance_report/app"
+    assert alert["labels"]["component"] == "vault-agent"
+    assert alert["labels"]["environment"] == "staging"
     assert alert["labels"]["failure_domain"] == "runtime"
     assert "vault-agent restarting" in alert["annotations"]["summary"]
 
