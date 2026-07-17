@@ -61,7 +61,12 @@ def _workspace(tmp_path: Path) -> dict:
 
 def test_committed_inventory_is_valid_and_apps_are_autonomous() -> None:
     manifest = load_manifest(ROOT / "harness" / "repos.yaml")
-    result = validate_manifest(ROOT, manifest)
+    # submodules_expected=False: this test must be portable across a machine with
+    # submodules initialized (a developer's checkout) and one without (CI, and any
+    # fresh non-recursive clone) — same call the harness-check CI job makes. The
+    # declarative correctness of harness/repos.yaml doesn't depend on which one
+    # happens to be running the test (#506).
+    result = validate_manifest(ROOT, manifest, submodules_expected=False)
 
     assert result.ok, result.to_dict()
     assert result.repository_count == 5
@@ -81,8 +86,24 @@ def test_committed_inventory_is_valid_and_apps_are_autonomous() -> None:
     assert {repo["governance"] for repo in apps} == {"autonomous"}
 
 
-def test_missing_checkout_is_warning_but_manifest_remains_valid(tmp_path: Path) -> None:
+def test_missing_checkout_is_error_by_default(tmp_path: Path) -> None:
+    """Non-optional (the default) means an uninitialized checkout is a real gap,
+    not a warning nobody reads — #506."""
     manifest = _workspace(tmp_path)
+    app = tmp_path / "repos" / "app"
+    (app / "AGENTS.md").unlink()
+    (app / ".git").unlink()
+    app.rmdir()
+
+    result = validate_manifest(tmp_path, manifest)
+
+    assert not result.ok
+    assert [error.code for error in result.errors] == ["checkout-missing"]
+
+
+def test_missing_checkout_is_warning_when_declared_optional(tmp_path: Path) -> None:
+    manifest = _workspace(tmp_path)
+    manifest["repositories"][1]["optional"] = True
     app = tmp_path / "repos" / "app"
     (app / "AGENTS.md").unlink()
     (app / ".git").unlink()
@@ -94,8 +115,25 @@ def test_missing_checkout_is_warning_but_manifest_remains_valid(tmp_path: Path) 
     assert [warning.code for warning in result.warnings] == ["checkout-missing"]
 
 
-def test_empty_submodule_directory_is_uninitialized_warning(tmp_path: Path) -> None:
+def test_empty_submodule_directory_is_uninitialized_error_by_default(
+    tmp_path: Path,
+) -> None:
     manifest = _workspace(tmp_path)
+    app = tmp_path / "repos" / "app"
+    (app / "AGENTS.md").unlink()
+    (app / ".git").unlink()
+
+    result = validate_manifest(tmp_path, manifest)
+
+    assert not result.ok
+    assert [error.code for error in result.errors] == ["checkout-uninitialized"]
+
+
+def test_empty_submodule_directory_is_warning_when_declared_optional(
+    tmp_path: Path,
+) -> None:
+    manifest = _workspace(tmp_path)
+    manifest["repositories"][1]["optional"] = True
     app = tmp_path / "repos" / "app"
     (app / "AGENTS.md").unlink()
     (app / ".git").unlink()
@@ -106,11 +144,44 @@ def test_empty_submodule_directory_is_uninitialized_warning(tmp_path: Path) -> N
     assert [warning.code for warning in result.warnings] == ["checkout-uninitialized"]
 
 
+def test_submodules_expected_false_downgrades_to_warning_even_when_not_optional(
+    tmp_path: Path,
+) -> None:
+    """CI never runs `submodules: true` — every submodule path is absent by
+    design there, not drift. submodules_expected=False must not error on that,
+    even for a non-optional repo (#506)."""
+    manifest = _workspace(tmp_path)
+    app = tmp_path / "repos" / "app"
+    (app / "AGENTS.md").unlink()
+    (app / ".git").unlink()
+    app.rmdir()
+
+    result = validate_manifest(tmp_path, manifest, submodules_expected=False)
+
+    assert result.ok
+    assert [warning.code for warning in result.warnings] == ["checkout-missing"]
+
+
+def test_submodules_expected_false_does_not_affect_the_root_checkout(
+    tmp_path: Path,
+) -> None:
+    """The flag is scoped to `checkout: submodule` — a genuinely broken root
+    checkout (this repo itself) must still error."""
+    manifest = _workspace(tmp_path)
+    (tmp_path / "AGENTS.md").unlink()
+
+    result = validate_manifest(tmp_path, manifest, submodules_expected=False)
+
+    assert not result.ok
+    assert any(error.code == "authority-path" for error in result.errors)
+
+
 def test_missing_checkout_does_not_skip_authority_schema(tmp_path: Path) -> None:
     manifest = _workspace(tmp_path)
     app = manifest["repositories"][1]
     app["path"] = "repos/missing"
     app["authority"] = []
+    app["optional"] = True
 
     result = validate_manifest(tmp_path, manifest)
 

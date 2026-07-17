@@ -22,13 +22,22 @@ def main(argv: list[str] | None = None) -> int:
     check.add_argument("--root", type=Path, default=ROOT)
     check.add_argument("--manifest", type=Path)
     check.add_argument("--json", action="store_true", dest="json_output")
+    check.add_argument(
+        "--no-submodules-expected",
+        action="store_false",
+        dest="submodules_expected",
+        help="this environment never checks out submodules (e.g. CI, which "
+        "deliberately skips `submodules: true` to keep app repos out of infra "
+        "CI's fetch) — treat every submodule checkout as expected-absent "
+        "instead of erroring on it",
+    )
     args = parser.parse_args(argv)
 
     root = args.root.resolve()
     manifest = args.manifest
     if manifest is not None and not manifest.is_absolute():
         manifest = root / manifest
-    result = check_workspace(root, manifest)
+    result = check_workspace(root, manifest, submodules_expected=args.submodules_expected)
     if args.json_output:
         print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
     else:

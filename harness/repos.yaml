@@ -40,6 +40,9 @@ repositories:
     governance: coordinated
     source: https://github.com/wangzitian0/oh-my-code-agent
     release_identity: tool-release-or-pinned-commit
+    # Not every workspace checkout needs TUI tooling day one — an uninitialized
+    # checkout here is a real, accepted state, not drift (#506).
+    optional: true
     authority:
       - README.md
 
