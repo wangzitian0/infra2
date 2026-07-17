@@ -50,7 +50,9 @@ nav:
       - Database: onboarding/03.database.md
       - Secrets: onboarding/04.secrets.md
       - SSO: onboarding/05.sso.md
-      - Observability (Planned): onboarding/06.observability.md
+      - Observability: onboarding/06.observability.md
+      - SigNoz Deployment Guide: onboarding/signoz.md
+      - New Service SOP: onboarding/07.new-service-sop.md
   # SSOT nav must list every MANIFEST topic — locked by
   # libs/tests/test_mkdocs_nav_manifest.py. Add a topic here when you add it to MANIFEST.
   - SSOT:
@@ -92,6 +94,16 @@ nav:
           - Observability: ssot/ops.observability.md
           - Watchdog Signals: ssot/watchdog-signals.yaml
   - Projects:
+      - Infra-021: project/Infra-021.openpanel_install.md
+      - Infra-020: project/Infra-020.truealpha_production_datahub.md
+      - Infra-017: project/Infra-017.truealpha_dagster_capture.md
+      - Infra-016: project/Infra-016.ci_gate_inventory.md
+      - Infra-013: project/Infra-013.service_registry_ssot.md
+      - Infra-012: project/Infra-012.watchdog_observability.md
+      - Infra-010: project/Infra-010.iac_and_service_verification.md
+      - Infra-009: project/Infra-009.finance_report_deploy.md
+      - Infra-008: project/Infra-008.platform_multi_env.md
+      - Infra-007: project/Infra-007.signoz_install.md
       - Portfolio: project/README.md
       - Infra-019: project/Infra-019.harness_control_plane.md
       - Infra-015: project/Infra-015.deploy_v2_front_door.md
@@ -104,3 +116,4 @@ nav:
       - Infra-001: project/archive/Infra-001.bootstrap_setup.md
       - Infra-002: project/archive/Infra-002.1password_vault_install.md
       - Infra-003: project/archive/Infra-003.docs_reorg.md
+      - Infra-018: project/archive/Infra-018.repository_boundary_decoupling.md

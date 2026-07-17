@@ -1,5 +1,7 @@
 # Infra-016: CI Gate Inventory — coordinate-ize infra CI, and de-overlap app vs infra responsibilities
 
+**Status**: In Progress
+
 ## Goal
 
 Make infra CI **reviewable at a glance the way `deploy_v2` is** — a small set of
