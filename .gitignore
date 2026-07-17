@@ -42,6 +42,7 @@ env/
 
 # Testing
 .pytest_cache/
+.ruff_cache/
 .coverage
 .coverage.*
 htmlcov/
@@ -84,4 +85,7 @@ docs/.site/
 # Cloudflare Wrangler local cache/state
 .wrangler/
 **/.wrangler/
+
+# Codex local agent workspace state
+.codex/
 
