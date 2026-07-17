@@ -16,7 +16,8 @@ def test_infra_ci_publishes_coverage_context_without_blocking_delivery() -> None
 
     assert "pytest-cov" in pyproject
     assert 'source = ["libs", "tools"]' in pyproject
-    assert "uv run python -P -m pytest libs/tests -q" in workflow
+    assert "uv run python -m pytest libs/tests -q -n auto" in workflow
+    assert 'PYTHONSAFEPATH: "1"' in workflow
     assert "--cov=libs" in workflow
     assert "--cov=tools" in workflow
     assert "--cov-report=xml:coverage/infra2-coverage.xml" in workflow

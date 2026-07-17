@@ -7,19 +7,27 @@ dependencies = [
     # Cross-repository wire/data contracts. Pin the immutable release artifact;
     # workspace submodules are never runtime dependencies.
     "infra2-sdk @ https://github.com/wangzitian0/infra2-sdk/releases/download/v0.3.0/infra2_sdk-0.3.0-py3-none-any.whl",
-    # E2E testing dependencies
+    # libs/tests unit testing
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=7.0.0",
-    "playwright>=1.40.0",
+    "pytest-xdist>=3.5.0",
     "httpx>=0.25.0",
     "python-dotenv>=1.0.0",
-    "asyncpg>=0.29.0",
     "cryptography>=41.0.0",
     "pyyaml>=6.0.0",
     # Automation
     "invoke>=2.2.0",
     "rich>=14.2.0",
+]
+
+[dependency-groups]
+# e2e_regressions/ is a manual/local-only suite (no CI workflow runs it) — kept out
+# of the default `uv sync`/`uv run` install so the infra-ci unit-test job doesn't pay
+# for deps it never imports. Run with `uv run --group e2e pytest e2e_regressions`.
+e2e = [
+    "playwright>=1.40.0",
+    "asyncpg>=0.29.0",
 ]
 
 [tool.pytest.ini_options]
