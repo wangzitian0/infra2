@@ -1,6 +1,6 @@
 # Infra2 Harness 与基础设施 AI Agent 行为准则
 
-> **禁令**：除非明确指定，否则 AI 不可以自动修改本文件。AI 不可以执行合流 (Merge PR) 操作。
+> **权限边界**：除非明确指定，否则 AI 不可以自动修改本文件。AI 仅可在下文“可合流条件”全部满足并取得仓库 owner 对当前 PR head 的明确批准后执行 Merge PR；任一状态失败、缺失或无法验证时必须 fail-closed，禁止合流。
 
 ## Harness 作用域与优先级
 
@@ -44,7 +44,7 @@
 - 要改基础设施/服务 → Layer README（[bootstrap](bootstrap/README.md), [platform](platform/README.md), [tools](tools/README.md)）→ [SSOT](docs/ssot/README.md)
 - 要找规范/权威定义 → [SSOT](docs/ssot/README.md)
 - 要找当前任务 → [Project](docs/project/README.md)
-- 要改监控/告警目标 → 派生自服务注册表（`libs/deploy/deployer.py::discover_services` + 各 `deploy.py` 的 `prod_only`），**禁止**手维护与 IaC 平行的服务清单。
+- 要改监控/告警目标 → 派生自服务注册表（`libs/service_registry.py` + 各 `deploy.py` 的 `prod_only`），**禁止**手维护与 IaC 平行的服务清单。
   一致性校验见 [`tools/watchdog_consistency_audit.py`](tools/watchdog_consistency_audit.py)；信号真源 [`docs/ssot/watchdog-signals.yaml`](docs/ssot/watchdog-signals.yaml)。
 
 **互引原则**
@@ -172,11 +172,22 @@
 - **检查 wiki 完备程度**：包括 SSOT、Project、README 等。
 - **推送前检查**：确保没有冲突。已有的 Code Review评论都已经处理（resolved）。
 
+### 可合流条件（AI Merge，全部必需）
+
+- **批准绑定当前 head**：PR 非 Draft；仓库 owner 已明确批准当前 `head SHA`。head 变化后旧批准失效，必须重新确认。
+- **合流真源唯一**：目标分支正确，PR `mergeable`，无冲突；检查与合流必须针对同一个 `head SHA`，禁止用本地旧结果或旧 review 代替。
+- **Merge Authority 全绿**：[`docs/ssot/ci-gate-inventory.yaml`](docs/ssot/ci-gate-inventory.yaml) 中该变更适用且 `blocks_merge: true` 的检查全部成功；pending、failure、cancelled、意外 skipped 或无法读取均视为不满足。
+- **Review 已闭环**：required review 已满足，所有 actionable conversation / review threads 已处理并 resolved；不得自行忽略、dismiss 或用过期 review 代替当前 head 审查。
+- **变更契约完整**：PR description checklist 完整；代码、测试、SSOT、Project、Layer README / Onboarding 按影响同步；无未解释的 scope drift。
+- **安全与运维门禁**：无敏感文件；已说明风险、回滚与 0 宕机影响；涉及 state discrepancy、密钥或生产数据时已按对应 SSOT 执行并留证。
+- **高风险例外显式放行**：若 merge 本身会触发 apply / deploy（包括 L1 bootstrap self-update、尚未解耦的 observability apply）或有不可逆副作用，必须先完成变更专属 proof，并取得 owner 对该副作用的再次明确批准。
+- **合流后闭环**：使用仓库允许的合流方式；确认 merge commit 已落在目标分支并监看 post-merge checks。失败时立即停止 tag / promote，报告并修复，不得继续发布。
+
 ### 线上测试
 
-- **测试分支**：你可以先推送分支，然后新建一个 staging 环境，然后使用你的分支做测试。
-- **测试过程**：请你假设你自己就是用户，会从 web / cli / ssh 等方式来确保你的变更符合预期。
-- **保持稳定**：代码提交后，必须保证staging环境符合预期了，我们才去合并 PR。
+- **Merge 与部署解耦**：普通开发 PR 以 `github_ci.merge_authority` 为合流门禁；preview / staging proof 不得冒充 Merge Authority，也不默认阻塞普通 PR。以 [`docs/ssot/ops.pipeline.md`](docs/ssot/ops.pipeline.md) 和 [`docs/ssot/delivery-stages.yaml`](docs/ssot/delivery-stages.yaml) 为准。
+- **测试过程**：需要 runtime proof 时，请假设自己就是用户，从 web / cli / ssh 等真实入口验证，并保存证据。
+- **发布与晋升**：release tag 必须来自 reviewed main；平台 tag 自动晋升 staging。staging 使用同一不可变 tag 验证并完成 soak 后，才可显式 promote prod，禁止跳过 staging。
 
 ### 运营准则
 

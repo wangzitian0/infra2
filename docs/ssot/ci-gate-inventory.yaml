@@ -44,8 +44,12 @@ gates:
     task_category: vault_policy
     workflow: .github/workflows/infra-ci.yml
     job: validate-vault-policy
-    blocks_merge: true
-    failure_semantics: vault-policy.hcl syntax is invalid.
+    # The job itself is `continue-on-error: true` (GHA container issues with vault
+    # policy fmt, infra-ci.yml:303) so it can never fail the run — it cannot
+    # structurally block merge. blocks_merge: false makes the declaration match
+    # that reality instead of claiming a gate that can't actually gate (#504).
+    blocks_merge: false
+    failure_semantics: vault-policy.hcl syntax is invalid (advisory only; does not block merge).
   - id: infra_ci.deployer_classes
     stage: github_ci.merge_authority
     task_category: deployer_contract
