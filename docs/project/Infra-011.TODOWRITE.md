@@ -26,6 +26,7 @@
 | Infra-011.17 | Off-host backup durability is rehearsed by restoring the latest verified artifact into an explicitly throwaway target and checking database invariants; live-looking production containers are refused by default. | `libs/tests/test_backup_verification.py`, `tools/backup_restore_rehearsal.py`, `docs/ssot/ops.recovery.md` |
 | Infra-011.18 | AI merge authority is fail-closed and bound to the current PR head, merge-authority CI, resolved review, complete change contracts, safety proof, and owner approval; ordinary merge remains decoupled from staging, while merge-triggered apply paths require explicit high-risk approval. | `AGENTS.md`, `docs/ssot/ops.pipeline.md`, `docs/ssot/delivery-stages.yaml`, `docs/ssot/ci-gate-inventory.yaml` |
 | Infra-011.19 | IaC deployment operations bind environment, exact ref, and normalized service set to one opaque ID; release fidelity uses exact deploy ref plus a secret-independent source fingerprint, while runtime fingerprint remains the idempotence gate. | `libs/tests/test_iac_runner_client.py`, `libs/tests/test_iac_runner_deploy_result.py`, `libs/tests/test_deployer.py`, `libs/tests/test_dokploy_config_drift.py`, `docs/ssot/ops.pipeline.md` |
+| Infra-011.20 | Every infra2 workflow uses the supported Node.js 24 major for governed official JavaScript Actions, and a repository-wide contract test rejects future stale-major additions or regressions. | `libs/tests/test_workflow_reference_contract.py`, `.github/workflows/reconcile-iac-inputs.yml`, `docs/ssot/ops.pipeline.md` |
 
 ## Issue Mapping
 
@@ -63,6 +64,7 @@
 - [x] Fail generic deployer syncs when Dokploy accepts a request but does not create a new runtime deployment record.
 - [x] Add Cloudflare Workers watchdog for production/staging public routes and probe-runner heartbeat.
 - [x] Add signal ownership inventory and watchdog consistency audit.
+- [x] Upgrade the release reconcile workflow to Node.js 24 Actions and enforce repository-wide minimum majors.
 - [x] Run full lint/test suite.
 - [x] Open PR.
 
@@ -111,3 +113,9 @@
 - Config drift now proves source fingerprint provenance against its stored deploy ref, compares the fingerprint with the latest release, and is strict on real drift/detector/structural failures. Pre-migration deployments are reported as `legacy_identity` without false drift.
 - Proof: `uv run python -m pytest -q libs/tests` (`916 passed`); focused regression (`106 passed`); Ruff, compileall, workflow YAML parsing, and `git diff --check` passed.
 - Rollout remains pending: after merge/release, each selected service backfills `IAC_SOURCE_CONFIG_HASH`/`IAC_DEPLOY_REF` on its next normal reconcile; legacy rows remain explicit and non-blocking, so no mass restart is required. The scheduled clean-checkout `--self-check` is the release proof. Local self-check is intentionally invalid while hash-input files differ from `HEAD`.
+
+## 2026-07-17 GitHub Actions Node.js 24 Baseline
+
+- Upgraded the release reconcile workflow from `checkout@v4`, `setup-python@v5`, and `upload-artifact@v4` to the repository's Node.js 24 majors (`v7`, `v6`, `v7`).
+- Added a repository-wide workflow contract test so newly introduced workflows cannot bypass the minimum major baseline.
+- Proof: full `libs/tests` (`953 passed`), focused workflow/reconcile contracts (`22 passed`), Ruff, workflow YAML parsing, SSOT/document governance, and `git diff --check` passed.
