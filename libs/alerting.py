@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import json
 import os
 from collections.abc import Mapping
@@ -40,10 +39,6 @@ class FeishuDeliveryError(AlertingError):
 class BasicAuth:
     username: str
     password: str
-
-    def header_value(self) -> str:
-        raw = f"{self.username}:{self.password}".encode("utf-8")
-        return "Basic " + base64.b64encode(raw).decode("ascii")
 
 
 def validate_feishu_webhook_url(url: str) -> str:

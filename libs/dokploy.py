@@ -125,10 +125,6 @@ class DokployClient:
             "POST", "project.create", json={"name": name, "description": description}
         )
 
-    def get_project(self, project_id: str) -> dict:
-        """Get project by ID"""
-        return self._request("GET", f"project.one?projectId={project_id}")
-
     def list_environments(self, project_name: str) -> list[dict]:
         """List environments for a project by name."""
         projects = self.list_projects()
@@ -314,20 +310,6 @@ class DokployClient:
                         return self.get_compose(compose_id)
         return None
 
-    def get_default_environment_id(self, project_name: str) -> str | None:
-        """Get the default environment ID for a project"""
-        projects = self.list_projects()
-        for project in projects:
-            if project["name"] == project_name:
-                for env in project.get("environments", []):
-                    if env.get("isDefault"):
-                        return env["environmentId"]
-                # If no default, return first
-                environments = project.get("environments", [])
-                if environments:
-                    return environments[0]["environmentId"]
-        return None
-
     def get_environment_id(
         self, project_name: str, env_name: str | None = None, require: bool = False
     ) -> str | None:
@@ -444,20 +426,6 @@ class DokployClient:
         if service_name:
             payload["serviceName"] = service_name
         return self._request("POST", "domain.create", json=payload)
-
-    def list_domains(self, compose_id: str) -> list[dict]:
-        """List all domains for a compose service"""
-        return self._request("GET", f"domain.all?composeId={compose_id}")
-
-    def delete_domain(self, domain_id: str) -> dict:
-        """Delete a domain"""
-        # Try DELETE first, then POST if it fails
-        try:
-            return self._request("DELETE", f"domain.delete?domainId={domain_id}")
-        except Exception:
-            pass
-        # Fallback to POST
-        return self._request("POST", "domain.delete", json={"domainId": domain_id})
 
     def ensure_domains(
         self,
