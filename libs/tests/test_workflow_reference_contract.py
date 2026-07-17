@@ -8,6 +8,22 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_REFERENCE_RE = re.compile(
     r"(?<![\w-])(?:\.\./)*(?:\./)?\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml"
 )
+OFFICIAL_ACTION_USE_RE = re.compile(
+    r"^[ \t]*uses:[ \t]*(actions/[A-Za-z0-9_.-]+)@([^\s#]+)"
+    r"(?:[ \t]*#.*)?$",
+    re.MULTILINE,
+)
+ACTION_VERSION_RE = re.compile(r"v(\d+)(?:\.\d+\.\d+)?")
+# These majors use the supported Node.js 24 action runtime. Raising a baseline is
+# deliberate; every workflow is scanned so newly added files cannot bypass it.
+MINIMUM_OFFICIAL_ACTION_MAJORS = {
+    "actions/checkout": 7,
+    "actions/deploy-pages": 5,
+    "actions/setup-go": 6,
+    "actions/setup-python": 6,
+    "actions/upload-artifact": 7,
+    "actions/upload-pages-artifact": 5,
+}
 SCANNED_SUFFIXES = {
     ".md",
     ".py",
@@ -39,6 +55,29 @@ def _normalize_workflow_reference(reference: str) -> str:
     return reference[reference.index(".github/workflows/") :]
 
 
+def _official_action_violations(path: Path, content: str) -> list[str]:
+    violations: list[str] = []
+    for match in OFFICIAL_ACTION_USE_RE.finditer(content):
+        action, ref = match.groups()
+        line_no = content.count("\n", 0, match.start()) + 1
+        minimum = MINIMUM_OFFICIAL_ACTION_MAJORS.get(action)
+        if minimum is None:
+            violations.append(
+                f"{path}:{line_no}: {action}@{ref} has no governed minimum"
+            )
+            continue
+
+        version = ACTION_VERSION_RE.fullmatch(ref)
+        if version is None:
+            violations.append(
+                f"{path}:{line_no}: {action}@{ref} must use a governed version"
+            )
+            continue
+        if int(version.group(1)) < minimum:
+            violations.append(f"{path}:{line_no}: {action}@{ref} requires v{minimum}+")
+    return violations
+
+
 def test_workflow_reference_matcher_accepts_relative_markdown_targets() -> None:
     content = (
         "[deploy](../../.github/workflows/deploy.yml)\n"
@@ -60,6 +99,37 @@ def test_workspace_submodules_are_outside_infra_workflow_discovery() -> None:
     workspace_readme = ROOT / "repos" / "README.md"
     assert workspace_readme.is_file()
     assert not _is_scanned(workspace_readme)
+
+
+def test_official_action_guard_rejects_stale_unversioned_and_unknown_actions() -> None:
+    content = "\n".join(
+        [
+            "    uses: actions/checkout@v4",
+            "    uses: actions/setup-python@main",
+            "    uses: actions/unknown@v1",
+        ]
+    )
+
+    assert _official_action_violations(Path("fixture.yml"), content) == [
+        "fixture.yml:1: actions/checkout@v4 requires v7+",
+        "fixture.yml:2: actions/setup-python@main must use a governed version",
+        "fixture.yml:3: actions/unknown@v1 has no governed minimum",
+    ]
+
+
+def test_workflows_use_governed_supported_official_action_majors() -> None:
+    violations: list[str] = []
+    workflows = sorted((ROOT / ".github" / "workflows").glob("*.y*ml"))
+
+    for workflow in workflows:
+        content = workflow.read_text(encoding="utf-8")
+        violations.extend(
+            _official_action_violations(workflow.relative_to(ROOT), content)
+        )
+
+    assert violations == [], "Ungoverned/unsupported GitHub Actions:\n" + "\n".join(
+        violations
+    )
 
 
 def test_workflow_references_point_to_live_workflow_files() -> None:

@@ -75,6 +75,14 @@
 > off-main / 未合并 tag 直接拒绝(见 §6)。这把「打 tag」与「能动 prod」绑定到 reviewed main——
 > 在 feature 分支打 tag 不再等于动 prod(解耦的第一步)。
 
+### 2.1 GitHub Actions runtime 基线
+
+官方 JavaScript Actions 必须登记并使用受支持的 Node.js 24 runtime major；当前发布链关键基线为
+`actions/checkout@v7`、`actions/setup-python@v6`、`actions/upload-artifact@v7`。所有 `actions/*` 基线只在
+`libs/tests/test_workflow_reference_contract.py::MINIMUM_OFFICIAL_ACTION_MAJORS` 维护，测试扫描全部
+`.github/workflows/*.yml|yaml`；未登记 Action、新 workflow 使用旧 major 或版本回退都必须在 CI
+fail-closed。升级基线前需审阅对应官方 major release notes，再修改这一处映射并让全仓统一收敛。
+
 ---
 
 ## 3. 发布机制 (Release model) — infra2 是独立产物
