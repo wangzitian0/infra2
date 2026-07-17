@@ -39,7 +39,11 @@ def test_deploy_canary_installs_the_declared_sdk_requirement() -> None:
     )
     for event in ("push", "pull_request"):
         paths = workflow["on"][event]["paths"]
-        assert {"pyproject.toml", "uv.lock", "repos/infra2-sdk"} <= set(paths)
+        # The installed SDK is the wheel pinned in pyproject.toml/uv.lock — moving
+        # the repos/infra2-sdk submodule pointer never changes it, so that path was
+        # a no-op trigger and was removed (#506).
+        assert {"pyproject.toml", "uv.lock"} <= set(paths)
+        assert "repos/infra2-sdk" not in paths
 
 
 def test_retired_compatibility_modules_stay_removed() -> None:

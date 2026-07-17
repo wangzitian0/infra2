@@ -82,7 +82,9 @@ def _error(findings: list[Finding], code: str, message: str) -> None:
     findings.append(Finding("error", code, message))
 
 
-def validate_manifest(root: Path, manifest: dict[str, Any]) -> CheckResult:
+def validate_manifest(
+    root: Path, manifest: dict[str, Any], *, submodules_expected: bool = True
+) -> CheckResult:
     findings: list[Finding] = []
     if manifest.get("schema_version") != SCHEMA_VERSION:
         _error(
@@ -214,6 +216,21 @@ def validate_manifest(root: Path, manifest: dict[str, Any]) -> CheckResult:
             )
             authority = []
 
+        # optional: true is an explicit declaration that this repository may be
+        # legitimately uninitialized (e.g. workspace tooling not everyone needs day
+        # one). Absent/false is the default — an uninitialized checkout is then a
+        # real gap, not silently downgraded to a warning nobody reads (#506).
+        # submodules_expected=False (CI: no workflow runs `submodules: true`, by
+        # design, to keep the big app submodules out of infra CI's fetch) means NO
+        # submodule is ever checked out here — that's structural, not drift, so it
+        # can't be escalated to an error regardless of `optional`.
+        is_optional = bool(repository.get("optional", False))
+        uninitialized_level = (
+            "warning"
+            if is_optional or (repository["checkout"] == "submodule" and not submodules_expected)
+            else "error"
+        )
+
         checkout_path = _inside(root, relative)
         if checkout_path is None:
             _error(
@@ -223,7 +240,7 @@ def validate_manifest(root: Path, manifest: dict[str, Any]) -> CheckResult:
         if not checkout_path.is_dir():
             findings.append(
                 Finding(
-                    "warning",
+                    uninitialized_level,
                     "checkout-missing",
                     f"{repository_id} checkout is not initialized: {relative}",
                 )
@@ -235,7 +252,7 @@ def validate_manifest(root: Path, manifest: dict[str, Any]) -> CheckResult:
         ):
             findings.append(
                 Finding(
-                    "warning",
+                    uninitialized_level,
                     "checkout-uninitialized",
                     f"{repository_id} submodule is not initialized: {relative}",
                 )
@@ -285,10 +302,12 @@ def validate_manifest(root: Path, manifest: dict[str, Any]) -> CheckResult:
     return CheckResult(len(repositories), tuple(findings))
 
 
-def check_workspace(root: Path, manifest_path: Path | None = None) -> CheckResult:
+def check_workspace(
+    root: Path, manifest_path: Path | None = None, *, submodules_expected: bool = True
+) -> CheckResult:
     path = manifest_path or root / "harness" / "repos.yaml"
     try:
         manifest = load_manifest(path)
     except HarnessManifestError as exc:
         return CheckResult(0, (Finding("error", "manifest-read", str(exc)),))
-    return validate_manifest(root, manifest)
+    return validate_manifest(root, manifest, submodules_expected=submodules_expected)

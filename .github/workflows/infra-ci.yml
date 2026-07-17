@@ -80,6 +80,29 @@ jobs:
       - name: Lint platform image pins (no bare :latest)
         run: python3 tools/lint_platform_image_pins.py
 
+  harness-check:
+    name: Validate Workspace Harness
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install pyyaml
+        run: pip install pyyaml
+
+      # Read-only: validates harness/repos.yaml against the actual checked-out
+      # repositories (roles, governance, authority files). --no-submodules-expected
+      # because this workflow never runs `submodules: true` (deliberately, to keep
+      # the big app submodules out of infra CI's fetch) — every submodule checkout
+      # is expected-absent here, not a real gap (#506).
+      - name: Run harness check
+        run: python3 -m tools.harness check --no-submodules-expected
+
   test-deployer-logic:
     name: Test Deployer Hash Logic
     runs-on: ubuntu-latest

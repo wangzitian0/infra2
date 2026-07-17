@@ -64,3 +64,10 @@ gates:
     job: lint-python
     blocks_merge: true
     failure_semantics: Python lint (ruff) fails.
+  - id: infra_ci.harness_check
+    stage: github_ci.merge_authority
+    task_category: workspace_harness
+    workflow: .github/workflows/infra-ci.yml
+    job: harness-check
+    blocks_merge: true
+    failure_semantics: harness/repos.yaml is internally inconsistent (schema, governance/role mismatch, missing authority file, or an unexpected non-optional uninitialized checkout).

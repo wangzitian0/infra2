@@ -26,7 +26,6 @@ name: Ops Checks
       - "libs/dokploy.py"
       - "pyproject.toml"
       - "uv.lock"
-      - "repos/infra2-sdk"
       - "finance_report/finance_report/preview/**"
       - ".github/workflows/ops-checks.yml"
       - "docs/ssot/ops.alerting.md"
@@ -43,7 +42,6 @@ name: Ops Checks
       - "libs/dokploy.py"
       - "pyproject.toml"
       - "uv.lock"
-      - "repos/infra2-sdk"
       - "finance_report/finance_report/preview/**"
       - ".github/workflows/ops-checks.yml"
   schedule:
