@@ -15,7 +15,7 @@ each environment pointed at its own OpenPanel analytics project, all queryable v
 the already-shipped CLIs.
 
 ## Context
-SigNoz (Infra-007) and OpenPanel (Infra-012) are deployed, but finance_report was not
+SigNoz (Infra-007) and OpenPanel (Infra-021) are deployed, but finance_report was not
 yet wired to them per environment. Two gaps had to close as config-as-code:
 
 1. **Backend telemetry** had empty `OTEL_*` defaults, so spans never reached SigNoz
@@ -99,5 +99,5 @@ Architecture is fixed and intentionally minimal:
 - [SSOT: platform.openpanel](../ssot/platform.openpanel.md)
 - [SSOT: platform.domain](../ssot/platform.domain.md)
 - [SSOT: core.environments](../ssot/core.environments.md)
-- [Infra-007 SigNoz](Infra-007.signoz_install.md) · [Infra-012 OpenPanel](Infra-012.openpanel_install.md)
+- [Infra-007 SigNoz](Infra-007.signoz_install.md) · [Infra-021 OpenPanel](Infra-021.openpanel_install.md)
 - App module: [finance_report/.../10.app/README.md](../../finance_report/finance_report/10.app/README.md)

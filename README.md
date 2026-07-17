@@ -57,6 +57,9 @@ infra2/
 ├── finance_report/   # L3 - 应用层 (Finance Report)
 ├── truealpha/        # L3 - 应用层 (TrueAlpha IaC)
 ├── repos/            # 统一开发 workspace (git submodules)
+├── cloudflare/       # Cloudflare Worker (infra-watchdog)
+├── scripts/          # 一次性/引导 shell 脚本
+├── playground/       # 探索性验证脚本 (非生产)
 ├── e2e_regressions/  # E2E 测试
 ├── libs/             # infra 内部库 (env, deployer, console)
 ├── tools/            # CLI 工具 (env, local)

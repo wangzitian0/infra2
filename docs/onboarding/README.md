@@ -25,7 +25,7 @@
 3. **[使用数据库](./03.database.md)** - PostgreSQL/Redis 接入
 4. **[管理密钥](./04.secrets.md)** - Vault 获取与管理
 5. **[接入 SSO](./05.sso.md)** - Authentik OIDC
-6. **[监控和分析](./06.observability.md)** - 规划中
+6. **[监控和分析](./06.observability.md)** - SigNoz/OTel 接入与告警
 7. **[新增服务 SOP](./07.new-service-sop.md)** - 新服务上线检查清单
 
 ---
@@ -76,4 +76,4 @@
 - **SSOT 模板**：[docs/ssot/template.md](../ssot/template.md)
 
 ---
-*Last updated: 2025-12-30*
+*Last updated: 2026-07-18*
