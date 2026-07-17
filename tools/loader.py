@@ -165,7 +165,7 @@ def load_all():
     root = Path(__file__).parent.parent
 
     # Load projects
-    for project in ["bootstrap", "platform", "finance"]:
+    for project in ["bootstrap", "platform"]:
         _load_project(ns, root, project)
 
     # Load app layers (nested structure: <app>/<app>/)
