@@ -52,14 +52,9 @@ EXACT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 def discover_services() -> dict[str, str]:
     """Discover deployable services based on deploy.py files."""
-    root = Path(__file__).resolve().parents[2]
-    service_map: dict[str, str] = {}
+    from libs.service_registry import _LAYERS as layers
 
-    layers = {
-        "platform": root / "platform",
-        "finance_report": root / "finance_report" / "finance_report",
-        "truealpha": root / "truealpha" / "truealpha",
-    }
+    service_map: dict[str, str] = {}
 
     for layer, layer_path in layers.items():
         if not layer_path.exists():

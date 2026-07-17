@@ -10,9 +10,9 @@ This module reads the Deployer attributes ONCE (via AST, no import side effects)
 and exposes `get_*`-style accessors so every downstream config can be DERIVED
 from, or audited against, the registry instead of hand-maintained.
 
-Scope of the scan mirrors `libs.deploy.deployer.discover_services` (the `platform` and
-`finance_report` layers) so `all_services()` is an exact superset-free match of
-the deploy fan-out list.
+`_LAYERS` below is the single source of truth for the layer name -> path mapping.
+`libs.deploy.deployer.discover_services` imports it directly (no second copy) so
+`all_services()` is an exact superset-free match of the deploy fan-out list.
 """
 
 from __future__ import annotations
@@ -23,7 +23,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# (layer name, layer path) — mirrors libs.deploy.deployer.discover_services.
+# (layer name, layer path) — the single source of truth; libs.deploy.deployer
+# and tools/loader.py both derive from this instead of hand-copying it.
 _LAYERS: dict[str, Path] = {
     "platform": REPO_ROOT / "platform",
     "finance_report": REPO_ROOT / "finance_report" / "finance_report",
