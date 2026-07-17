@@ -134,6 +134,155 @@ def test_fetch_recent_runs_filters_ops_checks_to_watchdog_jobs_and_paginates(mon
     assert requested_job_runs == ["1", "2", "3"]
 
 
+def test_fetch_stale_open_issues_filters_prs_and_recent_and_paginates(monkeypatch) -> None:
+    """#508: only open issues (not PRs) older than the threshold are returned."""
+    digest = _load_module()
+    now = datetime(2026, 7, 17, 0, 0, tzinfo=UTC)
+    issue_pages = {
+        "1": [
+            # stale, oldest first (API called with sort=updated&direction=asc)
+            {
+                "number": 438,
+                "title": "Weekly ops review",
+                "html_url": "https://github.com/wangzitian0/infra2/issues/438",
+                "updated_at": "2026-06-25T00:00:00Z",
+            },
+            {
+                # a PR — the issues API returns these too; must be excluded
+                "number": 500,
+                "title": "Not actually an issue",
+                "html_url": "https://github.com/wangzitian0/infra2/pull/500",
+                "updated_at": "2026-06-26T00:00:00Z",
+                "pull_request": {"url": "https://api.github.com/..."},
+            },
+        ],
+        "2": [
+            {
+                "number": 402,
+                "title": "Unify Cloudflare ledger + GitHub watchdog recall reporting",
+                "html_url": "https://github.com/wangzitian0/infra2/issues/402",
+                "updated_at": "2026-06-19T00:00:00Z",
+            },
+            {
+                # fresh — reached the cutoff, must stop paginating after this page
+                "number": 999,
+                "title": "Fresh issue",
+                "html_url": "https://github.com/wangzitian0/infra2/issues/999",
+                "updated_at": "2026-07-16T00:00:00Z",
+            },
+        ],
+        "3": [
+            {
+                "number": 1,
+                "title": "Should never be fetched",
+                "html_url": "https://github.com/wangzitian0/infra2/issues/1",
+                "updated_at": "2026-01-01T00:00:00Z",
+            },
+        ],
+    }
+    requested_pages: list[str] = []
+
+    class _Response:
+        def __init__(self, payload) -> None:
+            self._payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps(self._payload).encode("utf-8")
+
+    def fake_urlopen(request, timeout):  # noqa: ANN001, ARG001
+        parsed = urlparse(request.full_url)
+        query = parse_qs(parsed.query)
+        assert query.get("state") == ["open"]
+        assert query.get("sort") == ["updated"]
+        assert query.get("direction") == ["asc"]
+        page = query.get("page", ["1"])[0]
+        requested_pages.append(page)
+        return _Response(issue_pages.get(page, []))
+
+    monkeypatch.setattr(digest, "urlopen", fake_urlopen)
+
+    stale = digest.fetch_stale_open_issues(
+        "wangzitian0/infra2", "token", stale_days=14, per_page=2, now=now
+    )
+
+    assert [issue["number"] for issue in stale] == [438, 402]
+    assert requested_pages == ["1", "2"]  # page 3 never fetched — stopped at the fresh issue
+
+
+def test_summarize_stale_issues_shape() -> None:
+    digest = _load_module()
+    result = digest.summarize_stale_issues(
+        [
+            {
+                "number": 438,
+                "title": "  Weekly   ops review  ",
+                "html_url": "https://github.com/wangzitian0/infra2/issues/438",
+                "updated_at": "2026-06-25T00:00:00Z",
+            }
+        ]
+    )
+    assert result == [
+        {
+            "number": 438,
+            "title": "Weekly ops review",
+            "url": "https://github.com/wangzitian0/infra2/issues/438",
+            "updated_at": "2026-06-25T00:00:00Z",
+        }
+    ]
+
+
+def test_build_digest_message_includes_stale_issues_section() -> None:
+    digest = _load_module()
+    message = digest.build_digest_message(
+        {
+            "week_start_utc": "2026-07-10",
+            "week_end_utc": "2026-07-17",
+            "total_runs": 1,
+            "success_count": 1,
+            "failure_count": 0,
+            "cancelled_count": 0,
+            "other_count": 0,
+            "success_rate_pct": 100.0,
+            "stale_issues": [
+                {
+                    "number": 438,
+                    "title": "Weekly ops review",
+                    "url": "https://github.com/wangzitian0/infra2/issues/438",
+                    "updated_at": "2026-06-25T00:00:00Z",
+                }
+            ],
+        },
+        repository="wangzitian0/infra2",
+    )
+    assert f"Stale open issues ({digest.STALE_ISSUE_DAYS}+ days untouched):" in message
+    assert "#438 Weekly ops review (https://github.com/wangzitian0/infra2/issues/438)" in message
+
+
+def test_build_digest_message_omits_stale_issues_section_when_empty() -> None:
+    digest = _load_module()
+    message = digest.build_digest_message(
+        {
+            "week_start_utc": "2026-07-10",
+            "week_end_utc": "2026-07-17",
+            "total_runs": 1,
+            "success_count": 1,
+            "failure_count": 0,
+            "cancelled_count": 0,
+            "other_count": 0,
+            "success_rate_pct": 100.0,
+            "stale_issues": [],
+        },
+        repository="wangzitian0/infra2",
+    )
+    assert "Stale open issues" not in message
+
+
 def test_build_digest_message_contains_runbook_and_counts() -> None:
     """Infra-012.8: digest message must include counts and actionable runbook."""
     digest = _load_module()
