@@ -23,6 +23,12 @@ WORKFLOW_FILE = "ops-checks.yml"
 WATCHDOG_JOB_NAME = "Check infra2 host and alert bridge"
 DEFAULT_REPOSITORY = "wangzitian0/infra2"
 DIGEST_WINDOW_DAYS = 7
+# #508: a PR can materially advance an open issue's scope without ever referencing it
+# (the merge contract now asks for a reference, but nothing enforced it retroactively —
+# #425/#475/#402 all lagged the repo by 1-3 weeks before this existed). 14 days with no
+# update is long enough that either the issue is genuinely stalled or work landed
+# without being linked back — both are worth a human glance, not silent drift.
+STALE_ISSUE_DAYS = 14
 
 
 def fetch_recent_runs(
@@ -376,6 +382,71 @@ def _as_int(value: object) -> int:
         return 0
 
 
+def fetch_stale_open_issues(
+    repository: str,
+    token: str,
+    *,
+    stale_days: int = STALE_ISSUE_DAYS,
+    per_page: int = 100,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Open issues (not PRs) untouched for `stale_days`+, oldest-updated first.
+
+    A merged PR that advances an issue's scope is expected to reference it (#508);
+    this is the backstop for the case where one didn't — surfaced here rather than
+    silently trusted.
+    """
+    owner, repo = repository.split("/", 1)
+    current = now or datetime.now(UTC)
+    cutoff = current - timedelta(days=stale_days)
+    stale: list[dict[str, Any]] = []
+    page = 1
+
+    while True:
+        request = Request(
+            (
+                f"https://api.github.com/repos/{owner}/{repo}/issues"
+                f"?state=open&sort=updated&direction=asc&per_page={per_page}&page={page}"
+            ),
+            headers=_github_headers(token),
+            method="GET",
+        )
+        with urlopen(request, timeout=15) as response:  # noqa: S310
+            page_issues = json.loads(response.read().decode("utf-8"))
+        if not isinstance(page_issues, list) or not page_issues:
+            break
+
+        reached_fresh = False
+        for issue in page_issues:
+            if not isinstance(issue, dict) or "pull_request" in issue:
+                continue  # the issues API also returns PRs; not what this reports on
+            updated = _parse_iso8601(issue["updated_at"]) if issue.get("updated_at") else None
+            if updated is None:
+                continue
+            if updated >= cutoff:
+                reached_fresh = True  # ascending order: everything after is fresher
+                continue
+            stale.append(issue)
+
+        if reached_fresh or len(page_issues) < per_page:
+            break
+        page += 1
+
+    return stale
+
+
+def summarize_stale_issues(issues: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "number": issue.get("number"),
+            "title": _one_line(str(issue.get("title") or "")),
+            "url": issue.get("html_url"),
+            "updated_at": issue.get("updated_at"),
+        }
+        for issue in issues
+    ]
+
+
 def build_digest_message(summary: Mapping[str, Any], repository: str) -> str:
     """Build a compact weekly digest message."""
     lines = [
@@ -421,6 +492,13 @@ def build_digest_message(summary: Mapping[str, Any], repository: str) -> str:
             lines.append(f"Failure domains: {domain_text}")
         if audit.get("log_fetch_error_count"):
             lines.append(f"Log fetch errors: {audit['log_fetch_error_count']}")
+    stale_issues = summary.get("stale_issues")
+    if isinstance(stale_issues, list) and stale_issues:
+        lines.append(f"Stale open issues ({STALE_ISSUE_DAYS}+ days untouched):")
+        for issue in stale_issues[:10]:
+            lines.append(f"- #{issue['number']} {issue['title']} ({issue['url']})")
+        if len(stale_issues) > 10:
+            lines.append(f"  ...and {len(stale_issues) - 10} more")
     lines.append(
         "Runbook: https://github.com/wangzitian0/infra2/blob/main/platform/12.alerting/README.md#out-of-band-watchdog"
     )
@@ -456,6 +534,14 @@ def main(env: Mapping[str, str] | None = None) -> int:
             max_logs=max_logs,
         )
         summary["log_audit"] = summarize_watchdog_log_events(logs)
+    if current_env.get("WATCHDOG_DIGEST_STALE_ISSUES", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+    }:
+        stale_days = _as_int(current_env.get("WATCHDOG_DIGEST_STALE_ISSUE_DAYS")) or STALE_ISSUE_DAYS
+        stale = fetch_stale_open_issues(repository, token, stale_days=stale_days, now=now)
+        summary["stale_issues"] = summarize_stale_issues(stale)
     message = build_digest_message(summary, repository)
     if current_env.get("WATCHDOG_DIGEST_DRY_RUN") == "1":
         print(message)
