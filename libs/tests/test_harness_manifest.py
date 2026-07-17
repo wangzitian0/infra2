@@ -61,7 +61,12 @@ def _workspace(tmp_path: Path) -> dict:
 
 def test_committed_inventory_is_valid_and_apps_are_autonomous() -> None:
     manifest = load_manifest(ROOT / "harness" / "repos.yaml")
-    result = validate_manifest(ROOT, manifest)
+    # submodules_expected=False: this test must be portable across a machine with
+    # submodules initialized (a developer's checkout) and one without (CI, and any
+    # fresh non-recursive clone) — same call the harness-check CI job makes. The
+    # declarative correctness of harness/repos.yaml doesn't depend on which one
+    # happens to be running the test (#506).
+    result = validate_manifest(ROOT, manifest, submodules_expected=False)
 
     assert result.ok, result.to_dict()
     assert result.repository_count == 5
