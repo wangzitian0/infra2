@@ -7,16 +7,20 @@ from pathlib import Path
 import yaml
 
 from libs.vault_self_refresh_audit import (
+    OPTIONAL_INERT_FIELD_WATCHLIST,
     _remote_secret_file_state,
+    _remote_secret_file_text,
     _vault_addr_from_env,
     audit_from_observations,
     classify_container,
+    classify_optional_field_inertness,
     classify_rendered_env,
     classify_token,
     classify_vault_agent_logs,
     discover_vault_agent_compose_paths,
     inventory_compose_paths,
     load_inventory,
+    optional_inert_fields_for,
     redact,
     write_report,
 )
@@ -380,3 +384,159 @@ def test_remote_secret_file_state_parses_stat_json(monkeypatch) -> None:
     }
     assert captured["host"] == "vps.example"
     assert "docker exec platform-postgres-vault-agent sh -lc" in captured["command"]
+
+
+def test_remote_secret_file_text_returns_raw_cat_output(monkeypatch) -> None:
+    """#526: the raw-content fetch used for optional-field inertness checks
+    just `cat`s the rendered file and returns stdout verbatim."""
+    captured = {}
+
+    def fake_ssh(host, command):
+        captured["host"] = host
+        captured["command"] = command
+
+        class Result:
+            returncode = 0
+            stdout = 'LLM_ENCRYPTION_KEYS=""\nOTHER_KEY="value"\n'
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr("libs.vault_self_refresh_audit._ssh", fake_ssh)
+
+    result = _remote_secret_file_text("vps.example", "finance_report-app-vault-agent")
+
+    assert result == 'LLM_ENCRYPTION_KEYS=""\nOTHER_KEY="value"\n'
+    assert captured["host"] == "vps.example"
+    assert "docker exec finance_report-app-vault-agent sh -lc" in captured["command"]
+    assert "cat /vault/secrets/.env" in captured["command"]
+
+
+def test_remote_secret_file_text_returns_empty_on_ssh_failure(monkeypatch) -> None:
+    def fake_ssh(host, command):
+        class Result:
+            returncode = 1
+            stdout = ""
+            stderr = "connection refused"
+
+        return Result()
+
+    monkeypatch.setattr("libs.vault_self_refresh_audit._ssh", fake_ssh)
+
+    assert _remote_secret_file_text("vps.example", "some-vault-agent") == ""
+
+
+def test_optional_inert_field_watchlist_covers_llm_encryption_keys() -> None:
+    """#526: LLM_ENCRYPTION_KEYS is the one field the issue identified as
+    optional-by-architecture and outside every other observability signal."""
+    assert ("finance_report/app", "LLM_ENCRYPTION_KEYS") in OPTIONAL_INERT_FIELD_WATCHLIST
+    assert optional_inert_fields_for("finance_report/app") == ("LLM_ENCRYPTION_KEYS",)
+    # No watchlist entries for services never flagged as having this gap.
+    assert optional_inert_fields_for("platform/postgres") == ()
+
+
+def test_optional_field_inertness_classifier_reports_empty_value_as_inert() -> None:
+    """#526: LLM_ENCRYPTION_KEYS="" (the secrets.ctmpl unset-render shape) is
+    reported informationally, never as a failure."""
+    service = _service()
+
+    result = classify_optional_field_inertness(
+        service, "LLM_ENCRYPTION_KEYS", 'LLM_ENCRYPTION_KEYS=""\n'
+    )
+
+    assert result.status == "info"
+    assert result.severity == "P3"
+    assert "inert" in result.summary
+    assert result.evidence == {"field": "LLM_ENCRYPTION_KEYS", "populated": False}
+
+
+def test_optional_field_inertness_classifier_reports_missing_field_as_inert() -> None:
+    """#526: a field absent entirely from the rendered file is also inert."""
+    service = _service()
+
+    result = classify_optional_field_inertness(
+        service, "LLM_ENCRYPTION_KEYS", "OTHER_KEY=value\n"
+    )
+
+    assert result.status == "info"
+    assert result.evidence["populated"] is False
+
+
+def test_optional_field_inertness_classifier_reports_populated_value_as_active() -> None:
+    """#526: once a real value is provisioned, the field reports as active --
+    still informational, not a pass/fail gate."""
+    service = _service()
+
+    result = classify_optional_field_inertness(
+        service,
+        "LLM_ENCRYPTION_KEYS",
+        'LLM_ENCRYPTION_KEYS="gAAAAA-fake-fernet-key-material"\n',
+    )
+
+    assert result.status == "info"
+    assert "active" in result.summary
+    assert result.evidence == {"field": "LLM_ENCRYPTION_KEYS", "populated": True}
+    # The actual key material must never leak into the report evidence.
+    assert "fake-fernet-key-material" not in str(result.evidence)
+
+
+def test_audit_from_observations_reports_inert_field_without_failing_audit() -> None:
+    """#526: an otherwise-healthy service with an inert optional field still
+    reports overall status "pass" -- the inertness signal never gates."""
+    service = _service()
+    report = audit_from_observations(
+        [service],
+        {
+            "services": {
+                service.id: {
+                    "dokploy_env": "VAULT_APP_TOKEN=hvs.validlookingtoken",
+                    "token_lookup": {
+                        "valid": True,
+                        "renewable": True,
+                        "ttl_hours": 240,
+                    },
+                    "rendered_env": {
+                        "exists": True,
+                        "readable": True,
+                        "size": 20,
+                        "mtime": 950,
+                    },
+                    "rendered_env_text": 'LLM_ENCRYPTION_KEYS=""\n',
+                    "vault_agent_logs": "template rendered successfully",
+                    "vault_agent_container": {
+                        "name": "finance_report-app-vault-agent",
+                        "exists": True,
+                        "state": "running",
+                        "health": "healthy",
+                        "restart_count": 0,
+                    },
+                    "app_containers": [
+                        {
+                            "name": "finance_report-backend",
+                            "exists": True,
+                            "state": "running",
+                            "health": "healthy",
+                            "restart_count": 0,
+                            "mounts": ["/secrets/.env"],
+                        }
+                    ],
+                }
+            }
+        },
+        env="production",
+        now=1000,
+    )
+
+    assert report["status"] == "pass"
+    inertness_results = [
+        result
+        for result in report["results"]
+        if result["check_id"] == "optional-field-inertness::LLM_ENCRYPTION_KEYS"
+    ]
+    assert len(inertness_results) == 1
+    assert inertness_results[0]["status"] == "info"
+    assert inertness_results[0]["evidence"]["populated"] is False
+    assert (
+        "INFO P3 finance_report/app::optional-field-inertness::LLM_ENCRYPTION_KEYS"
+        in write_report(report)
+    )
