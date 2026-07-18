@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -147,6 +148,30 @@ def classify_token(
     lookup: dict[str, Any] | None,
 ) -> CheckResult:
     env = parse_env(env_text)
+    if service.auth_method == "approle":
+        # AppRole services (#264/#531) authenticate with VAULT_ROLE_ID + VAULT_SECRET_ID,
+        # not a static VAULT_APP_TOKEN -- there is no token to shape-check, look up,
+        # confirm renewable, or TTL-gate, so those sub-checks are skipped entirely
+        # (mirrors libs/deploy/promote.py::preflight_vault_token's AppRole branch).
+        missing = [key for key in service.auth_env_keys if not env.get(key)]
+        if missing:
+            return _result(
+                service,
+                "dokploy-env-approle",
+                "fail",
+                "P0",
+                f"{', '.join(missing)} missing from Dokploy env",
+                {"env_keys": sorted(env.keys()), "missing": missing},
+            )
+        return _result(
+            service,
+            "dokploy-env-approle",
+            "pass",
+            "P0",
+            f"{', '.join(service.auth_env_keys)} present in Dokploy env "
+            "(AppRole auth; no static token to look up, renew, or TTL-check)",
+            {"env_keys": sorted(env.keys())},
+        )
     token = env.get(service.vault_token_env_key)
     if not token:
         return _result(
@@ -259,12 +284,23 @@ def classify_rendered_env(
     age = max(0, observed_now - mtime)
     evidence = {**file_state, "age_seconds": age}
     if age > service.max_rendered_secret_age_seconds:
+        # #531: vault-agent's static_secret_render_interval only rewrites this file
+        # when the underlying Vault secret's CONTENT changes, not on every poll -- a
+        # healthy, low-churn secret can legitimately go long stretches without a
+        # re-render. mtime age is therefore "when did the secret last change," not
+        # "is vault-agent alive" -- that's already covered by classify_container()'s
+        # Docker health status (itself backed by the compose's own `vault token
+        # lookup-self` healthcheck). Report informationally, never fail, matching the
+        # #526 classify_optional_field_inertness pattern -- this never gates the
+        # overall audit status (see audit_from_observations).
         return _result(
             service,
             "rendered-env-freshness",
-            "fail",
-            "P1",
-            f"{service.rendered_secret_path} is stale",
+            "info",
+            "P3",
+            f"{service.rendered_secret_path} has not been rewritten in {age}s "
+            "(secret content likely unchanged since; vault-agent health is tracked "
+            "separately by the container healthcheck)",
             evidence,
         )
     return _result(
@@ -502,16 +538,21 @@ def collect_live_observations(
             env_name=env,
         )
         env_text = compose.get("env", "") if compose else ""
-        token = parse_env(env_text).get(service.vault_token_env_key)
-        token_lookup = (
-            verify_vault_token(
-                token,
-                addr=vault_addr,
-                min_ttl_hours=service.min_token_ttl_hours,
+        # AppRole services (#264/#531) have no static token to look up -- mirrors the
+        # skip in classify_token / preflight_vault_token above.
+        if service.auth_method == "approle":
+            token_lookup = None
+        else:
+            token = parse_env(env_text).get(service.vault_token_env_key)
+            token_lookup = (
+                verify_vault_token(
+                    token,
+                    addr=vault_addr,
+                    min_ttl_hours=service.min_token_ttl_hours,
+                )
+                if token
+                else None
             )
-            if token
-            else None
-        )
         vault_agent_name = _resolve_env_suffix(service.vault_agent_container, env)
         app_names = [_resolve_env_suffix(name, env) for name in service.app_containers]
         inert_fields = optional_inert_fields_for(service.id)
@@ -603,22 +644,46 @@ def _vault_addr_from_env(env_vars: dict[str, str | None]) -> str | None:
 
 
 def _ssh(host: str, command: str) -> subprocess.CompletedProcess[str]:
+    """Run a read-only command over SSH against `host`.
+
+    Normally invoked from inside the VPS (the iac-runner container), where root's
+    default SSH identity/known_hosts already trust `host`, so no `-i`/`-p` flags are
+    needed. A GitHub Actions runner has neither (#531): when the same
+    INFRA2_WATCHDOG_SSH_KEY_PATH/_PORT/_USER env vars the route-canary/watchdog jobs
+    already provision (see .github/workflows/ops-checks.yml's "Configure SSH key"
+    steps) are present, use them explicitly instead of relying on ambient SSH config.
+    Absent those env vars, behavior is byte-identical to before this change.
+    """
+    args = [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "-o",
+        "ControlMaster=auto",
+        "-o",
+        "ControlPersist=60s",
+        "-o",
+        "ControlPath=/tmp/infra2-vault-audit-%r@%h:%p",
+    ]
+    key_path = os.environ.get("INFRA2_WATCHDOG_SSH_KEY_PATH", "").strip()
+    if key_path:
+        args += [
+            "-i",
+            key_path,
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+        ]
+    port = os.environ.get("INFRA2_WATCHDOG_SSH_PORT", "").strip()
+    if port:
+        args += ["-p", port]
+    user = os.environ.get("INFRA2_WATCHDOG_SSH_USER", "").strip() or "root"
+    args += [f"{user}@{host}", command]
     return subprocess.run(
-        [
-            "ssh",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=10",
-            "-o",
-            "ControlMaster=auto",
-            "-o",
-            "ControlPersist=60s",
-            "-o",
-            "ControlPath=/tmp/infra2-vault-audit-%r@%h:%p",
-            f"root@{host}",
-            command,
-        ],
+        args,
         text=True,
         capture_output=True,
         check=False,
