@@ -104,6 +104,64 @@ def with_compose_id(env: str, compose_id: str) -> EnvConfig:
 
 
 # ---------------------------------------------------------------------------
+# Per-app fixed-compose targets (#500)
+# ---------------------------------------------------------------------------
+#
+# `env_config(env)` above owns the env REGIME (suffix/data/gates) — platform-wide policy,
+# identical for every fixed-compose app. `compose_id` and `app_url_pattern` are the two
+# facts that genuinely vary PER APP (which Dokploy compose, which public URL). This
+# overlay is the generalization point: finance_report keeps calling `env_config(env)`
+# directly (byte-identical, no change), and other bespoke apps register their overrides
+# here instead of duplicating the whole EnvConfig table.
+
+
+@dataclass(frozen=True)
+class _ComposeOverride:
+    compose_id: str | None
+    app_url_pattern: str  # contains {domain}
+
+
+# truealpha/app: version-pinned staging promotion (#500), generalizing the
+# finance_report fixed-compose path. compose_id verified live against the Dokploy API
+# 2026-07-18 (project "truealpha", env "staging", compose "app" -> w4zo_fm9d2PnUY8ULzNO7).
+# prod compose_id is None — the truealpha Dokploy project's `production` environment has
+# no compose yet, and truealpha's sender (truealpha#333) blocks PRODUCTION requests until
+# infra2 evidence support lands; a None compose_id fails closed if that ever changes
+# without this being updated first.
+_APP_COMPOSE_OVERRIDES: dict[str, dict[str, _ComposeOverride]] = {
+    "truealpha/app": {
+        "staging": _ComposeOverride(
+            "w4zo_fm9d2PnUY8ULzNO7", "https://truealpha-staging.{domain}"
+        ),
+        "prod": _ComposeOverride(None, "https://truealpha.{domain}"),
+    },
+}
+
+
+def app_compose_env_config(service: str, env: str) -> EnvConfig:
+    """The per-service EnvConfig for a fixed-compose app deploy (#500).
+
+    finance_report/app: identical to ``env_config(env)`` (no override registered).
+    Other bespoke apps: the env regime from ``env_config(env)`` with ``compose_id`` /
+    ``app_url_pattern`` overlaid from ``_APP_COMPOSE_OVERRIDES``. Raises ValueError for
+    a service/env with no registered override (e.g. truealpha/app + preview — #500 does
+    not wire preview for it, it has no preview compose stack yet).
+    """
+    base = env_config(env)
+    overrides_for_service = _APP_COMPOSE_OVERRIDES.get(service)
+    if overrides_for_service is None:
+        return base
+    override = overrides_for_service.get(env)
+    if override is None:
+        raise ValueError(
+            f"no compose target registered for service {service!r} env {env!r}"
+        )
+    return replace(
+        base, compose_id=override.compose_id, app_url_pattern=override.app_url_pattern
+    )
+
+
+# ---------------------------------------------------------------------------
 # Preview alias model (multi-alias, manually-deployed PREVIEW environment)
 # ---------------------------------------------------------------------------
 #

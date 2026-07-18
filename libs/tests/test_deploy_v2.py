@@ -429,6 +429,39 @@ def test_unknown_type_rejected(calls):
     assert calls["fixed"] is None and calls["preview"] is None
 
 
+def test_truealpha_staging_routes_fixed_with_its_own_service(calls):
+    # #500: a second bespoke SERVICES entry routes through the same fixed-compose path,
+    # carrying its own service key through to the backend (not finance_report's).
+    res = _deploy(
+        service="truealpha/app",
+        deploy_type="staging",
+        version_ref="v0.0.2",
+        iac_ref="v0.0.0",
+    )
+    assert calls["fixed"]["service"] == "truealpha/app"
+    assert calls["preview"] is None
+    assert res.target.service == "truealpha/app"
+
+
+def test_truealpha_preview_fails_closed_not_finance_report_preview(calls):
+    # truealpha/app has no preview compose yet (ServiceSpec.supports_preview=False) —
+    # must fail closed rather than silently running finance_report's preview internals
+    # (compose path, DB name, ...) against a different app's image.
+    with pytest.raises(ValueError, match="does not support preview/canary"):
+        _deploy(
+            service="truealpha/app",
+            deploy_type="preview/branch",
+            version_ref="main",
+        )
+    assert calls["preview"] is None and calls["fixed"] is None
+
+
+def test_truealpha_canary_fails_closed_too(calls):
+    with pytest.raises(ValueError, match="does not support preview/canary"):
+        _deploy(service="truealpha/app", deploy_type="canary", version_ref="main")
+    assert calls["preview"] is None and calls["fixed"] is None
+
+
 def test_unknown_service_rejected(calls):
     # platform/postgres is now a KNOWN (derived) service — use one with no deploy.py
     with pytest.raises(ValueError, match="unknown service"):

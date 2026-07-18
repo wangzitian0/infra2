@@ -272,16 +272,22 @@ def test_to_dict():
 
 
 def test_platform_specs_are_derived_from_service_registry():
-    # Infra-013: every non-app service is DERIVED from its deploy.py (service_registry),
-    # never hand-copied. prod_only must equal the Deployer's declared value.
+    # Infra-013: every non-bespoke service is DERIVED from its deploy.py
+    # (service_registry), never hand-copied. prod_only must equal the Deployer's
+    # declared value. Bespoke SERVICES entries (finance_report/app; truealpha/app since
+    # #500) win over their service_registry Deployer registration — see
+    # deploy_contract._iac_pinned_specs' "the app's bespoke spec wins" comment. A bespoke
+    # service can still have a (now-dormant, for deploy_v2 purposes) Deployer class
+    # registered, e.g. truealpha's AppDeployer, so it's fine for a SERVICES key to also
+    # appear in the registry.
     from libs.service_registry import service_attrs
 
-    from libs.deploy_contract import all_service_keys, service_spec
+    from libs.deploy_contract import SERVICES, all_service_keys, service_spec
 
     reg = service_attrs()
-    assert set(all_service_keys()) == set(reg) | {"finance_report/app"}
+    assert set(all_service_keys()) == set(reg) | set(SERVICES)
     for sid, meta in reg.items():
-        if sid == "finance_report/app":
+        if sid in SERVICES:
             continue
         spec = service_spec(sid)
         assert spec.iac_pinned is True
