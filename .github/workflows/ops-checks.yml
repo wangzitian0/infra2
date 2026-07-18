@@ -664,16 +664,31 @@ jobs:
             exit 1
           fi
           # READ-ONLY: re-resolves each hardcoded libs/deploy_env_config.py compose_id
-          # against live Dokploy state and fails loud on a mismatch, so a deleted/
-          # recreated compose is caught here instead of at the next real deploy.
+          # against live Dokploy state. Fails the STEP (exit 1) on ANY non-ok row,
+          # including a transient lookup error, so it's visible in the run log and
+          # retried on tomorrow's schedule — but only a confirmed DRIFT/missing row
+          # (never a bare lookup error) pages Feishu, in the next step. Alerting on an
+          # unconfirmed transient blip is exactly the "pages on transient, not real,
+          # failure" anti-pattern #425/#475 exist to eliminate.
           python -m tools.app_compose_id_drift
 
-      - name: Alert on failure
+      - name: Alert on confirmed drift
         if: failure() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
         run: |
           python - <<'PY'
           import os
+          from libs.dokploy import get_dokploy
+          from tools.app_compose_id_drift import confirmed_drift, scan
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
+
+          rows = scan(get_dokploy())
+          drifted = confirmed_drift(rows)
+          if not drifted:
+              # The step failed on a lookup ERROR only (no confirmed drift) — visible
+              # in the run log for a human to notice, but not alert-worthy on its own.
+              print("compose_id check step failed on a transient lookup error only "
+                    "(no confirmed drift) — not paging.")
+              raise SystemExit(0)
 
           run_url = "/".join(
               v for v in (
@@ -683,14 +698,15 @@ jobs:
                   os.environ.get("GITHUB_RUN_ID"),
               ) if v
           )
+          detail = "\n".join(f"- {r.target.service} ({r.target.env}): {r.note}" for r in drifted)
           deliver_out_of_band_alert(
               os.environ,
-              "🚨 Bespoke-app compose_id drift detected (or the check itself failed).\n"
+              "🚨 Bespoke-app compose_id drift confirmed.\n"
               "A hardcoded compose_id in libs/deploy_env_config.py no longer matches "
-              "its live Dokploy compose (or could not be resolved) — the next real "
-              "deploy to that env would 404. See the run log for which literal is "
-              "stale and its correct value; update libs/deploy_env_config.py "
-              "(see the module docstring for the recovery path).\n"
+              "its live Dokploy compose — the next real deploy to that env would 404.\n"
+              f"{detail}\n"
+              "Update libs/deploy_env_config.py (see the module docstring for the "
+              "recovery path).\n"
               f"Run: {run_url}",
           )
           PY

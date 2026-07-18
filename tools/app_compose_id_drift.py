@@ -105,6 +105,18 @@ def blockers(rows: list[Row]) -> list[Row]:
     return [r for r in rows if r.verdict != "ok"]
 
 
+def confirmed_drift(rows: list[Row]) -> list[Row]:
+    """Rows that are an actual, confirmed problem — never a transient lookup error.
+
+    A "error" verdict means the live Dokploy lookup itself failed (network blip, a
+    momentary API hiccup) — it is NOT proof the compose_id is wrong, only that this run
+    couldn't confirm either way. Alerting on that indiscriminately is exactly the
+    "pages on a transient blip, not a real failure" anti-pattern #425/#475 exist to
+    eliminate. Only "DRIFT"/"missing" are confirmed, alert-worthy findings.
+    """
+    return [r for r in rows if r.verdict in ("DRIFT", "missing")]
+
+
 def main() -> int:
     from libs.dokploy import get_dokploy
 
@@ -112,6 +124,10 @@ def main() -> int:
     rows = scan(client)
     report = format_report(rows)
     print(report)
+    # Any non-ok row fails the CI step (so a transient lookup error is still visible in
+    # the run log and gets retried on tomorrow's schedule) — but only confirmed_drift()
+    # rows are alert-worthy; the caller (this module's CI step) must check that
+    # separately before paging Feishu, not just "did this step fail."
     return 1 if blockers(rows) else 0
 
 

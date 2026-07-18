@@ -116,6 +116,26 @@ def test_lookup_error_is_reported_as_error_not_drift():
     assert row.verdict == "error"
     assert "live lookup failed" in row.note
     assert drift.blockers([row]) == [row]
+    # A bare lookup error is a CI-visible blocker (retried tomorrow) but is NOT
+    # confirmed drift — it must never page Feishu on its own (#425/#475: don't alert
+    # on a transient blip you can't distinguish from a real failure).
+    assert drift.confirmed_drift([row]) == []
+
+
+def test_confirmed_drift_includes_only_drift_and_missing():
+    stale = _target(compose_id="stale-id")
+    ok_row = drift.check_target(FakeDokployLookup({("app", "finance_report", "staging"): "A6V-hbJlgHMwgPDoTDnhH"}), _target())
+    drift_row = drift.check_target(FakeDokployLookup({("app", "finance_report", "staging"): "new-id"}), stale)
+    missing_row = drift.check_target(FakeDokployLookup({("app", "finance_report", "staging"): None}), _target())
+
+    class RaisingClient:
+        def find_compose_by_name(self, name, project_name=None, env_name=None):
+            raise RuntimeError("boom")
+
+    error_row = drift.check_target(RaisingClient(), _target())
+
+    result = drift.confirmed_drift([ok_row, drift_row, missing_row, error_row])
+    assert result == [drift_row, missing_row]
 
 
 def test_scan_checks_every_registered_target():
