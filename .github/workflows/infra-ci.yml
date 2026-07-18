@@ -333,6 +333,28 @@ jobs:
           fi
           echo "✅ All vault-agent files have required exit and health settings"
 
+  validate-required-env:
+    name: Validate Required-Env Manifest vs secrets.ctmpl
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Scoped to this job only — infra-ci deliberately never checks out submodules
+      # (#506), to keep the big app submodules out of its default fetch. This job is
+      # the one exception: it needs finance_report's generated env manifest, pinned to
+      # the exact commit infra2's git index records (i.e. what's actually deployed).
+      - name: Check out finance_report submodule
+        run: git submodule update --init repos/finance_report
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Run required-env drift audit
+        run: python3 tools/validate_required_env.py --enforce
+
   validate-vault-policy:
     name: Validate Vault Policy Syntax
     runs-on: ubuntu-latest

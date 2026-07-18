@@ -39,6 +39,13 @@ gates:
     job: validate-vault-agent
     blocks_merge: true
     failure_semantics: vault-agent.hcl is missing required settings.
+  - id: infra_ci.required_env_drift
+    stage: github_ci.merge_authority
+    task_category: secret_preflight
+    workflow: .github/workflows/infra-ci.yml
+    job: validate-required-env
+    blocks_merge: true
+    failure_semantics: finance_report's required-env manifest and secrets.ctmpl have drifted (#482).
   - id: infra_ci.vault_policy
     stage: github_ci.merge_authority
     task_category: vault_policy
