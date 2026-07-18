@@ -53,6 +53,7 @@ name: Ops Checks
     - cron: "47 * * * *" # hourly Dokploy preview leak detection (offset from route-canary)
     - cron: "27 4 * * *" # daily re-ensure of the VPS host-hygiene Dokploy schedule
     - cron: "17 7 * * *" # daily bespoke-app compose_id live drift check (#524)
+    - cron: "17 8 * * *" # daily Vault self-refresh audit (#531)
   workflow_dispatch:
     inputs:
       task:
@@ -69,6 +70,7 @@ name: Ops Checks
           - out-of-band-watchdog
           - watchdog-weekly-digest
           - app-compose-id-drift
+          - vault-self-refresh-audit
           - all
       dry_run:
         description: "Run checks without sending Feishu notifications"
@@ -111,7 +113,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 * * * *' && 'dokploy-route-canary-scheduled' || github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'infra2-deploy-guard-audit' || github.event_name == 'schedule' && github.event.schedule == '37 6 * * *' && 'deploy-v2-canary' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-leak-check' || github.event_name == 'schedule' && github.event.schedule == '27 4 * * *' && 'infra2-host-hygiene-schedule' || github.event_name == 'schedule' && github.event.schedule == '17 7 * * *' && 'infra2-app-compose-id-drift' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && inputs.task == 'dokploy-route-canary' && format('dokploy-route-canary-{0}-{1}', inputs.project, inputs.env) || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) || 'dokploy-route-canary-push' }}
+  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 * * * *' && 'dokploy-route-canary-scheduled' || github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'infra2-deploy-guard-audit' || github.event_name == 'schedule' && github.event.schedule == '37 6 * * *' && 'deploy-v2-canary' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-leak-check' || github.event_name == 'schedule' && github.event.schedule == '27 4 * * *' && 'infra2-host-hygiene-schedule' || github.event_name == 'schedule' && github.event.schedule == '17 7 * * *' && 'infra2-app-compose-id-drift' || github.event_name == 'schedule' && github.event.schedule == '17 8 * * *' && 'infra2-vault-self-refresh-audit' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && inputs.task == 'dokploy-route-canary' && format('dokploy-route-canary-{0}-{1}', inputs.project, inputs.env) || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) || 'dokploy-route-canary-push' }}
   cancel-in-progress: false
 
 env:
@@ -707,6 +709,120 @@ jobs:
               f"{detail}\n"
               "Update libs/deploy_env_config.py (see the module docstring for the "
               "recovery path).\n"
+              f"Run: {run_url}",
+          )
+          PY
+
+  vault-self-refresh-audit:
+    name: Vault self-refresh audit
+    # Live check (#531): needs Dokploy state + SSH into the VPS to inspect vault-agent/
+    # app containers, so it can't run on untrusted PR branches — scheduled + manual
+    # only, same as the other live-Dokploy/SSH-state checks in this file. Reuses the
+    # INFRA2_WATCHDOG_SSH_* credentials the route-canary/watchdog jobs already
+    # provision (no new secret) — see libs/vault_self_refresh_audit.py::_ssh.
+    if: ${{ (github.event_name == 'schedule' && github.event.schedule == '17 8 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'vault-self-refresh-audit' || inputs.task == 'all')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+      INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
+      VPS_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
+      INFRA2_WATCHDOG_SSH_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
+      INFRA2_WATCHDOG_SSH_USER: ${{ secrets.INFRA2_WATCHDOG_SSH_USER }}
+      INFRA2_WATCHDOG_SSH_PORT: ${{ vars.INFRA2_WATCHDOG_SSH_PORT }}
+      INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
+      INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
+      INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+      GITHUB_SERVER_URL: ${{ github.server_url }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      GITHUB_RUN_ID: ${{ github.run_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install runtime dependencies
+        run: python -m pip install httpx python-dotenv rich PyYAML
+
+      - name: Configure SSH key
+        env:
+          INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${INFRA2_WATCHDOG_SSH_PRIVATE_KEY:-}" ]]; then
+            echo "::error::INFRA2_WATCHDOG_SSH_PRIVATE_KEY secret is required for the Vault self-refresh audit."
+            exit 1
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_vault_audit
+          chmod 600 ~/.ssh/infra2_vault_audit
+          echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_vault_audit" >> "$GITHUB_ENV"
+
+      - name: Run Vault self-refresh audit
+        run: |
+          set -euo pipefail
+          if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
+            echo "::error::DOKPLOY_API_KEY secret is required for the Vault self-refresh audit."
+            exit 1
+          fi
+          if [[ -z "${VPS_HOST:-}" ]]; then
+            echo "::error::INFRA2_WATCHDOG_SSH_HOST secret is required for the Vault self-refresh audit."
+            exit 1
+          fi
+          # READ-ONLY: GETs each inventory service's Dokploy compose env and SSHes into
+          # the VPS to `docker inspect`/`docker exec cat`/`docker logs` its vault-agent
+          # and app containers (libs/vault_self_refresh_audit.py::collect_live_
+          # observations). Fails the STEP (exit 1) on ANY non-pass result, including a
+          # transient SSH/Dokploy lookup hiccup, so it's visible in the run log and
+          # retried on tomorrow's schedule — but only a confirmed `status="fail"`
+          # result (never an "info" note, #531) pages Feishu, in the next step.
+          python -m tools.vault_self_refresh_audit_check
+
+      - name: Alert on confirmed failure
+        if: failure() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        run: |
+          python - <<'PY'
+          import os
+          from tools.out_of_band_watchdog import deliver_out_of_band_alert
+          from tools.vault_self_refresh_audit_check import run
+
+          report = run()
+          failed = [r for r in report["results"] if r["status"] == "fail"]
+          if not failed:
+              # The step failed without a confirmed fail result (e.g. a transient SSH
+              # or Dokploy lookup hiccup) -- visible in the run log for a human to
+              # notice, but not alert-worthy on its own (#524/#425/#475: don't page on
+              # a transient blip you can't distinguish from a real failure).
+              print("vault self-refresh audit step failed without a confirmed fail "
+                    "result -- not paging.")
+              raise SystemExit(0)
+
+          run_url = "/".join(
+              v for v in (
+                  os.environ.get("GITHUB_SERVER_URL"),
+                  os.environ.get("GITHUB_REPOSITORY"),
+                  "actions/runs",
+                  os.environ.get("GITHUB_RUN_ID"),
+              ) if v
+          )
+          detail = "\n".join(
+              f"- {r['severity']} {r['service_id']}::{r['check_id']} - {r['summary']}"
+              for r in failed
+          )
+          deliver_out_of_band_alert(
+              os.environ,
+              f"🚨 Vault self-refresh audit found {len(failed)} confirmed failing "
+              "check(s).\n"
+              f"{detail}\n"
+              "Read-only findings — investigate the named service's vault-agent/app "
+              "containers on the VPS.\n"
               f"Run: {run_url}",
           )
           PY

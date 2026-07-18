@@ -6,8 +6,10 @@ from pathlib import Path
 
 import yaml
 
+from libs import vault_self_refresh_audit as vault_self_refresh_audit_module
 from libs.vault_self_refresh_audit import (
     OPTIONAL_INERT_FIELD_WATCHLIST,
+    VaultService,
     _remote_secret_file_state,
     _remote_secret_file_text,
     _vault_addr_from_env,
@@ -17,6 +19,7 @@ from libs.vault_self_refresh_audit import (
     classify_rendered_env,
     classify_token,
     classify_vault_agent_logs,
+    collect_live_observations,
     discover_vault_agent_compose_paths,
     inventory_compose_paths,
     load_inventory,
@@ -30,8 +33,33 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def _service():
+    """The real `finance_report/app` inventory row -- `auth_method="approle"`.
+
+    Every registered service is AppRole now (#531); this fixture is the exact
+    production case the AppRole regression tests exercise.
+    """
     services = load_inventory()
     return next(service for service in services if service.id == "finance_report/app")
+
+
+def _token_service():
+    """A synthetic `auth_method="token"` (the dataclass default) service.
+
+    #531: the real inventory has zero remaining token-auth services, so the classic
+    token-model classify_token tests need a fixture that isn't loaded from the live
+    inventory to keep exercising that code path.
+    """
+    return VaultService(
+        id="legacy/token-service",
+        project="legacy",
+        dokploy_service="token-service",
+        compose_path="legacy/compose.yaml",
+        vault_agent_config_path="legacy/vault-agent.hcl",
+        secret_template_path="legacy/secrets.ctmpl",
+        vault_path_template="secret/data/legacy/{env}/token-service",
+        vault_agent_container="legacy-vault-agent",
+        app_containers=("legacy-app",),
+    )
 
 
 def test_inventory_covers_every_active_vault_agent_compose() -> None:
@@ -69,8 +97,12 @@ def test_inventory_paths_exist_and_match_vault_agent_contract() -> None:
 def test_token_classifier_reports_missing_malformed_invalid_nonrenewable_and_low_ttl() -> (
     None
 ):
-    """#166: token lookup failure classes are explicit and severity-tagged."""
-    service = _service()
+    """#166: token lookup failure classes are explicit and severity-tagged.
+
+    #531: uses the synthetic token-model fixture, not the real inventory (which is
+    100% AppRole now) -- this test's assertions are byte-identical to before #531.
+    """
+    service = _token_service()
 
     missing = classify_token(service, "", None)
     assert missing.status == "fail"
@@ -108,9 +140,12 @@ def test_token_classifier_reports_missing_malformed_invalid_nonrenewable_and_low
 
 
 def test_token_classifier_accepts_healthy_renewable_token() -> None:
-    """#166: healthy periodic app tokens pass the audit token check."""
+    """#166: healthy periodic app tokens pass the audit token check.
+
+    #531: uses the synthetic token-model fixture (see note above).
+    """
     result = classify_token(
-        _service(),
+        _token_service(),
         "VAULT_APP_TOKEN=hvs.validlookingtoken",
         {"valid": True, "renewable": True, "ttl_hours": 240},
     )
@@ -119,8 +154,75 @@ def test_token_classifier_accepts_healthy_renewable_token() -> None:
     assert result.check_id == "vault-token"
 
 
-def test_rendered_env_classifier_reports_missing_empty_stale_and_unreadable() -> None:
-    """#166: rendered secret freshness failures are classified independently."""
+def test_token_classifier_approle_service_passes_on_role_and_secret_id() -> None:
+    """#531: an AppRole service with VAULT_ROLE_ID + VAULT_SECRET_ID present and NO
+    VAULT_APP_TOKEN must report PASS -- the exact case that was silently broken in
+    production (classify_token still hardcoded the legacy vault_token_env_key)."""
+    service = _service()  # finance_report/app, auth_method="approle"
+    assert service.auth_method == "approle"
+
+    result = classify_token(
+        service,
+        "VAULT_ROLE_ID=test-role-id-not-a-real-secret\n"
+        "VAULT_SECRET_ID=test-secret-id-not-a-real-secret\n",
+        None,
+    )
+
+    assert result.status == "pass"
+    assert result.severity == "P0"
+    assert "VAULT_APP_TOKEN" not in result.summary
+
+
+def test_token_classifier_approle_service_fails_when_role_id_missing() -> None:
+    """#531: missing VAULT_ROLE_ID (VAULT_SECRET_ID present) is a named P0 fail."""
+    service = _service()
+
+    result = classify_token(
+        service,
+        "VAULT_SECRET_ID=test-secret-id-not-a-real-secret\n",
+        None,
+    )
+
+    assert result.status == "fail"
+    assert result.severity == "P0"
+    assert "VAULT_ROLE_ID" in result.summary
+    assert "missing" in result.summary
+    assert result.evidence["missing"] == ["VAULT_ROLE_ID"]
+
+
+def test_token_classifier_approle_service_fails_when_secret_id_missing() -> None:
+    """#531: missing VAULT_SECRET_ID (VAULT_ROLE_ID present) is a named P0 fail."""
+    service = _service()
+
+    result = classify_token(
+        service,
+        "VAULT_ROLE_ID=test-role-id-not-a-real-secret\n",
+        None,
+    )
+
+    assert result.status == "fail"
+    assert result.severity == "P0"
+    assert "VAULT_SECRET_ID" in result.summary
+    assert result.evidence["missing"] == ["VAULT_SECRET_ID"]
+
+
+def test_token_classifier_approle_service_fails_when_both_missing() -> None:
+    """#531: neither AppRole credential present -- both named in the fail summary."""
+    service = _service()
+
+    result = classify_token(service, "", None)
+
+    assert result.status == "fail"
+    assert result.severity == "P0"
+    assert "VAULT_ROLE_ID" in result.summary
+    assert "VAULT_SECRET_ID" in result.summary
+    assert result.evidence["missing"] == ["VAULT_ROLE_ID", "VAULT_SECRET_ID"]
+
+
+def test_rendered_env_classifier_reports_missing_empty_and_unreadable_as_fail() -> None:
+    """#166: rendered secret render-breakage failures are classified independently --
+    these are genuinely broken renders, unlike the age-only staleness signal (#531,
+    see test_rendered_env_classifier_reports_stale_as_info below)."""
     service = _service()
 
     assert classify_rendered_env(service, {"exists": False}, now=1000).status == "fail"
@@ -140,13 +242,6 @@ def test_rendered_env_classifier_reports_missing_empty_stale_and_unreadable() ->
         ).summary
         == "/vault/secrets/.env is empty"
     )
-    stale = classify_rendered_env(
-        service,
-        {"exists": True, "readable": True, "size": 20, "mtime": 0},
-        now=1000,
-    )
-    assert stale.status == "fail"
-    assert stale.check_id == "rendered-env-freshness"
 
     unresolved = classify_rendered_env(
         service,
@@ -174,6 +269,84 @@ def test_rendered_env_classifier_accepts_fresh_nonempty_file() -> None:
 
     assert result.status == "pass"
     assert result.evidence["age_seconds"] == 50
+
+
+def test_rendered_env_classifier_reports_stale_as_info() -> None:
+    """#531: vault-agent's static_secret_render_interval only rewrites the file when
+    the underlying secret's content changes, not on every poll -- an old mtime on an
+    otherwise-valid file is informational (the container healthcheck is the real
+    liveness signal), never a hard fail."""
+    service = _service()
+
+    stale = classify_rendered_env(
+        service,
+        {"exists": True, "readable": True, "size": 20, "mtime": 0},
+        now=1000,
+    )
+
+    assert stale.status == "info"
+    assert stale.severity == "P3"
+    assert stale.check_id == "rendered-env-freshness"
+    assert "healthcheck" in stale.summary
+    assert "stale" not in stale.summary
+
+
+def test_audit_from_observations_stays_pass_with_only_stale_render_and_healthy_container() -> (
+    None
+):
+    """#531: when the ONLY non-pass result for a service is the info-level rendered-env
+    staleness note, paired with a healthy vault_agent_container result, the overall
+    audit status must stay "pass" -- the mtime signal never gates."""
+    service = _service()  # auth_method="approle"
+    report = audit_from_observations(
+        [service],
+        {
+            "services": {
+                service.id: {
+                    "dokploy_env": (
+                        "VAULT_ROLE_ID=test-role-id-not-a-real-secret\n"
+                        "VAULT_SECRET_ID=test-secret-id-not-a-real-secret\n"
+                    ),
+                    "token_lookup": None,
+                    "rendered_env": {
+                        "exists": True,
+                        "readable": True,
+                        "size": 20,
+                        "mtime": 0,
+                    },
+                    "vault_agent_logs": "template rendered successfully",
+                    "vault_agent_container": {
+                        "name": "finance_report-app-vault-agent",
+                        "exists": True,
+                        "state": "running",
+                        "health": "healthy",
+                        "restart_count": 0,
+                    },
+                    "app_containers": [
+                        {
+                            "name": "finance_report-backend",
+                            "exists": True,
+                            "state": "running",
+                            "health": "healthy",
+                            "restart_count": 0,
+                            "mounts": ["/secrets/.env"],
+                        }
+                    ],
+                }
+            }
+        },
+        env="production",
+        now=1000,
+    )
+
+    assert report["status"] == "pass"
+    freshness_results = [
+        result
+        for result in report["results"]
+        if result["check_id"] == "rendered-env-freshness"
+    ]
+    assert len(freshness_results) == 1
+    assert freshness_results[0]["status"] == "info"
 
 
 def test_vault_agent_log_classifier_detects_refresh_errors_and_redacts() -> None:
@@ -285,19 +458,22 @@ def test_container_classifier_checks_state_health_restarts_and_mounts() -> None:
 
 
 def test_audit_report_schema_and_redaction() -> None:
-    """#166: audit output is machine-readable and redacts secrets."""
+    """#166: audit output is machine-readable and redacts secrets.
+
+    #531: `_service()` (finance_report/app) is auth_method="approle" in the real
+    inventory, so the env carries AppRole credentials, not a legacy VAULT_APP_TOKEN.
+    """
     service = _service()
     report = audit_from_observations(
         [service],
         {
             "services": {
                 service.id: {
-                    "dokploy_env": "VAULT_APP_TOKEN=hvs.validlookingtoken",
-                    "token_lookup": {
-                        "valid": True,
-                        "renewable": True,
-                        "ttl_hours": 240,
-                    },
+                    "dokploy_env": (
+                        "VAULT_ROLE_ID=test-role-id-not-a-real-secret\n"
+                        "VAULT_SECRET_ID=test-secret-id-not-a-real-secret\n"
+                    ),
+                    "token_lookup": None,
                     "rendered_env": {
                         "exists": True,
                         "readable": True,
@@ -332,8 +508,9 @@ def test_audit_report_schema_and_redaction() -> None:
     assert report["schema_version"] == 1
     assert report["status"] == "pass"
     assert report["results"]
-    assert "validlookingtoken" not in str(report)
-    assert "- PASS P0 finance_report/app::vault-token" in write_report(report)
+    assert "test-role-id-not-a-real-secret" not in str(report)
+    assert "test-secret-id-not-a-real-secret" not in str(report)
+    assert "- PASS P0 finance_report/app::dokploy-env-approle" in write_report(report)
 
 
 def test_redact_masks_nested_secret_like_keys() -> None:
@@ -351,6 +528,70 @@ def test_vault_addr_prefers_explicit_addr_then_internal_domain() -> None:
         "https://vault.example.test"
     )
     assert _vault_addr_from_env({}) is None
+
+
+def test_ssh_uses_default_root_identity_when_no_ci_override_env_set(
+    monkeypatch,
+) -> None:
+    """Default (in-VPS operator) invocation: byte-identical to before #531 -- no
+    `-i`/`-p` flags, bare `root@host`."""
+    monkeypatch.delenv("INFRA2_WATCHDOG_SSH_KEY_PATH", raising=False)
+    monkeypatch.delenv("INFRA2_WATCHDOG_SSH_PORT", raising=False)
+    monkeypatch.delenv("INFRA2_WATCHDOG_SSH_USER", raising=False)
+    captured = {}
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+
+        class Result:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(
+        vault_self_refresh_audit_module.subprocess, "run", fake_run
+    )
+
+    vault_self_refresh_audit_module._ssh("vps.example", "echo hi")
+
+    assert captured["args"][-2:] == ["root@vps.example", "echo hi"]
+    assert "-i" not in captured["args"]
+    assert "-p" not in captured["args"]
+
+
+def test_ssh_uses_ci_override_env_vars_when_present(monkeypatch) -> None:
+    """#531: a GitHub Actions runner has no ambient SSH trust for the VPS -- when the
+    route-canary/watchdog jobs' INFRA2_WATCHDOG_SSH_* env vars are present, `_ssh` must
+    use them explicitly (key path, port, user) instead of relying on default SSH
+    config."""
+    monkeypatch.setenv("INFRA2_WATCHDOG_SSH_KEY_PATH", "/home/runner/.ssh/infra2_ci")
+    monkeypatch.setenv("INFRA2_WATCHDOG_SSH_PORT", "2222")
+    monkeypatch.setenv("INFRA2_WATCHDOG_SSH_USER", "deploy")
+    captured = {}
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+
+        class Result:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(
+        vault_self_refresh_audit_module.subprocess, "run", fake_run
+    )
+
+    vault_self_refresh_audit_module._ssh("vps.example", "echo hi")
+
+    args = captured["args"]
+    assert args[-2:] == ["deploy@vps.example", "echo hi"]
+    assert "-i" in args and args[args.index("-i") + 1] == "/home/runner/.ssh/infra2_ci"
+    assert "-p" in args and args[args.index("-p") + 1] == "2222"
+    assert "StrictHostKeyChecking=no" in args
 
 
 def test_remote_secret_file_state_parses_stat_json(monkeypatch) -> None:
@@ -482,19 +723,21 @@ def test_optional_field_inertness_classifier_reports_populated_value_as_active()
 
 def test_audit_from_observations_reports_inert_field_without_failing_audit() -> None:
     """#526: an otherwise-healthy service with an inert optional field still
-    reports overall status "pass" -- the inertness signal never gates."""
+    reports overall status "pass" -- the inertness signal never gates.
+
+    #531: `_service()` is auth_method="approle" in the real inventory.
+    """
     service = _service()
     report = audit_from_observations(
         [service],
         {
             "services": {
                 service.id: {
-                    "dokploy_env": "VAULT_APP_TOKEN=hvs.validlookingtoken",
-                    "token_lookup": {
-                        "valid": True,
-                        "renewable": True,
-                        "ttl_hours": 240,
-                    },
+                    "dokploy_env": (
+                        "VAULT_ROLE_ID=test-role-id-not-a-real-secret\n"
+                        "VAULT_SECRET_ID=test-secret-id-not-a-real-secret\n"
+                    ),
+                    "token_lookup": None,
                     "rendered_env": {
                         "exists": True,
                         "readable": True,
@@ -540,3 +783,55 @@ def test_audit_from_observations_reports_inert_field_without_failing_audit() -> 
         "INFO P3 finance_report/app::optional-field-inertness::LLM_ENCRYPTION_KEYS"
         in write_report(report)
     )
+
+
+def test_collect_live_observations_skips_token_lookup_for_approle_service(
+    monkeypatch,
+) -> None:
+    """#531: the duplicate live token-read/lookup in collect_live_observations must be
+    a no-op for AppRole services -- there is no static token to look up, mirroring the
+    classify_token skip."""
+    service = _service()  # finance_report/app, auth_method="approle"
+    assert service.auth_method == "approle"
+
+    class FakeDokployClient:
+        def find_compose_by_name(self, name, project_name=None, env_name=None):
+            return {
+                "env": (
+                    "VAULT_ROLE_ID=test-role-id-not-a-real-secret\n"
+                    "VAULT_SECRET_ID=test-secret-id-not-a-real-secret\n"
+                )
+            }
+
+    def fake_get_env():
+        return {"VPS_HOST": "vps.example", "INTERNAL_DOMAIN": "example.test"}
+
+    def fake_get_dokploy(host=None):
+        return FakeDokployClient()
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError(
+            "verify_vault_token must not be called for an AppRole service"
+        )
+
+    def fake_ssh(host, command):
+        class Result:
+            returncode = 0
+            stdout = (
+                '{"exists":true,"readable":true,"size":10,"mtime":1,'
+                '"has_no_value":false}'
+            )
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr("libs.common.get_env", fake_get_env)
+    monkeypatch.setattr("libs.dokploy.get_dokploy", fake_get_dokploy)
+    monkeypatch.setattr(
+        vault_self_refresh_audit_module, "verify_vault_token", fail_if_called
+    )
+    monkeypatch.setattr(vault_self_refresh_audit_module, "_ssh", fake_ssh)
+
+    observations = collect_live_observations([service], env="production")
+
+    assert observations["services"][service.id]["token_lookup"] is None
