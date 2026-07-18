@@ -506,25 +506,39 @@ class DokployClient:
         Note:
             This parser expects simple KEY=VALUE lines and does not handle quoted,
             escaped, or multiline values.
+        Note (infra2#525):
+            Dokploy's compose.one has no version/etag/updatedAt field to gate this
+            write on (confirmed against a live response), so the merge below is
+            serialized per compose_id via libs.compose_lock.compose_write_lock: two
+            concurrent callers merging into the SAME compose_id cannot silently
+            discard each other's write, because the second caller's GET is guaranteed
+            to happen only after the first caller's POST has landed. This is an
+            in-process lock only — see libs/compose_lock.py for what it does and does
+            not cover.
         """
         if env_str is None:
-            # Merge with existing
-            existing_env = self.get_compose_env(compose_id)
-            env_dict = {}
+            from libs.compose_lock import compose_write_lock
 
-            # Parse existing
-            for line in existing_env.split("\n"):
-                line = line.strip()
-                if line and "=" in line and not line.startswith("#"):
-                    key, value = line.split("=", 1)
-                    env_dict[key] = value
+            with compose_write_lock(compose_id):
+                # Merge with existing
+                existing_env = self.get_compose_env(compose_id)
+                env_dict = {}
 
-            # Update with new values
-            if env_vars:
-                env_dict.update(env_vars)
+                # Parse existing
+                for line in existing_env.split("\n"):
+                    line = line.strip()
+                    if line and "=" in line and not line.startswith("#"):
+                        key, value = line.split("=", 1)
+                        env_dict[key] = value
 
-            # Convert back to string
-            env_str = "\n".join(f"{k}={v}" for k, v in env_dict.items())
+                # Update with new values
+                if env_vars:
+                    env_dict.update(env_vars)
+
+                # Convert back to string
+                env_str = "\n".join(f"{k}={v}" for k, v in env_dict.items())
+
+                return self.update_compose(compose_id, env=env_str)
 
         return self.update_compose(compose_id, env=env_str)
 

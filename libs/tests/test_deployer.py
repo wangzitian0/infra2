@@ -563,6 +563,84 @@ def test_wait_for_new_deployment_record_times_out_on_unknown_status(
     )
 
 
+def test_wait_for_new_deployment_record_ignores_an_unrelated_concurrent_deploy(
+    monkeypatch,
+) -> None:
+    """infra2#525 finding 2: identical pattern to
+    libs.deploy.promote.wait_for_rollout -- "not in previous_ids" alone can't tell an
+    unrelated deploy's record apart from our own. A record with a start timestamp
+    before min_started_at (the epoch just before WE called deploy/redeploy_compose)
+    cannot be ours and must be skipped rather than reported as our own success."""
+    import libs.deploy.deployer as deployer
+    from libs.deploy.deployer import Deployer
+    from libs.deploy_queue import parse_epoch_seconds
+
+    monkeypatch.setattr(deployer.time, "monotonic", lambda: 100.0)
+
+    unrelated = {
+        "deploymentId": "unrelated",
+        "status": "done",
+        "createdAt": "2026-07-18T00:00:00.000Z",
+    }
+    trigger_epoch = parse_epoch_seconds("2026-07-18T00:04:00.000Z")
+
+    class Client:
+        def get_compose_deployments(self, compose_id):
+            return [unrelated]
+
+    assert (
+        Deployer._wait_for_new_deployment_record(
+            Client(),
+            "compose-1",
+            {"old"},
+            timeout_seconds=0,
+            interval_seconds=1,
+            min_started_at=trigger_epoch,
+        )
+        is False
+    )
+
+
+def test_wait_for_new_deployment_record_accepts_our_own_record_after_unrelated_one(
+    monkeypatch,
+) -> None:
+    """Complements the ignore test: once OUR record (started at/after
+    min_started_at) shows up alongside the earlier unrelated one, it is accepted."""
+    import libs.deploy.deployer as deployer
+    from libs.deploy.deployer import Deployer
+    from libs.deploy_queue import parse_epoch_seconds
+
+    monkeypatch.setattr(deployer.time, "monotonic", lambda: 100.0)
+
+    unrelated = {
+        "deploymentId": "unrelated",
+        "status": "done",
+        "createdAt": "2026-07-18T00:00:00.000Z",
+    }
+    ours = {
+        "deploymentId": "ours",
+        "status": "done",
+        "createdAt": "2026-07-18T00:05:00.000Z",
+    }
+    trigger_epoch = parse_epoch_seconds("2026-07-18T00:04:00.000Z")
+
+    class Client:
+        def get_compose_deployments(self, compose_id):
+            return [unrelated, ours]
+
+    assert (
+        Deployer._wait_for_new_deployment_record(
+            Client(),
+            "compose-1",
+            {"old"},
+            timeout_seconds=0,
+            interval_seconds=1,
+            min_started_at=trigger_epoch,
+        )
+        is True
+    )
+
+
 class TestDeployerVaultTokenPreflight:
     """Deployment sync must fail before touching runtime when Vault tokens are bad."""
 

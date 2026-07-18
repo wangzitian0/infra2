@@ -1,6 +1,8 @@
 """Unit tests for libs/dokploy.py."""
 
 import os
+import threading
+import time
 from unittest.mock import patch
 
 import httpx
@@ -571,6 +573,65 @@ class TestDokployClient:
 
         assert result == {"composeId": "compose-1"}
         assert calls == [("compose-1", "A=1\nB=new\nC=3")]
+
+    def test_update_compose_env_serializes_concurrent_read_modify_write(
+        self, dokploy_env
+    ):
+        """infra2#525: DokployClient.update_compose_env() does a plain GET-merge-POST
+        with no version/etag/CAS. Two concurrent callers merging into the SAME
+        compose_id must not lose either write — the second caller's GET must observe
+        the first caller's POST, not a stale snapshot.
+
+        This forces the actual race window open (a caller's GET happens, then a real
+        delay before its POST) so that WITHOUT the libs.compose_lock serialization the
+        second caller's GET would race in during that delay, read the stale env, and
+        its later POST would silently discard the first caller's key — reproducing the
+        exact "whichever POST lands last silently wins" lost-update infra2#525
+        describes. With the fix, the second caller's whole update_compose_env() call
+        (its GET included) is blocked until the first caller's POST has landed.
+        """
+        client = DokployClient()
+        store = {"env": "A=1"}
+        call_log: list[str] = []
+        first_get_started = threading.Event()
+
+        def fake_get_compose_env(compose_id):
+            call_log.append("get")
+            if call_log.count("get") == 1:
+                # This is the FIRST caller's GET. Signal readiness, then hold the
+                # window open long enough for a racing second caller to run its own
+                # GET+POST if it is not blocked by the lock.
+                first_get_started.set()
+                time.sleep(0.2)
+            return store["env"]
+
+        def fake_update_compose(compose_id, env):
+            call_log.append("post")
+            store["env"] = env
+            return {"composeId": compose_id}
+
+        client.get_compose_env = fake_get_compose_env
+        client.update_compose = fake_update_compose
+
+        def worker(key, value):
+            client.update_compose_env("compose-1", env_vars={key: value})
+
+        t1 = threading.Thread(target=worker, args=("B", "1"))
+        t1.start()
+        assert first_get_started.wait(timeout=2.0), "first caller's GET never started"
+        t2 = threading.Thread(target=worker, args=("C", "2"))
+        t2.start()
+        t1.join(timeout=5.0)
+        t2.join(timeout=5.0)
+        assert not t1.is_alive() and not t2.is_alive()
+
+        final = dict(line.split("=", 1) for line in store["env"].split("\n") if line)
+        # Both concurrent writers' keys survive -- neither's POST silently discarded
+        # the other's.
+        assert final == {"A": "1", "B": "1", "C": "2"}
+        # The lock forces the second caller's GET to happen strictly after the first
+        # caller's POST landed (get, post, get, post) -- never interleaved.
+        assert call_log == ["get", "post", "get", "post"]
 
     def test_get_github_provider_id_falls_back_to_existing_compose(self, dokploy_env):
         client = DokployClient()

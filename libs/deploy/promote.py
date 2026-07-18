@@ -21,10 +21,19 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
+from libs.compose_lock import compose_write_lock
 from libs.deploy_env_config import app_compose_env_config, otel_env
+from libs.deploy_queue import deployment_start_epoch
 from tools.deploy_failure_snapshot import emit_failure_snapshot
 from tools.openpanel_clients import openpanel_env
 from tools.resolve_deploy_ref import resolve_to_sha
+
+# infra2#525: Dokploy deployment records carry no caller-supplied correlation id, so a
+# start-timestamp floor (captured just before OUR OWN deploy_compose() call) is the only
+# available signal that a "new" record belongs to a DIFFERENT, unrelated trigger rather
+# than to us. Allow a small margin for clock skew between this process and Dokploy's
+# server rather than excluding on an exact instant.
+_CLOCK_SKEW_TOLERANCE_SECONDS = 5
 
 
 @dataclass(frozen=True)
@@ -44,6 +53,22 @@ def _deployment_ids(deployments) -> set[str]:
     return {_dep_id(d) for d in (deployments or []) if _dep_id(d)}
 
 
+def _started_before(deployment: dict, floor_epoch: float) -> bool:
+    """True if `deployment` has a parseable start timestamp that is clearly before
+    `floor_epoch` (beyond the clock-skew tolerance) — i.e. it cannot be the record our
+    own deploy_compose() call produced, because it started before we even called it.
+
+    A record with no parseable startedAt/createdAt/updatedAt is treated as AMBIGUOUS,
+    not excluded (returns False) — we only ever use this to rule a record OUT, never to
+    rule one in, so an unparseable timestamp preserves prior (pre-infra2#525) behavior
+    instead of introducing a new false-negative.
+    """
+    started = deployment_start_epoch(deployment)
+    if started is None:
+        return False
+    return started < floor_epoch - _CLOCK_SKEW_TOLERANCE_SECONDS
+
+
 def wait_for_rollout(
     client,
     compose_id: str,
@@ -53,6 +78,7 @@ def wait_for_rollout(
     interval: int = 5,
     _sleep=time.sleep,
     _now=time.monotonic,
+    min_started_at: float | None = None,
 ) -> dict:
     """Poll until a NEW Dokploy deployment record reaches a terminal-good status.
 
@@ -62,6 +88,18 @@ def wait_for_rollout(
     follows it), whereas this owns readiness itself — it keeps polling past `running`
     until a terminal-good status and raises TimeoutError on the deadline. P2 step 5
     reconciles the two pollers (D5) when deploy logic fully lands in infra2.
+
+    min_started_at (infra2#525 finding 2): "new" here means "not in before_ids", which
+    is also true of a deployment record produced by a DIFFERENT, unrelated
+    deploy_compose() call that lands between our before_ids snapshot and our poll —
+    Dokploy gives us no correlation id to disambiguate. When min_started_at is given
+    (the epoch just before we called our own deploy_compose()), a "new" record whose own
+    start timestamp is clearly earlier is excluded: it cannot be ours. This closes the
+    window between the snapshot and our own trigger; a same-compose deploy that starts
+    AFTER our trigger but before our first poll is still indistinguishable from our own
+    (Dokploy exposes no request/correlation id on deployment records) and is a residual,
+    documented risk — see libs/compose_lock.py for the complementary in-process lock
+    that keeps our OWN callers from ever producing that overlap.
     """
     deadline = _now() + max(0, timeout)
     while True:
@@ -70,6 +108,8 @@ def wait_for_rollout(
             for d in (client.get_compose_deployments(compose_id) or [])
             if _dep_id(d) and _dep_id(d) not in before_ids
         ]
+        if min_started_at is not None:
+            new = [d for d in new if not _started_before(d, min_started_at)]
         for d in new:
             status = str(d.get("status") or "").lower()
             if status == "error":
@@ -314,48 +354,68 @@ def deploy(
         # only non-empty overrides (an unset override must not blank the running model)
         env_vars.update({k: v for k, v in model_overrides.items() if v})
 
-    # update_compose_env merges with the existing compose env (keeps runtime-injected
-    # secrets/AppRole creds); we only override the digest + URL + suffix + infra keys.
-    # Snapshot deployment ids BEFORE triggering so wait_for_rollout watches the new one.
-    before_ids = (
-        _deployment_ids(client.get_compose_deployments(cfg.compose_id))
-        if wait
-        else set()
-    )
-    client.update_compose_env(cfg.compose_id, env_vars=env_vars)
-    try:
-        client.deploy_compose(cfg.compose_id)
-        if wait:
-            wait_for_rollout(client, cfg.compose_id, before_ids, timeout=timeout)
-        # Confirm the effective config advanced to what we pushed (deploy actually took).
-        if verify_config:
-            verify_effective_config_hash(
-                client, cfg.compose_id, config_hash, timeout=timeout
-            )
-        # Opt-in: prove the just-deployed service.version actually ingests into SigNoz
-        # (logs+traces), not merely that the rollout/config advanced. This is the
-        # platform-side home of the deployed-version ingestion proof — the app emits
-        # OTLP and is backend-agnostic; infra2 owns confirming it landed. Default OFF
-        # because it depends on Docker-network ClickHouse access + telemetry flush
-        # timing; enable per-workflow once validated for the env.
-        if verify_ingestion:
-            from tools.deploy_ingestion_smoke import verify_deploy_ingestion
+    # infra2#525: Dokploy's compose.one has no version/etag/updatedAt to gate the write
+    # on, and its deployment records carry no caller-supplied correlation id — so the
+    # whole read-modify-write-deploy-wait-verify sequence below is serialized per
+    # compose_id via an in-process advisory lock. This closes both the lost-update race
+    # (a concurrent update_compose_env clobbering this call's env write) and rollout
+    # cross-contamination (a concurrent deploy_compose landing a record wait_for_rollout
+    # could otherwise mistake for this call's own) for any caller in this process. It
+    # does NOT serialize across separate processes/CI runners — see
+    # libs/compose_lock.py for what covers that gap today.
+    with compose_write_lock(cfg.compose_id):
+        # update_compose_env merges with the existing compose env (keeps runtime-injected
+        # secrets/AppRole creds); we only override the digest + URL + suffix + infra keys.
+        # Snapshot deployment ids BEFORE triggering so wait_for_rollout watches the new one.
+        before_ids = (
+            _deployment_ids(client.get_compose_deployments(cfg.compose_id))
+            if wait
+            else set()
+        )
+        client.update_compose_env(cfg.compose_id, env_vars=env_vars)
+        try:
+            # Captured immediately before triggering: the earliest wall-clock instant a
+            # deployment record OUR OWN call could have produced may carry (infra2#525
+            # finding 2 — see wait_for_rollout's min_started_at).
+            trigger_epoch = time.time()
+            client.deploy_compose(cfg.compose_id)
+            if wait:
+                wait_for_rollout(
+                    client,
+                    cfg.compose_id,
+                    before_ids,
+                    timeout=timeout,
+                    min_started_at=trigger_epoch,
+                )
+            # Confirm the effective config advanced to what we pushed (deploy actually took).
+            if verify_config:
+                verify_effective_config_hash(
+                    client, cfg.compose_id, config_hash, timeout=timeout
+                )
+            # Opt-in: prove the just-deployed service.version actually ingests into SigNoz
+            # (logs+traces), not merely that the rollout/config advanced. This is the
+            # platform-side home of the deployed-version ingestion proof — the app emits
+            # OTLP and is backend-agnostic; infra2 owns confirming it landed. Default OFF
+            # because it depends on Docker-network ClickHouse access + telemetry flush
+            # timing; enable per-workflow once validated for the env.
+            if verify_ingestion:
+                from tools.deploy_ingestion_smoke import verify_deploy_ingestion
 
-            # ClickHouse URL resolution lives in deploy_ingestion_smoke (single owner,
-            # reusing the round-trip canary's env) — do not re-read it here.
-            verify_deploy_ingestion(
-                service_name=identity.service_name,
-                environment=deploy_environment,
-                expected_version=image_tag,
-            )
-    except Exception:
-        # #768: on a failed rollout/verify, surface the platform-layer state (Dokploy
-        # compose status, latest deployment error, platform-vs-app failure domain) into
-        # the step summary so triage separates a platform failure from an app failure
-        # without SSH. Best-effort — emit_failure_snapshot never raises — then re-raise
-        # the original deploy error unchanged.
-        emit_failure_snapshot(client, cfg.compose_id)
-        raise
+                # ClickHouse URL resolution lives in deploy_ingestion_smoke (single owner,
+                # reusing the round-trip canary's env) — do not re-read it here.
+                verify_deploy_ingestion(
+                    service_name=identity.service_name,
+                    environment=deploy_environment,
+                    expected_version=image_tag,
+                )
+        except Exception:
+            # #768: on a failed rollout/verify, surface the platform-layer state (Dokploy
+            # compose status, latest deployment error, platform-vs-app failure domain) into
+            # the step summary so triage separates a platform failure from an app failure
+            # without SSH. Best-effort — emit_failure_snapshot never raises — then re-raise
+            # the original deploy error unchanged.
+            emit_failure_snapshot(client, cfg.compose_id)
+            raise
 
     return DeployPlan(
         env=env, sha=sha, compose_id=cfg.compose_id, data=data_lane, env_vars=env_vars

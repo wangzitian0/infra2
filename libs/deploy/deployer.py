@@ -49,6 +49,13 @@ RUNTIME_ENV_KEYS_TO_PRESERVE = (
 SOURCE_CONFIG_HASH_VERSION = "v1"
 EXACT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
+# infra2#525: like libs.deploy.promote.wait_for_rollout, Dokploy deployment records
+# carry no caller-supplied correlation id, so a start-timestamp floor (captured just
+# before OUR OWN deploy/redeploy_compose() call) is the only available signal that a
+# "new" record belongs to a DIFFERENT, unrelated trigger rather than to us. Small
+# margin for clock skew between this process and Dokploy's server.
+_CLOCK_SKEW_TOLERANCE_SECONDS = 5
+
 
 def discover_services() -> dict[str, str]:
     """Discover deployable services based on deploy.py files."""
@@ -754,9 +761,19 @@ class Deployer:
         before_ids = cls._deployment_ids(
             cls._get_compose_deployments(client, compose_id)
         )
+        # infra2#525: captured immediately before triggering so
+        # _wait_for_new_deployment_record can rule out a "new" record that started
+        # before we even called deploy_compose (see min_started_at below) — it cannot
+        # be the record OUR call produced.
+        trigger_epoch = time.time()
         client.deploy_compose(compose_id)
         if cls._wait_for_new_deployment_record(
-            client, compose_id, before_ids, timeout, interval
+            client,
+            compose_id,
+            before_ids,
+            timeout,
+            interval,
+            min_started_at=trigger_epoch,
         ):
             return
 
@@ -766,9 +783,15 @@ class Deployer:
         before_ids = cls._deployment_ids(
             cls._get_compose_deployments(client, compose_id)
         )
+        trigger_epoch = time.time()
         client.redeploy_compose(compose_id)
         if cls._wait_for_new_deployment_record(
-            client, compose_id, before_ids, timeout, interval
+            client,
+            compose_id,
+            before_ids,
+            timeout,
+            interval,
+            min_started_at=trigger_epoch,
         ):
             return
 
@@ -801,6 +824,23 @@ class Deployer:
             else []
         )
 
+    @staticmethod
+    def _started_before_trigger(deployment: dict, floor_epoch: float) -> bool:
+        """True if `deployment` has a parseable start timestamp clearly before
+        `floor_epoch` (beyond the clock-skew tolerance) — i.e. it cannot be the record
+        produced by OUR OWN deploy/redeploy_compose() call, since it started before we
+        even called it (infra2#525 finding 2). A record with no parseable
+        startedAt/createdAt/updatedAt is AMBIGUOUS, not excluded — this is only ever
+        used to rule a record OUT, never to rule one in, so an unparseable timestamp
+        preserves prior (pre-infra2#525) behavior rather than a new false-negative.
+        """
+        from libs.deploy_queue import deployment_start_epoch
+
+        started = deployment_start_epoch(deployment)
+        if started is None:
+            return False
+        return started < floor_epoch - _CLOCK_SKEW_TOLERANCE_SECONDS
+
     @classmethod
     def _wait_for_new_deployment_record(
         cls,
@@ -809,6 +849,8 @@ class Deployer:
         previous_ids: set[str],
         timeout_seconds: int,
         interval_seconds: int,
+        *,
+        min_started_at: float | None = None,
     ) -> bool:
         deadline = time.monotonic() + max(0, timeout_seconds)
         while True:
@@ -821,6 +863,14 @@ class Deployer:
                         deployment.get("deploymentId") or deployment.get("id") or ""
                     )
                     if deployment_id not in new_ids:
+                        continue
+                    if min_started_at is not None and cls._started_before_trigger(
+                        deployment, min_started_at
+                    ):
+                        # infra2#525: a "new" record whose own timestamp predates when
+                        # WE called deploy/redeploy_compose cannot be the record our
+                        # call produced — it belongs to a different, unrelated
+                        # trigger. Skip it rather than reporting its status as ours.
                         continue
                     status = str(deployment.get("status") or "").lower()
                     if status == "error":
