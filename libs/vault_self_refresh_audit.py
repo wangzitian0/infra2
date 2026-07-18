@@ -22,6 +22,24 @@ from libs.env import verify_vault_token
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INVENTORY_PATH = REPO_ROOT / "docs/ssot/vault-self-refresh-inventory.yaml"
 SECRET_KEYS = ("token", "secret", "password", "key", "authorization")
+
+# (#526) Optional `vault:true` fields that are legitimately allowed to sit
+# unprovisioned in Vault: they have a real render line in secrets.ctmpl (so
+# tools/validate_required_env.py's wiring check is satisfied), but whether
+# Vault actually holds a non-empty VALUE is a separate, deliberate human
+# decision about enabling the optional feature the field unlocks. Once the
+# render-wiring gap closes, nothing else flags "wired but still empty" -- this
+# watchlist is the read-only, informational backstop for exactly that blind
+# spot. Not a periodic scan of every vault:true field: only add an entry here
+# when a field is both optional-by-architecture *and* outside every other
+# probe (DEPENDENCY_MANIFEST startup checks, `_check_static_config`, etc.) --
+# see issue #526 for the full audit of finance_report's 19 vault:true fields.
+OPTIONAL_INERT_FIELD_WATCHLIST: tuple[tuple[str, str], ...] = (
+    # secrets.ctmpl render line landed in #482/PR#520; the Vault value itself
+    # is intentionally unset until EPIC-023's DB-backed LLM-provider-secret
+    # storage is turned on for finance_report.
+    ("finance_report/app", "LLM_ENCRYPTION_KEYS"),
+)
 ERROR_LOG_PATTERNS = (
     "permission denied",
     "token expired",
@@ -259,6 +277,49 @@ def classify_rendered_env(
     )
 
 
+def optional_inert_fields_for(service_id: str) -> tuple[str, ...]:
+    """Watchlisted optional-field names to check for inertness on a service."""
+    return tuple(
+        field_name
+        for sid, field_name in OPTIONAL_INERT_FIELD_WATCHLIST
+        if sid == service_id
+    )
+
+
+def classify_optional_field_inertness(
+    service: VaultService,
+    field_name: str,
+    rendered_env_text: str | None,
+) -> CheckResult:
+    """Report (never fail) whether a watchlisted optional field is populated.
+
+    This is deliberately status="info" always: an empty/missing value here
+    means the field's render-wiring is fine (tools/validate_required_env.py
+    already gates that) but nobody has provisioned the actual Vault secret --
+    an architectural "is this optional feature turned on?" fact, not a
+    health/drift defect worth failing the audit over. See #526.
+    """
+    populated = bool(parse_env(rendered_env_text or "").get(field_name))
+    if populated:
+        return _result(
+            service,
+            f"optional-field-inertness::{field_name}",
+            "info",
+            "P3",
+            f"{field_name} is populated (dependent feature active)",
+            {"field": field_name, "populated": True},
+        )
+    return _result(
+        service,
+        f"optional-field-inertness::{field_name}",
+        "info",
+        "P3",
+        f"{field_name} is unset/empty in the rendered secrets file "
+        "(dependent feature is inert)",
+        {"field": field_name, "populated": False},
+    )
+
+
 def classify_vault_agent_logs(service: VaultService, logs: str) -> CheckResult:
     lower_logs = logs.lower()
     matches = [
@@ -368,6 +429,12 @@ def audit_from_observations(
         lookup = obs.get("token_lookup")
         results.append(classify_token(service, env_text, lookup))
         results.append(classify_rendered_env(service, obs.get("rendered_env", {}), now))
+        for field_name in optional_inert_fields_for(service.id):
+            results.append(
+                classify_optional_field_inertness(
+                    service, field_name, str(obs.get("rendered_env_text", ""))
+                )
+            )
         results.append(
             classify_vault_agent_logs(service, str(obs.get("vault_agent_logs", "")))
         )
@@ -388,7 +455,14 @@ def audit_from_observations(
                     expected_mount=service.app_secret_mount_path,
                 )
             )
-    status = "pass" if all(item.status == "pass" for item in results) else "fail"
+    # "info" results (e.g. optional-field-inertness, #526) are report-only and
+    # never gate the audit's overall pass/fail -- only real health/drift
+    # checks do.
+    status = (
+        "pass"
+        if all(item.status in ("pass", "info") for item in results)
+        else "fail"
+    )
     return {
         "schema_version": 1,
         "env": env,
@@ -440,10 +514,19 @@ def collect_live_observations(
         )
         vault_agent_name = _resolve_env_suffix(service.vault_agent_container, env)
         app_names = [_resolve_env_suffix(name, env) for name in service.app_containers]
+        inert_fields = optional_inert_fields_for(service.id)
         observations["services"][service.id] = {
             "dokploy_env": env_text,
             "token_lookup": token_lookup,
             "rendered_env": _remote_secret_file_state(vps_host, vault_agent_name),
+            # Only fetched for services with OPTIONAL_INERT_FIELD_WATCHLIST
+            # entries (#526) -- keeps secret-content exposure scoped to the
+            # fields this audit actually needs to see are non-empty.
+            "rendered_env_text": (
+                _remote_secret_file_text(vps_host, vault_agent_name)
+                if inert_fields
+                else ""
+            ),
             "vault_agent_logs": _remote_container_logs(vps_host, vault_agent_name),
             "vault_agent_container": _remote_container_state(
                 vps_host, vault_agent_name
@@ -596,6 +679,25 @@ def _remote_secret_file_state(host: str, vault_agent_container: str) -> dict[str
         f"docker exec {shlex.quote(vault_agent_container)} sh -lc {shlex.quote(script)}"
     )
     return _remote_json(host, command)
+
+
+def _remote_secret_file_text(host: str, vault_agent_container: str) -> str:
+    """Read the raw rendered secrets file content (read-only `cat`).
+
+    Unlike `_remote_secret_file_state`, this returns the actual KEY=VALUE
+    content so `classify_optional_field_inertness` (#526) can check specific
+    watchlisted fields for emptiness -- `collect_live_observations` only calls
+    this for services that have an `OPTIONAL_INERT_FIELD_WATCHLIST` entry, to
+    keep secret-content exposure scoped to what the audit actually needs.
+    """
+    command = (
+        f"docker exec {shlex.quote(vault_agent_container)} "
+        "sh -lc 'cat /vault/secrets/.env 2>/dev/null'"
+    )
+    result = _ssh(host, command)
+    if result.returncode != 0:
+        return ""
+    return result.stdout
 
 
 def _remote_container_logs(host: str, container_name: str) -> str:
