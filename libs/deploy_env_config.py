@@ -17,12 +17,25 @@ test all derive from here instead of re-stating per-env values across workflows.
 The staging and production compose ids are mirrored from the App-repo deploy.yml
 workflow and become the sole copy once P2 step 5 removes them there.
 No deploy is performed here — like the resolver, this is pure, importable config.
+
+Compose_id drift recovery (#524): every ``compose_id`` literal below (in ``_ENVIRONMENTS``
+and ``_APP_COMPOSE_OVERRIDES``) is read ONCE from the live Dokploy API and never
+re-verified — if the underlying Dokploy compose is ever deleted and recreated, it gets a
+fresh ``composeId`` and the literal here goes stale. ``tools/app_compose_id_drift.py`` is a
+scheduled (not PR-blocking) CI check that re-resolves each entry via
+``DokployClient.find_compose_by_name`` and fails loud if the live ``composeId`` no longer
+matches. If it fails: re-run ``find_compose_by_name(compose_name, project_name, env_name)``
+for the affected entry (``bespoke_app_compose_targets()`` below names the exact
+project/env/compose-name to use) and update the hardcoded literal to the returned
+``composeId``.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, replace
+
+from libs.common import normalize_env_name
 
 # data default per env. Non-prod defaults to `staging` data (operator choice); prod is
 # always real prod data. A PR sha never runs on prod data and prod data never leaves
@@ -159,6 +172,74 @@ def app_compose_env_config(service: str, env: str) -> EnvConfig:
     return replace(
         base, compose_id=override.compose_id, app_url_pattern=override.app_url_pattern
     )
+
+
+# The baseline bespoke app: finance_report/app has no _APP_COMPOSE_OVERRIDES entry, its
+# compose_id/app_url_pattern come straight from `_ENVIRONMENTS` (env_config()). It still
+# needs a Dokploy project/compose-name pair for live drift verification below, so it is
+# named here once rather than re-derived ad hoc.
+_BASELINE_APP_SERVICE = "finance_report/app"
+
+
+@dataclass(frozen=True)
+class ComposeTarget:
+    """One hardcoded compose_id literal this repo carries, and where to re-verify it live.
+
+    ``project_name``/``compose_name`` are the Dokploy identity ``DokployClient.
+    find_compose_by_name(compose_name, project_name, env_name=dokploy_env_name)`` needs to
+    re-resolve the compose independently of the (possibly stale) hardcoded ``compose_id`` —
+    see ``bespoke_app_compose_targets()``.
+    """
+
+    service: str  # e.g. "finance_report/app", "truealpha/app"
+    env: str  # deploy env key, e.g. "staging", "prod"
+    project_name: str  # Dokploy project name
+    compose_name: str  # Dokploy compose display name
+    dokploy_env_name: str  # Dokploy environment name (normalize_env_name'd)
+    compose_id: str  # the literal hardcoded in this module, to verify against live
+
+
+def bespoke_app_compose_targets() -> tuple[ComposeTarget, ...]:
+    """Every hardcoded bespoke-app compose_id, paired with where to re-verify it live (#524).
+
+    Single source for ``tools/app_compose_id_drift.py``: for each (service, env) with a
+    registered, non-None ``compose_id`` — finance_report/app's two envs from
+    ``_ENVIRONMENTS`` (it has no override) plus every ``_APP_COMPOSE_OVERRIDES`` entry —
+    derive the Dokploy project name and compose display name from the service key
+    (``"<project>/<compose-name>"``, e.g. ``truealpha/app`` -> project ``truealpha``,
+    compose ``app``) so a caller can re-run ``find_compose_by_name`` and compare.
+    """
+    targets: list[ComposeTarget] = []
+    project_name, compose_name = _BASELINE_APP_SERVICE.split("/", 1)
+    for env_name, cfg in _ENVIRONMENTS.items():
+        if cfg.dynamic or cfg.compose_id is None:
+            continue  # preview is per-PR/dynamic — nothing fixed to verify here
+        targets.append(
+            ComposeTarget(
+                service=_BASELINE_APP_SERVICE,
+                env=env_name,
+                project_name=project_name,
+                compose_name=compose_name,
+                dokploy_env_name=normalize_env_name(env_name),
+                compose_id=cfg.compose_id,
+            )
+        )
+    for service, overrides in _APP_COMPOSE_OVERRIDES.items():
+        project_name, compose_name = service.split("/", 1)
+        for env_name, override in overrides.items():
+            if override.compose_id is None:
+                continue  # not registered yet (e.g. truealpha/app prod) — nothing to verify
+            targets.append(
+                ComposeTarget(
+                    service=service,
+                    env=env_name,
+                    project_name=project_name,
+                    compose_name=compose_name,
+                    dokploy_env_name=normalize_env_name(env_name),
+                    compose_id=override.compose_id,
+                )
+            )
+    return tuple(targets)
 
 
 # ---------------------------------------------------------------------------

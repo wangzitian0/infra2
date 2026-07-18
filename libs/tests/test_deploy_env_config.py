@@ -63,6 +63,47 @@ def test_every_non_dynamic_env_has_a_compose_id():
             assert cfg.compose_id, f"{name} must declare a compose_id"
 
 
+# --- bespoke_app_compose_targets (#524 live drift verification) --------------------
+
+
+def test_bespoke_app_compose_targets_includes_finance_report_staging_and_prod():
+    targets = {(t.service, t.env): t for t in ec.bespoke_app_compose_targets()}
+    staging = targets[("finance_report/app", "staging")]
+    assert staging.project_name == "finance_report"
+    assert staging.compose_name == "app"
+    assert staging.dokploy_env_name == "staging"
+    assert staging.compose_id == "A6V-hbJlgHMwgPDoTDnhH"
+
+    prod = targets[("finance_report/app", "prod")]
+    assert prod.project_name == "finance_report"
+    assert prod.compose_name == "app"
+    assert prod.dokploy_env_name == "production"  # normalize_env_name("prod")
+    assert prod.compose_id == "lNn9gVS1Zyw79Jzw5dlbu"
+
+
+def test_bespoke_app_compose_targets_includes_registered_overrides():
+    targets = {(t.service, t.env): t for t in ec.bespoke_app_compose_targets()}
+    truealpha_staging = targets[("truealpha/app", "staging")]
+    assert truealpha_staging.project_name == "truealpha"
+    assert truealpha_staging.compose_name == "app"
+    assert truealpha_staging.dokploy_env_name == "staging"
+    assert truealpha_staging.compose_id == "w4zo_fm9d2PnUY8ULzNO7"
+
+
+def test_bespoke_app_compose_targets_skips_unregistered_and_dynamic_entries():
+    targets = {(t.service, t.env) for t in ec.bespoke_app_compose_targets()}
+    # truealpha/app prod has compose_id=None (not registered yet) — never a target.
+    assert ("truealpha/app", "prod") not in targets
+    # preview is dynamic/per-PR — never a fixed target.
+    assert ("finance_report/app", "preview") not in targets
+
+
+def test_bespoke_app_compose_targets_count_matches_registered_non_none_entries():
+    # 2 finance_report envs (staging, prod) + 1 truealpha override (staging only,
+    # prod is None) = 3. A drift check silently skipping an entry would under-count.
+    assert len(ec.bespoke_app_compose_targets()) == 3
+
+
 # --- preview alias model (multi-alias preview env) -------------------------------
 
 
