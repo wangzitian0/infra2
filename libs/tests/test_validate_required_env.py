@@ -4,9 +4,19 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from tools.validate_required_env import MANIFEST, TEMPLATE, audit, main
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# infra-ci deliberately never checks out submodules by default (#506) — only the
+# dedicated validate-required-env CI job does a scoped `git submodule update --init
+# repos/finance_report`. The general `libs/tests` run (every other CI job, and a plain
+# local checkout before running `invoke setup`) has no submodule content, so the two
+# "real" tests below must skip rather than fail when the manifest isn't there.
+_SUBMODULE_CHECKED_OUT = (ROOT / MANIFEST).exists()
+_SKIP_REASON = "repos/finance_report submodule not checked out"
 
 
 def _write(root: Path, fields: list[dict], template_lines: list[str]) -> None:
@@ -23,12 +33,14 @@ def _field(env: str, *, vault: bool, aliases: list[str] | None = None) -> dict:
     return {"field": env.lower(), "env": env, "aliases": aliases or [], "group": "Test", "vault": vault, "has_default": True}
 
 
+@pytest.mark.skipif(not _SUBMODULE_CHECKED_OUT, reason=_SKIP_REASON)
 def test_real_manifest_and_template_are_in_sync() -> None:
     result = audit()
     assert result["unbacked_vault_fields"] == []
     assert result["stale_template_entries"] == []
 
 
+@pytest.mark.skipif(not _SUBMODULE_CHECKED_OUT, reason=_SKIP_REASON)
 def test_real_enforce_exits_zero() -> None:
     assert main(["--enforce"]) == 0
 
