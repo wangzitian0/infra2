@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from libs.deploy import promote as dp
+from libs.deploy_queue import parse_epoch_seconds
 
 # A realistic full commit sha and its 7-char short form (the tag images are published
 # under). resolve_to_sha returns a full sha; IMAGE_TAG must be the short form.
@@ -236,6 +237,93 @@ def test_wait_for_rollout_ignores_pre_existing_records():
             _sleep=lambda _s: None,
             _now=_clock(0, 700),
         )
+
+
+# --- infra2#525: rollout cross-contamination -------------------------------------
+
+
+def test_wait_for_rollout_ignores_a_record_from_an_unrelated_concurrent_deploy():
+    """infra2#525 finding 2: before_ids alone can't tell an unrelated deploy's rollout
+    record apart from our own -- if a second, unrelated deploy_compose() call lands
+    between our before_ids snapshot and our own trigger, its resulting record is also
+    "not in before_ids" and looks new to us. Dokploy gives no correlation id, so the
+    only available signal is the start timestamp: a record that started BEFORE we
+    called our own deploy_compose() cannot be ours. Construct exactly that: an
+    unrelated record appears first (predates our trigger), then our own record
+    appears later -- the function must wait past the unrelated one and return ours,
+    not report the unrelated deploy's outcome as our own.
+    """
+    unrelated = {
+        "id": "unrelated-deploy",
+        "status": "done",
+        "createdAt": "2026-07-18T00:00:00.000Z",
+    }
+    ours = {
+        "id": "our-deploy",
+        "status": "done",
+        "createdAt": "2026-07-18T00:05:00.000Z",
+    }
+    # poll 1: only the unrelated record has shown up yet; poll 2: ours has landed too.
+    snapshots = iter([[unrelated], [unrelated, ours]])
+    client = FakeDokploy(deployments=lambda _self: next(snapshots))
+    trigger_epoch = parse_epoch_seconds("2026-07-18T00:04:00.000Z")
+
+    record = dp.wait_for_rollout(
+        client,
+        "cmp",
+        set(),
+        interval=0,
+        _sleep=lambda _s: None,
+        _now=_clock(0, 1),
+        min_started_at=trigger_epoch,
+    )
+
+    assert record["id"] == "our-deploy"
+
+
+def test_wait_for_rollout_times_out_if_only_an_unrelated_record_ever_appears():
+    """Complements the test above: if the ONLY "new" record is the unrelated one and
+    our own never shows up, the function must time out rather than falsely report the
+    unrelated deploy's "done" status as our own."""
+    unrelated = {
+        "id": "unrelated-deploy",
+        "status": "done",
+        "createdAt": "2026-07-18T00:00:00.000Z",
+    }
+    client = FakeDokploy(deployments=[unrelated])
+    trigger_epoch = parse_epoch_seconds("2026-07-18T00:04:00.000Z")
+
+    with pytest.raises(TimeoutError, match="did not finish"):
+        dp.wait_for_rollout(
+            client,
+            "cmp",
+            set(),
+            timeout=600,
+            interval=0,
+            _sleep=lambda _s: None,
+            _now=_clock(0, 700),
+            min_started_at=trigger_epoch,
+        )
+
+
+def test_wait_for_rollout_does_not_exclude_records_with_no_parseable_timestamp():
+    """A record with no createdAt/startedAt/updatedAt is ambiguous, not excluded --
+    min_started_at only ever rules a record OUT, never rules one in. This keeps
+    behavior unchanged for callers/fakes (like the rest of this suite) that don't
+    populate timestamps on their deployment records."""
+    client = FakeDokploy(deployments=[{"id": "new", "status": "done"}])
+
+    record = dp.wait_for_rollout(
+        client,
+        "cmp",
+        set(),
+        interval=0,
+        _sleep=lambda _s: None,
+        _now=_clock(0, 1),
+        min_started_at=parse_epoch_seconds("2026-07-18T00:04:00.000Z"),
+    )
+
+    assert record["id"] == "new"
 
 
 def test_deploy_with_wait_snapshots_before_then_polls_the_new_record():
