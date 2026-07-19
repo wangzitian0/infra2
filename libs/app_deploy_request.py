@@ -15,6 +15,8 @@ import httpx
 from infra2_sdk.deploy import DeployOperation, DeployRequest, DeployType
 from infra2_sdk.refs import ResolvedRef, resolve_image_ref, resolve_pr
 
+from libs.service_registry import domain_for_service
+
 APP_SOURCES: dict[str, str] = {
     "finance_report/app": "wangzitian0/finance_report",
     "truealpha/app": "wangzitian0/truealpha",
@@ -244,14 +246,18 @@ def make_plan(
         resolve_image=resolve_image,
         resolve_pull=resolve_pull,
     )
-    if not domain or any(character.isspace() for character in domain):
+    # A service with its own dedicated domain (Deployer.domain, e.g. truealpha/app ->
+    # truealpha.club) overrides whatever shared INTERNAL_DOMAIN the caller passed in;
+    # every other service (no override declared) keeps today's behavior unchanged.
+    effective_domain = domain_for_service(request.service) or domain
+    if not effective_domain or any(character.isspace() for character in effective_domain):
         raise ValueError("domain must be non-empty and contain no whitespace")
     if timeout <= 0:
         raise ValueError("timeout must be positive")
     return DeployPlan(
         request=request,
         iac_ref=select_iac_ref(request.deploy_type, repo_root=repo_root, runner=runner),
-        domain=domain,
+        domain=effective_domain,
         timeout=timeout,
     )
 

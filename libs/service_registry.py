@@ -73,6 +73,7 @@ class ServiceMeta:
     service: str  # the `service` attribute, e.g. "signoz"
     prod_only: bool  # True -> not deployed to non-production envs
     subdomain: str | None  # public subdomain, e.g. "sso"; None = no public route
+    domain: str | None  # dedicated product domain override; None = shared INTERNAL_DOMAIN
     service_port: int | None  # container port for routing
     service_name: str | None  # compose service name (multi-service composes)
     telemetry_service_name: str | None  # OTEL service.name override
@@ -139,6 +140,7 @@ def _meta_from_deploy_file(
         service=_class_attr(tree, "service") or service_name_dir,
         prod_only=bool(_class_attr(tree, "prod_only") or False),
         subdomain=_class_attr(tree, "subdomain"),
+        domain=_class_attr(tree, "domain"),
         service_port=_class_attr(tree, "service_port"),
         service_name=_class_attr(tree, "service_name"),
         telemetry_service_name=_class_attr(tree, "telemetry_service_name"),
@@ -208,6 +210,13 @@ def shared_services() -> set[str]:
 def subdomains() -> dict[str, str]:
     """Service_id -> public subdomain, only for services that declare one."""
     return {m.service_id: m.subdomain for m in service_attrs().values() if m.subdomain}
+
+
+def domain_for_service(service_id: str) -> str | None:
+    """The service's dedicated domain override, or None if it uses the shared
+    INTERNAL_DOMAIN a caller passes in (every service until truealpha/app)."""
+    meta = service_attrs().get(service_id)
+    return meta.domain if meta else None
 
 
 def service_identity(

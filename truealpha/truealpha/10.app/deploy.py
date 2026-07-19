@@ -21,6 +21,12 @@ class AppDeployer(Deployer):
     # The compose owns explicit Traefik routes (truealpha[-env].<domain>), so no
     # Dokploy-managed domain here (domain routing policy: never both).
     subdomain = None
+    # TrueAlpha is an independent product with its own registered domain, not a
+    # shared-platform service — override the shared INTERNAL_DOMAIN entirely so
+    # its compose's ${INTERNAL_DOMAIN} Traefik Host() rules resolve under
+    # truealpha.club instead of zitian.party. Read by
+    # libs.app_deploy_request.make_plan via libs.service_registry.domain_for_service.
+    domain = "truealpha.club"
     service_port = 3000
     service_name = "web"
 
