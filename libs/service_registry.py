@@ -21,6 +21,14 @@ import ast
 from dataclasses import dataclass
 from pathlib import Path
 
+from libs.service_facets import (
+    FACET_CLASSES,
+    BackupFacet,
+    Exemption,
+    ProbeFacet,
+    SignalFacet,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # (layer name, layer path) — the single source of truth; libs.deploy.deployer
@@ -66,6 +74,17 @@ class ServiceMeta:
     telemetry_service_name: str | None  # OTEL service.name override
     telemetry_component: str | None  # OTEL infra.component override
     project: str  # Dokploy project, defaults to "platform"
+    # Facet declarations (#541): typed per-service operational facts, read from
+    # the same Deployer class via AST. See libs/service_facets.py.
+    probes: tuple[ProbeFacet, ...] = ()
+    signals: tuple[SignalFacet, ...] = ()
+    backup: BackupFacet | None = None
+    exemptions: tuple[Exemption, ...] = ()
+    deploy_v2_canary: bool = False
+
+    def exempted(self, check_id: str) -> bool:
+        """True if this service explicitly opted out of facet ``check_id``."""
+        return any(e.check_id == check_id for e in self.exemptions)
 
 
 def service_attrs() -> dict[str, ServiceMeta]:
@@ -85,6 +104,7 @@ def service_attrs() -> dict[str, ServiceMeta]:
                 continue
             service_name_dir = parts[1]
             tree = ast.parse(deploy_file.read_text(encoding="utf-8"))
+            where = str(deploy_file.relative_to(REPO_ROOT))
             result[f"{layer}/{service_name_dir}"] = ServiceMeta(
                 service_id=f"{layer}/{service_name_dir}",
                 layer=layer,
@@ -96,6 +116,11 @@ def service_attrs() -> dict[str, ServiceMeta]:
                 telemetry_service_name=_class_attr(tree, "telemetry_service_name"),
                 telemetry_component=_class_attr(tree, "telemetry_component"),
                 project=_class_attr(tree, "project") or "platform",
+                probes=_facet_seq(tree, "probes", ProbeFacet, where),
+                signals=_facet_seq(tree, "signals", SignalFacet, where),
+                backup=_facet_one(tree, "backup", BackupFacet, where),
+                exemptions=_facet_seq(tree, "exemptions", Exemption, where),
+                deploy_v2_canary=bool(_class_attr(tree, "deploy_v2_canary") or False),
             )
     return result
 
@@ -232,15 +257,12 @@ def resolve_container_host(host: str) -> ServiceMeta | None:
     return bases[max(candidates, key=len)] if candidates else None
 
 
-def _class_attr(tree: ast.Module, attr_name: str) -> str | int | bool | None:
-    """Return the literal value of the Deployer subclass's class attribute.
+def _deployer_assign(tree: ast.Module, attr_name: str) -> ast.expr | None:
+    """The value node assigned to ``attr_name`` on the top-level Deployer subclass.
 
     Only TOP-LEVEL classes that subclass `Deployer` are considered, so a helper
     or nested class that happens to declare the same attribute name cannot shadow
     the registry (matches the docstring's "the Deployer class" guarantee).
-
-    Handles str / int / bool constants. `x = None` and non-literal values
-    (calls, names) read back as None — the attribute is treated as unset.
     """
     for node in tree.body:
         if not isinstance(node, ast.ClassDef) or not _is_deployer_class(node):
@@ -248,15 +270,76 @@ def _class_attr(tree: ast.Module, attr_name: str) -> str | int | bool | None:
         for stmt in node.body:
             if not isinstance(stmt, ast.Assign):
                 continue
-            if not any(
-                isinstance(t, ast.Name) and t.id == attr_name for t in stmt.targets
-            ):
-                continue
-            if isinstance(stmt.value, ast.Constant) and isinstance(
-                stmt.value.value, (str, int, bool)
-            ):
-                return stmt.value.value
+            if any(isinstance(t, ast.Name) and t.id == attr_name for t in stmt.targets):
+                return stmt.value
     return None
+
+
+def _class_attr(tree: ast.Module, attr_name: str) -> str | int | bool | None:
+    """Return the literal value of the Deployer subclass's class attribute.
+
+    Handles str / int / bool constants. `x = None` and non-literal values
+    (calls, names) read back as None — the attribute is treated as unset.
+    """
+    value = _deployer_assign(tree, attr_name)
+    if (
+        value is not None
+        and isinstance(value, ast.Constant)
+        and isinstance(value.value, (str, int, bool))
+    ):
+        return value.value
+    return None
+
+
+def _facet_instance(node: ast.expr, facet_cls: type, where: str):
+    """Build a facet instance from a LITERAL constructor Call node.
+
+    FAIL CLOSED: anything other than ``FacetCls(<literal args>)`` raises — a
+    facet the reader cannot evaluate must break CI loudly, never silently drop
+    (e.g. a probe vanishing from the rendered INFRA_PROBE_SPECS)."""
+    if not isinstance(node, ast.Call):
+        raise ValueError(
+            f"{where}: facet entries must be literal {facet_cls.__name__}(...) "
+            f"constructor calls (AST-read, never imported); got {ast.dump(node)[:80]}"
+        )
+    func = node.func
+    name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
+    if FACET_CLASSES.get(name) is not facet_cls:
+        raise ValueError(
+            f"{where}: expected a {facet_cls.__name__}(...) call, got {name!r}"
+        )
+    try:
+        args = [ast.literal_eval(arg) for arg in node.args]
+        kwargs = {kw.arg: ast.literal_eval(kw.value) for kw in node.keywords if kw.arg}
+        return facet_cls(*args, **kwargs)
+    except (ValueError, TypeError, SyntaxError) as exc:
+        raise ValueError(
+            f"{where}: {facet_cls.__name__} arguments must be literals "
+            f"(no names/f-strings/expressions): {exc}"
+        ) from exc
+
+
+def _facet_seq(tree: ast.Module, attr_name: str, facet_cls: type, where: str) -> tuple:
+    """The Deployer's ``attr_name`` facet tuple, AST-evaluated. Absent -> ()."""
+    value = _deployer_assign(tree, attr_name)
+    if value is None:
+        return ()
+    if not isinstance(value, (ast.Tuple, ast.List)):
+        raise ValueError(
+            f"{where}: `{attr_name}` must be a literal tuple/list of "
+            f"{facet_cls.__name__}(...) calls"
+        )
+    return tuple(_facet_instance(el, facet_cls, where) for el in value.elts)
+
+
+def _facet_one(tree: ast.Module, attr_name: str, facet_cls: type, where: str):
+    """The Deployer's single-facet ``attr_name``, AST-evaluated. Absent/None -> None."""
+    value = _deployer_assign(tree, attr_name)
+    if value is None:
+        return None
+    if isinstance(value, ast.Constant) and value.value is None:
+        return None
+    return _facet_instance(value, facet_cls, where)
 
 
 def _is_deployer_class(node: ast.ClassDef) -> bool:
