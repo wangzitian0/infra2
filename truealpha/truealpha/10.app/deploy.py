@@ -4,6 +4,7 @@ import sys
 from libs.common import get_env
 from libs.console import header, info, success, warning
 from libs.deploy.deployer import Deployer, make_tasks
+from libs.service_facets import SecretsFacet
 
 shared_tasks = sys.modules.get("truealpha.10.app.shared")
 
@@ -22,6 +23,37 @@ class AppDeployer(Deployer):
     subdomain = None
     service_port = 3000
     service_name = "web"
+
+    # Vault self-refresh facts (#542): the audit inventory derives from these
+    # (AppRole auth from day one). Two surfaces, mirroring finance_report/app:
+    #   1. the app itself;
+    #   2. the multi-alias ephemeral PREVIEW surface (#522, generalized off
+    #      finance_report/preview's pattern) — declared with an explicit
+    #      service_id, borrowing the SOURCE env's app secrets
+    #      (PREVIEW_SECRET_ENV, default staging).
+    # NOTE: production rollout is _APP_COMPOSE_OVERRIDES-gated (prod compose_id
+    # is None — see libs/deploy_env_config.py), which the audit derives as
+    # "not yet in production" for this app AND its preview surface.
+    secrets = (
+        SecretsFacet(
+            vault_agent_container="truealpha-app-vault-agent${ENV_SUFFIX}",
+            app_containers=(
+                "truealpha-llm${ENV_SUFFIX}",
+                "truealpha-web${ENV_SUFFIX}",
+            ),
+            auth_method="approle",
+        ),
+        SecretsFacet(
+            service_id="truealpha/preview",
+            compose_path="truealpha/truealpha/preview/compose.yaml",
+            vault_agent_container="truealpha-app-vault-agent${ENV_SUFFIX}",
+            app_containers=(
+                "truealpha-llm${ENV_SUFFIX}",
+                "truealpha-web${ENV_SUFFIX}",
+            ),
+            auth_method="approle",
+        ),
+    )
 
     @classmethod
     def pre_compose(cls, c) -> dict | None:

@@ -56,6 +56,23 @@ def test_prod_only_services_skip_staging() -> None:
     assert plan.prod_services == ["platform/signoz"]
 
 
+def test_not_yet_in_production_services_skip_prod() -> None:
+    """#542 (the v1.1.34 2/14 prod-promote failure): an iac_pinned service whose
+    Deployer declares `not_yet_in_production = True` (truealpha's staging-scoped
+    rollout, #500 — no prod composes or Vault provisioning) must fan out to
+    staging only, and be surfaced in the plan rather than silently dropped."""
+    plan = build_plan([MANIFEST_PATH])  # selects every iac_pinned service
+
+    for service in ("truealpha/postgres", "truealpha/data_engine"):
+        assert service in plan.selected
+        assert service in plan.staging_services
+        assert service not in plan.prod_services
+        assert service in plan.not_yet_in_production
+    # In-production services are untouched by the filter.
+    assert "platform/alerting" in plan.prod_services
+    assert plan.to_dict()["not_yet_in_production"] == plan.not_yet_in_production
+
+
 def test_deploy_commands_use_deploy_v2_and_prod_review_signals() -> None:
     plan = build_plan(["platform/12.alerting/compose.yaml"])
     commands = build_deploy_commands(

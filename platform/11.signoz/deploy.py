@@ -13,7 +13,7 @@ from libs.common import (
     otel_ingest_endpoint,
     service_domain,
 )
-from libs.service_facets import ProbeFacet
+from libs.service_facets import BackupFacet, ProbeFacet
 
 shared_tasks = sys.modules.get("platform.11.signoz.shared")
 
@@ -22,6 +22,15 @@ class SigNozDeployer(Deployer):
     service = "signoz"
     compose_path = "platform/11.signoz/compose.yaml"
     data_path = "/data/platform/signoz"
+
+    # Backup facts (#542): the backup inventory derives from these
+    # (formerly the ops.backup-inventory YAML, deleted).
+    backups = (
+        BackupFacet(
+            method="signoz_filesystem_archive",
+            restore_command="restore SigNoz data and collector config while service is stopped.",
+        ),
+    )
     # Observability — single prod instance; all envs ship here. No staging copy.
     prod_only = True
 

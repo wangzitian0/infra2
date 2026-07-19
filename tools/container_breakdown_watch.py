@@ -33,6 +33,7 @@ tools/infra_probe_runner.py's proven _should_send pattern). A bad poll seen whil
 an incident is already active but before the recovery threshold is reached never
 starts a new incident or resets the renotify clock.
 """
+# alerts-as: container-breakdown-watch  (#542 no-new-wheels: registered T5 signal)
 
 from __future__ import annotations
 

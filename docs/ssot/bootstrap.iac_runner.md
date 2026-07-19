@@ -647,7 +647,8 @@ path "auth/token/lookup-self"          { capabilities = ["read"] }
      `auth/approle/login` → 短 TTL token，**删除 `VAULT_APP_TOKEN` 回落**，并修 lines 125/129 诊断文案；
   4. `setup-approle --project=bootstrap --service=iac_runner` 注入凭证（policy 文件已存在且有界）；
   5. `scripts/deploy_iac_runner_bootstrap.sh` 预检 `VAULT_APP_TOKEN` → `VAULT_ROLE_ID`/`VAULT_SECRET_ID`；
-  6. `vault-self-refresh-inventory.yaml` iac_runner `auth_method: approle`；
+  6. iac_runner `auth_method: approle`（现声明于 `bootstrap/06.iac_runner/deploy.py`
+     的 `SecretsFacet`，audit inventory 由此派生，#542）；
   7. 保留现有 policy（含 accessors）。先在 staging 验证完整 GitOps 链路（webhook → `.sync` → 服务 healthy）。
 - **v2（权限收敛）—— 已完成（#369）**：砍掉 `vault_token_accessors` grant 与 `renew-self`，删除
   `setup-tokens` 任务与 `libs/vault_tokens.py` 静态 token 账本代码（仅保留 AppRole 复用的

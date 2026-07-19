@@ -11,7 +11,7 @@ import sys
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.env import generate_password
 from libs.console import header, success, error, warning, info, env_vars
-from libs.service_facets import ProbeFacet
+from libs.service_facets import BackupFacet, ProbeFacet, SecretsFacet
 
 shared_tasks = sys.modules.get("platform.03.minio.shared")
 
@@ -20,6 +20,15 @@ class MinioDeployer(Deployer):
     service = "minio"
     compose_path = "platform/03.minio/compose.yaml"
     data_path = "/data/platform/minio"
+
+    # Backup facts (#542): the backup inventory derives from these
+    # (formerly the ops.backup-inventory YAML, deleted).
+    backups = (
+        BackupFacet(
+            method="minio_bucket_mirror",
+            restore_command="mirror the selected off-host bucket snapshot back into MinIO.",
+        ),
+    )
     secret_key = "root_password"
 
     # Infra probes (#541): rendered into INFRA_PROBE_SPECS by platform/alerting.
@@ -29,6 +38,16 @@ class MinioDeployer(Deployer):
             kind="http",
             target="http://platform-minio${ENV_SUFFIX}:9000/minio/health/live",
             expected="200",
+        ),
+    )
+
+    # Vault self-refresh facts (#542): the audit inventory derives from this
+    # (AppRole auth per #257/#259).
+    secrets = (
+        SecretsFacet(
+            vault_agent_container="platform-minio-vault-agent${ENV_SUFFIX}",
+            app_containers=("platform-minio${ENV_SUFFIX}",),
+            auth_method="approle",
         ),
     )
 

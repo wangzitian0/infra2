@@ -16,7 +16,7 @@ Properties (by design):
   * SINGLE-SOURCED intent — reuses DEFAULT_RECORDS + _normalize_record + the CF client from the
     DNS tooling itself, so it checks the same records the tooling manages, not a third copy.
 
-Config (env, wired from GitHub secrets/vars in .github/workflows/dns-drift-report.yml):
+Config (env, wired from GitHub secrets/vars in ops-checks.yml's facet-reconcile job — #542):
   CF_API_TOKEN, CF_ZONE_ID | CF_ZONE_NAME   Cloudflare read access
   INTERNAL_DOMAIN                            e.g. zitian.party
   CF_RECORDS (optional)                      comma list override; else DEFAULT_RECORDS

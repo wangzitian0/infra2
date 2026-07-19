@@ -79,7 +79,6 @@ nav:
           - Platform PG: ssot/db.platform_pg.md
           - Redis: ssot/db.redis.md
           - ClickHouse: ssot/db.clickhouse.md
-          - Vault Self-Refresh: ssot/vault-self-refresh-inventory.yaml
       - Ops:
           - Standards: ssot/ops.standards.md
           - Pipeline: ssot/ops.pipeline.md
@@ -87,7 +86,6 @@ nav:
           - Test Coverage: ssot/ops.test_coverage.md
           - Recovery: ssot/ops.recovery.md
           - Storage: ssot/ops.storage.md
-          - Backup Inventory: ssot/ops.backup-inventory.yaml
           - Deploy Dependencies: ssot/deploy-dependencies.yaml
           - Delivery Stages: ssot/delivery-stages.yaml
           - CI Gate Inventory: ssot/ci-gate-inventory.yaml

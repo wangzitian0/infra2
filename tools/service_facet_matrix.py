@@ -2,7 +2,7 @@
 """Service × facet completeness matrix (#541).
 
 Extends the validate-deployers gate: for every registry service (a deploy.py
-Deployer subclass) and every facet column ({probes, signals, backup}), the cell
+Deployer subclass) and every facet column ({probes, signals, backups}), the cell
 is one of:
 
 - ``declared``  — the Deployer declares the facet;
@@ -31,7 +31,7 @@ if str(ROOT) not in sys.path:
 
 from libs.service_registry import ServiceMeta, service_attrs  # noqa: E402
 
-FACET_COLUMNS = ("probes", "signals", "backup")
+FACET_COLUMNS = ("probes", "signals", "backups")
 MISSING = "MISSING"
 
 

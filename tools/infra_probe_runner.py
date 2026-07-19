@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Run infra service probes and alert through the internal bridge."""
+# alert-delivery-exempt: the probe ENGINE — delivers on behalf of every registered internal probe signal (per-spec, not per-module)
 
 from __future__ import annotations
 

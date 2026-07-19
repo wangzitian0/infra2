@@ -8,7 +8,7 @@ from invoke import task
 
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.console import env_vars, error, run_with_status, success, header
-from libs.service_facets import Exemption
+from libs.service_facets import BackupFacet, Exemption
 
 # Get shared_tasks from sys.modules (loaded by tools/loader.py)
 shared_tasks = sys.modules.get("platform.21.portal.shared")
@@ -18,6 +18,15 @@ class PortalDeployer(Deployer):
     service = "portal"
     compose_path = "platform/21.portal/compose.yaml"
     data_path = "/data/platform/portal"
+
+    # Backup facts (#542): the backup inventory derives from these
+    # (formerly the ops.backup-inventory YAML, deleted).
+    backups = (
+        BackupFacet(
+            method="config_archive",
+            restore_command="restore portal config.yml.",
+        ),
+    )
     secret_key = ""
     uid = "1000"
     gid = "1000"

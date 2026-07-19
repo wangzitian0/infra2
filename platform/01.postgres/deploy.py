@@ -2,7 +2,7 @@
 
 import sys
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.service_facets import ProbeFacet
+from libs.service_facets import BackupFacet, ProbeFacet, SecretsFacet
 
 shared_tasks = sys.modules.get("platform.01.postgres.shared")
 
@@ -11,6 +11,15 @@ class PostgresDeployer(Deployer):
     service = "postgres"
     compose_path = "platform/01.postgres/compose.yaml"
     data_path = "/data/platform/postgres"
+
+    # Backup facts (#542): the backup inventory derives from these
+    # (formerly the ops.backup-inventory YAML, deleted).
+    backups = (
+        BackupFacet(
+            method="pg_dump_plus_data_archive",
+            restore_command="restore latest pg_dump, then reattach DATA_PATH if needed.",
+        ),
+    )
     uid = "70"  # Alpine postgres user
     chmod = "700"
     secret_key = "root_password"
@@ -22,6 +31,16 @@ class PostgresDeployer(Deployer):
             kind="tcp",
             target="platform-postgres${ENV_SUFFIX}:5432",
             expected="connected",
+        ),
+    )
+
+    # Vault self-refresh facts (#542): the audit inventory derives from this
+    # (AppRole auth per #257/#259).
+    secrets = (
+        SecretsFacet(
+            vault_agent_container="platform-postgres-vault-agent${ENV_SUFFIX}",
+            app_containers=("platform-postgres${ENV_SUFFIX}",),
+            auth_method="approle",
         ),
     )
 

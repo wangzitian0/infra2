@@ -120,12 +120,12 @@ entries:
     owner: docs/ssot/db.clickhouse.md
     summary: ClickHouse (SigNoz Storage)
     description: ClickHouse storage for observability and analytics.
-  vault.self_refresh_inventory:
-    owner: docs/ssot/vault-self-refresh-inventory.yaml
-    summary: Vault app-token self-refresh audit inventory
-    description: Vault app-token self-refresh audit inventory.
-    proofs:
-      - libs/tests/test_vault_self_refresh_audit.py
+  # vault.self_refresh_inventory retired (#542): the audit inventory is DERIVED
+  # from each service Deployer's SecretsFacet declarations (libs/service_facets.py
+  # -> libs/vault_self_refresh_audit.load_inventory); the former handwritten
+  # docs/ssot/vault-self-refresh-inventory.yaml is deleted, its final content
+  # frozen as libs/tests/fixtures/vault_self_refresh_inventory_frozen.yaml
+  # (equivalence proof: libs/tests/test_vault_inventory_equivalence.py).
 
   ops.standards:
     owner: docs/ssot/ops.standards.md
@@ -144,7 +144,7 @@ entries:
       tag-driven reconcile, deploy_v2 front door, the RELEASE model
       (infra2 = independently-released artifact; tag = the live platform version),
       and the T3 config-drift reconcile (§12: prod IAC_CONFIG_HASH vs release tag,
-      daily report-only via config-drift-report.yml).
+      daily report-only via ops-checks.yml's facet-reconcile job, #542).
     proofs:
       - libs/tests/test_iac_runner_deploy_result.py
       - libs/tests/test_pipeline_stage_contract.py
@@ -177,12 +177,6 @@ entries:
     owner: docs/ssot/ops.storage.md
     summary: 备份策略、R2 同步
     description: Storage and R2 backup policy.
-  ops.backup_inventory:
-    owner: docs/ssot/ops.backup-inventory.yaml
-    summary: Persistent data backup coverage inventory
-    description: Persistent data backup coverage inventory.
-    proofs:
-      - libs/tests/test_backup_verification.py
   ops.deploy_dependencies:
     owner: docs/ssot/deploy-dependencies.yaml
     summary: 部署扇出 + content-hash 依赖清单

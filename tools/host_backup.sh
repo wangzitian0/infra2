@@ -31,7 +31,9 @@ MANIFEST="${RUN_DIR}/manifest.json"
 mkdir -p "${RUN_DIR}"
 
 # service_id | kind | source (container or data_path)
-# Mirrors docs/ssot/ops.backup-inventory.yaml. kind in: pg | redis | path
+# Mirrors the BackupFacet declarations on each service's deploy.py
+# (libs.backup_verification.load_backup_inventory derives the inventory; the
+# handwritten ops.backup-inventory.yaml was deleted in #542). kind in: pg | redis | path
 SERVICES=$(cat <<EOF
 bootstrap/vault|path|/data/bootstrap/vault
 platform/postgres|pg|platform-postgres${SUFFIX}

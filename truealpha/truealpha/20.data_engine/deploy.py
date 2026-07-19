@@ -7,6 +7,7 @@ from pathlib import Path
 
 from libs.console import error
 from libs.deploy.deployer import Deployer, make_tasks
+from libs.service_facets import BackupFacet, SecretsFacet
 
 shared_tasks = sys.modules.get("truealpha.20.data_engine.shared")
 
@@ -20,6 +21,15 @@ class DataEngineDeployer(Deployer):
     service = "data_engine"
     compose_path = "truealpha/truealpha/20.data_engine/compose.yaml"
     data_path = "/data/truealpha/dagster"
+
+    # Backup facts (#542): the backup inventory derives from these
+    # (formerly the ops.backup-inventory YAML, deleted).
+    backups = (
+        BackupFacet(
+            method="dagster_artifact_archive",
+            restore_command="restore optional Dagster compute logs/IO artifacts; authoritative run metadata and raw evidence recover from Postgres and S3.",
+        ),
+    )
     uid = "10001"
     gid = "10001"
     secret_key = ""
@@ -28,6 +38,24 @@ class DataEngineDeployer(Deployer):
     subdomain = None
     service_port = 3001
     service_name = "dagster-webserver"
+
+    # Rollout state (#500/#522/#542): staging-scoped, no production composes or
+    # Vault provisioning yet (see truealpha/01.postgres/deploy.py's twin attr
+    # for the full context). REMOVE when promoted to production.
+    not_yet_in_production = True
+
+    # Vault self-refresh facts (#542): the audit inventory derives from this
+    # (AppRole auth from day one).
+    secrets = (
+        SecretsFacet(
+            vault_agent_container="truealpha-data-engine-vault-agent${ENV_SUFFIX}",
+            app_containers=(
+                "truealpha-dagster-webserver${ENV_SUFFIX}",
+                "truealpha-dagster-daemon${ENV_SUFFIX}",
+            ),
+            auth_method="approle",
+        ),
+    )
 
     _POSTGRES_PORTS = {"staging": "15432", "production": "15433"}
     _WEBSERVER_PORTS = {"staging": "13001", "production": "13002"}

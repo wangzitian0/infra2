@@ -26,6 +26,7 @@ from libs.service_facets import (
     BackupFacet,
     Exemption,
     ProbeFacet,
+    SecretsFacet,
     SignalFacet,
 )
 
@@ -49,6 +50,9 @@ _EXTERNAL_COMPONENT_IDS = {
     "finance-report-api": "finance_report/app",
     "finance-report-web": "finance_report/app",
     "host": "infra/host",
+    # the IaC control plane itself (facet reconcile, #542) — a pseudo-id like
+    # infra/host: monitored, but not a deployable service
+    "iac": "infra/iac",
     "iac-runner": "bootstrap/iac-runner",
     "vault": "bootstrap/vault",
 }
@@ -74,11 +78,24 @@ class ServiceMeta:
     telemetry_service_name: str | None  # OTEL service.name override
     telemetry_component: str | None  # OTEL infra.component override
     project: str  # Dokploy project, defaults to "platform"
+    # Deploy artifact facts (#542): the compose file this Deployer ships and the
+    # persistent data root it owns (None = stateless). Literal string attrs on
+    # the Deployer, read for facet derivations (vault inventory, backup
+    # inventory) so those expectations track the SAME deploy-side declaration.
+    compose_path: str | None = None
+    data_path: str | None = None
+    # Rollout state (#542): True = this service has no production deployment yet
+    # (deliberately staging-scoped, e.g. truealpha's #500 rollout). Consumed by
+    # tools/reconcile_iac_inputs.py's prod selection and the vault self-refresh
+    # audit's production exclusion — remove the Deployer attr when the service
+    # is actually promoted, and both derivations follow.
+    not_yet_in_production: bool = False
     # Facet declarations (#541): typed per-service operational facts, read from
     # the same Deployer class via AST. See libs/service_facets.py.
     probes: tuple[ProbeFacet, ...] = ()
     signals: tuple[SignalFacet, ...] = ()
-    backup: BackupFacet | None = None
+    backups: tuple[BackupFacet, ...] = ()
+    secrets: tuple[SecretsFacet, ...] = ()
     exemptions: tuple[Exemption, ...] = ()
     deploy_v2_canary: bool = False
 
@@ -103,26 +120,69 @@ def service_attrs() -> dict[str, ServiceMeta]:
             if not deploy_file.exists():
                 continue
             service_name_dir = parts[1]
-            tree = ast.parse(deploy_file.read_text(encoding="utf-8"))
-            where = str(deploy_file.relative_to(REPO_ROOT))
-            result[f"{layer}/{service_name_dir}"] = ServiceMeta(
-                service_id=f"{layer}/{service_name_dir}",
-                layer=layer,
-                service=_class_attr(tree, "service") or service_name_dir,
-                prod_only=bool(_class_attr(tree, "prod_only") or False),
-                subdomain=_class_attr(tree, "subdomain"),
-                service_port=_class_attr(tree, "service_port"),
-                service_name=_class_attr(tree, "service_name"),
-                telemetry_service_name=_class_attr(tree, "telemetry_service_name"),
-                telemetry_component=_class_attr(tree, "telemetry_component"),
-                project=_class_attr(tree, "project") or "platform",
-                probes=_facet_seq(tree, "probes", ProbeFacet, where),
-                signals=_facet_seq(tree, "signals", SignalFacet, where),
-                backup=_facet_one(tree, "backup", BackupFacet, where),
-                exemptions=_facet_seq(tree, "exemptions", Exemption, where),
-                deploy_v2_canary=bool(_class_attr(tree, "deploy_v2_canary") or False),
+            result[f"{layer}/{service_name_dir}"] = _meta_from_deploy_file(
+                deploy_file, service_id=f"{layer}/{service_name_dir}", layer=layer
             )
     return result
+
+
+def _meta_from_deploy_file(
+    deploy_file: Path, *, service_id: str, layer: str
+) -> ServiceMeta:
+    """Build one ServiceMeta from a deploy.py via AST (never imported)."""
+    service_name_dir = service_id.split("/", 1)[1]
+    tree = ast.parse(deploy_file.read_text(encoding="utf-8"))
+    where = str(deploy_file.relative_to(REPO_ROOT))
+    return ServiceMeta(
+        service_id=service_id,
+        layer=layer,
+        service=_class_attr(tree, "service") or service_name_dir,
+        prod_only=bool(_class_attr(tree, "prod_only") or False),
+        subdomain=_class_attr(tree, "subdomain"),
+        service_port=_class_attr(tree, "service_port"),
+        service_name=_class_attr(tree, "service_name"),
+        telemetry_service_name=_class_attr(tree, "telemetry_service_name"),
+        telemetry_component=_class_attr(tree, "telemetry_component"),
+        project=_class_attr(tree, "project") or "platform",
+        compose_path=_class_attr(tree, "compose_path"),
+        data_path=_class_attr(tree, "data_path"),
+        not_yet_in_production=bool(
+            _class_attr(tree, "not_yet_in_production") or False
+        ),
+        probes=_facet_seq(tree, "probes", ProbeFacet, where),
+        signals=_facet_seq(tree, "signals", SignalFacet, where),
+        backups=_facet_seq(tree, "backups", BackupFacet, where),
+        secrets=_facet_seq(tree, "secrets", SecretsFacet, where),
+        exemptions=_facet_seq(tree, "exemptions", Exemption, where),
+        deploy_v2_canary=bool(_class_attr(tree, "deploy_v2_canary") or False),
+    )
+
+
+# Facet-only bootstrap-plane deploy.py files (#542). The bootstrap plane is
+# deployed by bootstrap tooling and is deliberately OUTSIDE the registry scan —
+# `_LAYERS` drives the deploy fan-out (`all_services()` / discover_services),
+# and bootstrap must never enter that fan-out. But bootstrap/iac_runner's
+# deploy.py is still the single declaration point for its operational facets
+# (SecretsFacet, backups), so facet derivations read it through the SAME
+# fail-closed AST reader without registering it as a deployable service.
+_BOOTSTRAP_FACET_FILES: dict[str, Path] = {
+    "bootstrap/iac_runner": REPO_ROOT / "bootstrap/06.iac_runner/deploy.py",
+}
+
+
+def bootstrap_facet_attrs() -> dict[str, ServiceMeta]:
+    """Facet-only ServiceMetas for the bootstrap plane (NOT in service_attrs()).
+
+    Keys never overlap `all_services()`; consumers that need the bootstrap
+    plane's facets (e.g. the vault self-refresh inventory derivation) merge
+    this in explicitly.
+    """
+    return {
+        service_id: _meta_from_deploy_file(
+            deploy_file, service_id=service_id, layer="bootstrap"
+        )
+        for service_id, deploy_file in _BOOTSTRAP_FACET_FILES.items()
+    }
 
 
 def all_services() -> list[str]:

@@ -69,7 +69,7 @@ class ExampleDeployer(Deployer):
             renotify_window_sec=1800,
         ),
     )
-    backup = BackupFacet(method="pg_dump", retention_days=30, rpo_hours=24)
+    backups = (BackupFacet(method="pg_dump", retention_days=30, rpo_hours=24),)
     exemptions = (Exemption(check_id="probes", reason="covered elsewhere"),)
 """
 
@@ -97,8 +97,8 @@ def test_facet_reader_extracts_literal_declarations() -> None:
     signals = reg._facet_seq(tree, "signals", SignalFacet, "example/deploy.py")
     assert signals[0].tier == "minute"
     assert signals[0].consecutive_failures == 3
-    backup = reg._facet_one(tree, "backup", BackupFacet, "example/deploy.py")
-    assert backup == BackupFacet(method="pg_dump", retention_days=30, rpo_hours=24)
+    backups = reg._facet_seq(tree, "backups", BackupFacet, "example/deploy.py")
+    assert backups == (BackupFacet(method="pg_dump", retention_days=30, rpo_hours=24),)
     exemptions = reg._facet_seq(tree, "exemptions", Exemption, "example/deploy.py")
     assert exemptions[0].check_id == "probes"
 
@@ -106,7 +106,7 @@ def test_facet_reader_extracts_literal_declarations() -> None:
 def test_facet_reader_defaults_when_absent() -> None:
     tree = ast.parse("class XDeployer(Deployer):\n    service = 'x'\n")
     assert reg._facet_seq(tree, "probes", ProbeFacet, "x") == ()
-    assert reg._facet_one(tree, "backup", BackupFacet, "x") is None
+    assert reg._facet_seq(tree, "backups", BackupFacet, "x") == ()
 
 
 def test_facet_reader_ignores_nested_and_helper_classes() -> None:
@@ -178,7 +178,7 @@ def test_service_attrs_exposes_facet_fields_for_every_service() -> None:
         assert isinstance(meta.probes, tuple)
         assert isinstance(meta.signals, tuple)
         assert isinstance(meta.exemptions, tuple)
-        assert meta.backup is None or isinstance(meta.backup, BackupFacet)
+        assert all(isinstance(b, BackupFacet) for b in meta.backups)
         assert isinstance(meta.deploy_v2_canary, bool)
 
 
@@ -187,7 +187,7 @@ def test_deployer_base_facet_defaults_are_empty() -> None:
 
     assert Deployer.probes == ()
     assert Deployer.signals == ()
-    assert Deployer.backup is None
+    assert Deployer.backups == ()
     assert Deployer.exemptions == ()
     assert Deployer.deploy_v2_canary is False
 
@@ -205,7 +205,7 @@ def test_cell_states_declared_exempt_missing() -> None:
     assert cell_state(declared, "probes") == "declared"
     assert cell_state(declared, "signals") == "MISSING"
     assert cell_state(exempt, "signals") == "exempt"
-    assert cell_state(exempt, "backup") == "MISSING"
+    assert cell_state(exempt, "backups") == "MISSING"
 
 
 def test_matrix_flags_critical_probe_without_signal_facet() -> None:
@@ -286,7 +286,7 @@ def test_build_matrix_and_report_cover_every_service_and_column() -> None:
     assert rows[0][1] == {
         "probes": "declared",
         "signals": "MISSING",
-        "backup": "MISSING",
+        "backups": "MISSING",
     }
     report, clean = render_report(attrs)
     assert not clean

@@ -20,19 +20,39 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 MANIFEST = "repos/finance_report/common/runtime/required-env.generated.json"
 TEMPLATE = "finance_report/finance_report/10.app/secrets.ctmpl"
+APP_SERVICE_ID = "finance_report/app"
 RENDERED_VAR_RE = re.compile(r"^([A-Z][A-Z0-9_]*)=", re.MULTILINE)
 
-# Escape hatch (#523): names that must never be reported as drift, regardless of what
-# the regex above finds in secrets.ctmpl or what finance_report's manifest says. The
-# regex is comment-blind (it scans raw text, not a parsed Go template), so a future
-# doc-comment example written flush against column 0 could be misread as a "rendered"
-# variable. Add an entry here — with a comment explaining why — instead of reshaping
-# the template just to dodge a false positive.
-DRIFT_ALLOWLIST: frozenset[str] = frozenset()
+# Escape-hatch namespace (#523/#542): a name that must never be reported as drift
+# (e.g. a doc-comment example the comment-blind regex above misreads as a rendered
+# variable) is declared as an `Exemption(check_id="required-env-drift:<NAME>",
+# reason=...)` on finance_report/app's Deployer — the same facet declaration point
+# every other per-service fact lives at — and DERIVED here. The former module-level
+# DRIFT_ALLOWLIST constant is gone.
+DRIFT_EXEMPTION_PREFIX = "required-env-drift:"
 
 REQUIRED_FIELD_KEYS = ("env", "aliases", "vault")
+
+
+def drift_allowlist() -> frozenset[str]:
+    """Names exempted from drift reporting, derived from the app's facet
+    exemptions (see DRIFT_EXEMPTION_PREFIX above)."""
+    from libs.service_registry import service_attrs
+
+    return _allowlist_from_exemptions(service_attrs()[APP_SERVICE_ID].exemptions)
+
+
+def _allowlist_from_exemptions(exemptions) -> frozenset[str]:
+    return frozenset(
+        exemption.check_id[len(DRIFT_EXEMPTION_PREFIX) :]
+        for exemption in exemptions
+        if exemption.check_id.startswith(DRIFT_EXEMPTION_PREFIX)
+    )
 
 
 class ManifestShapeError(ValueError):
@@ -88,13 +108,14 @@ def _manifest_fields(root: Path) -> list[dict]:
     return validated
 
 
-def _rendered_names(root: Path) -> set[str]:
-    return set(RENDERED_VAR_RE.findall((root / TEMPLATE).read_text(encoding="utf-8"))) - DRIFT_ALLOWLIST
+def _rendered_names(root: Path, allowlist: frozenset[str]) -> set[str]:
+    return set(RENDERED_VAR_RE.findall((root / TEMPLATE).read_text(encoding="utf-8"))) - allowlist
 
 
-def audit(root: Path = ROOT) -> dict:
+def audit(root: Path = ROOT, allowlist: frozenset[str] | None = None) -> dict:
+    resolved_allowlist = drift_allowlist() if allowlist is None else allowlist
     fields = _manifest_fields(root)
-    rendered = _rendered_names(root)
+    rendered = _rendered_names(root, resolved_allowlist)
     manifest_names: set[str] = set()
     for field in fields:
         manifest_names.add(field["env"])
@@ -104,7 +125,7 @@ def audit(root: Path = ROOT) -> dict:
         field["env"]
         for field in fields
         if field["vault"]
-        and field["env"] not in DRIFT_ALLOWLIST
+        and field["env"] not in resolved_allowlist
         and not (({field["env"]} | set(field["aliases"])) & rendered)
     )
     stale_template_entries = sorted(rendered - manifest_names)

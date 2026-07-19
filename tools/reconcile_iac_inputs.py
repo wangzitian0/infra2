@@ -14,7 +14,7 @@ import json
 import os
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
 
@@ -32,6 +32,11 @@ class ReconcilePlan:
     dropped: list[str]
     staging_services: list[str]
     prod_services: list[str]
+    # Selected services deploying to STAGING ONLY because they have no
+    # production deployment yet (ServiceSpec.not_yet_in_production, #542 —
+    # derived from the Deployer's literal attr). Surfaced so a prod promotion
+    # plan shows WHY a service is absent instead of failing on it (v1.1.34).
+    not_yet_in_production: list[str] = field(default_factory=list)
 
     @property
     def services(self) -> list[str]:
@@ -46,6 +51,7 @@ class ReconcilePlan:
             "services": self.services,
             "staging_services": self.staging_services,
             "prod_services": self.prod_services,
+            "not_yet_in_production": self.not_yet_in_production,
         }
 
 
@@ -180,9 +186,17 @@ def build_plan(changed_files: Sequence[str]) -> ReconcilePlan:
 
     staging_services: list[str] = []
     prod_services: list[str] = []
+    not_yet_in_production: list[str] = []
     for service in sorted(selected):
         spec = service_spec(service)
-        if spec.prod_only:
+        # #542: a service with no production deployment yet (staging-scoped
+        # rollout, e.g. truealpha #500) deploys to staging only — including it
+        # in the prod fan-out is exactly what failed the v1.1.34 promote 2/14
+        # (no prod composes / Vault provisioning to deploy to).
+        if spec.not_yet_in_production:
+            staging_services.append(service)
+            not_yet_in_production.append(service)
+        elif spec.prod_only:
             prod_services.append(service)
         else:
             staging_services.append(service)
@@ -195,6 +209,7 @@ def build_plan(changed_files: Sequence[str]) -> ReconcilePlan:
         dropped=sorted(decision.dropped),
         staging_services=staging_services,
         prod_services=prod_services,
+        not_yet_in_production=not_yet_in_production,
     )
 
 
@@ -321,6 +336,11 @@ def write_summary(
             + ", ".join(
                 f"`{service}` ({reason})" for service, reason in plan.ignored.items()
             )
+        )
+    if plan.not_yet_in_production:
+        lines.append(
+            "- Staging-only (not yet in production): "
+            + ", ".join(f"`{service}`" for service in plan.not_yet_in_production)
         )
     if results:
         failed = [item for item in results if item.get("returncode") != 0]

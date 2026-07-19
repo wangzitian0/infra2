@@ -8,7 +8,6 @@ import yaml
 
 from libs import vault_self_refresh_audit as vault_self_refresh_audit_module
 from libs.vault_self_refresh_audit import (
-    OPTIONAL_INERT_FIELD_WATCHLIST,
     VaultService,
     _remote_container_logs,
     _remote_container_state,
@@ -25,7 +24,6 @@ from libs.vault_self_refresh_audit import (
     discover_vault_agent_compose_paths,
     inventory_compose_paths,
     load_inventory,
-    optional_inert_fields_for,
     redact,
     write_report,
 )
@@ -357,7 +355,8 @@ def test_mount_exempt_app_container_not_flagged_for_missing_secrets_mount() -> N
     and #163's independent investigation). Fixing the restart-count false positive
     unmasked this pre-existing, different check-vs-reality mismatch: applying
     app_secret_mount_path uniformly to every app_container assumed a uniformity that
-    doesn't hold. MOUNT_EXEMPT_CONTAINERS must suppress the mount check for it, while
+    doesn't hold. The prefect SecretsFacet's `mount_exempt_containers` (#542, formerly
+    the MOUNT_EXEMPT_CONTAINERS constant) must suppress the mount check for it, while
     every OTHER app_container in the same service (e.g. platform-prefect-services,
     which genuinely does read secrets) keeps being checked normally."""
     services = load_inventory()
@@ -889,14 +888,15 @@ def test_remote_secret_file_text_returns_empty_on_ssh_failure(monkeypatch) -> No
 
 def test_optional_inert_field_watchlist_covers_llm_encryption_keys() -> None:
     """#526: LLM_ENCRYPTION_KEYS is the one field the issue identified as
-    optional-by-architecture and outside every other observability signal."""
-    assert (
-        "finance_report/app",
+    optional-by-architecture and outside every other observability signal.
+    #542: the watchlist now lives as `optional_inert_fields` on the owning
+    service's SecretsFacet, derived into the inventory."""
+    by_id = {service.id: service for service in load_inventory()}
+    assert by_id["finance_report/app"].optional_inert_fields == (
         "LLM_ENCRYPTION_KEYS",
-    ) in OPTIONAL_INERT_FIELD_WATCHLIST
-    assert optional_inert_fields_for("finance_report/app") == ("LLM_ENCRYPTION_KEYS",)
+    )
     # No watchlist entries for services never flagged as having this gap.
-    assert optional_inert_fields_for("platform/postgres") == ()
+    assert by_id["platform/postgres"].optional_inert_fields == ()
 
 
 def test_optional_field_inertness_classifier_reports_empty_value_as_inert() -> None:

@@ -139,8 +139,9 @@
 read-only audit instead of relying on ad hoc SSH checks.
 
 **Scope**:
-- Inventory every active deployed `vault-agent` compose service in
-  `docs/ssot/vault-self-refresh-inventory.yaml`.
+- Inventory every active deployed `vault-agent` compose service (originally
+  `docs/ssot/vault-self-refresh-inventory.yaml`; since #542 derived from each
+  Deployer's `SecretsFacet` declarations).
 - Add `invoke vault-audit.self-refresh` to collect Dokploy env, Vault token
   lookup, rendered env freshness, vault-agent logs, and container state.
 - Keep live collection read-only: no token renewal, restart, redeploy, or secret

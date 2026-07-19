@@ -177,6 +177,21 @@ def app_compose_env_config(service: str, env: str) -> EnvConfig:
     )
 
 
+def services_without_prod_compose() -> frozenset[str]:
+    """Bespoke apps whose registered prod compose_id is None — i.e. NO production
+    deployment exists yet (#542). The None literal above IS the declaration
+    ("fails closed if prod ever appears without this being updated first"), so
+    "not yet in production" is DERIVED from it rather than declared a second
+    time — consumed by the vault self-refresh audit's production exclusion
+    (libs.vault_self_refresh_audit.inventory_ids_not_in_production).
+    """
+    return frozenset(
+        service
+        for service, overrides in _APP_COMPOSE_OVERRIDES.items()
+        if "prod" in overrides and overrides["prod"].compose_id is None
+    )
+
+
 # The baseline bespoke app: finance_report/app has no _APP_COMPOSE_OVERRIDES entry, its
 # compose_id/app_url_pattern come straight from `_ENVIRONMENTS` (env_config()). It still
 # needs a Dokploy project/compose-name pair for live drift verification below, so it is
