@@ -50,6 +50,9 @@ _EXTERNAL_COMPONENT_IDS = {
     "finance-report-api": "finance_report/app",
     "finance-report-web": "finance_report/app",
     "host": "infra/host",
+    # the IaC control plane itself (facet reconcile, #542) — a pseudo-id like
+    # infra/host: monitored, but not a deployable service
+    "iac": "infra/iac",
     "iac-runner": "bootstrap/iac-runner",
     "vault": "bootstrap/vault",
 }

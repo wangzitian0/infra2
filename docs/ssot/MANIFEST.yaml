@@ -144,7 +144,7 @@ entries:
       tag-driven reconcile, deploy_v2 front door, the RELEASE model
       (infra2 = independently-released artifact; tag = the live platform version),
       and the T3 config-drift reconcile (§12: prod IAC_CONFIG_HASH vs release tag,
-      daily report-only via config-drift-report.yml).
+      daily report-only via ops-checks.yml's facet-reconcile job, #542).
     proofs:
       - libs/tests/test_iac_runner_deploy_result.py
       - libs/tests/test_pipeline_stage_contract.py

@@ -378,7 +378,7 @@ git fetch --tags && git tag -l "v*.*.*" | sort -V | tail -5
   未变化时允许保留旧 deploy ref,避免无意义重启;ref 不是“必须等于最新 tag”的重部署开关。runtime secret 只进入
   `IAC_CONFIG_HASH`,不参与 release fidelity。旧部署缺 source identity 时分类为 `legacy_identity`,
   不伪装成 DRIFT;下次正常 release/reconcile 会迁移。
-- **载体**:[`.github/workflows/config-drift-report.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/config-drift-report.yml)
+- **载体**:ops-checks.yml 的 `facet-reconcile` job（#542 起与 compose_id/dns 漂移合并为单一日对账）
   ——**日报,strict detection,绝不自动 remediate**:真实 drift / detector error / structural mismatch
   使 workflow 失败并保留报告(修复仍正常走 release/reconcile,见 §2/§3;这符合
   §"告警 vs 报告"的天级=报告铁律,归 [ops.obs](./ops.observability.md) 的 cadence 分层)。

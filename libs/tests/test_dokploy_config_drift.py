@@ -1,7 +1,7 @@
 """Tests for the T3 config-drift reconciler's pure parts (tools/dokploy_config_drift.py).
 
 The live halves (Dokploy API, git-at-tag deployer loading) run in
-config-drift-report.yml with --self-check; here we lock the pure logic a
+the facet-reconcile job (#542) with --self-check; here we lock the pure logic a
 silent regression would hide behind: report formatting must surface DRIFT and
 ERROR loudly (a "0 drift" that silently skipped N services is the lie this
 tool exists to avoid), and contents_at_ref must distinguish missing paths.

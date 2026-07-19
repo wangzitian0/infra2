@@ -705,3 +705,20 @@ signals:
     cadence: 1d
     tier: day
     type: report
+
+  # Daily facet reconcile (#542 task 4): ONE reality-vs-declaration run absorbing
+  # the three formerly separate drift jobs (bespoke-app compose_id — previously
+  # signal-less; config-hash drift; dns drift). ops-checks.yml `facet-reconcile`
+  # (cron "17 7 * * *") running tools/facet_reconcile.py. primary_owner=self: it
+  # delivers its own daily report (self-proving, #425) and pages Feishu directly
+  # only on confirmed findings (#524 discipline). tier=day/type=report: silent-
+  # success-report shape; drift harm timescales are hours-to-days.
+  - signal_id: global.infra2.facet-reconcile
+    environment: global
+    component: iac
+    signal: facet-reconcile
+    primary_owner: self
+    severity: critical
+    cadence: 1d
+    tier: day
+    type: report
