@@ -9,10 +9,12 @@ chmod 700), prepared by `Deployer._prepare_dirs()` before deploy.
 - Internal hostname: `truealpha-postgres${ENV_SUFFIX}:5432`, DB `truealpha`.
 - Not publicly routed (`traefik.enable=false`).
 - Schemas (`raw` / `staging` / `mart` / `dagster` + KG tables) are owned by the
-  app repo (`db/migrations/*.sql`, idempotent). Apply after first boot:
-  `for f in db/migrations/*.sql db/roles.sql; do psql "$DATABASE_URL" -f "$f"; done`
-  (run from the truealpha repo; a proper in-container migration runner is
-  planned with the app's Phase 0.)
+  app repo (`db/migrations/*.sql`, idempotent). The `../10.app` `llm` container now
+  applies them on every boot (`db/apply_migrations.sh`, baked into the image,
+  truealpha#428) before serving — no manual step needed after first boot anymore.
+  The old manual command (`for f in db/migrations/*.sql db/roles.sql; do psql
+  "$DATABASE_URL" -f "$f"; done`, run from the truealpha repo) still works standalone
+  if you need to apply schema without bringing the app up.
 
 ## Deploy
 

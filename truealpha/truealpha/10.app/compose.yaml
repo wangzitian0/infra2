@@ -90,6 +90,9 @@ services:
         set -a
         . /secrets/.env
         set +a
+        # Apply db/migrations/*.sql + db/roles.sql (baked into the image, #428) against
+        # this env's DATABASE_URL before serving. Idempotent SQL, safe on every boot.
+        ./db/apply_migrations.sh
         exec uvicorn llm_service.main:app --host 0.0.0.0 --port 8000
     environment:
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
