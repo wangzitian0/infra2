@@ -89,3 +89,4 @@ docs/.site/
 # Codex local agent workspace state
 .codex/
 
+.claude/

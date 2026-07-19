@@ -51,11 +51,14 @@ class Section:
 
 
 def run_compose_id_section() -> Section:
-    from libs.dokploy import get_dokploy
-    from tools.app_compose_id_drift import confirmed_drift, format_report, scan
-
     section = Section("compose-id")
     try:
+        # imports inside the try (live lesson from the first run: a missing
+        # dependency in one section must degrade to THAT section's blocker,
+        # not crash the whole runner before the report is even delivered)
+        from libs.dokploy import get_dokploy
+        from tools.app_compose_id_drift import confirmed_drift, format_report, scan
+
         rows = scan(get_dokploy())
     except Exception as exc:  # noqa: BLE001 — a dead Dokploy is a blocker, not a crash
         section.blockers.append(f"compose_id scan failed: {exc}")
@@ -70,15 +73,15 @@ def run_compose_id_section() -> Section:
 
 
 def run_config_drift_section() -> Section:
-    from tools.dokploy_config_drift import (
-        _latest_release_tag,
-        format_report,
-        scan,
-        strict_blockers,
-    )
-
     section = Section("config-hash")
     try:
+        from tools.dokploy_config_drift import (
+            _latest_release_tag,
+            format_report,
+            scan,
+            strict_blockers,
+        )
+
         tag = _latest_release_tag()
         rows = scan(tag)
     except Exception as exc:  # noqa: BLE001
@@ -93,14 +96,6 @@ def run_config_drift_section() -> Section:
 
 
 def run_dns_section() -> Section:
-    from tools.dns_drift_report import (
-        _actual_records,
-        _dns_tasks,
-        _expected_records,
-        compute_drift,
-        format_report,
-    )
-
     section = Section("dns")
     have_zone = bool(os.environ.get("CF_ZONE_ID") or os.environ.get("CF_ZONE_NAME"))
     if not (os.environ.get("CF_API_TOKEN") and os.environ.get("INTERNAL_DOMAIN") and have_zone):
@@ -109,6 +104,14 @@ def run_dns_section() -> Section:
         section.report = "dns: skipped (Cloudflare credentials not configured)"
         return section
     try:
+        from tools.dns_drift_report import (
+            _actual_records,
+            _dns_tasks,
+            _expected_records,
+            compute_drift,
+            format_report,
+        )
+
         dns = _dns_tasks()
         expected = set(_expected_records(dns))
         actual = set(_actual_records(dns))
