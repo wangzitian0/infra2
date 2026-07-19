@@ -253,15 +253,34 @@ class AlertingDeployer(Deployer):
                 hide=True,
             )
             if not result.failed:
-                missing = missing_probe_names(source_specs, result.stdout or "")
-                if not missing:
-                    success(f"Runtime verified: {container} carries all source probes")
+                running_raw = (result.stdout or "").strip()
+                missing = missing_probe_names(source_specs, running_raw)
+                # Name-set coverage alone is NOT enough: the v1.1.33 staging deploy
+                # FAILED on the Dokploy side yet passed this check, because the
+                # stale (never-recreated) container still carried an equivalent
+                # 21-probe set from the old compose literal. Require the container's
+                # raw env value to equal what THIS deploy shipped (normalized) —
+                # a container that was not recreated with this deploy's exact
+                # config can no longer masquerade as verified.
+                value_matches = normalize_specs_text(running_raw) == source_specs
+                if not missing and value_matches:
+                    success(
+                        f"Runtime verified: {container} carries this deploy's exact "
+                        "probe specs"
+                    )
                     return None
-                last_err = (
-                    f"{container} is missing {len(missing)} probe(s) from the deployed "
-                    f"INFRA_PROBE_SPECS ({', '.join(missing)}) — container did not pick "
-                    "up the new config (likely not recreated)"
-                )
+                if not missing and not value_matches:
+                    last_err = (
+                        f"{container} carries an equivalent probe set but NOT this "
+                        "deploy's exact INFRA_PROBE_SPECS value — the container was "
+                        "not recreated with the new config (stale deploy)"
+                    )
+                else:
+                    last_err = (
+                        f"{container} is missing {len(missing)} probe(s) from the "
+                        f"deployed INFRA_PROBE_SPECS ({', '.join(missing)}) — container "
+                        "did not pick up the new config (likely not recreated)"
+                    )
             else:
                 last_err = (
                     f"could not read INFRA_PROBE_SPECS from {container}: "
