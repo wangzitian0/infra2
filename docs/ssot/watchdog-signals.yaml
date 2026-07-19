@@ -1,9 +1,61 @@
+# Signal ownership registry for tools/watchdog_consistency_audit.py (a blocking
+# infra-ci gate). Each signal is cross-validated against the live code-owned
+# config that actually implements it:
+#   primary_owner=internal  -> platform/12.alerting/compose.yaml INFRA_PROBE_SPECS
+#   primary_owner=cloudflare -> cloudflare/infra-watchdog/wrangler.toml
+#   primary_owner=github     -> tools/out_of_band_watchdog.py
+#   primary_owner=excluded   -> intentionally unwatched; requires exclusion_reason
+#                                + revalidation_condition
+#   primary_owner=self       -> the check pages Feishu directly from its own code
+#                                path (an in-process sidecar or a scheduled job's
+#                                own alerting step), verified by that tool's own
+#                                test suite rather than one of the three shared
+#                                config sources above -- so it is exempt from
+#                                this audit's owner-specific existence checks
+#                                (see tools/container_breakdown_watch.py,
+#                                tools/vault_self_refresh_audit_check.py).
+#
+# `tier` (minute|hour|day|month) + `type` (alert|report) -- #425 T5.
+# ops.observability.md §2 is the SSOT law (landed by #425 T1/#426): ALERT is
+# event-driven (fires only on a real failure), REPORT is time-driven (a
+# periodic summary whose own delivery self-proves the channel); the
+# cross-cutting invariant is tier<=hour => type=alert, tier>=day =>
+# type=report (the alert/report boundary IS the day line).
+#
+# These two fields are OPTIONAL per signal -- backfilling every existing entry
+# below is #425 T2's classify/audit job, tracked separately, not this gate's.
+# But the moment a signal declares `type: alert`, tools/watchdog_consistency_
+# audit.py._validate_tier_and_type() MAKES MANDATORY a structured (not
+# free-text) debounce:
+#   consecutive_failures: <int>   # consecutive bad polls before firing
+#   renotify_window_sec:  <int>   # seconds between re-alerts on an active incident
+# This is #425's own comment thread, verbatim: "an alert-tier check must
+# declare not only {tier, type} but, for type=alert, a debounce/threshold =
+# what distinguishes a real failure from a transient blip. That makes
+# slow!=dead a structural rule, not per-check luck." It exists because this
+# codebase shipped that exact bug TWICE independently before the rule existed
+# -- tools/container_breakdown_watch.py (#475, 333 firing/resolved pairs in
+# 48h from un-debounced flapping) and libs/vault_self_refresh_audit.py (#531,
+# four separate instances of a check with no time-window semantics). The
+# pre-existing free-text `alert_threshold: "3 consecutive failures"` field on
+# many entries below is left as-is (not retrofitted into the structured
+# fields here) -- converting the whole registry is more T2's classify-sweep
+# than this gate's enforcement mechanism; new alert-type entries should
+# prefer the structured fields, and may additionally carry `alert_threshold`
+# as a human-readable summary.
+#
+# Hard cutover, not a ratchet: zero pre-existing entries declared `type:
+# alert` before #425 T5, so making the debounce fields mandatory for
+# `type: alert` breaks nothing already in this file -- see
+# libs/tests/test_watchdog_consistency_audit.py for the positive/negative
+# proof.
 version: 2
 owners:
   - internal
   - cloudflare
   - github
   - excluded
+  - self
 signals:
   - signal_id: production.dokploy.internal-http
     environment: production
@@ -596,3 +648,58 @@ signals:
     primary_owner: github
     severity: critical
     cadence: 1d
+
+  # Container-breakdown watch (#425 T5 registration; #475 is the debounce this
+  # entry declares). In-process sidecar --
+  # platform/12.alerting/compose.yaml `container-breakdown-watch` running
+  # tools/container_breakdown_watch.py --loop -- polling the Docker socket every
+  # BREAKDOWN_INTERVAL_SECONDS=60s and paging Feishu directly (no separate
+  # out-of-band watchdog verifies it, hence primary_owner=self). tier=minute/
+  # type=alert: a crash-looping container hurts users within minutes. The
+  # consecutive_failures/renotify_window_sec below are
+  # libs.recency.evaluate_consecutive_hysteresis's fire thresholds -- exactly the
+  # debounce whose ABSENCE caused #475 (333 firing/resolved pairs in 48h from a
+  # single flapping container, each wrongly resetting the renotify clock).
+  - signal_id: production.docker.container-breakdown-watch
+    environment: production
+    component: docker
+    signal: container-breakdown-watch
+    primary_owner: self
+    severity: critical
+    cadence: 60s
+    tier: minute
+    type: alert
+    consecutive_failures: 3 # BREAKDOWN_FAILURE_THRESHOLD
+    renotify_window_sec: 1800 # BREAKDOWN_RENOTIFY_SECONDS
+    recovery_threshold: 5 # BREAKDOWN_RECOVERY_THRESHOLD (consecutive healthy polls to resolve; not a mandatory field, kept for completeness)
+    alert_threshold: 3 consecutive broken polls (~3 minutes at 60s cadence)
+
+  # Vault self-refresh audit (#425 T5 registration; #531 is the recency-window
+  # investigation this check exists to close). Daily GitHub Actions job --
+  # .github/workflows/ops-checks.yml `vault-self-refresh-audit` (cron
+  # "17 8 * * *") running tools/vault_self_refresh_audit_check.py, which SSHes
+  # the VPS + reads live Dokploy compose env to inspect every service's
+  # vault-agent/app-container self-refresh state. primary_owner=self: it pages
+  # Feishu directly from its own workflow step (see ops-checks.yml's "Alert on
+  # confirmed failure" step), not via a separate out-of-band watchdog.
+  # tier=day/type=report, NOT alert: the job is silent on success and its only
+  # notification is a page on a *confirmed* `status="fail"` result -- the same
+  # silent-success/page-only-on-confirmed-failure shape this SSOT already
+  # classifies deploy_v2_canary under (ops.observability.md §2 / SOP-007B), and
+  # its once-daily cadence matches the harm-timescale of a slowly-staling Vault
+  # secret (hours-to-days), not a minutes-scale liveness signal probe-runner
+  # already owns. Because type=report, the alert-only consecutive_failures/
+  # renotify_window_sec fields do not apply here: each scheduled run is a
+  # fresh, independent one-shot audit with no consecutive-poll state to debounce
+  # (see libs/vault_self_refresh_audit.py's module docstring for how
+  # *within-a-run* staleness/recency is bounded instead, e.g.
+  # RESTART_RECENCY_WINDOW_SECONDS).
+  - signal_id: global.vault.self-refresh-audit
+    environment: global
+    component: vault
+    signal: vault-self-refresh-audit
+    primary_owner: self
+    severity: critical
+    cadence: 1d
+    tier: day
+    type: report
