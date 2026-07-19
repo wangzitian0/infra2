@@ -166,7 +166,9 @@ def test_code_owned_ssot_entries_have_test_or_code_proofs() -> None:
         "platform.openpanel",
         # ops.alerting + ops.availability_ledger folded into ops.obs (single owner).
         "ops.obs",
-        "ops.backup_inventory",
+        # ops.backup_inventory retired (#542): the inventory is derived from
+        # Deployer BackupFacet declarations; its proof anchors moved to
+        # libs/tests/test_backup_inventory_equivalence.py.
         "ops.pipeline",
         # vault.self_refresh_inventory retired (#542): the inventory is derived
         # from Deployer SecretsFacet declarations; its proof anchors moved to

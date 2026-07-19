@@ -392,7 +392,7 @@ class Deployer:
     # libs/service_facets.py for the constraint and field docs.
     probes: tuple[ProbeFacet, ...] = ()
     signals: tuple[SignalFacet, ...] = ()
-    backup: BackupFacet | None = None
+    backups: tuple[BackupFacet, ...] = ()
     exemptions: tuple[Exemption, ...] = ()
     # True for services whose deploy path is exercised by the deploy_v2
     # acceptance canary (tools/deploy_v2_canary.py iterates the registry for

@@ -7,7 +7,7 @@ from tempfile import NamedTemporaryFile
 
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.console import success, info, run_with_status, error
-from libs.service_facets import Exemption
+from libs.service_facets import BackupFacet, Exemption
 
 shared_tasks = sys.modules.get("platform.03.clickhouse.shared")
 
@@ -16,6 +16,15 @@ class ClickHouseDeployer(Deployer):
     service = "clickhouse"
     compose_path = "platform/03.clickhouse/compose.yaml"
     data_path = "/data/platform/clickhouse"
+
+    # Backup facts (#542): the backup inventory derives from these
+    # (formerly the ops.backup-inventory YAML, deleted).
+    backups = (
+        BackupFacet(
+            method="clickhouse_data_archive",
+            restore_command="restore ClickHouse data/log directories while service is stopped.",
+        ),
+    )
     # Backs SigNoz (observability) — single prod instance, no staging copy.
     prod_only = True
     uid = "101"

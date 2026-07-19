@@ -5,7 +5,7 @@ import sys
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.env import get_secrets
 from libs.console import error, info, success
-from libs.service_facets import ProbeFacet, SecretsFacet
+from libs.service_facets import BackupFacet, ProbeFacet, SecretsFacet
 
 shared_tasks = sys.modules.get("platform.12.alerting.shared")
 
@@ -14,6 +14,15 @@ class AlertingDeployer(Deployer):
     service = "alerting"
     compose_path = "platform/12.alerting/compose.yaml"
     data_path = "/data/platform/alerting"
+
+    # Backup facts (#542): the backup inventory derives from these
+    # (formerly the ops.backup-inventory YAML, deleted).
+    backups = (
+        BackupFacet(
+            method="config_archive",
+            restore_command="restore alerting config artifacts; runtime secrets come from Vault.",
+        ),
+    )
 
     subdomain = None
     service_port = 8080

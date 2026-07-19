@@ -1,7 +1,7 @@
 import sys
 
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.service_facets import SecretsFacet
+from libs.service_facets import BackupFacet, SecretsFacet
 
 shared_tasks = sys.modules.get("finance_report.02.redis.shared")
 
@@ -12,6 +12,15 @@ class RedisDeployer(Deployer):
     service = "redis"
     compose_path = "finance_report/finance_report/02.redis/compose.yaml"
     data_path = "/data/finance_report/redis"
+
+    # Backup facts (#542): the backup inventory derives from these
+    # (formerly the ops.backup-inventory YAML, deleted).
+    backups = (
+        BackupFacet(
+            method="redis_rdb_archive",
+            restore_command="stop Redis, restore dump.rdb, then start Redis.",
+        ),
+    )
     secret_key = "PASSWORD"
     project = "finance_report"  # Dokploy project name
 

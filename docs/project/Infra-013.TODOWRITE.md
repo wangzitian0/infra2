@@ -20,7 +20,7 @@ Track the duplication sites that must be derived-from / audited-against the
 - [ ] Generate irreducible watchdog endpoint skeletons instead of committed duplication (follow-up; identity drift is already blocked)
 - [ ] `platform/23.prefect/compose.yaml:114`: `platform-authentik-server` missing `${ENV_SUFFIX}` → staging hits prod Authentik (P2, latent bug)
 - [ ] compose lint: flag `platform-<svc>` references that should carry `${ENV_SUFFIX}` (P2)
-- [ ] `docs/ssot/ops.backup-inventory.yaml`: derive service+data_path skeleton (P3)
+- [x] backup inventory: derived from per-service `BackupFacet` declarations (#542; the handwritten YAML is deleted, `libs/backup_verification.py::load_backup_inventory` is the derivation)
 - [x] `docs/ssot/vault-self-refresh-inventory.yaml`: derived from Deployer `SecretsFacet` declarations and deleted (#542)
 - [ ] `bootstrap/02.dns_and_cert/tasks.py`: `DEFAULT_RECORDS` derive from subdomains (P3)
 - [ ] ENV_SUFFIX logic duplicated: `sync_runner.deploy_env_overrides` vs `libs/common.py` (P3)

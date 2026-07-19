@@ -14,7 +14,6 @@ from libs.service_identity import ServiceIdentity
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_INVENTORY_PATH = REPO_ROOT / "docs/ssot/ops.backup-inventory.yaml"
 
 
 class BackupManifestError(ValueError):
@@ -44,15 +43,66 @@ class BackupCheck:
         return asdict(self)
 
 
-def load_backup_inventory(
-    path: Path | str = DEFAULT_INVENTORY_PATH,
-) -> list[BackupEntry]:
-    data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-    defaults = data.get("defaults", {})
+# Inventory-wide defaults, formerly the deleted handwritten YAML's `defaults:`
+# block (#542). A BackupFacet leaving retention/rpo/remote at zero-values means
+# "use these".
+INVENTORY_DEFAULTS = {"retention_days": 30, "rpo_hours": 24, "remote": "r2"}
+
+
+def load_backup_inventory(path: Path | str | None = None) -> list[BackupEntry]:
+    """The backup inventory, DERIVED from each service's BackupFacet declarations.
+
+    Formerly read from the handwritten ``ops.backup-inventory.yaml`` (deleted,
+    #542 — frozen as a test fixture); now every entry derives from the owning
+    Deployer via ``service_attrs()`` + ``bootstrap_facet_attrs()``:
+    ``service_id``/``data_path`` come from the Deployer's registry identity and
+    ``data_path`` attr unless the facet overrides them (bootstrap/1password and
+    bootstrap/vault have no deploy.py; they are declared on iac_runner's, the
+    bootstrap plane's single declaration point). ``path`` is accepted for
+    YAML-fixture reads in tests (the equivalence anchor) — production callers
+    pass nothing.
+    """
+    if path is not None:
+        data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+        defaults = data.get("defaults", {})
+        return [
+            BackupEntry(**{**defaults, **raw_entry})
+            for raw_entry in data.get("services", [])
+        ]
+
+    from libs.service_registry import bootstrap_facet_attrs, service_attrs
+
+    attrs = {**service_attrs(), **bootstrap_facet_attrs()}
     entries: list[BackupEntry] = []
-    for raw_entry in data.get("services", []):
-        merged = {**defaults, **raw_entry}
-        entries.append(BackupEntry(**merged))
+    seen: dict[str, str] = {}
+    for owner_id in sorted(attrs):
+        meta = attrs[owner_id]
+        for facet in meta.backups:
+            service_id = facet.service_id or owner_id
+            data_path = facet.data_path or (meta.data_path or "")
+            if not data_path:
+                raise ValueError(
+                    f"{owner_id}: BackupFacet needs a data_path (the Deployer "
+                    "declares none and the facet does not override it)"
+                )
+            if service_id in seen:
+                raise ValueError(
+                    f"duplicate backup inventory id {service_id!r} declared by "
+                    f"both {seen[service_id]} and {owner_id}"
+                )
+            seen[service_id] = owner_id
+            entries.append(
+                BackupEntry(
+                    service_id=service_id,
+                    data_path=data_path,
+                    method=facet.method,
+                    restore_command=facet.restore_command,
+                    remote=facet.remote or INVENTORY_DEFAULTS["remote"],
+                    retention_days=facet.retention_days
+                    or INVENTORY_DEFAULTS["retention_days"],
+                    rpo_hours=facet.rpo_hours or INVENTORY_DEFAULTS["rpo_hours"],
+                )
+            )
     return entries
 
 
@@ -153,7 +203,7 @@ def build_backup_alert_payload(report: dict[str, Any]) -> dict[str, Any]:
         },
         "groupLabels": {"alertname": "InfraBackupVerificationFailed"},
         "alerts": alerts,
-        "externalURL": "infra2://docs/ssot/ops.backup-inventory.yaml",
+        "externalURL": "infra2://libs/backup_verification.py#load_backup_inventory",
     }
 
 

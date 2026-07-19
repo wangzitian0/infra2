@@ -6,7 +6,7 @@ GitOps webhook service for automatic infrastructure sync.
 
 import sys
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.service_facets import SecretsFacet
+from libs.service_facets import BackupFacet, SecretsFacet
 
 shared_tasks = sys.modules.get("bootstrap.06.iac_runner.shared")
 
@@ -17,6 +17,31 @@ class IaCRunnerDeployer(Deployer):
     service = "iac_runner"  # Use underscore for Vault path compatibility
     compose_path = "bootstrap/06.iac_runner/compose.yaml"
     data_path = "/data/bootstrap/iac-runner"
+
+    # Backup facts (#542): the backup inventory derives from these (formerly
+    # the ops.backup-inventory YAML, deleted). bootstrap/1password and
+    # bootstrap/vault have no deploy.py of their own, so their entries are
+    # declared HERE with explicit service_id/data_path overrides — this file is
+    # the bootstrap plane's single declaration point (same convention as the
+    # SecretsFacet/ProbeFacet out-of-registry declarations).
+    backups = (
+        BackupFacet(
+            method="filesystem_archive",
+            restore_command="restore IaC Runner workspace cache; service can reclone if missing.",
+        ),
+        BackupFacet(
+            service_id="bootstrap/1password",
+            data_path="/data/bootstrap/1password",
+            method="encrypted_filesystem_archive",
+            restore_command="restore 1Password Connect data directory from the selected off-host archive.",
+        ),
+        BackupFacet(
+            service_id="bootstrap/vault",
+            data_path="/data/bootstrap/vault",
+            method="vault_file_storage_archive",
+            restore_command="restore Vault file storage, then unseal with operator-held recovery material.",
+        ),
+    )
     project = "bootstrap"
 
     # Webhook secret

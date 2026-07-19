@@ -118,13 +118,27 @@ class SignalFacet:
 class BackupFacet:
     """Backup facts for the service's ``data_path`` (aligned with
     ``libs.backup_verification.BackupEntry``; service_id/data_path derive from
-    the owning Deployer, so they are not repeated here)."""
+    the owning Deployer, so they are usually not repeated here).
+
+    ``service_id``/``data_path`` overrides follow SecretsFacet's convention:
+    set explicitly only when declaring on behalf of a surface whose identity
+    differs from the owning Deployer's — e.g. bootstrap/1password and
+    bootstrap/vault, which have no deploy.py of their own and are declared on
+    the bootstrap plane's single declaration point (iac_runner's deploy.py).
+
+    ``retention_days``/``rpo_hours``/``remote`` left at their zero-values mean
+    "use the inventory defaults" (30d / 24h / r2 — see
+    ``libs.backup_verification.INVENTORY_DEFAULTS``), mirroring how the deleted
+    handwritten YAML's ``defaults:`` block worked.
+    """
 
     method: str
     restore_command: str = ""
     remote: str = ""
     retention_days: int = 0
     rpo_hours: int = 0
+    service_id: str = ""
+    data_path: str = ""
 
 
 @dataclass(frozen=True)

@@ -22,7 +22,7 @@ layers** of parallel lists with little or no audit linking them.
 ② re-registries (libs/common.py, NO audit): SERVICE_SUBDOMAINS, CONTAINERS,
             SHARED_PLATFORM_SERVICES; sync_runner.py ALL_SERVICES / SERVICE_TASK_MAP
 ③ downstream (hand-copied): watchdog-signals.yaml, INFRA_PROBE_SPECS, wrangler
-            targets, ops.backup-inventory.yaml, vault-self-refresh-inventory.yaml,
+            targets, the backup inventory (BackupFacet-derived, #542), the vault self-refresh inventory (SecretsFacet-derived, #542),
             DNS DEFAULT_RECORDS
 + 99+ inline `platform-<svc>:port` strings in compose files (prefect missed
   ${ENV_SUFFIX} → staging Prefect auth hits PROD Authentik).

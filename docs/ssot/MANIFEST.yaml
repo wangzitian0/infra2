@@ -177,12 +177,6 @@ entries:
     owner: docs/ssot/ops.storage.md
     summary: 备份策略、R2 同步
     description: Storage and R2 backup policy.
-  ops.backup_inventory:
-    owner: docs/ssot/ops.backup-inventory.yaml
-    summary: Persistent data backup coverage inventory
-    description: Persistent data backup coverage inventory.
-    proofs:
-      - libs/tests/test_backup_verification.py
   ops.deploy_dependencies:
     owner: docs/ssot/deploy-dependencies.yaml
     summary: 部署扇出 + content-hash 依赖清单

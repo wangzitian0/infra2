@@ -1,7 +1,7 @@
 import sys
 
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.service_facets import SecretsFacet
+from libs.service_facets import BackupFacet, SecretsFacet
 
 shared_tasks = sys.modules.get("truealpha.01.postgres.shared")
 
@@ -17,6 +17,15 @@ class PostgresDeployer(Deployer):
     service = "postgres"
     compose_path = "truealpha/truealpha/01.postgres/compose.yaml"
     data_path = "/data/truealpha/postgres"
+
+    # Backup facts (#542): the backup inventory derives from these
+    # (formerly the ops.backup-inventory YAML, deleted).
+    backups = (
+        BackupFacet(
+            method="pg_dump_plus_data_archive",
+            restore_command="restore latest truealpha pg_dump, then reattach DATA_PATH if needed.",
+        ),
+    )
     secret_key = "POSTGRES_PASSWORD"
     project = "truealpha"  # Dokploy project name
 

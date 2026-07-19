@@ -7,7 +7,7 @@ from libs.common import with_env_suffix
 from libs.env import VAULT_ROOT_TOKEN_OP_REF
 from libs.console import success, warning, info, error, run_with_status
 from libs.env import generate_password, get_secrets
-from libs.service_facets import ProbeFacet, SecretsFacet
+from libs.service_facets import BackupFacet, ProbeFacet, SecretsFacet
 
 shared_tasks = sys.modules.get("platform.10.authentik.shared")
 
@@ -16,6 +16,15 @@ class AuthentikDeployer(Deployer):
     service = "authentik"
     compose_path = "platform/10.authentik/compose.yaml"
     data_path = "/data/platform/authentik"
+
+    # Backup facts (#542): the backup inventory derives from these
+    # (formerly the ops.backup-inventory YAML, deleted).
+    backups = (
+        BackupFacet(
+            method="filesystem_archive",
+            restore_command="restore media, certs, and custom templates from archive.",
+        ),
+    )
     uid = "1000"
     gid = "1000"
     secret_key = "secret_key"

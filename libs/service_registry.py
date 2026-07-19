@@ -91,7 +91,7 @@ class ServiceMeta:
     # the same Deployer class via AST. See libs/service_facets.py.
     probes: tuple[ProbeFacet, ...] = ()
     signals: tuple[SignalFacet, ...] = ()
-    backup: BackupFacet | None = None
+    backups: tuple[BackupFacet, ...] = ()
     secrets: tuple[SecretsFacet, ...] = ()
     exemptions: tuple[Exemption, ...] = ()
     deploy_v2_canary: bool = False
@@ -148,7 +148,7 @@ def _meta_from_deploy_file(
         ),
         probes=_facet_seq(tree, "probes", ProbeFacet, where),
         signals=_facet_seq(tree, "signals", SignalFacet, where),
-        backup=_facet_one(tree, "backup", BackupFacet, where),
+        backups=_facet_seq(tree, "backups", BackupFacet, where),
         secrets=_facet_seq(tree, "secrets", SecretsFacet, where),
         exemptions=_facet_seq(tree, "exemptions", Exemption, where),
         deploy_v2_canary=bool(_class_attr(tree, "deploy_v2_canary") or False),

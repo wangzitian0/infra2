@@ -2,7 +2,7 @@
 
 import sys
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.service_facets import ProbeFacet, SecretsFacet
+from libs.service_facets import BackupFacet, ProbeFacet, SecretsFacet
 
 shared_tasks = sys.modules.get("platform.01.postgres.shared")
 
@@ -11,6 +11,15 @@ class PostgresDeployer(Deployer):
     service = "postgres"
     compose_path = "platform/01.postgres/compose.yaml"
     data_path = "/data/platform/postgres"
+
+    # Backup facts (#542): the backup inventory derives from these
+    # (formerly the ops.backup-inventory YAML, deleted).
+    backups = (
+        BackupFacet(
+            method="pg_dump_plus_data_archive",
+            restore_command="restore latest pg_dump, then reattach DATA_PATH if needed.",
+        ),
+    )
     uid = "70"  # Alpine postgres user
     chmod = "700"
     secret_key = "root_password"

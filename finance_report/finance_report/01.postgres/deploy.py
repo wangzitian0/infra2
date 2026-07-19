@@ -1,7 +1,7 @@
 import sys
 
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.service_facets import SecretsFacet
+from libs.service_facets import BackupFacet, SecretsFacet
 
 shared_tasks = sys.modules.get("finance_report.01.postgres.shared")
 
@@ -12,6 +12,15 @@ class PostgresDeployer(Deployer):
     service = "postgres"
     compose_path = "finance_report/finance_report/01.postgres/compose.yaml"
     data_path = "/data/finance_report/postgres"
+
+    # Backup facts (#542): the backup inventory derives from these
+    # (formerly the ops.backup-inventory YAML, deleted).
+    backups = (
+        BackupFacet(
+            method="pg_dump_plus_data_archive",
+            restore_command="restore latest finance_report pg_dump, then reattach DATA_PATH if needed.",
+        ),
+    )
     secret_key = "POSTGRES_PASSWORD"
     project = "finance_report"  # Dokploy project name
 

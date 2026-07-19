@@ -7,7 +7,7 @@ from pathlib import Path
 
 from libs.console import error
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.service_facets import SecretsFacet
+from libs.service_facets import BackupFacet, SecretsFacet
 
 shared_tasks = sys.modules.get("truealpha.20.data_engine.shared")
 
@@ -21,6 +21,15 @@ class DataEngineDeployer(Deployer):
     service = "data_engine"
     compose_path = "truealpha/truealpha/20.data_engine/compose.yaml"
     data_path = "/data/truealpha/dagster"
+
+    # Backup facts (#542): the backup inventory derives from these
+    # (formerly the ops.backup-inventory YAML, deleted).
+    backups = (
+        BackupFacet(
+            method="dagster_artifact_archive",
+            restore_command="restore optional Dagster compute logs/IO artifacts; authoritative run metadata and raw evidence recover from Postgres and S3.",
+        ),
+    )
     uid = "10001"
     gid = "10001"
     secret_key = ""

@@ -7,7 +7,7 @@ from libs.common import with_env_suffix
 from libs.env import VAULT_ROOT_TOKEN_OP_REF
 from libs.console import success, warning, info, error
 from libs.env import get_secrets
-from libs.service_facets import ProbeFacet, SecretsFacet
+from libs.service_facets import BackupFacet, ProbeFacet, SecretsFacet
 
 shared_tasks = sys.modules.get("platform.24.openpanel.shared")
 
@@ -16,6 +16,15 @@ class OpenPanelDeployer(Deployer):
     service = "openpanel"
     compose_path = "platform/24.openpanel/compose.yaml"
     data_path = "/data/platform/openpanel"
+
+    # Backup facts (#542): the backup inventory derives from these
+    # (formerly the ops.backup-inventory YAML, deleted).
+    backups = (
+        BackupFacet(
+            method="filesystem_archive",
+            restore_command="restore OpenPanel persistent config/data while service is stopped.",
+        ),
+    )
     # Analytics — single prod instance (model B), no staging copy.
     prod_only = True
     uid = "1000"
