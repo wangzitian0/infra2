@@ -31,9 +31,11 @@ class AppDeployer(Deployer):
     #      finance_report/preview's pattern) — declared with an explicit
     #      service_id, borrowing the SOURCE env's app secrets
     #      (PREVIEW_SECRET_ENV, default staging).
-    # NOTE: production rollout is _APP_COMPOSE_OVERRIDES-gated (prod compose_id
-    # is None — see libs/deploy_env_config.py), which the audit derives as
-    # "not yet in production" for this app AND its preview surface.
+    # NOTE: production rollout is _APP_COMPOSE_OVERRIDES-gated (see
+    # libs/deploy_env_config.py). The prod compose_id is registered (live since
+    # #547), so the vault audit covers this app AND its preview surface in
+    # production — the "not yet in production" derivation dropped both
+    # automatically when the compose_id landed.
     secrets = (
         SecretsFacet(
             vault_agent_container="truealpha-app-vault-agent${ENV_SUFFIX}",
