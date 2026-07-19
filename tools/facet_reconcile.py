@@ -27,6 +27,7 @@ confirmed-only: a transient lookup error fails this job (visible in CI, retried
 next schedule) but never pages; only confirmed findings page (#524's
 confirmed_drift discipline, preserved per section).
 """
+# alerts-as: facet-reconcile  (#542 no-new-wheels: registered day-tier report signal)
 
 from __future__ import annotations
 

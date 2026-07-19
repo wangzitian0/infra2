@@ -19,6 +19,7 @@ READ-ONLY (git object reads + Dokploy GETs; no deploy, no writes). REPORT-ONLY (
 ``--strict`` exits 1 on real drift for opt-in CI). ``--self-check`` proves the git path matches
 disk at HEAD before trusting any tag comparison.
 """
+# alerts-as: facet-reconcile  (#542: scheduled delivery is the facet-reconcile's config-hash section)
 
 from __future__ import annotations
 

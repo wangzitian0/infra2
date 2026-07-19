@@ -25,6 +25,7 @@ Env:
   DEPLOY_GUARD_GRACE_SECONDS           wait before post-kill re-check (default 20)
   DEPLOY_GUARD_RENOTIFY_SECONDS        re-alert suppression window (default 1800)
 """
+# alert-delivery-exempt: sidecar watcher; T5 signal registration lands with the #543 single-sidecar merge
 
 from __future__ import annotations
 

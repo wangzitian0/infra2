@@ -121,6 +121,7 @@ env:
 
 jobs:
   audit:
+    # schedule-signal-exempt: pre-T5 scheduled audit; signal registration pending (#425 T2 backlog)
     name: Audit deploy dependency graph
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '37 2 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'deploy-guard-audit' || inputs.task == 'all')) }}
     runs-on: ubuntu-latest
@@ -187,6 +188,7 @@ jobs:
 
   # Dokploy route canary jobs
   canary:
+    # signal: infra2-dokploy-route-canary
     name: Run dynamic route canary
     if: ${{ github.event_name == 'push' || (github.event_name == 'schedule' && github.event.schedule == '17 * * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'dokploy-route-canary' || inputs.task == 'all')) }}
     runs-on: ubuntu-latest
@@ -295,6 +297,7 @@ jobs:
 
   # Out-of-band watchdog jobs
   watchdog:
+    # schedule-signal-exempt: delivers the whole github-plane infra2-* signal family (each individually registered in watchdog-signals.yaml)
     name: Check infra2 host and alert bridge
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '17 2 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'out-of-band-watchdog' || inputs.task == 'all')) }}
     runs-on: ubuntu-latest
@@ -356,6 +359,7 @@ jobs:
 
   # Watchdog weekly digest jobs
   digest:
+    # schedule-signal-exempt: weekly self-proving report (#425) — its own delivery is the signal
     name: Build and send weekly digest
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '0 1 * * 1') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'watchdog-weekly-digest' || inputs.task == 'all')) }}
     runs-on: ubuntu-latest
@@ -399,6 +403,7 @@ jobs:
 
   # deploy_v2 acceptance canary jobs
   deploy-v2-canary:
+    # schedule-signal-exempt: stage-evidence canary, report-tier self-proving delivery (ops.observability SOP-007B); T5 registration pending (#425 T2 backlog)
     name: deploy_v2 live canary
     # Skip FORK PRs: they get no secrets, so the live deploy can't run — skip (not fail) to
     # avoid noisy red checks for external contributors. Same-repo PRs + push/cron/manual run.
@@ -491,6 +496,7 @@ jobs:
           echo "deploy_v2 acceptance canary is GREEN — the unified path deploys and converges."
 
   preview-leak-check:
+    # schedule-signal-exempt: hourly lifecycle-contract check, deliberately outside facet reconciliation (#542); T5 registration pending (#425 T2 backlog)
     name: Detect leaked Dokploy previews
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '47 * * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'preview-leak-check' || inputs.task == 'all')) }}
     runs-on: ubuntu-latest
@@ -563,6 +569,7 @@ jobs:
           PY
 
   host-hygiene-schedule:
+    # schedule-signal-exempt: idempotent host-GC re-ensure; T5 registration pending (#425 T2 backlog)
     name: Ensure VPS host-hygiene schedule
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '27 4 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'host-hygiene-schedule' || inputs.task == 'all')) }}
     runs-on: ubuntu-latest
@@ -628,6 +635,7 @@ jobs:
           PY
 
   facet-reconcile:
+    # signal: facet-reconcile
     name: Daily facet reconcile (compose_id + config-hash + dns drift)
     # #542 task 4: ONE daily reality-vs-declaration reconcile absorbing the three
     # formerly separate drift jobs (app-compose-id-drift here, plus the deleted
@@ -711,6 +719,7 @@ jobs:
           PY
 
   vault-self-refresh-audit:
+    # signal: vault-self-refresh-audit
     name: Vault self-refresh audit
     # Live check (#531): needs Dokploy state + SSH into the VPS to inspect vault-agent/
     # app containers, so it can't run on untrusted PR branches — scheduled + manual
