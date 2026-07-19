@@ -23,8 +23,13 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
-from libs.service_registry import ServiceMeta, service_attrs
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from libs.service_registry import ServiceMeta, service_attrs  # noqa: E402
 
 FACET_COLUMNS = ("probes", "signals", "backup")
 MISSING = "MISSING"
