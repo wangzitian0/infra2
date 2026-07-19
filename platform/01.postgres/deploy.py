@@ -2,6 +2,7 @@
 
 import sys
 from libs.deploy.deployer import Deployer, make_tasks
+from libs.service_facets import ProbeFacet
 
 shared_tasks = sys.modules.get("platform.01.postgres.shared")
 
@@ -13,6 +14,16 @@ class PostgresDeployer(Deployer):
     uid = "70"  # Alpine postgres user
     chmod = "700"
     secret_key = "root_password"
+
+    # Infra probes (#541): rendered into INFRA_PROBE_SPECS by platform/alerting.
+    probes = (
+        ProbeFacet(
+            name="platform-postgres-tcp",
+            kind="tcp",
+            target="platform-postgres${ENV_SUFFIX}:5432",
+            expected="connected",
+        ),
+    )
 
 
 if shared_tasks:

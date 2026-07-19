@@ -7,6 +7,7 @@ from libs.common import with_env_suffix
 from libs.env import VAULT_ROOT_TOKEN_OP_REF
 from libs.console import success, info, fatal
 from libs.env import get_secrets
+from libs.service_facets import ProbeFacet
 
 shared_tasks = sys.modules.get("platform.23.prefect.shared")
 
@@ -22,6 +23,16 @@ class PrefectDeployer(Deployer):
     subdomain = None
     service_port = 4200
     service_name = "prefect-server"
+
+    # Infra probes (#541): rendered into INFRA_PROBE_SPECS by platform/alerting.
+    probes = (
+        ProbeFacet(
+            name="prefect-internal-http",
+            kind="http",
+            target="http://platform-prefect-server${ENV_SUFFIX}:4200/api/health",
+            expected="200",
+        ),
+    )
 
     @classmethod
     def pre_compose(cls, c):

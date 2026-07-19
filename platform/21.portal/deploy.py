@@ -8,6 +8,7 @@ from invoke import task
 
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.console import env_vars, error, run_with_status, success, header
+from libs.service_facets import Exemption
 
 # Get shared_tasks from sys.modules (loaded by tools/loader.py)
 shared_tasks = sys.modules.get("platform.21.portal.shared")
@@ -27,6 +28,15 @@ class PortalDeployer(Deployer):
     subdomain = None
     service_port = 8080
     service_name = "portal"  # Must match service name in compose.yaml
+
+    # No INFRA_PROBE_SPECS probe on purpose (#541; was test_probe_coverage's
+    # hand-kept _PROBE_EXEMPT entry, now declared where the service lives):
+    exemptions = (
+        Exemption(
+            check_id="probes",
+            reason="static homer dashboard — no liveness endpoint to probe",
+        ),
+    )
 
     @classmethod
     def pre_compose(cls, c):

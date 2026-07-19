@@ -7,6 +7,7 @@ from tempfile import NamedTemporaryFile
 
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.console import success, info, run_with_status, error
+from libs.service_facets import Exemption
 
 shared_tasks = sys.modules.get("platform.03.clickhouse.shared")
 
@@ -23,6 +24,21 @@ class ClickHouseDeployer(Deployer):
     subdomain = None
     service_port = None
     service_name = None
+
+    # No INFRA_PROBE_SPECS probe on purpose (#541 facet form of the decision
+    # previously documented inline in the alerting compose literal):
+    exemptions = (
+        Exemption(
+            check_id="probes",
+            reason="a read-only /ping stays 200 even when the data dir is "
+            "unwritable (read green / write dead). The truthful signals "
+            "replaced it: op-ch & platform-clickhouse have WRITE-PATH "
+            "healthchecks (unhealthy -> Dokploy restart), and the signoz/"
+            "openpanel round-trip probes are the alert path (write+query, so "
+            "they catch write-broken AND down). A /ping caught neither better, "
+            "so it was removed rather than kept as dead compensation.",
+        ),
+    )
 
     @classmethod
     def pre_compose(cls, c):
