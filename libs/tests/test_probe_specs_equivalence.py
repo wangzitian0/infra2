@@ -165,15 +165,72 @@ def test_env_suffix_placeholders_resolve_for_each_env() -> None:
 def test_env_value_encoding_round_trips_and_fails_closed() -> None:
     text = resolve_env_suffix(render_probe_spec_text(), "-staging")
     encoded = encode_specs_env_value(text)
-    assert "\n" not in encoded  # single dotenv line
-    assert encoded.startswith('"') and encoded.endswith('"')
-    # tolerant decode: expanded, still-encoded, and quoted forms all normalize
+    assert "\n" not in encoded  # single env line
+    # The v1.1.33 staging deploy proved Dokploy's .env writer expands backslash
+    # escapes into REAL newlines (crashing compose's dotenv parse), so the
+    # transport must contain NO backslashes and NO quotes — nothing any layer
+    # between Dokploy storage and the container env re-interprets.
+    assert "\\" not in encoded
+    assert '"' not in encoded
+    # tolerant decode: plain, ;;-separated, and the retired quoted/escaped forms
     assert normalize_specs_text(encoded) == text
     assert normalize_specs_text(text) == text
+    assert normalize_specs_text('"a|b\\nc|d"') == "a|b\nc|d"  # retired form still reads
     assert parse_probe_names(encoded) == parse_probe_names(text)
     # an unresolved placeholder (or any $) must never reach the env transport
-    with pytest.raises(ValueError, match="dotenv"):
+    with pytest.raises(ValueError, match="transport"):
         encode_specs_env_value(render_probe_spec_text())
+    # an embedded separator token would corrupt the line structure — fail closed
+    with pytest.raises(ValueError, match="transport"):
+        encode_specs_env_value("a|b;;c|d")
+
+
+def test_verify_runtime_applied_rejects_equivalent_but_stale_container(monkeypatch):
+    """The v1.1.33 blind spot: Dokploy's deploy FAILED, the old container kept an
+    EQUIVALENT 21-probe set, and name-set coverage alone reported success. The
+    verify must now require the container's raw env value to equal what THIS
+    deploy shipped."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "alerting_deploy_stale", ROOT / "platform/12.alerting/deploy.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    deployer = module.AlertingDeployer
+    monkeypatch.setattr(
+        deployer, "env", classmethod(lambda cls: {"VPS_HOST": "x", "ENV_SUFFIX": ""})
+    )
+
+    deployed = encode_specs_env_value("a|http|http://t|200|critical|5||svc/a")
+
+    class _StaleRun:
+        failed = False
+        # same probe NAME, different raw value (the old multi-line literal form)
+        stdout = "a|http|http://t|200|critical|5||svc/a\n# an old comment\n"
+        stderr = ""
+
+    class _C:
+        def run(self, *a, **kw):
+            return _StaleRun()
+
+    import time as _time
+
+    monkeypatch.setattr(_time, "monotonic", _make_expiring_clock())
+    err = deployer.verify_runtime_applied(_C(), {"INFRA_PROBE_SPECS": deployed})
+    assert err is not None and "not recreated" in err
+
+
+def _make_expiring_clock():
+    # first call establishes the deadline; subsequent calls leap past it so the
+    # poll loop exits after one iteration instead of sleeping 90s in tests
+    state = {"n": 0}
+
+    def _clock():
+        state["n"] += 1
+        return 0.0 if state["n"] == 1 else 10_000.0
+
+    return _clock
 
 
 # --- comment intent preserved as mechanism, not prose ------------------------

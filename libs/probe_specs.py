@@ -70,38 +70,49 @@ def resolve_env_suffix(specs_text: str, env_suffix: str) -> str:
     return specs_text.replace(ENV_SUFFIX_PLACEHOLDER, env_suffix)
 
 
+# Line separator for the single-line env transport. Chosen to be inert through
+# EVERY layer the value crosses (Dokploy env storage -> .env writer -> compose
+# dotenv parse -> container env): plain ASCII, no backslashes, no quotes, no $.
+# The original double-quote + \n-escape encoding was proven wrong LIVE
+# (v1.1.33 staging deploy, 2026-07-19): Dokploy's .env writer expands \n
+# escapes into REAL newlines, splitting the value across lines and crashing
+# compose's dotenv parse ('unexpected character "|" in variable name').
+SPECS_LINE_SEPARATOR = ";;"
+
+
 def encode_specs_env_value(specs_text: str) -> str:
     """Encode multi-line spec text as ONE dotenv-safe env value.
 
-    Dokploy stores the compose env as newline-joined ``KEY=value`` lines and
-    writes them verbatim to the ``.env`` docker compose reads, so the value must
-    be single-line. Double quotes + ``\\n`` escapes are the documented compose
-    dotenv form for embedded newlines (compose-go expands escape sequences
-    inside double-quoted values). Fails closed on characters that would break
-    the quoting or trigger dotenv interpolation — including an unresolved
-    ``${ENV_SUFFIX}`` placeholder (call :func:`resolve_env_suffix` first).
+    Joins lines with :data:`SPECS_LINE_SEPARATOR` — no quoting, no escape
+    sequences, nothing any env layer re-interprets. Internal spaces are fine
+    (dotenv preserves them in unquoted values; ``command`` probe targets need
+    them). Fails closed on content that could break the transport:
+    quote/backslash/``$`` (dotenv quoting and interpolation), ``#`` (starts an
+    inline comment in an unquoted dotenv value), an embedded separator token,
+    and an unresolved ``${ENV_SUFFIX}`` placeholder (call
+    :func:`resolve_env_suffix` first; caught by the ``$`` check).
     """
-    for forbidden in ('"', "\\", "$"):
+    for forbidden in ('"', "\\", "$", "#", SPECS_LINE_SEPARATOR):
         if forbidden in specs_text:
             raise ValueError(
-                f"probe spec text contains {forbidden!r}, which the dotenv "
-                "env-value transport cannot carry safely"
+                f"probe spec text contains {forbidden!r}, which the env-value "
+                "transport cannot carry safely"
             )
-    return '"' + specs_text.replace("\n", "\\n") + '"'
+    return specs_text.replace("\n", SPECS_LINE_SEPARATOR)
 
 
 def normalize_specs_text(specs_text: str) -> str:
     """Undo the env-value transport encoding, tolerantly.
 
-    Accepts plain multi-line text (the expected form after compose's dotenv
-    expands the double-quoted value) AND the still-encoded single-line form
-    (enclosing quotes and/or literal ``\\n`` sequences), so both the runner and
-    the runtime verification behave identically no matter which side of the
-    dotenv expansion they observe."""
+    Accepts plain multi-line text, the current ``;;``-separated single-line
+    transport form, AND the retired quoted/``\\n``-escaped form (still decoded
+    so a container carrying the old encoding is read correctly during the
+    transition), so the runner and the runtime verification behave identically
+    no matter which form they observe."""
     text = specs_text.strip()
     if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
         text = text[1:-1]
-    return text.replace("\\n", "\n")
+    return text.replace(SPECS_LINE_SEPARATOR, "\n").replace("\\n", "\n")
 
 
 def parse_probe_names(specs_text: str) -> set[str]:
