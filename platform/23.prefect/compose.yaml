@@ -184,6 +184,45 @@ services:
       options:
         max-size: "5m"
         max-file: "2"
+    healthcheck:
+      # #163/#531: prefect-services runs prefect's background service loops
+      # (scheduler/foreman/cancellation-cleanup/late-runs/etc, all ticking every
+      # 5-60s per `prefect.settings...server.services`) with NO HTTP port and NO
+      # live-status CLI surface -- `prefect server services ls` only dumps
+      # static enabled/disabled config from settings, not whether the running
+      # loops are actually ticking (verified against the installed prefect 3.7.4
+      # CLI). A log-freshness heartbeat was considered and ruled out: this
+      # container's own logs showed a genuine 7-day silent gap between lines
+      # while idle and healthy (verified live), so any "logged in the last N
+      # minutes" threshold would false-positive during ordinary quiet periods --
+      # exactly the sparse-logging trap #531 is about. The best real signal
+      # available is an ACTIVE, per-check network round-trip (fresh TCP connect,
+      # not a passive read of already-open sockets) from this container's own
+      # network namespace to both hard dependencies every one of those loops
+      # needs: Postgres (state) and Redis (messaging). This does not prove the
+      # asyncio loops aren't wedged -- no such probe exists for this role -- but
+      # it catches container-specific DNS/network-partition failures that
+      # Docker's bare `state=running` never would, and it is strictly more
+      # meaningful than a `pgrep`-style liveness check (which running already
+      # covers).
+      test:
+        - CMD-SHELL
+        - |
+          python -c "
+          import socket, sys
+          targets = [('platform-redis${ENV_SUFFIX}', 6379), ('platform-postgres${ENV_SUFFIX}', 5432)]
+          bad = []
+          for host, port in targets:
+              try:
+                  socket.create_connection((host, port), timeout=3).close()
+              except OSError:
+                  bad.append(host)
+          sys.exit(1 if bad else 0)
+          "
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   prefect-worker:
     # Pinned by digest (prefect 3.7.4 / prefect-redis 0.2.11). The :3-latest tag
@@ -209,6 +248,42 @@ services:
       options:
         max-size: "5m"
         max-file: "2"
+    healthcheck:
+      # #163/#531: a `pgrep`-style "is the process alive" check would be a WEAK
+      # signal -- Docker's own `state=running` already covers "the process
+      # didn't exit." A real check needs to prove the worker can actually do
+      # its job: poll the Prefect API to pick up work. `prefect work-pool
+      # inspect <pool> -o json` (confirmed present on the installed prefect
+      # 3.7.4 CLI) does a real authenticated HTTP round-trip to
+      # PREFECT_API_URL and exits non-zero on any connectivity failure (verified
+      # live: exit 0 against the real API, exit 1 when pointed at an
+      # unreachable address). Checking the returned `status` field is stronger
+      # than a bare connectivity check: prefect-server's own Foreman service
+      # loop (in platform-prefect-services, ticking every 15s) marks a work
+      # pool NOT_READY as soon as it has no worker with a recent heartbeat, so
+      # `status == READY` is a live proxy for "this worker's heartbeat is
+      # current," not just "the API answered." Together this catches: API/DNS
+      # unreachable, the pool/queue deleted or misconfigured, and (via
+      # Foreman's heartbeat bookkeeping) this worker having stopped polling --
+      # none of which `state=running` or a process-existence check would catch.
+      test:
+        - CMD-SHELL
+        - |
+          python -c "
+          import json, subprocess, sys
+          out = subprocess.run(
+              ['prefect', 'work-pool', 'inspect', 'default', '-o', 'json'],
+              capture_output=True, text=True, timeout=8,
+          )
+          if out.returncode != 0:
+              sys.exit(1)
+          data = json.loads(out.stdout)
+          sys.exit(0 if data.get('status') == 'READY' else 1)
+          "
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
 volumes:
   secrets:
