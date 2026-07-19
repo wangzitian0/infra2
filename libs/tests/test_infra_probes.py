@@ -880,3 +880,26 @@ def test_probe_runner_skips_liveness_heartbeat_in_dry_run(monkeypatch) -> None:
         pass
 
     assert beats == []
+
+
+def test_runner_dies_loudly_when_specs_env_set_but_empty(monkeypatch) -> None:
+    """#541 fail-closed layer 3: compose's `${INFRA_PROBE_SPECS:-}` yields a
+    SET-but-EMPTY env var when the renderer's output never arrives; os.getenv
+    then returns "" (not the default), which previously meant a zero-probe
+    runner with a green healthcheck — silent fleet blindness. The runner must
+    exit non-zero so the container goes unhealthy and pages."""
+    import pytest
+
+    runner = _load_probe_runner()
+    monkeypatch.setenv("INFRA_PROBE_SPECS", "")
+    with pytest.raises(SystemExit, match="refusing to run blind"):
+        runner._probe_groups()
+
+
+def test_runner_unset_env_still_uses_default_specs(monkeypatch) -> None:
+    """Unset (as opposed to set-but-empty) keeps the historical local-dev
+    fallback to DEFAULT_PROBE_SPECS — only the transport-failure shape dies."""
+    runner = _load_probe_runner()
+    monkeypatch.delenv("INFRA_PROBE_SPECS", raising=False)
+    groups = runner._probe_groups()
+    assert groups[0].raw_specs == runner.DEFAULT_PROBE_SPECS

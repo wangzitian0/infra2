@@ -47,6 +47,17 @@ def render_probe_spec_text(attrs=None) -> str:
                 )
             seen[probe.name] = service_id
             lines.append(probe.spec_line(default_service_id=service_id))
+    if not lines:
+        # Fail-closed (#541): an empty render means the registry walk itself
+        # broke (bad glob, import failure swallowed upstream, ...) — this repo
+        # always declares probes, so "no probes" is never a deployable state.
+        # Raising here stops compose_env_base cold instead of shipping an empty
+        # env value that would leave the whole fleet silently unmonitored.
+        raise ValueError(
+            "render_probe_spec_text produced ZERO probes — the ProbeFacet "
+            "registry walk found nothing, which is never a valid state; "
+            "refusing to render an empty INFRA_PROBE_SPECS"
+        )
     return "\n".join(lines)
 
 

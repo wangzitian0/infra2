@@ -88,3 +88,15 @@ def test_missing_probe_names_ignores_target_suffix_differences():
     source = "openpanel-api-http|http|http://platform-openpanel-api:3000/healthcheck|200|warning|5\n"
     running = "openpanel-api-http|http|http://platform-openpanel-api-staging:3000/healthcheck|200|warning|5\n"
     assert missing_probe_names(source, running) == []
+
+
+def test_render_fails_closed_on_empty_registry_walk():
+    """#541 fail-closed layer 1: an empty ProbeFacet walk is never a deployable
+    state — the renderer must raise, not ship an empty INFRA_PROBE_SPECS that
+    would leave the fleet silently unmonitored."""
+    import pytest
+
+    from libs.probe_specs import render_probe_spec_text
+
+    with pytest.raises(ValueError, match="ZERO probes"):
+        render_probe_spec_text(attrs={})

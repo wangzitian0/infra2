@@ -320,10 +320,22 @@ def run_once(
 
 
 def _probe_groups() -> list[ProbeGroup]:
+    # Fail-closed on set-but-empty (#541): os.getenv returns "" (not the default)
+    # when the env var EXISTS with an empty value — which is exactly what the
+    # compose `${INFRA_PROBE_SPECS:-}` reference produces if the registry renderer
+    # ever shipped nothing. Zero probes with a green healthcheck is silent fleet
+    # blindness, never a valid state; die loudly so the container goes unhealthy
+    # and the breakdown watcher pages, instead of "running" with nothing to do.
+    infra_specs = os.getenv("INFRA_PROBE_SPECS")
+    if infra_specs is not None and not infra_specs.strip():
+        raise SystemExit(
+            "INFRA_PROBE_SPECS is set but empty — the registry renderer produced "
+            "no probes; refusing to run blind (see #541)"
+        )
     groups = [
         ProbeGroup(
             name="infra-service",
-            raw_specs=os.getenv("INFRA_PROBE_SPECS", DEFAULT_PROBE_SPECS),
+            raw_specs=infra_specs if infra_specs is not None else DEFAULT_PROBE_SPECS,
             alert_name="InfraServiceProbeFailed",
             external_url="infra2://platform/12.alerting/infra-probes",
         )

@@ -224,7 +224,15 @@ class AlertingDeployer(Deployer):
         # only carries the ${INFRA_PROBE_SPECS} reference now.
         source_specs = normalize_specs_text(env_vars.get("INFRA_PROBE_SPECS", ""))
         if not source_specs:
-            return None  # nothing declared to verify
+            # Fail-closed (#541): the renderer always produces probes (it raises on
+            # an empty walk), so an empty deployed value here means the transport
+            # dropped it — the fleet would run blind on DEFAULT_PROBE_SPECS' single
+            # bridge probe. Never treat that as "nothing to verify".
+            return (
+                "deployed INFRA_PROBE_SPECS is empty — the registry renderer's "
+                "output never reached the deploy env; refusing to report a blind "
+                "probe fleet as a successful deploy"
+            )
 
         ssh_user = e.get("VPS_SSH_USER") or "root"
         suffix = e.get("ENV_SUFFIX", "")

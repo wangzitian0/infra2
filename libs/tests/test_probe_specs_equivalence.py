@@ -227,3 +227,22 @@ def test_out_of_registry_probes_carry_explicit_service_ids() -> None:
         assert service_id in attrs or service_id in known_external, (
             f"probe {row[0]} carries unknown service_id {service_id!r}"
         )
+
+
+def test_verify_runtime_applied_fails_closed_on_empty_deployed_specs(monkeypatch):
+    """#541 fail-closed layer 2: an empty deployed INFRA_PROBE_SPECS means the
+    renderer's output never reached the deploy env (the renderer itself raises
+    on an empty walk, so this can only be a transport drop). verify must return
+    an error string — never skip as 'nothing to verify'."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "alerting_deploy_verify", ROOT / "platform/12.alerting/deploy.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    deployer = module.AlertingDeployer
+    monkeypatch.setattr(deployer, "env", classmethod(lambda cls: {"VPS_HOST": "x"}))
+
+    err = deployer.verify_runtime_applied(None, {"INFRA_PROBE_SPECS": ""})
+    assert err is not None and "blind" in err
