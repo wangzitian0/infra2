@@ -25,6 +25,7 @@ from libs.console import (
     run_with_status,
 )
 from libs.env import VaultSecrets, generate_password, get_secrets, verify_vault_token
+from libs.service_facets import BackupFacet, Exemption, ProbeFacet, SignalFacet
 
 if TYPE_CHECKING:
     from invoke import Context
@@ -383,6 +384,20 @@ class Deployer:
     # Keys supplied by a runtime secret backend must affect deployment
     # idempotence, but cannot be reconstructed from a release in read-only CI.
     runtime_only_config_keys: frozenset[str] = frozenset()
+
+    # --- Service facets (#541 convergence): the Deployer subclass is the SINGLE
+    # declaration point for per-service operational facts; libs.service_registry
+    # .service_attrs() is the single derivation function. Declarations must be
+    # LITERAL constructor calls (they are read via AST, never imported) — see
+    # libs/service_facets.py for the constraint and field docs.
+    probes: tuple[ProbeFacet, ...] = ()
+    signals: tuple[SignalFacet, ...] = ()
+    backup: BackupFacet | None = None
+    exemptions: tuple[Exemption, ...] = ()
+    # True for services whose deploy path is exercised by the deploy_v2
+    # acceptance canary (tools/deploy_v2_canary.py iterates the registry for
+    # this flag instead of hardcoding a service id).
+    deploy_v2_canary: bool = False
 
     @classmethod
     def env(cls) -> dict[str, str | None]:

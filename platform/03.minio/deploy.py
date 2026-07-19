@@ -11,6 +11,7 @@ import sys
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.env import generate_password
 from libs.console import header, success, error, warning, info, env_vars
+from libs.service_facets import ProbeFacet
 
 shared_tasks = sys.modules.get("platform.03.minio.shared")
 
@@ -20,6 +21,16 @@ class MinioDeployer(Deployer):
     compose_path = "platform/03.minio/compose.yaml"
     data_path = "/data/platform/minio"
     secret_key = "root_password"
+
+    # Infra probes (#541): rendered into INFRA_PROBE_SPECS by platform/alerting.
+    probes = (
+        ProbeFacet(
+            name="minio-internal-http",
+            kind="http",
+            target="http://platform-minio${ENV_SUFFIX}:9000/minio/health/live",
+            expected="200",
+        ),
+    )
 
     # Domain configuration for Dokploy (Console)
     subdomain = "minio"  # minio.{INTERNAL_DOMAIN} -> Console

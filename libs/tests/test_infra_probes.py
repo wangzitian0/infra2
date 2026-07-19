@@ -187,11 +187,13 @@ def test_probe_runner_defaults_to_fast_probe_bounded_notification() -> None:
 
 
 def test_in_band_probe_compose_uses_internal_network_targets() -> None:
-    """#183: in-band probes must not route through Cloudflare public domains."""
-    compose = (ROOT / "platform/12.alerting/compose.yaml").read_text(encoding="utf-8")
-    probe_block = compose.split("INFRA_PROBE_SPECS: |", 1)[1].split(
-        "PUBLIC_ROUTE_PROBE_SPECS:", 1
-    )[0]
+    """#183: in-band probes must not route through Cloudflare public domains.
+
+    #541: the probe set is registry-rendered (ProbeFacet declarations on the
+    owning Deployers), so the rule is checked on the rendered text."""
+    from libs.probe_specs import render_probe_spec_text
+
+    probe_block = render_probe_spec_text()
 
     assert "https://cloud.${INTERNAL_DOMAIN}" not in probe_block
     assert "https://vault.${INTERNAL_DOMAIN}" not in probe_block
@@ -878,3 +880,26 @@ def test_probe_runner_skips_liveness_heartbeat_in_dry_run(monkeypatch) -> None:
         pass
 
     assert beats == []
+
+
+def test_runner_dies_loudly_when_specs_env_set_but_empty(monkeypatch) -> None:
+    """#541 fail-closed layer 3: compose's `${INFRA_PROBE_SPECS:-}` yields a
+    SET-but-EMPTY env var when the renderer's output never arrives; os.getenv
+    then returns "" (not the default), which previously meant a zero-probe
+    runner with a green healthcheck — silent fleet blindness. The runner must
+    exit non-zero so the container goes unhealthy and pages."""
+    import pytest
+
+    runner = _load_probe_runner()
+    monkeypatch.setenv("INFRA_PROBE_SPECS", "")
+    with pytest.raises(SystemExit, match="refusing to run blind"):
+        runner._probe_groups()
+
+
+def test_runner_unset_env_still_uses_default_specs(monkeypatch) -> None:
+    """Unset (as opposed to set-but-empty) keeps the historical local-dev
+    fallback to DEFAULT_PROBE_SPECS — only the transport-failure shape dies."""
+    runner = _load_probe_runner()
+    monkeypatch.delenv("INFRA_PROBE_SPECS", raising=False)
+    groups = runner._probe_groups()
+    assert groups[0].raw_specs == runner.DEFAULT_PROBE_SPECS

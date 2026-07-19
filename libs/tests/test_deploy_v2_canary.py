@@ -71,7 +71,12 @@ def spies(monkeypatch):
 
 
 def test_canary_deploys_reserved_slot_then_tears_down(spies):
-    res = run_canary(client=object(), domain="zitian.party", version_ref="main")
+    res = run_canary(
+        client=object(),
+        service="finance_report/app",
+        domain="zitian.party",
+        version_ref="main",
+    )
     assert res.ok is True
     assert res.alias == f"pr-{_CANARY_PR}"
     assert res.torn_down is True
@@ -86,7 +91,11 @@ def test_canary_deploys_reserved_slot_then_tears_down(spies):
 
 def test_keep_skips_teardown(spies):
     res = run_canary(
-        client=object(), domain="zitian.party", version_ref="main", teardown=False
+        client=object(),
+        service="finance_report/app",
+        domain="zitian.party",
+        version_ref="main",
+        teardown=False,
     )
     assert res.torn_down is False
     assert spies["down"] is None
@@ -105,7 +114,12 @@ def test_teardown_runs_even_when_deploy_raises(monkeypatch):
     monkeypatch.setattr(canary, "down", fake_down)
 
     with pytest.raises(TimeoutError):
-        run_canary(client=object(), domain="zitian.party", version_ref="main")
+        run_canary(
+            client=object(),
+            service="finance_report/app",
+            domain="zitian.party",
+            version_ref="main",
+        )
     assert rec["down"] == ("pr", _CANARY_PR)  # cleanup still ran
 
 
@@ -113,7 +127,11 @@ def test_no_wait_reports_unknown_health_but_still_tears_down(spies):
     # --no-wait: the deploy is fire-and-forget, so health is unknown (ok/healthy None),
     # but teardown still runs by default so the canary never leaks its ephemeral stack.
     res = run_canary(
-        client=object(), domain="zitian.party", version_ref="main", wait=False
+        client=object(),
+        service="finance_report/app",
+        domain="zitian.party",
+        version_ref="main",
+        wait=False,
     )
     assert res.ok is None
     assert res.healthy is None
@@ -123,7 +141,12 @@ def test_no_wait_reports_unknown_health_but_still_tears_down(spies):
 
 
 def test_version_ref_forwarded(spies):
-    run_canary(client=object(), domain="zitian.party", version_ref="v2.0.0")
+    run_canary(
+        client=object(),
+        service="finance_report/app",
+        domain="zitian.party",
+        version_ref="v2.0.0",
+    )
     assert spies["deploy"]["version_ref"] == "v2.0.0"
     assert spies["down"]["value"] == _CANARY_PR  # slot stays fixed regardless of code
 
@@ -203,7 +226,12 @@ def test_run_canary_teardown_failure_does_not_mask_deploy_error(monkeypatch, cap
     monkeypatch.setattr(canary.time, "sleep", lambda *_: None)
 
     with pytest.raises(RuntimeError, match="composeStatus=error"):
-        run_canary(client=object(), domain="z.p", version_ref="main")
+        run_canary(
+            client=object(),
+            service="finance_report/app",
+            domain="z.p",
+            version_ref="main",
+        )
     assert "teardown failed" in capsys.readouterr().err
 
 
@@ -393,3 +421,56 @@ def test_main_treats_leak_as_cleanup_failure(monkeypatch):
     )
     assert rc == 1
     assert "deploy-v2-cleanup" in sent["text"]  # healthy but leaked -> still a failure
+
+
+# --- registry-driven service selection (#541) --------------------------------
+
+
+def test_canary_services_derive_from_registry():
+    """The probed set comes from Deployer `deploy_v2_canary` flags via the
+    registry — today exactly finance_report/app (behavior unchanged); truealpha
+    joins by flipping its own flag, with no canary code change."""
+    assert canary.canary_services() == ["finance_report/app"]
+
+
+def test_canary_services_fail_closed_when_none_declared(monkeypatch):
+    import libs.service_registry as reg
+
+    monkeypatch.setattr(reg, "service_attrs", lambda: {})
+    with pytest.raises(RuntimeError, match="deploy_v2_canary"):
+        canary.canary_services()
+
+
+def test_run_canary_forwards_service_to_deploy_v2(spies):
+    run_canary(
+        client=object(),
+        service="finance_report/app",
+        domain="zitian.party",
+        version_ref="main",
+    )
+    assert spies["deploy"]["service"] == "finance_report/app"
+
+
+def test_main_iterates_registry_canary_services(monkeypatch, capsys):
+    import libs.dokploy as dk
+
+    monkeypatch.setattr(dk, "get_dokploy", lambda host: object())
+    seen = []
+
+    def fake_run(**kw):
+        seen.append(kw["service"])
+        return canary.CanaryResult(
+            ok=True,
+            target=_fake_target(),
+            alias="pr-999",
+            url="u",
+            healthy=True,
+            torn_down=True,
+        )
+
+    monkeypatch.setattr(canary, "run_canary", fake_run)
+    rc = canary.main(["--version-ref", "main", "--iac-ref", "main", "--domain", "z.p"])
+    assert rc == 0
+    assert seen == canary.canary_services() == ["finance_report/app"]
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["torn_down"] is True

@@ -7,6 +7,7 @@ from libs.common import with_env_suffix
 from libs.env import VAULT_ROOT_TOKEN_OP_REF
 from libs.console import success, warning, info, error, run_with_status
 from libs.env import generate_password, get_secrets
+from libs.service_facets import ProbeFacet
 
 shared_tasks = sys.modules.get("platform.10.authentik.shared")
 
@@ -23,6 +24,16 @@ class AuthentikDeployer(Deployer):
     subdomain = "sso"
     service_port = 9000
     service_name = "server"
+
+    # Infra probes (#541): rendered into INFRA_PROBE_SPECS by platform/alerting.
+    probes = (
+        ProbeFacet(
+            name="authentik-internal-http",
+            kind="http",
+            target="http://platform-authentik-server${ENV_SUFFIX}:9000/-/health/live/",
+            expected="200,204,302",
+        ),
+    )
 
     @classmethod
     def ensure_runtime_secrets(cls, c=None) -> bool:

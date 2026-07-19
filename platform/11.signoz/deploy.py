@@ -13,6 +13,7 @@ from libs.common import (
     otel_ingest_endpoint,
     service_domain,
 )
+from libs.service_facets import ProbeFacet
 
 shared_tasks = sys.modules.get("platform.11.signoz.shared")
 
@@ -38,6 +39,42 @@ class SigNozDeployer(Deployer):
     # The subdomain + the FE endpoint live in libs.common (#368, ONE source).
     otel_ingest_subdomain = OTEL_INGEST_SUBDOMAIN
     otel_ingest_service_name = "otel-collector"
+
+    # Infra probes (#541): rendered into INFRA_PROBE_SPECS by platform/alerting.
+    # SigNoz is prod_only (single shared instance; every env ships its data to
+    # prod — `prod_only = True` above), so targets carry NO ${ENV_SUFFIX}: probe
+    # the prod instance from ALL envs. Adding a -staging suffix would target a
+    # host that never exists -> a permanent false-positive alert. The renderer's
+    # tests enforce this from the registry's prod_only fact.
+    probes = (
+        ProbeFacet(
+            name="signoz-internal-http",
+            kind="http",
+            target="http://platform-signoz:8080/api/v1/health",
+            expected="200",
+        ),
+        # otel 畅通: the OTLP ingest pipeline itself (collector health_check
+        # ext :13133), distinct from the signoz query svc above.
+        ProbeFacet(
+            name="otel-collector-http",
+            kind="http",
+            target="http://platform-signoz-otel-collector:13133",
+            expected="200",
+        ),
+        # SigNoz round-trip: write a synthetic OTLP log through the collector,
+        # then query ClickHouse for the same nonce. This proves ingest +
+        # storage, not just process readiness. depends_on signoz-internal-http:
+        # if SigNoz itself is down the round-trip also fails — cascade-suppress
+        # the round-trip symptom, page the signoz root only.
+        ProbeFacet(
+            name="signoz-roundtrip",
+            kind="command",
+            target="python /app/tools/observability_roundtrip_probe.py signoz",
+            expected="roundtrip-ok",
+            timeout_seconds=45,
+            depends_on="signoz-internal-http",
+        ),
+    )
     otel_ingest_port = 4318
 
     # SigNoz specific secret

@@ -1,20 +1,19 @@
 """Tests for the runtime probe-spec verification helpers."""
 
-from pathlib import Path
-
 from libs.infra_probes import parse_probe_specs
-from libs.probe_specs import missing_probe_names, parse_probe_names
-
-_ALERTING_COMPOSE = (
-    Path(__file__).resolve().parents[2] / "platform/12.alerting/compose.yaml"
+from libs.probe_specs import (
+    missing_probe_names,
+    parse_probe_names,
+    render_probe_spec_text,
 )
 
 
 def test_otel_and_lark_flow_probes_are_declared():
-    """otel 畅通 + lark 畅通 must be AUTOMATED probes: the alerting container's
-    INFRA_PROBE_SPECS declares the OTLP-ingest collector health and the Feishu
-    delivery readiness, distinct from the signoz-query and bridge-process probes."""
-    text = _ALERTING_COMPOSE.read_text(encoding="utf-8")
+    """otel 畅通 + lark 畅通 must be AUTOMATED probes: the registry-rendered
+    INFRA_PROBE_SPECS (#541: ProbeFacet declarations on the owning Deployers)
+    declares the OTLP-ingest collector health and the Feishu delivery
+    readiness, distinct from the signoz-query and bridge-process probes."""
+    text = render_probe_spec_text()
     names = parse_probe_names(text)
     assert "otel-collector-http" in names, "otel ingest pipeline must be probed"
     assert "lark-delivery-http" in names, "lark delivery readiness must be probed"
@@ -35,7 +34,7 @@ def test_synthetic_roundtrip_canaries_are_declared():
     path is now covered by ``lark-delivery-http`` (config + reachability, no real post),
     the out-of-band watchdog's bridge /health check, and the daily reports' delivery.
     """
-    text = _ALERTING_COMPOSE.read_text(encoding="utf-8")
+    text = render_probe_spec_text()
     names = parse_probe_names(text)
 
     assert "signoz-roundtrip" in names
@@ -89,3 +88,15 @@ def test_missing_probe_names_ignores_target_suffix_differences():
     source = "openpanel-api-http|http|http://platform-openpanel-api:3000/healthcheck|200|warning|5\n"
     running = "openpanel-api-http|http|http://platform-openpanel-api-staging:3000/healthcheck|200|warning|5\n"
     assert missing_probe_names(source, running) == []
+
+
+def test_render_fails_closed_on_empty_registry_walk():
+    """#541 fail-closed layer 1: an empty ProbeFacet walk is never a deployable
+    state — the renderer must raise, not ship an empty INFRA_PROBE_SPECS that
+    would leave the fleet silently unmonitored."""
+    import pytest
+
+    from libs.probe_specs import render_probe_spec_text
+
+    with pytest.raises(ValueError, match="ZERO probes"):
+        render_probe_spec_text(attrs={})

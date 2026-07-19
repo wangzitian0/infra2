@@ -34,7 +34,15 @@ services:
   # `COPY tools /app/tools` with build context = repo root, so it bakes both
   # trees into its image. A change to either must redeploy it; without this
   # entry alerting would silently run stale tooling.
+  #
+  # The deploy.py globs (#541): alerting's INFRA_PROBE_SPECS env is RENDERED
+  # from every service's ProbeFacet declarations (deploy.py Deployer attrs),
+  # so a probe change in ANY deploy.py must fan out to alerting and flip its
+  # config hash — otherwise the runner keeps probing the previous set.
   platform/alerting:
     depends_on:
       - libs/**
       - tools/**
+      - platform/*/deploy.py
+      - finance_report/finance_report/*/deploy.py
+      - truealpha/truealpha/*/deploy.py

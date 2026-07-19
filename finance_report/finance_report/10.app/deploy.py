@@ -22,6 +22,13 @@ class AppDeployer(Deployer):
     telemetry_service_name = "finance-report-backend"
     telemetry_component = "backend"
 
+    # deploy_v2 acceptance canary support (#541): tools/deploy_v2_canary.py
+    # iterates registry services declaring this flag (was a hardcoded service
+    # id there). Requires a working preview lane (the canary deploys the
+    # reserved pr-<_CANARY_PR> slot); truealpha flips its own flag when its
+    # preview lands — no canary code change needed then.
+    deploy_v2_canary = True
+
     @classmethod
     def pre_compose(cls, c) -> dict | None:
         """Prepare environment and ensure MinIO bucket is configured."""

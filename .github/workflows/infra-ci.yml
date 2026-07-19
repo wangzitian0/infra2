@@ -247,6 +247,27 @@ jobs:
           cd ${{ github.workspace }}
           uv run python -m tools.ci_gate_audit
 
+      # #504/#541: the inventory's `blocks_merge: true` gates vs the LIVE GitHub branch
+      # ruleset for main (the repo is public, so the default token can read the rules
+      # API). Report-only, matching the inventory audit above: a live-API check must not
+      # flake-block merges, and a transient API blip must not page (#425) — drift is
+      # printed on every run. Flip to `--enforce` once it has run clean for a while.
+      - name: Audit CI-gate inventory vs live ruleset (report-only)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          cd ${{ github.workspace }}
+          uv run python -m tools.ci_gate_ruleset_audit
+
+      # #541 quick wire: the SSOT README topic index must stay a generated projection of
+      # docs/ssot/MANIFEST.yaml (tools/gen_ssot_index.py --write). The default (check)
+      # mode exits non-zero when stale; the pytest lock (test_ssot_index_generated)
+      # covers the same invariant — this explicit step surfaces it as its own line.
+      - name: Gate SSOT index generated from MANIFEST
+        run: |
+          cd ${{ github.workspace }}
+          uv run python tools/gen_ssot_index.py
+
       - name: Gate backup inventory covers registered data paths
         run: |
           cd ${{ github.workspace }}
@@ -489,6 +510,17 @@ jobs:
 
           print(f'\\n✅ All deploy.py files validated')
           "
+
+      # #541: service × facet completeness matrix. Every service × {probes,
+      # signals, backup} cell is declared / exempt / MISSING, plus cross-facet
+      # consistency flags (e.g. a critical probe with no SignalFacet debounce —
+      # the Infra-012.10 gap). Report-only ratchet (repo pattern, mirrors
+      # tools/ci_gate_audit.py Phase 1): flip to --enforce once the printed
+      # backlog is cleared.
+      - name: Service facet completeness matrix (report-only)
+        run: |
+          cd ${{ github.workspace }}
+          python -m tools.service_facet_matrix
 
   lint-python:
     name: Lint Python Code

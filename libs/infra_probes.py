@@ -55,9 +55,17 @@ def parse_probe_specs(raw: str) -> list[ProbeSpec]:
     """Parse newline-separated probe specs.
 
     Format: name|kind|target|expected|severity|timeout_seconds|depends_on|service_id
+
+    The specs arrive via the Dokploy compose env as ONE double-quoted
+    ``\\n``-escaped dotenv value (#541); compose's dotenv normally expands it
+    back to real newlines before the runner sees it. `normalize_specs_text`
+    also accepts the still-encoded form, so the runner parses the same probe
+    set no matter which side of the dotenv expansion it observes.
     """
+    from libs.probe_specs import normalize_specs_text
+
     specs: list[ProbeSpec] = []
-    for raw_line in raw.splitlines():
+    for raw_line in normalize_specs_text(raw).splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue

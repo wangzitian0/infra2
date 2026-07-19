@@ -7,6 +7,7 @@ from libs.common import with_env_suffix
 from libs.env import VAULT_ROOT_TOKEN_OP_REF
 from libs.console import success, warning, info, error
 from libs.env import get_secrets
+from libs.service_facets import ProbeFacet
 
 shared_tasks = sys.modules.get("platform.24.openpanel.shared")
 
@@ -31,6 +32,48 @@ class OpenPanelDeployer(Deployer):
     subdomain = None
     service_port = 3000
     service_name = "op-dashboard"
+
+    # Infra probes (#541): rendered into INFRA_PROBE_SPECS by platform/alerting.
+    # OpenPanel is prod_only (single shared analytics instance), so targets
+    # carry NO ${ENV_SUFFIX} — probe the prod instance from all envs (a
+    # suffixed host never exists; see the same rule on platform/signoz).
+    probes = (
+        ProbeFacet(
+            name="openpanel-api-http",
+            kind="http",
+            target="http://platform-openpanel-api:3000/healthcheck",
+            expected="200",
+            severity="warning",
+        ),
+        ProbeFacet(
+            name="openpanel-worker-http",
+            kind="http",
+            target="http://platform-openpanel-worker:3000/healthcheck",
+            expected="200",
+            severity="warning",
+        ),
+        ProbeFacet(
+            name="openpanel-dashboard-http",
+            kind="http",
+            target="http://platform-openpanel-dashboard:3000/api/healthcheck",
+            expected="200",
+            severity="warning",
+        ),
+        # OpenPanel round-trip: write a synthetic /track event to the
+        # env-specific finance project, then query OpenPanel ClickHouse for the
+        # nonce. depends_on openpanel-api-http: if the API is down the
+        # round-trip cannot write — cascade-suppress the round-trip, page the
+        # api root only.
+        ProbeFacet(
+            name="openpanel-roundtrip",
+            kind="command",
+            target="python /app/tools/observability_roundtrip_probe.py openpanel",
+            expected="roundtrip-ok",
+            severity="warning",
+            timeout_seconds=45,
+            depends_on="openpanel-api-http",
+        ),
+    )
 
     @classmethod
     def ensure_runtime_secrets(cls, c=None) -> bool:

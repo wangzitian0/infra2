@@ -1,7 +1,9 @@
 # Signal ownership registry for tools/watchdog_consistency_audit.py (a blocking
 # infra-ci gate). Each signal is cross-validated against the live code-owned
 # config that actually implements it:
-#   primary_owner=internal  -> platform/12.alerting/compose.yaml INFRA_PROBE_SPECS
+#   primary_owner=internal  -> INFRA_PROBE_SPECS rendered from each service's
+#                                deploy.py ProbeFacet declarations (#541;
+#                                libs/probe_specs.py::render_probe_spec_text)
 #   primary_owner=cloudflare -> cloudflare/infra-watchdog/wrangler.toml
 #   primary_owner=github     -> tools/out_of_band_watchdog.py
 #   primary_owner=excluded   -> intentionally unwatched; requires exclusion_reason
