@@ -7,11 +7,14 @@ it to serve 200 at its public URL, then tear it (and its ephemeral DB) back down
 canary is the proof that ``deploy_v2(service, type, version_ref, iac_ref)`` actually
 deploys — not just that the contract validates.
 
-By default it deploys the ``finance_report/app`` service with ``type=canary``, which runs
-the chosen code on a dedicated, reserved preview slot (``pr-<_CANARY_PR>`` — a number no
-real PR will reuse), so it never touches staging/prod or a real PR's stack. ``--service``
-selects a different preview-capable service (#522) — anything registered in
-``libs.deploy_env_config.preview_service_config`` (e.g. ``truealpha/app``).
+By default it deploys EVERY registry service declaring ``deploy_v2_canary = True`` on its
+Deployer (#541 — today ``finance_report/app`` only; see :func:`canary_services`) with
+``type=canary``, which runs the chosen code on a dedicated, reserved preview slot
+(``pr-<_CANARY_PR>`` — a number no real PR will reuse), so it never touches staging/prod
+or a real PR's stack. ``--service`` overrides the registry set with ONE explicit
+preview-capable service (#522/#538) — anything registered in
+``libs.deploy_env_config.preview_service_config`` works (e.g. ``truealpha/app``), even if
+it has not opted into the scheduled canary via the Deployer flag.
 
     run_canary(...)  -> deploy_v2(type=canary, version_ref) -> health 200 -> down (delete volumes)
 
@@ -48,6 +51,31 @@ from tools.deploy_v2 import _CANARY_PR, deploy_v2
 from libs.deploy.preview import down
 
 _DEFAULT_SERVICE = "finance_report/app"
+
+
+def canary_services() -> list[str]:
+    """Registry services declaring scheduled deploy_v2-canary coverage (#541).
+
+    Derived from each Deployer's ``deploy_v2_canary`` class attribute via the
+    single registry derivation (service_attrs) — no hardcoded service id. Today
+    that is finance_report/app only; truealpha auto-joins by flipping its own
+    flag once its brand-new preview lane (#538) has been live-proven. Fails
+    closed on an empty set: a scheduled canary that silently probes nothing is
+    worse than a red one.
+    """
+    from libs.service_registry import service_attrs
+
+    services = sorted(
+        service_id
+        for service_id, meta in service_attrs().items()
+        if meta.deploy_v2_canary
+    )
+    if not services:
+        raise RuntimeError(
+            "no registry service declares deploy_v2_canary=True — the scheduled "
+            "canary would silently prove nothing; refusing to run (see #541)"
+        )
+    return services
 
 _SDK_FAILURE_DOMAIN = {
     "deploy-v2-control-plane": FailureDomain.DOKPLOY_CONTROL_PLANE,
@@ -254,10 +282,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="deploy_v2 acceptance canary")
     parser.add_argument(
         "--service",
-        default=_DEFAULT_SERVICE,
-        help="preview-capable service to canary (default finance_report/app); any "
-        "service registered in libs.deploy_env_config.preview_service_config works, "
-        "e.g. truealpha/app (#522)",
+        default=None,
+        help="explicit preview-capable service to canary (any service registered in "
+        "libs.deploy_env_config.preview_service_config, e.g. truealpha/app — #522/#538). "
+        "Default: every registry service declaring deploy_v2_canary=True (#541), "
+        "today finance_report/app only.",
     )
     parser.add_argument(
         "--version-ref",
@@ -290,6 +319,20 @@ def main(argv: list[str] | None = None) -> int:
     from libs.dokploy import get_dokploy
 
     client = get_dokploy(host=f"cloud.{args.domain}")
+    # --service = explicit single-service override (#538); default = every
+    # registry service that opted into the scheduled canary (#541). One JSON
+    # result line per service (today: exactly one — ops-checks' single-line
+    # torn_down parse is unchanged until a second service enrolls).
+    services = [args.service] if args.service else canary_services()
+    overall_rc = 0
+    for service in services:
+        args.service = service  # stage-result/alert helpers read args.service
+        overall_rc = max(overall_rc, _canary_one(client, args, service))
+    return overall_rc
+
+
+def _canary_one(client, args, service: str) -> int:
+    """Run the canary for ONE service; returns its exit code (0 green)."""
     domain, detail, rc = None, None, 0
     started = time.monotonic()
     result = None
@@ -297,7 +340,7 @@ def main(argv: list[str] | None = None) -> int:
         result = run_canary(
             client=client,
             domain=args.domain,
-            service=args.service,
+            service=service,
             version_ref=args.version_ref,
             iac_ref=args.iac_ref,
             wait=not args.no_wait,
