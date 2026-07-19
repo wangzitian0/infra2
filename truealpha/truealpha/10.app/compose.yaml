@@ -92,7 +92,9 @@ services:
         set +a
         # Apply db/migrations/*.sql + db/roles.sql (baked into the image, #428) against
         # this env's DATABASE_URL before serving. Idempotent SQL, safe on every boot.
-        sh ./db/apply_migrations.sh
+        # A separate line (no &&) would let a migration failure silently fall through
+        # to `exec uvicorn` anyway — explicit exit so a broken schema fails closed.
+        sh ./db/apply_migrations.sh || exit 1
         exec uvicorn llm_service.main:app --host 0.0.0.0 --port 8000
     environment:
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
