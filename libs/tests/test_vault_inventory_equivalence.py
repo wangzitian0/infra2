@@ -125,17 +125,25 @@ def test_absorbed_constants_equivalence() -> None:
 
 
 def test_not_in_production_derivation_matches_deploy_side_facts() -> None:
-    """The retired NOT_YET_IN_PRODUCTION constant, now derived: the three
-    truealpha services (Deployer attrs + _APP_COMPOSE_OVERRIDES prod
-    compose_id=None) PLUS truealpha/preview — the on-behalf surface #538 added
-    to the inventory without updating the old constant, which made the daily
-    production audit fail on a false positive (observed live 2026-07-20)."""
-    assert inventory_ids_not_in_production() == {
-        "truealpha/postgres",
-        "truealpha/app",
-        "truealpha/data_engine",
-        "truealpha/preview",
-    }
+    """The retired NOT_YET_IN_PRODUCTION constant, now derived from deploy-side
+    facts — so the set FLIPS AUTOMATICALLY as reality changes, which is the
+    whole point. Verified live 2026-07-19/20: truealpha/app prod went live
+    (compose_id registered in _APP_COMPOSE_OVERRIDES) and truealpha-postgres is
+    running in prod, so app/preview/postgres left this set with zero audit-side
+    edits; data_engine keeps its Deployer flag (no prod containers exist).
+
+    Assert the MECHANISM's current output plus the two flip properties, not a
+    frozen snapshot — a snapshot here goes stale the moment rollout state moves
+    (exactly what broke the previous version of this test)."""
+    excluded = inventory_ids_not_in_production()
+    assert excluded == {"truealpha/data_engine"}
+    # flip property 1: a prod compose_id registration removes the app AND its
+    # on-behalf preview surface, with no audit-side change
+    assert "truealpha/app" not in excluded
+    assert "truealpha/preview" not in excluded
+    # flip property 2: removing the Deployer flag (postgres, live in prod since
+    # 2026-07-19) removes the service
+    assert "truealpha/postgres" not in excluded
 
 
 def test_duplicate_derived_inventory_ids_fail_closed() -> None:

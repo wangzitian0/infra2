@@ -110,6 +110,8 @@ def discover_deployer_data_paths(root: Path = REPO_ROOT) -> dict[str, str]:
     """Find deployer-owned persistent DATA_PATH roots from deploy.py files."""
     paths: dict[str, str] = {}
     for deploy_path in root.rglob("deploy.py"):
+        if any(part.startswith(".") for part in deploy_path.parts):
+            continue  # hidden dirs: .venv, .git, .claude worktrees (full repo copies)
         if ".venv" in deploy_path.parts:
             continue
         tree = ast.parse(deploy_path.read_text(encoding="utf-8"))

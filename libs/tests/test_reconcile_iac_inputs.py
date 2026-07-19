@@ -63,11 +63,16 @@ def test_not_yet_in_production_services_skip_prod() -> None:
     staging only, and be surfaced in the plan rather than silently dropped."""
     plan = build_plan([MANIFEST_PATH])  # selects every iac_pinned service
 
-    for service in ("truealpha/postgres", "truealpha/data_engine"):
+    # data_engine still carries the flag; postgres went LIVE in prod 2026-07-19
+    # (verified: truealpha-postgres running) and its flag was removed — the plan
+    # must include it for prod again, automatically.
+    for service in ("truealpha/data_engine",):
         assert service in plan.selected
         assert service in plan.staging_services
         assert service not in plan.prod_services
         assert service in plan.not_yet_in_production
+    assert "truealpha/postgres" in plan.prod_services
+    assert "truealpha/postgres" not in plan.not_yet_in_production
     # In-production services are untouched by the filter.
     assert "platform/alerting" in plan.prod_services
     assert plan.to_dict()["not_yet_in_production"] == plan.not_yet_in_production

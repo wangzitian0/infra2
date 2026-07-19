@@ -120,14 +120,13 @@ def test_production_run_excludes_services_not_yet_in_production(monkeypatch) -> 
     check.run(env="production")
 
     excluded = check.inventory_ids_not_in_production()
-    assert excluded == {
-        "truealpha/postgres",
-        "truealpha/app",
-        "truealpha/data_engine",
-        "truealpha/preview",
-    }
+    # mechanism, not snapshot: whatever the deploy-side facts currently derive
+    # is exactly what the production sweep must exclude (truealpha/app,
+    # /preview and /postgres auto-left this set when prod went live 2026-07-19)
+    assert excluded == {"truealpha/data_engine"}
     assert captured["ids"].isdisjoint(excluded)
     assert "finance_report/app" in captured["ids"]  # real prod services untouched
+    assert "truealpha/app" in captured["ids"]  # in prod since 2026-07-19 -> now swept
     assert "finance_report/preview" in captured["ids"]  # owner IS in production
 
 
