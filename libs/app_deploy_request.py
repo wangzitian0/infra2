@@ -17,12 +17,6 @@ from infra2_sdk.refs import ResolvedRef, resolve_image_ref, resolve_pr
 
 APP_SOURCES: dict[str, str] = {
     "finance_report/app": "wangzitian0/finance_report",
-    # #500: truealpha's sender (truealpha#333) only emits STAGING requests today —
-    # PRODUCTION_EVIDENCE_POLICIES has no truealpha/app entry, which is fine: that
-    # policy is only consulted for DeployType.PRODUCTION requests
-    # (verify_production_evidence), and truealpha's own sender-side authority check
-    # (tools/app_deploy_request.py in the app repo) already rejects those before infra2
-    # ever sees them.
     "truealpha/app": "wangzitian0/truealpha",
 }
 ALLOWED_SENDERS = frozenset({"wangzitian0"})

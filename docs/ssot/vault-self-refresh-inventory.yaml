@@ -198,6 +198,23 @@ services:
     app_containers:
       - truealpha-llm${ENV_SUFFIX}
       - truealpha-web${ENV_SUFFIX}
+  - id: truealpha/preview
+    project: truealpha
+    dokploy_service: app
+    # #522: multi-alias ephemeral PREVIEW, generalized off finance_report/preview's
+    # pattern. Same AppRole auth as the app; the secrets template reads the SOURCE
+    # env's app secrets (PREVIEW_SECRET_ENV, default staging) since an alias has no
+    # Vault path of its own — hence the {env} here resolves to that source env, not
+    # the alias.
+    auth_method: approle
+    compose_path: truealpha/truealpha/preview/compose.yaml
+    vault_agent_config_path: truealpha/truealpha/preview/vault-agent.hcl
+    secret_template_path: truealpha/truealpha/preview/secrets.ctmpl
+    vault_path_template: secret/data/truealpha/{env}/app
+    vault_agent_container: truealpha-app-vault-agent${ENV_SUFFIX}
+    app_containers:
+      - truealpha-llm${ENV_SUFFIX}
+      - truealpha-web${ENV_SUFFIX}
   - id: truealpha/data_engine
     project: truealpha
     dokploy_service: data_engine

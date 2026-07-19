@@ -7,9 +7,11 @@ it to serve 200 at its public URL, then tear it (and its ephemeral DB) back down
 canary is the proof that ``deploy_v2(service, type, version_ref, iac_ref)`` actually
 deploys — not just that the contract validates.
 
-It deploys the ``finance_report/app`` service with ``type=canary``, which runs the chosen
-code on a dedicated, reserved preview slot (``pr-<_CANARY_PR>`` — a number no real PR will
-reuse), so it never touches staging/prod or a real PR's stack.
+By default it deploys the ``finance_report/app`` service with ``type=canary``, which runs
+the chosen code on a dedicated, reserved preview slot (``pr-<_CANARY_PR>`` — a number no
+real PR will reuse), so it never touches staging/prod or a real PR's stack. ``--service``
+selects a different preview-capable service (#522) — anything registered in
+``libs.deploy_env_config.preview_service_config`` (e.g. ``truealpha/app``).
 
     run_canary(...)  -> deploy_v2(type=canary, version_ref) -> health 200 -> down (delete volumes)
 
@@ -18,6 +20,7 @@ logic is unit-testable with a fake (NO live calls in tests). The LIVE run needs 
 Dokploy access and is operator-driven:
 
     python -m tools.deploy_v2_canary --version-ref main --iac-ref main --domain zitian.party
+    python -m tools.deploy_v2_canary --service truealpha/app --version-ref main --iac-ref main --domain zitian.party
 
 ``--version-ref`` accepts any code surface (main | vX.Y.Z | <sha>); the
 canary always runs it on the reserved slot. Add ``--keep`` to leave the stack up.
@@ -44,7 +47,7 @@ from libs.deploy_contract import DeployTarget
 from tools.deploy_v2 import _CANARY_PR, deploy_v2
 from libs.deploy.preview import down
 
-_APP_SERVICE = "finance_report/app"
+_DEFAULT_SERVICE = "finance_report/app"
 
 _SDK_FAILURE_DOMAIN = {
     "deploy-v2-control-plane": FailureDomain.DOKPLOY_CONTROL_PLANE,
@@ -60,7 +63,7 @@ _EXTERNAL_FAILURE_DOMAINS = {
 
 
 def _best_effort_down(
-    *, domain: str, client, attempts: int = 3, _sleep=time.sleep
+    *, domain: str, client, service: str, attempts: int = 3, _sleep=time.sleep
 ) -> bool:
     """Tear the canary slot down, retrying transient control-plane errors.
 
@@ -72,7 +75,7 @@ def _best_effort_down(
     last = None
     for i in range(attempts):
         try:
-            down("pr", _CANARY_PR, domain=domain, client=client)
+            down("pr", _CANARY_PR, domain=domain, client=client, service=service)
             return True
         except (httpx.HTTPError, RuntimeError, ValueError) as exc:
             last = exc
@@ -100,6 +103,7 @@ def run_canary(
     *,
     client,
     domain: str,
+    service: str = _DEFAULT_SERVICE,
     version_ref: str = "main",
     iac_ref: str = "main",
     wait: bool = True,
@@ -108,6 +112,9 @@ def run_canary(
 ) -> CanaryResult:
     """Deploy the canary slot, assert health, then tear it down.
 
+    ``service`` selects the preview-capable service under test (default
+    ``finance_report/app``; any service registered in
+    ``libs.deploy_env_config.preview_service_config`` works, e.g. ``truealpha/app``).
     ``version_ref`` is any code surface (main | vX.Y.Z | <sha>); ``iac_ref``
     pins infra2. deploy_v2 resolves both. Raises whatever deploy_v2 raises on a
     contract/red-line violation, or TimeoutError from the backend if the stack never goes
@@ -118,7 +125,7 @@ def run_canary(
     res = None
     try:
         res = deploy_v2(
-            service=_APP_SERVICE,
+            service=service,
             deploy_type="canary",
             version_ref=version_ref,
             iac_ref=iac_ref,
@@ -132,7 +139,7 @@ def run_canary(
         # an unpublished image), its error still propagates after we clean up — and a flaky
         # control plane can't leave the slot leaked silently.
         if teardown:
-            torn_down = _best_effort_down(domain=domain, client=client)
+            torn_down = _best_effort_down(domain=domain, client=client, service=service)
 
     healthy = res.detail.get("healthy")
     ok = bool(healthy) if wait else None
@@ -185,7 +192,7 @@ def make_canary_stage_result(
         f"{resolved_target.service}@{resolved_target.code_version};"
         f"iac@{resolved_target.iac_ref}"
         if resolved_target is not None
-        else f"{_APP_SERVICE}@{args.version_ref};iac@{args.iac_ref}"
+        else f"{args.service}@{args.version_ref};iac@{args.iac_ref}"
     )
     return make_stage_result(
         source="tools.deploy_v2_canary",
@@ -246,6 +253,13 @@ def alert_failure(env, *, domain: str, detail: str, args, duration_ms: int = 0) 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="deploy_v2 acceptance canary")
     parser.add_argument(
+        "--service",
+        default=_DEFAULT_SERVICE,
+        help="preview-capable service to canary (default finance_report/app); any "
+        "service registered in libs.deploy_env_config.preview_service_config works, "
+        "e.g. truealpha/app (#522)",
+    )
+    parser.add_argument(
         "--version-ref",
         default="main",
         help="app code surface to canary: main | vX.Y.Z | <sha>",
@@ -283,6 +297,7 @@ def main(argv: list[str] | None = None) -> int:
         result = run_canary(
             client=client,
             domain=args.domain,
+            service=args.service,
             version_ref=args.version_ref,
             iac_ref=args.iac_ref,
             wait=not args.no_wait,

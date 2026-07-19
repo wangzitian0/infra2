@@ -1,0 +1,265 @@
+# TrueAlpha Application — PREVIEW (multi-alias, ephemeral) compose template
+#
+# Used by `python -m tools.deploy_v2 --service truealpha/app --type preview/*` (backend:
+# libs/deploy/preview.py, generalized off libs.deploy_env_config.preview_service_config —
+# #522) to stand up ONE throwaway preview stack per alias (branch-<name> / pr-<N> /
+# commit-<sha7> / tag-<slug>). Each alias gets its OWN copy of this compose as a distinct
+# Dokploy compose (project "truealpha", environment "preview"), with a unique ENV_SUFFIX so
+# container names + Traefik Host() rules never collide with each other or with
+# staging/prod.
+#
+# How preview differs from the staging/prod app compose (10.app/compose.yaml):
+#   1. It bundles its OWN throwaway `db` (Postgres) service on a NAMED volume — NO host
+#      bind mount, NEVER the shared truealpha-postgres (staging/prod). Its DB name is
+#      "truealpha" (PreviewServiceConfig.db_name). `delete_compose(delete_volumes=True)`
+#      at teardown removes that volume, so the database is genuinely ephemeral.
+#   2. The rendered DATABASE_URL is OVERRIDDEN to point at that local `db` service, AFTER
+#      sourcing the Vault-rendered /secrets/.env (so Vault still supplies the OTHER app
+#      secrets — ANTHROPIC_API_KEY, S3 — and only the DB is local/ephemeral).
+#   3. Everything else (vault-agent, llm, web, Traefik labels, healthchecks) mirrors the
+#      staging/prod template so a preview is a faithful, functional copy of the app.
+#
+# KNOWN GAP (tracked, not silently papered over): unlike finance_report's preview (which
+# runs `alembic upgrade head` on backend boot), truealpha has no in-container migration
+# runner yet — db/migrations/*.sql + db/roles.sql are applied manually from an app-repo
+# checkout today (see ../01.postgres/README.md: "a proper in-container migration runner
+# is planned with the app's Phase 0"). This preview's ephemeral `db` therefore boots with
+# NO schema until that runner exists — web/llm will come up (vault-agent + Postgres are
+# healthy) but any query touching `raw`/`staging`/`mart` will fail. Wiring an ad hoc
+# migration step here was deliberately NOT done: schema application is app-repo-owned
+# tooling, and inventing an infra2-side mechanism would preempt that design. Track the
+# migration-runner as its own truealpha issue before relying on this preview for anything
+# beyond a smoke/health-check deploy-path proof.
+#
+# Env vars supplied by libs.deploy.preview (see libs.deploy.promote for the shared set):
+# IMAGE_TAG, GIT_COMMIT_SHA, ENV_SUFFIX, ENV_DOMAIN_SUFFIX, NEXT_PUBLIC_APP_URL,
+# INTERNAL_DOMAIN, IAC_CONFIG_HASH, VAULT_ADDR, VAULT_ROLE_ID, VAULT_SECRET_ID, plus the
+# ephemeral-DB knobs PREVIEW_DB_USER / PREVIEW_DB_PASSWORD / PREVIEW_DB_NAME.
+services:
+  vault-agent:
+    init: true  # tini as PID1 reaps healthcheck ssl_client zombies
+    image: hashicorp/vault:1.15
+    container_name: truealpha-app-vault-agent${ENV_SUFFIX}
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    entrypoint:
+      - sh
+      - -c
+      - |
+        rm -f /vault/secrets/.env /vault/.token /vault/role_id /vault/secret_id 2>/dev/null || true
+        if [ -z "$$VAULT_ROLE_ID" ] || [ -z "$$VAULT_SECRET_ID" ]; then
+          echo "VAULT_ROLE_ID and VAULT_SECRET_ID are required"
+          exit 1
+        fi
+        if [ -z "$$VAULT_ADDR" ]; then
+          echo "VAULT_ADDR is required"
+          exit 1
+        fi
+        echo "$$VAULT_ROLE_ID" > /vault/role_id
+        echo "$$VAULT_SECRET_ID" > /vault/secret_id
+        # AppRole auto_auth: vault-agent logs in and renews/re-auths the token
+        # natively. No token_file decay, no manual renew loop.
+        exec vault agent -config=/etc/vault/vault-agent.hcl
+    environment:
+      VAULT_ADDR: ${VAULT_ADDR}
+      VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
+      VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
+      ENV: ${ENV}
+      # The ctmpl reads PREVIEW_SECRET_ENV to pick which env's Vault app-secrets path to
+      # render (secret/data/truealpha/<PREVIEW_SECRET_ENV>/app). Must be passed into THIS
+      # container — the renderer — or the template falls back to its "staging" default.
+      PREVIEW_SECRET_ENV: ${PREVIEW_SECRET_ENV:-staging}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - |
+          test -s /vault/secrets/.env && ! grep -q "<no value>" /vault/secrets/.env && test -s /vault/.token || exit 1
+          # vault token lookup THROTTLED to ~5min (token TTL is hours) — no 30s hammer (#292)
+          if [ -z "$$(find /tmp/.vault_hc -mmin -5 2>/dev/null)" ]; then
+            wget -q -T 3 --header="X-Vault-Token: $$(cat /vault/.token)" "$$VAULT_ADDR/v1/auth/token/lookup-self" -O /dev/null || exit 1
+            touch /tmp/.vault_hc
+          fi
+      interval: 30s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
+      - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
+      - secrets:/vault/secrets
+    networks:
+      - dokploy-network
+
+  # Ephemeral, throwaway PostgreSQL — local to THIS preview stack only.
+  # NOTE: data lives on the NAMED `preview_db` volume below (no host bind mount), so
+  # teardown via delete_compose(delete_volumes=True) destroys it completely. This is
+  # NOT the shared staging/prod truealpha-postgres; nothing here persists past an
+  # explicit teardown.
+  db:
+    image: postgres:16-alpine
+    container_name: truealpha-preview-db${ENV_SUFFIX}
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    environment:
+      POSTGRES_USER: ${PREVIEW_DB_USER:-preview}
+      POSTGRES_PASSWORD: ${PREVIEW_DB_PASSWORD:-preview}
+      POSTGRES_DB: ${PREVIEW_DB_NAME:-truealpha}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}
+      start_period: 20s
+      interval: 10s
+      retries: 10
+      timeout: 5s
+    volumes:
+      - preview_db:/var/lib/postgresql/data
+    networks:
+      - dokploy-network
+    labels:
+      - "traefik.enable=false"
+
+  llm:
+    image: ghcr.io/wangzitian0/truealpha-llm-service:${IMAGE_TAG:-latest}
+    pull_policy: always
+    container_name: truealpha-llm${ENV_SUFFIX}
+    restart: always
+    mem_limit: ${APP_LLM_MEM_LIMIT:-512m}
+    cpu_shares: ${TIER_CPU_SHARES:-1024}
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    depends_on:
+      vault-agent:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - |
+        # Wait for secrets file to be rendered by vault-agent
+        while [ ! -f /secrets/.env ]; do
+          echo "Waiting for secrets..."
+          sleep 1
+        done
+        set -a
+        . /secrets/.env
+        set +a
+        # PREVIEW OVERRIDE: Vault rendered a DATABASE_URL for the shared truealpha-postgres;
+        # replace it with this stack's OWN ephemeral DB so preview never reads/writes the
+        # shared staging/prod database. Done AFTER sourcing /secrets/.env so the override
+        # always wins; the rest of the Vault secrets (ANTHROPIC_API_KEY, S3) are kept.
+        export DATABASE_URL="$$PREVIEW_DATABASE_URL"
+        exec uvicorn llm_service.main:app --host 0.0.0.0 --port 8000
+    environment:
+      GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
+      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      # The ephemeral-DB DSN the entrypoint forces AFTER sourcing Vault secrets, pointing
+      # at the local `db` service (NOT truealpha-postgres*).
+      PREVIEW_DATABASE_URL: postgresql://${PREVIEW_DB_USER:-preview}:${PREVIEW_DB_PASSWORD:-preview}@truealpha-preview-db${ENV_SUFFIX}:5432/${PREVIEW_DB_NAME:-truealpha}
+    healthcheck:
+      # python stdlib probe: the uv-based slim image ships no curl/wget.
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)" ]
+      start_period: 30s
+      interval: 10s
+      retries: 3
+      timeout: 5s
+    volumes:
+      - secrets:/secrets:ro
+    networks:
+      - dokploy-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.rule=Host(`truealpha${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
+      - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.service=truealpha-api${ENV_DOMAIN_SUFFIX}"
+      - "traefik.http.services.truealpha-api${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=8000"
+      # Strip /api prefix before forwarding to the llm-service
+      - "traefik.http.middlewares.truealpha-api-strip${ENV_DOMAIN_SUFFIX}.stripprefix.prefixes=/api"
+      - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.middlewares=truealpha-api-strip${ENV_DOMAIN_SUFFIX}@docker"
+
+  web:
+    image: ghcr.io/wangzitian0/truealpha-app-web:${IMAGE_TAG:-latest}
+    pull_policy: always
+    container_name: truealpha-web${ENV_SUFFIX}
+    restart: always
+    mem_limit: ${APP_WEB_MEM_LIMIT:-512m}
+    cpu_shares: ${TIER_CPU_SHARES:-1024}
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    depends_on:
+      vault-agent:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - |
+        # The web app reads the mart schema directly (truealpha init.md rule 5):
+        # DATABASE_URL comes from Vault like the llm-service's, no API hop.
+        while [ ! -f /secrets/.env ]; do
+          echo "Waiting for secrets..."
+          sleep 1
+        done
+        set -a
+        . /secrets/.env
+        set +a
+        # PREVIEW OVERRIDE — see the llm service above for the rationale.
+        export DATABASE_URL="$$PREVIEW_DATABASE_URL"
+        exec node server.js
+    environment:
+      GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+      PREVIEW_DATABASE_URL: postgresql://${PREVIEW_DB_USER:-preview}:${PREVIEW_DB_PASSWORD:-preview}@truealpha-preview-db${ENV_SUFFIX}:5432/${PREVIEW_DB_NAME:-truealpha}
+    healthcheck:
+      # busybox wget ships with the alpine runtime image. 127.0.0.1, not localhost:
+      # busybox wget doesn't fall back across address families, and alpine resolves
+      # localhost to ::1 first while node only listens on IPv4.
+      test: [ "CMD", "wget", "-q", "-T", "3", "-O", "/dev/null", "http://127.0.0.1:3000" ]
+      start_period: 30s
+      interval: 30s
+      retries: 5
+      timeout: 10s
+    networks:
+      - dokploy-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.truealpha-web${ENV_DOMAIN_SUFFIX}.rule=Host(`truealpha${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`)"
+      - "traefik.http.routers.truealpha-web${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
+      - "traefik.http.routers.truealpha-web${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.truealpha-web${ENV_DOMAIN_SUFFIX}.service=truealpha-web${ENV_DOMAIN_SUFFIX}"
+      - "traefik.http.services.truealpha-web${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=3000"
+      # Lower priority than the /api route
+      - "traefik.http.routers.truealpha-web${ENV_DOMAIN_SUFFIX}.priority=1"
+
+volumes:
+  secrets:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=10m,mode=0755"
+  # Throwaway DB data. A NAMED volume (not a host bind mount) so Dokploy's
+  # delete_compose(delete_volumes=True) at teardown removes it entirely.
+  preview_db: {}
+
+networks:
+  dokploy-network:
+    external: true

@@ -684,13 +684,14 @@ def deploy_v2(
         if not svc_spec.supports_preview:
             raise ValueError(
                 f"{service!r} does not support preview/canary deploys yet "
-                "(libs.deploy_contract.ServiceSpec.supports_preview=False) — "
-                "libs.deploy.preview is still finance_report-shaped, #500."
+                "(libs.deploy_contract.ServiceSpec.supports_preview=False) — register a "
+                "libs.deploy_env_config.preview_service_config entry for it first (#522)."
             )
         result = _preview_up(
             spec.alias_kind,
             alias_value,
             code=resolved.sha,
+            service=service,
             image_ref=resolved.image_ref,
             iac_ref=target.iac_ref,
             domain=domain,
@@ -868,6 +869,7 @@ def main(argv: list[str] | None = None) -> int:
                 alias_value,
                 domain=domain,
                 client=get_dokploy(host=f"cloud.{domain}"),
+                service=args.service,
             )
             print(
                 json.dumps(

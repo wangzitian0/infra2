@@ -128,6 +128,23 @@ def test_version_ref_forwarded(spies):
     assert spies["down"]["value"] == _CANARY_PR  # slot stays fixed regardless of code
 
 
+def test_service_defaults_to_finance_report_but_is_overridable(spies):
+    # #522: --service selects which preview-capable service the canary probes; the
+    # default stays finance_report/app so every pre-#522 caller is unaffected.
+    run_canary(client=object(), domain="zitian.party", version_ref="main")
+    assert spies["deploy"]["service"] == "finance_report/app"
+    assert spies["down"]["service"] == "finance_report/app"
+
+    run_canary(
+        client=object(),
+        domain="zitian.party",
+        service="truealpha/app",
+        version_ref="main",
+    )
+    assert spies["deploy"]["service"] == "truealpha/app"
+    assert spies["down"]["service"] == "truealpha/app"
+
+
 # --- best-effort teardown (resilience to a flaky control plane) -------------
 
 
@@ -140,7 +157,12 @@ def test_best_effort_down_retries_then_succeeds(monkeypatch):
             raise httpx.HTTPError("transient 502")
 
     monkeypatch.setattr(canary, "down", flaky)
-    ok = canary._best_effort_down(domain="z.p", client=object(), _sleep=lambda *_: None)
+    ok = canary._best_effort_down(
+        domain="z.p",
+        client=object(),
+        service="finance_report/app",
+        _sleep=lambda *_: None,
+    )
     assert ok is True and calls["n"] == 2
 
 
@@ -155,7 +177,11 @@ def test_best_effort_down_warns_and_returns_false_on_persistent_failure(
 
     monkeypatch.setattr(canary, "down", boom)
     ok = canary._best_effort_down(
-        domain="z.p", client=object(), attempts=3, _sleep=lambda *_: None
+        domain="z.p",
+        client=object(),
+        service="finance_report/app",
+        attempts=3,
+        _sleep=lambda *_: None,
     )
     assert ok is False
     assert calls["n"] == 3  # exhausted retries
@@ -246,6 +272,7 @@ def test_stage_result_uses_resolved_deployment_coordinate():
 
 
 class _Args:
+    service = "finance_report/app"
     version_ref = "main"
     iac_ref = "main"
     domain = "z.p"
