@@ -151,6 +151,9 @@ def test_probe_runner_loop_catches_iteration_errors(monkeypatch) -> None:
             raise SystemExit(0)
 
     monkeypatch.setattr(runner, "run_once", fake_run_once)
+    monkeypatch.setattr(runner, "_build_watchers", lambda: [])
+    monkeypatch.setattr(runner, "_post_heartbeat", lambda **_k: None)
+    monkeypatch.setattr(runner, "_touch_state", lambda _p: None)
     monkeypatch.setattr(runner.time, "sleep", fake_sleep)
     monkeypatch.setattr("sys.argv", ["infra_probe_runner.py", "--loop", "--json"])
 
@@ -840,7 +843,9 @@ def test_probe_runner_posts_liveness_heartbeat_before_probes(monkeypatch) -> Non
         raise SystemExit(0)
 
     monkeypatch.setattr(runner, "run_once", fake_run_once)
+    monkeypatch.setattr(runner, "_build_watchers", lambda: [])
     monkeypatch.setattr(runner, "_post_heartbeat", fake_post_heartbeat)
+    monkeypatch.setattr(runner, "_touch_state", lambda _p: None)
     monkeypatch.setattr(runner.time, "sleep", fake_sleep)
     monkeypatch.setattr("sys.argv", ["infra_probe_runner.py", "--loop", "--json"])
 
@@ -871,6 +876,7 @@ def test_probe_runner_skips_liveness_heartbeat_in_dry_run(monkeypatch) -> None:
     monkeypatch.setenv("INFRA_PROBE_DRY_RUN", "1")
     monkeypatch.setattr(runner, "run_once", fake_run_once)
     monkeypatch.setattr(runner, "_post_heartbeat", lambda **k: beats.append(k))
+    monkeypatch.setattr(runner, "_touch_state", lambda _p: None)
     monkeypatch.setattr(runner.time, "sleep", fake_sleep)
     monkeypatch.setattr("sys.argv", ["infra_probe_runner.py", "--loop", "--json"])
 

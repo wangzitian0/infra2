@@ -117,7 +117,7 @@ def test_future_last_event_at_is_clamped_to_zero_age_not_negative():
 
 
 # --- evaluate_consecutive_hysteresis / ConsecutiveObservationState (#475) ---
-# Pure state-machine tests, independent of tools/container_breakdown_watch.py's
+# Pure state-machine tests, independent of libs/container_breakdown_watch.py's
 # Docker plumbing -- every case expressed directly as a sequence of poll
 # observations against a fresh ConsecutiveObservationState.
 

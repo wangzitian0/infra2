@@ -31,7 +31,7 @@ cumulative count and a last-occurrence timestamp read once, is the bad
 signal still live? That fits a check that samples Docker's lifetime
 ``RestartCount`` a single time (e.g. a daily audit).
 
-`tools/container_breakdown_watch.py` (#475) is a different shape: a
+`libs/container_breakdown_watch.py` (#475) is a different shape: a
 continuously-running poller that calls its sweep function repeatedly and
 needs to know "how many CONSECUTIVE polls in a row has this thing been
 broken" and, symmetrically, "how many consecutive polls has it now been
@@ -118,7 +118,7 @@ class ConsecutiveObservationState:
     One instance per monitored thing (e.g. one per container name). The caller
     owns storage/keying (a plain ``dict[key, ConsecutiveObservationState]`` kept
     in memory for the lifetime of a long-running poll loop is the expected
-    usage -- see ``tools/container_breakdown_watch.py``); this class only holds
+    usage -- see ``libs/container_breakdown_watch.py``); this class only holds
     the counters, it does no I/O and does not know about keys.
     """
 

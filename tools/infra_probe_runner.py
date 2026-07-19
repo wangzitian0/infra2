@@ -1,5 +1,22 @@
 #!/usr/bin/env python3
-"""Run infra service probes and alert through the internal bridge."""
+"""The single resident alerting sidecar (#543): infra probes + watcher plugins.
+
+One process, one container (`platform-alerting-probes${ENV_SUFFIX}`), all
+resident/continuous watching:
+
+  1. the probe loop (INFRA_PROBE_SPECS / PUBLIC_ROUTE_PROBE_SPECS), alerting
+     through the internal bridge;
+  2. registered watcher plugins (libs/resident_watchers.py) — the container
+     breakdown watch and the deploy-queue guard, formerly two separate compose
+     sidecars — invoked once per loop iteration with their own per-watcher
+     state and self-paced intervals.
+
+The compose healthcheck (state-file freshness) covers the WHOLE loop: a hung
+probe cycle OR a hung watcher stalls the next state write, the file goes
+stale, and the container flips unhealthy -> Dokploy restarts it (#163/#475
+monitor-the-monitor; the standalone sidecars had no healthcheck at all).
+See libs/resident_watchers.py for the plugin surface + timing budget.
+"""
 # alert-delivery-exempt: the probe ENGINE — delivers on behalf of every registered internal probe signal (per-spec, not per-module)
 
 from __future__ import annotations
@@ -126,6 +143,11 @@ def main() -> int:
     # liveness signal during local/debug runs).
     dry_run = os.getenv("INFRA_PROBE_DRY_RUN", "0") == "1"
 
+    # Resident watcher plugins (#543): breakdown watch + deploy-queue guard run
+    # inside THIS loop. Dry-run skips them entirely — they post real alerts to
+    # the bridge, which a local/debug run must never do.
+    watchers = [] if dry_run else _build_watchers()
+
     while True:
         # Liveness-first heartbeat (#369): prove the runner is alive at the START of
         # every iteration, BEFORE running probes. Crash/OOM/hang during a probe cycle
@@ -135,6 +157,12 @@ def main() -> int:
         # ping per loop costs no KV quota.
         if args.loop and not dry_run:
             _post_heartbeat(ok=True, detail="probe loop iteration starting")
+            # Local liveness-first mirror of the heartbeat: refresh the state
+            # file BEFORE the (possibly slow) probe+watcher work, so the
+            # compose healthcheck's freshness window measures loop liveness,
+            # not iteration duration — a long all-timeouts probe cycle plus
+            # watcher sweeps must not read as a hung loop.
+            _touch_state(state_path)
         try:
             exit_code = run_once(
                 as_json=args.json,
@@ -148,9 +176,34 @@ def main() -> int:
             traceback.print_exc()
             _post_heartbeat(ok=False, detail=f"iteration failed: {exc}")
             exit_code = 1
+        # Watcher plugins run AFTER the probes in the same iteration; each
+        # maybe_run self-paces on its own interval and never raises (one broken
+        # watcher must not kill the loop or its siblings). A HUNG watcher
+        # stalls the loop -> stale state file -> unhealthy -> restart.
+        for watcher in watchers:
+            watcher.maybe_run()
         if not args.loop:
             return exit_code
         time.sleep(interval)
+
+
+def _build_watchers() -> list:
+    """Construct the registered resident watcher plugins (#543).
+
+    A module-level seam so tests can stub the watcher set; the real registry
+    lives in libs/resident_watchers.build_watchers."""
+    from libs.resident_watchers import build_watchers
+
+    return build_watchers()
+
+
+def _touch_state(state_path: Path) -> None:
+    """Refresh the healthcheck state file's mtime (liveness-first, #543)."""
+    try:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.touch()
+    except OSError as exc:
+        print(f"infra probe state touch failed: {exc}", flush=True)
 
 
 def _deploy_env() -> str:

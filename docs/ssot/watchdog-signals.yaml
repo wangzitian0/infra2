@@ -652,13 +652,15 @@ signals:
     cadence: 1d
 
   # Container-breakdown watch (#425 T5 registration; #475 is the debounce this
-  # entry declares). In-process sidecar --
-  # platform/12.alerting/compose.yaml `container-breakdown-watch` running
-  # tools/container_breakdown_watch.py --loop -- polling the Docker socket every
+  # entry declares). Watcher PLUGIN inside the single resident alerting sidecar
+  # (#543): libs/container_breakdown_watch.py running inside
+  # tools/infra_probe_runner.py --loop (compose service `infra-probe-runner`,
+  # container platform-alerting-probes) -- polling the Docker socket every
   # BREAKDOWN_INTERVAL_SECONDS=60s and paging Feishu directly (no separate
-  # out-of-band watchdog verifies it, hence primary_owner=self). tier=minute/
-  # type=alert: a crash-looping container hurts users within minutes. The
-  # consecutive_failures/renotify_window_sec below are
+  # out-of-band watchdog verifies it, hence primary_owner=self; the merged
+  # sidecar's state-file healthcheck + probe heartbeat cover its liveness).
+  # tier=minute/type=alert: a crash-looping container hurts users within
+  # minutes. The consecutive_failures/renotify_window_sec below are
   # libs.recency.evaluate_consecutive_hysteresis's fire thresholds -- exactly the
   # debounce whose ABSENCE caused #475 (333 firing/resolved pairs in 48h from a
   # single flapping container, each wrongly resetting the renotify clock).
@@ -675,6 +677,31 @@ signals:
     renotify_window_sec: 1800 # BREAKDOWN_RENOTIFY_SECONDS
     recovery_threshold: 5 # BREAKDOWN_RECOVERY_THRESHOLD (consecutive healthy polls to resolve; not a mandatory field, kept for completeness)
     alert_threshold: 3 consecutive broken polls (~3 minutes at 60s cadence)
+
+  # Deploy-queue guard (#543 single-sidecar merge — this registration redeems
+  # the #542 lint exemption that deferred it). Watcher PLUGIN inside the same
+  # resident sidecar: libs/deploy_queue_guard.py inside
+  # tools/infra_probe_runner.py --loop, sweeping Dokploy's deployment records
+  # every DEPLOY_GUARD_INTERVAL_SECONDS=60s and paging Feishu directly
+  # (primary_owner=self). environment=global: the guard watches the whole
+  # shared Dokploy control plane (every project/env) from each runner.
+  # consecutive_failures=1 is honest, not lax: a deploy only qualifies once it
+  # has been `running` past DEPLOY_GUARD_CEILING_SECONDS (1800s) — the ceiling
+  # IS the debounce (a 30-minute-sustained state cannot be a transient blip),
+  # so the first qualifying sweep fires and renotify_window_sec suppresses
+  # repeats (per compose_id) for the incident's lifetime.
+  - signal_id: global.dokploy.deploy-queue-guard
+    environment: global
+    component: dokploy
+    signal: deploy-queue-guard
+    primary_owner: self
+    severity: critical
+    cadence: 60s
+    tier: minute
+    type: alert
+    consecutive_failures: 1 # ceiling-qualified (DEPLOY_GUARD_CEILING_SECONDS=1800 is the real debounce)
+    renotify_window_sec: 1800 # DEPLOY_GUARD_RENOTIFY_SECONDS
+    alert_threshold: one sweep observing a deploy running past the 1800s ceiling
 
   # Vault self-refresh audit (#425 T5 registration; #531 is the recency-window
   # investigation this check exists to close). Daily GitHub Actions job --

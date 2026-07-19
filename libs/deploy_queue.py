@@ -1,7 +1,8 @@
 """Detect deploy jobs stuck 'running' too long, via Dokploy's deployment status.
 
 Pure logic (no network, no clock) so it is unit-testable; the Dokploy API calls
-and the loop live in `tools/deploy_queue_guard.py`.
+and the Dokploy API calls live in `libs/deploy_queue_guard.py` (a watcher
+plugin in the single resident sidecar since #543).
 
 Why this works at the Dokploy-API layer instead of poking `bull:deployments:*`
 in Redis: the deploy queue is Dokploy's own BullMQ. We OBSERVE via the
