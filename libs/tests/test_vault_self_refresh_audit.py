@@ -10,6 +10,8 @@ from libs import vault_self_refresh_audit as vault_self_refresh_audit_module
 from libs.vault_self_refresh_audit import (
     OPTIONAL_INERT_FIELD_WATCHLIST,
     VaultService,
+    _remote_container_logs,
+    _remote_container_state,
     _remote_secret_file_state,
     _remote_secret_file_text,
     _vault_addr_from_env,
@@ -349,6 +351,71 @@ def test_audit_from_observations_stays_pass_with_only_stale_render_and_healthy_c
     assert freshness_results[0]["status"] == "info"
 
 
+def test_mount_exempt_app_container_not_flagged_for_missing_secrets_mount() -> None:
+    """#531: platform-prefect-worker genuinely has no secrets mount by design (it only
+    needs PREFECT_API_URL, a plain env var -- confirmed against the live compose file
+    and #163's independent investigation). Fixing the restart-count false positive
+    unmasked this pre-existing, different check-vs-reality mismatch: applying
+    app_secret_mount_path uniformly to every app_container assumed a uniformity that
+    doesn't hold. MOUNT_EXEMPT_CONTAINERS must suppress the mount check for it, while
+    every OTHER app_container in the same service (e.g. platform-prefect-services,
+    which genuinely does read secrets) keeps being checked normally."""
+    services = load_inventory()
+    prefect = next(service for service in services if service.id == "platform/prefect")
+
+    worker_state = {
+        "name": "platform-prefect-worker",
+        "exists": True,
+        "state": "running",
+        "health": "healthy",
+        "restart_count": 0,
+        "mounts": [],  # genuinely no secrets mount -- must NOT be flagged
+    }
+    services_state = {
+        "name": "platform-prefect-services",
+        "exists": True,
+        "state": "running",
+        "health": "healthy",
+        "restart_count": 0,
+        "mounts": [],  # DOES need the mount and doesn't have it -- must fail
+    }
+    report = audit_from_observations(
+        [prefect],
+        {
+            "services": {
+                prefect.id: {
+                    "dokploy_env": (
+                        "VAULT_ROLE_ID=test-role-id-not-a-real-secret\n"
+                        "VAULT_SECRET_ID=test-secret-id-not-a-real-secret\n"
+                    ),
+                    "token_lookup": None,
+                    "rendered_env": {"exists": True, "readable": True, "size": 20, "mtime": 0},
+                    "vault_agent_logs": "",
+                    "vault_agent_container": {
+                        "name": "platform-prefect-vault-agent",
+                        "exists": True,
+                        "state": "running",
+                        "health": "healthy",
+                        "restart_count": 0,
+                    },
+                    "app_containers": [worker_state, services_state],
+                }
+            }
+        },
+        env="production",
+        now=1000,
+    )
+
+    app_results = {
+        (r["evidence"].get("name")): r
+        for r in report["results"]
+        if r["check_id"] == "app-container"
+    }
+    assert app_results["platform-prefect-worker"]["status"] == "pass"
+    assert app_results["platform-prefect-services"]["status"] == "fail"
+    assert "mount" in app_results["platform-prefect-services"]["summary"].lower()
+
+
 def test_vault_agent_log_classifier_detects_refresh_errors_and_redacts() -> None:
     """#166: agent log audit catches known render/renewal failures."""
     result = classify_vault_agent_logs(
@@ -396,7 +463,12 @@ def test_container_classifier_checks_state_health_restarts_and_mounts() -> None:
     )
     assert unhealthy.status == "fail"
 
-    high_restart = classify_container(
+    # #531: a high restart_count only fails when the most recent restart is
+    # ALSO recent (State.StartedAt within the recency window of `now`) --
+    # Docker's RestartCount is lifetime-cumulative, so count alone is not
+    # enough. See test_container_classifier_restart_count_is_recency_bounded
+    # below for the full true-positive/false-positive pair this replaced.
+    high_restart_and_recent = classify_container(
         service,
         {
             "name": "backend",
@@ -405,11 +477,13 @@ def test_container_classifier_checks_state_health_restarts_and_mounts() -> None:
             "health": "healthy",
             "restart_count": 9,
             "max_restart_count": 3,
+            "started_at": "2026-07-19T11:59:30Z",
         },
         check_id="app-container",
+        now=1_784_462_400,  # 2026-07-19T12:00:00Z -- 30s after started_at
     )
-    assert high_restart.status == "fail"
-    assert high_restart.severity == "P1"
+    assert high_restart_and_recent.status == "fail"
+    assert high_restart_and_recent.severity == "P1"
 
     missing_mount = classify_container(
         service,
@@ -455,6 +529,93 @@ def test_container_classifier_checks_state_health_restarts_and_mounts() -> None:
         expected_mount="/secrets/.env",
     )
     assert healthy.status == "pass"
+
+
+def test_container_classifier_restart_count_is_recency_bounded() -> None:
+    """#531: restart_count alone is Docker's lifetime-cumulative counter -- a
+    container must be BOTH over the count threshold AND recently restarted
+    (State.StartedAt within the recency window) to fail. Reproduces the
+    exact live false positive (platform-prefect-services: 1781 restarts
+    between 2026-06-11 and 2026-07-06, then 12+ stable days) alongside a
+    true-positive control proving a genuinely-still-flapping container is
+    still caught."""
+    service = _service()
+    now = 1_784_462_400  # 2026-07-19T12:00:00Z, matching the live 2026-07-19 re-audit
+
+    # True positive: high count AND the last restart was moments ago -- still
+    # actively flapping, must fail.
+    actively_flapping = classify_container(
+        service,
+        {
+            "name": "platform-prefect-services",
+            "exists": True,
+            "state": "running",
+            "health": "healthy",
+            "restart_count": 9,
+            "max_restart_count": 3,
+            "started_at": "2026-07-19T11:55:00Z",  # 5 minutes before `now`
+        },
+        check_id="app-container",
+        now=now,
+    )
+    assert actively_flapping.status == "fail"
+    assert actively_flapping.severity == "P1"
+    assert "flapping" in actively_flapping.summary
+    assert actively_flapping.evidence["restart_age_seconds"] == 300
+
+    # False positive fix: the SAME high cumulative count, but the last
+    # restart was 12+ days ago (verified live, #531) -- must pass, not fail
+    # forever.
+    historically_bad_now_stable = classify_container(
+        service,
+        {
+            "name": "platform-prefect-services",
+            "exists": True,
+            "state": "running",
+            "health": "healthy",
+            "restart_count": 1781,
+            "max_restart_count": 3,
+            "started_at": "2026-07-06T12:56:39.626381256Z",  # 13 days before `now`
+        },
+        check_id="app-container",
+        now=now,
+    )
+    assert historically_bad_now_stable.status == "pass"
+
+    # A restart count at/under the threshold never fails, however recent.
+    low_count_recent = classify_container(
+        service,
+        {
+            "name": "platform-prefect-services",
+            "exists": True,
+            "state": "running",
+            "health": "healthy",
+            "restart_count": 3,
+            "max_restart_count": 3,
+            "started_at": "2026-07-19T11:59:59Z",  # 1 second before `now`
+        },
+        check_id="app-container",
+        now=now,
+    )
+    assert low_count_recent.status == "pass"
+
+    # Missing/unparseable started_at is treated as "no recency evidence" --
+    # conservative, does not flag -- rather than silently defaulting to
+    # either extreme.
+    no_started_at = classify_container(
+        service,
+        {
+            "name": "platform-prefect-services",
+            "exists": True,
+            "state": "running",
+            "health": "healthy",
+            "restart_count": 1781,
+            "max_restart_count": 3,
+        },
+        check_id="app-container",
+        now=now,
+    )
+    assert no_started_at.status == "pass"
 
 
 def test_audit_report_schema_and_redaction() -> None:
@@ -550,9 +711,7 @@ def test_ssh_uses_default_root_identity_when_no_ci_override_env_set(
 
         return Result()
 
-    monkeypatch.setattr(
-        vault_self_refresh_audit_module.subprocess, "run", fake_run
-    )
+    monkeypatch.setattr(vault_self_refresh_audit_module.subprocess, "run", fake_run)
 
     vault_self_refresh_audit_module._ssh("vps.example", "echo hi")
 
@@ -581,9 +740,7 @@ def test_ssh_uses_ci_override_env_vars_when_present(monkeypatch) -> None:
 
         return Result()
 
-    monkeypatch.setattr(
-        vault_self_refresh_audit_module.subprocess, "run", fake_run
-    )
+    monkeypatch.setattr(vault_self_refresh_audit_module.subprocess, "run", fake_run)
 
     vault_self_refresh_audit_module._ssh("vps.example", "echo hi")
 
@@ -592,6 +749,69 @@ def test_ssh_uses_ci_override_env_vars_when_present(monkeypatch) -> None:
     assert "-i" in args and args[args.index("-i") + 1] == "/home/runner/.ssh/infra2_ci"
     assert "-p" in args and args[args.index("-p") + 1] == "2222"
     assert "StrictHostKeyChecking=no" in args
+
+
+def test_remote_container_state_captures_started_at(monkeypatch) -> None:
+    """#531: the live adapter must thread Docker's State.StartedAt through so
+    classify_container can derive restart recency from it."""
+    captured = {}
+
+    def fake_ssh(host, command):
+        captured["host"] = host
+        captured["command"] = command
+
+        class Result:
+            returncode = 0
+            stdout = (
+                '{"State":{"Status":"running",'
+                '"StartedAt":"2026-07-06T12:56:39.626381256Z",'
+                '"Health":{"Status":"healthy"}},'
+                '"RestartCount":1781,'
+                '"Mounts":[{"Destination":"/secrets/.env"}]}'
+            )
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr("libs.vault_self_refresh_audit._ssh", fake_ssh)
+
+    result = _remote_container_state("vps.example", "platform-prefect-services")
+
+    assert result["started_at"] == "2026-07-06T12:56:39.626381256Z"
+    assert result["restart_count"] == 1781
+    assert result["state"] == "running"
+    assert captured["host"] == "vps.example"
+    assert "docker inspect" in captured["command"]
+
+
+def test_remote_container_logs_bounds_with_since_flag(monkeypatch) -> None:
+    """#531: `docker logs` must carry a `--since` bound (default DEFAULT_LOG_SINCE)
+    so a long-lived container's tail window can't still contain a resolved
+    incident's log spam from weeks ago."""
+    captured = {}
+
+    def fake_ssh(host, command):
+        captured["host"] = host
+        captured["command"] = command
+
+        class Result:
+            returncode = 0
+            stdout = "recent log line"
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr("libs.vault_self_refresh_audit._ssh", fake_ssh)
+
+    result = _remote_container_logs("vps.example", "platform-prefect-services")
+
+    assert result == "recent log line"
+    assert "--since 1h" in captured["command"]
+    assert "--tail 200" in captured["command"]
+
+    captured.clear()
+    _remote_container_logs("vps.example", "platform-prefect-services", since="6h")
+    assert "--since 6h" in captured["command"]
 
 
 def test_remote_secret_file_state_parses_stat_json(monkeypatch) -> None:
@@ -670,7 +890,10 @@ def test_remote_secret_file_text_returns_empty_on_ssh_failure(monkeypatch) -> No
 def test_optional_inert_field_watchlist_covers_llm_encryption_keys() -> None:
     """#526: LLM_ENCRYPTION_KEYS is the one field the issue identified as
     optional-by-architecture and outside every other observability signal."""
-    assert ("finance_report/app", "LLM_ENCRYPTION_KEYS") in OPTIONAL_INERT_FIELD_WATCHLIST
+    assert (
+        "finance_report/app",
+        "LLM_ENCRYPTION_KEYS",
+    ) in OPTIONAL_INERT_FIELD_WATCHLIST
     assert optional_inert_fields_for("finance_report/app") == ("LLM_ENCRYPTION_KEYS",)
     # No watchlist entries for services never flagged as having this gap.
     assert optional_inert_fields_for("platform/postgres") == ()
@@ -703,7 +926,9 @@ def test_optional_field_inertness_classifier_reports_missing_field_as_inert() ->
     assert result.evidence["populated"] is False
 
 
-def test_optional_field_inertness_classifier_reports_populated_value_as_active() -> None:
+def test_optional_field_inertness_classifier_reports_populated_value_as_active() -> (
+    None
+):
     """#526: once a real value is provisioned, the field reports as active --
     still informational, not a pass/fail gate."""
     service = _service()

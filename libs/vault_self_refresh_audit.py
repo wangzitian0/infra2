@@ -3,6 +3,41 @@
 The module is intentionally split into pure classifiers and thin live collection
 adapters. Tests exercise the classifiers and inventory/static contracts without
 requiring live Vault, Dokploy, or SSH access.
+
+## Recency semantics are mandatory (#531)
+
+This module was hit FOUR separate times by the same defect class: a check
+that reads a signal without any notion of *when* it happened, so it
+eventually misreports resolved history as a current problem
+(``classify_token`` checking a static field against a since-migrated auth
+model; ``classify_rendered_env`` using file mtime -- "when did the secret
+last change" -- as an "is the agent alive" proxy; ``classify_container``
+comparing Docker's lifetime-cumulative ``RestartCount`` with no time bound;
+``_remote_container_logs`` tailing 200 lines with no ``--since``, so an
+old, resolved crash-loop's log spam can sit in the window indefinitely).
+See #531 for the full investigation.
+
+The rule going forward, for every check added to this module: state its
+recency semantics explicitly, one of --
+
+1. **Bounded by an explicit time window** -- e.g. "only flag if the most
+   recent occurrence was within N seconds of now" (see `libs/recency.py`'s
+   `is_recently_flapping`, or a `--since <window>` bound on a `docker logs`
+   read). Use this for anything that accumulates or persists across time --
+   counters, logs, on-disk file content/mtime, anything answering "how many
+   times has X happened" or "does the recent history contain Y".
+2. **Explicitly justified as safe to leave unbounded** -- reserved for
+   checks that are direct reads of *current* state with no history
+   component at all, e.g. "does the container exist right now" / "is the
+   container's Docker state currently `running`" / "is the current Health
+   status `healthy`". These have no notion of "old" to guard against: there
+   is only ever one current value, not an accumulating trail of past ones.
+
+When in doubt, treat it as case 1. The failure mode this guards against is
+silent and slow (a check working correctly right up until some accumulated
+history stops matching present reality), so it is not something a quick
+code read or test run reliably catches after the fact -- decide the recency
+story at write time, not later.
 """
 
 from __future__ import annotations
@@ -17,7 +52,9 @@ import subprocess
 import time
 from typing import Any
 
+from libs.deploy_queue import parse_epoch_seconds
 from libs.env import verify_vault_token
+from libs.recency import is_recently_flapping
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -41,6 +78,61 @@ OPTIONAL_INERT_FIELD_WATCHLIST: tuple[tuple[str, str], ...] = (
     # storage is turned on for finance_report.
     ("finance_report/app", "LLM_ENCRYPTION_KEYS"),
 )
+# (#531) `app_secret_mount_path` is applied uniformly to every container in a
+# service's `app_containers` list -- but not every app_container in a service
+# actually reads Vault secrets. Fixing classify_container's restart-count
+# false positive (this same issue) unmasked exactly this: platform-prefect-
+# worker only needs PREFECT_API_URL (a plain, non-secret env var pointing at
+# prefect-server) to reach the API -- confirmed by reading
+# platform/23.prefect/compose.yaml, it has no `secrets:/secrets:ro` mount and
+# no entrypoint sourcing one, by design (issue #163's investigation of the
+# same compose file independently confirms this). Checking it for a mount it
+# was never supposed to have is the same "check assumes something not true of
+# reality" disease this issue is about, just in a different shape (assumed
+# uniformity instead of missing time-window) -- an explicit exemption list,
+# not silently dropping the check for everyone, keeps the check honest for
+# every OTHER app_container that genuinely does need the mount.
+MOUNT_EXEMPT_CONTAINERS: frozenset[str] = frozenset(
+    {"platform-prefect-worker", "platform-prefect-worker-staging"}
+)
+# (#531) Docker's RestartCount is lifetime-cumulative; the only other
+# restart-relevant signal it exposes is State.StartedAt (when the CURRENT run
+# began, i.e. the time of the most recent restart). classify_container()
+# therefore only flags a high restart count if the most recent restart was
+# itself within this window -- see libs/recency.py's module docstring for the
+# full reasoning. Sizing this window is a real tradeoff, not an arbitrary
+# pick:
+#   - Too short (e.g. minutes) risks missing a real, currently-active
+#     crash-loop whose backoff has stretched out, or simply not lining up
+#     with when this audit happens to run.
+#   - Too long (e.g. a day+) re-widens the exact bug this fixes: a container
+#     that restarted many times right at the start of a long-since-resolved
+#     incident would stay flagged for the whole window even though nothing
+#     has been wrong for most of it.
+# 1 hour is deliberately generous relative to a real crash-loop's cadence
+# (Docker's restart backoff caps at seconds-to-low-minutes, so a container
+# that is STILL actively flapping will restart well inside an hour) while
+# being short enough that "stable for 12+ days" (the verified-live
+# platform/prefect case) reliably clears it. This audit currently runs on a
+# daily CI schedule (#531/PR#532) plus ad hoc manual `invoke
+# vault-audit.self-refresh` runs; revisit this downward if the schedule ever
+# tightens to sub-hourly.
+RESTART_RECENCY_WINDOW_SECONDS = 3600
+
+# (#531) `docker logs` has no notion of "only what's relevant to a live
+# health check" -- without a `--since` bound, a long-lived, sparsely-logging
+# container's --tail window can still contain a resolved incident's crash-loop
+# spam from weeks ago, which classify_vault_agent_logs's substring matching
+# would then misattribute to the present. 1h mirrors RESTART_RECENCY_WINDOW_SECONDS's
+# reasoning: long enough that a real, currently-unfolding problem's log lines
+# are virtually guaranteed to be inside it (this audit's daily schedule means
+# a problem that started and got fixed entirely within an hour, days ago,
+# reasonably shouldn't still page today), short enough that ancient,
+# unrelated incidents fall out of the window entirely. A parameter (not a
+# hardcoded constant) since a future caller with a different polling cadence
+# (e.g. #475's tighter sidecar loop) may reasonably want a tighter window.
+DEFAULT_LOG_SINCE = "1h"
+
 ERROR_LOG_PATTERNS = (
     "permission denied",
     "token expired",
@@ -386,6 +478,8 @@ def classify_container(
     *,
     check_id: str,
     expected_mount: str | None = None,
+    now: int | float | None = None,
+    restart_recency_window_seconds: int = RESTART_RECENCY_WINDOW_SECONDS,
 ) -> CheckResult:
     name = str(container_state.get("name") or "")
     if not container_state.get("exists", True):
@@ -417,14 +511,42 @@ def classify_container(
             container_state,
         )
     restart_count = int(container_state.get("restart_count", 0))
-    if restart_count > int(container_state.get("max_restart_count", 3)):
+    max_restart_count = int(container_state.get("max_restart_count", 3))
+    # (#531) restart_count alone is Docker's lifetime-cumulative counter --
+    # flag only if it's ALSO recent (derived from State.StartedAt, the start
+    # of the current run i.e. the time of the most recent restart). See
+    # RESTART_RECENCY_WINDOW_SECONDS above and libs/recency.py for the full
+    # reasoning. `started_at` missing/unparseable is treated as "no recency
+    # evidence" (last_event_at=0.0 -> effectively infinite age), i.e. does
+    # NOT flag -- conservative by design, matching every other unbounded ->
+    # bounded fix in this module: absence of a recency signal must never be
+    # treated as "recent".
+    observed_now = float(now if now is not None else time.time())
+    started_at_epoch = parse_epoch_seconds(container_state.get("started_at"))
+    if is_recently_flapping(
+        event_count=restart_count,
+        last_event_at=started_at_epoch if started_at_epoch is not None else 0.0,
+        now=observed_now,
+        count_threshold=max_restart_count,
+        recency_window_seconds=restart_recency_window_seconds,
+    ):
+        restart_age = (
+            int(max(0.0, observed_now - started_at_epoch))
+            if started_at_epoch is not None
+            else None
+        )
         return _result(
             service,
             check_id,
             "fail",
             "P1",
-            f"container {name} restart count is high",
-            container_state,
+            f"container {name} restart count is high and recent (still flapping"
+            + (
+                f"; last restart {restart_age}s ago)"
+                if restart_age is not None
+                else ")"
+            ),
+            {**container_state, "restart_age_seconds": restart_age},
         )
     if expected_mount:
         mounts = container_state.get("mounts", [])
@@ -480,24 +602,25 @@ def audit_from_observations(
                 service,
                 vault_agent_state,
                 check_id="vault-agent-container",
+                now=now,
             )
         )
         for app_state in obs.get("app_containers", []):
+            exempt = str(app_state.get("name") or "") in MOUNT_EXEMPT_CONTAINERS
             results.append(
                 classify_container(
                     service,
                     app_state,
                     check_id="app-container",
-                    expected_mount=service.app_secret_mount_path,
+                    expected_mount=None if exempt else service.app_secret_mount_path,
+                    now=now,
                 )
             )
     # "info" results (e.g. optional-field-inertness, #526) are report-only and
     # never gate the audit's overall pass/fail -- only real health/drift
     # checks do.
     status = (
-        "pass"
-        if all(item.status in ("pass", "info") for item in results)
-        else "fail"
+        "pass" if all(item.status in ("pass", "info") for item in results) else "fail"
     )
     return {
         "schema_version": 1,
@@ -513,11 +636,18 @@ def collect_live_observations(
     *,
     env: str,
     host: str | None = None,
+    log_since: str = DEFAULT_LOG_SINCE,
 ) -> dict[str, Any]:
     """Collect read-only live observations from Dokploy, Vault, and Docker.
 
     This function intentionally only reads state. It does not restart, mutate,
     renew, or rotate anything.
+
+    `log_since` (#531) bounds how far back `_remote_container_logs` looks --
+    see `DEFAULT_LOG_SINCE`'s comment for the reasoning. Exposed as a
+    parameter (not hardcoded) since a different caller/cadence may reasonably
+    want a different window; this audit's own scheduled/manual callers use
+    the default.
     """
     from libs.common import get_env
     from libs.dokploy import get_dokploy
@@ -568,7 +698,9 @@ def collect_live_observations(
                 if inert_fields
                 else ""
             ),
-            "vault_agent_logs": _remote_container_logs(vps_host, vault_agent_name),
+            "vault_agent_logs": _remote_container_logs(
+                vps_host, vault_agent_name, since=log_since
+            ),
             "vault_agent_container": _remote_container_state(
                 vps_host, vault_agent_name
             ),
@@ -721,6 +853,15 @@ def _remote_container_state(host: str, container_name: str) -> dict[str, Any]:
         "state": state.get("Status"),
         "health": health,
         "restart_count": data.get("RestartCount", 0),
+        # (#531) Raw ISO-8601 StartedAt string -- the start of the CURRENT
+        # run, i.e. the time of the most recent restart (or creation, if
+        # never restarted). classify_container() parses this with
+        # libs.deploy_queue.parse_epoch_seconds to decide whether a high
+        # restart_count is still recent enough to matter. Kept as the raw
+        # string here (this is a thin collection adapter -- parsing belongs
+        # in the pure classifier, matching classify_rendered_env's mtime
+        # handling).
+        "started_at": state.get("StartedAt"),
         "mounts": mounts,
     }
 
@@ -765,10 +906,24 @@ def _remote_secret_file_text(host: str, vault_agent_container: str) -> str:
     return result.stdout
 
 
-def _remote_container_logs(host: str, container_name: str) -> str:
+def _remote_container_logs(
+    host: str, container_name: str, *, since: str = DEFAULT_LOG_SINCE
+) -> str:
+    """Recent stdout+stderr, time-bounded by `since` (a `docker logs
+    --since`-compatible duration like "1h").
+
+    (#531) `--tail 200` alone has no notion of *when* those 200 lines were
+    written -- a long-lived, sparsely-logging container's tail window can
+    still contain a resolved incident's crash-loop spam from weeks ago, which
+    `classify_vault_agent_logs`'s substring matching would then misattribute
+    to the present. `--since` bounds that; `--tail 200` is kept as a
+    belt-and-suspenders cap on volume within the window, not the recency
+    control. See DEFAULT_LOG_SINCE's comment for how the default was picked.
+    """
     result = _ssh(
         host,
-        f"docker logs --tail 200 {shlex.quote(container_name)} 2>&1",
+        f"docker logs --since {shlex.quote(since)} --tail 200 "
+        f"{shlex.quote(container_name)} 2>&1",
     )
     return result.stdout + result.stderr
 
