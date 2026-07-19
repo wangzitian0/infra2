@@ -147,7 +147,9 @@ def test_build_alert_payload_resolved_when_empty():
     assert payload["alerts"] == []
 
 
-def test_run_once_respects_renotify_window(monkeypatch):
+def test_run_once_requires_consecutive_broken_polls_before_firing(monkeypatch):
+    """#475 flap hysteresis: a single broken sweep must NOT fire; only the Nth
+    (failure_threshold) CONSECUTIVE broken sweep does."""
     import tools.container_breakdown_watch as w
 
     breakdown = Breakdown(
@@ -157,12 +159,197 @@ def test_run_once_respects_renotify_window(monkeypatch):
     posted: list = []
     monkeypatch.setattr(w, "_post_alert", lambda payload: posted.append(payload))
 
-    last: dict = {}
-    # first sweep alerts
-    assert w.run_once(client=None, log_tail=25, last_alerted=last, renotify=1800) == 1
-    # second sweep within window is suppressed
-    assert w.run_once(client=None, log_tail=25, last_alerted=last, renotify=1800) == 0
-    assert len(posted) == 1  # only one POST across both sweeps (renotify contract)
+    state: dict = {}
+    assert (
+        w.run_once(
+            client=None,
+            log_tail=25,
+            container_state=state,
+            renotify=1800,
+            failure_threshold=3,
+            recovery_threshold=5,
+        )
+        == 0
+    )
+    assert (
+        w.run_once(
+            client=None,
+            log_tail=25,
+            container_state=state,
+            renotify=1800,
+            failure_threshold=3,
+            recovery_threshold=5,
+        )
+        == 0
+    )
+    assert not posted  # still below threshold after 2 consecutive broken polls
+    assert (
+        w.run_once(
+            client=None,
+            log_tail=25,
+            container_state=state,
+            renotify=1800,
+            failure_threshold=3,
+            recovery_threshold=5,
+        )
+        == 1
+    )
+    assert len(posted) == 1  # 3rd consecutive broken poll fires
+    assert posted[0]["status"] == "firing"
+
+
+def test_run_once_respects_renotify_window_once_active(monkeypatch):
+    """BREAKDOWN_RENOTIFY_SECONDS still suppresses repeat firing of an ALREADY-active
+    incident (unrelated to the flap-hysteresis fire/resolve thresholds)."""
+    import tools.container_breakdown_watch as w
+
+    breakdown = Breakdown(
+        container="vault-agent", state="restarting", reason="r", detail="d"
+    )
+    monkeypatch.setattr(w, "sweep", lambda client, tail: [breakdown])
+    posted: list = []
+    monkeypatch.setattr(w, "_post_alert", lambda payload: posted.append(payload))
+
+    state: dict = {}
+    for _ in range(3):  # reach failure_threshold=3 -> fires once
+        w.run_once(
+            client=None,
+            log_tail=25,
+            container_state=state,
+            renotify=1800,
+            failure_threshold=3,
+            recovery_threshold=5,
+        )
+    assert len(posted) == 1
+    # further broken sweeps within the renotify window are suppressed
+    assert (
+        w.run_once(
+            client=None,
+            log_tail=25,
+            container_state=state,
+            renotify=1800,
+            failure_threshold=3,
+            recovery_threshold=5,
+        )
+        == 0
+    )
+    assert len(posted) == 1
+
+
+def test_run_once_requires_consecutive_healthy_polls_before_resolving(monkeypatch):
+    """#475 flap hysteresis: recovery requires recovery_threshold CONSECUTIVE healthy
+    sweeps, not just one -- the exact ContainerBreakdown fire/resolve storm."""
+    import tools.container_breakdown_watch as w
+
+    breakdown = Breakdown(
+        container="vault-agent", state="restarting", reason="r", detail="d"
+    )
+    posted: list = []
+    monkeypatch.setattr(w, "_post_alert", lambda payload: posted.append(payload))
+    state: dict = {}
+
+    monkeypatch.setattr(w, "sweep", lambda client, tail: [breakdown])
+    for _ in range(3):  # reach failure_threshold -> fires
+        w.run_once(
+            client=None,
+            log_tail=25,
+            container_state=state,
+            renotify=1800,
+            failure_threshold=3,
+            recovery_threshold=5,
+        )
+    assert [p["status"] for p in posted] == ["firing"]
+
+    monkeypatch.setattr(w, "sweep", lambda client, tail: [])  # now healthy
+    for _ in range(4):  # below recovery_threshold=5 -> must NOT resolve yet
+        w.run_once(
+            client=None,
+            log_tail=25,
+            container_state=state,
+            renotify=1800,
+            failure_threshold=3,
+            recovery_threshold=5,
+        )
+    assert [p["status"] for p in posted] == ["firing"]  # still no RESOLVED
+
+    w.run_once(  # 5th consecutive healthy sweep -> resolves
+        client=None,
+        log_tail=25,
+        container_state=state,
+        renotify=1800,
+        failure_threshold=3,
+        recovery_threshold=5,
+    )
+    assert [p["status"] for p in posted] == ["firing", "resolved"]
+    # the resolved alert must carry the ORIGINAL state label so its label set matches
+    # the firing instance — a stub "recovered" state would never resolve the page
+    assert (
+        posted[1]["alerts"][0]["labels"]["state"]
+        == posted[0]["alerts"][0]["labels"]["state"]
+        == "restarting"
+    )
+    # fully resolved and forgotten so it can start a fresh incident later
+    assert "vault-agent" not in state
+
+
+def test_run_once_relapse_before_recovery_threshold_is_same_incident(monkeypatch):
+    """The critical #475 property: a broken poll seen WHILE recovering (before
+    recovery_threshold healthy polls) must NOT start a new incident and must NOT
+    reset the renotify clock -- this is what produced 333 firing+resolved pairs."""
+    import tools.container_breakdown_watch as w
+
+    breakdown = Breakdown(
+        container="vault-agent", state="restarting", reason="r", detail="d"
+    )
+    posted: list = []
+    monkeypatch.setattr(w, "_post_alert", lambda payload: posted.append(payload))
+    state: dict = {}
+
+    monkeypatch.setattr(w, "sweep", lambda client, tail: [breakdown])
+    for _ in range(3):  # fires (failure_threshold=3)
+        w.run_once(
+            client=None,
+            log_tail=25,
+            container_state=state,
+            renotify=1800,
+            failure_threshold=3,
+            recovery_threshold=5,
+        )
+    assert len(posted) == 1
+
+    # 2 healthy polls (below recovery_threshold=5), then broken again: relapse.
+    monkeypatch.setattr(w, "sweep", lambda client, tail: [])
+    w.run_once(
+        client=None,
+        log_tail=25,
+        container_state=state,
+        renotify=1800,
+        failure_threshold=3,
+        recovery_threshold=5,
+    )
+    w.run_once(
+        client=None,
+        log_tail=25,
+        container_state=state,
+        renotify=1800,
+        failure_threshold=3,
+        recovery_threshold=5,
+    )
+    monkeypatch.setattr(w, "sweep", lambda client, tail: [breakdown])
+    fired = w.run_once(
+        client=None,
+        log_tail=25,
+        container_state=state,
+        renotify=1800,
+        failure_threshold=3,
+        recovery_threshold=5,
+    )
+    # no fresh firing (same incident, still well inside the renotify window) and no
+    # RESOLVED was ever posted for the blip
+    assert fired == 0
+    assert [p["status"] for p in posted] == ["firing"]
+    assert state["vault-agent"].active is True
+    assert state["vault-agent"].good_streak == 0  # relapse reset the recovery streak
 
 
 def test_run_once_logs_firing_and_resolved_decisions(monkeypatch):
@@ -183,42 +370,30 @@ def test_run_once_logs_firing_and_resolved_decisions(monkeypatch):
     monkeypatch.setattr(
         w.logger, "warning", lambda msg, *a: logs.append(msg % a if a else msg)
     )
-    last: dict = {}
+    state: dict = {}
 
     monkeypatch.setattr(w, "sweep", lambda client, tail: [bd])  # broken -> fires
-    w.run_once(client=None, log_tail=25, last_alerted=last, renotify=1800)
+    for _ in range(3):
+        w.run_once(
+            client=None,
+            log_tail=25,
+            container_state=state,
+            renotify=1800,
+            failure_threshold=3,
+            recovery_threshold=5,
+        )
     monkeypatch.setattr(w, "sweep", lambda client, tail: [])  # recovered -> resolves
-    w.run_once(client=None, log_tail=25, last_alerted=last, renotify=1800)
+    for _ in range(5):
+        w.run_once(
+            client=None,
+            log_tail=25,
+            container_state=state,
+            renotify=1800,
+            failure_threshold=3,
+            recovery_threshold=5,
+        )
 
     blob = "\n".join(logs)
     assert "BREAKDOWN-ALERT firing" in blob  # firing decision + bridge-post logged
     assert "BREAKDOWN-RESOLVED" in blob  # resolve decision now logged (was silent)
     assert "finance_report-frontend-branch-main" in blob  # named, not anonymous
-
-
-def test_run_once_emits_resolved_alert_on_recovery(monkeypatch):
-    import tools.container_breakdown_watch as w
-
-    breakdown = Breakdown(
-        container="vault-agent", state="restarting", reason="r", detail="d"
-    )
-    sweeps = [[breakdown], []]  # broken, then recovered
-    monkeypatch.setattr(w, "sweep", lambda client, tail: sweeps.pop(0))
-    posted: list = []
-    monkeypatch.setattr(w, "_post_alert", lambda payload: posted.append(payload))
-
-    last: dict = {}
-    w.run_once(client=None, log_tail=25, last_alerted=last, renotify=1800)  # fires
-    w.run_once(client=None, log_tail=25, last_alerted=last, renotify=1800)  # recovers
-
-    assert [p["status"] for p in posted] == ["firing", "resolved"]
-    # the resolved alert must carry the ORIGINAL state label so its label set matches
-    # the firing instance — a stub "recovered" state would never resolve the page
-    # (Copilot CR)
-    assert (
-        posted[1]["alerts"][0]["labels"]["state"]
-        == posted[0]["alerts"][0]["labels"]["state"]
-        == "restarting"
-    )
-    # the recovered container is forgotten so it can re-alert if it breaks again
-    assert "vault-agent" not in last

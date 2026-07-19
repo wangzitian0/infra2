@@ -18,8 +18,20 @@ Env:
   ALERTING_ENV_FILE                   env file to source (default /secrets/.env)
   BREAKDOWN_INTERVAL_SECONDS          loop interval (default 60)
   BREAKDOWN_RENOTIFY_SECONDS          re-alert suppression window (default 1800)
+  BREAKDOWN_FAILURE_THRESHOLD         consecutive broken polls before firing (default 3)
+  BREAKDOWN_RECOVERY_THRESHOLD        consecutive healthy polls before RESOLVED (default 5)
   BREAKDOWN_LOG_TAIL                  log lines to scan per container (default 25)
   BRIDGE_BASIC_AUTH_USERNAME/PASSWORD optional basic-auth for the bridge
+
+Flap hysteresis (#475): a container that blips broken/healthy/broken every poll
+used to fire+resolve every single blip (333 firing + ~equal resolved in 48h during
+the prefect/vault-agent incident, each RESOLVED wrongly resetting the renotify
+timer). BREAKDOWN_FAILURE_THRESHOLD/BREAKDOWN_RECOVERY_THRESHOLD require N/M
+CONSECUTIVE polls in a direction before firing/resolving -- see
+libs.recency.evaluate_consecutive_hysteresis for the state machine (mirrors
+tools/infra_probe_runner.py's proven _should_send pattern). A bad poll seen while
+an incident is already active but before the recovery threshold is reached never
+starts a new incident or resets the renotify clock.
 """
 
 from __future__ import annotations
@@ -38,8 +50,13 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from libs.container_breakdown import (  # noqa: E402
+    Breakdown,
     build_breakdown_alert_payload,
     find_breakdown_containers,
+)
+from libs.recency import (  # noqa: E402
+    ConsecutiveObservationState,
+    evaluate_consecutive_hysteresis,
 )
 
 logging.basicConfig(
@@ -55,6 +72,21 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 DEFAULT_INTERVAL = 60
 DEFAULT_RENOTIFY = 1800
 DEFAULT_LOG_TAIL = 25
+# 3 consecutive broken polls at the default 60s interval == ~3 minutes sustained
+# before firing -- long enough that a single transient blip (e.g. a container
+# briefly reporting "restarting" mid-deploy) never pages, short enough that a real
+# crash-loop (which keeps re-entering Docker's restart backoff every few seconds)
+# is caught well within one incident's first several minutes. Matches
+# tools/infra_probe_runner.py's own DEFAULT_FAILURE_THRESHOLD at the same 60s
+# cadence -- same reasoning, same codebase convention.
+DEFAULT_FAILURE_THRESHOLD = 3
+# 5 consecutive HEALTHY polls (~5 minutes) before RESOLVED. Deliberately more
+# generous than the failure threshold: Docker's restart backoff can itself put a
+# crash-looping container briefly into "running" between attempts, and the #475
+# incident's 333 firing/resolved pairs were exactly this -- a single healthy-looking
+# sample mistaken for real recovery. 5 minutes continuously healthy is well past any
+# single backoff gap.
+DEFAULT_RECOVERY_THRESHOLD = 5
 
 
 def _load_env_file(path: Path) -> None:
@@ -126,37 +158,101 @@ def sweep(client: httpx.Client, log_tail: int):
 
 
 def run_once(
-    client: httpx.Client, log_tail: int, last_alerted: dict, renotify: int
+    client: httpx.Client,
+    log_tail: int,
+    container_state: dict,
+    renotify: int,
+    failure_threshold: int = DEFAULT_FAILURE_THRESHOLD,
+    recovery_threshold: int = DEFAULT_RECOVERY_THRESHOLD,
 ) -> int:
-    """One sweep. Alerts only on breakdowns outside the renotify window. Returns
-    the number of containers alerted on."""
+    """One sweep. Flap hysteresis (#475): a container must be observed broken on
+    ``failure_threshold`` CONSECUTIVE sweeps before it fires, and healthy on
+    ``recovery_threshold`` CONSECUTIVE sweeps before it resolves -- a blip that
+    flips broken/healthy every poll must not page every time. ``container_state``
+    maps container name -> ``libs.recency.ConsecutiveObservationState`` and is
+    mutated in place; the caller keeps one dict alive for the life of the poll
+    loop (see main()). Returns the number of containers that fired this sweep
+    (new incidents plus any still-active incident renotified this sweep).
+    """
     now = time.monotonic()
     breakdowns = sweep(client, log_tail)
-    # last_alerted maps container -> (last_alert_monotonic, the breakdown we alerted on)
-    fresh = [
-        b
-        for b in breakdowns
-        if now - last_alerted.get(b.container, (-renotify - 1, None))[0] >= renotify
-    ]
+    broken_by_name = {b.container: b for b in breakdowns}
+
+    fresh: list[Breakdown] = []
+    for name, b in broken_by_name.items():
+        state = container_state.setdefault(name, ConsecutiveObservationState())
+        state.context = b  # latest breakdown, so a later RESOLVED reuses its labels
+        action = evaluate_consecutive_hysteresis(
+            state=state,
+            is_bad_now=True,
+            now=now,
+            failure_threshold=failure_threshold,
+            recovery_threshold=recovery_threshold,
+            renotify_seconds=renotify,
+        )
+        if action == "fire":
+            fresh.append(b)
+        elif not state.active:
+            logger.info(
+                "BREAKDOWN-PENDING %s (%s): bad_streak=%d/%d — not yet firing: %s",
+                name,
+                b.state,
+                state.bad_streak,
+                failure_threshold,
+                b.reason,
+            )
+
+    # Recovered = previously-tracked containers no longer broken THIS sweep, evaluated
+    # against the recovery threshold. A container that flips back to broken before
+    # reaching it stays part of the SAME active incident (evaluate_consecutive_hysteresis
+    # neither resets bad_streak's incident nor the renotify clock in that case).
+    recovered: list[Breakdown] = []
+    for name, state in list(container_state.items()):
+        if name in broken_by_name:
+            continue
+        action = evaluate_consecutive_hysteresis(
+            state=state,
+            is_bad_now=False,
+            now=now,
+            failure_threshold=failure_threshold,
+            recovery_threshold=recovery_threshold,
+            renotify_seconds=renotify,
+        )
+        if action == "resolve":
+            # Resolve with the ORIGINAL breakdown (same state, hence same label set) so
+            # the resolved alert matches the firing instance and the page actually
+            # clears — a stub state like "recovered" forms a different label set and
+            # never resolves the original.
+            recovered.append(state.context)
+        elif state.active:
+            logger.info(
+                "BREAKDOWN-RECOVERING %s: good_streak=%d/%d — not yet resolved",
+                name,
+                state.good_streak,
+                recovery_threshold,
+            )
+
+    # Prune entries with no live signal left: either never crossed the failure
+    # threshold and is healthy again, or just fully resolved above. Both leave
+    # active=False, bad_streak=0, good_streak=0 -- the same shape a brand-new
+    # entry starts in, so it's safe (and keeps memory bounded) to forget it; it is
+    # recreated via setdefault() if the container breaks again later.
+    for name in [
+        n
+        for n, s in container_state.items()
+        if not s.active and s.bad_streak == 0 and s.good_streak == 0
+    ]:
+        container_state.pop(name, None)
+
     if fresh:
         for b in fresh:
             logger.warning("BREAKDOWN %s (%s): %s", b.container, b.state, b.reason)
-            last_alerted[b.container] = (now, b)
         _post_alert(build_breakdown_alert_payload(fresh))
         logger.warning(
             "BREAKDOWN-ALERT firing count=%d -> posting to bridge: %s",
             len(fresh),
             ",".join(sorted(b.container for b in fresh)),
         )
-    # Recovered = previously-alerted containers no longer broken. Resolve them with the
-    # ORIGINAL breakdown (same state, hence same label set) so the resolved alert
-    # matches the firing instance and the page actually clears — a stub state like
-    # "recovered" forms a different label set and never resolves the original. Then
-    # forget them so they can re-alert if they break again.
-    live = {b.container for b in breakdowns}
-    recovered = [rec for name, (_, rec) in last_alerted.items() if name not in live]
-    for name in [n for n in last_alerted if n not in live]:
-        last_alerted.pop(name, None)
     if recovered:
         logger.warning(
             "BREAKDOWN-RESOLVED count=%d -> posting to bridge: %s",
@@ -194,15 +290,31 @@ def main() -> None:
     sock = os.environ.get("DOCKER_SOCK", "/var/run/docker.sock")
     interval = int(os.environ.get("BREAKDOWN_INTERVAL_SECONDS", DEFAULT_INTERVAL))
     renotify = int(os.environ.get("BREAKDOWN_RENOTIFY_SECONDS", DEFAULT_RENOTIFY))
+    failure_threshold = int(
+        os.environ.get("BREAKDOWN_FAILURE_THRESHOLD", DEFAULT_FAILURE_THRESHOLD)
+    )
+    recovery_threshold = int(
+        os.environ.get("BREAKDOWN_RECOVERY_THRESHOLD", DEFAULT_RECOVERY_THRESHOLD)
+    )
     log_tail = int(os.environ.get("BREAKDOWN_LOG_TAIL", DEFAULT_LOG_TAIL))
 
-    # container -> (last_alert_monotonic, breakdown we alerted on, kept so the
-    # resolved alert can reuse the original state/labels)
-    last_alerted: dict = {}
+    # container -> ConsecutiveObservationState (#475 flap hysteresis); one long-lived
+    # in-memory dict for the life of this process. No disk state file: this watcher
+    # runs as a single continuously-running `--loop` sidecar (restart: unless-stopped,
+    # see platform/12.alerting/compose.yaml), never invoked repeatedly by cron/systemd,
+    # so in-memory state already persists across every poll for as long as it matters.
+    container_state: dict = {}
     client = _docker_client(sock)
     while True:
         try:
-            run_once(client, log_tail, last_alerted, renotify)
+            run_once(
+                client,
+                log_tail,
+                container_state,
+                renotify,
+                failure_threshold,
+                recovery_threshold,
+            )
         except Exception as exc:  # one bad sweep must not kill the watcher
             logger.error("sweep failed: %s", exc)
         if not args.loop:

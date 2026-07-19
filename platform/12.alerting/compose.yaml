@@ -286,6 +286,10 @@ services:
       ALERTING_ENV_FILE: /secrets/.env
       BREAKDOWN_INTERVAL_SECONDS: ${BREAKDOWN_INTERVAL_SECONDS:-60}
       BREAKDOWN_RENOTIFY_SECONDS: ${BREAKDOWN_RENOTIFY_SECONDS:-1800}
+      # Flap hysteresis (#475): consecutive-poll thresholds before firing/resolving.
+      # See tools/container_breakdown_watch.py's module docstring for the reasoning.
+      BREAKDOWN_FAILURE_THRESHOLD: ${BREAKDOWN_FAILURE_THRESHOLD:-3}
+      BREAKDOWN_RECOVERY_THRESHOLD: ${BREAKDOWN_RECOVERY_THRESHOLD:-5}
       BREAKDOWN_LOG_TAIL: ${BREAKDOWN_LOG_TAIL:-25}
     volumes:
       - secrets:/secrets:ro
