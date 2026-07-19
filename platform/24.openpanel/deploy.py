@@ -7,7 +7,7 @@ from libs.common import with_env_suffix
 from libs.env import VAULT_ROOT_TOKEN_OP_REF
 from libs.console import success, warning, info, error
 from libs.env import get_secrets
-from libs.service_facets import ProbeFacet
+from libs.service_facets import ProbeFacet, SecretsFacet
 
 shared_tasks = sys.modules.get("platform.24.openpanel.shared")
 
@@ -72,6 +72,20 @@ class OpenPanelDeployer(Deployer):
             severity="warning",
             timeout_seconds=45,
             depends_on="openpanel-api-http",
+        ),
+    )
+
+    # Vault self-refresh facts (#542): the audit inventory derives from this
+    # (AppRole auth per #257/#259).
+    secrets = (
+        SecretsFacet(
+            vault_agent_container="platform-openpanel-vault-agent${ENV_SUFFIX}",
+            app_containers=(
+                "platform-openpanel-api${ENV_SUFFIX}",
+                "platform-openpanel-dashboard${ENV_SUFFIX}",
+                "platform-openpanel-worker${ENV_SUFFIX}",
+            ),
+            auth_method="approle",
         ),
     )
 

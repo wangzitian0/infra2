@@ -1,6 +1,7 @@
 import sys
 
 from libs.deploy.deployer import Deployer, make_tasks
+from libs.service_facets import SecretsFacet
 
 shared_tasks = sys.modules.get("finance_report.02.redis.shared")
 
@@ -18,6 +19,16 @@ class RedisDeployer(Deployer):
     subdomain = None
     service_port = 6379
     service_name = "redis"
+
+    # Vault self-refresh facts (#542): the audit inventory derives from this
+    # (AppRole auth per #257/#259).
+    secrets = (
+        SecretsFacet(
+            vault_agent_container="finance_report-redis-vault-agent${ENV_SUFFIX}",
+            app_containers=("finance_report-redis${ENV_SUFFIX}",),
+            auth_method="approle",
+        ),
+    )
 
 
 if shared_tasks:

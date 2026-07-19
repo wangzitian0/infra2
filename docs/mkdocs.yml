@@ -79,7 +79,6 @@ nav:
           - Platform PG: ssot/db.platform_pg.md
           - Redis: ssot/db.redis.md
           - ClickHouse: ssot/db.clickhouse.md
-          - Vault Self-Refresh: ssot/vault-self-refresh-inventory.yaml
       - Ops:
           - Standards: ssot/ops.standards.md
           - Pipeline: ssot/ops.pipeline.md

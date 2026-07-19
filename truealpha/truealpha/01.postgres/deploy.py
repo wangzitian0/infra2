@@ -1,6 +1,7 @@
 import sys
 
 from libs.deploy.deployer import Deployer, make_tasks
+from libs.service_facets import SecretsFacet
 
 shared_tasks = sys.modules.get("truealpha.01.postgres.shared")
 
@@ -27,6 +28,24 @@ class PostgresDeployer(Deployer):
     subdomain = None
     service_port = 5432
     service_name = "postgres"
+
+    # Rollout state (#500/#522/#542): truealpha's rollout is deliberately
+    # staging-scoped — the truealpha Dokploy project's `production` environment
+    # has zero composes and no production Vault provisioning (verified live,
+    # v1.1.34 prod promote failed on exactly this). Consumed by the reconcile
+    # prod selection and the vault self-refresh audit's production exclusion.
+    # REMOVE this attr when the service is actually promoted to production.
+    not_yet_in_production = True
+
+    # Vault self-refresh facts (#542): the audit inventory derives from this
+    # (AppRole auth from day one, same model as finance_report post-#257/#259).
+    secrets = (
+        SecretsFacet(
+            vault_agent_container="truealpha-postgres-vault-agent${ENV_SUFFIX}",
+            app_containers=("truealpha-postgres${ENV_SUFFIX}",),
+            auth_method="approle",
+        ),
+    )
 
     # Host-loopback port per env (the ingestion runtime runs as HOST processes
     # next to moomoo OpenD, and cannot route into the dokploy overlay). Fixed

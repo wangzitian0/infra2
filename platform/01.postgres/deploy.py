@@ -2,7 +2,7 @@
 
 import sys
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.service_facets import ProbeFacet
+from libs.service_facets import ProbeFacet, SecretsFacet
 
 shared_tasks = sys.modules.get("platform.01.postgres.shared")
 
@@ -22,6 +22,16 @@ class PostgresDeployer(Deployer):
             kind="tcp",
             target="platform-postgres${ENV_SUFFIX}:5432",
             expected="connected",
+        ),
+    )
+
+    # Vault self-refresh facts (#542): the audit inventory derives from this
+    # (AppRole auth per #257/#259).
+    secrets = (
+        SecretsFacet(
+            vault_agent_container="platform-postgres-vault-agent${ENV_SUFFIX}",
+            app_containers=("platform-postgres${ENV_SUFFIX}",),
+            auth_method="approle",
         ),
     )
 

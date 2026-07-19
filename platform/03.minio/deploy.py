@@ -11,7 +11,7 @@ import sys
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.env import generate_password
 from libs.console import header, success, error, warning, info, env_vars
-from libs.service_facets import ProbeFacet
+from libs.service_facets import ProbeFacet, SecretsFacet
 
 shared_tasks = sys.modules.get("platform.03.minio.shared")
 
@@ -29,6 +29,16 @@ class MinioDeployer(Deployer):
             kind="http",
             target="http://platform-minio${ENV_SUFFIX}:9000/minio/health/live",
             expected="200",
+        ),
+    )
+
+    # Vault self-refresh facts (#542): the audit inventory derives from this
+    # (AppRole auth per #257/#259).
+    secrets = (
+        SecretsFacet(
+            vault_agent_container="platform-minio-vault-agent${ENV_SUFFIX}",
+            app_containers=("platform-minio${ENV_SUFFIX}",),
+            auth_method="approle",
         ),
     )
 

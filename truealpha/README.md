@@ -41,8 +41,9 @@ invoke ta-data-engine.shared.status
 
 ## Vault Secrets
 
-Secrets are stored in Vault KV v2 (AppRole auth from day one — see
-[`docs/ssot/vault-self-refresh-inventory.yaml`](../docs/ssot/vault-self-refresh-inventory.yaml)):
+Secrets are stored in Vault KV v2 (AppRole auth from day one — declared per
+service as `SecretsFacet` on its Deployer, see `libs/service_facets.py`; the
+audit inventory derives from those declarations, #542):
 
 ```
 secret/data/truealpha/<env>/postgres

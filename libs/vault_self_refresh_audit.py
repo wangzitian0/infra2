@@ -58,43 +58,17 @@ from libs.recency import is_recently_flapping
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_INVENTORY_PATH = REPO_ROOT / "docs/ssot/vault-self-refresh-inventory.yaml"
 SECRET_KEYS = ("token", "secret", "password", "key", "authorization")
 
-# (#526) Optional `vault:true` fields that are legitimately allowed to sit
-# unprovisioned in Vault: they have a real render line in secrets.ctmpl (so
-# tools/validate_required_env.py's wiring check is satisfied), but whether
-# Vault actually holds a non-empty VALUE is a separate, deliberate human
-# decision about enabling the optional feature the field unlocks. Once the
-# render-wiring gap closes, nothing else flags "wired but still empty" -- this
-# watchlist is the read-only, informational backstop for exactly that blind
-# spot. Not a periodic scan of every vault:true field: only add an entry here
-# when a field is both optional-by-architecture *and* outside every other
-# probe (DEPENDENCY_MANIFEST startup checks, `_check_static_config`, etc.) --
-# see issue #526 for the full audit of finance_report's 19 vault:true fields.
-OPTIONAL_INERT_FIELD_WATCHLIST: tuple[tuple[str, str], ...] = (
-    # secrets.ctmpl render line landed in #482/PR#520; the Vault value itself
-    # is intentionally unset until EPIC-023's DB-backed LLM-provider-secret
-    # storage is turned on for finance_report.
-    ("finance_report/app", "LLM_ENCRYPTION_KEYS"),
-)
-# (#531) `app_secret_mount_path` is applied uniformly to every container in a
-# service's `app_containers` list -- but not every app_container in a service
-# actually reads Vault secrets. Fixing classify_container's restart-count
-# false positive (this same issue) unmasked exactly this: platform-prefect-
-# worker only needs PREFECT_API_URL (a plain, non-secret env var pointing at
-# prefect-server) to reach the API -- confirmed by reading
-# platform/23.prefect/compose.yaml, it has no `secrets:/secrets:ro` mount and
-# no entrypoint sourcing one, by design (issue #163's investigation of the
-# same compose file independently confirms this). Checking it for a mount it
-# was never supposed to have is the same "check assumes something not true of
-# reality" disease this issue is about, just in a different shape (assumed
-# uniformity instead of missing time-window) -- an explicit exemption list,
-# not silently dropping the check for everyone, keeps the check honest for
-# every OTHER app_container that genuinely does need the mount.
-MOUNT_EXEMPT_CONTAINERS: frozenset[str] = frozenset(
-    {"platform-prefect-worker", "platform-prefect-worker-staging"}
-)
+# (#542) The audit inventory is DERIVED from each service's Deployer
+# SecretsFacet declarations (libs/service_facets.py) — see load_inventory().
+# The formerly handwritten vault-self-refresh-inventory.yaml SSOT, the
+# OPTIONAL_INERT_FIELD_WATCHLIST (#526), and MOUNT_EXEMPT_CONTAINERS (#531)
+# constants are gone: their facts live as `secrets = (SecretsFacet(...),)`
+# fields (`optional_inert_fields` / `mount_exempt_containers`) on the OWNING
+# service's deploy.py, so the audit's expectations and the deployed vault-agent
+# wiring can no longer drift apart (#531's root cause).
+
 # (#531) Docker's RestartCount is lifetime-cumulative; the only other
 # restart-relevant signal it exposes is State.StartedAt (when the CURRENT run
 # began, i.e. the time of the most recent restart). classify_container()
@@ -170,6 +144,13 @@ class VaultService:
     min_token_ttl_hours: int = 48
     # "token" = static VAULT_APP_TOKEN; "approle" = VAULT_ROLE_ID + VAULT_SECRET_ID.
     auth_method: str = "token"
+    # (#531/#542) app_containers that by design run WITHOUT the secrets mount
+    # (``${ENV_SUFFIX}`` placeholders, resolved per audit env) — declared on the
+    # owning service's SecretsFacet, formerly the MOUNT_EXEMPT_CONTAINERS const.
+    mount_exempt_containers: tuple[str, ...] = ()
+    # (#526/#542) optional vault:true fields reported (never failed) on
+    # populated-ness — formerly the OPTIONAL_INERT_FIELD_WATCHLIST const.
+    optional_inert_fields: tuple[str, ...] = ()
 
     @property
     def auth_env_keys(self) -> tuple[str, ...]:
@@ -192,24 +173,119 @@ class CheckResult:
         return asdict(self)
 
 
-def load_inventory(path: Path | str = DEFAULT_INVENTORY_PATH) -> list[VaultService]:
-    try:
-        import yaml
-    except ModuleNotFoundError as exc:
-        if exc.name == "yaml":
-            raise RuntimeError(
-                "PyYAML is required to load the Vault self-refresh inventory."
-            ) from exc
-        raise
+def vault_path_template(project: str, service: str) -> str:
+    """The audit's expected Vault KV path template for a service.
 
-    data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-    defaults = data.get("defaults", {})
+    Built from the SAME (project, service) facts ``libs.env.get_secrets`` uses
+    to construct the deploy-side path (``app_vars`` →
+    ``secret/data/{project}/{env}/{service}``), so editing a Deployer's
+    ``project``/``service`` moves the deployed secret path AND this audit
+    expectation in lockstep — they cannot drift (#531/#542).
+    """
+    return f"secret/data/{project}/{{env}}/{service}"
+
+
+def load_inventory() -> list[VaultService]:
+    """DERIVE the audit inventory from the Deployer SecretsFacets (#542).
+
+    One entry per SecretsFacet across the registry scan plus the bootstrap
+    plane's facet-only deploy.py files. Deterministic: declaring services in
+    sorted id order, facets in declaration order. A duplicate derived id fails
+    closed — two facets silently claiming one inventory entry is exactly the
+    drift class the facet model exists to kill.
+    """
+    from libs.service_registry import bootstrap_facet_attrs, service_attrs
+
+    metas = {**bootstrap_facet_attrs(), **service_attrs()}
     services: list[VaultService] = []
-    for raw_service in data.get("services", []):
-        merged = {**defaults, **raw_service}
-        merged["app_containers"] = tuple(merged.get("app_containers", ()))
-        services.append(VaultService(**merged))
+    seen: dict[str, str] = {}
+    for declaring_id in sorted(metas):
+        meta = metas[declaring_id]
+        for facet in meta.secrets:
+            service = _vault_service_from_facet(meta, facet)
+            if service.id in seen:
+                raise ValueError(
+                    f"duplicate vault inventory id {service.id!r} derived from "
+                    f"both {seen[service.id]} and {declaring_id}"
+                )
+            seen[service.id] = declaring_id
+            services.append(service)
+    if not services:
+        # Fail closed (mirrors probe_specs.render_probe_spec_text): an empty
+        # derivation means the registry walk itself broke — this repo always
+        # declares vault-agent services, so "no inventory" is never valid.
+        raise ValueError(
+            "derived vault self-refresh inventory is EMPTY — the SecretsFacet "
+            "registry walk found nothing, which is never a valid state"
+        )
     return services
+
+
+def _vault_service_from_facet(meta, facet) -> VaultService:
+    """Build one VaultService from a SecretsFacet + its declaring ServiceMeta.
+
+    Everything derivable comes from the Deployer's own deploy facts (see
+    SecretsFacet's docstring): id/project/dokploy_service from the registry
+    identity, compose/agent-config/template paths from ``compose_path``, and
+    the vault path template from the deploy-side (project, service) pair.
+    """
+    compose_path = facet.compose_path or meta.compose_path
+    if not compose_path:
+        raise ValueError(
+            f"{meta.service_id}: SecretsFacet needs a compose_path (the Deployer "
+            "declares none and the facet does not override it)"
+        )
+    compose_dir = compose_path.rsplit("/", 1)[0]
+    return VaultService(
+        id=facet.service_id or meta.service_id,
+        project=meta.project,
+        dokploy_service=meta.service,
+        compose_path=compose_path,
+        vault_agent_config_path=f"{compose_dir}/vault-agent.hcl",
+        secret_template_path=f"{compose_dir}/secrets.ctmpl",
+        vault_path_template=vault_path_template(meta.project, meta.service),
+        vault_agent_container=facet.vault_agent_container,
+        app_containers=tuple(facet.app_containers),
+        vault_token_env_key=facet.vault_token_env_key,
+        rendered_secret_path=facet.rendered_secret_path,
+        app_secret_mount_path=facet.app_secret_mount_path,
+        max_rendered_secret_age_seconds=facet.max_rendered_secret_age_seconds,
+        min_token_ttl_hours=facet.min_token_ttl_hours,
+        auth_method=facet.auth_method,
+        mount_exempt_containers=tuple(facet.mount_exempt_containers),
+        optional_inert_fields=tuple(facet.optional_inert_fields),
+    )
+
+
+def inventory_ids_not_in_production() -> frozenset[str]:
+    """Inventory ids with no production deployment yet — DERIVED, not declared
+    twice (#542, replacing the hand-kept NOT_YET_IN_PRODUCTION constant).
+
+    Two sources, both deploy-side facts:
+      * a Deployer's literal ``not_yet_in_production = True`` (iac_pinned
+        services whose rollout is deliberately staging-scoped, e.g. #500);
+      * a bespoke app whose ``_APP_COMPOSE_OVERRIDES`` prod entry has
+        ``compose_id=None`` (libs.deploy_env_config — no prod compose exists).
+    A not-in-production owner's on-behalf surfaces (its ``service_id``-carrying
+    SecretsFacets, e.g. the preview alias stack) are excluded with it — an
+    alias of an app that isn't in production cannot be there either.
+    """
+    from libs.deploy_env_config import services_without_prod_compose
+    from libs.service_registry import bootstrap_facet_attrs, service_attrs
+
+    metas = {**bootstrap_facet_attrs(), **service_attrs()}
+    owners = services_without_prod_compose() | {
+        service_id
+        for service_id, meta in metas.items()
+        if meta.not_yet_in_production
+    }
+    excluded: set[str] = set()
+    for service_id, meta in metas.items():
+        if service_id not in owners:
+            continue
+        excluded.add(service_id)
+        excluded.update(facet.service_id for facet in meta.secrets if facet.service_id)
+    return frozenset(excluded)
 
 
 def redact(value: Any) -> Any:
@@ -405,15 +481,6 @@ def classify_rendered_env(
     )
 
 
-def optional_inert_fields_for(service_id: str) -> tuple[str, ...]:
-    """Watchlisted optional-field names to check for inertness on a service."""
-    return tuple(
-        field_name
-        for sid, field_name in OPTIONAL_INERT_FIELD_WATCHLIST
-        if sid == service_id
-    )
-
-
 def classify_optional_field_inertness(
     service: VaultService,
     field_name: str,
@@ -587,7 +654,7 @@ def audit_from_observations(
         lookup = obs.get("token_lookup")
         results.append(classify_token(service, env_text, lookup))
         results.append(classify_rendered_env(service, obs.get("rendered_env", {}), now))
-        for field_name in optional_inert_fields_for(service.id):
+        for field_name in service.optional_inert_fields:
             results.append(
                 classify_optional_field_inertness(
                     service, field_name, str(obs.get("rendered_env_text", ""))
@@ -605,8 +672,15 @@ def audit_from_observations(
                 now=now,
             )
         )
+        # (#531/#542) mount exemptions come from the owning service's own
+        # SecretsFacet; the facet keeps ${ENV_SUFFIX} symbolic, so resolve it
+        # for the audited env before comparing against live container names.
+        mount_exempt = {
+            _resolve_env_suffix(name, env)
+            for name in service.mount_exempt_containers
+        }
         for app_state in obs.get("app_containers", []):
-            exempt = str(app_state.get("name") or "") in MOUNT_EXEMPT_CONTAINERS
+            exempt = str(app_state.get("name") or "") in mount_exempt
             results.append(
                 classify_container(
                     service,
@@ -685,14 +759,14 @@ def collect_live_observations(
             )
         vault_agent_name = _resolve_env_suffix(service.vault_agent_container, env)
         app_names = [_resolve_env_suffix(name, env) for name in service.app_containers]
-        inert_fields = optional_inert_fields_for(service.id)
+        inert_fields = service.optional_inert_fields
         observations["services"][service.id] = {
             "dokploy_env": env_text,
             "token_lookup": token_lookup,
             "rendered_env": _remote_secret_file_state(vps_host, vault_agent_name),
-            # Only fetched for services with OPTIONAL_INERT_FIELD_WATCHLIST
-            # entries (#526) -- keeps secret-content exposure scoped to the
-            # fields this audit actually needs to see are non-empty.
+            # Only fetched for services with `optional_inert_fields` facet
+            # entries (#526/#542) -- keeps secret-content exposure scoped to
+            # the fields this audit actually needs to see are non-empty.
             "rendered_env_text": (
                 _remote_secret_file_text(vps_host, vault_agent_name)
                 if inert_fields
@@ -711,8 +785,8 @@ def collect_live_observations(
     return observations
 
 
-def inventory_compose_paths(path: Path | str = DEFAULT_INVENTORY_PATH) -> set[str]:
-    return {service.compose_path for service in load_inventory(path)}
+def inventory_compose_paths() -> set[str]:
+    return {service.compose_path for service in load_inventory()}
 
 
 def discover_vault_agent_compose_paths(root: Path = REPO_ROOT) -> set[str]:

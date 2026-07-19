@@ -202,11 +202,12 @@ invoke local.phase
 
 Read-only audit for the Vault app-token self-refresh chain. It checks Dokploy
 env, Vault token lookup, rendered `/vault/secrets/.env` freshness, vault-agent
-logs, and container state for every service in
-`docs/ssot/vault-self-refresh-inventory.yaml`.
+logs, and container state for every service in the facet-derived inventory
+(#542: each service Deployer's `SecretsFacet` declarations ->
+`libs/vault_self_refresh_audit.load_inventory`).
 
-It also reports (never fails on) whether any field in
-`OPTIONAL_INERT_FIELD_WATCHLIST` (`libs/vault_self_refresh_audit.py`) is
+It also reports (never fails on) whether any field in a service's
+`optional_inert_fields` SecretsFacet entry (`libs/service_facets.py`) is
 actually populated in the rendered secrets file, not just wired -- e.g.
 `finance_report/app`'s `LLM_ENCRYPTION_KEYS`, which can have a valid
 `secrets.ctmpl` render line while Vault still holds no value, silently

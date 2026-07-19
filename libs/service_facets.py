@@ -14,6 +14,11 @@ These dataclasses are the typed vocabulary those declarations use:
 - :class:`BackupFacet`    — backup method facts (fields aligned with
                             ``libs.backup_verification.BackupEntry``; ``service_id``
                             and ``data_path`` stay on the Deployer itself).
+- :class:`SecretsFacet`   — Vault self-refresh facts (fields aligned with
+                            ``libs.vault_self_refresh_audit.VaultService``); the
+                            audit inventory is DERIVED from these (#542), so the
+                            audit's expectations and the deployed vault-agent
+                            wiring come from the same declaration.
 - :class:`Exemption`      — an explicit, justified "this facet does not apply"
                             declaration, so a completeness matrix cell can be
                             *exempt* instead of silently MISSING.
@@ -123,12 +128,62 @@ class BackupFacet:
 
 
 @dataclass(frozen=True)
+class SecretsFacet:
+    """Vault self-refresh facts for one vault-agent surface the service owns.
+
+    The vault self-refresh audit's inventory (formerly the handwritten
+    ``vault-self-refresh-inventory.yaml`` SSOT, deleted) is DERIVED from these
+    declarations by ``libs.vault_self_refresh_audit.load_inventory`` (#542).
+    Everything derivable from the owning Deployer is NOT repeated here:
+
+    - inventory ``id`` / ``project`` / ``dokploy_service`` derive from the
+      declaring Deployer's registry id, ``project``, and ``service`` attrs;
+    - ``vault_path_template`` derives as
+      ``secret/data/{project}/{env}/{service}`` — the SAME (project, service)
+      facts ``libs.env.get_secrets`` uses to build the deploy-side Vault path,
+      so the audit expectation and the deployed path cannot drift (#531);
+    - ``compose_path`` defaults to the Deployer's own ``compose_path``, and the
+      vault-agent config / secrets template are its ``vault-agent.hcl`` /
+      ``secrets.ctmpl`` siblings.
+
+    ``service_id`` + ``compose_path`` are set explicitly only for a surface the
+    service declares on behalf of a non-registry inventory id — e.g. the
+    ephemeral ``finance_report/preview`` / ``truealpha/preview`` alias stacks
+    (owned by the app Deployer, same vault-agent, preview compose dir) —
+    mirroring ProbeFacet's out-of-registry ``service_id`` convention.
+
+    ``mount_exempt_containers`` (#531) names app_containers that by design run
+    WITHOUT the ``/secrets/.env`` mount (e.g. platform-prefect-worker), and
+    ``optional_inert_fields`` (#526) names optional vault:true fields whose
+    populated-ness is reported informationally — both formerly module-level
+    constants in libs/vault_self_refresh_audit.py, now declared where the
+    service lives.
+    """
+
+    vault_agent_container: str
+    app_containers: tuple[str, ...]
+    auth_method: str = "token"  # "token" | "approle"
+    service_id: str = ""  # empty = the declaring service's registry id
+    compose_path: str = ""  # empty = the declaring Deployer's compose_path
+    vault_token_env_key: str = "VAULT_APP_TOKEN"
+    rendered_secret_path: str = "/vault/secrets/.env"
+    app_secret_mount_path: str = "/secrets/.env"
+    max_rendered_secret_age_seconds: int = 900
+    min_token_ttl_hours: int = 48
+    mount_exempt_containers: tuple[str, ...] = ()
+    optional_inert_fields: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class Exemption:
     """An explicit, justified opt-out from one facet completeness check.
 
     ``check_id`` names the facet column being exempted (``probes`` | ``signals``
-    | ``backup``). ``reason`` must say WHY the facet genuinely does not apply —
-    an exemption is a conscious decision, not a forgotten gap.
+    | ``backup`` | ``secrets``), or a namespaced per-item check id for
+    finer-grained opt-outs (e.g. ``required-env-drift:<VAR>`` — consumed by
+    tools/validate_required_env.py as its drift allowlist, #542). ``reason``
+    must say WHY the facet genuinely does not apply — an exemption is a
+    conscious decision, not a forgotten gap.
     """
 
     check_id: str
@@ -141,5 +196,6 @@ FACET_CLASSES: dict[str, type] = {
     "ProbeFacet": ProbeFacet,
     "SignalFacet": SignalFacet,
     "BackupFacet": BackupFacet,
+    "SecretsFacet": SecretsFacet,
     "Exemption": Exemption,
 }

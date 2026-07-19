@@ -7,7 +7,16 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tools.validate_required_env import MANIFEST, ManifestShapeError, TEMPLATE, audit, main
+from tools.validate_required_env import (
+    DRIFT_EXEMPTION_PREFIX,
+    MANIFEST,
+    ManifestShapeError,
+    TEMPLATE,
+    _allowlist_from_exemptions,
+    audit,
+    drift_allowlist,
+    main,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "infra-ci.yml"
@@ -45,6 +54,39 @@ def test_real_manifest_and_template_are_in_sync() -> None:
 @pytest.mark.skipif(not _SUBMODULE_CHECKED_OUT, reason=_SKIP_REASON)
 def test_real_enforce_exits_zero() -> None:
     assert main(["--enforce"]) == 0
+
+
+def test_drift_allowlist_derives_from_app_facet_exemptions() -> None:
+    """#542: the retired DRIFT_ALLOWLIST constant (empty at migration time) is
+    now derived from finance_report/app's facet exemptions — empty until a
+    `required-env-drift:<NAME>` Exemption is declared on the Deployer, and an
+    exemption declared there flows straight into the audit's allowlist."""
+    from libs.service_facets import Exemption
+
+    assert drift_allowlist() == frozenset()  # equivalence with the old constant
+
+    derived = _allowlist_from_exemptions(
+        (
+            Exemption(
+                check_id=f"{DRIFT_EXEMPTION_PREFIX}FAKE_DOC_EXAMPLE",
+                reason="doc-comment example the comment-blind regex misreads",
+            ),
+            Exemption(check_id="backup", reason="unrelated facet exemption"),
+        )
+    )
+    assert derived == frozenset({"FAKE_DOC_EXAMPLE"})
+
+
+def test_allowlisted_name_suppresses_drift(tmp_path: Path) -> None:
+    """An allowlisted name is reported neither as unbacked nor as stale."""
+    _write(
+        tmp_path,
+        fields=[_field("SECRET_KEY", vault=True)],
+        template_lines=['DEBUG={{ with .Data.data.DEBUG }}{{ printf "%q" . }}{{ else }}"false"{{ end }}'],
+    )
+    result = audit(tmp_path, allowlist=frozenset({"SECRET_KEY", "DEBUG"}))
+    assert result["unbacked_vault_fields"] == []
+    assert result["stale_template_entries"] == []
 
 
 def test_unbacked_vault_field_is_flagged(tmp_path: Path) -> None:

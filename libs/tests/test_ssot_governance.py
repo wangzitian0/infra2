@@ -168,7 +168,9 @@ def test_code_owned_ssot_entries_have_test_or_code_proofs() -> None:
         "ops.obs",
         "ops.backup_inventory",
         "ops.pipeline",
-        "vault.self_refresh_inventory",
+        # vault.self_refresh_inventory retired (#542): the inventory is derived
+        # from Deployer SecretsFacet declarations; its proof anchors moved to
+        # libs/tests/test_vault_inventory_equivalence.py.
         "watchdog.signals",
     }
 

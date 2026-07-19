@@ -82,7 +82,6 @@
 | [db.platform_pg.md](./db.platform_pg.md) | `db.platform_pg` | Platform PG (L1) |
 | [db.redis.md](./db.redis.md) | `db.redis` | Redis 缓存 |
 | [db.clickhouse.md](./db.clickhouse.md) | `db.clickhouse` | ClickHouse (SigNoz Storage) |
-| [vault-self-refresh-inventory.yaml](./vault-self-refresh-inventory.yaml) | `vault.self_refresh_inventory` | Vault app-token self-refresh audit inventory |
 
 ---
 

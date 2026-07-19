@@ -5,7 +5,7 @@ import sys
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.env import get_secrets
 from libs.console import error, info, success
-from libs.service_facets import ProbeFacet
+from libs.service_facets import ProbeFacet, SecretsFacet
 
 shared_tasks = sys.modules.get("platform.12.alerting.shared")
 
@@ -112,6 +112,16 @@ class AlertingDeployer(Deployer):
             target="disk:/hostfs",
             expected="80",
             service_id="infra/host",
+        ),
+    )
+
+    # Vault self-refresh facts (#542): the audit inventory derives from this
+    # (AppRole auth per #257/#259).
+    secrets = (
+        SecretsFacet(
+            vault_agent_container="platform-alerting-vault-agent${ENV_SUFFIX}",
+            app_containers=("platform-alerting${ENV_SUFFIX}",),
+            auth_method="approle",
         ),
     )
 

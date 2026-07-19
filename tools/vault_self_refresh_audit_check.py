@@ -47,28 +47,28 @@ if str(ROOT) not in sys.path:
 from libs.vault_self_refresh_audit import (  # noqa: E402
     audit_from_observations,
     collect_live_observations,
+    inventory_ids_not_in_production,
     load_inventory,
     write_report,
 )
 
-# Inventory entries with no production deployment yet, so a daily env="production" run
-# would otherwise page Feishu forever on the same non-actionable "missing from
-# production" finding. Not a code bug -- verified live (#500/#524, 2026-07-18): the
-# truealpha Dokploy project's `production` environment has zero composes for any of
-# postgres/app/data_engine; #500 deliberately scoped truealpha's rollout to staging
-# only so far. Remove an entry here once that service is actually promoted to
-# production, not before -- this list documents current rollout state, not a
-# permanent exemption.
-NOT_YET_IN_PRODUCTION: frozenset[str] = frozenset(
-    {"truealpha/postgres", "truealpha/app", "truealpha/data_engine"}
-)
-
 
 def run(env: str = "production") -> dict[str, Any]:
-    """Collect live observations and classify them. READ-ONLY."""
+    """Collect live observations and classify them. READ-ONLY.
+
+    A production run excludes inventory entries with no production deployment
+    yet — otherwise the daily audit pages Feishu forever on the same
+    non-actionable "missing from production" finding (verified live: #500
+    scoped truealpha's rollout to staging only; the truealpha Dokploy project's
+    `production` environment has zero composes). The exclusion set is DERIVED
+    from deploy-side facts (#542) — the Deployer `not_yet_in_production` attr
+    and `_APP_COMPOSE_OVERRIDES`' prod compose_id=None — never a hand-kept
+    list, so promoting a service to production updates the audit automatically.
+    """
     services = load_inventory()
     if env == "production":
-        services = [s for s in services if s.id not in NOT_YET_IN_PRODUCTION]
+        excluded = inventory_ids_not_in_production()
+        services = [s for s in services if s.id not in excluded]
     observations = collect_live_observations(services, env=env)
     return audit_from_observations(services, observations, env=env)
 

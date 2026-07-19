@@ -6,6 +6,7 @@ GitOps webhook service for automatic infrastructure sync.
 
 import sys
 from libs.deploy.deployer import Deployer, make_tasks
+from libs.service_facets import SecretsFacet
 
 shared_tasks = sys.modules.get("bootstrap.06.iac_runner.shared")
 
@@ -25,6 +26,23 @@ class IaCRunnerDeployer(Deployer):
     subdomain = "iac"
     service_port = 8080
     service_name = "iac-runner"  # Docker service name keeps hyphen
+
+    # Vault self-refresh facts (#542). The bootstrap plane is outside the
+    # registry deploy fan-out, but this deploy.py is still the single
+    # declaration point for iac_runner's facets — read by
+    # libs.service_registry.bootstrap_facet_attrs() via the same fail-closed
+    # AST reader. AppRole auth (#369, completing #257/#259): vault-agent uses
+    # VAULT_ROLE_ID + VAULT_SECRET_ID (Dokploy-injected, NOT 1Password); P0
+    # anti-cycle invariants preserved — see docs/ssot/bootstrap.iac_runner.md
+    # §6.4. Bootstrap-plane containers carry no ${ENV_SUFFIX} (single shared
+    # instance).
+    secrets = (
+        SecretsFacet(
+            vault_agent_container="iac-runner-vault-agent",
+            app_containers=("iac-runner",),
+            auth_method="approle",
+        ),
+    )
 
 
 if shared_tasks:

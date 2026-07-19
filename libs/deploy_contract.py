@@ -54,6 +54,12 @@ class ServiceSpec:
             services (postgres/redis/…) are ``False``: ``sub_domain`` still derives
             ENV_SUFFIX/DATA_PATH but is not routed.
         prod_only: Only deployable to ``prod`` (e.g. clickhouse/signoz/openpanel).
+        not_yet_in_production: This service has no production deployment yet —
+            its rollout is deliberately staging-scoped (#500/#542). Derived from
+            the Deployer's literal ``not_yet_in_production`` attr; consumed by
+            ``tools/reconcile_iac_inputs.py`` so a release-tag prod promotion
+            never fans out to a service with nothing to deploy to (the v1.1.34
+            2/14 prod-promote failure).
         env_shared: One endpoint shared across envs — no env suffix, no preview
             instances (e.g. vault/sso/signoz/minio).
         iac_pinned: A platform service whose artifact is the IaC-pinned stack at
@@ -80,6 +86,7 @@ class ServiceSpec:
     base_subdomain: str
     web_facing: bool
     prod_only: bool = False
+    not_yet_in_production: bool = False
     env_shared: bool = False
     iac_pinned: bool = False
     image_repositories: tuple[str, ...] = ()
@@ -154,6 +161,7 @@ def _iac_pinned_specs() -> dict[str, ServiceSpec]:
             base_subdomain=meta.subdomain or meta.service,
             web_facing=meta.subdomain is not None,
             prod_only=meta.prod_only,
+            not_yet_in_production=meta.not_yet_in_production,
             iac_pinned=True,
         )
     return out

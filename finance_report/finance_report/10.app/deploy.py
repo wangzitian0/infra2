@@ -2,6 +2,7 @@ import sys
 
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.console import header, success, info, warning
+from libs.service_facets import SecretsFacet
 from tools.openpanel_clients import openpanel_env
 
 shared_tasks = sys.modules.get("finance_report.10.app.shared")
@@ -28,6 +29,33 @@ class AppDeployer(Deployer):
     # reserved pr-<_CANARY_PR> slot); truealpha flips its own flag when its
     # preview lands — no canary code change needed then.
     deploy_v2_canary = True
+
+    # Vault self-refresh facts (#542): the audit inventory derives from these
+    # (AppRole auth — the #257/#259 pilot). Two surfaces:
+    #   1. the app itself. optional_inert_fields (#526): LLM_ENCRYPTION_KEYS'
+    #      secrets.ctmpl render line landed in #482/PR#520; the Vault value is
+    #      intentionally unset until EPIC-023's DB-backed LLM-provider-secret
+    #      storage is turned on — reported informationally, never a failure.
+    #   2. the multi-alias ephemeral PREVIEW surface (declared here with an
+    #      explicit service_id — an alias stack has no registry Deployer of its
+    #      own). Same AppRole auth; its secrets template reads the SOURCE env's
+    #      app secrets (PREVIEW_SECRET_ENV, default staging), so the derived
+    #      vault path {env} resolves to that source env, not the alias.
+    secrets = (
+        SecretsFacet(
+            vault_agent_container="finance_report-app-vault-agent${ENV_SUFFIX}",
+            app_containers=("finance_report-backend${ENV_SUFFIX}",),
+            auth_method="approle",
+            optional_inert_fields=("LLM_ENCRYPTION_KEYS",),
+        ),
+        SecretsFacet(
+            service_id="finance_report/preview",
+            compose_path="finance_report/finance_report/preview/compose.yaml",
+            vault_agent_container="finance_report-app-vault-agent${ENV_SUFFIX}",
+            app_containers=("finance_report-backend${ENV_SUFFIX}",),
+            auth_method="approle",
+        ),
+    )
 
     @classmethod
     def pre_compose(cls, c) -> dict | None:

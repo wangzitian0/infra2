@@ -120,12 +120,12 @@ entries:
     owner: docs/ssot/db.clickhouse.md
     summary: ClickHouse (SigNoz Storage)
     description: ClickHouse storage for observability and analytics.
-  vault.self_refresh_inventory:
-    owner: docs/ssot/vault-self-refresh-inventory.yaml
-    summary: Vault app-token self-refresh audit inventory
-    description: Vault app-token self-refresh audit inventory.
-    proofs:
-      - libs/tests/test_vault_self_refresh_audit.py
+  # vault.self_refresh_inventory retired (#542): the audit inventory is DERIVED
+  # from each service Deployer's SecretsFacet declarations (libs/service_facets.py
+  # -> libs/vault_self_refresh_audit.load_inventory); the former handwritten
+  # docs/ssot/vault-self-refresh-inventory.yaml is deleted, its final content
+  # frozen as libs/tests/fixtures/vault_self_refresh_inventory_frozen.yaml
+  # (equivalence proof: libs/tests/test_vault_inventory_equivalence.py).
 
   ops.standards:
     owner: docs/ssot/ops.standards.md

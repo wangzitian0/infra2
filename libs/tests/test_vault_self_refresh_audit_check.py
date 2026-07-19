@@ -38,7 +38,7 @@ def test_run_loads_real_inventory_and_wires_collection_into_classification(
     assert report == {"status": "pass", "results": []}
     assert captured["collect_env"] == "production"
     assert captured["audit_env"] == "production"
-    # The real docs/ssot/vault-self-refresh-inventory.yaml inventory, not a stub.
+    # The real facet-derived inventory (#542), not a stub.
     assert captured["collect_services"]
     assert captured["audit_services"] is captured["collect_services"]
     assert captured["observations"] == {"services": {}}
@@ -95,7 +95,15 @@ def test_production_run_excludes_services_not_yet_in_production(monkeypatch) -> 
     """Verified live (2026-07-18): truealpha's Dokploy `production` environment has
     zero composes for postgres/app/data_engine (#500 scoped its rollout to staging
     only so far) -- a daily env="production" run must not check them, or it pages
-    Feishu forever on the same non-actionable "missing from production" finding."""
+    Feishu forever on the same non-actionable "missing from production" finding.
+
+    #542: the exclusion set is DERIVED (Deployer `not_yet_in_production` attrs +
+    `_APP_COMPOSE_OVERRIDES`' prod compose_id=None), replacing the hand-kept
+    NOT_YET_IN_PRODUCTION constant. The derivation also covers a
+    not-in-production owner's preview surface (truealpha/preview) -- the exact
+    entry #538 added without updating the old constant, which made the daily
+    production audit page on a false positive (observed live 2026-07-20).
+    """
     captured = {}
 
     def fake_collect_live_observations(services, *, env):
@@ -111,12 +119,20 @@ def test_production_run_excludes_services_not_yet_in_production(monkeypatch) -> 
 
     check.run(env="production")
 
-    assert captured["ids"].isdisjoint(check.NOT_YET_IN_PRODUCTION)
+    excluded = check.inventory_ids_not_in_production()
+    assert excluded == {
+        "truealpha/postgres",
+        "truealpha/app",
+        "truealpha/data_engine",
+        "truealpha/preview",
+    }
+    assert captured["ids"].isdisjoint(excluded)
     assert "finance_report/app" in captured["ids"]  # real prod services untouched
+    assert "finance_report/preview" in captured["ids"]  # owner IS in production
 
 
 def test_staging_run_does_not_exclude_anything(monkeypatch) -> None:
-    """The NOT_YET_IN_PRODUCTION filter is production-specific -- truealpha genuinely
+    """The not-in-production filter is production-specific -- truealpha genuinely
     is deployed to staging, so a staging run must still cover it."""
     captured = {}
 

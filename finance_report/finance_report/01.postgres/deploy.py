@@ -1,6 +1,7 @@
 import sys
 
 from libs.deploy.deployer import Deployer, make_tasks
+from libs.service_facets import SecretsFacet
 
 shared_tasks = sys.modules.get("finance_report.01.postgres.shared")
 
@@ -22,6 +23,16 @@ class PostgresDeployer(Deployer):
     subdomain = None
     service_port = 5432
     service_name = "postgres"
+
+    # Vault self-refresh facts (#542): the audit inventory derives from this
+    # (AppRole auth per #257/#259).
+    secrets = (
+        SecretsFacet(
+            vault_agent_container="finance_report-postgres-vault-agent${ENV_SUFFIX}",
+            app_containers=("finance_report-postgres${ENV_SUFFIX}",),
+            auth_method="approle",
+        ),
+    )
 
 
 if shared_tasks:

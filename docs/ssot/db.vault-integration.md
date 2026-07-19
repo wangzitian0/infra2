@@ -164,10 +164,13 @@ sidecars even when token lookup and template rendering are functional.
 The runtime proof for this contract is `invoke vault-audit.self-refresh`.
 It is read-only and must not rotate, renew, restart, or redeploy services.
 
-The authoritative inventory is
-[`vault-self-refresh-inventory.yaml`](./vault-self-refresh-inventory.yaml). Each
-active compose file with a `vault-agent` service must have exactly one row unless
-the compose file is explicitly a non-deployed alternate.
+The authoritative inventory is DERIVED (#542) from each service Deployer's
+`SecretsFacet` declarations (`libs/service_facets.py` →
+`libs/vault_self_refresh_audit.load_inventory`); the former handwritten
+`vault-self-refresh-inventory.yaml` is deleted (equivalence frozen as
+`libs/tests/fixtures/vault_self_refresh_inventory_frozen.yaml`). Each active
+compose file with a `vault-agent` service must have exactly one derived entry
+unless the compose file is explicitly a non-deployed alternate.
 
 The audit must check:
 - Dokploy service env includes the service's auth credentials (AppRole: a non-empty
