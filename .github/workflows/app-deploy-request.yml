@@ -2,6 +2,15 @@ name: App deploy request
 
 # Cross-repository receiver for the infra2-sdk DeployRequest v1 contract. Applications
 # request a deployment; infra2 verifies Production evidence and alone executes deploy_v2.
+#
+# infra2#537: without an explicit run-name, a repository_dispatch run's display_title
+# defaults to the workflow name ("App deploy request") — but every sender (e.g.
+# truealpha's deploy-release.yml) polls this repo's Actions API for a run whose
+# display_title equals `Deploy <service> <deploy_type> <version_ref> <source_sha>
+# [<request_id>]` to confirm receipt. Without this match the sender's poll loop always
+# times out, even on a fully successful receiver run. This run-name reproduces that
+# exact string from the dispatch payload so the match can succeed.
+run-name: Deploy ${{ github.event.client_payload.service }} ${{ github.event.client_payload.deploy_type }} ${{ github.event.client_payload.version_ref }} ${{ github.event.client_payload.source_sha }} [${{ github.event.client_payload.request_id }}]
 on:
   repository_dispatch:
     types: [app-deploy-request]

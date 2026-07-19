@@ -39,3 +39,21 @@ def test_receiver_never_checks_out_application_or_exposes_dokploy_to_validation(
     assert "repository:" not in body
     assert body.count("python -m tools.app_deploy_request") >= 3
     assert "python -m tools.deploy_v2_canary" in body
+
+
+def test_receiver_run_name_matches_what_senders_poll_for() -> None:
+    """infra2#537: without a matching run-name, a sender's receipt-polling loop
+    (e.g. truealpha's deploy-release.yml, which searches this repo's Actions API for a
+    run whose display_title equals "Deploy <service> <deploy_type> <version_ref>
+    <source_sha> [<request_id>]") can never find its own receiver run — GitHub's default
+    display_title for repository_dispatch is just the workflow name. This run-name must
+    reproduce that exact string from the dispatch payload, in that exact order.
+    """
+    run_name = workflow()["run-name"]
+    assert run_name == (
+        "Deploy ${{ github.event.client_payload.service }} "
+        "${{ github.event.client_payload.deploy_type }} "
+        "${{ github.event.client_payload.version_ref }} "
+        "${{ github.event.client_payload.source_sha }} "
+        "[${{ github.event.client_payload.request_id }}]"
+    )
