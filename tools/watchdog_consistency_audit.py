@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Audit watchdog signal ownership against live code-owned configs."""
+"""Audit watchdog signal ownership against live code-owned configs.
+
+Also enforces (#425 T5) the optional-but-if-present-mandatory `{tier, type}`
+declaration on each signal, and, for `type: alert` signals, a structured
+debounce (`consecutive_failures` + `renotify_window_sec`) -- see
+_validate_tier_and_type() and the YAML inventory's header comment for the
+full rule and rationale.
+"""
 
 from __future__ import annotations
 
@@ -23,7 +30,21 @@ COMPOSE = ROOT / "platform/12.alerting/compose.yaml"
 WRANGLER = ROOT / "cloudflare/infra-watchdog/wrangler.toml"
 OUT_OF_BAND = ROOT / "tools/out_of_band_watchdog.py"
 
-VALID_OWNERS = {"internal", "cloudflare", "github", "excluded"}
+VALID_OWNERS = {"internal", "cloudflare", "github", "excluded", "self"}
+
+# #425 T5: the four cadence tiers + two signal types from ops.observability.md §2
+# (the SSOT law landed by #425 T1/#426). `tier`/`type` are OPTIONAL on a signal
+# (backfilling every existing entry is #425 T2's classify job, not this gate's) --
+# but once a signal declares either, both are required and must be internally
+# consistent, and declaring `type: alert` pulls in the mandatory debounce fields
+# below. See _validate_inventory() and the YAML header comment for the full rule.
+VALID_TIERS = {"minute", "hour", "day", "month"}
+VALID_TYPES = {"alert", "report"}
+# Cross-cutting invariant (ops.observability.md §2): tiers <= hour are event-driven
+# ALERTs, tiers >= day are time-driven REPORTs. The alert/report boundary IS the
+# day line -- there is no such thing as an hourly report or a monthly alert.
+ALERT_TIERS = {"minute", "hour"}
+REPORT_TIERS = {"day", "month"}
 
 
 def main() -> int:
@@ -180,6 +201,88 @@ def _validate_inventory(signals: list[dict[str, Any]]) -> list[str]:
             )
         except ValueError as exc:
             errors.append(f"unresolvable service identity for {signal_id}: {exc}")
+        errors.extend(_validate_tier_and_type(signal, signal_id))
+    return errors
+
+
+def _validate_tier_and_type(signal: dict[str, Any], signal_id: str) -> list[str]:
+    """#425 T5: enforce the `{tier, type}` declaration and, for alerts, its debounce.
+
+    `tier`/`type` are optional per-signal (see the module-level comment for why),
+    so a signal that declares neither is left alone -- that is #425 T2's backlog,
+    not a failure here. But once EITHER is declared, both must be present, both
+    must be valid, and they must agree with the alert<=hour/report>=day invariant.
+
+    For `type: alert` specifically, this also enforces the debounce/threshold this
+    issue's comment thread calls out as the actual point of T5: "an alert-tier
+    check must declare not only {tier, type} but, for type=alert, a
+    debounce/threshold = what distinguishes a real failure from a transient
+    blip." `container_breakdown_watch.py` (#475) and the route-canary's single-shot
+    30s-timeout page (also #425) are the two concrete incidents this line is
+    closing -- both were exactly a check with no declared debounce paging on a
+    transient blip.
+    """
+    tier = signal.get("tier")
+    type_ = signal.get("type")
+    if tier is None and type_ is None:
+        return []
+
+    errors: list[str] = []
+    if tier is None or type_ is None:
+        errors.append(
+            f"{signal_id}: tier and type must be declared together "
+            f"(got tier={tier!r}, type={type_!r})"
+        )
+        return errors
+
+    tier_valid = tier in VALID_TIERS
+    type_valid = type_ in VALID_TYPES
+    if not tier_valid:
+        errors.append(
+            f"{signal_id}: invalid tier {tier!r} (must be one of {sorted(VALID_TIERS)})"
+        )
+    if not type_valid:
+        errors.append(
+            f"{signal_id}: invalid type {type_!r} (must be one of {sorted(VALID_TYPES)})"
+        )
+    if not (tier_valid and type_valid):
+        return errors
+
+    if type_ == "alert" and tier not in ALERT_TIERS:
+        errors.append(
+            f"{signal_id}: type=alert requires tier in {sorted(ALERT_TIERS)} "
+            f"(#425 cross-cutting invariant: alert/report boundary is the day "
+            f"line), got tier={tier!r}"
+        )
+    if type_ == "report" and tier not in REPORT_TIERS:
+        errors.append(
+            f"{signal_id}: type=report requires tier in {sorted(REPORT_TIERS)} "
+            f"(#425 cross-cutting invariant: alert/report boundary is the day "
+            f"line), got tier={tier!r}"
+        )
+
+    if type_ == "alert":
+        consecutive_failures = signal.get("consecutive_failures")
+        if (
+            not isinstance(consecutive_failures, int)
+            or isinstance(consecutive_failures, bool)
+            or consecutive_failures < 1
+        ):
+            errors.append(
+                f"{signal_id}: type=alert requires an int consecutive_failures >= 1 "
+                f"(the debounce that distinguishes a real failure from a transient "
+                f"blip -- #425 T5 / #475 / #531), got {consecutive_failures!r}"
+            )
+        renotify_window_sec = signal.get("renotify_window_sec")
+        if (
+            not isinstance(renotify_window_sec, int)
+            or isinstance(renotify_window_sec, bool)
+            or renotify_window_sec < 1
+        ):
+            errors.append(
+                f"{signal_id}: type=alert requires an int renotify_window_sec >= 1 "
+                f"seconds (#425 T5 / #475 / #531), got {renotify_window_sec!r}"
+            )
     return errors
 
 
