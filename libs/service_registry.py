@@ -73,7 +73,6 @@ class ServiceMeta:
     service: str  # the `service` attribute, e.g. "signoz"
     prod_only: bool  # True -> not deployed to non-production envs
     subdomain: str | None  # public subdomain, e.g. "sso"; None = no public route
-    domain: str | None  # dedicated product domain override; None = shared INTERNAL_DOMAIN
     service_port: int | None  # container port for routing
     service_name: str | None  # compose service name (multi-service composes)
     telemetry_service_name: str | None  # OTEL service.name override
@@ -99,6 +98,12 @@ class ServiceMeta:
     secrets: tuple[SecretsFacet, ...] = ()
     exemptions: tuple[Exemption, ...] = ()
     deploy_v2_canary: bool = False
+    # Dedicated product domain override (e.g. truealpha/app -> truealpha.club);
+    # None = use whatever shared INTERNAL_DOMAIN the deploy request/caller passes
+    # in (every service until truealpha/app). Kept last, with a default, so
+    # existing ServiceMeta(**kwargs) call sites that predate this field
+    # (tests, fixtures) keep constructing without knowing about it.
+    domain: str | None = None
 
     def exempted(self, check_id: str) -> bool:
         """True if this service explicitly opted out of facet ``check_id``."""
