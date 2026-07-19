@@ -78,6 +78,23 @@ OPTIONAL_INERT_FIELD_WATCHLIST: tuple[tuple[str, str], ...] = (
     # storage is turned on for finance_report.
     ("finance_report/app", "LLM_ENCRYPTION_KEYS"),
 )
+# (#531) `app_secret_mount_path` is applied uniformly to every container in a
+# service's `app_containers` list -- but not every app_container in a service
+# actually reads Vault secrets. Fixing classify_container's restart-count
+# false positive (this same issue) unmasked exactly this: platform-prefect-
+# worker only needs PREFECT_API_URL (a plain, non-secret env var pointing at
+# prefect-server) to reach the API -- confirmed by reading
+# platform/23.prefect/compose.yaml, it has no `secrets:/secrets:ro` mount and
+# no entrypoint sourcing one, by design (issue #163's investigation of the
+# same compose file independently confirms this). Checking it for a mount it
+# was never supposed to have is the same "check assumes something not true of
+# reality" disease this issue is about, just in a different shape (assumed
+# uniformity instead of missing time-window) -- an explicit exemption list,
+# not silently dropping the check for everyone, keeps the check honest for
+# every OTHER app_container that genuinely does need the mount.
+MOUNT_EXEMPT_CONTAINERS: frozenset[str] = frozenset(
+    {"platform-prefect-worker", "platform-prefect-worker-staging"}
+)
 # (#531) Docker's RestartCount is lifetime-cumulative; the only other
 # restart-relevant signal it exposes is State.StartedAt (when the CURRENT run
 # began, i.e. the time of the most recent restart). classify_container()
@@ -589,12 +606,13 @@ def audit_from_observations(
             )
         )
         for app_state in obs.get("app_containers", []):
+            exempt = str(app_state.get("name") or "") in MOUNT_EXEMPT_CONTAINERS
             results.append(
                 classify_container(
                     service,
                     app_state,
                     check_id="app-container",
-                    expected_mount=service.app_secret_mount_path,
+                    expected_mount=None if exempt else service.app_secret_mount_path,
                     now=now,
                 )
             )

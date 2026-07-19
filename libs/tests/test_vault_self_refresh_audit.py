@@ -351,6 +351,71 @@ def test_audit_from_observations_stays_pass_with_only_stale_render_and_healthy_c
     assert freshness_results[0]["status"] == "info"
 
 
+def test_mount_exempt_app_container_not_flagged_for_missing_secrets_mount() -> None:
+    """#531: platform-prefect-worker genuinely has no secrets mount by design (it only
+    needs PREFECT_API_URL, a plain env var -- confirmed against the live compose file
+    and #163's independent investigation). Fixing the restart-count false positive
+    unmasked this pre-existing, different check-vs-reality mismatch: applying
+    app_secret_mount_path uniformly to every app_container assumed a uniformity that
+    doesn't hold. MOUNT_EXEMPT_CONTAINERS must suppress the mount check for it, while
+    every OTHER app_container in the same service (e.g. platform-prefect-services,
+    which genuinely does read secrets) keeps being checked normally."""
+    services = load_inventory()
+    prefect = next(service for service in services if service.id == "platform/prefect")
+
+    worker_state = {
+        "name": "platform-prefect-worker",
+        "exists": True,
+        "state": "running",
+        "health": "healthy",
+        "restart_count": 0,
+        "mounts": [],  # genuinely no secrets mount -- must NOT be flagged
+    }
+    services_state = {
+        "name": "platform-prefect-services",
+        "exists": True,
+        "state": "running",
+        "health": "healthy",
+        "restart_count": 0,
+        "mounts": [],  # DOES need the mount and doesn't have it -- must fail
+    }
+    report = audit_from_observations(
+        [prefect],
+        {
+            "services": {
+                prefect.id: {
+                    "dokploy_env": (
+                        "VAULT_ROLE_ID=test-role-id-not-a-real-secret\n"
+                        "VAULT_SECRET_ID=test-secret-id-not-a-real-secret\n"
+                    ),
+                    "token_lookup": None,
+                    "rendered_env": {"exists": True, "readable": True, "size": 20, "mtime": 0},
+                    "vault_agent_logs": "",
+                    "vault_agent_container": {
+                        "name": "platform-prefect-vault-agent",
+                        "exists": True,
+                        "state": "running",
+                        "health": "healthy",
+                        "restart_count": 0,
+                    },
+                    "app_containers": [worker_state, services_state],
+                }
+            }
+        },
+        env="production",
+        now=1000,
+    )
+
+    app_results = {
+        (r["evidence"].get("name")): r
+        for r in report["results"]
+        if r["check_id"] == "app-container"
+    }
+    assert app_results["platform-prefect-worker"]["status"] == "pass"
+    assert app_results["platform-prefect-services"]["status"] == "fail"
+    assert "mount" in app_results["platform-prefect-services"]["summary"].lower()
+
+
 def test_vault_agent_log_classifier_detects_refresh_errors_and_redacts() -> None:
     """#166: agent log audit catches known render/renewal failures."""
     result = classify_vault_agent_logs(
