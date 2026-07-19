@@ -68,10 +68,12 @@ class ServiceSpec:
             Defaults to ``<service-part-of-key>`` with underscores dashed, matching the
             registry key unless the app's compose already established a different label.
         identity_component: The ``component`` telemetry label. Defaults to ``"app"``.
-        supports_preview: Whether ``libs.deploy.preview`` (still finance_report-shaped,
-            #500) can serve this service's preview/canary deploy types. False fails a
-            preview/canary target closed instead of silently running finance_report's
-            preview internals (compose path, DB name, ...) against a different app.
+        supports_preview: Whether ``libs.deploy.preview`` can serve this service's
+            preview/canary deploy types. False fails a preview/canary target closed. True
+            requires a matching entry in
+            ``libs.deploy_env_config.preview_service_config`` (project / compose path /
+            DB name / base_subdomain, #522) — the preview lifecycle looks the service up
+            there rather than assuming finance_report's internals.
     """
 
     key: str
@@ -113,11 +115,14 @@ SERVICES: dict[str, ServiceSpec] = {
         identity_service_name="finance-report-backend",
     ),
     # #500: version-pinned staging promotion (finance_report's fixed-compose path,
-    # generalized). Preview/canary are NOT wired for this service yet — its compose has
-    # no preview stack, and truealpha's sender (truealpha#333) only ever emits staging
-    # requests today; production is blocked sender-side pending infra2 evidence support,
-    # and this service has no Dokploy prod compose yet either (verified live 2026-07-18:
-    # the truealpha Dokploy project's `production` environment has zero composes).
+    # generalized). #522: preview/canary now wired too (libs.deploy.preview generalized
+    # off a per-service registry — deploy_env_config.preview_service_config; truealpha's
+    # own ephemeral-DB template is truealpha/truealpha/preview/compose.yaml). Production
+    # is NOT wired yet: truealpha#333 (closed via PR #334) lifted the sender-side
+    # staging-only restriction — the sender now emits preview/tag, staging, AND prod
+    # requests — but infra2 still has no PRODUCTION_EVIDENCE_POLICIES entry for this
+    # service and no Dokploy prod compose (verified live 2026-07-18: the truealpha
+    # Dokploy project's `production` environment has zero composes). See infra2#522.
     _TRUEALPHA_APP_KEY: ServiceSpec(
         key=_TRUEALPHA_APP_KEY,
         base_subdomain="truealpha",
@@ -127,7 +132,7 @@ SERVICES: dict[str, ServiceSpec] = {
             "ghcr.io/wangzitian0/truealpha-llm-service",
         ),
         identity_service_name="truealpha-app",
-        supports_preview=False,
+        supports_preview=True,
     ),
 }
 

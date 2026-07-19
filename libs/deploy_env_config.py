@@ -253,10 +253,12 @@ def bespoke_app_compose_targets() -> tuple[ComposeTarget, ...]:
 #
 # Four alias kinds coexist, each its OWN compose stack + OWN ephemeral DB. Every alias is
 # uniformly <kind>-<value> (no bare special case), so downstream parses them the same way:
-#   branch-<name>   -> report-branch-<name>.<domain> (a branch tip, default main, on demand)
-#   pr-<N>          -> report-pr-<N>.<domain>       (a specific PR)
-#   commit-<sha7>   -> report-commit-<sha7>.<domain> (a pinned commit)
-#   tag-<v1-2-3>    -> report-tag-<v1-2-3>.<domain>  (a release tag, DNS-safe slug)
+#   branch-<name>   -> <base>-branch-<name>.<domain> (a branch tip, default main, on demand)
+#   pr-<N>          -> <base>-pr-<N>.<domain>       (a specific PR)
+#   commit-<sha7>   -> <base>-commit-<sha7>.<domain> (a pinned commit)
+#   tag-<v1-2-3>    -> <base>-tag-<v1-2-3>.<domain>  (a release tag, DNS-safe slug)
+# where <base> is the deploying service's ``base_subdomain`` (``report`` for
+# finance_report/app, ``truealpha`` for truealpha/app — libs.deploy_contract.ServiceSpec).
 #
 # This is PURE config: no Dokploy calls, no resolution. libs/deploy/preview.py
 # turns the slug/suffix/url here into actual create_compose/deploy calls, and
@@ -277,13 +279,75 @@ _BRANCH_VALUE_RE = re.compile(r"\A[A-Za-z0-9._/-]+\Z")  # a git branch name (e.g
 # replaces the old bare `main` so the main-tip preview is report-branch-main.
 PREVIEW_KINDS = ("branch", "pr", "commit", "tag")
 
-# the Dokploy project + environment the preview stacks live under (kept distinct
-# from staging/prod composes; the lifecycle find-or-creates this environment).
-PREVIEW_PROJECT = "finance_report"
+# The Dokploy ENVIRONMENT name every service's preview stacks live under (kept distinct
+# from staging/prod composes; the lifecycle find-or-creates this environment). Shared
+# across services — each service's preview composes live in ITS OWN Dokploy PROJECT
+# (see PreviewServiceConfig.project below), so a shared environment name never collides.
 PREVIEW_ENVIRONMENT = "preview"
-# every preview compose name/appName shares this prefix so they are easy to find,
-# list, and bulk-reason-about, and never collide with the staging/prod composes.
-_PREVIEW_SLUG_PREFIX = "finance-report-preview"
+
+
+@dataclass(frozen=True)
+class PreviewServiceConfig:
+    """Per-service knobs the preview lifecycle (``libs.deploy.preview``) needs.
+
+    Generalizes what was, pre-#522, a set of module-level constants hardwired to
+    finance_report/app — the ONLY previously-supported service. Each registered service
+    gets its own Dokploy project (composes never collide across services), compose
+    slug prefix, preview compose template path, and ephemeral-DB name. ``base_subdomain``
+    must match the service's ``libs.deploy_contract.ServiceSpec.base_subdomain`` (the
+    preview URL is ``https://<base_subdomain>-<alias>.<domain>``); duplicated here rather
+    than imported to avoid a preview<->contract import cycle (deploy_contract already
+    imports this module for the fixed-env regime).
+    """
+
+    project: str  # Dokploy project name (e.g. "finance_report", "truealpha")
+    slug_prefix: str  # compose display-name / appName prefix, e.g. "finance-report-preview"
+    compose_path: str  # the preview compose template infra2 path, github-sourced by Dokploy
+    db_name: str  # default PREVIEW_DB_NAME (the ephemeral postgres database name)
+    base_subdomain: str  # e.g. "report" / "truealpha" — must match ServiceSpec.base_subdomain
+    secret_env: str = (
+        "staging"  # which env's Vault app-secrets path a preview borrows (no per-alias path)
+    )
+
+
+# finance_report/app is the original (and, pre-#522, only) preview-capable service; its
+# values are byte-identical to the former module-level constants, so registering it here
+# is a pure refactor — no behavior change for its existing previews/canary.
+_PREVIEW_SERVICE_CONFIGS: dict[str, PreviewServiceConfig] = {
+    "finance_report/app": PreviewServiceConfig(
+        project="finance_report",
+        slug_prefix="finance-report-preview",
+        compose_path="finance_report/finance_report/preview/compose.yaml",
+        db_name="finance_report",
+        base_subdomain="report",
+    ),
+    # #522: truealpha/app preview — own Dokploy project, own ephemeral DB (never the
+    # shared staging/prod truealpha-postgres). See truealpha/truealpha/preview/compose.yaml.
+    "truealpha/app": PreviewServiceConfig(
+        project="truealpha",
+        slug_prefix="truealpha-preview",
+        compose_path="truealpha/truealpha/preview/compose.yaml",
+        db_name="truealpha",
+        base_subdomain="truealpha",
+    ),
+}
+
+
+def preview_service_config(service: str) -> PreviewServiceConfig:
+    """Return the :class:`PreviewServiceConfig` for a preview-capable service.
+
+    Raises ``ValueError`` for a service with no registered preview config — the same
+    fail-closed shape as ``app_compose_env_config`` for the fixed-env overlay. Callers
+    (``libs.deploy.preview``) should gate on ``ServiceSpec.supports_preview`` first so this
+    is a defensive re-check, not the primary guard.
+    """
+    config = _PREVIEW_SERVICE_CONFIGS.get(service)
+    if config is None:
+        raise ValueError(
+            f"no preview config registered for service {service!r}: expected one of "
+            f"{sorted(_PREVIEW_SERVICE_CONFIGS)}"
+        )
+    return config
 
 
 @dataclass(frozen=True)
@@ -305,9 +369,15 @@ class PreviewAlias:
     compose_name: str  # Dokploy compose display name + appName slug
     deployment_environment: str  # telemetry display value (core.environments §4.5)
 
-    def app_url(self, *, domain: str) -> str:
-        """Concrete public URL for this alias: https://report<suffix>.<domain>."""
-        return f"https://report{self.env_suffix}.{domain}"
+    def app_url(self, *, domain: str, base_subdomain: str = "report") -> str:
+        """Concrete public URL for this alias: https://<base_subdomain><suffix>.<domain>.
+
+        ``base_subdomain`` defaults to ``"report"`` (finance_report/app, the original
+        preview-capable service) so every pre-#522 call site is unchanged; a caller
+        deploying a different service passes its ``ServiceSpec.base_subdomain`` /
+        ``PreviewServiceConfig.base_subdomain`` explicitly (see ``libs.deploy.preview``).
+        """
+        return f"https://{base_subdomain}{self.env_suffix}.{domain}"
 
 
 def _normalize_alias(kind: str, value: int | str | None) -> tuple[str, str]:
@@ -352,7 +422,15 @@ def _normalize_alias(kind: str, value: int | str | None) -> tuple[str, str]:
     )
 
 
-def preview_alias(kind: str, value: int | str | None = None) -> PreviewAlias:
+_DEFAULT_PREVIEW_SLUG_PREFIX = _PREVIEW_SERVICE_CONFIGS["finance_report/app"].slug_prefix
+
+
+def preview_alias(
+    kind: str,
+    value: int | str | None = None,
+    *,
+    slug_prefix: str = _DEFAULT_PREVIEW_SLUG_PREFIX,
+) -> PreviewAlias:
     """Map a preview (kind, value) to its full deterministic identity.
 
     Pure and total over the validated surface; the single source the lifecycle and
@@ -362,6 +440,10 @@ def preview_alias(kind: str, value: int | str | None = None) -> PreviewAlias:
         preview_alias("pr", 5)          -> alias pr-5,            suffix -pr-5
         preview_alias("commit", sha)    -> alias commit-1ab32d5,  suffix -commit-1ab32d5
         preview_alias("tag", "v1.2.3")  -> alias tag-v1-2-3,      suffix -tag-v1-2-3
+
+    ``slug_prefix`` defaults to finance_report/app's (the original preview-capable
+    service) so every pre-#522 call site is unchanged; a caller deploying a different
+    service passes its ``PreviewServiceConfig.slug_prefix`` explicitly.
     """
     norm_kind, norm_value = _normalize_alias(kind, value)
     # The URL/compose slug must be a single DNS label: a tag's/branch's dots and slashes
@@ -379,7 +461,7 @@ def preview_alias(kind: str, value: int | str | None = None) -> PreviewAlias:
         alias=alias,
         env_suffix=suffix,
         domain_suffix=suffix,
-        compose_name=f"{_PREVIEW_SLUG_PREFIX}-{alias}",
+        compose_name=f"{slug_prefix}-{alias}",
         deployment_environment=alias,
     )
 

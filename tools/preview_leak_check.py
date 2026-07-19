@@ -45,10 +45,17 @@ from libs.common import normalize_env_name  # noqa: E402
 from libs.deploy_env_config import (  # noqa: E402
     PREVIEW_ENVIRONMENT,
     PREVIEW_KINDS,
-    PREVIEW_PROJECT,
     preview_alias,
+    preview_service_config,
 )
 from tools.deploy_v2 import _CANARY_PR  # noqa: E402
+
+# This tool is finance_report/app-scoped only (its open-PR fetch is hardcoded to
+# APP_REPO below) — #522 generalized libs.deploy_env_config for multiple preview-capable
+# services, but extending leak detection to scan every registered service's own
+# Dokploy project is a separate, deliberate follow-up, not done here.
+_PREVIEW_CONFIG = preview_service_config("finance_report/app")
+PREVIEW_PROJECT = _PREVIEW_CONFIG.project
 
 # The bare main-tip preview that the current model always wants up.
 ALWAYS_KEEP_ALIASES = frozenset({"branch-main"})

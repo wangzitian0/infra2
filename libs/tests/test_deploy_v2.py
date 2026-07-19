@@ -443,23 +443,25 @@ def test_truealpha_staging_routes_fixed_with_its_own_service(calls):
     assert res.target.service == "truealpha/app"
 
 
-def test_truealpha_preview_fails_closed_not_finance_report_preview(calls):
-    # truealpha/app has no preview compose yet (ServiceSpec.supports_preview=False) —
-    # must fail closed rather than silently running finance_report's preview internals
-    # (compose path, DB name, ...) against a different app's image.
-    with pytest.raises(ValueError, match="does not support preview/canary"):
-        _deploy(
-            service="truealpha/app",
-            deploy_type="preview/branch",
-            version_ref="main",
-        )
-    assert calls["preview"] is None and calls["fixed"] is None
+def test_truealpha_preview_routes_to_preview_backend_with_its_own_service(calls):
+    # #522: truealpha/app now has its own preview compose (ServiceSpec.supports_preview=
+    # True, deploy_env_config.preview_service_config("truealpha/app")) — it must route
+    # through the SAME preview backend as finance_report/app, but carrying its own
+    # service key so the backend resolves truealpha's project/compose/DB, never
+    # finance_report's internals.
+    _deploy(
+        service="truealpha/app",
+        deploy_type="preview/branch",
+        version_ref="main",
+    )
+    assert calls["fixed"] is None
+    assert calls["preview"]["service"] == "truealpha/app"
 
 
-def test_truealpha_canary_fails_closed_too(calls):
-    with pytest.raises(ValueError, match="does not support preview/canary"):
-        _deploy(service="truealpha/app", deploy_type="canary", version_ref="main")
-    assert calls["preview"] is None and calls["fixed"] is None
+def test_truealpha_canary_routes_to_preview_backend_too(calls):
+    _deploy(service="truealpha/app", deploy_type="canary", version_ref="main")
+    assert calls["fixed"] is None
+    assert calls["preview"]["service"] == "truealpha/app"
 
 
 def test_unknown_service_rejected(calls):
@@ -675,8 +677,8 @@ def test_cli_down_tears_down_the_selected_preview_alias(monkeypatch, capsys):
     # routes to the preview backend's down(); it never resolves a ref or deploys.
     rec = {}
 
-    def fake_down(kind, value, *, domain, client):
-        rec.update(kind=kind, value=value, domain=domain, client=client)
+    def fake_down(kind, value, *, domain, client, service):
+        rec.update(kind=kind, value=value, domain=domain, client=client, service=service)
         return _fake_down_result(kind, value, domain=domain, client=client)
 
     import libs.dokploy as dk
@@ -710,6 +712,7 @@ def test_cli_down_tears_down_the_selected_preview_alias(monkeypatch, capsys):
         "value": "5",
         "domain": "zp.io",
         "client": "client@cloud.zp.io",
+        "service": "finance_report/app",
     }
     out = json.loads(capsys.readouterr().out)
     assert out["action"] == "down" and out["alias"] == "pr-5"
