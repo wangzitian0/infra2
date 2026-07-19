@@ -72,19 +72,61 @@ def test_rendered_specs_name_equivalence_via_live_check_helper() -> None:
     assert len(parse_probe_names(generated)) == 21  # the frozen probe count
 
 
-def test_frozen_fixture_matches_live_compose_literal() -> None:
-    """While the compose literal is still the live source (migration phase),
-    the frozen fixture must be its exact byte copy — proving the fixture froze
-    the real thing. This test is REMOVED at cutover (literal deleted)."""
+def test_compose_carries_only_the_env_reference_after_cutover() -> None:
+    """Cutover guard (#541): the compose literal was proven field-identical to
+    the frozen fixture (commit history) and then deleted — the renderer is the
+    ONLY source now. compose.yaml must reference the env var and never regrow a
+    hand-written literal beside it (which the renderer would silently shadow)."""
     import yaml
 
-    compose = yaml.safe_load(
-        (ROOT / "platform/12.alerting/compose.yaml").read_text(encoding="utf-8")
+    compose_text = (ROOT / "platform/12.alerting/compose.yaml").read_text(
+        encoding="utf-8"
     )
-    literal = compose["services"]["infra-probe-runner"]["environment"][
+    compose = yaml.safe_load(compose_text)
+    value = compose["services"]["infra-probe-runner"]["environment"][
         "INFRA_PROBE_SPECS"
     ]
-    assert literal == _frozen_text()
+    assert value == "${INFRA_PROBE_SPECS:-}", (
+        "platform/12.alerting/compose.yaml INFRA_PROBE_SPECS must stay the "
+        "${INFRA_PROBE_SPECS:-} reference — probes are declared as ProbeFacets "
+        f"on their owning Deployers, not in compose. Got: {value[:120]!r}"
+    )
+    assert "dokploy-internal-http|" not in compose_text  # no literal resurrection
+
+
+def test_alerting_env_base_ships_the_rendered_specs(monkeypatch) -> None:
+    """The deploy vehicle end to end: AlertingDeployer.compose_env_base (the
+    hook the iac-runner sync path actually uses — NOT pre_compose) and the
+    secret-free source_config_env_base both carry the encoded rendered specs."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "alerting_deploy", ROOT / "platform/12.alerting/deploy.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    deployer = module.AlertingDeployer
+
+    class _NoSecrets:
+        def get(self, key):
+            return None
+
+    monkeypatch.setattr(module, "get_secrets", lambda **kw: _NoSecrets())
+    env = {
+        "ENV": "staging",
+        "ENV_SUFFIX": "-staging",
+        "INTERNAL_DOMAIN": "example.test",
+        "ENV_DOMAIN_SUFFIX": "staging",
+        "DATA_PATH": "/data/platform/alerting-staging",
+    }
+    expected = encode_specs_env_value(
+        resolve_env_suffix(render_probe_spec_text(), "-staging")
+    )
+    assert deployer.compose_env_base(env)["INFRA_PROBE_SPECS"] == expected
+    assert deployer.source_config_env_base(env)["INFRA_PROBE_SPECS"] == expected
+    # decoding what shipped yields the exact probe set the registry declares
+    shipped = normalize_specs_text(expected)
+    assert parse_probe_names(shipped) == parse_probe_names(render_probe_spec_text())
 
 
 def test_rendering_is_deterministic() -> None:

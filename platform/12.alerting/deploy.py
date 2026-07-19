@@ -197,16 +197,21 @@ class AlertingDeployer(Deployer):
 
     @classmethod
     def verify_runtime_applied(cls, c, env_vars):
-        """Confirm the running probe runner actually carries every probe declared
-        in the source INFRA_PROBE_SPECS. Closes the gap where a deploy records the
-        intended hash but Dokploy never recreated the container, leaving stale
-        probe specs while the catalog claims the probes are 'Live'."""
+        """Confirm the running probe runner actually carries every probe the
+        registry rendered into the deployed INFRA_PROBE_SPECS env value. Closes
+        the gap where a deploy records the intended hash but Dokploy never
+        recreated the container, leaving stale probe specs while the catalog
+        claims the probes are 'Live'.
+
+        Post-cutover (#541) this ALSO proves the env-value transport end to
+        end: if Dokploy/compose ever failed to expand the encoded value back
+        into per-line specs, the running container would miss every probe name
+        and the deploy would fail loudly here instead of going silently blind.
+        """
         import time
 
-        import yaml
-
         from libs.console import warning
-        from libs.probe_specs import missing_probe_names
+        from libs.probe_specs import missing_probe_names, normalize_specs_text
 
         e = cls.env()
         host = e.get("VPS_HOST")
@@ -214,17 +219,10 @@ class AlertingDeployer(Deployer):
             warning("verify_runtime_applied: VPS_HOST unset; skipping runtime check")
             return None
 
-        try:
-            compose = yaml.safe_load(cls.get_compose_content(c)) or {}
-        except Exception as exc:  # noqa: BLE001 - never crash the deploy on a parse issue
-            warning(f"verify_runtime_applied: compose parse failed ({exc}); skipping")
-            return None
-        source_specs = (
-            compose.get("services", {})
-            .get("infra-probe-runner", {})
-            .get("environment", {})
-            .get("INFRA_PROBE_SPECS", "")
-        )
+        # The source of truth is the value this very deploy shipped (rendered
+        # from the ProbeFacet registry by compose_env_base) — the compose file
+        # only carries the ${INFRA_PROBE_SPECS} reference now.
+        source_specs = normalize_specs_text(env_vars.get("INFRA_PROBE_SPECS", ""))
         if not source_specs:
             return None  # nothing declared to verify
 

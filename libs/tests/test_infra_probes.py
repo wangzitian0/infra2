@@ -187,11 +187,13 @@ def test_probe_runner_defaults_to_fast_probe_bounded_notification() -> None:
 
 
 def test_in_band_probe_compose_uses_internal_network_targets() -> None:
-    """#183: in-band probes must not route through Cloudflare public domains."""
-    compose = (ROOT / "platform/12.alerting/compose.yaml").read_text(encoding="utf-8")
-    probe_block = compose.split("INFRA_PROBE_SPECS: |", 1)[1].split(
-        "PUBLIC_ROUTE_PROBE_SPECS:", 1
-    )[0]
+    """#183: in-band probes must not route through Cloudflare public domains.
+
+    #541: the probe set is registry-rendered (ProbeFacet declarations on the
+    owning Deployers), so the rule is checked on the rendered text."""
+    from libs.probe_specs import render_probe_spec_text
+
+    probe_block = render_probe_spec_text()
 
     assert "https://cloud.${INTERNAL_DOMAIN}" not in probe_block
     assert "https://vault.${INTERNAL_DOMAIN}" not in probe_block

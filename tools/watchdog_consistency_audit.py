@@ -26,7 +26,6 @@ if str(ROOT) not in sys.path:
 from libs.service_registry import service_id_for_component  # noqa: E402
 
 INVENTORY = ROOT / "docs/ssot/watchdog-signals.yaml"
-COMPOSE = ROOT / "platform/12.alerting/compose.yaml"
 WRANGLER = ROOT / "cloudflare/infra-watchdog/wrangler.toml"
 OUT_OF_BAND = ROOT / "tools/out_of_band_watchdog.py"
 
@@ -303,12 +302,15 @@ def _load_inventory() -> dict[str, Any]:
 
 
 def _compose_probe_specs() -> dict[str, str]:
-    compose = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
-    raw_specs = compose["services"]["infra-probe-runner"]["environment"][
-        "INFRA_PROBE_SPECS"
-    ]
+    """Probe name -> service_id of the internal probe set.
+
+    #541 cutover: the specs are no longer a compose.yaml literal — they are
+    rendered from each service's ProbeFacet declarations via the registry, so
+    this audit reads the same single derivation the deploy renders from."""
+    from libs.probe_specs import render_probe_spec_text
+
     specs: dict[str, str] = {}
-    for line in raw_specs.splitlines():
+    for line in render_probe_spec_text().splitlines():
         if not line.strip() or line.strip().startswith("#"):
             continue
         fields = [field.strip() for field in line.split("|")]

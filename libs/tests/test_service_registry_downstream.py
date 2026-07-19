@@ -1,49 +1,37 @@
-"""Enforce that INFRA_PROBE_SPECS agrees with the service registry on the facts they SHARE.
+"""Enforce that the rendered INFRA_PROBE_SPECS agrees with the service registry
+on the facts they SHARE.
 
-Infra-013 P1 framed this as "generate the downstream from the registry". On inspection the
-probe specs are NOT a hand-copied service list — they carry per-probe truth the registry does
-not (and should not) hold: health paths, expected codes, severities, cascade depends_on, and
-`command` round-trip probes. Generating them would lose that truth. So the registry is made the
-ENFORCED single source for the one fact both genuinely share: a service's `prod_only` identity,
-which decides whether its probe target carries `${ENV_SUFFIX}`.
+History: Infra-013 P1 first REJECTED generating the probe specs (the per-probe
+truth — health paths, expected codes, severities, cascade depends_on, command
+round-trips — had no owner-side home), and instead made the registry the
+enforced source for the one shared fact: a service's `prod_only` identity,
+which decides whether its probe target carries `${ENV_SUFFIX}`. #541 gave the
+per-probe truth a home (ProbeFacet declarations on each owning Deployer), so
+the specs ARE now generated — from the same registry — and this audit keeps
+the shared-fact rule pointed at the rendered output.
 
-The probe file documents the trap itself: a prod_only service (single shared instance, no
-per-env copy) probed with `${ENV_SUFFIX}` targets a host that never exists -> a *permanent
-false-positive alert*. Its inverse — a per-env service probed WITHOUT the suffix — only ever
-checks prod and silently ignores staging. Both are now registry-derived, not hand-vigilance.
+The trap is unchanged: a prod_only service (single shared instance, no per-env
+copy) probed with `${ENV_SUFFIX}` targets a host that never exists -> a
+*permanent false-positive alert*. Its inverse — a per-env service probed
+WITHOUT the suffix — only ever checks prod and silently ignores staging. Both
+stay registry-derived, not hand-vigilance.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from libs import service_registry
+from libs.probe_specs import render_probe_spec_text
 
-ROOT = Path(__file__).resolve().parents[2]
-COMPOSE = ROOT / "platform/12.alerting/compose.yaml"
 _SUFFIX = "${ENV_SUFFIX}"
 
 
 def _probe_spec_lines() -> list[str]:
-    """The `name|kind|target|...` rows of the INFRA_PROBE_SPECS block-scalar."""
-    lines = COMPOSE.read_text(encoding="utf-8").splitlines()
-    rows: list[str] = []
-    grabbing = False
-    block_indent = 0
-    for line in lines:
-        if not grabbing:
-            if "INFRA_PROBE_SPECS:" in line and line.rstrip().endswith("|"):
-                grabbing = True
-                block_indent = len(line) - len(line.lstrip())
-            continue
-        if line.strip() == "":
-            continue
-        if len(line) - len(line.lstrip()) <= block_indent:
-            break  # dedented out of the block scalar
-        row = line.strip()
-        if not row.startswith("#") and "|" in row:
-            rows.append(row)
-    return rows
+    """The rendered `name|kind|target|...` rows (registry-derived)."""
+    return [
+        line.strip()
+        for line in render_probe_spec_text().splitlines()
+        if line.strip() and "|" in line
+    ]
 
 
 def _target_host(kind: str, target: str) -> str:
@@ -55,15 +43,15 @@ def _target_host(kind: str, target: str) -> str:
 
 def test_infra_probe_specs_env_suffix_matches_registry_prod_only() -> None:
     rows = _probe_spec_lines()
-    assert rows, "INFRA_PROBE_SPECS block not found / empty (parser drift?)"
+    assert rows, "rendered INFRA_PROBE_SPECS empty (renderer drift?)"
 
     problems: list[str] = []
     checked = 0
     for row in rows:
         parts = row.split("|")
         name, kind, target = parts[0], parts[1], parts[2]
-        if kind == "command":
-            continue  # round-trips/canaries don't target a single registry container
+        if kind in ("command", "resource"):
+            continue  # round-trips/host backstops don't target a registry container
         host = _target_host(kind, target)
         # resolve_container_host handles sub-container names (signoz-otel-collector ->
         # signoz) via longest -prefix, so the enforcement isn't silently skipped for them.
@@ -84,6 +72,6 @@ def test_infra_probe_specs_env_suffix_matches_registry_prod_only() -> None:
             )
 
     assert checked, "no probe targets resolved to registry services (mapping drift?)"
-    assert not problems, "probe env-suffix disagrees with registry prod_only:\n" + "\n".join(
-        problems
+    assert not problems, (
+        "probe env-suffix disagrees with registry prod_only:\n" + "\n".join(problems)
     )

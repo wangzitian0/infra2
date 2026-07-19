@@ -159,62 +159,16 @@ services:
       OBS_ROUNDTRIP_STATE_FILE: /tmp/observability_roundtrip_probe_state.json
       OBS_ROUNDTRIP_INTERVAL_SECONDS: ${OBS_ROUNDTRIP_INTERVAL_SECONDS:-300}
       OBS_ROUNDTRIP_QUERY_WAIT_SECONDS: ${OBS_ROUNDTRIP_QUERY_WAIT_SECONDS:-30}
-      INFRA_PROBE_SPECS: |
-        dokploy-internal-http|http|http://dokploy:3000|200,302|critical|5||bootstrap/dokploy
-        vault-internal-http|http|http://vault:8200/v1/sys/health|200,429,472,473|critical|5||bootstrap/vault
-        minio-internal-http|http|http://platform-minio${ENV_SUFFIX}:9000/minio/health/live|200|critical|5||platform/minio
-        authentik-internal-http|http|http://platform-authentik-server${ENV_SUFFIX}:9000/-/health/live/|200,204,302|critical|5||platform/authentik
-        prefect-internal-http|http|http://platform-prefect-server${ENV_SUFFIX}:4200/api/health|200|critical|5||platform/prefect
-        # signoz/clickhouse are prod_only (single shared instance; every env ships its data to
-        # prod — see platform/{11.signoz,03.clickhouse}/deploy.py `prod_only = True`). Probe the
-        # prod instance from ALL envs (no ${ENV_SUFFIX}), matching openpanel below. Adding a
-        # -staging suffix targets a host that never exists -> a permanent false-positive alert.
-        signoz-internal-http|http|http://platform-signoz:8080/api/v1/health|200|critical|5||platform/signoz
-        # otel 畅通: the OTLP ingest pipeline itself (collector health_check ext :13133),
-        # distinct from the signoz query svc above. prod_only single instance (no suffix).
-        otel-collector-http|http|http://platform-signoz-otel-collector:13133|200|critical|5||platform/signoz
-        # SigNoz round-trip: write a synthetic OTLP log through the collector, then
-        # query ClickHouse for the same nonce. This proves ingest + storage, not just
-        # process readiness.
-        # depends_on signoz-internal-http (7th field): if SigNoz itself is down the round-trip
-        # also fails — cascade-suppress the round-trip symptom, page the signoz root only.
-        signoz-roundtrip|command|python /app/tools/observability_roundtrip_probe.py signoz|roundtrip-ok|critical|45|signoz-internal-http|platform/signoz
-        alert-bridge-http|http|http://platform-alerting${ENV_SUFFIX}:8080/health|200|critical|5||platform/alerting
-        # lark 畅通: bridge config valid AND Feishu host reachable (TCP 443), checked
-        # without posting to the real channel (see app.py /health/feishu).
-        lark-delivery-http|http|http://platform-alerting${ENV_SUFFIX}:8080/health/feishu|200|critical|5||platform/alerting
-        # NOTE: the 6h real-send `alert-delivery-canary` was retired (#425 T3): it posted a
-        # synthetic *alert* every 6h purely to prove the bridge→Feishu path — a periodic
-        # alert (the anti-pattern #425 forbids). The path is now covered without channel
-        # noise by `lark-delivery-http` (config valid + Feishu reachable, no real post),
-        # the out-of-band watchdog's independent bridge /health check, the daily reports'
-        # own Feishu delivery, and real alerts when they fire.
-        platform-postgres-tcp|tcp|platform-postgres${ENV_SUFFIX}:5432|connected|critical|5||platform/postgres
-        platform-redis-tcp|tcp|platform-redis${ENV_SUFFIX}:6379|connected|critical|5||platform/redis
-        # ClickHouse liveness is no longer probed by a read-only /ping: it stays 200 even
-        # when the data dir is unwritable (read green / write dead). The truthful signals
-        # replace it — op-ch & platform-clickhouse now have WRITE-PATH healthchecks
-        # (unhealthy -> Dokploy restart), and signoz/openpanel-roundtrip are the alert path
-        # (they write+query, so they catch write-broken AND down). A /ping caught neither
-        # better than those, so it is removed rather than kept as dead compensation.
-        op-connect-http|http|http://op-connect-api:8080/health|200|critical|5||bootstrap/1password
-        iac-runner-http|http|http://iac-runner:8080/health|200|warning|5||bootstrap/iac-runner
-        openpanel-api-http|http|http://platform-openpanel-api:3000/healthcheck|200|warning|5||platform/openpanel
-        openpanel-worker-http|http|http://platform-openpanel-worker:3000/healthcheck|200|warning|5||platform/openpanel
-        openpanel-dashboard-http|http|http://platform-openpanel-dashboard:3000/api/healthcheck|200|warning|5||platform/openpanel
-        # OpenPanel round-trip: write a synthetic /track event to the env-specific
-        # finance project, then query OpenPanel ClickHouse for the nonce.
-        # depends_on openpanel-api-http: if the API is down the round-trip cannot write —
-        # cascade-suppress the round-trip, page the api root only.
-        openpanel-roundtrip|command|python /app/tools/observability_roundtrip_probe.py openpanel|roundtrip-ok|warning|45|openpanel-api-http|platform/openpanel
-        # Host resource backstop — out-of-band from SigNoz, so it still fires when
-        # the host is starved (the dockerd-busy-loop class of incident). `expected`
-        # is the % ceiling; reads host-global /proc + the bind-mounted host root.
-        # Runs on the PRODUCTION runner only (the host is shared) — see
-        # infra_probe_runner._host_specs_for_env.
-        host-cpu|resource|cpu|80|warning|5||infra/host
-        host-mem|resource|mem|80|warning|5||infra/host
-        host-disk|resource|disk:/hostfs|80|critical|5||infra/host
+      # Registry-rendered (#541): the probe set is DECLARED as ProbeFacet
+      # attributes on each owning service's deploy.py Deployer class and
+      # aggregated by libs/probe_specs.py::render_probe_spec_text() via
+      # libs/service_registry.py::service_attrs(). AlertingDeployer.
+      # compose_env_base() resolves ${ENV_SUFFIX} and injects the encoded
+      # value into the Dokploy compose env — this reference is the ONLY probe
+      # source here. The pre-migration literal is frozen field-by-field in
+      # libs/tests/fixtures/infra_probe_specs_frozen.txt (permanent
+      # equivalence regression, libs/tests/test_probe_specs_equivalence.py).
+      INFRA_PROBE_SPECS: ${INFRA_PROBE_SPECS:-}
     volumes:
       - secrets:/secrets:ro
       # A dedicated empty host dir (Docker auto-creates it). statvfs reports usage
