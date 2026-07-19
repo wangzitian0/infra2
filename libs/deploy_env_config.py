@@ -137,16 +137,19 @@ class _ComposeOverride:
 # truealpha/app: version-pinned staging promotion (#500), generalizing the
 # finance_report fixed-compose path. compose_id verified live against the Dokploy API
 # 2026-07-18 (project "truealpha", env "staging", compose "app" -> w4zo_fm9d2PnUY8ULzNO7).
-# prod compose_id is None — the truealpha Dokploy project's `production` environment has
-# no compose yet, and truealpha's sender (truealpha#333) blocks PRODUCTION requests until
-# infra2 evidence support lands; a None compose_id fails closed if that ever changes
-# without this being updated first.
+# prod compose_id verified live 2026-07-19 (project "truealpha", env "production", compose
+# "app" -> j-gIAk0GfF0bGOitZN-og) — first go-live: Vault AppRole + app secret (SEC_USER_AGENT,
+# S3_*) + MinIO bucket provisioned, postgres deployed, app deployed and health-checked at
+# https://truealpha.zitian.party (PRODUCTION_EVIDENCE_POLICIES for the automated cross-repo
+# request flow is still unwired — this compose_id only unblocks the manual deploy_v2 path).
 _APP_COMPOSE_OVERRIDES: dict[str, dict[str, _ComposeOverride]] = {
     "truealpha/app": {
         "staging": _ComposeOverride(
             "w4zo_fm9d2PnUY8ULzNO7", "https://truealpha-staging.{domain}"
         ),
-        "prod": _ComposeOverride(None, "https://truealpha.{domain}"),
+        "prod": _ComposeOverride(
+            "j-gIAk0GfF0bGOitZN-og", "https://truealpha.{domain}"
+        ),
     },
 }
 

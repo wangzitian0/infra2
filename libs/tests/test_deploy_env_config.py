@@ -92,16 +92,16 @@ def test_bespoke_app_compose_targets_includes_registered_overrides():
 
 def test_bespoke_app_compose_targets_skips_unregistered_and_dynamic_entries():
     targets = {(t.service, t.env) for t in ec.bespoke_app_compose_targets()}
-    # truealpha/app prod has compose_id=None (not registered yet) — never a target.
-    assert ("truealpha/app", "prod") not in targets
+    # truealpha/app prod went live 2026-07-19 — now a registered target.
+    assert ("truealpha/app", "prod") in targets
     # preview is dynamic/per-PR — never a fixed target.
     assert ("finance_report/app", "preview") not in targets
 
 
 def test_bespoke_app_compose_targets_count_matches_registered_non_none_entries():
-    # 2 finance_report envs (staging, prod) + 1 truealpha override (staging only,
-    # prod is None) = 3. A drift check silently skipping an entry would under-count.
-    assert len(ec.bespoke_app_compose_targets()) == 3
+    # 2 finance_report envs (staging, prod) + 2 truealpha envs (staging, prod) = 4.
+    # A drift check silently skipping an entry would under-count.
+    assert len(ec.bespoke_app_compose_targets()) == 4
 
 
 # --- preview alias model (multi-alias preview env) -------------------------------

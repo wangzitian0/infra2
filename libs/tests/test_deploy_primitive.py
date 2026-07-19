@@ -103,22 +103,29 @@ def test_truealpha_staging_deploy_resolves_its_own_compose_and_identity():
     # per-image tags.
 
 
-def test_truealpha_prod_has_no_compose_yet_and_fails_closed():
-    # #500 scope: truealpha/app's Dokploy `production` environment has no compose
-    # (verified live 2026-07-18) — deploying there must fail closed, not silently no-op
-    # or fall back to finance_report's prod compose.
+def test_truealpha_prod_deploy_resolves_its_own_compose_and_identity():
+    # truealpha/app's production compose went live 2026-07-19 (Vault AppRole + app
+    # secret + MinIO bucket provisioned, postgres + app deployed and health-checked at
+    # https://truealpha.zitian.party) — mirrors the staging test above, prod env.
     client = FakeDokploy()
-    with pytest.raises(ValueError, match="no Dokploy compose registered"):
-        dp.deploy(
-            "prod",
-            FULL_SHA,
-            domain="zitian.party",
-            client=client,
-            service="truealpha/app",
-            staging_validated=True,
-            iac_ref="b" * 40,
-        )
-    assert client.updated == []  # fails BEFORE any mutation
+    plan = dp.deploy(
+        "prod",
+        FULL_SHA,
+        domain="zitian.party",
+        client=client,
+        service="truealpha/app",
+        staging_validated=True,
+        iac_ref="b" * 40,
+    )
+
+    assert plan.compose_id == "j-gIAk0GfF0bGOitZN-og"
+    cid, env = client.updated[0]
+    assert cid == "j-gIAk0GfF0bGOitZN-og"
+    assert env["NEXT_PUBLIC_APP_URL"] == "https://truealpha.zitian.party"
+    assert env["ENV_SUFFIX"] == ""
+    assert env["INFRA_SERVICE_ID"] == "truealpha/app"
+    assert env["INFRA_ENVIRONMENT"] == "production"
+    assert client.deployed == ["j-gIAk0GfF0bGOitZN-og"]
 
 
 def test_prod_refuses_unvalidated_digest_promote_not_rebuild():

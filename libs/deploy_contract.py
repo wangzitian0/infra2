@@ -118,11 +118,14 @@ SERVICES: dict[str, ServiceSpec] = {
     # generalized). #522: preview/canary now wired too (libs.deploy.preview generalized
     # off a per-service registry — deploy_env_config.preview_service_config; truealpha's
     # own ephemeral-DB template is truealpha/truealpha/preview/compose.yaml). Production
-    # is NOT wired yet: truealpha#333 (closed via PR #334) lifted the sender-side
-    # staging-only restriction — the sender now emits preview/tag, staging, AND prod
-    # requests — but infra2 still has no PRODUCTION_EVIDENCE_POLICIES entry for this
-    # service and no Dokploy prod compose (verified live 2026-07-18: the truealpha
-    # Dokploy project's `production` environment has zero composes). See infra2#522.
+    # went live manually 2026-07-19 (AppRole + secrets + MinIO bucket provisioned,
+    # postgres + app deployed, health-checked at https://truealpha.zitian.party —
+    # compose_id registered in deploy_env_config._APP_COMPOSE_OVERRIDES). The AUTOMATED
+    # cross-repo path is still NOT wired: infra2 has no PRODUCTION_EVIDENCE_POLICIES
+    # entry for this service (verify_production_evidence assumes finance_report's
+    # single-repo/single-workflow model, which does not fit truealpha's delegated-
+    # dispatch architecture) — a manual deploy_v2 invocation is the only supported
+    # path to prod today. See infra2#522.
     _TRUEALPHA_APP_KEY: ServiceSpec(
         key=_TRUEALPHA_APP_KEY,
         base_subdomain="truealpha",
