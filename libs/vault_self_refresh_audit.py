@@ -792,6 +792,8 @@ def inventory_compose_paths() -> set[str]:
 def discover_vault_agent_compose_paths(root: Path = REPO_ROOT) -> set[str]:
     paths: set[str] = set()
     for compose_path in root.rglob("compose*.yaml"):
+        if any(part.startswith(".") for part in compose_path.relative_to(root).parts):
+            continue  # hidden dirs: .venv, .git, .claude worktrees (full repo copies)
         text = compose_path.read_text(encoding="utf-8")
         if re.search(r"(?m)^  vault-agent:", text):
             paths.add(str(compose_path.relative_to(root)))

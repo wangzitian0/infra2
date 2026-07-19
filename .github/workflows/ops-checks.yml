@@ -673,7 +673,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install runtime dependencies
-        run: python -m pip install httpx python-dotenv rich PyYAML
+        run: python -m pip install httpx python-dotenv rich PyYAML invoke
 
       - name: Run facet reconcile
         run: |
@@ -755,7 +755,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install runtime dependencies
-        run: python -m pip install httpx python-dotenv rich PyYAML
+        run: python -m pip install httpx python-dotenv rich PyYAML invoke
 
       - name: Configure SSH key
         env:

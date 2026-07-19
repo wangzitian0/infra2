@@ -144,6 +144,8 @@ def test_workflow_references_point_to_live_workflow_files() -> None:
 
     missing: list[str] = []
     for path in sorted(ROOT.rglob("*")):
+        if any(part.startswith(".") and part != ".github" for part in path.relative_to(ROOT).parts):
+            continue  # hidden dirs (.claude worktrees are full repo copies) — but keep .github
         if not _is_scanned(path):
             continue
         try:

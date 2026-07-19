@@ -63,3 +63,26 @@ def test_main_exits_nonzero_on_any_blocker(monkeypatch):
 
     monkeypatch.setattr(alerting, "deliver_infra2_report", lambda text: True)
     assert fr.main() == 1
+
+
+def test_section_import_failure_degrades_to_blocker(monkeypatch):
+    """v1 live lesson: the first real run crashed whole-runner on a missing
+    dependency inside ONE section's import chain. A section import failure must
+    become that section's blocker; the other sections and the self-proving
+    report delivery must still happen."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def failing_import(name, *args, **kwargs):
+        if name.startswith("tools.dns_drift_report"):
+            raise ModuleNotFoundError("No module named 'invoke'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setenv("CF_API_TOKEN", "x")
+    monkeypatch.setenv("CF_ZONE_ID", "x")
+    monkeypatch.setenv("INTERNAL_DOMAIN", "example.test")
+    monkeypatch.setattr(builtins, "__import__", failing_import)
+    section = fr.run_dns_section()
+    assert section.blockers and "invoke" in section.blockers[0]
+    assert section.confirmed == []  # an import failure is transient-class, never pages
