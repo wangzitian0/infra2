@@ -28,16 +28,14 @@ python -m tools.deploy_v2 --service truealpha/app --type preview/branch --versio
 python -m tools.deploy_v2 --service truealpha/app --type preview/pr --version-ref 5 --iac-ref main --domain zitian.party --down
 ```
 
-## KNOWN GAP: no schema migration on boot
+## Schema migration on boot
 
-Unlike finance_report's preview (`alembic upgrade head` on backend startup), truealpha
-has no in-container migration runner yet — `db/migrations/*.sql` + `db/roles.sql` are
-applied manually from an app-repo checkout today (see `../01.postgres/README.md`: "a
-proper in-container migration runner is planned with the app's Phase 0"). This preview's
-ephemeral `db` therefore boots with **no schema**: vault-agent/Postgres/web/llm all come
-up healthy, but any query touching `raw`/`staging`/`mart` fails. Useful today as a
-deploy-path / image-boot proof; not yet useful for functional preview testing until the
-migration runner exists (track as its own truealpha issue before relying on it further).
+The `llm` service's image bakes in `db/migrations/*.sql` + `db/roles.sql` +
+`db/apply_migrations.sh` (truealpha#428) and this compose's `llm` entrypoint runs it
+against the ephemeral DB before serving — mirroring `Makefile`'s `db-migrate` target's
+exact `psql -v ON_ERROR_STOP=1 -f` semantics. Every alias therefore boots migrated from
+an empty database, the same schema-consistency guarantee finance_report's
+`alembic upgrade head` gives its own preview.
 
 ## One-time LIVE setup (not unit-testable)
 

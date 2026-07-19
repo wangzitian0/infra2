@@ -162,6 +162,10 @@ services:
         # shared staging/prod database. Done AFTER sourcing /secrets/.env so the override
         # always wins; the rest of the Vault secrets (ANTHROPIC_API_KEY, S3) are kept.
         export DATABASE_URL="$$PREVIEW_DATABASE_URL"
+        # Apply db/migrations/*.sql + db/roles.sql (baked into the image, #428) against
+        # the fresh ephemeral DB — this is exactly what closes the "boots with no schema"
+        # gap the README used to flag; every alias now starts migrated from empty.
+        ./db/apply_migrations.sh
         exec uvicorn llm_service.main:app --host 0.0.0.0 --port 8000
     environment:
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
