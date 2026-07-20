@@ -402,6 +402,50 @@ def test_plan_builds_staging_and_production_deploy_v2_args(tmp_path) -> None:
     ]
 
 
+def test_plan_domain_defaults_to_the_passed_in_shared_domain(tmp_path) -> None:
+    """finance_report has no Deployer.domain override — the caller-supplied
+    INTERNAL_DOMAIN (today's behavior for every service before truealpha) flows
+    through unchanged."""
+    plan = receiver.make_plan(
+        payload(),
+        sender="wangzitian0",
+        domain="zitian.party",
+        timeout=600,
+        repo_root=tmp_path,
+        resolve_image=resolved,
+        runner=tags,
+    )
+    assert plan.domain == "zitian.party"
+
+
+def test_plan_domain_is_overridden_by_the_service_registry(tmp_path) -> None:
+    """truealpha/app declares its own domain (Deployer.domain = "truealpha.club") —
+    the plan must use it even when a different shared domain is passed in, so
+    truealpha never silently lands on the platform's shared zitian.party."""
+    truealpha_repo = "wangzitian0/truealpha"
+    plan = receiver.make_plan(
+        payload(
+            service="truealpha/app",
+            source_repository=truealpha_repo,
+            evidence={
+                "source_run_url": f"https://github.com/{truealpha_repo}/actions/runs/100",
+                "source_run_id": "100",
+                "staging_run_url": "",
+                "reviewed_change_url": "",
+            },
+        ),
+        sender="wangzitian0",
+        domain="zitian.party",
+        timeout=600,
+        repo_root=tmp_path,
+        resolve_image=resolved,
+        runner=tags,
+    )
+    assert plan.domain == "truealpha.club"
+    assert "--domain" in plan.deploy_v2_args()
+    assert plan.deploy_v2_args()[plan.deploy_v2_args().index("--domain") + 1] == "truealpha.club"
+
+
 def test_remove_plan_uses_down_without_expected_sha(tmp_path) -> None:
     plan = receiver.make_plan(
         payload(operation="remove", deploy_type="preview/pr", version_ref="42"),

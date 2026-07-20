@@ -98,6 +98,12 @@ class ServiceMeta:
     secrets: tuple[SecretsFacet, ...] = ()
     exemptions: tuple[Exemption, ...] = ()
     deploy_v2_canary: bool = False
+    # Dedicated product domain override (e.g. truealpha/app -> truealpha.club);
+    # None = use whatever shared INTERNAL_DOMAIN the deploy request/caller passes
+    # in (every service until truealpha/app). Kept last, with a default, so
+    # existing ServiceMeta(**kwargs) call sites that predate this field
+    # (tests, fixtures) keep constructing without knowing about it.
+    domain: str | None = None
 
     def exempted(self, check_id: str) -> bool:
         """True if this service explicitly opted out of facet ``check_id``."""
@@ -139,6 +145,7 @@ def _meta_from_deploy_file(
         service=_class_attr(tree, "service") or service_name_dir,
         prod_only=bool(_class_attr(tree, "prod_only") or False),
         subdomain=_class_attr(tree, "subdomain"),
+        domain=_class_attr(tree, "domain"),
         service_port=_class_attr(tree, "service_port"),
         service_name=_class_attr(tree, "service_name"),
         telemetry_service_name=_class_attr(tree, "telemetry_service_name"),
@@ -208,6 +215,13 @@ def shared_services() -> set[str]:
 def subdomains() -> dict[str, str]:
     """Service_id -> public subdomain, only for services that declare one."""
     return {m.service_id: m.subdomain for m in service_attrs().values() if m.subdomain}
+
+
+def domain_for_service(service_id: str) -> str | None:
+    """The service's dedicated domain override, or None if it uses the shared
+    INTERNAL_DOMAIN a caller passes in (every service until truealpha/app)."""
+    meta = service_attrs().get(service_id)
+    return meta.domain if meta else None
 
 
 def service_identity(

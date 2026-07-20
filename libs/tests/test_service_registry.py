@@ -37,6 +37,20 @@ def test_reader_extracts_known_deployer_facts() -> None:
     app = attrs["finance_report/app"]
     assert app.telemetry_service_name == "finance-report-backend"
     assert app.telemetry_component == "backend"
+    # finance_report has no dedicated domain — it stays on the shared INTERNAL_DOMAIN
+    # a deploy request passes in, unlike truealpha below.
+    assert app.domain is None
+
+    truealpha_app = attrs["truealpha/app"]
+    # TrueAlpha is an independent product with its own registered domain, not a
+    # shared-platform service (Infra-021: truealpha.club, not zitian.party).
+    assert truealpha_app.domain == "truealpha.club"
+
+
+def test_domain_for_service_returns_override_or_none() -> None:
+    assert reg.domain_for_service("truealpha/app") == "truealpha.club"
+    assert reg.domain_for_service("finance_report/app") is None
+    assert reg.domain_for_service("platform/does-not-exist") is None
 
 
 def test_registry_builds_cross_plane_identity_from_deployer_facts() -> None:
