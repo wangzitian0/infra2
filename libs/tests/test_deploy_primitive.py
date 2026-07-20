@@ -488,9 +488,7 @@ def test_model_overrides_merged_only_when_non_empty():
 def test_preflight_vault_token_skips_when_compose_has_no_token():
     # a compose with no VAULT_APP_TOKEN is left alone (not every compose uses Vault)
     client = FakeDokploy(env_str="IMAGE_TAG=abc\nFOO=bar")
-    dp.preflight_vault_token(
-        client, "cmp", "zitian.party"
-    )  # must not raise / not call vault
+    dp.preflight_vault_token(client, "cmp")  # must not raise / not call vault
 
 
 def test_preflight_vault_token_skips_for_approle_service(monkeypatch):
@@ -505,9 +503,7 @@ def test_preflight_vault_token_skips_for_approle_service(monkeypatch):
     client = FakeDokploy(
         env_str="VAULT_ROLE_ID=role-x\nVAULT_SECRET_ID=secret-y\nVAULT_APP_TOKEN=hvs.stale"
     )
-    dp.preflight_vault_token(
-        client, "cmp", "zitian.party"
-    )  # must not raise / not call vault
+    dp.preflight_vault_token(client, "cmp")  # must not raise / not call vault
 
 
 def test_preflight_vault_token_raises_on_expiring_token(monkeypatch):
@@ -523,7 +519,7 @@ def test_preflight_vault_token_raises_on_expiring_token(monkeypatch):
     )
     client = FakeDokploy(env_str="VAULT_APP_TOKEN=hvs.deadbeef")
     with pytest.raises(RuntimeError, match="VAULT_APP_TOKEN preflight failed"):
-        dp.preflight_vault_token(client, "cmp", "zitian.party")
+        dp.preflight_vault_token(client, "cmp")
 
 
 # --- #290's fixed staging/prod twin: assert_approle_creds_present ----------------

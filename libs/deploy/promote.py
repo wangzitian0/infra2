@@ -180,9 +180,7 @@ def assert_approle_creds_present(service: str, client, compose_id: str) -> None:
         )
 
 
-def preflight_vault_token(
-    client, compose_id: str, domain: str, *, min_ttl_hours: int = 48
-):
+def preflight_vault_token(client, compose_id: str, *, min_ttl_hours: int = 48):
     """Fail closed before deploy if the compose's legacy VAULT_APP_TOKEN is present but
     invalid or expiring within min_ttl_hours. The token is gated only when present — a
     compose with no VAULT_APP_TOKEN is left alone (not every compose uses Vault).
@@ -191,7 +189,13 @@ def preflight_vault_token(
     vestigial VAULT_APP_TOKEN can linger in Dokploy and expire un-renewed, so gating on it
     would hard-block an AppRole deploy that would otherwise clean it up. Reuses the
     class-free libs.env.verify_vault_token. This does NOT auto-repair; it fails closed.
+
+    No caller-supplied domain: the token being verified lives on the ONE shared Vault
+    instance, never a per-service app-routing domain (infra_domain() — #561's general
+    form; this call site was the one #561 didn't cover, since it's phrased as a
+    positional caller-supplied param rather than a URL built inline).
     """
+    from libs.common import infra_domain
     from libs.env import verify_vault_token
 
     env_text = client.get_compose_env(compose_id)
@@ -203,7 +207,7 @@ def preflight_vault_token(
     if not token:
         return  # no token in this compose env -> nothing to gate on
     result = verify_vault_token(
-        token, addr=f"https://vault.{domain}", min_ttl_hours=min_ttl_hours
+        token, addr=f"https://vault.{infra_domain()}", min_ttl_hours=min_ttl_hours
     )
     if not result.get("valid"):
         raise RuntimeError(
@@ -360,11 +364,10 @@ def deploy(
     assert_approle_creds_present(service, client, cfg.compose_id)
 
     # Fail closed BEFORE any mutation if the compose's Vault token can't carry the deploy.
-    # Vault is the ONE shared control-plane instance (infra_domain), never this app's own
-    # routing domain — passing `domain` here would probe a vault.<app-domain> host that
-    # doesn't exist for any service with a domain override (#550/#561).
+    # preflight_vault_token resolves the shared Vault host itself now — no domain param
+    # to get wrong (#550/#561: this app's own routing domain must never reach it).
     if verify_vault:
-        preflight_vault_token(client, cfg.compose_id, infra_domain())
+        preflight_vault_token(client, cfg.compose_id)
 
     # The registry publishes images under the 7-char short sha (`git rev-parse --short`,
     # and the promote path's `${sha:0:7}`); pushing the full 40-char sha as IMAGE_TAG

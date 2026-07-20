@@ -223,6 +223,35 @@ def test_up_env_has_short_sha_suffix_and_ephemeral_db_knobs():
     )
 
 
+def test_up_app_domain_override_does_not_leak_into_the_otel_endpoint():
+    # truealpha/app routes its own public preview traffic under truealpha.club
+    # (Deployer.domain, #550), but SigNoz/OTel is the ONE shared collector
+    # (libs.common.SHARED_PLATFORM_SERVICES) and must never follow that override —
+    # promote.deploy() had this exact leak fixed already; preview.up() carried the same
+    # bug (silently no-op telemetry on a throwaway preview, never observed like
+    # promote's crash-looping prod symptom).
+    client = FakeDokploy(existing=None)
+    pl.up(
+        "commit",
+        "1ab32d5e6f",
+        code="abc1234",
+        service="truealpha/app",
+        domain="truealpha.club",
+        client=client,
+        http_get=_ok_get,
+        iac_ref="b" * 40,
+        _now=lambda: 1000,
+    )
+    _cid, env = client.env_updates[0]
+    # app's OWN routing: follows the override, unchanged.
+    assert env["INTERNAL_DOMAIN"] == "truealpha.club"
+    # shared control plane: NEVER follows the override.
+    assert (
+        env["NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT"]
+        == "https://otel.zitian.party/v1/traces"
+    )
+
+
 def test_up_self_provisions_the_preview_environment():
     # The dynamic preview env is created-if-absent (idempotent) so a first-ever preview on
     # a fresh box needs no out-of-band env-ensure step.

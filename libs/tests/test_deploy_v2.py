@@ -580,7 +580,8 @@ def cli(monkeypatch):
     return rec, json
 
 
-def test_cli_passes_surface_through(cli, capsys):
+def test_cli_passes_surface_through(cli, capsys, monkeypatch):
+    monkeypatch.delenv("INTERNAL_DOMAIN", raising=False)
     rec, json = cli
     rc = dv2.main(
         [
@@ -597,7 +598,9 @@ def test_cli_passes_surface_through(cli, capsys):
     assert rc == 0
     assert rec["deploy_type"] == "staging"
     assert rec["version_ref"] == "main" and rec["iac_ref"] == "main"
-    assert rec["client"] == "client@cloud.zp.io"  # host = cloud.<domain>
+    # Dokploy control-plane host is the ONE shared zone (infra_domain()), never --domain
+    # (the app's own routing domain) — "zp.io" here only ever flows through as rec["domain"].
+    assert rec["client"] == "client@cloud.zitian.party"
     assert rec["image_wait_seconds"] is None
     assert rec["image_poll_seconds"] is None
     out = json.loads(capsys.readouterr().out)
@@ -631,17 +634,19 @@ def test_cli_dokploy_host_ignores_a_per_service_domain_override(cli, monkeypatch
     assert rec["domain"] == "truealpha.club"
 
 
-def test_cli_dokploy_host_falls_back_to_domain_flag_without_internal_domain(
+def test_cli_dokploy_host_falls_back_to_the_known_org_domain_without_internal_domain(
     cli, monkeypatch
 ):
-    # Local/manual runs that don't export INTERNAL_DOMAIN keep today's behavior.
+    # Local/manual runs that don't export INTERNAL_DOMAIN get the same known-good
+    # literal every other INTERNAL_DOMAIN-reading call site falls back to
+    # (infra_domain()) — never the caller's own --domain (that was the #550/#561 bug).
     rec, _json = cli
     monkeypatch.delenv("INTERNAL_DOMAIN", raising=False)
     rc = dv2.main(
         ["--type", "staging", "--version-ref", "main", "--iac-ref", "main", "--domain", "zp.io"]
     )
     assert rc == 0
-    assert rec["client"] == "client@cloud.zp.io"
+    assert rec["client"] == "client@cloud.zitian.party"
 
 
 def test_cli_passes_image_wait_overrides(cli):
@@ -764,6 +769,7 @@ def _fake_down_result(kind, value, *, domain, client):
 def test_cli_down_tears_down_the_selected_preview_alias(monkeypatch, capsys):
     # --down resolves the SAME alias (kind from --type, value from --version-ref) and
     # routes to the preview backend's down(); it never resolves a ref or deploys.
+    monkeypatch.delenv("INTERNAL_DOMAIN", raising=False)
     rec = {}
 
     def fake_down(kind, value, *, domain, client, service):
@@ -800,7 +806,7 @@ def test_cli_down_tears_down_the_selected_preview_alias(monkeypatch, capsys):
         "kind": "pr",
         "value": "5",
         "domain": "zp.io",
-        "client": "client@cloud.zp.io",
+        "client": "client@cloud.zitian.party",
         "service": "finance_report/app",
     }
     out = json.loads(capsys.readouterr().out)
