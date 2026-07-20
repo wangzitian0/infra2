@@ -6,8 +6,15 @@ on:
       - 'bootstrap/**'
       - 'platform/**'
       - 'finance_report/**'
+      - 'repos/finance_report'
       - 'repos/finance_report/**'
       - 'truealpha/**'
+      - 'repos/truealpha'
+      - 'repos/truealpha/**'
+      - 'oh-my-code-agent'
+      - 'oh-my-code-agent/**'
+      - 'repos/infra2-sdk'
+      - 'repos/infra2-sdk/**'
       - 'libs/**'
       - 'tools/**'
       - 'cloudflare/**'
@@ -23,8 +30,15 @@ on:
       - 'bootstrap/**'
       - 'platform/**'
       - 'finance_report/**'
+      - 'repos/finance_report'
       - 'repos/finance_report/**'
       - 'truealpha/**'
+      - 'repos/truealpha'
+      - 'repos/truealpha/**'
+      - 'oh-my-code-agent'
+      - 'oh-my-code-agent/**'
+      - 'repos/infra2-sdk'
+      - 'repos/infra2-sdk/**'
       - 'libs/**'
       - 'tools/**'
       - 'cloudflare/**'
@@ -43,8 +57,66 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # detect-changes runs unconditionally (no path filter of its own) and
+  # every other job below is gated on its has_non_doc output, not on
+  # whether the *workflow* triggered at all. That distinction is the whole
+  # point: a required check whose *job* is skipped via `if:` still reports
+  # a conclusion GitHub's branch protection accepts as satisfying the
+  # requirement, but a required check whose *workflow* never triggers in
+  # the first place never reports anything, and blocks merge forever
+  # waiting on a status that will never arrive -- exactly what happened to
+  # submodule-pointer-only PRs before the path list above included the
+  # bare gitlink paths (oh-my-code-agent, repos/finance_report, etc.),
+  # which never match a `dir/**` glob since a gitlink bump changes that
+  # exact path, never a file beneath it.
+  #
+  # A PR whose entire diff is Markdown doesn't need any of these
+  # infra/deploy/vault gates to run at all -- has_non_doc lets those PRs
+  # skip straight to a passing required-check state instead of waiting on
+  # (or paying for) real compose/vault/deployer validation that a prose-only
+  # change can't affect.
+  detect-changes:
+    name: Detect Non-Doc Changes
+    runs-on: ubuntu-latest
+    outputs:
+      has_non_doc: ${{ steps.check.outputs.has_non_doc }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check whether every changed file is Markdown
+        id: check
+        run: |
+          set -e
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+          fi
+          # A force-push or a branch's first push reports an all-zero
+          # `before` SHA -- there is no real diff to compare, so treat it
+          # as "not doc-only" (run everything) rather than fail the check.
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            echo "has_non_doc=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$base" "$head")
+          echo "Changed files:"
+          echo "$changed"
+          if echo "$changed" | grep -qvE '\.md$'; then
+            echo "has_non_doc=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_non_doc=false" >> "$GITHUB_OUTPUT"
+          fi
+
   validate-compose:
     name: Validate Compose Files
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_non_doc == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -88,6 +160,8 @@ jobs:
 
   harness-check:
     name: Validate Workspace Harness
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_non_doc == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -111,6 +185,8 @@ jobs:
 
   test-deployer-logic:
     name: Test Deployer Hash Logic
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_non_doc == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -290,6 +366,8 @@ jobs:
 
   test-1password-healthcheck:
     name: Test 1Password Healthcheck
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_non_doc == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -309,6 +387,8 @@ jobs:
 
   validate-vault-agent:
     name: Validate Vault Agent Config
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_non_doc == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -363,6 +443,8 @@ jobs:
 
   validate-required-env:
     name: Validate Required-Env Manifest vs secrets.ctmpl
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_non_doc == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -385,6 +467,8 @@ jobs:
 
   validate-vault-policy:
     name: Validate Vault Policy Syntax
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_non_doc == 'true'
     runs-on: ubuntu-latest
     # This job is advisory - vault policy fmt has container issues in GHA
     continue-on-error: true
@@ -423,6 +507,8 @@ jobs:
 
   validate-deployers:
     name: Validate Deployer Classes
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_non_doc == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -529,6 +615,8 @@ jobs:
 
   lint-python:
     name: Lint Python Code
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_non_doc == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

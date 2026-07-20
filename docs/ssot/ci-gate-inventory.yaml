@@ -78,3 +78,17 @@ gates:
     job: harness-check
     blocks_merge: true
     failure_semantics: harness/repos.yaml is internally inconsistent (schema, governance/role mismatch, missing authority file, or an unexpected non-optional uninitialized checkout).
+  - id: infra_ci.detect_changes
+    stage: github_ci.merge_authority
+    task_category: change_detection
+    workflow: .github/workflows/infra-ci.yml
+    job: detect-changes
+    # Not itself one of the 7 required-status-check names in the branch
+    # ruleset, so it cannot directly block merge the way the other gates
+    # above do -- but every other job in this workflow depends on it
+    # (needs: detect-changes) and is skipped, not merely deprioritized, if
+    # it fails, which transitively blocks every gate below. Declared here
+    # (rather than left unregistered) because it IS a real job of a
+    # fully-covered workflow -- the audit's own coverage invariant.
+    blocks_merge: false
+    failure_semantics: The PR-vs-base diff could not be computed (e.g. a force-pushed/rewritten base), so every other infra-ci job that depends on it is skipped rather than run.
