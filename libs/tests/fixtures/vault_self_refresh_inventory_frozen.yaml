@@ -227,3 +227,4 @@ services:
     app_containers:
       - truealpha-dagster-webserver${ENV_SUFFIX}
       - truealpha-dagster-daemon${ENV_SUFFIX}
+      - truealpha-dagster-code-server${ENV_SUFFIX}
