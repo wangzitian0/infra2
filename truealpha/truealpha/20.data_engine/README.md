@@ -1,12 +1,23 @@
 # TrueAlpha Data Engine and Dagster
 
-This service deploys the exact reviewed `truealpha-data-engine` OCI digest as two
+This service deploys the exact reviewed `truealpha-data-engine` OCI digest as three
 runtime roles:
 
 - `dagster-webserver` exposes the Dagster UI on a host-loopback-only port.
 - `dagster-daemon` is the sole recurring-run authority and launches capture runs.
+- `dagster-code-server` is a persistent `dagster api grpc` process serving the
+  `data_engine.dagster_defs` Definitions over a unix socket
+  (`/var/lib/dagster/code-server.sock`). `dagster-webserver`/`dagster-daemon` load
+  it via `--grpc-socket /var/lib/dagster/code-server.sock` instead of each spawning and heartbeat-
+  managing their own local code-server subprocess (the framework default for
+  `-m data_engine.dagster_defs`, which self-terminates ~20s after its last
+  heartbeat and gets respawned — harmless per `dagster.job_ticks` history, but
+  needless churn and a tight safety margin for an always-on deployment). Local/
+  CI/preview compose (`truealpha/docker-compose.yml`) intentionally keeps the
+  lightweight `-m data_engine.dagster_defs` default instead — no extra service to
+  boot, at the cost of the same (there, harmless) churn.
 
-Both roles use the same image digest, isolated environment credentials, the
+All three roles use the same image digest, isolated environment credentials, the
 environment's TrueAlpha Postgres, and a dedicated artifact directory. Dagster
 run/event/schedule metadata is stored in Postgres's `dagster` schema. Staging is
 bounded to the immutable TOPT 20-issuer/21-instrument canary; Production expansion
@@ -14,8 +25,10 @@ requires a separate approved release/scope and remains shadow until graduation.
 
 ## Network Boundary
 
-OpenD listens only on host `127.0.0.1:11111`. The two Dagster roles therefore use
-host networking; no OpenD proxy is created. The Dagster UI also binds only to host
+OpenD listens only on host `127.0.0.1:11111`. All three Dagster roles therefore use
+host networking; no OpenD proxy is created. `dagster-code-server` communicates with
+the other two only over the unix socket on the shared data volume, so it needs no
+published port. The Dagster UI also binds only to host
 loopback (`13001` in Staging, `13002` in Production), has no Traefik route, and is
 reached through an SSH tunnel when needed. Postgres uses its existing loopback ports
 (`15432` Staging, `15433` Production).
@@ -51,10 +64,12 @@ DEPLOY_ENV=staging invoke ta-data_engine.shared.status
 ```bash
 docker inspect -f '{{.Config.Image}}' truealpha-dagster-webserver-staging
 docker inspect -f '{{.Config.Image}}' truealpha-dagster-daemon-staging
+docker inspect -f '{{.Config.Image}}' truealpha-dagster-code-server-staging
 docker exec truealpha-dagster-daemon-staging dagster-daemon liveness-check
+docker exec truealpha-dagster-code-server-staging dagster api grpc-health-check --socket /var/lib/dagster/code-server.sock
 ssh -L 13001:127.0.0.1:13001 <vps>  # then open http://127.0.0.1:13001
 ```
 
-The two image references must be byte-identical and digest-pinned. A missing digest,
-release manifest, approval, source credential, daemon heartbeat, or runtime image match
-blocks deployment.
+The three image references must be byte-identical and digest-pinned. A missing digest,
+release manifest, approval, source credential, daemon heartbeat, code-server health, or
+runtime image match blocks deployment.

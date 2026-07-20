@@ -52,6 +52,7 @@ class DataEngineDeployer(Deployer):
             app_containers=(
                 "truealpha-dagster-webserver${ENV_SUFFIX}",
                 "truealpha-dagster-daemon${ENV_SUFFIX}",
+                "truealpha-dagster-code-server${ENV_SUFFIX}",
             ),
             auth_method="approle",
         ),
@@ -156,6 +157,7 @@ class DataEngineDeployer(Deployer):
         containers = (
             f"truealpha-dagster-webserver{suffix}",
             f"truealpha-dagster-daemon{suffix}",
+            f"truealpha-dagster-code-server{suffix}",
         )
         deadline = time.monotonic() + 90
         last_error = "containers did not expose the promoted image"
