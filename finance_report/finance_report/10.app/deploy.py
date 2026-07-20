@@ -2,7 +2,7 @@ import sys
 
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.console import header, success, info, warning
-from libs.service_facets import SecretsFacet
+from libs.service_facets import PublicRouteFacet, SecretsFacet
 from tools.openpanel_clients import openpanel_env
 
 shared_tasks = sys.modules.get("finance_report.10.app.shared")
@@ -18,6 +18,22 @@ class AppDeployer(Deployer):
     project = "finance_report"
 
     subdomain = None
+
+    # Public routes probed from inside (#543, #209 reversed): TWO registered
+    # signals for this one service — the web root and the API health surface —
+    # matching the Cloudflare watchdog's own split. subdomain override because
+    # this bespoke app's Deployer declares none (routing lives in the compose).
+    public_routes = (
+        PublicRouteFacet(
+            name="finance-report-web-public-route",
+            subdomain="report",
+        ),
+        PublicRouteFacet(
+            name="finance-report-api-public-route",
+            subdomain="report",
+            path="/api/health",
+        ),
+    )
     service_port = 3000
     service_name = "frontend"
     telemetry_service_name = "finance-report-backend"

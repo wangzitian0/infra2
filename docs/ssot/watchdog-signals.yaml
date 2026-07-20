@@ -14,7 +14,7 @@
 #                                test suite rather than one of the three shared
 #                                config sources above -- so it is exempt from
 #                                this audit's owner-specific existence checks
-#                                (see tools/container_breakdown_watch.py,
+#                                (see libs/container_breakdown_watch.py,
 #                                tools/vault_self_refresh_audit_check.py).
 #
 # `tier` (minute|hour|day|month) + `type` (alert|report) -- #425 T5.
@@ -36,7 +36,7 @@
 # what distinguishes a real failure from a transient blip. That makes
 # slow!=dead a structural rule, not per-check luck." It exists because this
 # codebase shipped that exact bug TWICE independently before the rule existed
-# -- tools/container_breakdown_watch.py (#475, 333 firing/resolved pairs in
+# -- libs/container_breakdown_watch.py (#475, 333 firing/resolved pairs in
 # 48h from un-debounced flapping) and libs/vault_self_refresh_audit.py (#531,
 # four separate instances of a check with no time-window semantics). The
 # pre-existing free-text `alert_threshold: "3 consecutive failures"` field on
@@ -59,375 +59,22 @@ owners:
   - excluded
   - self
 signals:
-  - signal_id: production.dokploy.internal-http
-    environment: production
-    component: dokploy
-    signal: dokploy-internal-http
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-    retry_count: 2
-    renotify_window_sec: 3600
-    failure_domain_whitelist: [host-reachability, network, resource]
-    expected_sla_pct: 99.9
-
-  - signal_id: staging.dokploy.internal-http
-    environment: staging
-    component: dokploy
-    signal: dokploy-internal-http
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: production.vault.internal-http
-    environment: production
-    component: vault
-    signal: vault-internal-http
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-    expected: "200,429,472,473"
-
-  - signal_id: staging.vault.internal-http
-    environment: staging
-    component: vault
-    signal: vault-internal-http
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-    expected: "200,429,472,473"
-
-  - signal_id: production.minio.internal-http
-    environment: production
-    component: minio
-    signal: minio-internal-http
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: staging.minio.internal-http
-    environment: staging
-    component: minio
-    signal: minio-internal-http
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: production.authentik.internal-http
-    environment: production
-    component: authentik
-    signal: authentik-internal-http
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: staging.authentik.internal-http
-    environment: staging
-    component: authentik
-    signal: authentik-internal-http
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: production.signoz.internal-http
-    environment: production
-    component: signoz
-    signal: signoz-internal-http
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: staging.signoz.internal-http
-    environment: staging
-    component: signoz
-    signal: signoz-internal-http
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: production.alerting.bridge-http
-    environment: production
-    component: alerting
-    signal: alert-bridge-http
-    primary_owner: internal
-    secondary_owner: github
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: staging.alerting.bridge-http
-    environment: staging
-    component: alerting
-    signal: alert-bridge-http
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: production.postgres.tcp
-    environment: production
-    component: postgres
-    signal: platform-postgres-tcp
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: staging.postgres.tcp
-    environment: staging
-    component: postgres
-    signal: platform-postgres-tcp
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: production.redis.tcp
-    environment: production
-    component: redis
-    signal: platform-redis-tcp
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: staging.redis.tcp
-    environment: staging
-    component: redis
-    signal: platform-redis-tcp
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  # ClickHouse liveness is no longer a read-only /ping probe: it stayed green on an
-  # unwritable data dir (read green / write dead). Replaced by a WRITE-PATH healthcheck
-  # (op-ch & platform-clickhouse compose -> unhealthy -> Dokploy restart) plus the
-  # signoz/openpanel-roundtrip signals (write+query) as the alert path.
-
-  # Host resource backstop (out-of-band from SigNoz). Production runner only —
-  # the host is shared, so it is checked once. expected = % ceiling.
-  - signal_id: production.host.cpu
-    environment: production
-    component: host
-    signal: host-cpu
-    primary_owner: internal
-    severity: warning
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-    expected: "<=80% CPU"
-
-  - signal_id: production.host.mem
-    environment: production
-    component: host
-    signal: host-mem
-    primary_owner: internal
-    severity: warning
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-    expected: "<=80% memory"
-
-  - signal_id: production.host.disk
-    environment: production
-    component: host
-    signal: host-disk
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-    expected: "<=80% disk"
-
-  - signal_id: production.1password.internal-http
-    environment: production
-    component: 1password-connect
-    signal: op-connect-http
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: staging.1password.internal-http
-    environment: staging
-    component: 1password-connect
-    signal: op-connect-http
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: production.iac_runner.internal-http
-    environment: production
-    component: iac-runner
-    signal: iac-runner-http
-    primary_owner: internal
-    severity: warning
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: staging.iac_runner.internal-http
-    environment: staging
-    component: iac-runner
-    signal: iac-runner-http
-    primary_owner: internal
-    severity: warning
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  # Derived identity for every entry below is validated against the service
-  # registry and the eighth INFRA_PROBE_SPECS field by the consistency audit.
-  - signal_id: production.prefect.internal-http
-    environment: production
-    component: prefect
-    signal: prefect-internal-http
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: staging.prefect.internal-http
-    environment: staging
-    component: prefect
-    signal: prefect-internal-http
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: production.signoz.otel-collector-http
-    environment: production
-    component: signoz
-    signal: otel-collector-http
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: staging.signoz.otel-collector-http
-    environment: staging
-    component: signoz
-    signal: otel-collector-http
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: production.signoz.roundtrip
-    environment: production
-    component: signoz
-    signal: signoz-roundtrip
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: staging.signoz.roundtrip
-    environment: staging
-    component: signoz
-    signal: signoz-roundtrip
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: production.alerting.lark-delivery-http
-    environment: production
-    component: alerting
-    signal: lark-delivery-http
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: staging.alerting.lark-delivery-http
-    environment: staging
-    component: alerting
-    signal: lark-delivery-http
-    primary_owner: internal
-    severity: critical
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: production.openpanel.api-http
-    environment: production
-    component: openpanel
-    signal: openpanel-api-http
-    primary_owner: internal
-    severity: warning
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: staging.openpanel.api-http
-    environment: staging
-    component: openpanel
-    signal: openpanel-api-http
-    primary_owner: internal
-    severity: warning
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: production.openpanel.worker-http
-    environment: production
-    component: openpanel
-    signal: openpanel-worker-http
-    primary_owner: internal
-    severity: warning
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: staging.openpanel.worker-http
-    environment: staging
-    component: openpanel
-    signal: openpanel-worker-http
-    primary_owner: internal
-    severity: warning
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: production.openpanel.dashboard-http
-    environment: production
-    component: openpanel
-    signal: openpanel-dashboard-http
-    primary_owner: internal
-    severity: warning
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: staging.openpanel.dashboard-http
-    environment: staging
-    component: openpanel
-    signal: openpanel-dashboard-http
-    primary_owner: internal
-    severity: warning
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: production.openpanel.roundtrip
-    environment: production
-    component: openpanel
-    signal: openpanel-roundtrip
-    primary_owner: internal
-    severity: warning
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
-
-  - signal_id: staging.openpanel.roundtrip
-    environment: staging
-    component: openpanel
-    signal: openpanel-roundtrip
-    primary_owner: internal
-    severity: warning
-    cadence: 60s
-    alert_threshold: 3 consecutive failures
+  # ── internal plane: GENERATED, do not hand-write entries here (#543) ──
+  # Every `primary_owner: internal` entry is DERIVED from the ProbeFacet +
+  # SignalFacet declarations on each service's deploy.py Deployer by
+  # libs/watchdog_signal_entries.py::render_internal_signal_entries();
+  # tools/watchdog_consistency_audit.py merges the derived entries into this
+  # inventory at load time. Declaring a probe registers its signal — there is
+  # no second list to keep in sync. The pre-#543 handwritten section is frozen
+  # at libs/tests/fixtures/watchdog_internal_signals_frozen.yaml and
+  # libs/tests/test_watchdog_signal_entries.py proves the derivation stays
+  # field-level equivalent to it.
+  #
+  # ClickHouse liveness is deliberately NOT probed read-only: /ping stayed
+  # green on an unwritable data dir (read green / write dead). It is covered
+  # by a WRITE-PATH healthcheck (op-ch & platform-clickhouse compose ->
+  # unhealthy -> Dokploy restart) plus the signoz/openpanel-roundtrip signals
+  # (write+query) as the alert path.
 
   - signal_id: production.dokploy.public-route
     environment: production
@@ -643,22 +290,16 @@ signals:
     severity: critical
     cadence: 1d
 
-  - signal_id: global.infra2-dokploy-route-canary.github
-    environment: global
-    component: dokploy
-    signal: infra2-dokploy-route-canary
-    primary_owner: github
-    severity: critical
-    cadence: 1d
-
   # Container-breakdown watch (#425 T5 registration; #475 is the debounce this
-  # entry declares). In-process sidecar --
-  # platform/12.alerting/compose.yaml `container-breakdown-watch` running
-  # tools/container_breakdown_watch.py --loop -- polling the Docker socket every
+  # entry declares). Watcher PLUGIN inside the single resident alerting sidecar
+  # (#543): libs/container_breakdown_watch.py running inside
+  # tools/infra_probe_runner.py --loop (compose service `infra-probe-runner`,
+  # container platform-alerting-probes) -- polling the Docker socket every
   # BREAKDOWN_INTERVAL_SECONDS=60s and paging Feishu directly (no separate
-  # out-of-band watchdog verifies it, hence primary_owner=self). tier=minute/
-  # type=alert: a crash-looping container hurts users within minutes. The
-  # consecutive_failures/renotify_window_sec below are
+  # out-of-band watchdog verifies it, hence primary_owner=self; the merged
+  # sidecar's state-file healthcheck + probe heartbeat cover its liveness).
+  # tier=minute/type=alert: a crash-looping container hurts users within
+  # minutes. The consecutive_failures/renotify_window_sec below are
   # libs.recency.evaluate_consecutive_hysteresis's fire thresholds -- exactly the
   # debounce whose ABSENCE caused #475 (333 firing/resolved pairs in 48h from a
   # single flapping container, each wrongly resetting the renotify clock).
@@ -675,6 +316,31 @@ signals:
     renotify_window_sec: 1800 # BREAKDOWN_RENOTIFY_SECONDS
     recovery_threshold: 5 # BREAKDOWN_RECOVERY_THRESHOLD (consecutive healthy polls to resolve; not a mandatory field, kept for completeness)
     alert_threshold: 3 consecutive broken polls (~3 minutes at 60s cadence)
+
+  # Deploy-queue guard (#543 single-sidecar merge — this registration redeems
+  # the #542 lint exemption that deferred it). Watcher PLUGIN inside the same
+  # resident sidecar: libs/deploy_queue_guard.py inside
+  # tools/infra_probe_runner.py --loop, sweeping Dokploy's deployment records
+  # every DEPLOY_GUARD_INTERVAL_SECONDS=60s and paging Feishu directly
+  # (primary_owner=self). environment=global: the guard watches the whole
+  # shared Dokploy control plane (every project/env) from each runner.
+  # consecutive_failures=1 is honest, not lax: a deploy only qualifies once it
+  # has been `running` past DEPLOY_GUARD_CEILING_SECONDS (1800s) — the ceiling
+  # IS the debounce (a 30-minute-sustained state cannot be a transient blip),
+  # so the first qualifying sweep fires and renotify_window_sec suppresses
+  # repeats (per compose_id) for the incident's lifetime.
+  - signal_id: global.dokploy.deploy-queue-guard
+    environment: global
+    component: dokploy
+    signal: deploy-queue-guard
+    primary_owner: self
+    severity: critical
+    cadence: 60s
+    tier: minute
+    type: alert
+    consecutive_failures: 1 # ceiling-qualified (DEPLOY_GUARD_CEILING_SECONDS=1800 is the real debounce)
+    renotify_window_sec: 1800 # DEPLOY_GUARD_RENOTIFY_SECONDS
+    alert_threshold: one sweep observing a deploy running past the 1800s ceiling
 
   # Vault self-refresh audit (#425 T5 registration; #531 is the recency-window
   # investigation this check exists to close). Daily GitHub Actions job --

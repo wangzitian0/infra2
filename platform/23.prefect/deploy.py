@@ -7,7 +7,7 @@ from libs.common import with_env_suffix
 from libs.env import VAULT_ROOT_TOKEN_OP_REF
 from libs.console import success, info, fatal
 from libs.env import get_secrets
-from libs.service_facets import ProbeFacet, SecretsFacet
+from libs.service_facets import ProbeFacet, SecretsFacet, SignalFacet
 
 shared_tasks = sys.modules.get("platform.23.prefect.shared")
 
@@ -31,6 +31,20 @@ class PrefectDeployer(Deployer):
             kind="http",
             target="http://platform-prefect-server${ENV_SUFFIX}:4200/api/health",
             expected="200",
+        ),
+    )
+    # Signal classification (#425 T5 / #543): every probe above is a
+    # minute-tier alert debounced by the probe runner's shared loop —
+    # DEFAULT_FAILURE_THRESHOLD=3 / DEFAULT_RENOTIFY_SECONDS=1800
+    # (tools/infra_probe_runner.py). watchdog-signals entries derive from this
+    # (libs/watchdog_signal_entries.py); the values here must state what the
+    # runner actually does, not an aspiration.
+    signals = (
+        SignalFacet(
+            tier="minute",
+            type="alert",
+            consecutive_failures=3,
+            renotify_window_sec=1800,
         ),
     )
 

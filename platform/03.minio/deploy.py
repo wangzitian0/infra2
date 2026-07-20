@@ -11,7 +11,13 @@ import sys
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.env import generate_password
 from libs.console import header, success, error, warning, info, env_vars
-from libs.service_facets import BackupFacet, ProbeFacet, SecretsFacet
+from libs.service_facets import (
+    PublicRouteFacet,
+    BackupFacet,
+    ProbeFacet,
+    SecretsFacet,
+    SignalFacet,
+)
 
 shared_tasks = sys.modules.get("platform.03.minio.shared")
 
@@ -40,6 +46,20 @@ class MinioDeployer(Deployer):
             expected="200",
         ),
     )
+    # Signal classification (#425 T5 / #543): every probe above is a
+    # minute-tier alert debounced by the probe runner's shared loop —
+    # DEFAULT_FAILURE_THRESHOLD=3 / DEFAULT_RENOTIFY_SECONDS=1800
+    # (tools/infra_probe_runner.py). watchdog-signals entries derive from this
+    # (libs/watchdog_signal_entries.py); the values here must state what the
+    # runner actually does, not an aspiration.
+    signals = (
+        SignalFacet(
+            tier="minute",
+            type="alert",
+            consecutive_failures=3,
+            renotify_window_sec=1800,
+        ),
+    )
 
     # Vault self-refresh facts (#542): the audit inventory derives from this
     # (AppRole auth per #257/#259).
@@ -53,6 +73,14 @@ class MinioDeployer(Deployer):
 
     # Domain configuration for Dokploy (Console)
     subdomain = "minio"  # minio.{INTERNAL_DOMAIN} -> Console
+
+    # Public route probed from inside (#543, #209 reversed).
+    public_routes = (
+        PublicRouteFacet(
+            name="minio-public-route",
+            path="/minio/health/live",
+        ),
+    )
     service_port = 9001  # MinIO Console port
     service_name = "minio"
 

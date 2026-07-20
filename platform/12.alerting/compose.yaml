@@ -125,6 +125,10 @@ services:
     labels:
       - "traefik.enable=false"
 
+  # The SINGLE resident sidecar (#543): probe loop + ALL watcher plugins
+  # (container-breakdown watch, deploy-queue guard — formerly two separate
+  # services below, deleted in the #543 merge) in one low-footprint process.
+  # See tools/infra_probe_runner.py + libs/resident_watchers.py.
   infra-probe-runner:
     image: platform-alerting-feishu-bridge:${IAC_CONFIG_HASH:-latest}
     container_name: platform-alerting-probes${ENV_SUFFIX}
@@ -132,11 +136,20 @@ services:
     depends_on:
       - feishu-alert-bridge
     command: ["python", "/app/tools/infra_probe_runner.py", "--loop"]
+    # Resource budget (ops.standards §5.2): observed live RSS of the three
+    # pre-merge processes summed ≈ 80MiB (probes ~20 + breakdown ~26 + guard
+    # ~36, 2026-07-20 docker stats); 256m is a ceiling comfortably above the
+    # observed peak (never set it below peak — OOM loops are worse than no
+    # limit). cpu_shares 512: the monitor competes below prod workloads.
+    mem_limit: ${PROBE_RUNNER_MEM_LIMIT:-256m}
+    cpu_shares: 512
     healthcheck:
-      # The loop rewrites the state file every cycle; if it has not been touched within
-      # ~2x the interval, the probe loop is hung/dead. The runner had NO healthcheck, so a
-      # hung loop went undetected — a real false-negative (the "monitor is a black box"
-      # root). Now a hung runner goes unhealthy -> Dokploy restarts it.
+      # The loop refreshes the state file every cycle (liveness-first touch at
+      # iteration start + rewrite after probes); if it has not been touched
+      # within ~2x the interval, the loop is hung/dead — including a hang in a
+      # WATCHER plugin, since the watchers run inside the same loop (#543;
+      # closes #163's sidecar gap: the old breakdown/guard sidecars had no
+      # healthcheck at all). A hung runner goes unhealthy -> Dokploy restart.
       test:
         - CMD-SHELL
         - "find /tmp/infra_probe_runner_state.json -mmin -2 | grep -q . || exit 1"
@@ -145,6 +158,9 @@ services:
       retries: 3
       start_period: 90s
     environment:
+      # ENV gates the prod-only breakdown watcher AND labels probe alert
+      # payloads with the runner's real environment.
+      ENV: ${ENV:-production}
       ALERT_BRIDGE_URL: http://platform-alerting${ENV_SUFFIX}:8080/signoz/webhook
       ALERTING_ENV_FILE: /secrets/.env
       INFRA_PROBE_INTERVAL_SECONDS: ${INFRA_PROBE_INTERVAL_SECONDS:-60}
@@ -169,8 +185,39 @@ services:
       # libs/tests/fixtures/infra_probe_specs_frozen.txt (permanent
       # equivalence regression, libs/tests/test_probe_specs_equivalence.py).
       INFRA_PROBE_SPECS: ${INFRA_PROBE_SPECS:-}
+      # #543 (#209 reversed): registry-rendered public-route probes; empty only
+      # when no service declares one
+      PUBLIC_ROUTE_PROBE_SPECS: ${PUBLIC_ROUTE_PROBE_SPECS:-}
+      # --- watcher plugin: deploy-queue guard (#543 merge; env names kept
+      # verbatim from the deleted deploy-queue-guard service for continuity).
+      # Observe deploys stuck `running` past the ceiling via Dokploy's API and
+      # alert; opt-in remediation kills them through Dokploy's own
+      # compose.killBuild/cancelDeployment/cleanQueues (never raw Redis).
+      # Remediation is OFF by default — set DEPLOY_GUARD_REMEDIATE=1 to arm it.
+      DOKPLOY_URL: ${DOKPLOY_URL:-http://dokploy:3000/api}
+      DEPLOY_GUARD_CEILING_SECONDS: ${DEPLOY_GUARD_CEILING_SECONDS:-1800}
+      DEPLOY_GUARD_INTERVAL_SECONDS: ${DEPLOY_GUARD_INTERVAL_SECONDS:-60}
+      DEPLOY_GUARD_REMEDIATE: ${DEPLOY_GUARD_REMEDIATE:-0}
+      DEPLOY_GUARD_GRACE_SECONDS: ${DEPLOY_GUARD_GRACE_SECONDS:-20}
+      DEPLOY_GUARD_RENOTIFY_SECONDS: ${DEPLOY_GUARD_RENOTIFY_SECONDS:-1800}
+      # --- watcher plugin: container-breakdown watch (#543 merge; env names
+      # kept verbatim from the deleted container-breakdown-watch service).
+      # Alerts when ANY container is crash-looping/unhealthy WITH the cause
+      # pulled from its logs. prod-only singleton: the watcher reads the whole
+      # shared Docker engine, so only the prod runner's plugin sweeps (the
+      # staging plugin idles — see libs/container_breakdown_watch.py).
+      # Flap hysteresis (#475): consecutive-poll thresholds before
+      # firing/resolving.
+      BREAKDOWN_INTERVAL_SECONDS: ${BREAKDOWN_INTERVAL_SECONDS:-60}
+      BREAKDOWN_RENOTIFY_SECONDS: ${BREAKDOWN_RENOTIFY_SECONDS:-1800}
+      BREAKDOWN_FAILURE_THRESHOLD: ${BREAKDOWN_FAILURE_THRESHOLD:-3}
+      BREAKDOWN_RECOVERY_THRESHOLD: ${BREAKDOWN_RECOVERY_THRESHOLD:-5}
+      BREAKDOWN_LOG_TAIL: ${BREAKDOWN_LOG_TAIL:-25}
     volumes:
       - secrets:/secrets:ro
+      # Read-only Docker socket for the breakdown watcher plugin: reads
+      # container state + log tails; never writes/execs.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
       # A dedicated empty host dir (Docker auto-creates it). statvfs reports usage
       # of the FILESYSTEM BACKING this dir — on this single-root-partition host
       # that is the host root (incl. /var/lib/docker, where a runaway writer fills
@@ -178,76 +225,6 @@ services:
       # (SSH keys/configs). Read-only. If /var is split out on some host, point
       # this at a path on the filesystem you want to watch.
       - /var/lib/infra2-disk-probe:/hostfs:ro
-    networks:
-      - dokploy-network
-    logging:
-      driver: json-file
-      options:
-        max-size: "5m"
-        max-file: "2"
-    labels:
-      - "traefik.enable=false"
-
-  # Deploy-queue guard sidecar: observe deploys stuck `running` past the ceiling
-  # via Dokploy's API and alert; opt-in remediation kills them through Dokploy's
-  # own compose.killBuild/cancelDeployment/cleanQueues (never raw Redis).
-  # Remediation is OFF by default — set DEPLOY_GUARD_REMEDIATE=1 to arm it.
-  deploy-queue-guard:
-    image: platform-alerting-feishu-bridge:${IAC_CONFIG_HASH:-latest}
-    container_name: platform-alerting-deploy-guard${ENV_SUFFIX}
-    restart: unless-stopped
-    depends_on:
-      - feishu-alert-bridge
-    command: ["python", "/app/tools/deploy_queue_guard.py", "--loop"]
-    environment:
-      DOKPLOY_URL: ${DOKPLOY_URL:-http://dokploy:3000/api}
-      ALERT_BRIDGE_URL: http://platform-alerting${ENV_SUFFIX}:8080/signoz/webhook
-      ALERTING_ENV_FILE: /secrets/.env
-      DEPLOY_GUARD_CEILING_SECONDS: ${DEPLOY_GUARD_CEILING_SECONDS:-1800}
-      DEPLOY_GUARD_INTERVAL_SECONDS: ${DEPLOY_GUARD_INTERVAL_SECONDS:-60}
-      DEPLOY_GUARD_REMEDIATE: ${DEPLOY_GUARD_REMEDIATE:-0}
-      DEPLOY_GUARD_GRACE_SECONDS: ${DEPLOY_GUARD_GRACE_SECONDS:-20}
-      DEPLOY_GUARD_RENOTIFY_SECONDS: ${DEPLOY_GUARD_RENOTIFY_SECONDS:-1800}
-    volumes:
-      - secrets:/secrets:ro
-    networks:
-      - dokploy-network
-    logging:
-      driver: json-file
-      options:
-        max-size: "5m"
-        max-file: "2"
-    labels:
-      - "traefik.enable=false"
-
-  # Container-breakdown watch: alert when ANY container is crash-looping /
-  # unhealthy, WITH the cause pulled from its logs (e.g. missing Vault creds).
-  # The HTTP probes catch "service down"; this catches "down BECAUSE x" — the
-  # signal that was missing during the finance_report Vault outage. Read-only
-  # docker.sock to read container state + log tails; never writes/execs.
-  container-breakdown-watch:
-    image: platform-alerting-feishu-bridge:${IAC_CONFIG_HASH:-latest}
-    container_name: platform-alerting-breakdown-watch${ENV_SUFFIX}
-    restart: unless-stopped
-    depends_on:
-      - feishu-alert-bridge
-    command: ["python", "/app/tools/container_breakdown_watch.py", "--loop"]
-    environment:
-      # prod-only singleton: the watcher reads the whole shared Docker engine, so only
-      # the prod copy sweeps (non-prod copies no-op — see container_breakdown_watch.main).
-      ENV: ${ENV:-production}
-      ALERT_BRIDGE_URL: http://platform-alerting${ENV_SUFFIX}:8080/signoz/webhook
-      ALERTING_ENV_FILE: /secrets/.env
-      BREAKDOWN_INTERVAL_SECONDS: ${BREAKDOWN_INTERVAL_SECONDS:-60}
-      BREAKDOWN_RENOTIFY_SECONDS: ${BREAKDOWN_RENOTIFY_SECONDS:-1800}
-      # Flap hysteresis (#475): consecutive-poll thresholds before firing/resolving.
-      # See tools/container_breakdown_watch.py's module docstring for the reasoning.
-      BREAKDOWN_FAILURE_THRESHOLD: ${BREAKDOWN_FAILURE_THRESHOLD:-3}
-      BREAKDOWN_RECOVERY_THRESHOLD: ${BREAKDOWN_RECOVERY_THRESHOLD:-5}
-      BREAKDOWN_LOG_TAIL: ${BREAKDOWN_LOG_TAIL:-25}
-    volumes:
-      - secrets:/secrets:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - dokploy-network
     logging:

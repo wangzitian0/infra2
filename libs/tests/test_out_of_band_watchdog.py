@@ -7,7 +7,6 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import yaml
 
@@ -33,7 +32,10 @@ def test_workflow_runs_daily_and_can_be_dispatched() -> None:
 
     assert {"cron": "17 2 * * *"} in workflow["on"]["schedule"]
     assert "workflow_dispatch" in workflow["on"]
-    assert "out-of-band-watchdog" in workflow["on"]["workflow_dispatch"]["inputs"]["task"]["options"]
+    assert (
+        "out-of-band-watchdog"
+        in workflow["on"]["workflow_dispatch"]["inputs"]["task"]["options"]
+    )
     assert "ssh_targets_override" in workflow["on"]["workflow_dispatch"]["inputs"]
     assert workflow["permissions"] == {
         "contents": "read",
@@ -55,17 +57,6 @@ def test_workflow_alerts_directly_and_does_not_call_the_bridge() -> None:
     assert "/signoz/webhook" not in text
     assert "tools/out_of_band_watchdog.py" in text
     assert "inputs.ssh_targets_override" in text
-
-
-def test_workflow_configures_dokploy_route_canary_signal() -> None:
-    """Infra-011.9: out-of-band watchdog also probes Dokploy route liveness."""
-    text = WORKFLOW.read_text(encoding="utf-8")
-
-    assert "DOKPLOY_API_KEY" in text
-    assert "DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID" in text
-    assert "DOKPLOY_ROUTE_CANARY_DOKPLOY_HOST" in text
-    assert "DOKPLOY_ROUTE_CANARY_TIMEOUT_SECONDS" in text
-    assert "python -m pip install httpx python-dotenv rich" in text
 
 
 def test_default_targets_cover_public_host_and_bridge_health() -> None:
@@ -237,168 +228,6 @@ def test_worker_status_check_reports_last_run_failure_context(monkeypatch) -> No
     ]
 
 
-def test_dokploy_route_canary_check_fails_closed_without_config() -> None:
-    """Infra-011.9: missing canary config is an alert, not a silent gap."""
-    watchdog = _load_watchdog()
-
-    assert watchdog.run_dokploy_route_canary_check({}, ssh_config=None) == [
-        watchdog.CheckResult(
-            "infra2-dokploy-route-canary",
-            False,
-            "DOKPLOY_API_KEY is missing",
-            "configuration",
-        )
-    ]
-    assert watchdog.run_dokploy_route_canary_check(
-        {"DOKPLOY_API_KEY": "secret"},
-        ssh_config=None,
-    ) == [
-        watchdog.CheckResult(
-            "infra2-dokploy-route-canary",
-            False,
-            "DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID is missing",
-            "configuration",
-        )
-    ]
-
-
-def test_dokploy_route_canary_check_uses_run_scoped_default_host_and_compose() -> None:
-    """Infra-011.9: default OOB canaries must not overwrite another run's labels."""
-    watchdog = _load_watchdog()
-    captured = {}
-
-    def fake_runner(config, client):
-        captured["config"] = config
-        captured["client"] = client
-        return SimpleNamespace(
-            status="pass",
-            failure_domain="",
-            compose_id="cmp-canary",
-            public_url=f"https://{config.host}",
-            steps=[],
-        )
-
-    results = watchdog.run_dokploy_route_canary_check(
-        {
-            "DOKPLOY_API_KEY": "secret",
-            "DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID": "env-1",
-            "GITHUB_RUN_ID": "123",
-        },
-        ssh_config=None,
-        runner=fake_runner,
-        client_factory=lambda *, host: {"host": host},
-    )
-
-    assert results == [
-        watchdog.CheckResult(
-            "infra2-dokploy-route-canary",
-            True,
-            (
-                "status=pass failure_domain=none compose_id=cmp-canary "
-                "public_url=https://route-canary-watchdog.zitian.party"
-            ),
-        )
-    ]
-    assert captured["config"].host == "route-canary-watchdog.zitian.party"
-    assert captured["config"].compose_name == "dokploy-route-canary-watchdog"
-    assert captured["config"].nonce == "123"
-    assert captured["config"].repair_stale_compose is True
-
-
-def test_dokploy_route_canary_check_reports_worker_failure_domain() -> None:
-    """Infra-011.9: worker/deployment-record failures page through watchdog."""
-    watchdog = _load_watchdog()
-    captured = {}
-
-    def fake_runner(config, client):
-        captured["config"] = config
-        captured["client"] = client
-        return SimpleNamespace(
-            status="fail",
-            failure_domain="dokploy-worker-or-deployment-record",
-            compose_id="cmp-canary",
-            public_url="https://route-canary.example.com",
-            steps=[
-                SimpleNamespace(
-                    name="deployment-record",
-                    status="fail",
-                    detail="deploy request did not produce a new record",
-                )
-            ],
-        )
-
-    def fake_client_factory(*, host):
-        captured["host"] = host
-        return object()
-
-    results = watchdog.run_dokploy_route_canary_check(
-        {
-            "DOKPLOY_API_KEY": "secret",
-            "DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID": "env-1",
-            "DOKPLOY_ROUTE_CANARY_HOST": "route-canary.example.com",
-            "DOKPLOY_ROUTE_CANARY_TIMEOUT_SECONDS": "30",
-            "GITHUB_RUN_ID": "123",
-        },
-        ssh_config=watchdog.SshConfig(
-            host="vps.example.com",
-            user="root",
-            port=22,
-            key_path="/tmp/key",
-        ),
-        runner=fake_runner,
-        client_factory=fake_client_factory,
-    )
-
-    assert results == [
-        watchdog.CheckResult(
-            "infra2-dokploy-route-canary",
-            False,
-            (
-                "status=fail failure_domain=dokploy-worker-or-deployment-record "
-                "compose_id=cmp-canary public_url=https://route-canary.example.com "
-                "failed_steps=deployment-record:fail:deploy request did not produce a new record"
-            ),
-            "dokploy-worker-or-deployment-record",
-        )
-    ]
-    assert captured["host"] == "cloud.zitian.party"
-    assert captured["config"].ssh_host == "vps.example.com"
-    assert captured["config"].compose_name == "dokploy-route-canary-watchdog"
-    assert captured["config"].timeout_seconds == 30
-
-
-def test_dokploy_route_canary_check_uses_stable_default_name_and_timeout() -> None:
-    """Infra-011.9: OOB canary defaults match the stable guarded test asset."""
-    watchdog = _load_watchdog()
-    captured = {}
-
-    def fake_runner(config, client):
-        captured["config"] = config
-        captured["client"] = client
-        return SimpleNamespace(
-            status="pass",
-            failure_domain="",
-            compose_id="cmp-canary",
-            public_url="https://route-canary-watchdog.zitian.party",
-            steps=[],
-        )
-
-    results = watchdog.run_dokploy_route_canary_check(
-        {
-            "DOKPLOY_API_KEY": "secret",
-            "DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID": "env-1",
-        },
-        ssh_config=None,
-        runner=fake_runner,
-        client_factory=lambda *, host: object(),
-    )
-
-    assert results[0].ok is True
-    assert captured["config"].host == "route-canary-watchdog.zitian.party"
-    assert captured["config"].compose_name == "dokploy-route-canary-watchdog"
-    assert captured["config"].timeout_seconds == 180
-
-
 def test_custom_ssh_targets_preserve_mandatory_docker_health() -> None:
     """Infra-011.2: GitHub variable drift must not remove Docker health checks."""
     watchdog = _load_watchdog()
@@ -484,10 +313,8 @@ def test_main_sends_feishu_only_when_a_check_fails(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         watchdog,
-        "run_dokploy_route_canary_check",
-        lambda _env, ssh_config: [
-            watchdog.CheckResult("infra2-dokploy-route-canary", True, "pass")
-        ],
+        "run_dokploy_status_check",
+        lambda _env, **_kwargs: [],
     )
     monkeypatch.setattr(
         watchdog,
@@ -591,8 +418,8 @@ def test_main_structured_check_logs_include_attempt_count(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         watchdog,
-        "run_dokploy_route_canary_check",
-        lambda _env, ssh_config: [],
+        "run_dokploy_status_check",
+        lambda _env, **_kwargs: [],
     )
     monkeypatch.setattr(
         watchdog, "_emit_structured_log", lambda payload: emitted.append(dict(payload))
@@ -622,8 +449,8 @@ def test_main_uses_default_retry_values_when_env_is_blank(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         watchdog,
-        "run_dokploy_route_canary_check",
-        lambda _env, ssh_config: [],
+        "run_dokploy_status_check",
+        lambda _env, **_kwargs: [],
     )
 
     result = watchdog.main(
@@ -661,8 +488,8 @@ def test_main_records_delivery_failure_event_instead_of_crashing(monkeypatch) ->
     )
     monkeypatch.setattr(
         watchdog,
-        "run_dokploy_route_canary_check",
-        lambda _env, ssh_config: [],
+        "run_dokploy_status_check",
+        lambda _env, **_kwargs: [],
     )
     monkeypatch.setattr(
         watchdog,
@@ -687,7 +514,9 @@ def test_main_records_delivery_failure_event_instead_of_crashing(monkeypatch) ->
     assert delivery_events[0]["fallback_issue_url"].endswith("/issues/999")
 
 
-def test_main_records_delivery_success_event_for_weekly_recall_audit(monkeypatch) -> None:
+def test_main_records_delivery_success_event_for_weekly_recall_audit(
+    monkeypatch,
+) -> None:
     """Infra-012.8: delivery success is logged so weekly digest can audit recall."""
     watchdog = _load_watchdog()
     emitted: list[dict] = []
@@ -710,8 +539,8 @@ def test_main_records_delivery_success_event_for_weekly_recall_audit(monkeypatch
     )
     monkeypatch.setattr(
         watchdog,
-        "run_dokploy_route_canary_check",
-        lambda _env, ssh_config: [],
+        "run_dokploy_status_check",
+        lambda _env, **_kwargs: [],
     )
     monkeypatch.setattr(
         watchdog,
@@ -819,11 +648,18 @@ def test_create_delivery_fallback_issue_returns_none_without_token() -> None:
     assert issue_url is None
 
 
-def test_docs_state_that_github_fallback_includes_route_canary() -> None:
-    """Infra-011.9: docs must match the code-owned fallback watchdog scope."""
-    assert "Dokploy route canary" in ALERTING_README.read_text(encoding="utf-8")
-    assert "Dokploy route canary" in ALERTING_SSOT.read_text(encoding="utf-8")
-    assert "ops-checks.yml" in ALERTING_README.read_text(encoding="utf-8")
+def test_docs_do_not_resurrect_route_canary_in_fallback_scope() -> None:
+    """#543: docs must match the code-owned fallback watchdog scope.
+
+    The hourly synthetic-compose route canary is retired; the README must not
+    advertise it as fallback coverage, and the SSOT may only mention it in the
+    SOP-007 retirement note.
+    """
+    readme = ALERTING_README.read_text(encoding="utf-8")
+    ssot = ALERTING_SSOT.read_text(encoding="utf-8")
+    assert "route canary" not in readme.lower()
+    assert "ops-checks.yml" in readme
+    assert "已退役" in ssot.split("SOP-007:", 1)[1].split("SOP-007B", 1)[0]
 
 
 def _dokploy_projects_fixture():
@@ -861,14 +697,22 @@ def _dokploy_projects_fixture():
     ]
 
 
-def test_dokploy_status_check_skips_silently_without_api_key() -> None:
-    """Infra-011.9: a missing key is already flagged by route-canary, no dup."""
+def test_dokploy_status_check_fails_closed_without_api_key() -> None:
+    """#543: the retired route canary owned this signal; now this check does.
+
+    Infra-011.13 requires missing Dokploy API credentials to classify as a
+    ``configuration`` failure rather than silently skipping the status sweep.
+    """
     watchdog = _load_watchdog()
 
     def factory(*, host):  # pragma: no cover - must not be called
         raise AssertionError("client_factory must not run without an API key")
 
-    assert watchdog.run_dokploy_status_check({}, client_factory=factory) == []
+    results = watchdog.run_dokploy_status_check({}, client_factory=factory)
+    assert len(results) == 1
+    assert results[0].ok is False
+    assert results[0].failure_domain == "configuration"
+    assert "DOKPLOY_API_KEY" in results[0].detail
 
 
 def test_dokploy_status_check_flags_error_and_ignores_idle_done_running() -> None:
@@ -969,7 +813,7 @@ def test_format_failure_message_shows_max_severity_and_per_line_tags() -> None:
             severity="P0",
         ),
         watchdog.CheckResult(
-            name="infra2-dokploy-route-canary",
+            name="infra2-worker-status",
             ok=False,
             detail="status=fail",
             failure_domain="dokploy-control-plane",
@@ -981,7 +825,7 @@ def test_format_failure_message_shows_max_severity_and_per_line_tags() -> None:
 
     assert "Severity: P0" in message
     assert "- [P0] [host-reachability] infra2-ssh:" in message
-    assert "- [P1] [dokploy-control-plane] infra2-dokploy-route-canary:" in message
+    assert "- [P1] [dokploy-control-plane] infra2-worker-status:" in message
     assert "- [P2] [dokploy-deploy-status] dokploy-status:app/staging/backend:" in (
         message
     )

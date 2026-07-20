@@ -9,7 +9,7 @@ deployment record to appear and settle, but with divergent contracts:
 |                                                   |               | check follows)            |               |                   |
 | ``deploy.promote.wait_for_rollout``               | ``dict``      | poll PAST ``running`` to a   | raise         | raise TimeoutError|
 |                                                   |               | terminal-good status      |               |                   |
-| ``dokploy_route_canary._wait_for_new_deployment`` | ``CanaryStep``| ``running``/done is OK       | classify (no  | classify (no      |
+| (retired, #543) ``dokploy_route_canary``          | ``CanaryStep``| ``running``/done is OK       | classify (no  | classify (no      |
 |                                                   |               |                           | raise)        | raise)            |
 
 This module proposes ONE poller that spans all three via three flags, so each

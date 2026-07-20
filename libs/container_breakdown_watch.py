@@ -1,22 +1,23 @@
-#!/usr/bin/env python3
 """Container-breakdown watch: alert when a container is crash-looping / unhealthy,
 *with the reason* pulled from its logs.
 
-Sidecar in the alerting stack (mirrors tools/deploy_queue_guard.py). Read-only:
-needs ``/var/run/docker.sock`` mounted ``:ro``. Talks to the Docker Engine API
-over the socket with **httpx** (already a dependency) — no docker SDK.
+Watcher plugin in the single resident alerting sidecar (#543) — runs inside
+`tools/infra_probe_runner.py --loop` via `libs.resident_watchers.build_watchers`
+(it was a standalone compose sidecar before the merge). Read-only: needs
+``/var/run/docker.sock`` mounted ``:ro`` on the probe-runner container. Talks
+to the Docker Engine API over the socket with **httpx** (already a
+dependency) — no docker SDK.
 
 Why it exists: the HTTP probes + cloudflare watchdog catch "service down"; the
-deploy guard catches "deploy stuck". Neither says *why* a container is looping.
-This turns hours of "down, unknown cause" into an immediate "down because Vault
-creds missing" — the single signal that was absent during the finance_report
-outage.
+deploy-queue guard catches "deploy stuck". Neither says *why* a container is
+looping. This turns hours of "down, unknown cause" into an immediate "down
+because Vault creds missing" — the single signal that was absent during the
+finance_report outage.
 
-Env:
+Env (unchanged across the #543 merge — the names map into per-watcher config):
   DOCKER_SOCK                         docker socket path (default /var/run/docker.sock)
   ALERT_BRIDGE_URL                    where to POST alerts (the feishu bridge)
-  ALERTING_ENV_FILE                   env file to source (default /secrets/.env)
-  BREAKDOWN_INTERVAL_SECONDS          loop interval (default 60)
+  BREAKDOWN_INTERVAL_SECONDS          sweep interval (default 60; self-paced inside the loop)
   BREAKDOWN_RENOTIFY_SECONDS          re-alert suppression window (default 1800)
   BREAKDOWN_FAILURE_THRESHOLD         consecutive broken polls before firing (default 3)
   BREAKDOWN_RECOVERY_THRESHOLD        consecutive healthy polls before RESOLVED (default 5)
@@ -37,32 +38,22 @@ starts a new incident or resets the renotify clock.
 
 from __future__ import annotations
 
-import argparse
 import logging
 import os
-import sys
-import time
-from pathlib import Path
 
 import httpx
 
-_ROOT = Path(__file__).resolve().parents[1]
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
-
-from libs.container_breakdown import (  # noqa: E402
+from libs.container_breakdown import (
     Breakdown,
     build_breakdown_alert_payload,
     find_breakdown_containers,
 )
-from libs.recency import (  # noqa: E402
+from libs.recency import (
     ConsecutiveObservationState,
     evaluate_consecutive_hysteresis,
 )
+from libs.resident_watchers import ResidentWatcher
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
-)
 logger = logging.getLogger("container-breakdown-watch")
 # httpx/httpcore log every 60s Docker-socket poll at INFO ("GET /containers/json 200"),
 # which drowns the actual BREAKDOWN decisions in the container log (the reason a 07:33-style
@@ -88,21 +79,6 @@ DEFAULT_FAILURE_THRESHOLD = 3
 # sample mistaken for real recovery. 5 minutes continuously healthy is well past any
 # single backoff gap.
 DEFAULT_RECOVERY_THRESHOLD = 5
-
-
-def _load_env_file(path: Path) -> None:
-    """Source a KEY="value" env file into os.environ (does not overwrite)."""
-    if not path.exists():
-        return
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
-            os.environ[key] = value
 
 
 def _docker_client(sock: str) -> httpx.Client:
@@ -172,9 +148,11 @@ def run_once(
     flips broken/healthy every poll must not page every time. ``container_state``
     maps container name -> ``libs.recency.ConsecutiveObservationState`` and is
     mutated in place; the caller keeps one dict alive for the life of the poll
-    loop (see main()). Returns the number of containers that fired this sweep
-    (new incidents plus any still-active incident renotified this sweep).
+    loop (see BreakdownWatch). Returns the number of containers that fired this
+    sweep (new incidents plus any still-active incident renotified this sweep).
     """
+    import time
+
     now = time.monotonic()
     breakdowns = sweep(client, log_tail)
     broken_by_name = {b.container: b for b in breakdowns}
@@ -264,64 +242,58 @@ def run_once(
     return len(fresh)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--loop", action="store_true", help="run forever")
-    args = parser.parse_args()
+class BreakdownWatch(ResidentWatcher):
+    """The breakdown sweep as a resident watcher plugin (#543).
 
-    _load_env_file(Path(os.environ.get("ALERTING_ENV_FILE", "/secrets/.env")))
+    breakdown-watch reads the WHOLE shared Docker engine (no per-env container
+    filter), so a per-env copy double-fires on the same container and
+    mis-attributes the env. It stays a prod-only singleton: only the production
+    runner's plugin sweeps; non-prod copies are registered but no-op (logged
+    once) — the exact gating the standalone sidecar had.
+    """
 
-    # breakdown-watch reads the WHOLE shared Docker engine (no per-env container
-    # filter), so a per-env copy double-fires on the same container and mis-attributes
-    # the env. Run it as a prod-only singleton: one watcher covers every container on
-    # the box. Non-prod copies stay alive (so the service doesn't crash-loop) but never
-    # sweep or alert.
-    env_name = os.environ.get("ENV", "production")
-    if env_name != "production":
-        logger.info(
-            "breakdown-watch is prod-only (one watcher sees the whole shared engine); "
-            "skipping sweeps on env=%s",
-            env_name,
+    name = "container-breakdown-watch"
+
+    def __init__(self, environ=None) -> None:
+        super().__init__()
+        env = os.environ if environ is None else environ
+        self.interval_seconds = int(
+            env.get("BREAKDOWN_INTERVAL_SECONDS", DEFAULT_INTERVAL)
         )
-        if args.loop:
-            while True:
-                time.sleep(3600)
-        return
-
-    sock = os.environ.get("DOCKER_SOCK", "/var/run/docker.sock")
-    interval = int(os.environ.get("BREAKDOWN_INTERVAL_SECONDS", DEFAULT_INTERVAL))
-    renotify = int(os.environ.get("BREAKDOWN_RENOTIFY_SECONDS", DEFAULT_RENOTIFY))
-    failure_threshold = int(
-        os.environ.get("BREAKDOWN_FAILURE_THRESHOLD", DEFAULT_FAILURE_THRESHOLD)
-    )
-    recovery_threshold = int(
-        os.environ.get("BREAKDOWN_RECOVERY_THRESHOLD", DEFAULT_RECOVERY_THRESHOLD)
-    )
-    log_tail = int(os.environ.get("BREAKDOWN_LOG_TAIL", DEFAULT_LOG_TAIL))
-
-    # container -> ConsecutiveObservationState (#475 flap hysteresis); one long-lived
-    # in-memory dict for the life of this process. No disk state file: this watcher
-    # runs as a single continuously-running `--loop` sidecar (restart: unless-stopped,
-    # see platform/12.alerting/compose.yaml), never invoked repeatedly by cron/systemd,
-    # so in-memory state already persists across every poll for as long as it matters.
-    container_state: dict = {}
-    client = _docker_client(sock)
-    while True:
-        try:
-            run_once(
-                client,
-                log_tail,
-                container_state,
-                renotify,
-                failure_threshold,
-                recovery_threshold,
+        self.renotify = int(env.get("BREAKDOWN_RENOTIFY_SECONDS", DEFAULT_RENOTIFY))
+        self.failure_threshold = int(
+            env.get("BREAKDOWN_FAILURE_THRESHOLD", DEFAULT_FAILURE_THRESHOLD)
+        )
+        self.recovery_threshold = int(
+            env.get("BREAKDOWN_RECOVERY_THRESHOLD", DEFAULT_RECOVERY_THRESHOLD)
+        )
+        self.log_tail = int(env.get("BREAKDOWN_LOG_TAIL", DEFAULT_LOG_TAIL))
+        self.sock = env.get("DOCKER_SOCK", "/var/run/docker.sock")
+        self.enabled = env.get("ENV", "production") == "production"
+        if not self.enabled:
+            logger.info(
+                "breakdown-watch is prod-only (one watcher sees the whole shared "
+                "engine); plugin registered but idle on env=%s",
+                env.get("ENV"),
             )
-        except Exception as exc:  # one bad sweep must not kill the watcher
-            logger.error("sweep failed: %s", exc)
-        if not args.loop:
-            break
-        time.sleep(interval)
+        # container -> ConsecutiveObservationState (#475 flap hysteresis); one
+        # long-lived in-memory dict for the life of the sidecar process. No disk
+        # state file: the plugin lives inside the continuously-running probe
+        # runner (restart: unless-stopped), never re-invoked by cron/systemd, so
+        # in-memory state persists across every poll for as long as it matters.
+        self.container_state: dict = {}
+        self._client: httpx.Client | None = None
 
-
-if __name__ == "__main__":
-    main()
+    def _sweep(self) -> None:
+        if not self.enabled:
+            return
+        if self._client is None:
+            self._client = _docker_client(self.sock)
+        run_once(
+            self._client,
+            self.log_tail,
+            self.container_state,
+            self.renotify,
+            self.failure_threshold,
+            self.recovery_threshold,
+        )

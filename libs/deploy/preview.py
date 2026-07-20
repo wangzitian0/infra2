@@ -413,7 +413,7 @@ def down(
 def _http_get(url: str, timeout: float) -> tuple[int, str]:
     """Minimal GET returning (status, body-head). 0 status on a connection error.
 
-    Mirrors libs.dokploy_route_canary._http_get so preview readiness uses the same
+    Same follow-redirects/timeout discipline the retired route-canary used (#543), so preview readiness keeps the same
     stdlib-only probe; an injected getter replaces it in tests (no real HTTP).
     """
     request = Request(url, headers={"User-Agent": "infra2-preview-lifecycle/1.0"})

@@ -1,8 +1,10 @@
-#!/usr/bin/env python3
 """Deploy-queue guard: detect deploys stuck 'running' too long and (optionally)
 remediate them through Dokploy's own API.
 
-Runs as a sidecar in the alerting stack. Two halves, deliberately separated:
+Watcher plugin in the single resident alerting sidecar (#543) — runs inside
+`tools/infra_probe_runner.py --loop` via `libs.resident_watchers.build_watchers`
+(it was a standalone compose sidecar before the merge). Two halves,
+deliberately separated:
 
   * OBSERVE (always): query Dokploy deployment status, alert via the alert
     bridge when a deploy has been `running` past the ceiling. Read-only.
@@ -15,40 +17,32 @@ we go through its API to keep queue + deployment records consistent. This
 replaces the host watchdog's raw `LREM`/`DEL` surgery; the watchdog is now
 observe-only.
 
-Env:
+Env (unchanged across the #543 merge — the names map into per-watcher config):
   DOKPLOY_API_KEY / DOKPLOY_URL        Dokploy API (via libs.dokploy.get_dokploy)
   ALERT_BRIDGE_URL                     where to POST alerts (the feishu bridge)
-  ALERTING_ENV_FILE                    env file to source (default /secrets/.env)
+  ALERTING_ENV_FILE                    env file re-read each sweep (default /secrets/.env)
   DEPLOY_GUARD_CEILING_SECONDS         stuck threshold (default 1800 = 30 min)
-  DEPLOY_GUARD_INTERVAL_SECONDS        loop interval (default 60)
+  DEPLOY_GUARD_INTERVAL_SECONDS        sweep interval (default 60; self-paced inside the loop)
   DEPLOY_GUARD_REMEDIATE               "1" to arm kill-on-timeout (default "0")
   DEPLOY_GUARD_GRACE_SECONDS           wait before post-kill re-check (default 20)
   DEPLOY_GUARD_RENOTIFY_SECONDS        re-alert suppression window (default 1800)
 """
-# alert-delivery-exempt: sidecar watcher; T5 signal registration lands with the #543 single-sidecar merge
+# alerts-as: deploy-queue-guard  (#543 single-sidecar merge redeemed the #542 exemption)
 
 from __future__ import annotations
 
-import argparse
 import logging
 import os
-import sys
 import time
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parents[1]
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
-
-from libs.deploy_queue import (  # noqa: E402
+from libs.deploy_queue import (
     ComposeDeployments,
     build_deploy_guard_alert_payload,
     find_stuck_deploys,
 )
+from libs.resident_watchers import ResidentWatcher
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
-)
 logger = logging.getLogger("deploy-queue-guard")
 
 DEFAULT_CEILING = 1800
@@ -62,8 +56,10 @@ def _load_env_file(path: Path) -> None:
 
     EMPTY values are skipped so an env file rendered before Vault has populated a
     secret (e.g. DOKPLOY_API_KEY="") does not poison os.environ — a later
-    non-empty render is then picked up on the next reload. Already-set non-empty
-    keys are not overridden.
+    non-empty render is then picked up on the next reload. Already-set NON-EMPTY
+    keys are not overridden; a key that sits EMPTY in os.environ (e.g. the merged
+    sidecar's startup env-file load ran before Vault rendered the secret) IS
+    refreshed, so the guard still picks up a late-rendered DOKPLOY_API_KEY.
     """
     if not path.exists():
         return
@@ -74,7 +70,7 @@ def _load_env_file(path: Path) -> None:
         key, _, value = line.partition("=")
         key = key.strip()
         value = value.strip().strip('"').strip("'")
-        if key and value and key not in os.environ:
+        if key and value and not os.environ.get(key):
             os.environ[key] = value
 
 
@@ -235,70 +231,40 @@ def run_once(
     return len(stuck)
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--loop", action="store_true", help="run continuously")
-    mode.add_argument(
-        "--once", action="store_true", help="run a single sweep (default)"
-    )
-    args = parser.parse_args(argv)
+class DeployQueueGuard(ResidentWatcher):
+    """The deploy-queue sweep as a resident watcher plugin (#543).
 
-    env_path = Path(os.environ.get("ALERTING_ENV_FILE", "/secrets/.env"))
-    _load_env_file(env_path)
-    ceiling = _env_int("DEPLOY_GUARD_CEILING_SECONDS", DEFAULT_CEILING)
-    interval = _env_int("DEPLOY_GUARD_INTERVAL_SECONDS", DEFAULT_INTERVAL)
-    grace = _env_int("DEPLOY_GUARD_GRACE_SECONDS", DEFAULT_GRACE)
-    remediate = os.environ.get("DEPLOY_GUARD_REMEDIATE", "0").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-    }
+    Per sweep it reloads secrets and rebuilds the Dokploy client (cheap) so the
+    sidecar idles rather than crashlooping, and PICKS UP a DOKPLOY_API_KEY that
+    Vault renders after the container started — the standalone sidecar's exact
+    loop-iteration behavior.
+    """
 
-    logger.info(
-        "deploy-queue guard starting (ceiling=%ds remediate=%s interval=%ds)",
-        ceiling,
-        remediate,
-        interval,
-    )
+    name = "deploy-queue-guard"
 
-    alerted: dict[str, float] = {}
-    if not args.loop:
-        try:
-            client = _make_client()
-        except Exception as exc:
-            logger.error("Dokploy client unavailable: %s", exc)
-            return 2
-        return (
-            1
-            if run_once(
-                client,
-                ceiling=ceiling,
-                remediate=remediate,
-                grace=grace,
-                alerted=alerted,
-            )
-            else 0
+    def __init__(self, environ=None) -> None:
+        super().__init__()
+        env = os.environ if environ is None else environ
+        self.interval_seconds = int(
+            env.get("DEPLOY_GUARD_INTERVAL_SECONDS", "") or DEFAULT_INTERVAL
         )
+        self.ceiling = int(env.get("DEPLOY_GUARD_CEILING_SECONDS", "") or DEFAULT_CEILING)
+        self.grace = int(env.get("DEPLOY_GUARD_GRACE_SECONDS", "") or DEFAULT_GRACE)
+        self.remediate = (env.get("DEPLOY_GUARD_REMEDIATE") or "0").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        self.env_path = Path(env.get("ALERTING_ENV_FILE") or "/secrets/.env")
+        self.alerted: dict[str, float] = {}
 
-    while True:
-        try:
-            # Reload secrets + rebuild the client each iteration (cheap) so the
-            # sidecar idles rather than crashlooping, and PICKS UP a DOKPLOY_API_KEY
-            # that Vault renders after the container started.
-            _load_env_file(env_path)
-            client = _make_client()
-            run_once(
-                client,
-                ceiling=ceiling,
-                remediate=remediate,
-                grace=grace,
-                alerted=alerted,
-            )
-        except Exception as exc:  # a bad sweep / missing key must not kill the sidecar
-            logger.error("guard iteration failed: %s", exc)
-        time.sleep(interval)
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+    def _sweep(self) -> None:
+        _load_env_file(self.env_path)
+        client = _make_client()  # raises when DOKPLOY_API_KEY is still unset
+        run_once(
+            client,
+            ceiling=self.ceiling,
+            remediate=self.remediate,
+            grace=self.grace,
+            alerted=self.alerted,
+        )

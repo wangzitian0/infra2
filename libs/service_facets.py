@@ -8,6 +8,8 @@ These dataclasses are the typed vocabulary those declarations use:
 - :class:`ProbeFacet`     — one infra probe line (fields aligned with
                             ``libs.infra_probes.ProbeSpec``); the alerting stack
                             renders the aggregate ``INFRA_PROBE_SPECS`` from them.
+- :class:`PublicRouteFacet` — a public HTTP surface probed from inside (#543);
+                            declared as the plural ``public_routes`` tuple.
 - :class:`SignalFacet`    — watchdog signal classification (fields aligned with
                             #425 T5's ``docs/ssot/watchdog-signals.yaml``:
                             tier / type / consecutive_failures / renotify_window_sec).
@@ -95,6 +97,48 @@ class ProbeFacet:
                 self.service_id or default_service_id,
             )
         )
+
+
+@dataclass(frozen=True)
+class PublicRouteFacet:
+    """The owning service's public HTTP health surface, probed FROM INSIDE
+    (#543, reversing #209's internal-public-probes-off decision).
+
+    Declared as a SINGLE ``public_route`` attribute on a Deployer that also
+    declares a ``subdomain`` (the registry fails closed on one without the
+    other). The alerting deployer derives the per-environment probe line —
+    ``https://{subdomain}{ENV_DOMAIN_SUFFIX}.{INTERNAL_DOMAIN}{path}`` with
+    probe name ``{service}-public-route`` — into ``PUBLIC_ROUTE_PROBE_SPECS``
+    (see ``libs.probe_specs.render_public_route_spec_text``). Environment
+    rules come from registry facts, not repetition: ``prod_only`` services
+    render for production only (their staging host never exists — infra2#307),
+    and non-production renders downgrade to ``warning`` severity (a broken
+    staging route is not a page-worthy production incident), matching the
+    Cloudflare watchdog's own staging entries.
+
+    This is the third, innermost layer on the same route the Cloudflare edge
+    watchdog (30min) and the github-plane entrypoint check (daily) already
+    watch — minute-cadence, from inside the box, through the full public path
+    (DNS -> Cloudflare -> Traefik -> container).
+    """
+
+    path: str = "/"
+    expected: str = "200"
+    severity: str = "critical"
+    timeout_seconds: int = 10
+    # Overrides, SecretsFacet-convention: only set when the derived value is
+    # wrong for this surface. `name` when one service owns several routes
+    # (finance-report-web/-api) or the derived `{service}-public-route` doesn't
+    # match the registered signal; `subdomain` when the route's host differs
+    # from the Deployer's own (dokploy lives at cloud.<domain>); `service_id`
+    # for out-of-registry surfaces declared on-behalf (bootstrap vault/dokploy
+    # on the alerting deployer, mirroring its bootstrap ProbeFacets).
+    name: str = ""
+    subdomain: str = ""
+    service_id: str = ""
+    # single shared instance across envs (bootstrap vault/dokploy): never an
+    # env suffix on the host, in any environment
+    env_shared: bool = False
 
 
 @dataclass(frozen=True)
@@ -208,6 +252,7 @@ class Exemption:
 # to these names (bare or attribute-qualified) are evaluated.
 FACET_CLASSES: dict[str, type] = {
     "ProbeFacet": ProbeFacet,
+    "PublicRouteFacet": PublicRouteFacet,
     "SignalFacet": SignalFacet,
     "BackupFacet": BackupFacet,
     "SecretsFacet": SecretsFacet,

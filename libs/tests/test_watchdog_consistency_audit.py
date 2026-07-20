@@ -208,18 +208,11 @@ def test_invalid_tier_and_type_values_are_rejected() -> None:
     assert any("invalid type" in error for error in errors)
 
 
-def test_container_breakdown_watch_registered_and_matches_code(monkeypatch) -> None:
+def test_container_breakdown_watch_registered_and_matches_code() -> None:
     """#531-style drift closure: the registered thresholds must match the live
-    defaults in tools/container_breakdown_watch.py, not just look plausible."""
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location(
-        "container_breakdown_watch", ROOT / "tools/container_breakdown_watch.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    sys.modules.setdefault("container_breakdown_watch", module)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
+    defaults in libs/container_breakdown_watch.py (the watcher plugin inside
+    the #543 single resident sidecar), not just look plausible."""
+    import libs.container_breakdown_watch as module
 
     inventory = yaml.safe_load(INVENTORY.read_text(encoding="utf-8"))
     signals = {s["signal"]: s for s in inventory["signals"]}
@@ -231,6 +224,30 @@ def test_container_breakdown_watch_registered_and_matches_code(monkeypatch) -> N
     assert entry["consecutive_failures"] == module.DEFAULT_FAILURE_THRESHOLD
     assert entry["renotify_window_sec"] == module.DEFAULT_RENOTIFY
     assert entry["recovery_threshold"] == module.DEFAULT_RECOVERY_THRESHOLD
+
+    audit = _load_audit()
+    assert audit._validate_tier_and_type(entry, entry["signal_id"]) == []
+
+
+def test_deploy_queue_guard_registered_and_matches_code() -> None:
+    """#543: the deploy-queue guard's T5 registration (the #542 exemption come
+    due) must match the live defaults in libs/deploy_queue_guard.py. Its
+    consecutive_failures=1 is ceiling-qualified: a deploy only counts once it
+    has been running past DEPLOY_GUARD_CEILING_SECONDS, so the 1800s ceiling is
+    the real debounce and one qualifying sweep legitimately fires."""
+    import libs.deploy_queue_guard as module
+
+    inventory = yaml.safe_load(INVENTORY.read_text(encoding="utf-8"))
+    signals = {s["signal"]: s for s in inventory["signals"]}
+    entry = signals["deploy-queue-guard"]
+
+    assert entry["tier"] == "minute"
+    assert entry["type"] == "alert"
+    assert entry["primary_owner"] == "self"
+    assert entry["consecutive_failures"] == 1
+    assert entry["renotify_window_sec"] == module.DEFAULT_RENOTIFY
+    assert entry["cadence"] == f"{module.DEFAULT_INTERVAL}s"
+    assert str(module.DEFAULT_CEILING) in entry["alert_threshold"]
 
     audit = _load_audit()
     assert audit._validate_tier_and_type(entry, entry["signal_id"]) == []

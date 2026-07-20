@@ -5,15 +5,31 @@ reusable logic belongs in `libs/` (see the division-of-labor note below):
 
 1. **Invoke namespaces** — interactive CLI tasks loaded by `tools/loader.py`
    (`invoke <namespace>.<task>`).
-2. **Standalone scripts** — non-interactive entry points run by CI gates,
-   scheduled workflows, or as long-running sidecars (`python tools/<script>.py`).
+2. **Standalone scripts** — non-interactive entry points run by CI gates or
+   scheduled workflows (`python tools/<script>.py`).
    Examples: `deploy_v2.py` (deploy front door), `deploy_guard_audit.py` /
    `ci_gate_audit.py` / `service_identity_audit.py` / `lint_platform_image_pins.py` /
    `coverage_regression_audit.py` (infra-ci
    gates), `reconcile_iac_inputs.py` (tag reconcile), `out_of_band_watchdog.py`
-   / `watchdog_weekly_digest.py` (scheduled watchdogs), `deploy_queue_guard.py`
-   (alerting-stack sidecar), `dns_drift_report.py` / `dokploy_config_drift.py`
-   (drift reports).
+   / `watchdog_weekly_digest.py` (scheduled watchdogs), `dns_drift_report.py` /
+   `dokploy_config_drift.py` (drift reports).
+
+## The single resident entry point (#543)
+
+`infra_probe_runner.py` is the ONE long-running process this repo ships
+(container `platform-alerting-probes`). Everything resident runs inside its
+loop: the minute-tier service probes (`INFRA_PROBE_SPECS`), the public-route
+probes (`PUBLIC_ROUTE_PROBE_SPECS`), and the `ResidentWatcher` plugins
+(`libs/resident_watchers.py` — container-breakdown watch and the deploy-queue
+guard, each self-paced on its own interval, failure-isolated, and covered by
+the runner's healthcheck/heartbeat).
+
+Adding resident behavior means adding a watcher plugin in `libs/` and
+registering it in `libs/resident_watchers.py::build_watchers` — NOT a new
+sidecar, compose service, or standalone loop. A new alert path must register
+its signal in `docs/ssot/watchdog-signals.yaml` (internal probe signals derive
+automatically from the service's `ProbeFacet`/`SignalFacet` declarations);
+`tools/no_new_wheels_lint.py` blocks CI otherwise.
 
 `app_deploy_request.py` is the thin cross-repository adapter in front of `deploy_v2`.
 `libs/app_deploy_request.py` deserializes `infra2_sdk.deploy.DeployRequest`, validates
@@ -111,28 +127,6 @@ invoke dokploy.env-list --project=platform
 invoke dokploy.env-ensure --project=platform --env=staging --description="staging env"
 ```
 
-## dokploy_route_canary.py
-
-Dynamic route materialization proof for the Dokploy platform. It deploys a
-minimal same-host web/API compose and returns JSON that classifies failures as
-control plane, compose source-type drift, deployment record/worker, Docker
-runtime, or public Traefik route failures.
-
-```bash
-python tools/dokploy_route_canary.py \
-  --host route-canary.zitian.party \
-  --environment-id="$DOKPLOY_ENVIRONMENT_ID" \
-  --project platform \
-  --env staging \
-  --dokploy-host cloud.zitian.party \
-  --repair-stale-compose
-```
-
-`--repair-stale-compose` is restricted to `route-canary*` hosts and
-`dokploy-route-canary*` compose names. Repaired composes are normalized back to
-`sourceType=raw` before redeploying. GitHub canary runs default to the stable
-canary host/compose and rely on workflow concurrency to avoid overlap.
-
 ## deploy_v2_canary.py
 
 End-to-end proof for the unified deploy primitive. It deploys Finance Report to
@@ -171,7 +165,9 @@ uv run python tools/backup_restore_rehearsal.py \
 
 Direct Feishu watchdog intended to run outside the infra2 host from GitHub
 Actions. It verifies public host reachability, Cloudflare Worker self-health,
-SSH diagnostics, and the Dokploy route canary.
+SSH diagnostics, and consumes Dokploy's per-compose/application status as an
+alert source (fail-closed `configuration` failure when `DOKPLOY_API_KEY` is
+missing, #543).
 
 ```bash
 INFRA2_WATCHDOG_DRY_RUN=1 uv run python tools/out_of_band_watchdog.py

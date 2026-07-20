@@ -150,7 +150,7 @@ def test_build_alert_payload_resolved_when_empty():
 def test_run_once_requires_consecutive_broken_polls_before_firing(monkeypatch):
     """#475 flap hysteresis: a single broken sweep must NOT fire; only the Nth
     (failure_threshold) CONSECUTIVE broken sweep does."""
-    import tools.container_breakdown_watch as w
+    import libs.container_breakdown_watch as w
 
     breakdown = Breakdown(
         container="vault-agent", state="restarting", reason="r", detail="d"
@@ -201,7 +201,7 @@ def test_run_once_requires_consecutive_broken_polls_before_firing(monkeypatch):
 def test_run_once_respects_renotify_window_once_active(monkeypatch):
     """BREAKDOWN_RENOTIFY_SECONDS still suppresses repeat firing of an ALREADY-active
     incident (unrelated to the flap-hysteresis fire/resolve thresholds)."""
-    import tools.container_breakdown_watch as w
+    import libs.container_breakdown_watch as w
 
     breakdown = Breakdown(
         container="vault-agent", state="restarting", reason="r", detail="d"
@@ -239,7 +239,7 @@ def test_run_once_respects_renotify_window_once_active(monkeypatch):
 def test_run_once_requires_consecutive_healthy_polls_before_resolving(monkeypatch):
     """#475 flap hysteresis: recovery requires recovery_threshold CONSECUTIVE healthy
     sweeps, not just one -- the exact ContainerBreakdown fire/resolve storm."""
-    import tools.container_breakdown_watch as w
+    import libs.container_breakdown_watch as w
 
     breakdown = Breakdown(
         container="vault-agent", state="restarting", reason="r", detail="d"
@@ -296,7 +296,7 @@ def test_run_once_relapse_before_recovery_threshold_is_same_incident(monkeypatch
     """The critical #475 property: a broken poll seen WHILE recovering (before
     recovery_threshold healthy polls) must NOT start a new incident and must NOT
     reset the renotify clock -- this is what produced 333 firing+resolved pairs."""
-    import tools.container_breakdown_watch as w
+    import libs.container_breakdown_watch as w
 
     breakdown = Breakdown(
         container="vault-agent", state="restarting", reason="r", detail="d"
@@ -357,7 +357,7 @@ def test_run_once_logs_firing_and_resolved_decisions(monkeypatch):
     fire->resolve was only attributable by forensic IP->container reconstruction). Firing was
     already logged; resolve + the bridge-post were not. Capture logger.warning directly (the
     module calls logging.basicConfig, so caplog is unreliable here)."""
-    import tools.container_breakdown_watch as w
+    import libs.container_breakdown_watch as w
 
     bd = Breakdown(
         container="finance_report-frontend-branch-main",

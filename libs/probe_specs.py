@@ -147,3 +147,67 @@ def normalized_probe_fields(specs_text: str) -> list[list[str]]:
             continue
         rows.append([field.strip() for field in line.split("|")])
     return sorted(rows)
+
+
+def render_public_route_spec_text(env: str, domain: str, attrs=None) -> str:
+    """Aggregate every service's PublicRouteFacets into the runner's
+    ``PUBLIC_ROUTE_PROBE_SPECS`` text for one deploy environment (#543,
+    reversing #209's internal-public-probes-off decision).
+
+    Environment rules derive from registry facts, never repeated per-facet:
+    ``prod_only`` services render for production only (their staging host does
+    not exist — a permanent false positive otherwise), and every non-production
+    render is downgraded to ``warning`` severity (a broken staging route is not
+    a page-worthy production incident). The probe name is
+    ``{facet.name or service-part + '-public-route'}`` and MUST match a
+    registered ``*-public-route`` signal in watchdog-signals.yaml — enforced by
+    test, so an unregistered public probe cannot ship.
+    """
+    if attrs is None:
+        from libs.service_registry import service_attrs
+
+        attrs = service_attrs()
+    is_production = env == "production"
+    domain_suffix = "" if is_production else f"-{env}"
+    lines: list[str] = []
+    seen: dict[str, str] = {}
+    for owner_id in sorted(attrs):
+        meta = attrs[owner_id]
+        for facet in meta.public_routes:
+            service_id = facet.service_id or owner_id
+            prod_only = meta.prod_only
+            if prod_only and not is_production:
+                continue
+            sub = facet.subdomain or (meta.subdomain or "")
+            if not sub:
+                raise ValueError(
+                    f"{owner_id}: PublicRouteFacet needs a subdomain (the "
+                    "Deployer declares none and the facet does not override it)"
+                )
+            name = facet.name or f"{service_id.split('/', 1)[-1]}-public-route"
+            if name in seen:
+                raise ValueError(
+                    f"duplicate public-route probe name {name!r} declared by "
+                    f"both {seen[name]} and {owner_id}"
+                )
+            seen[name] = owner_id
+            host_suffix = "" if (prod_only or facet.env_shared) else domain_suffix
+            severity = facet.severity if is_production else "warning"
+            # domain resolved at render time (the $-free transport rejects
+            # placeholders — the Dokploy .env lesson, #541)
+            target = f"https://{sub}{host_suffix}.{domain}{facet.path}"
+            lines.append(
+                "|".join(
+                    [
+                        name,
+                        "http",
+                        target,
+                        facet.expected,
+                        severity,
+                        str(facet.timeout_seconds),
+                        "",
+                        service_id,
+                    ]
+                )
+            )
+    return "\n".join(lines)

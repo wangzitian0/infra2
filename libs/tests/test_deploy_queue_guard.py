@@ -1,9 +1,12 @@
-"""Tests for the deploy-queue guard sidecar (tools/deploy_queue_guard.py).
+"""Tests for the deploy-queue guard watcher (libs/deploy_queue_guard.py).
 
 The pure stuck-detection logic is covered by test_deploy_queue.py; this file
-covers the sidecar's orchestration: env-file loading semantics, the compose
+covers the watcher's orchestration: env-file loading semantics, the compose
 sweep's failure isolation, alert delivery guards, the renotify suppression
-window, and the remediate/escalate sequence.
+window, and the remediate/escalate sequence. Since the #543 single-sidecar
+merge the guard is a ResidentWatcher plugin inside tools/infra_probe_runner.py
+rather than a standalone sidecar — these tests are the behavior-parity proof
+that the merge changed the packaging, not the semantics.
 """
 
 from __future__ import annotations
@@ -12,7 +15,7 @@ from pathlib import Path
 
 
 from libs.deploy_queue import StuckDeploy
-from tools import deploy_queue_guard as guard
+from libs import deploy_queue_guard as guard
 
 
 # ---------------------------------------------------------------------------
@@ -285,41 +288,111 @@ def test_remediate_survives_kill_api_failure(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# main --once exit codes
+# DeployQueueGuard watcher plugin (#543) — the standalone `main --once/--loop`
+# entry is gone; the same behaviors now hang off the plugin's sweep.
 
 
-def test_main_once_returns_2_when_client_unavailable(
-    monkeypatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("ALERTING_ENV_FILE", str(tmp_path / "missing.env"))
+def test_watcher_sweep_survives_client_unavailable(monkeypatch, tmp_path: Path) -> None:
+    """The pre-merge loop idled (never crashlooped) while DOKPLOY_API_KEY was
+    still unrendered; the plugin must keep that: a client construction failure
+    is logged, never raised into the probe loop."""
+    watcher = guard.DeployQueueGuard(
+        {"ALERTING_ENV_FILE": str(tmp_path / "missing.env")}
+    )
 
     def no_client():
         raise RuntimeError("DOKPLOY_API_KEY missing")
 
     monkeypatch.setattr(guard, "_make_client", no_client)
 
-    assert guard.main(["--once"]) == 2
+    assert watcher.maybe_run(now=100.0) is True  # swept (and failed) quietly
 
 
-def test_main_once_returns_1_when_stuck_found(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("ALERTING_ENV_FILE", str(tmp_path / "missing.env"))
-    monkeypatch.delenv("DEPLOY_GUARD_REMEDIATE", raising=False)
+def test_watcher_sweep_alerts_on_stuck(monkeypatch, tmp_path: Path) -> None:
     compose, deployments = _stuck_compose(age_seconds=7200)
     client = _FakeClient(
         projects=_projects(compose), deployments_by_compose=deployments
     )
     monkeypatch.setattr(guard, "_make_client", lambda: client)
-    monkeypatch.setattr(guard, "_post_alert", lambda payload: None)
+    alerts: list[dict] = []
+    monkeypatch.setattr(guard, "_post_alert", alerts.append)
 
-    assert guard.main(["--once"]) == 1
+    watcher = guard.DeployQueueGuard(
+        {"ALERTING_ENV_FILE": str(tmp_path / "missing.env")}
+    )
+    watcher.maybe_run(now=100.0)
+
+    assert len(alerts) == 1
+    assert alerts[0]["commonLabels"]["alertname"] == "DeployQueueStuck"
+    assert client.killed == []  # observe-only by default
 
 
-def test_main_once_returns_0_when_clean(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("ALERTING_ENV_FILE", str(tmp_path / "missing.env"))
+def test_watcher_env_triad_maps_into_config_for_continuity() -> None:
+    """#543: the historical DEPLOY_GUARD_* env names keep working, mapped into
+    per-watcher config (the compose env block passes them through verbatim)."""
+    watcher = guard.DeployQueueGuard(
+        {
+            "DEPLOY_GUARD_CEILING_SECONDS": "900",
+            "DEPLOY_GUARD_INTERVAL_SECONDS": "120",
+            "DEPLOY_GUARD_GRACE_SECONDS": "5",
+            "DEPLOY_GUARD_REMEDIATE": "1",
+            "ALERTING_ENV_FILE": "/nonexistent/.env",
+        }
+    )
+
+    assert watcher.name == "deploy-queue-guard"
+    assert watcher.ceiling == 900
+    assert watcher.interval_seconds == 120
+    assert watcher.grace == 5
+    assert watcher.remediate is True
+
+    defaults = guard.DeployQueueGuard({})
+    assert defaults.ceiling == guard.DEFAULT_CEILING
+    assert defaults.interval_seconds == guard.DEFAULT_INTERVAL
+    assert defaults.remediate is False
+
+
+def test_watcher_renotify_state_survives_across_sweeps(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The `alerted` renotify map lives on the plugin instance for the sidecar
+    process's lifetime — two sweeps inside the window page once (the standalone
+    loop's exact suppression behavior)."""
+    compose, deployments = _stuck_compose(age_seconds=7200)
     client = _FakeClient(
-        projects=_projects({"composeId": "c1", "name": "svc"}),
-        deployments_by_compose={},
+        projects=_projects(compose), deployments_by_compose=deployments
     )
     monkeypatch.setattr(guard, "_make_client", lambda: client)
+    monkeypatch.setenv("DEPLOY_GUARD_RENOTIFY_SECONDS", "1800")
+    alerts: list[dict] = []
+    monkeypatch.setattr(guard, "_post_alert", alerts.append)
 
-    assert guard.main(["--once"]) == 0
+    watcher = guard.DeployQueueGuard(
+        {"ALERTING_ENV_FILE": str(tmp_path / "missing.env")}
+    )
+    watcher.maybe_run(now=100.0)
+    watcher.maybe_run(now=200.0)
+
+    assert len(alerts) == 1  # second sweep inside the renotify window is silent
+
+
+def test_watcher_reloads_env_file_each_sweep_for_late_rendered_key(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A DOKPLOY_API_KEY that Vault renders AFTER the sidecar started must be
+    picked up on a later sweep — including when the merged runner's startup
+    env-file load already planted the key as an EMPTY value in os.environ."""
+    import os
+
+    env_file = tmp_path / ".env"
+    env_file.write_text('LATE_KEY=""\n', encoding="utf-8")
+    monkeypatch.setenv("LATE_KEY", "")  # startup load saw the empty render
+    monkeypatch.setattr(guard, "_make_client", lambda: _FakeClient([], {}))
+
+    watcher = guard.DeployQueueGuard({"ALERTING_ENV_FILE": str(env_file)})
+    watcher.maybe_run(now=100.0)
+    assert os.environ.get("LATE_KEY") == ""  # still empty: file value empty too
+
+    env_file.write_text('LATE_KEY="rendered-now"\n', encoding="utf-8")
+    watcher.maybe_run(now=100.0 + watcher.interval_seconds)
+    assert os.environ.get("LATE_KEY") == "rendered-now"

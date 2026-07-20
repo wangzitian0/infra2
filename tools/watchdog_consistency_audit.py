@@ -298,7 +298,30 @@ def _missing(
 
 
 def _load_inventory() -> dict[str, Any]:
-    return yaml.safe_load(INVENTORY.read_text(encoding="utf-8"))
+    """The YAML (cross-plane, handwritten) + the derived internal plane (#543).
+
+    `primary_owner: internal` entries are generated from each service's
+    ProbeFacet/SignalFacet declarations, so the internal set-equality and
+    identity checks in audit() hold by construction; what this gate still
+    buys on the internal plane is _validate_inventory()'s tier/type/debounce
+    enforcement over the DERIVED entries — a deploy.py declaring a bad
+    SignalFacet fails CI here.
+    """
+    from libs.watchdog_signal_entries import render_internal_signal_entries
+
+    inventory = yaml.safe_load(INVENTORY.read_text(encoding="utf-8"))
+    handwritten = inventory.get("signals", [])
+    stray = [
+        s["signal_id"] for s in handwritten if s.get("primary_owner") == "internal"
+    ]
+    if stray:
+        raise ValueError(
+            f"handwritten `primary_owner: internal` entries in {INVENTORY.name}: "
+            f"{stray} — the internal plane is derived from ProbeFacet/SignalFacet "
+            f"declarations (#543); declare facets on the service's deploy.py instead"
+        )
+    inventory["signals"] = handwritten + render_internal_signal_entries()
+    return inventory
 
 
 def _compose_probe_specs() -> dict[str, str]:
@@ -343,7 +366,6 @@ def _github_signal_names() -> set[str]:
     names = {target.name for target in http_targets}
     names.update(target.name for target in ssh_targets)
     names.add("cloudflare-worker-status")
-    names.add("infra2-dokploy-route-canary")
     return names
 
 
