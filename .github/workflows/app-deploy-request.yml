@@ -93,9 +93,11 @@ jobs:
             --sender "$APP_DEPLOY_REQUEST_SENDER" \
             --domain "$INTERNAL_DOMAIN" \
             --repo-root .)"
+          service="$(printf '%s' "$plan" | python -c 'import json,sys; print(json.load(sys.stdin)["request"]["service"])')"
           version_ref="$(printf '%s' "$plan" | python -c 'import json,sys; print(json.load(sys.stdin)["request"]["version_ref"])')"
           iac_ref="$(printf '%s' "$plan" | python -c 'import json,sys; print(json.load(sys.stdin)["iac_ref"])')"
           python -m tools.deploy_v2_canary \
+            --service "$service" \
             --version-ref "$version_ref" \
             --iac-ref "$iac_ref" \
             --domain "$INTERNAL_DOMAIN" \
