@@ -245,6 +245,10 @@ def test_prod_tag_routes_fixed_and_pulls_the_tag_not_the_sha(calls):
         code_reviewed=True,
     )
     assert res.backend == "deploy-primitive"
+    # truealpha#447: iac_ref must reach the fixed-compose backend as a re-assertable
+    # branch/tag, not just get recorded on the target — this is what the backend passes
+    # to update_compose(..., branch=...) so the compose's OWN git source stays current.
+    assert calls["fixed"]["branch"] == "v0.0.0"  # _deploy's default fixed-env iac_ref
     assert calls["fixed"]["env"] == "prod"
     assert calls["fixed"]["code"] == SHA_CODE  # identity is the commit
     # the WHOLE point: prod pulls the retained tag, not the pruned short sha

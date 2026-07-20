@@ -741,7 +741,10 @@ def deploy_v2(
         return DeployV2Result(target, data_lane, "preview-lifecycle", detail)
 
     # staging | prod: the fixed-compose promote path. The backend pulls image_ref (a tag
-    # for a release, the short sha for code); iac_ref is carried on the target for the record.
+    # for a release, the short sha for code); target.iac_ref (a resolved sha) is carried
+    # for the record, while clone_ref (branch/tag form, same value _preview_up gets) is
+    # re-asserted as the compose's OWN git source on every call — otherwise the fixed
+    # compose's source ref never advances past whatever it was at creation (truealpha#447).
     # verify_vault / verify_config / model_overrides give the unified path PARITY with the
     # old bash dokploy_deploy.sh — default-ON so a token-TTL/effective-config regression
     # fails closed instead of being silently dropped on the way to prod.
@@ -753,6 +756,7 @@ def deploy_v2(
         service=service,
         image_ref=resolved.image_ref,
         iac_ref=target.iac_ref,
+        branch=clone_ref,
         wait=wait,
         timeout=timeout,
         staging_validated=staging_validated,

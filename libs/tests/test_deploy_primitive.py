@@ -19,10 +19,16 @@ class FakeDokploy:
     def __init__(self, deployments=None, env_str=None):
         self.updated: list[tuple[str, dict]] = []
         self.deployed: list[str] = []
+        self.branch_updates: list[tuple[str, str]] = []
         # list, or callable(self) -> list, used by wait_for_rollout's rollout poll.
         self._deployments = deployments
         # str/callable override for get_compose_env; if None, reflect the last push.
         self._env_str = env_str
+
+    def update_compose(self, compose_id, **kwargs):
+        if "branch" in kwargs:
+            self.branch_updates.append((compose_id, kwargs["branch"]))
+        return {}
 
     def update_compose_env(self, compose_id, env_vars=None, env_str=None):
         self.updated.append((compose_id, dict(env_vars or {})))
@@ -74,6 +80,37 @@ def test_staging_deploy_assembles_axes_and_triggers():
     assert env["INFRA_IAC_REF"] == "b" * 40
     assert "deployment.environment.name=staging" in env["OTEL_RESOURCE_ATTRIBUTES"]
     assert client.deployed == ["A6V-hbJlgHMwgPDoTDnhH"]
+
+
+def test_branch_is_reasserted_on_every_deploy_when_given():
+    # truealpha#447 root cause: a fixed compose's Dokploy github-source ref is whatever
+    # it was set to at creation and never advances on its own — deploy_v2's iac_ref was
+    # validated/recorded but never reached the actual git source Dokploy clones. branch
+    # must be re-asserted on every call, mirroring libs.deploy.preview.up.
+    client = FakeDokploy()
+    dp.deploy(
+        "staging",
+        FULL_SHA,
+        domain="zitian.party",
+        client=client,
+        iac_ref="b" * 40,
+        branch="v1.1.38",
+    )
+    assert client.branch_updates == [("A6V-hbJlgHMwgPDoTDnhH", "v1.1.38")]
+
+
+def test_branch_omitted_leaves_the_composes_source_untouched():
+    # Backward compatible: a caller (or test) that doesn't care about the source ref
+    # gets exactly today's behavior — no update_compose call at all.
+    client = FakeDokploy()
+    dp.deploy(
+        "staging",
+        FULL_SHA,
+        domain="zitian.party",
+        client=client,
+        iac_ref="b" * 40,
+    )
+    assert client.branch_updates == []
 
 
 def test_truealpha_staging_deploy_resolves_its_own_compose_and_identity():

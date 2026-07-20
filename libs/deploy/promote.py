@@ -229,6 +229,7 @@ def deploy(
     repo: str | None = None,
     image_ref: str | None = None,
     iac_ref: str = "",
+    branch: str | None = None,
     wait: bool = False,
     timeout: int = 600,
     model_overrides: dict[str, str] | None = None,
@@ -267,6 +268,18 @@ def deploy(
       to the one we pushed (fail-closed on a deploy that did not take).
     The verify_* flags default False so the assembly unit tests need no live Dokploy/Vault;
     the CLI enables them so a real workflow deploy gets the full bash-equivalent behavior.
+
+    branch (truealpha#447's root cause): the compose's OWN Dokploy github-source ref —
+    re-asserted on every call, mirroring libs.deploy.preview.up's identical re-assert
+    ("which also re-assert them on a redeploy"). Without this, a fixed compose's source
+    ref is whatever it was set to at creation and NEVER changes again — deploy_v2's
+    iac_ref is validated/recorded but never reaches the actual git source Dokploy clones.
+    finance_report's staging/prod happened to be created pointing at "main" (so it always
+    incidentally tracked HEAD); truealpha's was created pointing at a specific tag from
+    #478 (2026-07-11) and silently never advanced past it — every subsequent "successful"
+    deploy re-cloned that same 9-day-old commit, so infra2#562's secrets.ctmpl fix (and
+    this very re-assert fix) could not reach a running stack until this landed. None when
+    omitted (existing callers/tests unaffected); deploy_v2 always passes its clone_ref.
     """
     # Explicit None checks: an empty string is a caller error, not a silent fallback.
     if not domain or any(c.isspace() for c in domain):
@@ -372,6 +385,8 @@ def deploy(
             if wait
             else set()
         )
+        if branch:
+            client.update_compose(cfg.compose_id, branch=branch)
         client.update_compose_env(cfg.compose_id, env_vars=env_vars)
         try:
             # Captured immediately before triggering: the earliest wall-clock instant a
