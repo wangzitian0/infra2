@@ -13,7 +13,7 @@ from libs.common import (
     otel_ingest_endpoint,
     service_domain,
 )
-from libs.service_facets import PublicRouteFacet, BackupFacet, ProbeFacet
+from libs.service_facets import PublicRouteFacet, BackupFacet, ProbeFacet, SignalFacet
 
 shared_tasks = sys.modules.get("platform.11.signoz.shared")
 
@@ -94,6 +94,21 @@ class SigNozDeployer(Deployer):
             depends_on="signoz-internal-http",
         ),
     )
+    # Signal classification (#425 T5 / #543): every probe above is a
+    # minute-tier alert debounced by the probe runner's shared loop —
+    # DEFAULT_FAILURE_THRESHOLD=3 / DEFAULT_RENOTIFY_SECONDS=1800
+    # (tools/infra_probe_runner.py). watchdog-signals entries derive from this
+    # (libs/watchdog_signal_entries.py); the values here must state what the
+    # runner actually does, not an aspiration.
+    signals = (
+        SignalFacet(
+            tier="minute",
+            type="alert",
+            consecutive_failures=3,
+            renotify_window_sec=1800,
+        ),
+    )
+
     otel_ingest_port = 4318
 
     # SigNoz specific secret

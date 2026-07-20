@@ -11,7 +11,13 @@ import sys
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.env import generate_password
 from libs.console import header, success, error, warning, info, env_vars
-from libs.service_facets import PublicRouteFacet, BackupFacet, ProbeFacet, SecretsFacet
+from libs.service_facets import (
+    PublicRouteFacet,
+    BackupFacet,
+    ProbeFacet,
+    SecretsFacet,
+    SignalFacet,
+)
 
 shared_tasks = sys.modules.get("platform.03.minio.shared")
 
@@ -38,6 +44,20 @@ class MinioDeployer(Deployer):
             kind="http",
             target="http://platform-minio${ENV_SUFFIX}:9000/minio/health/live",
             expected="200",
+        ),
+    )
+    # Signal classification (#425 T5 / #543): every probe above is a
+    # minute-tier alert debounced by the probe runner's shared loop —
+    # DEFAULT_FAILURE_THRESHOLD=3 / DEFAULT_RENOTIFY_SECONDS=1800
+    # (tools/infra_probe_runner.py). watchdog-signals entries derive from this
+    # (libs/watchdog_signal_entries.py); the values here must state what the
+    # runner actually does, not an aspiration.
+    signals = (
+        SignalFacet(
+            tier="minute",
+            type="alert",
+            consecutive_failures=3,
+            renotify_window_sec=1800,
         ),
     )
 

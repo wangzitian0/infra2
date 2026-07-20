@@ -7,7 +7,13 @@ from libs.common import with_env_suffix
 from libs.env import VAULT_ROOT_TOKEN_OP_REF
 from libs.console import success, warning, info, error, run_with_status
 from libs.env import generate_password, get_secrets
-from libs.service_facets import PublicRouteFacet, BackupFacet, ProbeFacet, SecretsFacet
+from libs.service_facets import (
+    PublicRouteFacet,
+    BackupFacet,
+    ProbeFacet,
+    SecretsFacet,
+    SignalFacet,
+)
 
 shared_tasks = sys.modules.get("platform.10.authentik.shared")
 
@@ -52,6 +58,20 @@ class AuthentikDeployer(Deployer):
             kind="http",
             target="http://platform-authentik-server${ENV_SUFFIX}:9000/-/health/live/",
             expected="200,204,302",
+        ),
+    )
+    # Signal classification (#425 T5 / #543): every probe above is a
+    # minute-tier alert debounced by the probe runner's shared loop —
+    # DEFAULT_FAILURE_THRESHOLD=3 / DEFAULT_RENOTIFY_SECONDS=1800
+    # (tools/infra_probe_runner.py). watchdog-signals entries derive from this
+    # (libs/watchdog_signal_entries.py); the values here must state what the
+    # runner actually does, not an aspiration.
+    signals = (
+        SignalFacet(
+            tier="minute",
+            type="alert",
+            consecutive_failures=3,
+            renotify_window_sec=1800,
         ),
     )
 
