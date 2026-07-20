@@ -14,7 +14,7 @@
 #                                test suite rather than one of the three shared
 #                                config sources above -- so it is exempt from
 #                                this audit's owner-specific existence checks
-#                                (see tools/container_breakdown_watch.py,
+#                                (see libs/container_breakdown_watch.py,
 #                                tools/vault_self_refresh_audit_check.py).
 #
 # `tier` (minute|hour|day|month) + `type` (alert|report) -- #425 T5.
@@ -36,7 +36,7 @@
 # what distinguishes a real failure from a transient blip. That makes
 # slow!=dead a structural rule, not per-check luck." It exists because this
 # codebase shipped that exact bug TWICE independently before the rule existed
-# -- tools/container_breakdown_watch.py (#475, 333 firing/resolved pairs in
+# -- libs/container_breakdown_watch.py (#475, 333 firing/resolved pairs in
 # 48h from un-debounced flapping) and libs/vault_self_refresh_audit.py (#531,
 # four separate instances of a check with no time-window semantics). The
 # pre-existing free-text `alert_threshold: "3 consecutive failures"` field on

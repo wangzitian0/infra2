@@ -172,7 +172,7 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 | Cross-cutting | Backup freshness | latest off-host backup missing/stale/empty/no-checksum | P1 | backup manifest verifier |
 | Cross-cutting | Infra2 host reachability / probe heartbeat | public endpoints fail / probe runner stops heartbeat | P0/P1 | Cloudflare out-of-band watchdog |
 | Cross-cutting | SSH host diagnostics | external SSH bridge health fails | P0 | GitHub fallback watchdog |
-| Cross-cutting | Deploy queue | 部署卡在 `running` 超过 ceiling(默认 30min;单并发 FIFO 会阻塞所有后续部署) | P0 | Live (`DeployQueueStuck`,alerting stack 常驻 sidecar `tools/deploy_queue_guard.py --loop`;观测默认开,`DEPLOY_GUARD_REMEDIATE=1` 才 opt-in 走 Dokploy API kill/clean + 复查升级,绝不直接动 Redis/BullMQ) |
+| Cross-cutting | Deploy queue | 部署卡在 `running` 超过 ceiling(默认 30min;单并发 FIFO 会阻塞所有后续部署) | P0 | Live (`DeployQueueStuck`,probe-runner 常驻进程内的 ResidentWatcher 插件 `libs/deploy_queue_guard.py`,#543 单 sidecar 合并;观测默认开,`DEPLOY_GUARD_REMEDIATE=1` 才 opt-in 走 Dokploy API kill/clean + 复查升级,绝不直接动 Redis/BullMQ) |
 
 **设计约束**:告警含 actionable runbook 链接 · 聚合避免风暴 · Feishu 凭据只在 1Password(Vault 仅运行时镜像)· SigNoz webhook 只指向内部 bridge URL。
 **禁止**:为瞬时波动指标设 P0 · 忽略 Critical · SigNoz webhook 直指飞书自定义机器人。
@@ -237,7 +237,13 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 > **已知外部极限**:若 watchdog 与 Feishu/Lark 用的所有外部通道**同时**不可用,本仓库**没有第三条独立人工通知通道**(#425 月级/兜底范畴)。
 
 ### SOP-006: In-band 服务探针(分钟级)
-`INFRA_PROBE_SPECS` 由各服务 `deploy.py` Deployer 的 `ProbeFacet` 声明渲染(#541 单一声明点:聚合器 `libs/probe_specs.py::render_probe_spec_text()` 经 `AlertingDeployer.compose_env_base()` 注入 Dokploy env;迁移前的手写 literal 冻结为 `libs/tests/fixtures/infra_probe_specs_frozen.txt`,由 `libs/tests/test_probe_specs_equivalence.py` 做永久逐字段等价回归)。循环 `INFRA_PROBE_INTERVAL_SECONDS=60`(快检);通知分离:`FAILURE_THRESHOLD=3`、`RECOVERY_THRESHOLD=2`、`RENOTIFY_SECONDS=1800`。优先 Docker 网络目标(公网路由归 Cloudflare watchdog;`error code: 1010` 归类 `probe-client-blocked`)。spec 格式 `name|kind|target|expected|severity|timeout|depends_on|service_id`;kind=http/tcp/command。第八字段强制绑定 registry；`watchdog_consistency_audit.py` 校验 rendered specs↔inventory 双向集合相等以及 internal/Cloudflare `service_id` 一致。`depends_on` 链命中失败 root → 级联抑制(环路 fail-closed,见 `tools/infra_probe_runner.py`)。dry-run:`INFRA_PROBE_DRY_RUN=1 uv run python tools/infra_probe_runner.py --once --json`。
+`INFRA_PROBE_SPECS` 由各服务 `deploy.py` Deployer 的 `ProbeFacet` 声明渲染(#541 单一声明点:聚合器 `libs/probe_specs.py::render_probe_spec_text()` 经 `AlertingDeployer.compose_env_base()` 注入 Dokploy env;迁移前的手写 literal 冻结为 `libs/tests/fixtures/infra_probe_specs_frozen.txt`,由 `libs/tests/test_probe_specs_equivalence.py` 做永久逐字段等价回归)。循环 `INFRA_PROBE_INTERVAL_SECONDS=60`(快检);通知分离:`FAILURE_THRESHOLD=3`、`RECOVERY_THRESHOLD=2`、`RENOTIFY_SECONDS=1800`。优先 Docker 网络目标(公网路由归 Cloudflare watchdog;`error code: 1010` 归类 `probe-client-blocked`)。spec 格式 `name|kind|target|expected|severity|timeout|depends_on|service_id`;kind=http/tcp/command。第八字段强制绑定 registry。`depends_on` 链命中失败 root → 级联抑制(环路 fail-closed,见 `tools/infra_probe_runner.py`)。dry-run:`INFRA_PROBE_DRY_RUN=1 uv run python tools/infra_probe_runner.py --once --json`。
+
+**公网路由探针(#543,反转 #209)**:`PUBLIC_ROUTE_PROBE_SPECS` 由各服务的 `PublicRouteFacet` 声明渲染(`libs/probe_specs.py::render_public_route_spec_text`,域名渲染期解析、无 `$` 传输);prod_only 服务只渲染生产、非生产一律降为 warning。每个渲染出的 `*-public-route` 名字必须是已注册 signal(`libs/tests/test_infra_probes.py` 锁定)。
+
+**内部 signal 注册派生(#543)**:`watchdog-signals.yaml` 的 `primary_owner: internal` 条目不再手写,由 `libs/watchdog_signal_entries.py` 从 ProbeFacet+SignalFacet 派生(声明探针即注册 signal);`watchdog_consistency_audit.py` 加载时合并派生条目、拒绝手写 internal 条目,并对派生条目强制 #425 T5 tier/type/debounce 校验;跨平面条目(cloudflare/github/self/excluded)仍手写。手写时代的 39 条冻结于 `libs/tests/fixtures/watchdog_internal_signals_frozen.yaml`,`libs/tests/test_watchdog_signal_entries.py` 做永久逐字段等价回归。
+
+**常驻拓扑(#543 单 sidecar)**:probe-runner(`platform-alerting-probes`)是仓库唯一常驻进程;container-breakdown watch 与 deploy-queue guard 以 `ResidentWatcher` 插件(`libs/resident_watchers.py`)在其循环内自节奏运行,故障隔离、由 runner 的 healthcheck/heartbeat 兜底(挂起 watcher → state file 过期 → compose healthcheck 重启)。新增常驻能力 = 新增 watcher 插件,不新建 sidecar。
 > ✅ **`alert-delivery-canary` 已退役(#425 T3)**:它把"投递自证"做成了 6h 周期性告警(报告当告警),是 #425 禁止的反模式。bridge→Feishu 路径现由 `lark-delivery-http` + 带外 watchdog 的 bridge `/health` + 日报投递 + 真实告警覆盖,告警频道不再被合成事件刷屏。
 
 ### SOP-007: Dokploy route canary(已退役,#543)

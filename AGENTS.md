@@ -165,6 +165,7 @@
 - **DRY**：避免重复代码，使用函数/类/模块/组件等抽象。
 - **避免魔法数字**：使用常量/枚举/配置文件等替代。
 - **尽可能复用已有的库**：动手前永远先检查 libs 目录 [README.md](./libs/README.md)。
+- **不造新轮子（收敛红线，#542/#543）**：新增告警路径必须注册 signal（`tools/no_new_wheels_lint.py` 阻断 CI）；新增常驻监视 = probe-runner 的 `ResidentWatcher` 插件（`libs/resident_watchers.py`），不新建 sidecar/compose 服务；新增定时 ops 检查挂 `ops-checks.yml` 并声明 `# signal:`；服务级运维事实（探针/信号/备份/密钥）只声明在该服务 `deploy.py` 的 Facet 上，由注册表派生，不另开清单。入口全景见 [tools/README.md](./tools/README.md)。
 
 ### PR提交准则
 
