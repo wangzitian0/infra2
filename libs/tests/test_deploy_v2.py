@@ -130,6 +130,51 @@ def _deploy(**over):
     return deploy_v2(**base)
 
 
+# --- per-service source repo resolution (truealpha's first-ever v0.0.3 staging deploy
+# resolved its tag against finance_report's repo — the sole hardcoded default — colliding
+# with finance_report's own unrelated, ancient v0.0.3 tag) ------------------
+
+
+def test_repo_for_service_maps_known_services():
+    assert dv2._repo_for_service("finance_report/app") == dv2._APP_REPO
+    assert (
+        dv2._repo_for_service("truealpha/app")
+        == "https://github.com/wangzitian0/truealpha.git"
+    )
+
+
+def test_repo_for_service_falls_back_to_app_repo_for_unknown_service():
+    assert dv2._repo_for_service("some/unregistered-service") == dv2._APP_REPO
+
+
+def test_deploy_resolves_version_ref_against_the_services_own_repo(monkeypatch, calls):
+    seen_repos = []
+
+    def recording_resolve_image_ref(ref, **kw):
+        seen_repos.append(kw.get("repo"))
+        return _fake_resolve_image_ref(ref, **kw)
+
+    monkeypatch.setattr(dv2, "resolve_image_ref", recording_resolve_image_ref)
+    _deploy(service="truealpha/app", deploy_type="staging", version_ref="v0.0.3")
+    assert seen_repos == ["https://github.com/wangzitian0/truealpha.git"]
+
+
+def test_deploy_repo_override_wins_over_service_default(monkeypatch, calls):
+    seen_repos = []
+
+    def recording_resolve_image_ref(ref, **kw):
+        seen_repos.append(kw.get("repo"))
+        return _fake_resolve_image_ref(ref, **kw)
+
+    monkeypatch.setattr(dv2, "resolve_image_ref", recording_resolve_image_ref)
+    _deploy(
+        deploy_type="staging",
+        version_ref="v0.0.3",
+        repo="https://example.invalid/other.git",
+    )
+    assert seen_repos == ["https://example.invalid/other.git"]
+
+
 # --- #465: app→infra on-main compatibility guard (assert_iac_ref_on_main) ---
 
 

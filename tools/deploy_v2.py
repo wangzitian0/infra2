@@ -62,6 +62,16 @@ from tools.resolve_deploy_ref import (
 
 _APP_SERVICE = "finance_report/app"
 _APP_REPO = "https://github.com/wangzitian0/finance_report.git"
+# Every app-backed service's version_ref (tag/sha) resolves against its OWN source repo.
+# Mirrors libs.app_deploy_request.APP_SOURCES (kept in sync there for the cross-repo
+# request contract's short "owner/repo" form) — a service missing here falls back to
+# _APP_REPO, which was the sole hardcoded target before this map existed (finance_report
+# was the only service, so it went unnoticed until truealpha's first automated deploy
+# resolved its `v0.0.3` tag against finance_report's own unrelated old `v0.0.3` tag).
+_SERVICE_REPOS: dict[str, str] = {
+    _APP_SERVICE: _APP_REPO,
+    "truealpha/app": "https://github.com/wangzitian0/truealpha.git",
+}
 _INFRA2_REPO = "https://github.com/wangzitian0/infra2"
 # Dokploy's github source clones a branch/tag ref (`git clone -b`), NOT a commit sha — a
 # raw sha fails "Remote branch <sha> not found" (finance_report#342). So when iac_ref is a
@@ -130,6 +140,11 @@ def assert_iac_ref_on_main(
 def _default_main(version_ref) -> str:
     """A ``branch`` / ``canary`` version_ref defaults to the main tip when omitted."""
     return (str(version_ref).strip() if version_ref is not None else "") or "main"
+
+
+def _repo_for_service(service: str) -> str:
+    """The git repo a service's ``version_ref`` (tag/sha/branch) resolves against."""
+    return _SERVICE_REPOS.get(service, _APP_REPO)
 
 
 def _resolve_for_type(spec, version_ref, *, repo: str):
@@ -578,7 +593,7 @@ def deploy_v2(
     verify_ingestion: bool = False,
     timeout: int = 600,
     expected_sha: str | None = None,
-    repo: str = _APP_REPO,
+    repo: str | None = None,
     iac_runner_url: str | None = None,
     iac_webhook_secret: str | None = None,
     triggered_by: str = "deploy_v2",
@@ -628,7 +643,8 @@ def deploy_v2(
         )
 
     spec = deploy_type_spec(deploy_type)
-    resolved, alias_value = _resolve_for_type(spec, version_ref, repo=repo)
+    resolved_repo = repo if repo is not None else _repo_for_service(service)
+    resolved, alias_value = _resolve_for_type(spec, version_ref, repo=resolved_repo)
     if (
         normalized_expected_sha is not None
         and resolved.sha.lower() != normalized_expected_sha
@@ -817,6 +833,12 @@ def main(argv: list[str] | None = None) -> int:
         help="optional full commit sha that version_ref must resolve to before deploy",
     )
     parser.add_argument(
+        "--repo",
+        default=None,
+        help="git repo version_ref resolves against (default: per-service, see "
+        "_SERVICE_REPOS)",
+    )
+    parser.add_argument(
         "--image-wait-seconds",
         type=float,
         default=None,
@@ -926,6 +948,7 @@ def main(argv: list[str] | None = None) -> int:
             verify_ingestion=args.verify_ingestion,
             timeout=args.timeout,
             expected_sha=args.expected_sha,
+            repo=args.repo,
             image_wait_seconds=args.image_wait_seconds,
             image_poll_seconds=args.image_poll_seconds,
         )
