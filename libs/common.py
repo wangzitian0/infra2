@@ -69,10 +69,13 @@ def infra_domain() -> str:
     ``INTERNAL_DOMAIN``-reading call site (``tools/reconcile_iac_inputs.py``,
     ``tools/signoz_alert_rule_canary.py``). Deliberately takes NO caller-supplied
     fallback — accepting one reintroduces the exact bug this closes the moment a caller
-    passes its own app domain as that fallback. Mirrors tools.deploy_v2's own
-    ``_dokploy_host_domain`` (#561) for the Dokploy-client-host case specifically; this
-    is the general form for every OTHER shared-platform host build (promote.py's
-    vault./otel. — #561 did not cover these).
+    passes its own app domain as that fallback.
+
+    The SOLE implementation (a follow-up consolidated a near-duplicate,
+    ``tools.deploy_v2``'s ``_dokploy_host_domain``, into this — #561 fixed the Dokploy-
+    client-host case only; this closed vault./otel. call sites in promote.py and
+    preview.py that #561 didn't cover, and functions like ``preflight_vault_token`` now
+    call this internally instead of accepting a caller-supplied ``domain`` at all).
     """
     return os.environ.get("INTERNAL_DOMAIN", "").strip() or "zitian.party"
 

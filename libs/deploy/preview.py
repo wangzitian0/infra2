@@ -40,6 +40,7 @@ from urllib.request import Request, urlopen
 
 import httpx  # the injected Dokploy client raises httpx errors on a transient API blip
 
+from libs.common import infra_domain
 from libs.deploy_env_config import (
     PREVIEW_ENVIRONMENT,
     PreviewAlias,
@@ -146,7 +147,12 @@ def _preview_env_vars(
             domain=domain, base_subdomain=config.base_subdomain
         ),
         # #368: FE OTLP endpoint from the ONE source (consumed, not re-built in compose).
-        **otel_env(domain=domain),
+        # infra_domain(), not this app's own `domain` — SigNoz/OTel is the ONE shared
+        # collector (SHARED_PLATFORM_SERVICES), never per-service-domain-overridden;
+        # promote.deploy() had this exact bug fixed already (#561's general form) —
+        # preview.up() carried the same bug, just never observed (a throwaway preview's
+        # telemetry silently no-ops rather than crash-looping like #561's prod symptom).
+        **otel_env(domain=infra_domain()),
         # #375: every preview alias (main / pr-<N> / commit-<sha7>) shares the single
         # "preview" OpenPanel project; inject its client-id at runtime so preview
         # analytics actually emits (alias granularity rides deployment.environment, not

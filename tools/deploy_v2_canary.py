@@ -46,9 +46,10 @@ from infra2_sdk.delivery import (
     make_stage_result,
 )
 
-from libs.deploy_contract import DeployTarget
-from tools.deploy_v2 import _CANARY_PR, _dokploy_host_domain, deploy_v2
+from libs.common import infra_domain
 from libs.deploy.preview import down
+from libs.deploy_contract import DeployTarget
+from tools.deploy_v2 import _CANARY_PR, deploy_v2
 
 _DEFAULT_SERVICE = "finance_report/app"
 
@@ -318,7 +319,7 @@ def main(argv: list[str] | None = None) -> int:
     # Imported lazily so importing the module (and its unit tests) needs no Dokploy creds.
     from libs.dokploy import get_dokploy
 
-    client = get_dokploy(host=f"cloud.{_dokploy_host_domain(args.domain)}")
+    client = get_dokploy(host=f"cloud.{infra_domain()}")
     # --service = explicit single-service override (#538); default = every
     # registry service that opted into the scheduled canary (#541). One JSON
     # result line per service (today: exactly one — ops-checks' single-line

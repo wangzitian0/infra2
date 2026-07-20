@@ -30,6 +30,7 @@ from dataclasses import dataclass
 
 import httpx  # Dokploy transport errors from libs.dokploy surface as httpx exceptions
 
+from libs.common import infra_domain
 from libs.iac_runner_client import (
     poll_platform_deploy_status,
     trigger_platform_deploy,
@@ -145,20 +146,6 @@ def _default_main(version_ref) -> str:
 def _repo_for_service(service: str) -> str:
     """The git repo a service's ``version_ref`` (tag/sha/branch) resolves against."""
     return _SERVICE_REPOS.get(service, _APP_REPO)
-
-
-def _dokploy_host_domain(cli_domain: str) -> str:
-    """The Dokploy control-plane host's domain — always the org's one shared zone.
-
-    NEVER derived from a service's own public ``--domain`` (``Deployer.domain``, e.g.
-    truealpha/app -> truealpha.club, #550): there is exactly one Dokploy instance for
-    every service, always reachable at ``cloud.<org domain>``. ``INTERNAL_DOMAIN`` (set
-    org-wide by both deploy workflows, never per-service-overridden) is authoritative
-    when present; ``--domain`` is only a same-value fallback for local/manual runs that
-    don't export it. Using ``--domain`` here directly was the #550 regression: truealpha's
-    first staging deploy tried to reach the nonexistent ``cloud.truealpha.club``.
-    """
-    return os.getenv("INTERNAL_DOMAIN") or cli_domain
 
 
 def _resolve_for_type(spec, version_ref, *, repo: str):
@@ -908,7 +895,7 @@ def main(argv: list[str] | None = None) -> int:
                 spec.alias_kind,
                 alias_value,
                 domain=domain,
-                client=get_dokploy(host=f"cloud.{_dokploy_host_domain(args.domain)}"),
+                client=get_dokploy(host=f"cloud.{infra_domain()}"),
                 service=args.service,
             )
             print(
@@ -947,7 +934,7 @@ def main(argv: list[str] | None = None) -> int:
             # Imported lazily so importing the module needs no Dokploy creds.
             from libs.dokploy import get_dokploy
 
-            client = get_dokploy(host=f"cloud.{_dokploy_host_domain(args.domain)}")
+            client = get_dokploy(host=f"cloud.{infra_domain()}")
         result = deploy_v2(
             service=args.service,
             deploy_type=args.deploy_type,
