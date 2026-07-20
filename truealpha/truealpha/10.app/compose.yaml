@@ -42,6 +42,14 @@ services:
       VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
       VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
       ENV: ${ENV}
+      # Cache-bust (finance_report's vault-agent has always carried this): without a
+      # var this container's own resolved config actually reads, Compose sees an
+      # unchanged service on every same-tag promote deploy and never recreates it —
+      # so it never re-clones secrets.ctmpl or re-renders /vault/secrets/.env, no
+      # matter what changed there. This is why #562's SECRET_KEY template line sat
+      # unrendered on already-running staging/prod for hours after merging.
+      GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
+      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
     healthcheck:
       test:
         - CMD-SHELL
@@ -154,6 +162,10 @@ services:
         exec node server.js
     environment:
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
+      # Cache-bust — see vault-agent's IAC_CONFIG_HASH comment above: without this,
+      # web is never recreated on a same-tag promote deploy (GIT_COMMIT_SHA alone
+      # doesn't change between two deploys of the same release).
+      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
       HOSTNAME: 0.0.0.0
       PORT: "3000"
     healthcheck:

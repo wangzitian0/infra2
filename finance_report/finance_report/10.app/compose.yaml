@@ -203,6 +203,11 @@ services:
       - scripts/prefect_worker_entrypoint.sh
     environment:
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
+      # Cache-bust (matching vault-agent/backend above) — without it, a same-tag
+      # promote redeploy looks unchanged to Compose and this worker is never
+      # recreated, so it can keep running against a stale rendered secrets file
+      # (truealpha#447 was this exact gap on a different service).
+      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
     volumes:
       - secrets:/secrets:ro
     networks:
