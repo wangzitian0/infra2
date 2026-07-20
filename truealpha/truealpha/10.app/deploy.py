@@ -85,9 +85,11 @@ class AppDeployer(Deployer):
         provision (no docker CLI in the runner) but it can refuse to be silent."""
         if not super().ensure_runtime_secrets(c):
             return False
-        secrets = cls.secrets()
+        secrets = cls.secrets_backend()
         if not (secrets.get("S3_ACCESS_KEY") and secrets.get("S3_SECRET_KEY")):
-            warning("S3 credentials missing in Vault — the raw archive is not provisioned for this env")
+            warning(
+                "S3 credentials missing in Vault — the raw archive is not provisioned for this env"
+            )
             info(
                 "Run ONCE on the VPS host: VAULT_TOKEN=... bash "
                 "truealpha/truealpha/10.app/provision_bucket.sh <staging|production>, "
@@ -103,16 +105,20 @@ class AppDeployer(Deployer):
             return
         create_app_bucket = getattr(minio_shared, "create_app_bucket", None)
         if not create_app_bucket:
-            warning("MinIO shared task create_app_bucket not found; skipping bucket creation")
+            warning(
+                "MinIO shared task create_app_bucket not found; skipping bucket creation"
+            )
             return
 
-        secrets = cls.secrets()
+        secrets = cls.secrets_backend()
         bucket_name = secrets.get("S3_BUCKET") or "truealpha-raw"
         existing_access_key = secrets.get("S3_ACCESS_KEY")
         existing_secret_key = secrets.get("S3_SECRET_KEY")
 
         if bool(existing_access_key) ^ bool(existing_secret_key):
-            warning("Partial MinIO credentials found in Vault; generating a new access/secret pair")
+            warning(
+                "Partial MinIO credentials found in Vault; generating a new access/secret pair"
+            )
             existing_access_key = None
             existing_secret_key = None
 
@@ -128,7 +134,9 @@ class AppDeployer(Deployer):
             # work from a deploy — that silent degradation is how the first
             # truealpha staging deploys "succeeded" with no bucket. Point at
             # the host-side path instead of warning vaguely.
-            warning(f"docker CLI unavailable — cannot provision bucket '{bucket_name}' from this deploy")
+            warning(
+                f"docker CLI unavailable — cannot provision bucket '{bucket_name}' from this deploy"
+            )
             info(
                 "Run ONCE on the VPS host: VAULT_TOKEN=... bash "
                 "truealpha/truealpha/10.app/provision_bucket.sh <staging|production>, "
@@ -176,7 +184,9 @@ class AppDeployer(Deployer):
         raw archive must never expire; clearing the rules makes that true
         regardless of the bucket's history."""
         if shutil.which("docker") is None:
-            info("docker CLI unavailable — lifecycle check runs host-side via provision_bucket.sh")
+            info(
+                "docker CLI unavailable — lifecycle check runs host-side via provision_bucket.sh"
+            )
             return
         env_suffix = get_env().get("ENV_SUFFIX", "")
         container = f"platform-minio{env_suffix}"
@@ -187,11 +197,15 @@ class AppDeployer(Deployer):
         )
         output = f"{result.stdout or ''} {result.stderr or ''}".lower()
         if result.ok:
-            success(f"Lifecycle rules cleared on '{bucket_name}' — raw archive never expires")
+            success(
+                f"Lifecycle rules cleared on '{bucket_name}' — raw archive never expires"
+            )
         elif "does not exist" in output or "no lifecycle" in output:
             info(f"No lifecycle rules on '{bucket_name}' — raw archive never expires")
         else:
-            warning(f"Could not clear lifecycle rules on '{bucket_name}', verify manually: {result.stderr}")
+            warning(
+                f"Could not clear lifecycle rules on '{bucket_name}', verify manually: {result.stderr}"
+            )
 
 
 if shared_tasks:

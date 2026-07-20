@@ -747,7 +747,7 @@ def test_minio_sync_secret_hook_repairs_root_user(monkeypatch) -> None:
     secrets = FakeSecrets({"root_password": "existing"})
 
     monkeypatch.setattr(
-        module.MinioDeployer, "secrets", classmethod(lambda cls: secrets)
+        module.MinioDeployer, "secrets_backend", classmethod(lambda cls: secrets)
     )
 
     assert module.MinioDeployer.ensure_runtime_secrets() is True
@@ -806,7 +806,9 @@ def test_base_deployer_creates_missing_vault_secret_path(monkeypatch) -> None:
         service = "clickhouse"
         secret_key = "password"
 
-    monkeypatch.setattr(DummyDeployer, "secrets", classmethod(lambda cls: secrets))
+    monkeypatch.setattr(
+        DummyDeployer, "secrets_backend", classmethod(lambda cls: secrets)
+    )
 
     assert DummyDeployer.ensure_runtime_secrets() is True
     assert secrets.set_calls

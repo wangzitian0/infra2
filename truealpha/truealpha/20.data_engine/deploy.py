@@ -72,7 +72,7 @@ class DataEngineDeployer(Deployer):
 
     @classmethod
     def ensure_runtime_secrets(cls, c=None) -> bool:
-        secrets = cls.secrets()
+        secrets = cls.secrets_backend()
         missing = [key for key in cls._REQUIRED_SECRET_KEYS if not secrets.get(key)]
         if missing:
             error(f"Missing TrueAlpha data-engine Vault fields: {', '.join(missing)}")
@@ -90,13 +90,15 @@ class DataEngineDeployer(Deployer):
     @classmethod
     def compose_env_base(cls, env: dict | None = None) -> dict[str, str]:
         base = super().compose_env_base(env)
-        secrets = cls.secrets()
+        secrets = cls.secrets_backend()
         environment = base.get("ENV", "production")
         image_digest = secrets.get("DATA_ENGINE_IMAGE_DIGEST") or ""
         release_id = secrets.get("RELEASE_MANIFEST_ID") or ""
         approved_by = secrets.get("CAPTURE_APPROVED_BY") or ""
         if not _IMAGE_DIGEST.fullmatch(image_digest):
-            raise ValueError("DATA_ENGINE_IMAGE_DIGEST must be configured before deployment")
+            raise ValueError(
+                "DATA_ENGINE_IMAGE_DIGEST must be configured before deployment"
+            )
         if not _RELEASE_ID.fullmatch(release_id):
             raise ValueError("RELEASE_MANIFEST_ID must be configured before deployment")
         if not approved_by:
@@ -111,7 +113,9 @@ class DataEngineDeployer(Deployer):
                 "CAPTURE_APPROVED_BY": approved_by,
                 "GIT_COMMIT_SHA": secrets.get("GIT_COMMIT_SHA") or "unknown",
                 "TIER_CPU_SHARES": "512" if environment == "staging" else "1024",
-                "DATA_ENGINE_MEM_LIMIT": "768m" if environment == "staging" else "1536m",
+                "DATA_ENGINE_MEM_LIMIT": "768m"
+                if environment == "staging"
+                else "1536m",
                 "DATA_ENGINE_VAULT_MEM_LIMIT": "128m",
             }
         )
@@ -135,7 +139,9 @@ class DataEngineDeployer(Deployer):
             "public_env": dict(sorted(public_env.items())),
             "artifacts": artifacts,
         }
-        return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
 
     @classmethod
     def verify_runtime_applied(cls, c, env_vars: dict[str, str]) -> str | None:

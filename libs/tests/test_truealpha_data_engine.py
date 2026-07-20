@@ -10,7 +10,9 @@ SERVICE_DIR = ROOT / "truealpha/truealpha/20.data_engine"
 
 
 def _load_deploy_module():
-    spec = importlib.util.spec_from_file_location("truealpha_data_engine_deploy", SERVICE_DIR / "deploy.py")
+    spec = importlib.util.spec_from_file_location(
+        "truealpha_data_engine_deploy", SERVICE_DIR / "deploy.py"
+    )
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -68,9 +70,7 @@ def test_status_health_commands_are_safe_for_remote_single_quote_wrapper():
 def test_compose_pins_one_digest_and_keeps_dagster_on_host_loopback():
     compose = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8"))
     services = compose["services"]
-    expected_image = (
-        "ghcr.io/wangzitian0/truealpha-data-engine@${DATA_ENGINE_IMAGE_DIGEST:?DATA_ENGINE_IMAGE_DIGEST is required}"
-    )
+    expected_image = "ghcr.io/wangzitian0/truealpha-data-engine@${DATA_ENGINE_IMAGE_DIGEST:?DATA_ENGINE_IMAGE_DIGEST is required}"
     for name in ("dagster-webserver", "dagster-daemon"):
         service = services[name]
         assert service["image"] == expected_image
@@ -88,7 +88,9 @@ def test_deployer_derives_isolated_ports_and_full_configuration_hash(monkeypatch
     module = _load_deploy_module()
     deployer = module.DataEngineDeployer
     values = _secret_values()
-    monkeypatch.setattr(deployer, "secrets", classmethod(lambda cls: _Secrets(values)))
+    monkeypatch.setattr(
+        deployer, "secrets_backend", classmethod(lambda cls: _Secrets(values))
+    )
     environment = {
         "ENV": "staging",
         "ENV_SUFFIX": "-staging",
@@ -112,5 +114,7 @@ def test_deployer_fails_closed_on_missing_or_malformed_release_inputs(monkeypatc
     deployer = module.DataEngineDeployer
     values = _secret_values()
     values["DATA_ENGINE_IMAGE_DIGEST"] = "latest"
-    monkeypatch.setattr(deployer, "secrets", classmethod(lambda cls: _Secrets(values)))
+    monkeypatch.setattr(
+        deployer, "secrets_backend", classmethod(lambda cls: _Secrets(values))
+    )
     assert not deployer.ensure_runtime_secrets()

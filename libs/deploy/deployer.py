@@ -489,8 +489,17 @@ class Deployer:
         return result
 
     @classmethod
-    def secrets(cls):
-        """Get secrets backend for this service"""
+    def secrets_backend(cls):
+        """Get the secrets backend for this service.
+
+        Renamed from ``secrets`` (#543 hotfix): service Deployers declare a
+        ``secrets = (SecretsFacet(...),)`` facet attribute (#542), which
+        SHADOWED a same-named classmethod at runtime — every sync that hit
+        ``ensure_runtime_secrets`` died with "'tuple' object is not callable"
+        (v1.1.35 staging reconcile). Facet attribute names must never collide
+        with Deployer callables — enforced by
+        libs/tests/test_service_facets.py.
+        """
         e = cls.env()
         # Use cls.project if PROJECT env not set
         project = cls.project_name(e)
@@ -501,7 +510,7 @@ class Deployer:
     @classmethod
     def ensure_runtime_secrets(cls, c: "Context" | None = None) -> bool:
         """Ensure all Vault secrets required by the runtime template exist."""
-        secrets_backend = cls.secrets()
+        secrets_backend = cls.secrets_backend()
 
         if cls.secret_key:
             try:
