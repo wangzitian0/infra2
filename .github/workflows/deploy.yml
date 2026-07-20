@@ -117,7 +117,10 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install runtime dependencies
-        run: python -m pip install httpx python-dotenv rich
+        # deploy_v2_canary imports infra2_sdk.delivery (#498) — install the package
+        # itself (as app-deploy-request.yml's canary step already does) instead of a
+        # manually maintained subset that silently drifts out of sync with its imports.
+        run: python -m pip install -e .
       - name: Canary the artifact before the real deploy
         env:
           VERSION_REF_INPUT: ${{ github.event.inputs.version_ref || 'main' }}
