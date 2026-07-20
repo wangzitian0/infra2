@@ -600,6 +600,46 @@ def test_cli_passes_surface_through(cli, capsys):
     assert out["env"] == "staging" and out["backend"] == "deploy-primitive"
 
 
+def test_cli_dokploy_host_ignores_a_per_service_domain_override(cli, monkeypatch):
+    # #550 regression: truealpha/app's own public --domain (truealpha.club) must never
+    # redirect the Dokploy CONTROL-PLANE host — there is exactly one Dokploy instance,
+    # always reachable via INTERNAL_DOMAIN (org-wide, set by both deploy workflows,
+    # never per-service-overridden). --domain still flows through as the app's own
+    # public domain (rec["domain"]) — only the Dokploy client host is decoupled from it.
+    rec, _json = cli
+    monkeypatch.setenv("INTERNAL_DOMAIN", "zitian.party")
+    rc = dv2.main(
+        [
+            "--service",
+            "truealpha/app",
+            "--type",
+            "staging",
+            "--version-ref",
+            "main",
+            "--iac-ref",
+            "main",
+            "--domain",
+            "truealpha.club",
+        ]
+    )
+    assert rc == 0
+    assert rec["client"] == "client@cloud.zitian.party"
+    assert rec["domain"] == "truealpha.club"
+
+
+def test_cli_dokploy_host_falls_back_to_domain_flag_without_internal_domain(
+    cli, monkeypatch
+):
+    # Local/manual runs that don't export INTERNAL_DOMAIN keep today's behavior.
+    rec, _json = cli
+    monkeypatch.delenv("INTERNAL_DOMAIN", raising=False)
+    rc = dv2.main(
+        ["--type", "staging", "--version-ref", "main", "--iac-ref", "main", "--domain", "zp.io"]
+    )
+    assert rc == 0
+    assert rec["client"] == "client@cloud.zp.io"
+
+
 def test_cli_passes_image_wait_overrides(cli):
     rec, _json = cli
     rc = dv2.main(
