@@ -88,6 +88,8 @@ class AppDeployer(Deployer):
             return False
         if not cls._ensure_secret_key():
             return False
+        if not cls._ensure_app_service_db_password():
+            return False
         secrets = cls.secrets_backend()
         if not (secrets.get("S3_ACCESS_KEY") and secrets.get("S3_SECRET_KEY")):
             warning(
@@ -122,6 +124,33 @@ class AppDeployer(Deployer):
             success("Vault: SECRET_KEY generated and stored")
             return True
         error("Failed to store SECRET_KEY in Vault")
+        return False
+
+    @classmethod
+    def _ensure_app_service_db_password(cls) -> bool:
+        """Auto-provision app_service_login's DB password in Vault (truealpha#432
+        Stage A).
+
+        db/roles.sql creates a scoped app_service_login role (mart_readonly +
+        app_runtime, no DDL) but sets no password of its own — that happens out of
+        band, here, exactly like SECRET_KEY. db/apply_migrations.sh forwards this
+        value to psql on every migration run, so a rotation here takes effect
+        automatically on the next deploy. DATABASE_URL itself is unchanged by this —
+        nothing authenticates as app_service_login yet — so a missing/rotated value
+        here is inert, never a runtime outage, unlike SECRET_KEY or the S3 keys.
+        """
+        secrets = cls.secrets_backend()
+        try:
+            existing = secrets.get("APP_SERVICE_DB_PASSWORD")
+        except VaultSecrets.VaultSecretNotFoundError:
+            existing = None
+        if existing:
+            info("Vault secret exists: APP_SERVICE_DB_PASSWORD")
+            return True
+        if secrets.set("APP_SERVICE_DB_PASSWORD", generate_password(32)):
+            success("Vault: APP_SERVICE_DB_PASSWORD generated and stored")
+            return True
+        error("Failed to store APP_SERVICE_DB_PASSWORD in Vault")
         return False
 
     @classmethod
