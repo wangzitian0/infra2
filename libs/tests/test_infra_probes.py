@@ -220,11 +220,44 @@ def test_in_band_probe_compose_uses_internal_network_targets() -> None:
     assert "platform-signoz${ENV_SUFFIX}" not in probe_block
 
 
-def test_public_route_probe_compose_is_not_enabled_by_default() -> None:
-    """#209: public-route truth is primarily owned by Cloudflare."""
-    compose = (ROOT / "platform/12.alerting/compose.yaml").read_text(encoding="utf-8")
+def test_public_route_probes_derive_from_facets_and_registered_signals() -> None:
+    """#543 (#209 REVERSED, operator-approved): public routes are probed from
+    inside as the third layer on the same routes Cloudflare (30min) and the
+    github-plane check (daily) already watch. The compose carries the env
+    reference; the content derives from PublicRouteFacet declarations; and
+    every rendered probe name MUST be a registered *-public-route signal —
+    an unregistered public probe cannot ship."""
+    import yaml
 
-    assert "PUBLIC_ROUTE_PROBE_SPECS" not in compose
+    from libs.probe_specs import render_public_route_spec_text, parse_probe_names
+
+    compose = (ROOT / "platform/12.alerting/compose.yaml").read_text(encoding="utf-8")
+    assert "PUBLIC_ROUTE_PROBE_SPECS: ${PUBLIC_ROUTE_PROBE_SPECS:-}" in compose
+
+    signals = yaml.safe_load(
+        (ROOT / "docs/ssot/watchdog-signals.yaml").read_text(encoding="utf-8")
+    )
+    registered = {s.get("signal") for s in signals.get("signals", [])}
+
+    prod = render_public_route_spec_text("production", "zitian.party")
+    staging = render_public_route_spec_text("staging", "zitian.party")
+    prod_names = parse_probe_names(prod)
+    staging_names = parse_probe_names(staging)
+
+    assert prod_names, "production must render public-route probes"
+    for name in prod_names | staging_names:
+        assert name in registered, f"unregistered public-route probe: {name}"
+    # prod_only services (signoz) render for production only — the staging host
+    # never exists (the false-positive class the old literal documented)
+    assert "signoz-public-route" in prod_names
+    assert "signoz-public-route" not in staging_names
+    # non-production renders are warning severity — a broken staging route is
+    # not a page-worthy production incident
+    for line in staging.splitlines():
+        assert "|warning|" in line
+    # env_shared bootstrap hosts carry no env suffix in any environment
+    assert "https://vault.zitian.party" in staging
+    assert "https://cloud.zitian.party" in staging
 
 
 def test_probe_runner_dedupes_unchanged_failures_and_sends_recovery(

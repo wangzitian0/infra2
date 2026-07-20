@@ -11,7 +11,7 @@ import sys
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.env import generate_password
 from libs.console import header, success, error, warning, info, env_vars
-from libs.service_facets import BackupFacet, ProbeFacet, SecretsFacet
+from libs.service_facets import PublicRouteFacet, BackupFacet, ProbeFacet, SecretsFacet
 
 shared_tasks = sys.modules.get("platform.03.minio.shared")
 
@@ -53,6 +53,14 @@ class MinioDeployer(Deployer):
 
     # Domain configuration for Dokploy (Console)
     subdomain = "minio"  # minio.{INTERNAL_DOMAIN} -> Console
+
+    # Public route probed from inside (#543, #209 reversed).
+    public_routes = (
+        PublicRouteFacet(
+            name="minio-public-route",
+            path="/minio/health/live",
+        ),
+    )
     service_port = 9001  # MinIO Console port
     service_name = "minio"
 

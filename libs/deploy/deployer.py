@@ -25,7 +25,13 @@ from libs.console import (
     run_with_status,
 )
 from libs.env import VaultSecrets, generate_password, get_secrets, verify_vault_token
-from libs.service_facets import BackupFacet, Exemption, ProbeFacet, SignalFacet
+from libs.service_facets import (
+    BackupFacet,
+    Exemption,
+    ProbeFacet,
+    PublicRouteFacet,
+    SignalFacet,
+)
 
 if TYPE_CHECKING:
     from invoke import Context
@@ -391,6 +397,7 @@ class Deployer:
     # LITERAL constructor calls (they are read via AST, never imported) — see
     # libs/service_facets.py for the constraint and field docs.
     probes: tuple[ProbeFacet, ...] = ()
+    public_routes: tuple[PublicRouteFacet, ...] = ()
     signals: tuple[SignalFacet, ...] = ()
     backups: tuple[BackupFacet, ...] = ()
     exemptions: tuple[Exemption, ...] = ()

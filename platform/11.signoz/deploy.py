@@ -13,7 +13,7 @@ from libs.common import (
     otel_ingest_endpoint,
     service_domain,
 )
-from libs.service_facets import BackupFacet, ProbeFacet
+from libs.service_facets import PublicRouteFacet, BackupFacet, ProbeFacet
 
 shared_tasks = sys.modules.get("platform.11.signoz.shared")
 
@@ -41,6 +41,16 @@ class SigNozDeployer(Deployer):
     # labels in compose.yaml — see docs/ssot/platform.domain.md and
     # libs/tests/test_domain_routing_policy.py.
     subdomain = "signoz"
+
+    # Public route probed from inside (#543, #209 reversed). prod_only: the
+    # renderer emits this for production only (staging host never exists).
+    public_routes = (
+        PublicRouteFacet(
+            name="signoz-public-route",
+            path="/api/v1/health",
+            expected="200,301,302,401",
+        ),
+    )
     service_port = 8080  # SigNoz unified container port
     service_name = "signoz"
 

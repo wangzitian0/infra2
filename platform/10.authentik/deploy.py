@@ -7,7 +7,7 @@ from libs.common import with_env_suffix
 from libs.env import VAULT_ROOT_TOKEN_OP_REF
 from libs.console import success, warning, info, error, run_with_status
 from libs.env import generate_password, get_secrets
-from libs.service_facets import BackupFacet, ProbeFacet, SecretsFacet
+from libs.service_facets import PublicRouteFacet, BackupFacet, ProbeFacet, SecretsFacet
 
 shared_tasks = sys.modules.get("platform.10.authentik.shared")
 
@@ -31,6 +31,17 @@ class AuthentikDeployer(Deployer):
 
     # Domain configuration via Dokploy domains
     subdomain = "sso"
+
+    # Public route probed from inside (#543, #209 reversed): the third layer on
+    # the same route Cloudflare (30min) and the github-plane check (daily)
+    # already watch — minute cadence through the full public path.
+    public_routes = (
+        PublicRouteFacet(
+            name="authentik-public-route",
+            path="/-/health/live/",
+            expected="200,204,302",
+        ),
+    )
     service_port = 9000
     service_name = "server"
 

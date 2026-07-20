@@ -26,6 +26,7 @@ from libs.service_facets import (
     BackupFacet,
     Exemption,
     ProbeFacet,
+    PublicRouteFacet,
     SecretsFacet,
     SignalFacet,
 )
@@ -93,6 +94,7 @@ class ServiceMeta:
     # Facet declarations (#541): typed per-service operational facts, read from
     # the same Deployer class via AST. See libs/service_facets.py.
     probes: tuple[ProbeFacet, ...] = ()
+    public_routes: tuple[PublicRouteFacet, ...] = ()
     signals: tuple[SignalFacet, ...] = ()
     backups: tuple[BackupFacet, ...] = ()
     secrets: tuple[SecretsFacet, ...] = ()
@@ -150,6 +152,7 @@ def _meta_from_deploy_file(
             _class_attr(tree, "not_yet_in_production") or False
         ),
         probes=_facet_seq(tree, "probes", ProbeFacet, where),
+        public_routes=_facet_seq(tree, "public_routes", PublicRouteFacet, where),
         signals=_facet_seq(tree, "signals", SignalFacet, where),
         backups=_facet_seq(tree, "backups", BackupFacet, where),
         secrets=_facet_seq(tree, "secrets", SecretsFacet, where),

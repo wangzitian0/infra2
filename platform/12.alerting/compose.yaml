@@ -185,6 +185,9 @@ services:
       # libs/tests/fixtures/infra_probe_specs_frozen.txt (permanent
       # equivalence regression, libs/tests/test_probe_specs_equivalence.py).
       INFRA_PROBE_SPECS: ${INFRA_PROBE_SPECS:-}
+      # #543 (#209 reversed): registry-rendered public-route probes; empty only
+      # when no service declares one
+      PUBLIC_ROUTE_PROBE_SPECS: ${PUBLIC_ROUTE_PROBE_SPECS:-}
       # --- watcher plugin: deploy-queue guard (#543 merge; env names kept
       # verbatim from the deleted deploy-queue-guard service for continuity).
       # Observe deploys stuck `running` past the ceiling via Dokploy's API and

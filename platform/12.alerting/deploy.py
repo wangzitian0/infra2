@@ -5,7 +5,7 @@ import sys
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.env import get_secrets
 from libs.console import error, info, success
-from libs.service_facets import BackupFacet, ProbeFacet, SecretsFacet
+from libs.service_facets import PublicRouteFacet, BackupFacet, ProbeFacet, SecretsFacet
 
 shared_tasks = sys.modules.get("platform.12.alerting.shared")
 
@@ -49,6 +49,26 @@ class AlertingDeployer(Deployer):
     # Feishu reachable, no real post), the out-of-band watchdog's independent
     # bridge /health check, the daily reports' own Feishu delivery, and real
     # alerts when they fire.
+    # Public routes for the bootstrap plane (#543, on-behalf like the bootstrap
+    # ProbeFacets above): vault + dokploy are single shared instances
+    # (env_shared — never an env suffix), at their own hosts.
+    public_routes = (
+        PublicRouteFacet(
+            name="vault-public-route",
+            subdomain="vault",
+            service_id="bootstrap/vault",
+            path="/v1/sys/health",
+            expected="200,429,472,473",
+            env_shared=True,
+        ),
+        PublicRouteFacet(
+            name="dokploy-public-route",
+            subdomain="cloud",
+            service_id="bootstrap/dokploy",
+            expected="200,302",
+            env_shared=True,
+        ),
+    )
     probes = (
         ProbeFacet(
             name="alert-bridge-http",
@@ -155,6 +175,29 @@ class AlertingDeployer(Deployer):
         return encode_specs_env_value(text)
 
     @classmethod
+    def _public_route_specs_env_value(cls, e) -> str:
+        """Public-route probes as ONE dotenv-safe env value (#543, #209 reversed).
+
+        Same derivation + transport as INFRA_PROBE_SPECS: PublicRouteFacets ->
+        render_public_route_spec_text(env, domain) with the domain resolved at
+        render time (the $-free transport rejects placeholders), then the ;;
+        encoding. Empty only when no service declares a public route.
+        """
+        from libs.probe_specs import (
+            encode_specs_env_value,
+            render_public_route_spec_text,
+        )
+
+        env_name = e.get("ENV", "production")
+        domain = e.get("INTERNAL_DOMAIN", "")
+        if not domain:
+            raise ValueError(
+                "INTERNAL_DOMAIN is required to render PUBLIC_ROUTE_PROBE_SPECS"
+            )
+        text = render_public_route_spec_text(env_name, domain)
+        return encode_specs_env_value(text) if text else ""
+
+    @classmethod
     def compose_env_base(cls, env=None):
         """Rendered probe specs + probe heartbeat runtime env for Dokploy.
 
@@ -166,6 +209,7 @@ class AlertingDeployer(Deployer):
         e = env or cls.env()
         result = super().compose_env_base(e)
         result["INFRA_PROBE_SPECS"] = cls._probe_specs_env_value(e)
+        result["PUBLIC_ROUTE_PROBE_SPECS"] = cls._public_route_specs_env_value(e)
         op_secrets = get_secrets(
             project=cls.project_name(e),
             service=cls.service,
@@ -189,6 +233,7 @@ class AlertingDeployer(Deployer):
         e = env or cls.env()
         result = super().compose_env_base(e)
         result["INFRA_PROBE_SPECS"] = cls._probe_specs_env_value(e)
+        result["PUBLIC_ROUTE_PROBE_SPECS"] = cls._public_route_specs_env_value(e)
         return result
 
     @classmethod
@@ -242,6 +287,11 @@ class AlertingDeployer(Deployer):
         # from the ProbeFacet registry by compose_env_base) — the compose file
         # only carries the ${INFRA_PROBE_SPECS} reference now.
         source_specs = normalize_specs_text(env_vars.get("INFRA_PROBE_SPECS", ""))
+        # #543: the public-route group rides the same transport — verify it with
+        # the same raw-equality discipline (a stale container must not pass).
+        source_public = normalize_specs_text(
+            env_vars.get("PUBLIC_ROUTE_PROBE_SPECS", "")
+        )
         if not source_specs:
             # Fail-closed (#541): the renderer always produces probes (it raises on
             # an empty walk), so an empty deployed value here means the transport
@@ -283,6 +333,26 @@ class AlertingDeployer(Deployer):
                 # config can no longer masquerade as verified.
                 value_matches = normalize_specs_text(running_raw) == source_specs
                 if not missing and value_matches:
+                    # #543: same raw-equality discipline for the public-route
+                    # group riding the same transport — only when one is declared.
+                    if source_public:
+                        pub = c.run(
+                            f"ssh {ssh_user}@{host} "
+                            f"'docker exec {container} printenv PUBLIC_ROUTE_PROBE_SPECS'",
+                            warn=True,
+                            hide=True,
+                        )
+                        pub_raw = (pub.stdout or "").strip() if not pub.failed else ""
+                        if normalize_specs_text(pub_raw) != source_public:
+                            last_err = (
+                                f"{container} does not carry this deploy's exact "
+                                "PUBLIC_ROUTE_PROBE_SPECS value (stale or dropped)"
+                            )
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                return last_err
+                            time.sleep(min(5, max(1, remaining)))
+                            continue
                     success(
                         f"Runtime verified: {container} carries this deploy's exact "
                         "probe specs"
