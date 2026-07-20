@@ -77,6 +77,7 @@ def canary_services() -> list[str]:
         )
     return services
 
+
 _SDK_FAILURE_DOMAIN = {
     "deploy-v2-control-plane": FailureDomain.DOKPLOY_CONTROL_PLANE,
     "deploy-v2-health": FailureDomain.DOCKER_RUNTIME,
@@ -316,9 +317,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     # Imported lazily so importing the module (and its unit tests) needs no Dokploy creds.
+    from libs.common import infra_domain
     from libs.dokploy import get_dokploy
 
-    client = get_dokploy(host=f"cloud.{args.domain}")
+    # The Dokploy CONTROL PLANE is always the one shared host — never a per-service app
+    # domain override, even though --domain is normally already the shared INTERNAL_DOMAIN
+    # for this script's callers; see libs.common.infra_domain.
+    client = get_dokploy(host=f"cloud.{infra_domain()}")
     # --service = explicit single-service override (#538); default = every
     # registry service that opted into the scheduled canary (#541). One JSON
     # result line per service (today: exactly one — ops-checks' single-line

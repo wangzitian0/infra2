@@ -21,6 +21,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
+from libs.common import infra_domain
 from libs.compose_lock import compose_write_lock
 from libs.deploy_env_config import app_compose_env_config, otel_env
 from libs.deploy_queue import deployment_start_epoch
@@ -296,8 +297,11 @@ def deploy(
         )
 
     # Fail closed BEFORE any mutation if the compose's Vault token can't carry the deploy.
+    # Vault is the ONE shared control-plane instance (infra_domain), never this app's own
+    # routing domain — passing `domain` here would probe a vault.<app-domain> host that
+    # doesn't exist for any service with a domain override (#550).
     if verify_vault:
-        preflight_vault_token(client, cfg.compose_id, domain)
+        preflight_vault_token(client, cfg.compose_id, infra_domain())
 
     # The registry publishes images under the 7-char short sha (`git rev-parse --short`,
     # and the promote path's `${sha:0:7}`); pushing the full 40-char sha as IMAGE_TAG
@@ -349,7 +353,10 @@ def deploy(
     env_vars.update(openpanel_env(env))
     # #368: FE OTLP endpoint built ONCE (libs.deploy_env_config.otel_env) and injected
     # here so the compose consumes it instead of re-constructing the otel.<domain> URL.
-    env_vars.update(otel_env(domain=domain))
+    # SigNoz ingest is the shared platform instance (infra_domain), never this app's own
+    # routing domain — an app-domain override would ship the frontend an otel.<app-domain>
+    # endpoint with no collector behind it (#550).
+    env_vars.update(otel_env(domain=infra_domain()))
     if model_overrides:
         # only non-empty overrides (an unset override must not blank the running model)
         env_vars.update({k: v for k, v in model_overrides.items() if v})

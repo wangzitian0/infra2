@@ -880,6 +880,7 @@ def main(argv: list[str] | None = None) -> int:
                 if spec.alias_kind == "branch"
                 else args.version_ref
             )
+            from libs.common import infra_domain
             from libs.dokploy import get_dokploy
 
             # Reject a malformed domain before it reaches the Dokploy host string — the
@@ -890,7 +891,9 @@ def main(argv: list[str] | None = None) -> int:
                 spec.alias_kind,
                 alias_value,
                 domain=domain,
-                client=get_dokploy(host=f"cloud.{domain}"),
+                # The Dokploy CONTROL PLANE is always the one shared host — never this
+                # app's own routing domain (infra_domain, not domain; see libs.common).
+                client=get_dokploy(host=f"cloud.{infra_domain()}"),
                 service=args.service,
             )
             print(
@@ -927,9 +930,12 @@ def main(argv: list[str] | None = None) -> int:
         client = None
         if not service_spec(args.service).iac_pinned:
             # Imported lazily so importing the module needs no Dokploy creds.
+            from libs.common import infra_domain
             from libs.dokploy import get_dokploy
 
-            client = get_dokploy(host=f"cloud.{args.domain}")
+            # The Dokploy CONTROL PLANE is always the one shared host — never this app's
+            # own routing domain (args.domain); see libs.common.infra_domain.
+            client = get_dokploy(host=f"cloud.{infra_domain()}")
         result = deploy_v2(
             service=args.service,
             deploy_type=args.deploy_type,

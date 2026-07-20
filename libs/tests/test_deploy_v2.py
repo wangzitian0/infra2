@@ -211,7 +211,9 @@ def test_iac_ref_on_main_accepts_reachable(status):
 @pytest.mark.parametrize("status", ["ahead", "diverged"])
 def test_iac_ref_off_main_refused(status):
     with pytest.raises(ValueError, match="not on infra2 main"):
-        assert_iac_ref_on_main("v1.2.3", "prod", token="", transport=_cmp_transport(status))
+        assert_iac_ref_on_main(
+            "v1.2.3", "prod", token="", transport=_cmp_transport(status)
+        )
 
 
 def test_iac_ref_on_main_exempt_for_preview():
@@ -593,7 +595,9 @@ def test_cli_passes_surface_through(cli, capsys):
     assert rc == 0
     assert rec["deploy_type"] == "staging"
     assert rec["version_ref"] == "main" and rec["iac_ref"] == "main"
-    assert rec["client"] == "client@cloud.zp.io"  # host = cloud.<domain>
+    # host is the shared control-plane domain (libs.common.infra_domain), NOT --domain —
+    # see test_cli_down_tears_down_the_selected_preview_alias for the same split.
+    assert rec["client"] == "client@cloud.zitian.party"
     assert rec["image_wait_seconds"] is None
     assert rec["image_poll_seconds"] is None
     out = json.loads(capsys.readouterr().out)
@@ -723,7 +727,9 @@ def test_cli_down_tears_down_the_selected_preview_alias(monkeypatch, capsys):
     rec = {}
 
     def fake_down(kind, value, *, domain, client, service):
-        rec.update(kind=kind, value=value, domain=domain, client=client, service=service)
+        rec.update(
+            kind=kind, value=value, domain=domain, client=client, service=service
+        )
         return _fake_down_result(kind, value, domain=domain, client=client)
 
     import libs.dokploy as dk
@@ -756,7 +762,10 @@ def test_cli_down_tears_down_the_selected_preview_alias(monkeypatch, capsys):
         "kind": "pr",
         "value": "5",
         "domain": "zp.io",
-        "client": "client@cloud.zp.io",
+        # The Dokploy control-plane client is always the ONE shared host
+        # (libs.common.infra_domain) — independent of --domain, which is this app's own
+        # routing domain and stays "zp.io" above.
+        "client": "client@cloud.zitian.party",
         "service": "finance_report/app",
     }
     out = json.loads(capsys.readouterr().out)

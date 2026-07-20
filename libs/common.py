@@ -52,6 +52,28 @@ SHARED_PLATFORM_SERVICES = {
     "signoz",
 }
 
+
+def infra_domain() -> str:
+    """The ONE shared control-plane domain — cloud./vault./otel./sso./op./signoz./...
+    (SHARED_PLATFORM_SERVICES above) — independent of any per-service app-routing domain.
+
+    finance_report/app and truealpha/app route their own public traffic under different
+    domains (Deployer.domain, #550), but the platform behind them is a single shared
+    Dokploy instance and must never follow that override — passing an app's own domain
+    into a cloud./vault./otel. host build produces a nonexistent hostname with no
+    Traefik router or cert (a Cloudflare 526, in truealpha's case).
+
+    Reads INTERNAL_DOMAIN from the environment — the same variable every platform
+    Deployer (``e.get("INTERNAL_DOMAIN")``, see ``libs.deploy.deployer``) and CI workflow
+    already sets this from, and the same fallback literal already used at every other
+    ``INTERNAL_DOMAIN``-reading call site (``tools/reconcile_iac_inputs.py``,
+    ``tools/signoz_alert_rule_canary.py``). Deliberately takes NO caller-supplied
+    fallback — accepting one reintroduces the exact bug this closes the moment a caller
+    passes its own app domain as that fallback.
+    """
+    return os.environ.get("INTERNAL_DOMAIN") or "zitian.party"
+
+
 # Cache for env config (simple dict, no lru_cache to avoid OpSecrets caching issues)
 _env_cache: dict | None = None
 

@@ -103,6 +103,36 @@ def test_truealpha_staging_deploy_resolves_its_own_compose_and_identity():
     # per-image tags.
 
 
+def test_app_domain_override_does_not_leak_into_the_shared_control_plane_endpoints():
+    # truealpha/app routes its own public traffic under truealpha.club (Deployer.domain,
+    # #550) while Vault/SigNoz stay the single shared zitian.party instance. Before this
+    # was fixed, `domain` flowed into BOTH uses undifferentiated: a truealpha deploy's
+    # OTLP endpoint pointed at otel.truealpha.club (no collector there — every truealpha
+    # deploy silently shipped a broken telemetry endpoint to the frontend), and the same
+    # conflation would have sent the Vault preflight probe to vault.truealpha.club (a
+    # Cloudflare 526, the exact failure that surfaced this on truealpha's first real
+    # deploy — dormant here only because AppRole auth skips that preflight).
+    client = FakeDokploy()
+    plan = dp.deploy(
+        "staging",
+        FULL_SHA,
+        domain="truealpha.club",
+        client=client,
+        service="truealpha/app",
+        iac_ref="b" * 40,
+    )
+    cid, env = client.updated[0]
+    assert cid == plan.compose_id
+    # app's OWN routing: follows the override, unchanged.
+    assert env["NEXT_PUBLIC_APP_URL"] == "https://truealpha-staging.truealpha.club"
+    assert env["INTERNAL_DOMAIN"] == "truealpha.club"
+    # shared control plane: NEVER follows the override.
+    assert (
+        env["NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT"]
+        == "https://otel.zitian.party/v1/traces"
+    )
+
+
 def test_truealpha_prod_deploy_resolves_its_own_compose_and_identity():
     # truealpha/app's production compose went live 2026-07-19 (Vault AppRole + app
     # secret + MinIO bucket provisioned, postgres + app deployed and health-checked at
