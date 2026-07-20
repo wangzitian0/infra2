@@ -73,6 +73,11 @@ services:
       # render (secret/data/truealpha/<PREVIEW_SECRET_ENV>/app). Must be passed into THIS
       # container — the renderer — or the template falls back to its "staging" default.
       PREVIEW_SECRET_ENV: ${PREVIEW_SECRET_ENV:-staging}
+      # Cache-bust, matching 10.app/compose.yaml and finance_report's vault-agent —
+      # without a var this container's own config reads, Compose can leave a stale
+      # vault-agent (and stale rendered secrets.ctmpl) running across a redeploy.
+      GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
+      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
     healthcheck:
       test:
         - CMD-SHELL
@@ -232,6 +237,7 @@ services:
         exec node server.js
     environment:
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
+      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
       HOSTNAME: 0.0.0.0
       PORT: "3000"
       PREVIEW_DATABASE_URL: postgresql://${PREVIEW_DB_USER:-preview}:${PREVIEW_DB_PASSWORD:-preview}@truealpha-preview-db${ENV_SUFFIX}:5432/${PREVIEW_DB_NAME:-truealpha}
