@@ -226,7 +226,19 @@ def _record_urls(records: Iterable[str]) -> list[str]:
     return [f"https://{record}" for record in records]
 
 
-def _ensure_dns_records(records: list[str], proxied: bool, ttl: int) -> bool:
+def _ensure_dns_records(
+    records: list[str], proxied: bool, ttl: int, *, domain: str | None = None
+) -> bool:
+    """Ensure A records under ``domain`` (default INTERNAL_DOMAIN, the shared infra
+    zone) resolve to VPS_HOST.
+
+    ``domain`` lets a caller target a DIFFERENT Cloudflare zone this same VPS also
+    serves — e.g. a per-app custom domain (truealpha.club, #550) — without touching
+    the shared zone's CF_ZONE_ID: when ``domain`` differs from CF_ZONE_NAME/
+    INTERNAL_DOMAIN, the zone is resolved by NAME via the Cloudflare API instead of
+    the pinned CF_ZONE_ID (see _resolve_zone_id). The one CF_API_TOKEN in 1Password
+    already carries Zone.DNS access to both zones (verified live 2026-07-20).
+    """
     env = get_env()
     internal_domain = env.get("INTERNAL_DOMAIN")
     vps_host = env.get("VPS_HOST")
@@ -240,14 +252,16 @@ def _ensure_dns_records(records: list[str], proxied: bool, ttl: int) -> bool:
 
     secrets = _load_cloudflare_secrets()
     token = secrets.get("CF_API_TOKEN")
-    zone_id = secrets.get("CF_ZONE_ID")
-    zone_name = secrets.get("CF_ZONE_NAME") or internal_domain
+    zone_name = domain or secrets.get("CF_ZONE_NAME") or internal_domain
+    # The pinned CF_ZONE_ID only names the DEFAULT zone — a --domain override always
+    # resolves its own zone id by name (never reuse CF_ZONE_ID for a different zone).
+    zone_id = secrets.get("CF_ZONE_ID") if zone_name == internal_domain else None
 
     if not token:
         error("Missing CF_API_TOKEN", "Set in 1Password item bootstrap/cloudflare")
         return False
 
-    normalized = _normalize_record_list(records, internal_domain)
+    normalized = _normalize_record_list(records, zone_name)
     if not normalized:
         return False
     if not proxied and ttl <= 1:
@@ -392,16 +406,27 @@ def _write_record_list(records: list[str]) -> bool:
 
 
 @task
-def apply(c, records="", proxied="true", ttl=str(DEFAULT_TTL)):
-    """Ensure Cloudflare DNS records for bootstrap domains"""
+def apply(c, records="", proxied="true", ttl=str(DEFAULT_TTL), domain=""):
+    """Ensure Cloudflare DNS records for bootstrap domains.
+
+    --domain targets a different Cloudflare zone this VPS also serves (e.g. a
+    per-app custom domain, #550) instead of the default INTERNAL_DOMAIN zone —
+    --records must be given explicitly too in that case (CF_RECORDS in 1Password
+    is scoped to the default zone's records, not any override zone's).
+    """
     header("DNS apply", "Cloudflare DNS records")
-    record_list = _load_record_list(records)
+    record_list = (
+        _load_record_list(records) if not domain else _split_records_or_empty(records)
+    )
+    if domain and not record_list:
+        error("No records provided", "Use --records=sub1,sub2 with --domain")
+        return
     proxied_flag = _parse_bool(proxied, True)
     try:
         ttl_int = int(ttl)
     except ValueError:
         ttl_int = DEFAULT_TTL
-    if _ensure_dns_records(record_list, proxied_flag, ttl_int):
+    if _ensure_dns_records(record_list, proxied_flag, ttl_int, domain=domain or None):
         success("DNS apply complete")
 
 

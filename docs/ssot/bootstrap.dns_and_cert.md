@@ -12,7 +12,7 @@
 | **DNS 自动化** | `bootstrap/02.dns_and_cert/tasks.py` | Cloudflare API 调用与任务入口 |
 | **操作手册** | `bootstrap/02.dns_and_cert/README.md` | 使用方法与兜底说明 |
 | **环境变量清单** | `bootstrap/02.dns_and_cert/.env.example` | 仅 Key 清单 |
-| **密钥真源** | 1Password `bootstrap/cloudflare` | `CF_API_TOKEN`, `CF_ZONE_ID`, `CF_ZONE_NAME` |
+| **密钥真源** | 1Password `bootstrap/cloudflare` | `CF_API_TOKEN`, `CF_ZONE_ID`, `CF_ZONE_NAME`, `CF_ACCOUNT_ID` |
 | **默认域名列表** | 1Password `bootstrap/cloudflare` | `CF_RECORDS` |
 | **基础变量** | 1Password `init/env_vars` | `VPS_HOST`, `INTERNAL_DOMAIN` |
 
@@ -38,6 +38,29 @@ flowchart TB
 - **证书由 Cloudflare + Traefik 共同完成**：边缘证书由 Cloudflare 提供，源站证书由 Traefik 自动申请。
 - **域名范围**：`cloud`, `op`, `vault`, `sso`, `home`。
 - **可扩展**：新增域名写入 `CF_RECORDS` 或用 `invoke dns_and_cert.add`。
+
+### 多 Zone（App 自有域名）
+
+某些 App 有自己独立于 `INTERNAL_DOMAIN` 的公开域名（例如 truealpha/app 的
+`truealpha.club`，见 infra2#550），路由到**同一台 VPS**，但和共享控制面
+（`cloud.`/`vault.`/`otel.` 等，见 `libs.common.infra_domain()`）是两个不同的
+Cloudflare zone。这些域名的 A 记录（wildcard `*` + apex `@`）不在
+`bootstrap/02.dns_and_cert` 默认管理范围（`CF_RECORDS` 仍只描述
+`INTERNAL_DOMAIN` 下的记录），改用 `invoke dns-and-cert.apply --domain=<zone> --records=<...>`
+显式指定 zone：
+
+```bash
+invoke dns-and-cert.apply --domain=truealpha.club --records="*,@"
+```
+
+`--domain` 与默认 `INTERNAL_DOMAIN` 不同时，zone 永远按名称实时解析（绝不复用
+`CF_ZONE_ID`——那只是默认 zone 的 id，跨 zone 复用会静默写错 zone）。同一个
+`CF_API_TOKEN` 已同时对 `zitian.party` 与 `truealpha.club` 两个 zone 授权
+（Zone.Zone + Zone.DNS，2026-07-20 验证）；该 token **没有** Zone Settings 权限，
+所以 `invoke dns-and-cert.ssl` 目前只能对默认 zone 生效——`truealpha.club` 的
+SSL/TLS 模式仍需在 Cloudflare 控制台手动确认（该 zone 的邮件相关记录
+`MX`/`SendGrid CNAME`/`DKIM`/`SPF`/`DMARC` 也完全在本自动化管理范围之外，不要
+碰）。
 
 ---
 
