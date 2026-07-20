@@ -37,7 +37,30 @@ flowchart TB
 - **DNS 由 Cloudflare 管理**，DNS 记录通过 API 自动化。
 - **证书由 Cloudflare + Traefik 共同完成**：边缘证书由 Cloudflare 提供，源站证书由 Traefik 自动申请。
 - **域名范围**：`cloud`, `op`, `vault`, `sso`, `home`。
-- **可扩展**：新增域名写入 `CF_RECORDS` 或用 `invoke dns_and_cert.add`。
+- **可扩展**：新增域名写入 `CF_RECORDS` 或用 `invoke dns-and-cert.add`。
+
+### 多 Zone（App 自有域名）
+
+某些 App 有自己独立于 `INTERNAL_DOMAIN` 的公开域名（例如 truealpha/app 的
+`truealpha.club`，见 infra2#550），路由到**同一台 VPS**，但和共享控制面
+（`cloud.`/`vault.`/`otel.` 等，见 `libs.common.infra_domain()`）是两个不同的
+Cloudflare zone。这些域名的 A 记录（wildcard `*` + apex `@`）不在
+`bootstrap/02.dns_and_cert` 默认管理范围（`CF_RECORDS` 仍只描述
+`INTERNAL_DOMAIN` 下的记录），改用 `invoke dns-and-cert.apply --domain=<zone> --records=<...>`
+显式指定 zone：
+
+```bash
+invoke dns-and-cert.apply --domain=truealpha.club --records="*,@"
+```
+
+`--domain` 与默认 `INTERNAL_DOMAIN` 不同时，zone 永远按名称实时解析（绝不复用
+`CF_ZONE_ID`——那只是默认 zone 的 id，跨 zone 复用会静默写错 zone）。同一个
+`CF_API_TOKEN` 已同时对 `zitian.party` 与 `truealpha.club` 两个 zone 授权
+（Zone.Zone + Zone.DNS，2026-07-20 验证）；该 token **没有** Zone Settings 权限，
+所以 `invoke dns-and-cert.ssl` 目前只能对默认 zone 生效——`truealpha.club` 的
+SSL/TLS 模式仍需在 Cloudflare 控制台手动确认（该 zone 的邮件相关记录
+`MX`/`SendGrid CNAME`/`DKIM`/`SPF`/`DMARC` 也完全在本自动化管理范围之外，不要
+碰）。
 
 ---
 
@@ -45,7 +68,7 @@ flowchart TB
 
 ### ✅ 推荐模式
 
-- 使用 `invoke dns_and_cert.setup` 统一创建记录与 SSL 设置。
+- 使用 `invoke dns-and-cert.setup` 统一创建记录与 SSL 设置。
 - 修改域名或目标 IP 时只更新 1Password/模板，然后重跑任务。
 
 ### ⛔ 禁止模式
@@ -72,7 +95,7 @@ flowchart TB
 ### SOP-001: 一键配置 DNS + SSL
 
 ```bash
-invoke dns_and_cert.setup
+invoke dns-and-cert.setup
 ```
 
 `setup` 默认内置 60s 冷却等待，避免 DNS/证书传播导致误判，可用 `--cooldown=0` 跳过。
@@ -80,20 +103,20 @@ invoke dns_and_cert.setup
 ### SOP-002: 仅更新 DNS 记录
 
 ```bash
-invoke dns_and_cert.apply
+invoke dns-and-cert.apply
 ```
 
 ### SOP-003: 新增域名
 
 ```bash
-invoke dns_and_cert.add --records=newapp
+invoke dns-and-cert.add --records=newapp
 ```
 
 ### SOP-004: 证书预热与验证
 
 ```bash
-invoke dns_and_cert.warm
-invoke dns_and_cert.verify
+invoke dns-and-cert.warm
+invoke dns-and-cert.verify
 ```
 
 ---
@@ -102,8 +125,8 @@ invoke dns_and_cert.verify
 
 | 行为描述 | 验证方式 | 覆盖率 |
 |----------|----------|--------|
-| DNS 可解析 | `invoke dns_and_cert.verify` | ✅ Manual |
-| HTTPS 可达 | `invoke dns_and_cert.verify` | ✅ Manual |
+| DNS 可解析 | `invoke dns-and-cert.verify` | ✅ Manual |
+| HTTPS 可达 | `invoke dns-and-cert.verify` | ✅ Manual |
 | 网络层 E2E | `e2e_regressions/tests/bootstrap/network_layer/test_network.py` | ✅ Critical |
 
 ---
