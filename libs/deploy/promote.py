@@ -136,6 +136,50 @@ def _env_value(env_str: str, key: str) -> str | None:
     return None
 
 
+def assert_approle_creds_present(service: str, client, compose_id: str) -> None:
+    """Fail closed if this service's compose uses Vault AppRole auth but the env about
+    to be deployed lacks role/secret/addr creds.
+
+    #290/#316 added this exact guard (the #257/#290 foot-gun: an AppRole config change
+    lands without VAULT_ROLE_ID/VAULT_SECRET_ID, so the vault-agent crash-loops instead
+    of the service ever starting) — but only on the legacy Deployer.composing() path
+    and libs.deploy.preview's own copy. This promote path (what deploy_v2 actually
+    routes every app staging/prod deploy through) never carried it over, so a fixed
+    compose missing AppRole creds deployed a crash-looping vault-agent with no
+    preflight signal. update_compose_env merges into the EXISTING compose env and this
+    function's caller never sets these keys, so reading the compose's current env here
+    reflects exactly what will still be true after this deploy.
+    """
+    from pathlib import Path
+
+    from libs.service_registry import service_attrs
+
+    meta = service_attrs().get(service)
+    if not meta or not meta.compose_path:
+        return  # no statically-registered compose file to inspect
+    compose_text = Path(meta.compose_path).read_text(encoding="utf-8")
+    if "VAULT_ROLE_ID" not in compose_text and "VAULT_SECRET_ID" not in compose_text:
+        return  # service does not use AppRole auth
+
+    env_text = client.get_compose_env(compose_id)
+    missing = [
+        key
+        for key in ("VAULT_ROLE_ID", "VAULT_SECRET_ID", "VAULT_ADDR")
+        if not (_env_value(env_text, key) or "").strip()
+    ]
+    if missing:
+        raise ValueError(
+            f"{service}: compose uses Vault AppRole auth but {', '.join(missing)} "
+            f"{'is' if len(missing) == 1 else 'are'} missing from the deploy env — the "
+            "vault-agent would crash-loop (missing role/secret) or hang reaching an "
+            "empty address (missing VAULT_ADDR) and deadlock on its healthcheck (~6 "
+            f"min) instead of starting. Run `invoke vault.setup-approle "
+            f"--service={service} --deploy` (or set VAULT_ADDR, e.g. "
+            "https://vault.<INTERNAL_DOMAIN>) on the compose/project env before "
+            "deploying."
+        )
+
+
 def preflight_vault_token(
     client, compose_id: str, domain: str, *, min_ttl_hours: int = 48
 ):
@@ -308,6 +352,12 @@ def deploy(
             "(promote-not-rebuild). Pass staging_validated=True once staging has run "
             "this exact digest, or break_glass=True as an audited override (H5)."
         )
+
+    # Fail closed BEFORE any mutation if this compose can't actually authenticate to
+    # Vault — unconditional (unlike the legacy VAULT_APP_TOKEN check below), matching
+    # the legacy Deployer.composing() path where this has always been a hard gate, not
+    # an opt-in.
+    assert_approle_creds_present(service, client, cfg.compose_id)
 
     # Fail closed BEFORE any mutation if the compose's Vault token can't carry the deploy.
     # Vault is the ONE shared control-plane instance (infra_domain), never this app's own

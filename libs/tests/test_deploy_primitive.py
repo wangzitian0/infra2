@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from libs.deploy import promote as dp
@@ -49,7 +51,12 @@ class FakeDokploy:
         # reflect the last pushed env as a KEY=VALUE blob (effective-config verify reads it)
         if self.updated:
             return "\n".join(f"{k}={v}" for k, v in self.updated[-1][1].items())
-        return ""
+        # Baseline: a realistically-provisioned compose already has its AppRole creds
+        # (set once at initial `invoke vault.setup-approle`, never touched by promote's
+        # own env push) — assert_approle_creds_present reads this BEFORE any push, so
+        # this is the state it sees. Tests exercising the missing-creds case override
+        # via env_str=.
+        return "VAULT_ROLE_ID=r\nVAULT_SECRET_ID=s\nVAULT_ADDR=https://vault.zitian.party"
 
 
 def test_staging_deploy_assembles_axes_and_triggers():
@@ -519,6 +526,55 @@ def test_preflight_vault_token_raises_on_expiring_token(monkeypatch):
         dp.preflight_vault_token(client, "cmp", "zitian.party")
 
 
+# --- #290's fixed staging/prod twin: assert_approle_creds_present ----------------
+
+
+def test_assert_approle_creds_present_passes_when_all_three_present():
+    # finance_report/app's real compose.yaml declares VAULT_ROLE_ID/SECRET_ID; the
+    # FakeDokploy default baseline env already carries all three creds.
+    dp.assert_approle_creds_present("finance_report/app", FakeDokploy(), "cmp")
+
+
+def test_assert_approle_creds_present_raises_when_all_missing():
+    client = FakeDokploy(env_str="")
+    with pytest.raises(ValueError, match="VAULT_ROLE_ID, VAULT_SECRET_ID, VAULT_ADDR"):
+        dp.assert_approle_creds_present("truealpha/app", client, "cmp")
+
+
+def test_assert_approle_creds_present_raises_when_only_addr_missing():
+    client = FakeDokploy(env_str="VAULT_ROLE_ID=r\nVAULT_SECRET_ID=s")
+    with pytest.raises(ValueError, match="VAULT_ADDR is missing"):
+        dp.assert_approle_creds_present("finance_report/app", client, "cmp")
+
+
+def test_assert_approle_creds_present_skips_a_non_approle_service(tmp_path, monkeypatch):
+    compose = tmp_path / "compose.yaml"
+    compose.write_text("services:\n  app:\n    image: example\n")
+    fake_meta = SimpleNamespace(compose_path=str(compose))
+    monkeypatch.setattr(
+        "libs.service_registry.service_attrs",
+        lambda: {"some/service": fake_meta},
+    )
+    # Empty env would fail closed if this service used AppRole auth — it doesn't.
+    dp.assert_approle_creds_present("some/service", FakeDokploy(env_str=""), "cmp")
+
+
+def test_assert_approle_creds_present_skips_an_unregistered_service():
+    # A service absent from service_attrs() (no static compose file to inspect) is
+    # left alone rather than raising — same fail-open-on-unknown as the rest of this
+    # module's optional lookups.
+    dp.assert_approle_creds_present("not/registered", FakeDokploy(env_str=""), "cmp")
+
+
+def test_deploy_raises_before_any_mutation_when_approle_creds_missing():
+    client = FakeDokploy(env_str="")
+    with pytest.raises(ValueError, match="VAULT_ROLE_ID"):
+        dp.deploy("staging", "deadbeef", domain="z.p", client=client)
+    assert client.updated == []
+    assert client.deployed == []
+    assert client.branch_updates == []
+
+
 def test_deploy_verify_vault_gates_before_any_mutation(monkeypatch):
     import libs.env as env_mod
 
@@ -527,6 +583,13 @@ def test_deploy_verify_vault_gates_before_any_mutation(monkeypatch):
         "verify_vault_token",
         lambda token, addr=None, min_ttl_hours=24: {"valid": False, "error": "expired"},
     )
+    # This test isolates the legacy VAULT_APP_TOKEN gate specifically — a real compose
+    # with a live, invalid legacy token but NO AppRole creds at all no longer exists
+    # post-#257 (every service's compose requires VAULT_ROLE_ID/SECRET_ID to even
+    # start), so assert_approle_creds_present would otherwise fire first here on a
+    # fixture this test doesn't intend to exercise. See test_assert_approle_creds_*
+    # below for that gate's own coverage.
+    monkeypatch.setattr(dp, "assert_approle_creds_present", lambda *a, **k: None)
     client = FakeDokploy(env_str="VAULT_APP_TOKEN=hvs.x")
     with pytest.raises(RuntimeError, match="preflight failed"):
         dp.deploy("staging", "deadbeef", domain="z.p", client=client, verify_vault=True)
