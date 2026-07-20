@@ -63,15 +63,17 @@ def test_status_health_commands_are_safe_for_remote_single_quote_wrapper():
 
     assert "'" not in module.WEBSERVER_HEALTH_COMMAND
     assert "'" not in module.DAEMON_HEALTH_COMMAND
+    assert "'" not in module.CODE_SERVER_HEALTH_COMMAND
     assert '\\"http://127.0.0.1:\\"' in module.WEBSERVER_HEALTH_COMMAND
     assert "\\$DATABASE_URL" in module.DAEMON_HEALTH_COMMAND
+    assert "/var/lib/dagster/code-server.sock" in module.CODE_SERVER_HEALTH_COMMAND
 
 
 def test_compose_pins_one_digest_and_keeps_dagster_on_host_loopback():
     compose = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8"))
     services = compose["services"]
     expected_image = "ghcr.io/wangzitian0/truealpha-data-engine@${DATA_ENGINE_IMAGE_DIGEST:?DATA_ENGINE_IMAGE_DIGEST is required}"
-    for name in ("dagster-webserver", "dagster-daemon"):
+    for name in ("dagster-webserver", "dagster-daemon", "dagster-code-server"):
         service = services[name]
         assert service["image"] == expected_image
         assert service["network_mode"] == "host"
@@ -82,6 +84,29 @@ def test_compose_pins_one_digest_and_keeps_dagster_on_host_loopback():
     web_command = services["dagster-webserver"]["command"]
     assert "127.0.0.1" in web_command
     assert "${DAGSTER_WEBSERVER_PORT}" in web_command
+
+
+def test_webserver_and_daemon_load_the_persistent_code_server_over_grpc_socket():
+    # Eliminates the ~68-70s heartbeat-timeout churn each role's own "managed"
+    # local code-server subprocess produced under -m data_engine.dagster_defs
+    # (dagster._daemon.controller.DAEMON_GRPC_SERVER_HEARTBEAT_TTL = 20) by
+    # pointing both roles at one long-lived dagster-code-server instead.
+    compose = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8"))
+    services = compose["services"]
+
+    code_server_command = services["dagster-code-server"]["command"]
+    assert "--socket" in code_server_command
+    assert "/var/lib/dagster/code-server.sock" in code_server_command
+    assert "--heartbeat" not in code_server_command
+
+    for name in ("dagster-webserver", "dagster-daemon"):
+        service = services[name]
+        assert "--grpc-socket" in service["command"]
+        assert "/var/lib/dagster/code-server.sock" in service["command"]
+        assert "-m" not in service["command"]
+        assert service["depends_on"]["dagster-code-server"] == {
+            "condition": "service_healthy"
+        }
 
 
 def test_deployer_derives_isolated_ports_and_full_configuration_hash(monkeypatch):

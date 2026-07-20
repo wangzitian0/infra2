@@ -90,13 +90,54 @@ services:
     labels:
       - "traefik.enable=false"
 
+  # Persistent code-server role: webserver/daemon point at this
+  # long-lived process via --grpc-socket instead of each spawning + heartbeat-
+  # managing (20s TTL) their own local code-server subprocess, which was self-
+  # terminating and respawning roughly every 68-70s under normal operation
+  # (dagster._daemon.controller.DAEMON_GRPC_SERVER_HEARTBEAT_TTL = 20; harmless
+  # so far per dagster.job_ticks -- 13/13 SUCCESS across the churn -- but wasteful
+  # churn and a needlessly tight safety margin for an always-on deployment).
+  dagster-code-server:
+    <<: *dagster-service
+    container_name: truealpha-dagster-code-server${ENV_SUFFIX}
+    command:
+      - dagster
+      - api
+      - grpc
+      - -m
+      - data_engine.dagster_defs
+      - --socket
+      - /var/lib/dagster/code-server.sock
+      - --lazy-load-user-code
+      - --location-name
+      - data_engine.dagster_defs
+      - --log-level
+      - warning
+    healthcheck:
+      test:
+        - CMD
+        - dagster
+        - api
+        - grpc-health-check
+        - --socket
+        - /var/lib/dagster/code-server.sock
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
   dagster-webserver:
     <<: *dagster-service
     container_name: truealpha-dagster-webserver${ENV_SUFFIX}
+    depends_on:
+      vault-agent:
+        condition: service_healthy
+      dagster-code-server:
+        condition: service_healthy
     command:
       - dagster-webserver
-      - -m
-      - data_engine.dagster_defs
+      - --grpc-socket
+      - /var/lib/dagster/code-server.sock
       - --host
       - 127.0.0.1
       - --port
@@ -126,7 +167,12 @@ services:
   dagster-daemon:
     <<: *dagster-service
     container_name: truealpha-dagster-daemon${ENV_SUFFIX}
-    command: ["dagster-daemon", "run", "-m", "data_engine.dagster_defs"]
+    depends_on:
+      vault-agent:
+        condition: service_healthy
+      dagster-code-server:
+        condition: service_healthy
+    command: ["dagster-daemon", "run", "--grpc-socket", "/var/lib/dagster/code-server.sock"]
     healthcheck:
       test:
         - CMD-SHELL
