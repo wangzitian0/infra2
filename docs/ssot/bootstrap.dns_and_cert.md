@@ -12,7 +12,7 @@
 | **DNS 自动化** | `bootstrap/02.dns_and_cert/tasks.py` | Cloudflare API 调用与任务入口 |
 | **操作手册** | `bootstrap/02.dns_and_cert/README.md` | 使用方法与兜底说明 |
 | **环境变量清单** | `bootstrap/02.dns_and_cert/.env.example` | 仅 Key 清单 |
-| **密钥真源** | 1Password `bootstrap/cloudflare` | `CF_API_TOKEN`, `CF_ZONE_ID`, `CF_ZONE_NAME`, `CF_ACCOUNT_ID` |
+| **密钥真源** | 1Password `bootstrap/cloudflare` | `CF_API_TOKEN`, `CF_ZONE_ID`, `CF_ZONE_NAME` |
 | **默认域名列表** | 1Password `bootstrap/cloudflare` | `CF_RECORDS` |
 | **基础变量** | 1Password `init/env_vars` | `VPS_HOST`, `INTERNAL_DOMAIN` |
 
@@ -37,7 +37,7 @@ flowchart TB
 - **DNS 由 Cloudflare 管理**，DNS 记录通过 API 自动化。
 - **证书由 Cloudflare + Traefik 共同完成**：边缘证书由 Cloudflare 提供，源站证书由 Traefik 自动申请。
 - **域名范围**：`cloud`, `op`, `vault`, `sso`, `home`。
-- **可扩展**：新增域名写入 `CF_RECORDS` 或用 `invoke dns_and_cert.add`。
+- **可扩展**：新增域名写入 `CF_RECORDS` 或用 `invoke dns-and-cert.add`。
 
 ### 多 Zone（App 自有域名）
 
@@ -68,7 +68,7 @@ SSL/TLS 模式仍需在 Cloudflare 控制台手动确认（该 zone 的邮件相
 
 ### ✅ 推荐模式
 
-- 使用 `invoke dns_and_cert.setup` 统一创建记录与 SSL 设置。
+- 使用 `invoke dns-and-cert.setup` 统一创建记录与 SSL 设置。
 - 修改域名或目标 IP 时只更新 1Password/模板，然后重跑任务。
 
 ### ⛔ 禁止模式
@@ -95,7 +95,7 @@ SSL/TLS 模式仍需在 Cloudflare 控制台手动确认（该 zone 的邮件相
 ### SOP-001: 一键配置 DNS + SSL
 
 ```bash
-invoke dns_and_cert.setup
+invoke dns-and-cert.setup
 ```
 
 `setup` 默认内置 60s 冷却等待，避免 DNS/证书传播导致误判，可用 `--cooldown=0` 跳过。
@@ -103,20 +103,20 @@ invoke dns_and_cert.setup
 ### SOP-002: 仅更新 DNS 记录
 
 ```bash
-invoke dns_and_cert.apply
+invoke dns-and-cert.apply
 ```
 
 ### SOP-003: 新增域名
 
 ```bash
-invoke dns_and_cert.add --records=newapp
+invoke dns-and-cert.add --records=newapp
 ```
 
 ### SOP-004: 证书预热与验证
 
 ```bash
-invoke dns_and_cert.warm
-invoke dns_and_cert.verify
+invoke dns-and-cert.warm
+invoke dns-and-cert.verify
 ```
 
 ---
@@ -125,8 +125,8 @@ invoke dns_and_cert.verify
 
 | 行为描述 | 验证方式 | 覆盖率 |
 |----------|----------|--------|
-| DNS 可解析 | `invoke dns_and_cert.verify` | ✅ Manual |
-| HTTPS 可达 | `invoke dns_and_cert.verify` | ✅ Manual |
+| DNS 可解析 | `invoke dns-and-cert.verify` | ✅ Manual |
+| HTTPS 可达 | `invoke dns-and-cert.verify` | ✅ Manual |
 | 网络层 E2E | `e2e_regressions/tests/bootstrap/network_layer/test_network.py` | ✅ Critical |
 
 ---

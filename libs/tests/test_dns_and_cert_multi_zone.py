@@ -57,6 +57,35 @@ def test_default_zone_reuses_the_pinned_zone_id(m, monkeypatch):
     assert seen == {"zone_id": "zid-shared", "zone_name": "zitian.party"}
 
 
+def test_default_zone_check_uses_cf_zone_name_not_internal_domain(m, monkeypatch):
+    # CF_ZONE_NAME (when set) IS the default zone's real name — comparing the effective
+    # zone name against bare INTERNAL_DOMAIN instead would wrongly treat the default zone
+    # as an "override" the moment the two are configured to differ, dropping the pinned
+    # CF_ZONE_ID and forcing an unnecessary name lookup on every default-zone call.
+    _stub_env(
+        m,
+        monkeypatch,
+        {
+            "CF_API_TOKEN": "tok",
+            "CF_ZONE_ID": "zid-shared",
+            "CF_ZONE_NAME": "cf-alias.io",
+        },
+    )
+    seen = {}
+    monkeypatch.setattr(
+        m,
+        "_resolve_zone_id",
+        lambda client, zone_id, zone_name: (
+            seen.update(zone_id=zone_id, zone_name=zone_name) or "resolved"
+        ),
+    )
+    monkeypatch.setattr(m, "_ensure_record", lambda *a, **k: True)
+    monkeypatch.setattr(m, "_cloudflare_client", lambda token: _FakeClientCtx())
+
+    assert m._ensure_dns_records(["cloud"], True, 1) is True
+    assert seen == {"zone_id": "zid-shared", "zone_name": "cf-alias.io"}
+
+
 def test_domain_override_never_reuses_the_default_zone_id(m, monkeypatch):
     _stub_env(m, monkeypatch, {"CF_API_TOKEN": "tok", "CF_ZONE_ID": "zid-shared"})
     seen = {}

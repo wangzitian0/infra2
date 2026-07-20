@@ -252,10 +252,14 @@ def _ensure_dns_records(
 
     secrets = _load_cloudflare_secrets()
     token = secrets.get("CF_API_TOKEN")
-    zone_name = domain or secrets.get("CF_ZONE_NAME") or internal_domain
-    # The pinned CF_ZONE_ID only names the DEFAULT zone — a --domain override always
-    # resolves its own zone id by name (never reuse CF_ZONE_ID for a different zone).
-    zone_id = secrets.get("CF_ZONE_ID") if zone_name == internal_domain else None
+    # The pinned CF_ZONE_ID only names the DEFAULT zone — which is CF_ZONE_NAME when set,
+    # NOT unconditionally internal_domain (comparing against internal_domain directly
+    # would wrongly drop CF_ZONE_ID whenever the two are configured to differ). A --domain
+    # override always resolves its own zone id by name instead (never reuse CF_ZONE_ID for
+    # a different zone).
+    default_zone_name = secrets.get("CF_ZONE_NAME") or internal_domain
+    zone_name = domain or default_zone_name
+    zone_id = secrets.get("CF_ZONE_ID") if zone_name == default_zone_name else None
 
     if not token:
         error("Missing CF_API_TOKEN", "Set in 1Password item bootstrap/cloudflare")
