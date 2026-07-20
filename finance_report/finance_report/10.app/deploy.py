@@ -123,7 +123,7 @@ class AppDeployer(Deployer):
             )
             return
 
-        secrets = cls.secrets()
+        secrets = cls.secrets_backend()
         bucket_name = secrets.get("S3_BUCKET") or "finance-report-statements"
         existing_access_key = secrets.get("S3_ACCESS_KEY")
         existing_secret_key = secrets.get("S3_SECRET_KEY")

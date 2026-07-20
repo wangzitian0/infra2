@@ -215,7 +215,7 @@ class SigNozDeployer(Deployer):
         if not host:
             error("Missing VPS_HOST")
             return None
-        secrets_backend = cls.secrets()
+        secrets_backend = cls.secrets_backend()
 
         # Create data directory for query-service SQLite
         result = run_with_status(

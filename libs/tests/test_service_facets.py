@@ -308,3 +308,28 @@ def test_matrix_main_enforce_fails_on_missing_cells(capsys) -> None:
     # when the backlog is cleared this test should flip alongside the CI flag.
     report, clean = render_report(reg.service_attrs())
     assert matrix_main(["--enforce"]) == (0 if clean else 1)
+
+
+def test_facet_attribute_names_never_shadow_deployer_callables() -> None:
+    """v1.1.35 staging counterfactual (#543 hotfix): the `secrets` facet
+    attribute shadowed the Deployer classmethod of the same name, so every
+    sync that reached ensure_runtime_secrets died at deploy time with
+    "'tuple' object is not callable" — invisible to AST-only tests. No facet
+    attribute name may collide with a callable on the runtime Deployer."""
+    from libs.deploy.deployer import Deployer
+
+    facet_attr_names = (
+        "probes",
+        "public_routes",
+        "signals",
+        "backups",
+        "secrets",
+        "exemptions",
+    )  # the _meta_from_deploy_file facet attribute surface
+    for attr_name in facet_attr_names:
+        existing = getattr(Deployer, attr_name, None)
+        assert not callable(existing), (
+            f"Deployer.{attr_name} is callable — a `{attr_name} = (...)` facet "
+            f"declaration on a service Deployer would shadow it at runtime"
+        )
+    assert callable(Deployer.secrets_backend)
