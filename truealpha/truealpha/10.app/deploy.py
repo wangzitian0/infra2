@@ -2,8 +2,9 @@ import shutil
 import sys
 
 from libs.common import get_env
-from libs.console import header, info, success, warning
+from libs.console import error, header, info, success, warning
 from libs.deploy.deployer import Deployer, make_tasks
+from libs.env import VaultSecrets, generate_password
 from libs.service_facets import SecretsFacet
 
 shared_tasks = sys.modules.get("truealpha.10.app.shared")
@@ -85,6 +86,8 @@ class AppDeployer(Deployer):
         provision (no docker CLI in the runner) but it can refuse to be silent."""
         if not super().ensure_runtime_secrets(c):
             return False
+        if not cls._ensure_secret_key():
+            return False
         secrets = cls.secrets_backend()
         if not (secrets.get("S3_ACCESS_KEY") and secrets.get("S3_SECRET_KEY")):
             warning(
@@ -96,6 +99,30 @@ class AppDeployer(Deployer):
                 "then restart the app vault-agent."
             )
         return True
+
+    @classmethod
+    def _ensure_secret_key(cls) -> bool:
+        """Auto-provision SECRET_KEY in Vault (#447).
+
+        app-web's session JWT signing (auth/config.ts) hard-fails without this
+        in production; secrets.ctmpl now renders it. Unlike the MinIO bucket
+        below, generating a random signing secret needs no docker CLI, so
+        (unlike _ensure_minio_bucket) this runs from the iac-runner's sync
+        path too, and heals staging/production without a manual Vault step.
+        """
+        secrets = cls.secrets_backend()
+        try:
+            existing = secrets.get("SECRET_KEY")
+        except VaultSecrets.VaultSecretNotFoundError:
+            existing = None
+        if existing:
+            info("Vault secret exists: SECRET_KEY")
+            return True
+        if secrets.set("SECRET_KEY", generate_password(48)):
+            success("Vault: SECRET_KEY generated and stored")
+            return True
+        error("Failed to store SECRET_KEY in Vault")
+        return False
 
     @classmethod
     def _ensure_minio_bucket(cls, c):
