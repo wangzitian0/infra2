@@ -14,7 +14,7 @@ This wrapper gives the audit a scheduled forcing function, mirroring
 where ``invoke vault-audit.self-refresh`` normally runs, so ``tools/vault_audit.py``'s
 task decorator isn't the right surface here). ``collect_live_observations`` needs SSH
 access to the VPS to inspect vault-agent/app containers; the GitHub Actions job
-provisions this via the same ``INFRA2_WATCHDOG_SSH_*`` secrets the route-canary/
+provisions this via the same ``INFRA2_WATCHDOG_SSH_*`` secrets the
 watchdog jobs already use (see ``.github/workflows/ops-checks.yml`` and
 ``libs/vault_self_refresh_audit.py::_ssh``'s CI-override env vars) -- no new secret.
 

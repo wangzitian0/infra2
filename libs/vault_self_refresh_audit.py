@@ -857,7 +857,7 @@ def _ssh(host: str, command: str) -> subprocess.CompletedProcess[str]:
     Normally invoked from inside the VPS (the iac-runner container), where root's
     default SSH identity/known_hosts already trust `host`, so no `-i`/`-p` flags are
     needed. A GitHub Actions runner has neither (#531): when the same
-    INFRA2_WATCHDOG_SSH_KEY_PATH/_PORT/_USER env vars the route-canary/watchdog jobs
+    INFRA2_WATCHDOG_SSH_KEY_PATH/_PORT/_USER env vars the watchdog jobs
     already provision (see .github/workflows/ops-checks.yml's "Configure SSH key"
     steps) are present, use them explicitly instead of relying on ambient SSH config.
     Absent those env vars, behavior is byte-identical to before this change.

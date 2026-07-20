@@ -643,14 +643,6 @@ signals:
     severity: critical
     cadence: 1d
 
-  - signal_id: global.infra2-dokploy-route-canary.github
-    environment: global
-    component: dokploy
-    signal: infra2-dokploy-route-canary
-    primary_owner: github
-    severity: critical
-    cadence: 1d
-
   # Container-breakdown watch (#425 T5 registration; #475 is the debounce this
   # entry declares). Watcher PLUGIN inside the single resident alerting sidecar
   # (#543): libs/container_breakdown_watch.py running inside

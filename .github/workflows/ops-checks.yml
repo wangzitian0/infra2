@@ -45,12 +45,11 @@ name: Ops Checks
       - "finance_report/finance_report/preview/**"
       - ".github/workflows/ops-checks.yml"
   schedule:
-    - cron: "17 * * * *"
     - cron: "17 2 * * *"
     - cron: "37 2 * * *"
     - cron: "37 6 * * *"
     - cron: "0 1 * * 1"
-    - cron: "47 * * * *" # hourly Dokploy preview leak detection (offset from route-canary)
+    - cron: "47 * * * *" # hourly Dokploy preview leak detection
     - cron: "27 4 * * *" # daily re-ensure of the VPS host-hygiene Dokploy schedule
     - cron: "17 7 * * *" # daily facet reconcile: compose_id + config-hash + dns drift (#542)
     - cron: "17 8 * * *" # daily Vault self-refresh audit (#531)
@@ -63,7 +62,6 @@ name: Ops Checks
         type: choice
         options:
           - deploy-guard-audit
-          - dokploy-route-canary
           - deploy-v2-canary
           - preview-leak-check
           - host-hygiene-schedule
@@ -82,30 +80,6 @@ name: Ops Checks
         required: false
         type: string
         default: ""
-      environment_id:
-        description: "Dokploy Environment ID to create the canary compose in"
-        required: false
-        default: ""
-      project:
-        description: "Dokploy project name"
-        required: false
-        default: "platform"
-      env:
-        description: "Dokploy environment name hint"
-        required: false
-        default: "staging"
-      host:
-        description: "Public host for the canary; defaults to route-canary.zitian.party"
-        required: false
-        default: ""
-      compose_name:
-        description: "Dokploy compose name"
-        required: false
-        default: "dokploy-route-canary"
-      timeout_seconds:
-        description: "Per-stage timeout"
-        required: false
-        default: "90"
 
 permissions:
   contents: read
@@ -113,7 +87,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 * * * *' && 'dokploy-route-canary-scheduled' || github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'infra2-deploy-guard-audit' || github.event_name == 'schedule' && github.event.schedule == '37 6 * * *' && 'deploy-v2-canary' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-leak-check' || github.event_name == 'schedule' && github.event.schedule == '27 4 * * *' && 'infra2-host-hygiene-schedule' || github.event_name == 'schedule' && github.event.schedule == '17 7 * * *' && 'infra2-facet-reconcile' || github.event_name == 'schedule' && github.event.schedule == '17 8 * * *' && 'infra2-vault-self-refresh-audit' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && inputs.task == 'dokploy-route-canary' && format('dokploy-route-canary-{0}-{1}', inputs.project, inputs.env) || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) || 'dokploy-route-canary-push' }}
+  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'infra2-deploy-guard-audit' || github.event_name == 'schedule' && github.event.schedule == '37 6 * * *' && 'deploy-v2-canary' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-leak-check' || github.event_name == 'schedule' && github.event.schedule == '27 4 * * *' && 'infra2-host-hygiene-schedule' || github.event_name == 'schedule' && github.event.schedule == '17 7 * * *' && 'infra2-facet-reconcile' || github.event_name == 'schedule' && github.event.schedule == '17 8 * * *' && 'infra2-vault-self-refresh-audit' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) || format('ops-checks-push-{0}', github.sha) }}
   cancel-in-progress: false
 
 env:
@@ -186,116 +160,6 @@ jobs:
           )
           PY
 
-  # Dokploy route canary jobs
-  canary:
-    # signal: infra2-dokploy-route-canary
-    name: Run dynamic route canary
-    if: ${{ github.event_name == 'push' || (github.event_name == 'schedule' && github.event.schedule == '17 * * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'dokploy-route-canary' || inputs.task == 'all')) }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 8
-    env:
-      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
-      INFRA2_WATCHDOG_SSH_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
-      INFRA2_WATCHDOG_SSH_USER: ${{ secrets.INFRA2_WATCHDOG_SSH_USER }}
-      INFRA2_WATCHDOG_SSH_PORT: ${{ vars.INFRA2_WATCHDOG_SSH_PORT }}
-      DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID: ${{ vars.DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID }}
-      DOKPLOY_ROUTE_CANARY_PROJECT: ${{ vars.DOKPLOY_ROUTE_CANARY_PROJECT }}
-      DOKPLOY_ROUTE_CANARY_ENV: ${{ vars.DOKPLOY_ROUTE_CANARY_ENV }}
-      DOKPLOY_ROUTE_CANARY_HOST: ${{ vars.DOKPLOY_ROUTE_CANARY_HOST }}
-      DOKPLOY_ROUTE_CANARY_COMPOSE_NAME: ${{ vars.DOKPLOY_ROUTE_CANARY_COMPOSE_NAME }}
-      DOKPLOY_ROUTE_CANARY_TIMEOUT_SECONDS: ${{ vars.DOKPLOY_ROUTE_CANARY_TIMEOUT_SECONDS }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Install runtime dependencies
-        run: python -m pip install httpx python-dotenv rich
-
-      - name: Configure SSH key
-        env:
-          INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${INFRA2_WATCHDOG_SSH_PRIVATE_KEY:-}" ]]; then
-            echo "No SSH key configured; canary will skip Docker container/label inspection."
-            exit 0
-          fi
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_canary
-          chmod 600 ~/.ssh/infra2_canary
-          echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_canary" >> "$GITHUB_ENV"
-
-      - name: Run canary
-        env:
-          CANARY_HOST_INPUT: ${{ github.event.inputs.host || '' }}
-          COMPOSE_NAME_INPUT: ${{ github.event.inputs.compose_name || '' }}
-          ENVIRONMENT_ID_INPUT: ${{ github.event.inputs.environment_id || '' }}
-          PROJECT_INPUT: ${{ github.event.inputs.project || '' }}
-          ENV_NAME_INPUT: ${{ github.event.inputs.env || '' }}
-          TIMEOUT_SECONDS_INPUT: ${{ github.event.inputs.timeout_seconds || '' }}
-          EVENT_NAME: ${{ github.event_name }}
-          # out-of-band Feishu delivery (same secrets the watchdog uses) — a red route
-          # canary pages instead of dying silently in the hourly workflow log (#369).
-          # Injected ONLY for non-PR events (a PR run never uses --alert-on-failure).
-          INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE || '' }}
-          INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL || '' }}
-          INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID || '' }}
-          INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET || '' }}
-          INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID || '' }}
-          INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE || '' }}
-        run: |
-          set -euo pipefail
-
-          if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
-            echo "::error::DOKPLOY_API_KEY secret is required for Dokploy Route Canary."
-            exit 1
-          fi
-
-          environment_id="${ENVIRONMENT_ID_INPUT:-${DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID:-}}"
-          if [[ -z "$environment_id" ]]; then
-            echo "::error::DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID repository variable or workflow_dispatch environment_id input is required. failure_domain=dokploy-canary-configuration"
-            {
-              echo "## Dokploy Route Canary"
-              echo ""
-              echo "- Status: \`fail\`"
-              echo "- Failure domain: \`dokploy-canary-configuration\`"
-              echo "- Reason: DOKPLOY_ROUTE_CANARY_ENVIRONMENT_ID is not configured"
-              echo "- Action: configure the repository variable or run workflow_dispatch with environment_id"
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-
-          canary_host="${CANARY_HOST_INPUT:-${DOKPLOY_ROUTE_CANARY_HOST:-route-canary.zitian.party}}"
-          compose_name="${COMPOSE_NAME_INPUT:-${DOKPLOY_ROUTE_CANARY_COMPOSE_NAME:-dokploy-route-canary}}"
-          project="${PROJECT_INPUT:-${DOKPLOY_ROUTE_CANARY_PROJECT:-platform}}"
-          env_name="${ENV_NAME_INPUT:-${DOKPLOY_ROUTE_CANARY_ENV:-staging}}"
-          timeout_seconds="${TIMEOUT_SECONDS_INPUT:-${DOKPLOY_ROUTE_CANARY_TIMEOUT_SECONDS:-90}}"
-
-          # Out-of-band alert ONLY on a non-PR failure: a scheduled/post-merge red route
-          # canary is an infra incident (page); a PR red is CI feedback to the author.
-          alert_args=()
-          [[ "$EVENT_NAME" != "pull_request" ]] && alert_args+=(--alert-on-failure)
-
-          echo "Canary summary will be written to $GITHUB_STEP_SUMMARY"
-          python tools/dokploy_route_canary.py \
-            --host "$canary_host" \
-            --environment-id="$environment_id" \
-            --project "$project" \
-            --env "$env_name" \
-            --compose-name "$compose_name" \
-            --dokploy-host "cloud.zitian.party" \
-            --nonce "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-            --timeout-seconds "$timeout_seconds" \
-            --repair-stale-compose \
-            "${alert_args[@]}"
-
-  # Out-of-band watchdog jobs
   watchdog:
     # schedule-signal-exempt: delivers the whole github-plane infra2-* signal family (each individually registered in watchdog-signals.yaml)
     name: Check infra2 host and alert bridge
@@ -726,7 +590,7 @@ jobs:
     # Live check (#531): needs Dokploy state + SSH into the VPS to inspect vault-agent/
     # app containers, so it can't run on untrusted PR branches — scheduled + manual
     # only, same as the other live-Dokploy/SSH-state checks in this file. Reuses the
-    # INFRA2_WATCHDOG_SSH_* credentials the route-canary/watchdog jobs already
+    # INFRA2_WATCHDOG_SSH_* credentials the watchdog jobs already
     # provision (no new secret) — see libs/vault_self_refresh_audit.py::_ssh.
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '17 8 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'vault-self-refresh-audit' || inputs.task == 'all')) }}
     runs-on: ubuntu-latest
