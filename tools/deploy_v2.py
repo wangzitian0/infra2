@@ -59,7 +59,6 @@ from tools.resolve_deploy_ref import (
     resolve_pr,
     resolve_to_sha,
 )
-from libs.app_deploy_request import APP_SOURCES
 
 _APP_SERVICE = "finance_report/app"
 _APP_REPO = "https://github.com/wangzitian0/finance_report.git"
@@ -76,7 +75,13 @@ def _repo_for_service(service: str) -> str:
     with the wrong owner/repo would previously resolve ``version_ref`` against
     finance_report's history regardless of which service was requested — the exact bug
     that made a truealpha/app deploy resolve v0.0.3 to an unrelated finance_report commit.
+
+    Imported lazily (not at module level) so importing deploy_v2 doesn't pull in
+    libs.app_deploy_request's heavier deps (infra2_sdk) for callers that never touch
+    app-backed resolution — and avoids widening deploy_v2's import graph toward a cycle.
     """
+    from libs.app_deploy_request import APP_SOURCES
+
     owner_repo = APP_SOURCES.get(service)
     if owner_repo is None:
         return _APP_REPO
@@ -622,7 +627,7 @@ def deploy_v2(
     ``version_ref`` (its artifact is the ``iac_ref``-pinned stack) — see :func:`_deploy_platform`.
     """
     svc_spec = service_spec(service)
-    repo = repo or _repo_for_service(service)
+    repo = repo if repo is not None else _repo_for_service(service)
     normalized_expected_sha = _normalize_expected_sha(expected_sha)
     # Fixed envs (staging/prod) pin their IaC to an immutable release tag, on BOTH the
     # app-image axis (version_ref, gated per-type below) and the infra2-IaC axis (iac_ref,
