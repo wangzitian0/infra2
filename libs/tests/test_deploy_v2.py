@@ -28,6 +28,24 @@ SHA_CODE = "c" * 40
 SHA_IAC = "d" * 40
 
 
+# --- version_ref resolution must target the REQUESTED service's own repo, not always
+# finance_report's — the bug that made truealpha/app's v0.0.3 resolve against an unrelated
+# finance_report commit (deploy_v2 raised "not expected sha", the request's own source_sha) ---
+def test_repo_for_service_uses_each_app_sources_entry():
+    assert (
+        dv2._repo_for_service("finance_report/app")
+        == "https://github.com/wangzitian0/finance_report.git"
+    )
+    assert (
+        dv2._repo_for_service("truealpha/app")
+        == "https://github.com/wangzitian0/truealpha.git"
+    )
+
+
+def test_repo_for_service_falls_back_for_unregistered_services():
+    assert dv2._repo_for_service("platform/postgres") == dv2._APP_REPO
+
+
 @pytest.fixture(autouse=True)
 def _stub_iac_on_main_guard(monkeypatch):
     # The #465 on-main guard calls GitHub's compare API. Stub it module-wide so routing
@@ -166,7 +184,9 @@ def test_iac_ref_on_main_accepts_reachable(status):
 @pytest.mark.parametrize("status", ["ahead", "diverged"])
 def test_iac_ref_off_main_refused(status):
     with pytest.raises(ValueError, match="not on infra2 main"):
-        assert_iac_ref_on_main("v1.2.3", "prod", token="", transport=_cmp_transport(status))
+        assert_iac_ref_on_main(
+            "v1.2.3", "prod", token="", transport=_cmp_transport(status)
+        )
 
 
 def test_iac_ref_on_main_exempt_for_preview():
@@ -678,7 +698,9 @@ def test_cli_down_tears_down_the_selected_preview_alias(monkeypatch, capsys):
     rec = {}
 
     def fake_down(kind, value, *, domain, client, service):
-        rec.update(kind=kind, value=value, domain=domain, client=client, service=service)
+        rec.update(
+            kind=kind, value=value, domain=domain, client=client, service=service
+        )
         return _fake_down_result(kind, value, domain=domain, client=client)
 
     import libs.dokploy as dk

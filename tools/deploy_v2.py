@@ -59,9 +59,30 @@ from tools.resolve_deploy_ref import (
     resolve_pr,
     resolve_to_sha,
 )
+from libs.app_deploy_request import APP_SOURCES
 
 _APP_SERVICE = "finance_report/app"
 _APP_REPO = "https://github.com/wangzitian0/finance_report.git"
+
+
+def _repo_for_service(service: str) -> str:
+    """Clone URL to resolve ``version_ref`` against for an app-backed service.
+
+    ``APP_SOURCES`` (``libs.app_deploy_request`` — the same mapping that validates a
+    cross-repo deploy request's ``source_repository``) is the single source of truth for
+    service -> source repo. Falls back to ``_APP_REPO`` (finance_report) for services with
+    no registered source — today that is every non-app-request caller (tests, direct CLI
+    use pre-dating #522), so this preserves prior behavior for them. A registered service
+    with the wrong owner/repo would previously resolve ``version_ref`` against
+    finance_report's history regardless of which service was requested — the exact bug
+    that made a truealpha/app deploy resolve v0.0.3 to an unrelated finance_report commit.
+    """
+    owner_repo = APP_SOURCES.get(service)
+    if owner_repo is None:
+        return _APP_REPO
+    return f"https://github.com/{owner_repo}.git"
+
+
 _INFRA2_REPO = "https://github.com/wangzitian0/infra2"
 # Dokploy's github source clones a branch/tag ref (`git clone -b`), NOT a commit sha — a
 # raw sha fails "Remote branch <sha> not found" (finance_report#342). So when iac_ref is a
@@ -578,7 +599,7 @@ def deploy_v2(
     verify_ingestion: bool = False,
     timeout: int = 600,
     expected_sha: str | None = None,
-    repo: str = _APP_REPO,
+    repo: str | None = None,
     iac_runner_url: str | None = None,
     iac_webhook_secret: str | None = None,
     triggered_by: str = "deploy_v2",
@@ -601,6 +622,7 @@ def deploy_v2(
     ``version_ref`` (its artifact is the ``iac_ref``-pinned stack) — see :func:`_deploy_platform`.
     """
     svc_spec = service_spec(service)
+    repo = repo or _repo_for_service(service)
     normalized_expected_sha = _normalize_expected_sha(expected_sha)
     # Fixed envs (staging/prod) pin their IaC to an immutable release tag, on BOTH the
     # app-image axis (version_ref, gated per-type below) and the infra2-IaC axis (iac_ref,
