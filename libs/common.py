@@ -74,7 +74,7 @@ def infra_domain() -> str:
     is the general form for every OTHER shared-platform host build (promote.py's
     vault./otel. — #561 did not cover these).
     """
-    return os.environ.get("INTERNAL_DOMAIN") or "zitian.party"
+    return os.environ.get("INTERNAL_DOMAIN", "").strip() or "zitian.party"
 
 
 # Cache for env config (simple dict, no lru_cache to avoid OpSecrets caching issues)
