@@ -41,6 +41,15 @@ def test_receiver_never_checks_out_application_or_exposes_dokploy_to_validation(
     assert "python -m tools.deploy_v2_canary" in body
 
 
+def test_preflight_canary_targets_the_requested_service() -> None:
+    """A canary that ignores which service was requested silently validates the wrong
+    app: a truealpha/app request canaried finance_report/app's reserved slot instead
+    (report-pr-999), because --service was never wired through from the plan."""
+    body = WORKFLOW.read_text(encoding="utf-8")
+    assert 'json.load(sys.stdin)["request"]["service"]' in body
+    assert '--service "$service"' in body
+
+
 def test_receiver_run_name_matches_what_senders_poll_for() -> None:
     """infra2#537: without a matching run-name, a sender's receipt-polling loop
     (e.g. truealpha's deploy-release.yml, which searches this repo's Actions API for a
