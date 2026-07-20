@@ -60,7 +60,7 @@ def run_compose_id_section() -> Section:
         from tools.app_compose_id_drift import confirmed_drift, format_report, scan
 
         rows = scan(get_dokploy())
-    except Exception as exc:  # noqa: BLE001 — a dead Dokploy is a blocker, not a crash
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 — blocker, not a crash
         section.blockers.append(f"compose_id scan failed: {exc}")
         section.report = f"compose-id scan failed: {exc}"
         return section
@@ -84,7 +84,10 @@ def run_config_drift_section() -> Section:
 
         tag = _latest_release_tag()
         rows = scan(tag)
-    except Exception as exc:  # noqa: BLE001
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 — dokploy_config_drift
+        # raises SystemExit("no v* release tag found") on a tagless checkout;
+        # BaseException-shaped errors must still degrade to a section blocker
+        # (second live-run lesson), never crash the whole runner.
         section.blockers.append(f"config drift scan failed: {exc}")
         section.report = f"config-hash scan failed: {exc}"
         return section
@@ -116,7 +119,7 @@ def run_dns_section() -> Section:
         expected = set(_expected_records(dns))
         actual = set(_actual_records(dns))
         drift = compute_drift(expected, actual)
-    except Exception as exc:  # noqa: BLE001
+    except (Exception, SystemExit) as exc:  # noqa: BLE001
         section.blockers.append(f"dns scan failed: {exc}")
         section.report = f"dns scan failed: {exc}"
         return section

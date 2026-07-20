@@ -86,3 +86,19 @@ def test_section_import_failure_degrades_to_blocker(monkeypatch):
     section = fr.run_dns_section()
     assert section.blockers and "invoke" in section.blockers[0]
     assert section.confirmed == []  # an import failure is transient-class, never pages
+
+
+def test_section_systemexit_degrades_to_blocker(monkeypatch):
+    """Second live-run lesson: dokploy_config_drift raises SystemExit('no v*
+    release tag found') on a tagless checkout — SystemExit is not an Exception,
+    so it escaped the section isolation and crashed the runner before the
+    report went out. Sections must catch it as a blocker."""
+    import tools.dokploy_config_drift as cd
+
+    monkeypatch.setattr(
+        cd, "_latest_release_tag",
+        lambda: (_ for _ in ()).throw(SystemExit("no v* release tag found")),
+    )
+    section = fr.run_config_drift_section()
+    assert section.blockers and "no v* release tag" in section.blockers[0]
+    assert section.confirmed == []  # environment problem, never pages
