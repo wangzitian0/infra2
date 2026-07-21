@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import os
 import re
@@ -12,7 +14,13 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
-from infra2_sdk.deploy import DeployOperation, DeployRequest, DeployType
+from infra2_sdk.deploy import (
+    PRODUCTION_EVIDENCE_POLICY_PATH,
+    DeployOperation,
+    DeployRequest,
+    DeployType,
+    ProductionEvidencePolicy,
+)
 from infra2_sdk.refs import ResolvedRef, resolve_image_ref, resolve_pr
 
 from libs.service_registry import domain_for_service
@@ -28,18 +36,58 @@ _GITHUB_API_URL = "https://api.github.com"
 _GITHUB_API_VERSION = "2022-11-28"
 
 
-@dataclass(frozen=True)
-class ProductionEvidencePolicy:
-    workflow_path: str
-    review_base_ref: str
+def fetch_production_evidence_policy(
+    request: DeployRequest,
+    *,
+    fetch_json: Callable[[str], Mapping[str, object]],
+) -> ProductionEvidencePolicy:
+    """Fetch the app's OWN evidence contract, pinned to the release being verified.
 
-
-PRODUCTION_EVIDENCE_POLICIES: dict[str, ProductionEvidencePolicy] = {
-    "finance_report/app": ProductionEvidencePolicy(
-        workflow_path=".github/workflows/deploy.yml",
-        review_base_ref="main",
-    ),
-}
+    #576: each app repo is the sole authority on its own CI facts, declared as a
+    checked-in file at the SDK's canonical PRODUCTION_EVIDENCE_POLICY_PATH —
+    fetched here at ``request.source_sha`` so the contract and the workflows it
+    describes come from the SAME commit. There is deliberately NO fallback dict:
+    a missing or malformed contract fails closed, loudly, naming the app and the
+    expected path — an app without a contract is explicitly staging-only, never
+    silently so (the infra2#571 detection gap).
+    """
+    where = (
+        f"{request.source_repository}:{PRODUCTION_EVIDENCE_POLICY_PATH}"
+        f"@{request.source_sha}"
+    )
+    try:
+        payload = fetch_json(
+            f"/repos/{request.source_repository}/contents/"
+            f"{PRODUCTION_EVIDENCE_POLICY_PATH}?ref={request.source_sha}"
+        )
+    except (httpx.HTTPStatusError, ValueError, KeyError) as exc:
+        # _fetch_github_json wraps HTTP failures (including a 404 for a repo
+        # without the file) as ValueError; injected test fetchers may raise
+        # httpx errors or KeyError directly.
+        raise ValueError(
+            f"service {request.service!r} has no Production evidence contract: "
+            f"fetching {where} failed ({exc}). Production releases require the "
+            "app repo to declare its own contract file (infra2#576); without one "
+            "the app is staging-only."
+        ) from exc
+    content = payload.get("content")
+    if not isinstance(content, str):
+        raise ValueError(f"{where} did not return file content")
+    try:
+        raw = json.loads(base64.b64decode(content, validate=False))
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError(f"{where} is not valid JSON: {exc}") from exc
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"{where} must contain a JSON object")
+    try:
+        policy = ProductionEvidencePolicy.from_dict(raw)
+    except ValueError as exc:
+        raise ValueError(f"{where} is not a valid evidence contract: {exc}") from exc
+    if policy.service != request.service:
+        raise ValueError(
+            f"{where} declares service {policy.service!r}, not {request.service!r}"
+        )
+    return policy
 
 
 @dataclass(frozen=True)
@@ -102,13 +150,17 @@ def verify_production_evidence(
     *,
     fetch_json: Callable[[str], Mapping[str, object]] | None = None,
 ) -> None:
-    """Verify production evidence against GitHub's read-only API."""
+    """Verify production evidence against GitHub's read-only API.
+
+    The per-app expectations (workflow paths, events, display-title templates)
+    come from the app's OWN checked-in contract file — fetched at the release's
+    source_sha — never from an infra2-side dict (#576: the hardcoded
+    PRODUCTION_EVIDENCE_POLICIES that drifted into infra2#571's five blockers
+    is deleted, with no silent fallback).
+    """
     fetch = fetch_json or _fetch_github_json
-    policy = PRODUCTION_EVIDENCE_POLICIES.get(request.service)
-    if policy is None:
-        raise ValueError(
-            f"service {request.service!r} has no Production evidence policy"
-        )
+    # Pure-local URL-shape validation first (fail fast, no network), then the
+    # app's own contract, then the evidence runs it describes.
     source_run_id = _github_evidence_number(
         request.evidence.source_run_url,
         repository=request.source_repository,
@@ -129,6 +181,7 @@ def verify_production_evidence(
         resource="pull",
         field="reviewed_change_url",
     )
+    policy = fetch_production_evidence_policy(request, fetch_json=fetch)
 
     source_run = fetch(
         f"/repos/{request.source_repository}/actions/runs/{source_run_id}"
@@ -142,20 +195,20 @@ def verify_production_evidence(
         label="source run",
         repository=request.source_repository,
         url=request.evidence.source_run_url,
-        sha=request.source_sha,
-        event="push",
-        workflow_path=policy.workflow_path,
-        display_title=f"Release Images {request.version_ref}",
+        sha=request.source_sha if policy.source.require_head_sha else None,
+        event=policy.source.event,
+        workflow_path=policy.source.workflow_path,
+        display_title=policy.source.expected_display_title(request.version_ref),
     )
     _verify_run(
         staging_run,
         label="staging run",
         repository=request.source_repository,
         url=request.evidence.staging_run_url,
-        sha=request.source_sha,
-        event="workflow_dispatch",
-        workflow_path=policy.workflow_path,
-        display_title=f"Deploy Staging {request.version_ref}",
+        sha=request.source_sha if policy.staging.require_head_sha else None,
+        event=policy.staging.event,
+        workflow_path=policy.staging.workflow_path,
+        display_title=policy.staging.expected_display_title(request.version_ref),
     )
     _verify_reviewed_pull(
         reviewed_pull,
@@ -354,11 +407,16 @@ def _verify_run(
     label: str,
     repository: str,
     url: str,
-    sha: str,
+    sha: str | None,
     event: str,
     workflow_path: str,
     display_title: str,
 ) -> None:
+    """``sha=None`` means the run's expectation declared require_head_sha=false
+    (a branch-dispatched staging run: its head_sha is the branch tip at dispatch
+    time, not the release commit — the version linkage is the display title's
+    version_ref, plus the receiver's own version_ref->sha pin at execution time).
+    Every other check below is unconditional."""
     remote_repository = run.get("repository")
     if (
         not isinstance(remote_repository, Mapping)
@@ -369,7 +427,7 @@ def _verify_run(
         raise ValueError(f"{label} html_url does not match submitted evidence")
     if run.get("status") != "completed" or run.get("conclusion") != "success":
         raise ValueError(f"{label} must be completed successfully")
-    if run.get("head_sha") != sha:
+    if sha is not None and run.get("head_sha") != sha:
         raise ValueError(f"{label} head_sha does not match source_sha")
     if run.get("path") != workflow_path:
         raise ValueError(f"{label} workflow is not approved for Production evidence")

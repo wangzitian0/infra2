@@ -42,6 +42,16 @@ IGNORED_TOP_LEVEL_DIRS = {
     "playground",
     "repos",
 }
+# Workflow files that legitimately live in an APP repo, not infra2 — referenced
+# here because the decentralized Production evidence contracts (#576) declare
+# per-app workflow paths that infra2's receiver verifies against the app's own
+# repo. The app repos' own contract tests (truealpha PR #465, finance_report
+# PR #1978) assert these files actually exist there; this gate only guards
+# references to INFRA2's workflows going stale.
+FOREIGN_APP_WORKFLOWS = {
+    ".github/workflows/ci-required.yml",  # truealpha (source build)
+    ".github/workflows/deploy-release.yml",  # truealpha (staging deploy)
+}
 
 
 def _is_scanned(path: Path) -> bool:
@@ -154,6 +164,8 @@ def test_workflow_references_point_to_live_workflow_files() -> None:
             continue
         for match in WORKFLOW_REFERENCE_RE.finditer(content):
             reference = _normalize_workflow_reference(match.group(0))
+            if reference in FOREIGN_APP_WORKFLOWS:
+                continue
             if reference not in live_workflows:
                 line_no = content.count("\n", 0, match.start()) + 1
                 missing.append(f"{path.relative_to(ROOT)}:{line_no}: {reference}")
