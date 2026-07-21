@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from types import SimpleNamespace
 
@@ -15,6 +16,54 @@ from tools import app_deploy_request as receiver_cli
 
 SHA = "a" * 40
 APP_REPO = "wangzitian0/finance_report"
+
+# Mirrors the REAL contract each app checked into its own repo (#576):
+# finance_report tools/production_evidence_policy.json (PR #1978) and
+# truealpha's (PR #465) — the receiver fetches these at source_sha instead of
+# consulting the deleted PRODUCTION_EVIDENCE_POLICIES dict.
+FINANCE_REPORT_POLICY = {
+    "contract_version": 1,
+    "service": "finance_report/app",
+    "source": {
+        "workflow_path": ".github/workflows/deploy.yml",
+        "event": "push",
+        "display_title_template": "Release Images {version_ref}",
+    },
+    "staging": {
+        "workflow_path": ".github/workflows/deploy.yml",
+        "event": "workflow_dispatch",
+        "display_title_template": "Deploy Staging {version_ref}",
+    },
+    "review_base_ref": "main",
+}
+TRUEALPHA_POLICY = {
+    "contract_version": 1,
+    "service": "truealpha/app",
+    "source": {
+        "workflow_path": ".github/workflows/ci-required.yml",
+        "event": "push",
+        "display_title_template": "Release Images {version_ref}",
+    },
+    "staging": {
+        "workflow_path": ".github/workflows/deploy-release.yml",
+        "event": "workflow_dispatch",
+        "display_title_template": "Deploy staging {version_ref}",
+        "require_head_sha": False,
+    },
+    "review_base_ref": "main",
+}
+
+
+def policy_path(repo: str = APP_REPO, sha: str = SHA) -> str:
+    return f"/repos/{repo}/contents/tools/production_evidence_policy.json?ref={sha}"
+
+
+def policy_contents(policy: dict) -> dict:
+    # The GitHub contents API returns the file body base64-encoded.
+    return {
+        "content": base64.b64encode(json.dumps(policy).encode()).decode(),
+        "encoding": "base64",
+    }
 
 
 def payload(**overrides) -> dict:
@@ -216,6 +265,7 @@ def test_production_requires_repo_scoped_staging_and_review_urls() -> None:
 
 def test_production_evidence_is_verified_from_github() -> None:
     responses = {
+        policy_path(): policy_contents(FINANCE_REPORT_POLICY),
         f"/repos/{APP_REPO}/actions/runs/100": successful_run(100),
         f"/repos/{APP_REPO}/actions/runs/101": successful_run(101),
         f"/repos/{APP_REPO}/pulls/10": merged_pull(),
@@ -231,7 +281,120 @@ def test_production_evidence_is_verified_from_github() -> None:
         fetch_json=fetch,
     )
 
+    # The app's own contract file is fetched FIRST (at source_sha), then the runs.
     assert calls == list(responses)
+
+
+def test_missing_contract_file_fails_closed_naming_app_and_path() -> None:
+    # #576 AC: an app without a checked-in contract is explicitly, loudly
+    # staging-only — no silent fallback dict.
+    def fetch(path: str) -> dict:
+        raise ValueError(f"GitHub evidence request failed for {path}: HTTP 404")
+
+    with pytest.raises(ValueError) as exc:
+        receiver.verify_production_evidence(
+            receiver.parse_request(production_payload()),
+            fetch_json=fetch,
+        )
+    message = str(exc.value)
+    assert "'finance_report/app' has no Production evidence contract" in message
+    assert f"{APP_REPO}:tools/production_evidence_policy.json@{SHA}" in message
+
+
+@pytest.mark.parametrize(
+    "contents,error",
+    [
+        ({"content": 42}, "did not return file content"),
+        (
+            {"content": base64.b64encode(b"not json").decode()},
+            "is not valid JSON",
+        ),
+        (
+            policy_contents({"contract_version": 1, "service": "finance_report/app"}),
+            "is not a valid evidence contract",
+        ),
+        (
+            policy_contents(TRUEALPHA_POLICY),
+            "declares service 'truealpha/app', not 'finance_report/app'",
+        ),
+    ],
+)
+def test_malformed_or_misbound_contract_fails_closed(contents, error) -> None:
+    responses = {policy_path(): contents}
+    with pytest.raises(ValueError, match=error):
+        receiver.verify_production_evidence(
+            receiver.parse_request(production_payload()),
+            fetch_json=responses.__getitem__,
+        )
+
+
+def test_truealpha_policy_verifies_its_real_run_shapes() -> None:
+    # Shapes mirror the REAL captured runs (truealpha PR #465's fixtures):
+    # a tag-push ci-required build, and a deploy-release staging dispatch whose
+    # head_sha is main's tip at dispatch time — NOT the tag commit — which the
+    # contract declares via require_head_sha=false (the 6th mismatch beyond
+    # infra2#571's five, found while capturing the fixture).
+    ta_repo = "wangzitian0/truealpha"
+    request = receiver.parse_request(
+        production_payload(
+            service="truealpha/app",
+            source_repository=ta_repo,
+            evidence={
+                "source_run_url": f"https://github.com/{ta_repo}/actions/runs/100",
+                "source_run_id": "100",
+                "staging_run_url": f"https://github.com/{ta_repo}/actions/runs/101",
+                "reviewed_change_url": f"https://github.com/{ta_repo}/pull/10",
+            },
+        )
+    )
+    source_run = {
+        "status": "completed",
+        "conclusion": "success",
+        "head_sha": SHA,
+        "html_url": f"https://github.com/{ta_repo}/actions/runs/100",
+        "repository": {"full_name": ta_repo},
+        "event": "push",
+        "head_branch": "v1.2.3",
+        "path": ".github/workflows/ci-required.yml",
+        "display_title": "Release Images v1.2.3",
+    }
+    staging_run = {
+        "status": "completed",
+        "conclusion": "success",
+        "head_sha": "c" * 40,  # main's tip at dispatch time, not the tag commit
+        "html_url": f"https://github.com/{ta_repo}/actions/runs/101",
+        "repository": {"full_name": ta_repo},
+        "event": "workflow_dispatch",
+        "head_branch": "main",
+        "path": ".github/workflows/deploy-release.yml",
+        "display_title": "Deploy staging v1.2.3",
+    }
+    pull = {
+        "state": "closed",
+        "merged_at": "2026-07-15T00:00:00Z",
+        "merge_commit_sha": SHA,
+        "html_url": f"https://github.com/{ta_repo}/pull/10",
+        "base": {"ref": "main", "repo": {"full_name": ta_repo}},
+    }
+    responses = {
+        policy_path(ta_repo): policy_contents(TRUEALPHA_POLICY),
+        f"/repos/{ta_repo}/actions/runs/100": source_run,
+        f"/repos/{ta_repo}/actions/runs/101": staging_run,
+        f"/repos/{ta_repo}/pulls/10": pull,
+    }
+
+    receiver.verify_production_evidence(request, fetch_json=responses.__getitem__)
+
+    # require_head_sha stays enforced where declared: the SOURCE run's head_sha
+    # still fails closed on a mismatch even though staging's is exempt.
+    responses[f"/repos/{ta_repo}/actions/runs/100"] = {
+        **source_run,
+        "head_sha": "d" * 40,
+    }
+    with pytest.raises(ValueError, match="source run.*head_sha"):
+        receiver.verify_production_evidence(
+            request, fetch_json=responses.__getitem__
+        )
 
 
 @pytest.mark.parametrize(
@@ -271,6 +434,7 @@ def test_production_evidence_rejects_untrusted_remote_state(
     path, replacement, error
 ) -> None:
     responses = {
+        policy_path(): policy_contents(FINANCE_REPORT_POLICY),
         f"/repos/{APP_REPO}/actions/runs/100": successful_run(100),
         f"/repos/{APP_REPO}/actions/runs/101": successful_run(101),
         f"/repos/{APP_REPO}/pulls/10": merged_pull(),
