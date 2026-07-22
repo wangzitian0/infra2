@@ -689,6 +689,58 @@ def test_ensure_generated_secrets_is_a_noop_when_the_service_has_no_deployer(
     _real_ensure_generated_secrets("unregistered/service", "staging")  # must not raise
 
 
+@pytest.mark.parametrize(
+    "exc_attr",
+    ["VaultAuthError", "VaultConnectionError"],
+)
+def test_ensure_generated_secrets_degrades_when_this_context_has_no_vault_access(
+    monkeypatch, exc_attr
+):
+    # Real bug found via a live deploy (not caught by mocked unit tests): the
+    # app-deploy-request receiver — promote.deploy()'s actual caller in
+    # production — has no VAULT_ROOT_TOKEN (deliberately: DOKPLOY_API_KEY /
+    # IAC_WEBHOOK_SECRET only). VaultSecrets._load() raises VaultAuthError
+    # immediately in that context. A deploy must still proceed — this context
+    # simply cannot perform the self-heal, which is not the same as the
+    # self-heal having failed.
+    from libs.env import VaultSecrets
+
+    exc_cls = getattr(VaultSecrets, exc_attr)
+
+    class _NoVaultAccessDeployer:
+        @classmethod
+        def ensure_runtime_secrets(cls, *, env):
+            raise exc_cls("no route to Vault in this context")
+
+    monkeypatch.setattr(
+        "libs.deploy.deployer.load_deployer_class",
+        lambda service: _NoVaultAccessDeployer,
+    )
+    _real_ensure_generated_secrets("truealpha/app", "production")  # must not raise
+
+
+def test_deploy_proceeds_when_secret_provisioning_has_no_vault_access(monkeypatch):
+    """End-to-end: deploy() itself must not fail closed on this — the whole point
+    is that a routine staging/prod deploy keeps working even though its receiver
+    has no Vault credentials to self-heal with."""
+    from libs.env import VaultSecrets
+
+    class _NoVaultAccessDeployer:
+        @classmethod
+        def ensure_runtime_secrets(cls, *, env):
+            raise VaultSecrets.VaultAuthError("VAULT_ROOT_TOKEN not set")
+
+    monkeypatch.setattr(dp, "ensure_generated_secrets", _real_ensure_generated_secrets)
+    monkeypatch.setattr(
+        "libs.deploy.deployer.load_deployer_class",
+        lambda service: _NoVaultAccessDeployer,
+    )
+    client = FakeDokploy()
+    plan = dp.deploy("staging", FULL_SHA, domain="zitian.party", client=client)
+    assert plan.sha == FULL_SHA
+    assert client.deployed  # the deploy still happened
+
+
 def test_deploy_verify_vault_gates_before_any_mutation(monkeypatch):
     import libs.env as env_mod
 

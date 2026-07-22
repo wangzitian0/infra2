@@ -23,6 +23,7 @@ from dataclasses import dataclass
 
 from libs.common import infra_domain
 from libs.compose_lock import compose_write_lock
+from libs.console import warning
 from libs.deploy_env_config import app_compose_env_config, otel_env
 from libs.deploy_queue import deployment_start_epoch
 from tools.deploy_failure_snapshot import emit_failure_snapshot
@@ -202,13 +203,37 @@ def ensure_generated_secrets(service: str, env: str) -> None:
     tested, on each app's own Deployer; duplicating it here as a second
     implementation is exactly the kind of drift this session has been
     finding and removing elsewhere in this repo.
+
+    ensure_runtime_secrets ultimately calls VaultSecrets, which authenticates
+    with a root token (VAULT_ROOT_TOKEN) — a deliberately high-privilege
+    credential the app-deploy-request receiver (this function's actual real
+    caller: a GitHub Actions job reachable via cross-repo repository_dispatch)
+    is NOT and must NOT be handed; it only carries DOKPLOY_API_KEY and
+    IAC_WEBHOOK_SECRET. So VaultAuthError/VaultConnectionError here mean "this
+    execution context cannot check Vault at all," not "the secret write
+    failed" — degrade to a warning and let the deploy proceed (exactly
+    today's pre-#579 behavior) rather than fail every staging/prod deploy
+    closed on a self-heal this context was never going to be able to perform.
+    A real write failure (deployer_cls.ensure_runtime_secrets returning False
+    with valid Vault access) still raises below — that failure mode remains
+    fail-closed.
     """
     from libs.deploy.deployer import load_deployer_class
+    from libs.env import VaultSecrets
 
     deployer_cls = load_deployer_class(service)
     if deployer_cls is None:
         return  # no Deployer to consult (e.g. a test double service_id) — nothing to do
-    if not deployer_cls.ensure_runtime_secrets(env=env):
+    try:
+        provisioned = deployer_cls.ensure_runtime_secrets(env=env)
+    except (VaultSecrets.VaultAuthError, VaultSecrets.VaultConnectionError) as exc:
+        warning(
+            f"{service}: skipping generated-secret self-heal for env {env!r} — "
+            f"this deploy context has no Vault access ({exc.__class__.__name__}). "
+            "Deploying without it, same as before #447's promote.deploy() wiring."
+        )
+        return
+    if not provisioned:
         raise ValueError(
             f"{service}: failed to auto-provision one or more runtime secrets in "
             f"Vault for env {env!r} — see the Vault write error logged above."
