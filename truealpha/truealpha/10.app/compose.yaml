@@ -122,7 +122,13 @@ services:
       - dokploy-network
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.rule=Host(`truealpha${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`) && PathPrefix(`/api`)"
+      # Scoped to exactly what this FastAPI app serves (main.py: GET /health, and
+      # the MCP app mounted at /mcp) -- NOT a bare PathPrefix(`/api`). The web
+      # service's own Next.js API routes (/api/auth/login, /api/auth/me, ...) live
+      # under the same /api prefix on the same Host, and a bare PathPrefix(`/api`)
+      # here claims those too, silently 404ing them at llm instead of ever reaching
+      # web (truealpha#463 -- login was broken on both envs for this exact reason).
+      - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.rule=Host(`truealpha${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`) && (PathPrefix(`/api/mcp`) || Path(`/api/health`))"
       - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
       - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
       - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.service=truealpha-api${ENV_DOMAIN_SUFFIX}"
