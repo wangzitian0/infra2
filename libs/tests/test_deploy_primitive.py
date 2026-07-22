@@ -7,6 +7,9 @@ from types import SimpleNamespace
 import pytest
 
 from libs.deploy import promote as dp
+from libs.deploy.promote import (
+    ensure_generated_secrets as _real_ensure_generated_secrets,
+)
 from libs.deploy_queue import parse_epoch_seconds
 
 # A realistic full commit sha and its 7-char short form (the tag images are published
@@ -56,7 +59,22 @@ class FakeDokploy:
         # own env push) — assert_approle_creds_present reads this BEFORE any push, so
         # this is the state it sees. Tests exercising the missing-creds case override
         # via env_str=.
-        return "VAULT_ROLE_ID=r\nVAULT_SECRET_ID=s\nVAULT_ADDR=https://vault.zitian.party"
+        return (
+            "VAULT_ROLE_ID=r\nVAULT_SECRET_ID=s\nVAULT_ADDR=https://vault.zitian.party"
+        )
+
+
+@pytest.fixture(autouse=True)
+def _stub_secret_provisioning(monkeypatch):
+    """deploy() now self-heals missing Vault-generated secrets before mutating
+    (truealpha#447 — see ensure_generated_secrets), via a real dynamic import +
+    a real Vault-backed secrets_backend() call. That is a different external
+    system than the Dokploy `client` this whole file fakes, and none of the
+    tests below care about it — so neutralize it by default; the dedicated
+    tests in the "generated-secret provisioning" section re-arm it via their
+    own monkeypatch.
+    """
+    monkeypatch.setattr(dp, "ensure_generated_secrets", lambda *a, **k: None)
 
 
 def test_staging_deploy_assembles_axes_and_triggers():
@@ -543,7 +561,9 @@ def test_assert_approle_creds_present_raises_when_only_addr_missing():
         dp.assert_approle_creds_present("finance_report/app", client, "cmp")
 
 
-def test_assert_approle_creds_present_skips_a_non_approle_service(tmp_path, monkeypatch):
+def test_assert_approle_creds_present_skips_a_non_approle_service(
+    tmp_path, monkeypatch
+):
     compose = tmp_path / "compose.yaml"
     compose.write_text("services:\n  app:\n    image: example\n")
     fake_meta = SimpleNamespace(compose_path=str(compose))
@@ -569,6 +589,104 @@ def test_deploy_raises_before_any_mutation_when_approle_creds_missing():
     assert client.updated == []
     assert client.deployed == []
     assert client.branch_updates == []
+
+
+# --- truealpha#447: deploy() self-heals this service's generated Vault secrets ---
+
+
+def test_deploy_calls_ensure_generated_secrets_before_any_mutation(monkeypatch):
+    # Same "before any mutation" idiom as the AppRole guard above, but for a
+    # self-healing call rather than a hard gate: made to raise here purely to
+    # prove ordering, not because a real failure raises (it normally doesn't).
+    calls = []
+
+    def _record_and_raise(service, env):
+        calls.append((service, env))
+        raise ValueError("boom")
+
+    monkeypatch.setattr(dp, "ensure_generated_secrets", _record_and_raise)
+    client = FakeDokploy()
+    with pytest.raises(ValueError, match="boom"):
+        dp.deploy(
+            "prod",
+            "deadbeef",
+            domain="truealpha.club",
+            client=client,
+            service="truealpha/app",
+            staging_validated=True,
+        )
+    # env is resolved (prod -> production) before the call, matching identity's env.
+    assert calls == [("truealpha/app", "production")]
+    assert client.updated == []
+    assert client.deployed == []
+    assert client.branch_updates == []
+
+
+def test_deploy_calls_ensure_generated_secrets_with_the_unmapped_staging_env(
+    monkeypatch,
+):
+    calls = []
+    monkeypatch.setattr(
+        dp,
+        "ensure_generated_secrets",
+        lambda service, env: calls.append((service, env)),
+    )
+    client = FakeDokploy()
+    dp.deploy(
+        "staging", FULL_SHA, domain="zitian.party", client=client, iac_ref="b" * 40
+    )
+    assert calls == [("finance_report/app", "staging")]
+
+
+class _FakeGeneratedSecretsDeployer:
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def as_class(self):
+        calls = self.calls
+
+        class _Deployer:
+            @classmethod
+            def ensure_runtime_secrets(cls, *, env):
+                calls.append(env)
+                return True
+
+        return _Deployer
+
+
+def test_ensure_generated_secrets_calls_the_services_own_deployer(monkeypatch):
+    # Uses the directly-imported real function, not dp.ensure_generated_secrets —
+    # the autouse fixture above stubs THAT attribute for every test in this file
+    # (these three are exactly the tests that want the real body instead).
+    recorder = _FakeGeneratedSecretsDeployer()
+    monkeypatch.setattr(
+        "libs.deploy.deployer.load_deployer_class",
+        lambda service: recorder.as_class(),
+    )
+    _real_ensure_generated_secrets("truealpha/app", "production")
+    assert recorder.calls == ["production"]
+
+
+def test_ensure_generated_secrets_raises_when_provisioning_fails(monkeypatch):
+    class _FailingDeployer:
+        @classmethod
+        def ensure_runtime_secrets(cls, *, env):
+            return False
+
+    monkeypatch.setattr(
+        "libs.deploy.deployer.load_deployer_class", lambda service: _FailingDeployer
+    )
+    with pytest.raises(ValueError, match="failed to auto-provision"):
+        _real_ensure_generated_secrets("truealpha/app", "staging")
+
+
+def test_ensure_generated_secrets_is_a_noop_when_the_service_has_no_deployer(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "libs.deploy.deployer.load_deployer_class", lambda service: None
+    )
+    _real_ensure_generated_secrets("unregistered/service", "staging")  # must not raise
 
 
 def test_deploy_verify_vault_gates_before_any_mutation(monkeypatch):

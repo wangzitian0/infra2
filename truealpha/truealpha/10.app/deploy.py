@@ -76,21 +76,29 @@ class AppDeployer(Deployer):
         return env_vars
 
     @classmethod
-    def ensure_runtime_secrets(cls, c=None) -> bool:
+    def ensure_runtime_secrets(cls, c=None, *, env: str | None = None) -> bool:
         """Sync-path S3 readiness check.
 
         The iac-runner's sync NEVER calls pre_compose (it builds env straight
         from compose_env_base), so _ensure_minio_bucket above only runs in the
         manual pre-compose/setup tasks — a real deploy would silently ship an
         app with no S3 credentials. This hook IS called by sync; it cannot
-        provision (no docker CLI in the runner) but it can refuse to be silent."""
-        if not super().ensure_runtime_secrets(c):
+        provision (no docker CLI in the runner) but it can refuse to be silent.
+
+        Also called directly by libs.deploy.promote.deploy() (truealpha#447):
+        that fixed-compose path never ran pre_compose/sync either, so SECRET_KEY
+        was never auto-provisioned there and a fresh/rotated Vault environment
+        would crash-loop app-web with no self-healing. ``env`` is required by
+        that caller (see secrets_backend()) since it deploys staging and prod
+        from the same process/CLI invocation.
+        """
+        if not super().ensure_runtime_secrets(c, env=env):
             return False
-        if not cls._ensure_secret_key():
+        if not cls._ensure_secret_key(env=env):
             return False
-        if not cls._ensure_app_service_db_password():
+        if not cls._ensure_app_service_db_password(env=env):
             return False
-        secrets = cls.secrets_backend()
+        secrets = cls.secrets_backend(env=env)
         if not (secrets.get("S3_ACCESS_KEY") and secrets.get("S3_SECRET_KEY")):
             warning(
                 "S3 credentials missing in Vault — the raw archive is not provisioned for this env"
@@ -103,7 +111,7 @@ class AppDeployer(Deployer):
         return True
 
     @classmethod
-    def _ensure_secret_key(cls) -> bool:
+    def _ensure_secret_key(cls, env: str | None = None) -> bool:
         """Auto-provision SECRET_KEY in Vault (#447).
 
         app-web's session JWT signing (auth/config.ts) hard-fails without this
@@ -112,7 +120,7 @@ class AppDeployer(Deployer):
         (unlike _ensure_minio_bucket) this runs from the iac-runner's sync
         path too, and heals staging/production without a manual Vault step.
         """
-        secrets = cls.secrets_backend()
+        secrets = cls.secrets_backend(env=env)
         try:
             existing = secrets.get("SECRET_KEY")
         except VaultSecrets.VaultSecretNotFoundError:
@@ -127,7 +135,7 @@ class AppDeployer(Deployer):
         return False
 
     @classmethod
-    def _ensure_app_service_db_password(cls) -> bool:
+    def _ensure_app_service_db_password(cls, env: str | None = None) -> bool:
         """Auto-provision app_service_login's DB password in Vault (truealpha#432
         Stage A).
 
@@ -139,7 +147,7 @@ class AppDeployer(Deployer):
         nothing authenticates as app_service_login yet — so a missing/rotated value
         here is inert, never a runtime outage, unlike SECRET_KEY or the S3 keys.
         """
-        secrets = cls.secrets_backend()
+        secrets = cls.secrets_backend(env=env)
         try:
             existing = secrets.get("APP_SERVICE_DB_PASSWORD")
         except VaultSecrets.VaultSecretNotFoundError:
