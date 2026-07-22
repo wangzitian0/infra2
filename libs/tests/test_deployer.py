@@ -807,12 +807,116 @@ def test_base_deployer_creates_missing_vault_secret_path(monkeypatch) -> None:
         secret_key = "password"
 
     monkeypatch.setattr(
-        DummyDeployer, "secrets_backend", classmethod(lambda cls: secrets)
+        DummyDeployer, "secrets_backend", classmethod(lambda cls, env=None: secrets)
     )
 
     assert DummyDeployer.ensure_runtime_secrets() is True
     assert secrets.set_calls
     assert secrets.set_calls[0][0] == "password"
+
+
+# --- truealpha#447: promote.deploy() self-heals via a real Deployer import ------
+
+
+def test_load_deployer_class_returns_the_real_truealpha_app_deployer() -> None:
+    from libs.deploy.deployer import load_deployer_class
+
+    cls = load_deployer_class("truealpha/app")
+    assert cls is not None
+    assert cls.__name__ == "AppDeployer"
+    assert cls.service == "app"
+    assert cls.project == "truealpha"
+
+
+def test_load_deployer_class_returns_none_for_an_unknown_service() -> None:
+    from libs.deploy.deployer import load_deployer_class
+
+    assert load_deployer_class("nonexistent/service") is None
+    assert load_deployer_class("no-slash-in-this-id") is None
+    assert load_deployer_class("platform/nope") is None
+
+
+def test_secrets_backend_env_override_takes_precedence_over_process_env(
+    monkeypatch,
+) -> None:
+    """truealpha#447: libs.deploy.promote.deploy() calls this across staging AND
+    prod within one process — it must not depend on os.environ["ENV"], which
+    nothing sets for that in-process path (unlike the legacy invoke
+    <service>.sync subprocess, which always runs with ENV pre-set)."""
+    from libs.deploy.deployer import Deployer
+
+    captured = {}
+
+    class DummyDeployer(Deployer):
+        service = "widget"
+        project = "acme"
+
+        @classmethod
+        def env(cls):
+            return {"ENV": "production"}  # deliberately the WRONG env
+
+    def _fake_get_secrets(project, service, env):
+        captured.update(project=project, service=service, env=env)
+        return FakeSecrets()
+
+    monkeypatch.setattr("libs.deploy.deployer.get_secrets", _fake_get_secrets)
+
+    DummyDeployer.secrets_backend(env="staging")
+
+    assert captured == {"project": "acme", "service": "widget", "env": "staging"}
+
+
+def test_secrets_backend_falls_back_to_process_env_when_no_override(
+    monkeypatch,
+) -> None:
+    from libs.deploy.deployer import Deployer
+
+    captured = {}
+
+    class DummyDeployer(Deployer):
+        service = "widget"
+        project = "acme"
+
+        @classmethod
+        def env(cls):
+            return {"ENV": "staging"}
+
+    monkeypatch.setattr(
+        "libs.deploy.deployer.get_secrets",
+        lambda project, service, env: captured.setdefault("env", env) or FakeSecrets(),
+    )
+
+    DummyDeployer.secrets_backend()
+
+    assert captured["env"] == "staging"
+
+
+def test_truealpha_ensure_runtime_secrets_provisions_the_explicit_env_not_the_process_env(
+    monkeypatch,
+) -> None:
+    """End-to-end against the REAL truealpha AppDeployer: promote.deploy() passes
+    env= explicitly (via ensure_generated_secrets), so this must write to THAT
+    env's Vault store even though nothing sets os.environ["ENV"] for it."""
+    module = _load_deploy_module(
+        "truealpha/truealpha/10.app/deploy.py", "app_deploy_env_test"
+    )
+    stores = {
+        "staging": FakeSecrets({"DATABASE_URL": "postgres://staging"}),
+        "production": FakeSecrets({"DATABASE_URL": "postgres://prod"}),
+    }
+
+    monkeypatch.setattr(
+        module.AppDeployer,
+        "secrets_backend",
+        classmethod(lambda cls, env=None: stores[env]),
+    )
+
+    assert module.AppDeployer.ensure_runtime_secrets(env="staging") is True
+
+    assert stores["staging"].values["SECRET_KEY"]
+    assert stores["staging"].values["APP_SERVICE_DB_PASSWORD"]
+    assert "SECRET_KEY" not in stores["production"].values
+    assert "APP_SERVICE_DB_PASSWORD" not in stores["production"].values
 
 
 def test_portal_deployer_declares_no_runtime_secret_path() -> None:

@@ -6,11 +6,13 @@ Simplified: minimal class attributes, uses new env.py API.
 from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from pathlib import Path
+import importlib.util
 import os
 import hashlib
 import json
 import re
 import shlex
+import sys
 import time
 from invoke import task
 
@@ -37,7 +39,7 @@ if TYPE_CHECKING:
     from invoke import Context
 
 
-__all__ = ["Deployer", "make_tasks", "discover_services"]
+__all__ = ["Deployer", "make_tasks", "discover_services", "load_deployer_class"]
 
 # Runtime-only AppRole credentials injected into Dokploy env out-of-band (by
 # bootstrap/05.vault setup-approle), not present in the git-derived desired env.
@@ -62,6 +64,52 @@ EXACT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 # "new" record belongs to a DIFFERENT, unrelated trigger rather than to us. Small
 # margin for clock skew between this process and Dokploy's server.
 _CLOCK_SKEW_TOLERANCE_SECONDS = 5
+
+
+def load_deployer_class(service_id: str) -> "type[Deployer] | None":
+    """Dynamically import `service_id`'s deploy.py and return its Deployer subclass.
+
+    Every OTHER consumer of a service's facts (service_registry, promote.py's
+    assert_approle_creds_present) deliberately reads deploy.py via AST, never
+    importing it — importing runs the module's own top-level code. This is the
+    one place that import is actually needed: a fixed-compose deploy
+    (libs.deploy.promote) that wants to call a real Deployer classmethod (e.g.
+    ensure_runtime_secrets, truealpha#447) rather than re-derive its logic.
+    Safe to do here because a deploy.py's only load-time side effect
+    (make_tasks -> invoke task registration) is gated on its own
+    ``shared_tasks = sys.modules.get(...)`` lookup finding something — which is
+    never true for a standalone load like this one (mirrors the identical
+    precedent in tools/dokploy_config_drift.py and tests' _load_deploy_module).
+    Returns None if the service has no deploy.py or it defines no Deployer
+    subclass — callers treat that as "nothing to provision", not an error.
+    """
+    from libs.service_registry import _LAYERS
+
+    if "/" not in service_id:
+        return None
+    layer, name = service_id.split("/", 1)
+    layer_path = _LAYERS.get(layer)
+    if layer_path is None:
+        return None
+    deploy_file = next(layer_path.glob(f"*.{name}/deploy.py"), None)
+    if deploy_file is None:
+        return None
+    module_name = f"_deployer_{layer}_{name}"
+    spec = importlib.util.spec_from_file_location(module_name, deploy_file)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    for obj in vars(module).values():
+        if (
+            isinstance(obj, type)
+            and issubclass(obj, Deployer)
+            and obj is not Deployer
+            and obj.__module__ == module_name
+        ):
+            return obj
+    return None
 
 
 def discover_services() -> dict[str, str]:
@@ -489,7 +537,7 @@ class Deployer:
         return result
 
     @classmethod
-    def secrets_backend(cls):
+    def secrets_backend(cls, env: str | None = None):
         """Get the secrets backend for this service.
 
         Renamed from ``secrets`` (#543 hotfix): service Deployers declare a
@@ -499,18 +547,32 @@ class Deployer:
         (v1.1.35 staging reconcile). Facet attribute names must never collide
         with Deployer callables — enforced by
         libs/tests/test_service_facets.py.
+
+        ``env`` overrides the process ``ENV`` var (truealpha#447): a caller
+        that already knows which env it is deploying — e.g.
+        libs.deploy.promote.deploy(), which handles staging THEN prod within
+        one process/CLI invocation — must not depend on os.environ["ENV"]
+        happening to match, since nothing sets it for that in-process path
+        (unlike the legacy invoke <service>.sync subprocess, which always runs
+        with ENV pre-set for its whole lifetime). None keeps today's behavior.
         """
         e = cls.env()
         # Use cls.project if PROJECT env not set
         project = cls.project_name(e)
         return get_secrets(
-            project=project, service=cls.service, env=e.get("ENV", "production")
+            project=project, service=cls.service, env=env or e.get("ENV", "production")
         )
 
     @classmethod
-    def ensure_runtime_secrets(cls, c: "Context" | None = None) -> bool:
-        """Ensure all Vault secrets required by the runtime template exist."""
-        secrets_backend = cls.secrets_backend()
+    def ensure_runtime_secrets(
+        cls, c: "Context" | None = None, *, env: str | None = None
+    ) -> bool:
+        """Ensure all Vault secrets required by the runtime template exist.
+
+        ``env`` — see secrets_backend(); threaded through so this stays correct
+        when called for an env other than the process's own ``ENV``.
+        """
+        secrets_backend = cls.secrets_backend(env=env)
 
         if cls.secret_key:
             try:

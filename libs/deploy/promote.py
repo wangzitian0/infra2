@@ -180,6 +180,41 @@ def assert_approle_creds_present(service: str, client, compose_id: str) -> None:
         )
 
 
+def ensure_generated_secrets(service: str, env: str) -> None:
+    """Auto-provision this service's Vault-generated runtime secrets before deploying.
+
+    truealpha#447 root cause: app-web hard-fails on boot without SECRET_KEY
+    ("must come from Vault, never the development default"). truealpha's
+    Deployer already carries the fix (AppDeployer.ensure_runtime_secrets,
+    generates+stores it if missing, idempotent) — but that method is only ever
+    invoked from the legacy pre_compose/sync path (invoke <service>.sync via
+    the iac-runner). This promote path (what deploy_v2 actually routes every
+    app staging/prod deploy through) never called it, so #447 was only fixed
+    by a one-off manual Vault seed, not durably: a future Vault wipe/rotation
+    for this env would silently ship the same crash-loop again with no
+    self-healing. Mirrors assert_approle_creds_present's placement (before any
+    compose mutation) but self-heals instead of failing closed — provisioning
+    a missing secret is safe to retry/no-op, unlike a hard Vault auth gate.
+
+    Uses libs.deploy.deployer.load_deployer_class (real import, unlike this
+    module's other service lookups) because the provisioning logic itself
+    — WHICH keys, how they're generated — is app-specific and already lives,
+    tested, on each app's own Deployer; duplicating it here as a second
+    implementation is exactly the kind of drift this session has been
+    finding and removing elsewhere in this repo.
+    """
+    from libs.deploy.deployer import load_deployer_class
+
+    deployer_cls = load_deployer_class(service)
+    if deployer_cls is None:
+        return  # no Deployer to consult (e.g. a test double service_id) — nothing to do
+    if not deployer_cls.ensure_runtime_secrets(env=env):
+        raise ValueError(
+            f"{service}: failed to auto-provision one or more runtime secrets in "
+            f"Vault for env {env!r} — see the Vault write error logged above."
+        )
+
+
 def preflight_vault_token(client, compose_id: str, *, min_ttl_hours: int = 48):
     """Fail closed before deploy if the compose's legacy VAULT_APP_TOKEN is present but
     invalid or expiring within min_ttl_hours. The token is gated only when present — a
@@ -329,6 +364,11 @@ def deploy(
     deploy re-cloned that same 9-day-old commit, so infra2#562's secrets.ctmpl fix (and
     this very re-assert fix) could not reach a running stack until this landed. None when
     omitted (existing callers/tests unaffected); deploy_v2 always passes its clone_ref.
+
+    Also self-heals this service's Vault-generated runtime secrets before any mutation
+    (ensure_generated_secrets, truealpha#447's actual fix — the branch re-assert above
+    only explains why the symptom persisted after the initial code fix landed; this call
+    is what makes the fix durable rather than a one-off manual Vault seed).
     """
     # Explicit None checks: an empty string is a caller error, not a silent fallback.
     if not domain or any(c.isspace() for c in domain):
@@ -357,11 +397,20 @@ def deploy(
             "this exact digest, or break_glass=True as an audited override (H5)."
         )
 
+    # Computed here (not just where identity/openpanel need it below) because
+    # ensure_generated_secrets also needs it, before any mutation.
+    deploy_environment = {"prod": "production"}.get(env.strip().lower(), env)
+
     # Fail closed BEFORE any mutation if this compose can't actually authenticate to
     # Vault — unconditional (unlike the legacy VAULT_APP_TOKEN check below), matching
     # the legacy Deployer.composing() path where this has always been a hard gate, not
     # an opt-in.
     assert_approle_creds_present(service, client, cfg.compose_id)
+
+    # Self-heal BEFORE any mutation if this service's Vault-generated runtime secrets
+    # (e.g. truealpha's SECRET_KEY, #447) are missing — a fresh/rotated env would
+    # otherwise ship a crash-looping app with no signal until it's already deployed.
+    ensure_generated_secrets(service, deploy_environment)
 
     # Fail closed BEFORE any mutation if the compose's Vault token can't carry the deploy.
     # preflight_vault_token resolves the shared Vault host itself now — no domain param
@@ -399,7 +448,6 @@ def deploy(
     from libs.service_identity import ServiceIdentity
 
     svc_spec = service_spec(service)
-    deploy_environment = {"prod": "production"}.get(env.strip().lower(), env)
     identity = ServiceIdentity.build(
         service,
         deploy_environment,
