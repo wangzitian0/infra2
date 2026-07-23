@@ -155,7 +155,18 @@ jobs:
     timeout-minutes: 25
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
-      INTERNAL_DOMAIN: ${{ github.event.inputs.domain || 'zitian.party' }}
+      # The ONE shared control-plane domain (libs.common.infra_domain, #561) --
+      # cloud./vault./otel. host builds must NEVER follow a per-service app-routing
+      # override (inputs.domain, e.g. truealpha.club), or they produce a nonexistent
+      # hostname with no Traefik router or cert (a Cloudflare 526). app-deploy-
+      # request.yml already gets this right (fixed vars.INTERNAL_DOMAIN, independent
+      # of the per-request service domain); this job conflated the two by deriving it
+      # from inputs.domain -- discovered live deploying truealpha#474 (a
+      # truealpha/app prod deploy with inputs.domain=truealpha.club 526'd on
+      # cloud.truealpha.club before any mutation). The per-service app-routing domain
+      # still flows correctly to deploy_v2 via inputs.domain below (a separate,
+      # already-decoupled --domain CLI argument, not this env var).
+      INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
       # platform (iac_pinned) services trigger the iac_runner webhook instead of Dokploy.
       IAC_WEBHOOK_SECRET: ${{ secrets.IAC_WEBHOOK_SECRET }}
       IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
