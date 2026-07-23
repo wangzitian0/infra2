@@ -500,6 +500,20 @@ def deploy(
         # only non-empty overrides (an unset override must not blank the running model)
         env_vars.update({k: v for k, v in model_overrides.items() if v})
 
+    # Service-specific compose env vars a Deployer subclass computes itself
+    # (Deployer.compose_env_overrides, truealpha#474) — this shared assembly has no
+    # way to know about one-off app routing vars like AppDeployer's APP_HOST. Same
+    # dynamic-import pattern as ensure_generated_secrets above.
+    from libs.deploy.deployer import load_deployer_class
+
+    deployer_cls = load_deployer_class(service)
+    if deployer_cls is not None:
+        env_vars.update(
+            deployer_cls.compose_env_overrides(
+                env=deploy_environment, domain=domain, env_suffix=cfg.env_suffix
+            )
+        )
+
     # infra2#525: Dokploy's compose.one has no version/etag/updatedAt to gate the write
     # on, and its deployment records carry no caller-supplied correlation id — so the
     # whole read-modify-write-deploy-wait-verify sequence below is serialized per

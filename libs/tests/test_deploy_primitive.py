@@ -220,6 +220,48 @@ def test_truealpha_prod_deploy_resolves_its_own_compose_and_identity():
     assert client.deployed == ["j-gIAk0GfF0bGOitZN-og"]
 
 
+def test_truealpha_staging_deploy_sets_app_host():
+    """truealpha#474: promote.deploy is the ACTUAL code path a staging/prod
+    deploy_v2 run for this fixed app executes (confirmed live: it never calls
+    Deployer.compose_env_base at all). AppDeployer.compose_env_overrides was
+    previously wired into compose_env_base, which nothing on this path calls --
+    APP_HOST silently never reached Dokploy, and the compose's Traefik Host()
+    rule rendered as the literal, unmatchable `Host()` on a real deploy despite
+    every compose_env_base-level unit test passing. Assert against THIS path."""
+    client = FakeDokploy()
+    dp.deploy(
+        "staging", FULL_SHA, domain="zitian.party", client=client, service="truealpha/app", iac_ref="b" * 40
+    )
+    _, env = client.updated[0]
+    assert env["APP_HOST"] == "truealpha-staging.zitian.party"
+
+
+def test_truealpha_prod_deploy_sets_app_host_to_the_bare_domain():
+    """truealpha#474: production has no ENV_SUFFIX to disambiguate, so it must be the
+    bare domain, not truealpha.<domain> (the truealpha.truealpha.club bug)."""
+    client = FakeDokploy()
+    dp.deploy(
+        "prod",
+        FULL_SHA,
+        domain="truealpha.club",
+        client=client,
+        service="truealpha/app",
+        staging_validated=True,
+        iac_ref="b" * 40,
+    )
+    _, env = client.updated[0]
+    assert env["APP_HOST"] == "truealpha.club"
+
+
+def test_finance_report_deploy_has_no_app_host_override():
+    """The default Deployer.compose_env_overrides is a no-op: a service with no
+    override (finance_report/app) must not gain a stray APP_HOST key."""
+    client = FakeDokploy()
+    dp.deploy("staging", FULL_SHA, domain="zitian.party", client=client)
+    _, env = client.updated[0]
+    assert "APP_HOST" not in env
+
+
 def test_prod_refuses_unvalidated_digest_promote_not_rebuild():
     client = FakeDokploy()
     with pytest.raises(ValueError, match="requires a staging deploy"):
@@ -729,6 +771,10 @@ def test_deploy_proceeds_when_secret_provisioning_has_no_vault_access(monkeypatc
         @classmethod
         def ensure_runtime_secrets(cls, *, env):
             raise VaultSecrets.VaultAuthError("VAULT_ROOT_TOKEN not set")
+
+        @classmethod
+        def compose_env_overrides(cls, *, env, domain, env_suffix):
+            return {}
 
     monkeypatch.setattr(dp, "ensure_generated_secrets", _real_ensure_generated_secrets)
     monkeypatch.setattr(
