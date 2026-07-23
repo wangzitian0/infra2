@@ -59,7 +59,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install runtime dependencies
-        run: python -m pip install httpx python-dotenv pyyaml rich
+        run: python -m pip install invoke httpx python-dotenv pyyaml rich
 
       # A tag-push checkout has the full history (fetch-depth: 0) but no origin/main
       # remote-tracking ref. The reconcile guard (assert_after_on_main) refuses any tag

@@ -58,7 +58,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install runtime dependencies
-        run: python -m pip install httpx python-dotenv rich
+        run: python -m pip install invoke httpx python-dotenv rich
 
       - name: Tear down the PR preview alias
         run: |
