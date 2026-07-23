@@ -49,6 +49,7 @@ from libs.deploy_contract import (
     validate_ref_form,
 )
 from libs.deploy_env_config import env_config
+from libs.service_registry import domain_for_service
 from libs.deploy.promote import deploy as _deploy_fixed
 from libs.deploy.promote import model_overrides_from_env
 from libs.deploy.preview import _validate_domain
@@ -616,6 +617,15 @@ def deploy_v2(
     A platform (``iac_pinned``) service routes to the iac_runner webhook instead, ignoring
     ``version_ref`` (its artifact is the ``iac_ref``-pinned stack) — see :func:`_deploy_platform`.
     """
+    # A service with its own dedicated domain (Deployer.domain, e.g. truealpha/app ->
+    # truealpha.club) overrides whatever shared domain the caller passed in — the same
+    # rule libs.app_deploy_request.make_plan already applies on the App-repo request
+    # path. Without this, the workflow_dispatch path's default --domain zitian.party
+    # leaked into INTERNAL_DOMAIN/APP_HOST here and staging served on
+    # truealpha-staging.zitian.party while the canonical truealpha.club host 404'd
+    # (truealpha#474's deploy_v2 head; #586 fixed the request path only, verified live
+    # 2026-07-23: a v1.1.45 staging deploy through THIS path still leaked).
+    domain = domain_for_service(service) or domain
     svc_spec = service_spec(service)
     normalized_expected_sha = _normalize_expected_sha(expected_sha)
     # Fixed envs (staging/prod) pin their IaC to an immutable release tag, on BOTH the
