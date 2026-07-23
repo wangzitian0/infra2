@@ -1106,3 +1106,23 @@ def test_wait_for_image_dependencies_rejects_non_finite_env(monkeypatch):
     monkeypatch.setenv("DEPLOY_V2_IMAGE_WAIT_SECONDS", "nan")
     with pytest.raises(ValueError, match="must be finite"):
         dv2._wait_for_image_dependencies(spec, "abcdef0")
+
+
+# --- per-service domain override (truealpha#474's deploy_v2 head: the workflow's
+# default --domain zitian.party leaked into INTERNAL_DOMAIN/APP_HOST for an app
+# that owns its dedicated domain, so a v1.1.45 staging deploy still served on
+# truealpha-staging.zitian.party while the canonical truealpha.club host 404'd.
+# #586 fixed the App-repo request path only; deploy_v2 must apply the same
+# domain_for_service override) --------------------------------------------------
+
+
+def test_fixed_deploy_uses_the_services_own_domain_over_the_caller_input(calls):
+    _deploy(service="truealpha/app", deploy_type="staging", version_ref="v0.0.10")
+    assert calls["fixed"] is not None
+    assert calls["fixed"]["domain"] == "truealpha.club"
+
+
+def test_fixed_deploy_keeps_the_shared_domain_for_services_without_an_override(calls):
+    _deploy(deploy_type="staging", version_ref="v0.0.10")
+    assert calls["fixed"] is not None
+    assert calls["fixed"]["domain"] == "zitian.party"
