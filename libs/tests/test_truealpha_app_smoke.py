@@ -26,7 +26,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 _ENV = {"APP_HOST": "truealpha-staging.truealpha.club"}
-_GREEN = {"/api/health": 200, "/api/auth/login": 401, "/api/mcp": 200}
+_GREEN = {"/api/health": 200, "/api/auth/login": 401, "/api/mcp/": 200}
 
 
 @pytest.fixture(scope="module")
@@ -116,4 +116,4 @@ def test_447_class_login_500_fails_the_deploy(deployer, monkeypatch):
 
 
 def test_461_class_mcp_dead_fails_the_deploy(deployer, monkeypatch):
-    _expect_failure(deployer, monkeypatch, {**_GREEN, "/api/mcp": 502}, "POST /api/mcp initialize -> 502")
+    _expect_failure(deployer, monkeypatch, {**_GREEN, "/api/mcp/": 502}, "POST /api/mcp/ initialize -> 502")

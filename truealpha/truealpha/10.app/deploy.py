@@ -192,7 +192,14 @@ class AppDeployer(Deployer):
         if login not in {400, 401, 422, 429}:
             failures.append(f"POST /api/auth/login -> {login} (expected an auth-shaped 400/401/422/429)")
 
-        # One real MCP call (JSON-RPC initialize) through the public /api/mcp route.
+        # One real MCP call (JSON-RPC initialize) through the public MCP route.
+        # Trailing slash is REQUIRED: verified live on production 2026-07-23 —
+        # POST /api/mcp (no slash) 307-redirects to `http://<host>/mcp/`, which
+        # both DROPS the /api prefix (the Starlette mount redirects on the
+        # stripped path, so following it lands on app-web's 404) and downgrades
+        # to http. /api/mcp/ answers 200 with the JSON-RPC result directly.
+        # Probing the canonical working path keeps the smoke green while the
+        # redirect trap is tracked on truealpha#463.
         mcp_body = json.dumps(
             {
                 "jsonrpc": "2.0",
@@ -207,7 +214,7 @@ class AppDeployer(Deployer):
         ).encode()
         mcp = cls._probe_status(
             urllib.request.Request(
-                f"{base_url}/api/mcp",
+                f"{base_url}/api/mcp/",
                 data=mcp_body,
                 headers={
                     "Content-Type": "application/json",
@@ -217,7 +224,7 @@ class AppDeployer(Deployer):
             )
         )
         if mcp != 200:
-            failures.append(f"POST /api/mcp initialize -> {mcp} (expected 200)")
+            failures.append(f"POST /api/mcp/ initialize -> {mcp} (expected 200)")
         return failures
 
     @classmethod
