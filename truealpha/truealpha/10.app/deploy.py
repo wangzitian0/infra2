@@ -1,5 +1,9 @@
+import json
 import shutil
 import sys
+import time
+import urllib.error
+import urllib.request
 
 from libs.common import get_env
 from libs.console import error, header, info, success, warning
@@ -64,6 +68,12 @@ class AppDeployer(Deployer):
         ),
     )
 
+    # Post-deploy smoke pacing (truealpha#463 B2): containers report healthy
+    # within their start_period (30s); the deadline leaves headroom for image
+    # pulls on a cold node.
+    SMOKE_DEADLINE_SECONDS = 120
+    SMOKE_INTERVAL_SECONDS = 5
+
     @classmethod
     def compose_env_overrides(cls, *, env: str, domain: str, env_suffix: str) -> dict[str, str]:
         """Compute APP_HOST: the compose's Traefik Host() rules use this instead of
@@ -126,6 +136,118 @@ class AppDeployer(Deployer):
         # checksums + pointers). Same pattern as finance_report's bucket.
         cls._ensure_minio_bucket(c)
         return env_vars
+
+    @classmethod
+    def _smoke_base_url(cls, env_vars: dict[str, str]) -> str:
+        """The deployed surface's public origin — APP_HOST when the deploy path
+        provides it, else recomputed via compose_env_overrides (the truealpha#474
+        formula: bare domain in production, truealpha<suffix>.<domain> elsewhere)."""
+        host = env_vars.get("APP_HOST")
+        if not host:
+            e = cls.env()
+            domain = env_vars.get("INTERNAL_DOMAIN") or e.get("INTERNAL_DOMAIN") or cls.domain
+            host = cls.compose_env_overrides(
+                env=env_vars.get("ENV") or e.get("ENV") or "production",
+                domain=domain,
+                env_suffix=env_vars.get("ENV_DOMAIN_SUFFIX") or e.get("ENV_DOMAIN_SUFFIX") or "",
+            )["APP_HOST"]
+        return f"https://{host}"
+
+    @staticmethod
+    def _probe_status(request: urllib.request.Request) -> int | str:
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                return response.status
+        except urllib.error.HTTPError as err:
+            return err.code
+        except Exception as exc:  # URLError / timeout / TLS — the host is not serving
+            return f"unreachable ({exc})"
+
+    @classmethod
+    def _run_smoke_probes(cls, base_url: str) -> list[str]:
+        """One pass over the deployed surface; returns failure strings (empty = pass).
+
+        Retro-covers the four truealpha seam-incident classes:
+        #455 (service crash-looping -> /api/health dead), #463 (route shadowing
+        -> login 404s), #447 (missing SECRET_KEY -> login 500s), and the MCP
+        transport half of #461 (tool surface unreachable)."""
+        failures: list[str] = []
+
+        health = cls._probe_status(urllib.request.Request(f"{base_url}/api/health"))
+        if health != 200:
+            failures.append(f"GET /api/health -> {health} (expected 200)")
+
+        # Bogus credentials on purpose: ANY auth-shaped 4xx proves app-web's
+        # handler answered. 404 = the #463 shadowing class; 5xx = the #447
+        # missing-secret class.
+        login_body = json.dumps({"email": "smoke@invalid.example", "password": "smoke-invalid"}).encode()
+        login = cls._probe_status(
+            urllib.request.Request(
+                f"{base_url}/api/auth/login",
+                data=login_body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+        )
+        if login not in {400, 401, 422, 429}:
+            failures.append(f"POST /api/auth/login -> {login} (expected an auth-shaped 400/401/422/429)")
+
+        # One real MCP call (JSON-RPC initialize) through the public MCP route.
+        # Trailing slash is REQUIRED: verified live on production 2026-07-23 —
+        # POST /api/mcp (no slash) 307-redirects to `http://<host>/mcp/`, which
+        # both DROPS the /api prefix (the Starlette mount redirects on the
+        # stripped path, so following it lands on app-web's 404) and downgrades
+        # to http. /api/mcp/ answers 200 with the JSON-RPC result directly.
+        # Probing the canonical working path keeps the smoke green while the
+        # redirect trap is tracked on truealpha#463.
+        mcp_body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {},
+                    "clientInfo": {"name": "infra2-post-deploy-smoke", "version": "0"},
+                },
+            }
+        ).encode()
+        mcp = cls._probe_status(
+            urllib.request.Request(
+                f"{base_url}/api/mcp/",
+                data=mcp_body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                },
+                method="POST",
+            )
+        )
+        if mcp != 200:
+            failures.append(f"POST /api/mcp/ initialize -> {mcp} (expected 200)")
+        return failures
+
+    @classmethod
+    def verify_runtime_applied(cls, c, env_vars: dict[str, str]) -> str | None:
+        """truealpha#463 B2: the deployed surface must SERVE, not merely deploy.
+
+        One post-deploy smoke — login POST + one MCP call + llm health — through
+        the real Traefik routes. Every one of the four 2026-07 truealpha
+        incidents (#447/#455/#461/#463) shipped green CI and died only on the
+        deployed stack; this is the probe that would have failed those deploys
+        within minutes instead of days."""
+        del c
+        base_url = cls._smoke_base_url(env_vars)
+        info(f"{cls.service}: post-deploy smoke against {base_url}")
+        deadline = time.monotonic() + cls.SMOKE_DEADLINE_SECONDS
+        while True:
+            failures = cls._run_smoke_probes(base_url)
+            if not failures:
+                success(f"{cls.service}: post-deploy smoke passed (health + login + MCP)")
+                return None
+            if time.monotonic() >= deadline:
+                return f"post-deploy smoke failed at {base_url}: " + "; ".join(failures)
+            time.sleep(cls.SMOKE_INTERVAL_SECONDS)
 
     @classmethod
     def ensure_runtime_secrets(cls, c=None, *, env: str | None = None) -> bool:
