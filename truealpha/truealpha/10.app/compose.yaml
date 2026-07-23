@@ -128,7 +128,11 @@ services:
       # under the same /api prefix on the same Host, and a bare PathPrefix(`/api`)
       # here claims those too, silently 404ing them at llm instead of ever reaching
       # web (truealpha#463 -- login was broken on both envs for this exact reason).
-      - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.rule=Host(`truealpha${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`) && (PathPrefix(`/api/mcp`) || Path(`/api/health`))"
+      # Host uses ${APP_HOST} (deploy.py-computed), not the literal
+      # truealpha${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN} pattern -- that pattern
+      # collapsed to the malformed truealpha.truealpha.club in production, since
+      # INTERNAL_DOMAIN is already truealpha.club here (see truealpha#474).
+      - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.rule=Host(`${APP_HOST}`) && (PathPrefix(`/api/mcp`) || Path(`/api/health`))"
       - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
       - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
       - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.service=truealpha-api${ENV_DOMAIN_SUFFIX}"
@@ -189,7 +193,9 @@ services:
       - dokploy-network
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.truealpha-web${ENV_DOMAIN_SUFFIX}.rule=Host(`truealpha${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`)"
+      # See the llm router's comment above (truealpha#474) -- ${APP_HOST}, not the
+      # literal truealpha${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN} pattern.
+      - "traefik.http.routers.truealpha-web${ENV_DOMAIN_SUFFIX}.rule=Host(`${APP_HOST}`)"
       - "traefik.http.routers.truealpha-web${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
       - "traefik.http.routers.truealpha-web${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
       - "traefik.http.routers.truealpha-web${ENV_DOMAIN_SUFFIX}.service=truealpha-web${ENV_DOMAIN_SUFFIX}"

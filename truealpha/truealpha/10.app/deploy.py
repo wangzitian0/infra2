@@ -65,6 +65,33 @@ class AppDeployer(Deployer):
     )
 
     @classmethod
+    def compose_env_base(cls, env: dict | None = None) -> dict[str, str]:
+        """Compute APP_HOST: the compose's Traefik Host() rules use this instead of
+        the shared-platform-domain pattern `truealpha${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`.
+
+        That pattern is correct when INTERNAL_DOMAIN is the shared zitian.party domain
+        (disambiguating multiple apps: truealpha.zitian.party, financereport.zitian.party,
+        ...) but truealpha.club (this app's own registered domain, set via `domain` above)
+        already IS "truealpha" -- prefixing it again produces the malformed
+        truealpha.truealpha.club in production (empty ENV_DOMAIN_SUFFIX there collapses
+        the prefix straight onto the domain with nothing to separate them; staging's
+        non-empty "-staging" suffix accidentally produces a working, if redundant,
+        truealpha-staging.truealpha.club). See truealpha#474.
+
+        Fix: production is reachable at the bare domain; only non-production envs keep
+        the "truealpha" prefix, preserving staging's current working hostname exactly.
+        """
+        base = super().compose_env_base(env)
+        e = env or cls.env()
+        env_name = e.get("ENV", "production")
+        domain = base.get("INTERNAL_DOMAIN", "")
+        if env_name == "production":
+            base["APP_HOST"] = domain
+        else:
+            base["APP_HOST"] = f"truealpha{base.get('ENV_DOMAIN_SUFFIX', '')}.{domain}"
+        return base
+
+    @classmethod
     def pre_compose(cls, c) -> dict | None:
         env_vars = super().pre_compose(c)
         if env_vars is None:
