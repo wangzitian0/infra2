@@ -55,21 +55,21 @@ def test_both_routers_use_the_computed_app_host_not_the_literal_prefix_pattern()
 
 
 def test_app_host_is_bare_domain_in_production_and_prefixed_elsewhere() -> None:
-    """truealpha#474: production reaches the bare truealpha.club (no redundant
-    "truealpha" prefix); staging keeps its existing, already-working
-    truealpha-staging.truealpha.club shape unchanged."""
+    """truealpha#474: production reaches the bare domain (no redundant "truealpha"
+    prefix); non-production keeps the "truealpha" prefix, preserving staging's
+    existing, already-working truealpha-staging.<domain> shape unchanged.
+
+    compose_env_overrides, not compose_env_base: libs.deploy.promote.deploy (the
+    actual staging/prod deploy path for this fixed app) never calls
+    compose_env_base at all -- see test_deploy_primitive.py's
+    test_truealpha_*_deploy_sets_app_host for the regression test against that
+    real path (this file only pins the formula in isolation)."""
     module = _load_deploy_module()
     deployer = module.AppDeployer
 
-    prod_env = {"ENV": "production", "ENV_DOMAIN_SUFFIX": "", "INTERNAL_DOMAIN": "truealpha.club"}
-    assert deployer.compose_env_base(prod_env)["APP_HOST"] == "truealpha.club"
-
-    # ENV_SUFFIX (data-path collision guard, distinct from ENV_DOMAIN_SUFFIX) must be
-    # set for any non-production env or the base compose_env_base() raises ValueError.
-    staging_env = {
-        "ENV": "staging",
-        "ENV_SUFFIX": "-staging",
-        "ENV_DOMAIN_SUFFIX": "-staging",
-        "INTERNAL_DOMAIN": "truealpha.club",
-    }
-    assert deployer.compose_env_base(staging_env)["APP_HOST"] == "truealpha-staging.truealpha.club"
+    assert deployer.compose_env_overrides(env="production", domain="truealpha.club", env_suffix="")[
+        "APP_HOST"
+    ] == "truealpha.club"
+    assert deployer.compose_env_overrides(env="staging", domain="zitian.party", env_suffix="-staging")[
+        "APP_HOST"
+    ] == "truealpha-staging.zitian.party"

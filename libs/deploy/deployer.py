@@ -514,6 +514,21 @@ class Deployer:
         return {k: v for k, v in base.items() if v is not None}
 
     @classmethod
+    def compose_env_overrides(cls, *, env: str, domain: str, env_suffix: str) -> dict[str, str]:
+        """Extra compose env vars a fixed-app deploy (libs.deploy.promote.deploy) should
+        merge in beyond its own shared, hardcoded assembly (IMAGE_TAG, INTERNAL_DOMAIN,
+        identity.deploy_env(), openpanel_env(), otel_env(), ...). Default: none.
+
+        Deliberately separate from compose_env_base (the iac_pinned/iac-runner sync
+        path's hook, which promote.deploy never calls): a fixed-app deploy already has
+        `env`/`domain`/`env_suffix` resolved as this call's own explicit parameters, and
+        compose_env_base's data_path_for_env validation is irrelevant here. Subclasses
+        override this for one-off app-specific Traefik/routing vars promote.py's shared
+        assembly has no way to know about (e.g. AppDeployer.APP_HOST, truealpha#474).
+        """
+        return {}
+
+    @classmethod
     def source_config_env_base(cls, env: dict | None = None) -> dict[str, str]:
         """Return release-recomputable env inputs for source config identity."""
         if cls.runtime_only_config_keys:
