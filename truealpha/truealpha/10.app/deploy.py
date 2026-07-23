@@ -81,17 +81,40 @@ class AppDeployer(Deployer):
         Fix: production is reachable at the bare domain; only non-production envs keep
         the "truealpha" prefix, preserving staging's current working hostname exactly.
 
-        Deliberately its own hook (not an override of the base Deployer.compose_env_base,
-        which libs.deploy.promote.deploy -- the actual code path a fixed-app staging/prod
-        deploy runs through -- never calls at all): compose_env_base drags in
-        data_path_for_env's DATA_PATH/ENV_SUFFIX validation, which is irrelevant to this
-        one Traefik-routing value and produced a bogus "Nonestaging" DATA_PATH when tried
-        (AppDeployer.data_path is None). promote.deploy calls this narrow hook directly,
-        the same explicit way it already wires in identity.deploy_env()/openpanel_env().
+        A narrow, args-only hook (not folded straight into compose_env_base's own
+        DATA_PATH/ENV_SUFFIX validation dance, which is irrelevant to this one
+        Traefik-routing value and produced a bogus "Nonestaging" DATA_PATH when tried,
+        since AppDeployer.data_path is None) called from BOTH real deploy paths for
+        this fixed app -- see compose_env_base below and its docstring for why both
+        are necessary, not just one.
         """
         if env == "production":
             return {"APP_HOST": domain}
         return {"APP_HOST": f"truealpha{env_suffix}.{domain}"}
+
+    @classmethod
+    def compose_env_base(cls, env: dict | None = None) -> dict[str, str]:
+        """compose_env_base is the OTHER real deploy path's hook: Deployer.composing()
+        (invoke `ta-app.sync`, auto-triggered by the iac-runner's GitHub push webhook
+        on every push to main touching this directory -- confirmed live, not
+        hypothetical) builds its Dokploy env push from this method, and REPLACES the
+        compose's entire env wholesale (only VAULT_ROLE_ID/VAULT_SECRET_ID survive via
+        _preserve_runtime_env) -- omitting APP_HOST here would silently wipe it on the
+        next auto-sync, reproducing truealpha#474's outage. libs.deploy.promote.deploy
+        (the staging/prod deploy_v2 path) never calls this method at all -- it calls
+        compose_env_overrides directly instead (see promote.py) -- so both paths must
+        independently end up with APP_HOST; this just forwards to the same formula.
+        """
+        base = super().compose_env_base(env)
+        e = env or cls.env()
+        base.update(
+            cls.compose_env_overrides(
+                env=e.get("ENV", "production"),
+                domain=base.get("INTERNAL_DOMAIN") or "",
+                env_suffix=base.get("ENV_DOMAIN_SUFFIX") or "",
+            )
+        )
+        return base
 
     @classmethod
     def pre_compose(cls, c) -> dict | None:

@@ -59,11 +59,16 @@ def test_app_host_is_bare_domain_in_production_and_prefixed_elsewhere() -> None:
     prefix); non-production keeps the "truealpha" prefix, preserving staging's
     existing, already-working truealpha-staging.<domain> shape unchanged.
 
-    compose_env_overrides, not compose_env_base: libs.deploy.promote.deploy (the
-    actual staging/prod deploy path for this fixed app) never calls
-    compose_env_base at all -- see test_deploy_primitive.py's
-    test_truealpha_*_deploy_sets_app_host for the regression test against that
-    real path (this file only pins the formula in isolation)."""
+    This app has TWO real deploy paths and both must independently end up with
+    APP_HOST (see test_deploy_primitive.py's test_truealpha_*_deploy_sets_app_host
+    for promote.deploy's path, the one this file can't reach without mocking
+    Dokploy): libs.deploy.promote.deploy calls compose_env_overrides directly;
+    Deployer.composing() (invoke ta-app.sync, auto-triggered by the iac-runner's
+    live GitHub push webhook on every push touching this directory) calls
+    compose_env_base instead and REPLACES the compose's whole env wholesale --
+    omitting APP_HOST there silently wiped it on the very next auto-sync during
+    development of this fix, independent of and after the promote.deploy fix
+    landed. Pin both."""
     module = _load_deploy_module()
     deployer = module.AppDeployer
 
@@ -73,3 +78,16 @@ def test_app_host_is_bare_domain_in_production_and_prefixed_elsewhere() -> None:
     assert deployer.compose_env_overrides(env="staging", domain="zitian.party", env_suffix="-staging")[
         "APP_HOST"
     ] == "truealpha-staging.zitian.party"
+
+    prod_env = {"ENV": "production", "ENV_DOMAIN_SUFFIX": "", "INTERNAL_DOMAIN": "truealpha.club"}
+    assert deployer.compose_env_base(prod_env)["APP_HOST"] == "truealpha.club"
+
+    # ENV_SUFFIX (data-path collision guard, distinct from ENV_DOMAIN_SUFFIX) must be
+    # set for any non-production env or the base compose_env_base() raises ValueError.
+    staging_env = {
+        "ENV": "staging",
+        "ENV_SUFFIX": "-staging",
+        "ENV_DOMAIN_SUFFIX": "-staging",
+        "INTERNAL_DOMAIN": "zitian.party",
+    }
+    assert deployer.compose_env_base(staging_env)["APP_HOST"] == "truealpha-staging.zitian.party"
