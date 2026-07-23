@@ -64,5 +64,12 @@ def test_app_host_is_bare_domain_in_production_and_prefixed_elsewhere() -> None:
     prod_env = {"ENV": "production", "ENV_DOMAIN_SUFFIX": "", "INTERNAL_DOMAIN": "truealpha.club"}
     assert deployer.compose_env_base(prod_env)["APP_HOST"] == "truealpha.club"
 
-    staging_env = {"ENV": "staging", "ENV_DOMAIN_SUFFIX": "-staging", "INTERNAL_DOMAIN": "truealpha.club"}
+    # ENV_SUFFIX (data-path collision guard, distinct from ENV_DOMAIN_SUFFIX) must be
+    # set for any non-production env or the base compose_env_base() raises ValueError.
+    staging_env = {
+        "ENV": "staging",
+        "ENV_SUFFIX": "-staging",
+        "ENV_DOMAIN_SUFFIX": "-staging",
+        "INTERNAL_DOMAIN": "truealpha.club",
+    }
     assert deployer.compose_env_base(staging_env)["APP_HOST"] == "truealpha-staging.truealpha.club"
