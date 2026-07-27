@@ -632,7 +632,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install ruff
-        run: pip install ruff
+        run: pip install "ruff==0.15.22"  # pinned: 0.16 added rules that fail the estate repo-wide (2026-07-27); bump deliberately with the fixes
 
       - name: Run ruff check
         run: ruff check libs/ bootstrap/ platform/ finance_report/ truealpha/ tools/
