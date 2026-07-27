@@ -1,6 +1,7 @@
 dokploy-internal-http|http|http://dokploy:3000|200,302|critical|5||bootstrap/dokploy
 vault-internal-http|http|http://vault:8200/v1/sys/health|200,429,472,473|critical|5||bootstrap/vault
 minio-internal-http|http|http://platform-minio${ENV_SUFFIX}:9000/minio/health/live|200|critical|5||platform/minio
+minio-s3-head-bucket|s3|http://platform-minio${ENV_SUFFIX}:9000||critical|5||platform/minio
 authentik-internal-http|http|http://platform-authentik-server${ENV_SUFFIX}:9000/-/health/live/|200,204,302|critical|5||platform/authentik
 prefect-internal-http|http|http://platform-prefect-server${ENV_SUFFIX}:4200/api/health|200|critical|5||platform/prefect
 # signoz/clickhouse are prod_only (single shared instance; every env ships its data to
@@ -27,7 +28,7 @@ lark-delivery-http|http|http://platform-alerting${ENV_SUFFIX}:8080/health/feishu
 # noise by `lark-delivery-http` (config valid + Feishu reachable, no real post),
 # the out-of-band watchdog's independent bridge /health check, the daily reports'
 # own Feishu delivery, and real alerts when they fire.
-platform-postgres-tcp|tcp|platform-postgres${ENV_SUFFIX}:5432|connected|critical|5||platform/postgres
+platform-postgres-select1|postgres|platform-postgres${ENV_SUFFIX}:5432/postgres||critical|5||platform/postgres
 platform-redis-tcp|tcp|platform-redis${ENV_SUFFIX}:6379|connected|critical|5||platform/redis
 # ClickHouse liveness is no longer probed by a read-only /ping: it stays 200 even
 # when the data dir is unwritable (read green / write dead). The truthful signals

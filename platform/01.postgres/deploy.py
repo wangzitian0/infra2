@@ -25,12 +25,16 @@ class PostgresDeployer(Deployer):
     secret_key = "root_password"
 
     # Infra probes (#541): rendered into INFRA_PROBE_SPECS by platform/alerting.
+    # kind="postgres" (infra2_sdk.runtime.postgres, via libs/infra_probes.py) runs a
+    # real `SELECT 1` through a dedicated, minimal-privilege monitoring role — a bare
+    # TCP handshake proves the port is open, not that Postgres itself is accepting
+    # queries. Credentials come from the probe-runner's own vault secret
+    # (PROBE_POSTGRES_USER/PROBE_POSTGRES_PASSWORD), never from this spec text.
     probes = (
         ProbeFacet(
-            name="platform-postgres-tcp",
-            kind="tcp",
-            target="platform-postgres${ENV_SUFFIX}:5432",
-            expected="connected",
+            name="platform-postgres-select1",
+            kind="postgres",
+            target="platform-postgres${ENV_SUFFIX}:5432/postgres",
         ),
     )
     # Signal classification (#425 T5 / #543): every probe above is a

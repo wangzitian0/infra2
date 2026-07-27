@@ -5,7 +5,13 @@ description = "Infrastructure as Code for self-hosted services"
 requires-python = ">=3.11"
 dependencies = [
     # Cross-repository wire/data contracts. Pin the immutable release artifact;
-    # workspace submodules are never runtime dependencies.
+    # workspace submodules are never runtime dependencies. NOTE: keep this exact
+    # "infra2-sdk @ " prefix — ops-checks.yml's deploy-v2-canary job and
+    # test_deploy_canary_installs_the_declared_sdk_requirement extract this
+    # entry by an exact startswith("infra2-sdk @ ") match; an extras suffix
+    # (e.g. "infra2-sdk[foo] @ ") would silently stop matching and crash that
+    # job's dependency install. psycopg/boto3 are declared as their own plain
+    # entries below instead of via SDK extras for exactly this reason.
     "infra2-sdk @ https://github.com/wangzitian0/infra2-sdk/releases/download/v0.4.1/infra2_sdk-0.4.1-py3-none-any.whl",
     # libs/tests unit testing
     "pytest>=7.4.0",
@@ -19,6 +25,10 @@ dependencies = [
     # Automation
     "invoke>=2.2.0",
     "rich>=14.2.0",
+    # tools/infra_probe_runner.py real postgres/s3 protocol probes (kind="postgres"/"s3"
+    # in libs/infra_probes.py) call infra2_sdk.runtime.postgres/s3, which need these.
+    "psycopg[binary]>=3.2,<4",
+    "boto3>=1.34,<2",
 ]
 
 [dependency-groups]
