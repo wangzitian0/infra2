@@ -2,15 +2,32 @@
 
 from __future__ import annotations
 
+import inspect
 from importlib.metadata import version
 from pathlib import Path
 
 import yaml
 from infra2_sdk.ci import load_delivery_stages
+from infra2_sdk.delivery import DisagreementKind, detect_disagreement
 
 ROOT = Path(__file__).resolve().parents[2]
 LOCAL_STAGES = ROOT / "docs/ssot/delivery-stages.yaml"
 OPS_CHECKS = ROOT / ".github/workflows/ops-checks.yml"
+
+# DisagreementKind values detect_disagreement() cannot currently produce (confirmed by
+# reading its source: no branch returns them). Removing an enum value is a major-version,
+# separate-repo change per the SDK's own compatibility policy (README.md "Compatibility"),
+# so cleanup there is tracked separately, not done here. Each entry needs a reason; an
+# unreasoned addition here defeats the point of this test.
+_UNREACHABLE_DISAGREEMENT_KINDS = {
+    # #543 deleted route-canary (its only would-be producer) without revisiting this SDK
+    # enum — no infra2 or SDK code path emits it, and detect_disagreement() has no branch
+    # that returns it either.
+    DisagreementKind.CANARY_APP_READINESS: "never had a producer; SDK-side dead value",
+    # No commit history ties this to a specific retirement — grepped both infra2 and the
+    # SDK itself and found no producer anywhere, past or present.
+    DisagreementKind.HEARTBEAT_PROBE_RESULT: "no producer found anywhere; SDK-side dead value",
+}
 
 
 def test_infra_pins_the_expected_sdk_release() -> None:
@@ -49,3 +66,28 @@ def test_deploy_canary_installs_the_declared_sdk_requirement() -> None:
 def test_retired_compatibility_modules_stay_removed() -> None:
     assert not (ROOT / "libs/ci_gate_schema.py").exists()
     assert not (ROOT / "libs/pipeline_stage_contract.py").exists()
+
+
+def test_detect_disagreement_can_produce_every_non_exempt_disagreement_kind() -> None:
+    """A DisagreementKind the SDK declares but detect_disagreement() can never actually
+    return is a live-looking capability nobody built — exactly the shape #543's route-canary
+    retirement left behind (deleted the only producer, never revisited the SDK enum). This
+    scans detect_disagreement()'s own source for which members it references, so a NEW
+    unreachable value fails here immediately instead of requiring a fresh manual audit
+    across every consumer repo to notice. Values already known-dead are exempted above with
+    a reason; an exemption here does not fix the SDK, it just makes the gap visible instead
+    of silent."""
+    source = inspect.getsource(detect_disagreement)
+    reachable = {
+        member
+        for member in DisagreementKind
+        if f"DisagreementKind.{member.name}" in source
+    }
+    # NONE has an explicit `return DisagreementKind.NONE` fallthrough — a real, reachable
+    # return value like the rest, so it is not exempted.
+    expected = set(DisagreementKind) - set(_UNREACHABLE_DISAGREEMENT_KINDS)
+    assert reachable == expected, (
+        f"detect_disagreement() can no longer produce: {expected - reachable}. If this is "
+        "deliberate (e.g. a producer was retired), move the value into "
+        "_UNREACHABLE_DISAGREEMENT_KINDS above with a reason instead of leaving this test red."
+    )

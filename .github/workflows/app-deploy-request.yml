@@ -34,6 +34,8 @@ jobs:
     name: validate request contract
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      requires_preflight_canary: ${{ steps.plan.outputs.requires_preflight_canary }}
     steps:
       - name: Checkout released infra context
         uses: actions/checkout@v7
@@ -47,6 +49,7 @@ jobs:
       - name: Install receiver dependencies
         run: python -m pip install -e .
       - name: Validate and display the side-effect-free plan
+        id: plan
         run: |
           set -euo pipefail
           plan="$(python -m tools.app_deploy_request plan \
@@ -54,15 +57,19 @@ jobs:
             --domain "$INTERNAL_DOMAIN" \
             --repo-root .)"
           printf '%s\n' "$plan" | python -m json.tool
+          # requires_preflight_canary is DeployPlan's own property (libs/app_deploy_request.py) —
+          # the single source of truth for which requests get gated. preflight_canary's `if:`
+          # below reads this output instead of re-deriving deploy_type/operation itself, so the
+          # two can never drift apart.
+          needs_canary="$(printf '%s' "$plan" | python -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["requires_preflight_canary"]))')"
+          echo "requires_preflight_canary=$needs_canary" >> "$GITHUB_OUTPUT"
 
   preflight_canary:
     name: preflight requested artifact
     needs: [validate]
     if: >-
       ${{ needs.validate.result == 'success'
-          && github.event.client_payload.operation != 'remove'
-          && (github.event.client_payload.deploy_type == 'staging'
-              || github.event.client_payload.deploy_type == 'prod') }}
+          && needs.validate.outputs.requires_preflight_canary == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:

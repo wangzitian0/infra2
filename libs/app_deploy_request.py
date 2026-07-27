@@ -122,6 +122,20 @@ class DeployPlan:
             args.extend(["--staging-validated", "--code-reviewed"])
         return args
 
+    @property
+    def requires_preflight_canary(self) -> bool:
+        """Whether the receiver must canary this exact coordinate before executing it.
+
+        The single source of truth for "which requests get gated" — app-deploy-request.yml's
+        ``preflight_canary`` job reads this (via the ``plan`` CLI action's JSON) instead of
+        re-deriving it from a hardcoded ``deploy_type`` list in YAML, so the two can never
+        drift apart.
+        """
+        return (
+            self.request.deploy_type in FIXED_DEPLOY_TYPES
+            and self.request.operation != DeployOperation.REMOVE
+        )
+
     def to_dict(self) -> dict[str, object]:
         return {
             "request": self.request.to_dict(),
@@ -129,6 +143,7 @@ class DeployPlan:
             "domain": self.domain,
             "timeout": self.timeout,
             "deploy_v2_args": self.deploy_v2_args(),
+            "requires_preflight_canary": self.requires_preflight_canary,
         }
 
 

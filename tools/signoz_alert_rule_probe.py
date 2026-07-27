@@ -117,7 +117,7 @@ def _build_canary_payload(alert_name: str, channel_id: str) -> dict[str, Any]:
     payload = json.loads(json.dumps(source))
     payload["alert"] = alert_name
     payload["disabled"] = True
-    payload["source"] = "infra2/tools/signoz_alert_rule_canary.py"
+    payload["source"] = "infra2/tools/signoz_alert_rule_probe.py"
     payload["labels"] = {
         **payload.get("labels", {}),
         "severity": "info",

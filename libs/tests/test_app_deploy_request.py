@@ -626,6 +626,44 @@ def test_remove_plan_uses_down_without_expected_sha(tmp_path) -> None:
 
 
 @pytest.mark.parametrize(
+    "overrides,expected",
+    [
+        ({}, True),  # staging (payload()'s default deploy_type)
+        ({"deploy_type": "prod"}, True),
+        ({"deploy_type": "preview/pr", "version_ref": "42"}, False),
+        ({"deploy_type": "preview/branch", "version_ref": "main"}, False),
+        (
+            {"operation": "remove", "deploy_type": "preview/pr", "version_ref": "42"},
+            False,
+        ),
+    ],
+)
+def test_requires_preflight_canary_is_the_single_source_the_workflow_reads(
+    tmp_path, overrides, expected
+) -> None:
+    """app-deploy-request.yml's preflight_canary job reads this property (via the plan
+    CLI action's JSON) instead of hand-copying a deploy_type list into its `if:` — see
+    test_app_deploy_request_workflow.py. A production request additionally needs staging
+    + review evidence, so it goes through production_payload()."""
+    build_payload = (
+        production_payload if overrides.get("deploy_type") == "prod" else payload
+    )
+    plan = receiver.make_plan(
+        build_payload(**overrides),
+        sender="wangzitian0",
+        domain="zitian.party",
+        timeout=600,
+        repo_root=tmp_path,
+        production_evidence_verifier=lambda request: None,
+        resolve_image=resolved,
+        resolve_pull=lambda *_a, **_k: ResolvedRef(sha=SHA, image_ref="42", form="pr"),
+        runner=tags,
+    )
+    assert plan.requires_preflight_canary is expected
+    assert plan.to_dict()["requires_preflight_canary"] is expected
+
+
+@pytest.mark.parametrize(
     "domain,timeout", [("", 600), ("bad domain", 600), ("ok.test", 0)]
 )
 def test_plan_rejects_bad_execution_settings(tmp_path, domain, timeout) -> None:

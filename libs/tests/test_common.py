@@ -24,7 +24,7 @@ def test_infra_domain_defaults_to_zitian_party_when_unset(monkeypatch):
 def test_infra_domain_strips_whitespace(monkeypatch):
     # A stray newline/space in the env var would otherwise build an invalid host
     # (e.g. "vault.zitian.party\n") — strip defensively, matching every other
-    # INTERNAL_DOMAIN reader in the repo (tools/signoz_alert_rule_canary.py).
+    # INTERNAL_DOMAIN reader in the repo (tools/signoz_alert_rule_probe.py).
     monkeypatch.setenv("INTERNAL_DOMAIN", "  zitian.party\n")
     assert infra_domain() == "zitian.party"
 

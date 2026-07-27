@@ -35,7 +35,7 @@ from libs.observability_dashboards import (
 # Label stamped on every rule this catalog owns, so `apply_alerts` can safely prune its own
 # drift (renamed/leftover managed rules) without ever touching a hand-made rule.
 MANAGED_ALERT_SOURCE = "infra2/finance_report-alerts"
-# Residue left by the alert-rule canary (tools/signoz_alert_rule_canary.py) is also ours.
+# Residue left by the alert-rule canary (tools/signoz_alert_rule_probe.py) is also ours.
 _CANARY_RULE_PREFIX = "CanarySigNozPromqlPayload-"
 
 
