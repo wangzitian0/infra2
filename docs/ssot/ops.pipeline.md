@@ -138,7 +138,7 @@ staging。(RC tag `v*.*.*-rc.N` + soak 窗口仍为目标态,见 §3.4。)
 
 ## 4. `deploy_v2` 坐标(部署前门 SSOT)
 
-> **设计参考**: [Infra-015 deploy_v2 front door](../project/Infra-015.deploy_v2_front_door.md)(EPIC 追踪;**契约以本文为准**)。
+> **设计参考**: [Infra-015 deploy_v2 front door](../project/archive/Infra-015.deploy_v2_front_door.md)(EPIC 追踪,已归档;**契约以本文为准**)。
 
 统一坐标 **`(service, type, version_ref, iac_ref)`**——四个正交轴:
 
@@ -392,4 +392,4 @@ git fetch --tags && git tag -l "v*.*.*" | sort -V | tail -5
 - [docs/ssot/README.md](./README.md)
 - [docs/ssot/core.environments.md](./core.environments.md)(环境定义;部署触发指向本文)
 - [docs/ssot/bootstrap.iac_runner.md](./bootstrap.iac_runner.md)
-- [docs/project/Infra-015.deploy_v2_front_door.md](../project/Infra-015.deploy_v2_front_door.md)(EPIC;契约以本文为准)
+- [docs/project/archive/Infra-015.deploy_v2_front_door.md](../project/archive/Infra-015.deploy_v2_front_door.md)(EPIC,已归档;契约以本文为准)

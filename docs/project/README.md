@@ -16,7 +16,6 @@
 
 ## Global TODOWRITE
 - [Infra-001.TODOWRITE.md](./Infra-001.TODOWRITE.md) - Legacy/global issues
-- [Infra-015.TODOWRITE.md](./Infra-015.TODOWRITE.md) - deploy_v2 front door residuals (sender #1173 + archive)
 - [Infra-019.TODOWRITE.md](./Infra-019.TODOWRITE.md) - workspace harness follow-ups
 
 ## Related
@@ -35,7 +34,6 @@
 - [Infra-019: Workspace Harness Control Plane](./Infra-019.harness_control_plane.md) - **In Progress**
 - [Infra-017: TrueAlpha Dagster Capture Runtime](./Infra-017.truealpha_dagster_capture.md) - **In Progress**
 - [Infra-016: CI Gate Inventory — coordinate-ize infra CI, and de-overlap app vs infra responsibilities](./Infra-016.ci_gate_inventory.md) - **In Progress**
-- [Infra-015: deploy_v2 — the unified, trustworthy deploy front door](./Infra-015.deploy_v2_front_door.md) - **Implementation complete & live-verified; companion finance_report#1173 (app-repo sender) pending merge — archive (merge record + [TODOWRITE](./Infra-015.TODOWRITE.md)) once it lands**
 - [Infra-014: finance_report Observability Wiring (OTel → SigNoz + OpenPanel per-env)](./Infra-014.finance_report_observability.md) - **In Progress**
 - [Infra-013: Service Registry as Single Source of Truth](./Infra-013.service_registry_ssot.md) - **In Progress**
 - [Infra-012: Watchdog Observability & Alert Completeness](./Infra-012.watchdog_observability.md) - **In Progress (Phase 1 delivered, Phase 2/3 actively closing)**
@@ -55,6 +53,7 @@
 <!-- BEGIN GENERATED ARCHIVED PROJECTS (tools/gen_project_index.py) -->
 
 - [Infra-018: Repository Boundary Decoupling](./archive/Infra-018.repository_boundary_decoupling.md) - **Archived**
+- [Infra-015: deploy_v2 — the unified, trustworthy deploy front door](./archive/Infra-015.deploy_v2_front_door.md) - **Archived — implementation complete & live-verified; companion finance_report#1173**
 - [Infra-003: Documentation Reorganization](./archive/Infra-003.docs_reorg.md) - **Archived**
 - [Infra-002: 1Password + Vault Installation](./archive/Infra-002.1password_vault_install.md) - **Archived**
 - [Infra-001: Bootstrap Base Setup](./archive/Infra-001.bootstrap_setup.md) - **Archived**
