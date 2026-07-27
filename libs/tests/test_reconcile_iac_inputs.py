@@ -58,21 +58,22 @@ def test_prod_only_services_skip_staging() -> None:
 
 def test_not_yet_in_production_services_skip_prod() -> None:
     """#542 (the v1.1.34 2/14 prod-promote failure): an iac_pinned service whose
-    Deployer declares `not_yet_in_production = True` (truealpha's staging-scoped
-    rollout, #500 — no prod composes or Vault provisioning) must fan out to
-    staging only, and be surfaced in the plan rather than silently dropped."""
+    Deployer declares `not_yet_in_production = True` must fan out to staging
+    only, and be surfaced in the plan rather than silently dropped.
+
+    The exclusion set is DERIVED from Deployer attrs, so this test is the flag's
+    changelog: postgres graduated 2026-07-19, data_engine graduated 2026-07-27
+    (owner-approved TOPT production scope) — the set is empty today, and the
+    mechanism stays pinned so the next staging-scoped service re-populates it
+    deliberately, in this test, in the same PR."""
     plan = build_plan([MANIFEST_PATH])  # selects every iac_pinned service
 
-    # data_engine still carries the flag; postgres went LIVE in prod 2026-07-19
-    # (verified: truealpha-postgres running) and its flag was removed — the plan
-    # must include it for prod again, automatically.
-    for service in ("truealpha/data_engine",):
+    for service in ("truealpha/data_engine", "truealpha/postgres"):
         assert service in plan.selected
         assert service in plan.staging_services
-        assert service not in plan.prod_services
-        assert service in plan.not_yet_in_production
-    assert "truealpha/postgres" in plan.prod_services
-    assert "truealpha/postgres" not in plan.not_yet_in_production
+        assert service in plan.prod_services
+        assert service not in plan.not_yet_in_production
+    assert plan.not_yet_in_production == []
     # In-production services are untouched by the filter.
     assert "platform/alerting" in plan.prod_services
     assert plan.to_dict()["not_yet_in_production"] == plan.not_yet_in_production

@@ -39,10 +39,11 @@ class DataEngineDeployer(Deployer):
     service_port = 3001
     service_name = "dagster-webserver"
 
-    # Rollout state (#500/#522/#542): staging-scoped, no production composes or
-    # Vault provisioning yet (see truealpha/01.postgres/deploy.py's twin attr
-    # for the full context). REMOVE when promoted to production.
-    not_yet_in_production = True
+    # Rollout state: graduated to production 2026-07-27 (owner-approved,
+    # CAPTURE_APPROVED_BY recorded in secret/truealpha/production/data_engine).
+    # The former `not_yet_in_production = True` staging scope (#500/#522/#542)
+    # is removed — prod reconcile fan-out and the Vault self-refresh audit now
+    # include this service, mirroring truealpha/01.postgres's graduation.
 
     # Vault self-refresh facts (#542): the audit inventory derives from this
     # (AppRole auth from day one).
