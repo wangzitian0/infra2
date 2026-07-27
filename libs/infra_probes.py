@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
 import json
 import os
 import shlex
 import socket
 import subprocess
 import time
+from dataclasses import asdict, dataclass
 from typing import Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from infra2_sdk.runtime.postgres import PostgresSettings, probe_postgres
+from infra2_sdk.runtime.probes import DependencyStatus
+from infra2_sdk.runtime.s3 import S3Settings, probe_s3
 
 DEFAULT_TIMEOUT_SECONDS = 5.0
 HTTP_PROBE_HEADERS = {
@@ -97,6 +100,8 @@ def run_probe(
     tcp_connect: Callable[[str, int, float], None] | None = None,
     command_runner: Callable[[str, float], subprocess.CompletedProcess[str]]
     | None = None,
+    postgres_prober: Callable[[PostgresSettings], object] | None = None,
+    s3_prober: Callable[[S3Settings], object] | None = None,
 ) -> ProbeResult:
     started = time.monotonic()
     try:
@@ -108,6 +113,10 @@ def run_probe(
             observed = _run_command(spec, command_runner=command_runner)
         elif spec.kind == "resource":
             observed = _run_resource(spec)
+        elif spec.kind == "postgres":
+            observed = _run_postgres(spec, prober=postgres_prober)
+        elif spec.kind == "s3":
+            observed = _run_s3(spec, prober=s3_prober)
         else:
             raise ValueError(f"Unsupported probe kind: {spec.kind}")
         ok = _matches_expected(spec, observed)
@@ -285,6 +294,71 @@ def _run_command(
             result.stderr.strip() or result.stdout.strip() or "command failed"
         )
     return result.stdout.strip()
+
+
+def _run_postgres(
+    spec: ProbeSpec,
+    *,
+    prober: Callable[[PostgresSettings], object] | None,
+) -> str:
+    """Real ``SELECT 1`` reachability, not just a TCP handshake.
+
+    ``spec.target`` is ``host:port/dbname`` (compose already resolved
+    ``${ENV_SUFFIX}`` etc.) — no credentials in the registry-derived, frozen-fixture
+    -checked probe spec text. The probe-runner's own vault-rendered secrets
+    (platform/12.alerting/secrets.ctmpl) carry a dedicated, minimal-privilege
+    monitoring role: PROBE_POSTGRES_USER / PROBE_POSTGRES_PASSWORD. That role needs
+    no table grants — ``SELECT 1`` only requires CONNECT on the database.
+    """
+    password = os.environ.get("PROBE_POSTGRES_PASSWORD", "").strip()
+    if not password:
+        raise RuntimeError("PROBE_POSTGRES_PASSWORD is not set")
+    user = os.environ.get("PROBE_POSTGRES_USER", "probe_monitor").strip()
+    settings = PostgresSettings(
+        dsn=f"postgresql://{user}:{password}@{spec.target}",
+        connect_timeout_seconds=max(1, min(60, int(spec.timeout_seconds))),
+    )
+    probe = prober or probe_postgres
+    result = probe(settings)
+    if result.status != DependencyStatus.PRESENT:
+        raise RuntimeError(result.detail)
+    return result.detail
+
+
+def _run_s3(
+    spec: ProbeSpec,
+    *,
+    prober: Callable[[S3Settings], object] | None,
+) -> str:
+    """Real ``head_bucket`` reachability, not just an HTTP 200 on a liveness path.
+
+    ``spec.target`` is the S3-compatible endpoint URL (e.g.
+    ``http://platform-minio${ENV_SUFFIX}:9000``). The bucket and credentials come
+    from the probe-runner's own vault-rendered secrets — a dedicated, minimal
+    -privilege monitoring key scoped to one small healthcheck bucket, not the
+    MinIO root credentials.
+    """
+    bucket = os.environ.get("PROBE_S3_BUCKET", "").strip()
+    access_key = os.environ.get("PROBE_S3_ACCESS_KEY", "").strip()
+    secret_key = os.environ.get("PROBE_S3_SECRET_KEY", "").strip()
+    if not (bucket and access_key and secret_key):
+        raise RuntimeError(
+            "PROBE_S3_BUCKET / PROBE_S3_ACCESS_KEY / PROBE_S3_SECRET_KEY are not set"
+        )
+    settings = S3Settings(
+        bucket=bucket,
+        endpoint_url=spec.target,
+        access_key_id=access_key,
+        secret_access_key=secret_key,
+        addressing_style="path",
+        connect_timeout_seconds=max(1.0, min(60.0, spec.timeout_seconds)),
+        read_timeout_seconds=max(1.0, min(60.0, spec.timeout_seconds)),
+    )
+    probe = prober or probe_s3
+    result = probe(settings)
+    if result.status != DependencyStatus.PRESENT:
+        raise RuntimeError(result.detail)
+    return result.detail
 
 
 def _run_resource(spec: ProbeSpec, *, sample_seconds: float = 0.4) -> str:

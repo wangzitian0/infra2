@@ -7,6 +7,9 @@ import json
 import subprocess
 from pathlib import Path
 
+from infra2_sdk.runtime.probes import DependencyStatus
+from infra2_sdk.runtime.probes import ProbeResult as SdkProbeResult
+
 import libs.infra_probes as probes
 from libs.infra_probes import (
     build_probe_alert_payload,
@@ -14,7 +17,6 @@ from libs.infra_probes import (
     parse_probe_specs,
     run_probe,
 )
-
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -75,6 +77,112 @@ def test_tcp_and_command_probe_failures_are_classified() -> None:
     assert failed_results([tcp_result, command_result]) == [tcp_result, command_result]
     assert "refused" in tcp_result.summary
     assert "daemon down" in command_result.summary
+
+
+def test_postgres_probe_runs_a_real_select_1_not_just_a_tcp_handshake(
+    monkeypatch,
+) -> None:
+    """kind="postgres" must prove Postgres itself is accepting queries — a bare TCP
+    connect (the old platform-postgres-tcp probe) only proves the port is open."""
+    monkeypatch.setenv("PROBE_POSTGRES_USER", "probe_monitor")
+    monkeypatch.setenv("PROBE_POSTGRES_PASSWORD", "s3cret")
+    spec = parse_probe_specs(
+        "platform-postgres-select1|postgres|platform-postgres:5432/postgres"
+    )[0]
+    seen_settings = {}
+
+    def fake_prober(settings):
+        seen_settings["dsn"] = settings.dsn
+        return SdkProbeResult(
+            "database", DependencyStatus.PRESENT, "SELECT 1 succeeded", 4.0
+        )
+
+    result = run_probe(spec, postgres_prober=fake_prober)
+
+    assert result.ok is True
+    assert result.observed == "SELECT 1 succeeded"
+    assert (
+        seen_settings["dsn"]
+        == "postgresql://probe_monitor:s3cret@platform-postgres:5432/postgres"
+    )
+
+
+def test_postgres_probe_fails_closed_without_password(monkeypatch) -> None:
+    monkeypatch.delenv("PROBE_POSTGRES_PASSWORD", raising=False)
+    spec = parse_probe_specs(
+        "platform-postgres-select1|postgres|platform-postgres:5432/postgres"
+    )[0]
+
+    result = run_probe(
+        spec,
+        postgres_prober=lambda _settings: (_ for _ in ()).throw(
+            AssertionError("must not connect without a password")
+        ),
+    )
+
+    assert result.ok is False
+    assert "PROBE_POSTGRES_PASSWORD" in result.summary
+
+
+def test_postgres_probe_reports_the_sdk_detail_on_absence(monkeypatch) -> None:
+    monkeypatch.setenv("PROBE_POSTGRES_PASSWORD", "s3cret")
+    spec = parse_probe_specs(
+        "platform-postgres-select1|postgres|platform-postgres:5432/postgres"
+    )[0]
+
+    result = run_probe(
+        spec,
+        postgres_prober=lambda _settings: SdkProbeResult(
+            "database",
+            DependencyStatus.ABSENT,
+            "OperationalError: connection refused",
+            4.0,
+        ),
+    )
+
+    assert result.ok is False
+    assert "connection refused" in result.summary
+
+
+def test_s3_probe_runs_a_real_head_bucket_not_just_an_http_200(monkeypatch) -> None:
+    """kind="s3" must prove the S3 API path works — the existing minio-internal-http
+    probe only proves the process answers its liveness endpoint."""
+    monkeypatch.setenv("PROBE_S3_BUCKET", "infra-probe-healthcheck")
+    monkeypatch.setenv("PROBE_S3_ACCESS_KEY", "AKIA_PROBE")
+    monkeypatch.setenv("PROBE_S3_SECRET_KEY", "s3cret")
+    spec = parse_probe_specs("minio-s3-head-bucket|s3|http://platform-minio:9000")[0]
+    seen_settings = {}
+
+    def fake_prober(settings):
+        seen_settings["bucket"] = settings.bucket
+        seen_settings["endpoint_url"] = settings.endpoint_url
+        return SdkProbeResult(
+            "object_storage", DependencyStatus.PRESENT, "bucket accessible", 6.0
+        )
+
+    result = run_probe(spec, s3_prober=fake_prober)
+
+    assert result.ok is True
+    assert result.observed == "bucket accessible"
+    assert seen_settings["bucket"] == "infra-probe-healthcheck"
+    assert seen_settings["endpoint_url"] == "http://platform-minio:9000"
+
+
+def test_s3_probe_fails_closed_without_credentials(monkeypatch) -> None:
+    monkeypatch.delenv("PROBE_S3_BUCKET", raising=False)
+    monkeypatch.delenv("PROBE_S3_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("PROBE_S3_SECRET_KEY", raising=False)
+    spec = parse_probe_specs("minio-s3-head-bucket|s3|http://platform-minio:9000")[0]
+
+    result = run_probe(
+        spec,
+        s3_prober=lambda _settings: (_ for _ in ()).throw(
+            AssertionError("must not connect without credentials")
+        ),
+    )
+
+    assert result.ok is False
+    assert "PROBE_S3_BUCKET" in result.summary
 
 
 def test_failed_probes_build_signoz_compatible_payload() -> None:
@@ -229,7 +337,7 @@ def test_public_route_probes_derive_from_facets_and_registered_signals() -> None
     an unregistered public probe cannot ship."""
     import yaml
 
-    from libs.probe_specs import render_public_route_spec_text, parse_probe_names
+    from libs.probe_specs import parse_probe_names, render_public_route_spec_text
 
     compose = (ROOT / "platform/12.alerting/compose.yaml").read_text(encoding="utf-8")
     assert "PUBLIC_ROUTE_PROBE_SPECS: ${PUBLIC_ROUTE_PROBE_SPECS:-}" in compose

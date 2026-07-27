@@ -38,12 +38,27 @@ class MinioDeployer(Deployer):
     secret_key = "root_password"
 
     # Infra probes (#541): rendered into INFRA_PROBE_SPECS by platform/alerting.
+    # The http probe below only proves the MinIO process answers its liveness
+    # endpoint — no bucket, no credentials, no S3 API call. kind="s3"
+    # (infra2_sdk.runtime.s3, via libs/infra_probes.py) does a real `head_bucket`
+    # through a dedicated, minimal-privilege monitoring key against one small
+    # healthcheck bucket — proves the S3 API path actually works, not just that
+    # the server process is up. Credentials come from the probe-runner's own
+    # vault secret (PROBE_S3_BUCKET/PROBE_S3_ACCESS_KEY/PROBE_S3_SECRET_KEY),
+    # never from this spec text. Kept alongside the http probe rather than
+    # replacing it: liveness and S3-API-reachability are genuinely different
+    # failure modes worth distinguishing in an alert.
     probes = (
         ProbeFacet(
             name="minio-internal-http",
             kind="http",
             target="http://platform-minio${ENV_SUFFIX}:9000/minio/health/live",
             expected="200",
+        ),
+        ProbeFacet(
+            name="minio-s3-head-bucket",
+            kind="s3",
+            target="http://platform-minio${ENV_SUFFIX}:9000",
         ),
     )
     # Signal classification (#425 T5 / #543): every probe above is a

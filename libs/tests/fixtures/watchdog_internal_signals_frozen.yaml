@@ -65,6 +65,22 @@ signals:
   severity: critical
   cadence: 60s
   alert_threshold: 3 consecutive failures
+- signal_id: production.minio.s3-head-bucket
+  environment: production
+  component: minio
+  signal: minio-s3-head-bucket
+  primary_owner: internal
+  severity: critical
+  cadence: 60s
+  alert_threshold: 3 consecutive failures
+- signal_id: staging.minio.s3-head-bucket
+  environment: staging
+  component: minio
+  signal: minio-s3-head-bucket
+  primary_owner: internal
+  severity: critical
+  cadence: 60s
+  alert_threshold: 3 consecutive failures
 - signal_id: production.authentik.internal-http
   environment: production
   component: authentik
@@ -114,18 +130,18 @@ signals:
   severity: critical
   cadence: 60s
   alert_threshold: 3 consecutive failures
-- signal_id: production.postgres.tcp
+- signal_id: production.postgres.select1
   environment: production
   component: postgres
-  signal: platform-postgres-tcp
+  signal: platform-postgres-select1
   primary_owner: internal
   severity: critical
   cadence: 60s
   alert_threshold: 3 consecutive failures
-- signal_id: staging.postgres.tcp
+- signal_id: staging.postgres.select1
   environment: staging
   component: postgres
-  signal: platform-postgres-tcp
+  signal: platform-postgres-select1
   primary_owner: internal
   severity: critical
   cadence: 60s
