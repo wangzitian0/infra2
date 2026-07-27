@@ -24,8 +24,6 @@ disk at HEAD before trusting any tag comparison.
 from __future__ import annotations
 
 import argparse
-import importlib.util
-import inspect
 import os
 import subprocess
 import sys
@@ -47,34 +45,13 @@ from libs.deploy.deployer import (  # noqa: E402
     _compose_artifact_files,
     _repo_rel,
     config_hash_from_items,
+    load_deployer_class as _load_deployer,
 )
 from libs.deploy_dependencies import (  # noqa: E402
     extra_dependency_globs,
     service_key_from_path,
 )
 from libs import service_registry  # noqa: E402
-
-
-def _load_deployer(service_id: str) -> type[Deployer] | None:
-    layer, name = service_id.split("/", 1)
-    base = ROOT / (
-        "platform" if layer == "platform" else "finance_report/finance_report"
-    )
-    deploy_py = next(base.glob(f"*.{name}/deploy.py"), None)
-    if deploy_py is None:
-        return None
-    spec = importlib.util.spec_from_file_location(f"d_{layer}_{name}", deploy_py)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    for _, obj in inspect.getmembers(module, inspect.isclass):
-        if (
-            issubclass(obj, Deployer)
-            and obj is not Deployer
-            and obj.__module__ == spec.name
-        ):
-            return obj
-    return None
 
 
 def _hash_input_paths(
@@ -229,13 +206,17 @@ def _latest_release_tag() -> str:
 
 
 def _commit_at_ref(ref: str) -> str:
-    value = subprocess.run(
-        ["git", "rev-parse", f"{ref}^{{commit}}"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip().lower()
+    value = (
+        subprocess.run(
+            ["git", "rev-parse", f"{ref}^{{commit}}"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        .stdout.strip()
+        .lower()
+    )
     if not EXACT_COMMIT_RE.fullmatch(value):
         raise RuntimeError(f"{ref} did not resolve to an exact commit SHA")
     return value
@@ -243,11 +224,12 @@ def _commit_at_ref(ref: str) -> str:
 
 def _deployed_identities() -> dict[str, DeployedIdentity]:
     from libs.dokploy import DokployClient
+    from libs.service_registry import _LAYERS
 
     client = DokployClient()
     out: dict[str, DeployedIdentity] = {}
     for p in client.list_projects():
-        if p.get("name") not in ("platform", "finance_report"):
+        if p.get("name") not in _LAYERS:
             continue
         for env in p.get("environments", []):
             if env.get("name") != "production":
