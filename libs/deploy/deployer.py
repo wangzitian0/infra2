@@ -768,17 +768,20 @@ class Deployer:
         # single GitOps trigger; re-assert on update so a manual toggle can't
         # regress it.
         # Resolve the env that will actually be deployed (existing composes
-        # preserve runtime creds like VAULT_ROLE_ID from Dokploy), then fail
-        # closed if an AppRole compose would ship without its role/secret — the
-        # #257/#290 foot-gun where the vault-agent crash-loops on
-        # "VAULT_ROLE_ID and VAULT_SECRET_ID are required".
+        # preserve runtime creds like VAULT_ROLE_ID from Dokploy). The AppRole
+        # fail-closed check moved BELOW the create/update block: creating the
+        # compose RECORD triggers no deployment (autoDeploy=False everywhere),
+        # and asserting before creation deadlocked every first-time
+        # environment — sync refused to create the compose without creds while
+        # vault.setup-approle had no compose to inject creds into (hit live on
+        # truealpha/data_engine's production graduation, 2026-07-27). Order is
+        # now: upsert record -> assert creds -> deploy.
         if existing:
             compose_id = existing["composeId"]
             existing_env = client.get_compose(compose_id).get("env")
             effective_env = _preserve_runtime_env(env_str, existing_env)
         else:
             effective_env = env_str
-        cls._assert_approle_creds_present(effective_env)
 
         if existing:
             info("Updating existing compose service")
@@ -825,6 +828,14 @@ class Deployer:
             )
 
         # Deploy
+        # Fail closed BEFORE any deployment if an AppRole compose would ship
+        # without its role/secret — the #257/#290 foot-gun where the
+        # vault-agent crash-loops on "VAULT_ROLE_ID and VAULT_SECRET_ID are
+        # required". The compose record now exists either way, so
+        # `vault.setup-approle` has a target to inject into and its
+        # deploy=True performs the first credentialed deployment.
+        cls._assert_approle_creds_present(effective_env)
+
         info(f"Deploying compose {compose_id}...")
         cls._deploy_compose_with_record_check(client, compose_id)
 
