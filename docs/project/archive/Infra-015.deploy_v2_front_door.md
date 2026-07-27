@@ -1,12 +1,14 @@
 # Infra-015: deploy_v2 — the unified, trustworthy deploy front door
 
-**Status**: Implementation complete & live-verified; companion finance_report#1173 (app-repo sender) pending merge — archive (merge record + [TODOWRITE](./Infra-015.TODOWRITE.md)) once it lands
+**Status**: Archived — implementation complete & live-verified; companion finance_report#1173
+(app-repo sender) merged 2026-06-17, closing the cross-repo half of the report-branch-main
+auto target
 **Owner**: Infra
 **Priority**: P0
 **Root issue**: finance_report#1072 (commit-addressed deploy primitive & delivery pipeline)
 
-> **契约归属 (SSOT)**: 交付 / 触发 / 发布模型由 [docs/ssot/ops.pipeline.md](../ssot/ops.pipeline.md) 拥有;
-> deploy_v2 四轴坐标契约由 [core.environments §4.7](../ssot/core.environments.md) 拥有。
+> **契约归属 (SSOT)**: 交付 / 触发 / 发布模型由 [docs/ssot/ops.pipeline.md](../../ssot/ops.pipeline.md) 拥有;
+> deploy_v2 四轴坐标契约由 [core.environments §4.7](../../ssot/core.environments.md) 拥有。
 > **本 EPIC 只追踪「把它建出来」,不重述契约**(重述正是 SSOT 漂移之源)。
 
 ## Goal
@@ -31,7 +33,7 @@ place instead of scattered across bash and per-workflow YAML. After this EPIC,
 - **iac_ref** — pins *how* it is deployed (the infra2 stack revision).
 
 The four axes are orthogonal; completeness is proven in
-[SSOT core.environments §4.7.2](../ssot/core.environments.md).
+[SSOT core.environments §4.7.2](../../ssot/core.environments.md).
 
 ## Backends (routing by service class)
 | Service class | Backend | Notes |
@@ -98,8 +100,8 @@ input-drift trigger and still enters through `deploy_v2`.
     ("prod-only; cannot deploy to staging").
 
 ## References
-- [SSOT: core.environments §4.6 / §4.7.2](../ssot/core.environments.md)
-- [SSOT: ops.pipeline](../ssot/ops.pipeline.md)
+- [SSOT: core.environments §4.6 / §4.7.2](../../ssot/core.environments.md)
+- [SSOT: ops.pipeline](../../ssot/ops.pipeline.md)
 - `libs/iac_runner_client.py`, `tools/deploy_v2.py`, `tools/deploy_contract.py`
 - Root: finance_report#1072 · cutover issue #370
 - [[Infra-013]] service registry SSOT (the registry deploy_v2 derives from)
@@ -108,3 +110,5 @@ input-drift trigger and still enters through `deploy_v2`.
 | Date | Change |
 |------|--------|
 | 2026-06-17 | EPIC recorded as Done: coordinate + platform backend + cutover + both halves of the report-branch-main auto target shipped and live-verified. |
+| 2026-06-17 | finance_report#1173 (app-repo sender) merged — the cross-repo half of the auto target this EPIC's own residual TODOWRITE was waiting on. |
+| 2026-07-27 | Archived: moved to `docs/project/archive/`, merging in Infra-015.TODOWRITE.md's two residual items (both done — #1173 merged 2026-06-17, this move satisfies the archive step). Status line had stayed "pending merge" for 6 weeks after #1173 actually landed — nothing pinged this doc when the cross-repo condition it names was satisfied. |

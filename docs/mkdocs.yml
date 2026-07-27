@@ -104,7 +104,6 @@ nav:
       - Infra-007: project/Infra-007.signoz_install.md
       - Portfolio: project/README.md
       - Infra-019: project/Infra-019.harness_control_plane.md
-      - Infra-015: project/Infra-015.deploy_v2_front_door.md
       - Infra-014: project/Infra-014.finance_report_observability.md
       - Infra-011: project/Infra-011.reliability_hardening.md
       - Infra-006: project/Infra-006.documentation_engineering.md
@@ -114,4 +113,5 @@ nav:
       - Infra-001: project/archive/Infra-001.bootstrap_setup.md
       - Infra-002: project/archive/Infra-002.1password_vault_install.md
       - Infra-003: project/archive/Infra-003.docs_reorg.md
+      - Infra-015: project/archive/Infra-015.deploy_v2_front_door.md
       - Infra-018: project/archive/Infra-018.repository_boundary_decoupling.md
