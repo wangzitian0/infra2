@@ -164,6 +164,79 @@ def test_scan_classifies_pre_migration_identity_without_false_drift(
     assert not strict_blockers([row])
 
 
+def test_load_deployer_is_consolidated_onto_the_shared_helper() -> None:
+    """This module's own _load_deployer used to be an independent, hand-copied
+    duplicate that hardcoded "platform" vs "finance_report/finance_report" as
+    the only two possible base paths — silently mis-resolving (or never
+    reaching) every truealpha/* service_id since #500. Reusing the shared,
+    already-tested libs.deploy.deployer.load_deployer_class (built for exactly
+    this job) is the fix; this locks the consolidation so a future edit can't
+    quietly regrow a second copy of the same bug."""
+    from libs.deploy.deployer import load_deployer_class
+
+    assert drift._load_deployer is load_deployer_class
+
+
+class _FakeDokployClientForIdentities:
+    """Enough of DokployClient's shape for _deployed_identities: list_projects()
+    + _request() for a compose.one lookup. No real credentials/network."""
+
+    def __init__(self) -> None:
+        pass
+
+    def list_projects(self):
+        return [
+            {
+                "name": "truealpha",
+                "environments": [
+                    {
+                        "name": "production",
+                        "compose": [{"name": "app", "composeId": "cid-ta-app"}],
+                    },
+                    {
+                        "name": "staging",
+                        "compose": [{"name": "app", "composeId": "cid-ta-app-staging"}],
+                    },
+                ],
+            },
+            {
+                # A Dokploy project outside infra2's managed layers (e.g. an
+                # unrelated personal project on the same instance) must stay
+                # excluded — the fix derives the allowlist from
+                # service_registry._LAYERS, it does not just accept everything.
+                "name": "someone-elses-project",
+                "environments": [
+                    {
+                        "name": "production",
+                        "compose": [{"name": "widget", "composeId": "cid-widget"}],
+                    }
+                ],
+            },
+        ]
+
+    def _request(self, method: str, path: str):
+        assert method == "GET"
+        assert path == "compose.one?composeId=cid-ta-app"
+        return {"env": "IAC_CONFIG_HASH=deploy-v0.0.11-1785146688203\n"}
+
+
+def test_deployed_identities_includes_truealpha_and_excludes_unmanaged_projects(
+    monkeypatch,
+) -> None:
+    """#500 onboarded truealpha as a real deploy_v2 layer, but
+    _deployed_identities()'s project filter was never updated past its
+    original ("platform", "finance_report") tuple — every truealpha/* service
+    silently read as "not deployed" no matter what was actually live. The fix
+    derives the allowlist from service_registry._LAYERS instead."""
+    monkeypatch.setattr("libs.dokploy.DokployClient", _FakeDokployClientForIdentities)
+
+    identities = drift._deployed_identities()
+
+    assert "truealpha/app" in identities
+    assert identities["truealpha/app"].runtime_hash == "deploy-v0.0.11-1785146688203"
+    assert not any(key.startswith("someone-elses-project/") for key in identities)
+
+
 def test_strict_blockers_fail_on_detector_and_structural_errors() -> None:
     rows = [
         Row("platform/a", "in_sync"),

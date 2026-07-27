@@ -40,17 +40,54 @@ SERVICE_SUBDOMAINS = {
     "portal": "portal",  # portal.{domain}
 }
 
-# Shared platform services that should NOT have environment suffixes in their public URLs
-# These services are shared across all environments (staging/production use same endpoint)
-# Environment isolation is achieved via buckets/databases/paths, not subdomains
-SHARED_PLATFORM_SERVICES = {
-    "minio_api",
-    "minio_console",
-    "vault",
-    "dokploy",
-    "sso",
-    "signoz",
+# Bootstrap-plane services with no deploy.py / no service_registry entry at all —
+# installed once, directly, before Dokploy/deploy_v2 exist to deploy anything
+# "through" them, so there is no per-env instance and no registry entry to
+# derive "shared" from. Genuinely, currently irreducible to a derived fact —
+# see infra2#596 for what giving them a real registry entry would take.
+_BOOTSTRAP_ONLY_SHARED_SERVICES = frozenset({"vault", "dokploy"})
+
+# SERVICE_SUBDOMAINS short name -> the service_registry key it's backed by, for
+# every short name that IS a registered platform service (i.e. not bootstrap-plane).
+_REGISTRY_BACKED_SHORT_NAMES = {
+    "sso": "platform/authentik",
+    "signoz": "platform/signoz",
+    "minio_api": "platform/minio",
+    "minio_console": "platform/minio",
+    "portal": "platform/portal",
 }
+
+
+def SHARED_PLATFORM_SERVICES() -> set[str]:
+    """SERVICE_SUBDOMAINS short names that carry NO environment suffix in their
+    public URL — one shared endpoint across staging/prod, not a per-env
+    deployment. Environment isolation for these is via buckets/databases/paths
+    instead of subdomains.
+
+    Derived, not hand-maintained: a short name is shared iff it's a
+    bootstrap-plane singleton (_BOOTSTRAP_ONLY_SHARED_SERVICES — no registry
+    entry exists to derive this from) OR it maps to a registered service whose
+    Deployer declares ``prod_only = True`` (only ever deployed to prod, so
+    there is no staging instance to ever need a suffix against).
+
+    This used to be a hand-maintained literal that had silently drifted from
+    reality: `sso`/`minio_api`/`minio_console` were hardcoded in even though
+    authentik/minio are actually `prod_only=False` — real, separate staging
+    instances exist and always have (`sso-staging.zitian.party`,
+    `s3-staging.zitian.party`). A function, not a module-level constant, so it
+    stays fresh (and importing this module never performs a filesystem scan as
+    a side effect) — matches `service_registry.service_attrs()`'s own
+    recompute-on-each-call style rather than caching.
+    """
+    from libs import service_registry
+
+    shared_keys = service_registry.shared_services()
+    registry_derived = {
+        short_name
+        for short_name, key in _REGISTRY_BACKED_SHORT_NAMES.items()
+        if key in shared_keys
+    }
+    return set(_BOOTSTRAP_ONLY_SHARED_SERVICES) | registry_derived
 
 
 def infra_domain() -> str:
@@ -174,7 +211,7 @@ def get_service_url(
         raise ValueError(f"Unknown service: {service}")
 
     env_name = e.get("ENV", "production")
-    if service in SHARED_PLATFORM_SERVICES:
+    if service in SHARED_PLATFORM_SERVICES():
         env_name = "production"
 
     return f"https://{_build_domain(subdomain, env_name, domain)}"
