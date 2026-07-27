@@ -15,7 +15,7 @@ on:
       - "finance_report/finance_report/observability/**"
       - "libs/alerting.py"
       - "libs/observability_dashboards.py"
-      - "tools/signoz_alert_rule_canary.py"
+      - "tools/signoz_alert_rule_probe.py"
       - ".github/workflows/apply-observability.yml"
   workflow_dispatch:
     inputs:
@@ -67,7 +67,7 @@ jobs:
 
       - name: Canary — SigNoz alert rule payload
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'canary' }}
-        run: uv run python tools/signoz_alert_rule_canary.py
+        run: uv run python tools/signoz_alert_rule_probe.py
 
       - name: Apply alert rules (idempotent)
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'apply' }}

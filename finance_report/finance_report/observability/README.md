@@ -65,7 +65,7 @@ uv run python -m invoke fr-observability.shared.print-alerts
 uv run python -m invoke fr-observability.shared.print-dashboard
 
 # Live canary without applying the catalog:
-uv run python tools/signoz_alert_rule_canary.py
+uv run python tools/signoz_alert_rule_probe.py
 ```
 
 ## Verify (post-merge live gate)

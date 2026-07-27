@@ -41,6 +41,27 @@ def test_receiver_never_checks_out_application_or_exposes_dokploy_to_validation(
     assert "python -m tools.deploy_v2_canary" in body
 
 
+def test_preflight_canary_gate_derives_from_the_plan_not_a_hand_copied_deploy_type() -> (
+    None
+):
+    """Whether a request needs a canary preflight must come from DeployPlan
+    .requires_preflight_canary (libs/app_deploy_request.py), via validate's job output —
+    not a deploy_type literal hand-copied into this YAML's `if:`. A hand-copied list here
+    can drift from FIXED_DEPLOY_TYPES the moment a new fixed deploy_type is added, and
+    nothing would catch it."""
+    jobs = workflow()["jobs"]
+    body = WORKFLOW.read_text(encoding="utf-8")
+    assert jobs["validate"]["outputs"]["requires_preflight_canary"] == (
+        "${{ steps.plan.outputs.requires_preflight_canary }}"
+    )
+    assert (
+        "needs.validate.outputs.requires_preflight_canary == 'true'"
+        in jobs["preflight_canary"]["if"]
+    )
+    assert "deploy_type == 'staging'" not in body
+    assert "deploy_type == 'prod'" not in body
+
+
 def test_preflight_canary_targets_the_requested_service() -> None:
     """A canary that ignores which service was requested silently validates the wrong
     app: a truealpha/app request canaried finance_report/app's reserved slot instead

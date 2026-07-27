@@ -25,7 +25,7 @@ OBS_DIR = ROOT / "finance_report" / "finance_report" / "observability"
 APPLY_OBSERVABILITY_WORKFLOW = (
     ROOT / ".github" / "workflows" / "apply-observability.yml"
 )
-SIGNOZ_ALERT_CANARY = ROOT / "tools" / "signoz_alert_rule_canary.py"
+SIGNOZ_ALERT_PROBE = ROOT / "tools" / "signoz_alert_rule_probe.py"
 
 
 def test_openpanel_analytics_spec_is_valid_and_funnel_is_well_formed() -> None:
@@ -649,7 +649,7 @@ def test_apply_dashboard_raises_nonzero_exit_when_list_fails(monkeypatch) -> Non
 def test_signoz_alert_canary_uses_disabled_v5_promql_payload() -> None:
     """#1106 regression: live canary uses the same disabled v5 PromQL payload."""
     spec = importlib.util.spec_from_file_location(
-        "signoz_alert_rule_canary_under_test", SIGNOZ_ALERT_CANARY
+        "signoz_alert_rule_probe_under_test", SIGNOZ_ALERT_PROBE
     )
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
@@ -674,7 +674,7 @@ def test_signoz_alert_canary_uses_disabled_v5_promql_payload() -> None:
 def test_signoz_alert_canary_retries_rule_id_resolution(monkeypatch) -> None:
     """#1106 regression: canary cleanup should wait for the created rule to list."""
     spec = importlib.util.spec_from_file_location(
-        "signoz_alert_rule_canary_under_test", SIGNOZ_ALERT_CANARY
+        "signoz_alert_rule_probe_under_test", SIGNOZ_ALERT_PROBE
     )
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
@@ -709,7 +709,7 @@ def test_apply_observability_workflow_exposes_canary_mode() -> None:
 
     assert "mode:" in workflow
     assert "- canary" in workflow
-    assert "tools/signoz_alert_rule_canary.py" in workflow
+    assert "tools/signoz_alert_rule_probe.py" in workflow
     assert "inputs.mode == 'canary'" in workflow
     assert "inputs.mode == 'apply'" in workflow
 

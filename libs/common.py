@@ -104,7 +104,7 @@ def infra_domain() -> str:
     Deployer (``e.get("INTERNAL_DOMAIN")``, see ``libs.deploy.deployer``) and CI workflow
     already sets this from, and the same fallback literal already used at every other
     ``INTERNAL_DOMAIN``-reading call site (``tools/reconcile_iac_inputs.py``,
-    ``tools/signoz_alert_rule_canary.py``). Deliberately takes NO caller-supplied
+    ``tools/signoz_alert_rule_probe.py``). Deliberately takes NO caller-supplied
     fallback — accepting one reintroduces the exact bug this closes the moment a caller
     passes its own app domain as that fallback.
 
