@@ -405,6 +405,12 @@ def _vault_token_targets(root_dir: str) -> list[VaultTokenTarget]:
             {
                 "postgres": "01.postgres",
                 "app": "10.app",
+                # data_engine was missing from this map, so `invoke
+                # vault.setup-approle --project=truealpha --service=data_engine`
+                # answered "No matching AppRole targets" — found during the
+                # 2026-07-27 production graduation; its SecretsFacet has always
+                # declared approle auth for all three dagster containers.
+                "data_engine": "20.data_engine",
             },
             "truealpha",
         ),
