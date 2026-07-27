@@ -136,14 +136,17 @@ def test_not_in_production_derivation_matches_deploy_side_facts() -> None:
     frozen snapshot — a snapshot here goes stale the moment rollout state moves
     (exactly what broke the previous version of this test)."""
     excluded = inventory_ids_not_in_production()
-    assert excluded == {"truealpha/data_engine"}
+    # data_engine graduated 2026-07-27 (flag removed, prod deploy in the same
+    # runbook) — every truealpha service has now left the set.
+    assert excluded == set()
     # flip property 1: a prod compose_id registration removes the app AND its
     # on-behalf preview surface, with no audit-side change
     assert "truealpha/app" not in excluded
     assert "truealpha/preview" not in excluded
-    # flip property 2: removing the Deployer flag (postgres, live in prod since
-    # 2026-07-19) removes the service
+    # flip property 2: removing the Deployer flag removes the service
+    # (postgres 2026-07-19, data_engine 2026-07-27)
     assert "truealpha/postgres" not in excluded
+    assert "truealpha/data_engine" not in excluded
 
 
 def test_duplicate_derived_inventory_ids_fail_closed() -> None:
