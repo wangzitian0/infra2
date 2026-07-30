@@ -102,6 +102,27 @@ class MinioDeployer(Deployer):
     # 1Password item for root credentials
     OP_ITEM = "platform/minio/admin"
 
+    # Host-loopback port per env, for consumers that run as HOST processes or in
+    # `network_mode: host` containers and therefore cannot route into the
+    # dokploy swarm overlay. Fixed for the long-lived envs so host-side .env
+    # files stay stable; anything else (preview lanes) gets an ephemeral port.
+    # Same rationale and shape as truealpha/01.postgres' 15432/15433.
+    _HOST_PORTS = {"staging": "127.0.0.1:19000", "production": "127.0.0.1:19001"}
+
+    @classmethod
+    def compose_env_base(cls, env: dict | None = None) -> dict[str, str]:
+        # Injected here, NOT in pre_compose: the iac-runner's sync path builds the
+        # Dokploy env straight from compose_env_base without full pre_compose side
+        # effects, so a pre_compose override never reaches a real deploy — the
+        # truealpha-postgres v1.1.24 rollout shipped an ephemeral port for exactly
+        # that reason. compose_env_base flows through BOTH sync and the manual
+        # pre_compose/setup tasks.
+        base = super().compose_env_base(env)
+        base["PLATFORM_MINIO_HOST_PORT"] = cls._HOST_PORTS.get(
+            base.get("ENV", ""), "127.0.0.1:0"
+        )
+        return base
+
     @classmethod
     def ensure_runtime_secrets(cls, c=None) -> bool:
         """Ensure every field consumed by secrets.ctmpl exists in Vault."""

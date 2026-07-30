@@ -143,3 +143,53 @@ def test_deployer_fails_closed_on_missing_or_malformed_release_inputs(monkeypatc
         deployer, "secrets_backend", classmethod(lambda cls: _Secrets(values))
     )
     assert not deployer.ensure_runtime_secrets()
+
+
+def _load_minio_deploy_module():
+    spec = importlib.util.spec_from_file_location(
+        "platform_minio_deploy", ROOT / "platform/03.minio/deploy.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_minio_publishes_the_host_loopback_port_the_data_engine_dials():
+    """The data engine runs `network_mode: host` for OpenD, so it can only reach
+    platform services through the host loopback — dokploy-network is a swarm overlay
+    the host cannot route into. If MinIO stops publishing, or the two port maps drift,
+    every S3 call from capture fails ECONNREFUSED.
+
+    That is not hypothetical: it is what happened. The endpoint was
+    `http://127.0.0.1:9000` with nothing published there, and it went unnoticed for as
+    long as no deployed path actually opened an S3 connection (truealpha#171).
+    """
+    compose = yaml.safe_load((ROOT / "platform/03.minio/compose.yaml").read_text())
+    published = compose["services"]["minio"].get("ports") or []
+    assert any(
+        "PLATFORM_MINIO_HOST_PORT" in str(entry) and ":9000" in str(entry)
+        for entry in published
+    ), "MinIO must publish 9000 on the injected host-loopback port"
+
+    minio_ports = _load_minio_deploy_module().MinioDeployer._HOST_PORTS
+    engine_ports = _load_deploy_module().DataEngineDeployer._MINIO_PORTS
+    for env, published_addr in minio_ports.items():
+        assert published_addr.endswith(":" + engine_ports[env]), (
+            f"{env}: data engine dials :{engine_ports[env]} but MinIO publishes {published_addr}"
+        )
+
+
+def test_s3_endpoint_is_built_from_the_injected_port_not_from_vault():
+    """A Vault-supplied endpoint is what produced the outage: the stored value was
+    written for host-side sweep scripts and silently wrong for the container."""
+    template = (SERVICE_DIR / "secrets.ctmpl").read_text()
+    assert 'env "TA_MINIO_PORT"' in template
+    assert "$minio_port" in template
+    assert ".Data.data.S3_ENDPOINT" not in template, (
+        "S3_ENDPOINT must not come from Vault"
+    )
+    assert (
+        "S3_ENDPOINT"
+        not in _load_deploy_module().DataEngineDeployer._REQUIRED_SECRET_KEYS
+    )

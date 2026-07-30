@@ -89,6 +89,21 @@ services:
       interval: 30s
       retries: 5
       timeout: 5s
+    # Host-loopback publish for host-network consumers. truealpha's data engine
+    # runs `network_mode: host` on purpose (moomoo OpenD listens only on the
+    # host's 127.0.0.1), and dokploy-network is a swarm overlay the host cannot
+    # route into — so from that container MinIO is unreachable at BOTH
+    # `platform-minio*:9000` (no overlay DNS in host mode) and `127.0.0.1:9000`
+    # (nothing published). Mirrors truealpha/01.postgres, which publishes for
+    # exactly the same reason; deploy.py injects a per-env port so both stacks
+    # coexist on one box.
+    #
+    # This went unnoticed because no deployed path had ever opened an S3
+    # connection from that container: capture wrote `raw.fetches` pointer rows
+    # and never uploaded the bytes (truealpha#171). The first real upload failed
+    # with ECONNREFUSED and took the whole tick down.
+    ports:
+      - "${PLATFORM_MINIO_HOST_PORT:-127.0.0.1:0}:9000"
     volumes:
       - secrets:/secrets:ro
       - ${DATA_PATH}:/data

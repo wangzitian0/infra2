@@ -61,9 +61,19 @@ class DataEngineDeployer(Deployer):
 
     _POSTGRES_PORTS = {"staging": "15432", "production": "15433"}
     _WEBSERVER_PORTS = {"staging": "13001", "production": "13002"}
+    # MinIO's host-loopback publish (platform/03.minio deploy.py `_HOST_PORTS`).
+    # This service runs `network_mode: host` for OpenD, so it reaches platform
+    # services only through the host loopback — never the dokploy overlay.
+    # Kept as a literal mirror rather than an import: the two stacks deploy
+    # independently, and a shared constant would imply an ordering that does
+    # not exist. The runtime probe below is what catches a real divergence.
+    _MINIO_PORTS = {"staging": "19000", "production": "19001"}
+    # S3_ENDPOINT is deliberately absent: it is no longer read from Vault. The
+    # template derives it from the injected host-loopback port, so requiring a
+    # Vault key nothing consumes would only invite someone to "fix" the endpoint
+    # there and see no effect.
     _REQUIRED_SECRET_KEYS = (
         "SEC_USER_AGENT",
-        "S3_ENDPOINT",
         "S3_ACCESS_KEY",
         "S3_SECRET_KEY",
         "S3_BUCKET",
@@ -109,6 +119,7 @@ class DataEngineDeployer(Deployer):
         base.update(
             {
                 "TA_POSTGRES_PORT": cls._POSTGRES_PORTS.get(environment, "0"),
+                "TA_MINIO_PORT": cls._MINIO_PORTS.get(environment, "0"),
                 "DAGSTER_WEBSERVER_PORT": cls._WEBSERVER_PORTS.get(environment, "0"),
                 "DATA_ENGINE_IMAGE_DIGEST": image_digest,
                 "RELEASE_MANIFEST_ID": release_id,
