@@ -143,3 +143,43 @@ def test_deployer_fails_closed_on_missing_or_malformed_release_inputs(monkeypatc
         deployer, "secrets_backend", classmethod(lambda cls: _Secrets(values))
     )
     assert not deployer.ensure_runtime_secrets()
+
+
+def _load_minio_deploy_module():
+    spec = importlib.util.spec_from_file_location(
+        "platform_minio_deploy", ROOT / "platform/03.minio/deploy.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_dialled_s3_port_matches_the_one_minio_publishes():
+    """These two constants live in independently-deployed stacks, so drift is the
+    realistic failure — and #602 already demonstrated half of it: MinIO began publishing
+    19000/19001 while this service kept dialling the 9000 baked into Vault, so capture
+    stayed broken after the publish landed.
+    """
+    published = _load_minio_deploy_module().MinioDeployer._S3_HOST_PORTS
+    dialled = _load_deploy_module().DataEngineDeployer._MINIO_S3_PORTS
+    assert set(published) == set(dialled)
+    for env, addr in published.items():
+        assert addr.endswith(":" + dialled[env]), (
+            f"{env}: dialling :{dialled[env]}, MinIO publishes {addr}"
+        )
+
+
+def test_s3_endpoint_is_derived_not_taken_from_vault():
+    """A Vault-supplied endpoint is what produced the outage: the stored value was written
+    for host-side sweep scripts, and nothing in the deploy could tell it was wrong for a
+    `network_mode: host` container."""
+    template = (SERVICE_DIR / "secrets.ctmpl").read_text()
+    assert 'env "TA_MINIO_S3_PORT"' in template
+    assert ".Data.data.S3_ENDPOINT" not in template, (
+        "S3_ENDPOINT must not come from Vault"
+    )
+    assert (
+        "S3_ENDPOINT"
+        not in _load_deploy_module().DataEngineDeployer._REQUIRED_SECRET_KEYS
+    )
