@@ -21,6 +21,36 @@ class AlertingDeployer(Deployer):
     compose_path = "platform/12.alerting/compose.yaml"
     data_path = "/data/platform/alerting"
 
+    # Single source of truth for which secrets.ctmpl fields
+    # _sync_1password_to_vault actually requests from 1Password root_vars.
+    # secrets.ctmpl documented PROBE_POSTGRES_*/PROBE_S3_*/DOKPLOY_API_KEY with
+    # "store here"/"populate in the alerting Vault secret" instructions, but
+    # this list never asked 1Password for them — seeding 1Password alone was
+    # never enough, and the gap stayed invisible because each field degrades
+    # differently (fail-closed critical alert for the probes, silent idle for
+    # the deploy-queue guard). A class attribute (not a function-local list)
+    # so test_alerting_ctmpl_fields_all_reach_1password_sync can assert every
+    # secrets.ctmpl field is covered here without re-deriving or duplicating
+    # this list — the two can no longer drift apart unnoticed.
+    ROOT_VAR_KEYS = (
+        "ALERT_DELIVERY_MODE",
+        "FEISHU_WEBHOOK_URL",
+        "FEISHU_APP_ID",
+        "FEISHU_APP_SECRET",
+        "FEISHU_CHAT_ID",
+        "FEISHU_API_BASE",
+        "BRIDGE_BASIC_AUTH_USERNAME",
+        "BRIDGE_BASIC_AUTH_PASSWORD",
+        "INFRA_PROBE_HEARTBEAT_URL",
+        "INFRA_PROBE_HEARTBEAT_TOKEN",
+        "PROBE_POSTGRES_USER",
+        "PROBE_POSTGRES_PASSWORD",
+        "PROBE_S3_BUCKET",
+        "PROBE_S3_ACCESS_KEY",
+        "PROBE_S3_SECRET_KEY",
+        "DOKPLOY_API_KEY",
+    )
+
     # Backup facts (#542): the backup inventory derives from these
     # (formerly the ops.backup-inventory YAML, deleted).
     backups = (
@@ -428,29 +458,7 @@ class AlertingDeployer(Deployer):
             error(f"Unsupported ALERT_DELIVERY_MODE in 1Password: {mode}")
             return False
 
-        keys = [
-            "ALERT_DELIVERY_MODE",
-            "FEISHU_WEBHOOK_URL",
-            "FEISHU_APP_ID",
-            "FEISHU_APP_SECRET",
-            "FEISHU_CHAT_ID",
-            "FEISHU_API_BASE",
-            "BRIDGE_BASIC_AUTH_USERNAME",
-            "BRIDGE_BASIC_AUTH_PASSWORD",
-            "INFRA_PROBE_HEARTBEAT_URL",
-            "INFRA_PROBE_HEARTBEAT_TOKEN",
-            # #600's postgres/s3 probe credentials (secrets.ctmpl documents the
-            # one-time manual setup) were never added here, so
-            # _sync_1password_to_vault never actually pushed them into Vault even
-            # after being seeded in 1Password — the probes fail-closed correctly,
-            # but silently, since nothing surfaced the missing sync step itself.
-            "PROBE_POSTGRES_USER",
-            "PROBE_POSTGRES_PASSWORD",
-            "PROBE_S3_BUCKET",
-            "PROBE_S3_ACCESS_KEY",
-            "PROBE_S3_SECRET_KEY",
-        ]
-        values = {key: op_secrets.get(key) for key in keys}
+        values = {key: op_secrets.get(key) for key in cls.ROOT_VAR_KEYS}
         values["ALERT_DELIVERY_MODE"] = mode
 
         missing = [key for key in required_by_mode[mode] if not values.get(key)]

@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock
 import importlib.util
+import re
 from pathlib import Path
 
 import pytest
@@ -961,7 +962,10 @@ def test_alerting_sync_pushes_probe_credentials_from_1password_to_vault(
     alone was never enough: the sync silently dropped them and the probes stayed
     fail-closed even after an operator did exactly what the docs said. Confirmed
     live via SSH: both probes fired a critical alert in staging with the
-    credentials present in 1Password but never in Vault."""
+    credentials present in 1Password but never in Vault. DOKPLOY_API_KEY (the
+    deploy-queue-guard's key) had the identical gap, found by generalizing this
+    check rather than by a second live incident — it degrades soft (idles)
+    instead of fail-closed, which is exactly why nobody had noticed yet."""
     module = _load_deploy_module(
         "platform/12.alerting/deploy.py", "alerting_sync_probe_creds_test"
     )
@@ -974,6 +978,7 @@ def test_alerting_sync_pushes_probe_credentials_from_1password_to_vault(
             "PROBE_S3_BUCKET": "infra-probe-healthcheck",
             "PROBE_S3_ACCESS_KEY": "probe_monitor_staging",
             "PROBE_S3_SECRET_KEY": "s3-generated-secret",
+            "DOKPLOY_API_KEY": "dokploy-root-key",
         }
     )
     vault_secrets = FakeSecrets()
@@ -995,6 +1000,35 @@ def test_alerting_sync_pushes_probe_credentials_from_1password_to_vault(
     assert vault_secrets.values["PROBE_S3_BUCKET"] == "infra-probe-healthcheck"
     assert vault_secrets.values["PROBE_S3_ACCESS_KEY"] == "probe_monitor_staging"
     assert vault_secrets.values["PROBE_S3_SECRET_KEY"] == "s3-generated-secret"
+    assert vault_secrets.values["DOKPLOY_API_KEY"] == "dokploy-root-key"
+
+
+def test_alerting_ctmpl_fields_all_reach_1password_sync() -> None:
+    """Structural version of the regression above: every secret secrets.ctmpl
+    reads from Vault (every ``.Data.data.X`` template reference) must be a key
+    _sync_1password_to_vault actually requests from 1Password via
+    AlertingDeployer.ROOT_VAR_KEYS — otherwise a field can sit in the rendered
+    template, get documented with "store it here" setup instructions, get
+    genuinely seeded in 1Password by an operator following those instructions
+    to the letter, and still never reach Vault. This parses secrets.ctmpl
+    itself rather than re-listing its fields, so a NEW field added there
+    without a matching ROOT_VAR_KEYS entry fails here immediately — the same
+    class of gap this file already caught twice (PROBE_POSTGRES_*/PROBE_S3_*
+    live in staging, DOKPLOY_API_KEY only by inspection) cannot recur silently
+    a third time."""
+    module = _load_deploy_module(
+        "platform/12.alerting/deploy.py", "alerting_ctmpl_sync_coverage_test"
+    )
+    ctmpl = (ROOT / "platform/12.alerting/secrets.ctmpl").read_text(encoding="utf-8")
+    ctmpl_fields = set(re.findall(r"\.Data\.data\.([A-Z_0-9]+)", ctmpl))
+
+    assert ctmpl_fields, "expected secrets.ctmpl to declare at least one Vault field"
+    missing = ctmpl_fields - set(module.AlertingDeployer.ROOT_VAR_KEYS)
+    assert not missing, (
+        f"secrets.ctmpl references {sorted(missing)} but "
+        "AlertingDeployer.ROOT_VAR_KEYS does not request them from 1Password — "
+        "seeding 1Password alone will not get these into Vault"
+    )
 
 
 def test_remote_config_identity_reads_cross_plane_service_coordinates(
