@@ -439,6 +439,16 @@ class AlertingDeployer(Deployer):
             "BRIDGE_BASIC_AUTH_PASSWORD",
             "INFRA_PROBE_HEARTBEAT_URL",
             "INFRA_PROBE_HEARTBEAT_TOKEN",
+            # #600's postgres/s3 probe credentials (secrets.ctmpl documents the
+            # one-time manual setup) were never added here, so
+            # _sync_1password_to_vault never actually pushed them into Vault even
+            # after being seeded in 1Password — the probes fail-closed correctly,
+            # but silently, since nothing surfaced the missing sync step itself.
+            "PROBE_POSTGRES_USER",
+            "PROBE_POSTGRES_PASSWORD",
+            "PROBE_S3_BUCKET",
+            "PROBE_S3_ACCESS_KEY",
+            "PROBE_S3_SECRET_KEY",
         ]
         values = {key: op_secrets.get(key) for key in keys}
         values["ALERT_DELIVERY_MODE"] = mode
