@@ -23,6 +23,17 @@ shared_tasks = sys.modules.get("platform.03.minio.shared")
 
 
 class MinioDeployer(Deployer):
+    # Host-loopback S3 port per env (see compose.yaml ports comment;
+    # truealpha#496). Staging 19000 / production 19001, mirroring the
+    # truealpha postgres 15432/15433 convention.
+    _S3_HOST_PORTS = {"staging": "127.0.0.1:19000", "production": "127.0.0.1:19001"}
+
+    @classmethod
+    def compose_env_base(cls, env: dict | None = None) -> dict[str, str]:
+        base = super().compose_env_base(env)
+        base["MINIO_S3_HOST_PORT"] = cls._S3_HOST_PORTS.get(base.get("ENV", ""), "127.0.0.1:0")
+        return base
+
     service = "minio"
     compose_path = "platform/03.minio/compose.yaml"
     data_path = "/data/platform/minio"

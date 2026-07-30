@@ -89,6 +89,17 @@ services:
       interval: 30s
       retries: 5
       timeout: 5s
+    # Host-loopback publish for host-network consumers (truealpha's dagster
+    # containers run with network_mode host for the loopback Postgres ports
+    # and cannot route into the dokploy overlay). Same pattern as truealpha
+    # postgres (staging 15432 / production 15433): deploy.py injects a fixed
+    # per-env port so both stacks coexist on one box; other lanes get an
+    # ephemeral port. Surfaced by truealpha#496: the first LARGE new payload
+    # (a 3.4MB predecessor company-facts document) was also the first real
+    # S3 write from a host-network consumer, and 127.0.0.1:9000 pointed at
+    # nothing.
+    ports:
+      - "${MINIO_S3_HOST_PORT:-127.0.0.1:0}:9000"
     volumes:
       - secrets:/secrets:ro
       - ${DATA_PATH}:/data
