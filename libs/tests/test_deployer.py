@@ -951,6 +951,52 @@ def test_alerting_source_identity_does_not_read_runtime_secrets(monkeypatch) -> 
     assert "INFRA_PROBE_HEARTBEAT_TOKEN" not in source_env
 
 
+def test_alerting_sync_pushes_probe_credentials_from_1password_to_vault(
+    monkeypatch,
+) -> None:
+    """#600 regression: secrets.ctmpl documented a one-time manual setup for
+    PROBE_POSTGRES_*/PROBE_S3_* (postgres-select1/minio-s3-head-bucket probe
+    credentials) and told the operator to "store that password here" — but
+    _sync_1password_to_vault's keys list never asked for them, so seeding 1Password
+    alone was never enough: the sync silently dropped them and the probes stayed
+    fail-closed even after an operator did exactly what the docs said. Confirmed
+    live via SSH: both probes fired a critical alert in staging with the
+    credentials present in 1Password but never in Vault."""
+    module = _load_deploy_module(
+        "platform/12.alerting/deploy.py", "alerting_sync_probe_creds_test"
+    )
+    op_secrets = FakeSecrets(
+        {
+            "ALERT_DELIVERY_MODE": "feishu_webhook",
+            "FEISHU_WEBHOOK_URL": "https://open.feishu.cn/webhook/fake",
+            "PROBE_POSTGRES_USER": "probe_monitor",
+            "PROBE_POSTGRES_PASSWORD": "pg-generated-password",
+            "PROBE_S3_BUCKET": "infra-probe-healthcheck",
+            "PROBE_S3_ACCESS_KEY": "probe_monitor_staging",
+            "PROBE_S3_SECRET_KEY": "s3-generated-secret",
+        }
+    )
+    vault_secrets = FakeSecrets()
+    monkeypatch.setattr(
+        module,
+        "get_secrets",
+        lambda **kwargs: (
+            op_secrets
+            if kwargs.get("credential_type") == "root_vars"
+            else vault_secrets
+        ),
+    )
+    monkeypatch.setattr(module.AlertingDeployer, "env", classmethod(lambda cls: {}))
+
+    assert module.AlertingDeployer._sync_1password_to_vault() is True
+
+    assert vault_secrets.values["PROBE_POSTGRES_USER"] == "probe_monitor"
+    assert vault_secrets.values["PROBE_POSTGRES_PASSWORD"] == "pg-generated-password"
+    assert vault_secrets.values["PROBE_S3_BUCKET"] == "infra-probe-healthcheck"
+    assert vault_secrets.values["PROBE_S3_ACCESS_KEY"] == "probe_monitor_staging"
+    assert vault_secrets.values["PROBE_S3_SECRET_KEY"] == "s3-generated-secret"
+
+
 def test_remote_config_identity_reads_cross_plane_service_coordinates(
     monkeypatch,
 ) -> None:
