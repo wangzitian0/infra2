@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import sys
@@ -410,6 +411,71 @@ def test_alerting_platform_service_contract_files_exist() -> None:
     ctmpl = (base / "secrets.ctmpl").read_text(encoding="utf-8")
     assert "INFRA_PROBE_HEARTBEAT_URL" in ctmpl
     assert "INFRA_PROBE_HEARTBEAT_TOKEN" in ctmpl
+
+
+# import root -> the pip-installable name the Dockerfile must list. libs.infra_probes
+# gained real infra2_sdk.runtime.postgres/s3 imports in #600 (psycopg/boto3-backed
+# probes) without anyone updating this Dockerfile's now-false "stdlib-only" comment —
+# the image shipped, and the probe-runner crash-looped on the first postgres/s3
+# ProbeSpec dispatch in staging. Scanning actual imports (not a hardcoded list of
+# "known" third-party names) is the point: a NEW import here must be added to this
+# map or the test fails, so the Dockerfile can never again silently drift stale.
+_IMPORT_TO_PIP_NAME = {
+    "httpx": "httpx",
+    "dotenv": "python-dotenv",
+    "rich": "rich",
+    "invoke": "invoke",
+    "infra2_sdk": "infra2-sdk",
+    "psycopg": "psycopg",
+    "boto3": "boto3",
+}
+
+
+def _third_party_import_roots(source: str) -> set[str]:
+    tree = ast.parse(source)
+    roots: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            roots.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            roots.add(node.module.split(".")[0])
+    first_party = {"libs", "tools", "__future__"}
+    return {
+        r for r in roots if r not in first_party and r not in sys.stdlib_module_names
+    }
+
+
+def test_alerting_dockerfile_installs_every_import_the_packaged_code_needs() -> None:
+    """Infra-007 alerting / #600 regression: the image's pip install line must cover
+    every third-party import reachable from what it actually COPYs and runs
+    (app.py's entrypoint, and infra_probe_runner.py's import of libs.infra_probes) —
+    caught live via a staging ModuleNotFoundError crash loop, not by any test."""
+    base = ROOT / "platform/12.alerting"
+    dockerfile = (base / "Dockerfile").read_text(encoding="utf-8")
+    assert "pip install" in dockerfile, "expected a pip install step in the Dockerfile"
+
+    required_roots: set[str] = set()
+    for path in (
+        base / "app.py",
+        ROOT / "libs/infra_probes.py",
+        ROOT / "tools/infra_probe_runner.py",
+    ):
+        required_roots |= _third_party_import_roots(path.read_text(encoding="utf-8"))
+
+    missing_mapping = required_roots - set(_IMPORT_TO_PIP_NAME)
+    assert not missing_mapping, (
+        f"unmapped third-party import(s) {missing_mapping} in platform/12.alerting's "
+        "packaged code — add each to _IMPORT_TO_PIP_NAME above with its pip package name"
+    )
+
+    unsatisfied = {
+        root for root in required_roots if _IMPORT_TO_PIP_NAME[root] not in dockerfile
+    }
+    assert not unsatisfied, (
+        f"platform/12.alerting/Dockerfile's pip install does not cover: "
+        f"{[_IMPORT_TO_PIP_NAME[r] for r in sorted(unsatisfied)]} — "
+        f"required by an import in app.py / libs/infra_probes.py / tools/infra_probe_runner.py"
+    )
 
 
 def test_alerting_ssot_catalog_includes_dokploy_control_plane() -> None:
