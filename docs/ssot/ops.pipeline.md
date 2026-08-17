@@ -369,6 +369,11 @@ git fetch --tags && git tag -l "v*.*.*" | sort -V | tail -5
 `pr-999` 因为是保留 canary slot 不进入通用 leak detector，因此它的 cleanup proof 必须由
 canary job 自身 fail-closed 承担。
 
+**Create timeout 不是 create failure proof。** `compose.create` 是非幂等 POST；若响应 read
+timeout，调用方不得重放 POST。Preview lifecycle 只按确定性的 alias compose name 做 bounded
+read-after-write：精确记录出现则继续后续 update/deploy，始终未出现则重新抛出原始 timeout。
+这既避免重复 compose，也避免服务端已创建但客户端误判失败后留下孤儿。
+
 **泄露 = 告警,不是静默清理。** 每小时的 `ops-checks` job `preview-leak-check`(`47 * * * *`)只**检测**:列出 `finance_report/preview` 下的 compose,把两类无歧义的孤儿判为泄露——
 
 1. **pre-rename 裸 slug**(无 `branch-/pr-/commit-/tag-` 前缀,如改名前遗留的 `main`);

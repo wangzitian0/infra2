@@ -25,7 +25,7 @@
 | `deployer.py` | Deployment base class + task helpers | `Deployer`, `make_tasks()` |
 | `iac_runner_client.py` | Signed IaC Runner operation client | `trigger_platform_deploy()`, `poll_platform_deploy_status()` |
 | `dokploy.py` | Dokploy API client | `DokployClient`, `get_dokploy()` |
-| `deploy/preview.py` | Preview lifecycle with operation-scoped deploy proof and destructive teardown | `up()`, `down()` |
+| `deploy/preview.py` | Preview lifecycle with operation-scoped deploy proof, result-unknown create reconciliation, and destructive teardown | `up()`, `down()` |
 | `deploy/rollout.py` | New-deployment-record waiter shared by deploy orchestration | `wait_for_deployment()` |
 | `backup_restore.py` | Off-host backup restore rehearsal helpers | `latest_artifact_for_service()`, `build_postgres_rehearsal_plan()`, `run_postgres_restore_rehearsal()` |
 | `dokploy_route_canary.py` | Dynamic route canary | `run_route_canary()`, `render_canary_compose()` |

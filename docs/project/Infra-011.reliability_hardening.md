@@ -143,7 +143,8 @@ Dependencies:
 | Dokploy acknowledges delete while a queued deploy can still recreate or retain the compose. | Cleanup remains failed until bounded polling observes the compose absent twice consecutively; failure output exposes `torn_down=false`. |
 | Two workflow runs concurrently target the reserved `pr-999` slot. | One waits in a non-cancelling job concurrency group; canaries cannot delete or accept one another's evidence. |
 | A PR changes the preview compose while its canary clones `main`. | The workflow records the exact head SHA as authority, passes `github.head_ref` only as a clone ref, and the front door proves both resolve to the same commit before Dokploy clones it. |
-| A fresh DB migration and application import exceed the old 60-second backend health grace. | Backend remains in startup for up to 300 seconds; the outer 600-second public readiness gate still fails a real hang. |
+| A non-idempotent `compose.create` commits but its HTTP response times out. | Do not retry the POST; read the deterministic alias name, continue only if that exact record appears, otherwise preserve the original timeout. |
+| A fresh DB migration and application import exceed the old 60/300-second backend health grace. | Backend remains in startup for up to 450 seconds; bounded retries keep the inner ceiling near 480 seconds, so the outer 600-second public readiness gate still fails a real hang. |
 | Staging service code is unchanged. | Acceleration may skip expensive staging work only when the stage contract proves the skip and records `skipped_reason`. |
 
 ## Validation

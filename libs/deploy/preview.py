@@ -71,6 +71,8 @@ _SOURCE_APP_COMPOSE = "app"
 _VAULT_CRED_KEYS = ("VAULT_ADDR", "VAULT_ROLE_ID", "VAULT_SECRET_ID")
 _DEPLOYMENT_RECORD_TIMEOUT_SECONDS = 60
 _DEPLOYMENT_RECORD_INTERVAL_SECONDS = 3
+_AMBIGUOUS_CREATE_RECOVERY_ATTEMPTS = 4
+_AMBIGUOUS_CREATE_RECOVERY_INTERVAL_SECONDS = 2
 
 
 def _source_app_vault_creds(client, project: str, source_env: str) -> dict[str, str]:
@@ -318,13 +320,36 @@ def up(
         # sourceType) so the compose is never momentarily a raw compose with an empty
         # composeFile. The github *binding* (githubId/owner/repository/branch/composePath)
         # still has to be re-applied below — compose.create drops everything but sourceType.
-        created = client.create_compose(
-            environment_id=environment_id,
-            name=alias.compose_name,
-            app_name=alias.compose_name,
-            source_type="github",
-        )
-        compose_id = created["composeId"]
+        try:
+            created = client.create_compose(
+                environment_id=environment_id,
+                name=alias.compose_name,
+                app_name=alias.compose_name,
+                source_type="github",
+            )
+        except httpx.RequestError:
+            # A non-idempotent create must never be retried blindly: Dokploy can commit
+            # the record and then time out while returning the response. Recover that
+            # ambiguous result by reading the deterministic alias name. Live proof saw
+            # exactly this shape (read timeout + record present); a second POST could
+            # duplicate the resource, while failing immediately would orphan it.
+            recovered = None
+            for attempt in range(_AMBIGUOUS_CREATE_RECOVERY_ATTEMPTS):
+                try:
+                    recovered = _find_compose(
+                        client, config.project, alias.compose_name
+                    )
+                except httpx.HTTPError:
+                    recovered = None
+                if recovered:
+                    break
+                if attempt < _AMBIGUOUS_CREATE_RECOVERY_ATTEMPTS - 1:
+                    _sleep(_AMBIGUOUS_CREATE_RECOVERY_INTERVAL_SECONDS)
+            if not recovered:
+                raise
+            compose_id = recovered["composeId"]
+        else:
+            compose_id = created["composeId"]
     else:
         compose_id = existing["composeId"]
 

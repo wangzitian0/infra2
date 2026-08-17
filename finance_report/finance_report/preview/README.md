@@ -43,9 +43,10 @@ Vault Agent to OTEL; application secrets cannot redefine those coordinates.
 The `db` service stores data on the **named** `preview_db` volume (no host bind mount),
 so `down` (`delete_compose(delete_volumes=True)`) removes it entirely. Migrations run on
 backend startup (`alembic upgrade head`) against the fresh DB. Preview NEVER reads or
-writes the shared staging/prod database. The backend healthcheck has a bounded five-minute
+writes the shared staging/prod database. The backend healthcheck has a bounded 450-second
 cold-start grace because the full migration chain plus application import runs before the
-health port opens; the outer deploy canary still enforces its ten-minute readiness deadline.
+health port opens. Its bounded retries keep the inner ceiling near eight minutes, leaving
+about two minutes inside the outer deploy canary's ten-minute public-readiness deadline.
 
 ## One-time LIVE setup (not unit-testable)
 

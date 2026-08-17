@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import httpx
 import pytest
 
 from libs.deploy import preview as pl
@@ -247,6 +248,59 @@ def test_up_creates_compose_when_absent_and_deploys():
     assert result.sha == FULL_SHA
     assert result.url == "https://report-pr-5.zitian.party"
     assert result.healthy is True
+
+
+def test_up_recovers_ambiguous_create_timeout_by_alias_without_duplicate_post():
+    class AmbiguousCreateDokploy(FakeDokploy):
+        def create_compose(self, environment_id, name, **kwargs):
+            super().create_compose(environment_id, name, **kwargs)
+            # The server committed the deterministic record but the response was lost.
+            self._existing = {"composeId": "cmp-recovered"}
+            raise httpx.ReadTimeout(
+                "compose.create response timed out",
+                request=httpx.Request("POST", "https://cloud.z.p/api/compose.create"),
+            )
+
+    client = AmbiguousCreateDokploy(existing=None)
+    result = pl.up(
+        "pr",
+        5,
+        code="main",
+        domain="z.p",
+        client=client,
+        http_get=_ok_get,
+        _sleep=lambda _seconds: None,
+    )
+
+    assert len(client.created) == 1
+    assert client.updated[0]["composeId"] == "cmp-recovered"
+    assert client.deployed == ["cmp-recovered"]
+    assert result.compose_id == "cmp-recovered"
+
+
+def test_up_preserves_ambiguous_create_error_when_alias_never_appears():
+    class LostCreateDokploy(FakeDokploy):
+        def create_compose(self, environment_id, name, **kwargs):
+            super().create_compose(environment_id, name, **kwargs)
+            raise httpx.ReadTimeout(
+                "compose.create response timed out",
+                request=httpx.Request("POST", "https://cloud.z.p/api/compose.create"),
+            )
+
+    client = LostCreateDokploy(existing=None)
+    with pytest.raises(httpx.ReadTimeout, match="response timed out"):
+        pl.up(
+            "pr",
+            5,
+            code="main",
+            domain="z.p",
+            client=client,
+            _sleep=lambda _seconds: None,
+        )
+
+    assert len(client.created) == 1
+    assert client.updated == []
+    assert client.deployed == []
 
 
 def test_up_env_has_short_sha_suffix_and_ephemeral_db_knobs():
@@ -583,7 +637,8 @@ def test_preview_backend_health_grace_covers_fresh_database_cold_start():
     frontend_start = source.index("\n  frontend:")
     backend_block = source[backend_start:frontend_start]
 
-    assert "start_period: ${BACKEND_HEALTHCHECK_START_PERIOD:-300s}" in backend_block, (
-        "the complete fresh-DB migration chain and Uvicorn import take about four "
-        "minutes in live proof; a shorter default makes compose abort a healthy cold start"
+    assert "start_period: ${BACKEND_HEALTHCHECK_START_PERIOD:-450s}" in backend_block, (
+        "the complete fresh-DB migration chain and Uvicorn import crossed 300 seconds "
+        "under live load; 450 seconds plus bounded retries still leaves about two minutes "
+        "inside the outer 600-second public-readiness deadline"
     )
