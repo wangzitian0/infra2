@@ -48,6 +48,35 @@ def test_deploy_canary_installs_the_declared_sdk_requirement() -> None:
         assert "repos/infra2-sdk" not in paths
 
 
+def test_reserved_deploy_canary_slot_is_globally_serialized() -> None:
+    workflow = yaml.safe_load(OPS_CHECKS.read_text(encoding="utf-8"))
+    concurrency = workflow["jobs"]["deploy-v2-canary"]["concurrency"]
+
+    assert concurrency == {
+        "group": "deploy-v2-canary-pr-999",
+        "cancel-in-progress": False,
+    }
+
+
+def test_pull_request_canary_binds_exact_head_authority_to_cloneable_branch() -> None:
+    workflow = yaml.safe_load(OPS_CHECKS.read_text(encoding="utf-8"))
+    job = workflow["jobs"]["deploy-v2-canary"]
+    steps = {step["name"]: step for step in job["steps"]}
+    env = steps["Run deploy_v2 canary"]["env"]
+    iac_ref = env["IAC_REF_INPUT"]
+    clone_ref = env["IAC_CLONE_REF_INPUT"]
+
+    assert "github.event_name == 'pull_request'" in iac_ref
+    assert "github.event.pull_request.head.sha" in iac_ref
+    assert iac_ref.endswith("|| 'main' }}")
+    assert "github.head_ref" in clone_ref
+    assert clone_ref.endswith("|| '' }}")
+
+    run_command = steps["Run deploy_v2 canary"]["run"]
+    assert 'clone_args+=(--iac-clone-ref "$IAC_CLONE_REF_INPUT")' in run_command
+    assert '"${clone_args[@]}"' in run_command
+
+
 def test_retired_compatibility_modules_stay_removed() -> None:
     assert not (ROOT / "libs/ci_gate_schema.py").exists()
     assert not (ROOT / "libs/pipeline_stage_contract.py").exists()

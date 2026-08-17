@@ -113,6 +113,7 @@ def calls(monkeypatch):
     monkeypatch.setattr(dv2, "resolve_image_ref", _fake_resolve_image_ref)
     monkeypatch.setattr(dv2, "resolve_pr", _fake_resolve_pr)
     monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
+    monkeypatch.setattr(dv2, "resolve_branch_to_sha", lambda ref, **kw: SHA_IAC)
     return rec
 
 
@@ -211,7 +212,9 @@ def test_iac_ref_on_main_accepts_reachable(status):
 @pytest.mark.parametrize("status", ["ahead", "diverged"])
 def test_iac_ref_off_main_refused(status):
     with pytest.raises(ValueError, match="not on infra2 main"):
-        assert_iac_ref_on_main("v1.2.3", "prod", token="", transport=_cmp_transport(status))
+        assert_iac_ref_on_main(
+            "v1.2.3", "prod", token="", transport=_cmp_transport(status)
+        )
 
 
 def test_iac_ref_on_main_exempt_for_preview():
@@ -426,6 +429,41 @@ def test_iac_sha_falls_back_to_default_branch(calls):
     res = _deploy(deploy_type="preview/pr", version_ref=7, iac_ref="d" * 40)
     assert calls["preview"]["branch"] == "main"
     assert res.target.iac_ref == SHA_IAC
+
+
+def test_preview_iac_sha_can_clone_a_branch_resolving_to_the_same_sha(calls):
+    res = _deploy(
+        deploy_type="preview/pr",
+        version_ref=7,
+        iac_ref="d" * 40,
+        iac_clone_ref="fix/preview-proof",
+    )
+    assert calls["preview"]["branch"] == "fix/preview-proof"
+    assert res.target.iac_ref == SHA_IAC
+
+
+def test_preview_iac_clone_ref_rejects_authority_mismatch(monkeypatch, calls):
+    monkeypatch.setattr(dv2, "resolve_branch_to_sha", lambda *_a, **_kw: "e" * 40)
+    with pytest.raises(ValueError, match="not authoritative iac_ref SHA"):
+        _deploy(
+            deploy_type="canary",
+            version_ref="main",
+            iac_ref="d" * 40,
+            iac_clone_ref="fix/other-head",
+        )
+    assert calls["preview"] is None
+
+
+def test_fixed_env_rejects_iac_clone_ref(calls):
+    with pytest.raises(ValueError, match="only supported for preview/canary"):
+        _deploy(
+            deploy_type="prod",
+            version_ref="v1.2.3",
+            staging_validated=True,
+            code_reviewed=True,
+            iac_clone_ref="fix/not-authority",
+        )
+    assert calls["fixed"] is None
 
 
 @pytest.mark.parametrize("bad_iac", ["main", "d" * 40])
@@ -643,7 +681,16 @@ def test_cli_dokploy_host_falls_back_to_the_known_org_domain_without_internal_do
     rec, _json = cli
     monkeypatch.delenv("INTERNAL_DOMAIN", raising=False)
     rc = dv2.main(
-        ["--type", "staging", "--version-ref", "main", "--iac-ref", "main", "--domain", "zp.io"]
+        [
+            "--type",
+            "staging",
+            "--version-ref",
+            "main",
+            "--iac-ref",
+            "main",
+            "--domain",
+            "zp.io",
+        ]
     )
     assert rc == 0
     assert rec["client"] == "client@cloud.zitian.party"
@@ -773,7 +820,9 @@ def test_cli_down_tears_down_the_selected_preview_alias(monkeypatch, capsys):
     rec = {}
 
     def fake_down(kind, value, *, domain, client, service):
-        rec.update(kind=kind, value=value, domain=domain, client=client, service=service)
+        rec.update(
+            kind=kind, value=value, domain=domain, client=client, service=service
+        )
         return _fake_down_result(kind, value, domain=domain, client=client)
 
     import libs.dokploy as dk

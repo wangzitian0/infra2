@@ -152,6 +152,37 @@ def resolve_to_sha(
     return sha
 
 
+def resolve_branch_to_sha(
+    branch: str, *, repo: str = FINANCE_REPORT_REPO, runner=subprocess.run
+) -> str:
+    """Resolve a clone-only branch without broadening the deploy authority grammar.
+
+    Preview PRs need a branch name because Dokploy cannot clone a raw commit SHA. The
+    exact SHA remains authoritative; callers use this resolver only to prove the transport
+    branch points at that same commit before handing it to Dokploy.
+    """
+    cleaned = branch.strip()
+    invalid_chars = " ~^:?*[\\"
+    if (
+        not cleaned
+        or cleaned.startswith(("-", ".", "/", "refs/"))
+        or cleaned.endswith((".", "/", ".lock"))
+        or ".." in cleaned
+        or "@{" in cleaned
+        or "//" in cleaned
+        or any(ord(char) < 32 or char in invalid_chars for char in cleaned)
+    ):
+        raise ValueError(f"invalid clone branch {branch!r}")
+
+    remote_ref = f"refs/heads/{cleaned}"
+    for sha, name in _ls_remote_rows(repo, remote_ref, runner=runner):
+        if name == remote_ref:
+            return sha
+    raise ValueError(
+        f"clone branch {branch!r} ({remote_ref}) not found in {_redact_repo(repo)}"
+    )
+
+
 @dataclass(frozen=True)
 class ResolvedRef:
     """What a surface ref resolves to: its commit identity AND what image to pull.

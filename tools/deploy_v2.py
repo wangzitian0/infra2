@@ -57,6 +57,7 @@ from libs.deploy.preview import down as _preview_down
 from libs.deploy.preview import up as _preview_up
 from tools.resolve_deploy_ref import (
     classify_ref,
+    resolve_branch_to_sha,
     resolve_image_ref,
     resolve_pr,
     resolve_to_sha,
@@ -584,6 +585,7 @@ def deploy_v2(
     deploy_type: str,
     version_ref,
     iac_ref: str,
+    iac_clone_ref: str | None = None,
     client,
     domain: str,
     wait: bool = True,
@@ -608,8 +610,8 @@ def deploy_v2(
     branch — :func:`_resolve_for_type`), fails closed on a form it does not accept, and
     declares its gates. ``version_ref`` resolves to the commit identity (``sha``) AND the
     published ``image_ref`` the backend pulls (a short sha for code, a retained tag for a
-    release). ``iac_ref`` (a branch/tag/sha of infra2) pins the IaC and, when cloneable,
-    the preview compose template.
+    release). ``iac_ref`` pins the exact IaC identity. Preview-only ``iac_clone_ref`` may
+    name a cloneable branch, but only when it resolves to the same exact ``iac_ref`` SHA.
 
     Raises ``ValueError`` for any contract / form / gate / red-line / unsupported-service
     violation BEFORE any side effect; backend errors (rollout / health) propagate.
@@ -634,6 +636,9 @@ def deploy_v2(
     # no longer reach a fixed env — the gap that let a main-sha reconcile auto-deploy to prod.
     # preview/canary keep an unrestricted iac_ref (they clone live refs).
     validate_iac_ref_form(deploy_type, classify_ref(iac_ref))
+    spec = deploy_type_spec(deploy_type)
+    if iac_clone_ref is not None and not env_config(spec.env).dynamic:
+        raise ValueError("--iac-clone-ref is only supported for preview/canary deploys")
     # #465: a fixed-env iac_ref must also be ON infra2 main (not just tag-shaped) — the app
     # only runs reviewed, released infra. Covers both the platform and app branches below.
     assert_iac_ref_on_main(iac_ref, deploy_type)
@@ -653,7 +658,6 @@ def deploy_v2(
             timeout=timeout,
         )
 
-    spec = deploy_type_spec(deploy_type)
     resolved_repo = repo if repo is not None else _repo_for_service(service)
     resolved, alias_value = _resolve_for_type(spec, version_ref, repo=resolved_repo)
     if (
@@ -665,11 +669,24 @@ def deploy_v2(
             f"not expected sha {normalized_expected_sha!r}"
         )
 
-    # iac_ref: the recorded identity is its sha; the preview clone uses the ref verbatim
-    # when it is cloneable (branch/tag), else the default branch (a sha can't be cloned, #342).
+    # iac_ref is authoritative. A PR can separately supply its cloneable head branch, but
+    # that transport ref must resolve to the exact same SHA before Dokploy receives it.
     iac_form = classify_ref(iac_ref)
     iac_sha = resolve_to_sha(iac_ref, repo=_INFRA2_REPO)
-    clone_ref = _INFRA2_DEFAULT_BRANCH if iac_form == "sha" else iac_ref.strip()
+    if iac_clone_ref is not None:
+        clone_ref = iac_clone_ref.strip()
+        if iac_form != "sha" or not clone_ref:
+            raise ValueError(
+                "--iac-clone-ref requires a non-empty clone ref and exact-SHA --iac-ref"
+            )
+        clone_sha = resolve_branch_to_sha(clone_ref, repo=_INFRA2_REPO)
+        if clone_sha.lower() != iac_sha.lower():
+            raise ValueError(
+                f"iac clone ref {clone_ref!r} resolved to {clone_sha!r}, "
+                f"not authoritative iac_ref SHA {iac_sha!r}"
+            )
+    else:
+        clone_ref = _INFRA2_DEFAULT_BRANCH if iac_form == "sha" else iac_ref.strip()
 
     target = make_target(
         deploy_type,

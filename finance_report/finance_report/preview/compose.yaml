@@ -220,9 +220,10 @@ services:
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       # A fresh preview DB runs the full migration chain before uvicorn. The 2026-08-17
-      # branch-main incident measured 107s from container start to public readiness, so
-      # keep the default grace period above that observed cold path.
-      start_period: ${BACKEND_HEALTHCHECK_START_PERIOD:-120s}
+      # exact-head canary needed 293.6s for its complete operation. A bounded 450s grace
+      # leaves room for first-run host and migration variance while the outer canary
+      # retains its independent 600s fail-closed deadline.
+      start_period: ${BACKEND_HEALTHCHECK_START_PERIOD:-450s}
       interval: 10s
       retries: 3
       timeout: 5s

@@ -51,9 +51,10 @@ intentionally skips these proofs.
 The `db` service stores data on the **named** `preview_db` volume (no host bind mount),
 so `down` (`delete_compose(delete_volumes=True)`) removes it entirely. Migrations run on
 backend startup (`alembic upgrade head`) against the fresh DB. Preview NEVER reads or
-writes the shared staging/prod database. The backend healthcheck grants a 120-second
-startup period because the 2026-08-17 cold path took 107 seconds through migrations and
-uvicorn readiness.
+writes the shared staging/prod database. The backend healthcheck grants a bounded
+450-second startup period. The 2026-08-17 exact-head canary needed 293.6 seconds for its
+complete create/deploy/readiness/cleanup operation, while the outer canary retains its
+independent 600-second hard deadline.
 
 ## One-time LIVE setup (not unit-testable)
 

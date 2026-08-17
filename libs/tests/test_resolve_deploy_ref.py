@@ -67,6 +67,34 @@ def test_resolve_main_uses_refs_heads_main():
     assert runner.calls[0][-1] == "refs/heads/main"
 
 
+def test_resolve_clone_branch_supports_slashes_without_broadening_classify_ref():
+    runner = FakeRunner(
+        stdout="2" * 40 + "\trefs/heads/fix/canary-operation-evidence\n"
+    )
+    assert (
+        r.resolve_branch_to_sha("fix/canary-operation-evidence", runner=runner)
+        == "2" * 40
+    )
+    assert runner.calls[0][-1] == "refs/heads/fix/canary-operation-evidence"
+    with pytest.raises(ValueError, match="unrecognized deploy ref"):
+        r.classify_ref("fix/canary-operation-evidence")
+
+
+@pytest.mark.parametrize(
+    "branch", ["", "refs/heads/main", "../main", "bad branch", "bad~branch"]
+)
+def test_resolve_clone_branch_rejects_invalid_shapes_before_network(branch):
+    runner = FakeRunner(stdout="should-not-be-used")
+    with pytest.raises(ValueError, match="invalid clone branch"):
+        r.resolve_branch_to_sha(branch, runner=runner)
+    assert runner.calls == []
+
+
+def test_resolve_clone_branch_fails_when_exact_head_is_absent():
+    with pytest.raises(ValueError, match="clone branch.*not found"):
+        r.resolve_branch_to_sha("fix/missing", runner=FakeRunner(stdout=""))
+
+
 class _RealisticLsRemote:
     """Models `git ls-remote` faithfully: the peeled `^{}` row for an annotated tag is
     only emitted when that peeled ref is in the query args (an exact-ref query does NOT

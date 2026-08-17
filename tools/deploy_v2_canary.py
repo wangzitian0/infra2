@@ -3,9 +3,11 @@
 
 Exercises the WHOLE deploy_v2 path end to end against a real Dokploy: stand up a
 throwaway preview alias via the unified front door (the ``canary`` deploy type), wait for
-it to serve 200 at its public URL, then tear it (and its ephemeral DB) back down. A green
-canary is the proof that ``deploy_v2(service, type, version_ref, iac_ref)`` actually
-deploys — not just that the contract validates.
+the current trigger's deployment record to reach terminal-good, prove every public
+version surface serves the requested code, then tear it (and its ephemeral DB) back down
+until two consecutive reads observe absence. A green canary is the proof that
+``deploy_v2(service, type, version_ref, iac_ref)`` actually deploys — not just that the
+contract validates.
 
 By default it deploys EVERY registry service declaring ``deploy_v2_canary = True`` on its
 Deployer (#541 — today ``finance_report/app`` only; see :func:`canary_services`) with
@@ -25,8 +27,10 @@ Dokploy access and is operator-driven:
     python -m tools.deploy_v2_canary --version-ref main --iac-ref main --domain zitian.party
     python -m tools.deploy_v2_canary --service truealpha/app --version-ref main --iac-ref main --domain zitian.party
 
-``--version-ref`` accepts any code surface (main | vX.Y.Z | <sha>); the
-canary always runs it on the reserved slot. Add ``--keep`` to leave the stack up.
+``--version-ref`` accepts any code surface (main | vX.Y.Z | <sha>); the canary always runs
+it on the reserved slot. Same-repository PR workflows provide exact-head ``--iac-ref``
+authority plus a cloneable ``--iac-clone-ref`` and require both to resolve to one commit.
+Add ``--keep`` to leave the stack up.
 """
 
 from __future__ import annotations
@@ -78,11 +82,13 @@ def canary_services() -> list[str]:
         )
     return services
 
+
 _SDK_FAILURE_DOMAIN = {
     "deploy-v2-control-plane": FailureDomain.DOKPLOY_CONTROL_PLANE,
     "deploy-v2-health": FailureDomain.DOCKER_RUNTIME,
     "deploy-v2-configuration": FailureDomain.CONFIGURATION,
     "deploy-v2-cleanup": FailureDomain.RESOURCE,
+    "deploy-v2-time-budget": FailureDomain.TIME_BUDGET,
 }
 
 _EXTERNAL_FAILURE_DOMAINS = {
@@ -92,7 +98,7 @@ _EXTERNAL_FAILURE_DOMAINS = {
 
 
 def _best_effort_down(
-    *, domain: str, client, service: str, attempts: int = 3, _sleep=time.sleep
+    *, domain: str, client, service: str, attempts: int = 6, _sleep=None
 ) -> bool:
     """Tear the canary slot down, retrying transient control-plane errors.
 
@@ -101,15 +107,33 @@ def _best_effort_down(
     loud warning, so a leaked stack is surfaced (not silent — the very gap that orphaned a
     pr-999 compose when Dokploy 502'd mid-teardown).
     """
+    sleep = _sleep or time.sleep
     last = None
+    consecutive_absent = 0
     for i in range(attempts):
         try:
-            down("pr", _CANARY_PR, domain=domain, client=client, service=service)
-            return True
+            result = down(
+                "pr", _CANARY_PR, domain=domain, client=client, service=service
+            )
+            if not hasattr(result, "compose_id"):
+                raise RuntimeError(
+                    "preview teardown returned no compose convergence evidence"
+                )
+            if result.compose_id is None:
+                consecutive_absent += 1
+                if consecutive_absent >= 2:
+                    return True
+            else:
+                consecutive_absent = 0
+                last = RuntimeError(
+                    f"canary compose {result.compose_id} is still present after "
+                    "the delete request"
+                )
         except (httpx.HTTPError, RuntimeError, ValueError) as exc:
             last = exc
-            if i < attempts - 1:
-                _sleep(2**i)
+            consecutive_absent = 0
+        if i < attempts - 1:
+            sleep(min(2 ** (i + 1), 8))
     print(
         f"WARNING: canary teardown failed after {attempts} attempts ({last}); "
         f"possible leaked stack pr-{_CANARY_PR} — clean it up manually",
@@ -135,6 +159,7 @@ def run_canary(
     service: str = _DEFAULT_SERVICE,
     version_ref: str = "main",
     iac_ref: str = "main",
+    iac_clone_ref: str | None = None,
     wait: bool = True,
     teardown: bool = True,
     timeout: int = 600,
@@ -144,25 +169,30 @@ def run_canary(
     ``service`` selects the preview-capable service under test (default
     ``finance_report/app``; any service registered in
     ``libs.deploy_env_config.preview_service_config`` works, e.g. ``truealpha/app``).
-    ``version_ref`` is any code surface (main | vX.Y.Z | <sha>); ``iac_ref``
-    pins infra2. deploy_v2 resolves both. Raises whatever deploy_v2 raises on a
-    contract/red-line violation, or TimeoutError from the backend if the stack never goes
-    healthy. Teardown runs in a ``finally`` so a failed/unhealthy deploy still cleans up
-    its ephemeral stack.
+    ``version_ref`` is any code surface (main | vX.Y.Z | <sha>); ``iac_ref`` pins the
+    authoritative infra2 commit. ``iac_clone_ref`` is an optional preview-only transport
+    branch that must resolve to that commit. deploy_v2 resolves both. Raises whatever
+    deploy_v2 raises on a contract/red-line violation, or TimeoutError if the stack never
+    proves terminal rollout plus exact public identity. Teardown runs in a ``finally`` so
+    a failed/unhealthy deploy still cleans up its ephemeral stack.
     """
     torn_down = False
     res = None
+    deploy_error: Exception | None = None
     try:
         res = deploy_v2(
             service=service,
             deploy_type="canary",
             version_ref=version_ref,
             iac_ref=iac_ref,
+            iac_clone_ref=iac_clone_ref,
             client=client,
             domain=domain,
             wait=wait,
             timeout=timeout,
         )
+    except Exception as exc:  # noqa: BLE001 - attach cleanup proof, then re-raise
+        deploy_error = exc
     finally:
         # Best-effort, never-raising teardown: if the deploy above raised (e.g. fast-fail on
         # an unpublished image), its error still propagates after we clean up — and a flaky
@@ -170,6 +200,11 @@ def run_canary(
         if teardown:
             torn_down = _best_effort_down(domain=domain, client=client, service=service)
 
+    if deploy_error is not None:
+        deploy_error.torn_down = torn_down
+        raise deploy_error
+
+    assert res is not None
     healthy = res.detail.get("healthy")
     ok = bool(healthy) if wait else None
     return CanaryResult(
@@ -192,6 +227,8 @@ def failure_domain(exc: Exception) -> str:
     - ``deploy-v2-cleanup``        — healthy but the stack leaked (torn_down=false). NOT
                                      returned here (no exception) — ``main`` assigns it from
                                      the result. This function covers only the exception path.
+    - ``deploy-v2-time-budget``    — functionally healthy but the complete canary exceeded
+                                     its configured hard deadline. Also assigned by ``main``.
     """
     if isinstance(exc, httpx.HTTPError):
         return "deploy-v2-control-plane"
@@ -230,6 +267,7 @@ def make_canary_stage_result(
         target=target,
         status=status_value,
         duration_ms=duration_ms,
+        deadline_ms=max(0, int(args.timeout)) * 1000,
         failure_domain=failure,
         external_dependency=(domain or "") in _EXTERNAL_FAILURE_DOMAINS,
         skipped_reason=skipped_reason,
@@ -300,6 +338,11 @@ def main(argv: list[str] | None = None) -> int:
         help="infra2 ref pinning the IaC: main | vX.Y.Z | <sha>",
     )
     parser.add_argument(
+        "--iac-clone-ref",
+        default=None,
+        help="preview-only cloneable infra2 ref; must resolve to the exact --iac-ref SHA",
+    )
+    parser.add_argument(
         "--domain", required=True, help="base domain, e.g. zitian.party"
     )
     parser.add_argument(
@@ -344,6 +387,7 @@ def _canary_one(client, args, service: str) -> int:
             service=service,
             version_ref=args.version_ref,
             iac_ref=args.iac_ref,
+            iac_clone_ref=args.iac_clone_ref,
             wait=not args.no_wait,
             teardown=not args.keep,
             timeout=args.timeout,
@@ -352,6 +396,27 @@ def _canary_one(client, args, service: str) -> int:
         # httpx.HTTPError covers Dokploy transport/auth/API failures from libs.dokploy —
         # the probe must exit cleanly (code 1 + one line), not dump a traceback.
         domain, detail, rc = failure_domain(exc), str(exc), 1
+        torn_down = bool(getattr(exc, "torn_down", False))
+        duration_ms = round((time.monotonic() - started) * 1000)
+        stage_result = make_canary_stage_result(
+            domain=domain,
+            status=StageStatus.FAIL,
+            args=args,
+            duration_ms=duration_ms,
+            evidence_url=_run_url(os.environ),
+        )
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "healthy": None,
+                    "torn_down": torn_down,
+                    "failure_domain": domain,
+                    "stage_result": stage_result.to_dict(),
+                }
+            )
+        )
+        detail = f"{detail}; cleanup_torn_down={torn_down}"
         print(f"canary failed [{domain}]: {exc}", file=sys.stderr)
     else:
         if not (result.ok or args.no_wait):  # deployed but never went healthy
@@ -361,6 +426,14 @@ def _canary_one(client, args, service: str) -> int:
             detail, rc = f"torn_down={result.torn_down} (possible leak)", 1
 
         duration_ms = round((time.monotonic() - started) * 1000)
+        deadline_ms = max(0, args.timeout) * 1000
+        if rc == 0 and not args.no_wait and duration_ms > deadline_ms:
+            domain = "deploy-v2-time-budget"
+            detail = (
+                f"duration_ms={duration_ms} exceeded configured "
+                f"deadline_ms={deadline_ms}"
+            )
+            rc = 1
         if rc != 0:
             stage_status = StageStatus.FAIL
             skipped_reason = ""
@@ -382,7 +455,7 @@ def _canary_one(client, args, service: str) -> int:
         print(
             json.dumps(
                 {
-                    "ok": result.ok,
+                    "ok": result.ok if rc == 0 else False,
                     "alias": result.alias,
                     "url": result.url,
                     "healthy": result.healthy,

@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import httpx
 import pytest
 
 from libs.deploy import preview as pl
@@ -207,7 +208,7 @@ def test_preview_backend_health_budget_covers_measured_cold_start():
     match = re.search(r"BACKEND_HEALTHCHECK_START_PERIOD:-([0-9]+)s", backend_block)
 
     assert match is not None
-    assert int(match.group(1)) >= 120
+    assert int(match.group(1)) >= 450
 
 
 # --- up: create path -------------------------------------------------------------
@@ -252,6 +253,84 @@ def test_up_creates_compose_when_absent_and_deploys():
     assert result.sha == FULL_SHA
     assert result.url == "https://report-pr-5.zitian.party"
     assert result.healthy is True
+
+
+def test_up_adopts_deterministic_compose_after_create_timeout():
+    class CreateTimedOutAfterCommit(FakeDokploy):
+        def create_compose(self, environment_id, name, **kwargs):
+            created = super().create_compose(environment_id, name, **kwargs)
+            self._existing = {"composeId": created["composeId"]}
+            raise httpx.ReadTimeout("response lost after create")
+
+    client = CreateTimedOutAfterCommit(existing=None)
+    result = pl.up(
+        "pr",
+        5,
+        code="main",
+        domain="zitian.party",
+        client=client,
+        wait=False,
+    )
+
+    assert len(client.created) == 1
+    assert result.compose_id == "cmp-new"
+    assert client.deployed == ["cmp-new"]
+
+
+def test_up_retries_alias_read_after_ambiguous_create_until_commit_is_visible():
+    class EventuallyVisibleCreate(FakeDokploy):
+        committed = False
+        recovery_reads = 0
+
+        def find_compose_by_name(self, name, project_name=None, env_name=None):
+            if self.committed and env_name != "staging":
+                self.recovery_reads += 1
+                if self.recovery_reads >= 2:
+                    return {"composeId": "cmp-eventual"}
+                return None
+            return super().find_compose_by_name(name, project_name, env_name)
+
+        def create_compose(self, environment_id, name, **kwargs):
+            super().create_compose(environment_id, name, **kwargs)
+            self.committed = True
+            raise httpx.ReadTimeout("response lost after create")
+
+    sleeps: list[int] = []
+    client = EventuallyVisibleCreate(existing=None)
+    result = pl.up(
+        "pr",
+        5,
+        code="main",
+        domain="zitian.party",
+        client=client,
+        wait=False,
+        _sleep=sleeps.append,
+    )
+
+    assert len(client.created) == 1
+    assert client.recovery_reads == 2
+    assert sleeps == [2]
+    assert result.compose_id == "cmp-eventual"
+
+
+def test_up_preserves_create_timeout_when_alias_did_not_appear():
+    class CreateTimedOutBeforeCommit(FakeDokploy):
+        def create_compose(self, environment_id, name, **kwargs):
+            raise httpx.ReadTimeout("create never committed")
+
+    client = CreateTimedOutBeforeCommit(existing=None)
+    with pytest.raises(httpx.ReadTimeout, match="create never committed"):
+        pl.up(
+            "pr",
+            5,
+            code="main",
+            domain="zitian.party",
+            client=client,
+            wait=False,
+            _sleep=lambda _seconds: None,
+        )
+
+    assert client.deployed == []
 
 
 def test_up_env_has_short_sha_suffix_and_ephemeral_db_knobs():

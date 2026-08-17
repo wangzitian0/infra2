@@ -40,6 +40,8 @@ from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+import httpx
+
 from libs.common import infra_domain
 from libs.compose_lock import compose_write_lock
 from libs.deploy.promote import _deployment_ids, wait_for_rollout
@@ -71,6 +73,8 @@ _SOURCE_APP_COMPOSE = "app"
 # env's secret path, so it reuses that env's role verbatim — the same creds staging itself
 # runs with (injected once by `invoke setup-approle`); see _source_app_vault_creds.
 _VAULT_CRED_KEYS = ("VAULT_ADDR", "VAULT_ROLE_ID", "VAULT_SECRET_ID")
+_AMBIGUOUS_CREATE_RECOVERY_ATTEMPTS = 4
+_AMBIGUOUS_CREATE_RECOVERY_INTERVAL_SECONDS = 2
 
 
 def _source_app_vault_creds(client, project: str, source_env: str) -> dict[str, str]:
@@ -317,13 +321,37 @@ def up(
         # sourceType) so the compose is never momentarily a raw compose with an empty
         # composeFile. The github *binding* (githubId/owner/repository/branch/composePath)
         # still has to be re-applied below — compose.create drops everything but sourceType.
-        created = client.create_compose(
-            environment_id=environment_id,
-            name=alias.compose_name,
-            app_name=alias.compose_name,
-            source_type="github",
-        )
-        compose_id = created["composeId"]
+        try:
+            created = client.create_compose(
+                environment_id=environment_id,
+                name=alias.compose_name,
+                app_name=alias.compose_name,
+                source_type="github",
+            )
+        except httpx.HTTPError:
+            # compose.create is non-idempotent, so a lost response cannot be retried: the
+            # server may already have committed the deterministic alias. Re-read the
+            # exact project/environment/name with a bounded eventual-consistency budget
+            # and adopt that record; if it remains absent, preserve the original
+            # control-plane error. This is the live 2026-08-17 canary failure where a
+            # ReadTimeout left a real compose behind.
+            reconciled = None
+            for attempt in range(_AMBIGUOUS_CREATE_RECOVERY_ATTEMPTS):
+                try:
+                    reconciled = _find_compose(
+                        client, config.project, alias.compose_name
+                    )
+                except httpx.HTTPError:
+                    reconciled = None
+                if reconciled:
+                    break
+                if attempt < _AMBIGUOUS_CREATE_RECOVERY_ATTEMPTS - 1:
+                    _sleep(_AMBIGUOUS_CREATE_RECOVERY_INTERVAL_SECONDS)
+            if reconciled is None:
+                raise
+            compose_id = reconciled["composeId"]
+        else:
+            compose_id = created["composeId"]
     else:
         compose_id = existing["composeId"]
 

@@ -78,9 +78,22 @@ backend must match the requested runtime image ref (tag or short SHA), while the
 must match the resolved source SHA baked into its image. Therefore an old stack that
 remains routable during replacement, or a backend that starts while the frontend remains
 `Created`, cannot produce a false green. `--no-wait` explicitly omits both proofs and must
-not be used by a blocking deployment workflow. A fresh Finance Report preview database
-runs migrations before uvicorn, so its backend healthcheck grants a 120-second startup
-period, above the 107-second cold path measured in the 2026-08-17 `branch-main` incident.
+not be used by a blocking deployment workflow.
+
+The reserved `pr-999` canary is a singleton mutable resource, so all workflow events share
+one non-cancelling job concurrency group. A same-repository PR records its exact head SHA as
+the authoritative IaC identity and may pass the head branch only as a clone transport; the
+front door proves both refs resolve to the same commit before mutating Dokploy. If the
+non-idempotent `compose.create` call times out after Dokploy commits it, the lifecycle
+re-reads and adopts the one deterministic project/environment/name instead of creating a
+duplicate. Teardown is green only after two consecutive reads observe that name absent.
+
+A fresh Finance Report preview database runs migrations before uvicorn. Its backend
+healthcheck therefore grants a bounded 450-second startup period. The 2026-08-17 exact-head
+canary needed 293.6 seconds for the complete create/deploy/readiness/cleanup operation, so
+this leaves cold-host margin while the outer canary still fails closed at its configured
+600-second deadline. The emitted stage record uses that configured deadline, not the SDK's
+generic stage default; a `hard-breach` is a red time-budget failure even if health is green.
 
 > **平台服务**(iac_pinned)无 preview,只有 staging/prod,且**只接受 release tag 作 `iac_ref`**。release tag
 > 推送后 `reconcile-iac-inputs.yml` 自动:diff 上一 release tag → 本 tag,changed files 经
