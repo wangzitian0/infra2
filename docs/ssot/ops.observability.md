@@ -251,7 +251,7 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 
 ### SOP-007B: deploy_v2 Canary(日级/变更触发)
 `tools/deploy_v2_canary.py` 只使用保留的 `pr-999` 预览位，健康检查后必须清理 stack 与临时 DB。
-成功保持静默，仅在 GitHub summary 输出 `infra2-sdk v0.3.0` `StageResult`；非 PR 失败才经带外
+成功保持静默，仅在 GitHub summary 输出 `infra2-sdk v1.0.0` `StageResult`；非 PR 失败才经带外
 Feishu page，且告警携带同一结构化记录。不得通过破坏 production 数据或恢复周期性
 `alert-delivery-canary` 来制造失败；Feishu 正向投递仍由日报送达自证。
 
