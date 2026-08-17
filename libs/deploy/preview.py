@@ -16,7 +16,8 @@ Design seams (mirroring libs.deploy.promote / resolve_deploy_ref):
                           path / db name / base_subdomain — the per-service knobs)
 - (kind, value) -> ids  : deploy_env_config.preview_alias (suffix / url / slug / label)
 - side effects          : the injected Dokploy client (create/update/deploy/delete)
-- readiness             : an injected http getter polls <base_subdomain>-<alias>/api/health
+- readiness             : this trigger's terminal deployment record, then injected HTTP
+                          probes for every configured public version surface
 
 Everything with side effects takes an injected client/getter so the orchestration is
 unit-testable with a mock — NO live Dokploy/HTTP call happens in tests. The compose
@@ -33,17 +34,19 @@ This is a pure importable backend — the operator surface is the deploy_v2 CLI:
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-import httpx  # the injected Dokploy client raises httpx errors on a transient API blip
-
 from libs.common import infra_domain
+from libs.compose_lock import compose_write_lock
+from libs.deploy.promote import _deployment_ids, wait_for_rollout
 from libs.deploy_env_config import (
     PREVIEW_ENVIRONMENT,
     PreviewAlias,
+    PreviewReadinessProbe,
     otel_env,
     preview_alias,
     preview_service_config,
@@ -79,7 +82,9 @@ def _source_app_vault_creds(client, project: str, source_env: str) -> dict[str, 
     deploy time because a throwaway alias is recreated each ``up`` (and deleted on ``down``),
     so it can never rely on a manual one-time injection persisting the way a fixed env does.
     """
-    comp = client.find_compose_by_name(_SOURCE_APP_COMPOSE, project, env_name=source_env)
+    comp = client.find_compose_by_name(
+        _SOURCE_APP_COMPOSE, project, env_name=source_env
+    )
     if not comp:
         raise RuntimeError(
             f"cannot source preview Vault creds: no {_SOURCE_APP_COMPOSE!r} compose in "
@@ -234,7 +239,8 @@ def up(
 
     Resolves code->sha, computes the alias identity, finds-or-creates this alias's own
     Dokploy compose (GitHub-sourced preview template), pushes the env, triggers a deploy,
-    and — when wait=True — polls the alias's ``/api/health`` until 200. Idempotent:
+    and — when wait=True — waits for this trigger's terminal-good deployment record,
+    then proves every configured public surface serves the requested version. Idempotent:
     re-running an alias updates and redeploys the same compose in place.
     """
     _validate_domain(domain)
@@ -254,9 +260,7 @@ def up(
     # Inject the runtime AppRole creds the preview vault-agent logs in with — the same
     # role the source env runs with. Without them vault-agent crash-loops and the app
     # never becomes healthy. Merged before the compose env is pushed below.
-    env_vars.update(
-        _source_app_vault_creds(client, config.project, config.secret_env)
-    )
+    env_vars.update(_source_app_vault_creds(client, config.project, config.secret_env))
 
     # Find-or-create THIS alias's compose by its deterministic name. The GitHub source
     # fields make Dokploy pull the preview compose template (+ its mounted vault files)
@@ -323,45 +327,59 @@ def up(
     else:
         compose_id = existing["composeId"]
 
-    # Configure source + env on BOTH paths. Dokploy's compose.create persists ONLY the
-    # basic fields — it silently drops the github source (githubId/owner/repository/
-    # branch/composePath) and the env blob — so a first-ever preview deploy would land
-    # source-less and env-less and fail at deploy time ("Github Provider not found" / all
-    # compose vars blank → IMAGE_TAG defaults to :latest). The github source + env only
-    # stick via these follow-up compose.update / compose.update-env calls, which also
-    # re-assert them on a redeploy. MERGE the env so runtime AppRole creds
-    # (VAULT_ROLE_ID / VAULT_SECRET_ID / VAULT_ADDR) injected at setup survive a redeploy.
-    client.update_compose(compose_id, **source_fields)
-    client.update_compose_env(compose_id, env_vars=env_vars)
-
-    client.deploy_compose(compose_id)
-
     healthy: bool | None = None
     url = alias.app_url(domain=domain, base_subdomain=config.base_subdomain)
-    if wait:
+    expected_versions = {
+        "runtime": image_ref or sha[:7],
+        "source": sha[:7],
+    }
 
-        def _deploy_status():
-            # Best-effort: a transient API blip returns None (keep waiting on HTTP); only a
-            # definitive "error" status short-circuits the wait.
-            try:
-                return (client.get_compose(compose_id) or {}).get("composeStatus")
-            except httpx.HTTPError:
-                return None
-
-        healthy = _wait_for_health(
-            f"{url}/api/health",
-            timeout=health_timeout,
-            interval=health_interval,
-            http_get=http_get,
-            deploy_status=_deploy_status,
-            _sleep=_sleep,
-            _now=_monotonic,
+    # Serialize the full read-modify-write-trigger-observe sequence for this compose.
+    # The workflow concurrency group covers separate CI runners; this lock also protects
+    # direct/in-process callers from losing an env update or accepting another trigger's
+    # deployment record (same boundary as fixed-compose promotion, infra2#525).
+    with compose_write_lock(compose_id):
+        before_ids = (
+            _deployment_ids(client.get_compose_deployments(compose_id))
+            if wait
+            else set()
         )
-        if not healthy:
-            raise TimeoutError(
-                f"preview {alias.alias} did not become healthy at {url}/api/health "
-                f"within {health_timeout}s"
+
+        # Configure source + env on BOTH paths. Dokploy's compose.create persists ONLY
+        # basic fields, so github binding and env must be re-applied before every deploy.
+        # update_compose_env merges, preserving runtime AppRole credentials.
+        client.update_compose(compose_id, **source_fields)
+        client.update_compose_env(compose_id, env_vars=env_vars)
+
+        # A public 200 may still come from the old stack. Snapshot before this trigger and
+        # require a new deployment record to reach terminal-good before probing routes.
+        trigger_epoch = _now()
+        client.deploy_compose(compose_id)
+        if wait:
+            wait_for_rollout(
+                client,
+                compose_id,
+                before_ids,
+                timeout=health_timeout,
+                interval=health_interval,
+                _sleep=_sleep,
+                min_started_at=trigger_epoch,
             )
+            healthy = _wait_for_readiness(
+                url,
+                config.readiness_probes,
+                expected_versions=expected_versions,
+                timeout=health_timeout,
+                interval=health_interval,
+                http_get=http_get,
+                _sleep=_sleep,
+                _now=_monotonic,
+            )
+            if not healthy:
+                raise TimeoutError(
+                    f"preview {alias.alias} did not serve the requested deployment "
+                    f"identity on every public surface within {health_timeout}s"
+                )
 
     return PreviewResult(
         action="up",
@@ -425,9 +443,11 @@ def _http_get(url: str, timeout: float) -> tuple[int, str]:
     request = Request(url, headers={"User-Agent": "infra2-preview-lifecycle/1.0"})
     try:
         with urlopen(request, timeout=timeout) as response:  # noqa: S310
-            return response.status, response.read(256).decode("utf-8", errors="replace")
+            return response.status, response.read(4096).decode(
+                "utf-8", errors="replace"
+            )
     except HTTPError as exc:
-        return exc.code, exc.read(256).decode("utf-8", errors="replace")
+        return exc.code, exc.read(4096).decode("utf-8", errors="replace")
     except (URLError, TimeoutError) as exc:
         return 0, str(getattr(exc, "reason", exc))
 
@@ -442,24 +462,82 @@ def _wait_for_health(
     _sleep=time.sleep,
     _now=time.monotonic,
 ) -> bool:
-    """Poll ``health_url`` until it returns HTTP 200, or the deadline passes.
+    """Compatibility wrapper for one HTTP-status-only readiness surface.
 
-    Returns True on the first 200, False if the window elapses first. If ``deploy_status``
-    is given and reports ``"error"``, raise immediately — the deploy itself failed (e.g. an
-    unpublished image or a build error), so the stack can NEVER become healthy and waiting
-    out the full timeout only hides the real reason. Side-effect free apart from the
-    injected getter/status, so tests drive it with a fake clock + fake getter.
+    Returns True on the first 200 and False if the window elapses. The optional legacy
+    ``deploy_status`` precheck raises on an already-known error; preview ``up`` now uses
+    the stronger trigger-bound terminal deployment-record proof before public readiness.
+    Side-effect free apart from the injected getter/status.
+    """
+    if deploy_status is not None and deploy_status() == "error":
+        raise RuntimeError(
+            f"deploy failed (Dokploy composeStatus=error) before {health_url} became "
+            "healthy — check the Dokploy deploy log"
+        )
+    base_url, _, path = health_url.partition("/api/health")
+    return _wait_for_readiness(
+        base_url,
+        (PreviewReadinessProbe(f"/api/health{path}"),),
+        expected_versions={"runtime": ""},
+        timeout=timeout,
+        interval=interval,
+        http_get=http_get,
+        _sleep=_sleep,
+        _now=_now,
+    )
+
+
+def _wait_for_readiness(
+    base_url: str,
+    probes: tuple[PreviewReadinessProbe, ...],
+    *,
+    expected_versions: dict[str, str],
+    timeout: int,
+    interval: int,
+    http_get=None,
+    _sleep=time.sleep,
+    _now=time.monotonic,
+) -> bool:
+    """Require every configured public surface and its exact deploy version.
+
+    All surfaces are checked on every pass. A 200 without parseable matching version
+    metadata is not readiness when the probe declares ``version_fields``.
     """
     getter = http_get or _http_get
     deadline = _now() + max(0, timeout)
     while True:
-        if deploy_status is not None and deploy_status() == "error":
-            raise RuntimeError(
-                f"deploy failed (Dokploy composeStatus=error) before {health_url} became "
-                "healthy — check the Dokploy deploy log (image not published / build error?)"
-            )
-        status, _ = getter(health_url, 10)
-        if status == 200:
+        all_ready = bool(probes)
+        for probe in probes:
+            status, body = getter(f"{base_url.rstrip('/')}{probe.path}", 10)
+            if status != 200:
+                all_ready = False
+                continue
+            if probe.version_fields:
+                expected_version = expected_versions.get(probe.version_source)
+                if expected_version is None:
+                    raise ValueError(
+                        f"no expected preview version for source "
+                        f"{probe.version_source!r}"
+                    )
+                try:
+                    payload = json.loads(body)
+                except (json.JSONDecodeError, TypeError):
+                    all_ready = False
+                    continue
+                if not isinstance(payload, dict):
+                    all_ready = False
+                    continue
+                actual = next(
+                    (
+                        str(payload[field])
+                        for field in probe.version_fields
+                        if payload.get(field) is not None
+                    ),
+                    "",
+                )
+                if actual != expected_version:
+                    all_ready = False
+        if all_ready:
             return True
         if _now() >= deadline:
             return False

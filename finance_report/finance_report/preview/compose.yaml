@@ -219,7 +219,10 @@ services:
         exec uvicorn src.main:app --host 0.0.0.0 --port 8000
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
-      start_period: ${BACKEND_HEALTHCHECK_START_PERIOD:-60s}
+      # A fresh preview DB runs the full migration chain before uvicorn. The 2026-08-17
+      # branch-main incident measured 107s from container start to public readiness, so
+      # keep the default grace period above that observed cold path.
+      start_period: ${BACKEND_HEALTHCHECK_START_PERIOD:-120s}
       interval: 10s
       retries: 3
       timeout: 5s

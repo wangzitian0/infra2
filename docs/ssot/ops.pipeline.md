@@ -69,6 +69,19 @@ Receiver 的 validate job 将选定的 `iac_ref` 作为 job output 传给 canary
 | **平台服务**(iac_pinned)**prod** | **显式 promote**(`workflow_dispatch` `promote_prod=true` / `--promote-prod`)——tag 推送**不**自动动 prod | **同一 tag** | 同上 | — | 长期 |
 | **L1 Bootstrap**(iac-runner)| `bootstrap/06.iac_runner/**` 变更 | merged SHA | 带外 self-update(`deploy.yml`)| — | 独立 cadence |
 
+Preview success is a two-stage proof, not public reachability alone. The lifecycle
+snapshots Dokploy deployment IDs before its trigger, waits for a new record attributable
+to that trigger to reach a terminal-good state, and only then polls the service's declared
+public readiness surfaces. Finance Report declares both `/api/health` and
+`/frontend-version.json`; each must return HTTP 200 with `git_sha` or `version`. The
+backend must match the requested runtime image ref (tag or short SHA), while the frontend
+must match the resolved source SHA baked into its image. Therefore an old stack that
+remains routable during replacement, or a backend that starts while the frontend remains
+`Created`, cannot produce a false green. `--no-wait` explicitly omits both proofs and must
+not be used by a blocking deployment workflow. A fresh Finance Report preview database
+runs migrations before uvicorn, so its backend healthcheck grants a 120-second startup
+period, above the 107-second cold path measured in the 2026-08-17 `branch-main` incident.
+
 > **平台服务**(iac_pinned)无 preview,只有 staging/prod,且**只接受 release tag 作 `iac_ref`**。release tag
 > 推送后 `reconcile-iac-inputs.yml` 自动:diff 上一 release tag → 本 tag,changed files 经
 > [`deploy-dependencies.yaml`](./deploy-dependencies.yaml) fan-out 到受影响 `iac_pinned` 服务,以**该 tag** 触发

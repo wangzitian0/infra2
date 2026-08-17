@@ -28,6 +28,7 @@
 | Infra-011.19 | IaC deployment operations bind environment, exact ref, and normalized service set to one opaque ID; release fidelity uses exact deploy ref plus a secret-independent source fingerprint, while runtime fingerprint remains the idempotence gate. | `libs/tests/test_iac_runner_client.py`, `libs/tests/test_iac_runner_deploy_result.py`, `libs/tests/test_deployer.py`, `libs/tests/test_dokploy_config_drift.py`, `docs/ssot/ops.pipeline.md` |
 | Infra-011.20 | Every infra2 workflow uses the supported Node.js 24 major for governed official JavaScript Actions, and a repository-wide contract test rejects future stale-major additions or regressions. | `libs/tests/test_workflow_reference_contract.py`, `.github/workflows/reconcile-iac-inputs.yml`, `docs/ssot/ops.pipeline.md` |
 | Infra-011.21 | Observation failures never become empty reality; production desired state follows an immutable promotion marker; runtime-only deployers remain source-recomputable without secrets; Dokploy/runtime disagreement is explicit and non-silent. | `libs/tests/test_dns_drift_report.py`, `libs/tests/test_dokploy_config_drift.py`, `libs/tests/test_reconcile_iac_inputs.py`, `libs/tests/test_out_of_band_watchdog.py` |
+| Infra-011.22 | Preview success is bound to this invocation's terminal-good Dokploy deployment record, exact-version readiness on every configured public surface, and a health budget that covers measured cold startup. | `libs/tests/test_preview_lifecycle.py`, `libs/deploy/preview.py`, `finance_report/finance_report/preview/compose.yaml`, `docs/ssot/ops.pipeline.md` |
 
 ## Issue Mapping
 
@@ -39,6 +40,7 @@
 - wangzitian0/finance_report#945: off-host restore rehearsal proof for finance production data durability.
 - #186: IaC Runner route ownership drift blocked main deploy health checks.
 - #187: IaC Runner deploy failed after health recovery because repo `platform/` shadowed Python stdlib `platform`.
+- #610: preview and dependent-service deployments can report success while the replacement later fails or remains `Created`.
 - #189: IaC Runner deploy sync lacks Vault automation token after stdlib shadow fix.
 - #191: IaC Runner sync should use its scoped Vault app token.
 - TBD: Env x Stage contract and cross-stage consistency tracking.

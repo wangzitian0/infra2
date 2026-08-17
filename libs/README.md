@@ -25,6 +25,7 @@
 | `deployer.py` | Deployment base class + task helpers | `Deployer`, `make_tasks()` |
 | `iac_runner_client.py` | Signed IaC Runner operation client | `trigger_platform_deploy()`, `poll_platform_deploy_status()` |
 | `dokploy.py` | Dokploy API client | `DokployClient`, `get_dokploy()` |
+| `deploy/preview.py` | Dynamic preview lifecycle with trigger-bound terminal rollout and per-surface exact-version readiness | `up()`, `down()` |
 | `backup_restore.py` | Off-host backup restore rehearsal helpers | `latest_artifact_for_service()`, `build_postgres_rehearsal_plan()`, `run_postgres_restore_rehearsal()` |
 | `dokploy_route_canary.py` | Dynamic route canary | `run_route_canary()`, `render_canary_compose()` |
 | `app_deploy_request.py` | Fail-closed App request validation, Production evidence verification, and deploy planning | `verify_production_evidence()`, `validate_request_authority()`, `make_plan()` |
@@ -95,6 +96,7 @@ from libs.deploy.deployer import Deployer, make_tasks
 - Non-production requires `DATA_PATH` or `ENV_SUFFIX` unless `ALLOW_SHARED_DATA_PATH=1` is set.
 - `DokployClient.update_compose_env()` parses basic `KEY=VALUE` lines only (no quoted/escaped/multiline values).
 - Dokploy deployment proof uses `deployment.allByCompose` before falling back to embedded compose snapshots.
+- Preview deployment proof snapshots deployment IDs before triggering, waits for that invocation's new terminal-good record, and then requires every service-configured public surface to serve the requested version. A stale old-stack 200 is never sufficient.
 - Deployer identity has two planes: runtime `IAC_CONFIG_HASH` for idempotence, and versioned secret-free `IAC_SOURCE_CONFIG_HASH` plus exact `IAC_DEPLOY_REF` for release provenance. A Deployer declaring `runtime_only_config_keys` must provide an explicit source builder that never reads its secret backend.
 - Operational service identity is a third, metadata-only plane rendered by `service_identity.py`: registry-owned `service_id`/environment/component maps consistently to `INFRA_*`, OTEL resources, Docker labels and alert labels. It does not enter config hashes; missing/stale identity triggers one reconcile and post-deploy proof.
 - `service_registry.py` resolves Dokploy project/compose and legacy Docker container coordinates. Ambiguous or unknown runtime objects remain `infra/unregistered`; callers must not guess.
