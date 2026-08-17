@@ -5,7 +5,8 @@ name: Ops Checks
 #     into its image declares it, so a change actually redeploys it.
 #   - Necessity:  the iac-runner is the single deploy trigger (no compose left on
 #     Dokploy-native autoDeploy outside the allowlist).
-#   - Dynamic route canary proves Dokploy/Traefik route creation.
+#   - The deploy_v2 canary creates the reserved pr-999 preview, proves the
+#     Dokploy/Traefik/public-health path, then proves teardown convergence.
 #   - Out-of-band watchdog and weekly digest prove alert delivery and recall.
 # Failing deploy guard / canary / watchdog checks deliver Feishu alerts via the
 # shared out-of-band channel.
@@ -19,6 +20,8 @@ name: Ops Checks
       - "tools/deploy_v2.py"
       - "tools/deploy_v2_canary.py"
       - "tools/deploy_primitive.py"
+      - "libs/deploy/preview.py"
+      - "libs/deploy/rollout.py"
       - "libs/deploy_contract.py"
       - "libs/deploy_env_config.py"
       - "tools/resolve_deploy_ref.py"
@@ -35,6 +38,8 @@ name: Ops Checks
       - "tools/deploy_v2.py"
       - "tools/deploy_v2_canary.py"
       - "tools/deploy_primitive.py"
+      - "libs/deploy/preview.py"
+      - "libs/deploy/rollout.py"
       - "libs/deploy_contract.py"
       - "libs/deploy_env_config.py"
       - "tools/resolve_deploy_ref.py"
@@ -269,8 +274,9 @@ jobs:
   deploy-v2-canary:
     # schedule-signal-exempt: stage-evidence canary, report-tier self-proving delivery (ops.observability SOP-007B); T5 registration pending (#425 T2 backlog)
     name: deploy_v2 live canary
-    # Skip FORK PRs: they get no secrets, so the live deploy can't run — skip (not fail) to
-    # avoid noisy red checks for external contributors. Same-repo PRs + push/cron/manual run.
+    # This is a stateful ephemeral proof: same-repo PRs and main pushes create/delete the
+    # reserved pr-999 preview. It never targets staging/prod or advances a release marker.
+    # Skip FORK PRs: they get no secrets, so the live deploy can't run — skip (not fail).
     if: >-
       ${{ ((github.event_name == 'pull_request'
             && github.event.pull_request.head.repo.full_name == github.repository)
@@ -279,6 +285,12 @@ jobs:
           || (github.event_name == 'workflow_dispatch' && (inputs.task == 'deploy-v2-canary' || inputs.task == 'all'))) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Every event uses the same reserved compose. Serialize at job scope so PR,
+    # main, schedule, and manual canaries cannot delete or observe one another's
+    # pr-999 operation. Cancellation is unsafe because it can skip finally teardown.
+    concurrency:
+      group: deploy-v2-canary-pr-999
+      cancel-in-progress: false
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
       INTERNAL_DOMAIN: zitian.party
@@ -308,7 +320,10 @@ jobs:
       - name: Run deploy_v2 canary
         env:
           VERSION_REF_INPUT: main
-          IAC_REF_INPUT: main
+          # Authority stays the exact PR SHA; Dokploy clones the separately supplied
+          # branch only after deploy_v2 proves it resolves to this same SHA.
+          IAC_REF_INPUT: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'main' }}
+          IAC_CLONE_REF_INPUT: ${{ github.event_name == 'pull_request' && github.head_ref || '' }}
           DOMAIN_INPUT: zitian.party
           TIMEOUT_INPUT: "600"
           EVENT_NAME: ${{ github.event_name }}
@@ -324,15 +339,18 @@ jobs:
           # incident (page); a PR red is CI feedback to the author (no page).
           alert_args=()
           [[ "$EVENT_NAME" != "pull_request" ]] && alert_args+=(--alert-on-failure)
+          clone_args=()
+          [[ -n "$IAC_CLONE_REF_INPUT" ]] && clone_args+=(--iac-clone-ref "$IAC_CLONE_REF_INPUT")
 
-          # The canary prints a single JSON line on success; capture it so we can assert
-          # the stack was actually torn down (no leaked ephemeral stack) before passing.
+          # Success and failure both print one JSON line with cleanup evidence. Capture it
+          # so the run summary can prove whether the ephemeral stack converged to absent.
           set +e
           out="$(python -m tools.deploy_v2_canary \
             --version-ref "$VERSION_REF_INPUT" \
             --iac-ref "$IAC_REF_INPUT" \
             --domain "$DOMAIN_INPUT" \
             --timeout "$TIMEOUT_INPUT" \
+            "${clone_args[@]}" \
             "${alert_args[@]}")"
           rc=$?
           set -e

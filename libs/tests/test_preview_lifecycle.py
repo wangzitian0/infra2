@@ -41,6 +41,7 @@ class FakeDokploy:
         source_app=True,
         source_creds=True,
         compose_status="done",
+        deployment_snapshots=None,
     ):
         self._compose_status = compose_status  # Dokploy deploy status the wait polls
         self._existing = existing  # dict returned by find_compose_by_name, or None
@@ -55,6 +56,12 @@ class FakeDokploy:
         self.deleted: list[tuple[str, bool]] = []
         self.found: list[tuple] = []
         self.ensured: list[tuple] = []
+        snapshots = deployment_snapshots or [
+            [],
+            [{"deploymentId": "dep-new", "status": "running"}],
+        ]
+        self._deployment_snapshots = iter(snapshots)
+        self._last_deployments = []
 
     def get_github_provider_id(self):
         return self._github_id
@@ -107,6 +114,13 @@ class FakeDokploy:
     def get_compose(self, compose_id):
         return {"composeId": compose_id, "composeStatus": self._compose_status}
 
+    def get_compose_deployments(self, compose_id):
+        try:
+            self._last_deployments = next(self._deployment_snapshots)
+        except StopIteration:
+            pass
+        return list(self._last_deployments)
+
     def delete_compose(self, compose_id, *, delete_volumes=False):
         self.deleted.append((compose_id, delete_volumes))
         return {}
@@ -116,17 +130,25 @@ def _ok_get(url, timeout):
     return 200, "ok"
 
 
-def test_up_fast_fails_when_dokploy_reports_deploy_error():
-    # an unpublished image / build failure -> Dokploy composeStatus=error -> bail at once,
-    # NOT wait out the full health timeout (the 10-min hang the live canary hit).
-    client = FakeDokploy(existing=None, compose_status="error")
+def test_up_fast_fails_when_current_deployment_record_reports_error():
+    # An unpublished image / build failure must fast-fail, but only after the deployment
+    # record created by THIS trigger reports error. A compose-level status is not scoped
+    # to an operation and can be stale while Dokploy is still enqueueing the new record.
+    client = FakeDokploy(
+        existing=None,
+        compose_status="error",
+        deployment_snapshots=[
+            [],
+            [{"deploymentId": "dep-new", "status": "error"}],
+        ],
+    )
     polls = {"n": 0}
 
     def never_healthy(url, timeout):
         polls["n"] += 1
         return 0, "down"
 
-    with pytest.raises(RuntimeError, match="composeStatus=error"):
+    with pytest.raises(RuntimeError, match="deployment record entered error"):
         pl.up(
             "pr",
             5,
@@ -138,6 +160,49 @@ def test_up_fast_fails_when_dokploy_reports_deploy_error():
             health_interval=10,
         )
     assert polls["n"] == 0  # failed before the first HTTP health poll — no 600s wait
+
+
+def test_up_ignores_stale_compose_error_until_current_deployment_exists():
+    # Live post-merge regression: a newly-created compose exposed composeStatus=error at
+    # 12:28:52, while the deployment record for our trigger did not appear until
+    # 12:28:57. The old poller failed before the real operation had even started.
+    client = FakeDokploy(
+        existing=None,
+        compose_status="error",
+        deployment_snapshots=[
+            [],
+            [],
+            [{"deploymentId": "dep-new", "status": "running"}],
+        ],
+    )
+
+    result = pl.up(
+        "pr",
+        5,
+        code="main",
+        domain="z.p",
+        client=client,
+        http_get=_ok_get,
+        _sleep=lambda _seconds: None,
+    )
+
+    assert result.healthy is True
+
+
+def test_up_fails_closed_when_trigger_creates_no_deployment_record():
+    client = FakeDokploy(existing=None, deployment_snapshots=[[]])
+
+    with pytest.raises(RuntimeError, match="no new Dokploy deployment record"):
+        pl.up(
+            "pr",
+            5,
+            code="main",
+            domain="z.p",
+            client=client,
+            http_get=_ok_get,
+            deployment_record_timeout=0,
+            _sleep=lambda _seconds: None,
+        )
 
 
 # --- up: create path -------------------------------------------------------------
@@ -372,7 +437,9 @@ def test_up_raises_when_health_never_passes():
             http_get=lambda u, t: (503, "down"),
             health_timeout=600,
             _sleep=lambda _s: None,
-            _monotonic=iter([0, 700]).__next__,
+            # First value starts deployment-record proof; the next two drive the
+            # health-check deadline and timeout.
+            _monotonic=iter([0, 0, 700]).__next__,
         )
     # the deploy still happened; health is a post-deploy gate, not a pre-gate
     assert client.deployed == ["cmp-new"]
@@ -507,4 +574,16 @@ def test_preview_entrypoint_overrides_environment_to_match_otel_tag():
         "ENVIRONMENT override must come AFTER `. /secrets/.env` is sourced "
         "(same ordering requirement as the DATABASE_URL override), or Vault's "
         "borrowed staging value would win"
+    )
+
+
+def test_preview_backend_health_grace_covers_fresh_database_cold_start():
+    source = COMPOSE_PATH.read_text(encoding="utf-8")
+    backend_start = source.index("\n  backend:")
+    frontend_start = source.index("\n  frontend:")
+    backend_block = source[backend_start:frontend_start]
+
+    assert "start_period: ${BACKEND_HEALTHCHECK_START_PERIOD:-300s}" in backend_block, (
+        "the complete fresh-DB migration chain and Uvicorn import take about four "
+        "minutes in live proof; a shorter default makes compose abort a healthy cold start"
     )

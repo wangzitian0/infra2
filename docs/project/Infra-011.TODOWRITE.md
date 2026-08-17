@@ -28,6 +28,7 @@
 | Infra-011.19 | IaC deployment operations bind environment, exact ref, and normalized service set to one opaque ID; release fidelity uses exact deploy ref plus a secret-independent source fingerprint, while runtime fingerprint remains the idempotence gate. | `libs/tests/test_iac_runner_client.py`, `libs/tests/test_iac_runner_deploy_result.py`, `libs/tests/test_deployer.py`, `libs/tests/test_dokploy_config_drift.py`, `docs/ssot/ops.pipeline.md` |
 | Infra-011.20 | Every infra2 workflow uses the supported Node.js 24 major for governed official JavaScript Actions, and a repository-wide contract test rejects future stale-major additions or regressions. | `libs/tests/test_workflow_reference_contract.py`, `.github/workflows/reconcile-iac-inputs.yml`, `docs/ssot/ops.pipeline.md` |
 | Infra-011.21 | Observation failures never become empty reality; production desired state follows an immutable promotion marker; runtime-only deployers remain source-recomputable without secrets; Dokploy/runtime disagreement is explicit and non-silent. | `libs/tests/test_dns_drift_report.py`, `libs/tests/test_dokploy_config_drift.py`, `libs/tests/test_reconcile_iac_inputs.py`, `libs/tests/test_out_of_band_watchdog.py` |
+| Infra-011.22 | Preview/canary deploy proof is current-operation scoped, the singleton slot is serialized, and teardown proof requires stable observed absence and remains visible on failure. | `libs/tests/test_preview_lifecycle.py`, `libs/tests/test_preview_teardown_convergence.py`, `libs/tests/test_deploy_v2_canary.py`, `libs/tests/test_sdk_contract_adoption.py`, `.github/workflows/ops-checks.yml` |
 
 ## Issue Mapping
 
@@ -67,6 +68,7 @@
 - [x] Add signal ownership inventory and watchdog consistency audit.
 - [x] Upgrade the release reconcile workflow to Node.js 24 Actions and enforce repository-wide minimum majors.
 - [x] Harden observation truth, production target identity, secret-free source identity, and control/runtime discrepancy classification.
+- [x] Bind preview canary deploy/teardown evidence to the current operation and stable absence.
 - [x] Run full lint/test suite.
 - [x] Open PR.
 
@@ -138,3 +140,14 @@
   record the marker. Until that high-risk step is approved and succeeds, config drift and
   App production requests intentionally fail closed as unknown desired state.
 - Proof: full `libs/tests` (`1324 passed`), Ruff, changed-file Ruff format, compileall, workflow YAML parse, affected E2E collection, MkDocs build, harness manifest/status, and `git diff --check` passed.
+
+## 2026-08-17 Canary Operation Evidence Hardening
+
+- Post-merge canary evidence showed `composeStatus=error` five seconds before the current deploy's record existed; source image pull and the same app revision were independently healthy.
+- Reused the shared deployment-record waiter so preview acceptance ignores unscoped compose status and binds only records absent from the pre-trigger snapshot.
+- Made cleanup proof require two consecutive absent observations and emit `torn_down` even when deployment fails; the reserved `pr-999` stack from the incident was verified absent after exact cleanup.
+- Added the preview/rollout libraries to the live-canary path filters and documented that PR/main canaries are stateful ephemeral deploy-and-teardown proofs, not staging or production promotion.
+- Serialized the reserved singleton slot across PR/main/schedule/manual jobs with cancellation disabled, preventing concurrent canaries from deleting or accepting one another's evidence.
+- Live diagnosis proved the app image, Vault Agent, and ephemeral Postgres healthy; the complete migration chain succeeded, but the 60-second backend health grace expired before Uvicorn finished importing, so compose aborted before starting the frontend.
+- Raised only the Finance preview cold-start grace to 300 seconds under the existing 600-second public readiness deadline. PR canaries keep the exact head SHA as authority and clone the head branch only after proving it resolves to that SHA, so compose changes are tested without weakening ref red lines.
+- Local proof: full `libs/tests` (`1344 passed`), focused ref/deploy_v2/rollout/preview/canary regressions (`202 passed`), CI-pinned Ruff, compileall, workflow YAML/contracts, MkDocs build, and `git diff --check` passed.

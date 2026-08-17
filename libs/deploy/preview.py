@@ -41,6 +41,7 @@ from urllib.request import Request, urlopen
 import httpx  # the injected Dokploy client raises httpx errors on a transient API blip
 
 from libs.common import infra_domain
+from libs.deploy.rollout import wait_for_deployment
 from libs.deploy_env_config import (
     PREVIEW_ENVIRONMENT,
     PreviewAlias,
@@ -68,6 +69,8 @@ _SOURCE_APP_COMPOSE = "app"
 # env's secret path, so it reuses that env's role verbatim — the same creds staging itself
 # runs with (injected once by `invoke setup-approle`); see _source_app_vault_creds.
 _VAULT_CRED_KEYS = ("VAULT_ADDR", "VAULT_ROLE_ID", "VAULT_SECRET_ID")
+_DEPLOYMENT_RECORD_TIMEOUT_SECONDS = 60
+_DEPLOYMENT_RECORD_INTERVAL_SECONDS = 3
 
 
 def _source_app_vault_creds(client, project: str, source_env: str) -> dict[str, str]:
@@ -79,7 +82,9 @@ def _source_app_vault_creds(client, project: str, source_env: str) -> dict[str, 
     deploy time because a throwaway alias is recreated each ``up`` (and deleted on ``down``),
     so it can never rely on a manual one-time injection persisting the way a fixed env does.
     """
-    comp = client.find_compose_by_name(_SOURCE_APP_COMPOSE, project, env_name=source_env)
+    comp = client.find_compose_by_name(
+        _SOURCE_APP_COMPOSE, project, env_name=source_env
+    )
     if not comp:
         raise RuntimeError(
             f"cannot source preview Vault creds: no {_SOURCE_APP_COMPOSE!r} compose in "
@@ -220,6 +225,8 @@ def up(
     wait: bool = True,
     health_timeout: int = 600,
     health_interval: int = 10,
+    deployment_record_timeout: int = _DEPLOYMENT_RECORD_TIMEOUT_SECONDS,
+    deployment_record_interval: int = _DEPLOYMENT_RECORD_INTERVAL_SECONDS,
     repo: str | None = None,
     http_get=None,
     _now=time.time,
@@ -254,9 +261,7 @@ def up(
     # Inject the runtime AppRole creds the preview vault-agent logs in with — the same
     # role the source env runs with. Without them vault-agent crash-loops and the app
     # never becomes healthy. Merged before the compose env is pushed below.
-    env_vars.update(
-        _source_app_vault_creds(client, config.project, config.secret_env)
-    )
+    env_vars.update(_source_app_vault_creds(client, config.project, config.secret_env))
 
     # Find-or-create THIS alias's compose by its deterministic name. The GitHub source
     # fields make Dokploy pull the preview compose template (+ its mounted vault files)
@@ -334,19 +339,58 @@ def up(
     client.update_compose(compose_id, **source_fields)
     client.update_compose_env(compose_id, env_vars=env_vars)
 
+    # Compose status is not operation-scoped. In live Dokploy a newly-created compose
+    # exposed composeStatus=error for five seconds before THIS deploy's record appeared,
+    # so treating that field as current-operation proof killed a healthy canary early.
+    # Snapshot first, trigger once, then bind every fast-fail decision to a deployment
+    # record absent from the snapshot (the same identity rule fixed deployer sync).
+    before_deployments = client.get_compose_deployments(compose_id) or []
+    before_ids = {
+        str(deployment.get("deploymentId") or deployment.get("id") or "")
+        for deployment in before_deployments
+        if deployment.get("deploymentId") or deployment.get("id")
+    }
     client.deploy_compose(compose_id)
+    rollout = wait_for_deployment(
+        lambda: client.get_compose_deployments(compose_id),
+        before_ids,
+        timeout_seconds=min(deployment_record_timeout, health_timeout),
+        interval_seconds=max(1, deployment_record_interval),
+        require_terminal=False,
+        raise_on_error=True,
+        raise_on_timeout=False,
+        _sleep=_sleep,
+        _now=_monotonic,
+    )
+    if not rollout.ok:
+        raise RuntimeError(
+            "preview deploy created no new Dokploy deployment record within "
+            f"{min(deployment_record_timeout, health_timeout)}s (compose {compose_id})"
+        )
+    operation_ids = set(rollout.new_ids)
 
     healthy: bool | None = None
     url = alias.app_url(domain=domain, base_subdomain=config.base_subdomain)
     if wait:
 
         def _deploy_status():
-            # Best-effort: a transient API blip returns None (keep waiting on HTTP); only a
-            # definitive "error" status short-circuits the wait.
+            # Best-effort: a transient API blip returns None (keep waiting on HTTP). Only
+            # an explicit error on THIS trigger's new deployment record may fast-fail;
+            # composeStatus is deliberately ignored because it is stale/unscoped.
             try:
-                return (client.get_compose(compose_id) or {}).get("composeStatus")
+                deployments = client.get_compose_deployments(compose_id) or []
             except httpx.HTTPError:
                 return None
+            for deployment in deployments:
+                deployment_id = str(
+                    deployment.get("deploymentId") or deployment.get("id") or ""
+                )
+                if (
+                    deployment_id in operation_ids
+                    and str(deployment.get("status") or "").lower() == "error"
+                ):
+                    return "error"
+            return None
 
         healthy = _wait_for_health(
             f"{url}/api/health",
@@ -445,18 +489,18 @@ def _wait_for_health(
     """Poll ``health_url`` until it returns HTTP 200, or the deadline passes.
 
     Returns True on the first 200, False if the window elapses first. If ``deploy_status``
-    is given and reports ``"error"``, raise immediately — the deploy itself failed (e.g. an
-    unpublished image or a build error), so the stack can NEVER become healthy and waiting
-    out the full timeout only hides the real reason. Side-effect free apart from the
-    injected getter/status, so tests drive it with a fake clock + fake getter.
+    is given and reports ``"error"``, raise immediately — the current operation's
+    deployment record failed, so the stack can never become healthy and waiting out the
+    full timeout only hides the real reason. Side-effect free apart from the injected
+    getter/status, so tests drive it with a fake clock + fake getter.
     """
     getter = http_get or _http_get
     deadline = _now() + max(0, timeout)
     while True:
         if deploy_status is not None and deploy_status() == "error":
             raise RuntimeError(
-                f"deploy failed (Dokploy composeStatus=error) before {health_url} became "
-                "healthy — check the Dokploy deploy log (image not published / build error?)"
+                "current Dokploy deployment record entered error before "
+                f"{health_url} became healthy — check the deployment log"
             )
         status, _ = getter(health_url, 10)
         if status == 200:

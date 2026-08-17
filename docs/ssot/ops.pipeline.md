@@ -178,6 +178,20 @@ App 不再 checkout/执行 infra2。发送 `repository_dispatch` type `app-deplo
 4. staging/prod 的 `iac_ref` 由 infra2 选择为 `HEAD` 已包含的最新 `vX.Y.Z`，App 不再钉 infra submodule。
 5. 固定环境先跑同坐标 canary；通过后才调用既有 `deploy_v2`，Dokploy/Vault 凭据只存在于 infra2。
 
+Preview/canary 的 deploy proof 必须绑定**本次 operation**：触发前 snapshot compose 的
+deployment IDs，触发后只接受新增 record；当前 operation 没有产生 record 时 fail-closed，
+当前 record 进入 `error` 时 fast-fail。`composeStatus` 没有 operation identity，可能是陈旧值，
+不得作为本次 deploy 的成功或失败证据。same-repo PR 与 `main` push 的 canary 会创建并拆除
+保留的 `pr-999` 临时 preview；它是 stateful ephemeral proof，不触碰 staging/prod，也不推进
+production marker。所有事件类型的 `pr-999` job 共用一个不可取消的 concurrency group，禁止
+PR/main/schedule/manual canary 互删资源或互认 operation evidence。PR canary 必须以
+exact head SHA 作为权威 `iac_ref`，并另传 `github.head_ref` 作为 clone ref；前门必须证明
+`refs/heads/<branch>` 精确解析到同一 SHA 后才克隆；clone-only resolver 不扩大合法 deploy ref
+surface。否则改变 preview 模板的 PR 会错误地测试 `main` 旧模板，
+或用非权威 branch 替代已记录 SHA。fresh DB preview 在应用监听端口前执行完整 migration 与
+import，backend healthcheck 提供 300 秒 cold-start grace，外层 public-health gate 仍以 600 秒
+fail-closed，grace 不得替代最终 readiness proof。
+
 Finance Report 的 staging/prod/rollback 已全部 cut over 到 receiver，App 仓库不再
 checkout 或执行 infra2 源码。Production 没有 CLI bypass；receiver 通过只读 GitHub API
 取得远端事实后，才可附加既有 `--staging-validated --code-reviewed` red-line
@@ -347,6 +361,13 @@ git fetch --tags && git tag -l "v*.*.*" | sort -V | tail -5
 **生命周期是严格 1:1**:infra2 起一个 preview,就负责在它的 PR 关闭时把它拆掉。preview 是被**强势管理**的资源,**不靠定期 GC 兜底**——残留的 preview 是**异常**(teardown 被跳过或失败),不是常态。
 
 **事件驱动的拆除归 infra2**(app 不碰 Dokploy):PR 关闭时,app repo 发一个中立信号(`repository_dispatch` type `preview-teardown`,`client_payload.pr_number`),`preview-teardown.yml` 收到后走统一前门 `deploy_v2 --type preview/pr --version-ref <n> --down`(幂等)做权威拆除;失败 → 飞书告警(泄露将至)。app 侧不再自己拆。
+
+**Delete acknowledgement 不是 teardown proof。** Dokploy 的 delete 可能与仍在排队的 deploy
+竞态；canary 只有在 bounded retry 内连续两次重新查询都确认 compose 不存在时，才输出
+`torn_down=true`。部署失败路径同样必须输出结构化 `StageResult` 与 `torn_down`；无法证明稳定
+消失时保持失败并告警，不得让原始部署错误掩盖资源泄露，也不得让 teardown 错误替换原始根因。
+`pr-999` 因为是保留 canary slot 不进入通用 leak detector，因此它的 cleanup proof 必须由
+canary job 自身 fail-closed 承担。
 
 **泄露 = 告警,不是静默清理。** 每小时的 `ops-checks` job `preview-leak-check`(`47 * * * *`)只**检测**:列出 `finance_report/preview` 下的 compose,把两类无歧义的孤儿判为泄露——
 

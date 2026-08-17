@@ -51,6 +51,7 @@ class ConvergenceFakeDokploy:
             str, str
         ] = {}  # assigned appName -> composeId (ephemeral DB)
         self._seq = 0
+        self._deploy_started = False
 
     # --- read side ---------------------------------------------------------
     def get_github_provider_id(self):
@@ -93,10 +94,16 @@ class ConvergenceFakeDokploy:
         return {}
 
     def deploy_compose(self, compose_id):
+        self._deploy_started = True
         return {}
 
     def get_compose(self, compose_id):
         return {"composeId": compose_id, "composeStatus": "done"}
+
+    def get_compose_deployments(self, compose_id):
+        if not self._deploy_started:
+            return []
+        return [{"deploymentId": f"dep-{compose_id}", "status": "running"}]
 
     def delete_compose(self, compose_id, *, delete_volumes=False):
         # Dokploy deletes by composeId and prunes the docker project under the appName IT

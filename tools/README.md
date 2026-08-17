@@ -143,11 +143,23 @@ invoke dokploy.env-ensure --project=platform --env=staging --description="stagin
 
 End-to-end proof for the unified deploy primitive. It deploys Finance Report to
 the reserved `pr-999` slot, verifies public health, and tears the stack and
-ephemeral database down in `finally`. Success output and failure alerts include
-an `infra2_sdk.delivery.StageResult` whose target contains the resolved code and
-IaC SHAs; `--no-wait` is recorded as `skip`, never as a smoke pass.
-Scheduled/post-merge failures page through the out-of-band Feishu path, while
-PR failures remain CI-only.
+ephemeral database down in `finally`. Deploy acceptance is bound to a deployment
+record created by the current trigger; stale compose-level status is never used
+as operation proof. Cleanup succeeds only after two consecutive observations
+that the compose is absent, so an asynchronous delete acknowledgement or queued
+deploy cannot silently masquerade as teardown.
+
+Success and failure output include cleanup evidence plus an
+`infra2_sdk.delivery.StageResult` whose target contains the resolved code and
+IaC SHAs; `--no-wait` is recorded as `skip`, never as a smoke pass. Same-repo PR
+and `main` push runs are stateful ephemeral proofs: they create/delete only the
+reserved preview slot and never target staging/production or advance a promotion
+marker. A fixed, non-cancelling job concurrency group serializes that singleton
+slot across PR/main/schedule/manual runs. PR runs keep the exact head SHA as IaC
+authority and clone their head branch only after it resolves to that SHA, so
+compose-template changes are tested before merge; main/schedule runs use `main`.
+Scheduled/post-merge failures page through the out-of-band Feishu path, while PR
+failures remain CI-only.
 
 ```bash
 uv run python -m tools.deploy_v2_canary \

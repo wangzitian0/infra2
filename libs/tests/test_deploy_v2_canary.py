@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -20,6 +21,11 @@ from tools.deploy_v2_canary import _CANARY_PR, run_canary
 
 SHA_CODE = "e" * 40
 SHA_IAC = "f" * 40
+
+
+@pytest.fixture(autouse=True)
+def _no_real_teardown_sleep(monkeypatch):
+    monkeypatch.setattr(canary.time, "sleep", lambda *_: None)
 
 
 def _fake_target():
@@ -64,6 +70,7 @@ def spies(monkeypatch):
 
     def fake_down(kind, value, **kw):
         rec["down"] = {"kind": kind, "value": value, **kw}
+        return SimpleNamespace(compose_id=None)
 
     monkeypatch.setattr(canary, "deploy_v2", fake_deploy_v2)
     monkeypatch.setattr(canary, "down", fake_down)
@@ -109,6 +116,7 @@ def test_teardown_runs_even_when_deploy_raises(monkeypatch):
 
     def fake_down(kind, value, **kw):
         rec["down"] = (kind, value)
+        return SimpleNamespace(compose_id=None)
 
     monkeypatch.setattr(canary, "deploy_v2", boom)
     monkeypatch.setattr(canary, "down", fake_down)
@@ -178,6 +186,7 @@ def test_best_effort_down_retries_then_succeeds(monkeypatch):
         calls["n"] += 1
         if calls["n"] < 2:
             raise httpx.HTTPError("transient 502")
+        return SimpleNamespace(compose_id=None)
 
     monkeypatch.setattr(canary, "down", flaky)
     ok = canary._best_effort_down(
@@ -186,7 +195,52 @@ def test_best_effort_down_retries_then_succeeds(monkeypatch):
         service="finance_report/app",
         _sleep=lambda *_: None,
     )
-    assert ok is True and calls["n"] == 2
+    # One retry clears the API error, then two consecutive absent reads prove stable
+    # convergence instead of treating one delete response as cleanup proof.
+    assert ok is True and calls["n"] == 3
+
+
+def test_best_effort_down_rechecks_until_delete_converges(monkeypatch):
+    calls = {"n": 0}
+
+    def asynchronous_delete(kind, value, **kw):
+        calls["n"] += 1
+        return SimpleNamespace(compose_id="cmp" if calls["n"] == 1 else None)
+
+    monkeypatch.setattr(canary, "down", asynchronous_delete)
+    ok = canary._best_effort_down(
+        domain="z.p",
+        client=object(),
+        service="finance_report/app",
+        attempts=4,
+        _sleep=lambda *_: None,
+    )
+
+    assert ok is True
+    assert calls["n"] == 3  # delete requested, then absence confirmed twice
+
+
+def test_best_effort_down_rejects_delete_response_without_convergence(
+    monkeypatch, capsys
+):
+    calls = {"n": 0}
+
+    def never_disappears(kind, value, **kw):
+        calls["n"] += 1
+        return SimpleNamespace(compose_id="cmp")
+
+    monkeypatch.setattr(canary, "down", never_disappears)
+    ok = canary._best_effort_down(
+        domain="z.p",
+        client=object(),
+        service="finance_report/app",
+        attempts=3,
+        _sleep=lambda *_: None,
+    )
+
+    assert ok is False
+    assert calls["n"] == 3
+    assert "still present" in capsys.readouterr().err
 
 
 def test_best_effort_down_warns_and_returns_false_on_persistent_failure(
@@ -233,6 +287,28 @@ def test_run_canary_teardown_failure_does_not_mask_deploy_error(monkeypatch, cap
             version_ref="main",
         )
     assert "teardown failed" in capsys.readouterr().err
+
+
+def test_run_canary_attaches_cleanup_evidence_to_deploy_error(monkeypatch):
+    def boom_deploy(**kw):
+        raise RuntimeError("deployment record entered error")
+
+    def converged_down(kind, value, **kw):
+        return SimpleNamespace(compose_id=None)
+
+    monkeypatch.setattr(canary, "deploy_v2", boom_deploy)
+    monkeypatch.setattr(canary, "down", converged_down)
+    monkeypatch.setattr(canary.time, "sleep", lambda *_: None)
+
+    with pytest.raises(RuntimeError, match="deployment record entered error") as caught:
+        run_canary(
+            client=object(),
+            service="finance_report/app",
+            domain="z.p",
+            version_ref="main",
+        )
+
+    assert caught.value.torn_down is True
 
 
 # --- probe alerting: failure classification + out-of-band delivery ----------
@@ -364,6 +440,22 @@ def test_main_no_alert_without_flag(monkeypatch):
     assert rc == 1 and "text" not in sent  # PR-style run: no out-of-band page
 
 
+def test_main_failure_prints_structured_cleanup_evidence(monkeypatch, capsys):
+    def boom(**kw):
+        exc = RuntimeError("deployment record entered error")
+        exc.torn_down = True
+        raise exc
+
+    _main_with(monkeypatch, boom)
+    rc = canary.main(["--version-ref", "main", "--iac-ref", "main", "--domain", "z.p"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 1
+    assert payload["ok"] is False
+    assert payload["torn_down"] is True
+    assert payload["stage_result"]["status"] == "fail"
+
+
 def test_main_no_wait_emits_skip_evidence(monkeypatch, capsys):
     import libs.dokploy as dk
 
@@ -449,6 +541,19 @@ def test_run_canary_forwards_service_to_deploy_v2(spies):
         version_ref="main",
     )
     assert spies["deploy"]["service"] == "finance_report/app"
+
+
+def test_run_canary_forwards_exact_iac_authority_and_clone_ref(spies):
+    run_canary(
+        client=object(),
+        service="finance_report/app",
+        domain="zitian.party",
+        version_ref="main",
+        iac_ref=SHA_IAC,
+        iac_clone_ref="fix/preview-proof",
+    )
+    assert spies["deploy"]["iac_ref"] == SHA_IAC
+    assert spies["deploy"]["iac_clone_ref"] == "fix/preview-proof"
 
 
 def test_main_iterates_registry_canary_services(monkeypatch, capsys):

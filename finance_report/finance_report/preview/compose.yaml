@@ -219,7 +219,10 @@ services:
         exec uvicorn src.main:app --host 0.0.0.0 --port 8000
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
-      start_period: ${BACKEND_HEALTHCHECK_START_PERIOD:-60s}
+      # A fresh preview runs the complete Alembic chain before Uvicorn imports the app.
+      # Live proof on bde74c8 took about four minutes; 60s marked a healthy cold start
+      # unhealthy and made compose abort before it could start the frontend.
+      start_period: ${BACKEND_HEALTHCHECK_START_PERIOD:-300s}
       interval: 10s
       retries: 3
       timeout: 5s

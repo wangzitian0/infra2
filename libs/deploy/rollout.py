@@ -1,19 +1,9 @@
-"""Unified Dokploy deployment-rollout poller (D5 — DRAFT proposal).
+"""Operation-scoped Dokploy deployment-rollout polling.
 
-Today there are THREE near-duplicate pollers that each wait for a NEW Dokploy
-deployment record to appear and settle, but with divergent contracts:
-
-| caller                                            | returns       | success rule              | on error      | on timeout        |
-|---------------------------------------------------|---------------|---------------------------|---------------|-------------------|
-| ``deploy.deployer._wait_for_new_deployment_record``| ``bool``      | ``running`` is OK (a health  | raise         | return ``False``  |
-|                                                   |               | check follows)            |               |                   |
-| ``deploy.promote.wait_for_rollout``               | ``dict``      | poll PAST ``running`` to a   | raise         | raise TimeoutError|
-|                                                   |               | terminal-good status      |               |                   |
-| (retired, #543) ``dokploy_route_canary``          | ``CanaryStep``| ``running``/done is OK       | classify (no  | classify (no      |
-|                                                   |               |                           | raise)        | raise)            |
-
-This module proposes ONE poller that spans all three via three flags, so each
-caller keeps its exact behaviour while sharing the loop:
+Callers snapshot deployment IDs before triggering a deploy, then this poller
+accepts only records absent from that snapshot. This prevents stale compose or
+deployment state from being mistaken for evidence about the current operation.
+The flags support the two useful wait contracts:
 
 - ``require_terminal``  — False: ``running``/done ends the wait (deployer, canary);
                           True: keep polling until a terminal-good status (promote).
@@ -22,11 +12,9 @@ caller keeps its exact behaviour while sharing the loop:
 - ``raise_on_timeout``  — True: raise ``TimeoutError`` (promote);
                           False: return a ``timeout`` result (deployer, canary).
 
-It returns a rich :class:`RolloutResult`; each caller maps that to its own return
-type (bool / dict / CanaryStep). **This PR adds the poller + tests only — it does
-NOT rewire the three callers.** Migrating them (and whether the deploy strategy
-host is ``libs/deploy`` or the app framework — the open (a)/(b) decision) is the
-discussion this draft exists for.
+It returns a rich :class:`RolloutResult`; callers map that to their public result
+type. Preview deployment uses the non-terminal contract because public health is
+the following readiness gate.
 """
 
 from __future__ import annotations
