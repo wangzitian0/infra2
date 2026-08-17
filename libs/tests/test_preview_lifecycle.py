@@ -573,6 +573,24 @@ def test_versioned_readiness_rejects_unknown_version_source():
         )
 
 
+def test_versioned_readiness_accepts_match_from_any_declared_field():
+    assert (
+        pl._wait_for_readiness(
+            "https://x",
+            (pl.PreviewReadinessProbe("/version", ("git_sha", "version")),),
+            expected_versions={"runtime": SHORT_SHA},
+            timeout=0,
+            interval=10,
+            http_get=lambda _u, _t: (
+                200,
+                f'{{"git_sha":"{FULL_SHA}","version":"{SHORT_SHA}"}}',
+            ),
+            _now=lambda: 0,
+        )
+        is True
+    )
+
+
 def test_http_get_reads_enough_body_for_version_metadata(monkeypatch):
     class Response:
         status = 200

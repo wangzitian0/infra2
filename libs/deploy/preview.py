@@ -527,15 +527,11 @@ def _wait_for_readiness(
                 if not isinstance(payload, dict):
                     all_ready = False
                     continue
-                actual = next(
-                    (
-                        str(payload[field])
-                        for field in probe.version_fields
-                        if payload.get(field) is not None
-                    ),
-                    "",
-                )
-                if actual != expected_version:
+                if not any(
+                    str(payload[field]) == expected_version
+                    for field in probe.version_fields
+                    if payload.get(field) is not None
+                ):
                     all_ready = False
         if all_ready:
             return True
