@@ -267,6 +267,9 @@ infra2 当前固定 `infra2-sdk==0.3.0` 的不可变 release wheel；`deploy_v2_
 真实 producer：健康路径把 `StageResult` 写入 job summary JSON，失败路径把同一记录放入
 带外告警，并将控制面/配置/运行时/清理故障映射为 SDK 标准 failure domain。成功证据的
 `target` 必须记录已解析 code/IaC SHA；禁用健康检查的 `--no-wait` 只能记录带原因的 `skip`。
+Canary 的 `deadline_ms` 必须来自同一次调用显式声明的 `--timeout`，使执行门禁与证据预算共享
+一个 hard deadline；不得一边按 600 秒执行、一边静默套用 SDK 的 180 秒默认值而产生
+`pass + hard-breach` 自相矛盾的证据。
 
 必填:`source` · `environment`(`local`/`pr`/`pr-preview`/`staging`/`production`)· `stage` · `target` ·
 `status`(`pass`/`fail`/`skip`/`warn`/`running`)· `duration_ms`/`deadline_ms` · `failure_domain`(失败必填)·

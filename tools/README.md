@@ -158,6 +158,8 @@ marker. A fixed, non-cancelling job concurrency group serializes that singleton
 slot across PR/main/schedule/manual runs. PR runs keep the exact head SHA as IaC
 authority and clone their head branch only after it resolves to that SHA, so
 compose-template changes are tested before merge; main/schedule runs use `main`.
+The emitted StageResult uses the same explicit `--timeout` as its hard deadline,
+so a functional pass cannot be mislabeled by an unrelated SDK default budget.
 Scheduled/post-merge failures page through the out-of-band Feishu path, while PR
 failures remain CI-only.
 

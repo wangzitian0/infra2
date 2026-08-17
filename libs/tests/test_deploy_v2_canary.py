@@ -360,6 +360,8 @@ def test_failure_stage_result_uses_sdk_contract(domain, expected, external_depen
     assert result.failure_domain == expected
     assert result.external_dependency is external_dependency
     assert result.duration_ms == 123
+    assert result.deadline_ms == 600_000
+    assert result.budget_status.value == "within-budget"
     assert result.evidence_url.endswith("/1")
 
 
@@ -380,6 +382,7 @@ class _Args:
     version_ref = "main"
     iac_ref = "main"
     domain = "z.p"
+    timeout = 600
 
 
 def test_alert_failure_is_best_effort(monkeypatch, capsys):

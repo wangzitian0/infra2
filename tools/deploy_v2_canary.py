@@ -246,7 +246,12 @@ def make_canary_stage_result(
     resolved_target: DeployTarget | None = None,
     skipped_reason: str = "",
 ) -> StageResult:
-    """Build machine-readable canary evidence using the released SDK contract."""
+    """Build machine-readable canary evidence using the released SDK contract.
+
+    The CLI's explicit timeout is the canary's one hard deadline. Passing it into the
+    SDK keeps the functional gate and budget evidence on the same clock instead of
+    silently falling back to the generic deploy-smoke default.
+    """
     status_value = StageStatus(status)
     failure = (
         _SDK_FAILURE_DOMAIN.get(domain or "", FailureDomain.UNKNOWN)
@@ -266,6 +271,7 @@ def make_canary_stage_result(
         target=target,
         status=status_value,
         duration_ms=duration_ms,
+        deadline_ms=max(0, int(args.timeout)) * 1000,
         failure_domain=failure,
         external_dependency=(domain or "") in _EXTERNAL_FAILURE_DOMAINS,
         skipped_reason=skipped_reason,

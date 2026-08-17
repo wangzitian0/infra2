@@ -145,6 +145,7 @@ Dependencies:
 | A PR changes the preview compose while its canary clones `main`. | The workflow records the exact head SHA as authority, passes `github.head_ref` only as a clone ref, and the front door proves both resolve to the same commit before Dokploy clones it. |
 | A non-idempotent `compose.create` commits but its HTTP response times out. | Do not retry the POST; read the deterministic alias name, continue only if that exact record appears, otherwise preserve the original timeout. |
 | A fresh DB migration and application import exceed the old 60/300-second backend health grace. | Backend remains in startup for up to 450 seconds; bounded retries keep the inner ceiling near 480 seconds, so the outer 600-second public readiness gate still fails a real hang. |
+| A canary executes with `--timeout 600` but StageResult silently uses the SDK's 180-second default. | The explicit canary timeout is also its evidence `deadline_ms`; a normal functional pass remains `within-budget`, while a real end-to-end overrun stays visible. |
 | Staging service code is unchanged. | Acceleration may skip expensive staging work only when the stage contract proves the skip and records `skipped_reason`. |
 
 ## Validation
