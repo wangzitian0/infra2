@@ -89,3 +89,38 @@ def test_expected_records_strips_wrapping_quotes(monkeypatch) -> None:
     monkeypatch.setenv("INTERNAL_DOMAIN", "x")
     monkeypatch.setenv("CF_RECORDS", '"cloud,op"')
     assert m._expected_records(_DummyDns) == ["cloud.x", "op.x"]  # no stray quote
+
+
+def test_actual_records_never_turns_observation_failure_into_empty_zone(
+    monkeypatch,
+) -> None:
+    """A Cloudflare 401/transport failure is unknown reality, never zero records."""
+    m = _mod()
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    class _DummyDns:
+        @staticmethod
+        def _cloudflare_client(_token):
+            return _Client()
+
+        @staticmethod
+        def _resolve_zone_id(_client, _zone_id, _zone_name):
+            return "zone-1"
+
+        @staticmethod
+        def _cf_request(_client, _method, _path, **_kwargs):
+            return None
+
+    monkeypatch.setenv("CF_API_TOKEN", "expired")
+    monkeypatch.setenv("CF_ZONE_ID", "zone-1")
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="observation failed"):
+        m._actual_records(_DummyDns)

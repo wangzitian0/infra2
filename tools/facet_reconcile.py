@@ -8,7 +8,7 @@ job with its own hand-copied alert step:
   ``17 7 * * *``): hardcoded bespoke-app Dokploy compose_ids vs live Dokploy.
 - **config drift** (`tools/dokploy_config_drift.py`, was
   ``config-drift-report.yml``): declared IaC source-config hash at the latest
-  release tag vs the deployed hash.
+  explicit production marker vs the deployed hash.
 - **dns drift** (`tools/dns_drift_report.py`, was ``dns-drift-report.yml``):
   declared DNS records vs live Cloudflare.
 
@@ -76,13 +76,13 @@ def run_config_drift_section() -> Section:
     section = Section("config-hash")
     try:
         from tools.dokploy_config_drift import (
-            _latest_release_tag,
+            _production_target_tag,
             format_report,
             scan,
             strict_blockers,
         )
 
-        tag = _latest_release_tag()
+        tag = _production_target_tag()
         rows = scan(tag)
     except (Exception, SystemExit) as exc:  # noqa: BLE001 — dokploy_config_drift
         # raises SystemExit("no v* release tag found") on a tagless checkout;
@@ -101,7 +101,11 @@ def run_config_drift_section() -> Section:
 def run_dns_section() -> Section:
     section = Section("dns")
     have_zone = bool(os.environ.get("CF_ZONE_ID") or os.environ.get("CF_ZONE_NAME"))
-    if not (os.environ.get("CF_API_TOKEN") and os.environ.get("INTERNAL_DOMAIN") and have_zone):
+    if not (
+        os.environ.get("CF_API_TOKEN")
+        and os.environ.get("INTERNAL_DOMAIN")
+        and have_zone
+    ):
         # preserved semantics: not-yet-configured is a visible skip, never a red
         section.skipped = "Cloudflare credentials not configured"
         section.report = "dns: skipped (Cloudflare credentials not configured)"

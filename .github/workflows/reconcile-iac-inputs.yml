@@ -32,7 +32,8 @@ name: Reconcile IaC Inputs
         default: false
 
 permissions:
-  contents: read
+  # Explicit production promotion records an immutable production/v* marker.
+  contents: write
 
 concurrency:
   group: iac-input-reconcile-main
@@ -93,8 +94,24 @@ jobs:
           fi
 
           before="${INPUT_BEFORE:-}"
-          if [[ -z "$before" ]]; then
-            # Most recent release tag strictly before `after` (empty on the first release).
+          if [[ "$promote_prod" == "true" ]]; then
+            # Production is cumulative from its own desired-state marker, not from
+            # the previous staging candidate.  Otherwise vN+1/vN+2 staging-only
+            # changes are silently skipped when vN+3 is finally promoted.
+            production_marker="$(git tag --list 'production/v*.*.*' --sort=-v:refname | head -n1 || true)"
+            if [[ -n "$production_marker" ]]; then
+              production_before="${production_marker#production/}"
+              if [[ -n "$before" && "$before" != "$production_before" ]]; then
+                echo "::error::production before must match $production_marker; got '$before'."
+                exit 1
+              fi
+              before="$production_before"
+            elif [[ -z "$before" ]]; then
+              echo "::error::first production marker requires an explicit known-production 'before' release."
+              exit 1
+            fi
+          elif [[ -z "$before" ]]; then
+            # Staging remains incremental from the immediately previous release.
             before="$(git tag --list 'v*.*.*' --sort=-v:refname --merged "${after}^" 2>/dev/null | head -n1 || true)"
           fi
           echo "Promoting release tag '$after' (base '${before:-<none>}')"

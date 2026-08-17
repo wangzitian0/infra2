@@ -36,6 +36,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       requires_preflight_canary: ${{ steps.plan.outputs.requires_preflight_canary }}
+      iac_ref: ${{ steps.plan.outputs.iac_ref }}
     steps:
       - name: Checkout released infra context
         uses: actions/checkout@v7
@@ -62,7 +63,9 @@ jobs:
           # below reads this output instead of re-deriving deploy_type/operation itself, so the
           # two can never drift apart.
           needs_canary="$(printf '%s' "$plan" | python -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["requires_preflight_canary"]))')"
+          iac_ref="$(printf '%s' "$plan" | python -c 'import json,sys; print(json.load(sys.stdin)["iac_ref"])')"
           echo "requires_preflight_canary=$needs_canary" >> "$GITHUB_OUTPUT"
+          echo "iac_ref=$iac_ref" >> "$GITHUB_OUTPUT"
 
   preflight_canary:
     name: preflight requested artifact
@@ -77,6 +80,7 @@ jobs:
       cancel-in-progress: false
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+      VALIDATED_IAC_REF: ${{ needs.validate.outputs.iac_ref }}
     steps:
       - name: Checkout released infra context
         uses: actions/checkout@v7
@@ -102,7 +106,7 @@ jobs:
             --repo-root .)"
           service="$(printf '%s' "$plan" | python -c 'import json,sys; print(json.load(sys.stdin)["request"]["service"])')"
           version_ref="$(printf '%s' "$plan" | python -c 'import json,sys; print(json.load(sys.stdin)["request"]["version_ref"])')"
-          iac_ref="$(printf '%s' "$plan" | python -c 'import json,sys; print(json.load(sys.stdin)["iac_ref"])')"
+          iac_ref="$VALIDATED_IAC_REF"
           python -m tools.deploy_v2_canary \
             --service "$service" \
             --version-ref "$version_ref" \
@@ -124,6 +128,7 @@ jobs:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
       IAC_WEBHOOK_SECRET: ${{ secrets.IAC_WEBHOOK_SECRET }}
       IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
+      VALIDATED_IAC_REF: ${{ needs.validate.outputs.iac_ref }}
     steps:
       - name: Checkout released infra context
         uses: actions/checkout@v7
@@ -146,4 +151,5 @@ jobs:
           python -m tools.app_deploy_request execute \
             --sender "$APP_DEPLOY_REQUEST_SENDER" \
             --domain "$INTERNAL_DOMAIN" \
-            --repo-root .
+            --repo-root . \
+            --expected-iac-ref "$VALIDATED_IAC_REF"

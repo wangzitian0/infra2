@@ -1,7 +1,7 @@
 # Infra-019: TODOWRITE (Workspace Harness Control Plane)
 
 **Status**: Active
-**Last Updated**: 2026-07-16
+**Last Updated**: 2026-08-17
 
 ## Phase 1
 
@@ -19,7 +19,8 @@
       Design revision PR: wangzitian0/oh-my-code-agent#4 (plugin-based adapters,
       Claude Code + Codex first-party, isolated launch first); re-pin after it merges.
 
-- [ ] Add read-only `harness status` for pinned checkout, remote head, and release identity.
+- [x] Add read-only `harness status` for parent pin, checkout/remote head,
+      ahead/behind, dirty state, and release identity; optional fetch changes refs only.
 - [ ] Add an infra2-sdk-local contributor/agent guide through an independent SDK PR.
 - [ ] Decide whether workspace preference changes need their own version identifier.
 - [ ] Add cross-repository compatibility matrix reporting from released evidence.

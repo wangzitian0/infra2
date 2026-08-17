@@ -33,6 +33,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--domain", required=True)
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--repo-root", default=".")
+    parser.add_argument(
+        "--expected-iac-ref",
+        default="",
+        help="fail if the freshly validated plan no longer matches this prior coordinate",
+    )
     return parser
 
 
@@ -46,6 +51,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             timeout=args.timeout,
             repo_root=args.repo_root,
         )
+        if args.expected_iac_ref and plan.iac_ref != args.expected_iac_ref:
+            raise ValueError(
+                "validated iac_ref changed during the receiver run: "
+                f"{args.expected_iac_ref!r} -> {plan.iac_ref!r}"
+            )
         if args.action == "plan":
             print(json.dumps(plan.to_dict(), sort_keys=True))
             return 0

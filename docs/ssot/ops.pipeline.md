@@ -9,7 +9,8 @@
 > **心智模型（与 app 不同）**:
 > - **app 是消费者**——部署 = 选一个自己的镜像版本跑在平台上;手动或 IaC 触发**都符合预期**。
 > - **infra2 是发布型产物**——**一个 git tag = 一个平台发布候选**:推送即**自动晋升 staging**,
->   **prod 需显式 promote**后才成为权威 live 版本(打 tag ≠ 动 prod,§3.3)。
+>   **prod 需显式 promote**后才由不可变 `production/vX.Y.Z` marker 记为权威 live 版本
+>   (打 tag ≠ 动 prod,§3.3)。
 >   `main` 领先于最近 tag = **未发布**(正常,不是 drift)。
 > - **infra2-sdk 是协议产物**——App 与 infra2 各自固定 SDK SemVer；workspace submodule
 >   只提供统一 checkout，不决定运行或部署版本。
@@ -22,11 +23,15 @@
 |------|----------------|------|
 | **IaC Input Reconcile** | [`reconcile-iac-inputs.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/reconcile-iac-inputs.yml) | **Release-tag** 触发(`push: tags: v*.*.*`):diff 上一 tag→本 tag,把 changed `iac_pinned` 服务以**该 tag** 为 `iac_ref` fan-out 给 `deploy_v2 → iac_runner`;config-hash gate 决定 no-op vs 重启。**不是 main-push、不是 sha。** |
 | **Deploy 前门 (`deploy_v2`)** | [`tools/deploy_v2.py`](https://github.com/wangzitian0/infra2/blob/main/tools/deploy_v2.py) · [`deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) | 统一部署坐标 `(service, type, version_ref, iac_ref)`;app + 平台、staging/prod、pinned ref。 |
-| **App Deploy Request Receiver** | [`app-deploy-request.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/app-deploy-request.yml) · [`libs/app_deploy_request.py`](https://github.com/wangzitian0/infra2/blob/main/libs/app_deploy_request.py) | SDK `DeployRequest v1` 的跨仓库部署入口；验证 sender/repo/ref/SHA/evidence，prod 额外远端验证 run/review 状态，固定环境选择最新 on-main infra release tag，再调用 `deploy_v2`。 |
+| **App Deploy Request Receiver** | [`app-deploy-request.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/app-deploy-request.yml) · [`libs/app_deploy_request.py`](https://github.com/wangzitian0/infra2/blob/main/libs/app_deploy_request.py) | SDK `DeployRequest v1` 的跨仓库部署入口；验证 sender/repo/ref/SHA/evidence，prod 额外远端验证 run/review 状态。App staging 选最新 on-main infra release candidate；App prod 只选最新 `production/v*` marker 指向的 release；无 marker 时 production desired state 未知并 fail-closed。 |
 | **IaC Runner Bootstrap (L1)** | [`deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) · [`scripts/deploy_iac_runner_bootstrap.sh`](https://github.com/wangzitian0/infra2/blob/main/scripts/deploy_iac_runner_bootstrap.sh) | **带外**自更新:`bootstrap/06.iac_runner/**` 变更时,Actions 在 VPS 上重建 runner 自身(跟 merged SHA),**独立 cadence**。 |
 | **Auto-deploy report-branch-main** | [`deploy-report-main.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy-report-main.yml) | **唯一**自动目标:app main push → main 预览重部署。 |
 | **Observability config apply** | [`apply-observability.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/apply-observability.yml) | 告警规则 / 看板,声明式 reconcile。**当前 merge 即 apply**(见 §3.4 未收口项)。 |
 | **Docs site** | [`docs.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/docs.yml) · [`docs/mkdocs.yml`](../mkdocs.yml) | MkDocs → GitHub Pages。 |
+
+Receiver 的 validate job 将选定的 `iac_ref` 作为 job output 传给 canary/deploy；后续 job 重做
+权威校验时必须与该坐标完全一致，防止同一 receiver run 在新 release/production marker
+竞态中 canary 与 deploy 使用不同 IaC。
 
 ---
 
@@ -69,7 +74,8 @@
 > [`deploy-dependencies.yaml`](./deploy-dependencies.yaml) fan-out 到受影响 `iac_pinned` 服务,以**该 tag** 触发
 > `deploy_v2 → iac_runner`:**自动只晋升 staging**(soak);**prod 由显式 promote**(`workflow_dispatch
 > promote_prod=true` / `--promote-prod`)用同一 tag 放行——**tag 推送不自动动 prod**。是否重启由 Deployer
-> config-hash gate 定(hash 未变即 no-op)。
+> config-hash gate 定(hash 未变即 no-op)。所有 prod 命令成功后才创建并推送不可变
+> `production/<release-tag>` marker；重试只允许同 commit 幂等推送，禁止移动旧 marker。
 > CI(lint + 单测 + E2E)**不**触发 staging/prod 部署;reconcile 是独立的 tag-triggered apply。
 > **来源守卫**:apply 前 `assert_after_on_main` fail-closed 校验该 tag reachable from `origin/main`;
 > off-main / 未合并 tag 直接拒绝(见 §6)。这把「打 tag」与「能动 prod」绑定到 reviewed main——
@@ -89,7 +95,8 @@ fail-closed。升级基线前需审阅对应官方 major release notes，再修�
 
 ### 3.1 发布单位 = 一个 git tag
 
-**一个 `v*.*.*` tag = 一次平台发布 = 权威的「应该 live 的平台版本」。** 语义化版本:
+**一个 `v*.*.*` tag = 一次平台发布候选；最新 `production/v*.*.*` marker =
+production 权威的「应该 live 的平台版本」。** 语义化版本:
 
 - **MAJOR**: 破坏性/需手工迁移的基础设施变更(罕见)。
 - **MINOR**: 新能力。
@@ -109,7 +116,9 @@ infra2 有天然分层(层级编号沿用 [core.md#层级定义](./core.md#层�
 | **L2 Platform · 服务** | postgres / redis / signoz / alerting / openpanel … | **release tag → reconcile** | release tag |
 | **L2 Platform · 配置** | 告警规则 / 看板 / 探针 spec | **当前 merge 即 apply**(目标:折进 tag reconcile,见 §3.4)| merge SHA(目标:tag)|
 
-→ **「最近 tag」是 L2 Platform·服务 的权威 live 版本**;L1 Bootstrap 与 L2·配置 的版本错位**必须可见**(§3.5),不静默、也不叫 drift。
+→ **最新 release tag 是 staging candidate，最新 `production/v*` marker 才是 L2 Platform·服务
+production 的权威 live 版本**;L1 Bootstrap 与 L2·配置 的版本错位**必须可见**(§3.5),
+不静默、也不叫 drift。
 
 ### 3.3 晋升与 soak(promotion)
 
@@ -118,6 +127,11 @@ release tag 推送**自动晋升 staging**(promote-not-rebuild);**prod 是显式
 强制时序而非约定:**staging 先收敛 → soak → 人为放行 prod**(同一 tag)。高 MAJOR/风险发布 soak 更久。
 这把「打 tag」和「能动 prod」解耦——在未合并 feature 分支打 tag 既被来源守卫拒(§6),即便在 main 上也只自动到
 staging。(RC tag `v*.*.*-rc.N` + soak 窗口仍为目标态,见 §3.4。)
+只有 prod deploy 全部成功才记录 `production/<release-tag>` marker；该 marker 是 prod desired
+state 的唯一可版本化指针，不是新的部署触发器。prod promotion 从上一个 marker 对应 release
+做累计 diff，而不是从前一个 staging candidate 开始，确保中间仅进 staging 的 release 不被跳过。
+首次迁移尚无 marker 时必须显式给出已知 production `before`；config drift 与 App production
+request 在 marker 建立前都 fail-closed，不用 latest release 猜生产事实。
 
 ### 3.4 未收口项(open / 目标态)
 
@@ -223,6 +237,9 @@ runtime hash 不匹配才重部署,source hash/ref 由 T3 drift 检测。local a
 bind-mount 文件、Dockerfile 及其 `COPY`/`ADD` 源,防止代码/Vault 模板变了但 compose 文本没变时被跳过。
 runtime hash 相同但 source identity 缺失/非法时执行一次 migration reconcile;source identity 已有效且
 fingerprint 未变时保留其原 deploy ref,不因无关的新 release 重启服务。
+服务一旦声明 `runtime_only_config_keys`，必须显式实现不访问 secret backend 的
+`source_config_env_base`；合同测试枚举所有这类 Deployer，并校验 runtime-only key 不进入 source
+identity。
 
 **Dokploy 接受 deploy 请求 ≠ runtime 真变了**:每次 generic compose deploy 后,Deployer 记录现有 deployment IDs,
 要求出现新的 `running`/`done` 记录,`compose.deploy` 为 no-op 时用 `compose.redeploy` 重试一次,两次都没新记录则 sync 失败。
@@ -251,7 +268,8 @@ infra2 当前固定 `infra2-sdk==0.3.0` 的不可变 release wheel；`deploy_v2_
 ### ✅ 推荐
 - staging/prod **只部署 release tag**;prod 从 staging 已验证的**同一 tag** promote(promote-not-rebuild)。
 - 用语义化版本;semver 当风险信号。
-- 平台层「什么是 live」= 最近 release tag;L1 Bootstrap 与 L2·配置 的错位走可见性视图(§3.5),不当 drift。
+- 平台层「什么是 production live」= 最新 `production/v*` marker；新 release tag 仅是 staging
+  candidate。L1 Bootstrap 与 L2·配置的错位走可见性视图(§3.5),不当 drift。
 
 ### ⛔ 禁止
 - 禁止部署 untagged commit / branch / sha 到 staging/prod。
@@ -367,13 +385,15 @@ git fetch --tags && git tag -l "v*.*.*" | sort -V | tail -5
 
 ---
 
-## 12. Config-drift T3 reconcile(prod ↔ release tag)
+## 12. Config-drift T3 reconcile(prod ↔ production marker)
 
 > 治理弧线(T1 生成 / T2 强制 / T3 检测 / T4 隔离)中针对 **Dokploy 配置漂移**的 T3 检测器。
-> 回答一个问题:**线上 production 跑的配置,还是最新 release tag 声明的那份吗?**
+> 回答一个问题:**线上 production 跑的配置,还是最后一次显式 prod promotion
+> 声明的那份吗?**
 
 - **机制**:`tools/dokploy_config_drift.py` 对每个 iac_pinned 服务先证明线上
-  `IAC_SOURCE_CONFIG_HASH` 能由其 `IAC_DEPLOY_REF` 重算,再与最新 release tag 的 expected source hash
+  `IAC_SOURCE_CONFIG_HASH` 能由其 `IAC_DEPLOY_REF` 重算,再与最新 `production/v*` marker 的
+  expected source hash
   比较(`contents_at_ref` 直接 `git cat-file` 读 revision 内容,不做 checkout)。服务在新 release 中输入
   未变化时允许保留旧 deploy ref,避免无意义重启;ref 不是“必须等于最新 tag”的重部署开关。runtime secret 只进入
   `IAC_CONFIG_HASH`,不参与 release fidelity。旧部署缺 source identity 时分类为 `legacy_identity`,
@@ -384,6 +404,9 @@ git fetch --tags && git tag -l "v*.*.*" | sort -V | tail -5
   §"告警 vs 报告"的天级=报告铁律,归 [ops.obs](./ops.observability.md) 的 cadence 分层)。
 - **反静默铁律**:工具查不了的服务必须以 `error` 行大声出现在报告里——"0 drift 但其实跳过了
   N 个服务"正是这个工具要消灭的谎言;每次运行前先 `--self-check`(fixture 自证)。
+- **旧系统过渡**:无 `production/v*` marker = desired state 未知，检测段显式失败但不伪造
+  confirmed drift；首次新契约 prod promotion 必须给出已知 production baseline，成功后 marker
+  成为唯一目标，staging-only tag 永不会再改变 prod drift target。
 
 ---
 

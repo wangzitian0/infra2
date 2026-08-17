@@ -4,6 +4,9 @@
 > **Engine**: Pytest + Playwright + UV
 
 This framework verifies that the actual state of the infrastructure matches the architectural definitions in SSOT.
+It verifies public contracts across repository boundaries: declared health checks must all
+be green, while the harness does not copy an App's private dependency list; Authentik UI
+readiness is observed through its open Shadow DOM rather than top-level body text.
 
 ## 📚 SSOT References
 

@@ -3,10 +3,11 @@ Platform service availability and health tests.
 
 Tests Vault and Authentik endpoints.
 """
+
 import pytest
 import httpx
 from playwright.async_api import Page
-from conftest import TestConfig
+from conftest import TestConfig, assert_authentik_login_ready
 
 
 @pytest.mark.smoke
@@ -18,8 +19,9 @@ async def test_vault_is_accessible(config: TestConfig):
             f"{config.VAULT_URL}/v1/sys/health",
             timeout=10.0,
         )
-        assert response.status_code in [200, 429, 472, 473, 501], \
+        assert response.status_code in [200, 429, 472, 473, 501], (
             f"Vault health check failed: {response.status_code}"
+        )
 
 
 @pytest.mark.smoke
@@ -28,8 +30,9 @@ async def test_sso_is_accessible(config: TestConfig):
     """Verify Authentik SSO service is accessible."""
     async with httpx.AsyncClient(verify=False) as client:
         response = await client.get(config.SSO_URL, timeout=10.0)
-        assert response.status_code < 500, \
+        assert response.status_code < 500, (
             f"SSO should be accessible, got {response.status_code}"
+        )
 
 
 @pytest.mark.platform
@@ -58,8 +61,4 @@ async def test_sso_with_page(page: Page, config: TestConfig):
     """Browser-based SSO UI accessibility test."""
     await page.goto(config.SSO_URL, wait_until="domcontentloaded")
 
-    title = await page.title()
-    assert title and len(title) > 0, "SSO UI should load"
-
-    body_content = await page.locator("body").inner_text()
-    assert len(body_content) > 0, "SSO UI should have content"
+    await assert_authentik_login_ready(page)

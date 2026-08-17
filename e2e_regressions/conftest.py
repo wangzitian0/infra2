@@ -19,6 +19,21 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+async def assert_authentik_login_ready(page: Page) -> None:
+    """Assert Authentik's public login contract across its open Shadow DOM."""
+    title = await page.title()
+    assert title.strip(), "SSO page should load with a non-empty title"
+
+    executor = page.locator("ak-flow-executor")
+    await executor.wait_for(state="attached")
+    has_shadow_root = await executor.evaluate("element => Boolean(element.shadowRoot)")
+    assert has_shadow_root, "Authentik flow executor should expose its Shadow DOM"
+
+    interactive = executor.locator("input:visible, button:visible")
+    await interactive.first.wait_for(state="visible")
+    assert await interactive.count() > 0, "Authentik login flow should be interactive"
+
+
 def _require_env(name: str) -> str:
     val = os.getenv(name)
     if not val:

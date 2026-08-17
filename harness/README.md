@@ -18,10 +18,14 @@ The machine-readable inventory is [`repos.yaml`](./repos.yaml). Validate it with
 
 ```bash
 uv run python -m tools.harness check
+uv run python -m tools.harness status --fetch
 ```
 
 The command is read-only. It validates inventory structure and referenced authority
 files; it does not update submodules, copy policy, publish packages, or deploy services.
+`status` reports parent pins, checkout/remote heads, ahead/behind, dirty paths, and
+release identity. Its optional `--fetch` refreshes origin metadata only; it never checks
+out or pulls a repository. Add `--require-current` when drift should make CI/scripting fail.
 
 ## Workspace Guides
 

@@ -39,6 +39,20 @@ class DataEngineDeployer(Deployer):
     service_port = 3001
     service_name = "dagster-webserver"
 
+    # Values sourced from the independently released TrueAlpha artifact/runtime
+    # approval plane affect deployment idempotence, but cannot be reconstructed
+    # from an infra2 release.  Declaring them forces a separate secret-free
+    # source identity instead of letting the drift runner read Vault.
+    runtime_only_config_keys = frozenset(
+        {
+            "DATA_ENGINE_IMAGE_DIGEST",
+            "RELEASE_MANIFEST_ID",
+            "CAPTURE_APPROVED_BY",
+            "GIT_COMMIT_SHA",
+            "CONFIGURATION_SHA256",
+        }
+    )
+
     # Rollout state: graduated to production 2026-07-27 (owner-approved,
     # CAPTURE_APPROVED_BY recorded in secret/truealpha/production/data_engine).
     # The former `not_yet_in_production = True` staging scope (#500/#522/#542)
@@ -114,23 +128,34 @@ class DataEngineDeployer(Deployer):
         if not approved_by:
             raise ValueError("CAPTURE_APPROVED_BY must be configured before deployment")
 
+        base.update(cls._release_recomputable_env(environment))
         base.update(
             {
-                "TA_POSTGRES_PORT": cls._POSTGRES_PORTS.get(environment, "0"),
-                "TA_MINIO_S3_PORT": cls._MINIO_S3_PORTS.get(environment, "0"),
-                "DAGSTER_WEBSERVER_PORT": cls._WEBSERVER_PORTS.get(environment, "0"),
                 "DATA_ENGINE_IMAGE_DIGEST": image_digest,
                 "RELEASE_MANIFEST_ID": release_id,
                 "CAPTURE_APPROVED_BY": approved_by,
                 "GIT_COMMIT_SHA": secrets.get("GIT_COMMIT_SHA") or "unknown",
-                "TIER_CPU_SHARES": "512" if environment == "staging" else "1024",
-                "DATA_ENGINE_MEM_LIMIT": "768m"
-                if environment == "staging"
-                else "1536m",
-                "DATA_ENGINE_VAULT_MEM_LIMIT": "128m",
             }
         )
         base["CONFIGURATION_SHA256"] = cls._configuration_sha256(base)
+        return base
+
+    @classmethod
+    def _release_recomputable_env(cls, environment: str) -> dict[str, str]:
+        return {
+            "TA_POSTGRES_PORT": cls._POSTGRES_PORTS.get(environment, "0"),
+            "TA_MINIO_S3_PORT": cls._MINIO_S3_PORTS.get(environment, "0"),
+            "DAGSTER_WEBSERVER_PORT": cls._WEBSERVER_PORTS.get(environment, "0"),
+            "TIER_CPU_SHARES": "512" if environment == "staging" else "1024",
+            "DATA_ENGINE_MEM_LIMIT": "768m" if environment == "staging" else "1536m",
+            "DATA_ENGINE_VAULT_MEM_LIMIT": "128m",
+        }
+
+    @classmethod
+    def source_config_env_base(cls, env: dict | None = None) -> dict[str, str]:
+        """Build infra release identity without reading TrueAlpha runtime secrets."""
+        base = super().compose_env_base(env)
+        base.update(cls._release_recomputable_env(base.get("ENV", "production")))
         return base
 
     @classmethod

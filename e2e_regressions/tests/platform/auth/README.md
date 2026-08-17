@@ -7,7 +7,7 @@
 | 组件 | 测试 | 说明 |
 |------|------|------|
 | **Authentik** | `test_authentik_health` | 健康检查 |
-| **Authentik** | `test_authentik_login_page_loads` | UI 可达 |
+| **Authentik** | `test_authentik_login_page_loads` | host 元素、open Shadow DOM 与登录交互控件可达 |
 | **OIDC** | `test_oidc_discovery_endpoint` | OIDC 发现端点（可选） |
 
 ## 环境变量

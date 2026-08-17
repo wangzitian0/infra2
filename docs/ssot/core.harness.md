@@ -67,17 +67,25 @@ Harness 只拥有这些仓库之间的协作视图与边界定义。
 ```bash
 git submodule update --init --recursive
 uv run python -m tools.harness check
+uv run python -m tools.harness status --fetch
 ```
 
 `harness check` 是只读校验：验证清单 schema、focus、角色/治理组合、workspace 偏好和
 authority 路径。未初始化的 checkout 只报告 warning；结构错误、App 非自治或 authority
 漂移会失败。命令不得执行 fetch、checkout、写文件、发布或部署。
 
+`harness status` 只观测 checkout：显示 root/submodule parent pin、checkout HEAD、跟踪的
+remote HEAD、ahead/behind、dirty path 数和 checkout release identity。默认完全本地；显式
+`--fetch` 只刷新每个仓库的 `origin` refs/tags，不 checkout、pull、更改 parent pin 或触碰 App
+source。`--require-current` 在任一 checkout 落后/领先/脏/脱离 parent pin 时返回非零。
+
 ## 7. The Proof
 
 ```bash
 uv run pytest -q libs/tests/test_harness_manifest.py
+uv run pytest -q libs/tests/test_harness_status.py
 uv run python -m tools.harness check --json
+uv run python -m tools.harness status --fetch --json
 uv run pytest -q libs/tests/test_sdk_contract_adoption.py
 ```
 

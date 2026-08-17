@@ -73,3 +73,9 @@ ssh -L 13001:127.0.0.1:13001 <vps>  # then open http://127.0.0.1:13001
 The three image references must be byte-identical and digest-pinned. A missing digest,
 release manifest, approval, source credential, daemon heartbeat, code-server health, or
 runtime image match blocks deployment.
+
+Deployment identity is intentionally split: the runtime hash includes the approved image
+digest, release manifest, approver, source SHA, and configuration hash read from Vault;
+the release-recomputable source hash contains only deterministic ports/resource tier and
+checked-in artifacts. Read-only drift detection therefore never needs TrueAlpha runtime
+secrets and cannot turn an unavailable Vault read into false production drift.

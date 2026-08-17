@@ -144,7 +144,9 @@ def resolved(*args, **kwargs) -> ResolvedRef:
     return ResolvedRef(sha=SHA, image_ref="v1.2.3", form="tag")
 
 
-def tags(*args, **kwargs):
+def tags(args, **kwargs):
+    if "production/v*.*.*" in args:
+        return SimpleNamespace(stdout="production/v1.1.26\n")
     return SimpleNamespace(stdout="v1.1.28\nv1.1.27\n")
 
 
@@ -392,9 +394,7 @@ def test_truealpha_policy_verifies_its_real_run_shapes() -> None:
         "head_sha": "d" * 40,
     }
     with pytest.raises(ValueError, match="source run.*head_sha"):
-        receiver.verify_production_evidence(
-            request, fetch_json=responses.__getitem__
-        )
+        receiver.verify_production_evidence(request, fetch_json=responses.__getitem__)
 
 
 @pytest.mark.parametrize(
@@ -519,7 +519,9 @@ def test_github_evidence_fetch_fails_closed_without_leaking_response(
     assert "secret response" not in str(exc_info.value)
 
 
-def test_iac_ref_is_latest_merged_release_for_fixed_envs(tmp_path) -> None:
+def test_iac_ref_distinguishes_staging_candidate_from_production_target(
+    tmp_path,
+) -> None:
     assert (
         receiver.select_iac_ref(DeployType.STAGING, repo_root=tmp_path, runner=tags)
         == "v1.1.28"
@@ -528,12 +530,39 @@ def test_iac_ref_is_latest_merged_release_for_fixed_envs(tmp_path) -> None:
         receiver.select_iac_ref(DeployType.PREVIEW_PR, repo_root=tmp_path, runner=tags)
         == "main"
     )
+    assert (
+        receiver.select_iac_ref(DeployType.PRODUCTION, repo_root=tmp_path, runner=tags)
+        == "v1.1.26"
+    )
 
-    with pytest.raises(ValueError, match="no released infra2"):
+    with pytest.raises(ValueError, match="invalid production marker"):
         receiver.select_iac_ref(
             DeployType.PRODUCTION,
             repo_root=tmp_path,
             runner=lambda *args, **kwargs: SimpleNamespace(stdout="not-a-release\n"),
+        )
+
+
+def test_iac_ref_fails_closed_without_production_marker(tmp_path) -> None:
+    def no_marker(args, **_kwargs):
+        if "production/v*.*.*" in args:
+            return SimpleNamespace(stdout="")
+        return SimpleNamespace(stdout="v1.1.28\n")
+
+    with pytest.raises(ValueError, match="production IaC state is unknown"):
+        receiver.select_iac_ref(
+            DeployType.PRODUCTION, repo_root=tmp_path, runner=no_marker
+        )
+
+
+def test_iac_ref_fails_closed_on_malformed_production_marker(tmp_path) -> None:
+    with pytest.raises(ValueError, match="invalid production marker"):
+        receiver.select_iac_ref(
+            DeployType.PRODUCTION,
+            repo_root=tmp_path,
+            runner=lambda *_args, **_kwargs: SimpleNamespace(
+                stdout="production/v1.1.53-rc.1\n"
+            ),
         )
 
 
@@ -607,7 +636,10 @@ def test_plan_domain_is_overridden_by_the_service_registry(tmp_path) -> None:
     )
     assert plan.domain == "truealpha.club"
     assert "--domain" in plan.deploy_v2_args()
-    assert plan.deploy_v2_args()[plan.deploy_v2_args().index("--domain") + 1] == "truealpha.club"
+    assert (
+        plan.deploy_v2_args()[plan.deploy_v2_args().index("--domain") + 1]
+        == "truealpha.club"
+    )
 
 
 def test_remove_plan_uses_down_without_expected_sha(tmp_path) -> None:
@@ -697,6 +729,30 @@ def test_plan_cli_reads_payload_from_environment(monkeypatch, capsys, tmp_path) 
     assert (
         json.loads(capsys.readouterr().out)["request"]["request_id"] == "run-12345678"
     )
+
+
+def test_cli_rejects_iac_coordinate_change_after_validation(
+    monkeypatch, capsys, tmp_path
+) -> None:
+    request = payload(operation="remove", deploy_type="preview/pr", version_ref="42")
+    monkeypatch.setenv("APP_DEPLOY_REQUEST_JSON", json.dumps(request))
+
+    result = receiver_cli.main(
+        [
+            "plan",
+            "--sender",
+            "wangzitian0",
+            "--domain",
+            "zitian.party",
+            "--repo-root",
+            str(tmp_path),
+            "--expected-iac-ref",
+            "v9.9.9",
+        ]
+    )
+
+    assert result == 1
+    assert "iac_ref changed" in capsys.readouterr().err
 
 
 def test_cli_fails_closed_when_production_evidence_is_unavailable(

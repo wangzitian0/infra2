@@ -53,6 +53,9 @@ flowchart LR
 
 - **模式 A**: 每一个 SSOT 文档的 "The Proof" 章节**必须**链接到具体的测试文件。
 - **模式 B**: 测试用例应尽量保持幂等性（Idempotent），可重复运行。
+- **模式 C**: 验证公开契约，不复制 App 内部实现。Health 响应校验“所有声明的 check 为绿”，
+  不在 harness 硬编码 App 的 Redis/S3 等具体依赖清单。Web Component 登录页校验 host 元素、
+  open Shadow DOM 与可交互控件，不把顶层 `body.inner_text()` 当成组件内容真理。
 
 ### ⛔ 禁止模式 (Blacklist)
 

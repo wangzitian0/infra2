@@ -57,10 +57,15 @@
 
 ### Rule 3: 漂移检测优先 (Drift Detection First)
 针对外部服务（Vault, Authentik），优先在部署前执行 `invoke <service>.shared.status` 或 Dokploy 健康检查，避免在运行期才暴露问题。
+只读观测必须保留三态：“有数据”、“确认为空”、“观测失败/未知”。API、认证或
+传输失败不得转成空集合后继续计算 drift；应使检测段失败，但不伪造 confirmed finding。
 
 ### Rule 4: 状态不一致协议 (State Discrepancy Protocol)
 如果部署过程中出现“资源已存在/状态不一致”，禁止盲目重试。
 - **步骤**：1. 查询 Dokploy 应用状态；2. `docker ps`/日志确认实际运行；3. 必要时手动清理并更新 SSOT。
+- **交叉判定**：Dokploy `error` + 独立 Docker health 绿 = 仍然失败/送达，但标为
+  `state-discrepancy`/P2，先对账不盲目重启；Dokploy `error` + Docker health 红/未知 =
+  保留原 deploy/runtime 故障等级。任一平面的绿不得把另一平面的红静默掉。
 
 ### Rule 5: 传播冷却 (Cooldown Period)
 在部署 DNS 或证书后，必须在健康检查前加入等待窗口（建议 60s+），以应对解析延迟。

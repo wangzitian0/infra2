@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -52,6 +53,8 @@ from libs.deploy_dependencies import (  # noqa: E402
     service_key_from_path,
 )
 from libs import service_registry  # noqa: E402
+
+PRODUCTION_MARKER_RE = re.compile(r"production/v\d+\.\d+\.\d+")
 
 
 def _hash_input_paths(
@@ -191,18 +194,34 @@ def self_check() -> int:
     return 0
 
 
-def _latest_release_tag() -> str:
+def _tags(pattern: str) -> list[str]:
     tags = subprocess.run(
-        ["git", "tag", "--sort=-creatordate"],
+        ["git", "tag", "--list", pattern, "--sort=-version:refname"],
         cwd=ROOT,
         capture_output=True,
         text=True,
         check=True,
     ).stdout.splitlines()
-    for t in tags:
-        if t.startswith("v") and t[1:2].isdigit():
-            return t
-    raise SystemExit("no v* release tag found")
+    return [tag for tag in tags if tag]
+
+
+def _production_target_tag() -> str:
+    """Return the last explicitly promoted production release marker.
+
+    Absence is unknown desired state, never permission to substitute the latest
+    staging candidate and manufacture production drift.
+    """
+    markers = _tags("production/v*.*.*")
+    if not markers:
+        raise SystemExit(
+            "no production/v* marker found; production desired state is unknown"
+        )
+    invalid = [
+        marker for marker in markers if not PRODUCTION_MARKER_RE.fullmatch(marker)
+    ]
+    if invalid:
+        raise SystemExit(f"invalid production marker(s): {', '.join(invalid)}")
+    return markers[0]
 
 
 def _commit_at_ref(ref: str) -> str:
@@ -416,7 +435,7 @@ def format_report(tag: str, rows: list[Row]) -> str:
     errors = [r for r in rows if r.verdict == "error"]
     structural = [r for r in rows if r.verdict == "structural"]
     lines = [
-        f"📋 [Infra2] config-drift · production vs release {tag}",
+        f"📋 [Infra2] config-drift · production vs target {tag}",
         f"in sync {n('in_sync')} · DRIFT {len(drift)} · error {len(errors)} · "
         f"not deployed {n('not_deployed')} · structural {n('structural')} · "
         f"legacy {n('legacy_identity')} · n/a(app) {n('cache_bust')}",
@@ -441,7 +460,7 @@ def format_report(tag: str, rows: list[Row]) -> str:
         elif r.verdict == "legacy_identity":
             lines.append(f"  · legacy identity: {r.service} ({r.note})")
     if n("in_sync") and not drift and not errors and not structural:
-        lines.append(f"✅ every comparable service matches release {tag}.")
+        lines.append(f"✅ every comparable service matches production target {tag}.")
     return "\n".join(lines)
 
 
@@ -468,7 +487,7 @@ def main() -> int:
     if args.self_check:
         return self_check()
 
-    tag = _latest_release_tag()
+    tag = _production_target_tag()
     rows = scan(tag)
     report = format_report(tag, rows)
     print(report)

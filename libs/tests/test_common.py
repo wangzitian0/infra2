@@ -8,6 +8,7 @@ from libs.common import (
     _REGISTRY_BACKED_SHORT_NAMES,
     SHARED_PLATFORM_SERVICES,
     infra_domain,
+    check_service,
 )
 
 
@@ -88,3 +89,32 @@ def test_shared_platform_services_excludes_a_registry_backed_name_whose_service_
     attrs = service_registry.service_attrs()
     assert attrs["platform/authentik"].prod_only is False
     assert "sso" not in SHARED_PLATFORM_SERVICES()
+
+
+def test_check_service_quotes_nested_health_command(monkeypatch):
+    class _Result:
+        ok = True
+
+    class _Context:
+        command = ""
+
+        def run(self, command, **_kwargs):
+            self.command = command
+            return _Result()
+
+    monkeypatch.setattr(
+        "libs.common.get_env",
+        lambda: {"VPS_HOST": "host.example", "ENV": "production"},
+    )
+    context = _Context()
+    health = (
+        'python -c "import urllib.request; '
+        "urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)\""
+    )
+
+    result = check_service(context, "truealpha-llm", health)
+
+    assert result["is_ready"] is True
+    assert "root@host.example" in context.command
+    assert "docker exec truealpha-llm sh -lc" in context.command
+    assert "http://127.0.0.1:8000/health" in context.command

@@ -134,6 +134,30 @@ def test_deployer_derives_isolated_ports_and_full_configuration_hash(monkeypatch
     assert changed["CONFIGURATION_SHA256"] != config["CONFIGURATION_SHA256"]
 
 
+def test_source_identity_is_release_recomputable_without_vault(monkeypatch):
+    module = _load_deploy_module()
+    deployer = module.DataEngineDeployer
+    monkeypatch.setattr(
+        deployer,
+        "secrets_backend",
+        classmethod(lambda cls: (_ for _ in ()).throw(AssertionError("Vault read"))),
+    )
+    environment = {
+        "ENV": "production",
+        "ENV_SUFFIX": "",
+        "ENV_DOMAIN_SUFFIX": "",
+        "INTERNAL_DOMAIN": "example.test",
+    }
+
+    source = deployer.source_config_env_base(environment)
+
+    assert source["TA_POSTGRES_PORT"] == "15433"
+    assert source["TA_MINIO_S3_PORT"] == "19001"
+    assert source["DAGSTER_WEBSERVER_PORT"] == "13002"
+    assert deployer.runtime_only_config_keys
+    assert not deployer.runtime_only_config_keys.intersection(source)
+
+
 def test_deployer_fails_closed_on_missing_or_malformed_release_inputs(monkeypatch):
     module = _load_deploy_module()
     deployer = module.DataEngineDeployer
