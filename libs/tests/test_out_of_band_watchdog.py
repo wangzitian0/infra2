@@ -772,6 +772,52 @@ def test_dokploy_status_check_maps_prod_to_p1_and_staging_to_p2() -> None:
     )
 
 
+def test_healthy_runtime_reclassifies_dokploy_error_without_silencing_it() -> None:
+    watchdog = _load_watchdog()
+    results = [
+        watchdog.CheckResult(
+            "dokploy-status:truealpha/production/postgres",
+            False,
+            "composeStatus=error",
+            "dokploy-deploy-status",
+        ),
+        watchdog.CheckResult(
+            "infra2-docker-health",
+            True,
+            "docker-health-ok",
+            "docker-runtime",
+        ),
+    ]
+
+    correlated = watchdog.correlate_control_plane_with_runtime(results)
+
+    finding = correlated[0]
+    assert finding.ok is False
+    assert finding.failure_domain == "state-discrepancy"
+    assert "runtime_evidence=infra2-docker-health:ok" in finding.detail
+    assert watchdog._severity_for(finding.name, finding.failure_domain) == "P2"
+
+
+def test_failed_runtime_keeps_dokploy_failure_in_deploy_domain() -> None:
+    watchdog = _load_watchdog()
+    results = [
+        watchdog.CheckResult(
+            "dokploy-status:truealpha/production/postgres",
+            False,
+            "composeStatus=error",
+            "dokploy-deploy-status",
+        ),
+        watchdog.CheckResult(
+            "infra2-docker-health",
+            False,
+            "postgres unhealthy",
+            "docker-runtime",
+        ),
+    ]
+
+    assert watchdog.correlate_control_plane_with_runtime(results) == results
+
+
 def test_dokploy_status_check_turns_client_exception_into_alert() -> None:
     """Infra-011.9: control-plane query errors must become alerts, not crashes."""
     watchdog = _load_watchdog()

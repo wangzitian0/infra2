@@ -9,14 +9,18 @@ from pathlib import Path
 import pytest
 import yaml
 
+import tools.reconcile_iac_inputs as reconcile
 from tools.reconcile_iac_inputs import (
     MANIFEST_PATH,
     assert_after_on_main,
+    assert_production_marker_advances,
     build_deploy_commands,
     build_plan,
     commands_to_apply,
     is_zero_sha,
     main,
+    production_marker_tag,
+    record_production_marker,
     run_deploy_commands,
 )
 
@@ -182,31 +186,157 @@ def test_guard_accepts_on_main_tag() -> None:
 
 def _alerting_commands():
     plan = build_plan(["platform/12.alerting/compose.yaml"])
-    return build_deploy_commands(
-        plan, iac_ref=SHA, domain="zitian.party", timeout=600
-    )
+    return build_deploy_commands(plan, iac_ref=SHA, domain="zitian.party", timeout=600)
 
 
 def test_default_applies_staging_only() -> None:
     # release decoupling: a tag push auto-applies staging (soak), never prod.
-    applied = commands_to_apply(
-        _alerting_commands(), dry_run=False, promote_prod=False
-    )
+    applied = commands_to_apply(_alerting_commands(), dry_run=False, promote_prod=False)
     assert [c.deploy_type for c in applied] == ["staging"]
 
 
 def test_promote_prod_applies_prod_only() -> None:
     # prod is a separate, explicit promotion step.
-    applied = commands_to_apply(
-        _alerting_commands(), dry_run=False, promote_prod=True
-    )
+    applied = commands_to_apply(_alerting_commands(), dry_run=False, promote_prod=True)
     assert [c.deploy_type for c in applied] == ["prod"]
+
+
+def test_production_marker_is_immutable_and_idempotent() -> None:
+    calls = []
+
+    def runner(argv, **_kwargs):
+        calls.append(argv)
+        if argv[:3] == ["git", "rev-parse", "--verify"]:
+            return subprocess.CompletedProcess(argv, 0, "b" * 40 + "\n", "")
+        if argv[:3] == ["git", "push", "origin"]:
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        raise AssertionError(f"unexpected command: {argv}")
+
+    marker = record_production_marker("v1.2.3", ROOT, runner=runner)
+
+    assert marker == "production/v1.2.3"
+    assert calls[-1] == ["git", "push", "origin", "refs/tags/production/v1.2.3"]
+
+
+def test_production_marker_created_and_pushed_after_first_promotion() -> None:
+    calls = []
+
+    def runner(argv, **_kwargs):
+        calls.append(argv)
+        if argv[:3] == ["git", "rev-parse", "--verify"]:
+            if argv[3] == "v1.2.3^{commit}":
+                return subprocess.CompletedProcess(argv, 0, "b" * 40 + "\n", "")
+            return subprocess.CompletedProcess(argv, 128, "", "missing")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    assert record_production_marker("v1.2.3", ROOT, runner=runner) == (
+        "production/v1.2.3"
+    )
+    assert ["git", "tag", "production/v1.2.3", "b" * 40] in calls
+    assert ["git", "push", "origin", "refs/tags/production/v1.2.3"] in calls
+
+
+def test_production_marker_rejects_non_release_ref() -> None:
+    for invalid in ("main", "v1.2.3-rc.1"):
+        with pytest.raises(ValueError, match="version tag"):
+            production_marker_tag(invalid)
+
+
+def test_production_marker_refuses_backward_move() -> None:
+    def runner(argv, **_kwargs):
+        return subprocess.CompletedProcess(argv, 0, "production/v1.2.3\n", "")
+
+    with pytest.raises(SystemExit, match="cannot move backward"):
+        assert_production_marker_advances("v1.2.2", ROOT, runner=runner)
+
+    assert assert_production_marker_advances("v1.2.3", ROOT, runner=runner) == "v1.2.3"
+    assert assert_production_marker_advances("v1.2.4", ROOT, runner=runner) == "v1.2.3"
 
 
 def test_dry_run_applies_nothing() -> None:
     commands = _alerting_commands()
     assert commands_to_apply(commands, dry_run=True, promote_prod=False) == []
     assert commands_to_apply(commands, dry_run=True, promote_prod=True) == []
+
+
+def test_main_rejects_invalid_prod_ref_before_provenance_or_deploy(
+    monkeypatch,
+) -> None:
+    provenance_called = False
+
+    def provenance(*_args, **_kwargs):
+        nonlocal provenance_called
+        provenance_called = True
+
+    monkeypatch.setattr(reconcile, "assert_after_on_main", provenance)
+
+    with pytest.raises(ValueError, match="version tag"):
+        main(
+            [
+                "--after",
+                "main",
+                "--promote-prod",
+                "--changed-file",
+                "platform/12.alerting/compose.yaml",
+            ]
+        )
+
+    assert provenance_called is False
+
+
+@pytest.mark.parametrize("extra", [[], ["--dry-run"]])
+def test_main_requires_first_production_baseline_before_provenance(
+    monkeypatch,
+    extra,
+) -> None:
+    provenance_called = False
+
+    monkeypatch.setattr(
+        reconcile, "assert_production_marker_advances", lambda *_args, **_kwargs: None
+    )
+
+    def provenance(*_args, **_kwargs):
+        nonlocal provenance_called
+        provenance_called = True
+
+    monkeypatch.setattr(reconcile, "assert_after_on_main", provenance)
+
+    with pytest.raises(SystemExit, match="explicit known-production --before"):
+        main(
+            [
+                "--after",
+                "v1.2.3",
+                "--promote-prod",
+                "--changed-file",
+                "platform/12.alerting/compose.yaml",
+                *extra,
+            ]
+        )
+
+    assert provenance_called is False
+
+
+def test_main_rejects_before_that_disagrees_with_current_marker(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        reconcile,
+        "assert_production_marker_advances",
+        lambda *_args, **_kwargs: "v1.2.2",
+    )
+
+    with pytest.raises(SystemExit, match="must match current marker"):
+        main(
+            [
+                "--before",
+                "v1.2.1",
+                "--after",
+                "v1.2.3",
+                "--promote-prod",
+                "--changed-file",
+                "platform/12.alerting/compose.yaml",
+            ]
+        )
 
 
 def test_main_dry_run_plans_without_deploying(capsys) -> None:
@@ -275,3 +405,8 @@ def test_reconcile_workflow_contract() -> None:
     # the provenance guard relies on origin/main being resolvable in a tag-push checkout;
     # lock the exact fetch step so a future workflow edit can't silently break the guard.
     assert "refs/remotes/origin/main" in text
+    assert workflow["permissions"]["contents"] == "write"
+    assert "production/v* marker" in text.lower()
+    assert 'production_before="${production_marker#production/}"' in text
+    assert "first production marker requires an explicit known-production" in text
+    assert 'before="$production_before"' in text

@@ -54,12 +54,15 @@ def test_preflight_canary_gate_derives_from_the_plan_not_a_hand_copied_deploy_ty
     assert jobs["validate"]["outputs"]["requires_preflight_canary"] == (
         "${{ steps.plan.outputs.requires_preflight_canary }}"
     )
+    assert jobs["validate"]["outputs"]["iac_ref"] == "${{ steps.plan.outputs.iac_ref }}"
     assert (
         "needs.validate.outputs.requires_preflight_canary == 'true'"
         in jobs["preflight_canary"]["if"]
     )
     assert "deploy_type == 'staging'" not in body
     assert "deploy_type == 'prod'" not in body
+    assert '--expected-iac-ref "$VALIDATED_IAC_REF"' in body
+    assert body.count("needs.validate.outputs.iac_ref") == 2
 
 
 def test_preflight_canary_targets_the_requested_service() -> None:

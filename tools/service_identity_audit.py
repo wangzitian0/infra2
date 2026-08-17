@@ -20,6 +20,20 @@ DEPLOY_BOUNDARIES = (
     ROOT / "libs/deploy/promote.py",
     ROOT / "libs/deploy/preview.py",
 )
+NON_OWNED_TOP_LEVEL = {"repos", "oh-my-code-agent"}
+
+
+def _owned_alert_catalogs() -> list[Path]:
+    """Return root-owned catalogs, excluding nested checkouts and tool worktrees."""
+    catalogs: list[Path] = []
+    for path in ROOT.glob("**/observability/alert_rules.json"):
+        relative = path.relative_to(ROOT)
+        if relative.parts[0] in NON_OWNED_TOP_LEVEL:
+            continue
+        if any(part.startswith(".") for part in relative.parts):
+            continue
+        catalogs.append(path)
+    return sorted(catalogs)
 
 
 def audit() -> list[str]:
@@ -46,7 +60,7 @@ def audit() -> list[str]:
                     f"deployment boundary lacks {marker}: {path.relative_to(ROOT)}"
                 )
 
-    for path in ROOT.glob("**/observability/alert_rules.json"):
+    for path in _owned_alert_catalogs():
         data = json.loads(path.read_text(encoding="utf-8"))
         service_id = str(data.get("service_id", ""))
         environment = str(data.get("environment", ""))

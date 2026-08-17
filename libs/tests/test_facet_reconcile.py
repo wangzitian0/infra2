@@ -49,7 +49,9 @@ def test_main_delivers_report_even_when_clean(monkeypatch, capsys):
 
     delivered = {}
     monkeypatch.setattr(
-        alerting, "deliver_infra2_report", lambda text: delivered.setdefault("t", text) or True
+        alerting,
+        "deliver_infra2_report",
+        lambda text: delivered.setdefault("t", text) or True,
     )
     assert fr.main() == 0
     assert "facet reconcile" in delivered["t"]  # self-proving delivery (#425)
@@ -96,7 +98,8 @@ def test_section_systemexit_degrades_to_blocker(monkeypatch):
     import tools.dokploy_config_drift as cd
 
     monkeypatch.setattr(
-        cd, "_latest_release_tag",
+        cd,
+        "_production_target_tag",
         lambda: (_ for _ in ()).throw(SystemExit("no v* release tag found")),
     )
     section = fr.run_config_drift_section()

@@ -174,7 +174,18 @@ def _actual_records(dns) -> list[str]:
         result = dns._cf_request(
             client, "GET", f"/zones/{zone}/dns_records", params={"per_page": 100}
         )
-    return [r["name"] for r in (result or []) if r.get("type") in ("A", "CNAME")]
+    # The shared mutation-oriented Cloudflare helper returns ``None`` after it
+    # has already rendered an API/transport error.  ``None`` is therefore an
+    # observation failure, NOT an observed empty zone.  Treating it as ``[]``
+    # turns a 401 into "every intended record is missing" and pages on invented
+    # drift.
+    if result is None:
+        raise RuntimeError("Cloudflare DNS record observation failed")
+    if not isinstance(result, list):
+        raise RuntimeError(
+            "Cloudflare DNS record observation returned a non-list result"
+        )
+    return [r["name"] for r in result if r.get("type") in ("A", "CNAME")]
 
 
 def main() -> int:

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import subprocess
 
+import pytest
+
 import tools.dokploy_config_drift as drift
 from tools.dokploy_config_drift import (
     DeployedIdentity,
@@ -27,7 +29,7 @@ def test_format_report_all_in_sync_says_green() -> None:
     report = format_report("v1.1.19", rows)
 
     assert "in sync 1 · DRIFT 0" in report
-    assert "✅ every comparable service matches release v1.1.19." in report
+    assert "✅ every comparable service matches production target v1.1.19." in report
 
 
 def test_format_report_surfaces_drift_with_both_hashes() -> None:
@@ -251,3 +253,49 @@ def test_strict_blockers_fail_on_detector_and_structural_errors() -> None:
         "platform/c",
         "platform/d",
     ]
+
+
+def test_production_target_prefers_explicit_marker(monkeypatch) -> None:
+    monkeypatch.setattr(
+        drift,
+        "_tags",
+        lambda pattern: {
+            "production/v*.*.*": ["production/v1.1.48"],
+            "v*.*.*": ["v1.1.52"],
+        }[pattern],
+    )
+
+    assert drift._production_target_tag() == "production/v1.1.48"
+
+
+def test_production_target_fails_closed_without_marker(monkeypatch) -> None:
+    monkeypatch.setattr(drift, "_tags", lambda _pattern: [])
+
+    with pytest.raises(SystemExit, match="desired state is unknown"):
+        drift._production_target_tag()
+
+
+def test_production_target_fails_closed_on_malformed_marker(monkeypatch) -> None:
+    monkeypatch.setattr(drift, "_tags", lambda _pattern: ["production/v1.1.53-rc.1"])
+
+    with pytest.raises(SystemExit, match="invalid production marker"):
+        drift._production_target_tag()
+
+
+def test_every_runtime_only_deployer_has_a_secret_free_source_contract() -> None:
+    environment = {
+        "ENV": "production",
+        "ENV_SUFFIX": "",
+        "ENV_DOMAIN_SUFFIX": "",
+        "INTERNAL_DOMAIN": "example.test",
+    }
+    checked = []
+    for service_id in drift.service_registry.all_services():
+        deployer = drift._load_deployer(service_id)
+        if deployer is None or not deployer.runtime_only_config_keys:
+            continue
+        source = deployer.source_config_env_base(environment)
+        assert not deployer.runtime_only_config_keys.intersection(source), service_id
+        checked.append(service_id)
+
+    assert checked == ["platform/alerting", "truealpha/data_engine"]

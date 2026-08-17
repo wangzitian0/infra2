@@ -27,6 +27,7 @@
 | Infra-011.18 | AI merge authority is fail-closed and bound to the current PR head, merge-authority CI, resolved review, complete change contracts, safety proof, and owner approval; ordinary merge remains decoupled from staging, while merge-triggered apply paths require explicit high-risk approval. | `AGENTS.md`, `docs/ssot/ops.pipeline.md`, `docs/ssot/delivery-stages.yaml`, `docs/ssot/ci-gate-inventory.yaml` |
 | Infra-011.19 | IaC deployment operations bind environment, exact ref, and normalized service set to one opaque ID; release fidelity uses exact deploy ref plus a secret-independent source fingerprint, while runtime fingerprint remains the idempotence gate. | `libs/tests/test_iac_runner_client.py`, `libs/tests/test_iac_runner_deploy_result.py`, `libs/tests/test_deployer.py`, `libs/tests/test_dokploy_config_drift.py`, `docs/ssot/ops.pipeline.md` |
 | Infra-011.20 | Every infra2 workflow uses the supported Node.js 24 major for governed official JavaScript Actions, and a repository-wide contract test rejects future stale-major additions or regressions. | `libs/tests/test_workflow_reference_contract.py`, `.github/workflows/reconcile-iac-inputs.yml`, `docs/ssot/ops.pipeline.md` |
+| Infra-011.21 | Observation failures never become empty reality; production desired state follows an immutable promotion marker; runtime-only deployers remain source-recomputable without secrets; Dokploy/runtime disagreement is explicit and non-silent. | `libs/tests/test_dns_drift_report.py`, `libs/tests/test_dokploy_config_drift.py`, `libs/tests/test_reconcile_iac_inputs.py`, `libs/tests/test_out_of_band_watchdog.py` |
 
 ## Issue Mapping
 
@@ -65,6 +66,7 @@
 - [x] Add Cloudflare Workers watchdog for production/staging public routes and probe-runner heartbeat.
 - [x] Add signal ownership inventory and watchdog consistency audit.
 - [x] Upgrade the release reconcile workflow to Node.js 24 Actions and enforce repository-wide minimum majors.
+- [x] Harden observation truth, production target identity, secret-free source identity, and control/runtime discrepancy classification.
 - [x] Run full lint/test suite.
 - [x] Open PR.
 
@@ -110,7 +112,7 @@
 
 - Made the normalized service set part of the IaC Runner operation key and use the trigger-returned deployment ID for status polling; legacy env/ref-only polling fails closed when ambiguous.
 - Split versioned, release-recomputable source identity from runtime/secret config identity and persist the exact checked-out SHA. Runtime-only config requires an explicit secret-free source builder.
-- Config drift now proves source fingerprint provenance against its stored deploy ref, compares the fingerprint with the latest release, and is strict on real drift/detector/structural failures. Pre-migration deployments are reported as `legacy_identity` without false drift.
+- Config drift then proved source fingerprint provenance against its stored deploy ref and compared with the latest release; the 2026-08-17 hardening below supersedes that target with the explicit production marker. Pre-migration deployments remain `legacy_identity` without false drift.
 - Proof: `uv run python -m pytest -q libs/tests` (`916 passed`); focused regression (`106 passed`); Ruff, compileall, workflow YAML parsing, and `git diff --check` passed.
 - Rollout remains pending: after merge/release, each selected service backfills `IAC_SOURCE_CONFIG_HASH`/`IAC_DEPLOY_REF` on its next normal reconcile; legacy rows remain explicit and non-blocking, so no mass restart is required. The scheduled clean-checkout `--self-check` is the release proof. Local self-check is intentionally invalid while hash-input files differ from `HEAD`.
 
@@ -119,3 +121,20 @@
 - Upgraded the release reconcile workflow from `checkout@v4`, `setup-python@v5`, and `upload-artifact@v4` to the repository's Node.js 24 majors (`v7`, `v6`, `v7`).
 - Added a repository-wide workflow contract test so newly introduced workflows cannot bypass the minimum major baseline.
 - Proof: full `libs/tests` (`953 passed`), focused workflow/reconcile contracts (`22 passed`), Ruff, workflow YAML parsing, SSOT/document governance, and `git diff --check` passed.
+
+## 2026-08-17 Truthful Reconcile Hardening
+
+- Kept Cloudflare observation failure distinct from an observed empty DNS zone.
+- Made successful explicit prod promotion record an immutable `production/v*` marker; config drift now follows that marker, no-marker state fails closed, and later prod promotions cumulatively diff from the prior production marker rather than the prior staging candidate.
+- Bound App production deploy requests to the marker's underlying infra release, while App staging continues to use the latest release candidate.
+- Completed TrueAlpha data-engine's runtime/source identity split and added a generic contract over every runtime-only Deployer.
+- Correlated Dokploy deploy errors with independent Docker health: discrepancies remain failed and delivered, but route to P2 reconciliation rather than an invented runtime outage.
+- Fixed nested SSH health command quoting, combined TrueAlpha App readiness by boolean fields, tightened root-owned service-identity discovery, and aligned E2E assertions with public App/Shadow-DOM contracts.
+- Rollout evidence: the latest full explicit production reconcile was `v1.1.48`; later
+  `v1.1.49` single-service production runs left a mixed but explainable runtime, while
+  `v1.1.50`-`v1.1.52` remained staging candidates. No `production/v*` marker exists yet.
+  The first new-contract promotion must therefore explicitly use `before=v1.1.48`, target
+  the reviewed release after staging soak, reconcile the cumulative delta, and only then
+  record the marker. Until that high-risk step is approved and succeeds, config drift and
+  App production requests intentionally fail closed as unknown desired state.
+- Proof: full `libs/tests` (`1324 passed`), Ruff, changed-file Ruff format, compileall, workflow YAML parse, affected E2E collection, MkDocs build, harness manifest/status, and `git diff --check` passed.

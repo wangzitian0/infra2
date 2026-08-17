@@ -3,11 +3,12 @@ Auth and SSO integration tests.
 
 Tests authentication flows for Authentik.
 """
+
 import os
 import pytest
 import httpx
 from playwright.async_api import Page
-from conftest import TestConfig
+from conftest import TestConfig, assert_authentik_login_ready
 
 
 @pytest.mark.platform
@@ -18,8 +19,9 @@ async def test_authentik_health(config: TestConfig):
             f"{config.SSO_URL}/-/health/ready/",
             timeout=10.0,
         )
-        assert response.status_code < 500, \
+        assert response.status_code < 500, (
             f"Authentik health should respond, got {response.status_code}"
+        )
 
 
 @pytest.mark.platform
@@ -27,11 +29,7 @@ async def test_authentik_login_page_loads(page: Page, config: TestConfig):
     """Verify Authentik login page loads."""
     await page.goto(config.SSO_URL, wait_until="networkidle")
 
-    title = await page.title()
-    assert title is not None, "SSO page should load with a title"
-
-    body_content = await page.locator("body").inner_text()
-    assert len(body_content) > 0, "SSO page should have content"
+    await assert_authentik_login_ready(page)
 
 
 @pytest.mark.platform

@@ -32,6 +32,7 @@ APP_SOURCES: dict[str, str] = {
 ALLOWED_SENDERS = frozenset({"wangzitian0"})
 FIXED_DEPLOY_TYPES = frozenset({DeployType.STAGING, DeployType.PRODUCTION})
 _SEMVER_TAG_RE = re.compile(r"\Av[0-9]+\.[0-9]+\.[0-9]+\Z")
+_PRODUCTION_MARKER_PREFIX = "production/"
 _GITHUB_API_URL = "https://api.github.com"
 _GITHUB_API_VERSION = "2022-11-28"
 
@@ -280,17 +281,38 @@ def select_iac_ref(
 ) -> str:
     if deploy_type not in FIXED_DEPLOY_TYPES:
         return "main"
-    result = runner(
-        ["git", "tag", "--merged", "HEAD", "--sort=-version:refname"],
-        cwd=Path(repo_root),
-        capture_output=True,
-        text=True,
-        check=True,
+    patterns = (
+        [f"{_PRODUCTION_MARKER_PREFIX}v*.*.*"]
+        if deploy_type == DeployType.PRODUCTION
+        else ["v*.*.*"]
     )
-    for tag in result.stdout.splitlines():
-        cleaned = tag.strip()
-        if _SEMVER_TAG_RE.match(cleaned):
-            return cleaned
+    for pattern in patterns:
+        result = runner(
+            [
+                "git",
+                "tag",
+                "--list",
+                pattern,
+                "--merged",
+                "HEAD",
+                "--sort=-version:refname",
+            ],
+            cwd=Path(repo_root),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        for tag in result.stdout.splitlines():
+            cleaned = tag.strip().removeprefix(_PRODUCTION_MARKER_PREFIX)
+            if _SEMVER_TAG_RE.fullmatch(cleaned):
+                return cleaned
+            if deploy_type == DeployType.PRODUCTION and tag.strip():
+                raise ValueError(f"invalid production marker {tag.strip()!r}")
+    if deploy_type == DeployType.PRODUCTION:
+        raise ValueError(
+            "no production/vX.Y.Z marker is merged into HEAD; "
+            "production IaC state is unknown"
+        )
     raise ValueError("no released infra2 vX.Y.Z tag is merged into HEAD")
 
 
@@ -318,7 +340,9 @@ def make_plan(
     # truealpha.club) overrides whatever shared INTERNAL_DOMAIN the caller passed in;
     # every other service (no override declared) keeps today's behavior unchanged.
     effective_domain = domain_for_service(request.service) or domain
-    if not effective_domain or any(character.isspace() for character in effective_domain):
+    if not effective_domain or any(
+        character.isspace() for character in effective_domain
+    ):
         raise ValueError("domain must be non-empty and contain no whitespace")
     if timeout <= 0:
         raise ValueError("timeout must be positive")

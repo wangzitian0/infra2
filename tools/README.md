@@ -42,19 +42,25 @@ infra2.
 the infra-owned gate inventory against live workflow jobs. No local compatibility schema
 or application source checkout participates in the audit.
 
-`harness.py` is the read-only workspace front door. It validates
+`harness.py` is the read-only workspace front door. `check` validates
 `harness/repos.yaml`, referenced authority files, the infra2/infra2-sdk focus, and the
-autonomous App boundary. It never updates submodules or application policy.
+autonomous App boundary. `status` reports parent pin, checkout/remote heads,
+ahead/behind, dirty paths, and release identity; optional `--fetch` refreshes origin
+metadata but never checks out/pulls submodules or changes application policy.
 
 `dokploy_config_drift.py` is read-only and compares production's versioned,
-secret-independent source fingerprint with the latest release. It first verifies that
+secret-independent source fingerprint with the latest explicit `production/v*` promotion
+marker. A missing marker is unknown desired state and fails closed instead of guessing from
+the latest release. It first verifies that
 the stored fingerprint can be reproduced from `IAC_DEPLOY_REF`; runtime secrets remain
 only in the deploy idempotence hash. `--strict` fails on real drift, detector errors, and
 structural mismatches while reporting pre-migration identity separately.
 
 `service_identity_audit.py` is the blocking cross-plane identity gate. It validates
 every registry service, all deployment entry points, checked-in alert catalogs,
-and the complete internal/Cloudflare watchdog mapping. `watchdog_consistency_audit.py`
+and the complete root-owned internal/Cloudflare watchdog mapping; nested repositories and
+tool-created hidden worktrees are outside this repository's identity authority.
+`watchdog_consistency_audit.py`
 also enforces compose↔inventory equality and registry-derived `service_id` values.
 
 ## Division of labor (`libs/` vs `tools/`)
@@ -97,6 +103,12 @@ uv run python -m tools.harness check
 
 # Machine-readable result
 uv run python -m tools.harness check --json
+
+# Refresh remote metadata and report checkout/pin/release drift
+uv run python -m tools.harness status --fetch
+
+# Same observation, but fail when any checkout is ahead/behind/dirty/off-pin
+uv run python -m tools.harness status --fetch --require-current
 ```
 
 ## env (remote secrets)
@@ -167,7 +179,9 @@ Direct Feishu watchdog intended to run outside the infra2 host from GitHub
 Actions. It verifies public host reachability, Cloudflare Worker self-health,
 SSH diagnostics, and consumes Dokploy's per-compose/application status as an
 alert source (fail-closed `configuration` failure when `DOKPLOY_API_KEY` is
-missing, #543).
+missing, #543). A Dokploy deploy error remains failed; when the independent
+`infra2-docker-health` check is green it is routed as `state-discrepancy`/P2 for
+reconciliation instead of being mislabeled as a confirmed runtime outage.
 
 ```bash
 INFRA2_WATCHDOG_DRY_RUN=1 uv run python tools/out_of_band_watchdog.py

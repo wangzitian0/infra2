@@ -9,7 +9,7 @@ import re
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Mapping
@@ -588,6 +588,33 @@ def _dokploy_deployment_evidence(deployment: Mapping[str, object]) -> dict[str, 
     }
 
 
+def correlate_control_plane_with_runtime(
+    results: list[CheckResult],
+) -> list[CheckResult]:
+    """Classify Dokploy-error + healthy Docker as a state discrepancy.
+
+    Dokploy's control-plane status remains a real failure signal, but it does
+    not prove runtime outage.  A separately successful host-side Docker health
+    sweep is enough to lower urgency and route the operator to reconciliation;
+    it never turns the failed check green or suppresses delivery.
+    """
+    runtime_healthy = any(
+        result.name == "infra2-docker-health" and result.ok for result in results
+    )
+    if not runtime_healthy:
+        return results
+    return [
+        replace(
+            result,
+            failure_domain="state-discrepancy",
+            detail=f"{result.detail}; runtime_evidence=infra2-docker-health:ok",
+        )
+        if not result.ok and result.failure_domain == "dokploy-deploy-status"
+        else result
+        for result in results
+    ]
+
+
 def _severity_for(name: str, failure_domain: str) -> str:
     """Map a failure to a P0/P1/P2 severity ladder.
 
@@ -608,6 +635,8 @@ def _severity_for(name: str, failure_domain: str) -> str:
         if "staging" in lowered or "-pr-" in lowered or "preview" in lowered:
             return "P2"
         return "P1"
+    if failure_domain == "state-discrepancy":
+        return "P2"
     return "P2"
 
 
@@ -684,6 +713,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
     )
     results.extend(run_dokploy_status_check(current_env))
     results.extend(run_ssh_checks(ssh_config, ssh_targets))
+    results = correlate_control_plane_with_runtime(results)
     results = [
         CheckResult(
             result.name,
@@ -838,10 +868,21 @@ def _suggested_action_for_failure(name: str, failure_domain: str) -> str:
         return "call worker /status with WATCHDOG_STATUS_TOKEN and verify last-run freshness"
     if failure_domain == "dokploy-control-plane":
         return "check Dokploy API and deploy logs for rollout/network failures"
+    if failure_domain == "state-discrepancy":
+        return (
+            "compare Dokploy status/deploy evidence with `docker ps` and `docker inspect`; "
+            "reconcile the control-plane state without blind restart"
+        )
     return "inspect the failed check detail and verify target service health manually"
 
 
 def _runbook_url_for_failure(failure_domain: str) -> str:
+    if failure_domain == "state-discrepancy":
+        return (
+            "https://github.com/wangzitian0/infra2/blob/main/"
+            "docs/ssot/ops.standards.md#rule-4-"
+            "状态不一致协议-state-discrepancy-protocol"
+        )
     anchor = "#out-of-band-watchdog"
     if failure_domain == "alert-bridge":
         anchor = "#alerting-bridge"

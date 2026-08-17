@@ -63,7 +63,7 @@ def test_format_report_flags_drift_and_confirms_in_sync() -> None:
     assert "🔴 DRIFT platform/x" in drift and "v1.2.3" in drift
 
     ok = m.format_report("v1.2.3", [Row("platform/y", "in_sync", "aaa", "aaa")])
-    assert "✅ every comparable service matches release v1.2.3" in ok
+    assert "✅ every comparable service matches production target v1.2.3" in ok
 
 
 def test_format_report_surfaces_errors_and_does_not_call_them_drift() -> None:

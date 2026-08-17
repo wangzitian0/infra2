@@ -14,6 +14,9 @@ git submodule update --init --recursive
 
 # 只读验证仓库角色、authority 路径与自治边界
 uv run python -m tools.harness check
+
+# 刷新 remote refs 并显示 pin/HEAD/ahead-behind/dirty/release（不 checkout/pull）
+uv run python -m tools.harness status --fetch
 ```
 
 入口见 [harness/README.md](harness/README.md)，架构真源见

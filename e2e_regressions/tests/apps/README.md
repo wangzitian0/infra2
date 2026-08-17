@@ -14,7 +14,7 @@
 |------|------|----------|
 | **Core Services** | `test_api_health` | 核心服务连通性 |
 | **Portal** | `test_portal_sso` | Portal 登录重定向（可选） |
-| **Finance Report** | `test_finance_report_health_endpoint`, `test_finance_report_frontend_available` | 应用健康检查与依赖状态 |
+| **Finance Report** | `test_finance_report_health_endpoint`, `test_finance_report_frontend_available` | 应用健康检查声明的全部 checks 为绿，不在 harness 复制依赖清单 |
 
 ## 运行测试
 

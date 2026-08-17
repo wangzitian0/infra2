@@ -6,6 +6,7 @@ Simplified: uses libs/env.py for secrets, minimal API surface.
 
 from __future__ import annotations
 import os
+import shlex
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -298,11 +299,14 @@ def check_service(c: "Context", service: str, health_cmd: str) -> dict:
 
     container = with_env_suffix(container, env)
 
-    result = c.run(
-        f"ssh root@{env['VPS_HOST']} 'docker exec {container} {health_cmd}'",
-        warn=True,
-        hide=True,
-    )
+    # Build the local and remote shells independently.  Health commands often
+    # contain their own quotes (python -c + URLs); interpolating them inside one
+    # outer single-quoted SSH string silently changes the command and produces a
+    # false-unhealthy result.  ``sh -lc`` preserves the intended command while
+    # shlex.quote protects both shell boundaries.
+    remote_command = shlex.join(["docker", "exec", container, "sh", "-lc", health_cmd])
+    command = shlex.join(["ssh", f"root@{env['VPS_HOST']}", remote_command])
+    result = c.run(command, warn=True, hide=True)
 
     if result.ok:
         success(f"{container}: ready")

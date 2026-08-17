@@ -27,10 +27,9 @@ async def test_finance_report_health_endpoint(config: TestConfig):
         assert data.get("status") == "healthy", f"Health status is not healthy: {data}"
 
         checks = data.get("checks")
-        assert isinstance(checks, dict), "Health response missing checks"
-        assert checks.get("database") is True, "Database check should be healthy"
-        assert checks.get("redis") is True, "Redis check should be healthy"
-        assert checks.get("s3") is True, "S3 check should be healthy"
+        assert isinstance(checks, dict) and checks, "Health response missing checks"
+        unhealthy = sorted(name for name, ok in checks.items() if ok is not True)
+        assert not unhealthy, f"Health response contains unhealthy checks: {unhealthy}"
 
 
 @pytest.mark.app

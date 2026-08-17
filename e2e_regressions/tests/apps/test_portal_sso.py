@@ -3,9 +3,10 @@ Portal SSO login and navigation tests.
 
 Tests portal access with Authentik OIDC authentication flow.
 """
+
 import pytest
 from playwright.async_api import Page
-from conftest import TestConfig
+from conftest import TestConfig, assert_authentik_login_ready
 
 
 @pytest.mark.smoke
@@ -18,8 +19,9 @@ async def test_portal_accessible(page: Page, config: TestConfig):
     await page.goto(config.PORTAL_URL, wait_until="domcontentloaded")
 
     current_url = page.url
-    assert config.PORTAL_URL in current_url or config.SSO_URL in current_url, \
+    assert config.PORTAL_URL in current_url or config.SSO_URL in current_url, (
         f"Expected to be at Portal or SSO, got {current_url}"
+    )
 
 
 @pytest.mark.sso
@@ -27,11 +29,7 @@ async def test_sso_login_page_loads(page: Page, config: TestConfig):
     """Verify Authentik SSO login page loads correctly."""
     await page.goto(config.SSO_URL, wait_until="networkidle")
 
-    title = await page.title()
-    assert title is not None, "SSO page should load with a title"
-
-    body_content = await page.locator("body").inner_text()
-    assert len(body_content) > 0, "SSO page should have content"
+    await assert_authentik_login_ready(page)
 
 
 @pytest.mark.sso
@@ -62,7 +60,9 @@ async def test_portal_password_login(page: Page, config: TestConfig):
         if await password_input.is_visible():
             await password_input.fill(config.E2E_PASSWORD)
 
-            login_button = page.locator("button[type='submit'], text=/登录|login|sign in/i")
+            login_button = page.locator(
+                "button[type='submit'], text=/登录|login|sign in/i"
+            )
             if await login_button.is_visible():
                 await login_button.click()
                 await page.wait_for_timeout(2000)
@@ -106,6 +106,8 @@ async def test_portal_responsive_design(page: Page, config: TestConfig):
 
             await new_page.wait_for_load_state("networkidle")
 
-            assert len(errors) == 0, f"Portal should load without errors at {size}: {errors}"
+            assert len(errors) == 0, (
+                f"Portal should load without errors at {size}: {errors}"
+            )
         finally:
             await context.close()

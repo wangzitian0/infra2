@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -22,6 +23,8 @@ from libs.deploy_dependencies import explain_fanout
 from libs.deploy_contract import all_service_keys, service_spec
 
 MANIFEST_PATH = "docs/ssot/deploy-dependencies.yaml"
+PRODUCTION_MARKER_PREFIX = "production/"
+RELEASE_TAG_RE = re.compile(r"v\d+\.\d+\.\d+")
 
 
 @dataclass(frozen=True)
@@ -124,6 +127,123 @@ def assert_after_on_main(
         f"unresolvable ({ancestor.stderr.strip() or 'git error'}). Ensure it exists, e.g. "
         f"`git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main`."
     )
+
+
+def production_marker_tag(release_tag: str) -> str:
+    """Map an immutable release tag to its immutable production marker."""
+    if not RELEASE_TAG_RE.fullmatch(release_tag):
+        raise ValueError(
+            f"production promotion requires a version tag, got {release_tag!r}"
+        )
+    return f"{PRODUCTION_MARKER_PREFIX}{release_tag}"
+
+
+def assert_production_marker_advances(
+    release_tag: str,
+    repo_root: Path,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> str | None:
+    """Validate marker history and return the current production release, if any."""
+    production_marker_tag(release_tag)
+    listed = runner(
+        [
+            "git",
+            "tag",
+            "--list",
+            f"{PRODUCTION_MARKER_PREFIX}v*.*.*",
+            "--sort=-version:refname",
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    if listed.returncode != 0:
+        raise SystemExit(
+            f"::error::cannot enumerate production markers: {listed.stderr.strip()}"
+        )
+    markers = [line.strip() for line in listed.stdout.splitlines() if line.strip()]
+    invalid = [
+        marker
+        for marker in markers
+        if not RELEASE_TAG_RE.fullmatch(marker.removeprefix(PRODUCTION_MARKER_PREFIX))
+    ]
+    if invalid:
+        raise SystemExit(f"::error::invalid production marker(s): {', '.join(invalid)}")
+    if not markers:
+        return None
+    current = markers[0].removeprefix(PRODUCTION_MARKER_PREFIX)
+
+    def version(tag: str) -> tuple[int, ...]:
+        return tuple(int(part) for part in tag.removeprefix("v").split("."))
+
+    if version(release_tag) < version(current):
+        raise SystemExit(
+            f"::error::production promotion cannot move backward from {current} "
+            f"to {release_tag}; publish a newer revert release instead"
+        )
+    return current
+
+
+def record_production_marker(
+    release_tag: str,
+    repo_root: Path,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> str:
+    """Record a successful explicit production promotion as an immutable tag.
+
+    The marker advances only after all selected production deploys succeed.  A
+    retry is idempotent when the existing marker resolves to the same commit;
+    moving an existing marker is always refused.
+    """
+    marker = production_marker_tag(release_tag)
+    resolved = runner(
+        ["git", "rev-parse", "--verify", f"{release_tag}^{{commit}}"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    if resolved.returncode != 0:
+        raise SystemExit(f"::error::cannot resolve production release {release_tag!r}")
+    target_sha = resolved.stdout.strip().lower()
+
+    existing = runner(
+        ["git", "rev-parse", "--verify", f"refs/tags/{marker}^{{commit}}"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    if existing.returncode == 0:
+        existing_sha = existing.stdout.strip().lower()
+        if existing_sha != target_sha:
+            raise SystemExit(
+                f"::error::refusing to move immutable production marker {marker}: "
+                f"{existing_sha[:12]} != {target_sha[:12]}"
+            )
+    else:
+        tagged = runner(
+            ["git", "tag", marker, target_sha],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+        )
+        if tagged.returncode != 0:
+            raise SystemExit(
+                f"::error::cannot create production marker {marker}: "
+                f"{tagged.stderr.strip()}"
+            )
+    pushed = runner(
+        ["git", "push", "origin", f"refs/tags/{marker}"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    if pushed.returncode != 0:
+        raise SystemExit(
+            f"::error::cannot push production marker {marker}: {pushed.stderr.strip()}"
+        )
+    return marker
 
 
 def changed_files_from_git(
@@ -394,6 +514,24 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     repo_root = Path(args.repo_root).resolve()
+    # Validate the durable desired-state coordinate before any production side
+    # effect.  A branch, SHA, or pre-release must never deploy successfully and
+    # only then fail while trying to record its marker.
+    effective_before = args.before
+    if args.promote_prod:
+        current_production = assert_production_marker_advances(args.after, repo_root)
+        if current_production:
+            if effective_before and effective_before != current_production:
+                raise SystemExit(
+                    "::error::production before must match current marker release "
+                    f"{current_production}; got {effective_before}"
+                )
+            effective_before = current_production
+        elif not effective_before:
+            raise SystemExit(
+                "::error::first production marker requires an explicit known-production "
+                "--before release"
+            )
     # Fail-closed BEFORE planning/deploying: an apply run must promote a tag that is
     # reachable from reviewed main (Infra-011). dry-run is plan-only, so it may inspect
     # any ref (e.g. preview a not-yet-merged tag).
@@ -402,7 +540,7 @@ def main(argv: list[str] | None = None) -> int:
     changed_files = (
         list(args.changed_file)
         if args.changed_file
-        else changed_files_from_git(repo_root, args.before or None, args.after)
+        else changed_files_from_git(repo_root, effective_before or None, args.after)
     )
     plan = build_plan(changed_files)
     commands = build_deploy_commands(
@@ -418,6 +556,13 @@ def main(argv: list[str] | None = None) -> int:
     results: list[dict] = []
     if applied:
         results = run_deploy_commands(applied)
+    production_marker = ""
+    if (
+        args.promote_prod
+        and not args.dry_run
+        and not any(result.get("returncode") != 0 for result in results)
+    ):
+        production_marker = record_production_marker(args.after, repo_root)
 
     payload = {
         "plan": plan.to_dict(),
@@ -427,6 +572,7 @@ def main(argv: list[str] | None = None) -> int:
         "applied": [command.to_dict() for command in applied],
         "deferred": [command.to_dict() for command in deferred],
         "promote_prod": args.promote_prod,
+        "production_marker": production_marker,
         "results": results,
         "dry_run": args.dry_run,
     }

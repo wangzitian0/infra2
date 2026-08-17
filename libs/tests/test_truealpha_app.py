@@ -8,7 +8,19 @@ SERVICE_DIR = ROOT / "truealpha/truealpha/10.app"
 
 
 def _load_deploy_module():
-    spec = importlib.util.spec_from_file_location("truealpha_app_deploy", SERVICE_DIR / "deploy.py")
+    spec = importlib.util.spec_from_file_location(
+        "truealpha_app_deploy", SERVICE_DIR / "deploy.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_shared_tasks_module():
+    spec = importlib.util.spec_from_file_location(
+        "truealpha_app_shared_tasks", SERVICE_DIR / "shared_tasks.py"
+    )
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -26,21 +38,29 @@ def test_api_router_does_not_claim_the_bare_api_prefix() -> None:
     lower-priority Host()-only router."""
     compose = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8"))
     llm_labels = compose["services"]["llm"]["labels"]
-    rule_label = next(label for label in llm_labels if ".rule=" in label and "truealpha-api" in label)
+    rule_label = next(
+        label for label in llm_labels if ".rule=" in label and "truealpha-api" in label
+    )
     rule = rule_label.split(".rule=", 1)[1]
 
-    assert "PathPrefix(`/api`)" not in rule, "the llm router must not claim the bare /api prefix"
+    assert "PathPrefix(`/api`)" not in rule, (
+        "the llm router must not claim the bare /api prefix"
+    )
     assert "PathPrefix(`/api/mcp`)" in rule
     assert "Path(`/api/health`)" in rule
 
     web_labels = compose["services"]["web"]["labels"]
-    web_rule_label = next(label for label in web_labels if ".rule=" in label and "truealpha-web" in label)
+    web_rule_label = next(
+        label for label in web_labels if ".rule=" in label and "truealpha-web" in label
+    )
     # web's router must stay a bare Host() match (no PathPrefix of its own) so it
     # remains the catch-all for every /api/* path the llm router no longer claims.
     assert "PathPrefix" not in web_rule_label.split(".rule=", 1)[1]
 
 
-def test_both_routers_use_the_computed_app_host_not_the_literal_prefix_pattern() -> None:
+def test_both_routers_use_the_computed_app_host_not_the_literal_prefix_pattern() -> (
+    None
+):
     """truealpha#474: `truealpha${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}` collapses to
     the malformed `truealpha.truealpha.club` in production (empty ENV_DOMAIN_SUFFIX,
     INTERNAL_DOMAIN already `truealpha.club`). Both routers must use the
@@ -49,7 +69,9 @@ def test_both_routers_use_the_computed_app_host_not_the_literal_prefix_pattern()
     for service in ("llm", "web"):
         labels = compose["services"][service]["labels"]
         router_name = "truealpha-api" if service == "llm" else "truealpha-web"
-        rule = next(label for label in labels if ".rule=" in label and router_name in label).split(".rule=", 1)[1]
+        rule = next(
+            label for label in labels if ".rule=" in label and router_name in label
+        ).split(".rule=", 1)[1]
         assert "${APP_HOST}" in rule
         assert "${INTERNAL_DOMAIN}" not in rule
 
@@ -72,14 +94,24 @@ def test_app_host_is_bare_domain_in_production_and_prefixed_elsewhere() -> None:
     module = _load_deploy_module()
     deployer = module.AppDeployer
 
-    assert deployer.compose_env_overrides(env="production", domain="truealpha.club", env_suffix="")[
-        "APP_HOST"
-    ] == "truealpha.club"
-    assert deployer.compose_env_overrides(env="staging", domain="zitian.party", env_suffix="-staging")[
-        "APP_HOST"
-    ] == "truealpha-staging.zitian.party"
+    assert (
+        deployer.compose_env_overrides(
+            env="production", domain="truealpha.club", env_suffix=""
+        )["APP_HOST"]
+        == "truealpha.club"
+    )
+    assert (
+        deployer.compose_env_overrides(
+            env="staging", domain="zitian.party", env_suffix="-staging"
+        )["APP_HOST"]
+        == "truealpha-staging.zitian.party"
+    )
 
-    prod_env = {"ENV": "production", "ENV_DOMAIN_SUFFIX": "", "INTERNAL_DOMAIN": "truealpha.club"}
+    prod_env = {
+        "ENV": "production",
+        "ENV_DOMAIN_SUFFIX": "",
+        "INTERNAL_DOMAIN": "truealpha.club",
+    }
     assert deployer.compose_env_base(prod_env)["APP_HOST"] == "truealpha.club"
 
     # ENV_SUFFIX (data-path collision guard, distinct from ENV_DOMAIN_SUFFIX) must be
@@ -90,4 +122,27 @@ def test_app_host_is_bare_domain_in_production_and_prefixed_elsewhere() -> None:
         "ENV_DOMAIN_SUFFIX": "-staging",
         "INTERNAL_DOMAIN": "zitian.party",
     }
-    assert deployer.compose_env_base(staging_env)["APP_HOST"] == "truealpha-staging.zitian.party"
+    assert (
+        deployer.compose_env_base(staging_env)["APP_HOST"]
+        == "truealpha-staging.zitian.party"
+    )
+
+
+def test_status_combines_boolean_readiness_instead_of_truthy_result_dicts(monkeypatch):
+    module = _load_shared_tasks_module()
+    results = iter(
+        [
+            {"is_ready": False, "details": "Unhealthy"},
+            {"is_ready": True, "details": "Healthy"},
+        ]
+    )
+    monkeypatch.setattr(
+        module, "check_service", lambda *_args, **_kwargs: next(results)
+    )
+
+    status = module.status.body(object())
+
+    assert status == {
+        "is_ready": False,
+        "details": "llm=Unhealthy, web=Healthy",
+    }
