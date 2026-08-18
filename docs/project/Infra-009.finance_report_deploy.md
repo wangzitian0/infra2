@@ -56,6 +56,7 @@ vault → postgres → app
 
 | Date | Change |
 |------|--------|
+| 2026-08-18 | Made the finance_report app rate-limit fallback environment-aware: staging 2000, production 300, with Vault override precedence. |
 | 2026-06-02 | Scoped finance_report Vault app-token policies by environment and added targeted token repair with accessor tracking/revoke. |
 
 ## Vault Secrets Setup

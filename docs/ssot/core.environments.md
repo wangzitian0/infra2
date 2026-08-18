@@ -272,6 +272,13 @@ python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref
 | Staging | `secret/data/{project}/staging/{service}` | `secret/data/finance_report/staging/app` |
 | Production | `secret/data/{project}/production/{service}` | `secret/data/finance_report/production/app` |
 
+Vault values override rendered fallbacks. For `finance_report/app`, the global
+API request limit is environment capacity rather than a shared application
+default: staging renders `API_RATE_LIMIT_REQUESTS=2000` for the parallel E2E
+runner's shared IP, while production and unknown fixed environments retain
+`300`. No authenticated tenant bypass is implied, and operators can still set
+an explicit per-environment Vault value.
+
 <a id="telemetry-identity"></a>
 ### 4.5 遥测标识隔离 (Telemetry identity)
 
