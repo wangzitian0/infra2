@@ -69,6 +69,32 @@ Receiver 的 validate job 将选定的 `iac_ref` 作为 job output 传给 canary
 | **平台服务**(iac_pinned)**prod** | **显式 promote**(`workflow_dispatch` `promote_prod=true` / `--promote-prod`)——tag 推送**不**自动动 prod | **同一 tag** | 同上 | — | 长期 |
 | **L1 Bootstrap**(iac-runner)| `bootstrap/06.iac_runner/**` 变更 | merged SHA | 带外 self-update(`deploy.yml`)| — | 独立 cadence |
 
+Preview success is a two-stage proof, not public reachability alone. The lifecycle
+snapshots Dokploy deployment IDs before its trigger, waits for a new record attributable
+to that trigger to reach a terminal-good state, and only then polls the service's declared
+public readiness surfaces. Finance Report declares both `/api/health` and
+`/frontend-version.json`; each must return HTTP 200 with `git_sha` or `version`. The
+backend must match the requested runtime image ref (tag or short SHA), while the frontend
+must match the resolved source SHA baked into its image. Therefore an old stack that
+remains routable during replacement, or a backend that starts while the frontend remains
+`Created`, cannot produce a false green. `--no-wait` explicitly omits both proofs and must
+not be used by a blocking deployment workflow.
+
+The reserved `pr-999` canary is a singleton mutable resource, so all workflow events share
+one non-cancelling job concurrency group. A same-repository PR records its exact head SHA as
+the authoritative IaC identity and may pass the head branch only as a clone transport; the
+front door proves both refs resolve to the same commit before mutating Dokploy. If the
+non-idempotent `compose.create` call times out after Dokploy commits it, the lifecycle
+re-reads and adopts the one deterministic project/environment/name instead of creating a
+duplicate. Teardown is green only after two consecutive reads observe that name absent.
+
+A fresh Finance Report preview database runs migrations before uvicorn. Its backend
+healthcheck therefore grants a bounded 450-second startup period. The 2026-08-17 exact-head
+canary needed 293.6 seconds for the complete create/deploy/readiness/cleanup operation, so
+this leaves cold-host margin while the outer canary still fails closed at its configured
+600-second deadline. The emitted stage record uses that configured deadline, not the SDK's
+generic stage default; a `hard-breach` is a red time-budget failure even if health is green.
+
 > **平台服务**(iac_pinned)无 preview,只有 staging/prod,且**只接受 release tag 作 `iac_ref`**。release tag
 > 推送后 `reconcile-iac-inputs.yml` 自动:diff 上一 release tag → 本 tag,changed files 经
 > [`deploy-dependencies.yaml`](./deploy-dependencies.yaml) fan-out 到受影响 `iac_pinned` 服务,以**该 tag** 触发
@@ -249,7 +275,7 @@ identity。
 `infra2_sdk.delivery` 拥有 CI/CD、route canary、watchdog、probe 共享的稀疏 Env×Stage 证据 schema；
 infra2 与 App producer 都直接从各自固定版本的 SDK 导入，不保留源码级 compatibility re-export。
 当 stage 结果用于部署决策/告警路由/加速时,producer 必须发可比记录而非一次性日志。
-infra2 当前固定 `infra2-sdk==0.3.0` 的不可变 release wheel；`deploy_v2_canary` 是首个
+infra2 当前固定 `infra2-sdk==1.0.0` 的不可变 release wheel；`deploy_v2_canary` 是首个
 真实 producer：健康路径把 `StageResult` 写入 job summary JSON，失败路径把同一记录放入
 带外告警，并将控制面/配置/运行时/清理故障映射为 SDK 标准 failure domain。成功证据的
 `target` 必须记录已解析 code/IaC SHA；禁用健康检查的 `--no-wait` 只能记录带原因的 `skip`。

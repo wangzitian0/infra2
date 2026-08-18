@@ -8,8 +8,10 @@ path itself still needs a real smoke test (see the PR body).
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
+import httpx
 import pytest
 
 from libs.deploy import preview as pl
@@ -40,9 +42,9 @@ class FakeDokploy:
         github_id="gh-1",
         source_app=True,
         source_creds=True,
-        compose_status="done",
+        deployment_status="done",
     ):
-        self._compose_status = compose_status  # Dokploy deploy status the wait polls
+        self._deployment_status = deployment_status
         self._existing = existing  # dict returned by find_compose_by_name, or None
         self._environment_id = environment_id
         self._github_id = github_id
@@ -55,6 +57,7 @@ class FakeDokploy:
         self.deleted: list[tuple[str, bool]] = []
         self.found: list[tuple] = []
         self.ensured: list[tuple] = []
+        self.deployment_queries = 0
 
     def get_github_provider_id(self):
         return self._github_id
@@ -104,8 +107,14 @@ class FakeDokploy:
         self.deployed.append(compose_id)
         return {}
 
-    def get_compose(self, compose_id):
-        return {"composeId": compose_id, "composeStatus": self._compose_status}
+    def get_compose_deployments(self, compose_id):
+        self.deployment_queries += 1
+        records = [{"deploymentId": "dep-old", "status": "done"}]
+        if self.deployed:
+            records.append(
+                {"deploymentId": "dep-this-trigger", "status": self._deployment_status}
+            )
+        return records
 
     def delete_compose(self, compose_id, *, delete_volumes=False):
         self.deleted.append((compose_id, delete_volumes))
@@ -113,20 +122,20 @@ class FakeDokploy:
 
 
 def _ok_get(url, timeout):
-    return 200, "ok"
+    return 200, f'{{"git_sha":"{SHORT_SHA}","version":"{SHORT_SHA}"}}'
 
 
 def test_up_fast_fails_when_dokploy_reports_deploy_error():
-    # an unpublished image / build failure -> Dokploy composeStatus=error -> bail at once,
-    # NOT wait out the full health timeout (the 10-min hang the live canary hit).
-    client = FakeDokploy(existing=None, compose_status="error")
+    # An unpublished image / build failure on THIS invocation's deployment record must
+    # fail before any public readiness probe can accept the old stack's HTTP 200.
+    client = FakeDokploy(existing=None, deployment_status="error")
     polls = {"n": 0}
 
     def never_healthy(url, timeout):
         polls["n"] += 1
         return 0, "down"
 
-    with pytest.raises(RuntimeError, match="composeStatus=error"):
+    with pytest.raises(RuntimeError, match="rollout entered error"):
         pl.up(
             "pr",
             5,
@@ -136,8 +145,70 @@ def test_up_fast_fails_when_dokploy_reports_deploy_error():
             http_get=never_healthy,
             health_timeout=600,
             health_interval=10,
+            _sleep=lambda _s: None,
+            _monotonic=iter([0, 700]).__next__,
         )
     assert polls["n"] == 0  # failed before the first HTTP health poll — no 600s wait
+
+
+def test_up_waits_for_own_terminal_rollout_before_public_readiness():
+    client = FakeDokploy(existing={"composeId": "cmp-existing"})
+
+    def readiness_get(url, timeout):
+        # One pre-trigger snapshot plus at least one post-trigger poll must happen before
+        # the old public route is consulted. A bare old-stack 200 is not deploy proof.
+        assert client.deployment_queries >= 2
+        return _ok_get(url, timeout)
+
+    result = pl.up(
+        "branch",
+        "main",
+        code="main",
+        domain="zitian.party",
+        client=client,
+        http_get=readiness_get,
+    )
+
+    assert result.healthy is True
+    assert client.deployment_queries >= 2
+
+
+def test_finance_preview_requires_exact_version_on_backend_and_frontend():
+    client = FakeDokploy(existing={"composeId": "cmp-existing"})
+    seen: list[str] = []
+
+    def stale_frontend(url, timeout):
+        seen.append(url)
+        if url.endswith("/api/health"):
+            return _ok_get(url, timeout)
+        return 200, '{"git_sha":"old0000","version":"old0000"}'
+
+    with pytest.raises(TimeoutError, match="requested deployment identity"):
+        pl.up(
+            "branch",
+            "main",
+            code="main",
+            domain="zitian.party",
+            client=client,
+            http_get=stale_frontend,
+            health_timeout=600,
+            _sleep=lambda _s: None,
+            _monotonic=iter([0, 700]).__next__,
+        )
+
+    assert "https://report-branch-main.zitian.party/api/health" in seen
+    assert "https://report-branch-main.zitian.party/frontend-version.json" in seen
+
+
+def test_preview_backend_health_budget_covers_measured_cold_start():
+    source = COMPOSE_PATH.read_text(encoding="utf-8")
+    backend_start = source.index("\n  backend:")
+    frontend_start = source.index("\n  frontend:")
+    backend_block = source[backend_start:frontend_start]
+    match = re.search(r"BACKEND_HEALTHCHECK_START_PERIOD:-([0-9]+)s", backend_block)
+
+    assert match is not None
+    assert int(match.group(1)) >= 450
 
 
 # --- up: create path -------------------------------------------------------------
@@ -182,6 +253,84 @@ def test_up_creates_compose_when_absent_and_deploys():
     assert result.sha == FULL_SHA
     assert result.url == "https://report-pr-5.zitian.party"
     assert result.healthy is True
+
+
+def test_up_adopts_deterministic_compose_after_create_timeout():
+    class CreateTimedOutAfterCommit(FakeDokploy):
+        def create_compose(self, environment_id, name, **kwargs):
+            created = super().create_compose(environment_id, name, **kwargs)
+            self._existing = {"composeId": created["composeId"]}
+            raise httpx.ReadTimeout("response lost after create")
+
+    client = CreateTimedOutAfterCommit(existing=None)
+    result = pl.up(
+        "pr",
+        5,
+        code="main",
+        domain="zitian.party",
+        client=client,
+        wait=False,
+    )
+
+    assert len(client.created) == 1
+    assert result.compose_id == "cmp-new"
+    assert client.deployed == ["cmp-new"]
+
+
+def test_up_retries_alias_read_after_ambiguous_create_until_commit_is_visible():
+    class EventuallyVisibleCreate(FakeDokploy):
+        committed = False
+        recovery_reads = 0
+
+        def find_compose_by_name(self, name, project_name=None, env_name=None):
+            if self.committed and env_name != "staging":
+                self.recovery_reads += 1
+                if self.recovery_reads >= 2:
+                    return {"composeId": "cmp-eventual"}
+                return None
+            return super().find_compose_by_name(name, project_name, env_name)
+
+        def create_compose(self, environment_id, name, **kwargs):
+            super().create_compose(environment_id, name, **kwargs)
+            self.committed = True
+            raise httpx.ReadTimeout("response lost after create")
+
+    sleeps: list[int] = []
+    client = EventuallyVisibleCreate(existing=None)
+    result = pl.up(
+        "pr",
+        5,
+        code="main",
+        domain="zitian.party",
+        client=client,
+        wait=False,
+        _sleep=sleeps.append,
+    )
+
+    assert len(client.created) == 1
+    assert client.recovery_reads == 2
+    assert sleeps == [2]
+    assert result.compose_id == "cmp-eventual"
+
+
+def test_up_preserves_create_timeout_when_alias_did_not_appear():
+    class CreateTimedOutBeforeCommit(FakeDokploy):
+        def create_compose(self, environment_id, name, **kwargs):
+            raise httpx.ReadTimeout("create never committed")
+
+    client = CreateTimedOutBeforeCommit(existing=None)
+    with pytest.raises(httpx.ReadTimeout, match="create never committed"):
+        pl.up(
+            "pr",
+            5,
+            code="main",
+            domain="zitian.party",
+            client=client,
+            wait=False,
+            _sleep=lambda _seconds: None,
+        )
+
+    assert client.deployed == []
 
 
 def test_up_env_has_short_sha_suffix_and_ephemeral_db_knobs():
@@ -362,7 +511,7 @@ def test_up_no_wait_skips_health_check():
 
 def test_up_raises_when_health_never_passes():
     client = FakeDokploy(existing=None)
-    with pytest.raises(TimeoutError, match="did not become healthy"):
+    with pytest.raises(TimeoutError, match="requested deployment identity"):
         pl.up(
             "pr",
             5,
@@ -459,20 +608,113 @@ def test_wait_for_health_returns_false_on_timeout():
     assert healthy is False
 
 
+def test_wait_for_health_legacy_status_precheck_rejects_error():
+    with pytest.raises(RuntimeError, match="composeStatus=error"):
+        pl._wait_for_health(
+            "https://x/api/health",
+            timeout=600,
+            interval=10,
+            http_get=_ok_get,
+            deploy_status=lambda: "error",
+        )
+
+
+@pytest.mark.parametrize("body", ["not-json", "[]"])
+def test_versioned_readiness_rejects_unusable_json(body):
+    assert (
+        pl._wait_for_readiness(
+            "https://x",
+            (pl.PreviewReadinessProbe("/version", ("git_sha", "version")),),
+            expected_versions={"runtime": SHORT_SHA},
+            timeout=0,
+            interval=10,
+            http_get=lambda _u, _t: (200, body),
+            _now=lambda: 0,
+        )
+        is False
+    )
+
+
+def test_versioned_readiness_rejects_unknown_version_source():
+    with pytest.raises(ValueError, match="no expected preview version"):
+        pl._wait_for_readiness(
+            "https://x",
+            (
+                pl.PreviewReadinessProbe(
+                    "/version", ("git_sha",), version_source="invalid"
+                ),
+            ),
+            expected_versions={"runtime": SHORT_SHA},
+            timeout=0,
+            interval=10,
+            http_get=lambda _u, _t: (200, f'{{"git_sha":"{SHORT_SHA}"}}'),
+            _now=lambda: 0,
+        )
+
+
+def test_versioned_readiness_accepts_match_from_any_declared_field():
+    assert (
+        pl._wait_for_readiness(
+            "https://x",
+            (pl.PreviewReadinessProbe("/version", ("git_sha", "version")),),
+            expected_versions={"runtime": SHORT_SHA},
+            timeout=0,
+            interval=10,
+            http_get=lambda _u, _t: (
+                200,
+                f'{{"git_sha":"{FULL_SHA}","version":"{SHORT_SHA}"}}',
+            ),
+            _now=lambda: 0,
+        )
+        is True
+    )
+
+
+def test_http_get_reads_enough_body_for_version_metadata(monkeypatch):
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, limit):
+            assert limit == 4096
+            return f'{{"git_sha":"{SHORT_SHA}"}}'.encode()
+
+    monkeypatch.setattr(pl, "urlopen", lambda _request, timeout: Response())
+
+    assert pl._http_get("https://x/version", 10) == (
+        200,
+        f'{{"git_sha":"{SHORT_SHA}"}}',
+    )
+
+
 def test_up_image_ref_overrides_short_sha_for_releases():
     # a release pulls its retained TAG, not the (pruned) short sha
     client = FakeDokploy(existing=None)
+    seen: list[str] = []
+
+    def release_get(url, _timeout):
+        seen.append(url)
+        version = "v1.2.3" if url.endswith("/api/health") else SHORT_SHA
+        return 200, f'{{"git_sha":"{version}","version":"{version}"}}'
+
     pl.up(
         "branch",
         "main",
         code="main",
         domain="z.p",
         client=client,
-        http_get=_ok_get,
+        http_get=release_get,
         image_ref="v1.2.3",
     )
     _cid, env = client.env_updates[0]
     assert env["IMAGE_TAG"] == "v1.2.3" and env["GIT_COMMIT_SHA"] == "v1.2.3"
+    assert any(url.endswith("/api/health") for url in seen)
+    assert any(url.endswith("/frontend-version.json") for url in seen)
 
 
 def test_preview_entrypoint_overrides_environment_to_match_otel_tag():

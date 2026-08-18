@@ -27,6 +27,14 @@ import pytest
 
 import libs.deploy.preview as pl
 
+FULL_SHA = "1af32e6daf17e2c58383dd2c0bfaea13bc11e517"
+SHORT_SHA = FULL_SHA[:7]
+
+
+@pytest.fixture(autouse=True)
+def _stub_resolver(monkeypatch):
+    monkeypatch.setattr(pl, "resolve_to_sha", lambda code, repo=None: FULL_SHA)
+
 
 class ConvergenceFakeDokploy:
     """A stateful Dokploy double modelling the two layers of the infra2#310 leak.
@@ -51,6 +59,7 @@ class ConvergenceFakeDokploy:
             str, str
         ] = {}  # assigned appName -> composeId (ephemeral DB)
         self._seq = 0
+        self._deployed = False
 
     # --- read side ---------------------------------------------------------
     def get_github_provider_id(self):
@@ -93,7 +102,14 @@ class ConvergenceFakeDokploy:
         return {}
 
     def deploy_compose(self, compose_id):
+        self._deployed = True
         return {}
+
+    def get_compose_deployments(self, compose_id):
+        records = [{"deploymentId": "dep-old", "status": "done"}]
+        if self._deployed:
+            records.append({"deploymentId": "dep-new", "status": "done"})
+        return records
 
     def get_compose(self, compose_id):
         return {"composeId": compose_id, "composeStatus": "done"}
@@ -118,7 +134,7 @@ class ConvergenceFakeDokploy:
 
 
 def _ok_get(url, timeout):
-    return 200, "ok"
+    return 200, f'{{"git_sha":"{SHORT_SHA}","version":"{SHORT_SHA}"}}'
 
 
 _ALIASES = [("branch", "main"), ("pr", 7), ("commit", "1ab32d5")]

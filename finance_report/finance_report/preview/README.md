@@ -23,7 +23,7 @@ Driven by the `tools/deploy_v2.py` front door, which routes preview to the
 `libs/deploy/preview.py` backend (over the existing `libs/dokploy.py` client):
 
 ```bash
-# Stand up / update + deploy an alias, then health-check report-<alias>/api/health
+# Stand up / update + deploy an alias, then prove the triggered rollout and both versions
 python -m tools.deploy_v2 --type preview/pr --version-ref 5 --iac-ref main --domain zitian.party
 python -m tools.deploy_v2 --type preview/commit --version-ref 1ab32d5 --iac-ref main --domain zitian.party
 python -m tools.deploy_v2 --type preview/branch --version-ref main --iac-ref main --domain zitian.party
@@ -38,12 +38,23 @@ The same preview backend signs `ServiceIdentity v1` (`service_id=finance_report/
 environment=alias, version=image tag, iac_ref=exact infra2 SHA) and passes it through
 Vault Agent to OTEL; application secrets cannot redefine those coordinates.
 
+An `up` operation is successful only after the deployment record created after its own
+trigger reaches terminal-good and both public surfaces report the requested deployment
+identity: backend `/api/health` must match the runtime image ref, while frontend
+`/frontend-version.json` must match the resolved source SHA baked into its image. This
+ordering prevents the replaced stack's still-routable HTTP 200 from satisfying readiness
+and detects a frontend left in `Created` after the backend starts. `--no-wait`
+intentionally skips these proofs.
+
 ## Ephemeral DB
 
 The `db` service stores data on the **named** `preview_db` volume (no host bind mount),
 so `down` (`delete_compose(delete_volumes=True)`) removes it entirely. Migrations run on
 backend startup (`alembic upgrade head`) against the fresh DB. Preview NEVER reads or
-writes the shared staging/prod database.
+writes the shared staging/prod database. The backend healthcheck grants a bounded
+450-second startup period. The 2026-08-17 exact-head canary needed 293.6 seconds for its
+complete create/deploy/readiness/cleanup operation, while the outer canary retains its
+independent 600-second hard deadline.
 
 ## One-time LIVE setup (not unit-testable)
 

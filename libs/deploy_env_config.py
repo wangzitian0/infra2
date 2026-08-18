@@ -147,9 +147,7 @@ _APP_COMPOSE_OVERRIDES: dict[str, dict[str, _ComposeOverride]] = {
         "staging": _ComposeOverride(
             "w4zo_fm9d2PnUY8ULzNO7", "https://truealpha-staging.{domain}"
         ),
-        "prod": _ComposeOverride(
-            "j-gIAk0GfF0bGOitZN-og", "https://truealpha.{domain}"
-        ),
+        "prod": _ComposeOverride("j-gIAk0GfF0bGOitZN-og", "https://truealpha.{domain}"),
     },
 }
 
@@ -305,6 +303,21 @@ PREVIEW_ENVIRONMENT = "preview"
 
 
 @dataclass(frozen=True)
+class PreviewReadinessProbe:
+    """One public preview surface and the JSON fields that carry its version.
+
+    An empty ``version_fields`` tuple means HTTP 200 is the service's current public
+    contract. Services that expose deploy identity list their accepted field names and
+    whether the surface proves the runtime image ref or resolved source SHA, so stale
+    routes cannot satisfy readiness with a response from the replaced stack.
+    """
+
+    path: str
+    version_fields: tuple[str, ...] = ()
+    version_source: str = "runtime"
+
+
+@dataclass(frozen=True)
 class PreviewServiceConfig:
     """Per-service knobs the preview lifecycle (``libs.deploy.preview``) needs.
 
@@ -319,13 +332,20 @@ class PreviewServiceConfig:
     """
 
     project: str  # Dokploy project name (e.g. "finance_report", "truealpha")
-    slug_prefix: str  # compose display-name / appName prefix, e.g. "finance-report-preview"
-    compose_path: str  # the preview compose template infra2 path, github-sourced by Dokploy
-    db_name: str  # default PREVIEW_DB_NAME (the ephemeral postgres database name)
-    base_subdomain: str  # e.g. "report" / "truealpha" — must match ServiceSpec.base_subdomain
-    secret_env: str = (
-        "staging"  # which env's Vault app-secrets path a preview borrows (no per-alias path)
+    slug_prefix: (
+        str  # compose display-name / appName prefix, e.g. "finance-report-preview"
     )
+    compose_path: (
+        str  # the preview compose template infra2 path, github-sourced by Dokploy
+    )
+    db_name: str  # default PREVIEW_DB_NAME (the ephemeral postgres database name)
+    base_subdomain: (
+        str  # e.g. "report" / "truealpha" — must match ServiceSpec.base_subdomain
+    )
+    readiness_probes: tuple[PreviewReadinessProbe, ...] = (
+        PreviewReadinessProbe("/api/health"),
+    )
+    secret_env: str = "staging"  # which env's Vault app-secrets path a preview borrows (no per-alias path)
 
 
 # finance_report/app is the original (and, pre-#522, only) preview-capable service; its
@@ -338,6 +358,14 @@ _PREVIEW_SERVICE_CONFIGS: dict[str, PreviewServiceConfig] = {
         compose_path="finance_report/finance_report/preview/compose.yaml",
         db_name="finance_report",
         base_subdomain="report",
+        readiness_probes=(
+            PreviewReadinessProbe("/api/health", ("git_sha", "version")),
+            PreviewReadinessProbe(
+                "/frontend-version.json",
+                ("git_sha", "version"),
+                version_source="source",
+            ),
+        ),
     ),
     # #522: truealpha/app preview — own Dokploy project, own ephemeral DB (never the
     # shared staging/prod truealpha-postgres). See truealpha/truealpha/preview/compose.yaml.
@@ -440,7 +468,9 @@ def _normalize_alias(kind: str, value: int | str | None) -> tuple[str, str]:
     )
 
 
-_DEFAULT_PREVIEW_SLUG_PREFIX = _PREVIEW_SERVICE_CONFIGS["finance_report/app"].slug_prefix
+_DEFAULT_PREVIEW_SLUG_PREFIX = _PREVIEW_SERVICE_CONFIGS[
+    "finance_report/app"
+].slug_prefix
 
 
 def preview_alias(
