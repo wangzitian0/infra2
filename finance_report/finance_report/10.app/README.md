@@ -60,6 +60,17 @@ Stored at: `secret/data/finance_report/<env>/app`
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | SigNoz OTLP HTTP endpoint (optional Vault override; otherwise rendered — see Observability) |
 | `OTEL_SERVICE_NAME` | OTEL service name (optional Vault override) |
 | `OTEL_RESOURCE_ATTRIBUTES` | OTEL resource attributes (optional Vault override) |
+| `API_RATE_LIMIT_REQUESTS` | Optional global limiter override; see Rate-limit capacity below |
+| `API_RATE_LIMIT_WINDOW` | Optional global limiter window override; defaults to 60 seconds |
+
+## Rate-limit capacity
+
+`secrets.ctmpl` keeps Vault values authoritative. When
+`API_RATE_LIMIT_REQUESTS` is absent, the fixed staging environment renders
+`2000` because its parallel E2E workers share one runner IP; production and
+unknown environments retain the conservative application baseline of `300`.
+This is a capacity distinction, not a test-tenant exemption, and the production
+limit is unchanged.
 
 ## Observability Wiring (Infra-014)
 
