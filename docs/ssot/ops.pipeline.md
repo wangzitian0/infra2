@@ -88,12 +88,14 @@ non-idempotent `compose.create` call times out after Dokploy commits it, the lif
 re-reads and adopts the one deterministic project/environment/name instead of creating a
 duplicate. Teardown is green only after two consecutive reads observe that name absent.
 
-A fresh Finance Report preview database runs migrations before uvicorn. Its backend
-healthcheck therefore grants a bounded 450-second startup period. The 2026-08-17 exact-head
-canary needed 293.6 seconds for the complete create/deploy/readiness/cleanup operation, so
-this leaves cold-host margin while the outer canary still fails closed at its configured
-600-second deadline. The emitted stage record uses that configured deadline, not the SDK's
-generic stage default; a `hard-breach` is a red time-budget failure even if health is green.
+A Finance Report backend runs migrations before Uvicorn in both preview and fixed
+staging/production stacks. Both backend healthchecks therefore grant a bounded 450-second
+startup period. The 2026-08-17 exact-head canary needed 293.6 seconds for the complete
+create/deploy/readiness/cleanup operation, and a 2026-08-18 fixed-staging cold start needed
+177 seconds before its first healthy response. This leaves cold-host margin while the outer
+canary still fails closed at its configured 600-second deadline. The emitted stage record
+uses that configured deadline, not the SDK's generic stage default; a `hard-breach` is a red
+time-budget failure even if health is green.
 
 > **平台服务**(iac_pinned)无 preview,只有 staging/prod,且**只接受 release tag 作 `iac_ref`**。release tag
 > 推送后 `reconcile-iac-inputs.yml` 自动:diff 上一 release tag → 本 tag,changed files 经
@@ -346,6 +348,7 @@ gh workflow run deploy.yml -f service="finance_report/app" -f type="prod" \
 | **测试提前(PR dry-run plan)** | PR CI `Gate reconcile plan builds`:dry-run 出 fan-out plan,不部署 → `.github/workflows/infra-ci.yml` | ✅ |
 | **SDK pin/mirror 一致** | `libs/tests/test_sdk_contract_adoption.py` | ✅ |
 | **App request fail-closed** | `libs/tests/test_app_deploy_request.py` + `test_app_deploy_request_workflow.py` | ✅ |
+| **Finance Report fixed/preview cold-start budget** | `libs/tests/test_deploy_primitive.py` + `test_preview_lifecycle.py` assert both backend healthchecks allow at least 450 seconds | ✅ |
 
 ---
 

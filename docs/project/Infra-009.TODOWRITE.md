@@ -43,6 +43,8 @@ Main documentation is in finance_report repository:
 - Replaced unsupported template helpers in finance_report app secrets template
 - Locked the finance_report app rate-limit fallback to staging `2000` and
   production `300`, with Vault retaining precedence (finance_report#1829).
+- Locked the fixed app backend healthcheck to the same 450-second bounded cold-start
+  budget as preview after staging needed 177 seconds to become healthy.
 - Scoped finance_report Vault app-token policies by environment and added targeted token repair/revoke tracking for `vault.setup-tokens`. _(Historical: this static-token machinery was retired in #369 — every service is now on AppRole.)_
 - First app alert path: `finance-report-backend` -> OTEL -> SigNoz `FinanceReportBackendErrorLogs` -> `platform/12.alerting` -> Feishu/Lark
 

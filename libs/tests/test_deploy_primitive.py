@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -16,6 +18,9 @@ from libs.deploy_queue import parse_epoch_seconds
 # under). resolve_to_sha returns a full sha; IMAGE_TAG must be the short form.
 FULL_SHA = "1af32e6daf17e2c58383dd2c0bfaea13bc11e517"
 SHORT_SHA = "1af32e6"
+FIXED_FINANCE_REPORT_COMPOSE = (
+    Path(__file__).parents[2] / "finance_report/finance_report/10.app/compose.yaml"
+)
 
 
 class FakeDokploy:
@@ -105,6 +110,18 @@ def test_staging_deploy_assembles_axes_and_triggers():
     assert env["INFRA_IAC_REF"] == "b" * 40
     assert "deployment.environment.name=staging" in env["OTEL_RESOURCE_ATTRIBUTES"]
     assert client.deployed == ["A6V-hbJlgHMwgPDoTDnhH"]
+
+
+def test_fixed_finance_report_backend_health_budget_covers_cold_start():
+    """The fixed stack must tolerate the same migration-heavy boot as preview."""
+    source = FIXED_FINANCE_REPORT_COMPOSE.read_text(encoding="utf-8")
+    backend_start = source.index("\n  backend:")
+    worker_start = source.index("\n  prefect-worker:")
+    backend_block = source[backend_start:worker_start]
+    match = re.search(r"BACKEND_HEALTHCHECK_START_PERIOD:-([0-9]+)s", backend_block)
+
+    assert match is not None
+    assert int(match.group(1)) >= 450
 
 
 def test_branch_is_reasserted_on_every_deploy_when_given():
@@ -230,7 +247,12 @@ def test_truealpha_staging_deploy_sets_app_host():
     every compose_env_base-level unit test passing. Assert against THIS path."""
     client = FakeDokploy()
     dp.deploy(
-        "staging", FULL_SHA, domain="zitian.party", client=client, service="truealpha/app", iac_ref="b" * 40
+        "staging",
+        FULL_SHA,
+        domain="zitian.party",
+        client=client,
+        service="truealpha/app",
+        iac_ref="b" * 40,
     )
     _, env = client.updated[0]
     assert env["APP_HOST"] == "truealpha-staging.zitian.party"

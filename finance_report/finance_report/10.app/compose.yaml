@@ -12,7 +12,7 @@
 # Migration Safety:
 # - Failed migrations prevent container startup (fail-fast)
 # - Retry logic handles transient PostgreSQL connection issues
-# - Healthcheck by default allows up to 180s for migration + startup time (configurable via BACKEND_HEALTHCHECK_START_PERIOD)
+# - Healthcheck grants a bounded 450s for migration + cold startup (configurable via BACKEND_HEALTHCHECK_START_PERIOD)
 #
 services:
   vault-agent:
@@ -117,7 +117,7 @@ services:
 
         # Run database migrations with retry logic
         # Retries handle cases where PostgreSQL might not be fully ready
-        # Total retry time (~50s) fits within healthcheck start_period (60s)
+        # Total retry time (~50s) fits within the bounded cold-start health budget.
         echo "🔍 [CHECKPOINT-2] Starting database migrations..."
         max_retries=10
         retry_interval=5
@@ -159,7 +159,9 @@ services:
       OPENPANEL_ENVIRONMENT: ${OPENPANEL_ENVIRONMENT:-}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
-      start_period: ${BACKEND_HEALTHCHECK_START_PERIOD:-60s}
+      # Keep the fixed stack aligned with preview. A live staging cold start on
+      # 2026-08-18 needed 177s before the first successful /health response.
+      start_period: ${BACKEND_HEALTHCHECK_START_PERIOD:-450s}
       interval: 10s
       retries: 3
       timeout: 5s
