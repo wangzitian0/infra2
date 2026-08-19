@@ -144,6 +144,10 @@ For local development builds, see the [finance_report repository](https://github
 - Backend: `GET /health` on port 8000
 - Frontend: `GET /` on port 3000
 
+The backend runs Alembic migrations before starting Uvicorn. Both fixed and preview
+deployments therefore grant the backend a bounded 450-second healthcheck start period;
+the outer deploy deadline still fails closed if startup never converges.
+
 ## Operational Identity
 
 `deploy_v2` signs `ServiceIdentity v1` for `finance_report/app`. Vault Agent only
