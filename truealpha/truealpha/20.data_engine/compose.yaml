@@ -190,9 +190,12 @@ services:
       # 2.5s measured warm in the live container; the budget is sized for the
       # LA 8-10 spikes that killed the old CLI probe, not the happy path. A
       # heartbeat window of 5 minutes makes sub-minute polling pointless anyway.
+      # retries 3, not 5 (review on #620): enough to ride out a vault-agent
+      # secret rotation, while a dead daemon flips unhealthy in ~8 minutes
+      # (5-minute window + 3 failed checks) instead of ~10.
       interval: 60s
       timeout: 30s
-      retries: 5
+      retries: 3
       start_period: 60s
 
 volumes:
