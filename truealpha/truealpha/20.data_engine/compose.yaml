@@ -174,9 +174,19 @@ services:
         condition: service_healthy
     command: ["dagster-daemon", "run", "--grpc-socket", "/var/lib/dagster/code-server.sock"]
     healthcheck:
+      # `dagster-daemon liveness-check` is a full CLI cold start — under host load
+      # (LA 8-10 measured) the import alone exceeds the 10s budget, and the daemon
+      # sat "unhealthy" for 8 straight days while its sensor ticked every 30s
+      # (truealpha#616 evidence). The probe now asks the question directly: has
+      # ANY daemon heartbeat landed in the last 5 minutes? ~1s in-container,
+      # load-immune, and it measures the daemon's actual output instead of the
+      # CLI's startup time.
       test:
         - CMD-SHELL
-        - . /secrets/.env && export DAGSTER_POSTGRES_URL="$${DATABASE_URL}?options=-csearch_path%3Ddagster" && dagster-daemon liveness-check
+        - set -a; . /secrets/.env; set +a; python -c "import os, sys, psycopg;
+          c = psycopg.connect(os.environ['DATABASE_URL'], options='-csearch_path=dagster', connect_timeout=5);
+          row = c.execute(\"select count(*) from daemon_heartbeats where timestamp > (now() at time zone 'utc') - interval '5 minutes'\").fetchone();
+          c.close(); sys.exit(0 if row[0] > 0 else 1)"
       interval: 30s
       timeout: 10s
       retries: 5
