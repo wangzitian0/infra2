@@ -187,8 +187,11 @@ services:
           c = psycopg.connect(os.environ['DATABASE_URL'], options='-csearch_path=dagster', connect_timeout=5);
           row = c.execute(\"select count(*) from daemon_heartbeats where timestamp > (now() at time zone 'utc') - interval '5 minutes'\").fetchone();
           c.close(); sys.exit(0 if row[0] > 0 else 1)"
-      interval: 30s
-      timeout: 10s
+      # 2.5s measured warm in the live container; the budget is sized for the
+      # LA 8-10 spikes that killed the old CLI probe, not the happy path. A
+      # heartbeat window of 5 minutes makes sub-minute polling pointless anyway.
+      interval: 60s
+      timeout: 30s
       retries: 5
       start_period: 60s
 
