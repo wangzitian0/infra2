@@ -15,6 +15,14 @@ path "secret/metadata/truealpha/{{env}}/postgres" {
   capabilities = ["read", "list"]
 }
 
+path "secret/data/truealpha/{{env}}/market-data" {
+  capabilities = ["read"]
+}
+
+path "secret/metadata/truealpha/{{env}}/market-data" {
+  capabilities = ["read", "list"]
+}
+
 path "auth/token/lookup-self" {
   capabilities = ["read"]
 }
