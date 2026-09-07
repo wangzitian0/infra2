@@ -82,6 +82,15 @@ def test_sync_fails_only_when_vault_is_empty_too(monkeypatch) -> None:
         vault={"ALERT_DELIVERY_MODE": "feishu_app", "FEISHU_APP_ID": "id"},
     )
     assert module.AlertingDeployer._sync_1password_to_vault() is False
+    # the mode is part of the set: a webhook URL without ALERT_DELIVERY_MODE is not
+    # complete, because the runtime reads the mode from the same secret (review on #631)
+    _backends(
+        monkeypatch,
+        module,
+        op={},
+        vault={"FEISHU_WEBHOOK_URL": "https://open.feishu.cn/hook/z"},
+    )
+    assert module.AlertingDeployer._sync_1password_to_vault() is False
 
 
 def test_sync_still_copies_from_1password_when_it_answers(monkeypatch) -> None:
