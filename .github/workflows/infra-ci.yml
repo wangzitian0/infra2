@@ -260,6 +260,9 @@ jobs:
         run: |
           cd ${{ github.workspace }}
           mkdir -p coverage
+          # The template generator reads the app manifests through the submodules; infra-ci
+          # never checks those out (#506), so fetch the few files at the pinned commits.
+          uv run python -m tools.fetch_app_manifests
           uv run python -m pytest libs/tests -q -n auto \
             --cov=libs \
             --cov=tools \

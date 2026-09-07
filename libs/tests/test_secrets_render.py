@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -106,3 +107,57 @@ def test_every_generated_service_fails_the_render_on_a_missing_required_key() ->
             encoding="utf-8"
         )
         assert "error_on_missing_key = true" in agent, service.directory
+
+
+def test_fetch_app_manifests_reads_the_pinned_commit_and_only_fills_gaps(
+    tmp_path: Path,
+) -> None:
+    from tools import fetch_app_manifests
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.email", "t@example"], check=True
+    )
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "t"], check=True)
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(tmp_path),
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            f"160000,{sha},repos/truealpha",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "commit", "-q", "-m", "pin"], check=True
+    )
+    (tmp_path / "repos/truealpha/present.json").parent.mkdir(parents=True)
+    (tmp_path / "repos/truealpha/present.json").write_text("{}", encoding="utf-8")
+    urls: list[str] = []
+
+    def fake(url: str) -> bytes:
+        urls.append(url)
+        return b'{"contract_version": 2}'
+
+    fetched = fetch_app_manifests.fetch_missing(
+        [
+            "repos/truealpha/present.json",
+            "repos/truealpha/apps/x/required-env.generated.json",
+            "platform/x.json",
+        ],
+        root=tmp_path,
+        fetch=fake,
+    )
+    assert fetched == [
+        f"repos/truealpha/apps/x/required-env.generated.json @ {sha[:7]}"
+    ]
+    assert urls == [
+        f"https://raw.githubusercontent.com/wangzitian0/truealpha/{sha}/apps/x/required-env.generated.json"
+    ]
+    assert (
+        tmp_path / "repos/truealpha/apps/x/required-env.generated.json"
+    ).read_text() == '{"contract_version": 2}'
