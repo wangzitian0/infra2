@@ -96,3 +96,13 @@ def test_check_reports_a_stale_file(
     assert len(problems) == 2 and "svc/secrets.ctmpl" in problems[0]
     secrets_render.write((service,))
     assert secrets_render.check((service,)) == []
+
+
+def test_every_generated_service_fails_the_render_on_a_missing_required_key() -> None:
+    for service in secrets_render.SERVICES:
+        if not service.generated:
+            continue
+        agent = (ROOT / service.directory / "vault-agent.hcl").read_text(
+            encoding="utf-8"
+        )
+        assert "error_on_missing_key = true" in agent, service.directory

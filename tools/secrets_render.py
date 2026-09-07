@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 """Vault Agent templates and policies, generated from environment manifests.
 
-Every service's ``secrets.ctmpl`` and ``vault-policy.hcl`` are derived from the
-manifest(s) that say who produces each variable (infra2-sdk contract v2): the
-application's own manifest (checked out through the git submodule at the deployed
-commit) plus, for platform services and stack-only additions, a manifest kept in
-this repository next to the service. Nothing in a template is written by hand.
+Every migrated service's ``secrets.ctmpl`` (and, except for the IaC runner, its
+``vault-policy.hcl``) is derived from the manifest(s) that say who produces each
+variable (infra2-sdk contract v2): the application's own manifest (checked out through
+the git submodule at the deployed commit) plus, for platform services and stack-only
+additions, a manifest kept in this repository next to the service. The runner's policy
+is its *writer* identity across projects, a bootstrap concern no manifest describes,
+so it stays hand-written. Nothing else in a template is written by hand.
+
+Required keys fail closed: each migrated service's ``vault-agent.hcl`` sets
+``error_on_missing_key = true``, so a required value missing in Vault stops the render
+instead of rendering ``%!q(<nil>)``; optional (``empty_ok``) keys are omitted by the
+template itself.
 
     uv run python tools/secrets_render.py --write        # regenerate every service
     uv run python tools/secrets_render.py --check        # CI: committed == generated
@@ -36,8 +43,9 @@ class Service:
     manifests: tuple[str, ...]
     source_env: str | None = None
     exclude_groups: tuple[str, ...] = ()
-    # Hand-written files stay authoritative until the service is migrated; a listed
-    # service is only *checked*, never rewritten, while ``generated`` is False.
+    # Hand-written files stay authoritative until the service is migrated: while
+    # ``generated`` is False the manifest is still rendered and gated (so it cannot
+    # rot), but the files on disk are neither compared nor rewritten.
     generated: bool = True
     # The IaC runner's policy is its *writer* identity (create/update on every project),
     # a bootstrap concern that no manifest describes; its template is still generated.
