@@ -530,6 +530,7 @@ def safe_invoke_env_summary(env: dict[str, str]) -> str:
         "ENV_SUFFIX",
         "ENV_DOMAIN_SUFFIX",
         "IAC_DEPLOY_REF",
+        "DEPLOY_VERSION_REF",
         "VAULT_ROOT_TOKEN",
         "VAULT_ROLE_ID",
         "VAULT_SECRET_ID",

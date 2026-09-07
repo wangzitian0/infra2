@@ -212,7 +212,9 @@ def test_vault_agent_forwards_every_template_env():
     assert referenced, "template no longer reads any env — update this test"
     forwarded = set(_vault_agent_environment())
     missing = sorted(referenced - forwarded)
-    assert not missing, f"secrets.ctmpl reads {missing} but vault-agent does not forward them"
+    assert not missing, (
+        f"secrets.ctmpl reads {missing} but vault-agent does not forward them"
+    )
     assert _vault_agent_environment()["TA_MINIO_S3_PORT"] == "${TA_MINIO_S3_PORT}"
 
 
@@ -267,11 +269,10 @@ def test_a_release_request_pins_the_tag_digest_in_vault_before_reading_it(monkey
     deployer = deploy.DataEngineDeployer
     secrets = _WritableSecrets(_secret_values("a"))
     monkeypatch.setattr(deployer, "secrets_backend", classmethod(lambda cls: secrets))
-    monkeypatch.setattr(
-        deployer,
-        "env",
-        classmethod(lambda cls: {"ENV": "staging", "DEPLOY_VERSION_REF": "v0.0.46"}),
-    )
+    monkeypatch.setattr(deployer, "env", classmethod(lambda cls: {"ENV": "staging"}))
+    # The runner passes the release in the child PROCESS environment; Deployer.env()
+    # is the curated config and never carries it (the 2026-09-07 silent skip).
+    monkeypatch.setenv("DEPLOY_VERSION_REF", "v0.0.46")
     new_digest = "sha256:" + "e" * 64
     asked: list[tuple[str, str]] = []
 
@@ -323,11 +324,8 @@ def test_ensure_runtime_secrets_refuses_the_deploy_when_the_pin_fails(monkeypatc
     deployer = deploy.DataEngineDeployer
     secrets = _WritableSecrets(_secret_values("a"))
     monkeypatch.setattr(deployer, "secrets_backend", classmethod(lambda cls: secrets))
-    monkeypatch.setattr(
-        deployer,
-        "env",
-        classmethod(lambda cls: {"ENV": "staging", "DEPLOY_VERSION_REF": "v0.0.46"}),
-    )
+    monkeypatch.setattr(deployer, "env", classmethod(lambda cls: {"ENV": "staging"}))
+    monkeypatch.setenv("DEPLOY_VERSION_REF", "v0.0.46")
     monkeypatch.setattr(deploy, "error", lambda *_a, **_k: None)
     import libs.image_digest as image_digest
 
@@ -340,3 +338,23 @@ def test_ensure_runtime_secrets_refuses_the_deploy_when_the_pin_fails(monkeypatc
     )
     assert deployer.ensure_runtime_secrets() is False
     assert secrets.writes == []
+
+
+def test_ensure_runtime_secrets_pins_from_the_process_environment(monkeypatch):
+    """The regression that shipped: the version ref was read from cls.env(), which is
+    the curated deployment config and never carries DEPLOY_VERSION_REF, so the runner
+    reported success with no pin. It must come from os.environ."""
+    deploy = _load_deploy_module()
+    deployer = deploy.DataEngineDeployer
+    secrets = _WritableSecrets(_secret_values("a"))
+    monkeypatch.setattr(deployer, "secrets_backend", classmethod(lambda cls: secrets))
+    monkeypatch.setattr(deployer, "env", classmethod(lambda cls: {"ENV": "staging"}))
+    monkeypatch.setenv("DEPLOY_VERSION_REF", "v0.0.47")
+    import libs.image_digest as image_digest
+
+    monkeypatch.setattr(
+        image_digest, "resolve_image_digest", lambda image, ref: "sha256:" + "9" * 64
+    )
+    monkeypatch.setattr(deploy, "success", lambda *_a, **_k: None)
+    assert deployer.ensure_runtime_secrets() is True
+    assert ("GIT_COMMIT_SHA", "v0.0.47") in secrets.writes
