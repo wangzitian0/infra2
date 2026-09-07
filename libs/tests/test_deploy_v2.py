@@ -256,7 +256,11 @@ def test_iac_ref_on_main_sends_the_workflow_token(monkeypatch):
 
 def test_iac_ref_on_main_waits_out_a_short_rate_limit_then_succeeds():
     answers = [
-        _CmpResp("", code=403, headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1005"}),
+        _CmpResp(
+            "",
+            code=403,
+            headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1005"},
+        ),
         _CmpResp("behind"),
     ]
     slept = []
@@ -273,11 +277,21 @@ def test_iac_ref_on_main_waits_out_a_short_rate_limit_then_succeeds():
 
 def test_iac_ref_on_main_fails_closed_and_names_the_missing_token_when_anonymous():
     # an anonymous budget resets on the hour: far beyond what a deploy should block on
-    resp = _CmpResp("", code=403, headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "4600"}, text="API rate limit exceeded")
+    resp = _CmpResp(
+        "",
+        code=403,
+        headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "4600"},
+        text="API rate limit exceeded",
+    )
     slept = []
     with pytest.raises(RuntimeError, match="UNAUTHENTICATED.*GITHUB_TOKEN"):
         assert_iac_ref_on_main(
-            "v1.2.3", "prod", token="", transport=lambda url, **_kw: resp, sleep=slept.append, now=lambda: 1000.0
+            "v1.2.3",
+            "prod",
+            token="",
+            transport=lambda url, **_kw: resp,
+            sleep=slept.append,
+            now=lambda: 1000.0,
         )
     assert slept == []
 
@@ -287,7 +301,12 @@ def test_iac_ref_on_main_gives_up_after_bounded_attempts():
     slept = []
     with pytest.raises(RuntimeError, match="budget is spent"):
         assert_iac_ref_on_main(
-            "v1.2.3", "prod", token="t", transport=lambda url, **_kw: resp, sleep=slept.append, now=lambda: 0.0
+            "v1.2.3",
+            "prod",
+            token="t",
+            transport=lambda url, **_kw: resp,
+            sleep=slept.append,
+            now=lambda: 0.0,
         )
     assert slept == [2.0, 2.0]
 

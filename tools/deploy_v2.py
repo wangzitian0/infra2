@@ -112,7 +112,9 @@ def _rate_limited(resp) -> bool:
     if getattr(resp, "status_code", 200) not in (403, 429):
         return False
     headers = getattr(resp, "headers", None) or {}
-    if str(headers.get("X-RateLimit-Remaining", "")).strip() == "0" or headers.get("Retry-After"):
+    if str(headers.get("X-RateLimit-Remaining", "")).strip() == "0" or headers.get(
+        "Retry-After"
+    ):
         return True
     return "rate limit" in str(getattr(resp, "text", "") or "").lower()
 
