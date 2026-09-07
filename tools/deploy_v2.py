@@ -430,9 +430,13 @@ def _deploy_platform(
 
     We do NOT re-implement the platform deploy — ``Deployer.sync`` is Context/os.environ
     coupled — we trigger the SAME signed webhook ``deploy.yml`` uses, so the deploy
-    is byte-for-byte iac_runner's. ``version_ref`` is unused: a platform artifact IS the
-    ``iac_ref``-pinned stack, so the deploy ref (and the recorded version identity) is the
-    resolved infra2 sha. Platform services have no preview — only ``staging`` / ``prod``.
+    is byte-for-byte iac_runner's. A platform artifact IS the ``iac_ref``-pinned stack, so
+    the deploy ref (and the recorded version identity) is the resolved infra2 sha.
+    ``version_ref`` is forwarded to the runner only when it names an APP release — a tag
+    or sha that differs from the ``iac_ref`` — for a digest-pinned platform service such
+    as ``truealpha/data_engine`` to pin (truealpha#712); ``main``, or a ref equal to the
+    ``iac_ref`` (the reconcile's shape), is ignored. Platform services have no preview —
+    only ``staging`` / ``prod``.
     """
     type_spec = deploy_type_spec(deploy_type)
     if type_spec.env not in ("staging", "prod"):
@@ -463,6 +467,13 @@ def _deploy_platform(
     # a sha, never the ``main`` default — so every other platform service sees nothing new.
     pinned_ref = (version_ref or "").strip()
     pinned_ref = pinned_ref if pinned_ref and pinned_ref != "main" else None
+    if pinned_ref is not None and pinned_ref == iac_ref.strip():
+        # The reconcile pins both axes to the infra2 release tag (tools/reconcile_iac_inputs:
+        # "iac_pinned services ignore version_ref"); an infra2 tag is never an app release,
+        # so it must not reach a digest-pinning deployer (v1.1.59 would have asked the
+        # registry for truealpha-data-engine:v1.1.59). Only a ref that differs from the
+        # iac_ref names an app release.
+        pinned_ref = None
     response = trigger_platform_deploy(
         env=env,
         ref=iac_sha,

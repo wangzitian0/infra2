@@ -1175,3 +1175,18 @@ def test_fixed_deploy_keeps_the_shared_domain_for_services_without_an_override(c
     _deploy(deploy_type="staging", version_ref="v0.0.10")
     assert calls["fixed"] is not None
     assert calls["fixed"]["domain"] == "zitian.party"
+
+
+def test_platform_forwards_only_an_app_release_as_version_ref(monkeypatch):
+    """truealpha#712: a digest-pinned platform service (truealpha/data_engine) pins the
+    app release named by version_ref. The reconcile pins both axes to the infra2 tag
+    (version_ref == iac_ref), which is never an app release and must not reach the
+    deployer — v1.1.59's staging reconcile would have asked the registry for
+    truealpha-data-engine:v1.1.59. `main` (deploy.yml's default) is not forwarded either."""
+    sent, _res = _platform(monkeypatch, version_ref="v0.0.47")
+    assert sent["version_ref"] == "v0.0.47"
+    sent, _res = _platform(monkeypatch, version_ref="main")
+    assert sent.get("version_ref") is None
+    # the helper pins iac_ref to v0.0.0: the same tag as version_ref is the reconcile's shape
+    sent, _res = _platform(monkeypatch, version_ref="v0.0.0")
+    assert sent.get("version_ref") is None
