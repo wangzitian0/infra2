@@ -5,13 +5,15 @@ import sys
 import time
 from pathlib import Path
 
-from libs.console import error
+from libs.console import error, success
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.service_facets import BackupFacet, SecretsFacet
 
 shared_tasks = sys.modules.get("truealpha.20.data_engine.shared")
 
 _IMAGE_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+_VERSION_REF = re.compile(r"^(v[0-9]+\.[0-9]+\.[0-9]+|[0-9a-f]{7,40})$")
+_IMAGE = "ghcr.io/wangzitian0/truealpha-data-engine"
 _RELEASE_ID = re.compile(r"^release-manifest:[0-9a-f]{64}$")
 
 
@@ -95,7 +97,53 @@ class DataEngineDeployer(Deployer):
     )
 
     @classmethod
+    def pin_release(cls, version_ref: str, *, secrets=None, resolve=None) -> str:
+        """Pin the data-engine image of app release ``version_ref`` in Vault (truealpha#712).
+
+        The stack is digest-pinned; a release request carries a tag. The runner — the
+        one deploy context with the AppRole that may update this env's data_engine
+        path — resolves ``truealpha-data-engine:<tag>`` to its registry digest and
+        writes ``DATA_ENGINE_IMAGE_DIGEST`` plus ``GIT_COMMIT_SHA`` (the tag, the same
+        identifier the app images stamp) before ``compose_env_base`` reads them. The
+        existing ``verify_runtime_applied`` then proves the three containers run that
+        digest — the post-deploy assertion the issue asked for, unchanged.
+
+        Fails closed: an unresolvable tag or a refused Vault write raises, and the
+        deploy stops before any compose mutation.
+        """
+        from libs.image_digest import resolve_image_digest
+
+        candidate = str(version_ref).strip()
+        if not _VERSION_REF.fullmatch(candidate):
+            raise ValueError(
+                f"DEPLOY_VERSION_REF must be a vX.Y.Z tag or a commit sha, got {version_ref!r}"
+            )
+        digest = (resolve or resolve_image_digest)(_IMAGE, candidate)
+        if not _IMAGE_DIGEST.fullmatch(digest):
+            raise ValueError(
+                f"registry returned a malformed digest for {candidate}: {digest!r}"
+            )
+        backend = secrets if secrets is not None else cls.secrets_backend()
+        for key, value in (
+            ("DATA_ENGINE_IMAGE_DIGEST", digest),
+            ("GIT_COMMIT_SHA", candidate),
+        ):
+            if not backend.set(key, value):
+                raise RuntimeError(
+                    f"Vault refused to pin {key} for release {candidate}"
+                )
+        success(f"{cls.service}: pinned release {candidate} -> {digest[:19]}… in Vault")
+        return digest
+
+    @classmethod
     def ensure_runtime_secrets(cls, c=None) -> bool:
+        version_ref = (cls.env().get("DEPLOY_VERSION_REF") or "").strip()
+        if version_ref:
+            try:
+                cls.pin_release(version_ref)
+            except Exception as exc:  # noqa: BLE001 - every failure here must stop the deploy
+                error(f"{cls.service}: could not pin release {version_ref!r}: {exc}")
+                return False
         secrets = cls.secrets_backend()
         missing = [key for key in cls._REQUIRED_SECRET_KEYS if not secrets.get(key)]
         if missing:

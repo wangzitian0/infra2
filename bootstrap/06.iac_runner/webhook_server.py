@@ -5,6 +5,7 @@ GitHub Webhook Server for IaC Runner
 Receives GitHub push events and triggers sync for changed services.
 """
 
+import functools
 import hashlib
 import hmac
 import importlib.util
@@ -191,17 +192,39 @@ def _normalize_services(services: list[str] | None) -> tuple[str, ...]:
     return tuple(sorted({service.strip() for service in services}))
 
 
+VERSION_REF_RE = re.compile(r"\A(v[0-9]+\.[0-9]+\.[0-9]+|[0-9a-f]{7,40})\Z")
+
+
+def validate_version_ref(value) -> str | None:
+    """Optional app release the platform deploy should pin (truealpha#712): a vX.Y.Z
+    tag or a commit sha, or None when absent. Anything else is a 400, never coerced."""
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or not VERSION_REF_RE.fullmatch(value.strip()):
+        raise ValueError("version_ref must be a vX.Y.Z tag or a 7-40 hex commit sha")
+    return value.strip()
+
+
 def _deployment_key(
-    env: str, ref: str, services: list[str] | None = None
+    env: str,
+    ref: str,
+    services: list[str] | None = None,
+    version_ref: str | None = None,
 ) -> DeploymentKey:
-    return (env, ref, _normalize_services(services))
+    # version_ref is part of the key: two promotions of different app releases on the
+    # same iac_ref within RECENT_DEPLOY_TTL_SECONDS are different deployments.
+    return (env, ref, _normalize_services(services), version_ref or "")
 
 
 def _deployment_id(key: DeploymentKey) -> str:
     service_identity = ",".join(key[2])
-    return hashlib.sha256(
-        f"{key[0]}:{key[1]}:{service_identity}".encode()
-    ).hexdigest()[:16]
+    version_identity = key[3] if len(key) > 3 and key[3] else ""
+    # Legacy ids (no version_ref) keep their exact formula so a client that polls by the
+    # id it was handed before this change still finds its deployment.
+    seed = f"{key[0]}:{key[1]}:{service_identity}"
+    if version_identity:
+        seed += f":{version_identity}"
+    return hashlib.sha256(seed.encode()).hexdigest()[:16]
 
 
 def _recent_result(key: DeploymentKey) -> dict | None:
@@ -246,7 +269,9 @@ def _completed_response(
 ) -> dict:
     key = _deployment_key(env, ref, services)
     result_payload = (
-        result.to_public_dict() if hasattr(result, "to_public_dict") else result.to_dict()
+        result.to_public_dict()
+        if hasattr(result, "to_public_dict")
+        else result.to_dict()
     )
     return {
         "status": "completed" if result.success else "failed",
@@ -259,12 +284,38 @@ def _completed_response(
     }
 
 
-def _run_deployment(env: str, ref: str, triggered_by: str, services: list[str] | None = None) -> None:
+def _version_kwargs(version_ref: str | None) -> dict:
+    """Only a set version_ref travels as a kwarg, so callers and fakes that predate
+    truealpha#712 keep their exact positional shape."""
+    return {"version_ref": version_ref} if version_ref else {}
+
+
+def _deployment_target(version_ref: str | None):
+    """The thread target: _run_deployment itself when no version_ref is set (the exact
+    legacy shape), else the same function with the version bound in."""
+    if not version_ref:
+        return _run_deployment
+    return functools.partial(_run_deployment, version_ref=version_ref)
+
+
+def _run_deployment(
+    env: str,
+    ref: str,
+    triggered_by: str,
+    services: list[str] | None = None,
+    version_ref: str | None = None,
+) -> None:
     from sync_runner import sync_services_by_version
 
-    key = _deployment_key(env, ref, services)
+    key = _deployment_key(env, ref, services, version_ref)
     try:
-        result = sync_services_by_version(env, ref, triggered_by, services)
+        result = (
+            sync_services_by_version(
+                env, ref, triggered_by, services, version_ref=version_ref
+            )
+            if version_ref
+            else sync_services_by_version(env, ref, triggered_by, services)
+        )
         response = _completed_response(env, ref, triggered_by, result, services)
     except Exception as exc:
         logger.exception("Deployment failed before producing a sync result")
@@ -308,9 +359,7 @@ def op_service_account_works() -> bool:
             return bool(_op_health_cache["ok"])
     ok = False
     try:
-        result = subprocess.run(
-            ["op", "whoami"], capture_output=True, timeout=10
-        )
+        result = subprocess.run(["op", "whoami"], capture_output=True, timeout=10)
         ok = result.returncode == 0
     except (OSError, subprocess.SubprocessError):
         ok = False
@@ -443,15 +492,26 @@ def version_deploy():
 
     services = payload.get("services")
     if services is not None:
-        if not isinstance(services, list) or not all(isinstance(s, str) for s in services):
+        if not isinstance(services, list) or not all(
+            isinstance(s, str) for s in services
+        ):
             return jsonify({"error": "services must be a list of strings"}), 400
         if not services or any(not service.strip() for service in services):
-            return jsonify({"error": "services must be a non-empty list of non-empty strings"}), 400
+            return jsonify(
+                {"error": "services must be a non-empty list of non-empty strings"}
+            ), 400
 
-    logger.info(f"Deployment: {ref} to {env} by {triggered_by}")
+    try:
+        version_ref = validate_version_ref(payload.get("version_ref"))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    logger.info(
+        f"Deployment: {ref} to {env} by {triggered_by}"
+        + (f" (version_ref {version_ref})" if version_ref else "")
+    )
 
     if wait:
-        key = _deployment_key(env, ref, services)
+        key = _deployment_key(env, ref, services, version_ref)
         with _deploy_state_lock:
             recent = _recent_result(key)
             if recent:
@@ -463,7 +523,9 @@ def version_deploy():
                 ), 202
             _in_flight_deploys.add(key)
 
-        _run_deployment(env, ref, triggered_by, services)
+        _run_deployment(
+            env, ref, triggered_by, services, **_version_kwargs(version_ref)
+        )
         response = _recent_result(key) or {
             "status": "failed",
             "env": env,
@@ -474,7 +536,7 @@ def version_deploy():
         status_code = 200 if response.get("status") == "completed" else 500
         return jsonify(response), status_code
 
-    key = _deployment_key(env, ref, services)
+    key = _deployment_key(env, ref, services, version_ref)
     with _deploy_state_lock:
         recent = _recent_result(key)
         if recent:
@@ -486,14 +548,22 @@ def version_deploy():
         _in_flight_deploys.add(key)
 
     if services is not None:
-        thread = threading.Thread(target=_run_deployment, args=(env, ref, triggered_by, services))
+        thread = threading.Thread(
+            target=_deployment_target(version_ref),
+            args=(env, ref, triggered_by, services),
+        )
     else:
-        thread = threading.Thread(target=_run_deployment, args=(env, ref, triggered_by))
+        thread = threading.Thread(
+            target=_deployment_target(version_ref), args=(env, ref, triggered_by)
+        )
     thread.daemon = True
     thread.start()
 
     return jsonify(
-        {**_in_progress_response(env, ref, triggered_by, services=services), "wait": False}
+        {
+            **_in_progress_response(env, ref, triggered_by, services=services),
+            "wait": False,
+        }
     ), 202
 
 
@@ -516,25 +586,38 @@ def deployment_status():
 
     services = payload.get("services")
     if services is not None:
-        if not isinstance(services, list) or not all(isinstance(s, str) for s in services):
+        if not isinstance(services, list) or not all(
+            isinstance(s, str) for s in services
+        ):
             return jsonify({"error": "services must be a list of strings"}), 400
         if not services or any(not service.strip() for service in services):
-            return jsonify({"error": "services must be a non-empty list of non-empty strings"}), 400
+            return jsonify(
+                {"error": "services must be a non-empty list of non-empty strings"}
+            ), 400
     if deployment_id is not None and (
-        not isinstance(deployment_id, str) or not DEPLOYMENT_ID_RE.fullmatch(deployment_id)
+        not isinstance(deployment_id, str)
+        or not DEPLOYMENT_ID_RE.fullmatch(deployment_id)
     ):
-        return jsonify({"error": "deployment_id must be 16 lowercase hex characters"}), 400
+        return jsonify(
+            {"error": "deployment_id must be 16 lowercase hex characters"}
+        ), 400
 
+    try:
+        version_ref = validate_version_ref(payload.get("version_ref"))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     with _deploy_state_lock:
         if services is not None:
-            key = _deployment_key(env, ref, services)
+            key = _deployment_key(env, ref, services, version_ref)
         else:
             candidates = _keys_for_legacy_status(env, ref)
             if len(candidates) > 1:
                 return jsonify(
                     {
                         "error": "Ambiguous deployment; deployment_id and services are required",
-                        "candidate_deployment_ids": [_deployment_id(item) for item in candidates],
+                        "candidate_deployment_ids": [
+                            _deployment_id(item) for item in candidates
+                        ],
                     }
                 ), 409
             key = candidates[0] if candidates else _deployment_key(env, ref)
@@ -552,9 +635,7 @@ def deployment_status():
             return jsonify(recent), 200
         if key in _in_flight_deploys:
             return jsonify(
-                _in_progress_response(
-                    env, ref, triggered_by, services=list(key[2])
-                )
+                _in_progress_response(env, ref, triggered_by, services=list(key[2]))
             ), 200
 
     return jsonify(

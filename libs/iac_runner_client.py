@@ -74,6 +74,19 @@ def _validate_request(env: str, ref: str, secret: str, base_url: str) -> None:
         raise ValueError("iac_runner base_url is required")
 
 
+_VERSION_REF_RE = re.compile(r"\A(v[0-9]+\.[0-9]+\.[0-9]+|[0-9a-f]{7,40})\Z")
+
+
+def _validate_version_ref(version_ref: str) -> str:
+    """A release tag or a commit sha — the only two shapes a Deployer may pin from."""
+    candidate = str(version_ref).strip()
+    if not _VERSION_REF_RE.match(candidate):
+        raise ValueError(
+            f"version_ref must be a vX.Y.Z tag or a 7-40 hex commit sha, got {version_ref!r}"
+        )
+    return candidate
+
+
 def trigger_platform_deploy(
     *,
     env: str,
@@ -87,6 +100,7 @@ def trigger_platform_deploy(
     now=time.time,
     nonce: str | None = None,
     transport=httpx.post,
+    version_ref: str | None = None,
 ) -> dict:
     """Trigger an iac_runner platform deploy of ``services`` at ``ref`` to ``env``.
 
@@ -102,16 +116,18 @@ def trigger_platform_deploy(
     if not normalized_services or any(not service for service in normalized_services):
         raise ValueError("services must be a non-empty list of non-empty strings")
 
-    payload = json.dumps(
-        {
-            "env": env,
-            "ref": ref,
-            "triggered_by": triggered_by,
-            "wait": wait,
-            "services": normalized_services,
-        },
-        separators=(",", ":"),
-    ).encode()
+    body: dict = {
+        "env": env,
+        "ref": ref,
+        "triggered_by": triggered_by,
+        "wait": wait,
+        "services": normalized_services,
+    }
+    if version_ref is not None:
+        # The app release a digest-pinned platform service should pin (truealpha#712);
+        # validated here so a malformed ref fails before any POST, like env/ref.
+        body["version_ref"] = _validate_version_ref(version_ref)
+    payload = json.dumps(body, separators=(",", ":")).encode()
     headers = _signed_headers(secret, payload, now=now, nonce=nonce or _new_nonce())
     resp = transport(
         f"{base_url.rstrip('/')}/deploy",
@@ -139,6 +155,7 @@ def poll_platform_deploy_status(
     sleep=time.sleep,
     nonce_factory=_new_nonce,
     transport=httpx.post,
+    version_ref: str | None = None,
 ) -> dict:
     """Poll ``/deploy/status`` until the deploy reaches a terminal state (mirrors the bash loop).
 
@@ -165,6 +182,8 @@ def poll_platform_deploy_status(
     status_coordinate = {"env": env, "ref": ref, "triggered_by": triggered_by}
     if normalized_services is not None:
         status_coordinate["services"] = normalized_services
+    if version_ref is not None:
+        status_coordinate["version_ref"] = _validate_version_ref(version_ref)
     if deployment_id is not None:
         status_coordinate["deployment_id"] = deployment_id
     payload = json.dumps(

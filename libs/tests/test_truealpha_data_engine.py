@@ -207,3 +207,98 @@ def test_s3_endpoint_is_derived_not_taken_from_vault():
         "S3_ENDPOINT"
         not in _load_deploy_module().DataEngineDeployer._REQUIRED_SECRET_KEYS
     )
+
+
+class _WritableSecrets(_Secrets):
+    def __init__(self, values):
+        super().__init__(values)
+        self.writes: list[tuple[str, str]] = []
+
+    def set(self, key, value):
+        self.writes.append((key, value))
+        self.values[key] = value
+        return True
+
+
+def test_a_release_request_pins_the_tag_digest_in_vault_before_reading_it(monkeypatch):
+    """truealpha#712: the runner resolves truealpha-data-engine:<tag> to its registry digest
+    and writes it (with the tag as GIT_COMMIT_SHA, the identifier the app images stamp)
+    before compose_env_base reads Vault. The existing verify_runtime_applied then proves
+    the containers run that digest."""
+    deploy = _load_deploy_module()
+    deployer = deploy.DataEngineDeployer
+    secrets = _WritableSecrets(_secret_values("a"))
+    monkeypatch.setattr(deployer, "secrets_backend", classmethod(lambda cls: secrets))
+    monkeypatch.setattr(
+        deployer,
+        "env",
+        classmethod(lambda cls: {"ENV": "staging", "DEPLOY_VERSION_REF": "v0.0.46"}),
+    )
+    new_digest = "sha256:" + "e" * 64
+    asked: list[tuple[str, str]] = []
+
+    def resolve(image, ref):
+        asked.append((image, ref))
+        return new_digest
+
+    assert (
+        deployer.pin_release("v0.0.46", secrets=secrets, resolve=resolve) == new_digest
+    )
+    assert asked == [("ghcr.io/wangzitian0/truealpha-data-engine", "v0.0.46")]
+    assert secrets.writes == [
+        ("DATA_ENGINE_IMAGE_DIGEST", new_digest),
+        ("GIT_COMMIT_SHA", "v0.0.46"),
+    ]
+    # compose_env_base now reads the pinned values, not the ones Vault held before
+    env = deployer.compose_env_base(
+        {"ENV": "staging", "DATA_PATH": "/tmp/x", "ENV_SUFFIX": "-staging"}
+    )
+    assert (
+        env["DATA_ENGINE_IMAGE_DIGEST"] == new_digest
+        and env["GIT_COMMIT_SHA"] == "v0.0.46"
+    )
+
+
+def test_pin_release_fails_closed_on_a_bad_ref_or_an_unresolvable_tag(monkeypatch):
+    import pytest
+
+    deploy = _load_deploy_module()
+    deployer = deploy.DataEngineDeployer
+    secrets = _WritableSecrets(_secret_values("a"))
+    with pytest.raises(ValueError, match="vX.Y.Z tag or a commit sha"):
+        deployer.pin_release(
+            "latest", secrets=secrets, resolve=lambda image, ref: "sha256:" + "f" * 64
+        )
+    with pytest.raises(RuntimeError, match="no such tag"):
+        deployer.pin_release(
+            "v9.9.9",
+            secrets=secrets,
+            resolve=lambda image, ref: (_ for _ in ()).throw(
+                RuntimeError("no such tag")
+            ),
+        )
+    assert secrets.writes == []
+
+
+def test_ensure_runtime_secrets_refuses_the_deploy_when_the_pin_fails(monkeypatch):
+    deploy = _load_deploy_module()
+    deployer = deploy.DataEngineDeployer
+    secrets = _WritableSecrets(_secret_values("a"))
+    monkeypatch.setattr(deployer, "secrets_backend", classmethod(lambda cls: secrets))
+    monkeypatch.setattr(
+        deployer,
+        "env",
+        classmethod(lambda cls: {"ENV": "staging", "DEPLOY_VERSION_REF": "v0.0.46"}),
+    )
+    monkeypatch.setattr(deploy, "error", lambda *_a, **_k: None)
+    import libs.image_digest as image_digest
+
+    monkeypatch.setattr(
+        image_digest,
+        "resolve_image_digest",
+        lambda image, ref: (_ for _ in ()).throw(
+            image_digest.ImageDigestError("does not exist")
+        ),
+    )
+    assert deployer.ensure_runtime_secrets() is False
+    assert secrets.writes == []

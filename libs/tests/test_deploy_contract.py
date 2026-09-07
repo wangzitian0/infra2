@@ -292,3 +292,16 @@ def test_platform_specs_are_derived_from_service_registry():
         spec = service_spec(sid)
         assert spec.iac_pinned is True
         assert spec.prod_only == meta.prod_only  # derived, not a parallel hand-list
+
+
+def test_truealpha_app_carries_the_data_engine_as_its_companion():
+    """truealpha#712: the data engine is promoted by the same request as the app, so a
+    release can no longer leave it behind. Every companion must itself be a deployable
+    service the runner knows (iac_pinned), or the receiver would dispatch into a void."""
+    from libs.deploy_contract import service_spec
+
+    spec = service_spec("truealpha/app")
+    assert spec.companions == ("truealpha/data_engine",)
+    for companion in spec.companions:
+        assert service_spec(companion).iac_pinned is True
+    assert service_spec("finance_report/app").companions == ()
