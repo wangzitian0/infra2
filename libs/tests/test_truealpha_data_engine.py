@@ -358,3 +358,21 @@ def test_ensure_runtime_secrets_pins_from_the_process_environment(monkeypatch):
     monkeypatch.setattr(deploy, "success", lambda *_a, **_k: None)
     assert deployer.ensure_runtime_secrets() is True
     assert ("GIT_COMMIT_SHA", "v0.0.47") in secrets.writes
+
+
+def test_code_server_healthcheck_is_not_a_dagster_cli_cold_start():
+    """2026-09-07: `dagster api grpc-health-check` cost 10–11 s of CPU per check (a full
+    dagster import) every 30 s with a 10 s timeout, so under host load both code servers
+    were permanently unhealthy and the checks themselves were a third of a core each.
+    The probe must stay a bare socket connect — no dagster CLI, no dagster import."""
+    compose = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text())
+    check = compose["services"]["dagster-code-server"]["healthcheck"]
+    command = " ".join(check["test"])
+    assert "grpc-health-check" not in command and "dagster api" not in command
+    assert (
+        "socket.AF_UNIX" in command and "/var/lib/dagster/code-server.sock" in command
+    )
+    assert "import dagster" not in command
+    interval = int(str(check["interval"]).rstrip("s"))
+    timeout = int(str(check["timeout"]).rstrip("s"))
+    assert interval >= 60 and timeout <= interval // 2
