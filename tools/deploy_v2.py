@@ -463,6 +463,13 @@ def _deploy_platform(
     # a sha, never the ``main`` default — so every other platform service sees nothing new.
     pinned_ref = (version_ref or "").strip()
     pinned_ref = pinned_ref if pinned_ref and pinned_ref != "main" else None
+    if pinned_ref is not None and pinned_ref == iac_ref.strip():
+        # The reconcile pins both axes to the infra2 release tag (tools/reconcile_iac_inputs:
+        # "iac_pinned services ignore version_ref"); an infra2 tag is never an app release,
+        # so it must not reach a digest-pinning deployer (v1.1.59 would have asked the
+        # registry for truealpha-data-engine:v1.1.59). Only a ref that differs from the
+        # iac_ref names an app release.
+        pinned_ref = None
     response = trigger_platform_deploy(
         env=env,
         ref=iac_sha,
