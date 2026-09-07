@@ -1,5 +1,5 @@
-# Policy for truealpha postgres service
-# Scoped by vault.setup-approle to the target deployment environment.
+# Generated from truealpha/postgres by infra2_sdk.secrets. Do not edit.
+
 path "secret/data/truealpha/{{env}}/postgres" {
   capabilities = ["read"]
 }
@@ -8,7 +8,6 @@ path "secret/metadata/truealpha/{{env}}/postgres" {
   capabilities = ["read", "list"]
 }
 
-# Required for the vault-agent healthcheck token lookup (AppRole auth)
 path "auth/token/lookup-self" {
   capabilities = ["read"]
 }
