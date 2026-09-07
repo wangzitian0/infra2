@@ -266,8 +266,23 @@ class AlertingDeployer(Deployer):
             env=e.get("ENV", "production"),
             credential_type="root_vars",
         )
+        # Vault-first when 1Password is unavailable (#625: the service account was
+        # deleted and every alerting sync — and with it every platform reconcile —
+        # failed on a read Vault could already answer). The keys were synced into the
+        # runtime secret by _sync_1password_to_vault on earlier deploys; an empty op
+        # read is not a reason to ship a heartbeat-less alerting stack.
+        vault_secrets = None
         for key in ("INFRA_PROBE_HEARTBEAT_URL", "INFRA_PROBE_HEARTBEAT_TOKEN"):
             value = op_secrets.get(key)
+            if not value:
+                if vault_secrets is None:
+                    vault_secrets = get_secrets(
+                        project=cls.project_name(e),
+                        service=cls.service,
+                        env=e.get("ENV", "production"),
+                        credential_type="app_vars",
+                    )
+                value = vault_secrets.get(key)
             if value:
                 result[key] = value
         return result
@@ -449,16 +464,38 @@ class AlertingDeployer(Deployer):
             credential_type="app_vars",
         )
 
-        mode = op_secrets.get("ALERT_DELIVERY_MODE") or "feishu_webhook"
         required_by_mode = {
             "feishu_webhook": ["FEISHU_WEBHOOK_URL"],
             "feishu_app": ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_CHAT_ID"],
         }
+        op_values = {key: op_secrets.get(key) for key in cls.ROOT_VAR_KEYS}
+        if not any(op_values.values()):
+            # 1Password answered nothing (#625: deleted service account, no `op`, no
+            # token). Vault-first: the runtime secret this sync populated on earlier
+            # deploys is the same data; if it still satisfies the delivery mode, the
+            # deploy proceeds on it and says so. Only a Vault that is ALSO empty fails.
+            vault_mode = vault_secrets.get("ALERT_DELIVERY_MODE") or "feishu_webhook"
+            if vault_mode in required_by_mode and all(
+                vault_secrets.get(key) for key in required_by_mode[vault_mode]
+            ):
+                info(
+                    "1Password root_vars unreadable; Vault already holds the alerting "
+                    f"runtime secrets for mode {vault_mode} — deploying on Vault (#625)"
+                )
+                return True
+            error(
+                "Missing alerting secrets: 1Password root_vars unreadable and Vault has no "
+                f"complete set for mode {vault_mode}",
+                f"item={project}/{env_name}/{cls.service}",
+            )
+            return False
+
+        mode = op_values.get("ALERT_DELIVERY_MODE") or "feishu_webhook"
         if mode not in required_by_mode:
             error(f"Unsupported ALERT_DELIVERY_MODE in 1Password: {mode}")
             return False
 
-        values = {key: op_secrets.get(key) for key in cls.ROOT_VAR_KEYS}
+        values = dict(op_values)
         values["ALERT_DELIVERY_MODE"] = mode
 
         missing = [key for key in required_by_mode[mode] if not values.get(key)]
