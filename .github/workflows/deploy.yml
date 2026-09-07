@@ -108,6 +108,9 @@ jobs:
       cancel-in-progress: false
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+      # deploy_v2's on-main guard asks GitHub's compare API; without a token the call is
+      # anonymous and shares a 60/hour budget per runner IP (#635: `403 rate limit exceeded`).
+      GITHUB_TOKEN: ${{ github.token }}
       INTERNAL_DOMAIN: ${{ github.event.inputs.domain || 'zitian.party' }}
     steps:
       - name: Checkout
@@ -155,6 +158,9 @@ jobs:
     timeout-minutes: 25
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+      # deploy_v2's on-main guard asks GitHub's compare API; without a token the call is
+      # anonymous and shares a 60/hour budget per runner IP (#635: `403 rate limit exceeded`).
+      GITHUB_TOKEN: ${{ github.token }}
       # The ONE shared control-plane domain (libs.common.infra_domain, #561) --
       # cloud./vault./otel. host builds must NEVER follow a per-service app-routing
       # override (inputs.domain, e.g. truealpha.club), or they produce a nonexistent
