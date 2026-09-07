@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import re
 import sys
 import time
@@ -137,7 +138,12 @@ class DataEngineDeployer(Deployer):
 
     @classmethod
     def ensure_runtime_secrets(cls, c=None) -> bool:
-        version_ref = (cls.env().get("DEPLOY_VERSION_REF") or "").strip()
+        # From the PROCESS environment, not cls.env(): Deployer.env() is the curated
+        # deployment config (libs.common.get_env — 1Password init vars plus a fixed set
+        # of os.environ keys), and the runner's per-deploy DEPLOY_VERSION_REF is not in
+        # that set. The first live run of #630 (2026-09-07, infra2 run 34107133379)
+        # reported success with the pin silently skipped for exactly this reason.
+        version_ref = (os.environ.get("DEPLOY_VERSION_REF") or "").strip()
         if version_ref:
             try:
                 cls.pin_release(version_ref)
