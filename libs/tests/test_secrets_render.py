@@ -71,7 +71,7 @@ def test_merged_manifest_rejects_conflicting_declarations(
     )
     monkeypatch.setattr(secrets_render, "ROOT", tmp_path)
     service = secrets_render.Service("svc", "proj", "svc", ("a.json", "b.json"))
-    with pytest.raises(ValueError, match="KEY declared differently"):
+    with pytest.raises(ValueError, match="KEY.source declared differently"):
         secrets_render.merged_manifest(service)
     same = secrets_render.Service("svc", "proj", "svc", ("a.json", "a.json"))
     assert [f.env for f in secrets_render.merged_manifest(same).fields] == ["KEY"]

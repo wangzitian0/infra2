@@ -43,6 +43,8 @@ class Service:
     manifests: tuple[str, ...]
     source_env: str | None = None
     exclude_groups: tuple[str, ...] = ()
+    # Variables the stack supplies another way (a preview's ephemeral database DSN).
+    exclude_envs: tuple[str, ...] = ()
     # Hand-written files stay authoritative until the service is migrated: while
     # ``generated`` is False the manifest is still rendered and gated (so it cannot
     # rot), but the files on disk are neither compared nor rewritten.
@@ -120,6 +122,52 @@ SERVICES: tuple[Service, ...] = (
         "postgres",
         ("truealpha/truealpha/01.postgres/env.manifest.json",),
     ),
+    # App stacks: the application's own manifest (checked out through the submodule at the
+    # deployed commit) plus stack-only additions kept here. Environment-specific config
+    # (S3 endpoint, rate limits, telemetry) lives in the compose file / Deployer, not in
+    # the template.
+    Service(
+        "finance_report/finance_report/10.app",
+        "finance_report",
+        "app",
+        ("repos/finance_report/common/runtime/required-env.generated.json",),
+    ),
+    Service(
+        "finance_report/finance_report/preview",
+        "finance_report",
+        "app",
+        ("repos/finance_report/common/runtime/required-env.generated.json",),
+        source_env="staging",
+        exclude_envs=("DATABASE_URL", "REDIS_URL"),
+    ),
+    Service(
+        "truealpha/truealpha/10.app",
+        "truealpha",
+        "app",
+        (
+            "repos/truealpha/apps/app-web/required-env.manifest.json",
+            "repos/truealpha/apps/llm-service/required-env.generated.json",
+            "truealpha/truealpha/10.app/env.manifest.json",
+        ),
+    ),
+    Service(
+        "truealpha/truealpha/preview",
+        "truealpha",
+        "app",
+        (
+            "repos/truealpha/apps/app-web/required-env.manifest.json",
+            "repos/truealpha/apps/llm-service/required-env.generated.json",
+            "truealpha/truealpha/10.app/env.manifest.json",
+        ),
+        source_env="staging",
+        exclude_envs=("DATABASE_URL", "MIGRATIONS_DATABASE_URL"),
+    ),
+    Service(
+        "truealpha/truealpha/20.data_engine",
+        "truealpha",
+        "data_engine",
+        ("repos/truealpha/apps/data-engine/required-env.generated.json",),
+    ),
 )
 
 
@@ -129,17 +177,37 @@ def load_manifest(path: str) -> EnvironmentManifest:
     )
 
 
+_RENDER_KEYS = (
+    "source",
+    "provided_by",
+    "composed_from",
+    "store_key",
+    "empty_ok",
+    "scope",
+)
+
+
 def merged_manifest(service: Service) -> EnvironmentManifest:
-    """Union of a service's manifests; the same variable must be declared identically."""
+    """Union of a service's manifests.
+
+    Two apps in one stack may declare the same variable (both truealpha apps read
+    DATABASE_URL); they must agree on how it is produced and rendered, and the first
+    declaration wins for the rest (requiredness, description).
+    """
     fields: dict[str, EnvironmentField] = {}
     for path in service.manifests:
         for entry in load_manifest(path).fields:
+            if entry.env in service.exclude_envs:
+                continue
             existing = fields.get(entry.env)
-            if existing is not None and existing != entry:
-                raise ValueError(
-                    f"{service.directory}: {entry.env} declared differently in {path}"
-                )
-            fields.setdefault(entry.env, entry)
+            if existing is not None:
+                for key in _RENDER_KEYS:
+                    if getattr(existing, key) != getattr(entry, key):
+                        raise ValueError(
+                            f"{service.directory}: {entry.env}.{key} declared differently in {path}"
+                        )
+                continue
+            fields[entry.env] = entry
     return EnvironmentManifest(
         source=f"{service.project}/{service.service}", fields=tuple(fields.values())
     )

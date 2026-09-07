@@ -1,4 +1,5 @@
-# Scoped by vault.setup-approle to one deployment environment.
+# Generated from truealpha/data_engine by infra2_sdk.secrets. Do not edit.
+
 path "secret/data/truealpha/{{env}}/data_engine" {
   capabilities = ["read"]
 }

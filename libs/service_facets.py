@@ -239,7 +239,7 @@ class Exemption:
     ``check_id`` names the facet column being exempted (``probes`` | ``signals``
     | ``backup`` | ``secrets``), or a namespaced per-item check id for
     finer-grained opt-outs (e.g. ``required-env-drift:<VAR>`` — consumed by
-    tools/validate_required_env.py as its drift allowlist, #542). ``reason``
+    the retired tools/validate_required_env.py as its drift allowlist, #542; templates are generated from manifests since #633). ``reason``
     must say WHY the facet genuinely does not apply — an exemption is a
     conscious decision, not a forgotten gap.
     """

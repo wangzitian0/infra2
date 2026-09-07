@@ -160,6 +160,20 @@ services:
       OPENPANEL_CLIENT_ID: ${OPENPANEL_CLIENT_ID:-}
       OPENPANEL_API_URL: https://openpanel.${INTERNAL_DOMAIN}/api
       OPENPANEL_ENVIRONMENT: ${OPENPANEL_ENVIRONMENT:-}
+      # Configuration the hand-written preview secrets.ctmpl used to default (values
+      # previews effectively ran with on 2026-09-07, borrowing staging's); the generated
+      # template renders only human / runtime values from the staging path.
+      S3_ENDPOINT: http://platform-minio:9000
+      S3_BUCKET: finance-report-staging
+      S3_PUBLIC_BUCKET: finance-report-staging
+      S3_PRESIGN_EXPIRY_SECONDS: "900"
+      CORS_ORIGINS: ${NEXT_PUBLIC_APP_URL:-}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-}
+      PRIMARY_MODEL: ${PRIMARY_MODEL:-glm-5.2}
+      FALLBACK_MODELS: ${FALLBACK_MODELS:-glm-5-turbo,glm-5}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://platform-signoz-otel-collector:4318
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-finance-report-backend}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
       # The ephemeral-DB DSN the entrypoint forces AFTER sourcing Vault secrets.
       # asyncpg driver, pointing at the local `db` service (NOT finance_report-postgres*).
       PREVIEW_DATABASE_URL: postgresql+asyncpg://${PREVIEW_DB_USER:-preview}:${PREVIEW_DB_PASSWORD:-preview}@finance_report-preview-db${ENV_SUFFIX}:5432/${PREVIEW_DB_NAME:-finance_report}

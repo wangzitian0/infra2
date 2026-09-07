@@ -177,6 +177,9 @@ services:
     environment:
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      # Previews ran with the borrowed source env's APP_ENV before the template was
+      # generated; kept identical here (S3_ENDPOINT stays unset, as it was).
+      APP_ENV: ${PREVIEW_SECRET_ENV:-staging}
       # The ephemeral-DB DSN the entrypoint forces AFTER sourcing Vault secrets, pointing
       # at the local `db` service (NOT truealpha-postgres*).
       PREVIEW_DATABASE_URL: postgresql://${PREVIEW_DB_USER:-preview}:${PREVIEW_DB_PASSWORD:-preview}@truealpha-preview-db${ENV_SUFFIX}:5432/${PREVIEW_DB_NAME:-truealpha}
@@ -238,6 +241,9 @@ services:
     environment:
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      # Previews ran with the borrowed source env's APP_ENV before the template was
+      # generated; kept identical here (S3_ENDPOINT stays unset, as it was).
+      APP_ENV: ${PREVIEW_SECRET_ENV:-staging}
       HOSTNAME: 0.0.0.0
       PORT: "3000"
       PREVIEW_DATABASE_URL: postgresql://${PREVIEW_DB_USER:-preview}:${PREVIEW_DB_PASSWORD:-preview}@truealpha-preview-db${ENV_SUFFIX}:5432/${PREVIEW_DB_NAME:-truealpha}

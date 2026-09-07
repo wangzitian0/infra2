@@ -29,4 +29,8 @@ template_config {
 template {
   source      = "/etc/vault/secrets.ctmpl"
   destination = "/vault/secrets/.env"
+  # The template is generated from the service's manifest; a required key missing in
+  # Vault must fail the render (visible, no container start) instead of rendering
+  # `%!q(<nil>)`. Optional keys are omitted by the template itself (empty_ok).
+  error_on_missing_key = true
 }

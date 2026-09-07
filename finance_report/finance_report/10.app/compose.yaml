@@ -57,6 +57,9 @@ services:
       INFRA_SERVICE_ID: ${INFRA_SERVICE_ID:-finance_report/app}
       INFRA_ENVIRONMENT: ${INFRA_ENVIRONMENT:-${ENV:-production}}
       INFRA_IAC_REF: ${INFRA_IAC_REF:-}
+      # secrets.ctmpl is generated from the app manifest; DATABASE_URL / REDIS_URL are
+      # composed with the service suffix read from this variable.
+      ENV_SUFFIX: ${ENV_SUFFIX:-}
     healthcheck:
       test:
         - CMD-SHELL
@@ -157,6 +160,25 @@ services:
       OPENPANEL_CLIENT_ID: ${OPENPANEL_CLIENT_ID:-}
       OPENPANEL_API_URL: https://openpanel.${INTERNAL_DOMAIN}/api
       OPENPANEL_ENVIRONMENT: ${OPENPANEL_ENVIRONMENT:-}
+      # Environment-specific configuration the hand-written secrets.ctmpl used to
+      # default; the generated template renders only what the manifest marks human /
+      # runtime, so the deployment states these here (values are the ones every
+      # environment carried on 2026-09-07). Staging overrides come from
+      # AppDeployer.compose_env_overrides.
+      ENVIRONMENT: ${ENV:-production}
+      S3_ENDPOINT: http://platform-minio:9000
+      S3_BUCKET: ${S3_BUCKET:-statements}
+      S3_PUBLIC_BUCKET: ${S3_PUBLIC_BUCKET:-}
+      S3_PRESIGN_EXPIRY_SECONDS: "900"
+      CORS_ORIGINS: https://report${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-https://report${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}}
+      PREFECT_API_URL: http://platform-prefect-server${ENV_SUFFIX}:4200/api
+      API_RATE_LIMIT_REQUESTS: ${API_RATE_LIMIT_REQUESTS:-300}
+      PRIMARY_MODEL: ${PRIMARY_MODEL:-glm-5.2}
+      FALLBACK_MODELS: ${FALLBACK_MODELS:-glm-5-turbo,glm-5}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://platform-signoz-otel-collector:4318
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-finance-report-backend}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       # Keep the fixed stack aligned with preview. A live staging cold start on

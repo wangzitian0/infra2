@@ -75,9 +75,10 @@ CLI 命令 `invoke env.*` 和 `get_secrets()` 函数通过 `--type` 参数区分
 写进 compose 环境，不进 Vault。`empty_ok` 的变量在 Vault 没有值时整行省略，模板里不再出现
 `{{ else }}""`。`libs/tests/test_secrets_render.py` 断言提交的文件与生成结果一致；改 manifest 后
 运行 `uv run python tools/secrets_render.py --write`。iac-runner 的 policy 是写身份（跨项目
-create/update），不由 manifest 描述，仍然手写。尚未迁移的服务（app 栈）在
-`tools/secrets_render.py` 的注册表里标注，迁移时把模板里的环境默认值搬到 Deployer 的
-compose 环境。
+create/update），不由 manifest 描述，仍然手写。app 栈（truealpha app / data_engine / preview，finance_report app / preview）也已迁移：
+模板里原来的环境默认值（S3 端点、限流阈值、Prefect 与 OTel 地址等）改由 compose 文件与
+Deployer 的 `compose_env_overrides` 提供，manifest 只描述"谁产生这个值"。
+`tools/validate_required_env.py` 随之退役，一致性由生成测试保证。
 
 ## 2. 1Password Vault 结构
 

@@ -74,6 +74,24 @@ class AppDeployer(Deployer):
     )
 
     @classmethod
+    def compose_env_overrides(
+        cls, *, env: str, domain: str, env_suffix: str
+    ) -> dict[str, str]:
+        """Environment-specific values the generated secrets.ctmpl no longer defaults.
+
+        Production takes the compose file's inline defaults; staging carried these three
+        distinct values in Vault on 2026-09-07 (#633). Bucket names stay in step with
+        _ensure_minio_bucket, which reads S3_BUCKET from Vault for the same environment.
+        """
+        if env == "staging":
+            return {
+                "S3_BUCKET": "finance-report-staging",
+                "S3_PUBLIC_BUCKET": "finance-report-staging",
+                "API_RATE_LIMIT_REQUESTS": "2000",
+            }
+        return {}
+
+    @classmethod
     def pre_compose(cls, c) -> dict | None:
         """Prepare environment and ensure MinIO bucket is configured."""
         header(f"{cls.service} pre_compose", "Setting up application dependencies")
