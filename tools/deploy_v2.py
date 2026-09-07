@@ -430,9 +430,13 @@ def _deploy_platform(
 
     We do NOT re-implement the platform deploy — ``Deployer.sync`` is Context/os.environ
     coupled — we trigger the SAME signed webhook ``deploy.yml`` uses, so the deploy
-    is byte-for-byte iac_runner's. ``version_ref`` is unused: a platform artifact IS the
-    ``iac_ref``-pinned stack, so the deploy ref (and the recorded version identity) is the
-    resolved infra2 sha. Platform services have no preview — only ``staging`` / ``prod``.
+    is byte-for-byte iac_runner's. A platform artifact IS the ``iac_ref``-pinned stack, so
+    the deploy ref (and the recorded version identity) is the resolved infra2 sha.
+    ``version_ref`` is forwarded to the runner only when it names an APP release — a tag
+    or sha that differs from the ``iac_ref`` — for a digest-pinned platform service such
+    as ``truealpha/data_engine`` to pin (truealpha#712); ``main``, or a ref equal to the
+    ``iac_ref`` (the reconcile's shape), is ignored. Platform services have no preview —
+    only ``staging`` / ``prod``.
     """
     type_spec = deploy_type_spec(deploy_type)
     if type_spec.env not in ("staging", "prod"):
