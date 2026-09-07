@@ -424,6 +424,7 @@ def _deploy_platform(
     code_reviewed: bool | None,
     wait: bool,
     timeout: int,
+    version_ref: str | None = None,
 ) -> DeployV2Result:
     """Route a platform (iac_pinned) service to the iac_runner ``/deploy`` webhook.
 
@@ -458,6 +459,10 @@ def _deploy_platform(
     # it settles — terminal success is "completed", failure is "failed" (verified live).
     url = runner_url or os.getenv("IAC_RUNNER_URL", "")
     sec = secret or os.getenv("IAC_WEBHOOK_SECRET", "")
+    # An app release to pin (truealpha#712): forwarded only when it names one — a tag or
+    # a sha, never the ``main`` default — so every other platform service sees nothing new.
+    pinned_ref = (version_ref or "").strip()
+    pinned_ref = pinned_ref if pinned_ref and pinned_ref != "main" else None
     response = trigger_platform_deploy(
         env=env,
         ref=iac_sha,
@@ -466,8 +471,11 @@ def _deploy_platform(
         secret=sec,
         triggered_by=triggered_by,
         wait=False,
+        version_ref=pinned_ref,
     )
     detail = {"env": env, "ref": iac_sha, "services": [service], "iac_runner": response}
+    if pinned_ref:
+        detail["version_ref"] = pinned_ref
     if wait:
         final = poll_platform_deploy_status(
             env=env,
@@ -478,6 +486,7 @@ def _deploy_platform(
             secret=sec,
             triggered_by=triggered_by,
             attempts=_poll_attempts_for_timeout(timeout),
+            version_ref=pinned_ref,
         )
         detail["iac_runner_final"] = final
         status = str(final.get("status", "")).lower()
@@ -656,6 +665,7 @@ def deploy_v2(
             code_reviewed=code_reviewed,
             wait=wait,
             timeout=timeout,
+            version_ref=version_ref,
         )
 
     resolved_repo = repo if repo is not None else _repo_for_service(service)

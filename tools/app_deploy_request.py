@@ -12,10 +12,40 @@ from collections.abc import Sequence
 from libs.app_deploy_request import DeployPlan, make_plan
 
 
-def execute_plan(plan: DeployPlan) -> int:
-    from tools.deploy_v2 import main as deploy_v2_main
+def execute_plan(plan: DeployPlan, *, run=None) -> int:
+    """Execute the primary service, then each companion the service spec declares.
 
-    return deploy_v2_main(plan.deploy_v2_args())
+    A companion (``libs.deploy_contract.ServiceSpec.companions``) is promoted at the
+    same version_ref / iac_ref / type by the same request — truealpha/app carries
+    truealpha/data_engine (truealpha#712). Companions are platform (iac_pinned)
+    services, so ``--expected-sha`` — an app-image assertion — is dropped for them;
+    the runner pins the release's image digest from ``version_ref`` instead. The
+    first non-zero exit stops the sequence and is the request's exit code.
+    """
+    from libs.deploy_contract import service_spec
+
+    if run is None:
+        from tools.deploy_v2 import main as deploy_v2_main
+
+        run = deploy_v2_main
+    primary = plan.deploy_v2_args()
+    code = run(primary)
+    if code != 0:
+        return code
+    for companion in service_spec(plan.request.service).companions:
+        code = run(_companion_args(primary, companion))
+        if code != 0:
+            return code
+    return 0
+
+
+def _companion_args(primary: list[str], companion: str) -> list[str]:
+    args = list(primary)
+    args[args.index("--service") + 1] = companion
+    if "--expected-sha" in args:
+        at = args.index("--expected-sha")
+        del args[at : at + 2]
+    return args
 
 
 def _payload_from_env(name: str) -> str:

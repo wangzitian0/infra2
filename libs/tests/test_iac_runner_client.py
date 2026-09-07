@@ -61,9 +61,12 @@ def _capture(responses=None):
 
 def test_sign_matches_server_hmac_formula():
     ts, nonce, payload = "1700000000", "abc123def456", b'{"x":1}'
-    expected = "sha256=" + hmac.new(
-        SECRET.encode(), f"{ts}.{nonce}.".encode() + payload, hashlib.sha256
-    ).hexdigest()
+    expected = (
+        "sha256="
+        + hmac.new(
+            SECRET.encode(), f"{ts}.{nonce}.".encode() + payload, hashlib.sha256
+        ).hexdigest()
+    )
     assert _sign(SECRET, ts, nonce, payload) == expected
 
 
@@ -93,7 +96,9 @@ def test_trigger_builds_signed_payload_and_posts_to_deploy():
     assert h["X-IAC-Timestamp"] == "1700000000"
     assert h["X-IAC-Nonce"] == "n" * 16
     # the signature is over {ts}.{nonce}.+payload — exactly what the server recomputes
-    assert h["X-Hub-Signature-256"] == _sign(SECRET, "1700000000", "n" * 16, c["content"])
+    assert h["X-Hub-Signature-256"] == _sign(
+        SECRET, "1700000000", "n" * 16, c["content"]
+    )
 
 
 def test_trigger_normalizes_service_set_before_signing():
@@ -123,7 +128,11 @@ def test_trigger_normalizes_service_set_before_signing():
 def test_trigger_validates_inputs_before_post(kw, match):
     _, transport = _capture()
     base = dict(
-        env="staging", ref=SHA, services=["redis"], base_url="u", secret=SECRET,
+        env="staging",
+        ref=SHA,
+        services=["redis"],
+        base_url="u",
+        secret=SECRET,
         transport=transport,
     )
     base.update(kw)
@@ -134,9 +143,15 @@ def test_trigger_validates_inputs_before_post(kw, match):
 def test_poll_returns_on_terminal_status():
     calls, transport = _capture([{"status": "running"}, {"status": "success"}])
     res = poll_platform_deploy_status(
-        env="staging", ref=SHA, services=["redis"], deployment_id="a" * 16,
-        base_url="u", secret=SECRET,
-        interval=0, sleep=lambda *_: None, nonce_factory=lambda: "nonce123",
+        env="staging",
+        ref=SHA,
+        services=["redis"],
+        deployment_id="a" * 16,
+        base_url="u",
+        secret=SECRET,
+        interval=0,
+        sleep=lambda *_: None,
+        nonce_factory=lambda: "nonce123",
         transport=transport,
     )
     assert res["status"] == "success"
@@ -153,8 +168,14 @@ def test_poll_times_out_if_never_settles():
     _calls, transport = _capture([{"status": "running"}])
     with pytest.raises(TimeoutError, match="did not settle"):
         poll_platform_deploy_status(
-            env="staging", ref=SHA, base_url="u", secret=SECRET, attempts=3,
-            interval=0, sleep=lambda *_: None, nonce_factory=lambda: "nonce123",
+            env="staging",
+            ref=SHA,
+            base_url="u",
+            secret=SECRET,
+            attempts=3,
+            interval=0,
+            sleep=lambda *_: None,
+            nonce_factory=lambda: "nonce123",
             transport=transport,
         )
 
@@ -171,8 +192,14 @@ def test_poll_tolerates_transient_not_found_then_settles():
         ]
     )
     res = poll_platform_deploy_status(
-        env="staging", ref=SHA, base_url="u", secret=SECRET, attempts=10,
-        interval=0, sleep=lambda *_: None, nonce_factory=lambda: "nonce123",
+        env="staging",
+        ref=SHA,
+        base_url="u",
+        secret=SECRET,
+        attempts=10,
+        interval=0,
+        sleep=lambda *_: None,
+        nonce_factory=lambda: "nonce123",
         transport=transport,
     )
     assert res["status"] == "completed"
@@ -184,8 +211,14 @@ def test_poll_times_out_if_only_not_found():
     _calls, transport = _capture([({"status": "not_found"}, 404)])
     with pytest.raises(TimeoutError, match="did not settle"):
         poll_platform_deploy_status(
-            env="staging", ref=SHA, base_url="u", secret=SECRET, attempts=3,
-            interval=0, sleep=lambda *_: None, nonce_factory=lambda: "nonce123",
+            env="staging",
+            ref=SHA,
+            base_url="u",
+            secret=SECRET,
+            attempts=3,
+            interval=0,
+            sleep=lambda *_: None,
+            nonce_factory=lambda: "nonce123",
             transport=transport,
         )
 
@@ -196,8 +229,14 @@ def test_poll_raises_on_genuine_routing_404():
     _calls, transport = _capture([({"error": "Not Found"}, 404)])
     with pytest.raises(httpx.HTTPStatusError):
         poll_platform_deploy_status(
-            env="staging", ref=SHA, base_url="u", secret=SECRET, attempts=3,
-            interval=0, sleep=lambda *_: None, nonce_factory=lambda: "nonce123",
+            env="staging",
+            ref=SHA,
+            base_url="u",
+            secret=SECRET,
+            attempts=3,
+            interval=0,
+            sleep=lambda *_: None,
+            nonce_factory=lambda: "nonce123",
             transport=transport,
         )
 
@@ -214,6 +253,56 @@ def test_poll_validates_inputs_before_post():
         )
     with pytest.raises(ValueError, match="deployment_id"):
         poll_platform_deploy_status(
-            env="staging", ref=SHA, deployment_id="not-an-id",
-            base_url="u", secret=SECRET, transport=transport,
+            env="staging",
+            ref=SHA,
+            deployment_id="not-an-id",
+            base_url="u",
+            secret=SECRET,
+            transport=transport,
         )
+
+
+def test_trigger_carries_a_validated_version_ref_when_given():
+    """truealpha#712: the app release a digest-pinned platform service should pin rides
+    in the payload — and only there; an absent version_ref leaves the payload byte-identical
+    to before, so every other platform deploy is untouched."""
+    calls, transport = _capture()
+    trigger_platform_deploy(
+        env="production",
+        ref=SHA,
+        services=["truealpha/data_engine"],
+        base_url="https://iac.example",
+        secret=SECRET,
+        now=lambda: 1700000000.0,
+        nonce="n" * 16,
+        transport=transport,
+        version_ref="v0.0.46",
+    )
+    assert json.loads(calls[0]["content"])["version_ref"] == "v0.0.46"
+    calls, transport = _capture()
+    trigger_platform_deploy(
+        env="production",
+        ref=SHA,
+        services=["truealpha/data_engine"],
+        base_url="https://iac.example",
+        secret=SECRET,
+        now=lambda: 1700000000.0,
+        nonce="n" * 16,
+        transport=transport,
+    )
+    assert "version_ref" not in json.loads(calls[0]["content"])
+
+
+def test_version_ref_is_a_tag_or_a_sha_before_any_post():
+    calls, transport = _capture()
+    with pytest.raises(ValueError, match="vX.Y.Z tag or a 7-40 hex commit sha"):
+        trigger_platform_deploy(
+            env="production",
+            ref=SHA,
+            services=["truealpha/data_engine"],
+            base_url="https://iac.example",
+            secret=SECRET,
+            transport=transport,
+            version_ref="main; rm -rf /",
+        )
+    assert calls == []

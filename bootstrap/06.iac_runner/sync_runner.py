@@ -552,6 +552,7 @@ def run_invoke_task(
     repo_path: Path,
     deploy_env: str = "staging",
     deploy_ref: str | None = None,
+    version_ref: str | None = None,
 ) -> dict:
     """Run an invoke task with timeout and return result."""
     logger.info(
@@ -566,6 +567,11 @@ def run_invoke_task(
         if not EXACT_COMMIT_RE.fullmatch(deploy_ref):
             raise ValueError("deploy_ref must be an exact 40-character commit SHA")
         env_vars["IAC_DEPLOY_REF"] = deploy_ref.lower()
+    if version_ref:
+        # The app release this platform deploy pins (truealpha#712). Only a Deployer
+        # that reads DEPLOY_VERSION_REF acts on it; the value is already validated by
+        # the webhook (tag or sha) and is never interpolated into a shell.
+        env_vars["DEPLOY_VERSION_REF"] = version_ref
     if vault_root_token := resolve_vault_root_token(env_vars):
         env_vars["VAULT_ROOT_TOKEN"] = vault_root_token
     logger.info("Invoke child env: %s", safe_invoke_env_summary(env_vars))
@@ -661,7 +667,10 @@ def _log_fanout_decision(changed_files: list[str], services: set[str]) -> None:
 
 
 def sync_services(
-    services: set[str], ref: str | None = None, deploy_env: str = "staging"
+    services: set[str],
+    ref: str | None = None,
+    deploy_env: str = "staging",
+    version_ref: str | None = None,
 ) -> SyncResult:
     """Sync the specified services with deployment lock."""
     requested_services = sorted(services)
@@ -744,11 +753,13 @@ def sync_services(
                 continue
 
             if resolved_head:
+                extra = {"version_ref": version_ref} if version_ref else {}
                 result = run_invoke_task(
-                    task_name, repo_path, deploy_env, resolved_head
+                    task_name, repo_path, deploy_env, resolved_head, **extra
                 )
             else:
-                result = run_invoke_task(task_name, repo_path, deploy_env)
+                extra = {"version_ref": version_ref} if version_ref else {}
+                result = run_invoke_task(task_name, repo_path, deploy_env, **extra)
             service_result = ServiceSyncResult(
                 service=service,
                 task=task_name,
@@ -800,7 +811,11 @@ def sync_services(
 
 
 def sync_services_by_version(
-    env: str, ref: str, triggered_by: str, services: list[str] | None = None
+    env: str,
+    ref: str,
+    triggered_by: str,
+    services: list[str] | None = None,
+    version_ref: str | None = None,
 ) -> SyncResult:
     """Deploy targeted platform services to a specific environment using a git ref."""
     logger.info("=== Deployment Started ===")
@@ -811,7 +826,8 @@ def sync_services_by_version(
         logger.info(f"Targeted Services: {services}")
 
     target_services = set(services) if services else set()
-    result = sync_services(target_services, ref=ref, deploy_env=env)
+    extra = {"version_ref": version_ref} if version_ref else {}
+    result = sync_services(target_services, ref=ref, deploy_env=env, **extra)
 
     logger.info(
         "=== Deployment Complete: "

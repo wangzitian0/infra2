@@ -779,3 +779,59 @@ def test_cli_fails_closed_when_production_evidence_is_unavailable(
 
     assert result == 1
     assert "remote verification unavailable" in capsys.readouterr().err
+
+
+def test_execute_promotes_the_declared_companions_after_the_primary(tmp_path) -> None:
+    """truealpha#712: one app-deploy request promotes the app AND the data engine. The
+    companion runs at the same version_ref / iac_ref / type, without the app-image
+    --expected-sha assertion (it is a digest-pinned platform service; the runner pins the
+    release's digest from version_ref), and a companion failure is the request's failure."""
+    truealpha = "https://github.com/wangzitian0/truealpha"
+    production = receiver.make_plan(
+        production_payload(
+            service="truealpha/app",
+            source_repository="wangzitian0/truealpha",
+            evidence={
+                "source_run_url": f"{truealpha}/actions/runs/100",
+                "source_run_id": "100",
+                "staging_run_url": f"{truealpha}/actions/runs/101",
+                "reviewed_change_url": f"{truealpha}/pull/10",
+            },
+        ),
+        sender="wangzitian0",
+        domain="zitian.party",
+        timeout=600,
+        repo_root=tmp_path,
+        resolve_image=resolved,
+        runner=tags,
+        production_evidence_verifier=lambda request: None,
+    )
+    runs: list[list[str]] = []
+
+    def run(args: list[str]) -> int:
+        runs.append(list(args))
+        return 0
+
+    assert receiver_cli.execute_plan(production, run=run) == 0
+    assert [a[a.index("--service") + 1] for a in runs] == [
+        "truealpha/app",
+        "truealpha/data_engine",
+    ]
+    primary, companion = runs
+    assert "--expected-sha" in primary and "--expected-sha" not in companion
+    for flag in ("--type", "--version-ref", "--iac-ref", "--domain"):
+        assert companion[companion.index(flag) + 1] == primary[primary.index(flag) + 1]
+    assert "--staging-validated" in companion and "--code-reviewed" in companion
+
+    # the companion's exit code is the request's
+    codes = iter([0, 7])
+    assert receiver_cli.execute_plan(production, run=lambda args: next(codes)) == 7
+    # a failed primary never reaches the companion
+    seen: list[list[str]] = []
+
+    def failing(args: list[str]) -> int:
+        seen.append(list(args))
+        return 3
+
+    assert receiver_cli.execute_plan(production, run=failing) == 3
+    assert len(seen) == 1

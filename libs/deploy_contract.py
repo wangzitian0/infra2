@@ -74,6 +74,11 @@ class ServiceSpec:
             Defaults to ``<service-part-of-key>`` with underscores dashed, matching the
             registry key unless the app's compose already established a different label.
         identity_component: The ``component`` telemetry label. Defaults to ``"app"``.
+        companions: Services promoted by the SAME app-deploy request, after this one,
+            at the same ``version_ref`` / ``iac_ref`` / type. ``truealpha/app`` carries
+            ``truealpha/data_engine`` (truealpha#712): one release request promotes
+            the three images, so the engine can no longer sit a release behind the app
+            with every gate green. A companion failure fails the request.
         supports_preview: Whether ``libs.deploy.preview`` can serve this service's
             preview/canary deploy types. False fails a preview/canary target closed. True
             requires a matching entry in
@@ -92,6 +97,7 @@ class ServiceSpec:
     image_repositories: tuple[str, ...] = ()
     identity_service_name: str = ""
     identity_component: str = "app"
+    companions: tuple[str, ...] = ()
     supports_preview: bool = True
 
     def resolved_identity_service_name(self) -> str:
@@ -143,6 +149,7 @@ SERVICES: dict[str, ServiceSpec] = {
         ),
         identity_service_name="truealpha-app",
         supports_preview=True,
+        companions=("truealpha/data_engine",),
     ),
 }
 
