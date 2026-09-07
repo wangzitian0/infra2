@@ -46,6 +46,9 @@ jobs:
     timeout-minutes: 120
     env:
       IAC_WEBHOOK_SECRET: ${{ secrets.IAC_WEBHOOK_SECRET }}
+      # reconcile shells out to tools.deploy_v2, whose on-main guard needs an authenticated
+      # GitHub compare call (#635).
+      GITHUB_TOKEN: ${{ github.token }}
       IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
       INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
     steps:

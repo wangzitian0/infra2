@@ -100,6 +100,34 @@ def _infra2_owner_name(repo: str) -> str:
     return repo.rstrip("/").removesuffix(".git").split("github.com/")[-1]
 
 
+# GitHub's compare call is rate-limited per token — or, when the workflow forgets to pass
+# one, per runner IP (60/hour shared by every job GitHub schedules on that address). Waits
+# longer than this are not worth blocking a deploy for: fail closed and say why (#635).
+_RATE_LIMIT_MAX_WAIT_SECONDS = 120
+_RATE_LIMIT_DEFAULT_WAIT_SECONDS = 15
+
+
+def _rate_limited(resp) -> bool:
+    """403/429 whose headers or body say the GitHub budget is spent."""
+    if getattr(resp, "status_code", 200) not in (403, 429):
+        return False
+    headers = getattr(resp, "headers", None) or {}
+    if str(headers.get("X-RateLimit-Remaining", "")).strip() == "0" or headers.get("Retry-After"):
+        return True
+    return "rate limit" in str(getattr(resp, "text", "") or "").lower()
+
+
+def _rate_limit_wait_seconds(resp, now: float) -> float:
+    headers = getattr(resp, "headers", None) or {}
+    retry_after = str(headers.get("Retry-After", "")).strip()
+    if retry_after.isdigit():
+        return max(1.0, float(retry_after))
+    reset = str(headers.get("X-RateLimit-Reset", "")).strip()
+    if reset.isdigit():
+        return max(1.0, float(reset) - now)
+    return float(_RATE_LIMIT_DEFAULT_WAIT_SECONDS)
+
+
 def assert_iac_ref_on_main(
     iac_ref: str,
     deploy_type: str,
@@ -107,6 +135,9 @@ def assert_iac_ref_on_main(
     repo: str = _INFRA2_REPO,
     token: str | None = None,
     transport=httpx.get,
+    sleep=time.sleep,
+    now=time.time,
+    max_attempts: int = 3,
 ) -> None:
     """Fail-closed: a fixed-env (staging/prod) ``iac_ref`` must be an ON-MAIN release tag —
     its commit reachable from infra2 ``main``.
@@ -126,10 +157,31 @@ def assert_iac_ref_on_main(
         f"/compare/main...{iac_ref.strip()}"
     )
     headers = {"Accept": "application/vnd.github+json"}
-    tok = token if token is not None else os.getenv("GITHUB_TOKEN", "").strip()
+    tok = (
+        token
+        if token is not None
+        else (os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN") or "").strip()
+    )
     if tok:
         headers["Authorization"] = f"Bearer {tok}"
-    resp = transport(url, headers=headers, timeout=30)
+    for attempt in range(1, max_attempts + 1):
+        resp = transport(url, headers=headers, timeout=30)
+        if not _rate_limited(resp):
+            break
+        wait = _rate_limit_wait_seconds(resp, now())
+        if attempt < max_attempts and wait <= _RATE_LIMIT_MAX_WAIT_SECONDS:
+            sleep(wait)
+            continue
+        why = (
+            "the call was UNAUTHENTICATED — export GITHUB_TOKEN (github.token) in the deploy "
+            "step; anonymous calls share GitHub's 60/hour budget per runner IP"
+            if not tok
+            else "the token's GitHub API budget is spent"
+        )
+        raise RuntimeError(
+            f"GitHub compare API rate-limited (HTTP {resp.status_code}) for {url}: {why}; "
+            f"budget resets in ~{wait:.0f}s (attempt {attempt}/{max_attempts}, #635)"
+        )
     resp.raise_for_status()
     status = (resp.json() or {}).get("status")
     if status not in ("behind", "identical"):

@@ -180,9 +180,11 @@ def test_deploy_repo_override_wins_over_service_default(monkeypatch, calls):
 
 
 class _CmpResp:
-    def __init__(self, status, code=200):
+    def __init__(self, status, code=200, headers=None, text=""):
         self._status = status
         self.status_code = code
+        self.headers = headers or {}
+        self.text = text
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -235,6 +237,59 @@ def test_iac_ref_on_main_fail_closed_on_api_error():
         assert_iac_ref_on_main(
             "v1.2.3", "prod", token="", transport=_cmp_transport("behind", code=502)
         )
+
+
+def test_iac_ref_on_main_sends_the_workflow_token(monkeypatch):
+    """2026-09-07: two prod promotes died on `403 rate limit exceeded` from the compare API
+    because deploy.yml never exported GITHUB_TOKEN, so the call was anonymous (60/hour per
+    runner IP). The token from the environment must reach the request (#635)."""
+    monkeypatch.setenv("GITHUB_TOKEN", "ghs_test")
+    seen = []
+
+    def transport(url, headers, **_kw):
+        seen.append(headers.get("Authorization"))
+        return _CmpResp("behind")
+
+    assert_iac_ref_on_main("v1.2.3", "prod", transport=transport)
+    assert seen == ["Bearer ghs_test"]
+
+
+def test_iac_ref_on_main_waits_out_a_short_rate_limit_then_succeeds():
+    answers = [
+        _CmpResp("", code=403, headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1005"}),
+        _CmpResp("behind"),
+    ]
+    slept = []
+    assert_iac_ref_on_main(
+        "v1.2.3",
+        "prod",
+        token="t",
+        transport=lambda url, **_kw: answers.pop(0),
+        sleep=slept.append,
+        now=lambda: 1000.0,
+    )
+    assert slept == [5.0] and answers == []
+
+
+def test_iac_ref_on_main_fails_closed_and_names_the_missing_token_when_anonymous():
+    # an anonymous budget resets on the hour: far beyond what a deploy should block on
+    resp = _CmpResp("", code=403, headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "4600"}, text="API rate limit exceeded")
+    slept = []
+    with pytest.raises(RuntimeError, match="UNAUTHENTICATED.*GITHUB_TOKEN"):
+        assert_iac_ref_on_main(
+            "v1.2.3", "prod", token="", transport=lambda url, **_kw: resp, sleep=slept.append, now=lambda: 1000.0
+        )
+    assert slept == []
+
+
+def test_iac_ref_on_main_gives_up_after_bounded_attempts():
+    resp = _CmpResp("", code=429, headers={"Retry-After": "2"})
+    slept = []
+    with pytest.raises(RuntimeError, match="budget is spent"):
+        assert_iac_ref_on_main(
+            "v1.2.3", "prod", token="t", transport=lambda url, **_kw: resp, sleep=slept.append, now=lambda: 0.0
+        )
+    assert slept == [2.0, 2.0]
 
 
 # --- prod: release-only, pulls the TAG (the headline deliverable) ----------

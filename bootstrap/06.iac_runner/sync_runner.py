@@ -322,19 +322,52 @@ def file_lock(lock_path: Path, description: str):
         logger.info(f"{description} lock released")
 
 
-def run_git_command(args: list[str], repo_path: Path, description: str) -> bool:
-    """Run a git command with proper error handling."""
-    result = subprocess.run(
-        ["git"] + args,
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    if result.returncode != 0:
-        logger.error(f"Git {description} failed: {result.stderr}")
-        return False
-    return True
+GIT_COMMAND_TIMEOUT_SECONDS = 120
+GIT_COMMAND_ATTEMPTS = 2
+
+
+def run_git_command(
+    args: list[str],
+    repo_path: Path,
+    description: str,
+    *,
+    attempts: int = GIT_COMMAND_ATTEMPTS,
+    timeout: int = GIT_COMMAND_TIMEOUT_SECONDS,
+) -> bool:
+    """Run a git command with proper error handling.
+
+    A network git command can hang when GitHub is unreachable from the VPS (2026-09-07: two
+    prod promotes died on `fetch --tags --prune` timing out at 120 s, and the unhandled
+    TimeoutExpired took the gunicorn worker down with exit 141 — infra2#629). A timeout is
+    retried once, then reported as an ordinary failed git step so the sync ends with a
+    diagnostic instead of "Deployment failed before producing a sync result".
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            result = subprocess.run(
+                ["git"] + args,
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            if attempt < attempts:
+                logger.warning(
+                    f"Git {description} timed out after {timeout}s "
+                    f"(attempt {attempt}/{attempts}); retrying"
+                )
+                continue
+            logger.error(
+                f"Git {description} failed: timed out after {timeout}s on "
+                f"{attempts} attempts (git_command_timeout)"
+            )
+            return False
+        if result.returncode != 0:
+            logger.error(f"Git {description} failed: {result.stderr}")
+            return False
+        return True
+    return False
 
 
 def resolve_checkout_ref(repo_path: Path, target_ref: str) -> str | None:
