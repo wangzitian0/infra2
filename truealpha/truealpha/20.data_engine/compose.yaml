@@ -63,6 +63,17 @@ services:
       VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
       ENV: ${ENV}
       TA_POSTGRES_PORT: ${TA_POSTGRES_PORT}
+      # secrets.ctmpl dials MinIO with this (#604); `env "X"` inside the template
+      # reads the agent's own environment, so every variable the template names
+      # must be forwarded here — test_vault_agent_forwards_every_template_env pins it.
+      TA_MINIO_S3_PORT: ${TA_MINIO_S3_PORT}
+      # Cache-bust (mirrors 10.app's vault-agent): secrets.ctmpl is a single-file
+      # bind mount, so a checkout that rewrites it leaves this container holding the
+      # old inode, and Compose only recreates the agent when its resolved config
+      # changes. Without this, #604's endpoint line and #626's LLM_* lines stayed
+      # unrendered on running staging/prod for weeks. CONFIGURATION_SHA256 covers
+      # compose.yaml + secrets.ctmpl + vault-agent.hcl + vault-policy.hcl + public env.
+      TRUEALPHA_CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:?CONFIGURATION_SHA256 is required}
     healthcheck:
       test:
         - CMD-SHELL

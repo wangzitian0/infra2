@@ -1,4 +1,5 @@
 import importlib.util
+import re
 from pathlib import Path
 
 import yaml
@@ -192,6 +193,43 @@ def test_the_dialled_s3_port_matches_the_one_minio_publishes():
         assert addr.endswith(":" + dialled[env]), (
             f"{env}: dialling :{dialled[env]}, MinIO publishes {addr}"
         )
+
+
+def _vault_agent_environment() -> dict[str, str]:
+    compose = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text())
+    return compose["services"]["vault-agent"]["environment"]
+
+
+def test_vault_agent_forwards_every_template_env():
+    """`env "X"` in secrets.ctmpl reads the vault-agent container's own environment,
+    not the Compose project env. #604 added `env "TA_MINIO_S3_PORT"` to the template
+    while compose.yaml kept forwarding only TA_POSTGRES_PORT, so a recreated agent
+    rendered S3_ENDPOINT=http://127.0.0.1: (no port) and every raw capture failed
+    with `cannot access bucket truealpha-raw` (staging, 2026-09-07).
+    """
+    template = (SERVICE_DIR / "secrets.ctmpl").read_text()
+    referenced = set(re.findall(r'env "([A-Z0-9_]+)"', template))
+    assert referenced, "template no longer reads any env — update this test"
+    forwarded = set(_vault_agent_environment())
+    missing = sorted(referenced - forwarded)
+    assert not missing, f"secrets.ctmpl reads {missing} but vault-agent does not forward them"
+    assert _vault_agent_environment()["TA_MINIO_S3_PORT"] == "${TA_MINIO_S3_PORT}"
+
+
+def test_vault_agent_is_recreated_when_its_templates_change():
+    """secrets.ctmpl is a single-file bind mount: a checkout that rewrites the file
+    gives it a new inode, the running agent keeps the old one, and Compose only
+    recreates the agent when its resolved config changes. CONFIGURATION_SHA256
+    (compose.yaml + secrets.ctmpl + vault-agent.hcl + vault-policy.hcl + public env)
+    must therefore be part of the agent's config, as it already is for the runtime
+    services — otherwise template edits ship without ever rendering (#604, #626).
+    """
+    environment = _vault_agent_environment()
+    assert environment.get("TRUEALPHA_CONFIGURATION_SHA256", "").startswith(
+        "${CONFIGURATION_SHA256"
+    ), "vault-agent must carry CONFIGURATION_SHA256 so template changes recreate it"
+    hashed = _load_deploy_module().DataEngineDeployer
+    assert callable(getattr(hashed, "_configuration_sha256", None))
 
 
 def test_s3_endpoint_is_derived_not_taken_from_vault():
