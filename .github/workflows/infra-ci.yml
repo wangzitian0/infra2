@@ -262,7 +262,8 @@ jobs:
           mkdir -p coverage
           # The template generator reads the app manifests through the submodules; infra-ci
           # never checks those out (#506), so fetch the few files at the pinned commits.
-          uv run python -m tools.fetch_app_manifests
+          # (script path, not -m: the job runs with PYTHONSAFEPATH=1, so `tools` is not a package on sys.path)
+          uv run python tools/fetch_app_manifests.py
           uv run python -m pytest libs/tests -q -n auto \
             --cov=libs \
             --cov=tools \
