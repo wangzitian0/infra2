@@ -125,17 +125,24 @@ services:
       - --log-level
       - warning
     healthcheck:
+      # `dagster api grpc-health-check` is a full CLI cold start — it imports dagster and
+      # the workspace and costs 10–11 s of CPU per check on the shared host (measured
+      # 2026-09-07: interval 30 s, timeout 10 s, so under load every check timed out,
+      # both code servers sat `unhealthy` with a failing streak, and the checks alone
+      # burned about a core while making the load they then failed on — the same shape
+      # #616/#619 removed from the daemon). This probe connects to the gRPC unix socket
+      # with bare Python (no dagster import, ~50 ms): the server is up and accepting.
+      # Whether the code server can LOAD the definitions is the daemon's and the
+      # webserver's business, which they report through their own probes.
       test:
         - CMD
-        - dagster
-        - api
-        - grpc-health-check
-        - --socket
-        - /var/lib/dagster/code-server.sock
-      interval: 30s
+        - python
+        - -c
+        - "import socket; s = socket.socket(socket.AF_UNIX); s.settimeout(3); s.connect('/var/lib/dagster/code-server.sock'); s.close()"
+      interval: 60s
       timeout: 10s
       retries: 5
-      start_period: 30s
+      start_period: 60s
 
   dagster-webserver:
     <<: *dagster-service
