@@ -65,6 +65,20 @@ CLI 命令 `invoke env.*` 和 `get_secrets()` 函数通过 `--type` 参数区分
 
 ---
 
+### 1.5 模板由 manifest 生成（infra2-sdk contract v2）
+
+每个服务的 `secrets.ctmpl` 与 `vault-policy.hcl` 不再手写，而是由 `tools/secrets_render.py`
+从环境 manifest 生成：app 的 manifest 来自其仓库（通过 git submodule 固定在已部署的提交），
+平台服务的 manifest 放在服务目录的 `env.manifest.json`。manifest 里每个变量都声明了"谁产生它"
+（`human` / `runtime` / `release` / `decision` / `code`），模板只渲染 `human`、`runtime`、
+`provided_by`、`composed_from` 四类；`code` 类默认值留在应用里，`release` / `decision` 由部署
+写进 compose 环境，不进 Vault。`empty_ok` 的变量在 Vault 没有值时整行省略，模板里不再出现
+`{{ else }}""`。`libs/tests/test_secrets_render.py` 断言提交的文件与生成结果一致；改 manifest 后
+运行 `uv run python tools/secrets_render.py --write`。iac-runner 的 policy 是写身份（跨项目
+create/update），不由 manifest 描述，仍然手写。尚未迁移的服务（app 栈）在
+`tools/secrets_render.py` 的注册表里标注，迁移时把模板里的环境默认值搬到 Deployer 的
+compose 环境。
+
 ## 2. 1Password Vault 结构
 
 Bootstrap 依赖 1Password CLI (`op`)，使用 **`Infra2`** vault 存储所有凭证。

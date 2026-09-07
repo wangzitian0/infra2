@@ -1,22 +1,29 @@
-# Authentik reads its own rendered secrets at runtime via vault-agent.
-# Writes/rotation are performed by the IaC runner and root-token setup, not by
-# this service token, so the runtime policy is read-only (least privilege).
+# Generated from platform/authentik by infra2_sdk.secrets. Do not edit.
+
 path "secret/data/platform/{{env}}/authentik" {
-  capabilities = ["read", "list"]
+  capabilities = ["read"]
 }
+
 path "secret/metadata/platform/{{env}}/authentik" {
-  capabilities = ["list", "read"]
+  capabilities = ["read", "list"]
 }
 
-# Authentik needs to read Postgres and Redis credentials
 path "secret/data/platform/{{env}}/postgres" {
-  capabilities = ["read", "list"]
+  capabilities = ["read"]
 }
-path "secret/data/platform/{{env}}/redis" {
+
+path "secret/metadata/platform/{{env}}/postgres" {
   capabilities = ["read", "list"]
 }
 
-# Required for the vault-agent healthcheck token lookup (AppRole auth)
+path "secret/data/platform/{{env}}/redis" {
+  capabilities = ["read"]
+}
+
+path "secret/metadata/platform/{{env}}/redis" {
+  capabilities = ["read", "list"]
+}
+
 path "auth/token/lookup-self" {
   capabilities = ["read"]
 }

@@ -1,10 +1,13 @@
+# Generated from platform/redis by infra2_sdk.secrets. Do not edit.
+
 path "secret/data/platform/{{env}}/redis" {
   capabilities = ["read"]
 }
+
 path "secret/metadata/platform/{{env}}/redis" {
   capabilities = ["read", "list"]
 }
-# Required for the vault-agent healthcheck token lookup (AppRole auth)
+
 path "auth/token/lookup-self" {
   capabilities = ["read"]
 }

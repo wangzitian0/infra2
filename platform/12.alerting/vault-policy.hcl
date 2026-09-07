@@ -1,5 +1,5 @@
-# Policy for platform alerting bridge.
-# Scoped by vault.setup-approle to the target deployment environment.
+# Generated from platform/alerting by infra2_sdk.secrets. Do not edit.
+
 path "secret/data/platform/{{env}}/alerting" {
   capabilities = ["read"]
 }
@@ -8,7 +8,6 @@ path "secret/metadata/platform/{{env}}/alerting" {
   capabilities = ["read", "list"]
 }
 
-# Required for the vault-agent healthcheck token lookup (AppRole auth).
 path "auth/token/lookup-self" {
   capabilities = ["read"]
 }
