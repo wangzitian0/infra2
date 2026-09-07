@@ -244,8 +244,9 @@ def _in_progress_response(
     triggered_by: str = "unknown",
     duplicate: bool = False,
     services: list[str] | None = None,
+    version_ref: str | None = None,
 ) -> dict:
-    key = _deployment_key(env, ref, services)
+    key = _deployment_key(env, ref, services, version_ref)
     response = {
         "status": "in_progress",
         "deployment_id": _deployment_id(key),
@@ -255,6 +256,8 @@ def _in_progress_response(
         "requested_services": list(key[2]),
         "status_url": "/deploy/status",
     }
+    if version_ref:
+        response["version_ref"] = version_ref
     if duplicate:
         response["duplicate"] = True
     return response
@@ -266,14 +269,18 @@ def _completed_response(
     triggered_by: str,
     result,
     services: list[str] | None = None,
+    version_ref: str | None = None,
 ) -> dict:
-    key = _deployment_key(env, ref, services)
+    # Keyed exactly as the deployment was stored (review on #630): a version_ref that
+    # took part in the key must take part in the id, or /deploy/status looks up a
+    # deployment that was never stored under that id.
+    key = _deployment_key(env, ref, services, version_ref)
     result_payload = (
         result.to_public_dict()
         if hasattr(result, "to_public_dict")
         else result.to_dict()
     )
-    return {
+    response = {
         "status": "completed" if result.success else "failed",
         "deployment_id": _deployment_id(key),
         "env": env,
@@ -282,6 +289,9 @@ def _completed_response(
         "requested_services": list(key[2]),
         "result": result_payload,
     }
+    if version_ref:
+        response["version_ref"] = version_ref
+    return response
 
 
 def _version_kwargs(version_ref: str | None) -> dict:
@@ -316,7 +326,9 @@ def _run_deployment(
             if version_ref
             else sync_services_by_version(env, ref, triggered_by, services)
         )
-        response = _completed_response(env, ref, triggered_by, result, services)
+        response = _completed_response(
+            env, ref, triggered_by, result, services, version_ref=version_ref
+        )
     except Exception as exc:
         logger.exception("Deployment failed before producing a sync result")
         response = {
@@ -519,7 +531,9 @@ def version_deploy():
                 return jsonify({**recent, "cached": True}), status_code
             if key in _in_flight_deploys:
                 return jsonify(
-                    _in_progress_response(env, ref, triggered_by, True, services)
+                    _in_progress_response(
+                        env, ref, triggered_by, True, services, version_ref=version_ref
+                    )
                 ), 202
             _in_flight_deploys.add(key)
 
@@ -543,7 +557,9 @@ def version_deploy():
             return jsonify({**recent, "cached": True}), 200
         if key in _in_flight_deploys:
             return jsonify(
-                _in_progress_response(env, ref, triggered_by, True, services)
+                _in_progress_response(
+                    env, ref, triggered_by, True, services, version_ref=version_ref
+                )
             ), 202
         _in_flight_deploys.add(key)
 
@@ -561,7 +577,9 @@ def version_deploy():
 
     return jsonify(
         {
-            **_in_progress_response(env, ref, triggered_by, services=services),
+            **_in_progress_response(
+                env, ref, triggered_by, services=services, version_ref=version_ref
+            ),
             "wait": False,
         }
     ), 202
@@ -635,7 +653,13 @@ def deployment_status():
             return jsonify(recent), 200
         if key in _in_flight_deploys:
             return jsonify(
-                _in_progress_response(env, ref, triggered_by, services=list(key[2]))
+                _in_progress_response(
+                    env,
+                    ref,
+                    triggered_by,
+                    services=list(key[2]),
+                    version_ref=(key[3] if len(key) > 3 and key[3] else None),
+                )
             ), 200
 
     return jsonify(
