@@ -367,8 +367,11 @@ def test_code_server_healthcheck_is_not_a_dagster_cli_cold_start():
     The probe must stay a bare socket connect — no dagster CLI, no dagster import."""
     compose = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text())
     check = compose["services"]["dagster-code-server"]["healthcheck"]
+    # The shape, not substrings (review on #636): the executable is bare python, and no
+    # token of the command is a dagster CLI entry point of any kind.
+    assert check["test"][:2] == ["CMD", "python"]
+    assert not any(token.startswith("dagster") for token in check["test"][2:])
     command = " ".join(check["test"])
-    assert "grpc-health-check" not in command and "dagster api" not in command
     assert (
         "socket.AF_UNIX" in command and "/var/lib/dagster/code-server.sock" in command
     )
