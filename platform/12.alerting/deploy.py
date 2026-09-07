@@ -474,7 +474,10 @@ class AlertingDeployer(Deployer):
             # token). Vault-first: the runtime secret this sync populated on earlier
             # deploys is the same data; if it still satisfies the delivery mode, the
             # deploy proceeds on it and says so. Only a Vault that is ALSO empty fails.
-            vault_mode = vault_secrets.get("ALERT_DELIVERY_MODE") or "feishu_webhook"
+            # "Complete" includes the mode itself (review on #631): a Vault that holds a
+            # webhook URL but no ALERT_DELIVERY_MODE is not a set this deploy may run on,
+            # because the runtime reads the mode from the same secret.
+            vault_mode = vault_secrets.get("ALERT_DELIVERY_MODE")
             if vault_mode in required_by_mode and all(
                 vault_secrets.get(key) for key in required_by_mode[vault_mode]
             ):
@@ -485,7 +488,7 @@ class AlertingDeployer(Deployer):
                 return True
             error(
                 "Missing alerting secrets: 1Password root_vars unreadable and Vault has no "
-                f"complete set for mode {vault_mode}",
+                f"complete set (ALERT_DELIVERY_MODE={vault_mode!r} plus its required keys)",
                 f"item={project}/{env_name}/{cls.service}",
             )
             return False
