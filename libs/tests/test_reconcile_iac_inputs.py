@@ -520,8 +520,11 @@ def test_reconcile_workflow_pages_on_failure_with_the_runner_diagnostics() -> No
     job = workflow["jobs"]["reconcile"]
     for key in (
         "INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE",
+        "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL",
+        "INFRA2_OUT_OF_BAND_FEISHU_APP_ID",
         "INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET",
         "INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID",
+        "INFRA2_OUT_OF_BAND_FEISHU_API_BASE",
     ):
         assert job["env"][key] == "${{ secrets.%s }}" % key
     names = [step.get("name") for step in job["steps"]]
@@ -533,3 +536,18 @@ def test_reconcile_workflow_pages_on_failure_with_the_runner_diagnostics() -> No
     )
     assert alert["if"].startswith("failure()") and "inputs.dry_run" in alert["if"]
     assert "deliver_out_of_band_alert" in alert["run"] and "alert_text" in alert["run"]
+
+
+def test_github_run_url_is_real_or_clearly_absent() -> None:
+    env = {
+        "GITHUB_SERVER_URL": "https://github.com",
+        "GITHUB_REPOSITORY": "o/r",
+        "GITHUB_RUN_ID": "7",
+    }
+    assert reconcile.github_run_url(env) == "https://github.com/o/r/actions/runs/7"
+    assert (
+        reconcile.github_run_url({}) == "(run URL unavailable outside GitHub Actions)"
+    )
+    assert "actions/runs" not in reconcile.github_run_url(
+        {"GITHUB_SERVER_URL": "https://github.com"}
+    )
