@@ -320,7 +320,7 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           cd ${{ github.workspace }}
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git fetch --no-tags --no-recurse-submodules origin +refs/heads/main:refs/remotes/origin/main
           mapfile -t files < <(git diff --name-only --ignore-submodules=all origin/main...HEAD)
           args=(--after HEAD --dry-run)
           for f in "${files[@]}"; do
