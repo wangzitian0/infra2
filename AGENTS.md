@@ -175,7 +175,7 @@
 
 ### 可合流条件（AI Merge，全部必需）
 
-- **批准绑定当前 head**：PR 非 Draft；仓库 owner 已明确批准当前 `head SHA`，或该 PR 落在下文“会话级合流授权”的范围内。head 变化后逐-head 批准失效，必须重新确认。
+- **批准绑定当前 head**：PR 非 Draft，且满足下列两条路径之一。**逐-head 批准**：仓库 owner 已明确批准当前 `head SHA`；head 一旦变化该批准即失效，必须重新确认。**会话级授权**：该 PR 落在下文“会话级合流授权”的范围内；head 变化不需要回到 owner，但必须对新的 head 重新满足会话级的全部条件（含静置窗口重新计时）。
 - **合流真源唯一**：目标分支正确，PR `mergeable`，无冲突；检查与合流必须针对同一个 `head SHA`，禁止用本地旧结果或旧 review 代替。
 - **Merge Authority 全绿**：[`docs/ssot/ci-gate-inventory.yaml`](docs/ssot/ci-gate-inventory.yaml) 中该变更适用且 `blocks_merge: true` 的检查全部成功；pending、failure、cancelled、意外 skipped 或无法读取均视为不满足。
 - **Review 已闭环（加权阻塞）**：required review 已满足，所有 actionable conversation / review threads 已处理并 resolved；不得自行忽略、dismiss 或用过期 review 代替当前 head 审查。未 resolved 的 review 发现（不论来源——human reviewer、Copilot、/code-review 等）按 severity 加权计分：high=1.0、middle=0.5、low=0.25，未标注 severity 的按 middle 计。**未 resolved 发现的加权总分 ≥ 1.0 即视为未闭环、禁止合流**，不要求单条 high 才阻塞——例如 2 条 middle 或 4 条 low 累计到位同样阻塞。达到门槛后必须逐条修复，或取得 owner 对具体发现的明确豁免并留痕，方可标记为已处理。
