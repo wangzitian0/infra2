@@ -1,6 +1,6 @@
 # Infra2 Harness 与基础设施 AI Agent 行为准则
 
-> **权限边界**：除非明确指定，否则 AI 不可以自动修改本文件。AI 仅可在下文“可合流条件”全部满足并取得仓库 owner 对当前 PR head 的明确批准后执行 Merge PR；任一状态失败、缺失或无法验证时必须 fail-closed，禁止合流。
+> **权限边界**：除非明确指定，否则 AI 不可以自动修改本文件。AI 仅可在下文“可合流条件”全部满足后执行 Merge PR：owner 批准既可以是对当前 PR head 的明确批准，也可以是下文“会话级合流授权”所限定的范围；任一状态失败、缺失或无法验证时必须 fail-closed，禁止合流。
 
 ## Harness 作用域与优先级
 
@@ -175,7 +175,7 @@
 
 ### 可合流条件（AI Merge，全部必需）
 
-- **批准绑定当前 head**：PR 非 Draft；仓库 owner 已明确批准当前 `head SHA`。head 变化后旧批准失效，必须重新确认。
+- **批准绑定当前 head**：PR 非 Draft，且满足下列两条路径之一。**逐-head 批准**：仓库 owner 已明确批准当前 `head SHA`；head 一旦变化该批准即失效，必须重新确认。**会话级授权**：该 PR 落在下文“会话级合流授权”的范围内；head 变化不需要回到 owner，但必须对新的 head 重新满足会话级的全部条件（含静置窗口重新计时）。
 - **合流真源唯一**：目标分支正确，PR `mergeable`，无冲突；检查与合流必须针对同一个 `head SHA`，禁止用本地旧结果或旧 review 代替。
 - **Merge Authority 全绿**：[`docs/ssot/ci-gate-inventory.yaml`](docs/ssot/ci-gate-inventory.yaml) 中该变更适用且 `blocks_merge: true` 的检查全部成功；pending、failure、cancelled、意外 skipped 或无法读取均视为不满足。
 - **Review 已闭环（加权阻塞）**：required review 已满足，所有 actionable conversation / review threads 已处理并 resolved；不得自行忽略、dismiss 或用过期 review 代替当前 head 审查。未 resolved 的 review 发现（不论来源——human reviewer、Copilot、/code-review 等）按 severity 加权计分：high=1.0、middle=0.5、low=0.25，未标注 severity 的按 middle 计。**未 resolved 发现的加权总分 ≥ 1.0 即视为未闭环、禁止合流**，不要求单条 high 才阻塞——例如 2 条 middle 或 4 条 low 累计到位同样阻塞。达到门槛后必须逐条修复，或取得 owner 对具体发现的明确豁免并留痕，方可标记为已处理。
@@ -183,6 +183,25 @@
 - **安全与运维门禁**：无敏感文件；已说明风险、回滚与 0 宕机影响；涉及 state discrepancy、密钥或生产数据时已按对应 SSOT 执行并留证。
 - **高风险例外显式放行**：若 merge 本身会触发 apply / deploy（包括 L1 bootstrap self-update、尚未解耦的 observability apply）或有不可逆副作用，必须先完成变更专属 proof，并取得 owner 对该副作用的再次明确批准。
 - **合流后闭环**：使用仓库允许的合流方式；确认 merge commit 已落在目标分支并监看 post-merge checks。失败时立即停止 tag / promote，报告并修复，不得继续发布。
+
+### 会话级合流授权（2026-09-08 owner 批准）
+
+逐-head 批准在当前节奏下不可执行：2026-09-08 单日合流 11 个 PR，其中多数在 Copilot review
+被处理后 head SHA 变化，逐次回到 owner 确认会把交付停在等待上，而真正需要人看的两类改动
+（触发部署、改受保护文件）反而淹没在其中。因此：
+
+**owner 在一次会话中明确授权后**，AI 可自行合流同时满足下列全部条件的 PR：
+
+- 本节上方“可合流条件”全部满足（Merge Authority 全绿、目标分支正确、变更契约完整、安全与运维门禁通过）；
+- 所有 actionable review threads 已处理并 resolved（包括 Copilot 与 `/code-review`）；
+- 距该 PR 最后一次 push 已静置 **12 分钟**——留给异步 review 落地，避免合流一个还没被看完的 head；
+- 不触碰受保护文件（`AGENTS.md`、`CLAUDE.md`，以及各应用仓库标注为 protected 的架构文档）；
+- 合并本身不触发 apply / deploy（含 L1 bootstrap self-update、`bootstrap/06.iac_runner/**` 触发的 runner 重建、尚未解耦的 observability apply）。
+
+**仍需 owner 对当前 `head SHA` 明确批准**：触发部署或有不可逆副作用的 PR（上一条“高风险例外
+显式放行”不因会话授权而放宽），以及修改受保护文件的 PR。
+
+会话授权随会话结束而失效，不跨会话继承。
 
 ### 线上测试
 
