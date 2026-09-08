@@ -120,16 +120,18 @@ def test_vault_backend_accepts_the_transition_alias(monkeypatch) -> None:
 
     class FakeKv:
         @classmethod
-        def from_environ(cls, env):
+        def from_environ(cls, env, write_mode="patch"):
             seen.update(env)
+            seen["write_mode"] = write_mode
             return cls()
 
-    monkeypatch.setattr(secrets_supply, "UpdateOnlyVaultKv", FakeKv)
+    monkeypatch.setattr(secrets_supply, "VaultKvBackend", FakeKv)
     secrets_supply.vault_backend(
         {"VAULT_ROOT_TOKEN": "legacy", "INTERNAL_DOMAIN": "x.io"}
     )
     assert seen["VAULT_TOKEN"] == "legacy"
     assert seen["VAULT_ADDR"] == "https://vault.x.io"
+    assert seen["write_mode"] == "update"  # the policies grant update, not patch
     seen.clear()
     secrets_supply.vault_backend(
         {"VAULT_TOKEN": "new", "VAULT_ROOT_TOKEN": "legacy", "VAULT_ADDR": "https://v"}
@@ -166,8 +168,10 @@ def test_vault_writes_use_update_not_patch(monkeypatch) -> None:
             )
         return _types.SimpleNamespace(status=200, body=b"{}", headers={})
 
-    backend = secrets_supply.UpdateOnlyVaultKv(
-        "https://vault.test", token="t", transport=transport
+    from infra2_sdk.secrets import VaultKvBackend
+
+    backend = VaultKvBackend(
+        "https://vault.test", token="t", transport=transport, write_mode="update"
     )
     result = backend.write(
         "truealpha/staging/data_engine", {"B": "2", "SEC_USER_AGENT": "x"}

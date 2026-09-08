@@ -14,7 +14,6 @@ When 1Password cannot be reached the deploy proceeds on what Vault already holds
 
 from __future__ import annotations
 
-import json
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -24,7 +23,6 @@ from infra2_sdk.secrets import (
     SecretsError,
     SecretsResolver,
     VaultKvBackend,
-    WriteResult,
 )
 
 from libs.secrets_registry import Service, merged_manifest
@@ -53,34 +51,6 @@ class SupplyReport:
         return " ".join(parts)
 
 
-class UpdateOnlyVaultKv(VaultKvBackend):
-    """KV v2 writes as read → merge → POST (the ``update`` capability).
-
-    The SDK's default write is a merge PATCH, which needs the ``patch`` capability; the
-    deploy identities' policies grant create/read/update/list only (bootstrap/06.iac_runner
-    got HTTP 403 on truealpha/staging/data_engine). Writing the merged document with POST
-    is what libs.env.VaultSecrets always did, so no policy has to change.
-    """
-
-    def write(self, path: str, values: Mapping[str, str]) -> WriteResult:
-        current = dict(self.read(path))
-        changed = {k: v for k, v in values.items() if current.get(k) != v}
-        if not changed:
-            return WriteResult()
-        merged = {**current, **changed}
-        response = self._send(
-            "POST",
-            self._url("data", path),
-            self._headers("application/json"),
-            json.dumps({"data": merged}).encode("utf-8"),
-        )
-        if response.status not in (200, 204):
-            raise SecretsError(
-                f"Vault write to {path} failed with HTTP {response.status}"
-            )
-        return WriteResult(tuple(sorted(changed)))
-
-
 def vault_backend(environ: Mapping[str, str] | None = None) -> VaultKvBackend:
     """Vault over VAULT_ADDR + VAULT_TOKEN, or the runner's AppRole (VAULT_ROLE_ID/SECRET_ID)."""
     env = dict(environ or os.environ)
@@ -91,7 +61,9 @@ def vault_backend(environ: Mapping[str, str] | None = None) -> VaultKvBackend:
         env["VAULT_TOKEN"] = env[
             "VAULT_ROOT_TOKEN"
         ]  # transition alias, removed with #640
-    return UpdateOnlyVaultKv.from_environ(env)
+    # update mode: read → merge → POST, the write the deploy identities' policies allow
+    # (create/read/update/list, no patch) — infra2-sdk 1.5.0.
+    return VaultKvBackend.from_environ(env, write_mode="update")
 
 
 def resolver_for(

@@ -330,14 +330,12 @@ def test_ensure_runtime_secrets_refuses_the_deploy_when_the_pin_fails(monkeypatc
     monkeypatch.setattr(deployer, "env", classmethod(lambda cls: {"ENV": "staging"}))
     monkeypatch.setenv("DEPLOY_VERSION_REF", "v0.0.46")
     monkeypatch.setattr(deploy, "error", lambda *_a, **_k: None)
-    import libs.image_digest as image_digest
+    from infra2_sdk import release
 
     monkeypatch.setattr(
-        image_digest,
+        release,
         "resolve_image_digest",
-        lambda image, ref: (_ for _ in ()).throw(
-            image_digest.ImageDigestError("does not exist")
-        ),
+        lambda **kw: (_ for _ in ()).throw(release.ReleaseError("does not exist")),
     )
     assert deployer.ensure_runtime_secrets() is False
     assert secrets.writes == []
@@ -353,10 +351,10 @@ def test_ensure_runtime_secrets_pins_from_the_process_environment(monkeypatch):
     monkeypatch.setattr(deployer, "secrets_backend", classmethod(lambda cls: secrets))
     monkeypatch.setattr(deployer, "env", classmethod(lambda cls: {"ENV": "staging"}))
     monkeypatch.setenv("DEPLOY_VERSION_REF", "v0.0.47")
-    import libs.image_digest as image_digest
+    from infra2_sdk import release
 
     monkeypatch.setattr(
-        image_digest, "resolve_image_digest", lambda image, ref: "sha256:" + "9" * 64
+        release, "resolve_image_digest", lambda **kw: "sha256:" + "9" * 64
     )
     monkeypatch.setattr(deploy, "success", lambda *_a, **_k: None)
     assert deployer.ensure_runtime_secrets() is True

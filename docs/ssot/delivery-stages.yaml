@@ -3,7 +3,7 @@
 # manifests reviewable and is equality-guarded by test_sdk_contract_adoption.py; do not edit
 # one without releasing/adopting a new SDK version.
 version: 1
-sdk_version: 1.4.2
+sdk_version: 1.5.0
 stages:
   local.advisory:
     order: 0

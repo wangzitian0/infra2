@@ -16,6 +16,16 @@ shared_tasks = sys.modules.get("truealpha.20.data_engine.shared")
 _IMAGE_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _VERSION_REF = re.compile(r"^(v[0-9]+\.[0-9]+\.[0-9]+|[0-9a-f]{7,40})$")
 _IMAGE = "ghcr.io/wangzitian0/truealpha-data-engine"
+
+
+def _registry_digest(image: str, ref: str) -> str:
+    """``registry/owner/name`` + tag (or digest) → ``sha256:…`` via infra2-sdk (1.5.0)."""
+    from infra2_sdk import release
+
+    registry, _, name = image.partition("/")
+    return release.resolve_image_digest(image=name, reference=ref, registry=registry)
+
+
 _RELEASE_ID = re.compile(r"^release-manifest:[0-9a-f]{64}$")
 
 
@@ -113,14 +123,12 @@ class DataEngineDeployer(Deployer):
         Fails closed: an unresolvable tag or a refused Vault write raises, and the
         deploy stops before any compose mutation.
         """
-        from libs.image_digest import resolve_image_digest
-
         candidate = str(version_ref).strip()
         if not _VERSION_REF.fullmatch(candidate):
             raise ValueError(
                 f"DEPLOY_VERSION_REF must be a vX.Y.Z tag or a commit sha, got {version_ref!r}"
             )
-        digest = (resolve or resolve_image_digest)(_IMAGE, candidate)
+        digest = (resolve or _registry_digest)(_IMAGE, candidate)
         if not _IMAGE_DIGEST.fullmatch(digest):
             raise ValueError(
                 f"registry returned a malformed digest for {candidate}: {digest!r}"
