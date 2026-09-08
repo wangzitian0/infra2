@@ -20,6 +20,7 @@ import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,11 +40,29 @@ DEFAULT_LEDGER_URL = (
 
 
 def fetch_ledger(url: str, token: str, *, timeout: float = 20.0) -> dict[str, Any]:
-    headers = {"Accept": "application/json"}
+    # Cloudflare answers urllib's default User-Agent ("Python-urllib/3.x") with
+    # `403 error code: 1010` before the worker ever sees the request (measured
+    # 2026-09-08: curl and python-requests get the worker's 401/200, urllib gets 403);
+    # the weekly digest's sibling fetch names itself for the same reason. A failure
+    # carries the body so the next reader sees which layer refused.
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "infra2-stability-report/1.0",
+    }
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    with urlopen(Request(url, headers=headers), timeout=timeout) as response:
-        payload = json.loads(response.read().decode())
+    try:
+        with urlopen(Request(url, headers=headers), timeout=timeout) as response:
+            payload = json.loads(response.read().decode())
+    except HTTPError as error:
+        body = (
+            error.read().decode(errors="replace")[:200]
+            if hasattr(error, "read")
+            else ""
+        )
+        raise RuntimeError(
+            f"ledger {url} answered HTTP {error.code}: {body!r}"
+        ) from error
     return payload if isinstance(payload, dict) else {}
 
 

@@ -228,6 +228,52 @@ jobs:
       - name: Run watchdog
         run: python tools/out_of_band_watchdog.py
 
+      # #625 item 2 / #658 recommendation 8: the runner's /health already carries the
+      # `op whoami` verdict (op_service_account_token); nothing scheduled read it while the
+      # 1Password service account was dead from 09-04 to 09-07. This pages the same night.
+      - name: Runner health — 1Password service account and deploy prerequisites
+        if: always()
+        env:
+          IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
+        run: |
+          python - <<'PY'
+          import json, os, sys, urllib.request
+          from tools.out_of_band_watchdog import deliver_out_of_band_alert
+
+          url = os.environ["IAC_RUNNER_URL"].rstrip("/") + "/health"
+          request = urllib.request.Request(url, headers={"User-Agent": "infra2-ops-checks/1.0"})
+          try:
+              with urllib.request.urlopen(request, timeout=20) as response:
+                  health = json.loads(response.read().decode())
+          except Exception as error:  # noqa: BLE001 - any failure to read health is the finding
+              health = {"checks": {}, "error": str(error)[:200]}
+          checks = health.get("checks") or {}
+          required = ("op_service_account_token", "dokploy_api_key", "git_repo_url", "binary:op")
+          failed = [name for name in required if checks.get(name) is not True]
+          if health.get("error"):
+              failed.append(f"health unreadable: {health['error']}")
+          if not failed:
+              print("iac-runner health: every deploy prerequisite is true")
+              sys.exit(0)
+          run_url = "/".join(
+              v for v in (
+                  os.environ.get("GITHUB_SERVER_URL"),
+                  os.environ.get("GITHUB_REPOSITORY"),
+                  "actions/runs",
+                  os.environ.get("GITHUB_RUN_ID"),
+              ) if v
+          )
+          deliver_out_of_band_alert(
+              os.environ,
+              "🚨 iac-runner cannot deploy: " + ", ".join(failed) + ".\n"
+              "Every platform deploy and every app companion deploy goes through the runner; "
+              "with a dead 1Password service account they fail with onepassword_auth_failed "
+              "(#625, 2026-09-04..07).\n"
+              f"Health: {url}\nRun: {run_url}",
+          )
+          sys.exit(1)
+          PY
+
   # Watchdog weekly digest jobs
   digest:
     # schedule-signal-exempt: weekly self-proving report (#425) — its own delivery is the signal
@@ -271,6 +317,32 @@ jobs:
         # runs and any real misconfiguration fails the job loudly instead of
         # skipping quietly.
         run: python tools/stability_report.py
+
+      # Two Mondays (08-31, 09-07) the stability report died on the watchdog ledger and
+      # nothing paged: the digest job had no failure path (#658, recommendation 4).
+      - name: Alert on failure
+        if: failure() && env.INFRA2_STABILITY_REPORT_DRY_RUN != '1'
+        run: |
+          python - <<'PY'
+          import os
+          from tools.out_of_band_watchdog import deliver_out_of_band_alert
+
+          run_url = "/".join(
+              v for v in (
+                  os.environ.get("GITHUB_SERVER_URL"),
+                  os.environ.get("GITHUB_REPOSITORY"),
+                  "actions/runs",
+                  os.environ.get("GITHUB_RUN_ID"),
+              ) if v
+          )
+          deliver_out_of_band_alert(
+              os.environ,
+              "🚨 Weekly watchdog digest / stability report FAILED.\n"
+              "The week's alert ledger or the positive report was not delivered; the "
+              "ledger fetch or the Feishu delivery is broken, not the estate.\n"
+              f"Run: {run_url}",
+          )
+          PY
 
   # deploy_v2 acceptance canary jobs
   deploy-v2-canary:
