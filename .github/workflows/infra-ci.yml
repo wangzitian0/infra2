@@ -321,7 +321,7 @@ jobs:
         run: |
           cd ${{ github.workspace }}
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          mapfile -t files < <(git diff --name-only origin/main...HEAD)
+          mapfile -t files < <(git diff --name-only --ignore-submodules=all origin/main...HEAD)
           args=(--after HEAD --dry-run)
           for f in "${files[@]}"; do
             [[ -n "$f" ]] && args+=(--changed-file "$f")
