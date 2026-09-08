@@ -125,13 +125,15 @@ class AlertingDeployer(Deployer):
         # call got API 403, and Dokploy's clone of infra2 waited 136 s on github.com:443
         # ("Dokploy deployment record entered error", 04:36Z). No probe watched the VPS
         # -> GitHub path; every symptom surfaced as a failed deploy hours later.
+        # TCP, not the unauthenticated REST API: at the runner's 60 s cadence an API call
+        # would burn GitHub's 60 requests/hour per-IP allowance and page on its own 403s.
         ProbeFacet(
-            name="github-api-http",
-            kind="http",
-            target="https://api.github.com/rate_limit",
-            expected="200",
+            name="github-api-tcp",
+            kind="tcp",
+            target="api.github.com:443",
+            expected="connected",
             severity="warning",
-            timeout_seconds=15,
+            timeout_seconds=10,
             service_id="infra/github",
         ),
         # the smart-HTTP handshake Dokploy's `git clone` performs, without needing git
@@ -143,7 +145,7 @@ class AlertingDeployer(Deployer):
             expected="200",
             severity="warning",
             timeout_seconds=30,
-            depends_on="github-api-http",
+            depends_on="github-api-tcp",
             service_id="infra/github",
         ),
         # --- host resource backstop (out-of-band from SigNoz, so it still
