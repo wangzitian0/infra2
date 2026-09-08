@@ -32,6 +32,7 @@ REMOTE_SCRIPT = (
     "cd /workspace/infra2 && python3 tools/secrets_reconcile.py --json"
 )
 DEFAULT_REPORT_PATH = "secrets-reconcile-report.json"
+PAGING_FINDINGS = ("missing", "empty", "stale")
 
 
 def remote_command() -> str:
@@ -86,21 +87,21 @@ def run(
 
 
 def page_worthy_summary(report: Mapping[str, Any]) -> str:
-    """Findings worth a page, or '' (transport errors and warn-level quotas are not)."""
+    """Findings worth a page, or '' (transport errors, warn-level quotas and
+    ``unclassified`` leftovers are not: a key nobody declared cannot break a deploy; it
+    stays in the run log for cleanup, see #649)."""
     lines: list[str] = []
     for row in report.get("stores") or []:
         if row.get("ok"):
             continue
-        parts = [
-            f"{k}={row[k]}"
-            for k in ("missing", "empty", "unclassified", "stale")
-            if row.get(k)
-        ]
-        lines.append(f"- {row.get('service')} {row.get('env')}: {', '.join(parts)}")
+        parts = [f"{k}={row[k]}" for k in PAGING_FINDINGS if row.get(k)]
+        if parts:
+            lines.append(f"- {row.get('service')} {row.get('env')}: {', '.join(parts)}")
     for item in (report.get("capacity") or {}).get("items") or []:
         if item.get("level") == "exceeded":
             lines.append(
-                f"- quota {item.get('name')} {item.get('used')}/{item.get('limit')} per {item.get('window')} exceeded"
+                f"- quota {item.get('name')} {item.get('used')}/{item.get('limit')} "
+                f"per {item.get('window')} exceeded"
             )
     return "\n".join(lines)
 

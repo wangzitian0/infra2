@@ -22,10 +22,8 @@ def test_committed_templates_and_policies_match_their_manifests() -> None:
 def test_every_registered_manifest_exists_and_passes_the_offline_gate() -> None:
     for service in secrets_render.SERVICES:
         for path in service.manifests:
-            assert (ROOT / path).exists(), path
-            manifest = EnvironmentManifest.from_dict(
-                json.loads((ROOT / path).read_text(encoding="utf-8"))
-            )
+            # the checkout when present, else the CI/runner cache (fetched on demand)
+            manifest = secrets_render.load_manifest(path)
             assert validate_manifest_offline(manifest) == [], path
 
 
@@ -158,9 +156,23 @@ def test_fetch_app_manifests_reads_the_pinned_commit_and_only_fills_gaps(
     assert urls == [
         f"https://raw.githubusercontent.com/wangzitian0/truealpha/{sha}/apps/x/required-env.generated.json"
     ]
+    cached = (
+        tmp_path
+        / ".cache/app-manifests/repos/truealpha/apps/x/required-env.generated.json"
+    )
+    assert cached.read_text() == '{"contract_version": 2}'
+    assert not (
+        tmp_path / "repos/truealpha/apps/x"
+    ).exists()  # never inside the gitlink path
+    # a second pass is a no-op: the cache counts as present
     assert (
-        tmp_path / "repos/truealpha/apps/x/required-env.generated.json"
-    ).read_text() == '{"contract_version": 2}'
+        fetch_app_manifests.fetch_missing(
+            ["repos/truealpha/apps/x/required-env.generated.json"],
+            root=tmp_path,
+            fetch=fake,
+        )
+        == []
+    )
 
 
 def test_optional_keys_never_use_a_direct_map_access() -> None:

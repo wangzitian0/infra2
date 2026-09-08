@@ -13,6 +13,9 @@ from pathlib import Path
 
 from infra2_sdk.runtime.config_schema import EnvironmentField, EnvironmentManifest
 
+from libs import app_manifests
+from libs.app_manifests import CACHE_DIR  # noqa: F401  (re-exported)
+
 ROOT = Path(__file__).resolve().parent.parent
 ENVIRONMENTS = ("production", "staging")
 
@@ -164,22 +167,21 @@ SERVICES: tuple[Service, ...] = (
 )
 
 
-CACHE_DIR = ".cache/app-manifests"
-
-
 def manifest_file(path: str, *, root: Path = ROOT) -> Path:
-    """The submodule checkout when present, else the cache tools/fetch_app_manifests fills
-    in CI (which never checks out submodules, #506)."""
-    candidate = root / path
-    if candidate.exists() or not path.startswith("repos/"):
-        return candidate
-    return root / CACHE_DIR / path
+    """The submodule checkout when present, else the cache libs/app_manifests fills."""
+    return app_manifests.manifest_file(path, root=root)
 
 
-def load_manifest(path: str, *, root: Path = ROOT) -> EnvironmentManifest:
-    return EnvironmentManifest.from_dict(
-        json.loads(manifest_file(path, root=root).read_text(encoding="utf-8"))
-    )
+def load_manifest(path: str, *, root: Path = ROOT, fetch=None) -> EnvironmentManifest:
+    """Read one manifest; an app manifest absent from both checkout and cache is fetched
+    at the submodule's pinned commit first (CI and the iac-runner have no submodules)."""
+    file = manifest_file(path, root=root)
+    if not file.exists() and path.startswith("repos/"):
+        app_manifests.ensure_present(
+            [path], root=root, **({"fetch": fetch} if fetch else {})
+        )
+        file = manifest_file(path, root=root)
+    return EnvironmentManifest.from_dict(json.loads(file.read_text(encoding="utf-8")))
 
 
 _RENDER_KEYS = (
