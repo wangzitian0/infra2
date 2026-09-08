@@ -404,7 +404,8 @@ def test_deploy_compose_redeploys_when_dokploy_accepts_noop_deploy(monkeypatch):
 
 
 def test_deploy_compose_uses_deployment_api_when_compose_snapshot_is_stale(monkeypatch):
-    """Infra-011.11: deploy proof must use deployment.allByCompose when available."""
+    """Infra-011.11: deploy proof must use deployment.allByCompose when available —
+    and (#629) `running` is not a result: the wait continues until the record is done."""
     import libs.deploy.deployer as deployer
     from libs.deploy.deployer import Deployer
 
@@ -420,16 +421,18 @@ def test_deploy_compose_uses_deployment_api_when_compose_snapshot_is_stale(monke
                 {"deploymentId": "old", "status": "done"},
                 {"deploymentId": "new", "status": "running"},
             ],
+            [
+                {"deploymentId": "old", "status": "done"},
+                {"deploymentId": "new", "status": "done"},
+            ],
         ],
     )
-
     Deployer._deploy_compose_with_record_check(
         client,
         "compose-1",
-        timeout_seconds=0,
+        timeout_seconds=5,
         interval_seconds=1,
     )
-
     assert client.deploy_calls == 1
     assert client.redeploy_calls == 0
 
@@ -447,16 +450,51 @@ def test_deploy_compose_falls_back_when_deployment_api_fails(monkeypatch):
                 {"deploymentId": "old", "status": "done"},
                 {"deploymentId": "new", "status": "running"},
             ],
+            [
+                {"deploymentId": "old", "status": "done"},
+                {"deploymentId": "new", "status": "done"},
+            ],
         ]
     )
-
     Deployer._deploy_compose_with_record_check(
         client,
         "compose-1",
-        timeout_seconds=0,
+        timeout_seconds=5,
         interval_seconds=1,
     )
+    assert client.deploy_calls == 1
+    assert client.redeploy_calls == 0
 
+
+def test_deploy_compose_never_retriggers_a_deployment_that_is_still_running(
+    monkeypatch,
+):
+    """#629: on 2026-09-07/08 the record appeared 45–200 s after `compose.deploy` (Dokploy
+    clones infra2 first) and the 60 s wait fell back to `compose.redeploy`, queueing a
+    second deployment while the first went on. A record of ours that exists is never
+    re-triggered: the deadline raises instead."""
+    import pytest
+
+    import libs.deploy.deployer as deployer
+    from libs.deploy.deployer import Deployer
+
+    monkeypatch.setattr(deployer.time, "sleep", lambda _seconds: None)
+    client = FakeDokployDeployments(
+        [
+            [{"deploymentId": "old", "status": "done"}],
+            [
+                {"deploymentId": "old", "status": "done"},
+                {"deploymentId": "new", "status": "running"},
+            ],
+        ]
+    )
+    with pytest.raises(RuntimeError, match="still 'running'.*not re-triggering"):
+        Deployer._deploy_compose_with_record_check(
+            client,
+            "compose-1",
+            timeout_seconds=0,
+            interval_seconds=1,
+        )
     assert client.deploy_calls == 1
     assert client.redeploy_calls == 0
 
@@ -544,9 +582,13 @@ def test_wait_for_new_deployment_record_accepts_success_status(monkeypatch) -> N
     )
 
 
-def test_wait_for_new_deployment_record_times_out_on_unknown_status(
+def test_wait_for_new_deployment_record_raises_when_ours_is_still_in_progress(
     monkeypatch,
 ) -> None:
+    """`queued`/`running` at the deadline is neither "no record" (which would let the
+    caller re-trigger) nor success: it raises, naming the state and the env override."""
+    import pytest
+
     import libs.deploy.deployer as deployer
     from libs.deploy.deployer import Deployer
 
@@ -556,11 +598,30 @@ def test_wait_for_new_deployment_record_times_out_on_unknown_status(
         def get_compose_deployments(self, compose_id):
             return [{"deploymentId": "new", "status": "queued"}]
 
-    assert (
+    with pytest.raises(RuntimeError, match="still 'queued' after 0s"):
         Deployer._wait_for_new_deployment_record(
             Client(), "compose-1", {"old"}, timeout_seconds=0, interval_seconds=1
         )
-        is False
+
+
+def test_wait_for_new_deployment_record_waits_through_running_to_done(
+    monkeypatch,
+) -> None:
+    import libs.deploy.deployer as deployer
+    from libs.deploy.deployer import Deployer
+
+    monkeypatch.setattr(deployer.time, "sleep", lambda _seconds: None)
+    statuses = iter(["running", "running", "done"])
+
+    class Client:
+        def get_compose_deployments(self, compose_id):
+            return [{"deploymentId": "new", "status": next(statuses)}]
+
+    assert (
+        Deployer._wait_for_new_deployment_record(
+            Client(), "compose-1", {"old"}, timeout_seconds=5, interval_seconds=1
+        )
+        is True
     )
 
 
