@@ -79,6 +79,14 @@ DEFAULT_FAILURE_THRESHOLD = 3
 # sample mistaken for real recovery. 5 minutes continuously healthy is well past any
 # single backoff gap.
 DEFAULT_RECOVERY_THRESHOLD = 5
+# Stay-resolved floor (#658 recommendation 7, closes the class behind #475): once an
+# incident has RESOLVED, the same container does not page again for this long. A
+# container that keeps crossing the failure threshold inside the floor is "chronic":
+# it is counted, logged, and reported ONCE per digest window instead of re-firing
+# (2026-09-08: platform-prefect-worker fired 05:48 → resolved 05:55 → fired again 06:45,
+# every ~2 h, for seven weeks).
+DEFAULT_STAY_RESOLVED_SECONDS = 6 * 3600
+DEFAULT_CHRONIC_DIGEST_SECONDS = 24 * 3600
 
 
 def _docker_client(sock: str) -> httpx.Client:
@@ -141,6 +149,11 @@ def run_once(
     renotify: int,
     failure_threshold: int = DEFAULT_FAILURE_THRESHOLD,
     recovery_threshold: int = DEFAULT_RECOVERY_THRESHOLD,
+    *,
+    resolved_at: dict | None = None,
+    chronic: dict | None = None,
+    stay_resolved_seconds: int = DEFAULT_STAY_RESOLVED_SECONDS,
+    chronic_digest_seconds: int = DEFAULT_CHRONIC_DIGEST_SECONDS,
 ) -> int:
     """One sweep. Flap hysteresis (#475): a container must be observed broken on
     ``failure_threshold`` CONSECUTIVE sweeps before it fires, and healthy on
@@ -150,10 +163,18 @@ def run_once(
     mutated in place; the caller keeps one dict alive for the life of the poll
     loop (see BreakdownWatch). Returns the number of containers that fired this
     sweep (new incidents plus any still-active incident renotified this sweep).
+
+    Stay-resolved floor (#658): ``resolved_at`` maps container name -> monotonic time
+    of its last RESOLVED. A new incident inside ``stay_resolved_seconds`` of that does
+    not page; it is counted in ``chronic`` (name -> suppressed count) and the chronic
+    set is posted once per ``chronic_digest_seconds`` under ``chronic["__digest_at__"]``.
+    Both dicts are mutated in place and owned by the caller like ``container_state``.
     """
     import time
 
     now = time.monotonic()
+    resolved_at = {} if resolved_at is None else resolved_at
+    chronic = {} if chronic is None else chronic
     breakdowns = sweep(client, log_tail)
     broken_by_name = {b.container: b for b in breakdowns}
 
@@ -170,7 +191,25 @@ def run_once(
             renotify_seconds=renotify,
         )
         if action == "fire":
-            fresh.append(b)
+            since_resolved = now - resolved_at.get(name, float("-inf"))
+            if (
+                since_resolved < stay_resolved_seconds
+                and state.bad_streak == failure_threshold
+            ):
+                # a NEW incident inside the floor: chronic, not a page
+                chronic[name] = int(chronic.get(name, 0)) + 1
+                logger.warning(
+                    "BREAKDOWN-CHRONIC %s (%s): re-broke %ds after resolving (floor %ds); "
+                    "suppressed page #%d — %s",
+                    name,
+                    b.state,
+                    int(since_resolved),
+                    stay_resolved_seconds,
+                    chronic[name],
+                    b.reason,
+                )
+            else:
+                fresh.append(b)
         elif not state.active:
             logger.info(
                 "BREAKDOWN-PENDING %s (%s): bad_streak=%d/%d — not yet firing: %s",
@@ -198,6 +237,7 @@ def run_once(
             renotify_seconds=renotify,
         )
         if action == "resolve":
+            resolved_at[name] = now
             # Resolve with the ORIGINAL breakdown (same state, hence same label set) so
             # the resolved alert matches the firing instance and the page actually
             # clears — a stub state like "recovered" forms a different label set and
@@ -239,6 +279,34 @@ def run_once(
             ",".join(sorted(rec.container for rec in recovered)),
         )
         _post_alert(build_breakdown_alert_payload(recovered, firing=False))
+    chronic_names = sorted(n for n in chronic if n != "__digest_at__")
+    if (
+        chronic_names
+        and now - chronic.get("__digest_at__", float("-inf")) >= chronic_digest_seconds
+    ):
+        digest = [
+            Breakdown(
+                container=name,
+                state="chronic",
+                reason=f"re-broke {chronic[name]}x inside the {stay_resolved_seconds // 3600}h stay-resolved floor",
+                detail=(
+                    container_state.get(name).context.detail
+                    if container_state.get(name) and container_state[name].context
+                    else ""
+                ),
+            )
+            for name in chronic_names
+        ]
+        logger.warning(
+            "BREAKDOWN-CHRONIC-DIGEST count=%d -> posting once per %dh: %s",
+            len(digest),
+            chronic_digest_seconds // 3600,
+            ",".join(chronic_names),
+        )
+        _post_alert(build_breakdown_alert_payload(digest))
+        chronic["__digest_at__"] = now
+        for name in chronic_names:
+            chronic.pop(name, None)
     return len(fresh)
 
 
@@ -282,6 +350,15 @@ class BreakdownWatch(ResidentWatcher):
         # runner (restart: unless-stopped), never re-invoked by cron/systemd, so
         # in-memory state persists across every poll for as long as it matters.
         self.container_state: dict = {}
+        # #658 stay-resolved floor + chronic digest; same lifetime as container_state.
+        self.resolved_at: dict = {}
+        self.chronic: dict = {}
+        self.stay_resolved_seconds = int(
+            env.get("BREAKDOWN_STAY_RESOLVED_SECONDS", DEFAULT_STAY_RESOLVED_SECONDS)
+        )
+        self.chronic_digest_seconds = int(
+            env.get("BREAKDOWN_CHRONIC_DIGEST_SECONDS", DEFAULT_CHRONIC_DIGEST_SECONDS)
+        )
         self._client: httpx.Client | None = None
 
     def _sweep(self) -> None:
@@ -296,4 +373,8 @@ class BreakdownWatch(ResidentWatcher):
             self.renotify,
             self.failure_threshold,
             self.recovery_threshold,
+            resolved_at=self.resolved_at,
+            chronic=self.chronic,
+            stay_resolved_seconds=self.stay_resolved_seconds,
+            chronic_digest_seconds=self.chronic_digest_seconds,
         )

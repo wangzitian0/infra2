@@ -275,9 +275,7 @@ def inventory_ids_not_in_production() -> frozenset[str]:
 
     metas = {**bootstrap_facet_attrs(), **service_attrs()}
     owners = services_without_prod_compose() | {
-        service_id
-        for service_id, meta in metas.items()
-        if meta.not_yet_in_production
+        service_id for service_id, meta in metas.items() if meta.not_yet_in_production
     }
     excluded: set[str] = set()
     for service_id, meta in metas.items():
@@ -406,6 +404,11 @@ def classify_token(
     )
 
 
+#: A rendered secrets file older than this has missed every template/secret change since
+#: (#628: bind-mounted template edits do not re-render); beyond it the audit fails (#658).
+STALE_RENDERED_SECRET_FAIL_SECONDS = 7 * 86400
+
+
 def classify_rendered_env(
     service: VaultService,
     file_state: dict[str, Any],
@@ -451,6 +454,21 @@ def classify_rendered_env(
     mtime = int(file_state.get("mtime", 0))
     age = max(0, observed_now - mtime)
     evidence = {**file_state, "age_seconds": age}
+    if age > STALE_RENDERED_SECRET_FAIL_SECONDS:
+        # #658 recommendation 1 (2026-09-08): a rendered file nobody has rewritten in a
+        # week is not "low churn" any more — the data-engine agent ran a weeks-old
+        # secrets.ctmpl (no S3 port, no LLM_*) because a bind-mounted template edit
+        # never re-renders (#628), and this audit saw it and said `info`. Past this
+        # floor the file is stale by any reading of the word, and the audit fails.
+        return _result(
+            service,
+            "rendered-env-staleness",
+            "fail",
+            "P1",
+            f"{service.rendered_secret_path} has not been rewritten in {age // 86400} days "
+            "(a template or secret change since then never reached the container, #628)",
+            evidence,
+        )
     if age > service.max_rendered_secret_age_seconds:
         # #531: vault-agent's static_secret_render_interval only rewrites this file
         # when the underlying Vault secret's CONTENT changes, not on every poll -- a
@@ -676,8 +694,7 @@ def audit_from_observations(
         # SecretsFacet; the facet keeps ${ENV_SUFFIX} symbolic, so resolve it
         # for the audited env before comparing against live container names.
         mount_exempt = {
-            _resolve_env_suffix(name, env)
-            for name in service.mount_exempt_containers
+            _resolve_env_suffix(name, env) for name in service.mount_exempt_containers
         }
         for app_state in obs.get("app_containers", []):
             exempt = str(app_state.get("name") or "") in mount_exempt
