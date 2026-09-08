@@ -55,7 +55,7 @@ class AppDeployer(Deployer):
     #   2. the multi-alias ephemeral PREVIEW surface (declared here with an
     #      explicit service_id — an alias stack has no registry Deployer of its
     #      own). Same AppRole auth; its secrets template reads the SOURCE env's
-    #      app secrets (PREVIEW_SECRET_ENV, default staging), so the derived
+    #      app secrets (staging's, fixed in the generated template), so the derived
     #      vault path {env} resolves to that source env, not the alias.
     secrets = (
         SecretsFacet(
@@ -72,6 +72,24 @@ class AppDeployer(Deployer):
             auth_method="approle",
         ),
     )
+
+    @classmethod
+    def compose_env_overrides(
+        cls, *, env: str, domain: str, env_suffix: str
+    ) -> dict[str, str]:
+        """Environment-specific values the generated secrets.ctmpl no longer defaults.
+
+        Production takes the compose file's inline defaults; staging carried these three
+        distinct values in Vault on 2026-09-07 (#633). Bucket names stay in step with
+        _ensure_minio_bucket, which reads S3_BUCKET from Vault for the same environment.
+        """
+        if env == "staging":
+            return {
+                "S3_BUCKET": "finance-report-staging",
+                "S3_PUBLIC_BUCKET": "finance-report-staging",
+                "API_RATE_LIMIT_REQUESTS": "2000",
+            }
+        return {}
 
     @classmethod
     def pre_compose(cls, c) -> dict | None:
@@ -124,7 +142,9 @@ class AppDeployer(Deployer):
             return
 
         secrets = cls.secrets_backend()
-        bucket_name = secrets.get("S3_BUCKET") or "finance-report-statements"
+        bucket_name = (
+            secrets.get("S3_BUCKET") or "statements"
+        )  # = compose default (#637)
         existing_access_key = secrets.get("S3_ACCESS_KEY")
         existing_secret_key = secrets.get("S3_SECRET_KEY")
 

@@ -136,7 +136,7 @@ def _preview_env_vars(
     Mirrors libs.deploy.promote.deploy's shared keys (IMAGE_TAG/GIT_COMMIT_SHA short-sha,
     NEXT_PUBLIC_APP_URL, ENV_SUFFIX/ENV_DOMAIN_SUFFIX, COMPOSE_PROFILES, TRAEFIK_ENABLE,
     INTERNAL_DOMAIN, IAC_CONFIG_HASH cache-bust) and adds the preview-only bits: ENV is
-    the alias display label (telemetry consumes it), PREVIEW_SECRET_ENV picks which env's
+    the alias display label (telemetry consumes it); the generated secrets.ctmpl reads the
     Vault app secrets to render, and the ephemeral-DB knobs point DATABASE_URL at the
     stack's own local postgres.
 
@@ -176,7 +176,6 @@ def _preview_env_vars(
         # is carried into the running stack.
         "ENV": alias.deployment_environment,
         # Vault app-secrets source env (preview has no per-alias Vault path).
-        "PREVIEW_SECRET_ENV": config.secret_env,
         "COMPOSE_PROFILES": "app",
         "TRAEFIK_ENABLE": "true",
         "INTERNAL_DOMAIN": domain,

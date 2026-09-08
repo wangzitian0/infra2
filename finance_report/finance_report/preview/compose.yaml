@@ -65,11 +65,6 @@ services:
       INFRA_SERVICE_ID: ${INFRA_SERVICE_ID:-finance_report/app}
       INFRA_ENVIRONMENT: ${INFRA_ENVIRONMENT:-${ENV:-preview}}
       INFRA_IAC_REF: ${INFRA_IAC_REF:-}
-      # The ctmpl reads PREVIEW_SECRET_ENV to pick which env's Vault app-secrets path
-      # to render (secret/data/finance_report/<PREVIEW_SECRET_ENV>/app). Must be passed
-      # into THIS container — the renderer — or the template silently falls back to its
-      # "staging" default and any override from preview_lifecycle is ignored.
-      PREVIEW_SECRET_ENV: ${PREVIEW_SECRET_ENV:-staging}
     healthcheck:
       test:
         - CMD-SHELL
@@ -160,6 +155,20 @@ services:
       OPENPANEL_CLIENT_ID: ${OPENPANEL_CLIENT_ID:-}
       OPENPANEL_API_URL: https://openpanel.${INTERNAL_DOMAIN}/api
       OPENPANEL_ENVIRONMENT: ${OPENPANEL_ENVIRONMENT:-}
+      # Configuration the hand-written preview secrets.ctmpl used to default (values
+      # previews effectively ran with on 2026-09-07, borrowing staging's); the generated
+      # template renders only human / runtime values from the staging path.
+      S3_ENDPOINT: http://platform-minio:9000
+      S3_BUCKET: finance-report-staging
+      S3_PUBLIC_BUCKET: finance-report-staging
+      S3_PRESIGN_EXPIRY_SECONDS: "900"
+      CORS_ORIGINS: ${NEXT_PUBLIC_APP_URL:-}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-}
+      PRIMARY_MODEL: ${PRIMARY_MODEL:-glm-5.2}
+      FALLBACK_MODELS: ${FALLBACK_MODELS:-glm-5-turbo,glm-5}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://platform-signoz-otel-collector:4318
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-finance-report-backend}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
       # The ephemeral-DB DSN the entrypoint forces AFTER sourcing Vault secrets.
       # asyncpg driver, pointing at the local `db` service (NOT finance_report-postgres*).
       PREVIEW_DATABASE_URL: postgresql+asyncpg://${PREVIEW_DB_USER:-preview}:${PREVIEW_DB_PASSWORD:-preview}@finance_report-preview-db${ENV_SUFFIX}:5432/${PREVIEW_DB_NAME:-finance_report}
@@ -190,7 +199,7 @@ services:
         echo "✅ [CHECKPOINT-1b] DATABASE_URL overridden to the ephemeral preview DB"
 
         # PREVIEW OVERRIDE: Vault rendered ENVIRONMENT from the borrowed
-        # PREVIEW_SECRET_ENV bucket (e.g. "staging" secrets), same as DATABASE_URL
+        # staging bucket (the preview borrows staging's app secrets), same as DATABASE_URL
         # above. Unlike DATABASE_URL, nothing overrode it, so Settings.environment
         # silently read "staging" for every preview while OTEL_RESOURCE_ATTRIBUTES
         # (templated per-alias by secrets.ctmpl) correctly said deployment.environment=

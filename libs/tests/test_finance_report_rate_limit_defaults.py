@@ -1,50 +1,56 @@
-"""Infra-009: finance_report fixed-env rate-limit capacity contract."""
+"""Infra-009: finance_report fixed-env rate-limit capacity contract.
+
+The hand-written secrets.ctmpl used to carry the staging/production fallback (#615);
+since #637 the template is generated from the app manifest and the environment-specific
+value lives where the deployment states configuration: the compose file's inline
+default for production and AppDeployer.compose_env_overrides for staging.
+"""
 
 from __future__ import annotations
 
+import importlib.util
 import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+COMPOSE = ROOT / "finance_report/finance_report/10.app/compose.yaml"
 TEMPLATE = ROOT / "finance_report/finance_report/10.app/secrets.ctmpl"
 
 
-def _rate_limit_fallback(template: str, env: str) -> str:
-    default_match = re.search(
-        r'\$api_rate_limit_requests\s*:=\s*"(?P<value>\d+)"',
-        template,
+def _deployer():
+    spec = importlib.util.spec_from_file_location(
+        "finance_report_app_deploy",
+        ROOT / "finance_report/finance_report/10.app/deploy.py",
     )
-    assert default_match is not None
-    fallback = default_match.group("value")
-
-    override_pattern = re.compile(
-        r'if\s+eq\s+\$env\s+"(?P<env>[^"]+)".*?'
-        r'\$api_rate_limit_requests\s*=\s*"(?P<value>\d+)".*?end',
-        re.DOTALL,
-    )
-    for match in override_pattern.finditer(template):
-        if match.group("env") == env:
-            return match.group("value")
-    return fallback
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.AppDeployer
 
 
 def test_finance_report_rate_limit_fallback_is_environment_specific() -> None:
-    template = TEMPLATE.read_text(encoding="utf-8")
+    compose = COMPOSE.read_text(encoding="utf-8")
+    default = re.search(
+        r"API_RATE_LIMIT_REQUESTS: \$\{API_RATE_LIMIT_REQUESTS:-(?P<value>\d+)\}",
+        compose,
+    )
+    assert default is not None and default.group("value") == "300"
 
-    assert _rate_limit_fallback(template, "staging") == "2000"
-    assert _rate_limit_fallback(template, "production") == "300"
-    assert _rate_limit_fallback(template, "unexpected") == "300"
-
-
-def test_vault_rate_limit_value_keeps_precedence_over_the_fallback() -> None:
-    template = TEMPLATE.read_text(encoding="utf-8")
-    assignment = re.search(
-        r"API_RATE_LIMIT_REQUESTS=\{\{\s*with\s+"
-        r"\.Data\.data\.API_RATE_LIMIT_REQUESTS\s*\}\}"
-        r".*?\{\{\s*else\s*\}\}"
-        r'\{\{\s*\$api_rate_limit_requests\s*\|\s*printf\s+"%q"\s*\}\}'
-        r"\{\{\s*end\s*\}\}",
-        template,
+    overrides = _deployer().compose_env_overrides
+    assert (
+        overrides(env="staging", domain="zitian.party", env_suffix="-staging")[
+            "API_RATE_LIMIT_REQUESTS"
+        ]
+        == "2000"
+    )
+    assert "API_RATE_LIMIT_REQUESTS" not in overrides(
+        env="production", domain="zitian.party", env_suffix=""
+    )
+    assert "API_RATE_LIMIT_REQUESTS" not in overrides(
+        env="unexpected", domain="zitian.party", env_suffix="-x"
     )
 
-    assert assignment is not None
+
+def test_rate_limit_is_deployment_configuration_not_a_vault_value() -> None:
+    """The generated template renders human / runtime values only; a rate limit is neither."""
+    template = TEMPLATE.read_text(encoding="utf-8")
+    assert "API_RATE_LIMIT_REQUESTS" not in template

@@ -10,6 +10,8 @@ x-dagster-service: &dagster-service
   entrypoint: ["/bin/sh", "/opt/truealpha/dagster-entrypoint.sh"]
   environment:
     APP_ENV: ${ENV}
+    # Host-loopback MinIO (#602); was derived inside the hand-written secrets.ctmpl.
+    S3_ENDPOINT: http://127.0.0.1:${TA_MINIO_S3_PORT}
     GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
     MOOMOO_OPEND_HOST: 127.0.0.1
     MOOMOO_OPEND_PORT: "11111"
@@ -172,6 +174,7 @@ services:
       start_period: 30s
     environment:
       APP_ENV: ${ENV}
+      S3_ENDPOINT: http://127.0.0.1:${TA_MINIO_S3_PORT}
       DAGSTER_WEBSERVER_PORT: ${DAGSTER_WEBSERVER_PORT}
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
       MOOMOO_OPEND_HOST: 127.0.0.1

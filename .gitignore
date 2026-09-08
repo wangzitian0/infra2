@@ -90,3 +90,4 @@ docs/.site/
 .codex/
 
 .claude/
+.cache/

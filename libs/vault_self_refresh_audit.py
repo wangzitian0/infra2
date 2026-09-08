@@ -489,7 +489,7 @@ def classify_optional_field_inertness(
     """Report (never fail) whether a watchlisted optional field is populated.
 
     This is deliberately status="info" always: an empty/missing value here
-    means the field's render-wiring is fine (tools/validate_required_env.py
+    means the field's render-wiring is fine (the retired tools/validate_required_env.py
     already gates that) but nobody has provisioned the actual Vault secret --
     an architectural "is this optional feature turned on?" fact, not a
     health/drift defect worth failing the audit over. See #526.

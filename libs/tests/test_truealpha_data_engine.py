@@ -238,11 +238,14 @@ def test_s3_endpoint_is_derived_not_taken_from_vault():
     """A Vault-supplied endpoint is what produced the outage: the stored value was written
     for host-side sweep scripts, and nothing in the deploy could tell it was wrong for a
     `network_mode: host` container."""
+    # Since #637 the template is generated from the app manifest and carries no
+    # S3_ENDPOINT at all; the compose anchor derives it from the published port.
     template = (SERVICE_DIR / "secrets.ctmpl").read_text()
-    assert 'env "TA_MINIO_S3_PORT"' in template
     assert ".Data.data.S3_ENDPOINT" not in template, (
         "S3_ENDPOINT must not come from Vault"
     )
+    compose = (SERVICE_DIR / "compose.yaml").read_text()
+    assert "S3_ENDPOINT: http://127.0.0.1:${TA_MINIO_S3_PORT}" in compose
     assert (
         "S3_ENDPOINT"
         not in _load_deploy_module().DataEngineDeployer._REQUIRED_SECRET_KEYS

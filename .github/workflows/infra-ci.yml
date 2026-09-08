@@ -260,6 +260,10 @@ jobs:
         run: |
           cd ${{ github.workspace }}
           mkdir -p coverage
+          # The template generator reads the app manifests through the submodules; infra-ci
+          # never checks those out (#506), so fetch the few files at the pinned commits.
+          # (script path, not -m: the job runs with PYTHONSAFEPATH=1, so `tools` is not a package on sys.path)
+          uv run python tools/fetch_app_manifests.py
           uv run python -m pytest libs/tests -q -n auto \
             --cov=libs \
             --cov=tools \
@@ -316,8 +320,8 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           cd ${{ github.workspace }}
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          mapfile -t files < <(git diff --name-only origin/main...HEAD)
+          git fetch --no-tags --no-recurse-submodules origin +refs/heads/main:refs/remotes/origin/main
+          mapfile -t files < <(git diff --name-only --ignore-submodules=all origin/main...HEAD)
           args=(--after HEAD --dry-run)
           for f in "${files[@]}"; do
             [[ -n "$f" ]] && args+=(--changed-file "$f")
@@ -444,30 +448,6 @@ jobs:
             exit 1
           fi
           echo "✅ All vault-agent files have required exit and health settings"
-
-  validate-required-env:
-    name: Validate Required-Env Manifest vs secrets.ctmpl
-    needs: detect-changes
-    if: needs.detect-changes.outputs.has_non_doc == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      # Scoped to this job only — infra-ci deliberately never checks out submodules
-      # (#506), to keep the big app submodules out of its default fetch. This job is
-      # the one exception: it needs finance_report's generated env manifest, pinned to
-      # the exact commit infra2's git index records (i.e. what's actually deployed).
-      - name: Check out finance_report submodule
-        run: git submodule update --init repos/finance_report
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-
-      - name: Run required-env drift audit
-        run: python3 tools/validate_required_env.py --enforce
 
   validate-vault-policy:
     name: Validate Vault Policy Syntax

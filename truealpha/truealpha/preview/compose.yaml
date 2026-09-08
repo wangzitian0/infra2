@@ -69,10 +69,6 @@ services:
       VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
       VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
       ENV: ${ENV}
-      # The ctmpl reads PREVIEW_SECRET_ENV to pick which env's Vault app-secrets path to
-      # render (secret/data/truealpha/<PREVIEW_SECRET_ENV>/app). Must be passed into THIS
-      # container — the renderer — or the template falls back to its "staging" default.
-      PREVIEW_SECRET_ENV: ${PREVIEW_SECRET_ENV:-staging}
       # Cache-bust, matching 10.app/compose.yaml and finance_report's vault-agent —
       # without a var this container's own config reads, Compose can leave a stale
       # vault-agent (and stale rendered secrets.ctmpl) running across a redeploy.
@@ -177,6 +173,10 @@ services:
     environment:
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      # Previews borrow staging's app secrets (generated secrets.ctmpl / policy) and ran
+      # with staging's APP_ENV before the template was generated; kept identical here
+      # (S3_ENDPOINT stays unset, as it was).
+      APP_ENV: staging
       # The ephemeral-DB DSN the entrypoint forces AFTER sourcing Vault secrets, pointing
       # at the local `db` service (NOT truealpha-postgres*).
       PREVIEW_DATABASE_URL: postgresql://${PREVIEW_DB_USER:-preview}:${PREVIEW_DB_PASSWORD:-preview}@truealpha-preview-db${ENV_SUFFIX}:5432/${PREVIEW_DB_NAME:-truealpha}
@@ -238,6 +238,10 @@ services:
     environment:
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      # Previews borrow staging's app secrets (generated secrets.ctmpl / policy) and ran
+      # with staging's APP_ENV before the template was generated; kept identical here
+      # (S3_ENDPOINT stays unset, as it was).
+      APP_ENV: staging
       HOSTNAME: 0.0.0.0
       PORT: "3000"
       PREVIEW_DATABASE_URL: postgresql://${PREVIEW_DB_USER:-preview}:${PREVIEW_DB_PASSWORD:-preview}@truealpha-preview-db${ENV_SUFFIX}:5432/${PREVIEW_DB_NAME:-truealpha}

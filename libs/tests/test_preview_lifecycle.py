@@ -360,8 +360,9 @@ def test_up_env_has_short_sha_suffix_and_ephemeral_db_knobs():
     # ephemeral DB knobs the compose template reads to override DATABASE_URL
     assert env["PREVIEW_DB_USER"] == "preview"
     assert env["PREVIEW_DB_NAME"] == "finance_report"
-    # app secrets are read from a fixed source env (preview has no per-alias Vault path)
-    assert env["PREVIEW_SECRET_ENV"] == "staging"
+    # app secrets come from staging's Vault path, fixed in the generated secrets.ctmpl and
+    # policy (#637): no knob is injected any more
+    assert "PREVIEW_SECRET_ENV" not in env
     assert env["INFRA_IDENTITY_SCHEMA"] == "v1"
     assert env["INFRA_SERVICE_ID"] == "finance_report/app"
     assert env["INFRA_ENVIRONMENT"] == "commit-1ab32d5"
@@ -718,8 +719,8 @@ def test_up_image_ref_overrides_short_sha_for_releases():
 
 
 def test_preview_entrypoint_overrides_environment_to_match_otel_tag():
-    """Regression test: every preview boot borrows PREVIEW_SECRET_ENV's (default
-    "staging") Vault secrets, which bake in ENVIRONMENT=staging — while
+    """Regression test: every preview boot borrows staging's Vault secrets (the source
+    env fixed in the generated secrets.ctmpl), which bake in ENVIRONMENT=staging — while
     OTEL_RESOURCE_ATTRIBUTES is correctly templated per-alias by secrets.ctmpl
     (deployment.environment=<this alias's ENV token>). Nothing overrode
     ENVIRONMENT the way DATABASE_URL already is, so the app's
