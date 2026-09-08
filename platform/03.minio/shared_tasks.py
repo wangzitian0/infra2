@@ -1,3 +1,4 @@
+import io
 import json
 import shlex
 
@@ -44,6 +45,49 @@ def status(c):
                 result["details"] += f"; {name}: HTTP {code}"
 
     return result
+
+
+def _ensure_admin_alias(c, container_name: str, e: dict) -> bool:
+    """Point the container's ``local`` alias at this instance's root credential.
+
+    The image ships an alias with an empty access key, so every ``mc admin`` call in this
+    file answered "Access Denied" — which is how three applications ended up configured
+    with the MinIO root credential by hand instead (#677). ``mc alias import`` reads the
+    credential as JSON on stdin, so it appears in no command line: not in this host's
+    process list, and not in the container's.
+    """
+    from libs.env import get_secrets
+
+    env_name = e.get("ENV", "production")
+    try:
+        minio_secrets = get_secrets("platform", "minio", env_name)
+        root_user = minio_secrets.get("root_user") or "admin"
+        root_password = minio_secrets.get("root_password")
+    except Exception as exc:  # noqa: BLE001 - a missing store is a clear operator error
+        error(f"Could not read the MinIO root credential from Vault: {exc}")
+        return False
+    if not root_password:
+        error(f"platform/{env_name}/minio holds no root_password")
+        return False
+    payload = json.dumps(
+        {
+            "url": "http://127.0.0.1:9000",
+            "accessKey": root_user,
+            "secretKey": root_password,
+            "api": "s3v4",
+            "path": "auto",
+        }
+    )
+    result = c.run(
+        f"docker exec -i {container_name} mc alias import local /dev/stdin",
+        in_stream=io.StringIO(payload),
+        hide=True,
+        warn=True,
+    )
+    if not result.ok:
+        error("Failed to configure the MinIO admin alias")
+        return False
+    return True
 
 
 @task
@@ -98,6 +142,9 @@ def create_app_bucket(
     if not secret_key:
         secret_key = generate_password(32)
         info("Generated secret_key: <hidden>")
+
+    if not _ensure_admin_alias(c, container_name, e):
+        return None
 
     # Step 1: Create bucket
     info(f"Creating bucket '{bucket_name}'...")

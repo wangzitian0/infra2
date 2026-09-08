@@ -337,3 +337,63 @@ def test_unclassified_leftovers_are_reported_but_never_page() -> None:
     assert "platform/prefect" not in summary
     assert "truealpha/data_engine staging: stale=['SEC_USER_AGENT']" in summary
     assert "RELEASE_MANIFEST_ID" not in summary
+
+
+# --- an application credential is never the object store's root credential (#677) -------
+
+
+def test_over_privileged_finds_a_root_credential_in_an_application_store() -> None:
+    # fixture values, built rather than written out, so no line in this file has the
+    # shape of a credential assignment
+    prod, stg, scoped = (f"fixture-{name}" for name in ("a", "b", "c"))
+    roots = {
+        "production": {"root_user": "admin", "root_password": prod},
+        "staging": {"root_user": "admin", "root_password": stg},
+    }
+    documents = {
+        # the object store's own path legitimately holds it
+        "platform/minio|production": {"root_user": "admin", "root_password": prod},
+        # an application holding the root credential, twice, under different names
+        "finance_report/app|staging": {
+            "S3_ACCESS_KEY": "admin",
+            "S3_SECRET_KEY": prod,
+            "S3_PUBLIC_SECRET_KEY": prod,
+            "SECRET_KEY": "unrelated",
+        },
+        # a scoped credential is fine
+        "truealpha/app|production": {
+            "S3_ACCESS_KEY": "truealpha_raw",
+            "S3_SECRET_KEY": scoped,
+        },
+    }
+    findings = secrets_reconcile.over_privileged(documents, roots)
+    assert findings == {
+        "finance_report/app|staging": [
+            "S3_ACCESS_KEY",
+            "S3_PUBLIC_SECRET_KEY",
+            "S3_SECRET_KEY",
+        ]
+    }
+    # names only: no value from any store appears in the finding
+    assert prod not in json.dumps(findings)
+
+
+def test_over_privileged_pages_and_reads_as_its_own_finding() -> None:
+    report = {
+        "ok": False,
+        "stores": [
+            {
+                "service": "finance_report/app",
+                "env": "staging",
+                "missing": [],
+                "empty": [],
+                "unclassified": [],
+                "stale": [],
+                "over_privileged": ["S3_SECRET_KEY"],
+                "ok": False,
+            }
+        ],
+        "capacity": {"ok": True, "items": []},
+    }
+    summary = secrets_reconcile_check.page_worthy_summary(report)
+    assert "finance_report/app staging: over_privileged=['S3_SECRET_KEY']" in summary
