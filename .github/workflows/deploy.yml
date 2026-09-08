@@ -176,6 +176,15 @@ jobs:
       # platform (iac_pinned) services trigger the iac_runner webhook instead of Dokploy.
       IAC_WEBHOOK_SECRET: ${{ secrets.IAC_WEBHOOK_SECRET }}
       IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
+      INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
+      INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
+      INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+      GITHUB_SERVER_URL: ${{ github.server_url }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      GITHUB_RUN_ID: ${{ github.run_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -245,6 +254,38 @@ jobs:
             exit $rc
           fi
           echo "deploy_v2 $TYPE_INPUT succeeded."
+
+      - name: Alert on failure
+        if: failure()
+        env:
+          SERVICE_INPUT: ${{ github.event.inputs.service || 'finance_report/app' }}
+          TYPE_INPUT: ${{ github.event.inputs.type }}
+          VERSION_REF_INPUT: ${{ github.event.inputs.version_ref || 'main' }}
+          IAC_REF_INPUT: ${{ github.event.inputs.iac_ref || 'main' }}
+        run: |
+          python - <<'PY'
+          import os
+          from tools.out_of_band_watchdog import deliver_out_of_band_alert
+
+          run_url = "/".join(
+              v for v in (
+                  os.environ.get("GITHUB_SERVER_URL"),
+                  os.environ.get("GITHUB_REPOSITORY"),
+                  "actions/runs",
+                  os.environ.get("GITHUB_RUN_ID"),
+              ) if v
+          )
+          service = os.environ.get("SERVICE_INPUT", "unknown")
+          deploy_type = os.environ.get("TYPE_INPUT", "unknown")
+          version_ref = os.environ.get("VERSION_REF_INPUT", "unknown")
+          iac_ref = os.environ.get("IAC_REF_INPUT", "unknown")
+          deliver_out_of_band_alert(
+              os.environ,
+              f"🚨 deploy_v2 FAILED for {service} ({deploy_type}).\n"
+              f"Version: {version_ref} (iac: {iac_ref})\n"
+              f"Run: {run_url}",
+          )
+          PY
 
   # IaC runner bootstrap jobs
   bootstrap:

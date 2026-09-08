@@ -129,6 +129,15 @@ jobs:
       IAC_WEBHOOK_SECRET: ${{ secrets.IAC_WEBHOOK_SECRET }}
       IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
       VALIDATED_IAC_REF: ${{ needs.validate.outputs.iac_ref }}
+      INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
+      INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
+      INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+      GITHUB_SERVER_URL: ${{ github.server_url }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      GITHUB_RUN_ID: ${{ github.run_id }}
     steps:
       - name: Checkout released infra context
         uses: actions/checkout@v7
@@ -153,3 +162,39 @@ jobs:
             --domain "$INTERNAL_DOMAIN" \
             --repo-root . \
             --expected-iac-ref "$VALIDATED_IAC_REF"
+
+      - name: Alert on failure
+        if: failure()
+        run: |
+          python - <<'PY'
+          import json, os
+          from tools.out_of_band_watchdog import deliver_out_of_band_alert
+
+          run_url = "/".join(
+              v for v in (
+                  os.environ.get("GITHUB_SERVER_URL"),
+                  os.environ.get("GITHUB_REPOSITORY"),
+                  "actions/runs",
+                  os.environ.get("GITHUB_RUN_ID"),
+              ) if v
+          )
+          sender = os.environ.get("APP_DEPLOY_REQUEST_SENDER", "unknown")
+          req_raw = os.environ.get("APP_DEPLOY_REQUEST_JSON", "{}")
+          try:
+              req = json.loads(req_raw) if req_raw else {}
+          except Exception:
+              req = {}
+          service = req.get("service", "unknown")
+          deploy_type = req.get("deploy_type", "unknown")
+          version_ref = req.get("version_ref", "unknown")
+          iac_ref = os.environ.get("VALIDATED_IAC_REF", "unknown")
+          request_id = req.get("request_id", "unknown")
+          deliver_out_of_band_alert(
+              os.environ,
+              f"🚨 App deploy request execution FAILED for {service} ({deploy_type}).\n"
+              f"Request ID: {request_id}\n"
+              f"Sender: {sender}\n"
+              f"Version: {version_ref} (iac: {iac_ref})\n"
+              f"Run: {run_url}",
+          )
+          PY

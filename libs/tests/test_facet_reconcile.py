@@ -105,3 +105,46 @@ def test_section_systemexit_degrades_to_blocker(monkeypatch):
     section = fr.run_config_drift_section()
     assert section.blockers and "no v* release tag" in section.blockers[0]
     assert section.confirmed == []  # environment problem, never pages
+
+
+def test_dns_section_degrades_to_blocked_on_cloudflare_api_auth_error(monkeypatch):
+    """Issue #658 recommendation 2: Cloudflare API 401/403 or observation failure
+    must be reported as blocked, never as a job blocker. Real compose-id and config-hash
+    drift must remain legible, and the report must be delivered cleanly."""
+    monkeypatch.setenv("CF_API_TOKEN", "expired-or-revoked-token")
+    monkeypatch.setenv("CF_ZONE_ID", "dummy-zone")
+    monkeypatch.setenv("INTERNAL_DOMAIN", "example.test")
+
+    import tools.dns_drift_report as ddr
+
+    monkeypatch.setattr(
+        ddr,
+        "_actual_records",
+        lambda dns: (_ for _ in ()).throw(
+            RuntimeError("Cloudflare API returned an error reading DNS records")
+        ),
+    )
+    section = fr.run_dns_section()
+    assert not section.blockers
+    assert not section.confirmed
+    assert "blocked" in section.report
+    assert section.skipped and "Cloudflare API observation blocked" in section.skipped
+
+
+def test_dns_section_fails_job_on_confirmed_drift(monkeypatch):
+    """When records are truly missing in Cloudflare, it is confirmed drift and
+    blocks the job."""
+    monkeypatch.setenv("CF_API_TOKEN", "valid-token")
+    monkeypatch.setenv("CF_ZONE_ID", "dummy-zone")
+    monkeypatch.setenv("INTERNAL_DOMAIN", "example.test")
+
+    import tools.dns_drift_report as ddr
+
+    monkeypatch.setattr(ddr, "_expected_records", lambda dns: ["rec-a", "rec-b"])
+    monkeypatch.setattr(ddr, "_actual_records", lambda dns: ["rec-a"])
+
+    section = fr.run_dns_section()
+    assert section.blockers == ["rec-b"]
+    assert section.confirmed == ["rec-b"]
+    assert not section.skipped
+

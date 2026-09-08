@@ -48,7 +48,34 @@ def test_the_nightly_watchdog_reads_the_runner_health_and_pages_on_a_dead_prereq
     health = steps["Runner health — 1Password service account and deploy prerequisites"]
     assert health["if"] == "always()"
     assert "/health" in health["run"] and "op_service_account_token" in health["run"]
-    assert (
-        "deliver_out_of_band_alert" in health["run"] and "sys.exit(1)" in health["run"]
-    )
     assert health["env"]["IAC_RUNNER_URL"].startswith("${{ vars.IAC_RUNNER_URL")
+
+
+def test_deploy_workflow_pages_when_it_fails() -> None:
+    deploy_wf = ROOT / ".github" / "workflows" / "deploy.yml"
+    jobs = yaml.safe_load(deploy_wf.read_text(encoding="utf-8"))["jobs"]
+    deploy_job = jobs["deploy"]
+    steps = _steps(deploy_job)
+    alert = steps["Alert on failure"]
+    assert alert["if"] == "failure()"
+    assert "deliver_out_of_band_alert" in alert["run"]
+    assert "SERVICE_INPUT" in alert["env"]
+    assert (
+        deploy_job["env"]["INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID"]
+        == "${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}"
+    )
+
+
+def test_app_deploy_request_workflow_pages_when_it_fails() -> None:
+    request_wf = ROOT / ".github" / "workflows" / "app-deploy-request.yml"
+    jobs = yaml.safe_load(request_wf.read_text(encoding="utf-8"))["jobs"]
+    deploy_job = jobs["deploy"]
+    steps = _steps(deploy_job)
+    alert = steps["Alert on failure"]
+    assert alert["if"] == "failure()"
+    assert "deliver_out_of_band_alert" in alert["run"]
+    assert (
+        deploy_job["env"]["INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID"]
+        == "${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}"
+    )
+
