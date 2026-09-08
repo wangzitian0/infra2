@@ -230,3 +230,70 @@ def test_deployer_sync_under_secrets_supply_action_stops_after_the_supply(
         AlertingLike, "apply_secret_supply", classmethod(lambda cls, c, env=None: False)
     )
     assert AlertingLike.sync(object())["action"] == "failed"
+
+
+def test_deployer_sync_runs_the_supply_even_when_the_compose_hash_says_skip(
+    monkeypatch,
+) -> None:
+    """#649: a human value changed in 1Password is a deploy where nothing else changed;
+    the supply must not hide behind the compose change detection."""
+    prod = {
+        "ENV": "production",
+        "INTERNAL_DOMAIN": "x.io",
+        "DATA_PATH": "/data/platform/alerting",
+        "VPS_HOST": "vps",
+    }
+    monkeypatch.setattr(AlertingLike, "env", classmethod(lambda cls: dict(prod)))
+    monkeypatch.setattr(deployer_module, "validate_env", lambda: [])
+    monkeypatch.delenv("DEPLOY_ACTION", raising=False)
+    monkeypatch.setenv("IAC_DEPLOY_REF", "a" * 40)
+    monkeypatch.setattr(
+        AlertingLike,
+        "verify_vault_app_token",
+        classmethod(lambda cls: {"valid": True, "ttl_hours": 999}),
+    )
+    monkeypatch.setattr(
+        AlertingLike, "ensure_runtime_secrets", classmethod(lambda cls, c: True)
+    )
+    monkeypatch.setattr(
+        AlertingLike,
+        "compose_env_base",
+        classmethod(lambda cls, e=None: {"ENV": "production"}),
+    )
+    monkeypatch.setattr(
+        AlertingLike,
+        "source_config_env_base",
+        classmethod(lambda cls, e=None: {"ENV": "production"}),
+    )
+    monkeypatch.setattr(
+        AlertingLike,
+        "config_env_with_vault_addr",
+        classmethod(lambda cls, env, e: dict(env)),
+    )
+    monkeypatch.setattr(
+        AlertingLike,
+        "compute_local_config_hash",
+        classmethod(lambda cls, c, env: "same-hash"),
+    )
+    supplied: list = []
+    monkeypatch.setattr(
+        AlertingLike,
+        "apply_secret_supply",
+        classmethod(lambda cls, c, env=None: supplied.append(env) or True),
+    )
+
+    def remote_identity():
+        # whatever the remote-hash reader returns, the supply already ran; make the
+        # rest of sync stop here deterministically
+        raise RuntimeError("remote unreadable in this unit test")
+
+    monkeypatch.setattr(
+        AlertingLike,
+        "get_remote_config_identity",
+        classmethod(lambda cls: remote_identity()),
+    )
+    result = AlertingLike.sync(object())
+    assert supplied == ["production"]
+    assert (
+        result["action"] == "skipped"
+    )  # fail-closed skip path, reached AFTER the supply

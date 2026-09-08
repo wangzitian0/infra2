@@ -1425,6 +1425,16 @@ class Deployer:
                 "details": f"Failed to ensure runtime secrets for {cls.service}",
             }
 
+        # The secret supply runs on EVERY sync, before change detection: a human value
+        # that changed in 1Password is exactly the deploy where nothing else changed and
+        # the compose hash says "skip" (data_engine staging kept a stale SEC_USER_AGENT
+        # through a green v1.1.68 deploy, #649). Changed values restart the consumers.
+        if not cls.apply_secret_supply(c, env=e.get("ENV")):
+            return {
+                "action": "failed",
+                "details": "secret supply left required values missing",
+            }
+
         # Build env vars
         env_vars_dict = cls.config_env_with_vault_addr(cls.compose_env_base(e), e)
         source_env_vars = cls.config_env_with_vault_addr(
