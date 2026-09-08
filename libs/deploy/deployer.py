@@ -612,6 +612,60 @@ class Deployer:
                 info(f"Vault secret exists: {cls.secret_key}")
         return True
 
+    # ---- plan PR-E: the manifest-driven secret supply, applied on every deploy --------
+    @classmethod
+    def apply_secret_supply(cls, c: "Context", *, env: str | None = None) -> bool:
+        """Copy human values from 1Password, generate missing runtime values, mirror the
+        ones humans need, and refuse to deploy while the store lacks a required value.
+
+        Services without a registered manifest (libs.secrets_registry) are untouched.
+        When a value changed, the vault-agent and the app containers are restarted so the
+        rendered file and the processes that sourced it agree (RC4, #640).
+        """
+        from libs import secrets_registry, secrets_supply
+
+        e = cls.env()
+        env_name = env or e.get("ENV", "production")
+        service = secrets_registry.lookup(cls.project_name(e), cls.service)
+        if service is None:
+            return True
+
+        def restart(changed: tuple[str, ...]) -> None:
+            names = cls._secret_consumer_containers(e)
+            if not names:
+                return
+            info(
+                f"{cls.service}: {len(changed)} secret value(s) changed; restarting {', '.join(names)}"
+            )
+            run_with_status(
+                c,
+                f"ssh root@{e['VPS_HOST']} {shlex.quote(shlex.join(['docker', 'restart', *names]))}",
+                "Restart secret consumers",
+            )
+
+        try:
+            report = secrets_supply.apply(service, env_name, restart=restart)
+        except Exception as exc:  # noqa: BLE001 - a supply failure must stop the deploy, not crash it
+            error(f"{cls.service}: secret supply failed: {exc}")
+            return False
+        for note in report.notes:
+            warning(f"{cls.service}: {note}")
+        if not report.ok:
+            error(
+                f"{cls.service}: Vault still lacks required values: {', '.join(report.missing)}"
+            )
+            return False
+        success(f"{cls.service}: secret supply ok ({report.summary()})")
+        return True
+
+    @classmethod
+    def _secret_consumer_containers(cls, e: dict) -> list[str]:
+        names: list[str] = []
+        for facet in getattr(cls, "secrets", ()) or ():
+            for name in (facet.vault_agent_container, *facet.app_containers):
+                names.append(name.replace("${ENV_SUFFIX}", e.get("ENV_SUFFIX", "")))
+        return names
+
     @classmethod
     def _prepare_dirs(cls, c: "Context") -> bool:
         """Create data directories on VPS"""
@@ -665,6 +719,8 @@ class Deployer:
         e = cls.env()
 
         if not cls.ensure_runtime_secrets(c):
+            return None
+        if not cls.apply_secret_supply(c, env=e.get("ENV")):
             return None
 
         # Return base env vars + VAULT_ADDR for vault-init pattern

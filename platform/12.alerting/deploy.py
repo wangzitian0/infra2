@@ -4,7 +4,7 @@ import sys
 
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.env import get_secrets
-from libs.console import error, info, success
+from libs.console import success
 from libs.service_facets import (
     PublicRouteFacet,
     BackupFacet,
@@ -20,36 +20,6 @@ class AlertingDeployer(Deployer):
     service = "alerting"
     compose_path = "platform/12.alerting/compose.yaml"
     data_path = "/data/platform/alerting"
-
-    # Single source of truth for which secrets.ctmpl fields
-    # _sync_1password_to_vault actually requests from 1Password root_vars.
-    # secrets.ctmpl documented PROBE_POSTGRES_*/PROBE_S3_*/DOKPLOY_API_KEY with
-    # "store here"/"populate in the alerting Vault secret" instructions, but
-    # this list never asked 1Password for them — seeding 1Password alone was
-    # never enough, and the gap stayed invisible because each field degrades
-    # differently (fail-closed critical alert for the probes, silent idle for
-    # the deploy-queue guard). A class attribute (not a function-local list)
-    # so test_alerting_ctmpl_fields_all_reach_1password_sync can assert every
-    # secrets.ctmpl field is covered here without re-deriving or duplicating
-    # this list — the two can no longer drift apart unnoticed.
-    ROOT_VAR_KEYS = (
-        "ALERT_DELIVERY_MODE",
-        "FEISHU_WEBHOOK_URL",
-        "FEISHU_APP_ID",
-        "FEISHU_APP_SECRET",
-        "FEISHU_CHAT_ID",
-        "FEISHU_API_BASE",
-        "BRIDGE_BASIC_AUTH_USERNAME",
-        "BRIDGE_BASIC_AUTH_PASSWORD",
-        "INFRA_PROBE_HEARTBEAT_URL",
-        "INFRA_PROBE_HEARTBEAT_TOKEN",
-        "PROBE_POSTGRES_USER",
-        "PROBE_POSTGRES_PASSWORD",
-        "PROBE_S3_BUCKET",
-        "PROBE_S3_ACCESS_KEY",
-        "PROBE_S3_SECRET_KEY",
-        "DOKPLOY_API_KEY",
-    )
 
     # Backup facts (#542): the backup inventory derives from these
     # (formerly the ops.backup-inventory YAML, deleted).
@@ -260,29 +230,20 @@ class AlertingDeployer(Deployer):
         result = super().compose_env_base(e)
         result["INFRA_PROBE_SPECS"] = cls._probe_specs_env_value(e)
         result["PUBLIC_ROUTE_PROBE_SPECS"] = cls._public_route_specs_env_value(e)
-        op_secrets = get_secrets(
+        # The heartbeat coordinates are human values the supply keeps in Vault (synced
+        # from 1Password on deploy, #625 semantics preserved by libs/secrets_supply.py);
+        # read Vault only — no task reads 1Password directly any more.
+        vault_secrets = get_secrets(
             project=cls.project_name(e),
             service=cls.service,
             env=e.get("ENV", "production"),
-            credential_type="root_vars",
+            credential_type="app_vars",
         )
-        # Vault-first when 1Password is unavailable (#625: the service account was
-        # deleted and every alerting sync — and with it every platform reconcile —
-        # failed on a read Vault could already answer). The keys were synced into the
-        # runtime secret by _sync_1password_to_vault on earlier deploys; an empty op
-        # read is not a reason to ship a heartbeat-less alerting stack.
-        vault_secrets = None
         for key in ("INFRA_PROBE_HEARTBEAT_URL", "INFRA_PROBE_HEARTBEAT_TOKEN"):
-            value = op_secrets.get(key)
-            if not value:
-                if vault_secrets is None:
-                    vault_secrets = get_secrets(
-                        project=cls.project_name(e),
-                        service=cls.service,
-                        env=e.get("ENV", "production"),
-                        credential_type="app_vars",
-                    )
+            try:
                 value = vault_secrets.get(key)
+            except Exception:  # noqa: BLE001 - a missing path renders a heartbeat-less stack, as before
+                value = None
             if value:
                 result[key] = value
         return result
@@ -303,26 +264,22 @@ class AlertingDeployer(Deployer):
 
     @classmethod
     def pre_compose(cls, c):
-        """Sync 1Password alerting root vars into Vault runtime secrets."""
+        """Prepare the stack; the manifest-driven supply fills Vault from 1Password."""
         if not cls._prepare_dirs(c):
             return None
-
-        if not cls._sync_1password_to_vault():
-            return None
-
+        # Deployer.apply_secret_supply (libs/secrets_supply.py) copies the human-entered
+        # alerting values from 1Password, refuses to deploy while Vault lacks a required
+        # one, and deploys on Vault when 1Password cannot be reached (#625). It replaces
+        # the bespoke sync that lived here.
         e = cls.env()
+        if not cls.apply_secret_supply(c, env=e.get("ENV")):
+            return None
         result = cls.compose_env_base(e)
         result["VAULT_ADDR"] = e.get(
             "VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}"
         )
-        success("pre_compose complete - Vault runtime secrets synced from 1Password")
+        success("pre_compose complete - Vault holds the alerting runtime secrets")
         return result
-
-    @classmethod
-    def sync(cls, c, force=False):
-        if not cls._sync_1password_to_vault():
-            return {"action": "failed", "details": "1Password to Vault sync failed"}
-        return super().sync(c, force=force)
 
     @classmethod
     def verify_runtime_applied(cls, c, env_vars):
@@ -444,81 +401,6 @@ class AlertingDeployer(Deployer):
             if remaining <= 0:
                 return last_err
             time.sleep(min(5.0, remaining))
-
-    @classmethod
-    def _sync_1password_to_vault(cls) -> bool:
-        e = cls.env()
-        env_name = e.get("ENV", "production")
-        project = cls.project_name(e)
-
-        op_secrets = get_secrets(
-            project=project,
-            service=cls.service,
-            env=env_name,
-            credential_type="root_vars",
-        )
-        vault_secrets = get_secrets(
-            project=project,
-            service=cls.service,
-            env=env_name,
-            credential_type="app_vars",
-        )
-
-        required_by_mode = {
-            "feishu_webhook": ["FEISHU_WEBHOOK_URL"],
-            "feishu_app": ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_CHAT_ID"],
-        }
-        op_values = {key: op_secrets.get(key) for key in cls.ROOT_VAR_KEYS}
-        if not any(op_values.values()):
-            # 1Password answered nothing (#625: deleted service account, no `op`, no
-            # token). Vault-first: the runtime secret this sync populated on earlier
-            # deploys is the same data; if it still satisfies the delivery mode, the
-            # deploy proceeds on it and says so. Only a Vault that is ALSO empty fails.
-            # "Complete" includes the mode itself (review on #631): a Vault that holds a
-            # webhook URL but no ALERT_DELIVERY_MODE is not a set this deploy may run on,
-            # because the runtime reads the mode from the same secret.
-            vault_mode = vault_secrets.get("ALERT_DELIVERY_MODE")
-            if vault_mode in required_by_mode and all(
-                vault_secrets.get(key) for key in required_by_mode[vault_mode]
-            ):
-                info(
-                    "1Password root_vars unreadable; Vault already holds the alerting "
-                    f"runtime secrets for mode {vault_mode} — deploying on Vault (#625)"
-                )
-                return True
-            error(
-                "Missing alerting secrets: 1Password root_vars unreadable and Vault has no "
-                f"complete set (ALERT_DELIVERY_MODE={vault_mode!r} plus its required keys)",
-                f"item={project}/{env_name}/{cls.service}",
-            )
-            return False
-
-        mode = op_values.get("ALERT_DELIVERY_MODE") or "feishu_webhook"
-        if mode not in required_by_mode:
-            error(f"Unsupported ALERT_DELIVERY_MODE in 1Password: {mode}")
-            return False
-
-        values = dict(op_values)
-        values["ALERT_DELIVERY_MODE"] = mode
-
-        missing = [key for key in required_by_mode[mode] if not values.get(key)]
-        if missing:
-            error(
-                "Missing alerting secrets in 1Password root_vars",
-                f"item={project}/{env_name}/{cls.service} keys={', '.join(missing)}",
-            )
-            return False
-
-        for key, value in values.items():
-            if value is None:
-                continue
-            if not vault_secrets.set(key, value):
-                error(f"Failed to sync {key} into Vault runtime secret")
-                return False
-
-        info(f"Alerting delivery mode: {mode}")
-        success("Synced alerting runtime secrets from 1Password to Vault")
-        return True
 
 
 if shared_tasks:

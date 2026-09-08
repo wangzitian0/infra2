@@ -1,323 +1,188 @@
-"""
-Simplified environment and secret management
+"""Secret-store access for infra2 tasks, over the infra2-sdk adapters (plan PR-E).
 
-Three credential types:
-- bootstrap: 1Password - all bootstrap project credentials
-- root_vars: 1Password - superadmin passwords for non-bootstrap services
-- app_vars: Vault - application variables (consumed by vault-agent)
+Three credential types, two stores:
 
-Two backends:
-- OpSecrets: 1Password (uses OP_SERVICE_ACCOUNT_TOKEN)
-- VaultSecrets: HashiCorp Vault (uses VAULT_ROOT_TOKEN)
+- bootstrap: 1Password ``{project}/{service}`` — provisioning credentials, no env layer
+- root_vars: 1Password ``{project}/{env}/{service}`` — human-entered values per env
+- app_vars:  Vault ``secret/{project}/{env}/{service}`` — what services read at runtime
+
+The Vault token comes from ``VAULT_TOKEN`` (the runner's bounded AppRole token, or a
+break-glass token minted by ``bootstrap/05.vault``); ``VAULT_ROOT_TOKEN`` is accepted as a
+transition alias only. No task reads the root token from 1Password.
 """
 
 from __future__ import annotations
+
 import os
-import json
-import secrets
+import secrets as _secrets
 import string
-import subprocess
 import sys
 from typing import Literal, Optional
 
 import httpx
 
+from infra2_sdk.secrets import OnePasswordBackend, SecretsError, VaultKvBackend
 
 CredentialType = Literal["bootstrap", "root_vars", "app_vars"]
 
-# Single source for the 1Password locator of the Vault root token. It was hand-copied into
-# every "how to get the token" help string across deploy.py/shared_tasks (with the field name
-# drifting — some said /Token, some /Root Token); rotate the item here, not in N places.
+# The bootstrap root token's 1Password reference: only bootstrap/05.vault reads it.
 VAULT_ROOT_TOKEN_OP_REF = "op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token"
 
-__all__ = [
-    "OpSecrets",
-    "VaultSecrets",
-    "get_secrets",
-    "generate_password",
-    "verify_vault_token",
-    "CredentialType",
-    "VAULT_ROOT_TOKEN_OP_REF",
-]
+_SCOPE_ALLOWED = set(string.ascii_lowercase + string.digits + "_")
 
 
 def generate_password(length: int = 24) -> str:
-    """Generate secure random alphanumeric password"""
     alphabet = string.ascii_letters + string.digits
-    return "".join(secrets.choice(alphabet) for _ in range(length))
+    return "".join(_secrets.choice(alphabet) for _ in range(length))
 
 
 def _validate_scope_value(
-    label: str, value: str | None, allow_none: bool = False
+    name: str, value: str | None, *, allow_none: bool = False
 ) -> str | None:
-    """Validate project/env/service values for consistent path mapping."""
     if value is None:
         if allow_none:
             return None
-        raise ValueError(f"{label} is required")
-    trimmed = value.strip()
-    if not trimmed:
-        raise ValueError(f"{label} must not be empty")
-    if "-" in trimmed or "/" in trimmed:
-        raise ValueError(f"{label} must not include '-' or '/'")
-    return trimmed
+        raise ValueError(f"{name} is required")
+    if not value.strip():
+        raise ValueError(f"{name} must not be empty")
+    if any(ch not in _SCOPE_ALLOWED for ch in value):
+        raise ValueError(
+            f"{name} must not include characters outside [a-z0-9_] (got {value!r}); "
+            "Vault paths and 1Password items use underscores"
+        )
+    return value
+
+
+def vault_token(environ=None) -> str | None:
+    env = os.environ if environ is None else environ
+    return env.get("VAULT_TOKEN") or env.get("VAULT_ROOT_TOKEN") or None
+
+
+def vault_address(environ=None) -> str:
+    env = os.environ if environ is None else environ
+    if addr := env.get("VAULT_ADDR"):
+        return addr
+    if domain := env.get("INTERNAL_DOMAIN"):
+        return f"https://vault.{domain}"
+    return "https://vault.localhost"
 
 
 class OpSecrets:
-    """1Password secrets for bootstrap phase.
-
-    Requires OP_SERVICE_ACCOUNT_TOKEN environment variable.
-    """
+    """One 1Password item, read through the SDK's ``op`` adapter."""
 
     VAULT = "Infra2"
     INIT_ITEM = "init/env_vars"
 
-    def __init__(self, item: str = INIT_ITEM):
+    def __init__(
+        self, item: str = INIT_ITEM, backend: OnePasswordBackend | None = None
+    ):
         self.item = item
-        self._cache: dict | None = None
+        self._backend = backend or OnePasswordBackend(self.VAULT)
+        self._cache: dict[str, str] | None = None
 
     def _load(self) -> dict[str, str]:
-        """Load all fields from 1Password item"""
-        if self._cache is not None:
-            return self._cache
-
-        try:
-            result = subprocess.run(
-                [
-                    "op",
-                    "item",
-                    "get",
-                    self.item,
-                    f"--vault={self.VAULT}",
-                    "--format=json",
-                ],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            item = json.loads(result.stdout)
+        if self._cache is None:
+            try:
+                raw = self._backend.read(self.item)
+            except SecretsError as error:
+                print(
+                    f"OpSecrets: failed to load {self.item}: {error}", file=sys.stderr
+                )
+                raw = {}
             self._cache = {
-                f["label"]: f.get("value", "")
-                for f in item.get("fields", [])
-                if f.get("label")
-                and f.get("label") not in ["notesPlain", "password", "username"]
+                k: v
+                for k, v in raw.items()
+                if k not in ("notesPlain", "password", "username")
             }
-        except FileNotFoundError:
-            self._cache = {}
-        except subprocess.CalledProcessError as e:
-            print(f"OpSecrets: failed to load {self.item}: {e}", file=sys.stderr)
-            self._cache = {}
-        except json.JSONDecodeError as e:
-            print(f"OpSecrets: invalid JSON from {self.item}: {e}", file=sys.stderr)
-            self._cache = {}
         return self._cache
 
     def get(self, key: str) -> Optional[str]:
-        """Get a single field value"""
         return self._load().get(key)
 
     def get_all(self) -> dict[str, str]:
-        """Get all fields"""
-        return self._load()
+        return dict(self._load())
 
     def set(self, key: str, value: str) -> bool:
-        """Set a field value"""
         try:
-            subprocess.run(
-                [
-                    "op",
-                    "item",
-                    "edit",
-                    self.item,
-                    f"--vault={self.VAULT}",
-                    f"{key}={value}",
-                ],
-                capture_output=True,
-                check=True,
-            )
-            self._cache = None  # Invalidate cache
-            return True
-        except subprocess.CalledProcessError as e:
-            print(f"OpSecrets: failed to set {key}: {e}", file=sys.stderr)
+            self._backend.write(self.item, {key: value})
+        except SecretsError as error:
+            print(f"OpSecrets: failed to set {key}: {error}", file=sys.stderr)
             return False
+        self._cache = None
+        return True
 
 
 class VaultSecrets:
-    """Vault secrets for platform services.
-
-    Uses HTTP API directly (no vault CLI dependency).
-    Set VAULT_SKIP_VERIFY=1 to skip SSL verification for self-signed certs.
-    """
+    """One Vault KV v2 path, read and merge-written through the SDK's HTTP adapter."""
 
     class VaultError(Exception):
-        """Base exception for Vault operations"""
-
         pass
 
     class VaultAuthError(VaultError):
-        """Raised when Vault authentication fails"""
-
         pass
 
     class VaultConnectionError(VaultError):
-        """Raised when Vault server is unreachable"""
-
         pass
 
     class VaultSecretNotFoundError(VaultError):
-        """Raised when requested secret doesn't exist"""
-
         pass
 
-    def __init__(self, path: str, token: str | None = None, addr: str | None = None):
-        """
-        Args:
-            path: Secret path (e.g., "platform/production/postgres")
-            token: Vault token (default: from VAULT_ROOT_TOKEN env)
-            addr: Vault address (default: from VAULT_ADDR or INTERNAL_DOMAIN)
-        """
+    def __init__(
+        self, path: str, token: str | None = None, addr: str | None = None, backend=None
+    ):
         self.path = path
-        self.token = token or os.getenv("VAULT_ROOT_TOKEN")
-        self.addr = addr or self._get_addr()
-        self.verify_ssl = os.getenv("VAULT_SKIP_VERIFY", "").lower() not in (
-            "1",
-            "true",
-            "yes",
-        )
-        self._cache: dict | None = None
+        self.token = token or vault_token()
+        self.addr = addr or vault_address()
+        self._backend = backend
+        self._cache: dict[str, str] | None = None
 
-    @staticmethod
-    def _get_addr() -> str:
-        """Get Vault address from environment only (no 1Password dependency)"""
-        if addr := os.getenv("VAULT_ADDR"):
-            return addr
-        if domain := os.getenv("INTERNAL_DOMAIN"):
-            return f"https://vault.{domain}"
-        return "https://vault.localhost"
+    def _client(self) -> VaultKvBackend:
+        if self._backend is None:
+            if not self.token:
+                raise self.VaultAuthError(
+                    "\n❌ VAULT_TOKEN not set\n"
+                    "The iac-runner passes its AppRole token; a break-glass token comes from "
+                    "`invoke vault.break-glass-token` (bootstrap/05.vault)."
+                )
+            self._backend = VaultKvBackend(self.addr, token=self.token)
+        return self._backend
+
+    def _translate(self, error: SecretsError, verb: str) -> VaultError:
+        text = str(error)
+        if "HTTP 403" in text or "HTTP 401" in text:
+            return self.VaultAuthError(
+                f"\n❌ Permission denied ({verb}): {self.path}\nCheck: vault token lookup"
+            )
+        if "HTTP 503" in text or "HTTP 502" in text:
+            return self.VaultConnectionError("\n❌ Vault is sealed or unavailable")
+        return self.VaultError(f"\n❌ Vault {verb} failed: {text}\nPath: {self.path}")
 
     def _load(self) -> dict[str, str]:
-        """Load secrets from Vault"""
-        if self._cache is not None:
-            return self._cache
-
-        if not self.token:
-            raise self.VaultAuthError(
-                "\n❌ VAULT_ROOT_TOKEN not set\n"
-                "Fix: export VAULT_ROOT_TOKEN=<admin-token>\n"
-                f"Get from: op read '{VAULT_ROOT_TOKEN_OP_REF}'\n"
-                "(item: bootstrap/vault/Root Token)"
-            )
-
-        try:
-            with httpx.Client(verify=self.verify_ssl, timeout=10.0) as client:
-                resp = client.get(
-                    f"{self.addr}/v1/secret/data/{self.path}",
-                    headers={"X-Vault-Token": self.token},
+        if self._cache is None:
+            try:
+                data = dict(self._client().read(self.path))
+            except SecretsError as error:
+                raise self._translate(error, "read") from error
+            if not data:
+                raise self.VaultSecretNotFoundError(
+                    f"\n❌ Secret not found: {self.path}"
                 )
-
-                if resp.status_code == 200:
-                    data = resp.json().get("data", {}).get("data", {})
-                    if not data:
-                        raise self.VaultSecretNotFoundError(
-                            f"\n❌ Secret path exists but has no data: {self.path}\n"
-                            f"Fix: vault kv put secret/{self.path} key=value"
-                        )
-                    self._cache = data
-                    return self._cache
-                elif resp.status_code == 404:
-                    raise self.VaultSecretNotFoundError(
-                        f"\n❌ Secret not found: {self.path}\n"
-                        f"Fix: vault kv put secret/{self.path} key=value\n"
-                        f"Or check path exists: vault kv list secret/{'/'.join(self.path.split('/')[:-1])}"
-                    )
-                elif resp.status_code == 403:
-                    raise self.VaultAuthError(
-                        f"\n❌ Permission denied accessing: {self.path}\n"
-                        f"The AppRole token lacks read permission to this path.\n"
-                        f"Check token: vault token lookup\n"
-                        f"Fix: update the service's AppRole policy/creds (invoke vault.setup-approle)"
-                    )
-                elif resp.status_code == 503:
-                    raise self.VaultConnectionError(
-                        f"\n❌ Vault is sealed or unavailable\n"
-                        f"Check: curl {self.addr}/v1/sys/health\n"
-                        f"Fix: vault operator unseal (or check unsealer logs)"
-                    )
-                else:
-                    raise self.VaultError(
-                        f"\n❌ Vault returned unexpected status {resp.status_code}\n"
-                        f"Path: {self.path}\n"
-                        f"Response: {resp.text[:200]}"
-                    )
-
-        except httpx.ConnectError as e:
-            raise self.VaultConnectionError(
-                f"\n❌ Cannot connect to Vault: {e}\n"
-                f"Check: VAULT_ADDR={self.addr}\n"
-                f"Troubleshoot: curl {self.addr}/v1/sys/health"
-            ) from e
-        except httpx.TimeoutException as e:
-            raise self.VaultConnectionError(
-                f"\n❌ Vault connection timeout: {e}\n"
-                f"Check: VAULT_ADDR={self.addr}\n"
-                f"Network: Is Vault reachable?"
-            ) from e
+            self._cache = data
+        return self._cache
 
     def get(self, key: str) -> Optional[str]:
-        """Get a single secret"""
         return self._load().get(key)
 
     def get_all(self) -> dict[str, str]:
-        """Get all secrets"""
-        return self._load()
+        return dict(self._load())
 
     def set(self, key: str, value: str) -> bool:
-        """Set a secret (merge with existing)"""
-        if not self.token:
-            raise self.VaultAuthError(
-                "\n❌ VAULT_ROOT_TOKEN not set - cannot write secrets"
-            )
-
         try:
-            existing = self._load().copy()
-        except self.VaultSecretNotFoundError:
-            existing = {}
-        existing[key] = value
-
-        try:
-            with httpx.Client(verify=self.verify_ssl, timeout=10.0) as client:
-                resp = client.post(
-                    f"{self.addr}/v1/secret/data/{self.path}",
-                    headers={"X-Vault-Token": self.token},
-                    json={"data": existing},
-                )
-                if resp.status_code in (200, 204):
-                    self._cache = None
-                    return True
-                elif resp.status_code == 403:
-                    raise self.VaultAuthError(
-                        f"\n❌ Permission denied writing to: {self.path}\n"
-                        f"Token lacks write permission.\n"
-                        f"Check token: vault token lookup"
-                    )
-                elif resp.status_code == 503:
-                    raise self.VaultConnectionError(
-                        "\n❌ Vault is sealed or unavailable\nCannot write secrets."
-                    )
-                else:
-                    raise self.VaultError(
-                        f"\n❌ Vault write failed with status {resp.status_code}\n"
-                        f"Path: {self.path}\n"
-                        f"Response: {resp.text[:200]}"
-                    )
-        except httpx.ConnectError as e:
-            raise self.VaultConnectionError(
-                f"\n❌ Cannot connect to Vault: {e}\nCheck: VAULT_ADDR={self.addr}"
-            ) from e
-        except httpx.TimeoutException as e:
-            raise self.VaultConnectionError(
-                f"\n❌ Vault connection timeout: {e}"
-            ) from e
+            self._client().write(self.path, {key: value})
+        except SecretsError as error:
+            raise self._translate(error, "write") from error
+        self._cache = None
+        return True
 
 
 def get_secrets(
@@ -326,51 +191,30 @@ def get_secrets(
     env: str = "production",
     credential_type: CredentialType | None = None,
 ) -> OpSecrets | VaultSecrets:
-    """Factory to get appropriate secrets backend based on credential type.
-
-    Args:
-        project: Project name (e.g., 'bootstrap', 'platform', 'finance_report')
-        service: Service name (e.g., 'postgres'), None uses project/env path
-        env: Environment (default: 'production')
-        credential_type: Credential type - 'bootstrap', 'root_vars', or 'app_vars'
-                        If not specified, defaults to 'app_vars' (Vault)
-
-    Returns:
-        OpSecrets (1Password) for bootstrap/root_vars
-        VaultSecrets for app_vars
-
-    Type routing:
-        bootstrap  -> 1Password: {project}/{service} (no env layer)
-        root_vars  -> 1Password: {project}/{env}/{service}
-        app_vars   -> Vault: secret/data/{project}/{env}/{service}
-    """
+    """Factory: bootstrap / root_vars → 1Password items; app_vars (default) → Vault path."""
     validated_project: str = _validate_scope_value("project", project)  # type: ignore[assignment]
     validated_env: str = _validate_scope_value("env", env)  # type: ignore[assignment]
     validated_service = _validate_scope_value("service", service, allow_none=True)
-
     resolved_type = credential_type or "app_vars"
-
     if resolved_type == "bootstrap":
-        item = (
-            f"{validated_project}/{validated_service}"
+        return OpSecrets(
+            item=f"{validated_project}/{validated_service}"
             if validated_service
             else validated_project
         )
-        return OpSecrets(item=item)
-    elif resolved_type == "root_vars":
+    if resolved_type == "root_vars":
         item = (
             f"{validated_project}/{validated_env}/{validated_service}"
             if validated_service
             else f"{validated_project}/{validated_env}"
         )
         return OpSecrets(item=item)
-    else:
-        path = (
-            f"{validated_project}/{validated_env}/{validated_service}"
-            if validated_service
-            else f"{validated_project}/{validated_env}"
-        )
-        return VaultSecrets(path=path)
+    path = (
+        f"{validated_project}/{validated_env}/{validated_service}"
+        if validated_service
+        else f"{validated_project}/{validated_env}"
+    )
+    return VaultSecrets(path=path)
 
 
 def verify_vault_token(

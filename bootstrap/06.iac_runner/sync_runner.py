@@ -119,10 +119,10 @@ def diagnose_failure(stderr: str, stdout: str = "") -> dict[str, str]:
             "next_action": f"Create or repair secret/data/{secret_path} before rerunning deploy.",
         }
 
-    if "VAULT_ROOT_TOKEN not set" in combined:
+    if "VAULT_TOKEN not set" in combined or "VAULT_ROOT_TOKEN not set" in combined:
         return {
             "error_kind": "vault_token_missing",
-            "summary": "Child invoke task could not find VAULT_ROOT_TOKEN.",
+            "summary": "Child invoke task could not find VAULT_TOKEN.",
             "next_action": (
                 "Check the IaC Runner AppRole login: VAULT_ROLE_ID/VAULT_SECRET_ID "
                 "must be present in the runner env and `vault write auth/approle/login` "
@@ -492,11 +492,11 @@ def _approle_login(env: dict[str, str], role_id: str, secret_id: str) -> str | N
     return token
 
 
-def resolve_vault_root_token(env: dict[str, str]) -> str | None:
+def resolve_vault_token(env: dict[str, str]) -> str | None:
     """Resolve the Vault token for infrastructure sync subprocesses.
 
     Order:
-      1. An explicit VAULT_ROOT_TOKEN (operator/manual override; tests).
+      1. An explicit VAULT_TOKEN (operator/manual override; tests).
       2. AppRole login with the Dokploy-injected VAULT_ROLE_ID/VAULT_SECRET_ID,
          yielding a short-TTL bounded token (no delete, no root — see
          bootstrap/06.iac_runner/vault-policy.hcl).
@@ -505,7 +505,7 @@ def resolve_vault_root_token(env: dict[str, str]) -> str | None:
     AppRole (docs/ssot/bootstrap.iac_runner.md §6.4). The credential is never read
     from 1Password — role_id/secret_id come from Dokploy env, not `op read`.
     """
-    if token := env.get("VAULT_ROOT_TOKEN"):
+    if token := env.get("VAULT_TOKEN") or env.get("VAULT_ROOT_TOKEN"):
         return token
 
     role_id = env.get("VAULT_ROLE_ID")
@@ -514,7 +514,7 @@ def resolve_vault_root_token(env: dict[str, str]) -> str | None:
         return _approle_login(env, role_id, secret_id)
 
     logger.warning(
-        "No VAULT_ROOT_TOKEN and no VAULT_ROLE_ID/VAULT_SECRET_ID for AppRole login"
+        "No VAULT_TOKEN and no VAULT_ROLE_ID/VAULT_SECRET_ID for AppRole login"
     )
     return None
 
@@ -564,7 +564,7 @@ def safe_invoke_env_summary(env: dict[str, str]) -> str:
         "ENV_DOMAIN_SUFFIX",
         "IAC_DEPLOY_REF",
         "DEPLOY_VERSION_REF",
-        "VAULT_ROOT_TOKEN",
+        "VAULT_TOKEN",
         "VAULT_ROLE_ID",
         "VAULT_SECRET_ID",
         "OP_SERVICE_ACCOUNT_TOKEN",
@@ -606,7 +606,10 @@ def run_invoke_task(
         # that reads DEPLOY_VERSION_REF acts on it; the value is already validated by
         # the webhook (tag or sha) and is never interpolated into a shell.
         env_vars["DEPLOY_VERSION_REF"] = version_ref
-    if vault_root_token := resolve_vault_root_token(env_vars):
+    if vault_root_token := resolve_vault_token(env_vars):
+        # The bounded AppRole token travels as VAULT_TOKEN (libs.env, infra2-sdk); the old
+        # name is kept for one release so a child at an older iac_ref still finds it.
+        env_vars["VAULT_TOKEN"] = vault_root_token
         env_vars["VAULT_ROOT_TOKEN"] = vault_root_token
     logger.info("Invoke child env: %s", safe_invoke_env_summary(env_vars))
 

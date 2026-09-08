@@ -403,8 +403,11 @@ def test_alerting_platform_service_contract_files_exist() -> None:
     assert "secrets:/secrets:ro" in compose
 
     deploy = (base / "deploy.py").read_text(encoding="utf-8")
-    assert 'credential_type="root_vars"' in deploy
-    assert "Synced alerting runtime secrets from 1Password to Vault" in deploy
+    # PR-E: the manifest-driven supply (libs/secrets_supply.py) replaced the bespoke
+    # 1Password → Vault copy; the Deployer hook is what pre_compose calls.
+    assert "apply_secret_supply" in deploy
+    assert "_sync_1password_to_vault" not in deploy
+    assert 'credential_type="root_vars"' not in deploy
     assert "INFRA_PROBE_HEARTBEAT_URL" in deploy
     assert "INFRA_PROBE_HEARTBEAT_TOKEN" in deploy
 

@@ -1,163 +1,154 @@
-"""Unit tests for libs/env.py (OpSecrets/VaultSecrets)."""
-
-from unittest.mock import patch, MagicMock
+"""Unit tests for libs/env.py: the OpSecrets/VaultSecrets shims over the infra2-sdk
+backends (plan PR-E). The backends themselves are tested in the SDK; these tests pin
+the shim contract that tasks and Deployers rely on."""
 
 import pytest
 
+from infra2_sdk.secrets import SecretsError, WriteResult
+
+
+class FakeBackend:
+    def __init__(self, items=None, *, fail=None):
+        self.items = {k: dict(v) for k, v in (items or {}).items()}
+        self.fail = fail
+        self.writes = []
+
+    def read(self, path):
+        if self.fail:
+            raise SecretsError(self.fail)
+        return dict(self.items.get(path, {}))
+
+    def write(self, path, values):
+        if self.fail:
+            raise SecretsError(self.fail)
+        current = self.items.setdefault(path, {})
+        changed = tuple(k for k, v in values.items() if current.get(k) != v)
+        current.update(values)
+        self.writes.append((path, dict(values)))
+        return WriteResult(changed=changed)
+
 
 class TestOpSecrets:
-    """Test OpSecrets behavior"""
+    """OpSecrets = one 1Password item read through the SDK's ``op`` adapter."""
 
-    @patch("libs.env.subprocess.run")
-    def test_op_get_all_filters_fields(self, mock_run):
+    def test_op_get_all_filters_builtin_fields(self):
         from libs.env import OpSecrets
-        import json
 
-        mock_result = MagicMock()
-        mock_result.stdout = json.dumps(
+        backend = FakeBackend(
             {
-                "fields": [
-                    {"label": "username", "value": "admin"},
-                    {"label": "POSTGRES_PASSWORD", "value": "secret"},
-                    {"label": "notesPlain", "value": "skip this"},
-                    {"label": "password", "value": "skip this too"},
-                ]
+                "init/env_vars": {
+                    "DOMAIN": "example.com",
+                    "notesPlain": "notes",
+                    "password": "x",
+                    "username": "y",
+                }
             }
         )
-        mock_run.return_value = mock_result
+        assert OpSecrets(backend=backend).get_all() == {"DOMAIN": "example.com"}
 
-        op = OpSecrets(item="init/env_vars")
-        result = op.get_all()
-
-        assert result == {"POSTGRES_PASSWORD": "secret"}
-
-    @patch("libs.env.subprocess.run")
-    def test_op_get_single_field(self, mock_run):
-        from libs.env import OpSecrets
-        import json
-
-        mock_result = MagicMock()
-        mock_result.stdout = json.dumps(
-            {
-                "fields": [
-                    {"label": "VPS_HOST", "value": "10.0.0.1"},
-                ]
-            }
-        )
-        mock_run.return_value = mock_result
-
-        op = OpSecrets(item="init/env_vars")
-        assert op.get("VPS_HOST") == "10.0.0.1"
-
-    @patch("libs.env.subprocess.run")
-    def test_op_set_success(self, mock_run):
+    def test_op_get_single_field_and_caches_the_item(self):
         from libs.env import OpSecrets
 
-        mock_run.return_value = MagicMock()
-        op = OpSecrets(item="init/env_vars")
+        backend = FakeBackend({"bootstrap/vault": {"TOKEN": "t"}})
+        op = OpSecrets(item="bootstrap/vault", backend=backend)
+        assert op.get("TOKEN") == "t"
+        backend.items["bootstrap/vault"]["TOKEN"] = "changed-behind-our-back"
+        assert op.get("TOKEN") == "t"  # one read per instance, like before
+        assert op.get("MISSING") is None
 
-        assert op.set("VPS_HOST", "10.0.0.2") is True
-
-    @patch("libs.env.subprocess.run")
-    def test_op_set_failure(self, mock_run):
+    def test_op_set_writes_the_item_and_drops_the_cache(self):
         from libs.env import OpSecrets
-        from subprocess import CalledProcessError
 
-        mock_run.side_effect = CalledProcessError(1, "op")
-        op = OpSecrets(item="init/env_vars")
+        backend = FakeBackend({"platform/production/alerting": {"A": "1"}})
+        op = OpSecrets(item="platform/production/alerting", backend=backend)
+        assert op.get("A") == "1"
+        assert op.set("B", "2") is True
+        assert backend.writes == [("platform/production/alerting", {"B": "2"})]
+        assert op.get_all() == {"A": "1", "B": "2"}
 
-        assert op.set("VPS_HOST", "10.0.0.2") is False
+    def test_op_failures_degrade_to_empty_reads_and_false_writes(self, capsys):
+        from libs.env import OpSecrets
+
+        op = OpSecrets(backend=FakeBackend(fail="op: not signed in"))
+        assert op.get_all() == {}
+        assert op.set("K", "v") is False
+        assert "not signed in" in capsys.readouterr().err
 
 
 class TestVaultSecrets:
-    """Test VaultSecrets behavior"""
+    """VaultSecrets = one KV v2 path; errors keep their historical classes."""
 
-    @patch("libs.env.httpx.Client")
-    def test_vault_get_all_success(self, mock_client):
+    def test_vault_get_all_success(self):
         from libs.env import VaultSecrets
 
-        resp = MagicMock()
-        resp.status_code = 200
-        resp.json.return_value = {"data": {"data": {"password": "secret"}}}
+        backend = FakeBackend({"platform/production/postgres": {"PASSWORD": "p"}})
+        vault = VaultSecrets(path="platform/production/postgres", backend=backend)
+        assert vault.get_all() == {"PASSWORD": "p"}
+        assert vault.get("PASSWORD") == "p"
 
-        client = MagicMock()
-        client.get.return_value = resp
-        mock_client.return_value.__enter__.return_value = client
-
-        secrets = VaultSecrets(
-            path="platform/production/postgres",
-            token="token",
-            addr="https://vault.example",
-        )
-        assert secrets.get_all() == {"password": "secret"}
-
-    @patch("libs.env.httpx.Client")
-    def test_vault_get_all_non_200(self, mock_client):
+    def test_vault_missing_path_raises_not_found(self):
         from libs.env import VaultSecrets
 
-        resp = MagicMock()
-        resp.status_code = 403
+        vault = VaultSecrets(path="platform/production/nothing", backend=FakeBackend())
+        with pytest.raises(VaultSecrets.VaultSecretNotFoundError):
+            vault.get("ANY")
 
-        client = MagicMock()
-        client.get.return_value = resp
-        mock_client.return_value.__enter__.return_value = client
+    def test_vault_permission_denied_raises_auth_error(self):
+        from libs.env import VaultSecrets
 
-        secrets = VaultSecrets(
+        vault = VaultSecrets(
             path="platform/production/postgres",
-            token="token",
-            addr="https://vault.example",
+            backend=FakeBackend(
+                fail="vault read platform/production/postgres: HTTP 403"
+            ),
         )
         with pytest.raises(VaultSecrets.VaultAuthError):
-            secrets.get_all()
+            vault.get_all()
 
-    @patch("libs.env.httpx.Client")
-    def test_vault_set_merges_existing(self, mock_client):
+    def test_vault_sealed_raises_connection_error(self):
         from libs.env import VaultSecrets
 
-        get_resp = MagicMock()
-        get_resp.status_code = 200
-        get_resp.json.return_value = {"data": {"data": {"existing": "value"}}}
-
-        post_resp = MagicMock()
-        post_resp.status_code = 204
-
-        client = MagicMock()
-        client.get.return_value = get_resp
-        client.post.return_value = post_resp
-        mock_client.return_value.__enter__.return_value = client
-
-        secrets = VaultSecrets(
+        vault = VaultSecrets(
             path="platform/production/postgres",
-            token="token",
-            addr="https://vault.example",
+            backend=FakeBackend(fail="vault read: HTTP 503"),
         )
-        assert secrets.set("new", "value") is True
+        with pytest.raises(VaultSecrets.VaultConnectionError):
+            vault.get_all()
 
-    @patch("libs.env.httpx.Client")
-    def test_vault_set_creates_missing_secret_path(self, mock_client):
+    def test_vault_set_is_a_merge_patch_of_one_key(self):
         from libs.env import VaultSecrets
 
-        get_resp = MagicMock()
-        get_resp.status_code = 404
+        backend = FakeBackend({"platform/production/postgres": {"A": "1"}})
+        vault = VaultSecrets(path="platform/production/postgres", backend=backend)
+        assert vault.set("B", "2") is True
+        # the backend merges (KV v2 patch); the shim never re-sends the other keys
+        assert backend.writes == [("platform/production/postgres", {"B": "2"})]
+        assert vault.get_all() == {"A": "1", "B": "2"}
 
-        post_resp = MagicMock()
-        post_resp.status_code = 204
+    def test_vault_set_creates_missing_secret_path(self):
+        from libs.env import VaultSecrets
 
-        client = MagicMock()
-        client.get.return_value = get_resp
-        client.post.return_value = post_resp
-        mock_client.return_value.__enter__.return_value = client
+        backend = FakeBackend()
+        vault = VaultSecrets(path="platform/production/new", backend=backend)
+        assert vault.set("K", "v") is True
+        assert vault.get_all() == {"K": "v"}
 
-        secrets = VaultSecrets(
-            path="platform/production/alerting",
-            token="token",
-            addr="https://vault.example",
-        )
-        assert secrets.set("FEISHU_APP_SECRET", "value") is True
-        client.post.assert_called_once()
-        assert client.post.call_args.kwargs["json"] == {
-            "data": {"FEISHU_APP_SECRET": "value"}
-        }
+    def test_vault_without_a_token_fails_closed_with_the_new_guidance(
+        self, monkeypatch
+    ):
+        from libs.env import VaultSecrets
+
+        monkeypatch.delenv("VAULT_TOKEN", raising=False)
+        monkeypatch.delenv("VAULT_ROOT_TOKEN", raising=False)
+        with pytest.raises(VaultSecrets.VaultAuthError, match="VAULT_TOKEN not set"):
+            VaultSecrets(path="platform/production/postgres").get_all()
+
+    def test_vault_token_prefers_vault_token_over_the_transition_alias(self):
+        from libs.env import vault_token
+
+        assert vault_token({"VAULT_TOKEN": "a", "VAULT_ROOT_TOKEN": "b"}) == "a"
+        assert vault_token({"VAULT_ROOT_TOKEN": "b"}) == "b"
+        assert vault_token({}) is None
 
 
 class TestGetSecrets:

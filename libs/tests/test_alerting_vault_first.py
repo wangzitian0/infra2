@@ -1,110 +1,186 @@
-"""platform/alerting deploys on Vault when 1Password cannot answer (#625).
+"""The secret supply deploys on Vault when 1Password cannot answer (#625).
 
-The 1Password service account behind OP_SERVICE_ACCOUNT_TOKEN was deleted; every
-alerting sync failed on an `op` read, and because a platform reconcile is all-or-nothing,
-every release tag since has failed to promote and the production marker has not moved.
-The runtime secrets the sync used to copy from 1Password are already in Vault; the
-deployer now reads them from there when 1Password answers nothing, and fails only when
-Vault is empty too.
+The 1Password service account behind OP_SERVICE_ACCOUNT_TOKEN was deleted once; every
+alerting sync failed on an ``op`` read, and because a platform reconcile is
+all-or-nothing, no release promoted for days. The manifest-driven supply that replaced
+the bespoke alerting sync (plan PR-E, libs/secrets_supply.py) keeps the rule: when
+1Password is unreachable the deploy proceeds on what Vault already holds and only a
+Vault that lacks a required value fails it. These tests run the real infra2-sdk resolver
+over in-memory stores and a small manifest with one field of each source class.
 """
 
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
+from infra2_sdk.runtime.config_schema import EnvironmentManifest
+from infra2_sdk.secrets import (
+    SecretsError,
+    SecretsResolver,
+    WriteResult,
+    op_item,
+    vault_path,
+)
 
-ROOT = Path(__file__).resolve().parents[2]
+from libs import secrets_supply
+from libs.secrets_registry import Service
+
+MANIFEST = EnvironmentManifest.from_dict(
+    {
+        "contract_version": 2,
+        "source": "test/alerting",
+        "fields": [
+            {
+                "field": "alert_delivery_mode",
+                "env": "ALERT_DELIVERY_MODE",
+                "source": "human",
+                "injected": True,
+            },
+            {
+                "field": "feishu_webhook_url",
+                "env": "FEISHU_WEBHOOK_URL",
+                "source": "human",
+                "empty_ok": True,
+                "sensitive": True,
+            },
+            {
+                "field": "bridge_token",
+                "env": "BRIDGE_TOKEN",
+                "source": "runtime",
+                "sensitive": True,
+            },
+            {
+                "field": "heartbeat_token",
+                "env": "INFRA_PROBE_HEARTBEAT_TOKEN",
+                "source": "runtime",
+                "sensitive": True,
+                "mirror_to_1password": True,
+            },
+        ],
+    }
+)
+SERVICE = Service("platform/12.alerting", "platform", "alerting", ("unused",))
+STORE_PATH = vault_path("platform", "staging", "alerting")
+HUMAN_ITEM = op_item("platform", "staging", "alerting")
 
 
-def _load_deploy_module():
-    spec = importlib.util.spec_from_file_location(
-        "alerting_deploy_under_test", ROOT / "platform" / "12.alerting" / "deploy.py"
+class MemoryBackend:
+    def __init__(self, items=None, *, fail: str | None = None):
+        self.items = {k: dict(v) for k, v in (items or {}).items()}
+        self.fail = fail
+
+    def read(self, path):
+        if self.fail:
+            raise SecretsError(self.fail)
+        return dict(self.items.get(path, {}))
+
+    def write(self, path, values):
+        if self.fail:
+            raise SecretsError(self.fail)
+        current = self.items.setdefault(path, {})
+        changed = tuple(k for k, v in values.items() if current.get(k) != v)
+        current.update(values)
+        return WriteResult(changed=changed)
+
+
+def _apply(*, store: MemoryBackend, human: MemoryBackend, restarts: list):
+    resolver = SecretsResolver(
+        MANIFEST,
+        project="platform",
+        service="alerting",
+        env="staging",
+        store=store,
+        human=human,
     )
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-class _Secrets:
-    def __init__(self, values):
-        self.values = dict(values)
-        self.writes: list[tuple[str, str]] = []
-
-    def get(self, key):
-        return self.values.get(key)
-
-    def set(self, key, value):
-        self.writes.append((key, value))
-        self.values[key] = value
-        return True
-
-
-def _backends(monkeypatch, module, *, op: dict, vault: dict):
-    backends = {"root_vars": _Secrets(op), "app_vars": _Secrets(vault)}
-
-    def get_secrets(*, project, service, env, credential_type="app_vars", **_):
-        return backends[credential_type]
-
-    monkeypatch.setattr(module, "get_secrets", get_secrets)
-    monkeypatch.setattr(
-        module.AlertingDeployer, "env", classmethod(lambda cls: {"ENV": "staging"})
+    return secrets_supply.apply(
+        SERVICE,
+        "staging",
+        resolver=resolver,
+        restart=lambda keys: restarts.append(keys),
     )
-    return backends
 
 
-def test_sync_deploys_on_vault_when_1password_answers_nothing(
-    monkeypatch, capsys
-) -> None:
-    module = _load_deploy_module()
-    backends = _backends(
-        monkeypatch,
-        module,
-        op={},
-        vault={
-            "ALERT_DELIVERY_MODE": "feishu_webhook",
-            "FEISHU_WEBHOOK_URL": "https://open.feishu.cn/hook/x",
-        },
+def test_deploys_on_vault_when_1password_cannot_be_reached() -> None:
+    store = MemoryBackend(
+        {
+            STORE_PATH: {
+                "ALERT_DELIVERY_MODE": "feishu_webhook",
+                "FEISHU_WEBHOOK_URL": "https://open.feishu.cn/hook/x",
+                "BRIDGE_TOKEN": "b",
+                "INFRA_PROBE_HEARTBEAT_TOKEN": "h",
+            }
+        }
     )
-    assert module.AlertingDeployer._sync_1password_to_vault() is True
-    assert backends["app_vars"].writes == []  # nothing to copy; Vault is the source
-    assert "deploying on Vault (#625)" in capsys.readouterr().out
-
-
-def test_sync_fails_only_when_vault_is_empty_too(monkeypatch) -> None:
-    module = _load_deploy_module()
-    _backends(monkeypatch, module, op={}, vault={})
-    assert module.AlertingDeployer._sync_1password_to_vault() is False
-    _backends(
-        monkeypatch,
-        module,
-        op={},
-        vault={"ALERT_DELIVERY_MODE": "feishu_app", "FEISHU_APP_ID": "id"},
+    restarts: list = []
+    report = _apply(
+        store=store, human=MemoryBackend(fail="op: not signed in"), restarts=restarts
     )
-    assert module.AlertingDeployer._sync_1password_to_vault() is False
-    # the mode is part of the set: a webhook URL without ALERT_DELIVERY_MODE is not
-    # complete, because the runtime reads the mode from the same secret (review on #631)
-    _backends(
-        monkeypatch,
-        module,
-        op={},
-        vault={"FEISHU_WEBHOOK_URL": "https://open.feishu.cn/hook/z"},
-    )
-    assert module.AlertingDeployer._sync_1password_to_vault() is False
+
+    assert report.ok
+    assert report.changed == ()  # nothing to copy; Vault is the source
+    assert restarts == []  # unchanged values never restart the consumers
+    assert any("deploying on Vault (#625)" in note for note in report.notes)
 
 
-def test_sync_still_copies_from_1password_when_it_answers(monkeypatch) -> None:
-    module = _load_deploy_module()
-    backends = _backends(
-        monkeypatch,
-        module,
-        op={
-            "ALERT_DELIVERY_MODE": "feishu_webhook",
-            "FEISHU_WEBHOOK_URL": "https://open.feishu.cn/hook/y",
-        },
-        vault={},
+def test_fails_only_when_vault_lacks_a_required_value_too() -> None:
+    store = MemoryBackend()
+    restarts: list = []
+    report = _apply(
+        store=store, human=MemoryBackend(fail="op: not signed in"), restarts=restarts
     )
-    assert module.AlertingDeployer._sync_1password_to_vault() is True
-    assert ("FEISHU_WEBHOOK_URL", "https://open.feishu.cn/hook/y") in backends[
-        "app_vars"
-    ].writes
+
+    assert not report.ok
+    assert "ALERT_DELIVERY_MODE" in report.missing  # human, required, nowhere
+    assert "FEISHU_WEBHOOK_URL" not in report.missing  # empty_ok is not a blocker
+    # runtime values are still generated so the next deploy has them
+    assert set(report.changed) == {"BRIDGE_TOKEN", "INFRA_PROBE_HEARTBEAT_TOKEN"}
+    assert store.items[STORE_PATH].keys() == {
+        "BRIDGE_TOKEN",
+        "INFRA_PROBE_HEARTBEAT_TOKEN",
+    }
+
+
+def test_copies_human_values_mirrors_runtime_ones_and_restarts_once() -> None:
+    human = MemoryBackend(
+        {
+            HUMAN_ITEM: {
+                "ALERT_DELIVERY_MODE": "feishu_webhook",
+                "FEISHU_WEBHOOK_URL": "https://open.feishu.cn/hook/y",
+            }
+        }
+    )
+    store = MemoryBackend()
+    restarts: list = []
+    report = _apply(store=store, human=human, restarts=restarts)
+
+    assert report.ok, report.summary()
+    held = store.items[STORE_PATH]
+    assert held["ALERT_DELIVERY_MODE"] == "feishu_webhook"
+    assert held["FEISHU_WEBHOOK_URL"] == "https://open.feishu.cn/hook/y"
+    assert held["BRIDGE_TOKEN"] and held["INFRA_PROBE_HEARTBEAT_TOKEN"]
+    # the token humans need to paste into the heartbeat worker is mirrored back
+    assert (
+        human.items[HUMAN_ITEM]["INFRA_PROBE_HEARTBEAT_TOKEN"]
+        == held["INFRA_PROBE_HEARTBEAT_TOKEN"]
+    )
+    assert (
+        "BRIDGE_TOKEN" not in human.items[HUMAN_ITEM]
+    )  # not flagged, stays in Vault only
+    assert restarts == [report.changed]
+    assert "FEISHU_WEBHOOK_URL" in report.changed
+
+    # a second deploy with nothing new is a no-op: no writes, no restart
+    again = _apply(store=store, human=human, restarts=restarts)
+    assert again.ok and again.changed == ()
+    assert len(restarts) == 1
+
+
+def test_summary_names_keys_never_values() -> None:
+    report = secrets_supply.SupplyReport(
+        service="platform/alerting",
+        env="staging",
+        changed=("FEISHU_WEBHOOK_URL",),
+        missing=("FEISHU_APP_ID",),
+        notes=("1Password lacks ['FEISHU_APP_ID']",),
+    )
+    text = report.summary()
+    assert "FEISHU_WEBHOOK_URL" in text and "MISSING=['FEISHU_APP_ID']" in text
+    assert "feishu.cn" not in text
