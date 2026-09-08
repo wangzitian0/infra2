@@ -22,10 +22,8 @@ def test_committed_templates_and_policies_match_their_manifests() -> None:
 def test_every_registered_manifest_exists_and_passes_the_offline_gate() -> None:
     for service in secrets_render.SERVICES:
         for path in service.manifests:
-            assert (ROOT / path).exists(), path
-            manifest = EnvironmentManifest.from_dict(
-                json.loads((ROOT / path).read_text(encoding="utf-8"))
-            )
+            # the checkout when present, else the CI/runner cache (fetched on demand)
+            manifest = secrets_render.load_manifest(path)
             assert validate_manifest_offline(manifest) == [], path
 
 
