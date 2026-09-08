@@ -62,6 +62,20 @@ def _safe_json(resp) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _json_object_or_none(resp) -> dict | None:
+    """The response body as a dict, or ``None`` when there is no parseable JSON object.
+
+    Distinct from :func:`_safe_json`, which collapses "no body" and "an empty JSON
+    object" into the same ``{}`` — the gateway check below has to tell a bodiless
+    Traefik 404 apart from a runner 404 that really did answer ``{}``.
+    """
+    try:
+        data = resp.json() if getattr(resp, "content", None) else None
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def _validate_request(env: str, ref: str, secret: str, base_url: str) -> None:
     """Fail closed BEFORE signing/posting — never sign with an empty secret or bad target."""
     if env not in _VALID_ENVS:
@@ -222,8 +236,8 @@ def poll_platform_deploy_status(
         # reconcile, so we treat it as non-terminal and keep polling. A genuine routing
         # 404 (no JSON body / different status) still surfaces via raise_for_status().
         code = getattr(resp, "status_code", None)
-        if code == 404:
-            body = _safe_json(resp)
+        body = _json_object_or_none(resp) if code == 404 else None
+        if code == 404 and body is not None:
             if str(body.get("status", "")).lower() == "not_found":
                 last = body
                 gateway_down_since = None
@@ -231,8 +245,9 @@ def poll_platform_deploy_status(
                 continue
         # The runner is being recreated (#666): Traefik answers a bodiless/non-JSON 404
         # while no router exists, then 502/503/504 until the new container is healthy.
-        # A JSON 404 that is not `not_found` is still a genuine routing error.
-        if code in gateway_codes or (code == 404 and not _safe_json(resp)):
+        # A 404 that carries a JSON object which is not `not_found` — including an empty
+        # one — is a genuine routing error and still raises below.
+        if code in gateway_codes or (code == 404 and body is None):
             moment = float(now())
             gateway_down_since = (
                 gateway_down_since if gateway_down_since is not None else moment

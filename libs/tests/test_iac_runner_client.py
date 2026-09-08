@@ -387,3 +387,21 @@ def test_poll_fails_naming_the_restart_when_the_gateway_stays_down_past_the_grac
             transport=transport,
             gateway_grace=180.0,
         )
+
+
+def test_poll_raises_on_a_404_that_carries_an_empty_json_object():
+    """#666 review: `{}` is a JSON object the runner answered, not Traefik's bodiless
+    404 — it must raise as a routing error, not enter the gateway grace window."""
+    _calls, transport = _capture([({}, 404)])
+    with pytest.raises(httpx.HTTPStatusError):
+        poll_platform_deploy_status(
+            env="staging",
+            ref=SHA,
+            base_url="u",
+            secret=SECRET,
+            attempts=3,
+            interval=0,
+            sleep=lambda *_: None,
+            nonce_factory=lambda: "nonce123",
+            transport=transport,
+        )
