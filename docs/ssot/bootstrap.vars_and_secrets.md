@@ -48,20 +48,39 @@ CLI 命令 `invoke env.*` 和 `get_secrets()` 函数通过 `--type` 参数区分
 - 路径无 env 层：`{project}/{service}`
 
 
-### 1.4 凭证同步方向（1Password ↔ Vault）
+### 1.4 凭证同步方向（1Password ↔ Vault）——由 manifest 的 source 决定
 
-`root_vars`(1Password) 与 `app_vars`(Vault) 按**源头**决定同步方向，互不重叠、不形成双写环：
+每个服务读到的每个变量都在它的 manifest（`env.manifest.json` / app 的 `required-env.generated.json`，
+contract v2）里声明一个 **source class**；部署时 `Deployer.apply_secret_supply`
+（`libs/secrets_supply.py`，经 infra2-sdk `SecretsResolver`）按声明把 store 填齐——
+**Vault 只有这一个写入者，没有人手工往 Vault 里敲值。**
 
-| 凭证类别 | 源头 (SSOT) | 同步方向 | 触发方式 | 示例 |
-|---------|------------|---------|---------|------|
-| **人配置的第三方凭证**（人去外部系统申请/填写） | 1Password (`root_vars`) | 1Password → Vault | 部署时**自动**（服务 `deploy.py` 的 `_sync_1password_to_vault`） | alerting 的飞书 `FEISHU_*`、桥接 basic-auth、心跳 token |
-| **机器生成、人偶尔登录的 Web UI 密码** | Vault (`app_vars`，`generate_password`) | Vault → 1Password | **手动**（见 §3.5） | authentik / openpanel 的 admin `bootstrap_password` |
-| **纯机器运行时 secret** | Vault (`app_vars`) | 不同步（仅 Vault） | — | DB / Redis 连接串、各服务 `secret_key` / `cookie_secret` |
+| source | 谁产生 | 同步方向 | 何时 | 示例 |
+|--------|--------|---------|------|------|
+| `bootstrap` | 人（装机前） | 只在 1Password `bootstrap/<service>` | 手动一次 | Dokploy API key、`op` service-account token |
+| `human` | 人去外部系统申请/填写 | 1Password `{project}/{env}/{service}`（`scope: project` 时为 `{project}/shared/{service}`）→ Vault | **每次部署自动**，值不同才写 | 飞书 `FEISHU_*`、Twelve Data / OpenFIGI key、`SEC_USER_AGENT` |
+| `runtime` | 机器生成 | 只在 Vault；缺失时**部署时生成一次** | 每次部署自动 | DB / Redis 口令、`SECRET_KEY`、心跳 token |
+| `runtime` + `mirror_to_1password` | 机器生成、人偶尔要用 | Vault → 1Password | **每次部署自动**（取代旧 §3.5 的手动步骤） | admin `bootstrap_password`、要贴进 Worker 的心跳 token |
+| `release` / `decision` | 部署流程 / 治理审批 | 注入部署 env，不进 store | 每次部署 | `GIT_COMMIT_SHA`、`governance/approvals/<env>.yaml` 里的批准 |
+| `code` | compose / manifest 默认值 | 不进 store | — | `PROBE_POSTGRES_USER`、`FEISHU_API_BASE` |
 
-**原则**：机器运行时**必须**读到的 → 自动同步进 Vault；人**偶尔**才用的（登录 / 灾难恢复）→ 手动同步或直接放 1Password。
+**部署时的规则**（`libs/secrets_supply.apply`）：
+
+1. `human`：从 1Password 复制到 Vault（值相同不写）；1Password **不可达**时按 Vault 现有值部署并留 note（#625），只有 Vault 也缺必填值才让部署失败。
+2. `runtime`：Vault 没有的生成一次；标了 `mirror_to_1password` 的回写 1Password。
+3. 任一值变化 → 重启该服务的 vault-agent 与 app 容器，让渲染文件和读它的进程一致。
+4. 仍缺的必填键**按名字**报错并阻止部署；`empty_ok` 的键不阻止。
+
+**每日核对**：`tools/secrets_reconcile.py`（ops-checks `27 8 * * *`，在 iac-runner 容器内跑，
+`tools/secrets_reconcile_check.py` 经 SSH 取回结论）把每个 service × env 的 Vault 路径和
+manifest / 1Password 比对（missing / empty / unclassified / stale，**只报名字**），同时读
+Cloudflare 免费额度（KV 写入 1,000/天等）；有确认的发现才发飞书。
 
 > **为什么 iac-runner 需要 `OP_SERVICE_ACCOUNT_TOKEN`**
-> iac-runner 自身读 Vault 走 AppRole（Dokploy 注入的 `VAULT_ROLE_ID` / `VAULT_SECRET_ID`，**不用** `op`）。它需要 `op` 的**唯一**原因是：它执行平台部署任务，其中"1Password → Vault 自动同步"这一步要用 `op` 读 1Password。因此 op 依赖**收敛到最小**——全仓只有 `platform/12.alerting` 一个服务真正触发此同步。**新增服务若没有"人配置的第三方凭证"，应直接 `env.set --type=app_vars` 写 Vault，不要引入 1Password 依赖。**
+> iac-runner 自身读写 Vault 走 AppRole（Dokploy 注入的 `VAULT_ROLE_ID` / `VAULT_SECRET_ID`）。
+> 它需要 `op` 的原因只有一个：部署时的 supply 要读 1Password 里的 `human` 值、回写 `mirror_to_1password`
+> 的值。**新增服务不要再想"写哪个库"**——在 manifest 里给字段声明正确的 source，其余由 supply 完成。
+> 手工 `env.set` 进 Vault 只剩 break-glass（§5）。
 
 ---
 
@@ -167,7 +186,8 @@ invoke local.bootstrap  # 校验 1Password 的 init/env_vars（不生成本地 .
 
 | 变量名 | 权限 | 用途 | 存储位置 |
 |--------|------|------|----------|
-| `VAULT_ROOT_TOKEN` | Read + Write | `invoke vault.setup-approle` 生成/管理策略与 AppRole | 1Password `op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token`（或 `/Token`；item: `bootstrap/vault/Root Token`） |
+| `VAULT_TOKEN` | 由策略限定 | 部署任务读写 store：iac-runner 把自己的 **AppRole token** 以 `VAULT_TOKEN` 传给 `invoke *.sync` 子进程；本地 break-glass 用 `bootstrap/05.vault` 铸造的短期 token | 进程 env（不落盘、不进 GitHub Actions） |
+| `VAULT_ROOT_TOKEN` | Root | **只在 `bootstrap/05.vault`**（`invoke vault.setup-approle` 生成策略与 AppRole）；其他代码接受它仅作过渡别名一个版本 | 1Password `op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token`（item: `bootstrap/vault/Root Token`） |
 | `VAULT_ROLE_ID` + `VAULT_SECRET_ID` | AppRole 登录凭证 (per-project, per-env, per-service) | 运行时 vault-agent 用 approle 登录读取密钥 | Dokploy 服务环境变量（`setup-approle` 注入） |
 | `VAULT_ADDR` | — | vault-agent 连接地址（非敏感，但**必须存在**，否则 agent 卡住） | Dokploy 项目级 env |
 
@@ -233,8 +253,11 @@ vault kv get -field=bootstrap_password secret/platform/<env>/authentik | \
 # 读取密钥（默认 Vault）
 invoke env.get KEY --project=<project> --env=<env> --service=<service>
 
-# 写入密钥（默认 Vault）
-invoke env.set KEY=VALUE --project=<project> --env=<env> --service=<service>
+# 写入 1Password（human 值；下一次部署由 supply 复制进 Vault）
+invoke env.set KEY=VALUE --project=<project> --env=<env> --service=<service> --type=root_vars
+
+# 写入 Vault = break-glass：默认拒绝并给出指引；--break-glass 才写，并被每日 reconcile 报为 drift
+invoke env.set KEY=VALUE --project=<project> --env=<env> --service=<service> --break-glass
 
 # 预览（masked，默认 Vault）
 invoke env.list-all --project=<project> --service=<service>
@@ -261,38 +284,44 @@ invoke env.get POSTGRES_PASSWORD --project=platform --env=production --service=p
 ```
 
 > 省略 `--service` 表示读取/写入环境级（`{project}/{env}`）密钥。
-> 省略 `--type` 默认走 Vault（`app_vars`）。
+> 省略 `--type` 默认走 Vault（`app_vars`）——读是常规操作，**写需要 `--break-glass`**。
 
 ---
 
 ## 6. Python API
 
-```python
-from libs.env import OpSecrets, VaultSecrets, get_secrets, generate_password
+`libs/env.py` 是 infra2-sdk 后端（`OnePasswordBackend` / `VaultKvBackend`）上的薄壳，保留
+`OpSecrets` / `VaultSecrets` / `get_secrets` 的旧接口；Vault token 取 `VAULT_TOKEN`
+（`VAULT_ROOT_TOKEN` 仅过渡别名）。
 
-# Bootstrap seed vars (init/env_vars) - 直接用 OpSecrets
-init = OpSecrets()
-seed = init.get_all()
+```python
+from libs.env import OpSecrets, get_secrets, generate_password
+
+# Bootstrap seed vars (init/env_vars)
+seed = OpSecrets().get_all()
 
 # Bootstrap 凭证 (1Password, 无 env 层)
-bootstrap_secrets = get_secrets(project='bootstrap', service='vault', type='bootstrap')
-root_token = bootstrap_secrets.get('ROOT_TOKEN')
+dokploy_key = get_secrets("bootstrap", "dokploy", credential_type="bootstrap").get("DOKPLOY_API_KEY")
 
-# Root vars (1Password, 含 env 层，用于 Web UI 密码)
-root_vars = get_secrets(project='platform', env='production', service='authentik', type='root_vars')
-admin_password = root_vars.get('ADMIN_PASSWORD')
+# human 值 (1Password, 含 env 层)
+webhook = get_secrets("platform", "alerting", "production", credential_type="root_vars").get("FEISHU_WEBHOOK_URL")
 
-# App vars (Vault, 默认行为)
-secrets = get_secrets(project='platform', env='production', service='postgres')
-# 等价于:
-secrets = get_secrets(project='platform', env='production', service='postgres', type='app_vars')
-password = secrets.get('POSTGRES_PASSWORD')
-
-# 幂等生成密钥：不存在就生成并写入
-if not password:
-    password = generate_password(32)
-    secrets.set('POSTGRES_PASSWORD', password)
+# 运行时值 (Vault, 默认) —— 只读；写入由 supply 完成
+password = get_secrets("platform", "postgres", "production").get("POSTGRES_PASSWORD")
 ```
+
+部署时的写入走 registry + supply，而不是 `secrets.set`：
+
+```python
+from libs import secrets_registry, secrets_supply
+
+service = secrets_registry.lookup("platform", "alerting")          # 哪些 manifest 描述它
+report = secrets_supply.apply(service, "staging")                  # 复制 / 生成 / 回写 / 核对
+report.ok, report.changed, report.missing                          # 只有名字，没有值
+```
+
+`Deployer.apply_secret_supply` 在 `pre_compose` 里对每个注册过的服务调用它；新服务只需把
+`env.manifest.json` 加进 `libs/secrets_registry.SERVICES`。
 
 ### 6.1 Type 参数说明
 
@@ -309,13 +338,15 @@ if not password:
 
 ### ✅ 推荐模式
 - 使用 `invoke env.*` 命令读写远端
-- 使用 `get_secrets()`/`OpSecrets` 在代码中获取配置
-- **默认不指定 `--type`**，走 Vault（最安全）
+- 使用 `get_secrets()`/`OpSecrets` 在代码中**读**配置；写入由 `libs/secrets_supply.py` 按 manifest 完成
+- **默认不指定 `--type`**，走 Vault（读）
 - 需要 1Password 时**显式声明** `--type=bootstrap` 或 `--type=root_vars`
 - `.env.example` 仅作为 KEY 清单（用于 `Deployer` 校验）
 - 每个组件 README 包含完整手动步骤
 
 ### ⛔ 禁止模式
+- **禁止** 手工写 Vault（`env.set` 默认拒绝；`--break-glass` 会被每日 reconcile 报出）
+- **禁止** 在 `deploy.py` 里自写 1Password ↔ Vault 同步——在 manifest 里声明 source
 - **禁止** 本地存储实际环境变量值
 - **禁止** 在代码中硬编码密钥
 - **禁止** 提交任何 `.env` 文件到 Git

@@ -27,6 +27,8 @@ class Service:
     exclude_groups: tuple[str, ...] = ()
     # Variables the stack supplies another way (a preview's ephemeral database DSN).
     exclude_envs: tuple[str, ...] = ()
+    # Fixed environments the service deploys to; the reconcile walks these.
+    environments: tuple[str, ...] = ENVIRONMENTS
     # Hand-written files stay authoritative until the service is migrated: while
     # ``generated`` is False the manifest is still rendered and gated (so it cannot
     # rot), but the files on disk are neither compared nor rewritten.
@@ -51,6 +53,7 @@ SERVICES: tuple[Service, ...] = (
         "iac_runner",
         ("bootstrap/06.iac_runner/env.manifest.json",),
         policy=False,
+        environments=("production",),
     ),
     Service(
         "platform/01.postgres",

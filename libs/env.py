@@ -21,7 +21,14 @@ from typing import Literal, Optional
 
 import httpx
 
-from infra2_sdk.secrets import OnePasswordBackend, SecretsError, VaultKvBackend
+try:
+    from infra2_sdk.secrets import OnePasswordBackend, SecretsError, VaultKvBackend
+except ModuleNotFoundError as _error:  # pragma: no cover - environment, not logic
+    raise ModuleNotFoundError(
+        "infra2-sdk is required by libs/env.py: it is pinned in pyproject.toml and in "
+        "bootstrap/06.iac_runner/requirements.txt; an iac-runner image built before that "
+        "pin must be rebuilt (deploy.yml does so on the next main push)."
+    ) from _error
 
 CredentialType = Literal["bootstrap", "root_vars", "app_vars"]
 
@@ -141,8 +148,10 @@ class VaultSecrets:
             if not self.token:
                 raise self.VaultAuthError(
                     "\n❌ VAULT_TOKEN not set\n"
-                    "The iac-runner passes its AppRole token; a break-glass token comes from "
-                    "`invoke vault.break-glass-token` (bootstrap/05.vault)."
+                    "The iac-runner passes its AppRole token to deploy tasks. For a "
+                    "break-glass session mint a short-lived token with the root token "
+                    "(`vault token create -ttl=1h`, bootstrap/05.vault README) and export "
+                    "it as VAULT_TOKEN."
                 )
             self._backend = VaultKvBackend(self.addr, token=self.token)
         return self._backend

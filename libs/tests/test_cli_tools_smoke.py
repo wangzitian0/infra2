@@ -96,6 +96,7 @@ def test_env_tool_get_and_set_secret_use_selected_backend(monkeypatch) -> None:
         env="staging",
         credential_type="app_vars",
     )
+    # Vault (app_vars) is written by the deploy-time supply; a hand write is break-glass.
     env_tool.set_secret.body(
         None,
         "TOKEN=new",
@@ -104,8 +105,27 @@ def test_env_tool_get_and_set_secret_use_selected_backend(monkeypatch) -> None:
         env="staging",
         credential_type="app_vars",
     )
-
+    assert secrets.set_calls == []
+    env_tool.set_secret.body(
+        None,
+        "TOKEN=new",
+        project="platform",
+        service="app",
+        env="staging",
+        credential_type="app_vars",
+        break_glass=True,
+    )
     assert secrets.set_calls == [("TOKEN", "new")]
+    # 1Password (root_vars) writes stay routine
+    env_tool.set_secret.body(
+        None,
+        "TOKEN=human",
+        project="platform",
+        service="app",
+        env="staging",
+        credential_type="root_vars",
+    )
+    assert secrets.set_calls == [("TOKEN", "new"), ("TOKEN", "human")]
 
 
 def test_env_tool_rejects_bad_set_format(monkeypatch) -> None:

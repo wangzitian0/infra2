@@ -388,3 +388,21 @@ signals:
     cadence: 1d
     tier: day
     type: report
+
+  # Daily secrets reconcile + capacity (secrets supply chain, PR-E): every registered
+  # service's Vault path compared with its manifest and 1Password (missing / empty /
+  # unclassified / stale, names only) plus the Cloudflare free-tier readings behind
+  # the heartbeat worker (#616 flapping ate the KV write budget). ops-checks.yml
+  # `secrets-reconcile` (cron "27 8 * * *") running tools/secrets_reconcile_check.py,
+  # which executes tools/secrets_reconcile.py inside the iac-runner over SSH.
+  # primary_owner=self: the job's own alert step pages Feishu on confirmed findings
+  # only (#524 discipline). tier=day/type=report: drift harm timescales are days.
+  - signal_id: global.infra2.secrets-reconcile
+    environment: global
+    component: iac
+    signal: secrets-reconcile
+    primary_owner: self
+    severity: critical
+    cadence: 1d
+    tier: day
+    type: report
