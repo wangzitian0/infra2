@@ -290,3 +290,26 @@ class TestGeneratePassword:
 
         pwd = generate_password(100)
         assert pwd.isalnum()
+
+
+class TestWithoutTheSdk:
+    """Minimal GitHub Actions jobs (deploy_v2, watchdogs) have no infra2-sdk: reads are
+    empty, writes are False, and Vault access is the historical 'cannot reach Vault' class
+    that libs.deploy.promote degrades on (#649 incident)."""
+
+    def test_op_secrets_degrade(self, monkeypatch, capsys):
+        import libs.env as env
+
+        monkeypatch.setattr(env, "OnePasswordBackend", None)
+        op = env.OpSecrets()
+        assert op.get_all() == {} and op.get("X") is None
+        assert op.set("K", "v") is False
+        assert "infra2-sdk" in capsys.readouterr().err
+
+    def test_vault_secrets_raise_connection_error(self, monkeypatch):
+        import libs.env as env
+
+        monkeypatch.setattr(env, "VaultKvBackend", None)
+        vault = env.VaultSecrets(path="platform/production/postgres", token="t")
+        with pytest.raises(env.VaultSecrets.VaultConnectionError):
+            vault.get_all()
