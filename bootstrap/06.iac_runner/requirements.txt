@@ -7,4 +7,4 @@ rich>=13.0
 PyYAML>=6.0
 # infra2-sdk: libs/env.py, libs/secrets_supply.py and tools/secrets_reconcile.py run
 # inside this image; keep this the wheel pyproject.toml pins (libs/tests checks).
-infra2-sdk @ https://github.com/wangzitian0/infra2-sdk/releases/download/v1.5.0/infra2_sdk-1.5.0-py3-none-any.whl
+infra2-sdk @ https://github.com/wangzitian0/infra2-sdk/releases/download/v1.5.1/infra2_sdk-1.5.1-py3-none-any.whl

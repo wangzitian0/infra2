@@ -598,6 +598,19 @@ class Deployer:
         ``env`` — see secrets_backend(); threaded through so this stays correct
         when called for an env other than the process's own ``ENV``.
         """
+        from libs import secrets_registry
+
+        if (
+            secrets_registry.lookup(cls.project_name(cls.env()), cls.service)
+            is not None
+        ):
+            # The manifest owns this service's store and apply_secret_supply generates
+            # what it declares (PR-E: one writer). The legacy ``secret_key`` generation
+            # below wrote a key nobody declared — that is where the orphan values the
+            # daily reconcile reports as ``unclassified`` came from: platform/alerting's
+            # ``password`` (the class default) and platform/prefect's ``postgres_password``.
+            return True
+
         secrets_backend = cls.secrets_backend(env=env)
 
         if cls.secret_key:

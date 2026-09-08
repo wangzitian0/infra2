@@ -46,8 +46,6 @@ def _require_sdk(cls):
 
 CredentialType = Literal["bootstrap", "root_vars", "app_vars"]
 
-# The bootstrap root token's 1Password reference: only bootstrap/05.vault reads it.
-VAULT_ROOT_TOKEN_OP_REF = "op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token"
 
 _SCOPE_ALLOWED = set(string.ascii_lowercase + string.digits + "_")
 
