@@ -12,7 +12,7 @@ dependencies = [
     # (e.g. "infra2-sdk[foo] @ ") would silently stop matching and crash that
     # job's dependency install. psycopg/boto3 are declared as their own plain
     # entries below instead of via SDK extras for exactly this reason.
-    "infra2-sdk @ https://github.com/wangzitian0/infra2-sdk/releases/download/v1.4.1/infra2_sdk-1.4.1-py3-none-any.whl",
+    "infra2-sdk @ https://github.com/wangzitian0/infra2-sdk/releases/download/v1.4.2/infra2_sdk-1.4.2-py3-none-any.whl",
     # libs/tests unit testing
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
