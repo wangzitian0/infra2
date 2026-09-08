@@ -306,3 +306,34 @@ def test_runner_image_pins_the_same_sdk_wheel_as_pyproject() -> None:
     assert pinned and pinned.group(1) == wanted, (
         "runner image and workspace must run the same SDK"
     )
+
+
+def test_unclassified_leftovers_are_reported_but_never_page() -> None:
+    report = {
+        "ok": False,
+        "stores": [
+            {
+                "service": "platform/prefect",
+                "env": "staging",
+                "missing": [],
+                "empty": [],
+                "unclassified": ["postgres_password"],
+                "stale": [],
+                "ok": False,
+            },
+            {
+                "service": "truealpha/data_engine",
+                "env": "staging",
+                "missing": [],
+                "empty": [],
+                "unclassified": ["RELEASE_MANIFEST_ID"],
+                "stale": ["SEC_USER_AGENT"],
+                "ok": False,
+            },
+        ],
+        "capacity": {"ok": True, "items": []},
+    }
+    summary = secrets_reconcile_check.page_worthy_summary(report)
+    assert "platform/prefect" not in summary
+    assert "truealpha/data_engine staging: stale=['SEC_USER_AGENT']" in summary
+    assert "RELEASE_MANIFEST_ID" not in summary
