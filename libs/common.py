@@ -134,6 +134,24 @@ def normalize_env_name(value: str | None) -> str:
     return value
 
 
+def reset_env_cache() -> None:
+    """Forget the memoized deployment config (after DEPLOY_ENV changes in-process)."""
+    global _env_cache
+    _env_cache = None
+
+
+def set_deploy_env(env_name: str) -> None:
+    """Point this process at ``env_name`` the way the iac-runner does for its children:
+    DEPLOY_ENV is the only input get_env() reads; ENV_SUFFIX / ENV_DOMAIN_SUFFIX follow
+    from it (staging → ``-staging``), and the memoized config is dropped."""
+    name = normalize_env_name(env_name)
+    suffix = "" if name == "production" else f"-{name.replace('_', '-')}"
+    os.environ["DEPLOY_ENV"] = name
+    os.environ["ENV_SUFFIX"] = suffix
+    os.environ["ENV_DOMAIN_SUFFIX"] = suffix
+    reset_env_cache()
+
+
 def get_env() -> dict[str, str | None]:
     """Get deployment environment config.
 

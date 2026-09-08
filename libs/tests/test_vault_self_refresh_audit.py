@@ -388,7 +388,12 @@ def test_mount_exempt_app_container_not_flagged_for_missing_secrets_mount() -> N
                         "VAULT_SECRET_ID=test-secret-id-not-a-real-secret\n"
                     ),
                     "token_lookup": None,
-                    "rendered_env": {"exists": True, "readable": True, "size": 20, "mtime": 0},
+                    "rendered_env": {
+                        "exists": True,
+                        "readable": True,
+                        "size": 20,
+                        "mtime": 0,
+                    },
                     "vault_agent_logs": "",
                     "vault_agent_container": {
                         "name": "platform-prefect-vault-agent",
@@ -892,9 +897,7 @@ def test_optional_inert_field_watchlist_covers_llm_encryption_keys() -> None:
     #542: the watchlist now lives as `optional_inert_fields` on the owning
     service's SecretsFacet, derived into the inventory."""
     by_id = {service.id: service for service in load_inventory()}
-    assert by_id["finance_report/app"].optional_inert_fields == (
-        "LLM_ENCRYPTION_KEYS",
-    )
+    assert by_id["finance_report/app"].optional_inert_fields == ("LLM_ENCRYPTION_KEYS",)
     # No watchlist entries for services never flagged as having this gap.
     assert by_id["platform/postgres"].optional_inert_fields == ()
 

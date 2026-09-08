@@ -45,15 +45,18 @@ Uses **vault-agent sidecar** pattern for secrets injection:
 
 ## Setup
 
-### 1. Store Secrets in Vault
+### 1. Declare the runner's values (nobody types into Vault)
+
+`bootstrap/06.iac_runner/env.manifest.json` says who produces each value: `GIT_REPO_URL`
+is `human` — put it in the 1Password item `bootstrap/iac_runner`; `WEBHOOK_SECRET` is
+`runtime` — the deploy-time supply generates it once and mirrors it to the same item for
+GitHub Actions. A hand write into Vault is refused unless you pass `--break-glass`:
 
 ```bash
-# Store webhook secret and git repo URL
-invoke env.set WEBHOOK_SECRET=$(openssl rand -hex 32) --project=bootstrap --service=iac_runner
-invoke env.set GIT_REPO_URL=https://github.com/wangzitian0/infra2.git --project=bootstrap --service=iac_runner
+invoke env.set GIT_REPO_URL=https://github.com/wangzitian0/infra2.git --project=bootstrap --service=iac_runner --type=bootstrap
 ```
 
-Vault path: `secret/data/bootstrap/production/iac_runner`
+Vault path (read only from here): `secret/data/bootstrap/production/iac_runner`
 
 ### 2. Provision the AppRole credentials
 

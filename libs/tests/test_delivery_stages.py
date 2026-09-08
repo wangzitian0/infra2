@@ -1,4 +1,5 @@
 """The authoritative delivery-stage vocabulary (single-owner contract)."""
+
 from __future__ import annotations
 
 import re
@@ -21,7 +22,9 @@ def test_stage_ids_well_formed_and_unique() -> None:
 def test_stage_orders_total_and_unique() -> None:
     orders = [s["order"] for s in STAGES.values()]
     assert len(orders) == len(set(orders)), "stage orders must be unique"
-    assert sorted(orders) == list(range(len(orders))), "stage orders must be a 0..n-1 total order"
+    assert sorted(orders) == list(range(len(orders))), (
+        "stage orders must be a 0..n-1 total order"
+    )
 
 
 def test_every_stage_has_a_definition() -> None:

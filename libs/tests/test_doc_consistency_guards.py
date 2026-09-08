@@ -56,7 +56,9 @@ def _defined_ac_ids() -> set[str]:
     # rglob so archived EPICs under docs/project/archive/ count as defining their ACs too —
     # else a test citing an archived AC would falsely look orphaned.
     for path in (ROOT / "docs/project").rglob("Infra-*.md"):
-        defined |= set(_AC_RE.findall(path.read_text(encoding="utf-8", errors="ignore")))
+        defined |= set(
+            _AC_RE.findall(path.read_text(encoding="utf-8", errors="ignore"))
+        )
     return defined
 
 
@@ -70,7 +72,9 @@ def test_ac_ids_cited_in_tests_are_defined_in_an_epic() -> None:
     for path in (ROOT / "libs/tests").rglob("test_*.py"):
         if path.name == THIS:
             continue
-        for ac in set(_AC_RE.findall(path.read_text(encoding="utf-8", errors="ignore"))):
+        for ac in set(
+            _AC_RE.findall(path.read_text(encoding="utf-8", errors="ignore"))
+        ):
             if ac not in defined:
                 orphans.setdefault(ac, []).append(path.name)
     assert not orphans, f"tests cite AC ids not defined in any EPIC: {orphans}"
@@ -89,4 +93,6 @@ def test_ac_proof_file_paths_in_epics_exist() -> None:
                     continue  # globs + bare/cross-repo paths are out of scope (see above)
                 if not (ROOT / ref).exists():
                     missing.append(f"{doc.name}: {ref}")
-    assert not missing, "EPIC AC proof paths do not resolve:\n" + "\n".join(sorted(missing))
+    assert not missing, "EPIC AC proof paths do not resolve:\n" + "\n".join(
+        sorted(missing)
+    )

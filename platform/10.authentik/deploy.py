@@ -1,10 +1,9 @@
 """Authentik deployment with vault-init"""
 
 import sys
-import os
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.common import with_env_suffix
-from libs.env import VAULT_ROOT_TOKEN_OP_REF
+from libs.env import vault_token
 from libs.console import success, warning, info, error, run_with_status
 from libs.env import generate_password, get_secrets
 from libs.service_facets import (
@@ -147,13 +146,13 @@ class AuthentikDeployer(Deployer):
         project = e.get("PROJECT", "platform")
 
         # Check Vault access
-        if not os.getenv("VAULT_ROOT_TOKEN"):
+        if not vault_token():
             fatal(
-                "VAULT_ROOT_TOKEN not set",
+                "VAULT_TOKEN not set",
                 "Required for: 1) Reading postgres/redis passwords, 2) Storing authentik secrets\n"
-                f"   Get token: op read '{VAULT_ROOT_TOKEN_OP_REF}' "
+                "   The iac-runner passes its AppRole token; locally export a break-glass token "
                 "(or /Token; item: bootstrap/vault/Root Token)\n"
-                "   Then: export VAULT_ROOT_TOKEN=<token>",
+                "   as VAULT_TOKEN (bootstrap/05.vault README).",
             )
 
         # Check dependencies exist in Vault

@@ -248,7 +248,9 @@ class DeployQueueGuard(ResidentWatcher):
         self.interval_seconds = int(
             env.get("DEPLOY_GUARD_INTERVAL_SECONDS", "") or DEFAULT_INTERVAL
         )
-        self.ceiling = int(env.get("DEPLOY_GUARD_CEILING_SECONDS", "") or DEFAULT_CEILING)
+        self.ceiling = int(
+            env.get("DEPLOY_GUARD_CEILING_SECONDS", "") or DEFAULT_CEILING
+        )
         self.grace = int(env.get("DEPLOY_GUARD_GRACE_SECONDS", "") or DEFAULT_GRACE)
         self.remediate = (env.get("DEPLOY_GUARD_REMEDIATE") or "0").strip().lower() in {
             "1",

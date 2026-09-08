@@ -153,8 +153,12 @@ def _compute_config_hash(
     artifact_payload: str = "",
 ) -> str:
     """Compute hash of compose content + env vars for change detection."""
-    # Normalize env vars (sort keys, ignore empty values)
-    env_str = "\n".join(f"{k}={v}" for k, v in sorted(env_vars.items()) if v)
+    # Normalize env vars (sort keys). Empty values COUNT: a variable flipping from a
+    # value to "" changes the container env just as surely (#663 review) and must
+    # redeploy; only an absent key is absent.
+    env_str = "\n".join(
+        f"{k}={'' if v is None else v}" for k, v in sorted(env_vars.items())
+    )
     combined = (
         f"{compose_content}\n---ENV---\n{env_str}\n---ARTIFACTS---\n{artifact_payload}"
     )

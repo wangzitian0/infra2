@@ -28,5 +28,7 @@ def test_project_readme_index_is_generated_from_docs() -> None:
     )
     assert result.returncode == 0, (
         "docs/project/README.md portfolio index is out of sync with the project docs.\n"
-        "Run: python tools/gen_project_index.py --write\n" + result.stdout + result.stderr
+        "Run: python tools/gen_project_index.py --write\n"
+        + result.stdout
+        + result.stderr
     )

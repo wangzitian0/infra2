@@ -24,7 +24,9 @@ POLICIES = sorted(ROOT.glob("**/vault-policy.hcl"))
 
 
 def _grants(text: str, path: str) -> set[str]:
-    match = re.search(rf'path "{re.escape(path)}"\s*{{\s*capabilities\s*=\s*\[([^\]]*)\]', text)
+    match = re.search(
+        rf'path "{re.escape(path)}"\s*{{\s*capabilities\s*=\s*\[([^\]]*)\]', text
+    )
     return set(re.findall(r'"([a-z]+)"', match.group(1))) if match else set()
 
 
@@ -33,7 +35,13 @@ def test_every_policy_is_found() -> None:
 
 
 @pytest.mark.parametrize("policy", POLICIES, ids=lambda p: str(p.relative_to(ROOT)))
-def test_agent_policy_lets_the_agent_renew_and_look_up_its_own_token(policy: Path) -> None:
+def test_agent_policy_lets_the_agent_renew_and_look_up_its_own_token(
+    policy: Path,
+) -> None:
     text = policy.read_text(encoding="utf-8")
-    assert "update" in _grants(text, "auth/token/renew-self"), f"{policy}: no renew-self grant"
-    assert "read" in _grants(text, "auth/token/lookup-self"), f"{policy}: no lookup-self grant"
+    assert "update" in _grants(text, "auth/token/renew-self"), (
+        f"{policy}: no renew-self grant"
+    )
+    assert "read" in _grants(text, "auth/token/lookup-self"), (
+        f"{policy}: no lookup-self grant"
+    )

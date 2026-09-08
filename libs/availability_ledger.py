@@ -92,7 +92,8 @@ def summarize_ledger(ledger: Mapping[str, Any]) -> dict[str, Any]:
     perfect = [signal for signal in per_signal if signal["fail"] == 0]
     return {
         "as_of": ledger.get("as_of", "latest"),
-        "window_days": _coerce_count(ledger.get("window_days")) or len(list(_iter_days(ledger))),
+        "window_days": _coerce_count(ledger.get("window_days"))
+        or len(list(_iter_days(ledger))),
         "total_runs": total_runs,
         "signal_count": len(per_signal),
         "perfect_count": len(perfect),

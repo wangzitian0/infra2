@@ -53,7 +53,9 @@ def test_summarize_weekly_runs_filters_old_runs() -> None:
     assert summary["failed_run_urls"] == ["https://example/failure"]
 
 
-def test_fetch_recent_runs_filters_ops_checks_to_watchdog_jobs_and_paginates(monkeypatch) -> None:
+def test_fetch_recent_runs_filters_ops_checks_to_watchdog_jobs_and_paginates(
+    monkeypatch,
+) -> None:
     """Infra-012.8: digest only selects watchdog job runs from ops-checks pages."""
     digest = _load_module()
     now = datetime(2026, 6, 9, 0, 0, tzinfo=UTC)
@@ -134,7 +136,9 @@ def test_fetch_recent_runs_filters_ops_checks_to_watchdog_jobs_and_paginates(mon
     assert requested_job_runs == ["1", "2", "3"]
 
 
-def test_fetch_stale_open_issues_filters_prs_and_recent_and_paginates(monkeypatch) -> None:
+def test_fetch_stale_open_issues_filters_prs_and_recent_and_paginates(
+    monkeypatch,
+) -> None:
     """#508: only open issues (not PRs) older than the threshold are returned."""
     digest = _load_module()
     now = datetime(2026, 7, 17, 0, 0, tzinfo=UTC)
@@ -212,7 +216,10 @@ def test_fetch_stale_open_issues_filters_prs_and_recent_and_paginates(monkeypatc
     )
 
     assert [issue["number"] for issue in stale] == [438, 402]
-    assert requested_pages == ["1", "2"]  # page 3 never fetched — stopped at the fresh issue
+    assert requested_pages == [
+        "1",
+        "2",
+    ]  # page 3 never fetched — stopped at the fresh issue
 
 
 def test_summarize_stale_issues_shape() -> None:
@@ -261,7 +268,10 @@ def test_build_digest_message_includes_stale_issues_section() -> None:
         repository="wangzitian0/infra2",
     )
     assert f"Stale open issues ({digest.STALE_ISSUE_DAYS}+ days untouched):" in message
-    assert "#438 Weekly ops review (https://github.com/wangzitian0/infra2/issues/438)" in message
+    assert (
+        "#438 Weekly ops review (https://github.com/wangzitian0/infra2/issues/438)"
+        in message
+    )
 
 
 def test_build_digest_message_omits_stale_issues_section_when_empty() -> None:
@@ -380,5 +390,8 @@ def test_weekly_digest_workflow_schedule_and_dispatch_contract() -> None:
 
     assert {"cron": "0 1 * * 1"} in workflow["on"]["schedule"]
     assert "workflow_dispatch" in workflow["on"]
-    assert "watchdog-weekly-digest" in workflow["on"]["workflow_dispatch"]["inputs"]["task"]["options"]
+    assert (
+        "watchdog-weekly-digest"
+        in workflow["on"]["workflow_dispatch"]["inputs"]["task"]["options"]
+    )
     assert "dry_run" in workflow["on"]["workflow_dispatch"]["inputs"]

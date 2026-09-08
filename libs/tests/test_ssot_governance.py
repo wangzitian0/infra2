@@ -63,7 +63,9 @@ def test_ssot_manifest_owners_and_proofs_exist() -> None:
         assert owner_path.exists(), f"{key}: missing owner {owner}"
 
         for proof in entry.get("proofs", []):
-            assert (ROOT / _strip_anchor(proof)).exists(), f"{key}: missing proof {proof}"
+            assert (ROOT / _strip_anchor(proof)).exists(), (
+                f"{key}: missing proof {proof}"
+            )
 
     assert len(owners) == len(set(owners))
 
@@ -119,7 +121,9 @@ def test_project_ac_proof_paths_target_existing_files() -> None:
                 if " " in target or "\n" in target:
                     continue
 
-                matches = list(ROOT.glob(_strip_anchor(target))) if "*" in target else []
+                matches = (
+                    list(ROOT.glob(_strip_anchor(target))) if "*" in target else []
+                )
                 if matches:
                     continue
                 if not (ROOT / _strip_anchor(target)).exists():

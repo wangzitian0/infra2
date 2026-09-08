@@ -52,7 +52,9 @@ def test_vault_agent_uses_approle_not_token_file(hcl: Path) -> None:
     # match the auth-method config, not a stray mention in a migration comment. Strip ALL
     # whitespace (spaces/tabs/newlines) so a reformatted `type =\n"token_file"` can't slip past.
     normalized = re.sub(r"\s+", "", text)
-    assert 'type="token_file"' not in normalized and 'method"token_file"' not in normalized, (
+    assert (
+        'type="token_file"' not in normalized and 'method"token_file"' not in normalized
+    ), (
         f"{hcl.relative_to(REPO_ROOT)} reintroduced token_file auth — retired in #369; "
         "use AppRole (role_id + secret_id)."
     )

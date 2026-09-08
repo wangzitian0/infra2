@@ -24,7 +24,9 @@ def test_allows_specific_version_and_other_floating_tags():
 
 
 def test_allows_templated_app_image():
-    text = "    image: ghcr.io/wangzitian0/finance_report-backend:${IMAGE_TAG:-latest}\n"
+    text = (
+        "    image: ghcr.io/wangzitian0/finance_report-backend:${IMAGE_TAG:-latest}\n"
+    )
     assert bare_latest_violations(text) == []
 
 

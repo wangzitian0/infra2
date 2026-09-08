@@ -275,9 +275,7 @@ def inventory_ids_not_in_production() -> frozenset[str]:
 
     metas = {**bootstrap_facet_attrs(), **service_attrs()}
     owners = services_without_prod_compose() | {
-        service_id
-        for service_id, meta in metas.items()
-        if meta.not_yet_in_production
+        service_id for service_id, meta in metas.items() if meta.not_yet_in_production
     }
     excluded: set[str] = set()
     for service_id, meta in metas.items():
@@ -676,8 +674,7 @@ def audit_from_observations(
         # SecretsFacet; the facet keeps ${ENV_SUFFIX} symbolic, so resolve it
         # for the audited env before comparing against live container names.
         mount_exempt = {
-            _resolve_env_suffix(name, env)
-            for name in service.mount_exempt_containers
+            _resolve_env_suffix(name, env) for name in service.mount_exempt_containers
         }
         for app_state in obs.get("app_containers", []):
             exempt = str(app_state.get("name") or "") in mount_exempt

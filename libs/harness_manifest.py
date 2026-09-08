@@ -227,7 +227,8 @@ def validate_manifest(
         is_optional = bool(repository.get("optional", False))
         uninitialized_level = (
             "warning"
-            if is_optional or (repository["checkout"] == "submodule" and not submodules_expected)
+            if is_optional
+            or (repository["checkout"] == "submodule" and not submodules_expected)
             else "error"
         )
 

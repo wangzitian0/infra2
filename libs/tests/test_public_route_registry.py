@@ -69,6 +69,6 @@ def test_staging_public_routes_are_not_prod_only_services() -> None:
             )
 
     assert checked, "no public routes resolved to registry services (mapping drift?)"
-    assert not problems, "public route env disagrees with registry prod_only:\n" + "\n".join(
-        problems
+    assert not problems, (
+        "public route env disagrees with registry prod_only:\n" + "\n".join(problems)
     )

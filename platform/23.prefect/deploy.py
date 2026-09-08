@@ -1,10 +1,9 @@
 """Prefect deployment with vault-init"""
 
 import sys
-import os
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.common import with_env_suffix
-from libs.env import VAULT_ROOT_TOKEN_OP_REF
+from libs.env import vault_token
 from libs.console import success, info, fatal
 from libs.env import get_secrets
 from libs.service_facets import ProbeFacet, SecretsFacet, SignalFacet
@@ -80,12 +79,12 @@ class PrefectDeployer(Deployer):
         env_name = e.get("ENV", "production")
         project = e.get("PROJECT", "platform")
 
-        if not os.getenv("VAULT_ROOT_TOKEN"):
+        if not vault_token():
             fatal(
-                "VAULT_ROOT_TOKEN not set",
+                "VAULT_TOKEN not set",
                 "Required for reading postgres password\n"
-                f"   Get token: op read '{VAULT_ROOT_TOKEN_OP_REF}'\n"
-                "   Then: export VAULT_ROOT_TOKEN=<token>",
+                "   The iac-runner passes its AppRole token; locally export a break-glass token "
+                "   as VAULT_TOKEN (bootstrap/05.vault README).",
             )
 
         pg_secrets = get_secrets(project, "postgres", env_name)

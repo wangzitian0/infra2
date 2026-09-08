@@ -13,7 +13,7 @@ OWN ephemeral database. Any number coexist; they outlive a CI run until torn dow
 | File | Purpose |
 |------|---------|
 | `compose.yaml` | App (vault-agent + backend + frontend) **plus** a bundled throwaway `db` (postgres) on a named volume. Backend overrides `DATABASE_URL` to that local DB after sourcing Vault secrets. |
-| `secrets.ctmpl` | Vault template. Reads app secrets (AI keys, S3, OTEL) from a **fixed source env** (`PREVIEW_SECRET_ENV`, default `staging`). No postgres/redis blocks — preview uses its own ephemeral DB. |
+| `secrets.ctmpl` | Vault template. Reads app secrets (AI keys, S3, OTEL) from a **fixed source env** (`staging`, baked into the generated template, default `staging`). No postgres/redis blocks — preview uses its own ephemeral DB. |
 | `vault-agent.hcl` | AppRole auto-auth vault-agent config (identical pattern to `10.app`). |
 | `vault-policy.hcl` | Policy granting read on the **source** env's `app` path only. |
 

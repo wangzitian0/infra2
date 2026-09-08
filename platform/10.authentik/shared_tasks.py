@@ -9,10 +9,9 @@ Storage in Vault:
 - secret/platform/<env>/<service>/sso_*: Per-service SSO config
 """
 
-import os
 from invoke import task
 from libs.common import check_service, get_env, service_domain
-from libs.env import VAULT_ROOT_TOKEN_OP_REF
+from libs.env import vault_token
 from libs.console import header, success, error, warning, info
 
 
@@ -27,7 +26,7 @@ def create_root_token(c):
     """Create Authentik Root Token for SSO administration
 
     This creates the admin API token stored as 'root_token' in Vault.
-    Requires VAULT_ROOT_TOKEN to write to Vault.
+    Requires VAULT_TOKEN (the deploy credential) to write to Vault.
 
     The Authentik Root Token is used to:
     - Create SSO applications
@@ -35,7 +34,7 @@ def create_root_token(c):
     - Manage providers and policies
 
     Example:
-        export VAULT_ROOT_TOKEN=<vault-admin-token>
+        export VAULT_TOKEN=<deploy or break-glass token>
         invoke authentik.shared.create-root-token
     """
     from libs.env import get_secrets
@@ -44,16 +43,16 @@ def create_root_token(c):
 
     e = get_env()
     env_name = e.get("ENV", "production")
-    vault_root_token = os.getenv("VAULT_ROOT_TOKEN")
+    vault_root_token = vault_token()
 
     if not vault_root_token:
-        error("VAULT_ROOT_TOKEN not set")
+        error("VAULT_TOKEN not set")
         info("Vault admin token needed to store Authentik root token")
         info(
-            f"Get from: op read '{VAULT_ROOT_TOKEN_OP_REF}' "
+            "The iac-runner passes its AppRole token; locally export a break-glass token "
             "(or /Token; item: bootstrap/vault/Root Token)"
         )
-        info("Then: export VAULT_ROOT_TOKEN=<token>")
+        info("as VAULT_TOKEN (bootstrap/05.vault README)")
         return False
 
     info("Running token creation on server...")

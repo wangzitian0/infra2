@@ -31,7 +31,9 @@ def _scan_text_files() -> list[tuple[Path, str]]:
                 continue
             if "__pycache__" in candidate.parts:
                 continue
-            files.append((candidate.relative_to(ROOT), candidate.read_text(encoding="utf-8")))
+            files.append(
+                (candidate.relative_to(ROOT), candidate.read_text(encoding="utf-8"))
+            )
     return files
 
 
@@ -54,7 +56,9 @@ def test_deploy_v2_front_door_is_the_documented_deploy_path() -> None:
         _command("fr-postgres"): "old prefixed postgres setup deploy command",
         _command("fr-redis"): "old prefixed redis setup deploy command",
         _command("finance_report.app"): "old namespaced app setup deploy command",
-        _command("finance_report.postgres"): "old namespaced postgres setup deploy command",
+        _command(
+            "finance_report.postgres"
+        ): "old namespaced postgres setup deploy command",
         _command("finance_report.redis"): "old namespaced redis setup deploy command",
         _command("postgres"): "old platform postgres setup deploy command",
         _command("redis"): "old platform redis setup deploy command",

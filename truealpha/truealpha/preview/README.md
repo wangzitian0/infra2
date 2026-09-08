@@ -13,7 +13,7 @@ generalized `libs/deploy/preview.py` off a per-service registry — see
 | File | Purpose |
 |------|---------|
 | `compose.yaml` | App (vault-agent + llm + web) **plus** a bundled throwaway `db` (postgres) on a named volume. web/llm override `DATABASE_URL` to that local DB after sourcing Vault secrets. |
-| `secrets.ctmpl` | Vault template. Reads app secrets (SEC_USER_AGENT, ANTHROPIC_API_KEY, S3) from a **fixed source env** (`PREVIEW_SECRET_ENV`, default `staging`). No postgres block — preview uses its own ephemeral DB. |
+| `secrets.ctmpl` | Vault template. Reads app secrets (SEC_USER_AGENT, ANTHROPIC_API_KEY, S3) from a **fixed source env** (`staging`, baked into the generated template, default `staging`). No postgres block — preview uses its own ephemeral DB. |
 | `vault-agent.hcl` | AppRole auto-auth vault-agent config (identical pattern to `10.app`). |
 | `vault-policy.hcl` | Policy granting read on the **source** env's `app` path only. |
 

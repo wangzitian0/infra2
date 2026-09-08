@@ -1351,3 +1351,16 @@ def test_record_timeout_and_interval_honor_env_overrides(monkeypatch):
     monkeypatch.setenv("DOKPLOY_DEPLOYMENT_RECORD_INTERVAL_SECONDS", "9")
     assert D._resolve_record_timeout() == 240
     assert D._resolve_record_interval() == 9
+
+
+def test_config_hash_counts_a_value_that_became_empty() -> None:
+    """A variable flipping from a value to "" changes the container env; the hash must move."""
+    from libs.deploy.deployer import _compute_config_hash
+
+    with_value = _compute_config_hash("x: 1", {"A": "1", "B": "2"})
+    emptied = _compute_config_hash("x: 1", {"A": "1", "B": ""})
+    absent = _compute_config_hash("x: 1", {"A": "1"})
+    assert len({with_value, emptied, absent}) == 3
+    assert (
+        _compute_config_hash("x: 1", {"B": "2", "A": "1"}) == with_value
+    )  # order-blind

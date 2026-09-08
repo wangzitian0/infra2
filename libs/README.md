@@ -25,12 +25,11 @@
 | `secrets_supply.py` | Deploy-time secret supply through the SDK resolver | `apply()`, `resolver_for()`, `vault_backend()` |
 | `common.py` | Shared environment helpers | `get_env()`, `validate_env()`, `check_service()` |
 | `console.py` | Rich CLI output | `header()`, `success()`, `error()`, `prompt_action()` |
-| `deployer.py` | Deployment base class + task helpers | `Deployer`, `make_tasks()` |
+| `deploy/deployer.py` | Deployment base class + task helpers (`apply_secret_supply` runs on every sync) | `Deployer`, `make_tasks()` |
 | `iac_runner_client.py` | Signed IaC Runner operation client | `trigger_platform_deploy()`, `poll_platform_deploy_status()` |
 | `dokploy.py` | Dokploy API client | `DokployClient`, `get_dokploy()` |
 | `deploy/preview.py` | Dynamic preview lifecycle with trigger-bound terminal rollout and per-surface exact-version readiness | `up()`, `down()` |
 | `backup_restore.py` | Off-host backup restore rehearsal helpers | `latest_artifact_for_service()`, `build_postgres_rehearsal_plan()`, `run_postgres_restore_rehearsal()` |
-| `dokploy_route_canary.py` | Dynamic route canary | `run_route_canary()`, `render_canary_compose()` |
 | `app_deploy_request.py` | Fail-closed App request validation, Production evidence verification, and deploy planning | `verify_production_evidence()`, `validate_request_authority()`, `make_plan()` |
 | `harness_manifest.py` | Read-only workspace inventory and autonomy-boundary validation | `load_manifest()`, `validate_manifest()`, `check_workspace()` |
 | `harness_status.py` | Checkout pin/remote/release observation without checkout mutation | `workspace_status()`, `repository_status()` |

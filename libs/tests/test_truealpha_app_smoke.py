@@ -77,25 +77,42 @@ def test_green_path_passes(deployer, monkeypatch):
 def test_base_url_construction(deployer, monkeypatch):
     monkeypatch.setattr(deployer, "env", classmethod(lambda cls: {}))
     # Deploy paths that ship APP_HOST win verbatim.
-    assert deployer._smoke_base_url(dict(_ENV)) == "https://truealpha-staging.truealpha.club"
+    assert (
+        deployer._smoke_base_url(dict(_ENV))
+        == "https://truealpha-staging.truealpha.club"
+    )
     # Fallback recompute uses the truealpha#474 formula: bare domain in
     # production, truealpha<suffix>.<domain> elsewhere.
     assert (
-        deployer._smoke_base_url({"ENV": "production", "INTERNAL_DOMAIN": "truealpha.club", "ENV_DOMAIN_SUFFIX": ""})
+        deployer._smoke_base_url(
+            {
+                "ENV": "production",
+                "INTERNAL_DOMAIN": "truealpha.club",
+                "ENV_DOMAIN_SUFFIX": "",
+            }
+        )
         == "https://truealpha.club"
     )
     assert (
         deployer._smoke_base_url(
-            {"ENV": "staging", "INTERNAL_DOMAIN": "truealpha.club", "ENV_DOMAIN_SUFFIX": "-staging"}
+            {
+                "ENV": "staging",
+                "INTERNAL_DOMAIN": "truealpha.club",
+                "ENV_DOMAIN_SUFFIX": "-staging",
+            }
         )
         == "https://truealpha-staging.truealpha.club"
     )
 
 
-def _expect_failure(deployer, monkeypatch, responders: dict[str, object], needle: str) -> None:
+def _expect_failure(
+    deployer, monkeypatch, responders: dict[str, object], needle: str
+) -> None:
     _install(monkeypatch, deployer, responders)
     err = deployer.verify_runtime_applied(None, dict(_ENV))
-    assert err is not None and needle in err, f"expected failure mentioning {needle!r}, got {err!r}"
+    assert err is not None and needle in err, (
+        f"expected failure mentioning {needle!r}, got {err!r}"
+    )
 
 
 def test_455_class_llm_unreachable_fails_the_deploy(deployer, monkeypatch):
@@ -108,12 +125,27 @@ def test_455_class_llm_unreachable_fails_the_deploy(deployer, monkeypatch):
 
 
 def test_463_class_login_shadowed_404_fails_the_deploy(deployer, monkeypatch):
-    _expect_failure(deployer, monkeypatch, {**_GREEN, "/api/auth/login": 404}, "POST /api/auth/login -> 404")
+    _expect_failure(
+        deployer,
+        monkeypatch,
+        {**_GREEN, "/api/auth/login": 404},
+        "POST /api/auth/login -> 404",
+    )
 
 
 def test_447_class_login_500_fails_the_deploy(deployer, monkeypatch):
-    _expect_failure(deployer, monkeypatch, {**_GREEN, "/api/auth/login": 500}, "POST /api/auth/login -> 500")
+    _expect_failure(
+        deployer,
+        monkeypatch,
+        {**_GREEN, "/api/auth/login": 500},
+        "POST /api/auth/login -> 500",
+    )
 
 
 def test_461_class_mcp_dead_fails_the_deploy(deployer, monkeypatch):
-    _expect_failure(deployer, monkeypatch, {**_GREEN, "/api/mcp/": 502}, "POST /api/mcp/ initialize -> 502")
+    _expect_failure(
+        deployer,
+        monkeypatch,
+        {**_GREEN, "/api/mcp/": 502},
+        "POST /api/mcp/ initialize -> 502",
+    )
