@@ -74,3 +74,50 @@ def test_a_non_zero_exit_is_not_retried(monkeypatch, tmp_path):
         is False
     )
     assert len(calls) == 1
+
+
+def test_the_workspace_fetch_and_clone_never_recurse_into_submodules(
+    monkeypatch, tmp_path
+) -> None:
+    """infra2 carries repos/truealpha and repos/finance_report as submodules; the runner
+    deploys infra2's OWN tree and reads neither. Git's on-demand recursion still walks them
+    when a fetched commit moves a pointer, and on 2026-09-08 that failed a healthy fetch
+    (`Could not access submodule 'repos/finance_report'`) and aborted the sync, blocking
+    truealpha's v0.0.49 staging release."""
+    sync_runner = _load(monkeypatch)
+    seen: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        seen.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(sync_runner.subprocess, "run", fake_run)
+    sync_runner.run_git_command(
+        ["fetch", "--no-recurse-submodules", "--tags", "--prune", "origin"],
+        tmp_path,
+        "fetch",
+    )
+    assert seen[0] == [
+        "git",
+        "fetch",
+        "--no-recurse-submodules",
+        "--tags",
+        "--prune",
+        "origin",
+    ]
+
+    # Assert on the parsed argument lists, not on formatting: ruff may wrap either call.
+    import ast
+
+    tree = ast.parse((ROOT / "bootstrap/06.iac_runner/sync_runner.py").read_text())
+    argv_lists = [
+        [element.value for element in node.elts if isinstance(element, ast.Constant)]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.List)
+        and node.elts
+        and isinstance(node.elts[0], ast.Constant)
+    ]
+    clone = next(argv for argv in argv_lists if "clone" in argv)
+    assert "--no-recurse-submodules" in clone, clone
+    fetch = next(argv for argv in argv_lists if "fetch" in argv and "origin" in argv)
+    assert "--no-recurse-submodules" in fetch, fetch
