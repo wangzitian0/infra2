@@ -349,3 +349,35 @@ signals:
   severity: warning
   cadence: 60s
   alert_threshold: 3 consecutive failures
+- signal_id: production.github-api-tcp
+  environment: production
+  component: github
+  signal: github-api-tcp
+  primary_owner: internal
+  severity: warning
+  cadence: 60s
+  alert_threshold: 3 consecutive failures
+- signal_id: staging.github-api-tcp
+  environment: staging
+  component: github
+  signal: github-api-tcp
+  primary_owner: internal
+  severity: warning
+  cadence: 60s
+  alert_threshold: 3 consecutive failures
+- signal_id: production.github-clone-http
+  environment: production
+  component: github
+  signal: github-clone-http
+  primary_owner: internal
+  severity: warning
+  cadence: 60s
+  alert_threshold: 3 consecutive failures
+- signal_id: staging.github-clone-http
+  environment: staging
+  component: github
+  signal: github-clone-http
+  primary_owner: internal
+  severity: warning
+  cadence: 60s
+  alert_threshold: 3 consecutive failures

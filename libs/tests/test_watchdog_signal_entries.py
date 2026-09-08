@@ -34,7 +34,7 @@ RUNNER_RENOTIFY_WINDOW_SEC = 1800
 
 def _frozen() -> dict[tuple[str, str], dict]:
     signals = yaml.safe_load(FROZEN.read_text(encoding="utf-8"))["signals"]
-    assert len(signals) == 41
+    assert len(signals) == 45  # 41 + the two GitHub probes x two environments (#658)
     return {(s["environment"], s["signal"]): s for s in signals}
 
 
