@@ -76,3 +76,54 @@ def test_app_manifests_fall_back_to_the_ci_cache(tmp_path) -> None:
         secrets_registry.manifest_file("platform/x.json", root=tmp_path)
         == tmp_path / "platform/x.json"
     )
+
+
+def test_load_manifest_fetches_an_absent_app_manifest_at_the_pinned_commit(
+    tmp_path,
+) -> None:
+    """The iac-runner and CI have no submodule checkout; the registry must still resolve
+    app manifests at deploy time (the supply reads them) by fetching at the gitlink sha."""
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.email", "t@example"], check=True
+    )
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "t"], check=True)
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(tmp_path),
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            f"160000,{sha},repos/truealpha",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "commit", "-q", "-m", "pin"], check=True
+    )
+    urls: list[str] = []
+
+    def fake(url: str) -> bytes:
+        urls.append(url)
+        return json.dumps(
+            {
+                "contract_version": 2,
+                "source": "t",
+                "fields": [{"field": "k", "env": "K", "source": "runtime"}],
+            }
+        ).encode()
+
+    rel = "repos/truealpha/apps/x/required-env.generated.json"
+    manifest = secrets_registry.load_manifest(rel, root=tmp_path, fetch=fake)
+    assert [f.env for f in manifest.fields] == ["K"]
+    assert urls == [
+        f"https://raw.githubusercontent.com/wangzitian0/truealpha/{sha}/apps/x/required-env.generated.json"
+    ]
+    # cached: the next read makes no request
+    secrets_registry.load_manifest(rel, root=tmp_path, fetch=fake)
+    assert len(urls) == 1
