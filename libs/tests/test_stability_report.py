@@ -93,3 +93,47 @@ def test_negative_empty_default_still_fails_loudly(monkeypatch, capsys) -> None:
 
     assert rc == 2
     assert "required" in capsys.readouterr().err
+
+
+def test_fetch_ledger_names_itself_and_surfaces_the_refusing_layer(monkeypatch) -> None:
+    """Cloudflare answers urllib's default User-Agent with `403 error code: 1010` before
+    the worker sees the request (2026-09-08); the digest died on it two Mondays running."""
+    import io
+    import urllib.error
+
+    module = _load_module()
+    seen: dict[str, object] = {}
+
+    class _Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    def fake_urlopen(request, timeout):
+        seen["user_agent"] = request.get_header("User-agent")
+        seen["authorization"] = request.get_header("Authorization")
+        return _Response(json.dumps({"days": []}).encode())
+
+    monkeypatch.setattr(module, "urlopen", fake_urlopen)
+    assert module.fetch_ledger("https://ledger.example/ledger", "tok") == {"days": []}
+    assert seen["user_agent"] == "infra2-stability-report/1.0"
+    assert seen["authorization"] == "Bearer tok"
+
+    def refusing_urlopen(request, timeout):
+        raise urllib.error.HTTPError(
+            request.full_url,
+            403,
+            "Forbidden",
+            hdrs=None,
+            fp=io.BytesIO(b"error code: 1010"),
+        )
+
+    monkeypatch.setattr(module, "urlopen", refusing_urlopen)
+    try:
+        module.fetch_ledger("https://ledger.example/ledger", "tok")
+    except RuntimeError as error:
+        assert "HTTP 403" in str(error) and "error code: 1010" in str(error)
+    else:  # pragma: no cover - the assertion above is the test
+        raise AssertionError("a refused ledger must fail loudly")
