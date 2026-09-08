@@ -440,7 +440,12 @@ class Deployer:
     service_name: str = None  # For multi-service composes
     telemetry_service_name: str = None  # OpenTelemetry service.name override
     telemetry_component: str = None  # OpenTelemetry infra.component override
-    deployment_record_timeout_seconds: int = 60
+    # Measured on the VPS (2026-09-07/08): Dokploy takes 45–200 s after `compose.deploy`
+    # just to CREATE the deployment record (it clones infra2 from GitHub first), and a few
+    # more minutes to reach `done`. 60 s produced a red release lane while the deploy went
+    # on — and the redeploy fallback queued a second deployment (#629). 420 s + the 90 s
+    # runtime verification stays inside the runner's DEPLOY_TIMEOUT.
+    deployment_record_timeout_seconds: int = 420
     deployment_record_interval_seconds: int = 3
     # Keys supplied by a runtime secret backend must affect deployment
     # idempotence, but cannot be reconstructed from a release in read-only CI.
@@ -514,7 +519,9 @@ class Deployer:
         return {k: v for k, v in base.items() if v is not None}
 
     @classmethod
-    def compose_env_overrides(cls, *, env: str, domain: str, env_suffix: str) -> dict[str, str]:
+    def compose_env_overrides(
+        cls, *, env: str, domain: str, env_suffix: str
+    ) -> dict[str, str]:
         """Extra compose env vars a fixed-app deploy (libs.deploy.promote.deploy) should
         merge in beyond its own shared, hardcoded assembly (IMAGE_TAG, INTERNAL_DOMAIN,
         identity.deploy_env(), openpanel_env(), otel_env(), ...). Default: none.
@@ -967,6 +974,8 @@ class Deployer:
             return False
         return started < floor_epoch - _CLOCK_SKEW_TOLERANCE_SECONDS
 
+    _TERMINAL_SUCCESS_STATUSES = frozenset({"done", "success", "successful"})
+
     @classmethod
     def _wait_for_new_deployment_record(
         cls,
@@ -978,7 +987,17 @@ class Deployer:
         *,
         min_started_at: float | None = None,
     ) -> bool:
+        """Wait for the record OUR trigger produced to reach a terminal status.
+
+        True when it finished successfully; False when no record of ours appeared within
+        the deadline (the caller may re-trigger); raises when it entered ``error`` or is
+        still in progress at the deadline. ``running`` is not a result (#629): on
+        2026-09-07 the release lane went red 45–200 s before Dokploy had even created the
+        record, while the deploy went on and the redeploy fallback queued a second one. A
+        record that exists is therefore never re-triggered.
+        """
         deadline = time.monotonic() + max(0, timeout_seconds)
+        in_progress: tuple[str, str] | None = None
         while True:
             deployments = cls._get_compose_deployments(client, compose_id)
             current_ids = cls._deployment_ids(deployments)
@@ -1001,9 +1020,17 @@ class Deployer:
                     status = str(deployment.get("status") or "").lower()
                     if status == "error":
                         raise RuntimeError("Dokploy deployment record entered error")
-                    if status in {"running", "done", "success", "successful"}:
+                    if status in cls._TERMINAL_SUCCESS_STATUSES:
                         return True
+                    in_progress = (deployment_id, status or "unknown")
             if time.monotonic() >= deadline:
+                if in_progress is not None:
+                    raise RuntimeError(
+                        f"Dokploy deployment {in_progress[0]} is still "
+                        f"'{in_progress[1]}' after {timeout_seconds}s; not re-triggering. "
+                        "Raise DOKPLOY_DEPLOYMENT_RECORD_TIMEOUT_SECONDS if this Dokploy "
+                        "is slow (#629)."
+                    )
                 return False
             time.sleep(max(1, interval_seconds))
 
