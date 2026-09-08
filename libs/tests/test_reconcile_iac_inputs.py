@@ -492,7 +492,11 @@ def test_failure_alert_falls_back_to_the_stderr_tail_and_is_silent_on_success() 
             "service": "platform/minio",
             "type": "prod",
             "returncode": 1,
-            "stderr": "boom\n504 Gateway Timeout\n",
+            "stderr": (
+                "deploy_v2 failed: Client error '404 Not Found' for url "
+                "'https://iac.example/deploy/status'\n"
+                "For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404\n"
+            ),
         }
     ]
     text = reconcile.failure_alert_text(
@@ -501,7 +505,9 @@ def test_failure_alert_falls_back_to_the_stderr_tail_and_is_silent_on_success() 
     assert (
         text is not None
         and "(PRODUCTION promotion)" in text
-        and "- prod platform/minio: 504 Gateway Timeout" in text
+        and "- prod platform/minio: deploy_v2 failed: Client error '404 Not Found'"
+        in text
+        and "developer.mozilla.org" not in text
     )
     assert reconcile.failure_summary_from_result(failed[0]) == []
     assert (

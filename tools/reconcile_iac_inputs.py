@@ -506,14 +506,19 @@ def failure_alert_text(
                     f" — {str(entry.get('next_action') or entry.get('summary') or '').strip()[:200]}"
                 )
         else:
-            tail = [
-                line
+            stderr_lines = [
+                line.strip()
                 for line in str(item.get("stderr") or "").strip().splitlines()
                 if line.strip()
             ]
-            lines.append(
-                f"- {env} {services}: {(tail[-1] if tail else 'no diagnostic')[:200]}"
-            )
+            # deploy_v2's own verdict line names the failure; the lines after it are
+            # library boilerplate ("For more information check: https://developer...")
+            # — the first real page (v1.1.73, 2026-09-08 11:01Z) quoted the boilerplate.
+            verdict = [
+                line for line in stderr_lines if line.startswith("deploy_v2 failed:")
+            ]
+            detail = (verdict or stderr_lines or ["no diagnostic"])[-1]
+            lines.append(f"- {env} {services}: {detail[:200]}")
     lines.append(f"Run: {run_url}")
     return "\n".join(lines)
 
