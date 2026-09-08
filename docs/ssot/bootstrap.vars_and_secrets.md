@@ -76,6 +76,17 @@ contract v2）里声明一个 **source class**；部署时 `Deployer.apply_secre
 manifest / 1Password 比对（missing / empty / unclassified / stale，**只报名字**），同时读
 Cloudflare 免费额度（KV 写入 1,000/天等）；有确认的发现才发飞书。
 
+**存储卫生**：一个服务的 Vault 路径只允许存两类值——(1) 它的 Vault Agent 模板会渲染进容器的
+值（manifest 里 `human` / `runtime` 的 store-backed 字段），(2) 运维任务直接读、且**故意不渲染**
+进容器的值（`libs/secrets_registry.py` 的 `Service.store_only_keys`，每条都写明读它的代码）。
+其余都是孤儿：退役代码路径写下的、或已经搬进 compose 的配置。孤儿危险在于它看起来仍然权威——
+finance_report 生产库里留着应用早已不读的 `PRIMARY_MODEL`，模板停止渲染它的那天，Dokploy 里的
+陈旧副本顶替了上去（#649）。
+
+`python3 tools/secrets_prune.py` 列出每个 service × env 的孤儿（只报名字），`--apply` 用不含孤儿
+的文档整份重写该路径（KV v2 没有按键删除；用的是 create/update，不需要 `delete` 权限，旧版本留在
+Vault 历史里，`vault kv rollback` 可回退）。**不要**手工 `env.set` 清理。
+
 > **为什么 iac-runner 需要 `OP_SERVICE_ACCOUNT_TOKEN`**
 > iac-runner 自身读写 Vault 走 AppRole（Dokploy 注入的 `VAULT_ROLE_ID` / `VAULT_SECRET_ID`）。
 > 它需要 `op` 的原因只有一个：部署时的 supply 要读 1Password 里的 `human` 值、回写 `mirror_to_1password`

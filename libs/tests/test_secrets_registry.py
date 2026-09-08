@@ -127,3 +127,24 @@ def test_load_manifest_fetches_an_absent_app_manifest_at_the_pinned_commit(
     # cached: the next read makes no request
     secrets_registry.load_manifest(rel, root=tmp_path, fetch=fake)
     assert len(urls) == 1
+
+
+def test_every_provided_by_names_a_store_backed_field_of_that_provider() -> None:
+    """The prune keeps a provider's key because the provider declares it; if a consumer
+    named a key its provider does not own, the prune would delete a live credential."""
+    from infra2_sdk.secrets import vault_path  # noqa: F401  (documents the path shape)
+
+    by_id = {service.id: service for service in SERVICES}
+    for service in SERVICES:
+        for field in secrets_registry.merged_manifest(service).fields:
+            if not field.provided_by:
+                continue
+            provider_id, _, key = field.provided_by.partition(":")
+            assert provider_id in by_id, (
+                f"{service.id}: {field.env} names unknown {provider_id}"
+            )
+            provider_keys = secrets_registry.store_keys(by_id[provider_id])
+            assert key in provider_keys, (
+                f"{service.id}: {field.env} reads {provider_id}:{key}, which that service "
+                "does not declare as store-backed"
+            )

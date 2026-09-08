@@ -32,6 +32,11 @@ class Service:
     exclude_envs: tuple[str, ...] = ()
     # Fixed environments the service deploys to; the reconcile walks these.
     environments: tuple[str, ...] = ENVIRONMENTS
+    # Store keys an operator task reads directly and the Vault Agent template never
+    # renders (they must not reach the container). Declared here so the reconcile can
+    # tell "documented, ops-only" from "nobody knows what this is", and so the prune
+    # keeps them. Each entry names its reader.
+    store_only_keys: tuple[str, ...] = ()
     # Hand-written files stay authoritative until the service is migrated: while
     # ``generated`` is False the manifest is still rendered and gated (so it cannot
     # rot), but the files on disk are neither compared nor rewritten.
@@ -81,6 +86,9 @@ SERVICES: tuple[Service, ...] = (
         "platform",
         "authentik",
         ("platform/10.authentik/env.manifest.json",),
+        # platform/10.authentik/shared_tasks.py reads root_token for the admin API; it is
+        # an operator credential and deliberately never rendered into the container.
+        store_only_keys=("root_token",),
     ),
     Service(
         "platform/12.alerting",
@@ -163,6 +171,14 @@ SERVICES: tuple[Service, ...] = (
         "truealpha",
         "data_engine",
         ("repos/truealpha/apps/data-engine/required-env.generated.json",),
+        # The deploy identity the Deployer reads at compose time (pin_release writes the
+        # digest; the release id and the capture approval are governance values). They
+        # move to the release/decision plane with truealpha#781 and this line goes away.
+        store_only_keys=(
+            "CAPTURE_APPROVED_BY",
+            "DATA_ENGINE_IMAGE_DIGEST",
+            "RELEASE_MANIFEST_ID",
+        ),
     ),
 )
 
@@ -228,3 +244,17 @@ def lookup(project: str, service: str, *, preview: bool = False) -> Service | No
         ):
             return candidate
     return None
+
+
+def store_keys(service: Service, *, root: Path = ROOT) -> frozenset[str]:
+    """Every key this service's Vault path is allowed to hold.
+
+    The manifest's own store-backed fields (what the Vault Agent template renders) plus
+    the declared operator-only keys. A value a *consumer* composes from this service —
+    ``provided_by: "platform/postgres:root_password"`` — is a store-backed field of the
+    provider's own manifest, so it is already in this set on the provider's path.
+    """
+    manifest = merged_manifest(service, root=root)
+    return frozenset(
+        {field.key for field in manifest.store_backed} | set(service.store_only_keys)
+    )

@@ -65,11 +65,19 @@ def reconcile_stores(
                 resolver.human = None
                 report = resolver.reconcile()
                 note = f"1Password unavailable: {error}"
+            data = report.to_dict()
+            # Operator-only keys are declared in the registry, not in the manifest (the
+            # template must not render them): documented, not unknown.
+            data["unclassified"] = [
+                key
+                for key in data.get("unclassified", [])
+                if key not in service.store_only_keys
+            ]
             row: dict[str, object] = {
                 "service": service.id,
                 "env": env,
-                **report.to_dict(),
-                "ok": report.ok,
+                **data,
+                "ok": not any(data.get(key) for key in FINDING_KEYS),
             }
             if note:
                 row["note"] = note

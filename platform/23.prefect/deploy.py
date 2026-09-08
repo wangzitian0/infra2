@@ -17,7 +17,10 @@ class PrefectDeployer(Deployer):
     data_path = None
     uid = "999"
     gid = "999"
-    secret_key = "postgres_password"
+    # No secret of its own: the template composes both credentials from
+    # platform/postgres and platform/redis (see env.manifest.json). The old
+    # "postgres_password" generation wrote an orphan key nothing ever read.
+    secret_key = ""
 
     subdomain = None
     service_port = 4200
