@@ -35,6 +35,9 @@ from infra2_sdk.secrets import SecretsError, vault_path  # noqa: E402
 from libs.secrets_registry import SERVICES, Service, store_keys  # noqa: E402
 from libs.secrets_supply import vault_backend  # noqa: E402
 
+# infra2_sdk.runtime.config_schema.reconcile ignores these; so must the prune.
+RESERVED_PREFIXES = ("_",)
+
 
 @dataclass
 class PrunePlan:
@@ -105,8 +108,15 @@ def plan_for(
         held = dict(store.read(path))
     except SecretsError as error:
         return PrunePlan(service.id, env, path, error=str(error))
-    keep = {key: value for key, value in held.items() if key in allowed}
-    orphans = tuple(sorted(key for key in held if key not in allowed))
+
+    def kept(key: str) -> bool:
+        # RESERVED_PREFIXES mirrors the SDK reconcile's ignore list: a key a probe or an
+        # operator parks outside the manifest on purpose is not an orphan, and a prune
+        # that deleted it would quietly disagree with the report that found it.
+        return key in allowed or key.startswith(RESERVED_PREFIXES)
+
+    keep = {key: value for key, value in held.items() if kept(key)}
+    orphans = tuple(sorted(key for key in held if not kept(key)))
     return PrunePlan(service.id, env, path, tuple(sorted(keep)), orphans)
 
 

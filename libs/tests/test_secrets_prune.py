@@ -155,3 +155,18 @@ def test_every_registered_service_declares_where_its_operator_keys_are_read():
             "RELEASE_MANIFEST_ID",
         ),
     }
+
+
+def test_reserved_prefixes_are_left_alone(tmp_path):
+    """The SDK reconcile ignores `_`-prefixed keys, so a probe or an operator can park one
+    outside the manifest; the prune must not disagree with the report that found it."""
+    service = _service(tmp_path)
+    path = vault_path("platform", "staging", "svc")
+    store = MemoryStore(
+        {path: {"PASSWORD": "p", "MODE": "m", "_drift_probe": "x", "LEFTOVER": "y"}}
+    )
+    report = secrets_prune.prune(
+        services=(service,), store=store, apply=True, root=tmp_path
+    )
+    assert report.plans[0].orphans == ("LEFTOVER",)
+    assert set(store.documents[path]) == {"PASSWORD", "MODE", "_drift_probe"}
