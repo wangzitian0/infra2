@@ -1047,7 +1047,11 @@ def test_alerting_heartbeat_coordinates_only_tolerate_an_absent_vault_path(
     module = _load_deploy_module(
         "platform/12.alerting/deploy.py", "alerting_heartbeat_errors_test"
     )
-    staging = {"ENV": "staging", "ENV_SUFFIX": "-staging", "INTERNAL_DOMAIN": "x.io"}
+    staging = {
+        "ENV": "production",
+        "INTERNAL_DOMAIN": "x.io",
+        "DATA_PATH": "/data/platform/alerting",
+    }
     monkeypatch.setattr(
         module.AlertingDeployer, "env", classmethod(lambda cls: dict(staging))
     )
@@ -1061,16 +1065,12 @@ def test_alerting_heartbeat_coordinates_only_tolerate_an_absent_vault_path(
             raise VaultSecrets.VaultAuthError("403")
 
     monkeypatch.setattr(module, "get_secrets", lambda **kwargs: Absent())
-    env = module.AlertingDeployer.compose_env_base(
-        {"ENV": "staging", "INTERNAL_DOMAIN": "x.io"}
-    )
+    env = module.AlertingDeployer.compose_env_base(dict(staging))
     assert "INFRA_PROBE_HEARTBEAT_URL" not in env
 
     monkeypatch.setattr(module, "get_secrets", lambda **kwargs: Denied())
     with pytest.raises(VaultSecrets.VaultAuthError):
-        module.AlertingDeployer.compose_env_base(
-            {"ENV": "staging", "INTERNAL_DOMAIN": "x.io"}
-        )
+        module.AlertingDeployer.compose_env_base(dict(staging))
 
 
 def test_remote_config_identity_reads_cross_plane_service_coordinates(
