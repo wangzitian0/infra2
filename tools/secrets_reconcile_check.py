@@ -32,7 +32,7 @@ REMOTE_SCRIPT = (
     "cd /workspace/infra2 && python3 tools/secrets_reconcile.py --json"
 )
 DEFAULT_REPORT_PATH = "secrets-reconcile-report.json"
-PAGING_FINDINGS = ("missing", "empty", "stale")
+PAGING_FINDINGS = ("missing", "empty", "stale", "over_privileged")
 
 
 def remote_command() -> str:
@@ -89,7 +89,9 @@ def run(
 def page_worthy_summary(report: Mapping[str, Any]) -> str:
     """Findings worth a page, or '' (transport errors, warn-level quotas and
     ``unclassified`` leftovers are not: a key nobody declared cannot break a deploy; it
-    stays in the run log for cleanup, see #649)."""
+    stays in the run log for cleanup, see #649). ``over_privileged`` always pages: an
+    application holding the object store's root credential is #677 happening again.
+    """
     lines: list[str] = []
     for row in report.get("stores") or []:
         if row.get("ok"):

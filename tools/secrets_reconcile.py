@@ -18,9 +18,10 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import sys
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # runnable as a script
@@ -31,7 +32,7 @@ from infra2_sdk.capacity import (  # noqa: E402
     cloudflare_readings,
     evaluate,
 )
-from infra2_sdk.secrets import OnePasswordBackend, SecretsError  # noqa: E402
+from infra2_sdk.secrets import OnePasswordBackend, SecretsError, vault_path  # noqa: E402
 
 from libs.secrets_registry import SERVICES, Service  # noqa: E402
 from libs.secrets_supply import ONEPASSWORD_VAULT, resolver_for, vault_backend  # noqa: E402
@@ -39,7 +40,51 @@ from libs.secrets_supply import ONEPASSWORD_VAULT, resolver_for, vault_backend  
 # cloudflare/infra-watchdog/wrangler.toml; the token is the worker's own API token.
 CLOUDFLARE_ACCOUNT = "6e27b6853de0131bea033d235e0a1139"
 CLOUDFLARE_TOKEN_ITEM = ("bootstrap/cloudflare-worker", "CLOUDFLARE_WORKER_API_TOKEN")
-FINDING_KEYS = ("missing", "empty", "unclassified", "stale")
+FINDING_KEYS = ("missing", "empty", "unclassified", "stale", "over_privileged")
+# The object store's own service: every environment's root credential lives here, and
+# nowhere else. #677: three application paths held it, so finance_report could read and
+# delete every bucket on the production instance.
+MINIO_SERVICE = ("platform", "minio")
+
+
+def _digest(value: str) -> str:
+    return hashlib.sha256((value or "").encode("utf-8")).hexdigest()
+
+
+def over_privileged(
+    documents: Mapping[str, Mapping[str, str]],
+    root_credentials: Mapping[str, Mapping[str, str]],
+) -> dict[str, list[str]]:
+    """Which stores hold a credential that belongs to the object store's root account.
+
+    ``documents`` is ``{"project/service|env": {key: value}}`` and ``root_credentials`` is
+    ``{env: {"root_user": ..., "root_password": ...}}``. Compares digests, returns key
+    names: an application may hold its own scoped credential and nothing stronger (#677).
+    """
+    passwords = {
+        _digest(creds.get("root_password", "")): env
+        for env, creds in root_credentials.items()
+        if creds.get("root_password")
+    }
+    users = {creds.get("root_user", "") for creds in root_credentials.values()} - {""}
+    findings: dict[str, list[str]] = {}
+    for coordinate, document in documents.items():
+        service = coordinate.partition("|")[0]
+        if service == "/".join(MINIO_SERVICE):
+            continue  # the object store legitimately holds its own root credential
+        hits = sorted(
+            key
+            for key, value in document.items()
+            if isinstance(value, str)
+            and value
+            and (
+                _digest(value) in passwords
+                or (key.endswith("ACCESS_KEY") and value in users)
+            )
+        )
+        if hits:
+            findings[coordinate] = hits
+    return findings
 
 
 def reconcile_stores(
@@ -53,12 +98,21 @@ def reconcile_stores(
     store = store or vault_backend()
     human = human if human is not None else OnePasswordBackend(ONEPASSWORD_VAULT)
     rows: list[dict[str, object]] = []
+    documents: dict[str, Mapping[str, str]] = {}
+    root_credentials: dict[str, Mapping[str, str]] = {}
     for service in services:
         if service.preview:
             continue
         for env in environments or service.environments:
             resolver = resolver_for(service, env, store=store, human=human)
             note = ""
+            held: Mapping[str, str] = {}
+            try:
+                held = store.read(vault_path(service.project, env, service.service))
+            except SecretsError:
+                held = {}
+            if (service.project, service.service) == MINIO_SERVICE:
+                root_credentials[env] = held
             try:
                 report = resolver.reconcile()
             except SecretsError as error:
@@ -68,6 +122,7 @@ def reconcile_stores(
             data = report.to_dict()
             # Operator-only keys are declared in the registry, not in the manifest (the
             # template must not render them): documented, not unknown.
+            documents[f"{service.id}|{env}"] = held
             data["unclassified"] = [
                 key
                 for key in data.get("unclassified", [])
@@ -82,6 +137,12 @@ def reconcile_stores(
             if note:
                 row["note"] = note
             rows.append(row)
+    for coordinate, keys in over_privileged(documents, root_credentials).items():
+        service_id, _, env = coordinate.partition("|")
+        for row in rows:
+            if (row["service"], row["env"]) == (service_id, env):
+                row["over_privileged"] = keys
+                row["ok"] = False
     return rows
 
 
