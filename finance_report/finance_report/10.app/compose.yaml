@@ -147,7 +147,7 @@ services:
       # - This S3_PUBLIC_ENDPOINT is intentionally configured only for the backend.
       # - All S3 access from the application (including the browser/frontend) is
       #   performed via the backend API, so the frontend does not need this variable.
-      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-https://s3.${INTERNAL_DOMAIN}}
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
       INFRA_SERVICE_ID: ${INFRA_SERVICE_ID:-finance_report/app}
       INFRA_COMPONENT: backend
