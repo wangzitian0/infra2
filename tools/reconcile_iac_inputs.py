@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+from collections.abc import Mapping
 import json
 import os
 import re
