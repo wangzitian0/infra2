@@ -306,3 +306,34 @@ def test_version_ref_is_a_tag_or_a_sha_before_any_post():
             version_ref="main; rm -rf /",
         )
     assert calls == []
+
+
+def test_trigger_and_poll_carry_a_secrets_supply_action():
+    """deploy_v2 asks the runner for the secret supply alone before an app stack's
+    Dokploy promote (#649); the action rides in the signed body and the status coordinate."""
+    calls, transport = _capture()
+    trigger_platform_deploy(
+        env="staging",
+        ref=SHA,
+        services=["finance_report/app"],
+        base_url="https://iac.example/",
+        secret=SECRET,
+        now=lambda: 1700000000.0,
+        nonce="n" * 16,
+        transport=transport,
+        action="secrets-supply",
+    )
+    assert json.loads(calls[0]["content"])["action"] == "secrets-supply"
+    # the default action is not serialized: legacy runners keep their exact payload
+    calls2, transport2 = _capture()
+    trigger_platform_deploy(
+        env="staging",
+        ref=SHA,
+        services=["finance_report/app"],
+        base_url="https://iac.example/",
+        secret=SECRET,
+        now=lambda: 1700000000.0,
+        nonce="n" * 16,
+        transport=transport2,
+    )
+    assert "action" not in json.loads(calls2[0]["content"])

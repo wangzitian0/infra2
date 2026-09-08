@@ -568,6 +568,65 @@ def _poll_attempts_for_timeout(timeout: int, interval: int = 10) -> int:
     return max(1, (max(1, int(timeout)) + interval - 1) // interval)
 
 
+def _supply_app_secrets(
+    service: str,
+    env: str,
+    iac_sha: str,
+    *,
+    runner_url: str | None,
+    secret: str | None,
+    triggered_by: str,
+    timeout: int,
+) -> dict:
+    """Run the deploy-time secret supply for an app stack through the iac-runner.
+
+    App stacks promote through Dokploy directly (``_deploy_fixed``), a path that never
+    enters their Deployer, so ``Deployer.apply_secret_supply`` (copy human values from
+    1Password, generate runtime ones, report what is missing) would never run for them.
+    The runner has the AppRole and the 1Password service account this needs; Actions has
+    neither. So the same signed ``/deploy`` webhook is fired with ``action=secrets-supply``
+    and awaited before the promote — fail closed on a store that still lacks a required
+    value (#649). Without runner credentials (a caller outside deploy.yml) the step is
+    skipped and says so; the daily reconcile still reports the drift.
+    """
+    url = runner_url or os.getenv("IAC_RUNNER_URL", "")
+    sec = secret or os.getenv("IAC_WEBHOOK_SECRET", "")
+    if not url or not sec:
+        return {
+            "status": "skipped",
+            "reason": "no iac-runner credentials in this context",
+        }
+    runner_env = "production" if env == "prod" else env
+    response = trigger_platform_deploy(
+        env=runner_env,
+        ref=iac_sha,
+        services=[service],
+        base_url=url,
+        secret=sec,
+        triggered_by=triggered_by,
+        wait=False,
+        action="secrets-supply",
+    )
+    final = poll_platform_deploy_status(
+        env=runner_env,
+        ref=iac_sha,
+        services=[service],
+        deployment_id=response.get("deployment_id"),
+        base_url=url,
+        secret=sec,
+        triggered_by=triggered_by,
+        attempts=_poll_attempts_for_timeout(timeout),
+        action="secrets-supply",
+    )
+    status = str(final.get("status", "")).lower()
+    if status != "completed":
+        raise RuntimeError(
+            f"secret supply for {service} in {runner_env} ended {status!r}: "
+            f"{final.get('details') or final.get('error') or final}"
+        )
+    return {"status": "completed", "iac_runner": response, "iac_runner_final": final}
+
+
 def _deploy_platform_batch(
     services: list[str],
     deploy_type: str,
@@ -837,6 +896,15 @@ def deploy_v2(
     # verify_vault / verify_config / model_overrides give the unified path PARITY with the
     # old bash dokploy_deploy.sh — default-ON so a token-TTL/effective-config regression
     # fails closed instead of being silently dropped on the way to prod.
+    secret_supply = _supply_app_secrets(
+        service,
+        target.env,
+        target.iac_ref,
+        runner_url=iac_runner_url,
+        secret=iac_webhook_secret,
+        triggered_by=triggered_by,
+        timeout=timeout,
+    )
     plan = _deploy_fixed(
         target.env,
         resolved.sha,
@@ -862,6 +930,7 @@ def deploy_v2(
         "compose_id": plan.compose_id,
         "data": plan.data,
         "iac_ref": target.iac_ref,
+        "secret_supply": secret_supply,
     }
     return DeployV2Result(target, data_lane, "deploy-primitive", detail)
 

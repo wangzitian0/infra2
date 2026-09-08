@@ -1264,3 +1264,73 @@ def test_platform_forwards_only_an_app_release_as_version_ref(monkeypatch):
     # the helper pins iac_ref to v0.0.0: the same tag as version_ref is the reconcile's shape
     sent, _res = _platform(monkeypatch, version_ref="v0.0.0")
     assert sent.get("version_ref") is None
+
+
+# --- app-stack secret supply through the runner before a Dokploy promote (#649) --------
+
+
+def _runner_fakes(monkeypatch, *, final_status="completed"):
+    order: list = []
+
+    def fake_trigger(**kw):
+        order.append(("trigger", kw))
+        return {"status": "accepted", "deployment_id": "d" * 16}
+
+    def fake_poll(**kw):
+        order.append(("poll", kw))
+        return {"status": final_status, "deployment_id": "d" * 16}
+
+    monkeypatch.setattr(dv2, "trigger_platform_deploy", fake_trigger)
+    monkeypatch.setattr(dv2, "poll_platform_deploy_status", fake_poll)
+    return order
+
+
+def test_fixed_app_deploy_runs_the_secret_supply_through_the_runner_first(
+    calls, monkeypatch
+):
+    order = _runner_fakes(monkeypatch)
+    original_fixed = dv2._deploy_fixed
+
+    def fixed_after_supply(env, code, **kw):
+        order.append(("fixed", env))
+        return original_fixed(env, code, **kw)
+
+    monkeypatch.setattr(dv2, "_deploy_fixed", fixed_after_supply)
+    result = _deploy(
+        deploy_type="staging",
+        version_ref="v1.2.3",
+        iac_runner_url="https://iac.example",
+        iac_webhook_secret="s",
+    )
+    kinds = [k for k, _ in order]
+    assert kinds == ["trigger", "poll", "fixed"]
+    trigger_kw = order[0][1]
+    assert trigger_kw["action"] == "secrets-supply"
+    assert trigger_kw["services"] == ["finance_report/app"]
+    assert trigger_kw["env"] == "staging"
+    assert order[1][1]["action"] == "secrets-supply"
+    assert result.detail["secret_supply"]["status"] == "completed"
+
+
+def test_fixed_app_deploy_fails_closed_when_the_supply_fails(calls, monkeypatch):
+    _runner_fakes(monkeypatch, final_status="failed")
+    with pytest.raises(RuntimeError, match="secret supply for finance_report/app"):
+        _deploy(
+            deploy_type="staging",
+            version_ref="v1.2.3",
+            iac_runner_url="https://iac.example",
+            iac_webhook_secret="s",
+        )
+    assert calls["fixed"] is None  # never promoted
+
+
+def test_fixed_app_deploy_without_runner_credentials_skips_the_supply(
+    calls, monkeypatch
+):
+    order = _runner_fakes(monkeypatch)
+    monkeypatch.delenv("IAC_RUNNER_URL", raising=False)
+    monkeypatch.delenv("IAC_WEBHOOK_SECRET", raising=False)
+    result = _deploy(deploy_type="staging", version_ref="v1.2.3")
+    assert order == []
+    assert result.detail["secret_supply"]["status"] == "skipped"
+    assert calls["fixed"] is not None

@@ -196,3 +196,37 @@ def test_workflow_deploy_jobs_install_the_pinned_sdk() -> None:
         assert re.search(
             r"pip install invoke httpx python-dotenv rich .*infra2-sdk @ https://", text
         ), wf
+
+
+def test_deployer_sync_under_secrets_supply_action_stops_after_the_supply(
+    monkeypatch,
+) -> None:
+    """The runner's child gets DEPLOY_ACTION=secrets-supply from deploy_v2 (#649): only the
+    supply runs; nothing is composed, so an app stack's Dokploy promote stays the deploy."""
+    monkeypatch.setattr(AlertingLike, "env", classmethod(lambda cls: dict(ENV)))
+    monkeypatch.setattr(deployer_module, "validate_env", lambda: [])
+    monkeypatch.setenv("DEPLOY_ACTION", "secrets-supply")
+    seen: list = []
+    monkeypatch.setattr(
+        AlertingLike,
+        "apply_secret_supply",
+        classmethod(lambda cls, c, env=None: seen.append(env) or True),
+    )
+    monkeypatch.setattr(
+        AlertingLike,
+        "verify_vault_app_token",
+        classmethod(
+            lambda cls: (_ for _ in ()).throw(
+                AssertionError("must not reach the compose path")
+            )
+        ),
+    )
+    assert AlertingLike.sync(object()) == {
+        "action": "supplied",
+        "details": "secret supply applied; no compose",
+    }
+    assert seen == ["staging"]
+    monkeypatch.setattr(
+        AlertingLike, "apply_secret_supply", classmethod(lambda cls, c, env=None: False)
+    )
+    assert AlertingLike.sync(object())["action"] == "failed"

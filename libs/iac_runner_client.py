@@ -101,6 +101,7 @@ def trigger_platform_deploy(
     nonce: str | None = None,
     transport=httpx.post,
     version_ref: str | None = None,
+    action: str | None = None,
 ) -> dict:
     """Trigger an iac_runner platform deploy of ``services`` at ``ref`` to ``env``.
 
@@ -122,6 +123,7 @@ def trigger_platform_deploy(
         "triggered_by": triggered_by,
         "wait": wait,
         "services": normalized_services,
+        **({"action": action} if action and action != "sync" else {}),
     }
     if version_ref is not None:
         # The app release a digest-pinned platform service should pin (truealpha#712);
@@ -156,6 +158,7 @@ def poll_platform_deploy_status(
     nonce_factory=_new_nonce,
     transport=httpx.post,
     version_ref: str | None = None,
+    action: str | None = None,
 ) -> dict:
     """Poll ``/deploy/status`` until the deploy reaches a terminal state (mirrors the bash loop).
 
@@ -182,6 +185,8 @@ def poll_platform_deploy_status(
     status_coordinate = {"env": env, "ref": ref, "triggered_by": triggered_by}
     if normalized_services is not None:
         status_coordinate["services"] = normalized_services
+    if action and action != "sync":
+        status_coordinate["action"] = action
     if version_ref is not None:
         status_coordinate["version_ref"] = _validate_version_ref(version_ref)
     if deployment_id is not None:
