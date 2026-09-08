@@ -62,6 +62,20 @@ def _safe_json(resp) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _json_object_or_none(resp) -> dict | None:
+    """The response body as a dict, or ``None`` when there is no parseable JSON object.
+
+    Distinct from :func:`_safe_json`, which collapses "no body" and "an empty JSON
+    object" into the same ``{}`` — the gateway check below has to tell a bodiless
+    Traefik 404 apart from a runner 404 that really did answer ``{}``.
+    """
+    try:
+        data = resp.json() if getattr(resp, "content", None) else None
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def _validate_request(env: str, ref: str, secret: str, base_url: str) -> None:
     """Fail closed BEFORE signing/posting — never sign with an empty secret or bad target."""
     if env not in _VALID_ENVS:
@@ -159,8 +173,15 @@ def poll_platform_deploy_status(
     transport=httpx.post,
     version_ref: str | None = None,
     action: str | None = None,
+    gateway_grace: float = 180.0,
 ) -> dict:
     """Poll ``/deploy/status`` until the deploy reaches a terminal state (mirrors the bash loop).
+
+    A push that touches ``bootstrap/06.iac_runner`` recreates the runner while deploys
+    are in flight (#666: three times on 2026-09-08). While the container is being
+    recreated Traefik answers 404 without a JSON body, then 502/503/504; those are
+    tolerated for ``gateway_grace`` seconds of consecutive gateway errors before the
+    poll fails — naming the restart — instead of on the first one.
 
     Returns the final status dict. A terminal status is anything other than ``running`` /
     ``pending`` / ``in_progress``. Raises ``ValueError`` for a bad env/ref/secret/base_url
@@ -197,7 +218,9 @@ def poll_platform_deploy_status(
     ).encode()
     # non-terminal statuses from /deploy/status (terminal = "completed" / "failed").
     terminal_excluded = {"running", "pending", "in_progress", "queued", "accepted"}
+    gateway_codes = {502, 503, 504}
     last: dict = {}
+    gateway_down_since: float | None = None
     for _ in range(max(1, attempts)):
         headers = _signed_headers(secret, payload, now=now, nonce=nonce_factory())
         resp = transport(
@@ -212,12 +235,32 @@ def poll_platform_deploy_status(
         # (wait=False), not a terminal failure — a single 404 must not crash the whole
         # reconcile, so we treat it as non-terminal and keep polling. A genuine routing
         # 404 (no JSON body / different status) still surfaces via raise_for_status().
-        if getattr(resp, "status_code", None) == 404:
-            body = _safe_json(resp)
+        code = getattr(resp, "status_code", None)
+        body = _json_object_or_none(resp) if code == 404 else None
+        if code == 404 and body is not None:
             if str(body.get("status", "")).lower() == "not_found":
                 last = body
+                gateway_down_since = None
                 sleep(interval)
                 continue
+        # The runner is being recreated (#666): Traefik answers a bodiless/non-JSON 404
+        # while no router exists, then 502/503/504 until the new container is healthy.
+        # A 404 that carries a JSON object which is not `not_found` — including an empty
+        # one — is a genuine routing error and still raises below.
+        if code in gateway_codes or (code == 404 and body is None):
+            moment = float(now())
+            gateway_down_since = (
+                gateway_down_since if gateway_down_since is not None else moment
+            )
+            if moment - gateway_down_since > gateway_grace:
+                raise RuntimeError(
+                    f"iac_runner unreachable for {int(moment - gateway_down_since)}s while "
+                    f"polling deploy {ref[:12]} to {env} (last HTTP {code}): the runner was "
+                    "probably recreated by a bootstrap push mid-deploy (#666)"
+                )
+            sleep(interval)
+            continue
+        gateway_down_since = None
         resp.raise_for_status()
         last = resp.json() if resp.content else {}
         if str(last.get("status", "")).lower() not in terminal_excluded:
