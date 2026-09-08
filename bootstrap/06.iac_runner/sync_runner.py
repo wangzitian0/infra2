@@ -406,7 +406,14 @@ def update_repo(ref: str | None = None) -> bool:
         if not repo_path.exists():
             logger.info(f"Cloning {GIT_REPO_URL} to {repo_path}")
             result = subprocess.run(
-                ["git", "clone", GIT_REPO_URL, str(repo_path)],
+                # Same reason as the fetch below: the runner needs infra2's own tree only.
+                [
+                    "git",
+                    "clone",
+                    "--no-recurse-submodules",
+                    GIT_REPO_URL,
+                    str(repo_path),
+                ],
                 capture_output=True,
                 text=True,
                 timeout=300,
@@ -424,7 +431,16 @@ def update_repo(ref: str | None = None) -> bool:
             return False
 
         if not run_git_command(
-            ["fetch", "--tags", "--prune", "origin"], repo_path, "fetch"
+            # `--no-recurse-submodules`: this workspace is infra2's OWN tree — every deploy
+            # runs `invoke <service>.sync` from it and nothing here reads repos/truealpha or
+            # repos/finance_report. Git's on-demand recursion still tries them whenever a
+            # fetched commit moves a submodule pointer, and on 2026-09-08 that turned a
+            # successful fetch of infra2 main into `Could not access submodule
+            # 'repos/finance_report'` -> "Failed to update repo, aborting sync", which
+            # blocked truealpha's v0.0.49 staging release with nothing wrong on either side.
+            ["fetch", "--no-recurse-submodules", "--tags", "--prune", "origin"],
+            repo_path,
+            "fetch",
         ):
             return False
 
