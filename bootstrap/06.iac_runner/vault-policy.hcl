@@ -25,23 +25,28 @@ path "secret/data/bootstrap/+/iac_runner" {
   capabilities = ["read", "list"]
 }
 
+# `patch`: infra2-sdk's secret writer (>= 1.5.0) sends an HTTP PATCH
+# (application/merge-patch+json) whenever the secret already exists, so only the changed
+# keys travel and a key this deploy does not know about is never clobbered. KV v2 gates
+# that verb on its own capability: without it every re-deploy of an existing service
+# fails `vault_permission_denied` (truealpha v0.0.49 staging, 2026-09-08).
 # Platform secrets for syncing all platform services.
 # Sync tasks may repair missing runtime fields before deploying; deletion stays
 # reserved for operator/root-token maintenance.
 path "secret/data/platform/+/*" {
-  capabilities = ["create", "read", "update", "list"]
+  capabilities = ["create", "read", "update", "patch", "list"]
 }
 
 # Finance Report secrets for syncing app services.
 # Sync tasks may repair missing runtime fields before deploying; deletion stays
 # reserved for operator/root-token maintenance.
 path "secret/data/finance_report/+/*" {
-  capabilities = ["create", "read", "update", "list"]
+  capabilities = ["create", "read", "update", "patch", "list"]
 }
 
 # TrueAlpha secrets for syncing app services (same rationale as finance_report).
 path "secret/data/truealpha/+/*" {
-  capabilities = ["create", "read", "update", "list"]
+  capabilities = ["create", "read", "update", "patch", "list"]
 }
 
 # KV v2 LIST resolves to the secret/metadata/ path, not secret/data/, so the `list`
