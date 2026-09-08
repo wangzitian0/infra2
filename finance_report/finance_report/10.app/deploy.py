@@ -55,7 +55,7 @@ class AppDeployer(Deployer):
     #   2. the multi-alias ephemeral PREVIEW surface (declared here with an
     #      explicit service_id — an alias stack has no registry Deployer of its
     #      own). Same AppRole auth; its secrets template reads the SOURCE env's
-    #      app secrets (PREVIEW_SECRET_ENV, default staging), so the derived
+    #      app secrets (staging's, fixed in the generated template), so the derived
     #      vault path {env} resolves to that source env, not the alias.
     secrets = (
         SecretsFacet(
@@ -142,7 +142,9 @@ class AppDeployer(Deployer):
             return
 
         secrets = cls.secrets_backend()
-        bucket_name = secrets.get("S3_BUCKET") or "finance-report-statements"
+        bucket_name = (
+            secrets.get("S3_BUCKET") or "statements"
+        )  # = compose default (#637)
         existing_access_key = secrets.get("S3_ACCESS_KEY")
         existing_secret_key = secrets.get("S3_SECRET_KEY")
 

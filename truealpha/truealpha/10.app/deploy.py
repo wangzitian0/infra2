@@ -41,7 +41,7 @@ class AppDeployer(Deployer):
     #   2. the multi-alias ephemeral PREVIEW surface (#522, generalized off
     #      finance_report/preview's pattern) — declared with an explicit
     #      service_id, borrowing the SOURCE env's app secrets
-    #      (PREVIEW_SECRET_ENV, default staging).
+    #      (staging's, fixed in the generated template).
     # NOTE: production rollout is _APP_COMPOSE_OVERRIDES-gated (see
     # libs/deploy_env_config.py). The prod compose_id is registered (live since
     # #547), so the vault audit covers this app AND its preview surface in
@@ -75,7 +75,9 @@ class AppDeployer(Deployer):
     SMOKE_INTERVAL_SECONDS = 5
 
     @classmethod
-    def compose_env_overrides(cls, *, env: str, domain: str, env_suffix: str) -> dict[str, str]:
+    def compose_env_overrides(
+        cls, *, env: str, domain: str, env_suffix: str
+    ) -> dict[str, str]:
         """Compute APP_HOST: the compose's Traefik Host() rules use this instead of
         the shared-platform-domain pattern `truealpha${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`.
 
@@ -145,11 +147,17 @@ class AppDeployer(Deployer):
         host = env_vars.get("APP_HOST")
         if not host:
             e = cls.env()
-            domain = env_vars.get("INTERNAL_DOMAIN") or e.get("INTERNAL_DOMAIN") or cls.domain
+            domain = (
+                env_vars.get("INTERNAL_DOMAIN")
+                or e.get("INTERNAL_DOMAIN")
+                or cls.domain
+            )
             host = cls.compose_env_overrides(
                 env=env_vars.get("ENV") or e.get("ENV") or "production",
                 domain=domain,
-                env_suffix=env_vars.get("ENV_DOMAIN_SUFFIX") or e.get("ENV_DOMAIN_SUFFIX") or "",
+                env_suffix=env_vars.get("ENV_DOMAIN_SUFFIX")
+                or e.get("ENV_DOMAIN_SUFFIX")
+                or "",
             )["APP_HOST"]
         return f"https://{host}"
 
@@ -180,7 +188,9 @@ class AppDeployer(Deployer):
         # Bogus credentials on purpose: ANY auth-shaped 4xx proves app-web's
         # handler answered. 404 = the #463 shadowing class; 5xx = the #447
         # missing-secret class.
-        login_body = json.dumps({"email": "smoke@invalid.example", "password": "smoke-invalid"}).encode()
+        login_body = json.dumps(
+            {"email": "smoke@invalid.example", "password": "smoke-invalid"}
+        ).encode()
         login = cls._probe_status(
             urllib.request.Request(
                 f"{base_url}/api/auth/login",
@@ -190,7 +200,9 @@ class AppDeployer(Deployer):
             )
         )
         if login not in {400, 401, 422, 429}:
-            failures.append(f"POST /api/auth/login -> {login} (expected an auth-shaped 400/401/422/429)")
+            failures.append(
+                f"POST /api/auth/login -> {login} (expected an auth-shaped 400/401/422/429)"
+            )
 
         # One real MCP call (JSON-RPC initialize) through the public MCP route.
         # Trailing slash is REQUIRED: verified live on production 2026-07-23 —
@@ -243,7 +255,9 @@ class AppDeployer(Deployer):
         while True:
             failures = cls._run_smoke_probes(base_url)
             if not failures:
-                success(f"{cls.service}: post-deploy smoke passed (health + login + MCP)")
+                success(
+                    f"{cls.service}: post-deploy smoke passed (health + login + MCP)"
+                )
                 return None
             if time.monotonic() >= deadline:
                 return f"post-deploy smoke failed at {base_url}: " + "; ".join(failures)

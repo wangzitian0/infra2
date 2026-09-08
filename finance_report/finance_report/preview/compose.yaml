@@ -65,11 +65,6 @@ services:
       INFRA_SERVICE_ID: ${INFRA_SERVICE_ID:-finance_report/app}
       INFRA_ENVIRONMENT: ${INFRA_ENVIRONMENT:-${ENV:-preview}}
       INFRA_IAC_REF: ${INFRA_IAC_REF:-}
-      # The ctmpl reads PREVIEW_SECRET_ENV to pick which env's Vault app-secrets path
-      # to render (secret/data/finance_report/<PREVIEW_SECRET_ENV>/app). Must be passed
-      # into THIS container — the renderer — or the template silently falls back to its
-      # "staging" default and any override from preview_lifecycle is ignored.
-      PREVIEW_SECRET_ENV: ${PREVIEW_SECRET_ENV:-staging}
     healthcheck:
       test:
         - CMD-SHELL
@@ -204,7 +199,7 @@ services:
         echo "✅ [CHECKPOINT-1b] DATABASE_URL overridden to the ephemeral preview DB"
 
         # PREVIEW OVERRIDE: Vault rendered ENVIRONMENT from the borrowed
-        # PREVIEW_SECRET_ENV bucket (e.g. "staging" secrets), same as DATABASE_URL
+        # staging bucket (the preview borrows staging's app secrets), same as DATABASE_URL
         # above. Unlike DATABASE_URL, nothing overrode it, so Settings.environment
         # silently read "staging" for every preview while OTEL_RESOURCE_ATTRIBUTES
         # (templated per-alias by secrets.ctmpl) correctly said deployment.environment=
