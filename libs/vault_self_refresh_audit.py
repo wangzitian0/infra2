@@ -404,6 +404,11 @@ def classify_token(
     )
 
 
+#: A rendered secrets file older than this has missed every template/secret change since
+#: (#628: bind-mounted template edits do not re-render); beyond it the audit fails (#658).
+STALE_RENDERED_SECRET_FAIL_SECONDS = 7 * 86400
+
+
 def classify_rendered_env(
     service: VaultService,
     file_state: dict[str, Any],
@@ -449,6 +454,21 @@ def classify_rendered_env(
     mtime = int(file_state.get("mtime", 0))
     age = max(0, observed_now - mtime)
     evidence = {**file_state, "age_seconds": age}
+    if age > STALE_RENDERED_SECRET_FAIL_SECONDS:
+        # #658 recommendation 1 (2026-09-08): a rendered file nobody has rewritten in a
+        # week is not "low churn" any more — the data-engine agent ran a weeks-old
+        # secrets.ctmpl (no S3 port, no LLM_*) because a bind-mounted template edit
+        # never re-renders (#628), and this audit saw it and said `info`. Past this
+        # floor the file is stale by any reading of the word, and the audit fails.
+        return _result(
+            service,
+            "rendered-env-staleness",
+            "fail",
+            "P1",
+            f"{service.rendered_secret_path} has not been rewritten in {age // 86400} days "
+            "(a template or secret change since then never reached the container, #628)",
+            evidence,
+        )
     if age > service.max_rendered_secret_age_seconds:
         # #531: vault-agent's static_secret_render_interval only rewrites this file
         # when the underlying Vault secret's CONTENT changes, not on every poll -- a

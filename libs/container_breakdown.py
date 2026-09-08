@@ -170,8 +170,15 @@ def build_breakdown_alert_payload(
     *,
     firing: bool = True,
     external_url: str = "infra2://platform/12.alerting/container-breakdown",
+    severity: str = "critical",
+    alertname: str = "ContainerBreakdown",
 ) -> dict:
-    """Alertmanager/SigNoz-shaped payload for the alert bridge (``format_signoz_alert``)."""
+    """Alertmanager/SigNoz-shaped payload for the alert bridge (``format_signoz_alert``).
+
+    ``severity`` / ``alertname`` default to the paging ContainerBreakdown; the chronic
+    digest (#658) posts as ``ContainerBreakdownChronic`` at ``warning`` so the routing
+    that pages on critical does not fire for a once-a-day summary.
+    """
     status = "firing" if firing else "resolved"
     alerts = []
     for b in breakdowns:
@@ -187,9 +194,9 @@ def build_breakdown_alert_payload(
             {
                 "status": status,
                 "labels": {
-                    "alertname": "ContainerBreakdown",
+                    "alertname": alertname,
                     **identity.alert_labels(
-                        severity="critical", failure_domain="runtime"
+                        severity=severity, failure_domain="runtime"
                     ),
                     "state": b.state,
                 },
@@ -203,10 +210,10 @@ def build_breakdown_alert_payload(
     return {
         "status": status,
         "commonLabels": {
-            "alertname": "ContainerBreakdown",
+            "alertname": alertname,
             "identity_schema": "v1",
             "managed_by": "infra2",
-            "severity": "critical",
+            "severity": severity,
             "team": "infra",
         },
         "commonAnnotations": {

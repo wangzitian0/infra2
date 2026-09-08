@@ -397,3 +397,97 @@ def test_run_once_logs_firing_and_resolved_decisions(monkeypatch):
     assert "BREAKDOWN-ALERT firing" in blob  # firing decision + bridge-post logged
     assert "BREAKDOWN-RESOLVED" in blob  # resolve decision now logged (was silent)
     assert "finance_report-frontend-branch-main" in blob  # named, not anonymous
+
+
+def test_run_once_stay_resolved_floor_suppresses_a_refire_and_digests_chronic_once(
+    monkeypatch,
+):
+    """#658 recommendation 7: platform-prefect-worker fired 05:48 → resolved 05:55 →
+    fired again 06:45 for seven weeks. After a RESOLVED, the same container does not
+    page again inside the floor; it is counted as chronic and reported once per
+    digest window."""
+    import time
+
+    import libs.container_breakdown_watch as w
+
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(time, "monotonic", lambda: clock["now"])
+    broken = Breakdown(
+        container="prefect-worker", state="unhealthy", reason="r", detail="d"
+    )
+    observed = {"broken": True}
+    monkeypatch.setattr(
+        w, "sweep", lambda client, tail: [broken] if observed["broken"] else []
+    )
+    posted: list = []
+    monkeypatch.setattr(w, "_post_alert", lambda payload: posted.append(payload))
+    state: dict = {}
+    resolved_at: dict = {}
+    chronic: dict = {}
+
+    def sweep_n(n: int) -> int:
+        fired = 0
+        for _ in range(n):
+            clock["now"] += 60
+            fired += w.run_once(
+                client=None,
+                log_tail=25,
+                container_state=state,
+                renotify=1800,
+                failure_threshold=3,
+                recovery_threshold=5,
+                resolved_at=resolved_at,
+                chronic=chronic,
+                stay_resolved_seconds=6 * 3600,
+                chronic_digest_seconds=24 * 3600,
+            )
+        return fired
+
+    def chronic_digests() -> list:
+        return [
+            p
+            for p in posted
+            if any(
+                a.get("labels", {}).get("state") == "chronic"
+                for a in p.get("alerts", [])
+            )
+        ]
+
+    assert sweep_n(3) == 1  # first incident pages
+    assert [p["status"] for p in posted] == ["firing"]
+    observed["broken"] = False
+    assert sweep_n(5) == 0  # resolves after 5 healthy sweeps
+    assert [p["status"] for p in posted] == ["firing", "resolved"]
+    assert "prefect-worker" in resolved_at
+
+    observed["broken"] = True
+    assert sweep_n(3) == 0  # re-broke 8 minutes after resolving: chronic, no page
+    # the first digest window is open, so the chronic set went out at once — as ONE
+    # firing alert in state "chronic" — and the counter was consumed by the digest
+    assert len(chronic_digests()) == 1
+    digest = chronic_digests()[0]
+    assert digest["commonLabels"]["alertname"] == "ContainerBreakdownChronic"
+    assert digest["commonLabels"]["severity"] == "warning"
+    assert all(a["labels"]["severity"] == "warning" for a in digest["alerts"])
+    assert "prefect-worker" not in chronic and chronic["__digest_at__"] == clock["now"]
+    assert (
+        len([p for p in posted if p["status"] == "firing"]) == 2
+    )  # the incident + the digest
+
+    observed["broken"] = False
+    sweep_n(5)
+    observed["broken"] = True
+    assert (
+        sweep_n(3) == 0
+    )  # still inside the floor: counted again, no second digest today
+    assert chronic["prefect-worker"] == 1
+    assert len(chronic_digests()) == 1
+
+    # the floor is measured from the LATEST resolve: a container that keeps flapping keeps
+    # refreshing it and only ever reaches the daily digest — that is the point. Once it has
+    # stayed resolved for longer than the floor, a fresh incident pages normally again.
+    observed["broken"] = False
+    sweep_n(5)
+    clock["now"] += 7 * 3600
+    observed["broken"] = True
+    assert sweep_n(3) == 1

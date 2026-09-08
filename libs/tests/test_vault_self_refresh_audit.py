@@ -1063,3 +1063,74 @@ def test_collect_live_observations_skips_token_lookup_for_approle_service(
     observations = collect_live_observations([service], env="production")
 
     assert observations["services"][service.id]["token_lookup"] is None
+
+
+def test_rendered_env_classifier_fails_after_a_week_without_a_rewrite() -> None:
+    """#658 recommendation 1: the data-engine agent ran a weeks-old secrets.ctmpl
+    (no S3 port, no LLM_*) because a bind-mounted template edit never re-renders
+    (#628); this audit saw the staleness and said `info`. Past seven days it fails."""
+    service = _service()
+    week_and_a_day = 8 * 86400
+    stale = classify_rendered_env(
+        service,
+        {"exists": True, "readable": True, "size": 20, "mtime": 0},
+        now=week_and_a_day,
+    )
+    assert stale.status == "fail"
+    assert stale.severity == "P1"
+    assert stale.check_id == "rendered-env-staleness"
+    assert "8 days" in stale.summary and "#628" in stale.summary
+    # under the floor the #531 informational note stands unchanged
+    recent = classify_rendered_env(
+        service, {"exists": True, "readable": True, "size": 20, "mtime": 0}, now=1000
+    )
+    assert recent.status == "info" and recent.check_id == "rendered-env-freshness"
+
+
+def test_audit_fails_on_a_week_old_render_even_with_a_healthy_container() -> None:
+    service = _service()
+    report = audit_from_observations(
+        [service],
+        {
+            "services": {
+                service.id: {
+                    "dokploy_env": (
+                        "VAULT_ROLE_ID=test-role-id-not-a-real-secret\n"
+                        "VAULT_SECRET_ID=test-secret-id-not-a-real-secret\n"
+                    ),
+                    "token_lookup": None,
+                    "rendered_env": {
+                        "exists": True,
+                        "readable": True,
+                        "size": 20,
+                        "mtime": 0,
+                    },
+                    "vault_agent_logs": "template rendered successfully",
+                    "vault_agent_container": {
+                        "name": "finance_report-app-vault-agent",
+                        "exists": True,
+                        "state": "running",
+                        "health": "healthy",
+                        "restart_count": 0,
+                    },
+                    "app_containers": [
+                        {
+                            "name": "finance_report-backend",
+                            "exists": True,
+                            "state": "running",
+                            "health": "healthy",
+                            "restart_count": 0,
+                            "mounts": ["/secrets/.env"],
+                        }
+                    ],
+                }
+            }
+        },
+        env="production",
+        now=8 * 86400,
+    )
+    assert report["status"] == "fail"
+    staleness = [
+        r for r in report["results"] if r["check_id"] == "rendered-env-staleness"
+    ]
+    assert len(staleness) == 1 and staleness[0]["status"] == "fail"
