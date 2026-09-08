@@ -205,7 +205,7 @@ def ensure_generated_secrets(service: str, env: str) -> None:
     finding and removing elsewhere in this repo.
 
     ensure_runtime_secrets ultimately calls VaultSecrets, which authenticates
-    with a root token (VAULT_ROOT_TOKEN) — a deliberately high-privilege
+    with VAULT_TOKEN (the iac-runner's bounded AppRole token; PR-E) — a
     credential the app-deploy-request receiver (this function's actual real
     caller: a GitHub Actions job reachable via cross-repo repository_dispatch)
     is NOT and must NOT be handed; it only carries DOKPLOY_API_KEY and
