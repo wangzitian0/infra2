@@ -1036,6 +1036,43 @@ def test_alerting_template_fields_are_all_declared_in_its_manifest() -> None:
         assert key in referenced and key in declared
 
 
+def test_alerting_heartbeat_coordinates_only_tolerate_an_absent_vault_path(
+    monkeypatch,
+) -> None:
+    """Review on #648: a missing path (first deploy) renders a heartbeat-less stack,
+    but auth / connectivity errors must surface instead of silently dropping the
+    heartbeat coordinates."""
+    from libs.env import VaultSecrets
+
+    module = _load_deploy_module(
+        "platform/12.alerting/deploy.py", "alerting_heartbeat_errors_test"
+    )
+    staging = {"ENV": "staging", "ENV_SUFFIX": "-staging", "INTERNAL_DOMAIN": "x.io"}
+    monkeypatch.setattr(
+        module.AlertingDeployer, "env", classmethod(lambda cls: dict(staging))
+    )
+
+    class Absent:
+        def get(self, key):
+            raise VaultSecrets.VaultSecretNotFoundError("missing")
+
+    class Denied:
+        def get(self, key):
+            raise VaultSecrets.VaultAuthError("403")
+
+    monkeypatch.setattr(module, "get_secrets", lambda **kwargs: Absent())
+    env = module.AlertingDeployer.compose_env_base(
+        {"ENV": "staging", "INTERNAL_DOMAIN": "x.io"}
+    )
+    assert "INFRA_PROBE_HEARTBEAT_URL" not in env
+
+    monkeypatch.setattr(module, "get_secrets", lambda **kwargs: Denied())
+    with pytest.raises(VaultSecrets.VaultAuthError):
+        module.AlertingDeployer.compose_env_base(
+            {"ENV": "staging", "INTERNAL_DOMAIN": "x.io"}
+        )
+
+
 def test_remote_config_identity_reads_cross_plane_service_coordinates(
     monkeypatch,
 ) -> None:

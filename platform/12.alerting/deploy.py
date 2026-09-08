@@ -3,7 +3,7 @@
 import sys
 
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.env import get_secrets
+from libs.env import VaultSecrets, get_secrets
 from libs.console import success
 from libs.service_facets import (
     PublicRouteFacet,
@@ -242,7 +242,10 @@ class AlertingDeployer(Deployer):
         for key in ("INFRA_PROBE_HEARTBEAT_URL", "INFRA_PROBE_HEARTBEAT_TOKEN"):
             try:
                 value = vault_secrets.get(key)
-            except Exception:  # noqa: BLE001 - a missing path renders a heartbeat-less stack, as before
+            except VaultSecrets.VaultSecretNotFoundError:
+                # Only a genuinely absent path renders a heartbeat-less stack (a first
+                # deploy before the supply filled it); auth and connectivity errors
+                # surface and fail the deploy (review on #648).
                 value = None
             if value:
                 result[key] = value

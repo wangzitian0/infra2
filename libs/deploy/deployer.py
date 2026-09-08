@@ -637,11 +637,17 @@ class Deployer:
             info(
                 f"{cls.service}: {len(changed)} secret value(s) changed; restarting {', '.join(names)}"
             )
-            run_with_status(
+            result = run_with_status(
                 c,
                 f"ssh root@{e['VPS_HOST']} {shlex.quote(shlex.join(['docker', 'restart', *names]))}",
                 "Restart secret consumers",
             )
+            if not result:
+                # Fail closed (review on #648): consumers would keep running on the
+                # previously rendered values while the store already changed.
+                raise RuntimeError(
+                    f"could not restart {', '.join(names)} after {', '.join(changed)} changed"
+                )
 
         try:
             report = secrets_supply.apply(service, env_name, restart=restart)

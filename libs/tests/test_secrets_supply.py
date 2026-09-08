@@ -42,7 +42,9 @@ def harness(monkeypatch):
     monkeypatch.setattr(
         deployer_module,
         "run_with_status",
-        lambda c, cmd, label: calls["run"].append((cmd, label)) or True,
+        lambda c, cmd, label: (
+            calls["run"].append((cmd, label)) or calls.get("restart_ok", True)
+        ),
     )
 
     def install(report: SupplyReport, *, changed_seen=()):
@@ -133,3 +135,14 @@ def test_vault_backend_accepts_the_transition_alias(monkeypatch) -> None:
         {"VAULT_TOKEN": "new", "VAULT_ROOT_TOKEN": "legacy", "VAULT_ADDR": "https://v"}
     )
     assert seen["VAULT_TOKEN"] == "new" and seen["VAULT_ADDR"] == "https://v"
+
+
+def test_a_failed_restart_fails_the_deploy_closed(harness, capsys) -> None:
+    calls = harness(
+        SupplyReport("platform/alerting", "staging", changed=("FEISHU_WEBHOOK_URL",)),
+        changed_seen=("FEISHU_WEBHOOK_URL",),
+    )
+    calls["restart_ok"] = False  # ssh/docker restart returned non-zero
+    assert AlertingLike.apply_secret_supply(object()) is False
+    assert len(calls["run"]) == 1
+    assert "could not restart" in capsys.readouterr().out
