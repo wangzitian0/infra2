@@ -19,8 +19,6 @@ import string
 import sys
 from typing import Literal, Optional
 
-import httpx
-
 try:
     from infra2_sdk.secrets import OnePasswordBackend, SecretsError, VaultKvBackend
 except ModuleNotFoundError:  # pragma: no cover - environment, not logic
@@ -261,77 +259,25 @@ def verify_vault_token(
     addr: str | None = None,
     min_ttl_hours: int = 24,
 ) -> dict:
-    """Verify a Vault token is valid and has sufficient TTL.
+    """Verify a Vault token is valid and has sufficient TTL (infra2-sdk ``vault_token_status``).
 
-    Args:
-        token: The Vault token to verify
-        addr: Vault address (optional, uses VAULT_ADDR or INTERNAL_DOMAIN)
-        min_ttl_hours: Minimum acceptable TTL in hours (default: 24)
-
-    Returns:
-        dict with keys:
-            - valid: bool
-            - ttl_hours: float (remaining TTL, or -1 if expired/invalid)
-            - renewable: bool
-            - error: str | None
+    Returns the historical dict shape callers and tests rely on:
+    ``valid`` / ``ttl_hours`` / ``renewable`` / ``error`` (``None`` when valid).
     """
-    if not addr:
-        addr = os.getenv("VAULT_ADDR")
-        if not addr:
-            domain = os.getenv("INTERNAL_DOMAIN")
-            addr = f"https://vault.{domain}" if domain else "https://vault.localhost"
-
-    verify_ssl = os.getenv("VAULT_SKIP_VERIFY", "").lower() not in ("1", "true", "yes")
-
+    address = addr or vault_address()
     try:
-        with httpx.Client(verify=verify_ssl, timeout=10.0) as client:
-            resp = client.get(
-                f"{addr}/v1/auth/token/lookup-self",
-                headers={"X-Vault-Token": token},
-            )
-
-            if resp.status_code == 200:
-                data = resp.json().get("data", {})
-                ttl_seconds = data.get("ttl", 0)
-                ttl_hours = ttl_seconds / 3600
-                renewable = data.get("renewable", False)
-
-                is_valid = ttl_hours >= min_ttl_hours
-
-                return {
-                    "valid": is_valid,
-                    "ttl_hours": round(ttl_hours, 2),
-                    "renewable": renewable,
-                    "error": None
-                    if is_valid
-                    else f"TTL too low: {ttl_hours:.1f}h < {min_ttl_hours}h",
-                }
-            elif resp.status_code == 403:
-                return {
-                    "valid": False,
-                    "ttl_hours": -1,
-                    "renewable": False,
-                    "error": "Token expired or invalid (403 Forbidden)",
-                }
-            else:
-                return {
-                    "valid": False,
-                    "ttl_hours": -1,
-                    "renewable": False,
-                    "error": f"Vault returned status {resp.status_code}",
-                }
-
-    except httpx.ConnectError as e:
+        from infra2_sdk.secrets import vault_token_status
+    except ModuleNotFoundError:
         return {
             "valid": False,
             "ttl_hours": -1,
             "renewable": False,
-            "error": f"Cannot connect to Vault: {e}",
+            "error": _SDK_MISSING,
         }
-    except httpx.TimeoutException:
-        return {
-            "valid": False,
-            "ttl_hours": -1,
-            "renewable": False,
-            "error": "Vault connection timeout",
-        }
+    status = vault_token_status(address, token, min_ttl_seconds=min_ttl_hours * 3600)
+    return {
+        "valid": status.valid,
+        "ttl_hours": status.ttl_hours if status.ttl_seconds >= 0 else -1,
+        "renewable": status.renewable,
+        "error": None if status.valid else status.error,
+    }
