@@ -34,6 +34,8 @@ name: Reconcile IaC Inputs
 permissions:
   # Explicit production promotion records an immutable production/v* marker.
   contents: write
+  # the promotion guard lists this workflow's runs for the promoted tag (gh run list)
+  actions: read
 
 concurrency:
   group: iac-input-reconcile-main

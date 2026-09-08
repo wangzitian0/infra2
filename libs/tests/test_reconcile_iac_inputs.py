@@ -425,6 +425,8 @@ def test_promote_prod_refuses_a_tag_without_a_green_staging_soak() -> None:
     assert names.index(guard["name"]) < names.index("Reconcile changed IaC inputs")
     assert "inputs.promote_prod" in guard["if"] and "workflow_dispatch" in guard["if"]
     assert guard["env"]["GH_TOKEN"] == "${{ github.token }}"
+    # gh run list needs actions: read on the workflow token (review on #641)
+    assert workflow["permissions"] == {"contents": "write", "actions": "read"}
     script = guard["run"]
     assert "--workflow reconcile-iac-inputs.yml --event push --branch \"$after\"" in script
     assert 'select(.conclusion == "success")' in script
