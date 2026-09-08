@@ -232,6 +232,12 @@ services:
       # recreated, so it can keep running against a stale rendered secrets file
       # (truealpha#447 was this exact gap on a different service).
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      # The worker registers its deployment against the environment's Prefect server.
+      # Until #639 the vault-agent template rendered this default into /secrets/.env for
+      # every container of the stack; #639 moved it into the compose file but only for
+      # `backend`. Without it Prefect starts an ephemeral API server, times out, and the
+      # worker crash-loops at ~1.5 cores per environment (2026-09-08: 71 restarts).
+      PREFECT_API_URL: http://platform-prefect-server${ENV_SUFFIX}:4200/api
     volumes:
       - secrets:/secrets:ro
     networks:
