@@ -161,3 +161,17 @@ def test_fetch_app_manifests_reads_the_pinned_commit_and_only_fills_gaps(
     assert (
         tmp_path / "repos/truealpha/apps/x/required-env.generated.json"
     ).read_text() == '{"contract_version": 2}'
+
+
+def test_optional_keys_never_use_a_direct_map_access() -> None:
+    """Under error_on_missing_key a direct `.Data.data.KEY` access aborts the render when
+    the key is absent, which is exactly what an optional key may be. Optional keys must
+    render through `index` (infra2-sdk >= 1.4.1); this is the 2026-09-07 alerting outage."""
+    for service in secrets_render.SERVICES:
+        if not service.generated:
+            continue
+        template = (ROOT / service.directory / "secrets.ctmpl").read_text(
+            encoding="utf-8"
+        )
+        assert "{{ with .Data.data." not in template, service.directory
+        assert "{{- with .Data.data." not in template, service.directory
