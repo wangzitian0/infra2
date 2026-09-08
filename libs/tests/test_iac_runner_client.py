@@ -337,3 +337,53 @@ def test_trigger_and_poll_carry_a_secrets_supply_action():
         transport=transport2,
     )
     assert "action" not in json.loads(calls2[0]["content"])
+
+
+def test_poll_survives_a_runner_recreate_inside_the_grace_window():
+    """#666: while the runner container is recreated Traefik answers a bodiless 404, then
+    502/503/504; inside the grace window the poll keeps going and the deploy settles."""
+    _calls, transport = _capture(
+        [
+            ({"status": "running"}, 200),
+            ("404 page not found", 404),
+            ({}, 502),
+            ({}, 503),
+            ({}, 504),
+            ({"status": "running"}, 200),
+            ({"status": "completed"}, 200),
+        ]
+    )
+    clock = iter(range(0, 1000, 10))
+    res = poll_platform_deploy_status(
+        env="staging",
+        ref=SHA,
+        base_url="u",
+        secret=SECRET,
+        attempts=20,
+        interval=0,
+        now=lambda: next(clock),
+        sleep=lambda *_: None,
+        nonce_factory=lambda: "nonce123",
+        transport=transport,
+        gateway_grace=180.0,
+    )
+    assert res["status"] == "completed"
+
+
+def test_poll_fails_naming_the_restart_when_the_gateway_stays_down_past_the_grace():
+    _calls, transport = _capture([({}, 502)])
+    clock = iter(range(0, 100000, 100))
+    with pytest.raises(RuntimeError, match="recreated by a bootstrap push mid-deploy"):
+        poll_platform_deploy_status(
+            env="staging",
+            ref=SHA,
+            base_url="u",
+            secret=SECRET,
+            attempts=50,
+            interval=0,
+            now=lambda: next(clock),
+            sleep=lambda *_: None,
+            nonce_factory=lambda: "nonce123",
+            transport=transport,
+            gateway_grace=180.0,
+        )
