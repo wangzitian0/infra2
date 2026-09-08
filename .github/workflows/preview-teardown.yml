@@ -58,7 +58,9 @@ jobs:
           python-version: "3.11"
 
       - name: Install runtime dependencies
-        run: python -m pip install invoke httpx python-dotenv rich
+        # libs/env.py reads secret stores through infra2-sdk; install the exact wheel
+        # pyproject pins so this job runs the same code as the runner (#649).
+        run: python -m pip install invoke httpx python-dotenv rich "$(grep -oE 'infra2-sdk @ https://[^"]+' pyproject.toml)"
 
       - name: Tear down the PR preview alias
         run: |

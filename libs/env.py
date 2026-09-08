@@ -112,7 +112,10 @@ class OpSecrets:
         if self._cache is None:
             try:
                 raw = self._client().read(self.item)
-            except (SecretsError, OSError) as error:
+            except (SecretsError, OSError, ModuleNotFoundError) as error:
+                # ModuleNotFoundError: no infra2-sdk in a minimal GitHub Actions job
+                # (deploy_v2, watchdogs) — same degrade as a missing `op` binary, which
+                # is what those jobs always had (#649 incident: v1.1.66 crashed them).
                 # OSError: no `op` binary (CI runners, GitHub Actions) — degrade to an
                 # empty read exactly as the pre-SDK implementation did.
                 print(
@@ -135,7 +138,7 @@ class OpSecrets:
     def set(self, key: str, value: str) -> bool:
         try:
             self._client().write(self.item, {key: value})
-        except (SecretsError, OSError) as error:
+        except (SecretsError, OSError, ModuleNotFoundError) as error:
             print(f"OpSecrets: failed to set {key}: {error}", file=sys.stderr)
             return False
         self._cache = None
@@ -176,7 +179,11 @@ class VaultSecrets:
                     "(`vault token create -ttl=1h`, bootstrap/05.vault README) and export "
                     "it as VAULT_TOKEN."
                 )
-            self._backend = _require_sdk(VaultKvBackend)(self.addr, token=self.token)
+            if VaultKvBackend is None:
+                # A token but no SDK (minimal CI job): the historical "cannot reach Vault
+                # from here" class, which callers such as libs.deploy.promote degrade on.
+                raise self.VaultConnectionError(f"\n❌ {_SDK_MISSING}")
+            self._backend = VaultKvBackend(self.addr, token=self.token)
         return self._backend
 
     def _translate(self, error: SecretsError, verb: str) -> VaultError:

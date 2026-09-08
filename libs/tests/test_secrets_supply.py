@@ -124,7 +124,7 @@ def test_vault_backend_accepts_the_transition_alias(monkeypatch) -> None:
             seen.update(env)
             return cls()
 
-    monkeypatch.setattr(secrets_supply, "VaultKvBackend", FakeKv)
+    monkeypatch.setattr(secrets_supply, "UpdateOnlyVaultKv", FakeKv)
     secrets_supply.vault_backend(
         {"VAULT_ROOT_TOKEN": "legacy", "INTERNAL_DOMAIN": "x.io"}
     )
@@ -146,3 +146,53 @@ def test_a_failed_restart_fails_the_deploy_closed(harness, capsys) -> None:
     assert AlertingLike.apply_secret_supply(object()) is False
     assert len(calls["run"]) == 1
     assert "could not restart" in capsys.readouterr().out
+
+
+def test_vault_writes_use_update_not_patch(monkeypatch) -> None:
+    """Deploy identities have create/read/update/list, not patch (#649: runner got 403)."""
+    import json as _json
+    import types as _types
+
+    from infra2_sdk.secrets import WriteResult
+
+    calls: list[tuple[str, str, bytes | None]] = []
+
+    def transport(method, url, headers, body):
+        calls.append((method, url, body))
+        if method == "GET":
+            payload = {"data": {"data": {"A": "1", "B": "2"}}}
+            return _types.SimpleNamespace(
+                status=200, body=_json.dumps(payload).encode(), headers={}
+            )
+        return _types.SimpleNamespace(status=200, body=b"{}", headers={})
+
+    backend = secrets_supply.UpdateOnlyVaultKv(
+        "https://vault.test", token="t", transport=transport
+    )
+    result = backend.write(
+        "truealpha/staging/data_engine", {"B": "2", "SEC_USER_AGENT": "x"}
+    )
+    assert isinstance(result, WriteResult) and result.changed == ("SEC_USER_AGENT",)
+    methods = [m for m, _u, _b in calls]
+    assert "PATCH" not in methods and methods[-1] == "POST"
+    sent = _json.loads(calls[-1][2])["data"]
+    assert sent == {
+        "A": "1",
+        "B": "2",
+        "SEC_USER_AGENT": "x",
+    }  # merged document, nothing dropped
+    assert (
+        backend.write("truealpha/staging/data_engine", {"A": "1"}).changed == ()
+    )  # no-op write
+
+
+def test_workflow_deploy_jobs_install_the_pinned_sdk() -> None:
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    for wf in ("deploy.yml", "deploy-report-main.yml", "preview-teardown.yml"):
+        text = (root / ".github/workflows" / wf).read_text(encoding="utf-8")
+        assert re.search(
+            r"pip install invoke httpx python-dotenv rich .*infra2-sdk @ https://", text
+        ), wf
