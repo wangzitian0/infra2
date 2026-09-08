@@ -10,6 +10,8 @@ no-op vs restart. staging/prod accept tags only, so the promoted ref is always a
 from __future__ import annotations
 
 import argparse
+import ast
+from collections.abc import Mapping
 import json
 import os
 import re
@@ -430,6 +432,92 @@ def run_deploy_commands(
     return results
 
 
+_RUNNER_FINAL_RE = re.compile(
+    r"ended '(?P<status>[a-z_]+)': (?P<payload>\{.*\})\s*$", re.S
+)
+
+
+def failure_summary_from_result(result: dict) -> list[dict]:
+    """The iac-runner's per-service diagnostics behind a failed deploy_v2 command.
+
+    deploy_v2 raises with the runner's final status record appended as a Python literal
+    (``... ended 'failed': {...}``); that record carries ``failure_summary`` — one entry per
+    failed service with the runner's ``error_kind`` / ``summary`` / ``next_action`` — either
+    at the top level or under ``details``. Anything unparseable yields an empty list so the
+    caller falls back to the stderr tail; the alert is never silent because parsing failed.
+    """
+    stderr = str(result.get("stderr") or "")
+    match = _RUNNER_FINAL_RE.search(stderr)
+    if not match:
+        return []
+    try:
+        final = ast.literal_eval(match.group("payload"))
+    except (ValueError, SyntaxError):
+        return []
+    if not isinstance(final, dict):
+        return []
+    for candidate in (final, final.get("details")):
+        if isinstance(candidate, dict) and isinstance(
+            candidate.get("failure_summary"), list
+        ):
+            return [
+                entry
+                for entry in candidate["failure_summary"]
+                if isinstance(entry, dict)
+            ]
+    return []
+
+
+def github_run_url(env: Mapping[str, str]) -> str:
+    """The Actions run URL, or a clear placeholder when any part is missing (a local
+    run must not produce the misleading "actions/runs")."""
+    parts = (
+        env.get("GITHUB_SERVER_URL"),
+        env.get("GITHUB_REPOSITORY"),
+        env.get("GITHUB_RUN_ID"),
+    )
+    if not all(parts):
+        return "(run URL unavailable outside GitHub Actions)"
+    server, repository, run_id = parts
+    return f"{server}/{repository}/actions/runs/{run_id}"
+
+
+def failure_alert_text(
+    *, after: str, results: Sequence[dict], run_url: str, promote_prod: bool
+) -> str | None:
+    """One Feishu message for a failed reconcile: which tag, which environment, and per
+    service the runner's error_kind and next action — the earliest machine-readable point
+    of every deploy-chain incident of 2026-09-04..08 (infra2#658). ``None`` when nothing
+    failed."""
+    failed = [item for item in results if item.get("returncode") != 0]
+    if not failed:
+        return None
+    lines = [
+        f"🚨 IaC reconcile FAILED for {after} ({'PRODUCTION promotion' if promote_prod else 'staging soak'})."
+    ]
+    for item in failed:
+        env = str(item.get("type") or "?")
+        services = str(item.get("service") or "?")
+        summary = failure_summary_from_result(item)
+        if summary:
+            for entry in summary:
+                lines.append(
+                    f"- {env} {entry.get('service') or services}: {entry.get('error_kind') or 'unknown'}"
+                    f" — {str(entry.get('next_action') or entry.get('summary') or '').strip()[:200]}"
+                )
+        else:
+            tail = [
+                line
+                for line in str(item.get("stderr") or "").strip().splitlines()
+                if line.strip()
+            ]
+            lines.append(
+                f"- {env} {services}: {(tail[-1] if tail else 'no diagnostic')[:200]}"
+            )
+    lines.append(f"Run: {run_url}")
+    return "\n".join(lines)
+
+
 def write_summary(
     *,
     plan: ReconcilePlan,
@@ -564,7 +652,14 @@ def main(argv: list[str] | None = None) -> int:
     ):
         production_marker = record_production_marker(args.after, repo_root)
 
+    run_url = github_run_url(os.environ)
     payload = {
+        "alert_text": failure_alert_text(
+            after=args.after,
+            results=results,
+            run_url=run_url,
+            promote_prod=args.promote_prod,
+        ),
         "plan": plan.to_dict(),
         "commands": [command.to_dict() for command in commands],
         # what actually ran this invocation vs what is left for a deliberate next step

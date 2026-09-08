@@ -420,16 +420,134 @@ def test_promote_prod_refuses_a_tag_without_a_green_staging_soak() -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     steps = workflow["jobs"]["reconcile"]["steps"]
     names = [step.get("name") for step in steps]
-    guard = steps[names.index("Production promotion guard (soak, identity, change set)")]
-    assert names.index("Fetch origin/main for provenance guard") < names.index(guard["name"])
+    guard = steps[
+        names.index("Production promotion guard (soak, identity, change set)")
+    ]
+    assert names.index("Fetch origin/main for provenance guard") < names.index(
+        guard["name"]
+    )
     assert names.index(guard["name"]) < names.index("Reconcile changed IaC inputs")
     assert "inputs.promote_prod" in guard["if"] and "workflow_dispatch" in guard["if"]
     assert guard["env"]["GH_TOKEN"] == "${{ github.token }}"
     # gh run list needs actions: read on the workflow token (review on #641)
     assert workflow["permissions"] == {"contents": "write", "actions": "read"}
     script = guard["run"]
-    assert "--workflow reconcile-iac-inputs.yml --event push --branch \"$after\"" in script
+    assert (
+        '--workflow reconcile-iac-inputs.yml --event push --branch "$after"' in script
+    )
     assert 'select(.conclusion == "success")' in script
     assert "has no green staging soak" in script
     assert "merge-base --is-ancestor" in script
     assert "production/v*.*.*" in script and "git diff --stat" in script
+
+
+_RUNNER_FINAL_STDERR = (
+    "deploy_v2 failed: platform batch deploy of ['platform/alerting', 'truealpha/data_engine'] "
+    "to staging ended 'failed': {'deployment_id': 'abc', 'details': {'failure_summary': ["
+    "{'error_kind': 'onepassword_auth_failed', 'next_action': 'OP_SERVICE_ACCOUNT_TOKEN is invalid. "
+    "Recreate the service account.', 'service': 'platform/alerting', 'summary': 'record', "
+    "'task': 'alerting.sync'}, {'error_kind': 'unknown_invoke_failure', 'next_action': 'Inspect this "
+    "service stderr tail.', 'service': 'truealpha/data_engine', 'summary': 'record', "
+    "'task': 'ta-data-engine.sync'}], 'success': False}, 'status': 'failed', 'triggered_by': 'deploy_v2'}\n"
+)
+
+
+def test_failure_alert_names_each_service_and_its_error_kind() -> None:
+    """The v1.1.57 shape (2026-09-07 08:40Z): the runner's structured diagnostics reach the
+    page instead of a red checkmark (#658)."""
+    results = [
+        {
+            "service": "platform/alerting,truealpha/data_engine",
+            "type": "staging",
+            "returncode": 1,
+            "stdout": "",
+            "stderr": _RUNNER_FINAL_STDERR,
+        }
+    ]
+    summary = reconcile.failure_summary_from_result(results[0])
+    assert [entry["error_kind"] for entry in summary] == [
+        "onepassword_auth_failed",
+        "unknown_invoke_failure",
+    ]
+    text = reconcile.failure_alert_text(
+        after="v1.1.57", results=results, run_url="https://x/runs/1", promote_prod=False
+    )
+    assert text is not None and text.startswith(
+        "🚨 IaC reconcile FAILED for v1.1.57 (staging soak)"
+    )
+    assert (
+        "- staging platform/alerting: onepassword_auth_failed — OP_SERVICE_ACCOUNT_TOKEN is invalid"
+        in text
+    )
+    assert (
+        "- staging truealpha/data_engine: unknown_invoke_failure — Inspect this service stderr tail."
+        in text
+    )
+    assert text.endswith("Run: https://x/runs/1")
+
+
+def test_failure_alert_falls_back_to_the_stderr_tail_and_is_silent_on_success() -> None:
+    failed = [
+        {
+            "service": "platform/minio",
+            "type": "prod",
+            "returncode": 1,
+            "stderr": "boom\n504 Gateway Timeout\n",
+        }
+    ]
+    text = reconcile.failure_alert_text(
+        after="v1.1.64", results=failed, run_url="u", promote_prod=True
+    )
+    assert (
+        text is not None
+        and "(PRODUCTION promotion)" in text
+        and "- prod platform/minio: 504 Gateway Timeout" in text
+    )
+    assert reconcile.failure_summary_from_result(failed[0]) == []
+    assert (
+        reconcile.failure_alert_text(
+            after="v1.1.64",
+            results=[{"returncode": 0}],
+            run_url="u",
+            promote_prod=False,
+        )
+        is None
+    )
+
+
+def test_reconcile_workflow_pages_on_failure_with_the_runner_diagnostics() -> None:
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    job = workflow["jobs"]["reconcile"]
+    for key in (
+        "INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE",
+        "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL",
+        "INFRA2_OUT_OF_BAND_FEISHU_APP_ID",
+        "INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET",
+        "INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID",
+        "INFRA2_OUT_OF_BAND_FEISHU_API_BASE",
+    ):
+        assert job["env"][key] == "${{ secrets.%s }}" % key
+    names = [step.get("name") for step in job["steps"]]
+    alert = job["steps"][names.index("Alert on failure")]
+    assert (
+        names.index("Reconcile changed IaC inputs")
+        < names.index("Alert on failure")
+        < names.index("Upload reconcile result")
+    )
+    assert alert["if"].startswith("failure()") and "inputs.dry_run" in alert["if"]
+    assert "deliver_out_of_band_alert" in alert["run"] and "alert_text" in alert["run"]
+
+
+def test_github_run_url_is_real_or_clearly_absent() -> None:
+    env = {
+        "GITHUB_SERVER_URL": "https://github.com",
+        "GITHUB_REPOSITORY": "o/r",
+        "GITHUB_RUN_ID": "7",
+    }
+    assert reconcile.github_run_url(env) == "https://github.com/o/r/actions/runs/7"
+    assert (
+        reconcile.github_run_url({}) == "(run URL unavailable outside GitHub Actions)"
+    )
+    assert "actions/runs" not in reconcile.github_run_url(
+        {"GITHUB_SERVER_URL": "https://github.com"}
+    )

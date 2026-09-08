@@ -53,6 +53,14 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
       IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
       INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
+      # A failed reconcile pages out of band (#658): the runner's per-service error_kind is
+      # the earliest machine-readable point of every deploy-chain incident of 2026-09-04..08.
+      INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
+      INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
+      INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -184,6 +192,44 @@ jobs:
           [[ "$promote_prod" == "true" ]] && args+=(--promote-prod)
 
           python -m tools.reconcile_iac_inputs "${args[@]}"
+
+      # v1.1.57's reconcile (2026-09-07 08:35Z) recorded onepassword_auth_failed for
+      # platform/alerting and unknown_invoke_failure for truealpha/data_engine twenty minutes
+      # before the production incident and produced only a red checkmark (#658).
+      - name: Alert on failure
+        if: failure() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          INPUT_AFTER: ${{ inputs.after || github.ref_name }}
+          INPUT_PROMOTE_PROD: ${{ inputs.promote_prod || false }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          from tools.out_of_band_watchdog import deliver_out_of_band_alert
+
+          run_url = "/".join(
+              v for v in (
+                  os.environ.get("GITHUB_SERVER_URL"),
+                  os.environ.get("GITHUB_REPOSITORY"),
+                  "actions/runs",
+                  os.environ.get("GITHUB_RUN_ID"),
+              ) if v
+          )
+          text = None
+          result = Path("reconcile-result.json")
+          if result.exists():
+              try:
+                  text = json.loads(result.read_text()).get("alert_text")
+              except ValueError:
+                  text = None
+          if not text:
+              kind = "PRODUCTION promotion" if os.environ.get("INPUT_PROMOTE_PROD") == "true" else "staging soak"
+              text = (
+                  f"🚨 IaC reconcile FAILED for {os.environ.get('INPUT_AFTER')} ({kind}) before any "
+                  f"deploy result was recorded (guard, provenance or runner unreachable).\nRun: {run_url}"
+              )
+          deliver_out_of_band_alert(os.environ, text)
+          PY
 
       - name: Upload reconcile result
         uses: actions/upload-artifact@v7
