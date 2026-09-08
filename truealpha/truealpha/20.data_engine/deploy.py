@@ -233,6 +233,19 @@ class DataEngineDeployer(Deployer):
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
 
+    #: A first pull of the ~1 GB data-engine image took longer than the original 90 s
+    #: window on 2026-07-27 and again on 2026-09-04 (#595): the sync reported the OLD
+    #: digest while the pull was still in flight, and the containers came up on the new
+    #: one seconds later. So the verification first pulls the promoted digest itself
+    #: (Docker shares layers with the pull compose already started; the call returns when
+    #: the image is local), then expects the containers to switch, then waits for their
+    #: healthchecks: a deploy is applied when the promoted build is RUNNING, not merely
+    #: recorded.
+    PULL_DEADLINE_SECONDS = 600
+    SWITCH_DEADLINE_SECONDS = 180
+    HEALTH_DEADLINE_SECONDS = 300
+    POLL_INTERVAL_SECONDS = 5
+
     @classmethod
     def verify_runtime_applied(cls, c, env_vars: dict[str, str]) -> str | None:
         expected_digest = env_vars["DATA_ENGINE_IMAGE_DIGEST"]
@@ -248,24 +261,62 @@ class DataEngineDeployer(Deployer):
             f"truealpha-dagster-daemon{suffix}",
             f"truealpha-dagster-code-server{suffix}",
         )
-        deadline = time.monotonic() + 90
+
+        def remote(command: str, timeout: int | None = None):
+            return c.run(
+                f'ssh {ssh_user}@{host} "{command}"',
+                warn=True,
+                hide=True,
+                timeout=timeout,
+            )
+
+        pulled = remote(
+            f"docker pull -q {expected_image}", timeout=cls.PULL_DEADLINE_SECONDS
+        )
+        if not pulled.ok:
+            detail = (pulled.stderr or pulled.stdout or "").strip().splitlines()
+            return (
+                f"promoted image {expected_digest[:19]}… could not be pulled on {host} within "
+                f"{cls.PULL_DEADLINE_SECONDS}s: {detail[-1] if detail else 'no output'}"
+            )
+
+        deadline = time.monotonic() + cls.SWITCH_DEADLINE_SECONDS
         last_error = "containers did not expose the promoted image"
-        while time.monotonic() < deadline:
+        while True:
             mismatches = []
             for container in containers:
-                result = c.run(
-                    f"ssh {ssh_user}@{host} \"docker inspect -f '{{{{.Config.Image}}}}' {container}\"",
-                    warn=True,
-                    hide=True,
+                result = remote(
+                    f"docker inspect -f '{{{{.Config.Image}}}}' {container}"
                 )
                 actual = (result.stdout or "").strip()
                 if not result.ok or actual != expected_image:
                     mismatches.append(f"{container}={actual or 'unavailable'}")
             if not mismatches:
-                return None
+                break
             last_error = ", ".join(mismatches)
-            time.sleep(3)
-        return f"promoted image digest was not applied: {last_error}"
+            if time.monotonic() >= deadline:
+                return f"promoted image digest was not applied: {last_error}"
+            time.sleep(cls.POLL_INTERVAL_SECONDS)
+
+        deadline = time.monotonic() + cls.HEALTH_DEADLINE_SECONDS
+        while True:
+            unhealthy = []
+            for container in containers:
+                result = remote(
+                    f"docker inspect -f '{{{{if .State.Health}}}}{{{{.State.Health.Status}}}}"
+                    f"{{{{else}}}}{{{{.State.Status}}}}{{{{end}}}}' {container}"
+                )
+                status = (result.stdout or "").strip()
+                if not result.ok or status not in {"healthy", "running"}:
+                    unhealthy.append(f"{container}={status or 'unavailable'}")
+            if not unhealthy:
+                return None
+            if time.monotonic() >= deadline:
+                return (
+                    f"promoted image is running but not healthy after "
+                    f"{cls.HEALTH_DEADLINE_SECONDS}s: {', '.join(unhealthy)}"
+                )
+            time.sleep(cls.POLL_INTERVAL_SECONDS)
 
 
 if shared_tasks:
