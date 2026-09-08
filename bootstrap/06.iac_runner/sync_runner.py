@@ -587,6 +587,7 @@ def run_invoke_task(
     deploy_env: str = "staging",
     deploy_ref: str | None = None,
     version_ref: str | None = None,
+    action: str | None = None,
 ) -> dict:
     """Run an invoke task with timeout and return result."""
     logger.info(
@@ -606,6 +607,11 @@ def run_invoke_task(
         # that reads DEPLOY_VERSION_REF acts on it; the value is already validated by
         # the webhook (tag or sha) and is never interpolated into a shell.
         env_vars["DEPLOY_VERSION_REF"] = version_ref
+    if action and action != "sync":
+        # deploy_v2 asks for the secret supply alone before an app stack's Dokploy
+        # promote (which never enters the Deployer); Deployer.sync reads this and stops
+        # after apply_secret_supply — no compose (#649).
+        env_vars["DEPLOY_ACTION"] = action
     if vault_root_token := resolve_vault_token(env_vars):
         # The bounded AppRole token travels as VAULT_TOKEN (libs.env, infra2-sdk); the old
         # name is kept for one release so a child at an older iac_ref still finds it.
@@ -708,6 +714,7 @@ def sync_services(
     ref: str | None = None,
     deploy_env: str = "staging",
     version_ref: str | None = None,
+    action: str | None = None,
 ) -> SyncResult:
     """Sync the specified services with deployment lock."""
     requested_services = sorted(services)
@@ -789,13 +796,14 @@ def sync_services(
                 )
                 continue
 
+            extra = {"version_ref": version_ref} if version_ref else {}
+            if action and action != "sync":
+                extra["action"] = action
             if resolved_head:
-                extra = {"version_ref": version_ref} if version_ref else {}
                 result = run_invoke_task(
                     task_name, repo_path, deploy_env, resolved_head, **extra
                 )
             else:
-                extra = {"version_ref": version_ref} if version_ref else {}
                 result = run_invoke_task(task_name, repo_path, deploy_env, **extra)
             service_result = ServiceSyncResult(
                 service=service,
@@ -853,6 +861,7 @@ def sync_services_by_version(
     triggered_by: str,
     services: list[str] | None = None,
     version_ref: str | None = None,
+    action: str | None = None,
 ) -> SyncResult:
     """Deploy targeted platform services to a specific environment using a git ref."""
     logger.info("=== Deployment Started ===")
@@ -862,8 +871,12 @@ def sync_services_by_version(
     if services:
         logger.info(f"Targeted Services: {services}")
 
+    if action and action != "sync":
+        logger.info(f"Action: {action}")
     target_services = set(services) if services else set()
     extra = {"version_ref": version_ref} if version_ref else {}
+    if action and action != "sync":
+        extra["action"] = action
     result = sync_services(target_services, ref=ref, deploy_env=env, **extra)
 
     logger.info(

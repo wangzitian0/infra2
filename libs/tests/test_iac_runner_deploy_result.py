@@ -714,7 +714,9 @@ def test_run_invoke_task_logs_safe_child_env(monkeypatch, tmp_path) -> None:
     assert "ENV_SUFFIX=-staging" in summary
     assert "VAULT_ROLE_ID=set" in summary
     assert "VAULT_SECRET_ID=set" in summary
-    assert "VAULT_TOKEN=set" in summary  # the AppRole token travels as VAULT_TOKEN (PR-E)
+    assert (
+        "VAULT_TOKEN=set" in summary
+    )  # the AppRole token travels as VAULT_TOKEN (PR-E)
     assert "role-abc" not in summary
     assert "secret-xyz" not in summary
 
@@ -1283,9 +1285,7 @@ def test_deployment_identity_includes_normalized_service_set(monkeypatch) -> Non
     postgres = webhook_server._deployment_key(
         "staging", DEPLOY_SHA, ["platform/postgres"]
     )
-    redis = webhook_server._deployment_key(
-        "staging", DEPLOY_SHA, ["platform/redis"]
-    )
+    redis = webhook_server._deployment_key("staging", DEPLOY_SHA, ["platform/redis"])
     batch_a = webhook_server._deployment_key(
         "staging", DEPLOY_SHA, ["platform/redis", "platform/postgres"]
     )
@@ -1294,9 +1294,13 @@ def test_deployment_identity_includes_normalized_service_set(monkeypatch) -> Non
     )
 
     assert postgres != redis
-    assert webhook_server._deployment_id(postgres) != webhook_server._deployment_id(redis)
+    assert webhook_server._deployment_id(postgres) != webhook_server._deployment_id(
+        redis
+    )
     assert batch_a == batch_b
-    assert webhook_server._deployment_id(batch_a) == webhook_server._deployment_id(batch_b)
+    assert webhook_server._deployment_id(batch_a) == webhook_server._deployment_id(
+        batch_b
+    )
 
 
 def test_status_fails_closed_when_legacy_coordinate_is_ambiguous(monkeypatch) -> None:
@@ -1327,9 +1331,7 @@ def test_status_fails_closed_when_legacy_coordinate_is_ambiguous(monkeypatch) ->
     postgres = webhook_server._deployment_key(
         "staging", DEPLOY_SHA, ["platform/postgres"]
     )
-    redis = webhook_server._deployment_key(
-        "staging", DEPLOY_SHA, ["platform/redis"]
-    )
+    redis = webhook_server._deployment_key("staging", DEPLOY_SHA, ["platform/redis"])
     webhook_server._in_flight_deploys.update({postgres, redis})
 
     body, status_code = webhook_server.deployment_status()
@@ -1340,3 +1342,101 @@ def test_status_fails_closed_when_legacy_coordinate_is_ambiguous(monkeypatch) ->
         webhook_server._deployment_id(postgres),
         webhook_server._deployment_id(redis),
     }
+
+
+def test_secrets_supply_action_is_its_own_deployment_and_reaches_the_sync(
+    monkeypatch,
+) -> None:
+    """#649: deploy_v2 fires /deploy with action=secrets-supply before an app stack's
+    Dokploy promote. The action must reach sync_services_by_version (which sets
+    DEPLOY_ACTION for the child) and must key a different deployment than a plain sync
+    of the same coordinates, or the 600 s request cache would answer one with the other."""
+    # the webhook imports `sync_runner` by that name: load it under it so the fake below
+    # is the one it calls (the other tests do the same)
+    sync_runner = _load_module(
+        "sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch
+    )
+    fake_flask = types.ModuleType("flask")
+
+    class FakeFlask:
+        def __init__(self, _name):
+            pass
+
+        def route(self, *_args, **_kwargs):
+            return lambda func: func
+
+    fake_flask.Flask = FakeFlask
+    fake_flask.jsonify = lambda payload: payload
+    fake_flask.request = types.SimpleNamespace(
+        headers=_signed_headers(monkeypatch),
+        data=b"",
+        json={
+            "env": "staging",
+            "ref": DEPLOY_SHA,
+            "wait": True,
+            "triggered_by": "deploy_v2",
+            "services": ["finance_report/app"],
+            "action": "secrets-supply",
+        },
+    )
+    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+    webhook_server = _load_module(
+        "webhook_server_action_under_test",
+        IAC_RUNNER / "webhook_server.py",
+        monkeypatch,
+    )
+    seen: dict = {}
+
+    def fake_sync(env, ref, triggered_by, services=None, **kwargs):
+        seen.update(env=env, services=services, **kwargs)
+        return sync_runner.SyncResult(
+            env=env,
+            ref=ref,
+            requested_services=list(services or []),
+            results=[
+                sync_runner.ServiceSyncResult(
+                    service="finance_report/app", task="fr-app.sync", success=True
+                )
+            ],
+        )
+
+    monkeypatch.setattr(sync_runner, "sync_services_by_version", fake_sync)
+    body, status_code = webhook_server.version_deploy()
+    assert status_code == 200
+    assert seen["action"] == "secrets-supply"
+    assert body["action"] == "secrets-supply"
+    plain = webhook_server._deployment_key(
+        "staging", DEPLOY_SHA, ["finance_report/app"]
+    )
+    supply = webhook_server._deployment_key(
+        "staging", DEPLOY_SHA, ["finance_report/app"], action="secrets-supply"
+    )
+    assert webhook_server._deployment_id(plain) != webhook_server._deployment_id(supply)
+    assert body["deployment_id"] == webhook_server._deployment_id(supply)
+    # a plain sync of the same coordinates is NOT served from the supply's cached result
+    fake_flask.request.json = {**fake_flask.request.json, "action": "sync"}
+    body2, _ = webhook_server.version_deploy()
+    assert body2.get("cached") is not True or body2.get("action") != "secrets-supply"
+
+
+def test_run_invoke_task_passes_the_action_to_the_child(monkeypatch, tmp_path) -> None:
+    sync_runner = _load_module(
+        "sync_runner_action_env_under_test", IAC_RUNNER / "sync_runner.py", monkeypatch
+    )
+    captured: dict = {}
+
+    def fake_run(args, **kwargs):
+        if args[:3] == ["vault", "write", "-format=json"]:
+            return types.SimpleNamespace(
+                returncode=0, stdout='{"auth": {"client_token": "t"}}', stderr=""
+            )
+        captured["env"] = kwargs["env"]
+        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(sync_runner.subprocess, "run", fake_run)
+    sync_runner.run_invoke_task(
+        "fr-app.sync", tmp_path, "staging", action="secrets-supply"
+    )
+    assert captured["env"]["DEPLOY_ACTION"] == "secrets-supply"
+    sync_runner.run_invoke_task("fr-app.sync", tmp_path, "staging")
+    assert "DEPLOY_ACTION" not in captured["env"]

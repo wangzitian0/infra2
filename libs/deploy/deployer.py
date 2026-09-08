@@ -1377,6 +1377,21 @@ class Deployer:
         if missing := validate_env():
             return {"action": "failed", "details": f"Missing env: {', '.join(missing)}"}
 
+        if os.environ.get("DEPLOY_ACTION") == "secrets-supply":
+            # The runner was asked for the secret supply alone: deploy_v2 runs it before
+            # an app stack's Dokploy promote, a path that never enters this Deployer.
+            # Copy human values, generate runtime ones, report what is missing — and
+            # stop; the promote that follows recreates the containers (#649).
+            if not cls.apply_secret_supply(c, env=e.get("ENV")):
+                return {
+                    "action": "failed",
+                    "details": "secret supply left required values missing",
+                }
+            return {
+                "action": "supplied",
+                "details": "secret supply applied; no compose",
+            }
+
         # Pre-check: verify VAULT_APP_TOKEN validity
         try:
             token_status = cls.verify_vault_app_token()

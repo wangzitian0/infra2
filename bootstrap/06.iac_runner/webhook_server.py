@@ -205,15 +205,32 @@ def validate_version_ref(value) -> str | None:
     return value.strip()
 
 
+DEPLOY_ACTIONS = ("sync", "secrets-supply")
+
+
 def _deployment_key(
     env: str,
     ref: str,
     services: list[str] | None = None,
     version_ref: str | None = None,
+    action: str = "sync",
 ) -> DeploymentKey:
     # version_ref is part of the key: two promotions of different app releases on the
     # same iac_ref within RECENT_DEPLOY_TTL_SECONDS are different deployments.
-    return (env, ref, _normalize_services(services), version_ref or "")
+    # The action is part of the key too: a secrets-supply request must never be
+    # answered from a cached sync of the same coordinates (#649).
+    return (
+        env,
+        ref,
+        _normalize_services(services),
+        version_ref or "",
+        action or "sync",
+    )
+
+
+def _action_kwargs(action: str | None) -> dict:
+    """Only a non-default action travels as a kwarg (legacy fakes keep their shape)."""
+    return {"action": action} if action and action != "sync" else {}
 
 
 def _deployment_id(key: DeploymentKey) -> str:
@@ -224,6 +241,8 @@ def _deployment_id(key: DeploymentKey) -> str:
     seed = f"{key[0]}:{key[1]}:{service_identity}"
     if version_identity:
         seed += f":{version_identity}"
+    if len(key) > 4 and key[4] and key[4] != "sync":
+        seed += f":{key[4]}"
     return hashlib.sha256(seed.encode()).hexdigest()[:16]
 
 
@@ -245,8 +264,9 @@ def _in_progress_response(
     duplicate: bool = False,
     services: list[str] | None = None,
     version_ref: str | None = None,
+    action: str = "sync",
 ) -> dict:
-    key = _deployment_key(env, ref, services, version_ref)
+    key = _deployment_key(env, ref, services, version_ref, action)
     response = {
         "status": "in_progress",
         "deployment_id": _deployment_id(key),
@@ -258,6 +278,8 @@ def _in_progress_response(
     }
     if version_ref:
         response["version_ref"] = version_ref
+    if action and action != "sync":
+        response["action"] = action
     if duplicate:
         response["duplicate"] = True
     return response
@@ -270,11 +292,12 @@ def _completed_response(
     result,
     services: list[str] | None = None,
     version_ref: str | None = None,
+    action: str = "sync",
 ) -> dict:
     # Keyed exactly as the deployment was stored (review on #630): a version_ref that
     # took part in the key must take part in the id, or /deploy/status looks up a
     # deployment that was never stored under that id.
-    key = _deployment_key(env, ref, services, version_ref)
+    key = _deployment_key(env, ref, services, version_ref, action)
     result_payload = (
         result.to_public_dict()
         if hasattr(result, "to_public_dict")
@@ -291,6 +314,8 @@ def _completed_response(
     }
     if version_ref:
         response["version_ref"] = version_ref
+    if action and action != "sync":
+        response["action"] = action
     return response
 
 
@@ -300,12 +325,13 @@ def _version_kwargs(version_ref: str | None) -> dict:
     return {"version_ref": version_ref} if version_ref else {}
 
 
-def _deployment_target(version_ref: str | None):
-    """The thread target: _run_deployment itself when no version_ref is set (the exact
-    legacy shape), else the same function with the version bound in."""
-    if not version_ref:
+def _deployment_target(version_ref: str | None, action: str | None = None):
+    """The thread target: _run_deployment itself when no version_ref/action is set (the
+    exact legacy shape), else the same function with those bound in."""
+    kwargs = {**_version_kwargs(version_ref), **_action_kwargs(action)}
+    if not kwargs:
         return _run_deployment
-    return functools.partial(_run_deployment, version_ref=version_ref)
+    return functools.partial(_run_deployment, **kwargs)
 
 
 def _run_deployment(
@@ -314,20 +340,26 @@ def _run_deployment(
     triggered_by: str,
     services: list[str] | None = None,
     version_ref: str | None = None,
+    action: str = "sync",
 ) -> None:
     from sync_runner import sync_services_by_version
 
-    key = _deployment_key(env, ref, services, version_ref)
+    key = _deployment_key(env, ref, services, version_ref, action)
     try:
+        extra = {**_version_kwargs(version_ref), **_action_kwargs(action)}
         result = (
-            sync_services_by_version(
-                env, ref, triggered_by, services, version_ref=version_ref
-            )
-            if version_ref
+            sync_services_by_version(env, ref, triggered_by, services, **extra)
+            if extra
             else sync_services_by_version(env, ref, triggered_by, services)
         )
         response = _completed_response(
-            env, ref, triggered_by, result, services, version_ref=version_ref
+            env,
+            ref,
+            triggered_by,
+            result,
+            services,
+            version_ref=version_ref,
+            action=action,
         )
     except Exception as exc:
         logger.exception("Deployment failed before producing a sync result")
@@ -517,13 +549,17 @@ def version_deploy():
         version_ref = validate_version_ref(payload.get("version_ref"))
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+    action = payload.get("action") or "sync"
+    if action not in DEPLOY_ACTIONS:
+        return jsonify({"error": f"action must be one of {list(DEPLOY_ACTIONS)}"}), 400
     logger.info(
         f"Deployment: {ref} to {env} by {triggered_by}"
         + (f" (version_ref {version_ref})" if version_ref else "")
+        + (f" (action {action})" if action != "sync" else "")
     )
 
     if wait:
-        key = _deployment_key(env, ref, services, version_ref)
+        key = _deployment_key(env, ref, services, version_ref, action)
         with _deploy_state_lock:
             recent = _recent_result(key)
             if recent:
@@ -532,13 +568,24 @@ def version_deploy():
             if key in _in_flight_deploys:
                 return jsonify(
                     _in_progress_response(
-                        env, ref, triggered_by, True, services, version_ref=version_ref
+                        env,
+                        ref,
+                        triggered_by,
+                        True,
+                        services,
+                        version_ref=version_ref,
+                        action=action,
                     )
                 ), 202
             _in_flight_deploys.add(key)
 
         _run_deployment(
-            env, ref, triggered_by, services, **_version_kwargs(version_ref)
+            env,
+            ref,
+            triggered_by,
+            services,
+            **_version_kwargs(version_ref),
+            **_action_kwargs(action),
         )
         response = _recent_result(key) or {
             "status": "failed",
@@ -550,7 +597,7 @@ def version_deploy():
         status_code = 200 if response.get("status") == "completed" else 500
         return jsonify(response), status_code
 
-    key = _deployment_key(env, ref, services, version_ref)
+    key = _deployment_key(env, ref, services, version_ref, action)
     with _deploy_state_lock:
         recent = _recent_result(key)
         if recent:
@@ -558,19 +605,26 @@ def version_deploy():
         if key in _in_flight_deploys:
             return jsonify(
                 _in_progress_response(
-                    env, ref, triggered_by, True, services, version_ref=version_ref
+                    env,
+                    ref,
+                    triggered_by,
+                    True,
+                    services,
+                    version_ref=version_ref,
+                    action=action,
                 )
             ), 202
         _in_flight_deploys.add(key)
 
     if services is not None:
         thread = threading.Thread(
-            target=_deployment_target(version_ref),
+            target=_deployment_target(version_ref, action),
             args=(env, ref, triggered_by, services),
         )
     else:
         thread = threading.Thread(
-            target=_deployment_target(version_ref), args=(env, ref, triggered_by)
+            target=_deployment_target(version_ref, action),
+            args=(env, ref, triggered_by),
         )
     thread.daemon = True
     thread.start()
@@ -624,9 +678,12 @@ def deployment_status():
         version_ref = validate_version_ref(payload.get("version_ref"))
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+    action = payload.get("action") or "sync"
+    if action not in DEPLOY_ACTIONS:
+        return jsonify({"error": f"action must be one of {list(DEPLOY_ACTIONS)}"}), 400
     with _deploy_state_lock:
         if services is not None:
-            key = _deployment_key(env, ref, services, version_ref)
+            key = _deployment_key(env, ref, services, version_ref, action)
         else:
             candidates = _keys_for_legacy_status(env, ref)
             if len(candidates) > 1:
@@ -638,7 +695,11 @@ def deployment_status():
                         ],
                     }
                 ), 409
-            key = candidates[0] if candidates else _deployment_key(env, ref)
+            key = (
+                candidates[0]
+                if candidates
+                else _deployment_key(env, ref, action=action)
+            )
 
         expected_id = _deployment_id(key)
         if deployment_id is not None and deployment_id != expected_id:
