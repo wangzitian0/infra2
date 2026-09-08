@@ -303,7 +303,11 @@ def run_once(
             chronic_digest_seconds // 3600,
             ",".join(chronic_names),
         )
-        _post_alert(build_breakdown_alert_payload(digest))
+        _post_alert(
+            build_breakdown_alert_payload(
+                digest, severity="warning", alertname="ContainerBreakdownChronic"
+            )
+        )
         chronic["__digest_at__"] = now
         for name in chronic_names:
             chronic.pop(name, None)

@@ -465,6 +465,10 @@ def test_run_once_stay_resolved_floor_suppresses_a_refire_and_digests_chronic_on
     # the first digest window is open, so the chronic set went out at once — as ONE
     # firing alert in state "chronic" — and the counter was consumed by the digest
     assert len(chronic_digests()) == 1
+    digest = chronic_digests()[0]
+    assert digest["commonLabels"]["alertname"] == "ContainerBreakdownChronic"
+    assert digest["commonLabels"]["severity"] == "warning"
+    assert all(a["labels"]["severity"] == "warning" for a in digest["alerts"])
     assert "prefect-worker" not in chronic and chronic["__digest_at__"] == clock["now"]
     assert (
         len([p for p in posted if p["status"] == "firing"]) == 2
