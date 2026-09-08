@@ -714,7 +714,7 @@ def test_run_invoke_task_logs_safe_child_env(monkeypatch, tmp_path) -> None:
     assert "ENV_SUFFIX=-staging" in summary
     assert "VAULT_ROLE_ID=set" in summary
     assert "VAULT_SECRET_ID=set" in summary
-    assert "VAULT_ROOT_TOKEN=set" in summary
+    assert "VAULT_TOKEN=set" in summary  # the AppRole token travels as VAULT_TOKEN (PR-E)
     assert "role-abc" not in summary
     assert "secret-xyz" not in summary
 

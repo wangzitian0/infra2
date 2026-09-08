@@ -58,6 +58,7 @@ name: Ops Checks
     - cron: "27 4 * * *" # daily re-ensure of the VPS host-hygiene Dokploy schedule
     - cron: "17 7 * * *" # daily facet reconcile: compose_id + config-hash + dns drift (#542)
     - cron: "17 8 * * *" # daily Vault self-refresh audit (#531)
+    - cron: "27 8 * * *" # daily secrets reconcile + capacity (secrets supply chain, PR-E)
   workflow_dispatch:
     inputs:
       task:
@@ -74,6 +75,7 @@ name: Ops Checks
           - watchdog-weekly-digest
           - facet-reconcile
           - vault-self-refresh-audit
+          - secrets-reconcile
           - all
       dry_run:
         description: "Run checks without sending Feishu notifications"
@@ -92,7 +94,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'infra2-deploy-guard-audit' || github.event_name == 'schedule' && github.event.schedule == '37 6 * * *' && 'deploy-v2-canary' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-leak-check' || github.event_name == 'schedule' && github.event.schedule == '27 4 * * *' && 'infra2-host-hygiene-schedule' || github.event_name == 'schedule' && github.event.schedule == '17 7 * * *' && 'infra2-facet-reconcile' || github.event_name == 'schedule' && github.event.schedule == '17 8 * * *' && 'infra2-vault-self-refresh-audit' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) || format('ops-checks-push-{0}', github.sha) }}
+  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'infra2-deploy-guard-audit' || github.event_name == 'schedule' && github.event.schedule == '37 6 * * *' && 'deploy-v2-canary' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-leak-check' || github.event_name == 'schedule' && github.event.schedule == '27 4 * * *' && 'infra2-host-hygiene-schedule' || github.event_name == 'schedule' && github.event.schedule == '17 7 * * *' && 'infra2-facet-reconcile' || github.event_name == 'schedule' && github.event.schedule == '17 8 * * *' && 'infra2-vault-self-refresh-audit' || github.event_name == 'schedule' && github.event.schedule == '27 8 * * *' && 'infra2-secrets-reconcile' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) || format('ops-checks-push-{0}', github.sha) }}
   cancel-in-progress: false
 
 env:
@@ -707,6 +709,95 @@ jobs:
               f"{detail}\n"
               "Read-only findings — investigate the named service's vault-agent/app "
               "containers on the VPS.\n"
+              f"Run: {run_url}",
+          )
+          PY
+
+  secrets-reconcile:
+    # signal: secrets-reconcile
+    name: Secrets reconcile + capacity
+    # Live check (secrets supply chain, PR-E): every registered service's Vault path is
+    # compared with its manifest and with 1Password, and the Cloudflare quotas behind
+    # the heartbeat worker are read — names and counts only, never values. The
+    # comparison runs INSIDE the iac-runner (its AppRole and the 1Password service
+    # account live there); this job carries the verdict, reusing the watchdog SSH key.
+    if: ${{ (github.event_name == 'schedule' && github.event.schedule == '27 8 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'secrets-reconcile' || inputs.task == 'all')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
+      VPS_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
+      INFRA2_WATCHDOG_SSH_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
+      INFRA2_WATCHDOG_SSH_USER: ${{ secrets.INFRA2_WATCHDOG_SSH_USER }}
+      INFRA2_WATCHDOG_SSH_PORT: ${{ vars.INFRA2_WATCHDOG_SSH_PORT }}
+      INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
+      INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
+      INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+      SECRETS_RECONCILE_REPORT: ${{ github.workspace }}/secrets-reconcile-report.json
+      GITHUB_SERVER_URL: ${{ github.server_url }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      GITHUB_RUN_ID: ${{ github.run_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install runtime dependencies
+        run: python -m pip install httpx python-dotenv rich PyYAML invoke
+      - name: Configure SSH key
+        env:
+          INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${INFRA2_WATCHDOG_SSH_PRIVATE_KEY:-}" ]]; then
+            echo "::error::INFRA2_WATCHDOG_SSH_PRIVATE_KEY secret is required for the secrets reconcile."
+            exit 1
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_secrets_reconcile
+          chmod 600 ~/.ssh/infra2_secrets_reconcile
+          echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_secrets_reconcile" >> "$GITHUB_ENV"
+      - name: Run the secrets reconcile inside the iac-runner
+        run: |
+          set -euo pipefail
+          if [[ -z "${VPS_HOST:-}" ]]; then
+            echo "::error::INFRA2_WATCHDOG_SSH_HOST secret is required for the secrets reconcile."
+            exit 1
+          fi
+          # Fails the STEP on any finding or transport error so it shows in the run log;
+          # only a confirmed finding (never an SSH hiccup) pages Feishu in the next step.
+          python -m tools.secrets_reconcile_check
+      - name: Alert on confirmed findings
+        if: failure() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        run: |
+          python - <<'PY'
+          import os
+          from tools.out_of_band_watchdog import deliver_out_of_band_alert
+          from tools.secrets_reconcile_check import load_report, page_worthy_summary
+
+          report = load_report(os.environ)
+          summary = page_worthy_summary(report)
+          if not summary:
+              print("secrets reconcile step failed without a confirmed finding -- not paging.")
+              raise SystemExit(0)
+          run_url = "/".join(
+              v for v in (
+                  os.environ.get("GITHUB_SERVER_URL"),
+                  os.environ.get("GITHUB_REPOSITORY"),
+                  "actions/runs",
+                  os.environ.get("GITHUB_RUN_ID"),
+              ) if v
+          )
+          deliver_out_of_band_alert(
+              os.environ,
+              "🚨 Secrets reconcile found drift or a quota over budget.\n"
+              f"{summary}\n"
+              "Names only; fix the 1Password item or rerun the deploy, never type into Vault.\n"
               f"Run: {run_url}",
           )
           PY

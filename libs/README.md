@@ -8,7 +8,8 @@
 
 ## At a Glance
 
-- `get_secrets` selects `OpSecrets` (1Password) or `VaultSecrets` (Vault) for SSOT reads/writes.
+- `get_secrets` selects `OpSecrets` (1Password) or `VaultSecrets` (Vault) — thin shims over the infra2-sdk backends — for reads.
+- `secrets_registry` + `secrets_supply` are the one writer of Vault: every deploy applies the service's manifest (copy human values from 1Password, generate runtime values, mirror back, report what is missing by name).
 - `Deployer` + `make_tasks` standardize service deploy flows (now via Dokploy API).
 - `iac_runner_client` signs exact operation requests and polls by deployment ID.
 - `dokploy` wraps the Dokploy REST API for compose deployments.
@@ -20,6 +21,8 @@
 | Module | Role | Key APIs |
 |--------|------|----------|
 | `env.py` | **Core** SSOT secrets access | `OpSecrets`, `VaultSecrets`, `get_secrets`, `generate_password` |
+| `secrets_registry.py` | Which manifests describe each deployed service | `SERVICES`, `lookup()`, `merged_manifest()` |
+| `secrets_supply.py` | Deploy-time secret supply through the SDK resolver | `apply()`, `resolver_for()`, `vault_backend()` |
 | `common.py` | Shared environment helpers | `get_env()`, `validate_env()`, `check_service()` |
 | `console.py` | Rich CLI output | `header()`, `success()`, `error()`, `prompt_action()` |
 | `deployer.py` | Deployment base class + task helpers | `Deployer`, `make_tasks()` |
@@ -36,7 +39,7 @@
 
 ### Secrets (SSOT-first)
 
-`get_secrets()` routes to the appropriate backend based on `type` parameter:
+`get_secrets()` routes to the backend that owns the value (`credential_type`):
 
 | Type | Backend | Path Format |
 |------|---------|-------------|
@@ -48,18 +51,29 @@
 ```python
 from libs.env import get_secrets
 
-# App vars (Vault, default)
-secrets = get_secrets(project="platform", service="postgres", env="production")
-db_pass = secrets.get("POSTGRES_PASSWORD")
+# Runtime values (Vault, default) — read here, written by the supply on deploy
+db_pass = get_secrets("platform", "postgres", "production").get("POSTGRES_PASSWORD")
 
 # Bootstrap credentials (1Password, no env layer)
-bootstrap = get_secrets(project="bootstrap", service="vault", type="bootstrap")
-root_token = bootstrap.get("ROOT_TOKEN")
+dokploy_key = get_secrets("bootstrap", "dokploy", credential_type="bootstrap").get("DOKPLOY_API_KEY")
 
-# Root vars (1Password, with env layer, for Web UI passwords)
-root_vars = get_secrets(project="platform", env="production", service="authentik", type="root_vars")
-admin_pass = root_vars.get("ADMIN_PASSWORD")
+# Human-entered values (1Password, with env layer)
+webhook = get_secrets("platform", "alerting", "production", credential_type="root_vars").get("FEISHU_WEBHOOK_URL")
 ```
+
+Writes go through the manifest, not `secrets.set` (see
+`docs/ssot/bootstrap.vars_and_secrets.md` §1.4):
+
+```python
+from libs import secrets_registry, secrets_supply
+
+service = secrets_registry.lookup("platform", "alerting")
+report = secrets_supply.apply(service, "staging")   # names only: report.changed / report.missing
+```
+
+`Deployer.apply_secret_supply` calls this in `pre_compose` for every registered service and
+restarts the vault-agent and app containers when a value changed; `tools/secrets_reconcile.py`
+re-checks every store daily (ops-checks). `invoke env.set` into Vault is break-glass only.
 
 ### Init seed vars (1Password)
 ```python
@@ -105,7 +119,7 @@ from libs.deploy.deployer import Deployer, make_tasks
 - Infra contract and filesystem-discovery tests exclude `repos/`; workspace submodules own their own workflows and invariants.
 - Workflow contract tests enforce repository-wide minimum majors for official JavaScript Actions so new workflows cannot reintroduce unsupported runtimes.
 - `discover_services()` returns Invoke's CLI-normalized task names: service underscores become dashes (for example, `truealpha/data_engine` maps to `ta-data-engine.sync`), with a regression test against Invoke's `Collection.task_names` API.
-- `VaultSecrets` reads `VAULT_ROOT_TOKEN` and `VAULT_ADDR` (or falls back to `https://vault.$INTERNAL_DOMAIN`).
+- `VaultSecrets` reads `VAULT_TOKEN` (the runner's AppRole token; `VAULT_ROOT_TOKEN` is a transition alias for one release) and `VAULT_ADDR` (or falls back to `https://vault.$INTERNAL_DOMAIN`).
 
 ## References
 

@@ -210,7 +210,10 @@ jobs:
       - name: Install dependencies
         run: |
           cd ${{ github.workspace }}
-          uv pip install --system invoke httpx python-dotenv rich
+          # libs/env.py and libs/secrets_supply.py import infra2-sdk; install the exact
+          # wheel pyproject pins so this job validates what the runner runs.
+          uv pip install --system invoke httpx python-dotenv rich \
+            "$(grep -oE 'infra2-sdk @ https://[^"]+' pyproject.toml)"
 
       - name: Test config hash idempotency
         run: |
@@ -512,7 +515,10 @@ jobs:
       - name: Install dependencies
         run: |
           cd ${{ github.workspace }}
-          uv pip install --system invoke httpx python-dotenv rich
+          # libs/env.py and libs/secrets_supply.py import infra2-sdk; install the exact
+          # wheel pyproject pins so this job validates what the runner runs.
+          uv pip install --system invoke httpx python-dotenv rich \
+            "$(grep -oE 'infra2-sdk @ https://[^"]+' pyproject.toml)"
 
       - name: Validate all deploy.py files
         run: |

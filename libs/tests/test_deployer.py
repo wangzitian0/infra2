@@ -1013,83 +1013,64 @@ def test_alerting_source_identity_does_not_read_runtime_secrets(monkeypatch) -> 
     assert "INFRA_PROBE_HEARTBEAT_TOKEN" not in source_env
 
 
-def test_alerting_sync_pushes_probe_credentials_from_1password_to_vault(
+def test_alerting_template_fields_are_all_declared_in_its_manifest() -> None:
+    """Lineage: #600 found secrets.ctmpl documenting PROBE_POSTGRES_*/PROBE_S3_* and
+    DOKPLOY_API_KEY while the bespoke 1Password → Vault sync never requested them, so
+    an operator could seed 1Password exactly as told and the probes stayed fail-closed.
+    PR-E replaced that sync with the manifest-driven supply (libs/secrets_supply.py):
+    the template is rendered from the same manifest the supply applies, so a field can
+    no longer sit in the template without a declared source. This guards hand edits
+    to the generated template."""
+    from libs import secrets_registry
+
+    service = secrets_registry.lookup("platform", "alerting")
+    assert service is not None
+    declared = {field.env for field in secrets_registry.merged_manifest(service).fields}
+    ctmpl = (ROOT / "platform/12.alerting/secrets.ctmpl").read_text(encoding="utf-8")
+    referenced = set(re.findall(r"\.Data\.data\.([A-Z_0-9]+)", ctmpl)) | set(
+        re.findall(r'index \.Data\.data "([A-Z_0-9]+)"', ctmpl)
+    )
+    assert referenced, "expected secrets.ctmpl to read at least one Vault field"
+    assert referenced <= declared, sorted(referenced - declared)
+    for key in ("PROBE_POSTGRES_PASSWORD", "PROBE_S3_SECRET_KEY", "DOKPLOY_API_KEY"):
+        assert key in referenced and key in declared
+
+
+def test_alerting_heartbeat_coordinates_only_tolerate_an_absent_vault_path(
     monkeypatch,
 ) -> None:
-    """#600 regression: secrets.ctmpl documented a one-time manual setup for
-    PROBE_POSTGRES_*/PROBE_S3_* (postgres-select1/minio-s3-head-bucket probe
-    credentials) and told the operator to "store that password here" — but
-    _sync_1password_to_vault's keys list never asked for them, so seeding 1Password
-    alone was never enough: the sync silently dropped them and the probes stayed
-    fail-closed even after an operator did exactly what the docs said. Confirmed
-    live via SSH: both probes fired a critical alert in staging with the
-    credentials present in 1Password but never in Vault. DOKPLOY_API_KEY (the
-    deploy-queue-guard's key) had the identical gap, found by generalizing this
-    check rather than by a second live incident — it degrades soft (idles)
-    instead of fail-closed, which is exactly why nobody had noticed yet."""
+    """Review on #648: a missing path (first deploy) renders a heartbeat-less stack,
+    but auth / connectivity errors must surface instead of silently dropping the
+    heartbeat coordinates."""
+    from libs.env import VaultSecrets
+
     module = _load_deploy_module(
-        "platform/12.alerting/deploy.py", "alerting_sync_probe_creds_test"
+        "platform/12.alerting/deploy.py", "alerting_heartbeat_errors_test"
     )
-    op_secrets = FakeSecrets(
-        {
-            "ALERT_DELIVERY_MODE": "feishu_webhook",
-            "FEISHU_WEBHOOK_URL": "https://open.feishu.cn/webhook/fake",
-            "PROBE_POSTGRES_USER": "probe_monitor",
-            "PROBE_POSTGRES_PASSWORD": "pg-generated-password",
-            "PROBE_S3_BUCKET": "infra-probe-healthcheck",
-            "PROBE_S3_ACCESS_KEY": "probe_monitor_staging",
-            "PROBE_S3_SECRET_KEY": "s3-generated-secret",
-            "DOKPLOY_API_KEY": "dokploy-root-key",
-        }
-    )
-    vault_secrets = FakeSecrets()
+    staging = {
+        "ENV": "production",
+        "INTERNAL_DOMAIN": "x.io",
+        "DATA_PATH": "/data/platform/alerting",
+    }
     monkeypatch.setattr(
-        module,
-        "get_secrets",
-        lambda **kwargs: (
-            op_secrets
-            if kwargs.get("credential_type") == "root_vars"
-            else vault_secrets
-        ),
+        module.AlertingDeployer, "env", classmethod(lambda cls: dict(staging))
     )
-    monkeypatch.setattr(module.AlertingDeployer, "env", classmethod(lambda cls: {}))
 
-    assert module.AlertingDeployer._sync_1password_to_vault() is True
+    class Absent:
+        def get(self, key):
+            raise VaultSecrets.VaultSecretNotFoundError("missing")
 
-    assert vault_secrets.values["PROBE_POSTGRES_USER"] == "probe_monitor"
-    assert vault_secrets.values["PROBE_POSTGRES_PASSWORD"] == "pg-generated-password"
-    assert vault_secrets.values["PROBE_S3_BUCKET"] == "infra-probe-healthcheck"
-    assert vault_secrets.values["PROBE_S3_ACCESS_KEY"] == "probe_monitor_staging"
-    assert vault_secrets.values["PROBE_S3_SECRET_KEY"] == "s3-generated-secret"
-    assert vault_secrets.values["DOKPLOY_API_KEY"] == "dokploy-root-key"
+    class Denied:
+        def get(self, key):
+            raise VaultSecrets.VaultAuthError("403")
 
+    monkeypatch.setattr(module, "get_secrets", lambda **kwargs: Absent())
+    env = module.AlertingDeployer.compose_env_base(dict(staging))
+    assert "INFRA_PROBE_HEARTBEAT_URL" not in env
 
-def test_alerting_ctmpl_fields_all_reach_1password_sync() -> None:
-    """Structural version of the regression above: every secret secrets.ctmpl
-    reads from Vault (every ``.Data.data.X`` template reference) must be a key
-    _sync_1password_to_vault actually requests from 1Password via
-    AlertingDeployer.ROOT_VAR_KEYS — otherwise a field can sit in the rendered
-    template, get documented with "store it here" setup instructions, get
-    genuinely seeded in 1Password by an operator following those instructions
-    to the letter, and still never reach Vault. This parses secrets.ctmpl
-    itself rather than re-listing its fields, so a NEW field added there
-    without a matching ROOT_VAR_KEYS entry fails here immediately — the same
-    class of gap this file already caught twice (PROBE_POSTGRES_*/PROBE_S3_*
-    live in staging, DOKPLOY_API_KEY only by inspection) cannot recur silently
-    a third time."""
-    module = _load_deploy_module(
-        "platform/12.alerting/deploy.py", "alerting_ctmpl_sync_coverage_test"
-    )
-    ctmpl = (ROOT / "platform/12.alerting/secrets.ctmpl").read_text(encoding="utf-8")
-    ctmpl_fields = set(re.findall(r"\.Data\.data\.([A-Z_0-9]+)", ctmpl))
-
-    assert ctmpl_fields, "expected secrets.ctmpl to declare at least one Vault field"
-    missing = ctmpl_fields - set(module.AlertingDeployer.ROOT_VAR_KEYS)
-    assert not missing, (
-        f"secrets.ctmpl references {sorted(missing)} but "
-        "AlertingDeployer.ROOT_VAR_KEYS does not request them from 1Password — "
-        "seeding 1Password alone will not get these into Vault"
-    )
+    monkeypatch.setattr(module, "get_secrets", lambda **kwargs: Denied())
+    with pytest.raises(VaultSecrets.VaultAuthError):
+        module.AlertingDeployer.compose_env_base(dict(staging))
 
 
 def test_remote_config_identity_reads_cross_plane_service_coordinates(
