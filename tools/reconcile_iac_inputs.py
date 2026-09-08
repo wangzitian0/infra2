@@ -467,6 +467,20 @@ def failure_summary_from_result(result: dict) -> list[dict]:
     return []
 
 
+def github_run_url(env: Mapping[str, str]) -> str:
+    """The Actions run URL, or a clear placeholder when any part is missing (a local
+    run must not produce the misleading "actions/runs")."""
+    parts = (
+        env.get("GITHUB_SERVER_URL"),
+        env.get("GITHUB_REPOSITORY"),
+        env.get("GITHUB_RUN_ID"),
+    )
+    if not all(parts):
+        return "(run URL unavailable outside GitHub Actions)"
+    server, repository, run_id = parts
+    return f"{server}/{repository}/actions/runs/{run_id}"
+
+
 def failure_alert_text(
     *, after: str, results: Sequence[dict], run_url: str, promote_prod: bool
 ) -> str | None:
@@ -637,16 +651,7 @@ def main(argv: list[str] | None = None) -> int:
     ):
         production_marker = record_production_marker(args.after, repo_root)
 
-    run_url = "/".join(
-        part
-        for part in (
-            os.environ.get("GITHUB_SERVER_URL"),
-            os.environ.get("GITHUB_REPOSITORY"),
-            "actions/runs",
-            os.environ.get("GITHUB_RUN_ID"),
-        )
-        if part
-    )
+    run_url = github_run_url(os.environ)
     payload = {
         "alert_text": failure_alert_text(
             after=args.after,
