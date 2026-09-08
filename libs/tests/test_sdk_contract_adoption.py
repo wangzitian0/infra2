@@ -16,7 +16,7 @@ OPS_CHECKS = ROOT / ".github/workflows/ops-checks.yml"
 
 
 def test_infra_pins_the_expected_sdk_release() -> None:
-    assert version("infra2-sdk") == "1.4.0"
+    assert version("infra2-sdk") == "1.4.1"
 
 
 def test_local_stage_mirror_matches_the_released_sdk() -> None:
