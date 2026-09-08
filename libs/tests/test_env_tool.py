@@ -91,3 +91,26 @@ def test_failed_backend_write_is_reported() -> None:
         secrets_factory=lambda *a, **k: FakeStore(ok=False),
     )
     assert ok is False and message == "Failed to set K"
+
+
+def test_env_set_accepts_the_documented_type_spelling(monkeypatch) -> None:
+    """docs/ssot say `--type=`; invoke derives `--credential-type` from the parameter name.
+    Both spellings must reach the same backend selection."""
+    import tools.env_tool as env_tool
+
+    seen: list = []
+
+    class Store:
+        def set(self, key, value):
+            seen.append((key, value))
+            return True
+
+    monkeypatch.setattr(
+        env_tool,
+        "get_secrets",
+        lambda p, s, e, credential_type=None: seen.append(credential_type) or Store(),
+    )
+    env_tool.set_secret.body(
+        None, "K=v", project="platform", service="app", env="staging", type="root_vars"
+    )
+    assert seen == ["root_vars", ("K", "v")]

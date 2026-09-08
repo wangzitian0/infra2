@@ -61,7 +61,9 @@ def test_audit_reports_in_sync_when_declared_matches_live(monkeypatch) -> None:
     monkeypatch.setattr(
         cgra,
         "_blocking_gates",
-        lambda: [{"id": "infra_ci.lint_python", "workflow": "wf.yml", "job": "lint-python"}],
+        lambda: [
+            {"id": "infra_ci.lint_python", "workflow": "wf.yml", "job": "lint-python"}
+        ],
     )
     monkeypatch.setattr(cgra, "_job_display_name", lambda *_a: "Lint Python Code")
     monkeypatch.setattr(cgra, "_job_continue_on_error", lambda *_a: False)
@@ -81,7 +83,9 @@ def test_audit_flags_gate_missing_from_ruleset(monkeypatch) -> None:
     monkeypatch.setattr(
         cgra,
         "_blocking_gates",
-        lambda: [{"id": "infra_ci.lint_python", "workflow": "wf.yml", "job": "lint-python"}],
+        lambda: [
+            {"id": "infra_ci.lint_python", "workflow": "wf.yml", "job": "lint-python"}
+        ],
     )
     monkeypatch.setattr(cgra, "_job_display_name", lambda *_a: "Lint Python Code")
     monkeypatch.setattr(cgra, "_job_continue_on_error", lambda *_a: False)
@@ -109,12 +113,22 @@ def test_audit_flags_self_contradicting_gate(monkeypatch) -> None:
     monkeypatch.setattr(
         cgra,
         "_blocking_gates",
-        lambda: [{"id": "infra_ci.vault_policy", "workflow": "wf.yml", "job": "validate-vault-policy"}],
+        lambda: [
+            {
+                "id": "infra_ci.vault_policy",
+                "workflow": "wf.yml",
+                "job": "validate-vault-policy",
+            }
+        ],
     )
-    monkeypatch.setattr(cgra, "_job_display_name", lambda *_a: "Validate Vault Policy Syntax")
+    monkeypatch.setattr(
+        cgra, "_job_display_name", lambda *_a: "Validate Vault Policy Syntax"
+    )
     monkeypatch.setattr(cgra, "_job_continue_on_error", lambda *_a: True)
     monkeypatch.setattr(
-        cgra, "_live_required_contexts", lambda *_a, **_kw: {"Validate Vault Policy Syntax"}
+        cgra,
+        "_live_required_contexts",
+        lambda *_a, **_kw: {"Validate Vault Policy Syntax"},
     )
 
     result = cgra.audit(token="tok")
@@ -136,7 +150,9 @@ def test_current_inventory_matches_the_real_infra_ci_workflow() -> None:
     workflow file — catches a gate pointing at a renamed/removed job."""
     for gate in cgra._blocking_gates():
         name = cgra._job_display_name(gate["workflow"], gate["job"])
-        assert name is not None, f"{gate['id']} -> {gate['workflow']}:{gate['job']} has no job name"
+        assert name is not None, (
+            f"{gate['id']} -> {gate['workflow']}:{gate['job']} has no job name"
+        )
 
 
 def test_current_inventory_has_no_self_contradicting_gates() -> None:

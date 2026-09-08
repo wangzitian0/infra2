@@ -112,8 +112,9 @@ def test_op_health_first_call_after_init_runs_op_not_default_cache(monkeypatch):
     monkeypatch.setattr(
         ws.subprocess,
         "run",
-        lambda cmd, **_k: calls.append(cmd)
-        or subprocess.CompletedProcess(cmd, 0, b"{}", b""),
+        lambda cmd, **_k: (
+            calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, b"{}", b"")
+        ),
     )
     assert ws.op_service_account_works() is True
     assert calls  # op actually ran on the first call (not the default cached False)

@@ -45,7 +45,9 @@ def test_every_registered_layer_is_in_the_pr_and_push_path_filters() -> None:
 def test_every_registered_layer_is_in_the_ruff_lint_scope() -> None:
     content = INFRA_CI_PATH.read_text(encoding="utf-8")
     ruff_line = next(
-        line for line in content.splitlines() if line.strip().startswith("run: ruff check")
+        line
+        for line in content.splitlines()
+        if line.strip().startswith("run: ruff check")
     )
     for layer in _LAYERS:
         assert f"{layer}/" in ruff_line, (

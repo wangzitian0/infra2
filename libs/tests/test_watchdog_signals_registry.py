@@ -35,7 +35,9 @@ def test_staging_public_route_signals_for_prod_only_services_are_excluded() -> N
             continue
         if sig.get("environment") == "production":
             continue
-        meta = service_registry.resolve_container_host(f"platform-{sig.get('component')}")
+        meta = service_registry.resolve_container_host(
+            f"platform-{sig.get('component')}"
+        )
         if meta is None or not meta.prod_only:
             continue  # bootstrap / per-env service -> a staging host legitimately exists
         checked += 1
@@ -46,5 +48,7 @@ def test_staging_public_route_signals_for_prod_only_services_are_excluded() -> N
                 f"primary_owner: excluded with a reason, not an active signal"
             )
 
-    assert checked, "no staging prod_only public-route signals resolved (mapping drift?)"
+    assert checked, (
+        "no staging prod_only public-route signals resolved (mapping drift?)"
+    )
     assert not problems, "\n".join(problems)

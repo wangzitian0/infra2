@@ -130,7 +130,9 @@ def test_env_tool_get_and_set_secret_use_selected_backend(monkeypatch) -> None:
 
 def test_env_tool_rejects_bad_set_format(monkeypatch) -> None:
     calls = []
-    monkeypatch.setattr(env_tool, "get_secrets", lambda *args, **kwargs: calls.append(args))
+    monkeypatch.setattr(
+        env_tool, "get_secrets", lambda *args, **kwargs: calls.append(args)
+    )
 
     env_tool.set_secret.body(None, "TOKEN", credential_type="app_vars")
 
@@ -170,7 +172,10 @@ def test_dokploy_logs_fails_fast_when_compose_or_host_missing(monkeypatch) -> No
 def test_dokploy_logs_runs_deployment_tail(monkeypatch) -> None:
     client = FakeDokployClient()
     client.compose = {"composeId": "compose-1"}
-    client.latest_deployment = {"deploymentId": "deploy-1", "logPath": "/tmp/deploy.log"}
+    client.latest_deployment = {
+        "deploymentId": "deploy-1",
+        "logPath": "/tmp/deploy.log",
+    }
     monkeypatch.setattr(dokploy_env, "get_dokploy", lambda host=None: client)
     monkeypatch.setattr(
         dokploy_env,
@@ -180,9 +185,7 @@ def test_dokploy_logs_runs_deployment_tail(monkeypatch) -> None:
     context = SimpleNamespace(commands=[])
     context.run = lambda cmd: context.commands.append(cmd)
 
-    dokploy_env.logs.body(
-        context, "app", project="platform", deployment=True, tail=25
-    )
+    dokploy_env.logs.body(context, "app", project="platform", deployment=True, tail=25)
 
     assert context.commands == [
         "ssh root@vps.example.test 'tail -n 25 /tmp/deploy.log'"

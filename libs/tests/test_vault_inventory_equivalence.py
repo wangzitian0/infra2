@@ -113,9 +113,7 @@ def test_absorbed_constants_equivalence() -> None:
     }
     assert exempt_elsewhere == {}
 
-    assert by_id["finance_report/app"].optional_inert_fields == (
-        "LLM_ENCRYPTION_KEYS",
-    )
+    assert by_id["finance_report/app"].optional_inert_fields == ("LLM_ENCRYPTION_KEYS",)
     inert_elsewhere = {
         sid: svc.optional_inert_fields
         for sid, svc in by_id.items()
@@ -180,7 +178,7 @@ def test_duplicate_derived_inventory_ids_fail_closed() -> None:
 # --- the issue-AC counterfactual: one facet edit moves BOTH surfaces ---------
 
 
-_COUNTERFACTUAL_DEPLOY = '''
+_COUNTERFACTUAL_DEPLOY = """
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.service_facets import SecretsFacet
 
@@ -196,7 +194,7 @@ class ExampleDeployer(Deployer):
             auth_method="approle",
         ),
     )
-'''
+"""
 
 
 def _derived_service(source: str) -> VaultService:
@@ -233,9 +231,7 @@ def _deploy_side_vault_path(meta_project: str, meta_service: str) -> str:
     return f"secret/data/{secrets.path}"
 
 
-def test_counterfactual_secrets_facet_edit_moves_audit_and_deploy_in_lockstep() -> (
-    None
-):
+def test_counterfactual_secrets_facet_edit_moves_audit_and_deploy_in_lockstep() -> None:
     """Issue #542 AC: editing the Deployer's declaration changes BOTH the
     derived audit expectation AND the deploy-side rendering of the same fact,
     in lockstep — there is no second copy left to go stale.
@@ -256,14 +252,16 @@ def test_counterfactual_secrets_facet_edit_moves_audit_and_deploy_in_lockstep() 
     assert deploy_path == base.vault_path_template.format(env="production")
 
     # Counterfactual 1: rename the service attr on the Deployer.
-    renamed = _COUNTERFACTUAL_DEPLOY.replace('service = "example"', 'service = "renamed"')
+    renamed = _COUNTERFACTUAL_DEPLOY.replace(
+        'service = "example"', 'service = "renamed"'
+    )
     edited = _derived_service(renamed)
     assert edited.vault_path_template == "secret/data/platform/{env}/renamed"
     assert edited.dokploy_service == "renamed"
     # ... and the deploy-side path moved WITH it (same fact, both surfaces):
-    assert _deploy_side_vault_path("platform", "renamed") == edited.vault_path_template.format(
-        env="production"
-    )
+    assert _deploy_side_vault_path(
+        "platform", "renamed"
+    ) == edited.vault_path_template.format(env="production")
     assert _deploy_side_vault_path("platform", "renamed") != deploy_path
 
     # Counterfactual 2: edit a facet field (app container name).

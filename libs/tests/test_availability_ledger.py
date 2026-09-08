@@ -18,7 +18,11 @@ HEALTHY_AND_DEGRADED = {
             "date": "2026-06-10",
             "runs": 48,
             "signals": {
-                "production:dokploy-public-route": {"ok": 48, "fail": 0, "severity": "critical"},
+                "production:dokploy-public-route": {
+                    "ok": 48,
+                    "fail": 0,
+                    "severity": "critical",
+                },
                 "production:minio-public-route": {
                     "ok": 46,
                     "fail": 2,
@@ -31,8 +35,16 @@ HEALTHY_AND_DEGRADED = {
             "date": "2026-06-09",
             "runs": 48,
             "signals": {
-                "production:dokploy-public-route": {"ok": 48, "fail": 0, "severity": "critical"},
-                "production:minio-public-route": {"ok": 48, "fail": 0, "severity": "warning"},
+                "production:dokploy-public-route": {
+                    "ok": 48,
+                    "fail": 0,
+                    "severity": "critical",
+                },
+                "production:minio-public-route": {
+                    "ok": 48,
+                    "fail": 0,
+                    "severity": "warning",
+                },
             },
         },
     ],
@@ -52,7 +64,9 @@ def test_positive_multi_day_aggregation_is_exact() -> None:
 
     by_id = {s["id"]: s for s in summary["signals"]}
     assert by_id["production:dokploy-public-route"]["uptime_pct"] == 100.0
-    assert by_id["production:minio-public-route"]["uptime_pct"] == round((94 / 96) * 100, 3)
+    assert by_id["production:minio-public-route"]["uptime_pct"] == round(
+        (94 / 96) * 100, 3
+    )
 
 
 def test_positive_all_perfect_window_reports_clean() -> None:
@@ -74,7 +88,9 @@ def test_positive_all_perfect_window_reports_clean() -> None:
 def test_negative_degraded_signal_is_never_reported_perfect() -> None:
     """The core guarantee: any failure must drop the signal below 100%."""
     summary = summarize_ledger(HEALTHY_AND_DEGRADED)
-    minio = next(s for s in summary["signals"] if s["id"].endswith("minio-public-route"))
+    minio = next(
+        s for s in summary["signals"] if s["id"].endswith("minio-public-route")
+    )
 
     assert minio["fail"] == 2
     assert minio["uptime_pct"] < 100.0
@@ -93,7 +109,11 @@ def test_negative_malformed_input_does_not_inflate_or_crash() -> None:
             "not-a-day",  # wrong type
             {"date": "d1", "runs": 10, "signals": "not-a-map"},  # bad signals
             {"date": "d2", "runs": 10, "signals": {"x": "not-a-map"}},  # bad counts
-            {"date": "d3", "runs": 10, "signals": {"x": {"ok": 8, "fail": 2}}},  # the only real one
+            {
+                "date": "d3",
+                "runs": 10,
+                "signals": {"x": {"ok": 8, "fail": 2}},
+            },  # the only real one
         ],
     }
     summary = summarize_ledger(ledger)

@@ -155,9 +155,7 @@ def _meta_from_deploy_file(
         project=_class_attr(tree, "project") or "platform",
         compose_path=_class_attr(tree, "compose_path"),
         data_path=_class_attr(tree, "data_path"),
-        not_yet_in_production=bool(
-            _class_attr(tree, "not_yet_in_production") or False
-        ),
+        not_yet_in_production=bool(_class_attr(tree, "not_yet_in_production") or False),
         probes=_facet_seq(tree, "probes", ProbeFacet, where),
         public_routes=_facet_seq(tree, "public_routes", PublicRouteFacet, where),
         signals=_facet_seq(tree, "signals", SignalFacet, where),

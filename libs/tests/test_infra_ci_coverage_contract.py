@@ -30,4 +30,6 @@ def test_infra_ci_publishes_coverage_context_without_blocking_delivery() -> None
     assert "coverallsapp/github-action@v2" in workflow
     assert "format: cobertura" in workflow
     assert "file: coverage/infra2-coverage.xml" in workflow
-    assert "coveralls.io/repos/github/wangzitian0/infra2/badge.svg?branch=main" in readme
+    assert (
+        "coveralls.io/repos/github/wangzitian0/infra2/badge.svg?branch=main" in readme
+    )

@@ -124,9 +124,18 @@ def test_lookup_error_is_reported_as_error_not_drift():
 
 def test_confirmed_drift_includes_only_drift_and_missing():
     stale = _target(compose_id="stale-id")
-    ok_row = drift.check_target(FakeDokployLookup({("app", "finance_report", "staging"): "A6V-hbJlgHMwgPDoTDnhH"}), _target())
-    drift_row = drift.check_target(FakeDokployLookup({("app", "finance_report", "staging"): "new-id"}), stale)
-    missing_row = drift.check_target(FakeDokployLookup({("app", "finance_report", "staging"): None}), _target())
+    ok_row = drift.check_target(
+        FakeDokployLookup(
+            {("app", "finance_report", "staging"): "A6V-hbJlgHMwgPDoTDnhH"}
+        ),
+        _target(),
+    )
+    drift_row = drift.check_target(
+        FakeDokployLookup({("app", "finance_report", "staging"): "new-id"}), stale
+    )
+    missing_row = drift.check_target(
+        FakeDokployLookup({("app", "finance_report", "staging"): None}), _target()
+    )
 
     class RaisingClient:
         def find_compose_by_name(self, name, project_name=None, env_name=None):

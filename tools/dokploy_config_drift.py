@@ -24,7 +24,6 @@ disk at HEAD before trusting any tag comparison.
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import subprocess
 import sys
@@ -136,9 +135,11 @@ def expected_hash_at(
 
 
 def _set_env(env_name: str) -> None:
-    os.environ["ENV"] = env_name
-    os.environ["ENV_SUFFIX"] = "" if env_name == "production" else "-staging"
-    os.environ["ENV_DOMAIN_SUFFIX"] = "" if env_name == "production" else "-staging"
+    # get_env() reads DEPLOY_ENV (not ENV) and memoizes: setting ENV here computed
+    # production hashes for every non-production scan (review on #663).
+    from libs.common import set_deploy_env
+
+    set_deploy_env(env_name)
 
 
 @dataclass

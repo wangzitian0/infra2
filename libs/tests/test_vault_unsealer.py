@@ -66,9 +66,7 @@ def test_unsealer_health_rejects_stale_connect_token(monkeypatch) -> None:
                 ]
             },
         ),
-        "http://op-connect-api:8080/v1/vaults/vault-id/items/item-id": _Response(
-            401
-        ),
+        "http://op-connect-api:8080/v1/vaults/vault-id/items/item-id": _Response(401),
         "http://vault:8200/v1/sys/health": _Response(200, {"sealed": False}),
     }
     monkeypatch.setattr(
@@ -94,9 +92,7 @@ def test_unsealer_health_requires_active_connect_sync(monkeypatch) -> None:
                 ]
             },
         ),
-        "http://op-connect-api:8080/v1/vaults/vault-id/items/item-id": _Response(
-            200
-        ),
+        "http://op-connect-api:8080/v1/vaults/vault-id/items/item-id": _Response(200),
         "http://vault:8200/v1/sys/health": _Response(200, {"sealed": False}),
     }
     monkeypatch.setattr(
@@ -122,9 +118,7 @@ def test_unsealer_health_initializes_connect_before_health_probe(monkeypatch) ->
                 ]
             },
         ),
-        "http://op-connect-api:8080/v1/vaults/vault-id/items/item-id": _Response(
-            200
-        ),
+        "http://op-connect-api:8080/v1/vaults/vault-id/items/item-id": _Response(200),
         "http://vault:8200/v1/sys/health": _Response(200, {"sealed": False}),
     }
     client = _Client(responses)
@@ -184,7 +178,8 @@ def test_unseal_aborts_when_insufficient_keys(monkeypatch) -> None:
         {
             "http://vault:8200/v1/sys/health": _Response(503, {"sealed": True}),
             "http://op-connect-api:8080/v1/vaults/vault-id/items/item-id": _Response(
-                200, {"fields": [{"label": "Unseal Key 1", "value": "k1"}]}  # only 1 key
+                200,
+                {"fields": [{"label": "Unseal Key 1", "value": "k1"}]},  # only 1 key
             ),
         }
     )

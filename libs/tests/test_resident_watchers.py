@@ -247,9 +247,7 @@ def test_probe_runner_touches_state_file_at_loop_start(monkeypatch, tmp_path) ->
     monkeypatch.setattr(runner, "_build_watchers", lambda: [])
     monkeypatch.setattr(runner, "run_once", lambda **_k: 0)
     monkeypatch.setattr(runner, "_post_heartbeat", lambda **_k: None)
-    monkeypatch.setattr(
-        runner, "_touch_state", lambda path: touched.append(str(path))
-    )
+    monkeypatch.setattr(runner, "_touch_state", lambda path: touched.append(str(path)))
     monkeypatch.setattr(
         runner.time, "sleep", lambda _s: (_ for _ in ()).throw(SystemExit(0))
     )

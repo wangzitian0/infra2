@@ -94,7 +94,7 @@ Templated deterministically from the deploy context (a Vault value at
 `<git sha>` comes from `GIT_COMMIT_SHA` passed into the vault-agent container by the
 deploy primitive (`unknown` fallback). For `preview/`, `<alias>` is the per-alias ENV
 (`main` / `pr-<N>` / `commit-<sha7>`), not the secrets-source env — preview spans stay
-filterable by environment while still sourcing app secrets from `PREVIEW_SECRET_ENV`.
+filterable by environment while still sourcing app secrets from the fixed `staging` path the generated preview template reads.
 
 ### Frontend NEXT_PUBLIC_OTEL_* — runtime env in `compose.yaml` (`10.app/` and `preview/`)
 

@@ -44,7 +44,9 @@ def test_run_loads_real_inventory_and_wires_collection_into_classification(
     assert captured["observations"] == {"services": {}}
 
 
-def test_main_returns_zero_and_prints_pass_on_a_clean_audit(monkeypatch, capsys) -> None:
+def test_main_returns_zero_and_prints_pass_on_a_clean_audit(
+    monkeypatch, capsys
+) -> None:
     monkeypatch.setattr(
         check,
         "run",
@@ -129,7 +131,9 @@ def test_production_run_excludes_services_not_yet_in_production(monkeypatch) -> 
     assert captured["ids"].isdisjoint(excluded)
     assert "finance_report/app" in captured["ids"]  # real prod services untouched
     assert "truealpha/app" in captured["ids"]  # in prod since 2026-07-19 -> now swept
-    assert "truealpha/data_engine" in captured["ids"]  # graduated 2026-07-27 -> now swept
+    assert (
+        "truealpha/data_engine" in captured["ids"]
+    )  # graduated 2026-07-27 -> now swept
     assert "finance_report/preview" in captured["ids"]  # owner IS in production
 
 

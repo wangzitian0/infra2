@@ -1,4 +1,5 @@
 """The shared CI gate schema — the contract both repos' inventories validate against."""
+
 from __future__ import annotations
 
 from pathlib import Path

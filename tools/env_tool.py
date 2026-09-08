@@ -93,8 +93,10 @@ def get(
     service: str | None = None,
     env: str = "production",
     credential_type: str | None = None,
+    type: str | None = None,  # noqa: A002 - the documented --type spelling
 ):
     """Get secret from SSOT (Vault or 1Password)"""
+    credential_type = credential_type or type
     validated_type = _validate_type(credential_type)
     if credential_type is not None and validated_type is None:
         return
@@ -115,11 +117,13 @@ def set_secret(
     env: str = "production",
     credential_type: str | None = None,
     break_glass: bool = False,
+    type: str | None = None,  # noqa: A002 - the documented --type spelling
 ):
     """Set a secret in 1Password; Vault only with --break-glass (the supply owns it)"""
     if "=" not in keyvalue:
         error("Format: KEY=VALUE")
         return
+    credential_type = credential_type or type
     validated_type = _validate_type(credential_type)
     if credential_type is not None and validated_type is None:
         return
@@ -140,6 +144,7 @@ def list_all(
     service: str | None = None,
     env: str = "production",
     credential_type: str | None = None,
+    type: str | None = None,  # noqa: A002 - the documented --type spelling
 ):
     """List all secrets for a service"""
     from rich.table import Table
@@ -148,6 +153,7 @@ def list_all(
         error("--service is required")
         return
 
+    credential_type = credential_type or type
     validated_type = _validate_type(credential_type)
     if credential_type is not None and validated_type is None:
         return

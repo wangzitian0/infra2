@@ -79,9 +79,13 @@ def test_lint_detects_missing_suffix_and_allows_correct() -> None:
     # correct (env-suffixed) forms must NOT match — incl. bare host-only:
     assert not _HOST_REF.search("http://platform-authentik-server${ENV_SUFFIX}:9000/")
     assert not _HOST_REF.search("@platform-postgres${ENV_SUFFIX}:5432/prefect")
-    assert not _HOST_REF.search("PREFECT_REDIS_MESSAGING_HOST: platform-redis${ENV_SUFFIX}")
+    assert not _HOST_REF.search(
+        "PREFECT_REDIS_MESSAGING_HOST: platform-redis${ENV_SUFFIX}"
+    )
     # a longer container name must not match on a shorter service prefix:
-    assert not _HOST_REF.search("container_name: platform-postgres-vault-agent${ENV_SUFFIX}")
+    assert not _HOST_REF.search(
+        "container_name: platform-postgres-vault-agent${ENV_SUFFIX}"
+    )
     # prod_only shared services (no suffix is correct) must NOT match:
     assert not _HOST_REF.search("http://platform-signoz:8080/api/v1/health")
     assert not _HOST_REF.search("http://platform-clickhouse:8123/ping")
