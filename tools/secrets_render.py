@@ -171,9 +171,17 @@ SERVICES: tuple[Service, ...] = (
 )
 
 
+def manifest_file(path: str) -> Path:
+    """The submodule checkout when present, else the CI cache tools/fetch_app_manifests fills."""
+    candidate = ROOT / path
+    if candidate.exists() or not path.startswith("repos/"):
+        return candidate
+    return ROOT / ".cache/app-manifests" / path
+
+
 def load_manifest(path: str) -> EnvironmentManifest:
     return EnvironmentManifest.from_dict(
-        json.loads((ROOT / path).read_text(encoding="utf-8"))
+        json.loads(manifest_file(path).read_text(encoding="utf-8"))
     )
 
 

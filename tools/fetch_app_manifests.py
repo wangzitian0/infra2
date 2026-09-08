@@ -19,6 +19,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 GITHUB_OWNER = "wangzitian0"
+# Files land here, not under repos/<sub>/: writing inside an un-checked-out submodule
+# path makes git report "Could not access submodule" on every later diff in the job.
+CACHE_DIR = ".cache/app-manifests"
 
 Fetcher = Callable[[str], bytes]
 
