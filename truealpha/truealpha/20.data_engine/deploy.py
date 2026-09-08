@@ -6,6 +6,7 @@ import sys
 import time
 from pathlib import Path
 
+from invoke.exceptions import CommandTimedOut
 from libs.console import error, success
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.service_facets import BackupFacet, SecretsFacet
@@ -270,11 +271,18 @@ class DataEngineDeployer(Deployer):
                 timeout=timeout,
             )
 
-        pulled = remote(
-            f"docker pull -q {expected_image}", timeout=cls.PULL_DEADLINE_SECONDS
-        )
-        if not pulled.ok:
+        # invoke raises CommandTimedOut when `timeout=` elapses instead of returning a
+        # failed Result (review on #645); both shapes become the same fail-closed string.
+        try:
+            pulled = remote(
+                f"docker pull -q {expected_image}", timeout=cls.PULL_DEADLINE_SECONDS
+            )
+        except CommandTimedOut as timed_out:
+            pulled = None
+            detail = [f"timed out after {timed_out.timeout}s"]
+        else:
             detail = (pulled.stderr or pulled.stdout or "").strip().splitlines()
+        if pulled is None or not pulled.ok:
             return (
                 f"promoted image {expected_digest[:19]}… could not be pulled on {host} within "
                 f"{cls.PULL_DEADLINE_SECONDS}s: {detail[-1] if detail else 'no output'}"

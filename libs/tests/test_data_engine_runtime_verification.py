@@ -14,6 +14,7 @@ import importlib.util
 from pathlib import Path
 
 import pytest
+from invoke.exceptions import CommandTimedOut
 
 ROOT = Path(__file__).resolve().parents[2]
 DEPLOY = ROOT / "truealpha/truealpha/20.data_engine/deploy.py"
@@ -172,3 +173,23 @@ def test_a_container_without_a_healthcheck_counts_as_healthy_when_running(
         deployer.verify_runtime_applied(context, {"DATA_ENGINE_IMAGE_DIGEST": DIGEST})
         is None
     )
+
+
+def test_a_pull_that_times_out_fails_closed_with_the_same_message(deployer) -> None:
+    """invoke raises CommandTimedOut when `timeout=` elapses (review on #645); the
+    verification must not let that exception abort the deploy path."""
+
+    class _TimingOut(_Context):
+        def run(self, command, warn=False, hide=False, timeout=None):
+            if "docker pull" in command:
+                raise CommandTimedOut(_Result("", ok=False), timeout)
+            return super().run(command, warn=warn, hide=hide, timeout=timeout)
+
+    context = _TimingOut(
+        pull=_Result(DIGEST), images=[[IMAGE] * 3], health=[["healthy"] * 3]
+    )
+    error = deployer.verify_runtime_applied(
+        context, {"DATA_ENGINE_IMAGE_DIGEST": DIGEST}
+    )
+    assert error and "could not be pulled" in error
+    assert f"timed out after {deployer.PULL_DEADLINE_SECONDS}s" in error
