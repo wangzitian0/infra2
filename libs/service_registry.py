@@ -50,6 +50,9 @@ _EXTERNAL_COMPONENT_IDS = {
     "dokploy": "bootstrap/dokploy",
     "finance-report-api": "finance_report/app",
     "finance-report-web": "finance_report/app",
+    # the path every deploy depends on (#658 recommendation 5): the runner fetches,
+    # deploy_v2 compares on main, and Dokploy clones — all from github.com.
+    "github": "infra/github",
     "host": "infra/host",
     # the IaC control plane itself (facet reconcile, #542) — a pseudo-id like
     # infra/host: monitored, but not a deployable service
@@ -155,9 +158,7 @@ def _meta_from_deploy_file(
         project=_class_attr(tree, "project") or "platform",
         compose_path=_class_attr(tree, "compose_path"),
         data_path=_class_attr(tree, "data_path"),
-        not_yet_in_production=bool(
-            _class_attr(tree, "not_yet_in_production") or False
-        ),
+        not_yet_in_production=bool(_class_attr(tree, "not_yet_in_production") or False),
         probes=_facet_seq(tree, "probes", ProbeFacet, where),
         public_routes=_facet_seq(tree, "public_routes", PublicRouteFacet, where),
         signals=_facet_seq(tree, "signals", SignalFacet, where),

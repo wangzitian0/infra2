@@ -54,3 +54,5 @@ openpanel-roundtrip|command|python /app/tools/observability_roundtrip_probe.py o
 host-cpu|resource|cpu|80|warning|5||infra/host
 host-mem|resource|mem|80|warning|5||infra/host
 host-disk|resource|disk:/hostfs|80|critical|5||infra/host
+github-api-http|http|https://api.github.com/rate_limit|200|warning|15||infra/github
+github-clone-http|http|https://github.com/wangzitian0/infra2.git/info/refs?service=git-upload-pack|200|warning|30|github-api-http|infra/github
