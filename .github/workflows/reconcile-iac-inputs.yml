@@ -71,6 +71,51 @@ jobs:
       - name: Fetch origin/main for provenance guard
         run: git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
 
+      # Production promotion guard (2026-09-07 incident, #635 / #712): an unattended
+      # promote_prod picked up v1.1.61 whose own staging reconcile had FAILED (the generated
+      # alerting template aborted on a missing key); production alerting crash-looped until
+      # the rollback. The soak that a tag push runs on staging is the precondition for
+      # production, so the promotion refuses a tag without a green push-triggered run of this
+      # workflow. A dispatch-triggered staging run does not count (it may have been a dry run,
+      # or a promotion itself); the remedy is a new tag. The identity of the promoted tag is
+      # checked here as well, and the change set production will receive is listed.
+      - name: Production promotion guard (soak, identity, change set)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.promote_prod }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          INPUT_AFTER: ${{ inputs.after || '' }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          after="${INPUT_AFTER:-$REF_NAME}"
+          if [[ ! "$after" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::promote_prod promotes a release tag (vX.Y.Z); got '$after'."
+            exit 1
+          fi
+          if ! git rev-parse -q --verify "refs/tags/$after" >/dev/null; then
+            echo "::error::release tag '$after' does not exist."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$after" origin/main; then
+            echo "::error::release tag '$after' is not reachable from origin/main."
+            exit 1
+          fi
+          runs="$(gh run list --workflow reconcile-iac-inputs.yml --event push --branch "$after" \
+                    --json conclusion,status,url,createdAt --limit 10)"
+          soak="$(jq -r '[.[] | select(.conclusion == "success")] | first | .url // empty' <<<"$runs")"
+          if [[ -z "$soak" ]]; then
+            echo "::error::'$after' has no green staging soak: no push-triggered run of this workflow for the tag concluded success. Seen: $(jq -c '[.[] | {conclusion, status, url}]' <<<"$runs"). Fix the release and cut a new tag; production is never promoted from a tag whose staging reconcile did not pass."
+            exit 1
+          fi
+          echo "staging soak of $after: $soak (concluded $(jq -r '[.[] | select(.conclusion == "success")] | first | .createdAt' <<<"$runs"))"
+          marker="$(git tag --list 'production/v*.*.*' --sort=-v:refname | head -n1 || true)"
+          echo "production marker: ${marker:-<none>}"
+          if [[ -n "$marker" ]]; then
+            echo "change set production receives (${marker#production/} -> $after):"
+            git diff --stat "${marker#production/}" "$after" -- . ':!docs' ':!*.md' | tail -n 60
+          fi
+
       - name: Reconcile changed IaC inputs
         env:
           EVENT_NAME: ${{ github.event_name }}

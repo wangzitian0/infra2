@@ -410,3 +410,24 @@ def test_reconcile_workflow_contract() -> None:
     assert 'production_before="${production_marker#production/}"' in text
     assert "first production marker requires an explicit known-production" in text
     assert 'before="$production_before"' in text
+
+
+def test_promote_prod_refuses_a_tag_without_a_green_staging_soak() -> None:
+    """2026-09-07: v1.1.61 was promoted to production while its own staging reconcile had
+    failed; production alerting crash-looped until the rollback. The guard step runs only
+    on an explicit production promotion and needs a green push-triggered run of this
+    workflow for the same tag — a dispatch run (dry run, or a promotion) does not count."""
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["reconcile"]["steps"]
+    names = [step.get("name") for step in steps]
+    guard = steps[names.index("Production promotion guard (soak, identity, change set)")]
+    assert names.index("Fetch origin/main for provenance guard") < names.index(guard["name"])
+    assert names.index(guard["name"]) < names.index("Reconcile changed IaC inputs")
+    assert "inputs.promote_prod" in guard["if"] and "workflow_dispatch" in guard["if"]
+    assert guard["env"]["GH_TOKEN"] == "${{ github.token }}"
+    script = guard["run"]
+    assert "--workflow reconcile-iac-inputs.yml --event push --branch \"$after\"" in script
+    assert 'select(.conclusion == "success")' in script
+    assert "has no green staging soak" in script
+    assert "merge-base --is-ancestor" in script
+    assert "production/v*.*.*" in script and "git diff --stat" in script
