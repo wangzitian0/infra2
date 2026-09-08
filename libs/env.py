@@ -23,12 +23,28 @@ import httpx
 
 try:
     from infra2_sdk.secrets import OnePasswordBackend, SecretsError, VaultKvBackend
-except ModuleNotFoundError as _error:  # pragma: no cover - environment, not logic
-    raise ModuleNotFoundError(
-        "infra2-sdk is required by libs/env.py: it is pinned in pyproject.toml and in "
-        "bootstrap/06.iac_runner/requirements.txt; an iac-runner image built before that "
-        "pin must be rebuilt (deploy.yml does so on the next main push)."
-    ) from _error
+except ModuleNotFoundError:  # pragma: no cover - environment, not logic
+    # Helpers (generate_password, vault_token, verify_vault_token) stay importable in
+    # minimal environments; only constructing a store without an injected backend
+    # needs the SDK, and says so.
+    OnePasswordBackend = VaultKvBackend = None  # type: ignore[assignment,misc]
+
+    class SecretsError(RuntimeError):  # type: ignore[no-redef]
+        pass
+
+
+_SDK_MISSING = (
+    "infra2-sdk is required to read or write secret stores: it is pinned in pyproject.toml "
+    "and in bootstrap/06.iac_runner/requirements.txt; install the project dependencies "
+    "(uv sync) or rebuild the iac-runner image (deploy.yml does so on the next main push)."
+)
+
+
+def _require_sdk(cls):
+    if cls is None:
+        raise ModuleNotFoundError(_SDK_MISSING)
+    return cls
+
 
 CredentialType = Literal["bootstrap", "root_vars", "app_vars"]
 
@@ -84,13 +100,18 @@ class OpSecrets:
         self, item: str = INIT_ITEM, backend: OnePasswordBackend | None = None
     ):
         self.item = item
-        self._backend = backend or OnePasswordBackend(self.VAULT)
+        self._backend = backend  # built on first use so importing tasks needs no SDK
         self._cache: dict[str, str] | None = None
+
+    def _client(self) -> OnePasswordBackend:
+        if self._backend is None:
+            self._backend = _require_sdk(OnePasswordBackend)(self.VAULT)
+        return self._backend
 
     def _load(self) -> dict[str, str]:
         if self._cache is None:
             try:
-                raw = self._backend.read(self.item)
+                raw = self._client().read(self.item)
             except SecretsError as error:
                 print(
                     f"OpSecrets: failed to load {self.item}: {error}", file=sys.stderr
@@ -111,7 +132,7 @@ class OpSecrets:
 
     def set(self, key: str, value: str) -> bool:
         try:
-            self._backend.write(self.item, {key: value})
+            self._client().write(self.item, {key: value})
         except SecretsError as error:
             print(f"OpSecrets: failed to set {key}: {error}", file=sys.stderr)
             return False
@@ -153,7 +174,7 @@ class VaultSecrets:
                     "(`vault token create -ttl=1h`, bootstrap/05.vault README) and export "
                     "it as VAULT_TOKEN."
                 )
-            self._backend = VaultKvBackend(self.addr, token=self.token)
+            self._backend = _require_sdk(VaultKvBackend)(self.addr, token=self.token)
         return self._backend
 
     def _translate(self, error: SecretsError, verb: str) -> VaultError:
