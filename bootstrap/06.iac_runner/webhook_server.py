@@ -632,7 +632,12 @@ def version_deploy():
     return jsonify(
         {
             **_in_progress_response(
-                env, ref, triggered_by, services=services, version_ref=version_ref
+                env,
+                ref,
+                triggered_by,
+                services=services,
+                version_ref=version_ref,
+                action=action,
             ),
             "wait": False,
         }

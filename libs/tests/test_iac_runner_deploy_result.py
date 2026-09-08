@@ -1440,3 +1440,72 @@ def test_run_invoke_task_passes_the_action_to_the_child(monkeypatch, tmp_path) -
     assert captured["env"]["DEPLOY_ACTION"] == "secrets-supply"
     sync_runner.run_invoke_task("fr-app.sync", tmp_path, "staging")
     assert "DEPLOY_ACTION" not in captured["env"]
+
+
+def test_async_secrets_supply_response_id_matches_the_status_lookup(
+    monkeypatch,
+) -> None:
+    """v1.1.69 incident: the 202 body for an async secrets-supply request carried the id of
+    the plain sync (no action), so deploy_v2's poll of /deploy/status with the action got
+    409 'deployment_id does not match'. Every response for the action must carry its id."""
+    sync_runner = _load_module(
+        "sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch
+    )
+    fake_flask = types.ModuleType("flask")
+
+    class FakeFlask:
+        def __init__(self, _name):
+            pass
+
+        def route(self, *_args, **_kwargs):
+            return lambda func: func
+
+    fake_flask.Flask = FakeFlask
+    fake_flask.jsonify = lambda payload: payload
+    request_json = {
+        "env": "staging",
+        "ref": DEPLOY_SHA,
+        "wait": False,
+        "triggered_by": "deploy_v2",
+        "services": ["finance_report/app"],
+        "action": "secrets-supply",
+    }
+    fake_flask.request = types.SimpleNamespace(
+        headers=_signed_headers(monkeypatch), data=b"", json=dict(request_json)
+    )
+    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+    webhook_server = _load_module(
+        "webhook_server_async_action_under_test",
+        IAC_RUNNER / "webhook_server.py",
+        monkeypatch,
+    )
+
+    class ImmediateThread:
+        def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+            self._target, self._args, self._kwargs = target, args, kwargs or {}
+
+        def start(self):
+            self._target(*self._args, **self._kwargs)
+
+    monkeypatch.setattr(webhook_server.threading, "Thread", ImmediateThread)
+
+    def fake_sync(env, ref, triggered_by, services=None, **kwargs):
+        return sync_runner.SyncResult(
+            env=env, ref=ref, requested_services=list(services or []), results=[]
+        )
+
+    monkeypatch.setattr(sync_runner, "sync_services_by_version", fake_sync)
+    body, status_code = webhook_server.version_deploy()
+    expected = webhook_server._deployment_id(
+        webhook_server._deployment_key(
+            "staging", DEPLOY_SHA, ["finance_report/app"], action="secrets-supply"
+        )
+    )
+    assert body["deployment_id"] == expected
+    # and the status lookup with the same coordinates + action finds it (fresh
+    # signature: nonces are single-use)
+    fake_flask.request.headers = _signed_headers(monkeypatch)
+    fake_flask.request.json = {**request_json, "deployment_id": body["deployment_id"]}
+    status_body, status_code = webhook_server.deployment_status()
+    assert status_code == 200, status_body
+    assert status_body["deployment_id"] == expected
