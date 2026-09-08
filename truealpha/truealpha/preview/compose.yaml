@@ -173,10 +173,12 @@ services:
     environment:
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
-      # Previews borrow staging's app secrets (generated secrets.ctmpl / policy) and ran
-      # with staging's APP_ENV before the template was generated; kept identical here
-      # (S3_ENDPOINT stays unset, as it was).
+      # A preview reads staging's secrets (the generated template is fixed to that
+      # environment) and, since truealpha#780, llm-service validates its injected
+      # environment at boot: S3_ENDPOINT must be present — the staging MinIO, the
+      # same instance the staging stack uses.
       APP_ENV: staging
+      S3_ENDPOINT: http://platform-minio-staging:9000
       # The ephemeral-DB DSN the entrypoint forces AFTER sourcing Vault secrets, pointing
       # at the local `db` service (NOT truealpha-postgres*).
       PREVIEW_DATABASE_URL: postgresql://${PREVIEW_DB_USER:-preview}:${PREVIEW_DB_PASSWORD:-preview}@truealpha-preview-db${ENV_SUFFIX}:5432/${PREVIEW_DB_NAME:-truealpha}
@@ -238,10 +240,12 @@ services:
     environment:
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
-      # Previews borrow staging's app secrets (generated secrets.ctmpl / policy) and ran
-      # with staging's APP_ENV before the template was generated; kept identical here
-      # (S3_ENDPOINT stays unset, as it was).
+      # A preview reads staging's secrets (the generated template is fixed to that
+      # environment) and, since truealpha#780, llm-service validates its injected
+      # environment at boot: S3_ENDPOINT must be present — the staging MinIO, the
+      # same instance the staging stack uses.
       APP_ENV: staging
+      S3_ENDPOINT: http://platform-minio-staging:9000
       HOSTNAME: 0.0.0.0
       PORT: "3000"
       PREVIEW_DATABASE_URL: postgresql://${PREVIEW_DB_USER:-preview}:${PREVIEW_DB_PASSWORD:-preview}@truealpha-preview-db${ENV_SUFFIX}:5432/${PREVIEW_DB_NAME:-truealpha}
