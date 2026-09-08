@@ -502,13 +502,11 @@ def test_failure_alert_falls_back_to_the_stderr_tail_and_is_silent_on_success() 
     text = reconcile.failure_alert_text(
         after="v1.1.64", results=failed, run_url="u", promote_prod=True
     )
-    assert (
-        text is not None
-        and "(PRODUCTION promotion)" in text
-        and "- prod platform/minio: deploy_v2 failed: Client error '404 Not Found'"
-        in text
-        and "developer.mozilla.org" not in text
-    )
+    assert text is not None
+    assert "(PRODUCTION promotion)" in text
+    expected = "- prod platform/minio: deploy_v2 failed: Client error '404 Not Found'"
+    assert expected in text
+    assert "developer.mozilla.org" not in text
     assert reconcile.failure_summary_from_result(failed[0]) == []
     assert (
         reconcile.failure_alert_text(
