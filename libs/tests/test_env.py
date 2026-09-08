@@ -75,6 +75,25 @@ class TestOpSecrets:
         assert "not signed in" in capsys.readouterr().err
 
 
+class TestOpSecretsWithoutTheBinary:
+    """CI runners have no `op`: reads are empty and writes are False, never a crash."""
+
+    def test_missing_op_binary_degrades_like_before(self, capsys):
+        from libs.env import OpSecrets
+
+        class NoBinary:
+            def read(self, path):
+                raise FileNotFoundError(2, "No such file or directory", "op")
+
+            def write(self, path, values):
+                raise FileNotFoundError(2, "No such file or directory", "op")
+
+        op = OpSecrets(backend=NoBinary())
+        assert op.get_all() == {}
+        assert op.set("K", "v") is False
+        assert "op" in capsys.readouterr().err
+
+
 class TestVaultSecrets:
     """VaultSecrets = one KV v2 path; errors keep their historical classes."""
 

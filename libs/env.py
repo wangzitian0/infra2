@@ -112,7 +112,9 @@ class OpSecrets:
         if self._cache is None:
             try:
                 raw = self._client().read(self.item)
-            except SecretsError as error:
+            except (SecretsError, OSError) as error:
+                # OSError: no `op` binary (CI runners, GitHub Actions) — degrade to an
+                # empty read exactly as the pre-SDK implementation did.
                 print(
                     f"OpSecrets: failed to load {self.item}: {error}", file=sys.stderr
                 )
@@ -133,7 +135,7 @@ class OpSecrets:
     def set(self, key: str, value: str) -> bool:
         try:
             self._client().write(self.item, {key: value})
-        except SecretsError as error:
+        except (SecretsError, OSError) as error:
             print(f"OpSecrets: failed to set {key}: {error}", file=sys.stderr)
             return False
         self._cache = None
