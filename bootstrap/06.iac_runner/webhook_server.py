@@ -269,11 +269,16 @@ def _reusable_result(key: DeploymentKey) -> dict | None:
     identical failure from memory (2026-09-09). Polling a deployment's status still
     reports the failure (that is how deploy_v2 learns of it); only the "skip the work"
     shortcut is limited to successes.
+
+    Declining to reuse is all this does — it never discards the entry (review on this
+    PR). The synchronous path reads the result it just stored AFTER releasing the lock,
+    so a concurrent request that removed the failure here would leave the original one
+    answering "Deployment finished without a stored result" about its own deploy. The
+    entry ages out on the TTL like every other.
     """
     response = _recent_result(key)
     if response is None or response.get("status") == "completed":
         return response
-    _recent_deploys.pop(key, None)
     return None
 
 

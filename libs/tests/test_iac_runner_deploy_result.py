@@ -1263,10 +1263,16 @@ def test_a_remembered_failure_is_retried_not_replayed(monkeypatch) -> None:
     assert body2.get("cached") is True
     assert status_code2 == 200
 
-    # Polling the deployment's status still reports a failure — deploy_v2 depends on it.
+    # Polling the deployment's status still reports a failure — deploy_v2 depends on it,
+    # and declining to reuse must not DISCARD it: the synchronous path reads the result
+    # it stored after releasing the lock, so a concurrent request that popped the entry
+    # here would make the original request answer "Deployment finished without a stored
+    # result" about its own deploy (review on the PR that added _reusable_result).
     webhook_server._recent_deploys.clear()
     webhook_server._recent_deploys[key] = (time.monotonic(), _stored(success=False))
+    assert webhook_server._reusable_result(key) is None
     assert webhook_server._recent_result(key)["status"] == "failed"
+    assert key in webhook_server._recent_deploys
 
 
 def test_deploy_cache_reuses_only_when_requested_services_match(monkeypatch) -> None:
