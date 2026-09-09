@@ -582,7 +582,9 @@ def test_iac_ref_refuses_a_marker_that_predates_the_release_pin(tmp_path) -> Non
 
     def just_new_enough(args, **_kwargs):
         if "production/v*.*.*" in args:
-            return SimpleNamespace(stdout=f"production/{receiver.MINIMUM_PRODUCTION_MARKER}\n")
+            return SimpleNamespace(
+                stdout=f"production/{receiver.MINIMUM_PRODUCTION_MARKER}\n"
+            )
         return SimpleNamespace(stdout="v1.1.76\n")
 
     assert (
@@ -644,7 +646,10 @@ def test_marker_status_reports_the_lag_and_calls_a_pre_pin_marker_stale(
 
     rotted = receiver.marker_status(repo_root=tmp_path, runner=stale)
     assert rotted.stale
-    assert "STALE" in rotted.line() and "#650" in rotted.line()
+    # The line names the release the marker is behind (#632) and what to do about it
+    # (#650), because it is what a paging ops check prints (review on this PR).
+    assert "STALE" in rotted.line()
+    assert "#632" in rotted.line() and "#650" in rotted.line()
 
     def caught_up(args, **_kwargs):
         return SimpleNamespace(

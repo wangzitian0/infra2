@@ -357,7 +357,8 @@ class MarkerStatus:
             else f"{self.releases_behind} release(s) behind"
         )
         verdict = (
-            f" — STALE: predates {MINIMUM_PRODUCTION_MARKER}, the release pin (#650)"
+            f" — STALE: predates {MINIMUM_PRODUCTION_MARKER}, the release pin (#632); "
+            "promote infra2 to production before the next app release (#650)"
             if self.stale
             else ""
         )
