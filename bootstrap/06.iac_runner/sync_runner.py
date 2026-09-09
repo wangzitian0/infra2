@@ -438,7 +438,22 @@ def update_repo(ref: str | None = None) -> bool:
             # successful fetch of infra2 main into `Could not access submodule
             # 'repos/finance_report'` -> "Failed to update repo, aborting sync", which
             # blocked truealpha's v0.0.49 staging release with nothing wrong on either side.
-            ["fetch", "--no-recurse-submodules", "--tags", "--prune", "origin"],
+            # `--force --prune-tags`: this workspace is a MIRROR of origin, never a place
+            # where a local ref means anything. Without them a tag that was ever re-cut
+            # wedges the runner permanently — plain `--tags` refuses to move an existing
+            # tag and the whole fetch fails, so every later deploy aborts with "Failed to
+            # update repo". On 2026-09-09 a v1.1.77 left over from an aborted release
+            # (70af582f) blocked v1.1.77's own staging soak (9295e440); the repair fetch
+            # also pruned v1.1.15 and v1.1.16, deleted upstream long before.
+            [
+                "fetch",
+                "--no-recurse-submodules",
+                "--tags",
+                "--force",
+                "--prune",
+                "--prune-tags",
+                "origin",
+            ],
             repo_path,
             "fetch",
         ):

@@ -257,6 +257,26 @@ def _recent_result(key: DeploymentKey) -> dict | None:
     return response
 
 
+def _reusable_result(key: DeploymentKey) -> dict | None:
+    """A remembered result worth serving INSTEAD of deploying again — a success only.
+
+    The window exists to collapse duplicate requests for work already done. A failure is
+    not such work: an operator's natural next move is to fix the cause outside the
+    request's coordinates and retry the same coordinates, and serving the remembered
+    failure returns the original verbatim — same deployment_id, same message — as if
+    nothing had been fixed. v1.1.77's staging soak failed on a stale local tag in the
+    runner's workspace; the tag was repaired on the runner and the rerun reported the
+    identical failure from memory (2026-09-09). Polling a deployment's status still
+    reports the failure (that is how deploy_v2 learns of it); only the "skip the work"
+    shortcut is limited to successes.
+    """
+    response = _recent_result(key)
+    if response is None or response.get("status") == "completed":
+        return response
+    _recent_deploys.pop(key, None)
+    return None
+
+
 def _in_progress_response(
     env: str,
     ref: str,
@@ -561,10 +581,9 @@ def version_deploy():
     if wait:
         key = _deployment_key(env, ref, services, version_ref, action)
         with _deploy_state_lock:
-            recent = _recent_result(key)
+            recent = _reusable_result(key)
             if recent:
-                status_code = 200 if recent.get("status") == "completed" else 500
-                return jsonify({**recent, "cached": True}), status_code
+                return jsonify({**recent, "cached": True}), 200
             if key in _in_flight_deploys:
                 return jsonify(
                     _in_progress_response(
@@ -599,7 +618,7 @@ def version_deploy():
 
     key = _deployment_key(env, ref, services, version_ref, action)
     with _deploy_state_lock:
-        recent = _recent_result(key)
+        recent = _reusable_result(key)
         if recent:
             return jsonify({**recent, "cached": True}), 200
         if key in _in_flight_deploys:
