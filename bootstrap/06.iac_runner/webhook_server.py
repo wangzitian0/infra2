@@ -141,27 +141,6 @@ def validate_deploy_ref(ref: str | None) -> str | None:
     return normalized if EXACT_COMMIT_RE.fullmatch(normalized) else None
 
 
-def get_changed_services(commits: list[dict]) -> set[str]:
-    """Map a push's changed files to affected services via the deploy dependency
-    graph — the SAME matcher used by the git-diff path, so both routes apply the
-    manifest (own dir + declared deps) and neither uses a `libs/ -> __all__`
-    catch-all. Importing sync_runner also puts the checked-out repo on sys.path
-    so `libs.deploy_dependencies` resolves.
-    """
-    files = [
-        file_path
-        for commit in commits
-        for file_path in (
-            commit.get("added", [])
-            + commit.get("modified", [])
-            + commit.get("removed", [])
-        )
-    ]
-    from sync_runner import get_changed_services_from_files
-
-    return get_changed_services_from_files(files)
-
-
 def parse_bool(value) -> bool:
     """Parse booleans from JSON or common string literals."""
     if isinstance(value, bool):
@@ -482,18 +461,25 @@ def webhook():
     if ref != f"refs/heads/{GIT_BRANCH}":
         return jsonify({"status": "ignored", "reason": f"Not {GIT_BRANCH} branch"})
 
-    commits = payload.get("commits", [])
-    services = get_changed_services(commits)
-
-    if not services:
-        return jsonify({"status": "no_changes", "message": "No service files changed"})
-
-    run_sync(services)
-
+    # A merge is not a release, so this endpoint deploys nothing.
+    #
+    # The delivery model has exactly three ways a change reaches a running service
+    # (docs/ssot/ops.pipeline.md §2-3): an app PR gets a preview stack; a release tag
+    # auto-promotes staging through reconcile-iac-inputs.yml; production is an explicit,
+    # human promotion. infra2 itself has no persistent preview environment — a PR's
+    # deploy_v2 canary is its preview.
+    #
+    # Deploying staging from an untagged main HEAD, which this handler used to do, is a
+    # fourth path that contradicts all three: it makes "merge" mean "deploy", it puts
+    # staging on a commit no tag names, and it does so from a webhook nobody watches.
+    # It was silently dead from at least 2026-07-20 to 2026-09-09 (#585) with no service
+    # visibly out of date, which is the strongest evidence available that nothing needs
+    # it. The hook stays live and authenticated because a webhook that 401s is a broken
+    # thing regardless, and because /deploy still uses this server.
     return jsonify(
         {
-            "status": "accepted",
-            "services": list(services),
+            "status": "ignored",
+            "reason": "a push to main is not a deploy trigger; staging follows a release tag",
             "commit": payload.get("after", "")[:8],
         }
     )

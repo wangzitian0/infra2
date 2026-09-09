@@ -84,6 +84,10 @@ root credentials. See docs/ssot/bootstrap.iac_runner.md §6.4.
 4. Secret: (the WEBHOOK_SECRET from Vault)
 5. Events: Just the push event
 
+The hook stays configured and authenticated — a webhook that 401s is a broken thing
+regardless, and `/deploy` is served by the same process — but a push to `main` starts no
+deploy. Staging follows a release tag; production follows an explicit promotion.
+
 ### 4. Deploy
 
 ```bash
@@ -151,7 +155,7 @@ Create from prod tag → v1.3.1 → Deploy to Production (no main merge required
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Health check |
-| `/webhook` | POST | GitHub webhook receiver (change-based sync) |
+| `/webhook` | POST | GitHub push receiver — authenticates the delivery and deploys nothing (a merge is not a release; staging follows a release tag) |
 | `/sync` | POST | Manual sync trigger (legacy, disabled by default) |
 | `/deploy` | POST | SHA-based deployment (GitOps) |
 | `/deploy/status` | POST | Poll the exact deployment ID returned by `/deploy` |

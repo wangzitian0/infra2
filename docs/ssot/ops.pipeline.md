@@ -231,7 +231,7 @@ post-merge 部署被 GitHub Actions `concurrency` 串行化,调 IaC Runner 前�
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | 健康检查(含 vault / op / dokploy_api_key 功能性 fail-closed)|
-| `/webhook` | POST | GitHub webhook(change-based sync)|
+| `/webhook` | POST | GitHub push receiver. **Deploys nothing**: a merge is not a release. staging 由 release tag 经 `reconcile-iac-inputs.yml` 自动晋升，prod 由显式 promote，app 的 PR 走 preview 栈；infra2 自身没有常驻 preview，PR 期的 `deploy_v2 live canary` 就是它的 preview。此前它会用未打标的 main HEAD 部署 staging（对每个声明了 `libs/**`/`tools/**` 的服务，等于「合并即部署」），该路径已移除。|
 | `/deploy` | POST | 版本部署;`wait=true` 为 legacy 直等 |
 | `/deploy/status` | POST | 用 `/deploy` 返回的 `deployment_id` 签名轮询同一操作的真实 sync 结果 |
 | `/sync` | POST | legacy 手动同步;默认关闭,由 `ENABLE_LEGACY_SYNC` gate 开启 |
