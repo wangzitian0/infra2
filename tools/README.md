@@ -36,7 +36,9 @@ automatically from the service's `ProbeFacet`/`SignalFacet` declarations);
 source authority and immutable coordinates, remotely verifies Production run/review evidence,
 and selects the released IaC ref; the tool only wires argv/env and invokes the existing deploy
 front door. There is no CLI bypass for Production evidence. Dokploy/Vault mutation stays in
-infra2.
+infra2. Its `markers` action needs no request: it prints the production marker next to the
+newest release and exits non-zero once the marker is too old to pin the data engine from the
+release being promoted (#650) — the ops-checks deploy-guard-audit job runs it daily.
 
 `ci_gate_audit.py` imports the released `infra2_sdk.ci` schema directly and validates
 the infra-owned gate inventory against live workflow jobs. No local compatibility schema

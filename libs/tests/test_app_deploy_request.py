@@ -146,8 +146,8 @@ def resolved(*args, **kwargs) -> ResolvedRef:
 
 def tags(args, **kwargs):
     if "production/v*.*.*" in args:
-        return SimpleNamespace(stdout="production/v1.1.26\n")
-    return SimpleNamespace(stdout="v1.1.28\nv1.1.27\n")
+        return SimpleNamespace(stdout="production/v1.1.74\n")
+    return SimpleNamespace(stdout="v1.1.76\nv1.1.75\n")
 
 
 def test_parse_request_rejects_non_object_and_bad_json() -> None:
@@ -524,7 +524,7 @@ def test_iac_ref_distinguishes_staging_candidate_from_production_target(
 ) -> None:
     assert (
         receiver.select_iac_ref(DeployType.STAGING, repo_root=tmp_path, runner=tags)
-        == "v1.1.28"
+        == "v1.1.76"
     )
     assert (
         receiver.select_iac_ref(DeployType.PREVIEW_PR, repo_root=tmp_path, runner=tags)
@@ -532,7 +532,7 @@ def test_iac_ref_distinguishes_staging_candidate_from_production_target(
     )
     assert (
         receiver.select_iac_ref(DeployType.PRODUCTION, repo_root=tmp_path, runner=tags)
-        == "v1.1.26"
+        == "v1.1.74"
     )
 
     with pytest.raises(ValueError, match="invalid production marker"):
@@ -547,7 +547,7 @@ def test_iac_ref_fails_closed_without_production_marker(tmp_path) -> None:
     def no_marker(args, **_kwargs):
         if "production/v*.*.*" in args:
             return SimpleNamespace(stdout="")
-        return SimpleNamespace(stdout="v1.1.28\n")
+        return SimpleNamespace(stdout="v1.1.76\n")
 
     with pytest.raises(ValueError, match="production IaC state is unknown"):
         receiver.select_iac_ref(
@@ -566,6 +566,103 @@ def test_iac_ref_fails_closed_on_malformed_production_marker(tmp_path) -> None:
         )
 
 
+def test_iac_ref_refuses_a_marker_that_predates_the_release_pin(tmp_path) -> None:
+    """#650: a stale marker deploys the data engine from a deployer that cannot honour
+    the release pin, and today the release only finds out after prod is recreated."""
+
+    def stale_marker(args, **_kwargs):
+        if "production/v*.*.*" in args:
+            return SimpleNamespace(stdout="production/v1.1.52\n")
+        return SimpleNamespace(stdout="v1.1.76\n")
+
+    with pytest.raises(ValueError, match="predates v1.1.59"):
+        receiver.select_iac_ref(
+            DeployType.PRODUCTION, repo_root=tmp_path, runner=stale_marker
+        )
+
+    def just_new_enough(args, **_kwargs):
+        if "production/v*.*.*" in args:
+            return SimpleNamespace(
+                stdout=f"production/{receiver.MINIMUM_PRODUCTION_MARKER}\n"
+            )
+        return SimpleNamespace(stdout="v1.1.76\n")
+
+    assert (
+        receiver.select_iac_ref(
+            DeployType.PRODUCTION, repo_root=tmp_path, runner=just_new_enough
+        )
+        == receiver.MINIMUM_PRODUCTION_MARKER
+    )
+
+
+def test_plan_names_the_newest_release_next_to_the_ref_it_runs_at(tmp_path) -> None:
+    """The promotion lag is on screen in the plan, before anything is deployed."""
+    production = receiver.make_plan(
+        production_payload(),
+        sender="wangzitian0",
+        domain="zitian.party",
+        timeout=600,
+        repo_root=tmp_path,
+        production_evidence_verifier=lambda request: None,
+        resolve_image=resolved,
+        runner=tags,
+    )
+    assert production.iac_ref == "v1.1.74"
+    assert production.newest_iac_tag == "v1.1.76"
+    assert production.to_dict()["newest_iac_tag"] == "v1.1.76"
+
+    preview = receiver.make_plan(
+        payload(deploy_type="preview/pr", version_ref="42"),
+        sender="wangzitian0",
+        domain="zitian.party",
+        timeout=600,
+        repo_root=tmp_path,
+        resolve_image=resolved,
+        resolve_pull=lambda number, *, repo: ResolvedRef(
+            sha=SHA, image_ref=SHA[:7], form="pr"
+        ),
+        runner=tags,
+    )
+    assert preview.iac_ref == "main"
+    assert preview.newest_iac_tag == ""
+
+
+def test_marker_status_reports_the_lag_and_calls_a_pre_pin_marker_stale(
+    tmp_path,
+) -> None:
+    """The daily #650 report: both coordinates, the gap, and a verdict."""
+    current = receiver.marker_status(repo_root=tmp_path, runner=tags)
+    assert (current.production_marker, current.newest_tag) == ("v1.1.74", "v1.1.76")
+    assert current.releases_behind == 2
+    assert not current.stale
+    assert current.line() == (
+        "production marker v1.1.74 (2 release(s) behind); newest release v1.1.76"
+    )
+
+    def stale(args, **_kwargs):
+        if "production/v*.*.*" in args:
+            return SimpleNamespace(stdout="production/v1.1.52\n")
+        return SimpleNamespace(stdout="v1.1.76\nv1.1.52\n")
+
+    rotted = receiver.marker_status(repo_root=tmp_path, runner=stale)
+    assert rotted.stale
+    # The line names the release the marker is behind (#632) and what to do about it
+    # (#650), because it is what a paging ops check prints (review on this PR).
+    assert "STALE" in rotted.line()
+    assert "#632" in rotted.line() and "#650" in rotted.line()
+
+    def caught_up(args, **_kwargs):
+        return SimpleNamespace(
+            stdout=(
+                "production/v1.1.76\n" if "production/v*.*.*" in args else "v1.1.76\n"
+            )
+        )
+
+    assert receiver.marker_status(repo_root=tmp_path, runner=caught_up).line() == (
+        "production marker v1.1.76 (current); newest release v1.1.76"
+    )
+
+
 def test_plan_builds_staging_and_production_deploy_v2_args(tmp_path) -> None:
     staging = receiver.make_plan(
         payload(),
@@ -576,7 +673,7 @@ def test_plan_builds_staging_and_production_deploy_v2_args(tmp_path) -> None:
         resolve_image=resolved,
         runner=tags,
     )
-    assert staging.iac_ref == "v1.1.28"
+    assert staging.iac_ref == "v1.1.76"
     assert staging.deploy_v2_args()[-2:] == ["--expected-sha", SHA]
 
     production = receiver.make_plan(
