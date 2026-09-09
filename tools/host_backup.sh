@@ -34,16 +34,21 @@ mkdir -p "${RUN_DIR}"
 # Mirrors the BackupFacet declarations on each service's deploy.py
 # (libs.backup_verification.load_backup_inventory derives the inventory; the
 # handwritten ops.backup-inventory.yaml was deleted in #542). kind in: pg | redis | path
+# Logical dumps FIRST (atomic, most critical), busy path archives LAST: the
+# 2026-08-20 restore drill (truealpha#650) found every scheduled prod run had
+# been ABORTING at platform/minio -- tar exits 1 when live files change under
+# it, set -e killed the run, and every service registered after minio
+# (finance_report, truealpha) was silently never backed up.
 SERVICES=$(cat <<EOF
-bootstrap/vault|path|/data/bootstrap/vault
 platform/postgres|pg|platform-postgres${SUFFIX}
-platform/redis|redis|platform-redis${SUFFIX}|/data/platform/redis${SUFFIX}
-platform/clickhouse|path|/data/platform/clickhouse${SUFFIX}
-platform/minio|path|/data/platform/minio${SUFFIX}
-platform/authentik|path|/data/platform/authentik${SUFFIX}
 finance_report/postgres|pg|finance_report-postgres${SUFFIX}
-finance_report/redis|redis|finance_report-redis${SUFFIX}|/data/finance_report/redis${SUFFIX}
 truealpha/postgres|pg|truealpha-postgres${SUFFIX}
+platform/redis|redis|platform-redis${SUFFIX}|/data/platform/redis${SUFFIX}
+finance_report/redis|redis|finance_report-redis${SUFFIX}|/data/finance_report/redis${SUFFIX}
+bootstrap/vault|path|/data/bootstrap/vault
+platform/clickhouse|path|/data/platform/clickhouse${SUFFIX}
+platform/authentik|path|/data/platform/authentik${SUFFIX}
+platform/minio|path|/data/platform/minio${SUFFIX}
 EOF
 )
 
@@ -82,14 +87,20 @@ while IFS= read -r line; do
       echo "redis SAVE ${container}"
       docker exec "${container}" redis-cli SAVE >/dev/null || true
       archive="${RUN_DIR}/${safe_id}_${TS}.tar.gz"
-      tar -czf "${archive}" -C "${data_path}" .
+      rc=0; tar --warning=no-file-changed -czf "${archive}" -C "${data_path}" . || rc=$?
+      # tar exit 1 = files changed/vanished mid-read -- acceptable for a live path
+      # archive (crash-consistent at best); >=2 is a real failure and still aborts.
+      if [ "${rc}" -gt 1 ]; then echo "tar failed (${rc}) for ${service_id}" >&2; exit "${rc}"; fi
       emit_artifact "${service_id}" "${archive}" "redis_rdb_archive"
       ;;
     path)
       data_path="${rest%%|*}"
       if [ ! -d "${data_path}" ]; then echo "skip missing ${service_id} ${data_path}" >&2; continue; fi
       archive="${RUN_DIR}/${safe_id}_${TS}.tar.gz"
-      tar -czf "${archive}" -C "${data_path}" .
+      rc=0; tar --warning=no-file-changed -czf "${archive}" -C "${data_path}" . || rc=$?
+      # tar exit 1 = files changed/vanished mid-read -- acceptable for a live path
+      # archive (crash-consistent at best); >=2 is a real failure and still aborts.
+      if [ "${rc}" -gt 1 ]; then echo "tar failed (${rc}) for ${service_id}" >&2; exit "${rc}"; fi
       emit_artifact "${service_id}" "${archive}" "filesystem_archive"
       ;;
     *) echo "unknown kind ${kind} for ${service_id}" >&2; exit 2;;
