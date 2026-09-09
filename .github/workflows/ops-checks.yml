@@ -126,6 +126,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # The marker-lag report reads `git tag --merged HEAD`; the default shallow
+          # checkout carries no tags and would report "production IaC state is unknown"
+          # every night.
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -137,6 +142,12 @@ jobs:
 
       - name: Audit deploy fan-out coverage (sufficiency)
         run: python tools/deploy_guard_audit.py
+
+      - name: Report the production marker lag (#650)
+        # Delivered every run, not only on failure (#425): the line names both
+        # coordinates. Non-zero only when the marker predates the release-pin deployer,
+        # which is the state that breaks the next production release.
+        run: python -m tools.app_deploy_request markers --repo-root .
 
       - name: Audit single deploy trigger (necessity)
         if: env.DOKPLOY_API_KEY != ''

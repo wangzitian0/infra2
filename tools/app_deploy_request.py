@@ -9,7 +9,7 @@ import subprocess
 import sys
 from collections.abc import Sequence
 
-from libs.app_deploy_request import DeployPlan, make_plan
+from libs.app_deploy_request import DeployPlan, make_plan, marker_status
 
 
 def execute_plan(plan: DeployPlan, *, run=None) -> int:
@@ -57,10 +57,10 @@ def _payload_from_env(name: str) -> str:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("plan", "execute"))
+    parser.add_argument("action", choices=("plan", "execute", "markers"))
     parser.add_argument("--payload-env", default="APP_DEPLOY_REQUEST_JSON")
-    parser.add_argument("--sender", required=True)
-    parser.add_argument("--domain", required=True)
+    parser.add_argument("--sender", default="")
+    parser.add_argument("--domain", default="")
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--repo-root", default=".")
     parser.add_argument(
@@ -74,6 +74,14 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.action == "markers":
+            # No request needed: this reports infra2's own two coordinates, so the daily
+            # ops check can see the promotion lag without waiting for a release (#650).
+            status = marker_status(repo_root=args.repo_root)
+            print(status.line())
+            return 1 if status.stale else 0
+        if not args.sender or not args.domain:
+            raise ValueError("--sender and --domain are required for plan and execute")
         plan = make_plan(
             _payload_from_env(args.payload_env),
             sender=args.sender,

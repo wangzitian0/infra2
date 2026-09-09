@@ -23,7 +23,7 @@
 |------|----------------|------|
 | **IaC Input Reconcile** | [`reconcile-iac-inputs.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/reconcile-iac-inputs.yml) | **Release-tag** 触发(`push: tags: v*.*.*`):diff 上一 tag→本 tag,把 changed `iac_pinned` 服务以**该 tag** 为 `iac_ref` fan-out 给 `deploy_v2 → iac_runner`;config-hash gate 决定 no-op vs 重启。**不是 main-push、不是 sha。** |
 | **Deploy 前门 (`deploy_v2`)** | [`tools/deploy_v2.py`](https://github.com/wangzitian0/infra2/blob/main/tools/deploy_v2.py) · [`deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) | 统一部署坐标 `(service, type, version_ref, iac_ref)`;app + 平台、staging/prod、pinned ref。 |
-| **App Deploy Request Receiver** | [`app-deploy-request.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/app-deploy-request.yml) · [`libs/app_deploy_request.py`](https://github.com/wangzitian0/infra2/blob/main/libs/app_deploy_request.py) | SDK `DeployRequest v1` 的跨仓库部署入口；验证 sender/repo/ref/SHA/evidence，prod 额外远端验证 run/review 状态。App staging 选最新 on-main infra release candidate；App prod 只选最新 `production/v*` marker 指向的 release；无 marker 时 production desired state 未知并 fail-closed。 |
+| **App Deploy Request Receiver** | [`app-deploy-request.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/app-deploy-request.yml) · [`libs/app_deploy_request.py`](https://github.com/wangzitian0/infra2/blob/main/libs/app_deploy_request.py) | SDK `DeployRequest v1` 的跨仓库部署入口；验证 sender/repo/ref/SHA/evidence，prod 额外远端验证 run/review 状态。App staging 选最新 on-main infra release candidate；App prod 只选最新 `production/v*` marker 指向的 release；无 marker 时 production desired state 未知并 fail-closed。**marker 早于 `MINIMUM_PRODUCTION_MARKER`（`v1.1.59`，release pin #632 首次发布的 tag）时同样 fail-closed**：更旧的 deployer 会用运维手写进 Vault 的 digest 重建 data engine，而不是被晋升的那个 release（#650）。plan 输出同时给出 `iac_ref` 与 `newest_iac_tag`，晋升滞后在部署前就可见。 |
 | **IaC Runner Bootstrap (L1)** | [`deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) · [`scripts/deploy_iac_runner_bootstrap.sh`](https://github.com/wangzitian0/infra2/blob/main/scripts/deploy_iac_runner_bootstrap.sh) | **带外**自更新:`bootstrap/06.iac_runner/**` 变更时,Actions 在 VPS 上重建 runner 自身(跟 merged SHA),**独立 cadence**。 |
 | **Auto-deploy report-branch-main** | [`deploy-report-main.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy-report-main.yml) | **唯一**自动目标:app main push → main 预览重部署。 |
 | **Observability config apply** | [`apply-observability.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/apply-observability.yml) | 告警规则 / 看板,声明式 reconcile。**当前 merge 即 apply**(见 §3.4 未收口项)。 |
@@ -160,6 +160,10 @@ state 的唯一可版本化指针，不是新的部署触发器。prod promotion
 做累计 diff，而不是从前一个 staging candidate 开始，确保中间仅进 staging 的 release 不被跳过。
 首次迁移尚无 marker 时必须显式给出已知 production `before`；config drift 与 App production
 request 在 marker 建立前都 fail-closed，不用 latest release 猜生产事实。
+marker 不动就是 prod 用旧 deployer:2026-07-30 的 `production/v1.1.52` 让 truealpha v0.0.48 在
+2026-09-08 带着一个七月的 deployer 上了 prod(#650)。因此 marker 滞后每天由 ops-checks 的
+deploy-guard-audit 报一行(`python -m tools.app_deploy_request markers`),内容是 marker、落后几个
+release、以及是否已旧到会破坏下一次 prod 发布。
 
 ### 3.4 未收口项(open / 目标态)
 
