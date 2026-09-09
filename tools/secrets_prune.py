@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Remove from each service's Vault path what nothing reads (store hygiene, #649).
 
-A service's store may hold exactly two kinds of value: what its Vault Agent template
-renders into the container (the manifest's store-backed fields) and what an operator
-task reads directly (``Service.store_only_keys`` in libs/secrets_registry.py, each entry
-naming its reader). Anything else is an orphan — a value written by a retired code path,
-or a configuration key that moved into the compose file — and it is dangerous precisely
-because it looks authoritative: platform/production/finance_report kept a PRIMARY_MODEL
-the app stopped reading, and the day the template stopped rendering it, a stale Dokploy
-copy surfaced instead (#649).
+A service's store may hold exactly three kinds of value: what its Vault Agent template
+renders into the container (the manifest's store-backed fields), what an operator task
+reads directly (``Service.store_only_keys`` in libs/secrets_registry.py, each entry
+naming its reader), and what a probe or an operator parks under a reserved prefix
+(``RESERVED_PREFIXES`` below — the same names the SDK's reconcile ignores), which this
+tool keeps and never counts as an orphan. Anything else is an orphan — a value written
+by a retired code path, or a configuration key that moved into the compose file — and
+it is dangerous precisely because it looks authoritative:
+platform/production/finance_report kept a PRIMARY_MODEL the app stopped reading, and the
+day the template stopped rendering it, a stale Dokploy copy surfaced instead (#649).
 
     python3 tools/secrets_prune.py                         # dry run over every service
     python3 tools/secrets_prune.py --service platform/alerting --env staging
@@ -34,6 +36,9 @@ from infra2_sdk.secrets import SecretsError, vault_path  # noqa: E402
 
 from libs.secrets_registry import SERVICES, Service, store_keys  # noqa: E402
 from libs.secrets_supply import vault_backend  # noqa: E402
+
+# infra2_sdk.runtime.config_schema.reconcile ignores these; so must the prune.
+RESERVED_PREFIXES = ("_",)
 
 
 @dataclass
@@ -105,8 +110,15 @@ def plan_for(
         held = dict(store.read(path))
     except SecretsError as error:
         return PrunePlan(service.id, env, path, error=str(error))
-    keep = {key: value for key, value in held.items() if key in allowed}
-    orphans = tuple(sorted(key for key in held if key not in allowed))
+
+    def kept(key: str) -> bool:
+        # RESERVED_PREFIXES mirrors the SDK reconcile's ignore list: a key a probe or an
+        # operator parks outside the manifest on purpose is not an orphan, and a prune
+        # that deleted it would quietly disagree with the report that found it.
+        return key in allowed or key.startswith(RESERVED_PREFIXES)
+
+    keep = {key: value for key, value in held.items() if kept(key)}
+    orphans = tuple(sorted(key for key in held if not kept(key)))
     return PrunePlan(service.id, env, path, tuple(sorted(keep)), orphans)
 
 

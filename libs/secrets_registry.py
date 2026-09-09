@@ -135,6 +135,9 @@ SERVICES: tuple[Service, ...] = (
         "finance_report",
         "app",
         ("repos/finance_report/common/runtime/required-env.generated.json",),
+        # _ensure_minio_bucket reads the bucket name back to decide whether the scoped
+        # user already exists; the compose supplies the same name to the container.
+        store_only_keys=("S3_BUCKET",),
     ),
     Service(
         "finance_report/finance_report/preview",
@@ -153,6 +156,8 @@ SERVICES: tuple[Service, ...] = (
             "repos/truealpha/apps/llm-service/required-env.generated.json",
             "truealpha/truealpha/10.app/env.manifest.json",
         ),
+        # same bucket-provisioning read as finance_report/app
+        store_only_keys=("S3_BUCKET",),
     ),
     Service(
         "truealpha/truealpha/preview",
@@ -177,6 +182,7 @@ SERVICES: tuple[Service, ...] = (
         store_only_keys=(
             "CAPTURE_APPROVED_BY",
             "DATA_ENGINE_IMAGE_DIGEST",
+            "GIT_COMMIT_SHA",
             "RELEASE_MANIFEST_ID",
         ),
     ),

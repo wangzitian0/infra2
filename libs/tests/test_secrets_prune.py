@@ -149,9 +149,66 @@ def test_every_registered_service_declares_where_its_operator_keys_are_read():
     documented = {s.id: s.store_only_keys for s in SERVICES if s.store_only_keys}
     assert documented == {
         "platform/authentik": ("root_token",),
+        "finance_report/app": ("S3_BUCKET",),
+        "truealpha/app": ("S3_BUCKET",),
         "truealpha/data_engine": (
             "CAPTURE_APPROVED_BY",
             "DATA_ENGINE_IMAGE_DIGEST",
+            "GIT_COMMIT_SHA",
             "RELEASE_MANIFEST_ID",
         ),
     }
+
+
+def test_reserved_prefixes_are_left_alone(tmp_path):
+    """The SDK reconcile ignores `_`-prefixed keys, so a probe or an operator can park one
+    outside the manifest; the prune must not disagree with the report that found it."""
+    service = _service(tmp_path)
+    path = vault_path("platform", "staging", "svc")
+    store = MemoryStore(
+        {path: {"PASSWORD": "p", "MODE": "m", "_drift_probe": "x", "LEFTOVER": "y"}}
+    )
+    report = secrets_prune.prune(
+        services=(service,), store=store, apply=True, root=tmp_path
+    )
+    assert report.plans[0].orphans == ("LEFTOVER",)
+    assert set(store.documents[path]) == {"PASSWORD", "MODE", "_drift_probe"}
+
+
+# Every key a Deployer reads back from its OWN service path, transcribed from the
+# `secrets.get("...")` / `vault_secrets.get("...")` calls in each deploy.py. A key here
+# that the manifest does not make store-backed must be declared `store_only_keys`, or the
+# prune would delete the value the next deployment reads (#649 review).
+DEPLOYER_READS = {
+    "truealpha/data_engine": (
+        "CAPTURE_APPROVED_BY",
+        "DATA_ENGINE_IMAGE_DIGEST",
+        "GIT_COMMIT_SHA",
+        "RELEASE_MANIFEST_ID",
+    ),
+    "truealpha/app": (
+        "APP_SERVICE_DB_PASSWORD",
+        "S3_ACCESS_KEY",
+        "S3_BUCKET",
+        "S3_SECRET_KEY",
+        "SECRET_KEY",
+    ),
+    "finance_report/app": ("S3_ACCESS_KEY", "S3_BUCKET", "S3_SECRET_KEY"),
+    "platform/minio": ("root_password", "root_user"),
+}
+
+
+@pytest.mark.parametrize("service_id", sorted(DEPLOYER_READS))
+def test_the_prune_never_removes_a_key_a_deployer_reads(service_id):
+    from libs import secrets_registry
+
+    project, _, name = service_id.partition("/")
+    service = secrets_registry.lookup(project, name)
+    assert service is not None, service_id
+    allowed = secrets_registry.store_keys(service)
+    missing = sorted(set(DEPLOYER_READS[service_id]) - allowed)
+    assert not missing, (
+        f"{service_id}: deploy.py reads {missing} from its own Vault path, but neither the "
+        "manifest nor Service.store_only_keys declares them — tools/secrets_prune.py would "
+        "delete them"
+    )
