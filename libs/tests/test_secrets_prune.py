@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 
@@ -156,6 +157,7 @@ def test_every_registered_service_declares_where_its_operator_keys_are_read():
             "DATA_ENGINE_IMAGE_DIGEST",
             "GIT_COMMIT_SHA",
             "RELEASE_MANIFEST_ID",
+            "S3_BUCKET",
         ),
     }
 
@@ -179,12 +181,32 @@ def test_reserved_prefixes_are_left_alone(tmp_path):
 # `secrets.get("...")` / `vault_secrets.get("...")` calls in each deploy.py. A key here
 # that the manifest does not make store-backed must be declared `store_only_keys`, or the
 # prune would delete the value the next deployment reads (#649 review).
+def _data_engine_deployer():
+    """The class itself, so its declared reads cannot drift from this table."""
+    root = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location(
+        "data_engine_deploy_for_prune",
+        root / "truealpha/truealpha/20.data_engine/deploy.py",
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.DataEngineDeployer
+
+
 DEPLOYER_READS = {
-    "truealpha/data_engine": (
-        "CAPTURE_APPROVED_BY",
-        "DATA_ENGINE_IMAGE_DIGEST",
-        "GIT_COMMIT_SHA",
-        "RELEASE_MANIFEST_ID",
+    # Derived rather than transcribed. Hand-transcribing missed S3_BUCKET: the template
+    # stopped rendering it, so the manifest no longer calls it store-backed, while
+    # ensure_runtime_secrets still fails the deploy without it. The live dry run on
+    # 2026-09-09 duly listed truealpha/data_engine:S3_BUCKET as an orphan in both
+    # environments — a prune would have broken the next data-engine deploy.
+    "truealpha/data_engine": tuple(
+        sorted(
+            set(_data_engine_deployer()._REQUIRED_SECRET_KEYS)
+            # Not required (an unpinned deploy reports "unknown"), but read from this
+            # path by compose_env_base all the same.
+            | {"GIT_COMMIT_SHA"}
+        )
     ),
     "truealpha/app": (
         "APP_SERVICE_DB_PASSWORD",
