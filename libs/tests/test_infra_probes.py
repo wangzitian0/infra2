@@ -376,17 +376,25 @@ def test_the_watchers_can_actually_speak_at_info(monkeypatch, capsys) -> None:
     import logging
 
     runner = _load_probe_runner()
+    watched = ("deploy-queue-guard", "container-breakdown-watch")
     root = logging.getLogger()
-    previous_handlers, previous_level = list(root.handlers), root.level
-    for name in ("deploy-queue-guard", "container-breakdown-watch"):
-        logging.getLogger(name).setLevel(logging.NOTSET)
-    root.handlers = []
+    saved = {
+        "__root_handlers__": list(root.handlers),
+        "__root_level__": root.level,
+        **{name: logging.getLogger(name).level for name in watched},
+    }
     try:
-        assert (
-            logging.getLogger("deploy-queue-guard").getEffectiveLevel() > logging.INFO
-        )
+        # Build the precondition rather than inherit it: whatever the rest of the suite
+        # has done to logging, this test starts from an unconfigured process.
+        root.handlers = []
+        root.setLevel(logging.WARNING)
+        for name in watched:
+            logging.getLogger(name).setLevel(logging.NOTSET)
+        assert logging.getLogger(watched[0]).getEffectiveLevel() > logging.INFO
+
         runner._configure_logging()
-        for name in ("deploy-queue-guard", "container-breakdown-watch"):
+
+        for name in watched:
             assert logging.getLogger(name).getEffectiveLevel() == logging.INFO, name
         # nothing else becomes chatty
         assert (
@@ -395,7 +403,10 @@ def test_the_watchers_can_actually_speak_at_info(monkeypatch, capsys) -> None:
         )
         assert root.handlers, "a handler must exist or INFO records go nowhere"
     finally:
-        root.handlers, root.level = previous_handlers, previous_level
+        root.handlers = saved.pop("__root_handlers__")
+        root.setLevel(saved.pop("__root_level__"))
+        for name, level in saved.items():
+            logging.getLogger(name).setLevel(level)
 
 
 def test_every_probe_cycle_leaves_one_line_of_positive_evidence(

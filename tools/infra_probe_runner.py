@@ -131,8 +131,13 @@ def _configure_logging() -> None:
     watcher loggers are raised to INFO explicitly. httpx/httpcore are pinned to WARNING
     in libs.container_breakdown_watch, which polls the Docker socket every minute.
     """
+    # force=True: basicConfig is a no-op once the root logger has any handler, so
+    # without it a library that configured logging first would leave the root level and
+    # handler as it wanted them — and the summaries back where they started.
     logging.basicConfig(
-        level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s"
+        level=logging.WARNING,
+        format="%(levelname)s %(name)s: %(message)s",
+        force=True,
     )
     for name in ("deploy-queue-guard", "container-breakdown-watch"):
         logging.getLogger(name).setLevel(logging.INFO)
