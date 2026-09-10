@@ -5,11 +5,15 @@ GitOps deployment control plane for syncing reviewed, immutable revisions to Dok
 ## How It Works
 
 ```
-┌─────────────┐     webhook      ┌──────────────┐     invoke sync   ┌─────────────┐
-│   GitHub    │ ──────────────▶ │  IaC Runner  │ ─────────────────▶│  Services   │
-│  (push)     │                  │  (container) │                   │  (Dokploy)  │
-└─────────────┘                  └──────────────┘                   └─────────────┘
+┌──────────────────┐   /deploy   ┌──────────────┐   invoke sync   ┌─────────────┐
+│  GitHub Actions  │ ──────────▶ │  IaC Runner  │ ──────────────▶ │  Services   │
+│ (release tag, or │             │  (container) │                 │  (Dokploy)  │
+│  a prod promote) │             └──────────────┘                 └─────────────┘
+└──────────────────┘
 ```
+
+A push to `main` reaches `/webhook`, is authenticated, and deploys nothing — see
+[Deployment Flows](#deployment-flows).
 
 1. GitHub resolves an approved source/tag to an exact 40-character commit SHA.
 2. `/deploy` normalizes the requested service set and returns an opaque deployment ID.
@@ -102,53 +106,54 @@ IaC Runner supports **GitOps version-based deployments** via GitHub Actions work
 
 **Semantic Versioning**: `v{major}.{minor}.{patch}`
 
-- **Patch**: Staging iterations (auto-incremented on every `main` push)
-- **Minor**: Production releases (manual promotion from staging)
-- **Major**: Architecture changes (rare, manual)
+- **Patch / Minor**: a platform release candidate. Every tag is a candidate; what
+  distinguishes them is the size of the change, not where they deploy.
+- **Major**: architecture changes needing manual migration (rare).
 
 ### Deployment Flows
 
-**Staging (Automatic)**:
+There are three ways a change reaches a running service, and a merge is not one of them.
+
+**Staging (automatic, on a release tag)**:
 ```
-Push to main → deploy.yml → Resolve commit SHA → Deploy to Staging
+git push origin vX.Y.Z → reconcile-iac-inputs.yml → diff previous tag..this tag
+                       → deploy_v2 → /deploy → invoke {service}.sync (staging)
 ```
 
-**Production (Manual)**:
+**Production (explicit promotion, by a human)**:
 ```
-Select semver release tag → deploy.yml → Resolve commit SHA → Deploy to Production
+reconcile-iac-inputs.yml with promote_prod=true, at a tag that has soaked in staging
+                       → deploy_v2 → /deploy → invoke {service}.sync (production)
+                       → production/vX.Y.Z marker recorded
 ```
 
-**Hotfix (Manual)**:
-```
-Create from prod tag → v1.3.1 → Deploy to Production (no main merge required)
-```
+**A merge to `main`**: nothing deploys. `main` ahead of the newest tag means
+*unreleased*, which is the normal state, not drift. `/webhook` authenticates the push
+and answers `ignored`. An app repository's PR gets a preview stack instead; infra2 has
+no persistent preview environment — a PR's `deploy_v2 live canary` is its preview.
+
+See [`docs/ssot/ops.pipeline.md`](../../docs/ssot/ops.pipeline.md) §2–3 for the
+authoritative version of all three.
 
 ### Example Workflow
 
-1. **Developer pushes to main**:
+1. **Merge the change**. Nothing is deployed; `main` is now ahead of the newest tag.
+
+2. **Cut a release tag** when the change should reach staging:
    ```bash
-   git add platform/01.postgres/compose.yaml
-   git commit -m "feat: update postgres config"
-   git push origin main
+   git fetch --tags                       # a tag someone else took is a wedged runner
+   git tag -a v1.2.4 -m "postgres config" origin/main
+   git push origin v1.2.4
    ```
+   `reconcile-iac-inputs.yml` diffs `v1.2.3..v1.2.4`, fans the changed services out
+   through `deploy_v2`, and each service's config hash decides deploy vs no-op.
 
-2. **GitHub Actions resolves and deploys**:
-   - Resolves `main` to the pushed commit SHA
-   - Calls `/deploy` endpoint with `{"env":"staging","ref":"<40-char-sha>","source_ref":"main"}`
-
-3. **IaC Runner deploys to staging**:
-   - Checks out the exact commit SHA
-   - Runs `invoke {service}.sync` for all platform services
-   - Each service compares config hash and deploys only if changed
-
-4. **Manual production promotion**:
+3. **Soak in staging**, then promote the same immutable tag:
    ```bash
-   gh workflow run deploy.yml \
-     -f env="production" \
-     -f ref="v1.2.4"
+   gh workflow run reconcile-iac-inputs.yml -f promote_prod=true -f ref=v1.2.4
    ```
-   - Requires the `production` GitHub Environment and a semver tag
-   - Resolves the tag to a commit SHA before calling `/deploy`
+   Requires the `production` GitHub Environment. Production is never reached by
+   skipping staging, and the `production/v1.2.4` marker is what records that it was.
 
 ## Endpoints
 
