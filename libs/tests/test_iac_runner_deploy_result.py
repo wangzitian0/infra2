@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -1156,6 +1157,180 @@ def test_iac_runner_bootstrap_deploy_script_uses_confirmed_dokploy_env() -> None
     assert "Recovered DOKPLOY_API_KEY from current container env" in script
     assert "current container env are missing DOKPLOY_API_KEY" in script
     assert "if [ -f /secrets/.env ]; then" in script
+
+
+def test_a_push_to_main_deploys_nothing(monkeypatch) -> None:
+    """A merge is not a release: staging follows a release tag, production a promotion.
+
+    This handler used to sync services to staging from an untagged main HEAD — a fourth
+    delivery path contradicting the three in ops.pipeline.md, and the reason "merge"
+    silently meant "deploy" for every service declaring libs/** or tools/**.
+    """
+    monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
+    _load_module("sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch)
+    fake_flask = types.ModuleType("flask")
+
+    class FakeFlask:
+        def __init__(self, _name):
+            pass
+
+        def route(self, *_args, **_kwargs):
+            return lambda func: func
+
+    fake_flask.Flask = FakeFlask
+    fake_flask.jsonify = lambda payload: payload
+    body = json.dumps(
+        {
+            "ref": "refs/heads/main",
+            "after": "d505ba0caca8" + "0" * 28,
+            "commits": [{"modified": ["libs/secrets_registry.py"]}],
+        }
+    ).encode()
+    signature = hmac.new(b"test-webhook-secret", body, hashlib.sha256).hexdigest()
+    fake_flask.request = types.SimpleNamespace(
+        headers={
+            "X-Hub-Signature-256": f"sha256={signature}",
+            "X-GitHub-Event": "push",
+        },
+        data=body,
+        json=json.loads(body),
+    )
+    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+    webhook_server = _load_module(
+        "webhook_server_push_path", IAC_RUNNER / "webhook_server.py", monkeypatch
+    )
+
+    started: list = []
+    monkeypatch.setattr(
+        webhook_server, "run_sync", lambda services: started.append(services)
+    )
+
+    response = webhook_server.webhook()
+
+    assert not started, "a push to main must not start a sync"
+    assert response["status"] == "ignored"
+    assert "release tag" in response["reason"]
+    # The signature still has to pass — a webhook that 401s is a broken thing whatever
+    # the handler decides to do with the payload (#585).
+    fake_flask.request.headers["X-Hub-Signature-256"] = "sha256=" + "0" * 64
+    assert webhook_server.webhook()[1] == 401
+
+
+def test_a_remembered_failure_is_retried_not_replayed(monkeypatch) -> None:
+    """A retry after fixing the cause must actually redeploy (2026-09-09, v1.1.77).
+
+    The staging soak failed on a stale local tag in the runner's workspace. The tag was
+    repaired on the runner and the workflow was rerun; the rerun answered from the
+    remembered failure — same deployment_id, same message — so the repair looked like it
+    had changed nothing.
+    """
+    monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
+    sync_runner = _load_module(
+        "sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch
+    )
+    fake_flask = types.ModuleType("flask")
+
+    class FakeFlask:
+        def __init__(self, _name):
+            pass
+
+        def route(self, *_args, **_kwargs):
+            return lambda func: func
+
+    fake_flask.Flask = FakeFlask
+    fake_flask.jsonify = lambda payload: payload
+    fake_flask.request = types.SimpleNamespace()
+    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+    webhook_server = _load_module(
+        "webhook_server_under_test", IAC_RUNNER / "webhook_server.py", monkeypatch
+    )
+
+    services = ["platform/alerting"]
+    key = webhook_server._deployment_key("staging", DEPLOY_SHA, services)
+
+    def _stored(success: bool) -> dict:
+        return webhook_server._completed_response(
+            "staging",
+            DEPLOY_SHA,
+            "deploy_v2",
+            sync_runner.SyncResult(
+                env="staging",
+                ref=DEPLOY_SHA,
+                requested_services=services,
+                results=[
+                    sync_runner.ServiceSyncResult(
+                        service="platform/alerting",
+                        task="alerting.sync",
+                        success=success,
+                        stderr="" if success else "would clobber existing tag",
+                    )
+                ],
+            ),
+            services,
+        )
+
+    started: list[tuple] = []
+
+    def fake_sync(env, ref, *_args, **kwargs):
+        started.append((env, ref, kwargs.get("services")))
+        return sync_runner.SyncResult(
+            env=env,
+            ref=ref,
+            requested_services=services,
+            results=[
+                sync_runner.ServiceSyncResult(
+                    service="platform/alerting", task="alerting.sync", success=True
+                )
+            ],
+        )
+
+    monkeypatch.setattr(sync_runner, "sync_services_by_version", fake_sync)
+
+    # A remembered FAILURE is not served: the request deploys again.
+    webhook_server._recent_deploys.clear()
+    webhook_server._recent_deploys[key] = (time.monotonic(), _stored(success=False))
+    fake_flask.request.headers = _signed_headers(monkeypatch)
+    fake_flask.request.data = b""
+    fake_flask.request.json = {
+        "env": "staging",
+        "ref": DEPLOY_SHA,
+        "wait": True,
+        "triggered_by": "deploy_v2",
+        "services": services,
+    }
+    body, status_code = webhook_server.version_deploy()
+    assert started, "a remembered failure must not stand in for a real retry"
+    assert body.get("cached") is not True
+    assert status_code == 200
+
+    # A remembered SUCCESS still short-circuits — that is what the window is for.
+    started.clear()
+    webhook_server._recent_deploys.clear()
+    webhook_server._recent_deploys[key] = (time.monotonic(), _stored(success=True))
+    fake_flask.request.headers = _signed_headers(monkeypatch)
+    fake_flask.request.data = b""
+    fake_flask.request.json = {
+        "env": "staging",
+        "ref": DEPLOY_SHA,
+        "wait": True,
+        "triggered_by": "deploy_v2",
+        "services": services,
+    }
+    body2, status_code2 = webhook_server.version_deploy()
+    assert not started
+    assert body2.get("cached") is True
+    assert status_code2 == 200
+
+    # Polling the deployment's status still reports a failure — deploy_v2 depends on it,
+    # and declining to reuse must not DISCARD it: the synchronous path reads the result
+    # it stored after releasing the lock, so a concurrent request that popped the entry
+    # here would make the original request answer "Deployment finished without a stored
+    # result" about its own deploy (review on the PR that added _reusable_result).
+    webhook_server._recent_deploys.clear()
+    webhook_server._recent_deploys[key] = (time.monotonic(), _stored(success=False))
+    assert webhook_server._reusable_result(key) is None
+    assert webhook_server._recent_result(key)["status"] == "failed"
+    assert key in webhook_server._recent_deploys
 
 
 def test_deploy_cache_reuses_only_when_requested_services_match(monkeypatch) -> None:

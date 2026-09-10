@@ -5,11 +5,15 @@ GitOps deployment control plane for syncing reviewed, immutable revisions to Dok
 ## How It Works
 
 ```
-┌─────────────┐     webhook      ┌──────────────┐     invoke sync   ┌─────────────┐
-│   GitHub    │ ──────────────▶ │  IaC Runner  │ ─────────────────▶│  Services   │
-│  (push)     │                  │  (container) │                   │  (Dokploy)  │
-└─────────────┘                  └──────────────┘                   └─────────────┘
+┌──────────────────┐   /deploy   ┌──────────────┐   invoke sync   ┌─────────────┐
+│  GitHub Actions  │ ──────────▶ │  IaC Runner  │ ──────────────▶ │  Services   │
+│ (release tag, or │             │  (container) │                 │  (Dokploy)  │
+│  a prod promote) │             └──────────────┘                 └─────────────┘
+└──────────────────┘
 ```
+
+A push to `main` reaches `/webhook`, is authenticated, and deploys nothing — see
+[Deployment Flows](#deployment-flows).
 
 1. GitHub resolves an approved source/tag to an exact 40-character commit SHA.
 2. `/deploy` normalizes the requested service set and returns an opaque deployment ID.
@@ -25,6 +29,12 @@ The `sync` task uses two independent identities:
 - `IAC_SOURCE_CONFIG_HASH` is versioned and secret-independent; `IAC_DEPLOY_REF` records the exact revision that produced it.
 
 A deployment skips only when the runtime hash matches and a valid source identity already exists. Missing legacy identity triggers one migration reconcile.
+
+The recent-result window (`RECENT_DEPLOY_TTL_SECONDS`, 600s) is part of that idempotency, and only a **success** is reused. A remembered failure is kept but never served in place of the work: the request deploys again, because an operator's retry after fixing the cause must do the work rather than replay the original message. The stored failure still answers `/deploy/status` and the synchronous path's own read — that is how `deploy_v2` learns a deployment failed — and it ages out on the TTL like any other entry.
+
+## Workspace
+
+`/workspace/infra2` is a **mirror of origin**, not a repository anyone commits in. The sync fetches with `--tags --force --prune --prune-tags`, so a tag that was re-cut or withdrawn upstream is followed rather than defended: without that, one leftover local tag makes every later deploy abort with `Failed to update repo` (2026-09-09, a stale `v1.1.77` blocking `v1.1.77`'s own staging soak). Submodules are never recursed — the runner deploys infra2's own tree.
 
 ## Architecture
 
@@ -78,6 +88,10 @@ root credentials. See docs/ssot/bootstrap.iac_runner.md §6.4.
 4. Secret: (the WEBHOOK_SECRET from Vault)
 5. Events: Just the push event
 
+The hook stays configured and authenticated — a webhook that 401s is a broken thing
+regardless, and `/deploy` is served by the same process — but a push to `main` starts no
+deploy. Staging follows a release tag; production follows an explicit promotion.
+
 ### 4. Deploy
 
 ```bash
@@ -92,60 +106,64 @@ IaC Runner supports **GitOps version-based deployments** via GitHub Actions work
 
 **Semantic Versioning**: `v{major}.{minor}.{patch}`
 
-- **Patch**: Staging iterations (auto-incremented on every `main` push)
-- **Minor**: Production releases (manual promotion from staging)
-- **Major**: Architecture changes (rare, manual)
+- **Patch / Minor**: a platform release candidate. Every tag is a candidate; what
+  distinguishes them is the size of the change, not where they deploy.
+- **Major**: architecture changes needing manual migration (rare).
 
 ### Deployment Flows
 
-**Staging (Automatic)**:
+There are three ways a change reaches a running service, and a merge is not one of them.
+
+**Staging (automatic, on a release tag)**:
 ```
-Push to main → deploy.yml → Resolve commit SHA → Deploy to Staging
+git push origin vX.Y.Z → reconcile-iac-inputs.yml → diff previous tag..this tag
+                       → deploy_v2 → /deploy → invoke {service}.sync (staging)
 ```
 
-**Production (Manual)**:
+**Production (explicit promotion, by a human)**:
 ```
-Select semver release tag → deploy.yml → Resolve commit SHA → Deploy to Production
+reconcile-iac-inputs.yml with promote_prod=true, at a tag that has soaked in staging
+                       → deploy_v2 → /deploy → invoke {service}.sync (production)
+                       → production/vX.Y.Z marker recorded
 ```
 
-**Hotfix (Manual)**:
-```
-Create from prod tag → v1.3.1 → Deploy to Production (no main merge required)
-```
+**A merge to `main`**: nothing deploys. `main` ahead of the newest tag means
+*unreleased*, which is the normal state, not drift. `/webhook` authenticates the push
+and answers `ignored`. An app repository's PR gets a preview stack instead; infra2 has
+no persistent preview environment — a PR's `deploy_v2 live canary` is its preview.
+
+See [`docs/ssot/ops.pipeline.md`](../../docs/ssot/ops.pipeline.md) §2–3 for the
+authoritative version of all three.
 
 ### Example Workflow
 
-1. **Developer pushes to main**:
+1. **Merge the change**. Nothing is deployed; `main` is now ahead of the newest tag.
+
+2. **Cut a release tag** when the change should reach staging:
    ```bash
-   git add platform/01.postgres/compose.yaml
-   git commit -m "feat: update postgres config"
-   git push origin main
+   # Mirror semantics, the same ones the runner's workspace uses: plain `--tags`
+   # REFUSES to move a tag that already exists locally, which is precisely how a
+   # re-cut tag wedges a checkout.
+   git fetch --tags --force --prune --prune-tags
+   git tag -a v1.2.4 -m "postgres config" origin/main
+   git push origin v1.2.4
    ```
+   `reconcile-iac-inputs.yml` diffs `v1.2.3..v1.2.4`, fans the changed services out
+   through `deploy_v2`, and each service's config hash decides deploy vs no-op.
 
-2. **GitHub Actions resolves and deploys**:
-   - Resolves `main` to the pushed commit SHA
-   - Calls `/deploy` endpoint with `{"env":"staging","ref":"<40-char-sha>","source_ref":"main"}`
-
-3. **IaC Runner deploys to staging**:
-   - Checks out the exact commit SHA
-   - Runs `invoke {service}.sync` for all platform services
-   - Each service compares config hash and deploys only if changed
-
-4. **Manual production promotion**:
+3. **Soak in staging**, then promote the same immutable tag:
    ```bash
-   gh workflow run deploy.yml \
-     -f env="production" \
-     -f ref="v1.2.4"
+   gh workflow run reconcile-iac-inputs.yml -f promote_prod=true -f ref=v1.2.4
    ```
-   - Requires the `production` GitHub Environment and a semver tag
-   - Resolves the tag to a commit SHA before calling `/deploy`
+   Requires the `production` GitHub Environment. Production is never reached by
+   skipping staging, and the `production/v1.2.4` marker is what records that it was.
 
 ## Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Health check |
-| `/webhook` | POST | GitHub webhook receiver (change-based sync) |
+| `/webhook` | POST | GitHub push receiver — authenticates the delivery and deploys nothing (a merge is not a release; staging follows a release tag) |
 | `/sync` | POST | Manual sync trigger (legacy, disabled by default) |
 | `/deploy` | POST | SHA-based deployment (GitOps) |
 | `/deploy/status` | POST | Poll the exact deployment ID returned by `/deploy` |
