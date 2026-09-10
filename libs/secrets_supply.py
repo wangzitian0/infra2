@@ -60,10 +60,10 @@ def vault_backend(environ: Mapping[str, str] | None = None) -> VaultKvBackend:
     if not env.get("VAULT_TOKEN") and env.get("VAULT_ROOT_TOKEN"):
         # Where this name comes from: an operator exports it by hand for a break-glass
         # run (the READMEs under bootstrap/, platform/ and truealpha/ all do), and the
-        # iac-runner forwards it next to VAULT_TOKEN into every invoke child
-        # (bootstrap/06.iac_runner/sync_runner.py) so a deploy of an OLDER iac_ref still
-        # finds a token. No container holds it in its own environment; the deploy
-        # identity itself is an AppRole login.
+        # iac-runner forwards it next to VAULT_TOKEN into an invoke child whenever it
+        # resolves a token at all (bootstrap/06.iac_runner/sync_runner.py), so a deploy
+        # of an OLDER iac_ref still finds one. No container holds it in its own
+        # environment; the deploy identity itself is an AppRole login.
         #
         # Whether it is permanent or transitional is not settled here: libs/README.md,
         # docs/ssot/bootstrap.vars_and_secrets.md and sync_runner all call it a
