@@ -143,6 +143,16 @@ jobs:
       - name: Audit deploy fan-out coverage (sufficiency)
         run: python tools/deploy_guard_audit.py
 
+      - name: Audit webhook delivery health (#682)
+        # Reads the hook's own delivery list, the one record of #585's seven silent
+        # weeks. Needs a token with `admin:repo_hook` READ scope — the Actions token
+        # cannot carry it, so the step is inert until INFRA2_HOOKS_READ_TOKEN exists
+        # rather than failing daily on a permission it can never have.
+        if: ${{ secrets.INFRA2_HOOKS_READ_TOKEN != '' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.INFRA2_HOOKS_READ_TOKEN }}
+        run: python tools/webhook_delivery_audit.py --repo "$GITHUB_REPOSITORY"
+
       - name: Report the production marker lag (#650)
         # Delivered every run, not only on failure (#425): the line names both
         # coordinates. Non-zero only when the marker predates the release-pin deployer,
