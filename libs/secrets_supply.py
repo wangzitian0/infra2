@@ -62,7 +62,7 @@ def vault_backend(environ: Mapping[str, str] | None = None) -> VaultKvBackend:
         # operator READMEs export when a human runs a task by hand with the break-glass
         # token. Nothing deployed carries it — deploy identities authenticate by AppRole.
         env["VAULT_TOKEN"] = env["VAULT_ROOT_TOKEN"]
-    # update mode: read → merge → POST, the write the deploy identities' policies allow
+    # update mode: read → merge → POST — the only write the deploy identities' policies allow
     # (create/read/update/list, no patch) — infra2-sdk 1.5.0.
     return VaultKvBackend.from_environ(env, write_mode="update")
 
