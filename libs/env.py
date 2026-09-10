@@ -8,8 +8,9 @@ Three credential types, two stores:
 
 The Vault token comes from ``VAULT_TOKEN`` (the runner's bounded AppRole token, or a
 break-glass token minted by ``bootstrap/05.vault``). ``VAULT_ROOT_TOKEN`` is also
-accepted, and is the name the operator READMEs export when a human runs a task by hand;
-nothing deployed carries it. No task reads the root token from 1Password.
+accepted: it is the name the operator READMEs export for a hand-run task, and the
+iac-runner sets it next to ``VAULT_TOKEN`` in every invoke child so a deploy of an older
+iac_ref still finds a token. No task reads the root token from 1Password.
 """
 
 from __future__ import annotations

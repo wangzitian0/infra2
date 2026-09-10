@@ -60,7 +60,10 @@ def vault_backend(environ: Mapping[str, str] | None = None) -> VaultKvBackend:
     if not env.get("VAULT_TOKEN") and env.get("VAULT_ROOT_TOKEN"):
         # Supported on purpose, not transitional: VAULT_ROOT_TOKEN is the name the
         # operator READMEs export when a human runs a task by hand with the break-glass
-        # token. Nothing deployed carries it — deploy identities authenticate by AppRole.
+        # token, and the iac-runner sets it alongside VAULT_TOKEN in every invoke child
+        # (bootstrap/06.iac_runner/sync_runner.py) so a deploy of an OLDER iac_ref still
+        # finds a token. No container holds it in its own environment; the deploy
+        # identity itself is an AppRole login.
         env["VAULT_TOKEN"] = env["VAULT_ROOT_TOKEN"]
     # update mode: read → merge → POST — the only write the deploy identities' policies allow
     # (create/read/update/list, no patch) — infra2-sdk 1.5.0.
