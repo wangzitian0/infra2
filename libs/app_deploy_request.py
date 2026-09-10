@@ -24,9 +24,9 @@ from infra2_sdk.refs import ResolvedRef, resolve_image_ref, resolve_pr
 
 from libs.release_markers import (
     MINIMUM_PRODUCTION_MARKER,
-    _PRODUCTION_MARKER_PREFIX,
-    _version_key,
+    PRODUCTION_MARKER_PREFIX,
     marker_status,
+    version_key,
     newest_release_tag,
     production_marker,
 )
@@ -304,9 +304,9 @@ def select_iac_ref(
     if deploy_type != DeployType.PRODUCTION:
         return newest_release_tag(repo_root=repo_root, runner=runner)
     marker = production_marker(repo_root=repo_root, runner=runner)
-    if _version_key(marker) < _version_key(MINIMUM_PRODUCTION_MARKER):
+    if version_key(marker) < version_key(MINIMUM_PRODUCTION_MARKER):
         raise ValueError(
-            f"production marker {_PRODUCTION_MARKER_PREFIX}{marker} predates "
+            f"production marker {PRODUCTION_MARKER_PREFIX}{marker} predates "
             f"{MINIMUM_PRODUCTION_MARKER}, the first release whose deployer pins the "
             "data engine from the release being promoted (#632): promote infra2 to "
             "production first, or this deploy recreates the data engine from the "

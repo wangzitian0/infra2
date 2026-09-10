@@ -8,13 +8,17 @@ import os
 import subprocess
 import sys
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 # libs.release_markers is pure git; libs.app_deploy_request pulls in infra2_sdk and is
 # imported lazily, so `markers` runs in an ops job that installs neither (#650).
 from libs.release_markers import marker_status
 
+if TYPE_CHECKING:  # the annotation must not drag infra2_sdk into the markers path
+    from libs.app_deploy_request import DeployPlan
 
-def execute_plan(plan, *, run=None) -> int:
+
+def execute_plan(plan: "DeployPlan", *, run=None) -> int:
     """Execute the primary service, then each companion the service spec declares.
 
     A companion (``libs.deploy_contract.ServiceSpec.companions``) is promoted at the

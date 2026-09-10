@@ -18,7 +18,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _SEMVER_TAG_RE = re.compile(r"\Av[0-9]+\.[0-9]+\.[0-9]+\Z")
-_PRODUCTION_MARKER_PREFIX = "production/"
+#: Public: libs/app_deploy_request builds its refusal message from both of these, so
+#: they are part of this module's surface rather than its internals (review on #684).
+PRODUCTION_MARKER_PREFIX = "production/"
 # A production release also promotes the platform leg — truealpha/app carries
 # truealpha/data_engine — from the marker's checkout, and only v1.1.59 and later resolve
 # that image from the release's own DEPLOY_VERSION_REF (#632). Run against an older
@@ -51,7 +53,7 @@ def _merged_release_tags(
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
-def _version_key(tag: str) -> tuple[int, ...]:
+def version_key(tag: str) -> tuple[int, ...]:
     return tuple(int(part) for part in tag.removeprefix("v").split("."))
 
 
@@ -65,9 +67,9 @@ def newest_release_tag(*, repo_root: str | Path, runner=subprocess.run) -> str:
 
 def production_marker(*, repo_root: str | Path, runner=subprocess.run) -> str:
     """The release production is pinned to — the ref a production deploy runs at."""
-    pattern = f"{_PRODUCTION_MARKER_PREFIX}v*.*.*"
+    pattern = f"{PRODUCTION_MARKER_PREFIX}v*.*.*"
     for tag in _merged_release_tags(pattern, repo_root=repo_root, runner=runner):
-        cleaned = tag.removeprefix(_PRODUCTION_MARKER_PREFIX)
+        cleaned = tag.removeprefix(PRODUCTION_MARKER_PREFIX)
         if _SEMVER_TAG_RE.fullmatch(cleaned):
             return cleaned
         raise ValueError(f"invalid production marker {tag!r}")
@@ -88,7 +90,7 @@ class MarkerStatus:
     def stale(self) -> bool:
         """Whether a production release run at this marker would use a deployer that
         cannot pin the data engine from the release itself (#632)."""
-        return _version_key(self.production_marker) < _version_key(
+        return version_key(self.production_marker) < version_key(
             MINIMUM_PRODUCTION_MARKER
         )
 
@@ -120,6 +122,6 @@ def marker_status(*, repo_root: str | Path, runner=subprocess.run) -> MarkerStat
     ]
     if not releases:
         raise ValueError("no released infra2 vX.Y.Z tag is merged into HEAD")
-    marker_key = _version_key(marker)
-    behind = sum(1 for tag in releases if _version_key(tag) > marker_key)
+    marker_key = version_key(marker)
+    behind = sum(1 for tag in releases if version_key(tag) > marker_key)
     return MarkerStatus(marker, releases[0], behind)
