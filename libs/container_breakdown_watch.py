@@ -181,7 +181,17 @@ def run_once(
     fresh: list[Breakdown] = []
     for name, b in broken_by_name.items():
         state = container_state.setdefault(name, ConsecutiveObservationState())
+        previous = state.context
         state.context = b  # latest breakdown, so a later RESOLVED reuses its labels
+        # An ongoing incident whose CAUSE changed is news again: "unhealthy" becoming
+        # "restarting", or a different reason extracted from the logs, is what an
+        # operator wants told. Everything else about a still-broken container is in the
+        # digest, not on the pager (#475, owner decision 2026-09-09).
+        escalated = bool(
+            state.active
+            and previous is not None
+            and (previous.state, previous.reason) != (b.state, b.reason)
+        )
         action = evaluate_consecutive_hysteresis(
             state=state,
             is_bad_now=True,
@@ -190,6 +200,27 @@ def run_once(
             recovery_threshold=recovery_threshold,
             renotify_seconds=renotify,
         )
+        if action == "none" and state.active:
+            if escalated:
+                logger.warning(
+                    "BREAKDOWN-ESCALATED %s: %s/%s -> %s/%s",
+                    name,
+                    previous.state,
+                    previous.reason,
+                    b.state,
+                    b.reason,
+                )
+                action = "fire"
+                # The escalation IS a page, so the renotify clock restarts here. Without
+                # this a positive renotify would measure from the previous page and could
+                # re-page moments after the escalation (review on #686).
+                state.last_alert_at = now
+            elif renotify <= 0:
+                # Still broken, still the same reason: the digest carries it. Only when
+                # periodic re-notification is OFF, though — an operator who sets a
+                # positive renotify has asked for the timer and must not also get a
+                # digest about the same incident (review on #686).
+                chronic[name] = int(chronic.get(name, 0)) + 1
         if action == "fire":
             since_resolved = now - resolved_at.get(name, float("-inf"))
             if (
@@ -209,6 +240,8 @@ def run_once(
                     b.reason,
                 )
             else:
+                # An actual page resets "since it last paged", escalation included.
+                chronic.pop(name, None)
                 fresh.append(b)
         elif not state.active:
             logger.info(
@@ -280,6 +313,11 @@ def run_once(
         )
         _post_alert(build_breakdown_alert_payload(recovered, firing=False))
     chronic_names = sorted(n for n in chronic if n != "__digest_at__")
+    if chronic_names and "__digest_at__" not in chronic:
+        # Start the clock on the first chronic observation instead of posting on it.
+        # Since an ongoing unchanged incident is chronic too, an unset clock would put
+        # a digest on the pager one sweep after every incident began.
+        chronic["__digest_at__"] = now
     if (
         chronic_names
         and now - chronic.get("__digest_at__", float("-inf")) >= chronic_digest_seconds
@@ -288,7 +326,17 @@ def run_once(
             Breakdown(
                 container=name,
                 state="chronic",
-                reason=f"re-broke {chronic[name]}x inside the {stay_resolved_seconds // 3600}h stay-resolved floor",
+                reason=(
+                    # Keyed on the floor itself, not on `active`: a floor-suppressed
+                    # re-break leaves the incident active, so keying on `active` made
+                    # this wording unreachable in exactly the case it describes
+                    # (review on #686).
+                    f"re-broke {chronic[name]}x inside the "
+                    f"{stay_resolved_seconds // 3600}h stay-resolved floor"
+                    if now - resolved_at.get(name, float("-inf"))
+                    < stay_resolved_seconds
+                    else f"still broken, {chronic[name]} sweep(s) since it last paged"
+                ),
                 detail=(
                     container_state.get(name).context.detail
                     if container_state.get(name) and container_state[name].context

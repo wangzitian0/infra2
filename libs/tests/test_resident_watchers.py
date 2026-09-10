@@ -285,7 +285,10 @@ def test_compose_has_single_resident_sidecar_with_watcher_env() -> None:
         "DEPLOY_GUARD_RENOTIFY_SECONDS": "${DEPLOY_GUARD_RENOTIFY_SECONDS:-1800}",
         "BREAKDOWN_FAILURE_THRESHOLD": "${BREAKDOWN_FAILURE_THRESHOLD:-3}",
         "BREAKDOWN_RECOVERY_THRESHOLD": "${BREAKDOWN_RECOVERY_THRESHOLD:-5}",
-        "BREAKDOWN_RENOTIFY_SECONDS": "${BREAKDOWN_RENOTIFY_SECONDS:-1800}",
+        # 0 = never re-page an unchanged ongoing incident; escalation and the chronic
+        # digest carry it instead (#475). The old 1800 put 31 identical critical pages
+        # on the pager in 24 h for one broken container.
+        "BREAKDOWN_RENOTIFY_SECONDS": "${BREAKDOWN_RENOTIFY_SECONDS:-0}",
     }.items():
         assert env.get(key) == default, f"{key}: {env.get(key)!r}"
 

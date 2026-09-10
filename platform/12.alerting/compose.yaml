@@ -209,7 +209,9 @@ services:
       # Flap hysteresis (#475): consecutive-poll thresholds before
       # firing/resolving.
       BREAKDOWN_INTERVAL_SECONDS: ${BREAKDOWN_INTERVAL_SECONDS:-60}
-      BREAKDOWN_RENOTIFY_SECONDS: ${BREAKDOWN_RENOTIFY_SECONDS:-1800}
+      # 0 = never re-page an unchanged ongoing incident; escalation and the chronic
+      # digest carry it instead (#475). 1800 produced 31 identical pages in 24h.
+      BREAKDOWN_RENOTIFY_SECONDS: ${BREAKDOWN_RENOTIFY_SECONDS:-0}
       BREAKDOWN_FAILURE_THRESHOLD: ${BREAKDOWN_FAILURE_THRESHOLD:-3}
       BREAKDOWN_RECOVERY_THRESHOLD: ${BREAKDOWN_RECOVERY_THRESHOLD:-5}
       BREAKDOWN_LOG_TAIL: ${BREAKDOWN_LOG_TAIL:-25}

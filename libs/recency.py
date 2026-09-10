@@ -187,7 +187,13 @@ def evaluate_consecutive_hysteresis(
         # Already active: same still-active incident. Only re-notify (and
         # advance the renotify clock) once the window has elapsed -- a bad
         # poll on an already-firing incident must never look like a new one.
-        if now - state.last_alert_at >= renotify_seconds:
+        # ``renotify_seconds <= 0`` disables periodic re-notification entirely: an
+        # ongoing incident that has not CHANGED is reported by a digest, not by another
+        # page. One unhealthy preview container produced 31 identical critical pages in
+        # 24 hours under a 1800s window (production, 2026-09-09) and stayed broken the
+        # whole time — an alert that repeats at the same severity is one an operator
+        # learns to skip (#475).
+        if renotify_seconds > 0 and now - state.last_alert_at >= renotify_seconds:
             state.last_alert_at = now
             return "fire"
         return "none"
