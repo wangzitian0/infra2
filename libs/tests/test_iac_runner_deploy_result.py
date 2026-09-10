@@ -1167,7 +1167,9 @@ def test_a_push_to_main_deploys_nothing(monkeypatch) -> None:
     silently meant "deploy" for every service declaring libs/** or tools/**.
     """
     monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
-    _load_module("sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch)
+    sync_runner = _load_module(
+        "sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch
+    )
     fake_flask = types.ModuleType("flask")
 
     class FakeFlask:
@@ -1200,11 +1202,18 @@ def test_a_push_to_main_deploys_nothing(monkeypatch) -> None:
         "webhook_server_push_path", IAC_RUNNER / "webhook_server.py", monkeypatch
     )
 
+    # Behaviour first: nothing this handler does may reach a sync, by any route.
+    started: list = []
+    for name in ("sync_services", "sync_services_by_version"):
+        monkeypatch.setattr(
+            sync_runner, name, lambda *a, **k: started.append(a), raising=False
+        )
+
     response = webhook_server.webhook()
 
-    # Stronger than "this handler did not start a sync": since the legacy /sync endpoint
-    # was retired there is no function in this module that can start one at all. /deploy
-    # is the only way in.
+    assert not started, "a push to main must not start a sync"
+    # And structurally: since the legacy /sync endpoint was retired there is no function
+    # in this module that can start one at all — /deploy is the only way in.
     assert not hasattr(webhook_server, "run_sync"), (
         "a sync entry point outside /deploy is how 'merge' quietly meant 'deploy'"
     )

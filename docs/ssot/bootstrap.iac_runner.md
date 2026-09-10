@@ -277,8 +277,9 @@ def sync_service(service_name):
 | Endpoint | Method | Description | 触发方式 |
 |----------|--------|-------------|---------|
 | `/health` | GET | 健康检查 | 手动 / 监控 |
-| `/webhook` | POST | GitHub webhook 接收器（变更驱动） | GitHub 自动触发 |
+| `/webhook` | POST | GitHub push 接收器；验签后**不部署任何东西**（合并不是发布，staging 跟 release tag） | GitHub 自动触发 |
 | `/deploy` | POST | 版本部署（GitOps）| GitHub Actions |
+| `/deploy/status` | POST | 按 deployment_id 轮询该次部署的终态 | `deploy_v2` |
 
 ### 4.2 `/health` - 健康检查
 
@@ -376,6 +377,8 @@ curl -X POST https://iac.{domain}/deploy \
   "status_url": "/deploy/status"
 }
 ```
+
+## 5. 服务映射
 
 ### 5.1 变更文件 → 服务映射表
 
