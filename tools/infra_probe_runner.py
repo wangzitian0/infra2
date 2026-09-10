@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import os
 import traceback
 import time
@@ -117,6 +118,26 @@ class ProbeGroup(NamedTuple):
     external_url: str
 
 
+def _configure_logging() -> None:
+    """Give the process a root handler, and let the two watchers speak at INFO.
+
+    Without a handler, `logging`'s handler of last resort emits WARNING and above only —
+    so every `logger.info` in the watchers was silently dropped, and the only thing they
+    could say was a warning. That is why the deploy-queue guard's one line per sweep was
+    a per-compose WARNING (32,236 lines in 24 h on production) and why its replacement,
+    a single INFO summary, appeared nowhere at all when v1.1.78 reached staging.
+
+    The root stays at WARNING so nothing else in the process becomes chatty; the two
+    watcher loggers are raised to INFO explicitly. httpx/httpcore are pinned to WARNING
+    in libs.container_breakdown_watch, which polls the Docker socket every minute.
+    """
+    logging.basicConfig(
+        level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s"
+    )
+    for name in ("deploy-queue-guard", "container-breakdown-watch"):
+        logging.getLogger(name).setLevel(logging.INFO)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     mode = parser.add_mutually_exclusive_group()
@@ -125,6 +146,7 @@ def main() -> int:
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
+    _configure_logging()
     _load_env_file(Path(os.getenv("ALERTING_ENV_FILE", "/secrets/.env")))
     interval = int(
         os.getenv("INFRA_PROBE_INTERVAL_SECONDS", str(DEFAULT_PROBE_INTERVAL_SECONDS))
