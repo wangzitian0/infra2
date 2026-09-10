@@ -52,9 +52,11 @@ SHARED_RUNTIME_KEYS = (
     "FALLBACK_MODELS",
     "PREFECT_API_URL",
 )
-#: NOT shared. The OTLP endpoint turns export on, and the app refuses to start when
-#: export is on without a deployment.environment tag in OTEL_RESOURCE_ATTRIBUTES, which
-#: the deployer issues per component. See the comment on the anchor.
+#: Backend-only, and must stay that way. The OTLP endpoint is the sharp case — it turns
+#: export on, and the app refuses to start when export is on without a
+#: deployment.environment tag in OTEL_RESOURCE_ATTRIBUTES, which the deployer issues per
+#: component (see the comment on the anchor). CORS_ORIGINS and OTEL_SERVICE_NAME are the
+#: quiet case: they describe the HTTP service, which the worker is not.
 BACKEND_ONLY_KEYS = ("OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_SERVICE_NAME", "CORS_ORIGINS")
 
 
@@ -81,10 +83,15 @@ def test_the_worker_gets_the_same_runtime_configuration_as_the_backend() -> None
         )
 
 
-def test_the_worker_does_not_get_telemetry_it_cannot_satisfy() -> None:
-    """Handing the worker OTEL_EXPORTER_OTLP_ENDPOINT alone crash-looped staging within a
-    minute of the deploy: export on, no deployment.environment tag, Settings() refuses to
-    construct. Backend-only values stay on the backend."""
+def test_backend_only_configuration_stays_off_the_worker() -> None:
+    """The worker takes the shared anchor and nothing else.
+
+    Motivating case: handing it OTEL_EXPORTER_OTLP_ENDPOINT alone crash-looped staging
+    within a minute of the deploy — export on, no deployment.environment tag, Settings()
+    refuses to construct. The rest of the list is the same invariant without the drama:
+    CORS_ORIGINS and OTEL_SERVICE_NAME describe the HTTP service, and a worker claiming
+    them would be describing something it is not.
+    """
     services = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))["services"]
     backend = _environment(services["backend"])
     worker = _environment(services["prefect-worker"])
@@ -92,5 +99,5 @@ def test_the_worker_does_not_get_telemetry_it_cannot_satisfy() -> None:
     for key in BACKEND_ONLY_KEYS:
         assert key in backend, f"backend lost {key}"
         assert key not in worker, (
-            f"{key} on the worker turns on behaviour it has no configuration for"
+            f"{key} is backend-only and must not appear on the worker"
         )
