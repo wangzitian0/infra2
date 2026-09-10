@@ -58,9 +58,12 @@ def vault_backend(environ: Mapping[str, str] | None = None) -> VaultKvBackend:
         domain = env.get("INTERNAL_DOMAIN", "localhost")
         env["VAULT_ADDR"] = f"https://vault.{domain}"
     if not env.get("VAULT_TOKEN") and env.get("VAULT_ROOT_TOKEN"):
-        env["VAULT_TOKEN"] = env[
-            "VAULT_ROOT_TOKEN"
-        ]  # transition alias, removed with #640
+        # Not transitional (the comment here said "removed with #640" until #640 merged
+        # and it was not): VAULT_ROOT_TOKEN is the name eight operator READMEs export
+        # for the break-glass token — bootstrap/05.vault, bootstrap/06.iac_runner,
+        # platform, platform/21.portal, truealpha/{10.app,01.postgres}, the root README.
+        # It is supported on purpose; nothing deployed carries it.
+        env["VAULT_TOKEN"] = env["VAULT_ROOT_TOKEN"]
     # update mode: read → merge → POST, the write the deploy identities' policies allow
     # (create/read/update/list, no patch) — infra2-sdk 1.5.0.
     return VaultKvBackend.from_environ(env, write_mode="update")

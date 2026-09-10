@@ -7,8 +7,9 @@ Three credential types, two stores:
 - app_vars:  Vault ``secret/{project}/{env}/{service}`` — what services read at runtime
 
 The Vault token comes from ``VAULT_TOKEN`` (the runner's bounded AppRole token, or a
-break-glass token minted by ``bootstrap/05.vault``); ``VAULT_ROOT_TOKEN`` is accepted as a
-transition alias only. No task reads the root token from 1Password.
+break-glass token minted by ``bootstrap/05.vault``). ``VAULT_ROOT_TOKEN`` is also
+accepted, and is the name the operator READMEs export when a human runs a task by hand;
+nothing deployed carries it. No task reads the root token from 1Password.
 """
 
 from __future__ import annotations
