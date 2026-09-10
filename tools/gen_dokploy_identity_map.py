@@ -52,12 +52,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true", help="fail instead of writing")
     args = parser.parse_args(argv)
 
-    wanted = render(build())
+    # Built once: walking the deploy.py tree twice would not only be wasted work in CI,
+    # it could disagree with itself if the tree changed between the calls.
+    mapping = build()
+    wanted = render(mapping)
     path = DOKPLOY_IDENTITY_MAP_PATH
     current = path.read_text(encoding="utf-8") if path.is_file() else ""
     if args.check:
         if current == wanted:
-            print(f"{path.name}: up to date ({len(build())} entries)")
+            print(f"{path.name}: up to date ({len(mapping)} entries)")
             return 0
         print(
             f"{path.name} has drifted from the deploy.py tree; "
@@ -66,7 +69,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
     path.write_text(wanted, encoding="utf-8")
-    print(f"{path.name}: wrote {len(build())} entries")
+    print(f"{path.name}: wrote {len(mapping)} entries")
     return 0
 
 

@@ -311,7 +311,13 @@ def dokploy_identity_map() -> dict[str, str]:
     if DOKPLOY_IDENTITY_MAP_PATH.is_file():
         import json
 
-        return json.loads(DOKPLOY_IDENTITY_MAP_PATH.read_text(encoding="utf-8"))
+        try:
+            return json.loads(DOKPLOY_IDENTITY_MAP_PATH.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            # Fail closed to the bootstrap-only map. This is a fallback read inside a
+            # long-running watcher loop; an unreadable or malformed file must degrade
+            # identity resolution, never take the watcher down with it.
+            return from_tree
     return from_tree
 
 
