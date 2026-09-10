@@ -279,6 +279,14 @@ resolved from Compose labels through the service registry and surface as
 IaC Runner, MinIO, Postgres, Redis, and application dependency health remain
 service-level signals handled in-band through SigNoz and this bridge.
 
+A container breakdown pages **once**. While the incident continues unchanged it is not
+re-paged: it accrues into the chronic digest (`ContainerBreakdownChronic`, warning, once
+per digest window). It pages again only when the cause changes — `unhealthy` becoming
+`restarting`, or a different reason read out of the logs — or when it resolves.
+`BREAKDOWN_RENOTIFY_SECONDS` defaults to `0` for exactly that; a positive value restores
+periodic re-notification. The old 1800s default put 31 identical critical pages on the
+pager in 24 hours for one broken preview container, which stayed broken throughout.
+
 ## Infra Service Probes
 
 `infra-probe-runner` runs beside the bridge and checks core infra dependencies

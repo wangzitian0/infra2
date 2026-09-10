@@ -399,6 +399,71 @@ def test_run_once_logs_firing_and_resolved_decisions(monkeypatch):
     assert "finance_report-frontend-branch-main" in blob  # named, not anonymous
 
 
+def test_an_unchanged_ongoing_incident_pages_once_and_escalation_pages_again(
+    monkeypatch,
+):
+    """finance_report-backend-branch-main, production 2026-09-08/09: unhealthy for 18
+    hours, 31 identical `ContainerBreakdown critical` pages delivered to Feishu at
+    ~30-minute intervals, every one accepted, and the container stayed broken. An alert
+    that repeats at the same severity is one an operator learns to skip.
+
+    Owner decision 2026-09-09: page once, re-page only on a change, digest the rest.
+    """
+    import time
+
+    import libs.container_breakdown_watch as w
+
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(time, "monotonic", lambda: clock["now"])
+    current = {
+        "b": Breakdown(
+            container="fr-preview",
+            state="unhealthy",
+            reason="s3 unreachable",
+            detail="d",
+        )
+    }
+    monkeypatch.setattr(w, "sweep", lambda client, tail: [current["b"]])
+    posted: list = []
+    monkeypatch.setattr(w, "_post_alert", lambda payload: posted.append(payload))
+    state: dict = {}
+    chronic: dict = {}
+
+    def sweep_n(n: int) -> int:
+        fired = 0
+        for _ in range(n):
+            clock["now"] += 60
+            fired += w.run_once(
+                client=None,
+                log_tail=25,
+                container_state=state,
+                renotify=0,
+                failure_threshold=3,
+                recovery_threshold=5,
+                chronic=chronic,
+                chronic_digest_seconds=24 * 3600,
+            )
+        return fired
+
+    assert sweep_n(3) == 1  # the incident pages once
+    # 18 hours of it, at the production sweep interval
+    assert sweep_n(18 * 60) == 0
+    assert [p["status"] for p in posted] == ["firing"], "one page, not 31"
+    assert chronic["fr-preview"] == 18 * 60
+
+    # the cause changes: that is news again
+    current["b"] = Breakdown(
+        container="fr-preview", state="restarting", reason="crash loop", detail="d"
+    )
+    assert sweep_n(1) == 1
+    assert [p["status"] for p in posted] == ["firing", "firing"]
+    assert posted[-1]["alerts"][0]["labels"]["state"] == "restarting"
+
+    # and back to steady state: still no repeat pages
+    assert sweep_n(30) == 0
+    assert len([p for p in posted if p["status"] == "firing"]) == 2
+
+
 def test_run_once_stay_resolved_floor_suppresses_a_refire_and_digests_chronic_once(
     monkeypatch,
 ):
@@ -433,13 +498,17 @@ def test_run_once_stay_resolved_floor_suppresses_a_refire_and_digests_chronic_on
                 client=None,
                 log_tail=25,
                 container_state=state,
-                renotify=1800,
+                # the shipped default: an unchanged ongoing incident never re-pages,
+                # it accrues into the digest instead (#475)
+                renotify=0,
                 failure_threshold=3,
                 recovery_threshold=5,
                 resolved_at=resolved_at,
                 chronic=chronic,
                 stay_resolved_seconds=6 * 3600,
-                chronic_digest_seconds=24 * 3600,
+                # shorter than the floor on purpose, so a digest window can elapse while
+                # the container is still inside it — the scenario this test is about
+                chronic_digest_seconds=3600,
             )
         return fired
 
@@ -462,8 +531,13 @@ def test_run_once_stay_resolved_floor_suppresses_a_refire_and_digests_chronic_on
 
     observed["broken"] = True
     assert sweep_n(3) == 0  # re-broke 8 minutes after resolving: chronic, no page
-    # the first digest window is open, so the chronic set went out at once — as ONE
-    # firing alert in state "chronic" — and the counter was consumed by the digest
+    # The first chronic observation STARTS the digest clock rather than posting on it:
+    # an ongoing unchanged incident is chronic too, so an unset clock would put a digest
+    # on the pager one sweep after every incident began.
+    assert not chronic_digests()
+    assert chronic["prefect-worker"] >= 1
+    clock["now"] += 3600
+    assert sweep_n(1) == 0  # a digest window later, the chronic set goes out once
     assert len(chronic_digests()) == 1
     digest = chronic_digests()[0]
     assert digest["commonLabels"]["alertname"] == "ContainerBreakdownChronic"
@@ -480,7 +554,7 @@ def test_run_once_stay_resolved_floor_suppresses_a_refire_and_digests_chronic_on
     assert (
         sweep_n(3) == 0
     )  # still inside the floor: counted again, no second digest today
-    assert chronic["prefect-worker"] == 1
+    assert chronic["prefect-worker"] >= 1
     assert len(chronic_digests()) == 1
 
     # the floor is measured from the LATEST resolve: a container that keeps flapping keeps
