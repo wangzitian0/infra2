@@ -34,7 +34,7 @@ The recent-result window (`RECENT_DEPLOY_TTL_SECONDS`, 600s) is part of that ide
 
 ## Workspace
 
-`/workspace/infra2` is a **mirror of origin**, not a repository anyone commits in. The sync fetches with `--force --prune --prune-tags`, so a tag that was re-cut or withdrawn upstream is followed rather than defended: without that, one leftover local tag makes every later deploy abort with `Failed to update repo` (2026-09-09, a stale `v1.1.77` blocking `v1.1.77`'s own staging soak). Submodules are never recursed — the runner deploys infra2's own tree.
+`/workspace/infra2` is a **mirror of origin**, not a repository anyone commits in. The sync fetches with `--tags --force --prune --prune-tags`, so a tag that was re-cut or withdrawn upstream is followed rather than defended: without that, one leftover local tag makes every later deploy abort with `Failed to update repo` (2026-09-09, a stale `v1.1.77` blocking `v1.1.77`'s own staging soak). Submodules are never recursed — the runner deploys infra2's own tree.
 
 ## Architecture
 
