@@ -1,0 +1,21 @@
+{
+  "bootstrap/1password-connect": "bootstrap/1password",
+  "bootstrap/iac_runner": "bootstrap/iac-runner",
+  "bootstrap/vault": "bootstrap/vault",
+  "finance_report/app": "finance_report/app",
+  "finance_report/postgres": "finance_report/postgres",
+  "finance_report/redis": "finance_report/redis",
+  "platform/alerting": "platform/alerting",
+  "platform/authentik": "platform/authentik",
+  "platform/clickhouse": "platform/clickhouse",
+  "platform/minio": "platform/minio",
+  "platform/openpanel": "platform/openpanel",
+  "platform/portal": "platform/portal",
+  "platform/postgres": "platform/postgres",
+  "platform/prefect": "platform/prefect",
+  "platform/redis": "platform/redis",
+  "platform/signoz": "platform/signoz",
+  "truealpha/app": "truealpha/app",
+  "truealpha/data_engine": "truealpha/data_engine",
+  "truealpha/postgres": "truealpha/postgres"
+}
