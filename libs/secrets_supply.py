@@ -58,10 +58,20 @@ def vault_backend(environ: Mapping[str, str] | None = None) -> VaultKvBackend:
         domain = env.get("INTERNAL_DOMAIN", "localhost")
         env["VAULT_ADDR"] = f"https://vault.{domain}"
     if not env.get("VAULT_TOKEN") and env.get("VAULT_ROOT_TOKEN"):
-        env["VAULT_TOKEN"] = env[
-            "VAULT_ROOT_TOKEN"
-        ]  # transition alias, removed with #640
-    # update mode: read → merge → POST, the write the deploy identities' policies allow
+        # Where this name comes from: an operator exports it by hand for a break-glass
+        # run (the READMEs under bootstrap/, platform/ and truealpha/ all do), and the
+        # iac-runner forwards it next to VAULT_TOKEN into an invoke child whenever it
+        # resolves a token at all (bootstrap/06.iac_runner/sync_runner.py), so a deploy
+        # of an OLDER iac_ref still finds one. No container holds it in its own
+        # environment; the deploy identity itself is an AppRole login.
+        #
+        # Whether it is permanent or transitional is not settled here: libs/README.md,
+        # docs/ssot/bootstrap.vars_and_secrets.md and sync_runner all call it a
+        # transition alias for one release. This comment describes the behaviour rather
+        # than asserting the policy, and carries no date or issue number — a previous
+        # version said "removed with #640", and that is how it went stale.
+        env["VAULT_TOKEN"] = env["VAULT_ROOT_TOKEN"]
+    # update mode: read → merge → POST — the only write the deploy identities' policies allow
     # (create/read/update/list, no patch) — infra2-sdk 1.5.0.
     return VaultKvBackend.from_environ(env, write_mode="update")
 

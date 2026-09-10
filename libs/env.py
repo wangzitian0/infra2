@@ -7,8 +7,13 @@ Three credential types, two stores:
 - app_vars:  Vault ``secret/{project}/{env}/{service}`` — what services read at runtime
 
 The Vault token comes from ``VAULT_TOKEN`` (the runner's bounded AppRole token, or a
-break-glass token minted by ``bootstrap/05.vault``); ``VAULT_ROOT_TOKEN`` is accepted as a
-transition alias only. No task reads the root token from 1Password.
+break-glass token minted by ``bootstrap/05.vault``). ``VAULT_ROOT_TOKEN`` is also
+accepted: it is the name the operator READMEs export for a hand-run task, and the
+iac-runner forwards it next to ``VAULT_TOKEN`` into an invoke child whenever it
+resolves a token at all, so a deploy of an older iac_ref still finds one.
+
+Either way the value must already be in the process environment: no code path here
+resolves a token from 1Password. The human exporting it is the one running ``op read``.
 """
 
 from __future__ import annotations
