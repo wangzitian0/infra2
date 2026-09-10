@@ -26,7 +26,7 @@ The `sync` task uses two independent identities:
 
 A deployment skips only when the runtime hash matches and a valid source identity already exists. Missing legacy identity triggers one migration reconcile.
 
-The recent-result window (`RECENT_DEPLOY_TTL_SECONDS`, 600s) is part of that idempotency, and it remembers **successes only**. A remembered failure is dropped and the request deploys again: an operator's retry after fixing the cause must do the work, not replay the original message. Polling a deployment's status still reports the failure — that is how `deploy_v2` learns of it.
+The recent-result window (`RECENT_DEPLOY_TTL_SECONDS`, 600s) is part of that idempotency, and only a **success** is reused. A remembered failure is kept but never served in place of the work: the request deploys again, because an operator's retry after fixing the cause must do the work rather than replay the original message. The stored failure still answers `/deploy/status` and the synchronous path's own read — that is how `deploy_v2` learns a deployment failed — and it ages out on the TTL like any other entry.
 
 ## Workspace
 
