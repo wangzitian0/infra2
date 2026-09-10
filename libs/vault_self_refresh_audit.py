@@ -404,11 +404,6 @@ def classify_token(
     )
 
 
-#: A rendered secrets file older than this has missed every template/secret change since
-#: (#628: bind-mounted template edits do not re-render); beyond it the audit fails (#658).
-STALE_RENDERED_SECRET_FAIL_SECONDS = 7 * 86400
-
-
 def classify_deployed_template(
     service: VaultService,
     deployed_sha256: str,
@@ -454,7 +449,7 @@ def classify_deployed_template(
         "deployed-template",
         "pass",
         "P1",
-        f"the mounted {service.secret_template_path} matches the release",
+        f"the mounted /etc/vault/secrets.ctmpl matches {service.secret_template_path}",
         evidence,
     )
 
