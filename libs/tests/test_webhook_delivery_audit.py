@@ -99,7 +99,7 @@ def test_without_a_token_the_audit_says_it_could_not_look(monkeypatch, capsys):
     monkeypatch.delenv("GH_TOKEN", raising=False)
 
     assert audit.main([]) == 1
-    assert "no GITHUB_TOKEN" in capsys.readouterr().err
+    assert "no GITHUB_TOKEN or GH_TOKEN" in capsys.readouterr().err
 
 
 def test_main_exits_non_zero_only_when_a_hook_lands_nothing(monkeypatch, capsys):

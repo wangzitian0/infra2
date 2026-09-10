@@ -148,10 +148,9 @@ jobs:
         # weeks. Needs a token with `admin:repo_hook` READ scope — the Actions token
         # cannot carry it, so the step is inert until INFRA2_HOOKS_READ_TOKEN exists
         # rather than failing daily on a permission it can never have.
-        if: ${{ env.INFRA2_HOOKS_READ_TOKEN != '' }}
+        if: ${{ secrets.INFRA2_HOOKS_READ_TOKEN != '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.INFRA2_HOOKS_READ_TOKEN }}
-          INFRA2_HOOKS_READ_TOKEN: ${{ secrets.INFRA2_HOOKS_READ_TOKEN }}
         run: python tools/webhook_delivery_audit.py --repo "$GITHUB_REPOSITORY"
 
       - name: Report the production marker lag (#650)

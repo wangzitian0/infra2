@@ -67,6 +67,7 @@ def _get(path: str, token: str) -> list | dict:
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "infra2-webhook-delivery-audit",
         },
     )
     with urllib.request.urlopen(request, timeout=30) as response:
@@ -106,7 +107,10 @@ def main(argv: list[str] | None = None) -> int:
 
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
     if not token:
-        print("webhook deliveries: not checked (no GITHUB_TOKEN)", file=sys.stderr)
+        print(
+            "webhook deliveries: not checked (no GITHUB_TOKEN or GH_TOKEN)",
+            file=sys.stderr,
+        )
         return 1
     try:
         found = verdicts(args.repo, token)
