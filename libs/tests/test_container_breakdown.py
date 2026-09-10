@@ -464,6 +464,58 @@ def test_an_unchanged_ongoing_incident_pages_once_and_escalation_pages_again(
     assert len([p for p in posted if p["status"] == "firing"]) == 2
 
 
+def test_a_positive_renotify_restores_the_timer_and_pages_reset_the_digest_counter(
+    monkeypatch,
+):
+    """Review on #686: the two mechanisms must not overlap.
+
+    An operator who sets a positive BREAKDOWN_RENOTIFY_SECONDS has asked for periodic
+    re-paging and must not also collect a digest about the same incident; and any real
+    page — escalation included — resets "since it last paged", or the digest's own
+    wording is wrong.
+    """
+    import time
+
+    import libs.container_breakdown_watch as w
+
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(time, "monotonic", lambda: clock["now"])
+    current = {"b": Breakdown(container="c", state="unhealthy", reason="r", detail="d")}
+    monkeypatch.setattr(w, "sweep", lambda client, tail: [current["b"]])
+    monkeypatch.setattr(w, "_post_alert", lambda payload: None)
+
+    def sweeps(n, *, renotify, state, chronic):
+        fired = 0
+        for _ in range(n):
+            clock["now"] += 60
+            fired += w.run_once(
+                client=None,
+                log_tail=25,
+                container_state=state,
+                renotify=renotify,
+                failure_threshold=3,
+                recovery_threshold=5,
+                chronic=chronic,
+                chronic_digest_seconds=24 * 3600,
+            )
+        return fired
+
+    # timer on: re-pages on the timer, and nothing accrues to the digest
+    state, chronic = {}, {}
+    assert sweeps(3, renotify=1800, state=state, chronic=chronic) == 1
+    assert sweeps(60, renotify=1800, state=state, chronic=chronic) >= 1
+    assert [n for n in chronic if n != "__digest_at__"] == []
+
+    # timer off: pages once, accrues, and an escalation both re-pages and resets the count
+    state, chronic = {}, {}
+    assert sweeps(3, renotify=0, state=state, chronic=chronic) == 1
+    assert sweeps(10, renotify=0, state=state, chronic=chronic) == 0
+    assert chronic["c"] == 10
+    current["b"] = Breakdown(container="c", state="restarting", reason="r2", detail="d")
+    assert sweeps(1, renotify=0, state=state, chronic=chronic) == 1
+    assert "c" not in chronic, "a page resets 'since it last paged'"
+
+
 def test_run_once_stay_resolved_floor_suppresses_a_refire_and_digests_chronic_once(
     monkeypatch,
 ):
@@ -535,7 +587,7 @@ def test_run_once_stay_resolved_floor_suppresses_a_refire_and_digests_chronic_on
     # an ongoing unchanged incident is chronic too, so an unset clock would put a digest
     # on the pager one sweep after every incident began.
     assert not chronic_digests()
-    assert chronic["prefect-worker"] >= 1
+    assert chronic["prefect-worker"] == 1  # exactly the one suppressed refire
     clock["now"] += 3600
     assert sweep_n(1) == 0  # a digest window later, the chronic set goes out once
     assert len(chronic_digests()) == 1
@@ -554,7 +606,7 @@ def test_run_once_stay_resolved_floor_suppresses_a_refire_and_digests_chronic_on
     assert (
         sweep_n(3) == 0
     )  # still inside the floor: counted again, no second digest today
-    assert chronic["prefect-worker"] >= 1
+    assert chronic["prefect-worker"] == 1
     assert len(chronic_digests()) == 1
 
     # the floor is measured from the LATEST resolve: a container that keeps flapping keeps

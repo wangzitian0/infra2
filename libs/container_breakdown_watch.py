@@ -211,8 +211,11 @@ def run_once(
                     b.reason,
                 )
                 action = "fire"
-            else:
-                # Still broken, still the same reason: the digest carries it.
+            elif renotify <= 0:
+                # Still broken, still the same reason: the digest carries it. Only when
+                # periodic re-notification is OFF, though — an operator who sets a
+                # positive renotify has asked for the timer and must not also get a
+                # digest about the same incident (review on #686).
                 chronic[name] = int(chronic.get(name, 0)) + 1
         if action == "fire":
             since_resolved = now - resolved_at.get(name, float("-inf"))
@@ -233,6 +236,8 @@ def run_once(
                     b.reason,
                 )
             else:
+                # An actual page resets "since it last paged", escalation included.
+                chronic.pop(name, None)
                 fresh.append(b)
         elif not state.active:
             logger.info(
@@ -318,10 +323,15 @@ def run_once(
                 container=name,
                 state="chronic",
                 reason=(
-                    f"still broken, {chronic[name]} sweep(s) since it last paged"
-                    if (container_state.get(name) and container_state[name].active)
-                    else f"re-broke {chronic[name]}x inside the "
+                    # Keyed on the floor itself, not on `active`: a floor-suppressed
+                    # re-break leaves the incident active, so keying on `active` made
+                    # this wording unreachable in exactly the case it describes
+                    # (review on #686).
+                    f"re-broke {chronic[name]}x inside the "
                     f"{stay_resolved_seconds // 3600}h stay-resolved floor"
+                    if now - resolved_at.get(name, float("-inf"))
+                    < stay_resolved_seconds
+                    else f"still broken, {chronic[name]} sweep(s) since it last paged"
                 ),
                 detail=(
                     container_state.get(name).context.detail
