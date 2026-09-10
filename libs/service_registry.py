@@ -290,7 +290,30 @@ def service_id_for_component(component: str, *, signal: str = "") -> str:
 #: per compose per sweep (32,236 lines in 24 h), and every alert it raised carried
 #: `infra/unregistered` instead of a real service_id (#608). Regenerate with
 #: `python tools/gen_dokploy_identity_map.py`; a test fails if it drifts from the tree.
-DOKPLOY_IDENTITY_MAP_PATH = Path(__file__).resolve().parent / "dokploy_identity_map.json"
+DOKPLOY_IDENTITY_MAP_PATH = (
+    Path(__file__).resolve().parent / "dokploy_identity_map.json"
+)
+
+
+def _map_without_ambiguity(metas) -> dict[str, str]:
+    """`"<project>/<compose>" -> service_id`, with ambiguous coordinates left out.
+
+    Two services declaring the same (project, compose) pair cannot be told apart from a
+    Dokploy coordinate, and the resolver has always answered `None` there — "nobody can
+    account for this" is the honest answer, and assigning one of them would put a false
+    service_id on somebody's alert. A dict comprehension would have silently kept
+    whichever came last (review on #694), so collisions are removed rather than resolved.
+    """
+    seen: dict[str, str] = {}
+    ambiguous: set[str] = set()
+    for meta in metas:
+        key = f"{meta.project}/{meta.service}"
+        if key in seen and seen[key] != meta.service_id:
+            ambiguous.add(key)
+        seen[key] = meta.service_id
+    for key in ambiguous:
+        seen.pop(key, None)
+    return seen
 
 
 def dokploy_identity_map() -> dict[str, str]:
@@ -299,10 +322,7 @@ def dokploy_identity_map() -> dict[str, str]:
     The tree wins when it is present: a checkout is always more current than an artifact
     built from it. The file is the fallback for a container that ships neither.
     """
-    from_tree = {
-        f"{meta.project}/{meta.service}": meta.service_id
-        for meta in service_attrs().values()
-    }
+    from_tree = _map_without_ambiguity(service_attrs().values())
     from_tree.update(
         {f"bootstrap/{name}": sid for name, sid in _BOOTSTRAP_COMPOSE_IDS.items()}
     )

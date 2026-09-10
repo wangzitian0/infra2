@@ -32,11 +32,22 @@ from libs.service_registry import (  # noqa: E402
 
 
 def build() -> dict[str, str]:
-    """The map as the deploy.py tree declares it, right now."""
-    out = {
-        f"{meta.project}/{meta.service}": meta.service_id
-        for meta in service_attrs().values()
-    }
+    """The map as the deploy.py tree declares it, right now.
+
+    A coordinate two services both claim is an error here, not a silent last-write-wins:
+    the resolver answers None for an ambiguous pair by design, and baking one of the two
+    would put a false service_id on somebody's alert (review on #694). Fail the generator
+    and make somebody name the services apart.
+    """
+    out: dict[str, str] = {}
+    for meta in service_attrs().values():
+        key = f"{meta.project}/{meta.service}"
+        if key in out and out[key] != meta.service_id:
+            raise SystemExit(
+                f"two services claim the Dokploy coordinate {key!r}: "
+                f"{out[key]} and {meta.service_id}"
+            )
+        out[key] = meta.service_id
     out.update(
         {f"bootstrap/{name}": sid for name, sid in _BOOTSTRAP_COMPOSE_IDS.items()}
     )

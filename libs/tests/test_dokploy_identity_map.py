@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 
 from libs import service_registry
 from tools import gen_dokploy_identity_map
@@ -74,3 +76,37 @@ def test_the_generator_check_mode_reports_drift(tmp_path, monkeypatch, capsys):
 
     assert gen_dokploy_identity_map.main([]) == 0
     assert gen_dokploy_identity_map.main(["--check"]) == 0
+
+
+def test_an_ambiguous_coordinate_stays_unresolved(monkeypatch):
+    """Two services on one Dokploy coordinate cannot be told apart, and answering with
+    either would put a false service_id on somebody's alert. The resolver has always said
+    None there; a dict comprehension would have kept whichever came last (review on
+    #694)."""
+
+    class _Meta:
+        def __init__(self, project, service, service_id):
+            self.project, self.service, self.service_id = project, service, service_id
+
+    clash = [
+        _Meta("platform", "twin", "platform/twin-a"),
+        _Meta("platform", "twin", "platform/twin-b"),
+        _Meta("platform", "alone", "platform/alone"),
+    ]
+    monkeypatch.setattr(
+        service_registry, "service_attrs", lambda: {m.service_id: m for m in clash}
+    )
+
+    mapping = service_registry.dokploy_identity_map()
+    assert "platform/twin" not in mapping
+    assert mapping["platform/alone"] == "platform/alone"
+    assert service_registry.service_id_for_dokploy("platform", "twin") is None
+
+    # the generator refuses to bake one of the two rather than pick
+    monkeypatch.setattr(
+        gen_dokploy_identity_map,
+        "service_attrs",
+        lambda: {m.service_id: m for m in clash},
+    )
+    with pytest.raises(SystemExit, match="two services claim"):
+        gen_dokploy_identity_map.build()
