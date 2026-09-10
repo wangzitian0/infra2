@@ -279,7 +279,6 @@ def sync_service(service_name):
 | `/health` | GET | 健康检查 | 手动 / 监控 |
 | `/webhook` | POST | GitHub webhook 接收器（变更驱动） | GitHub 自动触发 |
 | `/deploy` | POST | 版本部署（GitOps）| GitHub Actions |
-| `/sync` | POST | 手动同步触发器（遗留） | 手动 curl |
 
 ### 4.2 `/health` - 健康检查
 
@@ -377,39 +376,6 @@ curl -X POST https://iac.{domain}/deploy \
   "status_url": "/deploy/status"
 }
 ```
-
-### 4.5 `/sync` - 手动同步（Legacy）
-
-`/sync` is disabled by default. It is a legacy manual endpoint and must only be
-enabled temporarily with `ENABLE_LEGACY_SYNC=true`; enabled calls use the same
-timestamped nonce HMAC headers as `/deploy`.
-
-**请求示例**:
-```bash
-# 同步特定服务
-PAYLOAD='{"services":["platform/postgres"]}'
-SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$SECRET" | cut -d' ' -f2)
-
-curl -X POST https://iac.{domain}/sync \
-  -H "Content-Type: application/json" \
-  -H "X-Hub-Signature-256: sha256=$SIGNATURE" \
-  -d "$PAYLOAD"
-
-# 同步所有服务
-PAYLOAD='{"all": true}'
-SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$SECRET" | cut -d' ' -f2)
-
-curl -X POST https://iac.{domain}/sync \
-  -H "Content-Type: application/json" \
-  -H "X-Hub-Signature-256: sha256=$SIGNATURE" \
-  -d "$PAYLOAD"
-```
-
-**注意**: 此端点为遗留接口，推荐使用 `/deploy` 进行版本化部署。
-
----
-
-## 5. 服务映射
 
 ### 5.1 变更文件 → 服务映射表
 

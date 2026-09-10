@@ -156,14 +156,6 @@ def parse_bool(value) -> bool:
     raise ValueError("wait must be a boolean")
 
 
-def run_sync(services: set[str]):
-    from sync_runner import sync_services
-
-    thread = threading.Thread(target=sync_services, args=(services,))
-    thread.daemon = True
-    thread.start()
-
-
 def _normalize_services(services: list[str] | None) -> tuple[str, ...]:
     """Canonical service-set identity; omitted services means the all-services operation."""
     if services is None:
@@ -483,34 +475,6 @@ def webhook():
             "commit": payload.get("after", "")[:8],
         }
     )
-
-
-@app.route("/sync", methods=["POST"])
-def manual_sync():
-    if os.environ.get("ENABLE_LEGACY_SYNC", "").lower() not in {
-        "1",
-        "true",
-        "yes",
-    }:
-        return jsonify({"error": "Legacy sync endpoint disabled"}), 404
-    if not verify_iac_request():
-        return jsonify({"error": "Invalid signature"}), 401
-
-    payload = request.json or {}
-    if not isinstance(payload, dict):
-        return jsonify({"error": "JSON object required"}), 400
-
-    if payload.get("all"):
-        services = {"__all__"}
-    else:
-        services = set(payload.get("services", []))
-
-    if not services:
-        return jsonify({"error": "No services specified"}), 400
-
-    run_sync(services)
-
-    return jsonify({"status": "accepted", "services": list(services)})
 
 
 def _keys_for_legacy_status(env: str, ref: str) -> list[DeploymentKey]:

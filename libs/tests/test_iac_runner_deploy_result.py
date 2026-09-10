@@ -1200,14 +1200,14 @@ def test_a_push_to_main_deploys_nothing(monkeypatch) -> None:
         "webhook_server_push_path", IAC_RUNNER / "webhook_server.py", monkeypatch
     )
 
-    started: list = []
-    monkeypatch.setattr(
-        webhook_server, "run_sync", lambda services: started.append(services)
-    )
-
     response = webhook_server.webhook()
 
-    assert not started, "a push to main must not start a sync"
+    # Stronger than "this handler did not start a sync": since the legacy /sync endpoint
+    # was retired there is no function in this module that can start one at all. /deploy
+    # is the only way in.
+    assert not hasattr(webhook_server, "run_sync"), (
+        "a sync entry point outside /deploy is how 'merge' quietly meant 'deploy'"
+    )
     assert response["status"] == "ignored"
     assert "release tag" in response["reason"]
     # The signature still has to pass — a webhook that 401s is a broken thing whatever

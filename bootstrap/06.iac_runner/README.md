@@ -164,7 +164,6 @@ authoritative version of all three.
 |----------|--------|-------------|
 | `/health` | GET | Health check |
 | `/webhook` | POST | GitHub push receiver — authenticates the delivery and deploys nothing (a merge is not a release; staging follows a release tag) |
-| `/sync` | POST | Manual sync trigger (legacy, disabled by default) |
 | `/deploy` | POST | SHA-based deployment (GitOps) |
 | `/deploy/status` | POST | Poll the exact deployment ID returned by `/deploy` |
 
@@ -193,26 +192,6 @@ curl -X POST https://iac.{domain}/deploy \
   -H "X-Hub-Signature-256: sha256=$SIGNATURE" \
   -H "X-IAC-Timestamp: $TIMESTAMP" \
   -H "X-IAC-Nonce: $NONCE" \
-  -d "$PAYLOAD"
-```
-
-### Manual Sync (Legacy)
-
-```bash
-# Sync specific services (requires signature)
-PAYLOAD='{"services":["platform/postgres"]}'
-SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac 'YOUR_SECRET' | cut -d' ' -f2)
-curl -X POST https://iac.{domain}/sync \
-  -H "Content-Type: application/json" \
-  -H "X-Hub-Signature-256: sha256=$SIGNATURE" \
-  -d "$PAYLOAD"
-
-# Sync all (requires signature)
-PAYLOAD='{"all": true}'
-SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac 'YOUR_SECRET' | cut -d' ' -f2)
-curl -X POST https://iac.{domain}/sync \
-  -H "Content-Type: application/json" \
-  -H "X-Hub-Signature-256: sha256=$SIGNATURE" \
   -d "$PAYLOAD"
 ```
 
