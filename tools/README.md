@@ -40,6 +40,13 @@ infra2. Its `markers` action needs no request: it prints the production marker n
 newest release and exits non-zero once the marker is too old to pin the data engine from the
 release being promoted (#650) — the ops-checks deploy-guard-audit job runs it daily.
 
+`webhook_delivery_audit.py` reads a repository's hook delivery list and fails only when
+deliveries are being **attempted and none are landing** — the shape of #585, where
+`/webhook` returned 401 on every delivery for seven weeks while the record of it went
+unread. A quiet hook is not a finding and neither is one bad delivery among good ones.
+It needs a token with `admin:repo_hook` read scope; the Actions token cannot carry that,
+so its ops-checks step stays inert until `INFRA2_HOOKS_READ_TOKEN` is configured.
+
 `ci_gate_audit.py` imports the released `infra2_sdk.ci` schema directly and validates
 the infra-owned gate inventory against live workflow jobs. No local compatibility schema
 or application source checkout participates in the audit.
