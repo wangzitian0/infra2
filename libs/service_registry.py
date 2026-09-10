@@ -277,6 +277,70 @@ def service_id_for_component(component: str, *, signal: str = "") -> str:
     )
 
 
+#: The (project, compose) -> service_id map, derived from the same deploy.py tree and
+#: written to disk so it can travel where the tree cannot. `platform/12.alerting`'s image
+#: COPYs `libs` and `tools` and nothing else — measured on the running container:
+#:
+#:     $ docker exec platform-alerting-probes ls /app
+#:     app.py  libs  tools
+#:     >>> len(service_attrs())            0
+#:     >>> service_id_for_dokploy("finance_report", "app")     None
+#:
+#: so every compose the deploy-queue guard swept resolved to None, it logged one warning
+#: per compose per sweep (32,236 lines in 24 h), and every alert it raised carried
+#: `infra/unregistered` instead of a real service_id (#608). Regenerate with
+#: `python tools/gen_dokploy_identity_map.py`; a test fails if it drifts from the tree.
+DOKPLOY_IDENTITY_MAP_PATH = (
+    Path(__file__).resolve().parent / "dokploy_identity_map.json"
+)
+
+
+def _map_without_ambiguity(metas) -> dict[str, str]:
+    """`"<project>/<compose>" -> service_id`, with ambiguous coordinates left out.
+
+    Two services declaring the same (project, compose) pair cannot be told apart from a
+    Dokploy coordinate, and the resolver has always answered `None` there — "nobody can
+    account for this" is the honest answer, and assigning one of them would put a false
+    service_id on somebody's alert. A dict comprehension would have silently kept
+    whichever came last (review on #694), so collisions are removed rather than resolved.
+    """
+    seen: dict[str, str] = {}
+    ambiguous: set[str] = set()
+    for meta in metas:
+        key = f"{meta.project}/{meta.service}"
+        if key in seen and seen[key] != meta.service_id:
+            ambiguous.add(key)
+        seen[key] = meta.service_id
+    for key in ambiguous:
+        seen.pop(key, None)
+    return seen
+
+
+def dokploy_identity_map() -> dict[str, str]:
+    """`"<project>/<compose>" -> service_id` from the deploy.py tree, or the baked file.
+
+    The tree wins when it is present: a checkout is always more current than an artifact
+    built from it. The file is the fallback for a container that ships neither.
+    """
+    from_tree = _map_without_ambiguity(service_attrs().values())
+    from_tree.update(
+        {f"bootstrap/{name}": sid for name, sid in _BOOTSTRAP_COMPOSE_IDS.items()}
+    )
+    if len(from_tree) > len(_BOOTSTRAP_COMPOSE_IDS):
+        return from_tree
+    if DOKPLOY_IDENTITY_MAP_PATH.is_file():
+        import json
+
+        try:
+            return json.loads(DOKPLOY_IDENTITY_MAP_PATH.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            # Fail closed to the bootstrap-only map. This is a fallback read inside a
+            # long-running watcher loop; an unreadable or malformed file must degrade
+            # identity resolution, never take the watcher down with it.
+            return from_tree
+    return from_tree
+
+
 def service_id_for_dokploy(project: str, compose_name: str) -> str | None:
     """Resolve a Dokploy project/compose coordinate without guessing globally.
 
@@ -289,13 +353,7 @@ def service_id_for_dokploy(project: str, compose_name: str) -> str | None:
     canonical_compose = (compose_name or "").strip().lower()
     if canonical_project == "bootstrap":
         return _BOOTSTRAP_COMPOSE_IDS.get(canonical_compose)
-
-    matches = [
-        meta.service_id
-        for meta in service_attrs().values()
-        if meta.project == canonical_project and meta.service == canonical_compose
-    ]
-    return matches[0] if len(matches) == 1 else None
+    return dokploy_identity_map().get(f"{canonical_project}/{canonical_compose}")
 
 
 def probe_container_bases() -> dict[str, ServiceMeta]:
