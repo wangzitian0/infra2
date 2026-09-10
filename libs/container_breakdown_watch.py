@@ -211,6 +211,10 @@ def run_once(
                     b.reason,
                 )
                 action = "fire"
+                # The escalation IS a page, so the renotify clock restarts here. Without
+                # this a positive renotify would measure from the previous page and could
+                # re-page moments after the escalation (review on #686).
+                state.last_alert_at = now
             elif renotify <= 0:
                 # Still broken, still the same reason: the digest carries it. Only when
                 # periodic re-notification is OFF, though — an operator who sets a
