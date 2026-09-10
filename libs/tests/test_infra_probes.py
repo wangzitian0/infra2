@@ -368,6 +368,39 @@ def test_public_route_probes_derive_from_facets_and_registered_signals() -> None
     assert "https://cloud.zitian.party" in staging
 
 
+def test_every_probe_cycle_leaves_one_line_of_positive_evidence(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    """#608: a passing probe is silent, so a log with no probe lines reads exactly like a
+    runner probing nothing. On 2026-09-09 that is how this container's log read while 24
+    infra-service and 7 public-route probes were passing every minute."""
+    runner = _load_probe_runner()
+    monkeypatch.setenv("INFRA_PROBE_SPECS", "vault|http|http://vault|200")
+    monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
+    monkeypatch.setenv("INFRA_PROBE_DRY_RUN", "1")
+    monkeypatch.setattr(
+        runner,
+        "run_probes",
+        lambda specs: [probes.run_probe(specs[0], http_get=lambda *_args: (200, "ok"))],
+    )
+
+    assert runner.run_once(state_path=tmp_path / "s.json") == 0
+    out = capsys.readouterr().out
+    assert "infra probes: infra-service 1/1 ok" in out
+    assert "FAILURES" not in out
+
+    monkeypatch.setattr(
+        runner,
+        "run_probes",
+        lambda specs: [
+            probes.run_probe(specs[0], http_get=lambda *_args: (503, "sealed"))
+        ],
+    )
+    assert runner.run_once(state_path=tmp_path / "s.json") == 1
+    out = capsys.readouterr().out
+    assert "infra probes: infra-service 0/1 ok" in out and "FAILURES" in out
+
+
 def test_probe_runner_dedupes_unchanged_failures_and_sends_recovery(
     monkeypatch,
     tmp_path,
