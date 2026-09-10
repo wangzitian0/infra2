@@ -409,6 +409,56 @@ def classify_token(
 STALE_RENDERED_SECRET_FAIL_SECONDS = 7 * 86400
 
 
+def classify_deployed_template(
+    service: VaultService,
+    deployed_sha256: str,
+) -> CheckResult:
+    """Is the template the agent has mounted the one this release ships?
+
+    This is the check #628 needs and #658 recommendation 1 approximated with mtime. The
+    data-engine agent ran a weeks-old `secrets.ctmpl` — no S3 port, no LLM_* — because a
+    single-file bind mount kept pointing at a replaced inode. The container's view of that
+    file has stale CONTENT and a perfectly consistent mtime, so only the content answers.
+
+    An unreadable template is not a mismatch: the check reports `info` and says so, rather
+    than turning an SSH hiccup into a page.
+    """
+    release_sha256 = _release_template_sha256(service)
+    evidence = {
+        "template_path": service.secret_template_path,
+        "deployed_sha256": deployed_sha256[:12],
+        "release_sha256": release_sha256[:12],
+    }
+    if not deployed_sha256 or not release_sha256:
+        return _result(
+            service,
+            "deployed-template",
+            "info",
+            "P3",
+            f"could not compare {service.secret_template_path} "
+            f"({'deployed' if not deployed_sha256 else 'release'} copy unreadable)",
+            evidence,
+        )
+    if deployed_sha256 != release_sha256:
+        return _result(
+            service,
+            "deployed-template",
+            "fail",
+            "P1",
+            f"the mounted {service.secret_template_path} is not the one this release "
+            "ships; a template change never reached the container (#628)",
+            evidence,
+        )
+    return _result(
+        service,
+        "deployed-template",
+        "pass",
+        "P1",
+        f"the mounted {service.secret_template_path} matches the release",
+        evidence,
+    )
+
+
 def classify_rendered_env(
     service: VaultService,
     file_state: dict[str, Any],
@@ -454,21 +504,18 @@ def classify_rendered_env(
     mtime = int(file_state.get("mtime", 0))
     age = max(0, observed_now - mtime)
     evidence = {**file_state, "age_seconds": age}
-    if age > STALE_RENDERED_SECRET_FAIL_SECONDS:
-        # #658 recommendation 1 (2026-09-08): a rendered file nobody has rewritten in a
-        # week is not "low churn" any more — the data-engine agent ran a weeks-old
-        # secrets.ctmpl (no S3 port, no LLM_*) because a bind-mounted template edit
-        # never re-renders (#628), and this audit saw it and said `info`. Past this
-        # floor the file is stale by any reading of the word, and the audit fails.
-        return _result(
-            service,
-            "rendered-env-staleness",
-            "fail",
-            "P1",
-            f"{service.rendered_secret_path} has not been rewritten in {age // 86400} days "
-            "(a template or secret change since then never reached the container, #628)",
-            evidence,
-        )
+    # Age alone is not a fault, and #688 measured what treating it as one costs: on
+    # 2026-09-10 this failed for five services at 65-67 days — authentik, openpanel,
+    # postgres, prefect, redis — every one of them a long-lived secret nobody had
+    # changed, each with `vault-agent-logs` passing in the same run. vault-agent only
+    # rewrites this file when the CONTENT changes, so mtime answers "when did the secret
+    # last change", never "did a change fail to arrive".
+    #
+    # The question #658 recommendation 1 was really asking is answered by
+    # `classify_deployed_template` below, which compares the template the agent has
+    # mounted against the one the release ships. That catches #628's actual shape — a
+    # single-file bind mount left pointing at a replaced inode — which mtime cannot,
+    # because the stale file's mtime is perfectly consistent with its stale content.
     if age > service.max_rendered_secret_age_seconds:
         # #531: vault-agent's static_secret_render_interval only rewrites this file
         # when the underlying Vault secret's CONTENT changes, not on every poll -- a
@@ -672,6 +719,11 @@ def audit_from_observations(
         lookup = obs.get("token_lookup")
         results.append(classify_token(service, env_text, lookup))
         results.append(classify_rendered_env(service, obs.get("rendered_env", {}), now))
+        results.append(
+            classify_deployed_template(
+                service, str(obs.get("deployed_template_sha256", ""))
+            )
+        )
         for field_name in service.optional_inert_fields:
             results.append(
                 classify_optional_field_inertness(
@@ -781,6 +833,9 @@ def collect_live_observations(
             "dokploy_env": env_text,
             "token_lookup": token_lookup,
             "rendered_env": _remote_secret_file_state(vps_host, vault_agent_name),
+            "deployed_template_sha256": _remote_template_sha256(
+                vps_host, vault_agent_name
+            ),
             # Only fetched for services with `optional_inert_fields` facet
             # entries (#526/#542) -- keeps secret-content exposure scoped to
             # the fields this audit actually needs to see are non-empty.
@@ -978,6 +1033,32 @@ def _remote_secret_file_state(host: str, vault_agent_container: str) -> dict[str
         f"docker exec {shlex.quote(vault_agent_container)} sh -lc {shlex.quote(script)}"
     )
     return _remote_json(host, command)
+
+
+def _remote_template_sha256(host: str, vault_agent_container: str) -> str:
+    """sha256 of the template the agent has mounted, computed inside the container.
+
+    The hash, not the content: this only has to answer "is the deployed template the one
+    the release ships", and hashing in place keeps the template text off the wire and out
+    of any log. Empty string when the file or the container is unreadable — an absent
+    answer must not read as a mismatch.
+    """
+    command = (
+        f"docker exec {shlex.quote(vault_agent_container)} "
+        "sh -lc 'sha256sum /etc/vault/secrets.ctmpl 2>/dev/null | cut -d\" \" -f1'"
+    )
+    result = _ssh(host, command)
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def _release_template_sha256(service: "VaultService") -> str:
+    """sha256 of the same template as the checked-out release declares it."""
+    import hashlib
+
+    path = REPO_ROOT / service.secret_template_path
+    if not path.is_file():
+        return ""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _remote_secret_file_text(host: str, vault_agent_container: str) -> str:

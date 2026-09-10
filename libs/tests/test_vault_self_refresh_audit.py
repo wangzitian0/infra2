@@ -8,6 +8,7 @@ import yaml
 
 from libs import vault_self_refresh_audit as vault_self_refresh_audit_module
 from libs.vault_self_refresh_audit import (
+    classify_deployed_template,
     VaultService,
     _remote_container_logs,
     _remote_container_state,
@@ -1065,33 +1066,59 @@ def test_collect_live_observations_skips_token_lookup_for_approle_service(
     assert observations["services"][service.id]["token_lookup"] is None
 
 
-def test_rendered_env_classifier_fails_after_a_week_without_a_rewrite() -> None:
-    """#658 recommendation 1: the data-engine agent ran a weeks-old secrets.ctmpl
-    (no S3 port, no LLM_*) because a bind-mounted template edit never re-renders
-    (#628); this audit saw the staleness and said `info`. Past seven days it fails."""
+def test_age_alone_is_information_however_old_the_render_is() -> None:
+    """#688: treating age as a fault failed five services at 65-67 days on 2026-09-10 —
+    authentik, openpanel, postgres, prefect, redis — every one a long-lived secret nobody
+    had changed, each with `vault-agent-logs` passing in the same run. vault-agent only
+    rewrites this file when the CONTENT changes, so mtime answers "when did the secret
+    last change", never "did a change fail to arrive"."""
     service = _service()
-    week_and_a_day = 8 * 86400
-    stale = classify_rendered_env(
-        service,
-        {"exists": True, "readable": True, "size": 20, "mtime": 0},
-        now=week_and_a_day,
-    )
-    assert stale.status == "fail"
-    assert stale.severity == "P1"
-    assert stale.check_id == "rendered-env-staleness"
-    assert "8 days" in stale.summary and "#628" in stale.summary
-    # under the floor the #531 informational note stands unchanged
+    for age in (8 * 86400, 67 * 86400):
+        old = classify_rendered_env(
+            service,
+            {"exists": True, "readable": True, "size": 20, "mtime": 0},
+            now=age,
+        )
+        assert old.status == "info", age
+        assert old.check_id == "rendered-env-freshness"
     recent = classify_rendered_env(
         service, {"exists": True, "readable": True, "size": 20, "mtime": 0}, now=1000
     )
     assert recent.status == "info" and recent.check_id == "rendered-env-freshness"
 
 
-def test_audit_fails_on_a_week_old_render_even_with_a_healthy_container() -> None:
+def test_the_deployed_template_is_compared_by_content(monkeypatch) -> None:
+    """The check #628 actually needs: a single-file bind mount left pointing at a
+    replaced inode has stale CONTENT and a perfectly consistent mtime, so only the
+    content answers. An unreadable copy is information, never a page."""
     service = _service()
-    report = audit_from_observations(
-        [service],
-        {
+    monkeypatch.setattr(
+        vault_self_refresh_audit_module,
+        "_release_template_sha256",
+        lambda _service: "a" * 64,
+    )
+
+    assert classify_deployed_template(service, "a" * 64).status == "pass"
+
+    drifted = classify_deployed_template(service, "b" * 64)
+    assert drifted.status == "fail" and drifted.severity == "P1"
+    assert (
+        "never reached the container" in drifted.summary and "#628" in drifted.summary
+    )
+    assert drifted.evidence["deployed_sha256"] == "b" * 12
+
+    unreadable = classify_deployed_template(service, "")
+    assert unreadable.status == "info"
+    assert "could not compare" in unreadable.summary
+
+
+def test_the_audit_does_not_fail_on_age_but_does_on_a_template_mismatch(
+    monkeypatch,
+) -> None:
+    service = _service()
+
+    def _observations(template_sha: str) -> dict:
+        return {
             "services": {
                 service.id: {
                     "dokploy_env": (
@@ -1105,6 +1132,7 @@ def test_audit_fails_on_a_week_old_render_even_with_a_healthy_container() -> Non
                         "size": 20,
                         "mtime": 0,
                     },
+                    "deployed_template_sha256": template_sha,
                     "vault_agent_logs": "template rendered successfully",
                     "vault_agent_container": {
                         "name": "finance_report-app-vault-agent",
@@ -1125,12 +1153,24 @@ def test_audit_fails_on_a_week_old_render_even_with_a_healthy_container() -> Non
                     ],
                 }
             }
-        },
-        env="production",
-        now=8 * 86400,
+        }
+
+    monkeypatch.setattr(
+        vault_self_refresh_audit_module,
+        "_release_template_sha256",
+        lambda _service: "a" * 64,
     )
-    assert report["status"] == "fail"
-    staleness = [
-        r for r in report["results"] if r["check_id"] == "rendered-env-staleness"
+
+    healthy = audit_from_observations(
+        [service], _observations("a" * 64), env="production", now=67 * 86400
+    )
+    assert healthy["status"] != "fail", "a 67-day-old render of an unchanged secret"
+
+    mismatched = audit_from_observations(
+        [service], _observations("b" * 64), env="production", now=1000
+    )
+    assert mismatched["status"] == "fail"
+    template = [
+        r for r in mismatched["results"] if r["check_id"] == "deployed-template"
     ]
-    assert len(staleness) == 1 and staleness[0]["status"] == "fail"
+    assert len(template) == 1 and template[0]["status"] == "fail"
