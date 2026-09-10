@@ -141,7 +141,10 @@ authoritative version of all three.
 
 2. **Cut a release tag** when the change should reach staging:
    ```bash
-   git fetch --tags                       # a tag someone else took is a wedged runner
+   # Mirror semantics, the same ones the runner's workspace uses: plain `--tags`
+   # REFUSES to move a tag that already exists locally, which is precisely how a
+   # re-cut tag wedges a checkout.
+   git fetch --tags --force --prune --prune-tags
    git tag -a v1.2.4 -m "postgres config" origin/main
    git push origin v1.2.4
    ```
