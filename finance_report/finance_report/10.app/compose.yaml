@@ -32,7 +32,13 @@ x-app-runtime-env: &app_runtime_env
   PRIMARY_MODEL: ${PRIMARY_MODEL:-glm-5.2}
   FALLBACK_MODELS: ${FALLBACK_MODELS:-glm-5-turbo,glm-5}
   PREFECT_API_URL: http://platform-prefect-server${ENV_SUFFIX}:4200/api
-  OTEL_EXPORTER_OTLP_ENDPOINT: http://platform-signoz-otel-collector:4318
+# OTEL_EXPORTER_OTLP_ENDPOINT is deliberately NOT here. It turns export ON, and this
+# application refuses to start when export is on without a deployment.environment tag in
+# OTEL_RESOURCE_ATTRIBUTES — which the deployer issues per component, for the backend.
+# Handing the worker the endpoint alone crash-looped staging within a minute of the first
+# deploy (2026-09-10): "Telemetry contract violation: OTEL export is enabled in a deployed
+# environment but OTEL_RESOURCE_ATTRIBUTES has no deployment.environment tag". Giving the
+# worker real telemetry means giving it its own identity, which is its own change.
 
 services:
   vault-agent:
@@ -189,6 +195,7 @@ services:
       CORS_ORIGINS: https://report${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-https://report${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}}
       API_RATE_LIMIT_REQUESTS: ${API_RATE_LIMIT_REQUESTS:-300}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://platform-signoz-otel-collector:4318
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-finance-report-backend}
       OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
     healthcheck:

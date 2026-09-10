@@ -51,8 +51,11 @@ SHARED_RUNTIME_KEYS = (
     "PRIMARY_MODEL",
     "FALLBACK_MODELS",
     "PREFECT_API_URL",
-    "OTEL_EXPORTER_OTLP_ENDPOINT",
 )
+#: NOT shared. The OTLP endpoint turns export on, and the app refuses to start when
+#: export is on without a deployment.environment tag in OTEL_RESOURCE_ATTRIBUTES, which
+#: the deployer issues per component. See the comment on the anchor.
+BACKEND_ONLY_KEYS = ("OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_SERVICE_NAME", "CORS_ORIGINS")
 
 
 def test_the_worker_gets_the_same_runtime_configuration_as_the_backend() -> None:
@@ -75,4 +78,19 @@ def test_the_worker_gets_the_same_runtime_configuration_as_the_backend() -> None
         assert worker.get(key) == backend[key], (
             f"prefect-worker's {key} differs from backend's — both run the same image "
             "and parse the same statements"
+        )
+
+
+def test_the_worker_does_not_get_telemetry_it_cannot_satisfy() -> None:
+    """Handing the worker OTEL_EXPORTER_OTLP_ENDPOINT alone crash-looped staging within a
+    minute of the deploy: export on, no deployment.environment tag, Settings() refuses to
+    construct. Backend-only values stay on the backend."""
+    services = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))["services"]
+    backend = _environment(services["backend"])
+    worker = _environment(services["prefect-worker"])
+
+    for key in BACKEND_ONLY_KEYS:
+        assert key in backend, f"backend lost {key}"
+        assert key not in worker, (
+            f"{key} on the worker turns on behaviour it has no configuration for"
         )
