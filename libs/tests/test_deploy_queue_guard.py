@@ -396,3 +396,62 @@ def test_watcher_reloads_env_file_each_sweep_for_late_rendered_key(
     env_file.write_text('LATE_KEY="rendered-now"\n', encoding="utf-8")
     watcher.maybe_run(now=100.0 + watcher.interval_seconds)
     assert os.environ.get("LATE_KEY") == "rendered-now"
+
+
+# ---------------------------------------------------------------------------
+# sweep reporting (#608): one line per sweep, not one line per unknown compose
+
+
+def _projects_with(*composes):
+    return [
+        {
+            "name": project,
+            "environments": [
+                {
+                    "name": "production",
+                    "compose": [{"composeId": f"c-{name}", "name": name}],
+                }
+            ],
+        }
+        for project, name in composes
+    ]
+
+
+def test_the_sweep_reports_once_and_names_only_what_nobody_knows(caplog) -> None:
+    """32,236 of the probe container's 32,300 log lines in 24 h were this warning,
+    one per unregistered compose per sweep (production, 2026-09-09). Composes that are
+    unregistered BY DESIGN are not news; a compose nobody can account for is."""
+    client = _FakeClient(
+        _projects_with(
+            ("platform", "redis"),  # registered
+            ("playground", "TianClaws"),  # scratch, by design
+            ("finance", "appwrite"),  # predates the registry, by design
+            ("finance_report", "finance-report-preview-branch-main"),  # preview lane
+            ("platform", "mystery"),  # nobody knows what this is
+        ),
+        {},
+    )
+
+    with caplog.at_level("INFO", logger=guard.logger.name):
+        composes = guard._list_composes(client)
+
+    assert len(composes) == 5
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert not warnings, "an expected-unregistered compose must not warn every sweep"
+
+    summary = [r.getMessage() for r in caplog.records if "swept" in r.getMessage()]
+    assert len(summary) == 1, summary
+    assert "5 compose(s)" in summary[0]
+    assert "1 registered" in summary[0]
+    assert "3 unregistered by design" in summary[0]
+    assert "1 unknown" in summary[0]
+    assert "platform/production/mystery" in summary[0]
+
+
+def test_a_fully_accounted_sweep_still_reports_a_line(caplog) -> None:
+    """Positive evidence every cycle: silence must never be the success case."""
+    client = _FakeClient(_projects_with(("platform", "redis")), {})
+    with caplog.at_level("INFO", logger=guard.logger.name):
+        guard._list_composes(client)
+    summary = [r.getMessage() for r in caplog.records if "swept" in r.getMessage()]
+    assert len(summary) == 1 and "0 unknown" in summary[0]

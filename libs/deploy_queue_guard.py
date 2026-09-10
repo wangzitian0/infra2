@@ -87,11 +87,43 @@ def _make_client():
     return get_dokploy()
 
 
+#: Dokploy holds composes this estate does not own: `playground/*` is scratch, and
+#: `finance/appwrite` predates the registry. They resolve to no service_id by design, so
+#: naming them here is what keeps "unregistered" meaning "nobody knows what this is".
+#: Owner decision 2026-09-09: the probe/registry scope is registry-declared services only.
+UNREGISTERED_BY_DESIGN: frozenset[str] = frozenset(
+    {
+        "playground/*",
+        "finance/appwrite",
+    }
+)
+
+
+def _expected_unregistered(project: str, compose_name: str) -> bool:
+    project = (project or "").strip().lower()
+    compose_name = (compose_name or "").strip().lower()
+    return (
+        f"{project}/*" in UNREGISTERED_BY_DESIGN
+        or f"{project}/{compose_name}" in UNREGISTERED_BY_DESIGN
+        # A preview stack is named for its branch/PR and is created and destroyed by the
+        # preview lane, never registered.
+        or "preview" in compose_name
+    )
+
+
 def _list_composes(client):
-    """Typed compose deployments with identity resolved at topology ingestion."""
+    """Typed compose deployments with identity resolved at topology ingestion.
+
+    Composes nobody registered are counted and reported once per sweep, not logged per
+    compose per sweep: that line ran 32,236 times in 24 hours on production
+    (2026-09-09), 99.8% of the probe container's entire log, and it buried the only
+    other thing in there — the breakdown alerts that were firing at the time.
+    """
     from libs.service_registry import service_id_for_dokploy
 
     out = []
+    unknown: set[str] = set()
+    registered = 0
     for project in client.list_projects():
         project_name = project.get("name", "")
         for env in project.get("environments", []):
@@ -107,13 +139,10 @@ def _list_composes(client):
                     logger.warning("deployments fetch failed for %s: %s", name, exc)
                     deployments = []
                 service_id = service_id_for_dokploy(project_name, name) or ""
-                if not service_id:
-                    logger.warning(
-                        "unregistered Dokploy compose identity: project=%s env=%s compose=%s",
-                        project_name,
-                        environment,
-                        name,
-                    )
+                if not service_id and not _expected_unregistered(project_name, name):
+                    unknown.add(f"{project_name}/{environment}/{name}")
+                if service_id:
+                    registered += 1
                 out.append(
                     ComposeDeployments(
                         compose_id=compose_id,
@@ -123,6 +152,15 @@ def _list_composes(client):
                         deployments=tuple(deployments),
                     )
                 )
+    logger.info(
+        "deploy-queue guard swept %d compose(s): %d registered, %d unregistered by design, "
+        "%d unknown%s",
+        len(out),
+        registered,
+        len(out) - registered - len(unknown),
+        len(unknown),
+        f" ({', '.join(sorted(unknown))})" if unknown else "",
+    )
     return out
 
 

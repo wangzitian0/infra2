@@ -362,6 +362,20 @@ def run_once(
                 _log_send(stream_key, stream_results, severity_override)
 
     state["ever_succeeded"] = sorted(ever_succeeded)
+    # One line per cycle, on success too. A probe that passes is silent, so a log with
+    # no probe lines in it is indistinguishable from a runner that probed nothing —
+    # which is exactly how #608 read this container's log on 2026-09-09, while 24
+    # infra-service and 7 public-route probes were in fact passing every minute.
+    if not as_json:
+        print(
+            "infra probes: "
+            + " · ".join(
+                f"{name} {sum(1 for r in rows if r.get('ok'))}/{len(rows)} ok"
+                for name, rows in json_results.items()
+            )
+            + (" — FAILURES" if any_failures else ""),
+            flush=True,
+        )
     if as_json:
         print(json.dumps(json_results, indent=2))
     if not dry_run:
