@@ -14,6 +14,26 @@
 # - Retry logic handles transient PostgreSQL connection issues
 # - Healthcheck grants a bounded 450s for migration + cold startup (configurable via BACKEND_HEALTHCHECK_START_PERIOD)
 #
+# Runtime configuration BOTH processes that run the backend image need. The worker
+# parses statements: it reads the same object store, talks to the same models, and must
+# know which environment it is in. Declared once because declaring it twice is how this
+# broke — #639 moved PREFECT_API_URL into this file "but only for backend", and on
+# 2026-09-10 the same shape cost a release: the staging worker had no S3_BUCKET, fell
+# back to the image default `statements` (production's bucket), and every statement it
+# tried to parse failed with `StorageError: Failed to access bucket statements` once
+# #677 scoped the staging credential to its own bucket. Production only worked because
+# the default happened to be the right name there.
+x-app-runtime-env: &app_runtime_env
+  ENVIRONMENT: ${ENV:-production}
+  S3_ENDPOINT: http://platform-minio:9000
+  S3_BUCKET: ${S3_BUCKET:-statements}
+  S3_PUBLIC_BUCKET: ${S3_PUBLIC_BUCKET:-}
+  S3_PRESIGN_EXPIRY_SECONDS: "900"
+  PRIMARY_MODEL: ${PRIMARY_MODEL:-glm-5.2}
+  FALLBACK_MODELS: ${FALLBACK_MODELS:-glm-5-turbo,glm-5}
+  PREFECT_API_URL: http://platform-prefect-server${ENV_SUFFIX}:4200/api
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://platform-signoz-otel-collector:4318
+
 services:
   vault-agent:
     init: true  # tini as PID1 reaps healthcheck ssl_client zombies
@@ -165,18 +185,10 @@ services:
       # runtime, so the deployment states these here (values are the ones every
       # environment carried on 2026-09-07). Staging overrides come from
       # AppDeployer.compose_env_overrides.
-      ENVIRONMENT: ${ENV:-production}
-      S3_ENDPOINT: http://platform-minio:9000
-      S3_BUCKET: ${S3_BUCKET:-statements}
-      S3_PUBLIC_BUCKET: ${S3_PUBLIC_BUCKET:-}
-      S3_PRESIGN_EXPIRY_SECONDS: "900"
+      <<: *app_runtime_env
       CORS_ORIGINS: https://report${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-https://report${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}}
-      PREFECT_API_URL: http://platform-prefect-server${ENV_SUFFIX}:4200/api
       API_RATE_LIMIT_REQUESTS: ${API_RATE_LIMIT_REQUESTS:-300}
-      PRIMARY_MODEL: ${PRIMARY_MODEL:-glm-5.2}
-      FALLBACK_MODELS: ${FALLBACK_MODELS:-glm-5-turbo,glm-5}
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://platform-signoz-otel-collector:4318
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-finance-report-backend}
       OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
     healthcheck:
@@ -232,12 +244,11 @@ services:
       # recreated, so it can keep running against a stale rendered secrets file
       # (truealpha#447 was this exact gap on a different service).
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
-      # The worker registers its deployment against the environment's Prefect server.
-      # Until #639 the vault-agent template rendered this default into /secrets/.env for
-      # every container of the stack; #639 moved it into the compose file but only for
-      # `backend`. Without it Prefect starts an ephemeral API server, times out, and the
-      # worker crash-loops at ~1.5 cores per environment (2026-09-08: 71 restarts).
-      PREFECT_API_URL: http://platform-prefect-server${ENV_SUFFIX}:4200/api
+      # The same runtime configuration the backend gets. PREFECT_API_URL is in there:
+      # without it Prefect starts an ephemeral API server, times out, and this worker
+      # crash-loops at ~1.5 cores per environment (2026-09-08: 71 restarts). So is
+      # S3_BUCKET, whose absence here broke every staging parse (see the anchor).
+      <<: *app_runtime_env
     volumes:
       - secrets:/secrets:ro
     networks:
