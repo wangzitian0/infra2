@@ -9,10 +9,12 @@ import subprocess
 import sys
 from collections.abc import Sequence
 
-from libs.app_deploy_request import DeployPlan, make_plan, marker_status
+# libs.release_markers is pure git; libs.app_deploy_request pulls in infra2_sdk and is
+# imported lazily, so `markers` runs in an ops job that installs neither (#650).
+from libs.release_markers import marker_status
 
 
-def execute_plan(plan: DeployPlan, *, run=None) -> int:
+def execute_plan(plan, *, run=None) -> int:
     """Execute the primary service, then each companion the service spec declares.
 
     A companion (``libs.deploy_contract.ServiceSpec.companions``) is promoted at the
@@ -80,6 +82,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             status = marker_status(repo_root=args.repo_root)
             print(status.line())
             return 1 if status.stale else 0
+
+        from libs.app_deploy_request import make_plan
+
         if not args.sender or not args.domain:
             raise ValueError("--sender and --domain are required for plan and execute")
         plan = make_plan(
