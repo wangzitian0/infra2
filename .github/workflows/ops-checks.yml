@@ -109,6 +109,11 @@ jobs:
     timeout-minutes: 10
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+      # Job scope on purpose: `secrets` is not available in a step-level `if:`, so the
+      # webhook-delivery step tests `env.` instead. Gating on `secrets.` made the whole
+      # workflow file invalid — every job vanished and the run failed before it started
+      # (main, 2026-09-10, run 34479086414).
+      INFRA2_HOOKS_READ_TOKEN: ${{ secrets.INFRA2_HOOKS_READ_TOKEN }}
       # The necessity audit (dokploy.audit-autodeploy) queries the Dokploy API at
       # cloud.<INTERNAL_DOMAIN>. Without this the client falls back to cloud.localhost
       # -> Connection refused -> a nightly false-positive page (03:55 deploy-guard).
@@ -148,7 +153,7 @@ jobs:
         # weeks. Needs a token with `admin:repo_hook` READ scope — the Actions token
         # cannot carry it, so the step is inert until INFRA2_HOOKS_READ_TOKEN exists
         # rather than failing daily on a permission it can never have.
-        if: ${{ secrets.INFRA2_HOOKS_READ_TOKEN != '' }}
+        if: ${{ env.INFRA2_HOOKS_READ_TOKEN != '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.INFRA2_HOOKS_READ_TOKEN }}
         run: python tools/webhook_delivery_audit.py --repo "$GITHUB_REPOSITORY"
