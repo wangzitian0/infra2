@@ -368,6 +368,47 @@ def test_public_route_probes_derive_from_facets_and_registered_signals() -> None
     assert "https://cloud.zitian.party" in staging
 
 
+def test_the_watchers_can_actually_speak_at_info(monkeypatch, capsys) -> None:
+    """v1.1.78 on staging: the deploy-queue guard's new one-line-per-sweep summary
+    appeared nowhere, because the process has no logging handler and `logging`'s handler
+    of last resort emits WARNING and above. The old per-compose line was only ever
+    visible for being a warning."""
+    import logging
+
+    runner = _load_probe_runner()
+    watched = ("deploy-queue-guard", "container-breakdown-watch")
+    root = logging.getLogger()
+    saved = {
+        "__root_handlers__": list(root.handlers),
+        "__root_level__": root.level,
+        **{name: logging.getLogger(name).level for name in watched},
+    }
+    try:
+        # Build the precondition rather than inherit it: whatever the rest of the suite
+        # has done to logging, this test starts from an unconfigured process.
+        root.handlers = []
+        root.setLevel(logging.WARNING)
+        for name in watched:
+            logging.getLogger(name).setLevel(logging.NOTSET)
+        assert logging.getLogger(watched[0]).getEffectiveLevel() > logging.INFO
+
+        runner._configure_logging()
+
+        for name in watched:
+            assert logging.getLogger(name).getEffectiveLevel() == logging.INFO, name
+        # nothing else becomes chatty
+        assert (
+            logging.getLogger("some.other.library").getEffectiveLevel()
+            == logging.WARNING
+        )
+        assert root.handlers, "a handler must exist or INFO records go nowhere"
+    finally:
+        root.handlers = saved.pop("__root_handlers__")
+        root.setLevel(saved.pop("__root_level__"))
+        for name, level in saved.items():
+            logging.getLogger(name).setLevel(level)
+
+
 def test_every_probe_cycle_leaves_one_line_of_positive_evidence(
     monkeypatch, tmp_path, capsys
 ) -> None:
