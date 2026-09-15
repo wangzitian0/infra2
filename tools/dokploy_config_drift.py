@@ -117,13 +117,26 @@ def _source_env_vars(dep: type[Deployer]) -> dict[str, str]:
 def expected_hash_at(
     dep: type[Deployer], c: Context, ref: str, env_vars: dict[str, str]
 ) -> tuple[str | None, list[str]]:
-    """(hash, missing_paths) — the config hash recomputed from `ref`'s content. missing_paths
-    are hash-input files that don't exist at `ref` (a structural change → can't compare)."""
+    """(hash, missing_paths) — the config hash recomputed from `ref`'s content.
+
+    missing_paths is the *structural* shortfall only: the compose file itself absent at
+    `ref`, or an input absent at `ref` that the checked-out tree does not have either. An
+    input present here but absent at `ref` was added after that release and is left out
+    of the comparison, not reported (see below)."""
     compose_path, artifact_paths, dep_paths = _hash_input_paths(dep, c)
     contents = contents_at_ref(ref, [compose_path, *artifact_paths, *dep_paths])
-    missing = [
+    absent = [
         p for p in (compose_path, *artifact_paths, *dep_paths) if p not in contents
     ]
+    # The input set is enumerated on the checked-out tree (main), the content at `ref`.
+    # A file that exists here but not at `ref` was added after the release: the deploy
+    # at `ref` never hashed it, so it is not an input of that release — dropping it is
+    # what makes the two hashes comparable. On 2026-09-15 a tool merged an hour after
+    # the promote (tools/pr_merge_gate.py, under platform/alerting's `tools/**` dep)
+    # turned the daily reconcile red as "4 input(s) absent at production/v1.1.82"
+    # with nothing drifted. Structural stays reserved for what really cannot be
+    # compared: the compose itself, or an input the tree no longer has either.
+    missing = [p for p in absent if p == compose_path or not (ROOT / p).is_file()]
     if compose_path in missing:
         return None, missing
     compose_content = contents[compose_path].decode("utf-8", "replace")
