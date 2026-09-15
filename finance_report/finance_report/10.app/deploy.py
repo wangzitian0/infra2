@@ -2,7 +2,7 @@ import sys
 
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.console import header, success, info, warning
-from libs.service_facets import PublicRouteFacet, SecretsFacet
+from libs.service_facets import ProbeFacet, PublicRouteFacet, SecretsFacet, SignalFacet
 from tools.openpanel_clients import openpanel_env
 
 shared_tasks = sys.modules.get("finance_report.10.app.shared")
@@ -36,6 +36,33 @@ class AppDeployer(Deployer):
     )
     service_port = 3000
     service_name = "frontend"
+
+    # Minute-tier internal probes, the layer the public routes cannot give: an edge
+    # failure and an app failure read the same from outside. Both containers sit on
+    # dokploy-network and answer from the runner (checked live 2026-09-15); the
+    # prefect worker exposes no HTTP and is covered by its own healthcheck.
+    probes = (
+        ProbeFacet(
+            name="finance-report-backend-http",
+            kind="http",
+            target="http://finance_report-backend${ENV_SUFFIX}:8000/health",
+            expected="200",
+        ),
+        ProbeFacet(
+            name="finance-report-frontend-http",
+            kind="http",
+            target="http://finance_report-frontend${ENV_SUFFIX}:3000/",
+            expected="200",
+        ),
+    )
+    signals = (
+        SignalFacet(
+            tier="minute",
+            type="alert",
+            consecutive_failures=3,
+            renotify_window_sec=1800,
+        ),
+    )
     telemetry_service_name = "finance-report-backend"
     telemetry_component = "backend"
 

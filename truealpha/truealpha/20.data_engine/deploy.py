@@ -9,7 +9,7 @@ from pathlib import Path
 from invoke.exceptions import CommandTimedOut
 from libs.console import error, success
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.service_facets import BackupFacet, SecretsFacet
+from libs.service_facets import BackupFacet, Exemption, SecretsFacet
 
 shared_tasks = sys.modules.get("truealpha.20.data_engine.shared")
 
@@ -51,6 +51,16 @@ class DataEngineDeployer(Deployer):
 
     subdomain = None
     service_port = 3001
+    # No network probe on purpose: the stack runs on the host network and the dagster
+    # webserver binds 127.0.0.1, unreachable from the probe runner's network. Its
+    # container healthcheck and the breakdown watch are the liveness signal.
+    exemptions = (
+        Exemption(
+            check_id="probes",
+            reason="host-network stack; dagster webserver binds 127.0.0.1 — covered by "
+            "the container healthcheck and the breakdown watch",
+        ),
+    )
     service_name = "dagster-webserver"
 
     # Values sourced from the independently released TrueAlpha artifact/runtime

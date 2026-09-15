@@ -1,7 +1,7 @@
 import sys
 
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.service_facets import BackupFacet, SecretsFacet
+from libs.service_facets import BackupFacet, ProbeFacet, SecretsFacet, SignalFacet
 
 shared_tasks = sys.modules.get("finance_report.01.postgres.shared")
 
@@ -31,6 +31,25 @@ class PostgresDeployer(Deployer):
     # No public domain (internal only)
     subdomain = None
     service_port = 5432
+
+    # Minute-tier liveness from the probe runner (TCP: the app's own credentials are
+    # not the runner's, so a protocol probe would only prove the password).
+    probes = (
+        ProbeFacet(
+            name="finance-report-postgres-tcp",
+            kind="tcp",
+            target="finance_report-postgres${ENV_SUFFIX}:5432",
+            expected="connected",
+        ),
+    )
+    signals = (
+        SignalFacet(
+            tier="minute",
+            type="alert",
+            consecutive_failures=3,
+            renotify_window_sec=1800,
+        ),
+    )
     service_name = "postgres"
 
     # Vault self-refresh facts (#542): the audit inventory derives from this
