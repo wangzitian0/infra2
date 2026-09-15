@@ -43,6 +43,11 @@ services:
       VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
       VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
       ENV: ${ENV}
+      # Cache-bust (#628): secrets.ctmpl is a single-file bind mount, so a checkout that
+      # rewrites it leaves the running agent on the old inode, and Compose only recreates
+      # a service whose resolved config changed. The hash covers the template, so a
+      # template edit recreates the agent instead of shipping as a silent no-op.
+      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
       # Required by secrets.ctmpl to render environment-suffixed dependency hostnames
       ENV_SUFFIX: ${ENV_SUFFIX:-}
     volumes:
