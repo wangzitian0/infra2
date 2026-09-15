@@ -53,6 +53,7 @@ secret 或 App source mutation，不产生线上 drift。
 
 | Date | Change |
 |---|---|
+| 2026-09-15 | Integrate reviewed SDK, OMCA and App snapshots; record released-wheel and installed-CLI proof, with the human interactive gate still explicit |
 | 2026-09-15 | Review all five refreshed repositories; map local architecture/proof entries, align SDK/OMCA ownership, and reject parent-repository fallback in checkout status |
 | 2026-07-16 | Phase 1: repository inventory, workspace preferences, read-only checker, and autonomy boundary |
 | 2026-07-16 | Phase 2: add root-level `oh-my-code-agent` submodule for future TUI management |

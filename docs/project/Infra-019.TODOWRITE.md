@@ -22,7 +22,7 @@
 - [x] Add read-only `harness status` for parent pin, checkout/remote head,
       ahead/behind, dirty state, and release identity; optional fetch changes refs only.
 - [x] Add an infra2-sdk-local contributor guide through independent SDK PR #31
-      (implementation and checks complete; integration awaits owner review).
+      (merged and released in v1.5.2; installed-artifact proof below).
 - [ ] Decide whether workspace preference changes need their own version identifier.
 - [ ] Add cross-repository compatibility matrix reporting from released evidence.
 - [ ] Archive Infra-019 after the selected follow-ups are complete or explicitly deferred.
@@ -57,7 +57,7 @@ The pre-existing root `handover.md` and OMCA working changes were retained.
 - [ ] Merge the independent reviewed changes and update the integrated snapshot after
   their applicable checks pass. No new SDK release or production deployment is implied.
 
-### OMCA evidence and limitations
+### Initial OMCA evidence and limitations (before repairs)
 
 The existing candidate `go run ./cmd/omca qualify tui --json` was exercised with no
 interactive/model session. Codex 0.153.4: no qualified Knowledge Pack; MCP and Skill
@@ -79,7 +79,7 @@ with SDK `manifests.main` requires an explicit compatibility proof first. TrueAl
 KG probes and domain manifests retain application policy. Structural checks do not
 prove either application's deployed behavior. No product issue is closed on this review.
 
-### Review delivery and proof
+### Initial review delivery and proof (superseded by continuation below)
 
 | Repository | Independent PR | Evidence / remaining boundary |
 | --- | --- | --- |
@@ -137,3 +137,70 @@ This extends the initial review above; it does not override app architecture own
 Remaining: finish current-head review/checks, merge eligible PRs, verify post-merge runs,
 and update parent snapshots only to reviewed main commits. Human-only host evidence
 must stay visibly incomplete until actually supplied. No production promotion is planned.
+
+## 2026-09-15 integrated acceptance evidence
+
+This section supersedes the initial review's pending states above. Shared structure means
+clear ownership, a local verification entry, a versioned consumption boundary, and
+independent delivery. It does not require matching App directory trees.
+
+### Delivered repository changes
+
+- infra2 [#699](https://github.com/wangzitian0/infra2/pull/699) merged as
+  `f0f687b4dfb9cdbb10345144baf52bc6f0e282e7`. Current-head reviews/threads and applicable
+  checks passed before merge; post-merge Infrastructure CI `34938241862` and Docs
+  `34938241871` passed. The shared inventory now points to each repository's actual
+  authority, and an empty submodule cannot masquerade as the parent Git repository.
+- SDK [#31](https://github.com/wangzitian0/infra2-sdk/pull/31) is released as `v1.5.2`
+  with the installed-artifact proof recorded above. Documentation/example
+  [#32](https://github.com/wangzitian0/infra2-sdk/pull/32) merged as
+  `3fecc8e48707a296f0f26315ba14106dd86f9e6b` after all ten checks and exact-head review.
+  Its post-merge CI `34939096142` passed.
+  The app-root readiness example proves healthy, unhealthy and missing dependency
+  outcomes using the released wheel; it requires no sibling repository source.
+- TrueAlpha [#821](https://github.com/wangzitian0/truealpha/pull/821) merged as
+  `e1cda5fbbc6665359e139cd9b331a032363b1b12`. Its public compatibility module delegates
+  environment semantics to the released SDK. Fourteen scoped tests and all applicable
+  remote checks passed. The subsequent reviewed main `a65e373a8f3c6900e2c926bcdda7afded6d26d9c`
+  includes this change; its CI `34937462324` passed after superseding the cancelled
+  earlier main run. The independently merged #825 restored MinIO acquisition.
+- OMCA [#91](https://github.com/wangzitian0/oh-my-code-agent/pull/91),
+  [#93](https://github.com/wangzitian0/oh-my-code-agent/pull/93), and
+  [#95](https://github.com/wangzitian0/oh-my-code-agent/pull/95) are merged.
+  The final main `fed892890cee650bd6798f467ba5813655a02c4a` passed post-merge CI
+  `34939043207`. Besides help and current-host compatibility, shell entry and direct
+  launch now preserve explicitly activated profiles and activation evidence. Failing-first
+  entrypoint tests cover both paths; incompatible state fails without resetting it.
+
+### Installed OMCA proof and outstanding human gate
+
+Built the reviewed main above and atomically installed it at `~/.local/bin/omca`, reporting
+`omca dev+fed8928`. SHA256:
+`ed75ccbb64c718e296503cfc8fefc50ecfe08cab9c0c6617a86c6b74ed39342b`.
+The prior binary is retained at `~/.local/bin/omca.before-foundation-review-20260915`.
+This is a pinned development build, not an invented release tag.
+
+Installed-binary `omca qualify tui --json` at `2026-09-15T06:55:19Z` reported:
+
+| Host | Knowledge pack | MCP isolation | Skills isolation | TUI/restart/model |
+|---|---|---|---|---|
+| Codex 0.153.4 | PASS | PASS | PASS: managed sentinel present, native sentinels absent | UNKNOWN |
+| Claude Code 2.1.267 | PASS | PASS: OMCA connected, native sentinel absent | UNKNOWN | UNKNOWN |
+
+Native configuration snapshots were unchanged; `interactiveAttempted=false` and
+`complete=false`. Exit 1 reflects the incomplete human gate. No model call was made.
+The JSON artifact is `/tmp/omca-fed8928-installed-qualification.json` on this workstation.
+The owner has been asked to run the documented human procedure from their own terminal.
+Full interactive usability remains unaccepted until that evidence exists.
+
+The original dirty OMCA checkout and root `handover.md` are preserved. Its reviewed code
+was integrated through isolated worktrees; the original checkout was not reset or
+overwritten. Parent gitlinks describe reviewed snapshots, not runtime dependencies.
+
+### Independent operational work
+
+Ops run `34938044492`, predating #699's merge, failed while importing the SDK through the
+Vault audit's registry dependency. This is independently tracked by
+[infra2 #703](https://github.com/wangzitian0/infra2/pull/703). It is not evidence of a
+deployed service outage, nor does this structure review claim a green production audit.
+No infrastructure apply or production promotion is part of this delivery.

@@ -47,6 +47,24 @@ contain shrink-only residue. TrueAlpha's issue and capability model remains inde
 SDK pins may differ between consumers: compatibility, not equal version strings, is
 the requirement. Neither App imports SDK source from the workspace checkout.
 
+## Reuse when starting an app
+
+| Need | Owner and reuse path |
+|---|---|
+| Environment tiers, runtime identity, dependency validation, HTTP/S3/Postgres/OTel adapters | Install a released `infra2-sdk` artifact; start from its standalone readiness example |
+| Business dependency names, required tiers, domain rules, routes and models | Define them in the app's own contracts and tests |
+| Infrastructure provisioning, secret delivery, deployment and promotion | Use infra2's published deployment interfaces and onboarding paths |
+| Coding-agent profiles, Skills/MCP selection and isolated launch | Use the independently built OMCA CLI; follow its host-version qualification procedure |
+
+Reuse a released contract where it removes duplicate semantics. Keep compatibility
+wrappers when an app's public API differs, and prove their behavior before replacement.
+Do not move app policy into a common package merely to make directory trees look alike.
+The SDK's installed-wheel smoke is an executable consumer example; OMCA's safe automatic
+qualification does not replace its human TUI/restart/model proof.
+
+Reviewed snapshot and acceptance evidence live in
+[Infra-019 TODOWRITE](../docs/project/Infra-019.TODOWRITE.md).
+
 ## Workspace Guides
 
 | Guide | Purpose |
