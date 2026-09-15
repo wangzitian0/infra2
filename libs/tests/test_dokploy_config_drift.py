@@ -299,3 +299,42 @@ def test_every_runtime_only_deployer_has_a_secret_free_source_contract() -> None
         checked.append(service_id)
 
     assert checked == ["platform/alerting", "truealpha/data_engine"]
+
+
+def test_an_input_added_after_the_release_is_not_a_structural_finding(
+    monkeypatch, tmp_path
+) -> None:
+    """2026-09-15: tools/pr_merge_gate.py merged an hour after production/v1.1.82 was
+    promoted; it matches platform/alerting's `tools/**` dependency, so the daily reconcile
+    reported `structural: 4 input(s) absent at production/v1.1.82` with zero drift. The
+    deploy at the release never hashed a file that did not exist yet."""
+    compose = "services:\n  x:\n    image: y\n"
+    newer = tmp_path / "libs" / "newer.py"
+    newer.parent.mkdir(parents=True)
+    newer.write_text("added after the tag\n", encoding="utf-8")
+
+    class Dep:
+        compose_path = "platform/x/compose.yaml"
+
+    monkeypatch.setattr(drift, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        drift,
+        "_hash_input_paths",
+        lambda _dep, _c: (
+            "platform/x/compose.yaml",
+            [],
+            ["libs/newer.py", "libs/gone.py"],
+        ),
+    )
+    monkeypatch.setattr(
+        drift,
+        "contents_at_ref",
+        lambda _ref, paths: {"platform/x/compose.yaml": compose.encode()},
+    )
+    expected, missing = drift.expected_hash_at(
+        Dep, None, "production/v1.1.82", {"ENV": "x"}
+    )
+    # libs/newer.py exists on the tree but not at the ref -> not an input of that release
+    # libs/gone.py exists nowhere -> a real structural finding
+    assert missing == ["libs/gone.py"]
+    assert expected == drift.config_hash_from_items(compose, {"ENV": "x"}, [], [])
