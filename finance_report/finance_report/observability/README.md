@@ -1,8 +1,7 @@
 # Finance Report — Observability config-as-code
 
 > **Purpose**: Checked-in SigNoz alert rules and dashboard for finance_report (#373).
-> **SSOT**: [docs/ssot/ops.observability.md](../../../docs/ssot/ops.observability.md) ·
-> [docs/ssot/ops.observability.md](../../../docs/ssot/ops.observability.md)
+> **SSOT**: [docs/ssot/ops.observability.md](../../../docs/ssot/ops.observability.md)
 
 This directory is the reviewable source of truth for the finance_report SigNoz
 objects. Definitions are JSON; provisioning is a post-merge `invoke` apply step
