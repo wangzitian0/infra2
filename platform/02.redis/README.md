@@ -64,7 +64,7 @@ path "secret/data/platform/{{env}}/redis" {
 - **Name**: `platform-redis${ENV_SUFFIX}`
 - **Image**: `redis:7-alpine`
 - **Port**: 6379 (internal only)
-- **Health check**: `redis-cli ping`
+- **Health check**: `. /secrets/.env && redis-cli -a "$PASSWORD" ping` (authenticated — an unauthenticated ping answers NOAUTH with exit 0 and reads as healthy)
 
 ## Used By
 
