@@ -203,6 +203,24 @@ def diagnose_failure(stderr: str, stdout: str = "") -> dict[str, str]:
     }
 
 
+VERDICT_MARKERS = ("✅", "❌", "⚠️")
+MAX_VERDICT_LINES = 12
+
+
+def verdict_lines(stdout: str, limit: int = MAX_VERDICT_LINES) -> list[str]:
+    """The deployer's own verdict lines — what libs.console prints as ✅ / ❌ / ⚠️
+    (`in service — 2 service(s) running and healthy`, `deployed with hash …`,
+    `not in service after deploy: …`). A green sync used to carry none of them
+    anywhere: the record said done and the runner said "sync completed", and the
+    proofs that ran in between were visible only on failure (#702 review)."""
+    lines: list[str] = []
+    for raw in stdout.splitlines():
+        line = raw.strip()
+        if line.startswith(VERDICT_MARKERS):
+            lines.append(line)
+    return lines[-limit:]
+
+
 @dataclass
 class ServiceSyncResult:
     service: str
@@ -212,10 +230,15 @@ class ServiceSyncResult:
     stdout: str = ""
     stderr: str = ""
 
+    @property
+    def verdict(self) -> list[str]:
+        return verdict_lines(self.stdout)
+
     def to_dict(self) -> dict:
         data = asdict(self)
         data["stdout"] = _tail_text(self.stdout)
         data["stderr"] = _tail_text(self.stderr)
+        data["verdict"] = self.verdict
         if not self.success and not self.skipped:
             data["diagnostic"] = diagnose_failure(self.stderr, self.stdout)
         return data
@@ -226,6 +249,7 @@ class ServiceSyncResult:
             "task": self.task,
             "success": self.success,
             "skipped": self.skipped,
+            "verdict": self.verdict,
         }
         if not self.success and not self.skipped:
             data["diagnostic"] = diagnose_failure(self.stderr, self.stdout)
@@ -648,6 +672,9 @@ def run_invoke_task(
         # name is kept for one release so a child at an older iac_ref still finds it.
         env_vars["VAULT_TOKEN"] = vault_root_token
         env_vars["VAULT_ROOT_TOKEN"] = vault_root_token
+    # The child prints through rich, which wraps at 80 columns when stdout is a pipe;
+    # a wrapped verdict line is a fragment. Give it room.
+    env_vars.setdefault("COLUMNS", "200")
     logger.info("Invoke child env: %s", safe_invoke_env_summary(env_vars))
 
     try:
@@ -847,6 +874,8 @@ def sync_services(
 
             if service_result.success:
                 logger.info(f"✅ {service}: sync completed")
+                for line in service_result.verdict:
+                    logger.info(f"   {service}: {line}")
             else:
                 logger.error(f"❌ {service}: sync failed")
                 diagnostic = diagnose_failure(

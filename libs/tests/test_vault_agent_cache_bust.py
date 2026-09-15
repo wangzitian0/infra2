@@ -30,10 +30,6 @@ COMPOSE_ROOTS = ("bootstrap", "platform", "finance_report", "truealpha")
 # Either the Deployer's hash or a service's own configuration digest recreates the agent.
 CACHE_BUST_VARIABLES = ("IAC_CONFIG_HASH", "TRUEALPHA_CONFIGURATION_SHA256")
 
-# A push to main under bootstrap/06.iac_runner/** rebuilds the runner (deploy.yml), which
-# AGENTS.md reserves for per-head owner approval; its agent is covered by a separate PR.
-PENDING_OWNER_APPROVAL = frozenset({"bootstrap/06.iac_runner/compose.yaml"})
-
 # Promote-tier app compose files: the ones libs.deploy.promote.deploy() governs for
 # finance_report/app and truealpha/app, fixed envs and preview alike. Their app services
 # source the rendered file at boot, so they must be recreated alongside the agent.
@@ -75,13 +71,11 @@ VAULT_AGENT_COMPOSE_FILES = _vault_agent_composes()
 def test_every_vault_agent_is_discovered():
     assert len(VAULT_AGENT_COMPOSE_FILES) >= 16, VAULT_AGENT_COMPOSE_FILES
     assert set(PROMOTE_TIER_COMPOSE_FILES) <= set(VAULT_AGENT_COMPOSE_FILES)
-    assert PENDING_OWNER_APPROVAL <= set(VAULT_AGENT_COMPOSE_FILES)
+    assert "bootstrap/06.iac_runner/compose.yaml" in VAULT_AGENT_COMPOSE_FILES
 
 
 @pytest.mark.parametrize("relative_path", VAULT_AGENT_COMPOSE_FILES)
 def test_vault_agent_is_recreated_when_its_template_changes(relative_path):
-    if relative_path in PENDING_OWNER_APPROVAL:
-        pytest.xfail("runner compose change needs per-head owner approval (#628)")
     environment = (
         _services(ROOT / relative_path)["vault-agent"].get("environment") or {}
     )
