@@ -108,6 +108,26 @@ def test_event_policy_waits_for_a_review_of_the_head_then_settles_briefly():
         gate.evaluate(_facts(), now=NOW, policy="vibes")
 
 
+def test_either_takes_the_review_early_and_keeps_the_clock_as_the_bound():
+    head = "abcdef0123456789"
+    reviewed = _facts(
+        head_sha=head,
+        last_push_at=NOW - 60,
+        reviews=(("copilot-pull-request-reviewer", head, NOW - 200),),
+    )
+    assert gate.evaluate(reviewed, now=NOW, policy="either").ready  # 200 s after review
+    unreviewed = _facts(head_sha=head, last_push_at=NOW - 11 * 60)
+    pending = gate.evaluate(unreviewed, now=NOW, policy="either")
+    assert not pending.ready and pending.quiet_remaining_seconds == 60
+    assert (
+        "no automated review" in pending.reasons[0]
+        and "quiet period" in pending.reasons[0]
+    )
+    assert gate.evaluate(
+        unreviewed, now=NOW + 60, policy="either"
+    ).ready  # the clock bound
+
+
 def test_the_clock_policy_ignores_reviews():
     facts = _facts(
         last_push_at=NOW - 60,

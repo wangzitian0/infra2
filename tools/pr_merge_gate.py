@@ -22,6 +22,8 @@ Two policies for the settling condition:
   On 2026-09-15 Copilot reviewed each first push within 2–3 minutes and never re-reviewed
   a fix-up push on its own, so the clock waited on nothing; ``--request-review`` asks
   Copilot for a review of the head when none exists.
+- ``either``: whichever of the two is satisfied first — the review lets a head go early,
+  the clock stays the upper bound when no automated review ever arrives.
 """
 
 from __future__ import annotations
@@ -249,32 +251,44 @@ def evaluate(
             f"{facts.review_threads_total} review threads, only the first "
             f"{MAX_REVIEW_THREADS} were read: resolve or evaluate by hand"
         )
-    # Round up: a fractional second still inside the window is inside the window.
-    remaining = 0
-    if policy == "clock":
-        remaining = math.ceil(facts.last_push_at + quiet_minutes * 60 - now)
-        if remaining > 0:
-            reasons.append(
-                f"head pushed {int(now - facts.last_push_at)}s ago; quiet period has "
-                f"{remaining}s to run"
-            )
-    elif policy == "event":
-        automated = [r for r in facts.reviews_on_head() if r[0] in AUTOMATED_REVIEWERS]
-        if not automated:
-            reasons.append(
-                f"no automated review on head {facts.head_sha[:7]} yet "
-                "(--request-review asks Copilot for one)"
-            )
-        else:
-            reviewed_at = max(r[2] for r in automated)
-            remaining = math.ceil(reviewed_at + settle_minutes * 60 - now)
-            if remaining > 0:
-                reasons.append(
-                    f"head reviewed {int(now - reviewed_at)}s ago; settling for "
-                    f"{remaining}s more"
-                )
-    else:
+    if policy not in ("clock", "event", "either"):
         raise ValueError(f"unknown policy {policy!r}")
+    # Round up: a fractional second still inside the window is inside the window.
+    clock_remaining = math.ceil(facts.last_push_at + quiet_minutes * 60 - now)
+    clock_reason = (
+        f"head pushed {int(now - facts.last_push_at)}s ago; quiet period has "
+        f"{clock_remaining}s to run"
+    )
+    automated = [r for r in facts.reviews_on_head() if r[0] in AUTOMATED_REVIEWERS]
+    if automated:
+        reviewed_at = max(r[2] for r in automated)
+        event_remaining = math.ceil(reviewed_at + settle_minutes * 60 - now)
+        event_reason = (
+            f"head reviewed {int(now - reviewed_at)}s ago; settling for "
+            f"{event_remaining}s more"
+        )
+    else:
+        event_remaining = None  # no review: the event never happened
+        event_reason = (
+            f"no automated review on head {facts.head_sha[:7]} yet "
+            "(--request-review asks Copilot for one)"
+        )
+    remaining = 0
+    if policy == "clock" and clock_remaining > 0:
+        remaining = clock_remaining
+        reasons.append(clock_reason)
+    elif policy == "event" and (event_remaining is None or event_remaining > 0):
+        remaining = event_remaining or 0
+        reasons.append(event_reason)
+    elif policy == "either":
+        event_ok = event_remaining is not None and event_remaining <= 0
+        if clock_remaining > 0 and not event_ok:
+            remaining = (
+                clock_remaining
+                if event_remaining is None
+                else min(clock_remaining, event_remaining)
+            )
+            reasons.append(f"{event_reason}; {clock_reason}")
     return Verdict(
         ready=not reasons,
         owner_required=owner,
@@ -305,10 +319,10 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
     )
     parser.add_argument(
         "--policy",
-        choices=("clock", "event"),
+        choices=("clock", "event", "either"),
         default="clock",
-        help="settling rule: 12 min after the push (clock) or 3 min after an automated "
-        "review of the head (event)",
+        help="settling rule: 12 min after the push (clock), 3 min after an automated "
+        "review of the head (event), or whichever comes first (either)",
     )
     parser.add_argument(
         "--request-review",
