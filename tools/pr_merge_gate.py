@@ -13,6 +13,17 @@ each time because the timing was judged by eye between other work. This tool jud
 
 Exit codes: 0 ready (or merged), 1 not yet (a check pending, a thread open, the head
 still settling), 2 needs the owner (protected file, deploy-triggering path, wrong base).
+
+Two policies for the settling condition:
+
+- ``clock`` (default, AGENTS.md as written): twelve minutes since the last push.
+- ``event``: an automated review has been submitted on the *current* head and three
+  minutes have passed since that review — the thing the clock was waiting for, measured.
+  On 2026-09-15 Copilot reviewed each first push within 2–3 minutes and never re-reviewed
+  a fix-up push on its own, so the clock waited on nothing; ``--request-review`` asks
+  Copilot for a review of the head when none exists.
+- ``either``: whichever of the two is satisfied first — the review lets a head go early,
+  the clock stays the upper bound when no automated review ever arrives.
 """
 
 from __future__ import annotations
@@ -30,6 +41,10 @@ from datetime import datetime
 
 DEFAULT_REPO = "wangzitian0/infra2"
 QUIET_MINUTES = 12
+SETTLE_MINUTES = 3  # event policy: after the review of the head, not after the push
+# GitHub's Copilot pull-request reviewer (a global bot id, the same in every repository).
+COPILOT_BOT_ID = "BOT_kgDOCnlnWA"
+AUTOMATED_REVIEWERS = frozenset({"copilot-pull-request-reviewer"})
 # AGENTS.md: protected files need the owner's approval of the head that changes them.
 PROTECTED_FILES = ("AGENTS.md", "CLAUDE.md")
 # A push to main under these paths deploys (deploy.yml: the runner rebuild) — a merge
@@ -62,6 +77,12 @@ class HeadFacts:
     checks: tuple[tuple[str, str], ...]  # (name, gh bucket or state)
     unresolved_threads: int
     review_threads_total: int = 0
+    node_id: str = ""
+    # (reviewer login, commit reviewed, submitted epoch) — a review pins a head
+    reviews: tuple[tuple[str, str, float], ...] = ()
+
+    def reviews_on_head(self) -> tuple[tuple[str, str, float], ...]:
+        return tuple(r for r in self.reviews if r[1] == self.head_sha)
 
 
 @dataclass
@@ -100,7 +121,7 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
                 "--repo",
                 repo,
                 "--json",
-                "number,state,isDraft,baseRefName,headRefOid,files,commits",
+                "number,state,isDraft,baseRefName,headRefOid,files,commits,id,reviews",
             ]
         )
     )
@@ -149,6 +170,31 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
         ),
         unresolved_threads=sum(1 for n in nodes if not n.get("isResolved")),
         review_threads_total=int(review_threads.get("totalCount") or len(nodes)),
+        node_id=str(view.get("id") or ""),
+        reviews=tuple(
+            (
+                str((r.get("author") or {}).get("login") or ""),
+                str((r.get("commit") or {}).get("oid") or ""),
+                _epoch(r["submittedAt"]) if r.get("submittedAt") else 0.0,
+            )
+            for r in view.get("reviews") or []
+        ),
+    )
+
+
+def request_copilot_review(facts: HeadFacts, *, gh: Runner = _gh) -> None:
+    """Ask Copilot to review the current head (it re-reviews a fix-up push only on request)."""
+    if not facts.node_id:
+        raise RuntimeError("pull request node id unknown; cannot request a review")
+    gh(
+        [
+            "api",
+            "graphql",
+            "-f",
+            "query=mutation{requestReviews(input:{pullRequestId:%s,botIds:[%s],union:true})"
+            "{pullRequest{number}}}"
+            % (json.dumps(facts.node_id), json.dumps(COPILOT_BOT_ID)),
+        ]
     )
 
 
@@ -157,7 +203,12 @@ def _deploy_triggering(path: str) -> bool:
 
 
 def evaluate(
-    facts: HeadFacts, *, now: float, quiet_minutes: int = QUIET_MINUTES
+    facts: HeadFacts,
+    *,
+    now: float,
+    quiet_minutes: int = QUIET_MINUTES,
+    policy: str = "clock",
+    settle_minutes: int = SETTLE_MINUTES,
 ) -> Verdict:
     """The rule, in one place. Every failed condition is a reason; owner-only
     conditions are named as such so a caller never waits on something time cannot fix."""
@@ -200,13 +251,48 @@ def evaluate(
             f"{facts.review_threads_total} review threads, only the first "
             f"{MAX_REVIEW_THREADS} were read: resolve or evaluate by hand"
         )
+    if policy not in ("clock", "event", "either"):
+        raise ValueError(f"unknown policy {policy!r}")
     # Round up: a fractional second still inside the window is inside the window.
-    remaining = math.ceil(facts.last_push_at + quiet_minutes * 60 - now)
-    if remaining > 0:
-        reasons.append(
-            f"head pushed {int(now - facts.last_push_at)}s ago; quiet period has "
-            f"{remaining}s to run"
+    clock_remaining = math.ceil(facts.last_push_at + quiet_minutes * 60 - now)
+    clock_reason = (
+        f"head pushed {int(now - facts.last_push_at)}s ago; quiet period has "
+        f"{clock_remaining}s to run"
+    )
+    # A review without a submission time is not a submitted review (r[2] == 0.0 would
+    # read as "settled since the epoch"): only timestamped automated reviews count.
+    automated = [
+        r for r in facts.reviews_on_head() if r[0] in AUTOMATED_REVIEWERS and r[2] > 0
+    ]
+    if automated:
+        reviewed_at = max(r[2] for r in automated)
+        event_remaining = math.ceil(reviewed_at + settle_minutes * 60 - now)
+        event_reason = (
+            f"head reviewed {int(now - reviewed_at)}s ago; settling for "
+            f"{event_remaining}s more"
         )
+    else:
+        event_remaining = None  # no review: the event never happened
+        event_reason = (
+            f"no automated review on head {facts.head_sha[:7]} yet "
+            "(--request-review asks Copilot for one)"
+        )
+    remaining = 0
+    if policy == "clock" and clock_remaining > 0:
+        remaining = clock_remaining
+        reasons.append(clock_reason)
+    elif policy == "event" and (event_remaining is None or event_remaining > 0):
+        remaining = event_remaining or 0
+        reasons.append(event_reason)
+    elif policy == "either":
+        event_ok = event_remaining is not None and event_remaining <= 0
+        if clock_remaining > 0 and not event_ok:
+            remaining = (
+                clock_remaining
+                if event_remaining is None
+                else min(clock_remaining, event_remaining)
+            )
+            reasons.append(f"{event_reason}; {clock_reason}")
     return Verdict(
         ready=not reasons,
         owner_required=owner,
@@ -220,7 +306,7 @@ def render(facts: HeadFacts, verdict: Verdict) -> str:
     if verdict.ready:
         return (
             f"{head}: mergeable under session authority — checks green "
-            f"({len(facts.checks)}), threads resolved, quiet period elapsed, "
+            f"({len(facts.checks)}), threads resolved, settled, "
             "no protected or deploy-triggering paths"
         )
     kind = "needs the owner" if verdict.owner_required else "not yet"
@@ -235,13 +321,32 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
     parser.add_argument(
         "--merge", action="store_true", help="squash-merge when the verdict is ready"
     )
+    parser.add_argument(
+        "--policy",
+        choices=("clock", "event", "either"),
+        default="clock",
+        help="settling rule: 12 min after the push (clock), 3 min after an automated "
+        "review of the head (event), or whichever comes first (either)",
+    )
+    parser.add_argument(
+        "--request-review",
+        action="store_true",
+        help="ask Copilot to review the head when no automated review of it exists",
+    )
     parser.add_argument("--json", action="store_true", help="machine-readable verdict")
     args = parser.parse_args(argv)
 
     from libs.console import error, success, warning
 
     facts = collect(args.number, repo=args.repo, gh=gh)
-    verdict = evaluate(facts, now=now(), quiet_minutes=args.quiet_minutes)
+    if args.request_review and not any(
+        r[0] in AUTOMATED_REVIEWERS and r[2] > 0 for r in facts.reviews_on_head()
+    ):
+        request_copilot_review(facts, gh=gh)
+        warning(f"#{facts.number}: Copilot review requested on {facts.head_sha[:7]}")
+    verdict = evaluate(
+        facts, now=now(), quiet_minutes=args.quiet_minutes, policy=args.policy
+    )
     if args.json:
         print(
             json.dumps(
@@ -252,6 +357,7 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
                     "owner_required": verdict.owner_required,
                     "reasons": verdict.reasons,
                     "quiet_remaining_seconds": verdict.quiet_remaining_seconds,
+                    "policy": args.policy,
                 }
             )
         )
