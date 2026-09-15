@@ -151,14 +151,16 @@ def test_every_provided_by_names_a_store_backed_field_of_that_provider() -> None
             )
 
 
-def test_the_registry_table_is_readable_without_the_sdk():
+def test_the_registry_table_is_readable_without_the_sdk() -> None:
     """The ops-checks vault audit installs no infra2_sdk; it reads SERVICES through
     libs.vault_self_refresh_audit to tell preview stacks apart (#701) and went red on
     `ModuleNotFoundError: infra2_sdk` the first time (run 34938044492). The table is data;
     only manifest loading needs the SDK."""
+    import os
     import subprocess
     import sys
 
+    root = Path(__file__).resolve().parents[2]
     code = (
         "import sys\n"
         "for name in ('infra2_sdk', 'infra2_sdk.runtime', 'infra2_sdk.runtime.config_schema'):\n"
@@ -171,7 +173,8 @@ def test_the_registry_table_is_readable_without_the_sdk():
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
-        cwd=Path(__file__).resolve().parents[2],
+        cwd=root,
+        env={**os.environ, "PYTHONPATH": str(root)},
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.split() == [str(len(SERVICES)), "2"]
