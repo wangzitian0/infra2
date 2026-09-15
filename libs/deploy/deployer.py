@@ -779,29 +779,7 @@ class Deployer:
         from libs.const import GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH
 
         # Resolve branch dynamically to support deploying non-main commits/tags
-        branch = GITHUB_BRANCH
-        try:
-            import subprocess
-
-            tag_res = subprocess.run(
-                ["git", "describe", "--tags", "--exact-match"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if tag_res.returncode == 0 and tag_res.stdout.strip():
-                branch = tag_res.stdout.strip()
-            else:
-                sha_res = subprocess.run(
-                    ["git", "rev-parse", "HEAD"],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                if sha_res.returncode == 0 and sha_res.stdout.strip():
-                    branch = sha_res.stdout.strip()
-        except Exception:
-            pass
+        branch = cls._checkout_ref() or GITHUB_BRANCH
 
         e = cls.env()
         header(f"{cls.service} composing", "Deploying via Dokploy API (GitHub)")
@@ -956,6 +934,129 @@ class Deployer:
 
         success(f"Deployed {cls.service} (composeId: {compose_id})")
         return compose_id
+
+    @classmethod
+    def _checkout_ref(cls) -> str | None:
+        """The ref Dokploy is told to check out: the exact tag on HEAD, else HEAD's sha."""
+        import subprocess
+
+        for argv in (
+            ["git", "describe", "--tags", "--exact-match"],
+            ["git", "rev-parse", "HEAD"],
+        ):
+            try:
+                result = subprocess.run(
+                    argv, capture_output=True, text=True, check=False
+                )
+            except OSError:
+                return None
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+        return None
+
+    @classmethod
+    def _checkout_sha(cls, ref: str) -> str | None:
+        """What `ref` resolves to here; None when this checkout cannot resolve it."""
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--verify", f"{ref}^{{commit}}"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return None
+        return result.stdout.strip() if result.returncode == 0 else None
+
+    # A deploy Dokploy reports done still has to leave the stack in service before it
+    # is reported as a success (#629, #691, #698). Health checks that are still
+    # starting get this long; a missing or exited container is a verdict at once.
+    IN_SERVICE_DEADLINE_SECONDS = 180
+    IN_SERVICE_INTERVAL_SECONDS = 5
+
+    @classmethod
+    def verify_in_service(cls, c: "Context", compose_id: str) -> str | None:
+        """The containers the deploy left behind, not the record Dokploy wrote about it.
+
+        Two proofs, read on the host over ssh (the same channel `check_service` and the
+        secret-consumer restart use), both fail-closed:
+
+        - identity: the compose project's checkout (`/etc/dokploy/compose/<appName>/code`)
+          is at the ref this deploy pinned — a clone that failed after the record was
+          created leaves prod on the previous code with a green receipt (#629);
+        - service: every service the compose declares a healthcheck for has a running,
+          not-unhealthy container. `Created` (a dependency never became healthy, #698),
+          exited, restarting, or absent (#691) is a failure; `health: starting` is waited
+          on up to IN_SERVICE_DEADLINE_SECONDS.
+
+        Returns an error string to fail the deploy, None to pass. Skipped with a warning
+        when VPS_HOST is unset (no host to ask).
+        """
+        from libs.deploy.in_service import (
+            DOCKER_PS_FORMAT,
+            expected_running_services,
+            in_service_verdict,
+            parse_docker_ps,
+        )
+        from libs.dokploy import get_dokploy
+
+        e = cls.env()
+        host = e.get("VPS_HOST")
+        if not host:
+            warning(f"{cls.service}: VPS_HOST unset; skipping the in-service check")
+            return None
+        ssh_user = e.get("VPS_SSH_USER") or "root"
+        domain = e.get("INTERNAL_DOMAIN")
+        record = get_dokploy(host=f"cloud.{domain}" if domain else None).get_compose(
+            compose_id
+        )
+        project = str(record.get("appName") or "").strip()
+        if not project:
+            return f"Dokploy compose {compose_id} reports no appName; its containers cannot be found"
+
+        def on_host(command: str) -> Any:
+            return c.run(
+                f"ssh {ssh_user}@{host} {shlex.quote(command)}", hide=True, warn=True
+            )
+
+        pinned = cls._checkout_ref()
+        expected_sha = cls._checkout_sha(pinned) if pinned else None
+        if expected_sha:
+            head = on_host(f"git -C /etc/dokploy/compose/{project}/code rev-parse HEAD")
+            deployed_sha = head.stdout.strip() if head.ok else ""
+            if deployed_sha != expected_sha:
+                return (
+                    f"Dokploy's checkout for {cls.service} is at "
+                    f"{deployed_sha[:12] or 'no readable HEAD'} but this deploy pinned "
+                    f"{pinned} ({expected_sha[:12]}); the record reports done on a stale clone"
+                )
+        else:
+            warning(
+                f"{cls.service}: cannot resolve the pinned ref here; identity unchecked"
+            )
+
+        expected = expected_running_services(cls.get_compose_content(c))
+        if not expected:
+            return None
+        listing = (
+            "docker ps -a --filter "
+            f"label=com.docker.compose.project={shlex.quote(project)} "
+            f"--format {shlex.quote(DOCKER_PS_FORMAT)}"
+        )
+        deadline = time.monotonic() + cls.IN_SERVICE_DEADLINE_SECONDS
+        while True:
+            result = on_host(listing)
+            if not result.ok:
+                return f"could not list {project}'s containers on {host}: {result.stderr.strip() or 'docker ps failed'}"
+            verdict = in_service_verdict(expected, parse_docker_ps(result.stdout))
+            if verdict.ok:
+                success(f"{cls.service}: in service — {verdict.message}")
+                return None
+            if not verdict.settling or time.monotonic() >= deadline:
+                return verdict.message
+            time.sleep(cls.IN_SERVICE_INTERVAL_SECONDS)
 
     @classmethod
     def _deploy_compose_with_record_check(
@@ -1693,6 +1794,19 @@ class Deployer:
             return {
                 "action": "failed",
                 "details": f"Runtime verification failed: {runtime_error}",
+            }
+
+        # The record said done and the env carries the hash; now the containers
+        # (#629, #691, #698): a deploy is not a success until the stack is in service.
+        try:
+            in_service_error = cls.verify_in_service(c, compose_id)
+        except Exception as exc:  # noqa: BLE001 - the proof is fail-closed, never a crash.
+            in_service_error = f"could not verify: {exc}"
+        if in_service_error:
+            error(f"{cls.service}: not in service after deploy: {in_service_error}")
+            return {
+                "action": "failed",
+                "details": f"Not in service after deploy: {in_service_error}",
             }
 
         success(f"{cls.service}: deployed with hash {local_hash}")

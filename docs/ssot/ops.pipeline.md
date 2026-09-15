@@ -275,6 +275,14 @@ identity。
 **Dokploy 接受 deploy 请求 ≠ runtime 真变了**:每次 generic compose deploy 后,Deployer 记录现有 deployment IDs,
 要求出现新的 `running`/`done` 记录,`compose.deploy` 为 no-op 时用 `compose.redeploy` 重试一次,两次都没新记录则 sync 失败。
 
+**记录 `done` ≠ 服务在线**(#629 / #691 / #698):record 到达终态、env 带上 hash 之后,Deployer 还要在宿主机上
+证明两件事,任一不成立则 sync 失败:(1) 身份——Dokploy 该 compose 的 checkout
+(`/etc/dokploy/compose/<appName>/code`)HEAD 等于本次 deploy 钉住的 ref,clone 在 record 建立后失败会留下
+旧代码 + 绿色回执;(2) 在线——compose 里每个声明了 `healthcheck` 的服务都有一个 `running` 且非 `unhealthy`
+的容器;`Created`(依赖没健康)、exited、restarting、缺失都是结论而非等待,只有 `health: starting`
+会等到 `IN_SERVICE_DEADLINE_SECONDS`。哪些服务必须在线由 compose 文件自己回答:长驻服务都有 healthcheck,
+一次性任务(authentik `token-init`、clickhouse init、signoz `schema-migrator`)没有。
+
 ### 5.4 Env × Stage Result Contract
 
 `infra2_sdk.delivery` 拥有 CI/CD、route canary、watchdog、probe 共享的稀疏 Env×Stage 证据 schema；
