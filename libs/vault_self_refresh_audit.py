@@ -44,6 +44,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+import functools
 import json
 import os
 import re
@@ -151,6 +152,13 @@ class VaultService:
     # (#526/#542) optional vault:true fields reported (never failed) on
     # populated-ness — formerly the OPTIONAL_INERT_FIELD_WATCHLIST const.
     optional_inert_fields: tuple[str, ...] = ()
+    # A preview alias stack (libs.secrets_registry marks it ``preview``). Its containers
+    # carry a per-alias suffix (-branch-main, -pr-N) that the fixed-environment audit
+    # cannot resolve: ``${ENV_SUFFIX}`` resolved per audited env names the fixed stack's
+    # containers instead, so every check measured the wrong stack under the preview's
+    # name — trivially green until the template content check (#692) compared the
+    # preview template against the fixed agent. The live audit reports it as skipped.
+    ephemeral: bool = False
 
     @property
     def auth_env_keys(self) -> tuple[str, ...]:
@@ -254,7 +262,20 @@ def _vault_service_from_facet(meta, facet) -> VaultService:
         auth_method=facet.auth_method,
         mount_exempt_containers=tuple(facet.mount_exempt_containers),
         optional_inert_fields=tuple(facet.optional_inert_fields),
+        ephemeral=_is_preview_stack(compose_dir),
     )
+
+
+@functools.lru_cache(maxsize=1)
+def _preview_stack_dirs() -> frozenset[str]:
+    """The stack directories the registry declares as previews (source_env set)."""
+    from libs.secrets_registry import SERVICES
+
+    return frozenset(service.directory for service in SERVICES if service.preview)
+
+
+def _is_preview_stack(compose_dir: str) -> bool:
+    return compose_dir in _preview_stack_dirs()
 
 
 def inventory_ids_not_in_production() -> frozenset[str]:
@@ -401,6 +422,24 @@ def classify_token(
         "P0",
         "Vault app token is valid, renewable, and above TTL floor",
         lookup,
+    )
+
+
+PREVIEW_STACK_SKIPPED = (
+    "preview alias stack: its containers carry a per-alias suffix (-branch-main, -pr-N) "
+    "this fixed-environment audit cannot resolve, so it is not measured here; the preview "
+    "lifecycle verifies each alias on deploy"
+)
+
+
+def _preview_stack_skipped(service: VaultService) -> CheckResult:
+    return _result(
+        service,
+        "preview-stack",
+        "info",
+        "P3",
+        PREVIEW_STACK_SKIPPED,
+        {"compose_path": service.compose_path},
     )
 
 
@@ -709,6 +748,9 @@ def audit_from_observations(
     results: list[CheckResult] = []
     observed_services = observations.get("services", {})
     for service in services:
+        if service.ephemeral:
+            results.append(_preview_stack_skipped(service))
+            continue
         obs = observed_services.get(service.id, {})
         env_text = str(obs.get("dokploy_env", ""))
         lookup = obs.get("token_lookup")
@@ -800,6 +842,9 @@ def collect_live_observations(
     client = get_dokploy(host=dokploy_host)
     observations: dict[str, Any] = {"services": {}}
     for service in services:
+        if service.ephemeral:
+            observations["services"][service.id] = {"skipped": PREVIEW_STACK_SKIPPED}
+            continue
         compose = client.find_compose_by_name(
             service.dokploy_service,
             project_name=service.project,
