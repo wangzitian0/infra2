@@ -47,10 +47,12 @@ The pre-existing root `handover.md` and OMCA working changes were retained.
 - [x] An empty optional submodule could be reported/fetched as its parent repository.
   Verify the Git top-level before observation; a real Git fixture proves the failure.
 - [x] TrueAlpha duplicated the SDK tier enum and rejected canonical tier names.
-  Independent change #820 adopts the existing released enum/parser through its public
+  Independent [TrueAlpha #820](https://github.com/wangzitian0/truealpha/issues/820)
+  change adopts the existing released enum/parser through its public
   compatibility import path; dependency instances remain app-owned.
 - [x] Finance SDK wheel coordinates were hand-maintained in three workflows.
-  Independent #2004 change reads the generated backend lock and checks its agreement
+  Independent [Finance Report #2004](https://github.com/wangzitian0/finance_report/issues/2004)
+  change reads the generated backend lock and checks its agreement
   with the dependency declaration; checksum enforcement stays at acquisition.
 - [x] SDK silently ignored missing/nonmapping named override tables. Independent SDK
   patch rejects them before writing a manifest, with failing-first regression tests.
@@ -115,7 +117,7 @@ This extends the initial review above; it does not override app architecture own
 - OMCA #91 merged as `a241446c430cb088092fc526c8ba59e618f80fa7`; post-merge CI passed.
   The original dirty OMCA checkout remains untouched. Candidate work is isolated in a
   separate worktree and submitted as [#93](https://github.com/wangzitian0/oh-my-code-agent/pull/93).
-- Codex 0.153.4 rejected the old generated approval setting. #93 adopts the documented
+- Codex 0.153.4 rejected the old generated approval setting. OMCA #93 adopts the documented
   untrusted-project migration with the existing read-only sandbox default, and versions
   both bootstrap/full-generation cache identities. Real safe introspection now proves
   OMCA MCP inclusion, repository Skill inclusion, native sentinel exclusion, and unchanged
@@ -123,10 +125,13 @@ This extends the initial review above; it does not override app architecture own
   race tests and lint pass; coverage is 80.4%. Human TUI/restart/model proof and Claude
   Skill inventory remain UNKNOWN; this does not establish full interactive MVP acceptance.
 - TrueAlpha #821 was rebased onto main including the independently delivered MinIO
-  mirror fix #825. All applicable checks passed at `50bee8a`; a subsequent review nit
+  mirror fix [TrueAlpha #825](https://github.com/wangzitian0/truealpha/pull/825).
+  All applicable checks passed at `50bee8a`; a subsequent review nit
   is being fixed and requires another current-head CI/review pass.
 - Finance #2036 now also restores both MinIO server/client acquisition through immutable
-  upstream Quay artifacts under #2037. Its existing toolchain gate now covers each CI
+  upstream Quay artifacts under
+  [Finance Report #2037](https://github.com/wangzitian0/finance_report/issues/2037).
+  Its existing toolchain gate now covers each CI
   acquisition job and preview Compose. Six drift mutations failed against the old guard;
   all 14 toolchain tests and static preflight pass after the repair. Remote CI must prove
   actual image acquisition because Docker is unavailable in the local workspace.
@@ -163,7 +168,8 @@ independent delivery. It does not require matching App directory trees.
   environment semantics to the released SDK. Fourteen scoped tests and all applicable
   remote checks passed. The subsequent reviewed main `a65e373a8f3c6900e2c926bcdda7afded6d26d9c`
   includes this change; its CI `34937462324` passed after superseding the cancelled
-  earlier main run. The independently merged #825 restored MinIO acquisition.
+  earlier main run. The independently merged
+  [TrueAlpha #825](https://github.com/wangzitian0/truealpha/pull/825) restored MinIO acquisition.
 - OMCA [#91](https://github.com/wangzitian0/oh-my-code-agent/pull/91),
   [#93](https://github.com/wangzitian0/oh-my-code-agent/pull/93), and
   [#95](https://github.com/wangzitian0/oh-my-code-agent/pull/95) are merged.
@@ -180,7 +186,11 @@ independent delivery. It does not require matching App directory trees.
   the version-preserving immutable MinIO mirror repair; mutation tests cover both
   acquisition jobs and preview Compose. Main CI is
   [run 34939649716](https://github.com/wangzitian0/finance_report/actions/runs/34939649716).
-  This closes acquisition incident #2037; deployment acceptance #2004 remains open.
+  This closes acquisition incident
+  [Finance Report #2037](https://github.com/wangzitian0/finance_report/issues/2037).
+  The broader SDK bump and dispatch-correlation proof in
+  [Finance Report #2004](https://github.com/wangzitian0/finance_report/issues/2004)
+  remains separately tracked; this change delivers its single-source pin scope.
 
 The integrated development pins are SDK `3fecc8e`, OMCA `fed8928`, TrueAlpha `a65e373`,
 and Finance Report `39e8ecf0`. Each full commit is identified above. The parent integration
@@ -296,7 +306,7 @@ overwritten. Parent gitlinks describe reviewed snapshots, not runtime dependenci
 
 ### Independent operational work
 
-Ops run `34938044492`, predating #699's merge, failed while importing the SDK through the
+Ops run `34938044492`, predating infra2 #699's merge, failed while importing the SDK through the
 Vault audit's registry dependency. The independent
 [infra2 #703](https://github.com/wangzitian0/infra2/pull/703) merged as `b6c7f239`;
 the Vault self-refresh audit in
