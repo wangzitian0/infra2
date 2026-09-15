@@ -1,6 +1,6 @@
 # Infra-016: CI Gate Inventory — coordinate-ize infra CI, and de-overlap app vs infra responsibilities
 
-**Status**: In Progress
+**Status**: Archived — Closed (#460 contracts + #461 infra inventory/audit completed and kept frozen; epic #459 closed as not planned — converged into boundary governance, finance_report#876; app-side phases 3–4 not pursued)
 
 ## Goal
 
@@ -169,13 +169,19 @@ prod-CI-touching work — de-risked by `3a` being additive and `3b` being a prov
 
 ## PR Links
 
-_(to be filled as slices land)_
+Phases 0–2 landed through infra2#460 (contracts) and infra2#461 (infra inventory + fail-closed audit), both closed
+as completed; see each issue's linked PRs. The epic infra2#459 was closed as **not planned** on 2026-06-29: the
+coordinate-ize/inventory/generate approach converged into boundary governance (finance_report#876, #1435, #465),
+so phases 3–4 (app alignment, cross-repo chain view — finance_report#1491/#1492) were not pursued and #460/#461
+stay frozen, not expanded. Live proofs of what shipped: `docs/ssot/ci-gate-inventory.yaml`,
+`docs/ssot/delivery-stages.yaml`, `tools/ci_gate_audit.py`, `libs/tests/test_ci_gate_audit.py`.
 
 ## Change Log
 
 | Date | Change |
 |------|--------|
 | 2026-06-29 | Initialized: proposal for infra CI gate inventory + app/infra de-overlap. |
+| 2026-09-15 | Archived: #460/#461 completed, epic #459 closed as not planned (converged into finance_report#876); moved to `docs/project/archive/` (#713). |
 
 ## References
 

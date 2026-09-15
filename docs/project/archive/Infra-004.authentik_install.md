@@ -1,6 +1,6 @@
 # Infra-004: Authentik Installation
 
-**Status**: Completed ✅
+**Status**: Archived — Completed (PR #28)
 **Owner**: Infra  
 **Priority**: P2  
 **Branch**: `refactor/platform-dry` (PR #28)
@@ -113,12 +113,58 @@ vault kv get -field=bootstrap_email secret/platform/<env>/authentik
 - Vault path: `secret/platform/<env>/authentik` (keys: `bootstrap_email`, `bootstrap_password`)
 - 1Password: `platform/authentik/admin`
 
-## TODOWRITE
+## TODOWRITE (Archived)
 
-- [Infra-004.TODOWRITE.md](./Infra-004.TODOWRITE.md)
+> Merged from `Infra-004.TODOWRITE.md` on 2026-09-15 when the project was archived (#713).
+> Unchecked items were never picked up by a tracked issue; they stay here as the historical record.
+
+### Purpose
+Track issues and improvements discovered during Authentik installation and platform deployment.
+
+### Top Issues / Improvements
+
+#### Deployment Experience
+- [ ] Add `invoke authentik.reset` command to reset database cleanly
+- [ ] Add `--dry-run` mode for pre-flight dependency checks
+- [ ] Integrate last 10 lines of logs into `status` command when unhealthy
+- [ ] Visualize dependency tree with status (like `tree` command)
+
+#### Error Handling (In Progress)
+- [x] Added `fatal()` for unrecoverable errors with actionable guidance
+- [x] Added `check_failed()` for non-fatal warnings
+- [x] Pre-flight check for `VAULT_ROOT_TOKEN` before operations
+- [ ] Pre-flight check for postgres/redis health before authentik deploy
+- [ ] Retry logic for transient failures (network, container startup)
+
+#### Documentation
+- [x] Document password classification (Web UI vs Machine)
+- [x] Add Vault → 1Password sync workflow
+- [ ] Create troubleshooting guide for common deployment failures
+- [ ] Add deployment state machine diagram
+- [ ] Document recovery procedures for each service
+
+#### Code Quality
+- [x] DRY refactor: -167 lines of duplicate code
+- [x] Domain auto-configuration via Dokploy API
+- [ ] Type hints for all deployer methods
+- [ ] Unit tests for deployer base class
+- [ ] Integration test for full platform deployment
+
+#### Secrets Management
+- [x] Bootstrap admin credentials in Vault
+- [ ] Auto-sync Web UI passwords to 1Password after generation
+- [ ] Rotate bootstrap credentials periodically
+- [ ] Audit trail for secret access
+
+#### Monitoring
+- [ ] Health check dashboard (all services at a glance)
+- [ ] Alert on service unhealthy for >5 minutes
+- [ ] Track deployment success/failure metrics
+- [ ] Log aggregation for all platform services
+
 
 ## References
 
-- [SSOT: platform.automation.md](../ssot/platform.automation.md)
-- [SSOT: bootstrap.vars_and_secrets.md](../ssot/bootstrap.vars_and_secrets.md)
+- [SSOT: platform.automation.md](../../ssot/platform.automation.md)
+- [SSOT: bootstrap.vars_and_secrets.md](../../ssot/bootstrap.vars_and_secrets.md)
 - [PR #28](https://github.com/wangzitian0/infra2/pull/28)

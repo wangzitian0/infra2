@@ -454,41 +454,9 @@ compose、env、secret 路径、**外部镜像 tag**、Traefik 路由 label、�
 
 ## 5. 测试门禁 (Quality Gates)
 
-### 5.1 Local → PR (Test)
-
-**门禁条件**:
-- ✅ 单元测试通过 (>= 95% 覆盖率)
-- ✅ Linter 无错误
-- ✅ 类型检查通过
-- ✅ 本地 E2E 测试通过
-
-**自动化**: Pre-commit hooks + GitHub Actions
-
----
-
-### 5.2 Test → Staging
-
-**门禁条件**:
-- ✅ Test 环境功能验证通过
-- ✅ Code review 通过
-- ✅ PR approved
-- ✅ Conflicts 解决
-
-**自动化**: GitHub Actions (merge to main)
-
----
-
-### 5.3 Staging → Production
-
-**门禁条件**:
-- ✅ Staging E2E 测试全部通过
-- ✅ 性能测试达标 (响应时间 < 200ms)
-- ✅ 安全扫描无高危漏洞
-- ✅ 数据库迁移在 staging 验证通过
-- ✅ Changelog 更新
-- ✅ 人工验收 (Product Owner approval)
-
-**自动化**: GitHub Actions (tag release) + Manual approval
+> 本节曾手抄一份「Local → PR → Staging → Production」门禁表，其中「Test → Staging 自动化 = GitHub Actions
+> (merge to main)」与现行模型矛盾：merge **不**部署；staging 跟 release tag，prod 显式 promote。
+> 门禁与触发由 [ops.pipeline.md](./ops.pipeline.md) §2.0「三过程，三闸门」**单一拥有**，此处不再重述。
 
 ---
 

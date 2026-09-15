@@ -135,7 +135,7 @@ def test_project_ac_proof_paths_target_existing_files() -> None:
 def test_redesigned_pipeline_validation_command_targets_existing_files() -> None:
     """Infra-011 validation commands must stay runnable as proof files move."""
     missing: list[str] = []
-    path = PROJECT_DIR / "Infra-011.reliability_hardening.md"
+    path = PROJECT_DIR / "archive" / "Infra-011.reliability_hardening.md"
 
     for target in BACKTICK_PATH_RE.findall(path.read_text(encoding="utf-8")):
         if not target.startswith(PROOF_PATH_PREFIXES):
