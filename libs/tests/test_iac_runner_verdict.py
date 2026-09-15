@@ -10,13 +10,17 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def _sync_runner(monkeypatch):
+    """Load the runner module in isolation: importing it inserts /workspace/<repo> into
+    sys.path, which must not leak into the rest of the suite (review on #707)."""
     monkeypatch.setenv("GIT_REPO_URL", "https://github.com/wangzitian0/infra2")
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    name = "sync_runner_for_verdict"
     spec = importlib.util.spec_from_file_location(
-        "sync_runner_for_verdict", ROOT / "bootstrap/06.iac_runner/sync_runner.py"
+        name, ROOT / "bootstrap/06.iac_runner/sync_runner.py"
     )
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
-    sys.modules["sync_runner_for_verdict"] = module
+    monkeypatch.setitem(sys.modules, name, module)
     spec.loader.exec_module(module)
     return module
 
