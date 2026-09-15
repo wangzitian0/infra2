@@ -187,4 +187,6 @@ def test_empty_optional_submodule_is_not_reported_as_its_parent(tmp_path: Path) 
     )
     assert not result.initialized
     assert result.checkout_head is None
+    assert str(tmp_path.resolve()) in result.error
+    assert "git submodule update --init" in result.error
     assert not any(call[0] == "fetch" for call in calls)

@@ -154,7 +154,12 @@ def repository_status(
     top_level = _value(checkout, "rev-parse", "--show-toplevel", runner=runner)
     if not top_level or Path(top_level).resolve() != checkout:
         return RepositoryStatus(
-            **common, initialized=False, error="path is not a repository root"
+            **common,
+            initialized=False,
+            error=(
+                f"path is not a repository root (Git top-level: {top_level or 'unknown'}); "
+                "initialize this checkout with git submodule update --init if it is a submodule"
+            ),
         )
 
     errors: list[str] = []
