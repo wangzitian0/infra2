@@ -15,7 +15,6 @@ from libs.dokploy import get_dokploy
 AUTODEPLOY_ALLOWLIST = {
     "1password-connect",
     "vault",
-    "TianClaws",
 }
 
 
