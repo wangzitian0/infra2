@@ -59,3 +59,10 @@ github-clone-http|http|https://github.com/wangzitian0/infra2.git/info/refs?servi
 # truealpha/app (#608): the two app containers, on dokploy-network
 truealpha-web-http|http|http://truealpha-web${ENV_SUFFIX}:3000/|200|critical|5||truealpha/app
 truealpha-llm-http|http|http://truealpha-llm${ENV_SUFFIX}:8000/health|200|critical|5||truealpha/app
+# finance_report/app: the two HTTP containers, on dokploy-network
+finance-report-backend-http|http|http://finance_report-backend${ENV_SUFFIX}:8000/health|200|critical|5||finance_report/app
+finance-report-frontend-http|http|http://finance_report-frontend${ENV_SUFFIX}:3000/|200|critical|5||finance_report/app
+# app-layer backing services (TCP liveness; credentials are the apps' own)
+finance-report-postgres-tcp|tcp|finance_report-postgres${ENV_SUFFIX}:5432|connected|critical|5||finance_report/postgres
+finance-report-redis-tcp|tcp|finance_report-redis${ENV_SUFFIX}:6379|connected|critical|5||finance_report/redis
+truealpha-postgres-tcp|tcp|truealpha-postgres${ENV_SUFFIX}:5432|connected|critical|5||truealpha/postgres

@@ -413,3 +413,83 @@ signals:
   severity: critical
   cadence: 60s
   alert_threshold: 3 consecutive failures
+- signal_id: production.finance-report-backend-http
+  environment: production
+  component: finance-report-api
+  signal: finance-report-backend-http
+  primary_owner: internal
+  severity: critical
+  cadence: 60s
+  alert_threshold: 3 consecutive failures
+- signal_id: staging.finance-report-backend-http
+  environment: staging
+  component: finance-report-api
+  signal: finance-report-backend-http
+  primary_owner: internal
+  severity: critical
+  cadence: 60s
+  alert_threshold: 3 consecutive failures
+- signal_id: production.finance-report-frontend-http
+  environment: production
+  component: finance-report-api
+  signal: finance-report-frontend-http
+  primary_owner: internal
+  severity: critical
+  cadence: 60s
+  alert_threshold: 3 consecutive failures
+- signal_id: staging.finance-report-frontend-http
+  environment: staging
+  component: finance-report-api
+  signal: finance-report-frontend-http
+  primary_owner: internal
+  severity: critical
+  cadence: 60s
+  alert_threshold: 3 consecutive failures
+- signal_id: production.finance-report-postgres-tcp
+  environment: production
+  component: finance-report-postgres
+  signal: finance-report-postgres-tcp
+  primary_owner: internal
+  severity: critical
+  cadence: 60s
+  alert_threshold: 3 consecutive failures
+- signal_id: staging.finance-report-postgres-tcp
+  environment: staging
+  component: finance-report-postgres
+  signal: finance-report-postgres-tcp
+  primary_owner: internal
+  severity: critical
+  cadence: 60s
+  alert_threshold: 3 consecutive failures
+- signal_id: production.finance-report-redis-tcp
+  environment: production
+  component: finance-report-redis
+  signal: finance-report-redis-tcp
+  primary_owner: internal
+  severity: critical
+  cadence: 60s
+  alert_threshold: 3 consecutive failures
+- signal_id: staging.finance-report-redis-tcp
+  environment: staging
+  component: finance-report-redis
+  signal: finance-report-redis-tcp
+  primary_owner: internal
+  severity: critical
+  cadence: 60s
+  alert_threshold: 3 consecutive failures
+- signal_id: production.truealpha-postgres-tcp
+  environment: production
+  component: truealpha-postgres
+  signal: truealpha-postgres-tcp
+  primary_owner: internal
+  severity: critical
+  cadence: 60s
+  alert_threshold: 3 consecutive failures
+- signal_id: staging.truealpha-postgres-tcp
+  environment: staging
+  component: truealpha-postgres
+  signal: truealpha-postgres-tcp
+  primary_owner: internal
+  severity: critical
+  cadence: 60s
+  alert_threshold: 3 consecutive failures

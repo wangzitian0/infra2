@@ -50,6 +50,10 @@ _EXTERNAL_COMPONENT_IDS = {
     "dokploy": "bootstrap/dokploy",
     "finance-report-api": "finance_report/app",
     "finance-report-web": "finance_report/app",
+    # app-layer backing services: `postgres`/`redis` alone is ambiguous across projects
+    "finance-report-postgres": "finance_report/postgres",
+    "finance-report-redis": "finance_report/redis",
+    "truealpha-postgres": "truealpha/postgres",
     # the path every deploy depends on (#658 recommendation 5): the runner fetches,
     # deploy_v2 compares on main, and Dokploy clones — all from github.com.
     "github": "infra/github",

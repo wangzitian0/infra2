@@ -70,8 +70,8 @@ def test_rendered_specs_name_equivalence_via_live_check_helper() -> None:
     assert missing_probe_names(generated, frozen) == []
     assert parse_probe_names(generated) == parse_probe_names(frozen)
     assert (
-        len(parse_probe_names(generated)) == 26
-    )  # the frozen probe count (+2 GitHub #658, +2 truealpha/app #608)
+        len(parse_probe_names(generated)) == 31
+    )  # frozen count: +2 GitHub #658, +2 truealpha/app #608, +2 finance_report/app, +3 app-layer postgres/redis
 
 
 def test_compose_carries_only_the_env_reference_after_cutover() -> None:

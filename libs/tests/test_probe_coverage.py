@@ -1,4 +1,4 @@
-"""Coverage audit: every probeable platform service must have an infra probe, or be exempt.
+"""Coverage audit: every probeable registry service must have an infra probe, or be exempt.
 
 A registry service that declares a service_port is reachable and should have a liveness probe
 in the rendered INFRA_PROBE_SPECS — otherwise it is a SILENT monitoring gap (down with no
@@ -11,7 +11,6 @@ silently regress.
 
 from __future__ import annotations
 
-import re
 
 from libs import service_registry
 from libs.probe_specs import render_probe_spec_text
@@ -27,12 +26,13 @@ def _probe_spec_rows() -> list[str]:
 
 
 def _covered_service_ids() -> set[str]:
+    """Services with at least one rendered probe, read from the row's own eighth field
+    (``service_id``) — the identity the runner reports on, app layer included."""
     covered: set[str] = set()
     for row in _probe_spec_rows():
-        for host in re.findall(r"platform-[\w-]+", row):
-            meta = service_registry.resolve_container_host(host)
-            if meta is not None:
-                covered.add(meta.service_id)
+        fields = [f.strip() for f in row.split("|")]
+        if len(fields) >= 8 and fields[7]:
+            covered.add(fields[7])
     return covered
 
 
@@ -44,14 +44,12 @@ def test_probeable_platform_services_have_a_probe_or_are_exempt() -> None:
     for service_id, meta in service_registry.service_attrs().items():
         if meta.service_port is None:
             continue  # not network-reachable -> nothing to probe
-        if meta.layer != "platform":
-            continue  # app layer (finance_report) is app-monitored, not infra-probed
         if service_id in covered or meta.exempted("probes"):
             continue
         gaps.append(service_id)
 
     assert not gaps, (
-        "probeable platform services with no ProbeFacet (declare probes on the "
+        "probeable services with no ProbeFacet (declare probes on the "
         "service's Deployer, or add Exemption(check_id='probes', reason=...)):\n"
         + "\n".join(sorted(gaps))
     )
