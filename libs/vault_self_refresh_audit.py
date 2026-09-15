@@ -44,6 +44,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+import functools
 import json
 import os
 import re
@@ -265,13 +266,16 @@ def _vault_service_from_facet(meta, facet) -> VaultService:
     )
 
 
-def _is_preview_stack(compose_dir: str) -> bool:
-    """Whether the registry declares this stack directory as a preview (source_env set)."""
+@functools.lru_cache(maxsize=1)
+def _preview_stack_dirs() -> frozenset[str]:
+    """The stack directories the registry declares as previews (source_env set)."""
     from libs.secrets_registry import SERVICES
 
-    return any(
-        service.preview and service.directory == compose_dir for service in SERVICES
-    )
+    return frozenset(service.directory for service in SERVICES if service.preview)
+
+
+def _is_preview_stack(compose_dir: str) -> bool:
+    return compose_dir in _preview_stack_dirs()
 
 
 def inventory_ids_not_in_production() -> frozenset[str]:
