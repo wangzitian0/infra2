@@ -103,3 +103,7 @@ uv run pytest -q libs/tests/test_sdk_contract_adoption.py
 - 所有 `external-application` 必须是 `autonomous`，且不能进入 focus。
 - authority 与 preference 路径可读且不能逃逸 workspace root。
 - 现有 SDK 采用测试继续证明消费者使用发布 artifact，而不是 submodule 源码。
+
+独立可用性证明必须经过分发边界：SDK 使用仓库外环境安装的发布 artifact；OMCA
+使用脱离构建源码目录的已安装二进制，并按实际 host/version 验证。源码目录内的
+测试不能替代这项证明；安全自动观测也不能替代人类 TUI/restart/model 验收。

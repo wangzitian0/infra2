@@ -38,7 +38,7 @@ navigation pointers to local authority, not a second copy of its policy.
 |---|---|---|
 | infra2 | `docs/ssot/` and `docs/project/Infra-019.*` | `uv run python -m tools.harness check`; relevant SSOT's The Proof |
 | infra2-sdk | `README.md`, `pyproject.toml`, module contracts | `uv run --extra dev pytest`; `uv run ruff check .` |
-| OMCA | `init.md`, `docs/README.md`, `docs/project/roadmap.md` | `make build`, `make test`; host/version-specific qualification |
+| OMCA | `init.md`, `docs/README.md`, `docs/project/roadmap.md` | `make build`, `make test`, `make standalone`; host/version-specific qualification |
 | Finance Report | `vision.md`, `common/<pkg>/contract.py`, `common/meta/data/MANIFEST.yaml` | `tools/preflight.py --tier=static` through its documented Python environment |
 | TrueAlpha | `vision.md`, `init.md`, issue-owned acceptance checks | `tools/prepush.sh` with Bash 4+; scoped runtime/module tests |
 
@@ -60,7 +60,9 @@ Reuse a released contract where it removes duplicate semantics. Keep compatibili
 wrappers when an app's public API differs, and prove their behavior before replacement.
 Do not move app policy into a common package merely to make directory trees look alike.
 The SDK's installed-wheel smoke is an executable consumer example; OMCA's safe automatic
-qualification does not replace its human TUI/restart/model proof.
+qualification does not replace its human TUI/restart/model proof. Its installed
+executable embeds reviewed Knowledge Packs and ontology; installation proof must
+run outside the build checkout, including after that checkout is removed.
 
 Reviewed snapshot and acceptance evidence live in
 [Infra-019 TODOWRITE](../docs/project/Infra-019.TODOWRITE.md).
