@@ -191,9 +191,21 @@ independent delivery. It does not require matching App directory trees.
   The broader SDK bump and dispatch-correlation proof in
   [Finance Report #2004](https://github.com/wangzitian0/finance_report/issues/2004)
   remains separately tracked; this change delivers its single-source pin scope.
+- Finance Report's main run above then exposed a measurement gap: its component coverage
+  ratchet blocks on main but only reports on PRs. The SDK CLI's `python -S` subprocess
+  proof was outside pytest-cov, leaving four CLI function lines unmeasured. Follow-up
+  [Finance Report #2038](https://github.com/wangzitian0/finance_report/pull/2038) adds
+  in-process proof of complete successful output and zero partial output on invalid
+  arguments/lock data, while retaining the subprocess isolation check. It merged as
+  `7c13b87cfb4be4a7f632d60fe6468a07eb9cb924` after all checks and exact-head review.
+  PR CI `34940605397` measured tools at `3129/3386` (92.41%), above the unchanged
+  `3065/3318` (92.37%) baseline; the failing main had measured `3125/3386` (92.29%).
+  No threshold, baseline, or runtime behavior changed. The replacement main evidence is
+  [run 34941437376](https://github.com/wangzitian0/finance_report/actions/runs/34941437376);
+  the parent snapshot's merge checklist requires completion of that run.
 
 The integrated development pins are SDK `3fecc8e`, OMCA `fed8928`, TrueAlpha `a65e373`,
-and Finance Report `39e8ecf0`. Each full commit is identified above. The parent integration
+and Finance Report `7c13b87c`. Each full commit is identified above. The parent integration
 PR is [infra2 #705](https://github.com/wangzitian0/infra2/pull/705); its merge requires
 fresh Merge Authority checks, review closure and the session's twelve-minute quiet window.
 
