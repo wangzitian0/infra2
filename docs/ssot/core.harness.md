@@ -11,7 +11,7 @@
 | Workspace 通用偏好 | `harness/workspace/` |
 | Infra2 架构与运维规则 | [`docs/ssot/core.md`](./core.md) 与相关 SSOT |
 | SDK 公共契约 | 已发布的 `infra2-sdk` SemVer artifact |
-| Workspace TUI tooling | `oh-my-code-agent` 自己的 README、代码与 release/commit |
+| Coding-agent tooling | `oh-my-code-agent` 自己的 `init.md`、`AGENTS.md`、文档地图与 release/commit |
 | App 开发与领域规则 | 各 App 自己的 `AGENTS.md`、架构文档、代码和 CI |
 
 ## 2. Goal And Non-Goals
@@ -32,8 +32,8 @@ App 的集成状态。它统一 workspace 视角，不统一产品仓库的迭�
 | Repository | Harness role | Governance | Release identity |
 |---|---|---|---|
 | `infra2` | Infrastructure implementation and deployment control plane | Local | Infra2 release tag |
-| `infra2-sdk` | Versioned, side-effect-free cross-repository contract | Coordinated, independently released | SDK SemVer |
-| `oh-my-code-agent` | Workspace TUI management tooling | Coordinated, independently released | Tool release or pinned commit |
+| `infra2-sdk` | Versioned contracts and explicitly invoked protocol adapters | Coordinated, independently released | SDK SemVer |
+| `oh-my-code-agent` | Coding-agent observation, profiles and isolated runtimes | Coordinated, independently released | Tool release or pinned commit |
 | `finance_report` | Integration-visible application checkout | Autonomous | App image ref/digest |
 | `truealpha` | Integration-visible application checkout | Autonomous | App image ref/digest |
 
@@ -47,17 +47,22 @@ Harness 只拥有这些仓库之间的协作视图与边界定义。
 2. 进入嵌套仓库后，先读取该仓库本地 authority；本地规则覆盖 workspace 偏好。
 3. Workspace guide 只提供默认决策倾向，不得绕过目标仓库的命令、gate 或审批。
 4. App 规则与 workspace 偏好冲突时，App 自治规则胜出；不通过修改 App 来消除差异。
-5. `oh-my-code-agent` 当前以其 README 为 authority；后续若增加本地 agent/架构规则，
-   进入该 sub-repo 后以更具体的本地 authority 为准。
+5. `oh-my-code-agent` 的 `init.md` 定义产品边界，`AGENTS.md` 定义 agent 操作规则，
+   `docs/README.md` 路由各主题 authority。其隔离能力按 host/version 的证据判断。
+6. 共用工程基础指可定位的 authority、可执行的本地 proof 与独立发布契约。
+   Finance Report 的正式概念归属在 `common/<pkg>/contract.py` 和 readme，
+   `docs/ssot/` 已退休；TrueAlpha 以 `init.md` 和 issue acceptance 为入口。
+   入口对照见 [`harness/README.md`](../../harness/README.md#repository-entry-points)。
 
 ## 5. Contract Versus Instance
 
-- `infra2-sdk` 可以拥有稳定、无副作用的数据模型、枚举、校验与序列化。
-- Infra2 和 App 各自拥有 CI gate 实例、部署实现、运行时 mutation 与人类治理规则。
+- `infra2-sdk` 拥有稳定的数据模型、枚举、校验、序列化和显式调用的协议适配器。
+  环境清单、密钥协议、发布身份解析以已发布 SDK 为准；import 不执行 I/O。
+- Infra2 和 App 各自拥有 CI gate 实例、部署编排、适配器调用时机与人类治理规则。
 - 跨仓库视图优先在读取时 join 已发布证据，不复制第二份可漂移的事实。
 - 新抽象只有在语义稳定且至少有清晰的多消费者契约时才进入 SDK。
-- TUI 安装、启动、配置适配等共享 tooling 逐步归入 `oh-my-code-agent`；领域命令、
-  产品 policy 与 runtime contract 留在各自 owner。
+- Coding-agent 配置发现、Profile/Skill/MCP 激活和隔离 runtime 属于 `oh-my-code-agent`；
+  它不承载 App 部署、通用任务调度或领域命令。App 的 Skill 内容与 policy 由 App 持有。
 
 这一边界延续 [`core.md` §3.1](./core.md#31-repository-dependency-boundary) 与已归档
 [`Infra-018`](../project/archive/Infra-018.repository_boundary_decoupling.md) 的源码解耦结论。
@@ -71,13 +76,15 @@ uv run python -m tools.harness status --fetch
 ```
 
 `harness check` 是只读校验：验证清单 schema、focus、角色/治理组合、workspace 偏好和
-authority 路径。未初始化的 checkout 只报告 warning；结构错误、App 非自治或 authority
+authority 路径。未初始化的必需 checkout 失败；显式 optional 或 CI 不拉 submodule 时
+报告 warning。结构错误、App 非自治或 authority
 漂移会失败。命令不得执行 fetch、checkout、写文件、发布或部署。
 
 `harness status` 只观测 checkout：显示 root/submodule parent pin、checkout HEAD、跟踪的
 remote HEAD、ahead/behind、dirty path 数和 checkout release identity。默认完全本地；显式
 `--fetch` 只刷新每个仓库的 `origin` refs/tags，不 checkout、pull、更改 parent pin 或触碰 App
 source。`--require-current` 在任一 checkout 落后/领先/脏/脱离 parent pin 时返回非零。
+观察与 fetch 前必须确认路径是独立 Git root；空 submodule 不能回退成父仓库。
 
 ## 7. The Proof
 

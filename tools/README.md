@@ -106,6 +106,11 @@ also enforces compose↔inventory equality and registry-derived `service_id` val
 
 ## harness.py
 
+Repository-specific architecture and verification entries are mapped in
+[`harness/README.md`](../harness/README.md). Status verifies each checkout is its own
+Git root before fetching; an empty optional submodule cannot refresh or report the
+parent repository by accident.
+
 ```bash
 # Human-readable result
 uv run python -m tools.harness check

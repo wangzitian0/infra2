@@ -9,12 +9,13 @@ domain semantics and may impose stronger constraints.
 - Share only stable semantics. Do not extract code merely because two implementations
   look similar today.
 - Separate contracts from instances: `infra2-sdk` owns versioned data models,
-  validation, serialization, and compatibility; each repository owns its CI gate
+  validation, serialization, explicitly invoked protocol adapters, and compatibility; each repository owns its CI gate
   instances and implementation policy.
 - Keep human workflow preferences out of `infra2-sdk`. They belong in this harness or
   the owning repository, not in runtime wire contracts.
-- Keep reusable TUI management in `oh-my-code-agent`; repository-specific commands and
-  product policy stay with the owning repository.
+- Keep coding-agent discovery, profiles, activation, and isolated runtime management in
+  `oh-my-code-agent`; repository-specific commands, scheduling, and product policy stay
+  with the owning repository. OMCA's charter does not define a general task orchestrator.
 - Never make workspace submodules package, runtime, deployment, or configuration-hash
   dependencies.
 

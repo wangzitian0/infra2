@@ -6,9 +6,10 @@ their ownership models.
 ## Scope
 
 - `infra2` is the infrastructure implementation and deployment control plane.
-- `infra2-sdk` is the versioned, side-effect-free cross-repository contract.
-- `oh-my-code-agent` is the independently versioned workspace tooling repository for
-  managing TUI integrations over time.
+- `infra2-sdk` owns versioned contracts and explicitly invoked protocol adapters;
+  importing it remains free of network and global-provider side effects.
+- `oh-my-code-agent` owns coding-agent observation, profiles and isolated runtimes,
+  independently of application deployment and task scheduling.
 - Workspace guides record shared preferences for GitHub, coordination, and software
   design.
 - `finance_report` and `truealpha` are autonomous application repositories. Their
@@ -26,6 +27,25 @@ files; it does not update submodules, copy policy, publish packages, or deploy s
 `status` reports parent pins, checkout/remote heads, ahead/behind, dirty paths, and
 release identity. Its optional `--fetch` refreshes origin metadata only; it never checks
 out or pulls a repository. Add `--require-current` when drift should make CI/scripting fail.
+
+## Repository entry points
+
+The shared structure is an explicit owner, local proof command, and independent release.
+Each repository keeps the file layout that expresses its own architecture. These are
+navigation pointers to local authority, not a second copy of its policy.
+
+| Repository | Architecture and work entry | Local verification entry |
+|---|---|---|
+| infra2 | `docs/ssot/` and `docs/project/Infra-019.*` | `uv run python -m tools.harness check`; relevant SSOT's The Proof |
+| infra2-sdk | `README.md`, `pyproject.toml`, module contracts | `uv run --extra dev pytest`; `uv run ruff check .` |
+| OMCA | `init.md`, `docs/README.md`, `docs/project/roadmap.md` | `make build`, `make test`; host/version-specific qualification |
+| Finance Report | `vision.md`, `common/<pkg>/contract.py`, `common/meta/data/MANIFEST.yaml` | `tools/preflight.py --tier=static` through its documented Python environment |
+| TrueAlpha | `vision.md`, `init.md`, issue-owned acceptance checks | `tools/prepush.sh` with Bash 4+; scoped runtime/module tests |
+
+Finance Report's `docs/ssot/` is retired. Its package roadmap owns new ACs; EPIC files
+contain shrink-only residue. TrueAlpha's issue and capability model remains independent.
+SDK pins may differ between consumers: compatibility, not equal version strings, is
+the requirement. Neither App imports SDK source from the workspace checkout.
 
 ## Workspace Guides
 

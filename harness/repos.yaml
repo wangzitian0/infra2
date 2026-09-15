@@ -44,7 +44,10 @@ repositories:
     # checkout here is a real, accepted state, not drift (#506).
     optional: true
     authority:
+      - AGENTS.md
+      - init.md
       - README.md
+      - docs/README.md
 
   - id: finance-report
     path: repos/finance_report
@@ -56,6 +59,9 @@ repositories:
     authority:
       - AGENTS.md
       - README.md
+      - vision.md
+      - common/meta/data/MANIFEST.yaml
+      - docs/agents/orchestration.md
 
   - id: truealpha
     path: repos/truealpha
@@ -67,3 +73,5 @@ repositories:
     authority:
       - AGENTS.md
       - init.md
+      - vision.md
+      - README.md

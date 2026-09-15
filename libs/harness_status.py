@@ -151,6 +151,11 @@ def repository_status(
         return RepositoryStatus(
             **common, initialized=False, error="not an initialized git checkout"
         )
+    top_level = _value(checkout, "rev-parse", "--show-toplevel", runner=runner)
+    if not top_level or Path(top_level).resolve() != checkout:
+        return RepositoryStatus(
+            **common, initialized=False, error="path is not a repository root"
+        )
 
     errors: list[str] = []
     if fetch:
