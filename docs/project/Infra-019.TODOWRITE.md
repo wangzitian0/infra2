@@ -171,6 +171,21 @@ independent delivery. It does not require matching App directory trees.
   `34939043207`. Besides help and current-host compatibility, shell entry and direct
   launch now preserve explicitly activated profiles and activation evidence. Failing-first
   entrypoint tests cover both paths; incompatible state fails without resetting it.
+- Finance Report [#2036](https://github.com/wangzitian0/finance_report/pull/2036) merged
+  as `39e8ecf08497764c10aa308409d60041f501d398` after exact-head review, all applicable
+  checks, and thread closure. PR CI `34938808207` and Preview `34938808204` passed:
+  all five backend shards, integration, Tier-1 API E2E, frontend build/browser/coverage,
+  tooling coverage, unified coverage, traceability, and the behavioral score ratchet.
+  The SDK pin helper removes three workflow-owned coordinate copies. Real CI proves
+  the version-preserving immutable MinIO mirror repair; mutation tests cover both
+  acquisition jobs and preview Compose. Main CI is
+  [run 34939649716](https://github.com/wangzitian0/finance_report/actions/runs/34939649716).
+  This closes acquisition incident #2037; deployment acceptance #2004 remains open.
+
+The integrated development pins are SDK `3fecc8e`, OMCA `fed8928`, TrueAlpha `a65e373`,
+and Finance Report `39e8ecf0`. Each full commit is identified above. The parent integration
+PR is [infra2 #705](https://github.com/wangzitian0/infra2/pull/705); its merge requires
+fresh Merge Authority checks, review closure and the session's twelve-minute quiet window.
 
 ### Installed OMCA proof and outstanding human gate
 
@@ -189,7 +204,89 @@ Installed-binary `omca qualify tui --json` at `2026-09-15T06:55:19Z` reported:
 
 Native configuration snapshots were unchanged; `interactiveAttempted=false` and
 `complete=false`. Exit 1 reflects the incomplete human gate. No model call was made.
-The JSON artifact is `/tmp/omca-fed8928-installed-qualification.json` on this workstation.
+The original JSON is retained below; it contains no credentials or native file contents.
+
+<details>
+<summary>Installed-binary qualification receipt</summary>
+
+```json
+{
+  "kind": "InteractiveTUIQualification",
+  "generatedAt": "2026-09-15T06:55:19Z",
+  "hosts": [
+    {
+      "host": "codex",
+      "version": "0.153.4",
+      "knowledgePack": "codex:cli:0.153.4",
+      "checks": [
+        {
+          "id": "knowledge-pack",
+          "status": "PASS",
+          "evidence": "E2",
+          "detail": "installed host version is covered by codex:cli:0.153.4"
+        },
+        {
+          "id": "native-mcp-exclusion",
+          "status": "PASS",
+          "evidence": "E3",
+          "detail": "host-reported MCP inventory=[omca]; native sentinel absent"
+        },
+        {
+          "id": "skill-isolation",
+          "status": "PASS",
+          "evidence": "E3",
+          "detail": "Codex host-reported 7 visible Skills; managed repository sentinel present and native sentinels absent"
+        },
+        {
+          "id": "human-interactive-tui",
+          "status": "UNKNOWN",
+          "evidence": "E0",
+          "detail": "codex initial/restart TUI and omca_status model canary require --interactive and explicit human attestation"
+        }
+      ],
+      "complete": false
+    },
+    {
+      "host": "claude-code",
+      "version": "2.1.267",
+      "knowledgePack": "claude-code:cli:2.1",
+      "checks": [
+        {
+          "id": "knowledge-pack",
+          "status": "PASS",
+          "evidence": "E2",
+          "detail": "installed host version is covered by claude-code:cli:2.1"
+        },
+        {
+          "id": "native-mcp-exclusion",
+          "status": "PASS",
+          "evidence": "E3",
+          "detail": "Claude host report shows omca connected and the native sentinel absent"
+        },
+        {
+          "id": "skill-isolation",
+          "status": "UNKNOWN",
+          "evidence": "E1",
+          "detail": "Claude Code 2.1.267 exposes no safe non-interactive Skill inventory; run --interactive under human supervision and verify /skills shows the managed repository sentinel but not the native sentinel"
+        },
+        {
+          "id": "human-interactive-tui",
+          "status": "UNKNOWN",
+          "evidence": "E0",
+          "detail": "claude-code initial/restart TUI and omca_status model canary require --interactive and explicit human attestation"
+        }
+      ],
+      "complete": false
+    }
+  ],
+  "realNativeStateClean": true,
+  "interactiveAttempted": false,
+  "complete": false
+}
+```
+
+</details>
+
 The owner has been asked to run the documented human procedure from their own terminal.
 Full interactive usability remains unaccepted until that evidence exists.
 
@@ -200,7 +297,9 @@ overwritten. Parent gitlinks describe reviewed snapshots, not runtime dependenci
 ### Independent operational work
 
 Ops run `34938044492`, predating #699's merge, failed while importing the SDK through the
-Vault audit's registry dependency. This is independently tracked by
-[infra2 #703](https://github.com/wangzitian0/infra2/pull/703). It is not evidence of a
-deployed service outage, nor does this structure review claim a green production audit.
+Vault audit's registry dependency. The independent
+[infra2 #703](https://github.com/wangzitian0/infra2/pull/703) merged as `b6c7f239`;
+the Vault self-refresh audit in
+[run 34939451271](https://github.com/wangzitian0/infra2/actions/runs/34939451271) passed
+on that main commit. The earlier import failure did not establish a service outage.
 No infrastructure apply or production promotion is part of this delivery.
