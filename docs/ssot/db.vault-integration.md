@@ -183,6 +183,14 @@ The audit must check:
 - vault-agent logs do not contain known token refresh or template render errors.
 - vault-agent and application containers are running with acceptable health; app
   containers must mount `/secrets/.env`.
+- The template the agent has mounted (`sha256` of `/etc/vault/secrets.ctmpl` inside
+  the container) is the one the checked-out release ships (#628, #692).
+
+A preview alias stack (`finance_report/preview`, `truealpha/preview`) is in the
+inventory but not measured by the live audit: its containers carry a per-alias
+suffix (`-branch-main`, `-pr-N`) the fixed-environment audit cannot resolve, so
+it is reported as `preview-stack` / `info` rather than measured on the fixed
+stack's containers under its name.
 
 The audit output is schema-versioned and redacts secret-like keys before
 printing or serializing results.

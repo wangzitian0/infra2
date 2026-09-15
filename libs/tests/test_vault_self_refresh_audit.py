@@ -1174,3 +1174,36 @@ def test_the_audit_does_not_fail_on_age_but_does_on_a_template_mismatch(
         r for r in mismatched["results"] if r["check_id"] == "deployed-template"
     ]
     assert len(template) == 1 and template[0]["status"] == "fail"
+
+
+def test_a_preview_stack_is_reported_as_skipped_not_measured_on_the_fixed_stack(
+    monkeypatch,
+) -> None:
+    """A preview facet names its containers with ``${ENV_SUFFIX}``, which the audit
+    resolves per fixed env — so `finance_report/preview` was measured on
+    `finance_report-app-vault-agent`, the PRODUCTION agent: trivially green for months,
+    then a P1 template mismatch on 2026-09-15 once #692 compared the preview template
+    against the fixed agent's. The audit now says what it cannot measure."""
+    services = {service.id: service for service in load_inventory()}
+    assert services["finance_report/preview"].ephemeral
+    assert services["truealpha/preview"].ephemeral
+    assert not services["finance_report/app"].ephemeral
+    assert not services["truealpha/app"].ephemeral
+
+    monkeypatch.setattr(
+        vault_self_refresh_audit_module,
+        "_release_template_sha256",
+        lambda _service: "a" * 64,
+    )
+    preview = services["finance_report/preview"]
+    # No observation at all for the preview (the collector skips it) — and no
+    # observation must never read as a mismatch or a missing container.
+    report = audit_from_observations([preview], {"services": {}}, env="production")
+    assert report["status"] == "pass"
+    (only,) = report["results"]
+    assert (only["check_id"], only["status"], only["severity"]) == (
+        "preview-stack",
+        "info",
+        "P3",
+    )
+    assert "-branch-main" in only["summary"]

@@ -159,6 +159,7 @@ services:
     app_containers:
       - finance_report-backend${ENV_SUFFIX}
   - id: finance_report/preview
+    ephemeral: true
     project: finance_report
     dokploy_service: app
     # Multi-alias ephemeral PREVIEW (feat/preview-env-multi-alias). Same AppRole
@@ -199,6 +200,7 @@ services:
       - truealpha-llm${ENV_SUFFIX}
       - truealpha-web${ENV_SUFFIX}
   - id: truealpha/preview
+    ephemeral: true
     project: truealpha
     dokploy_service: app
     # #522: multi-alias ephemeral PREVIEW, generalized off finance_report/preview's
