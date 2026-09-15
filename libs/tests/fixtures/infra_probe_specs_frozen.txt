@@ -56,3 +56,6 @@ host-mem|resource|mem|80|warning|5||infra/host
 host-disk|resource|disk:/hostfs|80|critical|5||infra/host
 github-api-tcp|tcp|api.github.com:443|connected|warning|10||infra/github
 github-clone-http|http|https://github.com/wangzitian0/infra2.git/info/refs?service=git-upload-pack|200|warning|30|github-api-tcp|infra/github
+# truealpha/app (#608): the two app containers, on dokploy-network
+truealpha-web-http|http|http://truealpha-web${ENV_SUFFIX}:3000/|200|critical|5||truealpha/app
+truealpha-llm-http|http|http://truealpha-llm${ENV_SUFFIX}:8000/health|200|critical|5||truealpha/app

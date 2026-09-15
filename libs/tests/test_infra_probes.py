@@ -1124,3 +1124,58 @@ def test_runner_unset_env_still_uses_default_specs(monkeypatch) -> None:
     monkeypatch.delenv("INFRA_PROBE_SPECS", raising=False)
     groups = runner._probe_groups()
     assert groups[0].raw_specs == runner.DEFAULT_PROBE_SPECS
+
+
+def test_truealpha_app_is_probed_inside_and_on_its_product_domain() -> None:
+    """#608's open half: the two truealpha/app containers had no probe, and the app's
+    public surface lives on its own domain (bare in production, prefixed in staging —
+    truealpha#474), which the public-route renderer could not express."""
+    import importlib.util
+
+    from libs.probe_specs import render_probe_spec_text, render_public_route_spec_text
+
+    internal = render_probe_spec_text()
+    assert (
+        "truealpha-web-http|http|http://truealpha-web${ENV_SUFFIX}:3000/|200|critical|5||truealpha/app"
+        in internal
+    )
+    assert (
+        "truealpha-llm-http|http|http://truealpha-llm${ENV_SUFFIX}:8000/health|200|critical|5||truealpha/app"
+        in internal
+    )
+
+    prod = render_public_route_spec_text("production", "zitian.party")
+    staging = render_public_route_spec_text("staging", "zitian.party")
+    assert (
+        "truealpha-web-public-route|http|https://truealpha.club/|200|critical|10||truealpha/app"
+        in prod
+    )
+    assert (
+        "truealpha-api-public-route|http|https://truealpha.club/api/health|200|critical"
+        in prod
+    )
+    assert (
+        "truealpha-web-public-route|http|https://truealpha-staging.truealpha.club/|200|warning"
+        in staging
+    )
+    # finance_report keeps the shared-domain formula
+    assert "https://report.zitian.party/api/health" in prod
+
+    # The hosts are the ones the deploy ships as APP_HOST — one formula, two readers.
+    spec = importlib.util.spec_from_file_location(
+        "truealpha_app_deploy_for_probes", ROOT / "truealpha/truealpha/10.app/deploy.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    overrides = module.AppDeployer.compose_env_overrides
+    assert (
+        overrides(env="production", domain="truealpha.club", env_suffix="")["APP_HOST"]
+        == "truealpha.club"
+    )
+    assert (
+        overrides(env="staging", domain="truealpha.club", env_suffix="-staging")[
+            "APP_HOST"
+        ]
+        == "truealpha-staging.truealpha.club"
+    )
