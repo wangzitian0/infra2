@@ -52,6 +52,17 @@ class FakeDokploy:
         d = self._deployments
         return d(self) if callable(d) else (d or [])
 
+    # list, or callable(self) -> list, used by the in-service proof (docker.getContainers).
+    # Default: a healthy host — every container_name of every registered app compose,
+    # for the fixed envs, Up and healthy.
+    _containers = None
+
+    def get_containers(self):
+        c = self._containers
+        if c is not None:
+            return c(self) if callable(c) else c
+        return healthy_host()
+
     def get_compose_env(self, compose_id):
         if self._env_str is not None:
             e = self._env_str
@@ -67,6 +78,31 @@ class FakeDokploy:
         return (
             "VAULT_ROLE_ID=r\nVAULT_SECRET_ID=s\nVAULT_ADDR=https://vault.zitian.party"
         )
+
+
+def healthy_host() -> list[dict]:
+    """docker.getContainers as a healthy host answers it, for every registered app
+    compose in both fixed environments."""
+    from pathlib import Path
+
+    from libs.deploy.in_service import expected_running_containers
+    from libs.service_registry import service_attrs
+
+    rows = []
+    for meta in service_attrs().values():
+        if not meta.compose_path or "/10.app/" not in meta.compose_path:
+            continue
+        text = Path(meta.compose_path).read_text(encoding="utf-8")
+        for suffix in ("", "-staging"):
+            for name in expected_running_containers(text, suffix).values():
+                rows.append(
+                    {
+                        "name": name,
+                        "state": "running",
+                        "status": "Up 9 seconds (healthy)",
+                    }
+                )
+    return rows
 
 
 @pytest.fixture(autouse=True)
@@ -936,3 +972,85 @@ def test_deploy_emits_platform_snapshot_on_failure(monkeypatch):
     # snapshot emitted exactly once, keyed on the staging compose id resolved by env_config
     assert len(emitted) == 1
     assert emitted[0]
+
+
+# --- in service (#698): the record said done, the containers say otherwise ---------
+
+
+def _rollout_done(self):
+    if self.deployed:
+        return [{"id": "old", "status": "done"}, {"id": "new", "status": "done"}]
+    return [{"id": "old", "status": "done"}]
+
+
+def test_deploy_with_wait_fails_when_the_frontend_is_left_created(monkeypatch):
+    """finance_report v0.1.50: backend migration failed, `depends_on: service_healthy`
+    left the frontend `Created` (absent from Dokploy's running list), site 404'd for 13
+    minutes with a done record. The deploy now fails and the platform snapshot fires."""
+    emitted: list[str] = []
+    monkeypatch.setattr(
+        dp,
+        "emit_failure_snapshot",
+        lambda client, compose_id: emitted.append(compose_id),
+    )
+    broken = [
+        dict(row, status="Up 3 minutes (unhealthy)")
+        if row["name"] == "finance_report-backend-staging"
+        else row
+        for row in healthy_host()
+        if row["name"] != "finance_report-frontend-staging"
+    ]
+    client = FakeDokploy(deployments=_rollout_done)
+    client._containers = broken
+    with pytest.raises(RuntimeError) as excinfo:
+        dp.deploy(
+            "staging", "deadbeef", domain="zitian.party", client=client, wait=True
+        )
+    message = str(excinfo.value)
+    assert "not in service after deploy of finance_report/app-staging" in message
+    assert "no container for frontend" in message
+    assert "backend is unhealthy" in message
+    assert emitted == ["A6V-hbJlgHMwgPDoTDnhH"]
+
+
+def test_deploy_with_wait_waits_for_a_health_check_still_starting(monkeypatch):
+    monkeypatch.setattr(dp.time, "sleep", lambda _s: None)
+    reads: list[int] = []
+
+    def containers(self):
+        reads.append(1)
+        starting = len(reads) < 3
+        return [
+            dict(row, status="Up 1 second (health: starting)")
+            if starting and row["name"] == "finance_report-backend-staging"
+            else row
+            for row in healthy_host()
+        ]
+
+    client = FakeDokploy(deployments=_rollout_done)
+    client._containers = containers
+    dp.deploy("staging", "deadbeef", domain="zitian.party", client=client, wait=True)
+    assert len(reads) == 3
+
+
+def test_deploy_without_wait_never_consults_the_containers():
+    client = FakeDokploy()
+    client._containers = lambda self: (_ for _ in ()).throw(AssertionError("consulted"))
+    dp.deploy("staging", "deadbeef", domain="zitian.party", client=client)
+
+
+def test_verify_in_service_gives_up_at_the_deadline():
+    client = FakeDokploy()
+    client._containers = [
+        dict(row, status="Up 1 second (health: starting)") for row in healthy_host()
+    ]
+    clock = iter([0, 0, 1000, 1000])
+    with pytest.raises(RuntimeError, match="health still starting"):
+        dp.verify_in_service(
+            client,
+            "finance_report/app",
+            "",
+            timeout=10,
+            _sleep=lambda _s: None,
+            _now=lambda: next(clock),
+        )

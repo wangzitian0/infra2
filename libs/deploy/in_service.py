@@ -11,6 +11,7 @@ listing says about it — so the verdict can be tested without a host.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 import yaml
@@ -108,3 +109,45 @@ def in_service_verdict(
     if starting:
         parts.append(f"health still starting for {', '.join(starting)}")
     return InServiceVerdict(False, not missing and not down, "; ".join(parts))
+
+
+def expected_running_containers(
+    compose_content: str, env_suffix: str
+) -> dict[str, str]:
+    """service -> container name for every service expected running, with the compose's
+    ``${ENV_SUFFIX}`` resolved for this environment.
+
+    The promote tier watches the stack through Dokploy's ``docker.getContainers``, which
+    reports container names rather than compose labels; every service in this repo
+    declares a fixed ``container_name``.
+    """
+    doc = yaml.safe_load(compose_content) or {}
+    services = doc.get("services") or {}
+    names: dict[str, str] = {}
+    for service in expected_running_services(compose_content):
+        raw = str(services[service].get("container_name") or "")
+        if not raw:
+            continue
+        names[service] = re.sub(r"\$\{ENV_SUFFIX(?::-[^}]*)?\}", env_suffix, raw)
+    return names
+
+
+def observe_containers(
+    expected: dict[str, str], containers: Iterable[dict]
+) -> dict[str, ContainerObservation]:
+    """Observations keyed by service from a ``docker.getContainers`` listing
+    (``{"name", "state", "status"}`` per container). A container Dokploy does not list
+    (stopped, ``Created``) is simply absent, which the verdict reports as missing."""
+    by_name = {}
+    for container in containers:
+        name = str(container.get("name") or "")
+        if name:
+            by_name.setdefault(name, container)
+    observed: dict[str, ContainerObservation] = {}
+    for service, name in expected.items():
+        found = by_name.get(name)
+        if found is not None:
+            observed[service] = ContainerObservation(
+                service, str(found.get("state") or ""), str(found.get("status") or "")
+            )
+    return observed

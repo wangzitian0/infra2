@@ -10,8 +10,10 @@ import pytest
 import libs.deploy.deployer as deployer_module
 from libs.deploy.in_service import (
     DOCKER_PS_FORMAT,
+    expected_running_containers,
     expected_running_services,
     in_service_verdict,
+    observe_containers,
     parse_docker_ps,
 )
 
@@ -345,3 +347,37 @@ def test_sync_reports_failed_when_the_stack_is_not_in_service(monkeypatch):
     result = NotInService.sync(MagicMock())
     assert result["action"] == "failed"
     assert "no container for postgres" in result["details"]
+
+
+def test_container_names_resolve_the_env_suffix_for_the_promote_tier():
+    compose = (ROOT / "finance_report/finance_report/10.app/compose.yaml").read_text()
+    staging = expected_running_containers(compose, "-staging")
+    assert staging["frontend"] == "finance_report-frontend-staging"
+    assert staging["backend"] == "finance_report-backend-staging"
+    assert (
+        expected_running_containers(compose, "")["frontend"]
+        == "finance_report-frontend"
+    )
+    assert (
+        expected_running_containers(
+            "services:\n  x:\n    healthcheck: {test: [CMD, true]}\n", ""
+        )
+        == {}
+    )
+
+
+def test_dokploy_container_listing_is_keyed_by_service_and_omits_the_absent():
+    observed = observe_containers(
+        {"backend": "app-backend", "frontend": "app-frontend"},
+        [
+            {
+                "name": "app-backend",
+                "state": "running",
+                "status": "Up 2 minutes (unhealthy)",
+            },
+            {"name": "unrelated", "state": "running", "status": "Up 4 days"},
+        ],
+    )
+    assert list(observed) == ["backend"] and observed["backend"].health == "unhealthy"
+    verdict = in_service_verdict(("backend", "frontend"), observed)
+    assert not verdict.ok and "no container for frontend" in verdict.message

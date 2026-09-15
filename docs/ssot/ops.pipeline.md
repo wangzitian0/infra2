@@ -282,6 +282,9 @@ identity。
 的容器;`Created`(依赖没健康)、exited、restarting、缺失都是结论而非等待,只有 `health: starting`
 会等到 `IN_SERVICE_DEADLINE_SECONDS`。哪些服务必须在线由 compose 文件自己回答:长驻服务都有 healthcheck,
 一次性任务(authentik `token-init`、clickhouse init、signoz `schema-migrator`)没有。
+promote tier(`libs.deploy.promote.deploy`,app + staging|prod,跑在 GitHub Actions、无 ssh)用 Dokploy 的
+`docker.getContainers` 做同一个证明(按 `container_name` 匹配;Dokploy 只列运行中的容器,`Created`/exited
+即为缺失);`wait=True` 时默认开启,失败走同一条 failure snapshot 路径。
 
 ### 5.4 Env × Stage Result Contract
 
