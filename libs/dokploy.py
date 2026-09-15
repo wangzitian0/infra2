@@ -334,6 +334,11 @@ class DokployClient:
                 return environments[0].get("environmentId")
         return None
 
+    def get_containers(self) -> list[dict]:
+        """Every running container on the host as Dokploy sees it: name, state, status
+        (the `docker ps` columns), image, ports. Stopped containers are not listed."""
+        return self._request("GET", "docker.getContainers")
+
     def get_compose_deployments(self, compose_id: str) -> list[dict]:
         """Get list of deployments for a compose application."""
         try:

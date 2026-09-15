@@ -277,6 +277,68 @@ def preflight_vault_token(client, compose_id: str, *, min_ttl_hours: int = 48):
         )
 
 
+IN_SERVICE_SETTLE_SECONDS = 180
+
+
+def verify_in_service(
+    client,
+    service: str,
+    env_suffix: str,
+    *,
+    timeout: int = IN_SERVICE_SETTLE_SECONDS,
+    interval: int = 5,
+    _sleep=time.sleep,
+    _now=time.monotonic,
+) -> str:
+    """Every service the app's compose declares a healthcheck for has a running,
+    not-unhealthy container, seen through Dokploy's ``docker.getContainers`` — the only
+    view of the host this tier has (it runs in GitHub Actions, no ssh).
+
+    finance_report v0.1.50 (#698): the backend's migration failed, ``depends_on:
+    service_healthy`` left ``finance_report-frontend`` in ``Created``, the site 404'd for
+    thirteen minutes — and the rollout record had said done. Missing (Dokploy lists only
+    running containers, so ``Created`` and exited show up as absent), restarting or
+    unhealthy is a verdict at once; only ``health: starting`` is waited on, up to
+    ``timeout``. Returns the verdict message on success; raises RuntimeError otherwise.
+    Mirrors libs.deploy.deployer.Deployer.verify_in_service for the iac-runner tier.
+    """
+    from pathlib import Path
+
+    from libs.deploy.in_service import (
+        expected_running_containers,
+        in_service_verdict,
+        observe_containers,
+    )
+    from libs.service_registry import service_attrs
+
+    meta = service_attrs().get(service)
+    if not meta or not meta.compose_path:
+        raise RuntimeError(
+            f"in-service verify: {service} has no registered compose file to read "
+            "expectations from"
+        )
+    expected = expected_running_containers(
+        Path(meta.compose_path).read_text(encoding="utf-8"), env_suffix
+    )
+    if not expected:
+        raise RuntimeError(
+            f"in-service verify: {meta.compose_path} declares no service with a "
+            "healthcheck and a container_name; nothing could be proven running"
+        )
+    deadline = _now() + max(0, timeout)
+    while True:
+        observed = observe_containers(expected, client.get_containers())
+        verdict = in_service_verdict(tuple(sorted(expected)), observed)
+        if verdict.ok:
+            return verdict.message
+        if not verdict.settling or _now() >= deadline:
+            raise RuntimeError(
+                f"not in service after deploy of {service}{env_suffix or ''}: "
+                f"{verdict.message}"
+            )
+        _sleep(max(1, interval))
+
+
 def verify_effective_config_hash(
     client,
     compose_id: str,
@@ -554,6 +616,10 @@ def deploy(
                 verify_effective_config_hash(
                     client, cfg.compose_id, config_hash, timeout=timeout
                 )
+            # The record said done; now the containers (#698): a rollout whose
+            # frontend is left `Created` behind an unhealthy backend is not a deploy.
+            if wait:
+                verify_in_service(client, service, cfg.env_suffix, timeout=timeout)
             # Opt-in: prove the just-deployed service.version actually ingests into SigNoz
             # (logs+traces), not merely that the rollout/config advanced. This is the
             # platform-side home of the deployed-version ingestion proof — the app emits
