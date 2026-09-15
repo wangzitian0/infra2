@@ -48,7 +48,7 @@
 <!-- BEGIN GENERATED ARCHIVED PROJECTS (tools/gen_project_index.py) -->
 
 - [Infra-018: Repository Boundary Decoupling](./archive/Infra-018.repository_boundary_decoupling.md) - **Archived**
-- [Infra-016: CI Gate Inventory — coordinate-ize infra CI, and de-overlap app vs infra responsibilities](./archive/Infra-016.ci_gate_inventory.md) - **Archived — Completed (#459 epic, #460 contracts, #461 infra inventory + audit all closed)**
+- [Infra-016: CI Gate Inventory — coordinate-ize infra CI, and de-overlap app vs infra responsibilities](./archive/Infra-016.ci_gate_inventory.md) - **Archived — Closed (#460 contracts + #461 infra inventory/audit completed and kept frozen; epic #459 closed as not planned — converged into boundary governance, finance_report#876; app-side phases 3–4 not pursued)**
 - [Infra-015: deploy_v2 — the unified, trustworthy deploy front door](./archive/Infra-015.deploy_v2_front_door.md) - **Archived — implementation complete & live-verified; companion finance_report#1173**
 - [Infra-011: Reliability and CI/CD Stage Contract](./archive/Infra-011.reliability_hardening.md) - **Archived — Completed (#158, #162, #168, #182, #183 all closed; AC table kept — tests cite `Infra-011.x` ids)**
 - [Infra-010: IaC & Service Verification](./archive/Infra-010.iac_and_service_verification.md) - **Archived — Completed 2026-01-24**
