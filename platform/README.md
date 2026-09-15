@@ -15,7 +15,7 @@ Platform services use **vault-init pattern**:
 |-------|----------|----------|
 | `01-09` | **Databases** | `01.postgres`, `02.redis`, `03.clickhouse`, `03.minio` |
 | `10-19` | **Auth, Observability & Alerting** | `10.authentik`, `11.signoz`, `12.alerting` |
-| `20-29` | **Portal & Applications** | `21.portal`, `23.prefect` |
+| `20-29` | **Portal & Applications** | `21.portal`, `23.prefect`, `24.openpanel` |
 
 ## Service Directory
 
@@ -41,6 +41,7 @@ platform/{nn}.{service}/
 - [Alerting Bridge](./12.alerting/README.md) - SigNoz to Feishu alert delivery
 - [Portal](./21.portal/README.md) - Internal dashboard
 - [Prefect](./23.prefect/README.md) - Workflow orchestration (Prefect)
+- [OpenPanel](./24.openpanel/README.md) - Product analytics (shared Postgres/Redis; dedicated `op-ch` ClickHouse 25.10)
 
 ## Prerequisites
 
@@ -113,6 +114,7 @@ clickhouse ──► signoz ──► alerting
 | alerting | signoz, vault | Internal Feishu notification bridge |
 | portal | authentik | Protected by SSO |
 | prefect | postgres, authentik | Workflow orchestration, protected by SSO |
+| openpanel | postgres, redis | Product analytics; runs its own `op-ch` ClickHouse (SigNoz pins the shared one to 25.5) |
 
 ## Adding New Service
 

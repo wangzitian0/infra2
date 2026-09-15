@@ -1,6 +1,6 @@
 # Infra-016: CI Gate Inventory — coordinate-ize infra CI, and de-overlap app vs infra responsibilities
 
-**Status**: In Progress
+**Status**: Archived — Completed (#459 epic, #460 contracts, #461 infra inventory + audit all closed)
 
 ## Goal
 
@@ -169,13 +169,16 @@ prod-CI-touching work — de-risked by `3a` being additive and `3b` being a prov
 
 ## PR Links
 
-_(to be filled as slices land)_
+Landed through the closed tracking issues — infra2#459 (epic), infra2#460 (contracts), infra2#461
+(infra inventory + fail-closed audit); see each issue's linked PRs. Live proofs: `docs/ssot/ci-gate-inventory.yaml`,
+`docs/ssot/delivery-stages.yaml`, `tools/ci_gate_audit.py`, `libs/tests/test_ci_gate_audit.py`.
 
 ## Change Log
 
 | Date | Change |
 |------|--------|
 | 2026-06-29 | Initialized: proposal for infra CI gate inventory + app/infra de-overlap. |
+| 2026-09-15 | Archived: #459/#460/#461 closed; moved to `docs/project/archive/` (#713). |
 
 ## References
 

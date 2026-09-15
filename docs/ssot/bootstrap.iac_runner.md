@@ -1,7 +1,10 @@
 # IaC Runner SSOT
 
 > **SSOT Key**: `bootstrap.iac_runner`
-> **核心定义**: GitOps 自动化部署服务，监听 GitHub webhook 并自动同步基础设施变更。
+> **核心定义**: 平台服务（`iac_pinned`）的**部署控制面**。GitHub Actions 以 **release tag** 为坐标、经 `deploy_v2`
+> 调用其签名 `/deploy`，Runner 检出该 tag 对应的精确 SHA 并对选定服务执行 `invoke {service}.sync`。
+> GitHub push webhook（`/webhook`）只验签、**不部署**——合并不是发布。「什么触发什么」的唯一权威是
+> [ops.pipeline.md](./ops.pipeline.md) §2–3；本文只讲 Runner 自身。
 
 ---
 
@@ -12,7 +15,7 @@
 | **Service Code** | [`bootstrap/06.iac_runner/`](../../bootstrap/06.iac_runner/) | 服务实现、Dockerfile |
 | **Deployment** | [`bootstrap/06.iac_runner/deploy.py`](../../bootstrap/06.iac_runner/deploy.py) | 部署脚本 |
 | **Secrets** | `secret/data/bootstrap/production/iac_runner` (Vault) | WEBHOOK_SECRET, GIT_REPO_URL |
-| **GitHub Workflows** | [`.github/workflows/deploy.yml`](../../.github/workflows/deploy.yml) | 触发 IaC Runner 的 CI/CD 流程 |
+| **GitHub Workflows** | [`reconcile-iac-inputs.yml`](../../.github/workflows/reconcile-iac-inputs.yml) · [`deploy.yml`](../../.github/workflows/deploy.yml) | release tag 推送 → **自动 staging**；`workflow_dispatch promote_prod=true` → **显式 prod**（经 `deploy_v2 → /deploy`）。`deploy.yml` 只负责 runner 自身的带外重建（`bootstrap/06.iac_runner/**` 合并后）与手动 `deploy_v2` 入口 |
 | **Component README** | [`bootstrap/06.iac_runner/README.md`](../../bootstrap/06.iac_runner/README.md) | 操作手册 |
 
 ---
@@ -21,13 +24,17 @@
 
 ### 2.1 定位与职责
 
-IaC Runner 是 **L1 Bootstrap 层**组件，负责自动化部署 **L2 Platform 层**服务。
+IaC Runner 是 **L1 Bootstrap 层**组件，负责部署 **L2 Platform 层**服务（`iac_pinned`）。
 
 **核心职责**:
-- 接收 GitHub webhook（push to `main`）
-- 解析变更文件，识别受影响的服务
-- 执行 `invoke {service}.sync` 自动部署
-- 支持基于版本的 GitOps 部署（staging/production）
+- 接收 GitHub Actions 的签名 `/deploy` 请求（坐标：`env` + 精确 40 位 commit SHA + 服务集合），检出该 SHA 并执行 `invoke {service}.sync`
+- 以 `deployment_id` 回答 `/deploy/status`，让 workflow 拿到真实的 per-service 终态（不是「请求已受理」）
+- 接收 GitHub push webhook（`/webhook`）：验签后回 `{"status":"ignored"}`，**不部署**（§3.2）
+- 由 Deployer config-hash gate 决定 no-op 还是真实重启（§3.3）
+
+**它不做什么**：不监听 `main`、不自增版本、不自己决定部署哪些服务。触发模型由
+[ops.pipeline.md](./ops.pipeline.md) §2 定义；fan-out 由 `reconcile-iac-inputs.yml` +
+[`deploy-dependencies.yaml`](./deploy-dependencies.yaml) 在 Actions 侧算好，作为 `services` 传入。
 
 **管理范围**:
 
@@ -35,8 +42,8 @@ IaC Runner 是 **L1 Bootstrap 层**组件，负责自动化部署 **L2 Platform 
 |------|---------|
 | **Bootstrap** (1Password, Vault) | Manual deployment and recovery |
 | **IaC Runner source image** | GitHub Actions external bootstrap update before `/deploy` when `bootstrap/06.iac_runner/**` changes |
-| **Platform** (Postgres, Redis, Authentik) | **IaC Runner 自动同步** ✅ |
-| **Apps** (finance_report, wealthfolio) | 各自独立的 CI/CD Pipeline |
+| **Platform** (`iac_pinned`：postgres, redis, authentik, minio, signoz, alerting, openpanel …) | release tag 推送 → **自动 staging**（soak）；`promote_prod=true` → **显式 prod**，成功后记录 `production/vX.Y.Z` marker |
+| **Apps** (finance_report, wealthfolio) | 各自独立的 CI/CD Pipeline（经 `deploy_v2` 前门，不经本 Runner） |
 
 ### 2.2 架构图
 
@@ -49,11 +56,12 @@ flowchart TB
 
     subgraph "CI/CD Layer"
         GitHub["GitHub<br/>(代码仓库)"]
-        Actions["GitHub Actions<br/>(deploy.yml)"]
+        Maintainer["Maintainer"]
+        Reconcile["GitHub Actions<br/>(reconcile-iac-inputs.yml → deploy_v2)"]
     end
 
     subgraph "Infrastructure Layer - Bootstrap (L1)"
-        IaCRunner["IaC Runner<br/>(GitOps Service)"]
+        IaCRunner["IaC Runner<br/>(deploy control plane)"]
         VaultAgent["Vault Agent<br/>(Sidecar)"]
     end
 
@@ -64,18 +72,19 @@ flowchart TB
         MinIO["MinIO"]
     end
 
-    GitHub -->|push to main| Actions
-    Actions -->|webhook /deploy| IaCRunner
-    GitHub -->|webhook /webhook| IaCRunner
-    
+    GitHub -->|push tag vX.Y.Z| Reconcile
+    Maintainer -->|workflow_dispatch promote_prod=true| Reconcile
+    Reconcile -->|signed /deploy + /deploy/status| IaCRunner
+    GitHub -.->|push main → /webhook: ignored, deploys nothing| IaCRunner
+
     VaultAgent -->|fetch secrets| Vault
     VaultAgent -->|inject via tmpfs| IaCRunner
-    
-    IaCRunner -->|invoke *.sync| Postgres
-    IaCRunner -->|invoke *.sync| Redis
-    IaCRunner -->|invoke *.sync| Authentik
-    IaCRunner -->|invoke *.sync| MinIO
-    
+
+    IaCRunner -->|invoke *.sync @ tag| Postgres
+    IaCRunner -->|invoke *.sync @ tag| Redis
+    IaCRunner -->|invoke *.sync @ tag| Authentik
+    IaCRunner -->|invoke *.sync @ tag| MinIO
+
     Vault -.->|bootstrap secrets| 1P
 ```
 
@@ -103,40 +112,61 @@ flowchart TB
 
 ## 3. 工作流详解
 
-### 3.1 变更驱动自动同步（Webhook）
+### 3.1 发布驱动部署（release tag → staging；显式 promote → prod）
+
+一个变更到达运行中的服务只有三条路，**合并到 `main` 不是其中之一**
+（权威定义见 [ops.pipeline.md](./ops.pipeline.md) §2.0 / §3.3）。
+
+**Staging（自动，随 release tag）**:
 
 ```
-┌─────────────┐     1. push to main      ┌──────────────┐
-│ Developer   │ ──────────────────────▶ │   GitHub     │
-└─────────────┘                          └──────────────┘
-                                               │
-                                               │ 2. webhook POST /webhook
-                                               ▼
-                                        ┌──────────────┐
-                                        │  IaC Runner  │
-                                        └──────────────┘
-                                               │
-                                               │ 3. parse changed files
-                                               ▼
-                                        ┌──────────────┐
-                                        │ Identify     │
-                                        │ Services     │
-                                        └──────────────┘
-                                               │
-                                               │ 4. invoke {service}.sync
-                                               ▼
-                                        ┌──────────────┐
-                                        │   Dokploy    │
-                                        │  (Services)  │
-                                        └──────────────┘
+┌─────────────┐  1. git push origin vX.Y.Z  ┌──────────────────────────┐
+│ Maintainer  │ ──────────────────────────▶ │ reconcile-iac-inputs.yml │
+└─────────────┘                             └──────────────────────────┘
+                                                        │
+                                                        │ 2. assert_after_on_main：tag 必须 reachable from origin/main
+                                                        │ 3. diff 上一 release tag → 本 tag
+                                                        │ 4. changed files 经 deploy-dependencies.yaml fan-out
+                                                        │    → 受影响的 iac_pinned 服务集合
+                                                        ▼
+                                              ┌──────────────────┐
+                                              │ tools/deploy_v2  │  --type staging --iac-ref vX.Y.Z
+                                              └──────────────────┘
+                                                        │ 5. /health preflight；签名 POST /deploy
+                                                        │    {"env":"staging","ref":"<tag 的 40 位 SHA>","services":[...]}
+                                                        ▼
+                                              ┌──────────────┐
+                                              │  IaC Runner  │  6. checkout SHA → invoke {service}.sync（DEPLOY_ENV=staging）
+                                              └──────────────┘
+                                                        │ 7. workflow 用 deployment_id 轮询 /deploy/status，直到 per-service 终态
+                                                        ▼
+                                              ┌──────────────┐
+                                              │   Dokploy    │
+                                              │  (staging)   │
+                                              └──────────────┘
 ```
 
-**关键步骤**:
-1. Developer 推送代码到 `main` 分支
-2. GitHub 触发 webhook → `POST https://iac.{domain}/webhook`
-3. IaC Runner 解析 `modified_files`，识别受影响的服务
-4. 对每个服务执行 `invoke {service}.sync`
-5. `sync` 任务计算配置哈希，仅在变更时重新部署
+**Production（显式，由人放行；tag 推送绝不自动动 prod）**:
+
+```
+gh workflow run reconcile-iac-inputs.yml -f after=vX.Y.Z -f promote_prod=true
+        │
+        │ 1. 晋升守卫：after 必须是 vX.Y.Z、存在、reachable from origin/main，
+        │    且该 tag 有一次 push 触发的绿色 staging soak（dispatch 触发的 staging run 不算）
+        │ 2. before = 当前最新 production/v* marker（首个 marker 需显式 -f before=<已知 prod 版本>）
+        │ 3. 与 staging 相同的 fan-out → deploy_v2 --type prod → 签名 /deploy（DEPLOY_ENV=production）
+        ▼
+   所有服务成功后推送不可变 marker `production/vX.Y.Z`（重试只允许同 commit 幂等推送，禁止移动旧 marker）
+```
+
+**关键事实**:
+1. `/deploy` 只接受精确 40 位 commit SHA；tag → SHA 的解析在 GitHub Actions 侧完成（§4.4）
+2. 服务集合是操作身份的一部分：`(env, exact_ref, normalized_service_set)` → `deployment_id`
+3. 是否真的重启由 `sync` 的 config-hash gate 决定（§3.3）；hash 未变即 no-op
+4. `main` 领先于最新 tag = **未发布**，是正常状态，不是 drift
+5. 回滚 = 以旧 tag 再跑一次 reconcile（§11.5）
+
+**sync 子进程约定**:
 
 IaC Runner owns the invoke child-process environment for GitOps deploys. For
 IaC Runner GitOps deploys specifically, non-production deploys must pass
@@ -160,89 +190,16 @@ path. Services that do not consume a runtime Vault template must explicitly set
 an empty `secret_key` so full platform sync does not fail on an unused
 `secret/data/{project}/{env}/{service}` path.
 
-### 3.2 版本驱动 GitOps 部署（GitHub Actions）
+### 3.2 GitHub push webhook（`/webhook`）：验签、不部署
 
-**语义化版本**: `v{major}.{minor}.{patch}`
+GitHub 仍配置了 push webhook（[README §3](../../bootstrap/06.iac_runner/README.md)），Runner 也仍验签——
+一个 401 的 webhook 本身就是坏掉的东西，且 `/deploy` 由同一进程提供。但对 `main` 的 push **不触发任何部署**，
+响应是 `{"status":"ignored","reason":"a push to main is not a deploy trigger; staging follows a release tag","commit":"<sha8>"}`；
+非 `push` 事件与非 `main` 分支同样 `ignored`（§4.3）。
 
-- **Patch**: Staging 迭代（每次 push main 自动 +1）
-- **Minor**: Production 发布（手动从 staging tag promote）
-- **Major**: 架构变更（罕见，手动）
-
-#### Staging 自动部署流程
-
-```
-┌─────────────┐     1. push to main      ┌──────────────┐
-│ Developer   │ ──────────────────────▶ │   GitHub     │
-└─────────────┘                          └──────────────┘
-                                               │
-                                               │ 2. trigger workflow
-                                               ▼
-                                        ┌──────────────┐
-                                        │ platform-    │
-                                        │ staging.yml  │
-                                        └──────────────┘
-                                               │
-                                               │ 3. auto-increment patch
-                                               │    v1.2.3 → v1.2.4
-                                               ▼
-                                        ┌──────────────┐
-                                        │ Create Tag   │
-                                        └──────────────┘
-                                               │
-                                               │ 4. POST /deploy
-                                               │    {"env":"staging","tag":"v1.2.4"}
-                                               ▼
-                                        ┌──────────────┐
-                                        │  IaC Runner  │
-                                        └──────────────┘
-                                               │
-                                               │ 5. checkout tag
-                                               │ 6. invoke *.sync (all platform)
-                                               ▼
-                                        ┌──────────────┐
-                                        │   Dokploy    │
-                                        │  (Staging)   │
-                                        └──────────────┘
-```
-
-#### Production 手动部署流程
-
-```
-┌─────────────┐     1. gh workflow run     ┌──────────────┐
-│ Maintainer  │ ──────────────────────────▶│   GitHub     │
-│             │    (staging_tag=v1.2.4)    │   Actions    │
-└─────────────┘                            └──────────────┘
-                                                  │
-                                                  │ 2. validate tag exists
-                                                  ▼
-                                           ┌──────────────┐
-                                           │ platform-    │
-                                           │ production.yml│
-                                           └──────────────┘
-                                                  │
-                                                  │ 3. promote minor version
-                                                  │    v1.2.4 → v1.3.0
-                                                  ▼
-                                           ┌──────────────┐
-                                           │ Create Tag   │
-                                           │ + Release    │
-                                           └──────────────┘
-                                                  │
-                                                  │ 4. POST /deploy
-                                                  │    {"env":"production","tag":"v1.3.0"}
-                                                  ▼
-                                           ┌──────────────┐
-                                           │  IaC Runner  │
-                                           └──────────────┘
-                                                  │
-                                                  │ 5. checkout tag
-                                                  │ 6. invoke *.sync (all platform)
-                                                  ▼
-                                           ┌──────────────┐
-                                           │   Dokploy    │
-                                           │ (Production) │
-                                           └──────────────┘
-```
+此前该端点会解析 changed files 并用**未打 tag 的 main HEAD** 部署 staging（对每个声明了 `libs/**`/`tools/**`
+依赖的服务等于「合并即部署」）。该路径已移除（#585）：它与上面的三条路全部矛盾，且从 2026-07-20 到
+2026-09-09 静默失效期间没有任何服务可见地过期——这是「没有东西需要它」最有力的证据。
 
 ### 3.3 配置哈希幂等性
 
@@ -297,47 +254,45 @@ curl https://iac.{domain}/health
 }
 ```
 
-### 4.3 `/webhook` - GitHub Webhook
+### 4.3 `/webhook` - GitHub Webhook（验签后 `ignored`）
 
 **请求示例**（GitHub 自动发送）:
 ```json
 POST /webhook HTTP/1.1
 Host: iac.{domain}
+X-GitHub-Event: push
 X-Hub-Signature-256: sha256=...
 Content-Type: application/json
 
 {
   "ref": "refs/heads/main",
-  "commits": [
-    {
-      "modified": ["platform/01.postgres/compose.yaml"],
-      "added": ["platform/03.redis/deploy.py"]
-    }
-  ]
+  "after": "0123456789abcdef0123456789abcdef01234567",
+  "commits": [ ... ]
 }
 ```
 
 **处理逻辑**:
-1. 验证 HMAC 签名（`X-Hub-Signature-256`）
-2. 仅处理 `main` 分支推送
-3. 解析 `modified`/`added`/`removed` 文件列表
-4. 映射文件路径到服务名称
-5. 执行 `invoke {service}.sync`
+1. 验证 HMAC 签名（`X-Hub-Signature-256`）；失败 → `401 {"error":"Invalid signature"}`
+2. 非 `push` 事件 → `{"status":"ignored","event":"<event>"}`
+3. 非 `refs/heads/main` → `{"status":"ignored","reason":"Not main branch"}`
+4. `main` push → **不解析 changed files、不执行任何 sync**，直接返回 `ignored`
 
 **响应**:
 ```json
 {
-  "status": "success",
-  "synced_services": ["postgres", "redis"],
-  "skipped_services": []
+  "status": "ignored",
+  "reason": "a push to main is not a deploy trigger; staging follows a release tag",
+  "commit": "01234567"
 }
 ```
+
+合并不是发布：staging 跟 release tag（§3.1），prod 由显式 promote 放行。没有 `synced_services`——这个端点不 sync。
 
 ### 4.4 `/deploy` - 版本部署
 
 **请求示例**（GitHub Actions 调用）:
 ```bash
-PAYLOAD='{"env":"staging","ref":"0123456789abcdef0123456789abcdef01234567","source_ref":"main","triggered_by":"github-actions","wait":false}'
+PAYLOAD='{"env":"staging","ref":"0123456789abcdef0123456789abcdef01234567","source_ref":"vX.Y.Z","services":["platform/postgres"],"triggered_by":"github-actions","wait":false}'
 TIMESTAMP="$(date +%s)"
 NONCE="$(openssl rand -hex 16)"
 SIGNATURE=$(printf '%s' "${TIMESTAMP}.${NONCE}.${PAYLOAD}" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')
@@ -364,7 +319,7 @@ curl -X POST https://iac.{domain}/deploy \
 4. GitHub Actions 轮询签名 `/deploy/status`
 5. Checkout 指定 commit SHA
 6. 根据环境设置 `DEPLOY_ENV` 环境变量
-7. 执行 `invoke {service}.sync` for all platform services
+7. 对 `services` 中的每个服务执行 `invoke {service}.sync`（省略 `services` 时为全部 platform 服务；正常路径下 `services` 由 reconcile 的 fan-out 算出）
 8. Return status/counts/diagnostics only; child stdout/stderr stay in runner logs.
 
 **响应**:
@@ -380,20 +335,16 @@ curl -X POST https://iac.{domain}/deploy \
 
 ## 5. 服务映射
 
-### 5.1 变更文件 → 服务映射表
+### 5.1 变更文件 → 服务映射（fan-out）
 
-| 变更路径 | 触发任务 | 说明 |
-|---------|---------|------|
-| `platform/01.postgres/*` | `postgres.sync` | 自动同步 PostgreSQL |
-| `platform/02.redis/*` | `redis.sync` | 自动同步 Redis |
-| `platform/10.authentik/*` | `authentik.sync` | 自动同步 Authentik |
-| `platform/11.minio/*` | `minio.sync` | 自动同步 MinIO |
-| `platform/12.alerting/*` | `alerting.sync` | 自动同步 alert bridge and probe runner |
-| `libs/*` | **All platform services** | 公共库变更，全量同步 |
-| `bootstrap/06.iac_runner/*` | External bootstrap update | GitHub Actions rebuilds the runner through SSH before `/deploy` |
-| `bootstrap/*` | **Skipped** | Other bootstrap services stay manual |
-| `finance_report/*` | **Skipped** | 使用 finance_report 独立 CI |
-| `finance/*` | **Skipped** | 使用应用独立 CI |
+fan-out **不在本文维护**（此前这里手抄了一张表，其中 `platform/11.minio/*` 这个目录从未存在过）。规则的唯一权威是
+[ops.pipeline.md](./ops.pipeline.md) §5.2；服务额外 bake 进镜像的 build/config 依赖（如 alerting 把 `libs/**`、`tools/**`
+COPY 进镜像）声明在 [`deploy-dependencies.yaml`](./deploy-dependencies.yaml)。`reconcile-iac-inputs.yml` 据此把
+changed files 换算成 `services` 传给 `/deploy`。要点：
+
+- `platform/<nn>.<svc>/*` → 只部署该服务；服务名来自 `discover_services()`（registry 派生，无手抄映射）
+- `libs/*` / `tools/*` → **仅声明了依赖的服务**；纯工具变化不部署
+- `bootstrap/06.iac_runner/*` → 带外 bootstrap 更新（§5.2）；其余 `bootstrap/*` 与 app 目录 → 跳过
 
 ### 5.2 排除规则
 
@@ -621,7 +572,7 @@ path "auth/token/lookup-self"          { capabilities = ["read"] }
   5. `scripts/deploy_iac_runner_bootstrap.sh` 预检 `VAULT_APP_TOKEN` → `VAULT_ROLE_ID`/`VAULT_SECRET_ID`；
   6. iac_runner `auth_method: approle`（现声明于 `bootstrap/06.iac_runner/deploy.py`
      的 `SecretsFacet`，audit inventory 由此派生，#542）；
-  7. 保留现有 policy（含 accessors）。先在 staging 验证完整 GitOps 链路（webhook → `.sync` → 服务 healthy）。
+  7. 保留现有 policy（含 accessors）。先在 staging 验证完整发布链路（release tag → reconcile → `/deploy` → `.sync` → 服务 healthy）。
 - **v2（权限收敛）—— 已完成（#369）**：砍掉 `vault_token_accessors` grant 与 `renew-self`，删除
   `setup-tokens` 任务与 `libs/vault_tokens.py` 静态 token 账本代码（仅保留 AppRole 复用的
   `policy_name`/`normalize_selector`/`VaultTokenTarget`），并从 `RUNTIME_ENV_KEYS_TO_PRESERVE` 移除
@@ -815,7 +766,7 @@ curl https://iac.{domain}/health
 | **Bootstrap/root credentials** | Read-only for iac_runner config | Bounded AppRole token; root credentials are operator-only |
 | **Docker Socket** | 只读 | `ro` mount（`/var/run/docker.sock:/var/run/docker.sock:ro`）|
 | **Host 文件系统** | 无写入权限 | 仅 workspace 目录可写 |
-| **Bootstrap 服务** | 排除自动同步 | 代码中硬编码过滤规则 |
+| **Bootstrap 服务** | 不在 tag reconcile 范围内 | 首装/灾备依赖，保持手动（§5.2） |
 
 ### 8.2 HMAC 签名验证
 
@@ -928,12 +879,12 @@ flowchart LR
 | **代码逻辑** | IaC Runner 自身 | 低 | 回滚镜像 |
 | **Dockerfile** | 构建流程 | 中 | 重新构建 |
 | **Vault 密钥** | 认证失败 | 高 | 回滚密钥 |
-| **GitHub Webhook** | 触发失败 | 中 | 修正配置 |
+| **`/deploy` 签名密钥**（`IAC_WEBHOOK_SECRET`） | reconcile 401、staging/prod 发布中断 | 中 | 修正 Actions secret / Vault 值 |
 
 ### 10.3 故障转移
 
 **IaC Runner 宕机时的应对**:
-1. **自动同步失败** → Platform 服务保持当前状态（无影响）
+1. **tag reconcile 失败**（`reconcile-iac-inputs.yml` 红 + 带外告警）→ Platform 服务保持当前状态（无影响）
 2. **手动部署** → 直接使用 `invoke {service}.setup`（不依赖 IaC Runner）
 3. **快速恢复** → `docker restart iac-runner` 或 `invoke iac-runner.setup`
 
@@ -950,10 +901,11 @@ flowchart LR
 
 **推荐流程**:
 1. **开发阶段**: 在功能分支测试变更
-2. **PR Review**: 人工审核 `platform/*` 变更
-3. **Merge to main**: 触发 IaC Runner 自动部署到 staging
-4. **Staging 验证**: 执行 E2E 测试
-5. **Production 发布**: 手动 promote staging tag 到 production
+2. **PR Review**: 人工审核 `platform/*` 变更；PR CI 的 reconcile `--dry-run` plan 提前展示这次发布会重部署哪些服务
+3. **Merge to main**: **不部署**——`main` 领先于最新 tag = 未发布
+4. **打 release tag** `vX.Y.Z`（从 main）: 自动晋升 staging（soak）
+5. **Staging 验证**: 执行 E2E 测试 / soak
+6. **Production 发布**: `gh workflow run reconcile-iac-inputs.yml -f after=vX.Y.Z -f promote_prod=true`，成功后记录 `production/vX.Y.Z` marker
 
 ### 11.2 配置版本控制
 
@@ -965,7 +917,7 @@ flowchart LR
 
 ### 11.3 运行时漂移检查
 
-IaC Runner 是 bootstrap 服务，不能依赖自身自动修复。Post-merge workflow 调用 `/deploy` 前必须先调用 `/health`，把运行时漂移暴露为明确的 preflight failure。
+IaC Runner 是 bootstrap 服务，不能依赖自身自动修复。`deploy_v2`（tag reconcile 与手动 dispatch 共用的前门）调用 `/deploy` 前必须先调用 `/health`，把运行时漂移暴露为明确的 preflight failure。
 
 关键漂移信号：
 - `GET https://iac.{domain}/health` 返回 404：Dokploy 域名没有路由到 IaC Runner app，优先检查 `bootstrap/iac_runner` 的 domain、serviceName、source path。
@@ -1001,10 +953,11 @@ invoke check-env
 
 **快速回滚步骤**:
 ```bash
-# 方式 1: 回滚 Git tag（推荐）
-gh workflow run deploy.yml \
-  -f env="production" \
-  -f ref="v1.2.3"  # 使用之前的稳定版本
+# 方式 1: 以旧 release tag 再跑一次 reconcile（推荐）
+# prod：before 自动取当前 production marker；after 必须有绿色 staging soak
+gh workflow run reconcile-iac-inputs.yml -f after=v1.2.3 -f promote_prod=true
+# staging 同理（不带 promote_prod）
+gh workflow run reconcile-iac-inputs.yml -f after=v1.2.3
 
 # 方式 2: 手动执行上一个版本的 sync
 git checkout v1.2.3
@@ -1030,8 +983,9 @@ invoke postgres.sync
 ### 12.2 已知限制
 
 1. **Bootstrap recovery boundary**: IaC Runner source is externally rebuilt by
-   GitHub Actions after merge, but first install and broken-SSH recovery remain
-   manual bootstrap operations.
+   `deploy.yml` when `bootstrap/06.iac_runner/**` lands on `main` (the one
+   merge-triggered path: L1 self-update), but first install and broken-SSH
+   recovery remain manual bootstrap operations.
 2. **单点故障**: 只有一个 IaC Runner 实例（未来可考虑主备模式）
 3. **缺乏审计日志**: 当前日志未持久化（可接入 SigNoz 改进）
 
@@ -1063,35 +1017,41 @@ docker exec iac-runner which op
 ### 13.2 功能验证
 
 ```bash
-# 测试 webhook 端点（手动触发）
-PAYLOAD='{"ref":"refs/heads/main","commits":[{"modified":["platform/01.postgres/compose.yaml"]}]}'
+# 测试 webhook 端点（手动触发）：验签通过即 ignored，不部署
+PAYLOAD='{"ref":"refs/heads/main","after":"0123456789abcdef0123456789abcdef01234567","commits":[]}'
 SECRET=$(invoke env.get WEBHOOK_SECRET --project=bootstrap --service=iac_runner)
 SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')
 
 curl -X POST https://iac.{domain}/webhook \
   -H "Content-Type: application/json" \
+  -H "X-GitHub-Event: push" \
   -H "X-Hub-Signature-256: sha256=$SIGNATURE" \
   -d "$PAYLOAD"
 
-# 预期输出: {"status":"success","synced_services":["postgres"]}
+# 预期输出: {"status":"ignored","reason":"a push to main is not a deploy trigger; staging follows a release tag","commit":"01234567"}
+# 错误签名 → 401 {"error":"Invalid signature"}
 ```
 
-### 13.3 GitHub Integration 验证
+### 13.3 发布链路验证（release tag → staging）
 
 ```bash
-# 1. 推送测试变更
-echo "# test" >> platform/01.postgres/README.md
-git add platform/01.postgres/README.md
-git commit -m "test: trigger iac runner"
-git push origin main
+# 1. 合并变更到 main：什么都不部署
+#    Settings → Webhooks → Recent Deliveries 应显示 200 + {"status":"ignored",...}
 
-# 2. 检查 GitHub webhook delivery
-# Settings → Webhooks → Recent Deliveries
-# 预期: 最新一次 delivery 显示 200 OK
+# 2. 从 main 打 release tag → 自动晋升 staging
+git checkout main && git pull
+git tag vX.Y.Z && git push origin vX.Y.Z
 
-# 3. 检查 IaC Runner 日志
+# 3. 看 reconcile 运行：fan-out 到哪些服务、每个服务的 sync 终态
+gh run list --workflow reconcile-iac-inputs.yml --branch vX.Y.Z --limit 1
+gh run watch <run-id>
+# 预期: 绿；summary 列出 changed files → selected services；输入未变的服务是 config-hash no-op
+
+# 4. 检查 IaC Runner 日志
 docker logs iac-runner --tail 50
-# 预期: 显示 "sync completed: 1 succeeded, 0 failed"
+# 预期: 该 deployment_id 下每个服务的 sync 结果（succeeded / skipped），无 failed
+
+# 5. PR 阶段就能预演：PR CI 的「Gate reconcile plan builds」跑 --dry-run，列出这次发布将重部署哪些服务
 ```
 
 ---
@@ -1112,9 +1072,10 @@ docker logs iac-runner --tail 50
 
 ### 14.3 GitHub Workflows
 
-- [deploy.yml](../../.github/workflows/deploy.yml) - Post-merge platform deployment
+- [reconcile-iac-inputs.yml](../../.github/workflows/reconcile-iac-inputs.yml) - release tag → staging（自动）；`promote_prod=true` → prod（显式）
+- [deploy.yml](../../.github/workflows/deploy.yml) - `deploy_v2` 手动入口 + `bootstrap/06.iac_runner/**` 合并后的 runner 带外自更新
 
 ---
 
-**Last updated**: 2026-06-17 (§6.4 revised to secrets-SSOT — single bounded AppRole, Dokploy-env creds, no 1Password storage; expanded circular-dependency counterfactuals)  
+**Last updated**: 2026-09-15 (§1/§2/§3/§4.3/§5.1/§8.1/§10–§14 rewritten to the release model — `/webhook` authenticates and deploys nothing, staging follows `vX.Y.Z` via `reconcile-iac-inputs.yml`, prod is an explicit `promote_prod=true` dispatch that records `production/vX.Y.Z`; the hand-copied fan-out table (which named a `platform/11.minio/` that never existed) now points at ops.pipeline.md §5.2 + deploy-dependencies.yaml; #713)  
 **Maintained by**: @wangzitian0

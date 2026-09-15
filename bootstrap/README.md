@@ -14,7 +14,7 @@
 ├── 03.dokploy_setup/      # Dokploy 域名和 CLI 配置
 ├── 04.1password/          # 1Password Connect
 ├── 05.vault/              # HashiCorp Vault
-├── 06.iac_runner/         # IaC Runner GitOps 自动化
+├── 06.iac_runner/         # IaC Runner 部署控制面（/deploy）
 └── README.md              # 本文件（组件索引）
 ```
 
@@ -72,12 +72,13 @@ HashiCorp Vault 秘密管理。
 **域名**：`vault.$INTERNAL_DOMAIN`
 
 ### 6. [IaC Runner](./06.iac_runner/README.md)
-GitOps 自动化部署服务，监听 GitHub webhook 并自动同步 Platform 层服务。
+Platform 层服务的部署控制面。GitHub Actions 以 release tag 为坐标、经 `deploy_v2` 调用其签名 `/deploy`；
+tag 推送自动晋升 staging，prod 由 `promote_prod=true` 显式放行。GitHub push webhook（`/webhook`）只验签、
+**不部署**——合并不是发布（[ops.pipeline.md](../docs/ssot/ops.pipeline.md) §2）。
 
 **状态**：✅ 已部署  
 **域名**：`iac.$INTERNAL_DOMAIN`  
-**管理范围**：Platform 层服务（postgres, redis, authentik, minio）  
-**最近修复**：PR #101 (op CLI), PR #102 (unzip依赖)
+**管理范围**：Platform 层 `iac_pinned` 服务（fan-out 见 [deploy-dependencies.yaml](../docs/ssot/deploy-dependencies.yaml)）
 
 ---
 
