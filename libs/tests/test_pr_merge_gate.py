@@ -74,6 +74,48 @@ def test_state_is_the_fallback_when_gh_reports_no_bucket():
     assert not gate.evaluate(_facts(checks=(("Tests", "FAILURE"),)), now=NOW).ready
 
 
+def test_event_policy_waits_for_a_review_of_the_head_then_settles_briefly():
+    head = "abcdef0123456789"
+    unreviewed = gate.evaluate(
+        _facts(head_sha=head, last_push_at=NOW - 60), now=NOW, policy="event"
+    )
+    assert (
+        not unreviewed.ready
+        and "no automated review on head abcdef0" in unreviewed.reasons[0]
+    )
+
+    stale = _facts(
+        head_sha=head,
+        last_push_at=NOW - 60,
+        reviews=(("copilot-pull-request-reviewer", "0000000", NOW - 600),),
+    )
+    assert not gate.evaluate(
+        stale, now=NOW, policy="event"
+    ).ready  # reviewed an older head
+
+    fresh = _facts(
+        head_sha=head,
+        last_push_at=NOW - 60,
+        reviews=(("copilot-pull-request-reviewer", head, NOW - 100),),
+    )
+    settling = gate.evaluate(fresh, now=NOW, policy="event")
+    assert not settling.ready and settling.quiet_remaining_seconds == 80
+    assert gate.evaluate(fresh, now=NOW + 80, policy="event").ready
+    # a human review alone does not count as the automated pass the rule waits for
+    human = _facts(head_sha=head, reviews=(("wangzitian0", head, NOW - 600),))
+    assert not gate.evaluate(human, now=NOW, policy="event").ready
+    with pytest.raises(ValueError):
+        gate.evaluate(_facts(), now=NOW, policy="vibes")
+
+
+def test_the_clock_policy_ignores_reviews():
+    facts = _facts(
+        last_push_at=NOW - 60,
+        reviews=(("copilot-pull-request-reviewer", "abcdef0123456789", NOW - 30),),
+    )
+    assert not gate.evaluate(facts, now=NOW).ready
+
+
 def test_no_checks_yet_is_not_green():
     verdict = gate.evaluate(_facts(checks=()), now=NOW)
     assert not verdict.ready and "no checks reported yet" in verdict.reasons
@@ -97,10 +139,19 @@ class _Gh:
             return json.dumps(
                 {
                     "number": 704,
+                    "id": "PR_node",
                     "state": "OPEN",
                     "isDraft": False,
                     "baseRefName": "main",
                     "headRefOid": "feedfacefeedface",
+                    "reviews": [
+                        {
+                            "author": {"login": "copilot-pull-request-reviewer"},
+                            "commit": {"oid": "feedfacefeedface"},
+                            "state": "COMMENTED",
+                            "submittedAt": "2026-09-15T06:58:00Z",
+                        }
+                    ],
                     "files": [{"path": "libs/probe_specs.py"}],
                     "commits": [
                         {"committedDate": "2026-09-15T06:40:00Z"},
@@ -117,6 +168,11 @@ class _Gh:
                     {"name": f"c{i}", "state": "COMPLETED", "bucket": s}
                     for i, s in enumerate(self.states)
                 ]
+            )
+        if argv[:2] == ["api", "graphql"] and "requestReviews" in argv[3]:
+            self.review_requests = getattr(self, "review_requests", 0) + 1
+            return json.dumps(
+                {"data": {"requestReviews": {"pullRequest": {"number": 704}}}}
             )
         if argv[:2] == ["api", "graphql"]:
             nodes = [{"isResolved": False}] * self.unresolved + [{"isResolved": True}]
@@ -145,6 +201,34 @@ def test_collect_reads_the_newest_commit_as_the_last_push():
     assert facts.last_push_at == gate._epoch("2026-09-15T06:55:22Z")
     assert facts.checks == (("c0", "pass"),) and facts.unresolved_threads == 0
     assert facts.review_threads_total == 1
+    assert facts.node_id == "PR_node"
+    assert facts.reviews_on_head()[0][0] == "copilot-pull-request-reviewer"
+
+
+def test_request_review_asks_copilot_only_when_the_head_is_unreviewed(capsys):
+    class _Unreviewed(_Gh):
+        def __call__(self, argv):
+            out = super().__call__(argv)
+            if list(argv)[:2] == ["pr", "view"]:
+                doc = json.loads(out)
+                doc["reviews"] = []
+                return json.dumps(doc)
+            return out
+
+    gh = _Unreviewed()
+    assert (
+        gate.main(
+            ["704", "--policy", "event", "--request-review"], gh=gh, now=lambda: NOW
+        )
+        == 1
+    )
+    assert gh.review_requests == 1
+    assert "no automated review on head" in capsys.readouterr().out
+    reviewed = _Gh()
+    gate.main(
+        ["704", "--policy", "event", "--request-review"], gh=reviewed, now=lambda: NOW
+    )
+    assert getattr(reviewed, "review_requests", 0) == 0
 
 
 def test_main_merges_only_a_ready_head_and_pins_the_head_commit(capsys):
