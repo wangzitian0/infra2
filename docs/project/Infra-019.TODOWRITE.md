@@ -22,7 +22,7 @@
 - [x] Add read-only `harness status` for parent pin, checkout/remote head,
       ahead/behind, dirty state, and release identity; optional fetch changes refs only.
 - [x] Add an infra2-sdk-local contributor guide through independent SDK PR #31
-      (implementation and checks complete; integration awaits owner review).
+      (merged and released in v1.5.2; installed-artifact proof below).
 - [ ] Decide whether workspace preference changes need their own version identifier.
 - [ ] Add cross-repository compatibility matrix reporting from released evidence.
 - [ ] Archive Infra-019 after the selected follow-ups are complete or explicitly deferred.
@@ -47,17 +47,19 @@ The pre-existing root `handover.md` and OMCA working changes were retained.
 - [x] An empty optional submodule could be reported/fetched as its parent repository.
   Verify the Git top-level before observation; a real Git fixture proves the failure.
 - [x] TrueAlpha duplicated the SDK tier enum and rejected canonical tier names.
-  Independent change #820 adopts the existing released enum/parser through its public
+  Independent [TrueAlpha #820](https://github.com/wangzitian0/truealpha/issues/820)
+  change adopts the existing released enum/parser through its public
   compatibility import path; dependency instances remain app-owned.
 - [x] Finance SDK wheel coordinates were hand-maintained in three workflows.
-  Independent #2004 change reads the generated backend lock and checks its agreement
+  Independent [Finance Report #2004](https://github.com/wangzitian0/finance_report/issues/2004)
+  change reads the generated backend lock and checks its agreement
   with the dependency declaration; checksum enforcement stays at acquisition.
 - [x] SDK silently ignored missing/nonmapping named override tables. Independent SDK
   patch rejects them before writing a manifest, with failing-first regression tests.
 - [ ] Merge the independent reviewed changes and update the integrated snapshot after
   their applicable checks pass. No new SDK release or production deployment is implied.
 
-### OMCA evidence and limitations
+### Initial OMCA evidence and limitations (before repairs)
 
 The existing candidate `go run ./cmd/omca qualify tui --json` was exercised with no
 interactive/model session. Codex 0.153.4: no qualified Knowledge Pack; MCP and Skill
@@ -79,7 +81,7 @@ with SDK `manifests.main` requires an explicit compatibility proof first. TrueAl
 KG probes and domain manifests retain application policy. Structural checks do not
 prove either application's deployed behavior. No product issue is closed on this review.
 
-### Review delivery and proof
+### Initial review delivery and proof (superseded by continuation below)
 
 | Repository | Independent PR | Evidence / remaining boundary |
 | --- | --- | --- |
@@ -115,7 +117,7 @@ This extends the initial review above; it does not override app architecture own
 - OMCA #91 merged as `a241446c430cb088092fc526c8ba59e618f80fa7`; post-merge CI passed.
   The original dirty OMCA checkout remains untouched. Candidate work is isolated in a
   separate worktree and submitted as [#93](https://github.com/wangzitian0/oh-my-code-agent/pull/93).
-- Codex 0.153.4 rejected the old generated approval setting. #93 adopts the documented
+- Codex 0.153.4 rejected the old generated approval setting. OMCA #93 adopts the documented
   untrusted-project migration with the existing read-only sandbox default, and versions
   both bootstrap/full-generation cache identities. Real safe introspection now proves
   OMCA MCP inclusion, repository Skill inclusion, native sentinel exclusion, and unchanged
@@ -123,10 +125,13 @@ This extends the initial review above; it does not override app architecture own
   race tests and lint pass; coverage is 80.4%. Human TUI/restart/model proof and Claude
   Skill inventory remain UNKNOWN; this does not establish full interactive MVP acceptance.
 - TrueAlpha #821 was rebased onto main including the independently delivered MinIO
-  mirror fix #825. All applicable checks passed at `50bee8a`; a subsequent review nit
+  mirror fix [TrueAlpha #825](https://github.com/wangzitian0/truealpha/pull/825).
+  All applicable checks passed at `50bee8a`; a subsequent review nit
   is being fixed and requires another current-head CI/review pass.
 - Finance #2036 now also restores both MinIO server/client acquisition through immutable
-  upstream Quay artifacts under #2037. Its existing toolchain gate now covers each CI
+  upstream Quay artifacts under
+  [Finance Report #2037](https://github.com/wangzitian0/finance_report/issues/2037).
+  Its existing toolchain gate now covers each CI
   acquisition job and preview Compose. Six drift mutations failed against the old guard;
   all 14 toolchain tests and static preflight pass after the repair. Remote CI must prove
   actual image acquisition because Docker is unavailable in the local workspace.
@@ -137,3 +142,186 @@ This extends the initial review above; it does not override app architecture own
 Remaining: finish current-head review/checks, merge eligible PRs, verify post-merge runs,
 and update parent snapshots only to reviewed main commits. Human-only host evidence
 must stay visibly incomplete until actually supplied. No production promotion is planned.
+
+## 2026-09-15 integrated acceptance evidence
+
+This section supersedes the initial review's pending states above. Shared structure means
+clear ownership, a local verification entry, a versioned consumption boundary, and
+independent delivery. It does not require matching App directory trees.
+
+### Delivered repository changes
+
+- infra2 [#699](https://github.com/wangzitian0/infra2/pull/699) merged as
+  `f0f687b4dfb9cdbb10345144baf52bc6f0e282e7`. Current-head reviews/threads and applicable
+  checks passed before merge; post-merge Infrastructure CI `34938241862` and Docs
+  `34938241871` passed. The shared inventory now points to each repository's actual
+  authority, and an empty submodule cannot masquerade as the parent Git repository.
+- SDK [#31](https://github.com/wangzitian0/infra2-sdk/pull/31) is released as `v1.5.2`
+  with the installed-artifact proof recorded above. Documentation/example
+  [#32](https://github.com/wangzitian0/infra2-sdk/pull/32) merged as
+  `3fecc8e48707a296f0f26315ba14106dd86f9e6b` after all ten checks and exact-head review.
+  Its post-merge CI `34939096142` passed.
+  The app-root readiness example proves healthy, unhealthy and missing dependency
+  outcomes using the released wheel; it requires no sibling repository source.
+- TrueAlpha [#821](https://github.com/wangzitian0/truealpha/pull/821) merged as
+  `e1cda5fbbc6665359e139cd9b331a032363b1b12`. Its public compatibility module delegates
+  environment semantics to the released SDK. Fourteen scoped tests and all applicable
+  remote checks passed. The subsequent reviewed main `a65e373a8f3c6900e2c926bcdda7afded6d26d9c`
+  includes this change; its CI `34937462324` passed after superseding the cancelled
+  earlier main run. The independently merged
+  [TrueAlpha #825](https://github.com/wangzitian0/truealpha/pull/825) restored MinIO acquisition.
+- OMCA [#91](https://github.com/wangzitian0/oh-my-code-agent/pull/91),
+  [#93](https://github.com/wangzitian0/oh-my-code-agent/pull/93), and
+  [#95](https://github.com/wangzitian0/oh-my-code-agent/pull/95) are merged.
+  The final main `fed892890cee650bd6798f467ba5813655a02c4a` passed post-merge CI
+  `34939043207`. Besides help and current-host compatibility, shell entry and direct
+  launch now preserve explicitly activated profiles and activation evidence. Failing-first
+  entrypoint tests cover both paths; incompatible state fails without resetting it.
+- Finance Report [#2036](https://github.com/wangzitian0/finance_report/pull/2036) merged
+  as `39e8ecf08497764c10aa308409d60041f501d398` after exact-head review, all applicable
+  checks, and thread closure. PR CI `34938808207` and Preview `34938808204` passed:
+  all five backend shards, integration, Tier-1 API E2E, frontend build/browser/coverage,
+  tooling coverage, unified coverage, traceability, and the behavioral score ratchet.
+  The SDK pin helper removes three workflow-owned coordinate copies. Real CI proves
+  the version-preserving immutable MinIO mirror repair; mutation tests cover both
+  acquisition jobs and preview Compose. Main CI is
+  [run 34939649716](https://github.com/wangzitian0/finance_report/actions/runs/34939649716).
+  This closes acquisition incident
+  [Finance Report #2037](https://github.com/wangzitian0/finance_report/issues/2037).
+  The broader SDK bump and dispatch-correlation proof in
+  [Finance Report #2004](https://github.com/wangzitian0/finance_report/issues/2004)
+  remains separately tracked; this change delivers its single-source pin scope.
+- Finance Report's main run above then exposed a measurement gap: its component coverage
+  ratchet blocks on main but only reports on PRs. The SDK CLI's `python -S` subprocess
+  proof was outside pytest-cov, leaving four CLI function lines unmeasured. Follow-up
+  [Finance Report #2038](https://github.com/wangzitian0/finance_report/pull/2038) adds
+  in-process proof of complete successful output and zero partial output on invalid
+  arguments/lock data, while retaining the subprocess isolation check. It merged as
+  `7c13b87cfb4be4a7f632d60fe6468a07eb9cb924` after all checks and exact-head review.
+  PR CI `34940605397` measured tools at `3129/3386` (92.41%), above the unchanged
+  `3065/3318` (92.37%) baseline; the failing main had measured `3125/3386` (92.29%).
+  No threshold, baseline, or runtime behavior changed. The replacement main evidence is
+  [run 34941437376](https://github.com/wangzitian0/finance_report/actions/runs/34941437376);
+  the parent snapshot's merge checklist requires completion of that run.
+
+The integrated development pins are SDK `3fecc8e`, OMCA `fed8928`, TrueAlpha `a65e373`,
+and Finance Report `7c13b87c`. Each full commit is identified above. The parent integration
+PR is [infra2 #705](https://github.com/wangzitian0/infra2/pull/705); its merge requires
+fresh Merge Authority checks, review closure and the session's twelve-minute quiet window.
+
+### Installed OMCA proof and outstanding human gate
+
+Built the reviewed main above and atomically installed it at `~/.local/bin/omca`, reporting
+`omca dev+fed8928`. SHA256:
+`ed75ccbb64c718e296503cfc8fefc50ecfe08cab9c0c6617a86c6b74ed39342b`.
+The prior binary is retained at `~/.local/bin/omca.before-foundation-review-20260915`.
+This is a pinned development build, not an invented release tag.
+
+Installed-binary `omca qualify tui --json` at `2026-09-15T06:55:19Z` reported:
+
+| Host | Knowledge pack | MCP isolation | Skills isolation | TUI/restart/model |
+|---|---|---|---|---|
+| Codex 0.153.4 | PASS | PASS | PASS: managed sentinel present, native sentinels absent | UNKNOWN |
+| Claude Code 2.1.267 | PASS | PASS: OMCA connected, native sentinel absent | UNKNOWN | UNKNOWN |
+
+Native configuration snapshots were unchanged; `interactiveAttempted=false` and
+`complete=false`. Exit 1 reflects the incomplete human gate. No model call was made.
+The original JSON is retained below; it contains no credentials or native file contents.
+
+<details>
+<summary>Installed-binary qualification receipt</summary>
+
+```json
+{
+  "kind": "InteractiveTUIQualification",
+  "generatedAt": "2026-09-15T06:55:19Z",
+  "hosts": [
+    {
+      "host": "codex",
+      "version": "0.153.4",
+      "knowledgePack": "codex:cli:0.153.4",
+      "checks": [
+        {
+          "id": "knowledge-pack",
+          "status": "PASS",
+          "evidence": "E2",
+          "detail": "installed host version is covered by codex:cli:0.153.4"
+        },
+        {
+          "id": "native-mcp-exclusion",
+          "status": "PASS",
+          "evidence": "E3",
+          "detail": "host-reported MCP inventory=[omca]; native sentinel absent"
+        },
+        {
+          "id": "skill-isolation",
+          "status": "PASS",
+          "evidence": "E3",
+          "detail": "Codex host-reported 7 visible Skills; managed repository sentinel present and native sentinels absent"
+        },
+        {
+          "id": "human-interactive-tui",
+          "status": "UNKNOWN",
+          "evidence": "E0",
+          "detail": "codex initial/restart TUI and omca_status model canary require --interactive and explicit human attestation"
+        }
+      ],
+      "complete": false
+    },
+    {
+      "host": "claude-code",
+      "version": "2.1.267",
+      "knowledgePack": "claude-code:cli:2.1",
+      "checks": [
+        {
+          "id": "knowledge-pack",
+          "status": "PASS",
+          "evidence": "E2",
+          "detail": "installed host version is covered by claude-code:cli:2.1"
+        },
+        {
+          "id": "native-mcp-exclusion",
+          "status": "PASS",
+          "evidence": "E3",
+          "detail": "Claude host report shows omca connected and the native sentinel absent"
+        },
+        {
+          "id": "skill-isolation",
+          "status": "UNKNOWN",
+          "evidence": "E1",
+          "detail": "Claude Code 2.1.267 exposes no safe non-interactive Skill inventory; run --interactive under human supervision and verify /skills shows the managed repository sentinel but not the native sentinel"
+        },
+        {
+          "id": "human-interactive-tui",
+          "status": "UNKNOWN",
+          "evidence": "E0",
+          "detail": "claude-code initial/restart TUI and omca_status model canary require --interactive and explicit human attestation"
+        }
+      ],
+      "complete": false
+    }
+  ],
+  "realNativeStateClean": true,
+  "interactiveAttempted": false,
+  "complete": false
+}
+```
+
+</details>
+
+The owner has been asked to run the documented human procedure from their own terminal.
+Full interactive usability remains unaccepted until that evidence exists.
+
+The original dirty OMCA checkout and root `handover.md` are preserved. Its reviewed code
+was integrated through isolated worktrees; the original checkout was not reset or
+overwritten. Parent gitlinks describe reviewed snapshots, not runtime dependencies.
+
+### Independent operational work
+
+Ops run `34938044492`, predating infra2 #699's merge, failed while importing the SDK through the
+Vault audit's registry dependency. The independent
+[infra2 #703](https://github.com/wangzitian0/infra2/pull/703) merged as `b6c7f239`;
+the Vault self-refresh audit in
+[run 34939451271](https://github.com/wangzitian0/infra2/actions/runs/34939451271) passed
+on that main commit. The earlier import failure did not establish a service outage.
+No infrastructure apply or production promotion is part of this delivery.
