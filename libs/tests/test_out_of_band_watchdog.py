@@ -212,6 +212,7 @@ def test_worker_status_check_reports_last_run_failure_context(monkeypatch) -> No
     results = watchdog.run_worker_status_check(
         {"INFRA2_WATCHDOG_WORKER_STATUS_TOKEN": "status-token"},
         timeout=3,
+        retry_delay_seconds=0,  # the retry is asserted below; its real 60 s wait is not
     )
 
     assert results == [

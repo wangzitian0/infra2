@@ -479,41 +479,6 @@ def _http_get(url: str, timeout: float) -> tuple[int, str]:
         return 0, str(getattr(exc, "reason", exc))
 
 
-def _wait_for_health(
-    health_url: str,
-    *,
-    timeout: int,
-    interval: int,
-    http_get=None,
-    deploy_status=None,
-    _sleep=time.sleep,
-    _now=time.monotonic,
-) -> bool:
-    """Compatibility wrapper for one HTTP-status-only readiness surface.
-
-    Returns True on the first 200 and False if the window elapses. The optional legacy
-    ``deploy_status`` precheck raises on an already-known error; preview ``up`` now uses
-    the stronger trigger-bound terminal deployment-record proof before public readiness.
-    Side-effect free apart from the injected getter/status.
-    """
-    if deploy_status is not None and deploy_status() == "error":
-        raise RuntimeError(
-            f"deploy failed (Dokploy composeStatus=error) before {health_url} became "
-            "healthy — check the Dokploy deploy log"
-        )
-    base_url, _, path = health_url.partition("/api/health")
-    return _wait_for_readiness(
-        base_url,
-        (PreviewReadinessProbe(f"/api/health{path}"),),
-        expected_versions={"runtime": ""},
-        timeout=timeout,
-        interval=interval,
-        http_get=http_get,
-        _sleep=_sleep,
-        _now=_now,
-    )
-
-
 def _wait_for_readiness(
     base_url: str,
     probes: tuple[PreviewReadinessProbe, ...],

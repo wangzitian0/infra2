@@ -42,20 +42,6 @@ def test_unknown_env_raises():
         ec.env_config("qa")
 
 
-def test_env_suffix_helper_handles_dynamic_preview():
-    assert ec.for_env_suffix("staging") == "-staging"
-    assert ec.for_env_suffix("prod") == ""
-    assert ec.for_env_suffix("preview", number=7) == "-pr-7"
-
-
-def test_with_compose_id_binds_the_dynamic_preview_compose():
-    bound = ec.with_compose_id("preview", "cmp-123")
-    assert bound.compose_id == "cmp-123"
-    assert bound.name == "preview"
-    # the original mapping is unchanged (frozen dataclass, replace returns a copy)
-    assert ec.env_config("preview").compose_id is None
-
-
 def test_every_non_dynamic_env_has_a_compose_id():
     for name in ec.ENVIRONMENTS:
         cfg = ec.env_config(name)

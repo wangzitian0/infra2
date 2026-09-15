@@ -12,7 +12,9 @@ reusable logic belongs in `libs/` (see the division-of-labor note below):
    `coverage_regression_audit.py` (infra-ci
    gates), `reconcile_iac_inputs.py` (tag reconcile), `out_of_band_watchdog.py`
    / `watchdog_weekly_digest.py` (scheduled watchdogs), `dns_drift_report.py` /
-   `dokploy_config_drift.py` (drift reports).
+   `dokploy_config_drift.py` (drift reports), `pr_merge_gate.py` (the AGENTS.md
+   session merge authority as a check: checks, threads, settling, protected and
+   deploy-triggering paths; `--merge` squash-merges only a ready head).
 
 ## The single resident entry point (#543)
 
@@ -95,7 +97,6 @@ also enforces compose↔inventory equality and registry-derived `service_id` val
 | `dokploy` | `tools/dokploy_env.py` | Dokploy project/environment helpers |
 | `local` | `tools/local_init.py` | Local CLI checks and bootstrap helpers |
 | `vault-audit` | `tools/vault_audit.py` | Read-only Vault app-token self-refresh audit |
-| `pr-merge-gate` | `tools/pr_merge_gate.py` | AGENTS.md session merge authority as a check (checks, threads, 12-min quiet, protected/deploy-triggering paths); `--merge` squash-merges only a ready head |
 
 ## Common Conventions
 
