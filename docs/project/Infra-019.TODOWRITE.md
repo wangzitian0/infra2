@@ -99,3 +99,41 @@ storage migration is part of these structural changes.
 
 PR check status is evidence for the stated head, not merge authorization. Integrated
 submodule pins remain unchanged until the independent changes are reviewed and merged.
+
+## 2026-09-15 authorized usability continuation
+
+Owner authorized quality-gated merges for this session and set the acceptance target:
+OMCA and the SDK must be useful independently, reducing app setup and maintenance cost.
+This extends the initial review above; it does not override app architecture ownership.
+
+- SDK #31 merged as `794544d157e5ac95cfb17b1b253c6f8e277dd7c5`; post-merge CI passed.
+  Released `v1.5.2` from that reviewed main commit. Release run `34935463086` passed.
+  Downloaded the published wheel into a fresh environment outside all repositories;
+  SHA256 `e422846adab5fb25818e8722f06a71a78de2b09527c28116533bf6a0d1e48ec8`
+  matched the release. Core/S3/Postgres/HTTP/OTel/all smoke groups and installed dependency
+  compatibility passed. This is installed-artifact proof, not a sibling-source import.
+- OMCA #91 merged as `a241446c430cb088092fc526c8ba59e618f80fa7`; post-merge CI passed.
+  The original dirty OMCA checkout remains untouched. Candidate work is isolated in a
+  separate worktree and submitted as [#93](https://github.com/wangzitian0/oh-my-code-agent/pull/93).
+- Codex 0.153.4 rejected the old generated approval setting. #93 adopts the documented
+  untrusted-project migration with the existing read-only sandbox default, and versions
+  both bootstrap/full-generation cache identities. Real safe introspection now proves
+  OMCA MCP inclusion, repository Skill inclusion, native sentinel exclusion, and unchanged
+  native configuration snapshots. Claude 2.1.267 proves MCP inclusion/exclusion. All Go
+  race tests and lint pass; coverage is 80.4%. Human TUI/restart/model proof and Claude
+  Skill inventory remain UNKNOWN; this does not establish full interactive MVP acceptance.
+- TrueAlpha #821 was rebased onto main including the independently delivered MinIO
+  mirror fix #825. All applicable checks passed at `50bee8a`; a subsequent review nit
+  is being fixed and requires another current-head CI/review pass.
+- Finance #2036 now also restores both MinIO server/client acquisition through immutable
+  upstream Quay artifacts under #2037. Its existing toolchain gate now covers each CI
+  acquisition job and preview Compose. Six drift mutations failed against the old guard;
+  all 14 toolchain tests and static preflight pass after the repair. Remote CI must prove
+  actual image acquisition because Docker is unavailable in the local workspace.
+- The SDK gets a standalone app readiness example with an installed-wheel HTTP smoke:
+  healthy, unhealthy, and omitted required dependency cases exercise the documented
+  public entrypoint. Dependency names, required tiers, and business policy remain app-owned.
+
+Remaining: finish current-head review/checks, merge eligible PRs, verify post-merge runs,
+and update parent snapshots only to reviewed main commits. Human-only host evidence
+must stay visibly incomplete until actually supplied. No production promotion is planned.

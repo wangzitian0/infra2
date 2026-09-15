@@ -10,9 +10,11 @@ stricter local rule.
 2. Keep the PR scope within declared writable paths and explain non-goals.
 3. Include a checklist covering code, tests, documentation, compatibility, and rollout
    when applicable.
-4. Never let an AI agent merge a PR. Merge authority remains human-owned.
+4. Merge authority remains owner-controlled. An agent may merge only within explicit
+   authorization for the current session and the target repository's merge gates.
+   Without that authorization, deliver a reviewed, mergeable PR for the owner.
 5. Continue monitoring an open PR for late checks, review comments, and conflicting
-   base changes until the human merge or close decision.
+   base changes until merge or close, then verify applicable post-merge checks.
 
 ## Ready-To-Merge Evidence
 
