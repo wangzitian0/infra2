@@ -128,6 +128,18 @@ def test_either_takes_the_review_early_and_keeps_the_clock_as_the_bound():
     ).ready  # the clock bound
 
 
+def test_a_review_without_a_submission_time_is_not_a_submitted_review():
+    head = "abcdef0123456789"
+    unsubmitted = _facts(
+        head_sha=head,
+        last_push_at=NOW - 60,
+        reviews=(("copilot-pull-request-reviewer", head, 0.0),),
+    )
+    verdict = gate.evaluate(unsubmitted, now=NOW, policy="event")
+    assert not verdict.ready and "no automated review on head" in verdict.reasons[0]
+    assert not gate.evaluate(unsubmitted, now=NOW, policy="either").ready
+
+
 def test_the_clock_policy_ignores_reviews():
     facts = _facts(
         last_push_at=NOW - 60,

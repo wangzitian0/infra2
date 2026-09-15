@@ -259,7 +259,11 @@ def evaluate(
         f"head pushed {int(now - facts.last_push_at)}s ago; quiet period has "
         f"{clock_remaining}s to run"
     )
-    automated = [r for r in facts.reviews_on_head() if r[0] in AUTOMATED_REVIEWERS]
+    # A review without a submission time is not a submitted review (r[2] == 0.0 would
+    # read as "settled since the epoch"): only timestamped automated reviews count.
+    automated = [
+        r for r in facts.reviews_on_head() if r[0] in AUTOMATED_REVIEWERS and r[2] > 0
+    ]
     if automated:
         reviewed_at = max(r[2] for r in automated)
         event_remaining = math.ceil(reviewed_at + settle_minutes * 60 - now)
@@ -336,7 +340,7 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
 
     facts = collect(args.number, repo=args.repo, gh=gh)
     if args.request_review and not any(
-        r[0] in AUTOMATED_REVIEWERS for r in facts.reviews_on_head()
+        r[0] in AUTOMATED_REVIEWERS and r[2] > 0 for r in facts.reviews_on_head()
     ):
         request_copilot_review(facts, gh=gh)
         warning(f"#{facts.number}: Copilot review requested on {facts.head_sha[:7]}")
