@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from libs.harness_status import workspace_status
+from libs.harness_status import repository_status, workspace_status
 
 
 def test_workspace_status_exposes_pin_remote_release_and_drift(tmp_path: Path) -> None:
@@ -38,6 +38,8 @@ def test_workspace_status_exposes_pin_remote_release_and_drift(tmp_path: Path) -
         is_app = checkout == app
         if args == ["rev-parse", "--is-inside-work-tree"]:
             output = "true\n"
+        elif args == ["rev-parse", "--show-toplevel"]:
+            output = str(checkout) + "\n"
         elif args == ["fetch", "--prune", "--tags", "origin"]:
             output = ""
         elif args == ["rev-parse", "HEAD^{commit}"]:
@@ -102,6 +104,7 @@ def test_workspace_status_never_reports_clean_when_git_status_fails(
         args = argv[3:]
         values = {
             ("rev-parse", "--is-inside-work-tree"): "true\n",
+            ("rev-parse", "--show-toplevel"): str(tmp_path) + "\n",
             ("rev-parse", "HEAD^{commit}"): "a" * 40 + "\n",
             ("symbolic-ref", "--quiet", "--short", "HEAD"): "main\n",
             (
@@ -160,3 +163,30 @@ def test_status_passes_submodule_expectation_to_manifest_validation(
 
     assert harness.main(argv) == 0
     assert observed == [expected]
+
+
+def test_empty_optional_submodule_is_not_reported_as_its_parent(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", str(tmp_path)], check=True, capture_output=True)
+    (tmp_path / "tooling").mkdir()
+    calls = []
+
+    def runner(argv, **kwargs):
+        calls.append(argv[3:])
+        return subprocess.run(argv, **kwargs)
+
+    result = repository_status(
+        tmp_path,
+        {
+            "id": "tooling",
+            "path": "tooling",
+            "checkout": "submodule",
+            "release_identity": "tag",
+        },
+        fetch=True,
+        runner=runner,
+    )
+    assert not result.initialized
+    assert result.checkout_head is None
+    assert str(tmp_path.resolve()) in result.error
+    assert "git submodule update --init" in result.error
+    assert not any(call[0] == "fetch" for call in calls)

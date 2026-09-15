@@ -19,7 +19,7 @@ uv run python -m tools.harness check
 uv run python -m tools.harness status --fetch
 ```
 
-入口见 [harness/README.md](harness/README.md)，架构真源见
+各仓库的架构、工作与验证入口见 [harness/README.md](harness/README.md#repository-entry-points)，架构真源见
 [Harness Control Plane SSOT](docs/ssot/core.harness.md)。
 
 ## 🚀 Quick Start
@@ -54,7 +54,7 @@ invoke --list
 ```
 infra2/
 ├── harness/          # Workspace 清单与通用协作/设计偏好
-├── oh-my-code-agent/ # Workspace TUI 管理 (git submodule)
+├── oh-my-code-agent/ # Coding-agent 配置观察与隔离 runtime (git submodule)
 ├── bootstrap/        # L1 - 基础层 (1Password, Vault)
 ├── platform/         # L2 - 平台层 (PostgreSQL, Redis, Authentik)
 ├── finance_report/   # L3 - 应用层 (Finance Report)

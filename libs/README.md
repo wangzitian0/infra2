@@ -32,7 +32,7 @@
 | `backup_restore.py` | Off-host backup restore rehearsal helpers | `latest_artifact_for_service()`, `build_postgres_rehearsal_plan()`, `run_postgres_restore_rehearsal()` |
 | `app_deploy_request.py` | Fail-closed App request validation, Production evidence verification, and deploy planning | `verify_production_evidence()`, `validate_request_authority()`, `make_plan()` |
 | `harness_manifest.py` | Read-only workspace inventory and autonomy-boundary validation | `load_manifest()`, `validate_manifest()`, `check_workspace()` |
-| `harness_status.py` | Checkout pin/remote/release observation without checkout mutation | `workspace_status()`, `repository_status()` |
+| `harness_status.py` | Checkout pin/remote/release observation; verifies repository roots before fetching so empty submodules cannot report their parent | `workspace_status()`, `repository_status()` |
 
 ## Usage Patterns
 
