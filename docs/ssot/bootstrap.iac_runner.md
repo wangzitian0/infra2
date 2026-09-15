@@ -883,7 +883,7 @@ flowchart LR
 | **代码逻辑** | IaC Runner 自身 | 低 | 回滚镜像 |
 | **Dockerfile** | 构建流程 | 中 | 重新构建 |
 | **Vault 密钥** | 认证失败 | 高 | 回滚密钥 |
-| **`/deploy` 签名密钥**（`IAC_WEBHOOK_SECRET`） | reconcile 401、staging/prod 发布中断 | 中 | 修正 Actions secret / Vault 值 |
+| **`/deploy` 签名密钥**——同一个值、两个名字：调用方 GitHub Actions secret `IAC_WEBHOOK_SECRET`（`reconcile-iac-inputs.yml` / `deploy.yml` / `app-deploy-request.yml` → `deploy_v2` / `iac_runner_client` 用它签名）→ Runner 端 env `WEBHOOK_SECRET`（vault-agent 从 `secret/data/bootstrap/production/iac_runner` 渲染，`webhook_server.py` 用它验签） | 两边不一致 → 每个签名 `/deploy` 都 401，reconcile / staging / prod 发布中断 | 中 | 以 Vault 值为准，把 GitHub secret `IAC_WEBHOOK_SECRET` 改成同一个值（轮换见 §8.3） |
 
 ### 10.3 故障转移
 
