@@ -36,7 +36,8 @@ services:
 """
 
 
-def _ps(*rows: tuple[str, str, str]) -> str:
+def _ps(*rows: tuple[str, ...]) -> str:
+    """docker ps lines; a row of any other width simulates malformed output."""
     return "\n".join("\t".join(row) for row in rows) + "\n"
 
 
@@ -214,6 +215,18 @@ def test_verify_in_service_fails_on_a_stale_clone_before_looking_at_containers(
     assert len(c.commands) == 1
     unreadable = _Context([_Run(False, "", "fatal: not a git repository")])
     assert "no readable HEAD" in deployer.verify_in_service(unreadable, "cid")
+
+
+def test_verify_in_service_fails_when_the_pinned_ref_cannot_be_resolved(
+    deployer, monkeypatch
+):
+    """Fail-closed (review): without a resolvable pinned ref the identity proof is
+    impossible, and an unprovable deploy is not a success."""
+    monkeypatch.setattr(deployer, "_checkout_sha", classmethod(lambda cls, ref: None))
+    c = _Context([])
+    message = deployer.verify_in_service(c, "cid")
+    assert message and "cannot resolve the ref it pinned" in message
+    assert c.commands == []
 
 
 def test_verify_in_service_reports_the_created_frontend(deployer):

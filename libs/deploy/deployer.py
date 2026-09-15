@@ -992,7 +992,8 @@ class Deployer:
           on up to IN_SERVICE_DEADLINE_SECONDS.
 
         Returns an error string to fail the deploy, None to pass. Skipped with a warning
-        when VPS_HOST is unset (no host to ask).
+        only when VPS_HOST is unset (no host to ask); a checkout that cannot resolve the
+        ref it pinned fails, since the identity proof is then impossible.
         """
         from libs.deploy.in_service import (
             DOCKER_PS_FORMAT,
@@ -1016,25 +1017,30 @@ class Deployer:
         if not project:
             return f"Dokploy compose {compose_id} reports no appName; its containers cannot be found"
 
+        destination = shlex.quote(f"{ssh_user}@{host}")
+
         def on_host(command: str) -> Any:
             return c.run(
-                f"ssh {ssh_user}@{host} {shlex.quote(command)}", hide=True, warn=True
+                f"ssh {destination} {shlex.quote(command)}", hide=True, warn=True
             )
 
+        # Fail-closed: a checkout that cannot say what it pinned cannot prove what Dokploy
+        # checked out, and that proof is the point (#629).
         pinned = cls._checkout_ref()
         expected_sha = cls._checkout_sha(pinned) if pinned else None
-        if expected_sha:
-            head = on_host(f"git -C /etc/dokploy/compose/{project}/code rev-parse HEAD")
-            deployed_sha = head.stdout.strip() if head.ok else ""
-            if deployed_sha != expected_sha:
-                return (
-                    f"Dokploy's checkout for {cls.service} is at "
-                    f"{deployed_sha[:12] or 'no readable HEAD'} but this deploy pinned "
-                    f"{pinned} ({expected_sha[:12]}); the record reports done on a stale clone"
-                )
-        else:
-            warning(
-                f"{cls.service}: cannot resolve the pinned ref here; identity unchecked"
+        if not pinned or not expected_sha:
+            return (
+                f"this checkout cannot resolve the ref it pinned for {cls.service} "
+                f"({pinned or 'no tag or HEAD'}); Dokploy's checkout cannot be proven"
+            )
+        code_dir = shlex.quote(f"/etc/dokploy/compose/{project}/code")
+        head = on_host(f"git -C {code_dir} rev-parse HEAD")
+        deployed_sha = head.stdout.strip() if head.ok else ""
+        if deployed_sha != expected_sha:
+            return (
+                f"Dokploy's checkout for {cls.service} is at "
+                f"{deployed_sha[:12] or 'no readable HEAD'} but this deploy pinned "
+                f"{pinned} ({expected_sha[:12]}); the record reports done on a stale clone"
             )
 
         expected = expected_running_services(cls.get_compose_content(c))
