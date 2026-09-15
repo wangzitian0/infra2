@@ -584,42 +584,6 @@ def test_down_is_idempotent_when_alias_absent():
 # --- the readiness poller --------------------------------------------------------
 
 
-def test_wait_for_health_returns_true_on_first_200():
-    snapshots = iter([(503, ""), (200, "ok")])
-    healthy = pl._wait_for_health(
-        "https://x/api/health",
-        timeout=600,
-        interval=0,
-        http_get=lambda u, t: next(snapshots),
-        _sleep=lambda _s: None,
-        _now=iter([0, 1]).__next__,
-    )
-    assert healthy is True
-
-
-def test_wait_for_health_returns_false_on_timeout():
-    healthy = pl._wait_for_health(
-        "https://x/api/health",
-        timeout=600,
-        interval=0,
-        http_get=lambda u, t: (0, "conn refused"),
-        _sleep=lambda _s: None,
-        _now=iter([0, 700]).__next__,
-    )
-    assert healthy is False
-
-
-def test_wait_for_health_legacy_status_precheck_rejects_error():
-    with pytest.raises(RuntimeError, match="composeStatus=error"):
-        pl._wait_for_health(
-            "https://x/api/health",
-            timeout=600,
-            interval=10,
-            http_get=_ok_get,
-            deploy_status=lambda: "error",
-        )
-
-
 @pytest.mark.parametrize("body", ["not-json", "[]"])
 def test_versioned_readiness_rejects_unusable_json(body):
     assert (

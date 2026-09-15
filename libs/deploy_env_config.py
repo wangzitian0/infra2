@@ -103,31 +103,6 @@ def env_config(env: str) -> EnvConfig:
         ) from None
 
 
-def for_env_suffix(env: str, *, number: int | str | None = None) -> str:
-    """The container/domain ENV_SUFFIX for a deploy env (preview is -pr-<number>)."""
-    cfg = env_config(env)
-    if cfg.dynamic and number is not None:
-        return f"-pr-{number}"
-    return cfg.env_suffix
-
-
-def with_compose_id(env: str, compose_id: str) -> EnvConfig:
-    """Bind a runtime compose_id (used for the dynamic preview env)."""
-    return replace(env_config(env), compose_id=compose_id)
-
-
-# ---------------------------------------------------------------------------
-# Per-app fixed-compose targets (#500)
-# ---------------------------------------------------------------------------
-#
-# `env_config(env)` above owns the env REGIME (suffix/data/gates) — platform-wide policy,
-# identical for every fixed-compose app. `compose_id` and `app_url_pattern` are the two
-# facts that genuinely vary PER APP (which Dokploy compose, which public URL). This
-# overlay is the generalization point: finance_report keeps calling `env_config(env)`
-# directly (byte-identical, no change), and other bespoke apps register their overrides
-# here instead of duplicating the whole EnvConfig table.
-
-
 @dataclass(frozen=True)
 class _ComposeOverride:
     compose_id: str | None

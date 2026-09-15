@@ -25,4 +25,4 @@
 ## Used by
 
 - [docs/ssot/README.md](./README.md)
-- [platform/11.signoz](../platform/11.signoz/README.md)
+- [platform/11.signoz](../../platform/11.signoz/README.md)
