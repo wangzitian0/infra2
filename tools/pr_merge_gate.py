@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import math
 import subprocess
 import sys
 import time
@@ -39,7 +40,12 @@ DEPLOY_TRIGGERING_GLOBS = (
     "scripts/deploy_iac_runner_bootstrap.sh",
     ".github/workflows/deploy.yml",
 )
+# gh's own classification of a check (`bucket`): pass / fail / pending / skipping /
+# cancel. `state` (SUCCESS, SKIPPED, IN_PROGRESS, …) is kept as the fallback for a gh
+# build without buckets.
+GREEN_BUCKETS = frozenset({"pass", "skipping"})
 GREEN_STATES = frozenset({"SUCCESS", "SKIPPED", "NEUTRAL"})
+MAX_REVIEW_THREADS = 100
 
 Runner = Callable[[Sequence[str]], str]
 
@@ -53,8 +59,9 @@ class HeadFacts:
     head_sha: str
     files: tuple[str, ...]
     last_push_at: float  # epoch seconds of the newest commit on the head
-    checks: tuple[tuple[str, str], ...]  # (name, state)
+    checks: tuple[tuple[str, str], ...]  # (name, gh bucket or state)
     unresolved_threads: int
+    review_threads_total: int = 0
 
 
 @dataclass
@@ -98,7 +105,17 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
         )
     )
     checks = json.loads(
-        gh(["pr", "checks", str(number), "--repo", repo, "--json", "name,state"])
+        gh(
+            [
+                "pr",
+                "checks",
+                str(number),
+                "--repo",
+                repo,
+                "--json",
+                "name,state,bucket",
+            ]
+        )
         or "[]"
     )
     owner, name = repo.split("/", 1)
@@ -109,12 +126,13 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
                 "graphql",
                 "-f",
                 "query=query{repository(owner:%s,name:%s){pullRequest(number:%d)"
-                "{reviewThreads(first:100){nodes{isResolved}}}}}"
-                % (json.dumps(owner), json.dumps(name), number),
+                "{reviewThreads(first:%d){totalCount nodes{isResolved}}}}}"
+                % (json.dumps(owner), json.dumps(name), number, MAX_REVIEW_THREADS),
             ]
         )
     )
-    nodes = threads["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+    review_threads = threads["data"]["repository"]["pullRequest"]["reviewThreads"]
+    nodes = review_threads["nodes"]
     commits = view.get("commits") or []
     last_push = max((_epoch(c["committedDate"]) for c in commits), default=0.0)
     return HeadFacts(
@@ -125,8 +143,12 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
         head_sha=str(view.get("headRefOid") or ""),
         files=tuple(str(f["path"]) for f in view.get("files") or []),
         last_push_at=last_push,
-        checks=tuple((str(c["name"]), str(c["state"])) for c in checks),
+        checks=tuple(
+            (str(c["name"]), str(c.get("bucket") or c.get("state") or ""))
+            for c in checks
+        ),
         unresolved_threads=sum(1 for n in nodes if not n.get("isResolved")),
+        review_threads_total=int(review_threads.get("totalCount") or len(nodes)),
     )
 
 
@@ -163,7 +185,9 @@ def evaluate(
         )
         owner = True
     not_green = sorted(
-        name for name, state in facts.checks if state not in GREEN_STATES
+        name
+        for name, verdict in facts.checks
+        if verdict not in GREEN_BUCKETS and verdict not in GREEN_STATES
     )
     if not facts.checks:
         reasons.append("no checks reported yet")
@@ -171,7 +195,13 @@ def evaluate(
         reasons.append(f"check(s) not green: {', '.join(not_green)}")
     if facts.unresolved_threads:
         reasons.append(f"{facts.unresolved_threads} review thread(s) unresolved")
-    remaining = int(facts.last_push_at + quiet_minutes * 60 - now)
+    if facts.review_threads_total > MAX_REVIEW_THREADS:
+        reasons.append(
+            f"{facts.review_threads_total} review threads, only the first "
+            f"{MAX_REVIEW_THREADS} were read: resolve or evaluate by hand"
+        )
+    # Round up: a fractional second still inside the window is inside the window.
+    remaining = math.ceil(facts.last_push_at + quiet_minutes * 60 - now)
     if remaining > 0:
         reasons.append(
             f"head pushed {int(now - facts.last_push_at)}s ago; quiet period has "
@@ -208,6 +238,8 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
     parser.add_argument("--json", action="store_true", help="machine-readable verdict")
     args = parser.parse_args(argv)
 
+    from libs.console import error, success, warning
+
     facts = collect(args.number, repo=args.repo, gh=gh)
     verdict = evaluate(facts, now=now(), quiet_minutes=args.quiet_minutes)
     if args.json:
@@ -224,7 +256,13 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
             )
         )
     else:
-        print(render(facts, verdict))
+        text = render(facts, verdict)
+        if verdict.ready:
+            success(text)
+        elif verdict.owner_required:
+            error(text)
+        else:
+            warning(text)
     if verdict.ready and args.merge:
         gh(
             [
@@ -239,7 +277,7 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
                 facts.head_sha,
             ]
         )
-        print(f"merged #{facts.number} at {facts.head_sha[:7]}")
+        success(f"merged #{facts.number} at {facts.head_sha[:7]}")
     return verdict.exit_code
 
 

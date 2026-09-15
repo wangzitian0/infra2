@@ -20,7 +20,7 @@ def _facts(**overrides) -> gate.HeadFacts:
         head_sha="abcdef0123456789",
         files=("libs/probe_specs.py",),
         last_push_at=NOW - 13 * 60,
-        checks=(("Lint", "SUCCESS"), ("Tests", "SUCCESS"), ("Docs", "SKIPPED")),
+        checks=(("Lint", "pass"), ("Tests", "pass"), ("Docs", "skipping")),
         unresolved_threads=0,
     )
     base.update(overrides)
@@ -41,7 +41,7 @@ def test_the_quiet_period_is_counted_from_the_last_push():
 
 def test_pending_checks_and_open_threads_are_not_yet_not_owner():
     verdict = gate.evaluate(
-        _facts(checks=(("Tests", "IN_PROGRESS"),), unresolved_threads=2), now=NOW
+        _facts(checks=(("Tests", "pending"),), unresolved_threads=2), now=NOW
     )
     assert verdict.exit_code == 1 and not verdict.owner_required
     assert "check(s) not green: Tests" in verdict.reasons
@@ -59,6 +59,21 @@ def test_a_protected_file_or_a_deploy_triggering_path_needs_the_owner():
     assert workflow.owner_required
 
 
+def test_a_fractional_second_inside_the_window_is_inside_the_window():
+    verdict = gate.evaluate(_facts(last_push_at=NOW - 12 * 60 + 0.4), now=NOW)
+    assert not verdict.ready and verdict.quiet_remaining_seconds == 1
+
+
+def test_more_threads_than_were_read_is_not_a_clean_verdict():
+    verdict = gate.evaluate(_facts(review_threads_total=150), now=NOW)
+    assert not verdict.ready and "only the first 100 were read" in verdict.reasons[0]
+
+
+def test_state_is_the_fallback_when_gh_reports_no_bucket():
+    assert gate.evaluate(_facts(checks=(("Tests", "SUCCESS"),)), now=NOW).ready
+    assert not gate.evaluate(_facts(checks=(("Tests", "FAILURE"),)), now=NOW).ready
+
+
 def test_no_checks_yet_is_not_green():
     verdict = gate.evaluate(_facts(checks=()), now=NOW)
     assert not verdict.ready and "no checks reported yet" in verdict.reasons
@@ -68,7 +83,7 @@ class _Gh:
     """Canned gh answers; records a merge if asked."""
 
     def __init__(
-        self, *, unresolved=0, states=("SUCCESS",), pushed_iso="2026-09-15T06:55:22Z"
+        self, *, unresolved=0, states=("pass",), pushed_iso="2026-09-15T06:55:22Z"
     ):
         self.calls: list[list[str]] = []
         self.unresolved = unresolved
@@ -94,8 +109,14 @@ class _Gh:
                 }
             )
         if argv[:2] == ["pr", "checks"]:
+            # gh's real shape (read live 2026-09-15): `state` is SUCCESS/SKIPPED/…,
+            # `bucket` is pass/fail/pending/skipping; there is no `conclusion` field,
+            # and `pr view --json files,commits` returns flat arrays.
             return json.dumps(
-                [{"name": f"c{i}", "state": s} for i, s in enumerate(self.states)]
+                [
+                    {"name": f"c{i}", "state": "COMPLETED", "bucket": s}
+                    for i, s in enumerate(self.states)
+                ]
             )
         if argv[:2] == ["api", "graphql"]:
             nodes = [{"isResolved": False}] * self.unresolved + [{"isResolved": True}]
@@ -103,7 +124,12 @@ class _Gh:
                 {
                     "data": {
                         "repository": {
-                            "pullRequest": {"reviewThreads": {"nodes": nodes}}
+                            "pullRequest": {
+                                "reviewThreads": {
+                                    "totalCount": len(nodes),
+                                    "nodes": nodes,
+                                }
+                            }
                         }
                     }
                 }
@@ -117,7 +143,8 @@ def test_collect_reads_the_newest_commit_as_the_last_push():
     facts = gate.collect(704, gh=_Gh())
     assert facts.head_sha == "feedfacefeedface"
     assert facts.last_push_at == gate._epoch("2026-09-15T06:55:22Z")
-    assert facts.checks == (("c0", "SUCCESS"),) and facts.unresolved_threads == 0
+    assert facts.checks == (("c0", "pass"),) and facts.unresolved_threads == 0
+    assert facts.review_threads_total == 1
 
 
 def test_main_merges_only_a_ready_head_and_pins_the_head_commit(capsys):
