@@ -95,6 +95,7 @@ also enforces compose↔inventory equality and registry-derived `service_id` val
 | `dokploy` | `tools/dokploy_env.py` | Dokploy project/environment helpers |
 | `local` | `tools/local_init.py` | Local CLI checks and bootstrap helpers |
 | `vault-audit` | `tools/vault_audit.py` | Read-only Vault app-token self-refresh audit |
+| `pr-merge-gate` | `tools/pr_merge_gate.py` | AGENTS.md session merge authority as a check (checks, threads, 12-min quiet, protected/deploy-triggering paths); `--merge` squash-merges only a ready head |
 
 ## Common Conventions
 
