@@ -21,7 +21,8 @@
 
 - [x] Add read-only `harness status` for parent pin, checkout/remote head,
       ahead/behind, dirty state, and release identity; optional fetch changes refs only.
-- [ ] Add an infra2-sdk-local contributor/agent guide through an independent SDK PR.
+- [x] Add an infra2-sdk-local contributor guide through independent SDK PR #31
+      (implementation and checks complete; integration awaits owner review).
 - [ ] Decide whether workspace preference changes need their own version identifier.
 - [ ] Add cross-repository compatibility matrix reporting from released evidence.
 - [ ] Archive Infra-019 after the selected follow-ups are complete or explicitly deferred.
@@ -77,3 +78,24 @@ environment generator retains legacy envelope/filter semantics; replacing it who
 with SDK `manifests.main` requires an explicit compatibility proof first. TrueAlpha's
 KG probes and domain manifests retain application policy. Structural checks do not
 prove either application's deployed behavior. No product issue is closed on this review.
+
+### Review delivery and proof
+
+| Repository | Independent PR | Evidence / remaining boundary |
+| --- | --- | --- |
+| infra2 | [#699](https://github.com/wangzitian0/infra2/pull/699) | 29 harness/adoption tests; workspace inventory check and documentation build pass. CI passed at `9785316`; this evidence update needs a fresh head check. |
+| infra2-sdk | [#31](https://github.com/wangzitian0/infra2-sdk/pull/31) | 308 tests, 94.43% coverage; all ten remote checks pass at `9f44145`. Candidate version 1.5.2 is not released. |
+| TrueAlpha | [#821](https://github.com/wangzitian0/truealpha/pull/821) | 14 scoped runtime tests and prepush pass at `21be729`; remote Python gates, Dagster liveness and application image builds pass. Full CI is blocked on MinIO acquisition. |
+| Finance Report | [#2036](https://github.com/wangzitian0/finance_report/pull/2036) | 36 local pin/workflow/common-tooling tests, lint/typecheck and static preflight pass. Remote CI exposed the new wrapper's mismatch with the common CLI contract; the corrected wrapper passes that existing regression gate. Full remote revalidation remains required; integration and Tier-1 E2E also stop on MinIO acquisition. |
+| OMCA | [#91](https://github.com/wangzitian0/oh-my-code-agent/pull/91) | Go race tests, build and lint pass; all four remote checks pass at `0b3dce7`. Original checkout and installed binary are unchanged. Full host qualification remains incomplete as above. |
+
+The shared CI blocker is `minio/minio:RELEASE.2025-09-07T16-13-09Z`: Docker
+reports pull access denied before tests start. TrueAlpha's core/data-engine/runtime
+jobs and Finance's integration/Tier-1 jobs cannot use the configured image. This
+establishes acquisition failure, not the registry-side cause. Track restoration in
+[TrueAlpha #823](https://github.com/wangzitian0/truealpha/issues/823); retain real
+object-store checks and verify any replacement artifact's provenance. No production
+storage migration is part of these structural changes.
+
+PR check status is evidence for the stated head, not merge authorization. Integrated
+submodule pins remain unchanged until the independent changes are reviewed and merged.
