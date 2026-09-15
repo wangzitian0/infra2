@@ -10,10 +10,16 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-
-from infra2_sdk.runtime.config_schema import EnvironmentField, EnvironmentManifest
+from typing import TYPE_CHECKING
 
 from libs import app_manifests
+
+if TYPE_CHECKING:
+    from infra2_sdk.runtime.config_schema import EnvironmentField, EnvironmentManifest
+
+# The SERVICES table is plain data and is read by contexts without the SDK (the ops-checks
+# vault audit installs neither the SDK nor a manifest loader); only manifest loading needs
+# infra2_sdk, so it is imported where it is used.
 from libs.app_manifests import CACHE_DIR  # noqa: F401  (re-exported)
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -203,6 +209,8 @@ def manifest_file(path: str, *, root: Path = ROOT) -> Path:
 def load_manifest(path: str, *, root: Path = ROOT, fetch=None) -> EnvironmentManifest:
     """Read one manifest; an app manifest absent from both checkout and cache is fetched
     at the submodule's pinned commit first (CI and the iac-runner have no submodules)."""
+    from infra2_sdk.runtime.config_schema import EnvironmentManifest
+
     file = manifest_file(path, root=root)
     if not file.exists() and path.startswith("repos/"):
         app_manifests.ensure_present(
@@ -229,6 +237,8 @@ def merged_manifest(service: Service, *, root: Path = ROOT) -> EnvironmentManife
     DATABASE_URL); they must agree on how it is produced and rendered, and the first
     declaration wins for the rest (requiredness, description).
     """
+    from infra2_sdk.runtime.config_schema import EnvironmentManifest
+
     fields: dict[str, EnvironmentField] = {}
     for path in service.manifests:
         for entry in load_manifest(path, root=root).fields:
