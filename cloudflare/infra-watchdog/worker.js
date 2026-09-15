@@ -8,6 +8,8 @@ const DEFAULT_TARGETS = [
   ["staging", "authentik-public-route", "platform/authentik", "https://sso-staging.zitian.party/-/health/live/", [200, 204, 302], "warning"],
   ["production", "finance-report-web-public-route", "finance_report/app", "https://report.zitian.party/", [200, 302, 307, 308], "critical"],
   ["production", "finance-report-api-public-route", "finance_report/app", "https://report.zitian.party/api/health", [200], "critical"],
+  ["production", "truealpha-web-public-route", "truealpha/app", "https://truealpha.club/", [200, 302, 307, 308], "critical"],
+  ["production", "truealpha-api-public-route", "truealpha/app", "https://truealpha.club/api/health", [200], "critical"],
   // finance_report#1653: `?full=1` asserts every DEPENDENCY_MANIFEST.required_for(tier)
   // dependency is present (not just DB+S3 liveness). Without this, a required dep
   // (e.g. workflow_engine/Prefect) can be down for days — the plain /api/health above
@@ -24,6 +26,8 @@ const DEFAULT_TARGETS = [
   ],
   ["staging", "finance-report-web-public-route", "finance_report/app", "https://report-staging.zitian.party/", [200, 302, 307, 308], "warning"],
   ["staging", "finance-report-api-public-route", "finance_report/app", "https://report-staging.zitian.party/api/health", [200], "warning"],
+  ["staging", "truealpha-web-public-route", "truealpha/app", "https://truealpha-staging.truealpha.club/", [200, 302, 307, 308], "warning"],
+  ["staging", "truealpha-api-public-route", "truealpha/app", "https://truealpha-staging.truealpha.club/api/health", [200], "warning"],
   [
     "staging",
     "finance-report-api-full-health-route",

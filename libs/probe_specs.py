@@ -195,7 +195,14 @@ def render_public_route_spec_text(env: str, domain: str, attrs=None) -> str:
             severity = facet.severity if is_production else "warning"
             # domain resolved at render time (the $-free transport rejects
             # placeholders — the Dokploy .env lesson, #541)
-            target = f"https://{sub}{host_suffix}.{domain}{facet.path}"
+            if meta.domain and is_production:
+                # A product domain (truealpha.club) is the bare host in production;
+                # non-production keeps the prefix: truealpha-staging.truealpha.club
+                # (truealpha#474 — the formula the deploy ships as APP_HOST).
+                host = meta.domain
+            else:
+                host = f"{sub}{host_suffix}.{meta.domain or domain}"
+            target = f"https://{host}{facet.path}"
             lines.append(
                 "|".join(
                     [

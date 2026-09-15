@@ -42,8 +42,12 @@ WATCHDOG_TARGETS_JSON = """
   {"environment":"staging","name":"authentik-public-route","service_id":"platform/authentik","url":"https://sso-staging.zitian.party/-/health/live/","statuses":[200,204,302],"severity":"warning"},
   {"environment":"production","name":"finance-report-web-public-route","service_id":"finance_report/app","url":"https://report.zitian.party/","statuses":[200,302,307,308],"severity":"critical"},
   {"environment":"production","name":"finance-report-api-public-route","service_id":"finance_report/app","url":"https://report.zitian.party/api/health","statuses":[200],"severity":"critical"},
+  {"environment":"production","name":"truealpha-web-public-route","service_id":"truealpha/app","url":"https://truealpha.club/","statuses":[200,302,307,308],"severity":"critical"},
+  {"environment":"production","name":"truealpha-api-public-route","service_id":"truealpha/app","url":"https://truealpha.club/api/health","statuses":[200],"severity":"critical"},
   {"environment":"staging","name":"finance-report-web-public-route","service_id":"finance_report/app","url":"https://report-staging.zitian.party/","statuses":[200,302,307,308],"severity":"warning"},
-  {"environment":"staging","name":"finance-report-api-public-route","service_id":"finance_report/app","url":"https://report-staging.zitian.party/api/health","statuses":[200],"severity":"warning"}
+  {"environment":"staging","name":"finance-report-api-public-route","service_id":"finance_report/app","url":"https://report-staging.zitian.party/api/health","statuses":[200],"severity":"warning"},
+  {"environment":"staging","name":"truealpha-web-public-route","service_id":"truealpha/app","url":"https://truealpha-staging.truealpha.club/","statuses":[200,302,307,308],"severity":"warning"},
+  {"environment":"staging","name":"truealpha-api-public-route","service_id":"truealpha/app","url":"https://truealpha-staging.truealpha.club/api/health","statuses":[200],"severity":"warning"}
 ]
 """
 WATCHDOG_HEARTBEATS_JSON = """

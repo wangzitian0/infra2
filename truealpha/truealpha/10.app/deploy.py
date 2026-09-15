@@ -9,7 +9,7 @@ from libs.common import get_env
 from libs.console import error, header, info, success, warning
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.env import VaultSecrets, generate_password
-from libs.service_facets import SecretsFacet
+from libs.service_facets import ProbeFacet, PublicRouteFacet, SecretsFacet, SignalFacet
 
 shared_tasks = sys.modules.get("truealpha.10.app.shared")
 
@@ -34,6 +34,48 @@ class AppDeployer(Deployer):
     domain = "truealpha.club"
     service_port = 3000
     service_name = "web"
+
+    # Minute-tier internal probes (#608, the half that stayed open: the two app
+    # containers had no probe at all, so the production runner reported
+    # "24/24 ok" with truealpha absent). Both containers sit on dokploy-network;
+    # the llm-service serves /health, the Next.js web answers 200 on / (its
+    # public /api/health is Traefik-routed to the llm-service).
+    probes = (
+        ProbeFacet(
+            name="truealpha-web-http",
+            kind="http",
+            target="http://truealpha-web${ENV_SUFFIX}:3000/",
+            expected="200",
+        ),
+        ProbeFacet(
+            name="truealpha-llm-http",
+            kind="http",
+            target="http://truealpha-llm${ENV_SUFFIX}:8000/health",
+            expected="200",
+        ),
+    )
+    # The public surface on the product domain (#543 layer 3). The renderer
+    # applies `domain` above: production is the bare domain, non-production is
+    # truealpha<suffix>.<domain> — the formula compose_env_overrides ships as
+    # APP_HOST (truealpha#474); a test holds the two together.
+    public_routes = (
+        PublicRouteFacet(
+            name="truealpha-web-public-route", subdomain="truealpha", path="/"
+        ),
+        PublicRouteFacet(
+            name="truealpha-api-public-route",
+            subdomain="truealpha",
+            path="/api/health",
+        ),
+    )
+    signals = (
+        SignalFacet(
+            tier="minute",
+            type="alert",
+            consecutive_failures=3,
+            renotify_window_sec=1800,
+        ),
+    )
 
     # Vault self-refresh facts (#542): the audit inventory derives from these
     # (AppRole auth from day one). Two surfaces, mirroring finance_report/app:

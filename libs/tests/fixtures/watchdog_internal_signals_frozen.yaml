@@ -381,3 +381,35 @@ signals:
   severity: warning
   cadence: 60s
   alert_threshold: 3 consecutive failures
+- signal_id: production.truealpha-web-http
+  environment: production
+  component: app
+  signal: truealpha-web-http
+  primary_owner: internal
+  severity: critical
+  cadence: 60s
+  alert_threshold: 3 consecutive failures
+- signal_id: staging.truealpha-web-http
+  environment: staging
+  component: app
+  signal: truealpha-web-http
+  primary_owner: internal
+  severity: critical
+  cadence: 60s
+  alert_threshold: 3 consecutive failures
+- signal_id: production.truealpha-llm-http
+  environment: production
+  component: app
+  signal: truealpha-llm-http
+  primary_owner: internal
+  severity: critical
+  cadence: 60s
+  alert_threshold: 3 consecutive failures
+- signal_id: staging.truealpha-llm-http
+  environment: staging
+  component: app
+  signal: truealpha-llm-http
+  primary_owner: internal
+  severity: critical
+  cadence: 60s
+  alert_threshold: 3 consecutive failures
