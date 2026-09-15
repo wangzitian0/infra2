@@ -194,7 +194,7 @@
 
 - 本节上方“可合流条件”全部满足（Merge Authority 全绿、目标分支正确、变更契约完整、安全与运维门禁通过）；
 - 所有 actionable review threads 已处理并 resolved（包括 Copilot 与 `/code-review`）；
-- 距该 PR 最后一次 push 已静置 **12 分钟**——留给异步 review 落地，避免合流一个还没被看完的 head；
+- 该 head 已**静置**：自动 review（Copilot）已对**当前 head SHA** 提交且距该 review ≥ 3 分钟；若自动 review 迟迟不来，仍以距最后一次 push 12 分钟为上限（两者先到者为准）。fix-up push 不会自动触发 Copilot 复审，需要显式请求。判定与合流统一走 `python -m tools.pr_merge_gate <n> --policy either --request-review --merge`（exit 1 = 未到时机，exit 2 = 需要 owner），不再肉眼看表；
 - 不触碰受保护文件（`AGENTS.md`、`CLAUDE.md`，以及各应用仓库标注为 protected 的架构文档）；
 - 合并本身不触发 apply / deploy（含 L1 bootstrap self-update、`bootstrap/06.iac_runner/**` 触发的 runner 重建、尚未解耦的 observability apply）。
 
