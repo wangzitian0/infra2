@@ -325,3 +325,127 @@ the Vault self-refresh audit in
 [run 34939451271](https://github.com/wangzitian0/infra2/actions/runs/34939451271) passed
 on that main commit. The earlier import failure did not establish a service outage.
 No infrastructure apply or production promotion is part of this delivery.
+
+## 2026-09-15 standalone OMCA follow-up
+
+This section supersedes the installed OMCA version/proof above after the local
+Codex upgrade. The distribution boundary is now part of the harness acceptance:
+SDK consumption uses a released artifact outside the repository; OMCA must run
+without its build checkout. Human host interaction remains a separate gate.
+
+- OMCA [#96](https://github.com/wangzitian0/oh-my-code-agent/pull/96) merged as
+  `751ddc54b42647abd77403fe75d002d8662c7d45`. It adds the exact Codex 0.154.0
+  observation pack and preserves adjacent-version rejection. Post-merge
+  [CI 34954115739](https://github.com/wangzitian0/oh-my-code-agent/actions/runs/34954115739)
+  passed.
+- OMCA [#98](https://github.com/wangzitian0/oh-my-code-agent/pull/98) merged as
+  `fa0455838d80ab13da156b6e567317919b525b53`. Knowledge and ontology JSON are
+  embedded from their canonical files. A trimmed-path CLI report and default
+  ontology lookup failed before the fix and pass after it; CI includes the
+  standalone gate. Post-merge
+  [CI 34955431174](https://github.com/wangzitian0/oh-my-code-agent/actions/runs/34955431174)
+  passed, including the full race suite. Both PRs passed current-head review,
+  with all review threads resolved before merge.
+- Built the merged commit from a temporary source archive with
+  `go build -trimpath`, removed that build source, and atomically installed the executable
+  at `~/.local/bin/omca`. The installed version is `dev+fa04558`; SHA-256 is
+  `b6682e2d23ea4f1ecb231b3a5aa4e9c32b131f5077937efaa520133951d2325b`.
+  The previous executable is retained as
+  `~/.local/bin/omca.before-standalone-20260915`.
+- At `2026-09-15T10:00:19Z`, that installed executable ran `omca qualify tui --json`
+  outside the checkout: Codex 0.154.0 Knowledge/MCP/Skills passed; Claude Code
+  2.1.272 Knowledge/MCP passed. Native configuration snapshots remained equal.
+  The full safe artifact is below; expected exit 1 reflects the remaining human
+  gate and Claude's unavailable automatic Skill inventory, not a passed full TUI.
+- The SDK's fresh standalone proof at `2026-09-15T07:59:41Z` downloaded the
+  published v1.5.2 wheel, verified SHA-256
+  `e422846adab5fb25818e8722f06a71a78de2b09527c28116533bf6a0d1e48ec8`, and
+  installed all extras into a new environment outside every repository.
+  Dependency compatibility and all six smoke groups passed; the HTTP app
+  entrypoint covered healthy, unhealthy and missing dependency outcomes.
+  A separate current-source run passed all 308 SDK tests.
+
+The OMCA gitlink now pins `fa0455838d80ab13da156b6e567317919b525b53`. The original
+OMCA checkout's pre-existing edits remain preserved, so its worktree can still
+show behind/dirty status; the installed tool has no source-checkout dependency.
+
+Remaining acceptance: a human runs the documented Codex and Claude interactive
+qualification against the installed executable and supplies its initial/restart
+TUI, Skill inventory and model-canary outcomes. Automatic evidence does not
+complete that requirement, and Infra-019 remains In Progress.
+
+```json
+{
+  "kind": "InteractiveTUIQualification",
+  "generatedAt": "2026-09-15T10:00:19Z",
+  "hosts": [
+    {
+      "host": "codex",
+      "version": "0.154.0",
+      "knowledgePack": "codex:cli:0.154.0",
+      "checks": [
+        {
+          "id": "knowledge-pack",
+          "status": "PASS",
+          "evidence": "E2",
+          "detail": "installed host version is covered by codex:cli:0.154.0"
+        },
+        {
+          "id": "native-mcp-exclusion",
+          "status": "PASS",
+          "evidence": "E3",
+          "detail": "host-reported MCP inventory=[omca]; native sentinel absent"
+        },
+        {
+          "id": "skill-isolation",
+          "status": "PASS",
+          "evidence": "E3",
+          "detail": "Codex host-reported 7 visible Skills; managed repository sentinel present and native sentinels absent"
+        },
+        {
+          "id": "human-interactive-tui",
+          "status": "UNKNOWN",
+          "evidence": "E0",
+          "detail": "codex initial/restart TUI and omca_status model canary require --interactive and explicit human attestation"
+        }
+      ],
+      "complete": false
+    },
+    {
+      "host": "claude-code",
+      "version": "2.1.272",
+      "knowledgePack": "claude-code:cli:2.1",
+      "checks": [
+        {
+          "id": "knowledge-pack",
+          "status": "PASS",
+          "evidence": "E2",
+          "detail": "installed host version is covered by claude-code:cli:2.1"
+        },
+        {
+          "id": "native-mcp-exclusion",
+          "status": "PASS",
+          "evidence": "E3",
+          "detail": "Claude host report shows omca connected and the native sentinel absent"
+        },
+        {
+          "id": "skill-isolation",
+          "status": "UNKNOWN",
+          "evidence": "E1",
+          "detail": "Claude Code 2.1.272 exposes no safe non-interactive Skill inventory; run --interactive under human supervision and verify /skills shows the managed repository sentinel but not the native sentinel"
+        },
+        {
+          "id": "human-interactive-tui",
+          "status": "UNKNOWN",
+          "evidence": "E0",
+          "detail": "claude-code initial/restart TUI and omca_status model canary require --interactive and explicit human attestation"
+        }
+      ],
+      "complete": false
+    }
+  ],
+  "realNativeStateClean": true,
+  "interactiveAttempted": false,
+  "complete": false
+}
+```
