@@ -45,13 +45,17 @@ services:
       # secrets.ctmpl is generated from the app manifests; DATABASE_URL is composed with
       # the service suffix read from this variable.
       ENV_SUFFIX: ${ENV_SUFFIX:-}
-      # Cache-bust (finance_report's vault-agent has always carried this): without a
-      # var this container's own resolved config actually reads, Compose sees an
-      # unchanged service on every same-tag promote deploy and never recreates it —
-      # so it never re-clones secrets.ctmpl or re-renders /vault/secrets/.env, no
-      # matter what changed there. This is why #562's SECRET_KEY template line sat
-      # unrendered on already-running staging/prod for hours after merging.
+      # Release identity (mirrors finance_report/10.app): libs.deploy.promote sets this
+      # to the image tag — short sha for a code deploy, vX.Y.Z for a release — the same
+      # value it stamps as OTEL service.version, and the app reports it as the deployed
+      # release (truealpha_runtime.deployed_release). "unknown" fallback. It is NOT the
+      # cache-bust: two promotes of the same tag carry the same value.
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
+      # Cache-bust: set fresh on every promote call (deploy-<tag>-<ms>), so this is the
+      # variable whose change makes Compose recreate the agent on a same-tag redeploy
+      # and re-render /vault/secrets/.env — #562's SECRET_KEY template line sat
+      # unrendered on running staging/prod until the agent read it
+      # (test_vault_agent_cache_bust pins it).
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
     healthcheck:
       test:

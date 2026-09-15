@@ -419,8 +419,12 @@ jobs:
               failed=1
             fi
           done < <(find . -name "vault-agent.hcl" -type f -print0)
+          # Select composes by the sidecar's service key. The previous marker,
+          # VAULT_APP_TOKEN, left every compose with the AppRole migration (#369), so
+          # the four checks below skipped all 16 vault-agent composes and the job
+          # stayed green while truealpha/data_engine went unchecked (#713).
           while IFS= read -r -d '' file; do
-            if ! grep -q "VAULT_APP_TOKEN" "$file"; then
+            if ! grep -q "^  vault-agent:" "$file"; then
               continue
             fi
             echo "Checking vault-agent health behavior: $file"
