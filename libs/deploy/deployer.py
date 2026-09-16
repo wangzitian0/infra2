@@ -1101,11 +1101,12 @@ class Deployer:
         from libs.deploy_dependencies import service_key_from_path
         from libs.service_registry import restart_after_containers
 
+        service_id = service_key_from_path(cls.compose_path or "")
+        if not service_id:
+            return []  # not a registry service, so nothing can declare restart_after it
         env_name = e.get("ENV", "production")
         declared = restart_after_containers(
-            service_key_from_path(cls.compose_path) or "",
-            env_name,
-            e.get("ENV_SUFFIX") or "",
+            service_id, env_name, e.get("ENV_SUFFIX") or ""
         )
         names = list(dict.fromkeys(n for group in declared.values() for n in group))
         if not names:

@@ -766,7 +766,11 @@ def test_restart_dependents_needs_a_host(monkeypatch):
     redis, _deployed = _redis_sync(monkeypatch, remote_hash="h0")
     with pytest.raises(RuntimeError, match="VPS_HOST unset; restart by hand"):
         redis.restart_dependents(_Host(RELEASE_SHA, REDIS_UP), {"ENV": "production"})
-    # a service nothing depends on needs no host at all
+    # a deployer outside the registry never scans it and needs no host at all
+    monkeypatch.setattr(
+        "libs.service_registry.service_attrs",
+        lambda: (_ for _ in ()).throw(AssertionError("must not scan the registry")),
+    )
     assert deployer_module.Deployer.restart_dependents(_Host(RELEASE_SHA, ""), {}) == []
 
 
