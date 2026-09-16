@@ -282,6 +282,13 @@ identity。
 的容器;`Created`(依赖没健康)、exited、restarting、缺失都是结论而非等待,只有 `health: starting`
 会等到 `IN_SERVICE_DEADLINE_SECONDS`。哪些服务必须在线由 compose 文件自己回答:长驻服务都有 healthcheck,
 一次性任务(authentik `token-init`、clickhouse init、signoz `schema-migrator`)没有。
+
+**跳过 ≠ 不看容器**(#691 / #698;#718 回归):runtime 与 source identity 都匹配而跳过部署时,Deployer
+(`verify_still_in_service`)仍在宿主机上做 (2) 在线证明,容器 exited/缺失/unhealthy 则强制重部署;但**不做**
+(1) 身份证明——本次 release 没有部署该服务,Dokploy checkout 停在它上一次部署的 ref 是正确状态
+(fingerprint 已覆盖 compose、build context 与声明依赖),拿本次 release 的 ref 去比会让每个 release
+重启所有未变服务(redis 重启即让 OpenPanel / Authentik worker 报 NOSCRIPT,#726)。Dokploy 查不到或宿主机
+列不出容器视为"无证据":按上文 remote hash 不可读的 fail-closed 立场告警并跳过,不用重部署放大负载。
 promote tier(`libs.deploy.promote.deploy`,app + staging|prod,跑在 GitHub Actions、无 ssh)用 Dokploy 的
 `docker.getContainers` 做同一个证明(按 `container_name` 匹配;Dokploy 只列运行中的容器,`Created`/exited
 即为缺失);`wait=True` 时默认开启,失败走同一条 failure snapshot 路径。

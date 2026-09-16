@@ -362,6 +362,242 @@ def test_sync_reports_failed_when_the_stack_is_not_in_service(monkeypatch):
     assert "no container for postgres" in result["details"]
 
 
+RELEASE_SHA = "a" * 40  # this runner's checkout: the release being synced (v1.2.4)
+LAST_DEPLOY_SHA = "b" * 40  # the release the stack was last deployed from
+
+REDIS_COMPOSE = """
+services:
+  redis:
+    image: redis:7
+    healthcheck: {test: ["CMD", "redis-cli", "ping"]}
+"""
+REDIS_UP = _ps(("redis", "running", "Up 3 days (healthy)"))
+REDIS_EXITED = _ps(("redis", "exited", "Exited (137) 2 hours ago"))
+
+
+class _Host:
+    """The VPS over ssh: Dokploy's checkout HEAD and the stack's containers."""
+
+    def __init__(self, checkout: str, containers: str, *, listable: bool = True):
+        self.checkout, self.containers, self.listable = checkout, containers, listable
+        self.commands: list[str] = []
+
+    def run(self, cmd, hide=True, warn=True):
+        self.commands.append(cmd)
+        if "rev-parse HEAD" in cmd:
+            return _Run(True, self.checkout + "\n")
+        if "docker ps" in cmd:
+            if not self.listable:
+                return _Run(False, "", "ssh: connect to host vps port 22: timed out")
+            return _Run(True, self.containers)
+        raise AssertionError(f"unexpected host command: {cmd}")
+
+    @property
+    def asked_for_the_checkout(self) -> bool:
+        return any("rev-parse" in cmd for cmd in self.commands)
+
+
+class _Dokploy:
+    """platform/redis in production; any other lookup finds nothing."""
+
+    def find_compose_by_name(self, name, project_name=None, env_name=None):
+        if (name, project_name, env_name) == ("redis", "platform", "production"):
+            return {"composeId": "cid", "appName": "platform-redis-x1"}
+        return None
+
+    def get_compose(self, compose_id):
+        assert compose_id == "cid"
+        return {"composeId": "cid", "appName": "platform-redis-x1"}
+
+
+def _redis_sync(monkeypatch, *, remote_hash: str):
+    """A platform/redis sync at RELEASE_SHA against a stack last deployed from
+    LAST_DEPLOY_SHA; `remote_hash` "h1" means its config did not change. Returns the
+    deployer and the list `composing` appends to when a (re)deploy is triggered."""
+    from libs.service_identity import ServiceIdentity
+
+    d = deployer_module
+    identity = ServiceIdentity.build(
+        "platform/redis", "production", component="redis", service_name="redis"
+    ).deploy_env()
+    remote = {
+        "runtime_hash": remote_hash,
+        "source_hash": f"{d.SOURCE_CONFIG_HASH_VERSION}:h1",
+        "deploy_ref": LAST_DEPLOY_SHA,
+        "identity_schema": identity["INFRA_IDENTITY_SCHEMA"],
+        "managed_by": identity["INFRA_MANAGED_BY"],
+        "service_id": identity["INFRA_SERVICE_ID"],
+        "environment": identity["INFRA_ENVIRONMENT"],
+    }
+    deployed: list[dict] = []
+
+    class Redis(d.Deployer):
+        service = "redis"
+        compose_path = "platform/02.redis/compose.yaml"
+        IN_SERVICE_INTERVAL_SECONDS = 0
+
+        @classmethod
+        def env(cls):
+            return {"ENV": "production", "VPS_HOST": "vps", "INTERNAL_DOMAIN": "x.test"}
+
+        @classmethod
+        def verify_vault_app_token(cls):
+            return {"valid": True}
+
+        @classmethod
+        def ensure_runtime_secrets(cls, c):
+            return True
+
+        @classmethod
+        def apply_secret_supply(cls, c, env=None):
+            return True
+
+        @classmethod
+        def compose_env_base(cls, e):
+            return {}
+
+        @classmethod
+        def source_config_env_base(cls, e):
+            return {}
+
+        @classmethod
+        def config_env_with_vault_addr(cls, env, e):
+            return dict(env)
+
+        @classmethod
+        def compute_local_config_hash(cls, c, env):
+            return "h1"
+
+        @classmethod
+        def get_compose_content(cls, c):
+            return REDIS_COMPOSE
+
+        @classmethod
+        def get_remote_config_identity(cls):
+            return dict(remote)
+
+        @classmethod
+        def _prepare_dirs(cls, c):
+            return True
+
+        @classmethod
+        def composing(cls, c, env):
+            deployed.append(env)
+            remote.update(
+                runtime_hash=env["IAC_CONFIG_HASH"],
+                source_hash=env["IAC_SOURCE_CONFIG_HASH"],
+                deploy_ref=env["IAC_DEPLOY_REF"],
+            )
+            return "cid"
+
+        @classmethod
+        def _await_effective_config_hash(cls, expected):
+            return remote["runtime_hash"]
+
+        @classmethod
+        def _checkout_ref(cls):
+            return "v1.2.4"
+
+        @classmethod
+        def _checkout_sha(cls, ref):
+            return RELEASE_SHA
+
+    monkeypatch.setattr("libs.dokploy.get_dokploy", lambda host=None: _Dokploy())
+    monkeypatch.setattr(d, "validate_env", lambda: [])
+    monkeypatch.setattr(d.time, "sleep", lambda _s: None)
+    monkeypatch.setenv("IAC_DEPLOY_REF", RELEASE_SHA)
+    monkeypatch.delenv("DEPLOY_ACTION", raising=False)
+    return Redis, deployed
+
+
+def test_an_unchanged_stack_at_an_older_checkout_is_skipped_not_restarted(
+    monkeypatch,
+):
+    """#718 regression: the skip path asked the post-deploy identity proof, which
+    wants Dokploy's checkout at THIS release; an unchanged stack is at its last
+    deploy's, so every release would have restarted every unchanged service (a redis
+    restart breaks OpenPanel and Authentik workers, #726)."""
+    redis, deployed = _redis_sync(monkeypatch, remote_hash="h1")
+    host = _Host(checkout=LAST_DEPLOY_SHA, containers=REDIS_UP)
+
+    result = redis.sync(host)
+
+    assert result["action"] == "skipped", result
+    assert deployed == []
+    assert not host.asked_for_the_checkout
+    assert any(
+        "label=com.docker.compose.project=platform-redis-x1" in cmd
+        for cmd in host.commands
+    )
+
+
+def test_an_unchanged_stack_with_an_exited_container_is_redeployed(monkeypatch):
+    """#691/#698, the intent of #718: matching config is no reason to leave a dead
+    container dead. (This also pins the compose lookup: #718 passed the project as
+    the compose name, which found nothing and skipped the check entirely.)"""
+    redis, deployed = _redis_sync(monkeypatch, remote_hash="h1")
+    host = _Host(checkout=LAST_DEPLOY_SHA, containers=REDIS_EXITED)
+
+    redis.sync(host)
+
+    assert len(deployed) == 1
+    assert deployed[0]["IAC_DEPLOY_REF"] == RELEASE_SHA
+
+
+def test_an_unchanged_stack_on_an_unreachable_host_is_skipped(monkeypatch):
+    """Unobservable is not dead: like an unreadable remote hash, a host that cannot
+    list the containers skips (with a warning) instead of amplifying the load."""
+    redis, deployed = _redis_sync(monkeypatch, remote_hash="h1")
+    warnings: list[str] = []
+    monkeypatch.setattr(deployer_module, "warning", warnings.append)
+    host = _Host(checkout=LAST_DEPLOY_SHA, containers="", listable=False)
+
+    result = redis.sync(host)
+
+    assert result["action"] == "skipped" and deployed == []
+    assert any(
+        "could not check the unchanged stack is in service" in w and "timed out" in w
+        for w in warnings
+    )
+
+
+def test_a_changed_stack_still_fails_on_a_stale_checkout_after_deploy(monkeypatch):
+    """#629 is untouched: after THIS release deployed the stack, a Dokploy checkout
+    left at the previous release is a failed deploy, healthy containers or not."""
+    redis, deployed = _redis_sync(monkeypatch, remote_hash="h0")
+    host = _Host(checkout=LAST_DEPLOY_SHA, containers=REDIS_UP)
+
+    result = redis.sync(host)
+
+    assert len(deployed) == 1
+    assert result["action"] == "failed"
+    assert "stale clone" in result["details"] and "v1.2.4" in result["details"]
+
+
+def test_a_changed_stack_at_the_new_checkout_is_updated(monkeypatch):
+    redis, deployed = _redis_sync(monkeypatch, remote_hash="h0")
+    host = _Host(checkout=RELEASE_SHA, containers=REDIS_UP)
+
+    result = redis.sync(host)
+
+    assert result == {"action": "updated", "details": "composeId: cid"}
+    assert host.asked_for_the_checkout
+
+
+def test_verify_in_service_still_reports_an_unlistable_host_as_a_failure(deployer):
+    """The post-deploy proof keeps its fail-closed message; only the skip path treats
+    an unobservable host as no evidence."""
+    c = _Context([_Run(True, "a" * 40 + "\n"), _Run(False, "", "permission denied")])
+    assert (
+        deployer.verify_in_service(c, "cid")
+        == "could not list platform-app-abc123's containers on vps: permission denied"
+    )
+    with pytest.raises(deployer_module._StackUnobservable, match="permission denied"):
+        deployer.verify_still_in_service(
+            _Context([_Run(False, "", "permission denied")]), "cid"
+        )
+
+
 def test_container_names_resolve_the_env_suffix_for_the_promote_tier():
     compose = (ROOT / "finance_report/finance_report/10.app/compose.yaml").read_text()
     staging = expected_running_containers(compose, "-staging")
