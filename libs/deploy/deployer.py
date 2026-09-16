@@ -4,7 +4,8 @@ Simplified: minimal class attributes, uses new env.py API.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, NamedTuple
 from pathlib import Path
 import importlib.util
 import os
@@ -64,6 +65,18 @@ EXACT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 # "new" record belongs to a DIFFERENT, unrelated trigger rather than to us. Small
 # margin for clock skew between this process and Dokploy's server.
 _CLOCK_SKEW_TOLERANCE_SECONDS = 5
+
+
+class _HostStack(NamedTuple):
+    """A Dokploy compose project on its host, and a way to ask the host about it."""
+
+    host: str
+    project: str
+    run: Callable[[str], Any]
+
+
+class _StackUnobservable(RuntimeError):
+    """The host could not be asked about the stack — no evidence either way."""
 
 
 def load_deployer_class(service_id: str) -> "type[Deployer] | None":
@@ -994,13 +1007,45 @@ class Deployer:
         Returns an error string to fail the deploy, None to pass. Skipped with a warning
         only when VPS_HOST is unset (no host to ask); a checkout that cannot resolve the
         ref it pinned fails, since the identity proof is then impossible.
+
+        The identity proof holds only right after THIS checkout deployed the stack; a
+        sync that skipped the deploy asks `verify_still_in_service` instead.
         """
-        from libs.deploy.in_service import (
-            DOCKER_PS_FORMAT,
-            expected_running_services,
-            in_service_verdict,
-            parse_docker_ps,
-        )
+        try:
+            stack = cls._stack_on_host(c, compose_id)
+            if stack is None:
+                return None
+            identity_error = cls._verify_checkout_identity(stack)
+            if identity_error:
+                return identity_error
+            return cls._verify_containers_in_service(c, stack)
+        except _StackUnobservable as exc:
+            return str(exc)
+
+    @classmethod
+    def verify_still_in_service(cls, c: "Context", compose_id: str) -> str | None:
+        """The service half of `verify_in_service`, for a stack sync did not redeploy.
+
+        sync skips a stack whose runtime and source config identities match, so this
+        release left it alone and Dokploy's checkout is at the ref of the stack's LAST
+        deploy. The identity half would call that a stale clone and force a restart of
+        every unchanged service on every release (#718). The config hash already covers
+        the compose file, its build context and declared dependencies, so the older
+        checkout holds the same inputs; what a skip still has to prove is that the
+        containers are up (#691, #698).
+
+        Returns an error string when the stack is not in service (sync redeploys it),
+        None when it is. Raises when the host cannot be asked (no appName, `docker ps`
+        failed): an unobservable stack is no evidence of a dead one.
+        """
+        stack = cls._stack_on_host(c, compose_id)
+        if stack is None:
+            return None
+        return cls._verify_containers_in_service(c, stack)
+
+    @classmethod
+    def _stack_on_host(cls, c: "Context", compose_id: str) -> _HostStack | None:
+        """Where the compose's containers run; None (with a warning) without VPS_HOST."""
         from libs.dokploy import get_dokploy
 
         e = cls.env()
@@ -1015,7 +1060,9 @@ class Deployer:
         )
         project = str(record.get("appName") or "").strip()
         if not project:
-            return f"Dokploy compose {compose_id} reports no appName; its containers cannot be found"
+            raise _StackUnobservable(
+                f"Dokploy compose {compose_id} reports no appName; its containers cannot be found"
+            )
 
         destination = shlex.quote(f"{ssh_user}@{host}")
 
@@ -1024,6 +1071,11 @@ class Deployer:
                 f"ssh {destination} {shlex.quote(command)}", hide=True, warn=True
             )
 
+        return _HostStack(host=host, project=project, run=on_host)
+
+    @classmethod
+    def _verify_checkout_identity(cls, stack: _HostStack) -> str | None:
+        """Dokploy's checkout for the stack is at the ref this checkout pinned (#629)."""
         # Fail-closed: a checkout that cannot say what it pinned cannot prove what Dokploy
         # checked out, and that proof is the point (#629).
         pinned = cls._checkout_ref()
@@ -1033,8 +1085,8 @@ class Deployer:
                 f"this checkout cannot resolve the ref it pinned for {cls.service} "
                 f"({pinned or 'no tag or HEAD'}); Dokploy's checkout cannot be proven"
             )
-        code_dir = shlex.quote(f"/etc/dokploy/compose/{project}/code")
-        head = on_host(f"git -C {code_dir} rev-parse HEAD")
+        code_dir = shlex.quote(f"/etc/dokploy/compose/{stack.project}/code")
+        head = stack.run(f"git -C {code_dir} rev-parse HEAD")
         deployed_sha = head.stdout.strip() if head.ok else ""
         if deployed_sha != expected_sha:
             return (
@@ -1042,20 +1094,37 @@ class Deployer:
                 f"{deployed_sha[:12] or 'no readable HEAD'} but this deploy pinned "
                 f"{pinned} ({expected_sha[:12]}); the record reports done on a stale clone"
             )
+        return None
+
+    @classmethod
+    def _verify_containers_in_service(
+        cls, c: "Context", stack: _HostStack
+    ) -> str | None:
+        """Every healthchecked service the compose declares has a running, healthy
+        container; `health: starting` is waited on up to IN_SERVICE_DEADLINE_SECONDS."""
+        from libs.deploy.in_service import (
+            DOCKER_PS_FORMAT,
+            expected_running_services,
+            in_service_verdict,
+            parse_docker_ps,
+        )
 
         expected = expected_running_services(cls.get_compose_content(c))
         if not expected:
             return None
         listing = (
             "docker ps -a --filter "
-            f"label=com.docker.compose.project={shlex.quote(project)} "
+            f"label=com.docker.compose.project={shlex.quote(stack.project)} "
             f"--format {shlex.quote(DOCKER_PS_FORMAT)}"
         )
         deadline = time.monotonic() + cls.IN_SERVICE_DEADLINE_SECONDS
         while True:
-            result = on_host(listing)
+            result = stack.run(listing)
             if not result.ok:
-                return f"could not list {project}'s containers on {host}: {result.stderr.strip() or 'docker ps failed'}"
+                raise _StackUnobservable(
+                    f"could not list {stack.project}'s containers on {stack.host}: "
+                    f"{result.stderr.strip() or 'docker ps failed'}"
+                )
             verdict = in_service_verdict(expected, parse_docker_ps(result.stdout))
             if verdict.ok:
                 success(f"{cls.service}: in service — {verdict.message}")
@@ -1232,20 +1301,20 @@ class Deployer:
         return False
 
     @classmethod
-    def get_remote_config_identity(cls) -> dict[str, str | None]:
-        """Read the config identity stored in Dokploy's effective compose env."""
+    def _find_remote_compose(cls, e: dict[str, str]) -> dict | None:
+        """This service's full compose record in its Dokploy project and environment."""
         from libs.dokploy import get_dokploy
 
-        e = cls.env()
-        env_name = e.get("ENV", "production")
-        project_name = cls.project_name(e)
         domain = e.get("INTERNAL_DOMAIN")
-        host = f"cloud.{domain}" if domain else None
-
-        client = get_dokploy(host=host)
-        existing = client.find_compose_by_name(
-            cls.service, project_name, env_name=env_name
+        client = get_dokploy(host=f"cloud.{domain}" if domain else None)
+        return client.find_compose_by_name(
+            cls.service, cls.project_name(e), env_name=e.get("ENV", "production")
         )
+
+    @classmethod
+    def get_remote_config_identity(cls) -> dict[str, str | None]:
+        """Read the config identity stored in Dokploy's effective compose env."""
+        existing = cls._find_remote_compose(cls.env())
 
         if not existing:
             return {
@@ -1669,18 +1738,25 @@ class Deployer:
             and remote_source_identity_valid
             and remote_service_identity_valid
         ):
-            # Verify container health before skipping!
-            # If containers are dead, crashed, or missing, do not skip — force redeploy (#698, #691).
-            in_service_error = None
+            # A skip still has to leave the stack in service: dead, crashed or missing
+            # containers force a redeploy (#691, #698). Only the containers — this
+            # release did not deploy the stack, so Dokploy's checkout is at its last
+            # deploy's ref, not this one (verify_still_in_service).
             try:
-                from libs.dokploy import get_dokploy
-
-                domain = e.get("INTERNAL_DOMAIN")
-                client = get_dokploy(host=f"cloud.{domain}" if domain else None)
-                existing = client.find_compose_by_name(cls.project_name(e), cls.service)
-                if existing and existing.get("composeId"):
-                    in_service_error = cls.verify_in_service(c, existing["composeId"])
-            except Exception:
+                existing = cls._find_remote_compose(e)
+                in_service_error = (
+                    cls.verify_still_in_service(c, existing["composeId"])
+                    if existing and existing.get("composeId")
+                    else None
+                )
+            except Exception as exc:  # noqa: BLE001 - unobservable is not dead
+                # Same stance as the unreadable remote hash above: a Dokploy or host
+                # that cannot answer is no evidence the stack is down, and redeploying
+                # on it would amplify the load that made it unreadable.
+                warning(
+                    f"{cls.service}: could not check the unchanged stack is in "
+                    f"service ({exc}); skipping deploy (fail-closed)"
+                )
                 in_service_error = None
 
             if in_service_error:
