@@ -312,6 +312,25 @@ class TestDokployClient:
             len(fake.calls) == 2
         )  # update_compose passed idempotent=True → retried once
 
+    def test_deploy_compose_and_project_create_never_retried_on_failures(
+        self, monkeypatch, dokploy_env
+    ):
+        # Non-idempotent operations must never be retried on 5xx or timeouts
+        request = httpx.Request("POST", "https://cloud.example.test/api/compose.deploy")
+        fake = _SequencedRaisingClient(
+            [
+                httpx.ReadTimeout("timed out", request=request),
+                FakeResponse({"ok": True}),
+            ]
+        )
+        monkeypatch.setattr(dokploy.httpx, "Client", lambda timeout: fake)
+        monkeypatch.setattr(dokploy.time, "sleep", lambda *_: None)
+        client = DokployClient(base_url="https://cloud.example.test/api")
+
+        with pytest.raises(httpx.RequestError):
+            client.deploy_compose("c1")
+        assert len(fake.calls) == 1  # exactly 1 attempt, zero retries
+
     @patch("libs.dokploy.DokployClient._request")
     def test_list_git_providers(self, mock_request):
         # Setup valid client

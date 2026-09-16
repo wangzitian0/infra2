@@ -117,3 +117,89 @@ def test_canonical_stateful_deployment_environments():
     assert normalize_env_name("stg") == "staging"
     assert normalize_env_name("staging") == "staging"
     assert normalize_env_name("preview") == "preview"
+    assert normalize_env_name("pr-123") == "pr_123"
+    assert normalize_env_name("preview-web") == "preview_web"
+
+
+VALID_DOKPLOY_DYNAMIC_ALIASES = [
+    "pr-1",
+    "pr-9999",
+    "commit-a1b2c3d4e5f6",
+    "branch-feature-login",
+    "branch-feat-123",
+    "tag-v1.0.0",
+    "tag-2.1.0",
+    "preview-service",
+]
+
+INVALID_DIRTY_ENV_INPUTS = [
+    "",
+    "   ",
+    None,
+    123,
+    "invalid-alias",
+    "unknown-env",
+    "dev",
+    "feature/xxx",
+    "local",
+]
+
+STRICT_MODE_STATEFUL_ENVS = [
+    "preview",
+    "staging",
+    "stg",
+    "production",
+    "prod",
+]
+
+
+@pytest.mark.parametrize("env_name", VALID_DOKPLOY_DYNAMIC_ALIASES)
+def test_dokploy_dynamic_aliases_are_stateful_in_non_strict(env_name: str) -> None:
+    from libs.common import is_stateful_deploy_env
+    from libs.service_identity import is_stateful_deploy_env as si_is_stateful
+
+    assert is_stateful_deploy_env(env_name, strict=False) is True
+    assert si_is_stateful(env_name, strict=False) is True
+
+
+@pytest.mark.parametrize("bad_env", INVALID_DIRTY_ENV_INPUTS)
+def test_invalid_and_dirty_env_inputs_rejected(bad_env) -> None:
+    from libs.common import is_stateful_deploy_env
+    from libs.service_identity import is_stateful_deploy_env as si_is_stateful
+
+    assert is_stateful_deploy_env(bad_env, strict=False) is False
+    assert si_is_stateful(bad_env, strict=False) is False
+
+
+@pytest.mark.parametrize("env_name", STRICT_MODE_STATEFUL_ENVS)
+def test_strict_mode_accepts_only_canonical_stateful_envs(env_name: str) -> None:
+    from libs.common import is_stateful_deploy_env
+    from libs.service_identity import is_stateful_deploy_env as si_is_stateful
+
+    assert is_stateful_deploy_env(env_name, strict=True) is True
+    assert si_is_stateful(env_name, strict=True) is True
+
+
+@pytest.mark.parametrize("alias", VALID_DOKPLOY_DYNAMIC_ALIASES)
+def test_strict_mode_rejects_all_dynamic_aliases(alias: str) -> None:
+    from libs.common import is_stateful_deploy_env
+    from libs.service_identity import is_stateful_deploy_env as si_is_stateful
+
+    assert is_stateful_deploy_env(alias, strict=True) is False
+    assert si_is_stateful(alias, strict=True) is False
+
+
+def test_service_identity_and_common_env_convergence(monkeypatch) -> None:
+    import os
+    from libs.common import get_env, set_deploy_env, reset_env_cache
+
+    monkeypatch.setenv("INFRA_ENVIRONMENT", "staging")
+    monkeypatch.delenv("DEPLOY_ENV", raising=False)
+    reset_env_cache()
+    env = get_env()
+    assert env["ENV_SUFFIX"] == "-staging"
+
+    set_deploy_env("production")
+    assert os.environ["INFRA_ENVIRONMENT"] == "production"
+    assert os.environ["DEPLOY_ENV"] == "production"
+
