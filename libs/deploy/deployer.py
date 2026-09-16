@@ -1669,11 +1669,31 @@ class Deployer:
             and remote_source_identity_valid
             and remote_service_identity_valid
         ):
-            success(f"{cls.service}: config unchanged, skipping deploy")
-            return {
-                "action": "skipped",
-                "details": "Runtime and source config identities match",
-            }
+            # Verify container health before skipping!
+            # If containers are dead, crashed, or missing, do not skip — force redeploy (#698, #691).
+            in_service_error = None
+            try:
+                from libs.dokploy import get_dokploy
+
+                domain = e.get("INTERNAL_DOMAIN")
+                client = get_dokploy(host=f"cloud.{domain}" if domain else None)
+                existing = client.find_compose_by_name(cls.project_name(e), cls.service)
+                if existing and existing.get("composeId"):
+                    in_service_error = cls.verify_in_service(c, existing["composeId"])
+            except Exception:
+                in_service_error = None
+
+            if in_service_error:
+                warning(
+                    f"{cls.service}: config unchanged but containers not in-service "
+                    f"({in_service_error}); forcing redeploy"
+                )
+            else:
+                success(f"{cls.service}: config unchanged, skipping deploy")
+                return {
+                    "action": "skipped",
+                    "details": "Runtime and source config identities match",
+                }
 
         # Config changed or force - do full deploy
         if remote_hash is None:

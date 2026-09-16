@@ -91,7 +91,7 @@ def test_out_of_band_watchdog_alerts_on_killed_container():
         name="infra2-docker-health",
         ok=False,
         detail="name=/finance_report-backend status=exited exit_code=137 health=none image=finance_report-backend:latest",
-        failure_domain="docker_runtime",
+        failure_domain="docker-runtime",
         severity="P1",
     )
 

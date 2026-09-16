@@ -43,7 +43,7 @@ IaC Runner 是 **L1 Bootstrap 层**组件，负责部署 **L2 Platform 层**服�
 | **Bootstrap** (1Password, Vault) | Manual deployment and recovery |
 | **IaC Runner source image** | GitHub Actions external bootstrap update before `/deploy` when `bootstrap/06.iac_runner/**` changes |
 | **Platform** (`iac_pinned`：postgres, redis, authentik, minio, signoz, alerting, openpanel …) | release tag 推送 → **自动 staging**（soak）；`promote_prod=true` → **显式 prod**，成功后记录 `production/vX.Y.Z` marker |
-| **Apps** (finance_report, wealthfolio) | 各自独立的 CI/CD Pipeline（经 `deploy_v2` 前门，不经本 Runner） |
+| **Apps** (finance_report, truealpha) | 各自独立的 CI/CD Pipeline（经 `deploy_v2` 前门，不经本 Runner） |
 
 ### 2.2 架构图
 

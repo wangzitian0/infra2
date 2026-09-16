@@ -60,7 +60,7 @@ flowchart TB
 
     subgraph Apps["L4 Apps (Business Logic)"]
         FinanceReport["Finance Report"]
-        Wealthfolio["Wealthfolio"]
+        TrueAlpha["TrueAlpha"]
     end
 
     %% Secrets flow

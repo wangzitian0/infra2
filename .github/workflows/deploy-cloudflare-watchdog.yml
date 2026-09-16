@@ -35,7 +35,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
-            echo "::error::CF_API_TOKEN secret is required."
+            echo "::error::CLOUDFLARE_API_TOKEN is not set; ensure repository secret CF_API_TOKEN is configured."
             exit 1
           fi
           npx wrangler deploy

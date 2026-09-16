@@ -39,15 +39,12 @@ class DokployClient:
             try:
                 from libs.env import OpSecrets
 
-                for item in ("init/env_vars", "bootstrap-dokploy", "dokploy-docker"):
-                    try:
-                        op = OpSecrets(item=item)
-                        key = op.get("DOKPLOY_API_KEY")
-                        if key:
-                            self.api_key = key
-                            break
-                    except Exception:
-                        continue
+                for item in ("bootstrap-dokploy", "dokploy-docker", "init/env_vars"):
+                    op = OpSecrets(item=item)
+                    key = op.get("DOKPLOY_API_KEY")
+                    if key:
+                        self.api_key = key
+                        break
             except (ImportError, AttributeError, KeyError):
                 # If 1Password integration or secret is unavailable, fall back to env var / final validation below.
                 pass

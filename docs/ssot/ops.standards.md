@@ -74,6 +74,12 @@
 platform compose 中的镜像禁止浮动 tag——上游静默漂移且不可复现。事故先例：#253/#255 的 prefect 卡死源于浮动的 `:3-latest` tag 漂移。规范要求钉到不随上游移动的引用：至少钉具体版本，推荐钉 digest（`image: repo:tag@sha256:...`）。
 - **机械守卫**（范围小于规范本身）：`tools/lint_platform_image_pins.py`（infra-ci 阻断）目前只拦截字面量裸 `:latest`；其它浮动 tag（如 `:3-latest`、`:stable`）靠 review 把关。逻辑在 `libs/image_pins.py`，proof `libs/tests/test_image_pins.py`。
 
+### Rule 7: 发布前 Schema 与枚举双向校验 (Pre-Deploy Schema Gate, #698)
+在任何涉及持久化存储的应用部署销毁或重启容器前，必须执行 Pre-Deploy Schema Gate（`tools/pre_deploy_schema_check.py`）：
+- **双向严格比对**：代码缺失 DB 已有枚举（`missing_in_code`）或 DB 缺失代码枚举（`missing_in_db`）均视为不兼容阻断项。
+- **Fail-Closed 原则**：数据库查询失败、连接超时或解析异常一律视为不满足，强制中断发布流程。
+- **事故先例**：2026-09-10 事故（#698）中，因 Enum 大小写不匹配（'PENDING' vs 'pending'）导致 finance_report 后端容器重启即崩溃死循环，服务中断 13 分钟。
+
 ---
 
 ## 4. 变量与密钥链条守则
