@@ -45,9 +45,10 @@ class MemoryKV {
   }
 }
 
-function makeEnv(kv) {
+function makeEnv(kv, overrides = {}) {
   return {
     ...vars,
+    ...overrides,
     WATCHDOG_STATE: kv,
     HEARTBEAT_TOKEN: "hb-token",
     WATCHDOG_RETRY_DELAY_MS: "0",
@@ -76,9 +77,12 @@ function stored(kv, heartbeat) {
 // One runner posting for a day. `verdict(i)` is the probe result of round i;
 // `livenessMode` is "flagged" (current runner), "legacy" (unflagged fixed detail)
 // or "none" (verdict posts only). Checkpoints sample what the 30-min cron would read.
-async function runnerDay(heartbeat, { verdict, livenessMode = "flagged", verdicts = true, seed = null }) {
+async function runnerDay(
+  heartbeat,
+  { verdict, livenessMode = "flagged", verdicts = true, seed = null, envOverrides = {} },
+) {
   const kv = new MemoryKV();
-  const env = makeEnv(kv);
+  const env = makeEnv(kv, envOverrides);
   if (seed) {
     kv.map.set(`heartbeat:${heartbeat.environment}:${heartbeat.name}`, JSON.stringify(seed));
   }
@@ -147,6 +151,20 @@ results.flapping = summarize(await runnerDay(heartbeat, { verdict: (round) => ro
 results.flappingNoLiveness = summarize(
   await runnerDay(heartbeat, { verdict: (round) => round % 2 === 0, livenessMode: "none" }),
 );
+// Malformed budget variables fall back to the defaults instead of writing every post.
+for (const [label, overrides] of [
+  ["malformedInterval", { WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS: "abc" }],
+  ["emptyInterval", { WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS: "" }],
+  ["zeroInterval", { WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS: "0" }],
+  [
+    "malformedBudget",
+    { WATCHDOG_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY: "lots", WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS: "600" },
+  ],
+]) {
+  results[label] = summarize(
+    await runnerDay(heartbeat, { verdict: (round) => round % 2 === 0, envOverrides: overrides }),
+  );
+}
 // Probe rounds hang: only liveness pings arrive; the stored failing verdict must survive.
 results.livenessOnly = summarize(
   await runnerDay(heartbeat, {

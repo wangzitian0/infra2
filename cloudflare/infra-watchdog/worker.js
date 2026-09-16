@@ -381,16 +381,30 @@ function isLivenessPing(payload) {
   return payload.liveness === true || String(payload.detail || "") === LEGACY_LIVENESS_DETAIL;
 }
 
+// A budget variable that is unset, empty, non-numeric or out of range falls back to
+// its default: NaN makes every `age < interval` comparison false, and 0 would write
+// every post — either silently reopens the unbounded-write path.
+function budgetVar(raw, fallback, { min }) {
+  if (raw === undefined || raw === null || String(raw).trim() === "") {
+    return fallback;
+  }
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= min ? value : fallback;
+}
+
 function heartbeatWritePolicy(env) {
   const minWriteIntervalMs =
-    Number(env.WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS || DEFAULT_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS) * 1000;
-  const configuredBudget = Number(env.WATCHDOG_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY);
+    budgetVar(env.WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS, DEFAULT_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS, {
+      min: 1,
+    }) * 1000;
   return {
     minWriteIntervalMs,
     livenessRefreshMs: minWriteIntervalMs * LIVENESS_REFRESH_INTERVALS,
-    statusChangeWritesPerDay: Number.isFinite(configuredBudget) && configuredBudget >= 0
-      ? configuredBudget
-      : DEFAULT_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY,
+    statusChangeWritesPerDay: Math.floor(
+      budgetVar(env.WATCHDOG_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY, DEFAULT_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY, {
+        min: 0,
+      }),
+    ),
   };
 }
 

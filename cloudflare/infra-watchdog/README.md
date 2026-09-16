@@ -178,7 +178,8 @@ every later heartbeat `put()` throws `KV put() limit exceeded for the day.` unti
 
 - a **verdict** post (the runner's post-probe heartbeat) refreshes the record once
   per `WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS` (`900`; the worker falls back
-  to `600` if unset);
+  to `600` if it is unset, empty, non-numeric or below 1 — a NaN or zero interval
+  would write every post);
 - a **changed** verdict is written at once, up to
   `WATCHDOG_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY` (`24`) times per key per UTC
   day; past that budget a flapping verdict waits for the next refresh;
@@ -230,7 +231,8 @@ Then redeploy platform alerting for each environment.
 - `WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS`: heartbeat refresh interval,
   defaults to `600` (`900` in `wrangler.toml`).
 - `WATCHDOG_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY`: early writes of a changed
-  verdict per heartbeat key per UTC day, defaults to `24`.
+  verdict per heartbeat key per UTC day, defaults to `24` (also when empty,
+  non-numeric or negative).
 - `WATCHDOG_TARGETS_JSON`: JSON array overriding public route targets.
 - `WATCHDOG_HEARTBEATS_JSON`: JSON array overriding heartbeat checks.
 - `ALERT_DELIVERY_MODE`: `feishu_webhook` or `feishu_app`.

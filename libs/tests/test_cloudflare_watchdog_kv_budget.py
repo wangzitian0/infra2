@@ -80,6 +80,20 @@ def test_flapping_verdicts_stay_inside_the_per_key_bound(day, budget_vars) -> No
         assert day[scenario]["puts"] <= _per_key_bound(budget_vars), scenario
 
 
+def test_malformed_budget_vars_fall_back_to_the_defaults(day) -> None:
+    """#735 review: a NaN or zero interval must not reopen write-every-post."""
+    default_interval = 600  # DEFAULT_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS
+    default_budget = 24  # DEFAULT_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY
+    bound = math.ceil(86400 / default_interval) + default_budget
+    for scenario in (
+        "malformedInterval",
+        "emptyInterval",
+        "zeroInterval",
+        "malformedBudget",
+    ):
+        assert day[scenario]["puts"] <= bound, (scenario, day[scenario]["puts"])
+
+
 def test_heartbeats_never_look_stale_to_the_cron(day, budget_vars) -> None:
     max_age = min(
         heartbeat["maxAgeSeconds"]
