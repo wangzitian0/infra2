@@ -25,6 +25,8 @@ App 后的治理优先级。两个 App 已形成各自成熟但不同的工作�
 4. **Documentation**: 更新根入口、SSOT、Project 和目录 README。
 5. **Workspace tooling**: 以 root-level submodule 接入 `oh-my-code-agent`，后续承载
    TUI 管理，但不进入 infra/App runtime dependency graph。
+6. **Workspace coordination**: orchestrator liveness 规则与只读 `harness sweep`
+   时钟；可选 guard hook 由 owner 接线。
 
 ## Design Decisions
 
@@ -41,6 +43,7 @@ App 后的治理优先级。两个 App 已形成各自成熟但不同的工作�
 uv run pytest -q libs/tests/test_harness_manifest.py
 uv run python -m tools.harness check --json
 uv run pytest -q libs/tests/test_sdk_contract_adoption.py
+uv run pytest -q libs/tests/test_harness_sweep.py libs/tests/test_orchestrator_guard_hook.py
 mkdocs build --config-file docs/mkdocs.yml
 ```
 
@@ -53,6 +56,7 @@ secret 或 App source mutation，不产生线上 drift。
 
 | Date | Change |
 |---|---|
+| 2026-09-16 | Orchestrator liveness: read-only `harness sweep`, `pr_merge_gate` no-checks fix, owner-wired guard hook (truealpha#876, follow-up #740) |
 | 2026-09-15 | Pin standalone OMCA with embedded Knowledge/ontology, qualify Codex 0.154.0 inventory, and record installed execution after build-source removal |
 | 2026-09-15 | Integrate reviewed SDK, OMCA and App snapshots; record released-wheel and installed-CLI proof, with the human interactive gate still explicit |
 | 2026-09-15 | Review all five refreshed repositories; map local architecture/proof entries, align SDK/OMCA ownership, and reject parent-repository fallback in checkout status |

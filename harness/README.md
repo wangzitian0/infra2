@@ -20,6 +20,7 @@ The machine-readable inventory is [`repos.yaml`](./repos.yaml). Validate it with
 ```bash
 uv run python -m tools.harness check
 uv run python -m tools.harness status --fetch
+uv run python -m tools.harness sweep /abs/path/to/watch.json [--watch]
 ```
 
 The command is read-only. It validates inventory structure and referenced authority
@@ -27,6 +28,9 @@ files; it does not update submodules, copy policy, publish packages, or deploy s
 `status` reports parent pins, checkout/remote heads, ahead/behind, dirty paths, and
 release identity. Its optional `--fetch` refreshes origin metadata only; it never checks
 out or pulls a repository. Add `--require-current` when drift should make CI/scripting fail.
+`sweep` is the orchestrator's clock: one state per watched agent, PR, release log,
+workflow run or worktree, with documented exit codes; see
+[Orchestrator Liveness](./workspace/coordination.md#orchestrator-liveness).
 
 ## Repository entry points
 
@@ -71,7 +75,7 @@ Reviewed snapshot and acceptance evidence live in
 
 | Guide | Purpose |
 |---|---|
-| [coordination.md](./workspace/coordination.md) | Work identity, ownership, preflight, and evidence handoff |
+| [coordination.md](./workspace/coordination.md) | Work identity, ownership, preflight, evidence handoff, and orchestrator liveness |
 | [github.md](./workspace/github.md) | Branch, PR, review, and exact-head delivery preferences |
 | [software-design.md](./workspace/software-design.md) | Dependency, contract, compatibility, and test preferences |
 

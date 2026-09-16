@@ -317,3 +317,31 @@ def test_a_failing_gh_call_is_an_error_not_a_verdict():
 
     with pytest.raises(RuntimeError, match="not found"):
         gate.collect(999, gh=boom)
+
+
+class _NoChecksYet(_Gh):
+    """gh before the first check registers: `pr checks` exits 1 with no JSON."""
+
+    def __init__(self, error="no checks reported on the 'harness/x' branch", **kw):
+        super().__init__(**kw)
+        self.error = error
+
+    def __call__(self, argv):
+        if list(argv)[:2] == ["pr", "checks"]:
+            self.calls.append(list(argv))
+            raise RuntimeError(f"gh {' '.join(argv)}: {self.error}")
+        return super().__call__(argv)
+
+
+def test_no_checks_reported_by_gh_is_zero_checks_not_a_crash(capsys):
+    facts = gate.collect(704, gh=_NoChecksYet())
+    assert facts.checks == ()
+    ready_at = gate._epoch("2026-09-15T06:55:22Z") + 12 * 60
+    # Before the fix this raised (a traceback, also exit 1) and the reason never printed.
+    assert gate.main(["704"], gh=_NoChecksYet(), now=lambda: ready_at) == 1
+    assert "no checks reported yet" in capsys.readouterr().out
+
+
+def test_any_other_checks_failure_still_raises():
+    with pytest.raises(RuntimeError, match="HTTP 502"):
+        gate.collect(704, gh=_NoChecksYet(error="HTTP 502: Bad Gateway"))

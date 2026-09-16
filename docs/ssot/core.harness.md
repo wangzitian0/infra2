@@ -86,11 +86,29 @@ remote HEAD、ahead/behind、dirty path 数和 checkout release identity。默�
 source。`--require-current` 在任一 checkout 落后/领先/脏/脱离 parent pin 时返回非零。
 观察与 fetch 前必须确认路径是独立 Git root；空 submodule 不能回退成父仓库。
 
+`harness sweep <watch.json>` 是 workspace orchestrator（启动 subagent、盯 PR/发布/CI、
+合流的主会话）的时钟，规则见
+[`coordination.md` Orchestrator Liveness](../../harness/workspace/coordination.md#orchestrator-liveness)。
+它把 watch list 中每个 agent、PR、release log、workflow run、worktree 归为唯一状态
+`WAITING / DONE / ACTION / STALL / UNKNOWN`：只有 `WAITING` 允许继续等待，且只由 GitHub
+事实白名单判定；合流 gate 只按退出码判定（0 ready、2 owner），其文本一律丢弃；携带
+`--merge`、`--request-review`、`--admin`、`--auto`（含 argparse 可展开的缩写）的 gate
+命令被拒绝。agent transcript 只 `stat`，从不读取。`--watch` 只打印状态迁移与心跳，
+任一项离开 `WAITING` 即退出。退出码：0 无需处理、1 需行动、2 有项完成而其余仍在等待
+（仅 watch）、3 停滞、4 无法判定（含用法与 watch list 错误）、5 watch 预算耗尽。
+它只打印、不投递告警，因此不注册 signal（`tools/no_new_wheels_lint.py` 只约束告警投递调用）。
+
+`tools/orchestrator_guard_hook.py` 是可选的 Claude Code hook：主会话中超过 4 分钟的
+前台调用与前台等待循环被拒绝，watch list 非空却未 arm watch 时拦截一次结束回合；
+subagent（hook 输入含 `agent_id`）豁免。`.claude/settings.json` 需 owner 审阅，仓库不自动接线。
+
 ## 7. The Proof
 
 ```bash
 uv run pytest -q libs/tests/test_harness_manifest.py
 uv run pytest -q libs/tests/test_harness_status.py
+uv run pytest -q libs/tests/test_harness_sweep.py libs/tests/test_orchestrator_guard_hook.py
+uv run python -m tools.harness sweep /abs/path/to/watch.json
 uv run python -m tools.harness check --json
 uv run python -m tools.harness status --fetch --json
 uv run pytest -q libs/tests/test_sdk_contract_adoption.py
@@ -103,6 +121,8 @@ uv run pytest -q libs/tests/test_sdk_contract_adoption.py
 - 所有 `external-application` 必须是 `autonomous`，且不能进入 focus。
 - authority 与 preference 路径可读且不能逃逸 workspace root。
 - 现有 SDK 采用测试继续证明消费者使用发布 artifact，而不是 submodule 源码。
+- `sweep` 对未 resolved review thread、红色 check、未知值与失败的 probe 从不报告
+  `WAITING`；gate 文本不参与判定；带变更 flag 的 gate 命令在执行前被拒绝。
 
 独立可用性证明必须经过分发边界：SDK 使用仓库外环境安装的发布 artifact；OMCA
 使用脱离构建源码目录的已安装二进制，并按实际 host/version 验证。源码目录内的
