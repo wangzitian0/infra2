@@ -97,8 +97,14 @@ def test_canonical_stateful_deployment_environments():
         assert is_stateful_deploy_env(env) is True
         assert si_is_stateful(env) is True
 
-    # Preview dynamic instances
-    for preview_instance in ("preview-pr-12", "commit-abc1234", "pr-42"):
+    # Preview dynamic instances per deploy_env_config.preview_alias SSOT model
+    for preview_instance in (
+        "pr-42",
+        "commit-1ab32d5",
+        "branch-feature-x",
+        "tag-v1-2-3",
+        "preview-pr-12",
+    ):
         assert is_stateful_deploy_env(preview_instance) is True
         assert is_stateful_deploy_env(preview_instance, strict=True) is False
 
