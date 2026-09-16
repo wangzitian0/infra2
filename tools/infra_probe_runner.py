@@ -299,9 +299,10 @@ def _track_never_green(
 def _escalated(streak: dict | None, now: float, runs: int, seconds: int) -> bool:
     if not streak:
         return False
-    return int(streak.get("runs") or 0) >= max(1, runs) and now - float(
-        streak.get("since") or now
-    ) >= max(0, seconds)
+    failing_for = now - float(streak.get("since", now))
+    return int(streak.get("runs") or 0) >= max(1, runs) and failing_for >= max(
+        0, seconds
+    )
 
 
 def _grace_note(result, alert_name: str, runs: int, seconds: int):
@@ -371,7 +372,9 @@ def run_once(
     json_results: dict[str, list[dict]] = {}
     dry_run = os.getenv("INFRA_PROBE_DRY_RUN", "0") == "1"
     ever_succeeded = set(state.get("ever_succeeded", []))
-    never_green = state.setdefault("never_green", {})
+    if not isinstance(state.get("never_green"), dict):
+        state["never_green"] = {}  # absent (older runner) or unreadable: start over
+    never_green = state["never_green"]
     probed: set[str] = set()
 
     for group in groups:
@@ -446,7 +449,7 @@ def run_once(
                     print(
                         f"probe-runner escalated probe={r.spec.name} "
                         f"stream={group.name} failed_runs={streak.get('runs')} "
-                        f"failing_for={int(now - float(streak.get('since') or now))}s "
+                        f"failing_for={int(now - float(streak.get('since', now)))}s "
                         "(never passed since runner start; no longer 'misconfigured')",
                         flush=True,
                     )

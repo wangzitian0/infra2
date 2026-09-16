@@ -841,6 +841,18 @@ def test_a_config_failure_does_not_count_toward_a_later_backend_streak(
     assert len(_firing(posted, "InfraServiceProbeFailed")) == 1
 
 
+def test_an_unreadable_never_green_state_starts_over(monkeypatch, tmp_path) -> None:
+    runner, posted, _clock, _printed = _roundtrip_runner(
+        monkeypatch, "warning", _backend_down
+    )
+    state_path = tmp_path / "s.json"
+    state_path.write_text(json.dumps({"groups": {}, "never_green": ["corrupt"]}))
+    assert runner.run_once(state_path=state_path, failure_threshold=1) == 1
+    streak = json.loads(state_path.read_text())["never_green"]["openpanel-roundtrip"]
+    assert streak["runs"] == 1
+    assert _firing(posted, "InfraProbeMisconfigured")
+
+
 def test_never_green_streaks_of_removed_probes_are_dropped(
     monkeypatch, tmp_path
 ) -> None:
