@@ -213,6 +213,9 @@ class DataEngineDeployer(Deployer):
         base["CONFIGURATION_SHA256"] = cls._configuration_sha256(base)
         return base
 
+    #: Where the governed moomoo origins run (truealpha#854, #874).
+    _MOOMOO_ORIGIN_ENVIRONMENTS = ("staging", "production")
+
     @classmethod
     def _release_recomputable_env(cls, environment: str) -> dict[str, str]:
         return {
@@ -222,14 +225,16 @@ class DataEngineDeployer(Deployer):
             "TIER_CPU_SHARES": "512" if environment == "staging" else "1024",
             "DATA_ENGINE_MEM_LIMIT": "768m" if environment == "staging" else "1536m",
             "DATA_ENGINE_VAULT_MEM_LIMIT": "128m",
-            # truealpha#854: the moomoo origins soak on staging; production flips only
-            # through a reviewed change here (part of CONFIGURATION_SHA256, so the flip
-            # is a new configuration identity, never an ambient env edit).
+            # truealpha#854: the moomoo origins soaked on staging and were proven on a
+            # manual forced TOPT tick there (2026-09-16 11:08Z, truealpha#874). Production
+            # turns them on through this reviewed change (part of CONFIGURATION_SHA256: a
+            # new configuration identity, never an ambient env edit). Any other
+            # environment stays off.
             "MOOMOO_KLINE_ORIGIN_ENABLED": "true"
-            if environment == "staging"
+            if environment in cls._MOOMOO_ORIGIN_ENVIRONMENTS
             else "false",
             "MOOMOO_FINANCIALS_ORIGIN_ENABLED": "true"
-            if environment == "staging"
+            if environment in cls._MOOMOO_ORIGIN_ENVIRONMENTS
             else "false",
         }
 
