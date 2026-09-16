@@ -135,6 +135,25 @@ def test_deployer_derives_isolated_ports_and_full_configuration_hash(monkeypatch
     assert changed["CONFIGURATION_SHA256"] != config["CONFIGURATION_SHA256"]
 
 
+def test_moomoo_origin_flags_soak_on_staging_and_stay_off_in_production():
+    """truealpha#854: the moomoo K-line and statements origins are feature-flagged in the
+    engine. Staging turns them on to soak; production stays off until a reviewed change
+    flips it here — and because the flags are part of the public env, that flip is a new
+    CONFIGURATION_SHA256, never an env edit nobody reviewed."""
+    module = _load_deploy_module()
+    deployer = module.DataEngineDeployer
+    staging = deployer._release_recomputable_env("staging")
+    production = deployer._release_recomputable_env("production")
+    for flag in ("MOOMOO_KLINE_ORIGIN_ENABLED", "MOOMOO_FINANCIALS_ORIGIN_ENABLED"):
+        assert staging[flag] == "true" and production[flag] == "false", flag
+    compose = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8"))
+    services = compose["services"]
+    for name in ("dagster-code-server", "dagster-daemon", "dagster-webserver"):
+        environment = services[name]["environment"]
+        for flag in ("MOOMOO_KLINE_ORIGIN_ENABLED", "MOOMOO_FINANCIALS_ORIGIN_ENABLED"):
+            assert environment.get(flag) == "${" + flag + ":-false}", (name, flag)
+
+
 def test_source_identity_is_release_recomputable_without_vault(monkeypatch):
     module = _load_deploy_module()
     deployer = module.DataEngineDeployer
