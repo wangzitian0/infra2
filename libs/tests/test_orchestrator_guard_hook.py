@@ -112,7 +112,17 @@ def test_an_armed_watch_or_an_empty_list_allows_the_stop(tmp_path, watch_list):
     assert _stop(tmp_path, [])[0] == hook.ALLOW
 
 
-@pytest.mark.parametrize("content", [None, "{not json", "[1, 2]"])
+def test_a_bare_list_is_a_watch_list_too(tmp_path, watch_list):
+    # `tools.harness sweep` accepts a bare list, so the hook must not ignore one.
+    watch_list.write_text(json.dumps([{"kind": "pr"}]))
+    assert _stop(tmp_path, [])[0] == hook.BLOCK
+    watch_list.write_text("[]")
+    assert _stop(tmp_path, [])[0] == hook.ALLOW
+
+
+@pytest.mark.parametrize(
+    "content", [None, "{not json", "null", "3", '{"items": "x"}', '{"other": [1]}']
+)
 def test_a_missing_or_broken_list_allows_the_stop(tmp_path, watch_list, content):
     if content is not None:
         watch_list.write_text(content)

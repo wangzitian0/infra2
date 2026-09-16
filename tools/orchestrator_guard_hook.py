@@ -82,9 +82,12 @@ def _stop(payload: dict, commands: Callable[[], list[str]]) -> tuple[int, str]:
     watch_path = str(Path(scratch) / WATCH_FILE)
     try:
         data = json.loads(Path(watch_path).read_text(encoding="utf-8"))
-        items = data.get("items") or []
-    except (OSError, ValueError, AttributeError):
+    except (OSError, ValueError):
         return ALLOW, ""
+    # The same two shapes `tools.harness sweep` accepts: {"items": [...]} or a bare list.
+    items = data.get("items") if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        items = []
     if items and not watch_armed(watch_path, commands()):
         return BLOCK, (
             f"orchestrator liveness: {len(items)} watched item(s) in {watch_path} but "
