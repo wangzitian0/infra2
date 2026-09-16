@@ -47,13 +47,16 @@ COPILOT_BOT_ID = "BOT_kgDOCnlnWA"
 AUTOMATED_REVIEWERS = frozenset({"copilot-pull-request-reviewer"})
 # AGENTS.md: protected files need the owner's approval of the head that changes them.
 PROTECTED_FILES = ("AGENTS.md", "CLAUDE.md")
-# A push to main under these paths deploys (deploy.yml: the runner rebuild) — a merge
-# must not be what triggers it under session authority.
+# A push to main under these paths deploys (deploy.yml: the runner rebuild;
+# deploy-cloudflare-watchdog.yml: `wrangler deploy` of the out-of-band worker, #718) —
+# a merge must not be what triggers it under session authority.
 DEPLOY_TRIGGERING_GLOBS = (
     "bootstrap/06.iac_runner/*",
     "bootstrap/06.iac_runner/**/*",
     "scripts/deploy_iac_runner_bootstrap.sh",
     ".github/workflows/deploy.yml",
+    "cloudflare/infra-watchdog/*",
+    "cloudflare/infra-watchdog/**/*",
 )
 # gh's own classification of a check (`bucket`): pass / fail / pending / skipping /
 # cancel. `state` (SUCCESS, SKIPPED, IN_PROGRESS, …) is kept as the fallback for a gh

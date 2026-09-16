@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 from tools import pr_merge_gate as gate
+
+ROOT = Path(__file__).resolve().parents[2]
 
 NOW = 1_800_000_000.0
 
@@ -57,6 +60,23 @@ def test_a_protected_file_or_a_deploy_triggering_path_needs_the_owner():
     assert runner.exit_code == 2 and "trigger a deploy" in runner.reasons[0]
     workflow = gate.evaluate(_facts(files=(".github/workflows/deploy.yml",)), now=NOW)
     assert workflow.owner_required
+    # deploy-cloudflare-watchdog.yml runs `wrangler deploy` on a push under this path
+    worker = gate.evaluate(
+        _facts(files=("cloudflare/infra-watchdog/worker.js",)), now=NOW
+    )
+    assert worker.exit_code == 2 and "trigger a deploy" in worker.reasons[0]
+
+
+def test_the_deploy_triggering_globs_cover_every_push_triggered_deploy_workflow():
+    import yaml
+
+    workflows = ROOT / ".github/workflows"
+    for name in ("deploy.yml", "deploy-cloudflare-watchdog.yml"):
+        workflow = yaml.safe_load((workflows / name).read_text(encoding="utf-8"))
+        on = workflow.get("on", workflow.get(True))
+        for pattern in on["push"]["paths"]:
+            sample = pattern.replace("**", "sub/file").replace("*", "file")
+            assert gate._deploy_triggering(sample), (name, pattern)
 
 
 def test_a_fractional_second_inside_the_window_is_inside_the_window():

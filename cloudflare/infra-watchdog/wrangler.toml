@@ -21,10 +21,14 @@ WATCHDOG_RETRY_MAX_ATTEMPTS = "2"
 WATCHDOG_RETRY_DELAY_MS = "60000"
 WATCHDOG_RENOTIFY_SECONDS = "7200"
 WATCHDOG_STATUS_MAX_AGE_SECONDS = "7200"
-# Heartbeat KV writes are throttled to at most one per this interval per key.
-# Worst-case daily puts = (heartbeat keys * ceil(86400/interval)) + cron lastRun
-# and alert-state puts, which must stay well under the KV free-tier 1000/day.
+# KV free tier: 1000 put()/day for the whole account. Worst-case daily puts =
+#   heartbeat keys * (ceil(86400 / MIN_WRITE_INTERVAL) + STATUS_CHANGE_WRITES_PER_DAY)
+#   + 48 cron runs * (lastRun + ledger + alert-state)
+#   = 2 * (96 + 24) + 48 * 3 = 384 (38%); healthy steady state 2 * 96 + 48 * 2 = 288.
+# Only configured heartbeat keys are stored, and a runner's liveness ping never
+# changes the stored verdict (2026-09-15: that alternation wrote on every post).
 WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS = "900"
+WATCHDOG_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY = "24"
 ALERT_DELIVERY_MODE = "feishu_app"
 # Secondary alert channel (email via Resend): used only when Feishu delivery
 # fails, so a Feishu outage cannot silently swallow an alert. RESEND_API_KEY is a

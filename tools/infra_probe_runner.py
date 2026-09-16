@@ -180,10 +180,13 @@ def main() -> int:
         # every iteration, BEFORE running probes. Crash/OOM/hang during a probe cycle
         # then surfaces as heartbeat staleness within one interval — independent of how
         # long the probe cycle takes. The post-probe heartbeat below still carries the
-        # ok/failure status. Heartbeat writes are throttled watchdog-side, so the extra
-        # ping per loop costs no KV quota.
+        # ok/failure status; this ping is flagged `liveness` so the watchdog keeps that
+        # verdict instead of flipping it back to ok — the flip is a status change, and
+        # while any probe failed every flip was a KV write (1198 puts/day, 2026-09-15).
         if args.loop and not dry_run:
-            _post_heartbeat(ok=True, detail="probe loop iteration starting")
+            _post_heartbeat(
+                ok=True, detail="probe loop iteration starting", liveness=True
+            )
             # Local liveness-first mirror of the heartbeat: refresh the state
             # file BEFORE the (possibly slow) probe+watcher work, so the
             # compose healthcheck's freshness window measures loop liveness,
@@ -566,7 +569,10 @@ def _save_state(path: Path, state: dict) -> None:
         print(f"infra probe state write failed: {exc}", flush=True)
 
 
-def _post_heartbeat(*, ok: bool, detail: str = "") -> None:
+def _post_heartbeat(*, ok: bool, detail: str = "", liveness: bool = False) -> None:
+    """Publish to the Cloudflare watchdog. ``liveness`` marks a ping that proves the
+    loop is alive but carries no probe verdict; the watchdog never lets it change the
+    stored ``ok``."""
     heartbeat_url = os.getenv("INFRA_PROBE_HEARTBEAT_URL", "").strip()
     if not heartbeat_url:
         return
@@ -578,6 +584,8 @@ def _post_heartbeat(*, ok: bool, detail: str = "") -> None:
         "detail": detail or ("probe loop completed" if ok else "probe loop failed"),
         "timestamp": int(time.time()),
     }
+    if liveness:
+        payload["liveness"] = True
     headers = {**HTTP_PROBE_HEADERS, "Content-Type": "application/json"}
     token = os.getenv("INFRA_PROBE_HEARTBEAT_TOKEN", "").strip()
     if token:

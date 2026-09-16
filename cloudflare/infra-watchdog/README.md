@@ -124,15 +124,22 @@ Copy the namespace IDs into `wrangler.toml` before deployment.
 
 ## Deployment
 
+A push to `main` that touches `cloudflare/infra-watchdog/**` runs
+[`deploy-cloudflare-watchdog.yml`](../../.github/workflows/deploy-cloudflare-watchdog.yml)
+(`wrangler deploy` with the `CF_API_TOKEN` repository secret, then a `/health`
+check): **merging a change here deploys it**. `tools/pr_merge_gate.py` therefore
+treats these paths as deploy-triggering — such a PR needs the owner's approval of
+its head, never session merge authority. The workflow is also
+`workflow_dispatch`-able. By hand, from this directory:
+
 ```bash
-cd cloudflare/infra-watchdog
-wrangler deploy
+CLOUDFLARE_API_TOKEN="$(op item get bootstrap/cloudflare-worker --vault Infra2 \
+  --fields label=CLOUDFLARE_WORKER_API_TOKEN --reveal)" wrangler deploy
 ```
 
-> Merging `worker.js` to `main` does **not** deploy the worker. Run
-> `wrangler deploy` after merge, otherwise the deployed worker drifts behind the
-> repo (this is how an undeployed KV-throttle fix once let the worker exhaust the
-> daily KV quota and emit false stale-heartbeat alerts).
+(`wrangler deploy --dry-run` validates the bundle and config without auth.) Before
+that workflow existed a merged KV-throttle fix sat undeployed and the worker
+exhausted the daily KV quota with false stale-heartbeat alerts.
 
 ### Observability (queryable logs)
 
@@ -161,15 +168,44 @@ never crashes the run. Verify the archive positively with
 
 ### Free-quota safety
 
-The worker must never trip the Cloudflare KV free-tier limit (1000 puts/day),
-because a quota trip silently kills heartbeat tracking. Heartbeat writes are
-throttled by `WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS` (set to `900` in
-`wrangler.toml`; the worker falls back to `600` if the variable is unset).
-Worst-case daily puts (`heartbeat keys * ceil(86400/interval) + cron lastRun and
-alert-state puts`) stay well under the limit, and
-`tests/test_cloudflare_watchdog.py` asserts this budget. If
-KV `put()` still fails, `recordHeartbeat` degrades to HTTP 200 with a logged
-error instead of an unhandled 500/1101.
+The worker must never trip the Cloudflare KV free-tier limit (1000 puts/day for
+the whole account), because a quota trip silently freezes both heartbeat records:
+every later heartbeat `put()` throws `KV put() limit exceeded for the day.` until
+00:00 UTC, the records go stale, and the cron pages false heartbeat failures.
+
+`recordHeartbeat` reads the stored record and writes only when
+`heartbeatWrite()` says so:
+
+- a **verdict** post (the runner's post-probe heartbeat) refreshes the record once
+  per `WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS` (`900`; the worker falls back
+  to `600` if unset);
+- a **changed** verdict is written at once, up to
+  `WATCHDOG_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY` (`24`) times per key per UTC
+  day; past that budget a flapping verdict waits for the next refresh;
+- a **liveness** ping (`"liveness": true`, or the runner's legacy
+  `probe loop iteration starting` detail) never changes the stored `ok`; it only
+  refreshes a record no verdict has refreshed for two intervals;
+- only `(environment, name)` pairs in `WATCHDOG_HEARTBEATS_JSON` (for enabled
+  environments) are stored; any other name gets HTTP 404 and costs nothing.
+
+Worst-case puts per UTC day:
+
+```
+heartbeat keys * (ceil(86400 / interval) + status-change budget)   2 * (96 + 24) = 240
++ cron runs * (lastRun + ledger rollup + alert state)              48 * 3        = 144
+                                                                                  = 384 (38%)
+```
+
+A healthy day costs about `2 * 96 + 48 * 2 = 288`. Before this rule
+(2026-09-15/16) the liveness ping's `ok=true` and a failing verdict alternated on
+every ~70 s probe loop and each alternation was written: 1198 and 1157 puts/day.
+`libs/tests/test_cloudflare_watchdog_kv_budget.py` replays a whole day of runner
+and cron traffic against `worker.js` under node and asserts these bounds;
+`libs/tests/test_cloudflare_watchdog.py` checks the formula against
+`wrangler.toml`. The daily ops check (`tools/secrets_reconcile.py`) reports
+yesterday's `cloudflare.kv.write` against the limit together with the last seven
+days and today so far. If KV `put()` still fails, `recordHeartbeat` degrades to
+HTTP 200 with a logged `watchdog.heartbeat.error` instead of an unhandled 500/1101.
 
 Set the probe runner heartbeat endpoint after deployment:
 
@@ -191,6 +227,10 @@ Then redeploy platform alerting for each environment.
 - `WATCHDOG_RETRY_DELAY_MS`: defaults to `60000` (retry after one minute).
 - `WATCHDOG_RENOTIFY_SECONDS`: defaults to `7200`.
 - `WATCHDOG_STATUS_MAX_AGE_SECONDS`: defaults to `7200`.
+- `WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS`: heartbeat refresh interval,
+  defaults to `600` (`900` in `wrangler.toml`).
+- `WATCHDOG_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY`: early writes of a changed
+  verdict per heartbeat key per UTC day, defaults to `24`.
 - `WATCHDOG_TARGETS_JSON`: JSON array overriding public route targets.
 - `WATCHDOG_HEARTBEATS_JSON`: JSON array overriding heartbeat checks.
 - `ALERT_DELIVERY_MODE`: `feishu_webhook` or `feishu_app`.
