@@ -10,6 +10,20 @@ name: App deploy request
 # [<request_id>]` to confirm receipt. Without this match the sender's poll loop always
 # times out, even on a fully successful receiver run. This run-name reproduces that
 # exact string from the dispatch payload so the match can succeed.
+#
+# One job, not three (#truealpha critical-path, 2026-09-15/16 measurement): the previous
+# validate / preflight_canary / deploy jobs each paid their own `actions/checkout
+# fetch-depth: 0` + `pip install -e .` (35-50s total) plus 10-20s of inter-job queueing,
+# on top of the 87-131s canary and 112-199s execute themselves. A sender never inspects
+# this workflow's job/step names (confirmed 2026-09-16 against
+# repos/truealpha and repos/finance_report — `tools/app_deploy_transport.py` delegates
+# to infra2_sdk.dispatch, which watermarks the RECEIVER'S RUN, waits for its overall
+# conclusion, and greps the run's logs for the request id; none of that reads a job or
+# step name), so the three stages become three steps of one job with the identical
+# gating the jobs had: validate always runs; canary runs only when the plan says
+# requires_preflight_canary; execute runs unless a prior step actually failed (a step
+# that is merely skipped does not fail `success()`) — so a failed validate never reaches
+# canary or execute, and a failed canary never reaches execute, exactly as before.
 run-name: Deploy ${{ github.event.client_payload.service }} ${{ github.event.client_payload.deploy_type }} ${{ github.event.client_payload.version_ref }} ${{ github.event.client_payload.source_sha }} [${{ github.event.client_payload.request_id }}]
 on:
   repository_dispatch:
@@ -30,13 +44,25 @@ env:
   INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
 
 jobs:
-  validate:
-    name: validate request contract
+  deploy:
+    name: validate, canary, and execute the deploy request
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      requires_preflight_canary: ${{ steps.plan.outputs.requires_preflight_canary }}
-      iac_ref: ${{ steps.plan.outputs.iac_ref }}
+    timeout-minutes: 45
+    # deploy-v2-canary is the cross-workflow singleton lock for the ONE reserved preview
+    # slot (pr-999) every deploy_v2 canary runs on, shared with deploy.yml's own canary
+    # job and ops-checks.yml's scheduled one — two canaries racing the same slot would
+    # corrupt each other's Dokploy compose. Scoping it per-step is not possible
+    # (concurrency groups gate a whole job, resolved before any step runs, and
+    # requires_preflight_canary is not known until the plan step executes), so this
+    # single job carries the group unconditionally. In practice that reproduces the old
+    # behavior almost exactly: this receiver only ever accepts deploy_type staging/prod
+    # (tools/app_deploy_request.py's own senders enforce that), so requires_preflight_canary
+    # is true for every request except an explicit `operation: remove` — the one case
+    # that now waits on this lock's queue when it previously would not have (a rare,
+    # latency-only regression: the group never cancels, only serializes).
+    concurrency:
+      group: deploy-v2-canary
+      cancel-in-progress: false
     steps:
       - name: Checkout released infra context
         uses: actions/checkout@v7
@@ -49,6 +75,7 @@ jobs:
           cache: pip
       - name: Install receiver dependencies
         run: python -m pip install -e .
+
       - name: Validate and display the side-effect-free plan
         id: plan
         run: |
@@ -59,47 +86,33 @@ jobs:
             --repo-root .)"
           printf '%s\n' "$plan" | python -m json.tool
           # requires_preflight_canary is DeployPlan's own property (libs/app_deploy_request.py) —
-          # the single source of truth for which requests get gated. preflight_canary's `if:`
-          # below reads this output instead of re-deriving deploy_type/operation itself, so the
-          # two can never drift apart.
+          # the single source of truth for which requests get gated. The canary step's
+          # `if:` below reads this output instead of re-deriving deploy_type/operation
+          # itself, so the two can never drift apart.
           needs_canary="$(printf '%s' "$plan" | python -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["requires_preflight_canary"]))')"
           iac_ref="$(printf '%s' "$plan" | python -c 'import json,sys; print(json.load(sys.stdin)["iac_ref"])')"
           echo "requires_preflight_canary=$needs_canary" >> "$GITHUB_OUTPUT"
           echo "iac_ref=$iac_ref" >> "$GITHUB_OUTPUT"
 
-  preflight_canary:
-    name: preflight requested artifact
-    needs: [validate]
-    if: >-
-      ${{ needs.validate.result == 'success'
-          && needs.validate.outputs.requires_preflight_canary == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    concurrency:
-      group: deploy-v2-canary
-      cancel-in-progress: false
-    env:
-      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
-      VALIDATED_IAC_REF: ${{ needs.validate.outputs.iac_ref }}
-      # Visible timing (#truealpha critical-path measurement, 2026-09-15/16): Python
-      # buffers stdout when it isn't a TTY, so a subprocess's own PYTHONUNBUFFERED=1
-      # (unlike `python -u`, which only affects `python` invocations made directly in
-      # this step, not modules it imports/execs) is required for libs.deploy_phase_log's
-      # phase() markers to show up in the live Actions log instead of all at once at exit.
-      PYTHONUNBUFFERED: "1"
-    steps:
-      - name: Checkout released infra context
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-          cache: pip
-      - name: Install receiver dependencies
-        run: python -m pip install -e .
+      # `if: success() && ...` (not the bare output check alone): an explicit `if:`
+      # replaces the step's implicit default (`success()`), so without `success()` here
+      # a failed validate step (empty/absent step outputs) would happen to also read as
+      # 'true' != 'true' — never quite wrong today, but relying on that coincidence
+      # instead of stating the real gate ("a failed validate never runs a canary")
+      # outright.
       - name: Canary the exact app and IaC coordinates
+        if: >-
+          ${{ success() && steps.plan.outputs.requires_preflight_canary == 'true' }}
+        env:
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+          VALIDATED_IAC_REF: ${{ steps.plan.outputs.iac_ref }}
+          # Visible timing (#truealpha critical-path measurement, 2026-09-15/16): Python
+          # buffers stdout when it isn't a TTY, so a subprocess's own PYTHONUNBUFFERED=1
+          # (unlike `python -u`, which only affects `python` invocations made directly
+          # in this step, not modules it imports/execs) is required for
+          # libs.deploy_phase_log's phase() markers to show up in the live Actions log
+          # instead of all at once at exit.
+          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
           if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
@@ -120,36 +133,18 @@ jobs:
             --domain "$INTERNAL_DOMAIN" \
             --timeout 600
 
-  deploy:
-    name: execute validated request
-    needs: [validate, preflight_canary]
-    if: >-
-      ${{ always()
-          && needs.validate.result == 'success'
-          && (needs.preflight_canary.result == 'success'
-              || needs.preflight_canary.result == 'skipped') }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    env:
-      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
-      IAC_WEBHOOK_SECRET: ${{ secrets.IAC_WEBHOOK_SECRET }}
-      IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
-      VALIDATED_IAC_REF: ${{ needs.validate.outputs.iac_ref }}
-      # See the identical comment in preflight_canary above.
-      PYTHONUNBUFFERED: "1"
-    steps:
-      - name: Checkout released infra context
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-          cache: pip
-      - name: Install receiver dependencies
-        run: python -m pip install -e .
+      # No explicit `if:` — the default `success()` already means "runs unless a prior
+      # step FAILED" (a step that was itself skipped, like the canary above on a request
+      # that does not require one, does not count as a failure), which is exactly
+      # "execute only if canary success/skipped".
       - name: Execute through deploy_v2
+        env:
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+          IAC_WEBHOOK_SECRET: ${{ secrets.IAC_WEBHOOK_SECRET }}
+          IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
+          VALIDATED_IAC_REF: ${{ steps.plan.outputs.iac_ref }}
+          # See the identical comment on the canary step above.
+          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
           if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then

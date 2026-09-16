@@ -29,9 +29,16 @@
 | **Observability config apply** | [`apply-observability.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/apply-observability.yml) | 告警规则 / 看板,声明式 reconcile。**当前 merge 即 apply**(见 §3.4 未收口项)。 |
 | **Docs site** | [`docs.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/docs.yml) · [`docs/mkdocs.yml`](../mkdocs.yml) | MkDocs → GitHub Pages。 |
 
-Receiver 的 validate job 将选定的 `iac_ref` 作为 job output 传给 canary/deploy；后续 job 重做
-权威校验时必须与该坐标完全一致，防止同一 receiver run 在新 release/production marker
-竞态中 canary 与 deploy 使用不同 IaC。
+Receiver 是**一个 job、三个 step**（validate → canary → execute，非 2026-09 前的三个
+job；job/step 名不是跨仓库契约——两个 App 的 sender 只等待 receiver run 的总体
+conclusion 并在 run 日志里 grep request id，`run-name`/`display_title` 才是唯一的
+跨仓库命名契约，见 `libs/tests/test_app_deploy_request_workflow.py`）。validate（`plan`）
+step 选定的 `iac_ref` 作为该 step 的 output 传给 canary/execute；后续 step 重做权威校验时
+必须与该坐标完全一致，防止同一 receiver run 在新 release/production marker 竞态中
+canary 与 execute 使用不同 IaC。canary step 与全仓库共享的 `deploy-v2-canary` 并发锁
+（`deploy.yml`/`ops-checks.yml` 的 canary 也用它，保护同一个保留预览槽 `pr-999`）绑定在
+整个 job 上，而不是单独的 step 上——GitHub Actions 的 concurrency group 在 job 开始前
+就要解析完毕，此时 `requires_preflight_canary` 还没算出来。
 
 ---
 

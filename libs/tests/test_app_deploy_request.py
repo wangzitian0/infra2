@@ -770,10 +770,11 @@ def test_remove_plan_uses_down_without_expected_sha(tmp_path) -> None:
 def test_requires_preflight_canary_is_the_single_source_the_workflow_reads(
     tmp_path, overrides, expected
 ) -> None:
-    """app-deploy-request.yml's preflight_canary job reads this property (via the plan
-    CLI action's JSON) instead of hand-copying a deploy_type list into its `if:` — see
-    test_app_deploy_request_workflow.py. A production request additionally needs staging
-    + review evidence, so it goes through production_payload()."""
+    """app-deploy-request.yml's canary step reads this property (via the plan step's own
+    output, from the `plan` CLI action's JSON) instead of hand-copying a deploy_type list
+    into its `if:` — see test_app_deploy_request_workflow.py. A production request
+    additionally needs staging + review evidence, so it goes through
+    production_payload()."""
     build_payload = (
         production_payload if overrides.get("deploy_type") == "prod" else payload
     )

@@ -147,9 +147,9 @@ class DeployPlan:
         """Whether the receiver must canary this exact coordinate before executing it.
 
         The single source of truth for "which requests get gated" — app-deploy-request.yml's
-        ``preflight_canary`` job reads this (via the ``plan`` CLI action's JSON) instead of
-        re-deriving it from a hardcoded ``deploy_type`` list in YAML, so the two can never
-        drift apart.
+        canary step reads this (via the ``plan`` CLI action's JSON, as the ``plan`` step's
+        own output) instead of re-deriving it from a hardcoded ``deploy_type`` list in
+        YAML, so the two can never drift apart.
         """
         return (
             self.request.deploy_type in FIXED_DEPLOY_TYPES
