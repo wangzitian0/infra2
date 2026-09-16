@@ -26,6 +26,7 @@ on:
       - '.github/workflows/deploy.yml'
       - '.github/workflows/reconcile-iac-inputs.yml'
       - '.github/workflows/ops-checks.yml'
+      - '.github/workflows/deploy-cloudflare-watchdog.yml'
   push:
     branches: [main]
     paths:
@@ -52,6 +53,7 @@ on:
       - '.github/workflows/deploy.yml'
       - '.github/workflows/reconcile-iac-inputs.yml'
       - '.github/workflows/ops-checks.yml'
+      - '.github/workflows/deploy-cloudflare-watchdog.yml'
 
 permissions:
   contents: read
