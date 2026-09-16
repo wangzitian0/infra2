@@ -221,7 +221,7 @@ tightens the bound (`0` = drill red). With `INFRA2_WATCHDOG_VERDICTS_PATH` set i
 appends every verdict for the issue trail.
 
 ```bash
-INFRA2_WATCHDOG_DRY_RUN=1 uv run python tools/out_of_band_watchdog.py
+WATCHDOG_DRY_RUN=1 uv run python tools/out_of_band_watchdog.py
 ```
 
 ## watchdog_issue_trail.py
