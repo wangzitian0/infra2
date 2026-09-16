@@ -11,17 +11,72 @@ Audit-hardened (反事实审计 2026-09-16):
   DB superset is the most dangerous runtime divergence.
 - Fail-closed: any exception (query failure, parse error) blocks deploy.
   A check that silently fails is worse than no check.
+- Never a silent pass (#718 review): a gate that cannot load its code-side enums or
+  has no database to compare against has not evaluated anything, so it exits
+  ``EXIT_NOT_EVALUATED`` — non-zero, like a finding.
+
+Exit codes: 0 verified (0 discrepancies) · 1 blocked (discrepancy or DB failure) ·
+3 not evaluated (an input is unavailable) — also blocking.
+
+The code side is the service's own SQLAlchemy metadata, so the gate runs where the
+application imports (its image or virtualenv), not from infra2's environment::
+
+    python tools/pre_deploy_schema_check.py --service finance_report/app
+        --app-path <finance_report checkout>/apps/backend --db-url postgresql://...
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib
 import os
 import re
 import sys
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Sequence
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
+EXIT_OK = 0
+EXIT_BLOCKED = 1
+# 2 is argparse's usage error; "not evaluated" gets its own code so a caller can tell
+# "the schemas differ" from "nothing was compared" — both still block.
+EXIT_NOT_EVALUATED = 3
+
+
+class GateNotEvaluated(Exception):
+    """An input the gate needs is unavailable, so there is no verdict — which blocks."""
+
+
+@dataclass(frozen=True)
+class EnumSource:
+    """Where a service's code-side enum truth lives.
+
+    ``metadata`` names a SQLAlchemy ``MetaData`` as ``module:attribute.path``; every
+    native enum column type registered on it is one Postgres enum type (its ``name``)
+    with its labels (``enums``). ``imports`` are imported first, for their side effect
+    of registering every mapped class on that metadata. ``app_path`` says which
+    directory of the service's checkout has to be on ``sys.path``.
+    """
+
+    metadata: str
+    imports: tuple[str, ...] = ()
+    app_path: str = ""
+
+
+# finance_report's backend is the ``src`` package under apps/backend of the
+# finance_report repository — there is no ``finance_report.models.enums`` (the infra2
+# ``finance_report`` package is deploy config). Its mapped classes register on
+# ``src.database.Base.metadata`` once ``src.orm_registry`` is imported, and every
+# Postgres enum there carries an explicit ``name=`` (``account_type_enum``, migration
+# 0007) that no class-name derivation reproduces.
+ENUM_SOURCES: dict[str, EnumSource] = {
+    "finance_report/app": EnumSource(
+        metadata="src.database:Base.metadata",
+        imports=("src.orm_registry",),
+        app_path="<finance_report checkout>/apps/backend",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -107,7 +162,11 @@ def query_db_enums(connection_or_cursor: Any) -> dict[str, list[str]]:
     elif hasattr(connection_or_cursor, "fetchall"):
         rows = connection_or_cursor.fetchall()
     else:
-        rows = []
+        # An object that can neither run the query nor hand back rows must not read as
+        # "the database has no enums".
+        raise TypeError(
+            f"cannot query enums through {type(connection_or_cursor).__name__}"
+        )
 
     enums: dict[str, list[str]] = {}
     for row in rows:
@@ -169,26 +228,123 @@ def check_enums(
     return discrepancies
 
 
-def load_code_enums_for_service(service: str) -> dict[str, type[Enum] | Sequence[str]]:
-    """Discover and load Enum definitions for the specified service."""
-    enums: dict[str, type[Enum] | Sequence[str]] = {}
-    if "finance" in service.lower():
-        try:
-            import importlib
+def _resolve(reference: str) -> Any:
+    module_name, _, attribute_path = reference.partition(":")
+    target: Any = importlib.import_module(module_name)
+    for part in filter(None, attribute_path.split(".")):
+        target = getattr(target, part)
+    return target
 
-            mod = importlib.import_module("finance_report.models.enums")
-            for attr_name in dir(mod):
-                attr = getattr(mod, attr_name)
-                if (
-                    isinstance(attr, type)
-                    and issubclass(attr, Enum)
-                    and attr is not Enum
-                ):
-                    name = re.sub(r"(?<!^)(?=[A-Z])", "_", attr.__name__).lower()
-                    enums[name] = attr
-        except (ImportError, AttributeError):
-            pass
+
+def _enum_type(column_type: Any) -> Any | None:
+    """The native enum type behind a column type, or None.
+
+    Duck-typed on what SQLAlchemy's ``Enum`` exposes (``name``, ``enums``,
+    ``native_enum``) so infra2 does not need SQLAlchemy installed; an ``ARRAY`` of an
+    enum and a ``TypeDecorator`` over one are unwrapped.
+    """
+    for candidate in (
+        column_type,
+        getattr(column_type, "item_type", None),
+        getattr(column_type, "impl_instance", None),
+    ):
+        if candidate is None:
+            continue
+        labels = getattr(candidate, "enums", None)
+        if (
+            isinstance(labels, (list, tuple))
+            and getattr(candidate, "name", None)
+            and getattr(candidate, "native_enum", True)
+        ):
+            return candidate
+    return None
+
+
+def enums_from_metadata(metadata: Any) -> dict[str, tuple[str, ...]]:
+    """``{postgres enum type name: labels}`` for every native enum column on ``metadata``."""
+    tables = getattr(metadata, "tables", None)
+    if not isinstance(tables, Mapping):
+        raise GateNotEvaluated(
+            f"{type(metadata).__name__} is not a SQLAlchemy MetaData (no .tables)"
+        )
+    enums: dict[str, tuple[str, ...]] = {}
+    for table in tables.values():
+        for column in table.columns:
+            enum_type = _enum_type(column.type)
+            if enum_type is None:
+                continue
+            labels = tuple(str(label) for label in enum_type.enums)
+            known = enums.setdefault(enum_type.name, labels)
+            if set(known) != set(labels):
+                raise GateNotEvaluated(
+                    f"enum type {enum_type.name!r} is declared with different labels "
+                    f"on two columns: {sorted(known)} vs {sorted(labels)}"
+                )
     return enums
+
+
+def load_code_enums_for_service(
+    service: str,
+    *,
+    app_path: str | None = None,
+    sources: Mapping[str, EnumSource] | None = None,
+) -> dict[str, tuple[str, ...]]:
+    """The service's code-side enums; raises ``GateNotEvaluated`` when they can't be read.
+
+    An unregistered service, a module that does not import, or a metadata object with
+    no native enum types all mean nothing can be compared — never "0 discrepancies".
+    """
+    sources = ENUM_SOURCES if sources is None else sources
+    source = sources.get(service)
+    if source is None:
+        raise GateNotEvaluated(
+            f"no enum source is registered for {service!r} "
+            f"(registered: {', '.join(sorted(sources)) or 'none'})"
+        )
+    if app_path:
+        directory = Path(app_path).expanduser().resolve()
+        if not directory.is_dir():
+            raise GateNotEvaluated(f"--app-path {app_path} is not a directory")
+        if str(directory) not in sys.path:
+            sys.path.insert(0, str(directory))
+    try:
+        for module_name in source.imports:
+            importlib.import_module(module_name)
+        metadata = _resolve(source.metadata)
+    except Exception as exc:  # noqa: BLE001 - any import-time failure means "not loaded"
+        hint = f" --app-path {source.app_path}" if source.app_path else ""
+        raise GateNotEvaluated(
+            f"cannot load {service} enums from {source.metadata}: "
+            f"{type(exc).__name__}: {exc} (run it in the service's own Python "
+            f"environment{hint})"
+        ) from exc
+    enums = enums_from_metadata(metadata)
+    if not enums:
+        raise GateNotEvaluated(
+            f"{source.metadata} declares no native enum types for {service}; "
+            "an empty code side cannot be compared"
+        )
+    return enums
+
+
+def libpq_url(db_url: str) -> str:
+    """Drop a SQLAlchemy driver suffix (``postgresql+asyncpg://``) libpq rejects."""
+    return re.sub(r"^(postgres(?:ql)?)\+[A-Za-z0-9_]+://", r"\1://", db_url)
+
+
+def fetch_db_enums(db_url: str) -> dict[str, list[str]]:
+    url = libpq_url(db_url)
+    try:
+        import psycopg  # type: ignore[import-not-found]
+    except ImportError:
+        import psycopg2  # type: ignore[import-not-found]
+
+        with psycopg2.connect(url) as conn:
+            with conn.cursor() as cur:
+                return query_db_enums(cur)
+    with psycopg.connect(url) as conn:
+        with conn.cursor() as cur:
+            return query_db_enums(cur)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -196,42 +352,48 @@ def main(argv: list[str] | None = None) -> int:
         description="Pre-deploy schema & enum check gate (#698)"
     )
     parser.add_argument(
-        "--service", required=True, help="Target service, e.g. finance_report/app"
+        "--service",
+        required=True,
+        help=f"Target service, one of: {', '.join(sorted(ENUM_SOURCES))}",
     )
     parser.add_argument(
-        "--db-url", default=None, help="Optional direct postgres connection URL"
+        "--db-url",
+        default=None,
+        help="Postgres connection URL (default: $DATABASE_URL); required",
+    )
+    parser.add_argument(
+        "--app-path",
+        default=None,
+        help="Directory put first on sys.path so the service's own package imports",
     )
     args = parser.parse_args(argv)
 
-    code_enums = load_code_enums_for_service(args.service)
     db_url = args.db_url or os.environ.get("DATABASE_URL")
-
+    reasons: list[str] = []
     if not db_url:
-        print(
-            f"Pre-deploy schema check: no database URL provided for {args.service}; verified code enums count={len(code_enums)}"
-        )
-        return 0
-
-    db_enums: dict[str, list[str]] = {}
+        reasons.append("no database URL (--db-url or DATABASE_URL)")
+    code_enums: dict[str, tuple[str, ...]] = {}
     try:
-        try:
-            import psycopg  # type: ignore[import-not-found]
+        code_enums = load_code_enums_for_service(args.service, app_path=args.app_path)
+    except GateNotEvaluated as exc:
+        reasons.append(str(exc))
+    if reasons:
+        print(
+            f"NOT EVALUATED — deploy blocked: pre-deploy schema check for {args.service}:",
+            file=sys.stderr,
+        )
+        for reason in reasons:
+            print(f"  - {reason}", file=sys.stderr)
+        return EXIT_NOT_EVALUATED
 
-            with psycopg.connect(db_url) as conn:
-                with conn.cursor() as cur:
-                    db_enums = query_db_enums(cur)
-        except ImportError:
-            import psycopg2  # type: ignore[import-not-found]
-
-            with psycopg2.connect(db_url) as conn:
-                with conn.cursor() as cur:
-                    db_enums = query_db_enums(cur)
+    try:
+        db_enums = fetch_db_enums(db_url)
     except Exception as exc:
         print(
             f"ERROR: Failed to connect to DB for pre-deploy schema check: {exc}",
             file=sys.stderr,
         )
-        return 1
+        return EXIT_BLOCKED
 
     discrepancies = check_enums(code_enums, db_enums)
     if discrepancies:
@@ -242,12 +404,13 @@ def main(argv: list[str] | None = None) -> int:
                 f"missing_in_code={disc.missing_in_code}, casing={disc.casing_mismatches}",
                 file=sys.stderr,
             )
-        return 1
+        return EXIT_BLOCKED
 
     print(
-        f"Pre-deploy schema check verified for service: {args.service} (0 discrepancies)"
+        f"Pre-deploy schema check verified for service: {args.service} "
+        f"({len(code_enums)} enum types, 0 discrepancies)"
     )
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

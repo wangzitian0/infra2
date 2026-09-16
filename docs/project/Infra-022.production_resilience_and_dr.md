@@ -35,7 +35,7 @@
 ### L3: 发布门禁闭环与告警降噪 (Deploy & Observability)
 - [ ] **T3.1 发布三段式门禁与 Schema 防御（#698）**：
   - [ ] Stage 1: Ephemeral Smoke（构建后启动临时容器冒烟校验）
-  - [x] Stage 2: Pre-flight Gate（`tools/pre_deploy_schema_check.py` 双向严格比对 + fail-closed，已交付并通过 10/10 单测）
+  - [x] Stage 2: Pre-flight Gate（`tools/pre_deploy_schema_check.py` 双向严格比对 + fail-closed；缺 DB URL / 代码侧枚举载入失败 = `NOT EVALUATED` 退出码 3 阻断，#718 review 修复；尚未接入 `deploy_v2`）
   - [ ] Stage 3: Deploy + Synthetic Probes（部署后打真实业务探针，设 10 分钟观察烘焙期 T_Bake）
 - [ ] **T3.2 安全回滚守则与人工刹车（#722）**：
   - 明确 `ROLLBACK_CLASS`：仅 Class A（无破坏性 DDL）允许自动回滚；出现 DROP/RENAME/收紧约束（Class C）**严禁自动回滚**，必须人工挂起并 forward-fix。
@@ -64,6 +64,7 @@
 | Date | Change |
 |---|---|
 | 2026-09-16 | 基于反事实审计全面重构路线图，正式立项 Infra-022，废除过度工程规划，确立生产韧性与 DR 为下一里程碑 |
+| 2026-09-16 | Schema Gate：#718 review 两条（枚举模块路径不存在、无 DB URL 时返回成功）修复为 `NOT EVALUATED`（退出码 3）阻断；代码侧改读服务自己的 SQLAlchemy metadata（`ENUM_SOURCES`） |
 
 ## Verification
 
@@ -74,7 +75,7 @@
 | 3 | 异地备份就绪 | R2 存在加密备份包且 SHA256 吻合 | `rclone ls r2:pg-backups/` 验证最新备份文件存在 |
 | 4 | 恢复演练闭环 | 自动化还原到临时库并通过 SQL 抽样 | `bash tools/verify_backup_restore.sh` 跑通并输出 `RESTORE_PROOF: PASS` |
 | 5 | 死人开关兜底 | 宿主机断网 10 分钟外部独立告警 | 停止心跳上报，Healthchecks.io 外部通道（飞书/邮件）在 10 分钟内报警 |
-| 6 | Schema Gate 门禁 | 数据库与代码 Enum/Schema 不一致即阻断 | `pytest libs/tests/test_pre_deploy_schema_check.py` 10/10 PASS |
+| 6 | Schema Gate 门禁 | 数据库与代码 Enum/Schema 不一致即阻断；缺输入（无 DB URL / 枚举载入失败）同样阻断 | `pytest libs/tests/test_pre_deploy_schema_check.py` 全绿 |
 | 7 | 回滚熔断与刹车 | 破坏性 migration 场景下阻止自动回滚 | 门禁输出 `ROLLBACK_CLASS: C` 并阻断自动回滚回路 |
 
 ## References
