@@ -323,6 +323,29 @@ def test_app_path_makes_the_service_package_importable(tmp_path, monkeypatch) ->
     ) == {"role_enum": ("admin",)}
 
 
+def test_app_path_expands_the_home_directory(tmp_path, monkeypatch) -> None:
+    home = tmp_path / "home"
+    (home / "app" / "schema_gate_home_app").mkdir(parents=True)
+    (home / "app" / "schema_gate_home_app" / "__init__.py").write_text(
+        "from types import SimpleNamespace\n"
+        "metadata = SimpleNamespace(tables={'t': SimpleNamespace(columns=["
+        "SimpleNamespace(type=SimpleNamespace(name='kind_enum', enums=['a']))])})\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.delitem(sys.modules, "schema_gate_home_app", raising=False)
+    sources = {"home/app": gate.EnumSource(metadata="schema_gate_home_app:metadata")}
+    assert gate.load_code_enums_for_service(
+        "home/app", app_path="~/app", sources=sources
+    ) == {"kind_enum": ("a",)}
+
+
+def test_a_missing_app_path_is_not_evaluated(tmp_path, fake_app) -> None:
+    with pytest.raises(gate.GateNotEvaluated, match="is not a directory"):
+        gate.load_code_enums_for_service(fake_app, app_path=str(tmp_path / "nope"))
+
+
 def test_main_without_database_url_is_not_evaluated(
     fake_app, monkeypatch, capsys
 ) -> None:

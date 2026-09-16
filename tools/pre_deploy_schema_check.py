@@ -302,9 +302,11 @@ def load_code_enums_for_service(
             f"(registered: {', '.join(sorted(sources)) or 'none'})"
         )
     if app_path:
-        resolved = str(Path(app_path).resolve())
-        if resolved not in sys.path:
-            sys.path.insert(0, resolved)
+        directory = Path(app_path).expanduser().resolve()
+        if not directory.is_dir():
+            raise GateNotEvaluated(f"--app-path {app_path} is not a directory")
+        if str(directory) not in sys.path:
+            sys.path.insert(0, str(directory))
     try:
         for module_name in source.imports:
             importlib.import_module(module_name)
