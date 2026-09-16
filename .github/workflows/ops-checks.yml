@@ -9,7 +9,8 @@ name: Ops Checks
 #     and teardown convergence on the reserved pr-999 preview.
 #   - Out-of-band watchdog and weekly digest prove alert delivery and recall.
 # Failing deploy guard / canary / watchdog checks deliver Feishu alerts via the
-# shared out-of-band channel.
+# shared out-of-band channel. The watchdog job also keeps one GitHub issue per red
+# check, closed by the next green scheduled run (truealpha#876 W4).
 
 "on":
   push:
@@ -88,10 +89,19 @@ name: Ops Checks
         required: false
         type: string
         default: ""
+      peer_liveness_bound_cap_hours:
+        # truealpha#876 drill: the cap only TIGHTENS the measured bound; `0` forces the
+        # truealpha scheduler-liveness peer check red. A run with this set pages and
+        # opens/comments on the issue, and never closes one.
+        description: "Drill (out-of-band-watchdog): cap the truealpha scheduler-liveness peer bound at this many hours (empty = measured bound; 0 = red)"
+        required: false
+        type: string
+        default: ""
 
+# issues: granted per job below (watchdog writes the issue trail, digest reads
+# issues), not here: the deploy-v2-canary job runs same-repo PR code.
 permissions:
   contents: read
-  issues: write
   actions: read
 
 concurrency:
@@ -200,8 +210,20 @@ jobs:
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '17 2 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'out-of-band-watchdog' || inputs.task == 'all')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      # truealpha#876 W4: the issue trail opens, comments on and closes watchdog issues;
+      # the Feishu-failure fallback issue predates it.
+      issues: write
     env:
       GITHUB_TOKEN: ${{ github.token }}
+      # truealpha#876 W4: each step appends its verdicts here; the last step reads them.
+      INFRA2_WATCHDOG_VERDICTS_PATH: ${{ github.workspace }}/watchdog-verdicts.jsonl
+      # Manual SSH diagnostics are not the scheduled checks: the issue trail stays off.
+      INFRA2_WATCHDOG_SSH_TARGETS_OVERRIDDEN: ${{ github.event_name == 'workflow_dispatch' && inputs.ssh_targets_override != '' && '1' || '0' }}
+      # truealpha#876 drill knob (validated as a number by the tool, never run as shell).
+      INFRA2_PEER_LIVENESS_BOUND_CAP_HOURS: ${{ github.event_name == 'workflow_dispatch' && inputs.peer_liveness_bound_cap_hours || '' }}
       INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
       INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
       INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
@@ -265,7 +287,23 @@ jobs:
         run: |
           python - <<'PY'
           import json, os, sys, urllib.request
+          from libs.watchdog_issue_trail import RUNNER_HEALTH_SOURCE, CheckVerdict, record_verdicts
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
+
+          def record(ok, detail):
+              # truealpha#876 W4: recorded before paging, so a failed delivery still leaves a
+              # verdict; a failed write never stops the page (the trail then reports no verdict).
+              path = os.environ.get("INFRA2_WATCHDOG_VERDICTS_PATH")
+              if not path:
+                  return
+              try:
+                  record_verdicts(
+                      path,
+                      source=RUNNER_HEALTH_SOURCE,
+                      checks=[CheckVerdict(RUNNER_HEALTH_SOURCE, ok, detail, "" if ok else "P0", "" if ok else "iac-runner")],
+                  )
+              except OSError as error:
+                  print(f"could not record the verdict for the issue trail: {error}", file=sys.stderr)
 
           url = os.environ["IAC_RUNNER_URL"].rstrip("/") + "/health"
           request = urllib.request.Request(url, headers={"User-Agent": "infra2-ops-checks/1.0"})
@@ -280,8 +318,10 @@ jobs:
           if health.get("error"):
               failed.append(f"health unreadable: {health['error']}")
           if not failed:
+              record(True, "every deploy prerequisite is true")
               print("iac-runner health: every deploy prerequisite is true")
               sys.exit(0)
+          record(False, "iac-runner cannot deploy: " + ", ".join(failed))
           run_url = "/".join(
               v for v in (
                   os.environ.get("GITHUB_SERVER_URL"),
@@ -301,6 +341,16 @@ jobs:
           sys.exit(1)
           PY
 
+      # truealpha#876 W4: Feishu alone left no record that the 2026-09-16
+      # cloudflare-worker-status incident (run 35048603264) was seen or that it ended.
+      # One issue per red check (exact title; comment while it stays red), closed by the
+      # next green scheduled run — in addition to Feishu, never instead. A step above
+      # that recorded no verdict is itself red. Mode (schedule / drill / dry run) is
+      # decided by libs/watchdog_issue_trail.py::issue_trail_mode from the env above.
+      - name: Record the verdicts as GitHub issues
+        if: ${{ !cancelled() }}
+        run: python tools/watchdog_issue_trail.py
+
   # Watchdog weekly digest jobs
   digest:
     # schedule-signal-exempt: weekly self-proving report (#425) — its own delivery is the signal
@@ -308,6 +358,12 @@ jobs:
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '0 1 * * 1') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'watchdog-weekly-digest' || inputs.task == 'all')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      # the ops-checks run list and logs
+      actions: read
+      # the stale-open-issues section
+      issues: read
     env:
       GITHUB_TOKEN: ${{ github.token }}
       INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}

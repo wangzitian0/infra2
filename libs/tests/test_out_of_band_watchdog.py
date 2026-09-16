@@ -37,11 +37,25 @@ def test_workflow_runs_daily_and_can_be_dispatched() -> None:
         in workflow["on"]["workflow_dispatch"]["inputs"]["task"]["options"]
     )
     assert "ssh_targets_override" in workflow["on"]["workflow_dispatch"]["inputs"]
-    assert workflow["permissions"] == {
+    # issues: per job, never workflow-wide: deploy-v2-canary runs same-repo PR code.
+    assert workflow["permissions"] == {"contents": "read", "actions": "read"}
+    jobs = workflow["jobs"]
+    assert jobs["watchdog"]["permissions"] == {
         "contents": "read",
-        "issues": "write",
         "actions": "read",
+        "issues": "write",
     }
+    assert jobs["digest"]["permissions"] == {
+        "contents": "read",
+        "actions": "read",
+        "issues": "read",
+    }
+    writers = [
+        name
+        for name, job in jobs.items()
+        if (job.get("permissions") or {}).get("issues") == "write"
+    ]
+    assert writers == ["watchdog"]
 
 
 def test_workflow_alerts_directly_and_does_not_call_the_bridge() -> None:
@@ -319,6 +333,11 @@ def test_main_sends_feishu_only_when_a_check_fails(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         watchdog,
+        "run_peer_scheduler_liveness_check",
+        lambda _env, _timeout, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        watchdog,
         "deliver_out_of_band_alert",
         lambda _env, text: sent_messages.append(text),
     )
@@ -423,6 +442,11 @@ def test_main_structured_check_logs_include_attempt_count(monkeypatch) -> None:
         lambda _env, **_kwargs: [],
     )
     monkeypatch.setattr(
+        watchdog,
+        "run_peer_scheduler_liveness_check",
+        lambda _env, _timeout, **_kwargs: [],
+    )
+    monkeypatch.setattr(
         watchdog, "_emit_structured_log", lambda payload: emitted.append(dict(payload))
     )
 
@@ -452,6 +476,11 @@ def test_main_uses_default_retry_values_when_env_is_blank(monkeypatch) -> None:
         watchdog,
         "run_dokploy_status_check",
         lambda _env, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        watchdog,
+        "run_peer_scheduler_liveness_check",
+        lambda _env, _timeout, **_kwargs: [],
     )
 
     result = watchdog.main(
@@ -491,6 +520,11 @@ def test_main_records_delivery_failure_event_instead_of_crashing(monkeypatch) ->
         watchdog,
         "run_dokploy_status_check",
         lambda _env, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        watchdog,
+        "run_peer_scheduler_liveness_check",
+        lambda _env, _timeout, **_kwargs: [],
     )
     monkeypatch.setattr(
         watchdog,
@@ -542,6 +576,11 @@ def test_main_records_delivery_success_event_for_weekly_recall_audit(
         watchdog,
         "run_dokploy_status_check",
         lambda _env, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        watchdog,
+        "run_peer_scheduler_liveness_check",
+        lambda _env, _timeout, **_kwargs: [],
     )
     monkeypatch.setattr(
         watchdog,
@@ -893,3 +932,275 @@ def test_docker_health_command_covers_created_and_exited_containers() -> None:
     # Exit code 0 (clean one-shot completion) must be excluded from alerts.
     assert '[ "$code" = "0" ]' in docker_health.command
     assert "{{.State.ExitCode}}" in docker_health.command
+
+
+# --- truealpha#876: issue trail + scheduler peer liveness ---------------------------
+
+
+def _patch_checks(monkeypatch, watchdog, *, dokploy=(), peer=()) -> None:
+    monkeypatch.setattr(
+        watchdog,
+        "run_http_checks",
+        lambda _targets, _timeout, **_kwargs: [
+            watchdog.CheckResult(
+                "infra2-public-entrypoint", True, "HTTP 200", "host-reachability"
+            )
+        ],
+    )
+    monkeypatch.setattr(watchdog, "run_ssh_checks", lambda _config, _targets: [])
+    monkeypatch.setattr(
+        watchdog,
+        "run_worker_status_check",
+        lambda _env, _timeout, **_kwargs: [
+            watchdog.CheckResult(
+                "cloudflare-worker-status",
+                False,
+                "worker status unhealthy: token=abc",
+                "cloudflare-worker-health",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        watchdog, "run_dokploy_status_check", lambda _env, **_kwargs: list(dokploy)
+    )
+    monkeypatch.setattr(
+        watchdog,
+        "run_peer_scheduler_liveness_check",
+        lambda _env, _timeout, **_kwargs: list(peer),
+    )
+    monkeypatch.setattr(watchdog, "deliver_out_of_band_alert", lambda _env, _msg: None)
+
+
+def test_main_records_every_verdict_for_the_issue_trail(monkeypatch, tmp_path) -> None:
+    """truealpha#876 W4: the watchdog hands the trail every verdict, green included."""
+    from libs.watchdog_issue_trail import load_trail
+
+    watchdog = _load_watchdog()
+    peer = watchdog.CheckResult(
+        watchdog.PEER_SCHEDULER_LIVENESS_CHECK,
+        False,
+        "STALE: newest scheduled run is 20.0h old",
+        "peer-scheduler-liveness",
+    )
+    _patch_checks(monkeypatch, watchdog, peer=[peer])
+    path = tmp_path / "verdicts.jsonl"
+
+    assert (
+        watchdog.main(
+            {"WATCHDOG_DRY_RUN": "0", "INFRA2_WATCHDOG_VERDICTS_PATH": str(path)}
+        )
+        == 1
+    )
+
+    trail = load_trail(path, expected_sources=["out-of-band-watchdog"])
+    assert set(trail.failing) == {
+        "cloudflare-worker-status",
+        watchdog.PEER_SCHEDULER_LIVENESS_CHECK,
+    }
+    assert trail.failing[watchdog.PEER_SCHEDULER_LIVENESS_CHECK].severity == "P1"
+    # the watchdog's own redaction runs before anything leaves the step
+    assert "abc" not in trail.failing["cloudflare-worker-status"].detail
+    assert {"infra2-public-entrypoint", "infra2-dokploy-status"} <= trail.green
+    # the status query answered, so a Dokploy unit that is absent is green
+    assert trail.is_green("dokploy-status:finance-report/production/backend")
+
+
+def test_main_does_not_green_the_dokploy_family_when_the_query_failed(
+    monkeypatch, tmp_path
+) -> None:
+    from libs.watchdog_issue_trail import load_trail
+
+    watchdog = _load_watchdog()
+    failed = watchdog.CheckResult(
+        watchdog.DOKPLOY_STATUS_CHECK, False, "raised", "dokploy-control-plane"
+    )
+    _patch_checks(monkeypatch, watchdog, dokploy=[failed])
+    path = tmp_path / "verdicts.jsonl"
+
+    watchdog.main({"WATCHDOG_DRY_RUN": "1", "INFRA2_WATCHDOG_VERDICTS_PATH": str(path)})
+
+    trail = load_trail(path, expected_sources=["out-of-band-watchdog"])
+    assert watchdog.DOKPLOY_STATUS_CHECK in trail.failing
+    assert not trail.is_green("dokploy-status:finance-report/production/backend")
+
+
+def test_main_runs_the_peer_check_with_the_watchdog_retry_settings(monkeypatch) -> None:
+    watchdog = _load_watchdog()
+    _patch_checks(monkeypatch, watchdog)
+    captured = {}
+
+    def fake_peer(env, timeout, **kwargs):
+        captured.update(kwargs, timeout=timeout)
+        return []
+
+    monkeypatch.setattr(watchdog, "run_peer_scheduler_liveness_check", fake_peer)
+    watchdog.main(
+        {
+            "WATCHDOG_DRY_RUN": "1",
+            "INFRA2_WATCHDOG_HTTP_TIMEOUT": "7",
+            "INFRA2_WATCHDOG_RETRY_MAX_ATTEMPTS": "3",
+            "INFRA2_WATCHDOG_RETRY_DELAY_SECONDS": "5",
+        }
+    )
+    assert captured == {"timeout": 7.0, "max_attempts": 3, "retry_delay_seconds": 5.0}
+
+
+def _peer_factory(verdicts, seen):
+    from libs.scheduler_peer_liveness import PeerVerdict
+
+    answers = iter(verdicts)
+
+    def factory(token, *, timeout):
+        seen.append((token, timeout))
+        return object()
+
+    def evaluate(_getter, *, now, bound_cap):
+        seen.append(("evaluate", bound_cap))
+        answer = next(answers)
+        if isinstance(answer, Exception):
+            raise answer
+        return PeerVerdict(*answer)
+
+    return factory, evaluate
+
+
+def test_peer_check_green_and_red_verdicts(monkeypatch) -> None:
+    """truealpha#876: the peer verdict becomes one watchdog check."""
+    watchdog = _load_watchdog()
+    seen: list = []
+    factory, evaluate = _peer_factory(
+        [
+            ("OK", "fresh"),
+            ("STALE", "20.0h old"),
+            ("DISABLED", "state='disabled_inactivity'"),
+        ],
+        seen,
+    )
+    monkeypatch.setattr(watchdog, "evaluate_peer_liveness", evaluate)
+    env = {"GITHUB_TOKEN": " tok "}
+
+    (green,) = watchdog.run_peer_scheduler_liveness_check(
+        env, 4.0, getter_factory=factory
+    )
+    assert green.ok and green.name == "truealpha-scheduler-liveness"
+    assert green.detail == "OK: fresh"
+    assert seen[:2] == [("tok", 4.0), ("evaluate", None)]
+
+    (stale,) = watchdog.run_peer_scheduler_liveness_check(
+        env, getter_factory=factory, retry_delay_seconds=0
+    )
+    assert not stale.ok and stale.failure_domain == "peer-scheduler-liveness"
+    assert stale.attempt_count == 1  # a verdict is not retried
+    (disabled,) = watchdog.run_peer_scheduler_liveness_check(
+        env, getter_factory=factory
+    )
+    assert disabled.detail.startswith("DISABLED")
+    assert watchdog._severity_for(stale.name, stale.failure_domain) == "P1"
+    assert "scheduler-liveness" in watchdog._suggested_action_for_failure(
+        stale.name, stale.failure_domain
+    )
+    assert watchdog._runbook_url_for_failure(stale.failure_domain).endswith(
+        "truealpha/actions/workflows/scheduler-liveness.yml"
+    )
+
+
+def test_peer_check_unreadable_is_red_after_one_retry(monkeypatch) -> None:
+    watchdog = _load_watchdog()
+    seen: list = []
+    factory, evaluate = _peer_factory(
+        [
+            RuntimeError("boom"),
+            ("UNVERIFIABLE", "HTTP 403"),
+            ("UNVERIFIABLE", "x"),
+            ("OK", "fresh"),
+        ],
+        seen,
+    )
+    monkeypatch.setattr(watchdog, "evaluate_peer_liveness", evaluate)
+    sleeps: list = []
+    monkeypatch.setattr(watchdog.time, "sleep", sleeps.append)
+
+    (red,) = watchdog.run_peer_scheduler_liveness_check(
+        {}, getter_factory=factory, max_attempts=2, retry_delay_seconds=9
+    )
+    assert not red.ok and red.detail == "UNVERIFIABLE: HTTP 403"
+    assert red.attempt_count == 2 and sleeps == [9]
+
+    (recovered,) = watchdog.run_peer_scheduler_liveness_check(
+        {}, getter_factory=factory, max_attempts=2, retry_delay_seconds=0
+    )
+    assert recovered.ok and recovered.attempt_count == 2
+
+
+def test_peer_check_bound_cap_is_passed_and_validated(monkeypatch) -> None:
+    from datetime import timedelta
+
+    watchdog = _load_watchdog()
+    seen: list = []
+    factory, evaluate = _peer_factory([("STALE", "capped")], seen)
+    monkeypatch.setattr(watchdog, "evaluate_peer_liveness", evaluate)
+
+    (drill,) = watchdog.run_peer_scheduler_liveness_check(
+        {"INFRA2_PEER_LIVENESS_BOUND_CAP_HOURS": "0"}, getter_factory=factory
+    )
+    assert not drill.ok
+    assert ("evaluate", timedelta(0)) in seen
+
+    (bad,) = watchdog.run_peer_scheduler_liveness_check(
+        {"INFRA2_PEER_LIVENESS_BOUND_CAP_HOURS": "soon"}, getter_factory=factory
+    )
+    assert not bad.ok and bad.failure_domain == "configuration"
+    assert "INFRA2_PEER_LIVENESS_BOUND_CAP_HOURS" in bad.detail
+
+
+def test_workflow_records_the_watchdog_verdicts_as_issues() -> None:
+    """truealpha#876 W4: the watchdog job's last step is the issue trail."""
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    job = workflow["jobs"]["watchdog"]
+    names = [step.get("name") for step in job["steps"]]
+    trail = job["steps"][-1]
+    assert trail["name"] == "Record the verdicts as GitHub issues"
+    assert (
+        names.index("Run watchdog")
+        < names.index(
+            "Runner health — 1Password service account and deploy prerequisites"
+        )
+        < names.index(trail["name"])
+    )
+    assert trail["if"] == "${{ !cancelled() }}"
+    assert trail["run"] == "python tools/watchdog_issue_trail.py"
+    assert job["env"]["INFRA2_WATCHDOG_VERDICTS_PATH"].endswith(
+        "watchdog-verdicts.jsonl"
+    )
+    assert (
+        "inputs.ssh_targets_override"
+        in job["env"]["INFRA2_WATCHDOG_SSH_TARGETS_OVERRIDDEN"]
+    )
+    health = job["steps"][
+        names.index(
+            "Runner health — 1Password service account and deploy prerequisites"
+        )
+    ]
+    assert (
+        "RUNNER_HEALTH_SOURCE" in health["run"] and "record_verdicts" in health["run"]
+    )
+    # the Feishu page is still delivered, after the verdict is recorded
+    assert health["run"].index("record(False") < health["run"].index(
+        "deliver_out_of_band_alert("
+    )
+
+
+def test_the_drill_input_reaches_the_tool_only_through_env() -> None:
+    """Untrusted dispatch text is never interpolated into a `run:` script."""
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    dispatch = workflow["on"]["workflow_dispatch"]["inputs"]
+    assert dispatch["peer_liveness_bound_cap_hours"]["default"] == ""
+    job = workflow["jobs"]["watchdog"]
+    assert (
+        "inputs.peer_liveness_bound_cap_hours"
+        in job["env"]["INFRA2_PEER_LIVENESS_BOUND_CAP_HOURS"]
+    )
+    for body in workflow["jobs"].values():
+        for step in body["steps"]:
+            assert "peer_liveness_bound_cap_hours" not in step.get("run", "")
+            assert "inputs.ssh_targets_override" not in step.get("run", "")

@@ -246,6 +246,8 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 
 ### SOP-005B: GitHub 兜底带外 watchdog(日级)
 活在 GitHub Actions(在 infra2 宿主之外),**日级**直发 Feishu;留作 SSH 宿主诊断、Cloudflare Worker 自检、Dokploy 控制面状态消费、手动诊断。secrets:`INFRA2_WATCHDOG_SSH_{HOST,USER,PRIVATE_KEY}`、`INFRA2_WATCHDOG_WORKER_STATUS_TOKEN`、`DOKPLOY_API_KEY` + Feishu 投递 secrets。默认查:公网 Dokploy 入口、Worker `/health`+`/status`、SSH 可达、Docker daemon、`platform-alerting` 容器内 `/health`。`infra2-docker-health` 检查**强制**(任何 `unhealthy`/`starting`/`Restarting` 容器在部署窗口外即失败),不可移除。投递异常时发 `watchdog.delivery.failure` + 开 GitHub fallback issue(label `watchdog-alert-fallback`)+ 非零退出。
+- **Issue 留痕(truealpha#876 W4)**:Feishu 之外(不替代),job 末步 `tools/watchdog_issue_trail.py` 为**每个红检查**维护一个 issue,标题**精确等于** `ops-checks watchdog is red: <check>`(label `incident`):红 → 已开则评论最早那条、否则新建;允许关闭的绿运行 → 评论并关闭同名 issue。各步把结论追加到 `INFRA2_WATCHDOG_VERDICTS_PATH`(`out-of-band-watchdog`、`iac-runner-health` 两个来源);**某来源没记录 = 该来源自身为红**(崩溃不等于安静)。`dokploy-status:*` 只在红时出现,状态查询成功即视整族已读,缺席的单元为绿。列表失败**绝不**转为新建(警告,下次重试);列表成功后写失败 → 退出 1。issue 正文进公开仓库:去除 job 密钥型环境变量的值与 IP。模式(`libs/watchdog_issue_trail.py::issue_trail_mode`):schedule 或 main 上的普通 dispatch = 开/评/关;带 drill 上限或非 main 分支的 dispatch = 只开/评、永不关闭;`dry_run` 或 `ssh_targets_override` = 不写。权限:`issues: write` 只授予 watchdog job(digest job 为 `issues: read`),不在 workflow 级(deploy-v2-canary 会跑同仓 PR 代码)。
+- **对等存活(truealpha#876 W5)**:`truealpha-scheduler-liveness` 检查 truealpha 的 `scheduler-liveness` workflow(它看护全 estate 的定时 workflow,却无法报告自己的调度器死亡)。红:非 `active`;最新**已起 job** 的 schedule run(`created_at`,`startup_failure`/排队不算)早于上限;从未按 schedule 运行且文件在默认分支最后变更早于上限;cron 无法测量;任何依赖的读取失败(不可验证即红,重试一次)。上限按 truealpha 同一规则**从其 cron 测量**:2×最大间隔 + 1h(`41 */6 * * *` → 13h)。最新 tick 取两个见证(`?event=schedule` 与未过滤列表)中较新者。GitHub 平面为日级,故发现延迟 ≤ 上限 + 24h。演练:`workflow_dispatch` `task=out-of-band-watchdog` + `peer_liveness_bound_cap_hours=0`(上限只能收紧)→ Feishu page + issue 开/评,且该运行不会关闭 issue;下一次定时运行(或 main 上的普通 dispatch)以实测上限变绿并关闭。
 > **已知外部极限**:若 watchdog 与 Feishu/Lark 用的所有外部通道**同时**不可用,本仓库**没有第三条独立人工通知通道**(#425 月级/兜底范畴)。
 
 ### SOP-006: In-band 服务探针(分钟级)
@@ -287,6 +289,8 @@ Feishu page，且告警携带同一结构化记录。不得通过破坏 producti
 | Feishu payload + 日志错误规则 payload | `libs/tests/test_alerting.py` | ✅ |
 | finance_report 告警/看板 config-as-code(#373) | `libs/tests/test_observability_dashboards.py` | ✅ |
 | Cloudflare / out-of-band / GitHub 兜底 watchdog 契约 | `test_cloudflare_watchdog.py`, `test_out_of_band_watchdog.py` | ✅ |
+| GitHub watchdog issue 留痕(精确标题去重、列表失败不新建、drill 不关闭、缺失来源即红、公开正文脱敏)(truealpha#876) | `libs/tests/test_watchdog_issue_trail.py` | ✅ |
+| truealpha scheduler-liveness 对等存活(上限实测且强制、非 active 红、读取失败红、从未运行的宽限)(truealpha#876) | `libs/tests/test_scheduler_peer_liveness.py`, `test_out_of_band_watchdog.py` | ✅ |
 | In-band 服务探针 + 级联抑制 + round-trip 失败分道/升级(#726) | `libs/tests/test_infra_probes.py` | ✅ |
 | Deploy-queue guard(卡死检测纯逻辑 + sidecar 编排:env 加载、扫描失败隔离、renotify 抑制、remediate/升级序列) | `libs/tests/test_deploy_queue.py`, `libs/tests/test_deploy_queue_guard.py` | ✅ |
 | 备份新鲜度告警 payload | `libs/tests/test_backup_verification.py` | ✅ |

@@ -22,6 +22,20 @@ if str(ROOT) not in sys.path:
 
 from libs.alerting import deliver_feishu_app_text, deliver_feishu_text  # noqa: E402
 from libs.dokploy import get_dokploy  # noqa: E402
+from libs.scheduler_peer_liveness import (  # noqa: E402
+    BOUND_CAP_ENV,
+    OK as PEER_OK,
+    UNVERIFIABLE,
+    evaluate as evaluate_peer_liveness,
+    github_getter,
+    parse_bound_cap_hours,
+)
+from libs.watchdog_issue_trail import (  # noqa: E402
+    VERDICTS_ENV,
+    WATCHDOG_SOURCE,
+    CheckVerdict,
+    record_verdicts,
+)
 
 DEFAULT_HTTP_TARGETS = """\
 infra2-public-entrypoint|https://cloud.zitian.party|200,302
@@ -31,6 +45,13 @@ cloudflare-worker-health|https://infra2-cloudflare-watchdog.wangzitian-ai.worker
 DEFAULT_WORKER_STATUS_URL = (
     "https://infra2-cloudflare-watchdog.wangzitian-ai.workers.dev/status"
 )
+
+#: truealpha#876: the peer that sees truealpha's scheduler-liveness workflow die.
+PEER_SCHEDULER_LIVENESS_CHECK = "truealpha-scheduler-liveness"
+DOKPLOY_STATUS_CHECK = "infra2-dokploy-status"
+#: Per-unit Dokploy results exist only when red: once the status query answered,
+#: a unit missing from the results is green (the issue trail closes its issue).
+DOKPLOY_STATUS_FAMILY = "dokploy-status:"
 
 DEFAULT_SSH_TARGETS = """\
 infra2-ssh|echo infra2-ssh-ok|infra2-ssh-ok
@@ -462,7 +483,7 @@ def run_dokploy_status_check(
     if not env.get("DOKPLOY_API_KEY", "").strip():
         return [
             CheckResult(
-                "infra2-dokploy-status",
+                DOKPLOY_STATUS_CHECK,
                 False,
                 "DOKPLOY_API_KEY is missing",
                 "configuration",
@@ -508,7 +529,7 @@ def run_dokploy_status_check(
     except Exception as exc:  # noqa: BLE001 - watchdog must turn errors into alerts.
         return [
             CheckResult(
-                "infra2-dokploy-status",
+                DOKPLOY_STATUS_CHECK,
                 False,
                 f"dokploy status query raised {type(exc).__name__}: "
                 f"{_one_line(str(exc))}",
@@ -542,7 +563,7 @@ def _dokploy_status_failure(
             detail_parts.append(f"{key}={_one_line(str(value))}")
     return [
         CheckResult(
-            f"dokploy-status:{project_name}/{env_name}/{unit_name}",
+            f"{DOKPLOY_STATUS_FAMILY}{project_name}/{env_name}/{unit_name}",
             False,
             " ".join(detail_parts),
             "dokploy-deploy-status",
@@ -588,6 +609,61 @@ def _dokploy_deployment_evidence(deployment: Mapping[str, object]) -> dict[str, 
     }
 
 
+def run_peer_scheduler_liveness_check(
+    env: Mapping[str, str],
+    timeout: float = 10.0,
+    *,
+    max_attempts: int = 2,
+    retry_delay_seconds: float = 60.0,
+    getter_factory=github_getter,
+    now: datetime | None = None,
+) -> list[CheckResult]:
+    """truealpha#876: is truealpha's scheduler-liveness workflow still ticking?
+
+    That workflow watches every scheduled workflow in the estate but cannot
+    report its own dead scheduler; this is the peer. An unreadable answer is
+    red (retried once, like the HTTP checks); the verdict itself is not retried.
+    """
+    try:
+        bound_cap = parse_bound_cap_hours(env.get(BOUND_CAP_ENV))
+    except ValueError as exc:
+        return [
+            CheckResult(
+                PEER_SCHEDULER_LIVENESS_CHECK,
+                False,
+                f"{BOUND_CAP_ENV}: {exc}",
+                "configuration",
+            )
+        ]
+    getter = getter_factory(env.get("GITHUB_TOKEN", "").strip(), timeout=timeout)
+    attempts = max(1, max_attempts)
+    detail = ""
+    status = UNVERIFIABLE
+    for attempt in range(1, attempts + 1):
+        try:
+            verdict = evaluate_peer_liveness(
+                getter, now=now or datetime.now(UTC), bound_cap=bound_cap
+            )
+            status, detail = verdict.status, verdict.detail
+        except Exception as exc:  # noqa: BLE001 - an unreadable peer is red, never a pass.
+            status = UNVERIFIABLE
+            detail = f"peer check raised {type(exc).__name__}: {_one_line(str(exc))}"
+        if status != UNVERIFIABLE or attempt == attempts:
+            break
+        if retry_delay_seconds > 0:
+            time.sleep(retry_delay_seconds)
+    ok = status == PEER_OK
+    return [
+        CheckResult(
+            PEER_SCHEDULER_LIVENESS_CHECK,
+            ok,
+            f"{status}: {detail}",
+            "" if ok else "peer-scheduler-liveness",
+            attempt_count=attempt,
+        )
+    ]
+
+
 def correlate_control_plane_with_runtime(
     results: list[CheckResult],
 ) -> list[CheckResult]:
@@ -628,7 +704,12 @@ def _severity_for(name: str, failure_domain: str) -> str:
         "configuration",
     }:
         return "P0"
-    if failure_domain in {"cloudflare-worker-health", "dokploy-control-plane"}:
+    if failure_domain in {
+        "cloudflare-worker-health",
+        "dokploy-control-plane",
+        # a dead peer scheduler hides every other scheduled check's staleness
+        "peer-scheduler-liveness",
+    }:
         return "P1"
     if failure_domain in {"dokploy-deploy-status", "public-route"}:
         lowered = name.lower()
@@ -713,6 +794,14 @@ def main(env: Mapping[str, str] | None = None) -> int:
     )
     results.extend(run_dokploy_status_check(current_env))
     results.extend(run_ssh_checks(ssh_config, ssh_targets))
+    results.extend(
+        run_peer_scheduler_liveness_check(
+            current_env,
+            timeout,
+            max_attempts=retry_max_attempts,
+            retry_delay_seconds=retry_delay_seconds,
+        )
+    )
     results = correlate_control_plane_with_runtime(results)
     results = [
         CheckResult(
@@ -725,6 +814,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
         )
         for result in results
     ]
+    _record_issue_trail_verdicts(current_env, results)
     for result in results:
         _emit_structured_log(
             {
@@ -798,6 +888,39 @@ def main(env: Mapping[str, str] | None = None) -> int:
     return 1
 
 
+def _record_issue_trail_verdicts(
+    env: Mapping[str, str], results: list[CheckResult]
+) -> None:
+    """Hand this run's verdicts to the issue-trail step (truealpha#876 W4)."""
+    path = env.get(VERDICTS_ENV, "").strip()
+    if not path:
+        return
+    checks = [
+        CheckVerdict(
+            result.name,
+            result.ok,
+            _redact(_one_line(result.detail)),
+            result.severity,
+            result.failure_domain,
+        )
+        for result in results
+    ]
+    green_prefixes: list[str] = []
+    if not any(result.name == DOKPLOY_STATUS_CHECK for result in results):
+        # The status query answered: its units that are absent are green.
+        checks.append(
+            CheckVerdict(DOKPLOY_STATUS_CHECK, True, "dokploy status query answered")
+        )
+        green_prefixes.append(DOKPLOY_STATUS_FAMILY)
+    try:
+        record_verdicts(
+            path, source=WATCHDOG_SOURCE, checks=checks, green_prefixes=green_prefixes
+        )
+    except OSError as exc:
+        # The issue-trail step then finds no verdict from this source: red.
+        print(f"could not record verdicts for the issue trail: {exc}", file=sys.stderr)
+
+
 def deliver_out_of_band_alert(env: Mapping[str, str], message: str) -> None:
     """Send a direct Feishu alert without using the infra2 bridge."""
     mode = (
@@ -868,6 +991,12 @@ def _suggested_action_for_failure(name: str, failure_domain: str) -> str:
         return "call worker /status with WATCHDOG_STATUS_TOKEN and verify last-run freshness"
     if failure_domain == "dokploy-control-plane":
         return "check Dokploy API and deploy logs for rollout/network failures"
+    if failure_domain == "peer-scheduler-liveness":
+        return (
+            "open truealpha's scheduler-liveness workflow: re-enable it if disabled, "
+            "check its newest scheduled run and githubstatus.com; while it is dead no "
+            "stopped scheduled workflow in the estate is reported"
+        )
     if failure_domain == "state-discrepancy":
         return (
             "compare Dokploy status/deploy evidence with `docker ps` and `docker inspect`; "
@@ -882,6 +1011,11 @@ def _runbook_url_for_failure(failure_domain: str) -> str:
             "https://github.com/wangzitian0/infra2/blob/main/"
             "docs/ssot/ops.standards.md#rule-4-"
             "状态不一致协议-state-discrepancy-protocol"
+        )
+    if failure_domain == "peer-scheduler-liveness":
+        return (
+            "https://github.com/wangzitian0/truealpha/actions/workflows/"
+            "scheduler-liveness.yml"
         )
     anchor = "#out-of-band-watchdog"
     if failure_domain == "alert-bridge":

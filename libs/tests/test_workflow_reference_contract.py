@@ -51,6 +51,9 @@ IGNORED_TOP_LEVEL_DIRS = {
 FOREIGN_APP_WORKFLOWS = {
     ".github/workflows/ci-required.yml",  # truealpha (source build)
     ".github/workflows/deploy-release.yml",  # truealpha (staging deploy)
+    # truealpha (watchdog of watchdogs); ops-checks' peer check reads it live and
+    # goes red if it is gone (libs/scheduler_peer_liveness.py, truealpha#876).
+    ".github/workflows/scheduler-liveness.yml",
 }
 
 
