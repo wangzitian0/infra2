@@ -24,13 +24,15 @@
 | **带外 watchdog** | [`cloudflare/infra-watchdog`](../../cloudflare/infra-watchdog/)(主,边缘 30min)+ [`.github/workflows/ops-checks.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/ops-checks.yml)(GitHub 兜底,日级) | 整机/整栈失联检测 |
 | **信号清单** | [`watchdog-signals.yaml`](watchdog-signals.yaml) | 按信号(非组件)追踪 watchdog 归属 |
 | **报告 - 账本** | Cloudflare KV(热 21 天)+ R2(冷长期)·`libs/availability_ledger.py`(聚合)·`tools/stability_report.py`(周报) | 正向证明 |
-| **部署指南** | [Infra-007](../project/Infra-007.signoz_install.md) | SigNoz 安装 |
+| **部署指南** | [Infra-007](../project/archive/Infra-007.signoz_install.md) | SigNoz 安装 |
 
 In-band 告警路径恒为:`component/app → OTLP Collector → SigNoz → platform/12.alerting → Feishu/Lark`。
 带外检测**独立于 VPS**(SigNoz 与 bridge 都在单台机器上,会和宿主一起挂),故走 Cloudflare 边缘 cron 直发 Feishu。
 
 > [!WARNING]
 > **单机共因失效与带外最高仲裁原则**：由于 SigNoz、ClickHouse、OTel Collector 与业务组件均单机共存，当宿主机遭遇物理死锁、网卡断联、磁盘打满时，带内监控将整体静默，监控大屏会虚假呈现“0 告警发生”。系统健康最高仲裁权由独立于 VPS 的带外通道持有（Cloudflare Worker 边缘 watchdog + 外部死人开关心跳），带外失联即刻升级为 P0 级整机灾难告警。
+>
+> **防假绿与维度下钻铁律**：所有业务指标与告警规则必须按 `(service_namespace, environment)` 维度分组计算，严禁在无标签的全局均值上计算成功率。单策略/单任务池故障时禁止被大盘平均值稀释覆盖。告警静默（Cooldown/Snooze）期必须在看板中明确标记为“已静音”而非“健康正常”。
 
 ---
 
