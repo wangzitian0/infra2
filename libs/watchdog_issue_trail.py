@@ -64,11 +64,16 @@ API_BASE = "https://api.github.com"
 API_TIMEOUT_SECONDS = 20.0
 MAX_DETAIL_CHARS = 1000
 #: Values of the job's variables whose names say they are credentials or private
-#: coordinates are scrubbed. Only the job's own prefixes: the runner's `USER`
-#: (`runner`) would otherwise turn every "iac-runner" into "iac-***".
+#: coordinates are scrubbed: a keyword anywhere after one of the job's own
+#: prefixes, and the whole out-of-band delivery family (every one of those comes
+#: from `secrets.*`, including API_BASE and DELIVERY_MODE). Only the job's own
+#: prefixes: the runner's `USER` (`runner`) would otherwise turn every
+#: "iac-runner" into "iac-***". libs/tests/test_watchdog_issue_trail.py checks
+#: that every `secrets.*` variable of the watchdog job matches.
 _SECRET_ENV_NAME = re.compile(
     r"^(?:INFRA2_|DOKPLOY_|CF_|FEISHU_|OP_|VAULT_)\w*"
     r"(?:HOST|USER|TOKEN|KEY|SECRET|PASSWORD|WEBHOOK|CHAT_ID|APP_ID)"
+    r"|^INFRA2_OUT_OF_BAND_\w+"
     r"|^(?:GITHUB_TOKEN|GH_TOKEN)$"
 )
 _MIN_SCRUBBED_VALUE = 4

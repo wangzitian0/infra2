@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 
 import pytest
+import yaml
 
 from libs import watchdog_issue_trail as trail_lib
 from libs.watchdog_issue_trail import (
@@ -35,6 +36,7 @@ from libs.watchdog_issue_trail import (
 from tools import watchdog_issue_trail as trail_tool
 
 RUN_URL = "https://github.com/wangzitian0/infra2/actions/runs/42"
+WORKFLOW = Path(__file__).resolve().parents[2] / ".github/workflows/ops-checks.yml"
 
 
 class FakeIssues:
@@ -272,6 +274,27 @@ def test_bodies_carry_no_private_host_ip_or_secret() -> None:
         assert leaked not in body
     # The runner's USER is not a secret, a port is too short, and a clock is not an IP.
     assert "iac-runner" in body and "port 22" in body and "10:26:58" in body
+
+
+def test_every_secret_of_the_watchdog_job_is_scrubbed() -> None:
+    """A `secrets.*` variable added to the job later cannot slip past the scrub."""
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    job = workflow["jobs"]["watchdog"]
+    names = {
+        name
+        for scope in [job.get("env", {})]
+        + [step.get("env", {}) for step in job["steps"]]
+        for name, value in scope.items()
+        if "secrets." in str(value)
+    }
+    assert {
+        "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL",
+        "INFRA2_OUT_OF_BAND_FEISHU_API_BASE",
+        "INFRA2_WATCHDOG_SSH_HOST",
+    } <= names
+    env = {name: f"value-of-{name.lower()}" for name in names}
+    detail = " ".join(env.values())
+    assert "value-of" not in trail_lib.scrub(detail, env)
 
 
 def test_a_name_with_a_private_value_is_scrubbed_in_the_title_and_still_closes() -> (
