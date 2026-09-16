@@ -47,6 +47,11 @@ APP_SOURCES: dict[str, str] = {
 }
 ALLOWED_SENDERS = frozenset({"wangzitian0"})
 FIXED_DEPLOY_TYPES = frozenset({DeployType.STAGING, DeployType.PRODUCTION})
+#: The deploy types whose request is canaried before it executes (truealpha#860):
+#: production only. app-deploy-request.yml's preflight_canary pre-filter mirrors this set;
+#: libs/tests/test_app_deploy_request_workflow.py pins the two to each other and the
+#: receiver re-checks it at run time, so they cannot drift apart silently.
+PREFLIGHT_CANARY_DEPLOY_TYPES = frozenset({DeployType.PRODUCTION})
 _GITHUB_API_URL = "https://api.github.com"
 _GITHUB_API_VERSION = "2022-11-28"
 
@@ -146,13 +151,26 @@ class DeployPlan:
     def requires_preflight_canary(self) -> bool:
         """Whether the receiver must canary this exact coordinate before executing it.
 
-        The single source of truth for "which requests get gated" — app-deploy-request.yml's
-        ``preflight_canary`` job reads this (via the ``plan`` CLI action's JSON) instead of
-        re-deriving it from a hardcoded ``deploy_type`` list in YAML, so the two can never
-        drift apart.
+        The single source of truth for "which requests get gated". app-deploy-request.yml
+        can only skip the canary job before any plan exists, so it pre-filters on the
+        payload; the receiver refuses to run when that pre-filter disagrees with this
+        property (``tools.app_deploy_request --require-preflight-canary`` /
+        ``--preflight-canary-result``) and a workflow test pins the two together.
+
+        Production only (truealpha#860). A production release runs at the production
+        marker (:func:`select_iac_ref`), a coordinate nothing deployed before it, so the
+        canary on the reserved slot is the only proof ahead of the mutation that
+        ``version_ref`` runs at that ``iac_ref``; it keeps gating the promote. A staging
+        deploy proves its own coordinate: deploy_v2 pins ``version_ref`` to
+        ``source_sha``, accepts only an on-main release tag, waits for the images, and
+        promotes to a new rollout record, the pushed config hash and every healthchecked
+        container in service; the sending app then confirms the public release identity
+        on staging, and production evidence requires that staging run to have succeeded.
+        The canary that used to precede it proved that same coordinate on a throwaway
+        slot and cost 81 s of every staging release (receiver run 35052266070).
         """
         return (
-            self.request.deploy_type in FIXED_DEPLOY_TYPES
+            self.request.deploy_type in PREFLIGHT_CANARY_DEPLOY_TYPES
             and self.request.operation != DeployOperation.REMOVE
         )
 

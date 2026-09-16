@@ -32,7 +32,11 @@ import httpx  # Dokploy transport errors from libs.dokploy surface as httpx exce
 
 from libs.common import infra_domain
 from libs.iac_runner_client import (
+    STATUS_POLL_BACKOFF,
+    STATUS_POLL_INITIAL_SECONDS,
+    STATUS_POLL_MAX_SECONDS,
     poll_platform_deploy_status,
+    status_poll_attempts,
     trigger_platform_deploy,
 )
 from libs.deploy_contract import (
@@ -528,6 +532,7 @@ def _deploy_platform(
         # registry for truealpha-data-engine:v1.1.59). Only a ref that differs from the
         # iac_ref names an app release.
         pinned_ref = None
+    started = time.monotonic()
     response = trigger_platform_deploy(
         env=env,
         ref=iac_sha,
@@ -552,9 +557,11 @@ def _deploy_platform(
             triggered_by=triggered_by,
             attempts=_poll_attempts_for_timeout(timeout),
             version_ref=pinned_ref,
+            **_STATUS_POLL_SCHEDULE,
         )
         detail["iac_runner_final"] = final
         status = str(final.get("status", "")).lower()
+        _progress(f"iac-runner sync of {service} to {env}", status, started)
         if status != "completed":  # "failed" / anything non-success
             raise RuntimeError(
                 f"platform deploy of {service} to {env} ended {status!r}: "
@@ -563,9 +570,40 @@ def _deploy_platform(
     return DeployV2Result(target, data_lane, "iac-runner", detail)
 
 
-def _poll_attempts_for_timeout(timeout: int, interval: int = 10) -> int:
-    """Convert a seconds budget into iac_runner status poll attempts."""
-    return max(1, (max(1, int(timeout)) + interval - 1) // interval)
+# The /deploy/status schedule every deploy_v2 wait uses (truealpha#860): 2 s first, then
+# growing to the 10 s it always was. See libs.iac_runner_client for the arithmetic.
+_STATUS_POLL_SCHEDULE = {
+    "interval": STATUS_POLL_INITIAL_SECONDS,
+    "backoff": STATUS_POLL_BACKOFF,
+    "max_interval": STATUS_POLL_MAX_SECONDS,
+}
+
+
+def _poll_attempts_for_timeout(timeout: int) -> int:
+    """Convert a seconds budget into iac_runner status poll attempts on that schedule."""
+    return status_poll_attempts(
+        max(1, int(timeout)),
+        initial=STATUS_POLL_INITIAL_SECONDS,
+        backoff=STATUS_POLL_BACKOFF,
+        maximum=STATUS_POLL_MAX_SECONDS,
+    )
+
+
+def _progress(what: str, outcome: str, started: float) -> None:
+    """One stderr line per finished deploy phase, flushed as it happens.
+
+    The receiver's step log timestamps each line when it arrives; before this, the
+    execute step printed its result only at the very end and the time between a secret
+    supply and the next sync could only be reconstructed from three other logs
+    (truealpha#860). Worded so it never looks like the ``deploy_v2 failed:`` verdict line
+    or a runner ``ended '<status>': {...}`` record that tools/reconcile_iac_inputs parses.
+    """
+    print(
+        f"deploy_v2 progress: {what}: {outcome or 'unknown'} "
+        f"after {time.monotonic() - started:.1f}s",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def _supply_app_secrets(
@@ -597,6 +635,7 @@ def _supply_app_secrets(
             "reason": "no iac-runner credentials in this context",
         }
     runner_env = "production" if env == "prod" else env
+    started = time.monotonic()
     response = trigger_platform_deploy(
         env=runner_env,
         ref=iac_sha,
@@ -617,8 +656,10 @@ def _supply_app_secrets(
         triggered_by=triggered_by,
         attempts=_poll_attempts_for_timeout(timeout),
         action="secrets-supply",
+        **_STATUS_POLL_SCHEDULE,
     )
     status = str(final.get("status", "")).lower()
+    _progress(f"secret supply for {service} in {runner_env}", status, started)
     if status != "completed":
         raise RuntimeError(
             f"secret supply for {service} in {runner_env} ended {status!r}: "
@@ -673,6 +714,7 @@ def _deploy_platform_batch(
     env = "production" if type_spec.env == "prod" else "staging"
     url = runner_url or os.getenv("IAC_RUNNER_URL", "")
     sec = secret or os.getenv("IAC_WEBHOOK_SECRET", "")
+    started = time.monotonic()
     response = trigger_platform_deploy(
         env=env,
         ref=iac_sha,
@@ -693,9 +735,11 @@ def _deploy_platform_batch(
             secret=sec,
             triggered_by=triggered_by,
             attempts=_poll_attempts_for_timeout(timeout),
+            **_STATUS_POLL_SCHEDULE,
         )
         detail["iac_runner_final"] = final
         status = str(final.get("status", "")).lower()
+        _progress(f"iac-runner sync of {', '.join(services)} to {env}", status, started)
         if status != "completed":
             raise RuntimeError(
                 f"platform batch deploy of {services} to {env} ended {status!r}: "
@@ -905,6 +949,7 @@ def deploy_v2(
         triggered_by=triggered_by,
         timeout=timeout,
     )
+    promote_started = time.monotonic()
     plan = _deploy_fixed(
         target.env,
         resolved.sha,
@@ -922,6 +967,11 @@ def deploy_v2(
         verify_config=verify_config,
         verify_ingestion=verify_ingestion,
         model_overrides=model_overrides_from_env(),
+    )
+    _progress(
+        f"Dokploy promote of {service} to {target.env}",
+        "in service" if wait else "triggered",
+        promote_started,
     )
     detail = {
         "env": plan.env,

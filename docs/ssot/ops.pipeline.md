@@ -208,7 +208,17 @@ App 不再 checkout/执行 infra2。发送 `repository_dispatch` type `app-deplo
    校验失败即 fail-closed。
 3. `version_ref` 必须在源仓库解析到 payload 的完整 `source_sha`。
 4. staging/prod 的 `iac_ref` 由 infra2 选择为 `HEAD` 已包含的最新 `vX.Y.Z`，App 不再钉 infra submodule。
-5. 固定环境先跑同坐标 canary；通过后才调用既有 `deploy_v2`，Dokploy/Vault 凭据只存在于 infra2。
+5. **只有 prod 先跑同坐标 canary**；通过后才调用既有 `deploy_v2`，Dokploy/Vault 凭据只存在于 infra2。
+   staging 不再 canary（truealpha#860）：staging 部署本身就证明了该坐标——`--expected-sha` 钉住
+   `version_ref`、只接受 on-main release tag、等镜像发布、promote 后等新 rollout 记录 / 推送的 config hash /
+   每个带 healthcheck 的容器 in service；发送方随后在 staging 公网确认 release 身份，prod evidence 又要求
+   这个 staging run 成功。prod 跑在 production marker 上，这个坐标在 prod 之前没人部署过，所以 canary 继续门控 prod。
+6. **作业形状**（truealpha#860）：`deploy` 一个 job 内先无凭据验证（`plan` step），下一 step 才拿到
+   `DOKPLOY_API_KEY` / `IAC_WEBHOOK_SECRET` 执行——凭据按 step 作用域，不按 job；staging 请求只跑这一个 job。
+   `preflight_canary` 单独成 job，只因为 `deploy-v2-canary` 并发组只能挂在整个 job 上，而它只应覆盖 canary、
+   不覆盖 promote；`deploy` job 断言自己的 checkout 仍选出 canary 证明过的 `iac_ref`。canary job 的 `if:` 在任何
+   plan 之前求值，只能读 payload，它镜像 `DeployPlan.requires_preflight_canary`：workflow 测试把两者钉在一起，
+   运行时两边再对 plan 复核（`--require-preflight-canary` / `--preflight-canary-result`），漂移即 fail-closed。
 
 Finance Report 的 staging/prod/rollback 已全部 cut over 到 receiver，App 仓库不再
 checkout 或执行 infra2 源码。Production 没有 CLI bypass；receiver 通过只读 GitHub API
@@ -225,7 +235,7 @@ IaC Runner 是 **L1 Bootstrap 层**组件,自动化部署 **L2 Platform 层**服
 
 post-merge 部署被 GitHub Actions `concurrency` 串行化,调 IaC Runner 前先 `/health` preflight(bootstrap drift
 在任何签名 `/deploy` 前先 fail)。Actions 用短签名 `/deploy` 启动,取得绑定完整操作坐标的 opaque
-`deployment_id`,再用该 ID 轮询签名 `/deploy/status`——**绿 workflow = IaC Runner 报告了同一个服务集合的
+`deployment_id`,再用该 ID 轮询签名 `/deploy/status`（间隔从 2 s 起每次 ×1.25、封顶 10 s：短操作约 1 s 内被看到，长操作仍是每 10 s 一次，truealpha#860）——**绿 workflow = IaC Runner 报告了同一个服务集合的
 完成 sync 结果,不只是请求被接受**。操作坐标是 `(env, exact_ref, normalized_service_set)`:服务集合是身份的一部分,
 不是日志附属字段;同一 release 并发部署不同服务不得互相命中 cache / in-flight / status。
 不走公网 Cloudflare 的 `wait=true`(会在 sync 完成前 524)。

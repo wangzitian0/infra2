@@ -757,8 +757,11 @@ def test_remove_plan_uses_down_without_expected_sha(tmp_path) -> None:
 @pytest.mark.parametrize(
     "overrides,expected",
     [
-        ({}, True),  # staging (payload()'s default deploy_type)
+        # truealpha#860: staging proves its own coordinate; production keeps the canary
+        ({}, False),  # staging (payload()'s default deploy_type)
+        ({"operation": "rollback"}, False),
         ({"deploy_type": "prod"}, True),
+        ({"deploy_type": "prod", "operation": "rollback"}, True),
         ({"deploy_type": "preview/pr", "version_ref": "42"}, False),
         ({"deploy_type": "preview/branch", "version_ref": "main"}, False),
         (
@@ -770,10 +773,10 @@ def test_remove_plan_uses_down_without_expected_sha(tmp_path) -> None:
 def test_requires_preflight_canary_is_the_single_source_the_workflow_reads(
     tmp_path, overrides, expected
 ) -> None:
-    """app-deploy-request.yml's preflight_canary job reads this property (via the plan
-    CLI action's JSON) instead of hand-copying a deploy_type list into its `if:` — see
-    test_app_deploy_request_workflow.py. A production request additionally needs staging
-    + review evidence, so it goes through production_payload()."""
+    """app-deploy-request.yml's preflight_canary pre-filter is pinned to this property
+    by test_app_deploy_request_workflow.py and re-checked against it at run time. A
+    production request additionally needs staging + review evidence, so it goes through
+    production_payload()."""
     build_payload = (
         production_payload if overrides.get("deploy_type") == "prod" else payload
     )
@@ -932,3 +935,107 @@ def test_execute_promotes_the_declared_companions_after_the_primary(tmp_path) ->
 
     assert receiver_cli.execute_plan(production, run=failing) == 3
     assert len(seen) == 1
+
+
+def _gate_cli(monkeypatch, request: dict, *extra: str) -> int:
+    """The receiver CLI with every remote fact faked (no GitHub, no git)."""
+    monkeypatch.setenv("APP_DEPLOY_REQUEST_JSON", json.dumps(request))
+    make_plan = receiver.make_plan
+
+    def offline_plan(payload_json, **kwargs):
+        return make_plan(
+            payload_json,
+            **kwargs,
+            production_evidence_verifier=lambda request: None,
+            resolve_image=resolved,
+            runner=tags,
+        )
+
+    monkeypatch.setattr(receiver, "make_plan", offline_plan)
+    return receiver_cli.main(
+        [
+            "plan",
+            "--sender",
+            "wangzitian0",
+            "--domain",
+            "zitian.party",
+            "--repo-root",
+            ".",
+            *extra,
+        ]
+    )
+
+
+def test_canary_job_refuses_a_request_its_plan_does_not_canary(
+    monkeypatch, capsys
+) -> None:
+    """truealpha#860: the workflow's pre-filter ran the canary job for a staging request
+    (a drift) — the canary job's own validation stops before any credential is used."""
+    result = _gate_cli(monkeypatch, payload(), "--require-preflight-canary")
+    assert result == 1
+    assert "pre-filter has drifted" in capsys.readouterr().err
+
+
+def test_canary_job_accepts_a_production_request(monkeypatch, capsys) -> None:
+    result = _gate_cli(monkeypatch, production_payload(), "--require-preflight-canary")
+    assert result == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["requires_preflight_canary"] is True
+    assert plan["iac_ref"] == "v1.1.74"
+
+
+@pytest.mark.parametrize("canary_result", ["skipped", "failure", "cancelled", ""])
+def test_production_never_executes_without_a_green_canary(
+    monkeypatch, capsys, canary_result
+) -> None:
+    """The pre-filter skipped the canary for a request the plan says must be canaried:
+    the deploy job refuses in its credential-free validation step."""
+    result = _gate_cli(
+        monkeypatch,
+        production_payload(),
+        "--preflight-canary-result",
+        canary_result,
+    )
+    assert result == 1
+    assert "requires a green preflight canary" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "request_payload,canary_result",
+    [
+        (payload(), "skipped"),
+        (payload(operation="rollback"), "skipped"),
+        (production_payload(), "success"),
+    ],
+)
+def test_deploy_job_accepts_the_canary_result_its_plan_expects(
+    monkeypatch, request_payload, canary_result
+) -> None:
+    assert (
+        _gate_cli(
+            monkeypatch,
+            request_payload,
+            "--preflight-canary-result",
+            canary_result,
+        )
+        == 0
+    )
+
+
+def test_gate_is_not_checked_for_an_operator_run_without_the_flags(tmp_path) -> None:
+    plan = receiver.make_plan(
+        production_payload(),
+        sender="wangzitian0",
+        domain="zitian.party",
+        timeout=600,
+        repo_root=tmp_path,
+        production_evidence_verifier=lambda request: None,
+        resolve_image=resolved,
+        runner=tags,
+    )
+    receiver_cli.check_preflight_canary_gate(plan)  # no workflow facts: no verdict
+    with pytest.raises(ValueError, match="requires a green preflight canary"):
+        receiver_cli.check_preflight_canary_gate(plan, canary_result="skipped")
+    receiver_cli.check_preflight_canary_gate(
+        plan, canary_job_ran=True, canary_result="success"
+    )

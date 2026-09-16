@@ -28,14 +28,35 @@ env:
   APP_DEPLOY_REQUEST_SENDER: ${{ github.event.sender.login }}
   GITHUB_TOKEN: ${{ github.token }}
   INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
+  # Each line reaches the step log when it is printed, so a deploy phase's duration is
+  # read off the log's timestamps instead of reconstructed from other logs (truealpha#860).
+  PYTHONUNBUFFERED: "1"
 
+# Job shape (truealpha#860). A job pays its own runner, checkout and install (~17 s), so
+# each job below exists for one reason only:
+#   - preflight_canary is its own job because the deploy-v2-canary concurrency group can
+#     only be held by a whole job, and it must cover the canary alone, not the promote.
+#     It runs for production requests only (DeployPlan.requires_preflight_canary).
+#   - deploy validates and executes in one job. A staging request runs this job alone.
+# Credentials are scoped per step, not per job: every job validates the request in a step
+# that holds no Dokploy or runner secret, and a secret appears only in the step after it.
 jobs:
-  validate:
-    name: validate request contract
+  preflight_canary:
+    name: preflight requested artifact
+    # Whether to canary is decided before any plan exists, so this pre-filter mirrors
+    # DeployPlan.requires_preflight_canary (PREFLIGHT_CANARY_DEPLOY_TYPES) on the raw
+    # payload. libs/tests/test_app_deploy_request_workflow.py pins the two to each other,
+    # and both jobs re-check it against the validated plan (--require-preflight-canary
+    # here, --preflight-canary-result in deploy), so a drift fails closed either way.
+    if: >-
+      ${{ github.event.client_payload.deploy_type == 'prod'
+          && github.event.client_payload.operation != 'remove' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
+    concurrency:
+      group: deploy-v2-canary
+      cancel-in-progress: false
     outputs:
-      requires_preflight_canary: ${{ steps.plan.outputs.requires_preflight_canary }}
       iac_ref: ${{ steps.plan.outputs.iac_ref }}
     steps:
       - name: Checkout released infra context
@@ -56,79 +77,48 @@ jobs:
           plan="$(python -m tools.app_deploy_request plan \
             --sender "$APP_DEPLOY_REQUEST_SENDER" \
             --domain "$INTERNAL_DOMAIN" \
-            --repo-root .)"
+            --repo-root . \
+            --require-preflight-canary)"
           printf '%s\n' "$plan" | python -m json.tool
-          # requires_preflight_canary is DeployPlan's own property (libs/app_deploy_request.py) —
-          # the single source of truth for which requests get gated. preflight_canary's `if:`
-          # below reads this output instead of re-deriving deploy_type/operation itself, so the
-          # two can never drift apart.
-          needs_canary="$(printf '%s' "$plan" | python -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["requires_preflight_canary"]))')"
+          service="$(printf '%s' "$plan" | python -c 'import json,sys; print(json.load(sys.stdin)["request"]["service"])')"
+          version_ref="$(printf '%s' "$plan" | python -c 'import json,sys; print(json.load(sys.stdin)["request"]["version_ref"])')"
           iac_ref="$(printf '%s' "$plan" | python -c 'import json,sys; print(json.load(sys.stdin)["iac_ref"])')"
-          echo "requires_preflight_canary=$needs_canary" >> "$GITHUB_OUTPUT"
-          echo "iac_ref=$iac_ref" >> "$GITHUB_OUTPUT"
-
-  preflight_canary:
-    name: preflight requested artifact
-    needs: [validate]
-    if: >-
-      ${{ needs.validate.result == 'success'
-          && needs.validate.outputs.requires_preflight_canary == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    concurrency:
-      group: deploy-v2-canary
-      cancel-in-progress: false
-    env:
-      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
-      VALIDATED_IAC_REF: ${{ needs.validate.outputs.iac_ref }}
-    steps:
-      - name: Checkout released infra context
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-          cache: pip
-      - name: Install receiver dependencies
-        run: python -m pip install -e .
+          {
+            echo "service=$service"
+            echo "version_ref=$version_ref"
+            echo "iac_ref=$iac_ref"
+          } >> "$GITHUB_OUTPUT"
       - name: Canary the exact app and IaC coordinates
+        env:
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+          VALIDATED_SERVICE: ${{ steps.plan.outputs.service }}
+          VALIDATED_VERSION_REF: ${{ steps.plan.outputs.version_ref }}
+          VALIDATED_IAC_REF: ${{ steps.plan.outputs.iac_ref }}
         run: |
           set -euo pipefail
           if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
             echo "::error::DOKPLOY_API_KEY is required for the deploy preflight."
             exit 1
           fi
-          plan="$(python -m tools.app_deploy_request plan \
-            --sender "$APP_DEPLOY_REQUEST_SENDER" \
-            --domain "$INTERNAL_DOMAIN" \
-            --repo-root .)"
-          service="$(printf '%s' "$plan" | python -c 'import json,sys; print(json.load(sys.stdin)["request"]["service"])')"
-          version_ref="$(printf '%s' "$plan" | python -c 'import json,sys; print(json.load(sys.stdin)["request"]["version_ref"])')"
-          iac_ref="$VALIDATED_IAC_REF"
           python -m tools.deploy_v2_canary \
-            --service "$service" \
-            --version-ref "$version_ref" \
-            --iac-ref "$iac_ref" \
+            --service "$VALIDATED_SERVICE" \
+            --version-ref "$VALIDATED_VERSION_REF" \
+            --iac-ref "$VALIDATED_IAC_REF" \
             --domain "$INTERNAL_DOMAIN" \
             --timeout 600
 
   deploy:
     name: execute validated request
-    needs: [validate, preflight_canary]
+    needs: [preflight_canary]
+    # !cancelled(), not always(): a cancelled run never starts a deploy. A skipped canary
+    # (every non-production request) lets the deploy through; the plan step below refuses
+    # it if the validated plan did require a canary.
     if: >-
-      ${{ always()
-          && needs.validate.result == 'success'
+      ${{ !cancelled()
           && (needs.preflight_canary.result == 'success'
               || needs.preflight_canary.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    env:
-      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
-      IAC_WEBHOOK_SECRET: ${{ secrets.IAC_WEBHOOK_SECRET }}
-      IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
-      VALIDATED_IAC_REF: ${{ needs.validate.outputs.iac_ref }}
     steps:
       - name: Checkout released infra context
         uses: actions/checkout@v7
@@ -141,7 +131,31 @@ jobs:
           cache: pip
       - name: Install receiver dependencies
         run: python -m pip install -e .
+      - name: Validate and display the side-effect-free plan
+        id: plan
+        env:
+          PREFLIGHT_CANARY_RESULT: ${{ needs.preflight_canary.result }}
+          # Empty when no canary ran; otherwise this checkout must still select the ref
+          # the canary proved (a tag cut between the two checkouts fails here).
+          CANARIED_IAC_REF: ${{ needs.preflight_canary.outputs.iac_ref }}
+        run: |
+          set -euo pipefail
+          plan="$(python -m tools.app_deploy_request plan \
+            --sender "$APP_DEPLOY_REQUEST_SENDER" \
+            --domain "$INTERNAL_DOMAIN" \
+            --repo-root . \
+            --expected-iac-ref "$CANARIED_IAC_REF" \
+            --preflight-canary-result "$PREFLIGHT_CANARY_RESULT")"
+          printf '%s\n' "$plan" | python -m json.tool
+          iac_ref="$(printf '%s' "$plan" | python -c 'import json,sys; print(json.load(sys.stdin)["iac_ref"])')"
+          echo "iac_ref=$iac_ref" >> "$GITHUB_OUTPUT"
       - name: Execute through deploy_v2
+        env:
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+          IAC_WEBHOOK_SECRET: ${{ secrets.IAC_WEBHOOK_SECRET }}
+          IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
+          PREFLIGHT_CANARY_RESULT: ${{ needs.preflight_canary.result }}
+          VALIDATED_IAC_REF: ${{ steps.plan.outputs.iac_ref }}
         run: |
           set -euo pipefail
           if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
@@ -152,4 +166,5 @@ jobs:
             --sender "$APP_DEPLOY_REQUEST_SENDER" \
             --domain "$INTERNAL_DOMAIN" \
             --repo-root . \
-            --expected-iac-ref "$VALIDATED_IAC_REF"
+            --expected-iac-ref "$VALIDATED_IAC_REF" \
+            --preflight-canary-result "$PREFLIGHT_CANARY_RESULT"
