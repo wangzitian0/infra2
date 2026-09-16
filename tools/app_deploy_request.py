@@ -54,6 +54,43 @@ def _companion_args(primary: list[str], companion: str) -> list[str]:
     return args
 
 
+def check_preflight_canary_gate(
+    plan: "DeployPlan",
+    *,
+    canary_job_ran: bool = False,
+    canary_result: str | None = None,
+) -> None:
+    """Refuse when the workflow's canary pre-filter disagrees with the validated plan.
+
+    app-deploy-request.yml decides whether the ``preflight_canary`` job runs before any
+    plan exists, from the raw payload (truealpha#860: one job for a staging request). The
+    plan is the authority (``DeployPlan.requires_preflight_canary``), so each side of the
+    pre-filter is re-checked here, fail-closed:
+
+    - ``canary_job_ran``: the canary job is running, so the plan must require a canary.
+    - ``canary_result``: the canary job's ``needs.<job>.result`` as seen by the deploy
+      job; a plan that requires a canary executes only after a successful one.
+      ``None`` (flag not given) is an operator run outside the workflow: no check.
+    """
+    if canary_job_ran and not plan.requires_preflight_canary:
+        raise ValueError(
+            "the preflight_canary job ran for a request its validated plan does not "
+            "canary: the workflow pre-filter has drifted from "
+            "DeployPlan.requires_preflight_canary"
+        )
+    if (
+        canary_result is not None
+        and plan.requires_preflight_canary
+        and canary_result != "success"
+    ):
+        raise ValueError(
+            "the validated plan requires a green preflight canary, but the "
+            f"preflight_canary job's result is {canary_result or 'empty'!r}: refusing to "
+            "execute (the workflow pre-filter has drifted from "
+            "DeployPlan.requires_preflight_canary)"
+        )
+
+
 def _payload_from_env(name: str) -> str:
     payload = os.getenv(name, "")
     if not payload:
@@ -73,6 +110,17 @@ def _parser() -> argparse.ArgumentParser:
         "--expected-iac-ref",
         default="",
         help="fail if the freshly validated plan no longer matches this prior coordinate",
+    )
+    parser.add_argument(
+        "--require-preflight-canary",
+        action="store_true",
+        help="the preflight canary job is running: fail unless the plan requires it",
+    )
+    parser.add_argument(
+        "--preflight-canary-result",
+        default=None,
+        help="the preflight canary job's result; a plan that requires a canary is "
+        "refused unless this is 'success'",
     )
     return parser
 
@@ -103,6 +151,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "validated iac_ref changed during the receiver run: "
                 f"{args.expected_iac_ref!r} -> {plan.iac_ref!r}"
             )
+        check_preflight_canary_gate(
+            plan,
+            canary_job_ran=args.require_preflight_canary,
+            canary_result=args.preflight_canary_result,
+        )
         if args.action == "plan":
             print(json.dumps(plan.to_dict(), sort_keys=True))
             return 0

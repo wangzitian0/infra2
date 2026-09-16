@@ -42,6 +42,11 @@ front door. There is no CLI bypass for Production evidence. Dokploy/Vault mutati
 infra2. Its `markers` action needs no request: it prints the production marker next to the
 newest release and exits non-zero once the marker is too old to pin the data engine from the
 release being promoted (#650) — the ops-checks deploy-guard-audit job runs it daily.
+`--require-preflight-canary` and `--preflight-canary-result` re-check the workflow's canary
+pre-filter against the validated plan (only production requests are canaried, truealpha#860);
+a disagreement in either direction fails before any credential is used. `deploy_v2` prints one
+`deploy_v2 progress:` line per finished phase (secret supply, Dokploy promote, iac-runner sync)
+on stderr, so the receiver log shows where a deploy's time went.
 
 `webhook_delivery_audit.py` reads a repository's hook delivery list and fails only when
 deliveries are being **attempted and none are landing** — the shape of #585, where

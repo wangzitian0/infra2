@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import itertools
 import json
+import math
 
 import httpx
 import pytest
@@ -17,6 +19,8 @@ import pytest
 from libs.iac_runner_client import (
     _sign,
     poll_platform_deploy_status,
+    status_poll_attempts,
+    status_poll_delays,
     trigger_platform_deploy,
 )
 
@@ -405,3 +409,106 @@ def test_poll_raises_on_a_404_that_carries_an_empty_json_object():
             nonce_factory=lambda: "nonce123",
             transport=transport,
         )
+
+
+# --- truealpha#860: the /deploy/status schedule starts short and grows to the old 10 s --
+
+
+def _poll_sleeps(responses, **kw):
+    slept: list[float] = []
+    calls, transport = _capture(responses)
+    result = poll_platform_deploy_status(
+        env="staging",
+        ref=SHA,
+        base_url="u",
+        secret=SECRET,
+        sleep=slept.append,
+        nonce_factory=lambda: "nonce123",
+        transport=transport,
+        **kw,
+    )
+    return result, slept, calls
+
+
+def test_poll_pauses_grow_from_the_first_interval_to_the_cap():
+    result, slept, calls = _poll_sleeps(
+        [{"status": "running"}] * 10 + [{"status": "completed"}],
+        attempts=20,
+        interval=2.0,
+        backoff=1.25,
+        max_interval=10.0,
+    )
+    assert result["status"] == "completed"
+    assert len(calls) == 11
+    assert slept == [2.0, 2.5, 3.125, 3.90625, 4.8828125] + [
+        pytest.approx(6.103515625),
+        pytest.approx(7.62939453125),
+        pytest.approx(9.5367431640625),
+        10.0,
+        10.0,
+    ]
+
+
+def test_poll_without_a_schedule_keeps_its_fixed_interval():
+    """Every existing caller that passes only ``interval`` polls exactly as before."""
+    _result, slept, _calls = _poll_sleeps(
+        [{"status": "running"}] * 3 + [{"status": "completed"}], interval=10.0
+    )
+    assert slept == [10.0, 10.0, 10.0]
+
+
+def test_poll_schedule_also_paces_not_found_and_gateway_retries():
+    _result, slept, _calls = _poll_sleeps(
+        [
+            ({"status": "not_found"}, 404),
+            ({}, 502),
+            ({"status": "running"}, 200),
+            ({"status": "completed"}, 200),
+        ],
+        interval=2.0,
+        backoff=2.0,
+        max_interval=5.0,
+    )
+    assert slept == [2.0, 4.0, 5.0]
+
+
+@pytest.mark.parametrize(
+    "schedule",
+    [dict(backoff=0.5), dict(interval=-1.0), dict(max_interval=-1.0)],
+)
+def test_poll_rejects_a_bad_schedule_before_any_request(schedule):
+    calls, transport = _capture()
+    kw = dict(interval=2.0, backoff=1.25, max_interval=10.0)
+    kw.update(schedule)
+    with pytest.raises(ValueError, match="poll delays need"):
+        poll_platform_deploy_status(
+            env="staging",
+            ref=SHA,
+            base_url="u",
+            secret=SECRET,
+            sleep=lambda *_: None,
+            transport=transport,
+            **kw,
+        )
+    assert calls == []
+
+
+@pytest.mark.parametrize("budget", [0, 1, 9, 10, 11, 120, 599, 600, 900])
+def test_status_poll_attempts_on_a_fixed_schedule_is_the_old_ceiling(budget):
+    assert status_poll_attempts(budget, initial=10, backoff=1, maximum=10) == max(
+        1, math.ceil(budget / 10)
+    )
+
+
+@pytest.mark.parametrize("budget", [1, 7.1, 60, 120, 600, 900])
+def test_status_poll_attempts_is_the_fewest_polls_covering_the_budget(budget):
+    attempts = status_poll_attempts(budget)
+    pauses = list(itertools.islice(status_poll_delays(), attempts))
+    assert sum(pauses) >= budget > sum(pauses[:-1])
+    # the short start costs at most five polls over the old fixed 10 s count
+    assert attempts - max(1, math.ceil(budget / 10)) <= 5
+
+
+def test_status_poll_attempts_refuses_a_schedule_that_never_pauses():
+    with pytest.raises(ValueError, match="never pauses"):
+        status_poll_attempts(60, initial=0)

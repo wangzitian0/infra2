@@ -21,12 +21,75 @@ import json
 import os
 import re
 import time
+from collections.abc import Iterator
 
 import httpx
 
 _SHA40_RE = re.compile(r"\A[0-9a-f]{40}\Z")
 _DEPLOYMENT_ID_RE = re.compile(r"\A[0-9a-f]{16}\Z")
 _VALID_ENVS = ("staging", "production")
+
+# /deploy/status poll schedule (truealpha#860). A fixed 10 s interval made a short
+# operation wait for its own verdict: a secret supply that finished 7.1 s after its
+# trigger was seen by the second poll, 10 s in. The schedule starts at 2 s and grows by a
+# quarter per pause up to the old 10 s, which it reaches ~40 s in (pauses 2, 2.5, 3.1,
+# 3.9, 4.9, 6.1, 7.6, 9.5, then 10). A short operation is seen about a second after it
+# finishes; any operation costs at most five polls more than before, and the runner's
+# steady-state status load (one poll per 10 s per waiting caller) is unchanged.
+STATUS_POLL_INITIAL_SECONDS = 2.0
+STATUS_POLL_BACKOFF = 1.25
+STATUS_POLL_MAX_SECONDS = 10.0
+
+
+def status_poll_delays(
+    initial: float = STATUS_POLL_INITIAL_SECONDS,
+    backoff: float = STATUS_POLL_BACKOFF,
+    maximum: float = STATUS_POLL_MAX_SECONDS,
+) -> Iterator[float]:
+    """The pauses between successive ``/deploy/status`` polls, without end.
+
+    ``initial``, then each pause ``backoff`` times the previous one, never above
+    ``maximum``. ``backoff=1`` with ``maximum=initial`` is a fixed interval. The
+    arguments are checked here, before the first poll is sent, not at the first pause.
+    """
+    if initial < 0 or maximum < 0 or backoff < 1:
+        raise ValueError(
+            "poll delays need initial >= 0, maximum >= 0 and backoff >= 1, got "
+            f"initial={initial!r} maximum={maximum!r} backoff={backoff!r}"
+        )
+
+    def delays() -> Iterator[float]:
+        delay = min(float(initial), float(maximum))
+        while True:
+            yield delay
+            delay = min(delay * backoff, float(maximum))
+
+    return delays()
+
+
+def status_poll_attempts(
+    budget_seconds: float,
+    *,
+    initial: float = STATUS_POLL_INITIAL_SECONDS,
+    backoff: float = STATUS_POLL_BACKOFF,
+    maximum: float = STATUS_POLL_MAX_SECONDS,
+) -> int:
+    """The fewest polls whose pauses, taken together, cover ``budget_seconds``.
+
+    :func:`poll_platform_deploy_status` pauses after every unsettled poll, the last one
+    included, so ``n`` polls give up after the first ``n`` pauses; this returns the
+    smallest ``n >= 1`` for which those add up to at least the budget. With a fixed
+    10 s schedule that is ``ceil(budget / 10)``, the count deploy_v2 always used.
+    """
+    budget = max(0.0, float(budget_seconds))
+    if initial <= 0 or maximum <= 0:
+        raise ValueError("a poll schedule that never pauses cannot cover a time budget")
+    delays = status_poll_delays(initial, backoff, maximum)
+    attempts, waited = 1, next(delays)
+    while waited < budget:
+        attempts += 1
+        waited += next(delays)
+    return attempts
 
 
 def _sign(secret: str, timestamp: str, nonce: str, payload: bytes) -> str:
@@ -174,8 +237,15 @@ def poll_platform_deploy_status(
     version_ref: str | None = None,
     action: str | None = None,
     gateway_grace: float = 180.0,
+    backoff: float = 1.0,
+    max_interval: float | None = None,
 ) -> dict:
     """Poll ``/deploy/status`` until the deploy reaches a terminal state (mirrors the bash loop).
+
+    The pause after the first unsettled poll is ``interval``; each later pause is
+    ``backoff`` times the previous one, capped at ``max_interval`` (default: ``interval``,
+    i.e. a fixed interval). deploy_v2 passes the :data:`STATUS_POLL_INITIAL_SECONDS`
+    schedule (truealpha#860).
 
     A push that touches ``bootstrap/06.iac_runner`` recreates the runner while deploys
     are in flight (#666: three times on 2026-09-08). While the container is being
@@ -219,6 +289,9 @@ def poll_platform_deploy_status(
     # non-terminal statuses from /deploy/status (terminal = "completed" / "failed").
     terminal_excluded = {"running", "pending", "in_progress", "queued", "accepted"}
     gateway_codes = {502, 503, 504}
+    delays = status_poll_delays(
+        interval, backoff, interval if max_interval is None else max_interval
+    )
     last: dict = {}
     gateway_down_since: float | None = None
     for _ in range(max(1, attempts)):
@@ -241,7 +314,7 @@ def poll_platform_deploy_status(
             if str(body.get("status", "")).lower() == "not_found":
                 last = body
                 gateway_down_since = None
-                sleep(interval)
+                sleep(next(delays))
                 continue
         # The runner is being recreated (#666): Traefik answers a bodiless/non-JSON 404
         # while no router exists, then 502/503/504 until the new container is healthy.
@@ -258,14 +331,14 @@ def poll_platform_deploy_status(
                     f"polling deploy {ref[:12]} to {env} (last HTTP {code}): the runner was "
                     "probably recreated by a bootstrap push mid-deploy (#666)"
                 )
-            sleep(interval)
+            sleep(next(delays))
             continue
         gateway_down_since = None
         resp.raise_for_status()
         last = resp.json() if resp.content else {}
         if str(last.get("status", "")).lower() not in terminal_excluded:
             return last
-        sleep(interval)
+        sleep(next(delays))
     raise TimeoutError(
         f"iac_runner deploy {ref[:12]} to {env} did not settle within {attempts} polls "
         f"(last status={last.get('status')!r})"

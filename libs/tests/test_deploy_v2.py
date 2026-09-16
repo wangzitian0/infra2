@@ -8,6 +8,7 @@ call happens — classify_ref stays real, so form validation is exercised for re
 
 from __future__ import annotations
 
+import itertools
 import json
 from dataclasses import dataclass
 
@@ -15,6 +16,7 @@ import httpx
 import pytest
 
 import tools.deploy_v2 as dv2
+from libs.iac_runner_client import status_poll_attempts, status_poll_delays
 from tools.deploy_v2 import (
     DeployV2Result,
     assert_iac_ref_on_main,
@@ -1087,7 +1089,71 @@ def test_platform_wait_uses_timeout_budget_for_status_poll(monkeypatch):
         timeout=120,
     )
 
-    assert seen["attempts"] == 12
+    # truealpha#860: the poll starts at 2 s and grows to 10 s; the attempt count is the
+    # fewest polls whose pauses still cover the whole 120 s budget.
+    assert (seen["interval"], seen["backoff"], seen["max_interval"]) == (
+        2.0,
+        1.25,
+        10.0,
+    )
+    pauses = list(
+        itertools.islice(
+            status_poll_delays(seen["interval"], seen["backoff"], seen["max_interval"]),
+            seen["attempts"],
+        )
+    )
+    assert sum(pauses) >= 120 > sum(pauses[:-1])
+    assert seen["attempts"] == 17  # a fixed 10 s interval needed 12 for the same budget
+
+
+def test_every_runner_wait_uses_the_short_first_poll_schedule(calls, monkeypatch):
+    """The secret supply is the short operation the schedule is for: it finished 7.1 s
+    after its trigger on 2026-09-16 and was seen at the 10 s poll (truealpha#860)."""
+    order = _runner_fakes(monkeypatch)
+    _deploy(
+        deploy_type="staging",
+        version_ref="v1.2.3",
+        iac_runner_url="https://iac.example",
+        iac_webhook_secret="s",
+    )
+    polls = [kw for kind, kw in order if kind == "poll"]
+    assert polls and all(
+        (kw["interval"], kw["backoff"], kw["max_interval"]) == (2.0, 1.25, 10.0)
+        and kw["attempts"] == dv2._poll_attempts_for_timeout(600)
+        for kw in polls
+    )
+
+
+def test_status_poll_schedule_reaches_a_short_verdict_sooner_and_keeps_the_long_rate():
+    pauses = list(itertools.islice(status_poll_delays(2.0, 1.25, 10.0), 12))
+    polled_at = list(itertools.accumulate(pauses))
+    # a 7.1 s secret supply is seen at the third pause (7.6 s), not at 10 s
+    assert next(t for t in polled_at if t >= 7.1) < 8
+    # past ~40 s the pause is the old 10 s: a long sync polls exactly as often as before
+    assert pauses[8:] == [10.0] * 4
+    assert status_poll_attempts(600, initial=10, backoff=1, maximum=10) == 60
+    assert status_poll_attempts(600) - 60 <= 5
+
+
+def test_deploy_phases_report_their_duration_on_stderr(calls, monkeypatch, capsys):
+    _runner_fakes(monkeypatch)
+    _deploy(
+        deploy_type="staging",
+        version_ref="v1.2.3",
+        iac_runner_url="https://iac.example",
+        iac_webhook_secret="s",
+    )
+    err = capsys.readouterr().err
+    assert (
+        "deploy_v2 progress: secret supply for finance_report/app in staging: completed after"
+        in err
+    )
+    assert (
+        "deploy_v2 progress: Dokploy promote of finance_report/app to staging:" in err
+    )
+    # never mistaken for the verdict line or the runner record reconcile parses
+    assert "deploy_v2 failed:" not in err
+    assert "ended '" not in err
 
 
 def test_platform_batch_cli_routes_services_once(monkeypatch, capsys):
