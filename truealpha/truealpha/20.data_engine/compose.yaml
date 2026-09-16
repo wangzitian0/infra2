@@ -16,6 +16,12 @@ x-dagster-service: &dagster-service
     MOOMOO_OPEND_HOST: 127.0.0.1
     MOOMOO_OPEND_PORT: "11111"
     MOOMOO_LEDGER_BACKEND: postgres
+    # truealpha#854: moomoo as a governed origin (third price origin, second financial
+    # origin) is feature-flagged in the engine; the flags are per-environment IaC
+    # (deploy.py::_release_recomputable_env): staging soaks them on, production stays off
+    # until a reviewed change flips it.
+    MOOMOO_KLINE_ORIGIN_ENABLED: ${MOOMOO_KLINE_ORIGIN_ENABLED:-false}
+    MOOMOO_FINANCIALS_ORIGIN_ENABLED: ${MOOMOO_FINANCIALS_ORIGIN_ENABLED:-false}
     TRUEALPHA_RELEASE_MANIFEST_ID: ${RELEASE_MANIFEST_ID:?RELEASE_MANIFEST_ID is required}
     TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST: ${DATA_ENGINE_IMAGE_DIGEST:?DATA_ENGINE_IMAGE_DIGEST is required}
     TRUEALPHA_CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:?CONFIGURATION_SHA256 is required}
@@ -183,6 +189,8 @@ services:
       MOOMOO_OPEND_HOST: 127.0.0.1
       MOOMOO_OPEND_PORT: "11111"
       MOOMOO_LEDGER_BACKEND: postgres
+      MOOMOO_KLINE_ORIGIN_ENABLED: ${MOOMOO_KLINE_ORIGIN_ENABLED:-false}
+      MOOMOO_FINANCIALS_ORIGIN_ENABLED: ${MOOMOO_FINANCIALS_ORIGIN_ENABLED:-false}
       TRUEALPHA_RELEASE_MANIFEST_ID: ${RELEASE_MANIFEST_ID:?RELEASE_MANIFEST_ID is required}
       TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST: ${DATA_ENGINE_IMAGE_DIGEST:?DATA_ENGINE_IMAGE_DIGEST is required}
       TRUEALPHA_CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:?CONFIGURATION_SHA256 is required}

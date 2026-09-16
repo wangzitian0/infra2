@@ -222,6 +222,15 @@ class DataEngineDeployer(Deployer):
             "TIER_CPU_SHARES": "512" if environment == "staging" else "1024",
             "DATA_ENGINE_MEM_LIMIT": "768m" if environment == "staging" else "1536m",
             "DATA_ENGINE_VAULT_MEM_LIMIT": "128m",
+            # truealpha#854: the moomoo origins soak on staging; production flips only
+            # through a reviewed change here (part of CONFIGURATION_SHA256, so the flip
+            # is a new configuration identity, never an ambient env edit).
+            "MOOMOO_KLINE_ORIGIN_ENABLED": "true"
+            if environment == "staging"
+            else "false",
+            "MOOMOO_FINANCIALS_ORIGIN_ENABLED": "true"
+            if environment == "staging"
+            else "false",
         }
 
     @classmethod
