@@ -134,6 +134,26 @@ def test_sync_skips_prod_only_service_on_non_production() -> None:
         def env(cls):
             return {"ENV": "production"}
 
+        @classmethod
+        def ensure_runtime_secrets(cls, c):
+            return True
+
+        @classmethod
+        def apply_secret_supply(cls, c, env=None):
+            return True
+
+        @classmethod
+        def get_compose_content(cls, c):
+            return "version: '3.8'\nservices: {}\n"
+
+        @classmethod
+        def get_remote_config_hash(cls, c):
+            return "different_hash"
+
+        @classmethod
+        def deploy_compose(cls, c, env_vars_dict=None):
+            return {"action": "applied", "details": "deployed"}
+
     prod = ObsDeployerProd.sync(MagicMock(), force=False)
     assert not (prod["action"] == "skipped" and "prod-only" in prod.get("details", ""))
 

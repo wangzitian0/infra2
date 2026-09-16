@@ -25,11 +25,12 @@ class DokployClient:
     """Client for Dokploy REST API"""
 
     def __init__(self, base_url: str | None = None, api_key: str | None = None):
-        internal_domain = os.getenv("INTERNAL_DOMAIN", "localhost")
+        from libs.common import infra_domain
+
         self.base_url = (
             base_url
             or os.getenv("DOKPLOY_URL")
-            or f"https://cloud.{internal_domain}/api"
+            or f"https://cloud.{infra_domain()}/api"
         )
         self.api_key = api_key or os.getenv("DOKPLOY_API_KEY")
 
@@ -38,8 +39,15 @@ class DokployClient:
             try:
                 from libs.env import OpSecrets
 
-                op = OpSecrets(item="bootstrap-dokploy")
-                self.api_key = op.get("DOKPLOY_API_KEY")
+                for item in ("init/env_vars", "bootstrap-dokploy", "dokploy-docker"):
+                    try:
+                        op = OpSecrets(item=item)
+                        key = op.get("DOKPLOY_API_KEY")
+                        if key:
+                            self.api_key = key
+                            break
+                    except Exception:
+                        continue
             except (ImportError, AttributeError, KeyError):
                 # If 1Password integration or secret is unavailable, fall back to env var / final validation below.
                 pass
