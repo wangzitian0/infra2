@@ -135,17 +135,21 @@ def test_deployer_derives_isolated_ports_and_full_configuration_hash(monkeypatch
     assert changed["CONFIGURATION_SHA256"] != config["CONFIGURATION_SHA256"]
 
 
-def test_moomoo_origin_flags_soak_on_staging_and_stay_off_in_production():
+def test_moomoo_origin_flags_are_on_in_staging_and_production_only():
     """truealpha#854: the moomoo K-line and statements origins are feature-flagged in the
-    engine. Staging turns them on to soak; production stays off until a reviewed change
-    flips it here — and because the flags are part of the public env, that flip is a new
-    CONFIGURATION_SHA256, never an env edit nobody reviewed."""
+    engine. They soaked on staging, were proven on a forced staging tick (truealpha#874),
+    and production turned them on through a reviewed change here — the flags are part of
+    the public env, so each flip is a new CONFIGURATION_SHA256, never an unreviewed env
+    edit. Any other environment name stays off."""
     module = _load_deploy_module()
     deployer = module.DataEngineDeployer
-    staging = deployer._release_recomputable_env("staging")
-    production = deployer._release_recomputable_env("production")
+    for environment in ("staging", "production"):
+        env = deployer._release_recomputable_env(environment)
+        for flag in ("MOOMOO_KLINE_ORIGIN_ENABLED", "MOOMOO_FINANCIALS_ORIGIN_ENABLED"):
+            assert env[flag] == "true", (environment, flag)
+    other = deployer._release_recomputable_env("pr-999")
     for flag in ("MOOMOO_KLINE_ORIGIN_ENABLED", "MOOMOO_FINANCIALS_ORIGIN_ENABLED"):
-        assert staging[flag] == "true" and production[flag] == "false", flag
+        assert other[flag] == "false", flag
     compose = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8"))
     services = compose["services"]
     for name in ("dagster-code-server", "dagster-daemon", "dagster-webserver"):
