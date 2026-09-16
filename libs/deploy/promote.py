@@ -25,6 +25,7 @@ from libs.common import infra_domain
 from libs.compose_lock import compose_write_lock
 from libs.console import warning
 from libs.deploy_env_config import app_compose_env_config, otel_env
+from libs.deploy_phase_log import phase
 from libs.deploy_queue import deployment_start_epoch
 from tools.deploy_failure_snapshot import emit_failure_snapshot
 from tools.openpanel_clients import openpanel_env
@@ -602,8 +603,11 @@ def deploy(
             # deployment record OUR OWN call could have produced may carry (infra2#525
             # finding 2 — see wait_for_rollout's min_started_at).
             trigger_epoch = time.time()
+            phase(f"{service}: dokploy-trigger: start")
             client.deploy_compose(cfg.compose_id)
+            phase(f"{service}: dokploy-trigger: accepted")
             if wait:
+                phase(f"{service}: rollout-wait: start")
                 wait_for_rollout(
                     client,
                     cfg.compose_id,
@@ -611,15 +615,20 @@ def deploy(
                     timeout=timeout,
                     min_started_at=trigger_epoch,
                 )
+                phase(f"{service}: rollout-wait: done")
             # Confirm the effective config advanced to what we pushed (deploy actually took).
             if verify_config:
+                phase(f"{service}: config-hash-verify: start")
                 verify_effective_config_hash(
                     client, cfg.compose_id, config_hash, timeout=timeout
                 )
+                phase(f"{service}: config-hash-verify: done")
             # The record said done; now the containers (#698): a rollout whose
             # frontend is left `Created` behind an unhealthy backend is not a deploy.
             if wait:
+                phase(f"{service}: in-service-verify: start")
                 verify_in_service(client, service, cfg.env_suffix, timeout=timeout)
+                phase(f"{service}: in-service-verify: done")
             # Opt-in: prove the just-deployed service.version actually ingests into SigNoz
             # (logs+traces), not merely that the rollout/config advanced. This is the
             # platform-side home of the deployed-version ingestion proof — the app emits

@@ -924,6 +924,44 @@ def test_deploy_verify_config_confirms_pushed_hash_rolled_out():
     assert client.deployed == ["A6V-hbJlgHMwgPDoTDnhH"]
 
 
+def test_deploy_logs_phase_markers_in_order(capsys):
+    """#truealpha critical-path visibility: dokploy-trigger, rollout-wait,
+    config-hash-verify, and in-service-verify must each print a one-line, timestamped
+    marker AT THE MOMENT they happen (not just at process exit) — and in this exact
+    order, with no behaviour change to the deploy itself."""
+
+    def deployments(self):
+        if self.deployed:
+            return [{"id": "new", "status": "done"}]
+        return []
+
+    client = FakeDokploy(deployments=deployments)
+    plan = dp.deploy(
+        "staging",
+        FULL_SHA,
+        domain="zitian.party",
+        client=client,
+        wait=True,
+        verify_config=True,
+    )
+    assert plan.sha == FULL_SHA  # unchanged: phase() is purely additive
+
+    lines = [
+        line for line in capsys.readouterr().out.splitlines() if line.startswith("[+")
+    ]
+    markers = [line.split("] ", 1)[1] for line in lines]
+    assert markers == [
+        "finance_report/app: dokploy-trigger: start",
+        "finance_report/app: dokploy-trigger: accepted",
+        "finance_report/app: rollout-wait: start",
+        "finance_report/app: rollout-wait: done",
+        "finance_report/app: config-hash-verify: start",
+        "finance_report/app: config-hash-verify: done",
+        "finance_report/app: in-service-verify: start",
+        "finance_report/app: in-service-verify: done",
+    ]
+
+
 def test_staging_deploy_injects_openpanel_client_id():
     """#372: the per-env OpenPanel client id reaches the compose env on the live
     deploy_v2/deploy_primitive path (it previously only lived in the unused

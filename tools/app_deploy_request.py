@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 # libs.release_markers is pure git; libs.app_deploy_request pulls in infra2_sdk and is
 # imported lazily, so `markers` runs in an ops job that installs neither (#650).
+from libs.deploy_phase_log import phase
 from libs.release_markers import marker_status
 
 if TYPE_CHECKING:  # the annotation must not drag infra2_sdk into the markers path
@@ -35,11 +36,15 @@ def execute_plan(plan: "DeployPlan", *, run=None) -> int:
 
         run = deploy_v2_main
     primary = plan.deploy_v2_args()
+    phase(f"{plan.request.service}: primary: start")
     code = run(primary)
+    phase(f"{plan.request.service}: primary: done (exit {code})")
     if code != 0:
         return code
     for companion in service_spec(plan.request.service).companions:
+        phase(f"{companion}: companion: start")
         code = run(_companion_args(primary, companion))
+        phase(f"{companion}: companion: done (exit {code})")
         if code != 0:
             return code
     return 0

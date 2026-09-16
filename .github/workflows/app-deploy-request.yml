@@ -81,6 +81,12 @@ jobs:
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
       VALIDATED_IAC_REF: ${{ needs.validate.outputs.iac_ref }}
+      # Visible timing (#truealpha critical-path measurement, 2026-09-15/16): Python
+      # buffers stdout when it isn't a TTY, so a subprocess's own PYTHONUNBUFFERED=1
+      # (unlike `python -u`, which only affects `python` invocations made directly in
+      # this step, not modules it imports/execs) is required for libs.deploy_phase_log's
+      # phase() markers to show up in the live Actions log instead of all at once at exit.
+      PYTHONUNBUFFERED: "1"
     steps:
       - name: Checkout released infra context
         uses: actions/checkout@v7
@@ -129,6 +135,8 @@ jobs:
       IAC_WEBHOOK_SECRET: ${{ secrets.IAC_WEBHOOK_SECRET }}
       IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
       VALIDATED_IAC_REF: ${{ needs.validate.outputs.iac_ref }}
+      # See the identical comment in preflight_canary above.
+      PYTHONUNBUFFERED: "1"
     steps:
       - name: Checkout released infra context
         uses: actions/checkout@v7

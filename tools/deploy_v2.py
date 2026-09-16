@@ -31,6 +31,7 @@ from dataclasses import dataclass
 import httpx  # Dokploy transport errors from libs.dokploy surface as httpx exceptions
 
 from libs.common import infra_domain
+from libs.deploy_phase_log import phase
 from libs.iac_runner_client import (
     poll_platform_deploy_status,
     trigger_platform_deploy,
@@ -528,6 +529,7 @@ def _deploy_platform(
         # registry for truealpha-data-engine:v1.1.59). Only a ref that differs from the
         # iac_ref names an app release.
         pinned_ref = None
+    phase(f"{service}: iac-runner-trigger: start")
     response = trigger_platform_deploy(
         env=env,
         ref=iac_sha,
@@ -538,10 +540,12 @@ def _deploy_platform(
         wait=False,
         version_ref=pinned_ref,
     )
+    phase(f"{service}: iac-runner-trigger: accepted")
     detail = {"env": env, "ref": iac_sha, "services": [service], "iac_runner": response}
     if pinned_ref:
         detail["version_ref"] = pinned_ref
     if wait:
+        phase(f"{service}: iac-runner-wait: start")
         final = poll_platform_deploy_status(
             env=env,
             ref=iac_sha,
@@ -553,6 +557,7 @@ def _deploy_platform(
             attempts=_poll_attempts_for_timeout(timeout),
             version_ref=pinned_ref,
         )
+        phase(f"{service}: iac-runner-wait: done")
         detail["iac_runner_final"] = final
         status = str(final.get("status", "")).lower()
         if status != "completed":  # "failed" / anything non-success
@@ -896,6 +901,7 @@ def deploy_v2(
     # verify_vault / verify_config / model_overrides give the unified path PARITY with the
     # old bash dokploy_deploy.sh — default-ON so a token-TTL/effective-config regression
     # fails closed instead of being silently dropped on the way to prod.
+    phase(f"{service}: secrets-supply: start")
     secret_supply = _supply_app_secrets(
         service,
         target.env,
@@ -905,6 +911,7 @@ def deploy_v2(
         triggered_by=triggered_by,
         timeout=timeout,
     )
+    phase(f"{service}: secrets-supply: done")
     plan = _deploy_fixed(
         target.env,
         resolved.sha,

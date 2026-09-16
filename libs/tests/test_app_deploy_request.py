@@ -932,3 +932,44 @@ def test_execute_promotes_the_declared_companions_after_the_primary(tmp_path) ->
 
     assert receiver_cli.execute_plan(production, run=failing) == 3
     assert len(seen) == 1
+
+
+def test_execute_plan_logs_primary_and_companion_phase_markers_in_order(
+    capsys, tmp_path
+):
+    """#truealpha critical-path visibility: execute_plan must mark the primary and
+    each companion's start/done as one-line timestamped log entries, in call order —
+    additive only, no change to the run()/exit-code contract."""
+    truealpha = "https://github.com/wangzitian0/truealpha"
+    production = receiver.make_plan(
+        production_payload(
+            service="truealpha/app",
+            source_repository="wangzitian0/truealpha",
+            evidence={
+                "source_run_url": f"{truealpha}/actions/runs/100",
+                "source_run_id": "100",
+                "staging_run_url": f"{truealpha}/actions/runs/101",
+                "reviewed_change_url": f"{truealpha}/pull/10",
+            },
+        ),
+        sender="wangzitian0",
+        domain="zitian.party",
+        timeout=600,
+        repo_root=tmp_path,
+        resolve_image=resolved,
+        runner=tags,
+        production_evidence_verifier=lambda request: None,
+    )
+
+    assert receiver_cli.execute_plan(production, run=lambda args: 0) == 0
+
+    lines = [
+        line for line in capsys.readouterr().out.splitlines() if line.startswith("[+")
+    ]
+    markers = [line.split("] ", 1)[1] for line in lines]
+    assert markers == [
+        "truealpha/app: primary: start",
+        "truealpha/app: primary: done (exit 0)",
+        "truealpha/data_engine: companion: start",
+        "truealpha/data_engine: companion: done (exit 0)",
+    ]
