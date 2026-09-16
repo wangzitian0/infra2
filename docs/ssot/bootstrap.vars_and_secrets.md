@@ -151,6 +151,7 @@ Token boundaries:
 `bootstrap/cloudflare` 推荐字段：
 
 - `CF_API_TOKEN`
+- `CF_WORKER_API_TOKEN`: Workers deploy token for `deploy-cloudflare-watchdog.yml` (1Password `bootstrap/cloudflare-worker` → `CLOUDFLARE_WORKER_API_TOKEN`); the DNS token `CF_API_TOKEN` has no Workers permission.
 - `CF_ZONE_ID`（可选，缺省时用 `CF_ZONE_NAME` 或 `INTERNAL_DOMAIN` 查找）
 - `CF_ZONE_NAME`（可选）
 - `CF_RECORDS`（可选，逗号分隔默认子域名列表）
