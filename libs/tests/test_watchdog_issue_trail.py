@@ -582,7 +582,9 @@ def test_the_tool_drill_opens_but_never_closes(tmp_path: Path) -> None:
     assert "drill" in api.created[0][1]
 
 
-def test_the_tool_is_inert_when_off_and_loud_when_misconfigured(tmp_path: Path) -> None:
+def test_the_tool_is_inert_when_off_and_loud_when_misconfigured(
+    tmp_path: Path, capsys
+) -> None:
     def refuse(*_args):
         raise AssertionError("no API client may be built")
 
@@ -602,6 +604,14 @@ def test_the_tool_is_inert_when_off_and_loud_when_misconfigured(tmp_path: Path) 
         trail_tool.main(_tool_env(tmp_path, GITHUB_TOKEN=""), issues_factory=refuse)
         == 1
     )
+    assert "GITHUB_TOKEN or GH_TOKEN" in capsys.readouterr().err
+    built = []
+    gh_token_env = _tool_env(tmp_path, GITHUB_TOKEN="", GH_TOKEN="gh-cli-token")
+    trail_tool.main(
+        gh_token_env,
+        issues_factory=lambda repo, token: built.append(token) or FakeIssues(),
+    )
+    assert built == ["gh-cli-token"]
     assert (
         trail_tool.main(
             _tool_env(tmp_path, GITHUB_REPOSITORY="infra2"), issues_factory=refuse

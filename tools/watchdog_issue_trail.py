@@ -83,7 +83,8 @@ def main(env: Mapping[str, str] | None = None, *, issues_factory=GitHubIssues) -
         return 1
     if "/" not in repository or not token:
         print(
-            "::error::issue trail: GITHUB_REPOSITORY (owner/name) and GITHUB_TOKEN are required",
+            "::error::issue trail: GITHUB_REPOSITORY (owner/name) and a token "
+            "(GITHUB_TOKEN or GH_TOKEN) are required",
             file=sys.stderr,
         )
         return 1
