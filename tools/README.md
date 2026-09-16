@@ -16,7 +16,11 @@ reusable logic belongs in `libs/` (see the division-of-labor note below):
    watchdogs), `dns_drift_report.py` /
    `dokploy_config_drift.py` (drift reports), `pr_merge_gate.py` (the AGENTS.md
    session merge authority as a check: checks, threads, settling, protected and
-   deploy-triggering paths; `--merge` squash-merges only a ready head).
+   deploy-triggering paths; `--merge` squash-merges only a ready head; gh's
+   "no checks reported" before the first check registers counts as zero checks),
+   `orchestrator_guard_hook.py` (an owner-wired Claude Code hook that keeps the
+   workspace orchestrator's foreground calls under 4 minutes and its watch armed;
+   see [coordination.md](../harness/workspace/coordination.md#orchestrator-liveness)).
 
 ## The single resident entry point (#543)
 
@@ -64,7 +68,11 @@ or application source checkout participates in the audit.
 `harness/repos.yaml`, referenced authority files, the infra2/infra2-sdk focus, and the
 autonomous App boundary. `status` reports parent pin, checkout/remote heads,
 ahead/behind, dirty paths, and release identity; optional `--fetch` refreshes origin
-metadata but never checks out/pulls submodules or changes application policy.
+metadata but never checks out/pulls submodules or changes application policy. `sweep`
+classifies every item on the orchestrator's watch list (agents, PRs, release logs,
+workflow runs, worktrees) into one state; logic in `libs/harness_sweep.py`. It only
+prints, so it registers no alert signal (`tools/no_new_wheels_lint.py` scans for
+alert-delivery calls; it makes none).
 
 `dokploy_config_drift.py` is read-only and compares production's versioned,
 secret-independent source fingerprint with the latest explicit `production/v*` promotion
@@ -132,6 +140,43 @@ uv run python -m tools.harness status --fetch
 
 # Same observation, but fail when any checkout is ahead/behind/dirty/off-pin
 uv run python -m tools.harness status --fetch --require-current
+
+# One line per watched item, then `sweep: exit N`
+uv run python -m tools.harness sweep /abs/path/watch.json
+
+# Transitions and heartbeats only; exits when any item leaves WAITING (run under Monitor)
+uv run python -m tools.harness sweep /abs/path/watch.json --watch
+```
+
+`sweep` is the orchestrator's clock ([Orchestrator Liveness](../harness/workspace/coordination.md#orchestrator-liveness)).
+Each item gets exactly one state: `WAITING` (only time will move it), `DONE`, `ACTION`,
+`STALL` (no progress past its threshold, or a dead process without a verdict line) or
+`UNKNOWN` (a probe failed or returned a value outside the allow-lists). Merge gates are
+judged by exit code only (0 ready, 2 owner); their output is discarded, and a gate argv
+carrying `--merge`, `--request-review`, `--admin` or `--auto`, or an abbreviation argparse
+would expand to one, is refused. Exit codes: 0 nothing needs you, 1 action, 2 an item
+finished while others wait (watch only), 3 stall, 4 could not evaluate (including usage
+and watch-list errors), 5 watch budget spent. `--interval` (90 s), `--heartbeat` (240 s),
+`--max-minutes` (0 = never) and `--unknown-tolerance` (1 sweep) tune the watch.
+
+The watch list is `{"items": [...]}`; every item may carry `label` and `stall_minutes`:
+
+| `kind` | Fields | Reads |
+|---|---|---|
+| `pr` | `repo`, `number` or `head` (branch), optional `gate: {argv, cwd}` with `{number}` placeholder, `settle_minutes` (12) | `gh pr view`, `gh pr checks`, review threads (GraphQL), the gate's exit code |
+| `workflow` | `repo`, `workflow`, optional `branch`, `event`, `expect_branch_head` | `gh run list`; with `expect_branch_head`, the run of the branch head's commit (only for workflows that run on every push) |
+| `release_log` | `path`, optional `pid` or `process_match`, `done_lines`, `fail_prefixes` | the log file (an `exit=N` line decides first), `pgrep` |
+| `agent` | `name`, `output` (the task output file) | `stat` only; the transcript is never opened |
+| `worktree` | `path` | `git` branch, head, porcelain status, unpushed count; file mtimes |
+
+```json
+{"items": [
+  {"kind": "pr", "repo": "wangzitian0/infra2", "number": 704,
+   "gate": {"argv": ["uv", "run", "python", "-m", "tools.pr_merge_gate", "{number}", "--policy", "either"],
+            "cwd": "/abs/path/to/infra2"}},
+  {"kind": "workflow", "repo": "wangzitian0/infra2", "workflow": "Docs", "branch": "main"},
+  {"kind": "agent", "name": "impl-1", "output": "/abs/path/to/tasks/impl-1.output"}
+]}
 ```
 
 ## env (remote secrets)

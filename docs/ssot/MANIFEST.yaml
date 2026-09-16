@@ -31,8 +31,11 @@ entries:
       Workspace control-plane contract: infra2 and infra2-sdk are the harness focus;
       application repositories remain autonomous checkouts; common GitHub, coordination,
       and software-design guidance is preference-level rather than cross-repository policy.
+      The read-only orchestrator sweep classifies watched work by allow-listed facts
+      and gate exit codes.
     proofs:
       - libs/tests/test_harness_manifest.py
+      - libs/tests/test_harness_sweep.py
   core.truealpha_runtime:
     owner: docs/ssot/core.truealpha_runtime.md
     summary: TrueAlpha Dagster artifact binding, environment isolation, and host-only OpenD boundary

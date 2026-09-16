@@ -64,6 +64,8 @@ DEPLOY_TRIGGERING_GLOBS = (
 GREEN_BUCKETS = frozenset({"pass", "skipping"})
 GREEN_STATES = frozenset({"SUCCESS", "SKIPPED", "NEUTRAL"})
 MAX_REVIEW_THREADS = 100
+# gh's stderr when a pull request has no check registered yet (it exits 1, no JSON).
+NO_CHECKS_REPORTED = "no checks reported"
 
 Runner = Callable[[Sequence[str]], str]
 
@@ -113,6 +115,32 @@ def _epoch(iso: str) -> float:
     return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
 
 
+def _read_checks(number: int, *, repo: str, gh: Runner) -> str:
+    """`gh pr checks --json`, with gh's "nothing registered yet" read as zero checks.
+
+    Before the first check registers, gh exits 1 with "no checks reported on the
+    '<branch>' branch" instead of printing `[]`. Raised as an error, that crashed the
+    gate with a traceback (also exit 1), so the "no checks reported yet" reason below
+    could never be reported. Any other failure still raises.
+    """
+    try:
+        return gh(
+            [
+                "pr",
+                "checks",
+                str(number),
+                "--repo",
+                repo,
+                "--json",
+                "name,state,bucket",
+            ]
+        )
+    except RuntimeError as exc:
+        if NO_CHECKS_REPORTED not in str(exc):
+            raise
+        return "[]"
+
+
 def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadFacts:
     """Read the head's facts through `gh`; nothing here decides."""
     view = json.loads(
@@ -128,20 +156,7 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
             ]
         )
     )
-    checks = json.loads(
-        gh(
-            [
-                "pr",
-                "checks",
-                str(number),
-                "--repo",
-                repo,
-                "--json",
-                "name,state,bucket",
-            ]
-        )
-        or "[]"
-    )
+    checks = json.loads(_read_checks(number, repo=repo, gh=gh) or "[]")
     owner, name = repo.split("/", 1)
     threads = json.loads(
         gh(

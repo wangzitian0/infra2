@@ -1,7 +1,7 @@
 # Infra-019: TODOWRITE (Workspace Harness Control Plane)
 
 **Status**: Active
-**Last Updated**: 2026-09-15
+**Last Updated**: 2026-09-16
 
 ## Phase 1
 
@@ -25,6 +25,11 @@
       (merged and released in v1.5.2; installed-artifact proof below).
 - [ ] Decide whether workspace preference changes need their own version identifier.
 - [ ] Add cross-repository compatibility matrix reporting from released evidence.
+- [x] Orchestrator liveness rule, read-only `harness sweep` and guard hook
+      (2026-09-16 section below).
+- [ ] Owner decision: wire `tools/orchestrator_guard_hook.py` into `.claude/settings.json`.
+- [ ] Split `pr_merge_gate` exit 1 into time-fixable / action-required / could-not-evaluate
+      ([infra2#740](https://github.com/wangzitian0/infra2/issues/740)).
 - [ ] Archive Infra-019 after the selected follow-ups are complete or explicitly deferred.
 
 > App policy adoption is intentionally not a TODO. Finance Report and TrueAlpha remain
@@ -449,3 +454,45 @@ complete that requirement, and Infra-019 remains In Progress.
   "complete": false
 }
 ```
+
+## 2026-09-16 orchestrator liveness
+
+Outcome: the main conversation never waits silently. Every in-flight agent, PR, release
+and default-branch CI run is on one watch list, a persistent `Monitor` runs one read-only
+sweep over it, and only allow-listed facts keep an item waiting
+([truealpha#876](https://github.com/wangzitian0/truealpha/issues/876)).
+
+Situation: the orchestrator waited more than ten minutes on a PR because its shell
+waiter grepped a merge gate's prose and never matched "1 unresolved review thread(s)".
+Notifications reach the main conversation only between tool calls, so a long
+foreground wait is deaf for its whole length. `pr_merge_gate` exit 1 covers pending
+and red checks, open threads, drafts and merged PRs alike, and `gh pr checks --json`
+exits 1 with "no checks reported" before any check exists, which crashed the gate.
+
+- [x] `libs/harness_sweep.py` + `python -m tools.harness sweep`: WAITING / DONE / ACTION /
+      STALL / UNKNOWN per item, gates by exit code only, mutating gate flags (and argparse
+      abbreviations of them) refused, `--watch` prints transitions and a heartbeat and
+      exits when an item leaves WAITING. Usage and watch-list errors exit 4, never 2.
+      Ported from a reviewed session prototype; stable per-item keys and a head-commit
+      run query (`gh run list --commit`) were added.
+- [x] Only prints: no alert-delivery primitive is called, so `tools/no_new_wheels_lint.py`
+      needs no signal registration (lint passes).
+- [x] `tools/pr_merge_gate.py`: gh's "no checks reported" is zero checks, so the existing
+      "no checks reported yet" reason is printed; other gh failures still raise. The test
+      fails on the previous code. Exit-code contract unchanged; the split is
+      [infra2#740](https://github.com/wangzitian0/infra2/issues/740).
+- [x] Rule: `harness/workspace/coordination.md` "Orchestrator Liveness", with stall
+      thresholds and the settings snippet.
+- [x] `tools/orchestrator_guard_hook.py` (stdlib only) with tests; not wired. The hook
+      input fields it relies on (`agent_id` for subagents, `scratchpad_dir`,
+      `stop_hook_active`) are present in the Claude Code 2.1.272 hook input schema.
+- [ ] Owner: add the documented hook entries to `.claude/settings.json` if wanted.
+
+Live read-only smoke (2026-09-16, one-shot against real GitHub): an open infra2 PR with
+pending checks reported WAITING, a merged PR DONE, a branch without a PR WAITING, a gate
+argv containing `--mer` UNKNOWN before execution, and the sweep exited 4 accordingly.
+One earlier sweep reported the main-branch head of a path-filtered workflow as having no
+run although one existed; it did not reproduce, and the head-commit query now asks for
+that commit's run directly.
+
+Rollback: revert the PR. Nothing is deployed, applied or wired; no secret is read.

@@ -35,6 +35,7 @@
 | `scheduler_peer_liveness.py` | truealpha#876 peer check: is truealpha's scheduler-liveness workflow still ticking (bound measured from its crons; unreadable = red) | `evaluate()`, `github_getter()`, `largest_gap()`, `parse_bound_cap_hours()` |
 | `watchdog_issue_trail.py` | truealpha#876 W4: one GitHub issue per red ops-checks watchdog check (exact-title dedup, closes on green, drill never closes) | `record_verdicts()`, `load_trail()`, `issue_trail_mode()`, `reconcile()`, `GitHubIssues` |
 | `harness_status.py` | Checkout pin/remote/release observation; verifies repository roots before fetching so empty submodules cannot report their parent | `workspace_status()`, `repository_status()` |
+| `harness_sweep.py` | Read-only orchestrator sweep: one state per watched agent/PR/release log/workflow run/worktree; waits only on allow-listed facts, judges gates by exit code, refuses mutating gate flags | `sweep()`, `sweep_once()`, `watch()`, `classify_pr()`, `load_items()` |
 
 ## Usage Patterns
 
