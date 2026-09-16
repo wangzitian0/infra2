@@ -189,6 +189,7 @@ def test_deployer_base_facet_defaults_are_empty() -> None:
     assert Deployer.signals == ()
     assert Deployer.backups == ()
     assert Deployer.exemptions == ()
+    assert Deployer.restart_after == ()
     assert Deployer.deploy_v2_canary is False
 
 
@@ -325,6 +326,7 @@ def test_facet_attribute_names_never_shadow_deployer_callables() -> None:
         "backups",
         "secrets",
         "exemptions",
+        "restart_after",
     )  # the _meta_from_deploy_file facet attribute surface
     for attr_name in facet_attr_names:
         existing = getattr(Deployer, attr_name, None)

@@ -6,7 +6,13 @@ from libs.common import with_env_suffix
 from libs.env import vault_token
 from libs.console import success, warning, info, error
 from libs.env import get_secrets
-from libs.service_facets import BackupFacet, ProbeFacet, SecretsFacet, SignalFacet
+from libs.service_facets import (
+    BackupFacet,
+    ProbeFacet,
+    RestartAfterFacet,
+    SecretsFacet,
+    SignalFacet,
+)
 
 shared_tasks = sys.modules.get("platform.24.openpanel.shared")
 
@@ -108,6 +114,18 @@ class OpenPanelDeployer(Deployer):
                 "platform-openpanel-worker${ENV_SUFFIX}",
             ),
             auth_method="approle",
+        ),
+    )
+
+    # Redis dependents (#726): the queue client in api and worker only calls EVALSHA
+    # and never reloads a script after NOSCRIPT, so a recreated platform-redis (empty
+    # script cache) failed every /track until both were restarted by hand. The
+    # platform/redis sync restarts them after it redeploys Redis.
+    restart_after = (
+        RestartAfterFacet(
+            dependency="platform/redis",
+            services=("op-api", "op-worker"),
+            reason="EVALSHA-only queue client never recovers from NOSCRIPT (#726)",
         ),
     )
 

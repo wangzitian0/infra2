@@ -10,6 +10,7 @@ from libs.service_facets import (
     PublicRouteFacet,
     BackupFacet,
     ProbeFacet,
+    RestartAfterFacet,
     SecretsFacet,
     SignalFacet,
 )
@@ -84,6 +85,15 @@ class AuthentikDeployer(Deployer):
                 "platform-authentik-worker${ENV_SUFFIX}",
             ),
             auth_method="approle",
+        ),
+    )
+    # Redis dependents (#713, #726): the worker does not recover after platform-redis
+    # is recreated; the platform/redis sync restarts it after it redeploys Redis.
+    restart_after = (
+        RestartAfterFacet(
+            dependency="platform/redis",
+            services=("worker",),
+            reason="the worker does not recover after a Redis recreate (#713)",
         ),
     )
 

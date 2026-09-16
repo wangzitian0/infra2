@@ -33,6 +33,7 @@ from libs.service_facets import (
     Exemption,
     ProbeFacet,
     PublicRouteFacet,
+    RestartAfterFacet,
     SignalFacet,
 )
 
@@ -478,6 +479,9 @@ class Deployer:
     signals: tuple[SignalFacet, ...] = ()
     backups: tuple[BackupFacet, ...] = ()
     exemptions: tuple[Exemption, ...] = ()
+    # Containers of THIS service to restart after another service is redeployed (#726);
+    # the dependency's sync performs the restart (restart_dependents).
+    restart_after: tuple[RestartAfterFacet, ...] = ()
     # True for services whose deploy path is exercised by the deploy_v2
     # acceptance canary (tools/deploy_v2_canary.py iterates the registry for
     # this flag instead of hardcoding a service id).
@@ -1043,17 +1047,31 @@ class Deployer:
             return None
         return cls._verify_containers_in_service(c, stack)
 
+    @staticmethod
+    def _on_host(c: "Context", e: dict) -> Callable[[str], Any] | None:
+        """Run one shell command on VPS_HOST over ssh; None without a host."""
+        host = e.get("VPS_HOST")
+        if not host:
+            return None
+        destination = shlex.quote(f"{e.get('VPS_SSH_USER') or 'root'}@{host}")
+
+        def on_host(command: str) -> Any:
+            return c.run(
+                f"ssh {destination} {shlex.quote(command)}", hide=True, warn=True
+            )
+
+        return on_host
+
     @classmethod
     def _stack_on_host(cls, c: "Context", compose_id: str) -> _HostStack | None:
         """Where the compose's containers run; None (with a warning) without VPS_HOST."""
         from libs.dokploy import get_dokploy
 
         e = cls.env()
-        host = e.get("VPS_HOST")
-        if not host:
+        on_host = cls._on_host(c, e)
+        if on_host is None:
             warning(f"{cls.service}: VPS_HOST unset; skipping the in-service check")
             return None
-        ssh_user = e.get("VPS_SSH_USER") or "root"
         domain = e.get("INTERNAL_DOMAIN")
         record = get_dokploy(host=f"cloud.{domain}" if domain else None).get_compose(
             compose_id
@@ -1063,15 +1081,67 @@ class Deployer:
             raise _StackUnobservable(
                 f"Dokploy compose {compose_id} reports no appName; its containers cannot be found"
             )
+        return _HostStack(host=e["VPS_HOST"], project=project, run=on_host)
 
-        destination = shlex.quote(f"{ssh_user}@{host}")
+    @classmethod
+    def restart_dependents(cls, c: "Context", e: dict) -> list[str]:
+        """Restart the containers that declared `restart_after` this service (#726).
 
-        def on_host(command: str) -> Any:
-            return c.run(
-                f"ssh {destination} {shlex.quote(command)}", hide=True, warn=True
+        Called only after a sync that redeployed this service and proved it in service:
+        a recreated Redis starts with an empty Lua script cache, and OpenPanel's
+        api/worker (EVALSHA only) and the Authentik worker stay broken until restarted.
+        The names come from the registry for this environment (`prod_only` dependents
+        only in production), over the same ssh channel as the in-service check.
+
+        A dependent that is not running has no stale connection to shed and is left
+        alone (a first deploy of a fresh environment has none yet). Returns the
+        containers restarted; raises when the host cannot list or restart them —
+        the caller fails the sync, since a retry skips the now-unchanged stack.
+        """
+        from libs.deploy_dependencies import service_key_from_path
+        from libs.service_registry import restart_after_containers
+
+        env_name = e.get("ENV", "production")
+        declared = restart_after_containers(
+            service_key_from_path(cls.compose_path) or "",
+            env_name,
+            e.get("ENV_SUFFIX") or "",
+        )
+        names = list(dict.fromkeys(n for group in declared.values() for n in group))
+        if not names:
+            return []
+        by_hand = shlex.join(["docker", "restart", *names])
+        on_host = cls._on_host(c, e)
+        if on_host is None:
+            raise RuntimeError(f"VPS_HOST unset; restart by hand: {by_hand}")
+        listing = on_host(shlex.join(["docker", "ps", "--format", "{{.Names}}"]))
+        if not listing.ok:
+            raise RuntimeError(
+                f"could not list running containers "
+                f"({(listing.stderr or '').strip() or 'docker ps failed'}); "
+                f"restart by hand: {by_hand}"
             )
-
-        return _HostStack(host=host, project=project, run=on_host)
+        running = {line.strip() for line in listing.stdout.splitlines()}
+        present = [name for name in names if name in running]
+        idle = [name for name in names if name not in running]
+        if idle:
+            warning(
+                f"{cls.service}: dependent(s) not running, not restarted: {', '.join(idle)}"
+            )
+        if not present:
+            return []
+        restart = on_host(shlex.join(["docker", "restart", *present]))
+        if not restart.ok:
+            raise RuntimeError(
+                f"docker restart failed "
+                f"({(restart.stderr or '').strip() or 'no output'}); "
+                f"restart by hand: {shlex.join(['docker', 'restart', *present])}"
+            )
+        success(
+            f"{cls.service}: restarted dependents after redeploy ({env_name}): "
+            f"{', '.join(present)}"
+        )
+        return present
 
     @classmethod
     def _verify_checkout_identity(cls, stack: _HostStack) -> str | None:
@@ -1911,11 +1981,27 @@ class Deployer:
                 "details": f"Not in service after deploy: {in_service_error}",
             }
 
+        # In service; now the services that do not survive this one being recreated
+        # (#726). Only here, after an applied deploy — a skip recreated nothing.
+        try:
+            restarted = cls.restart_dependents(c, e)
+        except Exception as exc:  # noqa: BLE001 - a failed restart fails the sync, never crashes it.
+            error(
+                f"{cls.service}: deployed, but its dependents were not restarted: {exc}"
+            )
+            return {
+                "action": "failed",
+                "details": f"Deployed, but dependents were not restarted: {exc}",
+            }
+
         success(f"{cls.service}: deployed with hash {local_hash}")
-        return {
+        result = {
             "action": "updated" if remote_hash else "created",
             "details": f"composeId: {compose_id}",
         }
+        if restarted:
+            result["restarted_dependents"] = restarted
+        return result
 
     @classmethod
     def verify_runtime_applied(

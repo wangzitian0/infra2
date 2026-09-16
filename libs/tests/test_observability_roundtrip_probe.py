@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 from tools import observability_roundtrip_probe as probe
@@ -170,3 +171,62 @@ def test_post_json_accepts_successful_non_json_body(monkeypatch) -> None:
     assert result == {"raw": "ok"}
     assert captured["url"] == "http://internal/track"
     assert json.loads(captured["body"]) == {"type": "track"}
+
+
+def _run_main(monkeypatch, tmp_path, backend: str) -> int:
+    monkeypatch.setattr(sys, "argv", ["observability_roundtrip_probe.py", backend])
+    monkeypatch.setenv("OBS_ROUNDTRIP_STATE_FILE", str(tmp_path / "state.json"))
+    monkeypatch.setenv("ALERTING_ENV_FILE", str(tmp_path / "absent.env"))
+    return probe.main()
+
+
+def test_main_exits_ex_config_when_the_openpanel_client_id_is_missing(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    """#726: a probe that cannot run says so with EX_CONFIG, which the probe runner
+    keeps in its misconfigured lane instead of escalating it as an outage."""
+    monkeypatch.setenv("OBS_ROUNDTRIP_ENV", "pr_7")  # no OpenPanel project
+    monkeypatch.delenv("OPENPANEL_CLIENT_ID", raising=False)
+    monkeypatch.setattr(
+        probe,
+        "_post_json",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("must not post")),
+    )
+
+    assert (
+        _run_main(monkeypatch, tmp_path, "openpanel") == probe.MISCONFIGURED_EXIT_CODE
+    )
+    assert probe.MISCONFIGURED_EXIT_CODE == os.EX_CONFIG
+    err = capsys.readouterr().err
+    assert err.startswith("roundtrip-misconfigured backend=openpanel")
+    assert "no OpenPanel client id for environment 'pr_7'" in err
+    assert not (tmp_path / "state.json").exists()
+
+
+def test_main_exits_ex_config_on_an_invalid_backend_url(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    monkeypatch.setenv("SIGNOZ_OTLP_LOGS_URL", "platform-signoz-otel-collector/v1/logs")
+
+    assert _run_main(monkeypatch, tmp_path, "signoz") == os.EX_CONFIG
+    assert "invalid URL" in capsys.readouterr().err
+
+
+def test_main_reports_a_backend_failure_as_an_ordinary_failure(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    """The NOSCRIPT outage: configuration fine, /track answers 500. Exit 1 — a
+    statement about OpenPanel, which the runner escalates."""
+    import urllib.error
+
+    monkeypatch.setenv("OBS_ROUNDTRIP_ENV", "production")
+
+    def track_500(url, *_a, **_k):
+        raise urllib.error.HTTPError(url, 500, "Internal Server Error", {}, None)
+
+    monkeypatch.setattr(probe, "_post_json", track_500)
+
+    assert _run_main(monkeypatch, tmp_path, "openpanel") == 1
+    err = capsys.readouterr().err
+    assert err.startswith("roundtrip-failed backend=openpanel")
+    assert "HTTP Error 500" in err

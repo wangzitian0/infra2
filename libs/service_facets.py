@@ -21,6 +21,9 @@ These dataclasses are the typed vocabulary those declarations use:
                             audit inventory is DERIVED from these (#542), so the
                             audit's expectations and the deployed vault-agent
                             wiring come from the same declaration.
+- :class:`RestartAfterFacet` — containers of the service that must be restarted
+                            after a dependency is redeployed (#726); the
+                            dependency's Deployer derives what to restart.
 - :class:`Exemption`      — an explicit, justified "this facet does not apply"
                             declaration, so a completeness matrix cell can be
                             *exempt* instead of silently MISSING.
@@ -233,6 +236,34 @@ class SecretsFacet:
 
 
 @dataclass(frozen=True)
+class RestartAfterFacet:
+    """Compose services of the owning Deployer to restart after ``dependency`` is
+    redeployed (#726).
+
+    Some clients do not survive their dependency being recreated. OpenPanel's queue
+    client only calls ``EVALSHA`` and never reloads a script after ``NOSCRIPT``, so the
+    2026-09-15 ``platform-redis`` recreate (empty Lua script cache) left every ``/track``
+    failing for ~17 h until api and worker were restarted by hand; the Authentik worker
+    has the same failure mode (#713). The dependent declares it here, next to its own
+    compose; the DEPENDENCY's Deployer reads the registry after a sync that actually
+    redeployed it (never after a skip) and restarts these containers in the same
+    environment (``libs.service_registry.restart_after_containers``).
+
+    ``services`` are compose service keys of the owning Deployer's ``compose_path``.
+    Container names are not repeated here: they derive from that compose's
+    ``container_name`` with ``${ENV_SUFFIX}`` resolved for the environment, so no
+    per-environment literal exists. The registry fails closed at load on an unknown
+    ``dependency`` or a service key the compose does not declare with a
+    ``container_name``. A ``prod_only`` dependent is restarted only after the
+    production dependency — it has no instance anywhere else.
+    """
+
+    dependency: str  # registry service_id, e.g. "platform/redis"
+    services: tuple[str, ...]  # compose service keys in the owning compose file
+    reason: str = ""
+
+
+@dataclass(frozen=True)
 class Exemption:
     """An explicit, justified opt-out from one facet completeness check.
 
@@ -256,5 +287,6 @@ FACET_CLASSES: dict[str, type] = {
     "SignalFacet": SignalFacet,
     "BackupFacet": BackupFacet,
     "SecretsFacet": SecretsFacet,
+    "RestartAfterFacet": RestartAfterFacet,
     "Exemption": Exemption,
 }

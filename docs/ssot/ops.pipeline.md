@@ -299,6 +299,16 @@ identity。
 (fingerprint 已覆盖 compose、build context 与声明依赖),拿本次 release 的 ref 去比会让每个 release
 重启所有未变服务(redis 重启即让 OpenPanel / Authentik worker 报 NOSCRIPT,#726)。Dokploy 查不到或宿主机
 列不出容器视为"无证据":按上文 remote hash 不可读的 fail-closed 立场告警并跳过,不用重部署放大负载。
+**重建依赖 ⇒ 重启依赖方**(#726 / #713):有些客户端扛不住依赖被重建——redis 重建后 Lua 脚本缓存清空,OpenPanel
+api/worker 只发 `EVALSHA`、从不在 `NOSCRIPT` 后重载脚本,Authentik worker 也不自愈。依赖方在自己的 `deploy.py`
+上声明 `restart_after = (RestartAfterFacet(dependency="platform/redis", services=(<compose service>, ...)),)`;
+依赖方的 sync **真正部署并通过上面的在线证明之后**(跳过时绝不),Deployer(`restart_dependents`)从 registry
+(`restart_after_containers`)取同一环境的容器名——由依赖方 compose 的 `container_name` 解析 `${ENV_SUFFIX}` 得出,
+`prod_only` 依赖方只在 production 出现——经同一 ssh 通道 `docker restart`,只重启正在运行的容器(没在跑的没有陈旧连接,
+首次部署新环境时也不存在),并打印 `✅ <service>: restarted dependents after redeploy (<env>): ...`(runner 的 verdict 行),
+sync 结果带 `restarted_dependents`。列不出或重启失败则 sync 失败并给出手工 `docker restart` 命令——重试会因 hash
+未变而跳过,不会再重启。registry 加载时 fail-closed:未注册的 `dependency`、自依赖、compose 里没有
+`container_name` 的服务名都直接报错。现有声明:`platform/openpanel`(`op-api`、`op-worker`)、`platform/authentik`(`worker`)。
 promote tier(`libs.deploy.promote.deploy`,app + staging|prod,跑在 GitHub Actions、无 ssh)用 Dokploy 的
 `docker.getContainers` 做同一个证明(按 `container_name` 匹配;Dokploy 只列运行中的容器,`Created`/exited
 即为缺失);`wait=True` 时默认开启,失败走同一条 failure snapshot 路径。

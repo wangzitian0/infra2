@@ -138,7 +138,14 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 - **synthetic round-trip**(`infra-probe-runner`,写读探针节流):
   - `signoz-roundtrip`:每 5min 写一条 OTLP log,再从 `signoz_logs.distributed_logs_v2` 按 nonce 查回 → 证 collector→ClickHouse ingest/storage 可用。
   - `openpanel-roundtrip`:每 5min 向 OpenPanel `/track` 写,再从 `openpanel.events` 查回 → 证 API→worker/storage 可用。
-  - 窗口由 `OBS_ROUNDTRIP_INTERVAL_SECONDS` / `OBS_ROUNDTRIP_QUERY_WAIT_SECONDS` 控制;失败作 `InfraServiceProbeFailed` 进 bridge。
+  - 窗口由 `OBS_ROUNDTRIP_INTERVAL_SECONDS` / `OBS_ROUNDTRIP_QUERY_WAIT_SECONDS` 控制;成功后节流 5min,失败的 round-trip 在 runner 的每一轮(60s)重跑。
+- **失败分道(#726)**:round-trip 失败有两条出口,措辞不同:
+  - `InfraServiceProbeFailed`(该组正常流,按 ProbeFacet **声明的** severity):曾经成功过的探针一失败就走这里(照常 3 轮去抖);
+    **从 runner 启动起从未成功过**的探针,在连续失败 ≥3 次且跨度 ≥15min(`INFRA_PROBE_NEVER_GREEN_ESCALATION_{FAILURES,SECONDS}`,
+    默认 3 / 900)后也升级到这里——`/healthcheck` 为绿不代表能写入(OpenPanel 在 NOSCRIPT 期间 `/healthcheck` 一直 200,事件丢了 17h)。
+  - `InfraProbeMisconfigured`(`<group>:misconfigured`,固定 warning):探针自报配置缺失(退出码 `EX_CONFIG`=78,如 OpenPanel client id
+    缺失、URL 非法)**永远**留在这里,不论历史——它没测到目标;从未成功过、仍在 15min 宽限期内的失败也暂留这里,描述写明
+    "has not passed since the probe runner started … becomes InfraServiceProbeFailed after …",而不是"探针坏了"。
 
 ### 4.6 finance_report 告警/仪表盘 config-as-code(#373)
 
@@ -280,14 +287,14 @@ Feishu page，且告警携带同一结构化记录。不得通过破坏 producti
 | Feishu payload + 日志错误规则 payload | `libs/tests/test_alerting.py` | ✅ |
 | finance_report 告警/看板 config-as-code(#373) | `libs/tests/test_observability_dashboards.py` | ✅ |
 | Cloudflare / out-of-band / GitHub 兜底 watchdog 契约 | `test_cloudflare_watchdog.py`, `test_out_of_band_watchdog.py` | ✅ |
-| In-band 服务探针 + 级联抑制 | `libs/tests/test_infra_probes.py` | ✅ |
+| In-band 服务探针 + 级联抑制 + round-trip 失败分道/升级(#726) | `libs/tests/test_infra_probes.py` | ✅ |
 | Deploy-queue guard(卡死检测纯逻辑 + sidecar 编排:env 加载、扫描失败隔离、renotify 抑制、remediate/升级序列) | `libs/tests/test_deploy_queue.py`, `libs/tests/test_deploy_queue_guard.py` | ✅ |
 | 备份新鲜度告警 payload | `libs/tests/test_backup_verification.py` | ✅ |
 | 账本聚合(正例+反例:降级绝不报 100%/perfect、畸形输入不抬高、0 检查不除零) | `libs/tests/test_availability_ledger.py` | ✅ |
 | Worker 账本 + `/ledger` + R2 归档 | `libs/tests/test_cloudflare_watchdog.py` | ✅ |
 | 周 watchdog recall digest / 周正向稳定性报告 | `test_watchdog_weekly_digest.py`, `test_stability_report.py` | ✅ |
 | Env×Stage failure-domain / disagreement 契约 | `libs/tests/test_pipeline_stage_contract.py` | ✅ |
-| synthetic round-trip | `test_observability_roundtrip_probe.py` | ✅ |
+| synthetic round-trip(配置缺失 → `EX_CONFIG`,后端失败 → 1) | `test_observability_roundtrip_probe.py` | ✅ |
 | IaC/runtime/telemetry/alert 身份契约 | `tools/service_identity_audit.py`, `libs/tests/test_service_identity*.py` | ✅ |
 | 告警通道手动连通 | `uv run invoke alerting.test-feishu` | Manual gate |
 

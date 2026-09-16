@@ -25,7 +25,7 @@
 | `secrets_supply.py` | Deploy-time secret supply through the SDK resolver | `apply()`, `resolver_for()`, `vault_backend()` |
 | `common.py` | Shared environment helpers | `get_env()`, `validate_env()`, `check_service()` |
 | `console.py` | Rich CLI output | `header()`, `success()`, `error()`, `prompt_action()` |
-| `deploy/deployer.py` | Deployment base class + task helpers (`apply_secret_supply` runs on every sync; a skipped sync still proves the containers are in service, a deploy also proves the checkout) | `Deployer`, `make_tasks()` |
+| `deploy/deployer.py` | Deployment base class + task helpers (`apply_secret_supply` runs on every sync; a skipped sync still proves the containers are in service, a deploy also proves the checkout and then restarts the services that declared `restart_after` it, #726) | `Deployer`, `make_tasks()`, `Deployer.restart_dependents()` |
 | `iac_runner_client.py` | Signed IaC Runner operation client | `trigger_platform_deploy()`, `poll_platform_deploy_status()`, `status_poll_delays()`, `status_poll_attempts()` |
 | `dokploy.py` | Dokploy API client | `DokployClient`, `get_dokploy()` |
 | `deploy/preview.py` | Dynamic preview lifecycle with trigger-bound terminal rollout and per-surface exact-version readiness | `up()`, `down()` |

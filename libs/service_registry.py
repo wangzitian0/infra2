@@ -27,6 +27,7 @@ from libs.service_facets import (
     Exemption,
     ProbeFacet,
     PublicRouteFacet,
+    RestartAfterFacet,
     SecretsFacet,
     SignalFacet,
 )
@@ -113,6 +114,10 @@ class ServiceMeta:
     # existing ServiceMeta(**kwargs) call sites that predate this field
     # (tests, fixtures) keep constructing without knowing about it.
     domain: str | None = None
+    # Dependency restarts (#726): the containers this service needs restarted after
+    # another registered service is redeployed. Validated at load
+    # (_validate_restart_after); consumed by restart_after_containers.
+    restart_after: tuple[RestartAfterFacet, ...] = ()
 
     def exempted(self, check_id: str) -> bool:
         """True if this service explicitly opted out of facet ``check_id``."""
@@ -138,6 +143,7 @@ def service_attrs() -> dict[str, ServiceMeta]:
             result[f"{layer}/{service_name_dir}"] = _meta_from_deploy_file(
                 deploy_file, service_id=f"{layer}/{service_name_dir}", layer=layer
             )
+    _validate_restart_after(result)
     return result
 
 
@@ -170,7 +176,84 @@ def _meta_from_deploy_file(
         secrets=_facet_seq(tree, "secrets", SecretsFacet, where),
         exemptions=_facet_seq(tree, "exemptions", Exemption, where),
         deploy_v2_canary=bool(_class_attr(tree, "deploy_v2_canary") or False),
+        restart_after=_facet_seq(tree, "restart_after", RestartAfterFacet, where),
     )
+
+
+def _compose_container_names(meta: ServiceMeta, env_suffix: str) -> dict[str, str]:
+    """compose service -> container name for ``meta``'s own compose file, resolved for
+    ``env_suffix`` (``libs.deploy.in_service.container_names``)."""
+    from libs.deploy.in_service import container_names
+
+    if not meta.compose_path:
+        raise ValueError(
+            f"{meta.service_id}: declares restart_after but no literal compose_path, "
+            "so its container names cannot be derived"
+        )
+    compose_file = REPO_ROOT / meta.compose_path
+    try:
+        compose_text = compose_file.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(
+            f"{meta.service_id}: restart_after needs {meta.compose_path}: {exc}"
+        ) from exc
+    return container_names(compose_text, env_suffix)
+
+
+def _validate_restart_after(metas: dict[str, ServiceMeta]) -> None:
+    """Fail closed at load (#726): a restart_after facet names a registered dependency
+    other than the declaring service, and compose services that the declaring
+    service's compose file declares with a ``container_name``. A typo here would
+    otherwise surface only as a dependent silently left running on a dead connection.
+    """
+    for service_id in sorted(metas):
+        meta = metas[service_id]
+        for facet in meta.restart_after:
+            label = f"{service_id} restart_after={facet.dependency!r}"
+            if facet.dependency == service_id:
+                raise ValueError(f"{label}: a service cannot restart after itself")
+            if facet.dependency not in metas:
+                raise ValueError(
+                    f"{label}: unknown dependency — not a registered service_id"
+                )
+            if isinstance(facet.services, str) or not facet.services:
+                raise ValueError(
+                    f"{label}: `services` must be a non-empty tuple of compose service keys"
+                )
+            declared = _compose_container_names(meta, "")
+            unknown = [name for name in facet.services if name not in declared]
+            if unknown:
+                raise ValueError(
+                    f"{label}: unknown dependent(s) {', '.join(unknown)} — "
+                    f"{meta.compose_path} declares a container_name only for "
+                    f"{', '.join(sorted(declared)) or 'nothing'}"
+                )
+
+
+def restart_after_containers(
+    dependency: str, env: str, env_suffix: str
+) -> dict[str, tuple[str, ...]]:
+    """service_id -> container names to restart after ``dependency`` was redeployed in
+    ``env`` (#726), resolved from each dependent's own compose for ``env_suffix``.
+
+    Only dependents that deploy to ``env`` are listed: a ``prod_only`` dependent has
+    no instance off production (OpenPanel runs once, against the production Redis).
+    """
+    attrs = service_attrs()
+    is_prod = env == PRODUCTION
+    result: dict[str, tuple[str, ...]] = {}
+    for service_id in sorted(attrs):
+        meta = attrs[service_id]
+        if meta.prod_only and not is_prod:
+            continue
+        facets = [f for f in meta.restart_after if f.dependency == dependency]
+        if not facets:
+            continue
+        names = _compose_container_names(meta, env_suffix)
+        result[service_id] = tuple(
+            dict.fromkeys(names[svc] for facet in facets for svc in facet.services)
+        )
+    return result
 
 
 # Facet-only bootstrap-plane deploy.py files (#542). The bootstrap plane is

@@ -111,6 +111,26 @@ def in_service_verdict(
     return InServiceVerdict(False, not missing and not down, "; ".join(parts))
 
 
+_ENV_SUFFIX_REF = re.compile(r"\$\{ENV_SUFFIX(?::-[^}]*)?\}")
+
+
+def container_names(compose_content: str, env_suffix: str) -> dict[str, str]:
+    """service -> container name for every compose service that declares a
+    ``container_name``, with ``${ENV_SUFFIX}`` resolved for this environment.
+
+    Every service in this repo declares a fixed ``container_name``, so this is how a
+    compose service key becomes the name ``docker`` knows it by in a given environment.
+    """
+    doc = yaml.safe_load(compose_content) or {}
+    services = doc.get("services") or {}
+    names: dict[str, str] = {}
+    for service, spec in services.items():
+        raw = str(spec.get("container_name") or "") if isinstance(spec, dict) else ""
+        if raw:
+            names[service] = _ENV_SUFFIX_REF.sub(lambda _ref: env_suffix, raw)
+    return names
+
+
 def expected_running_containers(
     compose_content: str, env_suffix: str
 ) -> dict[str, str]:
@@ -118,18 +138,14 @@ def expected_running_containers(
     ``${ENV_SUFFIX}`` resolved for this environment.
 
     The promote tier watches the stack through Dokploy's ``docker.getContainers``, which
-    reports container names rather than compose labels; every service in this repo
-    declares a fixed ``container_name``.
+    reports container names rather than compose labels.
     """
-    doc = yaml.safe_load(compose_content) or {}
-    services = doc.get("services") or {}
-    names: dict[str, str] = {}
-    for service in expected_running_services(compose_content):
-        raw = str(services[service].get("container_name") or "")
-        if not raw:
-            continue
-        names[service] = re.sub(r"\$\{ENV_SUFFIX(?::-[^}]*)?\}", env_suffix, raw)
-    return names
+    names = container_names(compose_content, env_suffix)
+    return {
+        service: names[service]
+        for service in expected_running_services(compose_content)
+        if service in names
+    }
 
 
 def observe_containers(

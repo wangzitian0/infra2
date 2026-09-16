@@ -27,6 +27,17 @@ SIGNOZ_LOG_MESSAGE = "infra-signoz-roundtrip-canary"
 OPENPANEL_EVENT_NAME = "infra_observability_roundtrip_canary"
 
 
+# Exit status of a round-trip that could not run because its OWN configuration is
+# missing or invalid (sysexits EX_CONFIG). The probe runner keeps such a failure in its
+# `<group>:misconfigured` lane for good: nothing about the backend was tested. Any
+# other failure is a statement about the backend and escalates (#726).
+MISCONFIGURED_EXIT_CODE = os.EX_CONFIG
+
+
+class ProbeConfigError(RuntimeError):
+    """The round-trip cannot run: its own configuration is missing or invalid."""
+
+
 @dataclass(frozen=True)
 class ProbeResult:
     backend: str
@@ -69,6 +80,12 @@ def main() -> int:
             if args.backend == "signoz"
             else run_openpanel_roundtrip(nonce)
         )
+    except ProbeConfigError as exc:
+        print(
+            f"roundtrip-misconfigured backend={args.backend} error={exc}",
+            file=sys.stderr,
+        )
+        return MISCONFIGURED_EXIT_CODE
     except Exception as exc:  # noqa: BLE001 - command probe should emit one clear error.
         print(f"roundtrip-failed backend={args.backend} error={exc}", file=sys.stderr)
         return 1
@@ -200,7 +217,7 @@ def _openpanel_client_id(deploy_env: str) -> str:
         return configured
     client_id = openpanel_env(deploy_env).get("OPENPANEL_CLIENT_ID", "")
     if not client_id:
-        raise RuntimeError(f"no OpenPanel client id for environment {deploy_env!r}")
+        raise ProbeConfigError(f"no OpenPanel client id for environment {deploy_env!r}")
     return client_id
 
 
@@ -255,7 +272,7 @@ def _post_json(
     body = json.dumps(payload).encode("utf-8")
     request_headers = {"Content-Type": "application/json", **(headers or {})}
     request = urllib.request.Request(
-        url,
+        _normalize_url(url),
         data=body,
         headers=request_headers,
         method="POST",
@@ -276,7 +293,7 @@ def _post_json(
 def _normalize_url(base_url: str) -> str:
     parsed = urllib.parse.urlparse(base_url)
     if not parsed.scheme or not parsed.netloc:
-        raise RuntimeError(f"invalid URL: {base_url!r}")
+        raise ProbeConfigError(f"invalid URL: {base_url!r}")
     return base_url
 
 

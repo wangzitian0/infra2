@@ -34,6 +34,15 @@
 python -m tools.deploy_v2 --service platform/redis --type staging --iac-ref vX.Y.Z --domain zitian.party
 ```
 
+重建 redis 后,依赖方(声明了 `restart_after` 的 OpenPanel api/worker、Authentik worker)由 redis 的 sync 自动重启
+(#726,见 [ops.pipeline.md](./ops.pipeline.md) "重建依赖 ⇒ 重启依赖方")。**手工**重建/重启 redis(`docker restart`、
+Dokploy UI)不经过该路径,须同时重启它们:
+
+```bash
+docker restart platform-authentik-worker platform-openpanel-api platform-openpanel-worker   # production
+docker restart platform-authentik-worker-staging                                            # staging
+```
+
 ### SOP-002: 查看状态
 
 ```bash
@@ -47,6 +56,7 @@ invoke redis.shared.status
 | 行为描述 | 验证方式 | 状态 |
 |----------|----------|------|
 | **服务可达** | `invoke redis.shared.status` | ✅ Manual |
+| **重建后重启依赖方,跳过时不重启**(#726) | `libs/tests/test_deploy_in_service.py`, `libs/tests/test_service_registry.py` | ✅ |
 
 ---
 
