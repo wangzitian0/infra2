@@ -335,6 +335,17 @@ def test_an_open_pr_runs_the_gate_in_its_cwd_and_uses_only_the_exit_code():
         # argparse expands unambiguous prefixes: `--mer` would merge.
         ["pr_merge_gate", "{number}", "--mer"],
         ["pr_merge_gate", "{number}", "--request=1"],
+        # `--` ends the wrapper's options; the gate still receives --merge.
+        [
+            "uv",
+            "run",
+            "--",
+            "python",
+            "-m",
+            "tools.pr_merge_gate",
+            "{number}",
+            "--merge",
+        ],
     ],
 )
 def test_gate_commands_carrying_a_mutating_flag_are_refused(argv):

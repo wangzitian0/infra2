@@ -456,12 +456,18 @@ def _waiting_reason(
 
 
 def mutating_flags(argv: Sequence[str]) -> list[str]:
-    """Flags in argv that are, or that argparse would expand to, a mutating flag."""
+    """Flags in argv that are, or that argparse would expand to, a mutating flag.
+
+    Every token is scanned, including those after a ``--``: a gate argv is often a
+    wrapper chain (``uv run -- python -m tools.pr_merge_gate N --merge``) where ``--``
+    ends the wrapper's options and the rest reaches the gate as options. A literal
+    positional ``--merge`` is refused too; a refusal is a visible UNKNOWN, never a merge.
+    """
     found = []
     for token in argv:
         name = str(token).split("=", 1)[0]
         if len(name) <= 2 or not name.startswith("--"):
-            continue  # "--" ends options; short flags are not expanded to these
+            continue  # "--" itself and short flags never expand to these
         found.extend(flag for flag in MUTATING_GATE_FLAGS if flag.startswith(name))
     return sorted(set(found))
 
