@@ -1,7 +1,13 @@
-# 六环境架构 SSOT
+# 环境模型与交付阶段 SSOT (Environment & Delivery Architecture)
 
 > **SSOT Key**: `core.environments`  
-> **核心定义**: 定义从本地开发到生产的六环境架构、各环境的用途、隔离策略、测试点和迭代速度。
+> **核心定义**: 基础设施生命周期遵循**从左到右推进的严格阶段链条**。系统架构严格区分**无状态执行器 (Stateless Runners)**与**有状态部署环境 (Deployment Environments)**：
+> 
+> - **部署只认三环境**：`preview`（PR 临时动态）、`staging`（单例预发）、`production`（单例生产），加目标态 `DR`（异地灾备）。
+> - **无状态执行器**：本地开发工作站、GitHub PR CI 虚拟机、宿主机 IaC Runner 仅负责代码测试与编排触发，不持有应用持久化状态。
+> - **两大致命七寸 (The Two Critical Choke Points)**：
+>   1. **【七寸 1】GitHub PR CI (`github_ci.merge_authority`)**：静态检查、单元测试、配置校验与 Schema 双向比对全绿，**阻断劣质代码合入主干**。
+>   2. **【七寸 2】Staging 预发环境 (`staging.release_validation`)**：不可变版本 Tag 驱动部署、真实探针冒烟与浸泡观察，**阻断破坏性变更晋升生产**。
 
 ---
 
@@ -9,41 +15,49 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **环境配置** | Dokploy Project/Environment | 远端环境变量和部署配置 |
-| **环境选择** | `DEPLOY_ENV` 环境变量 | 部署时目标环境选择 |
-| **数据隔离** | `DATA_PATH` / `ENV_SUFFIX` | 数据和容器名隔离 |
-| **域名隔离** | `ENV_DOMAIN_SUFFIX` | 公网域名隔离 |
+| **阶段定义与词汇** | [`docs/ssot/delivery-stages.yaml`](./delivery-stages.yaml) | 从左到右的统一交付阶段语义 |
+| **门禁清单** | [`docs/ssot/ci-gate-inventory.yaml`](./ci-gate-inventory.yaml) | 七寸 1 (Merge Authority) 的所有阻断门禁 |
+| **环境配置与部署** | Dokploy Project/Environment + `deploy_v2` | 远端环境变量和发布前门 |
+| **数据与域名隔离** | `DATA_PATH` / `ENV_SUFFIX` / `ENV_DOMAIN_SUFFIX` | 有状态部署环境间的数据与网络隔离 |
 
 ---
 
-## 2. 架构模型 - 六环境设计
+## 2. 架构模型 - 从左到右生命周期与两大七寸
 
 ```mermaid
 flowchart LR
-    L1["Local Dev<br/>(开发机)"]
-    L2["Local Docker<br/>(本地容器)"]
-    T["Test<br/>(临时环境)"]
-    S["Staging<br/>(集成测试)"]
-    P["Production<br/>(生产环境)"]
-    DR["DR<br/>(灾备)"]
-    
-    L1 -->|代码推送| L2
-    L2 -->|PR提交| T
-    T -->|测试通过| S
-    S -->|验证通过| P
-    P -.->|备份同步| DR
-    
-    style L1 fill:#e1f5fe
-    style L2 fill:#e1f5fe
-    style T fill:#fff9c4
-    style S fill:#fff3e0
-    style P fill:#c8e6c9
-    style DR fill:#f3e5f5
+    subgraph L2R["从左到右推进链路 (Left-to-Right Pipeline)"]
+        subgraph Runners["无状态执行器 (Stateless Runners)"]
+            DevStation["本地开发工作站<br/>(Local Dev / pre-commit)"]
+            GHARunner["GitHub PR CI Runner<br/>(无状态临时虚拟机)"]
+            IaCRunner["IaC Runner / deploy_v2<br/>(宿主机无状态任务触发器)"]
+        end
+
+        subgraph ChokePoints["🎯 两大致命七寸 (The Two Critical Gates)"]
+            Gate1["【七寸 1】GitHub PR CI<br/>Merge Authority 全绿<br/>(阻断坏代码合入主干)"]
+            Gate2["【七寸 2】Staging 预发环境<br/>不可变 Tag 浸泡验证<br/>(阻断坏发布进生产)"]
+        end
+
+        subgraph DeployEnvs["有状态部署环境 (3 Stateful Envs + DR)"]
+            Preview["1. Preview 临时隔离环境<br/>(按 PR 动态拉起/销毁)"]
+            Staging["2. Staging 集成预发环境<br/>(生产同构真实运行时)"]
+            Production["3. Production 生产环境<br/>(最高稳定 SLA)"]
+            DR["[目标态] DR 异地灾备<br/>(冷备/定期演练)"]
+        end
+    end
+
+    DevStation -->|提交 PR| GHARunner
+    GHARunner --> Gate1
+    Gate1 -->|合流 main| Preview
+    Gate1 -->|生成不可变 Tag| Staging
+    Staging --> Gate2
+    Gate2 -->|显式 Promote| Production
+    Production -.->|R2 备份流| DR
 ```
 
 ---
 
-## 3. 环境定义与特性
+## 3. 执行器与环境定义
 
 ### 3.1 Local Development (本地开发)
 
@@ -98,10 +112,10 @@ docker compose up  # 包括 backend + frontend
 
 ---
 
-### 3.3 Test (临时测试环境)
+### 3.3 Preview (PR 预览与临时部署环境)
 
-**位置**: VPS (Dokploy)  
-**用途**: PR 预览、功能验证、临时测试、0-downtime bootstrap 验证  
+**位置**: VPS (Dokploy 临时隔离项目)  
+**用途**: PR 预览、功能验证、临时冒烟测试、0-downtime 验证  
 **特点**:
 - ✅ **临时部署** - PR 创建时自动部署，PR 合并后自动销毁
 - ✅ **独立域名** - `report-pr-123.zitian.party`

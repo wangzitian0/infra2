@@ -29,6 +29,9 @@
 In-band 告警路径恒为:`component/app → OTLP Collector → SigNoz → platform/12.alerting → Feishu/Lark`。
 带外检测**独立于 VPS**(SigNoz 与 bridge 都在单台机器上,会和宿主一起挂),故走 Cloudflare 边缘 cron 直发 Feishu。
 
+> [!WARNING]
+> **单机共因失效与带外最高仲裁原则**：由于 SigNoz、ClickHouse、OTel Collector 与业务组件均单机共存，当宿主机遭遇物理死锁、网卡断联、磁盘打满时，带内监控将整体静默，监控大屏会虚假呈现“0 告警发生”。系统健康最高仲裁权由独立于 VPS 的带外通道持有（Cloudflare Worker 边缘 watchdog + 外部死人开关心跳），带外失联即刻升级为 P0 级整机灾难告警。
+
 ---
 
 ## 2. 信号模型与时间尺度分层 (Signal model & cadence tiers)

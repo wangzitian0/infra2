@@ -1,0 +1,59 @@
+name: Deploy Cloudflare Watchdog
+
+# Automatically deploy the Cloudflare Worker watchdog on pushes to main that
+# touch cloudflare/infra-watchdog/**, eliminating code-vs-live drift.
+# Also manually dispatchable.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "cloudflare/infra-watchdog/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-cloudflare-watchdog
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy Cloudflare Watchdog
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Deploy to Cloudflare Workers
+        working-directory: cloudflare/infra-watchdog
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+            echo "::error::CLOUDFLARE_API_TOKEN is not set; ensure repository secret CF_API_TOKEN is configured."
+            exit 1
+          fi
+          npx wrangler deploy
+
+      - name: Verify Watchdog Status
+        env:
+          WATCHDOG_STATUS_TOKEN: ${{ secrets.INFRA2_WATCHDOG_WORKER_STATUS_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "Waiting 5s for worker route propagation..."
+          sleep 5
+          STATUS_URL="https://infra2-cloudflare-watchdog.wangzitian-ai.workers.dev/status"
+          HEALTH_URL="https://infra2-cloudflare-watchdog.wangzitian-ai.workers.dev/health"
+          echo "Checking $HEALTH_URL..."
+          curl -sSf "$HEALTH_URL" | grep -q '"ok":true'
+          echo "Health check passed."
+          if [[ -n "${WATCHDOG_STATUS_TOKEN:-}" ]]; then
+            echo "Checking $STATUS_URL..."
+            STATUS_JSON="$(curl -sSf -H "Authorization: Bearer $WATCHDOG_STATUS_TOKEN" "$STATUS_URL")"
+            echo "Status: $STATUS_JSON"
+          fi

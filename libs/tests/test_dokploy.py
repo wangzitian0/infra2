@@ -140,8 +140,20 @@ class TestDokployClient:
         assert client.api_key == "op-key"
 
     def test_missing_api_key_raises(self, monkeypatch):
+        class FakeEmptyOpSecrets:
+            def __init__(self, item):
+                pass
+
+            def get(self, key):
+                raise KeyError(key)
+
         monkeypatch.delenv("DOKPLOY_API_KEY", raising=False)
         monkeypatch.delenv("DOKPLOY_URL", raising=False)
+        monkeypatch.setitem(
+            __import__("sys").modules,
+            "libs.env",
+            type("FakeEnvModule", (), {"OpSecrets": FakeEmptyOpSecrets}),
+        )
 
         with pytest.raises(ValueError, match="DOKPLOY_API_KEY not set"):
             DokployClient(base_url="https://cloud.example.test/api")

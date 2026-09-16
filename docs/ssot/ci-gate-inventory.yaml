@@ -24,7 +24,7 @@ gates:
     workflow: .github/workflows/infra-ci.yml
     job: test-deployer-logic
     blocks_merge: true
-    failure_semantics: Deployer config-hash idempotency, service discovery, or unit tests fail.
+    failure_semantics: Deployer config-hash idempotency, container healthcheck verification, pre-deploy schema gate, service discovery, or unit tests fail.
   - id: infra_ci.op_healthcheck
     stage: github_ci.merge_authority
     task_category: secret_preflight
