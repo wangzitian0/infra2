@@ -177,9 +177,9 @@ every later heartbeat `put()` throws `KV put() limit exceeded for the day.` unti
 `heartbeatWrite()` says so:
 
 - a **verdict** post (the runner's post-probe heartbeat) refreshes the record once
-  per `WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS` (`900`; the worker falls back
-  to `600` if it is unset, empty, non-numeric or below 1 — a NaN or zero interval
-  would write every post);
+  per `WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS` (`900`; the worker uses `600`
+  if it is unset, empty or non-numeric, and never less than `600` whatever it says —
+  a NaN, zero or tiny interval would write every post);
 - a **changed** verdict is written at once, up to
   `WATCHDOG_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY` (`24`) times per key per UTC
   day; past that budget a flapping verdict waits for the next refresh;
@@ -197,7 +197,9 @@ heartbeat keys * (ceil(86400 / interval) + status-change budget)   2 * (96 + 24)
                                                                                   = 384 (38%)
 ```
 
-A healthy day costs about `2 * 96 + 48 * 2 = 288`. Before this rule
+Whatever the Worker env says, the runtime clamps (interval ≥ 600 s, budget ≤ 24)
+cap it at `2 * (144 + 24) + 144 = 480` (48%). A healthy day costs about
+`2 * 96 + 48 * 2 = 288`. Before this rule
 (2026-09-15/16) the liveness ping's `ok=true` and a failing verdict alternated on
 every ~70 s probe loop and each alternation was written: 1198 and 1157 puts/day.
 `libs/tests/test_cloudflare_watchdog_kv_budget.py` replays a whole day of runner
@@ -231,8 +233,8 @@ Then redeploy platform alerting for each environment.
 - `WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS`: heartbeat refresh interval,
   defaults to `600` (`900` in `wrangler.toml`).
 - `WATCHDOG_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY`: early writes of a changed
-  verdict per heartbeat key per UTC day, defaults to `24` (also when empty,
-  non-numeric or negative).
+  verdict per heartbeat key per UTC day, defaults to `24` (also when empty or
+  non-numeric) and is clamped to `0..24`.
 - `WATCHDOG_TARGETS_JSON`: JSON array overriding public route targets.
 - `WATCHDOG_HEARTBEATS_JSON`: JSON array overriding heartbeat checks.
 - `ALERT_DELIVERY_MODE`: `feishu_webhook` or `feishu_app`.

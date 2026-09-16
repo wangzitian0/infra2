@@ -369,6 +369,11 @@ async function checkHeartbeats(env, heartbeats, nowMs) {
 // per UTC day, however often the runner posts and however its verdict flaps.
 const DEFAULT_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS = 600;
 const DEFAULT_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY = 24;
+// Hard runtime limits, whatever the Worker env says: with 2 heartbeat keys and 48
+// cron runs, the worst case is 2 * (ceil(86400 / 600) + 24) + 48 * 3 = 480 puts/day,
+// under half the free tier.
+const MIN_HEARTBEAT_WRITE_INTERVAL_SECONDS = 600;
+const MAX_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY = 24;
 // A liveness ping may refresh the record only once verdict posts have left it
 // alone this long (in units of minWriteInterval), so a verdict always gets the
 // write window first and a ping can never hide it.
@@ -381,21 +386,25 @@ function isLivenessPing(payload) {
   return payload.liveness === true || String(payload.detail || "") === LEGACY_LIVENESS_DETAIL;
 }
 
-// A budget variable that is unset, empty, non-numeric or out of range falls back to
-// its default: NaN makes every `age < interval` comparison false, and 0 would write
-// every post — either silently reopens the unbounded-write path.
-function budgetVar(raw, fallback, { min }) {
+// A budget variable that is unset, empty or non-numeric falls back to its default,
+// and one outside [min, max] is clamped: NaN makes every `age < interval`
+// comparison false, and a tiny interval or a huge budget writes (nearly) every
+// post — each silently reopens the unbounded-write path.
+function budgetVar(raw, fallback, { min, max = Infinity }) {
   if (raw === undefined || raw === null || String(raw).trim() === "") {
     return fallback;
   }
   const value = Number(raw);
-  return Number.isFinite(value) && value >= min ? value : fallback;
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, value));
 }
 
 function heartbeatWritePolicy(env) {
   const minWriteIntervalMs =
     budgetVar(env.WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS, DEFAULT_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS, {
-      min: 1,
+      min: MIN_HEARTBEAT_WRITE_INTERVAL_SECONDS,
     }) * 1000;
   return {
     minWriteIntervalMs,
@@ -403,6 +412,7 @@ function heartbeatWritePolicy(env) {
     statusChangeWritesPerDay: Math.floor(
       budgetVar(env.WATCHDOG_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY, DEFAULT_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY, {
         min: 0,
+        max: MAX_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY,
       }),
     ),
   };

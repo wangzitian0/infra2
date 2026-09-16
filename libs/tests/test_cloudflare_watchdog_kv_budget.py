@@ -80,18 +80,37 @@ def test_flapping_verdicts_stay_inside_the_per_key_bound(day, budget_vars) -> No
         assert day[scenario]["puts"] <= _per_key_bound(budget_vars), scenario
 
 
-def test_malformed_budget_vars_fall_back_to_the_defaults(day) -> None:
-    """#735 review: a NaN or zero interval must not reopen write-every-post."""
-    default_interval = 600  # DEFAULT_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS
-    default_budget = 24  # DEFAULT_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY
-    bound = math.ceil(86400 / default_interval) + default_budget
+RUNTIME_MIN_INTERVAL = 600  # worker.js MIN_HEARTBEAT_WRITE_INTERVAL_SECONDS
+RUNTIME_MAX_STATUS_CHANGES = 24  # worker.js MAX_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY
+
+
+def test_the_runtime_limits_are_the_ones_the_worker_enforces() -> None:
+    source = WORKER.read_text(encoding="utf-8")
+    assert f"MIN_HEARTBEAT_WRITE_INTERVAL_SECONDS = {RUNTIME_MIN_INTERVAL};" in source
+    assert (
+        f"MAX_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY = {RUNTIME_MAX_STATUS_CHANGES};"
+        in source
+    )
+
+
+def test_out_of_range_budget_vars_cannot_raise_the_runtime_bound(
+    day, budget_vars
+) -> None:
+    """#735 review: a NaN, zero or tiny interval, or a huge budget, must not reopen
+    write-every-post, whatever the Worker env says."""
+    per_key = math.ceil(86400 / RUNTIME_MIN_INTERVAL) + RUNTIME_MAX_STATUS_CHANGES
     for scenario in (
         "malformedInterval",
         "emptyInterval",
         "zeroInterval",
+        "tinyInterval",
         "malformedBudget",
+        "hugeBudget",
     ):
-        assert day[scenario]["puts"] <= bound, (scenario, day[scenario]["puts"])
+        assert day[scenario]["puts"] <= per_key, (scenario, day[scenario]["puts"])
+    heartbeat_keys = len(json.loads(budget_vars["WATCHDOG_HEARTBEATS_JSON"]))
+    runtime_worst_case = heartbeat_keys * per_key + CRON_RUNS_PER_DAY * 3
+    assert runtime_worst_case < KV_FREE_DAILY_PUTS * 0.5
 
 
 def test_a_corrupted_budget_counter_does_not_disable_the_budget(
