@@ -365,11 +365,12 @@ def test_main_passes_only_when_both_sides_match(fake_app, monkeypatch, capsys) -
         ],
         seen,
     )
+    # finance_report's DATABASE_URL form (credential-free here); libpq rejects "+asyncpg"
     rc = gate.main(
-        ["--service", fake_app, "--db-url", "postgresql+asyncpg://u:p@db:5432/app"]
+        ["--service", fake_app, "--db-url", "postgresql+asyncpg://db:5432/app"]
     )
     assert rc == gate.EXIT_OK
-    assert seen == ["postgresql://u:p@db:5432/app"]  # libpq can't take +asyncpg
+    assert seen == ["postgresql://db:5432/app"]  # what reaches psycopg.connect()
     assert "3 enum types, 0 discrepancies" in capsys.readouterr().out
 
 
@@ -407,6 +408,9 @@ def test_query_db_enums_rejects_an_object_that_cannot_query() -> None:
         query_db_enums(object())
 
 
-def test_libpq_url_keeps_plain_urls() -> None:
-    assert gate.libpq_url("postgresql://h/db") == "postgresql://h/db"
-    assert gate.libpq_url("postgres+psycopg2://h/db") == "postgres://h/db"
+def test_libpq_url_drops_only_the_driver_suffix() -> None:
+    assert gate.libpq_url("postgresql+asyncpg://db:5432/app") == (
+        "postgresql://db:5432/app"
+    )
+    assert gate.libpq_url("postgres+psycopg2://db/app") == "postgres://db/app"
+    assert gate.libpq_url("postgresql://db/app") == "postgresql://db/app"
