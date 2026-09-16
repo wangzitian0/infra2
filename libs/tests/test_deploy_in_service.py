@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +11,7 @@ import pytest
 import libs.deploy.deployer as deployer_module
 from libs.deploy.in_service import (
     DOCKER_PS_FORMAT,
+    container_names,
     expected_running_containers,
     expected_running_services,
     in_service_verdict,
@@ -376,32 +378,62 @@ REDIS_EXITED = _ps(("redis", "exited", "Exited (137) 2 hours ago"))
 
 
 class _Host:
-    """The VPS over ssh: Dokploy's checkout HEAD and the stack's containers."""
+    """The VPS over ssh: Dokploy's checkout HEAD, the stack's containers, and every
+    running container by name (what the dependent restart looks at, #726)."""
 
-    def __init__(self, checkout: str, containers: str, *, listable: bool = True):
+    def __init__(
+        self,
+        checkout: str,
+        containers: str,
+        *,
+        listable: bool = True,
+        running: tuple[str, ...] = (),
+        restart_ok: bool = True,
+    ):
         self.checkout, self.containers, self.listable = checkout, containers, listable
+        self.running, self.restart_ok = running, restart_ok
         self.commands: list[str] = []
 
     def run(self, cmd, hide=True, warn=True):
         self.commands.append(cmd)
         if "rev-parse HEAD" in cmd:
             return _Run(True, self.checkout + "\n")
+        if "{{.Names}}" in cmd:
+            return _Run(True, "".join(f"{name}\n" for name in self.running))
         if "docker ps" in cmd:
             if not self.listable:
                 return _Run(False, "", "ssh: connect to host vps port 22: timed out")
             return _Run(True, self.containers)
+        if "docker restart" in cmd:
+            if self.restart_ok:
+                return _Run(True, "")
+            return _Run(False, "", "Error response from daemon: container is paused")
         raise AssertionError(f"unexpected host command: {cmd}")
 
     @property
     def asked_for_the_checkout(self) -> bool:
         return any("rev-parse" in cmd for cmd in self.commands)
 
+    @property
+    def restarted(self) -> list[list[str]]:
+        """The containers named by each `docker restart` sent over ssh."""
+        restarts = []
+        for cmd in self.commands:
+            ssh, _destination, remote = shlex.split(cmd)
+            argv = shlex.split(remote)
+            if argv[:2] == ["docker", "restart"]:
+                restarts.append(argv[2:])
+        return restarts
+
 
 class _Dokploy:
-    """platform/redis in production; any other lookup finds nothing."""
+    """platform/redis in `env`; any other lookup finds nothing."""
+
+    def __init__(self, env: str = "production"):
+        self.env = env
 
     def find_compose_by_name(self, name, project_name=None, env_name=None):
-        if (name, project_name, env_name) == ("redis", "platform", "production"):
+        if (name, project_name, env_name) == ("redis", "platform", self.env):
             return {"composeId": "cid", "appName": "platform-redis-x1"}
         return None
 
@@ -410,15 +442,17 @@ class _Dokploy:
         return {"composeId": "cid", "appName": "platform-redis-x1"}
 
 
-def _redis_sync(monkeypatch, *, remote_hash: str):
-    """A platform/redis sync at RELEASE_SHA against a stack last deployed from
+def _redis_sync(
+    monkeypatch, *, remote_hash: str, env: str = "production", suffix: str = ""
+):
+    """A platform/redis sync in `env` at RELEASE_SHA against a stack last deployed from
     LAST_DEPLOY_SHA; `remote_hash` "h1" means its config did not change. Returns the
     deployer and the list `composing` appends to when a (re)deploy is triggered."""
     from libs.service_identity import ServiceIdentity
 
     d = deployer_module
     identity = ServiceIdentity.build(
-        "platform/redis", "production", component="redis", service_name="redis"
+        "platform/redis", env, component="redis", service_name="redis"
     ).deploy_env()
     remote = {
         "runtime_hash": remote_hash,
@@ -438,7 +472,12 @@ def _redis_sync(monkeypatch, *, remote_hash: str):
 
         @classmethod
         def env(cls):
-            return {"ENV": "production", "VPS_HOST": "vps", "INTERNAL_DOMAIN": "x.test"}
+            return {
+                "ENV": env,
+                "ENV_SUFFIX": suffix,
+                "VPS_HOST": "vps",
+                "INTERNAL_DOMAIN": "x.test",
+            }
 
         @classmethod
         def verify_vault_app_token(cls):
@@ -502,7 +541,7 @@ def _redis_sync(monkeypatch, *, remote_hash: str):
         def _checkout_sha(cls, ref):
             return RELEASE_SHA
 
-    monkeypatch.setattr("libs.dokploy.get_dokploy", lambda host=None: _Dokploy())
+    monkeypatch.setattr("libs.dokploy.get_dokploy", lambda host=None: _Dokploy(env))
     monkeypatch.setattr(d, "validate_env", lambda: [])
     monkeypatch.setattr(d.time, "sleep", lambda _s: None)
     monkeypatch.setenv("IAC_DEPLOY_REF", RELEASE_SHA)
@@ -580,8 +619,159 @@ def test_a_changed_stack_at_the_new_checkout_is_updated(monkeypatch):
 
     result = redis.sync(host)
 
+    # no dependent is running on this host, so none was restarted
     assert result == {"action": "updated", "details": "composeId: cid"}
     assert host.asked_for_the_checkout
+    assert host.restarted == []
+
+
+def _names(compose: str, suffix: str, *services: str) -> list[str]:
+    """Container names from the compose file itself, not literals."""
+    declared = container_names((ROOT / compose).read_text(), suffix)
+    return (
+        [declared[service] for service in services]
+        if services
+        else list(declared.values())
+    )
+
+
+OPENPANEL = "platform/24.openpanel/compose.yaml"
+AUTHENTIK = "platform/10.authentik/compose.yaml"
+REDIS = "platform/02.redis/compose.yaml"
+
+
+def _everything_running(suffix: str) -> tuple[str, ...]:
+    return tuple(
+        _names(REDIS, suffix) + _names(OPENPANEL, suffix) + _names(AUTHENTIK, suffix)
+    )
+
+
+def test_a_skipped_redis_sync_restarts_no_dependent(monkeypatch):
+    """#726: only a sync that recreated Redis flushes its script cache; a skip must
+    not bounce OpenPanel and Authentik on every release (#718)."""
+    redis, deployed = _redis_sync(monkeypatch, remote_hash="h1")
+    host = _Host(
+        checkout=LAST_DEPLOY_SHA, containers=REDIS_UP, running=_everything_running("")
+    )
+
+    result = redis.sync(host)
+
+    assert result["action"] == "skipped" and deployed == []
+    assert "restarted_dependents" not in result
+    assert host.restarted == []
+    assert not any("{{.Names}}" in cmd for cmd in host.commands)
+
+
+def test_an_applied_redis_sync_restarts_exactly_its_declared_dependents(monkeypatch):
+    """#726: after Redis is redeployed and in service, OpenPanel api + worker and the
+    Authentik worker are restarted in one call — and nothing else (not the OpenPanel
+    dashboard, not the Authentik server, not Redis itself)."""
+    redis, deployed = _redis_sync(monkeypatch, remote_hash="h0")
+    printed: list[str] = []
+    monkeypatch.setattr(deployer_module, "success", printed.append)
+    host = _Host(
+        checkout=RELEASE_SHA, containers=REDIS_UP, running=_everything_running("")
+    )
+
+    result = redis.sync(host)
+
+    expected = _names(AUTHENTIK, "", "worker") + _names(
+        OPENPANEL, "", "op-api", "op-worker"
+    )
+    assert result["action"] == "updated", result
+    assert len(deployed) == 1
+    assert host.restarted == [expected]
+    assert result["restarted_dependents"] == expected
+    # the runner prints the deployer's ✅ lines (sync_runner.verdict_lines)
+    assert any(
+        "restarted dependents after redeploy (production)" in line
+        and all(name in line for name in expected)
+        for line in printed
+    )
+    # the restart comes after the in-service proof, never before it
+    in_service = next(
+        i for i, cmd in enumerate(host.commands) if "com.docker.compose.project" in cmd
+    )
+    restart = next(i for i, cmd in enumerate(host.commands) if "docker restart" in cmd)
+    assert in_service < restart
+
+
+def test_a_staging_redis_sync_restarts_only_staging_dependents(monkeypatch):
+    """OpenPanel is prod_only (no staging instance), so a staging Redis restarts only
+    Authentik's staging worker — never a production container."""
+    redis, _deployed = _redis_sync(
+        monkeypatch, remote_hash="h0", env="staging", suffix="-staging"
+    )
+    host = _Host(
+        checkout=RELEASE_SHA,
+        containers=REDIS_UP,
+        running=_everything_running("") + _everything_running("-staging"),
+    )
+
+    result = redis.sync(host)
+
+    assert result["action"] == "updated", result
+    assert host.restarted == [_names(AUTHENTIK, "-staging", "worker")]
+    assert host.restarted == [["platform-authentik-worker-staging"]]
+
+
+def test_a_dependent_that_is_not_running_is_left_alone(monkeypatch):
+    redis, _deployed = _redis_sync(monkeypatch, remote_hash="h0")
+    warnings: list[str] = []
+    monkeypatch.setattr(deployer_module, "warning", warnings.append)
+    running = tuple(
+        name
+        for name in _everything_running("")
+        if name not in _names(OPENPANEL, "", "op-worker")
+    )
+    host = _Host(checkout=RELEASE_SHA, containers=REDIS_UP, running=running)
+
+    result = redis.sync(host)
+
+    assert result["action"] == "updated"
+    assert host.restarted == [
+        _names(AUTHENTIK, "", "worker") + _names(OPENPANEL, "", "op-api")
+    ]
+    assert any(
+        "not running, not restarted" in w and _names(OPENPANEL, "", "op-worker")[0] in w
+        for w in warnings
+    )
+
+
+def test_a_failed_dependent_restart_fails_the_sync_with_the_manual_command(
+    monkeypatch,
+):
+    """A retry would skip the now-unchanged Redis and never restart them, so the sync
+    fails and says what to run by hand."""
+    redis, _deployed = _redis_sync(monkeypatch, remote_hash="h0")
+    host = _Host(
+        checkout=RELEASE_SHA,
+        containers=REDIS_UP,
+        running=_everything_running(""),
+        restart_ok=False,
+    )
+
+    result = redis.sync(host)
+
+    assert result["action"] == "failed"
+    assert "dependents were not restarted" in result["details"]
+    assert "container is paused" in result["details"]
+    assert (
+        "restart by hand: docker restart platform-authentik-worker "
+        "platform-openpanel-api platform-openpanel-worker" in result["details"]
+    )
+
+
+def test_restart_dependents_needs_a_host(monkeypatch):
+    redis, _deployed = _redis_sync(monkeypatch, remote_hash="h0")
+    with pytest.raises(RuntimeError, match="VPS_HOST unset; restart by hand"):
+        redis.restart_dependents(_Host(RELEASE_SHA, REDIS_UP), {"ENV": "production"})
+    # a deployer outside the registry never scans it and needs no host at all
+    monkeypatch.setattr(
+        "libs.service_registry.service_attrs",
+        lambda: (_ for _ in ()).throw(AssertionError("must not scan the registry")),
+    )
+    assert deployer_module.Deployer.restart_dependents(_Host(RELEASE_SHA, ""), {}) == []
 
 
 def test_verify_in_service_still_reports_an_unlistable_host_as_a_failure(deployer):

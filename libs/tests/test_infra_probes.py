@@ -7,6 +7,7 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
 from infra2_sdk.runtime.probes import DependencyStatus
 from infra2_sdk.runtime.probes import ProbeResult as SdkProbeResult
 
@@ -295,6 +296,17 @@ def test_probe_runner_defaults_to_fast_probe_bounded_notification() -> None:
     assert (
         "INFRA_PROBE_RENOTIFY_SECONDS: ${INFRA_PROBE_RENOTIFY_SECONDS:-1800}" in compose
     )
+    # #726: the never-passed grace period, same defaults in code and compose
+    assert (
+        "INFRA_PROBE_NEVER_GREEN_ESCALATION_FAILURES: "
+        f"${{INFRA_PROBE_NEVER_GREEN_ESCALATION_FAILURES:-"
+        f"{runner.DEFAULT_NEVER_GREEN_ESCALATION_FAILURES}}}" in compose
+    )
+    assert (
+        "INFRA_PROBE_NEVER_GREEN_ESCALATION_SECONDS: "
+        f"${{INFRA_PROBE_NEVER_GREEN_ESCALATION_SECONDS:-"
+        f"{runner.DEFAULT_NEVER_GREEN_ESCALATION_SECONDS}}}" in compose
+    )
 
 
 def test_in_band_probe_compose_uses_internal_network_targets() -> None:
@@ -582,6 +594,282 @@ def test_never_green_http_probe_still_pages_critical(monkeypatch, tmp_path) -> N
     assert runner.run_once(state_path=tmp_path / "s.json", failure_threshold=1) == 1
     assert posted[0]["commonLabels"]["alertname"] == "InfraServiceProbeFailed"
     assert posted[0]["commonLabels"]["severity"] == "critical"
+
+
+def _roundtrip_runner(monkeypatch, severity: str, outcome):
+    """A runner probing one `command` round-trip whose result `outcome(spec)` decides,
+    with a controllable clock. Returns (runner, posted payloads, clock, printed lines)."""
+    runner = _load_probe_runner()
+    posted: list[dict] = []
+    printed: list[str] = []
+    clock = {"now": 1_000_000.0}
+    monkeypatch.setenv(
+        "INFRA_PROBE_SPECS",
+        "openpanel-roundtrip|command|python rt.py openpanel|roundtrip-ok|"
+        f"{severity}|45||platform/openpanel",
+    )
+    monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
+    monkeypatch.setattr(
+        runner, "post_alert_bridge_payload", lambda _u, p, **_k: posted.append(p)
+    )
+    monkeypatch.setattr(runner, "run_probes", lambda specs: [outcome(specs[0])])
+    monkeypatch.setattr(runner.time, "time", lambda: clock["now"])
+    monkeypatch.setattr(
+        "builtins.print", lambda *a, **_k: printed.append(" ".join(map(str, a)))
+    )
+    return runner, posted, clock, printed
+
+
+def _backend_down(spec):
+    """What the NOSCRIPT outage looked like: the round-trip ran and /track 500'd."""
+    return run_probe(
+        spec,
+        command_runner=lambda *_a: subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout="",
+            stderr="roundtrip-failed backend=openpanel error=HTTP Error 500",
+        ),
+    )
+
+
+def _config_missing(spec):
+    return run_probe(
+        spec,
+        command_runner=lambda *_a: subprocess.CompletedProcess(
+            args=[],
+            returncode=probes.MISCONFIGURED_EXIT_CODE,
+            stdout="",
+            stderr="roundtrip-misconfigured backend=openpanel "
+            "error=no OpenPanel client id for environment 'pr_7'",
+        ),
+    )
+
+
+def _firing(posted: list[dict], alert_name: str) -> list[dict]:
+    return [
+        p
+        for p in posted
+        if p["status"] == "firing" and p["commonLabels"]["alertname"] == alert_name
+    ]
+
+
+def test_command_probe_exiting_ex_config_is_classified_misconfigured() -> None:
+    spec = parse_probe_specs("rt|command|python rt.py|roundtrip-ok|warning|45")[0]
+    config = _config_missing(spec)
+    backend = _backend_down(spec)
+    assert config.observed == "ProbeMisconfigured"
+    assert "no OpenPanel client id" in config.summary
+    assert probes.is_misconfigured(config) is True
+    assert probes.is_misconfigured(backend) is False
+    assert probes.is_misconfigured(run_probe(spec, command_runner=_ok_runner)) is False
+
+
+def _ok_runner(*_args):
+    return subprocess.CompletedProcess(
+        args=[], returncode=0, stdout="roundtrip-ok", stderr=""
+    )
+
+
+@pytest.mark.parametrize("severity", ["warning", "critical"])
+def test_never_green_round_trip_escalates_after_the_grace_period(
+    monkeypatch, tmp_path, severity
+) -> None:
+    """#726: a runner recreated in the middle of an outage never saw the round-trip pass.
+    For 15 min that stays in the misconfigured lane — worded as 'has not passed', not as
+    a broken probe — and then fails in the normal stream at the DECLARED severity."""
+    runner, posted, clock, printed = _roundtrip_runner(
+        monkeypatch, severity, _backend_down
+    )
+    state_path = tmp_path / "s.json"
+
+    def cycle(at: float) -> None:
+        clock["now"] = 1_000_000.0 + at
+        assert (
+            runner.run_once(
+                state_path=state_path,
+                failure_threshold=1,
+                recovery_threshold=1,
+                escalation_failures=3,
+                escalation_seconds=900,
+            )
+            == 1
+        )
+
+    for at in (0, 60, 120, 600):  # four failed runs, still inside the 900 s window
+        cycle(at)
+    assert _firing(posted, "InfraServiceProbeFailed") == []
+    grace = _firing(posted, "InfraProbeMisconfigured")
+    assert len(grace) == 1  # debounced per stream; the wording is stable
+    assert grace[0]["commonLabels"]["severity"] == "warning"
+    description = grace[0]["alerts"][0]["annotations"]["description"]
+    assert description.startswith("has not passed since the probe runner started")
+    assert "becomes InfraServiceProbeFailed after 3 failed runs over 15 min" in (
+        description
+    )
+    assert "HTTP Error 500" in description
+
+    cycle(900)  # the streak now spans the window: an outage, not a misconfiguration
+    escalated = _firing(posted, "InfraServiceProbeFailed")
+    assert len(escalated) == 1
+    assert escalated[0]["commonLabels"]["severity"] == severity
+    assert escalated[0]["alerts"][0]["labels"]["service_id"] == "platform/openpanel"
+    assert "HTTP Error 500" in escalated[0]["alerts"][0]["annotations"]["description"]
+    # the misconfigured lane lets go of it, and the escalation is logged once
+    assert any(
+        p["status"] == "resolved"
+        and p["commonLabels"]["alertname"] == "InfraProbeMisconfigured"
+        for p in posted
+    )
+    cycle(960)
+    assert (
+        sum(
+            "probe-runner escalated probe=openpanel-roundtrip" in line
+            for line in printed
+        )
+        == 1
+    )
+    assert len(_firing(posted, "InfraServiceProbeFailed")) == 1  # renotify window
+
+
+def test_escalation_needs_both_the_run_count_and_the_window(
+    monkeypatch, tmp_path
+) -> None:
+    """A failing round-trip re-runs on every 60 s loop, so three runs alone is three
+    minutes; two runs an hour apart is not a streak of three either."""
+    runner, posted, clock, _printed = _roundtrip_runner(
+        monkeypatch, "warning", _backend_down
+    )
+    state_path = tmp_path / "s.json"
+
+    def cycle(at: float) -> None:
+        clock["now"] = 1_000_000.0 + at
+        runner.run_once(
+            state_path=state_path,
+            failure_threshold=1,
+            escalation_failures=3,
+            escalation_seconds=900,
+        )
+
+    cycle(0)
+    cycle(3600)
+    assert _firing(posted, "InfraServiceProbeFailed") == []
+    cycle(3660)
+    assert len(_firing(posted, "InfraServiceProbeFailed")) == 1
+
+
+def test_escalation_defaults_are_three_runs_over_fifteen_minutes(
+    monkeypatch, tmp_path
+) -> None:
+    runner, posted, clock, _printed = _roundtrip_runner(
+        monkeypatch, "warning", _backend_down
+    )
+    monkeypatch.delenv("INFRA_PROBE_NEVER_GREEN_ESCALATION_FAILURES", raising=False)
+    monkeypatch.delenv("INFRA_PROBE_NEVER_GREEN_ESCALATION_SECONDS", raising=False)
+    assert runner.DEFAULT_NEVER_GREEN_ESCALATION_FAILURES == 3
+    assert runner.DEFAULT_NEVER_GREEN_ESCALATION_SECONDS == 900
+    state_path = tmp_path / "s.json"
+    for at in range(0, 900, 60):
+        clock["now"] = 1_000_000.0 + at
+        runner.run_once(state_path=state_path, failure_threshold=1)
+    assert _firing(posted, "InfraServiceProbeFailed") == []
+    clock["now"] = 1_000_900.0
+    runner.run_once(state_path=state_path, failure_threshold=1)
+    assert len(_firing(posted, "InfraServiceProbeFailed")) == 1
+    streak = json.loads(state_path.read_text())["never_green"]["openpanel-roundtrip"]
+    assert streak["runs"] == 16 and streak["escalated"] is True
+
+
+def test_a_round_trip_missing_its_own_configuration_never_escalates(
+    monkeypatch, tmp_path
+) -> None:
+    """The client id / URL is absent: nothing about OpenPanel was tested, so it stays a
+    misconfigured-probe warning however long it lasts — and even after the probe once
+    passed (a deploy that dropped its config is still a config problem)."""
+    outcomes = [_ok_runner] + [None] * 40
+
+    def outcome(spec):
+        runner_fn = outcomes.pop(0)
+        return (
+            run_probe(spec, command_runner=runner_fn)
+            if runner_fn
+            else _config_missing(spec)
+        )
+
+    runner, posted, clock, printed = _roundtrip_runner(monkeypatch, "critical", outcome)
+    state_path = tmp_path / "s.json"
+    for at in range(0, 7200, 180):  # two hours
+        clock["now"] = 1_000_000.0 + at
+        runner.run_once(
+            state_path=state_path,
+            failure_threshold=1,
+            escalation_failures=3,
+            escalation_seconds=900,
+        )
+    assert _firing(posted, "InfraServiceProbeFailed") == []
+    misconfigured = _firing(posted, "InfraProbeMisconfigured")
+    assert misconfigured and all(
+        p["commonLabels"]["severity"] == "warning" for p in misconfigured
+    )
+    description = misconfigured[0]["alerts"][0]["annotations"]["description"]
+    assert "no OpenPanel client id" in description
+    assert "has not passed" not in description
+    assert not any("escalated" in line for line in printed)
+    assert json.loads(state_path.read_text())["never_green"] == {}
+
+
+def test_a_config_failure_does_not_count_toward_a_later_backend_streak(
+    monkeypatch, tmp_path
+) -> None:
+    """Config fixed after an hour, backend broken: the streak starts at the first run
+    that actually tested the backend."""
+    outcomes = [_config_missing] * 20 + [_backend_down] * 20
+    runner, posted, clock, _printed = _roundtrip_runner(
+        monkeypatch, "warning", lambda spec: outcomes.pop(0)(spec)
+    )
+    state_path = tmp_path / "s.json"
+    for index, at in enumerate(range(0, 4800, 180)):
+        clock["now"] = 1_000_000.0 + at
+        runner.run_once(
+            state_path=state_path,
+            failure_threshold=1,
+            escalation_failures=3,
+            escalation_seconds=900,
+        )
+        if index == 21:  # two backend failures, 180 s apart
+            assert _firing(posted, "InfraServiceProbeFailed") == []
+    assert len(_firing(posted, "InfraServiceProbeFailed")) == 1
+
+
+def test_an_unreadable_never_green_state_starts_over(monkeypatch, tmp_path) -> None:
+    runner, posted, _clock, _printed = _roundtrip_runner(
+        monkeypatch, "warning", _backend_down
+    )
+    state_path = tmp_path / "s.json"
+    state_path.write_text(json.dumps({"groups": {}, "never_green": ["corrupt"]}))
+    assert runner.run_once(state_path=state_path, failure_threshold=1) == 1
+    streak = json.loads(state_path.read_text())["never_green"]["openpanel-roundtrip"]
+    assert streak["runs"] == 1
+    assert _firing(posted, "InfraProbeMisconfigured")
+
+
+def test_never_green_streaks_of_removed_probes_are_dropped(
+    monkeypatch, tmp_path
+) -> None:
+    runner, _posted, clock, _printed = _roundtrip_runner(
+        monkeypatch, "warning", _backend_down
+    )
+    state_path = tmp_path / "s.json"
+    runner.run_once(state_path=state_path, failure_threshold=1)
+    assert "openpanel-roundtrip" in json.loads(state_path.read_text())["never_green"]
+    monkeypatch.setenv("INFRA_PROBE_SPECS", "vault|http|http://vault|200|critical|5")
+    monkeypatch.setattr(
+        runner,
+        "run_probes",
+        lambda specs: [run_probe(specs[0], http_get=lambda *_a: (200, "ok"))],
+    )
+    runner.run_once(state_path=state_path, failure_threshold=1)
+    assert json.loads(state_path.read_text())["never_green"] == {}
 
 
 def test_probe_spec_parses_depends_on_field() -> None:

@@ -23,6 +23,14 @@ HTTP_PROBE_HEADERS = {
     "Accept": "text/html,application/json,text/plain,*/*",
 }
 PROBE_CLIENT_BLOCKED_MARKERS = ("error code: 1010",)
+# A `command` probe exits EX_CONFIG when it could not run because its OWN configuration
+# is missing (tools/observability_roundtrip_probe.py): the result says nothing about the
+# target, and the probe runner keeps it out of the failing stream (#726).
+MISCONFIGURED_EXIT_CODE = os.EX_CONFIG
+
+
+class ProbeMisconfigured(RuntimeError):
+    """A command probe reported that its own configuration is missing or invalid."""
 
 
 @dataclass(frozen=True)
@@ -141,6 +149,11 @@ def run_probes(specs: list[ProbeSpec]) -> list[ProbeResult]:
 
 def failed_results(results: list[ProbeResult]) -> list[ProbeResult]:
     return [result for result in results if not result.ok]
+
+
+def is_misconfigured(result: ProbeResult) -> bool:
+    """True for a failure the probe attributed to its own missing configuration."""
+    return not result.ok and result.observed == ProbeMisconfigured.__name__
 
 
 def build_probe_alert_payload(
@@ -290,9 +303,10 @@ def _run_command(
             check=False,
         )
     if result.returncode != 0:
-        raise RuntimeError(
-            result.stderr.strip() or result.stdout.strip() or "command failed"
-        )
+        detail = result.stderr.strip() or result.stdout.strip() or "command failed"
+        if result.returncode == MISCONFIGURED_EXIT_CODE:
+            raise ProbeMisconfigured(detail)
+        raise RuntimeError(detail)
     return result.stdout.strip()
 
 

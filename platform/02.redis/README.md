@@ -69,3 +69,24 @@ path "secret/data/platform/{{env}}/redis" {
 ## Used By
 
 - `10.authentik` - Session and cache storage
+- `24.openpanel` - Queue processing (DB 3)
+- `23.prefect` - Messaging (DB 1)
+
+### Dependents restarted after a redeploy (#726)
+
+A recreated Redis starts with an empty Lua script cache and drops every client
+connection. OpenPanel's api/worker (they only call `EVALSHA`) and the Authentik
+worker do not recover from that on their own. They declare
+`restart_after = (RestartAfterFacet(dependency="platform/redis", ...),)` in their
+own `deploy.py`. After a sync that redeploys Redis and proves it in service, the
+Redis Deployer restarts those containers in the same environment. It never does
+this after a skipped sync. It prints
+`✅ redis: restarted dependents after redeploy (<env>): ...`.
+
+| Environment | Restarted |
+|-------------|-----------|
+| production | `platform-authentik-worker`, `platform-openpanel-api`, `platform-openpanel-worker` |
+| staging | `platform-authentik-worker-staging` (OpenPanel is `prod_only`) |
+
+If that restart fails, the sync fails and prints the `docker restart` command to
+run by hand. A retry would skip the unchanged Redis and never restart them.

@@ -138,3 +138,157 @@ def test_services_in_env_excludes_prod_only_off_production() -> None:
     assert reg.shared_services() & staging == set()
     assert reg.shared_services() <= production
     assert production == set(reg.all_services())
+
+
+# --- restart_after (#726) ----------------------------------------------------
+
+_REDIS_DEPLOY = (
+    "class RedisDeployer(Deployer):\n"
+    "    service = 'redis'\n"
+    "    compose_path = 'platform/02.redis/compose.yaml'\n"
+)
+_QUEUE_COMPOSE = """
+services:
+  api:
+    image: queue
+    container_name: platform-queue-api${ENV_SUFFIX}
+  migrate:
+    image: queue
+"""
+
+
+def _restart_after_tree(
+    tmp_path, monkeypatch, restart_after: str, *, prod_only: bool = False
+) -> None:
+    """A two-service registry: platform/redis and a platform/queue that declares
+    `restart_after = (<restart_after>,)` against its own compose file."""
+    platform = tmp_path / "platform"
+    (platform / "02.redis").mkdir(parents=True)
+    (platform / "02.redis/deploy.py").write_text(_REDIS_DEPLOY)
+    (platform / "30.queue").mkdir()
+    (platform / "30.queue/compose.yaml").write_text(_QUEUE_COMPOSE)
+    (platform / "30.queue/deploy.py").write_text(
+        "class QueueDeployer(Deployer):\n"
+        "    service = 'queue'\n"
+        "    compose_path = 'platform/30.queue/compose.yaml'\n"
+        f"    prod_only = {prod_only}\n"
+        f"    restart_after = ({restart_after},)\n"
+    )
+    monkeypatch.setattr(reg, "_LAYERS", {"platform": platform})
+    monkeypatch.setattr(reg, "REPO_ROOT", tmp_path)
+
+
+def test_restart_after_resolves_container_names_per_environment(
+    tmp_path, monkeypatch
+) -> None:
+    _restart_after_tree(
+        tmp_path,
+        monkeypatch,
+        "RestartAfterFacet(dependency='platform/redis', services=('api',))",
+    )
+    assert reg.restart_after_containers("platform/redis", "production", "") == {
+        "platform/queue": ("platform-queue-api",)
+    }
+    assert reg.restart_after_containers("platform/redis", "staging", "-staging") == {
+        "platform/queue": ("platform-queue-api-staging",)
+    }
+    # only the named dependency restarts it
+    assert reg.restart_after_containers("platform/postgres", "production", "") == {}
+
+
+def test_a_prod_only_dependent_is_restarted_only_in_production(
+    tmp_path, monkeypatch
+) -> None:
+    _restart_after_tree(
+        tmp_path,
+        monkeypatch,
+        "RestartAfterFacet(dependency='platform/redis', services=('api',))",
+        prod_only=True,
+    )
+    assert reg.restart_after_containers("platform/redis", "production", "") == {
+        "platform/queue": ("platform-queue-api",)
+    }
+    assert reg.restart_after_containers("platform/redis", "staging", "-staging") == {}
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        (
+            "RestartAfterFacet(dependency='platform/rediss', services=('api',))",
+            r"restart_after='platform/rediss': unknown dependency",
+        ),
+        (
+            "RestartAfterFacet(dependency='platform/redis', services=('api', 'worker'))",
+            r"unknown dependent\(s\) worker — platform/30.queue/compose.yaml declares "
+            r"a container_name only for api",
+        ),
+        (
+            # a compose service without a container_name has no name to restart
+            "RestartAfterFacet(dependency='platform/redis', services=('migrate',))",
+            r"unknown dependent\(s\) migrate",
+        ),
+        (
+            "RestartAfterFacet(dependency='platform/queue', services=('api',))",
+            r"cannot restart after itself",
+        ),
+        (
+            "RestartAfterFacet(dependency='platform/redis', services=())",
+            r"non-empty tuple",
+        ),
+        (
+            # `('api')` is a string, not a tuple — iterating it would name 'a', 'p', 'i'
+            "RestartAfterFacet(dependency='platform/redis', services=('api'))",
+            r"non-empty tuple",
+        ),
+        (
+            # a list would make the frozen facet mutable
+            "RestartAfterFacet(dependency='platform/redis', services=['api'])",
+            r"non-empty tuple of compose service keys, got \['api'\]",
+        ),
+        (
+            "RestartAfterFacet(dependency='platform/redis', services=('api', 3))",
+            r"non-empty tuple",
+        ),
+        (
+            "RestartAfterFacet(dependency='platform/redis', services=('',))",
+            r"non-empty tuple",
+        ),
+    ],
+)
+def test_restart_after_fails_closed_at_registry_load(
+    tmp_path, monkeypatch, declaration: str, message: str
+) -> None:
+    _restart_after_tree(tmp_path, monkeypatch, declaration)
+    with pytest.raises(ValueError, match=message):
+        reg.service_attrs()
+
+
+def test_redis_dependents_are_the_services_that_break_on_a_redis_recreate() -> None:
+    """#726 / #713: OpenPanel api + worker (EVALSHA without NOSCRIPT recovery) and the
+    Authentik worker. Names come from each dependent's compose, per environment;
+    OpenPanel is prod_only, so a staging Redis restarts only Authentik's worker."""
+    from libs.deploy.in_service import container_names
+
+    def names(compose: str, suffix: str, *services: str) -> tuple[str, ...]:
+        declared = container_names((REPO_ROOT / compose).read_text(), suffix)
+        return tuple(declared[service] for service in services)
+
+    openpanel = "platform/24.openpanel/compose.yaml"
+    authentik = "platform/10.authentik/compose.yaml"
+    assert reg.restart_after_containers("platform/redis", "production", "") == {
+        "platform/authentik": names(authentik, "", "worker"),
+        "platform/openpanel": names(openpanel, "", "op-api", "op-worker"),
+    }
+    assert reg.restart_after_containers("platform/redis", "staging", "-staging") == {
+        "platform/authentik": names(authentik, "-staging", "worker"),
+    }
+    assert names(authentik, "-staging", "worker") == (
+        "platform-authentik-worker-staging",
+    )
+    # nothing else restarts after a redeploy: every declared dependency is redis
+    assert {
+        facet.dependency
+        for meta in reg.service_attrs().values()
+        for facet in meta.restart_after
+    } == {"platform/redis"}

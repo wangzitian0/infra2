@@ -22,6 +22,7 @@ See libs/resident_watchers.py for the plugin surface + timing budget.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import logging
@@ -36,6 +37,7 @@ from libs.infra_probes import (
     HTTP_PROBE_HEADERS,
     build_probe_alert_payload,
     failed_results,
+    is_misconfigured,
     parse_probe_specs,
     post_alert_bridge_payload,
     run_probes,
@@ -50,10 +52,21 @@ DEFAULT_RENOTIFY_SECONDS = 1800
 DEFAULT_FAILURE_THRESHOLD = 3
 DEFAULT_RECOVERY_THRESHOLD = 2
 DEFAULT_STATE_FILE = "/tmp/infra_probe_runner_state.json"
-# A probe that has never once succeeded is treated as a broken/misconfigured probe, not a
-# real outage — routed to this distinct, warning-severity alert so it cannot page critical.
+# The `<group>:misconfigured` lane: a distinct, warning-severity alert for `command`
+# probes whose failure is not (yet) evidence about their target —
+#   - a probe that reported its own configuration missing (exit EX_CONFIG), for good;
+#   - a probe that has never passed since the runner started, for a grace period only.
 MISCONFIGURED_ALERT_NAME = "InfraProbeMisconfigured"
 MISCONFIGURED_SEVERITY = "warning"
+# The grace period (#726). A round-trip that never passed is as likely a broken target as
+# a broken probe: a runner recreated in the middle of the OpenPanel NOSCRIPT outage held
+# `openpanel-roundtrip` in this lane as "misconfigured" while every /track failed. After
+# this many consecutive failed runs, spanning at least this long (three round-trip
+# intervals of OBS_ROUNDTRIP_INTERVAL_SECONDS=300), it fails in the group's normal stream
+# at its declared severity. A failing round-trip re-runs on every loop, so the run count
+# alone would escalate after three minutes.
+DEFAULT_NEVER_GREEN_ESCALATION_FAILURES = 3
+DEFAULT_NEVER_GREEN_ESCALATION_SECONDS = 900
 
 
 def _log_send(stream_key: str, results: list, severity_override: str | None) -> None:
@@ -258,6 +271,56 @@ def _host_specs_for_env(specs: list) -> list:
     return [spec for spec in specs if spec.kind != "resource"]
 
 
+def _env_int(name: str, default: int) -> int:
+    return int(os.getenv(name, str(default)))
+
+
+def _track_never_green(
+    results: list, ever_succeeded: set[str], never_green: dict, now: float
+) -> None:
+    """Count consecutive failed runs of each `command` probe that has never passed.
+
+    Runs before cascade suppression: a round-trip muted because its root is down still
+    failed, and once the root recovers its streak is real history, not a fresh start.
+    A run that reported its own configuration missing tested nothing, so it ends the
+    streak instead of extending it.
+    """
+    for result in results:
+        if result.spec.kind != "command":
+            continue
+        name = result.spec.name
+        if result.ok or name in ever_succeeded or is_misconfigured(result):
+            never_green.pop(name, None)
+            continue
+        streak = never_green.setdefault(name, {"since": now, "runs": 0})
+        streak["runs"] = int(streak.get("runs") or 0) + 1
+
+
+def _escalated(streak: dict | None, now: float, runs: int, seconds: int) -> bool:
+    if not streak:
+        return False
+    failing_for = now - float(streak.get("since", now))
+    return int(streak.get("runs") or 0) >= max(1, runs) and failing_for >= max(
+        0, seconds
+    )
+
+
+def _grace_note(result, alert_name: str, runs: int, seconds: int):
+    """A never-passed failure in the misconfigured lane, worded as what it is.
+
+    The text is fixed per probe (no counters): it feeds the stream's fingerprint, and a
+    changing fingerprint would restart the debounce on every run.
+    """
+    return dataclasses.replace(
+        result,
+        summary=(
+            "has not passed since the probe runner started — probe or target broken; "
+            f"becomes {alert_name} after {runs} failed runs over {seconds // 60} min: "
+            f"{result.summary}"
+        ),
+    )
+
+
 def run_once(
     *,
     as_json: bool = False,
@@ -265,6 +328,8 @@ def run_once(
     failure_threshold: int | None = None,
     recovery_threshold: int | None = None,
     state_path: Path | None = None,
+    escalation_failures: int | None = None,
+    escalation_seconds: int | None = None,
 ) -> int:
     groups = _probe_groups()
     state_path = state_path or Path(
@@ -291,12 +356,26 @@ def run_once(
             os.getenv("INFRA_PROBE_RECOVERY_THRESHOLD", str(DEFAULT_RECOVERY_THRESHOLD))
         )
     )
+    if escalation_failures is None:
+        escalation_failures = _env_int(
+            "INFRA_PROBE_NEVER_GREEN_ESCALATION_FAILURES",
+            DEFAULT_NEVER_GREEN_ESCALATION_FAILURES,
+        )
+    if escalation_seconds is None:
+        escalation_seconds = _env_int(
+            "INFRA_PROBE_NEVER_GREEN_ESCALATION_SECONDS",
+            DEFAULT_NEVER_GREEN_ESCALATION_SECONDS,
+        )
     state = _load_state(state_path)
     now = time.time()
     any_failures = False
     json_results: dict[str, list[dict]] = {}
     dry_run = os.getenv("INFRA_PROBE_DRY_RUN", "0") == "1"
     ever_succeeded = set(state.get("ever_succeeded", []))
+    if not isinstance(state.get("never_green"), dict):
+        state["never_green"] = {}  # absent (older runner) or unreadable: start over
+    never_green = state["never_green"]
+    probed: set[str] = set()
 
     for group in groups:
         specs = _host_specs_for_env(parse_probe_specs(group.raw_specs))
@@ -307,8 +386,10 @@ def run_once(
 
         # Learn which probes have EVER passed (this cycle's passes included).
         for result in results:
+            probed.add(result.spec.name)
             if result.ok:
                 ever_succeeded.add(result.spec.name)
+        _track_never_green(results, ever_succeeded, never_green, now)
 
         # Cascade suppression: a probe whose declared `depends_on` chain reaches a failing
         # ROOT is a downstream symptom — suppress its alert and page the root only (page the
@@ -338,18 +419,40 @@ def run_once(
         # Split failures into two streams. ONLY `command` probes are eligible for the
         # misconfigured lane: they run code (the round-trips) that can be broken by a bug
         # so they may NEVER pass even against a healthy backend (the signoz-roundtrip
-        # 500-storm). A `command` probe that has never once succeeded is therefore far more
-        # likely a broken probe than an outage that began the instant the runner booted, so
-        # route it to a quiet warning-severity `InfraProbeMisconfigured` lane instead of
-        # paging critical. `http`/`tcp` liveness probes are NOT eligible — their failure is
-        # always a real target failure — and every command round-trip is backed by an
-        # `http` liveness probe that still carries the real-outage critical signal. Each
-        # stream dedups independently.
-        misconfig = [
-            r
-            for r in failures
-            if r.spec.kind == "command" and r.spec.name not in ever_succeeded
-        ]
+        # 500-storm). `http`/`tcp` liveness probes are NOT eligible — their failure is
+        # always a real target failure. A command failure goes to the quiet
+        # warning-severity `InfraProbeMisconfigured` lane when
+        #   - the probe reported its own configuration missing (EX_CONFIG): nothing about
+        #     the target was tested, whatever its history; or
+        #   - it has never passed since the runner started AND its failure streak is
+        #     still inside the grace period. A live /healthcheck does not prove ingestion
+        #     (#726: OpenPanel's stayed 200 through 17 h of NOSCRIPT), so after the
+        #     grace period the failure is an outage and joins the normal stream at the
+        #     probe's declared severity.
+        # Each stream dedups independently.
+        misconfig = []
+        for r in failures:
+            if r.spec.kind != "command":
+                continue
+            if is_misconfigured(r):
+                misconfig.append(r)
+            elif r.spec.name not in ever_succeeded:
+                streak = never_green.get(r.spec.name)
+                if not _escalated(streak, now, escalation_failures, escalation_seconds):
+                    misconfig.append(
+                        _grace_note(
+                            r, group.alert_name, escalation_failures, escalation_seconds
+                        )
+                    )
+                elif streak is not None and not streak.get("escalated"):
+                    streak["escalated"] = True
+                    print(
+                        f"probe-runner escalated probe={r.spec.name} "
+                        f"stream={group.name} failed_runs={streak.get('runs')} "
+                        f"failing_for={int(now - float(streak.get('since', now)))}s "
+                        "(never passed since runner start; no longer 'misconfigured')",
+                        flush=True,
+                    )
         misconfig_names = {r.spec.name for r in misconfig}
         regression_results = [r for r in results if r.spec.name not in misconfig_names]
 
@@ -389,6 +492,8 @@ def run_once(
                 _log_send(stream_key, stream_results, severity_override)
 
     state["ever_succeeded"] = sorted(ever_succeeded)
+    for name in set(never_green) - probed:
+        del never_green[name]  # the probe is gone from the specs
     # One line per cycle, on success too. A probe that passes is silent, so a log with
     # no probe lines in it is indistinguishable from a runner that probed nothing —
     # which is exactly how #608 read this container's log on 2026-09-09, while 24

@@ -321,3 +321,35 @@ INFRA_PROBE_DRY_RUN=1 uv run python tools/infra_probe_runner.py --once --json
 
 Heartbeat dry-run is intentionally disabled: `INFRA_PROBE_DRY_RUN=1` does not
 write alert state or post heartbeat.
+
+### Failing round-trips: two lanes (#726)
+
+`command` probes (the `signoz-roundtrip` / `openpanel-roundtrip` round-trips) fail
+into one of two streams per probe group:
+
+- `InfraServiceProbeFailed`, at the probe's declared severity, like every other
+  probe. A round-trip that has passed at least once since the runner started goes
+  here as soon as it fails. One that has **never** passed goes here after
+  `INFRA_PROBE_NEVER_GREEN_ESCALATION_FAILURES` (3) consecutive failed runs spanning
+  `INFRA_PROBE_NEVER_GREEN_ESCALATION_SECONDS` (900). A failing round-trip re-runs
+  on every 60 s loop, so both limits apply. The probe runner logs
+  `probe-runner escalated probe=<name> ...` once when that happens.
+- `InfraProbeMisconfigured` (`<group>:misconfigured`, always `warning`):
+  - A round-trip that exited `EX_CONFIG` (78) because its own configuration is
+    missing (no OpenPanel client id for the environment, an invalid URL) stays
+    here for as long as the problem lasts, even if it passed before.
+  - A never-passed failure also waits here during the 15-minute grace period.
+    Its description starts with `has not passed since the probe runner started`
+    and names the stream it will move to.
+
+The grace period used to be permanent. A runner recreated during the 2026-09-15/16
+OpenPanel `NOSCRIPT` outage reported `openpanel-roundtrip` as "misconfigured" while
+every `/track` failed. `openpanel-api-http` stayed green because OpenPanel's
+`/healthcheck` does not use Redis scripts.
+
+The round-trip state (`OBS_ROUNDTRIP_STATE_FILE`) only throttles successes (a pass
+suppresses the next runs for `OBS_ROUNDTRIP_INTERVAL_SECONDS`, reported as
+`mode=suppressed`). Failures are never throttled. The runner's own state file
+(`INFRA_PROBE_STATE_FILE`) holds `ever_succeeded` and the per-probe `never_green`
+failure streaks. Both files live in the container's `/tmp`, so a recreated
+runner starts with neither.
