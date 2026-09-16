@@ -122,6 +122,43 @@ def infra_domain() -> str:
 _env_cache: dict | None = None
 
 
+# ---------------------------------------------------------------------------
+# Canonical deployment environment names (SSOT)
+# ---------------------------------------------------------------------------
+DEPLOYMENT_ENV_PREVIEW: str = "preview"
+DEPLOYMENT_ENV_STAGING: str = "staging"
+DEPLOYMENT_ENV_PRODUCTION: str = "production"
+
+#: 全系统仅有状态部署环境（Stateful Deployment Environments）。
+#: preview   : Dokploy 动态临时预览环境（含独立临时数据库）
+#: staging   : 长期稳定预演环境，上线前唯一真实验证门禁
+#: production: 线上生产环境（挂接 DR 异地灾备只读复制目标）
+#: 注意：本地开发机、GitHub Actions Runner、VPS IaC Runner 属于无状态执行器。
+STATEFUL_DEPLOY_ENVIRONMENTS: tuple[str, ...] = (
+    DEPLOYMENT_ENV_PREVIEW,
+    DEPLOYMENT_ENV_STAGING,
+    DEPLOYMENT_ENV_PRODUCTION,
+)
+
+
+def is_stateful_deploy_env(env: str | None, *, strict: bool = False) -> bool:
+    """Return True if env represents one of the 3 stateful deploy environments.
+
+    If strict=True, requires the normalized tier to be exactly 'preview', 'staging', or 'production'.
+    If strict=False (default), also recognizes dynamic Dokploy preview instances (e.g. 'pr-123', 'commit-xxxx').
+    """
+    if not env or not isinstance(env, str) or not env.strip():
+        return False
+    val = env.strip().lower()
+    if val in ("prod", "production", "staging", "stg", "preview"):
+        return True
+    if not strict and (
+        val.startswith("preview") or val.startswith("commit-") or val.startswith("pr-")
+    ):
+        return True
+    return False
+
+
 def normalize_env_name(value: str | None) -> str:
     """Normalize environment name for consistent behavior."""
     if not value or not value.strip():
@@ -131,6 +168,8 @@ def normalize_env_name(value: str | None) -> str:
         raise ValueError("ENV name must not include '-' or '/' (use '_')")
     if value in ("prod", "production"):
         return "production"
+    if value in ("stg", "staging"):
+        return "staging"
     return value
 
 

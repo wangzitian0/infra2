@@ -69,3 +69,45 @@ def test_identity_rejects_ambiguous_or_unserializable_coordinates(
 ) -> None:
     with pytest.raises(ValueError, match=match):
         ServiceIdentity.build(**kwargs)
+
+
+def test_canonical_stateful_deployment_environments():
+    from libs.common import (
+        DEPLOYMENT_ENV_PREVIEW,
+        DEPLOYMENT_ENV_PRODUCTION,
+        DEPLOYMENT_ENV_STAGING,
+        STATEFUL_DEPLOY_ENVIRONMENTS,
+        is_stateful_deploy_env,
+        normalize_env_name,
+    )
+    from libs.service_identity import (
+        STATEFUL_DEPLOY_ENVIRONMENTS as SI_STATEFUL_ENVIRONMENTS,
+        is_stateful_deploy_env as si_is_stateful,
+    )
+
+    # Exactly 3 stateful deployment environments
+    assert STATEFUL_DEPLOY_ENVIRONMENTS == ("preview", "staging", "production")
+    assert SI_STATEFUL_ENVIRONMENTS == STATEFUL_DEPLOY_ENVIRONMENTS
+    assert DEPLOYMENT_ENV_PREVIEW == "preview"
+    assert DEPLOYMENT_ENV_STAGING == "staging"
+    assert DEPLOYMENT_ENV_PRODUCTION == "production"
+
+    # Stateful recognition
+    for env in ("preview", "staging", "production", "prod", "stg", "PROD", "Staging"):
+        assert is_stateful_deploy_env(env) is True
+        assert si_is_stateful(env) is True
+
+    # Preview dynamic instances
+    for preview_instance in ("preview-pr-12", "commit-abc1234", "pr-42"):
+        assert is_stateful_deploy_env(preview_instance) is True
+        assert is_stateful_deploy_env(preview_instance, strict=True) is False
+
+    # Stateless runners / ephemeral test runners are NOT stateful deployment environments
+    for runner in ("local", "dev", "github-actions", "runner", "ci", "", None):
+        assert is_stateful_deploy_env(runner) is False
+
+    # Normalization preserves canonical tiers
+    assert normalize_env_name("prod") == "production"
+    assert normalize_env_name("stg") == "staging"
+    assert normalize_env_name("staging") == "staging"
+    assert normalize_env_name("preview") == "preview"
