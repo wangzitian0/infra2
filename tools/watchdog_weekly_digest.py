@@ -241,14 +241,25 @@ def summarize_weekly_runs(
     current = now or datetime.now(UTC)
     cutoff = current - timedelta(days=DIGEST_WINDOW_DAYS)
     recent = recent_weekly_runs(runs, now=current)
-    totals: dict[str, int] = {"success": 0, "failure": 0, "cancelled": 0, "other": 0}
+    totals: dict[str, int] = {
+        "success": 0,
+        "failure": 0,
+        "cancelled": 0,
+        "timed_out": 0,
+        "other": 0,
+    }
     failed_urls: list[str] = []
     for run in recent:
         conclusion = str(run.get("conclusion") or "").lower()
         html_url = str(run.get("html_url") or "")
         if conclusion == "success":
             totals["success"] += 1
-        elif conclusion in {"failure", "timed_out"}:
+        elif conclusion == "timed_out":
+            totals["failure"] += 1
+            totals["timed_out"] += 1
+            if html_url:
+                failed_urls.append(html_url)
+        elif conclusion == "failure":
             totals["failure"] += 1
             if html_url:
                 failed_urls.append(html_url)
@@ -259,13 +270,16 @@ def summarize_weekly_runs(
 
     total_count = len(recent)
     success_rate = (totals["success"] / total_count * 100.0) if total_count else 0.0
+    failure_rate = (totals["failure"] / total_count * 100.0) if total_count else 0.0
     return {
         "total_runs": total_count,
         "success_count": totals["success"],
         "failure_count": totals["failure"],
         "cancelled_count": totals["cancelled"],
+        "timed_out_count": totals["timed_out"],
         "other_count": totals["other"],
         "success_rate_pct": round(success_rate, 2),
+        "failure_rate_pct": round(failure_rate, 2),
         "failed_run_urls": failed_urls[:5],
         "week_start_utc": cutoff.date().isoformat(),
         "week_end_utc": current.date().isoformat(),

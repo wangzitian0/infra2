@@ -84,11 +84,19 @@ class PreviewCompose:
 
 
 def collect_preview_composes(projects: list[dict]) -> list[PreviewCompose]:
-    """Flatten the finance_report/preview environment into preview composes."""
+    """Flatten registered preview environments into preview composes."""
     found: list[PreviewCompose] = []
     preview_env = normalize_env_name(PREVIEW_ENVIRONMENT)
+    from libs.deploy_env_config import _PREVIEW_SERVICE_CONFIGS
+
+    registered_projects = {
+        cfg.project: f"{cfg.slug_prefix}-" for cfg in _PREVIEW_SERVICE_CONFIGS.values()
+    }
+
     for project in projects:
-        if str(project.get("name") or "") != PREVIEW_PROJECT:
+        pname = str(project.get("name") or "")
+        prefix = registered_projects.get(pname)
+        if not prefix:
             continue
         for env in project.get("environments") or []:
             if normalize_env_name(env.get("name")) != preview_env:
@@ -96,13 +104,13 @@ def collect_preview_composes(projects: list[dict]) -> list[PreviewCompose]:
             for compose in env.get("compose") or []:
                 cname = str(compose.get("name") or "")
                 cid = compose.get("composeId")
-                if not cid or not cname.startswith(_COMPOSE_PREFIX):
+                if not cid or not cname.startswith(prefix):
                     continue
                 found.append(
                     PreviewCompose(
                         compose_name=cname,
                         compose_id=str(cid),
-                        alias=cname[len(_COMPOSE_PREFIX) :],
+                        alias=cname[len(prefix) :],
                     )
                 )
     return found
