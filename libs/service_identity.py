@@ -5,9 +5,29 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from libs.common import (
+    DEPLOYMENT_ENV_PREVIEW,
+    DEPLOYMENT_ENV_PRODUCTION,
+    DEPLOYMENT_ENV_STAGING,
+    STATEFUL_DEPLOY_ENVIRONMENTS,
+    is_stateful_deploy_env,
+)
+
 IDENTITY_SCHEMA_VERSION = "v1"
 MANAGED_BY = "infra2"
 DOCKER_LABEL_PREFIX = "party.zitian.infra"
+
+__all__ = [
+    "DEPLOYMENT_ENV_PREVIEW",
+    "DEPLOYMENT_ENV_PRODUCTION",
+    "DEPLOYMENT_ENV_STAGING",
+    "DOCKER_LABEL_PREFIX",
+    "IDENTITY_SCHEMA_VERSION",
+    "MANAGED_BY",
+    "STATEFUL_DEPLOY_ENVIRONMENTS",
+    "ServiceIdentity",
+    "is_stateful_deploy_env",
+]
 
 _SERVICE_ID_RE = re.compile(r"^[a-z0-9_]+/[a-z0-9][a-z0-9_-]*$")
 _TOKEN_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
