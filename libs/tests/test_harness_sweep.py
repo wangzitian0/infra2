@@ -6,6 +6,7 @@ import json
 import os
 import stat
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -55,6 +56,29 @@ def _pr(facts: PrFacts, gate: int | None = 1, **kwargs) -> Status:
 
 def _iso(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, timezone.utc).isoformat()
+
+
+# --- plumbing
+
+
+def test_run_command_reports_a_missing_binary_as_127_and_passes_output_through():
+    missing = sweep.run_command(["/nonexistent/binary-for-sweep-test"])
+    assert missing.rc == 127 and "FileNotFoundError" in missing.err
+    echoed = sweep.run_command([sys.executable, "-c", "print('hi')"])
+    assert (echoed.rc, echoed.out) == (0, "hi\n")
+
+
+def test_pid_alive_distinguishes_live_and_finished_processes(monkeypatch):
+    assert sweep.pid_alive(os.getpid())
+    done = subprocess.Popen([sys.executable, "-c", "pass"])
+    done.wait()
+    assert not sweep.pid_alive(done.pid)
+
+    def denied(pid, signal):
+        raise PermissionError
+
+    monkeypatch.setattr(sweep.os, "kill", denied)
+    assert sweep.pid_alive(1)  # someone else's live process
 
 
 # --- classify_pr
