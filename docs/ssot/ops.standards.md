@@ -78,6 +78,8 @@ platform compose 中的镜像禁止浮动 tag——上游静默漂移且不可�
 在任何涉及持久化存储的应用部署销毁或重启容器前，必须执行 Pre-Deploy Schema Gate（`tools/pre_deploy_schema_check.py`）：
 - **双向严格比对**：代码缺失 DB 已有枚举（`missing_in_code`）或 DB 缺失代码枚举（`missing_in_db`）均视为不兼容阻断项。
 - **Fail-Closed 原则**：数据库查询失败、连接超时或解析异常一律视为不满足，强制中断发布流程。
+- **未评估即阻断（#718 review）**：没有数据库 URL、服务未登记代码侧枚举来源（`ENUM_SOURCES`）或该来源导入失败/没有任何原生枚举，均输出 `NOT EVALUATED` 并以退出码 3 阻断——“什么都没比”绝不等于“0 处不一致”。退出码：0 通过 · 1 不一致或 DB 失败 · 3 未评估。
+- **代码侧真源**：服务自己的 SQLAlchemy metadata（finance_report：`import src.orm_registry` 后的 `src.database:Base.metadata`，Postgres 枚举类型名取自 `Enum(name=...)`），因此门禁在应用自己的 Python 环境里运行（`--app-path <finance_report checkout>/apps/backend`）。当前尚未接入 `deploy_v2`（见 Infra-022 TODOWRITE）。
 - **事故先例**：2026-09-10 事故（#698）中，因 Enum 大小写不匹配（'PENDING' vs 'pending'）导致 finance_report 后端容器重启即崩溃死循环，服务中断 13 分钟。
 
 ### Rule 8: 写入非幂等禁止盲目重试与幂等键铁律 (Safe Retries & Idempotency)
