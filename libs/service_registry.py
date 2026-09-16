@@ -216,9 +216,16 @@ def _validate_restart_after(metas: dict[str, ServiceMeta]) -> None:
                 raise ValueError(
                     f"{label}: unknown dependency — not a registered service_id"
                 )
-            if isinstance(facet.services, str) or not facet.services:
+            # A tuple, not any sequence: a list would make the frozen facet mutable,
+            # and a bare string would iterate as its characters.
+            if (
+                not isinstance(facet.services, tuple)
+                or not facet.services
+                or not all(isinstance(name, str) and name for name in facet.services)
+            ):
                 raise ValueError(
-                    f"{label}: `services` must be a non-empty tuple of compose service keys"
+                    f"{label}: `services` must be a non-empty tuple of compose service "
+                    f"keys, got {facet.services!r}"
                 )
             declared = _compose_container_names(meta, "")
             unknown = [name for name in facet.services if name not in declared]

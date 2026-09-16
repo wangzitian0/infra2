@@ -241,6 +241,19 @@ def test_a_prod_only_dependent_is_restarted_only_in_production(
             "RestartAfterFacet(dependency='platform/redis', services=('api'))",
             r"non-empty tuple",
         ),
+        (
+            # a list would make the frozen facet mutable
+            "RestartAfterFacet(dependency='platform/redis', services=['api'])",
+            r"non-empty tuple of compose service keys, got \['api'\]",
+        ),
+        (
+            "RestartAfterFacet(dependency='platform/redis', services=('api', 3))",
+            r"non-empty tuple",
+        ),
+        (
+            "RestartAfterFacet(dependency='platform/redis', services=('',))",
+            r"non-empty tuple",
+        ),
     ],
 )
 def test_restart_after_fails_closed_at_registry_load(
