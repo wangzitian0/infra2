@@ -168,14 +168,20 @@ def normalize_env_name(value: str | None) -> str:
     """Normalize environment name for consistent behavior."""
     if not value or not value.strip():
         return "production"
-    value = value.strip().lower()
-    if "-" in value or "/" in value:
-        raise ValueError("ENV name must not include '-' or '/' (use '_')")
-    if value in ("prod", "production"):
+    val = value.strip().lower()
+    if val in ("prod", "production"):
         return "production"
-    if value in ("stg", "staging"):
+    if val in ("stg", "staging"):
         return "staging"
-    return value
+    if val in ("preview", "preview_env", "preview-env"):
+        return "preview"
+    if val.startswith("pr-") or val.startswith("pr_"):
+        return val.replace("-", "_")
+    if val.startswith("preview-"):
+        return val.replace("-", "_")
+    if "-" in val or "/" in val:
+        raise ValueError("ENV name must not include '-' or '/' (use '_')")
+    return val
 
 
 def reset_env_cache() -> None:
@@ -186,10 +192,11 @@ def reset_env_cache() -> None:
 
 def set_deploy_env(env_name: str) -> None:
     """Point this process at ``env_name`` the way the iac-runner does for its children:
-    DEPLOY_ENV is the only input get_env() reads; ENV_SUFFIX / ENV_DOMAIN_SUFFIX follow
+    INFRA_ENVIRONMENT and DEPLOY_ENV are synchronized; ENV_SUFFIX / ENV_DOMAIN_SUFFIX follow
     from it (staging → ``-staging``), and the memoized config is dropped."""
     name = normalize_env_name(env_name)
     suffix = "" if name == "production" else f"-{name.replace('_', '-')}"
+    os.environ["INFRA_ENVIRONMENT"] = name
     os.environ["DEPLOY_ENV"] = name
     os.environ["ENV_SUFFIX"] = suffix
     os.environ["ENV_DOMAIN_SUFFIX"] = suffix
@@ -209,7 +216,12 @@ def get_env() -> dict[str, str | None]:
 
     op = OpSecrets()
 
-    env_name = normalize_env_name(os.environ.get("DEPLOY_ENV", "production"))
+    raw_env = (
+        os.environ.get("INFRA_ENVIRONMENT")
+        or os.environ.get("DEPLOY_ENV")
+        or "production"
+    )
+    env_name = normalize_env_name(raw_env)
     env_dns = env_name.replace("_", "-")
     env_domain_suffix = "" if env_name == "production" else f"-{env_dns}"
     project = (os.environ.get("PROJECT") or "platform").strip()
@@ -227,7 +239,7 @@ def get_env() -> dict[str, str | None]:
         "PROJECT": project,
         "ENV": env_name,
         "ENV_DOMAIN_SUFFIX": env_domain_suffix,
-        "ENV_SUFFIX": os.environ.get("ENV_SUFFIX"),
+        "ENV_SUFFIX": os.environ.get("ENV_SUFFIX") or env_domain_suffix,
         "DATA_PATH": os.environ.get("DATA_PATH"),
     }
     return _env_cache

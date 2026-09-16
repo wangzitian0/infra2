@@ -617,3 +617,25 @@ def test_run_once_stay_resolved_floor_suppresses_a_refire_and_digests_chronic_on
     clock["now"] += 7 * 3600
     observed["broken"] = True
     assert sweep_n(3) == 1
+
+
+def test_oom_killed_breakdown_classifies_as_host_memory():
+    """Verify that containers terminated by host CGroup OOM classify as host-memory instead of runtime."""
+    reason, detail = classify_reason("kernel: Out of memory: Killed process 1234 (python)")
+    assert "out of memory" in reason
+
+    bd = Breakdown(
+        container="finance_report-backend",
+        state="exited",
+        reason=reason,
+        detail=detail,
+        service_id="finance_report/app",
+        component="backend",
+        environment="production",
+    )
+    payload = build_breakdown_alert_payload([bd])
+    assert payload["status"] == "firing"
+    alert = payload["alerts"][0]
+    assert alert["labels"]["failure_domain"] == "host-memory"
+    assert "out of memory" in alert["annotations"]["description"].lower()
+

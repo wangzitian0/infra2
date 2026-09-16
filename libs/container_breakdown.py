@@ -38,6 +38,9 @@ BREAKDOWN_PATTERNS: tuple[tuple[str, str], ...] = (
     ("permission denied", "permission denied (Vault / secret access)"),
     ("no such host", "DNS / service resolution failure"),
     ("connection refused", "dependency unreachable (connection refused)"),
+    ("out of memory", "out of memory (host CGroup OOM killed)"),
+    ("oom-killer", "out of memory (host CGroup OOM killed)"),
+    ("killed process", "process terminated by system (SIGKILL)"),
 )
 
 _MAX_DETAIL = 200
@@ -97,8 +100,9 @@ def classify_reason(logs: str) -> tuple[str, str]:
     so the alert always carries *something* actionable.
     """
     for pattern, cause in BREAKDOWN_PATTERNS:
+        pat_lower = pattern.lower()
         for line in logs.splitlines():
-            if pattern in line:
+            if pat_lower in line.lower():
                 return cause, line.strip()[:_MAX_DETAIL]
     for line in reversed(logs.splitlines()):
         if line.strip():
@@ -190,13 +194,22 @@ def build_breakdown_alert_payload(
                 b.service_id.split("/", 1)[-1] if b.service_id else "unregistered"
             ),
         )
+        combined_text = (b.reason + " " + b.detail).lower()
+        domain = (
+            "host-memory"
+            if any(
+                k in combined_text
+                for k in ("out of memory", "oom-killer", "cgroup oom")
+            )
+            else "runtime"
+        )
         alerts.append(
             {
                 "status": status,
                 "labels": {
                     "alertname": alertname,
                     **identity.alert_labels(
-                        severity=severity, failure_domain="runtime"
+                        severity=severity, failure_domain=domain
                     ),
                     "state": b.state,
                 },
