@@ -19,6 +19,7 @@ effective-config verification.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from libs.common import infra_domain
@@ -408,6 +409,7 @@ def deploy(
     verify_vault: bool = False,
     verify_config: bool = False,
     verify_ingestion: bool = False,
+    on_triggered: Callable[[], None] | None = None,
     _now=time.time,
 ) -> DeployPlan:
     """Deploy a resolved app commit to a fixed app environment.
@@ -440,6 +442,17 @@ def deploy(
       to the one we pushed (fail-closed on a deploy that did not take).
     The verify_* flags default False so the assembly unit tests need no live Dokploy/Vault;
     the CLI enables them so a real workflow deploy gets the full bash-equivalent behavior.
+
+    on_triggered (truealpha#712's companion-parallel fire, #truealpha critical-path):
+    called exactly once, synchronously, immediately after Dokploy ACCEPTS the deploy
+    trigger (``client.deploy_compose``) — before any rollout wait / config verify /
+    in-service verify. tools.app_deploy_request.execute_plan uses this to start a
+    companion service's own deploy as soon as the primary's trigger is accepted, instead
+    of waiting for the primary's full health settle. Never called if the trigger itself
+    is never reached (assert_approle_creds_present / ensure_generated_secrets /
+    preflight_vault_token / the env push all raise before this point) — a primary that
+    fails before triggering must not start its companion. None (the default) is a no-op;
+    every existing caller is unaffected.
 
     branch (truealpha#447's root cause): the compose's OWN Dokploy github-source ref —
     re-asserted on every call, mirroring libs.deploy.preview.up's identical re-assert
@@ -606,6 +619,8 @@ def deploy(
             phase(f"{service}: dokploy-trigger: start")
             client.deploy_compose(cfg.compose_id)
             phase(f"{service}: dokploy-trigger: accepted")
+            if on_triggered is not None:
+                on_triggered()
             if wait:
                 phase(f"{service}: rollout-wait: start")
                 wait_for_rollout(

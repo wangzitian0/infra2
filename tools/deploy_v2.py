@@ -26,6 +26,7 @@ import math
 import os
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import httpx  # Dokploy transport errors from libs.dokploy surface as httpx exceptions
@@ -480,6 +481,7 @@ def _deploy_platform(
     wait: bool,
     timeout: int,
     version_ref: str | None = None,
+    on_triggered: Callable[[], None] | None = None,
 ) -> DeployV2Result:
     """Route a platform (iac_pinned) service to the iac_runner ``/deploy`` webhook.
 
@@ -541,6 +543,8 @@ def _deploy_platform(
         version_ref=pinned_ref,
     )
     phase(f"{service}: iac-runner-trigger: accepted")
+    if on_triggered is not None:
+        on_triggered()
     detail = {"env": env, "ref": iac_sha, "services": [service], "iac_runner": response}
     if pinned_ref:
         detail["version_ref"] = pinned_ref
@@ -741,6 +745,7 @@ def deploy_v2(
     triggered_by: str = "deploy_v2",
     image_wait_seconds: float | None = None,
     image_poll_seconds: float | None = None,
+    on_triggered: Callable[[], None] | None = None,
 ) -> DeployV2Result:
     """Execute one deploy_v2 coordinate ``(service, type, version_ref, iac_ref)``.
 
@@ -756,6 +761,13 @@ def deploy_v2(
 
     A platform (``iac_pinned``) service routes to the iac_runner webhook instead, ignoring
     ``version_ref`` (its artifact is the ``iac_ref``-pinned stack) — see :func:`_deploy_platform`.
+
+    ``on_triggered`` (truealpha#712 companion-parallel fire): called exactly once,
+    synchronously, once the underlying backend's trigger is ACCEPTED (Dokploy's
+    ``deploy_compose`` for the fixed-compose app path, iac_runner's ``/deploy`` webhook
+    for the platform path) — never called if a gate/validation/secrets-supply failure
+    means the trigger itself is never reached. Not wired to the preview-lifecycle
+    backend (companions never target a preview deploy). None (default) is a no-op.
     """
     # A service with its own dedicated domain (Deployer.domain, e.g. truealpha/app ->
     # truealpha.club) overrides whatever shared domain the caller passed in — the same
@@ -795,6 +807,7 @@ def deploy_v2(
             wait=wait,
             timeout=timeout,
             version_ref=version_ref,
+            on_triggered=on_triggered,
         )
 
     resolved_repo = repo if repo is not None else _repo_for_service(service)
@@ -929,6 +942,7 @@ def deploy_v2(
         verify_config=verify_config,
         verify_ingestion=verify_ingestion,
         model_overrides=model_overrides_from_env(),
+        on_triggered=on_triggered,
     )
     detail = {
         "env": plan.env,
@@ -942,11 +956,21 @@ def deploy_v2(
     return DeployV2Result(target, data_lane, "deploy-primitive", detail)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    on_triggered: Callable[[], None] | None = None,
+) -> int:
     """CLI entry for the unified front door — the surface deploy workflows invoke.
 
     Builds the Dokploy client, runs ``deploy_v2`` (which resolves the version_ref/iac_ref
     surfaces itself), and prints the result as one JSON line.
+
+    ``on_triggered`` is an in-process-only hook (not exposed on the argv/CLI surface —
+    it is a Python callable, not a string): forwarded to :func:`deploy_v2` so an
+    in-process caller like ``tools.app_deploy_request.execute_plan`` can fire a companion
+    service's deploy as soon as THIS one's trigger is accepted. Every argv-only (real
+    CLI) invocation omits it and gets today's behavior unchanged.
     """
     parser = argparse.ArgumentParser(description="unified deploy_v2 front door")
     parser.add_argument("--service", default=_APP_SERVICE, help="service key")
@@ -1134,6 +1158,7 @@ def main(argv: list[str] | None = None) -> int:
             repo=args.repo,
             image_wait_seconds=args.image_wait_seconds,
             image_poll_seconds=args.image_poll_seconds,
+            on_triggered=on_triggered,
         )
     except (ValueError, RuntimeError, TimeoutError, httpx.HTTPError) as exc:
         print(f"deploy_v2 failed: {exc}", file=sys.stderr)

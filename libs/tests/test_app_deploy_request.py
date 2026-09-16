@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import threading
 from types import SimpleNamespace
 
 import httpx
@@ -879,13 +880,9 @@ def test_cli_fails_closed_when_production_evidence_is_unavailable(
     assert "remote verification unavailable" in capsys.readouterr().err
 
 
-def test_execute_promotes_the_declared_companions_after_the_primary(tmp_path) -> None:
-    """truealpha#712: one app-deploy request promotes the app AND the data engine. The
-    companion runs at the same version_ref / iac_ref / type, without the app-image
-    --expected-sha assertion (it is a digest-pinned platform service; the runner pins the
-    release's digest from version_ref), and a companion failure is the request's failure."""
+def _truealpha_production_plan(tmp_path):
     truealpha = "https://github.com/wangzitian0/truealpha"
-    production = receiver.make_plan(
+    return receiver.make_plan(
         production_payload(
             service="truealpha/app",
             source_repository="wangzitian0/truealpha",
@@ -904,73 +901,171 @@ def test_execute_promotes_the_declared_companions_after_the_primary(tmp_path) ->
         runner=tags,
         production_evidence_verifier=lambda request: None,
     )
-    runs: list[list[str]] = []
 
-    def run(args: list[str]) -> int:
-        runs.append(list(args))
-        return 0
 
-    assert receiver_cli.execute_plan(production, run=run) == 0
-    assert [a[a.index("--service") + 1] for a in runs] == [
-        "truealpha/app",
-        "truealpha/data_engine",
-    ]
-    primary, companion = runs
+def _immediate_trigger_run(recorded: dict[str, list[str]], codes: dict[str, int]):
+    """A `run(args, on_triggered)` double that triggers immediately and returns the
+    code registered for that service in `codes` (default 0)."""
+
+    def run(args: list[str], on_triggered) -> int:
+        service = args[args.index("--service") + 1]
+        recorded[service] = list(args)
+        on_triggered()
+        return codes.get(service, 0)
+
+    return run
+
+
+def test_execute_promotes_the_declared_companion_with_correct_args(tmp_path) -> None:
+    """truealpha#712: one app-deploy request promotes the app AND the data engine. The
+    companion runs at the same version_ref / iac_ref / type, without the app-image
+    --expected-sha assertion (it is a digest-pinned platform service; the runner pins the
+    release's digest from version_ref)."""
+    production = _truealpha_production_plan(tmp_path)
+    recorded: dict[str, list[str]] = {}
+
+    assert (
+        receiver_cli.execute_plan(production, run=_immediate_trigger_run(recorded, {}))
+        == 0
+    )
+
+    assert set(recorded) == {"truealpha/app", "truealpha/data_engine"}
+    primary, companion = recorded["truealpha/app"], recorded["truealpha/data_engine"]
     assert "--expected-sha" in primary and "--expected-sha" not in companion
     for flag in ("--type", "--version-ref", "--iac-ref", "--domain"):
         assert companion[companion.index(flag) + 1] == primary[primary.index(flag) + 1]
     assert "--staging-validated" in companion and "--code-reviewed" in companion
 
-    # the companion's exit code is the request's
-    codes = iter([0, 7])
-    assert receiver_cli.execute_plan(production, run=lambda args: next(codes)) == 7
-    # a failed primary never reaches the companion
-    seen: list[list[str]] = []
 
-    def failing(args: list[str]) -> int:
-        seen.append(list(args))
-        return 3
+def test_execute_fires_the_companion_once_triggered_not_after_the_primary_finishes(
+    tmp_path,
+) -> None:
+    """#truealpha critical-path: the companion must start as soon as the primary's
+    Dokploy/iac-runner TRIGGER is accepted, not after the primary's full health-settle
+    completes. Proven by making the primary's own run() block until the companion has
+    actually started — a still-sequential implementation (companion only after the
+    primary call returns) would deadlock here and the bounded wait would time out."""
+    production = _truealpha_production_plan(tmp_path)
+    companion_started = threading.Event()
+    seen: dict[str, list[str]] = {}
+
+    def run(args: list[str], on_triggered) -> int:
+        service = args[args.index("--service") + 1]
+        if service == "truealpha/app":
+            on_triggered()
+            assert companion_started.wait(timeout=5), (
+                "companion never started while the primary was still running "
+                "(execute_plan regressed to sequential firing)"
+            )
+            seen[service] = list(args)
+            return 0
+        seen[service] = list(args)
+        companion_started.set()
+        return 0
+
+    assert receiver_cli.execute_plan(production, run=run) == 0
+    assert set(seen) == {"truealpha/app", "truealpha/data_engine"}
+
+
+def test_execute_skips_the_companion_when_the_primary_fails_before_triggering(
+    tmp_path,
+) -> None:
+    """A primary that fails before ever accepting its trigger (evidence / gate /
+    secrets-supply / Dokploy-API error) must never start the companion: 'a failed
+    primary TRIGGER skips the companion'."""
+    production = _truealpha_production_plan(tmp_path)
+    seen: list[str] = []
+
+    def failing(args: list[str], on_triggered) -> int:
+        seen.append(args[args.index("--service") + 1])
+        return 3  # never calls on_triggered — this is a trigger-time failure
 
     assert receiver_cli.execute_plan(production, run=failing) == 3
-    assert len(seen) == 1
+    assert seen == ["truealpha/app"]
 
 
-def test_execute_plan_logs_primary_and_companion_phase_markers_in_order(
-    capsys, tmp_path
-):
-    """#truealpha critical-path visibility: execute_plan must mark the primary and
-    each companion's start/done as one-line timestamped log entries, in call order —
-    additive only, no change to the run()/exit-code contract."""
-    truealpha = "https://github.com/wangzitian0/truealpha"
-    production = receiver.make_plan(
-        production_payload(
-            service="truealpha/app",
-            source_repository="wangzitian0/truealpha",
-            evidence={
-                "source_run_url": f"{truealpha}/actions/runs/100",
-                "source_run_id": "100",
-                "staging_run_url": f"{truealpha}/actions/runs/101",
-                "reviewed_change_url": f"{truealpha}/pull/10",
-            },
-        ),
+def test_execute_reports_the_union_of_failures_when_the_primary_fails_after_triggering(
+    tmp_path,
+) -> None:
+    """Once the trigger is accepted, a LATER primary failure (rollout wait / config
+    verify / in-service verify) must not prevent the companion from running — unlike
+    the old first-non-zero-stops-the-sequence behavior, which would never have reached
+    it. Both still ran is proven by both appearing in `recorded`."""
+    production = _truealpha_production_plan(tmp_path)
+    recorded: dict[str, list[str]] = {}
+
+    result = receiver_cli.execute_plan(
+        production,
+        run=_immediate_trigger_run(recorded, {"truealpha/app": 7}),
+    )
+
+    assert result == 7
+    assert set(recorded) == {"truealpha/app", "truealpha/data_engine"}
+
+
+def test_execute_reports_the_union_of_failures_when_only_the_companion_fails(
+    tmp_path,
+) -> None:
+    production = _truealpha_production_plan(tmp_path)
+    recorded: dict[str, list[str]] = {}
+
+    result = receiver_cli.execute_plan(
+        production,
+        run=_immediate_trigger_run(recorded, {"truealpha/data_engine": 5}),
+    )
+
+    assert result == 5
+    assert set(recorded) == {"truealpha/app", "truealpha/data_engine"}
+
+
+def test_execute_without_companions_never_starts_a_background_thread(tmp_path) -> None:
+    """finance_report/app declares no companions — execute_plan must take the plain,
+    single-call path (no threading involved) exactly as before."""
+    payload_data = payload(service="finance_report/app")
+    plan = receiver.make_plan(
+        payload_data,
         sender="wangzitian0",
         domain="zitian.party",
         timeout=600,
         repo_root=tmp_path,
         resolve_image=resolved,
         runner=tags,
-        production_evidence_verifier=lambda request: None,
     )
+    calls: list[list[str]] = []
 
-    assert receiver_cli.execute_plan(production, run=lambda args: 0) == 0
+    def run(args: list[str], on_triggered) -> int:
+        calls.append(list(args))
+        on_triggered()
+        return 0
+
+    assert receiver_cli.execute_plan(plan, run=run) == 0
+    assert len(calls) == 1
+
+
+def test_execute_plan_logs_primary_and_companion_phase_markers(
+    capsys, tmp_path
+) -> None:
+    """#truealpha critical-path visibility: execute_plan must mark the primary and
+    companion's start/done as one-line timestamped log entries — additive only, no
+    change to the run()/exit-code contract. "primary: start" is always first (nothing
+    else can happen before the primary's own run() begins); the primary's "done" marker
+    relative to the companion's is NOT ordered (they run concurrently once triggered),
+    so only the guaranteed ordering is asserted here."""
+    production = _truealpha_production_plan(tmp_path)
+    recorded: dict[str, list[str]] = {}
+
+    assert (
+        receiver_cli.execute_plan(production, run=_immediate_trigger_run(recorded, {}))
+        == 0
+    )
 
     lines = [
         line for line in capsys.readouterr().out.splitlines() if line.startswith("[+")
     ]
     markers = [line.split("] ", 1)[1] for line in lines]
-    assert markers == [
-        "truealpha/app: primary: start",
+    assert markers[0] == "truealpha/app: primary: start"
+    assert set(markers[1:]) == {
         "truealpha/app: primary: done (exit 0)",
         "truealpha/data_engine: companion: start",
         "truealpha/data_engine: companion: done (exit 0)",
-    ]
+    }
