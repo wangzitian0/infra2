@@ -165,6 +165,26 @@ for (const [label, overrides] of [
     await runnerDay(heartbeat, { verdict: (round) => round % 2 === 0, envOverrides: overrides }),
   );
 }
+// A corrupted status-change counter must not disable the budget.
+for (const [label, used] of [
+  ["corruptBudgetCounter", "many"],
+  ["negativeBudgetCounter", -1000],
+]) {
+  results[label] = summarize(
+    await runnerDay(heartbeat, {
+      verdict: (round) => round % 2 === 0,
+      seed: {
+        environment: heartbeat.environment,
+        name: heartbeat.name,
+        ok: true,
+        detail: "probe loop completed",
+        timestamp: 0,
+        receivedAt: DAY_START - 1000,
+        statusChangeBudget: { day: new Date(DAY_START).toISOString().slice(0, 10), used },
+      },
+    }),
+  );
+}
 // Probe rounds hang: only liveness pings arrive; the stored failing verdict must survive.
 results.livenessOnly = summarize(
   await runnerDay(heartbeat, {

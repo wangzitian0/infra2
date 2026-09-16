@@ -94,6 +94,18 @@ def test_malformed_budget_vars_fall_back_to_the_defaults(day) -> None:
         assert day[scenario]["puts"] <= bound, (scenario, day[scenario]["puts"])
 
 
+def test_a_corrupted_budget_counter_does_not_disable_the_budget(
+    day, budget_vars
+) -> None:
+    """#735 review: a NaN or negative stored counter must not reopen early writes."""
+    interval = int(budget_vars["WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS"])
+    refreshes = math.ceil(86400 / interval)
+    # a non-numeric or negative counter counts as spent: refresh writes only
+    # (the previous head wrote 116 and 1045 puts for these days)
+    for scenario in ("corruptBudgetCounter", "negativeBudgetCounter"):
+        assert day[scenario]["puts"] <= refreshes + 1, scenario
+
+
 def test_heartbeats_never_look_stale_to_the_cron(day, budget_vars) -> None:
     max_age = min(
         heartbeat["maxAgeSeconds"]

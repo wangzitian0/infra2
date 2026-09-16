@@ -428,10 +428,14 @@ function parseHeartbeatRecord(raw) {
 // minute per environment while any probe failed.
 function heartbeatWrite(existing, incoming, nowMs, policy) {
   const day = utcDateKey(nowMs);
-  const spent =
-    existing && existing.statusChangeBudget && existing.statusChangeBudget.day === day
-      ? Number(existing.statusChangeBudget.used || 0)
-      : 0;
+  const stored = existing && existing.statusChangeBudget;
+  let spent = 0;
+  if (stored && stored.day === day) {
+    const used = Number(stored.used);
+    // A counter that is not a non-negative number (a corrupted or hand-edited
+    // record) counts as spent: a NaN would make `spent >= budget` always false.
+    spent = Number.isFinite(used) && used >= 0 ? Math.floor(used) : policy.statusChangeWritesPerDay;
+  }
   const budget = (used) => ({ day, used });
   const { liveness, ...verdict } = incoming;
   if (!existing) {
