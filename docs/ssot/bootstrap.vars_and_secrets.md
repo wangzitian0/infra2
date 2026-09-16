@@ -74,7 +74,8 @@ contract v2）里声明一个 **source class**；部署时 `Deployer.apply_secre
 **每日核对**：`tools/secrets_reconcile.py`（ops-checks `27 8 * * *`，在 iac-runner 容器内跑，
 `tools/secrets_reconcile_check.py` 经 SSH 取回结论）把每个 service × env 的 Vault 路径和
 manifest / 1Password 比对（missing / empty / unclassified / stale，**只报名字**），同时读
-Cloudflare 免费额度（KV 写入 1,000/天等）；有确认的发现才发飞书。
+Cloudflare 免费额度（KV 写入 1,000/天等；以昨日判定，并附 `cloudflare.kv.write` 近 7 日 + 今日至今的逐日趋势，
+超额时趋势随告警一起发出）；有确认的发现才发飞书。
 
 **存储卫生**：一个服务的 Vault 路径只允许存两类值——(1) 它的 Vault Agent 模板会渲染进容器的
 值（manifest 里 `human` / `runtime` 的 store-backed 字段），(2) 运维任务直接读、且**故意不渲染**

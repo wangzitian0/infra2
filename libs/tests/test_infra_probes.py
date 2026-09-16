@@ -1233,6 +1233,42 @@ def test_probe_runner_posts_cloudflare_watchdog_heartbeat(
     }
 
 
+def test_probe_runner_liveness_ping_is_flagged_on_the_wire(monkeypatch) -> None:
+    """The watchdog keeps the stored verdict for a flagged liveness ping; a verdict
+    post (the exact payload above) carries no flag. 2026-09-15: the unflagged ping's
+    ok=true alternated with a failing verdict and every alternation was a KV put."""
+    runner = _load_probe_runner()
+    sent: list[dict] = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return b"ok"
+
+    def fake_urlopen(request, *, timeout):
+        sent.append(json.loads(request.data.decode("utf-8")))
+        return FakeResponse()
+
+    monkeypatch.setenv(
+        "INFRA_PROBE_HEARTBEAT_URL", "https://watchdog.example/heartbeat"
+    )
+    monkeypatch.setattr(runner, "urlopen", fake_urlopen)
+    runner._post_heartbeat(
+        ok=True, detail="probe loop iteration starting", liveness=True
+    )
+    runner._post_heartbeat(ok=False)
+
+    assert sent[0]["liveness"] is True
+    assert sent[0]["ok"] is True
+    assert "liveness" not in sent[1]
+    assert sent[1]["ok"] is False
+
+
 def test_probe_runner_heartbeat_is_configured_in_alerting_compose() -> None:
     """Infra-011.2: prod/staging alerting deployments can publish heartbeats."""
     compose = (ROOT / "platform/12.alerting/compose.yaml").read_text(encoding="utf-8")
@@ -1339,8 +1375,8 @@ def test_probe_runner_posts_liveness_heartbeat_before_probes(monkeypatch) -> Non
         events.append("run_once")
         return 0
 
-    def fake_post_heartbeat(*, ok, detail=""):
-        events.append(("hb", detail))
+    def fake_post_heartbeat(*, ok, detail="", liveness=False):
+        events.append(("hb", detail, liveness))
 
     def fake_sleep(_seconds):
         raise SystemExit(0)
@@ -1357,9 +1393,10 @@ def test_probe_runner_posts_liveness_heartbeat_before_probes(monkeypatch) -> Non
     except SystemExit:
         pass
 
-    assert events[0] == ("hb", "probe loop iteration starting")
+    # flagged as liveness so the watchdog keeps the last probe verdict (KV budget)
+    assert events[0] == ("hb", "probe loop iteration starting", True)
     assert "run_once" in events
-    assert events.index(("hb", "probe loop iteration starting")) < events.index(
+    assert events.index(("hb", "probe loop iteration starting", True)) < events.index(
         "run_once"
     )
 

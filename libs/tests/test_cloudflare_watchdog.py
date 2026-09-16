@@ -189,15 +189,22 @@ def test_cloudflare_watchdog_docs_include_deploy_and_secret_contract() -> None:
 
 
 def test_worker_heartbeat_throttles_kv_writes_to_avoid_daily_limit() -> None:
-    """Heartbeat writes must be throttled so the KV daily put() limit isn't hit."""
+    """Heartbeat writes must be throttled so the KV daily put() limit isn't hit.
+
+    Read-then-maybe-write: a verdict refreshes the record once per interval, a changed
+    verdict is written early only within a per-key daily budget, and a liveness ping
+    never changes the stored verdict (2026-09-15: that flip was written on every
+    post). Behaviour is proven in test_cloudflare_watchdog_kv_budget.py.
+    """
     source = WORKER.read_text(encoding="utf-8")
 
-    # Read-then-maybe-write: a status change persists immediately, otherwise the
-    # write is throttled by a configurable minimum interval.
     assert "WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS" in source
-    assert "shouldWrite" in source
-    assert "statusUnchanged" in source
+    assert "WATCHDOG_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY" in source
+    assert "function heartbeatWrite(existing, incoming, nowMs, policy)" in source
+    assert "function isLivenessPing(payload)" in source
+    assert "status-change-budget-spent" in source
     assert "const existingRaw = await env.WATCHDOG_STATE.get(key)" in source
+    assert "not a configured heartbeat" in source
 
 
 def test_worker_records_availability_ledger_with_positive_proof() -> None:
@@ -282,14 +289,20 @@ def test_worker_heartbeat_interval_is_explicit_and_within_kv_budget() -> None:
 
     interval_seconds = int(variables["WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS"])
     assert interval_seconds >= 600
+    status_change_writes = int(
+        variables["WATCHDOG_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY"]
+    )
 
     heartbeats = json.loads(variables["WATCHDOG_HEARTBEATS_JSON"])
     cron_runs_per_day = 48  # every 30 minutes
-    # Worst case: every heartbeat key forces one write per throttle interval, plus
-    # one lastRun put and one alert-state put per cron run. Ceil the per-key
-    # writes so a non-divisible interval is not under-counted.
-    heartbeat_puts = len(heartbeats) * math.ceil(86400 / interval_seconds)
-    cron_puts = cron_runs_per_day * 2
+    # Worst case: every configured heartbeat key refreshes once per throttle interval
+    # and spends its whole early status-change budget; every cron run puts lastRun,
+    # the ledger rollup and the alert state. Ceil the per-key refreshes so a
+    # non-divisible interval is not under-counted.
+    heartbeat_puts = len(heartbeats) * (
+        math.ceil(86400 / interval_seconds) + status_change_writes
+    )
+    cron_puts = cron_runs_per_day * 3
     worst_case_daily_puts = heartbeat_puts + cron_puts
 
     kv_free_daily_put_limit = 1000

@@ -360,6 +360,138 @@ async function checkHeartbeats(env, heartbeats, nowMs) {
   return results;
 }
 
+// Heartbeat KV budget. The free tier allows 1000 put()/day for the whole account,
+// and a spent quota silently freezes every heartbeat into a false "stale" page
+// (#616; again 2026-09-15/16: 1198 and 1157 puts/day). Each configured heartbeat
+// key costs at most
+//   ceil(86400 / minWriteInterval)   refresh writes
+// + statusChangeWritesPerDay         early writes for a changed verdict
+// per UTC day, however often the runner posts and however its verdict flaps.
+const DEFAULT_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS = 600;
+const DEFAULT_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY = 24;
+// Hard runtime limits, whatever the Worker env says: with 2 heartbeat keys and 48
+// cron runs, the worst case is 2 * (ceil(86400 / 600) + 24) + 48 * 3 = 480 puts/day,
+// under half the free tier.
+const MIN_HEARTBEAT_WRITE_INTERVAL_SECONDS = 600;
+const MAX_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY = 24;
+// A liveness ping may refresh the record only once verdict posts have left it
+// alone this long (in units of minWriteInterval), so a verdict always gets the
+// write window first and a ping can never hide it.
+const LIVENESS_REFRESH_INTERVALS = 2;
+// The probe runner's liveness-first ping (#369) before every probe round. Runners
+// built before the `liveness` flag send it with this fixed detail and ok=true.
+const LEGACY_LIVENESS_DETAIL = "probe loop iteration starting";
+
+function isLivenessPing(payload) {
+  return payload.liveness === true || String(payload.detail || "") === LEGACY_LIVENESS_DETAIL;
+}
+
+// A budget variable that is unset, empty or non-numeric falls back to its default,
+// and one outside [min, max] is clamped: NaN makes every `age < interval`
+// comparison false, and a tiny interval or a huge budget writes (nearly) every
+// post — each silently reopens the unbounded-write path.
+function budgetVar(raw, fallback, { min, max = Infinity }) {
+  if (raw === undefined || raw === null || String(raw).trim() === "") {
+    return fallback;
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, value));
+}
+
+function heartbeatWritePolicy(env) {
+  const minWriteIntervalMs =
+    budgetVar(env.WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS, DEFAULT_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS, {
+      min: MIN_HEARTBEAT_WRITE_INTERVAL_SECONDS,
+    }) * 1000;
+  return {
+    minWriteIntervalMs,
+    livenessRefreshMs: minWriteIntervalMs * LIVENESS_REFRESH_INTERVALS,
+    statusChangeWritesPerDay: Math.floor(
+      budgetVar(env.WATCHDOG_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY, DEFAULT_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY, {
+        min: 0,
+        max: MAX_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY,
+      }),
+    ),
+  };
+}
+
+function parseHeartbeatRecord(raw) {
+  if (!raw) {
+    return null;
+  }
+  try {
+    const record = JSON.parse(raw);
+    return record && typeof record === "object" && !Array.isArray(record) ? record : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+// Decides whether one heartbeat POST is worth a KV put(), and what to store.
+// `incoming` is the verdict or liveness ping as received; `existing` the stored
+// record or null. Only a verdict can change the stored `ok`: the runner's
+// liveness ping (ok=true) used to alternate with a failing verdict (ok=false) on
+// every loop, and every alternation was written immediately — ~2 puts per
+// minute per environment while any probe failed.
+function heartbeatWrite(existing, incoming, nowMs, policy) {
+  const day = utcDateKey(nowMs);
+  const stored = existing && existing.statusChangeBudget;
+  let spent = 0;
+  if (stored && stored.day === day) {
+    const used = Number(stored.used);
+    // A counter that is not a non-negative number (a corrupted or hand-edited
+    // record) counts as spent: a NaN would make `spent >= budget` always false.
+    spent = Number.isFinite(used) && used >= 0 ? Math.floor(used) : policy.statusChangeWritesPerDay;
+  }
+  const budget = (used) => ({ day, used });
+  const { liveness, ...verdict } = incoming;
+  if (!existing) {
+    return { write: true, reason: "first", value: { ...verdict, statusChangeBudget: budget(spent) } };
+  }
+  const ageMs = nowMs - Number(existing.receivedAt || 0);
+  if (ageMs < 0) {
+    // A record stamped in the future cannot age out; replace it.
+    return { write: true, reason: "future-record", value: { ...verdict, statusChangeBudget: budget(spent) } };
+  }
+  if (liveness) {
+    if (ageMs < policy.livenessRefreshMs) {
+      return { write: false, reason: "liveness-throttled" };
+    }
+    return {
+      write: true,
+      reason: "liveness-refresh",
+      value: { ...existing, receivedAt: incoming.receivedAt, refreshedBy: "liveness", statusChangeBudget: budget(spent) },
+    };
+  }
+  if (ageMs >= policy.minWriteIntervalMs) {
+    return { write: true, reason: "refresh", value: { ...verdict, statusChangeBudget: budget(spent) } };
+  }
+  const statusChanged = (existing.ok !== false) !== verdict.ok;
+  if (!statusChanged) {
+    return { write: false, reason: "throttled" };
+  }
+  if (spent >= policy.statusChangeWritesPerDay) {
+    // Flapping past the daily budget: the next refresh window carries the verdict.
+    return { write: false, reason: "status-change-budget-spent" };
+  }
+  return {
+    write: true,
+    reason: "status-change",
+    value: { ...verdict, statusChangeBudget: budget(spent + 1) },
+  };
+}
+
+function configuredHeartbeatKeys(env) {
+  const heartbeats = filterByEnvironment(
+    parseJsonList(env.WATCHDOG_HEARTBEATS_JSON, DEFAULT_HEARTBEATS),
+    enabledEnvironments(env),
+  );
+  return new Set(heartbeats.map((heartbeat) => heartbeatKey(heartbeat.environment, heartbeat.name)));
+}
+
 async function recordHeartbeat(request, env) {
   const expectedToken = String(env.HEARTBEAT_TOKEN || "");
   if (!expectedToken) {
@@ -388,13 +520,16 @@ async function recordHeartbeat(request, env) {
   let environment;
   let name;
   let key;
+  let configuredKeys;
   try {
     environment = safeId(payload.env || payload.environment || "production");
     name = safeId(payload.name || "infra-probe-runner");
     key = heartbeatKey(environment, name);
+    configuredKeys = configuredHeartbeatKeys(env);
   } catch (error) {
-    // A malformed env/name must not bubble up as an unhandled 500/CF-1101;
-    // degrade visibly with the same queryable event used for storage failures.
+    // A malformed env/name (or heartbeat config) must not bubble up as an
+    // unhandled 500/CF-1101; degrade visibly with the same queryable event used
+    // for storage failures.
     logWatchdogResult({
       event: "watchdog.heartbeat.error",
       timestamp: Date.now(),
@@ -403,46 +538,40 @@ async function recordHeartbeat(request, env) {
     });
     return jsonResponse({ ok: true, persisted: false, degraded: true });
   }
+  // Only keys the cron reads are stored: an unconfigured name would spend the
+  // shared put() budget on a record nobody checks.
+  if (!configuredKeys.has(key)) {
+    logWatchdogResult({
+      event: "watchdog.heartbeat.ignored",
+      timestamp: Date.now(),
+      status: "fail",
+      key,
+    });
+    return jsonResponse({ ok: false, key, persisted: false, error: "not a configured heartbeat" }, 404);
+  }
   const now = Date.now();
-  const value = {
+  const incoming = {
     environment,
     name,
     ok: payload.ok !== false,
     detail: String(payload.detail || ""),
     timestamp: Number(payload.timestamp || 0),
     receivedAt: now,
+    liveness: isLivenessPing(payload),
   };
 
-  // Throttle KV writes to stay within the Cloudflare KV daily put() limit.
-  // The probe runner posts heartbeats far more often than the staleness window
-  // requires; writing on every post exhausts the daily quota and then every
-  // put() throws, which silently breaks heartbeat tracking and triggers false
-  // "stale heartbeat" alerts. Reads are cheap, so read-then-maybe-write:
-  // always persist a status change immediately, otherwise write at most once
-  // per minWriteInterval (well under the staleness threshold).
-  const minWriteIntervalMs = Number(env.WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS || 600) * 1000;
-  let shouldWrite = true;
+  // Read-then-maybe-write (reads are cheap, puts are budgeted): see heartbeatWrite.
   // Fail-safe: a watcher must distinguish its own storage failure from a target
   // failure. If KV get/put throws (e.g. the daily quota is exhausted), log a
   // queryable structured event and degrade gracefully (HTTP 200) instead of
   // throwing an unhandled exception (HTTP 500 / CF 1101) that is invisible
   // unless someone is live-tailing the worker.
+  let decision;
   try {
     const existingRaw = await env.WATCHDOG_STATE.get(key);
-    if (existingRaw) {
-      try {
-        const existing = JSON.parse(existingRaw);
-        const ageMs = now - Number(existing.receivedAt || 0);
-        const statusUnchanged = (existing.ok !== false) === value.ok;
-        if (statusUnchanged && ageMs >= 0 && ageMs < minWriteIntervalMs) {
-          shouldWrite = false;
-        }
-      } catch (_error) {
-        shouldWrite = true;
-      }
-    }
-    if (shouldWrite) {
-      await env.WATCHDOG_STATE.put(key, JSON.stringify(value));
+    decision = heartbeatWrite(parseHeartbeatRecord(existingRaw), incoming, now, heartbeatWritePolicy(env));
+    if (decision.write) {
+      await env.WATCHDOG_STATE.put(key, JSON.stringify(decision.value));
     }
   } catch (error) {
     logWatchdogResult({
@@ -454,7 +583,7 @@ async function recordHeartbeat(request, env) {
     });
     return jsonResponse({ ok: true, key, persisted: false, degraded: true });
   }
-  return jsonResponse({ ok: true, key, persisted: shouldWrite });
+  return jsonResponse({ ok: true, key, persisted: decision.write, reason: decision.reason });
 }
 
 async function statusResponse(request, env) {

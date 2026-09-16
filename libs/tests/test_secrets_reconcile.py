@@ -135,6 +135,126 @@ def test_capacity_report_uses_readings_and_flags_exceeded() -> None:
     )
 
 
+# --- the KV write trend beside the verdict (2026-09-15: 1198/1000 with no history) ------
+
+# Cloudflare's per-day KV puts for the account, 2026-09-09 .. 2026-09-16 10:00Z.
+MEASURED_KV_WRITES = {
+    "2026-09-09": 288,
+    "2026-09-10": 298,
+    "2026-09-11": 286,
+    "2026-09-12": 288,
+    "2026-09-13": 284,
+    "2026-09-14": 290,
+    "2026-09-15": 1198,
+    "2026-09-16": 1157,
+}
+
+
+def _measured_fetch(calls):
+    import datetime as dt
+
+    def fetch(day: dt.date):
+        calls.append(day.isoformat())
+        used = MEASURED_KV_WRITES.get(day.isoformat())
+        if used is None:
+            return ()  # Cloudflare answered no account row
+        return (
+            CapacityReading("cloudflare.kv.read", 5300),
+            CapacityReading("cloudflare.kv.write", used),
+            CapacityReading("cloudflare.workers.requests", 6000),
+        )
+
+    return fetch
+
+
+def test_capacity_section_reports_the_write_trend_around_the_verdict() -> None:
+    import datetime as dt
+
+    calls: list[str] = []
+    report, trend, error = secrets_reconcile.capacity_section(
+        today=dt.date(2026, 9, 16), fetch=_measured_fetch(calls)
+    )
+    assert error is None
+    assert [i.name for i in report.at_level("exceeded")] == ["cloudflare.kv.write"]
+    assert trend["name"] == "cloudflare.kv.write" and trend["limit"] == 1000
+    assert [row["date"] for row in trend["days"]] == sorted(MEASURED_KV_WRITES)
+    assert [row["used"] for row in trend["days"]] == [
+        MEASURED_KV_WRITES[day] for day in sorted(MEASURED_KV_WRITES)
+    ]
+    assert [row["partial"] for row in trend["days"]] == [False] * 7 + [True]
+    # one analytics query per day: yesterday's serves the verdict and the trend
+    assert sorted(calls) == sorted(MEASURED_KV_WRITES)
+    assert trend["rendered"] == (
+        "cloudflare.kv.write/day (limit 1000; ! = over): 09-09 288 · 09-10 298 · "
+        "09-11 286 · 09-12 288 · 09-13 284 · 09-14 290 · 09-15 1198! · "
+        "09-16 1157! so far"
+    )
+    text = secrets_reconcile.render([], report, None, trend)
+    assert "capacity: cloudflare.kv.write 1198/1000/day exceeded" in text
+    assert "  cloudflare.kv.write/day (limit 1000; ! = over): 09-09 288" in text
+
+
+def test_trend_tells_no_answer_from_no_writes() -> None:
+    import datetime as dt
+
+    def fetch(day):
+        if day == dt.date(2026, 9, 14):
+            return ()
+        return (CapacityReading("cloudflare.workers.requests", 1),)
+
+    rows = secrets_reconcile.reading_trend(fetch, today=dt.date(2026, 9, 16), days=2)
+    assert [(row["date"], row["used"]) for row in rows] == [
+        ("2026-09-14", None),
+        ("2026-09-15", 0),
+        ("2026-09-16", 0),
+    ]
+    rendered = secrets_reconcile.render_trend(
+        {"name": "cloudflare.kv.write", "limit": 1000, "days": rows}
+    )
+    assert rendered.endswith("09-14 ? · 09-15 0 · 09-16 0 so far")
+
+
+def test_an_unreadable_trend_never_hides_the_verdict() -> None:
+    import datetime as dt
+
+    measured = _measured_fetch([])
+
+    def fetch(day):
+        if day == dt.date(2026, 9, 10):
+            raise RuntimeError("Cloudflare analytics failed with HTTP 429")
+        return measured(day)
+
+    report, trend, error = secrets_reconcile.capacity_section(
+        today=dt.date(2026, 9, 16), fetch=fetch
+    )
+    assert report.at_level("exceeded") and trend is None
+    assert error == "Cloudflare analytics failed with HTTP 429"
+    text = secrets_reconcile.render([], report, None, None, error)
+    assert "capacity: cloudflare.kv.write 1198/1000/day exceeded" in text
+    assert "cloudflare.kv.write/day trend unavailable (Cloudflare analytics" in text
+
+
+def test_build_report_carries_the_trend(monkeypatch) -> None:
+    import datetime as dt
+
+    monkeypatch.setattr(secrets_reconcile, "reconcile_stores", lambda: [])
+    section = secrets_reconcile.capacity_section(
+        today=dt.date(2026, 9, 15), fetch=_measured_fetch([])
+    )
+    monkeypatch.setattr(secrets_reconcile, "capacity_section", lambda: section)
+    report = secrets_reconcile.build_report()
+    assert report["ok"] is True  # 09-14 (290) is yesterday here
+    assert report["capacity_trend"]["days"][-1] == {
+        "date": "2026-09-15",
+        "used": 1198,
+        "partial": True,
+    }
+    assert report["capacity_trend_error"] is None
+    assert "capacity: ok" in report["rendered"]
+    assert "09-15 1198! so far" in report["rendered"]
+    json.dumps(report)  # the ops-check job reads it back as JSON
+
+
 def test_render_lists_findings_per_row() -> None:
     rows = [
         {
@@ -268,6 +388,47 @@ def test_check_parses_the_remote_json_and_pages_only_on_confirmed_findings() -> 
     assert "- platform/alerting staging: missing=['FEISHU_APP_ID']" in summary
     assert "- quota kv_writes 1200/1000 per day exceeded" in summary
     assert "kv_reads" not in summary and "platform/redis" not in summary
+
+
+def test_an_exceeded_quota_pages_with_its_trend() -> None:
+    report = {
+        "ok": False,
+        "stores": [],
+        "capacity": {
+            "ok": False,
+            "items": [
+                {
+                    "name": "cloudflare.kv.write",
+                    "used": 1198,
+                    "limit": 1000,
+                    "window": "day",
+                    "level": "exceeded",
+                },
+                {
+                    "name": "cloudflare.kv.delete",
+                    "used": 1,
+                    "limit": 1000,
+                    "window": "day",
+                    "level": "ok",
+                },
+            ],
+        },
+        "capacity_trend": {
+            "name": "cloudflare.kv.write",
+            "limit": 1000,
+            "days": [],
+            "rendered": "cloudflare.kv.write/day (limit 1000; ! = over): 09-15 1198!",
+        },
+    }
+    assert secrets_reconcile_check.page_worthy_summary(report) == (
+        "- quota cloudflare.kv.write 1198/1000 per day exceeded\n"
+        "  cloudflare.kv.write/day (limit 1000; ! = over): 09-15 1198!"
+    )
+    # a report from a runner without the trend still pages the quota line alone
+    del report["capacity_trend"]
+    assert secrets_reconcile_check.page_worthy_summary(report) == (
+        "- quota cloudflare.kv.write 1198/1000 per day exceeded"
+    )
 
 
 def test_ops_checks_schedules_the_reconcile_and_alerts_out_of_band() -> None:

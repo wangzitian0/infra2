@@ -99,12 +99,17 @@ def page_worthy_summary(report: Mapping[str, Any]) -> str:
         parts = [f"{k}={row[k]}" for k in PAGING_FINDINGS if row.get(k)]
         if parts:
             lines.append(f"- {row.get('service')} {row.get('env')}: {', '.join(parts)}")
+    trend = report.get("capacity_trend") or {}
     for item in (report.get("capacity") or {}).get("items") or []:
         if item.get("level") == "exceeded":
             lines.append(
                 f"- quota {item.get('name')} {item.get('used')}/{item.get('limit')} "
                 f"per {item.get('window')} exceeded"
             )
+            # The trend (rendered inside the runner, where the SDK lives) tells a
+            # one-day spike from a budget that has been creeping up.
+            if trend.get("name") == item.get("name") and trend.get("rendered"):
+                lines.append(f"  {trend['rendered']}")
     return "\n".join(lines)
 
 

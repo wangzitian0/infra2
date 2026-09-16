@@ -195,6 +195,13 @@ environment variables are configured:
 - `INFRA_PROBE_HEARTBEAT_NAME`: defaults to
   `platform-alerting-probes${ENV_SUFFIX}`
 
+Each loop posts a liveness ping (`"liveness": true`) before the probes and the
+probe verdict (`ok`) after them. The Worker never lets the liveness ping change the
+stored verdict, and it budgets its KV writes per heartbeat key (see
+[`cloudflare/infra-watchdog/README.md`](../../cloudflare/infra-watchdog/README.md#free-quota-safety)).
+The `(env, name)` pair must be listed in the Worker's `WATCHDOG_HEARTBEATS_JSON`;
+any other name is refused with HTTP 404.
+
 The same runner also owns synthetic closure probes:
 
 - `signoz-roundtrip`: writes an OTLP log and queries SigNoz ClickHouse for the

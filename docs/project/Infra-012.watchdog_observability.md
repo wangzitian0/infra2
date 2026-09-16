@@ -30,6 +30,28 @@ Still pending for full Infra-012 closure:
 - Extended Worker self-health metadata contract (`deployed_at`, config-hash
   drift, quota budget thresholds).
 
+## 2026-09-16 KV Write Budget Snapshot
+
+- Incident: the scheduled Ops Checks run 35074965812 failed on
+  `capacity: cloudflare.kv.write 1198/1000/day exceeded` (2026-09-15); 2026-09-16
+  had 1157 puts by 10:00Z and live `wrangler tail` showed every heartbeat `put()`
+  failing with `KV put() limit exceeded for the day.` Baseline was ~288/day.
+- Cause: the probe runner's liveness ping (`ok=true`) and its post-probe verdict
+  (`ok=false` while any probe fails) alternated on every ~70 s loop, and the
+  Worker wrote every status change at once (~2 puts/min per environment,
+  11:00–16:05Z on 09-15 and 00:00–05:10Z on 09-16, until the quota ran out).
+- Fix: liveness pings never change the stored verdict (runner flags them, the
+  Worker also recognises the legacy detail); changed verdicts get a per-key daily
+  early-write budget (24); only configured heartbeat keys are stored. Worst case
+  384 puts/day (38%), healthy ~288. The daily capacity check now reports the
+  `cloudflare.kv.write` trend (7 days + today) and pages it with an exceeded quota.
+  `tools/pr_merge_gate.py` treats `cloudflare/infra-watchdog/**` as
+  deploy-triggering (`deploy-cloudflare-watchdog.yml`, #718).
+- Still open: the probe that was failing in both environments during those
+  windows is not recoverable from container logs (both runners were recreated at
+  08:56–08:58Z on 09-16); since then a few single-loop probe failures per hour
+  remain.
+
 After PR #228 stabilized the Cloudflare watchdog dedupe fingerprint (reducing false 30-minute
 alerts), the system became **stable enough to discover deeper gaps**:
 
