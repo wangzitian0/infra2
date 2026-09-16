@@ -32,6 +32,8 @@
 | `backup_restore.py` | Off-host backup restore rehearsal helpers | `latest_artifact_for_service()`, `build_postgres_rehearsal_plan()`, `run_postgres_restore_rehearsal()` |
 | `app_deploy_request.py` | Fail-closed App request validation, Production evidence verification, and deploy planning | `verify_production_evidence()`, `validate_request_authority()`, `make_plan()` |
 | `harness_manifest.py` | Read-only workspace inventory and autonomy-boundary validation | `load_manifest()`, `validate_manifest()`, `check_workspace()` |
+| `scheduler_peer_liveness.py` | truealpha#876 peer check: is truealpha's scheduler-liveness workflow still ticking (bound measured from its crons; unreadable = red) | `evaluate()`, `github_getter()`, `largest_gap()`, `parse_bound_cap_hours()` |
+| `watchdog_issue_trail.py` | truealpha#876 W4: one GitHub issue per red ops-checks watchdog check (exact-title dedup, closes on green, drill never closes) | `record_verdicts()`, `load_trail()`, `issue_trail_mode()`, `reconcile()`, `GitHubIssues` |
 | `harness_status.py` | Checkout pin/remote/release observation; verifies repository roots before fetching so empty submodules cannot report their parent | `workspace_status()`, `repository_status()` |
 
 ## Usage Patterns

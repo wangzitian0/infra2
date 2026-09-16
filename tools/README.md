@@ -12,7 +12,8 @@ reusable logic belongs in `libs/` (see the division-of-labor note below):
    `ci_gate_audit.py` / `service_identity_audit.py` / `lint_platform_image_pins.py` /
    `coverage_regression_audit.py` (infra-ci
    gates), `reconcile_iac_inputs.py` (tag reconcile), `out_of_band_watchdog.py`
-   / `watchdog_weekly_digest.py` (scheduled watchdogs), `dns_drift_report.py` /
+   / `watchdog_issue_trail.py` / `watchdog_weekly_digest.py` (scheduled
+   watchdogs), `dns_drift_report.py` /
    `dokploy_config_drift.py` (drift reports), `pr_merge_gate.py` (the AGENTS.md
    session merge authority as a check: checks, threads, settling, protected and
    deploy-triggering paths; `--merge` squash-merges only a ready head).
@@ -211,9 +212,33 @@ alert source (fail-closed `configuration` failure when `DOKPLOY_API_KEY` is
 missing, #543). A Dokploy deploy error remains failed; when the independent
 `infra2-docker-health` check is green it is routed as `state-discrepancy`/P2 for
 reconciliation instead of being mislabeled as a confirmed runtime outage.
+It is also the peer for truealpha's `scheduler-liveness` workflow
+(`truealpha-scheduler-liveness`, logic in `libs/scheduler_peer_liveness.py`,
+truealpha#876): red when that workflow is not active, has not ticked on schedule
+within 2 x its largest cron gap + 1 h, never ticked while its file is older than
+that bound, or cannot be read. `INFRA2_PEER_LIVENESS_BOUND_CAP_HOURS` only
+tightens the bound (`0` = drill red). With `INFRA2_WATCHDOG_VERDICTS_PATH` set it
+appends every verdict for the issue trail.
 
 ```bash
-INFRA2_WATCHDOG_DRY_RUN=1 uv run python tools/out_of_band_watchdog.py
+WATCHDOG_DRY_RUN=1 uv run python tools/out_of_band_watchdog.py
+```
+
+## watchdog_issue_trail.py
+
+The ops-checks watchdog job's last step (truealpha#876 W4): reads the verdicts the
+earlier steps recorded and keeps one issue per red check, titled exactly
+`ops-checks watchdog is red: <check>` — open or comment while red, comment and
+close when green in a scheduled run (or a plain dispatch on main). Drills and
+branch dispatches never close; dry runs and SSH-override runs write nothing. A
+failed listing never falls through to create; a failed write exits 1. Logic in
+`libs/watchdog_issue_trail.py`.
+
+```bash
+GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/feature \
+  GITHUB_REPOSITORY=owner/sandbox GITHUB_TOKEN=... \
+  INFRA2_WATCHDOG_VERDICTS_PATH=watchdog-verdicts.jsonl \
+  uv run python tools/watchdog_issue_trail.py
 ```
 
 ## local (local readiness + bootstrap)
