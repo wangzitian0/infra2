@@ -30,7 +30,7 @@ The `sync` task uses two independent identities:
 
 A deployment skips only when the runtime hash matches and a valid source identity already exists. Missing legacy identity triggers one migration reconcile.
 
-The recent-result window (`RECENT_DEPLOY_TTL_SECONDS`, 600s) is part of that idempotency, and only a **success** is reused. A remembered failure is kept but never served in place of the work: the request deploys again, because an operator's retry after fixing the cause must do the work rather than replay the original message. The stored failure still answers `/deploy/status` and the synchronous path's own read — that is how `deploy_v2` learns a deployment failed — and it ages out on the TTL like any other entry.
+The recent-result window (`RECENT_DEPLOY_TTL_SECONDS`, 600s) is part of that idempotency, and only a **success** is reused. A remembered failure is kept but never served in place of the work: the request deploys again, because an operator's retry after fixing the cause must do the work rather than replay the original message. The stored failure still answers `/deploy/status` and the synchronous path's own read — that is how `deploy_v2` learns a deployment failed — and it ages out on the TTL like any other entry. A run in flight answers `/deploy/status` before any remembered result: the deployment ID is deterministic, so a retry shares it with the failure it retries, and until the retry finishes the poll reports it `in_progress` rather than the earlier run's failure (truealpha v0.0.83, 2026-09-17).
 
 ## Workspace
 

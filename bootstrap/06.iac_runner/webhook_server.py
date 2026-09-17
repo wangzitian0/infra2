@@ -688,9 +688,11 @@ def deployment_status():
                     "expected_deployment_id": expected_id,
                 }
             ), 409
-        recent = _recent_result(key)
-        if recent:
-            return jsonify(recent), 200
+        # A run in flight answers before any remembered result (2026-09-17). While a key
+        # is in flight, a remembered result belongs to an EARLIER run: _run_deployment
+        # stores its result and discards the key under this same lock. A failure stays
+        # remembered for the TTL even after a retry starts (_reusable_result), so reading
+        # it first handed the retry's poll the failure being retried (truealpha v0.0.83).
         if key in _in_flight_deploys:
             return jsonify(
                 _in_progress_response(
@@ -699,8 +701,12 @@ def deployment_status():
                     triggered_by,
                     services=list(key[2]),
                     version_ref=(key[3] if len(key) > 3 and key[3] else None),
+                    action=(key[4] if len(key) > 4 and key[4] else "sync"),
                 )
             ), 200
+        recent = _recent_result(key)
+        if recent:
+            return jsonify(recent), 200
 
     return jsonify(
         {
