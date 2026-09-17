@@ -69,7 +69,7 @@ In-band 告警路径恒为:`component/app → OTLP Collector → SigNoz → plat
 **`severity` 标签 ↔ 等级**:告警等级只有这三个值——`critical` = P0,`error` = P1,`warning` = P2(`ProbeFacet` 默认 `critical`;
 `info` 只出现在已恢复的推送与 CI 里禁用的 SigNoz schema canary,不是告警等级)。§5 的 Severity 列就是对应探针/规则**声明**的值,二者不一致即 SSOT 漂移。
 probe runner 一次推送覆盖一组内所有失败探针,整条推送的 severity 取其中**最高**的一个(`libs/infra_probes.group_severity`;
-未知值按 `critical` 计),每条 alert 的 label 仍是各自声明值。
+未知值按 `critical` 计并以 `critical` 发出),每条 alert 的 label 仍是各自声明值。
 
 ---
 

@@ -161,13 +161,18 @@ def group_severity(failures: list[ProbeResult]) -> str:
     One payload covers every failing probe of a group. Its severity used to be that of
     whichever probe rendered first, so a P1 `openpanel-roundtrip` failing next to a P2
     `openpanel-worker-http` (listed earlier) went out as a warning. An unrecognised
-    severity ranks as critical, so a typo pages loudly instead of quietly.
+    severity is sent as `critical`: a typo pages loudly, and the payload still carries
+    only a level the SSOT defines.
     """
     if not failures:
         return "info"
+    declared = (result.spec.severity.strip().lower() for result in failures)
     return min(
-        (result.spec.severity for result in failures),
-        key=lambda severity: _SEVERITY_RANK.get(severity, 0),
+        (
+            severity if severity in _SEVERITY_RANK else "critical"
+            for severity in declared
+        ),
+        key=_SEVERITY_RANK.__getitem__,
     )
 
 

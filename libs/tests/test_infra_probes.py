@@ -612,10 +612,11 @@ def test_payload_severity_is_the_most_severe_failure() -> None:
     assert build_probe_alert_payload(down)["commonLabels"]["severity"] == "error"
     assert probes.group_severity(down) == "error"
     assert probes.group_severity([*down, _result(critical, ok=False)]) == "critical"
-    # an unrecognised severity pages loudly rather than quietly
-    assert probes.group_severity(
-        [_result(warning, ok=False), _result(odd, ok=False)]
-    ) == ("crtical")
+    # an unrecognised severity pages loudly, as a level the SSOT defines
+    assert (
+        probes.group_severity([_result(warning, ok=False), _result(odd, ok=False)])
+        == "critical"
+    )
     assert probes.group_severity([]) == "info"
     # the per-alert labels keep each probe's own severity, and an override still wins
     assert [
