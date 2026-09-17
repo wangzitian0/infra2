@@ -345,6 +345,82 @@ def test_pin_release_fails_closed_on_a_bad_ref_or_an_unresolvable_tag(monkeypatc
     assert secrets.writes == []
 
 
+def test_pin_release_retries_a_lookup_that_got_no_answer(monkeypatch):
+    """2026-09-17: the v0.0.83 staging deploy died on one dropped ghcr.io connection
+    ("Remote end closed connection without response") with every other step green. A
+    lookup that got no answer is retried; the pin then proceeds as usual."""
+    import http.client
+
+    deploy = _load_deploy_module()
+    deployer = deploy.DataEngineDeployer
+    secrets = _WritableSecrets(_secret_values("a"))
+    monkeypatch.setattr(deploy, "error", lambda *_a, **_k: None)
+    monkeypatch.setattr(deploy, "success", lambda *_a, **_k: None)
+    digest = "sha256:" + "d" * 64
+    failures = [
+        http.client.RemoteDisconnected("Remote end closed connection without response"),
+        TimeoutError("timed out"),
+    ]
+
+    def resolve(image, ref):
+        if failures:
+            raise failures.pop(0)
+        return digest
+
+    slept: list[float] = []
+    assert (
+        deployer.pin_release(
+            "v0.0.83", secrets=secrets, resolve=resolve, sleep=slept.append
+        )
+        == digest
+    )
+    assert slept == list(deploy._PIN_RESOLVE_BACKOFF_SECONDS)
+    assert ("DATA_ENGINE_IMAGE_DIGEST", digest) in secrets.writes
+
+
+def test_pin_release_gives_up_after_the_last_transport_failure(monkeypatch):
+    import pytest
+
+    deploy = _load_deploy_module()
+    deployer = deploy.DataEngineDeployer
+    secrets = _WritableSecrets(_secret_values("a"))
+    monkeypatch.setattr(deploy, "error", lambda *_a, **_k: None)
+    calls: list[str] = []
+
+    def resolve(image, ref):
+        calls.append(ref)
+        raise ConnectionResetError("reset by peer")
+
+    with pytest.raises(ConnectionResetError):
+        deployer.pin_release(
+            "v0.0.83", secrets=secrets, resolve=resolve, sleep=lambda _s: None
+        )
+    assert len(calls) == len(deploy._PIN_RESOLVE_BACKOFF_SECONDS) + 1
+    assert secrets.writes == []
+
+
+def test_pin_release_never_retries_a_registry_answer(monkeypatch):
+    """A 404 or a refusal is an answer: retrying cannot change it, so it fails at once."""
+    import pytest
+    from infra2_sdk import release
+
+    deploy = _load_deploy_module()
+    deployer = deploy.DataEngineDeployer
+    secrets = _WritableSecrets(_secret_values("a"))
+    calls: list[str] = []
+
+    def resolve(image, ref):
+        calls.append(ref)
+        raise release.ReleaseError("does not exist in the registry")
+
+    with pytest.raises(release.ReleaseError):
+        deployer.pin_release(
+            "v9.9.9", secrets=secrets, resolve=resolve, sleep=lambda _s: None
+        )
+    assert calls == ["v9.9.9"]
+    assert secrets.writes == []
+
+
 def test_ensure_runtime_secrets_refuses_the_deploy_when_the_pin_fails(monkeypatch):
     deploy = _load_deploy_module()
     deployer = deploy.DataEngineDeployer

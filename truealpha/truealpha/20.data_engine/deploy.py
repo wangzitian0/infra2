@@ -1,4 +1,5 @@
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -16,6 +17,12 @@ shared_tasks = sys.modules.get("truealpha.20.data_engine.shared")
 _IMAGE_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _VERSION_REF = re.compile(r"^(v[0-9]+\.[0-9]+\.[0-9]+|[0-9a-f]{7,40})$")
 _IMAGE = "ghcr.io/wangzitian0/truealpha-data-engine"
+# A registry lookup that never got an answer (a dropped connection, a timeout, a reset) is
+# retried; an answer — 404, 401/403, a malformed digest — is final and fails the deploy.
+# 2026-09-17: the v0.0.83 staging deploy failed on one "Remote end closed connection
+# without response" from ghcr.io while every other step was green.
+_PIN_RESOLVE_BACKOFF_SECONDS = (2.0, 5.0)
+_TRANSPORT_ERRORS = (OSError, http.client.HTTPException)
 
 
 def _registry_digest(image: str, ref: str) -> str:
@@ -119,7 +126,9 @@ class DataEngineDeployer(Deployer):
     )
 
     @classmethod
-    def pin_release(cls, version_ref: str, *, secrets=None, resolve=None) -> str:
+    def pin_release(
+        cls, version_ref: str, *, secrets=None, resolve=None, sleep=time.sleep
+    ) -> str:
         """Pin the data-engine image of app release ``version_ref`` in Vault (truealpha#712).
 
         The stack is digest-pinned; a release request carries a tag. The runner — the
@@ -131,14 +140,29 @@ class DataEngineDeployer(Deployer):
         digest — the post-deploy assertion the issue asked for, unchanged.
 
         Fails closed: an unresolvable tag or a refused Vault write raises, and the
-        deploy stops before any compose mutation.
+        deploy stops before any compose mutation. Only a lookup that got no answer at
+        all is retried (``_PIN_RESOLVE_BACKOFF_SECONDS``); the last such failure raises.
         """
         candidate = str(version_ref).strip()
         if not _VERSION_REF.fullmatch(candidate):
             raise ValueError(
                 f"DEPLOY_VERSION_REF must be a vX.Y.Z tag or a commit sha, got {version_ref!r}"
             )
-        digest = (resolve or _registry_digest)(_IMAGE, candidate)
+        resolver = resolve or _registry_digest
+        attempts = len(_PIN_RESOLVE_BACKOFF_SECONDS) + 1
+        for attempt in range(1, attempts + 1):
+            try:
+                digest = resolver(_IMAGE, candidate)
+                break
+            except _TRANSPORT_ERRORS as exc:
+                if attempt == attempts:
+                    raise
+                delay = _PIN_RESOLVE_BACKOFF_SECONDS[attempt - 1]
+                error(
+                    f"{cls.service}: registry lookup for {candidate} got no answer "
+                    f"(attempt {attempt}/{attempts}: {exc}); retrying in {delay:g}s"
+                )
+                sleep(delay)
         if not _IMAGE_DIGEST.fullmatch(digest):
             raise ValueError(
                 f"registry returned a malformed digest for {candidate}: {digest!r}"
