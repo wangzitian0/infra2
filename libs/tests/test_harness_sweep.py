@@ -478,6 +478,34 @@ def test_probe_workflow_passes_filters_and_reads_the_branch_head():
     assert sweep.sweep(Env(run=empty), [no_branch], {})[0].state == UNKNOWN
 
 
+def test_probe_workflow_takes_the_newest_row_and_never_goes_back_in_time():
+    """2026-09-17: the listing's first row was yesterday's run while today's was still
+    in progress, and the watch printed WAITING->DONE for it."""
+    today = dict(_run("in_progress", created=NOW - 3 * MIN, sha="new"), databaseId=2)
+    yesterday = dict(
+        _run("completed", "success", created=NOW - 20 * 60 * MIN, sha="old"),
+        databaseId=1,
+    )
+    item = {"kind": "workflow", "repo": "o/r", "workflow": "CI", "branch": "main"}
+    memory: dict = {}
+    listing_rows = json.dumps([yesterday, today])
+    unordered = FakeRun([(["gh", "run", "list"], CommandResult(0, listing_rows, ""))])
+    [first] = sweep.sweep(Env(run=unordered, now=lambda: NOW), [item], memory)
+    assert first.state == WAITING and "@ new" in first.detail
+    listing = unordered.calls[0]
+    assert int(listing[listing.index("--limit") + 1]) > 1, "one row is what went wrong"
+
+    stale = FakeRun(
+        [
+            (["gh", "run", "list"], CommandResult(0, json.dumps([yesterday]), "")),
+            (["gh", "run", "view", "2"], CommandResult(0, json.dumps(today), "")),
+        ]
+    )
+    [second] = sweep.sweep(Env(run=stale, now=lambda: NOW), [item], memory)
+    assert second.state == WAITING, "a stale page must not turn a running run into DONE"
+    assert stale.calls[1][:4] == ["gh", "run", "view", "2"]
+
+
 # --- release logs
 
 RELEASE_DONE = """== tagging ==
