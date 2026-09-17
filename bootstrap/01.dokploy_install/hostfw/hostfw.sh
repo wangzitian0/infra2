@@ -36,9 +36,12 @@ check() {
   routed="$(ip -o route get 1.1.1.1 | sed -n 's/.* dev \([^ ]*\).*/\1/p')"
   [ -n "$declared" ] || die "hostfw.nft declares no PUBLIC_IF"
   [ "$declared" = "$routed" ] || die "hostfw.nft filters '$declared' but the default route leaves via '$routed'; fix PUBLIC_IF before applying"
-  if systemctl is-enabled --quiet nftables 2>/dev/null; then
-    # Ubuntu's stock /etc/nftables.conf starts with `flush ruleset`, which would wipe Docker's and fail2ban's tables.
-    grep -q '^flush ruleset' /etc/nftables.conf 2>/dev/null && die "nftables.service is enabled with 'flush ruleset'; disable it first"
+  if systemctl is-enabled --quiet nftables 2>/dev/null || systemctl is-active --quiet nftables 2>/dev/null; then
+    # Ubuntu's stock /etc/nftables.conf starts with `flush ruleset`, which would wipe Docker's and fail2ban's tables
+    # the next time nftables.service (re)starts. Indentation is legal nft syntax, so match it too.
+    if grep -Eq '^[[:space:]]*flush[[:space:]]+ruleset' /etc/nftables.conf 2>/dev/null; then
+      die "nftables.service is enabled or active and /etc/nftables.conf flushes the ruleset; disable it first"
+    fi
   fi
   nft -c -f "$RULES"
   echo "hostfw: $RULES is valid; public interface $declared"

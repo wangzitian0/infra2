@@ -69,5 +69,7 @@ def test_apply_checks_syntax_and_arms_the_revert_before_loading() -> None:
     assert apply.index("check") < apply.index("systemd-run") < apply.index('nft -f "$RULES"')
     assert "delete table inet \"$TABLE\"" in apply
     assert 'nft -c -f "$RULES"' in SCRIPT
-    # Refuses to proceed when the stock nftables.service would flush every table at boot.
-    assert "flush ruleset" in SCRIPT
+    # Refuses to proceed when the stock nftables.service would flush every table, indented or not.
+    check = SCRIPT[SCRIPT.index("check() {") : SCRIPT.index("apply() {")]
+    assert "^[[:space:]]*flush[[:space:]]+ruleset" in check
+    assert "is-enabled --quiet nftables" in check and "is-active --quiet nftables" in check
