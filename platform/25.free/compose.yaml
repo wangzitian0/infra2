@@ -1,0 +1,26 @@
+services:
+  free:
+    image: ghcr.io/sagernet/sing-box:v1.14.1
+    container_name: platform-free${ENV_SUFFIX}
+    restart: always
+    user: "0:0"
+    command: ["run", "-c", "/etc/sing-box/config.json"]
+    volumes:
+      - ${DATA_PATH}/config.json:/etc/sing-box/config.json:ro
+    networks:
+      - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.free${ENV_DOMAIN_SUFFIX}.rule=Host(`free${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`) && Path(`${FREE_PATH}`)"
+      - "traefik.http.routers.free${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
+      - "traefik.http.routers.free${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
+      - "traefik.http.services.free${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=10000"
+
+networks:
+  dokploy-network:
+    external: true
