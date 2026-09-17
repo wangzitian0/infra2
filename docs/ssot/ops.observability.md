@@ -66,6 +66,11 @@ In-band 告警路径恒为:`component/app → OTLP Collector → SigNoz → plat
 | **P1 (Error)** | 🟠 Orange | 30分钟 | 部分功能受损，核心链路仍通 |
 | **P2 (Warning)** | 🟡 Yellow | 工作日 | 资源使用率高，非关键错误 |
 
+**`severity` 标签 ↔ 等级**:告警规则与 `ProbeFacet(severity=…)` 只用这三个值——`critical` = P0,`error` = P1,`warning` = P2
+(`ProbeFacet` 默认 `critical`)。§5 的 Severity 列就是对应探针/规则**声明**的值,二者不一致即 SSOT 漂移。
+probe runner 一次推送覆盖一组内所有失败探针,整条推送的 severity 取其中**最高**的一个(`libs/infra_probes.group_severity`;
+未知值按 `critical` 计),每条 alert 的 label 仍是各自声明值。
+
 ---
 
 ## 4. 采集 (Collection / OTLP)
@@ -139,6 +144,9 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
   - `signoz-roundtrip`:每 5min 写一条 OTLP log,再从 `signoz_logs.distributed_logs_v2` 按 nonce 查回 → 证 collector→ClickHouse ingest/storage 可用。
   - `openpanel-roundtrip`:每 5min 向 OpenPanel `/track` 写,再从 `openpanel.events` 查回 → 证 API→worker/storage 可用。
   - 窗口由 `OBS_ROUNDTRIP_INTERVAL_SECONDS` / `OBS_ROUNDTRIP_QUERY_WAIT_SECONDS` 控制;成功后节流 5min,失败的 round-trip 在 runner 的每一轮(60s)重跑。
+  - **声明的 severity 按"失败是否丢数据"定**(§3/§5):`signoz-roundtrip` = `critical`(P0,遥测 ingest);`openpanel-roundtrip` 与它的
+    cascade root `openpanel-api-http` = `error`(P1,产品分析事件)。API 挂时 round-trip 被 cascade 抑制、由 api-http 出面,
+    所以 root 必须同级,否则整条 ingest 丢失反而按 P2 发。单次抖动仍不会发:runner 的 3 轮去抖 + 下面的 3 次 / 15min 升级规则(#734)照旧。
 - **失败分道(#726)**:round-trip 失败有两条出口,措辞不同:
   - `InfraServiceProbeFailed`(该组正常流,按 ProbeFacet **声明的** severity):曾经成功过的探针一失败就走这里(照常 3 轮去抖);
     **从 runner 启动起从未成功过**的探针,在连续失败 ≥3 次且跨度 ≥15min(`INFRA_PROBE_NEVER_GREEN_ESCALATION_{FAILURES,SECONDS}`,
@@ -173,7 +181,7 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 | L2 Platform | Alert Bridge | `/health` fails / Feishu unreachable | P0 | `alert-bridge-http`, `lark-delivery-http` + out-of-band bridge health |
 | L2 Platform | OpenPanel API | `/healthcheck` fails or synthetic `/track` nonce not queryable | P1 | `openpanel-api-http`, `openpanel-roundtrip` |
 | L2 Platform | OpenPanel ClickHouse (op-ch) | data dir unwritable / event store broken | P1 | Write-path healthcheck + `openpanel-roundtrip` |
-| L2 Platform | OpenPanel Worker / Dashboard | `/healthcheck` / `/api/healthcheck` fails | P1 / P2 | Live probes |
+| L2 Platform | OpenPanel Worker / Dashboard | `/healthcheck` / `/api/healthcheck` fails | P2 / P2 | Live probes (`openpanel-worker-http`, `openpanel-dashboard-http`);worker 停止落库时由 `openpanel-roundtrip` 以 P1 发 |
 | L2 Platform | Portal / Prefect | frontend / server-health unavailable | P2 / P1 | Planned |
 | L3 Finance Report | fr-postgres / fr-redis | app db / cache health fails | P0 / P1 | Planned |
 | L3 Finance Report | fr-app backend | OTEL ERROR/FATAL > 0 over 5m | P1 | code (`FinanceReportBackendErrorLogs`) |

@@ -20,4 +20,4 @@
 - [x] `libs/deploy/deployer.py` + `RestartAfterFacet`: redis 真正重部署（非跳过）并在线后，重启声明了 `restart_after: platform/redis` 的依赖方（OpenPanel api/worker、Authentik worker；staging 只有 Authentik worker），失败则 sync 失败并给出手工命令（#726，#713 同类）
 - [x] `tools/infra_probe_runner.py`: 从未成功过的 round-trip 连续失败 ≥3 次且 ≥15min 后升级到 `InfraServiceProbeFailed`（声明的 severity）；只有自报配置缺失（`EX_CONFIG`）的失败永久留在 `InfraProbeMisconfigured`（#726）
 - [ ] 手工 `docker restart platform-redis` / secret supply 触发的 redis 重启（`apply_secret_supply` 的 consumer restart）不经过依赖方重启路径；需要时在 redis 健康后再重启依赖方（#726 follow-up）
-- [ ] `openpanel-roundtrip` 声明 severity 仍是 `warning`，升级后是橙色 `InfraServiceProbeFailed`；ops.observability §5 把 OpenPanel synthetic 标为 P1——是否改为 `critical`/`error` 待 owner 决定（#726）
+- [x] `openpanel-roundtrip` 与其 cascade root `openpanel-api-http` 声明为 `error`（P1，owner 2026-09-17 委托决定）；worker/dashboard 仍 `warning`，§5 改为 P2/P2（worker 停止落库由 round-trip 以 P1 发）；一次推送的 severity 取组内最高而非首个失败探针（`libs/infra_probes.group_severity`）；`signoz-roundtrip` 已是 `critical`=§5 的 P0，未变（#726）

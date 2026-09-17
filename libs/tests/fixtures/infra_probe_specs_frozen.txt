@@ -38,14 +38,16 @@ platform-redis-tcp|tcp|platform-redis${ENV_SUFFIX}:6379|connected|critical|5||pl
 # better than those, so it is removed rather than kept as dead compensation.
 op-connect-http|http|http://op-connect-api:8080/health|200|critical|5||bootstrap/1password
 iac-runner-http|http|http://iac-runner:8080/health|200|warning|5||bootstrap/iac-runner
-openpanel-api-http|http|http://platform-openpanel-api:3000/healthcheck|200|warning|5||platform/openpanel
+# openpanel-api-http and openpanel-roundtrip: warning -> error (P1). A failure there loses
+# events (ops.observability §5); api-http is the round-trip's cascade root (#726).
+openpanel-api-http|http|http://platform-openpanel-api:3000/healthcheck|200|error|5||platform/openpanel
 openpanel-worker-http|http|http://platform-openpanel-worker:3000/healthcheck|200|warning|5||platform/openpanel
 openpanel-dashboard-http|http|http://platform-openpanel-dashboard:3000/api/healthcheck|200|warning|5||platform/openpanel
 # OpenPanel round-trip: write a synthetic /track event to the env-specific
 # finance project, then query OpenPanel ClickHouse for the nonce.
 # depends_on openpanel-api-http: if the API is down the round-trip cannot write —
 # cascade-suppress the round-trip, page the api root only.
-openpanel-roundtrip|command|python /app/tools/observability_roundtrip_probe.py openpanel|roundtrip-ok|warning|45|openpanel-api-http|platform/openpanel
+openpanel-roundtrip|command|python /app/tools/observability_roundtrip_probe.py openpanel|roundtrip-ok|error|45|openpanel-api-http|platform/openpanel
 # Host resource backstop — out-of-band from SigNoz, so it still fires when
 # the host is starved (the dockerd-busy-loop class of incident). `expected`
 # is the % ceiling; reads host-global /proc + the bind-mounted host root.

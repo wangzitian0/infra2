@@ -78,6 +78,19 @@ compose `environment:`.
 - **URL**: `https://openpanel{ENV_DOMAIN_SUFFIX}.{INTERNAL_DOMAIN}`
 - **API Endpoint**: `https://openpanel{ENV_DOMAIN_SUFFIX}.{INTERNAL_DOMAIN}/api`
 
+## Monitoring
+
+`deploy.py` declares the probes that `platform/12.alerting` runs from every
+environment (OpenPanel is `prod_only`, so the targets carry no suffix). Severity
+follows [ops.observability §3/§5](../../docs/ssot/ops.observability.md#3-告警分级-severity):
+
+| Probe | Severity | Why |
+|---|---|---|
+| `openpanel-api-http` | `error` (P1) | `/track` unreachable loses events; it is also the round-trip's cascade root |
+| `openpanel-roundtrip` | `error` (P1) | a `/track` event that never reaches `op-ch` is lost (#726: 17 h of `NOSCRIPT` with a green `/healthcheck`) |
+| `openpanel-worker-http` | `warning` (P2) | a worker that stops persisting pages P1 through the round-trip |
+| `openpanel-dashboard-http` | `warning` (P2) | the UI; no data at risk |
+
 ## Troubleshooting
 
 ### Health Check Failed
