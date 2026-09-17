@@ -149,13 +149,44 @@ runtime configuration. They must not be committed to this repository.
 `tools/host_backup.sh` is the on-host scheduled backup runner. Unlike the
 inventory archiver, it produces **restorable logical backups**:
 
-- Postgres services: `pg_dumpall` via `docker exec` (crash-consistent).
-- Redis services: `redis-cli SAVE` (best-effort) then archive `dump.rdb`.
-- Other data paths: gzip tar.
+- Postgres services: `pg_dumpall` via `docker exec` (crash-consistent). They run
+  **first**.
+- Redis services: an authenticated `redis-cli SAVE` (`REDISCLI_AUTH` from the
+  container's `/secrets/.env`), then archive `dump.rdb` only. A SAVE that does not
+  answer `OK` logs `WARN` and the archive holds the last automatic snapshot
+  (`--save 60 1`).
+- Other data paths: gzip tar, **last** (minio is the busiest live tree).
+
+Failure contract (#618, found by the truealpha#650 restore drill):
+
+- `tar` exit 1 (a live file changed or vanished mid-read) is a `WARN` and the
+  archive is kept as crash-consistent. Exit ≥2 fails that service.
+- A failing service never stops the others. It is logged as `FAILED <service_id>`,
+  its partial archive is removed, it is absent from the manifest (so SOP-004
+  reports it missing), and the run exits 1.
+- Before #618 the first failure ended the run under `set -e`: every scheduled
+  prod run stopped at `platform/minio` and never dumped the finance_report or
+  truealpha databases.
 
 It writes a `tools/backup_verification.py`-compatible manifest and, when
 `BACKUP_REMOTE` (an rclone target) is set, uploads each archive off-host. Local
-retention keeps the most recent `BACKUP_KEEP` (default 7) run directories.
+retention keeps the most recent `BACKUP_KEEP` (default 7) run directories and is
+skipped on a failed run. Prod and staging runs share `/data/backups/infra2`, so
+7 directories is about 3.5 days of each.
+
+Coverage gap: the script's service list is a hand-kept subset of the
+`BackupFacet` inventory (`libs/tests/test_host_backup_script.py` asserts it stays a
+subset). `bootstrap/1password`, `bootstrap/iac_runner`, `platform/alerting`,
+`platform/openpanel`, `platform/portal`, `platform/signoz` and
+`truealpha/data_engine` are declared but not archived by it.
+
+The host copy is installed by hand from `main` (script-deploy drift belongs to
+the reconcile lane). After a change merges, reinstall it and compare checksums:
+
+```bash
+install -m 0755 tools/host_backup.sh /usr/local/sbin/infra2-host-backup.sh
+sha256sum tools/host_backup.sh /usr/local/sbin/infra2-host-backup.sh
+```
 
 Scheduled on the host via crontab:
 
@@ -242,6 +273,7 @@ Recommended schedule after the rehearsal target is provisioned:
 | **Backup inventory covers DATA_PATH** | `libs/tests/test_backup_verification.py` | ✅ Implemented |
 | **Backup archive + checksum runner** | `tools/backup_runner.py` | ✅ Implemented |
 | **Backup freshness/checksum manifest** | `tools/backup_verification.py` | ✅ Implemented |
+| **On-host backup runner (SOP-006): dumps first, one failure never stops the rest, tar exit 1 is a WARN, authenticated redis SAVE** | `libs/tests/test_host_backup_script.py` | ✅ Implemented |
 | **Off-host restore rehearsal** | `tools/backup_restore_rehearsal.py` + `libs/tests/test_backup_verification.py` | ✅ Implemented |
 | **Vault Unseal 流程（自动）** | `bootstrap/05.vault/unsealer.py` 常驻自动解封;契约由 `libs/tests/test_vault_unsealer.py`(过期 Connect token 拒绝 / sync 非 ACTIVE / sealed 报不健康 / key 不足中止)+ `libs/tests/test_bootstrap_health.py`(healthcheck 接线)覆盖 | ✅ Automated |
 | **Vault Unseal 流程（手动兜底,SOP-001）** | `vault status` + `vault operator unseal` | ✅ Manual |

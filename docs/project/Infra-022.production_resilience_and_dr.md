@@ -58,6 +58,7 @@
 ## PR Links
 
 - #721, #722, #723, #724 (Tracking Issues)
+- #618 host_backup: 单服务失败不中止整轮（T2.1 前置）
 - 待关联后续实现 PR
 
 ## Change Log
@@ -65,6 +66,7 @@
 | Date | Change |
 |---|---|
 | 2026-09-16 | 基于反事实审计全面重构路线图，正式立项 Infra-022，废除过度工程规划，确立生产韧性与 DR 为下一里程碑 |
+| 2026-09-17 | T2.1 前置：`tools/host_backup.sh` 不再因单个服务失败中止整轮（#618，truealpha#650），pg dump 先跑，redis SAVE 鉴权；SSOT SOP-006 记录失败契约与覆盖缺口 |
 | 2026-09-16 | Schema Gate：#718 review 两条（枚举模块路径不存在、无 DB URL 时返回成功）修复为 `NOT EVALUATED`（退出码 3）阻断；代码侧改读服务自己的 SQLAlchemy metadata（`ENUM_SOURCES`） |
 
 ## Verification
