@@ -502,7 +502,7 @@ Rollback: revert the PR. Nothing is deployed, applied or wired; no secret is rea
 
 ### Artifacts
 
-- PR wangzitian0/oh-my-code-agent#107 `chore/drop-opencode-host` — OpenCode 移出 closed host vocabulary（ID/schema/ontology/roadmap/runtime/charter + 负路径测试换 cursor）；关闭 #31。CI 全绿。
+- PR wangzitian0/oh-my-code-agent#107 `chore/drop-opencode-host` — OpenCode 移出 closed host vocabulary（ID/schema/ontology/roadmap/runtime/charter + 负路径测试换 cursor）；关闭 upstream issue wangzitian0/oh-my-code-agent#31。CI 全绿。
 - PR wangzitian0/oh-my-code-agent#108 `feat/pi-host-observation` — pi 成为第三个一级 host（检测+观察层）：`PI_CODING_AGENT_DIR` native home、pi --version 严格裸 semver 解析、user/workspace/directory-chain 规则（auth.json discoverOnly E0）、coverage 诚实表（mcp/hook UNSUPPORTED——经 extensions 实现代码，不翻译）、pi.dev 官方源 allowlist、`knowledge/hosts/pi/cli/0.85` pack、evidence-ceiling 双侧同步。CI 全绿。
 - 真机 E2E（只读）：`omca context` 检出 pi 0.85.1；`omca report` 呈现 FRESH pack + 4 条真实观察（settings/trust E1、auth E0、worktree AGENTS.md E1）；零写入证明成立（唯一变化为本会话宿主 pi 进程自身的 session JSONL）。
 
@@ -512,10 +512,10 @@ Rollback: revert the PR. Nothing is deployed, applied or wired; no secret is rea
 
 ### Merge 记录（owner 本会话授权，2026-09-17）
 
-- #107 squash-merge 为 `e330174`；#108 rebase 到新 main（init.md 单处冲突已解）、修复全部 3 条 Copilot 评论并 resolve 后 squash-merge 为 `168705f`。issue #31 随 #107 自动关闭。post-merge main 上 4 项检查（build-test/lint/markdown-links/secret-scan）全绿；远端分支已清理。
+- #107 squash-merge 为 `e330174`；#108 rebase 到新 main（init.md 单处冲突已解）、修复全部 3 条 Copilot 评论并 resolve 后 squash-merge 为 `168705f`（此处的 #107/#108 均指 wangzitian0/oh-my-code-agent 的 PR）。upstream issue #31（oh-my-code-agent）随 #107 自动关闭。post-merge main 上 4 项检查（build-test/lint/markdown-links/secret-scan）全绿；远端分支已清理。
 - 合流前复验：两个 PR 的最终 head 均真机实跑（`omca context`/`report`/`doctor`）+ 全量 `go test -race`（27 packages ok）+ lint 干净 + CI 4/4 绿。
 
 ### Follow-ups
 
 - B2（后续 milestone）：基于 `PI_CODING_AGENT_DIR` 的 runtime 隔离（compile/shim/qualify/`omca run pi`）。
-- harness 仓库的 `oh-my-code-agent` submodule 指针仍指向 `b95c925`，需单独 PR 推进到 `168705f`（omca 独立发布，按 core.harness 边界走 reviewed pin）。
+- harness 仓库的 `oh-my-code-agent` submodule 指针推进到 `168705f` 由本 PR（infra2#746）完成；后续上游演进仍按 core.harness 边界走 reviewed pin（omca 独立发布）。
