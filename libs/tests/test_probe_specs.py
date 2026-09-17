@@ -51,7 +51,8 @@ def test_synthetic_roundtrip_canaries_are_declared():
     assert specs["signoz-roundtrip"].kind == "command"
     assert specs["signoz-roundtrip"].severity == "critical"
     assert specs["openpanel-roundtrip"].kind == "command"
-    assert specs["openpanel-roundtrip"].severity == "warning"
+    # ops.observability §3/§5: SigNoz ingest loss is P0, OpenPanel ingest loss is P1.
+    assert specs["openpanel-roundtrip"].severity == "error"
 
 
 def test_parse_probe_names_extracts_first_field():

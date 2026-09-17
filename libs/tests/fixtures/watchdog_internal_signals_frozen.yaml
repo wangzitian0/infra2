@@ -290,7 +290,7 @@ signals:
   component: openpanel
   signal: openpanel-api-http
   primary_owner: internal
-  severity: warning
+  severity: error
   cadence: 60s
   alert_threshold: 3 consecutive failures
 - signal_id: staging.openpanel.api-http
@@ -298,7 +298,7 @@ signals:
   component: openpanel
   signal: openpanel-api-http
   primary_owner: internal
-  severity: warning
+  severity: error
   cadence: 60s
   alert_threshold: 3 consecutive failures
 - signal_id: production.openpanel.worker-http
@@ -338,7 +338,7 @@ signals:
   component: openpanel
   signal: openpanel-roundtrip
   primary_owner: internal
-  severity: warning
+  severity: error
   cadence: 60s
   alert_threshold: 3 consecutive failures
 - signal_id: staging.openpanel.roundtrip
@@ -346,7 +346,7 @@ signals:
   component: openpanel
   signal: openpanel-roundtrip
   primary_owner: internal
-  severity: warning
+  severity: error
   cadence: 60s
   alert_threshold: 3 consecutive failures
 - signal_id: production.github-api-tcp

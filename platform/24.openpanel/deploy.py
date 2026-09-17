@@ -51,13 +51,22 @@ class OpenPanelDeployer(Deployer):
     # OpenPanel is prod_only (single shared analytics instance), so targets
     # carry NO ${ENV_SUFFIX} — probe the prod instance from all envs (a
     # suffixed host never exists; see the same rule on platform/signoz).
+    #
+    # Severity follows ops.observability §3/§5: `error` is P1, `warning` is P2.
+    # A failure that loses events is P1: `/track` unreachable (api-http) or events
+    # not landing in op-ch (roundtrip). api-http is also the round-trip's cascade
+    # root, so while the API is down it is the probe that pages. Declared
+    # `warning`, it would page a total ingest loss at P2 (#726). A worker or
+    # dashboard health failure loses nothing by itself; a worker that stops
+    # persisting pages P1 through the round-trip. The runner's debounce (3 runs)
+    # and the never-green grace (3 runs / 15 min, #734) still hold back a blip.
     probes = (
         ProbeFacet(
             name="openpanel-api-http",
             kind="http",
             target="http://platform-openpanel-api:3000/healthcheck",
             expected="200",
-            severity="warning",
+            severity="error",
         ),
         ProbeFacet(
             name="openpanel-worker-http",
@@ -83,7 +92,7 @@ class OpenPanelDeployer(Deployer):
             kind="command",
             target="python /app/tools/observability_roundtrip_probe.py openpanel",
             expected="roundtrip-ok",
-            severity="warning",
+            severity="error",
             timeout_seconds=45,
             depends_on="openpanel-api-http",
         ),

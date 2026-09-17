@@ -596,6 +596,95 @@ def test_never_green_http_probe_still_pages_critical(monkeypatch, tmp_path) -> N
     assert posted[0]["commonLabels"]["severity"] == "critical"
 
 
+def test_payload_severity_is_the_most_severe_failure() -> None:
+    """One payload covers a group's failing probes. Its severity is the worst of them,
+    not whichever rendered first (ops.observability §3: critical P0, error P1, warning P2)."""
+    warning, error, critical, odd = (
+        parse_probe_specs(f"{name}|http|http://x|200|{severity}|5")[0]
+        for name, severity in (
+            ("worker", "warning"),
+            ("roundtrip", "error"),
+            ("vault", "critical"),
+            ("typo", "crtical"),
+        )
+    )
+    down = [_result(warning, ok=False), _result(error, ok=False)]
+    assert build_probe_alert_payload(down)["commonLabels"]["severity"] == "error"
+    assert probes.group_severity(down) == "error"
+    assert probes.group_severity([*down, _result(critical, ok=False)]) == "critical"
+    # an unrecognised severity pages loudly, as a level the SSOT defines
+    assert (
+        probes.group_severity([_result(warning, ok=False), _result(odd, ok=False)])
+        == "critical"
+    )
+    assert probes.group_severity([]) == "info"
+    # the per-alert labels keep each probe's own severity, and an override still wins
+    assert [
+        a["labels"]["severity"] for a in build_probe_alert_payload(down)["alerts"]
+    ] == [
+        "warning",
+        "error",
+    ]
+    overridden = build_probe_alert_payload(down, severity_override="warning")
+    assert overridden["commonLabels"]["severity"] == "warning"
+
+
+@pytest.mark.parametrize(
+    ("failing", "paged"),
+    [
+        # 2026-09-15/16 (#726): NOSCRIPT, /healthcheck green, every /track lost
+        ({"openpanel-roundtrip"}, ["openpanel-roundtrip"]),
+        # API down: the round-trip is its cascade symptom, the API root pages
+        ({"openpanel-api-http", "openpanel-roundtrip"}, ["openpanel-api-http"]),
+        # worker down: events stop landing; the worker probe (P2) renders first
+        (
+            {"openpanel-worker-http", "openpanel-roundtrip"},
+            ["openpanel-roundtrip", "openpanel-worker-http"],
+        ),
+    ],
+    ids=["noscript", "api-down", "worker-down"],
+)
+def test_openpanel_ingest_loss_pages_p1_through_the_deployed_specs(
+    monkeypatch, tmp_path, failing, paged
+) -> None:
+    """ops.observability §5: an OpenPanel ingest loss is P1 (`error`). Driven through the
+    registry-rendered INFRA_PROBE_SPECS the alerting deploy ships. Red before: every
+    shape paged `warning`; the worker shape stayed `warning` with the probes raised
+    until the payload took the worst severity instead of the first."""
+    from libs.probe_specs import (
+        encode_specs_env_value,
+        render_probe_spec_text,
+        resolve_env_suffix,
+    )
+
+    runner = _load_probe_runner()
+    posted: list[dict] = []
+    monkeypatch.setenv(
+        "INFRA_PROBE_SPECS",
+        encode_specs_env_value(resolve_env_suffix(render_probe_spec_text(), "")),
+    )
+    monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
+    monkeypatch.setattr(
+        runner, "post_alert_bridge_payload", lambda _u, p, **_k: posted.append(p)
+    )
+    down: set[str] = set()
+    monkeypatch.setattr(
+        runner,
+        "run_probes",
+        lambda specs: [_result(s, ok=s.name not in down) for s in specs],
+    )
+    state_path = tmp_path / "s.json"
+
+    assert runner.run_once(state_path=state_path, failure_threshold=1) == 0
+    down.update(failing)
+    assert runner.run_once(state_path=state_path, failure_threshold=1) == 1
+
+    (page,) = _firing(posted, "InfraServiceProbeFailed")
+    assert _firing(posted, "InfraProbeMisconfigured") == []
+    assert sorted(a["labels"]["component"] for a in page["alerts"]) == paged
+    assert page["commonLabels"]["severity"] == "error"
+
+
 def _roundtrip_runner(monkeypatch, severity: str, outcome):
     """A runner probing one `command` round-trip whose result `outcome(spec)` decides,
     with a controllable clock. Returns (runner, posted payloads, clock, printed lines)."""

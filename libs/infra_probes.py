@@ -151,6 +151,31 @@ def failed_results(results: list[ProbeResult]) -> list[ProbeResult]:
     return [result for result in results if not result.ok]
 
 
+# ops.observability §3: critical = P0, error = P1, warning = P2.
+_SEVERITY_RANK = {"critical": 0, "error": 1, "warning": 2, "info": 3}
+
+
+def group_severity(failures: list[ProbeResult]) -> str:
+    """The severity a payload carries for ``failures``: the most severe one declared.
+
+    One payload covers every failing probe of a group. Its severity used to be that of
+    whichever probe rendered first, so a P1 `openpanel-roundtrip` failing next to a P2
+    `openpanel-worker-http` (listed earlier) went out as a warning. An unrecognised
+    severity is sent as `critical`: a typo pages loudly, and the payload still carries
+    only a level the SSOT defines.
+    """
+    if not failures:
+        return "info"
+    declared = (result.spec.severity.strip().lower() for result in failures)
+    return min(
+        (
+            severity if severity in _SEVERITY_RANK else "critical"
+            for severity in declared
+        ),
+        key=_SEVERITY_RANK.__getitem__,
+    )
+
+
 def is_misconfigured(result: ProbeResult) -> bool:
     """True for a failure the probe attributed to its own missing configuration."""
     return not result.ok and result.observed == ProbeMisconfigured.__name__
@@ -203,10 +228,7 @@ def build_probe_alert_payload(
         }
         for result in failures
     ]
-    if severity_override:
-        severity = severity_override
-    else:
-        severity = failures[0].spec.severity if failures else "info"
+    severity = severity_override or group_severity(failures)
     return {
         "status": status,
         "commonLabels": {

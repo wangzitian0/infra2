@@ -37,6 +37,7 @@ from libs.infra_probes import (
     HTTP_PROBE_HEADERS,
     build_probe_alert_payload,
     failed_results,
+    group_severity,
     is_misconfigured,
     parse_probe_specs,
     post_alert_bridge_payload,
@@ -74,10 +75,7 @@ def _log_send(stream_key: str, results: list, severity_override: str | None) -> 
     black box — failures-only, nothing on a successful send)."""
     failures = failed_results(results)
     status = "firing" if failures else "resolved"
-    if severity_override:
-        severity = severity_override
-    else:
-        severity = failures[0].spec.severity if failures else "info"
+    severity = severity_override or group_severity(failures)
     names = ",".join(sorted(r.spec.name for r in failures)) or "-"
     print(
         f"probe-runner send stream={stream_key} status={status} "
