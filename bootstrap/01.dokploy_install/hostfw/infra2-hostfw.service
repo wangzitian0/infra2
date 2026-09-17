@@ -1,0 +1,21 @@
+# infra2 host firewall. SSOT: docs/ssot/bootstrap.nodep.md §4 "Host firewall".
+# Installed by bootstrap/01.dokploy_install/hostfw/hostfw.sh install. It loads only table inet infra2_hostfw and
+# never touches Docker's or fail2ban's tables, so it is safe to (re)start at any time.
+[Unit]
+Description=infra2 host firewall (nftables table inet infra2_hostfw)
+Documentation=https://github.com/wangzitian0/infra2/blob/main/docs/ssot/bootstrap.nodep.md
+DefaultDependencies=no
+Wants=network-pre.target
+After=local-fs.target
+Before=network-pre.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/infra2/hostfw.nft
+ExecReload=/usr/sbin/nft -f /etc/infra2/hostfw.nft
+ExecStop=/usr/sbin/nft delete table inet infra2_hostfw
+
+[Install]
+WantedBy=multi-user.target

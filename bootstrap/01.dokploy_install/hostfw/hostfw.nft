@@ -1,0 +1,50 @@
+#!/usr/sbin/nft -f
+# infra2 host firewall. SSOT: docs/ssot/bootstrap.nodep.md §4 "Host firewall" (Infra-022 T1.3, #724).
+#
+# Public surface of the VPS: SSH (22) and the Traefik entrypoints (80, 443, 443/udp). Everything else that
+# listens on the public interface is refused. As of 2026-09-17 that means:
+#   - Dokploy's UI on 3000; operators use https://cloud.<domain> or an SSH tunnel;
+#   - the single-node swarm's control plane (2377/tcp), gossip (7946/tcp+udp) and VXLAN data plane (4789/udp).
+#
+# This table is ours alone. It never flushes the ruleset: Docker (iptables-nft `ip filter`/`ip nat`) and
+# fail2ban (`inet f2b-table`) own their own tables. A packet must pass every base chain on a hook, so a drop here
+# is final and an accept here does not bypass theirs.
+#
+# Docker-published IPv4 ports are DNAT'd in prerouting and reach containers through FORWARD, not INPUT. So the
+# Dokploy port is dropped again in `forward`, by its original destination port. Published IPv6 ports are served by
+# docker-proxy on the host, so `input` covers them.
+
+define PUBLIC_IF = "eth0"
+
+table inet infra2_hostfw
+delete table inet infra2_hostfw
+
+table inet infra2_hostfw {
+	set public_tcp {
+		type inet_service
+		elements = { 22, 80, 443 }
+	}
+
+	# 443: HTTP/3 on Traefik. 68/546: DHCPv4/DHCPv6 client replies.
+	set public_udp {
+		type inet_service
+		elements = { 68, 443, 546 }
+	}
+
+	# Host-bound traffic arriving on the public interface: allow-list, default drop.
+	chain input {
+		type filter hook input priority filter; policy accept;
+		iifname != $PUBLIC_IF accept
+		ct state established,related accept
+		meta l4proto { icmp, ipv6-icmp } accept
+		tcp dport @public_tcp accept
+		udp dport @public_udp accept
+		counter drop comment "infra2-hostfw: not on the public allow-list"
+	}
+
+	# Runs before Docker's FORWARD (priority filter). Drops only new external hits on the Dokploy UI port.
+	chain forward {
+		type filter hook forward priority filter - 1; policy accept;
+		iifname $PUBLIC_IF meta l4proto tcp ct original proto-dst 3000 counter drop comment "infra2-hostfw: Dokploy UI is not public"
+	}
+}

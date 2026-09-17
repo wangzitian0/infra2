@@ -9,6 +9,7 @@
 
 ## Top Issues
 
+- [x] `bootstrap/01.dokploy_install/hostfw/`: 主机防火墙（T1.3 / #724 的"只开放 80/443/SSH"），owner 2026-09-17 批准。用 nftables 自有表而非 UFW（UFW 挡不住 Docker DNAT 的端口）。上线前公网可连 3000（Dokploy UI）、2377、7946、4789/udp；上线后外部只剩 22/80/443，runner→Dokploy、runner→主机 22、Cloudflare 路由、Dagster→OpenD 均正常；已 `install` 持久化（`infra2-hostfw.service` enabled）。未做：80/443 仅放行 Cloudflare IP 段（#724 §3）
 - [ ] `tools/pg_backup_r2.sh`: 编写针对 Dokploy 托管 PostgreSQL 容器的定制导出与 rclone 同步脚本
 - [ ] `tools/verify_backup_restore.sh`: 编写在独立临时容器中解密、导入并验证行数的验证脚本
 - [ ] `bootstrap/docker_daemon.json`: 固化 `daemon.json` 并编写平滑热重载脚本（校验 live-restore 状态）
