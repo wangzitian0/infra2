@@ -9,7 +9,7 @@
 
 ```
 ./
-├── 01.dokploy_install/    # Dokploy 安装
+├── 01.dokploy_install/    # Dokploy 安装 + 主机防火墙（hostfw/）
 ├── 02.dns_and_cert/       # DNS 和证书配置
 ├── 03.dokploy_setup/      # Dokploy 域名和 CLI 配置
 ├── 04.1password/          # 1Password Connect

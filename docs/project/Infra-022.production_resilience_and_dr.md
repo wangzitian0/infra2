@@ -26,6 +26,7 @@
 - [ ] **T1.1 Docker 全局日志限额**：在 `/etc/docker/daemon.json` 配置 `max-size: 50m`, `max-file: 3`，配合 `live-restore: true` 实现平滑热重载。
 - [ ] **T1.2 磁盘双水位自愈守护**：部署 `disk-guardian`（systemd timer）：≥80% 触发自动清理 dangling 镜像与构建缓存并告警；≥85% 升级为 P0 告警并激进截断日志。
 - [ ] **T1.3 宿主机安全加固（#724）**：SSH 禁用密码认证、仅密钥登录；UFW 仅开放 80/443/SSH；Docker daemon 严禁暴露 TCP 端口。
+  - 2026-09-17 进展：SSH 仅密钥 + fail2ban 已在主机生效（2026-09-15，手工）；公网只开放 80/443/SSH 已由 `bootstrap/01.dokploy_install/hostfw/`（nftables，替代 UFW）落地并持久化；Docker daemon 未监听 TCP 2375/2376。剩余：SSH 加固代码化、80/443 仅放行 Cloudflare 段。
 
 ### L2: 生产数据备份与带外容灾 (Platform & Data)
 - [ ] **T2.1 PostgreSQL 自动化异地备份至 Cloudflare R2（#721）**：每日定时执行 `pg_dump -Fc`（结构化压缩），使用 `age` 客户端加密后通过 rclone 上传至 Cloudflare R2（零出网费），保留 30 天。
