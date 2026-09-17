@@ -14,6 +14,7 @@ import types
 from contextlib import contextmanager
 from pathlib import Path
 
+import pytest
 import yaml
 
 
@@ -1340,6 +1341,150 @@ def test_a_remembered_failure_is_retried_not_replayed(monkeypatch) -> None:
     assert webhook_server._reusable_result(key) is None
     assert webhook_server._recent_result(key)["status"] == "failed"
     assert key in webhook_server._recent_deploys
+
+
+@pytest.mark.parametrize("action", ["sync", "secrets-supply"])
+def test_a_retry_in_flight_is_reported_over_the_failure_it_retries(
+    monkeypatch, action
+) -> None:
+    """truealpha v0.0.83 staging, 2026-09-17: the first attempt failed on a transient
+    error (deployment_id 62d5bdb5bd8e4234); a retry with identical coordinates started a
+    real run at 07:43:32Z that succeeded at 07:45:36Z, but deploy_v2 reported the retry
+    failed after 1.2 s — its first /deploy/status poll was answered from the remembered
+    failure, which shares the retry's deterministic deployment_id. While a key is in
+    flight, any remembered result belongs to an earlier run."""
+    monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
+    sync_runner = _load_module(
+        "sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch
+    )
+    fake_flask = types.ModuleType("flask")
+
+    class FakeFlask:
+        def __init__(self, _name):
+            pass
+
+        def route(self, *_args, **_kwargs):
+            return lambda func: func
+
+    fake_flask.Flask = FakeFlask
+    fake_flask.jsonify = lambda payload: payload
+    fake_flask.request = types.SimpleNamespace(headers={}, data=b"", json={})
+    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+    webhook_server = _load_module(
+        "webhook_server_retry_in_flight_under_test",
+        IAC_RUNNER / "webhook_server.py",
+        monkeypatch,
+    )
+
+    services = ["truealpha/data_engine"]
+    version_ref = "v0.0.83"
+    key = webhook_server._deployment_key(
+        "staging", DEPLOY_SHA, services, version_ref, action
+    )
+    deployment_id = webhook_server._deployment_id(key)
+
+    def _result(success: bool):
+        return sync_runner.SyncResult(
+            env="staging",
+            ref=DEPLOY_SHA,
+            requested_services=services,
+            results=[
+                sync_runner.ServiceSyncResult(
+                    service="truealpha/data_engine",
+                    task="data_engine.sync",
+                    success=success,
+                    stderr="" if success else "transient: registry timed out",
+                )
+            ],
+        )
+
+    # The first attempt's failure is remembered for the key.
+    webhook_server._in_flight_deploys.clear()
+    webhook_server._recent_deploys.clear()
+    webhook_server._recent_deploys[key] = (
+        time.monotonic(),
+        webhook_server._completed_response(
+            "staging",
+            DEPLOY_SHA,
+            "deploy_v2",
+            _result(success=False),
+            services,
+            version_ref=version_ref,
+            action=action,
+        ),
+    )
+
+    # The retry starts and stays in flight until the test releases it.
+    pending: list = []
+
+    class DeferredThread:
+        daemon = False
+
+        def __init__(self, target=None, args=(), kwargs=None):
+            self._target, self._args, self._kwargs = target, args, kwargs or {}
+
+        def start(self):
+            pending.append(self)
+
+        def finish(self):
+            self._target(*self._args, **self._kwargs)
+
+    monkeypatch.setattr(webhook_server.threading, "Thread", DeferredThread)
+    monkeypatch.setattr(
+        sync_runner,
+        "sync_services_by_version",
+        lambda *_args, **_kwargs: _result(success=True),
+    )
+    request_json = {
+        "env": "staging",
+        "ref": DEPLOY_SHA,
+        "triggered_by": "deploy_v2",
+        "services": services,
+        "version_ref": version_ref,
+        **({"action": action} if action != "sync" else {}),
+    }
+    fake_flask.request.headers = _signed_headers(monkeypatch)
+    fake_flask.request.json = {**request_json, "wait": False}
+    body, status_code = webhook_server.version_deploy()
+    assert status_code == 202
+    assert body["status"] == "in_progress"
+    assert body.get("cached") is not True
+    assert body["deployment_id"] == deployment_id
+    assert len(pending) == 1 and key in webhook_server._in_flight_deploys
+
+    def _poll(payload: dict) -> tuple[dict, int]:
+        fake_flask.request.headers = _signed_headers(monkeypatch)
+        fake_flask.request.json = payload
+        return webhook_server.deployment_status()
+
+    # The retry's poll sees the retry, not the failure it is retrying — and the
+    # in-progress answer carries the same id (and action) the poll asked about.
+    status_body, status_code = _poll({**request_json, "deployment_id": deployment_id})
+    assert status_code == 200, status_body
+    assert status_body["status"] == "in_progress", status_body
+    assert status_body["deployment_id"] == deployment_id
+    assert status_body.get("action", "sync") == action
+    assert status_body["version_ref"] == version_ref
+
+    # An env/ref-only (legacy) poll finds one candidate, not an ambiguity, and it is
+    # the run in flight as well.
+    legacy_body, legacy_code = _poll(
+        {"env": "staging", "ref": DEPLOY_SHA, "triggered_by": "deploy_v2"}
+        | ({"action": action} if action != "sync" else {})
+    )
+    assert legacy_code == 200, legacy_body
+    assert legacy_body["status"] == "in_progress", legacy_body
+    assert legacy_body["deployment_id"] == deployment_id
+
+    # Once the retry finishes, the same poll reports ITS result.
+    pending.pop().finish()
+    assert key not in webhook_server._in_flight_deploys
+    status_body, status_code = _poll({**request_json, "deployment_id": deployment_id})
+    assert status_code == 200, status_body
+    assert status_body["status"] == "completed", status_body
+    assert status_body["deployment_id"] == deployment_id
+    assert status_body["result"]["succeeded"] == 1
+    assert status_body["result"]["failed"] == 0
 
 
 def test_deploy_cache_reuses_only_when_requested_services_match(monkeypatch) -> None:
