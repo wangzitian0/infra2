@@ -486,7 +486,8 @@ exits 1 with "no checks reported" before any check exists, which crashed the gat
 - [x] `tools/orchestrator_guard_hook.py` (stdlib only) with tests; not wired. The hook
       input fields it relies on (`agent_id` for subagents, `scratchpad_dir`,
       `stop_hook_active`) are present in the Claude Code 2.1.272 hook input schema.
-- [ ] Owner: add the documented hook entries to `.claude/settings.json` if wanted.
+- [x] Owner: add the documented hook entries to `.claude/settings.json` (done 2026-09-17: `.claude/settings.json` is a symlink projected by dev_env `workspace-iac/bin/ws-apply`, which now emits the hooks; the command exits 0 in projects without the hook file).
+- [x] Workflow probe: newest of several listed runs, never older than a run already seen in the watch (2026-09-17: `gh run list --limit 1` returned the previous day's run and the watch printed WAITING->DONE for a run still in progress).
 
 Live read-only smoke (2026-09-16, one-shot against real GitHub): an open infra2 PR with
 pending checks reported WAITING, a merged PR DONE, a branch without a PR WAITING, a gate

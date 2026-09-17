@@ -596,6 +596,11 @@ def classify_run(
     return Status(key, UNKNOWN, f"run {rid} status {status!r}", fp)
 
 
+#: Several rows, not one: the listing's first row has been an older run (see probe_workflow).
+RUN_LISTING_LIMIT = 10
+RUN_FIELDS = "databaseId,status,conclusion,headSha,createdAt"
+
+
 def probe_workflow(env: Env, item: dict, key: str, memory: dict) -> Status:
     """The newest run of a workflow; with ``expect_branch_head``, the run of the
     branch's current head commit, so an older or re-run commit cannot stand in for it.
@@ -610,9 +615,9 @@ def probe_workflow(env: Env, item: dict, key: str, memory: dict) -> Status:
         "--workflow",
         workflow,
         "--limit",
-        "1",
+        str(RUN_LISTING_LIMIT),
         "--json",
-        "databaseId,status,conclusion,headSha,createdAt",
+        RUN_FIELDS,
     ]
     if item.get("branch"):
         argv += ["--branch", item["branch"]]
@@ -624,10 +629,32 @@ def probe_workflow(env: Env, item: dict, key: str, memory: dict) -> Status:
         head = str(commit["sha"])
         head_at = epoch(commit["commit"]["committer"]["date"])
         argv += ["--commit", head]
-    rows = gh_json(env.run, argv)
+    rows = gh_json(env.run, argv) or []
+    run = (
+        max(rows, key=lambda row: epoch(row.get("createdAt")) or 0.0) if rows else None
+    )
+    # 2026-09-16/17: `gh run list --limit 1` intermittently returned a run from the day
+    # before as the newest, and the watch reported "WAITING->DONE" for a run that was
+    # still in progress. Take the newest of several rows, and never go back in time
+    # within a watch: a listing older than a run already seen is a stale page, so that
+    # run is read directly instead.
+    seen = memory.get(("newest_run", key))
+    if (
+        run is not None
+        and seen is not None
+        and (epoch(run.get("createdAt")) or 0.0) < seen[1]
+    ):
+        run = gh_json(
+            env.run, ["run", "view", str(seen[0]), "-R", repo, "--json", RUN_FIELDS]
+        )
+    if run is not None:
+        memory[("newest_run", key)] = (
+            run.get("databaseId"),
+            epoch(run.get("createdAt")) or 0.0,
+        )
     return classify_run(
         key,
-        rows[0] if rows else None,
+        run,
         now=env.now(),
         stall_minutes=float(
             item.get("stall_minutes", DEFAULT_STALL_MINUTES["workflow"])
