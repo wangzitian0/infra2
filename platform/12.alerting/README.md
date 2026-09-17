@@ -356,8 +356,8 @@ into one of two streams per probe group:
   `error` (P1), as is its cascade root `openpanel-api-http`: those failures lose
   data (`docs/ssot/ops.observability.md` §3/§5). A payload that covers several
   failing probes carries the most severe of their severities
-  (`libs.infra_probes.group_severity`), not the first one's. A round-trip that has passed at least once since the runner started goes
-  here as soon as it fails. One that has **never** passed goes here after
+  (`libs.infra_probes.group_severity`), not the first one's. A round-trip that
+  has passed at least once since the runner started goes here as soon as it fails. One that has **never** passed goes here after
   `INFRA_PROBE_NEVER_GREEN_ESCALATION_FAILURES` (3) consecutive failed runs spanning
   `INFRA_PROBE_NEVER_GREEN_ESCALATION_SECONDS` (900). A failing round-trip re-runs
   on every 60 s loop, so both limits apply. The probe runner logs
