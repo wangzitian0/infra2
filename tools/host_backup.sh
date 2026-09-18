@@ -134,7 +134,10 @@ backup_service() {
       ;;
     path)
       data_path="${rest%%|*}"
-      if [ ! -d "${data_path}" ]; then echo "skip missing ${service_id} ${data_path}" >&2; return 0; fi
+      if [ ! -d "${data_path}" ]; then
+        echo "missing data directory for ${service_id}: ${data_path}" >&2
+        return 1
+      fi
       archive="${RUN_DIR}/${safe_id}_${TS}.tar.gz"
       archive_tree "${service_id}" "${archive}" "${data_path}" .
       emit_artifact "${service_id}" "${archive}" "filesystem_archive"

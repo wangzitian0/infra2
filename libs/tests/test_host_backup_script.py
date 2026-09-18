@@ -208,6 +208,15 @@ def test_redis_without_a_snapshot_fails_that_service(host) -> None:
     assert "FAILED finance_report/redis" in proc.stderr
 
 
+def test_missing_path_directory_fails_that_service(host) -> None:
+    shutil.rmtree(Path(host["env"]["BACKUP_DATA_ROOT"]) / "platform/minio")
+    proc, manifest, _ = _run(host)
+    assert proc.returncode == 1
+    assert "platform/minio" not in _ids(manifest)
+    assert "FAILED platform/minio" in proc.stderr
+    assert "missing data directory for platform/minio" in proc.stderr
+
+
 def test_script_services_are_declared_backup_inventory() -> None:
     body = SCRIPT.read_text()
     block = body[body.index("SERVICES=$(cat <<EOF") : body.index("\nEOF\n")]
