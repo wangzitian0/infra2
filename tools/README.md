@@ -231,6 +231,21 @@ uv run python -m tools.deploy_v2_canary \
   --domain zitian.party
 ```
 
+## host_backup.sh
+
+On-host nightly backup (installed as `/usr/local/sbin/infra2-host-backup.sh`,
+cron in [SOP-006](../docs/ssot/ops.recovery.md#sop-006-on-host-scheduled-backup-runner-logical-dumps)).
+Postgres dumps run first and busy path archives (minio) last. Every service is
+attempted: a failing one is named on stderr as `FAILED <service_id>`, left out of
+the manifest, and the run exits 1 without pruning old runs. `tar` exit 1 (a live
+file changed mid-read) is a `WARN`, not a failure. Redis `SAVE` authenticates
+with the container's own secrets and only `dump.rdb` is archived. Tests:
+`libs/tests/test_host_backup_script.py` (PATH shims, no Docker needed).
+
+```bash
+ENV_SUFFIX=-staging BACKUP_OUTPUT_DIR=/tmp/hb tools/host_backup.sh
+```
+
 ## backup_restore_rehearsal.py
 
 Guarded restore rehearsal for off-host backup artifacts. The command verifies the

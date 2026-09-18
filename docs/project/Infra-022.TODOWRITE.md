@@ -10,6 +10,8 @@
 ## Top Issues
 
 - [x] `bootstrap/01.dokploy_install/hostfw/`: 主机防火墙（T1.3 / #724 的"只开放 80/443/SSH"），owner 2026-09-17 批准。用 nftables 自有表而非 UFW（UFW 挡不住 Docker DNAT 的端口）。上线前公网可连 3000（Dokploy UI）、2377、7946、4789/udp；上线后外部只剩 22/80/443，runner→Dokploy、runner→主机 22、Cloudflare 路由、Dagster→OpenD 均正常；已 `install` 持久化（`infra2-hostfw.service` enabled）。未做：80/443 仅放行 Cloudflare IP 段（#724 §3）
+- [x] `tools/host_backup.sh`（#618，truealpha#650 恢复演练发现）：每晚 prod 备份在 `platform/minio` 被 `tar` exit 1 + `set -e` 中止，finance_report/truealpha 的 pg dump 从未执行。改为 pg dump 先跑、minio 最后；`tar` exit 1 记 WARN；单个服务失败不再中止其余服务（`FAILED <id>`，残缺归档删除，不进 manifest，退出 1，跳过本地轮转）；redis `SAVE` 之前未鉴权（NOAUTH 且 exit 0，从未真正快照），现用容器自身 secrets 鉴权，只归档 `dump.rdb`。测试 `libs/tests/test_host_backup_script.py`。主机副本 2026-08-20 起已手工运行 PR 旧 head（sha256 `1e1285b9…`）；合入后需从 main 重装并核对 sha256（SOP-006）
+- [ ] `tools/host_backup.sh` 覆盖缺口：BackupFacet 清单中 `bootstrap/1password`、`bootstrap/iac_runner`、`platform/alerting`、`platform/openpanel`、`platform/portal`、`platform/signoz`、`truealpha/data_engine` 未被脚本归档；prod 与 staging 共用 `/data/backups/infra2`，`BACKUP_KEEP=7` 约等于各 3.5 天
 - [ ] `tools/pg_backup_r2.sh`: 编写针对 Dokploy 托管 PostgreSQL 容器的定制导出与 rclone 同步脚本
 - [ ] `tools/verify_backup_restore.sh`: 编写在独立临时容器中解密、导入并验证行数的验证脚本
 - [ ] `bootstrap/docker_daemon.json`: 固化 `daemon.json` 并编写平滑热重载脚本（校验 live-restore 状态）
