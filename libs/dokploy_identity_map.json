@@ -8,6 +8,7 @@
   "platform/alerting": "platform/alerting",
   "platform/authentik": "platform/authentik",
   "platform/clickhouse": "platform/clickhouse",
+  "platform/free": "platform/free",
   "platform/minio": "platform/minio",
   "platform/openpanel": "platform/openpanel",
   "platform/portal": "platform/portal",
