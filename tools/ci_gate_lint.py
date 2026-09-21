@@ -131,7 +131,7 @@ def main() -> int:
     wf_dir = args.pos_dir or args.workflows_dir
     if not wf_dir.is_dir():
         print(f"Workflow directory not found: {wf_dir}", file=sys.stderr)
-        return 0
+        return 1
 
     errors = lint_workflows_dir(wf_dir)
     if errors:

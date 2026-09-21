@@ -33,12 +33,16 @@ jobs:
 
       - name: Lint CI Gate Hierarchy
         run: |
-          if [ -d "${{ inputs.workflows_dir }}" ]; then
-            python -m tools.ci_gate_lint "${{ inputs.workflows_dir }}"
-          else
-            echo "Workflows directory not found, skipping."
+          if [ ! -d "${{ inputs.workflows_dir }}" ]; then
+            echo "::error::Workflows directory not found: ${{ inputs.workflows_dir }}"
+            exit 1
           fi
+          python -m tools.ci_gate_lint "${{ inputs.workflows_dir }}"
 
       - name: Evaluate OMCA Gate Policy Self-Test
         run: |
-          python -m tools.omca_gate_policy --self-test
+          cmd=(python -m tools.omca_gate_policy --self-test)
+          if [ "${{ inputs.strict }}" = "false" ]; then
+            cmd+=(--no-strict)
+          fi
+          "${cmd[@]}"
