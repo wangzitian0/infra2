@@ -7,6 +7,7 @@ teardown safety, and CLI entry point without requiring Docker or a live host.
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -100,8 +101,12 @@ def test_run_rehearsal_docker_args_and_invariants(
         plan = mock_restore.call_args[0][0]
         assert len(plan.invariant_sql) == 5
         invariants = " ".join(plan.invariant_sql)
-        assert "< 50 THEN RAISE EXCEPTION" in invariants
-        assert "< 5 THEN RAISE EXCEPTION" in invariants
+        # Thresholds are tuned per service, so assert the property that matters
+        # rather than the numbers: every floor must actually be enforceable and
+        # above 1, since a `< 1` floor only proves the database is not empty.
+        floors = [int(m) for m in re.findall(r"< (\d+) THEN RAISE EXCEPTION", invariants)]
+        assert len(floors) >= 2
+        assert all(floor > 1 for floor in floors), f"tautological floor in {floors}"
         assert "unexpected alembic_version" in invariants
 
         # Assert container teardown

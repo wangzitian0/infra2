@@ -260,7 +260,19 @@ python tools/run_restore_rehearsal.py \
   --manifest /data/backups/infra2/manifest.json \
   --service-id finance_report/postgres \
   --database finance_report
+
+# Drill every service in one scheduled run (each uses its own database, so
+# --database is rejected here). One service failing never stops the rest: every
+# service is attempted and the run exits 1 naming each failure (#618).
+python tools/run_restore_rehearsal.py --service-id all
 ```
+
+Each service emits its own `RESTORE_PROOF: PASS|FAIL` line; the exit code is the
+contract (0 only when every drilled service passed). Invariants are per service —
+`finance_report` asserts table/accounts/alembic floors, `truealpha` asserts table
+count plus TOPT capture and GPPE row floors. The floors sit near half of the
+observed production values: low enough not to flap on routine change, high enough
+that a truncated restore cannot pass.
 
 For direct manual invocation against an existing pre-provisioned rehearsal container:
 

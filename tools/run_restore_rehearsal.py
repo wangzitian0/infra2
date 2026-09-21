@@ -112,8 +112,8 @@ def run_rehearsal(
             invariants = (
                 "SELECT 1",
                 f"SELECT count(*) >= 1 FROM pg_database WHERE datname = '{database}'",
-                "DO $$ BEGIN IF (SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public') < 50 THEN RAISE EXCEPTION 'table count below threshold (<50)'; END IF; END $$;",
-                "DO $$ BEGIN IF (SELECT count(*) FROM accounts) < 5 THEN RAISE EXCEPTION 'accounts count below threshold (<5)'; END IF; END $$;",
+                "DO $$ BEGIN IF (SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public') < 40 THEN RAISE EXCEPTION 'table count below threshold (<40)'; END IF; END $$;",
+                "DO $$ BEGIN IF (SELECT count(*) FROM accounts) < 3 THEN RAISE EXCEPTION 'accounts count below threshold (<3)'; END IF; END $$;",
                 "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM alembic_version WHERE version_num IN ('0063_enum_case_compat', '0062_bank_custody')) THEN RAISE EXCEPTION 'unexpected alembic_version'; END IF; END $$;",
             )
         elif service_id == "truealpha/postgres":
@@ -121,8 +121,8 @@ def run_rehearsal(
                 "SELECT 1",
                 f"SELECT count(*) >= 1 FROM pg_database WHERE datname = '{database}'",
                 "DO $$ BEGIN IF (SELECT count(*) FROM information_schema.tables WHERE table_schema IN ('raw', 'staging', 'mart', 'app')) < 50 THEN RAISE EXCEPTION 'table count below threshold (<50)'; END IF; END $$;",
-                "DO $$ BEGIN IF (SELECT count(*) FROM mart.topt_capture_status WHERE complete = true) < 1 THEN RAISE EXCEPTION 'topt_capture_status count below threshold (<1)'; END IF; END $$;",
-                "DO $$ BEGIN IF (SELECT count(*) FROM mart.topt_gppe_results WHERE payload->>'availability' = 'available') < 100 THEN RAISE EXCEPTION 'topt_gppe_results available below threshold (<100)'; END IF; END $$;",
+                "DO $$ BEGIN IF (SELECT count(*) FROM mart.topt_capture_status WHERE complete = true) < 80 THEN RAISE EXCEPTION 'topt_capture_status count below threshold (<80)'; END IF; END $$;",
+                "DO $$ BEGIN IF (SELECT count(*) FROM mart.topt_gppe_results WHERE payload->>'availability' = 'available') < 1400 THEN RAISE EXCEPTION 'topt_gppe_results available below threshold (<1400)'; END IF; END $$;",
             )
         else:
             invariants = (
