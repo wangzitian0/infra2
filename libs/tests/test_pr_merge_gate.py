@@ -211,6 +211,7 @@ class _Gh:
                         }
                     ],
                     "files": [{"path": "libs/probe_specs.py"}],
+                    "changedFiles": 1,
                     "mergeable": getattr(self, "mergeable", "MERGEABLE"),
                     "mergeStateStatus": getattr(self, "merge_state", "CLEAN"),
                     "commits": [
@@ -946,3 +947,96 @@ def test_a_requested_change_blocks_even_when_it_left_no_thread():
     )
     assert not verdict.ready
     assert any("requested changes" in r for r in verdict.reasons)
+
+
+def test_a_field_gh_omitted_blocks_even_when_its_own_guard_would_switch_off():
+    # changedFiles was guarded one field at a time and kept the old `or 0`
+    # treatment, so `if facts.changed_files` switched off the very check that
+    # stops a truncated file list from dropping the owner gates. A blind audit
+    # showed the gate issuing `gh pr merge` on a 163-file PR because of it.
+    # The guard is now over the set of requested-but-missing fields, so the
+    # next field added cannot repeat it.
+    verdict = gate.evaluate(_green(absent_fields=("changedFiles",)), now=NOW)
+    assert not verdict.ready
+    assert any("gh did not return changedFiles" in r for r in verdict.reasons)
+
+
+def test_collect_records_every_requested_field_gh_did_not_return():
+    def fake(argv):
+        if argv[:2] == ["pr", "view"]:
+            # No files, changedFiles, commits, mergeable or mergeStateStatus.
+            return json.dumps(
+                {
+                    "number": 1,
+                    "state": "OPEN",
+                    "isDraft": False,
+                    "baseRefName": "main",
+                    "headRefOid": "f" * 40,
+                    "reviews": [],
+                    "id": "X",
+                }
+            )
+        if argv[:2] == ["pr", "checks"]:
+            return "[]"
+        if argv[:2] == ["api", "graphql"]:
+            return json.dumps(
+                {
+                    "data": {
+                        "repository": {
+                            "pullRequest": {
+                                "reviewThreads": {"totalCount": 0, "nodes": []}
+                            }
+                        }
+                    }
+                }
+            )
+        if argv[:1] == ["api"]:
+            return json.dumps({"files": []})
+        raise AssertionError(argv)
+
+    facts = gate.collect(1, gh=fake)
+    assert set(facts.absent_fields) == {
+        "files",
+        "changedFiles",
+        "commits",
+        "mergeable",
+        "mergeStateStatus",
+    }
+
+
+def test_a_tags_only_workflow_cannot_be_started_by_a_merge():
+    # `tags` without `branches` means tag pushes only. Reading an absent
+    # `branches` as "every branch" is right in general and wrong here; it was
+    # masked until the omitted-`paths` case stopped defaulting to nothing, at
+    # which point reconcile-iac-inputs.yml made every file deploy-triggering.
+    gate._declared_deploy_globs.cache_clear()
+    try:
+        workflows = {w for _, w in gate._declared_deploy_globs()[0]}
+        assert "reconcile-iac-inputs.yml" not in workflows
+        assert not gate._deploy_triggering("libs/probe_specs.py")
+    finally:
+        gate._declared_deploy_globs.cache_clear()
+
+
+def test_an_unreadable_workflow_read_escalates_rather_than_asking_for_patience(
+    monkeypatch,
+):
+    # exit 1 means "not yet" and a poller retries it forever. Not knowing
+    # whether a merge deploys is exactly the case that must escalate.
+    class Boom:
+        class YAMLError(Exception):
+            pass
+
+        @staticmethod
+        def safe_load(_):
+            raise Boom.YAMLError("unparseable")
+
+    gate._declared_deploy_globs.cache_clear()
+    monkeypatch.setattr(gate, "yaml", Boom)
+    try:
+        verdict = gate.evaluate(_green(), now=NOW)
+        assert not verdict.ready
+        assert verdict.owner_required
+        assert verdict.exit_code == 2
+    finally:
+        gate._declared_deploy_globs.cache_clear()

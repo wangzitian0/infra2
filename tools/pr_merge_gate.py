@@ -125,7 +125,7 @@ def _declared_deploy_globs() -> tuple[tuple[tuple[str, str], ...], bool]:
     """
     globs: list[tuple[str, str]] = []
     try:
-        names = sorted(WORKFLOW_DIR.glob("*.yml"))
+        names = sorted(WORKFLOW_DIR.glob("*.y*ml"))  # Actions accepts .yaml too
     except OSError:
         return (), False
     if not names:
@@ -155,11 +155,23 @@ def _declared_deploy_globs() -> tuple[tuple[tuple[str, str], ...], bool]:
         # omitted `branches` means every branch -- which includes main. Reading
         # only the list form silently skipped such a workflow, under-detecting
         # in the one direction that matters.
+        # Actions: `tags` without `branches` means tag pushes only, so a merge
+        # to main cannot start it. Reading an absent `branches` as "every
+        # branch" is right in general and wrong here, and it was masked until
+        # the `paths` case below stopped defaulting to nothing.
+        if "tags" in push and "branches" not in push:
+            continue
         if "branches" in push and "main" not in _as_list(push["branches"]):
             continue
         if not any(marker in text for marker in DEPLOY_MARKERS):
             continue
-        globs.extend((str(p), path.name) for p in _as_list(push.get("paths")))
+        paths = _as_list(push.get("paths"))
+        if "paths" not in push:
+            # Omitted `paths` means every path, the mirror of the `branches`
+            # case above. Reading it as "no paths" made the broadest deploy
+            # workflow contribute nothing -- coverage inverting with reach.
+            paths = ["*", "**"]
+        globs.extend((str(p), path.name) for p in paths)
     # Workflows present but none readable means the derivation is broken, not
     # that nothing deploys.
     # Every workflow must parse, not merely one of them. `parsed > 0` was the
@@ -275,6 +287,12 @@ class HeadFacts:
     # invisible -- and with required_approving_review_count: 0 the ruleset does
     # not withhold the merge either, so mergeStateStatus stays CLEAN.
     review_decision: str = ""
+    # Fields this call asked `gh` for and did not get back. Guarding one field
+    # at a time left changedFiles with the old `or 0` treatment, and
+    # `if facts.changed_files` then switched off the very guard that exists to
+    # stop a truncated file list from dropping the owner gates -- a blind audit
+    # showed the gate issuing `gh pr merge` on a 163-file PR because of it.
+    absent_fields: tuple[str, ...] = ()
     # (reviewer login, commit reviewed, submitted epoch) — a review pins a head
     reviews: tuple[tuple[str, str, float], ...] = ()
 
@@ -468,6 +486,17 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
         files=tuple(str(f["path"]) for f in view.get("files") or []),
         changed_files=int(view.get("changedFiles") or 0),
         review_decision=str(view.get("reviewDecision") or ""),
+        absent_fields=tuple(
+            name
+            for name in (
+                "files",
+                "changedFiles",
+                "commits",
+                "mergeable",
+                "mergeStateStatus",
+            )
+            if name not in view
+        ),
         last_push_at=last_push if head_seen else 0.0,
         checks=tuple(
             (str(c["name"]), str(c.get("bucket") or c.get("state") or ""))
@@ -577,14 +606,17 @@ def evaluate(
     # forever. Asking anyway turned a one-line "not OPEN" verdict into four
     # lines of noise about a question that no longer has an answer.
     is_open = facts.state == "OPEN"
-    absent = [
-        name
-        for name, value in (
-            ("mergeable", facts.mergeable),
-            ("mergeStateStatus", facts.merge_state),
-        )
-        if value == ABSENT
-    ]
+    absent = sorted(
+        set(facts.absent_fields)
+        | {
+            name
+            for name, value in (
+                ("mergeable", facts.mergeable),
+                ("mergeStateStatus", facts.merge_state),
+            )
+            if value == ABSENT
+        }
+    )
     if is_open and absent:
         reasons.append(
             f"gh did not return {', '.join(absent)} although asked for it: the "
@@ -649,6 +681,9 @@ def evaluate(
             "cannot read .github/workflows to determine which paths deploy on "
             "merge: fix the read rather than merging on an unknown"
         )
+        # exit 1 means "not yet"; a poller retries it forever. Not knowing
+        # whether a merge deploys is precisely the case that must escalate.
+        owner = True
     fired = {f: _deploy_triggering(f) for f in facts.files}
     deploying = sorted(f for f, w in fired.items() if w)
     if deploying:
