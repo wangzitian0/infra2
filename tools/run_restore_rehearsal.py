@@ -217,8 +217,11 @@ def run_rehearsal(
             "archive_size_bytes": archive_path.stat().st_size,
             "restored_db_size_bytes": db_size_bytes,
             "verified_tables_count": tables_count,
-            "verified_accounts_count": domain_stats.get("accounts_count", 0),
-            "verified_alembic_version": domain_stats.get("alembic_version", "n/a"),
+            # Kept flat for the finance_report report shape. They are null for
+            # services that have no accounts/alembic: a 0 here would assert that
+            # the check ran and found nothing, which is not what happened.
+            "verified_accounts_count": domain_stats.get("accounts_count"),
+            "verified_alembic_version": domain_stats.get("alembic_version"),
             "domain_stats": domain_stats,
             "duration_seconds": elapsed,
             "sandbox_container": container,
