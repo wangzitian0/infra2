@@ -270,6 +270,11 @@ class HeadFacts:
     # files=100, and everything from docs/ libs/ scripts/ tools/ uv.lock
     # onward was past the cut.
     changed_files: int = 0
+    # GitHub's own review verdict. The gate judged unresolved threads only, so a
+    # reviewer clicking Request changes without leaving a resolvable thread was
+    # invisible -- and with required_approving_review_count: 0 the ruleset does
+    # not withhold the merge either, so mergeStateStatus stays CLEAN.
+    review_decision: str = ""
     # (reviewer login, commit reviewed, submitted epoch) — a review pins a head
     reviews: tuple[tuple[str, str, float], ...] = ()
 
@@ -410,6 +415,7 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
                 repo,
                 "--json",
                 "number,state,isDraft,baseRefName,headRefOid,files,changedFiles,commits,id,reviews,"
+                "reviewDecision,"
                 "mergeable,mergeStateStatus",
             ]
         )
@@ -461,6 +467,7 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
         head_sha=str(view.get("headRefOid") or ""),
         files=tuple(str(f["path"]) for f in view.get("files") or []),
         changed_files=int(view.get("changedFiles") or 0),
+        review_decision=str(view.get("reviewDecision") or ""),
         last_push_at=last_push if head_seen else 0.0,
         checks=tuple(
             (str(c["name"]), str(c.get("bucket") or c.get("state") or ""))
@@ -667,6 +674,25 @@ def evaluate(
     missing = sorted(required - reported)
     if missing:
         reasons.append(f"required check(s) never reported: {', '.join(missing)}")
+    # `skipping` is the designed state for a docs-only PR, and blocking on it
+    # outright made those permanently unmergeable. But the gate still has to
+    # tell 适用 from 意外 skipped, and the workflow's own answer cannot be
+    # trusted for it: infra-ci computes has_non_doc from `git diff` against the
+    # base, so a rewritten base yields a wrong file list, emits
+    # has_non_doc=false, and reports Detect Non-Doc Changes GREEN while every
+    # required gate skips. GitHub's own file list for the PR is independent of
+    # that computation, so it is what decides here.
+    if any(not f.endswith(".md") for f in facts.files):
+        skipped = sorted(
+            name
+            for name, verdict in facts.checks
+            if name in required and verdict in ("skipping", "SKIPPED")
+        )
+        if skipped:
+            reasons.append(
+                f"required check(s) skipped although this PR changes non-Markdown "
+                f"files: {', '.join(skipped)}"
+            )
     if not facts.checks:
         reasons.append("no checks reported yet")
     if not_green:
@@ -682,6 +708,11 @@ def evaluate(
         reasons.append(
             f"checks are green against a base that has since changed {len(stale)} of "
             f"this PR's files ({shown}): update the branch so they re-run"
+        )
+    if facts.review_decision == "CHANGES_REQUESTED":
+        reasons.append(
+            "a reviewer has requested changes: resolve it with them rather than "
+            "merging over it"
         )
     if facts.unresolved_threads:
         reasons.append(f"{facts.unresolved_threads} review thread(s) unresolved")

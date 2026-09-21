@@ -774,7 +774,11 @@ def test_a_docs_only_pr_whose_required_checks_skipped_is_still_mergeable():
     # job is itself red, and `not_green` scans every check.
     required = sorted(gate._required_checks()[0])
     verdict = gate.evaluate(
-        _green(checks=tuple((name, "skipping") for name in required)), now=NOW
+        _green(
+            files=("docs/ssot/ops.pipeline.md",),
+            checks=tuple((name, "skipping") for name in required),
+        ),
+        now=NOW,
     )
     assert verdict.ready
 
@@ -910,3 +914,35 @@ def test_gh_is_called_without_a_terminal_and_with_a_deadline(monkeypatch):
     gate._gh(["pr", "view", "1"])
     assert seen["stdin"] is gate.subprocess.DEVNULL
     assert seen["timeout"] == gate.GH_TIMEOUT_S
+
+
+def test_a_required_check_skipped_on_a_code_pr_is_the_unexpected_kind():
+    # Blocking every skip made docs-only PRs unmergeable; allowing every skip
+    # lost the 意外 skipped clause entirely. The workflow's own answer cannot
+    # decide it: infra-ci computes has_non_doc from `git diff` against the base,
+    # so a rewritten base yields a wrong file list, emits has_non_doc=false, and
+    # reports Detect Non-Doc Changes GREEN while every required gate skips.
+    # GitHub's file list for the PR is independent of that computation.
+    required = sorted(gate._required_checks()[0])
+    verdict = gate.evaluate(
+        _green(
+            files=("libs/deploy_contract.py",),
+            checks=tuple((name, "skipping") for name in required)
+            + (("Detect Non-Doc Changes", "pass"),),
+        ),
+        now=NOW,
+    )
+    assert not verdict.ready
+    assert any("changes non-Markdown files" in r for r in verdict.reasons)
+
+
+def test_a_requested_change_blocks_even_when_it_left_no_thread():
+    # The gate counted unresolved threads only, so a reviewer clicking Request
+    # changes without an inline thread was invisible -- and with
+    # required_approving_review_count: 0 the ruleset does not withhold the merge
+    # either, so mergeStateStatus stays CLEAN and nothing else notices.
+    verdict = gate.evaluate(
+        _green(review_decision="CHANGES_REQUESTED", unresolved_threads=0), now=NOW
+    )
+    assert not verdict.ready
+    assert any("requested changes" in r for r in verdict.reasons)
