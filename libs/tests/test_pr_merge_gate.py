@@ -473,3 +473,55 @@ def test_a_merged_head_is_not_re_litigated_on_questions_that_have_no_answer():
     )
     assert not verdict.ready
     assert verdict.reasons == ["pull request is MERGED, not OPEN"]
+
+
+def test_an_unknown_merge_state_is_transient_not_a_conflict():
+    # Same cause as mergeable=UNKNOWN: GitHub is still computing the test merge.
+    # "not CLEAN" read like a settled conflict and sent the caller to rebase.
+    verdict = gate.evaluate(_facts(merge_state="UNKNOWN"), now=NOW)
+    assert not verdict.ready
+    reason = next(r for r in verdict.reasons if "mergeStateStatus" in r)
+    assert "re-run in a moment" in reason
+    assert "not CLEAN" not in reason
+
+
+def test_a_closed_pr_costs_no_comparison_round_trip():
+    calls: list[list[str]] = []
+
+    def fake(argv):
+        calls.append(argv)
+        if argv[:2] == ["pr", "view"]:
+            return json.dumps(
+                {
+                    "number": 704,
+                    "state": "MERGED",
+                    "isDraft": False,
+                    "baseRefName": "main",
+                    "headRefOid": "feedfacefeedface",
+                    "files": [],
+                    "commits": [],
+                    "reviews": [],
+                    "id": "PR_x",
+                    "mergeable": "UNKNOWN",
+                    "mergeStateStatus": "UNKNOWN",
+                }
+            )
+        if argv[:2] == ["pr", "checks"]:
+            return "[]"
+        if argv[:2] == ["api", "graphql"]:
+            return json.dumps(
+                {
+                    "data": {
+                        "repository": {
+                            "pullRequest": {
+                                "reviewThreads": {"totalCount": 0, "nodes": []}
+                            }
+                        }
+                    }
+                }
+            )
+        raise AssertionError(argv)
+
+    facts = gate.collect(704, gh=fake)
+    assert facts.base_changed_files == ()
+    assert not any("/compare/" in a for call in calls for a in call)

@@ -61,8 +61,16 @@ DEPLOY_TRIGGERING_GLOBS = (
 # gh's own classification of a check (`bucket`): pass / fail / pending / skipping /
 # cancel. `state` (SUCCESS, SKIPPED, IN_PROGRESS, …) is kept as the fallback for a gh
 # build without buckets.
-# GitHub merge states that do not themselves block: CLEAN, and BLOCKED/BEHIND
-# are reported by their own reasons above rather than duplicated here.
+# Merge states this gate accepts. Everything else is named by the
+# mergeStateStatus reason itself -- including BLOCKED and BEHIND, which have no
+# separate reason of their own. An earlier version of this comment claimed they
+# did; adding a state here silently stops it blocking, so the list is the rule.
+#
+# HAS_HOOKS and UNSTABLE are accepted deliberately: the first is a repository
+# configured with pre-receive hooks, the second means a non-required check is
+# red. Required checks are already judged by name above, so treating UNSTABLE as
+# a blocker here would duplicate that judgement and also block on checks the
+# repository has decided do not block.
 MERGE_STATES_OK = frozenset({"CLEAN", "HAS_HOOKS", "UNSTABLE"})
 
 GREEN_BUCKETS = frozenset({"pass", "skipping"})
@@ -218,8 +226,19 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
     nodes = review_threads["nodes"]
     commits = view.get("commits") or []
     last_push = max((_epoch(c["committedDate"]) for c in commits), default=0.0)
-    base_changed = _base_changed_files(
-        repo, str(view.get("headRefOid") or ""), str(view.get("baseRefName") or ""), gh=gh
+    # Only an open pull request can be updated, so the comparison that feeds the
+    # stale-green reason is worth a round trip only then. Auditing a run of
+    # merged PRs would otherwise pay one extra API call each for an answer
+    # `evaluate` discards.
+    base_changed = (
+        _base_changed_files(
+            repo,
+            str(view.get("headRefOid") or ""),
+            str(view.get("baseRefName") or ""),
+            gh=gh,
+        )
+        if str(view.get("state") or "") == "OPEN"
+        else ()
     )
     return HeadFacts(
         number=int(view["number"]),
@@ -310,7 +329,17 @@ def evaluate(
     elif is_open and facts.mergeable and facts.mergeable != "MERGEABLE":
         reasons.append(f"GitHub reports mergeable={facts.mergeable}, not MERGEABLE")
     if is_open and facts.merge_state and facts.merge_state not in MERGE_STATES_OK:
-        reasons.append(f"mergeStateStatus is {facts.merge_state}, not CLEAN")
+        if facts.merge_state == "UNKNOWN":
+            # Transient for the same reason mergeable=UNKNOWN is: GitHub is
+            # still computing the test merge. Saying "not CLEAN" reads like a
+            # settled conflict and sends the caller to rebase something that
+            # may well be fine.
+            reasons.append(
+                "mergeStateStatus is still UNKNOWN: re-run in a moment rather "
+                "than treating it as a conflict"
+            )
+        else:
+            reasons.append(f"mergeStateStatus is {facts.merge_state}, not CLEAN")
     protected = sorted(f for f in facts.files if f in PROTECTED_FILES)
     if protected:
         reasons.append(
