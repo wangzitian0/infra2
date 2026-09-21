@@ -351,6 +351,11 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
         action="store_true",
         help="ask Copilot to review the head when no automated review of it exists",
     )
+    parser.add_argument(
+        "--audit",
+        action="store_true",
+        help="run OMCA fast audit and block merge on critical architectural or blindfold findings",
+    )
     parser.add_argument("--json", action="store_true", help="machine-readable verdict")
     args = parser.parse_args(argv)
 
@@ -365,6 +370,30 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
     verdict = evaluate(
         facts, now=now(), quiet_minutes=args.quiet_minutes, policy=args.policy
     )
+    if args.audit:
+        try:
+            from tools.omca_gate_policy import evaluate_audit_report
+            audit_proc = subprocess.run(
+                ["omca", "audit", "--json", "--mode", "fast"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if audit_proc.returncode != 0 and not audit_proc.stdout.strip():
+                verdict.reasons.append(
+                    f"omca audit failed to run (rc={audit_proc.returncode}): {audit_proc.stderr.strip()[:100]}"
+                )
+                verdict.ready = False
+            else:
+                report = json.loads(audit_proc.stdout)
+                passed, blocking, _ = evaluate_audit_report(report, expect_sha=facts.head_sha)
+                if not passed:
+                    for b in blocking:
+                        verdict.reasons.append(f"omca audit blocked: {b}")
+                    verdict.ready = False
+        except Exception as exc:
+            verdict.reasons.append(f"omca audit execution error: {exc}")
+            verdict.ready = False
     if args.json:
         print(
             json.dumps(

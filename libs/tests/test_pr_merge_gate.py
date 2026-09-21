@@ -345,3 +345,19 @@ def test_no_checks_reported_by_gh_is_zero_checks_not_a_crash(capsys):
 def test_any_other_checks_failure_still_raises():
     with pytest.raises(RuntimeError, match="HTTP 502"):
         gate.collect(704, gh=_NoChecksYet(error="HTTP 502: Bad Gateway"))
+
+
+def test_pr_merge_gate_audit_flag_detects_blockers(monkeypatch, capsys):
+    from unittest.mock import MagicMock
+    ready_at = gate._epoch("2026-09-15T06:55:22Z") + 12 * 60
+    mock_run = MagicMock()
+    mock_run.return_value.returncode = 0
+    mock_run.return_value.stdout = json.dumps({
+        "verdict": "BLOCKED",
+        "commit": "feedfacefeedface",
+        "findings": [{"severity": "CRITICAL", "topic": "Memory Leak", "details": "leak"}],
+    })
+    monkeypatch.setattr(gate.subprocess, "run", mock_run)
+    exit_code = gate.main(["704", "--audit"], gh=_Gh(), now=lambda: ready_at)
+    assert exit_code == 1
+    assert "omca audit blocked" in capsys.readouterr().out
