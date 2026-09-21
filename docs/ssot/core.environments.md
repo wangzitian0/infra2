@@ -221,7 +221,7 @@ python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref
 - ✅ 只部署经过 staging 完整测试的版本
 - ✅ 使用 Git tags (如 `v1.2.3`)
 - ✅ 数据库迁移先在 staging 验证
-- ✅ 滚动切换与快速置换 (in-place fast-swap / canary; 单机避免空转重建)
+- ⏳ 滚动切换与快速置换 (in-place fast-swap / canary; Staging 试点已落地，待 W8 迁移解耦后晋升 Prod)
 
 **迭代速度**: ⚡ (周级)
 
@@ -393,11 +393,10 @@ commit `sha`（身份）+ `image_ref`（要拉的已发布镜像）——**code 
 
 > **现状边界**：`libs.deploy_contract.SERVICES` 中注册的 bespoke app（`finance_report/app`；
 > `truealpha/app` 自 #500 起）走 app 后端（`deploy_primitive` / `preview_lifecycle`）；`iac_pinned`
-> 服务从 `libs.service_registry` 派生并走 iac_runner `/deploy` webhook。`truealpha/app` 目前只接
-> `staging`（`ServiceSpec.supports_preview=False`：`preview_lifecycle` 仍是 finance_report 专属形状，
-> 未泛化；`prod` 尚无 Dokploy compose）。完整 GitHub 评审信号（供给 `code_reviewed=True`）可继续增强；
-> snapshot-sync / anonymization / rehearsal 属于 finance_report#893，但 `data_lane` 已是派生值，
-> 不是 deploy_v2 输入轴。
+> 服务从 `libs.service_registry` 派生并走 iac_runner `/deploy` webhook。`truealpha/app` 已接入
+> `preview`（多别名预览栈）、`staging` 与 `prod`（已配置独立 compose ID）。完整 GitHub 评审信号
+> （供给 `code_reviewed=True`）可继续增强；snapshot-sync / anonymization / rehearsal 属于
+> finance_report#893，但 `data_lane` 已是派生值，不是 deploy_v2 输入轴。
 
 ### 4.7.1 `type` 判别式（一个原语，N 场景）
 
