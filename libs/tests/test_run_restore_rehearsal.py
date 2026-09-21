@@ -98,10 +98,11 @@ def test_run_rehearsal_docker_args_and_invariants(
         # Assert plan invariants contain enforceable thresholds
         assert mock_restore.call_count == 1
         plan = mock_restore.call_args[0][0]
+        assert len(plan.invariant_sql) == 5
         invariants = " ".join(plan.invariant_sql)
         assert "< 50 THEN RAISE EXCEPTION" in invariants
         assert "< 5 THEN RAISE EXCEPTION" in invariants
-        assert "alembic_version missing" in invariants
+        assert "unexpected alembic_version" in invariants
 
         # Assert container teardown
         rm_cmds = [

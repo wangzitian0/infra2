@@ -168,6 +168,19 @@ def run_postgres_restore_rehearsal(
     if not archive_path.exists():
         raise BackupRestoreError(f"backup archive is missing: {archive_path}")
 
+    restore_target_db = plan.database
+    try:
+        with gzip.open(archive_path, "rt", errors="ignore") as f:
+            header_sample = f.read(2048)
+            if (
+                "pg_dumpall" in header_sample
+                or "CREATE ROLE" in header_sample
+                or "CREATE DATABASE" in header_sample
+            ):
+                restore_target_db = "postgres"
+    except Exception:
+        pass
+
     restore_cmd = [
         "docker",
         "exec",
@@ -178,7 +191,7 @@ def run_postgres_restore_rehearsal(
         plan.pg_user,
         "-v",
         "ON_ERROR_STOP=1",
-        "postgres",
+        restore_target_db,
     ]
     with gzip.open(archive_path, "rb") as dump:
         proc = popen(restore_cmd, stdin=subprocess.PIPE)

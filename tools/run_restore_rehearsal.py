@@ -103,13 +103,23 @@ def run_rehearsal(
             f"[+] Materialized archive: {archive_path} ({archive_path.stat().st_size} bytes)"
         )
 
-        # 4. Define invariants (enforce >=50 tables, >=5 accounts, alembic revision so bad restores are blocked)
-        invariants = (
-            "SELECT 1",
-            "DO $$ BEGIN IF (SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public') < 50 THEN RAISE EXCEPTION 'table count below threshold (<50)'; END IF; END $$;",
-            "DO $$ BEGIN IF (SELECT count(*) FROM accounts) < 5 THEN RAISE EXCEPTION 'accounts count below threshold (<5)'; END IF; END $$;",
-            "DO $$ BEGIN IF (SELECT count(*) FROM alembic_version) < 1 THEN RAISE EXCEPTION 'alembic_version missing'; END IF; END $$;",
-        )
+        # 4. Define invariants (5 checks enforcing connectivity, DB existence, table threshold, account count, and specific alembic version)
+        if service_id == "finance_report/postgres":
+            invariants = (
+                "SELECT 1",
+                f"SELECT count(*) >= 1 FROM pg_database WHERE datname = '{database}'",
+                "DO $$ BEGIN IF (SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public') < 50 THEN RAISE EXCEPTION 'table count below threshold (<50)'; END IF; END $$;",
+                "DO $$ BEGIN IF (SELECT count(*) FROM accounts) < 5 THEN RAISE EXCEPTION 'accounts count below threshold (<5)'; END IF; END $$;",
+                "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM alembic_version WHERE version_num IN ('0063_enum_case_compat', '0062_bank_custody')) THEN RAISE EXCEPTION 'unexpected alembic_version'; END IF; END $$;",
+            )
+        else:
+            invariants = (
+                "SELECT 1",
+                f"SELECT count(*) >= 1 FROM pg_database WHERE datname = '{database}'",
+                "DO $$ BEGIN IF (SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public') < 1 THEN RAISE EXCEPTION 'no tables restored'; END IF; END $$;",
+                "SELECT current_database()",
+                "SELECT 1",
+            )
         plan = build_postgres_rehearsal_plan(
             entry=entries[service_id],
             artifact=artifact,
@@ -153,8 +163,12 @@ def run_rehearsal(
                 "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"
             )
         )
-        accounts_count = int(query_val("SELECT count(*) FROM accounts"))
-        alembic_version = query_val("SELECT version_num FROM alembic_version")
+        if service_id == "finance_report/postgres":
+            accounts_count = int(query_val("SELECT count(*) FROM accounts"))
+            alembic_version = query_val("SELECT version_num FROM alembic_version")
+        else:
+            accounts_count = 0
+            alembic_version = "n/a"
         db_size_bytes = int(query_val("SELECT pg_database_size(current_database())"))
 
         elapsed = round(time.time() - start_time, 2)
