@@ -524,14 +524,14 @@ Rollback: revert the PR. Nothing is deployed, applied or wired; no secret is rea
 
 ## 2026-09-21 workspace 文档与 pin 语义：三个发现，两个已修，一个要 owner
 
-### 已修（PR infra2#760 / #761）
+### 已修（PR infra2#760 / #762）
 
 - **`doc_link_check` 会把生成物当死链**。链接可以指向一个「工作树里有、CI 里有、仓库里没有」的文件：
   生成的文档由工具产出并 gitignore，不入库。`os.path.exists` 于是随 generator 跑没跑而给出不同答案，
   检查在本地绿、干净 checkout 红。这和 #757 里 Copilot 抓到的「未展开 submodule 被当死链」是同一个
   错误类——**判定依赖于 checkout 形态**。#760 加 `git check-ignore` 归类，降级为信息行而非失败。
 - **`tools/README.md` 从来没有 `doc_link_check.py` 的条目**，是 #757 自身留下的缺口，#760 一并补上。
-- **submodule pin 推进已可测量**，见下。新增 `tools/submodule_pin_impact.py`（#761）。
+- **submodule pin 推进已可测量**，见下。新增 `tools/submodule_pin_impact.py`（#762；#761 在 #760 合流删基分支时被 GitHub 连带关闭，已重建）。
 
 ### 三个 subrepo 的死链审计：结论是审计错了，不是仓库错了
 
@@ -593,3 +593,90 @@ repos/truealpha/apps/llm-service/required-env.generated.json
 具体触发点：finance_report 没有任何链接检查（已实测），而 harness 刚建好一个并证明了它的一类假阳性。
 提 PR 给它算「帮它补缺」还是「分发 policy」，这条线需要 owner 划。定下之后，所有同类发现都不必再逐次
 上报。
+
+### 更正：finance_report「没有链接检查」是我说错了
+
+上面那句「finance_report 没有任何链接检查」来自一次过窄的 grep（只搜 `dead link|link_check|markdown-link`），
+**结论是错的**。该仓有大量文档门禁：
+
+- `tools/lint_doc_consistency.py` → `common/testing/lint_doc_consistency/` 共 **15 项检查**，含
+  `check_mkdocs_nav_coverage`（`docs/**/*.md` 必须出现在 nav）、`check_epic_anchors`（EPIC → `vision.md`
+  锚点）、`check_generated_analysis_snapshots_absent`。
+- `tools/check_manifest.py`：MANIFEST 的 owner/cross_ref 路径必须存在、`#anchor` 必须可解析。
+- `tests/tooling/test_stale_docs_consolidation.py::test_AC8_13_134_mkdocs_nav_links_resolve`：nav 里每个
+  `.md` 必须落到真实文件——**并且它已经用 `git check-ignore` 排除生成页**（`_is_build_generated`），
+  也就是说 #760 刚解决的那个问题，finance_report 早就解掉了。
+
+真实缺口窄得多：**没有任何检查解析 145 个 md 里的内联 `[text](relative/path.md)` 并验证目标存在**。
+`AGENTS.md` 自己就有约 25 条这样的链接，无人校验；`docs/` 之外的 95 个 md 完全在现有门禁范围之外。
+另外 `mkdocs.yml` 无 `strict:`，`docs.yml` 的 `mkdocs build` 不带 `--strict` 且只在 push main 时跑。
+
+记这一条是因为：**「审计说没有」和「审计没找到」是两回事**，而我把后者当成了前者报给 owner。
+
+### finance_report 的贡献规则：AGENTS.md 没有外部 PR 政策，但明确了 AI 的交付物就是 PR
+
+- `AGENTS.md:4`：`AI deliverable = CI-passing PR. User reviews and decides whether to merge.`
+- `AGENTS.md:145`：`❌ Agents never merge PRs`
+- 全文没有任何关于「外部仓库可否提 PR」的条款，无 `CONTRIBUTING.md`、无 `CODEOWNERS`。
+
+所以「AI 在该仓开 PR」是常态而非越界，**受禁止的是合流**。仍需 owner 裁定的是优先级问题：
+harness 发现的缺口该由 harness 去提，还是记给 App 自己排期。
+
+若要提，该仓有三条硬约束必须遵守：生成页须用 `git check-ignore` 排除（复用 `_is_build_generated`，
+别重造）；新工具必须是 `tools/*.py` 薄 shim 套 `common/` 模块（`check_tool_shim_contract.py` 在 CI 卡）；
+新门禁必须先注册 AC（`common/testing/contract.py`），否则 `check_ac_index.py` 直接失败。
+
+### db.business_pg.md 的悬置问题有答案了：SSOT 确实丢了，不是改名
+
+之前 `doc_link_check.py` 的 `KNOWN_UNRESOLVED` 把它记为「要么丢了 SSOT，要么同一主题两个名字」。
+调研给出的是前者，证据是历史而非推测：
+
+- 两篇文档曾共存并**互相排他**。`8c1bce8` 版本里，`db.business_pg.md` §3 黑名单写
+  「**禁止** 业务应用直接连接 L1 Platform PG」，而 `db.platform_pg.md` §3 黑名单写
+  「**严禁** 将业务数据写入 Platform PG」，白名单限定「仅限 Vault 和 Casdoor」。
+- 那条 `#5` 锚点当时是**真实且双向**的：`db.business_pg.md` 有 `## 5. 验证与测试 (The Proof)`，
+  其 Test Anchor 正是 `test_postgresql.py`，`Used by` 正是这个 e2e README。链接是对的，是锚点后来烂了。
+- 实际存在三个 Postgres 实例、两类主体：`platform-postgres`（无 `POSTGRES_DB`）、
+  `finance_report-postgres`（`POSTGRES_DB: finance_report`）、`truealpha-postgres`（`POSTGRES_DB: truealpha`），
+  在 `libs/service_registry.py:54-57` 注册为不同服务。
+- 删除发生在 `a3e546e`（PR #435），理由是「never built，0 code references」。该理由对**文档键**成立，
+  对**主体**不成立——删除当时 `finance_report/finance_report/01.postgres/` 已经存在。那次扫描找的是
+  字符串 `db.business_pg`，因此完全漏掉了基础设施本身。
+- 平台 PG 另有自己的 e2e 锚点（`test_platform_pg_accessible` → `ops.storage.md#5`），
+  改指过去会给它双重锚点。
+
+**所以「改指 `db.platform_pg.md`」是错的。** 但「原样复活 `db.business_pg.md`」也是错的：现代业务 PG 是
+**每应用一个**，不是一个共享 Business PG。剩下的是 owner 的形状决策——一篇 harness 级 SSOT、
+每应用各一篇、还是归 App 仓所有。
+
+### omca `tmp/`/`.tmp/` 的分类是错的，而且正是 `omca state` 被造出来要暴露的那类错
+
+`internal/auth/mutablestate.go:168-177` 把 `tmp/` 和 `.tmp/`（64.5MB，全机最大单项）标为
+`generation-local`。但字节实际躺在 **worktree 作用域**目录里：
+`internal/runtime/mutablehome.go:37` 的路径是 `worktreeStateDir/state/hosts/<host>/<surface>/<home>`，
+其注释明言该位置「是 `worktree-shared`……而不是 `generation-local`，后者会在每次重编译时静默抹掉它」。
+而 `internal/domain/runtimescope.go:61-65` 的封闭集合是 `worktree | workspace | user`——**根本没有
+generation 这一档**。
+
+`runtime.md` §9 的原话是「分类得比任何现存 runtime 更宽，不会让它变成共享，只会让分类变成无人背书的声明」。
+反向同样成立：分类得更窄也不会让它变隔离。这正是 `omca state` 的存在理由。
+
+对 #101 的直接后果：**「无活动 generation 时清理 scratch」这个命题本身是错的**，因为一个 `tmp/`
+服务该 worktree+host+surface 的**所有** generation。正确谓词是「该 worktree+host+surface 没有 host
+会话在跑」。
+
+而且那个谓词今天无法判定：`internal/runtime/restart.go:55-61` 明说自己「没有任何进程跟踪」；
+`OMCA_RUN_ID` 只是传给 host 的环境变量、从不落盘；`internal/shim/exec.go` 用 `syscall.Exec` 自我替换，
+不留 omca 父进程；ledger 记录的是迁移而非会话；两个 flock 一个是事务级一个是 daemon 单例。
+唯一便宜的代理是 mtime，而 omca 的 `AGENTS.md` 已明文否决它（「mtime 推断会把同机另一个真实会话的
+并发活动和测试自身的改动混为一谈，且无法区分」）。
+
+还有一条实测过的反例：`docs/evidence/interactive-tui-v0.1.0.md:144-152` 记录过一次事故——早期清理实现
+对 scratch 每一项调 `chmod`，而 Codex 在 scratch 里建了指向其**已安装原生二进制**的符号链接，
+macOS 上 `chmod` 跟随链接、抹掉了目标的可执行位。出事的就是这个目录，而 `mutablestate.go:171` 注明
+`.tmp/plugins` 里有**一整个 git clone**。
+
+结论：#101 的「prune」需要先有 liveness 原语（flock 由 host 进程继承、内核在其退出时释放，是有仓内先例的
+路子），需要自己的 ADR，还需要一个证明 host 真能重建 `tmp/` 的 fixture——`allowlist.go:47-50` 现有两条
+fixture 都是 `cache`，**没有一条覆盖 `tmp/`**。在此之前可做的只有：把这 64.5MB 在 `omca state` 里报成
+「待 liveness 判定、暂不可回收」，并修掉 `generation-local` 这个标签。
