@@ -32,6 +32,10 @@ set -euo pipefail
 OUTPUT_DIR="${BACKUP_OUTPUT_DIR:-/data/backups/infra2}"
 REMOTE="${BACKUP_REMOTE:-}"
 TIER="${BACKUP_TIER:-weekly}"
+if [ "${TIER}" != "weekly" ] && [ "${TIER}" != "quarterly" ]; then
+  echo "invalid BACKUP_TIER '${TIER}': must be 'weekly' or 'quarterly'" >&2
+  exit 2
+fi
 DATA_ROOT="${BACKUP_DATA_ROOT:-/data}"
 SUFFIX="${ENV_SUFFIX:-}"
 PG_SUPERUSER="${PG_SUPERUSER:-postgres}"

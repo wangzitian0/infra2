@@ -101,13 +101,12 @@ def run_rehearsal(
             f"[+] Materialized archive: {archive_path} ({archive_path.stat().st_size} bytes)"
         )
 
-        # 4. Define invariants
+        # 4. Define invariants (must raise an exception on failure so psql non-zero exit blocks bad restores)
         invariants = (
             "SELECT 1",
-            f"SELECT count(*) >= 1 FROM pg_database WHERE datname = '{database}'",
-            "SELECT count(*) >= 1 FROM information_schema.tables WHERE table_schema = 'public'",
-            "SELECT count(*) FROM accounts",
-            "SELECT version_num FROM alembic_version",
+            "DO $$ BEGIN IF (SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public') < 1 THEN RAISE EXCEPTION 'no tables restored'; END IF; END $$;",
+            "DO $$ BEGIN IF (SELECT count(*) FROM accounts) < 1 THEN RAISE EXCEPTION 'accounts table is empty'; END IF; END $$;",
+            "DO $$ BEGIN IF (SELECT count(*) FROM alembic_version) < 1 THEN RAISE EXCEPTION 'alembic_version missing'; END IF; END $$;",
         )
         plan = build_postgres_rehearsal_plan(
             entry=entries[service_id],
@@ -154,7 +153,7 @@ def run_rehearsal(
         )
         accounts_count = int(query_val("SELECT count(*) FROM accounts"))
         alembic_version = query_val("SELECT version_num FROM alembic_version")
-        db_size_bytes = int(query_val(f"SELECT pg_database_size('{database}')"))
+        db_size_bytes = int(query_val("SELECT pg_database_size(current_database())"))
 
         elapsed = round(time.time() - start_time, 2)
         evidence = {
@@ -210,6 +209,7 @@ def main() -> int:
     print("RESTORE REHEARSAL PROOF REPORT:")
     print("=" * 60)
     print(json.dumps(report, indent=2))
+    print(f"RESTORE_PROOF: {report['status']}")
     return 0 if report["status"] == "PASS" else 1
 
 
