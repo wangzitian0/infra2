@@ -385,3 +385,261 @@ def test_backup_restore_rehearsal_dry_run_has_no_download_side_effect(
     out = capsys.readouterr().out
     assert '"status": "planned"' in out
     assert str(tmp_path / "downloads" / "dump.sql.gz") in out
+
+
+def test_run_postgres_restore_rehearsal_filters_create_role_postgres(tmp_path) -> None:
+    """Postgres 16 dumpall includes CREATE ROLE postgres which fails on existing superuser."""
+    import gzip
+    from libs.backup_restore import RestoreRehearsalPlan, run_postgres_restore_rehearsal
+
+    dump_file = tmp_path / "dump.sql.gz"
+    with gzip.open(dump_file, "wb") as f:
+        f.write(
+            b"CREATE ROLE postgres;\nCREATE ROLE postgres WITH SUPERUSER;\nCREATE ROLE app_user;\nCREATE DATABASE testdb;\n"
+        )
+
+    plan = RestoreRehearsalPlan(
+        service_id="test/postgres",
+        source_uri="test:dump.sql.gz",
+        archive_path=dump_file,
+        target_container="test-postgres-restore-rehearsal",
+        pg_user="postgres",
+        database="testdb",
+        invariant_sql=("SELECT 1",),
+    )
+
+    written_lines = []
+
+    class MockStdin:
+        def write(self, data: bytes):
+            written_lines.append(data)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class MockProc:
+        def __init__(self):
+            self.stdin = MockStdin()
+
+        def wait(self):
+            return 0
+
+    class MockResult:
+        returncode = 0
+        stderr = ""
+
+    def mock_popen(cmd, stdin=None):
+        return MockProc()
+
+    def mock_runner(cmd, **kwargs):
+        return MockResult()
+
+    res = run_postgres_restore_rehearsal(plan, popen=mock_popen, runner=mock_runner)
+    assert res["status"] == "pass"
+    assert b"CREATE ROLE postgres;\n" not in written_lines
+    assert b"CREATE ROLE postgres WITH SUPERUSER;\n" not in written_lines
+    assert b"CREATE ROLE app_user;\n" in written_lines
+    assert b"CREATE DATABASE testdb;\n" in written_lines
+
+
+
+
+def _fake_restore(payload: bytes, tmp_path, *, stdin_cls=None, wait_rc: int = 0):
+    """Stream `payload` through the real restore path, returning what reached psql."""
+    import gzip
+
+    from libs.backup_restore import RestoreRehearsalPlan, run_postgres_restore_rehearsal
+
+    dump_file = tmp_path / "dump.sql.gz"
+    with gzip.open(dump_file, "wb") as handle:
+        handle.write(payload)
+
+    written: list[bytes] = []
+    waited: list[bool] = []
+
+    class RecordingStdin:
+        def write(self, data: bytes) -> None:
+            written.append(data)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class Proc:
+        def __init__(self) -> None:
+            self.stdin = (stdin_cls or RecordingStdin)()
+
+        def wait(self) -> int:
+            waited.append(True)
+            return wait_rc
+
+    class Result:
+        returncode = 0
+        stderr = ""
+
+    plan = RestoreRehearsalPlan(
+        service_id="test/postgres",
+        source_uri="test:dump.sql.gz",
+        archive_path=dump_file,
+        target_container="test-postgres-restore-rehearsal",
+        pg_user="postgres",
+        database="testdb",
+        invariant_sql=("SELECT 1",),
+    )
+    result = run_postgres_restore_rehearsal(
+        plan,
+        popen=lambda cmd, stdin=None: Proc(),
+        runner=lambda cmd, **kwargs: Result(),
+    )
+    return result, written, waited
+
+
+def test_restore_filter_never_drops_copy_block_data(tmp_path) -> None:
+    """A COPY data row starting with the role prefix is table data, not a statement."""
+    row_semicolon = b"CREATE ROLE postgres; -- a note a user saved\n"
+    row_space = b"CREATE ROLE postgres was executed by admin\n"
+    payload = (
+        b"CREATE ROLE postgres;\n"
+        b"CREATE ROLE app_user;\n"
+        b"COPY app.notes (body) FROM stdin;\n"
+        + row_semicolon
+        + row_space
+        + b"harmless note\n"
+        b"\\.\n"
+        b"CREATE DATABASE testdb;\n"
+    )
+    result, written, _ = _fake_restore(payload, tmp_path)
+
+    # Raw COPY data survives verbatim: dropping it would silently lose rows
+    # while the restore still reported a pass.
+    assert row_semicolon in written
+    assert row_space in written
+    # The genuine role statement outside the COPY block is still filtered.
+    assert b"CREATE ROLE postgres;\n" not in written
+    assert b"CREATE ROLE app_user;\n" in written
+    assert result["filtered_role_statements"] == 1
+
+
+def test_restore_filter_resumes_after_copy_terminator(tmp_path) -> None:
+    """The role filter re-arms once the COPY block closes with a backslash-dot."""
+    payload = (
+        b"COPY app.notes (body) FROM stdin;\n"
+        b"CREATE ROLE postgres; inside the block\n"
+        b"\\.\n"
+        b"CREATE ROLE postgres;\n"
+        b"CREATE DATABASE testdb;\n"
+    )
+    result, written, _ = _fake_restore(payload, tmp_path)
+
+    assert b"CREATE ROLE postgres; inside the block\n" in written
+    assert b"CREATE ROLE postgres;\n" not in written
+    assert result["filtered_role_statements"] == 1
+
+
+def test_restore_reaps_psql_when_it_exits_mid_stream(tmp_path) -> None:
+    """psql runs with ON_ERROR_STOP=1, so it can close the pipe while we write."""
+    from libs.backup_restore import BackupRestoreError
+
+    class EarlyExitStdin:
+        def __init__(self) -> None:
+            self.count = 0
+
+        def write(self, data: bytes) -> None:
+            self.count += 1
+            if self.count > 2:
+                raise BrokenPipeError(32, "Broken pipe")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    payload = b"".join(b"INSERT INTO t VALUES (%d);\n" % i for i in range(50))
+
+    # The subprocess exit code is the real diagnosis, so it must be reaped and
+    # surfaced instead of letting the raw BrokenPipeError escape.
+    with pytest.raises(BackupRestoreError, match="exit code 3"):
+        _fake_restore(payload, tmp_path, stdin_cls=EarlyExitStdin, wait_rc=3)
+
+
+
+
+def test_restore_rejects_a_psql_that_stopped_reading_but_exited_zero(tmp_path) -> None:
+    """An EPIPE with exit 0 means psql quit early: the restore is incomplete."""
+    from libs.backup_restore import BackupRestoreError
+
+    class EarlyExitStdin:
+        def __init__(self) -> None:
+            self.count = 0
+
+        def write(self, data: bytes) -> None:
+            self.count += 1
+            if self.count > 2:
+                raise BrokenPipeError(32, "Broken pipe")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    payload = b"".join(b"INSERT INTO t VALUES (%d);\n" % i for i in range(50))
+
+    # rc == 0 must NOT launder a truncated stream into a pass.
+    with pytest.raises(BackupRestoreError, match="stopped reading"):
+        _fake_restore(payload, tmp_path, stdin_cls=EarlyExitStdin, wait_rc=0)
+
+
+def test_restore_reaps_psql_when_the_write_loop_raises_something_else(tmp_path) -> None:
+    """Any error while streaming must still reap the child, not leave it running."""
+    import gzip
+
+    from libs.backup_restore import RestoreRehearsalPlan, run_postgres_restore_rehearsal
+
+    dump_file = tmp_path / "dump.sql.gz"
+    with gzip.open(dump_file, "wb") as handle:
+        handle.write(b"SELECT 1;\nSELECT 2;\n")
+
+    waited: list[bool] = []
+
+    class ExplodingStdin:
+        def write(self, data: bytes) -> None:
+            raise OSError(5, "Input/output error")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class Proc:
+        def __init__(self) -> None:
+            self.stdin = ExplodingStdin()
+
+        def wait(self) -> int:
+            waited.append(True)
+            return 0
+
+    plan = RestoreRehearsalPlan(
+        service_id="test/postgres",
+        source_uri="test:dump.sql.gz",
+        archive_path=dump_file,
+        target_container="test-postgres-restore-rehearsal",
+        pg_user="postgres",
+        database="testdb",
+        invariant_sql=("SELECT 1",),
+    )
+
+    with pytest.raises(OSError):
+        run_postgres_restore_rehearsal(
+            plan,
+            popen=lambda cmd, stdin=None: Proc(),
+            runner=lambda cmd, **kwargs: None,
+        )
+    assert waited == [True], "psql was left unreaped when the write loop failed"

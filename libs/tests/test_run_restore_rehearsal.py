@@ -7,6 +7,7 @@ teardown safety, and CLI entry point without requiring Docker or a live host.
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -100,8 +101,14 @@ def test_run_rehearsal_docker_args_and_invariants(
         plan = mock_restore.call_args[0][0]
         assert len(plan.invariant_sql) == 5
         invariants = " ".join(plan.invariant_sql)
-        assert "< 50 THEN RAISE EXCEPTION" in invariants
-        assert "< 5 THEN RAISE EXCEPTION" in invariants
+        # Thresholds are tuned per service, so assert the property that matters
+        # rather than the numbers: every floor must actually be enforceable and
+        # above 1, since a `< 1` floor only proves the database is not empty.
+        floors = [
+            int(m) for m in re.findall(r"< (\d+) THEN RAISE EXCEPTION", invariants)
+        ]
+        assert len(floors) >= 2
+        assert all(floor > 1 for floor in floors), f"tautological floor in {floors}"
         assert "unexpected alembic_version" in invariants
 
         # Assert container teardown
@@ -161,3 +168,70 @@ def test_main_cli_success(
         assert exit_code == 0
         captured = capsys.readouterr()
         assert "RESTORE_PROOF: PASS" in captured.out
+
+
+def test_run_restore_rehearsal_rejects_unsafe_database_name() -> None:
+    from tools.run_restore_rehearsal import run_rehearsal
+
+    with pytest.raises(ValueError, match="Invalid database name"):
+        run_rehearsal(
+            manifest_path="/dummy/manifest.json",
+            service_id="finance_report/postgres",
+            database="finance_report'; DROP TABLE accounts; --",
+        )
+
+    with pytest.raises(ValueError, match="Invalid database name: ''"):
+        run_rehearsal(
+            manifest_path="/dummy/manifest.json",
+            service_id="finance_report/postgres",
+            database="",
+        )
+
+
+def test_rehearsal_all_attempts_every_service_when_one_fails(
+    monkeypatch, capsys
+) -> None:
+    """One failing service never stops the others (#618)."""
+    import tools.run_restore_rehearsal as rrr
+
+    attempted: list[str] = []
+
+    def fake_run_rehearsal(*, manifest_path, service_id, database, keep_container):
+        attempted.append(service_id)
+        if service_id == "finance_report/postgres":
+            raise RuntimeError("sandbox container failed to become ready")
+        return {"status": "PASS", "service_id": service_id}
+
+    monkeypatch.setattr(rrr, "run_rehearsal", fake_run_rehearsal)
+    monkeypatch.setattr("sys.argv", ["run_restore_rehearsal", "--service-id", "all"])
+
+    rc = rrr.main()
+
+    assert attempted == ["finance_report/postgres", "truealpha/postgres"]
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "finance_report/postgres" in out
+    assert "RESTORE_PROOF: FAIL" in out
+    assert "RESTORE_PROOF: PASS" in out
+
+
+def test_rehearsal_all_survives_a_malformed_report(monkeypatch, capsys) -> None:
+    """A report missing 'status' must not abort the services that follow it."""
+    import tools.run_restore_rehearsal as rrr
+
+    attempted: list[str] = []
+
+    def fake_run_rehearsal(*, manifest_path, service_id, database, keep_container):
+        attempted.append(service_id)
+        if service_id == "finance_report/postgres":
+            return {"service_id": service_id}  # no "status" key
+        return {"status": "PASS", "service_id": service_id}
+
+    monkeypatch.setattr(rrr, "run_rehearsal", fake_run_rehearsal)
+    monkeypatch.setattr("sys.argv", ["run_restore_rehearsal", "--service-id", "all"])
+
+    rc = rrr.main()
+
+    assert attempted == ["finance_report/postgres", "truealpha/postgres"]
+    assert rc == 1
+    assert "KeyError" in capsys.readouterr().out

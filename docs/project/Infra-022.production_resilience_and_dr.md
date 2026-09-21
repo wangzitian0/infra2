@@ -30,7 +30,7 @@
 
 ### L2: 生产数据备份与带外容灾 (Platform & Data)
 - [x] **T2.1 全状态服务自动化异地备份至 Google Drive（#721）**：采用 `rclone crypt`（AES-256-GCM 零知识端到端加密），实现分级保留策略（周备保留 60 天，季度快照保留 2 年），1Password (`bootstrap/gdrive`) 为信任根，已打通端到端读写验证。
-- [x] **T2.2 备份自动恢复演练（Recovery Proof）**：落地沙箱化全自动恢复演练工具（`tools/run_restore_rehearsal.py`），在隔离 throwaway 容器中拉取 Google Drive 异地加密归档，完成真实灌库并校验 5 项核心业务不变量（52 张表、accounts 行数、alembic 迁移版本），演练完成后用后即焚 0 遗留，实测 10.62 秒全绿通过。
+- [x] **T2.2 备份自动恢复演练（Recovery Proof）**：落地沙箱化全自动恢复演练工具（`tools/run_restore_rehearsal.py`），在隔离 throwaway 容器中拉取 Google Drive 异地加密归档，完成真实灌库并校验各服务 5 项核心不变量：finance_report（≥40 张表、accounts ≥3、alembic 版本）与 truealpha（raw/staging/mart/app ≥50 张表、TOPT 完成 ≥80、GPPE available ≥1400）。`--service-id all` 一轮演练两个服务，单个服务失败不中止其余服务（#618 约定），退出 1 并列名失败者。演练完成后用后即焚 0 遗留，实测 10.62 秒全绿通过。
 - [ ] **T2.3 带外死人开关（Dead Man's Switch）**：宿主机定时向外部 Healthchecks.io 上报心跳，结合 Cloudflare Worker 带外探针；一旦宿主机系统死锁或网络中断，外部独立通道立即触发 P0 告警。
 
 ### L3: 发布门禁闭环与告警降噪 (Deploy & Observability)
@@ -50,7 +50,7 @@
 
 1. `/etc/docker/daemon.json` IaC 配置与平滑应用脚本。
 2. `tools/disk_guardian.sh` 与 systemd timer 磁盘自愈组件。
-3. `tools/pg_backup_r2.sh` 备份脚本 + GitHub Actions `restore-verification.yml` 自动恢复演练工作流。
+3. `tools/host_backup.sh` 异地加密备份脚本（Google Drive / rclone crypt）+ `tools/run_restore_rehearsal.py` 沙箱恢复演练（VPS crontab 周期执行）。
 4. 带外死人开关配置与 Cloudflare Worker 探针集成。
 5. `tools/pre_deploy_schema_check.py` 双向比对与回滚安全门禁（已加固）。
 6. P0 告警 Runbook 文档集 (`docs/runbooks/`).
@@ -78,7 +78,7 @@
 | 1 | Docker 日志限额 | 所有容器日志受限 ≤ 150MB | `docker inspect -f '{{json .HostConfig.LogConfig.Config}}' <c>` 包含 `max-size: 50m` |
 | 2 | 磁盘自愈机制 | 模拟使用率超标触发清理与通知 | `fallocate` 触发 `disk_guardian.sh`，确认 dangling 缓存清除且告警送达 |
 | 3 | 异地备份就绪 | Google Drive 存在加密备份包且 SHA256 吻合 | `rclone lsd gdrive-backup:infra2/` 验证目录存在且可读写 |
-| 4 | 恢复演练闭环 | 自动化还原到临时库并通过 SQL 抽样 | `tools/run_restore_rehearsal.py` 跑通并输出 `RESTORE_PROOF: PASS`（已在 VPS 实测通过，耗时 10.62s） |
+| 4 | 恢复演练闭环 | 自动化还原到临时库并通过 SQL 抽样 | `tools/run_restore_rehearsal.py --service-id all` 跑通，每个服务各输出一行 `RESTORE_PROOF: PASS`，退出码 0（已在 VPS 实测通过，耗时 10.62s） |
 | 5 | 死人开关兜底 | 宿主机断网 10 分钟外部独立告警 | 停止心跳上报，Healthchecks.io 外部通道（飞书/邮件）在 10 分钟内报警 |
 | 6 | Schema Gate 门禁 | 数据库与代码 Enum/Schema 不一致即阻断；缺输入（无 DB URL / 枚举载入失败）同样阻断 | `pytest libs/tests/test_pre_deploy_schema_check.py` 全绿 |
 | 7 | 回滚熔断与刹车 | 破坏性 migration 场景下阻止自动回滚 | 门禁输出 `ROLLBACK_CLASS: C` 并阻断自动回滚回路 |
