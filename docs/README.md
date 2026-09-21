@@ -9,8 +9,9 @@
 
 ## SSOT 中最常被引用的三篇
 
-`AGENTS.md` 的按需加载表直接指向这三篇，但本索引在 #765 把它指定为「唯一导航索引」时
-没有同步更新，于是从推荐阅读顺序走完的读者永远到不了它们：
+`AGENTS.md` 的按需加载表指向 `core.engineering.md` 与 `ops.merge-gate.md`；`core.md` 是
+`docs/ssot/README.md` 的首篇。#765 把本文件指定为「唯一导航索引」时没有同步更新它，
+于是在此之前，按推荐阅读顺序走完的读者到不了这三篇。本次补上：
 
 - [`core.md`](ssot/core.md) — 架构与分层真理
 - [`core.engineering.md`](ssot/core.engineering.md) — 代码与文档准则、STAR、Wiki 入口地图
