@@ -11,33 +11,49 @@
 
 ## 可合流条件（AI Merge，全部必需）
 
-- **批准绑定当前 head**：PR 非 Draft，且满足下列两条路径之一。**逐-head 批准**：仓库 owner 已明确批准当前 `head SHA`；head 一旦变化该批准即失效，必须重新确认。**会话级授权**：该 PR 落在下文"会话级合流授权"的范围内；head 变化不需要回到 owner，但必须对新的 head 重新满足会话级的全部条件（含静置窗口重新计时）。
+- **常设合流权（2026-09-21 owner 批准，取代逐-head 与会话级授权）**：标准 PR 流程走完、
+  下列条件全部满足的 PR，AI 可自行合流；不需要 owner 逐个批准，也不需要每个会话重新授权。
+  逐-head 批准在实际节奏下把交付停在等待上（2026-09-08 单日 11 个 PR，多数在 Copilot review
+  后 head 变化），而真正需要人看的那一类反而淹没其中；会话级授权只是把同一问题挪到每个会话开头。
+  保留的是下面这些**客观可判定**的条件，以及仍需 owner 的两类变更（见文末）。
 - **合流真源唯一**：目标分支正确，PR `mergeable`，无冲突；检查与合流必须针对同一个 `head SHA`，禁止用本地旧结果或旧 review 代替。
 - **Merge Authority 全绿**：[`docs/ssot/ci-gate-inventory.yaml`](ci-gate-inventory.yaml) 中该变更适用且 `blocks_merge: true` 的检查全部成功；pending、failure、cancelled、意外 skipped 或无法读取均视为不满足。
 - **Review 已闭环（加权阻塞）**：required review 已满足，所有 actionable conversation / review threads 已处理并 resolved；不得自行忽略、dismiss 或用过期 review 代替当前 head 审查。未 resolved 的 review 发现（不论来源——human reviewer、Copilot、/code-review 等）按 severity 加权计分：high=1.0、middle=0.5、low=0.25，未标注 severity 的按 middle 计。**未 resolved 发现的加权总分 ≥ 1.0 即视为未闭环、禁止合流**，不要求单条 high 才阻塞——例如 2 条 middle 或 4 条 low 累计到位同样阻塞。达到门槛后必须逐条修复，或取得 owner 对具体发现的明确豁免并留痕，方可标记为已处理。
+- **绿必须是当前的**：检查只证明它跑过的那棵树。兄弟 PR 合入后改写了本 PR 也动的文件时，
+  所有检查**仍然是绿的**——因为没有一个重跑过。因此必须比较 `base...head`，交集非空即更新分支重跑。
+- **必需检查必须在场**：`blocks_merge: true` 的检查不仅要绿，还必须**确实报告过**。
+  `detect-changes` 失败时其下游 job 是 skipped 而非 run，GitHub 仍接受为已满足——
+  因此必需集须以 `ci-gate-inventory.yaml` 为准逐个核对在场与结论，而不是只看已报告的检查是否为绿。
+- **静置**：自动 review（Copilot）已对**当前 head SHA** 提交且距该 review ≥ 3 分钟；
+  自动 review 迟迟不来时以距最后一次 push 12 分钟为上限（先到者为准）。
+  fix-up push 不会自动触发 Copilot 复审，需显式请求。
 - **变更契约完整**：PR description checklist 完整；代码、测试、SSOT、Project、Layer README / Onboarding 按影响同步；无未解释的 scope drift；PR description 显式引用其推进/关闭的 issue 编号（无则写明 None）——避免 PR 实质推进了某 issue 的 scope 却不留痕迹，导致 issue 可见状态滞后仓库实际进度（#508）。
 - **安全与运维门禁**：无敏感文件；已说明风险、回滚与 0 宕机影响；涉及 state discrepancy、密钥或生产数据时已按对应 SSOT 执行并留证。
-- **高风险例外显式放行**：若 merge 本身会触发 apply / deploy（包括 L1 bootstrap self-update、尚未解耦的 observability apply）或有不可逆副作用，必须先完成变更专属 proof，并取得 owner 对该副作用的再次明确批准。
+**仍需 owner 的两类，判据各不相同，分别列**：
+
+- **其一，按环境划线：staging 可自行部署，prod 不可**（2026-09-21 owner 批准）。
+  合流触发 staging 部署、临时槽 canary（`ops-checks.yml` 的 `deploy-v2-canary`，目标是保留的
+  `pr-0`）、`report-branch-main` 预览重部署——**均属 AI 自行合流范围**，不需要逐次批准。
+  触及 **prod** 的则必须取得 owner 对**当前 `head SHA`** 的明确批准，对旧 head 的批准不顺延：
+  prod apply、prod promote、L1 bootstrap self-update、`bootstrap/06.iac_runner/**` 触发的
+  runner 重建、尚未解耦的 observability apply（它直接打 live SigNoz）。
+  判据是**打到哪个环境**，其次才是可逆性；两者冲突时以环境为准。
+- **其二，改动"决定合流的东西"（判据与环境、可逆性均无关，是自我裁决问题）**：门禁从工作树读取规则，而 AI 合流自己的 PR
+  时那就是该 PR 的分支——改动因此由它自己引入的版本审判。这是自我裁决问题，不是不可逆问题，
+  所以单列。`tools/pr_merge_gate.py`、它的测试、`ci-gate-inventory.yaml` 以及本文件属于这一类。
+- **受保护文件**（`CLAUDE.md`，及各 App 标注为 protected 的架构文档）不再单独要求二次批准，
+  但修改它们的 PR 必须在 description 中引用授权它的那句 owner 指令，使授权可追溯——这是 PR
+  description 里的契约，由人核对，门禁不验。
+  注意 `AGENTS.md` 不在此列：#765 之后它装的是合流门禁的 5 点核心，因此归入上一条
+  「改动决定合流的东西」，仍需 owner 批准当前 head。
 - **合流后闭环**：使用仓库允许的合流方式；确认 merge commit 已落在目标分支并监看 post-merge checks。失败时立即停止 tag / promote，报告并修复，不得继续发布。
 
-## 会话级合流授权（2026-09-08 owner 批准）
+## 授权沿革
 
-逐-head 批准在当前节奏下不可执行：2026-09-08 单日合流 11 个 PR，其中多数在 Copilot review
-被处理后 head SHA 变化，逐次回到 owner 确认会把交付停在等待上，而真正需要人看的两类改动
-（触发部署、改受保护文件）反而淹没在其中。因此：
-
-**owner 在一次会话中明确授权后**，AI 可自行合流同时满足下列全部条件的 PR：
-
-- 上方"可合流条件"全部满足（Merge Authority 全绿、目标分支正确、变更契约完整、安全与运维门禁通过）；
-- 所有 actionable review threads 已处理并 resolved（包括 Copilot 与 `/code-review`）；
-- 该 head 已**静置**：自动 review（Copilot）已对**当前 head SHA** 提交且距该 review ≥ 3 分钟；若自动 review 迟迟不来，仍以距最后一次 push 12 分钟为上限（两者先到者为准）。fix-up push 不会自动触发 Copilot 复审，需要显式请求。判定与合流统一走 `python -m tools.pr_merge_gate <n> --policy either --request-review --merge`（exit 1 = 未到时机，exit 2 = 需要 owner），不再肉眼看表；
-- 不触碰受保护文件（`AGENTS.md`、`CLAUDE.md`，以及各应用仓库标注为 protected 的架构文档）；
-- 合并本身不触发 apply / deploy（含 L1 bootstrap self-update、`bootstrap/06.iac_runner/**` 触发的 runner 重建、尚未解耦的 observability apply）。
-
-**仍需 owner 对当前 `head SHA` 明确批准**：触发部署或有不可逆副作用的 PR（上一条"高风险例外
-显式放行"不因会话授权而放宽），以及修改受保护文件的 PR。
-
-会话授权随会话结束而失效，不跨会话继承。
+2026-09-08 引入会话级合流授权，以绕开逐-head 批准的等待；2026-09-21 owner 以
+「只要是标准 PR 过的，且各类 check 都过了，你可以 merge 代码」取代两者，改为上文的常设合流权。
+判定与合流统一走 `python -m tools.pr_merge_gate <n> --policy either --request-review --merge`
+（exit 1 = 未到时机，exit 2 = 需要 owner），不靠肉眼看表。
 
 ## 线上测试
 
