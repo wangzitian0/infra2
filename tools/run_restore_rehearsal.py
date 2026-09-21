@@ -45,17 +45,26 @@ def wait_for_postgres(container: str, user: str, timeout: int = 30) -> None:
     )
 
 
+def default_database_for_service(service_id: str) -> str:
+    if service_id == "truealpha/postgres":
+        return "truealpha"
+    elif service_id == "finance_report/postgres":
+        return "finance_report"
+    return "postgres"
+
+
 def run_rehearsal(
     *,
     manifest_path: str,
     service_id: str = "finance_report/postgres",
-    database: str = "finance_report",
+    database: str | None = None,
     download_dir: str = "/tmp/infra2-backup-restore-rehearsal",
     image: str = "postgres:16-alpine",
     keep_container: bool = False,
 ) -> dict[str, Any]:
-    if not re.fullmatch(r"^[a-zA-Z0-9_]+$", database):
-        raise ValueError(f"Invalid database name: {database!r}")
+    db = database or default_database_for_service(service_id)
+    if not re.fullmatch(r"^[a-zA-Z0-9_]+$", db):
+        raise ValueError(f"Invalid database name: {db!r}")
 
     safe_name = service_id.replace("/", "-")
     container = f"{safe_name}-restore-rehearsal-throwaway"
@@ -109,8 +118,8 @@ def run_rehearsal(
 
         # 4. Define invariants (connectivity, DB existence, table threshold, domain specific rows)
         db_exists_check = (
-            f"DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = '{database}') "
-            f"THEN RAISE EXCEPTION 'database {database} does not exist'; END IF; END $$;"
+            f"DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = '{db}') "
+            f"THEN RAISE EXCEPTION 'database {db} does not exist'; END IF; END $$;"
         )
         if service_id == "finance_report/postgres":
             invariants = (
@@ -142,7 +151,7 @@ def run_rehearsal(
             archive_path=archive_path,
             target_container=container,
             pg_user=bootstrap_user,
-            database=database,
+            database=db,
             invariant_sql=invariants,
         )
 
@@ -164,7 +173,7 @@ def run_rehearsal(
                     "-U",
                     bootstrap_user,
                     "-d",
-                    database,
+                    db,
                     "-Atqc",
                     sql,
                 ],
@@ -215,7 +224,7 @@ def run_rehearsal(
         evidence = {
             "status": "PASS",
             "service_id": service_id,
-            "database": database,
+            "database": db,
             "artifact_uri": artifact.get("remote_uri"),
             "artifact_sha256": artifact.get("sha256"),
             "archive_size_bytes": archive_path.stat().st_size,
@@ -248,14 +257,6 @@ def run_rehearsal(
             print(f"[!] Sandbox container {container} preserved for inspection.")
 
 
-def default_database_for_service(service_id: str) -> str:
-    if service_id == "truealpha/postgres":
-        return "truealpha"
-    elif service_id == "finance_report/postgres":
-        return "finance_report"
-    return "postgres"
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", default="/data/backups/infra2/manifest.json")
@@ -279,11 +280,10 @@ def main() -> int:
 
     all_passed = True
     for s_id in services:
-        db = args.database or default_database_for_service(s_id)
         report = run_rehearsal(
             manifest_path=manifest_path,
             service_id=s_id,
-            database=db,
+            database=args.database,
             keep_container=args.keep_container,
         )
         print("\n" + "=" * 60)
