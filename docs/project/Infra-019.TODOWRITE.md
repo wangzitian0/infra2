@@ -736,11 +736,12 @@ worktree 的每个 generation 触及，所以 `generation-local` 描述的是一
       配置后自动转为真实证明）。本地实跑证据：PASS 9392 tokens / 6.1s。
 - [ ] T2 omca pi runtime 隔离（=roadmap M6 交付项）：pi 走 Tier 1 MANAGED；8 处
       switch + 测试 ≈700-1000 LOC / 2-3 PR / 2-3 天。**最大风险点已排除**：
-      2026-09-21 真机行为学探针证明 PI_CODING_AGENT_DIR 是完全可逆的配置根边界
+      2026-09-21 真机行为学探针证明 `PI_CODING_AGENT_DIR` 是完全可逆的配置根边界
       （①迁移 home 下 pi 正常启动；②无凭证时模型调用不发生、真实凭证零泄漏、
-      auth.json 为空壳；③拷入 auth.json 后全链路通 zai/glm stop 4200 tokens；
-      ④真实 home 前后 shasum 逐字节不变），pack knownUnknowns 第 6 条可关（随
-      T2 PR-B fixture 化正化）。剩余：PR-A 机械接入 8 处 switch；ADR 分支合流
+      `auth.json` 为空壳；③拷入 `auth.json` 后全链路通 zai/glm stop 4200 tokens；
+      ④真实 home 全部 json/jsonl 文件的前后 SHA-256 digest 集合不变），pack
+      knownUnknowns 第 6 条可关（随 T2 PR-B 固化为可重复 fixture 并正式关闭）。剩余：
+      PR-A 机械接入 8 处 switch；ADR 分支合流
       （3 处冲突）；omca pin 推进归 owner 的 submodule_pin_impact 决策流程。
 - [x] T3 pi 0.86.1 knowledge pack：**已合流 omca#120（0c56d78）**。capability 逐字
       继承 0.85（发现面零变化），evidence artifact 钉 digest，回归门禁断言全 6
