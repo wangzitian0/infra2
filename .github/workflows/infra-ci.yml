@@ -168,6 +168,11 @@ jobs:
     if: needs.detect-changes.outputs.has_non_doc == 'true'
     runs-on: ubuntu-latest
     steps:
+      - name: Lint compose resource limits
+        # ops.standards.md §5 makes a memory ceiling 必须, written from a measured
+        # incident, and nothing checked it. Ratcheted: the 21 existing offenders
+        # are baselined and the list may only shrink.
+        run: uv run python tools/lint_compose_resource_limits.py
       - name: Checkout
         uses: actions/checkout@v7
 
