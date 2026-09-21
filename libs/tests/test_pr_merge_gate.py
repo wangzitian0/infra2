@@ -205,6 +205,8 @@ class _Gh:
                         }
                     ],
                     "files": [{"path": "libs/probe_specs.py"}],
+                    "mergeable": getattr(self, "mergeable", "MERGEABLE"),
+                    "mergeStateStatus": getattr(self, "merge_state", "CLEAN"),
                     "commits": [
                         {"committedDate": "2026-09-15T06:40:00Z"},
                         {"committedDate": self.pushed_iso},
@@ -242,6 +244,11 @@ class _Gh:
                     }
                 }
             )
+        if argv[:1] == ["api"] and "/compare/" in argv[1]:
+            # Files the base has changed since the head diverged. Defaults to
+            # none so existing cases keep their meaning; a case that wants the
+            # stale-green path sets `base_changed`.
+            return json.dumps({"files": list(getattr(self, "base_changed", ()))})
         if argv[:2] == ["pr", "merge"]:
             return ""
         raise AssertionError(argv)
@@ -361,3 +368,108 @@ def test_pr_merge_gate_audit_flag_detects_blockers(monkeypatch, capsys):
     exit_code = gate.main(["704", "--audit"], gh=_Gh(), now=lambda: ready_at)
     assert exit_code == 1
     assert "omca audit blocked" in capsys.readouterr().out
+
+
+# --- GitHub's own merge computation ------------------------------------------
+#
+# These exist because a real CONFLICTING pull request (infra2#758) reached
+# `evaluate` and came back reported only as "2 review thread(s) unresolved".
+# The gate had never asked GitHub whether the branch merges, while its green
+# verdict printed the word "mergeable" regardless. AGENTS.md's 合流真源唯一
+# names three things -- right base, `mergeable`, no conflict -- and only the
+# first was checked.
+
+
+def test_a_conflicting_head_is_blocked_and_says_so():
+    verdict = gate.evaluate(_facts(mergeable="CONFLICTING"), now=NOW)
+    assert not verdict.ready
+    assert any("CONFLICTING" in r for r in verdict.reasons)
+    # It must not be reported as an owner decision: a rebase fixes it.
+    assert not verdict.owner_required
+
+
+def test_unknown_mergeable_asks_for_a_re_poll_rather_than_assuming_clean():
+    verdict = gate.evaluate(_facts(mergeable="UNKNOWN"), now=NOW)
+    assert not verdict.ready
+    reason = next(r for r in verdict.reasons if "UNKNOWN" in r)
+    assert "re-run" in reason
+
+
+def test_a_dirty_merge_state_blocks_even_when_mergeable_is_unset():
+    verdict = gate.evaluate(_facts(merge_state="DIRTY"), now=NOW)
+    assert not verdict.ready
+    assert any("mergeStateStatus is DIRTY" in r for r in verdict.reasons)
+
+
+def test_an_unread_merge_state_is_not_invented_as_a_blocker():
+    # "" means the field was never read -- an older cached fact, or a caller
+    # constructing HeadFacts by hand. Absence of evidence is not a conflict.
+    assert gate.evaluate(_facts(mergeable="", merge_state=""), now=NOW).ready
+
+
+# --- stale green --------------------------------------------------------------
+#
+# A green check proves the tree it ran on. finance_report's AGENTS.md states the
+# hazard for the adjacent field: mergeStateStatus "can flip from CLEAN to
+# DIRTY/BEHIND the instant a sibling PR merges to main". The checks do not flip;
+# they simply never re-run, and stay green about a tree that no longer exists.
+
+
+def test_green_against_a_base_that_rewrote_this_prs_files_is_not_ready():
+    verdict = gate.evaluate(
+        _facts(base_changed_files=("libs/probe_specs.py", "docs/unrelated.md")),
+        now=NOW,
+    )
+    assert not verdict.ready
+    reason = next(r for r in verdict.reasons if "green against a base" in r)
+    assert "libs/probe_specs.py" in reason
+    assert "docs/unrelated.md" not in reason  # only the overlap is the problem
+    assert "1 of" in reason
+
+
+def test_a_base_that_changed_other_files_leaves_the_head_ready():
+    assert gate.evaluate(
+        _facts(base_changed_files=("docs/unrelated.md",)), now=NOW
+    ).ready
+
+
+def test_stale_green_is_not_reported_on_top_of_a_failing_check():
+    # Naming both would send the caller to update a branch whose checks are red
+    # anyway; the failure is the thing to fix first.
+    verdict = gate.evaluate(
+        _facts(
+            checks=(("Lint", "fail"),),
+            base_changed_files=("libs/probe_specs.py",),
+        ),
+        now=NOW,
+    )
+    assert not verdict.ready
+    assert not any("green against a base" in r for r in verdict.reasons)
+
+
+def test_an_unreadable_comparison_raises_no_concern(monkeypatch):
+    # Best-effort by construction: the compare call is an extra round trip that
+    # must never be able to manufacture a blocker it cannot substantiate.
+    def boom(argv):
+        raise RuntimeError("gh: API rate limit exceeded")
+
+    assert gate._base_changed_files("o/r", "deadbeef", "main", gh=boom) == ()
+    assert gate._base_changed_files("o/r", "", "main") == ()
+
+
+def test_a_merged_head_is_not_re_litigated_on_questions_that_have_no_answer():
+    # GitHub stops computing a test merge once a PR closes, so every merged head
+    # reports mergeable=UNKNOWN. Reporting that turned a one-line "not OPEN"
+    # verdict into four lines about a question that no longer has an answer --
+    # observed on infra2#763 minutes after it merged.
+    verdict = gate.evaluate(
+        _facts(
+            state="MERGED",
+            mergeable="UNKNOWN",
+            merge_state="UNKNOWN",
+            base_changed_files=("libs/probe_specs.py",),
+        ),
+        now=NOW,
+    )
+    assert not verdict.ready
+    assert verdict.reasons == ["pull request is MERGED, not OPEN"]

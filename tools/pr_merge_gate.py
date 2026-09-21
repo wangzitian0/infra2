@@ -61,6 +61,10 @@ DEPLOY_TRIGGERING_GLOBS = (
 # gh's own classification of a check (`bucket`): pass / fail / pending / skipping /
 # cancel. `state` (SUCCESS, SKIPPED, IN_PROGRESS, …) is kept as the fallback for a gh
 # build without buckets.
+# GitHub merge states that do not themselves block: CLEAN, and BLOCKED/BEHIND
+# are reported by their own reasons above rather than duplicated here.
+MERGE_STATES_OK = frozenset({"CLEAN", "HAS_HOOKS", "UNSTABLE"})
+
 GREEN_BUCKETS = frozenset({"pass", "skipping"})
 GREEN_STATES = frozenset({"SUCCESS", "SKIPPED", "NEUTRAL"})
 MAX_REVIEW_THREADS = 100
@@ -83,6 +87,13 @@ class HeadFacts:
     unresolved_threads: int
     review_threads_total: int = 0
     node_id: str = ""
+    # GitHub's own merge computation. "" means it was not read; "UNKNOWN" means
+    # GitHub is still computing a test merge and the caller should re-poll.
+    mergeable: str = ""
+    merge_state: str = ""
+    # Files the base branch has changed since this head diverged from it. Their
+    # intersection with `files` is what makes a green check stale.
+    base_changed_files: tuple[str, ...] = ()
     # (reviewer login, commit reviewed, submitted epoch) — a review pins a head
     reviews: tuple[tuple[str, str, float], ...] = ()
 
@@ -141,6 +152,38 @@ def _read_checks(number: int, *, repo: str, gh: Runner) -> str:
         return "[]"
 
 
+def _base_changed_files(
+    repo: str, head_sha: str, base: str, *, gh: Runner = _gh
+) -> tuple[str, ...]:
+    """Files the base branch has changed since this head diverged from it.
+
+    `compare/<head>...<base>` is computed from the merge base, so it answers
+    exactly "what has base gained that this head has not seen" -- not "what does
+    the head change", which `files` already covers.
+
+    This exists because a green check proves the tree it ran on, not the tree a
+    merge would produce. A sibling PR that lands between the run and the merge
+    can rewrite the very files under test, and every check stays green because
+    none of them re-ran. finance_report's AGENTS.md states the same hazard for
+    the adjacent field: `mergeStateStatus` "can flip from CLEAN to DIRTY/BEHIND
+    the instant a sibling PR merges to main -- re-check it fresh before every
+    'ready' report, never trust an earlier snapshot".
+
+    Best-effort: a comparison that cannot be read yields no files, so this can
+    only ever fail to raise a concern, never invent one. The hard blockers
+    (`mergeable`, checks, threads) do not depend on it.
+    """
+    if not head_sha or not base:
+        return ()
+    try:
+        payload = json.loads(
+            gh(["api", f"repos/{repo}/compare/{head_sha}...{base}", "--jq", "{files:[.files[]?.filename]}"])
+        )
+    except (RuntimeError, json.JSONDecodeError):
+        return ()
+    return tuple(str(f) for f in payload.get("files") or [])
+
+
 def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadFacts:
     """Read the head's facts through `gh`; nothing here decides."""
     view = json.loads(
@@ -152,7 +195,8 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
                 "--repo",
                 repo,
                 "--json",
-                "number,state,isDraft,baseRefName,headRefOid,files,commits,id,reviews",
+                "number,state,isDraft,baseRefName,headRefOid,files,commits,id,reviews,"
+                "mergeable,mergeStateStatus",
             ]
         )
     )
@@ -174,6 +218,9 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
     nodes = review_threads["nodes"]
     commits = view.get("commits") or []
     last_push = max((_epoch(c["committedDate"]) for c in commits), default=0.0)
+    base_changed = _base_changed_files(
+        repo, str(view.get("headRefOid") or ""), str(view.get("baseRefName") or ""), gh=gh
+    )
     return HeadFacts(
         number=int(view["number"]),
         state=str(view.get("state") or ""),
@@ -189,6 +236,9 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
         unresolved_threads=sum(1 for n in nodes if not n.get("isResolved")),
         review_threads_total=int(review_threads.get("totalCount") or len(nodes)),
         node_id=str(view.get("id") or ""),
+        mergeable=str(view.get("mergeable") or ""),
+        merge_state=str(view.get("mergeStateStatus") or ""),
+        base_changed_files=base_changed,
         reviews=tuple(
             (
                 str((r.get("author") or {}).get("login") or ""),
@@ -239,6 +289,28 @@ def evaluate(
     if facts.base != "main":
         reasons.append(f"base branch is {facts.base!r}, not main")
         owner = True
+    # AGENTS.md's 合流真源唯一 names three things: the right base, `mergeable`,
+    # and no conflict. Only the first was ever checked here, while the green
+    # verdict printed the word "mergeable" without having asked GitHub. A
+    # CONFLICTING pull request reached this function and was reported solely as
+    # "N review thread(s) unresolved", which sends a caller to fix the wrong
+    # thing.
+    # Only meaningful while the pull request is open: GitHub stops computing a
+    # test merge once it closes, so a merged head reports mergeable=UNKNOWN
+    # forever. Asking anyway turned a one-line "not OPEN" verdict into four
+    # lines of noise about a question that no longer has an answer.
+    is_open = facts.state == "OPEN"
+    if is_open and facts.mergeable == "CONFLICTING":
+        reasons.append("GitHub reports mergeable=CONFLICTING: rebase or merge main first")
+    elif is_open and facts.mergeable == "UNKNOWN":
+        reasons.append(
+            "GitHub is still computing mergeable (UNKNOWN): re-run in a moment "
+            "rather than treating it as clean"
+        )
+    elif is_open and facts.mergeable and facts.mergeable != "MERGEABLE":
+        reasons.append(f"GitHub reports mergeable={facts.mergeable}, not MERGEABLE")
+    if is_open and facts.merge_state and facts.merge_state not in MERGE_STATES_OK:
+        reasons.append(f"mergeStateStatus is {facts.merge_state}, not CLEAN")
     protected = sorted(f for f in facts.files if f in PROTECTED_FILES)
     if protected:
         reasons.append(
@@ -262,6 +334,16 @@ def evaluate(
         reasons.append("no checks reported yet")
     if not_green:
         reasons.append(f"check(s) not green: {', '.join(not_green)}")
+    # Green proves the tree the checks ran on. When main has since rewritten
+    # files this pull request also touches, that tree is not the one a merge
+    # would produce, and nothing re-ran to notice.
+    stale = sorted(set(facts.files) & set(facts.base_changed_files))
+    if stale and not not_green and is_open:
+        shown = ", ".join(stale[:4]) + (f" (+{len(stale) - 4} more)" if len(stale) > 4 else "")
+        reasons.append(
+            f"checks are green against a base that has since changed {len(stale)} of "
+            f"this PR's files ({shown}): update the branch so they re-run"
+        )
     if facts.unresolved_threads:
         reasons.append(f"{facts.unresolved_threads} review thread(s) unresolved")
     if facts.review_threads_total > MAX_REVIEW_THREADS:
