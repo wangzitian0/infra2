@@ -29,12 +29,13 @@
   fix-up push 不会自动触发 Copilot 复审，需显式请求。
 - **变更契约完整**：PR description checklist 完整；代码、测试、SSOT、Project、Layer README / Onboarding 按影响同步；无未解释的 scope drift；PR description 显式引用其推进/关闭的 issue 编号（无则写明 None）——避免 PR 实质推进了某 issue 的 scope 却不留痕迹，导致 issue 可见状态滞后仓库实际进度（#508）。
 - **安全与运维门禁**：无敏感文件；已说明风险、回滚与 0 宕机影响；涉及 state discrepancy、密钥或生产数据时已按对应 SSOT 执行并留证。
-- **唯一仍需 owner 的一类：不可逆的生产副作用**。判据是**回滚能否撤销**，不是"有没有跑部署命令"。
-  属于这一类：L1 bootstrap self-update、`bootstrap/06.iac_runner/**` 触发的 runner 重建、
-  尚未解耦的 observability apply、prod apply。必须先完成变更专属 proof，并取得 owner 对
-  **当前 `head SHA`** 的明确批准；对旧 head 的批准不顺延。
-  **不属于这一类**（因此可自行合流）：打临时槽/预览位的部署证明，例如 `ops-checks.yml` 的
-  `deploy-v2-canary`（目标是保留的 `pr-0` 临时槽）、`report-branch-main` 预览重部署。
+- **按环境划线：staging 可自行部署，prod 不可**（2026-09-21 owner 批准）。
+  合流触发 staging 部署、临时槽 canary（`ops-checks.yml` 的 `deploy-v2-canary`，目标是保留的
+  `pr-0`）、`report-branch-main` 预览重部署——**均属 AI 自行合流范围**，不需要逐次批准。
+  触及 **prod** 的则必须取得 owner 对**当前 `head SHA`** 的明确批准，对旧 head 的批准不顺延：
+  prod apply、prod promote、L1 bootstrap self-update、`bootstrap/06.iac_runner/**` 触发的
+  runner 重建、尚未解耦的 observability apply（它直接打 live SigNoz）。
+  判据是**打到哪个环境**，其次才是可逆性；两者冲突时以环境为准。
 - **改动"决定合流的东西"也需 owner（与可逆性无关）**：门禁从工作树读取规则，而 AI 合流自己的 PR
   时那就是该 PR 的分支——改动因此由它自己引入的版本审判。这是自我裁决问题，不是不可逆问题，
   所以单列。`tools/pr_merge_gate.py`、它的测试、`ci-gate-inventory.yaml` 以及本文件属于这一类。

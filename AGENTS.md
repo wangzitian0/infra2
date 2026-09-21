@@ -41,12 +41,11 @@
    却没重跑；`blocks_merge` 的检查被 skip 时 GitHub 也接受为已满足。判定统一走
    `python -m tools.pr_merge_gate <n> --policy either --request-review --merge`
    （exit 1 = 未到时机，exit 2 = 需要 owner），不靠肉眼看表。
-5. **两类必须回到 owner**，判据各不相同：
-   **(a) 回滚撤销不了**——L1 bootstrap self-update、runner 重建、observability apply、
-   prod apply。打临时槽的 canary 与预览重部署不属此类。
-   **(b) 改动"决定合流的东西"本身**——门禁读工作树里的规则，AI 合流自己的 PR 时那就是该 PR
-   的分支，于是改动由它自己引入的版本审判。这一类与可逆性无关，是自我裁决问题。
-   受保护文件改为引用 owner 指示即可，不再单独要求二次批准。
+5. **按环境划线**：合流触发 **staging** 部署、临时槽 canary、预览重部署——AI 可自行合流。
+   触及 **prod** 的必须回到 owner 并批准当前 `head SHA`：prod apply / promote、L1 bootstrap
+   self-update、runner 重建、observability apply。另有一类与环境无关但同样回到 owner——
+   **改动"决定合流的东西"本身**（门禁读工作树里的规则，AI 合流自己的 PR 时那就是该 PR 的
+   分支，于是改动由它自己引入的版本审判）。受保护文件引用 owner 指示即可。
 
 ## 🛡️ 安全与红线
 
