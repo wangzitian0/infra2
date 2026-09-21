@@ -77,7 +77,13 @@ def preflight(strict: bool) -> tuple[str, str]:
         return ("infra", why) if strict else ("skip", why)
 
     if not auth.is_file():
-        return missing(f"no {PROVIDER} credential: env unset and {auth} absent")
+        # Name both sources explicitly. "env unset" meant ZAI_CODING_CN_API_KEY,
+        # but PI_CODING_AGENT_DIR is also an env override, so the short form
+        # read as though the agent dir were unset when it may well be set and
+        # simply hold no auth.json.
+        return missing(
+            f"no {PROVIDER} credential: ZAI_CODING_CN_API_KEY unset and {auth} absent"
+        )
     try:
         keys = json.loads(auth.read_text())
     except OSError as exc:
@@ -137,6 +143,16 @@ def run_once() -> tuple[dict | None, str]:
     }
     checks["totalTokens"] = total
     checks["text"] = text.strip()[:120]
+    # The booleans say which assertion failed; these say what was actually seen.
+    # Without them a remote-only failure -- the provider silently routing to
+    # another model, say -- can only be diagnosed by reproducing it locally,
+    # which for a token-consuming proof means paying for it twice.
+    checks["observed"] = {
+        "returncode": proc.returncode,
+        "provider": message.get("provider"),
+        "model": message.get("model"),
+        "stopReason": message.get("stopReason"),
+    }
     return checks, ""
 
 
