@@ -88,7 +88,8 @@ def evaluate_audit_report(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Evaluate OMCA audit report against CI merge gate policy.")
-    parser.add_argument("report_file", type=Path, help="Path to audit.json file or '-' for stdin")
+    parser.add_argument("report_file", nargs="?", type=Path, default=None, help="Path to audit.json file or '-' for stdin")
+    parser.add_argument("--self-test", action="store_true", help="Run built-in policy evaluation self-test")
     parser.add_argument("--expect-sha", type=str, default=None, help="Expected head commit SHA")
     parser.add_argument(
         "--no-strict",
@@ -98,6 +99,19 @@ def main() -> int:
         help="Do not block on architectural heuristic topics, only on explicit CRITICAL/BLOCKER severities",
     )
     args = parser.parse_args()
+
+    if args.self_test:
+        clean_res, _, _ = evaluate_audit_report({"verdict": "PASS", "findings": []}, strict=True)
+        blocked_res, _, _ = evaluate_audit_report({"verdict": "BLOCKED", "critical_blockers": ["synthetic"]}, strict=True)
+        if clean_res and not blocked_res:
+            print("omca_gate_policy: Self-test passed (clean report passed, blocker correctly blocked)")
+            return 0
+        print("omca_gate_policy ERROR: Self-test assertion failed", file=sys.stderr)
+        return 1
+
+    if not args.report_file:
+        parser.print_help(sys.stderr)
+        return 2
 
     try:
         if str(args.report_file) == "-":

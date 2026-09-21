@@ -315,6 +315,16 @@ jobs:
           cd ${{ github.workspace }}
           uv run python tools/deploy_guard_audit.py
 
+      - name: Gate CI hierarchy and workflow budgets
+        run: |
+          cd ${{ github.workspace }}
+          uv run python -m tools.ci_gate_lint .github/workflows/
+
+      - name: Gate OMCA audit policy evaluator
+        run: |
+          cd ${{ github.workspace }}
+          uv run python -m tools.omca_gate_policy --self-test
+
       # Shift-left: surface what this PR would re-deploy once released, and prove the
       # reconcile plan BUILDS on these changes (deploy-dependencies fan-out + service
       # contracts resolve) — so 'release-time only' failures fail here, in the PR, instead.

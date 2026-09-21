@@ -27,6 +27,8 @@
 - [ ] Add cross-repository compatibility matrix reporting from released evidence.
 - [x] Orchestrator liveness rule, read-only `harness sweep` and guard hook
       (2026-09-16 section below).
+- [x] Add Left-to-Right CI hierarchy linter (`tools.ci_gate_lint`) and OMCA audit policy gate (`tools.omca_gate_policy --self-test`) into `infra-ci.yml`.
+- [x] Add reusable GitHub Actions workflow template `.github/workflows/templates/omca-audit-gate.yml` for App and Infra CI pipelines.
 - [ ] Owner decision: wire `tools/orchestrator_guard_hook.py` into `.claude/settings.json`.
 - [ ] Split `pr_merge_gate` exit 1 into time-fixable / action-required / could-not-evaluate
       ([infra2#740](https://github.com/wangzitian0/infra2/issues/740)).
