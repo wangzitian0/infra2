@@ -13,7 +13,7 @@
 
 - **批准绑定当前 head**：PR 非 Draft，且满足下列两条路径之一。**逐-head 批准**：仓库 owner 已明确批准当前 `head SHA`；head 一旦变化该批准即失效，必须重新确认。**会话级授权**：该 PR 落在下文"会话级合流授权"的范围内；head 变化不需要回到 owner，但必须对新的 head 重新满足会话级的全部条件（含静置窗口重新计时）。
 - **合流真源唯一**：目标分支正确，PR `mergeable`，无冲突；检查与合流必须针对同一个 `head SHA`，禁止用本地旧结果或旧 review 代替。
-- **Merge Authority 全绿**：[`docs/ssot/ci-gate-inventory.yaml`](../../docs/ssot/ci-gate-inventory.yaml) 中该变更适用且 `blocks_merge: true` 的检查全部成功；pending、failure、cancelled、意外 skipped 或无法读取均视为不满足。
+- **Merge Authority 全绿**：[`docs/ssot/ci-gate-inventory.yaml`](ci-gate-inventory.yaml) 中该变更适用且 `blocks_merge: true` 的检查全部成功；pending、failure、cancelled、意外 skipped 或无法读取均视为不满足。
 - **Review 已闭环（加权阻塞）**：required review 已满足，所有 actionable conversation / review threads 已处理并 resolved；不得自行忽略、dismiss 或用过期 review 代替当前 head 审查。未 resolved 的 review 发现（不论来源——human reviewer、Copilot、/code-review 等）按 severity 加权计分：high=1.0、middle=0.5、low=0.25，未标注 severity 的按 middle 计。**未 resolved 发现的加权总分 ≥ 1.0 即视为未闭环、禁止合流**，不要求单条 high 才阻塞——例如 2 条 middle 或 4 条 low 累计到位同样阻塞。达到门槛后必须逐条修复，或取得 owner 对具体发现的明确豁免并留痕，方可标记为已处理。
 - **变更契约完整**：PR description checklist 完整；代码、测试、SSOT、Project、Layer README / Onboarding 按影响同步；无未解释的 scope drift；PR description 显式引用其推进/关闭的 issue 编号（无则写明 None）——避免 PR 实质推进了某 issue 的 scope 却不留痕迹，导致 issue 可见状态滞后仓库实际进度（#508）。
 - **安全与运维门禁**：无敏感文件；已说明风险、回滚与 0 宕机影响；涉及 state discrepancy、密钥或生产数据时已按对应 SSOT 执行并留证。
@@ -41,6 +41,6 @@
 
 ## 线上测试
 
-- **Merge 与部署解耦**：普通开发 PR 以 `github_ci.merge_authority` 为合流门禁；preview / staging proof 不得冒充 Merge Authority，也不默认阻塞普通 PR。以 [`docs/ssot/ops.pipeline.md`](../../docs/ssot/ops.pipeline.md) 和 [`docs/ssot/delivery-stages.yaml`](../../docs/ssot/delivery-stages.yaml) 为准。
+- **Merge 与部署解耦**：普通开发 PR 以 `github_ci.merge_authority` 为合流门禁；preview / staging proof 不得冒充 Merge Authority，也不默认阻塞普通 PR。以 [`docs/ssot/ops.pipeline.md`](ops.pipeline.md) 和 [`docs/ssot/delivery-stages.yaml`](delivery-stages.yaml) 为准。
 - **测试过程**：需要 runtime proof 时，请假设自己就是用户，从 web / cli / ssh 等真实入口验证，并保存证据。
 - **发布与晋升**：release tag 必须来自 reviewed main；平台 tag 自动晋升 staging。staging 使用同一不可变 tag 验证并完成 soak 后，才可显式 promote prod，禁止跳过 staging。

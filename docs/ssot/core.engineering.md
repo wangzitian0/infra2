@@ -20,7 +20,7 @@
 | **SSOT** | `docs/ssot/` | 复杂话题集中管理，技术参考手册 | 所有人 |
 | **开发者体验** | `docs/onboarding/` | 场景驱动，注重接入顺滑 | 应用开发者 |
 
-> README 模板见 [docs/README_tempate.md](../../docs/README_tempate.md)。
+> README 模板见 [docs/README_tempate.md](../README_tempate.md)。
 > `docs/ssot/README.md` 由 `docs/ssot/MANIFEST.yaml` 生成，改索引文字要改 MANIFEST 而不是 README。
 
 ### AI 文档行为约束
@@ -48,7 +48,7 @@
 
 **3. Actions（具体执行步骤）**
 - **原子操作**：为每个 Task 制定具体 Action 序列。
-- **SSOT 对齐**：Actions 必须符合 [Ops Standards](../../docs/ssot/ops.standards.md) 的防御性守则。
+- **SSOT 对齐**：Actions 必须符合 [Ops Standards](ops.standards.md) 的防御性守则。
 - **闭环变更**：必须包含 修改代码 → 更新 SSOT → 验证生效。
 
 **4. Result（结果验证）**
