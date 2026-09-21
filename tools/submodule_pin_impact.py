@@ -19,8 +19,10 @@ repository derives inputs from, and needs a decision when it changes one.** That
 is a measurable property, which is what this reports.
 
 The derived set is discovered rather than listed, so a new consumer cannot
-silently escape the check: any ``repos/<sub>/<path>`` literal appearing in
-tracked non-test source is treated as derived.
+silently escape the check: for every gitlink in the tree -- at any depth, so a
+root-level submodule counts exactly like a nested one -- a ``<submodule
+path>/<file>`` literal appearing in tracked non-test, non-Markdown source is
+treated as derived.
 
 Exit 0 when every pin advance is inert (or there is nothing to advance), 1 when
 an advance would change a derived input. Exit 1 is not "refuse" — it means this

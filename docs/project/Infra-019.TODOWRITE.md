@@ -649,34 +649,41 @@ harness 发现的缺口该由 harness 去提，还是记给 App 自己排期。
 **每应用一个**，不是一个共享 Business PG。剩下的是 owner 的形状决策——一篇 harness 级 SSOT、
 每应用各一篇、还是归 App 仓所有。
 
-### omca `tmp/`/`.tmp/` 的分类是错的，而且正是 `omca state` 被造出来要暴露的那类错
+### omca #101：谓词是错的，但我第一版分析里「分类是错的」这一条本身也是错的
 
-`internal/auth/mutablestate.go:168-177` 把 `tmp/` 和 `.tmp/`（64.5MB，全机最大单项）标为
-`generation-local`。但字节实际躺在 **worktree 作用域**目录里：
-`internal/runtime/mutablehome.go:37` 的路径是 `worktreeStateDir/state/hosts/<host>/<surface>/<home>`，
-其注释明言该位置「是 `worktree-shared`……而不是 `generation-local`，后者会在每次重编译时静默抹掉它」。
-而 `internal/domain/runtimescope.go:61-65` 的封闭集合是 `worktree | workspace | user`——**根本没有
-generation 这一档**。
+先记我的错，因为它已经发到 issue 上过一轮：我一度断言 `internal/auth/mutablestate.go:168-177`
+把 `tmp/`/`.tmp/` 标为 `generation-local` 是分类错误，理由是字节实际住在 worktree 作用域目录里
+（`internal/runtime/mutablehome.go:37`）。**这个推论不成立。** 枚举自己的定义写在
+`internal/domain/mutablestate.go:26-34`：
 
-`runtime.md` §9 的原话是「分类得比任何现存 runtime 更宽，不会让它变成共享，只会让分类变成无人背书的声明」。
-反向同样成立：分类得更窄也不会让它变隔离。这正是 `omca state` 的存在理由。
+> `MutableStateGenerationLocal`……**这是保守默认值**，适用于本项目尚未用 fixture 证明可以更广共享的
+> 任何状态类（runtime.md §12「未知行为不得被 LLM 提升为 managed」同样适用于**无 fixture 就把状态类
+> 提升为 shared**）。
 
-对 #101 的直接后果：**「无活动 generation 时清理 scratch」这个命题本身是错的**，因为一个 `tmp/`
-服务该 worktree+host+surface 的**所有** generation。正确谓词是「该 worktree+host+surface 没有 host
-会话在跑」。
+也就是说 `generation-local` 是**下限**，不是物理布局断言；`sessions/`、`log/`、`*.sqlite`、
+`memories/`、`history.jsonl`、`skills/` 全在同一档，同样理由。我建议的「改成 `worktree-shared`」
+恰好就是 §12 禁止的无 fixture 提升——而且我在同一条评论里刚引用过
+`allowlist.go:47-50` 只有两条 fixture 且都不覆盖 `tmp/`。已在 issue 上公开撤回。
 
-而且那个谓词今天无法判定：`internal/runtime/restart.go:55-61` 明说自己「没有任何进程跟踪」；
-`OMCA_RUN_ID` 只是传给 host 的环境变量、从不落盘；`internal/shim/exec.go` 用 `syscall.Exec` 自我替换，
-不留 omca 父进程；ledger 记录的是迁移而非会话；两个 flock 一个是事务级一个是 daemon 单例。
-唯一便宜的代理是 mtime，而 omca 的 `AGENTS.md` 已明文否决它（「mtime 推断会把同机另一个真实会话的
-并发活动和测试自身的改动混为一谈，且无法区分」）。
+经核实仍然成立的部分：
 
-还有一条实测过的反例：`docs/evidence/interactive-tui-v0.1.0.md:144-152` 记录过一次事故——早期清理实现
-对 scratch 每一项调 `chmod`，而 Codex 在 scratch 里建了指向其**已安装原生二进制**的符号链接，
-macOS 上 `chmod` 跟随链接、抹掉了目标的可执行位。出事的就是这个目录，而 `mutablestate.go:171` 注明
-`.tmp/plugins` 里有**一整个 git clone**。
+- 字节确实在 `worktreeStateDir/state/hosts/<host>/<surface>/<home>`，**一个目录服务该
+  worktree+host+surface 的所有 generation**。所以 #101 的「无活动 generation 时清理」谓词依然是错的，
+  正确谓词是「该 worktree+host+surface 没有 host 会话在跑」。
+- 这个谓词今天无法判定：`internal/runtime/restart.go:55-61` 明说自己没有任何进程跟踪；
+  `OMCA_RUN_ID` 只传给 host、从不落盘；`internal/shim/exec.go` 用 `syscall.Exec` 自我替换，不留
+  omca 父进程；ledger 记录迁移而非会话；两个 flock 一个事务级一个 daemon 单例。唯一便宜的代理是
+  mtime，而 omca 的 `AGENTS.md` 已明文否决（无法区分同机另一个真实会话的并发活动）。
+- `allowlist.go:47-50` 两条 fixture 都是 `cache`，**没有一条覆盖 `tmp/`**，而
+  `mutablestate.go:171` 注明 `.tmp/plugins` 里有一整个 git clone。
+- 这个目录出过事故：`docs/evidence/interactive-tui-v0.1.0.md:144-152` 记录早期清理实现对每项调
+  `chmod`，而 Codex 在 scratch 里建了指向其已安装原生二进制的符号链接，macOS 上 `chmod` 跟随链接、
+  抹掉了目标的可执行位。为此写的符号链接安全删除器可复用（`cmd/omca/qualify_tui.go:715-736`）。
 
-结论：#101 的「prune」需要先有 liveness 原语（flock 由 host 进程继承、内核在其退出时释放，是有仓内先例的
-路子），需要自己的 ADR，还需要一个证明 host 真能重建 `tmp/` 的 fixture——`allowlist.go:47-50` 现有两条
-fixture 都是 `cache`，**没有一条覆盖 `tmp/`**。在此之前可做的只有：把这 64.5MB 在 `omca state` 里报成
-「待 liveness 判定、暂不可回收」，并修掉 `generation-local` 这个标签。
+真正的张力（这次表述准确）：worktree 作用域的 native home 意味着其中**每一项**在物理上都能被该
+worktree 的每个 generation 触及，所以 `generation-local` 描述的是一种无人执行的**意图可见性**。
+这是全部十个条目的系统性问题，不是那两行 scratch 的缺陷——而 `cmd/omca/state.go:68-69` 早就
+直说了「纸面为真、磁盘为假」。把它接上是 #118 的题目，不是 #101 的。
+
+结论：#101 **没有**无需新机制的修法。唯一还站得住的改动是呈现层——让 `omca state` 把这 64.5MB
+报成「待 liveness 判定、暂不可回收」，而不是让读者推断 scratch 可以随手删。
