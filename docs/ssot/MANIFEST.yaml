@@ -218,11 +218,11 @@ entries:
       - libs/tests/test_ci_gate_audit.py
   ops.merge_gate:
     owner: docs/ssot/ops.merge-gate.md
-    summary: 可合流条件逐条、常设合流权及其唯一例外、PR 准则、发布晋升
+    summary: 可合流条件逐条、常设合流权及其 owner 保留项、PR 准则、发布晋升
     description: >-
       The full AI-merge gate for this repository: every mergeable condition, the
-      standing merge authority and the single class of change that still needs the
-      owner, PR submission rules, and the release/promotion path. AGENTS.md keeps the minimal fail-closed decision core
+      standing merge authority and the classes of change that still need the owner,
+      PR submission rules, and the release/promotion path. AGENTS.md keeps the minimal fail-closed decision core
       and points here; the machine-readable check inventory stays in
       ci-gate-inventory.yaml.
     proofs:
