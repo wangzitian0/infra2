@@ -215,7 +215,7 @@ curl https://report.zitian.party/api/health
 ### 相关文档
 
 - [Finance Report README](finance_report/README.md)
-- [Infra-009 项目文档](docs/project/Infra-009.finance_report_deploy.md)
+- [Infra-009 项目文档](docs/project/archive/Infra-009.finance_report_deploy.md)
 - [源代码仓库](https://github.com/wangzitian0/finance_report)
 
 ## 🔗 相关链接

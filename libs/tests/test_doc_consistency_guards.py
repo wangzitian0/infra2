@@ -15,6 +15,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 THIS = Path(__file__).name
+# tools/doc_link_check.py is the one file whose job is to RECORD paths that do
+# not resolve: its KNOWN_UNRESOLVED map holds each dead cross-reference the
+# repository has deliberately not guessed a target for, together with the
+# decision that is pending. Scanning it here would read those records as
+# references and fail on exactly the thing they exist to track. Excluded for
+# the same reason THIS is -- a file that talks about broken paths is not a
+# file that has broken paths.
+_RECORDS_UNRESOLVED_PATHS = {"doc_link_check.py"}
 
 # Scope to the GOVERNED doc trees (SSOT + EPIC). Arbitrary made-up paths used as test
 # fixtures (e.g. `docs/notes.md` "owned by nobody -> dropped") live outside these subtrees.
@@ -35,7 +43,13 @@ def _code_py_files() -> list[Path]:
     files: list[Path] = []
     for base in ("libs", "tools", "platform", "bootstrap"):
         files.extend((ROOT / base).rglob("*.py"))
-    return [f for f in files if f.name != THIS and "__pycache__" not in f.parts]
+    return [
+        f
+        for f in files
+        if f.name != THIS
+        and f.name not in _RECORDS_UNRESOLVED_PATHS
+        and "__pycache__" not in f.parts
+    ]
 
 
 def test_code_doc_path_references_resolve() -> None:

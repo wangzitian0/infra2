@@ -123,7 +123,7 @@ docker exec platform-clickhouse${ENV_SUFFIX} clickhouse-client --query "SHOW DAT
 
 ## Documentation
 
-- Project: [docs/project/Infra-007.signoz_install.md](../project/Infra-007.signoz_install.md)
+- Project: [docs/project/Infra-007.signoz_install.md](../project/archive/Infra-007.signoz_install.md)
 - SSOT: [docs/ssot/ops.observability.md](../ssot/ops.observability.md)
 - ClickHouse: [platform/03.clickhouse/README.md](../../platform/03.clickhouse/README.md)
 - SigNoz: [platform/11.signoz/README.md](../../platform/11.signoz/README.md)

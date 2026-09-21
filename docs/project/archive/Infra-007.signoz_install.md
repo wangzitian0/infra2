@@ -2,7 +2,7 @@
 **Status**: Archived — Completed
 **Created**: 2026-01-01  
 **Owner**: AI Agent  
-**Related SSOT**: [ops.observability.md](../ssot/ops.observability.md)
+**Related SSOT**: [ops.observability.md](../../ssot/ops.observability.md)
 
 ## Objective
 
@@ -17,10 +17,10 @@
 
 ## SSOT Anchors
 
-- [docs/ssot/core.md](../ssot/core.md) - 层级结构与命名规范
-- [docs/ssot/ops.standards.md](../ssot/ops.standards.md) - 防御性运维守则
-- [docs/ssot/bootstrap.vars_and_secrets.md](../ssot/bootstrap.vars_and_secrets.md) - 密钥管理体系
-- [docs/ssot/ops.observability.md](../ssot/ops.observability.md) - 可观测性规范
+- [docs/ssot/core.md](../../ssot/core.md) - 层级结构与命名规范
+- [docs/ssot/ops.standards.md](../../ssot/ops.standards.md) - 防御性运维守则
+- [docs/ssot/bootstrap.vars_and_secrets.md](../../ssot/bootstrap.vars_and_secrets.md) - 密钥管理体系
+- [docs/ssot/ops.observability.md](../../ssot/ops.observability.md) - 可观测性规范
 
 ## Tasks Breakdown
 
