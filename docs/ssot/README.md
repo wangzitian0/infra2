@@ -44,6 +44,7 @@
 | 文件 | SSOT Key | 关键内容 |
 |------|----------|----------|
 | [core.md](./core.md) | `core` | 架构 + 目录 + 环境 + 变量 + 网络 |
+| [core.engineering.md](./core.engineering.md) | `core.engineering` | 代码风格、收敛红线、文档四分类、STAR 框架 |
 | [core.environments.md](./core.environments.md) | `core.environments` | 环境分类、隔离与命名 |
 | [core.harness.md](./core.harness.md) | `core.harness` | Workspace harness scope, repository autonomy, and coordination boundary |
 | [core.truealpha_runtime.md](./core.truealpha_runtime.md) | `core.truealpha_runtime` | TrueAlpha Dagster artifact binding, environment isolation, and host-only OpenD boundary |
@@ -98,6 +99,7 @@
 | [deploy-dependencies.yaml](./deploy-dependencies.yaml) | `ops.deploy_dependencies` | 部署扇出 + content-hash 依赖清单 |
 | [delivery-stages.yaml](./delivery-stages.yaml) | `ops.delivery_stages` | SDK 版本化交付管线 stage 词汇（app+infra CI 共享） |
 | [ci-gate-inventory.yaml](./ci-gate-inventory.yaml) | `ops.ci_gate_inventory` | infra CI gate 坐标清单（(stage,task_category)→workflow:job） |
+| [ops.merge-gate.md](./ops.merge-gate.md) | `ops.merge_gate` | 可合流条件逐条、会话级合流授权、PR 准则、发布晋升 |
 | [ops.observability.md](./ops.observability.md) | `ops.obs` | 可观测性单一 owner：采集(SigNoz/日志/链路)+ 告警(规则/分级/watchdog)+ 报告(可用率账本)+ 时间尺度分层 |
 | [watchdog-signals.yaml](./watchdog-signals.yaml) | `watchdog.signals` | Active watchdog signal inventory and ownership |
 
