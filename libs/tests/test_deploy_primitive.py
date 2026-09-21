@@ -1054,3 +1054,19 @@ def test_verify_in_service_gives_up_at_the_deadline():
             _sleep=lambda _s: None,
             _now=lambda: next(clock),
         )
+
+
+def test_deploy_fast_swap_uses_deterministic_config_hash():
+    # R17 (#750): truealpha/app staging has fast_swap=True, so IAC_CONFIG_HASH is
+    # deterministic (no timestamp) to avoid churning vault-agent when secrets are unchanged.
+    client = FakeDokploy()
+    plan = dp.deploy(
+        "staging",
+        FULL_SHA,
+        domain="zitian.party",
+        client=client,
+        service="truealpha/app",
+        iac_ref="b" * 40,
+    )
+    assert plan.env_vars["IAC_CONFIG_HASH"] == f"deploy-{SHORT_SHA}"
+

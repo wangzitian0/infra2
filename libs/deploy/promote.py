@@ -519,7 +519,12 @@ def deploy(
     # Millisecond resolution so two deploys to the same compose within the same wall
     # second (e.g. a retry) still differ — whole-second granularity could collide and
     # re-introduce the very no-op this guards against.
-    config_hash = f"deploy-{image_tag}-{int(_now() * 1000)}"
+    # R17 (#750): short-swap promote (cfg.fast_swap) uses deterministic tag-based hash
+    # so vault-agent is not unnecessarily recreated when secrets haven't changed.
+    if cfg.fast_swap:
+        config_hash = f"deploy-{image_tag}"
+    else:
+        config_hash = f"deploy-{image_tag}-{int(_now() * 1000)}"
     env_vars = {
         "IMAGE_TAG": image_tag,
         "GIT_COMMIT_SHA": image_tag,

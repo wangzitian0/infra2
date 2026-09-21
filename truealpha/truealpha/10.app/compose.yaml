@@ -71,6 +71,7 @@ services:
       timeout: 5s
       retries: 12
       start_period: 10s
+      start_interval: 2s
     volumes:
       - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
       - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
@@ -124,6 +125,7 @@ services:
       # ::1 first, and the server only listens on IPv4 -> spurious refused conns.
       test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)" ]
       start_period: 30s
+      start_interval: 2s
       interval: 10s
       retries: 3
       timeout: 5s
@@ -199,6 +201,7 @@ services:
       # alpine resolves localhost to ::1 first while node only listens on IPv4.
       test: [ "CMD", "wget", "-q", "-T", "3", "-O", "/dev/null", "http://127.0.0.1:3000" ]
       start_period: 30s
+      start_interval: 2s
       interval: 30s
       retries: 5
       timeout: 10s
