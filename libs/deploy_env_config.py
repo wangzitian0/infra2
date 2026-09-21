@@ -55,10 +55,10 @@ class EnvConfig:
     gates_prod: bool = False  # prod must deploy here first (staging)
     requires_staging_first: bool = False  # this env (prod) requires a staging deploy
     dynamic: bool = False  # per-PR; compose_id/suffix are resolved at deploy time
-    # R17 (#750): the short-swap promote — content-hashed vault-agent cache-bust, fast
-    # healthcheck start interval, migrations applied before the swap. Opted in per
-    # service and env (``_ComposeOverride.fast_swap``); the owner put it on staging only
-    # (2026-09-17: "先在 staging 做吧，prod 回头再说").
+    # R17 (#750): the short-swap promote — deterministic (tag/iac_ref-hashed) vault-agent
+    # cache-bust, fast healthcheck start interval, migrations applied before the swap.
+    # Opted in per service and env (``_ComposeOverride.fast_swap``); the owner put it on
+    # staging only (2026-09-17: "先在 staging 做吧，prod 回头再说").
     fast_swap: bool = False
 
     def app_url(self, *, domain: str, number: int | str | None = None) -> str:

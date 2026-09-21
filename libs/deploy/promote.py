@@ -514,15 +514,15 @@ def deploy(
     # retained tag (image_ref="vX.Y.Z"), code pulls the short sha. image_ref is supplied by
     # the resolver (resolve_image_ref); fall back to sha[:7] for direct/legacy callers.
     image_tag = image_ref or sha[:7]
-    # IAC_CONFIG_HASH is a per-deploy cache-bust: it changes every call so a same-digest
-    # promote still forces a real redeploy (promote-not-rebuild must never no-op).
-    # Millisecond resolution so two deploys to the same compose within the same wall
-    # second (e.g. a retry) still differ — whole-second granularity could collide and
-    # re-introduce the very no-op this guards against.
-    # R17 (#750): short-swap promote (cfg.fast_swap) uses deterministic tag-based hash
-    # so vault-agent is not unnecessarily recreated when secrets haven't changed.
+    # IAC_CONFIG_HASH cache-bust:
+    # Under standard promote, this changes on every call (ms resolution) so a same-digest
+    # promote forces a redeploy.
+    # Under fast_swap (R17, #750), a deterministic hash based on image tag and iac_ref
+    # is used so vault-agent is recreated only when code or infra configuration actually
+    # changes, eliminating container restart downtime during app swaps.
     if cfg.fast_swap:
-        config_hash = f"deploy-{image_tag}"
+        iac_suffix = f"-{iac_ref[:7]}" if iac_ref else ""
+        config_hash = f"deploy-{image_tag}{iac_suffix}"
     else:
         config_hash = f"deploy-{image_tag}-{int(_now() * 1000)}"
     env_vars = {

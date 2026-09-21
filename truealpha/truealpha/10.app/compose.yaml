@@ -51,11 +51,10 @@ services:
       # release (truealpha_runtime.deployed_release). "unknown" fallback. It is NOT the
       # cache-bust: two promotes of the same tag carry the same value.
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
-      # Cache-bust: set fresh on every promote call (deploy-<tag>-<ms>), so this is the
-      # variable whose change makes Compose recreate the agent on a same-tag redeploy
-      # and re-render /vault/secrets/.env — #562's SECRET_KEY template line sat
-      # unrendered on running staging/prod until the agent read it
-      # (test_vault_agent_cache_bust pins it).
+      # Cache-bust: by default set fresh on every promote call (deploy-<tag>-<ms>) so Compose
+      # recreates the agent on a same-tag redeploy and re-renders /vault/secrets/.env.
+      # Under fast_swap (R17, e.g. on staging), this uses a deterministic tag/iac_ref hash
+      # to prevent unnecessary recreate when neither code nor secrets have changed.
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
     healthcheck:
       test:
