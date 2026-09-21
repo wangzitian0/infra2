@@ -201,7 +201,7 @@ Scheduled on the host via crontab:
 ```
 
 > **OFF-HOST STATUS**: **ACTIVE**. Off-host logical backups are encrypted end-to-end
-> (`rclone crypt`, AES-256-GCM) and uploaded to Google Drive (`gdrive-backup:infra2`).
+> (`rclone crypt`) and uploaded to Google Drive (`gdrive-backup:infra2`).
 > The root of trust is 1Password (`bootstrap/gdrive`). To restore credentials on a
 > fresh host: `op item get "bootstrap/gdrive" --vault "Infra2" --fields "rclone_conf" > ~/.config/rclone/rclone.conf`.
 > The off-host manifest is verified with SOP-004.
