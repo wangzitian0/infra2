@@ -44,6 +44,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 ROOT = Path(__file__).resolve().parent.parent
+# A field `gh` was asked for and did not return, distinct from one never asked for.
+ABSENT = "ABSENT"
 DEFAULT_REPO = "wangzitian0/infra2"
 QUIET_MINUTES = 12
 SETTLE_MINUTES = 3  # event policy: after the review of the head, not after the push
@@ -178,8 +180,13 @@ class HeadFacts:
     unresolved_threads: int
     review_threads_total: int = 0
     node_id: str = ""
-    # GitHub's own merge computation. "" means it was not read; "UNKNOWN" means
-    # GitHub is still computing a test merge and the caller should re-poll.
+    # GitHub's own merge computation. "UNKNOWN" means GitHub is still computing
+    # a test merge and the caller should re-poll. ABSENT means `gh` was asked
+    # for the field and did not return it -- a gh version change, a permission
+    # downgrade, an API shape change -- which must block rather than pass: the
+    # field's whole job is to block, so losing it silently loses the check.
+    # "" is reserved for a HeadFacts built by hand, where the field was never
+    # requested and there is nothing to have lost.
     mergeable: str = ""
     merge_state: str = ""
     # Files the base branch has changed since this head diverged from it. Their
@@ -338,8 +345,13 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
         unresolved_threads=sum(1 for n in nodes if not n.get("isResolved")),
         review_threads_total=int(review_threads.get("totalCount") or len(nodes)),
         node_id=str(view.get("id") or ""),
-        mergeable=str(view.get("mergeable") or ""),
-        merge_state=str(view.get("mergeStateStatus") or ""),
+        # ABSENT, not "", when gh omits a field this call explicitly requested.
+        mergeable=str(view.get("mergeable") or "") if "mergeable" in view else ABSENT,
+        merge_state=(
+            str(view.get("mergeStateStatus") or "")
+            if "mergeStateStatus" in view
+            else ABSENT
+        ),
         base_changed_files=base_changed,
         reviews=tuple(
             (
@@ -432,7 +444,21 @@ def evaluate(
     # forever. Asking anyway turned a one-line "not OPEN" verdict into four
     # lines of noise about a question that no longer has an answer.
     is_open = facts.state == "OPEN"
-    if is_open and facts.mergeable == "CONFLICTING":
+    absent = [
+        name
+        for name, value in (("mergeable", facts.mergeable), ("mergeStateStatus", facts.merge_state))
+        if value == ABSENT
+    ]
+    if is_open and absent:
+        reasons.append(
+            f"gh did not return {', '.join(absent)} although asked for it: the "
+            "conflict check is unavailable, so this cannot be judged ready"
+        )
+    # ABSENT is already named once above; letting it fall through would repeat
+    # the same fact as three reasons and bury the one that explains it.
+    if is_open and facts.mergeable == ABSENT:
+        pass
+    elif is_open and facts.mergeable == "CONFLICTING":
         reasons.append("GitHub reports mergeable=CONFLICTING: rebase or merge main first")
     elif is_open and facts.mergeable == "UNKNOWN":
         reasons.append(
@@ -441,7 +467,12 @@ def evaluate(
         )
     elif is_open and facts.mergeable and facts.mergeable != "MERGEABLE":
         reasons.append(f"GitHub reports mergeable={facts.mergeable}, not MERGEABLE")
-    if is_open and facts.merge_state and facts.merge_state not in MERGE_STATES_OK:
+    if (
+        is_open
+        and facts.merge_state
+        and facts.merge_state != ABSENT
+        and facts.merge_state not in MERGE_STATES_OK
+    ):
         if facts.merge_state == "UNKNOWN":
             # Transient for the same reason mergeable=UNKNOWN is: GitHub is
             # still computing the test merge. Saying "not CLEAN" reads like a

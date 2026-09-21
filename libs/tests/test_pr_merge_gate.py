@@ -401,10 +401,54 @@ def test_a_dirty_merge_state_blocks_even_when_mergeable_is_unset():
     assert any("mergeStateStatus is DIRTY" in r for r in verdict.reasons)
 
 
-def test_an_unread_merge_state_is_not_invented_as_a_blocker():
-    # "" means the field was never read -- an older cached fact, or a caller
-    # constructing HeadFacts by hand. Absence of evidence is not a conflict.
+def test_a_hand_built_fact_without_merge_fields_is_not_invented_as_a_blocker():
+    # "" is reserved for a HeadFacts constructed by hand, where the field was
+    # never requested and so nothing was lost. collect() never produces it.
     assert gate.evaluate(_facts(mergeable="", merge_state=""), now=NOW).ready
+
+
+def test_a_field_gh_was_asked_for_and_did_not_return_blocks():
+    # This test replaces one that asserted the opposite and was wrong. The
+    # earlier reasoning -- "absence of evidence is not a conflict" -- does not
+    # hold for a field collect() always requests: losing it silently loses the
+    # only check that catches a conflicting branch. Probed before fixing:
+    # collect() with mergeable omitted from gh's output returned ready=True
+    # with an empty reasons list.
+    for field in ("mergeable", "merge_state"):
+        verdict = gate.evaluate(_facts(**{field: gate.ABSENT}), now=NOW)
+        assert not verdict.ready, field
+        assert any("gh did not return" in r for r in verdict.reasons), field
+
+
+def test_collect_marks_an_omitted_field_absent_rather_than_empty():
+    def fake(argv):
+        if argv[:2] == ["pr", "view"]:
+            return json.dumps(
+                {
+                    "number": 1,
+                    "state": "OPEN",
+                    "isDraft": False,
+                    "baseRefName": "main",
+                    "headRefOid": "f" * 40,
+                    "files": [],
+                    "commits": [],
+                    "reviews": [],
+                    "id": "X",
+                }  # mergeable / mergeStateStatus deliberately omitted
+            )
+        if argv[:2] == ["pr", "checks"]:
+            return "[]"
+        if argv[:2] == ["api", "graphql"]:
+            return json.dumps(
+                {"data": {"repository": {"pullRequest": {"reviewThreads": {"totalCount": 0, "nodes": []}}}}}
+            )
+        if argv[:1] == ["api"]:
+            return json.dumps({"files": []})
+        raise AssertionError(argv)
+
+    facts = gate.collect(1, gh=fake)
+    assert facts.mergeable == gate.ABSENT
+    assert facts.merge_state == gate.ABSENT
 
 
 # --- stale green --------------------------------------------------------------
