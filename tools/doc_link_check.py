@@ -30,6 +30,33 @@ import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+def submodule_paths() -> set[str]:
+    """Paths registered in .gitmodules, as repo-relative POSIX strings.
+
+    A link INTO a submodule is legitimate -- the root README pointing at
+    ``oh-my-code-agent/README.md`` is exactly the kind of cross-reference
+    AGENTS.md's entry map is built from -- but it cannot be verified here.
+    CI checks out without ``--recursive``, so those directories are empty,
+    and a checker that treated an empty submodule as a dead link would fail
+    on every correct link into one. Registration is the right signal: the
+    path is declared by this repository, and its contents are the other
+    repository's CI to verify.
+    """
+    paths: set[str] = set()
+    gitmodules = os.path.join(REPO_ROOT, ".gitmodules")
+    if not os.path.exists(gitmodules):
+        return paths
+    for line in open(gitmodules, encoding="utf-8"):
+        line = line.strip()
+        if line.startswith("path"):
+            _, _, value = line.partition("=")
+            if value.strip():
+                paths.add(value.strip().rstrip("/"))
+    return paths
+
+
+SUBMODULES = None  # populated in main()
+
 SKIP_DIRS = {
     ".git", ".venv", "node_modules", "__pycache__",
     # Submodules: separate repositories, separate CI (AGENTS.md "依賴邊界").
@@ -71,6 +98,8 @@ def iter_markdown_files():
 
 
 def main() -> int:
+    global SUBMODULES
+    SUBMODULES = submodule_paths()
     dead: list[tuple[str, str, str]] = []
     exempt: list[tuple[str, str]] = []
 
@@ -90,6 +119,9 @@ def main() -> int:
             resolved = os.path.normpath(os.path.join(os.path.dirname(path), target))
             if os.path.exists(resolved):
                 continue
+            rel_target = os.path.relpath(resolved, REPO_ROOT).replace(os.sep, "/")
+            if any(rel_target == sm or rel_target.startswith(sm + "/") for sm in SUBMODULES):
+                continue  # inside a submodule: unverifiable without a recursive checkout
             if (rel_file, target) in KNOWN_UNRESOLVED:
                 exempt.append((rel_file, target))
                 continue
