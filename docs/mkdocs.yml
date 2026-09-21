@@ -61,6 +61,7 @@ nav:
           - Architecture: ssot/core.md
           - Environments: ssot/core.environments.md
           - Workspace Harness: ssot/core.harness.md
+          - Engineering: ssot/core.engineering.md
           - TrueAlpha Runtime: ssot/core.truealpha_runtime.md
       - Bootstrap:
           - No-Dep: ssot/bootstrap.nodep.md
@@ -90,6 +91,7 @@ nav:
           - Delivery Stages: ssot/delivery-stages.yaml
           - CI Gate Inventory: ssot/ci-gate-inventory.yaml
           - Observability: ssot/ops.observability.md
+          - Merge Gate: ssot/ops.merge-gate.md
           - Watchdog Signals: ssot/watchdog-signals.yaml
   - Projects:
       - Infra-022: project/Infra-022.production_resilience_and_dr.md
