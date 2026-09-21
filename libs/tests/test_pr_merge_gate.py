@@ -594,3 +594,35 @@ def test_a_merge_triggered_path_needs_no_workflow_to_name():
     verdict = gate.evaluate(_facts(files=("bootstrap/06.iac_runner/main.tf",)), now=NOW)
     reason = next(r for r in verdict.reasons if "trigger a deploy" in r)
     assert " via " not in reason
+
+
+def test_the_observability_apply_is_deploy_triggering():
+    # apply-observability.yml pushes to main and runs
+    # `invoke fr-observability.shared.apply-alerts` against live SigNoz.
+    # AGENTS.md names "observability apply" as a high-risk merge side effect,
+    # and the first marker list missed it -- the same omission the derivation
+    # was written to stop.
+    gate._declared_deploy_globs.cache_clear()
+    assert (
+        gate._deploy_triggering("finance_report/finance_report/observability/x.yaml")
+        == "apply-observability.yml"
+    )
+    assert gate._deploy_triggering("libs/alerting.py") == "apply-observability.yml"
+
+
+def test_a_trigger_field_may_be_a_string_or_omitted():
+    # Actions accepts a bare string wherever it accepts a list, and an omitted
+    # `branches` means every branch -- main included. Reading only the list
+    # form under-detected, which is the one direction that matters.
+    assert gate._as_list("main") == ["main"]
+    assert gate._as_list(["main", "release"]) == ["main", "release"]
+    assert gate._as_list(None) == []
+    assert gate._as_list(7) == []
+
+
+def test_double_star_globs_match_without_translation():
+    # fnmatch's "*" matches "/" too, so "a/**" already matches "a/b/c.py".
+    # A helper that claimed to translate them was a no-op -- worse than
+    # nothing, because it read as though the case were handled.
+    assert gate._deploy_triggering("bootstrap/06.iac_runner/deep/nested/main.tf")
+    assert gate._deploy_triggering("cloudflare/infra-watchdog/a/b/index.ts")

@@ -70,7 +70,19 @@ DEPLOY_TRIGGERING_GLOBS = (
 # A workflow that pushes to main and does one of these deploys. Deliberately a
 # short, explicit list: the judgement "this actually deploys" stays here, while
 # the paths that reach it are derived, because it is the paths that drift.
-DEPLOY_MARKERS = ("deploy_v2", "wrangler deploy", "iac_runner", "repository_dispatch")
+DEPLOY_MARKERS = (
+    "deploy_v2",
+    "wrangler deploy",
+    "iac_runner",
+    "repository_dispatch",
+    # apply-observability.yml pushes to main and runs
+    # `invoke fr-observability.shared.apply-alerts` / `.apply-dashboard`
+    # against the live SigNoz. AGENTS.md names "observability apply" as a
+    # high-risk merge side effect by name, and the first version of this list
+    # missed it -- the same omission it was written to stop.
+    "invoke fr-observability",
+    "terraform apply",
+)
 WORKFLOW_DIR = ROOT / ".github" / "workflows"
 
 
@@ -109,11 +121,17 @@ def _declared_deploy_globs() -> tuple[tuple[str, str], ...]:
         # PyYAML resolves a bare `on:` key to the boolean True.
         triggers = doc.get("on") if isinstance(doc.get("on"), dict) else doc.get(True)
         push = (triggers or {}).get("push") if isinstance(triggers, dict) else None
-        if not isinstance(push, dict) or "main" not in (push.get("branches") or []):
+        if not isinstance(push, dict):
+            continue
+        # Actions accepts a bare string wherever it accepts a list, and an
+        # omitted `branches` means every branch -- which includes main. Reading
+        # only the list form silently skipped such a workflow, under-detecting
+        # in the one direction that matters.
+        if "branches" in push and "main" not in _as_list(push["branches"]):
             continue
         if not any(marker in text for marker in DEPLOY_MARKERS):
             continue
-        globs.extend((str(p), path.name) for p in (push.get("paths") or []))
+        globs.extend((str(p), path.name) for p in _as_list(push.get("paths")))
     return tuple(dict.fromkeys(globs))
 # gh's own classification of a check (`bucket`): pass / fail / pending / skipping /
 # cancel. `state` (SUCCESS, SKIPPED, IN_PROGRESS, …) is kept as the fallback for a gh
@@ -350,18 +368,30 @@ def _deploy_triggering(path: str) -> str:
     find out which one; "...starts ops-checks.yml" is a judgement they can make
     from the line itself.
     """
+    # No translation is needed for `**`: unlike a shell glob, fnmatch's `*`
+    # matches "/" as well, so "a/**" and "a/*" both already match "a/b/c.py".
+    # An earlier version of this function called a _normalise() helper that
+    # claimed to convert them and was in fact a no-op ("a/**"[:-1] + "*" is
+    # "a/**"), which is worse than doing nothing: it read as though the case
+    # were handled.
     for glob in DEPLOY_TRIGGERING_GLOBS:
-        if fnmatch.fnmatch(path, _normalise(glob)):
+        if fnmatch.fnmatch(path, glob):
             return "on merge"
     for glob, workflow in _declared_deploy_globs():
-        if fnmatch.fnmatch(path, _normalise(glob)):
+        if fnmatch.fnmatch(path, glob):
             return workflow
     return ""
 
 
-def _normalise(glob: str) -> str:
-    """`fnmatch` has no `**`; a workflow's `a/**` means "anything under a/"."""
-    return glob[:-1] + "*" if glob.endswith("/**") else glob
+def _as_list(value: object) -> list[str]:
+    """A YAML field that accepts a string or a list, read as a list either way."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [str(v) for v in value]
+    return []
 
 
 def evaluate(
