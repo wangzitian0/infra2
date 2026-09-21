@@ -55,7 +55,7 @@ def run_rehearsal(
 ) -> dict[str, Any]:
     safe_name = service_id.replace("/", "-")
     container = f"{safe_name}-restore-rehearsal-throwaway"
-    bootstrap_user = "rehearsal_bootstrap"
+    bootstrap_user = "postgres"
     start_time = time.time()
 
     entries = {entry.service_id: entry for entry in load_backup_inventory()}
@@ -103,7 +103,7 @@ def run_rehearsal(
             f"[+] Materialized archive: {archive_path} ({archive_path.stat().st_size} bytes)"
         )
 
-        # 4. Define invariants (5 checks enforcing connectivity, DB existence, table threshold, account count, and specific alembic version)
+        # 4. Define invariants (connectivity, DB existence, table threshold, domain specific rows)
         if service_id == "finance_report/postgres":
             invariants = (
                 "SELECT 1",
@@ -112,11 +112,19 @@ def run_rehearsal(
                 "DO $$ BEGIN IF (SELECT count(*) FROM accounts) < 5 THEN RAISE EXCEPTION 'accounts count below threshold (<5)'; END IF; END $$;",
                 "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM alembic_version WHERE version_num IN ('0063_enum_case_compat', '0062_bank_custody')) THEN RAISE EXCEPTION 'unexpected alembic_version'; END IF; END $$;",
             )
+        elif service_id == "truealpha/postgres":
+            invariants = (
+                "SELECT 1",
+                f"SELECT count(*) >= 1 FROM pg_database WHERE datname = '{database}'",
+                "DO $$ BEGIN IF (SELECT count(*) FROM information_schema.tables WHERE table_schema IN ('raw', 'staging', 'mart', 'app')) < 50 THEN RAISE EXCEPTION 'table count below threshold (<50)'; END IF; END $$;",
+                "DO $$ BEGIN IF (SELECT count(*) FROM mart.topt_capture_status WHERE complete = true) < 1 THEN RAISE EXCEPTION 'topt_capture_status count below threshold (<1)'; END IF; END $$;",
+                "DO $$ BEGIN IF (SELECT count(*) FROM mart.topt_gppe_results WHERE payload->>'availability' = 'available') < 100 THEN RAISE EXCEPTION 'topt_gppe_results available below threshold (<100)'; END IF; END $$;",
+            )
         else:
             invariants = (
                 "SELECT 1",
                 f"SELECT count(*) >= 1 FROM pg_database WHERE datname = '{database}'",
-                "DO $$ BEGIN IF (SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public') < 1 THEN RAISE EXCEPTION 'no tables restored'; END IF; END $$;",
+                "DO $$ BEGIN IF (SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog', 'information_schema')) < 1 THEN RAISE EXCEPTION 'no tables restored'; END IF; END $$;",
                 "SELECT current_database()",
                 "SELECT 1",
             )
@@ -158,17 +166,41 @@ def run_rehearsal(
             )
             return res.stdout.strip()
 
-        tables_count = int(
-            query_val(
-                "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"
-            )
-        )
+        domain_stats: dict[str, Any] = {}
         if service_id == "finance_report/postgres":
-            accounts_count = int(query_val("SELECT count(*) FROM accounts"))
-            alembic_version = query_val("SELECT version_num FROM alembic_version")
+            tables_count = int(
+                query_val(
+                    "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"
+                )
+            )
+            domain_stats = {
+                "accounts_count": int(query_val("SELECT count(*) FROM accounts")),
+                "alembic_version": query_val("SELECT version_num FROM alembic_version"),
+            }
+        elif service_id == "truealpha/postgres":
+            tables_count = int(
+                query_val(
+                    "SELECT count(*) FROM information_schema.tables WHERE table_schema IN ('raw', 'staging', 'mart', 'app')"
+                )
+            )
+            domain_stats = {
+                "topt_capture_complete_count": int(
+                    query_val(
+                        "SELECT count(*) FROM mart.topt_capture_status WHERE complete = true"
+                    )
+                ),
+                "topt_gppe_available_count": int(
+                    query_val(
+                        "SELECT count(*) FROM mart.topt_gppe_results WHERE payload->>'availability' = 'available'"
+                    )
+                ),
+            }
         else:
-            accounts_count = 0
-            alembic_version = "n/a"
+            tables_count = int(
+                query_val(
+                    "SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog', 'information_schema')"
+                )
+            )
         db_size_bytes = int(query_val("SELECT pg_database_size(current_database())"))
 
         elapsed = round(time.time() - start_time, 2)
@@ -181,8 +213,9 @@ def run_rehearsal(
             "archive_size_bytes": archive_path.stat().st_size,
             "restored_db_size_bytes": db_size_bytes,
             "verified_tables_count": tables_count,
-            "verified_accounts_count": accounts_count,
-            "verified_alembic_version": alembic_version,
+            "verified_accounts_count": domain_stats.get("accounts_count", 0),
+            "verified_alembic_version": domain_stats.get("alembic_version", "n/a"),
+            "domain_stats": domain_stats,
             "duration_seconds": elapsed,
             "sandbox_container": container,
             "teardown": not keep_container,
@@ -207,11 +240,19 @@ def run_rehearsal(
             print(f"[!] Sandbox container {container} preserved for inspection.")
 
 
+def default_database_for_service(service_id: str) -> str:
+    if service_id == "truealpha/postgres":
+        return "truealpha"
+    elif service_id == "finance_report/postgres":
+        return "finance_report"
+    return "postgres"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", default="/data/backups/infra2/manifest.json")
     parser.add_argument("--service-id", default="finance_report/postgres")
-    parser.add_argument("--database", default="finance_report")
+    parser.add_argument("--database", default=None)
     parser.add_argument("--keep-container", action="store_true")
     args = parser.parse_args()
 
@@ -222,18 +263,32 @@ def main() -> int:
         if candidates:
             manifest_path = str(candidates[-1])
 
-    report = run_rehearsal(
-        manifest_path=manifest_path,
-        service_id=args.service_id,
-        database=args.database,
-        keep_container=args.keep_container,
+    services = (
+        ["finance_report/postgres", "truealpha/postgres"]
+        if args.service_id == "all"
+        else [args.service_id]
     )
-    print("\n" + "=" * 60)
-    print("RESTORE REHEARSAL PROOF REPORT:")
-    print("=" * 60)
-    print(json.dumps(report, indent=2))
-    print(f"RESTORE_PROOF: {report['status']}")
-    return 0 if report["status"] == "PASS" else 1
+
+    all_passed = True
+    reports = []
+    for s_id in services:
+        db = args.database or default_database_for_service(s_id)
+        report = run_rehearsal(
+            manifest_path=manifest_path,
+            service_id=s_id,
+            database=db,
+            keep_container=args.keep_container,
+        )
+        reports.append(report)
+        print("\n" + "=" * 60)
+        print(f"RESTORE REHEARSAL PROOF REPORT ({s_id}):")
+        print("=" * 60)
+        print(json.dumps(report, indent=2))
+        print(f"RESTORE_PROOF: {report['status']}")
+        if report["status"] != "PASS":
+            all_passed = False
+
+    return 0 if all_passed else 1
 
 
 if __name__ == "__main__":

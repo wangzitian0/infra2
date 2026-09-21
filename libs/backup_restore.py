@@ -197,7 +197,10 @@ def run_postgres_restore_rehearsal(
         proc = popen(restore_cmd, stdin=subprocess.PIPE)
         assert proc.stdin is not None
         with proc.stdin:
-            shutil.copyfileobj(dump, proc.stdin)
+            for line in dump:
+                if line.startswith(b"CREATE ROLE postgres;"):
+                    continue
+                proc.stdin.write(line)
         rc = proc.wait()
     if rc != 0:
         raise BackupRestoreError(f"postgres restore command failed with exit code {rc}")

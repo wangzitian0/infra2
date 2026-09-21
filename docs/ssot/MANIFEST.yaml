@@ -178,8 +178,8 @@ entries:
       - libs/tests/test_backup_verification.py
   ops.storage:
     owner: docs/ssot/ops.storage.md
-    summary: 备份策略、R2 同步
-    description: Storage and R2 backup policy.
+    summary: 备份策略、Google Drive 加密同步与还原演练
+    description: Storage, Google Drive encrypted backup, and restore rehearsal policy.
   ops.deploy_dependencies:
     owner: docs/ssot/deploy-dependencies.yaml
     summary: 部署扇出 + content-hash 依赖清单

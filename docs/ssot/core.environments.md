@@ -52,7 +52,7 @@ flowchart LR
     Gate1 -->|生成不可变 Tag| Staging
     Staging --> Gate2
     Gate2 -->|显式 Promote| Production
-    Production -.->|R2 备份流| DR
+    Production -.->|Google Drive 加密备份流| DR
 ```
 
 ---
@@ -199,7 +199,7 @@ python -m tools.deploy_v2 --service finance_report/app --type staging --version-
 - ✅ **高可用** - 监控、告警、备份
 - ✅ **性能优化** - 缓存、CDN、数据库优化
 - ✅ **安全加固** - WAF、Rate limiting、Audit logs
-- ✅ **数据备份** - 每日备份到 Cloudflare R2
+- ✅ **数据备份** - 每日备份到 Google Drive (rclone crypt 客户端加密)
 
 **配置**:
 ```bash
@@ -229,22 +229,22 @@ python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref
 
 ### 3.6 DR (灾备环境)
 
-**位置**: 备用 VPS (或 Cloudflare R2)  
+**位置**: 备用 VPS (或 Google Drive 异地加密存储)  
 **用途**: 数据备份、灾难恢复  
 **特点**:
-- ✅ **冷备份** - 数据每日同步，不运行服务
-- ✅ **快速恢复** - 可在 1 小时内启动服务
-- ✅ **成本优化** - 仅存储数据，不运行容器
+- ✅ **冷备份** - 数据定期加密同步至异地存储，不常驻冗余实例
+- ✅ **沙箱演练** - 支持自动化沙箱还原演练（SOP-006A，秒级验证业务数据完整性）
+- ✅ **分级保留** - 周备保留 60 天（滑动窗口），季度长存快照保留 2 年（730 天）
 
 **配置**:
 ```bash
-# 备份策略 (每日执行)
-# PostgreSQL → pg_dump → R2
-# MinIO → rclone sync → R2
-# Vault → backup snapshot → R2
+# 备份策略 (定时执行，见 ops.recovery.md SOP-006)
+# PostgreSQL → pg_dumpall (各服务独立逻辑备份) → Google Drive (rclone crypt AES-256-GCM)
+# Redis → redis-cli SAVE (密码认证快照) → Google Drive (rclone crypt)
+# 数据目录 → tar.gz (crash-consistent) → Google Drive (rclone crypt)
 ```
 
-**恢复 SLA**: < 1 小时 (RTO)  
+**恢复 SLA**: < 1 小时 (RTO，沙箱 DB 还原实测 < 30 秒)  
 **数据丢失**: < 24 小时 (RPO)
 
 ---

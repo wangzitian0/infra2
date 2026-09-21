@@ -385,3 +385,59 @@ def test_backup_restore_rehearsal_dry_run_has_no_download_side_effect(
     out = capsys.readouterr().out
     assert '"status": "planned"' in out
     assert str(tmp_path / "downloads" / "dump.sql.gz") in out
+
+
+def test_run_postgres_restore_rehearsal_filters_create_role_postgres(tmp_path) -> None:
+    """Postgres 16 dumpall includes CREATE ROLE postgres which fails on existing superuser."""
+    import gzip
+    from libs.backup_restore import RestoreRehearsalPlan, run_postgres_restore_rehearsal
+
+    dump_file = tmp_path / "dump.sql.gz"
+    with gzip.open(dump_file, "wb") as f:
+        f.write(b"CREATE ROLE postgres;\nCREATE ROLE app_user;\nCREATE DATABASE testdb;\n")
+
+    plan = RestoreRehearsalPlan(
+        service_id="test/postgres",
+        source_uri="test:dump.sql.gz",
+        archive_path=dump_file,
+        target_container="test-postgres-restore-rehearsal",
+        pg_user="postgres",
+        database="testdb",
+        invariant_sql=("SELECT 1",),
+    )
+
+    written_lines = []
+
+    class MockStdin:
+        def write(self, data: bytes):
+            written_lines.append(data)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class MockProc:
+        def __init__(self):
+            self.stdin = MockStdin()
+
+        def wait(self):
+            return 0
+
+    class MockResult:
+        returncode = 0
+        stderr = ""
+
+    def mock_popen(cmd, stdin=None):
+        return MockProc()
+
+    def mock_runner(cmd, **kwargs):
+        return MockResult()
+
+    res = run_postgres_restore_rehearsal(plan, popen=mock_popen, runner=mock_runner)
+    assert res["status"] == "pass"
+    assert b"CREATE ROLE postgres;\n" not in written_lines
+    assert b"CREATE ROLE app_user;\n" in written_lines
+    assert b"CREATE DATABASE testdb;\n" in written_lines
+
