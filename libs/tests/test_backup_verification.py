@@ -454,3 +454,149 @@ def test_run_restore_rehearsal_rejects_unsafe_database_name() -> None:
             service_id="finance_report/postgres",
             database="finance_report'; DROP TABLE accounts; --",
         )
+
+
+def _fake_restore(payload: bytes, tmp_path, *, stdin_cls=None, wait_rc: int = 0):
+    """Stream `payload` through the real restore path, returning what reached psql."""
+    import gzip
+
+    from libs.backup_restore import RestoreRehearsalPlan, run_postgres_restore_rehearsal
+
+    dump_file = tmp_path / "dump.sql.gz"
+    with gzip.open(dump_file, "wb") as handle:
+        handle.write(payload)
+
+    written: list[bytes] = []
+    waited: list[bool] = []
+
+    class RecordingStdin:
+        def write(self, data: bytes) -> None:
+            written.append(data)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class Proc:
+        def __init__(self) -> None:
+            self.stdin = (stdin_cls or RecordingStdin)()
+
+        def wait(self) -> int:
+            waited.append(True)
+            return wait_rc
+
+    class Result:
+        returncode = 0
+        stderr = ""
+
+    plan = RestoreRehearsalPlan(
+        service_id="test/postgres",
+        source_uri="test:dump.sql.gz",
+        archive_path=dump_file,
+        target_container="test-postgres-restore-rehearsal",
+        pg_user="postgres",
+        database="testdb",
+        invariant_sql=("SELECT 1",),
+    )
+    result = run_postgres_restore_rehearsal(
+        plan,
+        popen=lambda cmd, stdin=None: Proc(),
+        runner=lambda cmd, **kwargs: Result(),
+    )
+    return result, written, waited
+
+
+def test_restore_filter_never_drops_copy_block_data(tmp_path) -> None:
+    """A COPY data row starting with the role prefix is table data, not a statement."""
+    row_semicolon = b"CREATE ROLE postgres; -- a note a user saved\n"
+    row_space = b"CREATE ROLE postgres was executed by admin\n"
+    payload = (
+        b"CREATE ROLE postgres;\n"
+        b"CREATE ROLE app_user;\n"
+        b"COPY app.notes (body) FROM stdin;\n"
+        + row_semicolon
+        + row_space
+        + b"harmless note\n"
+        b"\\.\n"
+        b"CREATE DATABASE testdb;\n"
+    )
+    result, written, _ = _fake_restore(payload, tmp_path)
+
+    # Raw COPY data survives verbatim: dropping it would silently lose rows
+    # while the restore still reported a pass.
+    assert row_semicolon in written
+    assert row_space in written
+    # The genuine role statement outside the COPY block is still filtered.
+    assert b"CREATE ROLE postgres;\n" not in written
+    assert b"CREATE ROLE app_user;\n" in written
+    assert result["filtered_role_statements"] == 1
+
+
+def test_restore_filter_resumes_after_copy_terminator(tmp_path) -> None:
+    """The role filter re-arms once the COPY block closes with a backslash-dot."""
+    payload = (
+        b"COPY app.notes (body) FROM stdin;\n"
+        b"CREATE ROLE postgres; inside the block\n"
+        b"\\.\n"
+        b"CREATE ROLE postgres;\n"
+        b"CREATE DATABASE testdb;\n"
+    )
+    result, written, _ = _fake_restore(payload, tmp_path)
+
+    assert b"CREATE ROLE postgres; inside the block\n" in written
+    assert b"CREATE ROLE postgres;\n" not in written
+    assert result["filtered_role_statements"] == 1
+
+
+def test_restore_reaps_psql_when_it_exits_mid_stream(tmp_path) -> None:
+    """psql runs with ON_ERROR_STOP=1, so it can close the pipe while we write."""
+    from libs.backup_restore import BackupRestoreError
+
+    class EarlyExitStdin:
+        def __init__(self) -> None:
+            self.count = 0
+
+        def write(self, data: bytes) -> None:
+            self.count += 1
+            if self.count > 2:
+                raise BrokenPipeError(32, "Broken pipe")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    payload = b"".join(b"INSERT INTO t VALUES (%d);\n" % i for i in range(50))
+
+    # The subprocess exit code is the real diagnosis, so it must be reaped and
+    # surfaced instead of letting the raw BrokenPipeError escape.
+    with pytest.raises(BackupRestoreError, match="exit code 3"):
+        _fake_restore(payload, tmp_path, stdin_cls=EarlyExitStdin, wait_rc=3)
+
+
+def test_rehearsal_all_attempts_every_service_when_one_fails(monkeypatch, capsys) -> None:
+    """One failing service never stops the others (#618)."""
+    import tools.run_restore_rehearsal as rrr
+
+    attempted: list[str] = []
+
+    def fake_run_rehearsal(*, manifest_path, service_id, database, keep_container):
+        attempted.append(service_id)
+        if service_id == "finance_report/postgres":
+            raise RuntimeError("sandbox container failed to become ready")
+        return {"status": "PASS", "service_id": service_id}
+
+    monkeypatch.setattr(rrr, "run_rehearsal", fake_run_rehearsal)
+    monkeypatch.setattr("sys.argv", ["run_restore_rehearsal", "--service-id", "all"])
+
+    rc = rrr.main()
+
+    assert attempted == ["finance_report/postgres", "truealpha/postgres"]
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "finance_report/postgres" in out
+    assert "RESTORE_PROOF: FAIL" in out
+    assert "RESTORE_PROOF: PASS" in out

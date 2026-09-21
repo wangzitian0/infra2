@@ -54,7 +54,7 @@ def run_rehearsal(
     image: str = "postgres:16-alpine",
     keep_container: bool = False,
 ) -> dict[str, Any]:
-    if not re.fullmatch(r"^[a-zA-Z0-9_]+$", database):
+    if not re.fullmatch(r"[a-zA-Z0-9_]+", database):
         raise ValueError(f"Invalid database name: {database!r}")
 
     safe_name = service_id.replace("/", "-")
@@ -260,6 +260,12 @@ def main() -> int:
     parser.add_argument("--keep-container", action="store_true")
     args = parser.parse_args()
 
+    if args.service_id == "all" and args.database:
+        parser.error(
+            "--database cannot be combined with --service-id all: "
+            "each service restores into its own database"
+        )
+
     # If manifest default doesn't exist, search for latest TS manifest
     manifest_path = args.manifest
     if not Path(manifest_path).exists():
@@ -273,24 +279,37 @@ def main() -> int:
         else [args.service_id]
     )
 
-    all_passed = True
+    # One failing service never stops the others (#618): every service is
+    # attempted, and the run exits 1 naming each failure. Otherwise a permanent
+    # failure in the first service would silently leave the rest never drilled.
+    failures: list[str] = []
     for s_id in services:
         db = args.database or default_database_for_service(s_id)
-        report = run_rehearsal(
-            manifest_path=manifest_path,
-            service_id=s_id,
-            database=db,
-            keep_container=args.keep_container,
-        )
         print("\n" + "=" * 60)
         print(f"RESTORE REHEARSAL PROOF REPORT ({s_id}):")
         print("=" * 60)
+        try:
+            report = run_rehearsal(
+                manifest_path=manifest_path,
+                service_id=s_id,
+                database=db,
+                keep_container=args.keep_container,
+            )
+        except Exception as exc:  # noqa: BLE001 - one service must not abort the run
+            failures.append(s_id)
+            print(f"[!] rehearsal raised: {type(exc).__name__}: {exc}")
+            print("RESTORE_PROOF: FAIL")
+            continue
         print(json.dumps(report, indent=2))
         print(f"RESTORE_PROOF: {report['status']}")
         if report["status"] != "PASS":
-            all_passed = False
+            failures.append(s_id)
 
-    return 0 if all_passed else 1
+    if failures:
+        print(f"\n[!] restore rehearsal FAILED for: {', '.join(failures)}")
+        return 1
+    print(f"\n[+] restore rehearsal passed for: {', '.join(services)}")
+    return 0
 
 
 if __name__ == "__main__":

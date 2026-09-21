@@ -9,6 +9,7 @@ basic database invariants.
 from __future__ import annotations
 
 import gzip
+import re
 import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -19,6 +20,16 @@ from libs.backup_verification import (
     _parse_timestamp,
     verify_backup_manifest,
 )
+
+
+# pg_dumpall emits the source cluster's own superuser role, but the rehearsal
+# sandbox already bootstraps as `postgres`, so re-creating it aborts the restore
+# under ON_ERROR_STOP=1. Only these exact statement prefixes are dropped.
+_REDUNDANT_ROLE_STMTS = (b"CREATE ROLE postgres;", b"CREATE ROLE postgres ")
+
+# `COPY <table> (...) FROM stdin;` opens a raw-data block terminated by `\.`.
+# Every line in between is table data, not SQL.
+_COPY_FROM_STDIN = re.compile(rb"^COPY\s.*\sFROM\s+stdin;", re.IGNORECASE)
 
 
 class BackupRestoreError(RuntimeError):
@@ -192,16 +203,35 @@ def run_postgres_restore_rehearsal(
         "ON_ERROR_STOP=1",
         restore_target_db,
     ]
+    filtered_roles = 0
     with gzip.open(archive_path, "rb") as dump:
         proc = popen(restore_cmd, stdin=subprocess.PIPE)
-        assert proc.stdin is not None
-        with proc.stdin:
-            for line in dump:
-                if line.startswith(
-                    (b"CREATE ROLE postgres;", b"CREATE ROLE postgres ")
-                ):
-                    continue
-                proc.stdin.write(line)
+        if proc.stdin is None:
+            raise BackupRestoreError("restore subprocess exposed no stdin pipe")
+        try:
+            with proc.stdin:
+                in_copy_data = False
+                for line in dump:
+                    # Inside a COPY block every line is raw table data, so the
+                    # role filter must not inspect it: a row whose first column
+                    # starts with the prefix would be dropped and the restore
+                    # would silently lose data while still reporting a pass.
+                    if in_copy_data:
+                        if line.rstrip(b"\r\n") == b"\\.":
+                            in_copy_data = False
+                        proc.stdin.write(line)
+                        continue
+                    if line.startswith(_REDUNDANT_ROLE_STMTS):
+                        filtered_roles += 1
+                        continue
+                    if _COPY_FROM_STDIN.match(line):
+                        in_copy_data = True
+                    proc.stdin.write(line)
+        except BrokenPipeError:
+            # psql runs with ON_ERROR_STOP=1, so it can exit while we are still
+            # streaming. Its own exit code and stderr are the real diagnosis,
+            # so fall through and reap it instead of surfacing the pipe error.
+            pass
         rc = proc.wait()
     if rc != 0:
         raise BackupRestoreError(f"postgres restore command failed with exit code {rc}")
@@ -234,4 +264,5 @@ def run_postgres_restore_rehearsal(
         "service_id": plan.service_id,
         "target_container": plan.target_container,
         "invariants_checked": len(plan.invariant_sql),
+        "filtered_role_statements": filtered_roles,
     }
