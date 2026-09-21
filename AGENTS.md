@@ -67,5 +67,8 @@
 | 接入应用 / 新手上手 | [`docs/onboarding/README.md`](docs/onboarding/README.md) |
 | 改某一层基础设施 | 该层 `README.md`（[bootstrap](bootstrap/README.md) / [platform](platform/README.md) / [tools](tools/README.md) / [libs](libs/README.md)） |
 
-`CLAUDE.md` 是本文的软链，两个文件名指向同一份内容——Claude Code 不读裸 `AGENTS.md`，
-Pi/Codex 读，这对软链是承重件，由 `ws-agents-lint` 看守。
+`CLAUDE.md` 与本文同内容：它只有一行 `@AGENTS.md`，把本文导入。**真源只有 `AGENTS.md`，
+改规则改这里。** Claude Code 自 v2.1.277 起也能直接读 `AGENTS.md`，但工作目录或任一祖先目录
+存在 `CLAUDE.md` 时它只读 `CLAUDE.md`——本机 `~/zitian/CLAUDE.md` 就是这样一个祖先，所以
+导入文件必须入库，不能只靠原生支持。用导入而非软链：软链在 Windows 上会被 git checkout 成
+一行纯文本，且 Edit/Write 工具拒绝写穿软链。此文件由 `libs/tests/test_claude_md_import.py` 看守。
