@@ -123,6 +123,20 @@ SKIP_PATHS: set[str] = set()
 
 LINK_RE = re.compile(r"\[([^\]]*)\]\(([^)\s]+?)\)")
 
+# Code spans are examples, not links. This checker's own project notes describe
+# the gap it fills by quoting the shape of a Markdown link, and that example was
+# promptly reported as a dead link -- correctly, since a checker cannot tell a
+# specimen from the real thing by looking at it.
+#
+# Stripped per line, never across the file: one line holding an odd number of
+# backticks would otherwise misalign every pair after it and silence real links.
+# A label that merely contains a code span, [`name`](path), keeps its target,
+# because only the span between the backticks is removed. Blanked to the same
+# width rather than collapsed, so offsets still line up with the original text
+# and a reported link can be quoted as the author wrote it instead of with its
+# label hollowed out.
+CODE_SPAN_RE = re.compile(r"`+[^`\n]*`+")
+
 # Keyed on (file, link target with any anchor stripped), so an entry stays
 # matched when only the section anchor changes.
 #
@@ -134,13 +148,24 @@ KNOWN_UNRESOLVED = {
         "e2e_regressions/tests/data/postgresql/README.md",
         "../../../../docs/ssot/db.business_pg.md",
     ): (
-        "This suite calls itself the Test Anchor for a Business PostgreSQL SSOT "
-        "that does not exist. docs/ssot/ has db.platform_pg.md instead, and "
-        "retargeting is not obviously correct: platform_pg describes 'Platform "
-        "層的共享 PostgreSQL', its Proof section is numbered 4 while this link "
-        "cites #5, and it carries no back-reference to this suite. So either "
-        "business PG lost its SSOT and needs one, or the two are the same "
-        "subject under two names. That is a content decision, not a path fix."
+        "Answered, but the answer is a missing document rather than a wrong "
+        "path. db.business_pg.md existed: at 8c1bce8 it and db.platform_pg.md "
+        "excluded each other in their blacklists (business forbade apps from "
+        "connecting to Platform PG; platform forbade business data on it, "
+        "whitelisting only Vault and Casdoor), and its Proof section really was "
+        "numbered 5, with this suite as its Test Anchor and a reciprocal Used-by "
+        "entry. So the #5 anchor was correct and later rotted. It was deleted in "
+        "a3e546e (#435) as a 'never built' planned doc on a scan for the string "
+        "db.business_pg, which missed that finance_report/01.postgres already "
+        "existed. Three Postgres instances exist today, two subjects: platform "
+        "(no POSTGRES_DB) and per-app (POSTGRES_DB: finance_report, truealpha). "
+        "Retargeting to db.platform_pg.md would assert business data lives on "
+        "the platform instance and give it a second test anchor alongside "
+        "ops.storage.md#5. Reviving the old document verbatim would also be "
+        "wrong: business PG is now per-app, not one shared instance. The "
+        "remaining question is the shape -- one harness SSOT, one per app, or "
+        "app-repo owned -- which is an owner decision, so the link stays "
+        "tracked rather than guessed."
     ),
 }
 
@@ -171,8 +196,13 @@ def main() -> int:
             text = open(path, encoding="utf-8").read()
         except (OSError, UnicodeDecodeError):
             continue
-        for match in LINK_RE.finditer(text):
-            label, link = match.group(1), match.group(2)
+        scan = "\n".join(
+            CODE_SPAN_RE.sub(lambda m: " " * len(m.group(0)), ln)
+            for ln in text.splitlines()
+        )
+        for match in LINK_RE.finditer(scan):
+            label = text[match.start(1) : match.end(1)]
+            link = match.group(2)
             if link.startswith(("http://", "https://", "mailto:", "#", "//")):
                 continue
             target = link.split("#", 1)[0]
