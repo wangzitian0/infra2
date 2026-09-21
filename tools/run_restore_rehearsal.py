@@ -38,7 +38,9 @@ def wait_for_postgres(container: str, user: str, timeout: int = 30) -> None:
         if res.returncode == 0:
             return
         time.sleep(1)
-    raise RuntimeError(f"Sandbox container {container} failed to become ready within {timeout}s")
+    raise RuntimeError(
+        f"Sandbox container {container} failed to become ready within {timeout}s"
+    )
 
 
 def run_rehearsal(
@@ -54,7 +56,7 @@ def run_rehearsal(
     container = f"{safe_name}-restore-rehearsal-throwaway"
     bootstrap_user = "rehearsal_bootstrap"
     start_time = time.time()
-    
+
     entries = {entry.service_id: entry for entry in load_backup_inventory()}
     if service_id not in entries:
         raise ValueError(f"Unknown backup service: {service_id}")
@@ -71,10 +73,15 @@ def run_rehearsal(
     print(f"[*] Starting sandbox container: {container} (image: {image})...")
     subprocess.run(["docker", "rm", "-f", container], capture_output=True)
     run_cmd = [
-        "docker", "run", "-d",
-        "--name", container,
-        "-e", f"POSTGRES_PASSWORD={bootstrap_user}",
-        "-e", f"POSTGRES_USER={bootstrap_user}",
+        "docker",
+        "run",
+        "-d",
+        "--name",
+        container,
+        "-e",
+        f"POSTGRES_PASSWORD={bootstrap_user}",
+        "-e",
+        f"POSTGRES_USER={bootstrap_user}",
         "--memory=1g",
         "--cpus=1",
         image,
@@ -90,7 +97,9 @@ def run_rehearsal(
         print(f"[*] Materializing artifact from {artifact.get('remote_uri')}...")
         dl_dir = Path(download_dir)
         archive_path = materialize_artifact(artifact, dl_dir)
-        print(f"[+] Materialized archive: {archive_path} ({archive_path.stat().st_size} bytes)")
+        print(
+            f"[+] Materialized archive: {archive_path} ({archive_path.stat().st_size} bytes)"
+        )
 
         # 4. Define invariants
         invariants = (
@@ -111,21 +120,38 @@ def run_rehearsal(
         )
 
         # 5. Execute restore & invariants
-        print(f"[*] Restoring into {container} and running {len(invariants)} invariants...")
-        rehearsal_result = run_postgres_restore_rehearsal(plan)
+        print(
+            f"[*] Restoring into {container} and running {len(invariants)} invariants..."
+        )
+        run_postgres_restore_rehearsal(plan)
         print("[+] Rehearsal ingestion and base invariants PASSED.")
 
         # 6. Collect detailed business row counts for proof
         def query_val(sql: str) -> str:
             res = subprocess.run(
-                ["docker", "exec", container, "psql", "-U", bootstrap_user, "-d", database, "-Atqc", sql],
+                [
+                    "docker",
+                    "exec",
+                    container,
+                    "psql",
+                    "-U",
+                    bootstrap_user,
+                    "-d",
+                    database,
+                    "-Atqc",
+                    sql,
+                ],
                 capture_output=True,
                 text=True,
                 check=True,
             )
             return res.stdout.strip()
 
-        tables_count = int(query_val("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"))
+        tables_count = int(
+            query_val(
+                "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"
+            )
+        )
         accounts_count = int(query_val("SELECT count(*) FROM accounts"))
         alembic_version = query_val("SELECT version_num FROM alembic_version")
         db_size_bytes = int(query_val(f"SELECT pg_database_size('{database}')"))
