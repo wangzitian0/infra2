@@ -62,8 +62,8 @@ def run_rehearsal(
     image: str = "postgres:16-alpine",
     keep_container: bool = False,
 ) -> dict[str, Any]:
-    db = database or default_database_for_service(service_id)
-    if not re.fullmatch(r"[a-zA-Z0-9_]+", db):
+    db = default_database_for_service(service_id) if database is None else database
+    if not re.fullmatch(r"^[a-zA-Z0-9_]+$", db):
         raise ValueError(f"Invalid database name: {db!r}")
 
     safe_name = service_id.replace("/", "-")
