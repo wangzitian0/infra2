@@ -107,14 +107,14 @@ def _unlimited_services(path: Path) -> tuple[list[str], str | None]:
                 continue
             if "extends" in spec:
                 continue  # the ceiling may be in the file it extends
-            if _is_ceiling(spec.get("mem_limit")):
-                continue
-            node: object = spec.get("deploy")
-            for key in ("resources", "limits"):
-                node = node.get(key) if isinstance(node, dict) else None
-            if isinstance(node, dict) and _is_ceiling(node.get("memory")):
-                continue
-            bad.append(str(name))
+            # ops.standards.md §5 names compose fields -- mem_limit /
+            # mem_reservation / cpu_shares -- and never the `deploy.resources`
+            # form. Accepting a spelling the SSOT does not sanction, and then
+            # recommending it in the failure message, would teach contributors
+            # to write something the standard does not describe. Verified that
+            # no service in the tree relies on it today.
+            if not _is_ceiling(spec.get("mem_limit")):
+                bad.append(str(name))
     if not saw_services:
         return [], "no services"
     return bad, None
@@ -153,21 +153,29 @@ def main() -> int:
         return 1
 
     new = sorted(unlimited - baseline)
-    fixed = sorted(baseline - unlimited)
+    # An entry whose file no longer exists is stale, not "now limited" -- the
+    # two need different messages or a rename reads as a fix.
+    gone = sorted(
+        e for e in baseline - unlimited if not (ROOT / e.split("::", 1)[0]).exists()
+    )
+    fixed = sorted(e for e in baseline - unlimited if e not in gone)
     if new:
         print("compose services without a memory ceiling, not in the baseline:\n")
         for item in new:
             print(f"  {item}")
         print(
             "\nops.standards.md §5: 每个容器必须声明资源限额。Give the service a\n"
-            "`mem_limit:` (or `deploy.resources.limits.memory`) above its observed\n"
-            "peak. A value of 0 is not a ceiling -- Docker reads it as unlimited."
+            "`mem_limit:` above its observed peak -- the SSOT names compose fields\n"
+            "(mem_limit / mem_reservation / cpu_shares), not deploy.resources.\n"
+            "A value of 0 is not a ceiling: Docker reads it as unlimited."
         )
         return 1
-    if fixed:
-        print("baseline may only shrink — these now declare a ceiling, remove them:\n")
+    if fixed or gone:
+        print("baseline may only shrink — update it:\n")
         for item in fixed:
-            print(f"  {item}")
+            print(f"  now declares a ceiling, remove: {item}")
+        for item in gone:
+            print(f"  file no longer exists, remove: {item}")
         return 1
     print(f"compose resource limits: {len(unlimited)} grandfathered, 0 new.")
     return 0

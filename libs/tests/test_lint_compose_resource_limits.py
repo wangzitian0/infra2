@@ -50,20 +50,20 @@ def test_a_real_size_is_a_ceiling(tmp_path, value):
     assert lint._unlimited_services(path)[0] == [], value
 
 
-def test_the_deploy_form_counts_and_is_parsed_the_same_way(tmp_path):
-    ok = _write(
-        tmp_path,
-        "services:\n  app:\n    image: nginx\n    deploy:\n"
-        "      resources:\n        limits:\n          memory: 512M\n",
+def test_the_deploy_form_is_not_a_ceiling_because_the_ssot_does_not_name_it(
+    tmp_path_factory,
+):
+    # ops.standards.md §5 names compose fields -- mem_limit / mem_reservation /
+    # cpu_shares -- and never `deploy.resources.limits.memory`. Accepting a
+    # spelling the standard does not describe, and recommending it in the
+    # failure message, would teach contributors to write something the SSOT
+    # does not sanction. No service in the tree relies on it.
+    path = _write(
+        tmp_path_factory.mktemp("d"),
+        "services:\n  app:\n    image: nginx\n"
+        "    deploy:\n      resources:\n        limits:\n          memory: 512M\n",
     )
-    assert lint._unlimited_services(ok)[0] == []
-    zero = tmp_path / "z.yaml"
-    zero.write_text(
-        "services:\n  app:\n    image: nginx\n    deploy:\n"
-        "      resources:\n        limits:\n          memory: '0'\n",
-        encoding="utf-8",
-    )
-    assert lint._unlimited_services(zero)[0] == ["app"]
+    assert lint._unlimited_services(path)[0] == ["app"]
 
 
 def test_a_malformed_deploy_is_non_compliant_not_a_crash(tmp_path):
