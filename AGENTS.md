@@ -1,6 +1,6 @@
 # Infra2 Harness 与基础设施 AI Agent 行为准则
 
-> **权限边界**：除非明确指定，否则 AI 不可以自动修改本文件。AI 仅可在"合流门禁"全部满足后执行 Merge PR：owner 批准既可以是对当前 PR head 的明确批准，也可以是 [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.md) 中"会话级合流授权"所限定的范围；任一状态失败、缺失或无法验证时必须 fail-closed，禁止合流。
+> **权限边界**：AI 修改本文件需 owner 明确指示，并在 PR description 中引用那句指示。AI 可在"合流门禁"全部满足后自行 Merge PR（2026-09-21 owner 授予常设合流权，取代逐-head 与会话级授权，细则见 [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.md)）；任一状态失败、缺失或无法验证时必须 fail-closed，禁止合流。
 
 > **本文只放判定所需的不变量。** 程序性细则按需加载，入口见下方"按需加载"。
 > 长期常驻的指令会稀释红线的权重——规则越长越不被遵守。
@@ -37,11 +37,13 @@
 1. **同一 head**：检查、review、合流针对同一个 `head SHA`；不得用本地旧结果或过期 review 代替。
 2. **Merge Authority 全绿**：[`docs/ssot/ci-gate-inventory.yaml`](docs/ssot/ci-gate-inventory.yaml) 中适用且 `blocks_merge: true` 的检查全部 success；pending / failure / cancelled / 意外 skipped / 读不到，都算不满足。
 3. **Review 已闭环**：未 resolved 发现按 severity 加权（high=1.0 / middle=0.5 / low=0.25，未标注按 middle），**总分 ≥ 1.0 即禁止合流**。
-4. **授权在范围内**：逐-head 批准，或落在会话级授权范围内。判定统一走
+4. **绿是当前的，且必需检查确实报告过**：兄弟 PR 合入后改写了本 PR 也动的文件时，检查仍是绿的
+   却没重跑；`blocks_merge` 的检查被 skip 时 GitHub 也接受为已满足。判定统一走
    `python -m tools.pr_merge_gate <n> --policy either --request-review --merge`
    （exit 1 = 未到时机，exit 2 = 需要 owner），不靠肉眼看表。
-5. **两类必须回到 owner**：触发 apply / deploy 或有不可逆副作用的 PR；修改受保护文件
-   （`AGENTS.md`、`CLAUDE.md`，及各 App 标注为 protected 的架构文档）的 PR。
+5. **一类必须回到 owner**：**回滚撤销不了**的变更——L1 bootstrap self-update、runner 重建、
+   observability apply、prod apply，以及改动"决定合流的东西"本身。打临时槽的 canary 与预览
+   重部署不属此类。受保护文件改为引用 owner 指示即可，不再单独要求二次批准。
 
 ## 🛡️ 安全与红线
 
