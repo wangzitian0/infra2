@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import pytest
 
 from tools.omca_gate_policy import evaluate_audit_report, main
 
@@ -110,13 +109,37 @@ def test_sha_mismatch_blocks() -> None:
     assert any("SHA mismatch" in b for b in blocking)
 
 
+def test_non_strict_mode_does_not_block_on_heuristic_topics() -> None:
+    report = {
+        "target": ".",
+        "verdict": "PASS",
+        "findings": [
+            {
+                "category": "MODULE_CONTRACT",
+                "scout": "M2_SPEC_DEVIATION",
+                "topic": "PPT Only Project (No Implementation)",
+                "severity": "HIGH",
+                "details": "Only docs found",
+                "evidence": "0 source files",
+            }
+        ],
+    }
+    # strict=True blocks
+    passed_strict, blocking_strict, _ = evaluate_audit_report(report, strict=True)
+    assert passed_strict is False
+    assert len(blocking_strict) == 1
+
+    # strict=False allows HIGH severity heuristic topics to pass
+    passed_lenient, blocking_lenient, warnings = evaluate_audit_report(report, strict=False)
+    assert passed_lenient is True
+    assert blocking_lenient == []
+    assert len(warnings) == 1
+
+
 def test_main_cli_exit_codes(tmp_path: Path) -> None:
     clean_report = tmp_path / "clean.json"
     clean_report.write_text(json.dumps({"verdict": "PASS", "findings": []}))
 
-    # Clean report -> exit 0
-    assert main.__wrapped__ if hasattr(main, "__wrapped__") else True
-    # Test via sys.argv override
     import sys
     orig_argv = sys.argv
     try:

@@ -2,10 +2,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-import pytest
 import yaml
 
-from tools.ci_gate_lint import lint_workflow, lint_workflows_dir
+from tools.ci_gate_lint import lint_workflow
 from tools.ci_spec import (
     GATE_WALL_CLOCK_BUDGET_S,
     MAX_SINGLE_TEST_S,

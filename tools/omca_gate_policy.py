@@ -71,8 +71,8 @@ def evaluate_audit_report(
             blocking.append(msg)
             continue
 
-        # Check fatal topics even if marked HIGH (e.g. PPT Project / Zero Tests)
-        if topic.lower() in BLOCKING_TOPICS and severity in ("HIGH", "CRITICAL", "BLOCKER"):
+        # Check fatal topics when in strict mode (e.g. PPT Project / Zero Tests)
+        if strict and topic.lower() in BLOCKING_TOPICS and severity in ("HIGH", "CRITICAL", "BLOCKER"):
             blocking.append(f"FATAL ARCHITECTURAL DEFECT: {msg}")
             continue
 
@@ -90,7 +90,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Evaluate OMCA audit report against CI merge gate policy.")
     parser.add_argument("report_file", type=Path, help="Path to audit.json file or '-' for stdin")
     parser.add_argument("--expect-sha", type=str, default=None, help="Expected head commit SHA")
-    parser.add_argument("--strict", action="store_true", default=True, help="Fail-closed on any critical finding")
+    parser.add_argument(
+        "--no-strict",
+        dest="strict",
+        action="store_false",
+        default=True,
+        help="Do not block on architectural heuristic topics, only on explicit CRITICAL/BLOCKER severities",
+    )
     args = parser.parse_args()
 
     try:

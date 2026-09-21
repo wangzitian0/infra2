@@ -9,7 +9,6 @@ Validates GitHub Actions workflow definitions against `tools/ci_spec.py`:
 from __future__ import annotations
 
 import argparse
-import glob
 import re
 import sys
 from pathlib import Path
