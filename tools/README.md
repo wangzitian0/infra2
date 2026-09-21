@@ -16,7 +16,10 @@ reusable logic belongs in `libs/` (see the division-of-labor note below):
    watchdogs), `dns_drift_report.py` /
    `dokploy_config_drift.py` (drift reports), `pr_merge_gate.py` (the AGENTS.md
    session merge authority as a check: checks, threads, settling, protected and
-   deploy-triggering paths; `--merge` squash-merges only a ready head; gh's
+   deploy-triggering paths, plus GitHub's own `mergeable`/`mergeStateStatus`
+   and a stale-green guard -- green proves the tree the checks ran on, so a
+   sibling merge that rewrites this PR's files invalidates it without any
+   check going red; `--merge` squash-merges only a ready head; gh's
    "no checks reported" before the first check registers counts as zero checks),
    `orchestrator_guard_hook.py` (an owner-wired Claude Code hook that keeps the
    workspace orchestrator's foreground calls under 4 minutes and its watch armed;
