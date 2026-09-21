@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import tempfile
@@ -53,6 +54,9 @@ def run_rehearsal(
     image: str = "postgres:16-alpine",
     keep_container: bool = False,
 ) -> dict[str, Any]:
+    if not re.fullmatch(r"^[a-zA-Z0-9_]+$", database):
+        raise ValueError(f"Invalid database name: {database!r}")
+
     safe_name = service_id.replace("/", "-")
     container = f"{safe_name}-restore-rehearsal-throwaway"
     bootstrap_user = "postgres"
@@ -270,7 +274,6 @@ def main() -> int:
     )
 
     all_passed = True
-    reports = []
     for s_id in services:
         db = args.database or default_database_for_service(s_id)
         report = run_rehearsal(
@@ -279,7 +282,6 @@ def main() -> int:
             database=db,
             keep_container=args.keep_container,
         )
-        reports.append(report)
         print("\n" + "=" * 60)
         print(f"RESTORE REHEARSAL PROOF REPORT ({s_id}):")
         print("=" * 60)

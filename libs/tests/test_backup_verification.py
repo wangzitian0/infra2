@@ -442,3 +442,14 @@ def test_run_postgres_restore_rehearsal_filters_create_role_postgres(tmp_path) -
     assert b"CREATE ROLE postgres;\n" not in written_lines
     assert b"CREATE ROLE app_user;\n" in written_lines
     assert b"CREATE DATABASE testdb;\n" in written_lines
+
+
+def test_run_restore_rehearsal_rejects_unsafe_database_name() -> None:
+    from tools.run_restore_rehearsal import run_rehearsal
+
+    with pytest.raises(ValueError, match="Invalid database name"):
+        run_rehearsal(
+            manifest_path="/dummy/manifest.json",
+            service_id="finance_report/postgres",
+            database="finance_report'; DROP TABLE accounts; --",
+        )
