@@ -375,6 +375,31 @@ invoke vault-audit.self-refresh --json-output
 invoke vault-audit.self-refresh --observations=/path/to/observations.json
 ```
 
+## doc_link_check.py
+
+Fails when a relative Markdown link in this repository points at nothing.
+AGENTS.md builds the wiki on cross-references (the 0/1 級 entry map, the 互引原則,
+every SSOT citation) and nothing verified them: 29 were dead when the check was
+written. Run by [`docs.yml`](../.github/workflows/docs.yml) before the mkdocs build.
+
+Three things are deliberately not failures, because each is real in a working
+tree or in CI but absent from a plain checkout:
+
+- **Submodules** — skipped by the paths `.gitmodules` registers, not by directory
+  name. CI checks out non-recursively, so those directories are empty; name
+  matching would also wrongly exclude this repository's own top-level
+  `truealpha/` and `finance_report/`.
+- **Generated, gitignored targets** — reported as an informational line. A
+  sibling repository links at a generated `db-schema.md` from 13 places; every
+  link is correct and a checker without this concept calls all 13 broken.
+- **`KNOWN_UNRESOLVED`** — links whose target's existence is an open question,
+  each recorded with the decision that is pending. A tracked question, never a
+  guessed target.
+
+```bash
+python3 tools/doc_link_check.py
+```
+
 ## References
 
 - [文档索引](../docs/README.md)
