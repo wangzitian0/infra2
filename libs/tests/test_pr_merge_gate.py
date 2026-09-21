@@ -761,17 +761,35 @@ def _green(**overrides) -> gate.HeadFacts:
     return _facts(**base)
 
 
-def test_a_required_check_that_skipped_is_not_green():
-    # Measured before this existed: all seven required checks reported as
-    # `skipping` gave ready=True with an empty reasons list.
-    # ci-gate-inventory.yaml names how that happens -- when detect-changes
-    # fails, every job depending on it is skipped rather than run.
+def test_a_docs_only_pr_whose_required_checks_skipped_is_still_mergeable():
+    # This replaces a test asserting the opposite, which was wrong and broke a
+    # designed path. infra-ci.yml:69-82 states that skipping a required job via
+    # `if:` is a passing state: a PR whose whole diff is Markdown needs none of
+    # those gates, and #709 and #673 merged in exactly that shape. Blocking it
+    # made every docs-only PR unmergeable forever -- including the one carrying
+    # this repository's own merge-authority rules.
+    #
+    # The case the old assertion meant to catch, `detect-changes` failing and
+    # taking its dependents down as skipped, is covered by the next test: that
+    # job is itself red, and `not_green` scans every check.
     required = sorted(gate._required_checks()[0])
     verdict = gate.evaluate(
         _green(checks=tuple((name, "skipping") for name in required)), now=NOW
     )
+    assert verdict.ready
+
+
+def test_detect_changes_failing_still_blocks_even_though_its_dependents_skipped():
+    required = sorted(gate._required_checks()[0])
+    verdict = gate.evaluate(
+        _green(
+            checks=tuple((name, "skipping") for name in required)
+            + (("Detect Non-Doc Changes", "fail"),)
+        ),
+        now=NOW,
+    )
     assert not verdict.ready
-    assert any("skipped rather than run" in r for r in verdict.reasons)
+    assert any("Detect Non-Doc Changes" in r for r in verdict.reasons)
 
 
 def test_a_required_check_that_never_reported_is_not_absence_of_a_problem():
@@ -802,6 +820,7 @@ def test_changing_what_decides_merges_needs_the_owner():
         "tools/pr_merge_gate.py",
         "libs/tests/test_pr_merge_gate.py",
         "docs/ssot/ops.merge-gate.md",
+        "docs/ssot/ci-gate-inventory.yaml",
     ):
         verdict = gate.evaluate(_green(files=(path,)), now=NOW)
         assert not verdict.ready, path

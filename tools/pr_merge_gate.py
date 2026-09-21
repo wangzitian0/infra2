@@ -64,6 +64,10 @@ SELF_GOVERNING_FILES = (
     # skips every required check, so an agent could rewrite its own authority
     # and merge it with nothing run and nothing asked.
     "docs/ssot/ops.merge-gate.md",
+    # Flipping one gate to `blocks_merge: false` removes it from the required
+    # set that judges the very PR doing the flipping, and ci_gate_audit does
+    # not cross-check that field against the live ruleset.
+    "docs/ssot/ci-gate-inventory.yaml",
 )
 PROTECTED_FILES = ("AGENTS.md", "CLAUDE.md")
 # A push to main under these paths deploys (deploy.yml: the runner rebuild;
@@ -187,12 +191,18 @@ GREEN_BUCKETS = frozenset({"pass", "skipping"})
 def _required_checks() -> tuple[frozenset[str], bool]:
     """Display names of the `blocks_merge: true` gates, and whether they read.
 
-    `skipping` counts as green above, which is right for a job a path filter
-    legitimately excluded and wrong for a gate that must run. Measured before
-    this existed: with all seven required checks reported as `skipping`, the
-    verdict was ready with an empty reasons list. ci-gate-inventory.yaml:78-86
-    names the exact way that happens -- if `detect-changes` fails, every job
-    depending on it is skipped rather than run.
+    This catches a required gate that never registered at all. It deliberately
+    does NOT block on `skipping`: infra-ci.yml:69-82 states that skipping a
+    required job via `if:` is a designed passing state -- a PR whose whole diff
+    is Markdown needs none of those gates, and PRs #709 and #673 merged in
+    exactly that shape. An earlier version of this function blocked on it, which
+    made every docs-only PR unmergeable forever, including the one carrying this
+    repository's own merge-authority rules.
+
+    The case that version meant to catch -- `detect-changes` failing and taking
+    its dependents down as `skipped` -- is already caught, because that job is
+    itself red and `not_green` scans every check. The skip branch bought nothing
+    and cost the designed path.
 
     The inventory stores a job key; `gh pr checks` reports the workflow's
     display name, so the name is read from the workflow rather than guessed.
@@ -655,17 +665,8 @@ def evaluate(
         )
     reported = {name for name, _ in facts.checks}
     missing = sorted(required - reported)
-    skipped = sorted(
-        name
-        for name, verdict in facts.checks
-        if name in required and verdict in ("skipping", "SKIPPED")
-    )
     if missing:
         reasons.append(f"required check(s) never reported: {', '.join(missing)}")
-    if skipped:
-        reasons.append(
-            f"required check(s) skipped rather than run: {', '.join(skipped)}"
-        )
     if not facts.checks:
         reasons.append("no checks reported yet")
     if not_green:
