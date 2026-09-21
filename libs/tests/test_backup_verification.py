@@ -395,7 +395,7 @@ def test_run_postgres_restore_rehearsal_filters_create_role_postgres(tmp_path) -
     dump_file = tmp_path / "dump.sql.gz"
     with gzip.open(dump_file, "wb") as f:
         f.write(
-            b"CREATE ROLE postgres;\nCREATE ROLE app_user;\nCREATE DATABASE testdb;\n"
+            b"CREATE ROLE postgres;\nCREATE ROLE postgres WITH SUPERUSER;\nCREATE ROLE app_user;\nCREATE DATABASE testdb;\n"
         )
 
     plan = RestoreRehearsalPlan(
@@ -440,6 +440,7 @@ def test_run_postgres_restore_rehearsal_filters_create_role_postgres(tmp_path) -
     res = run_postgres_restore_rehearsal(plan, popen=mock_popen, runner=mock_runner)
     assert res["status"] == "pass"
     assert b"CREATE ROLE postgres;\n" not in written_lines
+    assert b"CREATE ROLE postgres WITH SUPERUSER;\n" not in written_lines
     assert b"CREATE ROLE app_user;\n" in written_lines
     assert b"CREATE DATABASE testdb;\n" in written_lines
 

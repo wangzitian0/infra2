@@ -197,7 +197,9 @@ def run_postgres_restore_rehearsal(
         assert proc.stdin is not None
         with proc.stdin:
             for line in dump:
-                if line.startswith(b"CREATE ROLE postgres;"):
+                if line.startswith(
+                    (b"CREATE ROLE postgres;", b"CREATE ROLE postgres ")
+                ):
                     continue
                 proc.stdin.write(line)
         rc = proc.wait()
