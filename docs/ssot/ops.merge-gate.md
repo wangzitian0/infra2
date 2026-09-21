@@ -20,10 +20,10 @@
 - **Merge Authority 全绿**：[`docs/ssot/ci-gate-inventory.yaml`](ci-gate-inventory.yaml) 中该变更适用且 `blocks_merge: true` 的检查全部成功；pending、failure、cancelled、意外 skipped 或无法读取均视为不满足。
 - **Review 已闭环（加权阻塞）**：required review 已满足，所有 actionable conversation / review threads 已处理并 resolved；不得自行忽略、dismiss 或用过期 review 代替当前 head 审查。未 resolved 的 review 发现（不论来源——human reviewer、Copilot、/code-review 等）按 severity 加权计分：high=1.0、middle=0.5、low=0.25，未标注 severity 的按 middle 计。**未 resolved 发现的加权总分 ≥ 1.0 即视为未闭环、禁止合流**，不要求单条 high 才阻塞——例如 2 条 middle 或 4 条 low 累计到位同样阻塞。达到门槛后必须逐条修复，或取得 owner 对具体发现的明确豁免并留痕，方可标记为已处理。
 - **绿必须是当前的**：检查只证明它跑过的那棵树。兄弟 PR 合入后改写了本 PR 也动的文件时，
-  所有检查**仍然是绿的**——因为没有一个重跑过。gate 比较 `base...head` 并点名交集，出现即更新分支重跑。
+  所有检查**仍然是绿的**——因为没有一个重跑过。因此必须比较 `base...head`，交集非空即更新分支重跑。
 - **必需检查必须在场**：`blocks_merge: true` 的检查不仅要绿，还必须**确实报告过**。
   `detect-changes` 失败时其下游 job 是 skipped 而非 run，GitHub 仍接受为已满足——
-  gate 从 `ci-gate-inventory.yaml` 读出必需集并逐个核对在场与结论。
+  因此必需集须以 `ci-gate-inventory.yaml` 为准逐个核对在场与结论，而不是只看已报告的检查是否为绿。
 - **静置**：自动 review（Copilot）已对**当前 head SHA** 提交且距该 review ≥ 3 分钟；
   自动 review 迟迟不来时以距最后一次 push 12 分钟为上限（先到者为准）。
   fix-up push 不会自动触发 Copilot 复审，需显式请求。
@@ -35,8 +35,9 @@
   **当前 `head SHA`** 的明确批准；对旧 head 的批准不顺延。
   **不属于这一类**（因此可自行合流）：打临时槽/预览位的部署证明，例如 `ops-checks.yml` 的
   `deploy-v2-canary`（目标是保留的 `pr-0` 临时槽）、`report-branch-main` 预览重部署。
-- **改动"决定合流的东西"也需 owner**：gate 从工作树读取规则，而 AI 合流自己的 PR 时那就是该 PR 的分支——
-  改动因此由它自己引入的版本审判。`tools/pr_merge_gate.py`、它的测试、以及本文件属于这一类。
+- **改动"决定合流的东西"也需 owner（与可逆性无关）**：门禁从工作树读取规则，而 AI 合流自己的 PR
+  时那就是该 PR 的分支——改动因此由它自己引入的版本审判。这是自我裁决问题，不是不可逆问题，
+  所以单列。`tools/pr_merge_gate.py`、它的测试、`ci-gate-inventory.yaml` 以及本文件属于这一类。
 - **受保护文件**（`AGENTS.md`、`CLAUDE.md`，及各 App 标注为 protected 的架构文档）不再单独要求
   二次批准，但修改它们的 PR 必须在 description 中引用授权它的那句 owner 指令，使授权可追溯。
 - **合流后闭环**：使用仓库允许的合流方式；确认 merge commit 已落在目标分支并监看 post-merge checks。失败时立即停止 tag / promote，报告并修复，不得继续发布。
