@@ -576,3 +576,21 @@ def test_an_unreadable_workflow_directory_leaves_the_written_globs_standing(monk
         assert not gate._deploy_triggering("tools/deploy_v2.py")
     finally:
         gate._declared_deploy_globs.cache_clear()
+
+
+def test_the_deploy_reason_names_the_workflow_that_fires():
+    # "tools/deploy_v2.py triggers a deploy" makes an owner go and find out
+    # which one. Naming it makes the line a judgement they can act on.
+    verdict = gate.evaluate(_facts(files=("tools/deploy_v2.py",)), now=NOW)
+    reason = next(r for r in verdict.reasons if "trigger a deploy" in r)
+    assert "ops-checks.yml" in reason
+    assert "tools/deploy_v2.py" in reason
+
+
+def test_a_merge_triggered_path_needs_no_workflow_to_name():
+    # bootstrap/06.iac_runner has no workflow path filter -- the merge itself
+    # rebuilds the runner -- so there is nothing to cite and the reason says so
+    # by omission rather than by inventing a source.
+    verdict = gate.evaluate(_facts(files=("bootstrap/06.iac_runner/main.tf",)), now=NOW)
+    reason = next(r for r in verdict.reasons if "trigger a deploy" in r)
+    assert " via " not in reason

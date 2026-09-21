@@ -75,7 +75,7 @@ WORKFLOW_DIR = ROOT / ".github" / "workflows"
 
 
 @functools.lru_cache(maxsize=1)
-def _declared_deploy_globs() -> tuple[str, ...]:
+def _declared_deploy_globs() -> tuple[tuple[str, str], ...]:
     """`on.push.paths` of every workflow that pushes to main and deploys.
 
     The hand-written list above missed `ops-checks.yml`, whose 21 push paths
@@ -93,7 +93,7 @@ def _declared_deploy_globs() -> tuple[str, ...]:
     a malformed file must not take the gate offline -- and the written list
     above still stands on its own.
     """
-    globs: list[str] = []
+    globs: list[tuple[str, str]] = []
     try:
         names = sorted(WORKFLOW_DIR.glob("*.yml"))
     except OSError:
@@ -113,7 +113,7 @@ def _declared_deploy_globs() -> tuple[str, ...]:
             continue
         if not any(marker in text for marker in DEPLOY_MARKERS):
             continue
-        globs.extend(str(p) for p in (push.get("paths") or []))
+        globs.extend((str(p), path.name) for p in (push.get("paths") or []))
     return tuple(dict.fromkeys(globs))
 # gh's own classification of a check (`bucket`): pass / fail / pending / skipping /
 # cancel. `state` (SUCCESS, SKIPPED, IN_PROGRESS, …) is kept as the fallback for a gh
@@ -342,9 +342,21 @@ def request_copilot_review(facts: HeadFacts, *, gh: Runner = _gh) -> None:
     )
 
 
-def _deploy_triggering(path: str) -> bool:
-    globs = DEPLOY_TRIGGERING_GLOBS + _declared_deploy_globs()
-    return any(fnmatch.fnmatch(path, _normalise(glob)) for glob in globs)
+def _deploy_triggering(path: str) -> str:
+    """The workflow a merge of `path` would start, or "" for none.
+
+    Returns the name rather than a bool so the verdict can say *what* fires. An
+    owner asked to approve "tools/deploy_v2.py triggers a deploy" has to go and
+    find out which one; "...starts ops-checks.yml" is a judgement they can make
+    from the line itself.
+    """
+    for glob in DEPLOY_TRIGGERING_GLOBS:
+        if fnmatch.fnmatch(path, _normalise(glob)):
+            return "on merge"
+    for glob, workflow in _declared_deploy_globs():
+        if fnmatch.fnmatch(path, _normalise(glob)):
+            return workflow
+    return ""
 
 
 def _normalise(glob: str) -> str:
@@ -410,11 +422,14 @@ def evaluate(
             f"head {facts.head_sha[:7]} required"
         )
         owner = True
-    deploying = sorted(f for f in facts.files if _deploy_triggering(f))
+    fired = {f: _deploy_triggering(f) for f in facts.files}
+    deploying = sorted(f for f, w in fired.items() if w)
     if deploying:
+        workflows = sorted({fired[f] for f in deploying if fired[f] != "on merge"})
+        via = f" via {', '.join(workflows)}" if workflows else ""
         reasons.append(
-            f"merging would trigger a deploy ({', '.join(deploying)}): owner approval "
-            f"of head {facts.head_sha[:7]} required"
+            f"merging would trigger a deploy{via} ({', '.join(deploying)}): owner "
+            f"approval of head {facts.head_sha[:7]} required"
         )
         owner = True
     not_green = sorted(
