@@ -166,3 +166,61 @@ def test_main_cli_success(
         assert exit_code == 0
         captured = capsys.readouterr()
         assert "RESTORE_PROOF: PASS" in captured.out
+
+
+def test_run_restore_rehearsal_rejects_unsafe_database_name() -> None:
+    from tools.run_restore_rehearsal import run_rehearsal
+
+    with pytest.raises(ValueError, match="Invalid database name"):
+        run_rehearsal(
+            manifest_path="/dummy/manifest.json",
+            service_id="finance_report/postgres",
+            database="finance_report'; DROP TABLE accounts; --",
+        )
+
+
+def test_rehearsal_all_attempts_every_service_when_one_fails(monkeypatch, capsys) -> None:
+    """One failing service never stops the others (#618)."""
+    import tools.run_restore_rehearsal as rrr
+
+    attempted: list[str] = []
+
+    def fake_run_rehearsal(*, manifest_path, service_id, database, keep_container):
+        attempted.append(service_id)
+        if service_id == "finance_report/postgres":
+            raise RuntimeError("sandbox container failed to become ready")
+        return {"status": "PASS", "service_id": service_id}
+
+    monkeypatch.setattr(rrr, "run_rehearsal", fake_run_rehearsal)
+    monkeypatch.setattr("sys.argv", ["run_restore_rehearsal", "--service-id", "all"])
+
+    rc = rrr.main()
+
+    assert attempted == ["finance_report/postgres", "truealpha/postgres"]
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "finance_report/postgres" in out
+    assert "RESTORE_PROOF: FAIL" in out
+    assert "RESTORE_PROOF: PASS" in out
+
+
+def test_rehearsal_all_survives_a_malformed_report(monkeypatch, capsys) -> None:
+    """A report missing 'status' must not abort the services that follow it."""
+    import tools.run_restore_rehearsal as rrr
+
+    attempted: list[str] = []
+
+    def fake_run_rehearsal(*, manifest_path, service_id, database, keep_container):
+        attempted.append(service_id)
+        if service_id == "finance_report/postgres":
+            return {"service_id": service_id}  # no "status" key
+        return {"status": "PASS", "service_id": service_id}
+
+    monkeypatch.setattr(rrr, "run_rehearsal", fake_run_rehearsal)
+    monkeypatch.setattr("sys.argv", ["run_restore_rehearsal", "--service-id", "all"])
+
+    rc = rrr.main()
+
+    assert attempted == ["finance_report/postgres", "truealpha/postgres"]
+    assert rc == 1
+    assert "KeyError" in capsys.readouterr().out
