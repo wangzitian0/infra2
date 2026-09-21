@@ -53,6 +53,18 @@ SETTLE_MINUTES = 3  # event policy: after the review of the head, not after the 
 COPILOT_BOT_ID = "BOT_kgDOCnlnWA"
 AUTOMATED_REVIEWERS = frozenset({"copilot-pull-request-reviewer"})
 # AGENTS.md: protected files need the owner's approval of the head that changes them.
+SELF_GOVERNING_FILES = (
+    # The gate decides from the working tree, which for an agent merging its
+    # own PR is that PR's branch -- so a change here is judged by the version
+    # it introduces. Its tests ship in the same PR and can be edited by it.
+    "tools/pr_merge_gate.py",
+    "libs/tests/test_pr_merge_gate.py",
+    # #765 moved the merge-authority rules out of the protected AGENTS.md and
+    # into SSOT. The rules stayed protected in name only: a .md-only PR also
+    # skips every required check, so an agent could rewrite its own authority
+    # and merge it with nothing run and nothing asked.
+    "docs/ssot/ops.merge-gate.md",
+)
 PROTECTED_FILES = ("AGENTS.md", "CLAUDE.md")
 # A push to main under these paths deploys (deploy.yml: the runner rebuild;
 # deploy-cloudflare-watchdog.yml: `wrangler deploy` of the out-of-band worker, #718) —
@@ -113,9 +125,13 @@ def _declared_deploy_globs() -> tuple[tuple[tuple[str, str], ...], bool]:
     except OSError:
         return (), False
     if not names:
-        # No workflows at all is a real repository state (and the unit tests
-        # point WORKFLOW_DIR at an empty path deliberately), so it is healthy.
-        return (), True
+        # Path.glob swallows scandir errors, so a missing or unreadable
+        # directory arrives here indistinguishable from an empty one -- which
+        # is why the OSError branch above is effectively unreachable. An
+        # existing-but-empty directory is a real repository state; one that is
+        # not there at all is a broken read, and reporting it healthy silently
+        # retired every derived deploy path.
+        return (), WORKFLOW_DIR.is_dir()
     parsed = 0
     for path in names:
         try:
@@ -142,7 +158,13 @@ def _declared_deploy_globs() -> tuple[tuple[tuple[str, str], ...], bool]:
         globs.extend((str(p), path.name) for p in _as_list(push.get("paths")))
     # Workflows present but none readable means the derivation is broken, not
     # that nothing deploys.
-    return tuple(dict.fromkeys(globs)), parsed > 0
+    # Every workflow must parse, not merely one of them. `parsed > 0` was the
+    # first attempt and does not achieve the intent: with one file broken among
+    # many, its paths vanish while the read still reports healthy, which is the
+    # under-detection the derivation exists to prevent.
+    return tuple(dict.fromkeys(globs)), parsed == len(names)
+
+
 # gh's own classification of a check (`bucket`): pass / fail / pending / skipping /
 # cancel. `state` (SUCCESS, SKIPPED, IN_PROGRESS, …) is kept as the fallback for a gh
 # build without buckets.
@@ -159,6 +181,45 @@ def _declared_deploy_globs() -> tuple[tuple[tuple[str, str], ...], bool]:
 MERGE_STATES_OK = frozenset({"CLEAN", "HAS_HOOKS", "UNSTABLE"})
 
 GREEN_BUCKETS = frozenset({"pass", "skipping"})
+
+
+@functools.lru_cache(maxsize=1)
+def _required_checks() -> tuple[frozenset[str], bool]:
+    """Display names of the `blocks_merge: true` gates, and whether they read.
+
+    `skipping` counts as green above, which is right for a job a path filter
+    legitimately excluded and wrong for a gate that must run. Measured before
+    this existed: with all seven required checks reported as `skipping`, the
+    verdict was ready with an empty reasons list. ci-gate-inventory.yaml:78-86
+    names the exact way that happens -- if `detect-changes` fails, every job
+    depending on it is skipped rather than run.
+
+    The inventory stores a job key; `gh pr checks` reports the workflow's
+    display name, so the name is read from the workflow rather than guessed.
+    An unreadable inventory returns unhealthy, and the caller blocks on it:
+    losing this list loses the only check that notices a gate never ran.
+    """
+    try:
+        doc = yaml.safe_load((ROOT / "docs/ssot/ci-gate-inventory.yaml").read_text())
+        gates = [g for g in (doc.get("gates") or []) if g.get("blocks_merge")]
+    except (OSError, yaml.YAMLError, AttributeError):
+        return frozenset(), False
+    if not gates:
+        return frozenset(), False
+    names: set[str] = set()
+    for gate in gates:
+        job, workflow = gate.get("job"), gate.get("workflow")
+        display = job
+        try:
+            spec = yaml.safe_load((ROOT / str(workflow)).read_text())
+            display = ((spec.get("jobs") or {}).get(job) or {}).get("name") or job
+        except (OSError, yaml.YAMLError, AttributeError, TypeError):
+            pass
+        if display:
+            names.add(str(display))
+    return frozenset(names), True
+
+
 GREEN_STATES = frozenset({"SUCCESS", "SKIPPED", "NEUTRAL"})
 MAX_REVIEW_THREADS = 100
 # gh's stderr when a pull request has no check registered yet (it exits 1, no JSON).
@@ -192,6 +253,13 @@ class HeadFacts:
     # Files the base branch has changed since this head diverged from it. Their
     # intersection with `files` is what makes a green check stale.
     base_changed_files: tuple[str, ...] = ()
+    # What GitHub says the PR changes, against what `files` actually returned.
+    # `gh pr view --json files` caps at 100; both the protected-file and the
+    # deploy-triggering checks iterate `files`, so a larger PR silently drops
+    # the owner gate. Measured on finance_report#2042: changedFiles=163,
+    # files=100, and everything from docs/ libs/ scripts/ tools/ uv.lock
+    # onward was past the cut.
+    changed_files: int = 0
     # (reviewer login, commit reviewed, submitted epoch) — a review pins a head
     reviews: tuple[tuple[str, str, float], ...] = ()
 
@@ -213,8 +281,27 @@ class Verdict:
         return 2 if self.owner_required else 1
 
 
+GH_TIMEOUT_S = 60
+
+
 def _gh(argv: Sequence[str]) -> str:
-    result = subprocess.run(["gh", *argv], capture_output=True, text=True, check=False)
+    # This runs unattended, so stdin is closed rather than inherited: a gh that
+    # decides to prompt (auth re-login, a confirmation) would otherwise block on
+    # a terminal that is not there, and the gate would hang instead of failing.
+    # The timeout is the same argument for the network.
+    try:
+        result = subprocess.run(
+            ["gh", *argv],
+            capture_output=True,
+            text=True,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            timeout=GH_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"gh {' '.join(argv)}: no response in {GH_TIMEOUT_S}s"
+        ) from exc
     if result.returncode != 0:
         raise RuntimeError(f"gh {' '.join(argv)}: {result.stderr.strip() or 'failed'}")
     return result.stdout
@@ -275,11 +362,30 @@ def _base_changed_files(
         return ()
     try:
         payload = json.loads(
-            gh(["api", f"repos/{repo}/compare/{head_sha}...{base}", "--jq", "{files:[.files[]?.filename]}"])
+            gh(
+                [
+                    "api",
+                    f"repos/{repo}/compare/{head_sha}...{base}",
+                    "--jq",
+                    "{files:[.files[]?.filename]}",
+                ]
+            )
         )
     except (RuntimeError, json.JSONDecodeError):
         return ()
     return tuple(str(f) for f in payload.get("files") or [])
+
+
+def _field(view: dict, name: str) -> str:
+    """A requested field's value, or ABSENT when it is missing OR empty.
+
+    Keying on the key alone was one layer too shallow: `gh` returning
+    `{"mergeable": null}` kept the key present, coalesced to "", and re-opened
+    the fail-open. Both shapes mean the same thing -- the answer this call asked
+    for did not arrive -- so both must block.
+    """
+    value = view.get(name)
+    return str(value) if value else ABSENT
 
 
 def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadFacts:
@@ -293,7 +399,7 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
                 "--repo",
                 repo,
                 "--json",
-                "number,state,isDraft,baseRefName,headRefOid,files,commits,id,reviews,"
+                "number,state,isDraft,baseRefName,headRefOid,files,changedFiles,commits,id,reviews,"
                 "mergeable,mergeStateStatus",
             ]
         )
@@ -316,6 +422,13 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
     nodes = review_threads["nodes"]
     commits = view.get("commits") or []
     last_push = max((_epoch(c["committedDate"]) for c in commits), default=0.0)
+    # The commits connection is capped at 100 and returned oldest-first, so on a
+    # long branch the newest commit -- the one the quiet period is measured from
+    # -- is exactly the one missing. And an empty list yields last_push = 0.0,
+    # which reads as "pushed in 1970" and settles instantly. Both are caught by
+    # asking whether the head itself came back.
+    head_sha = str(view.get("headRefOid") or "")
+    head_seen = any(str(c.get("oid") or "") == head_sha for c in commits)
     # Only an open pull request can be updated, so the comparison that feeds the
     # stale-green reason is worth a round trip only then. Auditing a run of
     # merged PRs would otherwise pay one extra API call each for an answer
@@ -337,7 +450,8 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
         base=str(view.get("baseRefName") or ""),
         head_sha=str(view.get("headRefOid") or ""),
         files=tuple(str(f["path"]) for f in view.get("files") or []),
-        last_push_at=last_push,
+        changed_files=int(view.get("changedFiles") or 0),
+        last_push_at=last_push if head_seen else 0.0,
         checks=tuple(
             (str(c["name"]), str(c.get("bucket") or c.get("state") or ""))
             for c in checks
@@ -346,12 +460,8 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
         review_threads_total=int(review_threads.get("totalCount") or len(nodes)),
         node_id=str(view.get("id") or ""),
         # ABSENT, not "", when gh omits a field this call explicitly requested.
-        mergeable=str(view.get("mergeable") or "") if "mergeable" in view else ABSENT,
-        merge_state=(
-            str(view.get("mergeStateStatus") or "")
-            if "mergeStateStatus" in view
-            else ABSENT
-        ),
+        mergeable=_field(view, "mergeable"),
+        merge_state=_field(view, "mergeStateStatus"),
         base_changed_files=base_changed,
         reviews=tuple(
             (
@@ -426,6 +536,12 @@ def evaluate(
     conditions are named as such so a caller never waits on something time cannot fix."""
     reasons: list[str] = []
     owner = False
+    if facts.state == "OPEN" and not facts.last_push_at:
+        reasons.append(
+            "no timestamp for the head commit, so the settling window cannot be "
+            "measured: gh returned no commits, or the head was past the 100 it "
+            "returns oldest-first"
+        )
     if facts.state != "OPEN":
         reasons.append(f"pull request is {facts.state or 'unknown'}, not OPEN")
     if facts.draft:
@@ -446,7 +562,10 @@ def evaluate(
     is_open = facts.state == "OPEN"
     absent = [
         name
-        for name, value in (("mergeable", facts.mergeable), ("mergeStateStatus", facts.merge_state))
+        for name, value in (
+            ("mergeable", facts.mergeable),
+            ("mergeStateStatus", facts.merge_state),
+        )
         if value == ABSENT
     ]
     if is_open and absent:
@@ -459,7 +578,9 @@ def evaluate(
     if is_open and facts.mergeable == ABSENT:
         pass
     elif is_open and facts.mergeable == "CONFLICTING":
-        reasons.append("GitHub reports mergeable=CONFLICTING: rebase or merge main first")
+        reasons.append(
+            "GitHub reports mergeable=CONFLICTING: rebase or merge main first"
+        )
     elif is_open and facts.mergeable == "UNKNOWN":
         reasons.append(
             "GitHub is still computing mergeable (UNKNOWN): re-run in a moment "
@@ -484,6 +605,21 @@ def evaluate(
             )
         else:
             reasons.append(f"mergeStateStatus is {facts.merge_state}, not CLEAN")
+    if facts.changed_files and len(facts.files) < facts.changed_files:
+        reasons.append(
+            f"gh returned {len(facts.files)} of {facts.changed_files} changed files "
+            "(the API caps at 100): the protected-file and deploy checks read that "
+            "list, so neither can be trusted here"
+        )
+        owner = True
+    governing = sorted(f for f in facts.files if f in SELF_GOVERNING_FILES)
+    if governing:
+        reasons.append(
+            f"changes what decides merges ({', '.join(governing)}): the working-tree "
+            f"copy is what judged this PR, so owner approval of head "
+            f"{facts.head_sha[:7]} is required"
+        )
+        owner = True
     protected = sorted(f for f in facts.files if f in PROTECTED_FILES)
     if protected:
         reasons.append(
@@ -511,6 +647,25 @@ def evaluate(
         for name, verdict in facts.checks
         if verdict not in GREEN_BUCKETS and verdict not in GREEN_STATES
     )
+    required, inventory_read = _required_checks()
+    if not inventory_read:
+        reasons.append(
+            "cannot read docs/ssot/ci-gate-inventory.yaml: the required-check "
+            "list is unavailable, so a gate that never ran cannot be noticed"
+        )
+    reported = {name for name, _ in facts.checks}
+    missing = sorted(required - reported)
+    skipped = sorted(
+        name
+        for name, verdict in facts.checks
+        if name in required and verdict in ("skipping", "SKIPPED")
+    )
+    if missing:
+        reasons.append(f"required check(s) never reported: {', '.join(missing)}")
+    if skipped:
+        reasons.append(
+            f"required check(s) skipped rather than run: {', '.join(skipped)}"
+        )
     if not facts.checks:
         reasons.append("no checks reported yet")
     if not_green:
@@ -520,7 +675,9 @@ def evaluate(
     # would produce, and nothing re-ran to notice.
     stale = sorted(set(facts.files) & set(facts.base_changed_files))
     if stale and not not_green and is_open:
-        shown = ", ".join(stale[:4]) + (f" (+{len(stale) - 4} more)" if len(stale) > 4 else "")
+        shown = ", ".join(stale[:4]) + (
+            f" (+{len(stale) - 4} more)" if len(stale) > 4 else ""
+        )
         reasons.append(
             f"checks are green against a base that has since changed {len(stale)} of "
             f"this PR's files ({shown}): update the branch so they re-run"
@@ -636,20 +793,23 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
     if args.audit:
         try:
             from tools.omca_gate_policy import evaluate_audit_report
+
             audit_proc = subprocess.run(
                 ["omca", "audit", "--json", "--mode", "fast"],
                 capture_output=True,
                 text=True,
                 check=False,
             )
-            if audit_proc.returncode != 0 and not audit_proc.stdout.strip():
+            if audit_proc.returncode != 0:
                 verdict.reasons.append(
                     f"omca audit failed to run (rc={audit_proc.returncode}): {audit_proc.stderr.strip()[:100]}"
                 )
                 verdict.ready = False
             else:
                 report = json.loads(audit_proc.stdout)
-                passed, blocking, _ = evaluate_audit_report(report, expect_sha=facts.head_sha)
+                passed, blocking, _ = evaluate_audit_report(
+                    report, expect_sha=facts.head_sha
+                )
                 if not passed:
                     for b in blocking:
                         verdict.reasons.append(f"omca audit blocked: {b}")

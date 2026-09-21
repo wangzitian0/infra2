@@ -23,7 +23,8 @@ def _facts(**overrides) -> gate.HeadFacts:
         head_sha="abcdef0123456789",
         files=("libs/probe_specs.py",),
         last_push_at=NOW - 13 * 60,
-        checks=(("Lint", "pass"), ("Tests", "pass"), ("Docs", "skipping")),
+        checks=tuple((name, "pass") for name in sorted(gate._required_checks()[0]))
+        + (("Docs", "skipping"),),
         unresolved_threads=0,
     )
     base.update(overrides)
@@ -90,7 +91,12 @@ def test_more_threads_than_were_read_is_not_a_clean_verdict():
 
 
 def test_state_is_the_fallback_when_gh_reports_no_bucket():
-    assert gate.evaluate(_facts(checks=(("Tests", "SUCCESS"),)), now=NOW).ready
+    required = sorted(gate._required_checks()[0])
+    # Required checks reported by `state` rather than `bucket`; the point of the
+    # test is the fallback, so they must still be present.
+    assert gate.evaluate(
+        _facts(checks=tuple((name, "SUCCESS") for name in required)), now=NOW
+    ).ready
     assert not gate.evaluate(_facts(checks=(("Tests", "FAILURE"),)), now=NOW).ready
 
 
@@ -208,8 +214,8 @@ class _Gh:
                     "mergeable": getattr(self, "mergeable", "MERGEABLE"),
                     "mergeStateStatus": getattr(self, "merge_state", "CLEAN"),
                     "commits": [
-                        {"committedDate": "2026-09-15T06:40:00Z"},
-                        {"committedDate": self.pushed_iso},
+                        {"oid": "0" * 40, "committedDate": "2026-09-15T06:40:00Z"},
+                        {"oid": "feedfacefeedface", "committedDate": self.pushed_iso},
                     ],
                 }
             )
@@ -217,8 +223,15 @@ class _Gh:
             # gh's real shape (read live 2026-09-15): `state` is SUCCESS/SKIPPED/…,
             # `bucket` is pass/fail/pending/skipping; there is no `conclusion` field,
             # and `pr view --json files,commits` returns flat arrays.
+            # The required gates are emitted green as background, so a case can
+            # vary `states` to exercise one condition without tripping the
+            # separate "a required check never reported" rule.
             return json.dumps(
                 [
+                    {"name": name, "state": "COMPLETED", "bucket": "pass"}
+                    for name in sorted(gate._required_checks()[0])
+                ]
+                + [
                     {"name": f"c{i}", "state": "COMPLETED", "bucket": s}
                     for i, s in enumerate(self.states)
                 ]
@@ -258,7 +271,8 @@ def test_collect_reads_the_newest_commit_as_the_last_push():
     facts = gate.collect(704, gh=_Gh())
     assert facts.head_sha == "feedfacefeedface"
     assert facts.last_push_at == gate._epoch("2026-09-15T06:55:22Z")
-    assert facts.checks == (("c0", "pass"),) and facts.unresolved_threads == 0
+    assert ("c0", "pass") in facts.checks and facts.unresolved_threads == 0
+    assert sorted(gate._required_checks()[0]) == [n for n, _ in facts.checks[:-1]]
     assert facts.review_threads_total == 1
     assert facts.node_id == "PR_node"
     assert facts.reviews_on_head()[0][0] == "copilot-pull-request-reviewer"
@@ -356,14 +370,19 @@ def test_any_other_checks_failure_still_raises():
 
 def test_pr_merge_gate_audit_flag_detects_blockers(monkeypatch, capsys):
     from unittest.mock import MagicMock
+
     ready_at = gate._epoch("2026-09-15T06:55:22Z") + 12 * 60
     mock_run = MagicMock()
     mock_run.return_value.returncode = 0
-    mock_run.return_value.stdout = json.dumps({
-        "verdict": "BLOCKED",
-        "commit": "feedfacefeedface",
-        "findings": [{"severity": "CRITICAL", "topic": "Memory Leak", "details": "leak"}],
-    })
+    mock_run.return_value.stdout = json.dumps(
+        {
+            "verdict": "BLOCKED",
+            "commit": "feedfacefeedface",
+            "findings": [
+                {"severity": "CRITICAL", "topic": "Memory Leak", "details": "leak"}
+            ],
+        }
+    )
     monkeypatch.setattr(gate.subprocess, "run", mock_run)
     exit_code = gate.main(["704", "--audit"], gh=_Gh(), now=lambda: ready_at)
     assert exit_code == 1
@@ -440,7 +459,15 @@ def test_collect_marks_an_omitted_field_absent_rather_than_empty():
             return "[]"
         if argv[:2] == ["api", "graphql"]:
             return json.dumps(
-                {"data": {"repository": {"pullRequest": {"reviewThreads": {"totalCount": 0, "nodes": []}}}}}
+                {
+                    "data": {
+                        "repository": {
+                            "pullRequest": {
+                                "reviewThreads": {"totalCount": 0, "nodes": []}
+                            }
+                        }
+                    }
+                }
             )
         if argv[:1] == ["api"]:
             return json.dumps({"files": []})
@@ -601,23 +628,26 @@ def test_the_written_globs_survive_derivation():
 
 
 def test_a_deploy_triggering_path_routes_to_the_owner():
-    verdict = gate.evaluate(
-        _facts(files=("tools/deploy_v2.py",)), now=NOW
-    )
+    verdict = gate.evaluate(_facts(files=("tools/deploy_v2.py",)), now=NOW)
     assert not verdict.ready
     assert verdict.owner_required
     assert any("trigger a deploy" in r for r in verdict.reasons)
 
 
-def test_an_unreadable_workflow_directory_leaves_the_written_globs_standing(monkeypatch):
-    # A malformed or missing workflow must not take the gate offline, and must
-    # not quietly stop the written list from blocking.
+def test_a_missing_workflow_directory_is_a_broken_read_not_an_empty_repo(monkeypatch):
+    # Replaces a test that asserted ((), True) here AND that tools/deploy_v2.py
+    # was not deploy-triggering -- it ratified the silent loss of every derived
+    # deploy path. Path.glob swallows scandir errors, so a missing directory is
+    # indistinguishable from an empty one by its result and the OSError branch
+    # never fires; existence has to be asked directly.
     gate._declared_deploy_globs.cache_clear()
     monkeypatch.setattr(gate, "WORKFLOW_DIR", gate.ROOT / "does-not-exist")
     try:
-        assert gate._declared_deploy_globs() == ((), True)
+        assert gate._declared_deploy_globs() == ((), False)
         assert gate._deploy_triggering("bootstrap/06.iac_runner/main.tf")
-        assert not gate._deploy_triggering("tools/deploy_v2.py")
+        verdict = gate.evaluate(_facts(), now=NOW)
+        assert not verdict.ready
+        assert any("cannot read .github/workflows" in r for r in verdict.reasons)
     finally:
         gate._declared_deploy_globs.cache_clear()
 
@@ -672,7 +702,9 @@ def test_double_star_globs_match_without_translation():
     assert gate._deploy_triggering("cloudflare/infra-watchdog/a/b/index.ts")
 
 
-def test_an_unreadable_workflow_set_blocks_instead_of_quietly_under_detecting(monkeypatch):
+def test_an_unreadable_workflow_set_blocks_instead_of_quietly_under_detecting(
+    monkeypatch,
+):
     # Found by probing rather than by reading. With every workflow unparseable,
     # the first version returned zero derived globs and libs/alerting.py -- a
     # production observability apply -- came back not deploy-triggering, with a
@@ -699,14 +731,163 @@ def test_an_unreadable_workflow_set_blocks_instead_of_quietly_under_detecting(mo
         gate._declared_deploy_globs.cache_clear()
 
 
-def test_an_empty_workflow_directory_is_healthy_not_broken(monkeypatch):
-    # A repository with no workflows is a real state, and the unit tests point
-    # WORKFLOW_DIR at an empty path on purpose. Treating that as a malfunction
-    # would block every PR in such a repo.
+def test_an_existing_but_empty_workflow_directory_is_healthy(tmp_path, monkeypatch):
+    # A repository that genuinely has no workflows is a real state; blocking
+    # every PR there would be its own bug. The distinction from the test above
+    # is whether the directory exists -- the one thing Path.glob's result
+    # cannot tell you.
     gate._declared_deploy_globs.cache_clear()
-    monkeypatch.setattr(gate, "WORKFLOW_DIR", gate.ROOT / "no-such-dir")
+    monkeypatch.setattr(gate, "WORKFLOW_DIR", tmp_path)
     try:
         assert gate._declared_deploy_globs() == ((), True)
         assert gate.evaluate(_facts(), now=NOW).ready
     finally:
         gate._declared_deploy_globs.cache_clear()
+
+
+# --- findings from the /audit scouts -----------------------------------------
+
+
+def _green(**overrides) -> gate.HeadFacts:
+    """A head that is ready but for whatever the caller overrides."""
+    required = sorted(gate._required_checks()[0])
+    base = dict(
+        checks=tuple((name, "pass") for name in required),
+        mergeable="MERGEABLE",
+        merge_state="CLEAN",
+        changed_files=1,
+    )
+    base.update(overrides)
+    return _facts(**base)
+
+
+def test_a_required_check_that_skipped_is_not_green():
+    # Measured before this existed: all seven required checks reported as
+    # `skipping` gave ready=True with an empty reasons list.
+    # ci-gate-inventory.yaml names how that happens -- when detect-changes
+    # fails, every job depending on it is skipped rather than run.
+    required = sorted(gate._required_checks()[0])
+    verdict = gate.evaluate(
+        _green(checks=tuple((name, "skipping") for name in required)), now=NOW
+    )
+    assert not verdict.ready
+    assert any("skipped rather than run" in r for r in verdict.reasons)
+
+
+def test_a_required_check_that_never_reported_is_not_absence_of_a_problem():
+    verdict = gate.evaluate(_green(checks=(("Some Other Job", "pass"),)), now=NOW)
+    assert not verdict.ready
+    assert any("never reported" in r for r in verdict.reasons)
+
+
+def test_a_truncated_file_list_cannot_be_trusted_for_the_owner_gates():
+    # gh pr view --json files caps at 100. Both the protected-file and the
+    # deploy-triggering checks read that list, so a larger PR would silently
+    # drop the owner gate. Real shape: finance_report#2042, 163 changed, 100
+    # returned, with every deploy-triggering path past the cut.
+    verdict = gate.evaluate(
+        _green(files=tuple(f"f{i}.py" for i in range(100)), changed_files=163), now=NOW
+    )
+    assert not verdict.ready
+    assert verdict.owner_required
+    assert any("100 of 163" in r for r in verdict.reasons)
+
+
+def test_changing_what_decides_merges_needs_the_owner():
+    # The gate decides from the working tree, which for an agent merging its
+    # own PR is that PR's branch -- the change judges itself. #765 moved the
+    # merge-authority rules into SSOT, out of the protected file, while a
+    # .md-only PR also skips every required check.
+    for path in (
+        "tools/pr_merge_gate.py",
+        "libs/tests/test_pr_merge_gate.py",
+        "docs/ssot/ops.merge-gate.md",
+    ):
+        verdict = gate.evaluate(_green(files=(path,)), now=NOW)
+        assert not verdict.ready, path
+        assert verdict.owner_required, path
+        assert any("what decides merges" in r for r in verdict.reasons), path
+
+
+def test_an_ordinary_green_head_still_merges():
+    # The guards above must not make every PR owner-required; that would make
+    # the signal worthless and push everything back onto the owner.
+    verdict = gate.evaluate(_green(files=("libs/x.py",)), now=NOW)
+    assert verdict.ready
+    assert not verdict.owner_required
+
+
+def test_a_head_missing_from_the_commit_page_cannot_be_judged_settled():
+    # The commits connection is capped at 100 and returned oldest-first, so on a
+    # long branch the newest commit -- the very one the quiet period measures
+    # from -- is the one missing. And an empty list yields last_push_at = 0.0,
+    # which reads as "pushed in 1970" and settles instantly. Measured before
+    # this guard: last_push_at=0.0 gave ready=True with an empty reasons list.
+    verdict = gate.evaluate(_facts(last_push_at=0.0), now=NOW)
+    assert not verdict.ready
+    assert any("settling window cannot be measured" in r for r in verdict.reasons)
+
+
+def test_collect_refuses_a_commit_page_that_does_not_contain_the_head():
+    def fake(argv):
+        if argv[:2] == ["pr", "view"]:
+            return json.dumps(
+                {
+                    "number": 1,
+                    "state": "OPEN",
+                    "isDraft": False,
+                    "baseRefName": "main",
+                    "headRefOid": "f" * 40,
+                    "files": [],
+                    "changedFiles": 0,
+                    # An old commit, and no sign of the head: exactly the shape
+                    # a >100-commit branch returns.
+                    "commits": [
+                        {"oid": "0" * 40, "committedDate": "2020-01-01T00:00:00Z"}
+                    ],
+                    "reviews": [],
+                    "id": "X",
+                    "mergeable": "MERGEABLE",
+                    "mergeStateStatus": "CLEAN",
+                }
+            )
+        if argv[:2] == ["pr", "checks"]:
+            return "[]"
+        if argv[:2] == ["api", "graphql"]:
+            return json.dumps(
+                {
+                    "data": {
+                        "repository": {
+                            "pullRequest": {
+                                "reviewThreads": {"totalCount": 0, "nodes": []}
+                            }
+                        }
+                    }
+                }
+            )
+        if argv[:1] == ["api"]:
+            return json.dumps({"files": []})
+        raise AssertionError(argv)
+
+    assert gate.collect(1, gh=fake).last_push_at == 0.0
+
+
+def test_gh_is_called_without_a_terminal_and_with_a_deadline(monkeypatch):
+    # This runs unattended. A gh that decides to prompt would block on a
+    # terminal that is not there, and the gate would hang rather than fail.
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen.update(kwargs)
+
+        class R:
+            returncode = 0
+            stdout = "{}"
+            stderr = ""
+
+        return R()
+
+    monkeypatch.setattr(gate.subprocess, "run", fake_run)
+    gate._gh(["pr", "view", "1"])
+    assert seen["stdin"] is gate.subprocess.DEVNULL
+    assert seen["timeout"] == gate.GH_TIMEOUT_S
