@@ -288,7 +288,7 @@ def poll_platform_deploy_status(
     ).encode()
     # non-terminal statuses from /deploy/status (terminal = "completed" / "failed").
     terminal_excluded = {"running", "pending", "in_progress", "queued", "accepted"}
-    gateway_codes = {502, 503, 504}
+    gateway_codes = {502, 503, 504, 520, 521, 522, 523, 524}
     delays = status_poll_delays(
         interval, backoff, interval if max_interval is None else max_interval
     )
@@ -296,12 +296,26 @@ def poll_platform_deploy_status(
     gateway_down_since: float | None = None
     for _ in range(max(1, attempts)):
         headers = _signed_headers(secret, payload, now=now, nonce=nonce_factory())
-        resp = transport(
-            f"{base_url.rstrip('/')}/deploy/status",
-            content=payload,
-            headers=headers,
-            timeout=timeout,
-        )
+        try:
+            resp = transport(
+                f"{base_url.rstrip('/')}/deploy/status",
+                content=payload,
+                headers=headers,
+                timeout=timeout,
+            )
+        except (httpx.TimeoutException, httpx.RequestError) as exc:
+            moment = float(now())
+            gateway_down_since = (
+                gateway_down_since if gateway_down_since is not None else moment
+            )
+            if moment - gateway_down_since > gateway_grace:
+                raise RuntimeError(
+                    f"iac_runner unreachable for {int(moment - gateway_down_since)}s while "
+                    f"polling deploy {ref[:12]} to {env} (last error: {exc}): the runner was "
+                    "probably recreated by a bootstrap push mid-deploy (#666) or gateway timed out"
+                ) from exc
+            sleep(next(delays))
+            continue
         # iac_runner answers 404 {"status":"not_found"} when the deploy isn't visible
         # yet: the trigger's in-flight entry hasn't registered, or the runner restarted
         # and lost its in-memory deploy state. That's a TRANSIENT miss right after firing
@@ -316,8 +330,9 @@ def poll_platform_deploy_status(
                 gateway_down_since = None
                 sleep(next(delays))
                 continue
-        # The runner is being recreated (#666): Traefik answers a bodiless/non-JSON 404
-        # while no router exists, then 502/503/504 until the new container is healthy.
+        # The runner is being recreated (#666) or Cloudflare timed out to origin:
+        # Traefik answers a bodiless/non-JSON 404 while no router exists, then 502/503/504
+        # or Cloudflare 520-524 until the container is healthy/reachable.
         # A 404 that carries a JSON object which is not `not_found` — including an empty
         # one — is a genuine routing error and still raises below.
         if code in gateway_codes or (code == 404 and body is None):
