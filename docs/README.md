@@ -7,6 +7,15 @@
 
 ---
 
+## `AGENTS.md` 直接路由到的两篇
+
+`AGENTS.md` 的按需加载表把「提 PR / 判断能否合流」和「写代码 / 写文档」直接路由到这两篇，
+而 #765 把本文件指定为「唯一导航索引」时没有同步更新它——于是在此之前，按下方推荐阅读顺序
+走完的读者到不了它们（`core.md` 不在此列，阅读顺序第 3 步已经链接它）。本次补上：
+
+- [`core.engineering.md`](ssot/core.engineering.md) — 代码与文档准则、STAR、Wiki 入口地图
+- [`ops.merge-gate.md`](ssot/ops.merge-gate.md) — 合流门禁逐条
+
 ## 📌 快速入口
 
 - **工程入口**：[README.md](../README.md)
