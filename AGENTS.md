@@ -69,6 +69,6 @@
 
 `CLAUDE.md` 与本文同内容：它只有一行 `@AGENTS.md`，把本文导入。**真源只有 `AGENTS.md`，
 改规则改这里。** Claude Code 自 v2.1.277 起也能直接读 `AGENTS.md`，但工作目录或任一祖先目录
-存在 `CLAUDE.md` 时它只读 `CLAUDE.md`——本机 `~/zitian/CLAUDE.md` 就是这样一个祖先，所以
-导入文件必须入库，不能只靠原生支持。用导入而非软链：软链在 Windows 上会被 git checkout 成
+存在 `CLAUDE.md` 时它**只读** `CLAUDE.md`。这个 workspace 的父目录里就有一个，所以只靠原生
+支持不够——导入文件必须入库。用导入而非软链：软链在 Windows 上会被 git checkout 成
 一行纯文本，且 Edit/Write 工具拒绝写穿软链。此文件由 `libs/tests/test_claude_md_import.py` 看守。
