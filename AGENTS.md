@@ -60,6 +60,7 @@
 
 | 要做什么 | 读哪里 |
 |---|---|
+| 全局工程概览 / 快速开始 | [`README.md`](README.md) |
 | 提 PR / 判断能否合流 / 执行 merge | [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.md) |
 | 写代码 / 写文档 / 用 STAR 拆任务 / 运营准则 | [`docs/ssot/core.engineering.md`](docs/ssot/core.engineering.md) |
 | 查技术真理、架构、SOP | [`docs/ssot/README.md`](docs/ssot/README.md)（由 `MANIFEST.yaml` 生成） |
