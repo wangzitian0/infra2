@@ -12,7 +12,7 @@
 | **Postgres 数据目录** | `platform/01.postgres/compose.yaml` | `${DATA_PATH}` (e.g., `/data/platform/postgres${ENV_SUFFIX}`) |
 | **Redis 数据目录** | `platform/02.redis/compose.yaml` | `${DATA_PATH}` (e.g., `/data/platform/redis${ENV_SUFFIX}`) |
 | **Vault 数据目录** | `bootstrap/05.vault/compose.yaml` | `/data/bootstrap/vault` |
-| **备份归档** | **Google Drive (via rclone crypt)** | 异地冷备（off-host，AES-256-GCM 零知识客户端加密）。清单由各服务 `deploy.py` 的 `BackupFacet` 声明派生（`libs/backup_verification.py`，#542）；分级保留策略：周备保留 60 天（滑动窗口 ~8 周），每 3 个月季度长存快照保留 2 年（730 天）；验证见 [`ops.recovery.md`](./ops.recovery.md) SOP-004/005/006 |
+| **备份归档** | **Google Drive (via rclone crypt)** | 异地冷备（off-host，rclone crypt 客户端加密）。清单由各服务 `deploy.py` 的 `BackupFacet` 声明派生（`libs/backup_verification.py`，#542）；分级保留策略：周备保留 60 天（滑动窗口 ~8 周），每 3 个月季度长存快照保留 2 年（730 天）；验证见 [`ops.recovery.md`](./ops.recovery.md) SOP-004/005/006 |
 
 ---
 

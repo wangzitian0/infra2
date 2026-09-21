@@ -239,7 +239,7 @@ python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref
 **配置**:
 ```bash
 # 备份策略 (定时执行，见 ops.recovery.md SOP-006)
-# PostgreSQL → pg_dumpall (各服务独立逻辑备份) → Google Drive (rclone crypt AES-256-GCM)
+# PostgreSQL → pg_dumpall (各服务独立逻辑备份) → Google Drive (rclone crypt E2EE)
 # Redis → redis-cli SAVE (密码认证快照) → Google Drive (rclone crypt)
 # 数据目录 → tar.gz (crash-consistent) → Google Drive (rclone crypt)
 ```

@@ -108,10 +108,14 @@ def run_rehearsal(
         )
 
         # 4. Define invariants (connectivity, DB existence, table threshold, domain specific rows)
+        db_exists_check = (
+            f"DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = '{database}') "
+            f"THEN RAISE EXCEPTION 'database {database} does not exist'; END IF; END $$;"
+        )
         if service_id == "finance_report/postgres":
             invariants = (
                 "SELECT 1",
-                f"SELECT count(*) >= 1 FROM pg_database WHERE datname = '{database}'",
+                db_exists_check,
                 "DO $$ BEGIN IF (SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public') < 50 THEN RAISE EXCEPTION 'table count below threshold (<50)'; END IF; END $$;",
                 "DO $$ BEGIN IF (SELECT count(*) FROM accounts) < 5 THEN RAISE EXCEPTION 'accounts count below threshold (<5)'; END IF; END $$;",
                 "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM alembic_version WHERE version_num IN ('0063_enum_case_compat', '0062_bank_custody')) THEN RAISE EXCEPTION 'unexpected alembic_version'; END IF; END $$;",
@@ -119,7 +123,7 @@ def run_rehearsal(
         elif service_id == "truealpha/postgres":
             invariants = (
                 "SELECT 1",
-                f"SELECT count(*) >= 1 FROM pg_database WHERE datname = '{database}'",
+                db_exists_check,
                 "DO $$ BEGIN IF (SELECT count(*) FROM information_schema.tables WHERE table_schema IN ('raw', 'staging', 'mart', 'app')) < 50 THEN RAISE EXCEPTION 'table count below threshold (<50)'; END IF; END $$;",
                 "DO $$ BEGIN IF (SELECT count(*) FROM mart.topt_capture_status WHERE complete = true) < 1 THEN RAISE EXCEPTION 'topt_capture_status count below threshold (<1)'; END IF; END $$;",
                 "DO $$ BEGIN IF (SELECT count(*) FROM mart.topt_gppe_results WHERE payload->>'availability' = 'available') < 100 THEN RAISE EXCEPTION 'topt_gppe_results available below threshold (<100)'; END IF; END $$;",
@@ -127,7 +131,7 @@ def run_rehearsal(
         else:
             invariants = (
                 "SELECT 1",
-                f"SELECT count(*) >= 1 FROM pg_database WHERE datname = '{database}'",
+                db_exists_check,
                 "DO $$ BEGIN IF (SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog', 'information_schema')) < 1 THEN RAISE EXCEPTION 'no tables restored'; END IF; END $$;",
                 "SELECT current_database()",
                 "SELECT 1",
