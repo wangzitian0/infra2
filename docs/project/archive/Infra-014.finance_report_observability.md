@@ -29,7 +29,7 @@ Architecture is fixed and intentionally minimal:
   and production all ship to `platform-signoz-otel-collector:4318`. Environments are
   distinguished downstream by the `deployment.environment` resource attribute, not by
   per-env collectors or per-env routes. See
-  [core.environments.md](../ssot/core.environments.md) telemetry-identity rules.
+  [core.environments.md](../../ssot/core.environments.md) telemetry-identity rules.
 - **One public ingest domain, Dokploy-managed.** `otel.${INTERNAL_DOMAIN}` is the only
   public surface, forwarded to `:4318`. Both this domain and the SigNoz Web UI domain
   are registered through Dokploy (no hand-written Traefik labels in `compose.yaml`):
@@ -94,12 +94,12 @@ Architecture is fixed and intentionally minimal:
 - [ ] Post-merge RUNBOOK executed (Vault token + OpenPanel client-id + redeploy) — see PR body.
 
 ## References
-- [SSOT: ops.observability](../ssot/ops.observability.md)
-- [SSOT: platform.openpanel](../ssot/platform.openpanel.md)
-- [SSOT: platform.domain](../ssot/platform.domain.md)
-- [SSOT: core.environments](../ssot/core.environments.md)
+- [SSOT: ops.observability](../../ssot/ops.observability.md)
+- [SSOT: platform.openpanel](../../ssot/platform.openpanel.md)
+- [SSOT: platform.domain](../../ssot/platform.domain.md)
+- [SSOT: core.environments](../../ssot/core.environments.md)
 - [Infra-007 SigNoz](Infra-007.signoz_install.md) · [Infra-021 OpenPanel](Infra-021.openpanel_install.md)
-- App module: [finance_report/.../10.app/README.md](../../finance_report/finance_report/10.app/README.md)
+- App module: [finance_report/.../10.app/README.md](../../../repos/finance_report/README.md)
 
 
 ## TODOWRITE (Archived)

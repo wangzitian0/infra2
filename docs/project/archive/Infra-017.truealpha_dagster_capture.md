@@ -52,7 +52,7 @@ OpenD's loopback binding also prevents a normal overlay-network container from r
 
 ## References
 
-- [SSOT: core.truealpha_runtime](../ssot/core.truealpha_runtime.md)
+- [SSOT: core.truealpha_runtime](../../ssot/core.truealpha_runtime.md)
 - TrueAlpha issues #27, #51, #53, #67, and #68
 
 
