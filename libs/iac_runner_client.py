@@ -344,7 +344,7 @@ def poll_platform_deploy_status(
                 raise RuntimeError(
                     f"iac_runner unreachable for {int(moment - gateway_down_since)}s while "
                     f"polling deploy {ref[:12]} to {env} (last HTTP {code}): the runner was "
-                    "probably recreated by a bootstrap push mid-deploy (#666)"
+                    "probably recreated by a bootstrap push mid-deploy (#666) or gateway / Cloudflare timed out"
                 )
             sleep(next(delays))
             continue

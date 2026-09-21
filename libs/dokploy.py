@@ -75,7 +75,7 @@ class DokployClient:
     ) -> dict | list:
         """Make authenticated request to Dokploy API.
 
-        Transient gateway errors (502/503/504) and connection errors (incl. read-timeouts
+        Transient gateway errors (502/503/504, Cloudflare 520-524) and connection errors (incl. read-timeouts
         from a churning control plane, see #252) are retried with backoff when the request
         is safe to repeat: any GET, or a POST the caller marks ``idempotent``. A flaky
         control plane should self-heal rather than hard-fail the caller.
