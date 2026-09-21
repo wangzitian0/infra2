@@ -20,6 +20,7 @@ on:
       - 'cloudflare/**'
       - 'docs/**'
       - 'AGENTS.md'
+      - 'CLAUDE.md'
       - 'README.md'
       - 'SECRETS.md'
       - '.github/workflows/infra-ci.yml'
@@ -47,6 +48,7 @@ on:
       - 'cloudflare/**'
       - 'docs/**'
       - 'AGENTS.md'
+      - 'CLAUDE.md'
       - 'README.md'
       - 'SECRETS.md'
       - '.github/workflows/infra-ci.yml'
@@ -113,7 +115,12 @@ jobs:
           changed=$(git diff --name-only "$base" "$head")
           echo "Changed files:"
           echo "$changed"
-          if echo "$changed" | grep -qvE '\.md$'; then
+          # AGENTS.md and CLAUDE.md are load-bearing config, not prose: CLAUDE.md
+          # decides whether AGENTS.md is read at all, and AGENTS.md is the
+          # constitution. Classing them as docs meant every change to them
+          # skipped every required check -- including the test that guards them.
+          if echo "$changed" | grep -qvE '\.md$' \
+            || echo "$changed" | grep -qE '^(AGENTS|CLAUDE)\.md$'; then
             echo "has_non_doc=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_non_doc=false" >> "$GITHUB_OUTPUT"
