@@ -435,6 +435,36 @@ submodule checkout, so CI cannot run it as written. Making it a gate would mean
 comparing the PR's two gitlinks and fetching those objects — worth doing, not
 done.
 
+## pi_chain_smoke.py (pi main-chain real-run proof)
+
+The scheduled, token-consuming end-to-end proof of the agent main chain
+(Infra-019 2026-09-21): launch a fresh `pi` CLI process against
+`zai-coding-cn`/`glm-5.3-flash` in JSON mode and assert the whole chain —
+provider routing, `stopReason=stop`, sentinel echo, and
+`0 < totalTokens <= 30000` (the ceiling doubles as a system-prompt-bloat
+regression detector). Exists because every component gate stayed green while
+the real chain was broken; per the owner's verdict, mechanism success must be
+proven by real runs that consume tokens.
+
+Observational only: consumes external model quota and asserts remote-model
+prose, so it must never gate merges (`# schedule-signal-exempt` in
+ops-checks.yml; daily cron + `workflow_dispatch` task `pi-chain-smoke`). Exit
+contract: `0` pass/SKIP, `1` chain assertion failure, `2` infra error
+(pi missing/timeout/unparseable). Credentials: `ZAI_CODING_CN_API_KEY` env
+(CI secret; the job SKIPs green until the secret is configured) or a local
+`auth.json` — read from `$PI_CODING_AGENT_DIR` when that is set to a non-empty
+value, and from `~/.pi/agent` otherwise. An `auth.json` that exists but cannot
+be read, is not JSON, or carries no `zai-coding-cn` entry each report their own
+reason rather than all reading as "no credential".
+
+```bash
+# Local proof (uses auth.json credentials)
+python3 tools/pi_chain_smoke.py
+
+# CI mode: missing credentials are an infra error, not a SKIP
+python3 tools/pi_chain_smoke.py --strict
+```
+
 ## References
 
 - [文档索引](../docs/README.md)

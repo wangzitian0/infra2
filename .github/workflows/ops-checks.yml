@@ -61,6 +61,7 @@ name: Ops Checks
     - cron: "17 7 * * *" # daily facet reconcile: compose_id + config-hash + dns drift (#542)
     - cron: "17 8 * * *" # daily Vault self-refresh audit (#531)
     - cron: "27 8 * * *" # daily secrets reconcile + capacity (secrets supply chain, PR-E)
+    - cron: "57 3 * * *" # daily pi main-chain smoke: real token-consuming E2E (Infra-019)
   workflow_dispatch:
     inputs:
       task:
@@ -78,6 +79,7 @@ name: Ops Checks
           - facet-reconcile
           - vault-self-refresh-audit
           - secrets-reconcile
+          - pi-chain-smoke
           - all
       dry_run:
         description: "Run checks without sending Feishu notifications"
@@ -105,7 +107,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'infra2-deploy-guard-audit' || github.event_name == 'schedule' && github.event.schedule == '37 6 * * *' && 'deploy-v2-canary' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-leak-check' || github.event_name == 'schedule' && github.event.schedule == '27 4 * * *' && 'infra2-host-hygiene-schedule' || github.event_name == 'schedule' && github.event.schedule == '17 7 * * *' && 'infra2-facet-reconcile' || github.event_name == 'schedule' && github.event.schedule == '17 8 * * *' && 'infra2-vault-self-refresh-audit' || github.event_name == 'schedule' && github.event.schedule == '27 8 * * *' && 'infra2-secrets-reconcile' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) || format('ops-checks-push-{0}', github.sha) }}
+  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'infra2-deploy-guard-audit' || github.event_name == 'schedule' && github.event.schedule == '37 6 * * *' && 'deploy-v2-canary' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-leak-check' || github.event_name == 'schedule' && github.event.schedule == '27 4 * * *' && 'infra2-host-hygiene-schedule' || github.event_name == 'schedule' && github.event.schedule == '17 7 * * *' && 'infra2-facet-reconcile' || github.event_name == 'schedule' && github.event.schedule == '17 8 * * *' && 'infra2-vault-self-refresh-audit' || github.event_name == 'schedule' && github.event.schedule == '27 8 * * *' && 'infra2-secrets-reconcile' || github.event_name == 'schedule' && github.event.schedule == '57 3 * * *' && 'pi-chain-smoke' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) || format('ops-checks-push-{0}', github.sha) }}
   cancel-in-progress: false
 
 env:
@@ -956,3 +958,29 @@ jobs:
               f"Run: {run_url}",
           )
           PY
+
+  pi-chain-smoke:
+    # schedule-signal-exempt: observational real-run proof of the pi main chain
+    # (Infra-019 2026-09-21); consumes external model quota and asserts remote
+    # model prose, delivers no alerts and must never gate merges.
+    name: pi chain smoke (pi CLI -> zai-coding-cn -> glm-5.3-flash)
+    if: ${{ (github.event_name == 'schedule' && github.event.schedule == '57 3 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'pi-chain-smoke' || inputs.task == 'all')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install pinned pi coding agent
+        run: npm install -g @earendil-works/pi-coding-agent@0.86.1
+      - name: Run the token-consuming main-chain smoke
+        env:
+          ZAI_CODING_CN_API_KEY: ${{ secrets.ZAI_CODING_CN_API_KEY }}
+        run: |
+          # Job scope on purpose: secrets are invisible to a step-level `if:`.
+          if [ -z "$ZAI_CODING_CN_API_KEY" ]; then
+            echo "SKIP: ZAI_CODING_CN_API_KEY secret not configured on this repo yet"
+            exit 0
+          fi
+          python3 tools/pi_chain_smoke.py --strict

@@ -687,3 +687,65 @@ worktree 的每个 generation 触及，所以 `generation-local` 描述的是一
 
 结论：#101 **没有**无需新机制的修法。唯一还站得住的改动是呈现层——让 `omca state` 把这 64.5MB
 报成「待 liveness 判定、暂不可回收」，而不是让读者推断 scratch 可以随手删。
+## 2026-09-21 pi 主链真实运行实测（owner 指令：pi+glm-5.3-flash E2E 必须消耗 token）
+
+背景：owner 重申架构决策——pi 是唯一主链 host，主链成功=机制成功；机制成功必须以
+真实运行（消耗 token）证明；其他 TUI（codex/claude）属覆盖率问题，可图谱化灵活处理。
+本次排查确认：此前所有测试均为组件级（unit/fixture/只读观察，#108 的 E2E 是零写入
+观察证明），pi 主链从未被真实 E2E 实测，导致下列断链长期无人发现。
+
+### 发现（全部当场实测留证）
+
+- [x] pi+glm-5.3-flash 主链 E2E 通过（真实 token）：`cd /tmp && pi --provider
+      zai-coding-cn --model glm-5.3-flash --mode json --no-session -p "Reply with
+      exactly: CHAIN-OK"` → 输出 `CHAIN-OK`，usage input 11749 / output 18 /
+      reasoning 13 / total 11767 tokens，cost $0.00177，stopReason=stop。
+- [x] 裸 `pi -p` 模型解析缺陷：子进程不继承交互会话模型，落到
+      amazon-bedrock/claude-opus-4-6 且 403（凭证无效）。交互启动参数未沉淀为可重复
+      入口，E2E 必须显式 `--provider/--model`。
+- [x] omca pi 适配止步 observation tier（#108 有意为之，B2 runtime 隔离仍是
+      follow-up）：`omca run` 仅支持 codex|claude；pi 0.86.1 无 qualified knowledge
+      pack（pack 只到 0.85，drift 报 degrade to OBSERVED）；`omca doctor` 报本会话
+      pi UNMANAGED、无 compiled generation。
+- [x] ~~direnv 授权链路损坏~~ **scout 修正：误报**。direnv v2.37.1 的 `allowed 0`
+      是枚举 `Allowed=0`（非布尔 false），allow 文件哈希与当前 .envrc 精确匹配，
+      `direnv export bash` 实跑成功；1970 deny watch 是对不存在 deny 文件的常态
+      watch（mtime 零值）。真 bug 在 omca doctor：把枚举 int 当布尔解析。
+- [x] ws-mem 断链根因精确定位：`ws-mcp-runtime` 渲染器替换表只有 `WS_ROOT` 没有
+      `WS_PATH`，config.yml 写 `$WS_PATH` → 运行时引用空值烘焙 →
+      `BASIC_MEMORY_HOME=/.ws/basic-memory`；“交互 shell 好 pi 坏”是错觉，
+      `direnv export bash` 实跑证明两边拿到同一个坏值。落盘配置未腐蚀，但 CLI 与
+      MCP 已双库脑裂。**已修复**：dev_env#22（渲染器加 WS_PATH + ws-mem 兜底
+      `! -d` 分支 + 测试），ws-apply 重生成后 ws-mem stats/search 实测恢复。
+- [x] ~~skill 双真源漂移~~ **scout 修正：今天 16:14 已被 ws-apply 收敛**。现为三层
+      symlink 投影：SSOT=`dev_env/skills/common`（git 仓库，7 skill）→ 汇流点 B
+      `~/zitian/.agents/skills`（逐 skill symlink）← A `.ws/.pi/agent/skills`（B
+      的别名）；旧 56 个企业技能已迁 `~/.agents/skills.shopee/`。残留风险：
+      dev_env 里 audit/SKILL.md 有未提交改动；workspace/config.yml 自引用已随
+      dev_env#22 删除；synced/ 是投影体系外的 Claude 云同步失控面。
+
+### Follow-ups（2026-09-21 晚间 5-scout 并行侦察后重排；T4 已落地，T1 PR 待合流）
+
+- [x] T1 固化 pi+glm 主链 E2E smoke 门禁：`tools/pi_chain_smoke.py`
+      （不放 omca——pi 不在其 host 列表且违反 submodule 边界）；断言
+      message_end(stopReason=stop) + CHAIN-OK + 0<totalTokens≤30000 +
+      provider/model 路由；退出码 0/1/2 对齐 omca_gate_policy；挂
+      ops-checks.yml 每日 cron `57 3 * * *` + workflow_dispatch 任务
+      `pi-chain-smoke`，`# schedule-signal-exempt`（观察性检查永不升格
+      blocks_merge）；CI 用 `ZAI_CODING_CN_API_KEY` secret（未配置前 SKIP 绿，
+      配置后自动转为真实证明）。本地实跑证据：PASS 9392 tokens / 6.1s。
+- [ ] T2 omca pi runtime 隔离（=roadmap M6 交付项）：pi 走 Tier 1 MANAGED
+      （PI_CODING_AGENT_DIR 等价 CODEX_HOME，非 claude Tier 2）；8 处 switch +
+      测试 ≈700-1000 LOC / 2-3 PR / 2-3 天。前置：本地 checkout detached 在
+      #98，落后 origin/main(#111) 3 commits——#108/#109（pi 全部代码）与 ADR
+      0006 只在远端/分支，须先同步+合流 tier 分支；PR-B 先做
+      PI_CODING_AGENT_DIR 行为学证明（pack knownUnknowns 明言从未验证）。
+- [ ] T3 pi 0.86.1 knowledge pack：~0.5-1 天；0.85 pack 本身在
+      fix/host-tier-ssot 分支未进 main；0.85→0.86.1 发现面零变化（skills.md
+      逐字节相同），capability 可 verbatim 继承；重建二进制后 drift 应转绿。
+- [x] T4 环境修复：ws-mcp-runtime 渲染器加 WS_PATH（一行根修）+ ws-apply
+      重生成；ws-mem 兜底加 `! -d` 分支消双库脑裂；omca doctor direnv 枚举
+      解析修复（omca 侧，待 T2 一起提 PR）。
+- [ ] T5 skill 体系收尾：commit dev_env(skills) 的 audit 未提交改动；
+      synced/ 失控面是否管控待决策（workspace/config.yml 自引用已随
+      dev_env#22 删除）。
