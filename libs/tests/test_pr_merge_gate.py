@@ -642,9 +642,7 @@ def test_a_prod_reaching_deploy_needs_the_owner_and_a_canary_does_not():
     # agent's to merge; prod is not. apply-observability writes to live SigNoz,
     # so it stays owner-required; ops-checks' canary targets the reserved
     # ephemeral slot, so it does not.
-    assert (
-        gate._deploy_triggering("libs/alerting.py") == "apply-observability.yml"
-    )
+    assert gate._deploy_triggering("libs/alerting.py") == "apply-observability.yml"
     # deploy.yml is in the written list, which reports "on merge" -- it has no
     # workflow to cite because the merge itself is the trigger.
     assert gate._deploy_triggering(".github/workflows/deploy.yml") == "on merge"
