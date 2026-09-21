@@ -17,9 +17,11 @@ Two mechanisms produced them, and both recur:
 Neither is a judgement call, which is exactly why leaving them to review was
 the wrong place for them.
 
-Submodules are skipped: ``repos/*`` and ``oh-my-code-agent`` are separate
-repositories with their own CI, and AGENTS.md is explicit that harness policy
-is not distributed into them.
+Submodules are skipped, by the paths ``.gitmodules`` registers rather than by
+directory name: they are separate repositories with their own CI, and
+AGENTS.md is explicit that harness policy is not distributed into them. Name
+matching would also exclude this repository's own top-level ``truealpha/``
+and ``finance_report/``, which merely share a basename with two of them.
 """
 
 from __future__ import annotations
@@ -57,13 +59,25 @@ def submodule_paths() -> set[str]:
 
 SUBMODULES = None  # populated in main()
 
-SKIP_DIRS = {
+# Skipped by NAME at any depth: build and tooling noise that is never
+# documentation.
+SKIP_NAMES = {
     ".git", ".venv", "node_modules", "__pycache__",
-    # Submodules: separate repositories, separate CI (AGENTS.md "依賴邊界").
-    "repos", "oh-my-code-agent", "truealpha",
     # Agent scratch checkouts; gitignored, not repository content.
     ".claude", ".omo",
 }
+
+# Skipped by repo-relative PATH. Name matching was wrong here and Copilot
+# caught it: this repository has a top-level `truealpha/` and
+# `finance_report/` that are ordinary tracked directories with their own
+# Markdown, distinct from the `repos/truealpha` and `repos/finance_report`
+# submodules that merely share a basename. Skipping by name silently
+# excluded 12 real documents from checking.
+#
+# The submodule paths themselves come from .gitmodules rather than being
+# listed here, so this set stays empty unless something genuinely needs a
+# path-scoped exclusion.
+SKIP_PATHS: set[str] = set()
 
 LINK_RE = re.compile(r"\[([^\]]*)\]\(([^)\s]+?)\)")
 
@@ -89,9 +103,15 @@ KNOWN_UNRESOLVED = {
 }
 
 
-def iter_markdown_files():
+def iter_markdown_files(submodules: set[str]):
+    skip_paths = SKIP_PATHS | submodules
     for root, dirs, files in os.walk(REPO_ROOT):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        rel_root = os.path.relpath(root, REPO_ROOT).replace(os.sep, "/")
+        prefix = "" if rel_root == "." else rel_root + "/"
+        dirs[:] = [
+            d for d in dirs
+            if d not in SKIP_NAMES and (prefix + d) not in skip_paths
+        ]
         for name in files:
             if name.endswith(".md"):
                 yield os.path.join(root, name)
@@ -103,7 +123,7 @@ def main() -> int:
     dead: list[tuple[str, str, str]] = []
     exempt: list[tuple[str, str]] = []
 
-    for path in iter_markdown_files():
+    for path in iter_markdown_files(SUBMODULES):
         rel_file = os.path.relpath(path, REPO_ROOT)
         try:
             text = open(path, encoding="utf-8").read()

@@ -99,7 +99,7 @@ Architecture is fixed and intentionally minimal:
 - [SSOT: platform.domain](../../ssot/platform.domain.md)
 - [SSOT: core.environments](../../ssot/core.environments.md)
 - [Infra-007 SigNoz](Infra-007.signoz_install.md) · [Infra-021 OpenPanel](Infra-021.openpanel_install.md)
-- App module: [finance_report/.../10.app/README.md](../../../repos/finance_report/README.md)
+- App module: [finance_report/.../10.app/README.md](../../../finance_report/finance_report/10.app/README.md)
 
 
 ## TODOWRITE (Archived)
