@@ -520,9 +520,8 @@ def deploy(
     # Under fast_swap (R17, #750), a deterministic hash based on image tag and iac_ref
     # is used so vault-agent is recreated only when code or infra configuration actually
     # changes, eliminating container restart downtime during app swaps.
-    if cfg.fast_swap:
-        iac_suffix = f"-{iac_ref[:7]}" if iac_ref else ""
-        config_hash = f"deploy-{image_tag}{iac_suffix}"
+    if cfg.fast_swap and iac_ref:
+        config_hash = f"deploy-{image_tag}-{iac_ref[:7]}"
     else:
         config_hash = f"deploy-{image_tag}-{int(_now() * 1000)}"
     env_vars = {

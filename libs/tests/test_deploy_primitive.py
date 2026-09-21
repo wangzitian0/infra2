@@ -1071,3 +1071,19 @@ def test_deploy_fast_swap_uses_deterministic_config_hash():
     )
     assert plan.env_vars["IAC_CONFIG_HASH"] == f"deploy-{SHORT_SHA}-{'b' * 7}"
 
+
+def test_deploy_fast_swap_falls_back_to_ms_hash_when_iac_ref_missing():
+    # When iac_ref is omitted, fast_swap safely falls back to the per-call timestamp cache-bust.
+    client = FakeDokploy()
+    plan = dp.deploy(
+        "staging",
+        FULL_SHA,
+        domain="zitian.party",
+        client=client,
+        service="truealpha/app",
+        iac_ref="",
+        _now=lambda: 1000,
+    )
+    assert plan.env_vars["IAC_CONFIG_HASH"] == f"deploy-{SHORT_SHA}-1000000"
+
+
