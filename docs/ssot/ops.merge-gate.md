@@ -39,8 +39,11 @@
 - **改动"决定合流的东西"也需 owner（与可逆性无关）**：门禁从工作树读取规则，而 AI 合流自己的 PR
   时那就是该 PR 的分支——改动因此由它自己引入的版本审判。这是自我裁决问题，不是不可逆问题，
   所以单列。`tools/pr_merge_gate.py`、它的测试、`ci-gate-inventory.yaml` 以及本文件属于这一类。
-- **受保护文件**（`AGENTS.md`、`CLAUDE.md`，及各 App 标注为 protected 的架构文档）不再单独要求
-  二次批准，但修改它们的 PR 必须在 description 中引用授权它的那句 owner 指令，使授权可追溯。
+- **受保护文件**（`CLAUDE.md`，及各 App 标注为 protected 的架构文档）不再单独要求二次批准，
+  但修改它们的 PR 必须在 description 中引用授权它的那句 owner 指令，使授权可追溯——这是 PR
+  description 里的契约，由人核对，门禁不验。
+  注意 `AGENTS.md` 不在此列：#765 之后它装的是合流门禁的 5 点核心，因此归入上一条
+  「改动决定合流的东西」，仍需 owner 批准当前 head。
 - **合流后闭环**：使用仓库允许的合流方式；确认 merge commit 已落在目标分支并监看 post-merge checks。失败时立即停止 tag / promote，报告并修复，不得继续发布。
 
 ## 授权沿革
