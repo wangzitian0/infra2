@@ -521,3 +521,75 @@ Rollback: revert the PR. Nothing is deployed, applied or wired; no secret is rea
 
 - B2（后续 milestone）：基于 `PI_CODING_AGENT_DIR` 的 runtime 隔离（compile/shim/qualify/`omca run pi`）。
 - harness 仓库的 `oh-my-code-agent` submodule 指针推进到 `168705f` 由本 PR（infra2#746）完成；后续上游演进仍按 core.harness 边界走 reviewed pin（omca 独立发布）。
+
+## 2026-09-21 workspace 文档与 pin 语义：三个发现，两个已修，一个要 owner
+
+### 已修（PR infra2#760 / #761）
+
+- **`doc_link_check` 会把生成物当死链**。链接可以指向一个「工作树里有、CI 里有、仓库里没有」的文件：
+  生成的文档由工具产出并 gitignore，不入库。`os.path.exists` 于是随 generator 跑没跑而给出不同答案，
+  检查在本地绿、干净 checkout 红。这和 #757 里 Copilot 抓到的「未展开 submodule 被当死链」是同一个
+  错误类——**判定依赖于 checkout 形态**。#760 加 `git check-ignore` 归类，降级为信息行而非失败。
+- **`tools/README.md` 从来没有 `doc_link_check.py` 的条目**，是 #757 自身留下的缺口，#760 一并补上。
+- **submodule pin 推进已可测量**，见下。新增 `tools/submodule_pin_impact.py`（#761）。
+
+### 三个 subrepo 的死链审计：结论是审计错了，不是仓库错了
+
+| repo | 跟踪 md | 初报死链 | 实际 |
+|---|---|---|---|
+| finance_report | 145 | 13 | **0** |
+| truealpha | 33 | 0 | 0 |
+| infra2-sdk | 2 | 0 | 0 |
+
+finance_report 那 13 条全指向 `docs/reference/db-schema.md`：由
+`tools/generate_db_schema_reference.py` 生成、`.gitignore:13` 忽略、其 CI 每次重建并用 `--check`
+卡漂移。**13 条链接全是对的。** 记在这里是因为「审计报了一堆红」比「审计器有假阳性」更容易被当成结论。
+
+### 需要 owner：`AGENTS.md` 关于 submodule pin 的断言被代码证伪
+
+`AGENTS.md`「Harness 作用域与优先级」第 5 条写：
+
+> submodule 只表示开发快照，不是 package、runtime、deployment 或 config-hash 依赖。
+
+实测不成立。`libs/app_manifests.py` 的 `ensure_present` 从
+`raw.githubusercontent.com/<owner>/<repo>/<pinned-sha>/<path>` 取 app manifest（因为 infra-ci 和
+iac-runner 都不 checkout submodule），而 `libs/secrets_registry.load_manifest` **在部署时**调用它。
+pin SHA 因此决定部署校验哪份 `required-env` 契约。
+
+允许的故障：pin 跨过一个新增必需变量的 App 提交，下次部署就会索要一个 1Password 里还不存在的密钥。
+
+爆炸半径可精确枚举——全仓库从 `repos/` 读的文件只有 4 份：
+
+```
+repos/finance_report/common/runtime/required-env.generated.json
+repos/truealpha/apps/app-web/required-env.manifest.json
+repos/truealpha/apps/data-engine/required-env.generated.json
+repos/truealpha/apps/llm-service/required-env.generated.json
+```
+
+所以真实规则既不是「pin 随便推」也不是「每次都要批」，而是：**改不到派生文件就是惰性的，改到了才需要
+决策**。#761 把这条写成了检查，两个分支都在真实历史上验过（truealpha `fbf5eb4` 确实改过
+`apps/data-engine/required-env.generated.json`，检查会报）。
+
+**但矛盾本身没消除**：`AGENTS.md` 是 owner 保护文件，那句话仍然是错的。需要 owner 改写第 5 条，
+或者明确裁定「manifest 解析不算 deployment 依赖」——后者我认为站不住，因为它确实在部署路径上。
+
+### 需要 owner：`AGENTS.md` 两处命名与实际不符
+
+- 「AI 文档行为约束」第 3 条点名 `Infra-001.bootstrap_and_setup.md`，实际文件是
+  `docs/project/archive/Infra-001.bootstrap_setup.md`（无 `and_`）。被保护条款保护的文件名不存在，
+  条款就是空转的。
+- 同节写 `archived/`，实际目录是 `docs/project/archive/`（`docs/project/README.md` 亦作 `archive/`）。
+
+两处都是机械可判的，但文件受保护，不自行修改。
+
+### 需要 owner 新增准则：harness 在 App 仓库发现通用缺陷时，能否直接提 PR
+
+冲突双方都在 `AGENTS.md` 里，都成立：
+
+- 「App 自治……harness 不复制、不分发、不强制同步 App policy」
+- 「SSOT First / 禁止隐性漂移」
+
+具体触发点：finance_report 没有任何链接检查（已实测），而 harness 刚建好一个并证明了它的一类假阳性。
+提 PR 给它算「帮它补缺」还是「分发 policy」，这条线需要 owner 划。定下之后，所有同类发现都不必再逐次
+上报。
