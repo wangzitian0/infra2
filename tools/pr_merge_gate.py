@@ -87,7 +87,7 @@ WORKFLOW_DIR = ROOT / ".github" / "workflows"
 
 
 @functools.lru_cache(maxsize=1)
-def _declared_deploy_globs() -> tuple[tuple[str, str], ...]:
+def _declared_deploy_globs() -> tuple[tuple[tuple[str, str], ...], bool]:
     """`on.push.paths` of every workflow that pushes to main and deploys.
 
     The hand-written list above missed `ops-checks.yml`, whose 21 push paths
@@ -109,13 +109,19 @@ def _declared_deploy_globs() -> tuple[tuple[str, str], ...]:
     try:
         names = sorted(WORKFLOW_DIR.glob("*.yml"))
     except OSError:
-        return ()
+        return (), False
+    if not names:
+        # No workflows at all is a real repository state (and the unit tests
+        # point WORKFLOW_DIR at an empty path deliberately), so it is healthy.
+        return (), True
+    parsed = 0
     for path in names:
         try:
             text = path.read_text(encoding="utf-8")
             doc = yaml.safe_load(text)
         except (OSError, UnicodeDecodeError, yaml.YAMLError):
             continue
+        parsed += 1
         if not isinstance(doc, dict):
             continue
         # PyYAML resolves a bare `on:` key to the boolean True.
@@ -132,7 +138,9 @@ def _declared_deploy_globs() -> tuple[tuple[str, str], ...]:
         if not any(marker in text for marker in DEPLOY_MARKERS):
             continue
         globs.extend((str(p), path.name) for p in _as_list(push.get("paths")))
-    return tuple(dict.fromkeys(globs))
+    # Workflows present but none readable means the derivation is broken, not
+    # that nothing deploys.
+    return tuple(dict.fromkeys(globs)), parsed > 0
 # gh's own classification of a check (`bucket`): pass / fail / pending / skipping /
 # cancel. `state` (SUCCESS, SKIPPED, IN_PROGRESS, …) is kept as the fallback for a gh
 # build without buckets.
@@ -377,7 +385,7 @@ def _deploy_triggering(path: str) -> str:
     for glob in DEPLOY_TRIGGERING_GLOBS:
         if fnmatch.fnmatch(path, glob):
             return "on merge"
-    for glob, workflow in _declared_deploy_globs():
+    for glob, workflow in _declared_deploy_globs()[0]:
         if fnmatch.fnmatch(path, glob):
             return workflow
     return ""
@@ -452,6 +460,11 @@ def evaluate(
             f"head {facts.head_sha[:7]} required"
         )
         owner = True
+    if not _declared_deploy_globs()[1]:
+        reasons.append(
+            "cannot read .github/workflows to determine which paths deploy on "
+            "merge: fix the read rather than merging on an unknown"
+        )
     fired = {f: _deploy_triggering(f) for f in facts.files}
     deploying = sorted(f for f, w in fired.items() if w)
     if deploying:

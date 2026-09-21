@@ -571,7 +571,7 @@ def test_an_unreadable_workflow_directory_leaves_the_written_globs_standing(monk
     gate._declared_deploy_globs.cache_clear()
     monkeypatch.setattr(gate, "WORKFLOW_DIR", gate.ROOT / "does-not-exist")
     try:
-        assert gate._declared_deploy_globs() == ()
+        assert gate._declared_deploy_globs() == ((), True)
         assert gate._deploy_triggering("bootstrap/06.iac_runner/main.tf")
         assert not gate._deploy_triggering("tools/deploy_v2.py")
     finally:
@@ -626,3 +626,43 @@ def test_double_star_globs_match_without_translation():
     # nothing, because it read as though the case were handled.
     assert gate._deploy_triggering("bootstrap/06.iac_runner/deep/nested/main.tf")
     assert gate._deploy_triggering("cloudflare/infra-watchdog/a/b/index.ts")
+
+
+def test_an_unreadable_workflow_set_blocks_instead_of_quietly_under_detecting(monkeypatch):
+    # Found by probing rather than by reading. With every workflow unparseable,
+    # the first version returned zero derived globs and libs/alerting.py -- a
+    # production observability apply -- came back not deploy-triggering, with a
+    # verdict that said nothing about why. Failure here removes a blocker, so
+    # swallowing it is the opposite of safe; the docstring had borrowed that
+    # reasoning from _base_changed_files, whose failure can only add one.
+    class Boom:
+        class YAMLError(Exception):
+            pass
+
+        @staticmethod
+        def safe_load(_):
+            raise Boom.YAMLError("unparseable")
+
+    gate._declared_deploy_globs.cache_clear()
+    monkeypatch.setattr(gate, "yaml", Boom)
+    try:
+        _, healthy = gate._declared_deploy_globs()
+        assert not healthy
+        verdict = gate.evaluate(_facts(), now=NOW)
+        assert not verdict.ready
+        assert any("cannot read .github/workflows" in r for r in verdict.reasons)
+    finally:
+        gate._declared_deploy_globs.cache_clear()
+
+
+def test_an_empty_workflow_directory_is_healthy_not_broken(monkeypatch):
+    # A repository with no workflows is a real state, and the unit tests point
+    # WORKFLOW_DIR at an empty path on purpose. Treating that as a malfunction
+    # would block every PR in such a repo.
+    gate._declared_deploy_globs.cache_clear()
+    monkeypatch.setattr(gate, "WORKFLOW_DIR", gate.ROOT / "no-such-dir")
+    try:
+        assert gate._declared_deploy_globs() == ((), True)
+        assert gate.evaluate(_facts(), now=NOW).ready
+    finally:
+        gate._declared_deploy_globs.cache_clear()
