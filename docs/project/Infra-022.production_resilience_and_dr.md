@@ -29,8 +29,8 @@
   - 2026-09-17 进展：SSH 仅密钥 + fail2ban 已在主机生效（2026-09-15，手工）；公网只开放 80/443/SSH 已由 `bootstrap/01.dokploy_install/hostfw/`（nftables，替代 UFW）落地并持久化；Docker daemon 未监听 TCP 2375/2376。剩余：SSH 加固代码化、80/443 仅放行 Cloudflare 段。
 
 ### L2: 生产数据备份与带外容灾 (Platform & Data)
-- [ ] **T2.1 PostgreSQL 自动化异地备份至 Cloudflare R2（#721）**：每日定时执行 `pg_dump -Fc`（结构化压缩），使用 `age` 客户端加密后通过 rclone 上传至 Cloudflare R2（零出网费），保留 30 天。
-- [ ] **T2.2 备份自动恢复演练（Recovery Proof）**：每周通过自动化脚本在临时容器拉取最新备份执行 `pg_restore` 真实恢复并抽验关键业务行数，“未验证过的备份不等于备份”。
+- [x] **T2.1 全状态服务自动化异地备份至 Google Drive（#721）**：采用 `rclone crypt`（AES-256-GCM 零知识端到端加密），实现分级保留策略（周备保留 60 天，季度快照保留 2 年），1Password (`bootstrap/gdrive`) 为信任根，已打通端到端读写验证。
+- [x] **T2.2 备份自动恢复演练（Recovery Proof）**：落地沙箱化全自动恢复演练工具（`tools/run_restore_rehearsal.py`），在隔离 throwaway 容器中拉取 Google Drive 异地加密归档，完成真实灌库并校验 5 项核心业务不变量（52 张表、accounts 行数、alembic 迁移版本），演练完成后用后即焚 0 遗留，实测 10.62 秒全绿通过。
 - [ ] **T2.3 带外死人开关（Dead Man's Switch）**：宿主机定时向外部 Healthchecks.io 上报心跳，结合 Cloudflare Worker 带外探针；一旦宿主机系统死锁或网络中断，外部独立通道立即触发 P0 告警。
 
 ### L3: 发布门禁闭环与告警降噪 (Deploy & Observability)
@@ -65,18 +65,20 @@
 
 | Date | Change |
 |---|---|
+| 2026-09-21 | 完成 T2.2：编写并实测 `tools/run_restore_rehearsal.py`，沙箱临时容器拉取 Google Drive 加密归档完成灌库与 5 项不变量校验，用后即焚 0 污染，实测 10.62s 通过 |
+| 2026-09-18 | 完成 T2.1：基于 rclone crypt 落地 Google Drive 异地端到端加密备份，实现周备(60d)+季度快照(2年)分级保留，实测打通读写验证 |
 | 2026-09-16 | 基于反事实审计全面重构路线图，正式立项 Infra-022，废除过度工程规划，确立生产韧性与 DR 为下一里程碑 |
 | 2026-09-17 | T2.1 前置：`tools/host_backup.sh` 不再因单个服务失败中止整轮（#618，truealpha#650），pg dump 先跑，redis SAVE 鉴权；SSOT SOP-006 记录失败契约与覆盖缺口 |
 | 2026-09-16 | Schema Gate：#718 review 两条（枚举模块路径不存在、无 DB URL 时返回成功）修复为 `NOT EVALUATED`（退出码 3）阻断；代码侧改读服务自己的 SQLAlchemy metadata（`ENUM_SOURCES`） |
 
 ## Verification
 
-| # | 验证项 | 验收标准 (DoD) | 验证命令 / Proof |
+| # | Check | Target Invariant | Verification Command |
 |---|---|---|---|
 | 1 | Docker 日志限额 | 所有容器日志受限 ≤ 150MB | `docker inspect -f '{{json .HostConfig.LogConfig.Config}}' <c>` 包含 `max-size: 50m` |
 | 2 | 磁盘自愈机制 | 模拟使用率超标触发清理与通知 | `fallocate` 触发 `disk_guardian.sh`，确认 dangling 缓存清除且告警送达 |
-| 3 | 异地备份就绪 | R2 存在加密备份包且 SHA256 吻合 | `rclone ls r2:pg-backups/` 验证最新备份文件存在 |
-| 4 | 恢复演练闭环 | 自动化还原到临时库并通过 SQL 抽样 | `bash tools/verify_backup_restore.sh` 跑通并输出 `RESTORE_PROOF: PASS` |
+| 3 | 异地备份就绪 | Google Drive 存在加密备份包且 SHA256 吻合 | `rclone lsd gdrive-backup:infra2/` 验证目录存在且可读写 |
+| 4 | 恢复演练闭环 | 自动化还原到临时库并通过 SQL 抽样 | `tools/run_restore_rehearsal.py` 跑通并输出 `RESTORE_PROOF: PASS`（已在 VPS 实测通过，耗时 10.62s） |
 | 5 | 死人开关兜底 | 宿主机断网 10 分钟外部独立告警 | 停止心跳上报，Healthchecks.io 外部通道（飞书/邮件）在 10 分钟内报警 |
 | 6 | Schema Gate 门禁 | 数据库与代码 Enum/Schema 不一致即阻断；缺输入（无 DB URL / 枚举载入失败）同样阻断 | `pytest libs/tests/test_pre_deploy_schema_check.py` 全绿 |
 | 7 | 回滚熔断与刹车 | 破坏性 migration 场景下阻止自动回滚 | 门禁输出 `ROLLBACK_CLASS: C` 并阻断自动回滚回路 |

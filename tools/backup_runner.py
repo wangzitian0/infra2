@@ -18,7 +18,7 @@ from libs.backup_verification import BackupEntry, load_backup_inventory
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", default="/tmp/infra2-backups")
-    parser.add_argument("--remote", default=os.getenv("BACKUP_REMOTE", "r2:infra2"))
+    parser.add_argument("--remote", default=os.getenv("BACKUP_REMOTE", "gdrive-backup:infra2"))
     parser.add_argument("--service", action="append", default=[])
     parser.add_argument("--no-upload", action="store_true")
     parser.add_argument("--manifest", default="")

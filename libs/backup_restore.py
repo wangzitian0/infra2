@@ -178,7 +178,7 @@ def run_postgres_restore_rehearsal(
         plan.pg_user,
         "-v",
         "ON_ERROR_STOP=1",
-        plan.database,
+        "postgres",
     ]
     with gzip.open(archive_path, "rb") as dump:
         proc = popen(restore_cmd, stdin=subprocess.PIPE)

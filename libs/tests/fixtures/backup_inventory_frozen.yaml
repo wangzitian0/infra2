@@ -1,8 +1,8 @@
 version: 1
 defaults:
-  retention_days: 30
-  rpo_hours: 24
-  remote: r2
+  retention_days: 60
+  rpo_hours: 180
+  remote: gdrive-backup
 services:
   - service_id: bootstrap/1password
     data_path: /data/bootstrap/1password

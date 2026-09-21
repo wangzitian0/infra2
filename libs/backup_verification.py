@@ -45,8 +45,8 @@ class BackupCheck:
 
 # Inventory-wide defaults, formerly the deleted handwritten YAML's `defaults:`
 # block (#542). A BackupFacet leaving retention/rpo/remote at zero-values means
-# "use these".
-INVENTORY_DEFAULTS = {"retention_days": 30, "rpo_hours": 24, "remote": "r2"}
+# "use these". Weekly cadence defaults to 180h RPO (7.5d) and gdrive-backup remote.
+INVENTORY_DEFAULTS = {"retention_days": 60, "rpo_hours": 180, "remote": "gdrive-backup"}
 
 
 def load_backup_inventory(path: Path | str | None = None) -> list[BackupEntry]:
