@@ -14,6 +14,26 @@ ROOT = Path(__file__).resolve().parents[2]
 NOW = 1_800_000_000.0
 
 
+@pytest.fixture(autouse=True)
+def _clear_module_caches():
+    """Both filesystem reads in the gate are ``lru_cache``d and take no
+    arguments, so a test that monkeypatches ``yaml``, ``ROOT`` or
+    ``WORKFLOW_DIR`` poisons them for the rest of the session.
+
+    Per-test ``finally`` blocks were the first attempt and did not hold: a
+    mutation audit found 2 of 120 shuffled orders failing with a 16-test blast
+    radius because one test cleared one cache and not the other, and the fix
+    for that immediately reintroduced it in a newly added test. Clearing both
+    around every test removes the discipline requirement instead of restating
+    it.
+    """
+    gate._declared_deploy_globs.cache_clear()
+    gate._required_checks.cache_clear()
+    yield
+    gate._declared_deploy_globs.cache_clear()
+    gate._required_checks.cache_clear()
+
+
 def _facts(**overrides) -> gate.HeadFacts:
     base = dict(
         number=704,
@@ -271,9 +291,23 @@ class _Gh:
 def test_collect_reads_the_newest_commit_as_the_last_push():
     facts = gate.collect(704, gh=_Gh())
     assert facts.head_sha == "feedfacefeedface"
-    assert facts.last_push_at == gate._epoch("2026-09-15T06:55:22Z")
+    # A known epoch, not _epoch() on both sides -- that tautology survived
+    # mutating _epoch to return a constant 42.0.
+    assert facts.last_push_at == 1789455322.0
     assert ("c0", "pass") in facts.checks and facts.unresolved_threads == 0
-    assert sorted(gate._required_checks()[0]) == [n for n, _ in facts.checks[:-1]]
+    # Pinned literally, not compared against _required_checks(): the fixture
+    # builds its checks FROM that call, so asserting equality made whatever it
+    # returned definitionally correct. Mutating it to {"Totally Made Up Gate"}
+    # killed no tests.
+    assert sorted(gate._required_checks()[0]) == [
+        "Lint Python Code",
+        "Test 1Password Healthcheck",
+        "Test Deployer Hash Logic",
+        "Validate Compose Files",
+        "Validate Deployer Classes",
+        "Validate Vault Agent Config",
+        "Validate Workspace Harness",
+    ]
     assert facts.review_threads_total == 1
     assert facts.node_id == "PR_node"
     assert facts.reviews_on_head()[0][0] == "copilot-pull-request-reviewer"
@@ -651,6 +685,7 @@ def test_a_missing_workflow_directory_is_a_broken_read_not_an_empty_repo(monkeyp
         assert any("cannot read .github/workflows" in r for r in verdict.reasons)
     finally:
         gate._declared_deploy_globs.cache_clear()
+        gate._required_checks.cache_clear()
 
 
 def test_the_deploy_reason_names_the_workflow_that_fires():
@@ -720,7 +755,12 @@ def test_an_unreadable_workflow_set_blocks_instead_of_quietly_under_detecting(
         def safe_load(_):
             raise Boom.YAMLError("unparseable")
 
+    # _required_checks is cached and also parses YAML, so the fake propagates
+    # into it and (frozenset(), False) sticks for the rest of the session --
+    # 2 of 120 shuffled orders failed, taking 16 tests with them, because this
+    # cleared only the other cache.
     gate._declared_deploy_globs.cache_clear()
+    gate._required_checks.cache_clear()
     monkeypatch.setattr(gate, "yaml", Boom)
     try:
         _, healthy = gate._declared_deploy_globs()
@@ -730,6 +770,7 @@ def test_an_unreadable_workflow_set_blocks_instead_of_quietly_under_detecting(
         assert any("cannot read .github/workflows" in r for r in verdict.reasons)
     finally:
         gate._declared_deploy_globs.cache_clear()
+        gate._required_checks.cache_clear()
 
 
 def test_an_existing_but_empty_workflow_directory_is_healthy(tmp_path, monkeypatch):
@@ -914,7 +955,9 @@ def test_gh_is_called_without_a_terminal_and_with_a_deadline(monkeypatch):
     monkeypatch.setattr(gate.subprocess, "run", fake_run)
     gate._gh(["pr", "view", "1"])
     assert seen["stdin"] is gate.subprocess.DEVNULL
-    assert seen["timeout"] == gate.GH_TIMEOUT_S
+    # A literal, not gate.GH_TIMEOUT_S: comparing the observed value against
+    # the constant it came from passes for any value, including 0.
+    assert seen["timeout"] == 60
 
 
 def test_a_required_check_skipped_on_a_code_pr_is_the_unexpected_kind():
@@ -1040,3 +1083,53 @@ def test_an_unreadable_workflow_read_escalates_rather_than_asking_for_patience(
         assert verdict.exit_code == 2
     finally:
         gate._declared_deploy_globs.cache_clear()
+
+
+def test_a_draft_is_not_mergeable():
+    # Zero coverage before this: `draft=` appeared once in the whole file, as
+    # the fixture's own default. Mutating `if facts.draft:` to `if False:`
+    # killed no tests, and "PR 非 Draft" is the first condition AGENTS.md names.
+    verdict = gate.evaluate(_green(draft=True), now=NOW)
+    assert not verdict.ready
+    assert any("draft" in r for r in verdict.reasons)
+
+
+def test_a_pr_targeting_something_other_than_main_needs_the_owner():
+    # Same: `base=` appeared once, as base="main". This branch sets owner too,
+    # so both the block and the escalation were uncovered.
+    verdict = gate.evaluate(_green(base="release/1.0"), now=NOW)
+    assert not verdict.ready
+    assert verdict.owner_required
+    assert any("not main" in r for r in verdict.reasons)
+
+
+def test_the_written_globs_are_load_bearing_on_their_own():
+    # The list named in the source and the list derived from the workflows
+    # overlap completely, so a test asserting a written path matched proved
+    # nothing -- dropping any written glob killed no tests. Isolate them.
+    gate._declared_deploy_globs.cache_clear()
+    try:
+        derived = {glob for glob, _ in gate._declared_deploy_globs()[0]}
+        for written in gate.DEPLOY_TRIGGERING_GLOBS:
+            if written in derived:
+                continue  # covered either way; not what this test is for
+            assert gate._deploy_triggering(
+                written.replace("**", "x").replace("*", "x")
+            ), written
+    finally:
+        gate._declared_deploy_globs.cache_clear()
+
+
+def test_an_unreadable_inventory_blocks_through_the_real_path(monkeypatch):
+    # The "cannot read ci-gate-inventory.yaml" blocker was only ever reached by
+    # forcing _required_checks to return False. Through the real code path --
+    # the file simply not being there -- nothing exercised it.
+    gate._required_checks.cache_clear()
+    monkeypatch.setattr(gate, "ROOT", gate.ROOT / "does-not-exist")
+    try:
+        assert gate._required_checks() == (frozenset(), False)
+        verdict = gate.evaluate(_green(), now=NOW)
+        assert not verdict.ready
+        assert any("ci-gate-inventory" in r for r in verdict.reasons)
+    finally:
+        gate._required_checks.cache_clear()
