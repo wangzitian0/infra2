@@ -55,6 +55,11 @@ class EnvConfig:
     gates_prod: bool = False  # prod must deploy here first (staging)
     requires_staging_first: bool = False  # this env (prod) requires a staging deploy
     dynamic: bool = False  # per-PR; compose_id/suffix are resolved at deploy time
+    # R17 (#750): the short-swap promote — deterministic (tag/iac_ref-hashed) vault-agent
+    # cache-bust, fast healthcheck start interval, migrations applied before the swap.
+    # Opted in per service and env (``_ComposeOverride.fast_swap``); the owner put it on
+    # staging only (2026-09-17: "先在 staging 做吧，prod 回头再说").
+    fast_swap: bool = False
 
     def app_url(self, *, domain: str, number: int | str | None = None) -> str:
         """Concrete public URL: fill {domain} (always) and {number} (preview only)."""
@@ -107,6 +112,7 @@ def env_config(env: str) -> EnvConfig:
 class _ComposeOverride:
     compose_id: str | None
     app_url_pattern: str  # contains {domain}
+    fast_swap: bool = False  # see EnvConfig.fast_swap
 
 
 # truealpha/app: version-pinned staging promotion (#500), generalizing the
@@ -120,7 +126,9 @@ class _ComposeOverride:
 _APP_COMPOSE_OVERRIDES: dict[str, dict[str, _ComposeOverride]] = {
     "truealpha/app": {
         "staging": _ComposeOverride(
-            "w4zo_fm9d2PnUY8ULzNO7", "https://truealpha-staging.{domain}"
+            "w4zo_fm9d2PnUY8ULzNO7",
+            "https://truealpha-staging.{domain}",
+            fast_swap=True,
         ),
         "prod": _ComposeOverride("j-gIAk0GfF0bGOitZN-og", "https://truealpha.{domain}"),
     },
@@ -146,7 +154,10 @@ def app_compose_env_config(service: str, env: str) -> EnvConfig:
             f"no compose target registered for service {service!r} env {env!r}"
         )
     return replace(
-        base, compose_id=override.compose_id, app_url_pattern=override.app_url_pattern
+        base,
+        compose_id=override.compose_id,
+        app_url_pattern=override.app_url_pattern,
+        fast_swap=override.fast_swap,
     )
 
 
