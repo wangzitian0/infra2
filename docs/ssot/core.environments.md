@@ -221,7 +221,7 @@ python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref
 - ✅ 只部署经过 staging 完整测试的版本
 - ✅ 使用 Git tags (如 `v1.2.3`)
 - ✅ 数据库迁移先在 staging 验证
-- ✅ 分批部署 (canary / blue-green)
+- ✅ 滚动切换与快速置换 (in-place fast-swap / canary; 单机避免空转重建)
 
 **迭代速度**: ⚡ (周级)
 
