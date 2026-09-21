@@ -193,9 +193,9 @@ The `S3_PUBLIC_ENDPOINT` is **required** for production deployments because:
 
 ## References
 
-- [SSOT: platform.domain](../ssot/platform.domain.md)
-- [SSOT: bootstrap.vars_and_secrets](../ssot/bootstrap.vars_and_secrets.md)
-- [Platform README](../../platform/README.md)
+- [SSOT: platform.domain](../../ssot/platform.domain.md)
+- [SSOT: bootstrap.vars_and_secrets](../../ssot/bootstrap.vars_and_secrets.md)
+- [Platform README](../../../platform/README.md)
 
 
 ## TODOWRITE (Archived)

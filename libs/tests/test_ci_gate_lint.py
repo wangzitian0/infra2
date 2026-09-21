@@ -133,3 +133,14 @@ def test_lint_non_pr_workflow_ignored(tmp_path: Path) -> None:
 
     errors = lint_workflow(wf_file)
     assert errors == []
+
+
+def test_main_missing_directory_fails_closed(tmp_path: Path) -> None:
+    from tools.ci_gate_lint import main
+    import sys
+    from unittest.mock import patch
+
+    non_existent = tmp_path / "does_not_exist"
+    with patch.object(sys, "argv", ["ci_gate_lint", str(non_existent)]):
+        exit_code = main()
+        assert exit_code == 1, "Missing directory must exit 1 (fail-closed)"

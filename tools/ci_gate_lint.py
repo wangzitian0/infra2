@@ -114,6 +114,13 @@ def lint_workflows_dir(workflows_dir: Path) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Lint GitHub Actions workflows for Left-to-Right CI hierarchy.")
     parser.add_argument(
+        "pos_dir",
+        nargs="?",
+        type=Path,
+        default=None,
+        help="Optional positional path to workflows directory",
+    )
+    parser.add_argument(
         "--workflows-dir",
         type=Path,
         default=Path(".github/workflows"),
@@ -121,11 +128,12 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if not args.workflows_dir.is_dir():
-        print(f"Workflow directory not found: {args.workflows_dir}", file=sys.stderr)
-        return 0
+    wf_dir = args.pos_dir or args.workflows_dir
+    if not wf_dir.is_dir():
+        print(f"Workflow directory not found: {wf_dir}", file=sys.stderr)
+        return 1
 
-    errors = lint_workflows_dir(args.workflows_dir)
+    errors = lint_workflows_dir(wf_dir)
     if errors:
         print("ci_gate_lint FAILED with violations:", file=sys.stderr)
         for err in errors:

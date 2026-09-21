@@ -15,8 +15,13 @@
 - TODOWRITE template: [todowrite_template.md](./todowrite_template.md)
 
 ## Global TODOWRITE
-- [Infra-001.TODOWRITE.md](./Infra-001.TODOWRITE.md) - Legacy/global issues
 - [Infra-019.TODOWRITE.md](./Infra-019.TODOWRITE.md) - workspace harness follow-ups
+
+> Infra-001's TODOWRITE was merged into
+> [its archived project file](./archive/Infra-001.bootstrap_setup.md) per the
+> archive procedure in [todowrite_template.md](./todowrite_template.md); its
+> only remaining entry recorded that the content had already moved to
+> Infra-006.
 
 ## Related
 - [README.md](../../README.md) - 工程入口

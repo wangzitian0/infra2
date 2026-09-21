@@ -375,6 +375,66 @@ invoke vault-audit.self-refresh --json-output
 invoke vault-audit.self-refresh --observations=/path/to/observations.json
 ```
 
+## doc_link_check.py
+
+Fails when a relative Markdown link in this repository points at nothing.
+AGENTS.md builds the wiki on cross-references (the 0/1 級 entry map, the 互引原則,
+every SSOT citation) and nothing verified them: 29 were dead when the check was
+written. Run by [`docs.yml`](../.github/workflows/docs.yml) before the mkdocs build.
+
+Three things are deliberately not failures, because each is real in a working
+tree or in CI but absent from a plain checkout:
+
+- **Submodules** — skipped by the paths `.gitmodules` registers, not by directory
+  name. CI checks out non-recursively, so those directories are empty; name
+  matching would also wrongly exclude this repository's own top-level
+  `truealpha/` and `finance_report/`.
+- **Generated, gitignored targets** — reported as an informational line. A
+  sibling repository links at a generated `db-schema.md` from 13 places; every
+  link is correct and a checker without this concept calls all 13 broken.
+- **`KNOWN_UNRESOLVED`** — links whose target's existence is an open question,
+  each recorded with the decision that is pending. A tracked question, never a
+  guessed target.
+
+```bash
+python3 tools/doc_link_check.py
+```
+
+## submodule_pin_impact.py
+
+Reports whether advancing a submodule pin would change anything this repository
+derives from it. Covers **every** gitlink in the tree, at any depth — `.gitmodules`
+registers four and `oh-my-code-agent` sits at the repository root, so scoping this
+to `repos/` (as the first version did) left a third of the pins outside the check
+that exists to watch pins.
+
+AGENTS.md says a pin "只表示开发快照，不是 ... deployment ... 依赖". That is not
+exactly true: [`libs/app_manifests.py`](../libs/app_manifests.py) resolves app
+manifests from `raw.githubusercontent.com/<owner>/<repo>/<pinned-sha>/<path>` because
+neither infra-ci nor the iac-runner checks the submodules out, and
+`libs/secrets_registry.load_manifest` calls it at deploy time. The pinned commit
+selects which `required-env` contract a deploy validates against, so advancing a
+pin across an App commit that adds a required variable makes the next deploy
+demand a secret that may not exist in 1Password yet.
+
+The rule is therefore neither "pins are free" nor "every bump needs review":
+**a pin advance is inert when it changes none of the derived files, and needs a
+decision when it changes one.** The derived set is discovered from tracked
+non-test, non-Markdown source rather than listed, so a new consumer cannot
+silently escape it — while prose describing a path (including this README) does
+not register as a consumer.
+
+Exit 1 means "this one needs a human", with the changed files already printed.
+
+```bash
+python3 tools/submodule_pin_impact.py
+```
+
+**Local only.** It compares the pin against the checkout beside it, and CI has no
+submodule checkout, so CI cannot run it as written. Making it a gate would mean
+comparing the PR's two gitlinks and fetching those objects — worth doing, not
+done.
+
 ## pi_chain_smoke.py (pi main-chain real-run proof)
 
 The scheduled, token-consuming end-to-end proof of the agent main chain
@@ -391,8 +451,11 @@ prose, so it must never gate merges (`# schedule-signal-exempt` in
 ops-checks.yml; daily cron + `workflow_dispatch` task `pi-chain-smoke`). Exit
 contract: `0` pass/SKIP, `1` chain assertion failure, `2` infra error
 (pi missing/timeout/unparseable). Credentials: `ZAI_CODING_CN_API_KEY` env
-(CI secret; the job SKIPs green until the secret is configured) or the local
-`$PI_CODING_AGENT_DIR/auth.json`.
+(CI secret; the job SKIPs green until the secret is configured) or a local
+`auth.json` — read from `$PI_CODING_AGENT_DIR` when that is set to a non-empty
+value, and from `~/.pi/agent` otherwise. An `auth.json` that exists but cannot
+be read, is not JSON, or carries no `zai-coding-cn` entry each report their own
+reason rather than all reading as "no credential".
 
 ```bash
 # Local proof (uses auth.json credentials)

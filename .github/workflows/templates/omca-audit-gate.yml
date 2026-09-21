@@ -1,0 +1,48 @@
+name: OMCA Audit Gate (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      workflows_dir:
+        description: 'Directory containing workflow files to lint for Left-to-Right hierarchy'
+        required: false
+        default: '.github/workflows'
+        type: string
+      strict:
+        description: 'Enforce strict architectural blocking rules in OMCA policy'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  audit-gate:
+    name: OMCA Audit & CI Budget Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Lint CI Gate Hierarchy
+        run: |
+          if [ ! -d "${{ inputs.workflows_dir }}" ]; then
+            echo "::error::Workflows directory not found: ${{ inputs.workflows_dir }}"
+            exit 1
+          fi
+          python -m tools.ci_gate_lint "${{ inputs.workflows_dir }}"
+
+      - name: Evaluate OMCA Gate Policy Self-Test
+        run: |
+          cmd=(python -m tools.omca_gate_policy --self-test)
+          if [ "${{ inputs.strict }}" = "false" ]; then
+            cmd+=(--no-strict)
+          fi
+          "${cmd[@]}"

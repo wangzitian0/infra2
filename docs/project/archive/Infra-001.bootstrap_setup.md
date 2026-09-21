@@ -23,3 +23,16 @@ Bring up the minimal bootstrap layer (L1) to enable subsequent platform setup.
 
 ## Verification
 - Bootstrap services reachable as documented.
+
+---
+
+## TODOWRITE (merged on archive)
+
+**Status**: Active  
+**Owner**: Infra
+
+## Purpose
+Track top issues discovered during projects.
+
+## Top Issues (Top 30)
+- [x] 文档工程化事项已迁移至 Infra-006.TODOWRITE.md

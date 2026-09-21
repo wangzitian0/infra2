@@ -52,6 +52,7 @@ MODEL = "glm-5.3-flash"
 PROMPT = "Reply with exactly: CHAIN-OK"
 SENTINEL = "CHAIN-OK"
 BUDGET_TOTAL_TOKENS = 30_000
+DEFAULT_AGENT_DIR = "~/.pi/agent"
 TIMEOUT_S = 180
 MAX_ATTEMPTS = 2
 BACKOFF_S = 5
@@ -63,19 +64,34 @@ def preflight(strict: bool) -> tuple[str, str]:
         return "infra", "pi binary not found on PATH"
     if os.environ.get("ZAI_CODING_CN_API_KEY"):
         return "ok", "credential from ZAI_CODING_CN_API_KEY env"
-    agent_dir = Path(os.environ.get("PI_CODING_AGENT_DIR", "~/.pi/agent"))
+    # `.get(name, default)` returns "" when the variable is set but empty, and
+    # Path("") is the current directory -- which would look for ./auth.json in
+    # whatever directory the run happened to start in. An empty value means
+    # "unset", so fall back to the default explicitly.
+    agent_dir = Path(os.environ.get("PI_CODING_AGENT_DIR") or DEFAULT_AGENT_DIR)
     auth = agent_dir.expanduser() / "auth.json"
-    if auth.is_file():
-        try:
-            keys = json.loads(auth.read_text())
-            if isinstance(keys, dict) and PROVIDER in keys:
-                return "ok", f"credential from {auth}"
-        except (OSError, ValueError):
-            pass
-        return ("infra", "no zai-coding-cn credential in env or auth.json") \
-            if strict else ("skip", f"no {PROVIDER} credential (env/auth.json)")
-    return ("infra", "no zai-coding-cn credential in env or auth.json") if strict \
-        else ("skip", f"no {PROVIDER} credential (env/auth.json)")
+
+    def missing(why: str) -> tuple[str, str]:
+        """One place for the not-usable outcome, so strict and lenient cannot
+        drift apart, and so the reason survives into the detail string."""
+        return ("infra", why) if strict else ("skip", why)
+
+    if not auth.is_file():
+        return missing(f"no {PROVIDER} credential: env unset and {auth} absent")
+    try:
+        keys = json.loads(auth.read_text())
+    except OSError as exc:
+        # Distinct from "absent": a file that exists but cannot be read is a
+        # permissions or filesystem problem, and reporting it as a missing
+        # credential sends the reader looking in the wrong place.
+        return missing(f"{auth} exists but could not be read: {exc}")
+    except ValueError as exc:
+        return missing(f"{auth} is not valid JSON: {exc}")
+    if not isinstance(keys, dict):
+        return missing(f"{auth} is {type(keys).__name__}, expected a JSON object")
+    if PROVIDER not in keys:
+        return missing(f"{auth} has no {PROVIDER} entry")
+    return "ok", f"credential from {auth}"
 
 
 def run_once() -> tuple[dict | None, str]:
