@@ -345,7 +345,7 @@ def test_trigger_and_poll_carry_a_secrets_supply_action():
 
 def test_poll_survives_a_runner_recreate_inside_the_grace_window():
     """#666: while the runner container is recreated Traefik answers a bodiless 404, then
-    502/503/504; inside the grace window the poll keeps going and the deploy settles."""
+    502/503/504 or Cloudflare 522; inside the grace window the poll keeps going and the deploy settles."""
     _calls, transport = _capture(
         [
             ({"status": "running"}, 200),
@@ -353,6 +353,7 @@ def test_poll_survives_a_runner_recreate_inside_the_grace_window():
             ({}, 502),
             ({}, 503),
             ({}, 504),
+            ({}, 522),
             ({"status": "running"}, 200),
             ({"status": "completed"}, 200),
         ]
@@ -372,6 +373,35 @@ def test_poll_survives_a_runner_recreate_inside_the_grace_window():
         gateway_grace=180.0,
     )
     assert res["status"] == "completed"
+
+
+def test_poll_survives_transport_timeout_inside_grace_window():
+    """Cloudflare transpacific read timeout / connection drops within grace window must be retried."""
+    attempts = [0]
+
+    def buggy_transport(*args, **kwargs):
+        attempts[0] += 1
+        if attempts[0] == 1:
+            raise httpx.ReadTimeout("The read operation timed out")
+        req = httpx.Request("POST", "http://test")
+        return httpx.Response(200, json={"status": "completed"}, request=req)
+
+    clock = iter(range(0, 1000, 10))
+    res = poll_platform_deploy_status(
+        env="staging",
+        ref=SHA,
+        base_url="u",
+        secret=SECRET,
+        attempts=5,
+        interval=0,
+        now=lambda: next(clock),
+        sleep=lambda *_: None,
+        nonce_factory=lambda: "nonce123",
+        transport=buggy_transport,
+        gateway_grace=180.0,
+    )
+    assert res["status"] == "completed"
+    assert attempts[0] == 2
 
 
 def test_poll_fails_naming_the_restart_when_the_gateway_stays_down_past_the_grace():

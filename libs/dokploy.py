@@ -54,13 +54,14 @@ class DokployClient:
                 "DOKPLOY_API_KEY not set. Generate from Dokploy /settings/profile or store in 1Password"
             )
 
-    # Gateway blips (the dokploy-traefik in front of the API returns these when the backend
-    # is briefly unresponsive). Safe to retry on a GET — and on a POST the caller marks
-    # ``idempotent`` (a set-desired-state write like ``compose.update``, where re-applying
-    # the same payload is a no-op even if the first attempt already acted). A 502/503/504 or
-    # a read-timeout means the gateway never relayed a response; for a NON-idempotent POST
-    # (create/deploy/delete) the backend may still have acted, so those are never retried.
-    _TRANSIENT_STATUS = (502, 503, 504)
+    # Gateway blips (the dokploy-traefik in front of the API or Cloudflare edge returns
+    # these when the backend is briefly unresponsive or a transpacific packet drops). Safe to retry
+    # on a GET — and on a POST the caller marks ``idempotent`` (a set-desired-state write like
+    # ``compose.update``, where re-applying the same payload is a no-op even if the first attempt
+    # already acted). A 502/503/504, Cloudflare 520-524, or a read-timeout means the gateway never
+    # relayed a response; for a NON-idempotent POST (create/deploy/delete) the backend may still have
+    # acted, so those are never retried.
+    _TRANSIENT_STATUS = (502, 503, 504, 520, 521, 522, 523, 524)
 
     def _request(
         self,
@@ -74,7 +75,7 @@ class DokployClient:
     ) -> dict | list:
         """Make authenticated request to Dokploy API.
 
-        Transient gateway errors (502/503/504) and connection errors (incl. read-timeouts
+        Transient gateway errors (502/503/504, Cloudflare 520-524) and connection errors (incl. read-timeouts
         from a churning control plane, see #252) are retried with backoff when the request
         is safe to repeat: any GET, or a POST the caller marks ``idempotent``. A flaky
         control plane should self-heal rather than hard-fail the caller.
