@@ -360,6 +360,15 @@ jobs:
           cd ${{ github.workspace }}
           uv run python tools/gen_ssot_index.py
 
+      # The project portfolio index is generated the same way and was not
+      # gated, so it could drift silently while the SSOT index could not --
+      # an asymmetry with no reason behind it. Default (check) mode exits
+      # non-zero when stale, exactly like the step above.
+      - name: Gate project index generated from docs/project
+        run: |
+          cd ${{ github.workspace }}
+          uv run python tools/gen_project_index.py
+
       - name: Gate backup inventory covers registered data paths
         run: |
           cd ${{ github.workspace }}
