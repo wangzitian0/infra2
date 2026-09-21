@@ -88,6 +88,15 @@ DEPLOY_TRIGGERING_GLOBS = (
 # A workflow that pushes to main and does one of these deploys. Deliberately a
 # short, explicit list: the judgement "this actually deploys" stays here, while
 # the paths that reach it are derived, because it is the paths that drift.
+# Workflows whose push-to-main deploy never reaches prod. Owner approval is
+# scoped by environment (2026-09-21): staging, the reserved pr-0 canary slot and
+# the report-branch-main preview are the agent's to merge; prod is not.
+#
+# This stays a written list because the question -- which environment does this
+# deploy reach -- is not stated anywhere in the workflow file. It is the same
+# shape as DEPLOY_MARKERS: the judgement is written down, the paths are derived.
+NON_PROD_DEPLOY_WORKFLOWS = frozenset({"ops-checks.yml"})
+
 DEPLOY_MARKERS = (
     "deploy_v2",
     "wrangler deploy",
@@ -554,7 +563,7 @@ def _deploy_triggering(path: str) -> str:
         if fnmatch.fnmatch(path, glob):
             return "on merge"
     for glob, workflow in _declared_deploy_globs()[0]:
-        if fnmatch.fnmatch(path, glob):
+        if fnmatch.fnmatch(path, glob) and workflow not in NON_PROD_DEPLOY_WORKFLOWS:
             return workflow
     return ""
 

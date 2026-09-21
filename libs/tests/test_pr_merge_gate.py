@@ -636,14 +636,20 @@ def test_a_closed_pr_costs_no_comparison_round_trip():
 # --- deploy-triggering paths, derived ----------------------------------------
 
 
-def test_ops_checks_push_paths_are_treated_as_deploy_triggering():
-    # The hand-written list named deploy.yml and the watchdog but missed
-    # ops-checks.yml, whose push paths each start a live deploy_v2 canary on
-    # merge. infra2#758 edits that workflow, and the gate would have said
-    # session authority sufficed.
-    assert gate._deploy_triggering(".github/workflows/ops-checks.yml")
-    assert gate._deploy_triggering("tools/deploy_v2.py")
-    assert gate._deploy_triggering("libs/deploy_contract.py")
+def test_a_prod_reaching_deploy_needs_the_owner_and_a_canary_does_not():
+    # Owner approval is scoped by environment (owner, 2026-09-21): staging, the
+    # reserved pr-0 canary slot and the report-branch-main preview are the
+    # agent's to merge; prod is not. apply-observability writes to live SigNoz,
+    # so it stays owner-required; ops-checks' canary targets the reserved
+    # ephemeral slot, so it does not.
+    assert (
+        gate._deploy_triggering("libs/alerting.py") == "apply-observability.yml"
+    )
+    # deploy.yml is in the written list, which reports "on merge" -- it has no
+    # workflow to cite because the merge itself is the trigger.
+    assert gate._deploy_triggering(".github/workflows/deploy.yml") == "on merge"
+    assert not gate._deploy_triggering("tools/deploy_v2.py")
+    assert not gate._deploy_triggering(".github/workflows/ops-checks.yml")
 
 
 def test_ordinary_paths_are_still_not_deploy_triggering():
@@ -663,7 +669,10 @@ def test_the_written_globs_survive_derivation():
 
 
 def test_a_deploy_triggering_path_routes_to_the_owner():
-    verdict = gate.evaluate(_facts(files=("tools/deploy_v2.py",)), now=NOW)
+    # libs/alerting.py, not tools/deploy_v2.py: the latter only starts the
+    # reserved-slot canary, which is the agent's to merge since the owner
+    # scoped approval by environment.
+    verdict = gate.evaluate(_facts(files=("libs/alerting.py",)), now=NOW)
     assert not verdict.ready
     assert verdict.owner_required
     assert any("trigger a deploy" in r for r in verdict.reasons)
@@ -691,10 +700,10 @@ def test_a_missing_workflow_directory_is_a_broken_read_not_an_empty_repo(monkeyp
 def test_the_deploy_reason_names_the_workflow_that_fires():
     # "tools/deploy_v2.py triggers a deploy" makes an owner go and find out
     # which one. Naming it makes the line a judgement they can act on.
-    verdict = gate.evaluate(_facts(files=("tools/deploy_v2.py",)), now=NOW)
+    verdict = gate.evaluate(_facts(files=("libs/alerting.py",)), now=NOW)
     reason = next(r for r in verdict.reasons if "trigger a deploy" in r)
-    assert "ops-checks.yml" in reason
-    assert "tools/deploy_v2.py" in reason
+    assert "apply-observability.yml" in reason
+    assert "libs/alerting.py" in reason
 
 
 def test_a_merge_triggered_path_needs_no_workflow_to_name():
