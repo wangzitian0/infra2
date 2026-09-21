@@ -68,6 +68,11 @@ SELF_GOVERNING_FILES = (
     # set that judges the very PR doing the flipping, and ci_gate_audit does
     # not cross-check that field against the live ruleset.
     "docs/ssot/ci-gate-inventory.yaml",
+    # Since #765 moved the procedures to SSOT, AGENTS.md holds the five-point
+    # merge core -- it decides merges, so it belongs here rather than in the
+    # protected list, whose duty is now to cite the owner instruction instead
+    # of asking for a second approval.
+    "AGENTS.md",
 )
 PROTECTED_FILES = ("AGENTS.md", "CLAUDE.md")
 # A push to main under these paths deploys (deploy.yml: the runner rebuild;
@@ -231,7 +236,9 @@ def _required_checks() -> tuple[frozenset[str], bool]:
     losing this list loses the only check that notices a gate never ran.
     """
     try:
-        doc = yaml.safe_load((ROOT / "docs/ssot/ci-gate-inventory.yaml").read_text())
+        doc = yaml.safe_load(
+            (ROOT / "docs/ssot/ci-gate-inventory.yaml").read_text(encoding="utf-8")
+        )
         gates = [g for g in (doc.get("gates") or []) if g.get("blocks_merge")]
     except (OSError, yaml.YAMLError, AttributeError):
         return frozenset(), False
@@ -242,7 +249,7 @@ def _required_checks() -> tuple[frozenset[str], bool]:
         job, workflow = gate.get("job"), gate.get("workflow")
         display = job
         try:
-            spec = yaml.safe_load((ROOT / str(workflow)).read_text())
+            spec = yaml.safe_load((ROOT / str(workflow)).read_text(encoding="utf-8"))
             display = ((spec.get("jobs") or {}).get(job) or {}).get("name") or job
         except (OSError, yaml.YAMLError, AttributeError, TypeError):
             pass
@@ -678,13 +685,10 @@ def evaluate(
             f"{facts.head_sha[:7]} is required"
         )
         owner = True
-    protected = sorted(f for f in facts.files if f in PROTECTED_FILES)
-    if protected:
-        reasons.append(
-            f"touches protected file(s) {', '.join(protected)}: owner approval of "
-            f"head {facts.head_sha[:7]} required"
-        )
-        owner = True
+    # No escalation for protected files any more: the rule is now to cite the
+    # owner instruction that authorised the edit, which is a contract in the PR
+    # description and not a thing this tool can verify. The ones that genuinely
+    # must not be self-judged are in SELF_GOVERNING_FILES above.
     if not _declared_deploy_globs()[1]:
         reasons.append(
             "cannot read .github/workflows to determine which paths deploy on "

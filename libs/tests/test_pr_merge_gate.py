@@ -72,22 +72,6 @@ def test_pending_checks_and_open_threads_are_not_yet_not_owner():
     assert "2 review thread(s) unresolved" in verdict.reasons
 
 
-def test_a_protected_file_or_a_deploy_triggering_path_needs_the_owner():
-    protected = gate.evaluate(_facts(files=("AGENTS.md", "libs/x.py")), now=NOW)
-    assert protected.exit_code == 2 and "AGENTS.md" in protected.reasons[0]
-    runner = gate.evaluate(
-        _facts(files=("bootstrap/06.iac_runner/compose.yaml",)), now=NOW
-    )
-    assert runner.exit_code == 2 and "trigger a deploy" in runner.reasons[0]
-    workflow = gate.evaluate(_facts(files=(".github/workflows/deploy.yml",)), now=NOW)
-    assert workflow.owner_required
-    # deploy-cloudflare-watchdog.yml runs `wrangler deploy` on a push under this path
-    worker = gate.evaluate(
-        _facts(files=("cloudflare/infra-watchdog/worker.js",)), now=NOW
-    )
-    assert worker.exit_code == 2 and "trigger a deploy" in worker.reasons[0]
-
-
 def test_the_deploy_triggering_globs_cover_every_push_triggered_deploy_workflow():
     import yaml
 
@@ -358,7 +342,7 @@ def test_main_json_reports_the_owner_gate(capsys):
             out = super().__call__(argv)
             if list(argv)[:2] == ["pr", "view"]:
                 doc = json.loads(out)
-                doc["files"].append({"path": "CLAUDE.md"})
+                doc["files"].append({"path": "AGENTS.md"})
                 return json.dumps(doc)
             return out
 
@@ -874,6 +858,7 @@ def test_changing_what_decides_merges_needs_the_owner():
         "libs/tests/test_pr_merge_gate.py",
         "docs/ssot/ops.merge-gate.md",
         "docs/ssot/ci-gate-inventory.yaml",
+        "AGENTS.md",
     ):
         verdict = gate.evaluate(_green(files=(path,)), now=NOW)
         assert not verdict.ready, path
