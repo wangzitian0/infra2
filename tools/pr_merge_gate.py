@@ -33,6 +33,7 @@ import fnmatch
 import functools
 import json
 import math
+import os
 import subprocess
 import sys
 import time
@@ -149,7 +150,18 @@ def _declared_deploy_globs() -> tuple[tuple[tuple[str, str], ...], bool]:
         # existing-but-empty directory is a real repository state; one that is
         # not there at all is a broken read, and reporting it healthy silently
         # retired every derived deploy path.
-        return (), WORKFLOW_DIR.is_dir()
+        # is_dir() is True for a directory with no read permission, and
+        # Path.glob swallows the PermissionError exactly as it swallows
+        # FileNotFoundError -- so an unreadable directory reported healthy with
+        # zero globs, silently retiring every derived deploy path. Probe the
+        # read itself rather than the directory's existence.
+        try:
+            os.close(os.open(WORKFLOW_DIR, os.O_RDONLY))
+            with os.scandir(WORKFLOW_DIR):
+                pass
+        except OSError:
+            return (), False
+        return (), True
     parsed = 0
     for path in names:
         try:
@@ -502,6 +514,13 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
         files=tuple(str(f["path"]) for f in view.get("files") or []),
         changed_files=int(view.get("changedFiles") or 0),
         review_decision=str(view.get("reviewDecision") or ""),
+        # `not view.get(name)`, not `name not in view`. _field() two lines up
+        # was deliberately changed to treat a present-but-null value as ABSENT,
+        # and the class guard introduced in the same commit did not carry that
+        # over: {"files": null, "changedFiles": null} left the key present, gave
+        # an empty file list, switched the truncation guard off, and every
+        # owner gate then iterated nothing -- exit 0, `gh pr merge` issued.
+        # None of these five is ever legitimately empty on a real pull request.
         absent_fields=tuple(
             name
             for name in (
@@ -511,7 +530,7 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
                 "mergeable",
                 "mergeStateStatus",
             )
-            if name not in view
+            if not view.get(name)
         ),
         last_push_at=last_push if head_seen else 0.0,
         checks=tuple(

@@ -1125,3 +1125,87 @@ def test_an_unreadable_inventory_blocks_through_the_real_path(monkeypatch):
         assert any("ci-gate-inventory" in r for r in verdict.reasons)
     finally:
         gate._required_checks.cache_clear()
+
+
+def test_a_null_valued_field_is_absent_too_not_merely_a_missing_key():
+    # The class guard asked "was the key there?" while _field(), two lines
+    # above it in the same commit, asked "did an answer arrive?". A blind audit
+    # drove {"files": null, "changedFiles": null} end to end: empty file list,
+    # truncation guard switched off by its own `if facts.changed_files`, every
+    # owner gate iterating nothing -- exit 0, and the tool printed
+    # "merged #704". None of these five is ever legitimately empty on a real PR.
+    def fake(argv):
+        if argv[:2] == ["pr", "view"]:
+            return json.dumps(
+                {
+                    "number": 1,
+                    "state": "OPEN",
+                    "isDraft": False,
+                    "baseRefName": "main",
+                    "headRefOid": "f" * 40,
+                    "files": None,
+                    "changedFiles": None,
+                    "commits": None,
+                    "reviews": [],
+                    "id": "X",
+                    "mergeable": "MERGEABLE",
+                    "mergeStateStatus": "CLEAN",
+                }
+            )
+        if argv[:2] == ["pr", "checks"]:
+            return json.dumps(
+                [
+                    {"name": n, "state": "COMPLETED", "bucket": "pass"}
+                    for n in sorted(gate._required_checks()[0])
+                ]
+            )
+        if argv[:2] == ["api", "graphql"]:
+            return json.dumps(
+                {
+                    "data": {
+                        "repository": {
+                            "pullRequest": {
+                                "reviewThreads": {"totalCount": 0, "nodes": []}
+                            }
+                        }
+                    }
+                }
+            )
+        if argv[:1] == ["api"]:
+            return json.dumps({"files": []})
+        raise AssertionError(argv)
+
+    facts = gate.collect(1, gh=fake)
+    assert set(facts.absent_fields) == {"files", "changedFiles", "commits"}
+    verdict = gate.evaluate(facts, now=NOW)
+    assert not verdict.ready
+    assert any("gh did not return" in r for r in verdict.reasons)
+
+
+def test_a_directory_that_exists_but_cannot_be_read_is_not_healthy(tmp_path):
+    # is_dir() is True for a directory with no read permission, and Path.glob
+    # swallows the PermissionError exactly as it swallows FileNotFoundError --
+    # so the fix for the missing-directory case walked straight back into the
+    # trap its own docstring describes: healthy=True, zero derived globs, and a
+    # ready verdict with an empty reasons list while libs/alerting.py (a live
+    # SigNoz apply) came back not deploy-triggering.
+    workflows = tmp_path / "workflows"
+    workflows.mkdir()
+    (workflows / "x.yml").write_text(
+        "on:\n  push:\n    branches: [main]\n    paths: ['libs/**']\njobs: {}\n"
+        "# terraform apply\n",
+        encoding="utf-8",
+    )
+    import os as _os
+
+    _os.chmod(workflows, 0o000)
+    try:
+        gate._declared_deploy_globs.cache_clear()
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(gate, "WORKFLOW_DIR", workflows)
+            globs, healthy = gate._declared_deploy_globs()
+            assert globs == ()
+            assert not healthy
+    finally:
+        _os.chmod(workflows, 0o755)
+        gate._declared_deploy_globs.cache_clear()
