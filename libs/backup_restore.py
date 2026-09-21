@@ -204,9 +204,12 @@ def run_postgres_restore_rehearsal(
         restore_target_db,
     ]
     filtered_roles = 0
+    stopped_reading = False
     with gzip.open(archive_path, "rb") as dump:
         proc = popen(restore_cmd, stdin=subprocess.PIPE)
-        if proc.stdin is None:
+        if proc.stdin is None:  # pragma: no cover - stdin=PIPE always gives a pipe
+            proc.kill()
+            proc.wait()
             raise BackupRestoreError("restore subprocess exposed no stdin pipe")
         try:
             with proc.stdin:
@@ -231,10 +234,21 @@ def run_postgres_restore_rehearsal(
             # psql runs with ON_ERROR_STOP=1, so it can exit while we are still
             # streaming. Its own exit code and stderr are the real diagnosis,
             # so fall through and reap it instead of surfacing the pipe error.
-            pass
-        rc = proc.wait()
+            stopped_reading = True
+        finally:
+            # Reap on every path. Any other exception from the write loop (a
+            # corrupt gzip member, an OSError) would otherwise propagate past
+            # wait() and leave psql running with nothing to read.
+            rc = proc.wait()
     if rc != 0:
         raise BackupRestoreError(f"postgres restore command failed with exit code {rc}")
+    if stopped_reading:
+        # psql stopped reading before the dump was fully streamed but still
+        # exited 0. The restore is incomplete, so this must not pass as success.
+        raise BackupRestoreError(
+            "postgres restore command stopped reading before the dump was "
+            "fully streamed, yet exited 0: the restore is incomplete"
+        )
 
     for sql in plan.invariant_sql:
         result = runner(

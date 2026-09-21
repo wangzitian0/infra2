@@ -298,14 +298,19 @@ def main() -> int:
                 database=db,
                 keep_container=args.keep_container,
             )
+            # Reading and serializing the report belongs inside the guard too:
+            # a malformed report would otherwise raise here and abort the run,
+            # skipping every remaining service.
+            status = report["status"]
+            rendered = json.dumps(report, indent=2)
         except Exception as exc:  # noqa: BLE001 - one service must not abort the run
             failures.append(s_id)
             print(f"[!] rehearsal raised: {type(exc).__name__}: {exc}")
             print("RESTORE_PROOF: FAIL")
             continue
-        print(json.dumps(report, indent=2))
-        print(f"RESTORE_PROOF: {report['status']}")
-        if report["status"] != "PASS":
+        print(rendered)
+        print(f"RESTORE_PROOF: {status}")
+        if status != "PASS":
             failures.append(s_id)
 
     if failures:

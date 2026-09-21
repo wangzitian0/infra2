@@ -600,3 +600,100 @@ def test_rehearsal_all_attempts_every_service_when_one_fails(monkeypatch, capsys
     assert "finance_report/postgres" in out
     assert "RESTORE_PROOF: FAIL" in out
     assert "RESTORE_PROOF: PASS" in out
+
+
+def test_restore_rejects_a_psql_that_stopped_reading_but_exited_zero(tmp_path) -> None:
+    """An EPIPE with exit 0 means psql quit early: the restore is incomplete."""
+    from libs.backup_restore import BackupRestoreError
+
+    class EarlyExitStdin:
+        def __init__(self) -> None:
+            self.count = 0
+
+        def write(self, data: bytes) -> None:
+            self.count += 1
+            if self.count > 2:
+                raise BrokenPipeError(32, "Broken pipe")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    payload = b"".join(b"INSERT INTO t VALUES (%d);\n" % i for i in range(50))
+
+    # rc == 0 must NOT launder a truncated stream into a pass.
+    with pytest.raises(BackupRestoreError, match="stopped reading"):
+        _fake_restore(payload, tmp_path, stdin_cls=EarlyExitStdin, wait_rc=0)
+
+
+def test_restore_reaps_psql_when_the_write_loop_raises_something_else(tmp_path) -> None:
+    """Any error while streaming must still reap the child, not leave it running."""
+    import gzip
+
+    from libs.backup_restore import RestoreRehearsalPlan, run_postgres_restore_rehearsal
+
+    dump_file = tmp_path / "dump.sql.gz"
+    with gzip.open(dump_file, "wb") as handle:
+        handle.write(b"SELECT 1;\nSELECT 2;\n")
+
+    waited: list[bool] = []
+
+    class ExplodingStdin:
+        def write(self, data: bytes) -> None:
+            raise OSError(5, "Input/output error")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class Proc:
+        def __init__(self) -> None:
+            self.stdin = ExplodingStdin()
+
+        def wait(self) -> int:
+            waited.append(True)
+            return 0
+
+    plan = RestoreRehearsalPlan(
+        service_id="test/postgres",
+        source_uri="test:dump.sql.gz",
+        archive_path=dump_file,
+        target_container="test-postgres-restore-rehearsal",
+        pg_user="postgres",
+        database="testdb",
+        invariant_sql=("SELECT 1",),
+    )
+
+    with pytest.raises(OSError):
+        run_postgres_restore_rehearsal(
+            plan,
+            popen=lambda cmd, stdin=None: Proc(),
+            runner=lambda cmd, **kwargs: None,
+        )
+    assert waited == [True], "psql was left unreaped when the write loop failed"
+
+
+def test_rehearsal_all_survives_a_malformed_report(monkeypatch, capsys) -> None:
+    """A report missing 'status' must not abort the services that follow it."""
+    import tools.run_restore_rehearsal as rrr
+
+    attempted: list[str] = []
+
+    def fake_run_rehearsal(*, manifest_path, service_id, database, keep_container):
+        attempted.append(service_id)
+        if service_id == "finance_report/postgres":
+            return {"service_id": service_id}  # no "status" key
+        return {"status": "PASS", "service_id": service_id}
+
+    monkeypatch.setattr(rrr, "run_rehearsal", fake_run_rehearsal)
+    monkeypatch.setattr("sys.argv", ["run_restore_rehearsal", "--service-id", "all"])
+
+    rc = rrr.main()
+
+    assert attempted == ["finance_report/postgres", "truealpha/postgres"]
+    assert rc == 1
+    assert "KeyError" in capsys.readouterr().out
