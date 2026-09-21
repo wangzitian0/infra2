@@ -30,15 +30,20 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import functools
 import json
 import math
 import subprocess
 import sys
 import time
+from pathlib import Path
+
+import yaml
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 
+ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_REPO = "wangzitian0/infra2"
 QUIET_MINUTES = 12
 SETTLE_MINUTES = 3  # event policy: after the review of the head, not after the push
@@ -50,6 +55,9 @@ PROTECTED_FILES = ("AGENTS.md", "CLAUDE.md")
 # A push to main under these paths deploys (deploy.yml: the runner rebuild;
 # deploy-cloudflare-watchdog.yml: `wrangler deploy` of the out-of-band worker, #718) —
 # a merge must not be what triggers it under session authority.
+# Paths whose merge sets something running that a revert does not undo. These
+# are the ones no workflow declares for itself -- a runner rebuild, a bootstrap
+# self-update -- so they stay written down.
 DEPLOY_TRIGGERING_GLOBS = (
     "bootstrap/06.iac_runner/*",
     "bootstrap/06.iac_runner/**/*",
@@ -58,6 +66,55 @@ DEPLOY_TRIGGERING_GLOBS = (
     "cloudflare/infra-watchdog/*",
     "cloudflare/infra-watchdog/**/*",
 )
+
+# A workflow that pushes to main and does one of these deploys. Deliberately a
+# short, explicit list: the judgement "this actually deploys" stays here, while
+# the paths that reach it are derived, because it is the paths that drift.
+DEPLOY_MARKERS = ("deploy_v2", "wrangler deploy", "iac_runner", "repository_dispatch")
+WORKFLOW_DIR = ROOT / ".github" / "workflows"
+
+
+@functools.lru_cache(maxsize=1)
+def _declared_deploy_globs() -> tuple[str, ...]:
+    """`on.push.paths` of every workflow that pushes to main and deploys.
+
+    The hand-written list above missed `ops-checks.yml`, whose 21 push paths
+    each start a live `deploy_v2` canary on merge -- its own comment says so:
+    "Same-repo PRs, main pushes, schedules, and manual runs all mutate the same
+    reserved ephemeral slot". A PR touching any of them therefore needs owner
+    approval of that head under AGENTS.md's 高风险例外, and this gate would have
+    said session authority sufficed.
+
+    Deriving is the point. A second hand-written list would drift the same way
+    the first one did; the workflows already declare which paths wake them.
+
+    Reads only local files, so there is no network, no TTY and nothing to race.
+    A workflow that cannot be parsed contributes nothing rather than raising --
+    a malformed file must not take the gate offline -- and the written list
+    above still stands on its own.
+    """
+    globs: list[str] = []
+    try:
+        names = sorted(WORKFLOW_DIR.glob("*.yml"))
+    except OSError:
+        return ()
+    for path in names:
+        try:
+            text = path.read_text(encoding="utf-8")
+            doc = yaml.safe_load(text)
+        except (OSError, UnicodeDecodeError, yaml.YAMLError):
+            continue
+        if not isinstance(doc, dict):
+            continue
+        # PyYAML resolves a bare `on:` key to the boolean True.
+        triggers = doc.get("on") if isinstance(doc.get("on"), dict) else doc.get(True)
+        push = (triggers or {}).get("push") if isinstance(triggers, dict) else None
+        if not isinstance(push, dict) or "main" not in (push.get("branches") or []):
+            continue
+        if not any(marker in text for marker in DEPLOY_MARKERS):
+            continue
+        globs.extend(str(p) for p in (push.get("paths") or []))
+    return tuple(dict.fromkeys(globs))
 # gh's own classification of a check (`bucket`): pass / fail / pending / skipping /
 # cancel. `state` (SUCCESS, SKIPPED, IN_PROGRESS, …) is kept as the fallback for a gh
 # build without buckets.
@@ -286,7 +343,13 @@ def request_copilot_review(facts: HeadFacts, *, gh: Runner = _gh) -> None:
 
 
 def _deploy_triggering(path: str) -> bool:
-    return any(fnmatch.fnmatch(path, glob) for glob in DEPLOY_TRIGGERING_GLOBS)
+    globs = DEPLOY_TRIGGERING_GLOBS + _declared_deploy_globs()
+    return any(fnmatch.fnmatch(path, _normalise(glob)) for glob in globs)
+
+
+def _normalise(glob: str) -> str:
+    """`fnmatch` has no `**`; a workflow's `a/**` means "anything under a/"."""
+    return glob[:-1] + "*" if glob.endswith("/**") else glob
 
 
 def evaluate(

@@ -525,3 +525,54 @@ def test_a_closed_pr_costs_no_comparison_round_trip():
     facts = gate.collect(704, gh=fake)
     assert facts.base_changed_files == ()
     assert not any("/compare/" in a for call in calls for a in call)
+
+
+# --- deploy-triggering paths, derived ----------------------------------------
+
+
+def test_ops_checks_push_paths_are_treated_as_deploy_triggering():
+    # The hand-written list named deploy.yml and the watchdog but missed
+    # ops-checks.yml, whose push paths each start a live deploy_v2 canary on
+    # merge. infra2#758 edits that workflow, and the gate would have said
+    # session authority sufficed.
+    assert gate._deploy_triggering(".github/workflows/ops-checks.yml")
+    assert gate._deploy_triggering("tools/deploy_v2.py")
+    assert gate._deploy_triggering("libs/deploy_contract.py")
+
+
+def test_ordinary_paths_are_still_not_deploy_triggering():
+    # Derivation must not swallow the repository whole: over-blocking would
+    # send every PR to the owner and make the signal worthless.
+    assert not gate._deploy_triggering("tools/pi_chain_smoke.py")
+    assert not gate._deploy_triggering("tools/README.md")
+    assert not gate._deploy_triggering("libs/tests/test_pr_merge_gate.py")
+
+
+def test_the_written_globs_survive_derivation():
+    # These have no workflow path filter to be derived from -- a runner rebuild
+    # and a bootstrap self-update are triggered by the merge itself.
+    assert gate._deploy_triggering("bootstrap/06.iac_runner/main.tf")
+    assert gate._deploy_triggering("scripts/deploy_iac_runner_bootstrap.sh")
+    assert gate._deploy_triggering("cloudflare/infra-watchdog/src/index.ts")
+
+
+def test_a_deploy_triggering_path_routes_to_the_owner():
+    verdict = gate.evaluate(
+        _facts(files=("tools/deploy_v2.py",)), now=NOW
+    )
+    assert not verdict.ready
+    assert verdict.owner_required
+    assert any("trigger a deploy" in r for r in verdict.reasons)
+
+
+def test_an_unreadable_workflow_directory_leaves_the_written_globs_standing(monkeypatch):
+    # A malformed or missing workflow must not take the gate offline, and must
+    # not quietly stop the written list from blocking.
+    gate._declared_deploy_globs.cache_clear()
+    monkeypatch.setattr(gate, "WORKFLOW_DIR", gate.ROOT / "does-not-exist")
+    try:
+        assert gate._declared_deploy_globs() == ()
+        assert gate._deploy_triggering("bootstrap/06.iac_runner/main.tf")
+        assert not gate._deploy_triggering("tools/deploy_v2.py")
+    finally:
+        gate._declared_deploy_globs.cache_clear()
