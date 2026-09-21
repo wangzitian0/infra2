@@ -3,8 +3,9 @@
 
 `docs/ssot/ops.standards.md` §5 makes this a 必须, and it was written from a
 measured incident: "2026-06 prefect 占 3G、零限额下内存 27/31G、Dokploy 控制面
-超时". Its blacklist adds "禁止无限额服务上 prod". Nothing checked it. An audit
-found 13 committed compose files with no ceiling at all, including
+超时". Its blacklist adds "禁止无限额服务上 prod". Nothing checked it. An audit found
+committed compose files with no ceiling at all -- 21 once the check is applied
+per service rather than per file -- including
 platform/01.postgres, platform/10.authentik, platform/11.signoz,
 bootstrap/05.vault and bootstrap/06.iac_runner -- and prod, staging, preview and
 playground share one VPS, so a single leak takes the control plane with it,
@@ -62,8 +63,13 @@ def _declares_ceiling(path: Path) -> bool:
             return False
         if "mem_limit" in spec:
             continue
-        limits = ((spec.get("deploy") or {}).get("resources") or {}).get("limits") or {}
-        if "memory" not in limits:
+        # Walk defensively: a `deploy:` that is not a mapping is malformed, and
+        # crashing on it would fail open by turning the lint into an error the
+        # job reports as broken rather than as a missing ceiling.
+        node = spec.get("deploy")
+        for key in ("resources", "limits"):
+            node = node.get(key) if isinstance(node, dict) else None
+        if not isinstance(node, dict) or "memory" not in node:
             return False
     return True
 
