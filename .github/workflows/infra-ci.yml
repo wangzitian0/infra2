@@ -162,6 +162,13 @@ jobs:
       - name: Lint platform image pins (no bare :latest)
         run: python3 tools/lint_platform_image_pins.py
 
+      - name: Install lint dependencies
+        # This job has no setup-python and installs nothing else; the resource
+        # lint needs PyYAML. It imported today only because the runner image
+        # happens to ship it -- an image refresh would turn a blocks_merge gate
+        # into ModuleNotFoundError for every PR.
+        run: python3 -m pip install --quiet pyyaml
+
       - name: Lint compose resource limits
         # ops.standards.md §5 makes a memory ceiling 必须 and was written from a
         # measured incident; nothing checked it. Ratcheted: the existing
