@@ -13,6 +13,7 @@ import argparse
 import json
 import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -69,7 +70,7 @@ def run_rehearsal(
     )
     assert_rehearsal_target(container)
 
-    # 1. Start isolated sandbox container
+    # 1. Start isolated sandbox container (hard-disable networking, enforce local trust auth)
     print(f"[*] Starting sandbox container: {container} (image: {image})...")
     subprocess.run(["docker", "rm", "-f", container], capture_output=True)
     run_cmd = [
@@ -78,8 +79,9 @@ def run_rehearsal(
         "-d",
         "--name",
         container,
+        "--network=none",
         "-e",
-        f"POSTGRES_PASSWORD={bootstrap_user}",
+        "POSTGRES_HOST_AUTH_METHOD=trust",
         "-e",
         f"POSTGRES_USER={bootstrap_user}",
         "--memory=1g",
@@ -101,11 +103,11 @@ def run_rehearsal(
             f"[+] Materialized archive: {archive_path} ({archive_path.stat().st_size} bytes)"
         )
 
-        # 4. Define invariants (must raise an exception on failure so psql non-zero exit blocks bad restores)
+        # 4. Define invariants (enforce >=50 tables, >=5 accounts, alembic revision so bad restores are blocked)
         invariants = (
             "SELECT 1",
-            "DO $$ BEGIN IF (SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public') < 1 THEN RAISE EXCEPTION 'no tables restored'; END IF; END $$;",
-            "DO $$ BEGIN IF (SELECT count(*) FROM accounts) < 1 THEN RAISE EXCEPTION 'accounts table is empty'; END IF; END $$;",
+            "DO $$ BEGIN IF (SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public') < 50 THEN RAISE EXCEPTION 'table count below threshold (<50)'; END IF; END $$;",
+            "DO $$ BEGIN IF (SELECT count(*) FROM accounts) < 5 THEN RAISE EXCEPTION 'accounts count below threshold (<5)'; END IF; END $$;",
             "DO $$ BEGIN IF (SELECT count(*) FROM alembic_version) < 1 THEN RAISE EXCEPTION 'alembic_version missing'; END IF; END $$;",
         )
         plan = build_postgres_rehearsal_plan(
@@ -177,8 +179,15 @@ def run_rehearsal(
         if not keep_container:
             print(f"[*] Teardown: removing sandbox container {container}...")
             subprocess.run(["docker", "rm", "-f", container], capture_output=True)
-            if Path(download_dir).exists():
-                shutil.rmtree(download_dir, ignore_errors=True)
+            p_dl = Path(download_dir).resolve()
+            # Safety guard: only rmtree if path contains rehearsal marker or is inside OS tempdir
+            tmp_root = Path(tempfile.gettempdir()).resolve()
+            if p_dl.exists() and (
+                "infra2-backup-restore-rehearsal" in p_dl.name
+                or "rehearsal" in p_dl.name
+                or p_dl.is_relative_to(tmp_root)
+            ):
+                shutil.rmtree(p_dl, ignore_errors=True)
             print("[+] Teardown completed. Zero remnants.")
         else:
             print(f"[!] Sandbox container {container} preserved for inspection.")
