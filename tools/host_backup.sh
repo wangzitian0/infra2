@@ -15,12 +15,14 @@
 # skipped on a failed run, so older good runs are not rotated away.
 #
 # Usage (on the VPS, where /data and the docker socket live):
-#   tools/host_backup.sh                      # archive locally to /data/backups/infra2
-#   BACKUP_REMOTE=r2:infra2 tools/host_backup.sh   # archive + upload off-host
+#   tools/host_backup.sh                                              # archive locally to /data/backups/infra2
+#   BACKUP_REMOTE=gdrive-backup:infra2 tools/host_backup.sh           # archive + upload off-host (weekly)
+#   BACKUP_REMOTE=gdrive-backup:infra2 BACKUP_TIER=quarterly tools/host_backup.sh # quarterly snapshot
 #
 # Environment:
 #   BACKUP_OUTPUT_DIR  default /data/backups/infra2
-#   BACKUP_REMOTE      optional rclone remote prefix (e.g. r2:infra2); off-host upload
+#   BACKUP_REMOTE      optional rclone remote prefix (e.g. gdrive-backup:infra2); off-host upload
+#   BACKUP_TIER        optional retention tier: weekly (default) | quarterly
 #   BACKUP_DATA_ROOT   host data root holding the service data paths (default /data)
 #   BACKUP_KEEP        local run directories to keep (default 7)
 #   ENV_SUFFIX         optional container suffix (e.g. -staging); default production ("")
@@ -29,6 +31,11 @@ set -euo pipefail
 
 OUTPUT_DIR="${BACKUP_OUTPUT_DIR:-/data/backups/infra2}"
 REMOTE="${BACKUP_REMOTE:-}"
+TIER="${BACKUP_TIER:-weekly}"
+if [ "${TIER}" != "weekly" ] && [ "${TIER}" != "quarterly" ]; then
+  echo "invalid BACKUP_TIER '${TIER}': must be 'weekly' or 'quarterly'" >&2
+  exit 2
+fi
 DATA_ROOT="${BACKUP_DATA_ROOT:-/data}"
 SUFFIX="${ENV_SUFFIX:-}"
 PG_SUPERUSER="${PG_SUPERUSER:-postgres}"
@@ -37,6 +44,11 @@ TS="$(date -u +%Y%m%dT%H%M%SZ)"
 RUN_DIR="${OUTPUT_DIR}/${TS}"
 MANIFEST="${RUN_DIR}/manifest.json"
 ARTIFACTS_FILE="${RUN_DIR}/.artifacts.jsonl"
+
+RUN_REMOTE=""
+if [ -n "${REMOTE}" ]; then
+  RUN_REMOTE="${REMOTE%/}/${TIER}/${TS}"
+fi
 
 mkdir -p "${RUN_DIR}"
 : > "${ARTIFACTS_FILE}"
@@ -71,7 +83,10 @@ emit_artifact() {
   size=$(stat -c%s "${archive}")
   sha=$(sha256_of "${archive}")
   remote_uri="local:${archive}"
-  if [ -n "${REMOTE}" ]; then
+  if [ -n "${RUN_REMOTE}" ]; then
+    remote_uri="${RUN_REMOTE}/${service_id}/$(basename "${archive}")"
+    rclone copyto "${archive}" "${remote_uri}"
+  elif [ -n "${REMOTE}" ]; then
     remote_uri="${REMOTE%/}/${service_id}/$(basename "${archive}")"
     rclone copyto "${archive}" "${remote_uri}"
   fi
@@ -171,6 +186,9 @@ done <<< "${SERVICES}"
 } > "${MANIFEST}"
 rm -f "${ARTIFACTS_FILE}"
 
+if [ -n "${RUN_REMOTE}" ]; then
+  rclone copyto "${MANIFEST}" "${RUN_REMOTE}/manifest.json"
+fi
 if [ -n "${REMOTE}" ]; then
   rclone copyto "${MANIFEST}" "${REMOTE%/}/manifest.json"
 fi
@@ -181,9 +199,24 @@ if [ "${#failures[@]}" -gt 0 ]; then
   exit 1
 fi
 
-# Retention: keep the most recent BACKUP_KEEP local run directories.
+# Local Retention: keep the most recent BACKUP_KEEP local run directories.
 ls -1dt "${OUTPUT_DIR}"/*/ 2>/dev/null | tail -n +$((BACKUP_KEEP + 1)) | while read -r old; do
   rm -rf "${old}"
 done
+
+# Remote Retention: automated lifecycle policy on off-host backend (Google Drive)
+if [ -n "${REMOTE}" ]; then
+  if [ "${TIER}" = "weekly" ]; then
+    # Weekly backups retained for 60 days (~8 weeks)
+    echo "Pruning expired weekly backups older than 60d on ${REMOTE%/}/weekly..."
+    rclone delete --min-age 60d "${REMOTE%/}/weekly" 2>/dev/null || true
+    rclone rmdirs --leave-root "${REMOTE%/}/weekly" 2>/dev/null || true
+  elif [ "${TIER}" = "quarterly" ]; then
+    # Quarterly backups retained for 730 days (2 years, total 8 snapshots)
+    echo "Pruning expired quarterly backups older than 730d on ${REMOTE%/}/quarterly..."
+    rclone delete --min-age 730d "${REMOTE%/}/quarterly" 2>/dev/null || true
+    rclone rmdirs --leave-root "${REMOTE%/}/quarterly" 2>/dev/null || true
+  fi
+fi
 
 echo "${MANIFEST}"

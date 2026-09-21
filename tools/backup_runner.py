@@ -18,7 +18,9 @@ from libs.backup_verification import BackupEntry, load_backup_inventory
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", default="/tmp/infra2-backups")
-    parser.add_argument("--remote", default=os.getenv("BACKUP_REMOTE", "r2:infra2"))
+    parser.add_argument(
+        "--remote", default=os.getenv("BACKUP_REMOTE", "gdrive-backup:infra2")
+    )
     parser.add_argument("--service", action="append", default=[])
     parser.add_argument("--no-upload", action="store_true")
     parser.add_argument("--manifest", default="")
@@ -52,13 +54,19 @@ def main() -> int:
         "verified_at": timestamp,
         "artifacts": artifacts,
     }
-    manifest_path = Path(args.manifest) if args.manifest else output_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    manifest_path = (
+        Path(args.manifest) if args.manifest else output_dir / "manifest.json"
+    )
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+    )
     print(manifest_path)
     return 0
 
 
-def _select_entries(entries: list[BackupEntry], selected: set[str]) -> list[BackupEntry]:
+def _select_entries(
+    entries: list[BackupEntry], selected: set[str]
+) -> list[BackupEntry]:
     if not selected:
         return entries
     known = {entry.service_id for entry in entries}

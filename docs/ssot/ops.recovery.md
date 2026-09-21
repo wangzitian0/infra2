@@ -106,7 +106,7 @@ graph TD
       "created_at": "2026-06-05T00:00:00Z",
       "size_bytes": 123456,
       "sha256": "<64 hex chars>",
-      "remote_uri": "r2:infra2/platform/postgres/archive.tar.gz"
+      "remote_uri": "gdrive-backup:infra2/weekly/20260920T033000Z/platform/postgres/archive.tar.gz"
     }
   ]
 }
@@ -136,15 +136,15 @@ uv run python tools/backup_runner.py --output-dir /tmp/infra2-backups --no-uploa
 生产上传示例：
 
 ```bash
-BACKUP_REMOTE=r2:infra2 uv run python tools/backup_runner.py \
+BACKUP_REMOTE=gdrive-backup:infra2 uv run python tools/backup_runner.py \
   --output-dir /data/backups/infra2 \
   --manifest /data/backups/infra2/manifest.json
 ```
 
-`rclone` remote credentials must live on the host or in 1Password-managed
-runtime configuration. They must not be committed to this repository.
+`rclone` remote credentials live in 1Password `bootstrap/gdrive` (`rclone_conf` field).
+They must not be committed to this repository.
 
-### SOP-006: On-host scheduled backup runner (logical dumps)
+### SOP-006: On-host scheduled backup runner (logical dumps + tiered retention)
 
 `tools/host_backup.sh` is the on-host scheduled backup runner. Unlike the
 inventory archiver, it produces **restorable logical backups**:
@@ -169,10 +169,11 @@ Failure contract (#618, found by the truealpha#650 restore drill):
   truealpha databases.
 
 It writes a `tools/backup_verification.py`-compatible manifest and, when
-`BACKUP_REMOTE` (an rclone target) is set, uploads each archive off-host. Local
-retention keeps the most recent `BACKUP_KEEP` (default 7) run directories and is
-skipped on a failed run. Prod and staging runs share `/data/backups/infra2`, so
-7 directories is about 3.5 days of each.
+`BACKUP_REMOTE` (an rclone target) is set, uploads each archive off-host into
+the tier directory (`${REMOTE}/${BACKUP_TIER}/${TS}`). Local retention keeps the
+most recent `BACKUP_KEEP` (default 7) run directories and is skipped on a failed run.
+Prod and staging runs share `/data/backups/infra2`, so 7 directories is about 3.5 days of each.
+Remote retention automatically prunes expired snapshots (`weekly` > 60d; `quarterly` > 730d).
 
 Coverage gap: the script's service list is a hand-kept subset of the
 `BackupFacet` inventory (`libs/tests/test_host_backup_script.py` asserts it stays a
@@ -191,24 +192,35 @@ sha256sum tools/host_backup.sh /usr/local/sbin/infra2-host-backup.sh
 Scheduled on the host via crontab:
 
 ```cron
-30 3 * * * /usr/local/sbin/infra2-host-backup.sh >> /var/log/infra2-backup.log 2>&1
-45 3 * * * ENV_SUFFIX=-staging /usr/local/sbin/infra2-host-backup.sh >> /var/log/infra2-backup-staging.log 2>&1
+# Weekly backups (Sundays 03:30 UTC, rolling 60d window)
+30 3 * * 0 BACKUP_REMOTE=gdrive-backup:infra2 BACKUP_TIER=weekly /usr/local/sbin/infra2-host-backup.sh >> /var/log/infra2-backup.log 2>&1
+45 3 * * 0 BACKUP_REMOTE=gdrive-backup:infra2 BACKUP_TIER=weekly ENV_SUFFIX=-staging /usr/local/sbin/infra2-host-backup.sh >> /var/log/infra2-backup-staging.log 2>&1
+
+# Quarterly long-term snapshots (04:00 UTC on Jan 1, Apr 1, Jul 1, Oct 1, 2-year retention)
+0 4 1 1,4,7,10 * BACKUP_REMOTE=gdrive-backup:infra2 BACKUP_TIER=quarterly /usr/local/sbin/infra2-host-backup.sh >> /var/log/infra2-backup-quarterly.log 2>&1
 ```
 
-> **OFF-HOST STATUS**: on-host logical backups are live and scheduled, but
-> off-host upload is **inactive until R2 S3 credentials are provisioned**.
-> A single-VPS host loss currently loses both data and on-host backups. To
-> activate off-host durability: create a Cloudflare R2 access key/secret, store
-> it in 1Password (`bootstrap/cloudflare` or a dedicated `bootstrap/r2` item),
-> install `rclone` + an `r2:` remote on the host, then set `BACKUP_REMOTE=r2:infra2`
-> in the cron entries. The off-host manifest is then verified with SOP-004.
+> **OFF-HOST STATUS**: **ACTIVE**. Off-host logical backups are encrypted end-to-end
+> (`rclone crypt`, AES-256-GCM) and uploaded to Google Drive (`gdrive-backup:infra2`).
+> The root of trust is 1Password (`bootstrap/gdrive`). To restore credentials on a
+> fresh host: `op item get "bootstrap/gdrive" --vault "Infra2" --fields "rclone_conf" > ~/.config/rclone/rclone.conf`.
+> The off-host manifest is verified with SOP-004.
 
 ### SOP-006A: Off-host restore rehearsal
 
 Backups are not considered durable until the latest off-host artifact has been
 restored into a disposable target and checked. Use
-`tools/backup_restore_rehearsal.py` for the finance_report production database
-rehearsal:
+`tools/run_restore_rehearsal.py` for automated, sandboxed end-to-end rehearsals:
+
+```bash
+# Automated sandboxed rehearsal (spins up disposable container, restores, checks invariants, destroys container)
+python3 tools/run_restore_rehearsal.py \
+  --manifest /data/backups/infra2/manifest.json \
+  --service-id finance_report/postgres \
+  --database finance_report
+```
+
+Or low-level manual invocation with `tools/backup_restore_rehearsal.py`:
 
 ```bash
 uv run python tools/backup_restore_rehearsal.py \
@@ -222,14 +234,15 @@ Safety rules:
 - The manifest must pass the same off-host freshness/checksum checks as SOP-004.
 - The target container name must contain `rehearsal`, `restore`, or `throwaway`
   unless an operator deliberately uses the explicit override in code.
-- The default invariants run `SELECT 1` and
-  `SELECT count(*) >= 1 FROM pg_database` after restore; add stronger
-  service-specific invariants with `--invariant-sql`.
+- Zero host port binds and zero volume mounts to production `/data`.
+- The default invariants run `SELECT 1`,
+  `SELECT count(*) >= 1 FROM pg_database`, table count assertions, and domain
+  row count checks (e.g. `SELECT count(*) FROM accounts`, `alembic_version`).
 
 Recommended schedule after the rehearsal target is provisioned:
 
 ```cron
-15 4 * * 0 BACKUP_REMOTE=r2:infra2 /usr/local/sbin/infra2-backup-restore-rehearsal.sh >> /var/log/infra2-backup-restore-rehearsal.log 2>&1
+15 4 * * 0 BACKUP_REMOTE=gdrive-backup:infra2 python3 /infra2/tools/run_restore_rehearsal.py >> /var/log/infra2-backup-restore-rehearsal.log 2>&1
 ```
 
 ### SOP-007: 服务因 vault-agent 缺凭证崩溃 (re-provision AppRole)
@@ -274,7 +287,7 @@ Recommended schedule after the rehearsal target is provisioned:
 | **Backup archive + checksum runner** | `tools/backup_runner.py` | ✅ Implemented |
 | **Backup freshness/checksum manifest** | `tools/backup_verification.py` | ✅ Implemented |
 | **On-host backup runner (SOP-006): dumps first, one failure never stops the rest, tar exit 1 is a WARN, authenticated redis SAVE** | `libs/tests/test_host_backup_script.py` | ✅ Implemented |
-| **Off-host restore rehearsal** | `tools/backup_restore_rehearsal.py` + `libs/tests/test_backup_verification.py` | ✅ Implemented |
+| **Off-host restore rehearsal** | `tools/run_restore_rehearsal.py` + `libs/tests/test_backup_verification.py` | ✅ Implemented & Live Verified (10.62s PASS) |
 | **Vault Unseal 流程（自动）** | `bootstrap/05.vault/unsealer.py` 常驻自动解封;契约由 `libs/tests/test_vault_unsealer.py`(过期 Connect token 拒绝 / sync 非 ACTIVE / sealed 报不健康 / key 不足中止)+ `libs/tests/test_bootstrap_health.py`(healthcheck 接线)覆盖 | ✅ Automated |
 | **Vault Unseal 流程（手动兜底,SOP-001）** | `vault status` + `vault operator unseal` | ✅ Manual |
 | **vault-agent 凭证 re-provision (SOP-007)** | `vault.setup-approle --deploy` | ✅ Manual |

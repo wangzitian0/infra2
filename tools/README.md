@@ -246,12 +246,23 @@ with the container's own secrets and only `dump.rdb` is archived. Tests:
 ENV_SUFFIX=-staging BACKUP_OUTPUT_DIR=/tmp/hb tools/host_backup.sh
 ```
 
-## backup_restore_rehearsal.py
+## backup_restore_rehearsal.py & run_restore_rehearsal.py
 
-Guarded restore rehearsal for off-host backup artifacts. The command verifies the
-manifest freshness/checksum contract, refuses live-looking targets by default,
-downloads remote artifacts through `rclone copyto`, restores into the rehearsal
-container, and runs an invariant SQL check.
+Guarded restore rehearsal for off-host backup artifacts. `run_restore_rehearsal.py`
+automates the full sandbox lifecycle: spins up an ephemeral throwaway container
+(zero host port binds, zero mount to `/data`, resource capped), downloads and
+decrypts the latest artifact from Google Drive via `rclone crypt`, ingests the SQL
+dump, verifies database and domain invariants, and cleanly tears down the container.
+
+```bash
+# Automated sandboxed end-to-end rehearsal (spins up sandbox, restores, asserts, destroys)
+python tools/run_restore_rehearsal.py \
+  --manifest /data/backups/infra2/manifest.json \
+  --service-id finance_report/postgres \
+  --database finance_report
+```
+
+For direct manual invocation against an existing pre-provisioned rehearsal container:
 
 ```bash
 uv run python tools/backup_restore_rehearsal.py \
