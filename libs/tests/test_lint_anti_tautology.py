@@ -124,3 +124,7 @@ def test_cli_main_with_clean_and_dirty_files(tmp_path: Path) -> None:
 
     # Directory with dirty file exits 1
     assert main([str(tmp_path)]) == 1
+
+
+def test_cli_main_empty_args_exits_2() -> None:
+    assert main([]) == 2

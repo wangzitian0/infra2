@@ -61,7 +61,10 @@ class TautologyVisitor(ast.NodeVisitor):
                                         f"{self.filename}:{child.lineno}: Tautological comparison: 'not in ...[:0]' is always true."
                                     )
                         # check empty sequence / set / dict literals
-                        elif isinstance(comparator, (ast.List, ast.Tuple, ast.Set)) and not comparator.elts:
+                        elif (
+                            isinstance(comparator, (ast.List, ast.Tuple, ast.Set))
+                            and not comparator.elts
+                        ):
                             self.violations.append(
                                 f"{self.filename}:{child.lineno}: Tautological comparison: 'not in empty literal container' is always true."
                             )
@@ -69,7 +72,9 @@ class TautologyVisitor(ast.NodeVisitor):
                             self.violations.append(
                                 f"{self.filename}:{child.lineno}: Tautological comparison: 'not in empty dict' is always true."
                             )
-                        elif isinstance(comparator, ast.Constant) and comparator.value in ("", b""):
+                        elif isinstance(
+                            comparator, ast.Constant
+                        ) and comparator.value in ("", b""):
                             self.violations.append(
                                 f"{self.filename}:{child.lineno}: Tautological comparison: 'not in empty string literal' is always true."
                             )
@@ -115,8 +120,11 @@ def check_paths(paths: list[str | Path]) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     args = argv if argv is not None else sys.argv[1:]
     if not args:
-        print("Usage: python tools/lint_anti_tautology.py <file-or-dir> ...")
-        return 0
+        print(
+            "Error: No target paths specified for anti-tautology linting.",
+            file=sys.stderr,
+        )
+        return 2
 
     violations = check_paths(args)
     if violations:
