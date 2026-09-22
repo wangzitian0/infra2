@@ -120,3 +120,51 @@ def test_main_maps_skip_to_exit_zero(monkeypatch, capsys) -> None:
     monkeypatch.setattr("sys.argv", ["pi_chain_smoke.py"])
     assert smoke.main() == 0
     assert json.loads(capsys.readouterr().out)["verdict"] == "SKIP"
+
+
+_PASSING_CHECKS = {
+    "exit0": True, "agent_end": True, "route_ok": True, "stop_ok": True,
+    "text_ok": True, "tokens_ok": True, "totalTokens": 42,
+}
+
+
+@pytest.mark.parametrize(
+    "detail",
+    (
+        "credential from ZAI_CODING_CN_API_KEY env",
+        "credential from /fake/agent/auth.json",
+    ),
+)
+def test_main_names_the_credential_source_it_actually_used(
+    monkeypatch, capsys, detail: str
+) -> None:
+    """dev_env#48: a passing preflight used to discard `detail` -- the run
+    picked env or auth.json, and nothing downstream could tell which. Both
+    must now be visible: printed (stderr, so the one-line stdout verdict
+    stays machine-parseable) and carried into the verdict JSON, regardless
+    of which of the two lines actually supplied the credential.
+    """
+    monkeypatch.setattr(smoke, "preflight", lambda strict: ("ok", detail))
+    monkeypatch.setattr(smoke, "run_once", lambda: (dict(_PASSING_CHECKS), ""))
+    monkeypatch.setattr("sys.argv", ["pi_chain_smoke.py"])
+    assert smoke.main() == 0
+    captured = capsys.readouterr()
+    assert detail in captured.err
+    verdict = json.loads(captured.out)
+    assert verdict["verdict"] == "PASS"
+    assert verdict["credential_source"] == detail
+
+
+def test_main_names_the_credential_source_on_a_failed_run_too(monkeypatch, capsys) -> None:
+    """The source name must survive a FAIL verdict as well -- diagnosing a
+    remote failure benefits from knowing which credential line was live,
+    not just that the run failed."""
+    detail = "credential from ZAI_CODING_CN_API_KEY env"
+    monkeypatch.setattr(smoke, "preflight", lambda strict: ("ok", detail))
+    failing = dict(_PASSING_CHECKS, route_ok=False)
+    monkeypatch.setattr(smoke, "run_once", lambda: (failing, ""))
+    monkeypatch.setattr("sys.argv", ["pi_chain_smoke.py"])
+    assert smoke.main() == 1
+    verdict = json.loads(capsys.readouterr().out)
+    assert verdict["verdict"] == "FAIL"
+    assert verdict["credential_source"] == detail
