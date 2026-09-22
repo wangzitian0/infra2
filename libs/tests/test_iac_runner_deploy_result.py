@@ -198,6 +198,52 @@ def test_sync_result_classifies_dokploy_auth_over_vault_red_herring(
     assert "DOKPLOY_API_KEY" in diagnostic["next_action"]
 
 
+def test_sync_result_classifies_a_retry_exhausted_tls_blip_as_transient_transport(
+    monkeypatch,
+) -> None:
+    """#810: truealpha/app v0.0.90 staging failed once on an SSL EOF that 28 minutes
+    earlier's v0.0.89 never hit. libs/secrets_supply.py's retrying_transport already
+    retried it (#759's backoff) before raising; the diagnostic must name it
+    transient_transport with the retry count, not fall through to unknown_invoke_failure."""
+    sync_runner = _load_module(
+        "sync_runner_transient_transport_under_test",
+        IAC_RUNNER / "sync_runner.py",
+        monkeypatch,
+    )
+
+    diagnostic = sync_runner.diagnose_failure(
+        "app: secret supply failed: transient transport error talking to Vault, "
+        "retried 2 time(s) without success: <urlopen error [SSL: "
+        "UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol "
+        "(_ssl.c:1016)>"
+    )
+
+    assert diagnostic["error_kind"] == "transient_transport"
+    assert "UNEXPECTED_EOF" in diagnostic["summary"]
+    assert "2x" in diagnostic["next_action"]
+    assert "container" not in diagnostic["next_action"]  # no more "go read the logs"
+
+
+def test_sync_result_classifies_an_aborted_connection_as_transient_transport(
+    monkeypatch,
+) -> None:
+    """The other two markers #810 names (ECONNRESET / Connection aborted) must route
+    the same way as the SSL EOF case, not just the exact incident's literal text."""
+    sync_runner = _load_module(
+        "sync_runner_transient_transport_aborted_under_test",
+        IAC_RUNNER / "sync_runner.py",
+        monkeypatch,
+    )
+
+    diagnostic = sync_runner.diagnose_failure(
+        "app: secret supply failed: transient transport error talking to Vault, "
+        "retried 1 time(s) without success: Connection aborted."
+    )
+
+    assert diagnostic["error_kind"] == "transient_transport"
+    assert "1x" in diagnostic["next_action"]
+
+
 def test_iac_runner_policy_can_repair_service_runtime_secrets() -> None:
     """Infra-011.6: deploy sync can create/update missing runtime secret fields."""
     policy = IAC_RUNNER_VAULT_POLICY.read_text(encoding="utf-8")

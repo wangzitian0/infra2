@@ -185,6 +185,31 @@ def diagnose_failure(stderr: str, stdout: str = "") -> dict[str, str]:
             "next_action": "Inspect the service deploy logs and Dokploy deployment status for the timed-out task.",
         }
 
+    # #810: a TLS/connection blip mid a secrets-supply Vault call (SSL EOF, a reset or
+    # aborted connection) -- libs/secrets_supply.py's retrying_transport already retried
+    # this with #759's backoff before giving up, so an operator does not need to open a
+    # container to see "it failed once"; they need to know it's a network blip, not a
+    # config problem, and how many times it already retried.
+    _TRANSIENT_TRANSPORT_MARKERS = (
+        "UNEXPECTED_EOF",
+        "ECONNRESET",
+        "Connection aborted",
+    )
+    if any(marker in combined for marker in _TRANSIENT_TRANSPORT_MARKERS):
+        retried_match = re.search(r"retried (\d+) time", combined)
+        retried = retried_match.group(1) if retried_match else "several"
+        return {
+            "error_kind": "transient_transport",
+            "summary": _first_matching_line(
+                combined, (*_TRANSIENT_TRANSPORT_MARKERS, "SSL:")
+            ),
+            "next_action": (
+                f"Already retried automatically ({retried}x) and still failed -- a "
+                "longer-lived network blip (Vault/Cloudflare edge), not a config "
+                "problem. Re-run the deploy; escalate only if it keeps recurring."
+            ),
+        }
+
     summary = _first_matching_line(
         combined,
         (

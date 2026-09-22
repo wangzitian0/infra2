@@ -4,14 +4,17 @@ test_alerting_vault_first.py; this file pins how a Deployer reacts to the report
 
 from __future__ import annotations
 
+import ssl
 import types
+import urllib.error
+import urllib.request
 
 import pytest
 
 import libs.deploy.deployer as deployer_module
 from libs import secrets_supply
 from libs.deploy.deployer import Deployer
-from libs.secrets_supply import SupplyReport
+from libs.secrets_supply import SupplyReport, TransientTransportError
 
 ENV = {"ENV": "staging", "ENV_SUFFIX": "-staging", "VPS_HOST": "vps.test"}
 
@@ -120,9 +123,10 @@ def test_vault_backend_accepts_the_transition_alias(monkeypatch) -> None:
 
     class FakeKv:
         @classmethod
-        def from_environ(cls, env, write_mode="patch"):
+        def from_environ(cls, env, write_mode="patch", transport=None):
             seen.update(env)
             seen["write_mode"] = write_mode
+            seen["transport"] = transport
             return cls()
 
     monkeypatch.setattr(secrets_supply, "VaultKvBackend", FakeKv)
@@ -132,6 +136,7 @@ def test_vault_backend_accepts_the_transition_alias(monkeypatch) -> None:
     assert seen["VAULT_TOKEN"] == "legacy"
     assert seen["VAULT_ADDR"] == "https://vault.x.io"
     assert seen["write_mode"] == "update"  # the policies grant update, not patch
+    assert callable(seen["transport"])  # #810: every call retries transient TLS blips
     seen.clear()
     secrets_supply.vault_backend(
         {"VAULT_TOKEN": "new", "VAULT_ROOT_TOKEN": "legacy", "VAULT_ADDR": "https://v"}
@@ -301,3 +306,124 @@ def test_deployer_sync_runs_the_supply_even_when_the_compose_hash_says_skip(
     assert (
         result["action"] == "skipped"
     )  # fail-closed skip path, reached AFTER the supply
+
+
+# --- #810: a transient TLS/transport blip mid a Vault call must retry, not fail ------
+
+
+class _FakeHttpResponse:
+    """Mimics what ``urllib.request.urlopen`` returns: a context manager with
+    ``.status``, ``.headers.items()`` and ``.read()`` -- exactly what
+    ``infra2_sdk._transport.urllib_transport``'s ``send()`` reads off it."""
+
+    def __init__(self, status: int = 200, body: bytes = b"{}") -> None:
+        self.status = status
+        self.headers: dict[str, str] = {}
+        self._body = body
+
+    def __enter__(self) -> "_FakeHttpResponse":
+        return self
+
+    def __exit__(self, *exc_info: object) -> bool:
+        return False
+
+    def read(self) -> bytes:
+        return self._body
+
+
+def _ssl_eof_error() -> urllib.error.URLError:
+    """The exact exception shape truealpha/app's staging deploy hit (v0.0.90,
+    receiver run 35725507704): urlopen wraps the OpenSSL EOF in a URLError."""
+    return urllib.error.URLError(
+        ssl.SSLError(
+            "[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of "
+            "protocol (_ssl.c:1016)"
+        )
+    )
+
+
+def test_retrying_transport_survives_one_tls_eof_then_succeeds(monkeypatch) -> None:
+    """#810 red->green case 1: urlopen raises the SSL EOF once, then answers -- the
+    Vault call must retry (once, with #759's backoff) and succeed, not fail the sync."""
+    calls: list[str] = []
+
+    def fake_urlopen(request, timeout=None):
+        calls.append(request.full_url)
+        if len(calls) == 1:
+            raise _ssl_eof_error()
+        return _FakeHttpResponse(status=200, body=b'{"data": {"data": {}}}')
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    sleeps: list[float] = []
+    transport = secrets_supply.retrying_transport(_sleep=sleeps.append)
+
+    response = transport(
+        "GET", "https://vault.test/v1/secret/data/truealpha/staging/app", {}, None
+    )
+
+    assert response.status == 200
+    assert len(calls) == 2  # 1 failed attempt + 1 retry that succeeded
+    assert sleeps == [2]  # retry count = 1 backoff sleep
+
+
+def test_retrying_transport_fails_closed_past_the_retry_budget(monkeypatch) -> None:
+    """#810 red->green case 2: the blip never clears -- fail with a diagnosable
+    error after #759's retry budget (2 retries = 3 attempts total), not hang forever."""
+    calls: list[str] = []
+
+    def fake_urlopen(request, timeout=None):
+        calls.append(request.full_url)
+        raise _ssl_eof_error()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    sleeps: list[float] = []
+    transport = secrets_supply.retrying_transport(_sleep=sleeps.append)
+
+    with pytest.raises(TransientTransportError, match="retried 2 time"):
+        transport(
+            "GET", "https://vault.test/v1/secret/data/truealpha/staging/app", {}, None
+        )
+
+    assert len(calls) == 3  # 1 initial + 2 retries, same budget as libs/dokploy.py
+    assert sleeps == [2, 4]
+
+
+def test_retrying_transport_does_not_retry_unrelated_errors(monkeypatch) -> None:
+    """A non-transient failure (e.g. a bad URL) must not be retried or reclassified --
+    only the #810 TLS/connection blip markers are transient."""
+    calls: list[str] = []
+
+    def fake_urlopen(request, timeout=None):
+        calls.append(request.full_url)
+        raise urllib.error.URLError("nodename nor servname provided, or not known")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    transport = secrets_supply.retrying_transport(
+        _sleep=lambda _s: pytest.fail("must not sleep")
+    )
+
+    with pytest.raises(urllib.error.URLError):
+        transport("GET", "https://vault.test/v1/secret/data/x", {}, None)
+    assert len(calls) == 1  # no retry
+
+
+def test_transient_transport_error_surfaces_through_apply_secret_supply(
+    monkeypatch, capsys
+) -> None:
+    """After the retry budget is exhausted, apply_secret_supply must still fail the
+    deploy (same fail-closed contract as any other secret supply exception) and the
+    printed message must carry #810's diagnosable marker text."""
+    monkeypatch.setattr(AlertingLike, "env", classmethod(lambda cls: dict(ENV)))
+
+    def boom(service, env, *, resolver=None, restart=None):
+        raise TransientTransportError(
+            "transient transport error talking to Vault, retried 2 time(s) "
+            "without success: <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] "
+            "EOF occurred in violation of protocol (_ssl.c:1016)>"
+        )
+
+    monkeypatch.setattr(secrets_supply, "apply", boom)
+    assert AlertingLike.apply_secret_supply(object()) is False
+    out = capsys.readouterr().out
+    assert "transient transport error" in out
+    assert "UNEXPECTED_EOF" in out
