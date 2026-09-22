@@ -65,10 +65,17 @@ def _defanged(workflow_rel_path: str, job_id: str) -> list[str]:
 
 def _live_required_contexts(
     repository: str, branch: str, token: str, *, opener=urllib.request.urlopen
-) -> set[str] | None:
-    """Required status check contexts GitHub actually enforces for `branch`, or
-    None if it couldn't be determined (fail-safe: caller must not treat None as
-    "no requirements")."""
+) -> tuple[set[str], set[int]] | None:
+    """What GitHub enforces for `branch`: the required status check contexts, and
+    the ids of the rulesets they came from.
+
+    None if it could not be determined. Fail-safe: a caller must not read None as
+    "no requirements" -- that is the same shape of hole as an empty protected set.
+
+    The ruleset ids ride along because `_ruleset_posture` needs them and this is
+    the call that already knows them; asking twice would let the two answers
+    describe different rulesets.
+    """
     url = f"https://api.github.com/repos/{repository}/rules/branches/{branch}"
     request = urllib.request.Request(
         url,
@@ -84,13 +91,64 @@ def _live_required_contexts(
     except Exception:  # noqa: BLE001 - any failure -> undetermined, fail safe
         return None
     contexts: set[str] = set()
+    ruleset_ids: set[int] = set()
     for rule in rules if isinstance(rules, list) else []:
+        rid = rule.get("ruleset_id")
+        if isinstance(rid, int):
+            ruleset_ids.add(rid)
         if rule.get("type") != "required_status_checks":
             continue
         for check in rule.get("parameters", {}).get("required_status_checks", []):
             if isinstance(check, dict) and check.get("context"):
                 contexts.add(check["context"])
-    return contexts
+    return contexts, ruleset_ids
+
+
+def _ruleset_posture(
+    repository: str, ruleset_ids: set[int], token: str, opener=urllib.request.urlopen
+) -> dict | None:
+    """Whether the rulesets carrying those rules can actually stop anyone.
+
+    Two fields decide that, and neither appears in the branch-rules response
+    the required-check comparison reads:
+
+    - ``enforcement``: a ruleset set to ``disabled`` or ``evaluate`` keeps every
+      rule listed and stops applying them.
+    - ``bypass_actors``: anyone listed merges past every required check.
+
+    Both matter more than the check list they qualify, and both are editable
+    from the GitHub UI, which leaves **no trace in this repository at all** --
+    no commit, no diff, nothing a reviewer could see. This audit is the only
+    thing positioned to notice, and until now it read neither.
+    """
+    posture: dict = {"rulesets": [], "inactive": [], "bypassable": []}
+    for rid in sorted(ruleset_ids):
+        request = urllib.request.Request(
+            f"https://api.github.com/repos/{repository}/rulesets/{rid}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "infra2-ci-gate-ruleset-audit/1.0",
+            },
+        )
+        try:
+            with opener(request, timeout=20) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except Exception:  # noqa: BLE001 - unreadable posture is undetermined
+            return None
+        name = str(body.get("name") or rid)
+        enforcement = str(body.get("enforcement") or "")
+        actors = body.get("bypass_actors") or []
+        posture["rulesets"].append(
+            {"id": rid, "name": name, "enforcement": enforcement}
+        )
+        if enforcement != "active":
+            posture["inactive"].append(
+                f"{name}: enforcement={enforcement or 'unknown'}"
+            )
+        if actors:
+            posture["bypassable"].append(f"{name}: {len(actors)} bypass actor(s)")
+    return posture
 
 
 def audit(
@@ -111,7 +169,8 @@ def audit(
         if defanged:
             self_contradicting.append(f"{gate.get('id', '?')} ({', '.join(defanged)})")
 
-    live = _live_required_contexts(repository, branch, token)
+    live_pair = _live_required_contexts(repository, branch, token)
+    live, ruleset_ids = (None, set()) if live_pair is None else live_pair
 
     result: dict = {
         "declared_blocking_checks": sorted(declared),
@@ -122,6 +181,15 @@ def audit(
         result["live_required_checks"] = None
         result["status"] = "undetermined (could not reach GitHub rules API)"
         return result
+
+    posture = _ruleset_posture(repository, ruleset_ids, token)
+    if posture is None:
+        result["live_required_checks"] = sorted(live)
+        result["status"] = "undetermined (could not read ruleset enforcement)"
+        return result
+    result["rulesets"] = posture["rulesets"]
+    result["inactive_rulesets"] = posture["inactive"]
+    result["bypassable_rulesets"] = posture["bypassable"]
 
     missing_from_ruleset = sorted(set(declared) - live)
     extra_in_ruleset = sorted(live - set(declared))
@@ -135,6 +203,11 @@ def audit(
             or extra_in_ruleset
             or self_contradicting
             or unresolvable
+            # A ruleset that is not enforcing, or that anyone can bypass, makes
+            # the required-check list above decorative -- a larger drift than
+            # any disagreement inside it.
+            or posture["inactive"]
+            or posture["bypassable"]
         )
         else "in_sync"
     )
