@@ -50,6 +50,12 @@
 - **避免魔法数字**：使用常量/枚举/配置文件等替代。
 - **尽可能复用已有的库**：动手前永远先检查 libs 目录 [README.md](../../libs/README.md)。
 - **不造新轮子（收敛红线，#542/#543）**：新增告警路径必须注册 signal（`tools/no_new_wheels_lint.py` 阻断 CI）；新增常驻监视 = probe-runner 的 `ResidentWatcher` 插件（`libs/resident_watchers.py`），不新建 sidecar/compose 服务；新增定时 ops 检查挂 `ops-checks.yml` 并声明 `# signal:`；服务级运维事实（探针/信号/备份/密钥）只声明在该服务 `deploy.py` 的 Facet 上，由注册表派生，不另开清单。入口全景见 [tools/README.md](../../tools/README.md)。
+- **能算出来的集合不要手写（#787/#791/#794）**：一份手写清单分不清「有意排除」和「上周二
+  加的没人注意」。2026-09-22 同一形状在四处同时成立：`pr_merge_gate` 的自治文件清单、
+  `ci_gate_audit.KNOWN_CI_WORKFLOWS`、`infra-ci.yml` 的 `paths`、`ops-checks.yml` 各 job 的
+  `pip install`。第四处的代价是 `preview-leak-check` 每小时红一次、无人发现（#794）。
+  判据：**如果这个集合能从它真正依赖的东西算出来，就算；算不出来的才写清单，并给清单配一条
+  会红的守卫。** 剩余欠账见 #800。
 
 ## 文档准则
 
@@ -122,3 +128,6 @@ schema**，那是个枚举不完的开集。**守卫的输入面比守卫的断�
 - **工具优先级**：mcp > cli > api > ssh > web 浏览器。
 - **drift 修复**：可以手动创建测试或修补线上问题，但必须确保代码修复，合并后 apply 一次消除 drift。
 - **0 宕机原则**：有宕机风险必须主动提出。若必须宕机，须提出降低宕机时长的方案。
+- **退出码只从没接管道的调用里读**：`cmd | tail` 之后的 `$?` 是 `tail` 的状态，不是 `cmd` 的。
+  本仓库实测踩过：验证 `pr_merge_gate` 该返回 2 时读到 0，也曾把 schema gate 的 exit 3 读成 0。
+  要看输出又要看退出码时，先 `out=$(cmd 2>&1); rc=$?`，再打印 `$out`。
