@@ -105,11 +105,14 @@ _OWNER_INSTRUCTION_HEADER_RE = re.compile(
 # this: `^` inside alternative (a) still pins it to line-start, while
 # alternative (b) is free to match further in.
 #
-# The "content" character inside 「...」 must be `[^\s」]`, not `\S` -- `\S`
-# matches a stray closing `」` just as readily as real text, so `「」」` or
-# `「」 」` (an empty quote followed by a loose `」`) would otherwise still read
-# as a non-empty citation.
-_QUOTE_LINE_RE = re.compile(r"^>\s*\S|「[^」]*[^\s」][^」]*」")
+# "Content" means at least one word character (`[^\W_]` -- a Unicode word
+# character, excluding `_`, so CJK counts), not merely any non-whitespace
+# character. Excluding one marker character at a time (first a stray `」`,
+# then bare `>`) chases its own tail: `\S` after `>` also matched a second or
+# third `>`, so `>>` / `> >` / `>>>` (nested blockquote syntax, no quoted text)
+# still read as cited. A word-character requirement closes the whole class at
+# once instead of enumerating punctuation marks one bug report at a time.
+_QUOTE_LINE_RE = re.compile(r"^>.*[^\W_]|「[^」]*[^\W_][^」]*」")
 
 
 def _owner_instruction_quoted(body: str) -> bool:
@@ -117,9 +120,12 @@ def _owner_instruction_quoted(body: str) -> bool:
 
     Looks for a line matching `_OWNER_INSTRUCTION_HEADER_RE`, then the first
     non-blank line after it: a `>` blockquote with content after the marker, or
-    a line containing a non-empty 「...」original-words quote, counts -- a bare
-    `>` or an empty 「」does not. Multiple headers are tried independently, so
-    one empty attempt does not shadow a real citation further down the body.
+    a line containing a non-empty 「...」original-words quote, counts -- "content"
+    means at least one word character (letters/digits/CJK, not `_`), so a bare
+    `>`, nested markers with no text (`>>`, `> >`), an empty 「」, or
+    punctuation-only text all still count as no citation. Multiple headers are
+    tried independently, so one empty attempt does not shadow a real citation
+    further down the body.
     """
     lines = (body or "").splitlines()
     for i, line in enumerate(lines):

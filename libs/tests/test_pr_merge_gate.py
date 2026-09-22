@@ -1016,6 +1016,14 @@ def test_an_ordinary_green_head_still_merges():
         # SSOT wording is "含「...」原话", not "line starts with 「".
         "## Owner instruction\n\n"
         "2026-09-22: 「加速收敛啊，包括 sub-agent」;「总裁要约定心跳机制的哇」",
+        # Nested `>` markers are fine as long as a real word character follows
+        # them somewhere on the line -- only the markers-with-no-text shape is
+        # rejected (see the reject list below).
+        "## Owner instruction\n\n>> x",
+        "## Owner instruction\n\n> > 授权",
+        # An empty nested quote next to a real one still has real content
+        # somewhere on the line, so it counts.
+        "## Owner instruction\n\n「」」「真内容」",
     ],
 )
 def test_owner_instruction_quoted_recognises_a_header_and_its_quote(body):
@@ -1041,6 +1049,14 @@ def test_owner_instruction_quoted_recognises_a_header_and_its_quote(body):
         # above can still be fooled by an empty quote followed by loose `」`s.
         "## Owner instruction\n\n「」」",
         "## Owner instruction\n\n「」 」",
+        # Nested `>` quote markers with no quoted text are still a citation of
+        # nothing -- `>` itself must not count as the required word character.
+        "## Owner instruction\n\n>>",
+        "## Owner instruction\n\n> >",
+        "## Owner instruction\n\n> > >",
+        "## Owner instruction\n\n>>>",
+        # Punctuation-only content (no word character) does not count either.
+        "## Owner instruction\n\n> 。」",
     ],
 )
 def test_owner_instruction_quoted_rejects_a_header_without_a_quote_beneath_it(body):
