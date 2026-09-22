@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from tools import facet_reconcile as fr
 
 
@@ -107,7 +109,18 @@ def test_section_systemexit_degrades_to_blocker(monkeypatch):
     assert section.confirmed == []  # environment problem, never pages
 
 
-def test_dns_section_degrades_to_blocked_on_cloudflare_api_auth_error(monkeypatch):
+@pytest.mark.parametrize(
+    "error_msg",
+    [
+        "Cloudflare API returned an error reading DNS records: 401 Unauthorized",
+        "Cloudflare DNS record observation failed",
+        "could not resolve Cloudflare zone (CF_ZONE_ID / CF_ZONE_NAME)",
+        "Cloudflare DNS record observation returned a non-list result",
+    ],
+)
+def test_dns_section_degrades_to_blocked_on_cloudflare_api_auth_error(
+    monkeypatch, error_msg: str
+):
     """Issue #658 recommendation 2: Cloudflare API 401/403 or observation failure
     must be reported as blocked, never as a job blocker. Real compose-id and config-hash
     drift must remain legible, and the report must be delivered cleanly."""
@@ -122,9 +135,7 @@ def test_dns_section_degrades_to_blocked_on_cloudflare_api_auth_error(monkeypatc
     monkeypatch.setattr(
         ddr,
         "_actual_records",
-        lambda dns: (_ for _ in ()).throw(
-            RuntimeError("Cloudflare API returned an error reading DNS records: 401 Unauthorized")
-        ),
+        lambda dns: (_ for _ in ()).throw(RuntimeError(error_msg)),
     )
     section = fr.run_dns_section()
     assert not section.blockers

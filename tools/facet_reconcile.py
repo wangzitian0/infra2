@@ -104,6 +104,7 @@ def _is_dns_observation_blocked(exc: BaseException) -> bool:
         pattern in msg
         for pattern in (
             "cloudflare api",
+            "cloudflare dns record observation",
             "could not resolve cloudflare zone",
             "unauthorized",
             "forbidden",
