@@ -23,11 +23,11 @@ on:
       - 'CLAUDE.md'
       - 'README.md'
       - 'SECRETS.md'
-      - '.github/workflows/infra-ci.yml'
-      - '.github/workflows/deploy.yml'
-      - '.github/workflows/reconcile-iac-inputs.yml'
-      - '.github/workflows/ops-checks.yml'
-      - '.github/workflows/deploy-cloudflare-watchdog.yml'
+      # Any workflow file, not a hand-listed five. The five used to omit docs.yml,
+      # so adding a job there skipped the ci_gate_audit --enforce step below -- i.e.
+      # the coverage guard could not fire on the very change it exists to catch.
+      # libs/tests/test_ci_gate_audit.py locks this against regressing to a list.
+      - '.github/workflows/**'
   push:
     branches: [main]
     paths:
@@ -51,11 +51,11 @@ on:
       - 'CLAUDE.md'
       - 'README.md'
       - 'SECRETS.md'
-      - '.github/workflows/infra-ci.yml'
-      - '.github/workflows/deploy.yml'
-      - '.github/workflows/reconcile-iac-inputs.yml'
-      - '.github/workflows/ops-checks.yml'
-      - '.github/workflows/deploy-cloudflare-watchdog.yml'
+      # Any workflow file, not a hand-listed five. The five used to omit docs.yml,
+      # so adding a job there skipped the ci_gate_audit --enforce step below -- i.e.
+      # the coverage guard could not fire on the very change it exists to catch.
+      # libs/tests/test_ci_gate_audit.py locks this against regressing to a list.
+      - '.github/workflows/**'
 
 permissions:
   contents: read

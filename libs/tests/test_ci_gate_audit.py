@@ -15,11 +15,12 @@ from pathlib import Path
 import yaml
 
 from tools.ci_gate_audit import (
-    KNOWN_CI_WORKFLOWS,
+    PR_TRIGGERS,
     WORKFLOWS_DIR,
     _all_workflow_files,
     audit,
     audit_gates,
+    covered_workflows,
     main,
 )
 
@@ -109,7 +110,7 @@ def test_audit_output_names_its_own_coverage_boundary() -> None:
     """A reader of the printed JSON (not just this source file) must be able to
     see which workflows the audit does and does not check."""
     result = audit()
-    assert result["covered_workflows"] == sorted(KNOWN_CI_WORKFLOWS)
+    assert result["covered_workflows"] == sorted(covered_workflows(ROOT))
     assert result["out_of_scope_workflows"], (
         "sanity: infra2 has more than one workflow, so some must be out of scope"
     )
@@ -195,12 +196,19 @@ def test_enforce_mode_fails_closed_on_an_unregistered_job(monkeypatch, capsys) -
         f"at 'every job': {stderr!r}"
     )
     assert "not backlog" in stderr.lower(), (
-        f"error text must say out-of-scope workflows are a deliberate decision, not "
-        f"an unregistered backlog: {stderr!r}"
+        f"error text must say out-of-scope workflows are not an unregistered "
+        f"backlog: {stderr!r}"
+    )
+    assert "pull request" in stderr.lower(), (
+        f"error text must state the coverage CRITERION (runs on a pull request) so a "
+        f"reader can check their own workflow against it, rather than making them go "
+        f"find a list: {stderr!r}"
     )
 
     capsys.readouterr()  # drain before the report-only check below
-    assert mod.main([]) == 0, "report-only mode must stay non-blocking on the same drift"
+    assert mod.main([]) == 0, (
+        "report-only mode must stay non-blocking on the same drift"
+    )
 
 
 def test_infra_ci_step_runs_the_audit_with_enforce() -> None:
@@ -215,3 +223,139 @@ def test_infra_ci_step_runs_the_audit_with_enforce() -> None:
     ]
     assert len(steps) == 1, f"expected exactly one ci_gate_audit step, got {steps}"
     assert "--enforce" in steps[0]["run"]
+
+
+# -- Coverage criterion: computed from triggers, not hand-listed ---------------------
+
+
+def _repo(tmp_path, workflows: dict[str, str]) -> object:
+    wf_dir = tmp_path / WORKFLOWS_DIR
+    wf_dir.mkdir(parents=True)
+    for name, body in workflows.items():
+        (wf_dir / name).write_text(body, encoding="utf-8")
+    return tmp_path
+
+
+def test_coverage_is_computed_from_the_pull_request_trigger(tmp_path) -> None:
+    """The scope must follow the workflows' own triggers.
+
+    A hand-written scope tuple cannot tell "deliberately excluded" apart from "added
+    last Tuesday and nobody noticed": the risk the inventory guards is a job showing up
+    on a PR with nobody having decided whether it gates, and that risk is created by
+    adding `pull_request:` -- not by anyone remembering to widen a constant.
+    """
+    root = _repo(
+        tmp_path,
+        {
+            # bare `on:` -> PyYAML gives the boolean True as the key, the shape every
+            # real workflow in this repo has.
+            "on-pr.yml": "on:\n  pull_request:\n    paths: ['x/**']\njobs:\n  a: {}\n",
+            "on-pr-target.yml": "on:\n  pull_request_target:\njobs:\n  b: {}\n",
+            "scheduled-only.yml": "on:\n  schedule:\n    - cron: '0 1 * * *'\njobs:\n  c: {}\n",
+            "push-only.yml": "on: push\njobs:\n  d: {}\n",
+        },
+    )
+    covered = set(covered_workflows(root))
+    assert covered == {
+        f"{WORKFLOWS_DIR}/on-pr.yml",
+        f"{WORKFLOWS_DIR}/on-pr-target.yml",
+    }, covered
+
+
+def test_adding_a_pull_request_trigger_widens_the_scope_by_itself(tmp_path) -> None:
+    """The regression a frozen tuple allowed: a workflow gains `pull_request:` (so its
+    jobs start appearing as PR checks) and the audit keeps not looking at it."""
+    wf = tmp_path / WORKFLOWS_DIR / "later.yml"
+    root = _repo(
+        tmp_path,
+        {"later.yml": "on:\n  schedule:\n    - cron: '0 1 * * *'\njobs:\n  j: {}\n"},
+    )
+    assert covered_workflows(root) == ()
+
+    wf.write_text(
+        "on:\n  schedule:\n    - cron: '0 1 * * *'\n  pull_request:\njobs:\n  j: {}\n",
+        encoding="utf-8",
+    )
+    assert covered_workflows(root) == (f"{WORKFLOWS_DIR}/later.yml",)
+
+
+def test_every_pr_triggered_workflow_is_fully_registered() -> None:
+    """The live ratchet: nothing that can put a check on a PR is unregistered."""
+    result = audit()
+    assert result["unregistered_jobs"] == []
+    # And the scope is genuinely wider than the single workflow it used to be frozen at,
+    # so this test cannot pass vacuously.
+    assert len(result["covered_workflows"]) >= 3, result["covered_workflows"]
+
+
+def test_out_of_scope_workflows_really_cannot_gate_a_pull_request() -> None:
+    """Whatever the audit excuses itself from checking must be excused for the stated
+    reason -- not merely absent from a list someone forgot to update."""
+    from tools.ci_gate_audit import _workflow_triggers
+
+    for wf in audit()["out_of_scope_workflows"]:
+        assert not (_workflow_triggers(ROOT / wf) & PR_TRIGGERS), (
+            f"{wf} is reported out of scope but does run on a pull request"
+        )
+
+
+def test_widening_coverage_did_not_change_what_blocks_merge() -> None:
+    """Direction proof for the ops-checks/docs backfill.
+
+    Registering a job is bookkeeping; `blocks_merge: true` is authority. The backfill
+    added 13 gates and zero authority, which is what makes it provably non-loosening --
+    and this set is exactly the 7 required status checks configured on the live `main`
+    ruleset. Promoting a gate here without adding its ruleset context (or vice versa)
+    breaks that correspondence, so this list is deliberately spelled out rather than
+    derived from the same file it is checking.
+    """
+    inventory = yaml.safe_load(
+        (ROOT / "docs/ssot/ci-gate-inventory.yaml").read_text(encoding="utf-8")
+    )
+    blocking = {g["id"] for g in inventory["gates"] if g.get("blocks_merge")}
+    assert blocking == {
+        "infra_ci.compose_validate",
+        "infra_ci.deployer_logic",
+        "infra_ci.op_healthcheck",
+        "infra_ci.vault_agent",
+        "infra_ci.deployer_classes",
+        "infra_ci.lint_python",
+        "infra_ci.harness_check",
+    }, (
+        "the blocks_merge set changed; if that is intended, update the live branch "
+        "ruleset's required_status_checks in the same change and edit this list"
+    )
+
+
+def test_the_enforce_step_can_actually_fire_on_every_covered_workflow() -> None:
+    """A guard that never runs is not a guard.
+
+    `ci_gate_audit --enforce` lives in infra-ci.yml, which is itself `paths`-filtered.
+    Before this test, those paths named five workflows by hand and omitted docs.yml --
+    so adding an unregistered job to docs.yml changed no path infra-ci watches, infra-ci
+    never ran, and the coverage check silently did not happen on exactly the change it
+    exists to catch. Every workflow the audit claims to cover must be able to trigger
+    the workflow that runs the audit.
+    """
+    infra_ci = yaml.safe_load((ROOT / INFRA_CI).read_text(encoding="utf-8"))
+    triggers = infra_ci.get(True, infra_ci.get("on")) or {}
+
+    def matches(patterns: list[str], target: str) -> bool:
+        # GitHub `paths` globs: `**` spans directory separators, `*` does not. Only the
+        # shapes this repo actually uses are handled -- a new shape that this cannot
+        # read will read as "no match" and fail the test loudly rather than pass blind.
+        for pat in patterns:
+            if pat == target:
+                return True
+            if pat.endswith("/**") and target.startswith(pat[:-2]):
+                return True
+        return False
+
+    for event in ("pull_request", "push"):
+        paths = (triggers.get(event) or {}).get("paths") or []
+        assert paths, f"infra-ci.yml has no {event} paths filter to check"
+        for wf in covered_workflows(ROOT):
+            assert matches(paths, wf), (
+                f"{wf} is in the audit's covered scope, but editing it does not trigger "
+                f"infra-ci.yml on {event} -- the --enforce step would never run"
+            )
