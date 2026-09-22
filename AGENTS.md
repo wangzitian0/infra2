@@ -1,6 +1,6 @@
 # Infra2 Harness 与基础设施 AI Agent 行为准则
 
-> **权限边界**：AI 修改本文件需 owner 明确指示，并在 PR description 中引用那句指示。AI 可在"合流门禁"全部满足后自行 Merge PR（2026-09-21 owner 授予常设合流权，取代逐-head 与会话级授权，细则见 [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.md)）；任一状态失败、缺失或无法验证时必须 fail-closed，禁止合流。
+> **权限边界**：AI 修改本文件需 owner 明确指示，并在 PR description 中引用那句指示。AI 可在"合流门禁"全部满足后自行 Merge PR（2026-09-21 owner 授予常设合流权，取代逐-head 与会话级授权；2026-09-22 owner 确认该授权覆盖其名下**全部仓库**，进入任一仓库都不需要重新申请，细则见 [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.md)）；任一状态失败、缺失或无法验证时必须 fail-closed，禁止合流。
 
 > **本文只放判定所需的不变量。** 程序性细则按需加载，入口见下方"按需加载"。
 > 长期常驻的指令会稀释红线的权重——规则越长越不被遵守。
@@ -15,7 +15,8 @@
    `infra2`、`infra2-sdk` 与通用协作偏好。
 2. **App 自治**：`repos/finance_report` 与 `repos/truealpha` 只是 workspace checkout。
    进入 App 后，必须先读其本地 `AGENTS.md` 与架构文档；App 本地规则优先，harness
-   不复制、不分发、不强制同步 App policy。
+   不复制、不分发、不强制同步 App policy。**但合流授权不是 App policy**——它是 owner 对
+   自己名下仓库的一次性授权，不因换了仓库而失效，不要进了 App 就重新推导出"需要单独批准"。
 3. **Workspace tooling**：根目录 `oh-my-code-agent/` 是独立 submodule，用于逐步承载
    各类 TUI 管理。它独立迭代，不得成为 infra 或 App 的 runtime/source 依赖。
 4. **偏好不是跨仓库命令**：GitHub、协作与软件设计默认偏好位于
@@ -41,11 +42,12 @@
    却没重跑；`blocks_merge` 的检查被 skip 时 GitHub 也接受为已满足。判定统一走
    `python -m tools.pr_merge_gate <n> --policy either --request-review --merge`
    （exit 1 = 未到时机，exit 2 = 需要 owner），不靠肉眼看表。
-5. **按环境划线**：合流触发 **staging** 部署、临时槽 canary、预览重部署——AI 可自行合流。
-   触及 **prod** 的必须回到 owner 并批准当前 `head SHA`：prod apply / promote、L1 bootstrap
-   self-update、runner 重建、observability apply。另有一类与环境无关但同样回到 owner——
-   **改动"决定合流的东西"本身**（门禁读工作树里的规则，AI 合流自己的 PR 时那就是该 PR 的
-   分支，于是改动由它自己引入的版本审判）。受保护文件引用 owner 指示即可。
+5. **按环境划线（对全部仓库一致）**：合流触发 **staging** 部署、临时槽 canary、预览重部署
+   ——AI 可自行合流。**owner 按权限保留的只有 prod 部署这一类**，必须回到 owner 并批准当前
+   `head SHA`：prod apply / promote、L1 bootstrap self-update、runner 重建、observability apply。
+   还有一类回到 owner 的**不是权限问题，是自我裁决问题**——**改动"决定合流的东西"本身**：
+   门禁从工作树读规则，AI 合流自己的 PR 时读到的就是该 PR 引入的版本，等于由被告改写的法条
+   来审判；且只改 `.md` 的 PR 会跳过全部必需检查。受保护文件引用 owner 指示即可。
 
 ## 🛡️ 安全与红线
 
