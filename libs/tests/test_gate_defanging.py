@@ -225,6 +225,97 @@ def test_an_unreadable_file_reads_as_empty(tmp_path) -> None:
     no_read.write_text("jobs: {}\n", encoding="utf-8")
     no_read.chmod(0o000)
     try:
-        assert ci_spec.load_workflow(no_read) == {}
+        # chmod does not stop root, and permission semantics differ by platform
+        # (#788 review). Assert the OSError path only where the chmod actually
+        # took effect; otherwise this fails for a reason that is not the code's.
+        try:
+            no_read.read_bytes()
+        except OSError:
+            assert ci_spec.load_workflow(no_read) == {}
+        else:
+            pytest.skip("this environment can read a 0o000 file")
     finally:
         no_read.chmod(0o644)
+
+
+# -- One read, and an exemption that stays where it was written (#788 review 2) ------
+
+
+def test_read_workflow_returns_parse_and_source_together(tmp_path) -> None:
+    """Two reads meant two failure paths and one handler; callers take both here."""
+    wf = tmp_path / "wf.yml"
+    wf.write_text(JOB_LEVEL, encoding="utf-8")
+    parsed, source = ci_spec.read_workflow(wf)
+    assert parsed["jobs"]["gate"]["continue-on-error"] is True
+    assert source == JOB_LEVEL
+
+
+def test_read_workflow_of_an_unreadable_file_yields_no_source(tmp_path) -> None:
+    """The second read was the unhandled one: a caller that got {} from
+    load_workflow still crashed fetching the comments."""
+    bad = tmp_path / "bad.yml"
+    bad.write_bytes(b"jobs:\n  gate:\n    name: \xff\xfe\n")
+    assert ci_spec.read_workflow(bad) == ({}, "")
+    assert ci_spec.read_workflow(tmp_path / "absent.yml") == ({}, "")
+
+
+def test_read_workflow_keeps_the_text_when_only_the_yaml_is_broken(tmp_path) -> None:
+    wf = tmp_path / "wf.yml"
+    wf.write_text("jobs: [\n", encoding="utf-8")
+    parsed, source = ci_spec.read_workflow(wf)
+    assert parsed == {} and source == "jobs: [\n"
+
+
+UNNAMED_EXEMPT_STEP = """
+jobs:
+  gate:
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    steps:
+      - # gate-exempt: nothing should be exempted by this
+        run: ./flaky.sh
+        continue-on-error: true
+"""
+
+
+def test_a_comment_on_an_unnamed_step_exempts_nothing() -> None:
+    """The bypass one level down from the last one.
+
+    `current` used to survive into the next declaration, so a bare
+    `- # gate-exempt:` still pointed at the enclosing job and silenced the job's
+    own `continue-on-error`. The docstring already promised it exempted nothing.
+    """
+    found = ci_spec.defanged_steps(
+        _wf(UNNAMED_EXEMPT_STEP), "gate", UNNAMED_EXEMPT_STEP
+    )
+    assert "<job>" in found, found
+    assert any(f.startswith("step #") for f in found), found
+
+
+def test_an_exemption_can_be_keyed_to_a_step_named_only_by_uses() -> None:
+    """`defanged_steps` reports such a step by its `uses`, so that is the name an
+    exemption has to be written against for a reader to match them up."""
+    wf = """
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: coverallsapp/github-action@v2
+        # gate-exempt: reports a number, does not check one
+        continue-on-error: true
+"""
+    assert ci_spec.defanged_steps(_wf(wf), "gate", wf) == []
+
+
+@pytest.mark.parametrize(
+    "node", ["jobs:\n  gate: notamapping\n", "jobs:\n  gate:\n    - a\n"]
+)
+def test_a_job_node_that_is_not_a_mapping_is_not_a_crash(node) -> None:
+    assert ci_spec.defanged_steps(_wf(node), "gate", node) == []
+
+
+def test_steps_that_are_not_a_list_of_mappings_are_not_a_crash() -> None:
+    wf = "jobs:\n  gate:\n    continue-on-error: true\n    steps: oops\n"
+    assert ci_spec.defanged_steps(_wf(wf), "gate", wf) == ["<job>"]
+    wf2 = "jobs:\n  gate:\n    steps:\n      - just a string\n"
+    assert ci_spec.defanged_steps(_wf(wf2), "gate", wf2) == []

@@ -61,12 +61,8 @@ def _defanged(workflow_rel_path: str, job_id: str) -> list[str]:
     which is why this was missed for so long: the same question was being
     answered in three files and deepened in none.
     """
-    path = ROOT / workflow_rel_path
-    if not path.is_file():
-        return []
-    return ci_spec.defanged_steps(
-        ci_spec.load_workflow(path), job_id, path.read_text(encoding="utf-8")
-    )
+    workflow, source = ci_spec.read_workflow(ROOT / workflow_rel_path)
+    return ci_spec.defanged_steps(workflow, job_id, source)
 
 
 def _live_required_contexts(

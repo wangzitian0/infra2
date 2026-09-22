@@ -52,6 +52,34 @@ import re  # noqa: E402
 import yaml  # noqa: E402  (kept next to the helpers that use it)
 
 
+def read_workflow(path) -> tuple[dict, str]:
+    """A workflow's parsed YAML and its raw text, from a single read.
+
+    Two reads meant two failure paths and only one of them handled (#788 review):
+    `load_workflow` returned {} for an unreadable file while the caller's own
+    `read_text()` -- needed because YAML parsing discards the comments exemptions
+    live in -- raised straight through it. One read, one failure mode.
+    """
+    from pathlib import Path
+
+    p = Path(path)
+    if not p.is_file():
+        return {}, ""
+    try:
+        source = p.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return {}, ""
+    try:
+        parsed = yaml.safe_load(source)
+    except yaml.YAMLError:
+        # The text read; only the structure did not. Handing back the source
+        # keeps the comment scan working on a file whose YAML is broken.
+        return {}, source
+    # Valid YAML that is not a mapping (`null`, a list, a bare string) would sail
+    # past the handler and break every `.get()` downstream.
+    return (parsed if isinstance(parsed, dict) else {}), source
+
+
 def load_workflow(path) -> dict:
     """A workflow's parsed YAML, or {} when it is absent or unreadable.
 
@@ -103,7 +131,13 @@ def defanged_steps(workflow: dict, job_id: str, source: str = "") -> list[str]:
 
     Job level is reported as ``"<job>"`` so one caller handles both.
     """
-    job = (workflow.get("jobs") or {}).get(job_id) or {}
+    jobs = workflow.get("jobs")
+    job = (jobs if isinstance(jobs, dict) else {}).get(job_id)
+    if not isinstance(job, dict):
+        # A scalar or list where a job mapping belongs (#788 review). `.get()` on
+        # it raises and takes the auditor down; there is nothing to audit, and a
+        # crash is not a finding.
+        return []
     exempt = _exempt_lines(source)
     out: list[str] = []
     # Keyed by THIS job's id, not `not exempt` (#788 review). Treating the
@@ -113,8 +147,9 @@ def defanged_steps(workflow: dict, job_id: str, source: str = "") -> list[str]:
     # rebuilt inside the audit.
     if job.get("continue-on-error") and job_id not in exempt:
         out.append("<job>")
-    for index, step in enumerate(job.get("steps") or []):
-        if not step.get("continue-on-error"):
+    steps = job.get("steps")
+    for index, step in enumerate(steps if isinstance(steps, list) else []):
+        if not isinstance(step, dict) or not step.get("continue-on-error"):
             continue
         name = str(step.get("name") or step.get("uses") or f"step #{index}")
         if name not in exempt:
@@ -152,8 +187,21 @@ def _exempt_lines(source: str) -> set[str]:
             if job:
                 current = job.group(1)
         stripped = code.strip()
-        if stripped.startswith("- name:"):
-            current = stripped[len("- name:") :].strip().strip("\"'")
+        # `== "-"` as well as the prefix: the comment is split off first, so a
+        # line that is nothing but `- # gate-exempt: ...` strips down to a bare
+        # dash -- which is exactly the unnamed step this reset exists for.
+        if stripped == "-" or stripped.startswith("- "):
+            # A new list item, so whatever was declared above it is over. Without
+            # this reset (#788 review) a bare `- # gate-exempt: ...` on an unnamed
+            # step kept `current` pointing at the enclosing job and exempted the
+            # job's own `continue-on-error` -- the same "one comment silences
+            # something else" bypass this module was just fixed for, one level down.
+            # `name` then `uses` because that is the order `defanged_steps` names a
+            # step by; anything it reports as `step #N` is unexemptable on purpose.
+            current = ""
+            for key in ("- name:", "- uses:"):
+                if stripped.startswith(key):
+                    current = stripped[len(key) :].strip().strip("\"'")
         if current and GATE_EXEMPT_RE.search(line):
             found.add(current)
     return found
