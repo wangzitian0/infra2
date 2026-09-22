@@ -102,6 +102,9 @@ flowchart LR
 | 行为描述 | 测试文件 (Test Anchor) | 覆盖率 |
 |----------|-----------------------|--------|
 | **测试框架自身** | [`conftest.py`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/conftest.py) | ✅ Meta-Test |
+| **CI 实际触发**（本节 §2 架构图声明的 `CI → Runner → Pytest` 链路真实存在，不是只写在文档里） | [`ops-checks.yml` job `e2e-regressions-smoke`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/ops-checks.yml)（每日针对生产环境跑 `-m smoke` 层；`libs/tests/test_e2e_regressions_ci_wiring.py` 对工作流文件做实执行断言） | ✅ Critical |
+
+> **覆盖分层说明**：目前只有 `smoke` 层（<1min、无需数据库/SSO 凭据的 HTTP/Playwright 只读检查）接入了 CI，匹配 §2 的测试分级设计；`critical`/`full`（需要 Postgres/Redis/ClickHouse 凭据与 SSO 登录）尚未接入，属于后续独立的接线工作，不在本节声称之内。
 
 ---
 

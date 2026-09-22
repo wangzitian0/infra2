@@ -167,6 +167,7 @@ entries:
     description: Deployment verification and E2E regression strategy.
     proofs:
       - e2e_regressions/tests/bootstrap/network_layer/test_network.py
+      - libs/tests/test_e2e_regressions_ci_wiring.py
   ops.test_coverage:
     owner: docs/ssot/ops.test_coverage.md
     summary: libs/tools 单测覆盖率 no-regression 门禁
