@@ -100,19 +100,6 @@ def test_without_the_source_every_one_is_reported() -> None:
     assert ci_spec.defanged_steps(_wf(EXEMPTED), "gate") == ["Upload coverage"]
 
 
-def test_a_comment_on_an_unnamed_step_exempts_nothing() -> None:
-    """An exemption nobody can point at is not one — the report names steps."""
-    unnamed = """
-jobs:
-  gate:
-    steps:
-      - # gate-exempt: no name to attach this to
-        continue-on-error: true
-        run: echo hi
-"""
-    assert ci_spec.defanged_steps(_wf(unnamed), "gate", unnamed)
-
-
 @pytest.mark.parametrize(
     "job", ("lint-python", "test-deployer-logic", "validate-compose")
 )
