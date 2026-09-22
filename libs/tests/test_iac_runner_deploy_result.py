@@ -1743,9 +1743,11 @@ def test_secrets_supply_action_is_its_own_deployment_and_reaches_the_sync(
     assert webhook_server._deployment_id(plain) != webhook_server._deployment_id(supply)
     assert body["deployment_id"] == webhook_server._deployment_id(supply)
     # a plain sync of the same coordinates is NOT served from the supply's cached result
+    fake_flask.request.headers = _signed_headers(monkeypatch)
     fake_flask.request.json = {**fake_flask.request.json, "action": "sync"}
     body2, _ = webhook_server.version_deploy()
-    assert body2.get("cached") is not True or body2.get("action") != "secrets-supply"
+    assert body2.get("cached") is not True
+    assert body2.get("action") == "sync"
 
 
 def test_run_invoke_task_passes_the_action_to_the_child(monkeypatch, tmp_path) -> None:

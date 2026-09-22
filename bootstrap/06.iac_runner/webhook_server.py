@@ -274,7 +274,7 @@ def _in_progress_response(
     }
     if version_ref:
         response["version_ref"] = version_ref
-    if action and action != "sync":
+    if action:
         response["action"] = action
     if duplicate:
         response["duplicate"] = True
@@ -310,7 +310,7 @@ def _completed_response(
     }
     if version_ref:
         response["version_ref"] = version_ref
-    if action and action != "sync":
+    if action:
         response["action"] = action
     return response
 

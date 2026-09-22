@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import re
 from importlib.metadata import version
 from pathlib import Path
 
@@ -17,6 +18,13 @@ OPS_CHECKS = ROOT / ".github/workflows/ops-checks.yml"
 
 def test_infra_pins_the_expected_sdk_release() -> None:
     assert version("infra2-sdk") == "1.5.1"
+
+
+def test_alerting_dockerfile_sdk_pin_matches_pyproject() -> None:
+    dockerfile = (ROOT / "platform/12.alerting/Dockerfile").read_text(encoding="utf-8")
+    match = re.search(r"infra2_sdk-([0-9.]+)-", dockerfile)
+    assert match is not None, "Failed to find infra2_sdk version in Alerting Dockerfile"
+    assert match.group(1) == version("infra2-sdk")
 
 
 def test_local_stage_mirror_matches_the_released_sdk() -> None:
