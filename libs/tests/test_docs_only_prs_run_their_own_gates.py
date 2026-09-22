@@ -14,7 +14,7 @@ nothing but Markdown. So the gate was skipped by precisely the change it
 existed to catch, and ``test_project_index_generated.py`` -- which says in its
 own docstring that "editing the README index by hand ... fails here" -- was
 skipped with it. #505 (Infra-004/005 drifting to the wrong status in the index,
-Infra-010/011/014/016 missing outright) would have passed CI green today.
+Infra-010/014/016 missing outright) would have passed CI green today.
 ``.github/workflows/docs.yml`` triggers on ``**/*.md``, so running the two
 generators there closes it.
 
@@ -93,6 +93,37 @@ GATE_JOBS = (
 # for every step after it -- which a harness that executes one step in
 # isolation cannot see, and a blind audit duly walked through.
 CROSS_STEP_ENV_MECHANISMS = ("GITHUB_PATH", "GITHUB_ENV", "add-path", "set-env")
+
+# Scanning `run:` text for those four is sound only over steps that HAVE a
+# `run:`. A `uses:` step has none and is invisible to it, while the ordinary
+# way an action changes PATH is `@actions/core`'s addPath()/exportVariable(),
+# which write those same files from inside the action -- never as text in the
+# workflow. An audit inserted `uses: some-org/totally-fake-action@v1` ahead of
+# the gates and all 22 tests stayed green. The vocabulary is closed; the set of
+# steps that can speak it is not, because a third-party action's behaviour
+# cannot be read off the YAML at all.
+#
+# So this is not matching, it is permission: the actions allowed to run ahead
+# of a gate are listed, and a new one fails until someone has looked at it.
+# Scope, stated rather than implied: this catches a NEW action appearing in
+# front of a gate. It does not catch an approved action changing behaviour in
+# a new version -- that is review's and dependabot's job, not a list's.
+ACTIONS_ALLOWED_BEFORE_GATES = frozenset(
+    {
+        "actions/checkout",
+        "actions/setup-python",
+        "actions/upload-artifact",
+        "astral-sh/setup-uv",
+        "coverallsapp/github-action",
+    }
+)
+
+# `if: needs.<job>.outputs.<key>` names something another job has to declare.
+# Renaming that output leaves every `if:` textually identical and resolves to
+# the empty string, so `'' == 'true'` is false and the job never runs -- which
+# pinning the `if:` string cannot see, though an earlier docstring here claimed
+# it could.
+_NEEDS_OUTPUT_RE = re.compile(r"needs\.([A-Za-z0-9_-]+)\.outputs\.([A-Za-z0-9_-]+)")
 
 # Every file a generator derives its answer from. Changing one of these is what
 # makes the corresponding index stale, so each must reach a gate.
@@ -408,7 +439,10 @@ def test_the_gate_job_still_runs_when_the_model_says_it_does(
     """The job hosting a gate must be scheduled on the terms the model assumes.
 
     Everything else here executes a step's script directly, which says nothing
-    about whether GitHub would ever start the job holding it. Disabling the job
+    about whether GitHub would ever start the job holding it.
+
+    A renamed `needs` output is checked separately below: pinning the `if:`
+    text cannot see it, because the text stays identical and stops resolving. Disabling the job
     -- a mistyped condition, a renamed `needs` output, a stray `false` -- turns
     the gate off while every other assertion stays green.
     """
@@ -418,6 +452,15 @@ def test_the_gate_job_still_runs_when_the_model_says_it_does(
         f"GATE_JOBS assumes {expected_if!r}. Either the job's scheduling "
         "changed and the model has to follow, or the condition was broken."
     )
+    for referenced, key in _NEEDS_OUTPUT_RE.findall(job.get("if") or ""):
+        declared = (_jobs(workflow).get(referenced) or {}).get("outputs") or {}
+        assert key in declared, (
+            f"{workflow.name}:{job_name} gates itself on "
+            f"needs.{referenced}.outputs.{key}, which {referenced} does not "
+            f"declare (it has {sorted(declared)}). The expression resolves to "
+            "the empty string, the comparison is false, and the job silently "
+            "never runs."
+        )
     assert job.get("needs") == expected_needs, (
         f"{workflow.name}:{job_name} declares `needs: {job.get('needs')!r}` but "
         f"GATE_JOBS assumes {expected_needs!r}. Every added dependency is one "
@@ -617,6 +660,15 @@ def test_every_generator_input_reaches_a_gate_that_bites(
         where = f"{workflow.name}:{job_name} step {step.get('name')!r}"
         job = _jobs(workflow)[job_name]
         for earlier in job["steps"][:index]:
+            action = (earlier.get("uses") or "").split("@")[0]
+            assert not action or action in ACTIONS_ALLOWED_BEFORE_GATES, (
+                f"{workflow.name}:{job_name} runs {action!r} before "
+                f"{step.get('name')!r}. An action can put a shadow `uv` or "
+                "`python3` on PATH from inside itself, which no amount of "
+                "reading this YAML would reveal -- so new ones are refused "
+                "until someone has looked and added them to "
+                "ACTIONS_ALLOWED_BEFORE_GATES."
+            )
             body = earlier.get("run") or ""
             hijacks = [m for m in CROSS_STEP_ENV_MECHANISMS if m in body]
             assert not hijacks, (

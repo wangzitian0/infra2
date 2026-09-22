@@ -83,6 +83,21 @@ Track top issues discovered during documentation engineering.
      （它改不了这两个索引，且 `pr_merge_gate` 会以「required check(s) never reported」拦下这种 PR，
      所以不是可利用的洞——但结论写宽了就是错的。）已把 SSOT、本条与测试 docstring 的说法
      收敛到「生成器读的文件」。
+- **第五轮 claim 审计又抓到两条 HIGH，都在我这一轮刚写的守卫里**：
+  1. **`uses:` 步骤对跨步骤扫描完全隐形**。我的注释论证是「这四个机制是闭集，所以可以文本匹配」——
+     **词汇表**是闭的没错，但**扫描的域**（只有 `run:` 正文）不是：`uses:` 步骤没有 `run:`，
+     而 action 改 PATH 的正常方式恰恰是在自己内部调 `@actions/core` 的 `addPath()`，
+     workflow YAML 里一个字都看不到。实测：gate 前插 `uses: some-org/totally-fake-action@v1`，
+     **22 全绿**。而 gate 之前本来就有 3–5 个 `uses:`（含 `astral-sh/setup-uv`，正是这类）。
+     改法只能是**显式许可**而不是匹配：列出允许在 gate 之前运行的 action，新来的一律红。
+     边界写明：它守「新 action 进场」，不守「已批准 action 换版本」——后者归 review 和 dependabot。
+  2. **重命名 `needs` 输出，`if:` 文本锁定看不见**。把 `detect-changes` 的 `outputs.has_non_doc`
+     改名，所有 `if:` 一字未动却全部解析成空串，`'' == 'true'` 为假，job 永不运行。实测 **22 全绿**。
+     而我上一轮的 docstring 明写着这个测试能抓「a renamed `needs` output」——**承诺了没实现的能力**。
+     已加结构检查：从 `if:` 里提取 `needs.<job>.outputs.<key>`，断言被引用的 job 确实声明了它。
+  - 反向验证：未知 `uses:` **5 红**、重命名 output **1 红**；对照组（白名单内的 `actions/checkout`）
+    **22 绿**，说明守卫有分辨力而不是一律红。
+
 - **第五轮盲审又打穿两次，又都是 HIGH**。这一轮尤其说明问题：**每次我以为闭合了，
   换一把 YAML 钥匙就又开了**——先是步骤文本，再是 job 条件，这次是 `needs:` 和 `shell:`。
   1. **`needs:` 从不检查**。给 `test-deployer-logic` 加一个依赖（`needs: [detect-changes, lint-python]`，
@@ -103,6 +118,13 @@ Track top issues discovered during documentation engineering.
   未建模 shell（`shell: python`）**8 红**（fail-closed 生效）、pi 步骤 shell 覆盖 **3 红**；原样 22 / 3 全绿。
 
 - **第四轮盲审又打穿两次，都是 HIGH，都成立**：
+  0. **顺带一条事实更正（第五轮 claim 审计）**：此前多处写的「#505 缺的是
+     Infra-010/011/014/016」**是错的**，issue #505 原文是「Infra-010/014/016 存在于磁盘但
+     索引完全没登记」——三个，不含 011；且修复提交前的 README 里 Infra-011 确实在索引中
+     （`git show f4de6fb^:docs/project/README.md` 可查）。这条错误来自上游 commit message，
+     扩散到 `tools/gen_project_index.py`、`test_project_index_generated.py`、
+     `core.engineering.md` 与本文件共四处，已全部更正。
+     **我在同一轮宣称「零 FALSE」时照抄了它而没有复核**——继承来的事实和自己写的事实一样要查。
   1. **job 级 `if:` 从不检查**。把 `test-deployer-logic` 或 docs.yml 的 `build` 整个 job
      `if: false`——门禁连同该 job 里另外十来个必需检查一起关掉——**测试全绿**。
      `GATE_JOBS` 硬编码了 job 名，却从不读 `job["if"]`：这套测试证明的是

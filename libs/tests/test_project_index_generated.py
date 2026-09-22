@@ -7,7 +7,7 @@ single source; docs/project/README.md's Active/Archived tables are a projection 
 re-statusing a project doc without regenerating — fails here. Fix:
 python tools/gen_project_index.py --write. This is what previously let Infra-004/005
 drift to "In Progress" in the index while their own docs said "Completed", and let
-Infra-010/011/014/016 go missing from the index entirely.
+Infra-010/014/016 go missing from the index entirely.
 """
 
 from __future__ import annotations

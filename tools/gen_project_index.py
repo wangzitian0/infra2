@@ -4,7 +4,7 @@ each Infra-XXX doc's own H1 title and Status header.
 
 The portfolio previously hand-copied each project's status into the index —
 Infra-004 and Infra-005 drifted to "In Progress" in the index while their own
-docs said "Completed", and Infra-010/011/014/016 were missing entirely (#505).
+docs said "Completed", and Infra-010/014/016 were missing entirely (#505).
 This makes the index a pure projection of the docs directory, so it cannot
 drift from what each doc actually says. `test_project_index_generated_matches_
 committed` locks generated == committed; run `python tools/gen_project_index.py
