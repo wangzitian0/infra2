@@ -12,6 +12,7 @@ Also flags the inverse smell: a gate declared `blocks_merge: true` whose job is
 merge no matter what the ruleset says (see infra_ci.vault_policy, which is why this
 audit exists).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -22,6 +23,8 @@ import urllib.request
 from pathlib import Path
 
 import yaml
+
+from tools import ci_spec
 
 ROOT = Path(__file__).resolve().parents[1]
 INVENTORY = ROOT / "docs/ssot/ci-gate-inventory.yaml"
@@ -37,21 +40,27 @@ def _blocking_gates() -> list[dict]:
 def _job_display_name(workflow_rel_path: str, job_id: str) -> str | None:
     """The GitHub Actions check `context` a job reports is its `name:`, not its
     YAML job id — required_status_checks matches on the display name."""
-    path = ROOT / workflow_rel_path
-    if not path.is_file():
-        return None
-    wf = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    job = (wf.get("jobs") or {}).get(job_id) or {}
-    return job.get("name")
+    workflow = ci_spec.load_workflow(ROOT / workflow_rel_path)
+    jobs = workflow.get("jobs")
+    job = (jobs if isinstance(jobs, dict) else {}).get(job_id)
+    return job.get("name") if isinstance(job, dict) else None
 
 
-def _job_continue_on_error(workflow_rel_path: str, job_id: str) -> bool:
-    path = ROOT / workflow_rel_path
-    if not path.is_file():
-        return False
-    wf = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    job = (wf.get("jobs") or {}).get(job_id) or {}
-    return bool(job.get("continue-on-error"))
+def _defanged(workflow_rel_path: str, job_id: str) -> list[str]:
+    """Parts of a required gate that can no longer fail it.
+
+    This used to read only ``job.get("continue-on-error")``. One level down
+    was invisible: a `continue-on-error` on the step that actually runs
+    `ruff`, or the tests, leaves the job's name, its `if:` and its `needs:`
+    byte-identical while the required check becomes unconditionally green --
+    measured, and all three gate auditors passed it.
+
+    The reading now lives in ``tools.ci_spec`` so there is one place to fix,
+    which is why this was missed for so long: the same question was being
+    answered in three files and deepened in none.
+    """
+    workflow, source = ci_spec.read_workflow(ROOT / workflow_rel_path)
+    return ci_spec.defanged_steps(workflow, job_id, source)
 
 
 def _live_required_contexts(
@@ -98,8 +107,9 @@ def audit(
             unresolvable.append(gate.get("id", "?"))
             continue
         declared[name] = gate.get("id", "?")
-        if _job_continue_on_error(gate.get("workflow", ""), gate.get("job", "")):
-            self_contradicting.append(gate.get("id", "?"))
+        defanged = _defanged(gate.get("workflow", ""), gate.get("job", ""))
+        if defanged:
+            self_contradicting.append(f"{gate.get('id', '?')} ({', '.join(defanged)})")
 
     live = _live_required_contexts(repository, branch, token)
 
@@ -120,7 +130,12 @@ def audit(
     result["extra_in_ruleset"] = extra_in_ruleset
     result["status"] = (
         "drift"
-        if (missing_from_ruleset or extra_in_ruleset or self_contradicting or unresolvable)
+        if (
+            missing_from_ruleset
+            or extra_in_ruleset
+            or self_contradicting
+            or unresolvable
+        )
         else "in_sync"
     )
     return result
@@ -128,7 +143,9 @@ def audit(
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--repository", default=os.getenv("GITHUB_REPOSITORY", DEFAULT_REPOSITORY))
+    ap.add_argument(
+        "--repository", default=os.getenv("GITHUB_REPOSITORY", DEFAULT_REPOSITORY)
+    )
     ap.add_argument("--branch", default=DEFAULT_BRANCH)
     ap.add_argument(
         "--token",
@@ -166,7 +183,10 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
     if args.enforce and result["status"] != "in_sync":
-        print("::error::ci-gate-inventory.yaml is out of sync with the live ruleset", file=sys.stderr)
+        print(
+            "::error::ci-gate-inventory.yaml is out of sync with the live ruleset",
+            file=sys.stderr,
+        )
         return 1
     return 0
 

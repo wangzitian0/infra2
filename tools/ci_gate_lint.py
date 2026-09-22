@@ -6,6 +6,7 @@ Validates GitHub Actions workflow definitions against `tools/ci_spec.py`:
 2. Banned gate steps: heavy benchmarks and full reconciliations must not run in PR gate jobs.
 3. Compute saturation: pytest parallelism must use `-n auto` rather than arbitrary hardcoded workers.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -14,8 +15,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import yaml
-
+from tools import ci_spec
 from tools.ci_spec import (
     BANNED_IN_GATE_PATTERNS,
     SHARD_MAX,
@@ -40,14 +40,14 @@ def _is_pr_gate_workflow(wf: dict[str, Any]) -> bool:
 
 def lint_workflow(path: Path) -> list[str]:
     """Inspects a workflow file for CI gate hierarchy violations."""
-    try:
-        content = path.read_text(encoding="utf-8")
-        wf = yaml.safe_load(content) or {}
-    except Exception as exc:
-        return [f"{path}: Failed to parse YAML: {exc}"]
-
-    if not isinstance(wf, dict):
-        return []
+    wf, content = ci_spec.read_workflow(path)
+    if not wf:
+        # `read_workflow` folds every "nothing usable here" into an empty mapping,
+        # which is what an auditor wants. A linter owes the reader the reason, so
+        # it asks for one -- and gets None for an absent or blank file, which this
+        # has always reported as no findings rather than as a failure.
+        reason = ci_spec.workflow_read_error(path)
+        return [f"{path}: Failed to parse YAML: {reason}"] if reason else []
 
     if not _is_pr_gate_workflow(wf):
         return []
@@ -112,7 +112,9 @@ def lint_workflows_dir(workflows_dir: Path) -> list[str]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Lint GitHub Actions workflows for Left-to-Right CI hierarchy.")
+    parser = argparse.ArgumentParser(
+        description="Lint GitHub Actions workflows for Left-to-Right CI hierarchy."
+    )
     parser.add_argument(
         "pos_dir",
         nargs="?",

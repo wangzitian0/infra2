@@ -66,7 +66,7 @@ def test_audit_reports_in_sync_when_declared_matches_live(monkeypatch) -> None:
         ],
     )
     monkeypatch.setattr(cgra, "_job_display_name", lambda *_a: "Lint Python Code")
-    monkeypatch.setattr(cgra, "_job_continue_on_error", lambda *_a: False)
+    monkeypatch.setattr(cgra, "_defanged", lambda *_a: [])
     monkeypatch.setattr(
         cgra,
         "_live_required_contexts",
@@ -88,7 +88,7 @@ def test_audit_flags_gate_missing_from_ruleset(monkeypatch) -> None:
         ],
     )
     monkeypatch.setattr(cgra, "_job_display_name", lambda *_a: "Lint Python Code")
-    monkeypatch.setattr(cgra, "_job_continue_on_error", lambda *_a: False)
+    monkeypatch.setattr(cgra, "_defanged", lambda *_a: [])
     monkeypatch.setattr(cgra, "_live_required_contexts", lambda *_a, **_kw: set())
 
     result = cgra.audit(token="tok")
@@ -124,7 +124,7 @@ def test_audit_flags_self_contradicting_gate(monkeypatch) -> None:
     monkeypatch.setattr(
         cgra, "_job_display_name", lambda *_a: "Validate Vault Policy Syntax"
     )
-    monkeypatch.setattr(cgra, "_job_continue_on_error", lambda *_a: True)
+    monkeypatch.setattr(cgra, "_defanged", lambda *_a: ["Run ruff check"])
     monkeypatch.setattr(
         cgra,
         "_live_required_contexts",
@@ -133,7 +133,12 @@ def test_audit_flags_self_contradicting_gate(monkeypatch) -> None:
 
     result = cgra.audit(token="tok")
     assert result["status"] == "drift"
-    assert result["self_contradicting_gates"] == ["infra_ci.vault_policy"]
+    # The report names which part was defanged, not just which gate: a
+    # reader who has to open the workflow to find out is one step
+    # further from fixing it.
+    assert result["self_contradicting_gates"] == [
+        "infra_ci.vault_policy (Run ruff check)"
+    ]
 
 
 def test_audit_is_undetermined_when_live_state_unreachable(monkeypatch) -> None:
@@ -157,10 +162,16 @@ def test_current_inventory_matches_the_real_infra_ci_workflow() -> None:
 
 def test_current_inventory_has_no_self_contradicting_gates() -> None:
     """Regression guard for #504: a blocks_merge: true gate must not be
-    continue-on-error (it could never actually block)."""
+    continue-on-error (it could never actually block).
+
+    Now reads step level too. A `continue-on-error` on the step that runs the
+    check defangs the gate exactly as thoroughly as one on the job, and was
+    invisible here until it was measured. A deliberate exemption declares
+    itself with `# gate-exempt: <reason>` beside the step.
+    """
     contradicting = [
-        gate["id"]
+        f"{gate['id']} ({', '.join(found)})"
         for gate in cgra._blocking_gates()
-        if cgra._job_continue_on_error(gate["workflow"], gate["job"])
+        if (found := cgra._defanged(gate["workflow"], gate["job"]))
     ]
     assert contradicting == []
