@@ -46,7 +46,14 @@ REPO_PACKAGES = ("libs", "tools", "finance_report", "truealpha")
 # does, so a `try/except ImportError` fallback still takes its fallback -- which is
 # the behaviour being checked, not a case to special-case.
 _PROBE = """
-import importlib.machinery, json, sys
+import json, os, sys
+
+# The jobs run `python -m tools.X` from the repo root, where the root is on
+# sys.path. This probe can itself run under PYTHONSAFEPATH=1 (infra-ci sets it),
+# which drops the implicit cwd entry -- so put it back explicitly. Without this
+# the probe reports the repo's own packages as missing, which is a fact about
+# the probe and not about the job it is meant to be judging.
+sys.path.insert(0, os.getcwd())
 
 ALLOWED = set(json.loads(sys.argv[1])) | set(sys.stdlib_module_names)
 
@@ -80,6 +87,8 @@ def _install_lines(job: dict) -> list[str]:
 # `name @ url` inside a shell assignment, e.g.
 # `sdk_requirement="$(... value.startswith("infra2-sdk @ ") ...)"`.
 _PINNED_IN_SHELL = re.compile(r"([A-Za-z][A-Za-z0-9._-]*)\s+@\s")
+# `$( ... )`, with one level of nested parentheses -- enough for the shapes here.
+_CMD_SUBST = re.compile(r"\$\((?:[^()]|\([^()]*\))*\)")
 
 
 def _declared_distributions(job: dict) -> set[str] | None:
@@ -97,7 +106,15 @@ def _declared_distributions(job: dict) -> set[str] | None:
     )
     found: set[str] = set()
     for line in lines:
-        for token in line.split("pip install", 1)[1].split():
+        tail = line.split("pip install", 1)[1]
+        # `"$(grep -oE 'infra2-sdk @ https://...' pyproject.toml)"` names a
+        # distribution only a shell can resolve. Read the name out of it and take
+        # the substitution off the line: splitting on whitespace first turned the
+        # grep's own arguments into package names (`https://`, `pyproject.toml)`).
+        for subst in _CMD_SUBST.findall(tail):
+            found |= set(_PINNED_IN_SHELL.findall(subst))
+            tail = tail.replace(subst, " ")
+        for token in tail.split():
             token = token.strip("\"'")
             if token in ("\\", ""):
                 continue
