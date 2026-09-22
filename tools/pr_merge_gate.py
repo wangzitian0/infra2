@@ -104,7 +104,12 @@ _OWNER_INSTRUCTION_HEADER_RE = re.compile(
 # require the quote to open the line. `.search()`, not `.match()`, evaluates
 # this: `^` inside alternative (a) still pins it to line-start, while
 # alternative (b) is free to match further in.
-_QUOTE_LINE_RE = re.compile(r"^>\s*\S|「[^」]*\S[^」]*」")
+#
+# The "content" character inside 「...」 must be `[^\s」]`, not `\S` -- `\S`
+# matches a stray closing `」` just as readily as real text, so `「」」` or
+# `「」 」` (an empty quote followed by a loose `」`) would otherwise still read
+# as a non-empty citation.
+_QUOTE_LINE_RE = re.compile(r"^>\s*\S|「[^」]*[^\s」][^」]*」")
 
 
 def _owner_instruction_quoted(body: str) -> bool:

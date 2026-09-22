@@ -1036,6 +1036,11 @@ def test_owner_instruction_quoted_recognises_a_header_and_its_quote(body):
         "## Owner instruction\n\n>",
         "## Owner instruction\n\n>   ",
         "## Owner instruction\n\n「」",
+        # A stray `」` is not "content" either -- `\S` matches a closing bracket
+        # just as readily as real text, so a naive fix for the empty-quote bug
+        # above can still be fooled by an empty quote followed by loose `」`s.
+        "## Owner instruction\n\n「」」",
+        "## Owner instruction\n\n「」 」",
     ],
 )
 def test_owner_instruction_quoted_rejects_a_header_without_a_quote_beneath_it(body):
