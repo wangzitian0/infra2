@@ -80,6 +80,7 @@ name: Ops Checks
           - vault-self-refresh-audit
           - secrets-reconcile
           - pi-chain-smoke
+          - schema-gate-probe
           - all
       dry_run:
         description: "Run checks without sending Feishu notifications"
@@ -958,6 +959,39 @@ jobs:
               f"Run: {run_url}",
           )
           PY
+
+  schema-gate-probe:
+    # Dispatch-only and read-only: it answers whether a pre-deploy schema gate
+    # could run on the VPS, and changes nothing. Never scheduled, so it has no
+    # signal to register; never on pull_request, so it cannot gate a merge.
+    name: Pre-deploy schema gate — read-only feasibility probe
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.task == 'schema-gate-probe' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Configure SSH key
+        env:
+          INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${INFRA2_WATCHDOG_SSH_PRIVATE_KEY:-}" ]; then
+            echo "::error::INFRA2_WATCHDOG_SSH_PRIVATE_KEY is not configured; the probe has nothing to reach."
+            exit 1
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_schema_probe
+          chmod 600 ~/.ssh/infra2_schema_probe
+          echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_schema_probe" >> "$GITHUB_ENV"
+      - name: Probe
+        env:
+          INFRA2_WATCHDOG_SSH_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
+          INFRA2_WATCHDOG_SSH_USER: ${{ secrets.INFRA2_WATCHDOG_SSH_USER }}
+          INFRA2_WATCHDOG_SSH_PORT: ${{ vars.INFRA2_WATCHDOG_SSH_PORT }}
+        run: python3 tools/schema_gate_probe.py
 
   pi-chain-smoke:
     # schedule-signal-exempt: observational real-run proof of the pi main chain
