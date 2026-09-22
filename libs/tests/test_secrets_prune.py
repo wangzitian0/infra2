@@ -115,7 +115,8 @@ def test_a_refused_write_or_read_is_reported_not_raised(tmp_path):
     unreadable = MemoryStore(fail="HTTP 403")
     report = secrets_prune.prune(services=(service,), store=unreadable, root=tmp_path)
     assert "unreadable" in report.render()
-    assert secrets_prune.main.__doc__ is None or True  # main() is exercised below
+    assert bool(secrets_prune.main.__doc__)
+    assert "secrets prune" in secrets_prune.main.__doc__.lower()
 
 
 def test_previews_own_no_path_and_are_skipped(tmp_path):

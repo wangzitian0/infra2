@@ -319,6 +319,7 @@ jobs:
           # never checks those out (#506), so fetch the few files at the pinned commits.
           # (script path, not -m: the job runs with PYTHONSAFEPATH=1, so `tools` is not a package on sys.path)
           uv run python tools/fetch_app_manifests.py
+          uv run python tools/lint_anti_tautology.py libs/tests
           uv run python -m pytest libs/tests -q -n auto \
             --cov=libs \
             --cov=tools \
@@ -724,3 +725,11 @@ jobs:
       - name: Run ruff format check
         if: steps.changed-python.outputs.files != ''
         run: ruff format --check ${{ steps.changed-python.outputs.files }}
+
+      - name: Run anti-tautology test linter
+        run: |
+          targets=("libs/tests")
+          if [ -d repos/infra2-sdk/tests ]; then
+            targets+=("repos/infra2-sdk/tests")
+          fi
+          python tools/lint_anti_tautology.py "${targets[@]}"
