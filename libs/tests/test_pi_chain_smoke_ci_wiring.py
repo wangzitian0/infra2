@@ -48,10 +48,29 @@ REFUSAL_EXITS = (1, 2)
 
 
 def _smoke_step() -> dict:
-    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
-    steps = [s for s in jobs[JOB]["steps"] if "pi_chain_smoke" in (s.get("run") or "")]
+    doc = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    job = doc["jobs"][JOB]
+    steps = [s for s in job["steps"] if "pi_chain_smoke" in (s.get("run") or "")]
     assert len(steps) == 1, f"expected exactly one step invoking the smoke, got {steps}"
-    return steps[0]
+    step = steps[0]
+    # This harness runs the step under `bash -e`, GitHub's implicit default on
+    # Linux. An explicit `shell:` -- on the step, or in `defaults.run` on the
+    # job or the workflow, nowhere near it -- would change that, and `bash {0}`
+    # in particular drops `-e`. Refuse rather than measure a different shell
+    # than CI uses. (The sibling suite in
+    # test_generated_doc_indexes_are_guarded.py executes a workflow's own
+    # classifier shell the same way; here the step is a single command, so
+    # pinning is enough.)
+    declared = [
+        step.get("shell"),
+        ((job.get("defaults") or {}).get("run") or {}).get("shell"),
+        ((doc.get("defaults") or {}).get("run") or {}).get("shell"),
+    ]
+    assert not any(declared), (
+        f"a `shell:` override is in play ({declared}); `bash -e` below would no "
+        "longer be what CI runs"
+    )
+    return step
 
 
 def test_the_step_hands_the_verdict_to_the_tool_and_passes_strict() -> None:
@@ -92,18 +111,27 @@ def test_a_refusing_tool_fails_the_step_with_no_credential(
     script = tmp_path / "step.sh"
     script.write_text(run, encoding="utf-8")
 
+    # Inherit the environment and override only what the scenario needs. A
+    # hand-picked PATH-and-HOME one is not a smaller version of a runner's
+    # environment but a different one: with HOME moved, a python3 resolved
+    # through a version manager's shim fails to start (exit 126), and this
+    # test then reports "the step never invoked the smoke tool" -- which reads
+    # exactly like the wiring defect it exists to catch. The sibling test in
+    # test_generated_doc_indexes_are_guarded.py takes the same position; the
+    # two are deliberately consistent.
+    env = dict(os.environ)
+    # An undefined repository secret arrives as the empty string.
+    env["ZAI_CODING_CN_API_KEY"] = ""
     proc = subprocess.run(
         # GitHub's default shell for `run:` on Linux is `bash -e {0}`.
         ["bash", "-e", str(script)],
         cwd=tmp_path,
         capture_output=True,
         text=True,
-        env={
-            "PATH": os.environ["PATH"],
-            "HOME": str(tmp_path),
-            # An undefined repository secret arrives as the empty string.
-            "ZAI_CODING_CN_API_KEY": "",
-        },
+        # No step here should take seconds. Unbounded, a blocked subprocess
+        # holds a required check until GitHub's 6-hour job default.
+        timeout=120,
+        env=env,
     )
 
     reached = tmp_path / "reached.json"
