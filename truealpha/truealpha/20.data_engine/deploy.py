@@ -6,6 +6,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 from invoke.exceptions import CommandTimedOut
 from libs.console import error, success
@@ -180,7 +181,8 @@ class DataEngineDeployer(Deployer):
         return digest
 
     @classmethod
-    def ensure_runtime_secrets(cls, c=None) -> bool:
+    def ensure_runtime_secrets(cls, c=None, *, env: str | None = None) -> bool:
+        secrets = cls.secrets_backend(env=env)
         # From the PROCESS environment, not cls.env(): Deployer.env() is the curated
         # deployment config (libs.common.get_env — 1Password init vars plus a fixed set
         # of os.environ keys), and the runner's per-deploy DEPLOY_VERSION_REF is not in
@@ -189,11 +191,10 @@ class DataEngineDeployer(Deployer):
         version_ref = (os.environ.get("DEPLOY_VERSION_REF") or "").strip()
         if version_ref:
             try:
-                cls.pin_release(version_ref)
+                cls.pin_release(version_ref, secrets=secrets)
             except Exception as exc:  # noqa: BLE001 - every failure here must stop the deploy
                 error(f"{cls.service}: could not pin release {version_ref!r}: {exc}")
                 return False
-        secrets = cls.secrets_backend()
         missing = [key for key in cls._REQUIRED_SECRET_KEYS if not secrets.get(key)]
         if missing:
             error(f"Missing TrueAlpha data-engine Vault fields: {', '.join(missing)}")
@@ -320,12 +321,20 @@ class DataEngineDeployer(Deployer):
         )
 
         def remote(command: str, timeout: int | None = None):
-            return c.run(
-                f'ssh {ssh_user}@{host} "{command}"',
-                warn=True,
-                hide=True,
-                timeout=timeout,
-            )
+            try:
+                return c.run(
+                    f'ssh -o BatchMode=yes -o ConnectTimeout=10 {ssh_user}@{host} "{command}"',
+                    warn=True,
+                    hide=True,
+                    timeout=timeout,
+                )
+            except CommandTimedOut as timed_out:
+                return SimpleNamespace(
+                    ok=False,
+                    stdout="",
+                    stderr=f"timed out after {timed_out.timeout}s",
+                    returncode=124,
+                )
 
         # invoke raises CommandTimedOut when `timeout=` elapses instead of returning a
         # failed Result (review on #645); both shapes become the same fail-closed string.
@@ -350,7 +359,8 @@ class DataEngineDeployer(Deployer):
             mismatches = []
             for container in containers:
                 result = remote(
-                    f"docker inspect -f '{{{{.Config.Image}}}}' {container}"
+                    f"docker inspect -f '{{{{.Config.Image}}}}' {container}",
+                    timeout=15,
                 )
                 actual = (result.stdout or "").strip()
                 if not result.ok or actual != expected_image:
@@ -368,7 +378,8 @@ class DataEngineDeployer(Deployer):
             for container in containers:
                 result = remote(
                     f"docker inspect -f '{{{{if .State.Health}}}}{{{{.State.Health.Status}}}}"
-                    f"{{{{else}}}}{{{{.State.Status}}}}{{{{end}}}}' {container}"
+                    f"{{{{else}}}}{{{{.State.Status}}}}{{{{end}}}}' {container}",
+                    timeout=15,
                 )
                 status = (result.stdout or "").strip()
                 if not result.ok or status not in {"healthy", "running"}:

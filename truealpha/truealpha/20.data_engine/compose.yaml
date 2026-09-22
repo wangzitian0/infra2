@@ -18,8 +18,9 @@ x-dagster-service: &dagster-service
     MOOMOO_LEDGER_BACKEND: postgres
     # truealpha#854: moomoo as a governed origin (third price origin, second financial
     # origin) is feature-flagged in the engine; the flags are per-environment IaC
-    # (deploy.py::_release_recomputable_env): staging soaks them on, production stays off
-    # until a reviewed change flips it.
+    # (deploy.py::_release_recomputable_env): enabled in staging and production
+    # (soaked on staging, proven in truealpha#874, and enabled in production via #854 / #874).
+    # Any other environment name stays off.
     MOOMOO_KLINE_ORIGIN_ENABLED: ${MOOMOO_KLINE_ORIGIN_ENABLED:-false}
     MOOMOO_FINANCIALS_ORIGIN_ENABLED: ${MOOMOO_FINANCIALS_ORIGIN_ENABLED:-false}
     TRUEALPHA_RELEASE_MANIFEST_ID: ${RELEASE_MANIFEST_ID:?RELEASE_MANIFEST_ID is required}

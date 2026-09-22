@@ -19,18 +19,6 @@
 #   3. Everything else (vault-agent, llm, web, Traefik labels, healthchecks) mirrors the
 #      staging/prod template so a preview is a faithful, functional copy of the app.
 #
-# KNOWN GAP (tracked, not silently papered over): unlike finance_report's preview (which
-# runs `alembic upgrade head` on backend boot), truealpha has no in-container migration
-# runner yet — db/migrations/*.sql + db/roles.sql are applied manually from an app-repo
-# checkout today (see ../01.postgres/README.md: "a proper in-container migration runner
-# is planned with the app's Phase 0"). This preview's ephemeral `db` therefore boots with
-# NO schema until that runner exists — web/llm will come up (vault-agent + Postgres are
-# healthy) but any query touching `raw`/`staging`/`mart` will fail. Wiring an ad hoc
-# migration step here was deliberately NOT done: schema application is app-repo-owned
-# tooling, and inventing an infra2-side mechanism would preempt that design. Track the
-# migration-runner as its own truealpha issue before relying on this preview for anything
-# beyond a smoke/health-check deploy-path proof.
-#
 # Env vars supplied by libs.deploy.preview (see libs.deploy.promote for the shared set):
 # IMAGE_TAG, GIT_COMMIT_SHA, ENV_SUFFIX, ENV_DOMAIN_SUFFIX, NEXT_PUBLIC_APP_URL,
 # INTERNAL_DOMAIN, IAC_CONFIG_HASH, VAULT_ADDR, VAULT_ROLE_ID, VAULT_SECRET_ID, plus the
@@ -195,7 +183,7 @@ services:
       - dokploy-network
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.rule=Host(`truealpha${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.rule=Host(`truealpha${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`) && (PathPrefix(`/api/mcp`) || Path(`/api/health`))"
       - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
       - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
       - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.service=truealpha-api${ENV_DOMAIN_SUFFIX}"
