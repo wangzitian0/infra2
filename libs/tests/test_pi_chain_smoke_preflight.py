@@ -158,13 +158,17 @@ def test_main_names_the_credential_source_it_actually_used(
 def test_main_names_the_credential_source_on_a_failed_run_too(monkeypatch, capsys) -> None:
     """The source name must survive a FAIL verdict as well -- diagnosing a
     remote failure benefits from knowing which credential line was live,
-    not just that the run failed."""
+    not just that the run failed. Symmetric with the PASS-path assertion
+    above: both the stderr line and the JSON field must carry it, not just
+    one of the two."""
     detail = "credential from ZAI_CODING_CN_API_KEY env"
     monkeypatch.setattr(smoke, "preflight", lambda strict: ("ok", detail))
     failing = dict(_PASSING_CHECKS, route_ok=False)
     monkeypatch.setattr(smoke, "run_once", lambda: (failing, ""))
     monkeypatch.setattr("sys.argv", ["pi_chain_smoke.py"])
     assert smoke.main() == 1
-    verdict = json.loads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    assert detail in captured.err
+    verdict = json.loads(captured.out)
     assert verdict["verdict"] == "FAIL"
     assert verdict["credential_source"] == detail

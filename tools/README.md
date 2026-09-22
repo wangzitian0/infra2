@@ -461,7 +461,7 @@ reason rather than all reading as "no credential".
 
 `preflight()` never treats env as a silent default: whichever of the two
 lines actually supplied the credential is named in a stderr line
-(`preflight: credential from ...`) and carried into the verdict JSON as
+(`[pi_chain_smoke] preflight: credential from ...`) and carried into the verdict JSON as
 `credential_source`, on both PASS and FAIL, so a run never leaves it to be
 re-derived after the fact (dev_env#48). This dev_env issue also resolved the
 apparent inconsistency between the two credential names: `GLM_API_KEY` and
