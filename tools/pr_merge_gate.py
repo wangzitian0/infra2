@@ -32,6 +32,7 @@ import argparse
 import ast
 import fnmatch
 import functools
+import hashlib
 import json
 import math
 import os
@@ -492,6 +493,11 @@ class HeadFacts:
     # (`_proven_tighter`). Defaults to empty so a HeadFacts built by hand proves
     # nothing and every self-governing change in it goes to the owner.
     proven_tighter: tuple[str, ...] = ()
+    # Rule files whose working-tree copy is not the base branch's
+    # (`_working_tree_rule_drift`). Empty means "checked and identical"; a
+    # hand-built HeadFacts therefore asserts no drift, which is what its other
+    # fields do too.
+    rule_drift: tuple[str, ...] = ()
     # What GitHub says the PR changes, against what `files` actually returned.
     # `gh pr view --json files` caps at 100; both the protected-file and the
     # deploy-triggering checks iterate `files`, so a larger PR silently drops
@@ -577,6 +583,68 @@ def _file_at(repo: str, ref: str, path: str, *, gh: Runner = _gh) -> str | None:
         )
     except RuntimeError:
         return None
+
+
+def _blob_sha(data: bytes) -> str:
+    """A git blob id, computed locally so comparing a tree costs no extra API calls."""
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def _working_tree_rule_drift(
+    repo: str, base: str, *, gh: Runner = _gh
+) -> tuple[str, ...]:
+    """Self-governing files whose working-tree copy differs from the base branch's.
+
+    This gate reads its own rules from the working tree. Nothing checked that those
+    were the rules on the branch a merge would land on, so a checkout carrying an
+    unmerged rule change issued verdicts under it -- on every pull request, including
+    the ones that had nothing to do with the change.
+
+    Measured, not hypothesised: on 2026-09-22 a background poller merged #791 while
+    the working tree sat on the branch of #792, the still-unreviewed PR that relaxes
+    exactly the rule #791 needed relaxed. #791's own content turned out to be
+    non-loosening, so nothing was lost -- but the verdict was issued by a law that
+    had not been enacted, which is the whole thing the self-adjudication rule exists
+    to stop. Uncommitted edits to a rule file land in the same trap and are caught
+    the same way.
+
+    One API call: the base tree's blob ids, compared against locally computed ones.
+    Anything unreadable counts as drift, because "I could not tell whether I am
+    judging by the merged rules" has to stop a merge, not wave it through.
+    """
+    unknown = ("<the base branch's rules could not be read>",)
+    if not (repo and base):
+        return unknown
+    try:
+        payload = json.loads(
+            gh(
+                [
+                    "api",
+                    f"repos/{repo}/git/trees/{base}?recursive=1",
+                    "--jq",
+                    "{truncated:.truncated, tree:[.tree[]|{path,sha}]}",
+                ]
+            )
+        )
+        if payload.get("truncated"):
+            # A truncated tree silently omits paths, and an omitted path compares
+            # equal to nothing -- the same shape as the empty-set holes above.
+            return unknown
+        remote = {str(e["path"]): str(e["sha"]) for e in payload.get("tree") or []}
+    except (RuntimeError, json.JSONDecodeError, KeyError, TypeError):
+        return unknown
+    if not remote:
+        return unknown
+    drift: list[str] = []
+    for path in sorted(self_governing_files()):
+        try:
+            local = _blob_sha((ROOT / path).read_bytes())
+        except OSError:
+            drift.append(path)
+            continue
+        if remote.get(path) != local:
+            drift.append(path)
+    return tuple(drift)
 
 
 def _proven_tighter(
@@ -760,7 +828,13 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
         if str(view.get("state") or "") == "OPEN"
         else ()
     )
+    drift = (
+        _working_tree_rule_drift(repo, str(view.get("baseRefName") or ""), gh=gh)
+        if str(view.get("state") or "") == "OPEN"
+        else ()
+    )
     return HeadFacts(
+        rule_drift=drift,
         number=int(view["number"]),
         state=str(view.get("state") or ""),
         draft=bool(view.get("isDraft")),
@@ -962,6 +1036,19 @@ def evaluate(
             "list, so neither can be trusted here"
         )
         owner = True
+    if facts.rule_drift:
+        # Before asking what this pull request changes, ask whether the rules doing
+        # the asking are the merged ones. They are read from the working tree, so a
+        # checkout on another branch -- or with an uncommitted edit -- judges every
+        # pull request by a law nobody has enacted.
+        reasons.append(
+            f"the working tree's copy of the merge rules is not "
+            f"{facts.base}'s ({', '.join(facts.rule_drift)}): every verdict here "
+            f"would be issued under rules that are not merged — check out {facts.base} "
+            f"cleanly and re-run, or land those changes first"
+        )
+        owner = True
+
     governing = sorted(f for f in facts.files if f in self_governing_files())
     unproven = [f for f in governing if f not in facts.proven_tighter]
     if unproven:
