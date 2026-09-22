@@ -178,9 +178,33 @@ def self_governing_files() -> frozenset[str]:
             if (ROOT / test).is_file():
                 closure.add(test)
     closure |= set(RULE_TEXT_FILES)
+    # 每一个 workflow 文件。它们**决定这个门禁怎么判**，而闭包走不到它们：
+    # `WORKFLOW_DIR = ROOT / ".github" / "workflows"` 是路径拼接，`_repo_deps` 的
+    # 字面量正则看不见；而 `_declared_deploy_globs()` 每次都从工作树重读它们来决定
+    # 哪些路径一合就部署，`_required_checks()` 也从它们解析必需检查的显示名。
+    #
+    # 审计实测（2026-09-22）的绕过：一个 PR 同时改 `libs/alerting.py` 和
+    # `apply-observability.yml`，把前者从后者的 `on.push.paths` 里删掉 ——
+    # 门禁读的是这个 PR 自己那份 workflow，于是「合流会触发 observability apply」
+    # 这条升级不再成立，判定为 ready=True / owner_required=False / exit=0。
+    # 那是 AGENTS.md 明文列为必须回 owner 的一类，被会话权限直接合掉。
+    closure |= {f for f in _all_workflow_files() if (ROOT / f).is_file()}
     if seed not in closure:  # pragma: no cover - defensive
         closure = {seed, *RULE_TEXT_FILES}
     return frozenset(closure)
+
+
+def _all_workflow_files() -> list[str]:
+    """`.github/workflows` 下的每个 workflow，相对仓库根。"""
+    # 直接拼相对路径，不用 `relative_to(ROOT)`：`WORKFLOW_DIR` 是 import 期从原始
+    # ROOT 算出来的，而测试会 monkeypatch `gate.ROOT`；那时两者不再有父子关系，
+    # `relative_to` 抛 ValueError，把一个只读的列举变成崩溃。
+    if not WORKFLOW_DIR.is_dir():
+        return []
+    return sorted(
+        f".github/workflows/{p.name}"
+        for p in list(WORKFLOW_DIR.glob("*.yml")) + list(WORKFLOW_DIR.glob("*.yaml"))
+    )
 
 
 # ---- Which way did a change to the rules move? --------------------------------------
@@ -252,6 +276,49 @@ def _inventory_only_gained_authority(base_text: str, head_text: str) -> bool:
 # Self-governing paths a proof exists for. Everything else in the closure is unproven
 # by construction, which is the point: this set only grows when someone can state what
 # the file's decision input is and which way is stricter.
+def _workflow_only_gained_authority(base_text: str, head_text: str) -> bool:
+    """True 当这份 workflow 的改动只会让门禁更常说「不」。
+
+    门禁从 workflow 里读两样东西，两样都得只增不减：
+
+    * `on.push.paths` —— 哪些路径一合就部署。**多**一条 = 多一类改动要回 owner。
+      少一条 = 少一类，那正是审计实测到的绕过。
+    * 每个 job 的 `name:` —— 必需检查的显示名由它解析而来。改名会让一条必需检查
+      「从没报告过」，而那条路径是拦不住的；所以要求名字集合是超集。
+
+    其余随便改（`run:`、`env:`、新增 job……）都不影响这两个判定输入，不设限。
+    """
+
+    def read(text):
+        try:
+            doc = yaml.safe_load(text)
+        except yaml.YAMLError:
+            return None
+        if not isinstance(doc, dict):
+            return None
+        on = doc.get(True, doc.get("on"))
+        push = on.get("push") if isinstance(on, dict) else None
+        paths = push.get("paths") if isinstance(push, dict) else None
+        jobs = doc.get("jobs")
+        names = (
+            {
+                str(j.get("name"))
+                for j in (jobs or {}).values()
+                if isinstance(j, dict) and j.get("name")
+            }
+            if isinstance(jobs, dict)
+            else None
+        )
+        if names is None:
+            return None
+        return frozenset(str(x) for x in paths or []), frozenset(names)
+
+    base, head = read(base_text), read(head_text)
+    if base is None or head is None:
+        return False
+    return base[0] <= head[0] and base[1] <= head[1]
+
+
 DIRECTION_PROOFS = {
     "docs/ssot/ci-gate-inventory.yaml": _inventory_only_gained_authority,
 }
@@ -563,6 +630,21 @@ def _gh(argv: Sequence[str]) -> str:
     return result.stdout
 
 
+def _direction_proof_for(path: str):
+    """这个文件的方向证明，没有则 None。
+
+    workflow 逐个注册而不是写成一条通配：`DIRECTION_PROOFS` 是「能证明的那些」，
+    保持它可枚举，读的人才知道哪些文件有证明、哪些没有。
+    """
+    if path in DIRECTION_PROOFS:
+        return DIRECTION_PROOFS[path]
+    if path.startswith(f"{WORKFLOW_DIR.name}/") or path.startswith(
+        ".github/workflows/"
+    ):
+        return _workflow_only_gained_authority
+    return None
+
+
 def _file_at(repo: str, ref: str, path: str, *, gh: Runner = _gh) -> str | None:
     """A file's contents at a ref, or None if it cannot be read.
 
@@ -658,7 +740,7 @@ def _proven_tighter(
     """
     proven: list[str] = []
     for path in sorted(set(files) & self_governing_files()):
-        proof = DIRECTION_PROOFS.get(path)
+        proof = _direction_proof_for(path)
         if proof is None:
             continue
         base_text = _file_at(repo, base, path, gh=gh)
