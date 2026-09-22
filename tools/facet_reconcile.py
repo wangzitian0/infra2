@@ -98,6 +98,21 @@ def run_config_drift_section() -> Section:
     return section
 
 
+def _is_dns_observation_blocked(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return any(
+        pattern in msg
+        for pattern in (
+            "cloudflare api",
+            "could not resolve cloudflare zone",
+            "unauthorized",
+            "forbidden",
+            "401",
+            "403",
+        )
+    )
+
+
 def run_dns_section() -> Section:
     section = Section("dns")
     have_zone = bool(os.environ.get("CF_ZONE_ID") or os.environ.get("CF_ZONE_NAME"))
@@ -124,8 +139,19 @@ def run_dns_section() -> Section:
         actual = set(_actual_records(dns))
         drift = compute_drift(expected, actual)
     except (Exception, SystemExit) as exc:  # noqa: BLE001
-        section.blockers.append(f"dns scan failed: {exc}")
-        section.report = f"dns scan failed: {exc}"
+        err = str(exc)
+        # Issue #658 recommendation 2: a credential or API observation failure
+        # (e.g. Cloudflare API 401/403, zone resolution failure) means this external
+        # check could not run. That is an observation block, NOT a confirmed DNS drift.
+        # Treating an auth failure as a job-failing blocker blinds the daily reconcile
+        # by permanently turning the job red and drowning out real Dokploy compose-id
+        # and config-hash drift (#658).
+        if _is_dns_observation_blocked(exc):
+            section.skipped = f"Cloudflare API observation blocked: {err}"
+            section.report = f"dns: blocked ({err})"
+            return section
+        section.blockers.append(f"dns scan failed: {err}")
+        section.report = f"dns scan failed: {err}"
         return section
     section.report = format_report(
         drift, os.environ.get("INTERNAL_DOMAIN", "?"), len(expected), len(actual)
