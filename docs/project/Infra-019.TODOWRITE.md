@@ -732,8 +732,21 @@ worktree 的每个 generation 触及，所以 `generation-local` 描述的是一
       provider/model 路由；退出码 0/1/2 对齐 omca_gate_policy；挂
       ops-checks.yml 每日 cron `57 3 * * *` + workflow_dispatch 任务
       `pi-chain-smoke`，`# schedule-signal-exempt`（观察性检查永不升格
-      blocks_merge）；CI 用 `ZAI_CODING_CN_API_KEY` secret（未配置前 SKIP 绿，
-      配置后自动转为真实证明）。本地实跑证据：PASS 9392 tokens / 6.1s。
+      blocks_merge）；CI 用 `ZAI_CODING_CN_API_KEY` secret。本地实跑证据：
+      PASS 9392 tokens / 6.1s。
+- [x] T1a 撤掉「未配置前 SKIP 绿」：`--strict` 存在的唯一理由就是把缺凭证判成
+      infra error（退出码 2），而步骤里一段 shell 预检抢在它前面 `exit 0`，
+      **让 `--strict` 永远到不了**——一个以「组件门禁全绿而真链路是坏的」为立项
+      前提的证明，自己每天报绿却从未启动过 pi。首次 cron 是 2026-09-22 03:57Z，
+      在它产出第一个假绿之前改掉。守卫 `libs/tests/test_pi_chain_smoke_ci_wiring.py`
+      **执行**该步骤的脚本本身（喂一个必定拒绝的 stub），断言的是物理退出码而不是
+      shell 文本——文本匹配枚举不完通往 `exit 0` 的写法（`|| true`、`set +e`、
+      `case`、函数、提前 `return`）。修复前实测两参数化用例全红，修复后全绿。
+- [ ] T1b **owner 动作**：在 infra2 仓库配置 `ZAI_CODING_CN_API_KEY` secret
+      （现有 secret 清单里没有它）。在此之前每日 03:57Z 的 pi 主链证明是红的，
+      输出 `{"verdict":"INFRA","reason":"no zai-coding-cn credential: ..."}`。
+      红是正确状态——这条链从未被证明过；要么配上密钥让它变成真证明，要么撤掉
+      这个 cron，但不能让它继续以绿色存在。
 - [ ] T2 omca pi runtime 隔离（=roadmap M6 交付项）：pi 走 Tier 1 MANAGED；8 处
       switch + 测试 ≈700-1000 LOC / 2-3 PR / 2-3 天。**最大风险点已排除**：
       2026-09-21 真机行为学探针证明 `PI_CODING_AGENT_DIR` 是完全可逆的配置根边界

@@ -976,11 +976,15 @@ jobs:
         run: npm install -g @earendil-works/pi-coding-agent@0.86.1
       - name: Run the token-consuming main-chain smoke
         env:
+          # Secrets are invisible to a step-level `if:`, so the value is passed
+          # in and the tool decides -- which is the whole point of --strict.
           ZAI_CODING_CN_API_KEY: ${{ secrets.ZAI_CODING_CN_API_KEY }}
-        run: |
-          # Job scope on purpose: secrets are invisible to a step-level `if:`.
-          if [ -z "$ZAI_CODING_CN_API_KEY" ]; then
-            echo "SKIP: ZAI_CODING_CN_API_KEY secret not configured on this repo yet"
-            exit 0
-          fi
-          python3 tools/pi_chain_smoke.py --strict
+        # Nothing answers the credential question ahead of the tool. A shell
+        # pre-check used to print SKIP and exit 0 when the secret was empty,
+        # which on this repository it always is -- so --strict, whose entire
+        # job is to turn that into an infra error, could never run, and the
+        # daily proof would have reported success without ever launching pi.
+        # The tool's preflight also names which credential it wanted and where
+        # it looked, which a SKIP line cannot. Proof:
+        # libs/tests/test_pi_chain_smoke_ci_wiring.py runs this step for real.
+        run: python3 tools/pi_chain_smoke.py --strict
