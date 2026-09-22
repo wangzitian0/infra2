@@ -1672,3 +1672,47 @@ def test_only_workflows_get_the_workflow_proof():
     assert gate._direction_proof_for("docs/ssot/ci-gate-inventory.yaml") is not None
     for path in ("tools/pr_merge_gate.py", "AGENTS.md", "libs/console.py"):
         assert gate._direction_proof_for(path) is None, path
+
+
+# -- workflow 方向证明的三个误判形态（#809 review）---------------------------------
+
+WF_NO_PATHS = "on:\n  push:\n    branches: [main]\njobs:\n  a:\n    name: A\n"
+WF_WITH_PATHS = 'on:\n  push:\n    paths: ["x"]\njobs:\n  a:\n    name: A\n'
+
+
+def test_a_missing_paths_key_means_all_paths_not_none():
+    """Actions 把「没有 paths」当成「所有路径」。当成空集的话，给一个本来无 paths
+    的 workflow 加上过滤 —— 一次**收窄**、一次放松 —— 会被证明成收紧。
+
+    这正是 `_inventory_only_gained_authority` 里防过的空集陷阱换了个形状：那边是
+    「base 为空则任何 head 都是超集」，这边是「base 缺 key 被读成空」。
+    """
+    assert not gate._workflow_only_gained_authority(WF_NO_PATHS, WF_WITH_PATHS)
+    # 反向：去掉过滤 = 触发面变大 = 更多改动要回 owner = 收紧
+    assert gate._workflow_only_gained_authority(WF_WITH_PATHS, WF_NO_PATHS)
+
+
+def test_a_scalar_paths_value_is_not_a_set_of_characters():
+    """`paths: "x"` 用 `frozenset(str(v) for v in raw)` 会拆成字符集合，
+    于是比较的是字母而不是路径。"""
+    scalar = 'on:\n  push:\n    paths: "x"\njobs:\n  a:\n    name: A\n'
+    assert not gate._workflow_only_gained_authority(scalar, WF_WITH_PATHS)
+    assert not gate._workflow_only_gained_authority(WF_WITH_PATHS, scalar)
+
+
+def test_a_job_without_a_name_reports_under_its_job_id():
+    """`_required_checks()` 取 `name or job_id`，这里必须同一个取法。只收有 `name:`
+    的 job 会让「给无名 job 加 name」看起来是超集，实际是把那条必需检查改了名，
+    旧名字从此不再报告 —— 而「必需检查从没报告过」这条路径是拦不住的。"""
+    unnamed = 'on:\n  push:\n    paths: ["x"]\njobs:\n  a: {}\n'
+    assert not gate._workflow_only_gained_authority(unnamed, WF_WITH_PATHS)
+    # 同一份不动必须仍然成立，否则这条断言是靠「什么都证明不了」通过的
+    assert gate._workflow_only_gained_authority(unnamed, unnamed)
+
+
+@pytest.mark.parametrize(
+    "bad", ["on:\n  push:\n    paths: ['x']\n", "jobs: notamapping\n", "on: [\n"]
+)
+def test_a_workflow_without_a_jobs_mapping_proves_nothing(bad):
+    assert not gate._workflow_only_gained_authority(WF_WITH_PATHS, bad)
+    assert not gate._workflow_only_gained_authority(bad, WF_WITH_PATHS)

@@ -282,9 +282,15 @@ def _workflow_only_gained_authority(base_text: str, head_text: str) -> bool:
     门禁从 workflow 里读两样东西，两样都得只增不减：
 
     * `on.push.paths` —— 哪些路径一合就部署。**多**一条 = 多一类改动要回 owner。
-      少一条 = 少一类，那正是审计实测到的绕过。
-    * 每个 job 的 `name:` —— 必需检查的显示名由它解析而来。改名会让一条必需检查
-      「从没报告过」，而那条路径是拦不住的；所以要求名字集合是超集。
+    * 每个 job 报告出来的检查名 —— `_required_checks()` 取 `name or job_id`，所以
+      这里必须用同一个取法。只收有 `name:` 的 job 会让「给一个无名 job 加 name」
+      看起来是超集，而它实际上把那条必需检查从 job id 改名了，旧名字从此不再报告。
+
+    **`paths` 缺失不是空集**：GitHub Actions 把「没有 paths」当成「所有路径」。
+    当成空集的话，「给一个本来无 paths 的 workflow 加上 paths 过滤」——一次收窄、
+    一次放松——会被证明成收紧。这正是 `_inventory_only_gained_authority` 里防过的
+    空集陷阱，在这里换了个形状（#809 review）。所以 paths 用 None 表示「全部」，
+    并显式处理 base 全部 / head 收窄 这一组。
 
     其余随便改（`run:`、`env:`、新增 job……）都不影响这两个判定输入，不设限。
     """
@@ -298,25 +304,34 @@ def _workflow_only_gained_authority(base_text: str, head_text: str) -> bool:
             return None
         on = doc.get(True, doc.get("on"))
         push = on.get("push") if isinstance(on, dict) else None
-        paths = push.get("paths") if isinstance(push, dict) else None
+        if isinstance(push, dict) and "paths" in push:
+            raw = push["paths"]
+            # 标量字符串会被 `frozenset(str(x) for x in raw)` 拆成字符集合。
+            if not isinstance(raw, list):
+                return None
+            paths = frozenset(str(x) for x in raw)
+        else:
+            paths = None  # 没有 paths = 所有路径
         jobs = doc.get("jobs")
-        names = (
-            {
-                str(j.get("name"))
-                for j in (jobs or {}).values()
-                if isinstance(j, dict) and j.get("name")
-            }
-            if isinstance(jobs, dict)
-            else None
-        )
-        if names is None:
+        if not isinstance(jobs, dict):
             return None
-        return frozenset(str(x) for x in paths or []), frozenset(names)
+        names = frozenset(
+            str((spec.get("name") if isinstance(spec, dict) else None) or job_id)
+            for job_id, spec in jobs.items()
+        )
+        return paths, names
 
     base, head = read(base_text), read(head_text)
     if base is None or head is None:
         return False
-    return base[0] <= head[0] and base[1] <= head[1]
+    base_paths, head_paths = base[0], head[0]
+    if base_paths is None:
+        # base 触发于所有路径。只有 head 也触发于所有路径才不算放松。
+        if head_paths is not None:
+            return False
+    elif head_paths is not None and not base_paths <= head_paths:
+        return False
+    return base[1] <= head[1]
 
 
 DIRECTION_PROOFS = {
@@ -633,14 +648,13 @@ def _gh(argv: Sequence[str]) -> str:
 def _direction_proof_for(path: str):
     """这个文件的方向证明，没有则 None。
 
-    workflow 逐个注册而不是写成一条通配：`DIRECTION_PROOFS` 是「能证明的那些」，
-    保持它可枚举，读的人才知道哪些文件有证明、哪些没有。
+    workflow 走前缀匹配而不是逐个登记：闭包本身就是算出来的（`_all_workflow_files()`），
+    再手写一份同样的清单，就是今天反复在拆的那种「两份会漂移的手写清单」。
+    `DIRECTION_PROOFS` 留给逐个登记的个案。
     """
     if path in DIRECTION_PROOFS:
         return DIRECTION_PROOFS[path]
-    if path.startswith(f"{WORKFLOW_DIR.name}/") or path.startswith(
-        ".github/workflows/"
-    ):
+    if path.startswith(".github/workflows/"):
         return _workflow_only_gained_authority
     return None
 
