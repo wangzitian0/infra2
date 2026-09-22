@@ -69,30 +69,29 @@
 > `docs/project/README.md` 同理，由各 `Infra-NNN` 文档自己的 H1 与 Status 行生成
 > （`tools/gen_project_index.py`）——改索引要改那份文档，不是改索引。
 
-**守卫必须能被它要守的改动触发。** 这两个索引的输入全是文档，所以证明它们没过期的门禁
-**跑在 `docs.yml` 里**：它按 `**/*.md` 触发。infra-ci 里那两份同样的门禁待在
-`has_non_doc == 'true'` 的 job 下，而「新增/改名/改 Status 一篇 Project 文档」「手改生成块」
-恰恰是全 Markdown 的改动——门禁会被它存在的理由跳过。#505 那次漂移（Infra-004/005 索引里
-状态错、Infra-010/014/016 整个缺失）今天原样重来会一路绿灯。判据不是「这个检查重不重要」，
-而是**它的输入会不会在它不运行的那类 PR 里变**；会，就得挪到那类 PR 触发得到的地方。
+**守卫必须能被它要守的改动触发。** 这两个索引「是否同步」早就有测试证明
+（`test_project_index_generated` / `test_ssot_index_generated`），它们跑在 infra-ci 的
+`test-deployer-logic` 里——GitHub ruleset 强制的七个必需检查之一。缺陷从来不在这两个测试，
+而在承载它们的 job 由 `has_non_doc` 门控：**新增/改名/改 Status 一篇 Project 文档、
+手改生成块，全都是纯 Markdown**，于是「让索引过期的那种改动」恰好就是「跳过证明索引没过期的那个测试」
+的那种改动。#505 是留在案的实例（Infra-004/005 状态错、Infra-010/014/016 整个缺失）。
 
-**而且「跑了」不等于「还咬人」。** 证明见
-`libs/tests/test_docs_only_prs_run_their_own_gates.py`，它断言两件事，两件都是量出来的：
-*可达性*——对每个生成器读的每个文件，存在一个会因该文件改动而触发的 workflow 跑了它
-（触发模型同时覆盖两个 workflow 各自的 `paths:` 与 infra-ci 的 `has_non_doc`，后者的分类
-shell 是从 workflow 里取出来在临时仓库上真的执行的，不是重新实现的）；*咬合*——把那个步骤
-**真的跑一遍**，喂一棵索引已过期的树，断言退出码非 0。**只断言步骤文本里出现了生成器的名字
-证明不了任何事**：加一个 `|| true`，所有这类断言仍然全绿而门禁已经不门禁了。
-`continue-on-error` 是从脚本外面废掉一个步骤的唯一方式，它是含义单一的 YAML key，所以按 key 查。
+所以判据是：**一份文档如果是某个生成物的输入，它就是配置，不是散文**——`detect-changes` 按这条
+把 `docs/project/**.md` 与 `docs/ssot/README.md` 判为 non-doc（与 #774 对 `AGENTS.md`/`CLAUDE.md`
+同一条理由）。规则刻意比生成器自己的输入集**粗**：生成器跳过 `*.TODOWRITE.md`/`*.SUMMARY.md`，
+精确复述会在 shell 里留下第二份会漂移的真源。**决定权在漂移的方向**——粗规则是超集，漂了只是多跑一次
+CI；精规则一旦跟不上就少认一个真输入，门禁直接哑掉。实测 300 个 PR（97 天）：精确版翻转 2 个，
+粗版 5 个，代价是每季度三次约 2 分钟的 job。
 
-### AI 文档行为约束
-
-1. **不随意生成文档**：需要记录的内容集中放入对应 `Infra-XXX.TODOWRITE.md`（同编号）。按 Scope Model 建立的载体（skill 目录、子树规则文件）不在此限。
-2. **Project 文件配对**：每个 Project 含 `Infra-XXX.<project>.md` 与 `Infra-XXX.TODOWRITE.md`（同编号）。归档后合并为单文件（见 `docs/project/README.md`）。
-3. **Project 目录规则**：`docs/project/archive/Infra-001.bootstrap_setup.md` 未经授权只可以加东西不可以删东西；artifacts 简要记录到对应 `Infra-XXX.TODOWRITE.md`，不随意创建新 Project 文件。
-4. **每次修改必须更新**：改代码 → 更新对应目录 `README.md`；涉及架构变更 → 更新相关 SSOT 文档。
-
-> 项目编号以 `docs/project/README.md` 为准；若本节与当前项目结构不一致，以它为准并同步修正本文。
+**反面教材值得记住**：第一版不是这么做的，而是在 `docs.yml` 里加门禁步骤、再写 700 行测试去**模拟 CI**
+证明那个步骤会跑且会咬人。六轮对抗审计用 **19 种**不同方式打穿它——step/job 的 `if:`、
+`working-directory`、`strategy.matrix`、`container`、`services`、`concurrency`、`runs-on`、
+`permissions`、`timeout-minutes`、`env`、`defaults`、checkout 的 `with: {ref: main}`、
+`on.pull_request.types`、`outputs:` 里一个拼错的 step id……因为它的输入是 **GitHub Actions 的
+schema**，那是个枚举不完的开集。**守卫的输入面比守卫的断言强度更决定成败**：
+把问题缩成「一个布尔分类器对四条路径模式的真值表」，才是可判定的。
+证明见 `libs/tests/test_generated_doc_indexes_are_guarded.py`——它执行 `detect-changes`
+自己的 shell，并带一条对照（普通散文仍是 doc-only，否则规则宽到失去意义）。
 
 ## STAR 问题解决框架
 

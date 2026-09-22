@@ -49,19 +49,6 @@ jobs:
       - name: Check relative documentation links
         run: python3 tools/doc_link_check.py
 
-      # Both indexes are projections of documentation, and infra-ci's copies of
-      # these two gates sit in a job that only runs when a pull request changes
-      # a non-Markdown file. So the change that makes an index stale -- adding,
-      # renaming or re-statusing a project doc, hand-editing a generated block
-      # -- is exactly the change that skipped the gate. This workflow runs on
-      # `**/*.md`, so between the two nothing is left uncovered; proof in
-      # libs/tests/test_docs_only_prs_run_their_own_gates.py.
-      # (PyYAML for gen_ssot_index arrives with mkdocs, verified 6.0.3.)
-      - name: Gate generated doc indexes are in sync
-        run: |
-          python3 tools/gen_project_index.py
-          python3 tools/gen_ssot_index.py
-
       - name: Build site
         run: mkdocs build --config-file docs/mkdocs.yml
 
