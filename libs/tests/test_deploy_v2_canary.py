@@ -17,7 +17,7 @@ from infra2_sdk.delivery import FailureDomain, PipelineStage, StageStatus
 
 import tools.deploy_v2_canary as canary
 from libs.deploy_contract import make_target
-from tools.deploy_v2_canary import _CANARY_PR, run_canary
+from tools.deploy_v2_canary import CANARY_PR, run_canary
 
 SHA_CODE = "e" * 40
 SHA_IAC = "f" * 40
@@ -34,7 +34,7 @@ def _fake_target():
         service="finance_report/app",
         version=SHA_CODE,
         iac_ref=SHA_IAC,
-        alias_value=_CANARY_PR,
+        alias_value=CANARY_PR,
     )
 
 
@@ -60,10 +60,10 @@ def spies(monkeypatch):
             data_lane="staging",
             backend="preview-lifecycle",
             detail={
-                "alias": f"pr-{_CANARY_PR}",
+                "alias": f"pr-{CANARY_PR}",
                 "compose_id": "cmp",
                 "sha": SHA_CODE,
-                "url": f"https://report-pr-{_CANARY_PR}.{kw['domain']}",
+                "url": f"https://report-pr-{CANARY_PR}.{kw['domain']}",
                 "healthy": healthy,
             },
         )
@@ -85,14 +85,14 @@ def test_canary_deploys_reserved_slot_then_tears_down(spies):
         version_ref="main",
     )
     assert res.ok is True
-    assert res.alias == f"pr-{_CANARY_PR}"
+    assert res.alias == f"pr-{CANARY_PR}"
     assert res.torn_down is True
     # deployed via the unified front door with the canary type...
     assert spies["deploy"]["deploy_type"] == "canary"
     assert spies["deploy"]["version_ref"] == "main"
     # ...then tore the reserved slot down.
     assert spies["down"]["kind"] == "pr"
-    assert spies["down"]["value"] == _CANARY_PR
+    assert spies["down"]["value"] == CANARY_PR
     assert spies["down"]["domain"] == "zitian.party"
 
 
@@ -128,7 +128,7 @@ def test_teardown_runs_even_when_deploy_raises(monkeypatch):
             domain="zitian.party",
             version_ref="main",
         )
-    assert rec["down"] == ("pr", _CANARY_PR)  # cleanup still ran
+    assert rec["down"] == ("pr", CANARY_PR)  # cleanup still ran
 
 
 def test_no_wait_reports_unknown_health_but_still_tears_down(spies):
@@ -145,7 +145,7 @@ def test_no_wait_reports_unknown_health_but_still_tears_down(spies):
     assert res.healthy is None
     assert res.torn_down is True
     assert spies["deploy"]["wait"] is False
-    assert spies["down"]["value"] == _CANARY_PR
+    assert spies["down"]["value"] == CANARY_PR
 
 
 def test_version_ref_forwarded(spies):
@@ -156,7 +156,7 @@ def test_version_ref_forwarded(spies):
         version_ref="v2.0.0",
     )
     assert spies["deploy"]["version_ref"] == "v2.0.0"
-    assert spies["down"]["value"] == _CANARY_PR  # slot stays fixed regardless of code
+    assert spies["down"]["value"] == CANARY_PR  # slot stays fixed regardless of code
 
 
 def test_service_defaults_to_finance_report_but_is_overridable(spies):
@@ -261,7 +261,7 @@ def test_best_effort_down_warns_and_returns_false_on_persistent_failure(
     assert ok is False
     assert calls["n"] == 3  # exhausted retries
     err = capsys.readouterr().err
-    assert "teardown failed" in err and f"pr-{_CANARY_PR}" in err  # loud leak warning
+    assert "teardown failed" in err and f"pr-{CANARY_PR}" in err  # loud leak warning
 
 
 def test_run_canary_teardown_failure_does_not_mask_deploy_error(monkeypatch, capsys):

@@ -69,7 +69,7 @@ class AppDeployer(Deployer):
     # deploy_v2 acceptance canary support (#541): tools/deploy_v2_canary.py
     # iterates registry services declaring this flag (was a hardcoded service
     # id there). Requires a working preview lane (the canary deploys the
-    # reserved pr-<_CANARY_PR> slot); truealpha flips its own flag when its
+    # reserved pr-<CANARY_PR> slot); truealpha flips its own flag when its
     # preview lands — no canary code change needed then.
     deploy_v2_canary = True
 

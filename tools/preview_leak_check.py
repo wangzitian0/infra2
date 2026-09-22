@@ -15,7 +15,7 @@ A preview is flagged as leaked when it is one of two unambiguous orphan classes:
      replaced with ``branch-main``. The deterministic-name ``down`` can't reach it.
   2. **``pr-<n>`` previews for CLOSED PRs** — a leaked PR teardown.
 
-Everything else (``branch-main``, the reserved canary ``pr-<_CANARY_PR>`` slot,
+Everything else (``branch-main``, the reserved canary ``pr-<CANARY_PR>`` slot,
 ``tag-*``, any non-preview compose) is left untouched. Fail-safe: if the open-PR
 set can't be fetched, PR leaks are not flagged (bare-slug orphans still are, since
 they don't depend on PR state).
@@ -43,12 +43,12 @@ if str(ROOT) not in sys.path:
 
 from libs.common import normalize_env_name  # noqa: E402
 from libs.deploy_env_config import (  # noqa: E402
+    CANARY_PR,
     PREVIEW_ENVIRONMENT,
     PREVIEW_KINDS,
     preview_alias,
     preview_service_config,
 )
-from tools.deploy_v2 import _CANARY_PR  # noqa: E402
 
 # This tool is finance_report/app-scoped only (its open-PR fetch is hardcoded to
 # APP_REPO below) — #522 generalized libs.deploy_env_config for multiple preview-capable
@@ -61,7 +61,7 @@ PREVIEW_PROJECT = _PREVIEW_CONFIG.project
 ALWAYS_KEEP_ALIASES = frozenset({"branch-main"})
 # The reserved canary slot (deploy_v2_canary stands it up/tears it down hourly);
 # never reap it even when PR 999 is obviously not "open".
-CANARY_ALIAS = f"pr-{_CANARY_PR}"
+CANARY_ALIAS = f"pr-{CANARY_PR}"
 # Every current alias is `<kind>-<slug>` for a known kind (branch/pr/commit/tag);
 # an alias with no known kind prefix (e.g. the bare `main` slug from before the
 # branch-main rename) is a pre-rename orphan the deterministic-name `down` can no

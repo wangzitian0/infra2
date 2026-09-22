@@ -52,7 +52,7 @@ from libs.deploy_contract import (
     validate_iac_ref_form,
     validate_ref_form,
 )
-from libs.deploy_env_config import env_config
+from libs.deploy_env_config import CANARY_PR, env_config
 from libs.service_registry import domain_for_service
 from libs.deploy.promote import deploy as _deploy_fixed
 from libs.deploy.promote import model_overrides_from_env
@@ -85,8 +85,6 @@ _INFRA2_REPO = "https://github.com/wangzitian0/infra2"
 # sha we clone the default branch; a branch/tag iac_ref is cloned verbatim (this is what
 # dissolves the old separate `iac_branch` input — the iac_ref surface now drives the clone).
 _INFRA2_DEFAULT_BRANCH = "main"
-# The canary runs arbitrary code on a fixed throwaway preview slot no real PR reuses.
-_CANARY_PR = 999
 _DEFAULT_IMAGE_WAIT_SECONDS = 300
 _DEFAULT_IMAGE_POLL_SECONDS = 10.0
 _IMAGE_MANIFEST_ACCEPT = ", ".join(
@@ -215,7 +213,7 @@ def _resolve_for_type(spec, version_ref, *, repo: str):
     matrix (``accepted_forms``) fails closed on a form the type does not take:
 
     - ``canary``          — any ref form, code OR release (default main); runs on the
-                            fixed ``pr-<_CANARY_PR>`` slot (it is a deploy-path probe, so
+                            fixed ``pr-<CANARY_PR>`` slot (it is a deploy-path probe, so
                             it stays maximally flexible).
     - ``preview/pr``      — ``version_ref`` IS a PR number (``resolve_pr`` -> PR-head image);
                             its slot is that number.
@@ -228,7 +226,7 @@ def _resolve_for_type(spec, version_ref, *, repo: str):
     if spec.key == "canary":
         ref = _default_main(version_ref)
         validate_ref_form(spec.key, classify_ref(ref))
-        return resolve_image_ref(ref, repo=repo), _CANARY_PR
+        return resolve_image_ref(ref, repo=repo), CANARY_PR
     if spec.alias_kind == "pr":
         return resolve_pr(version_ref, repo=repo), version_ref
     # `branch` defaults to the main tip; the other ref types require an explicit version_ref.
