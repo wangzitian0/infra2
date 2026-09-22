@@ -26,6 +26,7 @@ class RepositoryStatus:
     behind: int | None = None
     dirty_paths: int | None = None
     checkout_release: str | None = None
+    contract: str = "pinned"
     error: str = ""
 
     @property
@@ -34,11 +35,14 @@ class RepositoryStatus:
 
     @property
     def current(self) -> bool:
+        pin_satisfied = (
+            True if self.contract == "snapshot" else self.pin_matches is not False
+        )
         return (
             self.initialized
             and not self.error
             and self.remote_current
-            and self.pin_matches is not False
+            and pin_satisfied
             and self.dirty_paths == 0
         )
 
@@ -139,10 +143,16 @@ def repository_status(
 ) -> RepositoryStatus:
     relative = str(repository["path"])
     checkout = (root / relative).resolve()
+    role = repository.get("role")
+    contract = str(
+        repository.get("contract")
+        or ("snapshot" if role == "external-application" else "pinned")
+    )
     common = {
         "repository_id": str(repository["id"]),
         "path": relative,
         "release_identity": str(repository["release_identity"]),
+        "contract": contract,
     }
     if not checkout.is_dir():
         return RepositoryStatus(**common, initialized=False, error="checkout missing")

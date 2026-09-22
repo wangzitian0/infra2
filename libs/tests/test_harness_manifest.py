@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 
 import yaml
 
@@ -358,3 +359,76 @@ def test_cli_resolves_relative_manifest_from_requested_root(
 
     assert exit_code == 0
     assert "harness check: PASS" in capsys.readouterr().out
+
+
+def test_contract_tiering_schema_validation(tmp_path: Path) -> None:
+    manifest = _workspace(tmp_path)
+    app = manifest["repositories"][1]
+    app["contract"] = "floating"
+
+    result = validate_manifest(tmp_path, manifest)
+    assert not result.ok
+    assert any(error.code == "contract" for error in result.errors)
+
+    app["contract"] = ["pinned"]
+    result = validate_manifest(tmp_path, manifest)
+    assert not result.ok
+    assert any(error.code == "contract" for error in result.errors)
+
+    app["contract"] = "pinned"
+    result = validate_manifest(tmp_path, manifest)
+    assert not any(error.code == "contract" for error in result.errors)
+
+    app["contract"] = "snapshot"
+    result = validate_manifest(tmp_path, manifest)
+    assert not any(error.code == "contract" for error in result.errors)
+
+
+def test_submodule_pin_drift_distinguishes_pinned_vs_snapshot(tmp_path: Path) -> None:
+    manifest = _workspace(tmp_path)
+    parent_pin_sha = "1" * 40
+    head_sha = "2" * 40
+
+    def runner(argv, **_kwargs):
+        args = argv[3:]
+        if args == ["ls-tree", "HEAD", "--", "repos/app"]:
+            return subprocess.CompletedProcess(
+                argv, 0, f"160000 commit {parent_pin_sha}\trepos/app\n", ""
+            )
+        if args == ["rev-parse", "HEAD^{commit}"]:
+            return subprocess.CompletedProcess(argv, 0, f"{head_sha}\n", "")
+        raise AssertionError(f"unexpected git call: {argv}")
+
+    # Case 1: contract == "pinned" with drift -> error with code="pin-drift", ok is False
+    manifest["repositories"][1]["contract"] = "pinned"
+    pinned_result = validate_manifest(tmp_path, manifest, runner=runner)
+    assert not pinned_result.ok
+    drift_errors = [e for e in pinned_result.errors if e.code == "pin-drift"]
+    assert len(drift_errors) == 1
+    assert "pinned submodule has drifted" in drift_errors[0].message
+    assert f"checkout={head_sha[:12]}" in drift_errors[0].message
+    assert f"parent={parent_pin_sha[:12]}" in drift_errors[0].message
+
+    # Case 2: contract == "snapshot" with drift -> warning with code="pin-drift", ok is True
+    manifest["repositories"][1]["contract"] = "snapshot"
+    snapshot_result = validate_manifest(tmp_path, manifest, runner=runner)
+    assert snapshot_result.ok is True
+    drift_warnings = [w for w in snapshot_result.warnings if w.code == "pin-drift"]
+    assert len(drift_warnings) == 1
+    assert "snapshot submodule has advanced" in drift_warnings[0].message
+    assert f"checkout={head_sha[:12]}" in drift_warnings[0].message
+    assert f"parent={parent_pin_sha[:12]}" in drift_warnings[0].message
+
+
+def test_committed_inventory_specifies_contract_tiering() -> None:
+    manifest = load_manifest(ROOT / "harness" / "repos.yaml")
+    expected = {
+        "infra2": "pinned",
+        "infra2-sdk": "pinned",
+        "oh-my-code-agent": "snapshot",
+        "finance-report": "snapshot",
+        "truealpha": "snapshot",
+    }
+    actual = {repo["id"]: repo.get("contract") for repo in manifest["repositories"]}
+    assert actual == expected
+

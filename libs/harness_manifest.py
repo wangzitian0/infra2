@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
+
+Runner = Callable[..., subprocess.CompletedProcess]
 
 SCHEMA_VERSION = 1
 ALLOWED_CHECKOUTS = {"root", "submodule"}
@@ -17,12 +20,48 @@ ALLOWED_ROLES = {
     "external-application",
 }
 ALLOWED_GOVERNANCE = {"local", "coordinated", "autonomous"}
+ALLOWED_CONTRACTS = {"pinned", "snapshot"}
 # "none" is the only defined value today: a checkout so declared does not carry a
 # Repo-layer rules projection (no AGENTS.md/CLAUDE.md expected there) — its
 # constraints travel through a published artifact and its own README/pyproject
 # instead (core.harness.md §1; dev_env #51). Absent the key, the default stays
 # "a Repo layer exists", so this is opt-out, not opt-in.
 ALLOWED_RULES_LAYER = {"none"}
+
+
+def _git(
+    checkout: Path,
+    *args: str,
+    runner: Runner = subprocess.run,
+) -> subprocess.CompletedProcess:
+    return runner(
+        ["git", "-C", str(checkout), *args],
+        capture_output=True,
+        text=True,
+    )
+
+
+def _value(
+    checkout: Path,
+    *args: str,
+    runner: Runner = subprocess.run,
+) -> str | None:
+    completed = _git(checkout, *args, runner=runner)
+    if completed.returncode != 0:
+        return None
+    value = completed.stdout.strip()
+    return value or None
+
+
+def _parent_pin(
+    root: Path, relative: str, *, runner: Runner = subprocess.run
+) -> str | None:
+    value = _value(root, "ls-tree", "HEAD", "--", relative, runner=runner)
+    if not value:
+        return None
+    metadata = value.split("\t", 1)[0].split()
+    return metadata[2].lower() if len(metadata) >= 3 else None
+
 
 
 class HarnessManifestError(ValueError):
@@ -89,7 +128,11 @@ def _error(findings: list[Finding], code: str, message: str) -> None:
 
 
 def validate_manifest(
-    root: Path, manifest: dict[str, Any], *, submodules_expected: bool = True
+    root: Path,
+    manifest: dict[str, Any],
+    *,
+    submodules_expected: bool = True,
+    runner: Runner = subprocess.run,
 ) -> CheckResult:
     findings: list[Finding] = []
     if manifest.get("schema_version") != SCHEMA_VERSION:
@@ -205,6 +248,17 @@ def validate_manifest(
                 "rules-layer",
                 f"{repository_id} has unsupported rules_layer: {rules_layer!r}",
             )
+        contract = repository.get("contract")
+        if contract is not None:
+            if not isinstance(contract, str) or contract not in ALLOWED_CONTRACTS:
+                _error(
+                    findings,
+                    "contract",
+                    f"{repository_id} has unsupported contract: {contract!r}",
+                )
+                contract = "snapshot" if role == "external-application" else "pinned"
+        else:
+            contract = "snapshot" if role == "external-application" else "pinned"
         expected_governance = {
             "infrastructure-control-plane": "local",
             "cross-repository-contract": "coordinated",
@@ -274,6 +328,32 @@ def validate_manifest(
                 )
             )
             continue
+        if (
+            repository["checkout"] == "submodule"
+            and (checkout_path / ".git").exists()
+            and submodules_expected
+        ):
+            parent_pin = _parent_pin(root, relative, runner=runner)
+            head = _value(checkout_path, "rev-parse", "HEAD^{commit}", runner=runner)
+            if parent_pin and head and parent_pin != head.lower():
+                if contract == "pinned":
+                    findings.append(
+                        Finding(
+                            "error",
+                            "pin-drift",
+                            f"{repository_id} pinned submodule has drifted: "
+                            f"checkout={head[:12]} parent={parent_pin[:12]}",
+                        )
+                    )
+                elif contract == "snapshot":
+                    findings.append(
+                        Finding(
+                            "warning",
+                            "pin-drift",
+                            f"{repository_id} snapshot submodule has advanced: "
+                            f"checkout={head[:12]} parent={parent_pin[:12]}",
+                        )
+                    )
         for authority_path in authority:
             resolved = _inside(checkout_path, authority_path)
             if resolved is None or not resolved.is_file():
@@ -319,11 +399,17 @@ def validate_manifest(
 
 
 def check_workspace(
-    root: Path, manifest_path: Path | None = None, *, submodules_expected: bool = True
+    root: Path,
+    manifest_path: Path | None = None,
+    *,
+    submodules_expected: bool = True,
+    runner: Runner = subprocess.run,
 ) -> CheckResult:
     path = manifest_path or root / "harness" / "repos.yaml"
     try:
         manifest = load_manifest(path)
     except HarnessManifestError as exc:
         return CheckResult(0, (Finding("error", "manifest-read", str(exc)),))
-    return validate_manifest(root, manifest, submodules_expected=submodules_expected)
+    return validate_manifest(
+        root, manifest, submodules_expected=submodules_expected, runner=runner
+    )

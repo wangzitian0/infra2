@@ -6,7 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from libs.harness_status import repository_status, workspace_status
+from libs.harness_status import (
+    RepositoryStatus,
+    repository_status,
+    workspace_status,
+)
 
 
 def test_workspace_status_exposes_pin_remote_release_and_drift(tmp_path: Path) -> None:
@@ -190,3 +194,119 @@ def test_empty_optional_submodule_is_not_reported_as_its_parent(tmp_path: Path) 
     assert str(tmp_path.resolve()) in result.error
     assert "git submodule update --init" in result.error
     assert not any(call[0] == "fetch" for call in calls)
+
+
+def test_repository_status_contract_snapshot_allows_pin_drift() -> None:
+    pinned = RepositoryStatus(
+        repository_id="pinned-repo",
+        path="repos/pinned",
+        release_identity="tag",
+        initialized=True,
+        remote_ref="origin/main",
+        remote_head="a" * 40,
+        ahead=0,
+        behind=0,
+        dirty_paths=0,
+        pin_matches=False,
+        contract="pinned",
+    )
+    assert pinned.contract == "pinned"
+    assert pinned.current is False
+
+    snapshot = RepositoryStatus(
+        repository_id="app",
+        path="repos/app",
+        release_identity="image",
+        initialized=True,
+        remote_ref="origin/main",
+        remote_head="a" * 40,
+        ahead=0,
+        behind=0,
+        dirty_paths=0,
+        pin_matches=False,
+        contract="snapshot",
+    )
+    assert snapshot.contract == "snapshot"
+    assert snapshot.current is True
+
+
+def test_workspace_status_propagates_contract_and_respects_snapshot_pin_drift(
+    tmp_path: Path,
+) -> None:
+    app = tmp_path / "repos" / "app"
+    app.mkdir(parents=True)
+    root_sha = "a" * 40
+    app_sha = "b" * 40
+    remote_app_sha = "b" * 40
+    parent_pin_sha = "c" * 40
+    manifest = {
+        "repositories": [
+            {
+                "id": "root",
+                "path": ".",
+                "checkout": "root",
+                "release_identity": "tag",
+                "contract": "pinned",
+            },
+            {
+                "id": "app",
+                "path": "repos/app",
+                "checkout": "submodule",
+                "release_identity": "image",
+                "contract": "snapshot",
+            },
+        ]
+    }
+
+    def runner(argv, **_kwargs):
+        checkout = Path(argv[2])
+        args = argv[3:]
+        is_app = checkout == app
+        if args == ["rev-parse", "--is-inside-work-tree"]:
+            return subprocess.CompletedProcess(argv, 0, "true\n", "")
+        if args == ["rev-parse", "--show-toplevel"]:
+            return subprocess.CompletedProcess(argv, 0, str(checkout) + "\n", "")
+        if args == ["rev-parse", "HEAD^{commit}"]:
+            return subprocess.CompletedProcess(
+                argv, 0, f"{app_sha if is_app else root_sha}\n", ""
+            )
+        if args == ["symbolic-ref", "--quiet", "--short", "HEAD"]:
+            return subprocess.CompletedProcess(argv, 0, "main\n", "")
+        if args[:4] == [
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ]:
+            return subprocess.CompletedProcess(argv, 0, "origin/main\n", "")
+        if args == ["rev-parse", "origin/main^{commit}"]:
+            return subprocess.CompletedProcess(
+                argv, 0, f"{remote_app_sha if is_app else root_sha}\n", ""
+            )
+        if args[:3] == ["rev-list", "--left-right", "--count"]:
+            return subprocess.CompletedProcess(argv, 0, "0 0\n", "")
+        if args == ["status", "--porcelain"]:
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if args == ["describe", "--tags", "--always"]:
+            return subprocess.CompletedProcess(argv, 0, "v1.0.0\n", "")
+        if args == ["ls-tree", "HEAD", "--", "repos/app"]:
+            return subprocess.CompletedProcess(
+                argv, 0, f"160000 commit {parent_pin_sha}\trepos/app\n", ""
+            )
+        raise AssertionError(f"unexpected git call: {argv}")
+
+    result = workspace_status(tmp_path, manifest, runner=runner)
+    root_status, app_status = result.repositories
+
+    assert root_status.contract == "pinned"
+    assert root_status.current is True
+
+    assert app_status.contract == "snapshot"
+    assert app_status.parent_pin == parent_pin_sha
+    assert app_status.checkout_head == app_sha
+    assert app_status.pin_matches is False
+    assert app_status.current is True
+    assert result.ok is True
+    assert result.current is True
+
+

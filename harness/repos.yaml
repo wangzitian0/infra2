@@ -15,6 +15,7 @@ repositories:
     checkout: root
     role: infrastructure-control-plane
     governance: local
+    contract: pinned
     source: https://github.com/wangzitian0/infra2
     release_identity: infra2-release-tag
     authority:
@@ -27,6 +28,7 @@ repositories:
     checkout: submodule
     role: cross-repository-contract
     governance: coordinated
+    contract: pinned
     source: https://github.com/wangzitian0/infra2-sdk
     release_identity: sdk-semver
     # Nested submodule — does not carry a Repo-layer rules projection (no
@@ -44,6 +46,7 @@ repositories:
     checkout: submodule
     role: workspace-tooling
     governance: coordinated
+    contract: snapshot
     source: https://github.com/wangzitian0/oh-my-code-agent
     release_identity: tool-release-or-pinned-commit
     # Not every workspace checkout needs TUI tooling day one — an uninitialized
@@ -60,6 +63,7 @@ repositories:
     checkout: submodule
     role: external-application
     governance: autonomous
+    contract: snapshot
     source: https://github.com/wangzitian0/finance_report
     release_identity: app-image-ref-or-digest
     authority:
@@ -74,6 +78,7 @@ repositories:
     checkout: submodule
     role: external-application
     governance: autonomous
+    contract: snapshot
     source: https://github.com/wangzitian0/truealpha
     release_identity: app-image-ref-or-digest
     authority:
