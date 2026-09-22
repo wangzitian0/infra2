@@ -80,6 +80,14 @@ GENERATOR_INPUTS = {
 
 # `uv run python x` -> `python3 x`. Everything else in the step's script runs
 # verbatim, so the shell around the command is what is measured.
+# Nothing here should take seconds, let alone minutes. Without a bound, a
+# subprocess that blocks holds `test-deployer-logic` -- a required check with
+# no `timeout-minutes:` -- until GitHub's 6-hour default. Inheriting the
+# ambient environment (which is right, see _sanitized_env) is what makes that
+# reachable: a global git config can point `commit.gpgsign` at a gpg that waits
+# on a pinentry with no TTY.
+SUBPROCESS_TIMEOUT_S = 120
+
 UV_SHIM = """#!/bin/sh
 [ "$1" = "run" ] && shift
 [ "$1" = "python" ] && shift
@@ -104,12 +112,34 @@ def _sanitized_env() -> dict[str, str]:
 
 
 def _git(*args: str, cwd: Path) -> str:
+    """git in a throwaway repository, deaf to the ambient user's configuration.
+
+    Identity, signing and hooks are all pinned rather than inherited: a global
+    ``commit.gpgsign = true`` whose gpg waits on a pinentry, or a global
+    ``core.hooksPath`` holding a pre-commit hook, would otherwise block here
+    forever. ``_sanitized_env`` deliberately keeps ``HOME``, so ``~/.gitconfig``
+    is in play and these have to be turned off explicitly.
+    """
     return subprocess.run(
-        ["git", "-c", "user.email=t@t", "-c", "user.name=t", *args],
+        [
+            "git",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "tag.gpgsign=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            *args,
+        ],
         cwd=cwd,
         capture_output=True,
         text=True,
         check=True,
+        timeout=SUBPROCESS_TIMEOUT_S,
         env=_sanitized_env(),
     ).stdout.strip()
 
@@ -189,6 +219,7 @@ def _has_non_doc(files: list[str], tmp_path: Path) -> bool:
         check=True,
         capture_output=True,
         text=True,
+        timeout=SUBPROCESS_TIMEOUT_S,
         env=env,
     )
     emitted = dict(
@@ -353,12 +384,20 @@ def test_the_stale_fixture_is_actually_stale(generator: str, tmp_path: Path) -> 
     root = _stale_tree(generator, tmp_path)
     _markers_intact(generator, root)
     result = subprocess.run(
-        ["python3", generator], cwd=root, capture_output=True, text=True
+        ["python3", generator],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=SUBPROCESS_TIMEOUT_S,
     )
     assert result.returncode != 0, f"{generator} reported a stale tree as fine"
     other = next(g for g in GENERATOR_INPUTS if g != generator)
     paired = subprocess.run(
-        ["python3", other], cwd=root, capture_output=True, text=True
+        ["python3", other],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=SUBPROCESS_TIMEOUT_S,
     )
     # Only the targeted index is stale, so a step that runs both must be
     # failing because of this one -- which is what proves the failure
@@ -406,6 +445,7 @@ def test_every_generator_input_reaches_a_gate_that_bites(
             cwd=root,
             capture_output=True,
             text=True,
+            timeout=SUBPROCESS_TIMEOUT_S,
             env=env,
         )
         bit.append((workflow.name, job_name, step.get("name"), result.returncode))

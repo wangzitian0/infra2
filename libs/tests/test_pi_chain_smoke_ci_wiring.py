@@ -92,18 +92,27 @@ def test_a_refusing_tool_fails_the_step_with_no_credential(
     script = tmp_path / "step.sh"
     script.write_text(run, encoding="utf-8")
 
+    # Inherit the environment and override only what the scenario needs. A
+    # hand-picked PATH-and-HOME one is not a smaller version of a runner's
+    # environment but a different one: with HOME moved, a python3 resolved
+    # through a version manager's shim fails to start (exit 126), and this
+    # test then reports "the step never invoked the smoke tool" -- which reads
+    # exactly like the wiring defect it exists to catch. The sibling test in
+    # test_docs_only_prs_run_their_own_gates.py takes the same position; the
+    # two are deliberately consistent.
+    env = dict(os.environ)
+    # An undefined repository secret arrives as the empty string.
+    env["ZAI_CODING_CN_API_KEY"] = ""
     proc = subprocess.run(
         # GitHub's default shell for `run:` on Linux is `bash -e {0}`.
         ["bash", "-e", str(script)],
         cwd=tmp_path,
         capture_output=True,
         text=True,
-        env={
-            "PATH": os.environ["PATH"],
-            "HOME": str(tmp_path),
-            # An undefined repository secret arrives as the empty string.
-            "ZAI_CODING_CN_API_KEY": "",
-        },
+        # No step here should take seconds. Unbounded, a blocked subprocess
+        # holds a required check until GitHub's 6-hour job default.
+        timeout=120,
+        env=env,
     )
 
     reached = tmp_path / "reached.json"

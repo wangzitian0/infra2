@@ -27,9 +27,30 @@ Track top issues discovered during documentation engineering.
   （其 docstring 正写着「hand-editing the README index ... fails here」）一起被跳过。
 - 也就是说 #505 那次漂移原样重来会全绿通过。`pr_merge_gate` 对纯 `.md` PR 的 skipped
   required checks 是**设计内接受**的（否则这类 PR 永远不可合流），所以没有第二道拦得住。
-- 修复：两个生成器加进 `docs.yml`（触发条件 `**/*.md` + `docs/**`）。`pr_merge_gate` 的
-  `not_green` 扫描**每一个**报告过的 check，所以 `Docs` 变红即阻断合流，不需要动
-  `ci-gate-inventory.yaml`。
+- 修复：两个生成器加进 `docs.yml`（触发条件 `**/*.md` + `docs/**`）。
+- **这条阻断到什么程度，起初写宽了，`/audit` Scout-T 打假后改正**：
+  `pr_merge_gate` 的 `not_green` 扫描**每一个**报告过的 check（不只 required 的），
+  所以**走 `pr_merge_gate` 合流时**这个 check 变红即阻断——它报出来的名字是 **`build`**，
+  不是 `Docs`（docs.yml 的 job 没有 `name:`，grep `Docs` 什么也找不到）。
+  **但 GitHub 自己不拦**：main 的 ruleset（`11416804`，实测）只要求 7 个 check，
+  `build` 不在其中（`bypass_actors=0`、`current_user_can_bypass=never`，那 7 个是真拦的）。
+  Web UI 或 `gh pr merge` 直接合并不会被拦住。这是**纪律**而不是**机制**，
+  恰恰是同一批 PR 自己反对的那种闭合方式。
+- **而「登记进 ruleset」不是解法，已实测证否**：`docs.yml` 只在 `**/*.md`/`docs/**` 上触发，
+  把它的 `build` 声明为 `blocks_merge: true` 后，纯代码 PR 会因为它**从未报告**而被拦死——
+  直接跑 `pr_merge_gate.evaluate` 验证：`['required check(s) never reported: build']`。
+  GitHub ruleset 侧同理（带 `paths:` 过滤的 workflow 一旦成为 required check，
+  不匹配的 PR 会永远停在 Expected）。而 `ci-gate-inventory.yaml` 的 gate schema 里
+  **没有**路径适用性字段（字段只有 `id/stage/task_category/workflow/job/blocks_merge/failure_semantics`）。
+  所以真正的补齐要么是把门禁挪进一个**无条件运行**的 job，要么去掉 docs.yml 的 `paths:`，
+  要么给 gate schema 加适用性——三条都属于「改动决定合流的东西」，**需 owner**。
+- **好消息：门禁被拆掉这件事是机制性防住的**（Scout-M 的自治理缺口在这个门禁上不可利用）。
+  改 `.github/workflows/docs.yml` 必然让 `has_non_doc=true`（实测），于是
+  `Test Deployer Hash Logic` 必然运行，它跑 `libs/tests`，
+  而 `test_docs_only_prs_run_their_own_gates` 在步骤被删/被 `|| true`/被 `continue-on-error`
+  时都会红（实测 3/3/4 红）——且 `Test Deployer Hash Logic` **就在** GitHub 那 7 个不可绕过的
+  required check 里。剩余敞口只有一种：**纯文档 PR 索引真的过期、`build` 真的红了，
+  而有人不走 `pr_merge_gate` 直接从 UI 合并**。
 - 覆盖的范围是**两个生成器读的那些文件**，不是任意改动集：`docs/project/**.md`、
   `docs/project/README.md`、`docs/ssot/MANIFEST.yaml`、`docs/ssot/README.md`。
   这些全在 `docs/` 下，而 `docs/**` 同时在 infra-ci 的 `paths:` 允许清单和 docs.yml 的触发条件里，
