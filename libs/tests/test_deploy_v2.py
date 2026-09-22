@@ -77,6 +77,7 @@ class _Plan:
     compose_id: str
     data: str
     env_vars: dict
+    rollback_class: str | None = None
 
 
 @pytest.fixture
@@ -359,6 +360,40 @@ def test_staging_accepts_tag_and_pulls_it(calls):
     assert calls["fixed"]["env"] == "staging"
     assert calls["fixed"]["image_ref"] == "v1.2.3"
     assert calls["image_waits"][-1]["image_ref"] == "v1.2.3"
+
+
+# --- #698 / Infra-022 T3.2: promote.deploy()'s ROLLBACK_CLASS must reach deploy_v2's --
+# own detail, not be computed by the schema gate and silently discarded ----------------
+
+
+def test_deploy_v2_carries_rollback_class_into_detail(monkeypatch, calls):
+    """The pre-deploy schema gate's ROLLBACK_CLASS (tools.pre_deploy_schema_check.
+    classify_rollback, printed by libs.deploy.schema_gate.run_schema_gate) must land in
+    deploy_v2's own JSON result -- the thing an operator and the GitHub Actions step
+    summary actually see -- not just get computed inside promote.deploy() and dropped."""
+
+    def fake_deploy_with_rollback_class(env, code, **kw):
+        return _Plan(
+            env=env,
+            sha=code,
+            compose_id=f"cmp-{env}",
+            data="x",
+            env_vars={},
+            rollback_class="C",
+        )
+
+    monkeypatch.setattr(dv2, "_deploy_fixed", fake_deploy_with_rollback_class)
+    res = _deploy(deploy_type="staging", version_ref="v1.2.3")
+    assert res.detail["rollback_class"] == "C"
+
+
+def test_deploy_v2_rollback_class_is_none_when_the_gate_never_ran(calls):
+    """A service the schema gate doesn't apply to (or a fixture that never wires
+    rollback_class) must report None explicitly -- not omit the key, and not fabricate
+    a class deploy_v2 itself has no basis for."""
+    res = _deploy(deploy_type="staging", version_ref="v1.2.3")
+    assert "rollback_class" in res.detail
+    assert res.detail["rollback_class"] is None
 
 
 @pytest.mark.parametrize("bad", ["main", "c" * 40, "release/0.1"])

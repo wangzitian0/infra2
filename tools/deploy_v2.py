@@ -981,6 +981,13 @@ def deploy_v2(
         "data": plan.data,
         "iac_ref": target.iac_ref,
         "secret_supply": secret_supply,
+        # The #698 pre-deploy schema gate's ROLLBACK_CLASS (Infra-022 T3.2 /
+        # TODOWRITE:20) — None when the gate doesn't apply to this service
+        # (libs.deploy.schema_gate.gate_applies). Carried here (not just computed and
+        # discarded in promote.deploy()) so it reaches this printed JSON / the GitHub
+        # Actions step summary: an operator deciding whether a later rollback of this
+        # exact release is safe must not have to re-run the check to see it.
+        "rollback_class": plan.rollback_class,
     }
     return DeployV2Result(target, data_lane, "deploy-primitive", detail)
 

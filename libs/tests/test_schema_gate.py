@@ -142,6 +142,35 @@ def test_read_database_url_raises_on_ssh_failure():
         sg._read_database_url("1.2.3.4", "vault-agent-x", runner=runner, timeout=5)
 
 
+def test_read_database_url_failure_never_echoes_captured_stdout():
+    """The command reads /vault/secrets/.env -- a rendered secrets file. A failure
+    exception must never carry its stdout, or one failed read could print a real
+    credential straight into a public GitHub Actions step log."""
+    secret_marker = "sk-live-SECRET-DO-NOT-LEAK-1234567890"
+    runner = FakeRunner(
+        [_fail(1, stdout=f'DATABASE_URL="postgresql://u:{secret_marker}@h/db"\n')]
+    )
+    with pytest.raises(sg.SchemaGateError) as exc_info:
+        sg._read_database_url("1.2.3.4", "vault-agent-x", runner=runner, timeout=5)
+    message = str(exc_info.value)
+    assert secret_marker not in message
+    # still identifies the failing step + exit code for ops triage -- withholding the
+    # secret content must not degrade into withholding everything.
+    assert "vault-agent-x" in message
+    assert "1.2.3.4" in message
+    assert "exit 1" in message
+
+
+def test_read_database_url_failure_never_echoes_captured_stderr():
+    """Same guarantee for stderr -- the old code fell back to it when stdout was
+    empty, which is exactly as capable of carrying rendered secret content."""
+    secret_marker = "sk-live-SECRET-DO-NOT-LEAK-in-stderr"
+    runner = FakeRunner([_fail(2, stderr=f"partial read: {secret_marker}")])
+    with pytest.raises(sg.SchemaGateError) as exc_info:
+        sg._read_database_url("1.2.3.4", "vault-agent-x", runner=runner, timeout=5)
+    assert secret_marker not in str(exc_info.value)
+
+
 def test_read_database_url_raises_when_key_is_absent():
     runner = FakeRunner([_ok(stdout="OTHER=1\n")])
     with pytest.raises(sg.SchemaGateError, match="rendered no DATABASE_URL"):

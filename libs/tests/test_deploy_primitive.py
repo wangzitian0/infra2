@@ -758,6 +758,32 @@ def test_deploy_skips_schema_gate_for_an_unregistered_service(monkeypatch):
     assert client.deployed  # yet the deploy proceeded normally to completion
 
 
+def test_deploy_carries_the_gates_rollback_class_into_the_returned_plan(monkeypatch):
+    """run_schema_gate's return value (the ROLLBACK_CLASS, Infra-022 T3.2) must reach
+    the caller through DeployPlan -- not be computed and dropped on the floor."""
+    monkeypatch.setattr(dp.schema_gate, "run_schema_gate", lambda *a, **k: "C")
+    client = FakeDokploy()
+    plan = dp.deploy(
+        "staging", FULL_SHA, domain="zitian.party", client=client, iac_ref="b" * 40
+    )
+    assert plan.rollback_class == "C"
+
+
+def test_deploy_plan_rollback_class_is_none_for_an_unregistered_service():
+    """truealpha/app is never gated -- its DeployPlan must say so explicitly (None),
+    not silently omit or fabricate a class."""
+    client = FakeDokploy()
+    plan = dp.deploy(
+        "staging",
+        FULL_SHA,
+        domain="zitian.party",
+        client=client,
+        service="truealpha/app",
+        iac_ref="b" * 40,
+    )
+    assert plan.rollback_class is None
+
+
 # --- truealpha#447: deploy() self-heals this service's generated Vault secrets ---
 
 

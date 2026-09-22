@@ -47,6 +47,12 @@ class DeployPlan:
     compose_id: str
     data: str  # derived data_lane from EnvConfig, kept for deploy_v2 result detail
     env_vars: dict[str, str]
+    # The #698 pre-deploy schema gate's ROLLBACK_CLASS (Infra-022 T3.2 / TODOWRITE:20)
+    # for this exact deploy, or None when the gate didn't apply (schema_gate.gate_applies
+    # was False for this service). Recorded here so it reaches deploy_v2's own JSON
+    # result / the GitHub Actions step summary — an operator deciding whether a later
+    # rollback is safe must not have to re-run the check to see this.
+    rollback_class: str | None = None
 
 
 def _dep_id(deployment: dict) -> str:
@@ -524,6 +530,12 @@ def deploy(
     # registered in tools.pre_deploy_schema_check.ENUM_SOURCES are gated
     # (schema_gate.gate_applies) — a service without persistent enums registered there
     # is unaffected by this check.
+    #
+    # rollback_class is CAPTURED (not just raised-on-block) and carried into the
+    # returned DeployPlan below: a passing deploy still records its ROLLBACK_CLASS so
+    # an operator deciding whether a LATER rollback of this exact release is safe reads
+    # it from the deploy record instead of re-running the check (Infra-022 T3.2).
+    rollback_class: str | None = None
     if schema_gate.gate_applies(service):
         from libs.service_registry import service_attrs
 
@@ -533,7 +545,7 @@ def deploy(
                 f"{service}: pre-deploy schema gate is registered for this service but "
                 "it has no compose_path to locate its vault-agent container from"
             )
-        schema_gate.run_schema_gate(
+        rollback_class = schema_gate.run_schema_gate(
             service,
             compose_path=meta.compose_path,
             env_suffix=cfg.env_suffix,
@@ -676,7 +688,12 @@ def deploy(
             raise
 
     return DeployPlan(
-        env=env, sha=sha, compose_id=cfg.compose_id, data=data_lane, env_vars=env_vars
+        env=env,
+        sha=sha,
+        compose_id=cfg.compose_id,
+        data=data_lane,
+        env_vars=env_vars,
+        rollback_class=rollback_class,
     )
 
 

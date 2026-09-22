@@ -160,10 +160,19 @@ def _read_database_url(
         [*_ssh_args(host), command], text=True, capture_output=True, timeout=timeout
     )
     if result.returncode != 0:
+        # `result.stdout`/`result.stderr` here are whatever the remote side captured
+        # for a `cat /vault/secrets/.env` invocation — the RENDERED SECRETS FILE itself
+        # (DATABASE_URL, and possibly more the template renders). Unlike
+        # ``run_schema_gate``'s own BLOCKED message (that one is the check script's
+        # diagnostic text, which never contains a credential), this command's captured
+        # output must NEVER be echoed into an exception a CI log could carry — one
+        # failure here would otherwise print a secret straight into GitHub Actions'
+        # public step log. Identify the failing step + exit code only; no content.
         raise SchemaGateError(
             "pre-deploy schema gate: could not read the rendered secrets from "
-            f"{vault_agent_container} on {host} (ssh/docker exit {result.returncode}): "
-            f"{(result.stderr or result.stdout or '').strip()[-500:]}"
+            f"{vault_agent_container} on {host} (ssh/docker exit {result.returncode}) "
+            "-- command output withheld: this reads a rendered secrets file, and a "
+            "failure must not risk echoing its content into a log"
         )
     for line in (result.stdout or "").splitlines():
         line = line.strip()
