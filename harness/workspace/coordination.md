@@ -12,12 +12,19 @@ These are harness defaults, not a replacement for repository-local contributor r
    ```
 
 2. Give each change one stable work key: an issue ID, project ID, or explicit
-   standalone key.
+   standalone key. The physical form of that claim is the Root-level worktree rule (one worktree
+   per work key, with the key as the directory prefix -- the issue number for issue
+   work, the project or standalone key otherwise). Its source is
+   `dev_env/workspace-iac/etc/rules/subagents.md` 铁则 6, which `ws-apply` projects into
+   the workspace root `AGENTS.md` one level above this repository; this guide does not
+   restate it.
 3. Search open and recently closed issues, PRs, and branches before creating another
    owner for the same work key.
 4. Allow parallel work only when both work keys and writable paths are disjoint. Keep
    one writer for shared manifests, lockfiles, migrations, registries, and authority
-   documents.
+   documents -- disjoint worktrees (iron rule 6) stop two agents sharing a `.git/index`,
+   but they do not stop two issues each legitimately touching the same migration
+   chain; that is what this single-writer rule is for.
 5. Collapse duplicate work immediately and cross-link the surviving line of work.
 
 ## Work Order
@@ -60,8 +67,12 @@ outcomes and never matched "1 unresolved review thread(s)"
    pending checks, but also for red checks, unresolved threads, drafts and merged PRs.
 4. Every wake-up sweeps everything, tells the user one line per change, and acts on
    every item that is not waiting before re-arming the watch.
-5. Read agent progress without reading transcripts: the output file's mtime and size,
-   and the agent's worktree (branch head, dirty files, unpushed commits) or PR head.
+5. Read agent progress without reading transcripts. The signal is tool-call activity,
+   not output: on 2026-09-22 a native Agent's task output file sat at 152 bytes for 45
+   minutes while the agent committed and pushed four branches, and the orchestrator
+   stopped it as dead. So: the agent's worktree (branch head, dirty files, unpushed
+   commits) or PR head is evidence; the output file's mtime and size are not evidence, for
+   native Agents. Look in the sandbox the artifact lives in, not the main checkout.
 6. Background scripts always append a verdict line, so a dead process is
    distinguishable from a finished one:
 
@@ -73,7 +84,7 @@ outcomes and never matched "1 unresolved review thread(s)"
 
 | Item | Stalled when | Response |
 |---|---|---|
-| Agent | No transcript write, commit or file change for 20 min | `SendMessage` asking for status; tell the user if 10 more minutes pass |
+| Agent | No tool call for ~2 min (owner's criterion, 2026-09-22). A tool call still in flight -- a `Monitor`, a foreground `wait`, a long test run -- counts as alive for its whole duration; the criterion is *no call started and none running*, not *no call returned*. `harness sweep` cannot see tool calls yet and stats the output files instead -- treat its agent STALL as a proxy, confirm in the worktree before acting | Look in the agent's worktree; `SendMessage` only if the worktree is also idle; tell the user if 10 more minutes pass |
 | PR checks | Checks pending and none finished for 30 min | Inspect the run; re-run or report |
 | Release log | No write for 25 min, or the process died without a verdict line | Read the log tail; report the last stage |
 | Workflow run | Queued or running for more than 45 min | Inspect or cancel the run and report |

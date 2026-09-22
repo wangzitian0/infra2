@@ -28,8 +28,8 @@
 
 ## 3. Artifact and Configuration Binding
 
-Both `dagster-webserver` and `dagster-daemon` must run the same full OCI digest.
-Deploy fails closed unless Vault supplies:
+All three Dagster roles (`dagster-code-server`, `dagster-daemon`, and `dagster-webserver`)
+must run the same full OCI digest. Deploy fails closed unless Vault supplies:
 
 - `DATA_ENGINE_IMAGE_DIGEST` as `sha256:<64 lowercase hex>`;
 - `RELEASE_MANIFEST_ID` as `release-manifest:<64 lowercase hex>`;
@@ -45,8 +45,9 @@ to the promoted digest; recording a Dokploy config hash alone is insufficient.
 ## 4. Network and Storage Boundary
 
 - OpenD remains host-only on `127.0.0.1:11111`; no bridge-facing proxy is permitted.
-- Only the two Dagster roles use host networking. They reach the environment's
-  loopback-only Postgres port (`15432` Staging, `15433` Production).
+- All three Dagster roles use host networking. They reach the environment's
+  loopback-only Postgres port (`15432` Staging, `15433` Production) and MinIO S3
+  loopback port (`19000` Staging, `19001` Production).
 - Dagster UI binds only to host loopback (`13001` Staging, `13002` Production), has
   `traefik.enable=false`, and is accessed through an SSH tunnel.
 - Dagster run/event/schedule metadata uses the environment Postgres `dagster` schema.
@@ -69,13 +70,15 @@ OpenD/source budget contention.
 DEPLOY_ENV=staging invoke ta-data_engine.shared.status
 docker inspect -f '{{.Config.Image}}' truealpha-dagster-webserver-staging
 docker inspect -f '{{.Config.Image}}' truealpha-dagster-daemon-staging
+docker inspect -f '{{.Config.Image}}' truealpha-dagster-code-server-staging
+docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' truealpha-dagster-code-server-staging
 docker exec truealpha-dagster-daemon-staging dagster-daemon liveness-check
 ```
 
 Required assertions:
 
-1. Both image references equal the accepted digest.
-2. The daemon heartbeat is current and schedule metadata persists after restart.
+1. All three image references equal the accepted digest.
+2. The daemon heartbeat is current, code-server is healthy, and schedule metadata persists after restart.
 3. Postgres contains Dagster runtime tables only in `dagster`, never `public`.
 4. OpenD, Postgres, and Dagster UI are unreachable on non-loopback host interfaces.
 5. A missing digest/release/approval/credential or wrong `APP_ENV` blocks execution.

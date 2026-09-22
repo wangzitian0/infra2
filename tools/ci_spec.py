@@ -180,36 +180,54 @@ def defanged_steps(workflow: dict, job_id: str, source: str = "") -> list[str]:
     # coverage upload, say -- silenced a job-level `continue-on-error` somewhere
     # else in the same file. That is the bypass this audit exists to catch,
     # rebuilt inside the audit.
-    if job.get("continue-on-error") and job_id not in exempt:
+    if job.get("continue-on-error") and (job_id, job_id) not in exempt:
         out.append("<job>")
     steps = job.get("steps")
     for index, step in enumerate(steps if isinstance(steps, list) else []):
         if not isinstance(step, dict) or not step.get("continue-on-error"):
             continue
         name = str(step.get("name") or step.get("uses") or f"step #{index}")
-        if name not in exempt:
+        if (job_id, name) not in exempt:
             out.append(name)
     return out
 
 
 # A job declaration: a two-space-indented key inside the top-level `jobs:` block.
 _JOB_KEY_RE = re.compile(r"^  ([A-Za-z_][\w-]*):\s*$")
+# `run: |`、`script: >-` 等 block scalar 的宿主键：其正文是字符串，不是声明。
+_BLOCK_SCALAR_RE = re.compile(r":\s*[|>][+-]?\d*\s*$")
 
 
-def _exempt_lines(source: str) -> set[str]:
-    """Names carrying a `# gate-exempt:` comment, keyed to the declaration above it.
+def _exempt_lines(source: str) -> set[tuple[str, str]]:
+    """`(job id, 声明名)` -> 带 `# gate-exempt:` 的那些，按 **job 隔离**。
 
-    A declaration is a job id or a step's `- name:` -- what a reader sees in the
-    report. A comment attached to neither exempts nothing, which is deliberate: an
-    exemption nobody can point at is not one. Keying to exactly one declaration is
-    the whole point; see `defanged_steps` for what an unkeyed exemption did.
+    键里必须带 job：只按名字记是文件级扁平集合，于是两个 job 里同名的 step 会互相
+    借用豁免 —— 一个 advisory job 里合法豁免的 `Lint`，会让另一个**必需** job 里
+    同样叫 `Lint` 且没有任何豁免声明的 `continue-on-error` 被静默放过。`Lint` /
+    `Test` / `Build` 这类名字跨 job 重名在真实 workflow 里极其常见，不需要任何恶意
+    构造（审计实测 2026-09-22）。这是「一条豁免只豁免它写在谁头上的那一个」这条
+    规则的第三层 —— 前两层是 workflow 级开关、和 `current` 跨声明残留。
+
+    声明是 job id 或 step 的 `- name:` / `- uses:` —— 报告里怎么称呼它，豁免就得
+    写在那个名字上。挂在谁都不是的注释谁也豁免不了。
+
+    `run: |` 这类 block scalar 的正文被跳过：脚本里出现的 `- name:` 是字符串，不是
+    声明，把它当声明会凭空造出一条谁都没写过的豁免。
     """
     if not source:
         return set()
-    found: set[str] = set()
+    found: set[tuple[str, str]] = set()
+    job_id = ""
     current = ""
     in_jobs = False
+    block_indent: int | None = None
     for line in source.splitlines():
+        indent = len(line) - len(line.lstrip())
+        if block_indent is not None:
+            # 还在 block scalar 里：缩进大于宿主键才算正文；空行不结束它。
+            if not line.strip() or indent > block_indent:
+                continue
+            block_indent = None
         # Split off comments before reading structure, so `- name: x  # gate-exempt: y`
         # yields the name `x`. A `#` inside a quoted step name would be mis-split;
         # no workflow here has one, and the failure direction is to report the step
@@ -217,10 +235,13 @@ def _exempt_lines(source: str) -> set[str]:
         code = line.split("#", 1)[0]
         if code[:1] not in ("", " ", "\t"):
             in_jobs = code.startswith("jobs:")
+            if not in_jobs:
+                job_id = current = ""
         elif in_jobs:
             job = _JOB_KEY_RE.match(code.rstrip())
             if job:
-                current = job.group(1)
+                job_id = job.group(1)
+                current = job_id
         stripped = code.strip()
         # `== "-"` as well as the prefix: the comment is split off first, so a
         # line that is nothing but `- # gate-exempt: ...` strips down to a bare
@@ -237,6 +258,8 @@ def _exempt_lines(source: str) -> set[str]:
             for key in ("- name:", "- uses:"):
                 if stripped.startswith(key):
                     current = stripped[len(key) :].strip().strip("\"'")
-        if current and GATE_EXEMPT_RE.search(line):
-            found.add(current)
+        if _BLOCK_SCALAR_RE.search(code):
+            block_indent = indent
+        if job_id and current and GATE_EXEMPT_RE.search(line):
+            found.add((job_id, current))
     return found

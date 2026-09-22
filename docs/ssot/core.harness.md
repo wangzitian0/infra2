@@ -7,7 +7,7 @@
 
 | 事实 | 唯一来源 |
 |---|---|
-| Workspace 成员、角色、治理模式 | `harness/repos.yaml` |
+| Workspace 成员、角色、治理模式与契约分级 | `harness/repos.yaml` |
 | Workspace 通用偏好 | `harness/workspace/` |
 | Infra2 架构与运维规则 | [`docs/ssot/core.md`](./core.md) 与相关 SSOT |
 | SDK 公共契约 | 已发布的 `infra2-sdk` SemVer artifact |
@@ -29,13 +29,17 @@ App 的集成状态。它统一 workspace 视角，不统一产品仓库的迭�
 
 ## 3. Ownership Model
 
-| Repository | Harness role | Governance | Release identity |
-|---|---|---|---|
-| `infra2` | Infrastructure implementation and deployment control plane | Local | Infra2 release tag |
-| `infra2-sdk` | Versioned contracts and explicitly invoked protocol adapters | Coordinated, independently released | SDK SemVer |
-| `oh-my-code-agent` | Coding-agent observation, profiles and isolated runtimes | Coordinated, independently released | Tool release or pinned commit |
-| `finance_report` | Integration-visible application checkout | Autonomous | App image ref/digest |
-| `truealpha` | Integration-visible application checkout | Autonomous | App image ref/digest |
+| Repository | Harness role | Governance | Contract tier | Release identity |
+|---|---|---|---|---|
+| `infra2` | Infrastructure implementation and deployment control plane | Local | Pinned | Infra2 release tag |
+| `infra2-sdk` | Versioned contracts and explicitly invoked protocol adapters | Coordinated, independently released | Pinned | SDK SemVer |
+| `oh-my-code-agent` | Coding-agent observation, profiles and isolated runtimes | Coordinated, independently released | Snapshot | Tool release or pinned commit |
+| `finance_report` | Integration-visible application checkout | Autonomous | Snapshot | App image ref/digest |
+| `truealpha` | Integration-visible application checkout | Autonomous | Snapshot | App image ref/digest |
+
+契约分级治理语义：
+- `pinned`：pin 视为强合同。当 submodule checkout HEAD 与 parent commit pin 不一致（pin-drift）时，`harness check` 判定为 ERROR 严格阻断，`harness status` 标记为 DRIFT。
+- `snapshot`：pin 仅视为开发快照记录。当 submodule 发生 HEAD 推进或漂移时，`harness check` 判定为 WARNING 记录而不阻断开发（退出码 0），`harness status` 保持 CURRENT 正常状态，确保自主 App 的自治边界与迭代节奏。
 
 `coordinated` 不表示两个 Git 仓库合成一个发布单元。Infra2 与 SDK 仍通过各自 PR、
 commit、tag 和兼容性证明独立发布；`oh-my-code-agent` 也通过自己的仓库独立演进。
@@ -75,15 +79,15 @@ uv run python -m tools.harness check
 uv run python -m tools.harness status --fetch
 ```
 
-`harness check` 是只读校验：验证清单 schema、focus、角色/治理组合、workspace 偏好和
-authority 路径。未初始化的必需 checkout 失败；显式 optional 或 CI 不拉 submodule 时
-报告 warning。结构错误、App 非自治或 authority
-漂移会失败。命令不得执行 fetch、checkout、写文件、发布或部署。
+`harness check` 是只读校验：验证清单 schema、focus、角色/治理组合、契约分级（pinned vs snapshot）、
+workspace 偏好和 authority 路径。未初始化的必需 checkout 失败；显式 optional 或 CI 不拉 submodule 时
+报告 warning。结构错误、App 非自治、authority 漂移或 pinned 仓库发生 pin drift 会失败（exit 1）；
+snapshot 仓库发生 HEAD 推进仅作为 warning 记录，保持 check 通过（exit 0）。命令不得执行 fetch、checkout、写文件、发布或部署。
 
 `harness status` 只观测 checkout：显示 root/submodule parent pin、checkout HEAD、跟踪的
 remote HEAD、ahead/behind、dirty path 数和 checkout release identity。默认完全本地；显式
 `--fetch` 只刷新每个仓库的 `origin` refs/tags，不 checkout、pull、更改 parent pin 或触碰 App
-source。`--require-current` 在任一 checkout 落后/领先/脏/脱离 parent pin 时返回非零。
+source。`--require-current` 在任一 checkout 落后/领先/脏、或 pinned checkout 脱离 parent pin 时返回非零（snapshot 仓库的 pin drift 不会破坏 current 判定）。
 观察与 fetch 前必须确认路径是独立 Git root；空 submodule 不能回退成父仓库。
 
 `harness sweep <watch.json>` 是 workspace orchestrator（启动 subagent、盯 PR/发布/CI、
