@@ -55,7 +55,13 @@ def _project_number(path: Path) -> int:
     Dormant today — the ids are in the twenties — and silent when it arrives.
     """
     match = _NUMBER_RE.match(path.name)
-    assert match, f"{path.name} does not start with an Infra id"
+    if match is None:
+        # SystemExit, not assert: `python -O` strips assertions, which would
+        # turn this into an AttributeError on `None.group` and lose the message.
+        # Matches how the rest of this script reports a refusal.
+        raise SystemExit(
+            f"gen_project_index: {path.name} does not start with an Infra id"
+        )
     return int(match.group(1))
 
 

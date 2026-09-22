@@ -67,6 +67,10 @@ def test_todowrite_and_summary_are_still_skipped(tmp_path: Path) -> None:
 
 
 def test_a_name_without_an_id_is_refused_rather_than_sorted_last() -> None:
-    """Returning a sentinel would bury the file at one end and call that an answer."""
-    with pytest.raises(AssertionError):
+    """Returning a sentinel would bury the file at one end and call that an answer.
+
+    SystemExit rather than AssertionError, because `python -O` strips
+    assertions and this is a CLI: the refusal has to survive the flag.
+    """
+    with pytest.raises(SystemExit, match="does not start with an Infra id"):
         gen_project_index._project_number(Path("README.md"))
