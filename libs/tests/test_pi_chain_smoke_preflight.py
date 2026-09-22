@@ -4,8 +4,8 @@
 ``pi_chain_smoke.py --strict``, on the premise that ``--strict`` would then
 make a missing credential an infra error. The wiring test proved the step
 reaches the tool; it substitutes a stub, so it never runs ``preflight`` at all.
-An audit put it plainly: the whole argument rested on a function no executed
-assertion touched. One real CI run has since shown exit 2, which is evidence
+An audit put it plainly: the whole argument rested on a function that no
+executed assertion touched. One real CI run has since shown exit 2, which is evidence
 for that day's code and no guard against the next edit — flipping the ternary
 in ``missing()`` would restore the silence #776 was written to end.
 
