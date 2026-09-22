@@ -30,12 +30,30 @@ Track top issues discovered during documentation engineering.
 - 修复：两个生成器加进 `docs.yml`（触发条件 `**/*.md` + `docs/**`）。`pr_merge_gate` 的
   `not_green` 扫描**每一个**报告过的 check，所以 `Docs` 变红即阻断合流，不需要动
   `ci-gate-inventory.yaml`。
-- 覆盖是闭的而不是靠列举：任何改动集要么含非 `.md` 文件（infra-ci 跑）、要么命中
-  `**/*.md` 或 `docs/**`（docs.yml 跑），两者的并集没有缝。
-  `libs/tests/test_docs_only_prs_run_their_own_gates.py` 按象限枚举形状逐个断言，
-  且 `has_non_doc` 不是重新实现的——把 infra-ci 那段 shell 取出来在临时仓库上**真的执行**。
-- 反向验证：撤掉 docs.yml 的改动后 8 红 6 绿（红的正好是 4 种纯文档形状 × 2 个生成器），
-  加回后 14 全绿。
+- 覆盖的范围是**两个生成器读的那些文件**，不是任意改动集：`docs/project/**.md`、
+  `docs/project/README.md`、`docs/ssot/MANIFEST.yaml`、`docs/ssot/README.md`。
+  这些全在 `docs/` 下，而 `docs/**` 同时在 infra-ci 的 `paths:` 允许清单和 docs.yml 的触发条件里，
+  所以每一个都至少被一个 workflow 接住。
+- **独立只读审计（Sonnet，未看过缺陷上下文）抓到本 PR 两条，都成立，都已改**：
+  1. **HIGH**——第一版断言只是「生成器路径出现在步骤文本里」。审计员把 docs.yml 的步骤改成
+     `python3 tools/gen_project_index.py || true`（门禁彻底失效），**23 个测试仍然全绿**。
+     这正是 #776 的姊妹测试点名要防的形态，而这个测试自己没防。已改为**执行式**：
+     造一棵索引过期的树（只弄脏目标生成器的输入，另一个保持同步，以此证明失败是**穿过**
+     步骤传出来的而不是来自它的兄弟命令），把步骤的 `run:` 正文真的跑一遍（`uv` 用 shim 换成
+     `python3`，这样 `&&`／`||`／`set +e`／提前 `exit 0` 这些 shell 逻辑都在被测量），
+     断言退出码非 0；`continue-on-error` 另按 YAML key 查。
+  2. **MIDDLE**——「任何改动集都逃不过两个 workflow」这句是**假的**：infra-ci 的 `paths:` 是
+     一份策划过的允许清单，`pyproject.toml` 既不在里面、也不命中 docs.yml，两个 workflow 都不触发。
+     （它改不了这两个索引，且 `pr_merge_gate` 会以「required check(s) never reported」拦下这种 PR，
+     所以不是可利用的洞——但结论写宽了就是错的。）已把 SSOT、本条与测试 docstring 的说法
+     收敛到「生成器读的文件」。
+- 反向验证（改完后逐个复现审计员的攻击）：
+  | 怎么废掉门禁 | 测试结果 |
+  |---|---|
+  | 步骤整个删掉（原始缺陷） | 3 红 |
+  | 步骤加 `\|\| true` | 3 红 |
+  | 步骤加 `continue-on-error: true` | 4 红 |
+  | 原样 | 15 全绿 |
 
 ## Latest Findings (2026-06-11)
 
