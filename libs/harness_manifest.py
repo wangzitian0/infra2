@@ -17,6 +17,12 @@ ALLOWED_ROLES = {
     "external-application",
 }
 ALLOWED_GOVERNANCE = {"local", "coordinated", "autonomous"}
+# "none" is the only defined value today: a checkout so declared does not carry a
+# Repo-layer rules projection (no AGENTS.md/CLAUDE.md expected there) — its
+# constraints travel through a published artifact and its own README/pyproject
+# instead (core.harness.md §1; dev_env #51). Absent the key, the default stays
+# "a Repo layer exists", so this is opt-out, not opt-in.
+ALLOWED_RULES_LAYER = {"none"}
 
 
 class HarnessManifestError(ValueError):
@@ -189,6 +195,15 @@ def validate_manifest(
                 findings,
                 "governance",
                 f"{repository_id} has unsupported governance: {governance}",
+            )
+        rules_layer = repository.get("rules_layer")
+        if rules_layer is not None and (
+            not isinstance(rules_layer, str) or rules_layer not in ALLOWED_RULES_LAYER
+        ):
+            _error(
+                findings,
+                "rules-layer",
+                f"{repository_id} has unsupported rules_layer: {rules_layer!r}",
             )
         expected_governance = {
             "infrastructure-control-plane": "local",
