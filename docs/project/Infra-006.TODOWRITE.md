@@ -44,13 +44,26 @@ Track top issues discovered during documentation engineering.
   **没有**路径适用性字段（字段只有 `id/stage/task_category/workflow/job/blocks_merge/failure_semantics`）。
   所以真正的补齐要么是把门禁挪进一个**无条件运行**的 job，要么去掉 docs.yml 的 `paths:`，
   要么给 gate schema 加适用性——三条都属于「改动决定合流的东西」，**需 owner**。
-- **好消息：门禁被拆掉这件事是机制性防住的**（Scout-M 的自治理缺口在这个门禁上不可利用）。
-  改 `.github/workflows/docs.yml` 必然让 `has_non_doc=true`（实测），于是
-  `Test Deployer Hash Logic` 必然运行，它跑 `libs/tests`，
-  而 `test_docs_only_prs_run_their_own_gates` 在步骤被删/被 `|| true`/被 `continue-on-error`
-  时都会红（实测 3/3/4 红）——且 `Test Deployer Hash Logic` **就在** GitHub 那 7 个不可绕过的
-  required check 里。剩余敞口只有一种：**纯文档 PR 索引真的过期、`build` 真的红了，
-  而有人不走 `pr_merge_gate` 直接从 UI 合并**。
+- **门禁被拆掉这件事合不进去——但机制分两种，我起初只说了一种，而且说错了那一种**
+  （第二轮 claim 审计打假，已实测）：
+  - **只改 `.github/workflows/docs.yml` 一个文件**（正是「拆门禁」的形状）：
+    该路径**不在** infra-ci 的 `paths:` 里（实测 25 条里 5 条 workflow 条目，无 docs.yml），
+    所以 **infra-ci 根本不触发**，`has_non_doc` 从未被计算，`Test Deployer Hash Logic`
+    也不会跑——**不是「跑了并抓到」，是「根本没跑」**。它仍然合不进去，但靠的是七个
+    required check **一个都没报告**：`pr_merge_gate` 实测给出
+    `required check(s) never reported: <七个全部>`，GitHub ruleset 侧则永远停在 Expected。
+  - **PR 同时动了 infra-ci 允许清单里的东西**（`libs/**`、`tools/**`、`docs/**`…，
+    历史上每一次改 docs.yml 都是这种形状）：infra-ci 触发，`Test Deployer Hash Logic`
+    跑 `libs/tests`，`test_docs_only_prs_run_their_own_gates` 在步骤被删/`|| true`/
+    `continue-on-error` 时都红（实测 3/3/4 红）。这一种才是**被测试抓到**。
+  - 我原来的说法把第一种形状也归给了测试。**错法正是同一段文字在另一处刚警告过的那条**：
+    带 `paths:` 过滤的 required check，在不匹配的 PR 上永远停在 Expected。
+    写下这个陷阱，然后在下一段掉进去。
+  - 顺带一条：`libs/tests/test_docs_only_prs_run_their_own_gates.py` 的**代码**是对的——
+    它在问 `has_non_doc` 之前先问 `_workflow_fires(INFRA_CI, files)`（实测该文件下为
+    `False`）。错的只有散文：我把分类器**单独**拿来推论，而测试没有。
+- 剩余敞口只有一种：**纯文档 PR 索引真的过期、`build` 真的红了，而有人不走
+  `pr_merge_gate` 直接从 UI 合并**——那时 GitHub 不拦。
 - 覆盖的范围是**两个生成器读的那些文件**，不是任意改动集：`docs/project/**.md`、
   `docs/project/README.md`、`docs/ssot/MANIFEST.yaml`、`docs/ssot/README.md`。
   这些全在 `docs/` 下，而 `docs/**` 同时在 infra-ci 的 `paths:` 允许清单和 docs.yml 的触发条件里，
