@@ -1869,3 +1869,70 @@ def test_a_job_without_a_name_reports_under_its_job_id():
 def test_a_workflow_without_a_jobs_mapping_proves_nothing(bad):
     assert not gate._workflow_only_gained_authority(WF_WITH_PATHS, bad)
     assert not gate._workflow_only_gained_authority(bad, WF_WITH_PATHS)
+
+
+# -- 现状扫描看不见被删掉的东西（#809 review，审计元模式第三次出现）------------------
+
+
+def test_deleting_a_workflow_is_still_self_governing():
+    """`self_governing_files()` 是从**当前树** glob 出来的。一个 PR 把某个 workflow
+    删掉或改名，它就不出现在那次 glob 里 —— 路径仍在 `facts.files` 中，闭包里却没有它，
+    于是自我裁决判不到。
+
+    而删掉一个声明了 deploy 路径的 workflow，与把那条 path 从它里面删掉，是同一件事：
+    `_declared_deploy_globs()` 少读到一条，一类本该升级的改动不再升级。
+
+    这是这次审计的元模式第三次出现 —— 护栏读的是代理而不是真实对象，而代理看不见
+    「被移走的东西」。前两次是「字面量正则扫不到路径拼接」和「空集陷阱」。
+    """
+    deleted = f"{gate.WORKFLOW_PREFIX}deleted-by-this-pr.yml"
+    assert deleted not in gate.self_governing_files(), (
+        "前提：它确实不在枚举出来的集合里"
+    )
+    assert gate.is_self_governing(deleted), "但它必须被判为自我裁决"
+
+
+def test_deleting_a_workflow_escalates_to_the_owner():
+    """端到端：光判定函数对还不够，`evaluate` 得真的升级。
+
+    路径必须是当前树上**不存在**的 workflow —— 这正是「删除」在 `facts.files`
+    里的样子。用一个仍然存在的路径（比如 `apply-observability.yml`）测不出这条
+    回归：那样的路径在 `evaluate()` 换成 `is_self_governing()` 之前，靠旧的
+    `path in self_governing_files()` 成员判定就已经能升级，测试红不了旧代码，
+    也就抓不住「删除或改名后不再升级」这个真正要守住的行为。
+    """
+    deleted = f"{gate.WORKFLOW_PREFIX}deleted-by-this-pr.yml"
+    verdict = gate.evaluate(
+        _facts(files=("libs/alerting.py", deleted)),
+        now=NOW,
+    )
+    assert verdict.owner_required and verdict.exit_code == 2
+    assert deleted in verdict.reasons[0]
+
+
+def test_renaming_a_workflow_escalates_to_the_owner():
+    """同一枚硬币的另一面：改名之后旧路径从树上消失、新路径也还没被 glob 到 ——
+    两条路径出现在 `facts.files` 里时都必须仍然升级。"""
+    renamed = f"{gate.WORKFLOW_PREFIX}renamed-by-this-pr.yml"
+    verdict = gate.evaluate(_facts(files=(renamed,)), now=NOW)
+    assert verdict.owner_required and verdict.exit_code == 2
+    assert renamed in verdict.reasons[0]
+
+
+def test_a_new_workflow_is_self_governing_before_it_exists():
+    """同一枚硬币的另一面：新增一个 workflow 也不在当前树的 glob 里。
+    新增一个会在 push 上部署的 workflow，是在给自己发新的部署权。
+
+    路径用 `WORKFLOW_PREFIX` 拼而不是写成字面量：
+    `test_workflow_reference_contract.py` 会扫本仓库源码里形如
+    「工作流目录前缀 + 文件名」的字面量并要求它们指向真实文件 —— 连这段解释里举的
+    例子都会被它扫到（实测），所以例子也不能写成字面量。这里要的恰好是一个
+    **不存在**的名字，写成字面量就会被那道守卫判红（实测跑出来了，它抓得对）。
+    """
+    assert gate.is_self_governing(f"{gate.WORKFLOW_PREFIX}brand-new.yml")
+
+
+def test_the_prefix_does_not_swallow_unrelated_paths():
+    """前缀判定不能宽到把普通改动也拖进 owner 审批。"""
+    for path in ("libs/probe_specs.py", "docs/README.md", ".github/dependabot.yml"):
+        assert not gate.is_self_governing(path), path

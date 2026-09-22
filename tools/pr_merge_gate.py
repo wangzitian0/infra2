@@ -250,10 +250,32 @@ def self_governing_files() -> frozenset[str]:
     # 门禁读的是这个 PR 自己那份 workflow，于是「合流会触发 observability apply」
     # 这条升级不再成立，判定为 ready=True / owner_required=False / exit=0。
     # 那是 AGENTS.md 明文列为必须回 owner 的一类，被会话权限直接合掉。
-    closure |= {f for f in _all_workflow_files() if (ROOT / f).is_file()}
+    # 枚举出来的只是「此刻还在树上的那些」，用于让闭包可读、可测；真正的成员判定走
+    # `is_self_governing()` 的路径前缀，因为**现状扫描看不见被删掉的东西**：一个 PR
+    # 把某个 workflow 删掉或改名，它就不出现在这次 glob 里，闭包里没有它，自我裁决
+    # 判不到 —— 正好回到它要堵的那个绕过形态（审计 #809 review）。
+    closure |= set(_all_workflow_files())
     if seed not in closure:  # pragma: no cover - defensive
         closure = {seed, *RULE_TEXT_FILES}
     return frozenset(closure)
+
+
+WORKFLOW_PREFIX = ".github/workflows/"
+
+
+def is_self_governing(path: str) -> bool:
+    """这个路径的改动会不会让门禁审判自己改写的规则。
+
+    不是 `path in self_governing_files()`：那是一个从**当前树**算出来的集合，
+    而删除和改名恰好让路径从当前树上消失。任何 `.github/workflows/` 下的路径都算，
+    存在与否无关 —— 删掉一个声明了 deploy 路径的 workflow，和把那条 path 从它里面
+    删掉，是同一件事。
+
+    前缀测试先判：它是一次字符串比较，`self_governing_files()` 是一次仓库遍历外加
+    闭包计算（首次调用未命中缓存时）。多数路径都不在 `.github/workflows/` 下，
+    短路掉后半句不改变结果 —— 两边都为 True 时 `or` 已经满足，只是省了那次遍历。
+    """
+    return path.startswith(WORKFLOW_PREFIX) or path in self_governing_files()
 
 
 def _all_workflow_files() -> list[str]:
@@ -1220,7 +1242,12 @@ def evaluate(
         owner = True
 
     quoted_instruction = _owner_instruction_quoted(facts.body)
-    governing = sorted(f for f in facts.files if f in self_governing_files())
+    # Membership test is `is_self_governing`, not `f in self_governing_files()`:
+    # the latter is computed from the current tree, so a deleted or renamed
+    # workflow path escapes it (#818). The citation carve-out below is
+    # independent of that fix -- it excuses RULE_TEXT_FILES specifically, not
+    # workflow paths, so the two compose without touching each other's cases.
+    governing = sorted(f for f in facts.files if is_self_governing(f))
     unproven = [
         f
         for f in governing
