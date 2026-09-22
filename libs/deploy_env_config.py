@@ -37,6 +37,13 @@ from dataclasses import dataclass, replace
 
 from libs.common import normalize_env_name
 
+# The canary runs arbitrary code on a fixed throwaway preview slot no real PR reuses.
+# It lives here, not in tools/deploy_v2.py, because it is a number: importing it used
+# to drag in the whole deploy stack (deploy_v2 -> promote -> schema_gate -> in_service
+# -> yaml), which is how #783 silently broke the nightly preview-leak check -- a job
+# that installs httpx/python-dotenv/rich and has no reason to need a YAML parser.
+CANARY_PR = 999
+
 # data default per env. Non-prod defaults to `staging` data (operator choice); prod is
 # always real prod data. A PR sha never runs on prod data and prod data never leaves
 # prod un-anonymized (the G2 / RL-DATA red lines, finance_report#877). deploy_v2 derives

@@ -12,7 +12,7 @@ contract validates.
 By default it deploys EVERY registry service declaring ``deploy_v2_canary = True`` on its
 Deployer (#541 — today ``finance_report/app`` only; see :func:`canary_services`) with
 ``type=canary``, which runs the chosen code on a dedicated, reserved preview slot
-(``pr-<_CANARY_PR>`` — a number no real PR will reuse), so it never touches staging/prod
+(``pr-<CANARY_PR>`` — a number no real PR will reuse), so it never touches staging/prod
 or a real PR's stack. ``--service`` overrides the registry set with ONE explicit
 preview-capable service (#522/#538) — anything registered in
 ``libs.deploy_env_config.preview_service_config`` works (e.g. ``truealpha/app``), even if
@@ -53,7 +53,8 @@ from infra2_sdk.delivery import (
 from libs.common import infra_domain
 from libs.deploy.preview import down
 from libs.deploy_contract import DeployTarget
-from tools.deploy_v2 import _CANARY_PR, deploy_v2
+from libs.deploy_env_config import CANARY_PR
+from tools.deploy_v2 import deploy_v2
 
 _DEFAULT_SERVICE = "finance_report/app"
 
@@ -113,7 +114,7 @@ def _best_effort_down(
     for i in range(attempts):
         try:
             result = down(
-                "pr", _CANARY_PR, domain=domain, client=client, service=service
+                "pr", CANARY_PR, domain=domain, client=client, service=service
             )
             if not hasattr(result, "compose_id"):
                 raise RuntimeError(
@@ -136,7 +137,7 @@ def _best_effort_down(
             sleep(min(2 ** (i + 1), 8))
     print(
         f"WARNING: canary teardown failed after {attempts} attempts ({last}); "
-        f"possible leaked stack pr-{_CANARY_PR} — clean it up manually",
+        f"possible leaked stack pr-{CANARY_PR} — clean it up manually",
         file=sys.stderr,
     )
     return False
