@@ -41,6 +41,8 @@ _LEGACY_CORS_ORIGINS = [
     "https://report-branch-main.zitian.party",
     "https://report-pr-*.zitian.party",
     "https://report-commit-*.zitian.party",
+    "https://truealpha-staging.zitian.party",
+    "https://truealpha.zitian.party",
     "http://localhost:3000",
 ]
 
