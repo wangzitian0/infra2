@@ -115,6 +115,13 @@ class _ComposeOverride:
     fast_swap: bool = False  # see EnvConfig.fast_swap
 
 
+# The baseline bespoke app: finance_report/app has no _APP_COMPOSE_OVERRIDES entry, its
+# compose_id/app_url_pattern come straight from `_ENVIRONMENTS` (env_config()). It still
+# needs a Dokploy project/compose-name pair for live drift verification below, so it is
+# named here once rather than re-derived ad hoc.
+_BASELINE_APP_SERVICE = "finance_report/app"
+
+
 # truealpha/app: version-pinned staging promotion (#500), generalizing the
 # finance_report fixed-compose path. compose_id verified live against the Dokploy API
 # 2026-07-18 (project "truealpha", env "staging", compose "app" -> w4zo_fm9d2PnUY8ULzNO7).
@@ -147,6 +154,11 @@ def app_compose_env_config(service: str, env: str) -> EnvConfig:
     base = env_config(env)
     overrides_for_service = _APP_COMPOSE_OVERRIDES.get(service)
     if overrides_for_service is None:
+        if service != _BASELINE_APP_SERVICE:
+            raise ValueError(
+                f"no compose target registered for service {service!r}: "
+                f"expected {_BASELINE_APP_SERVICE!r} or one of {sorted(_APP_COMPOSE_OVERRIDES)}"
+            )
         return base
     override = overrides_for_service.get(env)
     if override is None:
@@ -174,13 +186,6 @@ def services_without_prod_compose() -> frozenset[str]:
         for service, overrides in _APP_COMPOSE_OVERRIDES.items()
         if "prod" in overrides and overrides["prod"].compose_id is None
     )
-
-
-# The baseline bespoke app: finance_report/app has no _APP_COMPOSE_OVERRIDES entry, its
-# compose_id/app_url_pattern come straight from `_ENVIRONMENTS` (env_config()). It still
-# needs a Dokploy project/compose-name pair for live drift verification below, so it is
-# named here once rather than re-derived ad hoc.
-_BASELINE_APP_SERVICE = "finance_report/app"
 
 
 @dataclass(frozen=True)
@@ -525,14 +530,15 @@ _PREVIEW_CORS_WILDCARD_KINDS = ("pr", "commit")
 _PREVIEW_CORS_BRANCHES = ("main",)
 
 
-def cors_allowed_origins(*, domain: str) -> list[str]:
+def cors_allowed_origins(domain: str) -> list[str]:
     """The OTLP collector's CORS allow-list, derived from the FE origins.
 
     Single source: fixed envs (staging/prod) come from their ``app_url_pattern``;
-    preview aliases contribute their wildcard / branch origins; plus the local dev
-    origin. Order is stable (fixed envs, then branch, then wildcard kinds, then
-    local) so the rendered config is deterministic. This mirrors exactly the FE
-    domains so the allow-list can never drift from them.
+    preview aliases contribute their wildcard / branch origins; bespoke apps
+    from ``_APP_COMPOSE_OVERRIDES``; plus the local dev origin. Order is stable
+    (fixed envs, then branch, then wildcard kinds, then bespoke app overrides,
+    then local) so the rendered config is deterministic. This mirrors exactly
+    the FE domains so the allow-list can never drift from them.
     """
     origins: list[str] = []
     # Fixed, non-dynamic envs (prod first, then staging) — straight from their URL pattern.
@@ -547,6 +553,12 @@ def cors_allowed_origins(*, domain: str) -> list[str]:
     # Preview pr/commit aliases — wildcard, since the value is per-deploy.
     for kind in _PREVIEW_CORS_WILDCARD_KINDS:
         origins.append(f"https://report-{kind}-*.{domain}")
+    # Bespoke app overrides (e.g. truealpha/app staging and prod).
+    for overrides in _APP_COMPOSE_OVERRIDES.values():
+        for override in overrides.values():
+            origin = override.app_url_pattern.format(domain=domain)
+            if origin not in origins:
+                origins.append(origin)
     origins.append(_LOCAL_DEV_ORIGIN)
     return origins
 

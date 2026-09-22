@@ -1,10 +1,9 @@
 # TrueAlpha Application (web + llm)
 #
-# v1 deploy model: iac_pinned via deploy_v2 -> iac_runner -> `invoke ta-app.sync`.
-# Images are built and pushed to GHCR by the truealpha app repo's CI; this compose
-# pulls ${IMAGE_TAG:-latest}. Version-pinned staging/prod promotion (the
-# finance_report promote path) is deliberately deferred until the app has real
-# mart data to protect.
+# v2 deploy model: fixed-compose promotion via deploy_v2(service="truealpha/app", ...)
+# -> libs.deploy.promote. Images are built and pushed to GHCR by the truealpha app
+# repo's CI; Dokploy compose pulls pinned ${IMAGE_TAG}. Fast-swap short promote enabled
+# on staging.
 #
 # The app repo owns the DB schema DDL (db/migrations, idempotent SQL) — see
 # ../01.postgres/README.md for the bootstrap command.
@@ -45,12 +44,6 @@ services:
       # secrets.ctmpl is generated from the app manifests; DATABASE_URL is composed with
       # the service suffix read from this variable.
       ENV_SUFFIX: ${ENV_SUFFIX:-}
-      # Release identity (mirrors finance_report/10.app): libs.deploy.promote sets this
-      # to the image tag — short sha for a code deploy, vX.Y.Z for a release — the same
-      # value it stamps as OTEL service.version, and the app reports it as the deployed
-      # release (truealpha_runtime.deployed_release). "unknown" fallback. It is NOT the
-      # cache-bust: two promotes of the same tag carry the same value.
-      GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
       # Cache-bust: by default set fresh on every promote call (deploy-<tag>-<ms>) so Compose
       # recreates the agent on a same-tag redeploy and re-renders /vault/secrets/.env.
       # Under fast_swap (R17, e.g. on staging), this uses a deterministic tag/iac_ref hash

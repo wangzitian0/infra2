@@ -192,3 +192,22 @@ def test_preview_tag_alias_rejects_non_tag():
         preview_alias("tag", "1.2.3")  # missing leading v
     with pytest.raises(ValueError, match="vX.Y.Z release tag"):
         preview_alias("tag", "main")
+
+
+def test_app_compose_env_config_rejects_unregistered_service():
+    with pytest.raises(
+        ValueError,
+        match=r"no compose target registered.*expected 'finance_report/app'",
+    ):
+        ec.app_compose_env_config("unregistered_service", "staging")
+    with pytest.raises(
+        ValueError,
+        match=r"no compose target registered.*expected 'finance_report/app'",
+    ):
+        ec.app_compose_env_config("platform/redis", "staging")
+
+
+def test_cors_allowed_origins_includes_truealpha():
+    origins = ec.cors_allowed_origins("zitian.party")
+    assert "https://truealpha.zitian.party" in origins
+    assert "https://truealpha-staging.zitian.party" in origins

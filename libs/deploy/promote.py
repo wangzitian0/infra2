@@ -26,6 +26,7 @@ from libs.compose_lock import compose_write_lock
 from libs.console import warning
 from libs.deploy_env_config import app_compose_env_config, otel_env
 from libs.deploy_queue import deployment_start_epoch
+from libs.service_registry import REPO_ROOT
 from tools.deploy_failure_snapshot import emit_failure_snapshot
 from tools.openpanel_clients import openpanel_env
 from tools.resolve_deploy_ref import resolve_to_sha
@@ -151,14 +152,12 @@ def assert_approle_creds_present(service: str, client, compose_id: str) -> None:
     function's caller never sets these keys, so reading the compose's current env here
     reflects exactly what will still be true after this deploy.
     """
-    from pathlib import Path
-
     from libs.service_registry import service_attrs
 
     meta = service_attrs().get(service)
     if not meta or not meta.compose_path:
         return  # no statically-registered compose file to inspect
-    compose_text = Path(meta.compose_path).read_text(encoding="utf-8")
+    compose_text = (REPO_ROOT / meta.compose_path).read_text(encoding="utf-8")
     if "VAULT_ROLE_ID" not in compose_text and "VAULT_SECRET_ID" not in compose_text:
         return  # service does not use AppRole auth
 
@@ -302,8 +301,6 @@ def verify_in_service(
     ``timeout``. Returns the verdict message on success; raises RuntimeError otherwise.
     Mirrors libs.deploy.deployer.Deployer.verify_in_service for the iac-runner tier.
     """
-    from pathlib import Path
-
     from libs.deploy.in_service import (
         expected_running_containers,
         in_service_verdict,
@@ -318,7 +315,7 @@ def verify_in_service(
             "expectations from"
         )
     expected = expected_running_containers(
-        Path(meta.compose_path).read_text(encoding="utf-8"), env_suffix
+        (REPO_ROOT / meta.compose_path).read_text(encoding="utf-8"), env_suffix
     )
     if not expected:
         raise RuntimeError(
