@@ -103,22 +103,33 @@ def _sanitized_env() -> dict[str, str]:
     environment, and a hand-picked PATH-only one is not a smaller version of
     that but a different one, where git and grep can behave differently (HOME,
     locale) and a false verdict here would be invisible.
+
+    The exception is the whole ``GIT_*`` family rather than a list of names.
+    Three were stripped at first -- ``GIT_DIR``, ``GIT_WORK_TREE``,
+    ``GIT_INDEX_FILE`` -- and an audit pointed out the list was open:
+    ``GIT_OBJECT_DIRECTORY``, ``GIT_COMMON_DIR``, ``GIT_CONFIG_GLOBAL``,
+    ``GIT_CEILING_DIRECTORIES`` redirect git just as effectively, and
+    ``GIT_AUTHOR_*``/``GIT_COMMITTER_*`` beat the ``-c user.*`` pins outright
+    because git reads identity from the environment ahead of config. Nothing
+    here needs any of them, and a prefix is closed where a list is open.
     """
     return {
-        name: value
-        for name, value in os.environ.items()
-        if name not in {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"}
+        name: value for name, value in os.environ.items() if not name.startswith("GIT_")
     }
 
 
 def _git(*args: str, cwd: Path) -> str:
     """git in a throwaway repository, deaf to the ambient user's configuration.
 
-    Identity, signing and hooks are all pinned rather than inherited: a global
-    ``commit.gpgsign = true`` whose gpg waits on a pinentry, or a global
-    ``core.hooksPath`` holding a pre-commit hook, would otherwise block here
-    forever. ``_sanitized_env`` deliberately keeps ``HOME``, so ``~/.gitconfig``
-    is in play and these have to be turned off explicitly.
+    Identity, signing, hooks and the filesystem monitor are pinned rather than
+    inherited. ``_sanitized_env`` deliberately keeps ``HOME``, so
+    ``~/.gitconfig`` is in play, and each of these can block: a
+    ``commit.gpgsign = true`` whose gpg waits on a pinentry with no TTY, a
+    ``core.hooksPath`` holding a pre-commit hook, or a ``core.fsmonitor``
+    pointing at a daemon that stopped answering -- the last one measured
+    blocking ``git add -A`` with the other three pins already in place.
+    Identity is pinned here *and* by dropping ``GIT_AUTHOR_*``/
+    ``GIT_COMMITTER_*`` in ``_sanitized_env``, since those beat ``-c``.
     """
     return subprocess.run(
         [
@@ -133,6 +144,8 @@ def _git(*args: str, cwd: Path) -> str:
             "tag.gpgsign=false",
             "-c",
             "core.hooksPath=/dev/null",
+            "-c",
+            "core.fsmonitor=false",
             *args,
         ],
         cwd=cwd,
@@ -311,14 +324,16 @@ def _gate_steps(generator: str, files: list[str], tmp_path: Path) -> list[tuple]
     return reached
 
 
-def _stale_tree(generator: str, tmp_path: Path) -> Path:
-    """A miniature repository where ``generator``'s index is out of date.
+def _tree(tmp_path: Path, *, stale_for: str | None) -> Path:
+    """A miniature repository, optionally with ``stale_for``'s index out of date.
 
     The generators resolve their root from their own location
     (``Path(__file__).resolve().parents[1]``), so copying them next to a copy
     of the docs they read is enough to point them at this tree.
     """
-    root = (tmp_path / "tree").resolve()
+    root = (tmp_path / ("stale" if stale_for else "clean")).resolve()
+    if root.exists():
+        return root
     (root / "tools").mkdir(parents=True)
     for name in GENERATOR_INPUTS:
         shutil.copy2(ROOT / name, root / name)
@@ -327,7 +342,9 @@ def _stale_tree(generator: str, tmp_path: Path) -> Path:
     for name in ("MANIFEST.yaml", "README.md"):
         shutil.copy2(ROOT / "docs/ssot" / name, root / "docs/ssot" / name)
 
-    if generator == "tools/gen_project_index.py":
+    if stale_for is None:
+        return root
+    if stale_for == "tools/gen_project_index.py":
         # A new project doc the committed index cannot know about. Built from
         # segments on purpose: this file never exists, and spelling it as one
         # literal would make test_code_doc_path_references_resolve read it as a
@@ -381,7 +398,7 @@ def _markers_intact(generator: str, root: Path) -> None:
 def test_the_stale_fixture_is_actually_stale(generator: str, tmp_path: Path) -> None:
     """If the fixture did not make the index stale, every bite test below would
     pass without proving anything."""
-    root = _stale_tree(generator, tmp_path)
+    root = _tree(tmp_path, stale_for=generator)
     _markers_intact(generator, root)
     result = subprocess.run(
         ["python3", generator],
@@ -389,6 +406,7 @@ def test_the_stale_fixture_is_actually_stale(generator: str, tmp_path: Path) -> 
         capture_output=True,
         text=True,
         timeout=SUBPROCESS_TIMEOUT_S,
+        env=_sanitized_env(),
     )
     assert result.returncode != 0, f"{generator} reported a stale tree as fine"
     other = next(g for g in GENERATOR_INPUTS if g != generator)
@@ -398,6 +416,7 @@ def test_the_stale_fixture_is_actually_stale(generator: str, tmp_path: Path) -> 
         capture_output=True,
         text=True,
         timeout=SUBPROCESS_TIMEOUT_S,
+        env=_sanitized_env(),
     )
     # Only the targeted index is stale, so a step that runs both must be
     # failing because of this one -- which is what proves the failure
@@ -405,53 +424,86 @@ def test_the_stale_fixture_is_actually_stale(generator: str, tmp_path: Path) -> 
     assert paired.returncode == 0, f"{other} is also stale; the fixture is not isolated"
 
 
+def _run_step(step: dict, root: Path, env: dict[str, str]) -> int:
+    """Exit code of the step's own script, run against ``root``."""
+    script = root / "step.sh"
+    script.write_text(
+        _expand(step["run"], {"${{ github.workspace }}": str(root)}), encoding="utf-8"
+    )
+    return subprocess.run(
+        ["bash", "-e", str(script)],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=SUBPROCESS_TIMEOUT_S,
+        env=env,
+    ).returncode
+
+
 @pytest.mark.parametrize("generator", sorted(GENERATOR_INPUTS))
 @pytest.mark.parametrize("which_input", (0, 1))
+@pytest.mark.parametrize("mixed", (False, True), ids=("docs-only", "with-code"))
 def test_every_generator_input_reaches_a_gate_that_bites(
-    generator: str, which_input: int, tmp_path: Path
+    generator: str, which_input: int, mixed: bool, tmp_path: Path
 ) -> None:
+    """Every gate a change reaches must pass on a fresh index and fail on a stale one.
+
+    Both halves are load-bearing, and each was added because a mutation beat
+    the version without it:
+
+    - without the fresh-index half, replacing the step body with a bare
+      ``exit 1`` -- the gate removed outright, every Markdown pull request red
+      regardless of the index -- satisfied the staleness assertion and all
+      four cases passed. ``returncode != 0`` is satisfied by a step that has
+      stopped checking anything.
+    - without ``mixed``, every input for ``gen_project_index`` was pure
+      Markdown, so ``has_non_doc`` was false and infra-ci's copy of the gate
+      was never reached. Putting ``|| true`` on it -- the exact pattern this
+      file's docstring says it refuses -- left all 15 tests green.
+
+    And the verdict is taken over *every* gate reached, not any of them: a
+    reached step that names the generator and swallows its exit code is a lie
+    whether or not a sibling gate happens to cover the same change.
+    """
     files = [GENERATOR_INPUTS[generator][which_input]]
+    if mixed:
+        # A non-Markdown file, so has_non_doc is true and infra-ci's own copy
+        # of the gate is reached as well as docs.yml's.
+        files.append("libs/env.py")
     reached = _gate_steps(generator, files, tmp_path)
     assert reached, (
         f"a pull request changing only {files} runs no check that invokes "
         f"{generator}, so it can leave that index stale and stay green"
     )
 
-    root = _stale_tree(generator, tmp_path)
-    _markers_intact(generator, root)
-    shim = root / "bin"
-    shim.mkdir()
+    clean = _tree(tmp_path, stale_for=None)
+    stale = _tree(tmp_path, stale_for=generator)
+    _markers_intact(generator, stale)
+    shim = tmp_path / "bin"
+    shim.mkdir(exist_ok=True)
     (shim / "uv").write_text(UV_SHIM, encoding="utf-8")
     (shim / "uv").chmod(0o755)
     env = _sanitized_env() | {"PATH": f"{shim}:{os.environ['PATH']}"}
 
-    bit = []
     for workflow, job_name, step in reached:
+        where = f"{workflow.name}:{job_name} step {step.get('name')!r}"
         job = _jobs(workflow)[job_name]
         assert not step.get("continue-on-error"), (
-            f"{workflow.name}:{job_name} step {step.get('name')!r} is "
-            "continue-on-error, so its verdict cannot fail the job"
+            f"{where} is continue-on-error, so its verdict cannot fail the job"
         )
         assert not job.get("continue-on-error"), (
             f"{workflow.name}:{job_name} is continue-on-error"
         )
-        script = root / "step.sh"
-        script.write_text(
-            _expand(step["run"], {"${{ github.workspace }}": str(root)}),
-            encoding="utf-8",
-        )
-        result = subprocess.run(
-            ["bash", "-e", str(script)],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            timeout=SUBPROCESS_TIMEOUT_S,
-            env=env,
-        )
-        bit.append((workflow.name, job_name, step.get("name"), result.returncode))
 
-    assert any(code != 0 for *_, code in bit), (
-        f"every gate reached by a change to {files} ran against a tree whose "
-        f"{generator} index is stale and still reported success: {bit} -- the "
-        "step names the generator but no longer lets its verdict out"
-    )
+        on_fresh = _run_step(step, clean, env)
+        assert on_fresh == 0, (
+            f"{where} exits {on_fresh} against a tree whose indexes are already "
+            "in sync -- it is not gating, it is just red, and an always-red "
+            "step satisfies the staleness check below without checking anything"
+        )
+        on_stale = _run_step(step, stale, env)
+        assert on_stale != 0, (
+            f"{where} ran against a tree whose {generator} index is stale and "
+            "still reported success -- it names the generator but no longer "
+            "lets its verdict out"
+        )

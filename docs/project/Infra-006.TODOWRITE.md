@@ -81,13 +81,33 @@ Track top issues discovered during documentation engineering.
      （它改不了这两个索引，且 `pr_merge_gate` 会以「required check(s) never reported」拦下这种 PR，
      所以不是可利用的洞——但结论写宽了就是错的。）已把 SSOT、本条与测试 docstring 的说法
      收敛到「生成器读的文件」。
+- **第三轮盲审（只喂代码，屏蔽全部 `*.md` 与 `docs/`）把这个测试打穿了两次，都成立**：
+  1. 把 docs.yml 的步骤正文换成**无条件 `exit 1`**（注释里仍写着两个生成器的名字）——
+     门禁彻底没了、每个文档 PR 都红，**19 个用例照样全绿**。因为断言只有
+     `returncode != 0`，一个永远红的假门禁轻松满足它。**「红」和「会判断」不是一回事。**
+  2. `gen_project_index` 的两个输入都是纯 `.md`，于是 `has_non_doc=false`，
+     infra-ci 里那份同样的门禁**从来没被这个套件碰到过**。给它加 `|| true`——
+     正是本文件 docstring 点名拒绝的那种写法——**15 个用例全绿**。
+- 两条的修法是同一个：**断言必须能分辨**。现在每个被触达的门禁都跑**两遍**：
+  对一棵**索引同步**的树必须 exit 0，对一棵**索引过期**的树必须 exit 非 0；
+  而且是对**每一个**被触达的门禁都要求（不是 `any`）——一个写着生成器名字却吞掉它退出码的
+  步骤就是假的，旁边有没有另一个门禁兜着都一样。参数化新增 `mixed`（输入 + 一个非文档文件），
+  把 infra-ci 那份也拉进射程。
+- 同轮还有一条 MIDDLE：`core.fsmonitor` 是和 gpgsign/hooksPath 同族的**第四个**挂起点，
+  三个 `-c` 都钉了也没钉它（实测：其余三个都在的情况下 `git add -A` 仍被阻塞）。
+  已加 `-c core.fsmonitor=false`。另外 `_sanitized_env` 原本只剔三个名字，而
+  `GIT_AUTHOR_*`/`GIT_COMMITTER_*` 能直接盖过 `-c user.*`、`GIT_CONFIG_GLOBAL` 等同族还有一串——
+  **名单是开集，前缀是闭集**，改成剔掉整个 `GIT_*`。
 - 反向验证（改完后逐个复现审计员的攻击）：
   | 怎么废掉门禁 | 测试结果 |
   |---|---|
   | 步骤整个删掉（原始缺陷） | 3 红 |
-  | 步骤加 `\|\| true` | 3 红 |
-  | 步骤加 `continue-on-error: true` | 4 红 |
-  | 原样 | 15 全绿 |
+  | 步骤加 `\|\| true` | 8 红 |
+  | 步骤加 `continue-on-error: true` | 8 红 |
+  | 步骤换成无条件 `exit 1`（盲审攻击 1，此前 19 绿） | **8 红** |
+  | infra-ci 的 project-index 门禁加 `\|\| true`（盲审攻击 2，此前 15 绿） | **2 红** |
+  | 原样 | 19 全绿 |
+  | 敌对 `~/.gitconfig`（fsmonitor + gpgsign 双挂起） | 19 绿 / 7.0s（未加固时 `add -A` 8 秒被杀） |
 
 ## Latest Findings (2026-06-11)
 
