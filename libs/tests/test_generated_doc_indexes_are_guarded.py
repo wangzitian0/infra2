@@ -49,6 +49,9 @@ from tools import gen_project_index, gen_ssot_index
 
 ROOT = Path(__file__).resolve().parents[2]
 INFRA_CI = ROOT / ".github" / "workflows" / "infra-ci.yml"
+# The classifier step's own id, so a second `run:` step in that job cannot
+# be mistaken for it.
+DETECT_STEP_ID = "check"
 
 # Nothing here should take seconds. Unbounded, a blocked subprocess holds
 # `test-deployer-logic` -- a required check with no `timeout-minutes:` -- until
@@ -109,13 +112,39 @@ def _git(*args: str, cwd: Path) -> str:
 
 
 def _detect_changes_script() -> str:
-    """infra-ci's own doc/non-doc classifier, lifted out rather than restated."""
+    """infra-ci's own doc/non-doc classifier, lifted out rather than restated.
+
+    Selected by ``id``, not by being the only ``run:`` step: the job is free to
+    grow a second one, and picking whichever happens to be first would then
+    execute something other than the classifier while still looking right.
+
+    ``bash -e`` below is GitHub's implicit default, which holds only while
+    nothing declares otherwise. A ``shell:`` on the step, or in ``defaults.run``
+    on the job or the workflow, changes the semantics -- ``bash {0}`` drops
+    ``-e`` -- so this refuses rather than measuring a different shell than CI
+    runs. That is the same trap this file's predecessor was defeated by.
+    """
     doc = yaml.safe_load(INFRA_CI.read_text(encoding="utf-8"))
     keys = [k for k in (True, "on") if k in doc]
     assert len(keys) == 1, f"infra-ci.yml has triggers under {keys}"
-    steps = [s for s in doc["jobs"]["detect-changes"]["steps"] if s.get("run")]
-    assert len(steps) == 1, f"expected one run step in detect-changes, got {steps}"
-    return steps[0]["run"]
+    job = doc["jobs"]["detect-changes"]
+    steps = [s for s in job["steps"] if s.get("id") == DETECT_STEP_ID]
+    assert len(steps) == 1, (
+        f"expected exactly one step with id {DETECT_STEP_ID!r} in detect-changes, "
+        f"got {[s.get('id') for s in job['steps']]}"
+    )
+    step = steps[0]
+    declared = [
+        step.get("shell"),
+        ((job.get("defaults") or {}).get("run") or {}).get("shell"),
+        ((doc.get("defaults") or {}).get("run") or {}).get("shell"),
+    ]
+    assert not any(declared), (
+        f"a `shell:` override is in play ({declared}); `bash -e` below would no "
+        "longer be what CI runs"
+    )
+    assert step.get("run"), f"step {DETECT_STEP_ID!r} has no run body"
+    return step["run"]
 
 
 def _has_non_doc(files: list[str], tmp_path: Path) -> bool:
