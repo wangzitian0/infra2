@@ -6,12 +6,17 @@ Its own docstring says so -- ``--strict  # CI: missing creds -> exit 2``.
 
 The only caller passed ``--strict`` and then made it unreachable: a shell
 branch ahead of it printed ``SKIP`` and ``exit 0`` whenever the secret was
-empty, which on this repository it always is (``ZAI_CODING_CN_API_KEY`` is not
-in the repository's secrets). So the daily "real token-consuming E2E proof of
-the pi main chain" would have reported success every day without ever
-launching pi -- the exact failure the tool was written to stop, since #758's
-premise is that "every unit/fixture gate stayed green while the chain was
-broken in production".
+empty. Every run without the secret would therefore have reported success
+without ever launching pi -- and on 2026-09-22, when this was written,
+``ZAI_CODING_CN_API_KEY`` was not among the repository's secrets, so that was
+every run the daily "real token-consuming E2E proof of the pi main chain"
+would ever have made. Exactly the failure the tool was written to stop, since
+#758's premise is that "every unit/fixture gate stayed green while the chain
+was broken in production".
+
+Whether the secret is configured today is not what this test depends on. The
+defect was the step answering the credential question at all; the assertions
+below hold either way.
 
 **This test executes the step rather than reading it.** Asserting on the shell
 text would only forbid the one spelling that happened to be used: a guard that
