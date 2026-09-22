@@ -219,9 +219,33 @@ def self_governing_files() -> frozenset[str]:
             if (ROOT / test).is_file():
                 closure.add(test)
     closure |= set(RULE_TEXT_FILES)
+    # 每一个 workflow 文件。它们**决定这个门禁怎么判**，而闭包走不到它们：
+    # `WORKFLOW_DIR = ROOT / ".github" / "workflows"` 是路径拼接，`_repo_deps` 的
+    # 字面量正则看不见；而 `_declared_deploy_globs()` 每次都从工作树重读它们来决定
+    # 哪些路径一合就部署，`_required_checks()` 也从它们解析必需检查的显示名。
+    #
+    # 审计实测（2026-09-22）的绕过：一个 PR 同时改 `libs/alerting.py` 和
+    # `apply-observability.yml`，把前者从后者的 `on.push.paths` 里删掉 ——
+    # 门禁读的是这个 PR 自己那份 workflow，于是「合流会触发 observability apply」
+    # 这条升级不再成立，判定为 ready=True / owner_required=False / exit=0。
+    # 那是 AGENTS.md 明文列为必须回 owner 的一类，被会话权限直接合掉。
+    closure |= {f for f in _all_workflow_files() if (ROOT / f).is_file()}
     if seed not in closure:  # pragma: no cover - defensive
         closure = {seed, *RULE_TEXT_FILES}
     return frozenset(closure)
+
+
+def _all_workflow_files() -> list[str]:
+    """`.github/workflows` 下的每个 workflow，相对仓库根。"""
+    # 直接拼相对路径，不用 `relative_to(ROOT)`：`WORKFLOW_DIR` 是 import 期从原始
+    # ROOT 算出来的，而测试会 monkeypatch `gate.ROOT`；那时两者不再有父子关系，
+    # `relative_to` 抛 ValueError，把一个只读的列举变成崩溃。
+    if not WORKFLOW_DIR.is_dir():
+        return []
+    return sorted(
+        f".github/workflows/{p.name}"
+        for p in list(WORKFLOW_DIR.glob("*.yml")) + list(WORKFLOW_DIR.glob("*.yaml"))
+    )
 
 
 # ---- Which way did a change to the rules move? --------------------------------------
@@ -298,6 +322,64 @@ def _inventory_only_gained_authority(base_text: str, head_text: str) -> bool:
 # Self-governing paths a proof exists for. Everything else in the closure is unproven
 # by construction, which is the point: this set only grows when someone can state what
 # the file's decision input is and which way is stricter.
+def _workflow_only_gained_authority(base_text: str, head_text: str) -> bool:
+    """True 当这份 workflow 的改动只会让门禁更常说「不」。
+
+    门禁从 workflow 里读两样东西，两样都得只增不减：
+
+    * `on.push.paths` —— 哪些路径一合就部署。**多**一条 = 多一类改动要回 owner。
+    * 每个 job 报告出来的检查名 —— `_required_checks()` 取 `name or job_id`，所以
+      这里必须用同一个取法。只收有 `name:` 的 job 会让「给一个无名 job 加 name」
+      看起来是超集，而它实际上把那条必需检查从 job id 改名了，旧名字从此不再报告。
+
+    **`paths` 缺失不是空集**：GitHub Actions 把「没有 paths」当成「所有路径」。
+    当成空集的话，「给一个本来无 paths 的 workflow 加上 paths 过滤」——一次收窄、
+    一次放松——会被证明成收紧。这正是 `_inventory_only_gained_authority` 里防过的
+    空集陷阱，在这里换了个形状（#809 review）。所以 paths 用 None 表示「全部」，
+    并显式处理 base 全部 / head 收窄 这一组。
+
+    其余随便改（`run:`、`env:`、新增 job……）都不影响这两个判定输入，不设限。
+    """
+
+    def read(text):
+        try:
+            doc = yaml.safe_load(text)
+        except yaml.YAMLError:
+            return None
+        if not isinstance(doc, dict):
+            return None
+        on = doc.get(True, doc.get("on"))
+        push = on.get("push") if isinstance(on, dict) else None
+        if isinstance(push, dict) and "paths" in push:
+            raw = push["paths"]
+            # 标量字符串会被 `frozenset(str(x) for x in raw)` 拆成字符集合。
+            if not isinstance(raw, list):
+                return None
+            paths = frozenset(str(x) for x in raw)
+        else:
+            paths = None  # 没有 paths = 所有路径
+        jobs = doc.get("jobs")
+        if not isinstance(jobs, dict):
+            return None
+        names = frozenset(
+            str((spec.get("name") if isinstance(spec, dict) else None) or job_id)
+            for job_id, spec in jobs.items()
+        )
+        return paths, names
+
+    base, head = read(base_text), read(head_text)
+    if base is None or head is None:
+        return False
+    base_paths, head_paths = base[0], head[0]
+    if base_paths is None:
+        # base 触发于所有路径。只有 head 也触发于所有路径才不算放松。
+        if head_paths is not None:
+            return False
+    elif head_paths is not None and not base_paths <= head_paths:
+        return False
+    return base[1] <= head[1]
+
+
 DIRECTION_PROOFS = {
     "docs/ssot/ci-gate-inventory.yaml": _inventory_only_gained_authority,
 }
@@ -615,6 +697,20 @@ def _gh(argv: Sequence[str]) -> str:
     return result.stdout
 
 
+def _direction_proof_for(path: str):
+    """这个文件的方向证明，没有则 None。
+
+    workflow 走前缀匹配而不是逐个登记：闭包本身就是算出来的（`_all_workflow_files()`），
+    再手写一份同样的清单，就是今天反复在拆的那种「两份会漂移的手写清单」。
+    `DIRECTION_PROOFS` 留给逐个登记的个案。
+    """
+    if path in DIRECTION_PROOFS:
+        return DIRECTION_PROOFS[path]
+    if path.startswith(".github/workflows/"):
+        return _workflow_only_gained_authority
+    return None
+
+
 def _file_at(repo: str, ref: str, path: str, *, gh: Runner = _gh) -> str | None:
     """A file's contents at a ref, or None if it cannot be read.
 
@@ -710,7 +806,7 @@ def _proven_tighter(
     """
     proven: list[str] = []
     for path in sorted(set(files) & self_governing_files()):
-        proof = DIRECTION_PROOFS.get(path)
+        proof = _direction_proof_for(path)
         if proof is None:
             continue
         base_text = _file_at(repo, base, path, gh=gh)

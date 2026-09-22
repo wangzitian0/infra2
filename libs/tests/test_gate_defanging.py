@@ -362,3 +362,65 @@ def test_a_blank_workflow_is_not_a_lint_failure(tmp_path, body) -> None:
     blank = tmp_path / "blank.yml"
     blank.write_text(body, encoding="utf-8")
     assert ci_gate_lint.lint_workflow(blank) == []
+
+
+# -- 一条豁免只豁免它写在谁头上的那一个（审计 2026-09-22 第三层）-----------------
+
+SAME_NAME_ACROSS_JOBS = """
+jobs:
+  advisory_job:
+    steps:
+      - name: Lint
+        # gate-exempt: advisory job, flakiness tolerated
+        continue-on-error: true
+        run: ruff check .
+  required_job:
+    steps:
+      - name: Lint
+        continue-on-error: true
+        run: ruff check .
+"""
+
+
+def test_an_exemption_does_not_cross_into_another_job_with_the_same_step_name() -> None:
+    """同一个绕过的第三层。
+
+    前两层：workflow 级开关（任一豁免静默所有 job 级 defang）、`current` 跨声明残留
+    （无名 step 上的注释豁免了外层 job）。这一层是**文件级扁平集合**：只按名字记，
+    于是 advisory job 里合法豁免的 `Lint`，让 required job 里同名、**毫无豁免声明**的
+    `continue-on-error` 被静默放过。
+
+    `Lint` / `Test` / `Build` 跨 job 重名在真实 workflow 里极其常见，不需要恶意构造。
+    审计实测发现（2026-09-22），此前没有任何测试覆盖 —— 已有的那条只测了不同 job id
+    下**不同名**的 step，恰好绕开了会撞车的场景。
+    """
+    parsed = _wf(SAME_NAME_ACROSS_JOBS)
+    assert ci_spec.defanged_steps(parsed, "advisory_job", SAME_NAME_ACROSS_JOBS) == []
+    assert ci_spec.defanged_steps(parsed, "required_job", SAME_NAME_ACROSS_JOBS) == [
+        "Lint"
+    ], "required job 的 Lint 没有任何豁免声明，必须报出来"
+
+
+BLOCK_SCALAR_LOOKALIKE = """
+jobs:
+  gate:
+    steps:
+      - name: Print an example
+        run: |
+          cat <<'YAML'
+          - name: Run something risky
+            # gate-exempt: 这只是 heredoc 里的示例文本
+          YAML
+      - name: Run something risky
+        continue-on-error: true
+        run: ./flaky.sh
+"""
+
+
+def test_text_inside_a_block_scalar_is_not_a_declaration() -> None:
+    """`run: |` 的正文是字符串，不是声明。把它当声明会凭空造出一条谁都没写过的豁免，
+    而写它的人根本不知道自己豁免了什么。"""
+    found = ci_spec.defanged_steps(
+        _wf(BLOCK_SCALAR_LOOKALIKE), "gate", BLOCK_SCALAR_LOOKALIKE
+    )
+    assert found == ["Run something risky"], found
