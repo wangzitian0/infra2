@@ -13,7 +13,8 @@ These are harness defaults, not a replacement for repository-local contributor r
 
 2. Give each change one stable work key: an issue ID, project ID, or explicit
    standalone key. The physical form of that claim is the Root-level worktree rule (one worktree
-   per issue, issue prefix in the directory name). Its source is
+   per work key, with the key as the directory prefix -- the issue number for issue
+   work, the project or standalone key otherwise). Its source is
    `dev_env/workspace-iac/etc/rules/subagents.md` 铁则 6, which `ws-apply` projects into
    the workspace root `AGENTS.md` one level above this repository; this guide does not
    restate it.
