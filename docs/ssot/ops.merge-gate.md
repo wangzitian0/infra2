@@ -11,13 +11,9 @@
 
 ## 可合流条件（AI Merge，全部必需）
 
-- **常设合流权（2026-09-21 owner 批准，取代逐-head 与会话级授权；2026-09-22 owner 确认
-  覆盖其名下全部仓库）**：标准 PR 流程走完、下列条件全部满足的 PR，AI 可自行合流；不需要
-  owner 逐个批准，不需要每个会话重新授权，**也不需要按仓库重新申请**——进入 App 仓库后
-  仍适用，不要因为"App 自治"而重新推导出需要单独批准。
-  逐-head 批准在实际节奏下把交付停在等待上（2026-09-08 单日 11 个 PR，多数在 Copilot review
-  后 head 变化），而真正需要人看的那一类反而淹没其中；会话级授权只是把同一问题挪到每个会话开头。
-  保留的是下面这些**客观可判定**的条件，以及仍需 owner 的两类变更（见文末）。
+- **常设合流权**是 workspace 级事实（工作区根 `AGENTS.md`「合流授权」），本文不重述其范围；
+  本文只定义 infra2 自己的门禁：标准 PR 流程走完、下列**客观可判定**条件全部满足的 PR，AI
+  可自行合流，剩下仍需 owner 的两类变更见文末。
 - **合流真源唯一**：目标分支正确，PR `mergeable`，无冲突；检查与合流必须针对同一个 `head SHA`，禁止用本地旧结果或旧 review 代替。
 - **Merge Authority 全绿**：[`docs/ssot/ci-gate-inventory.yaml`](ci-gate-inventory.yaml) 中该变更适用且 `blocks_merge: true` 的检查全部成功；pending、failure、cancelled、意外 skipped 或无法读取均视为不满足。
 - **Review 已闭环（加权阻塞）**：required review 已满足，所有 actionable conversation / review threads 已处理并 resolved；不得自行忽略、dismiss 或用过期 review 代替当前 head 审查。未 resolved 的 review 发现（不论来源——human reviewer、Copilot、/code-review 等）按 severity 加权计分：high=1.0、middle=0.5、low=0.25，未标注 severity 的按 middle 计。**未 resolved 发现的加权总分 ≥ 1.0 即视为未闭环、禁止合流**，不要求单条 high 才阻塞——例如 2 条 middle 或 4 条 low 累计到位同样阻塞。达到门槛后必须逐条修复，或取得 owner 对具体发现的明确豁免并留痕，方可标记为已处理。
@@ -77,10 +73,9 @@
 
 2026-09-08 引入会话级合流授权，以绕开逐-head 批准的等待；2026-09-21 owner 以
 「只要是标准 PR 过的，且各类 check 都过了，你可以 merge 代码」取代两者，改为上文的常设合流权。
-2026-09-22 owner 进一步澄清覆盖范围：「我的所有 repo 都放开 merge 权限了啊。现在唯一保留的
-是部署 prod 的权限」——授权按 owner 名下仓库整体给出，不按仓库逐个申请。文末仍需 owner 的
-第二类（改动"决定合流的东西"本身）不属于权限保留，而是自我裁决问题：门禁从工作树读规则，
-AI 合流自己的 PR 时读到的就是该 PR 引入的版本。
+2026-09-22 owner 澄清授权覆盖其名下全部仓库，这条事实随之上提到 workspace 级规则（dev_env#59）；
+本文只保留 infra2 自己的门禁条件。文末仍需 owner 的第二类（改动"决定合流的东西"本身）不属于
+权限保留，而是自我裁决问题：门禁从工作树读规则，AI 合流自己的 PR 时读到的就是该 PR 引入的版本。
 判定与合流统一走 `python -m tools.pr_merge_gate <n> --policy either --request-review --merge`
 （exit 1 = 未到时机，exit 2 = 需要 owner），不靠肉眼看表。
 
