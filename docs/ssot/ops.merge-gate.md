@@ -55,18 +55,28 @@
   | 把一条 gate 提升为 `blocks_merge: true` | 收紧 | 门禁自行放行 |
   | 删除 / 降级一条 blocking gate | 放松 | **回 owner** |
   | 把一条 blocking gate 指向另一个 job | 放松（看着没删） | **回 owner** |
-  | 改 `pr_merge_gate.py` 或任何闭包内 Python | 无机械读法 | **回 owner** |
-  | 改 `AGENTS.md` / 本文件 | 散文，无机械读法 | **回 owner** |
+  | 改 `pr_merge_gate.py` 或任何闭包内 Python | 无机械读法，且无引用出口 | **回 owner** |
+  | 改 `AGENTS.md` / 本文件 | 散文，无方向读法 | **引用 owner 指示 → 放行；否则回 owner** |
   | base 侧读不到 / 解析失败 / blocking 集合为空 | 证明不出来 | **回 owner** |
 
   证明由 `_proven_tighter()` 从 GitHub 读 base 与 head 两个版本算出，**不读工作树、不看 PR
   描述的声称**。一个 PR 里只要还有一个闭包文件证明不出来，整个 PR 仍回 owner——被证明的那个
   不替其余文件背书。
+
+  **两份规则散文的第二条出口（2026-09-22 owner 指示：「授权给你 merge 权限啊。为什么卡我这？」）**：
+  `AGENTS.md` 与本文件读不出方向，但可以换一种能验的证据——PR body 里引用 owner 那句指示。
+  与下一条「受保护文件」不同，这条出口**由门禁自己核验**，不是人工核对的契约：
+  `_owner_instruction_quoted()` 要求 body 里存在一行匹配
+  `(?im)^(##+\s*)?(owner instruction|owner 指示)\b.*$`，且其后第一条非空行是引用
+  （`>` 开头，或含「...」原话）——标题下面没有引用文本、或压根没有这个标题，都判不存在，维持
+  回 owner。命中则这两份文件退出 `self_governing_files()` 的 unproven 集合，不再触发 exit 2；
+  闭包里其余文件（`pr_merge_gate.py` 本身、它 import 的一切、它读的数据、这些文件各自的测试）
+  不受影响——引用只对这两份散文生效，改代码本身仍回 owner，理由同上一条的"无机械读法"。
 - **受保护文件**（`CLAUDE.md`，及各 App 标注为 protected 的架构文档）不再单独要求二次批准，
   但修改它们的 PR 必须在 description 中引用授权它的那句 owner 指令，使授权可追溯——这是 PR
-  description 里的契约，由人核对，门禁不验。
-  注意 `AGENTS.md` 不在此列：#765 之后它装的是合流门禁的 5 点核心，因此归入上一条
-  「改动决定合流的东西」，仍需 owner 批准当前 head。
+  description 里的契约，由人核对，门禁不验（与上面 `AGENTS.md` / 本文件那条不同，那条门禁自验）。
+  `AGENTS.md` 与本文件不算在这条里——它们的引用出口在上一条，由 `pr_merge_gate.py` 机械核验，
+  不是这条的人工核对契约。
 - **合流后闭环**：使用仓库允许的合流方式；确认 merge commit 已落在目标分支并监看 post-merge checks。失败时立即停止 tag / promote，报告并修复，不得继续发布。
 
 ## 授权沿革

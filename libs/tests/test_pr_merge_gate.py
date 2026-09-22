@@ -268,12 +268,18 @@ class _Gh:
     """Canned gh answers; records a merge if asked."""
 
     def __init__(
-        self, *, unresolved=0, states=("pass",), pushed_iso="2026-09-15T06:55:22Z"
+        self,
+        *,
+        unresolved=0,
+        states=("pass",),
+        pushed_iso="2026-09-15T06:55:22Z",
+        body="",
     ):
         self.calls: list[list[str]] = []
         self.unresolved = unresolved
         self.states = states
         self.pushed_iso = pushed_iso
+        self.body = body
 
     def __call__(self, argv):
         if argv[:1] == ["api"] and "/git/trees/" in argv[1]:
@@ -302,6 +308,7 @@ class _Gh:
                     "changedFiles": 1,
                     "mergeable": getattr(self, "mergeable", "MERGEABLE"),
                     "mergeStateStatus": getattr(self, "merge_state", "CLEAN"),
+                    "body": self.body,
                     "commits": [
                         {"oid": "0" * 40, "committedDate": "2026-09-15T06:40:00Z"},
                         {"oid": "feedfacefeedface", "committedDate": self.pushed_iso},
@@ -376,6 +383,18 @@ def test_collect_reads_the_newest_commit_as_the_last_push():
         "Validate Vault Agent Config",
         "Validate Workspace Harness",
     ]
+
+
+def test_collect_reads_the_pr_body_for_the_owner_instruction_citation():
+    facts = gate.collect(704, gh=_Gh(body="## Owner instruction\n\n> 引用测试"))
+    assert facts.body == "## Owner instruction\n\n> 引用测试"
+
+
+def test_collect_defaults_a_missing_body_to_empty_not_none():
+    # gh returns null, not an absent key, for an empty PR description. `HeadFacts.body`
+    # is read by a regex, so it must be a str even when GitHub gave nothing back.
+    facts = gate.collect(704, gh=_Gh(body=None))
+    assert facts.body == ""
     assert facts.review_threads_total == 1
     assert facts.node_id == "PR_node"
     assert facts.reviews_on_head()[0][0] == "copilot-pull-request-reviewer"
@@ -971,6 +990,140 @@ def test_an_ordinary_green_head_still_merges():
     verdict = gate.evaluate(_green(files=("libs/x.py",)), now=NOW)
     assert verdict.ready
     assert not verdict.owner_required
+
+
+# -- #814: rule-text files get a second way to clear "what decides merges" --------
+#
+# AGENTS.md / ops.merge-gate.md have no direction-proof reading (prose, not a closed
+# schema), so they always went to the owner even for a change that only tightens the
+# gate. 2026-09-22 owner instruction ("授权给你 merge 权限啊。为什么卡我这？") added a
+# second, non-directional way out for exactly these two files: cite the instruction
+# in the PR body. `_owner_instruction_quoted` is the mechanical check for that
+# citation; it must not read anything else in self_governing_files() as excused.
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "## Owner instruction\n\n> 授权给你 merge 权限啊。为什么卡我这？",
+        "## owner 指示\n\n> 授权给你 merge 权限啊。为什么卡我这？",
+        "Owner instruction:\n> quote right under it, no blank line",
+        "## Owner Instruction\n\n「授权给你 merge 权限啊」",
+        "## Owner instruction\n\n\n> quote after two blank lines",
+        "intro text\n\n## Owner instruction\n> quote\n\nmore text after the quote",
+        "## Owner instruction\n\n> 授权给你 merge 权限啊",
+        # A 「...」 quote merely needs to appear on the line, not open it -- the
+        # SSOT wording is "含「...」原话", not "line starts with 「".
+        "## Owner instruction\n\n"
+        "2026-09-22: 「加速收敛啊，包括 sub-agent」;「总裁要约定心跳机制的哇」",
+        # Nested `>` markers are fine as long as a real word character follows
+        # them somewhere on the line -- only the markers-with-no-text shape is
+        # rejected (see the reject list below).
+        "## Owner instruction\n\n>> x",
+        "## Owner instruction\n\n> > 授权",
+        # An empty nested quote next to a real one still has real content
+        # somewhere on the line, so it counts.
+        "## Owner instruction\n\n「」」「真内容」",
+    ],
+)
+def test_owner_instruction_quoted_recognises_a_header_and_its_quote(body):
+    assert gate._owner_instruction_quoted(body)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "",
+        "no header at all, just prose that mentions the owner instruction",
+        "## Owner instruction\n\nthis only claims one exists, no quote follows",
+        "## Owner instruction",  # header with nothing after it
+        "## Owner instruction\n\n\n",  # header, then only blank lines to EOF
+        "## Something else\n\n> a quote, but under the wrong header",
+        # A bare `>` (or `「」`) is a citation of nothing -- it must not count as
+        # quoting the instruction just because it looks like markdown quote syntax.
+        "## Owner instruction\n\n>",
+        "## Owner instruction\n\n>   ",
+        "## Owner instruction\n\n「」",
+        # A stray `」` is not "content" either -- `\S` matches a closing bracket
+        # just as readily as real text, so a naive fix for the empty-quote bug
+        # above can still be fooled by an empty quote followed by loose `」`s.
+        "## Owner instruction\n\n「」」",
+        "## Owner instruction\n\n「」 」",
+        # Nested `>` quote markers with no quoted text are still a citation of
+        # nothing -- `>` itself must not count as the required word character.
+        "## Owner instruction\n\n>>",
+        "## Owner instruction\n\n> >",
+        "## Owner instruction\n\n> > >",
+        "## Owner instruction\n\n>>>",
+        # Punctuation-only content (no word character) does not count either.
+        "## Owner instruction\n\n> 。」",
+    ],
+)
+def test_owner_instruction_quoted_rejects_a_header_without_a_quote_beneath_it(body):
+    assert not gate._owner_instruction_quoted(body)
+
+
+def test_owner_instruction_quoted_tries_a_later_header_after_an_empty_one():
+    body = (
+        "## Owner instruction\n\nfirst attempt claims one, quotes nothing\n\n"
+        "## Owner instruction\n\n> second attempt actually quotes the words"
+    )
+    assert gate._owner_instruction_quoted(body)
+
+
+def test_rule_text_files_clear_the_owner_gate_when_the_body_cites_the_instruction():
+    verdict = gate.evaluate(
+        _green(
+            files=("AGENTS.md", "docs/ssot/ops.merge-gate.md"),
+            body="## Owner instruction\n\n> 授权给你 merge 权限啊。为什么卡我这？",
+        ),
+        now=NOW,
+    )
+    assert verdict.ready and verdict.exit_code == 0, verdict.reasons
+
+
+def test_rule_text_files_still_need_the_owner_without_a_citation():
+    """The control for the test above: an empty body is the pre-#814 status quo,
+    and the reason must point the caller at the way out."""
+    verdict = gate.evaluate(
+        _green(files=("AGENTS.md", "docs/ssot/ops.merge-gate.md")), now=NOW
+    )
+    assert verdict.owner_required and verdict.exit_code == 2
+    assert any("what decides merges" in r for r in verdict.reasons)
+    assert any("citing the owner instruction" in r for r in verdict.reasons), (
+        verdict.reasons
+    )
+
+
+def test_a_header_with_no_quote_beneath_it_still_needs_the_owner():
+    verdict = gate.evaluate(
+        _green(
+            files=("AGENTS.md",),
+            body="## Owner instruction\n\nthis merely asserts one exists",
+        ),
+        now=NOW,
+    )
+    assert verdict.owner_required and verdict.exit_code == 2
+
+
+def test_a_citation_does_not_excuse_the_gates_own_code():
+    """A quote in the body proves nothing about pr_merge_gate.py itself: the
+    defendant-rewrites-the-law hazard self_governing_files() exists for is
+    unaffected by what the PR body says about itself. Mirrors
+    test_a_proven_file_does_not_excuse_an_unproven_one for the direction-proof
+    carve-out."""
+    verdict = gate.evaluate(
+        _green(
+            files=("AGENTS.md", "tools/pr_merge_gate.py"),
+            body="## Owner instruction\n\n> 授权给你 merge 权限啊。为什么卡我这？",
+        ),
+        now=NOW,
+    )
+    assert verdict.owner_required and verdict.exit_code == 2
+    assert "tools/pr_merge_gate.py" in verdict.reasons[0]
+    assert "AGENTS.md" not in verdict.reasons[0], (
+        "the cited rule-text file must not be named as a blocker"
+    )
 
 
 def test_a_head_missing_from_the_commit_page_cannot_be_judged_settled():

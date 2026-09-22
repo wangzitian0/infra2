@@ -79,6 +79,68 @@ AUTOMATED_REVIEWERS = frozenset({"copilot-pull-request-reviewer"})
 # held, so `test_the_closure_still_covers_everything_the_list_did` pins it.
 RULE_TEXT_FILES = ("AGENTS.md", "docs/ssot/ops.merge-gate.md")
 
+# AGENTS.md §6's last line: a change to RULE_TEXT_FILES may skip the owner escalation
+# that `evaluate` would otherwise apply -- not because the prose stopped mattering, but
+# because a direction proof is impossible for prose (see the DIRECTION_PROOFS comment
+# below) and a cited instruction is the substitute the owner accepted for these two
+# files specifically. It is not a substitute for self_governing_files() as a whole:
+# pr_merge_gate.py itself, what it imports, the data it reads, and their tests are the
+# defendant-rewrites-the-law case and stay unproven regardless of what the body says.
+#
+# The header must be followed by an actual quote, not just a claim that one exists --
+# a heading with nothing under it, or prose that merely mentions "owner instruction",
+# proves nothing a reviewer could not equally assert for any other edit.
+# Kept byte-for-byte identical to the regex the merge-gate ruling (#814) specifies,
+# so the code and the SSOT that documents it cannot silently drift apart.
+_OWNER_INSTRUCTION_HEADER_RE = re.compile(
+    r"(?im)^(##+\s*)?(owner instruction|owner 指示)\b.*$"
+)
+# A quote must actually quote something: a bare `>` or an empty `「」` is a
+# citation of nothing and must not pass. Two shapes count, per the SSOT wording
+# ("`>` 开头，或含「...」原话"): (a) a `>` blockquote *with content after the
+# marker* -- anchored, since that is markdown quote syntax and only means
+# something at the start of the line; (b) a line that merely *contains* a
+# non-empty 「...」 quote anywhere -- unanchored, since "含" (contains) does not
+# require the quote to open the line. `.search()`, not `.match()`, evaluates
+# this: `^` inside alternative (a) still pins it to line-start, while
+# alternative (b) is free to match further in.
+#
+# "Content" means at least one word character (`[^\W_]` -- a Unicode word
+# character, excluding `_`, so CJK counts), not merely any non-whitespace
+# character. Excluding one marker character at a time (first a stray `」`,
+# then bare `>`) chases its own tail: `\S` after `>` also matched a second or
+# third `>`, so `>>` / `> >` / `>>>` (nested blockquote syntax, no quoted text)
+# still read as cited. A word-character requirement closes the whole class at
+# once instead of enumerating punctuation marks one bug report at a time.
+_QUOTE_LINE_RE = re.compile(r"^>.*[^\W_]|「[^」]*[^\W_][^」]*」")
+
+
+def _owner_instruction_quoted(body: str) -> bool:
+    """True when the PR body cites the owner instruction, not just names it.
+
+    Looks for a line matching `_OWNER_INSTRUCTION_HEADER_RE`, then the first
+    non-blank line after it: a `>` blockquote with content after the marker, or
+    a line containing a non-empty 「...」original-words quote, counts -- "content"
+    means at least one word character (letters/digits/CJK, not `_`), so a bare
+    `>`, nested markers with no text (`>>`, `> >`), an empty 「」, or
+    punctuation-only text all still count as no citation. Multiple headers are
+    tried independently, so one empty attempt does not shadow a real citation
+    further down the body.
+    """
+    lines = (body or "").splitlines()
+    for i, line in enumerate(lines):
+        if not _OWNER_INSTRUCTION_HEADER_RE.match(line):
+            continue
+        for later in lines[i + 1 :]:
+            stripped = later.strip()
+            if not stripped:
+                continue
+            if _QUOTE_LINE_RE.search(stripped):
+                return True
+            break  # first non-blank line under this header is not a quote
+    return False
+
+
 # AGENTS.md point 3: unresolved findings are weighted high=1.0 / middle=0.5 /
 # low=0.25, unlabelled counts as middle, and a total of 1.0 or more blocks.
 # The rule was written down and never implemented -- the gate counted threads,
@@ -243,6 +305,11 @@ def _all_workflow_files() -> list[str]:
 # reading -- any line of either can loosen anything -- so they keep going to the owner.
 # Unknown file, unreadable version, parse failure, empty base: all unproven. Loosening
 # always goes to the owner. The default, in every branch below, is the owner.
+#
+# RULE_TEXT_FILES (AGENTS.md, ops.merge-gate.md) have a second, non-directional way
+# out: a cited owner instruction in the PR body (`_owner_instruction_quoted`, applied
+# in `evaluate`). That is not a direction proof and does not extend to this module's
+# own code closure -- see the comment above `_OWNER_INSTRUCTION_HEADER_RE`.
 
 
 def _blocking_coordinates(text: str) -> frozenset[tuple[str, str, str]] | None:
@@ -622,6 +689,12 @@ class HeadFacts:
     absent_fields: tuple[str, ...] = ()
     # (reviewer login, commit reviewed, submitted epoch) — a review pins a head
     reviews: tuple[tuple[str, str, float], ...] = ()
+    # The PR description, read for the owner-instruction citation that AGENTS.md
+    # §6 lets RULE_TEXT_FILES substitute for a direction proof (see
+    # `_owner_instruction_quoted`). Defaults to "" -- a hand-built HeadFacts
+    # therefore cites nothing, which stays on the conservative side like every
+    # other default here.
+    body: str = ""
 
     def reviews_on_head(self) -> tuple[tuple[str, str, float], ...]:
         return tuple(r for r in self.reviews if r[1] == self.head_sha)
@@ -882,7 +955,7 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
                 "--json",
                 "number,state,isDraft,baseRefName,headRefOid,files,changedFiles,commits,id,reviews,"
                 "reviewDecision,"
-                "mergeable,mergeStateStatus",
+                "mergeable,mergeStateStatus,body",
             ]
         )
     )
@@ -1002,6 +1075,7 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
         mergeable=_field(view, "mergeable"),
         merge_state=_field(view, "mergeStateStatus"),
         base_changed_files=base_changed,
+        body=str(view.get("body") or ""),
         reviews=tuple(
             (
                 str((r.get("author") or {}).get("login") or ""),
@@ -1167,8 +1241,23 @@ def evaluate(
         )
         owner = True
 
+    quoted_instruction = _owner_instruction_quoted(facts.body)
+    # Membership test is `is_self_governing`, not `f in self_governing_files()`:
+    # the latter is computed from the current tree, so a deleted or renamed
+    # workflow path escapes it (#818). The citation carve-out below is
+    # independent of that fix -- it excuses RULE_TEXT_FILES specifically, not
+    # workflow paths, so the two compose without touching each other's cases.
     governing = sorted(f for f in facts.files if is_self_governing(f))
-    unproven = [f for f in governing if f not in facts.proven_tighter]
+    unproven = [
+        f
+        for f in governing
+        if f not in facts.proven_tighter
+        # RULE_TEXT_FILES get a second way to clear this check: a cited owner
+        # instruction in the PR body, verifiable by `_owner_instruction_quoted`
+        # rather than merely claimed. Everything else in the closure has no such
+        # carve-out -- see the comment above `_OWNER_INSTRUCTION_HEADER_RE`.
+        and not (f in RULE_TEXT_FILES and quoted_instruction)
+    ]
     if unproven:
         # Proven-tighter files are excluded, not the whole check: a PR that tightens the
         # inventory and edits the gate's Python still needs the owner for the Python.
@@ -1178,11 +1267,14 @@ def evaluate(
             f"working-tree copy is what judged this PR, so owner approval of head "
             f"{facts.head_sha[:7]} is required"
         )
+        if any(f in RULE_TEXT_FILES for f in unproven):
+            reasons.append(
+                "rule-text files (AGENTS.md / docs/ssot/ops.merge-gate.md) can clear "
+                "this instead by citing the owner instruction that authorised the "
+                "edit in the PR body, under a heading matching 'owner instruction' / "
+                "'owner 指示' followed by a quoted line (`> ...` or 「...」)"
+            )
         owner = True
-    # No escalation for protected files any more: the rule is now to cite the
-    # owner instruction that authorised the edit, which is a contract in the PR
-    # description and not a thing this tool can verify. The ones that genuinely
-    # must not be self-judged come from self_governing_files() above.
     if not _declared_deploy_globs()[1]:
         reasons.append(
             "cannot read .github/workflows to determine which paths deploy on "
