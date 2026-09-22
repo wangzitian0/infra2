@@ -45,6 +45,8 @@ def test_authorized_whitelists_not_empty() -> None:
     assert "openpanel" in AUTHORIZED_BUCKETS
     assert "signoz" in AUTHORIZED_BUCKETS
     assert "authentik-media" in AUTHORIZED_BUCKETS
+    assert "truealpha-raw" in AUTHORIZED_BUCKETS
+    assert "truealpha-staging-raw" in AUTHORIZED_BUCKETS
     assert "appwrite-0" not in AUTHORIZED_BUCKETS
     assert "appwrite-staging-0" not in AUTHORIZED_BUCKETS
 
@@ -100,6 +102,11 @@ def test_cli_main_fail_on_orphans_exit_code() -> None:
     # Without --fail-on-orphans, it reports orphans but exits with code 0
     exit_code_lenient = main(["--databases", "postgres", "activepieces"])
     assert exit_code_lenient == 0
+
+
+def test_cli_main_zero_inputs_exits_2() -> None:
+    """Verifies CLI exits with code 2 when no candidate assets are specified (anti-green-while-empty)."""
+    assert main([]) == 2
 
 
 def test_cli_main_json_and_dry_run_output() -> None:

@@ -63,6 +63,8 @@ AUTHORIZED_BUCKETS: frozenset[str] = frozenset(
         "authentik-media",
         "statements",
         "archive",
+        "truealpha-raw",
+        "truealpha-staging-raw",
     }
 )
 
@@ -183,6 +185,13 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if not (args.databases or args.buckets or args.paths):
+        print(
+            "Error: No candidate assets provided for reachability audit. Specify at least one of --databases, --buckets, or --paths.",
+            file=sys.stderr,
+        )
+        return 2
 
     report = run_audit(
         databases=args.databases,

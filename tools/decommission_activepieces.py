@@ -28,16 +28,21 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-def default_runner(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+def default_runner(
+    cmd: list[str],
+    *,
+    text: bool = True,
+    input: bytes | str | None = None,
+) -> subprocess.CompletedProcess[Any]:
     """Default process runner using subprocess.run."""
-    return subprocess.run(cmd, capture_output=True, text=True, check=False)
+    return subprocess.run(cmd, capture_output=True, text=text, input=input, check=False)
 
 
 def check_database_exists(
     db_name: str = "activepieces",
     *,
     container: str = "platform-postgres",
-    runner: Callable[[list[str]], subprocess.CompletedProcess[str]] = default_runner,
+    runner: Callable[..., Any] = default_runner,
 ) -> bool:
     """Check if database exists in PostgreSQL container."""
     cmd = [
@@ -51,7 +56,7 @@ def check_database_exists(
         f"SELECT 1 FROM pg_database WHERE datname = '{db_name}';",
     ]
     res = runner(cmd)
-    return res.returncode == 0 and "1" in res.stdout.strip()
+    return res.returncode == 0 and "1" in getattr(res, "stdout", "").strip()
 
 
 def export_database_backup(
@@ -59,11 +64,12 @@ def export_database_backup(
     output_path: Path,
     *,
     container: str = "platform-postgres",
-    runner: Callable[[list[str]], Any] = default_runner,
+    runner: Callable[..., Any] = default_runner,
 ) -> Path:
-    """Export custom-format pg_dump of the database."""
+    """Export custom-format pg_dump of the database without text-decoding stdout."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [
+    container_tmp = f"/tmp/{output_path.name}"
+    dump_cmd = [
         "docker",
         "exec",
         container,
@@ -71,21 +77,27 @@ def export_database_backup(
         "-U",
         "postgres",
         "-Fc",
+        "-f",
+        container_tmp,
         db_name,
     ]
-    res = runner(cmd)
+    res = runner(dump_cmd)
     if res.returncode != 0:
         raise RuntimeError(
             f"pg_dump failed for {db_name}: {getattr(res, 'stderr', 'unknown error')}"
         )
 
-    # If runner output contains binary or text dump
-    if hasattr(res, "stdout") and res.stdout:
-        if isinstance(res.stdout, bytes):
-            output_path.write_bytes(res.stdout)
-        elif isinstance(res.stdout, str):
-            output_path.write_text(res.stdout, encoding="latin1")
+    # Copy dump from container to host output_path
+    cp_cmd = ["docker", "cp", f"{container}:{container_tmp}", str(output_path)]
+    res_cp = runner(cp_cmd)
+    if res_cp.returncode != 0:
+        raise RuntimeError(
+            f"docker cp failed for {output_path}: {getattr(res_cp, 'stderr', 'unknown error')}"
+        )
 
+    # Cleanup container temporary dump file
+    cleanup_cmd = ["docker", "exec", container, "rm", "-f", container_tmp]
+    runner(cleanup_cmd)
     return output_path
 
 
@@ -94,7 +106,7 @@ def verify_backup_integrity(
     *,
     min_bytes: int = 1024,
     container: str = "platform-postgres",
-    runner: Callable[[list[str]], Any] = default_runner,
+    runner: Callable[..., Any] = default_runner,
 ) -> bool:
     """Verify backup file size and table structure via pg_restore -l."""
     if not backup_file.exists():
@@ -110,8 +122,9 @@ def verify_backup_integrity(
     cmd = ["pg_restore", "-l", str(backup_file)]
     res = runner(cmd)
     if res.returncode != 0:
+        dump_bytes = backup_file.read_bytes()
         cmd_docker = ["docker", "exec", "-i", container, "pg_restore", "-l"]
-        res_docker = runner(cmd_docker)
+        res_docker = runner(cmd_docker, input=dump_bytes, text=False)
         if res_docker.returncode != 0:
             err = getattr(res, "stderr", "") or getattr(res_docker, "stderr", "")
             raise ValueError(
@@ -139,18 +152,22 @@ def upload_backup_to_archive(
     *,
     bucket: str = "archive",
     archive_dir: Path | None = None,
-    runner: Callable[[list[str]], Any] = default_runner,
+    runner: Callable[..., Any] = default_runner,
 ) -> str:
-    """Save backup file to local archive directory and attempt MinIO archive upload."""
+    """Save backup file to local archive directory and upload to MinIO archive bucket."""
     target_dir = archive_dir or Path("/tmp/infra2_archive")
     target_dir.mkdir(parents=True, exist_ok=True)
     destination = target_dir / backup_file.name
     shutil.copy2(backup_file, destination)
 
-    # MinIO upload via mc if configured
+    # MinIO upload via mc with strict returncode verification
     minio_target = f"minio/{bucket}/activepieces/{backup_file.name}"
     cmd = ["mc", "cp", str(backup_file), minio_target]
-    runner(cmd)
+    res = runner(cmd)
+    if res.returncode != 0:
+        raise RuntimeError(
+            f"Failed to upload backup to MinIO ({minio_target}): exit {res.returncode}, stderr: {getattr(res, 'stderr', '')}"
+        )
 
     return f"s3://{bucket}/activepieces/{backup_file.name}"
 
