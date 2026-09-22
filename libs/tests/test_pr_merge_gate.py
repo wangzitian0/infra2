@@ -1257,3 +1257,197 @@ def test_a_directory_that_exists_but_cannot_be_read_is_not_healthy(tmp_path):
     finally:
         _os.chmod(workflows, 0o755)
         gate._declared_deploy_globs.cache_clear()
+
+
+# -- Direction of a change to the rules that judge merges ----------------------------
+#
+# Owner instruction 2026-09-22: "方向可机械证明为收紧则放行。放松需要给我审核."
+
+
+def _inv(*gates: tuple[str, str, str, bool]) -> str:
+    body = "".join(
+        f"  - id: {i}\n"
+        f"    stage: github_ci.merge_authority\n"
+        f"    task_category: t\n"
+        f"    workflow: {w}\n"
+        f"    job: {j}\n"
+        f"    blocks_merge: {str(b).lower()}\n"
+        for i, w, j, b in gates
+    )
+    return f"version: 1\nrepo_prefix: infra_ci.\ngates:\n{body}"
+
+
+BASE_INV = _inv(
+    ("infra_ci.lint", ".github/workflows/infra-ci.yml", "lint-python", True),
+    ("infra_ci.compose", ".github/workflows/infra-ci.yml", "validate-compose", True),
+)
+
+
+def test_an_unchanged_blocking_set_is_proven_tighter():
+    """The backfill shape: rows added, authority untouched. Equal is non-loosening."""
+    assert gate._inventory_only_gained_authority(BASE_INV, BASE_INV)
+
+
+def test_registering_a_non_blocking_gate_is_proven_tighter():
+    head = BASE_INV + (
+        "  - id: infra_ci.smoke\n"
+        "    stage: ops.scheduled_cleanup\n"
+        "    task_category: t\n"
+        "    workflow: .github/workflows/ops-checks.yml\n"
+        "    job: pi-chain-smoke\n"
+        "    blocks_merge: false\n"
+    )
+    assert gate._inventory_only_gained_authority(BASE_INV, head)
+
+
+def test_promoting_a_gate_to_blocking_is_proven_tighter():
+    head = _inv(
+        ("infra_ci.lint", ".github/workflows/infra-ci.yml", "lint-python", True),
+        (
+            "infra_ci.compose",
+            ".github/workflows/infra-ci.yml",
+            "validate-compose",
+            True,
+        ),
+        (
+            "infra_ci.vault",
+            ".github/workflows/infra-ci.yml",
+            "validate-vault-agent",
+            True,
+        ),
+    )
+    assert gate._inventory_only_gained_authority(BASE_INV, head)
+
+
+def test_removing_a_blocking_gate_is_not_proven():
+    head = _inv(
+        ("infra_ci.lint", ".github/workflows/infra-ci.yml", "lint-python", True)
+    )
+    assert not gate._inventory_only_gained_authority(BASE_INV, head)
+
+
+def test_demoting_a_blocking_gate_is_not_proven():
+    head = _inv(
+        ("infra_ci.lint", ".github/workflows/infra-ci.yml", "lint-python", True),
+        (
+            "infra_ci.compose",
+            ".github/workflows/infra-ci.yml",
+            "validate-compose",
+            False,
+        ),
+    )
+    assert not gate._inventory_only_gained_authority(BASE_INV, head)
+
+
+def test_repointing_a_blocking_gate_at_another_job_is_not_proven():
+    """The id set is unchanged and the count is unchanged -- but the gate now
+    watches a different job, which is how a blocking check becomes a passing one
+    without anything looking removed."""
+    head = _inv(
+        ("infra_ci.lint", ".github/workflows/infra-ci.yml", "lint-python", True),
+        ("infra_ci.compose", ".github/workflows/infra-ci.yml", "detect-changes", True),
+    )
+    assert not gate._inventory_only_gained_authority(BASE_INV, head)
+
+
+def test_an_empty_base_blocking_set_proves_nothing():
+    """Otherwise every head is a superset of nothing -- and the change that would
+    benefit most from that is the one that empties the set."""
+    assert not gate._inventory_only_gained_authority(_inv(), BASE_INV)
+    assert not gate._inventory_only_gained_authority("gates: []\n", BASE_INV)
+
+
+@pytest.mark.parametrize("bad", ["", "gates: [\n", "gates: notalist\n", "- a\n- b\n"])
+def test_an_unreadable_version_proves_nothing(bad):
+    assert not gate._inventory_only_gained_authority(bad, BASE_INV)
+    assert not gate._inventory_only_gained_authority(BASE_INV, bad)
+
+
+def test_only_files_with_a_stated_proof_can_be_proven():
+    """Python in the closure has no mechanical reading of "stricter", so it must never
+    be proven -- not even when the two versions are identical."""
+    calls: list[list[str]] = []
+
+    def fake_gh(argv):
+        calls.append(list(argv))
+        return "print('hello')\n"
+
+    proven = gate._proven_tighter(
+        "o/r",
+        "main",
+        "deadbeef",
+        ("tools/pr_merge_gate.py", "AGENTS.md", "libs/console.py"),
+        gh=fake_gh,
+    )
+    assert proven == ()
+    assert calls == [], "a file with no stated proof must not even be fetched"
+
+
+def test_an_unreachable_version_is_not_proven():
+    """Fail closed: if either side cannot be read, nothing is proven."""
+
+    def fake_gh(argv):
+        raise RuntimeError("404")
+
+    assert (
+        gate._proven_tighter(
+            "o/r", "main", "deadbeef", ("docs/ssot/ci-gate-inventory.yaml",), gh=fake_gh
+        )
+        == ()
+    )
+
+
+def test_a_proven_inventory_change_does_not_need_the_owner():
+    verdict = gate.evaluate(
+        _facts(
+            files=("docs/ssot/ci-gate-inventory.yaml", "tools/ci_gate_audit.py"),
+            proven_tighter=("docs/ssot/ci-gate-inventory.yaml",),
+        ),
+        now=NOW,
+    )
+    assert verdict.ready and verdict.exit_code == 0, verdict.reasons
+
+
+def test_the_same_change_unproven_still_needs_the_owner():
+    """The control for the test above: it is the proof doing the work, not the path."""
+    verdict = gate.evaluate(
+        _facts(files=("docs/ssot/ci-gate-inventory.yaml", "tools/ci_gate_audit.py")),
+        now=NOW,
+    )
+    assert verdict.owner_required and verdict.exit_code == 2
+    assert "ci-gate-inventory.yaml" in verdict.reasons[0]
+
+
+def test_a_proven_file_does_not_excuse_an_unproven_one():
+    """Tightening the inventory must not buy a free edit to the gate's own code."""
+    verdict = gate.evaluate(
+        _facts(
+            files=("docs/ssot/ci-gate-inventory.yaml", "tools/pr_merge_gate.py"),
+            proven_tighter=("docs/ssot/ci-gate-inventory.yaml",),
+        ),
+        now=NOW,
+    )
+    assert verdict.owner_required and verdict.exit_code == 2
+    assert "tools/pr_merge_gate.py" in verdict.reasons[0]
+    assert "ci-gate-inventory.yaml" not in verdict.reasons[0], (
+        "the proven file must not be named as a blocker"
+    )
+
+
+def test_hand_built_facts_prove_nothing_by_default():
+    """The field defaults to empty, so every code path that does not run the proof
+    falls back to the owner rather than past them."""
+    assert (
+        gate.HeadFacts(
+            number=1,
+            state="OPEN",
+            draft=False,
+            base="main",
+            head_sha="a" * 40,
+            files=("docs/ssot/ci-gate-inventory.yaml",),
+            last_push_at=NOW,
+            checks=(),
+            unresolved_threads=0,
+        ).proven_tighter
+        == ()
+    )

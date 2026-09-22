@@ -180,6 +180,82 @@ def self_governing_files() -> frozenset[str]:
     if seed not in closure:  # pragma: no cover - defensive
         closure = {seed, *RULE_TEXT_FILES}
     return frozenset(closure)
+
+
+# ---- Which way did a change to the rules move? --------------------------------------
+#
+# A change to a self-governing file is the defendant editing the law, and the hazard is
+# one-directional: the defendant rewriting it *in their own favour*. A change that can
+# only make this gate say no more often is not in their favour, so it does not need the
+# owner -- provided "more often" is computed from the two versions, never asserted in a
+# pull request description.
+#
+# Only a closed set can carry that proof. `ci-gate-inventory.yaml` has a schema and feeds
+# exactly one decision here (which checks must be green before a merge), so base-vs-head
+# is a set comparison with a defined direction. Python and the rule prose have no such
+# reading -- any line of either can loosen anything -- so they keep going to the owner.
+# Unknown file, unreadable version, parse failure, empty base: all unproven. Loosening
+# always goes to the owner. The default, in every branch below, is the owner.
+
+
+def _blocking_coordinates(text: str) -> frozenset[tuple[str, str, str]] | None:
+    """(gate id, workflow, job) for every gate with merge authority, or None.
+
+    None, not an empty set, when the document cannot be read the way
+    `_required_checks` reads it: "I could not tell" and "nothing blocks" must not
+    collapse into the same value, because the second one makes every head a superset.
+    """
+    try:
+        doc = yaml.safe_load(text)
+        gates = (doc or {}).get("gates")
+    except (yaml.YAMLError, AttributeError):
+        return None
+    if not isinstance(gates, list):
+        return None
+    out: set[tuple[str, str, str]] = set()
+    for gate in gates:
+        if not isinstance(gate, dict):
+            return None
+        if gate.get("blocks_merge"):
+            out.add(
+                (
+                    str(gate.get("id", "")),
+                    str(gate.get("workflow", "")),
+                    str(gate.get("job", "")),
+                )
+            )
+    return frozenset(out)
+
+
+def _inventory_only_gained_authority(base_text: str, head_text: str) -> bool:
+    """True when every check that blocked a merge before still blocks it, unchanged.
+
+    Registering a gate is bookkeeping; `blocks_merge: true` is authority. A head whose
+    blocking set is a superset of the base's cannot let anything through that the base
+    would have stopped -- including when the two are equal, which is what a backfill of
+    `blocks_merge: false` rows looks like. The coordinate carries the workflow and job,
+    so repointing an existing blocking gate at a job that always passes is not a
+    superset and is not proven.
+    """
+    base = _blocking_coordinates(base_text)
+    head = _blocking_coordinates(head_text)
+    if base is None or head is None:
+        return False
+    if not base:
+        # An empty base makes every head a superset -- the same shape of hole as an
+        # empty protected set, and it would prove exactly the change that empties it.
+        return False
+    return base <= head
+
+
+# Self-governing paths a proof exists for. Everything else in the closure is unproven
+# by construction, which is the point: this set only grows when someone can state what
+# the file's decision input is and which way is stricter.
+DIRECTION_PROOFS = {
+    "docs/ssot/ci-gate-inventory.yaml": _inventory_only_gained_authority,
+}
+
+
 # A push to main under these paths deploys (deploy.yml: the runner rebuild;
 # deploy-cloudflare-watchdog.yml: `wrangler deploy` of the out-of-band worker, #718) —
 # a merge must not be what triggers it under session authority.
@@ -412,6 +488,10 @@ class HeadFacts:
     # Files the base branch has changed since this head diverged from it. Their
     # intersection with `files` is what makes a green check stale.
     base_changed_files: tuple[str, ...] = ()
+    # Self-governing files whose change was mechanically proven non-loosening
+    # (`_proven_tighter`). Defaults to empty so a HeadFacts built by hand proves
+    # nothing and every self-governing change in it goes to the owner.
+    proven_tighter: tuple[str, ...] = ()
     # What GitHub says the PR changes, against what `files` actually returned.
     # `gh pr view --json files` caps at 100; both the protected-file and the
     # deploy-triggering checks iterate `files`, so a larger PR silently drops
@@ -475,6 +555,51 @@ def _gh(argv: Sequence[str]) -> str:
     if result.returncode != 0:
         raise RuntimeError(f"gh {' '.join(argv)}: {result.stderr.strip() or 'failed'}")
     return result.stdout
+
+
+def _file_at(repo: str, ref: str, path: str, *, gh: Runner = _gh) -> str | None:
+    """A file's contents at a ref, or None if it cannot be read.
+
+    Read from GitHub at both refs rather than from the working tree: the working tree
+    is whatever happens to be checked out, and the question here is what *merging*
+    would do to the rules.
+    """
+    if not (repo and ref and path):
+        return None
+    try:
+        return gh(
+            [
+                "api",
+                "-H",
+                "Accept: application/vnd.github.raw",
+                f"repos/{repo}/contents/{path}?ref={ref}",
+            ]
+        )
+    except RuntimeError:
+        return None
+
+
+def _proven_tighter(
+    repo: str, base: str, head_sha: str, files: Sequence[str], *, gh: Runner = _gh
+) -> tuple[str, ...]:
+    """Self-governing files in `files` whose change is provably non-loosening.
+
+    `base` is the base branch's tip, not the merge base: if main has since gained a
+    blocking gate this head does not carry, merging would drop it, and the comparison
+    against the tip is what notices.
+    """
+    proven: list[str] = []
+    for path in sorted(set(files) & self_governing_files()):
+        proof = DIRECTION_PROOFS.get(path)
+        if proof is None:
+            continue
+        base_text = _file_at(repo, base, path, gh=gh)
+        head_text = _file_at(repo, head_sha, path, gh=gh)
+        if base_text is None or head_text is None:
+            continue
+        if proof(base_text, head_text):
+            proven.append(path)
+    return tuple(proven)
 
 
 def _epoch(iso: str) -> float:
@@ -621,13 +746,28 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
         if str(view.get("state") or "") == "OPEN"
         else ()
     )
+    changed = tuple(str(f["path"]) for f in view.get("files") or [])
+    # Two API reads per provable file, so only for an open pull request that actually
+    # touches one. A closed one is being audited, not merged.
+    proven = (
+        _proven_tighter(
+            repo,
+            str(view.get("baseRefName") or ""),
+            str(view.get("headRefOid") or ""),
+            changed,
+            gh=gh,
+        )
+        if str(view.get("state") or "") == "OPEN"
+        else ()
+    )
     return HeadFacts(
         number=int(view["number"]),
         state=str(view.get("state") or ""),
         draft=bool(view.get("isDraft")),
         base=str(view.get("baseRefName") or ""),
         head_sha=str(view.get("headRefOid") or ""),
-        files=tuple(str(f["path"]) for f in view.get("files") or []),
+        files=changed,
+        proven_tighter=proven,
         changed_files=int(view.get("changedFiles") or 0),
         review_decision=str(view.get("reviewDecision") or ""),
         # `not view.get(name)`, not `name not in view`. _field() two lines up
@@ -656,7 +796,10 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
         unresolved_threads=sum(1 for n in nodes if not n.get("isResolved")),
         unresolved_weight=sum(
             thread_weight(
-                [c.get("body") or "" for c in ((n.get("comments") or {}).get("nodes") or [])]
+                [
+                    c.get("body") or ""
+                    for c in ((n.get("comments") or {}).get("nodes") or [])
+                ]
             )
             for n in nodes
             if not n.get("isResolved")
@@ -820,10 +963,14 @@ def evaluate(
         )
         owner = True
     governing = sorted(f for f in facts.files if f in self_governing_files())
-    if governing:
+    unproven = [f for f in governing if f not in facts.proven_tighter]
+    if unproven:
+        # Proven-tighter files are excluded, not the whole check: a PR that tightens the
+        # inventory and edits the gate's Python still needs the owner for the Python.
         reasons.append(
-            f"changes what decides merges ({', '.join(governing)}): the working-tree "
-            f"copy is what judged this PR, so owner approval of head "
+            f"changes what decides merges ({', '.join(unproven)}) without a mechanical "
+            f"proof that the change can only make this gate say no more often: the "
+            f"working-tree copy is what judged this PR, so owner approval of head "
             f"{facts.head_sha[:7]} is required"
         )
         owner = True
