@@ -1,6 +1,6 @@
 # Infra2 Harness 与基础设施 AI Agent 行为准则
 
-> **权限边界**：AI 修改本文件需 owner 明确指示，并在 PR description 中引用那句指示。AI 可在"合流门禁"全部满足后自行 Merge PR（2026-09-21 owner 授予常设合流权，取代逐-head 与会话级授权；2026-09-22 owner 确认该授权覆盖其名下**全部仓库**，进入任一仓库都不需要重新申请，细则见 [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.md)）；任一状态失败、缺失或无法验证时必须 fail-closed，禁止合流。
+> **权限边界**：AI 修改本文件需 owner 明确指示，并在 PR description 中引用那句指示。AI 可在"合流门禁"全部满足后自行 Merge PR（常设合流权是 workspace 级事实，见工作区根 `AGENTS.md`「合流授权」，本文不重述；本仓库的门禁条件见 [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.md)）；任一状态失败、缺失或无法验证时必须 fail-closed，禁止合流。
 
 > **本文只放判定所需的不变量。** 程序性细则按需加载，入口见下方"按需加载"。
 > 长期常驻的指令会稀释红线的权重——规则越长越不被遵守。
