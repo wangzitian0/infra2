@@ -10,7 +10,6 @@ Validates detection of fake assertions:
 from __future__ import annotations
 
 from pathlib import Path
-import pytest
 
 from tools.lint_anti_tautology import check_source, main
 
