@@ -38,10 +38,13 @@
 owner 已定 fail-closed。但**直接在 `deploy_v2` 里调用会阻断 100% 的部署**——这是实测不是担心：
 
 ```
-pre_deploy_schema_check --service finance_report/app     (infra2 环境) → exit 3
-pre_deploy_schema_check --service truealpha/data_engine  (infra2 环境) → exit 3
+python tools/pre_deploy_schema_check.py --service finance_report/app     (infra2 环境) → exit 3
+python tools/pre_deploy_schema_check.py --service truealpha/data_engine  (infra2 环境) → exit 3
 NOT EVALUATED — deploy blocked ... No module named 'src' ... no enum source registered
 ```
+
+> 它是仓库里的一个脚本，没有 console script / entry point——照着 `pre_deploy_schema_check`
+> 敲在新 clone 里是跑不起来的。
 
 ### 为什么：门禁需要的两半住在不同地方
 
@@ -94,8 +97,9 @@ docker run --rm -i --network dokploy-network -e DATABASE_URL="$DB" \
 对**适用**的服务 fail-closed，退出码 1 与 3 都阻断。
 
 未登记的持久化服务是**覆盖面**问题，不是 fail-closed 问题。
-`libs/backup_verification.load_backup_inventory()` 列出 17 个有持久化存储的服务，可作为
-「应该被覆盖」的真源——应该用一个**审计**让缺口可见，而不是用 fail-closed 把它伪装成「全挂」。
+`libs/backup_verification.load_backup_inventory()` 列出了有持久化存储的服务，可作为
+「应该被覆盖」的真源（数量随 `BackupFacet` 增删而变，所以这里不钉死一个数字——
+要现值就跑它）——应该用一个**审计**让缺口可见，而不是用 fail-closed 把它伪装成「全挂」。
 否则 owner 要的「防止 #698 复发」会变成「停掉所有部署」。
 
 ### 合流要求
