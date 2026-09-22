@@ -132,7 +132,20 @@ def _has_non_doc(files: list[str], tmp_path: Path) -> bool:
 
 
 def _to_regex(pattern: str) -> str:
-    """GitHub path-filter glob: ``**`` crosses ``/``, a lone ``*`` does not."""
+    """GitHub path-filter glob: ``**`` crosses ``/``, a lone ``*`` does not.
+
+    The whole path must match. There is no implicit "...and everything under
+    it" -- which is exactly why workflows write ``docs/**`` and not ``docs``.
+    Modelling a trailing ``/...`` as optional would make this matcher more
+    permissive than GitHub: it would report a workflow as firing for a pattern
+    GitHub would not match, and a `paths:` list narrowed by mistake would then
+    still look covered here.
+
+    ``**/`` stands for zero or more directories, so ``**/*.md`` matches a path
+    with no ``/`` in it at all. That is not read off the documentation: #773
+    changed only ``AGENTS.md`` -- root level, no directory part, nothing under
+    ``docs/`` -- and ``Docs / build`` ran on it.
+    """
     assert not pattern.startswith("!"), "negated filters are not modelled here"
     assert not set(pattern) & set("?[]{}"), f"unmodelled glob syntax in {pattern!r}"
     out = []
@@ -145,7 +158,32 @@ def _to_regex(pattern: str) -> str:
             out.append("[^/]*")
         elif token:
             out.append(re.escape(token))
-    return "".join(out) + r"(?:/.*)?$"
+    return "".join(out)
+
+
+# What the matcher must and must not say, so the model itself is guarded
+# rather than trusted. The first case is the observed one (#773).
+_GLOB_CASES = (
+    ("**/*.md", "AGENTS.md", True),
+    ("**/*.md", "docs/ssot/README.md", True),
+    ("**/*.md", "docs/ssot/MANIFEST.yaml", False),
+    ("docs/**", "docs/ssot/README.md", True),
+    ("docs/**", "docsite/x.md", False),
+    # A bare directory name is not a prefix filter -- the reason `docs/**`
+    # is spelled out. A matcher that got this wrong would call a narrowed
+    # `paths:` list covered.
+    ("docs", "docs/ssot/README.md", False),
+    (".github/workflows/docs.yml", ".github/workflows/docs.yml", True),
+    (".github/workflows/docs.yml", ".github/workflows/docs.yml.bak", False),
+    ("*.md", "docs/x.md", False),
+)
+
+
+@pytest.mark.parametrize(("pattern", "path", "expected"), _GLOB_CASES)
+def test_the_path_filter_model_matches_github(
+    pattern: str, path: str, expected: bool
+) -> None:
+    assert bool(re.fullmatch(_to_regex(pattern), path)) is expected
 
 
 def _triggers(workflow: Path) -> dict:
@@ -165,7 +203,7 @@ def _triggers(workflow: Path) -> dict:
 def _docs_workflow_fires(files: list[str]) -> bool:
     patterns = _triggers(DOCS)["pull_request"]["paths"]
     regexes = [re.compile(_to_regex(p)) for p in patterns]
-    return any(r.match(f) for f in files for r in regexes)
+    return any(r.fullmatch(f) for f in files for r in regexes)
 
 
 def _run_bodies(workflow: Path, job: str) -> str:
