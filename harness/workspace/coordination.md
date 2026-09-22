@@ -13,8 +13,10 @@ These are harness defaults, not a replacement for repository-local contributor r
 
 2. Give each change one stable work key: an issue ID, project ID, or explicit
    standalone key. The physical form of that claim is the Root-level worktree rule (one worktree
-   per issue, issue prefix in the directory name; see the workspace root `AGENTS.md`,
-   铁则 6); this guide does not restate it.
+   per issue, issue prefix in the directory name). Its source is
+   `dev_env/workspace-iac/etc/rules/subagents.md` 铁则 6, which `ws-apply` projects into
+   the workspace root `AGENTS.md` one level above this repository; this guide does not
+   restate it.
 3. Search open and recently closed issues, PRs, and branches before creating another
    owner for the same work key.
 4. Allow parallel work only when both work keys and writable paths are disjoint. Keep
