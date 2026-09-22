@@ -48,10 +48,28 @@ REFUSAL_EXITS = (1, 2)
 
 
 def _smoke_step() -> dict:
-    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
-    steps = [s for s in jobs[JOB]["steps"] if "pi_chain_smoke" in (s.get("run") or "")]
+    doc = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    job = doc["jobs"][JOB]
+    steps = [s for s in job["steps"] if "pi_chain_smoke" in (s.get("run") or "")]
     assert len(steps) == 1, f"expected exactly one step invoking the smoke, got {steps}"
-    return steps[0]
+    step = steps[0]
+    # This harness runs the step under `bash -e`, GitHub's implicit default on
+    # Linux. An explicit `shell:` -- on the step, or in `defaults.run` on the
+    # job or the workflow, nowhere near it -- would change that, and `bash {0}`
+    # in particular drops `-e`. Refuse rather than measure a different shell
+    # than CI uses. (The sibling suite in
+    # test_docs_only_prs_run_their_own_gates.py resolves the declared shell
+    # instead; here the step is a single command, so pinning is enough.)
+    declared = [
+        step.get("shell"),
+        ((job.get("defaults") or {}).get("run") or {}).get("shell"),
+        ((doc.get("defaults") or {}).get("run") or {}).get("shell"),
+    ]
+    assert not any(declared), (
+        f"a `shell:` override is in play ({declared}); `bash -e` below would no "
+        "longer be what CI runs"
+    )
+    return step
 
 
 def test_the_step_hands_the_verdict_to_the_tool_and_passes_strict() -> None:

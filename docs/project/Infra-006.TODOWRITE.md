@@ -83,6 +83,25 @@ Track top issues discovered during documentation engineering.
      （它改不了这两个索引，且 `pr_merge_gate` 会以「required check(s) never reported」拦下这种 PR，
      所以不是可利用的洞——但结论写宽了就是错的。）已把 SSOT、本条与测试 docstring 的说法
      收敛到「生成器读的文件」。
+- **第五轮盲审又打穿两次，又都是 HIGH**。这一轮尤其说明问题：**每次我以为闭合了，
+  换一把 YAML 钥匙就又开了**——先是步骤文本，再是 job 条件，这次是 `needs:` 和 `shell:`。
+  1. **`needs:` 从不检查**。给 `test-deployer-logic` 加一个依赖（`needs: [detect-changes, lint-python]`，
+     看起来就是「lint 过了再跑部署测试」的排序优化）——那个依赖一旦失败或被跳过，
+     本 job 连同它的 15 个门禁整个 skip，而 **skipped 被 branch protection 当作满足**。测试全绿。
+  2. **`shell:` 覆盖从不复制**。`shell: bash {0}` 去掉 `-e`，多行脚本只报**最后一行**的退出码，
+     前面失败的生成器被吞掉。测试全绿，因为 `_run_step` 硬编码 `bash -e`。
+     **实测同一棵过期树**：`bash -e` exit 1 / `bash` exit 0。而且它精确重开 #505 的文档-only 路径——
+     纯文档 PR 只到得了 docs.yml 这一个门禁，`gen_project_index` 在第一行失败、
+     `gen_ssot_index` 在第二行成功，脚本退出码 0，CI 绿。
+     更隐蔽的变体是 job 级 `defaults.run.shell`，连门禁步骤上都看不见。
+- 修法：
+  - `needs:` 和 `if:` 一样钉进 `GATE_JOBS` 并断言相等（同样是锁定不是求值，理由同上）。
+  - `_run_step` 不再硬编码，改为**解析 workflow 声明的 shell**（step → job `defaults.run` →
+    workflow `defaults.run`），按 GitHub 文档的映射构造 argv；**未建模的 `shell:` 值一律断言失败**，
+    宁可拒绝也不要在另一个 shell 下测量。姊妹的 pi 测试同步加了「没有 shell 覆盖」的断言。
+- 反向验证：`needs` 加依赖 **1 红**、step `shell` 覆盖 **4 红**、job `defaults.run.shell` **4 红**、
+  未建模 shell（`shell: python`）**8 红**（fail-closed 生效）、pi 步骤 shell 覆盖 **3 红**；原样 22 / 3 全绿。
+
 - **第四轮盲审又打穿两次，都是 HIGH，都成立**：
   1. **job 级 `if:` 从不检查**。把 `test-deployer-logic` 或 docs.yml 的 `build` 整个 job
      `if: false`——门禁连同该 job 里另外十来个必需检查一起关掉——**测试全绿**。

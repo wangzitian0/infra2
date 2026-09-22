@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -63,20 +64,24 @@ DOCS = ROOT / ".github" / "workflows" / "docs.yml"
 
 # Which job each workflow runs the generators from, and (for infra-ci) whether
 # that job is behind the doc/non-doc classifier.
-# (workflow, job, the job's `if:` exactly as the workflow must spell it).
-# None means the job is unconditional. Pinned rather than evaluated: running a
+# (workflow, job, the job's `if:`, the job's `needs:`) exactly as the workflow
+# must spell them; None means absent. Pinned rather than evaluated: running a
 # GitHub expression would mean reimplementing its language here, and a wrong
 # reimplementation is a worse oracle than a mismatch that demands a human
 # update this line. It exists because a blind audit set `if: false` on each of
 # these jobs in turn -- the whole job disabled, and for test-deployer-logic
 # that is a dozen required gates, not two -- and every test here stayed green:
 # the suite proved "if these steps ran they would behave", never "this job runs".
+# `needs:` is pinned for the same reason and was found the same way: adding a
+# second dependency leaves the job skipped whenever that one fails or skips,
+# and a skipped job reports a conclusion branch protection accepts.
 GATE_JOBS = (
-    (DOCS, "build", None),
+    (DOCS, "build", None, None),
     (
         INFRA_CI,
         "test-deployer-logic",
         "needs.detect-changes.outputs.has_non_doc == 'true'",
+        "detect-changes",
     ),
 )
 
@@ -181,8 +186,52 @@ def _git(*args: str, cwd: Path) -> str:
     ).stdout.strip()
 
 
+def _workflow_doc(workflow: Path) -> dict:
+    return yaml.safe_load(workflow.read_text(encoding="utf-8"))
+
+
 def _jobs(workflow: Path) -> dict:
-    return yaml.safe_load(workflow.read_text(encoding="utf-8"))["jobs"]
+    return _workflow_doc(workflow)["jobs"]
+
+
+# GitHub's `shell:` keyword resolved the way it documents it: a keyword maps to
+# a fixed command line, and a value containing `{0}` is a custom template.
+# Omitted means `bash -e {0}` on Linux -- notably WITHOUT `-o pipefail`, which
+# only the explicit `bash` keyword adds.
+_SHELL_KEYWORDS = {
+    "bash": "bash --noprofile --norc -eo pipefail {0}",
+    "sh": "sh -e {0}",
+}
+_DEFAULT_SHELL = "bash -e {0}"
+
+
+def _shell_argv(step: dict, job: dict, doc: dict, script: Path) -> list[str]:
+    """The argv CI would use for this step, rather than the one preferred here.
+
+    Hardcoding `bash -e` measured a shell the workflow may not be asking for.
+    `shell: bash {0}` drops `-e`, so a multi-line gate reports only its last
+    command's status and a failing generator on an earlier line is swallowed:
+    measured, the same stale tree gives exit 1 under `bash -e` and exit 0 under
+    `bash`. The override can also sit in `defaults.run.shell` on the job or the
+    workflow, nowhere near the step. A `shell:` value not modelled here makes
+    this refuse rather than run the step under something else.
+    """
+    spec = (
+        step.get("shell")
+        or ((job.get("defaults") or {}).get("run") or {}).get("shell")
+        or ((doc.get("defaults") or {}).get("run") or {}).get("shell")
+    )
+    if spec is None:
+        template = _DEFAULT_SHELL
+    elif "{0}" in spec:
+        template = spec
+    else:
+        assert spec in _SHELL_KEYWORDS, (
+            f"step declares `shell: {spec}`, which this harness does not model; "
+            "teach it that shell rather than measuring a different one"
+        )
+        template = _SHELL_KEYWORDS[spec]
+    return [token.replace("{0}", str(script)) for token in shlex.split(template)]
 
 
 def _triggers(workflow: Path) -> dict:
@@ -331,7 +380,7 @@ def _workflow_fires(workflow: Path, files: list[str]) -> bool:
 def _gate_steps(generator: str, files: list[str], tmp_path: Path) -> list[tuple]:
     """(workflow, job name, step) for every gate a change to ``files`` reaches."""
     reached = []
-    for workflow, job_name, expected_if in GATE_JOBS:
+    for workflow, job_name, expected_if, _expected_needs in GATE_JOBS:
         if not _workflow_fires(workflow, files):
             continue
         if expected_if is not None:
@@ -349,12 +398,12 @@ def _gate_steps(generator: str, files: list[str], tmp_path: Path) -> list[tuple]
 
 
 @pytest.mark.parametrize(
-    ("workflow", "job_name", "expected_if"),
+    ("workflow", "job_name", "expected_if", "expected_needs"),
     GATE_JOBS,
-    ids=[f"{w.name}:{j}" for w, j, _ in GATE_JOBS],
+    ids=[f"{w.name}:{j}" for w, j, _, _ in GATE_JOBS],
 )
 def test_the_gate_job_still_runs_when_the_model_says_it_does(
-    workflow: Path, job_name: str, expected_if: str | None
+    workflow: Path, job_name: str, expected_if: str | None, expected_needs: str | None
 ) -> None:
     """The job hosting a gate must be scheduled on the terms the model assumes.
 
@@ -368,6 +417,12 @@ def test_the_gate_job_still_runs_when_the_model_says_it_does(
         f"{workflow.name}:{job_name} runs under `if: {job.get('if')!r}` but "
         f"GATE_JOBS assumes {expected_if!r}. Either the job's scheduling "
         "changed and the model has to follow, or the condition was broken."
+    )
+    assert job.get("needs") == expected_needs, (
+        f"{workflow.name}:{job_name} declares `needs: {job.get('needs')!r}` but "
+        f"GATE_JOBS assumes {expected_needs!r}. Every added dependency is one "
+        "more job whose failure or skip silently skips this one, and a skipped "
+        "job satisfies branch protection."
     )
 
 
@@ -497,14 +552,14 @@ def test_the_stale_fixture_is_actually_stale(
     assert paired.returncode == 0, f"{other} is also stale; the fixture is not isolated"
 
 
-def _run_step(step: dict, root: Path, env: dict[str, str]) -> int:
-    """Exit code of the step's own script, run against ``root``."""
+def _run_step(step: dict, job: dict, doc: dict, root: Path, env: dict[str, str]) -> int:
+    """Exit code of the step's own script, under the shell the workflow declares."""
     script = root / "step.sh"
     script.write_text(
         _expand(step["run"], {"${{ github.workspace }}": str(root)}), encoding="utf-8"
     )
     return subprocess.run(
-        ["bash", "-e", str(script)],
+        _shell_argv(step, job, doc, script),
         cwd=root,
         capture_output=True,
         text=True,
@@ -578,13 +633,14 @@ def test_every_generator_input_reaches_a_gate_that_bites(
             f"{workflow.name}:{job_name} is continue-on-error"
         )
 
-        on_fresh = _run_step(step, clean, env)
+        doc = _workflow_doc(workflow)
+        on_fresh = _run_step(step, job, doc, clean, env)
         assert on_fresh == 0, (
             f"{where} exits {on_fresh} against a tree whose indexes are already "
             "in sync -- it is not gating, it is just red, and an always-red "
             "step satisfies the staleness check below without checking anything"
         )
-        on_stale = _run_step(step, stale, env)
+        on_stale = _run_step(step, job, doc, stale, env)
         assert on_stale != 0, (
             f"{where} ran against a tree whose {generator} index is stale and "
             "still reported success -- it names the generator but no longer "
