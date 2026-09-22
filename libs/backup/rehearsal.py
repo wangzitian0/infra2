@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -56,7 +57,14 @@ def execute_rehearsal(
     **kwargs: Any,
 ) -> dict[str, Any]:
     """B-02: Execute restore rehearsal with timeout guard."""
-    return run_postgres_restore_rehearsal(plan, **kwargs)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(run_postgres_restore_rehearsal, plan, **kwargs)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except concurrent.futures.TimeoutError as exc:
+            raise BackupRestoreError(
+                f"postgres restore rehearsal timed out after {timeout_seconds}s"
+            ) from exc
 
 
 __all__ = [

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 
 from libs import common, env, secrets_supply, service_registry
 from libs.backup import (
@@ -211,3 +212,56 @@ def test_backward_compatibility_shims() -> None:
     # secrets_supply shims
     assert hasattr(secrets_supply, "apply_secret_supply")
     assert hasattr(secrets_supply, "create_secrets_resolver")
+
+
+def test_rehearsal_timeout_guard(monkeypatch) -> None:
+    """Verify execute_rehearsal raises BackupRestoreError when timed out."""
+    import time
+    from libs.backup.rehearsal import BackupRestoreError, execute_rehearsal
+
+    def slow_rehearsal(plan, **kwargs):
+        time.sleep(0.5)
+        return {}
+
+    monkeypatch.setattr(
+        "libs.backup.rehearsal.run_postgres_restore_rehearsal", slow_rehearsal
+    )
+    with pytest.raises(BackupRestoreError, match="timed out after 0.1s"):
+        execute_rehearsal(None, timeout_seconds=0.1)  # type: ignore[arg-type]
+
+
+def test_truealpha_deploy_s3_fails_closed(monkeypatch) -> None:
+    """Verify truealpha deploy raises RuntimeError instead of silent warning when S3 check fails."""
+    import importlib.util
+    import sys
+    from unittest.mock import MagicMock
+
+    mock_minio = MagicMock()
+    mock_minio.create_app_bucket = MagicMock()
+    monkeypatch.setitem(sys.modules, "platform.03.minio.shared", mock_minio)
+
+    root = Path(__file__).resolve().parents[2]
+    deploy_path = root / "truealpha/truealpha/10.app/deploy.py"
+    spec = importlib.util.spec_from_file_location("test_ta_deploy_s3", deploy_path)
+    assert spec is not None and spec.loader is not None
+    app_deploy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(app_deploy)
+    AppDeployer = app_deploy.AppDeployer
+
+    mock_backend = MagicMock()
+    mock_backend.get.side_effect = lambda k: {
+        "S3_BUCKET": "test-bucket",
+        "S3_ACCESS_KEY": "test-key",
+        "S3_SECRET_KEY": "test-secret",
+    }.get(k)
+    monkeypatch.setattr(AppDeployer, "secrets_backend", classmethod(lambda cls, env=None: mock_backend))
+
+    def broken_ensure_bucket(*args, **kwargs):
+        raise ConnectionRefusedError("MinIO connection failed")
+
+    monkeypatch.setattr("infra2_sdk.runtime.s3.ensure_bucket", broken_ensure_bucket)
+
+    with pytest.raises(RuntimeError, match="unreachable; failing deploy closed"):
+        AppDeployer._ensure_minio_bucket(MagicMock())
+
+

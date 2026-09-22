@@ -450,7 +450,12 @@ class AppDeployer(Deployer):
                 ensure_bucket(s3_settings, allow_create=False)
                 info(f"S3 bucket '{bucket_name}' verified reachable via S3 API")
             except Exception as exc:
-                warning(f"S3 bucket verification via S3 API: {exc}")
+                error(
+                    f"S3 bucket '{bucket_name}' verification failed via S3 API: {exc}"
+                )
+                raise RuntimeError(
+                    f"S3 bucket '{bucket_name}' unreachable; failing deploy closed to prevent GREEN-WHILE-EMPTY: {exc}"
+                ) from exc
             # The never-expire invariant must hold for pre-existing buckets too.
             cls._ensure_never_expires(c, bucket_name)
             return
@@ -458,18 +463,14 @@ class AppDeployer(Deployer):
         if shutil.which("docker") is None:
             # The iac-runner deploys through the Dokploy API and has no docker
             # CLI/socket, so create_app_bucket (docker exec ... mc) can never
-            # work from a deploy — that silent degradation is how the first
-            # truealpha staging deploys "succeeded" with no bucket. Point at
-            # the host-side path instead of warning vaguely.
-            warning(
+            # work from a deploy. Fail closed rather than silently pretending success.
+            error(
                 f"docker CLI unavailable — cannot provision bucket '{bucket_name}' from this deploy"
             )
-            info(
-                "Run ONCE on the VPS host: VAULT_TOKEN=... bash "
-                "truealpha/truealpha/10.app/provision_bucket.sh <staging|production>, "
-                "then restart the app vault-agent."
+            raise RuntimeError(
+                f"Cannot provision bucket '{bucket_name}': docker CLI is unavailable and credentials do not exist in Vault. "
+                "Run ONCE on the VPS host: VAULT_TOKEN=... bash truealpha/truealpha/10.app/provision_bucket.sh <staging|production>"
             )
-            return
 
         header("MinIO Bucket Setup", f"Creating raw-archive bucket: {bucket_name}")
         # lifecycle_days=0 means create_app_bucket ADDS no expiry rule — the raw
