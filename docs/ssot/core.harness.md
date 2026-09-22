@@ -13,6 +13,8 @@
 | SDK 公共契约 | 已发布的 `infra2-sdk` SemVer artifact |
 | Coding-agent tooling | `oh-my-code-agent` 自己的 `init.md`、`AGENTS.md`、文档地图与 release/commit |
 | App 开发与领域规则 | 各 App 自己的 `AGENTS.md`、架构文档、代码和 CI |
+| Agent 规则内容（Root / Workspace 层）、skill、MCP spec 与其渲染函数 | `dev_env/workspace-iac`（git 单源；投影由 `ws-apply` / `ws-render` 单向生成） |
+| 本机常驻运行时（hub、受管 HOME、watcher、TUI） | `oh-my-code-agent`，只消费 dev_env 渲染的配置，不持有内容真源 |
 
 ## 2. Goal And Non-Goals
 
@@ -67,6 +69,23 @@ Harness 只拥有这些仓库之间的协作视图与边界定义。
 - 新抽象只有在语义稳定且至少有清晰的多消费者契约时才进入 SDK。
 - Coding-agent 配置发现、Profile/Skill/MCP 激活和隔离 runtime 属于 `oh-my-code-agent`；
   它不承载 App 部署、通用任务调度或领域命令。App 的 Skill 内容与 policy 由 App 持有。
+
+### 5.1 Harness 三方边界（2026-09-23 owner 裁定）
+
+一条判据：**需要 review 才能改的是内容，归 `dev_env`；常驻进程与机器状态是运行时，
+归 `oh-my-code-agent`；checkout 只持有自己那一层，并在固定位置接收产物。** 一件东西只落一格。
+
+| 方 | 持有 | 绝不做 |
+|---|---|---|
+| `dev_env`（单源） | Root / Workspace 规则真源、skill / command / MCP spec / secrets 模板、纯函数工具（`ws-render`、`ws-check-drift`、`ws-agents-lint`、`ws-doctor`、`ws-mem-distill`），全部 `--json`，CI | 常驻进程、机器状态、UI |
+| `oh-my-code-agent`（运行时） | hub（每 OS user 一个，profile = workspace，一个 (workspace, server) 一份进程，宿主经 bridge 接入）、受管 HOME、定时器与 watcher、drift / report / TUI | 持有内容真源；重实现 render / drift 判定（只调用 dev_env 工具并展示）；写回 dev_env 或渲染产物；调度任务；超出 Knowledge Pack 证据级的写权限 |
+| checkout（消费者） | 自己的 `AGENTS.md`（Repo 层，入库）；`harness/repos.yaml` 的 `rules_layer` 声明 | 跟踪文件里出现 Root / Workspace 内容；自带 MCP / skill 副本 |
+
+不变量：内容单向流动（dev_env → render → checkout / OMCA desired state），无反向写路径；
+secret 只经 `env_files` 进 hub，渲染件里不得出现字面量；Workspace 块不进任何机器全局文件。
+物证、投递表与工作项见 [infra2#820](https://github.com/wangzitian0/infra2/issues/820) 与
+dev_env#80。宿主发现规则（Codex / Gemini CLI 不越过 `.git`，Claude / Pi 无界向上）以
+OMCA Knowledge Pack 为准，未收录前引用 dev_env#44 的实测记录。
 
 这一边界延续 [`core.md` §3.1](./core.md#31-repository-dependency-boundary) 与已归档
 [`Infra-018`](../project/archive/Infra-018.repository_boundary_decoupling.md) 的源码解耦结论。

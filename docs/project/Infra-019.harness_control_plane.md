@@ -27,6 +27,9 @@ App 后的治理优先级。两个 App 已形成各自成熟但不同的工作�
    TUI 管理，但不进入 infra/App runtime dependency graph。
 6. **Workspace coordination**: orchestrator liveness 规则与只读 `harness sweep`
    时钟；可选 guard hook 由 owner 接线。
+7. **Boundary (Phase 3)**: 三方边界落地——dev_env 单源渲染到每个 checkout 的宿主本地
+   文件，OMCA hub 承担 (workspace, server) 单实例与 watcher / TUI，跟踪见
+   [infra2#820](https://github.com/wangzitian0/infra2/issues/820)。
 
 ## Design Decisions
 
@@ -56,6 +59,7 @@ secret 或 App source mutation，不产生线上 drift。
 
 | Date | Change |
 |---|---|
+| 2026-09-23 | Phase 3: record the three-party harness boundary in `core.harness.md` §5.1; epic #820 with dev_env#80/#81–#84 and OMCA#123–#128 |
 | 2026-09-16 | Orchestrator liveness: read-only `harness sweep`, `pr_merge_gate` no-checks fix, owner-wired guard hook (truealpha#876, follow-up #740) |
 | 2026-09-15 | Pin standalone OMCA with embedded Knowledge/ontology, qualify Codex 0.154.0 inventory, and record installed execution after build-source removal |
 | 2026-09-15 | Integrate reviewed SDK, OMCA and App snapshots; record released-wheel and installed-CLI proof, with the human interactive gate still explicit |

@@ -1,7 +1,7 @@
 # Infra-019: TODOWRITE (Workspace Harness Control Plane)
 
 **Status**: Active
-**Last Updated**: 2026-09-16
+**Last Updated**: 2026-09-23
 
 ## Phase 1
 
@@ -33,6 +33,22 @@
 - [ ] Split `pr_merge_gate` exit 1 into time-fixable / action-required / could-not-evaluate
       ([infra2#740](https://github.com/wangzitian0/infra2/issues/740)).
 - [ ] Archive Infra-019 after the selected follow-ups are complete or explicitly deferred.
+
+## Phase 3: three-party harness boundary (2026-09-23, epic #820)
+
+Boundary: content that needs review lives in `dev_env`; resident processes and machine
+state live in `oh-my-code-agent`; a checkout holds only its own layer and receives
+rendered artifacts at fixed paths (`core.harness.md` §5.1).
+
+- [x] Record the boundary in `core.harness.md` §1/§5.1 (this phase's PR).
+- [ ] dev_env#80: `ws-render` — one-way render to per-checkout host-local files, stamped.
+- [ ] dev_env#81: render hub config and host MCP configs to `omca hub bridge`.
+- [ ] dev_env#84: literal secrets in `~/.omca/harness.json` → `env_files`; `ws-doctor` guard.
+- [ ] OMCA#123–#127: roadmap Stream H; hub contract; workers; TUI; instruction Knowledge Pack.
+- [ ] dev_env#82: delete `ws-mem-daemon`, `ws-tui`, template first-copy logic once replaced.
+- [ ] dev_env#83: Root resident block ≤ 2,000 chars after skill projection is uniform.
+- [ ] Repo-level merge wording: finance_report#2069, truealpha#949, OMCA#128.
+- [ ] Close-out: `ps` shows one process per (workspace, server); dev_env#44 matrix CLI rows verified.
 
 > App policy adoption is intentionally not a TODO. Finance Report and TrueAlpha remain
 > autonomous and may independently reuse a preference if their maintainers choose.
