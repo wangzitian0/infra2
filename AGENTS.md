@@ -37,7 +37,7 @@
 
 1. **同一 head**：检查、review、合流针对同一个 `head SHA`；不得用本地旧结果或过期 review 代替。
 2. **Merge Authority 全绿**：[`docs/ssot/ci-gate-inventory.yaml`](docs/ssot/ci-gate-inventory.yaml) 中适用且 `blocks_merge: true` 的检查全部 success；pending / failure / cancelled / 意外 skipped / 读不到，都算不满足。
-3. **Review 已闭环**：未 resolved 发现按 severity 加权（high=1.0 / middle=0.5 / low=0.25，未标注按 middle），**总分 ≥ 1.0 即禁止合流**。
+3. **Review 已闭环**：未 resolved 发现按 severity 加权（high=1.0 / middle=0.5 / low=0.25，未标注按 middle），**总分 ≥ 1.0 即禁止合流**。由 `pr_merge_gate` 计分，不靠人心算；`severity: <级别>` 是唯一被识别的标注形式，从散文措辞推断等级会让判决取决于句子怎么写。
 4. **绿是当前的，且必需检查确实报告过**：兄弟 PR 合入后改写了本 PR 也动的文件时，检查仍是绿的
    却没重跑；`blocks_merge` 的检查被 skip 时 GitHub 也接受为已满足。判定统一走
    `python -m tools.pr_merge_gate <n> --policy either --request-review --merge`
@@ -47,7 +47,11 @@
    `head SHA`：prod apply / promote、L1 bootstrap self-update、runner 重建、observability apply。
    还有一类回到 owner 的**不是权限问题，是自我裁决问题**——**改动"决定合流的东西"本身**：
    门禁从工作树读规则，AI 合流自己的 PR 时读到的就是该 PR 引入的版本，等于由被告改写的法条
-   来审判；且只改 `.md` 的 PR 会跳过全部必需检查。受保护文件引用 owner 指示即可。
+   来审判。**判据不是一份文件清单，而是可计算的依赖闭包**：`pr_merge_gate` 自身、它 import 的
+   一切、它读的数据文件，以及这些文件各自的测试——由 `tools/pr_merge_gate.self_governing_files()`
+   算出，**新增一个 import 自动纳入保护，不靠谁记得**。只有代码读不到的两份**规则文本**
+   （本文件与 `ops.merge-gate.md`）是显式列举的，因为闭包到不了它们。
+   受保护文件引用 owner 指示即可。
 
 ## 🛡️ 安全与红线
 

@@ -29,15 +29,17 @@ Two policies for the settling condition:
 from __future__ import annotations
 
 import argparse
+import ast
 import fnmatch
 import functools
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import yaml
 from collections.abc import Callable, Sequence
@@ -53,29 +55,131 @@ SETTLE_MINUTES = 3  # event policy: after the review of the head, not after the 
 # GitHub's Copilot pull-request reviewer (a global bot id, the same in every repository).
 COPILOT_BOT_ID = "BOT_kgDOCnlnWA"
 AUTOMATED_REVIEWERS = frozenset({"copilot-pull-request-reviewer"})
-# AGENTS.md: protected files need the owner's approval of the head that changes them.
-SELF_GOVERNING_FILES = (
-    # The gate decides from the working tree, which for an agent merging its
-    # own PR is that PR's branch -- so a change here is judged by the version
-    # it introduces. Its tests ship in the same PR and can be edited by it.
-    "tools/pr_merge_gate.py",
-    "libs/tests/test_pr_merge_gate.py",
-    # #765 moved the merge-authority rules out of the protected AGENTS.md and
-    # into SSOT. The rules stayed protected in name only: a .md-only PR also
-    # skips every required check, so an agent could rewrite its own authority
-    # and merge it with nothing run and nothing asked.
-    "docs/ssot/ops.merge-gate.md",
-    # Flipping one gate to `blocks_merge: false` removes it from the required
-    # set that judges the very PR doing the flipping, and ci_gate_audit does
-    # not cross-check that field against the live ruleset.
-    "docs/ssot/ci-gate-inventory.yaml",
-    # Since #765 moved the procedures to SSOT, AGENTS.md holds the five-point
-    # merge core -- it decides merges, so it belongs here rather than in the
-    # protected list, whose duty is now to cite the owner instruction instead
-    # of asking for a second approval.
-    "AGENTS.md",
+
+# The gate decides from the working tree, so an agent merging its own pull
+# request is judged by the version that pull request introduces. What "judges"
+# means is not a matter of taste -- it is this module plus everything it reads
+# to reach a verdict, which is a transitive closure and therefore computable.
+#
+# It used to be a hand-written list of five paths, and a hand-written list is
+# open: it missed `tools/omca_gate_policy.py` (the blocking audit layer),
+# `libs/console.py`, and omca's test, all of which this module imports. Adding
+# an import used to silently widen what judges a pull request without widening
+# what protects it. Computing the closure closes that by construction.
+#
+# Two files are listed rather than computed, for the one reason a closure over
+# code cannot reach them: no code reads them. They are the rules themselves --
+# `AGENTS.md` holds the merge-authority invariants, `ops.merge-gate.md` the
+# clauses. Both appear in this module only inside comments, which the closure
+# deliberately does not follow: following prose would sweep in every path ever
+# mentioned in a docstring.
+#
+# This is exactly where a computed set can quietly lose ground a listed one
+# held, so `test_the_closure_still_covers_everything_the_list_did` pins it.
+RULE_TEXT_FILES = ("AGENTS.md", "docs/ssot/ops.merge-gate.md")
+
+# AGENTS.md point 3: unresolved findings are weighted high=1.0 / middle=0.5 /
+# low=0.25, unlabelled counts as middle, and a total of 1.0 or more blocks.
+# The rule was written down and never implemented -- the gate counted threads,
+# so one unlabelled finding of any kind blocked a merge. Two consequences, and
+# the second is why this is worth implementing rather than deleting: a single
+# `high` weighed the same as a single nit, and a reviewer that never labels
+# severity (no automated one does) could stall a pull request on a wording
+# preference.
+SEVERITY_WEIGHTS = {"high": 1.0, "middle": 0.5, "medium": 0.5, "low": 0.25}
+UNLABELLED_SEVERITY_WEIGHT = SEVERITY_WEIGHTS["middle"]
+BLOCKING_SEVERITY_TOTAL = 1.0
+# Only an explicit label counts. Inferring severity from prose would make the
+# verdict depend on how a sentence is phrased, which is the opposite of what a
+# gate is for.
+_SEVERITY_RE = re.compile(
+    r"\bseverity\s*[:：]\s*\**(high|middle|medium|low)\b", re.IGNORECASE
 )
-PROTECTED_FILES = ("AGENTS.md", "CLAUDE.md")
+
+
+def thread_weight(bodies: Sequence[str]) -> float:
+    """The weight of one unresolved thread.
+
+    The highest label anywhere in the thread wins: a reply that downgrades its
+    own nit does not lower a `high` raised above it, and a thread resolves as a
+    whole or not at all.
+    """
+    best = 0.0
+    for body in bodies:
+        for match in _SEVERITY_RE.finditer(body or ""):
+            best = max(best, SEVERITY_WEIGHTS[match.group(1).lower()])
+    return best or UNLABELLED_SEVERITY_WEIGHT
+
+
+# Repository-internal data a gate module may read. Kept narrow on purpose --
+# a wider pattern would sweep in every path mentioned in prose.
+_DATA_SUFFIXES = (".json", ".yaml", ".yml", ".md")
+
+
+def _repo_deps(rel: str) -> set[str]:
+    """Repository files this module imports or reads, one level deep."""
+    found: set[str] = set()
+    path = ROOT / rel
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError:
+        return found
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        tree = None
+    if tree is not None:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names = [node.module]
+            else:
+                continue
+            for name in names:
+                stem = name.replace(".", "/")
+                for candidate in (f"{stem}.py", f"{stem}/__init__.py"):
+                    if (ROOT / candidate).is_file():
+                        found.add(candidate)
+    for match in re.finditer(r"""["']((?:docs|libs|tools)/[\w./-]+)["']""", source):
+        rel_data = match.group(1)
+        if rel_data.endswith(_DATA_SUFFIXES) and (ROOT / rel_data).is_file():
+            found.add(rel_data)
+    return found
+
+
+@functools.lru_cache(maxsize=1)
+def self_governing_files() -> frozenset[str]:
+    """Everything a change to which would let this gate judge its own rewrite.
+
+    The closure from this module, plus each closure member's own test (a test
+    ships in the same pull request and can be edited by it), plus the rule
+    texts no code reads.
+
+    Falls back to the closure's seed if the walk finds nothing, so a parsing
+    failure cannot quietly empty the protected set -- an empty set here would
+    let any rewrite through, which is the one outcome worse than a wrong one.
+    """
+    seed = "tools/pr_merge_gate.py"
+    closure = {seed}
+    frontier = {seed}
+    while frontier:
+        nxt: set[str] = set()
+        for member in frontier:
+            if member.endswith(".py"):
+                nxt |= _repo_deps(member)
+        nxt -= closure
+        closure |= nxt
+        frontier = nxt
+    for member in list(closure):
+        if member.endswith(".py"):
+            test = f"libs/tests/test_{PurePosixPath(member).stem}.py"
+            if (ROOT / test).is_file():
+                closure.add(test)
+    closure |= set(RULE_TEXT_FILES)
+    if seed not in closure:  # pragma: no cover - defensive
+        closure = {seed, *RULE_TEXT_FILES}
+    return frozenset(closure)
 # A push to main under these paths deploys (deploy.yml: the runner rebuild;
 # deploy-cloudflare-watchdog.yml: `wrangler deploy` of the out-of-band worker, #718) —
 # a merge must not be what triggers it under session authority.
@@ -272,6 +376,9 @@ def _required_checks() -> tuple[frozenset[str], bool]:
 
 GREEN_STATES = frozenset({"SUCCESS", "SKIPPED", "NEUTRAL"})
 MAX_REVIEW_THREADS = 100
+# Enough to carry a thread's label; a thread that needs more replies than
+# this to state its severity has a different problem.
+MAX_THREAD_COMMENTS = 20
 # gh's stderr when a pull request has no check registered yet (it exits 1, no JSON).
 NO_CHECKS_REPORTED = "no checks reported"
 
@@ -289,6 +396,8 @@ class HeadFacts:
     last_push_at: float  # epoch seconds of the newest commit on the head
     checks: tuple[tuple[str, str], ...]  # (name, gh bucket or state)
     unresolved_threads: int
+    # AGENTS.md's weighted total; see SEVERITY_WEIGHTS.
+    unresolved_weight: float = 0.0
     review_threads_total: int = 0
     node_id: str = ""
     # GitHub's own merge computation. "UNKNOWN" means GitHub is still computing
@@ -475,8 +584,15 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
                 "graphql",
                 "-f",
                 "query=query{repository(owner:%s,name:%s){pullRequest(number:%d)"
-                "{reviewThreads(first:%d){totalCount nodes{isResolved}}}}}"
-                % (json.dumps(owner), json.dumps(name), number, MAX_REVIEW_THREADS),
+                "{reviewThreads(first:%d){totalCount nodes{isResolved "
+                "comments(first:%d){nodes{body}}}}}}}"
+                % (
+                    json.dumps(owner),
+                    json.dumps(name),
+                    number,
+                    MAX_REVIEW_THREADS,
+                    MAX_THREAD_COMMENTS,
+                ),
             ]
         )
     )
@@ -538,6 +654,13 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
             for c in checks
         ),
         unresolved_threads=sum(1 for n in nodes if not n.get("isResolved")),
+        unresolved_weight=sum(
+            thread_weight(
+                [c.get("body") or "" for c in ((n.get("comments") or {}).get("nodes") or [])]
+            )
+            for n in nodes
+            if not n.get("isResolved")
+        ),
         review_threads_total=int(review_threads.get("totalCount") or len(nodes)),
         node_id=str(view.get("id") or ""),
         # ABSENT, not "", when gh omits a field this call explicitly requested.
@@ -696,7 +819,7 @@ def evaluate(
             "list, so neither can be trusted here"
         )
         owner = True
-    governing = sorted(f for f in facts.files if f in SELF_GOVERNING_FILES)
+    governing = sorted(f for f in facts.files if f in self_governing_files())
     if governing:
         reasons.append(
             f"changes what decides merges ({', '.join(governing)}): the working-tree "
@@ -707,7 +830,7 @@ def evaluate(
     # No escalation for protected files any more: the rule is now to cite the
     # owner instruction that authorised the edit, which is a contract in the PR
     # description and not a thing this tool can verify. The ones that genuinely
-    # must not be self-judged are in SELF_GOVERNING_FILES above.
+    # must not be self-judged come from self_governing_files() above.
     if not _declared_deploy_globs()[1]:
         reasons.append(
             "cannot read .github/workflows to determine which paths deploy on "
@@ -781,8 +904,12 @@ def evaluate(
             "a reviewer has requested changes: resolve it with them rather than "
             "merging over it"
         )
-    if facts.unresolved_threads:
-        reasons.append(f"{facts.unresolved_threads} review thread(s) unresolved")
+    if facts.unresolved_weight >= BLOCKING_SEVERITY_TOTAL:
+        reasons.append(
+            f"{facts.unresolved_threads} unresolved review thread(s) weigh "
+            f"{facts.unresolved_weight:g} (AGENTS.md blocks at "
+            f"{BLOCKING_SEVERITY_TOTAL:g}; unlabelled counts as middle)"
+        )
     if facts.review_threads_total > MAX_REVIEW_THREADS:
         reasons.append(
             f"{facts.review_threads_total} review threads, only the first "
