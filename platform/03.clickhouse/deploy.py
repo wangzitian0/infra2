@@ -14,6 +14,7 @@ shared_tasks = sys.modules.get("platform.03.clickhouse.shared")
 
 class ClickHouseDeployer(Deployer):
     service = "clickhouse"
+    secret_key = ""
     compose_path = "platform/03.clickhouse/compose.yaml"
     data_path = "/data/platform/clickhouse"
 

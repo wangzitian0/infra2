@@ -64,12 +64,60 @@ def test_the_quiet_period_is_counted_from_the_last_push():
 
 
 def test_pending_checks_and_open_threads_are_not_yet_not_owner():
+    # unresolved_weight, not the thread count: AGENTS.md weighs findings and
+    # blocks at 1.0. Two unlabelled threads are 0.5 each, which is what this
+    # case was always describing -- enough to block.
     verdict = gate.evaluate(
-        _facts(checks=(("Tests", "pending"),), unresolved_threads=2), now=NOW
+        _facts(
+            checks=(("Tests", "pending"),), unresolved_threads=2, unresolved_weight=1.0
+        ),
+        now=NOW,
     )
     assert verdict.exit_code == 1 and not verdict.owner_required
     assert "check(s) not green: Tests" in verdict.reasons
-    assert "2 review thread(s) unresolved" in verdict.reasons
+    assert any("weigh 1" in r for r in verdict.reasons)
+
+
+def test_one_unlabelled_finding_no_longer_blocks_on_its_own():
+    """The behaviour change this implementation introduces, stated outright.
+
+    AGENTS.md has always said high=1.0 / middle=0.5 / low=0.25, unlabelled as
+    middle, blocking at 1.0. The gate counted threads instead, so a single
+    wording nit from a reviewer that labels nothing -- no automated reviewer
+    does -- stalled a merge exactly as hard as a correctness defect. This is
+    the rule the document already carried; the code has caught up to it.
+    """
+    verdict = gate.evaluate(
+        _green(unresolved_threads=1, unresolved_weight=0.5), now=NOW
+    )
+    assert not any("weigh" in r for r in verdict.reasons), verdict.reasons
+
+
+def test_one_high_finding_still_blocks_alone():
+    """The other half: weighting must not make a real finding cheaper."""
+    verdict = gate.evaluate(
+        _green(unresolved_threads=1, unresolved_weight=1.0), now=NOW
+    )
+    assert any("weigh 1" in r for r in verdict.reasons)
+
+
+@pytest.mark.parametrize(
+    ("bodies", "expected"),
+    (
+        (["no label here"], gate.UNLABELLED_SEVERITY_WEIGHT),
+        (["severity: low"], 0.25),
+        (["Severity: HIGH"], 1.0),
+        (["**severity: middle**"], 0.5),
+        # The highest label in the thread wins: a reply downgrading its own nit
+        # must not lower a `high` raised above it.
+        (["severity: low", "on reflection severity: high"], 1.0),
+        # Prose is not a label. Inferring from wording would make the verdict
+        # depend on phrasing.
+        (["this is a high severity problem"], gate.UNLABELLED_SEVERITY_WEIGHT),
+    ),
+)
+def test_thread_weight_reads_only_explicit_labels(bodies, expected):
+    assert gate.thread_weight(bodies) == expected
 
 
 def test_the_deploy_triggering_globs_cover_every_push_triggered_deploy_workflow():

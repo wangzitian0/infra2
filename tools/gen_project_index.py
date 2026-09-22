@@ -32,12 +32,37 @@ README = PROJECT_DIR / "README.md"
 
 BEGIN_ACTIVE = "<!-- BEGIN GENERATED ACTIVE PROJECTS (tools/gen_project_index.py) -->"
 END_ACTIVE = "<!-- END GENERATED ACTIVE PROJECTS -->"
-BEGIN_ARCHIVED = "<!-- BEGIN GENERATED ARCHIVED PROJECTS (tools/gen_project_index.py) -->"
+BEGIN_ARCHIVED = (
+    "<!-- BEGIN GENERATED ARCHIVED PROJECTS (tools/gen_project_index.py) -->"
+)
 END_ARCHIVED = "<!-- END GENERATED ARCHIVED PROJECTS -->"
 
 _TITLE_RE = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
 _STATUS_RE = re.compile(r"^\s*>?\s*\*\*(?:Status|状态)\*\*:?\s*(.+?)\s*$", re.MULTILINE)
 _SKIP_SUFFIXES = (".TODOWRITE.md", ".SUMMARY.md")
+
+
+_NUMBER_RE = re.compile(r"^Infra-(\d+)")
+
+
+def _project_number(path: Path) -> int:
+    """The Infra id as a number, for ordering.
+
+    Sorting these paths as strings is only accidentally right: it agrees with
+    numeric order while every id has the same width, and stops the moment one
+    does not. "Infra-999" sorts above "Infra-1000" as text, so the newest doc
+    would land below an older one under a comment promising the opposite.
+    Dormant today — the ids are in the twenties — and silent when it arrives.
+    """
+    match = _NUMBER_RE.match(path.name)
+    if match is None:
+        # SystemExit, not assert: `python -O` strips assertions, which would
+        # turn this into an AttributeError on `None.group` and lose the message.
+        # Matches how the rest of this script reports a refusal.
+        raise SystemExit(
+            f"gen_project_index: {path.name} does not start with an Infra id"
+        )
+    return int(match.group(1))
 
 
 def _project_docs(directory: Path) -> list[Path]:
@@ -47,7 +72,9 @@ def _project_docs(directory: Path) -> list[Path]:
             for path in directory.glob("Infra-*.md")
             if not path.name.endswith(_SKIP_SUFFIXES)
         ),
-        reverse=True,  # newest (highest Infra-NNN) first, matching the prior hand order
+        # newest (highest Infra-NNN) first, matching the prior hand order
+        key=_project_number,
+        reverse=True,
     )
 
 
@@ -58,7 +85,9 @@ def _extract(path: Path) -> tuple[str, str]:
     if title_match is None:
         raise SystemExit(f"gen_project_index: no H1 title in {path.relative_to(ROOT)}")
     if status_match is None:
-        raise SystemExit(f"gen_project_index: no Status line in {path.relative_to(ROOT)}")
+        raise SystemExit(
+            f"gen_project_index: no Status line in {path.relative_to(ROOT)}"
+        )
     return title_match.group(1).strip(), status_match.group(1).strip()
 
 
@@ -74,7 +103,9 @@ def render_readme() -> str:
     text = README.read_text(encoding="utf-8")
     for begin, end in ((BEGIN_ACTIVE, END_ACTIVE), (BEGIN_ARCHIVED, END_ARCHIVED)):
         if begin not in text or end not in text:
-            raise SystemExit(f"gen_project_index: markers not found in {README} — add them once")
+            raise SystemExit(
+                f"gen_project_index: markers not found in {README} — add them once"
+            )
 
     text = (
         text.split(BEGIN_ACTIVE)[0]
@@ -110,7 +141,10 @@ def main() -> int:
 
     actual = README.read_text(encoding="utf-8")
     if actual != expected:
-        print("gen_project_index: docs/project/README.md is stale — run with --write", file=sys.stderr)
+        print(
+            "gen_project_index: docs/project/README.md is stale — run with --write",
+            file=sys.stderr,
+        )
         return 1
     print("docs/project/README.md is up to date")
     return 0

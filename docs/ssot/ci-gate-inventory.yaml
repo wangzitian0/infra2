@@ -4,18 +4,24 @@
 # docs/ssot/delivery-stages.yaml is the pinned local mirror, not a second definition.
 # Validated by tools/ci_gate_audit.py.
 #
-# Scope: .github/workflows/infra-ci.yml is fully covered below, and infra-ci.yml's own CI
-# step now runs the audit with --enforce (unregistered job there = hard fail). The other 9
-# workflows (ops-checks, reconcile-iac-inputs, apply-observability, deploy, deploy-report-main,
-# deploy-cloudflare-watchdog, app-deploy-request, preview-teardown, docs) are intentionally
-# NOT registered here: Infra-016's wider Phase 2 would have
-# coordinate-ized them too, but the epic (#459) closed 2026-06-29 "not planned" — it
-# converged into boundary governance instead, and infra's inventory (#460/#461, i.e. this
-# file) was explicitly kept frozen at infra-ci.yml, not left as an active backlog. See
-# docs/project/archive/Infra-016.ci_gate_inventory.md for the decision record before
-# widening tools.ci_gate_audit.KNOWN_CI_WORKFLOWS — that reopens a closed epic, it isn't a
-# routine backfill. `ci_gate_audit`'s JSON output carries `covered_workflows` /
-# `out_of_scope_workflows` so this boundary is visible to a report reader, not just here.
+# Scope is COMPUTED, not listed: a workflow's jobs must all be registered here exactly when
+# that workflow runs on a pull request (`pull_request` / `pull_request_target`), because that
+# is precisely when a job can appear on a PR without anyone deciding whether it gates merge.
+# Today that is infra-ci.yml, ops-checks.yml and docs.yml; the other 7 workflows never run on
+# a PR, so they are `out_of_scope_workflows` in the audit's JSON -- not backlog, just unable
+# to gate. Add `pull_request:` to a workflow and it becomes covered automatically; its jobs
+# then have to be registered or infra-ci.yml's `--enforce` step fails.
+#
+# Registering the ops-checks/docs jobs below finishes Infra-016 Phase 1 as it was written
+# (its D2 line scoped "infra-ci 7, ops-checks 6, ... drift reports", and `ops.scheduled_cleanup`
+# was defined for exactly this and sat unused). What epic #459 closed 2026-06-29 as "not
+# planned" was phases 3-4 -- app alignment and the cross-repo chain view -- not infra coverage.
+# See docs/project/archive/Infra-016.ci_gate_inventory.md.
+#
+# Every gate added by that backfill is `blocks_merge: false`: the set of blocks_merge:true
+# gates still equals, exactly, the 7 required status checks in the live branch ruleset, which
+# is what makes widening the audit provably non-loosening. Promoting any of these to
+# blocks_merge: true is a separate change that must add the ruleset context alongside it.
 version: 1
 repo_prefix: infra_ci.
 gates:
@@ -93,3 +99,100 @@ gates:
     # fully-covered workflow -- the audit's own coverage invariant.
     blocks_merge: false
     failure_semantics: The PR-vs-base diff could not be computed (e.g. a force-pushed/rewritten base), so every other infra-ci job that depends on it is skipped rather than run.
+  - id: infra_ci.docs_build
+    stage: github_ci.merge_authority
+    task_category: docs_build
+    workflow: .github/workflows/docs.yml
+    job: build
+    # Runs on every docs-touching PR but is not one of the 7 required contexts in the
+    # branch ruleset, so a broken docs build cannot itself block merge today.
+    blocks_merge: false
+    failure_semantics: The MkDocs site fails to build (broken nav, missing page, or a strict-mode warning).
+  - id: infra_ci.docs_deploy
+    stage: prod.release_integrity
+    task_category: docs_publish
+    workflow: .github/workflows/docs.yml
+    job: deploy
+    # `if: push && refs/heads/main` -- never runs on a PR, but it is a job of a covered
+    # workflow, so the audit's coverage invariant requires it declared.
+    blocks_merge: false
+    failure_semantics: The built docs site fails to publish to GitHub Pages after a merge to main.
+  - id: infra_ci.deploy_v2_canary
+    stage: preview.runtime
+    task_category: deploy_canary
+    workflow: .github/workflows/ops-checks.yml
+    job: deploy-v2-canary
+    # The one ops-checks job that does run on same-repo PRs (touching deploy paths). Not a
+    # required context, so it is PR runtime proof rather than merge authority.
+    blocks_merge: false
+    failure_semantics: A live deploy_v2 canary against the temporary slot fails to roll out, verify, or tear down.
+  - id: infra_ci.deploy_graph_audit
+    stage: ops.scheduled_cleanup
+    task_category: drift_report
+    workflow: .github/workflows/ops-checks.yml
+    job: audit
+    blocks_merge: false
+    failure_semantics: The scheduled deploy dependency-graph audit finds drift between declared and actual deploy edges.
+  - id: infra_ci.host_watchdog
+    stage: ops.scheduled_cleanup
+    task_category: host_watchdog
+    workflow: .github/workflows/ops-checks.yml
+    job: watchdog
+    blocks_merge: false
+    failure_semantics: The infra2 host or its alert bridge is unreachable or unhealthy.
+  - id: infra_ci.weekly_digest
+    stage: ops.scheduled_cleanup
+    task_category: drift_report
+    workflow: .github/workflows/ops-checks.yml
+    job: digest
+    blocks_merge: false
+    failure_semantics: The weekly operational digest cannot be built or delivered.
+  - id: infra_ci.preview_leak
+    stage: ops.scheduled_cleanup
+    task_category: preview_leak
+    workflow: .github/workflows/ops-checks.yml
+    job: preview-leak-check
+    blocks_merge: false
+    failure_semantics: A Dokploy preview outlived its PR and is still consuming a slot.
+  - id: infra_ci.host_hygiene_schedule
+    stage: ops.scheduled_cleanup
+    task_category: host_hygiene
+    workflow: .github/workflows/ops-checks.yml
+    job: host-hygiene-schedule
+    blocks_merge: false
+    failure_semantics: The VPS host-hygiene timer is missing or not scheduled as declared.
+  - id: infra_ci.facet_reconcile
+    stage: ops.scheduled_cleanup
+    task_category: reconcile_plan
+    workflow: .github/workflows/ops-checks.yml
+    job: facet-reconcile
+    blocks_merge: false
+    failure_semantics: compose_id, config-hash or DNS has drifted from the declared facet state.
+  - id: infra_ci.vault_self_refresh_audit
+    stage: ops.scheduled_cleanup
+    task_category: vault_agent
+    workflow: .github/workflows/ops-checks.yml
+    job: vault-self-refresh-audit
+    blocks_merge: false
+    failure_semantics: Vault agent self-refresh has stopped renewing, so a lease is heading for expiry.
+  - id: infra_ci.secrets_reconcile
+    stage: ops.scheduled_cleanup
+    task_category: secret_preflight
+    workflow: .github/workflows/ops-checks.yml
+    job: secrets-reconcile
+    blocks_merge: false
+    failure_semantics: Declared secrets diverge from 1Password, or the account is near a capacity limit.
+  - id: infra_ci.pi_chain_smoke
+    stage: ops.scheduled_cleanup
+    task_category: provider_smoke
+    workflow: .github/workflows/ops-checks.yml
+    job: pi-chain-smoke
+    blocks_merge: false
+    failure_semantics: The pi CLI -> zai-coding-cn -> glm-5.3-flash chain cannot complete a real call (credential, routing, or provider outage).
+  - id: infra_ci.e2e_regressions_smoke
+    stage: prod.release_integrity
+    task_category: e2e_regression
+    workflow: .github/workflows/ops-checks.yml
+    job: e2e-regressions-smoke
+    blocks_merge: false
+    failure_semantics: The production e2e regression smoke fails against the live deployment.
