@@ -135,3 +135,96 @@ def test_a_missing_workflow_reports_nothing_rather_than_raising() -> None:
     # workflow that ought to exist.
     absent = ROOT / ".github" / "workflows" / "does-not-exist.yml"
     assert ci_spec.load_workflow(absent) == {}
+
+
+# -- An exemption exempts one thing (#788 review) ------------------------------------
+
+JOB_LEVEL_PLUS_EXEMPTED_STEP = """
+jobs:
+  gate:
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run ruff check
+        run: ruff check .
+      - name: Upload coverage
+        # gate-exempt: reports a number, does not check one
+        continue-on-error: true
+        uses: coverallsapp/github-action@v2
+"""
+
+EXEMPTED_JOB = """
+jobs:
+  gate:
+    # gate-exempt: advisory only, declared blocks_merge:false
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run ruff check
+        run: ruff check .
+"""
+
+
+def test_an_exempted_step_does_not_silence_its_job() -> None:
+    """The bypass this audit would otherwise have rebuilt inside itself.
+
+    The job is `continue-on-error: true` AND an unrelated coverage step carries a
+    `# gate-exempt:`. Reading the exemptions as one workflow-wide flag (`not exempt`)
+    made the second fact hide the first: add one exempted step anywhere in the file
+    and a required job could be defanged silently -- exactly the drift this audit
+    exists to detect.
+    """
+    found = ci_spec.defanged_steps(
+        _wf(JOB_LEVEL_PLUS_EXEMPTED_STEP), "gate", JOB_LEVEL_PLUS_EXEMPTED_STEP
+    )
+    assert found == ["<job>"], found
+
+
+def test_a_job_can_be_exempted_by_its_own_comment() -> None:
+    """The counterpart: the exemption keyed to the job itself does apply to it,
+    so the mechanism still has a legitimate job-level use."""
+    assert ci_spec.defanged_steps(_wf(EXEMPTED_JOB), "gate", EXEMPTED_JOB) == []
+
+
+def test_one_jobs_exemption_does_not_carry_to_another() -> None:
+    """Keying is per declaration, not 'the last comment seen wins the file'."""
+    two_jobs = (
+        EXEMPTED_JOB
+        + """  other:
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run tests
+        run: pytest
+"""
+    )
+    assert ci_spec.defanged_steps(_wf(two_jobs), "gate", two_jobs) == []
+    assert ci_spec.defanged_steps(_wf(two_jobs), "other", two_jobs) == ["<job>"]
+
+
+# -- load_workflow's docstring promise (#788 review) ----------------------------------
+
+
+@pytest.mark.parametrize("body", ["", "null\n", "- a\n- b\n", "just a string\n"])
+def test_valid_yaml_that_is_not_a_mapping_reads_as_empty(tmp_path, body) -> None:
+    """`yaml.safe_load` happily returns None/list/str, which sails past the
+    YAMLError handler and breaks every `.get()` downstream."""
+    p = tmp_path / "wf.yml"
+    p.write_text(body, encoding="utf-8")
+    assert ci_spec.load_workflow(p) == {}
+
+
+def test_an_unreadable_file_reads_as_empty(tmp_path) -> None:
+    """The docstring promised {} for 'absent or unreadable', but only malformed
+    YAML was caught -- a permission error or invalid UTF-8 raised through it."""
+    bad_utf8 = tmp_path / "bad.yml"
+    bad_utf8.write_bytes(b"jobs:\n  gate:\n    name: \xff\xfe\n")
+    assert ci_spec.load_workflow(bad_utf8) == {}
+
+    no_read = tmp_path / "locked.yml"
+    no_read.write_text("jobs: {}\n", encoding="utf-8")
+    no_read.chmod(0o000)
+    try:
+        assert ci_spec.load_workflow(no_read) == {}
+    finally:
+        no_read.chmod(0o644)

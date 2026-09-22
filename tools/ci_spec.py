@@ -65,9 +65,16 @@ def load_workflow(path) -> dict:
     if not p.is_file():
         return {}
     try:
-        return yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-    except yaml.YAMLError:
+        parsed = yaml.safe_load(p.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        # "Unreadable" is not only malformed YAML (#788 review): a permission
+        # error or invalid UTF-8 raised straight through the docstring's promise
+        # and crashed the caller. A workflow that cannot be read is a finding to
+        # phrase, in every one of those cases.
         return {}
+    # Valid YAML that is not a mapping (`null`, a list, a bare string) would sail
+    # past the try and break every `.get()` downstream.
+    return parsed if isinstance(parsed, dict) else {}
 
 
 # A `continue-on-error` is not automatically wrong -- uploading coverage to a
@@ -99,7 +106,12 @@ def defanged_steps(workflow: dict, job_id: str, source: str = "") -> list[str]:
     job = (workflow.get("jobs") or {}).get(job_id) or {}
     exempt = _exempt_lines(source)
     out: list[str] = []
-    if job.get("continue-on-error") and not exempt:
+    # Keyed by THIS job's id, not `not exempt` (#788 review). Treating the
+    # exemptions as one workflow-wide flag meant a single exempted step -- a
+    # coverage upload, say -- silenced a job-level `continue-on-error` somewhere
+    # else in the same file. That is the bypass this audit exists to catch,
+    # rebuilt inside the audit.
+    if job.get("continue-on-error") and job_id not in exempt:
         out.append("<job>")
     for index, step in enumerate(job.get("steps") or []):
         if not step.get("continue-on-error"):
@@ -110,21 +122,38 @@ def defanged_steps(workflow: dict, job_id: str, source: str = "") -> list[str]:
     return out
 
 
-def _exempt_lines(source: str) -> set[str]:
-    """Step names carrying a `# gate-exempt:` comment.
+# A job declaration: a two-space-indented key inside the top-level `jobs:` block.
+_JOB_KEY_RE = re.compile(r"^  ([A-Za-z_][\w-]*):\s*$")
 
-    Matched by the step's own `- name:` because that is what a reader sees in
-    the report; a comment attached to an unnamed step exempts nothing, which is
-    deliberate -- an exemption nobody can point at is not one.
+
+def _exempt_lines(source: str) -> set[str]:
+    """Names carrying a `# gate-exempt:` comment, keyed to the declaration above it.
+
+    A declaration is a job id or a step's `- name:` -- what a reader sees in the
+    report. A comment attached to neither exempts nothing, which is deliberate: an
+    exemption nobody can point at is not one. Keying to exactly one declaration is
+    the whole point; see `defanged_steps` for what an unkeyed exemption did.
     """
     if not source:
         return set()
     found: set[str] = set()
     current = ""
+    in_jobs = False
     for line in source.splitlines():
-        stripped = line.strip()
+        # Split off comments before reading structure, so `- name: x  # gate-exempt: y`
+        # yields the name `x`. A `#` inside a quoted step name would be mis-split;
+        # no workflow here has one, and the failure direction is to report the step
+        # rather than to hide it.
+        code = line.split("#", 1)[0]
+        if code[:1] not in ("", " ", "\t"):
+            in_jobs = code.startswith("jobs:")
+        elif in_jobs:
+            job = _JOB_KEY_RE.match(code.rstrip())
+            if job:
+                current = job.group(1)
+        stripped = code.strip()
         if stripped.startswith("- name:"):
             current = stripped[len("- name:") :].strip().strip("\"'")
-        elif GATE_EXEMPT_RE.search(stripped) and current:
+        if current and GATE_EXEMPT_RE.search(line):
             found.add(current)
     return found
