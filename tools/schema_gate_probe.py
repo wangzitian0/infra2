@@ -109,6 +109,40 @@ def remote(ssh: list[str], command: str, *, stdin: str = "", timeout: int = 120)
     return run([*ssh, command], stdin=stdin, timeout=timeout)
 
 
+def redact(text: str, *secrets: str) -> str:
+    """Remove secret values this process holds from text about to be printed.
+
+    Not pattern matching. The probe knows the exact DATABASE_URL it read, so
+    the set of strings to remove is closed, and removing them is exact rather
+    than a guess about what a secret looks like.
+
+    It matters because raw stderr is reported for diagnosis, and a database
+    driver's exception message routinely carries the whole connection string.
+    These logs are readable by anyone who can read the repository.
+    """
+    for secret in secrets:
+        # Two characters would redact half the alphabet out of the diagnosis.
+        if secret and len(secret) > 3:
+            text = text.replace(secret, "***")
+    return text
+
+
+def secrets_in(url: str) -> tuple[str, ...]:
+    """The URL and its password, both worth removing on their own.
+
+    A driver may echo the whole URL, or quote only the credential it failed to
+    authenticate with.
+    """
+    if not url:
+        return ()
+    parts = [url]
+    if "://" in url and "@" in url:
+        userinfo = url.split("://", 1)[1].rsplit("@", 1)[0]
+        if ":" in userinfo:
+            parts.append(userinfo.split(":", 1)[1])
+    return tuple(p for p in parts if p)
+
+
 def scheme_of(url: str) -> str:
     """The scheme and host shape only — never the credentials."""
     if not url:
@@ -150,6 +184,9 @@ def main() -> int:
         return PROBE_INFRA
 
     code, out, err = remote(ssh, "docker --version")
+    # The only output printed unscrubbed, and the only one that can be:
+    # it happens before any credential has been read, so there is nothing
+    # yet to scrub, and `docker --version` carries none.
     probes["docker_reachable"] = {"exit": code, "version": out, "stderr": err[:200]}
     if code != 0:
         report["verdict"] = "INFRA"
@@ -158,16 +195,22 @@ def main() -> int:
         return PROBE_INFRA
 
     # 1. the container, by name prefix so the env suffix does not have to be known
-    # The one swallow that is correct here: grep exits 1 when it matches
-    # nothing, and matching nothing is an answer rather than a failure.
-    # The count is checked explicitly below instead of inferred from it.
-    code, out, _ = remote(
-        ssh,
-        "docker ps --format '{{.Names}}\t{{.Image}}' | grep -F "
-        + shlex.quote(args.container)
-        + " || true",
-    )
-    running = [line.split("\t") for line in out.splitlines() if line.strip()]
+    # No grep and no `|| true`. Piping into grep merges two exit codes into
+    # one, and `|| true` then discards it: `docker ps` failing on a permission
+    # error or a dead daemon would arrive here as an empty list and be
+    # reported as "no container is running", which is a different fact. The
+    # listing is filtered in Python so docker's own verdict survives.
+    code, out, err = remote(ssh, "docker ps --format '{{.Names}}\t{{.Image}}'")
+    if code != 0:
+        report["verdict"] = "INFRA"
+        report["reason"] = f"docker ps failed (exit {code}): {err[:200]}"
+        print(json.dumps(report, indent=2))
+        return PROBE_INFRA
+    running = [
+        line.split("\t")
+        for line in out.splitlines()
+        if line.strip() and args.container in line.split("\t")[0]
+    ]
     probes["running_containers"] = running
     # `--container` is a name prefix: the env suffix is not known here, and
     # prod, staging and every live preview can share it. Picking the first
@@ -188,15 +231,18 @@ def main() -> int:
     container = running[0][0]
 
     # 2. DATABASE_URL, existence and scheme only
-    code, out, err = remote(
+    code, db_url, err = remote(
         ssh, f"docker exec {shlex.quote(container)} printenv DATABASE_URL"
     )
+    # Held for the end-to-end run below and, just as importantly, to scrub
+    # every piece of output this process prints from here on.
+    secrets = secrets_in(db_url)
     probes["database_url"] = {
         "exit": code,
-        "readable": bool(out),
-        "scheme": scheme_of(out),
+        "readable": bool(db_url),
+        "scheme": scheme_of(db_url),
         "source": f"docker exec {container} printenv",
-        "stderr": err[:200],
+        "stderr": redact(err, *secrets)[:200],
     }
 
     # 3. the image: does it start, where does it work from, does the metadata
@@ -210,7 +256,11 @@ def main() -> int:
         "'pwd; python3 -c \"import sys; print(sys.version.split()[0])\"'",
         timeout=300,
     )
-    probes["image_starts"] = {"exit": code, "stdout": out, "stderr": err[:300]}
+    probes["image_starts"] = {
+        "exit": code,
+        "stdout": redact(out, *secrets)[:300],
+        "stderr": redact(err, *secrets)[:300],
+    }
 
     code, out, err = remote(
         ssh,
@@ -219,16 +269,24 @@ def main() -> int:
         "print(len(src.database.Base.metadata.tables))\"'",
         timeout=300,
     )
-    probes["metadata_imports"] = {"exit": code, "tables": out, "stderr": err[:300]}
+    probes["metadata_imports"] = {
+        "exit": code,
+        "tables": redact(out, *secrets)[:300],
+        "stderr": redact(err, *secrets)[:300],
+    }
 
     # 4. the gate itself, end to end, with the script piped in over stdin
-    gate_source = ""
     try:
         with open(GATE_SCRIPT, encoding="utf-8") as handle:
             gate_source = handle.read()
     except OSError as exc:
-        probes["gate_end_to_end"] = {"error": f"cannot read {GATE_SCRIPT}: {exc}"}
-        gate_source = ""
+        # Skipping the one probe that answers the actual question, and still
+        # reporting PROBED with exit 0, would tell the caller the end-to-end
+        # check ran.
+        report["verdict"] = "INFRA"
+        report["reason"] = f"cannot read {GATE_SCRIPT}: {exc}"
+        print(json.dumps(report, indent=2))
+        return PROBE_INFRA
 
     if gate_source:
         app_path = f" --app-path {shlex.quote(args.app_path)}" if args.app_path else ""
@@ -241,8 +299,11 @@ def main() -> int:
         code, out, err = remote(ssh, command, stdin=gate_source, timeout=300)
         probes["gate_end_to_end"] = {
             "exit": code,
-            "verdict_line": out.splitlines()[-1][:400] if out else "",
-            "stderr": err[:400],
+            "verdict_line": redact(out.splitlines()[-1] if out else "", *secrets)[:400],
+            # Scrubbed, not merely truncated: a driver's exception message
+            # routinely carries the whole connection string, and these logs are
+            # readable by anyone who can read the repository.
+            "stderr": redact(err, *secrets)[:400],
         }
 
     report["verdict"] = "PROBED"

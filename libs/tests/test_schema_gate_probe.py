@@ -137,3 +137,66 @@ def test_ambiguous_or_absent_containers_refuse(
     assert (
         "containers match" in report["reason"] or "nothing to read" in report["reason"]
     )
+
+
+_URL = "postgresql+asyncpg://app:hunter2@finance_report-postgres:5432/finance"
+
+
+def test_redaction_removes_the_whole_url_and_the_password_alone() -> None:
+    """A driver may echo the connection string, or quote only the credential.
+
+    This is not pattern matching: the probe holds the exact value it read, so
+    the set of strings to remove is closed and removing them is exact.
+    """
+    secrets = probe.secrets_in(_URL)
+    assert _URL in secrets and "hunter2" in secrets
+
+    whole = probe.redact(f"could not connect to {_URL}", *secrets)
+    assert "hunter2" not in whole and "***" in whole
+
+    just_the_password = probe.redact(
+        'FATAL: password authentication failed for "hunter2"', *secrets
+    )
+    assert "hunter2" not in just_the_password
+
+
+def test_redaction_does_not_eat_the_diagnosis() -> None:
+    """A secret short enough to appear everywhere would redact the message.
+
+    Without the length floor, a two-character password turns every stderr into
+    asterisks and the probe stops being able to say what went wrong.
+    """
+    assert probe.redact("connection refused", "ab") == "connection refused"
+    assert probe.secrets_in("") == ()
+    assert probe.secrets_in("postgresql://nouserinfo/db") == (
+        "postgresql://nouserinfo/db",
+    )
+
+
+def test_docker_ps_failing_is_not_reported_as_no_containers(
+    monkeypatch, capsys
+) -> None:
+    """Two different facts, and conflating them hides the one that matters.
+
+    A dead daemon or a permission error used to arrive here as an empty
+    listing — because the command piped into grep and swallowed the code with
+    `|| true` — and got reported as "nothing is running".
+    """
+    monkeypatch.setenv("INFRA2_WATCHDOG_SSH_HOST", "vps")
+    monkeypatch.setenv("INFRA2_WATCHDOG_SSH_USER", "ops")
+    monkeypatch.setenv("INFRA2_WATCHDOG_SSH_KEY_PATH", "/k")
+
+    def remote(ssh, command, *, stdin="", timeout=120):
+        if command.startswith("docker --version"):
+            return 0, "Docker version 27.0.0", ""
+        if command.startswith("docker ps"):
+            return 1, "", "permission denied while trying to connect to the daemon"
+        return 0, "", ""
+
+    monkeypatch.setattr(probe, "remote", remote)
+    monkeypatch.setattr(sys, "argv", ["probe"])
+
+    assert probe.main() == probe.PROBE_INFRA
+    report = json.loads(capsys.readouterr().out)
+    assert "docker ps failed" in report["reason"]
+    assert "permission denied" in report["reason"]
