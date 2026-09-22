@@ -166,23 +166,40 @@ def test_all_workflow_files_includes_dot_yaml(tmp_path) -> None:
     assert f"{WORKFLOWS_DIR}/infra-ci.yml" in fixed_scan
 
 
-def test_enforce_mode_fails_closed_on_an_unregistered_job(monkeypatch) -> None:
+def test_enforce_mode_fails_closed_on_an_unregistered_job(monkeypatch, capsys) -> None:
     """Within the covered scope, --enforce must actually turn drift into a
-    non-zero exit -- not just a printed line."""
+    non-zero exit -- not just a printed line. AND (#780 review) the error text
+    itself must not overclaim scope: it must not tell a reader every job in
+    every workflow needs coordinate-izing when the audit only ever checks
+    covered_workflows -- that would hide the exact same gap this PR exists to
+    stop hiding, just moved from a source comment into the error message."""
     import tools.ci_gate_audit as mod
 
-    monkeypatch.setattr(
-        mod,
-        "audit",
-        lambda root=mod.ROOT: {
-            "schema_errors": [],
-            "dangling_gates": [],
-            "unregistered_jobs": [f"{INFRA_CI}:some-new-job"],
-            "covered_workflows": [INFRA_CI],
-            "out_of_scope_workflows": [],
-        },
-    )
+    fake_result = {
+        "schema_errors": [],
+        "dangling_gates": [],
+        "unregistered_jobs": [f"{INFRA_CI}:some-new-job"],
+        "covered_workflows": [INFRA_CI],
+        "out_of_scope_workflows": ["some/other.yml"],
+    }
+    monkeypatch.setattr(mod, "audit", lambda root=mod.ROOT: fake_result)
+
     assert mod.main(["--enforce"]) == 1
+    stderr = capsys.readouterr().err
+    assert "every job" not in stderr.lower(), (
+        f"error text overclaims scope with an unqualified 'every job' -- a reader "
+        f"would think out_of_scope_workflows need registering too: {stderr!r}"
+    )
+    assert INFRA_CI in stderr, (
+        f"error text must name the actual covered_workflows scope, not just gesture "
+        f"at 'every job': {stderr!r}"
+    )
+    assert "not backlog" in stderr.lower(), (
+        f"error text must say out-of-scope workflows are a deliberate decision, not "
+        f"an unregistered backlog: {stderr!r}"
+    )
+
+    capsys.readouterr()  # drain before the report-only check below
     assert mod.main([]) == 0, "report-only mode must stay non-blocking on the same drift"
 
 

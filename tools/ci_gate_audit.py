@@ -128,7 +128,19 @@ def main(argv: list[str] | None = None) -> int:
         print("::error::schema errors / dangling gates are not allowed even in shadow", file=sys.stderr)
         return 1
     if args.enforce and result["unregistered_jobs"]:
-        print("::error::unregistered CI jobs (every job must be coordinate-ized)", file=sys.stderr)
+        # Scoped on purpose (#780 review): "every job must be coordinate-ized" would
+        # tell a reader the audit expects out_of_scope_workflows to be registered too
+        # -- exactly the overclaim this PR exists to stop making. Every job WITHIN
+        # covered_workflows must be registered; workflows outside it are not backlog,
+        # they are the frozen Infra-016 #459 scope decision (module docstring).
+        print(
+            "::error::unregistered CI jobs within covered_workflows "
+            f"{result['covered_workflows']} must be registered in {INVENTORY} -- "
+            "workflows in out_of_scope_workflows are NOT backlog, they are a "
+            "deliberate scope decision (Infra-016 #459 closed 'not planned'): "
+            f"{result['unregistered_jobs']}",
+            file=sys.stderr,
+        )
         return 1
     return 0
 
