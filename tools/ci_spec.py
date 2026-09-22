@@ -46,6 +46,10 @@ BANNED_GATE_MARKERS = (
 # `continue-on-error` lived in one of them and only looked at the job, so
 # closing it at step level meant finding and fixing three places, and nobody
 # did. Asking the question once means answering it once.
+#
+# All three now read through here (#788 review, which caught this comment
+# claiming a consolidation that had only been done for one of them). What the
+# inventory YAML does is a different question and stays with its own readers.
 # ---------------------------------------------------------------------------
 
 import re  # noqa: E402
@@ -78,6 +82,37 @@ def read_workflow(path) -> tuple[dict, str]:
     # Valid YAML that is not a mapping (`null`, a list, a bare string) would sail
     # past the handler and break every `.get()` downstream.
     return (parsed if isinstance(parsed, dict) else {}), source
+
+
+def workflow_read_error(path) -> str | None:
+    """Why `read_workflow` gave back an empty mapping for `path`, or None.
+
+    Only the linter needs this: an auditor that finds nothing to audit reports
+    that, while a linter owes the reader the reason a file did not parse. Called
+    on the empty-mapping path only, so the happy path still parses once.
+
+    An absent or blank file is not an error here -- `lint_workflow` has always
+    treated those as "no findings", and turning them into failures would be a
+    behaviour change smuggled in under a refactor.
+    """
+    from pathlib import Path
+
+    p = Path(path)
+    if not p.is_file():
+        return None
+    try:
+        source = p.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return str(exc)
+    if not source.strip():
+        return None
+    try:
+        parsed = yaml.safe_load(source)
+    except yaml.YAMLError as exc:
+        return str(exc)
+    if isinstance(parsed, dict):
+        return None
+    return f"top level is {type(parsed).__name__}, not a mapping"
 
 
 def load_workflow(path) -> dict:

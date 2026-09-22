@@ -40,12 +40,10 @@ def _blocking_gates() -> list[dict]:
 def _job_display_name(workflow_rel_path: str, job_id: str) -> str | None:
     """The GitHub Actions check `context` a job reports is its `name:`, not its
     YAML job id — required_status_checks matches on the display name."""
-    path = ROOT / workflow_rel_path
-    if not path.is_file():
-        return None
-    wf = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    job = (wf.get("jobs") or {}).get(job_id) or {}
-    return job.get("name")
+    workflow = ci_spec.load_workflow(ROOT / workflow_rel_path)
+    jobs = workflow.get("jobs")
+    job = (jobs if isinstance(jobs, dict) else {}).get(job_id)
+    return job.get("name") if isinstance(job, dict) else None
 
 
 def _defanged(workflow_rel_path: str, job_id: str) -> list[str]:

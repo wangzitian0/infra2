@@ -109,7 +109,7 @@ def test_the_real_required_jobs_carry_no_undeclared_exemption(job: str) -> None:
     source = INFRA_CI.read_text(encoding="utf-8")
     found = ci_spec.defanged_steps(ci_spec.load_workflow(INFRA_CI), job, source)
     assert not found, (
-        f"{job} has step(s) whose failure cannot fail it and which say no why: "
+        f"{job} has step(s) whose failure cannot fail it and which give no reason: "
         f"{found}. Add `# gate-exempt: <reason>` if that is deliberate."
     )
 
@@ -306,3 +306,59 @@ def test_steps_that_are_not_a_list_of_mappings_are_not_a_crash() -> None:
     assert ci_spec.defanged_steps(_wf(wf), "gate", wf) == ["<job>"]
     wf2 = "jobs:\n  gate:\n    steps:\n      - just a string\n"
     assert ci_spec.defanged_steps(_wf(wf2), "gate", wf2) == []
+
+
+# -- One reader for all three auditors (#788 review 2) -------------------------------
+
+
+def test_every_gate_auditor_reads_workflows_through_ci_spec() -> None:
+    """The header comment claimed a consolidation that had been done for one of
+    the three (#788 review). Assert the claim instead of restating it: no auditor
+    may parse a workflow itself.
+
+    The inventory YAML is a different question with different readers, so this
+    looks only at the workflow path: a `yaml.safe_load` whose argument mentions a
+    workflow, or a `.read_text()` on a path that came from `WORKFLOWS`/`workflow`.
+    """
+    root = pathlib.Path(__file__).resolve().parents[2]
+    for name in ("ci_gate_audit.py", "ci_gate_lint.py", "ci_gate_ruleset_audit.py"):
+        source = (root / "tools" / name).read_text(encoding="utf-8")
+        offenders = [
+            line.strip()
+            for line in source.splitlines()
+            if "yaml.safe_load" in line and "INVENTORY" not in line.upper()
+        ]
+        assert not offenders, (
+            f"tools/{name} parses a workflow itself instead of using "
+            f"tools.ci_spec.read_workflow: {offenders}"
+        )
+
+
+def test_the_linter_still_reports_why_a_workflow_did_not_parse(tmp_path) -> None:
+    """Routing the linter through the shared reader must not cost it the reason.
+
+    `read_workflow` folds every unusable file into an empty mapping, which is what
+    an auditor wants and what a linter must not silently inherit -- a broken
+    workflow would lint clean.
+    """
+    from tools import ci_gate_lint
+
+    broken = tmp_path / "broken.yml"
+    broken.write_text("jobs: [\n", encoding="utf-8")
+    findings = ci_gate_lint.lint_workflow(broken)
+    assert len(findings) == 1 and "Failed to parse YAML" in findings[0], findings
+
+    not_a_mapping = tmp_path / "list.yml"
+    not_a_mapping.write_text("- a\n- b\n", encoding="utf-8")
+    assert ci_gate_lint.lint_workflow(not_a_mapping), "a list is not a workflow"
+
+
+@pytest.mark.parametrize("body", ["", "   \n\n"])
+def test_a_blank_workflow_is_not_a_lint_failure(tmp_path, body) -> None:
+    """Preserved on purpose: this has always been no findings, and turning it into
+    a failure would be a behaviour change smuggled in under a refactor."""
+    from tools import ci_gate_lint
+
+    blank = tmp_path / "blank.yml"
+    blank.write_text(body, encoding="utf-8")
+    assert ci_gate_lint.lint_workflow(blank) == []

@@ -39,6 +39,8 @@ from pathlib import Path
 import yaml
 from infra2_sdk.ci import load_delivery_stages, validate_inventory
 
+from tools import ci_spec
+
 ROOT = Path(__file__).resolve().parents[1]
 INVENTORY = "docs/ssot/ci-gate-inventory.yaml"
 STAGES = "docs/ssot/delivery-stages.yaml"
@@ -49,21 +51,12 @@ WORKFLOWS_DIR = ".github/workflows"
 PR_TRIGGERS = frozenset({"pull_request", "pull_request_target"})
 
 
-def _load_workflow(path: Path) -> dict:
-    # Non-file (missing, or a bare/empty `workflow:` resolving to the repo root dir) → empty,
-    # so the gate surfaces as dangling/schema_error and the audit exits 1 cleanly rather
-    # than crashing with IsADirectoryError.
-    if not path.is_file():
-        return {}
-    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-
-
 def _workflow_jobs(path: Path) -> list[str]:
-    return list((_load_workflow(path).get("jobs") or {}).keys())
+    return list((ci_spec.load_workflow(path).get("jobs") or {}).keys())
 
 
 def _workflow_triggers(path: Path) -> set[str]:
-    wf = _load_workflow(path)
+    wf = ci_spec.load_workflow(path)
     # PyYAML resolves the bare key `on:` to the boolean True (YAML 1.1 truthy), so a
     # `wf.get("on")`-only read sees nothing on every real workflow file in this repo.
     on = wf.get(True, wf.get("on"))
