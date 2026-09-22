@@ -21,10 +21,18 @@ def test_infra_pins_the_expected_sdk_release() -> None:
 
 
 def test_alerting_dockerfile_sdk_pin_matches_pyproject() -> None:
+    pyproject_text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    wheel_match = re.search(r'"(infra2-sdk @ https://[^"]+)"', pyproject_text)
+    assert wheel_match is not None, "Failed to find infra2-sdk requirement in pyproject.toml"
+    declared_wheel = wheel_match.group(1)
+
     dockerfile = (ROOT / "platform/12.alerting/Dockerfile").read_text(encoding="utf-8")
-    match = re.search(r"infra2_sdk-([0-9.]+)-", dockerfile)
-    assert match is not None, "Failed to find infra2_sdk version in Alerting Dockerfile"
-    assert match.group(1) == version("infra2-sdk")
+    assert declared_wheel in dockerfile, (
+        f"Alerting Dockerfile must contain the exact pinned wheel URL from pyproject.toml: {declared_wheel}"
+    )
+    version_match = re.search(r"infra2_sdk-([0-9.]+)-", declared_wheel)
+    assert version_match is not None
+    assert version_match.group(1) == version("infra2-sdk")
 
 
 def test_local_stage_mirror_matches_the_released_sdk() -> None:
