@@ -200,3 +200,77 @@ def test_docker_ps_failing_is_not_reported_as_no_containers(
     report = json.loads(capsys.readouterr().out)
     assert "docker ps failed" in report["reason"]
     assert "permission denied" in report["reason"]
+
+
+def test_a_percent_encoded_password_is_redacted_in_both_forms() -> None:
+    """The URL carries it encoded; the driver reports it decoded.
+
+    `p@ss word` appears as `p%40ss%20word` in the URL, so redacting only what
+    the URL contained would leave the decoded form intact in exactly the
+    message most likely to quote it — an authentication failure.
+    """
+    url = "postgresql://app:p%40ss%20word@db:5432/finance"
+    secrets = probe.secrets_in(url)
+    assert "p%40ss%20word" in secrets and "p@ss word" in secrets
+
+    for message in (
+        f"could not connect to {url}",
+        'FATAL: password authentication failed for "p@ss word"',
+        "driver echoed p%40ss%20word",
+    ):
+        cleaned = probe.redact(message, *secrets)
+        assert "p@ss word" not in cleaned and "p%40ss%20word" not in cleaned
+
+
+def test_the_gate_script_is_found_from_any_working_directory(
+    tmp_path, monkeypatch
+) -> None:
+    """A relative path would make the probe refuse from anywhere but the root.
+
+    The script sits next to this tool, not next to whoever invoked it.
+    """
+    monkeypatch.chdir(tmp_path)
+    assert probe.GATE_SCRIPT.is_file()
+
+
+def test_container_matching_is_a_prefix_not_a_substring(monkeypatch, capsys) -> None:
+    """`--container` is documented as a prefix; a substring match would create
+    the ambiguity this refusal exists to prevent."""
+    monkeypatch.setenv("INFRA2_WATCHDOG_SSH_HOST", "vps")
+    monkeypatch.setenv("INFRA2_WATCHDOG_SSH_USER", "ops")
+    monkeypatch.setenv("INFRA2_WATCHDOG_SSH_KEY_PATH", "/k")
+
+    def remote(ssh, command, *, stdin="", timeout=120):
+        if command.startswith("docker --version"):
+            return 0, "Docker version 27.0.0", ""
+        if command.startswith("docker ps"):
+            # Only the first starts with the prefix; the second merely
+            # contains it and must not be treated as a candidate.
+            return 0, "finance_report-backend\timg\nold-finance_report-backend\timg", ""
+        return 0, "", ""
+
+    monkeypatch.setattr(probe, "remote", remote)
+    monkeypatch.setattr(sys, "argv", ["probe"])
+    probe.main()
+    report = json.loads(capsys.readouterr().out)
+    names = [row[0] for row in report["probes"]["running_containers"]]
+    assert names == ["finance_report-backend"]
+
+
+def test_the_ssh_options_match_the_rest_of_the_repository() -> None:
+    """Three other tools reach this same host; diverging here is a surprise.
+
+    `accept-new` writes known_hosts, so it needs a usable ~/.ssh and fails
+    where those three succeed.
+    """
+    argv = probe.ssh_argv(
+        {
+            "INFRA2_WATCHDOG_SSH_HOST": "vps",
+            "INFRA2_WATCHDOG_SSH_USER": "ops",
+            "INFRA2_WATCHDOG_SSH_KEY_PATH": "/k",
+        }
+    )
+    assert argv is not None
+    assert "StrictHostKeyChecking=no" in argv
+    assert "UserKnownHostsFile=/dev/null" in argv
+    assert "accept-new" not in " ".join(argv)

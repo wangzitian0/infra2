@@ -46,6 +46,8 @@ import os
 import shlex
 import subprocess
 import sys
+import urllib.parse
+from pathlib import Path
 
 PROBE_OK = 0
 PROBE_INFRA = 2
@@ -53,7 +55,7 @@ PROBE_INFRA = 2
 # The gate runs inside the image, so its script has to get there somehow.
 # Piping it over stdin to `python -` avoids baking an infra2 tool into an
 # application image or mounting a path that only exists on the runner.
-GATE_SCRIPT = "tools/pre_deploy_schema_check.py"
+GATE_SCRIPT = Path(__file__).resolve().parent / "pre_deploy_schema_check.py"
 
 
 def ssh_argv(env: dict[str, str]) -> list[str] | None:
@@ -68,6 +70,10 @@ def ssh_argv(env: dict[str, str]) -> list[str] | None:
     if not (host and user and key):
         return None
     port = (env.get("INFRA2_WATCHDOG_SSH_PORT") or "22").strip()
+    # The options libs/vault_self_refresh_audit, tools/secrets_reconcile_check
+    # and tools/out_of_band_watchdog all use against this same host. Not a
+    # style preference: `accept-new` writes known_hosts, so it needs a usable
+    # ~/.ssh and fails where those three succeed.
     return [
         "ssh",
         "-i",
@@ -75,11 +81,13 @@ def ssh_argv(env: dict[str, str]) -> list[str] | None:
         "-p",
         port,
         "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-o",
         "BatchMode=yes",
         "-o",
         "ConnectTimeout=15",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
         f"{user}@{host}",
     ]
 
@@ -139,8 +147,16 @@ def secrets_in(url: str) -> tuple[str, ...]:
     if "://" in url and "@" in url:
         userinfo = url.split("://", 1)[1].rsplit("@", 1)[0]
         if ":" in userinfo:
-            parts.append(userinfo.split(":", 1)[1])
-    return tuple(p for p in parts if p)
+            encoded = userinfo.split(":", 1)[1]
+            parts.append(encoded)
+            # A password with a reserved character is percent-encoded in the
+            # URL and decoded by the driver, so the two are different strings
+            # and an error message may quote either. Redacting only the form
+            # that happened to be in the URL would leak the other.
+            decoded = urllib.parse.unquote(encoded)
+            if decoded != encoded:
+                parts.append(decoded)
+    return tuple(dict.fromkeys(p for p in parts if p))
 
 
 def scheme_of(url: str) -> str:
@@ -206,10 +222,13 @@ def main() -> int:
         report["reason"] = f"docker ps failed (exit {code}): {err[:200]}"
         print(json.dumps(report, indent=2))
         return PROBE_INFRA
+    # `startswith`, matching what --container is documented to be. A substring
+    # test would also match a container merely containing the name, which is
+    # the ambiguity this is here to avoid rather than create.
     running = [
-        line.split("\t")
-        for line in out.splitlines()
-        if line.strip() and args.container in line.split("\t")[0]
+        parts
+        for parts in (line.split("\t", 1) for line in out.splitlines() if line.strip())
+        if parts[0].startswith(args.container)
     ]
     probes["running_containers"] = running
     # `--container` is a name prefix: the env suffix is not known here, and
