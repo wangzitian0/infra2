@@ -63,7 +63,31 @@ DOCS = ROOT / ".github" / "workflows" / "docs.yml"
 
 # Which job each workflow runs the generators from, and (for infra-ci) whether
 # that job is behind the doc/non-doc classifier.
-GATE_JOBS = ((DOCS, "build", False), (INFRA_CI, "test-deployer-logic", True))
+# (workflow, job, the job's `if:` exactly as the workflow must spell it).
+# None means the job is unconditional. Pinned rather than evaluated: running a
+# GitHub expression would mean reimplementing its language here, and a wrong
+# reimplementation is a worse oracle than a mismatch that demands a human
+# update this line. It exists because a blind audit set `if: false` on each of
+# these jobs in turn -- the whole job disabled, and for test-deployer-logic
+# that is a dozen required gates, not two -- and every test here stayed green:
+# the suite proved "if these steps ran they would behave", never "this job runs".
+GATE_JOBS = (
+    (DOCS, "build", None),
+    (
+        INFRA_CI,
+        "test-deployer-logic",
+        "needs.detect-changes.outputs.has_non_doc == 'true'",
+    ),
+)
+
+# The complete set of ways one step can change a later step's environment in
+# the same job: GitHub defines exactly these (the two command files, plus the
+# deprecated workflow commands they replaced). Unlike shell verbs, this is a
+# closed set fixed by the platform, so scanning for it is not the open-set
+# trap. A step writing any of them before a gate can shadow `uv` or `python3`
+# for every step after it -- which a harness that executes one step in
+# isolation cannot see, and a blind audit duly walked through.
+CROSS_STEP_ENV_MECHANISMS = ("GITHUB_PATH", "GITHUB_ENV", "add-path", "set-env")
 
 # Every file a generator derives its answer from. Changing one of these is what
 # makes the corresponding index stale, so each must reach a gate.
@@ -307,31 +331,54 @@ def _workflow_fires(workflow: Path, files: list[str]) -> bool:
 def _gate_steps(generator: str, files: list[str], tmp_path: Path) -> list[tuple]:
     """(workflow, job name, step) for every gate a change to ``files`` reaches."""
     reached = []
-    for workflow, job_name, needs_non_doc in GATE_JOBS:
+    for workflow, job_name, expected_if in GATE_JOBS:
         if not _workflow_fires(workflow, files):
             continue
-        if needs_non_doc:
+        if expected_if is not None:
             scratch = tmp_path / workflow.stem
             scratch.mkdir(parents=True, exist_ok=True)
             if not _has_non_doc(files, scratch):
                 continue
         job = _jobs(workflow)[job_name]
         reached += [
-            (workflow, job_name, step)
-            for step in job["steps"]
+            (workflow, job_name, index, step)
+            for index, step in enumerate(job["steps"])
             if generator in (step.get("run") or "")
         ]
     return reached
 
 
-def _tree(tmp_path: Path, *, stale_for: str | None) -> Path:
+@pytest.mark.parametrize(
+    ("workflow", "job_name", "expected_if"),
+    GATE_JOBS,
+    ids=[f"{w.name}:{j}" for w, j, _ in GATE_JOBS],
+)
+def test_the_gate_job_still_runs_when_the_model_says_it_does(
+    workflow: Path, job_name: str, expected_if: str | None
+) -> None:
+    """The job hosting a gate must be scheduled on the terms the model assumes.
+
+    Everything else here executes a step's script directly, which says nothing
+    about whether GitHub would ever start the job holding it. Disabling the job
+    -- a mistyped condition, a renamed `needs` output, a stray `false` -- turns
+    the gate off while every other assertion stays green.
+    """
+    job = _jobs(workflow)[job_name]
+    assert job.get("if") == expected_if, (
+        f"{workflow.name}:{job_name} runs under `if: {job.get('if')!r}` but "
+        f"GATE_JOBS assumes {expected_if!r}. Either the job's scheduling "
+        "changed and the model has to follow, or the condition was broken."
+    )
+
+
+def _tree(tmp_path: Path, *, stale_for: str | None, mode: str = "add") -> Path:
     """A miniature repository, optionally with ``stale_for``'s index out of date.
 
     The generators resolve their root from their own location
     (``Path(__file__).resolve().parents[1]``), so copying them next to a copy
     of the docs they read is enough to point them at this tree.
     """
-    root = (tmp_path / ("stale" if stale_for else "clean")).resolve()
+    root = (tmp_path / (f"stale-{mode}" if stale_for else "clean")).resolve()
     if root.exists():
         return root
     (root / "tools").mkdir(parents=True)
@@ -344,7 +391,22 @@ def _tree(tmp_path: Path, *, stale_for: str | None) -> Path:
 
     if stale_for is None:
         return root
-    if stale_for == "tools/gen_project_index.py":
+    if stale_for == "tools/gen_project_index.py" and mode == "status":
+        # The other half of #505: not a missing doc, but an existing one whose
+        # Status drifted from what the index says. Infra-004/005 showed both
+        # shapes, and only the first had a fixture until an audit said so.
+        doc = root / "docs" / "project" / GENERATOR_INPUTS[stale_for][0].split("/")[-1]
+        text = doc.read_text(encoding="utf-8")
+        drifted = re.sub(
+            r"^(\s*>?\s*\*\*(?:Status|状态)\*\*:?\s*).+$",
+            r"\1Audit fixture drift",
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+        assert drifted != text, f"no Status line to drift in {doc.name}"
+        doc.write_text(drifted, encoding="utf-8")
+    elif stale_for == "tools/gen_project_index.py":
         # A new project doc the committed index cannot know about. Built from
         # segments on purpose: this file never exists, and spelling it as one
         # literal would make test_code_doc_path_references_resolve read it as a
@@ -394,11 +456,22 @@ def _markers_intact(generator: str, root: Path) -> None:
         )
 
 
-@pytest.mark.parametrize("generator", sorted(GENERATOR_INPUTS))
-def test_the_stale_fixture_is_actually_stale(generator: str, tmp_path: Path) -> None:
+# Each way an index can go out of date, so a regression confined to one of
+# them cannot hide behind a fixture that only exercises the other.
+_STALE_MODES = (
+    ("tools/gen_project_index.py", "add"),
+    ("tools/gen_project_index.py", "status"),
+    ("tools/gen_ssot_index.py", "hand-edit"),
+)
+
+
+@pytest.mark.parametrize(("generator", "mode"), _STALE_MODES)
+def test_the_stale_fixture_is_actually_stale(
+    generator: str, mode: str, tmp_path: Path
+) -> None:
     """If the fixture did not make the index stale, every bite test below would
     pass without proving anything."""
-    root = _tree(tmp_path, stale_for=generator)
+    root = _tree(tmp_path, stale_for=generator, mode=mode)
     _markers_intact(generator, root)
     result = subprocess.run(
         ["python3", generator],
@@ -485,9 +558,19 @@ def test_every_generator_input_reaches_a_gate_that_bites(
     (shim / "uv").chmod(0o755)
     env = _sanitized_env() | {"PATH": f"{shim}:{os.environ['PATH']}"}
 
-    for workflow, job_name, step in reached:
+    for workflow, job_name, index, step in reached:
         where = f"{workflow.name}:{job_name} step {step.get('name')!r}"
         job = _jobs(workflow)[job_name]
+        for earlier in job["steps"][:index]:
+            body = earlier.get("run") or ""
+            hijacks = [m for m in CROSS_STEP_ENV_MECHANISMS if m in body]
+            assert not hijacks, (
+                f"{workflow.name}:{job_name} step {earlier.get('name')!r} runs "
+                f"before {step.get('name')!r} and writes {hijacks} -- it can "
+                "put a shadow `uv` or `python3` ahead of the real one for every "
+                "step after it, which this harness cannot see because it runs "
+                "one step in isolation rather than replaying the job"
+            )
         assert not step.get("continue-on-error"), (
             f"{where} is continue-on-error, so its verdict cannot fail the job"
         )

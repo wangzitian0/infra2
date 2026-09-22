@@ -31,7 +31,9 @@ Track top issues discovered during documentation engineering.
 - **这条阻断到什么程度，起初写宽了，`/audit` Scout-T 打假后改正**：
   `pr_merge_gate` 的 `not_green` 扫描**每一个**报告过的 check（不只 required 的），
   所以**走 `pr_merge_gate` 合流时**这个 check 变红即阻断——它报出来的名字是 **`build`**，
-  不是 `Docs`（docs.yml 的 job 没有 `name:`，grep `Docs` 什么也找不到）。
+  不是 `Docs`：docs.yml 的 **job** 没有 `name:`，GitHub 就用 job id 作 check context。
+  （文件顶层确实有 `name: Docs`，但那是 **workflow** 名，不是 check 名——第四轮 claim
+  审计指出原先那句「grep `Docs` 什么也找不到」说过头了。）
   **但 GitHub 自己不拦**：main 的 ruleset（`11416804`，实测）只要求 7 个 check，
   `build` 不在其中（`bypass_actors=0`、`current_user_can_bypass=never`，那 7 个是真拦的）。
   Web UI 或 `gh pr merge` 直接合并不会被拦住。这是**纪律**而不是**机制**，
@@ -81,6 +83,28 @@ Track top issues discovered during documentation engineering.
      （它改不了这两个索引，且 `pr_merge_gate` 会以「required check(s) never reported」拦下这种 PR，
      所以不是可利用的洞——但结论写宽了就是错的。）已把 SSOT、本条与测试 docstring 的说法
      收敛到「生成器读的文件」。
+- **第四轮盲审又打穿两次，都是 HIGH，都成立**：
+  1. **job 级 `if:` 从不检查**。把 `test-deployer-logic` 或 docs.yml 的 `build` 整个 job
+     `if: false`——门禁连同该 job 里另外十来个必需检查一起关掉——**测试全绿**。
+     `GATE_JOBS` 硬编码了 job 名，却从不读 `job["if"]`：这套测试证明的是
+     「**这些步骤如果被执行**，行为正确」，从来不是「**这个 job 会被执行**」。
+  2. **同 job 的前序步骤能用 `$GITHUB_PATH` 把影子 `uv`/`python3` 塞到 PATH 前面**，
+     让其后**每一个**步骤（不止这两个门禁）静默空转——**测试全绿**。
+     因为测试是孤立执行单个步骤，不重放整个 job 的步骤间环境传播。
+- 修法与它们的性质：
+  - `GATE_JOBS` 改为 `(workflow, job, 期望的 if 表达式)`，新增测试断言实际 `if:` **恰好**等于模型。
+    这是**文本锁定不是求值**——求值等于在这里重新实现一遍 GitHub 表达式语言，
+    而一个实现错的判官比一个「对不上就红、逼人来同步」的锁更危险。注释里写明了这个取舍。
+  - 跨步骤环境劫持：扫描 gate 步骤**之前**的同 job 步骤，禁止出现
+    `GITHUB_PATH`/`GITHUB_ENV`/`add-path`/`set-env`。这也是文本匹配，但匹配的是
+    **GitHub 自己定义的、有限的、文档化的**全部跨步骤环境机制——**闭集**，
+    不同于 shell 动词那种开集。这个区别是这条守卫能不能成立的全部理由。
+- 同轮 LOW：`gen_project_index` 只测了「新增未登记文档」，没测「已有文档 Status 漂移」——
+  而 #505 两种都有（Infra-004/005 就是后者）。已补 `status` 模式 fixture。
+- **第四轮 claim 审计：零 FALSE。** 六个变异数字、`core.fsmonitor`、`GIT_AUTHOR_*` 覆盖
+  `-c user.*`、ruleset 七个 check、`pr_merge_gate` 的两个反事实、2064、九个门禁，全部独立复现。
+  唯一一条是上面那个括号的措辞，已改。
+
 - **第三轮盲审（只喂代码，屏蔽全部 `*.md` 与 `docs/`）把这个测试打穿了两次，都成立**：
   1. 把 docs.yml 的步骤正文换成**无条件 `exit 1`**（注释里仍写着两个生成器的名字）——
      门禁彻底没了、每个文档 PR 都红，**19 个用例照样全绿**。因为断言只有
@@ -102,12 +126,15 @@ Track top issues discovered during documentation engineering.
   | 怎么废掉门禁 | 测试结果 |
   |---|---|
   | 步骤整个删掉（原始缺陷） | 3 红 |
-  | 步骤加 `\|\| true` | 8 红 |
+  | 步骤加 `\|\| true` | 4 红 |
   | 步骤加 `continue-on-error: true` | 8 红 |
-  | 步骤换成无条件 `exit 1`（盲审攻击 1，此前 19 绿） | **8 红** |
-  | infra-ci 的 project-index 门禁加 `\|\| true`（盲审攻击 2，此前 15 绿） | **2 红** |
-  | 原样 | 19 全绿 |
-  | 敌对 `~/.gitconfig`（fsmonitor + gpgsign 双挂起） | 19 绿 / 7.0s（未加固时 `add -A` 8 秒被杀） |
+  | 步骤换成无条件 `exit 1`（三轮盲审攻击，此前 19 绿） | **8 红** |
+  | infra-ci 的 project-index 门禁加 `\|\| true`（三轮盲审攻击，此前 15 绿） | **2 红** |
+  | infra-ci `test-deployer-logic` 整个 job `if: false`（四轮盲审攻击，此前 19 绿） | **1 红** |
+  | docs.yml `build` 整个 job `if: false`（四轮盲审攻击，此前 19 绿） | **1 红** |
+  | 前序步骤用 `$GITHUB_PATH` 塞影子（四轮盲审攻击，此前 19 绿） | **5 红** |
+  | 原样 | 22 全绿 |
+  | 敌对 `~/.gitconfig`（fsmonitor + gpgsign 双挂起） | 22 绿（未加固时 `add -A` 8 秒被杀） |
 
 ## Latest Findings (2026-06-11)
 
