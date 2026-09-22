@@ -27,7 +27,7 @@ from libs.console import (
     env_vars,
     run_with_status,
 )
-from libs.env import VaultSecrets, generate_password, get_secrets, verify_vault_token
+from libs.env import get_secrets, verify_vault_token
 from libs.service_facets import (
     BackupFacet,
     Exemption,
@@ -492,7 +492,7 @@ class Deployer:
         return get_env()
 
     @classmethod
-    def project_name(cls, env: dict | None = None) -> str:
+    def project_name(cls, env: dict | str | None = None) -> str:
         """Get project name, prioritizing class attribute over env var.
 
         The class `project` attribute takes precedence. Only uses PROJECT env var
@@ -501,7 +501,7 @@ class Deployer:
         if cls.project != "platform":
             # Class explicitly sets a non-default project, use it
             return cls.project
-        e = env or cls.env()
+        e = env if isinstance(env, dict) else cls.env()
         return e.get("PROJECT") or cls.project
 
     @classmethod
@@ -581,7 +581,7 @@ class Deployer:
 
     @classmethod
     def secrets_backend(cls, env: str | None = None):
-        """Get the secrets backend for this service.
+        """Get VaultSecrets instance for this service.
 
         Renamed from ``secrets`` (#543 hotfix): service Deployers declare a
         ``secrets = (SecretsFacet(...),)`` facet attribute (#542), which
@@ -591,7 +591,7 @@ class Deployer:
         with Deployer callables — enforced by
         libs/tests/test_service_facets.py.
 
-        ``env`` overrides the process ``ENV`` var (truealpha#447): a caller
+        ``env`` selects the target environment's Vault store. The deploy path
         that already knows which env it is deploying — e.g.
         libs.deploy.promote.deploy(), which handles staging THEN prod within
         one process/CLI invocation — must not depend on os.environ["ENV"]
@@ -610,40 +610,53 @@ class Deployer:
     def ensure_runtime_secrets(
         cls, c: "Context" | None = None, *, env: str | None = None
     ) -> bool:
-        """Ensure all Vault secrets required by the runtime template exist.
+        """Gate runtime-secret readiness before compose deploy or sync.
+
+        Returns True when this service's Vault state is acceptable:
+        - Manifest-registered services: True immediately (``apply_secret_supply``
+          is the single writer; this method defers to it).
+        - Services without a ``secret_key``: True immediately (no Vault
+          interaction needed).
+        - Unmanifested services with a ``secret_key``: generate-or-verify the
+          key in Vault (legacy self-heal path for not-yet-migrated services).
 
         ``env`` — see secrets_backend(); threaded through so this stays correct
         when called for an env other than the process's own ``ENV``.
         """
         from libs import secrets_registry
 
-        if (
-            secrets_registry.lookup(cls.project_name(cls.env()), cls.service)
-            is not None
-        ):
+        e = cls.env()
+        effective_env = env or e.get("ENV", "production")
+        project = cls.project_name(e)
+
+        if secrets_registry.lookup(project, cls.service) is not None:
             # The manifest owns this service's store and apply_secret_supply generates
-            # what it declares (PR-E: one writer). The legacy ``secret_key`` generation
-            # below wrote a key nobody declared — that is where the orphan values the
-            # daily reconcile reports as ``unclassified`` came from: platform/alerting's
-            # ``password`` (the class default) and platform/prefect's ``postgres_password``.
+            # what it declares (PR-E: one writer).
             return True
 
-        secrets_backend = cls.secrets_backend(env=env)
+        # Services without a registered manifest and without an explicit secret_key
+        # (e.g. services with empty passwords, or pure proxy/label configs) require
+        # no Vault runtime secrets.
+        if not cls.secret_key:
+            return True
 
-        if cls.secret_key:
-            try:
-                val = secrets_backend.get(cls.secret_key)
-            except VaultSecrets.VaultSecretNotFoundError:
-                val = None
-            if not val:
-                val = generate_password(24)
-                if secrets_backend.set(cls.secret_key, val):
-                    warning(f"Generated new secret in Vault: {cls.secret_key}")
-                else:
-                    error(f"Failed to store secret in Vault: {cls.secret_key}")
-                    return False
+        from libs.env import VaultSecrets, generate_password
+
+        secrets_backend = cls.secrets_backend(env=effective_env)
+
+        try:
+            val = secrets_backend.get(cls.secret_key)
+        except VaultSecrets.VaultSecretNotFoundError:
+            val = None
+        if not val:
+            val = generate_password(24)
+            if secrets_backend.set(cls.secret_key, val):
+                warning(f"Generated new secret in Vault: {cls.secret_key}")
             else:
-                info(f"Vault secret exists: {cls.secret_key}")
+                error(f"Failed to store secret in Vault: {cls.secret_key}")
+                return False
+        else:
+            info(f"Vault secret exists: {cls.secret_key}")
         return True
 
     # ---- plan PR-E: the manifest-driven secret supply, applied on every deploy --------

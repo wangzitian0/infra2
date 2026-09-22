@@ -873,8 +873,19 @@ def test_authentik_sync_secret_hook_repairs_bootstrap_fields(monkeypatch) -> Non
     assert stores["authentik"].values["bootstrap_email"] == "admin@example.test"
 
 
+def test_base_deployer_ensure_runtime_secrets_passes_for_service_without_secret_key() -> None:
+    """Services without a manifest and with secret_key = '' require no Vault secrets."""
+    from libs.deploy.deployer import Deployer
+
+    class StubNoSecretDeployer(Deployer):
+        service = "unregistered_test_stub"
+        secret_key = ""
+
+    assert StubNoSecretDeployer.ensure_runtime_secrets() is True
+
+
 def test_base_deployer_creates_missing_vault_secret_path(monkeypatch) -> None:
-    """Infra-011.6: sync repairs an absent Vault path before compose deploy."""
+    """Infra-011.6: sync repairs an absent Vault path for unmanifested service with secret_key."""
     from libs.deploy.deployer import Deployer
     from libs.env import VaultSecrets
 
@@ -884,17 +895,17 @@ def test_base_deployer_creates_missing_vault_secret_path(monkeypatch) -> None:
 
     secrets = MissingPathSecrets()
 
-    class DummyDeployer(Deployer):
-        service = "clickhouse"
-        secret_key = "password"
+    class StubWithSecretDeployer(Deployer):
+        service = "unregistered_test_stub"
+        secret_key = "jwt_secret"
 
     monkeypatch.setattr(
-        DummyDeployer, "secrets_backend", classmethod(lambda cls, env=None: secrets)
+        StubWithSecretDeployer, "secrets_backend", classmethod(lambda cls, env=None: secrets)
     )
 
-    assert DummyDeployer.ensure_runtime_secrets() is True
+    assert StubWithSecretDeployer.ensure_runtime_secrets() is True
     assert secrets.set_calls
-    assert secrets.set_calls[0][0] == "password"
+    assert secrets.set_calls[0][0] == "jwt_secret"
 
 
 # --- truealpha#447: promote.deploy() self-heals via a real Deployer import ------
