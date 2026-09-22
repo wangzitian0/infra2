@@ -120,10 +120,14 @@ jobs:
           # constitution. Classing them as docs meant every change to them
           # skipped every required check -- including the test that guards them.
           #
-          # docs/project/*.md and docs/ssot/README.md are inputs to a generated
-          # file, which makes them config too. docs/project/README.md is
-          # projected from each Infra-NNN doc's H1 and Status line, and
-          # docs/ssot/README.md's tables from MANIFEST.yaml. Adding, renaming
+          # docs/project/*.md and docs/ssot/README.md sit on a generation
+          # relation, which makes them config too -- on opposite sides of it.
+          # docs/project/*.md are INPUTS: docs/project/README.md is projected
+          # from each Infra-NNN doc's H1 and Status line. docs/ssot/README.md
+          # is an OUTPUT: its tables are projected from MANIFEST.yaml, and it
+          # is listed because hand-editing a generated block is the other way
+          # to put an index out of sync. (MANIFEST.yaml itself needs no rule --
+          # it is not Markdown, so it was never classed doc-only.) Adding, renaming
           # or re-statusing a project doc -- or hand-editing a generated block
           # -- is the change that makes an index stale, and until #777 it was
           # also the change that skipped the tests proving the index is in

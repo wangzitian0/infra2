@@ -58,8 +58,9 @@ def _smoke_step() -> dict:
     # job or the workflow, nowhere near it -- would change that, and `bash {0}`
     # in particular drops `-e`. Refuse rather than measure a different shell
     # than CI uses. (The sibling suite in
-    # test_docs_only_prs_run_their_own_gates.py resolves the declared shell
-    # instead; here the step is a single command, so pinning is enough.)
+    # test_generated_doc_indexes_are_guarded.py executes a workflow's own
+    # classifier shell the same way; here the step is a single command, so
+    # pinning is enough.)
     declared = [
         step.get("shell"),
         ((job.get("defaults") or {}).get("run") or {}).get("shell"),
@@ -116,7 +117,7 @@ def test_a_refusing_tool_fails_the_step_with_no_credential(
     # through a version manager's shim fails to start (exit 126), and this
     # test then reports "the step never invoked the smoke tool" -- which reads
     # exactly like the wiring defect it exists to catch. The sibling test in
-    # test_docs_only_prs_run_their_own_gates.py takes the same position; the
+    # test_generated_doc_indexes_are_guarded.py takes the same position; the
     # two are deliberately consistent.
     env = dict(os.environ)
     # An undefined repository secret arrives as the empty string.

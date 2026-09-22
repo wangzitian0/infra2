@@ -72,9 +72,11 @@ def _sanitized_env() -> dict[str, str]:
 
 
 def _git(*args: str, cwd: Path) -> str:
-    """git in a throwaway repository, deaf to the ambient user's configuration.
+    """git in a throwaway repository, with the settings that can block pinned off.
 
-    ``HOME`` is kept on purpose, so ``~/.gitconfig`` is in play and each of
+    ``HOME`` is kept on purpose, so ``~/.gitconfig`` IS in play -- the point is
+    not to isolate git from it but to override the handful of keys that can
+    hang. Each of
     these can block: a ``commit.gpgsign`` whose gpg waits on a pinentry with no
     TTY, a ``core.hooksPath`` holding a pre-commit hook, a ``core.fsmonitor``
     pointing at a daemon that stopped answering -- the last measured blocking

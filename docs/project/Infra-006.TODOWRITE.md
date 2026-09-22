@@ -88,7 +88,7 @@ Track top issues discovered during documentation engineering.
   - 我原来的说法把第一种形状也归给了测试。**错法正是同一段文字在另一处刚警告过的那条**：
     带 `paths:` 过滤的 required check，在不匹配的 PR 上永远停在 Expected。
     写下这个陷阱，然后在下一段掉进去。
-  - 顺带一条：`libs/tests/test_docs_only_prs_run_their_own_gates.py` 的**代码**是对的——
+  - 顺带一条：`libs/tests/test_docs_only_prs_run_their_own_gates.py`（**本 PR 已删除**，见本节开头的结论） 的**代码**是对的——
     它在问 `has_non_doc` 之前先问 `_workflow_fires(INFRA_CI, files)`（实测该文件下为
     `False`）。错的只有散文：我把分类器**单独**拿来推论，而测试没有。
 - 剩余敞口只有一种：**纯文档 PR 索引真的过期、`build` 真的红了，而有人不走
