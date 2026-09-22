@@ -36,12 +36,12 @@
 ### L3: 发布门禁闭环与告警降噪 (Deploy & Observability)
 - [ ] **T3.1 发布三段式门禁与 Schema 防御（#698）**：
   - [ ] Stage 1: Ephemeral Smoke（构建后启动临时容器冒烟校验）
-  - [x] Stage 2: Pre-flight Gate（`tools/pre_deploy_schema_check.py` 双向严格比对 + fail-closed；缺 DB URL / 代码侧枚举载入失败 = `NOT EVALUATED` 退出码 3 阻断，#718 review 修复；尚未接入 `deploy_v2`）
+  - [x] Stage 2: Pre-flight Gate（`tools/pre_deploy_schema_check.py` 双向严格比对 + fail-closed；缺 DB URL / 代码侧枚举载入失败 = `NOT EVALUATED` 退出码 3 阻断，#718 review 修复；已接入 `deploy_v2`——`libs/deploy/promote.py:deploy()` 在任何 Dokploy 变更前调用 `libs/deploy/schema_gate.py`，SSH 到 VPS 用即将部署的应用镜像跑检查，退出码 1/3 及任何传输失败均阻断，详见 TODOWRITE 第 20 条）
   - [ ] Stage 3: Deploy + Synthetic Probes（部署后打真实业务探针，设 10 分钟观察烘焙期 T_Bake）
 - [ ] **T3.2 安全回滚守则与人工刹车（#722）**：
-  - 明确 `ROLLBACK_CLASS`：仅 Class A（无破坏性 DDL）允许自动回滚；出现 DROP/RENAME/收紧约束（Class C）**严禁自动回滚**，必须人工挂起并 forward-fix。
-  - 自动回滚上限熔断：最多自动回滚 1 次，严禁运行 `migrate down`。
-  - 支持 `--force-promote` 强行放行参数（必须携带 `--reason` 与 `--operator` 并留痕）。
+  - [x] 明确 `ROLLBACK_CLASS`：仅 Class A（无破坏性 DDL）允许自动回滚；出现 DROP/RENAME/收紧约束（Class C）**严禁自动回滚**，必须人工挂起并 forward-fix。`tools/pre_deploy_schema_check.py::classify_rollback` 已实现并随 Stage 2 门禁的每次比对一起计算、打印（`ROLLBACK_CLASS: A|C`）——门禁本身只有两档可达（casing 漂移必然同时触发 missing_in_code，不存在可达的中间档）。**这只是分类，不是执行器**：下面两项（自动回滚熔断、`--force-promote`）仍未实现，本仓库目前没有任何自动回滚路径可供这个分类去约束。
+  - [ ] 自动回滚上限熔断：最多自动回滚 1 次，严禁运行 `migrate down`。
+  - [ ] 支持 `--force-promote` 强行放行参数（必须携带 `--reason` 与 `--operator` 并留痕）。
 - [ ] **T3.3 告警信噪比治理与 P0 Runbook（#723）**：
   - 告警严格分级（P0 立即叫人 / P1 日间处理），同源 5 分钟去重聚合。
   - Top 5 P0 告警必须提供 3 步内可执行的排障 Runbook 链接。
@@ -65,6 +65,7 @@
 
 | Date | Change |
 |---|---|
+| 2026-09-22 | Stage 2 接入 `deploy_v2`：`libs/deploy/promote.py:deploy()` 在任何 Dokploy 变更前调用新增的 `libs/deploy/schema_gate.py`（SSH 到 VPS，用即将部署的应用镜像跑检查——infra2 CI 与 iac-runner 都没有"docker daemon + 应用网络"兼备的环境，只有 VPS 主机有），exit 0 才放行，exit 1/3 及任何传输失败一律阻断。同时给 `tools/pre_deploy_schema_check.py` 加上 `classify_rollback`（A/C 两档，casing 漂移必然伴随 missing_in_code，不存在可达的中间档），随门禁结果一起打印 `ROLLBACK_CLASS`。仅对 `ENUM_SOURCES` 已注册服务生效（目前只有 `finance_report/app`）。实测：staging/prod 当前各有历史遗留 enum 漂移，本次接入后会真实阻断下一次 finance_report/app 部署，需先处理或走例外路径 |
 | 2026-09-21 | 完成 T2.2：编写并实测 `tools/run_restore_rehearsal.py`，沙箱临时容器拉取 Google Drive 加密归档完成灌库与 5 项不变量校验，用后即焚 0 污染，实测 10.62s 通过 |
 | 2026-09-18 | 完成 T2.1：基于 rclone crypt 落地 Google Drive 异地端到端加密备份，实现周备(60d)+季度快照(2年)分级保留，实测打通读写验证 |
 | 2026-09-16 | 基于反事实审计全面重构路线图，正式立项 Infra-022，废除过度工程规划，确立生产韧性与 DR 为下一里程碑 |
@@ -80,8 +81,8 @@
 | 3 | 异地备份就绪 | Google Drive 存在加密备份包且 SHA256 吻合 | `rclone lsd gdrive-backup:infra2/` 验证目录存在且可读写 |
 | 4 | 恢复演练闭环 | 自动化还原到临时库并通过 SQL 抽样 | `tools/run_restore_rehearsal.py --service-id all` 跑通，每个服务各输出一行 `RESTORE_PROOF: PASS`，退出码 0（已在 VPS 实测通过，耗时 10.62s） |
 | 5 | 死人开关兜底 | 宿主机断网 10 分钟外部独立告警 | 停止心跳上报，Healthchecks.io 外部通道（飞书/邮件）在 10 分钟内报警 |
-| 6 | Schema Gate 门禁 | 数据库与代码 Enum/Schema 不一致即阻断；缺输入（无 DB URL / 枚举载入失败）同样阻断 | `pytest libs/tests/test_pre_deploy_schema_check.py` 全绿 |
-| 7 | 回滚熔断与刹车 | 破坏性 migration 场景下阻止自动回滚 | 门禁输出 `ROLLBACK_CLASS: C` 并阻断自动回滚回路 |
+| 6 | Schema Gate 门禁 | 数据库与代码 Enum/Schema 不一致即阻断；缺输入（无 DB URL / 枚举载入失败）同样阻断；且真的接在 `deploy_v2` 的部署路径上，不只是模块自证 | `pytest libs/tests/test_pre_deploy_schema_check.py libs/tests/test_schema_gate.py libs/tests/test_deploy_primitive.py -k schema_gate` 全绿；实机验证见 TODOWRITE 第 20 条 |
+| 7 | ROLLBACK_CLASS 分类 | 破坏性信号（DROP/RENAME 已落库的枚举，即 missing_in_code）分类为 C，纯新增分类为 A | `pytest libs/tests/test_pre_deploy_schema_check.py -k classify_rollback` 全绿；门禁每次比对都打印 `ROLLBACK_CLASS: A|C`。**尚无**自动回滚执行器/熔断/`--force-promote`（T3.2 其余两项未实现）——本行只验证分类，不验证回滚回路。
 
 ## References
 

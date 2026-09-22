@@ -176,6 +176,18 @@ jobs:
       # platform (iac_pinned) services trigger the iac_runner webhook instead of Dokploy.
       IAC_WEBHOOK_SECRET: ${{ secrets.IAC_WEBHOOK_SECRET }}
       IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
+      # libs.deploy.schema_gate's #698 pre-deploy schema gate (finance_report/app
+      # staging/prod only, TODOWRITE:20): it SSHes to the VPS to run the check inside
+      # the app's own published image — the only place both a docker daemon and the
+      # app's docker network are reachable from (neither this job nor iac-runner has
+      # both; see libs/deploy/schema_gate.py's module docstring for the physical
+      # probe). Reuses the SAME INFRA2_WATCHDOG_SSH_* credentials the watchdog jobs in
+      # ops-checks.yml already provision — no new secret.
+      VPS_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
+      INFRA2_WATCHDOG_SSH_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
+      INFRA2_WATCHDOG_SSH_USER: ${{ secrets.INFRA2_WATCHDOG_SSH_USER }}
+      INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
+      INFRA2_WATCHDOG_SSH_PORT: ${{ vars.INFRA2_WATCHDOG_SSH_PORT }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -189,6 +201,20 @@ jobs:
         # libs/env.py reads secret stores through infra2-sdk; install the exact wheel
         # pyproject pins so this job runs the same code as the runner (#649).
         run: python -m pip install invoke httpx python-dotenv rich "$(grep -oE 'infra2-sdk @ https://[^"]+' pyproject.toml)"
+
+      - name: Configure SSH key for the pre-deploy schema gate
+        # Same optional-provisioning shape as ops-checks.yml's watchdog jobs: a
+        # platform (iac_pinned) deploy never needs this (libs.deploy.schema_gate only
+        # runs for finance_report/app), so a missing key must not hard-fail those.
+        # finance_report/app staging/prod WITHOUT it fails closed later, loudly, from
+        # schema_gate._ssh_host() itself -- never silently skipped.
+        if: env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY != ''
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_schema_gate
+          chmod 600 ~/.ssh/infra2_schema_gate
+          echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_schema_gate" >> "$GITHUB_ENV"
 
       - name: Run deploy_v2
         env:

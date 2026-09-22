@@ -118,6 +118,18 @@ def _stub_secret_provisioning(monkeypatch):
     monkeypatch.setattr(dp, "ensure_generated_secrets", lambda *a, **k: None)
 
 
+@pytest.fixture(autouse=True)
+def _stub_schema_gate(monkeypatch):
+    """deploy() now runs the #698 pre-deploy schema gate over SSH before mutating
+    (libs.deploy.schema_gate) for any registered service (finance_report/app today).
+    That is real SSH/docker, a different external system than the Dokploy `client`
+    this whole file fakes — neutralize it by default (a passing ROLLBACK_CLASS); the
+    dedicated tests in the "pre-deploy schema gate" section re-arm it via their own
+    monkeypatch on the schema_gate module itself.
+    """
+    monkeypatch.setattr(dp.schema_gate, "run_schema_gate", lambda *a, **k: "A")
+
+
 def test_staging_deploy_assembles_axes_and_triggers():
     client = FakeDokploy()
     plan = dp.deploy(
@@ -691,6 +703,61 @@ def test_deploy_raises_before_any_mutation_when_approle_creds_missing():
     assert client.branch_updates == []
 
 
+# --- #698 / Infra-022 TODOWRITE:20: deploy() must gate on the pre-deploy schema check --
+
+
+def test_deploy_calls_schema_gate_before_any_mutation_when_registered(monkeypatch):
+    """finance_report/app IS registered in tools.pre_deploy_schema_check.ENUM_SOURCES —
+    a blocking gate must stop deploy() before it touches Dokploy at all."""
+    calls = []
+
+    def _record_and_block(service, **kwargs):
+        calls.append((service, kwargs))
+        raise dp.schema_gate.SchemaGateError("blocked: 2 discrepancies")
+
+    monkeypatch.setattr(dp.schema_gate, "run_schema_gate", _record_and_block)
+    client = FakeDokploy()
+    with pytest.raises(dp.schema_gate.SchemaGateError, match="blocked"):
+        dp.deploy(
+            "staging",
+            FULL_SHA,
+            domain="zitian.party",
+            client=client,
+            iac_ref="b" * 40,
+        )
+    assert len(calls) == 1
+    service, kwargs = calls[0]
+    assert service == "finance_report/app"
+    assert kwargs["compose_path"] == "finance_report/finance_report/10.app/compose.yaml"
+    assert kwargs["env_suffix"] == "-staging"
+    assert kwargs["image_ref"] == SHORT_SHA
+    assert client.updated == []
+    assert client.deployed == []
+    assert client.branch_updates == []
+
+
+def test_deploy_skips_schema_gate_for_an_unregistered_service(monkeypatch):
+    """truealpha/app has no ENUM_SOURCES entry yet — it must not be gated (a future
+    service needs registering there first, same as the onboarding SOP already says)."""
+    calls = []
+    monkeypatch.setattr(
+        dp.schema_gate,
+        "run_schema_gate",
+        lambda *a, **k: calls.append((a, k)) or "A",
+    )
+    client = FakeDokploy()
+    dp.deploy(
+        "staging",
+        FULL_SHA,
+        domain="zitian.party",
+        client=client,
+        service="truealpha/app",
+        iac_ref="b" * 40,
+    )
+    assert calls == []  # the gate was never even consulted
+    assert client.deployed  # yet the deploy proceeded normally to completion
+
+
 # --- truealpha#447: deploy() self-heals this service's generated Vault secrets ---
 
 
@@ -1085,5 +1152,3 @@ def test_deploy_fast_swap_falls_back_to_ms_hash_when_iac_ref_missing():
         _now=lambda: 1000,
     )
     assert plan.env_vars["IAC_CONFIG_HASH"] == f"deploy-{SHORT_SHA}-1000000"
-
-
