@@ -80,7 +80,7 @@ outcomes and never matched "1 unresolved review thread(s)"
 
 | Item | Stalled when | Response |
 |---|---|---|
-| Agent | No tool call for ~2 min (owner's criterion, 2026-09-22). `harness sweep` cannot see tool calls yet and stats files instead -- treat its agent STALL as a proxy, confirm in the worktree before acting | Look in the agent's worktree; `SendMessage` only if the worktree is also idle; tell the user if 10 more minutes pass |
+| Agent | No tool call for ~2 min (owner's criterion, 2026-09-22). A tool call still in flight -- a `Monitor`, a foreground `wait`, a long test run -- counts as alive for its whole duration; the criterion is *no call started and none running*, not *no call returned*. `harness sweep` cannot see tool calls yet and stats files instead -- treat its agent STALL as a proxy, confirm in the worktree before acting | Look in the agent's worktree; `SendMessage` only if the worktree is also idle; tell the user if 10 more minutes pass |
 | PR checks | Checks pending and none finished for 30 min | Inspect the run; re-run or report |
 | Release log | No write for 25 min, or the process died without a verdict line | Read the log tail; report the last stage |
 | Workflow run | Queued or running for more than 45 min | Inspect or cancel the run and report |
