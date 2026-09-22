@@ -66,6 +66,17 @@
 
 > README 模板见 [docs/README_tempate.md](../README_tempate.md)。
 > `docs/ssot/README.md` 由 `docs/ssot/MANIFEST.yaml` 生成，改索引文字要改 MANIFEST 而不是 README。
+> `docs/project/README.md` 同理，由各 `Infra-NNN` 文档自己的 H1 与 Status 行生成
+> （`tools/gen_project_index.py`）——改索引要改那份文档，不是改索引。
+
+**守卫必须能被它要守的改动触发。** 这两个索引的输入全是文档，所以证明它们没过期的门禁
+**跑在 `docs.yml` 里**：它按 `**/*.md` 触发。infra-ci 里那两份同样的门禁待在
+`has_non_doc == 'true'` 的 job 下，而「新增/改名/改 Status 一篇 Project 文档」「手改生成块」
+恰恰是全 Markdown 的改动——门禁会被它存在的理由跳过。#505 那次漂移（Infra-004/005 索引里
+状态错、Infra-010/011/014/016 整个缺失）今天原样重来会一路绿灯。判据不是「这个检查重不重要」，
+而是**它的输入会不会在它不运行的那类 PR 里变**；会，就得挪到那类 PR 触发得到的地方。
+证明见 `libs/tests/test_docs_only_prs_run_their_own_gates.py`：它按（是否 Markdown × 是否在
+`docs/` 下）分象限，对每种改动形状断言至少有一个会触发的 workflow 跑了这两个生成器。
 
 ### AI 文档行为约束
 
