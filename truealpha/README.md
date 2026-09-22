@@ -54,5 +54,5 @@ secret/data/truealpha/<env>/data_engine
 ## References
 
 - **Source Code**: [github.com/wangzitian0/truealpha](https://github.com/wangzitian0/truealpha)
-- **Project docs**: [Infra-017](../docs/project/archive/Infra-017.truealpha_dagster_capture.md), [Infra-020](../docs/project/Infra-020.truealpha_production_datahub.md)
+- **Project docs**: [Infra-017](../docs/project/Infra-017.truealpha_dagster_capture.md), [Infra-020](../docs/project/Infra-020.truealpha_production_datahub.md)
 - **Finance Report README** (sibling app layer, same pattern): [finance_report/README.md](../finance_report/README.md)
