@@ -10,9 +10,14 @@ stricter local rule.
 2. Keep the PR scope within declared writable paths and explain non-goals.
 3. Include a checklist covering code, tests, documentation, compatibility, and rollout
    when applicable.
-4. Merge authority remains owner-controlled. An agent may merge only within explicit
-   authorization for the current session and the target repository's merge gates.
-   Without that authorization, deliver a reviewed, mergeable PR for the owner.
+4. Merge authority is a standing grant, not a per-session one: the owner granted it on
+   2026-09-21 and confirmed on 2026-09-22 that it spans every repository they own (the
+   record and the conditions are in
+   [`docs/ssot/ops.merge-gate.md`](../../docs/ssot/ops.merge-gate.md)). An agent merges
+   within that grant and the target repository's own merge gates; the two classes the
+   owner kept -- production deploys, and changes to what decides merges -- are listed
+   there, not here. Session-scoped authorization was superseded and must not be
+   re-derived from this file.
 5. Continue monitoring an open PR for late checks, review comments, and conflicting
    base changes until merge or close, then verify applicable post-merge checks.
 
