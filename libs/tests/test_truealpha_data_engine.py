@@ -188,7 +188,9 @@ def test_deployer_fails_closed_on_missing_or_malformed_release_inputs(monkeypatc
     values = _secret_values()
     values["DATA_ENGINE_IMAGE_DIGEST"] = "latest"
     monkeypatch.setattr(
-        deployer, "secrets_backend", classmethod(lambda cls: _Secrets(values))
+        deployer,
+        "secrets_backend",
+        classmethod(lambda cls, env=None: _Secrets(values)),
     )
     assert not deployer.ensure_runtime_secrets()
 
@@ -425,7 +427,11 @@ def test_ensure_runtime_secrets_refuses_the_deploy_when_the_pin_fails(monkeypatc
     deploy = _load_deploy_module()
     deployer = deploy.DataEngineDeployer
     secrets = _WritableSecrets(_secret_values("a"))
-    monkeypatch.setattr(deployer, "secrets_backend", classmethod(lambda cls: secrets))
+    monkeypatch.setattr(
+        deployer,
+        "secrets_backend",
+        classmethod(lambda cls, env=None: secrets),
+    )
     monkeypatch.setattr(deployer, "env", classmethod(lambda cls: {"ENV": "staging"}))
     monkeypatch.setenv("DEPLOY_VERSION_REF", "v0.0.46")
     monkeypatch.setattr(deploy, "error", lambda *_a, **_k: None)
@@ -447,7 +453,11 @@ def test_ensure_runtime_secrets_pins_from_the_process_environment(monkeypatch):
     deploy = _load_deploy_module()
     deployer = deploy.DataEngineDeployer
     secrets = _WritableSecrets(_secret_values("a"))
-    monkeypatch.setattr(deployer, "secrets_backend", classmethod(lambda cls: secrets))
+    monkeypatch.setattr(
+        deployer,
+        "secrets_backend",
+        classmethod(lambda cls, env=None: secrets),
+    )
     monkeypatch.setattr(deployer, "env", classmethod(lambda cls: {"ENV": "staging"}))
     monkeypatch.setenv("DEPLOY_VERSION_REF", "v0.0.47")
     from infra2_sdk import release
@@ -479,3 +489,119 @@ def test_code_server_healthcheck_is_not_a_dagster_cli_cold_start():
     interval = int(str(check["interval"]).rstrip("s"))
     timeout = int(str(check["timeout"]).rstrip("s"))
     assert interval >= 60 and timeout <= interval // 2
+
+
+def test_ensure_runtime_secrets_accepts_env_parameter(monkeypatch):
+    """Issue #803: DataEngineDeployer.ensure_runtime_secrets must accept env parameter
+    and pass it to secrets_backend without falling back to production."""
+    deploy = _load_deploy_module()
+    deployer = deploy.DataEngineDeployer
+    secrets = _WritableSecrets(_secret_values("a"))
+    calls: list[str | None] = []
+
+    def mock_secrets_backend(env=None):
+        calls.append(env)
+        return secrets
+
+    monkeypatch.setattr(
+        deployer,
+        "secrets_backend",
+        classmethod(lambda cls, env=None: mock_secrets_backend(env)),
+    )
+    monkeypatch.setenv("DEPLOY_VERSION_REF", "v0.0.48")
+    from infra2_sdk import release
+
+    monkeypatch.setattr(
+        release, "resolve_image_digest", lambda **kw: "sha256:" + "8" * 64
+    )
+    monkeypatch.setattr(deploy, "success", lambda *_a, **_k: None)
+
+    # Calling with env="staging" must succeed and not raise TypeError
+    assert deployer.ensure_runtime_secrets(env="staging") is True
+    assert "staging" in calls
+    assert ("GIT_COMMIT_SHA", "v0.0.48") in secrets.writes
+
+
+def test_verify_runtime_applied_passes_timeout_to_inspect(monkeypatch):
+    """Issue #803: verify_runtime_applied must pass -o BatchMode=yes -o ConnectTimeout=10
+    to ssh, and timeout=15 to inspect calls in both loops."""
+    deploy = _load_deploy_module()
+    deployer = deploy.DataEngineDeployer
+    monkeypatch.setattr(
+        deployer,
+        "env",
+        classmethod(lambda cls: {"VPS_HOST": "1.2.3.4", "VPS_SSH_USER": "root"}),
+    )
+
+    calls: list[tuple[str, int | None]] = []
+
+    class MockResult:
+        ok = True
+        stdout = "ghcr.io/wangzitian0/truealpha-data-engine@sha256:" + "a" * 64
+        stderr = ""
+
+    class MockContext:
+        def run(self, cmd, warn=True, hide=True, timeout=None):
+            calls.append((cmd, timeout))
+            res = MockResult()
+            if "Health.Status" in cmd:
+                res.stdout = "healthy"
+            return res
+
+    mock_c = MockContext()
+    digest = "sha256:" + "a" * 64
+    err = deployer.verify_runtime_applied(mock_c, {"DATA_ENGINE_IMAGE_DIGEST": digest})
+    assert err is None
+
+    # remote() commands must include ssh hardening flags
+    for cmd, timeout in calls:
+        assert "-o BatchMode=yes" in cmd
+        assert "-o ConnectTimeout=10" in cmd
+
+    # inspect calls must pass timeout=15
+    inspect_calls = [c for c in calls if "docker inspect" in c[0]]
+    assert len(inspect_calls) == 6, (
+        f"expected 6 inspect calls (3 image + 3 health), got {len(inspect_calls)}"
+    )
+    for cmd, timeout in inspect_calls:
+        assert (
+            timeout == 15
+        ), f"expected timeout=15 for inspect call, got {timeout}: {cmd}"
+
+
+def test_verify_runtime_applied_retries_on_command_timed_out(monkeypatch):
+    """Issue #803: when docker inspect raises CommandTimedOut, verify_runtime_applied
+    should handle it gracefully without crashing, retrying until deadline."""
+    from invoke.exceptions import CommandTimedOut
+
+    deploy = _load_deploy_module()
+    deployer = deploy.DataEngineDeployer
+    monkeypatch.setattr(
+        deployer,
+        "env",
+        classmethod(lambda cls: {"VPS_HOST": "1.2.3.4", "VPS_SSH_USER": "root"}),
+    )
+    # Shorten deadlines for test speed
+    monkeypatch.setattr(deployer, "SWITCH_DEADLINE_SECONDS", 0.05)
+    monkeypatch.setattr(deployer, "POLL_INTERVAL_SECONDS", 0.01)
+
+    class MockContext:
+        def run(self, cmd, warn=True, hide=True, timeout=None):
+            if "docker pull" in cmd:
+                class PullResult:
+                    ok = True
+                    stdout = "pull success"
+                    stderr = ""
+
+                return PullResult()
+            # docker inspect raises CommandTimedOut
+            raise CommandTimedOut("inspect command timed out", timeout=15)
+
+    mock_c = MockContext()
+    digest = "sha256:" + "a" * 64
+    err = deployer.verify_runtime_applied(mock_c, {"DATA_ENGINE_IMAGE_DIGEST": digest})
+    assert err is not None
+    assert "promoted image digest was not applied" in err
+    assert "unavailable" in err
+
+

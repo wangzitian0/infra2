@@ -36,7 +36,7 @@ python -m tools.deploy_v2 --service truealpha/app --type staging --version-ref v
 # Verify
 invoke ta-postgres.shared.status
 invoke ta-app.shared.status
-invoke ta-data-engine.shared.status
+invoke ta-data_engine.shared.status
 ```
 
 ## Vault Secrets

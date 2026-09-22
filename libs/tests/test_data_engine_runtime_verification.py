@@ -111,7 +111,7 @@ def test_the_promoted_digest_is_pulled_before_the_containers_are_inspected(
     assert (
         f"docker pull -q {IMAGE}" in first and timeout == deployer.PULL_DEADLINE_SECONDS
     )
-    assert "ssh root@vps" in first
+    assert "root@vps" in first and "-o BatchMode=yes" in first
     names = [c for c, _ in context.calls if ".Config.Image" in c]
     assert any("truealpha-dagster-code-server-staging" in c for c in names)
     # the old digest on the first round was waited out, not reported

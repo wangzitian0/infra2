@@ -146,3 +146,23 @@ def test_status_combines_boolean_readiness_instead_of_truthy_result_dicts(monkey
         "is_ready": False,
         "details": "llm=Unhealthy, web=Healthy",
     }
+
+
+def test_preview_api_router_does_not_claim_the_bare_api_prefix() -> None:
+    """Issue #803: Preview compose llm router must match production/staging routing
+    and not claim the bare /api prefix, which would swallow web API routes."""
+    preview_compose = yaml.safe_load(
+        (ROOT / "truealpha/truealpha/preview/compose.yaml").read_text(encoding="utf-8")
+    )
+    llm_labels = preview_compose["services"]["llm"]["labels"]
+    rule_label = next(
+        label for label in llm_labels if ".rule=" in label and "truealpha-api" in label
+    )
+    rule = rule_label.split(".rule=", 1)[1]
+
+    assert "PathPrefix(`/api`)" not in rule, (
+        "the preview llm router must not claim the bare /api prefix"
+    )
+    assert "PathPrefix(`/api/mcp`)" in rule
+    assert "Path(`/api/health`)" in rule
+
