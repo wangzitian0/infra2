@@ -85,6 +85,15 @@ def test_committed_inventory_is_valid_and_apps_are_autonomous() -> None:
     assert {repo["id"] for repo in apps} == {"finance-report", "truealpha"}
     assert {repo["governance"] for repo in apps} == {"autonomous"}
 
+    # dev_env #51: infra2-sdk is a nested submodule that does not carry a
+    # Repo-layer rules projection — it must be declared, not left implicit, so
+    # the A-layer discovery matrix in dev_env can assert "expected no Repo
+    # layer" from this manifest instead of guessing.
+    sdk = next(
+        repo for repo in manifest["repositories"] if repo["id"] == "infra2-sdk"
+    )
+    assert sdk.get("rules_layer") == "none"
+
 
 def test_missing_checkout_is_error_by_default(tmp_path: Path) -> None:
     """Non-optional (the default) means an uninitialized checkout is a real gap,
@@ -246,6 +255,25 @@ def test_external_application_cannot_be_coordinated_or_focused(
         "governance-role",
         "focus-autonomy",
     }
+
+
+def test_unsupported_rules_layer_value_fails(tmp_path: Path) -> None:
+    manifest = _workspace(tmp_path)
+    manifest["repositories"][1]["rules_layer"] = "sometimes"
+
+    result = validate_manifest(tmp_path, manifest)
+
+    assert not result.ok
+    assert [error.code for error in result.errors] == ["rules-layer"]
+
+
+def test_rules_layer_none_is_accepted(tmp_path: Path) -> None:
+    manifest = _workspace(tmp_path)
+    manifest["repositories"][1]["rules_layer"] = "none"
+
+    result = validate_manifest(tmp_path, manifest)
+
+    assert result.ok, result.to_dict()
 
 
 def test_missing_authority_and_invalid_preferences_fail(tmp_path: Path) -> None:
