@@ -3,28 +3,32 @@
 
 Validates ``docs/ssot/ci-gate-inventory.yaml`` against the shared schema and against the
 ACTUAL workflows: every gate's ``workflow:job`` must exist (no *dangling* gate), and every
-job of a *covered* CI workflow (``KNOWN_CI_WORKFLOWS``) must be registered (no
-*unregistered* job).
+job of a *covered* workflow must be registered (no *unregistered* job).
 
-Ratchet: schema errors and dangling gates are ALWAYS hard, everywhere. Unregistered jobs
-are hard only inside the covered scope, and only with ``--enforce`` — ``infra-ci.yml`` is
-covered and currently has zero unregistered jobs (``libs/tests/test_ci_gate_audit.py``
-locks that), so ``infra-ci.yml`` itself now runs this audit with ``--enforce``: a job added
-there without a matching gate fails CI, not just a printed backlog line.
+**What "covered" means is computed, not listed.** A workflow is covered exactly when it can
+produce a check on a pull request -- i.e. its own triggers include ``pull_request`` /
+``pull_request_target`` (``covered_workflows``). That criterion is the audit's whole reason
+to exist: the inventory's consumer is merge authority (``tools/pr_merge_gate.py`` reads
+``blocks_merge``), and the hole being guarded is *a job appears on a PR and nobody decided
+whether it gates*. A workflow that never runs on a PR cannot open that hole, so registering
+it would be bookkeeping with no consumer -- it is reported as ``out_of_scope_workflows``.
 
-Coverage is deliberately narrow, and staying narrow is a *decision*, not a gap someone
-forgot to close. Infra-016's own plan (docs/project/archive/Infra-016.ci_gate_inventory.md)
-scoped a Phase 2 that would have coordinate-ized ops-checks/reconcile-iac-inputs/
-apply-observability/etc. too — but the epic (#459) closed 2026-06-29 as "not planned": the
-coordinate-ize-every-workflow approach converged into boundary governance instead, and
-#460/#461 (the infra side, i.e. exactly this file + inventory) were explicitly "completed
-and kept frozen", not left as an active backlog. Widening ``KNOWN_CI_WORKFLOWS`` reopens
-that closed epic decision — it is not a routine backfill, so it isn't done here without
-revisiting that record. What a reader of a report *does* need, and what silently scoping to
-one workflow denied them before, is to see the boundary without reading this comment or the
-archive: ``audit()``'s ``covered_workflows`` / ``out_of_scope_workflows`` fields name it in
-the machine-readable output itself.
+This replaces a hand-written ``KNOWN_CI_WORKFLOWS = (infra-ci.yml,)``. A hand-written scope
+cannot tell the difference between "deliberately excluded" and "added last Tuesday and
+nobody noticed": adding ``pull_request:`` to any workflow used to widen the real risk
+surface while leaving the audit's idea of it frozen. Now the scope moves with the triggers.
+
+On the Infra-016 record, precisely: epic #459 closed 2026-06-29 "not planned" for **phases
+3-4** (app alignment, cross-repo chain view). Phase 1's own plan -- the archive's D2 line --
+scoped "``infra-ci`` 7, ``ops-checks`` 6, reconcile dry-run gate, apply-observability, drift
+reports", and shipped only the ``infra-ci`` half; the ``ops.scheduled_cleanup`` stage and the
+``reconcile_plan`` / ``preview_leak`` / ``drift_report`` categories were defined for the
+other half and sat unused. Registering the PR-triggered remainder finishes Phase 1 as
+written; it does not reopen what was closed. The ``blocks_merge: true`` set is unchanged by
+that backfill, which is what makes the widening provably non-loosening
+(``libs/tests/test_ci_gate_audit.py`` locks the set).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -39,21 +43,56 @@ ROOT = Path(__file__).resolve().parents[1]
 INVENTORY = "docs/ssot/ci-gate-inventory.yaml"
 STAGES = "docs/ssot/delivery-stages.yaml"
 WORKFLOWS_DIR = ".github/workflows"
-# Workflows whose jobs must ALL be registered. Scope is frozen at infra-ci.yml — see the
-# module docstring for why this is not "Phase 1 of 2, pending" despite older comments/
-# commit messages saying so; expanding it means re-opening Infra-016 (#459), not filling
-# in a backlog.
-KNOWN_CI_WORKFLOWS = (f"{WORKFLOWS_DIR}/infra-ci.yml",)
+# A workflow is in scope exactly when it can put a check on a pull request. Both spellings:
+# `pull_request_target` runs on PRs too (with base-repo permissions), so excluding it would
+# leave the more privileged of the two unaudited.
+PR_TRIGGERS = frozenset({"pull_request", "pull_request_target"})
+
+
+def _load_workflow(path: Path) -> dict:
+    # Non-file (missing, or a bare/empty `workflow:` resolving to the repo root dir) → empty,
+    # so the gate surfaces as dangling/schema_error and the audit exits 1 cleanly rather
+    # than crashing with IsADirectoryError.
+    if not path.is_file():
+        return {}
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
 def _workflow_jobs(path: Path) -> list[str]:
-    # Non-file (missing, or a bare/empty `workflow:` resolving to the repo root dir) → no
-    # jobs, so the gate surfaces as dangling/schema_error and the audit exits 1 cleanly
-    # rather than crashing with IsADirectoryError.
-    if not path.is_file():
+    return list((_load_workflow(path).get("jobs") or {}).keys())
+
+
+def _workflow_triggers(path: Path) -> set[str]:
+    wf = _load_workflow(path)
+    # PyYAML resolves the bare key `on:` to the boolean True (YAML 1.1 truthy), so a
+    # `wf.get("on")`-only read sees nothing on every real workflow file in this repo.
+    on = wf.get(True, wf.get("on"))
+    if isinstance(on, str):
+        return {on}
+    if isinstance(on, dict):
+        return set(on)
+    if isinstance(on, list):
+        return {t for t in on if isinstance(t, str)}
+    return set()
+
+
+def _all_workflow_files(root: Path) -> list[str]:
+    wf_dir = root / WORKFLOWS_DIR
+    if not wf_dir.is_dir():
         return []
-    wf = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    return list((wf.get("jobs") or {}).keys())
+    return sorted(
+        f"{WORKFLOWS_DIR}/{p.name}"
+        for p in list(wf_dir.glob("*.yml")) + list(wf_dir.glob("*.yaml"))
+    )
+
+
+def covered_workflows(root: Path = ROOT) -> tuple[str, ...]:
+    """Workflows whose jobs must all be registered: those that run on a pull request."""
+    return tuple(
+        wf
+        for wf in _all_workflow_files(root)
+        if _workflow_triggers(root / wf) & PR_TRIGGERS
+    )
 
 
 def audit_gates(
@@ -83,31 +122,21 @@ def audit_gates(
     }
 
 
-def _all_workflow_files(root: Path) -> list[str]:
-    wf_dir = root / WORKFLOWS_DIR
-    if not wf_dir.is_dir():
-        return []
-    return sorted(
-        f"{WORKFLOWS_DIR}/{p.name}"
-        for p in list(wf_dir.glob("*.yml")) + list(wf_dir.glob("*.yaml"))
-    )
-
-
 def audit(root: Path = ROOT) -> dict:
     inv = yaml.safe_load((root / INVENTORY).read_text(encoding="utf-8")) or {}
+    known = covered_workflows(root)
     result = audit_gates(
         inv.get("gates") or [],
         root=root,
         prefix=inv.get("repo_prefix"),
-        known_ci_workflows=KNOWN_CI_WORKFLOWS,
+        known_ci_workflows=known,
     )
     # Not derived from `covered`/gates above -- a reader must see the scope boundary even
     # when the inventory is empty or broken, since that's exactly when "what does this
     # audit even check" matters most.
-    known = set(KNOWN_CI_WORKFLOWS)
     result["covered_workflows"] = sorted(known)
     result["out_of_scope_workflows"] = [
-        w for w in _all_workflow_files(root) if w not in known
+        w for w in _all_workflow_files(root) if w not in set(known)
     ]
     return result
 
@@ -117,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--enforce",
         action="store_true",
-        help="exit non-zero on an unregistered job within covered_workflows (KNOWN_CI_WORKFLOWS)",
+        help="exit non-zero on an unregistered job within covered_workflows",
     )
     args = ap.parse_args(argv)
     result = audit()
@@ -125,19 +154,22 @@ def main(argv: list[str] | None = None) -> int:
 
     hard = bool(result["schema_errors"] or result["dangling_gates"])
     if hard:
-        print("::error::schema errors / dangling gates are not allowed even in shadow", file=sys.stderr)
+        print(
+            "::error::schema errors / dangling gates are not allowed even in shadow",
+            file=sys.stderr,
+        )
         return 1
     if args.enforce and result["unregistered_jobs"]:
-        # Scoped on purpose (#780 review): "every job must be coordinate-ized" would
-        # tell a reader the audit expects out_of_scope_workflows to be registered too
-        # -- exactly the overclaim this PR exists to stop making. Every job WITHIN
-        # covered_workflows must be registered; workflows outside it are not backlog,
-        # they are the frozen Infra-016 #459 scope decision (module docstring).
+        # Scoped on purpose (#780 review): an unqualified "every job must be
+        # coordinate-ized" would tell a reader the audit expects out_of_scope_workflows
+        # to be registered too -- exactly the overclaim that review caught. State the
+        # criterion instead, so a reader can check their own workflow against it.
         print(
             "::error::unregistered CI jobs within covered_workflows "
             f"{result['covered_workflows']} must be registered in {INVENTORY} -- "
-            "workflows in out_of_scope_workflows are NOT backlog, they are a "
-            "deliberate scope decision (Infra-016 #459 closed 'not planned'): "
+            "a workflow is covered exactly when it runs on a pull request "
+            f"({sorted(PR_TRIGGERS)}); workflows in out_of_scope_workflows are not "
+            "backlog, they never run on a pull request so they cannot gate one: "
             f"{result['unregistered_jobs']}",
             file=sys.stderr,
         )
