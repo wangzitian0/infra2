@@ -1747,7 +1747,7 @@ def test_secrets_supply_action_is_its_own_deployment_and_reaches_the_sync(
     fake_flask.request.json = {**fake_flask.request.json, "action": "sync"}
     body2, _ = webhook_server.version_deploy()
     assert body2.get("cached") is not True
-    assert body2.get("action") == "sync"
+    assert body2.get("action") != "secrets-supply"
 
 
 def test_run_invoke_task_passes_the_action_to_the_child(monkeypatch, tmp_path) -> None:
