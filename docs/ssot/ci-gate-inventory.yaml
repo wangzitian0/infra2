@@ -4,10 +4,18 @@
 # docs/ssot/delivery-stages.yaml is the pinned local mirror, not a second definition.
 # Validated by tools/ci_gate_audit.py.
 #
-# Phase 1 (shadow): .github/workflows/infra-ci.yml is fully covered below. Other CI
-# workflows (ops-checks, reconcile-iac-inputs, apply-observability, drift reports) are the
-# unregistered backlog — the audit runs report-only until they are covered, then flips
-# fail-closed (Phase 2).
+# Scope: .github/workflows/infra-ci.yml is fully covered below, and infra-ci.yml's own CI
+# step now runs the audit with --enforce (unregistered job there = hard fail). The other 9
+# workflows (ops-checks, reconcile-iac-inputs, apply-observability, deploy, deploy-report-main,
+# deploy-cloudflare-watchdog, app-deploy-request, preview-teardown, docs) are intentionally
+# NOT registered here: Infra-016's wider Phase 2 would have
+# coordinate-ized them too, but the epic (#459) closed 2026-06-29 "not planned" — it
+# converged into boundary governance instead, and infra's inventory (#460/#461, i.e. this
+# file) was explicitly kept frozen at infra-ci.yml, not left as an active backlog. See
+# docs/project/archive/Infra-016.ci_gate_inventory.md for the decision record before
+# widening tools.ci_gate_audit.KNOWN_CI_WORKFLOWS — that reopens a closed epic, it isn't a
+# routine backfill. `ci_gate_audit`'s JSON output carries `covered_workflows` /
+# `out_of_scope_workflows` so this boundary is visible to a report reader, not just here.
 version: 1
 repo_prefix: infra_ci.
 gates:

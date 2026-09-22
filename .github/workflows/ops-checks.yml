@@ -62,6 +62,7 @@ name: Ops Checks
     - cron: "17 8 * * *" # daily Vault self-refresh audit (#531)
     - cron: "27 8 * * *" # daily secrets reconcile + capacity (secrets supply chain, PR-E)
     - cron: "57 3 * * *" # daily pi main-chain smoke: real token-consuming E2E (Infra-019)
+    - cron: "13 5 * * *" # daily e2e_regressions smoke pyramid against live production
   workflow_dispatch:
     inputs:
       task:
@@ -80,6 +81,7 @@ name: Ops Checks
           - vault-self-refresh-audit
           - secrets-reconcile
           - pi-chain-smoke
+          - e2e-regressions-smoke
           - all
       dry_run:
         description: "Run checks without sending Feishu notifications"
@@ -107,7 +109,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'infra2-deploy-guard-audit' || github.event_name == 'schedule' && github.event.schedule == '37 6 * * *' && 'deploy-v2-canary' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-leak-check' || github.event_name == 'schedule' && github.event.schedule == '27 4 * * *' && 'infra2-host-hygiene-schedule' || github.event_name == 'schedule' && github.event.schedule == '17 7 * * *' && 'infra2-facet-reconcile' || github.event_name == 'schedule' && github.event.schedule == '17 8 * * *' && 'infra2-vault-self-refresh-audit' || github.event_name == 'schedule' && github.event.schedule == '27 8 * * *' && 'infra2-secrets-reconcile' || github.event_name == 'schedule' && github.event.schedule == '57 3 * * *' && 'pi-chain-smoke' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) || format('ops-checks-push-{0}', github.sha) }}
+  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'infra2-deploy-guard-audit' || github.event_name == 'schedule' && github.event.schedule == '37 6 * * *' && 'deploy-v2-canary' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-leak-check' || github.event_name == 'schedule' && github.event.schedule == '27 4 * * *' && 'infra2-host-hygiene-schedule' || github.event_name == 'schedule' && github.event.schedule == '17 7 * * *' && 'infra2-facet-reconcile' || github.event_name == 'schedule' && github.event.schedule == '17 8 * * *' && 'infra2-vault-self-refresh-audit' || github.event_name == 'schedule' && github.event.schedule == '27 8 * * *' && 'infra2-secrets-reconcile' || github.event_name == 'schedule' && github.event.schedule == '57 3 * * *' && 'pi-chain-smoke' || github.event_name == 'schedule' && github.event.schedule == '13 5 * * *' && 'e2e-regressions-smoke' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) || format('ops-checks-push-{0}', github.sha) }}
   cancel-in-progress: false
 
 env:
@@ -989,3 +991,48 @@ jobs:
         # wanted and where it looked, which a SKIP line cannot. Proof:
         # libs/tests/test_pi_chain_smoke_ci_wiring.py runs this step for real.
         run: python3 tools/pi_chain_smoke.py --strict
+
+  e2e-regressions-smoke:
+    # schedule-signal-exempt: observational real-run proof of the e2e_regressions
+    # smoke tier (docs/ssot/ops.e2e-regressions.md §2's declared CI trigger, which
+    # no workflow actually ran until this job — 6 SSOT docs cited these test files
+    # as "Proof" while nothing produced that evidence). Read-only HTTP/Playwright
+    # checks against the live production estate; delivers no alerts and must
+    # never gate merges. e2e_regressions/ deps are an opt-in `uv` group (#515: kept
+    # out of infra-ci's default install so the fast PR unit-test job never pays for
+    # deps it doesn't import) — this job is the one place that installs and runs it.
+    name: e2e regressions smoke (production)
+    if: ${{ (github.event_name == 'schedule' && github.event.schedule == '13 5 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'e2e-regressions-smoke' || inputs.task == 'all')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install e2e dependency group
+        run: uv sync --group e2e
+
+      - name: Install Playwright chromium
+        run: uv run --group e2e playwright install --with-deps chromium
+
+      - name: Run e2e_regressions smoke suite against production
+        env:
+          DEPLOY_ENV: production
+          INTERNAL_DOMAIN: zitian.party
+        # -m smoke only: the SSOT test pyramid (ops.e2e-regressions.md §2) reserves
+        # critical/full for heavier, credentialed runs (DB creds, SSO login) that
+        # are a separate, later wiring step -- not silently expanded here.
+        # Proof: libs/tests/test_e2e_regressions_ci_wiring.py runs this step for real.
+        run: |
+          cd ${{ github.workspace }}
+          uv run --group e2e pytest e2e_regressions/tests -m smoke -v

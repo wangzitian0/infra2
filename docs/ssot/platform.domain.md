@@ -211,8 +211,8 @@ docker logs bootstrap-traefik 2>&1 | grep "home.zitian.party"
 docker exec platform-portal${ENV_SUFFIX} ping -c 1 platform-authentik-server${ENV_SUFFIX}
 # Expected: 解析成功
 
-# 5. 端到端测试
-pytest e2e_regressions/tests/apps/test_portal_sso.py
+# 5. 端到端测试（冒烟层，已接入 ops-checks.yml 的 e2e-regressions-smoke 夜间任务）
+pytest e2e_regressions/tests/apps/test_portal_sso.py -m smoke
 ```
 
 ---
