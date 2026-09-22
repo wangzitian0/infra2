@@ -980,7 +980,9 @@ jobs:
           set -euo pipefail
           if [ -z "${INFRA2_WATCHDOG_SSH_PRIVATE_KEY:-}" ]; then
             echo "::error::INFRA2_WATCHDOG_SSH_PRIVATE_KEY is not configured; the probe has nothing to reach."
-            exit 1
+            # 2, not 1: the probe's vocabulary is 0 answered / 2 could not run,
+            # and a refusal here is the same kind of event as one inside it.
+            exit 2
           fi
           install -m 700 -d ~/.ssh
           printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_schema_probe

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import sys
+
 import pytest
 
 from tools import schema_gate_probe as probe
@@ -70,3 +73,67 @@ def test_the_password_cannot_reach_the_report() -> None:
     secret = "hunter2"
     url = f"postgresql://user:{secret}@db:5432/finance"
     assert secret not in probe.scheme_of(url)
+
+
+def test_a_missing_binary_is_an_answer_not_a_traceback() -> None:
+    """A probe that dies with a stack trace has reported nothing.
+
+    Python exits 1 on an uncaught exception, and 1 is not in this tool's
+    vocabulary — a caller reading the exit code would see a verdict the probe
+    never gave.
+    """
+    code, _, err = probe.run(["definitely-not-a-binary-xyz"])
+    assert code == probe.PROBE_INFRA
+    assert "could not execute" in err
+
+
+def test_a_hanging_remote_is_an_answer_too() -> None:
+    code, _, err = probe.run(["sleep", "5"], timeout=1)
+    assert code == probe.PROBE_INFRA
+    assert "timed out" in err
+
+
+def _fake_remote(listing: str):
+    """Stand in for ssh, answering only the container-discovery call."""
+
+    def remote(ssh, command, *, stdin="", timeout=120):
+        if command.startswith("docker --version"):
+            return 0, "Docker version 27.0.0", ""
+        if command.startswith("docker ps"):
+            return 0, listing, ""
+        return 0, "", ""
+
+    return remote
+
+
+@pytest.mark.parametrize(
+    ("listing", "why"),
+    (
+        ("", "nothing to read DATABASE_URL from"),
+        (
+            "finance_report-backend\timg\nfinance_report-backend-staging\timg",
+            "two containers share the prefix",
+        ),
+    ),
+)
+def test_ambiguous_or_absent_containers_refuse(
+    listing: str, why: str, monkeypatch, capsys
+) -> None:
+    """Picking one of several would read the wrong database and say nothing.
+
+    `--container` is a prefix because the environment suffix is not known
+    here, so prod, staging and every live preview can match it. Reporting
+    whichever docker listed first as "the" answer is the failure this refuses.
+    """
+    monkeypatch.setenv("INFRA2_WATCHDOG_SSH_HOST", "vps")
+    monkeypatch.setenv("INFRA2_WATCHDOG_SSH_USER", "ops")
+    monkeypatch.setenv("INFRA2_WATCHDOG_SSH_KEY_PATH", "/k")
+    monkeypatch.setattr(probe, "remote", _fake_remote(listing))
+    monkeypatch.setattr(sys, "argv", ["probe"])
+
+    assert probe.main() == probe.PROBE_INFRA
+    report = json.loads(capsys.readouterr().out)
+    assert report["verdict"] == "INFRA"
+    assert (
+        "containers match" in report["reason"] or "nothing to read" in report["reason"]
+    )

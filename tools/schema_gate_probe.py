@@ -87,9 +87,21 @@ def ssh_argv(env: dict[str, str]) -> list[str] | None:
 def run(
     argv: list[str], *, stdin: str = "", timeout: int = 120
 ) -> tuple[int, str, str]:
-    proc = subprocess.run(
-        argv, input=stdin, capture_output=True, text=True, timeout=timeout
-    )
+    """Never raises. A probe that dies with a traceback has reported nothing.
+
+    ``subprocess.run`` raises ``TimeoutExpired`` when the remote hangs and
+    ``OSError`` when ssh is not installed. Both would leave Python exiting 1,
+    a code this tool's vocabulary does not have, and a stack trace where a
+    structured answer belongs.
+    """
+    try:
+        proc = subprocess.run(
+            argv, input=stdin, capture_output=True, text=True, timeout=timeout
+        )
+    except subprocess.TimeoutExpired:
+        return PROBE_INFRA, "", f"timed out after {timeout}s"
+    except OSError as exc:
+        return PROBE_INFRA, "", f"could not execute {argv[0]!r}: {exc}"
     return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
 
 
@@ -146,35 +158,56 @@ def main() -> int:
         return PROBE_INFRA
 
     # 1. the container, by name prefix so the env suffix does not have to be known
+    # The one swallow that is correct here: grep exits 1 when it matches
+    # nothing, and matching nothing is an answer rather than a failure.
+    # The count is checked explicitly below instead of inferred from it.
     code, out, _ = remote(
         ssh,
-        "docker ps --format '{{.Names}}\t{{.Image}}' | grep "
+        "docker ps --format '{{.Names}}\t{{.Image}}' | grep -F "
         + shlex.quote(args.container)
         + " || true",
     )
     running = [line.split("\t") for line in out.splitlines() if line.strip()]
     probes["running_containers"] = running
-    container = running[0][0] if running else ""
+    # `--container` is a name prefix: the env suffix is not known here, and
+    # prod, staging and every live preview can share it. Picking the first
+    # would read DATABASE_URL from whichever docker listed first and report it
+    # as the answer, so ambiguity is refused and the caller narrows it.
+    if len(running) != 1:
+        report["verdict"] = "INFRA"
+        report["reason"] = (
+            f"{len(running)} running containers match {args.container!r}"
+            + (
+                f": {[r[0] for r in running]}. Narrow it with --container."
+                if running
+                else ", so there is nothing to read DATABASE_URL from."
+            )
+        )
+        print(json.dumps(report, indent=2))
+        return PROBE_INFRA
+    container = running[0][0]
 
     # 2. DATABASE_URL, existence and scheme only
-    if container:
-        code, out, err = remote(
-            ssh, f"docker exec {shlex.quote(container)} printenv DATABASE_URL || true"
-        )
-        probes["database_url"] = {
-            "readable": bool(out),
-            "scheme": scheme_of(out),
-            "source": f"docker exec {container} printenv",
-            "stderr": err[:200],
-        }
-    else:
-        probes["database_url"] = {"readable": False, "reason": "no running container"}
+    code, out, err = remote(
+        ssh, f"docker exec {shlex.quote(container)} printenv DATABASE_URL"
+    )
+    probes["database_url"] = {
+        "exit": code,
+        "readable": bool(out),
+        "scheme": scheme_of(out),
+        "source": f"docker exec {container} printenv",
+        "stderr": err[:200],
+    }
 
-    # 3. the image: does it start, where does it work from, does the metadata import
+    # 3. the image: does it start, where does it work from, does the metadata
+    #    import. No `|| true` on either: appending it makes the remote shell
+    #    exit 0 whatever happened, so `exit` would read 0 for an image that
+    #    never started -- erasing the one thing these probes are for. `run()`
+    #    returns the code without raising, so there is nothing to swallow.
     code, out, err = remote(
         ssh,
         f"docker run --rm --entrypoint sh {shlex.quote(args.image)} -c "
-        "'pwd; python3 -c \"import sys; print(sys.version.split()[0])\"' || true",
+        "'pwd; python3 -c \"import sys; print(sys.version.split()[0])\"'",
         timeout=300,
     )
     probes["image_starts"] = {"exit": code, "stdout": out, "stderr": err[:300]}
@@ -183,7 +216,7 @@ def main() -> int:
         ssh,
         f"docker run --rm --entrypoint sh {shlex.quote(args.image)} -c "
         "'python3 -c \"import src.orm_registry, src.database; "
-        "print(len(src.database.Base.metadata.tables))\"' || true",
+        "print(len(src.database.Base.metadata.tables))\"'",
         timeout=300,
     )
     probes["metadata_imports"] = {"exit": code, "tables": out, "stderr": err[:300]}
@@ -197,7 +230,7 @@ def main() -> int:
         probes["gate_end_to_end"] = {"error": f"cannot read {GATE_SCRIPT}: {exc}"}
         gate_source = ""
 
-    if gate_source and container:
+    if gate_source:
         app_path = f" --app-path {shlex.quote(args.app_path)}" if args.app_path else ""
         command = (
             f"DB=$(docker exec {shlex.quote(container)} printenv DATABASE_URL) && "
@@ -210,10 +243,6 @@ def main() -> int:
             "exit": code,
             "verdict_line": out.splitlines()[-1][:400] if out else "",
             "stderr": err[:400],
-        }
-    elif gate_source:
-        probes["gate_end_to_end"] = {
-            "error": "no running container to read DATABASE_URL from"
         }
 
     report["verdict"] = "PROBED"
