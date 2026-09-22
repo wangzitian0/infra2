@@ -459,12 +459,24 @@ def test_classify_rollback_is_class_a_when_only_code_is_ahead() -> None:
 
 
 def test_classify_rollback_is_class_c_for_casing_drift() -> None:
-    # #698's own replay: compare_enum_values computes missing_in_db/missing_in_code and
-    # casing_mismatches off the same set difference, so a casing drift always ALSO sets
-    # missing_in_code -- "silent data corruption" is never the mild tier.
+    # #698's own replay: this particular casing drift also sets missing_in_code (both
+    # come off the same code_set/db_set comparison here) -- either signal alone would
+    # already classify C; see the next test for a case where only casing_mismatches
+    # fires and missing_in_code stays empty.
     disc = compare_enum_values("status", ["PENDING"], ["pending"])
     assert disc.casing_mismatches == (("PENDING", "pending"),)
     assert disc.missing_in_code == ("pending",)
+    assert classify_rollback([disc]) == ROLLBACK_CLASS_C
+
+
+def test_classify_rollback_is_class_c_for_casing_drift_alone() -> None:
+    """#783 review: casing_mismatches and missing_in_code are independent signals, not
+    always coupled -- code declaring BOTH case variants against a DB with only the
+    lowercase one sets casing_mismatches without missing_in_code. Class C must still
+    fire on casing_mismatches alone; it is never the safe tier."""
+    disc = compare_enum_values("status", ["PENDING", "pending"], ["pending"])
+    assert disc.casing_mismatches == (("PENDING", "pending"),)
+    assert disc.missing_in_code == ()  # the counter-example: NOT set here
     assert classify_rollback([disc]) == ROLLBACK_CLASS_C
 
 

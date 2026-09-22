@@ -248,16 +248,24 @@ def run_schema_gate(
         timeout=timeout,
     )
     output = "\n".join(part for part in (result.stdout, result.stderr) if part)
-    if result.returncode != 0:
-        raise SchemaGateError(
-            f"pre-deploy schema gate BLOCKED {service} (exit {result.returncode}): "
-            f"{output.strip()[-2000:]}"
-        )
+    # Parsed BEFORE the returncode check, on purpose: pre_deploy_schema_check.py's
+    # main() prints ROLLBACK_CLASS on stdout for BOTH its passing and its blocked exit
+    # path (everything except NOT EVALUATED, exit 3, which never computed a
+    # comparison) -- the blocked case is exactly when an operator most wants to know
+    # the class without re-running the check by hand. run_schema_gate still raises on
+    # block (a blocked deploy must not proceed), but folds the class into the
+    # exception message so it reaches the deploy log either way.
     rollback_class = ""
     for line in (result.stdout or "").splitlines():
         line = line.strip()
         if line.startswith("ROLLBACK_CLASS: "):
             rollback_class = line.split(":", 1)[1].strip()
+    if result.returncode != 0:
+        suffix = f" (ROLLBACK_CLASS: {rollback_class})" if rollback_class else ""
+        raise SchemaGateError(
+            f"pre-deploy schema gate BLOCKED {service} (exit {result.returncode})"
+            f"{suffix}: {output.strip()[-2000:]}"
+        )
     if not rollback_class:
         # exit 0 with no parseable ROLLBACK_CLASS is not a real answer -- treat an
         # unparseable pass as blocking rather than trusting it (Rule 7's "never a

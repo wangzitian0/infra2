@@ -223,6 +223,28 @@ def test_run_schema_gate_docker_command_overrides_entrypoint_and_attaches_networ
     assert docker_call["input"] == sg._SCHEMA_CHECK_SCRIPT.read_text(encoding="utf-8")
 
 
+def test_run_schema_gate_blocked_message_includes_the_rollback_class_when_present():
+    """The blocked path is exactly when an operator most wants the classification --
+    it must not depend on the raw diagnostic dump happening to still contain the line
+    after truncation (#783 review). ROLLBACK_CLASS is printed FIRST here and the dump
+    is truncated to its last 2000 chars, so a plain "is the raw text present somewhere"
+    check would pass by accident even without parsing it out explicitly; put enough
+    filler after it that only an explicit parse (of the FULL, untruncated stdout)
+    survives the truncation.
+    """
+    stdout = "ROLLBACK_CLASS: C\n" + ("noise " * 400)  # > 2000 chars of trailing filler
+    assert stdout.strip()[-2000:].count("ROLLBACK_CLASS") == 0  # verifies the setup
+    runner = FakeRunner(
+        [
+            _ok(stdout='DATABASE_URL="postgresql://u:p@h:5432/db"\n'),
+            _fail(1, stdout=stdout),
+        ]
+    )
+    with pytest.raises(sg.SchemaGateError) as exc_info:
+        sg.run_schema_gate(**_gate_kwargs(runner=runner, timeout=5))
+    assert "(ROLLBACK_CLASS: C)" in str(exc_info.value)
+
+
 def test_run_schema_gate_blocks_on_exit_1_discrepancy():
     runner = FakeRunner(
         [
