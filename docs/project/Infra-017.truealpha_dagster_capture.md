@@ -1,5 +1,5 @@
 # Infra-017: TrueAlpha Dagster Capture Runtime
-**Status**: Archived — Closed (Dagster superseded by TrueAlpha DataHub pipeline Infra-020)
+**Status**: Active — Production companion runtime to TrueAlpha
 **Owner**: Infra
 **Priority**: P1
 **Branch**: `feat/truealpha-dagster-capture`
@@ -52,7 +52,7 @@ OpenD's loopback binding also prevents a normal overlay-network container from r
 
 ## References
 
-- [SSOT: core.truealpha_runtime](../../ssot/core.truealpha_runtime.md)
+- [SSOT: core.truealpha_runtime](../ssot/core.truealpha_runtime.md)
 - TrueAlpha issues #27, #51, #53, #67, and #68
 
 
