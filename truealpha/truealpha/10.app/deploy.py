@@ -9,7 +9,13 @@ from libs.common import get_env
 from libs.console import error, header, info, success, warning
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.env import VaultSecrets, generate_password
-from libs.service_facets import ProbeFacet, PublicRouteFacet, SecretsFacet, SignalFacet
+from libs.service_facets import (
+    ProbeFacet,
+    PublicRouteFacet,
+    SecretsFacet,
+    SignalFacet,
+    StorageFacet,
+)
 
 shared_tasks = sys.modules.get("truealpha.10.app.shared")
 
@@ -74,6 +80,14 @@ class AppDeployer(Deployer):
             type="alert",
             consecutive_failures=3,
             renotify_window_sec=1800,
+        ),
+    )
+    storage = (
+        StorageFacet(
+            bucket="truealpha-raw",
+            lifecycle_days=0,
+            versioning=False,
+            encryption=True,
         ),
     )
 
@@ -418,6 +432,25 @@ class AppDeployer(Deployer):
 
         if existing_access_key and existing_secret_key:
             info("MinIO credentials already exist in Vault, skipping bucket creation")
+            try:
+                from infra2_sdk.runtime.s3 import S3Settings, ensure_bucket
+
+                env_suffix = get_env().get("ENV_SUFFIX", "")
+                endpoint = (
+                    f"http://platform-minio{env_suffix}:9000"
+                    if env_suffix
+                    else "http://platform-minio:9000"
+                )
+                s3_settings = S3Settings(
+                    bucket=bucket_name,
+                    endpoint_url=endpoint,
+                    access_key_id=existing_access_key,
+                    secret_access_key=existing_secret_key,
+                )
+                ensure_bucket(s3_settings, allow_create=False)
+                info(f"S3 bucket '{bucket_name}' verified reachable via S3 API")
+            except Exception as exc:
+                warning(f"S3 bucket verification via S3 API: {exc}")
             # The never-expire invariant must hold for pre-existing buckets too.
             cls._ensure_never_expires(c, bucket_name)
             return

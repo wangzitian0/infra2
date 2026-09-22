@@ -30,6 +30,7 @@ from libs.service_facets import (
     RestartAfterFacet,
     SecretsFacet,
     SignalFacet,
+    StorageFacet,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -118,6 +119,8 @@ class ServiceMeta:
     # another registered service is redeployed. Validated at load
     # (_validate_restart_after); consumed by restart_after_containers.
     restart_after: tuple[RestartAfterFacet, ...] = ()
+    # Storage bucket facts (#822 / Phase 3 SSOT)
+    storage: tuple[StorageFacet, ...] = ()
 
     def exempted(self, check_id: str) -> bool:
         """True if this service explicitly opted out of facet ``check_id``."""
@@ -177,6 +180,7 @@ def _meta_from_deploy_file(
         exemptions=_facet_seq(tree, "exemptions", Exemption, where),
         deploy_v2_canary=bool(_class_attr(tree, "deploy_v2_canary") or False),
         restart_after=_facet_seq(tree, "restart_after", RestartAfterFacet, where),
+        storage=_facet_seq(tree, "storage", StorageFacet, where),
     )
 
 
@@ -580,3 +584,12 @@ def _is_deployer_class(node: ast.ClassDef) -> bool:
         if isinstance(base, ast.Attribute) and base.attr.endswith("Deployer"):
             return True
     return False
+
+
+# Re-exports for Phase 3 Domain Convergence (SSOT)
+from libs.core.service import (  # noqa: E402
+    Service as Service,
+    load_service_registry as load_service_registry,
+)
+
+

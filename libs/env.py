@@ -284,3 +284,10 @@ def verify_vault_token(
         "renewable": status.renewable,
         "error": None if status.valid else status.error,
     }
+
+
+# Canonical aliases for Phase 3 Domain Convergence (SSOT)
+generate_secret_token = generate_password
+resolve_vault_token = vault_token
+
+
