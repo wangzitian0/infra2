@@ -212,7 +212,7 @@ docker exec platform-portal${ENV_SUFFIX} ping -c 1 platform-authentik-server${EN
 # Expected: 解析成功
 
 # 5. 端到端测试
-pytest e2e_regressions/tests/platform/test_portal.py
+pytest e2e_regressions/tests/apps/test_portal_sso.py
 ```
 
 ---
