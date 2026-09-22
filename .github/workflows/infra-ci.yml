@@ -18,6 +18,10 @@ on:
       - 'libs/**'
       - 'tools/**'
       - 'cloudflare/**'
+      # harness/ is what `Validate Workspace Harness` validates; without it a
+      # harness-only PR never started this workflow, so the ruleset's required
+      # checks could never report and the PR could never merge (infra2#817).
+      - 'harness/**'
       - 'docs/**'
       - 'AGENTS.md'
       - 'CLAUDE.md'
