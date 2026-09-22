@@ -243,6 +243,9 @@ class _Gh:
         self.pushed_iso = pushed_iso
 
     def __call__(self, argv):
+        if argv[:1] == ["api"] and "/git/trees/" in argv[1]:
+            # A clean checkout: every rule file matches the base branch.
+            return _tree_payload()
         argv = list(argv)
         self.calls.append(argv)
         if argv[:2] == ["pr", "view"]:
@@ -348,6 +351,9 @@ def test_collect_reads_the_newest_commit_as_the_last_push():
 def test_request_review_asks_copilot_only_when_the_head_is_unreviewed(capsys):
     class _Unreviewed(_Gh):
         def __call__(self, argv):
+            if argv[:1] == ["api"] and "/git/trees/" in argv[1]:
+                # A clean checkout: every rule file matches the base branch.
+                return _tree_payload()
             out = super().__call__(argv)
             if list(argv)[:2] == ["pr", "view"]:
                 doc = json.loads(out)
@@ -387,6 +393,9 @@ def test_main_merges_only_a_ready_head_and_pins_the_head_commit(capsys):
 def test_main_json_reports_the_owner_gate(capsys):
     class _Protected(_Gh):
         def __call__(self, argv):
+            if argv[:1] == ["api"] and "/git/trees/" in argv[1]:
+                # A clean checkout: every rule file matches the base branch.
+                return _tree_payload()
             out = super().__call__(argv)
             if list(argv)[:2] == ["pr", "view"]:
                 doc = json.loads(out)
@@ -415,6 +424,9 @@ class _NoChecksYet(_Gh):
         self.error = error
 
     def __call__(self, argv):
+        if argv[:1] == ["api"] and "/git/trees/" in argv[1]:
+            # A clean checkout: every rule file matches the base branch.
+            return _tree_payload()
         if list(argv)[:2] == ["pr", "checks"]:
             self.calls.append(list(argv))
             raise RuntimeError(f"gh {' '.join(argv)}: {self.error}")
@@ -508,6 +520,9 @@ def test_a_field_gh_was_asked_for_and_did_not_return_blocks():
 
 def test_collect_marks_an_omitted_field_absent_rather_than_empty():
     def fake(argv):
+        if argv[:1] == ["api"] and "/git/trees/" in argv[1]:
+            # A clean checkout: every rule file matches the base branch.
+            return _tree_payload()
         if argv[:2] == ["pr", "view"]:
             return json.dumps(
                 {
@@ -627,6 +642,9 @@ def test_a_closed_pr_costs_no_comparison_round_trip():
     calls: list[list[str]] = []
 
     def fake(argv):
+        if argv[:1] == ["api"] and "/git/trees/" in argv[1]:
+            # A clean checkout: every rule file matches the base branch.
+            return _tree_payload()
         calls.append(argv)
         if argv[:2] == ["pr", "view"]:
             return json.dumps(
@@ -935,6 +953,9 @@ def test_a_head_missing_from_the_commit_page_cannot_be_judged_settled():
 
 def test_collect_refuses_a_commit_page_that_does_not_contain_the_head():
     def fake(argv):
+        if argv[:1] == ["api"] and "/git/trees/" in argv[1]:
+            # A clean checkout: every rule file matches the base branch.
+            return _tree_payload()
         if argv[:2] == ["pr", "view"]:
             return json.dumps(
                 {
@@ -1046,6 +1067,9 @@ def test_a_field_gh_omitted_blocks_even_when_its_own_guard_would_switch_off():
 
 def test_collect_records_every_requested_field_gh_did_not_return():
     def fake(argv):
+        if argv[:1] == ["api"] and "/git/trees/" in argv[1]:
+            # A clean checkout: every rule file matches the base branch.
+            return _tree_payload()
         if argv[:2] == ["pr", "view"]:
             # No files, changedFiles, commits, mergeable or mergeStateStatus.
             return json.dumps(
@@ -1183,6 +1207,9 @@ def test_a_null_valued_field_is_absent_too_not_merely_a_missing_key():
     # owner gate iterating nothing -- exit 0, and the tool printed
     # "merged #704". None of these five is ever legitimately empty on a real PR.
     def fake(argv):
+        if argv[:1] == ["api"] and "/git/trees/" in argv[1]:
+            # A clean checkout: every rule file matches the base branch.
+            return _tree_payload()
         if argv[:2] == ["pr", "view"]:
             return json.dumps(
                 {
@@ -1257,3 +1284,298 @@ def test_a_directory_that_exists_but_cannot_be_read_is_not_healthy(tmp_path):
     finally:
         _os.chmod(workflows, 0o755)
         gate._declared_deploy_globs.cache_clear()
+
+
+# -- Direction of a change to the rules that judge merges ----------------------------
+#
+# Owner instruction 2026-09-22: "方向可机械证明为收紧则放行。放松需要给我审核."
+
+
+def _inv(*gates: tuple[str, str, str, bool]) -> str:
+    body = "".join(
+        f"  - id: {i}\n"
+        f"    stage: github_ci.merge_authority\n"
+        f"    task_category: t\n"
+        f"    workflow: {w}\n"
+        f"    job: {j}\n"
+        f"    blocks_merge: {str(b).lower()}\n"
+        for i, w, j, b in gates
+    )
+    return f"version: 1\nrepo_prefix: infra_ci.\ngates:\n{body}"
+
+
+BASE_INV = _inv(
+    ("infra_ci.lint", ".github/workflows/infra-ci.yml", "lint-python", True),
+    ("infra_ci.compose", ".github/workflows/infra-ci.yml", "validate-compose", True),
+)
+
+
+def test_an_unchanged_blocking_set_is_proven_tighter():
+    """The backfill shape: rows added, authority untouched. Equal is non-loosening."""
+    assert gate._inventory_only_gained_authority(BASE_INV, BASE_INV)
+
+
+def test_registering_a_non_blocking_gate_is_proven_tighter():
+    head = BASE_INV + (
+        "  - id: infra_ci.smoke\n"
+        "    stage: ops.scheduled_cleanup\n"
+        "    task_category: t\n"
+        "    workflow: .github/workflows/ops-checks.yml\n"
+        "    job: pi-chain-smoke\n"
+        "    blocks_merge: false\n"
+    )
+    assert gate._inventory_only_gained_authority(BASE_INV, head)
+
+
+def test_promoting_a_gate_to_blocking_is_proven_tighter():
+    head = _inv(
+        ("infra_ci.lint", ".github/workflows/infra-ci.yml", "lint-python", True),
+        (
+            "infra_ci.compose",
+            ".github/workflows/infra-ci.yml",
+            "validate-compose",
+            True,
+        ),
+        (
+            "infra_ci.vault",
+            ".github/workflows/infra-ci.yml",
+            "validate-vault-agent",
+            True,
+        ),
+    )
+    assert gate._inventory_only_gained_authority(BASE_INV, head)
+
+
+def test_removing_a_blocking_gate_is_not_proven():
+    head = _inv(
+        ("infra_ci.lint", ".github/workflows/infra-ci.yml", "lint-python", True)
+    )
+    assert not gate._inventory_only_gained_authority(BASE_INV, head)
+
+
+def test_demoting_a_blocking_gate_is_not_proven():
+    head = _inv(
+        ("infra_ci.lint", ".github/workflows/infra-ci.yml", "lint-python", True),
+        (
+            "infra_ci.compose",
+            ".github/workflows/infra-ci.yml",
+            "validate-compose",
+            False,
+        ),
+    )
+    assert not gate._inventory_only_gained_authority(BASE_INV, head)
+
+
+def test_repointing_a_blocking_gate_at_another_job_is_not_proven():
+    """The id set is unchanged and the count is unchanged -- but the gate now
+    watches a different job, which is how a blocking check becomes a passing one
+    without anything looking removed."""
+    head = _inv(
+        ("infra_ci.lint", ".github/workflows/infra-ci.yml", "lint-python", True),
+        ("infra_ci.compose", ".github/workflows/infra-ci.yml", "detect-changes", True),
+    )
+    assert not gate._inventory_only_gained_authority(BASE_INV, head)
+
+
+def test_an_empty_base_blocking_set_proves_nothing():
+    """Otherwise every head is a superset of nothing -- and the change that would
+    benefit most from that is the one that empties the set."""
+    assert not gate._inventory_only_gained_authority(_inv(), BASE_INV)
+    assert not gate._inventory_only_gained_authority("gates: []\n", BASE_INV)
+
+
+@pytest.mark.parametrize("bad", ["", "gates: [\n", "gates: notalist\n", "- a\n- b\n"])
+def test_an_unreadable_version_proves_nothing(bad):
+    assert not gate._inventory_only_gained_authority(bad, BASE_INV)
+    assert not gate._inventory_only_gained_authority(BASE_INV, bad)
+
+
+def test_only_files_with_a_stated_proof_can_be_proven():
+    """Python in the closure has no mechanical reading of "stricter", so it must never
+    be proven -- not even when the two versions are identical."""
+    calls: list[list[str]] = []
+
+    def fake_gh(argv):
+        calls.append(list(argv))
+        return "print('hello')\n"
+
+    proven = gate._proven_tighter(
+        "o/r",
+        "main",
+        "deadbeef",
+        ("tools/pr_merge_gate.py", "AGENTS.md", "libs/console.py"),
+        gh=fake_gh,
+    )
+    assert proven == ()
+    assert calls == [], "a file with no stated proof must not even be fetched"
+
+
+def test_an_unreachable_version_is_not_proven():
+    """Fail closed: if either side cannot be read, nothing is proven."""
+
+    def fake_gh(argv):
+        raise RuntimeError("404")
+
+    assert (
+        gate._proven_tighter(
+            "o/r", "main", "deadbeef", ("docs/ssot/ci-gate-inventory.yaml",), gh=fake_gh
+        )
+        == ()
+    )
+
+
+def test_a_proven_inventory_change_does_not_need_the_owner():
+    verdict = gate.evaluate(
+        _facts(
+            files=("docs/ssot/ci-gate-inventory.yaml", "tools/ci_gate_audit.py"),
+            proven_tighter=("docs/ssot/ci-gate-inventory.yaml",),
+        ),
+        now=NOW,
+    )
+    assert verdict.ready and verdict.exit_code == 0, verdict.reasons
+
+
+def test_the_same_change_unproven_still_needs_the_owner():
+    """The control for the test above: it is the proof doing the work, not the path."""
+    verdict = gate.evaluate(
+        _facts(files=("docs/ssot/ci-gate-inventory.yaml", "tools/ci_gate_audit.py")),
+        now=NOW,
+    )
+    assert verdict.owner_required and verdict.exit_code == 2
+    assert "ci-gate-inventory.yaml" in verdict.reasons[0]
+
+
+def test_a_proven_file_does_not_excuse_an_unproven_one():
+    """Tightening the inventory must not buy a free edit to the gate's own code."""
+    verdict = gate.evaluate(
+        _facts(
+            files=("docs/ssot/ci-gate-inventory.yaml", "tools/pr_merge_gate.py"),
+            proven_tighter=("docs/ssot/ci-gate-inventory.yaml",),
+        ),
+        now=NOW,
+    )
+    assert verdict.owner_required and verdict.exit_code == 2
+    assert "tools/pr_merge_gate.py" in verdict.reasons[0]
+    assert "ci-gate-inventory.yaml" not in verdict.reasons[0], (
+        "the proven file must not be named as a blocker"
+    )
+
+
+def test_hand_built_facts_prove_nothing_by_default():
+    """The field defaults to empty, so every code path that does not run the proof
+    falls back to the owner rather than past them."""
+    assert (
+        gate.HeadFacts(
+            number=1,
+            state="OPEN",
+            draft=False,
+            base="main",
+            head_sha="a" * 40,
+            files=("docs/ssot/ci-gate-inventory.yaml",),
+            last_push_at=NOW,
+            checks=(),
+            unresolved_threads=0,
+        ).proven_tighter
+        == ()
+    )
+
+
+# -- Are the rules doing the judging the merged ones? --------------------------------
+#
+# Measured 2026-09-22: a background poller merged #791 while the working tree sat on
+# the branch of #792 -- the unreviewed PR that relaxes exactly the rule #791 needed
+# relaxed. Nothing was lost (#791's content was non-loosening), but the verdict came
+# from a law that had not been enacted.
+
+
+def _tree_payload(overrides: dict[str, str] | None = None, *, truncated=False) -> str:
+    tree = []
+    for path in sorted(gate.self_governing_files()):
+        sha = gate._blob_sha((gate.ROOT / path).read_bytes())
+        tree.append({"path": path, "sha": (overrides or {}).get(path, sha)})
+    return json.dumps({"truncated": truncated, "tree": tree})
+
+
+def test_blob_sha_is_the_one_git_computes():
+    """The comparison is worthless if the two sides hash differently."""
+    import subprocess
+
+    for path in ("AGENTS.md", "tools/pr_merge_gate.py"):
+        want = subprocess.run(
+            ["git", "hash-object", path],
+            cwd=gate.ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        assert gate._blob_sha((gate.ROOT / path).read_bytes()) == want
+
+
+def test_a_matching_tree_is_no_drift():
+    """The case that must stay quiet, or the gate blocks every merge forever."""
+    assert (
+        gate._working_tree_rule_drift("o/r", "main", gh=lambda a: _tree_payload()) == ()
+    )
+
+
+def test_a_differing_rule_file_is_drift():
+    payload = _tree_payload({"AGENTS.md": "0" * 40})
+    assert gate._working_tree_rule_drift("o/r", "main", gh=lambda a: payload) == (
+        "AGENTS.md",
+    )
+
+
+def test_a_rule_file_missing_from_the_base_tree_is_drift():
+    """A path the base does not have compares equal to nothing, so it must be named."""
+    full = json.loads(_tree_payload())
+    full["tree"] = [e for e in full["tree"] if e["path"] != "tools/pr_merge_gate.py"]
+    payload = json.dumps(full)
+    assert "tools/pr_merge_gate.py" in gate._working_tree_rule_drift(
+        "o/r", "main", gh=lambda a: payload
+    )
+
+
+@pytest.mark.parametrize(
+    "gh",
+    [
+        pytest.param(lambda a: _tree_payload(truncated=True), id="truncated"),
+        pytest.param(lambda a: json.dumps({"tree": []}), id="empty"),
+        pytest.param(lambda a: "not json", id="unparseable"),
+        pytest.param(
+            lambda a: (_ for _ in ()).throw(RuntimeError("404")), id="unreachable"
+        ),
+    ],
+)
+def test_a_base_tree_that_cannot_be_read_counts_as_drift(gh):
+    """'I could not tell whether I am judging by the merged rules' must stop a
+    merge, not wave it through."""
+    drift = gate._working_tree_rule_drift("o/r", "main", gh=gh)
+    assert drift and "could not be read" in drift[0]
+
+
+def test_no_repo_or_base_counts_as_drift():
+    assert gate._working_tree_rule_drift("", "main", gh=lambda a: _tree_payload())
+    assert gate._working_tree_rule_drift("o/r", "", gh=lambda a: _tree_payload())
+
+
+def test_rule_drift_stops_a_merge_that_is_otherwise_ready():
+    """It is not about what the PR changes: an unrelated PR is judged by the same
+    working-tree rules, so it is stopped by the same fact."""
+    verdict = gate.evaluate(_facts(rule_drift=("tools/pr_merge_gate.py",)), now=NOW)
+    assert verdict.owner_required and verdict.exit_code == 2
+    assert "not merged" in verdict.reasons[0]
+    assert "tools/pr_merge_gate.py" in verdict.reasons[0]
+
+
+def test_rule_drift_is_not_excused_by_a_direction_proof():
+    """The proof says the PR's own change is safe; drift says the judge is not the
+    merged one. Different facts, and the second one is not answered by the first."""
+    verdict = gate.evaluate(
+        _facts(
+            files=("docs/ssot/ci-gate-inventory.yaml",),
+            proven_tighter=("docs/ssot/ci-gate-inventory.yaml",),
+            rule_drift=("tools/pr_merge_gate.py",),
+        ),
+        now=NOW,
+    )
+    assert verdict.owner_required and verdict.exit_code == 2
