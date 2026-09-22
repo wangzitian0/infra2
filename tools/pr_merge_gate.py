@@ -208,8 +208,12 @@ def is_self_governing(path: str) -> bool:
     而删除和改名恰好让路径从当前树上消失。任何 `.github/workflows/` 下的路径都算，
     存在与否无关 —— 删掉一个声明了 deploy 路径的 workflow，和把那条 path 从它里面
     删掉，是同一件事。
+
+    前缀测试先判：它是一次字符串比较，`self_governing_files()` 是一次仓库遍历外加
+    闭包计算（首次调用未命中缓存时）。多数路径都不在 `.github/workflows/` 下，
+    短路掉后半句不改变结果 —— 两边都为 True 时 `or` 已经满足，只是省了那次遍历。
     """
-    return path in self_governing_files() or path.startswith(WORKFLOW_PREFIX)
+    return path.startswith(WORKFLOW_PREFIX) or path in self_governing_files()
 
 
 def _all_workflow_files() -> list[str]:

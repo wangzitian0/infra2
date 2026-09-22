@@ -1740,13 +1740,30 @@ def test_deleting_a_workflow_is_still_self_governing():
 
 
 def test_deleting_a_workflow_escalates_to_the_owner():
-    """端到端：光判定函数对还不够，`evaluate` 得真的升级。"""
+    """端到端：光判定函数对还不够，`evaluate` 得真的升级。
+
+    路径必须是当前树上**不存在**的 workflow —— 这正是「删除」在 `facts.files`
+    里的样子。用一个仍然存在的路径（比如 `apply-observability.yml`）测不出这条
+    回归：那样的路径在 `evaluate()` 换成 `is_self_governing()` 之前，靠旧的
+    `path in self_governing_files()` 成员判定就已经能升级，测试红不了旧代码，
+    也就抓不住「删除或改名后不再升级」这个真正要守住的行为。
+    """
+    deleted = f"{gate.WORKFLOW_PREFIX}deleted-by-this-pr.yml"
     verdict = gate.evaluate(
-        _facts(files=("libs/alerting.py", ".github/workflows/apply-observability.yml")),
+        _facts(files=("libs/alerting.py", deleted)),
         now=NOW,
     )
     assert verdict.owner_required and verdict.exit_code == 2
-    assert "apply-observability.yml" in verdict.reasons[0]
+    assert deleted in verdict.reasons[0]
+
+
+def test_renaming_a_workflow_escalates_to_the_owner():
+    """同一枚硬币的另一面：改名之后旧路径从树上消失、新路径也还没被 glob 到 ——
+    两条路径出现在 `facts.files` 里时都必须仍然升级。"""
+    renamed = f"{gate.WORKFLOW_PREFIX}renamed-by-this-pr.yml"
+    verdict = gate.evaluate(_facts(files=(renamed,)), now=NOW)
+    assert verdict.owner_required and verdict.exit_code == 2
+    assert renamed in verdict.reasons[0]
 
 
 def test_a_new_workflow_is_self_governing_before_it_exists():
