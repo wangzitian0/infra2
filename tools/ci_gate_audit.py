@@ -43,7 +43,7 @@ WORKFLOWS_DIR = ".github/workflows"
 # module docstring for why this is not "Phase 1 of 2, pending" despite older comments/
 # commit messages saying so; expanding it means re-opening Infra-016 (#459), not filling
 # in a backlog.
-KNOWN_CI_WORKFLOWS = (".github/workflows/infra-ci.yml",)
+KNOWN_CI_WORKFLOWS = (f"{WORKFLOWS_DIR}/infra-ci.yml",)
 
 
 def _workflow_jobs(path: Path) -> list[str]:

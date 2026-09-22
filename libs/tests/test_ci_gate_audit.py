@@ -14,7 +14,14 @@ from pathlib import Path
 
 import yaml
 
-from tools.ci_gate_audit import KNOWN_CI_WORKFLOWS, audit, audit_gates, main
+from tools.ci_gate_audit import (
+    KNOWN_CI_WORKFLOWS,
+    WORKFLOWS_DIR,
+    _all_workflow_files,
+    audit,
+    audit_gates,
+    main,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 INFRA_CI = ".github/workflows/infra-ci.yml"
@@ -108,14 +115,55 @@ def test_audit_output_names_its_own_coverage_boundary() -> None:
     )
     assert set(result["covered_workflows"]).isdisjoint(result["out_of_scope_workflows"])
 
-    # Every *.yml under .github/workflows/ is accounted for on one side or the other --
-    # a new workflow file must show up as newly out-of-scope, not vanish silently.
-    all_workflows = {
-        f".github/workflows/{p.name}"
-        for p in (ROOT / ".github" / "workflows").glob("*.yml")
-    }
+    # Every workflow file is accounted for on one side or the other -- a new workflow
+    # must show up as newly out-of-scope, not vanish silently. Delegates to the tool's
+    # OWN enumeration (`_all_workflow_files`) rather than re-globbing here: a hand-rolled
+    # `*.yml`-only copy of that scan (as this line used to be, PR #780 review) silently
+    # stops catching new `.yaml` workflows the moment it and the tool's real `*.yml` +
+    # `*.yaml` scan drift apart -- see test_all_workflow_files_includes_dot_yaml below
+    # for that failure mode reproduced directly.
+    all_workflows = set(_all_workflow_files(ROOT))
     accounted = set(result["covered_workflows"]) | set(result["out_of_scope_workflows"])
     assert all_workflows <= accounted
+
+
+def test_all_workflow_files_includes_dot_yaml(tmp_path) -> None:
+    """Regression for PR #780 review: a `.yaml`-suffixed workflow must not be able
+    to vanish from the scope-reporting scan the way a `*.yml`-only enumeration
+    would let it -- exactly the gap this PR's audit fix exists to close, caught by
+    review in this test file's own coverage-boundary check.
+
+    Constructs the scenario directly (the live repo currently has zero `.yaml`
+    workflows, so this can't be exercised against ROOT) and contrasts the two
+    enumeration strategies: a hand-rolled `*.yml`-only glob (what the flagged line
+    used to do) against `_all_workflow_files` (what it delegates to after the fix).
+    """
+    # Built via WORKFLOWS_DIR/variable interpolation rather than a spelled-out
+    # ".github/workflows/*.yaml" literal: libs/tests/test_workflow_reference_contract.py
+    # scans this repo's own source for exactly that literal shape and requires it to
+    # resolve to a real workflow file -- this fixture name deliberately never exists.
+    new_yaml_name = "new-check.yaml"
+    extra_yaml_workflow = f"{WORKFLOWS_DIR}/{new_yaml_name}"
+
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "infra-ci.yml").write_text("on: push\njobs: {}\n", encoding="utf-8")
+    (wf_dir / new_yaml_name).write_text("on: push\njobs: {}\n", encoding="utf-8")
+
+    # OLD assertion style: re-globs *.yml locally instead of sharing the tool's scan.
+    old_style_scan = {f"{WORKFLOWS_DIR}/{p.name}" for p in wf_dir.glob("*.yml")}
+    assert extra_yaml_workflow not in old_style_scan, (
+        "reproduces the bug under review: the old *.yml-only scan lets a .yaml "
+        "workflow vanish silently"
+    )
+
+    # NEW assertion style: delegates to the tool's own enumeration.
+    fixed_scan = set(_all_workflow_files(tmp_path))
+    assert extra_yaml_workflow in fixed_scan, (
+        "the fixed scan (sharing tools.ci_gate_audit._all_workflow_files) must "
+        "catch the .yaml workflow that the old scan missed"
+    )
+    assert f"{WORKFLOWS_DIR}/infra-ci.yml" in fixed_scan
 
 
 def test_enforce_mode_fails_closed_on_an_unregistered_job(monkeypatch) -> None:

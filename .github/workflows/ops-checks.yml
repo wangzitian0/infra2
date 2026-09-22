@@ -1019,11 +1019,15 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
+      # --locked: fail the job if uv.lock is stale or would resolve differently from
+      # pyproject.toml (e.g. the e2e group's pins drifted), instead of uv silently
+      # re-resolving and installing whatever it lands on -- a job named "smoke test"
+      # should not also be a silent floating-dependency upgrade.
       - name: Install e2e dependency group
-        run: uv sync --group e2e
+        run: uv sync --group e2e --locked
 
       - name: Install Playwright chromium
-        run: uv run --group e2e playwright install --with-deps chromium
+        run: uv run --group e2e --locked playwright install --with-deps chromium
 
       - name: Run e2e_regressions smoke suite against production
         env:
@@ -1035,4 +1039,4 @@ jobs:
         # Proof: libs/tests/test_e2e_regressions_ci_wiring.py runs this step for real.
         run: |
           cd ${{ github.workspace }}
-          uv run --group e2e pytest e2e_regressions/tests -m smoke -v
+          uv run --group e2e --locked pytest e2e_regressions/tests -m smoke -v

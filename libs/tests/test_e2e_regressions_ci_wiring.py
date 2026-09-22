@@ -83,6 +83,24 @@ def test_the_job_runs_the_smoke_tier_against_e2e_regressions() -> None:
     )
 
 
+def test_every_uv_invocation_in_the_job_is_locked() -> None:
+    """`uv sync`/`uv run` must not be able to silently re-resolve a stale or
+    drifted uv.lock in this job (#780 review): every `uv sync`/`uv run` call in
+    the job must carry `--locked`, so a stale lockfile fails the job instead of
+    uv quietly installing whatever it re-resolves to."""
+    job = _job()
+    for step in job.get("steps", []):
+        run = str(step.get("run") or "")
+        for line in run.splitlines():
+            line = line.strip()
+            if line.startswith("uv sync") or line.startswith("uv run"):
+                assert "--locked" in line, (
+                    f"{step.get('name', '?')!r} runs {line!r} without --locked -- "
+                    "a stale/drifted uv.lock would be silently re-resolved instead "
+                    "of failing the job"
+                )
+
+
 def _referenced_proof_paths() -> dict[str, list[str]]:
     """path -> list of citing files, for every e2e_regressions/tests/*.py path
     mentioned across the SSOT docs + MANIFEST.yaml."""
