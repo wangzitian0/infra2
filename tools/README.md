@@ -454,8 +454,7 @@ prose, so it must never gate merges (`# schedule-signal-exempt` in
 ops-checks.yml; daily cron + `workflow_dispatch` task `pi-chain-smoke`). Exit
 contract: `0` pass/SKIP, `1` chain assertion failure, `2` infra error
 (pi missing/timeout/unparseable). Credentials: `ZAI_CODING_CN_API_KEY` env
-(CI secret; the job SKIPs green until the secret is configured) or a local
-`auth.json` — read from `$PI_CODING_AGENT_DIR` when that is set to a non-empty
+(CI secret) or a local `auth.json` — read from `$PI_CODING_AGENT_DIR` when that is set to a non-empty
 value, and from `~/.pi/agent` otherwise. An `auth.json` that exists but cannot
 be read, is not JSON, or carries no `zai-coding-cn` entry each report their own
 reason rather than all reading as "no credential".
@@ -467,6 +466,17 @@ python3 tools/pi_chain_smoke.py
 # CI mode: missing credentials are an infra error, not a SKIP
 python3 tools/pi_chain_smoke.py --strict
 ```
+
+The scheduled job passes `--strict` and lets it decide. Nothing in the step
+answers the credential question first: a shell pre-check that printed `SKIP`
+and exited 0 on an empty secret made `--strict` unreachable, so a proof whose
+premise is that green component gates hid a broken chain would itself have
+reported green every day without launching pi. While
+`ZAI_CODING_CN_API_KEY` is unset on the repository the daily run is therefore
+**red, naming the missing credential** — the honest state for a check that has
+never run. `libs/tests/test_pi_chain_smoke_ci_wiring.py` executes the step's
+own script against a refusing stub, so the property holds however the script
+is later rewritten.
 
 ## References
 
