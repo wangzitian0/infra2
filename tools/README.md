@@ -459,6 +459,17 @@ value, and from `~/.pi/agent` otherwise. An `auth.json` that exists but cannot
 be read, is not JSON, or carries no `zai-coding-cn` entry each report their own
 reason rather than all reading as "no credential".
 
+`preflight()` never treats env as a silent default: whichever of the two
+lines actually supplied the credential is named in a stderr line
+(`[pi_chain_smoke] preflight: credential from ...`) and carried into the verdict JSON as
+`credential_source`, on both PASS and FAIL, so a run never leaves it to be
+re-derived after the fact (dev_env#48). This dev_env issue also resolved the
+apparent inconsistency between the two credential names: `GLM_API_KEY` and
+`ZAI_CODING_CN_API_KEY` name one zai-coding-cn provider credential, with
+`GLM_API_KEY`'s 1Password entry as the single source and the latter derived
+from it in the workspace's `.envrc`, so the env line here is no longer
+structurally unset in a normal workspace.
+
 ```bash
 # Local proof (uses auth.json credentials)
 python3 tools/pi_chain_smoke.py

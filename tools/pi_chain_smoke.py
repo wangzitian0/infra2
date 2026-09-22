@@ -171,6 +171,16 @@ def main() -> int:
         print(json.dumps({"verdict": "SKIP", "reason": detail}))
         return 0
 
+    # dev_env#48: preflight already distinguishes which line supplied the
+    # credential (env vs. auth.json) in `detail` -- the defect was that a
+    # passing preflight discarded it here instead of saying so anywhere. Two
+    # names for the same zai-coding-cn provider (GLM_API_KEY,
+    # ZAI_CODING_CN_API_KEY) plus auth.json made "which one actually ran"
+    # unanswerable from a green run alone. Print it (stderr, so the one-line
+    # NDJSON verdict on stdout stays machine-parseable) and carry it into the
+    # verdict so a log or a caller can tell without re-deriving it.
+    print(f"[pi_chain_smoke] preflight: {detail}", file=sys.stderr)
+
     checks: dict | None = None
     error = ""
     for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -185,10 +195,12 @@ def main() -> int:
     failed = sorted(k for k in ("exit0", "agent_end", "route_ok", "stop_ok",
                                 "text_ok", "tokens_ok") if not checks.get(k))
     if failed:
-        print(json.dumps({"verdict": "FAIL", "failed": failed, **checks}))
+        print(json.dumps({"verdict": "FAIL", "failed": failed,
+                          "credential_source": detail, **checks}))
         return 1
     print(json.dumps({"verdict": "PASS", "provider": PROVIDER, "model": MODEL,
-                      "totalTokens": checks["totalTokens"]}))
+                      "totalTokens": checks["totalTokens"],
+                      "credential_source": detail}))
     return 0
 
 
