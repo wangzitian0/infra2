@@ -101,6 +101,47 @@ class EnumDiscrepancy:
         )
 
 
+# Infra-022 T3.2 / TODOWRITE:20: the safety class an automatic-rollback circuit breaker
+# would need before this deploy's schema state could be reversed. Only Class A may ever
+# auto-rollback; Class C never may (DROP/RENAME/tightened constraints require a human
+# forward-fix, production_resilience_and_dr.md T3.2). This module has no visibility into
+# raw migration DDL — it can only classify from the SAME bidirectional enum comparison
+# the gate already computes, so it distinguishes exactly two tiers, not three: A
+# (nothing destructive observed) and C (something was).
+#
+# Both ``missing_in_code`` and ``casing_mismatches`` are treated as Class C — this is a
+# DELIBERATE choice below (``or``), not a derived necessity: they are NOT always
+# coupled. ``compare_enum_values`` computes them from independent comparisons (a plain
+# set difference for missing_in_code; a separate case-insensitive scan for
+# casing_mismatches), so casing drift CAN occur with an empty ``missing_in_code`` — e.g.
+# code declaring both case variants (``["PENDING", "pending"]``) against a DB with only
+# ``["pending"]`` sets ``casing_mismatches=(("PENDING","pending"),)`` while
+# ``missing_in_code=()`` (the lowercase member alone already satisfies the DB side).
+# Class C classifies it anyway because same-value casing drift is "silent data
+# corruption" per ``EnumDiscrepancy.has_error`` — never treated as the safe tier.
+ROLLBACK_CLASS_A = "A"  # no destructive signal observed -- automatic rollback permitted
+ROLLBACK_CLASS_C = "C"  # DB carries structure the code no longer declares -- never auto
+
+
+def classify_rollback(discrepancies: Sequence[EnumDiscrepancy]) -> str:
+    """ROLLBACK_CLASS for this comparison (Infra-022 T3.2's rollback safety class).
+
+    - Class C: any discrepancy has ``missing_in_code`` (the DB carries an enum label, or
+      a whole enum type, the code no longer declares) OR a same-value casing drift —
+      independent signals, both treated as Class C (see the module-level comment above
+      for why they are not always coupled). ``missing_in_code`` is the direction that
+      corresponds to a DROP/RENAME having already reached the database; the old code
+      cannot be safely restored against it. This also covers a DB-only enum type
+      (``code_values=()``).
+    - Class A: zero discrepancies, or only ``missing_in_db`` (code is ahead of a
+      not-yet-migrated DB — purely additive; old code neither reads nor needs the new
+      label).
+    """
+    if any(disc.missing_in_code or disc.casing_mismatches for disc in discrepancies):
+        return ROLLBACK_CLASS_C
+    return ROLLBACK_CLASS_A
+
+
 def compare_enum_values(
     enum_name: str, code_values: Sequence[str], db_values: Sequence[str]
 ) -> EnumDiscrepancy:
@@ -396,6 +437,16 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_BLOCKED
 
     discrepancies = check_enums(code_enums, db_enums)
+    # Printed on stdout (never stderr) in both branches below, as a stable-format line a
+    # caller can grep for, regardless of whether the gate itself passed or blocked. This
+    # process normally runs remotely, over SSH inside the app's own container
+    # (libs/deploy/schema_gate.py's module docstring) -- it is THAT module's
+    # run_schema_gate() that parses this exact line back out of the captured stdout and
+    # returns/reports it; libs/deploy/promote.py's deploy() then carries the value into
+    # DeployPlan.rollback_class, and tools/deploy_v2.py exposes it in its own JSON
+    # result as detail["rollback_class"]. This script itself has no caller here — it
+    # only has to keep emitting a predictable line for schema_gate.py to find.
+    rollback_class = classify_rollback(discrepancies)
     if discrepancies:
         print(f"ERROR: Schema discrepancies found for {args.service}:", file=sys.stderr)
         for disc in discrepancies:
@@ -404,12 +455,14 @@ def main(argv: list[str] | None = None) -> int:
                 f"missing_in_code={disc.missing_in_code}, casing={disc.casing_mismatches}",
                 file=sys.stderr,
             )
+        print(f"ROLLBACK_CLASS: {rollback_class}")
         return EXIT_BLOCKED
 
     print(
         f"Pre-deploy schema check verified for service: {args.service} "
         f"({len(code_enums)} enum types, 0 discrepancies)"
     )
+    print(f"ROLLBACK_CLASS: {rollback_class}")
     return EXIT_OK
 
 

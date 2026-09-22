@@ -9,6 +9,9 @@ import pytest
 
 from tools import pre_deploy_schema_check as gate
 from tools.pre_deploy_schema_check import (
+    ROLLBACK_CLASS_A,
+    ROLLBACK_CLASS_C,
+    classify_rollback,
     compare_enum_values,
     extract_enum_values,
     check_enums,
@@ -437,3 +440,115 @@ def test_libpq_url_drops_only_the_driver_suffix() -> None:
     )
     assert gate.libpq_url("postgres+psycopg2://db/app") == "postgres://db/app"
     assert gate.libpq_url("postgresql://db/app") == "postgresql://db/app"
+
+
+# --- ROLLBACK_CLASS (Infra-022 T3.2 / TODOWRITE:20) ---
+
+
+def test_classify_rollback_is_class_a_with_no_discrepancies() -> None:
+    assert classify_rollback([]) == ROLLBACK_CLASS_A
+
+
+def test_classify_rollback_is_class_a_when_only_code_is_ahead() -> None:
+    # missing_in_db only: code declares a label the DB doesn't have yet -- purely
+    # additive, old code neither reads nor needs it.
+    disc = compare_enum_values("status", ["A", "B", "ARCHIVED"], ["A", "B"])
+    assert disc.missing_in_db == ("ARCHIVED",)
+    assert disc.missing_in_code == ()
+    assert classify_rollback([disc]) == ROLLBACK_CLASS_A
+
+
+def test_classify_rollback_is_class_c_for_casing_drift() -> None:
+    # #698's own replay: this particular casing drift also sets missing_in_code (both
+    # come off the same code_set/db_set comparison here) -- either signal alone would
+    # already classify C; see the next test for a case where only casing_mismatches
+    # fires and missing_in_code stays empty.
+    disc = compare_enum_values("status", ["PENDING"], ["pending"])
+    assert disc.casing_mismatches == (("PENDING", "pending"),)
+    assert disc.missing_in_code == ("pending",)
+    assert classify_rollback([disc]) == ROLLBACK_CLASS_C
+
+
+def test_classify_rollback_is_class_c_for_casing_drift_alone() -> None:
+    """#783 review: casing_mismatches and missing_in_code are independent signals, not
+    always coupled -- code declaring BOTH case variants against a DB with only the
+    lowercase one sets casing_mismatches without missing_in_code. Class C must still
+    fire on casing_mismatches alone; it is never the safe tier."""
+    disc = compare_enum_values("status", ["PENDING", "pending"], ["pending"])
+    assert disc.casing_mismatches == (("PENDING", "pending"),)
+    assert disc.missing_in_code == ()  # the counter-example: NOT set here
+    assert classify_rollback([disc]) == ROLLBACK_CLASS_C
+
+
+def test_classify_rollback_is_class_c_when_db_carries_orphaned_labels() -> None:
+    # missing_in_code: the DB still carries a label the code no longer declares -- the
+    # direction that corresponds to a DROP/RENAME having already reached the database.
+    disc = compare_enum_values("status", ["A", "B"], ["A", "B", "ARCHIVED"])
+    assert disc.missing_in_code == ("ARCHIVED",)
+    assert classify_rollback([disc]) == ROLLBACK_CLASS_C
+
+
+def test_classify_rollback_is_class_c_for_a_db_only_enum_type() -> None:
+    discrepancies = check_enums(
+        {"status": ["A", "B"]}, {"status": ["A", "B"], "priority": ["low", "high"]}
+    )
+    assert classify_rollback(discrepancies) == ROLLBACK_CLASS_C
+
+
+def test_classify_rollback_is_class_a_when_mixed_with_a_clean_enum() -> None:
+    # The classifier looks across the WHOLE batch: one clean enum must not mask a
+    # dangerous discrepancy on another enum in the same comparison.
+    clean = compare_enum_values("clean", ["X"], ["X"])
+    assert not clean.has_error
+    dangerous = compare_enum_values("dangerous", ["A", "B"], ["A", "B", "ARCHIVED"])
+    assert classify_rollback([clean, dangerous]) == ROLLBACK_CLASS_C
+
+
+def test_main_prints_rollback_class_on_a_clean_pass(
+    fake_app, monkeypatch, capsys
+) -> None:
+    seen: list[str] = []
+    _fake_psycopg(
+        monkeypatch,
+        [
+            ("account_type_enum", "ASSET"),
+            ("account_type_enum", "LIABILITY"),
+            ("journal_entry_status_enum", "draft"),
+            ("journal_entry_status_enum", "posted"),
+            ("tag_enum", "x"),
+        ],
+        seen,
+    )
+    rc = gate.main(
+        ["--service", fake_app, "--db-url", "postgresql+asyncpg://db:5432/app"]
+    )
+    assert rc == gate.EXIT_OK
+    assert "ROLLBACK_CLASS: A" in capsys.readouterr().out
+
+
+def test_main_prints_rollback_class_on_a_block(fake_app, monkeypatch, capsys) -> None:
+    _fake_psycopg(
+        monkeypatch,
+        [
+            ("account_type_enum", "asset"),
+            ("account_type_enum", "liability"),
+            ("journal_entry_status_enum", "draft"),
+            ("journal_entry_status_enum", "posted"),
+            ("tag_enum", "x"),
+        ],
+        [],
+    )
+    monkeypatch.setenv("DATABASE_URL", "postgresql://db/app")
+    rc = gate.main(["--service", fake_app])
+    assert rc == gate.EXIT_BLOCKED
+    # #698's own casing-divergence replay: never the milder tier.
+    assert "ROLLBACK_CLASS: C" in capsys.readouterr().out
+
+
+def test_main_prints_no_rollback_class_when_not_evaluated(
+    fake_app, monkeypatch, capsys
+) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    rc = gate.main(["--service", fake_app])
+    assert rc == gate.EXIT_NOT_EVALUATED
+    assert "ROLLBACK_CLASS" not in capsys.readouterr().out

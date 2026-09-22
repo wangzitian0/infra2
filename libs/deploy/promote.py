@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from libs.common import infra_domain
 from libs.compose_lock import compose_write_lock
 from libs.console import warning
+from libs.deploy import schema_gate
 from libs.deploy_env_config import app_compose_env_config, otel_env
 from libs.deploy_queue import deployment_start_epoch
 from libs.service_registry import REPO_ROOT
@@ -46,6 +47,12 @@ class DeployPlan:
     compose_id: str
     data: str  # derived data_lane from EnvConfig, kept for deploy_v2 result detail
     env_vars: dict[str, str]
+    # The #698 pre-deploy schema gate's ROLLBACK_CLASS (Infra-022 T3.2 / TODOWRITE:20)
+    # for this exact deploy, or None when the gate didn't apply (schema_gate.gate_applies
+    # was False for this service). Recorded here so it reaches deploy_v2's own JSON
+    # result / the GitHub Actions step summary — an operator deciding whether a later
+    # rollback is safe must not have to re-run the check to see this.
+    rollback_class: str | None = None
 
 
 def _dep_id(deployment: dict) -> str:
@@ -511,6 +518,40 @@ def deploy(
     # retained tag (image_ref="vX.Y.Z"), code pulls the short sha. image_ref is supplied by
     # the resolver (resolve_image_ref); fall back to sha[:7] for direct/legacy callers.
     image_tag = image_ref or sha[:7]
+
+    # Fail closed BEFORE any mutation: the code side's ORM/enum truth for the EXACT
+    # image about to be deployed, against the CURRENT live schema (#698, SSOT
+    # ops.standards.md Rule 7 / Infra-022 TODOWRITE:20). Runs inside the app's own
+    # published image over SSH to the VPS (libs.deploy.schema_gate) — the only place
+    # ``load_code_enums_for_service`` produces a real answer; infra2's own environment
+    # cannot import the app's ORM. A discrepancy (exit 1) and NOT EVALUATED (exit 3 —
+    # missing DB URL / a failed code-side import, #718 review) are BOTH blocking, same
+    # as an SSH/docker transport failure — there is no silent pass. Only services
+    # registered in tools.pre_deploy_schema_check.ENUM_SOURCES are gated
+    # (schema_gate.gate_applies) — a service without persistent enums registered there
+    # is unaffected by this check.
+    #
+    # rollback_class is CAPTURED (not just raised-on-block) and carried into the
+    # returned DeployPlan below: a passing deploy still records its ROLLBACK_CLASS so
+    # an operator deciding whether a LATER rollback of this exact release is safe reads
+    # it from the deploy record instead of re-running the check (Infra-022 T3.2).
+    rollback_class: str | None = None
+    if schema_gate.gate_applies(service):
+        from libs.service_registry import service_attrs
+
+        meta = service_attrs().get(service)
+        if meta is None or not meta.compose_path:
+            raise ValueError(
+                f"{service}: pre-deploy schema gate is registered for this service but "
+                "it has no compose_path to locate its vault-agent container from"
+            )
+        rollback_class = schema_gate.run_schema_gate(
+            service,
+            compose_path=meta.compose_path,
+            env_suffix=cfg.env_suffix,
+            image_ref=image_tag,
+        )
+
     # IAC_CONFIG_HASH cache-bust:
     # Under standard promote, this changes on every call (ms resolution) so a same-digest
     # promote forces a redeploy.
@@ -647,7 +688,12 @@ def deploy(
             raise
 
     return DeployPlan(
-        env=env, sha=sha, compose_id=cfg.compose_id, data=data_lane, env_vars=env_vars
+        env=env,
+        sha=sha,
+        compose_id=cfg.compose_id,
+        data=data_lane,
+        env_vars=env_vars,
+        rollback_class=rollback_class,
     )
 
 
