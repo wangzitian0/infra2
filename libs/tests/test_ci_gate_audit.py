@@ -359,3 +359,19 @@ def test_the_enforce_step_can_actually_fire_on_every_covered_workflow() -> None:
                 f"{wf} is in the audit's covered scope, but editing it does not trigger "
                 f"infra-ci.yml on {event} -- the --enforce step would never run"
             )
+
+
+def test_a_jobs_node_that_is_not_a_mapping_is_not_a_crash(tmp_path) -> None:
+    """`jobs:` as a list or a scalar is valid YAML and an invalid workflow (#789
+    review). `.keys()` on it took the whole audit down; there is nothing to
+    enumerate, and a crash is not a finding."""
+    from tools.ci_gate_audit import _workflow_jobs
+
+    for body in ("jobs: oops\n", "jobs:\n  - a\n  - b\n", "jobs: null\n", "on: push\n"):
+        path = tmp_path / "wf.yml"
+        path.write_text(body, encoding="utf-8")
+        assert _workflow_jobs(path) == [], body
+
+    path = tmp_path / "ok.yml"
+    path.write_text("jobs:\n  build: {}\n", encoding="utf-8")
+    assert _workflow_jobs(path) == ["build"], "the working case must still work"

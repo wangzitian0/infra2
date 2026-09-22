@@ -52,7 +52,12 @@ PR_TRIGGERS = frozenset({"pull_request", "pull_request_target"})
 
 
 def _workflow_jobs(path: Path) -> list[str]:
-    return list((ci_spec.load_workflow(path).get("jobs") or {}).keys())
+    # `jobs:` as a list or a scalar is valid YAML and an invalid workflow, and
+    # `.keys()` on it takes the audit down (#789 review). There is nothing to
+    # enumerate, and a crash is not a finding -- the gate surfaces as dangling
+    # instead, which is what the caller already knows how to report.
+    jobs = ci_spec.load_workflow(path).get("jobs")
+    return list(jobs.keys()) if isinstance(jobs, dict) else []
 
 
 def _workflow_triggers(path: Path) -> set[str]:
