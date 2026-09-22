@@ -259,7 +259,22 @@ def test_external_application_cannot_be_coordinated_or_focused(
 
 def test_unsupported_rules_layer_value_fails(tmp_path: Path) -> None:
     manifest = _workspace(tmp_path)
-    manifest["repositories"][1]["rules_layer"] = "sometimes"
+    app = next(repo for repo in manifest["repositories"] if repo["id"] == "app")
+    app["rules_layer"] = "sometimes"
+
+    result = validate_manifest(tmp_path, manifest)
+
+    assert not result.ok
+    assert [error.code for error in result.errors] == ["rules-layer"]
+
+
+def test_non_string_rules_layer_value_fails_without_raising(tmp_path: Path) -> None:
+    """A YAML sequence/map value must become a validation finding, not an
+    uncaught TypeError from the `not in ALLOWED_RULES_LAYER` set membership
+    test on an unhashable value."""
+    manifest = _workspace(tmp_path)
+    app = next(repo for repo in manifest["repositories"] if repo["id"] == "app")
+    app["rules_layer"] = ["none"]
 
     result = validate_manifest(tmp_path, manifest)
 
@@ -269,7 +284,8 @@ def test_unsupported_rules_layer_value_fails(tmp_path: Path) -> None:
 
 def test_rules_layer_none_is_accepted(tmp_path: Path) -> None:
     manifest = _workspace(tmp_path)
-    manifest["repositories"][1]["rules_layer"] = "none"
+    app = next(repo for repo in manifest["repositories"] if repo["id"] == "app")
+    app["rules_layer"] = "none"
 
     result = validate_manifest(tmp_path, manifest)
 

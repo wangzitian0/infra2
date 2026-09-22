@@ -197,11 +197,13 @@ def validate_manifest(
                 f"{repository_id} has unsupported governance: {governance}",
             )
         rules_layer = repository.get("rules_layer")
-        if rules_layer is not None and rules_layer not in ALLOWED_RULES_LAYER:
+        if rules_layer is not None and (
+            not isinstance(rules_layer, str) or rules_layer not in ALLOWED_RULES_LAYER
+        ):
             _error(
                 findings,
                 "rules-layer",
-                f"{repository_id} has unsupported rules_layer: {rules_layer}",
+                f"{repository_id} has unsupported rules_layer: {rules_layer!r}",
             )
         expected_governance = {
             "infrastructure-control-plane": "local",
