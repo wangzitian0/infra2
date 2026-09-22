@@ -55,6 +55,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tools import gen_project_index, gen_ssot_index
+
 ROOT = Path(__file__).resolve().parents[2]
 INFRA_CI = ROOT / ".github" / "workflows" / "infra-ci.yml"
 DOCS = ROOT / ".github" / "workflows" / "docs.yml"
@@ -306,12 +308,42 @@ def _stale_tree(generator: str, tmp_path: Path) -> Path:
     else:
         # A hand edit inside the generated block -- the thing the header of
         # docs/ssot/README.md forbids.
+        #
+        # The marker comes from the generator, and the edit goes after the
+        # WHOLE marker line. The first version of this fixture partitioned on a
+        # prefix of it and so cut the marker in half; the generator then failed
+        # with "markers not found" -- the deleted-marker path, byte-identical
+        # to deleting the marker outright, not the hand-edit path this is
+        # supposed to exercise. Same exit code, different reason, and every
+        # assertion downstream passed while proving the wrong thing.
         readme = root / "docs/ssot/README.md"
-        text = readme.read_text(encoding="utf-8")
-        marker = "<!-- BEGIN GENERATED SSOT INDEX"
-        head, _, rest = text.partition(marker)
+        head, marker, rest = readme.read_text(encoding="utf-8").partition(
+            gen_ssot_index.BEGIN
+        )
+        assert marker, "the generated SSOT block's BEGIN marker moved"
         readme.write_text(f"{head}{marker}\n| hand edited |{rest}", encoding="utf-8")
     return root
+
+
+def _markers_intact(generator: str, root: Path) -> None:
+    """A generator that cannot find its own markers fails for a reason that has
+    nothing to do with staleness, so the fixture must leave them alone."""
+    if generator == "tools/gen_ssot_index.py":
+        text = (root / "docs/ssot/README.md").read_text(encoding="utf-8")
+        required = (gen_ssot_index.BEGIN, gen_ssot_index.END)
+    else:
+        text = (root / "docs/project/README.md").read_text(encoding="utf-8")
+        required = (
+            gen_project_index.BEGIN_ACTIVE,
+            gen_project_index.END_ACTIVE,
+            gen_project_index.BEGIN_ARCHIVED,
+            gen_project_index.END_ARCHIVED,
+        )
+    for marker in required:
+        assert marker in text, (
+            f"the fixture damaged {marker!r}, so {generator} would fail on "
+            "'markers not found' instead of on a stale index"
+        )
 
 
 @pytest.mark.parametrize("generator", sorted(GENERATOR_INPUTS))
@@ -319,6 +351,7 @@ def test_the_stale_fixture_is_actually_stale(generator: str, tmp_path: Path) -> 
     """If the fixture did not make the index stale, every bite test below would
     pass without proving anything."""
     root = _stale_tree(generator, tmp_path)
+    _markers_intact(generator, root)
     result = subprocess.run(
         ["python3", generator], cwd=root, capture_output=True, text=True
     )
@@ -346,6 +379,7 @@ def test_every_generator_input_reaches_a_gate_that_bites(
     )
 
     root = _stale_tree(generator, tmp_path)
+    _markers_intact(generator, root)
     shim = root / "bin"
     shim.mkdir()
     (shim / "uv").write_text(UV_SHIM, encoding="utf-8")
