@@ -4,7 +4,7 @@
 **Owner**: Infra  
 **Priority**: P0  
 **Branch**: `feat/infra-022-resilience-and-dr`  
-**Related Issues**: #721 (备份与DR), #722 (回滚刹车), #723 (告警降噪), #724 (宿主机安全基线), #698 (Schema Gate)
+**Related Issues**: #798 (Epic 总览), #721 (备份与DR), #722 (回滚刹车), #723 (告警降噪), #724 (宿主机安全基线), #698 (Schema Gate)
 
 ## Goal
 
@@ -57,7 +57,7 @@
 
 ## PR Links
 
-- #721, #722, #723, #724 (Tracking Issues)
+- #798 (Epic 交付闭环总览), #721, #722, #723, #724 (Tracking Issues)
 - #618 host_backup: 单服务失败不中止整轮（T2.1 前置）
 - 待关联后续实现 PR
 
