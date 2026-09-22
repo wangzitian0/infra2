@@ -394,16 +394,16 @@ jobs:
 
       # Infra-016 #461: coordinate-ized CI gate inventory drift audit. Schema errors and
       # dangling gates are always hard. `--enforce` additionally fails on an unregistered
-      # job -- but only within tools.ci_gate_audit.KNOWN_CI_WORKFLOWS, which today is just
-      # this workflow (infra-ci.yml). It's safe to enforce now because infra-ci.yml is
-      # provably fully covered (libs/tests/test_ci_gate_audit.py locks unregistered_jobs
-      # == [] for it): a job landing here later without a matching gate now fails CI
-      # instead of only printing. This is NOT "every CI workflow is covered" -- Infra-016's
-      # wider Phase 2 (ops-checks/reconcile-iac-inputs/apply-observability/etc.) was closed
-      # "not planned" (#459, see docs/project/archive/Infra-016.ci_gate_inventory.md) and
-      # was deliberately not reopened here; the tool's own JSON output names the remaining
-      # out-of-scope workflows so that boundary is visible without reading this comment.
-      - name: Gate CI inventory drift (enforced for infra-ci.yml; other workflows out of scope)
+      # job, within the scope `tools.ci_gate_audit.covered_workflows()` computes: a
+      # workflow is covered exactly when its own triggers include `pull_request` /
+      # `pull_request_target`, which is precisely when one of its jobs can appear on a
+      # pull request with nobody having decided whether it gates merge (#791). Today that
+      # is infra-ci.yml, ops-checks.yml and docs.yml -- 22 jobs, all registered, locked by
+      # libs/tests/test_ci_gate_audit.py. Add `pull_request:` to any workflow and it joins
+      # the scope automatically; its jobs then have to be registered or this step fails.
+      # The remaining workflows never run on a pull request, so they cannot gate one; the
+      # tool's JSON names them under out_of_scope_workflows.
+      - name: Gate CI inventory drift (scope = workflows that run on a pull request)
         run: |
           cd ${{ github.workspace }}
           uv run python -m tools.ci_gate_audit --enforce
