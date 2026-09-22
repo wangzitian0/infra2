@@ -1011,6 +1011,11 @@ def test_an_ordinary_green_head_still_merges():
         "## Owner Instruction\n\n「授权给你 merge 权限啊」",
         "## Owner instruction\n\n\n> quote after two blank lines",
         "intro text\n\n## Owner instruction\n> quote\n\nmore text after the quote",
+        "## Owner instruction\n\n> 授权给你 merge 权限啊",
+        # A 「...」 quote merely needs to appear on the line, not open it -- the
+        # SSOT wording is "含「...」原话", not "line starts with 「".
+        "## Owner instruction\n\n"
+        "2026-09-22: 「加速收敛啊，包括 sub-agent」;「总裁要约定心跳机制的哇」",
     ],
 )
 def test_owner_instruction_quoted_recognises_a_header_and_its_quote(body):
@@ -1026,6 +1031,11 @@ def test_owner_instruction_quoted_recognises_a_header_and_its_quote(body):
         "## Owner instruction",  # header with nothing after it
         "## Owner instruction\n\n\n",  # header, then only blank lines to EOF
         "## Something else\n\n> a quote, but under the wrong header",
+        # A bare `>` (or `「」`) is a citation of nothing -- it must not count as
+        # quoting the instruction just because it looks like markdown quote syntax.
+        "## Owner instruction\n\n>",
+        "## Owner instruction\n\n>   ",
+        "## Owner instruction\n\n「」",
     ],
 )
 def test_owner_instruction_quoted_rejects_a_header_without_a_quote_beneath_it(body):

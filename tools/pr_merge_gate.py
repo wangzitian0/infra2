@@ -79,7 +79,7 @@ AUTOMATED_REVIEWERS = frozenset({"copilot-pull-request-reviewer"})
 # held, so `test_the_closure_still_covers_everything_the_list_did` pins it.
 RULE_TEXT_FILES = ("AGENTS.md", "docs/ssot/ops.merge-gate.md")
 
-# AGENTS.md §5's last line: a change to RULE_TEXT_FILES may skip the owner escalation
+# AGENTS.md §6's last line: a change to RULE_TEXT_FILES may skip the owner escalation
 # that `evaluate` would otherwise apply -- not because the prose stopped mattering, but
 # because a direction proof is impossible for prose (see the DIRECTION_PROOFS comment
 # below) and a cited instruction is the substitute the owner accepted for these two
@@ -95,15 +95,25 @@ RULE_TEXT_FILES = ("AGENTS.md", "docs/ssot/ops.merge-gate.md")
 _OWNER_INSTRUCTION_HEADER_RE = re.compile(
     r"(?im)^(##+\s*)?(owner instruction|owner 指示)\b.*$"
 )
-_QUOTE_LINE_RE = re.compile(r"^(?:>|「.*」)")
+# A quote must actually quote something: a bare `>` or an empty `「」` is a
+# citation of nothing and must not pass. Two shapes count, per the SSOT wording
+# ("`>` 开头，或含「...」原话"): (a) a `>` blockquote *with content after the
+# marker* -- anchored, since that is markdown quote syntax and only means
+# something at the start of the line; (b) a line that merely *contains* a
+# non-empty 「...」 quote anywhere -- unanchored, since "含" (contains) does not
+# require the quote to open the line. `.search()`, not `.match()`, evaluates
+# this: `^` inside alternative (a) still pins it to line-start, while
+# alternative (b) is free to match further in.
+_QUOTE_LINE_RE = re.compile(r"^>\s*\S|「[^」]*\S[^」]*」")
 
 
 def _owner_instruction_quoted(body: str) -> bool:
     """True when the PR body cites the owner instruction, not just names it.
 
     Looks for a line matching `_OWNER_INSTRUCTION_HEADER_RE`, then the first
-    non-blank line after it: a `>` blockquote or a 「...」original-words quote
-    counts, anything else does not. Multiple headers are tried independently, so
+    non-blank line after it: a `>` blockquote with content after the marker, or
+    a line containing a non-empty 「...」original-words quote, counts -- a bare
+    `>` or an empty 「」does not. Multiple headers are tried independently, so
     one empty attempt does not shadow a real citation further down the body.
     """
     lines = (body or "").splitlines()
@@ -114,7 +124,7 @@ def _owner_instruction_quoted(body: str) -> bool:
             stripped = later.strip()
             if not stripped:
                 continue
-            if _QUOTE_LINE_RE.match(stripped):
+            if _QUOTE_LINE_RE.search(stripped):
                 return True
             break  # first non-blank line under this header is not a quote
     return False
@@ -647,7 +657,7 @@ class HeadFacts:
     # (reviewer login, commit reviewed, submitted epoch) — a review pins a head
     reviews: tuple[tuple[str, str, float], ...] = ()
     # The PR description, read for the owner-instruction citation that AGENTS.md
-    # §5 lets RULE_TEXT_FILES substitute for a direction proof (see
+    # §6 lets RULE_TEXT_FILES substitute for a direction proof (see
     # `_owner_instruction_quoted`). Defaults to "" -- a hand-built HeadFacts
     # therefore cites nothing, which stays on the conservative side like every
     # other default here.
