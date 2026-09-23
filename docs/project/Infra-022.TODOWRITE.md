@@ -11,7 +11,7 @@
 
 - [x] `bootstrap/01.dokploy_install/hostfw/`: 主机防火墙（T1.3 / #724 的"只开放 80/443/SSH"），owner 2026-09-17 批准。用 nftables 自有表而非 UFW（UFW 挡不住 Docker DNAT 的端口）。上线前公网可连 3000（Dokploy UI）、2377、7946、4789/udp；上线后外部只剩 22/80/443，runner→Dokploy、runner→主机 22、Cloudflare 路由、Dagster→OpenD 均正常；已 `install` 持久化（`infra2-hostfw.service` enabled）。未做：80/443 仅放行 Cloudflare IP 段（#724 §3）
 - [x] `tools/host_backup.sh`（#618，truealpha#650 恢复演练发现）：每晚 prod 备份在 `platform/minio` 被 `tar` exit 1 + `set -e` 中止，finance_report/truealpha 的 pg dump 从未执行。改为 pg dump 先跑、minio 最后；`tar` exit 1 记 WARN；单个服务失败不再中止其余服务（`FAILED <id>`，残缺归档删除，不进 manifest，退出 1，跳过本地轮转）；redis `SAVE` 之前未鉴权（NOAUTH 且 exit 0，从未真正快照），现用容器自身 secrets 鉴权，只归档 `dump.rdb`。测试 `libs/tests/test_host_backup_script.py`。主机副本 2026-08-20 起已手工运行 PR 旧 head（sha256 `1e1285b9…`）；合入后需从 main 重装并核对 sha256（SOP-006）
-- [ ] `tools/host_backup.sh` 覆盖缺口：BackupFacet 清单中 `bootstrap/1password`、`bootstrap/iac_runner`、`platform/alerting`、`platform/openpanel`、`platform/portal`、`platform/signoz`、`truealpha/data_engine` 未被脚本归档；prod 与 staging 共用 `/data/backups/infra2`，`BACKUP_KEEP=7` 约等于各 3.5 天
+- [ ] `tools/host_backup.sh` 现场覆盖验收：源代码已补齐 17/17 个 BackupFacet（原缺口另含 `platform/free`），并以双向 CI 检查防漂移；代码现把 prod/staging 的 manifest 与本地 `BACKUP_KEEP=7` 保留分别隔离，恢复演练默认只接受 Production manifest。待 VPS 安装同 SHA 脚本并分别证明两环境的 17/17 异地 manifest、字节校验与新增类别隔离恢复。
 - [x] `tools/host_backup.sh`: 支持 Google Drive (rclone crypt E2EE) 分级异地备份（周备保留 60d，季度快照保留 730d），1Password 凭证已闭环，测试通过
 - [x] `tools/run_restore_rehearsal.py`: 编写在独立临时沙箱容器中解密、导入并验证 5 项核心业务不变量的自动化演练工具，实测 10.62s 通过并用后即焚 0 残留
 - [ ] `bootstrap/docker_daemon.json`: 固化 `daemon.json` 并编写平滑热重载脚本（校验 live-restore 状态）

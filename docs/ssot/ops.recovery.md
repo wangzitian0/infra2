@@ -127,6 +127,9 @@ uv run python tools/backup_verification.py --manifest /path/to/manifest.json --j
 为每个登记的 `data_path` 创建 archive、计算 SHA256，并通过主机上的 `rclone`
 remote 上传到 off-host storage。
 
+这个按声明生成文件归档的命令目前是手工入口；宿主机定时任务使用下面的
+`host_backup.sh`。不能用这里的示例命令证明每周的异地备份已经运行。
+
 Dry-run 不上传：
 
 ```bash
@@ -170,16 +173,29 @@ Failure contract (#618, found by the truealpha#650 restore drill):
 
 It writes a `tools/backup_verification.py`-compatible manifest and, when
 `BACKUP_REMOTE` (an rclone target) is set, uploads each archive off-host into
-the tier directory (`${REMOTE}/${BACKUP_TIER}/${TS}`). Local retention keeps the
-most recent `BACKUP_KEEP` (default 7) run directories and is skipped on a failed run.
-Prod and staging runs share `/data/backups/infra2`, so 7 directories is about 3.5 days of each.
+the tier/environment directory (`${REMOTE}/${BACKUP_TIER}/${ENVIRONMENT}/${TS}`). Local retention keeps the
+most recent `BACKUP_KEEP` (default 7) run directories **per environment** and is
+skipped on a failed run. Run directories are named `production-<timestamp>` or
+`staging-<timestamp>` under `/data/backups/infra2`; each run's manifest records
+its environment. The latest pointers are `production-manifest.json` and
+`staging-manifest.json` in that directory. The off-host latest manifests are
+likewise separate (`gdrive-backup:infra2/production/manifest.json` and
+`gdrive-backup:infra2/staging/manifest.json`). Legacy unprefixed local runs are
+left untouched for an operator to retire after the new path is verified.
+Because the set includes Vault and 1Password Connect state, the runner uses
+`umask 077` and makes `/data/backups/infra2` root-only (`0700`). On rollout,
+check this on the host before the next run; restricting this parent also shields
+legacy archives that were created with looser modes.
 Remote retention automatically prunes expired snapshots (`weekly` > 60d; `quarterly` > 730d).
 
-Coverage gap: the script's service list is a hand-kept subset of the
-`BackupFacet` inventory (`libs/tests/test_host_backup_script.py` asserts it stays a
-subset). `bootstrap/1password`, `bootstrap/iac_runner`, `platform/alerting`,
-`platform/openpanel`, `platform/portal`, `platform/signoz` and
-`truealpha/data_engine` are declared but not archived by it.
+The script's service list must equal the `BackupFacet` inventory. The list is
+currently hand-kept because the installed host copy runs without a repo Python
+environment; `libs/tests/test_host_backup_script.py` checks both directions and
+the declared data paths. A new facet without a scheduled backup entry fails CI.
+Bootstrap paths are shared by both environments; environment-scoped paths take
+`ENV_SUFFIX`. Source coverage alone is not runtime proof: after merging a script
+change, reinstall the host copy, verify its checksum, and inspect a fresh
+off-host manifest and restored artifact for every required entry.
 
 The host copy is installed by hand from `main` (script-deploy drift belongs to
 the reconcile lane). After a change merges, reinstall it and compare checksums:
@@ -215,7 +231,7 @@ restored into a disposable target and checked. Use
 ```bash
 # Automated sandboxed rehearsal (spins up disposable container, restores, checks invariants, destroys container)
 python3 tools/run_restore_rehearsal.py \
-  --manifest /data/backups/infra2/manifest.json \
+  --manifest /data/backups/infra2/production-manifest.json \
   --service-id finance_report/postgres \
   --database finance_report
 ```
@@ -224,7 +240,7 @@ Or low-level manual invocation with `tools/backup_restore_rehearsal.py`:
 
 ```bash
 uv run python tools/backup_restore_rehearsal.py \
-  --manifest /data/backups/infra2/manifest.json \
+  --manifest /data/backups/infra2/production-manifest.json \
   --service-id finance_report/postgres \
   --target-container finance_report-postgres-restore-rehearsal
 ```
@@ -232,6 +248,11 @@ uv run python tools/backup_restore_rehearsal.py \
 Safety rules:
 
 - The manifest must pass the same off-host freshness/checksum checks as SOP-004.
+- The automated runner defaults to Production and requires the manifest's
+  `environment` to match. To rehearse Staging, pass both `--environment staging`
+  and `--manifest /data/backups/infra2/staging-manifest.json`. Missing or
+  mismatched environment is a failure; the runner never guesses from the latest
+  timestamp because the later Staging cron would otherwise mask Production.
 - The target container name must contain `rehearsal`, `restore`, or `throwaway`
   unless an operator deliberately uses the explicit override in code.
 - Zero host port binds and zero volume mounts to production `/data`.

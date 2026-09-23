@@ -50,6 +50,7 @@ def main() -> int:
 
     manifest = {
         "schema_version": 1,
+        "environment": "production",  # BackupFacet data_path values are production paths.
         "generated_at": timestamp,
         "verified_at": timestamp,
         "artifacts": artifacts,

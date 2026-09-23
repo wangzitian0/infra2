@@ -24,10 +24,11 @@
 #   BACKUP_REMOTE      optional rclone remote prefix (e.g. gdrive-backup:infra2); off-host upload
 #   BACKUP_TIER        optional retention tier: weekly (default) | quarterly
 #   BACKUP_DATA_ROOT   host data root holding the service data paths (default /data)
-#   BACKUP_KEEP        local run directories to keep (default 7)
+#   BACKUP_KEEP        local run directories to keep per environment (default 7)
 #   ENV_SUFFIX         optional container suffix (e.g. -staging); default production ("")
 #   PG_SUPERUSER       postgres superuser for pg_dumpall (default: postgres)
 set -euo pipefail
+umask 077  # Local archives include Vault and 1Password Connect state.
 
 OUTPUT_DIR="${BACKUP_OUTPUT_DIR:-/data/backups/infra2}"
 REMOTE="${BACKUP_REMOTE:-}"
@@ -38,19 +39,26 @@ if [ "${TIER}" != "weekly" ] && [ "${TIER}" != "quarterly" ]; then
 fi
 DATA_ROOT="${BACKUP_DATA_ROOT:-/data}"
 SUFFIX="${ENV_SUFFIX:-}"
+case "${SUFFIX}" in
+  "") ENVIRONMENT="production" ;;
+  "-staging") ENVIRONMENT="staging" ;;
+  *) echo "unsupported ENV_SUFFIX '${SUFFIX}': expected empty or -staging" >&2; exit 2 ;;
+esac
 PG_SUPERUSER="${PG_SUPERUSER:-postgres}"
 BACKUP_KEEP="${BACKUP_KEEP:-7}"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
-RUN_DIR="${OUTPUT_DIR}/${TS}"
+RUN_DIR="${OUTPUT_DIR}/${ENVIRONMENT}-${TS}"
 MANIFEST="${RUN_DIR}/manifest.json"
+LATEST_MANIFEST="${OUTPUT_DIR}/${ENVIRONMENT}-manifest.json"
 ARTIFACTS_FILE="${RUN_DIR}/.artifacts.jsonl"
 
 RUN_REMOTE=""
 if [ -n "${REMOTE}" ]; then
-  RUN_REMOTE="${REMOTE%/}/${TIER}/${TS}"
+  RUN_REMOTE="${REMOTE%/}/${TIER}/${ENVIRONMENT}/${TS}"
 fi
 
 mkdir -p "${RUN_DIR}"
+chmod 700 "${OUTPUT_DIR}" "${RUN_DIR}"
 : > "${ARTIFACTS_FILE}"
 
 # service_id | kind | source (container or data_path)
@@ -68,9 +76,17 @@ finance_report/postgres|pg|finance_report-postgres${SUFFIX}
 truealpha/postgres|pg|truealpha-postgres${SUFFIX}
 platform/redis|redis|platform-redis${SUFFIX}|${DATA_ROOT}/platform/redis${SUFFIX}
 finance_report/redis|redis|finance_report-redis${SUFFIX}|${DATA_ROOT}/finance_report/redis${SUFFIX}
+bootstrap/1password|path|${DATA_ROOT}/bootstrap/1password
+bootstrap/iac_runner|path|${DATA_ROOT}/bootstrap/iac-runner
 bootstrap/vault|path|${DATA_ROOT}/bootstrap/vault
+platform/alerting|path|${DATA_ROOT}/platform/alerting${SUFFIX}
+platform/free|path|${DATA_ROOT}/platform/free${SUFFIX}
+platform/openpanel|path|${DATA_ROOT}/platform/openpanel${SUFFIX}
+platform/portal|path|${DATA_ROOT}/platform/portal${SUFFIX}
+platform/signoz|path|${DATA_ROOT}/platform/signoz${SUFFIX}
 platform/clickhouse|path|${DATA_ROOT}/platform/clickhouse${SUFFIX}
 platform/authentik|path|${DATA_ROOT}/platform/authentik${SUFFIX}
+truealpha/data_engine|path|${DATA_ROOT}/truealpha/dagster${SUFFIX}
 platform/minio|path|${DATA_ROOT}/platform/minio${SUFFIX}
 EOF
 )
@@ -179,18 +195,20 @@ done <<< "${SERVICES}"
 {
   echo "{"
   echo "  \"schema_version\": 1,"
+  echo "  \"environment\": \"${ENVIRONMENT}\","
   echo "  \"generated_at\": $(date -u +%s),"
   echo "  \"verified_at\": $(date -u +%s),"
   echo "  \"artifacts\": [$(paste -sd, "${ARTIFACTS_FILE}")]"
   echo "}"
 } > "${MANIFEST}"
 rm -f "${ARTIFACTS_FILE}"
+install -m 0600 "${MANIFEST}" "${LATEST_MANIFEST}"
 
 if [ -n "${RUN_REMOTE}" ]; then
   rclone copyto "${MANIFEST}" "${RUN_REMOTE}/manifest.json"
 fi
 if [ -n "${REMOTE}" ]; then
-  rclone copyto "${MANIFEST}" "${REMOTE%/}/manifest.json"
+  rclone copyto "${MANIFEST}" "${REMOTE%/}/${ENVIRONMENT}/manifest.json"
 fi
 
 if [ "${#failures[@]}" -gt 0 ]; then
@@ -199,9 +217,10 @@ if [ "${#failures[@]}" -gt 0 ]; then
   exit 1
 fi
 
-# Local Retention: keep the most recent BACKUP_KEEP local run directories.
-ls -1dt "${OUTPUT_DIR}"/*/ 2>/dev/null | tail -n +$((BACKUP_KEEP + 1)) | while read -r old; do
-  rm -rf "${old}"
+# Local Retention: keep BACKUP_KEEP runs per environment. Legacy unsuffixed
+# directories are left intact until an operator verifies and retires them.
+find "${OUTPUT_DIR}" -maxdepth 1 -type d -name "${ENVIRONMENT}-*" -print | sort -r | tail -n +$((BACKUP_KEEP + 1)) | while IFS= read -r old; do
+  rm -rf -- "${old}"
 done
 
 # Remote Retention: automated lifecycle policy on off-host backend (Google Drive)

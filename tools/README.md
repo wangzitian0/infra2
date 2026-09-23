@@ -236,7 +236,7 @@ uv run python -m tools.deploy_v2_canary \
 
 ## host_backup.sh
 
-On-host nightly backup (installed as `/usr/local/sbin/infra2-host-backup.sh`,
+On-host weekly backup (installed as `/usr/local/sbin/infra2-host-backup.sh`,
 cron in [SOP-006](../docs/ssot/ops.recovery.md#sop-006-on-host-scheduled-backup-runner-logical-dumps)).
 Postgres dumps run first and busy path archives (minio) last. Every service is
 attempted: a failing one is named on stderr as `FAILED <service_id>`, left out of
@@ -244,6 +244,9 @@ the manifest, and the run exits 1 without pruning old runs. `tar` exit 1 (a live
 file changed mid-read) is a `WARN`, not a failure. Redis `SAVE` authenticates
 with the container's own secrets and only `dump.rdb` is archived. Tests:
 `libs/tests/test_host_backup_script.py` (PATH shims, no Docker needed).
+The script covers every declared `BackupFacet`, keeps seven local runs per
+environment, and writes separate `production-manifest.json` and
+`staging-manifest.json` latest pointers.
 
 ```bash
 ENV_SUFFIX=-staging BACKUP_OUTPUT_DIR=/tmp/hb tools/host_backup.sh
@@ -260,7 +263,7 @@ dump, verifies database and domain invariants, and cleanly tears down the contai
 ```bash
 # Automated sandboxed end-to-end rehearsal (spins up sandbox, restores, asserts, destroys)
 python tools/run_restore_rehearsal.py \
-  --manifest /data/backups/infra2/manifest.json \
+  --manifest /data/backups/infra2/production-manifest.json \
   --service-id finance_report/postgres \
   --database finance_report
 
@@ -268,6 +271,12 @@ python tools/run_restore_rehearsal.py \
 # --database is rejected here). One service failing never stops the rest: every
 # service is attempted and the run exits 1 naming each failure (#618).
 python tools/run_restore_rehearsal.py --service-id all
+
+# Explicit Staging drill; Production is the default and rejects this manifest.
+python tools/run_restore_rehearsal.py \
+  --environment staging \
+  --manifest /data/backups/infra2/staging-manifest.json \
+  --service-id all
 ```
 
 Each service emits its own `RESTORE_PROOF: PASS|FAIL` line; the exit code is the

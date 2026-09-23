@@ -56,6 +56,7 @@ def default_database_for_service(service_id: str) -> str:
 def run_rehearsal(
     *,
     manifest_path: str,
+    environment: str = "production",
     service_id: str = "finance_report/postgres",
     database: str | None = None,
     download_dir: str = "/tmp/infra2-backup-restore-rehearsal",
@@ -76,6 +77,11 @@ def run_rehearsal(
         raise ValueError(f"Unknown backup service: {service_id}")
 
     manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    if manifest.get("environment") != environment:
+        raise ValueError(
+            f"Restore manifest environment is {manifest.get('environment')!r}, "
+            f"expected {environment!r}"
+        )
     artifact = assert_manifest_is_rehearsable(
         entries[service_id],
         manifest,
@@ -262,7 +268,12 @@ def run_rehearsal(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", default="/data/backups/infra2/manifest.json")
+    parser.add_argument(
+        "--manifest", default="/data/backups/infra2/production-manifest.json"
+    )
+    parser.add_argument(
+        "--environment", choices=("production", "staging"), default="production"
+    )
     parser.add_argument("--service-id", default="finance_report/postgres")
     parser.add_argument("--database", default=None)
     parser.add_argument("--keep-container", action="store_true")
@@ -273,13 +284,6 @@ def main() -> int:
             "--database cannot be combined with --service-id all: "
             "each service restores into its own database"
         )
-
-    # If manifest default doesn't exist, search for latest TS manifest
-    manifest_path = args.manifest
-    if not Path(manifest_path).exists():
-        candidates = sorted(Path("/data/backups/infra2").glob("*/manifest.json"))
-        if candidates:
-            manifest_path = str(candidates[-1])
 
     services = (
         ["finance_report/postgres", "truealpha/postgres"]
@@ -297,7 +301,8 @@ def main() -> int:
         print("=" * 60)
         try:
             report = run_rehearsal(
-                manifest_path=manifest_path,
+                manifest_path=args.manifest,
+                environment=args.environment,
                 service_id=s_id,
                 database=args.database,
                 keep_container=args.keep_container,

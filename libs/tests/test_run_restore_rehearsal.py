@@ -22,6 +22,7 @@ def mock_manifest_file(tmp_path: Path) -> Path:
     now_ts = int(time.time())
     manifest_data = {
         "schema_version": 1,
+        "environment": "production",
         "generated_at": now_ts,
         "verified_at": now_ts,
         "artifacts": [
@@ -38,6 +39,19 @@ def mock_manifest_file(tmp_path: Path) -> Path:
     manifest_file = tmp_path / "manifest.json"
     manifest_file.write_text(json.dumps(manifest_data), encoding="utf-8")
     return manifest_file
+
+
+def test_rehearsal_rejects_staging_manifest_before_starting_container(
+    mock_manifest_file: Path,
+) -> None:
+    manifest = json.loads(mock_manifest_file.read_text(encoding="utf-8"))
+    manifest["environment"] = "staging"
+    mock_manifest_file.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with patch("subprocess.run") as run_command:
+        with pytest.raises(ValueError, match="expected 'production'"):
+            run_rehearsal(manifest_path=str(mock_manifest_file))
+    run_command.assert_not_called()
 
 
 def test_run_rehearsal_docker_args_and_invariants(
@@ -197,7 +211,11 @@ def test_rehearsal_all_attempts_every_service_when_one_fails(
 
     attempted: list[str] = []
 
-    def fake_run_rehearsal(*, manifest_path, service_id, database, keep_container):
+    def fake_run_rehearsal(
+        *, manifest_path, environment, service_id, database, keep_container
+    ):
+        assert environment == "production"
+        assert manifest_path == "/data/backups/infra2/production-manifest.json"
         attempted.append(service_id)
         if service_id == "finance_report/postgres":
             raise RuntimeError("sandbox container failed to become ready")
@@ -222,7 +240,11 @@ def test_rehearsal_all_survives_a_malformed_report(monkeypatch, capsys) -> None:
 
     attempted: list[str] = []
 
-    def fake_run_rehearsal(*, manifest_path, service_id, database, keep_container):
+    def fake_run_rehearsal(
+        *, manifest_path, environment, service_id, database, keep_container
+    ):
+        assert environment == "production"
+        assert manifest_path == "/data/backups/infra2/production-manifest.json"
         attempted.append(service_id)
         if service_id == "finance_report/postgres":
             return {"service_id": service_id}  # no "status" key
