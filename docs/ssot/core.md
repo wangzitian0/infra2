@@ -25,7 +25,7 @@
 - **安全与机密供给**：参见 [`libs/security/`](https://github.com/wangzitian0/infra2/blob/main/libs/security/)
 - **灾备与恢复演练**：参见 [`libs/backup/`](https://github.com/wangzitian0/infra2/blob/main/libs/backup/)
 - **可观测性与探针诊断**：参见 [`libs/observability/`](https://github.com/wangzitian0/infra2/blob/main/libs/observability/)
-- **部署基类**：参见 [`libs/deploy/deployer.py`](https://github.com/wangzitian0/infra2/blob/main/libs/deploy/deployer.py)
+- **部署引擎与流水线**：参见 [`libs/deploy/`](https://github.com/wangzitian0/infra2/blob/main/libs/deploy/)
 - **任务加载器**：参见 [`tasks.py`](https://github.com/wangzitian0/infra2/blob/main/tasks.py)
 
 ---
@@ -199,6 +199,28 @@ platform/
 │   └── shared_tasks.py
 └── README.md
 ```
+
+### Libs 内部库目录结构（领域驱动包）
+
+```
+libs/
+├── core/             # SSOT 实体 Service、环境 DeploymentEnvironment、常量
+│   └── README.md
+├── security/         # Vault/1Password 密钥供给、Token 生成、孤儿清理
+│   └── README.md
+├── backup/           # 灾备清单发现、恢复演练规格与沙箱验证
+│   └── README.md
+├── observability/    # 探针规格、容器崩溃日志诊断、看门狗 Issue 留痕
+│   └── README.md
+├── deploy/           # Deployer 基础抽象、预览槽生命周期、晋升机制、Schema 门禁
+│   └── README.md
+└── README.md         # 内部库架构索引
+```
+
+**规则**：
+- ✅ 每个领域包包含专属 `README.md`，定义其领域模型、API 与安全守卫
+- ✅ 外部仅通过领域包顶层导出（`from libs.<domain> import ...`）消费其能力
+- ✅ 平铺模块（`libs/env.py` 等）仅作为向后兼容 Shim 保留，严禁新增业务逻辑
 
 ### Volume 路径规范
 

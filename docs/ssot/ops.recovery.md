@@ -12,7 +12,7 @@
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
 | **Master Keys** | **1Password** | Root Token, Unseal Keys, SSH Keys |
-| **数据备份** | `/data` + 各服务 `deploy.py` 的 `BackupFacet` 声明（派生：`libs/backup_verification.py::load_backup_inventory`，#542）+ off-host manifest | DB dumps and persistent data archives |
+| **数据备份** | `/data` + 各服务 `deploy.py` 的 `BackupFacet` 声明（派生：[`libs/backup/`](../../libs/backup/README.md) [`libs/backup/verification.py::load_backup_inventory`]，#542）+ off-host manifest | DB dumps and persistent data archives |
 | **代码仓库** | **GitHub** | 部署代码、Compose 定义 |
 
 ---
@@ -123,7 +123,7 @@ uv run python tools/backup_verification.py --manifest /path/to/manifest.json --j
 
 ### SOP-005: 生成并上传 off-host 备份
 
-备份 runner 读取各服务 `BackupFacet` 声明派生的清单（`libs/backup_verification.py::load_backup_inventory`，#542），
+备份 runner 读取各服务 `BackupFacet` 声明派生的清单（[`libs/backup/`](../../libs/backup/README.md) `libs/backup/verification.py::load_backup_inventory` / 兼容门面 `libs/backup_verification.py`，#542），
 为每个登记的 `data_path` 创建 archive、计算 SHA256，并通过主机上的 `rclone`
 remote 上传到 off-host storage。
 
@@ -287,7 +287,7 @@ Recommended schedule after the rehearsal target is provisioned:
 | **Backup archive + checksum runner** | `tools/backup_runner.py` | ✅ Implemented |
 | **Backup freshness/checksum manifest** | `tools/backup_verification.py` | ✅ Implemented |
 | **On-host backup runner (SOP-006): dumps first, one failure never stops the rest, tar exit 1 is a WARN, authenticated redis SAVE** | `libs/tests/test_host_backup_script.py` | ✅ Implemented |
-| **Off-host restore rehearsal** | `tools/run_restore_rehearsal.py` + `libs/tests/test_backup_verification.py` | ✅ Implemented & Live Verified (10.62s PASS) |
+| **Off-host restore rehearsal** | `tools/run_restore_rehearsal.py` + `libs/backup/` (`libs/tests/test_backup_restore.py`, `libs/tests/test_backup_verification.py`) | ✅ Implemented & Live Verified (10.62s PASS) |
 | **Vault Unseal 流程（自动）** | `bootstrap/05.vault/unsealer.py` 常驻自动解封;契约由 `libs/tests/test_vault_unsealer.py`(过期 Connect token 拒绝 / sync 非 ACTIVE / sealed 报不健康 / key 不足中止)+ `libs/tests/test_bootstrap_health.py`(healthcheck 接线)覆盖 | ✅ Automated |
 | **Vault Unseal 流程（手动兜底,SOP-001）** | `vault status` + `vault operator unseal` | ✅ Manual |
 | **vault-agent 凭证 re-provision (SOP-007)** | `vault.setup-approle --deploy` | ✅ Manual |
