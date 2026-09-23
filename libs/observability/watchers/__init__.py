@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from libs.container_breakdown_watch import (
+from libs.observability.watchers.breakdown_watch import (
     BreakdownWatch,
     sweep as sweep_breakdowns,
 )

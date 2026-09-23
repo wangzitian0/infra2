@@ -11,7 +11,7 @@ import pytest
 from infra2_sdk.runtime.probes import DependencyStatus
 from infra2_sdk.runtime.probes import ProbeResult as SdkProbeResult
 
-import libs.infra_probes as probes
+import libs.observability.probes as probes
 from libs.infra_probes import (
     build_probe_alert_payload,
     failed_results,

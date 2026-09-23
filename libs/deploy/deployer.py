@@ -669,7 +669,8 @@ class Deployer:
         When a value changed, the vault-agent and the app containers are restarted so the
         rendered file and the processes that sourced it agree (RC4, #640).
         """
-        from libs import secrets_registry, secrets_supply
+        from libs import secrets_registry
+        from libs.security import supply as secrets_supply
 
         e = cls.env()
         env_name = env or e.get("ENV", "production")

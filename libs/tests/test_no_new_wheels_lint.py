@@ -45,6 +45,24 @@ def test_synthetic_bogus_signal_name_is_caught(tmp_path: Path) -> None:
     assert "not-a-real-signal" in errors[0]
 
 
+def test_callsite_inside_a_domain_package_is_caught(tmp_path: Path) -> None:
+    """#846: the scan was `glob("*.py")`, so it never descended into libs/<domain>/.
+    Moving an implementation into a domain package therefore took it out of the lint's
+    reach silently — the lint stayed green because it had stopped looking, not because
+    the file complied. This is the case that used to slip through."""
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "libs" / "observability").mkdir(parents=True)
+    rogue = tmp_path / "libs" / "observability" / "rogue.py"
+    rogue.write_text(
+        "from libs.observability.probes import post_alert_bridge_payload\n"
+        "post_alert_bridge_payload({})\n"
+    )
+    errors = lint_python_callsites(root=tmp_path, signals={"registered-signal"})
+    assert len(errors) == 1
+    assert "libs/observability/rogue.py" in errors[0]
+    assert "no-new-wheels" in errors[0]
+
+
 def test_exempt_marker_with_reason_passes(tmp_path: Path) -> None:
     (tmp_path / "tools").mkdir()
     (tmp_path / "libs").mkdir()
