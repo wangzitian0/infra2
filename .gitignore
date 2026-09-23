@@ -89,7 +89,14 @@ docs/.site/
 # Codex local agent workspace state
 .codex/
 
-.claude/
+# `.claude/` is local agent runtime state and stays ignored -- except the
+# skill discovery address. A host reads `<repo>/.claude/skills/`; it does
+# not read `<repo>/skills/`, so the committed symlinks there are what makes
+# the vendored skills reachable at all (dev_env#120).
+# `.claude/*` rather than `.claude/`: git never descends into an ignored
+# directory, so a bare `!.claude/skills` under it would match nothing.
+.claude/*
+!.claude/skills
 .cache/
 .envrc
 .omo/
