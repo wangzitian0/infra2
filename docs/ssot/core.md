@@ -21,9 +21,12 @@
 
 ### Code as SSOT 索引
 
-- **任务加载器**：参见 [`tasks.py`](https://github.com/wangzitian0/infra2/blob/main/tasks.py)
+- **服务实体与环境真源**：参见 [`libs/core/`](https://github.com/wangzitian0/infra2/blob/main/libs/core/)
+- **安全与机密供给**：参见 [`libs/security/`](https://github.com/wangzitian0/infra2/blob/main/libs/security/)
+- **灾备与恢复演练**：参见 [`libs/backup/`](https://github.com/wangzitian0/infra2/blob/main/libs/backup/)
+- **可观测性与探针诊断**：参见 [`libs/observability/`](https://github.com/wangzitian0/infra2/blob/main/libs/observability/)
 - **部署基类**：参见 [`libs/deploy/deployer.py`](https://github.com/wangzitian0/infra2/blob/main/libs/deploy/deployer.py)
-- **环境变量/密钥**：参见 [`libs/env.py`](https://github.com/wangzitian0/infra2/blob/main/libs/env.py)
+- **任务加载器**：参见 [`tasks.py`](https://github.com/wangzitian0/infra2/blob/main/tasks.py)
 
 ---
 
