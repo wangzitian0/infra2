@@ -99,7 +99,7 @@ async function runScheduledWatchdog(env, nowMs) {
       event: "watchdog.deadman.failure",
       timestamp: nowMs,
       status: "fail",
-      error: "external scheduler heartbeat failed",
+      error: oneLine(error && error.message ? error.message : String(error)),
     });
     if (runError === null) runError = error;
   }
@@ -112,14 +112,18 @@ async function pingSchedulerDeadman(env, ok) {
     throw new Error("WATCHDOG_DEADMAN_PING_URL is missing or invalid");
   }
   let response;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
   try {
     response = await fetch(`${url}${ok ? "" : "/fail"}`, {
       method: "GET",
       redirect: "error",
-      signal: AbortSignal.timeout(8000),
+      signal: controller.signal,
     });
   } catch (_error) {
     throw new Error("external scheduler heartbeat request failed");
+  } finally {
+    clearTimeout(timeout);
   }
   if (!response.ok) throw new Error("external scheduler heartbeat returned an error");
 }
