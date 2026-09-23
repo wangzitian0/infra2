@@ -86,7 +86,12 @@ the authoritative IaC identity and may pass the head branch only as a clone tran
 front door proves both refs resolve to the same commit before mutating Dokploy. If the
 non-idempotent `compose.create` call times out after Dokploy commits it, the lifecycle
 re-reads and adopts the one deterministic project/environment/name instead of creating a
-duplicate. Teardown is green only after two consecutive reads observe that name absent.
+duplicate. Teardown is green only after two consecutive reads observe **both** the
+Dokploy compose record absent and zero containers for that service's reserved `pr-999`
+slot in Dokploy's host container API. A deleted record with lingering `Created`,
+`Restarting` or running containers is a failed cleanup, even if Dokploy reports the
+delete request as successful. The 2026-09-23 live canary reported `torn_down: true`
+while the host still had four `pr-999` containers; record-only checks are insufficient.
 
 A Finance Report backend runs migrations before Uvicorn in both preview and fixed
 staging/production stacks. Both backend healthchecks therefore grant a bounded 450-second

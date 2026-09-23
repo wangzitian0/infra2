@@ -111,6 +111,8 @@ def _best_effort_down(
     sleep = _sleep or time.sleep
     last = None
     consecutive_absent = 0
+    service_project = service.split("/", 1)[0]
+    slot_suffix = f"-pr-{CANARY_PR}"
     for i in range(attempts):
         try:
             result = down(
@@ -121,16 +123,34 @@ def _best_effort_down(
                     "preview teardown returned no compose convergence evidence"
                 )
             if result.compose_id is None:
-                consecutive_absent += 1
-                if consecutive_absent >= 2:
-                    return True
+                containers = client.get_containers()
+                if not isinstance(containers, list) or not all(
+                    isinstance(row, dict) and isinstance(row.get("name"), str)
+                    for row in containers
+                ):
+                    raise RuntimeError("Dokploy container inventory is not readable")
+                survivors = sorted(
+                    row["name"]
+                    for row in containers
+                    if row["name"].lstrip("/").startswith(f"{service_project}-")
+                    and row["name"].endswith(slot_suffix)
+                )
+                if survivors:
+                    consecutive_absent = 0
+                    last = RuntimeError(
+                        f"canary Docker containers still present after compose deletion: {survivors}"
+                    )
+                else:
+                    consecutive_absent += 1
+                    if consecutive_absent >= 2:
+                        return True
             else:
                 consecutive_absent = 0
                 last = RuntimeError(
                     f"canary compose {result.compose_id} is still present after "
                     "the delete request"
                 )
-        except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+        except (httpx.HTTPError, RuntimeError, ValueError, AttributeError) as exc:
             last = exc
             consecutive_absent = 0
         if i < attempts - 1:

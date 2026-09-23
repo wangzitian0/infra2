@@ -344,8 +344,10 @@ class DokployClient:
         return None
 
     def get_containers(self) -> list[dict]:
-        """Every running container on the host as Dokploy sees it: name, state, status
-        (the `docker ps` columns), image, ports. Stopped containers are not listed."""
+        """Host containers as Dokploy sees them, including Created/Restarting states.
+
+        Observed live on 2026-09-23; callers must still validate the response shape.
+        """
         return self._request("GET", "docker.getContainers")
 
     def get_compose_deployments(self, compose_id: str) -> list[dict]:
@@ -576,7 +578,9 @@ class DokployClient:
                 if github_id:
                     return github_id
         except Exception as exc:
-            logger.warning("Method 1 failed to query git providers from Dokploy: %s", exc)
+            logger.warning(
+                "Method 1 failed to query git providers from Dokploy: %s", exc
+            )
 
         # Method 2: fall back to a compose that is already bound to GitHub.
         try:
@@ -587,7 +591,9 @@ class DokployClient:
                         if comp.get("githubId"):
                             return comp.get("githubId")
         except Exception as exc:
-            logger.warning("Method 2 failed to discover bound GitHub compose from Dokploy: %s", exc)
+            logger.warning(
+                "Method 2 failed to discover bound GitHub compose from Dokploy: %s", exc
+            )
 
         return None
 
