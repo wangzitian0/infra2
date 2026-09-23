@@ -330,35 +330,38 @@ def test_widening_coverage_did_not_change_what_blocks_merge() -> None:
 def test_the_enforce_step_can_actually_fire_on_every_covered_workflow() -> None:
     """A guard that never runs is not a guard.
 
-    `ci_gate_audit --enforce` lives in infra-ci.yml, which is itself `paths`-filtered.
-    Before this test, those paths named five workflows by hand and omitted docs.yml --
-    so adding an unregistered job to docs.yml changed no path infra-ci watches, infra-ci
-    never ran, and the coverage check silently did not happen on exactly the change it
-    exists to catch. Every workflow the audit claims to cover must be able to trigger
-    the workflow that runs the audit.
+    `ci_gate_audit --enforce` lives in infra-ci.yml. It used to be `paths`-filtered,
+    and this test answered the question by matching each covered workflow against
+    those globs -- correct only while the globs stayed current. They did not: the
+    list named five workflows by hand and omitted docs.yml, so adding an
+    unregistered job there triggered nothing and the coverage check silently did
+    not happen on exactly the change it exists to catch. The hand-fix for that
+    (a `.github/workflows/**` glob) did not stop #817 or #850, which were the same
+    shape one directory over.
+
+    The filter is gone (#817), so the answer no longer depends on a list: every
+    change triggers infra-ci.yml, therefore every covered workflow does. What this
+    now asserts is that premise, plus a non-empty covered set -- because "every
+    workflow in an empty set can trigger the audit" is true and worthless.
     """
     infra_ci = yaml.safe_load((ROOT / INFRA_CI).read_text(encoding="utf-8"))
     triggers = infra_ci.get(True, infra_ci.get("on")) or {}
 
-    def matches(patterns: list[str], target: str) -> bool:
-        # GitHub `paths` globs: `**` spans directory separators, `*` does not. Only the
-        # shapes this repo actually uses are handled -- a new shape that this cannot
-        # read will read as "no match" and fail the test loudly rather than pass blind.
-        for pat in patterns:
-            if pat == target:
-                return True
-            if pat.endswith("/**") and target.startswith(pat[:-2]):
-                return True
-        return False
-
     for event in ("pull_request", "push"):
-        paths = (triggers.get(event) or {}).get("paths") or []
-        assert paths, f"infra-ci.yml has no {event} paths filter to check"
-        for wf in covered_workflows(ROOT):
-            assert matches(paths, wf), (
-                f"{wf} is in the audit's covered scope, but editing it does not trigger "
-                f"infra-ci.yml on {event} -- the --enforce step would never run"
-            )
+        assert event in triggers, f"infra-ci.yml must still run on {event}"
+        spec = triggers[event] or {}
+        present = sorted(k for k in ("paths", "paths-ignore") if k in spec)
+        assert not present, (
+            f"infra-ci.yml filters its {event} trigger on {present}, so editing a "
+            f"covered workflow outside that filter would not run --enforce. Skip "
+            f"work inside the workflow with `if:`, never at the trigger."
+        )
+
+    covered = covered_workflows(ROOT)
+    assert covered, (
+        "the audit covers no workflow, so this guard is checking nothing -- "
+        "covered_workflows() returning empty is itself the finding"
+    )
 
 
 def test_a_jobs_node_that_is_not_a_mapping_is_not_a_crash(tmp_path) -> None:
