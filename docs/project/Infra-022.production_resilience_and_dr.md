@@ -70,6 +70,7 @@
 
 | Date | Change |
 |---|---|
+| 2026-09-24 | VPS 对 `gdrive-backup:infra2/weekly/validation/` 执行不含生产数据的加密远端探针：上传小型文本标记、远端读回逐字节匹配、删除后列表确认不存在。证明新周备份路径可写、可读、可清理；不证明 17/17 生产数据已异地上传。 |
 | 2026-09-24 | 旧版异地根 `manifest.json` 无环境字段、仅 9 项，指向 2026-09-20 03:45 的归档；当前恢复工具会拒绝其原始清单。只在临时副本标 `legacy-unknown` 后，从远端下载 Finance Report/TrueAlpha 数据库归档（10,796,771 / 62,604,288 字节），校验大小、SHA256、gzip，并各自在网络隔离容器中恢复、通过 5 项不变量；临时数据与容器已清除。不据此判定 Production 17/17 或 T2.1/T2.2 完成。 |
 | 2026-09-24 | VPS 只读核验：`infra2-disk-guardian.timer` 和 `infra2-host-heartbeat.timer` 均不存在，`/etc/infra2/host-guard.env` 及安装脚本均不存在；Docker `live-restore=false`，磁盘使用 70%。用 main `a6f29e5` 的脚本运行 `configure_docker.sh --check`，daemon 候选配置校验通过，未应用。T1.1/T1.2/T2.3 仍未完成。 |
 | 2026-09-24 | Production platform Postgres 归档在隔离实例中还原，5 个数据库及各库表数与在线一致；匿名数据卷已删除。 |
