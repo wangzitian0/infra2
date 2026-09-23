@@ -39,23 +39,53 @@ Modules in `libs/` that provide direct integrations or operational clients:
 
 ## 🛡️ Backward-Compatibility Shims (PEP 484)
 
-Legacy flat modules in `libs/` are preserved **strictly as backward-compatibility shims** to prevent breaking existing CLI tools and consumers during progressive migration.
+Legacy flat modules in `libs/` are kept so existing CLI tools, workflows and
+`docs/ssot/` snippets keep importing the path they always did. A **Frozen Shim** holds
+**nothing but re-exports**: a docstring, one `from libs.<domain>.<module> import (...)`,
+and `__all__`.
 
 > [!IMPORTANT]
-> **Shim Boundary Policy**: Legacy shims re-export symbols from domain packages using PEP 484 `__all__`.
-> **Never add new business logic to shims.** All new features and refactorings must be implemented in and imported directly from the relevant domain package (`libs.core`, `libs.security`, `libs.backup`, `libs.observability`, `libs.deploy`).
+> **Shim Boundary Policy**: **Never add new business logic to a Frozen Shim.** All new
+> features and refactorings go in the domain package (`libs.core`, `libs.security`,
+> `libs.backup`, `libs.observability`, `libs.deploy`) and are imported from there.
 
-| Legacy Shim | Target Domain Package | Re-exported Symbols | Status |
+This table is **not documentation, it is the contract**:
+`libs/tests/test_frozen_shims.py` parses it and, for every `Frozen Shim` row, asserts
+the module is structurally a re-export of exactly the module named here and that each
+re-exported name `is` the same object on both paths. A row that claims more than the
+code does fails the suite (#846: the table was written before the code moved, and for
+six modules the code never followed).
+
+| Legacy Shim | Implementation Module | Re-exported Symbols | Status |
 |-------------|-----------------------|---------------------|--------|
-| `libs/env.py` | `libs.security`, `libs.core` | `get_secrets`, `generate_password`, `vault_token`, `OpSecrets`, `VaultSecrets` | Frozen Shim |
-| `libs/common.py` | `libs.core` | `get_env`, `validate_env`, `check_service`, `CONTAINERS` | Frozen Shim |
-| `libs/secrets_supply.py` | `libs.security` | `apply`, `resolver_for`, `vault_backend` | Frozen Shim |
-| `libs/service_registry.py` | `libs.core` | `SERVICES`, `lookup`, `merged_manifest` | Frozen Shim |
-| `libs/backup_restore.py` | `libs.backup` | `build_postgres_rehearsal_plan`, `run_postgres_restore_rehearsal` | Frozen Shim |
-| `libs/backup_verification.py` | `libs.backup` | `load_backup_inventory`, `verify_backup_manifest` | Frozen Shim |
-| `libs/container_breakdown.py` | `libs.observability` | `analyze_container_logs`, `build_breakdown_alert_payload` | Frozen Shim |
-| `libs/infra_probes.py` | `libs.observability` | `execute_probe`, `run_probes`, `ProbeSpec` | Frozen Shim |
-| `libs/watchdog_issue_trail.py` | `libs.observability` | `reconcile`, `record_verdicts`, `load_trail` | Frozen Shim |
+| `libs/secrets_supply.py` | `libs.security.supply` | `apply`, `resolver_for`, `vault_backend`, `retrying_transport` | Frozen Shim |
+| `libs/infra_probes.py` | `libs.observability.probes` | `execute_probe`, `run_probes`, `ProbeSpec`, `post_alert_bridge_payload` | Frozen Shim |
+| `libs/watchdog_issue_trail.py` | `libs.observability.issue_trail` | `reconcile`, `record_verdicts`, `load_trail` | Frozen Shim |
+| `libs/container_breakdown.py` | `libs.observability.breakdown` | `analyze_container_logs`, `build_breakdown_alert_payload` | Frozen Shim |
+| `libs/container_breakdown_watch.py` | `libs.observability.watchers.breakdown_watch` | `BreakdownWatch`, `sweep`, `run_once` | Frozen Shim |
+| `libs/backup_verification.py` | `libs.backup.verification` | `load_backup_inventory`, `verify_backup_manifest` | Frozen Shim |
+| `libs/backup_restore.py` | `libs.backup.rehearsal` | `build_postgres_rehearsal_plan`, `run_postgres_restore_rehearsal` | Frozen Shim |
+| `libs/env.py` | — (holds its own implementation) | — | Not a shim |
+| `libs/common.py` | — (holds its own implementation) | — | Not a shim |
+| `libs/service_registry.py` | — (holds its own implementation) | — | Not a shim |
+
+### The three that are not shims yet
+
+`libs/env.py` (293 lines), `libs/common.py` (394) and `libs/service_registry.py` (595)
+are **implementation modules that a domain package imports**, not re-exports. They are
+listed above so the table stays exhaustive, and the guard asserts they are *not*
+structurally shims — migrate one and the table must move with it.
+
+`libs/env.py` cannot simply move into `libs/security/store.py` as things stand:
+`libs/security/__init__.py` eagerly imports `libs/security/supply.py`, whose
+`from infra2_sdk.secrets import ...` is unconditional, so any `libs.security.*` import
+requires the wheel. `libs/env.py` deliberately does not — it guards that import so
+minimal GitHub Actions jobs can still use `verify_vault_token` / `generate_password`
+(see its `try/except ModuleNotFoundError`, and the guards
+`libs/tests/test_env.py::TestWithoutTheSdk`,
+`test_secrets_registry.py::test_the_registry_table_is_readable_without_the_sdk` and
+`test_workflow_runtime_deps.py::test_a_job_can_import_what_it_runs`). Moving it
+requires first deciding whether `libs.security` may be imported without infra2-sdk.
 
 ---
 
