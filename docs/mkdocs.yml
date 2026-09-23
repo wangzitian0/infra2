@@ -97,6 +97,7 @@ nav:
       - Infra-022: project/Infra-022.production_resilience_and_dr.md
       - Infra-020: project/Infra-020.truealpha_production_datahub.md
       - Infra-019: project/Infra-019.harness_control_plane.md
+      - Infra-017: project/Infra-017.truealpha_dagster_capture.md
       - Infra-013: project/Infra-013.service_registry_ssot.md
       - Infra-012: project/Infra-012.watchdog_observability.md
       - Infra-006: project/Infra-006.documentation_engineering.md
@@ -115,6 +116,5 @@ nav:
       - Infra-014: project/archive/Infra-014.finance_report_observability.md
       - Infra-015: project/archive/Infra-015.deploy_v2_front_door.md
       - Infra-016: project/archive/Infra-016.ci_gate_inventory.md
-      - Infra-017: project/archive/Infra-017.truealpha_dagster_capture.md
       - Infra-018: project/archive/Infra-018.repository_boundary_decoupling.md
       - Infra-021: project/archive/Infra-021.openpanel_install.md

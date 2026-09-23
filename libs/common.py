@@ -388,3 +388,10 @@ def check_service(c: "Context", service: str, health_cmd: str) -> dict:
 
     error(f"{container}: not ready")
     return {"is_ready": False, "details": "Unhealthy"}
+
+
+# Re-exports for Phase 3 Domain Convergence (SSOT)
+from libs.core.environ import (  # noqa: E402
+    DeploymentEnvironment as DeploymentEnvironment,
+    get_environment as get_environment,
+)

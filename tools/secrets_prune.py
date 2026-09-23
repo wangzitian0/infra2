@@ -151,6 +151,7 @@ def prune(
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entrypoint for secrets prune."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--service", help="one service id, e.g. platform/alerting")
     parser.add_argument("--env", help="one environment, e.g. staging")

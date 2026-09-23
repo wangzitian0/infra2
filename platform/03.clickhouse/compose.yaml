@@ -60,6 +60,7 @@ services:
     # burst of concurrent queries/merges could still grow into the host and trip the
     # OOM killer. This is the container backstop; sized larger than op-ch because
     # signoz ingestion is the heavier consumer.
+    init: true
     mem_limit: 3584m
     depends_on:
       init-clickhouse:

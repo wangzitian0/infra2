@@ -79,6 +79,68 @@ AUTOMATED_REVIEWERS = frozenset({"copilot-pull-request-reviewer"})
 # held, so `test_the_closure_still_covers_everything_the_list_did` pins it.
 RULE_TEXT_FILES = ("AGENTS.md", "docs/ssot/ops.merge-gate.md")
 
+# AGENTS.md §6's last line: a change to RULE_TEXT_FILES may skip the owner escalation
+# that `evaluate` would otherwise apply -- not because the prose stopped mattering, but
+# because a direction proof is impossible for prose (see the DIRECTION_PROOFS comment
+# below) and a cited instruction is the substitute the owner accepted for these two
+# files specifically. It is not a substitute for self_governing_files() as a whole:
+# pr_merge_gate.py itself, what it imports, the data it reads, and their tests are the
+# defendant-rewrites-the-law case and stay unproven regardless of what the body says.
+#
+# The header must be followed by an actual quote, not just a claim that one exists --
+# a heading with nothing under it, or prose that merely mentions "owner instruction",
+# proves nothing a reviewer could not equally assert for any other edit.
+# Kept byte-for-byte identical to the regex the merge-gate ruling (#814) specifies,
+# so the code and the SSOT that documents it cannot silently drift apart.
+_OWNER_INSTRUCTION_HEADER_RE = re.compile(
+    r"(?im)^(##+\s*)?(owner instruction|owner 指示)\b.*$"
+)
+# A quote must actually quote something: a bare `>` or an empty `「」` is a
+# citation of nothing and must not pass. Two shapes count, per the SSOT wording
+# ("`>` 开头，或含「...」原话"): (a) a `>` blockquote *with content after the
+# marker* -- anchored, since that is markdown quote syntax and only means
+# something at the start of the line; (b) a line that merely *contains* a
+# non-empty 「...」 quote anywhere -- unanchored, since "含" (contains) does not
+# require the quote to open the line. `.search()`, not `.match()`, evaluates
+# this: `^` inside alternative (a) still pins it to line-start, while
+# alternative (b) is free to match further in.
+#
+# "Content" means at least one word character (`[^\W_]` -- a Unicode word
+# character, excluding `_`, so CJK counts), not merely any non-whitespace
+# character. Excluding one marker character at a time (first a stray `」`,
+# then bare `>`) chases its own tail: `\S` after `>` also matched a second or
+# third `>`, so `>>` / `> >` / `>>>` (nested blockquote syntax, no quoted text)
+# still read as cited. A word-character requirement closes the whole class at
+# once instead of enumerating punctuation marks one bug report at a time.
+_QUOTE_LINE_RE = re.compile(r"^>.*[^\W_]|「[^」]*[^\W_][^」]*」")
+
+
+def _owner_instruction_quoted(body: str) -> bool:
+    """True when the PR body cites the owner instruction, not just names it.
+
+    Looks for a line matching `_OWNER_INSTRUCTION_HEADER_RE`, then the first
+    non-blank line after it: a `>` blockquote with content after the marker, or
+    a line containing a non-empty 「...」original-words quote, counts -- "content"
+    means at least one word character (letters/digits/CJK, not `_`), so a bare
+    `>`, nested markers with no text (`>>`, `> >`), an empty 「」, or
+    punctuation-only text all still count as no citation. Multiple headers are
+    tried independently, so one empty attempt does not shadow a real citation
+    further down the body.
+    """
+    lines = (body or "").splitlines()
+    for i, line in enumerate(lines):
+        if not _OWNER_INSTRUCTION_HEADER_RE.match(line):
+            continue
+        for later in lines[i + 1 :]:
+            stripped = later.strip()
+            if not stripped:
+                continue
+            if _QUOTE_LINE_RE.search(stripped):
+                return True
+            break  # first non-blank line under this header is not a quote
+    return False
+
+
 # AGENTS.md point 3: unresolved findings are weighted high=1.0 / middle=0.5 /
 # low=0.25, unlabelled counts as middle, and a total of 1.0 or more blocks.
 # The rule was written down and never implemented -- the gate counted threads,
@@ -178,9 +240,55 @@ def self_governing_files() -> frozenset[str]:
             if (ROOT / test).is_file():
                 closure.add(test)
     closure |= set(RULE_TEXT_FILES)
+    # 每一个 workflow 文件。它们**决定这个门禁怎么判**，而闭包走不到它们：
+    # `WORKFLOW_DIR = ROOT / ".github" / "workflows"` 是路径拼接，`_repo_deps` 的
+    # 字面量正则看不见；而 `_declared_deploy_globs()` 每次都从工作树重读它们来决定
+    # 哪些路径一合就部署，`_required_checks()` 也从它们解析必需检查的显示名。
+    #
+    # 审计实测（2026-09-22）的绕过：一个 PR 同时改 `libs/alerting.py` 和
+    # `apply-observability.yml`，把前者从后者的 `on.push.paths` 里删掉 ——
+    # 门禁读的是这个 PR 自己那份 workflow，于是「合流会触发 observability apply」
+    # 这条升级不再成立，判定为 ready=True / owner_required=False / exit=0。
+    # 那是 AGENTS.md 明文列为必须回 owner 的一类，被会话权限直接合掉。
+    # 枚举出来的只是「此刻还在树上的那些」，用于让闭包可读、可测；真正的成员判定走
+    # `is_self_governing()` 的路径前缀，因为**现状扫描看不见被删掉的东西**：一个 PR
+    # 把某个 workflow 删掉或改名，它就不出现在这次 glob 里，闭包里没有它，自我裁决
+    # 判不到 —— 正好回到它要堵的那个绕过形态（审计 #809 review）。
+    closure |= set(_all_workflow_files())
     if seed not in closure:  # pragma: no cover - defensive
         closure = {seed, *RULE_TEXT_FILES}
     return frozenset(closure)
+
+
+WORKFLOW_PREFIX = ".github/workflows/"
+
+
+def is_self_governing(path: str) -> bool:
+    """这个路径的改动会不会让门禁审判自己改写的规则。
+
+    不是 `path in self_governing_files()`：那是一个从**当前树**算出来的集合，
+    而删除和改名恰好让路径从当前树上消失。任何 `.github/workflows/` 下的路径都算，
+    存在与否无关 —— 删掉一个声明了 deploy 路径的 workflow，和把那条 path 从它里面
+    删掉，是同一件事。
+
+    前缀测试先判：它是一次字符串比较，`self_governing_files()` 是一次仓库遍历外加
+    闭包计算（首次调用未命中缓存时）。多数路径都不在 `.github/workflows/` 下，
+    短路掉后半句不改变结果 —— 两边都为 True 时 `or` 已经满足，只是省了那次遍历。
+    """
+    return path.startswith(WORKFLOW_PREFIX) or path in self_governing_files()
+
+
+def _all_workflow_files() -> list[str]:
+    """`.github/workflows` 下的每个 workflow，相对仓库根。"""
+    # 直接拼相对路径，不用 `relative_to(ROOT)`：`WORKFLOW_DIR` 是 import 期从原始
+    # ROOT 算出来的，而测试会 monkeypatch `gate.ROOT`；那时两者不再有父子关系，
+    # `relative_to` 抛 ValueError，把一个只读的列举变成崩溃。
+    if not WORKFLOW_DIR.is_dir():
+        return []
+    return sorted(
+        f".github/workflows/{p.name}"
+        for p in list(WORKFLOW_DIR.glob("*.yml")) + list(WORKFLOW_DIR.glob("*.yaml"))
+    )
 
 
 # ---- Which way did a change to the rules move? --------------------------------------
@@ -197,6 +305,11 @@ def self_governing_files() -> frozenset[str]:
 # reading -- any line of either can loosen anything -- so they keep going to the owner.
 # Unknown file, unreadable version, parse failure, empty base: all unproven. Loosening
 # always goes to the owner. The default, in every branch below, is the owner.
+#
+# RULE_TEXT_FILES (AGENTS.md, ops.merge-gate.md) have a second, non-directional way
+# out: a cited owner instruction in the PR body (`_owner_instruction_quoted`, applied
+# in `evaluate`). That is not a direction proof and does not extend to this module's
+# own code closure -- see the comment above `_OWNER_INSTRUCTION_HEADER_RE`.
 
 
 def _blocking_coordinates(text: str) -> frozenset[tuple[str, str, str]] | None:
@@ -252,6 +365,64 @@ def _inventory_only_gained_authority(base_text: str, head_text: str) -> bool:
 # Self-governing paths a proof exists for. Everything else in the closure is unproven
 # by construction, which is the point: this set only grows when someone can state what
 # the file's decision input is and which way is stricter.
+def _workflow_only_gained_authority(base_text: str, head_text: str) -> bool:
+    """True 当这份 workflow 的改动只会让门禁更常说「不」。
+
+    门禁从 workflow 里读两样东西，两样都得只增不减：
+
+    * `on.push.paths` —— 哪些路径一合就部署。**多**一条 = 多一类改动要回 owner。
+    * 每个 job 报告出来的检查名 —— `_required_checks()` 取 `name or job_id`，所以
+      这里必须用同一个取法。只收有 `name:` 的 job 会让「给一个无名 job 加 name」
+      看起来是超集，而它实际上把那条必需检查从 job id 改名了，旧名字从此不再报告。
+
+    **`paths` 缺失不是空集**：GitHub Actions 把「没有 paths」当成「所有路径」。
+    当成空集的话，「给一个本来无 paths 的 workflow 加上 paths 过滤」——一次收窄、
+    一次放松——会被证明成收紧。这正是 `_inventory_only_gained_authority` 里防过的
+    空集陷阱，在这里换了个形状（#809 review）。所以 paths 用 None 表示「全部」，
+    并显式处理 base 全部 / head 收窄 这一组。
+
+    其余随便改（`run:`、`env:`、新增 job……）都不影响这两个判定输入，不设限。
+    """
+
+    def read(text):
+        try:
+            doc = yaml.safe_load(text)
+        except yaml.YAMLError:
+            return None
+        if not isinstance(doc, dict):
+            return None
+        on = doc.get(True, doc.get("on"))
+        push = on.get("push") if isinstance(on, dict) else None
+        if isinstance(push, dict) and "paths" in push:
+            raw = push["paths"]
+            # 标量字符串会被 `frozenset(str(x) for x in raw)` 拆成字符集合。
+            if not isinstance(raw, list):
+                return None
+            paths = frozenset(str(x) for x in raw)
+        else:
+            paths = None  # 没有 paths = 所有路径
+        jobs = doc.get("jobs")
+        if not isinstance(jobs, dict):
+            return None
+        names = frozenset(
+            str((spec.get("name") if isinstance(spec, dict) else None) or job_id)
+            for job_id, spec in jobs.items()
+        )
+        return paths, names
+
+    base, head = read(base_text), read(head_text)
+    if base is None or head is None:
+        return False
+    base_paths, head_paths = base[0], head[0]
+    if base_paths is None:
+        # base 触发于所有路径。只有 head 也触发于所有路径才不算放松。
+        if head_paths is not None:
+            return False
+    elif head_paths is not None and not base_paths <= head_paths:
+        return False
+    return base[1] <= head[1]
+
+
 DIRECTION_PROOFS = {
     "docs/ssot/ci-gate-inventory.yaml": _inventory_only_gained_authority,
 }
@@ -518,6 +689,12 @@ class HeadFacts:
     absent_fields: tuple[str, ...] = ()
     # (reviewer login, commit reviewed, submitted epoch) — a review pins a head
     reviews: tuple[tuple[str, str, float], ...] = ()
+    # The PR description, read for the owner-instruction citation that AGENTS.md
+    # §6 lets RULE_TEXT_FILES substitute for a direction proof (see
+    # `_owner_instruction_quoted`). Defaults to "" -- a hand-built HeadFacts
+    # therefore cites nothing, which stays on the conservative side like every
+    # other default here.
+    body: str = ""
 
     def reviews_on_head(self) -> tuple[tuple[str, str, float], ...]:
         return tuple(r for r in self.reviews if r[1] == self.head_sha)
@@ -561,6 +738,20 @@ def _gh(argv: Sequence[str]) -> str:
     if result.returncode != 0:
         raise RuntimeError(f"gh {' '.join(argv)}: {result.stderr.strip() or 'failed'}")
     return result.stdout
+
+
+def _direction_proof_for(path: str):
+    """这个文件的方向证明，没有则 None。
+
+    workflow 走前缀匹配而不是逐个登记：闭包本身就是算出来的（`_all_workflow_files()`），
+    再手写一份同样的清单，就是今天反复在拆的那种「两份会漂移的手写清单」。
+    `DIRECTION_PROOFS` 留给逐个登记的个案。
+    """
+    if path in DIRECTION_PROOFS:
+        return DIRECTION_PROOFS[path]
+    if path.startswith(".github/workflows/"):
+        return _workflow_only_gained_authority
+    return None
 
 
 def _file_at(repo: str, ref: str, path: str, *, gh: Runner = _gh) -> str | None:
@@ -658,7 +849,7 @@ def _proven_tighter(
     """
     proven: list[str] = []
     for path in sorted(set(files) & self_governing_files()):
-        proof = DIRECTION_PROOFS.get(path)
+        proof = _direction_proof_for(path)
         if proof is None:
             continue
         base_text = _file_at(repo, base, path, gh=gh)
@@ -764,7 +955,7 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
                 "--json",
                 "number,state,isDraft,baseRefName,headRefOid,files,changedFiles,commits,id,reviews,"
                 "reviewDecision,"
-                "mergeable,mergeStateStatus",
+                "mergeable,mergeStateStatus,body",
             ]
         )
     )
@@ -884,6 +1075,7 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
         mergeable=_field(view, "mergeable"),
         merge_state=_field(view, "mergeStateStatus"),
         base_changed_files=base_changed,
+        body=str(view.get("body") or ""),
         reviews=tuple(
             (
                 str((r.get("author") or {}).get("login") or ""),
@@ -1049,8 +1241,23 @@ def evaluate(
         )
         owner = True
 
-    governing = sorted(f for f in facts.files if f in self_governing_files())
-    unproven = [f for f in governing if f not in facts.proven_tighter]
+    quoted_instruction = _owner_instruction_quoted(facts.body)
+    # Membership test is `is_self_governing`, not `f in self_governing_files()`:
+    # the latter is computed from the current tree, so a deleted or renamed
+    # workflow path escapes it (#818). The citation carve-out below is
+    # independent of that fix -- it excuses RULE_TEXT_FILES specifically, not
+    # workflow paths, so the two compose without touching each other's cases.
+    governing = sorted(f for f in facts.files if is_self_governing(f))
+    unproven = [
+        f
+        for f in governing
+        if f not in facts.proven_tighter
+        # RULE_TEXT_FILES get a second way to clear this check: a cited owner
+        # instruction in the PR body, verifiable by `_owner_instruction_quoted`
+        # rather than merely claimed. Everything else in the closure has no such
+        # carve-out -- see the comment above `_OWNER_INSTRUCTION_HEADER_RE`.
+        and not (f in RULE_TEXT_FILES and quoted_instruction)
+    ]
     if unproven:
         # Proven-tighter files are excluded, not the whole check: a PR that tightens the
         # inventory and edits the gate's Python still needs the owner for the Python.
@@ -1060,11 +1267,14 @@ def evaluate(
             f"working-tree copy is what judged this PR, so owner approval of head "
             f"{facts.head_sha[:7]} is required"
         )
+        if any(f in RULE_TEXT_FILES for f in unproven):
+            reasons.append(
+                "rule-text files (AGENTS.md / docs/ssot/ops.merge-gate.md) can clear "
+                "this instead by citing the owner instruction that authorised the "
+                "edit in the PR body, under a heading matching 'owner instruction' / "
+                "'owner 指示' followed by a quoted line (`> ...` or 「...」)"
+            )
         owner = True
-    # No escalation for protected files any more: the rule is now to cite the
-    # owner instruction that authorised the edit, which is a contract in the PR
-    # description and not a thing this tool can verify. The ones that genuinely
-    # must not be self-judged come from self_governing_files() above.
     if not _declared_deploy_globs()[1]:
         reasons.append(
             "cannot read .github/workflows to determine which paths deploy on "

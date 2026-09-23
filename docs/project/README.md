@@ -37,6 +37,7 @@
 - [Infra-022: Production Resilience & Disaster Recovery (生产韧性与容灾兜底)](./Infra-022.production_resilience_and_dr.md) - **In Progress**
 - [Infra-020: TrueAlpha Production DataHub](./Infra-020.truealpha_production_datahub.md) - **In Progress**
 - [Infra-019: Workspace Harness Control Plane](./Infra-019.harness_control_plane.md) - **In Progress**
+- [Infra-017: TrueAlpha Dagster Capture Runtime](./Infra-017.truealpha_dagster_capture.md) - **Active — Production companion runtime to TrueAlpha**
 - [Infra-013: Service Registry as Single Source of Truth](./Infra-013.service_registry_ssot.md) - **In Progress**
 - [Infra-012: Watchdog Observability & Alert Completeness](./Infra-012.watchdog_observability.md) - **In Progress (Phase 1 delivered, Phase 2/3 actively closing)**
 - [Infra-006: Documentation Engineering](./Infra-006.documentation_engineering.md) - **In Progress**
@@ -49,7 +50,6 @@
 
 - [Infra-021: OpenPanel Installation](./archive/Infra-021.openpanel_install.md) - **Archived — Completed**
 - [Infra-018: Repository Boundary Decoupling](./archive/Infra-018.repository_boundary_decoupling.md) - **Archived**
-- [Infra-017: TrueAlpha Dagster Capture Runtime](./archive/Infra-017.truealpha_dagster_capture.md) - **Archived — Closed (Dagster superseded by TrueAlpha DataHub pipeline Infra-020)**
 - [Infra-016: CI Gate Inventory — coordinate-ize infra CI, and de-overlap app vs infra responsibilities](./archive/Infra-016.ci_gate_inventory.md) - **Archived — Closed (#460 contracts + #461 infra inventory/audit completed and kept frozen; epic #459 closed as not planned — converged into boundary governance, finance_report#876; app-side phases 3–4 not pursued)**
 - [Infra-015: deploy_v2 — the unified, trustworthy deploy front door](./archive/Infra-015.deploy_v2_front_door.md) - **Archived — implementation complete & live-verified; companion finance_report#1173**
 - [Infra-014: finance_report Observability Wiring (OTel → SigNoz + OpenPanel per-env)](./archive/Infra-014.finance_report_observability.md) - **Archived — Completed**

@@ -279,6 +279,23 @@ class Exemption:
     reason: str
 
 
+@dataclass(frozen=True)
+class StorageFacet:
+    """Storage / S3 bucket contract declaration for a service (#822 / Phase 3).
+
+    Declares the S3/MinIO bucket requirements for the service:
+    - bucket: bucket name (e.g. "truealpha-raw")
+    - lifecycle_days: 0 for never-expire raw archive, or positive retention days
+    - versioning: whether object versioning is enabled
+    - encryption: whether bucket-level encryption is required
+    """
+
+    bucket: str
+    lifecycle_days: int = 0
+    versioning: bool = False
+    encryption: bool = True
+
+
 # Constructor-name -> class map for the registry's AST facet reader. Only calls
 # to these names (bare or attribute-qualified) are evaluated.
 FACET_CLASSES: dict[str, type] = {
@@ -289,4 +306,6 @@ FACET_CLASSES: dict[str, type] = {
     "SecretsFacet": SecretsFacet,
     "RestartAfterFacet": RestartAfterFacet,
     "Exemption": Exemption,
+    "StorageFacet": StorageFacet,
 }
+
