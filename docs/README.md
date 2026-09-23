@@ -22,6 +22,7 @@
 - **文档首页**：[docs/onboarding/README.md](./onboarding/README.md)
 - **SSOT 技术参考**：[docs/ssot/README.md](./ssot/README.md)
 - **项目进度**：[docs/project/README.md](./project/README.md)
+- **P0 值班 Runbook**：[Infra-022 五类故障](./runbooks/infra022-p0.md)
 - **AI 行为准则**：[AGENTS.md](../AGENTS.md)
 - **Workspace Harness**：`harness/README.md`
 
