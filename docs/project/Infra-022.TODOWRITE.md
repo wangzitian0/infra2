@@ -14,6 +14,7 @@
 - [ ] `tools/host_backup.sh` 现场覆盖验收：源代码已补齐 17/17 个 BackupFacet（原缺口另含 `platform/free`），并以双向 CI 检查防漂移；代码现把 prod/staging 的 manifest 与本地 `BACKUP_KEEP=7` 保留分别隔离，恢复演练默认只接受 Production manifest。2026-09-23 独立 Staging 本机 canary 产出 17/17，归档 282,318,058 字节，逐项 SHA256、大小、gzip/tar 可读性与权限检查通过；2026-09-24 Production 本机 canary 也产出 17/17，2,726,743,453 字节并通过同样校验。两环境的 Finance Report/TrueAlpha 数据库、Production 的 platform Postgres 与两份 Redis RDB、MinIO 均已在隔离容器加载（MinIO 另读回一个实际对象）；Production ClickHouse 在隔离实例中查询两张关键表成功，其他路径仍缺功能恢复。两次均显式 unset `BACKUP_REMOTE`，不算异地证明。待 VPS 安装同 SHA 脚本并分别证明两环境的 17/17 异地 manifest、字节校验与新增类别隔离恢复。
 - [x] `tools/host_backup.sh`: 支持 Google Drive (rclone crypt E2EE) 分级异地备份（周备保留 60d，季度快照保留 730d），1Password 凭证已闭环，测试通过
 - [x] `tools/run_restore_rehearsal.py`: 编写在独立临时沙箱容器中解密、导入并验证 5 项核心业务不变量的自动化演练工具，实测 10.62s 通过并用后即焚 0 残留
+- [ ] 异地恢复验收：2026-09-24 从旧版根清单下载 Finance Report/TrueAlpha 两份数据库归档，大小、SHA256、gzip 校验及网络隔离容器内各 5 项不变量均通过，容器与临时下载已清理；但根清单仅 9 项且无环境标记，演练只在临时副本上标 `legacy-unknown`。仍待新脚本产出的 Production 17/17 异地清单及连续两个周周期的正式恢复证明。
 - [ ] `bootstrap/01.dokploy_install/host_guard/daemon.json`: daemon 默认日志限额、live-restore 与校验/回滚脚本已准备；待当前 head 的 owner 生产批准、VPS 应用、新建容器配置与业务在线验证。旧 Dokploy 控制面容器需后续安全重建才会继承默认值。
 - [ ] `tools/disk_guardian.sh`: 80%/85% 守护与 systemd timer、模拟测试已准备；待 VPS 部署与 P1/P0 外部送达验收。
 - [ ] `bootstrap/01.dokploy_install/host_guard/host-guard.env`: 独立主机、磁盘 P1、磁盘 P0 Healthchecks.io 检查及心跳 timer 已设计；真实 URL 只放 VPS root:root 0600 文件，待外部通知联动和停 ping 演练。
