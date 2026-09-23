@@ -1207,3 +1207,36 @@ def test_a_preview_stack_is_reported_as_skipped_not_measured_on_the_fixed_stack(
         "P3",
     )
     assert "-branch-main" in only["summary"]
+
+
+def test_safe_excerpt_redacts_keys_with_spaces_and_quotes() -> None:
+    raw_log = (
+        "INFO Starting service\n"
+        "DEBUG password: my_super_secret_password\n"
+        "DEBUG key = \"super_secret_key\"\n"
+        "DEBUG authorization: Bearer s.vaultToken123456\n"
+        "INFO Running normally"
+    )
+    excerpt = vault_self_refresh_audit_module._safe_excerpt(raw_log)
+    assert "my_super_secret_password" not in excerpt
+    assert "super_secret_key" not in excerpt
+    assert "s.vaultToken123456" not in excerpt
+    assert "***REDACTED***" in excerpt
+
+
+def test_audit_token_redacts_malformed_token_in_evidence() -> None:
+    import dataclasses
+    import json
+
+    service = dataclasses.replace(load_inventory()[0], auth_method="token")
+    malformed_token = "secret1234"
+    result = vault_self_refresh_audit_module.classify_token(
+        service,
+        env_text=f"{service.vault_token_env_key}={malformed_token}\n",
+        lookup=None,
+    )
+    assert result.status == "fail"
+    assert result.check_id == "dokploy-env-token"
+    assert malformed_token not in json.dumps(result.evidence)
+    assert "token_hint" in result.evidence
+    assert result.evidence["token_length"] == 10

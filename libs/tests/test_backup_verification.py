@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 from pathlib import Path
 
@@ -277,6 +278,110 @@ def test_backup_restore_rehearsal_downloads_remote_artifact(tmp_path) -> None:
         )
         == tmp_path / "dump.sql.gz"
     )
+
+
+def test_materialize_artifact_verifies_real_checksum_and_cleans_corrupted(tmp_path) -> None:
+    content = b"valid sql dump data"
+    correct_hash = hashlib.sha256(content).hexdigest()
+    corrupt_hash = "f" * 64
+
+    class Result:
+        returncode = 0
+        stderr = ""
+
+    def mock_download_good(cmd, **_kwargs):
+        dest = Path(cmd[3])
+        dest.write_bytes(content)
+        return Result()
+
+    # Case 1: valid sha256 matches
+    archive = materialize_artifact(
+        {
+            "remote_uri": "r2:infra2/finance_report/postgres/dump.sql.gz",
+            "sha256": correct_hash,
+        },
+        tmp_path,
+        runner=mock_download_good,
+    )
+    assert archive.exists()
+    assert archive.read_bytes() == content
+
+    # Case 2: checksum mismatch raises BackupRestoreError and unlinks corrupted file
+    def mock_download_corrupt(cmd, **_kwargs):
+        dest = Path(cmd[3])
+        dest.write_bytes(content)
+        return Result()
+
+    target_file = tmp_path / "corrupt.sql.gz"
+    with pytest.raises(BackupRestoreError, match="checksum mismatch"):
+        materialize_artifact(
+            {
+                "remote_uri": "r2:infra2/finance_report/postgres/corrupt.sql.gz",
+                "sha256": corrupt_hash,
+            },
+            tmp_path,
+            runner=mock_download_corrupt,
+        )
+    assert not target_file.exists(), "Corrupted download file must be cleaned up"
+
+    # Case 3: local: uri also verifies sha256
+    local_file = tmp_path / "local.sql.gz"
+    local_file.write_bytes(content)
+    with pytest.raises(BackupRestoreError, match="checksum mismatch"):
+        materialize_artifact(
+            {
+                "remote_uri": f"local:{local_file}",
+                "sha256": corrupt_hash,
+            },
+            tmp_path,
+        )
+
+
+def test_execute_rehearsal_handles_timeout_cleanly(monkeypatch) -> None:
+    import time
+    from libs.backup.rehearsal import RestoreRehearsalPlan, execute_rehearsal
+
+    plan = RestoreRehearsalPlan(
+        service_id="test/postgres",
+        source_uri="test:dump.sql.gz",
+        archive_path=Path("/tmp/fake.sql.gz"),
+        target_container="test-postgres-restore-rehearsal",
+        pg_user="postgres",
+        database="testdb",
+        invariant_sql=("SELECT 1",),
+    )
+
+    def slow_restore(*args, **kwargs):
+        time.sleep(0.5)
+        return {}
+
+    monkeypatch.setattr(
+        "libs.backup.rehearsal.run_postgres_restore_rehearsal", slow_restore
+    )
+    with pytest.raises(BackupRestoreError, match="timed out"):
+        execute_rehearsal(plan, timeout_seconds=0.05)
+
+
+def test_detect_dump_target_db(tmp_path) -> None:
+    import gzip
+    from libs.backup.rehearsal import _detect_dump_target_db
+
+    # Case 1: dump with CREATE ROLE / pg_dumpall triggers 'postgres' db
+    dump_cluster = tmp_path / "cluster.sql.gz"
+    with gzip.open(dump_cluster, "wb") as f:
+        f.write(b"-- pg_dumpall output\nCREATE ROLE test;\n")
+    assert _detect_dump_target_db(dump_cluster, "appdb") == "postgres"
+
+    # Case 2: standard single-db dump keeps default_db
+    dump_single = tmp_path / "single.sql.gz"
+    with gzip.open(dump_single, "wb") as f:
+        f.write(b"CREATE TABLE users (id int);\n")
+    assert _detect_dump_target_db(dump_single, "appdb") == "appdb"
+
+    # Case 3: non-gzip file falls back gracefully without crash
+    plain_file = tmp_path / "plain.sql"
+    plain_file.write_text("CREATE TABLE plain (id int);")
+    assert _detect_dump_target_db(plain_file, "appdb") == "appdb"
 
 
 def test_backup_restore_rehearsal_refuses_live_looking_targets(tmp_path) -> None:

@@ -51,12 +51,14 @@ def test_active_services_not_in_project_archive() -> None:
 
 def test_archived_docs_do_not_claim_active_status() -> None:
     """Archived docs in docs/project/archive/ must not declare Status: Active."""
-    for archive_file in ARCHIVE_DIR.glob("Infra-*.md"):
+    archived_files = list(ARCHIVE_DIR.glob("Infra-*.md"))
+    assert len(archived_files) > 0, f"No archived docs found in {ARCHIVE_DIR}"
+    for archive_file in archived_files:
         content = archive_file.read_text(encoding="utf-8")
         status_match = re.search(r"^\s*>?\s*\*\*(?:Status|状态)\*\*:?\s*(.+?)\s*$", content, re.MULTILINE)
-        if status_match:
-            status_val = status_match.group(1).strip()
-            assert not status_val.startswith("Active"), (
-                f"Archived file {archive_file.name} has Status: '{status_val}'. "
-                "Archived docs must have Status: Archived / Completed / Closed."
-            )
+        assert status_match is not None, f"Archived file {archive_file.name} missing Status header"
+        status_val = status_match.group(1).strip()
+        assert not status_val.startswith("Active"), (
+            f"Archived file {archive_file.name} has Status: '{status_val}'. "
+            "Archived docs must have Status: Archived / Completed / Closed."
+        )

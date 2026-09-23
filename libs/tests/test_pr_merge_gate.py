@@ -1936,3 +1936,56 @@ def test_the_prefix_does_not_swallow_unrelated_paths():
     """前缀判定不能宽到把普通改动也拖进 owner 审批。"""
     for path in ("libs/probe_specs.py", "docs/README.md", ".github/dependabot.yml"):
         assert not gate.is_self_governing(path), path
+
+
+def test_thread_weight_upgrades_critical_signals_without_label():
+    """未显式标注 severity 的评论，若包含 critical/fatal/vulnerability 等高危词，必须提权为 1.0 (high)。"""
+    # 普通未标注评论: 0.5 (middle)
+    assert gate.thread_weight(["Please rename this variable for clarity."]) == 0.5
+
+    # 包含高危安全信号的未标注评论: 1.0 (high)
+    assert gate.thread_weight(["CRITICAL: SQL injection vulnerability detected in query handler"]) == 1.0
+    assert gate.thread_weight(["Fatal memory leak in worker loop"]) == 1.0
+    assert gate.thread_weight(["Possible credential leak via stderr"]) == 1.0
+
+    # 显式标注者优先（即便包含词汇）
+    assert gate.thread_weight(["severity: low - critical typo in documentation"]) == 0.25
+
+
+def test_repo_deps_resolves_relative_imports(tmp_path, monkeypatch):
+    """_repo_deps 必须能够正确解析 Python AST 中的相对导入 (from . import xxx)。"""
+    monkeypatch.setattr(gate, "ROOT", tmp_path)
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    sub_a = pkg / "a.py"
+    sub_b = pkg / "b.py"
+    sub_a.write_text("from .b import something\n")
+    sub_b.write_text("something = 1\n")
+
+    deps = gate._repo_deps("pkg/a.py")
+    assert "pkg/b.py" in deps
+
+
+def test_gh_retries_transient_failures(monkeypatch):
+    """_gh 遇到限流或暂时性错误时应执行指数退避重试并在恢复后成功返回。"""
+    attempts = 0
+
+    class MockResult:
+        def __init__(self, rc, stdout, stderr):
+            self.returncode = rc
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def mock_run(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            return MockResult(1, "", "HTTP 429: API rate limit exceeded")
+        return MockResult(0, "success_output\n", "")
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+    monkeypatch.setattr("time.sleep", lambda _: None)
+
+    out = gate._gh(["api", "user"], max_retries=3, initial_delay=0.01)
+    assert out == "success_output\n"
+    assert attempts == 3

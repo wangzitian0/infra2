@@ -107,8 +107,9 @@ ENVIRONMENTS = tuple(_ENVIRONMENTS)
 
 def env_config(env: str) -> EnvConfig:
     """Return the EnvConfig for a deploy env. Raises ValueError for an unknown env."""
+    normalized = "prod" if env in ("prod", "production") else env
     try:
-        return _ENVIRONMENTS[env]
+        return _ENVIRONMENTS[normalized]
     except KeyError:
         raise ValueError(
             f"unknown deploy env {env!r}: expected one of {sorted(_ENVIRONMENTS)}"
@@ -159,6 +160,7 @@ def app_compose_env_config(service: str, env: str) -> EnvConfig:
     not wire preview for it, it has no preview compose stack yet).
     """
     base = env_config(env)
+    normalized_env = base.name
     overrides_for_service = _APP_COMPOSE_OVERRIDES.get(service)
     if overrides_for_service is None:
         if service != _BASELINE_APP_SERVICE:
@@ -167,7 +169,7 @@ def app_compose_env_config(service: str, env: str) -> EnvConfig:
                 f"expected {_BASELINE_APP_SERVICE!r} or one of {sorted(_APP_COMPOSE_OVERRIDES)}"
             )
         return base
-    override = overrides_for_service.get(env)
+    override = overrides_for_service.get(normalized_env)
     if override is None:
         raise ValueError(
             f"no compose target registered for service {service!r} env {env!r}"

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import gzip
+import hashlib
 import re
 import subprocess
 from dataclasses import asdict, dataclass
@@ -112,22 +113,40 @@ def materialize_artifact(
     """Resolve a local artifact path, downloading remote artifacts with rclone."""
     remote_uri = str(artifact.get("remote_uri") or "")
     if remote_uri.startswith("local:"):
-        return Path(remote_uri.removeprefix("local:"))
-    if ":" not in remote_uri:
+        destination = Path(remote_uri.removeprefix("local:"))
+        if not destination.exists():
+            raise BackupRestoreError(f"local backup artifact not found: {destination}")
+    elif ":" not in remote_uri:
         raise BackupRestoreError(f"unsupported backup artifact URI: {remote_uri}")
-
-    download_dir.mkdir(parents=True, exist_ok=True)
-    destination = planned_artifact_path(artifact, download_dir)
-    result = runner(
-        ["rclone", "copyto", remote_uri, str(destination)],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise BackupRestoreError(
-            result.stderr.strip() or f"rclone download failed: {remote_uri}"
+    else:
+        download_dir.mkdir(parents=True, exist_ok=True)
+        destination = planned_artifact_path(artifact, download_dir)
+        result = runner(
+            ["rclone", "copyto", remote_uri, str(destination)],
+            text=True,
+            capture_output=True,
+            check=False,
         )
+        if result.returncode != 0:
+            destination.unlink(missing_ok=True)
+            raise BackupRestoreError(
+                result.stderr.strip() or f"rclone download failed: {remote_uri}"
+            )
+
+    expected_sha256 = artifact.get("sha256")
+    if expected_sha256:
+        h = hashlib.sha256()
+        with destination.open("rb") as f:
+            while chunk := f.read(65536):
+                h.update(chunk)
+        actual_sha256 = h.hexdigest()
+        if actual_sha256.lower() != str(expected_sha256).lower():
+            if not remote_uri.startswith("local:"):
+                destination.unlink(missing_ok=True)
+            raise BackupRestoreError(
+                f"backup artifact checksum mismatch for {destination.name}: "
+                f"expected {expected_sha256}, got {actual_sha256}"
+            )
     return destination
 
 
@@ -170,6 +189,21 @@ def build_postgres_rehearsal_plan(
     )
 
 
+def _detect_dump_target_db(archive_path: Path, default_db: str) -> str:
+    """Inspect archive header to detect if cluster-wide dumps require restoring to postgres db."""
+    try:
+        with gzip.open(archive_path, "rt", errors="ignore") as f:
+            header_sample = f.read(2048)
+            if any(
+                marker in header_sample
+                for marker in ("pg_dumpall", "CREATE ROLE", "CREATE DATABASE")
+            ):
+                return "postgres"
+    except (gzip.BadGzipFile, OSError):
+        pass
+    return default_db
+
+
 def run_postgres_restore_rehearsal(
     plan: RestoreRehearsalPlan,
     *,
@@ -182,18 +216,7 @@ def run_postgres_restore_rehearsal(
     if not archive_path.exists():
         raise BackupRestoreError(f"backup archive is missing: {archive_path}")
 
-    restore_target_db = plan.database
-    try:
-        with gzip.open(archive_path, "rt", errors="ignore") as f:
-            header_sample = f.read(2048)
-            if (
-                "pg_dumpall" in header_sample
-                or "CREATE ROLE" in header_sample
-                or "CREATE DATABASE" in header_sample
-            ):
-                restore_target_db = "postgres"
-    except Exception:
-        pass
+    restore_target_db = _detect_dump_target_db(archive_path, plan.database)
 
     restore_cmd = [
         "docker",
@@ -342,14 +365,17 @@ def execute_rehearsal(
     **kwargs: Any,
 ) -> dict[str, Any]:
     """B-02: Execute restore rehearsal with timeout guard."""
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
         future = executor.submit(run_postgres_restore_rehearsal, plan, **kwargs)
-        try:
-            return future.result(timeout=timeout_seconds)
-        except concurrent.futures.TimeoutError as exc:
-            raise BackupRestoreError(
-                f"postgres restore rehearsal timed out after {timeout_seconds}s"
-            ) from exc
+        return future.result(timeout=timeout_seconds)
+    except concurrent.futures.TimeoutError as exc:
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise BackupRestoreError(
+            f"postgres restore rehearsal timed out after {timeout_seconds}s"
+        ) from exc
+    finally:
+        executor.shutdown(wait=False)
 
 
 __all__ = [

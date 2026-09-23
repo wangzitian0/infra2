@@ -308,7 +308,7 @@ Recommended schedule after the rehearsal target is provisioned:
 | **Backup archive + checksum runner** | `tools/backup_runner.py` | ✅ Implemented |
 | **Backup freshness/checksum manifest** | `tools/backup_verification.py` | ✅ Implemented |
 | **On-host backup runner (SOP-006): dumps first, one failure never stops the rest, tar exit 1 is a WARN, authenticated redis SAVE** | `libs/tests/test_host_backup_script.py` | ✅ Implemented |
-| **Off-host restore rehearsal** | `tools/run_restore_rehearsal.py` + `libs/backup/` (`libs/tests/test_backup_restore.py`, `libs/tests/test_backup_verification.py`) | ✅ Implemented & Live Verified (10.62s PASS) |
+| **Off-host restore rehearsal** | `tools/run_restore_rehearsal.py` + `libs/backup/` (`libs/tests/test_backup_verification.py`) | ✅ Implemented & Live Verified (10.62s PASS) |
 | **Vault Unseal 流程（自动）** | `bootstrap/05.vault/unsealer.py` 常驻自动解封;契约由 `libs/tests/test_vault_unsealer.py`(过期 Connect token 拒绝 / sync 非 ACTIVE / sealed 报不健康 / key 不足中止)+ `libs/tests/test_bootstrap_health.py`(healthcheck 接线)覆盖 | ✅ Automated |
 | **Vault Unseal 流程（手动兜底,SOP-001）** | `vault status` + `vault operator unseal` | ✅ Manual |
 | **vault-agent 凭证 re-provision (SOP-007)** | `vault.setup-approle --deploy` | ✅ Manual |

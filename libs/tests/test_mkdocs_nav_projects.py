@@ -35,6 +35,8 @@ def test_mkdocs_nav_lists_every_active_project_doc() -> None:
     nav_files = set(_NAV_ACTIVE_RE.findall(text)) - set(_NAV_ARCHIVED_RE.findall(text))
     on_disk = _project_doc_names(PROJECT_DIR)
 
+    assert len(on_disk) > 0, f"No active project docs discovered in {PROJECT_DIR}"
+    assert len(nav_files) > 0, "No active nav files parsed from mkdocs.yml"
     missing = sorted(on_disk - nav_files)
     assert not missing, (
         "Active project docs missing from docs/mkdocs.yml nav (add them under "
@@ -47,6 +49,8 @@ def test_mkdocs_nav_lists_every_archived_project_doc() -> None:
     nav_files = set(_NAV_ARCHIVED_RE.findall(text))
     on_disk = _project_doc_names(ARCHIVE_DIR)
 
+    assert len(on_disk) > 0, f"No archived project docs discovered in {ARCHIVE_DIR}"
+    assert len(nav_files) > 0, "No archived nav files parsed from mkdocs.yml"
     missing = sorted(on_disk - nav_files)
     assert not missing, (
         "Archived project docs missing from docs/mkdocs.yml nav (add them under "

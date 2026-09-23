@@ -26,6 +26,16 @@ def test_prod_config():
     assert cfg.app_url(domain="zitian.party") == "https://report.zitian.party"
 
 
+def test_production_alias_is_normalized_to_prod():
+    cfg = ec.env_config("production")
+    assert cfg.name == "prod"
+    assert cfg.compose_id == "lNn9gVS1Zyw79Jzw5dlbu"
+
+    app_cfg = ec.app_compose_env_config("truealpha/app", "production")
+    assert app_cfg.name == "prod"
+    assert app_cfg.compose_id == "j-gIAk0GfF0bGOitZN-og"
+
+
 def test_preview_is_dynamic_and_defaults_to_staging_data():
     cfg = ec.env_config("preview")
     assert cfg.dynamic is True
@@ -211,3 +221,26 @@ def test_cors_allowed_origins_includes_truealpha():
     origins = ec.cors_allowed_origins("zitian.party")
     assert "https://truealpha.zitian.party" in origins
     assert "https://truealpha-staging.zitian.party" in origins
+
+
+def test_is_stateful_deploy_env_strict_and_lenient():
+    from libs.core.constants import is_stateful_deploy_env
+
+    # Lenient (strict=False) accepts aliases and dynamic preview patterns
+    assert is_stateful_deploy_env("production") is True
+    assert is_stateful_deploy_env("prod") is True
+    assert is_stateful_deploy_env("staging") is True
+    assert is_stateful_deploy_env("stg") is True
+    assert is_stateful_deploy_env("preview") is True
+    assert is_stateful_deploy_env("pr-123") is True
+    assert is_stateful_deploy_env("commit-abc1234") is True
+    assert is_stateful_deploy_env("unknown-env") is False
+    assert is_stateful_deploy_env(None) is False
+
+    # Strict (strict=True) accepts ONLY the canonical tier names
+    assert is_stateful_deploy_env("production", strict=True) is True
+    assert is_stateful_deploy_env("staging", strict=True) is True
+    assert is_stateful_deploy_env("preview", strict=True) is True
+    assert is_stateful_deploy_env("prod", strict=True) is False
+    assert is_stateful_deploy_env("stg", strict=True) is False
+    assert is_stateful_deploy_env("pr-123", strict=True) is False

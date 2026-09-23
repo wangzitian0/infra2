@@ -21,6 +21,10 @@ import ast
 from dataclasses import dataclass
 from pathlib import Path
 
+from libs.core.service import (
+    Service as Service,
+    load_service_registry as load_service_registry,
+)
 from libs.service_facets import (
     FACET_CLASSES,
     BackupFacet,
@@ -542,9 +546,15 @@ def _facet_instance(node: ast.expr, facet_cls: type, where: str):
         raise ValueError(
             f"{where}: expected a {facet_cls.__name__}(...) call, got {name!r}"
         )
+    for kw in node.keywords:
+        if kw.arg is None:
+            raise ValueError(
+                f"{where}: dynamic **kwargs unpacking is not supported in "
+                f"{facet_cls.__name__} facet definition"
+            )
     try:
         args = [ast.literal_eval(arg) for arg in node.args]
-        kwargs = {kw.arg: ast.literal_eval(kw.value) for kw in node.keywords if kw.arg}
+        kwargs = {kw.arg: ast.literal_eval(kw.value) for kw in node.keywords if kw.arg is not None}
         return facet_cls(*args, **kwargs)
     except (ValueError, TypeError, SyntaxError) as exc:
         raise ValueError(
@@ -584,12 +594,5 @@ def _is_deployer_class(node: ast.ClassDef) -> bool:
         if isinstance(base, ast.Attribute) and base.attr.endswith("Deployer"):
             return True
     return False
-
-
-# Re-exports for Phase 3 Domain Convergence (SSOT)
-from libs.core.service import (  # noqa: E402
-    Service as Service,
-    load_service_registry as load_service_registry,
-)
 
 

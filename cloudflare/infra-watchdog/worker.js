@@ -523,6 +523,9 @@ async function recordHeartbeat(request, env) {
   let configuredKeys;
   try {
     environment = safeId(payload.env || payload.environment || "production");
+    if (environment === "prod") {
+      environment = "production";
+    }
     name = safeId(payload.name || "infra-probe-runner");
     key = heartbeatKey(environment, name);
     configuredKeys = configuredHeartbeatKeys(env);

@@ -669,7 +669,7 @@ def deploy(
             # because it depends on Docker-network ClickHouse access + telemetry flush
             # timing; enable per-workflow once validated for the env.
             if verify_ingestion:
-                from tools.deploy_ingestion_smoke import verify_deploy_ingestion
+                from libs.deploy.ingestion_verify import verify_deploy_ingestion
 
                 # ClickHouse URL resolution lives in deploy_ingestion_smoke (single owner,
                 # reusing the round-trip canary's env) — do not re-read it here.

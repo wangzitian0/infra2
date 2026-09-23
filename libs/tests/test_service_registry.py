@@ -304,3 +304,15 @@ def test_storage_facet_declared_on_truealpha_app() -> None:
     assert storage_facet.versioning is False
     assert storage_facet.encryption is True
 
+
+def test_facet_instance_rejects_dynamic_kwargs_unpacking() -> None:
+    code = "StorageFacet(**options)"
+    call_node = ast.parse(code, mode="eval").body
+    with pytest.raises(ValueError, match=r"dynamic \*\*kwargs unpacking is not supported"):
+        reg._facet_instance(call_node, reg.StorageFacet, where="test/service")
+
+    normal_code = "StorageFacet(bucket='my-bucket')"
+    normal_node = ast.parse(normal_code, mode="eval").body
+    facet = reg._facet_instance(normal_node, reg.StorageFacet, where="test/service")
+    assert facet.bucket == "my-bucket"
+

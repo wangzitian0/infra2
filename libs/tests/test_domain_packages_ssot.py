@@ -186,7 +186,9 @@ def test_observability_breakdown_analysis() -> None:
 
 def test_observability_watcher_and_trail_aliases() -> None:
     """O-02 & O-04: Verify watcher and trail entry points."""
-    assert ContainerBreakdownWatcher is not None
+    import inspect
+
+    assert inspect.isclass(ContainerBreakdownWatcher)
     assert callable(reconcile_watchdog_issues)
 
 

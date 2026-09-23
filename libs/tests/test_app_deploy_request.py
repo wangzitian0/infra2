@@ -137,7 +137,18 @@ def merged_pull() -> dict:
         "merge_commit_sha": SHA,
         "html_url": f"https://github.com/{APP_REPO}/pull/10",
         "base": {"ref": "main", "repo": {"full_name": APP_REPO}},
+        "user": {"login": "octocat-author"},
     }
+
+
+def approved_reviews() -> list[dict]:
+    return [
+        {
+            "id": 1,
+            "user": {"login": "octocat-reviewer"},
+            "state": "APPROVED",
+        }
+    ]
 
 
 def resolved(*args, **kwargs) -> ResolvedRef:
@@ -271,6 +282,7 @@ def test_production_evidence_is_verified_from_github() -> None:
         f"/repos/{APP_REPO}/actions/runs/100": successful_run(100),
         f"/repos/{APP_REPO}/actions/runs/101": successful_run(101),
         f"/repos/{APP_REPO}/pulls/10": merged_pull(),
+        f"/repos/{APP_REPO}/pulls/10/reviews": approved_reviews(),
     }
     calls = []
 
@@ -383,6 +395,7 @@ def test_truealpha_policy_verifies_its_real_run_shapes() -> None:
         f"/repos/{ta_repo}/actions/runs/100": source_run,
         f"/repos/{ta_repo}/actions/runs/101": staging_run,
         f"/repos/{ta_repo}/pulls/10": pull,
+        f"/repos/{ta_repo}/pulls/10/reviews": approved_reviews(),
     }
 
     receiver.verify_production_evidence(request, fetch_json=responses.__getitem__)
@@ -438,10 +451,51 @@ def test_production_evidence_rejects_untrusted_remote_state(
         f"/repos/{APP_REPO}/actions/runs/100": successful_run(100),
         f"/repos/{APP_REPO}/actions/runs/101": successful_run(101),
         f"/repos/{APP_REPO}/pulls/10": merged_pull(),
+        f"/repos/{APP_REPO}/pulls/10/reviews": approved_reviews(),
     }
     response_path = next(key for key in responses if path in key)
     responses[response_path] = {**responses[response_path], **replacement}
 
+    with pytest.raises(ValueError, match=error):
+        receiver.verify_production_evidence(
+            receiver.parse_request(production_payload()),
+            fetch_json=responses.__getitem__,
+        )
+
+
+@pytest.mark.parametrize(
+    "reviews,error",
+    [
+        ([], "at least one APPROVED review"),
+        (
+            [{"user": {"login": "octocat-author"}, "state": "APPROVED"}],
+            "at least one APPROVED review",
+        ),
+        (
+            [{"user": {"login": "reviewer"}, "state": "CHANGES_REQUESTED"}],
+            "pending CHANGES_REQUESTED",
+        ),
+        (
+            [
+                {"user": {"login": "reviewer"}, "state": "APPROVED"},
+                {"user": {"login": "reviewer2"}, "state": "CHANGES_REQUESTED"},
+            ],
+            "pending CHANGES_REQUESTED",
+        ),
+        (
+            [{"user": {"login": "reviewer"}, "state": "COMMENTED"}],
+            "at least one APPROVED review",
+        ),
+    ],
+)
+def test_production_evidence_rejects_missing_or_invalid_review(reviews, error) -> None:
+    responses = {
+        policy_path(): policy_contents(FINANCE_REPORT_POLICY),
+        f"/repos/{APP_REPO}/actions/runs/100": successful_run(100),
+        f"/repos/{APP_REPO}/actions/runs/101": successful_run(101),
+        f"/repos/{APP_REPO}/pulls/10": merged_pull(),
+        f"/repos/{APP_REPO}/pulls/10/reviews": reviews,
+    }
     with pytest.raises(ValueError, match=error):
         receiver.verify_production_evidence(
             receiver.parse_request(production_payload()),
@@ -1039,3 +1093,21 @@ def test_gate_is_not_checked_for_an_operator_run_without_the_flags(tmp_path) -> 
     receiver_cli.check_preflight_canary_gate(
         plan, canary_job_ran=True, canary_result="success"
     )
+
+
+def test_fetch_github_json_supports_reviews_array(monkeypatch) -> None:
+    import httpx
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return [{"id": 1, "state": "APPROVED"}]
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: FakeResponse())
+    result = receiver._fetch_github_json("/repos/owner/repo/pulls/1/reviews")
+    assert isinstance(result, list)
+    assert result[0]["state"] == "APPROVED"

@@ -6,11 +6,14 @@ Requires DOKPLOY_API_KEY in environment (generate from /settings/profile).
 """
 
 from __future__ import annotations
+import logging
 import os
 import time
 import httpx
 from dotenv import load_dotenv
 from libs.common import normalize_env_name as _common_normalize_env_name
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -527,10 +530,10 @@ class DokployClient:
             in-process lock only — see libs/compose_lock.py for what it does and does
             not cover.
         """
-        if env_str is None:
-            from libs.compose_lock import compose_write_lock
+        from libs.compose_lock import compose_write_lock
 
-            with compose_write_lock(compose_id):
+        with compose_write_lock(compose_id):
+            if env_str is None:
                 # Merge with existing
                 existing_env = self.get_compose_env(compose_id)
                 env_dict = {}
@@ -549,9 +552,7 @@ class DokployClient:
                 # Convert back to string
                 env_str = "\n".join(f"{k}={v}" for k, v in env_dict.items())
 
-                return self.update_compose(compose_id, env=env_str)
-
-        return self.update_compose(compose_id, env=env_str)
+            return self.update_compose(compose_id, env=env_str)
 
     # Git Provider endpoints
     def list_git_providers(self) -> list[dict]:
@@ -574,8 +575,8 @@ class DokployClient:
                 github_id = p.get("githubId")
                 if github_id:
                     return github_id
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Method 1 failed to query git providers from Dokploy: %s", exc)
 
         # Method 2: fall back to a compose that is already bound to GitHub.
         try:
@@ -585,8 +586,8 @@ class DokployClient:
                     for comp in env.get("compose", []):
                         if comp.get("githubId"):
                             return comp.get("githubId")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Method 2 failed to discover bound GitHub compose from Dokploy: %s", exc)
 
         return None
 

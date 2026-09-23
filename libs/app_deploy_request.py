@@ -7,7 +7,7 @@ import binascii
 import json
 import os
 import subprocess
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -35,10 +35,17 @@ from libs.service_registry import domain_for_service
 # Re-exported so the receiver keeps one import surface (`marker_status` is used by
 # tools/app_deploy_request.py's `markers` action, which must not import this module).
 __all__ = [
+    "APP_SOURCES",
+    "DeployPlan",
     "MINIMUM_PRODUCTION_MARKER",
+    "make_plan",
     "marker_status",
     "newest_release_tag",
+    "parse_request",
     "production_marker",
+    "select_iac_ref",
+    "validate_request_authority",
+    "verify_production_evidence",
 ]
 
 APP_SOURCES: dict[str, str] = {
@@ -244,6 +251,11 @@ def verify_production_evidence(
         f"/repos/{request.source_repository}/actions/runs/{staging_run_id}"
     )
     reviewed_pull = fetch(f"/repos/{request.source_repository}/pulls/{pull_number}")
+    reviews = fetch(f"/repos/{request.source_repository}/pulls/{pull_number}/reviews")
+    if not isinstance(reviews, Sequence) or isinstance(reviews, (str, bytes, Mapping)):
+        raise ValueError(
+            f"GitHub evidence response for /repos/{request.source_repository}/pulls/{pull_number}/reviews must be a list"
+        )
     _verify_run(
         source_run,
         label="source run",
@@ -266,6 +278,7 @@ def verify_production_evidence(
     )
     _verify_reviewed_pull(
         reviewed_pull,
+        reviews=reviews,
         repository=request.source_repository,
         url=request.evidence.reviewed_change_url,
         sha=request.source_sha,
@@ -431,7 +444,9 @@ def _github_evidence_number(
     return number
 
 
-def _fetch_github_json(path: str) -> Mapping[str, object]:
+def _fetch_github_json(
+    path: str, *, expect_array: bool = False
+) -> Mapping[str, object] | list[object]:
     headers = {
         "Accept": "application/vnd.github+json",
         "User-Agent": "infra2-app-deploy-receiver",
@@ -457,8 +472,12 @@ def _fetch_github_json(path: str) -> Mapping[str, object]:
         raise ValueError(
             f"GitHub evidence request failed for {path}: {type(exc).__name__}"
         ) from None
-    if not isinstance(payload, Mapping):
-        raise ValueError(f"GitHub evidence response for {path} must be an object")
+    if expect_array or path.endswith("/reviews"):
+        if not isinstance(payload, list):
+            raise ValueError(f"GitHub evidence response for {path} must be a list")
+    else:
+        if not isinstance(payload, Mapping):
+            raise ValueError(f"GitHub evidence response for {path} must be an object")
     return payload
 
 
@@ -501,6 +520,7 @@ def _verify_run(
 def _verify_reviewed_pull(
     pull: Mapping[str, object],
     *,
+    reviews: Sequence[object] | None = None,
     repository: str,
     url: str,
     sha: str,
@@ -527,6 +547,31 @@ def _verify_reviewed_pull(
         raise ValueError(
             "reviewed pull request merge_commit_sha does not match source_sha"
         )
+
+    if reviews is not None:
+        user = pull.get("user")
+        pull_author = user.get("login") if isinstance(user, Mapping) else None
+
+        latest_states: dict[str, str] = {}
+        for r in reviews:
+            if not isinstance(r, Mapping):
+                continue
+            r_user = r.get("user")
+            reviewer = r_user.get("login") if isinstance(r_user, Mapping) else None
+            state = r.get("state")
+            if reviewer and isinstance(state, str):
+                latest_states[reviewer] = state
+
+        if pull_author:
+            latest_states.pop(pull_author, None)
+
+        if any(s == "CHANGES_REQUESTED" for s in latest_states.values()):
+            raise ValueError("reviewed pull request has pending CHANGES_REQUESTED")
+
+        if not any(s == "APPROVED" for s in latest_states.values()):
+            raise ValueError(
+                "reviewed pull request must have at least one APPROVED review from another user"
+            )
 
 
 def _git_url(repository: str) -> str:

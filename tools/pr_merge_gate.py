@@ -158,6 +158,10 @@ BLOCKING_SEVERITY_TOTAL = 1.0
 _SEVERITY_RE = re.compile(
     r"\bseverity\s*[:：]\s*\**(high|middle|medium|low)\b", re.IGNORECASE
 )
+_CRITICAL_SECURITY_RE = re.compile(
+    r"\b(critical|fatal|security vulnerability|sql injection|remote code execution|credential leak)\b",
+    re.IGNORECASE,
+)
 
 
 def thread_weight(bodies: Sequence[str]) -> float:
@@ -165,13 +169,21 @@ def thread_weight(bodies: Sequence[str]) -> float:
 
     The highest label anywhere in the thread wins: a reply that downgrades its
     own nit does not lower a `high` raised above it, and a thread resolves as a
-    whole or not at all.
+    whole or not at all. If unlabelled, clear critical security signals weigh 1.0.
     """
     best = 0.0
+    has_critical_signal = False
     for body in bodies:
-        for match in _SEVERITY_RE.finditer(body or ""):
+        text = body or ""
+        for match in _SEVERITY_RE.finditer(text):
             best = max(best, SEVERITY_WEIGHTS[match.group(1).lower()])
-    return best or UNLABELLED_SEVERITY_WEIGHT
+        if _CRITICAL_SECURITY_RE.search(text):
+            has_critical_signal = True
+    if best:
+        return best
+    if has_critical_signal:
+        return SEVERITY_WEIGHTS["high"]
+    return UNLABELLED_SEVERITY_WEIGHT
 
 
 # Repository-internal data a gate module may read. Kept narrow on purpose --
@@ -195,15 +207,38 @@ def _repo_deps(rel: str) -> set[str]:
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 names = [alias.name for alias in node.names]
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                names = [node.module]
-            else:
-                continue
-            for name in names:
-                stem = name.replace(".", "/")
-                for candidate in (f"{stem}.py", f"{stem}/__init__.py"):
-                    if (ROOT / candidate).is_file():
-                        found.add(candidate)
+                for name in names:
+                    stem = name.replace(".", "/")
+                    for candidate in (f"{stem}.py", f"{stem}/__init__.py"):
+                        if (ROOT / candidate).is_file():
+                            found.add(candidate)
+            elif isinstance(node, ast.ImportFrom):
+                if node.level and node.level > 0:
+                    base = path.parent
+                    for _ in range(node.level - 1):
+                        base = base.parent
+                    if node.module:
+                        sub = node.module.replace(".", "/")
+                        target = base / sub
+                    else:
+                        target = base
+                    for alias in node.names:
+                        for cand in (
+                            target / f"{alias.name}.py",
+                            target / alias.name / "__init__.py",
+                            target.with_suffix(".py"),
+                            target / "__init__.py",
+                        ):
+                            if cand.is_file():
+                                try:
+                                    found.add(str(cand.relative_to(ROOT)))
+                                except ValueError:
+                                    pass
+                elif node.module:
+                    stem = node.module.replace(".", "/")
+                    for candidate in (f"{stem}.py", f"{stem}/__init__.py"):
+                        if (ROOT / candidate).is_file():
+                            found.add(candidate)
     for match in re.finditer(r"""["']((?:docs|libs|tools)/[\w./-]+)["']""", source):
         rel_data = match.group(1)
         if rel_data.endswith(_DATA_SUFFIXES) and (ROOT / rel_data).is_file():
@@ -362,9 +397,6 @@ def _inventory_only_gained_authority(base_text: str, head_text: str) -> bool:
     return base <= head
 
 
-# Self-governing paths a proof exists for. Everything else in the closure is unproven
-# by construction, which is the point: this set only grows when someone can state what
-# the file's decision input is and which way is stricter.
 def _workflow_only_gained_authority(base_text: str, head_text: str) -> bool:
     """True 当这份 workflow 的改动只会让门禁更常说「不」。
 
@@ -717,27 +749,44 @@ class Verdict:
 GH_TIMEOUT_S = 60
 
 
-def _gh(argv: Sequence[str]) -> str:
+def _gh(argv: Sequence[str], *, max_retries: int = 3, initial_delay: float = 1.0) -> str:
     # This runs unattended, so stdin is closed rather than inherited: a gh that
     # decides to prompt (auth re-login, a confirmation) would otherwise block on
     # a terminal that is not there, and the gate would hang instead of failing.
     # The timeout is the same argument for the network.
-    try:
-        result = subprocess.run(
-            ["gh", *argv],
-            capture_output=True,
-            text=True,
-            check=False,
-            stdin=subprocess.DEVNULL,
-            timeout=GH_TIMEOUT_S,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"gh {' '.join(argv)}: no response in {GH_TIMEOUT_S}s"
-        ) from exc
-    if result.returncode != 0:
-        raise RuntimeError(f"gh {' '.join(argv)}: {result.stderr.strip() or 'failed'}")
-    return result.stdout
+    last_err: Exception | None = None
+    delay = initial_delay
+    for attempt in range(max_retries):
+        try:
+            result = subprocess.run(
+                ["gh", *argv],
+                capture_output=True,
+                text=True,
+                check=False,
+                stdin=subprocess.DEVNULL,
+                timeout=GH_TIMEOUT_S,
+            )
+            if result.returncode == 0:
+                return result.stdout
+            err_msg = result.stderr.strip() or "failed"
+            if any(term in err_msg.lower() for term in ("rate limit", "secondary rate", "too many requests", "timed out", "connection reset")):
+                if attempt < max_retries - 1:
+                    time.sleep(delay)
+                    delay *= 2.0
+                    continue
+            raise RuntimeError(f"gh {' '.join(argv)}: {err_msg}")
+        except subprocess.TimeoutExpired as exc:
+            last_err = exc
+            if attempt < max_retries - 1:
+                time.sleep(delay)
+                delay *= 2.0
+                continue
+            raise RuntimeError(
+                f"gh {' '.join(argv)}: no response in {GH_TIMEOUT_S}s"
+            ) from exc
+    if last_err:
+        raise last_err
+    raise RuntimeError(f"gh {' '.join(argv)}: failed after {max_retries} attempts")
 
 
 def _direction_proof_for(path: str):
@@ -1469,6 +1518,8 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
                 capture_output=True,
                 text=True,
                 check=False,
+                stdin=subprocess.DEVNULL,
+                timeout=30.0,
             )
             if audit_proc.returncode != 0:
                 verdict.reasons.append(

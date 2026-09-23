@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 import tomllib
 from importlib.metadata import version
 from pathlib import Path
@@ -102,25 +101,55 @@ def test_retired_compatibility_modules_stay_removed() -> None:
 
 
 def test_detect_disagreement_can_produce_every_disagreement_kind() -> None:
-    """A DisagreementKind the SDK declares but detect_disagreement() can never actually
-    return is a live-looking capability nobody built — exactly the shape #543's route-canary
-    retirement left behind (deleted the only producer, never revisited the SDK enum). infra2-sdk
-    v1.0.0 removed the two values that were unreachable here (CANARY_APP_READINESS,
-    HEARTBEAT_PROBE_RESULT), so this now scans detect_disagreement()'s own source for which
-    members it references with no exemptions: every declared value must be reachable, or a
-    NEW unreachable value fails here immediately instead of requiring a fresh manual audit
-    across every consumer repo to notice."""
-    source = inspect.getsource(detect_disagreement)
-    reachable = {
-        member
-        for member in DisagreementKind
-        if f"DisagreementKind.{member.name}" in source
+    """Execute detect_disagreement with real StageResult inputs for all DisagreementKind enum values.
+
+    Anti-Tautology (Rule 7): tests real execution outcomes, never string-matching inspect.getsource.
+    """
+    from infra2_sdk.delivery import (
+        FailureDomain,
+        PipelineStage,
+        StageStatus,
+        make_stage_result,
+    )
+
+    normal_results = [
+        make_stage_result(
+            source="ci",
+            environment="staging",
+            stage=PipelineStage.WATCHDOG,
+            target="app",
+            status=StageStatus.PASS,
+        )
+    ]
+    assert detect_disagreement(normal_results) == DisagreementKind.NONE
+
+    disagreement_results = [
+        make_stage_result(
+            source="ci",
+            environment="staging",
+            stage=PipelineStage.WATCHDOG,
+            target="app",
+            status=StageStatus.PASS,
+        ),
+        make_stage_result(
+            source="ci",
+            environment="staging",
+            stage=PipelineStage.DEPLOY_SMOKE,
+            target="app",
+            status=StageStatus.FAIL,
+            failure_domain=FailureDomain.TRAEFIK_PUBLIC_ROUTE,
+        ),
+    ]
+    assert detect_disagreement(disagreement_results) == DisagreementKind.INTERNAL_HEALTH_PUBLIC_ROUTE
+
+    producers = {
+        DisagreementKind.NONE: lambda: detect_disagreement(normal_results),
+        DisagreementKind.INTERNAL_HEALTH_PUBLIC_ROUTE: lambda: detect_disagreement(disagreement_results),
     }
-    # NONE has an explicit `return DisagreementKind.NONE` fallthrough — a real, reachable
-    # return value like the rest.
-    assert reachable == set(DisagreementKind), (
-        f"detect_disagreement() can no longer produce: {set(DisagreementKind) - reachable}. "
-        "If this is deliberate (e.g. a producer was retired), either restore a producer or "
-        "remove the now-dead value from the SDK (major release, see its README "
-        "'Compatibility' section) as was done for CANARY_APP_READINESS/HEARTBEAT_PROBE_RESULT."
+    produced_kinds = {kind: fn() for kind, fn in producers.items()}
+    for kind, val in produced_kinds.items():
+        assert val == kind
+
+    assert set(producers.keys()) == set(DisagreementKind), (
+        f"Missing execution test for DisagreementKind: {set(DisagreementKind) - set(producers.keys())}"
     )
