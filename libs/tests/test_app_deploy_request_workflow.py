@@ -110,12 +110,26 @@ def test_secrets_are_scoped_to_the_steps_that_use_them() -> None:
     canary = step(jobs["preflight_canary"], "Canary the exact app and IaC coordinates")
     assert canary["env"]["DOKPLOY_API_KEY"] == "${{ secrets.DOKPLOY_API_KEY }}"
     assert "IAC_WEBHOOK_SECRET" not in str(jobs["preflight_canary"])
+    ssh_step = step(jobs["deploy"], "Configure SSH key for the pre-deploy schema gate")
+    assert (
+        ssh_step["env"]["INFRA2_WATCHDOG_SSH_PRIVATE_KEY"]
+        == "${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}"
+    )
     execute = step(jobs["deploy"], "Execute through deploy_v2")
     assert execute["env"]["DOKPLOY_API_KEY"] == "${{ secrets.DOKPLOY_API_KEY }}"
     assert execute["env"]["IAC_WEBHOOK_SECRET"] == "${{ secrets.IAC_WEBHOOK_SECRET }}"
+    assert execute["env"]["VPS_HOST"] == "${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}"
+    assert (
+        execute["env"]["INFRA2_WATCHDOG_SSH_HOST"]
+        == "${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}"
+    )
+    assert (
+        execute["env"]["INFRA2_WATCHDOG_SSH_USER"]
+        == "${{ secrets.INFRA2_WATCHDOG_SSH_USER }}"
+    )
     for job in jobs.values():
         for item in job["steps"]:
-            if item in (canary, execute):
+            if item in (canary, execute, ssh_step):
                 continue
             assert not SECRET_REF.search(str(item)), item.get("name")
 
