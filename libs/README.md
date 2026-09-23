@@ -1,137 +1,132 @@
-# Infra2 Internal Libraries
+# Infra2 Internal Libraries (`libs/`)
 
-> **Purpose**: Internal libraries used by deploy scripts and CLI tools. Stable
-> cross-repository contracts live in
-> [`infra2-sdk`](https://github.com/wangzitian0/infra2-sdk) and are imported directly.
-> The infra2 release pin is `v1.6.0`; adoption and Canary installation are
-> equality-guarded by `libs/tests/test_sdk_contract_adoption.py`.
+> **Purpose**: Internal domain packages, deployment backends, and platform clients used by deploy scripts, CLI tools, and background workers.
+> Stable cross-repository contracts live in [`infra2-sdk`](https://github.com/wangzitian0/infra2-sdk) and are imported directly.
+> The infra2 release pin is `v1.6.0`; adoption and equality are guarded by `libs/tests/test_sdk_contract_adoption.py`.
 
-## At a Glance
+---
 
-- **Domain Packages (SSOT)**: Core infrastructure capabilities are organized into 4 cohesive domain packages:
-  - `libs/core/`: The single immutable `Service` domain entity, typed `DeploymentEnvironment`, and invariant constants.
-  - `libs/security/`: Vault / 1Password secret resolution, supply pipelines, and orphan prune.
-  - `libs/backup/`: Backup verification, rehearsal specifications, and restore rehearsal execution.
-  - `libs/observability/`: Infrastructure probes, breakdown analyzers, watchers, and watchdog issue reconciliation.
-- `Deployer` + `make_tasks` standardize service deploy flows (via Dokploy API).
-- `iac_runner_client` signs exact operation requests and polls by deployment ID, 2 s first and growing to 10 s (truealpha#860).
-- `dokploy` wraps the Dokploy REST API for compose deployments.
-- `console` helpers keep CLI output consistent (Rich).
-- **Backward-Compatible Shims**: Legacy flat modules (`libs/env.py`, `libs/common.py`, `libs/secrets_supply.py`, `libs/service_registry.py`) provide PEP 484 re-exports to ensure zero breakage across existing consumers.
+## 🏛️ Architecture & Domain Packages (SSOT)
 
-## Module Map
+Infrastructure capabilities are organized into 5 cohesive domain packages. Each package is self-contained with its own localized `README.md`, domain entities, invariants, and tests:
 
-| Package / Module | Role | Key APIs |
-|------------------|------|----------|
-| `core/` | **SSOT** domain entities & environment | `Service`, `load_service_registry()`, `get_service()`, `DeploymentEnvironment`, `with_env_suffix()` |
-| `security/` | **SSOT** secrets resolution & prune | `generate_secret_token()`, `resolve_vault_token()`, `apply_secret_supply()`, `prune_orphan_secrets()` |
-| `backup/` | **SSOT** disaster recovery rehearsal | `RehearsalSpecification`, `create_rehearsal_plan()`, `execute_rehearsal()`, `load_backup_inventory()` |
-| `observability/` | **SSOT** probes, diagnosis & alerts | `BreakdownVerdict`, `analyze_container_logs()`, `reconcile_watchdog_issues()`, `probe_postgres()`, `probe_s3()` |
-| `deploy/deployer.py` | Deployment base class + task helpers | `Deployer`, `make_tasks()`, `Deployer.restart_dependents()` |
-| `iac_runner_client.py` | Signed IaC Runner operation client | `trigger_platform_deploy()`, `poll_platform_deploy_status()` |
-| `dokploy.py` | Dokploy API client | `DokployClient`, `get_dokploy()` |
-| `deploy/preview.py` | Dynamic preview lifecycle | `up()`, `down()` |
-| `app_deploy_request.py` | Fail-closed App request validation | `verify_production_evidence()`, `validate_request_authority()` |
-| `harness_manifest.py` | Read-only workspace inventory | `load_manifest()`, `validate_manifest()` |
-| `scheduler_peer_liveness.py` | Scheduler liveness check | `evaluate()`, `largest_gap()` |
-| `watchdog_issue_trail.py` | Red ops-checks issue deduplication | `record_verdicts()`, `reconcile()` |
-| `harness_status.py` | Repository pin/remote observation | `workspace_status()`, `repository_status()` |
-| `harness_sweep.py` | Read-only orchestrator sweep | `sweep()`, `sweep_once()`, `watch()` |
-| `env.py` (legacy shim) | Backward compatibility shim | `get_secrets`, `generate_password`, `vault_token` |
-| `common.py` (legacy shim) | Shared environment helpers | `get_env()`, `validate_env()`, `check_service()` |
-| `secrets_supply.py` (legacy shim) | Deploy-time secret supply shim | `apply()`, `resolver_for()` |
+| Domain Package | SSOT Role | Local Documentation | Key Capabilities & APIs |
+|----------------|-----------|---------------------|--------------------------|
+| [`core/`](./core/README.md) | **Domain Entities & Environment** | [core/README.md](./core/README.md) | Single immutable `Service` entity, typed `DeploymentEnvironment`, environment derivation (`with_env_suffix`), estate constants |
+| [`security/`](./security/README.md) | **Secret Supply & Vault Lifecycle** | [security/README.md](./security/README.md) | Vault KV & 1Password resolution (`VaultSecrets`), deploy-time secret supply pipeline (`apply_secret_supply`), token generation, orphan key pruning |
+| [`backup/`](./backup/README.md) | **Disaster Recovery & Rehearsal** | [backup/README.md](./backup/README.md) | Backup inventory discovery (`load_backup_inventory`), manifest verification, restore rehearsal specifications (`RehearsalSpecification`), sandboxed rehearsal execution |
+| [`observability/`](./observability/README.md) | **Probes, Triage & Watchdogs** | [observability/README.md](./observability/README.md) | In-band health probes (`ProbeSpec`, `execute_probe`), container breakdown log analysis (`analyze_container_logs`), watchdog issue trail reconciliation, alerting sidecar resident watchers |
+| [`deploy/`](./deploy/README.md) | **Deployment Engine & Promotion** | [deploy/README.md](./deploy/README.md) | Unified `Deployer` base class, fixed-environment promotion (`deploy()`), dynamic preview stack lifecycle (`up()`, `down()`), pre-deploy schema gate (`schema_gate`) |
 
-## Usage Patterns
+---
 
-### Secrets (SSOT-first)
+## 🔌 Platform Clients & Standalone Modules
 
-`get_secrets()` routes to the backend that owns the value (`credential_type`):
+Modules in `libs/` that provide direct integrations or operational clients:
 
-| Type | Backend | Path Format |
-|------|---------|-------------|
-| `None` (default) | Vault | `secret/data/{project}/{env}/{service}` |
-| `'app_vars'` | Vault | `secret/data/{project}/{env}/{service}` |
-| `'bootstrap'` | 1Password | `{project}/{service}` (no env) |
-| `'root_vars'` | 1Password | `{project}/{env}/{service}` |
+| Module | Purpose | Key Exports |
+|--------|---------|-------------|
+| [`dokploy.py`](./dokploy.py) | Dokploy REST API wrapper | `DokployClient`, `get_dokploy()` |
+| [`iac_runner_client.py`](./iac_runner_client.py) | Signed HMAC operation client for IaC Runner | `trigger_platform_deploy()`, `poll_platform_deploy_status()` |
+| [`app_deploy_request.py`](./app_deploy_request.py) | Fail-closed App deploy request validation | `verify_production_evidence()`, `validate_request_authority()` |
+| [`harness_manifest.py`](./harness_manifest.py) | Workspace inventory & autonomy boundary audit | `load_manifest()`, `validate_manifest()`, `check_workspace()` |
+| [`harness_status.py`](./harness_status.py) | Git checkout pin/remote/release observation | `workspace_status()`, `repository_status()` |
+| [`harness_sweep.py`](./harness_sweep.py) | Read-only orchestrator sweep for PRs & gates | `sweep()`, `sweep_once()`, `watch()` |
+| [`console.py`](./console.py) | Rich CLI formatting and header blocks | `header()`, `success()`, `error()`, `prompt_action()` |
+| [`availability_ledger.py`](./availability_ledger.py) | Pure availability ledger aggregation & uptime math | `aggregate_ledger()`, `calculate_uptime()` |
 
+---
+
+## 🛡️ Backward-Compatibility Shims (PEP 484)
+
+Legacy flat modules in `libs/` are preserved **strictly as backward-compatibility shims** to prevent breaking existing CLI tools and consumers during progressive migration.
+
+> [!IMPORTANT]
+> **Shim Boundary Policy**: Legacy shims re-export symbols from domain packages using PEP 484 `__all__`.
+> **Never add new business logic to shims.** All new features and refactorings must be implemented in and imported directly from the relevant domain package (`libs.core`, `libs.security`, `libs.backup`, `libs.observability`, `libs.deploy`).
+
+| Legacy Shim | Target Domain Package | Re-exported Symbols | Status |
+|-------------|-----------------------|---------------------|--------|
+| `libs/env.py` | `libs.security`, `libs.core` | `get_secrets`, `generate_password`, `vault_token`, `OpSecrets`, `VaultSecrets` | Frozen Shim |
+| `libs/common.py` | `libs.core` | `get_env`, `validate_env`, `check_service`, `CONTAINERS` | Frozen Shim |
+| `libs/secrets_supply.py` | `libs.security` | `apply`, `resolver_for`, `vault_backend` | Frozen Shim |
+| `libs/service_registry.py` | `libs.core` | `SERVICES`, `lookup`, `merged_manifest` | Frozen Shim |
+| `libs/backup_restore.py` | `libs.backup` | `build_postgres_rehearsal_plan`, `run_postgres_restore_rehearsal` | Frozen Shim |
+| `libs/backup_verification.py` | `libs.backup` | `load_backup_inventory`, `verify_backup_manifest` | Frozen Shim |
+| `libs/container_breakdown.py` | `libs.observability` | `analyze_container_logs`, `build_breakdown_alert_payload` | Frozen Shim |
+| `libs/infra_probes.py` | `libs.observability` | `execute_probe`, `run_probes`, `ProbeSpec` | Frozen Shim |
+| `libs/watchdog_issue_trail.py` | `libs.observability` | `reconcile`, `record_verdicts`, `load_trail` | Frozen Shim |
+
+---
+
+## 🚀 Recommended Usage Patterns
+
+### 1. Domain Entities & Registry (`libs.core`)
 ```python
-from libs.env import get_secrets
+from libs.core import get_service, load_service_registry, DeploymentEnvironment
 
-# Runtime values (Vault, default) — read here, written by the supply on deploy
-db_pass = get_secrets("platform", "postgres", "production").get("POSTGRES_PASSWORD")
-
-# Bootstrap credentials (1Password, no env layer)
-dokploy_key = get_secrets("bootstrap", "dokploy", credential_type="bootstrap").get("DOKPLOY_API_KEY")
-
-# Human-entered values (1Password, with env layer)
-webhook = get_secrets("platform", "alerting", "production", credential_type="root_vars").get("FEISHU_WEBHOOK_URL")
+service = get_service("platform/postgres")
+registry = load_service_registry()
+env = DeploymentEnvironment.from_str("staging")
 ```
 
-Writes go through the manifest, not `secrets.set` (see
-`docs/ssot/bootstrap.vars_and_secrets.md` §1.4):
-
+### 2. Secret Supply & Vault Access (`libs.security`)
 ```python
-from libs import secrets_registry, secrets_supply
+from libs.core import get_service
+from libs.security import apply_secret_supply, resolve_vault_token, VaultSecrets
 
-service = secrets_registry.lookup("platform", "alerting")
-report = secrets_supply.apply(service, "staging")   # names only: report.changed / report.missing
+service = get_service("platform/alerting")
+report = apply_secret_supply(service, env="staging")
+
+token = resolve_vault_token()
+client = VaultSecrets(token=token)
+secret = client.get("platform/postgres", "staging")
 ```
 
-`Deployer.apply_secret_supply` calls this in `pre_compose` for every registered service and
-restarts the vault-agent and app containers when a value changed; `tools/secrets_reconcile.py`
-re-checks every store daily (ops-checks). `invoke env.set` into Vault is break-glass only.
-
-### Init seed vars (1Password)
+### 3. Disaster Recovery & Rehearsal (`libs.backup`)
 ```python
-from libs.env import OpSecrets
+from libs.backup import RehearsalSpecification, create_rehearsal_plan, execute_rehearsal
 
-init = OpSecrets()  # defaults to init/env_vars in Infra2 vault
-vps_host = init.get("VPS_HOST")
+spec = RehearsalSpecification(
+    service_id="platform/postgres",
+    database_name="postgres",
+    target_container="test-rehearsal-postgres",
+    target_port=15432,
+)
+plan = create_rehearsal_plan(spec, snapshot_date="latest")
+result = execute_rehearsal(plan)
 ```
 
-### Deployer-based tasks
+### 4. Observability Probes & Log Triage (`libs.observability`)
+```python
+from libs.observability import ProbeSpec, execute_probe, analyze_container_logs
+
+spec = ProbeSpec(name="pg-tcp", kind="tcp", target="platform-postgres:5432")
+result = execute_probe(spec)
+
+verdict = analyze_container_logs("platform-alerting")
+if verdict.is_broken:
+    print(f"Container broken: {verdict.reason}")
+```
+
+### 5. Deployment & Task Generation (`libs.deploy`)
 ```python
 from libs.deploy.deployer import Deployer, make_tasks
+from libs.deploy.promote import deploy
+
+class CustomDeployer(Deployer):
+    service_id = "platform/custom"
+
+tasks = make_tasks(CustomDeployer)
 ```
 
-## CLI Output Conventions
+---
 
-- Use `libs.console.header()` at task boundaries to anchor logs.
-- Use `success()`/`warning()`/`error()`/`info()` for status lines; avoid raw `print`.
-- Use `run_with_status()` for remote commands so success/error is consistent.
-- Use `prompt_action()` for manual steps; keep instructions in the panel.
-- Use `console.print()` only for raw values, Rich tables, or command blocks that must remain unwrapped.
+## 🔗 Related References
 
-## Notes
-
-- Prefer explicit imports (e.g. `from libs.env import get_secrets`) over `from libs import ...` to avoid circular deps.
-- `libs.common.get_env()` reads from `init/env_vars` in 1Password; no local `.env` required.
-- `DEPLOY_ENV` selects the Dokploy Environment; env-scoped values (e.g. `DATA_PATH`, `ENV_SUFFIX`) should live in Dokploy Environment or CLI env when needed.
-- Public domains follow `{subdomain}{ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}` where `ENV_DOMAIN_SUFFIX` is `""` for production and `"-<env>"` for non-prod; `ENV` must not include `-` or `/` (use `_`, which is converted to `-` in domains).
-- `project`/`env`/`service` identifiers must not include `-` or `/` to keep `{project}/{env}/{service}` paths unambiguous.
-- `ENV_SUFFIX` is opt-in and only used when explicitly set.
-- `check_service()` uses the `CONTAINERS` mapping and quotes the local SSH shell and remote
-  `docker exec ... sh -lc` shell independently, so nested Python/URL quotes remain intact;
-  SigNoz runs as `platform-signoz`.
-- Non-production requires `DATA_PATH` or `ENV_SUFFIX` unless `ALLOW_SHARED_DATA_PATH=1` is set.
-- `DokployClient.update_compose_env()` parses basic `KEY=VALUE` lines only (no quoted/escaped/multiline values).
-- Dokploy deployment proof uses `deployment.allByCompose` before falling back to embedded compose snapshots.
-- Preview deployment proof snapshots deployment IDs before triggering, waits for that invocation's new terminal-good record, and then requires every service-configured public surface to serve the requested version. A stale old-stack 200 is never sufficient. The reserved canary is workflow-serialized; same-repository PRs bind a cloneable head branch to the exact head SHA; uncertain compose-create responses reconcile through the deterministic alias; and cleanup requires two consecutive absence observations.
-- Deployer identity has two planes: runtime `IAC_CONFIG_HASH` for idempotence, and versioned secret-free `IAC_SOURCE_CONFIG_HASH` plus exact `IAC_DEPLOY_REF` for release provenance. A Deployer declaring `runtime_only_config_keys` must provide an explicit source builder that never reads its secret backend.
-- Operational service identity is a third, metadata-only plane rendered by `service_identity.py`: registry-owned `service_id`/environment/component maps consistently to `INFRA_*`, OTEL resources, Docker labels and alert labels. It does not enter config hashes; missing/stale identity triggers one reconcile and post-deploy proof.
-- `service_registry.py` resolves Dokploy project/compose and legacy Docker container coordinates. Ambiguous or unknown runtime objects remain `infra/unregistered`; callers must not guess.
-- Dokploy API errors include method + endpoint context via `httpx` exceptions.
-- Production App requests use read-only GitHub API metadata to bind approved source/staging workflows and the merged review commit to the requested source SHA; their infra `iac_ref` follows the latest explicit production marker rather than an unpromoted staging candidate, and marker absence fails closed as unknown production state.
-- Infra contract and filesystem-discovery tests exclude `repos/`; workspace submodules own their own workflows and invariants.
-- Workflow contract tests enforce repository-wide minimum majors for official JavaScript Actions so new workflows cannot reintroduce unsupported runtimes.
-- `discover_services()` returns Invoke's CLI-normalized task names: service underscores become dashes (for example, `truealpha/data_engine` maps to `ta-data-engine.sync`), with a regression test against Invoke's `Collection.task_names` API.
-- `VaultSecrets` reads `VAULT_TOKEN` (the runner's AppRole token; `VAULT_ROOT_TOKEN` is a transition alias for one release) and `VAULT_ADDR` (or falls back to `https://vault.$INTERNAL_DOMAIN`).
-
-## References
-
-- **文档索引**: [docs/README.md](../docs/README.md)
-- **Project Portfolio**: [docs/project/README.md](../docs/project/README.md)
-- **AI 行为准则**: [AGENTS.md](../AGENTS.md)
-- **SSOT**: [docs/ssot/platform.automation.md](../docs/ssot/platform.automation.md)
-- **Core**: [docs/ssot/core.md](../docs/ssot/core.md)
-- **Platform**: [platform/README.md](../platform/README.md)
+- **SSOT Core Architecture**: [`docs/ssot/core.md`](../docs/ssot/core.md)
+- **SSOT Automation**: [`docs/ssot/platform.automation.md`](../docs/ssot/platform.automation.md)
+- **SSOT Pipeline**: [`docs/ssot/ops.pipeline.md`](../docs/ssot/ops.pipeline.md)
+- **SSOT Recovery**: [`docs/ssot/ops.recovery.md`](../docs/ssot/ops.recovery.md)
+- **SSOT Secrets**: [`docs/ssot/bootstrap.vars_and_secrets.md`](../docs/ssot/bootstrap.vars_and_secrets.md)
+- **AI Agent Guidelines**: [`AGENTS.md`](../AGENTS.md)
