@@ -151,3 +151,52 @@ def test_agents_md_names_no_guard_that_does_not_exist() -> None:
         + ", ".join(missing)
         + ". A guard that is only a name reads as covered and is not."
     )
+
+
+def test_agents_md_points_at_the_function_that_actually_decides_provability() -> None:
+    """AGENTS.md §6 stopped listing the provable files and now points at the code.
+
+    It lives beside `test_agents_md_names_no_guard_that_does_not_exist` because
+    it is the same job: a reference in AGENTS.md has to resolve. That one checks
+    backticked *paths*, this one checks a *symbol*, and a rename defeats exactly
+    one of them. It is deliberately not in test_pr_merge_gate.py -- that file is
+    inside the gate's own self-governing closure, and a new guard over the
+    prose does not belong to the case that closure exists for.
+
+    The list was duplicated prose: it named `ci-gate-inventory.yaml` alone while
+    `_direction_proof_for` had since added every `.github/workflows/` path by
+    prefix. Two copies drift, and this one drifted *strict* -- which is not the
+    safe direction it sounds like. Someone following the prose asks the owner
+    once too often; someone following the code asks once too seldom, and which
+    copy gets read first is luck (#855).
+
+    A pointer only helps while it resolves. The existing guard checks that
+    backticked *paths* in AGENTS.md exist; this checks the *symbol*, because a
+    rename would leave the path valid and the sentence meaningless.
+    """
+    from pathlib import Path as _Path
+
+    import tools.pr_merge_gate as gate
+
+    name = "_direction_proof_for"
+    assert hasattr(gate, name), (
+        f"AGENTS.md §6 delegates the provable-file question to {name}(), which no "
+        "longer exists in tools/pr_merge_gate.py. Either restore it or rewrite "
+        "the rule -- a rule that points at nothing is worse than one that repeats "
+        "itself, because it reads as delegated."
+    )
+    agents = (_Path(__file__).resolve().parents[2] / "AGENTS.md").read_text(
+        encoding="utf-8"
+    )
+    assert name in agents, (
+        f"AGENTS.md no longer names {name}(). If the delegation moved, this test "
+        "is the thing that was holding the prose and the code together."
+    )
+    # And the delegation has to be live: the function must still answer for the
+    # two shapes the rule is about, or the prose is describing something else.
+    assert gate._direction_proof_for("docs/ssot/ci-gate-inventory.yaml") is not None
+    assert gate._direction_proof_for(".github/workflows/infra-ci.yml") is not None
+    assert gate._direction_proof_for("tools/pr_merge_gate.py") is None, (
+        "the gate's own Python must stay unprovable; if it gained a proof, the "
+        "defendant can now rewrite the law and show a certificate for it"
+    )
