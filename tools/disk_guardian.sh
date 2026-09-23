@@ -4,7 +4,7 @@
 set -euo pipefail
 
 DATA_PATH="${DISK_GUARDIAN_DATA_PATH:-/data}"
-LOG_ROOT="${DISK_GUARDIAN_LOG_ROOT:-/var/lib/docker/containers}"
+LOG_ROOT="${DISK_GUARDIAN_LOG_ROOT:-}"
 WARNING_PERCENT=80
 CRITICAL_PERCENT=85
 LOG_LIMIT_BYTES=$((100 * 1024 * 1024))
@@ -23,6 +23,11 @@ disk_percent() {
   fi
   printf '%s\n' "${percent}"
 }
+
+if [[ -z "${LOG_ROOT}" ]]; then
+  docker_root="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || true)"
+  LOG_ROOT="${docker_root:-/var/lib/docker}/containers"
+fi
 
 ping_check() {
   local variable="$1" suffix="${2:-}" url

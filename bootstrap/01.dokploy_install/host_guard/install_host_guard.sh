@@ -17,8 +17,8 @@ if [[ ! -f "${ENV_FILE}" ]]; then
   echo "missing root-only host guard environment file: ${ENV_FILE}" >&2
   exit 1
 fi
-if [[ "$(stat -c '%a:%u' "${ENV_FILE}")" != "600:0" ]]; then
-  echo "${ENV_FILE} must be mode 0600 and owned by root" >&2
+if [[ "$(stat -c '%a:%u:%g' "${ENV_FILE}")" != "600:0:0" ]]; then
+  echo "${ENV_FILE} must be root:root with mode 0600" >&2
   exit 1
 fi
 set -a

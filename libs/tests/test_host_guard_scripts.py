@@ -30,6 +30,7 @@ def guard_host(tmp_path: Path) -> dict[str, str]:
         ),
         "docker": (
             '#!/bin/sh\nprintf "docker %s\\n" "$*" >> "$GUARD_COMMANDS"\n'
+            'if [ "$1" = info ]; then printf "%s\\n" "${FAKE_DOCKER_ROOT:-/var/lib/docker}"; exit 0; fi\n'
             'if [ -n "${FAKE_DISK_PERCENT_AFTER_PRUNE:-}" ]; then '
             'printf "%s" "$FAKE_DISK_PERCENT_AFTER_PRUNE" > "$FAKE_DISK_PERCENT_FILE"; fi\n'
             'test "${FAKE_PRUNE_OK:-1}" = 1\n'
@@ -122,6 +123,27 @@ def test_disk_guardian_critical_truncates_large_log_and_signals_failure(
     result = _run("disk_guardian.sh", guard_host)
     assert result.returncode == 1
     assert large_log.stat().st_size == 0
+    assert f"{PING_URL}/fail" in _commands(guard_host)
+
+
+def test_disk_guardian_finds_logs_under_docker_data_root(
+    guard_host, tmp_path: Path
+) -> None:
+    guard_host["FAKE_DISK_PERCENT"] = "85"
+    docker_root = tmp_path / "docker"
+    log_dir = docker_root / "containers"
+    log_dir.mkdir(parents=True)
+    large_log = log_dir / "container-json.log"
+    with large_log.open("wb") as handle:
+        handle.truncate(101 * 1024 * 1024)
+    guard_host.pop("DISK_GUARDIAN_LOG_ROOT")
+    guard_host["FAKE_DOCKER_ROOT"] = str(docker_root)
+
+    result = _run("disk_guardian.sh", guard_host)
+
+    assert result.returncode == 1
+    assert large_log.stat().st_size == 0
+    assert "docker info --format" in _commands(guard_host)
     assert f"{PING_URL}/fail" in _commands(guard_host)
 
 
