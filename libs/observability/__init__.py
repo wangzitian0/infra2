@@ -23,6 +23,10 @@ from libs.observability.issue_trail import (
     reconcile_watchdog_issues,
     record_verdicts,
 )
+from libs.observability.openpanel import (
+    OPENPANEL_CLIENTS,
+    openpanel_env,
+)
 from libs.observability.probes import (
     DEFAULT_TIMEOUT_SECONDS,
     ProbeSpec,
@@ -47,6 +51,8 @@ __all__ = [
     "GitHubIssueClient",
     "GitHubIssues",
     "IssueApi",
+    "OPENPANEL_CLIENTS",
+    "openpanel_env",
     "ProbeSpec",
     "Trail",
     "analyze_container_logs",

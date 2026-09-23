@@ -15,7 +15,7 @@ Platform services use **vault-init pattern**:
 |-------|----------|----------|
 | `01-09` | **Databases** | `01.postgres`, `02.redis`, `03.clickhouse`, `03.minio` |
 | `10-19` | **Auth, Observability & Alerting** | `10.authentik`, `11.signoz`, `12.alerting` |
-| `20-29` | **Portal & Applications** | `21.portal`, `23.prefect`, `24.openpanel` |
+| `20-29` | **Portal & Applications** | `21.portal`, `23.prefect`, `24.openpanel`, `25.free` |
 
 ## Service Directory
 
@@ -42,6 +42,7 @@ platform/{nn}.{service}/
 - [Portal](./21.portal/README.md) - Internal dashboard
 - [Prefect](./23.prefect/README.md) - Workflow orchestration (Prefect)
 - [OpenPanel](./24.openpanel/README.md) - Product analytics (shared Postgres/Redis; dedicated `op-ch` ClickHouse 25.10)
+- [Free Gateway](./25.free/README.md) - Gateway service for free.zitian.party
 
 ## Prerequisites
 

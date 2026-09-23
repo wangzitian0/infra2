@@ -57,7 +57,7 @@ Project closed on 2025-12-30; list retained for record.
 - [x] `docs/README.md`: 外链指向 `tools/README.md`，本仓库不存在 `tools/` 目录（已改为文本说明）。
 - [x] `docs/README.md`: 外链指向 `envs/README.md`，本仓库不存在 `envs/` 目录（已改为文本说明）。
 - [x] `docs/README.md`: 外链指向 `apps/README.md`，本仓库不存在 `apps/` 目录（已改为文本说明）。
-- [x] `docs/README_tempate.md`: 模板内的占位链接不存在（已改为纯文本路径示例）。
+- [x] `docs/README_template.md`: 模板内的占位链接不存在（已改为纯文本路径示例）。
 - [x] `bootstrap/README.md`: 目录索引包含 `./06.casdoor/`（已改为非链接说明）。
 - [x] `e2e_regressions/tests/bootstrap/README.md`: 指向缺失 SSOT（已改为 `core.md` / `ops.storage.md`）。
 - [x] `e2e_regressions/tests/bootstrap/README.md`: 指向缺失 SSOT（已改为 `core.md` / `ops.storage.md`）。

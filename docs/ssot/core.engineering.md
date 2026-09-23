@@ -70,7 +70,7 @@
 | **SSOT** | `docs/ssot/` | 复杂话题集中管理，技术参考手册 | 所有人 |
 | **开发者体验** | `docs/onboarding/` | 场景驱动，注重接入顺滑 | 应用开发者 |
 
-> README 模板见 [docs/README_tempate.md](../README_tempate.md)。
+> README 模板见 [docs/README_template.md](../README_template.md)。
 > `docs/ssot/README.md` 由 `docs/ssot/MANIFEST.yaml` 生成，改索引文字要改 MANIFEST 而不是 README。
 > `docs/project/README.md` 同理，由各 `Infra-NNN` 文档自己的 H1 与 Status 行生成
 > （`tools/gen_project_index.py`）——改索引要改那份文档，不是改索引。
