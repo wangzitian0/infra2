@@ -185,7 +185,7 @@ python -m tools.deploy_v2 --service finance_report/app --type staging --version-
 - ✅ 性能基准测试
 - ✅ 安全扫描 (OWASP ZAP)
 - ✅ 数据库迁移测试
-- ✅ 备份恢复测试
+- ⏳ 新备份路径的 Staging 全状态恢复测试待验收（见 Infra-022 T2.1/T2.2）
 
 **迭代速度**: ⚡⚡ (天级)
 
@@ -196,10 +196,10 @@ python -m tools.deploy_v2 --service finance_report/app --type staging --version-
 **位置**: VPS (Dokploy)  
 **用途**: 生产服务、真实用户访问  
 **特点**:
-- ✅ **高可用** - 监控、告警、备份
+- ⏳ **单机韧性** - 监控、告警、备份持续建设；单 VPS 尚无主机级高可用
 - ✅ **性能优化** - 缓存、CDN、数据库优化
 - ✅ **安全加固** - WAF、Rate limiting、Audit logs
-- ✅ **数据备份** - 每日备份到 Google Drive (rclone crypt 客户端加密)
+- ⏳ **数据备份** - 当前主机按周上传 Google Drive（rclone crypt 客户端加密）；全状态覆盖和恢复证明待验收，实时状态见 [Infra-022](../project/Infra-022.production_resilience_and_dr.md)
 
 **配置**:
 ```bash
@@ -229,12 +229,12 @@ python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref
 
 ### 3.6 DR (灾备环境)
 
-**位置**: 备用 VPS (或 Google Drive 异地加密存储)  
+**位置**: Google Drive 异地加密存储；备用 VPS 恢复环境尚未验收\
 **用途**: 数据备份、灾难恢复  
 **特点**:
-- ✅ **冷备份** - 数据定期加密同步至异地存储，不常驻冗余实例
-- ✅ **沙箱演练** - 支持自动化沙箱还原演练（SOP-006A，秒级验证业务数据完整性）
-- ✅ **分级保留** - 周备保留 60 天（滑动窗口），季度长存快照保留 2 年（730 天）
+- ⏳ **冷备份** - 已有定期异地加密备份；已声明的 17 个 `BackupFacet` 备份项仍待逐项完成生产验收（17/17）
+- ⏳ **沙箱演练** - 已有部分数据库的单次恢复证明；新路径需连续两个周周期验证，整机恢复另行演练（见 [ops.recovery.md](./ops.recovery.md) SOP-006A/SOP-006B）
+- ⏳ **分级保留** - 代码定义周备保留 60 天、季度快照保留 730 天；运行效果待验收
 
 **配置**:
 ```bash
@@ -244,8 +244,8 @@ python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref
 # 数据目录 → tar.gz (crash-consistent) → Google Drive (rclone crypt)
 ```
 
-**恢复 SLA**: < 1 小时 (RTO，沙箱 DB 还原实测 < 30 秒)  
-**数据丢失**: < 24 小时 (RPO)
+**恢复目标**: 整机 RTO < 1 小时；尚无整机演练实测值，数据库沙箱恢复耗时不能代替整机 RTO。
+**数据丢失目标**: RPO < 24 小时；当前每周备份计划不能满足该目标。`BackupFacet` 的备份新鲜度判定以各服务 `rpo_hours` 为准（未显式声明时默认 180 小时），运行覆盖与实际 RPO 仍待验证。
 
 ---
 
