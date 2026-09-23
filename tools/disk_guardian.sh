@@ -58,8 +58,8 @@ if [[ "${DRY_RUN}" == true ]]; then
   echo "[dry-run] docker image prune -f --filter dangling=true"
   echo "[dry-run] docker builder prune -f --filter until=24h"
 else
-  if ! timeout 45 docker image prune -f --filter dangling=true; then cleanup_failed=true; fi
-  if ! timeout 45 docker builder prune -f --filter until=24h; then cleanup_failed=true; fi
+  if ! timeout 15 docker image prune -f --filter dangling=true; then cleanup_failed=true; fi
+  if ! timeout 15 docker builder prune -f --filter until=24h; then cleanup_failed=true; fi
 fi
 if [[ "${cleanup_failed}" == true ]]; then
   echo "disk_guardian: safe cleanup failed" >&2
