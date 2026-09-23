@@ -703,6 +703,42 @@ def test_enforce_returns_data_lane():
     assert enforce_data_lane_red_lines(target, code_reviewed=True) == "prod"
 
 
+def test_enforce_data_lane_snapshot_freshness_warning(monkeypatch, tmp_path, caplog):
+    import json
+    import logging
+    from datetime import datetime, timezone, timedelta
+    from libs.deploy_contract import make_deploy_target
+    import tools.deploy_v2 as dv2_mod
+
+    old_time = (datetime.now(timezone.utc) - timedelta(days=8)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"generated_at": old_time}), encoding="utf-8")
+
+    target = make_deploy_target(
+        service="finance_report/app",
+        env="staging",
+        code_version=SHA_CODE,
+        iac_ref=SHA_IAC,
+    )
+    with monkeypatch.context() as m:
+        orig_path = dv2_mod.Path
+        m.setattr(
+            dv2_mod,
+            "Path",
+            lambda p: (
+                manifest
+                if str(p) == "/data/backups/anonymized/manifest.json"
+                else orig_path(p)
+            ),
+        )
+        with caplog.at_level(logging.WARNING, logger="deploy_v2"):
+            lane = enforce_data_lane_red_lines(target)
+            assert lane == "staging"
+            assert "older than 7 days" in caplog.text
+
+
 # --- CLI entry (the cutover seam) ------------------------------------------
 
 
