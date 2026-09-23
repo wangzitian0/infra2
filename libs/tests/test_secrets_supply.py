@@ -12,7 +12,7 @@ import urllib.request
 import pytest
 
 import libs.deploy.deployer as deployer_module
-from libs import secrets_supply
+from libs.security import supply as secrets_supply
 from libs.deploy.deployer import Deployer
 from libs.secrets_supply import SupplyReport, TransientTransportError
 
