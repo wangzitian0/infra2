@@ -3,39 +3,43 @@
 > **Purpose**: Internal libraries used by deploy scripts and CLI tools. Stable
 > cross-repository contracts live in
 > [`infra2-sdk`](https://github.com/wangzitian0/infra2-sdk) and are imported directly.
-> The infra2 release pin is `v1.5.1`; adoption and Canary installation are
+> The infra2 release pin is `v1.6.0`; adoption and Canary installation are
 > equality-guarded by `libs/tests/test_sdk_contract_adoption.py`.
 
 ## At a Glance
 
-- `get_secrets` selects `OpSecrets` (1Password) or `VaultSecrets` (Vault) — thin shims over the infra2-sdk backends — for reads.
-- `secrets_registry` + `secrets_supply` are the one writer of Vault: every deploy applies the service's manifest (copy human values from 1Password, generate runtime values, mirror back, report what is missing by name).
-- `Deployer` + `make_tasks` standardize service deploy flows (now via Dokploy API).
+- **Domain Packages (SSOT)**: Core infrastructure capabilities are organized into 4 cohesive domain packages:
+  - `libs/core/`: The single immutable `Service` domain entity, typed `DeploymentEnvironment`, and invariant constants.
+  - `libs/security/`: Vault / 1Password secret resolution, supply pipelines, and orphan prune.
+  - `libs/backup/`: Backup verification, rehearsal specifications, and restore rehearsal execution.
+  - `libs/observability/`: Infrastructure probes, breakdown analyzers, watchers, and watchdog issue reconciliation.
+- `Deployer` + `make_tasks` standardize service deploy flows (via Dokploy API).
 - `iac_runner_client` signs exact operation requests and polls by deployment ID, 2 s first and growing to 10 s (truealpha#860).
 - `dokploy` wraps the Dokploy REST API for compose deployments.
-- `backup_restore` verifies off-host backup manifests and builds guarded restore rehearsal plans.
 - `console` helpers keep CLI output consistent (Rich).
+- **Backward-Compatible Shims**: Legacy flat modules (`libs/env.py`, `libs/common.py`, `libs/secrets_supply.py`, `libs/service_registry.py`) provide PEP 484 re-exports to ensure zero breakage across existing consumers.
 
 ## Module Map
 
-| Module | Role | Key APIs |
-|--------|------|----------|
-| `env.py` | **Core** SSOT secrets access | `OpSecrets`, `VaultSecrets`, `get_secrets`, `generate_password` |
-| `secrets_registry.py` | Which manifests describe each deployed service | `SERVICES`, `lookup()`, `merged_manifest()` |
-| `secrets_supply.py` | Deploy-time secret supply through the SDK resolver | `apply()`, `resolver_for()`, `vault_backend()` |
-| `common.py` | Shared environment helpers | `get_env()`, `validate_env()`, `check_service()` |
-| `console.py` | Rich CLI output | `header()`, `success()`, `error()`, `prompt_action()` |
-| `deploy/deployer.py` | Deployment base class + task helpers (`apply_secret_supply` runs on every sync; a skipped sync still proves the containers are in service, a deploy also proves the checkout and then restarts the services that declared `restart_after` it, #726) | `Deployer`, `make_tasks()`, `Deployer.restart_dependents()` |
-| `iac_runner_client.py` | Signed IaC Runner operation client | `trigger_platform_deploy()`, `poll_platform_deploy_status()`, `status_poll_delays()`, `status_poll_attempts()` |
+| Package / Module | Role | Key APIs |
+|------------------|------|----------|
+| `core/` | **SSOT** domain entities & environment | `Service`, `load_service_registry()`, `get_service()`, `DeploymentEnvironment`, `with_env_suffix()` |
+| `security/` | **SSOT** secrets resolution & prune | `generate_secret_token()`, `resolve_vault_token()`, `apply_secret_supply()`, `prune_orphan_secrets()` |
+| `backup/` | **SSOT** disaster recovery rehearsal | `RehearsalSpecification`, `create_rehearsal_plan()`, `execute_rehearsal()`, `load_backup_inventory()` |
+| `observability/` | **SSOT** probes, diagnosis & alerts | `BreakdownVerdict`, `analyze_container_logs()`, `reconcile_watchdog_issues()`, `probe_postgres()`, `probe_s3()` |
+| `deploy/deployer.py` | Deployment base class + task helpers | `Deployer`, `make_tasks()`, `Deployer.restart_dependents()` |
+| `iac_runner_client.py` | Signed IaC Runner operation client | `trigger_platform_deploy()`, `poll_platform_deploy_status()` |
 | `dokploy.py` | Dokploy API client | `DokployClient`, `get_dokploy()` |
-| `deploy/preview.py` | Dynamic preview lifecycle with trigger-bound terminal rollout and per-surface exact-version readiness | `up()`, `down()` |
-| `backup_restore.py` | Off-host backup restore rehearsal helpers | `latest_artifact_for_service()`, `build_postgres_rehearsal_plan()`, `run_postgres_restore_rehearsal()` |
-| `app_deploy_request.py` | Fail-closed App request validation, Production evidence verification, and deploy planning | `verify_production_evidence()`, `validate_request_authority()`, `make_plan()` |
-| `harness_manifest.py` | Read-only workspace inventory and autonomy-boundary validation | `load_manifest()`, `validate_manifest()`, `check_workspace()` |
-| `scheduler_peer_liveness.py` | truealpha#876 peer check: is truealpha's scheduler-liveness workflow still ticking (bound measured from its crons; unreadable = red) | `evaluate()`, `github_getter()`, `largest_gap()`, `parse_bound_cap_hours()` |
-| `watchdog_issue_trail.py` | truealpha#876 W4: one GitHub issue per red ops-checks watchdog check (exact-title dedup, closes on green, drill never closes) | `record_verdicts()`, `load_trail()`, `issue_trail_mode()`, `reconcile()`, `GitHubIssues` |
-| `harness_status.py` | Checkout pin/remote/release observation; verifies repository roots before fetching so empty submodules cannot report their parent | `workspace_status()`, `repository_status()` |
-| `harness_sweep.py` | Read-only orchestrator sweep: one state per watched agent/PR/release log/workflow run/worktree; waits only on allow-listed facts, judges gates by exit code, refuses mutating gate flags | `sweep()`, `sweep_once()`, `watch()`, `classify_pr()`, `load_items()` |
+| `deploy/preview.py` | Dynamic preview lifecycle | `up()`, `down()` |
+| `app_deploy_request.py` | Fail-closed App request validation | `verify_production_evidence()`, `validate_request_authority()` |
+| `harness_manifest.py` | Read-only workspace inventory | `load_manifest()`, `validate_manifest()` |
+| `scheduler_peer_liveness.py` | Scheduler liveness check | `evaluate()`, `largest_gap()` |
+| `watchdog_issue_trail.py` | Red ops-checks issue deduplication | `record_verdicts()`, `reconcile()` |
+| `harness_status.py` | Repository pin/remote observation | `workspace_status()`, `repository_status()` |
+| `harness_sweep.py` | Read-only orchestrator sweep | `sweep()`, `sweep_once()`, `watch()` |
+| `env.py` (legacy shim) | Backward compatibility shim | `get_secrets`, `generate_password`, `vault_token` |
+| `common.py` (legacy shim) | Shared environment helpers | `get_env()`, `validate_env()`, `check_service()` |
+| `secrets_supply.py` (legacy shim) | Deploy-time secret supply shim | `apply()`, `resolver_for()` |
 
 ## Usage Patterns
 
