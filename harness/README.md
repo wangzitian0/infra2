@@ -83,6 +83,32 @@ These guides are defaults for root workspace work. Inside a nested repository, i
 `AGENTS.md`, architecture documents, and contributor guides take precedence. Adoption by
 an autonomous App is an App decision, not a harness synchronization task.
 
+## Rendered Skills (`skills/`)
+
+`skills/` is a **rendered artifact, not a source**. Each `skills/<name>/SKILL.md` is
+copied byte-for-byte from the workspace source of truth (`dev_env/skills/common/<name>/`)
+by `ws-skills-sync`, which also runs `--check` to prove the copy is identical by SHA-256.
+Editing a file under `skills/` here does not reach the source: the next sync overwrites
+it, and until then every other repository disagrees with this one. Fix the source, then
+re-sync every repository.
+
+Only the shippable half is vendored. Each skill upstream is split in two so that "1:1"
+is a hash comparison rather than a human reading of derived text:
+
+| Upstream file | Vendored here | Why |
+|---|---|---|
+| `SKILL.md` | yes | Carries no identity and no environment coupling; safe in a public repository |
+| `local.md` | no | Holds vault names, absolute home paths, and workspace-only tooling |
+
+The split is enforced upstream by a guard over both failure modes: identity leak (a vault
+name or home path reaching a public repository, which no later commit can undo) and
+environment coupling (an instruction naming a command that exists on one machine, which
+is unfollowable everywhere else). That guard is a floor, not a proof — it has twice been
+extended only after a human reviewer found what it missed.
+
+The boundary this sits under, and why a committed copy does not break one-way flow, is
+[Harness Control Plane SSOT §5.1](../docs/ssot/core.harness.md#51-harness-三方边界2026-09-23-owner-裁定).
+
 ## Ownership Boundary
 
 The harness owns coordination metadata, not cross-repository source coupling. Production
