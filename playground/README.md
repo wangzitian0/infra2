@@ -29,3 +29,5 @@ curl -s -o /dev/null -w 'quote: %{http_code}\n' -H 'User-Agent: Mozilla/5.0' \
 curl -s -o /dev/null -w 'chart: %{http_code}\n' -H 'User-Agent: Mozilla/5.0' \
   'https://query2.finance.yahoo.com/v8/finance/chart/AAPL?interval=1d&range=5d'
 ```
+
+<!-- acceptance probe for #817: this line exists only to make a PR whose entire diff lies outside the deleted path filter. Not for merge. -->
