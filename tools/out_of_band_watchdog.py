@@ -1006,6 +1006,16 @@ def _suggested_action_for_failure(name: str, failure_domain: str) -> str:
 
 
 def _runbook_url_for_failure(failure_domain: str) -> str:
+    if failure_domain in {"host-reachability", "docker-runtime"}:
+        anchor = (
+            "#watchdog-silent"
+            if failure_domain == "host-reachability"
+            else "#container-killed"
+        )
+        return (
+            "https://github.com/wangzitian0/infra2/blob/main/"
+            f"docs/runbooks/infra022-p0.md{anchor}"
+        )
     if failure_domain == "state-discrepancy":
         return (
             "https://github.com/wangzitian0/infra2/blob/main/"
@@ -1020,8 +1030,6 @@ def _runbook_url_for_failure(failure_domain: str) -> str:
     anchor = "#out-of-band-watchdog"
     if failure_domain == "alert-bridge":
         anchor = "#alerting-bridge"
-    elif failure_domain in {"host-reachability", "docker-runtime"}:
-        anchor = "#verification"
     return (
         "https://github.com/wangzitian0/infra2/blob/main/platform/12.alerting/README.md"
         f"{anchor}"

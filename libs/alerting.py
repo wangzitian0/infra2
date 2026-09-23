@@ -17,6 +17,15 @@ SIGNOZ_ALERT_VERSION = "v5"
 MAX_ALERT_LINES = 8
 MAX_MESSAGE_CHARS = 3500
 TRUNCATION_SUFFIX = "\n...[truncated]"
+_P0_RUNBOOK_BASE = (
+    "https://github.com/wangzitian0/infra2/blob/main/docs/runbooks/infra022-p0.md"
+)
+_RUNBOOK_BY_ALERT = {
+    "ContainerBreakdown": f"{_P0_RUNBOOK_BASE}#container-killed",
+    "DeployQueueStuck": f"{_P0_RUNBOOK_BASE}#deployment-failed",
+    "InfraServiceProbeFailed": _P0_RUNBOOK_BASE,
+    "InfraPublicRouteProbeFailed": _P0_RUNBOOK_BASE,
+}
 
 
 class AlertingError(Exception):
@@ -186,18 +195,30 @@ def build_feishu_alert_card(payload: dict[str, Any]) -> dict[str, Any]:
         )
 
     external_url = payload.get("externalURL")
+    actions: list[dict[str, Any]] = []
     if isinstance(external_url, str) and external_url.startswith("http"):
+        actions.append(
+            {
+                "tag": "button",
+                "text": {"tag": "plain_text", "content": "Open in SigNoz"},
+                "url": external_url,
+                "type": "primary",
+            }
+        )
+    if runbook_url := _RUNBOOK_BY_ALERT.get(alert_name):
+        actions.append(
+            {
+                "tag": "button",
+                "text": {"tag": "plain_text", "content": "Open runbook"},
+                "url": runbook_url,
+                "type": "default",
+            }
+        )
+    if actions:
         elements.append(
             {
                 "tag": "action",
-                "actions": [
-                    {
-                        "tag": "button",
-                        "text": {"tag": "plain_text", "content": "Open in SigNoz"},
-                        "url": external_url,
-                        "type": "primary",
-                    }
-                ],
+                "actions": actions,
             }
         )
 
@@ -257,6 +278,8 @@ def format_signoz_alert(payload: dict[str, Any]) -> str:
     external_url = payload.get("externalURL")
     if isinstance(external_url, str) and external_url:
         lines.append(f"SigNoz: {external_url}")
+    if runbook_url := _RUNBOOK_BY_ALERT.get(alert_name):
+        lines.append(f"Runbook: {runbook_url}")
 
     for index, alert in enumerate(alerts[:MAX_ALERT_LINES], start=1):
         if not isinstance(alert, dict):
