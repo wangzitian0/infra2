@@ -111,13 +111,14 @@ graph TD
 
 ```json
 {
+  "environment": "production",
   "artifacts": [
     {
       "service_id": "platform/postgres",
       "created_at": "2026-06-05T00:00:00Z",
       "size_bytes": 123456,
       "sha256": "<64 hex chars>",
-      "remote_uri": "gdrive-backup:infra2/weekly/20260920T033000Z/platform/postgres/archive.tar.gz"
+      "remote_uri": "gdrive-backup:infra2/weekly/production/20260920T033000Z/platform/postgres/archive.tar.gz"
     }
   ]
 }
@@ -227,8 +228,13 @@ Scheduled on the host via crontab:
 0 4 1 1,4,7,10 * BACKUP_REMOTE=gdrive-backup:infra2 BACKUP_TIER=quarterly /usr/local/sbin/infra2-host-backup.sh >> /var/log/infra2-backup-quarterly.log 2>&1
 ```
 
-> **OFF-HOST STATUS**: **ACTIVE**. Off-host logical backups are encrypted end-to-end
-> (`rclone crypt`) and uploaded to Google Drive (`gdrive-backup:infra2`).
+> **OFF-HOST STATUS**: Transport active; full-state coverage unverified.
+> The encrypted `rclone crypt` remote is readable and writable, but the latest
+> observed legacy root manifest contained only 9 of 17 declared services and
+> no environment marker. Production and Staging are not considered fully
+> protected until each has a fresh 17/17 off-host manifest and downloaded
+> archives pass size/SHA256 checks and isolated restore checks.
+> Backups are uploaded to Google Drive (`gdrive-backup:infra2`).
 > The root of trust is 1Password (`bootstrap/gdrive`). To restore credentials on a
 > fresh host: `op item get "bootstrap/gdrive" --vault "Infra2" --fields "rclone_conf" > ~/.config/rclone/rclone.conf`.
 > The off-host manifest is verified with SOP-004.

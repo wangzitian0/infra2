@@ -95,7 +95,7 @@
 |---|---|---|---|
 | 1 | Docker 日志限额 | 所有容器日志受限 ≤ 150MB | `docker inspect -f '{{json .HostConfig.LogConfig.Config}}' <c>` 包含 `max-size: 50m` |
 | 2 | 磁盘自愈机制 | 模拟使用率超标触发清理与通知 | `fallocate` 触发 `disk_guardian.sh`，确认 dangling 缓存清除且告警送达 |
-| 3 | 异地备份就绪 | Google Drive 存在加密备份包且 SHA256 吻合 | `rclone lsd gdrive-backup:infra2/` 验证目录存在且可读写 |
+| 3 | 异地备份就绪 | Production 与 Staging 各有最新的 17/17 环境专属清单；每项远端归档可重新下载并通过字节数与 SHA256 校验，关键状态可在隔离实例恢复 | 分别从 `gdrive-backup:infra2/{production,staging}/manifest.json` 下载清单；用 `tools/backup_verification.py` 校验覆盖与时效，逐项从清单的 `remote_uri` 下载重算大小和 SHA256，再执行隔离恢复；仅列出远端目录不构成验收 |
 | 4 | 恢复演练闭环 | 自动化还原 Production 异地备份到临时库并通过 SQL 抽样 | `tools/run_restore_rehearsal.py --service-id all` 在新环境标记与最新指针上连续两个周周期跑通，每个服务各输出 `RESTORE_PROOF: PASS`，退出码 0；旧路径曾单次 10.62s 通过，不能代替此项 |
 | 5 | 死人开关兜底 | 宿主机断网 10 分钟外部独立告警 | 停止心跳上报，Healthchecks.io 外部通道（飞书/邮件）在 10 分钟内报警 |
 | 6 | Schema Gate 门禁 | 数据库与代码 Enum/Schema 不一致即阻断；缺输入（无 DB URL / 枚举载入失败）同样阻断；且真的接在 `deploy_v2` 的部署路径上，不只是模块自证 | `pytest libs/tests/test_pre_deploy_schema_check.py libs/tests/test_schema_gate.py libs/tests/test_deploy_primitive.py -k schema_gate` 全绿；实机验证见 TODOWRITE 第 20 条 |
