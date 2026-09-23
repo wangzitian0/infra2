@@ -65,7 +65,8 @@ if ! ping_check DISK_GUARDIAN_WARNING_PING_URL /fail; then
   warning_ping_failed=true
 fi
 
-if (( before >= CRITICAL_PERCENT )); then
+after_prune="$(disk_percent)"
+if (( before >= CRITICAL_PERCENT || after_prune >= CRITICAL_PERCENT )); then
   echo "disk_guardian: critical threshold ${CRITICAL_PERCENT}% reached"
   if [[ -d "${LOG_ROOT}" ]]; then
     while IFS= read -r -d '' log_path; do

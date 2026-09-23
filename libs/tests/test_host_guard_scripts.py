@@ -23,11 +23,15 @@ def guard_host(tmp_path: Path) -> dict[str, str]:
     commands.touch()
     for name, body in {
         "df": (
-            '#!/bin/sh\nprintf "Filesystem 1024-blocks Used Available Capacity Mounted\\n'
-            '/dev/test 100 10 90 %s%% /data\\n" "$FAKE_DISK_PERCENT"\n'
+            '#!/bin/sh\npercent="$FAKE_DISK_PERCENT"\n'
+            'if [ -n "${FAKE_DISK_PERCENT_FILE:-}" ]; then percent="$(cat "$FAKE_DISK_PERCENT_FILE")"; fi\n'
+            'printf "Filesystem 1024-blocks Used Available Capacity Mounted\\n'
+            '/dev/test 100 10 90 %s%% /data\\n" "$percent"\n'
         ),
         "docker": (
             '#!/bin/sh\nprintf "docker %s\\n" "$*" >> "$GUARD_COMMANDS"\n'
+            'if [ -n "${FAKE_DISK_PERCENT_AFTER_PRUNE:-}" ]; then '
+            'printf "%s" "$FAKE_DISK_PERCENT_AFTER_PRUNE" > "$FAKE_DISK_PERCENT_FILE"; fi\n'
             'test "${FAKE_PRUNE_OK:-1}" = 1\n'
         ),
         "dockerd": '#!/bin/sh\ncp "$3" "$GUARD_CAPTURE_CONFIG"\n',
@@ -116,6 +120,20 @@ def test_disk_guardian_critical_truncates_large_log_and_signals_failure(
     result = _run("disk_guardian.sh", guard_host)
     assert result.returncode == 1
     assert large_log.stat().st_size == 0
+    assert f"{PING_URL}/fail" in _commands(guard_host)
+
+
+def test_disk_guardian_escalates_when_writes_cross_85_during_cleanup(
+    guard_host, tmp_path: Path
+) -> None:
+    percent_file = tmp_path / "disk-percent"
+    percent_file.write_text("80", encoding="utf-8")
+    guard_host["FAKE_DISK_PERCENT_FILE"] = str(percent_file)
+    guard_host["FAKE_DISK_PERCENT_AFTER_PRUNE"] = "85"
+    result = _run("disk_guardian.sh", guard_host)
+
+    assert result.returncode == 1
+    assert f"{WARNING_PING_URL}/fail" in _commands(guard_host)
     assert f"{PING_URL}/fail" in _commands(guard_host)
 
 
