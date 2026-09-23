@@ -1030,8 +1030,6 @@ def _runbook_url_for_failure(failure_domain: str) -> str:
     anchor = "#out-of-band-watchdog"
     if failure_domain == "alert-bridge":
         anchor = "#alerting-bridge"
-    elif failure_domain in {"host-reachability", "docker-runtime"}:
-        anchor = "#verification"
     return (
         "https://github.com/wangzitian0/infra2/blob/main/platform/12.alerting/README.md"
         f"{anchor}"
