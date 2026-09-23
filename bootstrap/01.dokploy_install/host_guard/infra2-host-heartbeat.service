@@ -1,7 +1,5 @@
 [Unit]
 Description=Infra2 external host heartbeat
-After=docker.service network-online.target
-Wants=network-online.target
 
 [Service]
 Type=oneshot
