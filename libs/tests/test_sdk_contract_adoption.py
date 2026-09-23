@@ -72,6 +72,7 @@ def test_reserved_deploy_canary_slot_is_globally_serialized() -> None:
 
     assert concurrency == {
         "group": "deploy-v2-canary-pr-999",
+        "queue": "max",
         "cancel-in-progress": False,
     }
 
