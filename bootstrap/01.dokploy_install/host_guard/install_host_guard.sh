@@ -9,6 +9,10 @@ esac
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 ENV_FILE="${INFRA2_HOST_GUARD_ENV:-/etc/infra2/host-guard.env}"
+if [[ "${MODE}" == "--apply" && "${ENV_FILE}" != "/etc/infra2/host-guard.env" ]]; then
+  echo "--apply must validate the same /etc/infra2/host-guard.env that systemd reads" >&2
+  exit 1
+fi
 
 for script in disk_guardian.sh host_heartbeat.sh; do
   bash -n "${REPO_ROOT}/tools/${script}"
@@ -21,12 +25,21 @@ if [[ "$(stat -c '%a:%u:%g' "${ENV_FILE}")" != "600:0:0" ]]; then
   echo "${ENV_FILE} must be root:root with mode 0600" >&2
   exit 1
 fi
-set -a
-# The file is root-owned and private; systemd reads the same assignment format.
-# shellcheck disable=SC1090
-source "${ENV_FILE}"
-set +a
-urls=("${HOST_HEARTBEAT_PING_URL:-}" "${DISK_GUARDIAN_WARNING_PING_URL:-}" "${DISK_GUARDIAN_PING_URL:-}")
+declare -A ping_urls=()
+while IFS= read -r line || [[ -n "${line}" ]]; do
+  if [[ "${line}" =~ ^[[:space:]]*(#|$) ]]; then continue; fi
+  if [[ ! "${line}" =~ ^(HOST_HEARTBEAT_PING_URL|DISK_GUARDIAN_WARNING_PING_URL|DISK_GUARDIAN_PING_URL)=(https://hc-ping\.com/[A-Za-z0-9/_-]+)$ ]]; then
+    echo "${ENV_FILE} accepts only literal Healthchecks.io URL assignments" >&2
+    exit 1
+  fi
+  key="${BASH_REMATCH[1]}"
+  if [[ -n "${ping_urls[${key}]+set}" ]]; then
+    echo "${ENV_FILE} contains duplicate ${key}" >&2
+    exit 1
+  fi
+  ping_urls["${key}"]="${BASH_REMATCH[2]}"
+done < "${ENV_FILE}"
+urls=("${ping_urls[HOST_HEARTBEAT_PING_URL]:-}" "${ping_urls[DISK_GUARDIAN_WARNING_PING_URL]:-}" "${ping_urls[DISK_GUARDIAN_PING_URL]:-}")
 for url in "${urls[@]}"; do
   if [[ ! "${url}" =~ ^https://hc-ping\.com/[A-Za-z0-9/_-]+$ ]] || [[ "${url}" == *replace-with* ]]; then
     echo "host guard requires three real Healthchecks.io ping URLs" >&2

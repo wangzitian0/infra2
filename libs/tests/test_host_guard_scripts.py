@@ -13,6 +13,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 PING_URL = "https://hc-ping.com/test-check-uuid"
 WARNING_PING_URL = "https://hc-ping.com/test-warning-uuid"
+HOST_PING_URL = "https://hc-ping.com/test-host-uuid"
 
 
 @pytest.fixture
@@ -39,6 +40,7 @@ def guard_host(tmp_path: Path) -> dict[str, str]:
         "curl": '#!/bin/sh\nprintf "curl %s\\n" "$*" >> "$GUARD_COMMANDS"\n',
         "stat": (
             '#!/bin/sh\nfor arg do file="$arg"; done\n'
+            'if [ "$1" = -c ] && [ "$2" = "%a:%u:%g" ]; then echo 600:0:0; exit 0; fi\n'
             'if [ "$file" = "${FAKE_STAT_FAIL_PATH:-}" ]; then exit 1; fi\n'
             'wc -c < "$file" | tr -d " "\n'
         ),
@@ -209,6 +211,76 @@ def test_heartbeat_success(guard_host) -> None:
     assert result.returncode == 0, result.stderr
     assert PING_URL in _commands(guard_host)
     assert "/fail" not in _commands(guard_host)
+
+
+def test_host_guard_env_validation_never_executes_shell(guard_host, tmp_path: Path) -> None:
+    env_file = tmp_path / "host-guard.env"
+    marker = tmp_path / "should-not-exist"
+    env_file.write_text(
+        f"HOST_HEARTBEAT_PING_URL=$(touch {marker})\n"
+        f"DISK_GUARDIAN_WARNING_PING_URL={WARNING_PING_URL}\n"
+        f"DISK_GUARDIAN_PING_URL={PING_URL}\n",
+        encoding="utf-8",
+    )
+    guard_host["INFRA2_HOST_GUARD_ENV"] = str(env_file)
+    script = ROOT / "bootstrap/01.dokploy_install/host_guard/install_host_guard.sh"
+
+    result = subprocess.run(
+        ["bash", str(script), "--check"],
+        env=guard_host,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert not marker.exists()
+
+
+def test_host_guard_checks_literal_distinct_urls(guard_host, tmp_path: Path) -> None:
+    env_file = tmp_path / "host-guard.env"
+    env_file.write_text(
+        "# Literal values consumed by systemd EnvironmentFile\n"
+        f"HOST_HEARTBEAT_PING_URL={HOST_PING_URL}\n"
+        f"DISK_GUARDIAN_WARNING_PING_URL={WARNING_PING_URL}\n"
+        f"DISK_GUARDIAN_PING_URL={PING_URL}\n",
+        encoding="utf-8",
+    )
+    guard_host["INFRA2_HOST_GUARD_ENV"] = str(env_file)
+    script = ROOT / "bootstrap/01.dokploy_install/host_guard/install_host_guard.sh"
+
+    result = subprocess.run(
+        ["bash", str(script), "--check"],
+        env=guard_host,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_host_guard_apply_rejects_a_different_env_file(guard_host, tmp_path: Path) -> None:
+    guard_host["INFRA2_HOST_GUARD_ENV"] = str(tmp_path / "other.env")
+    script = ROOT / "bootstrap/01.dokploy_install/host_guard/install_host_guard.sh"
+
+    result = subprocess.run(
+        ["bash", str(script), "--apply"],
+        env=guard_host,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "same /etc/infra2/host-guard.env" in result.stderr
+
+
+def test_disk_guardian_unit_does_not_wait_for_network() -> None:
+    unit = (
+        ROOT / "bootstrap/01.dokploy_install/host_guard/infra2-disk-guardian.service"
+    ).read_text(encoding="utf-8")
+    assert "network-online.target" not in unit
 
 
 def test_docker_config_check_preserves_unrelated_settings(
