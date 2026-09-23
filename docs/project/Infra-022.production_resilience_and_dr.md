@@ -70,6 +70,7 @@
 
 | Date | Change |
 |---|---|
+| 2026-09-24 | 再次只读核验 VPS：安装脚本仍为旧 SHA256 `b8f9b117a7bf426bb12c89cd307a7c89f91d25edf309c4852e1c4524404fc0a7`，crontab 有 3 条指向该脚本的备份任务；远端 `production/manifest.json` 与 `staging/manifest.json` 均不存在，旧根清单仍为无环境标记的 9 项。因此即使定时任务存在，不能判定新版分环境 17/17 已运行。 |
 | 2026-09-24 | 核对 GitHub Actions 现场记录：2026-09-23 的 `deploy_v2 live canary` job 成功，`finance_report/app` 的临时 `pr-999` 槽公开健康与版本证明通过，并完成销毁；该定时检查不等于正式发布候选版本的 Stage 1 烟测。 |
 | 2026-09-24 | VPS 对 `gdrive-backup:infra2/weekly/validation/` 执行不含生产数据的加密远端探针：上传小型文本标记、远端读回逐字节匹配、删除后列表确认不存在。证明新周备份路径可写、可读、可清理；不证明 17/17 生产数据已异地上传。 |
 | 2026-09-24 | 旧版异地根 `manifest.json` 无环境字段、仅 9 项，指向 2026-09-20 03:45 的归档；当前恢复工具会拒绝其原始清单。只在临时副本标 `legacy-unknown` 后，从远端下载 Finance Report/TrueAlpha 数据库归档（10,796,771 / 62,604,288 字节），校验大小、SHA256、gzip，并各自在网络隔离容器中恢复、通过 5 项不变量；临时数据与容器已清除。不据此判定 Production 17/17 或 T2.1/T2.2 完成。 |
