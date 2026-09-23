@@ -8,7 +8,6 @@ from infra2_sdk.delivery import (
     BudgetStatus,
     DisagreementKind,
     FailureDomain,
-    PipelineEnvironment,
     PipelineStage,
     StageStatus,
     acceleration_allowed,
@@ -16,13 +15,14 @@ from infra2_sdk.delivery import (
     detect_disagreement,
     make_stage_result,
 )
+from infra2_sdk.runtime.environment import EnvironmentTier
 
 
 def test_env_stage_schema_serializes_required_fields() -> None:
     """Infra-011.12: producers share one sparse Env x Stage result shape."""
     result = make_stage_result(
         source="deploy.yml",
-        environment=PipelineEnvironment.STAGING,
+        environment=EnvironmentTier.STAGING,
         stage=PipelineStage.DEPLOY_STATUS,
         target="platform/postgres",
         status=StageStatus.PASS,
@@ -162,12 +162,10 @@ def test_preview_stage_subset_is_named_and_stable() -> None:
         PipelineStage.REGRESSION_E2E,
         PipelineStage.IMAGE_BUILD,
         PipelineStage.DEPLOY_SMOKE,
-        PipelineStage.ROUTE_CANARY,
     }
 
     assert {stage.value for stage in preview_stages} == {
         "regression-e2e",
         "image-build",
         "deploy-smoke",
-        "route-canary",
     }
