@@ -1,0 +1,8 @@
+[Unit]
+Description=Infra2 external host heartbeat
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/infra2/host-guard.env
+ExecStart=/usr/local/sbin/infra2-host-heartbeat.sh
+TimeoutStartSec=20

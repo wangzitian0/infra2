@@ -78,21 +78,32 @@ graph TD
 ### SOP-002: 平台数据库恢复
 
 - **触发条件**: Platform PG 数据损坏
-- **步骤**:
-    1. 停止相关服务（Dokploy Stop）。
-    2. 恢复数据：
-       ```bash
-       ssh root@<VPS_HOST>
-       docker exec -i platform-postgres${ENV_SUFFIX} psql -U postgres < /data/backups/latest.sql
-       ```
-    3. 启动服务并验证健康。
+- **先取证**：确定目标环境和服务 ID（Production 为 `platform/postgres`），从该环境的
+  `/data/backups/infra2/production-manifest.json` 或
+  `/data/backups/infra2/staging-manifest.json` 选定一个归档及其 SHA256。
+  用 SOP-004 验证完整 manifest，再从异地拉取所选归档并核对实际字节与 SHA256。
+  环境专用 manifest 缺失或服务条目不全即暂停，不能猜测旧 `manifest.json` 的环境。
+- **先隔离恢复**：在替换任何在线数据前，使用 SOP-006A 的沙箱恢复证明该归档可读。
+  记录归档时间、演练结果和当前故障库的只读快照；禁止把未验证的文件直接灌入在线库。
+- **生产切换**：停写、选择新数据库实例或隔离目标、执行服务专属恢复、校验业务不变量、
+  再切换依赖方；此步骤需要 owner 对目标环境与当前操作批准。当前仓库只有沙箱演练工具，
+  **没有**经验证的自动化生产数据库切换执行器。必须先在同版本隔离目标完成演练并记录
+  实际命令和结果，不能把演练 PASS 当成在线切换 PASS。
+
+旧命令 `/data/backups/latest.sql` 与现行 manifest/归档格式不符，不能作为恢复入口。
 
 ### SOP-003: 紧急访问 (Break-glass)
 
 - **触发条件**: SSO 不可用，需操作 Vault
 - **步骤**:
-    1. 获取 Root Token: `op item get "bootstrap/vault/Unseal Keys" --vault "Infra2" --reveal`
-    2. 登录: `vault login <root_token>`
+    1. 从 1Password `Infra2` vault 的 **`bootstrap/vault/Root Token`** 条目读取
+       `Root Token` 字段；`bootstrap/vault/Unseal Keys` 只用于 SOP-001 解封。
+    2. 在可信的操作终端先确认 `INTERNAL_DOMAIN` 指向目标环境，执行
+       `export VAULT_ADDR="https://vault.${INTERNAL_DOMAIN:?set INTERNAL_DOMAIN}"`。
+       用 `read -r -s -p 'Vault root token: ' VAULT_TOKEN; printf '\n'; export VAULT_TOKEN`
+       从交互式提示输入 token，随后用 `vault token lookup` 确认权限，再完成紧急操作。
+       结束后立即 `unset VAULT_TOKEN`。不要运行会把 root token 缓存到本机 token
+       helper 的普通 `vault login`，也不要把 token 写入命令参数、工单或日志。
 
 ### SOP-004: 备份 freshness 验证
 
@@ -266,6 +277,35 @@ Recommended schedule after the rehearsal target is provisioned:
 15 4 * * 0 BACKUP_REMOTE=gdrive-backup:infra2 python3 /infra2/tools/run_restore_rehearsal.py >> /var/log/infra2-backup-restore-rehearsal.log 2>&1
 ```
 
+### SOP-006B: VPS 全灭后的整机恢复演练与 RTO 计时
+
+**状态：尚未实测。** SOP-006A 的 10.62 秒记录只覆盖一个数据库在现有主机上的
+沙箱还原；它不包含购置/启动新主机、恢复控制面、17 个状态服务、DNS 切换或业务验收，
+不得写作整机 RTO。当前周备策略的恢复点取决于最后一个通过字节与 SHA256 校验的
+异地归档；没有已验证的 WAL/PITR 路径，不能声称 15 分钟 RPO。
+
+1. **宣告与隔离**：记下故障宣告时刻 `t0`、受影响环境、最后一次成功的异地
+   manifest 和故障主机状态。若旧主机仍可写，先阻止双写；保留其磁盘和日志取证，
+   不在旧机上清理 `/data`。演练在与生产隔离的新 VPS 上进行，不切生产 DNS。
+2. **重建信任根与控制面**：从 1Password 取得 SSH、rclone crypt、Vault 所需的
+   现有凭据，从 GitHub 固定一个 infra2 commit；按 bootstrap 顺序恢复主机、
+   Dokploy、1Password Connect、Vault 与 IaC Runner。不得从已失效主机上的 Vault
+   寻找唯一解封材料，也不得把任何凭据写进仓库或演练日志。
+3. **恢复数据**：分别选择 Production/Staging 的最新合格 off-host manifest，
+   用 SOP-004 验证覆盖、时间、字节和 SHA256。先用 SOP-006A 在隔离容器里证明
+   Postgres 归档能还原；其余服务逐项按 `BackupFacet.restore_command` 规划并验证。
+   缺项或失败项记为恢复失败，不能用其他环境的较新 manifest 顶替。
+4. **重建服务与验收**：按依赖顺序启动平台与应用；逐项核对 17/17 状态归档、
+   Vault/密钥供给、数据库业务不变量、公开探针和告警路径。只有数据与服务均通过
+   才记 `t1`。生产 DNS/流量切换属于单独的 owner 批准操作，演练不执行。
+5. **记录实测**：整机 `RTO=t1-t0`；按每个状态服务分别记录
+   `RPO=故障时刻-该服务最后可恢复归档的生成时刻`。留存新主机规格、代码 SHA、
+   manifest URI/校验摘要、各阶段起止时刻、失败及人工步骤。首次整机演练通过前，
+   RTO 状态为 **unknown**，不是目标值或单库还原耗时。
+
+整机演练没有自动化执行器；上面是顺序与验收契约。实际恢复命令须先在隔离目标
+逐项验证，再写入服务级 runbook；不可将声明中的 `restore_command` 当作已经实测。
+
 ### SOP-007: 服务因 vault-agent 缺凭证崩溃 (re-provision AppRole)
 
 - **触发条件**: 某服务的 vault-agent 反复 `Restarting`,日志 `VAULT_ROLE_ID and
@@ -280,7 +320,7 @@ Recommended schedule after the rehearsal target is provisioned:
     ssh root@<VPS_HOST>
     docker exec iac-runner sh -c '
       set -a; . /secrets/.env 2>/dev/null; set +a
-      export VAULT_ROOT_TOKEN=$(op read "op://Infra2/<vault-root-token-item>/Token")
+      export VAULT_ROOT_TOKEN=$(op read "op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token")
       cd /workspace/infra2
       BOOT="import platform, runpy, sys; sys.path.insert(0, \".\"); runpy.run_module(\"invoke\", run_name=\"__main__\")"
       python3 -P -c "$BOOT" vault.setup-approle --project <project> --service <service> --deploy

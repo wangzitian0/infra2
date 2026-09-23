@@ -23,15 +23,16 @@
 ## Scope
 
 ### L1: 宿主机防爆与安全底座 (Host & Engine)
-- [ ] **T1.1 Docker 全局日志限额**：在 `/etc/docker/daemon.json` 配置 `max-size: 50m`, `max-file: 3`，配合 `live-restore: true` 实现平滑热重载。
-- [ ] **T1.2 磁盘双水位自愈守护**：部署 `disk-guardian`（systemd timer）：≥80% 触发自动清理 dangling 镜像与构建缓存并告警；≥85% 升级为 P0 告警并激进截断日志。
+- [ ] **T1.1 Docker 全局日志限额**：在 `/etc/docker/daemon.json` 配置 `max-size: 50m`, `max-file: 3`，配合 `live-restore: true` 实现平滑热重载。代码与校验脚本在 `bootstrap/01.dokploy_install/host_guard/`；待 owner 批准当前 head 后安装并验证新建容器。旧容器不会自动继承全局默认值。
+- [ ] **T1.2 磁盘双水位自愈守护**：部署 `disk-guardian`（systemd timer）：≥80% 触发自动清理 dangling 镜像与构建缓存并发 P1 告警；≥85% 升级为 P0 告警并截断超大日志。代码与模拟测试已准备；待真实 timer 和外部通知验收。
 - [ ] **T1.3 宿主机安全加固（#724）**：SSH 禁用密码认证、仅密钥登录；UFW 仅开放 80/443/SSH；Docker daemon 严禁暴露 TCP 端口。
   - 2026-09-17 进展：SSH 仅密钥 + fail2ban 已在主机生效（2026-09-15，手工）；公网只开放 80/443/SSH 已由 `bootstrap/01.dokploy_install/hostfw/`（nftables，替代 UFW）落地并持久化；Docker daemon 未监听 TCP 2375/2376。剩余：SSH 加固代码化、80/443 仅放行 Cloudflare 段。
 
 ### L2: 生产数据备份与带外容灾 (Platform & Data)
 - [ ] **T2.1 全状态服务自动化异地备份至 Google Drive（#721）**：`rclone crypt` 与分级保留已打通；源代码的定时脚本现覆盖 17/17 个 `BackupFacet` 声明。仍须在 VPS 安装同 SHA 脚本、取得生产和 Staging 各一轮 17/17 的异地 manifest 与字节校验，并完成新增归档的隔离恢复，才能称为全状态交付。
 - [ ] **T2.2 备份自动恢复演练（Recovery Proof）**：沙箱工具和五项业务不变量已落地，历史手动运行在 10.62 秒内通过。但旧的默认 manifest 选择会取到周日较晚生成的 Staging 备份；代码现按环境分离并默认验证 Production manifest。仍须在 VPS 上用新脚本完成两次连续周周期的 Production `--service-id all` 演练，并保留期间的并行兜底。
-- [ ] **T2.3 带外死人开关（Dead Man's Switch）**：宿主机定时向外部 Healthchecks.io 上报心跳，Cloudflare Worker 自身的 30 分钟 cron 也向另一独立检查上报；主机失联与 Worker 停摆分别由外部通知。代码准备不等于现场验收，须验证两条通知路径。
+- [ ] **T2.3 带外死人开关（Dead Man's Switch）**：宿主机 systemd timer 定时向外部 Healthchecks.io 上报心跳与磁盘 P1/P0 状态，Cloudflare Worker 的 30 分钟 cron 向第四个独立检查上报；主机失联与 Worker 停摆分别由外部通知。代码准备不等于现场验收，须配置四条真实检查 URL、生产安装并验证外部通知送达。
+- [ ] **T2.4 整机故障恢复与 RTO 证明**：在隔离的新 VPS 上按 `ops.recovery` 的整机演练步骤重建信任根、控制面和数据，记录从故障宣告到公开服务及业务不变量恢复的耗时。现有 10.62 秒数据仅是单库沙箱还原耗时，不能作为整机 RTO。
 
 ### L3: 发布门禁闭环与告警降噪 (Deploy & Observability)
 - [ ] **T3.1 发布三段式门禁与 Schema 防御（#698）**：
@@ -65,6 +66,7 @@
 
 | Date | Change |
 |---|---|
+| 2026-09-23 | 宿主机现场核查：93 个运行容器中 89 个已有容器级日志限额，4 个未设限的是 Dokploy 控制面；daemon 无默认日志限额及 live-restore，已有每 6 小时运行的 host hygiene。新增 daemon 配置校验/回滚脚本、5 分钟磁盘守护、1 分钟带外心跳及三条独立外部检查的安装方案；生产验收前 T1.1/T1.2/T2.3 保持未完成。 |
 | 2026-09-22 | Stage 2 接入 `deploy_v2`：`libs/deploy/promote.py:deploy()` 在任何 Dokploy 变更前调用新增的 `libs/deploy/schema_gate.py`（SSH 到 VPS，用即将部署的应用镜像跑检查——infra2 CI 与 iac-runner 都没有"docker daemon + 应用网络"兼备的环境，只有 VPS 主机有），exit 0 才放行，exit 1/3 及任何传输失败一律阻断。同时给 `tools/pre_deploy_schema_check.py` 加上 `classify_rollback`（A/C 两档，casing 漂移必然伴随 missing_in_code，不存在可达的中间档），随门禁结果一起打印 `ROLLBACK_CLASS`。仅对 `ENUM_SOURCES` 已注册服务生效（目前只有 `finance_report/app`）。实测：staging/prod 当前各有历史遗留 enum 漂移，本次接入后会真实阻断下一次 finance_report/app 部署，需先处理或走例外路径 |
 | 2026-09-21 | 完成 T2.2：编写并实测 `tools/run_restore_rehearsal.py`，沙箱临时容器拉取 Google Drive 加密归档完成灌库与 5 项不变量校验，用后即焚 0 污染，实测 10.62s 通过 |
 | 2026-09-18 | 完成 T2.1：基于 rclone crypt 落地 Google Drive 异地端到端加密备份，实现周备(60d)+季度快照(2年)分级保留，实测打通读写验证 |
