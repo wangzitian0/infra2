@@ -23,7 +23,7 @@
 ## Scope
 
 ### L1: 宿主机防爆与安全底座 (Host & Engine)
-- [ ] **T1.1 Docker 全局日志限额**：在 `/etc/docker/daemon.json` 配置 `max-size: 50m`, `max-file: 3`，配合 `live-restore: true` 实现平滑热重载。代码与校验脚本在 `bootstrap/01.dokploy_install/host_guard/`；待 owner 批准当前 head 后安装并验证新建容器。旧容器不会自动继承全局默认值。
+- [ ] **T1.1 Docker 全局日志限额**：在 `/etc/docker/daemon.json` 配置 `max-size: 50m`, `max-file: 3`，配合 `live-restore: true` 实现平滑热重载。代码与校验脚本在 `bootstrap/01.dokploy_install/host_guard/`。2026-09-24 将 main `a6f29e5` 的配置和检查脚本临时送到 VPS，`configure_docker.sh --check` 返回 `configuration OK`，未改变 daemon；现场 `docker info` 仍显示 `live-restore=false`。待 owner 批准当前 head 后安装并验证新建容器。旧容器不会自动继承全局默认值。
 - [ ] **T1.2 磁盘双水位自愈守护**：部署 `disk-guardian`（systemd timer）：≥80% 触发自动清理 dangling 镜像与构建缓存并发 P1 告警；≥85% 升级为 P0 告警并截断超大日志。代码与模拟测试已准备；待真实 timer 和外部通知验收。
 - [ ] **T1.3 宿主机安全加固（#724）**：SSH 禁用密码认证、仅密钥登录；UFW 仅开放 80/443/SSH；Docker daemon 严禁暴露 TCP 端口。
   - 2026-09-17 进展：SSH 仅密钥 + fail2ban 已在主机生效（2026-09-15，手工）；公网只开放 80/443/SSH 已由 `bootstrap/01.dokploy_install/hostfw/`（nftables，替代 UFW）落地并持久化；Docker daemon 未监听 TCP 2375/2376。剩余：SSH 加固代码化、80/443 仅放行 Cloudflare 段。
@@ -70,6 +70,7 @@
 
 | Date | Change |
 |---|---|
+| 2026-09-24 | VPS 只读核验：`infra2-disk-guardian.timer` 和 `infra2-host-heartbeat.timer` 均不存在，`/etc/infra2/host-guard.env` 及安装脚本均不存在；Docker `live-restore=false`，磁盘使用 70%。用 main `a6f29e5` 的脚本运行 `configure_docker.sh --check`，daemon 候选配置校验通过，未应用。T1.1/T1.2/T2.3 仍未完成。 |
 | 2026-09-24 | Production platform Postgres 归档在隔离实例中还原，5 个数据库及各库表数与在线一致；匿名数据卷已删除。 |
 | 2026-09-24 | Production ClickHouse 归档在隔离实例中启动，104 张非系统表可见，SigNoz 日志与 trace summary 实际扫描查询成功；仍待其他表、异地包与整机恢复验证。 |
 | 2026-09-24 | Production canary 的 Redis RDB 与 MinIO 归档通过隔离实例实际加载；MinIO 列出 11,306 个对象并读回一个对象，临时数据清理。异地恢复仍待验证。 |
