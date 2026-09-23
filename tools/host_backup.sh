@@ -202,7 +202,7 @@ done <<< "${SERVICES}"
   echo "}"
 } > "${MANIFEST}"
 rm -f "${ARTIFACTS_FILE}"
-cp "${MANIFEST}" "${LATEST_MANIFEST}"
+install -m 0600 "${MANIFEST}" "${LATEST_MANIFEST}"
 
 if [ -n "${RUN_REMOTE}" ]; then
   rclone copyto "${MANIFEST}" "${RUN_REMOTE}/manifest.json"

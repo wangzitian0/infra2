@@ -156,6 +156,18 @@ def test_every_service_is_archived_and_dumps_run_before_path_archives(host) -> N
     assert "platform/minio" in calls[-1], calls
 
 
+def test_existing_latest_manifest_permissions_are_tightened(host) -> None:
+    latest = host["out"] / "production-manifest.json"
+    latest.write_text("old manifest", encoding="utf-8")
+    latest.chmod(0o644)
+
+    proc, manifest, _ = _run(host)
+
+    assert proc.returncode == 0, proc.stderr
+    assert stat.S_IMODE(latest.stat().st_mode) == 0o600
+    assert json.loads(latest.read_text(encoding="utf-8")) == manifest
+
+
 def test_staging_run_covers_all_declared_services(host) -> None:
     data_root = Path(host["env"]["BACKUP_DATA_ROOT"])
     for entry in load_backup_inventory():

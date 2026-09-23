@@ -165,7 +165,7 @@ Failure contract (#618, found by the truealpha#650 restore drill):
 - `tar` exit 1 (a live file changed or vanished mid-read) is a `WARN` and the
   archive is kept as crash-consistent. Exit ≥2 fails that service.
 - A failing service never stops the others. It is logged as `FAILED <service_id>`,
-its partial archive is removed, it is absent from the manifest (so SOP-004
+  its partial archive is removed, it is absent from the manifest (so SOP-004
   reports it missing), and the run exits 1.
 - Before #618 the first failure ended the run under `set -e`: every scheduled
   prod run stopped at `platform/minio` and never dumped the finance_report or
