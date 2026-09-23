@@ -43,7 +43,7 @@ PRIMITIVES = (
 SCAN_EXEMPT_FILES = {
     "tools/out_of_band_watchdog.py",  # defines deliver_out_of_band_alert
     "libs/alerting.py",  # defines deliver_infra2_report + the shared engine
-    "libs/infra_probes.py",  # defines post_alert_bridge_payload
+    "libs/observability/probes.py",  # defines post_alert_bridge_payload
     "tools/no_new_wheels_lint.py",
 }
 
@@ -66,9 +66,12 @@ def lint_python_callsites(
     signals = signals if signals is not None else registered_signal_names()
     errors: list[str] = []
     for folder in ("tools", "libs"):
-        for path in sorted((root / folder).glob("*.py")):
+        # rglob, not glob: the #846 domain packages (libs/observability/, libs/deploy/,
+        # ...) hold implementations that a flat-only scan would stop covering the moment
+        # a file moves into one -- silently, with the lint still green.
+        for path in sorted((root / folder).rglob("*.py")):
             rel = path.relative_to(root).as_posix()
-            if rel in SCAN_EXEMPT_FILES:
+            if rel in SCAN_EXEMPT_FILES or "/tests/" in rel:
                 continue
             text = path.read_text(encoding="utf-8")
             if not any(p in text for p in PRIMITIVES):
@@ -106,11 +109,7 @@ def lint_scheduled_jobs(
     job_ids = set((yaml.safe_load(text).get("jobs") or {}).keys())
     jobs_start = text.index("\njobs:")
     job_re = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$", re.M)
-    headers = [
-        m
-        for m in job_re.finditer(text, jobs_start)
-        if m.group(1) in job_ids
-    ]
+    headers = [m for m in job_re.finditer(text, jobs_start) if m.group(1) in job_ids]
     errors: list[str] = []
     for i, m in enumerate(headers):
         start = m.start()

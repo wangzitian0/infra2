@@ -115,7 +115,7 @@ def test_breakdown_watch_is_prod_only_and_idles_elsewhere(monkeypatch) -> None:
     """The breakdown watcher reads the WHOLE shared Docker engine, so only the
     production runner's plugin sweeps — the staging plugin stays registered but
     idle (the standalone sidecar's exact gating)."""
-    import libs.container_breakdown_watch as w
+    import libs.observability.watchers.breakdown_watch as w
 
     def boom(sock):  # a non-prod plugin must never touch the socket
         raise AssertionError("staging plugin must not open the docker socket")
@@ -154,7 +154,7 @@ def test_breakdown_env_triad_maps_into_config_for_continuity() -> None:
     assert w.recovery_threshold == 6
     assert w.log_tail == 50
 
-    import libs.container_breakdown_watch as mod
+    import libs.observability.watchers.breakdown_watch as mod
 
     defaults = BreakdownWatch({"ENV": "production"})
     assert defaults.interval_seconds == mod.DEFAULT_INTERVAL

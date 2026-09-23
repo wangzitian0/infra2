@@ -210,9 +210,9 @@ def test_invalid_tier_and_type_values_are_rejected() -> None:
 
 def test_container_breakdown_watch_registered_and_matches_code() -> None:
     """#531-style drift closure: the registered thresholds must match the live
-    defaults in libs/container_breakdown_watch.py (the watcher plugin inside
+    defaults in libs/observability/watchers/breakdown_watch.py (the watcher plugin inside
     the #543 single resident sidecar), not just look plausible."""
-    import libs.container_breakdown_watch as module
+    import libs.observability.watchers.breakdown_watch as module
 
     inventory = yaml.safe_load(INVENTORY.read_text(encoding="utf-8"))
     signals = {s["signal"]: s for s in inventory["signals"]}

@@ -15,7 +15,7 @@ from urllib.error import HTTPError, URLError
 import pytest
 import yaml
 
-from libs import watchdog_issue_trail as trail_lib
+from libs.observability import issue_trail as trail_lib
 from libs.watchdog_issue_trail import (
     FULL,
     OFF,

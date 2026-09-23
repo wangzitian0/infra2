@@ -403,7 +403,7 @@ def test_alerting_platform_service_contract_files_exist() -> None:
     assert "secrets:/secrets:ro" in compose
 
     deploy = (base / "deploy.py").read_text(encoding="utf-8")
-    # PR-E: the manifest-driven supply (libs/secrets_supply.py) replaced the bespoke
+    # PR-E: the manifest-driven supply (libs/security/supply.py) replaced the bespoke
     # 1Password → Vault copy; the Deployer hook is what pre_compose calls.
     assert "apply_secret_supply" in deploy
     assert "_sync_1password_to_vault" not in deploy
@@ -416,7 +416,7 @@ def test_alerting_platform_service_contract_files_exist() -> None:
     assert "INFRA_PROBE_HEARTBEAT_TOKEN" in ctmpl
 
 
-# import root -> the pip-installable name the Dockerfile must list. libs.infra_probes
+# import root -> the pip-installable name the Dockerfile must list. libs.observability.probes
 # gained real infra2_sdk.runtime.postgres/s3 imports in #600 (psycopg/boto3-backed
 # probes) without anyone updating this Dockerfile's now-false "stdlib-only" comment —
 # the image shipped, and the probe-runner crash-looped on the first postgres/s3
@@ -451,7 +451,7 @@ def _third_party_import_roots(source: str) -> set[str]:
 def test_alerting_dockerfile_installs_every_import_the_packaged_code_needs() -> None:
     """Infra-007 alerting / #600 regression: the image's pip install line must cover
     every third-party import reachable from what it actually COPYs and runs
-    (app.py's entrypoint, and infra_probe_runner.py's import of libs.infra_probes) —
+    (app.py's entrypoint, and infra_probe_runner.py's import of libs.observability.probes) —
     caught live via a staging ModuleNotFoundError crash loop, not by any test."""
     base = ROOT / "platform/12.alerting"
     dockerfile = (base / "Dockerfile").read_text(encoding="utf-8")
@@ -460,7 +460,7 @@ def test_alerting_dockerfile_installs_every_import_the_packaged_code_needs() -> 
     required_roots: set[str] = set()
     for path in (
         base / "app.py",
-        ROOT / "libs/infra_probes.py",
+        ROOT / "libs/observability/probes.py",
         ROOT / "tools/infra_probe_runner.py",
     ):
         required_roots |= _third_party_import_roots(path.read_text(encoding="utf-8"))
@@ -477,7 +477,8 @@ def test_alerting_dockerfile_installs_every_import_the_packaged_code_needs() -> 
     assert not unsatisfied, (
         f"platform/12.alerting/Dockerfile's pip install does not cover: "
         f"{[_IMPORT_TO_PIP_NAME[r] for r in sorted(unsatisfied)]} — "
-        f"required by an import in app.py / libs/infra_probes.py / tools/infra_probe_runner.py"
+        f"required by an import in app.py / libs/observability/probes.py / "
+        f"tools/infra_probe_runner.py"
     )
 
 

@@ -150,7 +150,7 @@ def test_build_alert_payload_resolved_when_empty():
 def test_run_once_requires_consecutive_broken_polls_before_firing(monkeypatch):
     """#475 flap hysteresis: a single broken sweep must NOT fire; only the Nth
     (failure_threshold) CONSECUTIVE broken sweep does."""
-    import libs.container_breakdown_watch as w
+    import libs.observability.watchers.breakdown_watch as w
 
     breakdown = Breakdown(
         container="vault-agent", state="restarting", reason="r", detail="d"
@@ -201,7 +201,7 @@ def test_run_once_requires_consecutive_broken_polls_before_firing(monkeypatch):
 def test_run_once_respects_renotify_window_once_active(monkeypatch):
     """BREAKDOWN_RENOTIFY_SECONDS still suppresses repeat firing of an ALREADY-active
     incident (unrelated to the flap-hysteresis fire/resolve thresholds)."""
-    import libs.container_breakdown_watch as w
+    import libs.observability.watchers.breakdown_watch as w
 
     breakdown = Breakdown(
         container="vault-agent", state="restarting", reason="r", detail="d"
@@ -239,7 +239,7 @@ def test_run_once_respects_renotify_window_once_active(monkeypatch):
 def test_run_once_requires_consecutive_healthy_polls_before_resolving(monkeypatch):
     """#475 flap hysteresis: recovery requires recovery_threshold CONSECUTIVE healthy
     sweeps, not just one -- the exact ContainerBreakdown fire/resolve storm."""
-    import libs.container_breakdown_watch as w
+    import libs.observability.watchers.breakdown_watch as w
 
     breakdown = Breakdown(
         container="vault-agent", state="restarting", reason="r", detail="d"
@@ -296,7 +296,7 @@ def test_run_once_relapse_before_recovery_threshold_is_same_incident(monkeypatch
     """The critical #475 property: a broken poll seen WHILE recovering (before
     recovery_threshold healthy polls) must NOT start a new incident and must NOT
     reset the renotify clock -- this is what produced 333 firing+resolved pairs."""
-    import libs.container_breakdown_watch as w
+    import libs.observability.watchers.breakdown_watch as w
 
     breakdown = Breakdown(
         container="vault-agent", state="restarting", reason="r", detail="d"
@@ -357,7 +357,7 @@ def test_run_once_logs_firing_and_resolved_decisions(monkeypatch):
     fire->resolve was only attributable by forensic IP->container reconstruction). Firing was
     already logged; resolve + the bridge-post were not. Capture logger.warning directly (the
     module calls logging.basicConfig, so caplog is unreliable here)."""
-    import libs.container_breakdown_watch as w
+    import libs.observability.watchers.breakdown_watch as w
 
     bd = Breakdown(
         container="finance_report-frontend-branch-main",
@@ -411,7 +411,7 @@ def test_an_unchanged_ongoing_incident_pages_once_and_escalation_pages_again(
     """
     import time
 
-    import libs.container_breakdown_watch as w
+    import libs.observability.watchers.breakdown_watch as w
 
     clock = {"now": 1000.0}
     monkeypatch.setattr(time, "monotonic", lambda: clock["now"])
@@ -476,7 +476,7 @@ def test_a_positive_renotify_restores_the_timer_and_pages_reset_the_digest_count
     """
     import time
 
-    import libs.container_breakdown_watch as w
+    import libs.observability.watchers.breakdown_watch as w
 
     clock = {"now": 1000.0}
     monkeypatch.setattr(time, "monotonic", lambda: clock["now"])
@@ -525,7 +525,7 @@ def test_run_once_stay_resolved_floor_suppresses_a_refire_and_digests_chronic_on
     digest window."""
     import time
 
-    import libs.container_breakdown_watch as w
+    import libs.observability.watchers.breakdown_watch as w
 
     clock = {"now": 1000.0}
     monkeypatch.setattr(time, "monotonic", lambda: clock["now"])
@@ -621,7 +621,9 @@ def test_run_once_stay_resolved_floor_suppresses_a_refire_and_digests_chronic_on
 
 def test_oom_killed_breakdown_classifies_as_host_memory():
     """Verify that containers terminated by host CGroup OOM classify as host-memory instead of runtime."""
-    reason, detail = classify_reason("kernel: Out of memory: Killed process 1234 (python)")
+    reason, detail = classify_reason(
+        "kernel: Out of memory: Killed process 1234 (python)"
+    )
     assert "out of memory" in reason
 
     bd = Breakdown(
@@ -638,4 +640,3 @@ def test_oom_killed_breakdown_classifies_as_host_memory():
     alert = payload["alerts"][0]
     assert alert["labels"]["failure_domain"] == "host-memory"
     assert "out of memory" in alert["annotations"]["description"].lower()
-
