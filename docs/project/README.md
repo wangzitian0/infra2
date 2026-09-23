@@ -35,7 +35,7 @@
 <!-- BEGIN GENERATED ACTIVE PROJECTS (tools/gen_project_index.py) -->
 
 - [Infra-022: Production Resilience & Disaster Recovery (生产韧性与容灾兜底)](./Infra-022.production_resilience_and_dr.md) - **In Progress**
-- [Infra-020: TrueAlpha Production DataHub](./Infra-020.truealpha_production_datahub.md) - **In Progress**
+- [Infra-020: TrueAlpha Production DataHub](./Infra-020.truealpha_production_datahub.md) - **In Progress — narrow production slice evidenced; prerequisite reconciliation open**
 - [Infra-019: Workspace Harness Control Plane](./Infra-019.harness_control_plane.md) - **In Progress**
 - [Infra-017: TrueAlpha Dagster Capture Runtime](./Infra-017.truealpha_dagster_capture.md) - **Active — Production companion runtime to TrueAlpha**
 - [Infra-013: Service Registry as Single Source of Truth](./Infra-013.service_registry_ssot.md) - **In Progress**
