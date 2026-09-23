@@ -171,7 +171,9 @@ def test_audit_is_undetermined_when_live_state_unreachable(monkeypatch) -> None:
 def test_current_inventory_matches_the_real_infra_ci_workflow() -> None:
     """Every declared blocking gate must resolve to a real job `name:` in its
     workflow file — catches a gate pointing at a renamed/removed job."""
-    for gate in cgra._blocking_gates():
+    gates = list(cgra._blocking_gates())
+    assert len(gates) > 0, "No blocking gates found in inventory (GREEN-WHILE-EMPTY risk)"
+    for gate in gates:
         name = cgra._job_display_name(gate["workflow"], gate["job"])
         assert name is not None, (
             f"{gate['id']} -> {gate['workflow']}:{gate['job']} has no job name"
@@ -187,9 +189,11 @@ def test_current_inventory_has_no_self_contradicting_gates() -> None:
     invisible here until it was measured. A deliberate exemption declares
     itself with `# gate-exempt: <reason>` beside the step.
     """
+    gates = list(cgra._blocking_gates())
+    assert len(gates) > 0, "No blocking gates found in inventory (GREEN-WHILE-EMPTY risk)"
     contradicting = [
         f"{gate['id']} ({', '.join(found)})"
-        for gate in cgra._blocking_gates()
+        for gate in gates
         if (found := cgra._defanged(gate["workflow"], gate["job"]))
     ]
     assert contradicting == []

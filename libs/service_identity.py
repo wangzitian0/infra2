@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from libs.common import (
+from libs.core.constants import (
     DEPLOYMENT_ENV_PREVIEW,
     DEPLOYMENT_ENV_PRODUCTION,
     DEPLOYMENT_ENV_STAGING,

@@ -6,12 +6,8 @@ import os
 import secrets as _secrets
 import string
 from collections.abc import Mapping
-from typing import TYPE_CHECKING
 
 from libs.env import VaultSecrets
-
-if TYPE_CHECKING:
-    pass
 
 
 def generate_secret_token(

@@ -26,7 +26,7 @@ from typing import Literal, Optional
 
 try:
     from infra2_sdk.secrets import OnePasswordBackend, SecretsError, VaultKvBackend
-except ModuleNotFoundError:  # pragma: no cover - environment, not logic
+except ImportError:  # pragma: no cover - environment, not logic
     # Helpers (generate_password, vault_token, verify_vault_token) stay importable in
     # minimal environments; only constructing a store without an injected backend
     # needs the SDK, and says so.
@@ -270,7 +270,7 @@ def verify_vault_token(
     address = addr or vault_address()
     try:
         from infra2_sdk.secrets import vault_token_status
-    except ModuleNotFoundError:
+    except ImportError:
         return {
             "valid": False,
             "ttl_hours": -1,
