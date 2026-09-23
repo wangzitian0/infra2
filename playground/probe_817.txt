@@ -1,0 +1,3 @@
+# acceptance probe for #817 — not for merge
+# a non-Markdown file, so detect-changes must report has_non_doc=true
+# and the seven required checks must actually RUN rather than skip.
