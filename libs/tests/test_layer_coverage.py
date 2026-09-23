@@ -22,24 +22,30 @@ def _load_infra_ci() -> dict:
     return yaml.safe_load(INFRA_CI_PATH.read_text(encoding="utf-8"))
 
 
-def test_every_registered_layer_is_in_the_pr_and_push_path_filters() -> None:
-    workflow = _load_infra_ci()
-    triggers = workflow[True]  # `on:` parses as the bool key True in YAML 1.1
+def test_no_registered_layer_can_be_left_out_of_ci() -> None:
+    """The successor to the per-layer path-filter check (#817, #850).
 
-    pr_paths = set(triggers["pull_request"]["paths"])
-    push_paths = set(triggers["push"]["paths"])
+    That check asked whether each registered layer appeared in infra-ci.yml's
+    `paths` lists, which answered the real question -- can a change to this layer
+    skip CI -- only for as long as someone kept the list current. It did not, twice.
 
-    for layer in _LAYERS:
-        expected = f"{layer}/**"
-        assert expected in pr_paths, (
-            f"layer {layer!r} is registered in service_registry._LAYERS but "
-            f"{expected!r} is missing from infra-ci.yml pull_request.paths — "
-            "changes to this layer won't trigger CI"
+    The list is gone, so the question is answered structurally: with no `paths`
+    filter, *every* change triggers the workflow, registered layer or not. This
+    asserts the premise that makes that true, and fails if a filter comes back --
+    at which point a layer could go missing from it again.
+    """
+    triggers = _load_infra_ci()[True]  # `on:` parses as the bool key True in YAML 1.1
+    for event in ("pull_request", "push"):
+        assert event in triggers, f"infra-ci.yml must still run on {event}"
+        spec = triggers[event] or {}
+        present = sorted(k for k in ("paths", "paths-ignore") if k in spec)
+        assert not present, (
+            f"infra-ci.yml filters its {event} trigger on {present}. A registered "
+            f"layer missing from that list skips CI silently, and the seven "
+            f"required checks stop reporting entirely -- see "
+            f"libs/tests/test_required_checks_can_report.py"
         )
-        assert expected in push_paths, (
-            f"layer {layer!r} is registered in service_registry._LAYERS but "
-            f"{expected!r} is missing from infra-ci.yml push.paths"
-        )
+    assert _LAYERS, "the layer registry is empty; this guard would be checking nothing"
 
 
 def test_every_registered_layer_is_in_the_ruff_lint_scope() -> None:
