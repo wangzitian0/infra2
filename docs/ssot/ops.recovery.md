@@ -316,7 +316,7 @@ Recommended schedule after the rehearsal target is provisioned:
     ssh root@<VPS_HOST>
     docker exec iac-runner sh -c '
       set -a; . /secrets/.env 2>/dev/null; set +a
-      export VAULT_ROOT_TOKEN=$(op read "op://Infra2/<vault-root-token-item>/Token")
+      export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token')
       cd /workspace/infra2
       BOOT="import platform, runpy, sys; sys.path.insert(0, \".\"); runpy.run_module(\"invoke\", run_name=\"__main__\")"
       python3 -P -c "$BOOT" vault.setup-approle --project <project> --service <service> --deploy
