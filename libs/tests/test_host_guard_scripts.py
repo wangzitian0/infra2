@@ -37,7 +37,9 @@ def guard_host(tmp_path: Path) -> dict[str, str]:
         "dockerd": '#!/bin/sh\ncp "$3" "$GUARD_CAPTURE_CONFIG"\n',
         "curl": '#!/bin/sh\nprintf "curl %s\\n" "$*" >> "$GUARD_COMMANDS"\n',
         "stat": (
-            '#!/bin/sh\nfor arg do file="$arg"; done\nwc -c < "$file" | tr -d " "\n'
+            '#!/bin/sh\nfor arg do file="$arg"; done\n'
+            'if [ "$file" = "${FAKE_STAT_FAIL_PATH:-}" ]; then exit 1; fi\n'
+            'wc -c < "$file" | tr -d " "\n'
         ),
         "timeout": (
             '#!/bin/sh\nprintf "timeout %s\\n" "$*" >> "$GUARD_COMMANDS"\n'
@@ -134,6 +136,26 @@ def test_disk_guardian_escalates_when_writes_cross_85_during_cleanup(
 
     assert result.returncode == 1
     assert f"{WARNING_PING_URL}/fail" in _commands(guard_host)
+    assert f"{PING_URL}/fail" in _commands(guard_host)
+
+
+def test_disk_guardian_still_pages_when_a_log_vanishes_during_scan(
+    guard_host, tmp_path: Path
+) -> None:
+    guard_host["FAKE_DISK_PERCENT"] = "85"
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    vanished = log_dir / "a-json.log"
+    vanished.touch()
+    large_log = log_dir / "b-json.log"
+    with large_log.open("wb") as handle:
+        handle.truncate(101 * 1024 * 1024)
+    guard_host["FAKE_STAT_FAIL_PATH"] = str(vanished)
+
+    result = _run("disk_guardian.sh", guard_host)
+
+    assert result.returncode == 1
+    assert large_log.stat().st_size == 0
     assert f"{PING_URL}/fail" in _commands(guard_host)
 
 

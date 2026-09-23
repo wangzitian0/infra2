@@ -70,13 +70,18 @@ if (( before >= CRITICAL_PERCENT || after_prune >= CRITICAL_PERCENT )); then
   echo "disk_guardian: critical threshold ${CRITICAL_PERCENT}% reached"
   if [[ -d "${LOG_ROOT}" ]]; then
     while IFS= read -r -d '' log_path; do
-      size_bytes="$(stat -c%s "${log_path}")"
+      if ! size_bytes="$(stat -c%s "${log_path}")"; then
+        echo "disk_guardian: log vanished or is unreadable: ${log_path}" >&2
+        continue
+      fi
       if (( size_bytes > LOG_LIMIT_BYTES )); then
         echo "disk_guardian: oversized Docker json log ${log_path} (${size_bytes} bytes)"
         if [[ "${DRY_RUN}" == true ]]; then
           echo "[dry-run] truncate ${log_path}"
         else
-          : > "${log_path}"
+          if ! : > "${log_path}"; then
+            echo "disk_guardian: cannot truncate ${log_path}" >&2
+          fi
         fi
       fi
     done < <(find "${LOG_ROOT}" -type f -name '*-json.log' -print0)
