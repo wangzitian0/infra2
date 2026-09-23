@@ -44,7 +44,8 @@ def guard_host(tmp_path: Path) -> dict[str, str]:
         ),
         "timeout": (
             '#!/bin/sh\nprintf "timeout %s\\n" "$*" >> "$GUARD_COMMANDS"\n'
-            'test "$FAKE_DOCKER_OK" = 1\n'
+            'test "$FAKE_DOCKER_OK" = 1 || exit 124\n'
+            'shift\n"$@"\n'
         ),
     }.items():
         path = bin_dir / name
@@ -143,7 +144,21 @@ def test_disk_guardian_finds_logs_under_docker_data_root(
 
     assert result.returncode == 1
     assert large_log.stat().st_size == 0
-    assert "docker info --format" in _commands(guard_host)
+    assert "timeout 5 docker info --format" in _commands(guard_host)
+    assert f"{PING_URL}/fail" in _commands(guard_host)
+
+
+def test_disk_guardian_pages_if_docker_info_times_out(
+    guard_host,
+) -> None:
+    guard_host["FAKE_DISK_PERCENT"] = "85"
+    guard_host["FAKE_DOCKER_OK"] = "0"
+    guard_host.pop("DISK_GUARDIAN_LOG_ROOT")
+
+    result = _run("disk_guardian.sh", guard_host)
+
+    assert result.returncode == 1
+    assert "timeout 5 docker info --format" in _commands(guard_host)
     assert f"{PING_URL}/fail" in _commands(guard_host)
 
 

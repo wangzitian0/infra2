@@ -25,7 +25,7 @@ disk_percent() {
 }
 
 if [[ -z "${LOG_ROOT}" ]]; then
-  docker_root="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || true)"
+  docker_root="$(timeout 5 docker info --format '{{.DockerRootDir}}' 2>/dev/null || true)"
   LOG_ROOT="${docker_root:-/var/lib/docker}/containers"
 fi
 
