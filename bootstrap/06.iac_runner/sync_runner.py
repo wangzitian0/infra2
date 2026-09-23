@@ -190,21 +190,36 @@ def diagnose_failure(stderr: str, stdout: str = "") -> dict[str, str]:
     # this with #759's backoff before giving up, so an operator does not need to open a
     # container to see "it failed once"; they need to know it's a network blip, not a
     # config problem, and how many times it already retried.
+    # The first marker is the retry wrapper's OWN phrase, and it is the reliable one:
+    # `_is_transient_transport_error` retries `ConnectionResetError` /
+    # `ConnectionAbortedError` on an isinstance check, but Python renders those as
+    # "[Errno 104] Connection reset by peer" / "Software caused connection abort" --
+    # neither carries "ECONNRESET" or "Connection aborted". Scanning only for the OS's
+    # wording therefore missed exactly the errors the layer below had just retried, and
+    # they fell through to unknown_invoke_failure, which is what #810 set out to remove.
+    # Keying on what `retrying_transport` itself emits does not depend on how any
+    # particular platform words an errno. The literal markers stay as a second net for
+    # a blip that surfaces without having gone through the wrapper.
+    _TRANSIENT_WRAPPER_PHRASE = "transient transport error"
     _TRANSIENT_TRANSPORT_MARKERS = (
+        _TRANSIENT_WRAPPER_PHRASE,
         "UNEXPECTED_EOF",
         "ECONNRESET",
         "Connection aborted",
+        "Connection reset by peer",
     )
     if any(marker in combined for marker in _TRANSIENT_TRANSPORT_MARKERS):
         retried_match = re.search(r"retried (\d+) time", combined)
-        retried = retried_match.group(1) if retried_match else "several"
+        # No count in the text means the failure did not carry one, not that it was
+        # retried zero times -- say so in words rather than rendering "(severalx)".
+        retried = f"{retried_match.group(1)}x" if retried_match else "several times"
         return {
             "error_kind": "transient_transport",
             "summary": _first_matching_line(
                 combined, (*_TRANSIENT_TRANSPORT_MARKERS, "SSL:")
             ),
             "next_action": (
-                f"Already retried automatically ({retried}x) and still failed -- a "
+                f"Already retried automatically ({retried}) and still failed -- a "
                 "longer-lived network blip (Vault/Cloudflare edge), not a config "
                 "problem. Re-run the deploy; escalate only if it keeps recurring."
             ),
