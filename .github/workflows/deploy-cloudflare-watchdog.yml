@@ -32,7 +32,7 @@ jobs:
           APPROVED_SHA: ${{ inputs.approved_sha }}
         run: |
           set -euo pipefail
-          test "${GITHUB_ACTOR}" = "wangzitian0"
+          test "${GITHUB_ACTOR}" = "${GITHUB_REPOSITORY_OWNER}"
           test "${GITHUB_REF}" = "refs/heads/main"
           test "${GITHUB_SHA}" = "${APPROVED_SHA}"
           test "$(git rev-parse HEAD)" = "${APPROVED_SHA}"

@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKER = ROOT / "cloudflare/infra-watchdog/worker.js"
@@ -39,11 +40,14 @@ def test_scheduler_success_failure_and_missing_secret(tmp_path: Path) -> None:
 
 
 def test_worker_production_deploy_requires_exact_head_manual_dispatch() -> None:
-    workflow = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
-    trigger = workflow.split("on:", 1)[1].split("permissions:", 1)[0]
-    assert "workflow_dispatch:" in trigger
-    assert "approved_sha:" in trigger
-    assert "push:" not in trigger
-    assert 'test "${GITHUB_ACTOR}" = "wangzitian0"' in workflow
-    assert 'test "${GITHUB_REF}" = "refs/heads/main"' in workflow
-    assert 'test "${GITHUB_SHA}" = "${APPROVED_SHA}"' in workflow
+    source = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(source)
+    triggers = workflow.get(
+        "on", workflow.get(True)
+    )  # PyYAML YAML 1.1 treats on as bool.
+    assert set(triggers) == {"workflow_dispatch"}
+    dispatch = triggers["workflow_dispatch"]
+    assert dispatch["inputs"]["approved_sha"]["required"] is True
+    assert 'test "${GITHUB_ACTOR}" = "${GITHUB_REPOSITORY_OWNER}"' in source
+    assert 'test "${GITHUB_REF}" = "refs/heads/main"' in source
+    assert 'test "${GITHUB_SHA}" = "${APPROVED_SHA}"' in source
