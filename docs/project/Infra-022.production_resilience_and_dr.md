@@ -32,6 +32,7 @@
 - [ ] **T2.1 全状态服务自动化异地备份至 Google Drive（#721）**：`rclone crypt` 与分级保留已打通；源代码的定时脚本现覆盖 17/17 个 `BackupFacet` 声明。仍须在 VPS 安装同 SHA 脚本、取得生产和 Staging 各一轮 17/17 的异地 manifest 与字节校验，并完成新增归档的隔离恢复，才能称为全状态交付。
 - [ ] **T2.2 备份自动恢复演练（Recovery Proof）**：沙箱工具和五项业务不变量已落地，历史手动运行在 10.62 秒内通过。但旧的默认 manifest 选择会取到周日较晚生成的 Staging 备份；代码现按环境分离并默认验证 Production manifest。仍须在 VPS 上用新脚本完成两次连续周周期的 Production `--service-id all` 演练，并保留期间的并行兜底。
 - [ ] **T2.3 带外死人开关（Dead Man's Switch）**：宿主机定时向外部 Healthchecks.io 上报心跳，结合既有 Cloudflare Worker 带外探针；一旦宿主机系统死锁或网络中断，外部独立通道立即触发 P0 告警。systemd timer 与脚本已准备；待三条真实检查 URL、生产安装和外部送达演练。
+- [ ] **T2.4 整机故障恢复与 RTO 证明**：在隔离的新 VPS 上按 `ops.recovery` 的整机演练步骤重建信任根、控制面和数据，记录从故障宣告到公开服务及业务不变量恢复的耗时。现有 10.62 秒数据仅是单库沙箱还原耗时，不能作为整机 RTO。
 
 ### L3: 发布门禁闭环与告警降噪 (Deploy & Observability)
 - [ ] **T3.1 发布三段式门禁与 Schema 防御（#698）**：
