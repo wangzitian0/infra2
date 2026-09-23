@@ -17,7 +17,7 @@ OPS_CHECKS = ROOT / ".github/workflows/ops-checks.yml"
 
 
 def test_infra_pins_the_expected_sdk_release() -> None:
-    assert version("infra2-sdk") == "2.1.0"
+    assert version("infra2-sdk") == "2.1.1"
 
 
 def test_alerting_dockerfile_sdk_pin_matches_pyproject() -> None:
