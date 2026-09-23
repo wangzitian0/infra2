@@ -238,7 +238,11 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 ## 7. 标准操作程序 (Playbooks)
 
 ### SOP-001: 响应 P0 告警
-确认影响范围 → 基础设施故障参考 [Recovery SSOT](./ops.recovery.md) → 状态页更新 Incident。
+确认影响范围 → 按 [Infra-022 五类 P0 Runbook](../runbooks/infra022-p0.md)
+30 秒定位（磁盘满、部署失败、容器 kill、Schema 分叉、Watchdog 报死）→
+基础设施故障参考 [Recovery SSOT](./ops.recovery.md) → 状态页更新 Incident。
+Runbook 入库仅交付操作路径；#723 要求的一次现场演练、完整告警分级与路由、
+低流量 Canary 防误报及行动率 KPI 仍须单独验收。
 
 ### SOP-002: 接入飞书自定义机器人通道
 1. 飞书群建自定义机器人,复制 webhook URL。

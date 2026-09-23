@@ -131,6 +131,29 @@ def test_alertmanager_payload_is_rendered_as_feishu_text() -> None:
     assert feishu_payload == {"msg_type": "text", "content": {"text": text}}
 
 
+@pytest.mark.parametrize(
+    ("alert_name", "anchor"),
+    [
+        ("ContainerBreakdown", "#container-killed"),
+        ("DeployQueueStuck", "#deployment-failed"),
+    ],
+)
+def test_p0_alerts_link_to_existing_runbook_in_text_and_card(
+    alert_name: str, anchor: str
+) -> None:
+    payload = _sample_alert_payload(
+        commonLabels={"alertname": alert_name, "severity": "critical"}
+    )
+    text = format_signoz_alert(payload)
+    card = build_feishu_alert_card(payload)
+    url = f"https://github.com/wangzitian0/infra2/blob/main/docs/runbooks/infra022-p0.md{anchor}"
+    assert f"Runbook: {url}" in text
+    assert url in json.dumps(card)
+    heading = anchor.removeprefix("#").replace("-", " ")
+    headings = (ROOT / "docs/runbooks/infra022-p0.md").read_text(encoding="utf-8")
+    assert f"## {heading}" in headings.lower()
+
+
 def _sample_alert_payload(**over) -> dict:
     payload = {
         "status": "firing",

@@ -306,6 +306,16 @@ def test_failure_message_is_out_of_band_and_redacts_secrets() -> None:
     assert "secret-token" not in message
 
 
+def test_host_failures_link_to_concrete_p0_runbooks() -> None:
+    watchdog = _load_watchdog()
+    assert watchdog._runbook_url_for_failure("host-reachability").endswith(
+        "docs/runbooks/infra022-p0.md#watchdog-silent"
+    )
+    assert watchdog._runbook_url_for_failure("docker-runtime").endswith(
+        "docs/runbooks/infra022-p0.md#container-killed"
+    )
+
+
 def test_main_sends_feishu_only_when_a_check_fails(monkeypatch) -> None:
     """Infra-007.2: successful checks stay quiet, failures send direct Feishu."""
     watchdog = _load_watchdog()
