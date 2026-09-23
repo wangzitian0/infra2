@@ -49,4 +49,4 @@ print(f"Restored {result.tables_verified} tables in {result.elapsed_seconds:.2f}
 
 - **Sandbox Immunity**: Rehearsals MUST NOT target production ports (e.g., 5432) or live volume mounts; `assert_rehearsal_target()` enforces strict ephemeral host separation.
 - **Fail-Closed Verification**: A missing or stale manifest triggers an immediate P1 alert payload (`build_backup_alert_payload()`).
-- **Guards & Tests**: Covered by `libs/tests/test_backup_verification.py` and `libs/tests/test_backup_restore.py`.
+- **Guards & Tests**: Covered by `libs/tests/test_backup_verification.py`.

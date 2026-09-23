@@ -35,10 +35,17 @@ from libs.service_registry import domain_for_service
 # Re-exported so the receiver keeps one import surface (`marker_status` is used by
 # tools/app_deploy_request.py's `markers` action, which must not import this module).
 __all__ = [
+    "APP_SOURCES",
+    "DeployPlan",
     "MINIMUM_PRODUCTION_MARKER",
+    "make_plan",
     "marker_status",
     "newest_release_tag",
+    "parse_request",
     "production_marker",
+    "select_iac_ref",
+    "validate_request_authority",
+    "verify_production_evidence",
 ]
 
 APP_SOURCES: dict[str, str] = {
@@ -465,7 +472,7 @@ def _fetch_github_json(
         raise ValueError(
             f"GitHub evidence request failed for {path}: {type(exc).__name__}"
         ) from None
-    if expect_array:
+    if expect_array or path.endswith("/reviews"):
         if not isinstance(payload, list):
             raise ValueError(f"GitHub evidence response for {path} must be a list")
     else:

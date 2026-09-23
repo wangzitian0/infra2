@@ -324,6 +324,43 @@ def test_materialize_artifact_verifies_real_checksum_and_cleans_corrupted(tmp_pa
         )
     assert not target_file.exists(), "Corrupted download file must be cleaned up"
 
+    # Case 3: local: uri also verifies sha256
+    local_file = tmp_path / "local.sql.gz"
+    local_file.write_bytes(content)
+    with pytest.raises(BackupRestoreError, match="checksum mismatch"):
+        materialize_artifact(
+            {
+                "remote_uri": f"local:{local_file}",
+                "sha256": corrupt_hash,
+            },
+            tmp_path,
+        )
+
+
+def test_execute_rehearsal_handles_timeout_cleanly(monkeypatch) -> None:
+    import time
+    from libs.backup.rehearsal import RestoreRehearsalPlan, execute_rehearsal
+
+    plan = RestoreRehearsalPlan(
+        service_id="test/postgres",
+        source_uri="test:dump.sql.gz",
+        archive_path=Path("/tmp/fake.sql.gz"),
+        target_container="test-postgres-restore-rehearsal",
+        pg_user="postgres",
+        database="testdb",
+        invariant_sql=("SELECT 1",),
+    )
+
+    def slow_restore(*args, **kwargs):
+        time.sleep(0.5)
+        return {}
+
+    monkeypatch.setattr(
+        "libs.backup.rehearsal.run_postgres_restore_rehearsal", slow_restore
+    )
+    with pytest.raises(BackupRestoreError, match="timed out"):
+        execute_rehearsal(plan, timeout_seconds=0.05)
+
 
 def test_backup_restore_rehearsal_refuses_live_looking_targets(tmp_path) -> None:
     """Infra-011.17 / #945: real backup restores require a throwaway target."""

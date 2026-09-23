@@ -14,6 +14,7 @@ from __future__ import annotations
 import concurrent.futures
 import gzip
 import hashlib
+import os
 import re
 import subprocess
 from dataclasses import asdict, dataclass
@@ -113,22 +114,26 @@ def materialize_artifact(
     """Resolve a local artifact path, downloading remote artifacts with rclone."""
     remote_uri = str(artifact.get("remote_uri") or "")
     if remote_uri.startswith("local:"):
-        return Path(remote_uri.removeprefix("local:"))
-    if ":" not in remote_uri:
+        destination = Path(remote_uri.removeprefix("local:"))
+        if not destination.exists():
+            raise BackupRestoreError(f"local backup artifact not found: {destination}")
+    elif ":" not in remote_uri:
         raise BackupRestoreError(f"unsupported backup artifact URI: {remote_uri}")
-
-    download_dir.mkdir(parents=True, exist_ok=True)
-    destination = planned_artifact_path(artifact, download_dir)
-    result = runner(
-        ["rclone", "copyto", remote_uri, str(destination)],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise BackupRestoreError(
-            result.stderr.strip() or f"rclone download failed: {remote_uri}"
+    else:
+        download_dir.mkdir(parents=True, exist_ok=True)
+        destination = planned_artifact_path(artifact, download_dir)
+        result = runner(
+            ["rclone", "copyto", remote_uri, str(destination)],
+            text=True,
+            capture_output=True,
+            check=False,
         )
+        if result.returncode != 0:
+            destination.unlink(missing_ok=True)
+            raise BackupRestoreError(
+                result.stderr.strip() or f"rclone download failed: {remote_uri}"
+            )
+
     expected_sha256 = artifact.get("sha256")
     if expected_sha256:
         h = hashlib.sha256()
@@ -137,7 +142,8 @@ def materialize_artifact(
                 h.update(chunk)
         actual_sha256 = h.hexdigest()
         if actual_sha256.lower() != str(expected_sha256).lower():
-            destination.unlink(missing_ok=True)
+            if not remote_uri.startswith("local:"):
+                destination.unlink(missing_ok=True)
             raise BackupRestoreError(
                 f"backup artifact checksum mismatch for {destination.name}: "
                 f"expected {expected_sha256}, got {actual_sha256}"
@@ -339,14 +345,17 @@ def execute_rehearsal(
     **kwargs: Any,
 ) -> dict[str, Any]:
     """B-02: Execute restore rehearsal with timeout guard."""
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
         future = executor.submit(run_postgres_restore_rehearsal, plan, **kwargs)
-        try:
-            return future.result(timeout=timeout_seconds)
-        except concurrent.futures.TimeoutError as exc:
-            raise BackupRestoreError(
-                f"postgres restore rehearsal timed out after {timeout_seconds}s"
-            ) from exc
+        return future.result(timeout=timeout_seconds)
+    except concurrent.futures.TimeoutError as exc:
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise BackupRestoreError(
+            f"postgres restore rehearsal timed out after {timeout_seconds}s"
+        ) from exc
+    finally:
+        executor.shutdown(wait=False)
 
 
 __all__ = [

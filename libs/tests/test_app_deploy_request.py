@@ -1093,3 +1093,21 @@ def test_gate_is_not_checked_for_an_operator_run_without_the_flags(tmp_path) -> 
     receiver_cli.check_preflight_canary_gate(
         plan, canary_job_ran=True, canary_result="success"
     )
+
+
+def test_fetch_github_json_supports_reviews_array(monkeypatch) -> None:
+    import httpx
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return [{"id": 1, "state": "APPROVED"}]
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: FakeResponse())
+    result = receiver._fetch_github_json("/repos/owner/repo/pulls/1/reviews")
+    assert isinstance(result, list)
+    assert result[0]["state"] == "APPROVED"
