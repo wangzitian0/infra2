@@ -64,7 +64,7 @@ const DEFAULT_HEARTBEATS = [
 
 export default {
   async scheduled(controller, env, ctx) {
-    ctx.waitUntil(runWatchdog(env, controller.scheduledTime || Date.now()));
+    ctx.waitUntil(runScheduledWatchdog(env, controller.scheduledTime || Date.now()));
   },
 
   async fetch(request, env) {
@@ -84,6 +84,49 @@ export default {
     return jsonResponse({ ok: false, error: "not found" }, 404);
   },
 };
+
+async function runScheduledWatchdog(env, nowMs) {
+  let runError = null;
+  try {
+    await runWatchdog(env, nowMs);
+  } catch (error) {
+    runError = error;
+  }
+  try {
+    await pingSchedulerDeadman(env, runError === null);
+  } catch (error) {
+    logWatchdogResult({
+      event: "watchdog.deadman.failure",
+      timestamp: nowMs,
+      status: "fail",
+      error: oneLine(error && error.message ? error.message : String(error)),
+    });
+    if (runError === null) runError = error;
+  }
+  if (runError !== null) throw runError;
+}
+
+async function pingSchedulerDeadman(env, ok) {
+  const url = String(env.WATCHDOG_DEADMAN_PING_URL || "").trim();
+  if (!/^https:\/\/hc-ping\.com\/[A-Za-z0-9_-]+$/.test(url)) {
+    throw new Error("WATCHDOG_DEADMAN_PING_URL is missing or invalid");
+  }
+  let response;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    response = await fetch(`${url}${ok ? "" : "/fail"}`, {
+      method: "GET",
+      redirect: "error",
+      signal: controller.signal,
+    });
+  } catch (_error) {
+    throw new Error("external scheduler heartbeat request failed");
+  } finally {
+    clearTimeout(timeout);
+  }
+  if (!response.ok) throw new Error("external scheduler heartbeat returned an error");
+}
 
 async function runWatchdog(env, nowMs = Date.now()) {
   const environments = enabledEnvironments(env);

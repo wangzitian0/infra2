@@ -160,6 +160,10 @@ def test_the_deploy_triggering_globs_cover_every_push_triggered_deploy_workflow(
     for name in ("deploy.yml", "deploy-cloudflare-watchdog.yml"):
         workflow = yaml.safe_load((workflows / name).read_text(encoding="utf-8"))
         on = workflow.get("on", workflow.get(True))
+        if "push" not in on:
+            assert name == "deploy-cloudflare-watchdog.yml"
+            assert "workflow_dispatch" in on
+            continue
         for pattern in on["push"]["paths"]:
             sample = pattern.replace("**", "sub/file").replace("*", "file")
             assert gate._deploy_triggering(sample), (name, pattern)

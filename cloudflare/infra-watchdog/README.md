@@ -21,6 +21,9 @@ runner heartbeat freshness.
 - Dedupe is keyed on stable identity plus failure domain, not volatile details
   like heartbeat age, so the same fault renotifies only on the configured
   interval.
+- Sends a separate completion ping to Healthchecks.io after each 30-minute cron.
+  A failed run sends `/fail`; a stopped cron produces a missed ping. This check
+  detects the Worker itself without relying on the VPS or its alert bridge.
 
 ## Required Secrets
 
@@ -45,11 +48,22 @@ Heartbeat:
 ```bash
 wrangler secret put HEARTBEAT_TOKEN
 wrangler secret put WATCHDOG_STATUS_TOKEN
+wrangler secret put WATCHDOG_DEADMAN_PING_URL
 ```
 
 `HEARTBEAT_TOKEN` must match `INFRA_PROBE_HEARTBEAT_TOKEN` in the platform
 alerting deployment. `WATCHDOG_STATUS_TOKEN` is required for authenticated
 GitHub audit checks of `/status`.
+`WATCHDOG_DEADMAN_PING_URL` is a separate Healthchecks.io check URL, stored only
+as a Worker secret. Configure its period for 30 minutes and choose a grace and
+notification route based on a controlled missed-ping drill. The notification
+must not traverse this Worker, the VPS, SigNoz, or the internal alert bridge.
+
+The Worker deployment workflow is manual because deployment applies to
+Production. After owner approval of the exact reviewed `main` head SHA, dispatch
+`Deploy Cloudflare Watchdog` on `main` with `approved_sha` set to that SHA. The
+workflow rejects another actor, ref or SHA. Check the deployment job and the
+external Healthchecks receipt before marking the dead-man switch live.
 
 Secondary alert channel (email via Resend — used only when Feishu delivery
 fails, so a Feishu outage cannot silently swallow an alert):
