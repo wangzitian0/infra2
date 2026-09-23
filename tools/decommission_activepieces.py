@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import re
 import shutil
 import subprocess
 import sys
@@ -26,6 +27,12 @@ from typing import Any, Callable
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+
+def _validate_database_name(db_name: str) -> None:
+    """Restrict names used in SQL and backup paths to simple identifiers."""
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", db_name):
+        raise ValueError(f"Unsafe PostgreSQL database name: {db_name!r}")
 
 
 def default_runner(
@@ -44,7 +51,8 @@ def check_database_exists(
     container: str = "platform-postgres",
     runner: Callable[..., Any] = default_runner,
 ) -> bool:
-    """Check if database exists in PostgreSQL container."""
+    """Check if database exists; never mistake a failed query for absence."""
+    _validate_database_name(db_name)
     cmd = [
         "docker",
         "exec",
@@ -56,7 +64,17 @@ def check_database_exists(
         f"SELECT 1 FROM pg_database WHERE datname = '{db_name}';",
     ]
     res = runner(cmd)
-    return res.returncode == 0 and "1" in getattr(res, "stdout", "").strip()
+    if res.returncode != 0:
+        raise RuntimeError(
+            f"Could not check whether database {db_name} exists: "
+            f"{getattr(res, 'stderr', 'unknown error')}"
+        )
+    output = getattr(res, "stdout", "").strip()
+    if output not in {"", "1"}:
+        raise RuntimeError(
+            f"Unexpected database existence result for {db_name}: {output!r}"
+        )
+    return output == "1"
 
 
 def export_database_backup(
@@ -181,6 +199,7 @@ def drop_database(
     runner: Callable[[list[str]], Any] = default_runner,
 ) -> bool:
     """Drop database with strict double confirmation gates."""
+    _validate_database_name(db_name)
     if dry_run:
         print(
             f"[DRY-RUN] Safety gate active: skipped physical DROP DATABASE {db_name};"
@@ -246,7 +265,7 @@ def cleanup_data_path(
             f"Destructive operation aborted: cleaning {data_path} requires explicit --confirm"
         )
 
-    cmd = ["rm", "-rf", str(p)]
+    cmd = ["rm", "-rf", "--", str(p)]
     res = runner(cmd)
     if res.returncode != 0:
         raise RuntimeError(
@@ -267,6 +286,7 @@ def decommission_activepieces(
     runner: Callable[[list[str]], Any] = default_runner,
 ) -> dict[str, Any]:
     """Execute end-to-end decommission workflow with apocalypse safeguards."""
+    _validate_database_name(db_name)
     timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     backup_dir_path = backup_dir or Path("/tmp/activepieces_decommission")
     backup_file = backup_dir_path / f"{db_name}_{timestamp}.dump"
@@ -304,6 +324,11 @@ def decommission_activepieces(
     else:
         print(
             f"Database '{db_name}' does not exist; skipping database backup and drop."
+        )
+
+    if Path(data_path).exists() and not backup_verified and not dry_run:
+        raise RuntimeError(
+            f"Refusing to remove {data_path}: no verified database backup is available"
         )
 
     path_cleaned = cleanup_data_path(

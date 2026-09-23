@@ -66,9 +66,65 @@ def test_check_database_exists() -> None:
     assert check_database_exists("activepieces", runner=runner_exists) is True
 
     runner_absent = MockRunner(
-        {"SELECT 1 FROM pg_database": subprocess.CompletedProcess([], 0, "0\n", "")}
+        {"SELECT 1 FROM pg_database": subprocess.CompletedProcess([], 0, "", "")}
     )
     assert check_database_exists("activepieces", runner=runner_absent) is False
+
+
+def test_database_query_failure_never_allows_path_cleanup(tmp_path: Path) -> None:
+    data_path = tmp_path / "activepieces"
+    data_path.mkdir()
+    runner = MockRunner(
+        {
+            "SELECT 1 FROM pg_database": subprocess.CompletedProcess(
+                [], 1, "", "connection refused"
+            )
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="connection refused"):
+        decommission_activepieces(
+            confirm=True,
+            data_path=data_path,
+            backup_dir=tmp_path,
+            runner=runner,
+        )
+
+    assert not runner.has_command_containing("pg_dump")
+    assert not runner.has_command_containing("DROP DATABASE")
+    assert not runner.has_command_containing("rm -rf")
+
+
+def test_database_absence_without_verified_backup_keeps_path(tmp_path: Path) -> None:
+    data_path = tmp_path / "activepieces"
+    data_path.mkdir()
+    runner = MockRunner(
+        {"SELECT 1 FROM pg_database": subprocess.CompletedProcess([], 0, "", "")}
+    )
+
+    with pytest.raises(RuntimeError, match="no verified database backup"):
+        decommission_activepieces(
+            confirm=True,
+            data_path=data_path,
+            backup_dir=tmp_path,
+            runner=runner,
+        )
+
+    assert not runner.has_command_containing("rm -rf")
+
+
+def test_unsafe_database_name_is_rejected_before_any_command(tmp_path: Path) -> None:
+    runner = MockRunner()
+
+    with pytest.raises(ValueError, match="Unsafe PostgreSQL database name"):
+        decommission_activepieces(
+            confirm=True,
+            db_name="activepieces'; DROP DATABASE finance_report; --",
+            data_path=tmp_path,
+            runner=runner,
+        )
+
+    assert runner.commands == []
 
 
 def test_verify_backup_integrity_rejects_missing_file(tmp_path: Path) -> None:
