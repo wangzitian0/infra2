@@ -30,6 +30,7 @@
 
 ### L2: 生产数据备份与带外容灾 (Platform & Data)
 - [ ] **T2.1 全状态服务自动化异地备份至 Google Drive（#721）**：`rclone crypt` 与分级保留已打通；源代码的定时脚本现覆盖 17/17 个 `BackupFacet` 声明。2026-09-23 在 VPS 以 `tools/host_backup.sh` 文件 SHA256 `e2a897cf2d583e5b612946834c9d80b176339ebcc32c56c5e23da0df3c9cea83` 对 Staging 做独立本机 canary：17/17 项、总归档 282,318,058 字节，逐项 SHA256、字节数和 gzip/tar 可读性通过，目录 `0700`、manifest `0600`（`/data/backups/infra2-validation-staging-20260923T164904Z/staging-manifest.json`）。2026-09-24 将其中两个数据库归档分别还原至网络隔离、内存/CPU 限额的一次性 Postgres 容器：Finance Report 52 张表、5,327 条账户记录，TrueAlpha 144 张表、354 条完整抓取记录及 4,560 条可用结果；两次均退出 0、通过 3 项 SQL 不变量，容器已销毁。这证明新版**本机数据库归档**可恢复；其余 15 项未做功能恢复，也未证明异地上传/下载。现场异地最新可读清单（2026-09-18）仍只有 9/17 项，安装的宿主机脚本 SHA256 仍为 `b8f9b117a7bf426bb12c89cd307a7c89f91d25edf309c4852e1c4524404fc0a7`。仍须安装同 SHA 新脚本、取得生产和 Staging 各一轮 17/17 的异地 manifest 与字节校验，并完成新增归档的隔离恢复，才能称为全状态交付。
+  - 2026-09-24 又用同一新源码在独立 root-only 目录 `/data/backups/infra2-validation-production-20260924T0200Z/` 运行 Production 本机 canary（`BACKUP_REMOTE` 显式 unset）：退出 0，17/17 项、2,726,743,453 字节；逐项重算 SHA256/大小，gzip/tar 读取全部通过，目录 `0700`、manifest `0600`。Finance Report 及 TrueAlpha 的生产归档分别在网络隔离的一次性容器中通过 5 项 SQL 不变量；还原库与当时在线库分别同为 52 张表/9 个账户、118 张表/178 条完整抓取/3,131 条可用结果。两容器均销毁。OpenPanel 和 ClickHouse 的在线 tar 有文件变化 WARN，故仅证明归档结构可读，尚未证明其功能恢复。**本次也未上传异地**。
 - [ ] **T2.2 备份自动恢复演练（Recovery Proof）**：沙箱工具和五项业务不变量已落地，历史手动运行在 10.62 秒内通过。但旧的默认 manifest 选择会取到周日较晚生成的 Staging 备份；代码现按环境分离并默认验证 Production manifest。仍须在 VPS 上用新脚本完成两次连续周周期的 Production `--service-id all` 演练，并保留期间的并行兜底。
 - [ ] **T2.3 带外死人开关（Dead Man's Switch）**：宿主机 systemd timer 定时向外部 Healthchecks.io 上报心跳与磁盘 P1/P0 状态，Cloudflare Worker 的 30 分钟 cron 向第四个独立检查上报；主机失联与 Worker 停摆分别由外部通知。代码准备不等于现场验收，须配置四条真实检查 URL、生产安装并验证外部通知送达。
 - [ ] **T2.4 整机故障恢复与 RTO 证明**：在隔离的新 VPS 上按 `ops.recovery` 的整机演练步骤重建信任根、控制面和数据，记录从故障宣告到公开服务及业务不变量恢复的耗时。现有 10.62 秒数据仅是单库沙箱还原耗时，不能作为整机 RTO。
@@ -66,6 +67,8 @@
 
 | Date | Change |
 |---|---|
+| 2026-09-24 | 生产 TrueAlpha 首次隔离恢复撞到官方 Postgres 镜像临时服务器的就绪竞态；恢复工具改为等初始化完成标记和最终服务器就绪，重跑 5 项不变量通过。独立复审又发现 `docker rm -f` 会留下含恢复数据的匿名卷；本次演练留下的 5 个卷按创建时间、Postgres 内容和 dangling 状态核对后逐个删除，恢复工具改为清理容器及匿名卷，并隔离每次下载目录。 |
+| 2026-09-24 | Production 新脚本本机 canary 17/17，17 个文件哈希与读取均通过；Finance Report 和 TrueAlpha 从该归档恢复后通过 5 项不变量且行数与在线库相同。仍待异地 17/17。 |
 | 2026-09-24 | Staging 新归档中 Finance Report 和 TrueAlpha 的 Postgres 数据在 VPS 一次性网络隔离容器中实际恢复并通过 SQL 检查；两个容器均清理。异地最新清单仍只有 9/17，T2.1 保持未完成。 |
 | 2026-09-23 | Staging 本机 17/17 备份 canary 从新源码直接运行，独立 root-only 目录，17 个归档均通过 SHA256、大小与 gzip/tar 读取检查；未上传异地，未做功能恢复，T2.1 保持未完成。 |
 | 2026-09-23 | 宿主机现场核查：93 个运行容器中 89 个已有容器级日志限额，4 个未设限的是 Dokploy 控制面；daemon 无默认日志限额及 live-restore，已有每 6 小时运行的 host hygiene。新增 daemon 配置校验/回滚脚本、5 分钟磁盘守护、1 分钟带外心跳及三条独立外部检查的安装方案；生产验收前 T1.1/T1.2/T2.3 保持未完成。 |
