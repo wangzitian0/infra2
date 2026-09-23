@@ -23,6 +23,11 @@ SHA_CODE = "e" * 40
 SHA_IAC = "f" * 40
 
 
+class _NoContainersClient:
+    def get_containers(self):
+        return []
+
+
 @pytest.fixture(autouse=True)
 def _no_real_teardown_sleep(monkeypatch):
     monkeypatch.setattr(canary.time, "sleep", lambda *_: None)
@@ -79,7 +84,7 @@ def spies(monkeypatch):
 
 def test_canary_deploys_reserved_slot_then_tears_down(spies):
     res = run_canary(
-        client=object(),
+        client=_NoContainersClient(),
         service="finance_report/app",
         domain="zitian.party",
         version_ref="main",
@@ -98,7 +103,7 @@ def test_canary_deploys_reserved_slot_then_tears_down(spies):
 
 def test_keep_skips_teardown(spies):
     res = run_canary(
-        client=object(),
+        client=_NoContainersClient(),
         service="finance_report/app",
         domain="zitian.party",
         version_ref="main",
@@ -123,7 +128,7 @@ def test_teardown_runs_even_when_deploy_raises(monkeypatch):
 
     with pytest.raises(TimeoutError):
         run_canary(
-            client=object(),
+            client=_NoContainersClient(),
             service="finance_report/app",
             domain="zitian.party",
             version_ref="main",
@@ -135,7 +140,7 @@ def test_no_wait_reports_unknown_health_but_still_tears_down(spies):
     # --no-wait: the deploy is fire-and-forget, so health is unknown (ok/healthy None),
     # but teardown still runs by default so the canary never leaks its ephemeral stack.
     res = run_canary(
-        client=object(),
+        client=_NoContainersClient(),
         service="finance_report/app",
         domain="zitian.party",
         version_ref="main",
@@ -150,7 +155,7 @@ def test_no_wait_reports_unknown_health_but_still_tears_down(spies):
 
 def test_version_ref_forwarded(spies):
     run_canary(
-        client=object(),
+        client=_NoContainersClient(),
         service="finance_report/app",
         domain="zitian.party",
         version_ref="v2.0.0",
@@ -162,12 +167,12 @@ def test_version_ref_forwarded(spies):
 def test_service_defaults_to_finance_report_but_is_overridable(spies):
     # #522: --service selects which preview-capable service the canary probes; the
     # default stays finance_report/app so every pre-#522 caller is unaffected.
-    run_canary(client=object(), domain="zitian.party", version_ref="main")
+    run_canary(client=_NoContainersClient(), domain="zitian.party", version_ref="main")
     assert spies["deploy"]["service"] == "finance_report/app"
     assert spies["down"]["service"] == "finance_report/app"
 
     run_canary(
-        client=object(),
+        client=_NoContainersClient(),
         domain="zitian.party",
         service="truealpha/app",
         version_ref="main",
@@ -191,7 +196,7 @@ def test_best_effort_down_retries_then_succeeds(monkeypatch):
     monkeypatch.setattr(canary, "down", flaky)
     ok = canary._best_effort_down(
         domain="z.p",
-        client=object(),
+        client=_NoContainersClient(),
         service="finance_report/app",
         _sleep=lambda *_: None,
     )
@@ -208,7 +213,7 @@ def test_best_effort_down_rechecks_until_delete_converges(monkeypatch):
     monkeypatch.setattr(canary, "down", asynchronous_delete)
     ok = canary._best_effort_down(
         domain="z.p",
-        client=object(),
+        client=_NoContainersClient(),
         service="finance_report/app",
         attempts=4,
         _sleep=lambda *_: None,
@@ -216,6 +221,62 @@ def test_best_effort_down_rechecks_until_delete_converges(monkeypatch):
 
     assert ok is True
     assert calls["n"] == 3
+
+
+def test_best_effort_down_rejects_record_only_false_pass(monkeypatch, capsys):
+    monkeypatch.setattr(
+        canary, "down", lambda *args, **kwargs: SimpleNamespace(compose_id=None)
+    )
+
+    class OrphanedClient:
+        def get_containers(self):
+            return [
+                {"name": "finance_report-frontend-pr-999", "state": "created"},
+                {"name": "finance_report-preview-db-pr-999", "state": "running"},
+                {
+                    "name": "finance_report-app-vault-agent-pr-999",
+                    "state": "restarting",
+                },
+                {"name": "truealpha-app-pr-999", "state": "running"},
+            ]
+
+    ok = canary._best_effort_down(
+        domain="z.p",
+        client=OrphanedClient(),
+        service="finance_report/app",
+        attempts=3,
+        _sleep=lambda *_: None,
+    )
+
+    assert ok is False
+    assert "finance_report-preview-db-pr-999" in capsys.readouterr().err
+
+
+def test_best_effort_down_waits_for_container_disappearance(monkeypatch):
+    monkeypatch.setattr(
+        canary, "down", lambda *args, **kwargs: SimpleNamespace(compose_id=None)
+    )
+
+    class EventuallyCleanClient:
+        reads = 0
+
+        def get_containers(self):
+            self.reads += 1
+            if self.reads < 3:
+                return [{"name": "finance_report-preview-db-pr-999"}]
+            return [{"name": "truealpha-preview-db-pr-999"}]
+
+    client = EventuallyCleanClient()
+    ok = canary._best_effort_down(
+        domain="z.p",
+        client=client,
+        service="finance_report/app",
+        attempts=4,
+        _sleep=lambda *_: None,
+    )
+
+    assert ok is True
+    assert client.reads == 4
 
 
 def test_best_effort_down_rejects_delete_response_without_convergence(
@@ -230,7 +291,7 @@ def test_best_effort_down_rejects_delete_response_without_convergence(
     monkeypatch.setattr(canary, "down", never_disappears)
     ok = canary._best_effort_down(
         domain="z.p",
-        client=object(),
+        client=_NoContainersClient(),
         service="finance_report/app",
         attempts=3,
         _sleep=lambda *_: None,
@@ -253,7 +314,7 @@ def test_best_effort_down_warns_and_returns_false_on_persistent_failure(
     monkeypatch.setattr(canary, "down", boom)
     ok = canary._best_effort_down(
         domain="z.p",
-        client=object(),
+        client=_NoContainersClient(),
         service="finance_report/app",
         attempts=3,
         _sleep=lambda *_: None,
@@ -279,7 +340,7 @@ def test_run_canary_teardown_failure_does_not_mask_deploy_error(monkeypatch, cap
 
     with pytest.raises(RuntimeError, match="composeStatus=error"):
         run_canary(
-            client=object(),
+            client=_NoContainersClient(),
             service="finance_report/app",
             domain="z.p",
             version_ref="main",
@@ -299,7 +360,7 @@ def test_run_canary_attaches_cleanup_evidence_to_deploy_error(monkeypatch):
 
     with pytest.raises(RuntimeError, match="deployment record entered error") as caught:
         run_canary(
-            client=object(),
+            client=_NoContainersClient(),
             service="finance_report/app",
             domain="z.p",
             version_ref="main",
@@ -575,7 +636,7 @@ def test_canary_services_fail_closed_when_none_declared(monkeypatch):
 
 def test_run_canary_forwards_service_to_deploy_v2(spies):
     run_canary(
-        client=object(),
+        client=_NoContainersClient(),
         service="finance_report/app",
         domain="zitian.party",
         version_ref="main",
@@ -585,7 +646,7 @@ def test_run_canary_forwards_service_to_deploy_v2(spies):
 
 def test_run_canary_forwards_exact_iac_authority_and_clone_ref(spies):
     run_canary(
-        client=object(),
+        client=_NoContainersClient(),
         service="finance_report/app",
         domain="zitian.party",
         version_ref="main",

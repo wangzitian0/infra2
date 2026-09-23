@@ -31,6 +31,15 @@ In-band 告警路径恒为:`component/app → OTLP Collector → SigNoz → plat
 
 > [!WARNING]
 > **单机共因失效与带外最高仲裁原则**：由于 SigNoz、ClickHouse、OTel Collector 与业务组件均单机共存，当宿主机遭遇物理死锁、网卡断联、磁盘打满时，带内监控将整体静默，监控大屏会虚假呈现“0 告警发生”。系统健康最高仲裁权由独立于 VPS 的带外通道持有（Cloudflare Worker 边缘 watchdog + 外部死人开关心跳），带外失联即刻升级为 P0 级整机灾难告警。
+
+Cloudflare Worker watchdog 的定时执行也由外部 Healthchecks.io 独立监控：每次
+30 分钟 cron 完成后 ping 成功；执行异常则发送 `/fail`，任务根本未启动则停止
+ping。`WATCHDOG_DEADMAN_PING_URL` 是 Cloudflare Worker secret，不入库、不出日志，
+其外部通知不能依赖 VPS、SigNoz、Alert Bridge 或同一个 Worker。按 30 分钟
+周期设置外部检查的 grace 和通知窗口，并通过暂停 cron 的受控演练实测送达时间；
+不能把宿主机一分钟心跳的 10 分钟时限套给此检查。Worker 目录合入 main 会触发
+生产部署的旧工作流，因此该目录的部署工作流必须改为手动 dispatch，并校验
+owner 批准的当前 head SHA，才能满足 `AGENTS.md` 的生产权限边界。
 >
 > **防假绿与维度下钻铁律**：所有业务指标与告警规则必须按 `(service_namespace, environment)` 维度分组计算，严禁在无标签的全局均值上计算成功率。单策略/单任务池故障时禁止被大盘平均值稀释覆盖。告警静默（Cooldown/Snooze）期必须在看板中明确标记为“已静音”而非“健康正常”。
 

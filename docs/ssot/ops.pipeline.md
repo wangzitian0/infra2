@@ -86,7 +86,12 @@ the authoritative IaC identity and may pass the head branch only as a clone tran
 front door proves both refs resolve to the same commit before mutating Dokploy. If the
 non-idempotent `compose.create` call times out after Dokploy commits it, the lifecycle
 re-reads and adopts the one deterministic project/environment/name instead of creating a
-duplicate. Teardown is green only after two consecutive reads observe that name absent.
+duplicate. Teardown is green only after two consecutive reads observe **both** the
+Dokploy compose record absent and zero containers for that service's reserved `pr-999`
+slot in Dokploy's host container API. A deleted record with lingering `Created`,
+`Restarting` or running containers is a failed cleanup, even if Dokploy reports the
+delete request as successful. The 2026-09-23 live canary reported `torn_down: true`
+while the host still had four `pr-999` containers; record-only checks are insufficient.
 
 A Finance Report backend runs migrations before Uvicorn in both preview and fixed
 staging/production stacks. Both backend healthchecks therefore grant a bounded 450-second
@@ -452,6 +457,33 @@ git fetch --tags && git tag -l "v*.*.*" | sort -V | tail -5
 - **类型铁律**:schedule 必须是 `dokploy-server`;遗留的 `server` 类型(serverId 为 null)会被 `schedule.create` 接受但**永不执行**——这个静默 no-op 正是以前宿主机垃圾堆积的根因。
 
 手动一次性 ensure(或排障):`python -m tools.host_hygiene_schedule --ensure --server-id null`(需 `DOKPLOY_API_KEY`)。
+
+### 11.1 Infra-022 宿主机快速防护与带外心跳
+
+既有 host hygiene 是每 6 小时的通用 GC，不能代替分钟级磁盘水位响应。
+`bootstrap/01.dokploy_install/host_guard/` 是宿主机防护的声明源：
+
+- Docker daemon 默认 `json-file` 轮转为 `max-size=50m`、`max-file=3`，并开启
+  `live-restore`。安装前用宿主机 `dockerd --validate --config-file` 校验，保留
+  `/etc/docker/daemon.json` 其他既有键；先 reload，验证 daemon 与业务仍在线。
+  Docker 默认日志选项只对**新建容器**生效，旧容器须在后续安全重建时逐项验证；
+  不得因追求日志上限直接重建单副本 Dokploy 控制面。旧容器在过渡期由现有
+  host hygiene 的超大日志截断与下面的磁盘守护兜底。
+- `disk_guardian` 由宿主机 systemd timer 每 5 分钟运行。低于 80% 不清理；
+  达到 80% 向独立外部检查发 P1 信号，只清 dangling 镜像与过期 builder cache
+  并记录前后水位；达到
+  85% 才截断超过 100 MiB 的 Docker json 日志并向独立外部检查发送失败信号。
+  不删卷、运行容器、已用镜像、备份或 preview 资源。一次清理不能把水位降回
+  85% 以下时继续保持失败状态，下一轮不得假报恢复。
+- `host_heartbeat` 由独立 systemd timer 每分钟运行；宿主机和 Docker 可达才向
+  Healthchecks.io 发成功 ping，检查失败发 `/fail`，主机死锁/失联则停止 ping。
+  Ping URL 只放在 root-only `/etc/infra2/host-guard.env`，不入库、不出日志。
+  三个独立检查分别负责整机失联、磁盘 P1 和磁盘 P0；外部接收端的 period/grace/通知
+  必须经停 ping 与触发 85% 的现场演练证明 10 分钟内送达。
+
+生产应用按 `AGENTS.md` 的当前 head SHA owner 批准执行；先 dry-run 与
+`dockerd --validate`，再装 timer/reload，核对 Docker/业务健康、systemd 最近
+执行结果及外部送达。SSOT 的“已交付”以这些现场物证为准，不以文件入库为准。
 
 ---
 

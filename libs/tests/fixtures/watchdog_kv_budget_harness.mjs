@@ -54,6 +54,7 @@ function makeEnv(kv, overrides = {}) {
     WATCHDOG_RETRY_DELAY_MS: "0",
     ALERT_DELIVERY_MODE: "feishu_webhook",
     FEISHU_WEBHOOK_URL: "https://feishu.invalid/hook",
+    WATCHDOG_DEADMAN_PING_URL: "https://hc-ping.com/test-worker-check",
   };
 }
 

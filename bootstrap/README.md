@@ -9,7 +9,7 @@
 
 ```
 ./
-├── 01.dokploy_install/    # Dokploy 安装 + 主机防火墙（hostfw/）
+├── 01.dokploy_install/    # Dokploy 安装 + 主机防火墙（hostfw/）+ 宿主机守护（host_guard/）
 ├── 02.dns_and_cert/       # DNS 和证书配置
 ├── 03.dokploy_setup/      # Dokploy 域名和 CLI 配置
 ├── 04.1password/          # 1Password Connect
@@ -45,6 +45,9 @@ VPS 初始化时安装 Dokploy 容器平台。
 
 **状态**：✅ 已部署  
 **域名**：`cloud.$INTERNAL_DOMAIN`
+
+宿主机磁盘与 Docker 防护见 [host_guard](./01.dokploy_install/host_guard/README.md)；
+配置入库后仍须按生产门禁单独部署和验收。
 
 ### 2. [DNS 和证书](./02.dns_and_cert/README.md)
 配置 Cloudflare DNS 和 Traefik HTTPS 证书。
