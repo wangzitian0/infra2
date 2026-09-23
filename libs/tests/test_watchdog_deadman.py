@@ -33,6 +33,8 @@ def test_scheduler_success_failure_and_missing_secret(tmp_path: Path) -> None:
     assert cases["success"]["ok"]
     assert url in cases["success"]["calls"]
     assert f"{url}/fail" not in cases["success"]["calls"]
+    assert cases["whitespaceUrl"]["ok"]
+    assert cases["whitespaceUrl"]["calls"] == cases["success"]["calls"]
     assert not cases["workerFailure"]["ok"]
     assert f"{url}/fail" in cases["workerFailure"]["calls"]
     assert not cases["missingUrl"]["ok"]

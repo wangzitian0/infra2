@@ -51,6 +51,7 @@ async function scheduled(options) {
 
 const result = {
   success: await scheduled(),
+  whitespaceUrl: await scheduled({ pingUrl: ` \n${url} \n` }),
   workerFailure: await scheduled({ failPut: true }),
   missingUrl: await scheduled({ pingUrl: "" }),
 };

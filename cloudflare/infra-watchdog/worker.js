@@ -107,7 +107,7 @@ async function runScheduledWatchdog(env, nowMs) {
 }
 
 async function pingSchedulerDeadman(env, ok) {
-  const url = String(env.WATCHDOG_DEADMAN_PING_URL || "");
+  const url = String(env.WATCHDOG_DEADMAN_PING_URL || "").trim();
   if (!/^https:\/\/hc-ping\.com\/[A-Za-z0-9_-]+$/.test(url)) {
     throw new Error("WATCHDOG_DEADMAN_PING_URL is missing or invalid");
   }
