@@ -151,8 +151,12 @@ from infra2_sdk.snapshot import (
 
 proof = json.loads(Path('${TMP_PROOF}').read_text(encoding='utf-8'))
 dump_path = Path('${TMP_DUMP}')
-dump_bytes = dump_path.read_bytes()
-dump_sha256 = hashlib.sha256(dump_bytes).hexdigest()
+h = hashlib.sha256()
+with dump_path.open('rb') as f:
+    for chunk in iter(lambda: f.read(65536), b''):
+        h.update(chunk)
+dump_sha256 = h.hexdigest()
+dump_size = dump_path.stat().st_size
 now_iso = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 now_compact = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
 
@@ -177,7 +181,7 @@ manifest = AnonymizedSnapshotManifest(
     artifact=SnapshotArtifact(
         format=SnapshotArtifactFormat.POSTGRESQL_CUSTOM,
         sha256=dump_sha256,
-        size_bytes=len(dump_bytes),
+        size_bytes=dump_size,
     ),
 )
 
@@ -194,7 +198,7 @@ if [ "${DRY_RUN}" = true ]; then
   echo "[*] Dry run enabled: skipping staging database restore."
 elif docker ps --format '{{.Names}}' | grep -q "^${STAGING_CONTAINER}$"; then
   echo "[*] Restoring ${OUTPUT_DUMP} into ${STAGING_CONTAINER} (${STAGING_DB})..."
-  docker exec -i "${STAGING_CONTAINER}" pg_restore --clean --if-exists -U "${PG_USER}" -d "${STAGING_DB}" < "${OUTPUT_DUMP}" || true
+  docker exec -i "${STAGING_CONTAINER}" pg_restore --clean --if-exists -U "${PG_USER}" -d "${STAGING_DB}" < "${OUTPUT_DUMP}"
   echo "[+] Staging ingestion complete."
 fi
 
