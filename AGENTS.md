@@ -95,7 +95,7 @@
 | 入库软链 → `AGENTS.md` | 读到 | 读到 |
 | 仅 `AGENTS.md`（祖先有 `CLAUDE.md`） | **读不到** | **读不到** |
 
-**`@import` 只在 `CLAUDE.md` 位于当前工作目录时解析**；被祖先遍历找到时不解析。于是从
+**单行 `@AGENTS.md` 导入只在 `CLAUDE.md` 位于当前工作目录时解析**；被祖先遍历找到时不解析。于是从
 `libs/`、`tools/`、任何 worktree 子目录起的会话，全程没有合流门禁、没有 SSOT First、没有红线，
 而且没有任何信号。软链换来的代价是 Windows 无 `core.symlinks` 时 checkout 会把它落成一行纯文本
 ——**这个风险仍然存在，但它被改成会响**：`libs/tests/test_claude_md_carrier.py` 里

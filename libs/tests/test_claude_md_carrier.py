@@ -11,15 +11,15 @@ import" -- but the thing that had failed was *untracked*, not *symlink*. A
 committed symlink (mode 120000) is cloned like any other object, which the four
 sibling repositories have been demonstrating daily.
 
-**Second defect (#856):** `@AGENTS.md` resolves only when that CLAUDE.md is in
-the current working directory. When the ancestor walk finds it instead, the
+**Second defect (#856):** the one-line `@AGENTS.md` import resolves only when
+that CLAUDE.md is in the current working directory. When the ancestor walk finds it instead, the
 import is not followed, so a session started in `libs/`, `tools/`, `docs/ssot/`
 or any worktree subdirectory ran with no merge gate, no SSOT-first rule and no
 red lines -- silently. Measured with a discriminative probe ("does your loaded
 instruction text contain this string", file reads forbidden), twice per cell:
 
     carrier                              repo root   subdirectory
-    CLAUDE.md = one line @AGENTS.md      YES         NO
+    CLAUDE.md = one-line @AGENTS.md      YES         NO
     CLAUDE.md -> AGENTS.md (symlink)     YES         YES
     CLAUDE.md inlining the whole text    YES         YES
     AGENTS.md alone, ancestor CLAUDE.md  NO          NO
@@ -95,9 +95,16 @@ def test_claude_md_is_a_committed_symlink_to_agents_md() -> None:
 def test_claude_md_reads_back_as_the_constitution_itself() -> None:
     """The effect, not the shape: opening CLAUDE.md must yield AGENTS.md's bytes.
 
-    This is what every host actually does, and it is the assertion that survives
-    a change of carrier -- inline the text, symlink it, or find a third way, and
-    this still says whether the rules arrive.
+    This is what every host actually does, so it is the assertion that stays
+    true whichever carrier is chosen -- inline the text, symlink it, or find a
+    third way, and this still says whether the rules arrive.
+
+    That is not the same as saying the module tolerates a different carrier.
+    `test_claude_md_is_a_committed_symlink_to_agents_md` deliberately pins mode
+    120000, because the symlink is the one form measured to work from a
+    subdirectory. Changing carrier means changing that assertion too, with a new
+    measurement behind it -- this one will not object on its own, and is not
+    meant to be the thing that notices.
     """
     carrier = (ROOT / "CLAUDE.md").read_bytes()
     constitution = (ROOT / TARGET).read_bytes()
