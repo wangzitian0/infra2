@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -32,16 +33,29 @@ from libs.backup_verification import load_backup_inventory
 def wait_for_postgres(container: str, user: str, timeout: int = 30) -> None:
     deadline = time.time() + timeout
     while time.time() < deadline:
-        res = subprocess.run(
-            ["docker", "exec", container, "pg_isready", "-U", user],
+        # The official Postgres image starts a temporary server during init.
+        # pg_isready can succeed there, just before that server is stopped.
+        logs = subprocess.run(
+            ["docker", "logs", container],
             capture_output=True,
             text=True,
         )
-        if res.returncode == 0:
-            return
+        if (
+            logs.returncode == 0
+            and "PostgreSQL init process complete; ready for start up."
+            in (logs.stdout + logs.stderr)
+        ):
+            res = subprocess.run(
+                ["docker", "exec", container, "pg_isready", "-U", user],
+                capture_output=True,
+                text=True,
+            )
+            if res.returncode == 0:
+                return
         time.sleep(1)
     raise RuntimeError(
-        f"Sandbox container {container} failed to become ready within {timeout}s"
+        f"Sandbox container {container} failed to finish initialization and "
+        f"become ready within {timeout}s"
     )
 
 
@@ -68,7 +82,13 @@ def run_rehearsal(
         raise ValueError(f"Invalid database name: {db!r}")
 
     safe_name = service_id.replace("/", "-")
-    container = f"{safe_name}-restore-rehearsal-throwaway"
+    container = f"{safe_name}-restore-rehearsal-{uuid.uuid4().hex[:8]}-throwaway"
+    download_root = Path(download_dir)
+    safe_root = download_root.resolve()
+    tmp_root = Path(tempfile.gettempdir()).resolve()
+    if not ("rehearsal" in safe_root.name or safe_root.is_relative_to(tmp_root)):
+        raise ValueError(f"unsafe download_dir for restore rehearsal: {download_dir}")
+    artifact_dir = download_root / container
     bootstrap_user = "postgres"
     start_time = time.time()
 
@@ -91,7 +111,6 @@ def run_rehearsal(
 
     # 1. Start isolated sandbox container (hard-disable networking, enforce local trust auth)
     print(f"[*] Starting sandbox container: {container} (image: {image})...")
-    subprocess.run(["docker", "rm", "-f", container], capture_output=True)
     run_cmd = [
         "docker",
         "run",
@@ -107,17 +126,17 @@ def run_rehearsal(
         "--cpus=1",
         image,
     ]
-    subprocess.run(run_cmd, check=True, capture_output=True)
-
+    started = False
     try:
+        subprocess.run(run_cmd, check=True, capture_output=True)
+        started = True
         # 2. Wait for readiness
         wait_for_postgres(container, bootstrap_user)
         print("[+] Sandbox database is ready for ingestion.")
 
         # 3. Materialize artifact (local or rclone download from Google Drive)
         print(f"[*] Materializing artifact from {artifact.get('remote_uri')}...")
-        dl_dir = Path(download_dir)
-        archive_path = materialize_artifact(artifact, dl_dir)
+        archive_path = materialize_artifact(artifact, artifact_dir)
         print(
             f"[+] Materialized archive: {archive_path} ({archive_path.stat().st_size} bytes)"
         )
@@ -250,18 +269,37 @@ def run_rehearsal(
 
     finally:
         if not keep_container:
-            print(f"[*] Teardown: removing sandbox container {container}...")
-            subprocess.run(["docker", "rm", "-f", container], capture_output=True)
-            p_dl = Path(download_dir).resolve()
-            # Safety guard: only rmtree if path contains rehearsal marker or is inside OS tempdir
-            tmp_root = Path(tempfile.gettempdir()).resolve()
-            if p_dl.exists() and (
-                "infra2-backup-restore-rehearsal" in p_dl.name
-                or "rehearsal" in p_dl.name
-                or p_dl.is_relative_to(tmp_root)
-            ):
-                shutil.rmtree(p_dl, ignore_errors=True)
-            print("[+] Teardown completed. Zero remnants.")
+            print(f"[*] Teardown: removing sandbox container and volumes {container}...")
+            cleanup = subprocess.run(
+                ["docker", "rm", "-f", "-v", container],
+                capture_output=True,
+                text=True,
+            )
+            missing_before_start = (
+                not started
+                and cleanup.returncode != 0
+                and "No such container" in cleanup.stderr
+            )
+            if missing_before_start:
+                inspect = subprocess.run(
+                    ["docker", "container", "inspect", container],
+                    capture_output=True,
+                )
+                missing_before_start = inspect.returncode != 0
+            if cleanup.returncode != 0 and not missing_before_start:
+                raise RuntimeError(
+                    f"Could not remove restore sandbox {container} and its volumes: "
+                    f"{cleanup.stderr.strip()}"
+                )
+            p_dl = artifact_dir.resolve()
+            if not p_dl.is_relative_to(safe_root):
+                raise RuntimeError(f"restore download path escaped its root: {p_dl}")
+            if p_dl.exists():
+                shutil.rmtree(p_dl)
+            if missing_before_start:
+                print("[+] No sandbox container exists; download directory cleaned.")
+            else:
+                print("[+] Teardown completed. Container and volumes removed.")
         else:
             print(f"[!] Sandbox container {container} preserved for inspection.")
 

@@ -8,13 +8,46 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tools.run_restore_rehearsal import main, run_rehearsal
+from tools.run_restore_rehearsal import main, run_rehearsal, wait_for_postgres
+
+
+def test_wait_for_postgres_ignores_temporary_init_server() -> None:
+    """The image's init server can pass pg_isready before the final server starts."""
+    log_reads = 0
+    readiness_checks = 0
+
+    def fake_run(cmd, *args, **kwargs):
+        nonlocal log_reads, readiness_checks
+        result = MagicMock(returncode=0)
+        if cmd[:2] == ["docker", "logs"]:
+            log_reads += 1
+            result.stderr = ""
+            result.stdout = (
+                "PostgreSQL init process complete; ready for start up."
+                if log_reads >= 2
+                else "database system is ready to accept connections"
+            )
+        elif cmd[:2] == ["docker", "exec"]:
+            assert log_reads >= 2, "checked readiness against the temporary server"
+            readiness_checks += 1
+            result.returncode = 0 if readiness_checks >= 2 else 2
+        return result
+
+    with (
+        patch("tools.run_restore_rehearsal.subprocess.run", side_effect=fake_run),
+        patch("tools.run_restore_rehearsal.time.sleep"),
+    ):
+        wait_for_postgres("infra022-restore-rehearsal", "postgres", timeout=5)
+
+    assert log_reads >= 2
+    assert readiness_checks == 2
 
 
 @pytest.fixture
@@ -132,34 +165,141 @@ def test_run_rehearsal_docker_args_and_invariants(
             for cmd in captured_cmds
             if len(cmd) > 2 and cmd[0] == "docker" and cmd[1] == "rm"
         ]
-        assert any("-f" in cmd for cmd in rm_cmds)
+        assert len(rm_cmds) == 1
+        assert "-f" in rm_cmds[0] and "-v" in rm_cmds[0]
+
+
+def test_failed_sandbox_start_removes_container_and_volume(
+    mock_manifest_file: Path,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(cmd, *args, **kwargs):
+        commands.append(cmd)
+        if cmd[:2] == ["docker", "run"]:
+            raise subprocess.CalledProcessError(1, cmd)
+        return MagicMock(returncode=0)
+
+    with patch("subprocess.run", side_effect=fake_run):
+        with pytest.raises(subprocess.CalledProcessError):
+            run_rehearsal(manifest_path=str(mock_manifest_file))
+
+    assert len([c for c in commands if c[:2] == ["docker", "run"]]) == 1
+    cleanup = [c for c in commands if c[:2] == ["docker", "rm"]]
+    assert len(cleanup) == 1
+    assert "-f" in cleanup[0] and "-v" in cleanup[0]
+
+
+def test_failed_cleanup_is_reported_even_when_start_fails(
+    mock_manifest_file: Path,
+) -> None:
+    def fake_run(cmd, *args, **kwargs):
+        if cmd[:2] == ["docker", "run"]:
+            raise subprocess.CalledProcessError(1, cmd)
+        if cmd[:2] == ["docker", "rm"]:
+            return MagicMock(returncode=1, stderr="removal failed")
+        return MagicMock(returncode=0)
+
+    with patch("subprocess.run", side_effect=fake_run):
+        with pytest.raises(RuntimeError, match="removal failed"):
+            run_rehearsal(manifest_path=str(mock_manifest_file))
+
+
+def test_start_failure_before_container_exists_keeps_original_error(
+    mock_manifest_file: Path,
+) -> None:
+    def fake_run(cmd, *args, **kwargs):
+        if cmd[:2] == ["docker", "run"]:
+            raise subprocess.CalledProcessError(125, cmd)
+        if cmd[:2] == ["docker", "rm"]:
+            return MagicMock(returncode=1, stderr="No such container")
+        if cmd[:3] == ["docker", "container", "inspect"]:
+            return MagicMock(returncode=1)
+        raise AssertionError(cmd)
+
+    with patch("subprocess.run", side_effect=fake_run):
+        with pytest.raises(subprocess.CalledProcessError) as exc:
+            run_rehearsal(manifest_path=str(mock_manifest_file))
+
+    assert exc.value.returncode == 125
+
+
+def test_failed_restore_respects_keep_container(
+    tmp_path: Path, mock_manifest_file: Path
+) -> None:
+    archive = tmp_path / "dump.sql.gz"
+    archive.write_bytes(b"dump")
+    commands: list[list[str]] = []
+
+    def fake_run(cmd, *args, **kwargs):
+        commands.append(cmd)
+        return MagicMock(returncode=0)
+
+    with (
+        patch("subprocess.run", side_effect=fake_run),
+        patch("tools.run_restore_rehearsal.wait_for_postgres"),
+        patch("tools.run_restore_rehearsal.materialize_artifact", return_value=archive),
+        patch(
+            "tools.run_restore_rehearsal.run_postgres_restore_rehearsal",
+            side_effect=RuntimeError("restore failed"),
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="restore failed"):
+            run_rehearsal(
+                manifest_path=str(mock_manifest_file), keep_container=True
+            )
+
+    assert not any(cmd[:2] == ["docker", "rm"] for cmd in commands)
+
+
+def test_sequential_runs_use_separate_download_directories(
+    tmp_path: Path, mock_manifest_file: Path
+) -> None:
+    archive = tmp_path / "dump.sql.gz"
+    archive.write_bytes(b"dump")
+    download_root = tmp_path / "infra2-backup-restore-rehearsal"
+
+    def fake_run(cmd, *args, **kwargs):
+        return MagicMock(returncode=0, stdout="42\n")
+
+    with (
+        patch("subprocess.run", side_effect=fake_run),
+        patch("tools.run_restore_rehearsal.wait_for_postgres"),
+        patch(
+            "tools.run_restore_rehearsal.materialize_artifact",
+            return_value=archive,
+        ) as materialize,
+        patch("tools.run_restore_rehearsal.run_postgres_restore_rehearsal"),
+    ):
+        for _ in range(2):
+            run_rehearsal(
+                manifest_path=str(mock_manifest_file),
+                download_dir=str(download_root),
+            )
+
+    directories = [call.args[1] for call in materialize.call_args_list]
+    assert len(directories) == 2
+    assert directories[0] != directories[1]
+    assert all(path.parent == download_root for path in directories)
 
 
 def test_teardown_safety_guard_rejects_arbitrary_path(
     tmp_path: Path, mock_manifest_file: Path
 ) -> None:
     unsafe_dir = Path("/etc/cron.d")  # should never be wiped
-    fake_archive = tmp_path / "dump.sql.gz"
-    fake_archive.write_bytes(b"dummy")
-
     with (
-        patch("subprocess.run", return_value=MagicMock(stdout="0\n", returncode=0)),
-        patch("tools.run_restore_rehearsal.wait_for_postgres"),
-        patch(
-            "tools.run_restore_rehearsal.materialize_artifact",
-            return_value=fake_archive,
-        ),
-        patch("tools.run_restore_rehearsal.run_postgres_restore_rehearsal"),
+        patch("subprocess.run") as run_command,
         patch("shutil.rmtree") as mock_rmtree,
     ):
-        run_rehearsal(
-            manifest_path=str(mock_manifest_file),
-            service_id="finance_report/postgres",
-            database="finance_report",
-            download_dir=str(unsafe_dir),
-            keep_container=False,
-        )
-        # rmtree must NOT be called for unsafe_dir
+        with pytest.raises(ValueError, match="unsafe download_dir"):
+            run_rehearsal(
+                manifest_path=str(mock_manifest_file),
+                service_id="finance_report/postgres",
+                database="finance_report",
+                download_dir=str(unsafe_dir),
+                keep_container=False,
+            )
+        run_command.assert_not_called()
         mock_rmtree.assert_not_called()
 
 
