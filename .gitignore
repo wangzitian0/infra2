@@ -92,3 +92,5 @@ docs/.site/
 .claude/
 .cache/
 .envrc
+.omo/
+/handover*.md
