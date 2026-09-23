@@ -506,7 +506,7 @@ def _fake_restore(
     return result, written, waited
 
 
-@pytest.mark.parametrize("output", ["f\n", "0\n", "\n", "t\nf\n"])
+@pytest.mark.parametrize("output", ["f\n", "0\n", "\n", "t\nf\n", "present\n"])
 def test_restore_rejects_false_or_ambiguous_select_invariant(tmp_path, output) -> None:
     from libs.backup_restore import BackupRestoreError
 

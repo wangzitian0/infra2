@@ -281,11 +281,15 @@ def run_postgres_restore_rehearsal(
         # statements such as DO assert through RAISE EXCEPTION and have no output.
         if re.match(r"\s*(SELECT|WITH|VALUES|TABLE)\b", sql, re.IGNORECASE):
             values = [value.strip().lower() for value in result.stdout.splitlines()]
-            if (
-                len(values) != 1
-                or "|" in values[0]
-                or values[0] in {"", "f", "false", "0"}
-            ):
+            if len(values) != 1:
+                raise BackupRestoreError(
+                    f"restore invariant did not return one true scalar: {sql}"
+                )
+            value = values[0]
+            is_nonzero_integer = (
+                bool(re.fullmatch(r"[+-]?\d+", value)) and int(value) != 0
+            )
+            if value not in {"t", "true"} and not is_nonzero_integer:
                 raise BackupRestoreError(
                     f"restore invariant did not return one true scalar: {sql}"
                 )
