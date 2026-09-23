@@ -26,6 +26,7 @@ go stale the same way.
 
 from __future__ import annotations
 
+import ast
 import json
 import subprocess
 import sys
@@ -137,6 +138,31 @@ def _declared_distributions(job: dict) -> set[str] | None:
     return found or None
 
 
+def _subprocess_modules(module: str) -> set[str]:
+    """Find secondary repo modules spawned via `python -m` inside a module."""
+    rel_path = ROOT / (module.replace(".", "/") + ".py")
+    if not rel_path.is_file():
+        return set()
+    try:
+        tree = ast.parse(rel_path.read_text(encoding="utf-8"))
+    except SyntaxError:
+        return set()
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.List, ast.Tuple)):
+            elements = [
+                elt.value
+                for elt in node.elts
+                if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+            ]
+            for i, val in enumerate(elements):
+                if val == "-m" and i + 1 < len(elements):
+                    target = elements[i + 1]
+                    if target.startswith(REPO_PACKAGES):
+                        found.add(target)
+    return found
+
+
 def _entry_modules(job: dict) -> set[str]:
     """Repo modules run as `python -m`, excluding anything under `uv run`."""
     found: set[str] = set()
@@ -151,7 +177,10 @@ def _entry_modules(job: dict) -> set[str]:
                     candidate = tokens[index + 1]
                     if candidate.startswith(REPO_PACKAGES):
                         found.add(candidate)
-    return found
+    expanded = set(found)
+    for mod in list(found):
+        expanded |= _subprocess_modules(mod)
+    return expanded
 
 
 _REQ_NAME = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
