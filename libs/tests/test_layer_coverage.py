@@ -34,7 +34,13 @@ def test_no_registered_layer_can_be_left_out_of_ci() -> None:
     asserts the premise that makes that true, and fails if a filter comes back --
     at which point a layer could go missing from it again.
     """
-    triggers = _load_infra_ci()[True]  # `on:` parses as the bool key True in YAML 1.1
+    # `on:` parses as the boolean True under YAML 1.1, but only while it is
+    # unquoted -- `"on":` yields the string key, and so would a loader change.
+    # Accept either, so this stays a guard about path filters rather than one
+    # about scalar quirks.
+    doc = _load_infra_ci()
+    triggers = doc.get(True, doc.get("on"))
+    assert triggers, "infra-ci.yml has no trigger block under `on:` or `True`"
     for event in ("pull_request", "push"):
         assert event in triggers, f"infra-ci.yml must still run on {event}"
         spec = triggers[event] or {}

@@ -89,17 +89,52 @@ def test_a_merge_blocking_workflow_has_no_path_filter(rel: str, event: str) -> N
     )
 
 
-def test_the_inventory_still_covers_every_ruleset_required_check() -> None:
-    """The guard is only as wide as the inventory; a check missing from it is unguarded.
+def test_every_blocking_gate_resolves_to_a_real_named_job() -> None:
+    """A gate whose job cannot be resolved is a check that can never be satisfied.
 
-    Not a network call: the ruleset's seven contexts are the job *names* in the
-    blocking workflows, so the two can be compared offline. A required check whose
-    job is not registered as blocks_merge would slip past the parametrised test above.
+    The ruleset names its required checks by *display name*. `pr_merge_gate`
+    reconstructs those names by reading each blocks_merge gate's `job` key out of
+    its workflow and taking that job's `name:` -- and when the lookup fails it
+    silently falls back to the job key itself. A gate pointing at a renamed or
+    deleted job therefore produces a name matching no ruleset context, so the gate
+    is reported as "never reported" on every PR, forever, with nothing saying why.
+
+    That is checkable offline, which the ruleset itself is not: comparing against
+    the live required-check set means a network call, and writing the seven
+    contexts down here would be a second copy of them that drifts. So this asserts
+    the resolution step instead -- the one that can fail silently.
+
+    (An earlier version of this test was named for the ruleset comparison and only
+    asserted that jobs had a `name`. Copilot caught the mismatch on #853. A test
+    that promises more than its body does is worse than no test, because the
+    promise is what gets read.)
     """
     data = yaml.safe_load(INVENTORY.read_text(encoding="utf-8"))
-    blocking = {(g["workflow"], g["job"]) for g in data["gates"] if g.get("blocks_merge") is True}
-    for rel in _blocking_workflows():
-        jobs = yaml.safe_load((REPO / rel).read_text(encoding="utf-8"))["jobs"]
-        for job_id, spec in jobs.items():
-            if (rel, job_id) in blocking:
-                assert spec.get("name"), f"{rel}:{job_id} blocks merge but has no display name"
+    blocking = [g for g in data["gates"] if g.get("blocks_merge") is True]
+    assert blocking, "no blocking gate to check"
+
+    display_names: list[str] = []
+    for gate in blocking:
+        workflow = REPO / gate["workflow"]
+        jobs = yaml.safe_load(workflow.read_text(encoding="utf-8")).get("jobs") or {}
+        job = gate["job"]
+        assert job in jobs, (
+            f"gate {gate['id']!r} points at job {job!r}, which does not exist in "
+            f"{gate['workflow']}. pr_merge_gate falls back to the job key as the "
+            "display name, which matches no ruleset context, so this gate would "
+            "read as 'never reported' on every pull request"
+        )
+        name = (jobs[job] or {}).get("name")
+        assert name, (
+            f"gate {gate['id']!r} resolves to job {job!r}, which has no `name:`. "
+            "The ruleset matches on display name; without one the fallback is the "
+            "job key, which is not what GitHub reports"
+        )
+        display_names.append(name)
+
+    duplicates = {n for n in display_names if display_names.count(n) > 1}
+    assert not duplicates, (
+        f"two blocking gates share the display name(s) {sorted(duplicates)}; "
+        "pr_merge_gate holds them in a set, so one silently vanishes from the "
+        "list of checks it insists on seeing"
+    )
