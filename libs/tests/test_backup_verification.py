@@ -362,6 +362,28 @@ def test_execute_rehearsal_handles_timeout_cleanly(monkeypatch) -> None:
         execute_rehearsal(plan, timeout_seconds=0.05)
 
 
+def test_detect_dump_target_db(tmp_path) -> None:
+    import gzip
+    from libs.backup.rehearsal import _detect_dump_target_db
+
+    # Case 1: dump with CREATE ROLE / pg_dumpall triggers 'postgres' db
+    dump_cluster = tmp_path / "cluster.sql.gz"
+    with gzip.open(dump_cluster, "wb") as f:
+        f.write(b"-- pg_dumpall output\nCREATE ROLE test;\n")
+    assert _detect_dump_target_db(dump_cluster, "appdb") == "postgres"
+
+    # Case 2: standard single-db dump keeps default_db
+    dump_single = tmp_path / "single.sql.gz"
+    with gzip.open(dump_single, "wb") as f:
+        f.write(b"CREATE TABLE users (id int);\n")
+    assert _detect_dump_target_db(dump_single, "appdb") == "appdb"
+
+    # Case 3: non-gzip file falls back gracefully without crash
+    plain_file = tmp_path / "plain.sql"
+    plain_file.write_text("CREATE TABLE plain (id int);")
+    assert _detect_dump_target_db(plain_file, "appdb") == "appdb"
+
+
 def test_backup_restore_rehearsal_refuses_live_looking_targets(tmp_path) -> None:
     """Infra-011.17 / #945: real backup restores require a throwaway target."""
     with pytest.raises(BackupRestoreError, match="target container"):

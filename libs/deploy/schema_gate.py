@@ -45,6 +45,7 @@ fail-closed principle Rule 7 states for a DB query failure).
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -215,6 +216,14 @@ def _read_database_url(
     )
 
 
+_DB_PASSWORD_RE = re.compile(r"://([^:@\s]+):([^@\s]+)@")
+
+
+def _sanitize_db_url(text: str) -> str:
+    """Mask credentials in database URLs (e.g. postgresql://user:pass@host -> postgresql://user:******@host)."""
+    return _DB_PASSWORD_RE.sub(r"://\1:******@", text)
+
+
 def _run_remote_check(
     host: str,
     *,
@@ -293,9 +302,10 @@ def run_schema_gate(
             rollback_class = line.split(":", 1)[1].strip()
     if result.returncode != 0:
         suffix = f" (ROLLBACK_CLASS: {rollback_class})" if rollback_class else ""
+        sanitized_output = _sanitize_db_url(output.strip()[-2000:])
         raise SchemaGateError(
             f"pre-deploy schema gate BLOCKED {service} (exit {result.returncode})"
-            f"{suffix}: {output.strip()[-2000:]}"
+            f"{suffix}: {sanitized_output}"
         )
     if not rollback_class:
         # exit 0 with no parseable ROLLBACK_CLASS is not a real answer -- treat an

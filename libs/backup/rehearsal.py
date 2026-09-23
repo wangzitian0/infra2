@@ -14,7 +14,6 @@ from __future__ import annotations
 import concurrent.futures
 import gzip
 import hashlib
-import os
 import re
 import subprocess
 from dataclasses import asdict, dataclass
@@ -190,6 +189,21 @@ def build_postgres_rehearsal_plan(
     )
 
 
+def _detect_dump_target_db(archive_path: Path, default_db: str) -> str:
+    """Inspect archive header to detect if cluster-wide dumps require restoring to postgres db."""
+    try:
+        with gzip.open(archive_path, "rt", errors="ignore") as f:
+            header_sample = f.read(2048)
+            if any(
+                marker in header_sample
+                for marker in ("pg_dumpall", "CREATE ROLE", "CREATE DATABASE")
+            ):
+                return "postgres"
+    except (gzip.BadGzipFile, OSError):
+        pass
+    return default_db
+
+
 def run_postgres_restore_rehearsal(
     plan: RestoreRehearsalPlan,
     *,
@@ -202,18 +216,7 @@ def run_postgres_restore_rehearsal(
     if not archive_path.exists():
         raise BackupRestoreError(f"backup archive is missing: {archive_path}")
 
-    restore_target_db = plan.database
-    try:
-        with gzip.open(archive_path, "rt", errors="ignore") as f:
-            header_sample = f.read(2048)
-            if (
-                "pg_dumpall" in header_sample
-                or "CREATE ROLE" in header_sample
-                or "CREATE DATABASE" in header_sample
-            ):
-                restore_target_db = "postgres"
-    except Exception:
-        pass
+    restore_target_db = _detect_dump_target_db(archive_path, plan.database)
 
     restore_cmd = [
         "docker",

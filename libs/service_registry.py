@@ -546,9 +546,15 @@ def _facet_instance(node: ast.expr, facet_cls: type, where: str):
         raise ValueError(
             f"{where}: expected a {facet_cls.__name__}(...) call, got {name!r}"
         )
+    for kw in node.keywords:
+        if kw.arg is None:
+            raise ValueError(
+                f"{where}: dynamic **kwargs unpacking is not supported in "
+                f"{facet_cls.__name__} facet definition"
+            )
     try:
         args = [ast.literal_eval(arg) for arg in node.args]
-        kwargs = {kw.arg: ast.literal_eval(kw.value) for kw in node.keywords if kw.arg}
+        kwargs = {kw.arg: ast.literal_eval(kw.value) for kw in node.keywords if kw.arg is not None}
         return facet_cls(*args, **kwargs)
     except (ValueError, TypeError, SyntaxError) as exc:
         raise ValueError(

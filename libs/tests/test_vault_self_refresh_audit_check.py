@@ -128,13 +128,22 @@ def test_production_run_excludes_services_not_yet_in_production(monkeypatch) -> 
     # /data_engine graduated 2026-07-27 — the set is empty today, and the next
     # staging-scoped service must re-populate it HERE, in the same PR).
     assert excluded == set()
-    assert captured["ids"].isdisjoint(excluded)
     assert "finance_report/app" in captured["ids"]  # real prod services untouched
     assert "truealpha/app" in captured["ids"]  # in prod since 2026-07-19 -> now swept
     assert (
         "truealpha/data_engine" in captured["ids"]
     )  # graduated 2026-07-27 -> now swept
     assert "finance_report/preview" in captured["ids"]  # owner IS in production
+
+    # Anti-puppet adversarial check: verify the exclusion filter actually drops
+    # services when inventory_ids_not_in_production() is non-empty.
+    mock_excluded = {"finance_report/app"}
+    monkeypatch.setattr(check, "inventory_ids_not_in_production", lambda: mock_excluded)
+    captured.clear()
+    check.run(env="production")
+    assert "finance_report/app" not in captured["ids"]
+    assert mock_excluded.isdisjoint(captured["ids"])
+    assert "truealpha/app" in captured["ids"]
 
 
 def test_staging_run_does_not_exclude_anything(monkeypatch) -> None:
