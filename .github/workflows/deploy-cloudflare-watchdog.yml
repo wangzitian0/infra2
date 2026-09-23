@@ -1,16 +1,15 @@
 name: Deploy Cloudflare Watchdog
 
-# Automatically deploy the Cloudflare Worker watchdog on pushes to main that
-# touch cloudflare/infra-watchdog/**, eliminating code-vs-live drift.
-# Also manually dispatchable.
+# Production Worker deployment requires owner approval of the exact main head.
+# Merging source alone must not apply it to production.
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "cloudflare/infra-watchdog/**"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      approved_sha:
+        description: "Owner-approved exact infra2 main head SHA"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -27,6 +26,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Verify owner-approved exact head
+        env:
+          APPROVED_SHA: ${{ inputs.approved_sha }}
+        run: |
+          set -euo pipefail
+          test "${GITHUB_ACTOR}" = "wangzitian0"
+          test "${GITHUB_REF}" = "refs/heads/main"
+          test "${GITHUB_SHA}" = "${APPROVED_SHA}"
+          test "$(git rev-parse HEAD)" = "${APPROVED_SHA}"
 
       - name: Deploy to Cloudflare Workers
         working-directory: cloudflare/infra-watchdog
