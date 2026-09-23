@@ -98,8 +98,10 @@ graph TD
 - **步骤**:
     1. 从 1Password `Infra2` vault 的 **`bootstrap/vault/Root Token`** 条目读取
        `Root Token` 字段；`bootstrap/vault/Unseal Keys` 只用于 SOP-001 解封。
-    2. 在可信的操作终端运行 `vault login -no-print`，在交互式提示中输入 token，
-       然后用 `vault token lookup` 确认权限。不要把 token 写入命令参数、工单或日志。
+    2. 在可信的操作终端先确认 `INTERNAL_DOMAIN` 指向目标环境，执行
+       `export VAULT_ADDR="https://vault.${INTERNAL_DOMAIN:?set INTERNAL_DOMAIN}"`，
+       核对地址后运行 `vault login -no-print`，在交互式提示中输入 token，
+       再用 `vault token lookup` 确认权限。不要把 token 写入命令参数、工单或日志。
 
 ### SOP-004: 备份 freshness 验证
 
