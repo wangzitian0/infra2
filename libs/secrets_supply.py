@@ -15,19 +15,100 @@ When 1Password cannot be reached the deploy proceeds on what Vault already holds
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from infra2_sdk.secrets import (
+    HttpTransport,
     OnePasswordBackend,
     SecretsError,
     SecretsResolver,
     VaultKvBackend,
+    urllib_transport,
 )
 
 from libs.secrets_registry import Service, merged_manifest
 
 ONEPASSWORD_VAULT = "Infra2"
+
+# #810: one SSL EOF ("SSL: UNEXPECTED_EOF_WHILE_READING") mid a Vault call failed a
+# whole staging deploy that a 28-minutes-earlier release had passed fine -- the TCP/TLS
+# session died before there was a status code to classify, so none of #759's retryable
+# codes ever saw it. Same shape of blip as #759's Cloudflare/Dokploy gateway retries,
+# one layer lower; reuse its constants (2 retries, 2**attempt seconds) rather than
+# inventing a second backoff policy.
+_TRANSIENT_TRANSPORT_MARKERS = ("UNEXPECTED_EOF", "ECONNRESET", "Connection aborted")
+_TRANSIENT_RETRIES = 2
+
+
+class TransientTransportError(RuntimeError):
+    """A TLS/connection blip survived the #810 retry budget.
+
+    Deliberately NOT a ``SecretsError``: ``apply()`` below tolerates a ``SecretsError``
+    around ``sync_human()`` as "1Password unreachable, deploy on what Vault holds"
+    (#625) or "store write refused" -- both are policy/reachability calls already made.
+    This is neither: it means the retry budget ran out on a Vault call whose outcome is
+    still unknown, so it must propagate as a hard failure exactly like the un-retried
+    exception did before #810, not be swallowed by that fallback.
+    """
+
+
+def _is_transient_transport_error(exc: BaseException) -> bool:
+    """#810: TLS EOF, a reset connection, or an aborted one during a Vault HTTP call.
+
+    Checks both the exception itself and (for ``urllib.error.URLError``, what
+    ``urllib_transport`` lets an ``OSError``/``ssl.SSLError`` surface as) its wrapped
+    ``reason`` -- ``URLError`` isn't an ``OSError`` subclass, so an errno-backed reason
+    (``ConnectionResetError`` = ECONNRESET, ``ConnectionAbortedError`` = ECONNABORTED)
+    only matches by type one level down. A message-text match covers the OpenSSL EOF
+    case, whose reason is an ``ssl.SSLError`` we deliberately don't treat as transient
+    in general (a cert failure is not a blip).
+    """
+    candidates: list[BaseException] = [exc]
+    reason = getattr(exc, "reason", None)
+    if isinstance(reason, BaseException):
+        candidates.append(reason)
+    for candidate in candidates:
+        if isinstance(candidate, (ConnectionResetError, ConnectionAbortedError)):
+            return True
+        if any(marker in str(candidate) for marker in _TRANSIENT_TRANSPORT_MARKERS):
+            return True
+    return False
+
+
+def retrying_transport(
+    transport: HttpTransport | None = None,
+    *,
+    _retries: int = _TRANSIENT_RETRIES,
+    _sleep: Callable[[float], None] = time.sleep,
+) -> HttpTransport:
+    """Wrap an ``infra2_sdk`` HTTP transport so a transient TLS/connection blip (#810)
+    is retried with #759's backoff instead of failing the whole secret supply on one
+    dropped session. Safe to retry blindly: every call this module makes through it is
+    either a GET or ``vault_backend``'s idempotent read-merge-POST (a set-desired-state
+    write, like #759's ``compose.update``) -- never a non-idempotent create/delete.
+    """
+    send = transport or urllib_transport()
+
+    def wrapped(method: str, url: str, headers: Mapping[str, str], body: bytes | None):
+        attempt = 0
+        while True:
+            try:
+                return send(method, url, headers, body)
+            except Exception as exc:  # noqa: BLE001 - reclassified below, or re-raised as-is
+                if not _is_transient_transport_error(exc):
+                    raise
+                if attempt < _retries:
+                    attempt += 1
+                    _sleep(2**attempt)
+                    continue
+                raise TransientTransportError(
+                    f"transient transport error talking to Vault, retried {attempt} "
+                    f"time(s) without success: {exc}"
+                ) from exc
+
+    return wrapped
 
 
 @dataclass(frozen=True)
@@ -73,7 +154,9 @@ def vault_backend(environ: Mapping[str, str] | None = None) -> VaultKvBackend:
         env["VAULT_TOKEN"] = env["VAULT_ROOT_TOKEN"]
     # update mode: read → merge → POST — the only write the deploy identities' policies allow
     # (create/read/update/list, no patch) — infra2-sdk 1.5.0.
-    return VaultKvBackend.from_environ(env, write_mode="update")
+    return VaultKvBackend.from_environ(
+        env, write_mode="update", transport=retrying_transport()
+    )
 
 
 def resolver_for(
@@ -146,4 +229,3 @@ def apply(
 # Re-exports for Phase 3 Domain Convergence (SSOT)
 apply_secret_supply = apply
 create_secrets_resolver = resolver_for
-

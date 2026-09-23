@@ -198,6 +198,111 @@ def test_sync_result_classifies_dokploy_auth_over_vault_red_herring(
     assert "DOKPLOY_API_KEY" in diagnostic["next_action"]
 
 
+def test_sync_result_classifies_a_retry_exhausted_tls_blip_as_transient_transport(
+    monkeypatch,
+) -> None:
+    """#810: truealpha/app v0.0.90 staging failed once on an SSL EOF that 28 minutes
+    earlier's v0.0.89 never hit. libs/secrets_supply.py's retrying_transport already
+    retried it (#759's backoff) before raising; the diagnostic must name it
+    transient_transport with the retry count, not fall through to unknown_invoke_failure."""
+    sync_runner = _load_module(
+        "sync_runner_transient_transport_under_test",
+        IAC_RUNNER / "sync_runner.py",
+        monkeypatch,
+    )
+
+    diagnostic = sync_runner.diagnose_failure(
+        "app: secret supply failed: transient transport error talking to Vault, "
+        "retried 2 time(s) without success: <urlopen error [SSL: "
+        "UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol "
+        "(_ssl.c:1016)>"
+    )
+
+    assert diagnostic["error_kind"] == "transient_transport"
+    assert "UNEXPECTED_EOF" in diagnostic["summary"]
+    assert "2x" in diagnostic["next_action"]
+    assert "container" not in diagnostic["next_action"]  # no more "go read the logs"
+
+
+def test_sync_result_classifies_an_aborted_connection_as_transient_transport(
+    monkeypatch,
+) -> None:
+    """The other two markers #810 names (ECONNRESET / Connection aborted) must route
+    the same way as the SSL EOF case, not just the exact incident's literal text."""
+    sync_runner = _load_module(
+        "sync_runner_transient_transport_aborted_under_test",
+        IAC_RUNNER / "sync_runner.py",
+        monkeypatch,
+    )
+
+    diagnostic = sync_runner.diagnose_failure(
+        "app: secret supply failed: transient transport error talking to Vault, "
+        "retried 1 time(s) without success: Connection aborted."
+    )
+
+    assert diagnostic["error_kind"] == "transient_transport"
+    assert "1x" in diagnostic["next_action"]
+
+
+@pytest.mark.parametrize(
+    "rendered_cause",
+    (
+        "[Errno 104] Connection reset by peer",
+        "[Errno 53] Software caused connection abort",
+    ),
+)
+def test_sync_result_classifies_errno_typed_resets_as_transient_transport(
+    monkeypatch, rendered_cause: str
+) -> None:
+    """The two cases `retrying_transport` catches by TYPE, not by marker text.
+
+    `_is_transient_transport_error` retries a `ConnectionResetError` /
+    `ConnectionAbortedError` on an isinstance check, but Python renders those as
+    "Connection reset by peer" / "Software caused connection abort" -- which carry
+    none of the literal markers ("ECONNRESET", "Connection aborted") this classifier
+    used to scan for. So exactly the errors the retry layer handles arrived here
+    unrecognised and fell through to `unknown_invoke_failure`, the outcome #810
+    exists to eliminate. Keyed on the wrapper's own phrase instead, which every
+    retry-exhausted failure carries regardless of the OS's wording.
+    """
+    sync_runner = _load_module(
+        f"sync_runner_errno_reset_{abs(hash(rendered_cause))}_under_test",
+        IAC_RUNNER / "sync_runner.py",
+        monkeypatch,
+    )
+
+    diagnostic = sync_runner.diagnose_failure(
+        "app: secret supply failed: transient transport error talking to Vault, "
+        f"retried 2 time(s) without success: {rendered_cause}"
+    )
+
+    assert diagnostic["error_kind"] == "transient_transport"
+    assert "2x" in diagnostic["next_action"]
+    assert rendered_cause in diagnostic["summary"]
+
+
+def test_transient_transport_next_action_reads_as_english_without_a_count(
+    monkeypatch,
+) -> None:
+    """When no "retried N time(s)" phrase is present the count is unknown, and the
+    old fallback rendered it as "(severalx)". Say "several times" instead; the "Nx"
+    form is only used when there is an N."""
+    sync_runner = _load_module(
+        "sync_runner_transient_no_count_under_test",
+        IAC_RUNNER / "sync_runner.py",
+        monkeypatch,
+    )
+
+    diagnostic = sync_runner.diagnose_failure(
+        "app: secret supply failed: transient transport error talking to Vault: "
+        "[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred"
+    )
+
+    assert diagnostic["error_kind"] == "transient_transport"
+    assert "severalx" not in diagnostic["next_action"]
+    assert "several times" in diagnostic["next_action"]
+
+
 def test_iac_runner_policy_can_repair_service_runtime_secrets() -> None:
     """Infra-011.6: deploy sync can create/update missing runtime secret fields."""
     policy = IAC_RUNNER_VAULT_POLICY.read_text(encoding="utf-8")
