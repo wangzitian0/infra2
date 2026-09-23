@@ -40,7 +40,7 @@
 
 ### L3: 发布门禁闭环与告警降噪 (Deploy & Observability)
 - [ ] **T3.1 发布三段式门禁与 Schema 防御（#698）**：
-  - [ ] Stage 1: Ephemeral Smoke（构建后启动临时容器冒烟校验）。现有 `deploy_v2` 定时 canary 在保留的 `pr-999` 临时槽验证部署、公开健康/版本与清理；2026-09-23 06:54 UTC 的 [运行记录](https://github.com/wangzitian0/infra2/actions/runs/35829000829) 实际通过，耗时约 112 秒，`healthy=true`、`torn_down=true`。它运行的是当时的 main，不是每次正式发布的候选镜像，因此 Stage 1 仍未满足。
+  - [ ] Stage 1: Ephemeral Smoke（构建后启动临时容器冒烟校验）。`app-deploy-request.yml` 的 Production 请求与手动 `deploy.yml` 的 Finance Report staging/prod 请求已有同坐标 preflight canary；receiver 的 staging 请求按 SSOT 直接部署。另有定时 `deploy_v2` canary 在保留的 `pr-999` 临时槽验证当时 main 的部署、公开健康/版本与清理；2026-09-23 06:54 UTC 的 [运行记录](https://github.com/wangzitian0/infra2/actions/runs/35829000829) 实际通过，耗时约 112 秒，`healthy=true`、`torn_down=true`。该定时记录只证明当时 main；尚缺每条正式发布路径对候选版本的现场覆盖证明，Stage 1 保持未完成。
   - [x] Stage 2: Pre-flight Gate（`tools/pre_deploy_schema_check.py` 双向严格比对 + fail-closed；缺 DB URL / 代码侧枚举载入失败 = `NOT EVALUATED` 退出码 3 阻断，#718 review 修复；已接入 `deploy_v2`——`libs/deploy/promote.py:deploy()` 在任何 Dokploy 变更前调用 `libs/deploy/schema_gate.py`，SSH 到 VPS 用即将部署的应用镜像跑检查，退出码 1/3 及任何传输失败均阻断，详见 TODOWRITE 第 20 条）
   - [ ] Stage 3: Deploy + Synthetic Probes（部署后打真实业务探针，设 10 分钟观察烘焙期 T_Bake）
 - [ ] **T3.2 安全回滚守则与人工刹车（#722）**：
