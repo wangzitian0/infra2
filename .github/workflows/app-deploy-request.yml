@@ -149,6 +149,19 @@ jobs:
           printf '%s\n' "$plan" | python -m json.tool
           iac_ref="$(printf '%s' "$plan" | python -c 'import json,sys; print(json.load(sys.stdin)["iac_ref"])')"
           echo "iac_ref=$iac_ref" >> "$GITHUB_OUTPUT"
+      - name: Configure SSH key for the pre-deploy schema gate
+        # libs.deploy.schema_gate SSHes to the VPS to run pre_deploy_schema_check inside
+        # the app's published image. Reuses INFRA2_WATCHDOG_SSH_* secrets (#802).
+        env:
+          INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${INFRA2_WATCHDOG_SSH_PRIVATE_KEY:-}" ]]; then
+            install -m 700 -d ~/.ssh
+            printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_schema_gate
+            chmod 600 ~/.ssh/infra2_schema_gate
+            echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_schema_gate" >> "$GITHUB_ENV"
+          fi
       - name: Execute through deploy_v2
         env:
           DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
@@ -156,6 +169,10 @@ jobs:
           IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
           PREFLIGHT_CANARY_RESULT: ${{ needs.preflight_canary.result }}
           VALIDATED_IAC_REF: ${{ steps.plan.outputs.iac_ref }}
+          VPS_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
+          INFRA2_WATCHDOG_SSH_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
+          INFRA2_WATCHDOG_SSH_USER: ${{ secrets.INFRA2_WATCHDOG_SSH_USER }}
+          INFRA2_WATCHDOG_SSH_PORT: ${{ vars.INFRA2_WATCHDOG_SSH_PORT }}
         run: |
           set -euo pipefail
           if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
