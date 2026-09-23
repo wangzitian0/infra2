@@ -174,8 +174,6 @@ def test_agents_md_points_at_the_function_that_actually_decides_provability() ->
     backticked *paths* in AGENTS.md exist; this checks the *symbol*, because a
     rename would leave the path valid and the sentence meaningless.
     """
-    from pathlib import Path as _Path
-
     import tools.pr_merge_gate as gate
 
     name = "_direction_proof_for"
@@ -185,18 +183,23 @@ def test_agents_md_points_at_the_function_that_actually_decides_provability() ->
         "the rule -- a rule that points at nothing is worse than one that repeats "
         "itself, because it reads as delegated."
     )
-    agents = (_Path(__file__).resolve().parents[2] / "AGENTS.md").read_text(
-        encoding="utf-8"
-    )
-    assert name in agents, (
-        f"AGENTS.md no longer names {name}(). If the delegation moved, this test "
-        "is the thing that was holding the prose and the code together."
+    agents = (ROOT / TARGET).read_text(encoding="utf-8")
+    # The backticked token, not a bare mention: prose that merely says the words
+    # in passing is not a reference a reader can follow, and this test exists to
+    # keep a followable one.
+    assert f"`{name}()`" in agents, (
+        f"AGENTS.md no longer names `{name}()` as a code reference. If the "
+        "delegation moved, this test is the thing that was holding the prose and "
+        "the code together."
     )
     # And the delegation has to be live: the function must still answer for the
     # two shapes the rule is about, or the prose is describing something else.
-    assert gate._direction_proof_for("docs/ssot/ci-gate-inventory.yaml") is not None
-    assert gate._direction_proof_for(".github/workflows/infra-ci.yml") is not None
-    assert gate._direction_proof_for("tools/pr_merge_gate.py") is None, (
+    # Reached through `name` so a rename cannot leave half the test pointing at
+    # the old symbol and still passing.
+    decide = getattr(gate, name)
+    assert decide("docs/ssot/ci-gate-inventory.yaml") is not None
+    assert decide(".github/workflows/infra-ci.yml") is not None
+    assert decide("tools/pr_merge_gate.py") is None, (
         "the gate's own Python must stay unprovable; if it gained a proof, the "
         "defendant can now rewrite the law and show a certificate for it"
     )
