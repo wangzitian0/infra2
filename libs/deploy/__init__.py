@@ -6,4 +6,7 @@ The ``tools/`` package keeps only the CLI front doors (``deploy_v2.py`` /
 - :mod:`libs.deploy.deployer` — the Invoke-task platform/app Deployer.
 - :mod:`libs.deploy.preview`  — the multi-alias preview lifecycle (``up`` / ``down``).
 - :mod:`libs.deploy.promote`  — the fixed-compose staging/prod promote backend.
+- :mod:`libs.deploy.failure_snapshot` — Dokploy deploy failure diagnosis snapshot.
 """
+
+from __future__ import annotations

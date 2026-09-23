@@ -16,6 +16,7 @@
 | `service.py` | Immutable service specification & registry loader | `Service`, `load_service_registry()`, `get_service()` |
 | `environ.py` | Environment enum, suffix derivation, and validation | `DeploymentEnvironment`, `get_environment()`, `with_env_suffix()` |
 | `constants.py` | Estate-wide constants and Docker labels | `DEPLOYMENT_ENV_PRODUCTION`, `DEPLOYMENT_ENV_STAGING`, `DEPLOYMENT_ENV_PREVIEW`, `DOCKER_LABEL_PREFIX`, `IDENTITY_SCHEMA_VERSION`, `MANAGED_BY`, `REPO_ROOT` |
+| `ci_spec.py` | CI testing hierarchy budgets and workflow parser | `GATE_WALL_CLOCK_BUDGET_S`, `read_workflow()`, `defanged_steps()`, `load_workflow()` |
 
 ## Usage Examples
 

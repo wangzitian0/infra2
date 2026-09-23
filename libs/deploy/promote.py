@@ -27,9 +27,9 @@ from libs.console import warning
 from libs.deploy import schema_gate
 from libs.deploy_env_config import app_compose_env_config, otel_env
 from libs.deploy_queue import deployment_start_epoch
-from libs.service_registry import REPO_ROOT
-from tools.deploy_failure_snapshot import emit_failure_snapshot
-from tools.openpanel_clients import openpanel_env
+from libs.core import REPO_ROOT
+from libs.deploy.failure_snapshot import emit_failure_snapshot
+from libs.observability.openpanel import openpanel_env
 from tools.resolve_deploy_ref import resolve_to_sha
 
 # infra2#525: Dokploy deployment records carry no caller-supplied correlation id, so a

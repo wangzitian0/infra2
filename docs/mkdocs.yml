@@ -8,7 +8,7 @@ docs_dir: .
 site_dir: ../.site
 
 exclude_docs: |
-  README_tempate.md
+  README_template.md
   project/project_template.md
   project/todowrite_template.md
   ssot/template.md
