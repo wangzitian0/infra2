@@ -1,0 +1,11 @@
+[Unit]
+Description=Send Infra2 external host heartbeat every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=infra2-host-heartbeat.service
+
+[Install]
+WantedBy=timers.target

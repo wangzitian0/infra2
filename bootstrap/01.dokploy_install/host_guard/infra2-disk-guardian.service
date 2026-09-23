@@ -1,0 +1,10 @@
+[Unit]
+Description=Infra2 fast disk guardian
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/infra2/host-guard.env
+ExecStart=/usr/local/sbin/infra2-disk-guardian.sh
+TimeoutStartSec=90
