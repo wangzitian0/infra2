@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Infra2 disk guardian every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=10s
+Unit=infra2-disk-guardian.service
+
+[Install]
+WantedBy=timers.target
