@@ -29,8 +29,8 @@
   - 2026-09-17 进展：SSH 仅密钥 + fail2ban 已在主机生效（2026-09-15，手工）；公网只开放 80/443/SSH 已由 `bootstrap/01.dokploy_install/hostfw/`（nftables，替代 UFW）落地并持久化；Docker daemon 未监听 TCP 2375/2376。剩余：SSH 加固代码化、80/443 仅放行 Cloudflare 段。
 
 ### L2: 生产数据备份与带外容灾 (Platform & Data)
-- [x] **T2.1 全状态服务自动化异地备份至 Google Drive（#721）**：采用 `rclone crypt`（AES-256-GCM 零知识端到端加密），实现分级保留策略（周备保留 60 天，季度快照保留 2 年），1Password (`bootstrap/gdrive`) 为信任根，已打通端到端读写验证。
-- [x] **T2.2 备份自动恢复演练（Recovery Proof）**：落地沙箱化全自动恢复演练工具（`tools/run_restore_rehearsal.py`），在隔离 throwaway 容器中拉取 Google Drive 异地加密归档，完成真实灌库并校验各服务 5 项核心不变量：finance_report（≥40 张表、accounts ≥3、alembic 版本）与 truealpha（raw/staging/mart/app ≥50 张表、TOPT 完成 ≥80、GPPE available ≥1400）。`--service-id all` 一轮演练两个服务，单个服务失败不中止其余服务（#618 约定），退出 1 并列名失败者。演练完成后用后即焚 0 遗留，实测 10.62 秒全绿通过。
+- [ ] **T2.1 全状态服务自动化异地备份至 Google Drive（#721）**：`rclone crypt` 与分级保留已打通；源代码的定时脚本现覆盖 17/17 个 `BackupFacet` 声明。仍须在 VPS 安装同 SHA 脚本、取得生产和 Staging 各一轮 17/17 的异地 manifest 与字节校验，并完成新增归档的隔离恢复，才能称为全状态交付。
+- [ ] **T2.2 备份自动恢复演练（Recovery Proof）**：沙箱工具和五项业务不变量已落地，历史手动运行在 10.62 秒内通过。但旧的默认 manifest 选择会取到周日较晚生成的 Staging 备份；代码现按环境分离并默认验证 Production manifest。仍须在 VPS 上用新脚本完成两次连续周周期的 Production `--service-id all` 演练，并保留期间的并行兜底。
 - [ ] **T2.3 带外死人开关（Dead Man's Switch）**：宿主机定时向外部 Healthchecks.io 上报心跳，结合 Cloudflare Worker 带外探针；一旦宿主机系统死锁或网络中断，外部独立通道立即触发 P0 告警。
 
 ### L3: 发布门禁闭环与告警降噪 (Deploy & Observability)
@@ -79,7 +79,7 @@
 | 1 | Docker 日志限额 | 所有容器日志受限 ≤ 150MB | `docker inspect -f '{{json .HostConfig.LogConfig.Config}}' <c>` 包含 `max-size: 50m` |
 | 2 | 磁盘自愈机制 | 模拟使用率超标触发清理与通知 | `fallocate` 触发 `disk_guardian.sh`，确认 dangling 缓存清除且告警送达 |
 | 3 | 异地备份就绪 | Google Drive 存在加密备份包且 SHA256 吻合 | `rclone lsd gdrive-backup:infra2/` 验证目录存在且可读写 |
-| 4 | 恢复演练闭环 | 自动化还原到临时库并通过 SQL 抽样 | `tools/run_restore_rehearsal.py --service-id all` 跑通，每个服务各输出一行 `RESTORE_PROOF: PASS`，退出码 0（已在 VPS 实测通过，耗时 10.62s） |
+| 4 | 恢复演练闭环 | 自动化还原 Production 异地备份到临时库并通过 SQL 抽样 | `tools/run_restore_rehearsal.py --service-id all` 在新环境标记与最新指针上连续两个周周期跑通，每个服务各输出 `RESTORE_PROOF: PASS`，退出码 0；旧路径曾单次 10.62s 通过，不能代替此项 |
 | 5 | 死人开关兜底 | 宿主机断网 10 分钟外部独立告警 | 停止心跳上报，Healthchecks.io 外部通道（飞书/邮件）在 10 分钟内报警 |
 | 6 | Schema Gate 门禁 | 数据库与代码 Enum/Schema 不一致即阻断；缺输入（无 DB URL / 枚举载入失败）同样阻断；且真的接在 `deploy_v2` 的部署路径上，不只是模块自证 | `pytest libs/tests/test_pre_deploy_schema_check.py libs/tests/test_schema_gate.py libs/tests/test_deploy_primitive.py -k schema_gate` 全绿；实机验证见 TODOWRITE 第 20 条 |
 | 7 | ROLLBACK_CLASS 分类 | 破坏性信号（DROP/RENAME 已落库的枚举，即 missing_in_code）分类为 C，纯新增分类为 A | `pytest libs/tests/test_pre_deploy_schema_check.py -k classify_rollback` 全绿；门禁每次比对都打印 `ROLLBACK_CLASS: A|C`。**尚无**自动回滚执行器/熔断/`--force-promote`（T3.2 其余两项未实现）——本行只验证分类，不验证回滚回路。

@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -23,9 +24,17 @@ SCRIPT = REPO / "tools/host_backup.sh"
 PG_SERVICES = {"platform/postgres", "finance_report/postgres", "truealpha/postgres"}
 REDIS_SERVICES = {"platform/redis", "finance_report/redis"}
 PATH_SERVICES = {
+    "bootstrap/1password",
+    "bootstrap/iac_runner",
     "bootstrap/vault",
+    "platform/alerting",
+    "platform/free",
+    "platform/openpanel",
+    "platform/portal",
+    "platform/signoz",
     "platform/clickhouse",
     "platform/authentik",
+    "truealpha/data_engine",
     "platform/minio",
 }
 ALL_SERVICES = PG_SERVICES | REDIS_SERVICES | PATH_SERVICES
@@ -78,9 +87,17 @@ def host(tmp_path: Path):
         (data / sub / "dump.rdb").write_text("rdb")
         (data / sub / "appendonly.aof").write_text("aof")
     for sub in (
+        "bootstrap/1password",
+        "bootstrap/iac-runner",
         "bootstrap/vault",
+        "platform/alerting",
+        "platform/free",
+        "platform/openpanel",
+        "platform/portal",
+        "platform/signoz",
         "platform/clickhouse",
         "platform/authentik",
+        "truealpha/dagster",
         "platform/minio",
     ):
         (data / sub).mkdir(parents=True)
@@ -122,6 +139,11 @@ def _ids(manifest: dict) -> set[str]:
 def test_every_service_is_archived_and_dumps_run_before_path_archives(host) -> None:
     proc, manifest, calls = _run(host)
     assert proc.returncode == 0, proc.stderr
+    assert manifest["environment"] == "production"
+    assert (host["out"] / "production-manifest.json").exists()
+    assert stat.S_IMODE(host["out"].stat().st_mode) == 0o700
+    latest = host["out"] / "production-manifest.json"
+    assert stat.S_IMODE(latest.stat().st_mode) == 0o600
     assert _ids(manifest) == ALL_SERVICES
     last_dump = max(i for i, call in enumerate(calls) if "pg_dumpall" in call)
     first_path_tar = min(
@@ -132,6 +154,31 @@ def test_every_service_is_archived_and_dumps_run_before_path_archives(host) -> N
     assert last_dump < first_path_tar, calls
     # minio is the busiest live tree: archived last so nothing waits behind it
     assert "platform/minio" in calls[-1], calls
+
+
+def test_staging_run_covers_all_declared_services(host) -> None:
+    data_root = Path(host["env"]["BACKUP_DATA_ROOT"])
+    for entry in load_backup_inventory():
+        if entry.service_id.startswith("bootstrap/"):
+            continue
+        source = data_root / entry.data_path.removeprefix("/data/")
+        staging_source = Path(f"{source}-staging")
+        staging_source.mkdir(parents=True, exist_ok=True)
+        if entry.service_id in REDIS_SERVICES:
+            (staging_source / "dump.rdb").write_text("staging rdb")
+
+    proc, manifest, _ = _run(host, ENV_SUFFIX="-staging")
+    assert proc.returncode == 0, proc.stderr
+    assert manifest["environment"] == "staging"
+    assert (host["out"] / "staging-manifest.json").exists()
+    assert _ids(manifest) == ALL_SERVICES
+
+
+def test_unknown_environment_suffix_fails_before_archiving(host) -> None:
+    proc, manifest, calls = _run(host, ENV_SUFFIX="-unknown")
+    assert proc.returncode == 2
+    assert manifest == {}
+    assert calls == []
 
 
 def test_tar_exit_1_is_a_warning_and_the_run_continues(host) -> None:
@@ -160,6 +207,10 @@ def test_a_failing_service_does_not_stop_the_rest(host) -> None:
     assert "FAILED finance_report/postgres" in proc.stderr
     assert "FAILED platform/clickhouse" in proc.stderr
     assert "2 service(s) FAILED" in proc.stderr
+    latest = json.loads(
+        (host["out"] / "production-manifest.json").read_text(encoding="utf-8")
+    )
+    assert _ids(latest) == _ids(manifest), "latest must expose the failed run"
     run_dir = Path(proc.stdout.strip().splitlines()[-1]).parent
     # a failed dump or tar leaves no half-written archive behind
     assert not list(run_dir.glob("finance_report_postgres_*"))
@@ -170,13 +221,16 @@ def test_a_failing_service_does_not_stop_the_rest(host) -> None:
 
 def test_retention_keeps_the_newest_runs_on_success(host) -> None:
     for i in range(1, 6):
-        (host["out"] / f"2026010{i}T000000Z").mkdir()
-        os.utime(host["out"] / f"2026010{i}T000000Z", (i, i))
+        (host["out"] / f"production-2026010{i}T000000Z").mkdir()
+        os.utime(host["out"] / f"production-2026010{i}T000000Z", (i, i))
+    staging_dir = host["out"] / "staging-20260101T000000Z"
+    staging_dir.mkdir()
     proc, _, _ = _run(host, BACKUP_KEEP="2")
     assert proc.returncode == 0, proc.stderr
-    kept = sorted(p.name for p in host["out"].iterdir())
+    kept = sorted(p.name for p in host["out"].glob("production-*/"))
     assert len(kept) == 2
-    assert "20260105T000000Z" in kept
+    assert "production-20260105T000000Z" in kept
+    assert staging_dir.exists(), "production retention must not prune staging"
 
 
 def test_redis_save_authenticates_and_only_dump_rdb_is_archived(host) -> None:
@@ -220,7 +274,22 @@ def test_missing_path_directory_fails_that_service(host) -> None:
 def test_script_services_are_declared_backup_inventory() -> None:
     body = SCRIPT.read_text()
     block = body[body.index("SERVICES=$(cat <<EOF") : body.index("\nEOF\n")]
-    ids = set(re.findall(r"^([a-z_]+/[a-z_]+)\|(?:pg|redis|path)\|", block, re.M))
+    ids = set(re.findall(r"^([a-z0-9_]+/[a-z0-9_]+)\|(?:pg|redis|path)\|", block, re.M))
     assert ids == ALL_SERVICES
     declared = {entry.service_id for entry in load_backup_inventory()}
-    assert ids <= declared, ids - declared
+    assert ids == declared, {
+        "missing_from_runner": declared - ids,
+        "missing_from_inventory": ids - declared,
+    }
+
+
+def test_path_sources_match_backup_facets() -> None:
+    body = SCRIPT.read_text()
+    block = body[body.index("SERVICES=$(cat <<EOF") : body.index("\nEOF\n")]
+    for entry in load_backup_inventory():
+        if entry.service_id not in PATH_SERVICES:
+            continue
+        source = entry.data_path.replace("/data", "${DATA_ROOT}", 1)
+        if not entry.service_id.startswith("bootstrap/"):
+            source += "${SUFFIX}"
+        assert f"{entry.service_id}|path|{source}" in block
