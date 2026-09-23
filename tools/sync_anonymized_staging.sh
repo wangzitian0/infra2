@@ -21,6 +21,16 @@ STAGING_DB="${STAGING_DB:-finance_report}"
 PG_USER="${PG_USER:-postgres}"
 POSTGRES_IMAGE="${POSTGRES_IMAGE:-postgres:16-alpine}"
 
+DRY_RUN=false
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run)
+      DRY_RUN=true
+      shift
+      ;;
+  esac
+done
+
 mkdir -p "${ANONYMIZED_DIR}"
 
 cleanup() {
@@ -180,7 +190,9 @@ mv "${TMP_DUMP}" "${OUTPUT_DUMP}"
 rm -f "${TMP_PROOF}"
 
 echo "=== Step 6: Ingest anonymized snapshot into Staging ==="
-if docker ps --format '{{.Names}}' | grep -q "^${STAGING_CONTAINER}$"; then
+if [ "${DRY_RUN}" = true ]; then
+  echo "[*] Dry run enabled: skipping staging database restore."
+elif docker ps --format '{{.Names}}' | grep -q "^${STAGING_CONTAINER}$"; then
   echo "[*] Restoring ${OUTPUT_DUMP} into ${STAGING_CONTAINER} (${STAGING_DB})..."
   docker exec -i "${STAGING_CONTAINER}" pg_restore --clean --if-exists -U "${PG_USER}" -d "${STAGING_DB}" < "${OUTPUT_DUMP}" || true
   echo "[+] Staging ingestion complete."

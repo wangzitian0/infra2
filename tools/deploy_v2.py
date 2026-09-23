@@ -474,11 +474,16 @@ def enforce_data_lane_red_lines(
                         import logging
 
                         logging.getLogger("deploy_v2").warning(
-                            "Staging anonymized snapshot is older than 7 days (age=%.1f days)",
+                            "Anonymized snapshot for %s is older than 7 days (age=%.1f days)",
+                            target.env,
                             age_days,
                         )
-            except Exception:
-                pass
+            except Exception as exc:
+                import logging
+
+                logging.getLogger("deploy_v2").debug(
+                    "Failed to evaluate anonymized snapshot freshness: %s", exc
+                )
     return data_lane
 
 
