@@ -81,8 +81,22 @@
 | 接入应用 / 新手上手 | [`docs/onboarding/README.md`](docs/onboarding/README.md) |
 | 改某一层基础设施 | 该层 `README.md`（[bootstrap](bootstrap/README.md) / [platform](platform/README.md) / [tools](tools/README.md) / [libs](libs/README.md)） |
 
-`CLAUDE.md` 与本文同内容：它只有一行 `@AGENTS.md`，把本文导入。**真源只有 `AGENTS.md`，
+`CLAUDE.md` 与本文同内容：它是一条**入库的软链** → `AGENTS.md`。**真源只有 `AGENTS.md`，
 改规则改这里。** Claude Code 自 v2.1.277 起也能直接读 `AGENTS.md`，但工作目录或任一祖先目录
-存在 `CLAUDE.md` 时它**只读** `CLAUDE.md`。这个 workspace 的父目录里就有一个，所以只靠原生
-支持不够——导入文件必须入库。用导入而非软链：软链在 Windows 上会被 git checkout 成
-一行纯文本，且 Edit/Write 工具拒绝写穿软链。此文件由 `libs/tests/test_claude_md_import.py` 看守。
+存在 `CLAUDE.md` 时它**只读** `CLAUDE.md`，而这个 workspace 的父目录里就有一个——所以本仓库
+必须自带载体，不能靠原生支持。
+
+载体形态是**测出来的，不是选出来的**（#856）。判别式探针问「已加载的指令文本里有没有这个字符串」
+并禁止读文件，每格两次：
+
+| 载体 | 仓库根 | 子目录 |
+|---|---|---|
+| 单行 `@AGENTS.md` 导入 | 读到 | **读不到** |
+| 入库软链 → `AGENTS.md` | 读到 | 读到 |
+| 仅 `AGENTS.md`（祖先有 `CLAUDE.md`） | **读不到** | **读不到** |
+
+**单行 `@AGENTS.md` 导入只在 `CLAUDE.md` 位于当前工作目录时解析**；被祖先遍历找到时不解析。于是从
+`libs/`、`tools/`、任何 worktree 子目录起的会话，全程没有合流门禁、没有 SSOT First、没有红线，
+而且没有任何信号。软链换来的代价是 Windows 无 `core.symlinks` 时 checkout 会把它落成一行纯文本
+——**这个风险仍然存在，但它被改成会响**：`libs/tests/test_claude_md_carrier.py` 里
+`test_a_broken_symlink_checkout_fails_loudly` 按内容形态判定，任何平台都能照出来。
