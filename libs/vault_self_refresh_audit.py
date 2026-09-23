@@ -370,13 +370,14 @@ def classify_token(
             {"env_keys": sorted(env.keys())},
         )
     if not _looks_like_vault_token(token):
+        token_hint = token[:3] + "***" + token[-3:] if len(token) > 6 else "***"
         return _result(
             service,
             "dokploy-env-token",
             "fail",
             "P0",
             f"{service.vault_token_env_key} is malformed",
-            {"token": token},
+            {"token_hint": token_hint, "token_length": len(token)},
         )
     if lookup is None:
         return _result(
@@ -943,7 +944,7 @@ def _safe_excerpt(logs: str, limit: int = 500) -> str:
     excerpt = logs[-limit:]
     for key in SECRET_KEYS:
         excerpt = re.sub(
-            rf"(?i)({key}[A-Z0-9_ -]*[:=])[^\s]+",
+            rf'(?i)({key}[A-Z0-9_ -]*[:=]\s*["\']?)(?:Bearer\s+)?[^\s"\']+',
             r"\1***REDACTED***",
             excerpt,
         )

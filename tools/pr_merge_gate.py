@@ -365,64 +365,6 @@ def _inventory_only_gained_authority(base_text: str, head_text: str) -> bool:
 # Self-governing paths a proof exists for. Everything else in the closure is unproven
 # by construction, which is the point: this set only grows when someone can state what
 # the file's decision input is and which way is stricter.
-def _workflow_only_gained_authority(base_text: str, head_text: str) -> bool:
-    """True 当这份 workflow 的改动只会让门禁更常说「不」。
-
-    门禁从 workflow 里读两样东西，两样都得只增不减：
-
-    * `on.push.paths` —— 哪些路径一合就部署。**多**一条 = 多一类改动要回 owner。
-    * 每个 job 报告出来的检查名 —— `_required_checks()` 取 `name or job_id`，所以
-      这里必须用同一个取法。只收有 `name:` 的 job 会让「给一个无名 job 加 name」
-      看起来是超集，而它实际上把那条必需检查从 job id 改名了，旧名字从此不再报告。
-
-    **`paths` 缺失不是空集**：GitHub Actions 把「没有 paths」当成「所有路径」。
-    当成空集的话，「给一个本来无 paths 的 workflow 加上 paths 过滤」——一次收窄、
-    一次放松——会被证明成收紧。这正是 `_inventory_only_gained_authority` 里防过的
-    空集陷阱，在这里换了个形状（#809 review）。所以 paths 用 None 表示「全部」，
-    并显式处理 base 全部 / head 收窄 这一组。
-
-    其余随便改（`run:`、`env:`、新增 job……）都不影响这两个判定输入，不设限。
-    """
-
-    def read(text):
-        try:
-            doc = yaml.safe_load(text)
-        except yaml.YAMLError:
-            return None
-        if not isinstance(doc, dict):
-            return None
-        on = doc.get(True, doc.get("on"))
-        push = on.get("push") if isinstance(on, dict) else None
-        if isinstance(push, dict) and "paths" in push:
-            raw = push["paths"]
-            # 标量字符串会被 `frozenset(str(x) for x in raw)` 拆成字符集合。
-            if not isinstance(raw, list):
-                return None
-            paths = frozenset(str(x) for x in raw)
-        else:
-            paths = None  # 没有 paths = 所有路径
-        jobs = doc.get("jobs")
-        if not isinstance(jobs, dict):
-            return None
-        names = frozenset(
-            str((spec.get("name") if isinstance(spec, dict) else None) or job_id)
-            for job_id, spec in jobs.items()
-        )
-        return paths, names
-
-    base, head = read(base_text), read(head_text)
-    if base is None or head is None:
-        return False
-    base_paths, head_paths = base[0], head[0]
-    if base_paths is None:
-        # base 触发于所有路径。只有 head 也触发于所有路径才不算放松。
-        if head_paths is not None:
-            return False
-    elif head_paths is not None and not base_paths <= head_paths:
-        return False
-    return base[1] <= head[1]
-
-
 DIRECTION_PROOFS = {
     "docs/ssot/ci-gate-inventory.yaml": _inventory_only_gained_authority,
 }
@@ -743,15 +685,11 @@ def _gh(argv: Sequence[str]) -> str:
 def _direction_proof_for(path: str):
     """这个文件的方向证明，没有则 None。
 
-    workflow 走前缀匹配而不是逐个登记：闭包本身就是算出来的（`_all_workflow_files()`），
-    再手写一份同样的清单，就是今天反复在拆的那种「两份会漂移的手写清单」。
-    `DIRECTION_PROOFS` 留给逐个登记的个案。
+    `DIRECTION_PROOFS` 留给逐个登记的闭集数据文件（如 ci-gate-inventory.yaml）。
+    workflow 步骤包含图灵完备的执行能力（run / steps / actions），无法通过静态 Job 名称
+    与路径证明单调收紧，不设自动放行，修改必须经过 owner 审核。
     """
-    if path in DIRECTION_PROOFS:
-        return DIRECTION_PROOFS[path]
-    if path.startswith(".github/workflows/"):
-        return _workflow_only_gained_authority
-    return None
+    return DIRECTION_PROOFS.get(path)
 
 
 def _file_at(repo: str, ref: str, path: str, *, gh: Runner = _gh) -> str | None:

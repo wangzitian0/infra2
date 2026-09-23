@@ -26,6 +26,16 @@ def test_prod_config():
     assert cfg.app_url(domain="zitian.party") == "https://report.zitian.party"
 
 
+def test_production_alias_is_normalized_to_prod():
+    cfg = ec.env_config("production")
+    assert cfg.name == "prod"
+    assert cfg.compose_id == "lNn9gVS1Zyw79Jzw5dlbu"
+
+    app_cfg = ec.app_compose_env_config("truealpha/app", "production")
+    assert app_cfg.name == "prod"
+    assert app_cfg.compose_id == "j-gIAk0GfF0bGOitZN-og"
+
+
 def test_preview_is_dynamic_and_defaults_to_staging_data():
     cfg = ec.env_config("preview")
     assert cfg.dynamic is True

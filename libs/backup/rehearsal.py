@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import gzip
+import hashlib
 import re
 import subprocess
 from dataclasses import asdict, dataclass
@@ -128,6 +129,19 @@ def materialize_artifact(
         raise BackupRestoreError(
             result.stderr.strip() or f"rclone download failed: {remote_uri}"
         )
+    expected_sha256 = artifact.get("sha256")
+    if expected_sha256:
+        h = hashlib.sha256()
+        with destination.open("rb") as f:
+            while chunk := f.read(65536):
+                h.update(chunk)
+        actual_sha256 = h.hexdigest()
+        if actual_sha256.lower() != str(expected_sha256).lower():
+            destination.unlink(missing_ok=True)
+            raise BackupRestoreError(
+                f"backup artifact checksum mismatch for {destination.name}: "
+                f"expected {expected_sha256}, got {actual_sha256}"
+            )
     return destination
 
 

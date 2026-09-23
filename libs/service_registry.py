@@ -21,6 +21,10 @@ import ast
 from dataclasses import dataclass
 from pathlib import Path
 
+from libs.core.service import (
+    Service as Service,
+    load_service_registry as load_service_registry,
+)
 from libs.service_facets import (
     FACET_CLASSES,
     BackupFacet,
@@ -584,12 +588,5 @@ def _is_deployer_class(node: ast.ClassDef) -> bool:
         if isinstance(base, ast.Attribute) and base.attr.endswith("Deployer"):
             return True
     return False
-
-
-# Re-exports for Phase 3 Domain Convergence (SSOT)
-from libs.core.service import (  # noqa: E402
-    Service as Service,
-    load_service_registry as load_service_registry,
-)
 
 

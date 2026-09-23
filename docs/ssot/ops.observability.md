@@ -197,6 +197,27 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 **设计约束**:告警含 actionable runbook 链接 · 聚合避免风暴 · Feishu 凭据只在 1Password(Vault 仅运行时镜像)· SigNoz webhook 只指向内部 bridge URL。
 **禁止**:为瞬时波动指标设 P0 · 忽略 Critical · SigNoz webhook 直指飞书自定义机器人。
 
+### 5.1 健康检查接口规范与 Anti-Puppet 铁律 (Liveness & Readiness SSOT)
+
+为杜绝组件假绿（GREEN-WHILE-EMPTY / 吞异常返回 200），所有接入 infra2 的应用服务统一遵循分级探针协议：
+
+1. **`/livez`（存活探针 - Liveness）**：
+   - 目标：检测容器进程与核心事件循环是否存活。
+   - 判据：进程无死锁即返回 HTTP 200。**严禁在 `/livez` 内部检查外部下游依赖（如远程数据库或外部 API）**，防止外部故障引发容器级联驱逐与无限重启风暴。
+
+2. **`/readyz`（就绪探针 - Readiness）**：
+   - 目标：检测服务是否具备对外处理流量的完整业务能力。
+   - 判据：检查本服务必需的核心运行时依赖（Postgres 连接握手、Redis 可写、S3 连通、本地配置加载完成）。
+   - **失败即阻断**：任一必需依赖不可达时，**必须返回 HTTP 503 (Service Unavailable)**，并在响应体 JSON 中明确列出未就绪的具体原因。**严禁使用 `try...except pass` 吞咽异常并假装 200 返回**。
+
+3. **`/health`（向后兼容聚合探针）**：
+   - 响应格式必须为结构化 JSON：`{"status": "healthy"|"degraded"|"unhealthy", "checks": {...}}`。
+   - 当关键依赖挂掉时，HTTP 状态码必须对齐整体健康状态（非 200），供上层 Ingress / Load Balancer 安全切断流量。
+
+4. **探针级联依赖抑制 (`depends_on`)**：
+   - 当上游服务（如 Web/LLM）依赖下游基础组件（如 Postgres/Redis）时，上游探针在 `ProbeFacet` 中必须显式声明 `depends_on="<下游探针名>"`。
+   - 当下游基础组件挂掉引发告警时，探针引擎自动抑制上游级联失效探针，只向值班人员投递根因告警，从物理层消除告警风暴。
+
 ---
 
 ## 6. 报告与可用率账本 (Reporting & Availability Ledger)
