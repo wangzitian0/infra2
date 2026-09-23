@@ -23,7 +23,10 @@ App 的集成状态。它统一 workspace 视角，不统一产品仓库的迭�
 
 明确不做：
 
-- 不从 harness 向 App vendoring、symlink 或同步 policy/skill。
+- 不从 harness 向 App 分发或同步 policy：App 的规则由它自己的 `AGENTS.md` 决定。
+  **skill 不在此列**（2026-09-23 owner 指示「各个 repo 将 skill 真入库。必须是 1:1 的」）：
+  它从 `dev_env` 单向渲染进每个 repo 并入库，见 §5.1。两者的区别是谁能改——
+  policy 由 repo 自己写，skill 只能改单源。
 - 不把 App submodule 变成 package、runtime、deployment 或 config-hash 依赖。
 - 不替 App 决定领域架构、CI gate 实例、版本节奏或发布审批。
 - 不把人类工作流偏好放进 `infra2-sdk` 的运行时 wire contract。
@@ -79,7 +82,14 @@ Harness 只拥有这些仓库之间的协作视图与边界定义。
 |---|---|---|
 | `dev_env`（单源） | Root / Workspace 规则真源、skill / command / MCP spec / secrets 模板、纯函数工具（`ws-render`、`ws-check-drift`、`ws-agents-lint`、`ws-doctor`、`ws-mem-distill`），全部 `--json`，CI | 常驻进程、机器状态、UI |
 | `oh-my-code-agent`（运行时） | hub（每 OS user 一个，profile = workspace，一个 (workspace, server) 一份进程，宿主经 bridge 接入）、受管 HOME、定时器与 watcher、drift / report / TUI | 持有内容真源；重实现 render / drift 判定（只调用 dev_env 工具并展示）；写回 dev_env 或渲染产物；调度任务；超出 Knowledge Pack 证据级的写权限 |
-| checkout（消费者） | 自己的 `AGENTS.md`（Repo 层，入库）；`harness/repos.yaml` 的 `rules_layer` 声明 | 跟踪文件里出现 Root / Workspace 内容；自带 MCP / skill 副本 |
+| checkout（消费者） | 自己的 `AGENTS.md`（Repo 层，入库）；`harness/repos.yaml` 的 `rules_layer` 声明；`skills/`（从 `dev_env` 1:1 渲染，入库） | 跟踪文件里出现 Root / Workspace 内容；**手写或就地修改**渲染产物 |
+
+渲染产物入库不违反单向流动：**入库的是副本，不是真源**。判据是可计算的——
+`ws-skills-sync --check` 按 `sha256` 比对每个 `skills/<name>/SKILL.md` 与 `dev_env`
+的对应文件，不等即 drift。就地改一个 repo 的副本不会传播，只会让它与其余 repo 不一致，
+而下一次同步把它覆盖掉——所以「改副本」是静默失败，不是局部定制。
+只有 `SKILL.md` 随渲染出仓；`local.md` 留在 `dev_env`，承载 vault 名、绝对家目录路径
+与只此一机存在的命令。这些 repo 都是 public，泄露不可撤销。
 
 不变量：内容单向流动（dev_env → render → checkout / OMCA desired state），无反向写路径；
 secret 只经 `env_files` 进 hub，渲染件里不得出现字面量；Workspace 块不进任何机器全局文件。
