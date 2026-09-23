@@ -34,17 +34,17 @@ def is_stateful_deploy_env(env: str | None, *, strict: bool = False) -> bool:
     if not env or not isinstance(env, str) or not env.strip():
         return False
     val = env.strip().lower()
+    if strict:
+        return val in STATEFUL_DEPLOY_ENVIRONMENTS
     if val in ("prod", "production", "staging", "stg", "preview"):
         return True
-    if not strict and (
+    return (
         val.startswith("pr-")
         or val.startswith("commit-")
         or val.startswith("branch-")
         or val.startswith("tag-")
         or val.startswith("preview-")
-    ):
-        return True
-    return False
+    )
 
 
 __all__ = [
