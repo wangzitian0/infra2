@@ -79,7 +79,8 @@ graph TD
 
 - **触发条件**: Platform PG 数据损坏
 - **先取证**：确定目标环境和服务 ID（Production 为 `platform/postgres`），从该环境的
-  `production-manifest.json` 或 `staging-manifest.json` 选定一个归档及其 SHA256。
+  `/data/backups/infra2/production-manifest.json` 或
+  `/data/backups/infra2/staging-manifest.json` 选定一个归档及其 SHA256。
   用 SOP-004 验证完整 manifest，再从异地拉取所选归档并核对实际字节与 SHA256。
   环境专用 manifest 缺失或服务条目不全即暂停，不能猜测旧 `manifest.json` 的环境。
 - **先隔离恢复**：在替换任何在线数据前，使用 SOP-006A 的沙箱恢复证明该归档可读。
@@ -96,8 +97,8 @@ graph TD
 - **触发条件**: SSO 不可用，需操作 Vault
 - **步骤**:
     1. 从 1Password `Infra2` vault 的 **`bootstrap/vault/Root Token`** 条目读取
-       `Token` 字段；`bootstrap/vault/Unseal Keys` 只用于 SOP-001 解封。
-    2. 在可信的操作终端运行 `vault login -no-print`，在隐藏提示中输入 token，
+       `Root Token` 字段；`bootstrap/vault/Unseal Keys` 只用于 SOP-001 解封。
+    2. 在可信的操作终端运行 `vault login -no-print`，在交互式提示中输入 token，
        然后用 `vault token lookup` 确认权限。不要把 token 写入命令参数、工单或日志。
 
 ### SOP-004: 备份 freshness 验证
