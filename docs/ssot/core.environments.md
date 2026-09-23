@@ -229,11 +229,11 @@ python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref
 
 ### 3.6 DR (灾备环境)
 
-**位置**: Google Drive 异地加密存储；备用 VPS 恢复环境尚未验收
+**位置**: Google Drive 异地加密存储；备用 VPS 恢复环境尚未验收<br>
 **用途**: 数据备份、灾难恢复  
 **特点**:
 - ⏳ **冷备份** - 已有定期异地加密备份；17/17 全状态覆盖仍待生产验收
-- ⏳ **沙箱演练** - 已有部分数据库的单次恢复证明；新路径需连续两个周周期验证，整机恢复另行演练（SOP-006A/006B）
+- ⏳ **沙箱演练** - 已有部分数据库的单次恢复证明；新路径需连续两个周周期验证，整机恢复另行演练（见 [ops.recovery.md](./ops.recovery.md) SOP-006A/SOP-006B）
 - ⏳ **分级保留** - 代码定义周备保留 60 天、季度快照保留 730 天；运行效果待验收
 
 **配置**:
@@ -245,7 +245,7 @@ python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref
 ```
 
 **恢复目标**: 整机 RTO < 1 小时；尚无整机演练实测值，数据库沙箱恢复耗时不能代替整机 RTO。
-**数据丢失目标**: RPO < 24 小时；当前每周备份计划不能满足该目标。`BackupFacet` 的备份新鲜度阈值为 180 小时，运行覆盖与实际 RPO 仍待验证。
+**数据丢失目标**: RPO < 24 小时；当前每周备份计划不能满足该目标。`BackupFacet` 的备份新鲜度判定以各服务 `rpo_hours` 为准（未显式声明时默认 180 小时），运行覆盖与实际 RPO 仍待验证。
 
 ---
 
