@@ -130,6 +130,8 @@ VALID_DOKPLOY_DYNAMIC_ALIASES = [
     "tag-v1.0.0",
     "tag-2.1.0",
     "preview-service",
+    "prod",
+    "stg",
 ]
 
 INVALID_DIRTY_ENV_INPUTS = [
@@ -147,9 +149,7 @@ INVALID_DIRTY_ENV_INPUTS = [
 STRICT_MODE_STATEFUL_ENVS = [
     "preview",
     "staging",
-    "stg",
     "production",
-    "prod",
 ]
 
 
