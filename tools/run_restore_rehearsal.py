@@ -127,7 +127,7 @@ def run_rehearsal(
                 db_exists_check,
                 "DO $$ BEGIN IF (SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public') < 40 THEN RAISE EXCEPTION 'table count below threshold (<40)'; END IF; END $$;",
                 "DO $$ BEGIN IF (SELECT count(*) FROM accounts) < 3 THEN RAISE EXCEPTION 'accounts count below threshold (<3)'; END IF; END $$;",
-                "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM alembic_version WHERE version_num IN ('0063_enum_case_compat', '0062_bank_custody')) THEN RAISE EXCEPTION 'unexpected alembic_version'; END IF; END $$;",
+                "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM alembic_version WHERE version_num IN ('0065_user_soft_delete', '0064_enum_drift_cleanup', '0063_enum_case_compat', '0062_bank_custody')) THEN RAISE EXCEPTION 'unexpected alembic_version'; END IF; END $$;",
             )
         elif service_id == "truealpha/postgres":
             invariants = (

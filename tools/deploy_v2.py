@@ -27,6 +27,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx  # Dokploy transport errors from libs.dokploy surface as httpx exceptions
 
@@ -457,6 +458,32 @@ def enforce_data_lane_red_lines(
             "prod data requires an explicit code-reviewed signal (RL-DATA-1); "
             f"got code_reviewed={code_reviewed!r}"
         )
+    if target.service == "finance_report/app" and target.env in ("staging", "prod"):
+        manifest_path = Path("/data/backups/anonymized/manifest.json")
+        if manifest_path.exists():
+            try:
+                import json
+                from datetime import datetime, timezone
+
+                m = json.loads(manifest_path.read_text(encoding="utf-8"))
+                gen_at = m.get("generated_at")
+                if gen_at:
+                    dt = datetime.fromisoformat(gen_at.replace("Z", "+00:00"))
+                    age_days = (datetime.now(timezone.utc) - dt).total_seconds() / 86400
+                    if age_days > 7.0:
+                        import logging
+
+                        logging.getLogger("deploy_v2").warning(
+                            "Anonymized snapshot for %s is older than 7 days (age=%.1f days)",
+                            target.env,
+                            age_days,
+                        )
+            except Exception as exc:
+                import logging
+
+                logging.getLogger("deploy_v2").debug(
+                    "Failed to evaluate anonymized snapshot freshness: %s", exc
+                )
     return data_lane
 
 
