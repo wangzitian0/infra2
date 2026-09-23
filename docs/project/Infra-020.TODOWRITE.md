@@ -10,6 +10,7 @@ DataHub slice.
 
 ## Top Issues (Top 30)
 
+- [ ] 2026-09-23 evidence reconciliation: TrueAlpha #271, #426 and #475 closed with real Production manual capture, `mart.current_pointer`, and matching App/MCP run identity. Original prerequisite issues #171, #205, #41, #52, #60, #61 are still open. Keep their checkboxes open; obtain an owner-scoped sequence exception or reconcile each prerequisite against the real run before marking Infra-020 complete.
 - [ ] TrueAlpha D4: publish an accepted DataHub handoff that explicitly authorizes
       the #271 Production consumer; the current scopes allow only Local/CI consumers
       or D3 in Staging.
