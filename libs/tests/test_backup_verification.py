@@ -429,6 +429,7 @@ def test_run_postgres_restore_rehearsal_filters_create_role_postgres(tmp_path) -
 
     class MockResult:
         returncode = 0
+        stdout = "1\n"
         stderr = ""
 
     def mock_popen(cmd, stdin=None):
@@ -445,9 +446,14 @@ def test_run_postgres_restore_rehearsal_filters_create_role_postgres(tmp_path) -
     assert b"CREATE DATABASE testdb;\n" in written_lines
 
 
-
-
-def _fake_restore(payload: bytes, tmp_path, *, stdin_cls=None, wait_rc: int = 0):
+def _fake_restore(
+    payload: bytes,
+    tmp_path,
+    *,
+    stdin_cls=None,
+    wait_rc: int = 0,
+    invariant_stdout: str = "1\n",
+):
     """Stream `payload` through the real restore path, returning what reached psql."""
     import gzip
 
@@ -480,6 +486,7 @@ def _fake_restore(payload: bytes, tmp_path, *, stdin_cls=None, wait_rc: int = 0)
 
     class Result:
         returncode = 0
+        stdout = invariant_stdout
         stderr = ""
 
     plan = RestoreRehearsalPlan(
@@ -497,6 +504,14 @@ def _fake_restore(payload: bytes, tmp_path, *, stdin_cls=None, wait_rc: int = 0)
         runner=lambda cmd, **kwargs: Result(),
     )
     return result, written, waited
+
+
+@pytest.mark.parametrize("output", ["f\n", "0\n", "\n", "t\nf\n", "present\n"])
+def test_restore_rejects_false_or_ambiguous_select_invariant(tmp_path, output) -> None:
+    from libs.backup_restore import BackupRestoreError
+
+    with pytest.raises(BackupRestoreError, match="one true scalar"):
+        _fake_restore(b"SELECT 1;\n", tmp_path, invariant_stdout=output)
 
 
 def test_restore_filter_never_drops_copy_block_data(tmp_path) -> None:
@@ -566,8 +581,6 @@ def test_restore_reaps_psql_when_it_exits_mid_stream(tmp_path) -> None:
     # surfaced instead of letting the raw BrokenPipeError escape.
     with pytest.raises(BackupRestoreError, match="exit code 3"):
         _fake_restore(payload, tmp_path, stdin_cls=EarlyExitStdin, wait_rc=3)
-
-
 
 
 def test_restore_rejects_a_psql_that_stopped_reading_but_exited_zero(tmp_path) -> None:

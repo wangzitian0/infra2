@@ -276,6 +276,23 @@ def run_postgres_restore_rehearsal(
             raise BackupRestoreError(
                 result.stderr.strip() or f"restore invariant failed: {sql}"
             )
+        # psql exits successfully when a SELECT returns false, zero, or no row.
+        # A query used as an invariant must produce a true/nonzero scalar;
+        # statements such as DO assert through RAISE EXCEPTION and have no output.
+        if re.match(r"\s*(SELECT|WITH|VALUES|TABLE)\b", sql, re.IGNORECASE):
+            values = [value.strip().lower() for value in result.stdout.splitlines()]
+            if len(values) != 1:
+                raise BackupRestoreError(
+                    f"restore invariant did not return one true scalar: {sql}"
+                )
+            value = values[0]
+            is_nonzero_integer = (
+                bool(re.fullmatch(r"[+-]?\d+", value)) and int(value) != 0
+            )
+            if value not in {"t", "true"} and not is_nonzero_integer:
+                raise BackupRestoreError(
+                    f"restore invariant did not return one true scalar: {sql}"
+                )
 
     return {
         "status": "pass",
