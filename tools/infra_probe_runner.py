@@ -47,6 +47,7 @@ from libs.infra_probes import (
     run_probes,
 )
 from libs.observability.probes import failure_domain
+from libs.observability.local_ledger import record_probe_round
 
 
 DEFAULT_PROBE_SPECS = """
@@ -578,6 +579,7 @@ def run_once(
         state["failing_public_routes"] = _paged_public_routes(state, json_results, now)
         problems = list(loop_errors)
         save_error = _save_state(state_path, state)
+        record_probe_round(json_results, _deploy_env(), state_path, now)
         if save_error:
             problems.append(f"state save failed: {save_error}")
         delivery_failures = state.get("delivery_failures") or {}

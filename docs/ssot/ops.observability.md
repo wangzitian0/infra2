@@ -23,7 +23,7 @@
 | **告警 - 密钥源头** | 1Password `platform/{env}/alerting` → 运行时镜像 Vault `secret/platform/{env}/alerting` | Feishu 凭据 + 可选 bridge basic auth |
 | **带外 watchdog** | [`cloudflare/infra-watchdog`](../../cloudflare/infra-watchdog/)(轻量带外,边缘 30min)+ [`.github/workflows/ops-checks.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/ops-checks.yml)(日级带外审计) | 只判 VPS 自己报告不了的:整机/整栈失联、告警链路自身失效;分工见 §1.1 |
 | **信号清单** | [`watchdog-signals.yaml`](watchdog-signals.yaml) | 按信号(非组件)追踪 watchdog 归属 |
-| **报告 - 账本** | Cloudflare KV(热 21 天)+ R2(冷长期)·`libs/availability_ledger.py`(聚合)·`tools/stability_report.py`(周报) | 正向证明 |
+| **报告 - 账本** | VPS probe runner 账本文件(21 天,`libs/observability/local_ledger.py`)+ Worker 心跳失联边沿(`/outages`)·`libs/availability_ledger.py`(聚合)·`tools/stability_report.py`(周报) | 正向证明,见 §6 |
 | **部署指南** | [Infra-007](../project/archive/Infra-007.signoz_install.md) | SigNoz 安装 |
 
 In-band 告警路径恒为:`component/app → OTLP Collector → SigNoz → platform/12.alerting → Feishu/Lark`。
@@ -63,9 +63,8 @@ owner 批准的当前 head SHA，才能满足 `AGENTS.md` 的生产权限边界�
   里挂着清偿它的阶段 issue;已不再违规的欠账条目同样失败——欠账只能随修复一起缩短。
 - **Cloudflare 预算(#904 验收)**:cron CPU p99 < 5 ms、每次运行子请求 ≤ 10、KV 只在状态变化时写(≤ 200/天),留在免费档。
   超出是设计缺陷,不是升级付费的理由。
-- **可用率(目标态,#904)**:成功计数由 VPS 探针累加(重活);VPS 失联区间由 Worker 只在心跳过期/恢复两个边沿各写一次
-  KV(每次事故 2 次写);二者合算可用率。VPS 无法记录自己宕机期间的状态,这部分仍必须在带外——但只记边沿,不做累加。
-  §6 描述的是迁移前的现状。
+- **可用率(#904 起为现状)**:成功计数由 VPS 探针累加(重活);VPS 失联区间由 Worker 只在心跳过期/恢复两个边沿各写一次
+  KV(每次事故 2 次写);二者合算可用率。VPS 无法记录自己宕机期间的状态,这部分仍必须在带外——但只记边沿,不做累加。见 §6。
 
 ---
 
@@ -220,10 +219,10 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 | L3 Finance Report | fr-app backend | OTEL ERROR/FATAL > 0 over 5m | P1 | code (`FinanceReportBackendErrorLogs`) |
 | L3 Finance Report | fr-app backend | RED SLO: 5xx > 5% 5m / p95 > 1500ms | P0/P1 | code (`FinanceReportHigh5xxRate`, `FinanceReportP95LatencyHigh`) |
 | L3 Finance Report | fr-app backend | business anomaly: parse spike / reconciliation / rate-limit / async failure | P1/P2 | code (`FinanceReport{StatementParseFailureSpike,ReconciliationAnomaly,RateLimitSaturation,AsyncTaskFailures}`) |
-| L3 Finance Report | fr-app public route | `report[-staging].zitian.party/` (web) or `/api/health` from Cloudflare | P0 prod / P1 staging | Cloudflare out-of-band watchdog |
+| L3 Finance Report | fr-app public route | `report[-staging].zitian.party/` (web) or `/api/health` fails | P0 prod / P2 staging | Live in-band public-route probes (`finance-report-{web,api}-public-route`);prod web 另由 Cloudflare 作为产品外部入口(2 次连续失败)|
 | Cross-cutting | Vault app tokens / rendered env | missing / malformed / invalid / low-TTL / `<no value>` | P0/P1 | Docker healthcheck + `vault-audit.self-refresh` |
 | Cross-cutting | Backup freshness | latest off-host backup missing/stale/empty/no-checksum | P1 | backup manifest verifier |
-| Cross-cutting | Infra2 host reachability / probe heartbeat | public endpoints fail / probe runner stops heartbeat | P0/P1 | Cloudflare out-of-band watchdog |
+| Cross-cutting | Infra2 host reachability / probe heartbeat | prod heartbeat stale(P0 VPS 或出网断)/ 心跳 `ok=false`(P1 探测循环或投递失效)/ 3 个产品外部入口连续 2 次不可达(P0) | P0/P1 | Cloudflare out-of-band watchdog(SOP-005)|
 | Cross-cutting | SSH host diagnostics | external SSH bridge health fails | — (report) | GitHub 日审计只报告;整机失联由 Cloudflare 报警(#908) |
 | Cross-cutting | Deploy queue | 部署卡在 `running` 超过 ceiling(默认 30min;单并发 FIFO 会阻塞所有后续部署) | P0 | Live (`DeployQueueStuck`,probe-runner 常驻进程内的 ResidentWatcher 插件 `libs/deploy_queue_guard.py`,#543 单 sidecar 合并;仅 production runner 运行,#903;观测默认开,`DEPLOY_GUARD_REMEDIATE=1` 才 opt-in 走 Dokploy API kill/clean + 复查升级,绝不直接动 Redis/BullMQ) |
 
@@ -257,12 +256,21 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 
 > 故障流告警**证明不了"它一直是好的"**。账本是闭环的正向一半:**成功也记,且绝不能把降级信号报成健康**。
 
-- **为何外置(KV/R2 而非 SigNoz)**:SigNoz 与 bridge 都在单台 VPS,**度量不了自己宿主的可用率**。账本必须活在比被测对象更可靠的层(Cloudflare)。**#904 将按 §1.1 拆分**:累加迁回 VPS,带外只记失联边沿。
-- **记账**:`worker.js` `recordLedger` 每次 cron 把各信号 ok/fail 累加进**当日一个聚合 rollup**(绝不一信号一键,否则击穿 KV 免费写配额→静默假死);跨天结算的昨日写入 R2(S3 标准、静态凭据、与备份同后端、Worker 原生 binding,无需第二套同步)。
-- **热 21 天 KV `ledger:YYYY-MM-DD`** 供 `/ledger`/`/status`/周报;**冷长期 R2 `watchdog-ledger/YYYY-MM-DD.json`**。
-- **聚合/算 uptime** 只在 `libs/availability_ledger.py`(纯函数,CLI 与测试共用);R2/KV 缺失时**安全降级 no-op**,部署不挂。
-- **周报**:`tools/stability_report.py`(弱 CLI)读 `/ledger` → Lark 正向证明,需 `INFRA2_WATCHDOG_LEDGER_URL`。
-- **禁止**:per-signal-per-run 建 KV 键 · 把 `fail>0` 计入 100%/perfect · 信任畸形 day/signal 抬高可用率。
+- **分工(#904,§1.1)**:成功/失败计数是重活,在 VPS;VPS 失联期间它什么也记不了,这一段只能在带外——Worker 只记心跳的
+  失联/恢复**边沿**,不做累加。
+- **记账(VPS)**:probe runner 每轮一次调用 `libs/observability/local_ledger.py::record_probe_round`,把每个探针(含公网路由探针,
+  取级联抑制**之前**的原始结果)的 ok/fail 累加进本环境**一个**账本文件的当日条目,保留 21 天,原子替换写入;文件在宿主机
+  `/var/lib/infra2-availability-ledger${ENV_SUFFIX}/availability-ledger.json`(compose bind mount,跨重部署保留)。账本写失败只打日志,
+  绝不打断探测循环(循环失败会被心跳报成告警链路故障)。
+- **失联边沿(Worker)**:production 心跳过期时开一条 outage(`start` = 最后一次记录到的联系,保守),恢复时以第一条新鲜心跳的时间
+  收口(`end`);每次事故 2 次 KV 写,保留最近 50 条,`GET /outages`(与 `/status` 同一 token)。
+- **合算**只在 `libs/availability_ledger.py`(纯函数,CLI 与测试共用):`apply_outages` 把每段失联按天、按探测周期(60 s)折算为该
+  环境**每个**信号的失败次数——没有这一步,一台自己宕机的 VPS 会把幸存的日子报成 100%。读不懂的 outage 记录计数并写进报告,不静默丢弃。
+- **周报**:`tools/stability_report.py`(GitHub `ops-checks.yml` digest job,周一)经 SSH 读两个环境的账本文件(同
+  `out_of_band_watchdog.py` 读备份 manifest 的方式),再取 Worker `/outages` → Lark。账本缺失、为空、超过 6 h 未更新或 `/outages`
+  读不到,一律让任务失败并由该 job 的失败告警发出——不出报告好过出一份虚高的报告。
+- **禁止**:把 `fail>0` 计入 100%/perfect · 信任畸形 day/signal/outage 抬高可用率 · 空账本报 100% · 在 Worker 里累加。
+- **已知缺口**:原 R2 冷归档随 Worker 瘦身删除,账本只有 21 天热数据;长期留存(把账本目录纳入备份)未做。
 
 > **天级日报(目标态,#425 T3)**:统一健康日报(探针绿/红、今日 fire/resolve、备份新鲜度、drift)发 Feishu,**其送达即投递自证**;"投递真断了"的硬信号留给独立带外 watchdog。6h 合成 `alert-delivery-canary` 已退役(它把投递自证做成了周期性告警);当前 bridge→Feishu 路径由 `lark-delivery-http`(配置有效 + Feishu 可达,不真发)、带外 watchdog 的 bridge `/health`、日报自身投递、以及真实告警共同覆盖。
 
@@ -305,12 +313,15 @@ Runbook 入库仅交付操作路径；#723 要求的一次现场演练、完整�
 
 > **注**:`apply_alerts` 现为声明式 reconcile(upsert + 默认只 log 的 prune),见 [ops.pipeline.md](./ops.pipeline.md)。
 
-### SOP-005: Cloudflare 带外 watchdog(轻量带外,边缘 30min;#904 瘦身中)
-活在 [`cloudflare/infra-watchdog`](../../cloudflare/infra-watchdog/),**直发 Feishu**(不经它要验证的 bridge)。归属按信号记于 [`watchdog-signals.yaml`](watchdog-signals.yaml)。默认覆盖:prod 公网路由 `cloud/vault/minio/sso/signoz` + report web/api;staging 选定路由;prod/staging probe-runner heartbeat 新鲜度。每个 target 携带 registry 校验的 `service_id`;结构化事件写 `identity_schema=v1` / `managed_by=infra2`,dedupe keys on **stable failure identity plus failure domain**，具体 fingerprint 使用 `(environment, service_id, signal, failure_domain)`。config-preflight 失败单独报(不冒充路由故障);投递失败发 `watchdog.delivery.failure` 结构化事件不静默。
+### SOP-005: Cloudflare 带外 watchdog(轻量带外,边缘 30min;#904)
+活在 [`cloudflare/infra-watchdog`](../../cloudflare/infra-watchdog/),**直发 Feishu**(不经它要验证的 bridge,email 兜底)。只判 VPS 自己报告不了的(§1.1),归属记于 [`watchdog-signals.yaml`](watchdog-signals.yaml);细节见其 README。
+- **报警,只报 production**:prod 心跳过期 → P0 host-reachability「VPS or its egress is down」;心跳新鲜但 `ok=false` → P1 alert-pipeline,带 runner 的 `detail`;3 个产品外部入口(`dokploy`、`finance-report-web`、`truealpha-web`)每次运行各 GET 一次、**无 run 内 sleep 重试**,连续 2 次失败 → P0 host-reachability——除非新鲜的 prod 心跳在 `failing_public_routes` 里列出了该路由(VPS 已报,抑制并在 `/status` 记原因;v1 或过期心跳的未知列表**不**抑制)。staging 心跳只记录、在 `/status` 展示,从不报警。其余公网路由全部由 VPS in-band 探针报(SOP-006)。
+- **告警状态按故障身份**(`<env>:<name>:heartbeat-stale|heartbeat-unhealthy|entrypoint`),仍活跃的告警至多每 6 h 重发一次,detail 变化不算新告警,RESOLVED 写明恢复了什么;一次运行的所有事件合成一条消息。未送达的告警不标记已发,本次运行失败(死人开关收 `/fail`),下次重试。config-preflight 失败(JSON 错、有效配置为空、缺 KV)单独报,且不"恢复"任何它没法评估的告警。
+- **心跳契约 v2**(#903 runner 侧):`schema: 2`、`last_delivery_ok_at`、`failing_public_routes`;`ok` 表示探测循环健康。无 `schema` 的 v1 载荷照收,新字段记为未知。
+- **`/status`** 报 Worker **自身**健康(最近一次运行新鲜、配置有效、投递成功),不是目标是否健康——GitHub 日级审计据此判 watchdog-liveness。`/outages` 见 §6。
 - secrets:webhook 模式 `FEISHU_WEBHOOK_URL`;app 模式 `FEISHU_APP_SECRET`;两者 `HEARTBEAT_TOKEN`、`WATCHDOG_STATUS_TOKEN`(源 1Password `Infra2/bootstrap/cloudflare-worker`)。
-- KV `WATCHDOG_STATE`;vars `WATCHDOG_ENVIRONMENTS=production,staging`、`WATCHDOG_RENOTIFY_SECONDS=7200` 等。
 - 部署:首次 `cd cloudflare/infra-watchdog && wrangler kv namespace create WATCHDOG_STATE && wrangler secret put ... && wrangler deploy`;之后由 `deploy-cloudflare-watchdog.yml` **手动 dispatch** 部署,输入必须是 owner 批准的 main 精确 head SHA(`approved_sha`);合流本身不部署。再配 probe runner heartbeat:`env.set INFRA_PROBE_HEARTBEAT_URL=.../heartbeat` + `INFRA_PROBE_HEARTBEAT_TOKEN`(prod+staging)→ deploy_v2。
-- **KV 写预算**(免费档全账号 1000 put/天;耗尽后心跳 put 全失败、记录冻结 → 假 stale 告警):心跳 verdict 每 `WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS`(900)刷新一次;verdict 变化提前写,每 key 每 UTC 日至多 `WATCHDOG_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY`(24)次;runner 的 liveness ping(`liveness: true`)**不得改写** verdict;只存 `WATCHDOG_HEARTBEATS_JSON` 里的 key。最坏 `2×(96+24)+48×3=384/天`(38%)。事故先例:2026-09-15/16 liveness `ok=true` 与失败 verdict 每轮交替、每次交替都写 → 1198 / 1157 put/天。证明:`libs/tests/test_cloudflare_watchdog_kv_budget.py`(node 回放整日流量);每日 `tools/secrets_reconcile.py` 报告 `cloudflare.kv.write` 近 7 日 + 今日趋势。
+- **预算(#904 验收)**:每次运行子请求 = 3 个入口 GET + prod 心跳读 + 状态读 + **恰好一次** KV 写 + 死人开关 = 7;报警运行 +token+send = 9;Feishu send 失败转 email = 10。KV 写:转换时写状态文档(告警、入口连续失败、失联边沿、运行记录),否则只写 `watchdog:last-run`。心跳 verdict 每 `WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS`(1800)刷新,verdict(`ok` 或失败路由集合)变化提前写,每 key 每 UTC 日至多 24 次;liveness ping **不得改写** verdict;只存 `WATCHDOG_HEARTBEATS_JSON` 里的 key。最坏 `2×(48+24)+48=192/天`,健康日实测 140。事故先例:2026-09-15/16 liveness 与失败 verdict 交替、每次交替都写 → 1198 / 1157 put/天。证明:`libs/tests/test_cloudflare_watchdog_kv_budget.py`(node 回放整日两个 runner + 48 次 cron)与 `libs/tests/test_cloudflare_watchdog.py`(行为契约);CPU 本地测不了,部署后以 Cloudflare 分析验收 cron CPU p99 < 5 ms;每日 `tools/secrets_reconcile.py` 报告 `cloudflare.kv.write` 近 7 日 + 今日趋势。
 
 ### SOP-005B: GitHub 兜底带外 watchdog(日级)
 活在 GitHub Actions(在 infra2 宿主之外),**日级**;`tools/out_of_band_watchdog.py`。按 §1.1 **只 page 本层拥有的故障类**,其余只报告(#908):
@@ -324,7 +335,7 @@ Runbook 入库仅交付操作路径；#723 要求的一次现场演练、完整�
 > **已知外部极限**:若 watchdog 与 Feishu/Lark 用的所有外部通道**同时**不可用,本仓库**没有第三条独立人工通知通道**(#425 月级/兜底范畴)。
 
 ### SOP-006: In-band 服务探针(分钟级)
-`INFRA_PROBE_SPECS` 由各服务 `deploy.py` Deployer 的 `ProbeFacet` 声明渲染(#541 单一声明点:聚合器 `libs/probe_specs.py::render_probe_spec_text()` 经 `AlertingDeployer.compose_env_base()` 注入 Dokploy env;迁移前的手写 literal 冻结为 `libs/tests/fixtures/infra_probe_specs_frozen.txt`,由 `libs/tests/test_probe_specs_equivalence.py` 做永久逐字段等价回归)。循环 `INFRA_PROBE_INTERVAL_SECONDS=60`(快检);通知分离:`FAILURE_THRESHOLD=3`、`RECOVERY_THRESHOLD=2`、`RENOTIFY_SECONDS=0`(#903:不按定时器重发,见下)。优先 Docker 网络目标(公网路由归 Cloudflare watchdog;`error code: 1010` 归类 `probe-client-blocked`)。spec 格式 `name|kind|target|expected|severity|timeout|depends_on|service_id`;kind=http/tcp/command。第八字段强制绑定 registry。`depends_on` 链命中失败 root → 级联抑制(环路 fail-closed,见 `tools/infra_probe_runner.py`)。dry-run:`INFRA_PROBE_DRY_RUN=1 uv run python tools/infra_probe_runner.py --once --json`。
+`INFRA_PROBE_SPECS` 由各服务 `deploy.py` Deployer 的 `ProbeFacet` 声明渲染(#541 单一声明点:聚合器 `libs/probe_specs.py::render_probe_spec_text()` 经 `AlertingDeployer.compose_env_base()` 注入 Dokploy env;迁移前的手写 literal 冻结为 `libs/tests/fixtures/infra_probe_specs_frozen.txt`,由 `libs/tests/test_probe_specs_equivalence.py` 做永久逐字段等价回归)。循环 `INFRA_PROBE_INTERVAL_SECONDS=60`(快检);通知分离:`FAILURE_THRESHOLD=3`、`RECOVERY_THRESHOLD=2`、`RENOTIFY_SECONDS=0`(#903:不按定时器重发,见下)。优先 Docker 网络目标;公网路由由下述 `PUBLIC_ROUTE_PROBE_SPECS` 在带内探测并报警(#904 起 Cloudflare 只留每产品 1 个外部入口;`error code: 1010` 归类 `probe-client-blocked`)。每轮结果同时计入可用率账本(§6)。spec 格式 `name|kind|target|expected|severity|timeout|depends_on|service_id`;kind=http/tcp/command。第八字段强制绑定 registry。`depends_on` 链命中失败 root → 级联抑制(环路 fail-closed,见 `tools/infra_probe_runner.py`)。dry-run:`INFRA_PROBE_DRY_RUN=1 uv run python tools/infra_probe_runner.py --once --json`。
 
 **公网路由探针(#543,反转 #209)**:`PUBLIC_ROUTE_PROBE_SPECS` 由各服务的 `PublicRouteFacet` 声明渲染(`libs/probe_specs.py::render_public_route_spec_text`,域名渲染期解析、无 `$` 传输);prod_only 服务只渲染生产、非生产一律降为 warning。每个渲染出的 `*-public-route` 名字必须是已注册 signal(`libs/tests/test_infra_probes.py` 锁定)。
 
@@ -351,9 +362,10 @@ Runbook 入库仅交付操作路径；#723 要求的一次现场演练、完整�
 Feishu page，且告警携带同一结构化记录。不得通过破坏 production 数据或恢复周期性
 `alert-delivery-canary` 来制造失败；Feishu 正向投递仍由日报送达自证。
 
-### SOP-008: 账本冷归档 + 周报
-- R2:确认桶 `infra2` + `wrangler.toml` `[[r2_buckets]] binding=LEDGER_BUCKET` → `wrangler deploy`;跨天后 R2 `watchdog-ledger/` 出现昨日 JSON。
-- 周报:`ops-checks.yml`(周一 UTC)跑 `stability_report.py` 读 `/ledger` → Lark;本地 `INFRA2_STABILITY_REPORT_DRY_RUN=1 python tools/stability_report.py --input ledger.json`。
+### SOP-008: 可用率账本 + 周报
+- 账本:部署 platform/alerting 后,宿主机 `/var/lib/infra2-availability-ledger${ENV_SUFFIX}/availability-ledger.json` 应每分钟更新(`updated_at`);Worker `GET /outages`(status token)列出 production 失联边沿。
+- 周报:`ops-checks.yml` digest job(周一 UTC)跑 `stability_report.py`,经 SSH 读两环境账本 + 取 `/outages` → Lark;本地
+  `INFRA2_STABILITY_REPORT_DRY_RUN=1 python tools/stability_report.py --ledger production=prod.json --ledger staging=staging.json --outages outages.json`。
 
 ---
 
@@ -380,8 +392,9 @@ Feishu page，且告警携带同一结构化记录。不得通过破坏 producti
 | staging/预览容器只进摘要、deploy-queue guard prod-only(#903) | `libs/tests/test_container_breakdown.py`, `libs/tests/test_resident_watchers.py` | ✅ |
 | Deploy-queue guard(卡死检测纯逻辑 + sidecar 编排:env 加载、扫描失败隔离、renotify 抑制、remediate/升级序列) | `libs/tests/test_deploy_queue.py`, `libs/tests/test_deploy_queue_guard.py` | ✅ |
 | 备份新鲜度告警 payload | `libs/tests/test_backup_verification.py` | ✅ |
-| 账本聚合(正例+反例:降级绝不报 100%/perfect、畸形输入不抬高、0 检查不除零) | `libs/tests/test_availability_ledger.py` | ✅ |
-| Worker 账本 + `/ledger` + R2 归档 | `libs/tests/test_cloudflare_watchdog.py` | ✅ |
+| 账本聚合(正例+反例:降级绝不报 100%/perfect、畸形输入不抬高、0 检查不除零、失联区间计为失败) | `libs/tests/test_availability_ledger.py` | ✅ |
+| VPS 账本记账(每轮计数、按 UTC 日、21 天裁剪、原子写、失败不打断循环、runner 调用点) | `libs/tests/test_local_ledger.py` | ✅ |
+| Worker 行为契约(入口去抖、VPS 已报则抑制、按身份告警、失联边沿与 `/outages`、预算) | `libs/tests/test_cloudflare_watchdog.py`, `test_cloudflare_watchdog_kv_budget.py` | ✅ |
 | 周 watchdog recall digest / 周正向稳定性报告 | `test_watchdog_weekly_digest.py`, `test_stability_report.py` | ✅ |
 | Env×Stage failure-domain / disagreement 契约 | `libs/tests/test_pipeline_stage_contract.py` | ✅ |
 | synthetic round-trip(配置缺失 → `EX_CONFIG`,后端失败 → 1) | `test_observability_roundtrip_probe.py` | ✅ |
