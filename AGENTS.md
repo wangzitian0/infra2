@@ -1,108 +1,86 @@
-# Infra2 Harness 与基础设施 AI Agent 行为准则
+<!-- WS_STATIC_START adapter=rules-v2 inputs=40d952908f21d69b1b479809068511281b5fcae716213ef504ca6cd062cde900 -->
+<!-- Generated file: do not edit by hand. These rules are maintained in the owner's rule source and re-rendered here. -->
 
-> **权限边界**：AI 修改本文件需 owner 明确指示，并在 PR description 中引用那句指示。AI 可在"合流门禁"全部满足后自行 Merge PR（常设合流权是 workspace 级事实，见工作区根 `AGENTS.md`「合流授权」，本文不重述；本仓库的门禁条件见 [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.md)）；任一状态失败、缺失或无法验证时必须 fail-closed，禁止合流。
+## Engineering discipline
 
-> **本文只放判定所需的不变量。** 程序性细则按需加载，入口见下方"按需加载"。
-> 长期常驻的指令会稀释红线的权重——规则越长越不被遵守。
+- **Measure the physical system first.** Before an abstract architecture proposal, inspect the system with read-only probes such as `time cmd`, process chains, and file-descriptor locks. A conceptually neat story without physical evidence is insufficient. A probe must not write. Do not combine validation and action in one command: a POST permission probe can create a resource, and a trial commit can leave a real commit. Measure, read the result, then decide, with a stop point between these steps.
+- **Green does not prove truth.** The tested system writes its own unit tests, CI, and issue states. Cross-check critical conclusions against two external sources not written by this repository.
+- **Tests must be falsifiable.** Do not hide assertions in `if (exists)` or `if (code != 0)` so failures run zero assertions. Do not accept tautologies such as `typeof null === 'object'` or `result !== undefined || true`. Source-text `indexOf` matches against prose are not integration tests. Duplicate test function identifiers can silently shadow earlier tests (Python `def` and duplicate JS function/const/export names); duplicate string titles in `test()` or `it()` instead run both. A green count is not coverage evidence. Make a new test fail under a relevant mutation. A read-only reviewer treats such fake-test patterns as CRITICAL merge blockers.
+- **One source of truth:** Keep one authoritative definition for each core fact. Repeated hardcoding and scattered configuration invite drift.
+- **Clean up during migration:** After the new mechanism is live and equivalence is proved, remove its predecessor, obsolete files, and dead code in the same change. Define contracts first and derive CI from them.
+- **Deletion can leave guards green and empty:** A guard for an old structure can stop checking anything after deletion. Check each guard and remove it or redirect it to the new structure; green tests alone do not prove safe deletion.
+- **Define guard scope from what it must govern, not from today's passing tree.** Let the guard fail on existing violations, then repair them. A guard never seen failing is not yet evidence of protection.
 
-## Harness 作用域与优先级
+## Delivery and merge
 
-本仓库同时是 `infra2` 的实现/部署控制面和多仓库开发 workspace。机器清单见
-[`harness/repos.yaml`](harness/repos.yaml)，架构边界见
-[`docs/ssot/core.harness.md`](docs/ssot/core.harness.md)。
+- **Fail fast left to right:** Put the cheapest and likeliest failure checks first.
+- **Review standing authorization:** Resolve a review thread directly after independently verifying it is fixed or obsolete. Do not resolve actionable, ambiguous, or unverified feedback. Automated reviewers may read a redacted GitHub diff rather than source: GitHub can show `"Authorization": f"Bearer ******"` where source has `"Authorization": f"Bearer {token}"`. Check source before judging a report. When a report is false, turn the concern into a falsifiable invariant test rather than merely dismissing it.
+- **Weighted review gates:** Each repository defines its own severity weights and blocking thresholds. Read literal `severity: <level>` tags; do not infer severity from prose.
+- **Merge when ready:** Once all merge conditions pass, merge and continue from the latest main rather than piling up divergent branches.
 
-1. **Harness focus**：本文件直接治理根目录的 `infra2` 工作；workspace 重点是
-   `infra2`、`infra2-sdk` 与通用协作偏好。
-2. **App 自治**：`repos/finance_report` 与 `repos/truealpha` 只是 workspace checkout。
-   进入 App 后，必须先读其本地 `AGENTS.md` 与架构文档；App 本地规则优先，harness
-   不复制、不分发、不强制同步 App policy。**但合流授权不是 App policy**——它是 owner 对
-   自己名下仓库的一次性授权，不因换了仓库而失效，不要进了 App 就重新推导出"需要单独批准"。
-3. **Workspace tooling**：根目录 `oh-my-code-agent/` 是独立 submodule，用于逐步承载
-   各类 TUI 管理。它独立迭代，不得成为 infra 或 App 的 runtime/source 依赖。
-4. **偏好不是跨仓库命令**：GitHub、协作与软件设计默认偏好位于
-   [`harness/workspace/`](harness/workspace/)。目标仓库有更具体规则时，以目标仓库为准。
-5. **依赖边界**：submodule 只表示开发快照，不是 package、runtime、deployment 或
-   config-hash 依赖。稳定跨仓库代码契约只通过已发布的 `infra2-sdk` 版本传递。
+## Runtime safety
 
-## 🚨 核心强制原则（SSOT First）
+- **Reason from the worst case.** For environment changes, wrappers, redirection, or interception rules, check for no-TTY deadlock in CI or child processes, concurrent shared-file truncation/races, and network or cold-start failure cascades. Reject a proposal whose lack of backlash cannot be established.
+- **Treat three hidden green failures as defects:** WRONG FORMULA (an incorrect formula passes assertions), GREEN-WHILE-EMPTY (filtering removes all output but reports success), and STALE-REPORTED-AS-FRESH (old data is labeled fresh). Implausible output is evidence of a defect.
+- **Protect ambient services.** Default unit tests and Executor tasks must not destructively act on host ports, shared background processes, or development databases (`DROP`, `TRUNCATE`, `--clear`, forced restart). Resets require an isolated sandbox/worktree with a dedicated random port, or an explicit `CI=true` or `ALLOW_CLEAR_TEST=1` guard; otherwise skip safely with a warning.
+- **Two triggers:** Every background job or batch process needs both scheduled execution and manual replay.
+- **Do not steal CD locks:** A trigger is instant but publication is delayed. Do not interrupt a running deployment; the next run must coalesce commits accumulated while it was busy.
 
-1. **SSOT 为最高真理**：基础设施的**唯一权威来源**是 [`docs/ssot/`](docs/ssot/README.md)。
-2. **无 SSOT 不开工**：引入新组件前，必须先在 `docs/ssot/` 定义其真理（架构、约束、SOP）。
-3. **禁止隐性漂移**：发现代码与 SSOT 不符时必须立即同步修正，严禁让 SSOT 腐烂。
+# Infra2 Harness and Infrastructure AI Agent Rules
 
-## 🔒 合流门禁（最小判定条件）
+> **Authority boundary:** An AI agent may modify this file only under an explicit owner instruction, which the PR description must quote. The agent may merge a PR when every merge gate passes (standing authority is a Workspace-tier fact; this repository's criteria are in [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.md)). If any required state fails, is missing, or cannot be verified, fail closed and do not merge.
 
-完整细则见 [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.md)。
-**下列任一不满足即 fail-closed，禁止合流**：
+> **Keep only decision invariants here.** Load procedures on demand through the links below. Long always-loaded instructions dilute hard boundaries.
 
-1. **同一 head**：检查、review、合流针对同一个 `head SHA`；不得用本地旧结果或过期 review 代替。
-2. **Merge Authority 全绿**：[`docs/ssot/ci-gate-inventory.yaml`](docs/ssot/ci-gate-inventory.yaml) 中适用且 `blocks_merge: true` 的检查全部 success；pending / failure / cancelled / 意外 skipped / 读不到，都算不满足。
-3. **Review 已闭环**：未 resolved 发现按 severity 加权（high=1.0 / middle=0.5 / low=0.25，未标注按 middle），**总分 ≥ 1.0 即禁止合流**。由 `pr_merge_gate` 计分，不靠人心算；`severity: <级别>` 是唯一被识别的标注形式，从散文措辞推断等级会让判决取决于句子怎么写。
-4. **绿是当前的，且必需检查确实报告过**：兄弟 PR 合入后改写了本 PR 也动的文件时，检查仍是绿的
-   却没重跑；`blocks_merge` 的检查被 skip 时 GitHub 也接受为已满足。判定统一走
-   `python -m tools.pr_merge_gate <n> --policy either --request-review --merge`
-   （exit 1 = 未到时机，exit 2 = 需要 owner），不靠肉眼看表。
-5. **按环境划线（对全部仓库一致）**：合流触发 **staging** 部署、临时槽 canary、预览重部署
-   ——AI 可自行合流。**owner 按权限保留的只有 prod 部署这一类**，必须回到 owner 并批准当前
-   `head SHA`：prod apply / promote、L1 bootstrap self-update、runner 重建、observability apply。
-   还有一类回到 owner 的**不是权限问题，是自我裁决问题**——**改动"决定合流的东西"本身**：
-   门禁从工作树读规则，AI 合流自己的 PR 时读到的就是该 PR 引入的版本，等于由被告改写的法条
-   来审判。**判据不是一份文件清单，而是可计算的依赖闭包**：`pr_merge_gate` 自身、它 import 的
-   一切、它读的数据文件，以及这些文件各自的测试——由 `tools/pr_merge_gate.self_governing_files()`
-   算出，**新增一个 import 自动纳入保护，不靠谁记得**。只有代码读不到的两份**规则文本**
-   （本文件与 `ops.merge-gate.md`）是显式列举的，因为闭包到不了它们。
-6. **自我裁决按方向裁，不按文件裁**（2026-09-22 owner 指示）：被告改写法条的危害是单向的
-   ——**对自己有利**。一个只会让门禁更常说「不」的改动不可能对自己有利，所以**方向可由代码
-   机械证明为收紧的，门禁自行放行；放松、或证明不出来的，回到 owner 审核**。
-   **证明必须算出来，不能在 PR 描述里声称**：可证明的是**判定输入为闭集、且比较可机械计算**
-   的文件。**哪些文件属于这一类，由 `tools/pr_merge_gate.py` 的 `_direction_proof_for()` 决定，
-   不在这里列**——这份散文列一遍就是第二份会漂移的清单，而漂移时先被读到的往往是过期那份。
-   Python 与规则散文没有这种读法，任何一行都可能放松任何东西，一律回 owner。
-   未知文件、读不到、解析失败、base 侧为空——全部算证明不出来。**默认是回 owner。**
-   受保护文件引用 owner 指示即可。
+## Harness scope and precedence
 
-   这条散文曾经比代码严，而**方向上严也是错的**（#855）：照散文做的人多问 owner 一次
-   （浪费），照代码做的人少问一次（风险面）。哪一份先被读到取决于运气。规则的作用是让下一个
-   agent 不必重新推导；一条读完还得去读实现才能用的规则，等于没有规则。所以判据下沉到代码，
-   这里只留指针。
+This repository is both the implementation/deployment control plane for `infra2` and a multi-repository development workspace. The machine inventory is [`harness/repos.yaml`](harness/repos.yaml); architecture boundaries are in [`docs/ssot/core.harness.md`](docs/ssot/core.harness.md).
 
-## 🛡️ 安全与红线
+1. **Harness focus:** This file directly governs `infra2` work at the root. Workspace emphasis covers `infra2`, `infra2-sdk`, and general collaboration preferences.
+2. **App autonomy:** `repos/finance_report` and `repos/truealpha` are workspace checkouts. On entering an App, read its own `AGENTS.md` and architecture documents; the App's local rules take precedence. Each App's Repo tier is projected from its own dev_env source; the harness does not define or overwrite App policy. **Merge authority is not App policy:** it is a standing owner grant across their repositories and does not need to be requested again on changing repositories.
+3. **Workspace tooling:** Root-level `oh-my-code-agent/` is an independent submodule for TUI management. It evolves independently and must not become a runtime or source dependency of infra or Apps.
+4. **Preferences are not cross-repository commands:** Default GitHub, collaboration, and design preferences live in [`harness/workspace/`](harness/workspace/). More specific rules in the target repository prevail.
+5. **Dependency boundary:** A submodule is a development snapshot, not a package, runtime, deployment, or configuration-hash dependency. Stable cross-repository code contracts travel only through a published `infra2-sdk` version.
 
-- **严禁**提交任何敏感文件（`*.pem`、`.env`、`*.tfvars`）。
-- **状态不一致**：Apply 冲突时必须执行 [State Discrepancy Protocol](docs/ssot/ops.standards.md#rule-4-状态不一致协议-state-discrepancy-protocol)。
-- **密钥源头**：1Password 是静态密钥的唯一真源。
-- **0 宕机**：有宕机风险必须主动提出；必须宕机时须给出降低时长的方案。
+## Core mandatory principles (SSOT first)
 
-## 📎 按需加载
+1. **SSOT is authoritative:** [`docs/ssot/`](docs/ssot/README.md) is the only authority for infrastructure facts.
+2. **Define truth before implementation:** Specify a new component's architecture, constraints, and SOP in `docs/ssot/` before implementing it.
+3. **No hidden drift:** When code and SSOT disagree, correct the mismatch immediately; do not let the SSOT decay.
 
-导航索引只维护一份，在 [`docs/README.md`](docs/README.md)——本文不再复制目录树。
+## Merge gate (minimum decision criteria)
 
-| 要做什么 | 读哪里 |
+Full procedures are in [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.md). **Any unmet criterion below fails closed and prohibits merge:**
+
+1. **Same head:** Checks, review, and merge must refer to the same `head SHA`. Old local results or stale reviews are not substitutes.
+2. **Merge Authority green:** Every applicable check marked `blocks_merge: true` in [`docs/ssot/ci-gate-inventory.yaml`](docs/ssot/ci-gate-inventory.yaml) must conclude success. Pending, failed, cancelled, unexpectedly skipped, or unreadable counts as unmet.
+3. **Review closure:** Weight unresolved findings by literal severity: high=1.0, middle=0.5, low=0.25, and unlabeled=middle. A total of at least 1.0 blocks merge. Let `pr_merge_gate` calculate it; do not estimate manually. Only a literal `severity: <level>` annotation defines severity; prose tone does not.
+4. **Green must be current and actually reported:** A sibling PR can alter the same files after this PR's checks without triggering a rerun. GitHub may also accept a skipped required check. Use `python -m tools.pr_merge_gate <n> --policy either --request-review --merge` for the decision (exit 1 means not ready; exit 2 means owner action required), rather than visually reading a check table.
+5. **Environment and reserved authority:** Across all repositories, an AI agent may merge changes that trigger staging deployment, temporary canaries, or preview redeployment. Only **production deployment** is reserved to the owner and requires approval for the current `head SHA`: production apply/promote, L1 bootstrap self-update, runner rebuild, and observability apply. A separate reason to return to the owner is **self-adjudication**: changing what decides whether this very PR may merge. The gate reads rules from the worktree; a PR could otherwise judge itself under rules it introduced. The protected set is a computable dependency closure: `pr_merge_gate`, all its imports, the data files it reads, and the tests for those files. `tools/pr_merge_gate.self_governing_files()` computes that closure so a new import is protected automatically. Only two rule-text files outside the code-readable closure are listed explicitly: this file and `ops.merge-gate.md`.
+6. **Judge self-adjudication by direction, not merely by file** (owner instruction, 2026-09-22): The risk is a change favorable to the PR itself. A mechanically proven tightening can proceed under the gate; a relaxation or a change whose direction cannot be proven returns to the owner. Proof must be computed, not asserted in a PR description. It is possible only for closed-set decision inputs with mechanically comparable base and head values. `tools/pr_merge_gate.py` owns `_direction_proof_for()`; do not duplicate its file list here. Python and rule prose can loosen behavior in arbitrary ways and therefore return to the owner. Unknown files, unreadable input, parse failure, or missing base input also return to the owner by default. A protected rule-text change must cite the owner's instruction.
+
+   This prose once disagreed with implementation by being stricter (#855). The strict direction was still wrong: one reader unnecessarily asked the owner, while another reader followed code. A rule that requires reading implementation again to interpret it has failed as a rule. The mechanical criterion now lives in code; this paragraph points to it.
+
+## Security and hard boundaries
+
+- Never commit sensitive files (`*.pem`, `.env`, `*.tfvars`).
+- On an infrastructure Apply conflict, follow the [State Discrepancy Protocol](docs/ssot/ops.standards.md).
+- 1Password is the only authority for static secrets.
+- Surface any downtime risk. If downtime is unavoidable, provide a plan to shorten it.
+
+## Load on demand
+
+[`docs/README.md`](docs/README.md) is the single navigation index; do not copy its directory tree here.
+
+| Task | Read |
 |---|---|
-| 全局工程概览 / 快速开始 | [`README.md`](README.md) |
-| 提 PR / 判断能否合流 / 执行 merge | [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.md) |
-| 写代码 / 写文档 / 用 STAR 拆任务 / 运营准则 | [`docs/ssot/core.engineering.md`](docs/ssot/core.engineering.md) |
-| 查技术真理、架构、SOP | [`docs/ssot/README.md`](docs/ssot/README.md)（由 `MANIFEST.yaml` 生成） |
-| 找当前任务 | [`docs/project/README.md`](docs/project/README.md) |
-| 接入应用 / 新手上手 | [`docs/onboarding/README.md`](docs/onboarding/README.md) |
-| 改某一层基础设施 | 该层 `README.md`（[bootstrap](bootstrap/README.md) / [platform](platform/README.md) / [tools](tools/README.md) / [libs](libs/README.md)） |
+| Overall engineering overview and quick start | [`README.md`](README.md) |
+| Open a PR, decide merge readiness, or merge | [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.md) |
+| Write code/docs, split tasks with STAR, or apply operating principles | [`docs/ssot/core.engineering.md`](docs/ssot/core.engineering.md) |
+| Find technical truth, architecture, or SOPs | [`docs/ssot/README.md`](docs/ssot/README.md), generated from `MANIFEST.yaml` |
+| Find the current task | [`docs/project/README.md`](docs/project/README.md) |
+| Integrate an App or onboard | [`docs/onboarding/README.md`](docs/onboarding/README.md) |
+| Change an infrastructure layer | Its README: [bootstrap](bootstrap/README.md), [platform](platform/README.md), [tools](tools/README.md), or [libs](libs/README.md) |
 
-`CLAUDE.md` 与本文同内容：它是一条**入库的软链** → `AGENTS.md`。**真源只有 `AGENTS.md`，
-改规则改这里。** Claude Code 自 v2.1.277 起也能直接读 `AGENTS.md`，但工作目录或任一祖先目录
-存在 `CLAUDE.md` 时它**只读** `CLAUDE.md`，而这个 workspace 的父目录里就有一个——所以本仓库
-必须自带载体，不能靠原生支持。
-
-载体形态是**测出来的，不是选出来的**（#856）。判别式探针问「已加载的指令文本里有没有这个字符串」
-并禁止读文件，每格两次：
-
-| 载体 | 仓库根 | 子目录 |
-|---|---|---|
-| 单行 `@AGENTS.md` 导入 | 读到 | **读不到** |
-| 入库软链 → `AGENTS.md` | 读到 | 读到 |
-| 仅 `AGENTS.md`（祖先有 `CLAUDE.md`） | **读不到** | **读不到** |
-
-**单行 `@AGENTS.md` 导入只在 `CLAUDE.md` 位于当前工作目录时解析**；被祖先遍历找到时不解析。于是从
-`libs/`、`tools/`、任何 worktree 子目录起的会话，全程没有合流门禁、没有 SSOT First、没有红线，
-而且没有任何信号。软链换来的代价是 Windows 无 `core.symlinks` 时 checkout 会把它落成一行纯文本
-——**这个风险仍然存在，但它被改成会响**：`libs/tests/test_claude_md_carrier.py` 里
-`test_a_broken_symlink_checkout_fails_loudly` 按内容形态判定，任何平台都能照出来。
+`CLAUDE.md` is a committed symlink to `AGENTS.md`. Both are generated from the owner's rule source: propose rule changes there instead of editing this file. Claude Code can read `AGENTS.md` natively since v2.1.277, but when a `CLAUDE.md` exists in the current directory or an ancestor it reads only `CLAUDE.md` files, so this repository must carry its own committed `CLAUDE.md`. On Windows without `core.symlinks`, a checkout writes the link as a one-line file; `libs/tests/test_claude_md_carrier.py` fails loudly on that shape.
+<!-- WS_STATIC_END -->
