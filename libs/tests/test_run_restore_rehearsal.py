@@ -7,8 +7,10 @@ teardown safety, and CLI entry point without requiring Docker or a live host.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
+import sys
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -323,6 +325,28 @@ def test_main_cli_success(
         assert exit_code == 0
         captured = capsys.readouterr()
         assert "RESTORE_PROOF: PASS" in captured.out
+
+
+def test_cron_invocation_starts_in_a_fresh_interpreter() -> None:
+    """The VPS cron runs this file with ``PYTHONPATH=.`` from the repo root (#892).
+
+    The repo's top-level ``platform/`` package then shadows the stdlib module, and
+    on Linux ``uuid`` calls ``platform.system()`` at import time. pytest has already
+    loaded the real ``platform`` in this process, so only a fresh interpreter shows
+    the crash; it is Linux-only because CPython skips that import on darwin/win32.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    result = subprocess.run(
+        [sys.executable, "tools/run_restore_rehearsal.py", "--service-id", "all", "--help"],
+        cwd=repo_root,
+        env={**os.environ, "PYTHONPATH": "."},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--service-id" in result.stdout
 
 
 def test_run_restore_rehearsal_rejects_unsafe_database_name() -> None:
