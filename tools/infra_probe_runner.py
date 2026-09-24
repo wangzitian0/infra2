@@ -22,6 +22,7 @@ See libs/resident_watchers.py for the plugin surface + timing budget.
 from __future__ import annotations
 
 import argparse
+import copy
 import dataclasses
 import hashlib
 import json
@@ -31,8 +32,10 @@ import traceback
 import time
 from pathlib import Path
 from typing import NamedTuple
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from libs.alerting import is_report_only_environment, mark_report_payload
 from libs.infra_probes import (
     HTTP_PROBE_HEADERS,
     build_probe_alert_payload,
@@ -43,13 +46,18 @@ from libs.infra_probes import (
     post_alert_bridge_payload,
     run_probes,
 )
+from libs.observability.probes import failure_domain
 
 
 DEFAULT_PROBE_SPECS = """
 alert-bridge-http|http|http://platform-alerting:8080/health|200|critical|5
 """
 DEFAULT_PROBE_INTERVAL_SECONDS = 60
-DEFAULT_RENOTIFY_SECONDS = 1800
+# 0 = never re-page an unchanged ongoing incident on a timer (#903). A stream re-sends
+# only when the identity of its failing set changes (probe, kind, failure domain) —
+# which is also how an escalation reaches the pager — and the once-a-day chronic digest
+# carries the rest. 1800 re-sent one route failure 870 times in 16 days (#901).
+DEFAULT_RENOTIFY_SECONDS = 0
 DEFAULT_FAILURE_THRESHOLD = 3
 DEFAULT_RECOVERY_THRESHOLD = 2
 DEFAULT_STATE_FILE = "/tmp/infra_probe_runner_state.json"
@@ -68,6 +76,17 @@ MISCONFIGURED_SEVERITY = "warning"
 # alone would escalate after three minutes.
 DEFAULT_NEVER_GREEN_ESCALATION_FAILURES = 3
 DEFAULT_NEVER_GREEN_ESCALATION_SECONDS = 900
+# The chronic digest (#903): once per UTC day, a REPORT (delivery=report, never the
+# pager) listing every stream that has been failing for longer than a day — the probe
+# runner's counterpart of the breakdown watcher's ContainerBreakdownChronic.
+CHRONIC_DIGEST_ALERT_NAME = "InfraProbeChronic"
+CHRONIC_AFTER_SECONDS = 24 * 3600
+# Heartbeat contract v2 (#903): `ok` is the probe LOOP's health (a group run raised,
+# the state save failed, or a send still pending failed its bridge delivery) — never a
+# probe verdict. `failing_public_routes` lists only the routes this runner has already
+# told someone about (see _paged_public_routes): the Worker stands down on exactly those.
+HEARTBEAT_SCHEMA = 2
+PUBLIC_ROUTE_GROUP = "public-route"
 
 
 def _log_send(stream_key: str, results: list, severity_override: str | None) -> None:
@@ -196,7 +215,10 @@ def main() -> int:
         # while any probe failed every flip was a KV write (1198 puts/day, 2026-09-15).
         if args.loop and not dry_run:
             _post_heartbeat(
-                ok=True, detail="probe loop iteration starting", liveness=True
+                ok=True,
+                detail="probe loop iteration starting",
+                liveness=True,
+                state=_load_state(state_path),
             )
             # Local liveness-first mirror of the heartbeat: refresh the state
             # file BEFORE the (possibly slow) probe+watcher work, so the
@@ -215,7 +237,12 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001 - looped probes must keep running.
             print(f"infra probe iteration failed: {exc}", flush=True)
             traceback.print_exc()
-            _post_heartbeat(ok=False, detail=f"iteration failed: {exc}")
+            if not dry_run:
+                _post_heartbeat(
+                    ok=False,
+                    detail=f"probe loop raised {type(exc).__name__}: {exc}",
+                    state=_load_state(state_path),
+                )
             exit_code = 1
         # Watcher plugins run AFTER the probes in the same iteration; each
         # maybe_run self-paces on its own interval and never raises (one broken
@@ -266,8 +293,10 @@ def _host_specs_for_env(specs: list) -> list:
     """Host `resource` probes describe the single shared host, so only the
     production runner should run them — otherwise the prod and staging runners
     (co-located on that host) both alert on the same CPU/mem/disk threshold.
+    Only a recognised non-production runner skips them (#903 review): `prod` or a
+    typo still watches the host rather than leaving it unwatched.
     """
-    if _deploy_env() == "production":
+    if not is_report_only_environment(_deploy_env()):
         return specs
     return [spec for spec in specs if spec.kind != "resource"]
 
@@ -309,8 +338,9 @@ def _escalated(streak: dict | None, now: float, runs: int, seconds: int) -> bool
 def _grace_note(result, alert_name: str, runs: int, seconds: int):
     """A never-passed failure in the misconfigured lane, worded as what it is.
 
-    The text is fixed per probe (no counters): it feeds the stream's fingerprint, and a
-    changing fingerprint would restart the debounce on every run.
+    The text is fixed per probe (no counters), so the card reads the same on every run.
+    It no longer feeds the stream's fingerprint (#903: identity only), so wording it
+    differently could not restart the debounce either.
     """
     return dataclasses.replace(
         result,
@@ -377,8 +407,13 @@ def run_once(
         state["never_green"] = {}  # absent (older runner) or unreadable: start over
     never_green = state["never_green"]
     probed: set[str] = set()
+    loop_errors: list[str] = []
 
-    for group in groups:
+    # One group's run is isolated from the next (#903): a group that raises is named in
+    # the heartbeat, the other group still alerts, and the state still saves. The body
+    # is a closure so it reads the loop's shared state exactly as the inline loop did.
+    def _run_group(group: ProbeGroup) -> None:
+        nonlocal any_failures
         specs = _host_specs_for_env(parse_probe_specs(group.raw_specs))
         results = run_probes(specs)
         failures = failed_results(results)
@@ -477,7 +512,8 @@ def run_once(
                 if failed_results(stream_results):
                     _send_payload(payload)
                 continue
-            if _should_send(
+            before = copy.deepcopy(state.get("groups", {}).get(stream_key))
+            paged = _should_send(
                 stream_key,
                 stream_results,
                 state,
@@ -485,12 +521,36 @@ def run_once(
                 renotify_seconds,
                 failure_threshold,
                 recovery_threshold,
-            ):
-                if _maintenance_active(now):
-                    continue
-                _send_payload(payload)
-                _record_sent(stream_key, stream_results, state, now)
-                _log_send(stream_key, stream_results, severity_override)
+            )
+            if paged is None:
+                # Nothing pending for this stream: a delivery of it that failed earlier
+                # is moot, and must not hold the heartbeat red (#903 review).
+                state.get("delivery_failures", {}).pop(stream_key, None)
+                continue
+            if _maintenance_active(now):
+                continue
+            payload = build_probe_alert_payload(
+                paged,
+                alert_name=alert_name,
+                external_url=group.external_url,
+                severity_override=severity_override,
+            )
+            if not _send_payload(payload, state, now, stream_key):
+                # Undelivered: roll the stream back so the next loop sends it again
+                # (a resolve included — _should_send already recorded it).
+                _restore_stream(state, stream_key, before)
+                continue
+            _record_sent(stream_key, paged, state, now)
+            _log_send(stream_key, paged, severity_override)
+
+    for group in groups:
+        try:
+            _run_group(group)
+        except Exception as exc:  # noqa: BLE001 - one group must not sink the loop.
+            traceback.print_exc()
+            loop_errors.append(
+                f"group {group.name} raised {type(exc).__name__}: {exc}"[:200]
+            )
 
     state["ever_succeeded"] = sorted(ever_succeeded)
     for name in set(never_green) - probed:
@@ -511,13 +571,33 @@ def run_once(
         )
     if as_json:
         print(json.dumps(json_results, indent=2))
+    for error in loop_errors:
+        print(f"probe-runner loop error: {error}", flush=True)
     if not dry_run:
-        if _maintenance_active(now):
-            _post_heartbeat(ok=True, detail="probe loop suppressed during maintenance")
-        else:
-            _post_heartbeat(ok=not any_failures)
-        _save_state(state_path, state)
-    return 1 if any_failures else 0
+        _maybe_send_chronic_digest(state, now)
+        state["failing_public_routes"] = _paged_public_routes(state, json_results, now)
+        problems = list(loop_errors)
+        save_error = _save_state(state_path, state)
+        if save_error:
+            problems.append(f"state save failed: {save_error}")
+        delivery_failures = state.get("delivery_failures") or {}
+        if delivery_failures:
+            problems.append(
+                "bridge delivery failed: "
+                + "; ".join(
+                    f"{error} ({stream_key})"
+                    for stream_key, error in sorted(delivery_failures.items())
+                )
+            )
+        healthy = (
+            "probe loop completed; alerts suppressed during maintenance"
+            if _maintenance_active(now)
+            else "probe loop completed"
+        )
+        _post_heartbeat(
+            ok=not problems, detail="; ".join(problems) or healthy, state=state
+        )
+    return 1 if any_failures or loop_errors else 0
 
 
 def _probe_groups() -> list[ProbeGroup]:
@@ -554,20 +634,180 @@ def _probe_groups() -> list[ProbeGroup]:
     return groups
 
 
-def _send_payload(payload: dict) -> None:
+def _delivers_as_report() -> bool:
+    """Only the production runner pages (#903).
+
+    Staging alerts are real signals about staging, but nobody is on call for them:
+    every payload the staging runner sends is a REPORT (``delivery=report``). Only an
+    environment on the report-only allowlist (staging, the preview slots) reports;
+    ``prod``, a typo or an unset value pages rather than going quiet.
+    """
+    return is_report_only_environment(_deploy_env())
+
+
+def _send_payload(
+    payload: dict,
+    state: dict | None = None,
+    now: float | None = None,
+    stream_key: str | None = None,
+) -> bool:
+    """POST ``payload`` to the bridge; True on a 2xx.
+
+    With ``state``, the outcome is recorded for the heartbeat: ``last_delivery_ok_at``
+    on any success; a failure is kept per stream in ``delivery_failures`` until that
+    stream's retry lands or it has nothing left to send.
+    """
+    if _delivers_as_report():
+        payload = mark_report_payload(payload)
     if os.getenv("INFRA_PROBE_DRY_RUN", "0") == "1":
         print(json.dumps(payload, indent=2))
-        return
+        return True
 
     bridge_url = os.getenv(
         "ALERT_BRIDGE_URL",
         "http://platform-alerting:8080/signoz/webhook",
     )
-    post_alert_bridge_payload(
-        bridge_url,
-        payload,
-        username=os.getenv("BRIDGE_BASIC_AUTH_USERNAME", ""),
-        password=os.getenv("BRIDGE_BASIC_AUTH_PASSWORD", ""),
+    try:
+        post_alert_bridge_payload(
+            bridge_url,
+            payload,
+            username=os.getenv("BRIDGE_BASIC_AUTH_USERNAME", ""),
+            password=os.getenv("BRIDGE_BASIC_AUTH_PASSWORD", ""),
+        )
+    except Exception as exc:  # noqa: BLE001 - a failed delivery is reported, not fatal.
+        error = _delivery_error(exc)
+        print(
+            f"probe-runner bridge delivery failed stream={stream_key or '-'}: {error}",
+            flush=True,
+        )
+        if state is not None and stream_key:
+            state.setdefault("delivery_failures", {})[stream_key] = error
+        return False
+    if state is not None:
+        state["last_delivery_ok_at"] = int(time.time() if now is None else now)
+        if stream_key:
+            state.setdefault("delivery_failures", {}).pop(stream_key, None)
+    return True
+
+
+def _delivery_error(exc: Exception) -> str:
+    if isinstance(exc, HTTPError):
+        return f"HTTP {exc.code}"
+    return f"{type(exc).__name__}: {exc}"[:200]
+
+
+def _paged_public_routes(state: dict, json_results: dict, now: float) -> list[str]:
+    """The heartbeat's ``failing_public_routes``: public routes failing in this loop
+    AND covered by a page this runner delivered that is still open (#903 / #911).
+
+    The Worker stands down its own entrypoint page for every route listed here, so a
+    route belongs on the list only once the VPS has actually told someone. It is not
+    listed before its debounce threshold, while its page is undelivered (the stream
+    state only records what a 2xx delivered), after its page resolved, or at all
+    during maintenance, when sends are skipped.
+    """
+    if _maintenance_active(now):
+        return []
+    # `probes` is what the last delivered send paged; a resolve empties it.
+    paged = set(state.get("groups", {}).get(PUBLIC_ROUTE_GROUP, {}).get("probes") or [])
+    failing = {
+        row["spec"]["name"]
+        for row in json_results.get(PUBLIC_ROUTE_GROUP, [])
+        if not row.get("ok")
+    }
+    return sorted(failing & paged)
+
+
+def _restore_stream(state: dict, stream_key: str, before: dict | None) -> None:
+    groups = state.setdefault("groups", {})
+    if before is None:
+        groups.pop(stream_key, None)
+    else:
+        groups[stream_key] = before
+
+
+def _maybe_send_chronic_digest(state: dict, now: float) -> None:
+    """Once per UTC day, report every stream failing for longer than a day (#903).
+
+    The runner no longer re-pages an unchanged incident on a timer, so a long outage
+    resurfaces here instead — as a REPORT, the way the breakdown watcher's
+    ContainerBreakdownChronic does. The first digest goes out on the loop a stream
+    crosses a day; after that, at most one per UTC day. The day is marked only once a
+    digest is out, so one held back by maintenance or a failed delivery goes out on a
+    later loop the same day.
+    """
+    day = time.strftime("%Y-%m-%d", time.gmtime(now))
+    if state.get("digest_day") == day:
+        state.get("delivery_failures", {}).pop(CHRONIC_DIGEST_ALERT_NAME, None)
+        return
+    chronic = []
+    for stream_key, group_state in sorted(state.get("groups", {}).items()):
+        if not group_state.get("active"):
+            continue
+        # A stream carried over from a runner that did not record the start: from now.
+        since = float(group_state.setdefault("active_since", now))
+        if now - since > CHRONIC_AFTER_SECONDS:
+            chronic.append((stream_key, since, list(group_state.get("probes") or [])))
+    if not chronic:
+        # nothing to report any more: a digest that failed earlier is moot
+        state.get("delivery_failures", {}).pop(CHRONIC_DIGEST_ALERT_NAME, None)
+        return
+    if _maintenance_active(now):
+        return
+    payload = _chronic_digest_payload(chronic, now)
+    if not _send_payload(payload, state, now, CHRONIC_DIGEST_ALERT_NAME):
+        return
+    print(
+        f"probe-runner CHRONIC-DIGEST count={len(chronic)} -> report, at most once "
+        f"per UTC day: {','.join(stream_key for stream_key, _, _ in chronic)}",
+        flush=True,
+    )
+    state["digest_day"] = day
+
+
+def _chronic_digest_payload(chronic: list, now: float) -> dict:
+    environment = _deploy_env()
+    alerts = []
+    for stream_key, since, probe_names in chronic:
+        failing_for = int(now - since)
+        alerts.append(
+            {
+                "status": "firing",
+                "labels": {
+                    "alertname": CHRONIC_DIGEST_ALERT_NAME,
+                    "severity": "warning",
+                    "environment": environment,
+                    "stream": stream_key,
+                },
+                "annotations": {
+                    "summary": (
+                        f"{stream_key} failing for {failing_for // 86400}d "
+                        f"{failing_for % 86400 // 3600}h: "
+                        + (", ".join(probe_names) or "no probe names recorded")
+                    ),
+                    "description": (
+                        "not re-paged while its failing set is unchanged; a change "
+                        "or the recovery is sent as usual"
+                    ),
+                },
+            }
+        )
+    return mark_report_payload(
+        {
+            "status": "firing",
+            "commonLabels": {
+                "alertname": CHRONIC_DIGEST_ALERT_NAME,
+                "severity": "warning",
+                "team": "infra",
+                "environment": environment,
+            },
+            "commonAnnotations": {
+                "summary": f"{len(chronic)} probe stream(s) failing for more than a day",
+            },
+            "groupLabels": {"alertname": CHRONIC_DIGEST_ALERT_NAME},
+            "alerts": alerts,
+            "externalURL": "infra2://platform/12.alerting/infra-probes",
+        }
     )
 
 
@@ -579,75 +819,118 @@ def _should_send(
     renotify_seconds: int,
     failure_threshold: int,
     recovery_threshold: int,
-) -> bool:
-    failures = failed_results(results)
+) -> list | None:
+    """Decide whether a stream sends this loop: the results to send, or None.
+
+    Debounce is per probe (#903 review). Each failing probe identity (name, kind,
+    failure domain) counts its own consecutive failures, and the stream's PAGE SET is
+    the probes past ``failure_threshold`` plus any probe already paged that is still
+    failing. A sibling failing every other loop therefore neither holds back a probe
+    that is hard down nor re-pages an active incident: only a change of the page set,
+    or a positive renotify timer, re-sends. The stream recovers while its page set is
+    empty — a probe still below the threshold never paged, so it does not hold the
+    incident open.
+
+    The results returned are the page set's failures plus the passing probes (none
+    failing for a resolve), so a payload built from them names exactly what paged.
+    """
     group_state = state.setdefault("groups", {}).setdefault(group_name, {})
-    if not failures:
-        group_state["failure_count"] = 0
-        if not group_state.get("active"):
-            _record_resolved(group_name, state)
-            return False
+    failing = {_probe_identity(result): result for result in failed_results(results)}
+    previous = group_state.get("streaks")
+    previous = previous if isinstance(previous, dict) else {}
+    streaks = {key: int(previous.get(key) or 0) + 1 for key in failing}
+    group_state["streaks"] = streaks
+    active = bool(group_state.get("active"))
+    paged_names = set(group_state.get("probes") or []) if active else set()
+    page = {
+        key
+        for key, result in failing.items()
+        if streaks[key] >= max(1, failure_threshold) or result.spec.name in paged_names
+    }
+    if not page:
+        if not active:
+            group_state["recovery_count"] = 0
+            return None
         recovery_count = int(group_state.get("recovery_count") or 0) + 1
         group_state["recovery_count"] = recovery_count
         if recovery_count < max(1, recovery_threshold):
-            return False
+            return None
         _record_resolved(group_name, state)
-        return True
+        return [result for result in results if result.ok]
 
-    fingerprint = _failure_fingerprint(results)
-    pending_fingerprint = str(group_state.get("pending_fingerprint") or "")
-    failure_count = (
-        int(group_state.get("failure_count") or 0) + 1
-        if fingerprint == pending_fingerprint
-        else 1
-    )
-    group_state["pending_fingerprint"] = fingerprint
-    group_state["failure_count"] = failure_count
     group_state["recovery_count"] = 0
-    if failure_count < max(1, failure_threshold) and not group_state.get("active"):
-        return False
-
+    paged = [
+        result for result in results if result.ok or _probe_identity(result) in page
+    ]
     last_fingerprint = str(group_state.get("fingerprint") or "")
     last_alert_at = float(group_state.get("last_alert_at") or 0)
-    return (
-        not group_state.get("active")
-        or fingerprint != last_fingerprint
-        or now - last_alert_at >= renotify_seconds
-    )
+    if (
+        not active
+        or _failure_fingerprint(paged) != last_fingerprint
+        # renotify <= 0 turns the timer off (#903): an unchanged incident is not re-paged
+        or (renotify_seconds > 0 and now - last_alert_at >= renotify_seconds)
+    ):
+        return paged
+    return None
 
 
 def _record_sent(group_name: str, results: list, state: dict, now: float) -> None:
+    """Record a delivered send. Per-probe streaks survive it: a probe still below the
+    threshold keeps counting across the page and the resolve."""
     failures = failed_results(results)
-    state.setdefault("groups", {})[group_name] = {
-        "active": bool(failures),
-        "fingerprint": _failure_fingerprint(results) if failures else "",
-        "pending_fingerprint": _failure_fingerprint(results) if failures else "",
-        "failure_count": int(
-            state.get("groups", {}).get(group_name, {}).get("failure_count") or 0
-        ),
-        "recovery_count": 0,
-        "last_alert_at": now,
-    }
+    group_state = state.setdefault("groups", {}).setdefault(group_name, {})
+    # When the incident started, kept across re-sends of the same incident, and the
+    # probes it pages — what the chronic digest reports (#903).
+    active_since = (
+        float(group_state.get("active_since") or now)
+        if failures and group_state.get("active")
+        else (now if failures else 0)
+    )
+    group_state.update(
+        {
+            "active": bool(failures),
+            "active_since": active_since,
+            "probes": sorted(result.spec.name for result in failures),
+            "fingerprint": _failure_fingerprint(results) if failures else "",
+            "recovery_count": 0,
+            "last_alert_at": now,
+        }
+    )
 
 
 def _record_resolved(group_name: str, state: dict) -> None:
-    state.setdefault("groups", {})[group_name] = {
-        "active": False,
-        "fingerprint": "",
-        "pending_fingerprint": "",
-        "failure_count": 0,
-        "recovery_count": 0,
-        "last_alert_at": 0,
-    }
+    state.setdefault("groups", {}).setdefault(group_name, {}).update(
+        {
+            "active": False,
+            "active_since": 0,
+            "probes": [],
+            "fingerprint": "",
+            "recovery_count": 0,
+            "last_alert_at": 0,
+        }
+    )
+
+
+def _probe_identity(result) -> str:
+    """One failing probe's identity (#903): which probe, of which kind, failing in
+    which failure domain. Its reading is not part of it."""
+    return f"{result.spec.name}|{result.spec.kind}|{failure_domain(result)}"
 
 
 def _failure_fingerprint(results: list) -> str:
+    """The IDENTITY of a stream's failing set: which probes, of which kind, failing in
+    which failure domain (#903).
+
+    Readings are not identity. A resource probe reports a new percentage every loop and
+    an HTTP body can carry a request id; hashing `observed`/`summary` reset the
+    debounce every loop (a flapping reading never reached the threshold) and re-sent an
+    active incident on every change. They stay in the payload, for display only.
+    """
     failures = [
         {
             "name": result.spec.name,
             "kind": result.spec.kind,
-            "observed": result.observed,
-            "summary": result.summary,
+            "failure_domain": failure_domain(result),
         }
         for result in failed_results(results)
     ]
@@ -664,28 +947,49 @@ def _load_state(path: Path) -> dict:
         return {"groups": {}}
 
 
-def _save_state(path: Path, state: dict) -> None:
+def _save_state(path: Path, state: dict) -> str:
+    """Persist ``state``; returns the error text, or "" when it was written."""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
     except OSError as exc:
         print(f"infra probe state write failed: {exc}", flush=True)
+        return f"{type(exc).__name__}: {exc}"
+    return ""
 
 
-def _post_heartbeat(*, ok: bool, detail: str = "", liveness: bool = False) -> None:
-    """Publish to the Cloudflare watchdog. ``liveness`` marks a ping that proves the
-    loop is alive but carries no probe verdict; the watchdog never lets it change the
-    stored ``ok``."""
+def _post_heartbeat(
+    *,
+    ok: bool,
+    detail: str = "",
+    liveness: bool = False,
+    state: dict | None = None,
+) -> None:
+    """Publish to the Cloudflare watchdog (contract v2, #903).
+
+    ``ok`` is the probe LOOP's health, never a probe verdict: false only when a group
+    run raised, the state save failed, or a send that is still pending failed its
+    bridge delivery (it clears when the retry lands or the stream has nothing left to
+    send), and ``detail`` names which. ``last_delivery_ok_at`` (epoch seconds of the last bridge
+    2xx, 0 if none yet) and ``failing_public_routes`` (routes failing now whose page
+    was delivered and is still open) come from ``state``; a liveness
+    ping repeats the last completed loop's values. ``liveness`` marks a ping that
+    proves the loop is alive but carries no verdict; the watchdog never lets it change
+    the stored ``ok``."""
     heartbeat_url = os.getenv("INFRA_PROBE_HEARTBEAT_URL", "").strip()
     if not heartbeat_url:
         return
 
+    state = state or {}
     payload = {
         "env": _deploy_env(),
         "name": os.getenv("INFRA_PROBE_HEARTBEAT_NAME", "infra-probe-runner"),
         "ok": ok,
         "detail": detail or ("probe loop completed" if ok else "probe loop failed"),
         "timestamp": int(time.time()),
+        "schema": HEARTBEAT_SCHEMA,
+        "last_delivery_ok_at": int(state.get("last_delivery_ok_at") or 0),
+        "failing_public_routes": sorted(state.get("failing_public_routes") or []),
     }
     if liveness:
         payload["liveness"] = True

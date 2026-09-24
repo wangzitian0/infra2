@@ -225,7 +225,7 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 | Cross-cutting | Backup freshness | latest off-host backup missing/stale/empty/no-checksum | P1 | backup manifest verifier |
 | Cross-cutting | Infra2 host reachability / probe heartbeat | public endpoints fail / probe runner stops heartbeat | P0/P1 | Cloudflare out-of-band watchdog |
 | Cross-cutting | SSH host diagnostics | external SSH bridge health fails | P0 | GitHub fallback watchdog |
-| Cross-cutting | Deploy queue | 部署卡在 `running` 超过 ceiling(默认 30min;单并发 FIFO 会阻塞所有后续部署) | P0 | Live (`DeployQueueStuck`,probe-runner 常驻进程内的 ResidentWatcher 插件 `libs/deploy_queue_guard.py`,#543 单 sidecar 合并;观测默认开,`DEPLOY_GUARD_REMEDIATE=1` 才 opt-in 走 Dokploy API kill/clean + 复查升级,绝不直接动 Redis/BullMQ) |
+| Cross-cutting | Deploy queue | 部署卡在 `running` 超过 ceiling(默认 30min;单并发 FIFO 会阻塞所有后续部署) | P0 | Live (`DeployQueueStuck`,probe-runner 常驻进程内的 ResidentWatcher 插件 `libs/deploy_queue_guard.py`,#543 单 sidecar 合并;仅 production runner 运行,#903;观测默认开,`DEPLOY_GUARD_REMEDIATE=1` 才 opt-in 走 Dokploy API kill/clean + 复查升级,绝不直接动 Redis/BullMQ) |
 
 **设计约束**:告警含 actionable runbook 链接 · 聚合避免风暴 · Feishu 凭据只在 1Password(Vault 仅运行时镜像)· SigNoz webhook 只指向内部 bridge URL。
 **禁止**:为瞬时波动指标设 P0 · 忽略 Critical · SigNoz webhook 直指飞书自定义机器人。
@@ -290,6 +290,7 @@ Runbook 入库仅交付操作路径；#723 要求的一次现场演练、完整�
 
 ### SOP-003: 接入飞书 App Bot 通道
 开放平台启用机器人 + 发布 `im:message` 权限 + 拿 `chat_id`,写 1Password root vars(`ALERT_DELIVERY_MODE=feishu_app`、`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_CHAT_ID`)→ setup-approle → deploy_v2 → `alerting.test-feishu`。
+可选 `FEISHU_REPORT_CHAT_ID`(#903,仅 app 模式):带 `delivery=report` 标签的推送(见 SOP-006)改投这个报告群;未设置时仍投告警群、卡片标题加 `[REPORT]` 前缀,不丢消息。bridge `/health` 的 `report_route` 显示当前走 `report-chat` 还是 `pager-fallback`。
 
 ### SOP-004 / SOP-004B / SOP-004C: 应用 OTEL 错误告警 + finance_report 告警目录 config-as-code(#373 / #1106)
 1. bridge 健康 + SigNoz API key + Feishu channel(SOP-002/004 步骤)。
@@ -318,11 +319,20 @@ Runbook 入库仅交付操作路径；#723 要求的一次现场演练、完整�
 > **已知外部极限**:若 watchdog 与 Feishu/Lark 用的所有外部通道**同时**不可用,本仓库**没有第三条独立人工通知通道**(#425 月级/兜底范畴)。
 
 ### SOP-006: In-band 服务探针(分钟级)
-`INFRA_PROBE_SPECS` 由各服务 `deploy.py` Deployer 的 `ProbeFacet` 声明渲染(#541 单一声明点:聚合器 `libs/probe_specs.py::render_probe_spec_text()` 经 `AlertingDeployer.compose_env_base()` 注入 Dokploy env;迁移前的手写 literal 冻结为 `libs/tests/fixtures/infra_probe_specs_frozen.txt`,由 `libs/tests/test_probe_specs_equivalence.py` 做永久逐字段等价回归)。循环 `INFRA_PROBE_INTERVAL_SECONDS=60`(快检);通知分离:`FAILURE_THRESHOLD=3`、`RECOVERY_THRESHOLD=2`、`RENOTIFY_SECONDS=1800`。优先 Docker 网络目标(公网路由归 Cloudflare watchdog;`error code: 1010` 归类 `probe-client-blocked`)。spec 格式 `name|kind|target|expected|severity|timeout|depends_on|service_id`;kind=http/tcp/command。第八字段强制绑定 registry。`depends_on` 链命中失败 root → 级联抑制(环路 fail-closed,见 `tools/infra_probe_runner.py`)。dry-run:`INFRA_PROBE_DRY_RUN=1 uv run python tools/infra_probe_runner.py --once --json`。
+`INFRA_PROBE_SPECS` 由各服务 `deploy.py` Deployer 的 `ProbeFacet` 声明渲染(#541 单一声明点:聚合器 `libs/probe_specs.py::render_probe_spec_text()` 经 `AlertingDeployer.compose_env_base()` 注入 Dokploy env;迁移前的手写 literal 冻结为 `libs/tests/fixtures/infra_probe_specs_frozen.txt`,由 `libs/tests/test_probe_specs_equivalence.py` 做永久逐字段等价回归)。循环 `INFRA_PROBE_INTERVAL_SECONDS=60`(快检);通知分离:`FAILURE_THRESHOLD=3`、`RECOVERY_THRESHOLD=2`、`RENOTIFY_SECONDS=0`(#903:不按定时器重发,见下)。优先 Docker 网络目标(公网路由归 Cloudflare watchdog;`error code: 1010` 归类 `probe-client-blocked`)。spec 格式 `name|kind|target|expected|severity|timeout|depends_on|service_id`;kind=http/tcp/command。第八字段强制绑定 registry。`depends_on` 链命中失败 root → 级联抑制(环路 fail-closed,见 `tools/infra_probe_runner.py`)。dry-run:`INFRA_PROBE_DRY_RUN=1 uv run python tools/infra_probe_runner.py --once --json`。
 
 **公网路由探针(#543,反转 #209)**:`PUBLIC_ROUTE_PROBE_SPECS` 由各服务的 `PublicRouteFacet` 声明渲染(`libs/probe_specs.py::render_public_route_spec_text`,域名渲染期解析、无 `$` 传输);prod_only 服务只渲染生产、非生产一律降为 warning。每个渲染出的 `*-public-route` 名字必须是已注册 signal(`libs/tests/test_infra_probes.py` 锁定)。
 
 **内部 signal 注册派生(#543)**:`watchdog-signals.yaml` 的 `primary_owner: internal` 条目不再手写,由 `libs/watchdog_signal_entries.py` 从 ProbeFacet+SignalFacet 派生(声明探针即注册 signal);`watchdog_consistency_audit.py` 加载时合并派生条目、拒绝手写 internal 条目,并对派生条目强制 #425 T5 tier/type/debounce 校验;跨平面条目(cloudflare/github/self/excluded)仍手写。手写时代的 39 条冻结于 `libs/tests/fixtures/watchdog_internal_signals_frozen.yaml`,`libs/tests/test_watchdog_signal_entries.py` 做永久逐字段等价回归。
+
+**降噪、日报摘要与心跳 v2(#903)**:#901 实测 30 天 2,445 条飞书消息只对应 57 个 (告警, 对象);单条公网路由故障每 26 分钟重发、16 天 870 次。
+- **去重身份与逐探针去抖**:失败的身份只是探针名、kind、failure domain(`probe-client-blocked` / `service-or-route`)。读数(`observed`/`summary`)只进卡片展示:资源探针每轮读数不同,哈希读数会让去抖永远达不到阈值、并让已发出的故障随读数变化反复重发。去抖**按探针**计:每个失败身份各自数连续失败,流的"呼叫集"= 越过 `FAILURE_THRESHOLD` 的探针 + 已呼出且仍在失败的探针;推送只列呼叫集。于是一个隔轮失败的兄弟探针既不会拖住一个硬挂的探针(整集合去抖时它永远到不了阈值),也不会在已呼出的故障上反复重发;呼叫集为空时才计恢复。
+- **不按定时器重发**:`RENOTIFY_SECONDS=0`。已发出的故障只在失败集合身份变化时再发(新探针加入/离开、failure domain 变化、round-trip 从 misconfigured 通道升级进正常流——升级即身份变化);恢复照常发 resolved。正数仍可显式配置,恢复旧的定时重发。
+- **每日摘要(报告)**:持续失败超过 24h 的流,在越过 24h 的那一轮发一次 `InfraProbeChronic`,之后每个 UTC 日至多一次;带 `delivery=report`,是报告不是告警(§2 铁律:定时器发出的都是报告)。与 breakdown watcher 的 `ContainerBreakdownChronic` 同构。
+- **投递失败不丢**:bridge 非 2xx 时该流状态回滚,下一轮重发(resolved 也一样)。失败按流记录,心跳随之变红;该流重发成功、或该流已没有待发内容(例如页还没送达探针就恢复了)时清除。一直失败的投递(如报告群 id 配错)每轮重试、心跳一直红。
+- **心跳契约 v2**(Worker 侧见 Phase 3):`POST /heartbeat` 保留 `env`/`name`/`ok`/`detail`/`timestamp`/可选 `liveness`,新增 `schema: 2`、`last_delivery_ok_at`(最近一次 bridge 2xx 的 epoch 秒,从未成功为 0,持久化在 runner state,进程重启不丢)、`failing_public_routes`(排序;**本轮仍在失败、且 runner 已成功投递其告警且该告警尚未 resolved** 的公网路由探针——Worker 只对这些路由让出自己的入口告警,所以未达去抖阈值、告警未送达、维护窗口内都为空,见 #911)。**`ok` 只表示探测循环自身健康**:仅在某组运行抛异常、state 写盘失败、或某个仍待发送的推送投递失败时为 false,`detail` 写明哪一项(如 `bridge delivery failed: HTTP 502 (infra-service)`、`group infra-service raised TimeoutError: …`);探针失败不再是心跳失败。liveness ping 携带上一轮的这两个字段。一组抛异常不再中断整轮:其他组照常告警、state 照常保存。
+- **staging 与预览不呼人**:只有**白名单**里的非生产环境只报告——staging 与预览槽位(`libs/alerting.is_report_only_environment`,先经 `libs/common.normalize_env_name` 归一:`stg` 即 staging,`pr-5`/`branch-main`/`commit-…`/`tag-…` 即预览);`prod`、拼写错误、未设置一律按生产呼人,宁可呼人也不静默。同一判定用于:staging runner 的推送带 `delivery=report`;host 资源探针、breakdown watcher、deploy-queue guard 的 prod-only 闸门(Dokploy 与 Docker 引擎共享,staging 副本空转)。breakdown watcher 只在 production runner 运行却能看到整台宿主的容器:容器的环境取规范标签 `party.zitian.infra.environment`,缺标签时才由 compose project 与名字推断(`-staging`、预览槽位的 `-{pr,branch,commit,tag}-…`);staging/预览容器只进每日摘要、从不呼人(也不发 resolved)。`ContainerBreakdownChronic` 按受众拆开:staging/预览行是报告(`delivery=report`),生产行(stay-resolved floor 内的重坏、呼出后仍坏着的故障)仍发告警群——它们只在摘要里出现。
+- **路由**:bridge 按 `commonLabels.delivery == "report"` 把报告投到 `FEISHU_REPORT_CHAT_ID`,未配置则回落告警群并加 `[REPORT]` 标题(SOP-003)。
 
 **常驻拓扑(#543 单 sidecar)**:probe-runner(`platform-alerting-probes`)是仓库唯一常驻进程;container-breakdown watch 与 deploy-queue guard 以 `ResidentWatcher` 插件(`libs/observability/watchers/` 与 `libs/resident_watchers.py`)在其循环内自节奏运行,故障隔离、由 runner 的 healthcheck/heartbeat 兜底(挂起 watcher → state file 过期 → compose healthcheck 重启)。新增常驻能力 = 新增 watcher 插件,不新建 sidecar。
 > ✅ **`alert-delivery-canary` 已退役(#425 T3)**:它把"投递自证"做成了 6h 周期性告警(报告当告警),是 #425 禁止的反模式。bridge→Feishu 路径现由 `lark-delivery-http` + 带外 watchdog 的 bridge `/health` + 日报投递 + 真实告警覆盖,告警频道不再被合成事件刷屏。
@@ -359,6 +369,9 @@ Feishu page，且告警携带同一结构化记录。不得通过破坏 producti
 | GitHub watchdog issue 留痕(精确标题去重、列表失败不新建、drill 不关闭、缺失来源即红、公开正文脱敏)(truealpha#876) | `libs/tests/test_watchdog_issue_trail.py` | ✅ |
 | truealpha scheduler-liveness 对等存活(上限实测且强制、非 active 红、读取失败红、从未运行的宽限)(truealpha#876) | `libs/tests/test_scheduler_peer_liveness.py`, `test_out_of_band_watchdog.py` | ✅ |
 | In-band 服务探针 + 级联抑制 + round-trip 失败分道/升级(#726) | `libs/tests/test_infra_probes.py` | ✅ |
+| 身份 fingerprint、无定时重发、每日摘要、staging 报告化、心跳 v2、投递失败回滚(#903) | `libs/tests/test_infra_probes.py` | ✅ |
+| `delivery=report` 路由(报告群 / 告警群 `[REPORT]` 回落)(#903) | `libs/tests/test_alerting.py` | ✅ |
+| staging/预览容器只进摘要、deploy-queue guard prod-only(#903) | `libs/tests/test_container_breakdown.py`, `libs/tests/test_resident_watchers.py` | ✅ |
 | Deploy-queue guard(卡死检测纯逻辑 + sidecar 编排:env 加载、扫描失败隔离、renotify 抑制、remediate/升级序列) | `libs/tests/test_deploy_queue.py`, `libs/tests/test_deploy_queue_guard.py` | ✅ |
 | 备份新鲜度告警 payload | `libs/tests/test_backup_verification.py` | ✅ |
 | 账本聚合(正例+反例:降级绝不报 100%/perfect、畸形输入不抬高、0 检查不除零) | `libs/tests/test_availability_ledger.py` | ✅ |

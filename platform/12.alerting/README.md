@@ -107,6 +107,7 @@ Runtime mirror: Vault path `secret/platform/{env}/alerting`.
 | `FEISHU_APP_ID` | app mode | Feishu Open Platform app ID |
 | `FEISHU_APP_SECRET` | app mode | Feishu Open Platform app secret |
 | `FEISHU_CHAT_ID` | app mode | Target chat ID for app bot messages |
+| `FEISHU_REPORT_CHAT_ID` | optional, app mode | Chat for `delivery=report` payloads (#903); unset = pager chat with a `[REPORT]` title |
 | `FEISHU_API_BASE` | no | Defaults to `https://open.feishu.cn` |
 | `BRIDGE_BASIC_AUTH_USERNAME` | no | Optional SigNoz webhook basic auth username |
 | `BRIDGE_BASIC_AUTH_PASSWORD` | no | Optional SigNoz webhook basic auth password |
@@ -196,8 +197,17 @@ environment variables are configured:
   `platform-alerting-probes${ENV_SUFFIX}`
 
 Each loop posts a liveness ping (`"liveness": true`) before the probes and the
-probe verdict (`ok`) after them. The Worker never lets the liveness ping change the
-stored verdict, and it budgets its KV writes per heartbeat key (see
+loop verdict (`ok`) after them. Since contract v2 (#903, `"schema": 2`) `ok` is the
+probe loop's own health — false only when a group run raised, the state save failed,
+or a send that is still pending failed its bridge delivery (cleared once the retry
+lands or the stream has nothing left to send), with `detail` naming which — and a failing
+probe no longer flips it. Every post also carries `last_delivery_ok_at` (epoch
+seconds of the last bridge 2xx, 0 if none) and `failing_public_routes`: the sorted
+public-route probes that are failing in that loop AND whose page the runner delivered
+and has not resolved. The Worker stands down its own entrypoint page for exactly these,
+so the list is empty before the debounce threshold, while a page is undelivered, and
+during maintenance. The Worker never lets the liveness
+ping change the stored verdict, and it budgets its KV writes per heartbeat key (see
 [`cloudflare/infra-watchdog/README.md`](../../cloudflare/infra-watchdog/README.md#free-quota-safety)).
 The `(env, name)` pair must be listed in the Worker's `WATCHDOG_HEARTBEATS_JSON`;
 any other name is refused with HTTP 404.

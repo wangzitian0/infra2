@@ -117,13 +117,14 @@ def test_breakdown_watch_is_prod_only_and_idles_elsewhere(monkeypatch) -> None:
     idle (the standalone sidecar's exact gating)."""
     import libs.observability.watchers.breakdown_watch as w
 
-    def boom(sock):  # a non-prod plugin must never touch the socket
-        raise AssertionError("staging plugin must not open the docker socket")
-
-    monkeypatch.setattr(w, "_docker_client", boom)
+    # Recorded, not raised: maybe_run swallows a sweep's exceptions by contract, so a
+    # stub that raises would let a staging sweep pass unnoticed (#903 review).
+    sockets: list[str] = []
+    monkeypatch.setattr(w, "_docker_client", lambda sock: sockets.append(sock))
     staging = BreakdownWatch({"ENV": "staging"})
     assert staging.enabled is False
     assert staging.maybe_run(now=0.0) is True  # ticked, swept as a no-op
+    assert sockets == []  # never opened the docker socket
 
     swept = {"n": 0}
     monkeypatch.setattr(w, "_docker_client", lambda sock: object())
@@ -132,6 +133,21 @@ def test_breakdown_watch_is_prod_only_and_idles_elsewhere(monkeypatch) -> None:
     assert prod.enabled is True
     prod.maybe_run(now=0.0)
     assert swept["n"] == 1
+
+
+def test_prod_only_watchers_idle_only_on_a_recognised_non_production_env() -> None:
+    """#903 review: both prod-only gates compared ENV to "production" exactly, so
+    `prod` or a typo idled the only runner that watches the shared engine and Dokploy.
+    Only an environment on the report-only allowlist idles them; anything else sweeps
+    (at worst twice, never not at all)."""
+    for env in ("prod", "PRODUCTION ", "garbage"):
+        assert BreakdownWatch({"ENV": env}).enabled is True, env
+        assert DeployQueueGuard({"ENV": env}).enabled is True, env
+    assert BreakdownWatch({}).enabled is True
+    assert DeployQueueGuard({}).enabled is True
+    for env in ("staging", "stg", "pr-5"):
+        assert BreakdownWatch({"ENV": env}).enabled is False, env
+        assert DeployQueueGuard({"ENV": env}).enabled is False, env
 
 
 def test_breakdown_env_triad_maps_into_config_for_continuity() -> None:
@@ -162,14 +178,30 @@ def test_breakdown_env_triad_maps_into_config_for_continuity() -> None:
     assert defaults.recovery_threshold == mod.DEFAULT_RECOVERY_THRESHOLD
 
 
-def test_deploy_queue_guard_runs_in_every_env() -> None:
-    """The guard watches the shared Dokploy control plane; unlike the breakdown
-    watcher it stays active on every env's runner (pre-merge behavior: the
-    deploy-queue-guard service ran in prod AND staging)."""
-    w = DeployQueueGuard({"ENV": "staging", "ALERTING_ENV_FILE": "/nonexistent"})
-    assert w.name == "deploy-queue-guard"
-    # no `enabled` gate exists on the guard — construction implies active
-    assert not hasattr(w, "enabled")
+def test_deploy_queue_guard_is_prod_only_and_idles_elsewhere(monkeypatch) -> None:
+    """#903: the guard watches the SHARED Dokploy control plane, so the staging copy
+    paged every stuck deploy a second time. Like the breakdown watcher it is now a
+    prod-only singleton: the staging plugin stays registered but never talks to
+    Dokploy, and a runner without ENV counts as production."""
+    import libs.deploy_queue_guard as guard
+
+    # Recorded, not raised: maybe_run swallows a sweep's exceptions by contract, so a
+    # stub that raises would let a staging sweep pass unnoticed.
+    clients: list[str] = []
+    monkeypatch.setattr(guard, "_make_client", lambda: clients.append("c") or "client")
+    staging = DeployQueueGuard({"ENV": "staging", "ALERTING_ENV_FILE": "/nonexistent"})
+    assert staging.name == "deploy-queue-guard"
+    assert staging.enabled is False
+    assert staging.maybe_run(now=0.0) is True  # ticked, swept as a no-op
+    assert clients == []  # never talked to Dokploy
+
+    swept: list[str] = []
+    monkeypatch.setattr(guard, "run_once", lambda client, **_k: swept.append(client))
+    for environ in ({"ENV": "production"}, {}):
+        prod = DeployQueueGuard({**environ, "ALERTING_ENV_FILE": "/nonexistent"})
+        assert prod.enabled is True
+        prod.maybe_run(now=0.0)
+    assert swept == ["client", "client"]
 
 
 # ---------------------------------------------------------------------------

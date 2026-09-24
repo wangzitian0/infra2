@@ -158,15 +158,20 @@ services:
       retries: 3
       start_period: 90s
     environment:
-      # ENV gates the prod-only breakdown watcher AND labels probe alert
-      # payloads with the runner's real environment.
+      # ENV gates the prod-only breakdown watcher and deploy-queue guard, labels
+      # probe alert payloads with the runner's real environment, and makes a
+      # staging/preview runner's alerts REPORTS (delivery=report, never the pager;
+      # #903). Only that allowlist reports: `prod`, a typo or no ENV pages.
       ENV: ${ENV:-production}
       ALERT_BRIDGE_URL: http://platform-alerting${ENV_SUFFIX}:8080/signoz/webhook
       ALERTING_ENV_FILE: /secrets/.env
       INFRA_PROBE_INTERVAL_SECONDS: ${INFRA_PROBE_INTERVAL_SECONDS:-60}
       INFRA_PROBE_FAILURE_THRESHOLD: ${INFRA_PROBE_FAILURE_THRESHOLD:-3}
       INFRA_PROBE_RECOVERY_THRESHOLD: ${INFRA_PROBE_RECOVERY_THRESHOLD:-2}
-      INFRA_PROBE_RENOTIFY_SECONDS: ${INFRA_PROBE_RENOTIFY_SECONDS:-1800}
+      # 0 = an unchanged failing set is never re-sent on a timer; a change in the set
+      # (or its failure domain) re-sends, and a once-per-UTC-day REPORT digest lists
+      # streams failing > 24h (#903). 1800 re-sent one route 870 times in 16 days.
+      INFRA_PROBE_RENOTIFY_SECONDS: ${INFRA_PROBE_RENOTIFY_SECONDS:-0}
       # #726: a round-trip that never passed since the runner started leaves the
       # misconfigured lane after this many failed runs spanning this long.
       INFRA_PROBE_NEVER_GREEN_ESCALATION_FAILURES: ${INFRA_PROBE_NEVER_GREEN_ESCALATION_FAILURES:-3}
@@ -194,6 +199,8 @@ services:
       PUBLIC_ROUTE_PROBE_SPECS: ${PUBLIC_ROUTE_PROBE_SPECS:-}
       # --- watcher plugin: deploy-queue guard (#543 merge; env names kept
       # verbatim from the deleted deploy-queue-guard service for continuity).
+      # prod-only singleton since #903: Dokploy is shared, so the staging copy
+      # idles instead of paging the same stuck deploy twice.
       # Observe deploys stuck `running` past the ceiling via Dokploy's API and
       # alert; opt-in remediation kills them through Dokploy's own
       # compose.killBuild/cancelDeployment/cleanQueues (never raw Redis).
@@ -209,7 +216,8 @@ services:
       # Alerts when ANY container is crash-looping/unhealthy WITH the cause
       # pulled from its logs. prod-only singleton: the watcher reads the whole
       # shared Docker engine, so only the prod runner's plugin sweeps (the
-      # staging plugin idles — see libs/container_breakdown_watch.py).
+      # staging plugin idles — see libs/container_breakdown_watch.py). Staging
+      # and preview containers go to its daily digest only, never the pager (#903).
       # Flap hysteresis (#475): consecutive-poll thresholds before
       # firing/resolving.
       BREAKDOWN_INTERVAL_SECONDS: ${BREAKDOWN_INTERVAL_SECONDS:-60}

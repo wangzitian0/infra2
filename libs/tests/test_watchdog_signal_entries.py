@@ -25,11 +25,24 @@ ROOT = Path(__file__).resolve().parents[2]
 FROZEN = Path(__file__).parent / "fixtures/watchdog_internal_signals_frozen.yaml"
 AUDIT = ROOT / "tools/watchdog_consistency_audit.py"
 
+
+def _probe_runner():
+    spec = importlib.util.spec_from_file_location(
+        "infra_probe_runner_for_signal_entries", ROOT / "tools/infra_probe_runner.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 # The probe runner's actual shared debounce (tools/infra_probe_runner.py
 # DEFAULT_FAILURE_THRESHOLD / DEFAULT_RENOTIFY_SECONDS) — what every derived
-# entry must state, because the registry documents what the runner DOES.
-RUNNER_CONSECUTIVE_FAILURES = 3
-RUNNER_RENOTIFY_WINDOW_SEC = 1800
+# entry must state, because the registry documents what the runner DOES. Read
+# from the runner itself (#903), so a SignalFacet that restates a stale value
+# fails here instead of drifting.
+RUNNER_CONSECUTIVE_FAILURES = _probe_runner().DEFAULT_FAILURE_THRESHOLD
+RUNNER_RENOTIFY_WINDOW_SEC = _probe_runner().DEFAULT_RENOTIFY_SECONDS
 
 
 def _frozen() -> dict[tuple[str, str], dict]:
@@ -94,9 +107,9 @@ def test_structured_debounce_supersedes_frozen_free_text_threshold() -> None:
     in #425 T5's structured fields, matching the runner's real defaults.
 
     One handwritten entry (production.dokploy.internal-http) claimed
-    `renotify_window_sec: 3600` — an aspiration nothing implemented; the
-    runner renotifies every 1800s for all probes. The derivation states the
-    truth, so that entry normalizes 3600 -> 1800.
+    `renotify_window_sec: 3600` — an aspiration nothing implemented. The
+    derivation states what the runner does for every probe: since #903 it never
+    re-notifies on a timer (0), so that entry normalizes 3600 -> 0.
     """
     frozen = _frozen()
     for key, entry in _rendered().items():
@@ -199,3 +212,43 @@ def test_probe_declaring_services_all_carry_a_signal_facet() -> None:
                 f"derived watchdog-signals entries would be unclassified "
                 f"(Infra-012.10 / #425 T5)"
             )
+
+
+def test_an_alert_facet_must_declare_its_renotify_window() -> None:
+    """#903 review: `renotify_window_sec=0` is a real declaration ("never on a
+    timer"), so a default of 0 made a forgotten window indistinguishable from a
+    declared one. Left out, it stays None and the derived entry fails the audit;
+    declared as 0 it passes."""
+    from libs.service_facets import ProbeFacet, SignalFacet
+    from libs.service_registry import ServiceMeta
+
+    spec = importlib.util.spec_from_file_location("watchdog_audit_for_facets", AUDIT)
+    assert spec and spec.loader
+    audit = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(audit)
+
+    def derived_errors(signal: SignalFacet) -> list[str]:
+        meta = ServiceMeta(
+            service_id="platform/example",
+            layer="platform",
+            service="example",
+            prod_only=False,
+            subdomain=None,
+            service_port=None,
+            service_name=None,
+            telemetry_service_name=None,
+            telemetry_component=None,
+            project="platform",
+            probes=(ProbeFacet(name="example-http", kind="http", target="http://x"),),
+            signals=(signal,),
+        )
+        [entry, *_] = render_internal_signal_entries(attrs={"platform/example": meta})
+        return audit._validate_tier_and_type(entry, entry["signal_id"])
+
+    forgotten = SignalFacet(tier="minute", type="alert", consecutive_failures=3)
+    assert forgotten.renotify_window_sec is None
+    assert any("renotify_window_sec" in error for error in derived_errors(forgotten))
+    declared = SignalFacet(
+        tier="minute", type="alert", consecutive_failures=3, renotify_window_sec=0
+    )
+    assert derived_errors(declared) == []

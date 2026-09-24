@@ -36,6 +36,7 @@ import os
 import time
 from pathlib import Path
 
+from libs.alerting import is_report_only_environment
 from libs.deploy_queue import (
     ComposeDeployments,
     build_deploy_guard_alert_payload,
@@ -276,6 +277,11 @@ class DeployQueueGuard(ResidentWatcher):
     sidecar idles rather than crashlooping, and PICKS UP a DOKPLOY_API_KEY that
     Vault renders after the container started — the standalone sidecar's exact
     loop-iteration behavior.
+
+    Production-only singleton (#903), gated exactly like the breakdown watcher: the
+    Dokploy control plane is shared by every environment, so the production runner
+    already sees every stuck deploy. The staging copy used to page the same
+    DeployQueueStuck a second time; it stays registered but idle.
     """
 
     name = "deploy-queue-guard"
@@ -297,8 +303,18 @@ class DeployQueueGuard(ResidentWatcher):
         }
         self.env_path = Path(env.get("ALERTING_ENV_FILE") or "/secrets/.env")
         self.alerted: dict[str, float] = {}
+        # Idle only on a recognised non-production runner: `prod` or a typo sweeps.
+        self.enabled = not is_report_only_environment(env.get("ENV"))
+        if not self.enabled:
+            logger.info(
+                "deploy-queue guard is prod-only (Dokploy is shared; the production "
+                "runner watches every deploy); plugin registered but idle on env=%s",
+                env.get("ENV"),
+            )
 
     def _sweep(self) -> None:
+        if not self.enabled:
+            return
         _load_env_file(self.env_path)
         client = _make_client()  # raises when DOKPLOY_API_KEY is still unset
         run_once(

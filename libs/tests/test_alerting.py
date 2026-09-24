@@ -571,3 +571,136 @@ def test_alerting_app_request_guards_are_explicit() -> None:
 
     source = path.read_text(encoding="utf-8")
     assert "secrets.compare_digest(header, expected)" in source
+
+
+# ---------------------------------------------------------------------------
+# #903: delivery=report routing through the bridge
+
+
+def _bridge_under_test(monkeypatch, *, mode: str = "feishu_app", report_chat: str = ""):
+    """The real bridge handler on an ephemeral local port, with Feishu delivery
+    captured instead of sent. Returns (post, sent, stop)."""
+    import threading
+    from http.server import ThreadingHTTPServer
+    from urllib.request import Request, urlopen
+
+    path = ROOT / "platform/12.alerting/app.py"
+    spec = importlib.util.spec_from_file_location("alerting_app_routing", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    for key in ("BRIDGE_BASIC_AUTH_USERNAME", "BRIDGE_BASIC_AUTH_PASSWORD"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("ALERT_DELIVERY_MODE", mode)
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_test")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "app-secret")
+    monkeypatch.setenv("FEISHU_CHAT_ID", "oc_pager")
+    monkeypatch.setenv(
+        "FEISHU_WEBHOOK_URL", "https://open.feishu.cn/open-apis/bot/v2/hook/abc"
+    )
+    if report_chat:
+        monkeypatch.setenv("FEISHU_REPORT_CHAT_ID", report_chat)
+    else:
+        monkeypatch.delenv("FEISHU_REPORT_CHAT_ID", raising=False)
+
+    sent: list[dict] = []
+
+    def app_card(*, chat_id, card, **_kwargs):
+        sent.append({"chat": chat_id, "title": card["header"]["title"]["content"]})
+        return {"code": 0}
+
+    def webhook_card(url, card, **_kwargs):
+        sent.append({"chat": "webhook", "title": card["header"]["title"]["content"]})
+        return {"code": 0}
+
+    monkeypatch.setattr(module, "deliver_feishu_app_card", app_card)
+    monkeypatch.setattr(module, "deliver_feishu_card", webhook_card)
+    server = ThreadingHTTPServer(("localhost", 0), module.AlertBridgeHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def post(payload: dict) -> int:
+        body = json.dumps(payload).encode("utf-8")
+        request = Request(
+            f"http://localhost:{server.server_address[1]}/signoz/webhook",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=5) as response:
+            return response.status
+
+    def stop() -> None:
+        server.shutdown()
+        server.server_close()
+
+    return post, sent, stop
+
+
+def _payload(alertname: str, *, report: bool) -> dict:
+    from libs.alerting import mark_report_payload
+
+    payload = {
+        "status": "firing",
+        "commonLabels": {"alertname": alertname, "severity": "warning"},
+        "alerts": [{"status": "firing", "labels": {"alertname": alertname}}],
+    }
+    return mark_report_payload(payload) if report else payload
+
+
+def test_bridge_sends_a_report_to_the_report_chat_and_a_page_to_the_pager(
+    monkeypatch,
+) -> None:
+    """#903: `delivery=report` goes to FEISHU_REPORT_CHAT_ID; everything else still
+    reaches the pager chat, untouched."""
+    post, sent, stop = _bridge_under_test(monkeypatch, report_chat="oc_reports")
+    try:
+        assert post(_payload("InfraProbeChronic", report=True)) == 202
+        assert post(_payload("InfraServiceProbeFailed", report=False)) == 202
+    finally:
+        stop()
+
+    assert [s["chat"] for s in sent] == ["oc_reports", "oc_pager"]
+    assert not any(s["title"].startswith("[REPORT]") for s in sent)
+
+
+def test_bridge_without_a_report_chat_marks_reports_in_the_pager_chat(
+    monkeypatch,
+) -> None:
+    """#903: with FEISHU_REPORT_CHAT_ID unset nothing is lost — the report lands in the
+    pager chat, titled [REPORT] so it does not read as a page. A webhook is bound to
+    one chat, so webhook mode always takes this fallback."""
+    for mode, pager in (("feishu_app", "oc_pager"), ("feishu_webhook", "webhook")):
+        post, sent, stop = _bridge_under_test(monkeypatch, mode=mode)
+        try:
+            assert post(_payload("ContainerBreakdownChronic", report=True)) == 202
+            assert post(_payload("ContainerBreakdown", report=False)) == 202
+        finally:
+            stop()
+
+        assert [s["chat"] for s in sent] == [pager, pager], mode
+        assert sent[0]["title"].startswith("[REPORT] "), mode
+        assert "ContainerBreakdownChronic" in sent[0]["title"], mode
+        assert not sent[1]["title"].startswith("[REPORT]"), mode
+
+
+def test_only_staging_and_preview_environments_are_report_only() -> None:
+    """#903 review: the report-only decision is an allowlist over the normalized
+    environment. `prod`, `PRODUCTION `, unset and garbage page; staging and the
+    preview slots report."""
+    from libs.alerting import is_report_only_environment
+
+    pages = [None, "", "production", "PRODUCTION ", "prod", "garbage", "x/y", "pr"]
+    reports = [
+        "staging",
+        " STAGING",
+        "stg",
+        "preview",
+        "pr-5",
+        "branch-main",
+        "commit-1ab32d5",
+        "tag-v1-2-3",
+    ]
+    assert [v for v in pages if is_report_only_environment(v)] == []
+    assert [v for v in reports if not is_report_only_environment(v)] == []

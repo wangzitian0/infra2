@@ -24,8 +24,11 @@ resident sidecar since #543) so this stays unit-testable.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
+
+from libs.deploy_env_config import PREVIEW_KINDS
 
 from libs.service_identity import DOCKER_LABEL_PREFIX, ServiceIdentity
 from libs.service_registry import resolve_container_host
@@ -48,6 +51,11 @@ BREAKDOWN_PATTERNS: tuple[tuple[str, str], ...] = (
 )
 
 _MAX_DETAIL = 200
+# A preview slot's containers carry `-<kind>-<value>` (libs.deploy_env_config:
+# -pr-5, -branch-main, -commit-1ab32d5, -tag-v1-2-3).
+_PREVIEW_SLOT_NAME = re.compile(
+    r"-(?:" + "|".join(re.escape(kind) for kind in PREVIEW_KINDS) + r")-"
+)
 
 
 @dataclass(frozen=True)
@@ -139,7 +147,11 @@ def container_identity(entry: dict) -> tuple[str, str, str]:
         coordinate = f"{project}/{name}".lower()
         if "staging" in coordinate:
             environment = "staging"
-        elif "preview" in coordinate or "pr-" in coordinate:
+        elif (
+            "preview" in coordinate
+            or "pr-" in coordinate
+            or _PREVIEW_SLOT_NAME.search(name.lower())
+        ):
             environment = "preview"
         else:
             environment = "production"

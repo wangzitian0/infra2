@@ -152,13 +152,16 @@ class SignalFacet:
     For ``type="alert"`` the debounce fields are mandatory semantics (what
     distinguishes a real failure from a transient blip — #475/#531):
     ``consecutive_failures`` bad polls before firing, ``renotify_window_sec``
-    between re-alerts on an active incident.
+    between re-alerts on an active incident. ``renotify_window_sec=0`` is a real
+    declaration ("never re-page on a timer", #903), so it has no default: an alert
+    facet that leaves it out stays ``None`` and fails the watchdog consistency audit
+    instead of silently reading as 0.
     """
 
     tier: str
     type: str
     consecutive_failures: int = 0
-    renotify_window_sec: int = 0
+    renotify_window_sec: int | None = None
 
 
 @dataclass(frozen=True)
@@ -308,4 +311,3 @@ FACET_CLASSES: dict[str, type] = {
     "Exemption": Exemption,
     "StorageFacet": StorageFacet,
 }
-

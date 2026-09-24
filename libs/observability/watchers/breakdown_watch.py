@@ -21,7 +21,7 @@ Env (unchanged across the #543 merge — the names map into per-watcher config):
   DOCKER_SOCK                         docker socket path (default /var/run/docker.sock)
   ALERT_BRIDGE_URL                    where to POST alerts (the feishu bridge)
   BREAKDOWN_INTERVAL_SECONDS          sweep interval (default 60; self-paced inside the loop)
-  BREAKDOWN_RENOTIFY_SECONDS          re-alert suppression window (default 1800)
+  BREAKDOWN_RENOTIFY_SECONDS          re-alert window; 0 (default) = never on a timer
   BREAKDOWN_FAILURE_THRESHOLD         consecutive broken polls before firing (default 3)
   BREAKDOWN_RECOVERY_THRESHOLD        consecutive healthy polls before RESOLVED (default 5)
   BREAKDOWN_LOG_TAIL                  log lines to scan per container (default 25)
@@ -36,6 +36,14 @@ libs.recency.evaluate_consecutive_hysteresis for the state machine (mirrors
 tools/infra_probe_runner.py's proven _should_send pattern). A bad poll seen while
 an incident is already active but before the recovery threshold is reached never
 starts a new incident or resets the renotify clock.
+
+Staging and previews never page (#903): only the production runner sweeps, and it
+sees every container on the shared engine. A container whose environment is staging
+or a preview slot (its canonical label, else inferred from its compose project and
+name — ``container_identity``) is counted into the daily chronic digest instead of
+paging, and its digest lines go out as a REPORT (``delivery=report``). Production
+lines of the same digest still go to the pager: a floor-suppressed production
+re-break is only ever told there.
 """
 # alerts-as: container-breakdown-watch  (#542 no-new-wheels: registered T5 signal)
 
@@ -46,6 +54,7 @@ import os
 
 import httpx
 
+from libs.alerting import is_report_only_environment, mark_report_payload
 from libs.observability.breakdown import (
     Breakdown,
     build_breakdown_alert_payload,
@@ -65,7 +74,10 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 DEFAULT_INTERVAL = 60
-DEFAULT_RENOTIFY = 1800
+# 0 = an unchanged ongoing incident is never re-paged on a timer; escalation and the
+# chronic digest carry it (#475). The compose default has been 0 since #475; this module
+# default now says the same, so the registry entry can state it (#903).
+DEFAULT_RENOTIFY = 0
 DEFAULT_LOG_TAIL = 25
 # 3 consecutive broken polls at the default 60s interval == ~3 minutes sustained
 # before firing -- long enough that a single transient blip (e.g. a container
@@ -90,6 +102,17 @@ DEFAULT_RECOVERY_THRESHOLD = 5
 # every ~2 h, for seven weeks).
 DEFAULT_STAY_RESOLVED_SECONDS = 6 * 3600
 DEFAULT_CHRONIC_DIGEST_SECONDS = 24 * 3600
+
+
+def is_report_only(breakdown: Breakdown | None) -> bool:
+    """True for a staging or preview container: digest only, never the pager (#903).
+
+    Keyed on the container's environment as ``container_identity`` resolved it — the
+    canonical ``party.zitian.infra.environment`` label, or, only when that is absent,
+    what its compose project and name say. No breakdown at hand, or any environment
+    not on the report-only allowlist, pages.
+    """
+    return breakdown is not None and is_report_only_environment(breakdown.environment)
 
 
 def _docker_client(sock: str) -> httpx.Client:
@@ -155,6 +178,7 @@ def run_once(
     *,
     resolved_at: dict | None = None,
     chronic: dict | None = None,
+    chronic_context: dict | None = None,
     stay_resolved_seconds: int = DEFAULT_STAY_RESOLVED_SECONDS,
     chronic_digest_seconds: int = DEFAULT_CHRONIC_DIGEST_SECONDS,
 ) -> int:
@@ -171,13 +195,22 @@ def run_once(
     of its last RESOLVED. A new incident inside ``stay_resolved_seconds`` of that does
     not page; it is counted in ``chronic`` (name -> suppressed count) and the chronic
     set is posted once per ``chronic_digest_seconds`` under ``chronic["__digest_at__"]``.
-    Both dicts are mutated in place and owned by the caller like ``container_state``.
+    ``chronic_context`` keeps each chronic container's latest breakdown, so the digest
+    still knows its environment after the container resolved and was pruned: staging
+    and preview lines go out as a report, production lines to the pager (#903). All
+    three dicts are mutated in place and owned by the caller like ``container_state``.
     """
     import time
 
     now = time.monotonic()
     resolved_at = {} if resolved_at is None else resolved_at
     chronic = {} if chronic is None else chronic
+    chronic_context = {} if chronic_context is None else chronic_context
+
+    def count_chronic(name: str, breakdown: Breakdown) -> None:
+        chronic[name] = int(chronic.get(name, 0)) + 1
+        chronic_context[name] = breakdown
+
     breakdowns = sweep(client, log_tail)
     broken_by_name = {b.container: b for b in breakdowns}
 
@@ -223,15 +256,24 @@ def run_once(
                 # periodic re-notification is OFF, though — an operator who sets a
                 # positive renotify has asked for the timer and must not also get a
                 # digest about the same incident (review on #686).
-                chronic[name] = int(chronic.get(name, 0)) + 1
+                count_chronic(name, b)
         if action == "fire":
             since_resolved = now - resolved_at.get(name, float("-inf"))
-            if (
+            if is_report_only(b):
+                count_chronic(name, b)
+                logger.info(
+                    "BREAKDOWN-REPORT-ONLY %s (%s): staging/preview, digest only — %s",
+                    name,
+                    b.state,
+                    b.reason,
+                )
+            elif (
                 since_resolved < stay_resolved_seconds
                 and state.bad_streak == failure_threshold
             ):
-                # a NEW incident inside the floor: chronic, not a page
-                chronic[name] = int(chronic.get(name, 0)) + 1
+                # a NEW incident inside the floor: chronic, not a page — its digest
+                # line goes to the pager, it is production
+                count_chronic(name, b)
                 logger.warning(
                     "BREAKDOWN-CHRONIC %s (%s): re-broke %ds after resolving (floor %ds); "
                     "suppressed page #%d — %s",
@@ -245,6 +287,7 @@ def run_once(
             else:
                 # An actual page resets "since it last paged", escalation included.
                 chronic.pop(name, None)
+                chronic_context.pop(name, None)
                 fresh.append(b)
         elif not state.active:
             logger.info(
@@ -277,8 +320,10 @@ def run_once(
             # Resolve with the ORIGINAL breakdown (same state, hence same label set) so
             # the resolved alert matches the firing instance and the page actually
             # clears — a stub state like "recovered" forms a different label set and
-            # never resolves the original.
-            recovered.append(state.context)
+            # never resolves the original. A report-only container never paged, so
+            # there is nothing to clear.
+            if not is_report_only(state.context):
+                recovered.append(state.context)
         elif state.active:
             logger.info(
                 "BREAKDOWN-RECOVERING %s: good_streak=%d/%d — not yet resolved",
@@ -325,25 +370,35 @@ def run_once(
         chronic_names
         and now - chronic.get("__digest_at__", float("-inf")) >= chronic_digest_seconds
     ):
+
+        def context(name: str) -> Breakdown | None:
+            tracked = container_state.get(name)
+            return chronic_context.get(name) or (tracked.context if tracked else None)
+
         digest = [
             Breakdown(
                 container=name,
                 state="chronic",
                 reason=(
+                    f"staging/preview container, never paged: broken in "
+                    f"{chronic[name]} sweep(s)"
+                    if is_report_only(context(name))
                     # Keyed on the floor itself, not on `active`: a floor-suppressed
                     # re-break leaves the incident active, so keying on `active` made
                     # this wording unreachable in exactly the case it describes
                     # (review on #686).
-                    f"re-broke {chronic[name]}x inside the "
+                    else f"re-broke {chronic[name]}x inside the "
                     f"{stay_resolved_seconds // 3600}h stay-resolved floor"
                     if now - resolved_at.get(name, float("-inf"))
                     < stay_resolved_seconds
                     else f"still broken, {chronic[name]} sweep(s) since it last paged"
                 ),
-                detail=(
-                    container_state.get(name).context.detail
-                    if container_state.get(name) and container_state[name].context
-                    else ""
+                detail=context(name).detail if context(name) else "",
+                service_id=context(name).service_id if context(name) else "",
+                component=context(name).component if context(name) else "container",
+                # no context: production, so the line pages rather than going quiet
+                environment=(
+                    context(name).environment if context(name) else "production"
                 ),
             )
             for name in chronic_names
@@ -354,14 +409,32 @@ def run_once(
             chronic_digest_seconds // 3600,
             ",".join(chronic_names),
         )
-        _post_alert(
-            build_breakdown_alert_payload(
-                digest, severity="warning", alertname="ContainerBreakdownChronic"
+        # Split by audience (#903 review): a production line — a floor-suppressed
+        # re-break, an incident still broken since it paged — is only ever told here,
+        # so it goes to the pager as it always did. Staging and preview lines are a
+        # report.
+        paging = [line for line in digest if not is_report_only(line)]
+        reports = [line for line in digest if is_report_only(line)]
+        if paging:
+            _post_alert(
+                build_breakdown_alert_payload(
+                    paging, severity="warning", alertname="ContainerBreakdownChronic"
+                )
             )
-        )
+        if reports:
+            _post_alert(
+                mark_report_payload(
+                    build_breakdown_alert_payload(
+                        reports,
+                        severity="warning",
+                        alertname="ContainerBreakdownChronic",
+                    )
+                )
+            )
         chronic["__digest_at__"] = now
         for name in chronic_names:
             chronic.pop(name, None)
+            chronic_context.pop(name, None)
     return len(fresh)
 
 
@@ -392,7 +465,8 @@ class BreakdownWatch(ResidentWatcher):
         )
         self.log_tail = int(env.get("BREAKDOWN_LOG_TAIL", DEFAULT_LOG_TAIL))
         self.sock = env.get("DOCKER_SOCK", "/var/run/docker.sock")
-        self.enabled = env.get("ENV", "production") == "production"
+        # Idle only on a recognised non-production runner: `prod` or a typo sweeps.
+        self.enabled = not is_report_only_environment(env.get("ENV"))
         if not self.enabled:
             logger.info(
                 "breakdown-watch is prod-only (one watcher sees the whole shared "
@@ -408,6 +482,7 @@ class BreakdownWatch(ResidentWatcher):
         # #658 stay-resolved floor + chronic digest; same lifetime as container_state.
         self.resolved_at: dict = {}
         self.chronic: dict = {}
+        self.chronic_context: dict = {}
         self.stay_resolved_seconds = int(
             env.get("BREAKDOWN_STAY_RESOLVED_SECONDS", DEFAULT_STAY_RESOLVED_SECONDS)
         )
@@ -430,6 +505,7 @@ class BreakdownWatch(ResidentWatcher):
             self.recovery_threshold,
             resolved_at=self.resolved_at,
             chronic=self.chronic,
+            chronic_context=self.chronic_context,
             stay_resolved_seconds=self.stay_resolved_seconds,
             chronic_digest_seconds=self.chronic_digest_seconds,
         )
@@ -437,6 +513,7 @@ class BreakdownWatch(ResidentWatcher):
 
 __all__ = [
     "BreakdownWatch",
+    "is_report_only",
     "DEFAULT_CHRONIC_DIGEST_SECONDS",
     "DEFAULT_FAILURE_THRESHOLD",
     "DEFAULT_INTERVAL",

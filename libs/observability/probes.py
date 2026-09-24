@@ -215,7 +215,7 @@ def build_probe_alert_payload(
             "alertname": alert_name,
             **identity.alert_labels(
                 severity=severity_override or result.spec.severity,
-                failure_domain=_failure_domain(result),
+                failure_domain=failure_domain(result),
             ),
             "probe_kind": result.spec.kind,
         }
@@ -479,7 +479,9 @@ def _matches_expected(spec: ProbeSpec, observed: str) -> bool:
     return spec.expected in observed
 
 
-def _failure_domain(result: ProbeResult) -> str:
+def failure_domain(result: ProbeResult) -> str:
+    """Where a failure sits: ``probe-client-blocked`` (the edge refused the probe, error
+    1010) or ``service-or-route``. Part of a failure's identity (#903)."""
     observed = result.observed.lower()
     summary = result.summary.lower()
     if any(
@@ -505,6 +507,7 @@ __all__ = [
     "build_probe_alert_payload",
     "execute_probe",
     "failed_results",
+    "failure_domain",
     "group_severity",
     "is_misconfigured",
     "parse_probe_specs",

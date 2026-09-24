@@ -60,7 +60,7 @@ class AppDeployer(Deployer):
             tier="minute",
             type="alert",
             consecutive_failures=3,
-            renotify_window_sec=1800,
+            renotify_window_sec=0,
         ),
     )
     telemetry_service_name = "finance-report-backend"
