@@ -1,4 +1,11 @@
-"""Out-of-band infra2 host and alert bridge watchdog."""
+"""Out-of-band infra2 watchdog: the daily GitHub audit (ops.observability.md §1.1).
+
+It pages only the failure classes the GitHub layer owns -- the Cloudflare Worker's
+liveness, backups and the restore rehearsal, the peer scheduler -- plus failures
+of its own configuration. The other checks (host, Docker, bridge, Dokploy
+status, staging backups) still run, and their failures go to one daily report
+because another layer pages them (#908).
+"""
 
 from __future__ import annotations
 
@@ -21,7 +28,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from libs.alerting import deliver_feishu_app_text, deliver_feishu_text  # noqa: E402
+from libs.alerting import (  # noqa: E402
+    INFRA2_REPORTS_ENV,
+    deliver_feishu_app_text,
+    deliver_feishu_text,
+    deliver_infra2_report,
+)
+from libs.deploy_queue import deployment_start_epoch  # noqa: E402
 from libs.dokploy import get_dokploy  # noqa: E402
 from libs.scheduler_peer_liveness import (  # noqa: E402
     BOUND_CAP_ENV,
@@ -38,21 +51,49 @@ from libs.watchdog_issue_trail import (  # noqa: E402
     record_verdicts,
 )
 
+#: #908: the Worker's `/health` always answers `{"ok": true}`, so it could not
+#: detect anything; the Worker's liveness is judged from `/status` freshness.
 DEFAULT_HTTP_TARGETS = """\
 infra2-public-entrypoint|https://cloud.zitian.party|200,302
-cloudflare-worker-health|https://infra2-cloudflare-watchdog.wangzitian-ai.workers.dev/health|200
 """
 
 DEFAULT_WORKER_STATUS_URL = (
     "https://infra2-cloudflare-watchdog.wangzitian-ai.workers.dev/status"
 )
+WORKER_STATUS_CHECK = "cloudflare-worker-status"
+#: The Worker's own staleness bound (`WATCHDOG_STATUS_MAX_AGE_SECONDS`) lives in
+#: its deploy config; the GitHub audit reads the same value instead of a copy.
+WORKER_WRANGLER = ROOT / "cloudflare/infra-watchdog/wrangler.toml"
+WORKER_MAX_AGE_VAR = "WATCHDOG_STATUS_MAX_AGE_SECONDS"
+#: worker.js statusResponse: a last run this far "in the future" is clock skew, stale.
+WORKER_FUTURE_TOLERANCE_SECONDS = 300
+
+#: #908 (ops.observability.md §1.1): which checks page is decided by the signal
+#: registry, not here. A GitHub signal pages unless it is `type: report`; the
+#: consistency audit fails a paging signal outside its failure class's pager layer.
+SIGNAL_REGISTRY = ROOT / "docs/ssot/watchdog-signals.yaml"
+SIGNAL_REGISTRY_CHECK = "watchdog-signal-registry"
+REPORT_CHECK = "watchdog-report-delivery"
+#: Failures of the watchdog itself. They page whichever check they surfaced on:
+#: a watchdog that cannot see is silent, and only the pager is sure to be read.
+WATCHDOG_SELF_DOMAINS = frozenset({"configuration", "report-delivery"})
+PAGE, REPORT = "page", "report"
 
 #: truealpha#876: the peer that sees truealpha's scheduler-liveness workflow die.
 PEER_SCHEDULER_LIVENESS_CHECK = "truealpha-scheduler-liveness"
 DOKPLOY_STATUS_CHECK = "infra2-dokploy-status"
-#: Per-unit Dokploy results exist only when red: once the status query answered,
-#: a unit missing from the results is green (the issue trail closes its issue).
 DOKPLOY_STATUS_FAMILY = "dokploy-status:"
+#: #908: a Dokploy `error` whose latest deployment is older than this is a stale
+#: record, not a failure (two units stayed "red" for 17 and 15 days while their
+#: containers were healthy).
+DOKPLOY_RECORD_MAX_AGE_HOURS = 72
+#: A healthy host-wide container sweep contradicts a Dokploy `error` record.
+RUNTIME_EVIDENCE_CHECK = "infra2-docker-health"
+STATE_DISCREPANCY_RUNBOOK = (
+    "https://github.com/wangzitian0/infra2/blob/main/"
+    "docs/ssot/ops.standards.md#rule-4-"
+    "状态不一致协议-state-discrepancy-protocol"
+)
 
 DEFAULT_SSH_TARGETS = """\
 infra2-ssh|echo infra2-ssh-ok|infra2-ssh-ok
@@ -105,6 +146,11 @@ class CheckResult:
     failure_domain: str = ""
     attempt_count: int = 1
     severity: str = "P1"
+    #: Information for the daily report that is not this check's verdict (#908),
+    #: e.g. the Worker's own last-run findings.
+    note: str = ""
+    #: Epoch seconds of the evidence behind a Dokploy `error` (its latest deployment).
+    recorded_at: float | None = None
 
 
 def parse_http_targets(raw: str) -> list[HttpTarget]:
@@ -203,8 +249,16 @@ def run_worker_status_check(
     *,
     max_attempts: int = 2,
     retry_delay_seconds: float = 60.0,
+    max_age_seconds: int | None = None,
 ) -> list[CheckResult]:
-    """Check authenticated Cloudflare Worker cron/KV-backed watchdog status."""
+    """Is the Cloudflare Worker still running? (watchdog-liveness, #908)
+
+    Judged on freshness only: green while its last run is at most the Worker's own
+    `WATCHDOG_STATUS_MAX_AGE_SECONDS` old. What that run found (failures, delivery
+    errors, an empty config) the Worker pages itself, and Healthchecks.io pages a
+    run that failed to deliver; here it is a note for the daily report, so one
+    Worker finding is not paged a second time a day later.
+    """
     url = (
         env.get("INFRA2_WATCHDOG_WORKER_STATUS_URL") or DEFAULT_WORKER_STATUS_URL
     ).strip()
@@ -214,44 +268,56 @@ def run_worker_status_check(
     if not token:
         return [
             CheckResult(
-                "cloudflare-worker-status",
+                WORKER_STATUS_CHECK,
                 False,
                 "INFRA2_WATCHDOG_WORKER_STATUS_TOKEN is missing",
                 "configuration",
             )
         ]
+    if max_age_seconds is None:
+        try:
+            max_age_seconds = worker_status_max_age_seconds()
+        except Exception as exc:  # noqa: BLE001 - an unknown bound is red, never a pass.
+            return [
+                CheckResult(
+                    WORKER_STATUS_CHECK,
+                    False,
+                    f"cannot read {WORKER_MAX_AGE_VAR} from {WORKER_WRANGLER.name}: "
+                    f"{type(exc).__name__}: {_one_line(str(exc))}",
+                    "configuration",
+                )
+            ]
 
     attempts = max(1, max_attempts)
     retry_delay = max(0.0, retry_delay_seconds)
-    last_results: list[CheckResult] = []
+    result = None
     for attempt in range(1, attempts + 1):
-        last_results = _run_worker_status_once(url, token, timeout)
-        if all(result.ok for result in last_results):
-            return [
-                CheckResult(
-                    result.name,
-                    result.ok,
-                    result.detail,
-                    result.failure_domain,
-                    attempt_count=attempt,
-                )
-                for result in last_results
-            ]
+        result = replace(
+            _run_worker_status_once(url, token, timeout, max_age_seconds),
+            attempt_count=attempt,
+        )
+        if result.ok:
+            break
         if attempt < attempts and retry_delay > 0:
             time.sleep(retry_delay)
-    return [
-        CheckResult(
-            result.name,
-            result.ok,
-            result.detail,
-            result.failure_domain,
-            attempt_count=attempts,
-        )
-        for result in last_results
-    ]
+    assert result is not None
+    return [result]
 
 
-def _run_worker_status_once(url: str, token: str, timeout: float) -> list[CheckResult]:
+def worker_status_max_age_seconds(path: Path = WORKER_WRANGLER) -> int:
+    """The Worker's configured staleness bound, read from its wrangler.toml."""
+    import tomllib
+
+    raw = tomllib.loads(path.read_text(encoding="utf-8"))["vars"][WORKER_MAX_AGE_VAR]
+    value = int(str(raw).strip())
+    if value <= 0:
+        raise ValueError(f"{WORKER_MAX_AGE_VAR}={raw!r} is not a positive bound")
+    return value
+
+
+def _run_worker_status_once(
+    url: str, token: str, timeout: float, max_age_seconds: int
+) -> CheckResult:
     request = Request(
         url,
         headers={
@@ -260,93 +326,64 @@ def _run_worker_status_once(url: str, token: str, timeout: float) -> list[CheckR
         },
         method="GET",
     )
+
+    def red(detail: str, note: str = "") -> CheckResult:
+        return CheckResult(
+            WORKER_STATUS_CHECK, False, detail, "cloudflare-worker-health", note=note
+        )
+
     try:
         with urlopen(request, timeout=timeout) as response:  # noqa: S310
             status = response.status
             body = response.read(4096).decode("utf-8", errors="replace")
     except HTTPError as exc:
         detail = exc.read(512).decode("utf-8", errors="replace")
-        return [
-            CheckResult(
-                "cloudflare-worker-status",
-                False,
-                f"HTTP {exc.code}; body={_one_line(detail)}",
-                "cloudflare-worker-health",
-            )
-        ]
+        return red(f"HTTP {exc.code}; body={_one_line(detail)}")
     except (OSError, URLError) as exc:
-        return [
-            CheckResult(
-                "cloudflare-worker-status",
-                False,
-                f"GET {url} failed: {exc}",
-                "cloudflare-worker-health",
-            )
-        ]
-
+        return red(f"GET {url} failed: {exc}")
     if status != 200:
-        return [
-            CheckResult(
-                "cloudflare-worker-status",
-                False,
-                f"HTTP {status}; expected 200",
-                "cloudflare-worker-health",
-            )
-        ]
+        return red(f"HTTP {status}; expected 200")
     try:
         payload = json.loads(body)
     except json.JSONDecodeError:
-        return [
-            CheckResult(
-                "cloudflare-worker-status",
-                False,
-                "status response is invalid JSON",
-                "cloudflare-worker-health",
-            )
-        ]
+        return red("status response is invalid JSON")
 
-    last_run = payload.get("lastRun") if isinstance(payload, dict) else {}
+    last_run = payload.get("lastRun") if isinstance(payload, dict) else None
     if not isinstance(last_run, dict):
         last_run = {}
-    route_count = int(last_run.get("routeTargetCount") or 0)
-    heartbeat_count = int(last_run.get("heartbeatTargetCount") or 0)
-    age_seconds = last_run.get("ageSeconds")
-    last_run_ok = last_run.get("ok")
-    failure_count = last_run.get("failureCount")
-    delivery_error = last_run.get("deliveryError") or "none"
-    if payload.get("ok") is not True:
-        return [
-            CheckResult(
-                "cloudflare-worker-status",
-                False,
-                (
-                    f"worker status unhealthy: age={age_seconds} "
-                    f"last_run_ok={last_run_ok} failures={failure_count} "
-                    f"routes={route_count} heartbeats={heartbeat_count} "
-                    f"delivery_error={_one_line(str(delivery_error))}"
-                ),
-                "cloudflare-worker-health",
-            )
-        ]
-    if route_count <= 0 or heartbeat_count <= 0:
-        return [
-            CheckResult(
-                "cloudflare-worker-status",
-                False,
-                (
-                    "worker effective config is empty: "
-                    f"routes={route_count} heartbeats={heartbeat_count}"
-                ),
-                "cloudflare-worker-health",
-            )
-        ]
-    return [
-        CheckResult(
-            "cloudflare-worker-status",
-            True,
-            f"worker last-run fresh: age={age_seconds}s",
+    note = _worker_own_verdict_note(last_run)
+    age = last_run.get("ageSeconds")
+    if not isinstance(age, (int, float)) or isinstance(age, bool):
+        return red(f"worker has no recorded run: ageSeconds={age!r}", note)
+    if age < -WORKER_FUTURE_TOLERANCE_SECONDS:
+        return red(f"worker last run is {-age}s in the future (clock skew?)", note)
+    if age > max_age_seconds:
+        return red(
+            f"worker last run is stale: age={age}s > max {max_age_seconds}s", note
         )
-    ]
+    return CheckResult(
+        WORKER_STATUS_CHECK,
+        True,
+        f"worker last run fresh: age={age}s (max {max_age_seconds}s)",
+        note=note,
+    )
+
+
+def _worker_own_verdict_note(last_run: Mapping[str, object]) -> str:
+    """The Worker's own last-run verdict, for the report; empty when all was well."""
+    last_run_ok = last_run.get("ok")
+    failure_count = last_run.get("failureCount") or 0
+    delivery_error = str(last_run.get("deliveryError") or "")
+    # worker.js: `ok: lastRun.ok !== false`, so only an explicit False is a failure.
+    if last_run_ok is not False and not failure_count and not delivery_error:
+        return ""
+    return (
+        f"Cloudflare Worker's own last run: ok={last_run_ok} "
+        f"failures={failure_count} routes={last_run.get('routeTargetCount')} "
+        f"heartbeats={last_run.get('heartbeatTargetCount')} "
+        f"delivery_error={_one_line(delivery_error) or 'none'} "
+        "(the Worker pages its own findings; Healthchecks.io pages a failed run)"
+    )
 
 
 def _run_http_check_once(target: HttpTarget, timeout: float) -> CheckResult:
@@ -730,12 +767,14 @@ def run_dokploy_status_check(
     *,
     client_factory=get_dokploy,
 ) -> list[CheckResult]:
-    """Consume Dokploy's authoritative per-compose/app status as an alert source.
+    """Read Dokploy's per-compose/app status for the daily report (#908).
 
     A missing DOKPLOY_API_KEY is a configuration failure surfaced by this check
-    directly (the route canary that used to own that signal is retired, #543/#425). Any compose/application whose
-    status is exactly ``error`` (case-insensitive) is reported as a failure;
-    ``idle``/``done``/``running`` (and anything else) are not alerts.
+    directly (the route canary that used to own that signal is retired,
+    #543/#425), and a configuration failure pages. Any compose/application whose
+    status is exactly ``error`` (case-insensitive) is a report-only failure, unless
+    split_stale_dokploy_records finds the record stale;
+    ``idle``/``done``/``running`` (and anything else) are not findings.
     """
     if not env.get("DOKPLOY_API_KEY", "").strip():
         return [
@@ -818,12 +857,14 @@ def _dokploy_status_failure(
         value = evidence.get(key)
         if value:
             detail_parts.append(f"{key}={_one_line(str(value))}")
+    recorded_at = evidence.get("latest_deployment_at")
     return [
         CheckResult(
             f"{DOKPLOY_STATUS_FAMILY}{project_name}/{env_name}/{unit_name}",
             False,
             " ".join(detail_parts),
             "dokploy-deploy-status",
+            recorded_at=recorded_at if isinstance(recorded_at, float) else None,
         )
     ]
 
@@ -851,6 +892,9 @@ def _dokploy_compose_error_evidence(
         return evidence
     if isinstance(latest, Mapping):
         evidence.update(_dokploy_deployment_evidence(latest))
+        recorded_at = deployment_start_epoch(dict(latest))
+        if recorded_at is not None:
+            evidence["latest_deployment_at"] = float(recorded_at)
     return evidence
 
 
@@ -921,31 +965,45 @@ def run_peer_scheduler_liveness_check(
     ]
 
 
-def correlate_control_plane_with_runtime(
-    results: list[CheckResult],
-) -> list[CheckResult]:
-    """Classify Dokploy-error + healthy Docker as a state discrepancy.
+def split_stale_dokploy_records(
+    results: list[CheckResult], *, now_ts: float
+) -> tuple[list[CheckResult], list[tuple[CheckResult, str]]]:
+    """#908: separate stale Dokploy `error` records from current failures.
 
-    Dokploy's control-plane status remains a real failure signal, but it does
-    not prove runtime outage.  A separately successful host-side Docker health
-    sweep is enough to lower urgency and route the operator to reconciliation;
-    it never turns the failed check green or suppresses delivery.
+    A record is stale when its latest deployment is older than
+    DOKPLOY_RECORD_MAX_AGE_HOURS, or when the host-wide container sweep
+    (RUNTIME_EVIDENCE_CHECK) is green in the same run and so contradicts it.
+    Stale records are not failures, but they are not dropped either: the daily
+    report lists them for reconciliation (ops.standards.md Rule 4). A record with
+    no timestamp and no healthy runtime evidence stays a failure.
     """
     runtime_healthy = any(
-        result.name == "infra2-docker-health" and result.ok for result in results
+        result.name == RUNTIME_EVIDENCE_CHECK and result.ok for result in results
     )
-    if not runtime_healthy:
-        return results
-    return [
-        replace(
-            result,
-            failure_domain="state-discrepancy",
-            detail=f"{result.detail}; runtime_evidence=infra2-docker-health:ok",
-        )
-        if not result.ok and result.failure_domain == "dokploy-deploy-status"
-        else result
-        for result in results
-    ]
+    bound_seconds = DOKPLOY_RECORD_MAX_AGE_HOURS * 3600
+    kept: list[CheckResult] = []
+    stale: list[tuple[CheckResult, str]] = []
+    for result in results:
+        if result.ok or not result.name.startswith(DOKPLOY_STATUS_FAMILY):
+            kept.append(result)
+            continue
+        reasons = []
+        if (
+            result.recorded_at is not None
+            and now_ts - result.recorded_at > bound_seconds
+        ):
+            age_hours = (now_ts - result.recorded_at) / 3600
+            reasons.append(
+                f"latest deployment is {age_hours:.0f}h old "
+                f"(bound {DOKPLOY_RECORD_MAX_AGE_HOURS}h)"
+            )
+        if runtime_healthy:
+            reasons.append(f"contradicted by {RUNTIME_EVIDENCE_CHECK}: ok")
+        if reasons:
+            stale.append((result, "; ".join(reasons)))
+        else:
+            kept.append(result)
+    return kept, stale
 
 
 def _severity_for(name: str, failure_domain: str) -> str:
@@ -966,6 +1024,8 @@ def _severity_for(name: str, failure_domain: str) -> str:
         "dokploy-control-plane",
         # a dead peer scheduler hides every other scheduled check's staleness
         "peer-scheduler-liveness",
+        # report-only findings reached no one
+        "report-delivery",
     }:
         return "P1"
     if failure_domain in {"backup", "restore-rehearsal"}:
@@ -976,8 +1036,6 @@ def _severity_for(name: str, failure_domain: str) -> str:
         if "staging" in lowered or "-pr-" in lowered or "preview" in lowered:
             return "P2"
         return "P1"
-    if failure_domain == "state-discrepancy":
-        return "P2"
     return "P2"
 
 
@@ -985,7 +1043,7 @@ _SEVERITY_ORDER = {"P0": 0, "P1": 1, "P2": 2}
 
 
 def format_failure_message(results: list[CheckResult], *, run_url: str) -> str:
-    """Build a Feishu message for failed out-of-band checks."""
+    """Build the Feishu page for failed paging checks (see route_failures)."""
     failures = [result for result in results if not result.ok]
     highest = min(
         (result.severity for result in failures),
@@ -995,7 +1053,8 @@ def format_failure_message(results: list[CheckResult], *, run_url: str) -> str:
     lines = [
         "[OUT-OF-BAND] Infra2 watchdog failed",
         f"Severity: {highest}",
-        "Scope: host reachability / alert bridge availability",
+        "Scope: Cloudflare Worker liveness / backups and restore rehearsal / "
+        "peer scheduler / the watchdog's own configuration",
         "Route: GitHub Actions -> Feishu direct",
     ]
     if run_url:
@@ -1013,8 +1072,146 @@ def format_failure_message(results: list[CheckResult], *, run_url: str) -> str:
     return "\n".join(lines)
 
 
+def load_paging_checks(path: Path = SIGNAL_REGISTRY) -> frozenset[str]:
+    """The GitHub checks that page: registered `primary_owner: github`, not reports.
+
+    Imported lazily: other jobs import this module for alert delivery without
+    PyYAML. An empty set would page nothing, so it is an error, not a quiet day.
+    """
+    import yaml
+
+    inventory = yaml.safe_load(path.read_text(encoding="utf-8"))
+    names = frozenset(
+        str(signal["signal"])
+        for signal in inventory["signals"]
+        if signal.get("primary_owner") == "github" and signal.get("type") != "report"
+    )
+    if not names:
+        raise ValueError(f"{path.name} registers no paging GitHub signal")
+    return names
+
+
+def pages(result: CheckResult, paging_checks: frozenset[str] | None) -> bool:
+    """Does this failure page? `paging_checks=None` (registry unreadable) pages all."""
+    return (
+        paging_checks is None
+        or result.name in paging_checks
+        or result.failure_domain in WATCHDOG_SELF_DOMAINS
+    )
+
+
+def route_failures(
+    results: list[CheckResult], paging_checks: frozenset[str] | None
+) -> tuple[list[CheckResult], list[CheckResult]]:
+    """Split failures into (paged, reported) -- #908, ops.observability.md §1.1.
+
+    GitHub pages only the failure classes it owns (Worker liveness, data
+    protection, config drift, the peer scheduler) plus failures of the watchdog
+    itself; everything else another layer pages, so here it is a report line.
+    """
+    failures = [result for result in results if not result.ok]
+    paged = [result for result in failures if pages(result, paging_checks)]
+    reported = [result for result in failures if not pages(result, paging_checks)]
+    return paged, reported
+
+
+def format_report_message(
+    reported: list[CheckResult],
+    stale: list[tuple[CheckResult, str]],
+    notes: list[str],
+    *,
+    run_url: str,
+) -> str:
+    """The daily report for what this watchdog reports but does not page.
+
+    Empty when there is nothing to say: the other daily reports already prove the
+    reports chat delivers, so a green day sends nothing from this job.
+    """
+    if not (reported or stale or notes):
+        return ""
+    lines = [
+        "[REPORT] Infra2 GitHub watchdog -- daily audit",
+        "Reported, not paged: another layer pages these failure classes "
+        "(ops.observability.md §1.1).",
+    ]
+    if run_url:
+        lines.append(f"Run: {run_url}")
+    if reported:
+        lines.append(f"Failures ({len(reported)}):")
+        for result in reported:
+            domain = f"[{result.failure_domain}] " if result.failure_domain else ""
+            lines.append(
+                f"- [{result.severity}] {domain}{result.name}: {_redact(result.detail)}"
+            )
+    if stale:
+        lines.append(
+            f"Stale Dokploy records ({len(stale)}), not failures; reconcile per "
+            f"{STATE_DISCREPANCY_RUNBOOK}:"
+        )
+        for result, reason in stale:
+            lines.append(f"- {result.name}: {_redact(result.detail)} [{reason}]")
+    if notes:
+        lines.append("Information:")
+        lines.extend(f"- {_redact(note)}" for note in notes)
+    return "\n".join(lines)
+
+
+def _deliver_report(
+    env: Mapping[str, str],
+    report: str,
+    reported: list[CheckResult],
+    *,
+    dry_run: bool,
+) -> CheckResult | None:
+    """Send the report; a report path that is missing or broken pages instead."""
+    undelivered = (
+        f"; undelivered: {len(reported)} report-only failure(s)"
+        + (f" ({', '.join(result.name for result in reported)})" if reported else "")
+        if report
+        else ""
+    )
+    missing = [name for name in INFRA2_REPORTS_ENV if not env.get(name, "").strip()]
+    if missing:
+        return CheckResult(
+            REPORT_CHECK,
+            False,
+            f"report path is not configured: {', '.join(missing)} missing{undelivered}",
+            "configuration",
+        )
+    if not report:
+        return None
+    if dry_run:
+        print(report)
+        return None
+    try:
+        deliver_infra2_report(report, env)
+    except Exception as exc:  # noqa: BLE001 - a lost report must page, not vanish.
+        _emit_structured_log(
+            {
+                "event": "watchdog.report.delivery.failure",
+                "status": "fail",
+                "error": _redact(_one_line(str(exc))),
+            }
+        )
+        return CheckResult(
+            REPORT_CHECK,
+            False,
+            f"report delivery failed: {_one_line(str(exc))}{undelivered}",
+            "report-delivery",
+        )
+    _emit_structured_log(
+        {
+            "event": "watchdog.report.delivery.success",
+            "status": "ok",
+            "report_failure_count": len(reported),
+            "route": "github-actions->infra2-reports",
+        }
+    )
+    return None
+
+
 def main(env: Mapping[str, str] | None = None) -> int:
-    """Run watchdog checks and send Feishu directly on failure."""
+    """Run watchdog checks; page the owned classes, report the rest (#908)."""
     current_env = env or os.environ
     http_targets = parse_http_targets(
         current_env.get("INFRA2_WATCHDOG_HTTP_TARGETS", "")
@@ -1063,52 +1260,93 @@ def main(env: Mapping[str, str] | None = None) -> int:
             retry_delay_seconds=retry_delay_seconds,
         )
     )
-    results = correlate_control_plane_with_runtime(results)
     results = [
-        CheckResult(
-            result.name,
-            result.ok,
-            result.detail,
-            result.failure_domain,
-            attempt_count=result.attempt_count,
-            severity=_severity_for(result.name, result.failure_domain),
-        )
+        replace(result, severity=_severity_for(result.name, result.failure_domain))
         for result in results
     ]
-    _record_issue_trail_verdicts(current_env, results)
+    results, stale = split_stale_dokploy_records(results, now_ts=time.time())
+    try:
+        paging_checks: frozenset[str] | None = load_paging_checks()
+    except Exception as exc:  # noqa: BLE001 - unknown routing pages everything.
+        paging_checks = None
+        results.append(
+            CheckResult(
+                SIGNAL_REGISTRY_CHECK,
+                False,
+                f"cannot read {SIGNAL_REGISTRY.name}, so every failure pages: "
+                f"{type(exc).__name__}: {_one_line(str(exc))}",
+                "configuration",
+                severity=_severity_for(SIGNAL_REGISTRY_CHECK, "configuration"),
+            )
+        )
+    paged, reported = route_failures(results, paging_checks)
+    dry_run = current_env.get("WATCHDOG_DRY_RUN") == "1"
+    report = format_report_message(
+        reported,
+        stale,
+        [result.note for result in results if result.note],
+        run_url=_github_run_url(current_env),
+    )
+    report_failure = _deliver_report(current_env, report, reported, dry_run=dry_run)
+    if report_failure is not None:
+        report_failure = replace(
+            report_failure,
+            severity=_severity_for(report_failure.name, report_failure.failure_domain),
+        )
+        results.append(report_failure)
+        paged.append(report_failure)
+
+    _record_issue_trail_verdicts(current_env, results, paging_checks)
     for result in results:
+        route = "" if result.ok else PAGE if pages(result, paging_checks) else REPORT
         _emit_structured_log(
             {
                 "event": "watchdog.check",
                 "name": result.name,
                 "status": "ok" if result.ok else "fail",
+                "route": route,
                 "failure_domain": result.failure_domain,
                 "attempt_count": result.attempt_count,
                 "detail": _redact(result.detail),
             }
         )
+        suffix = " [reported, not paged]" if route == REPORT else ""
         status = "OK" if result.ok else "FAIL"
-        print(f"{status} {result.name}: {_redact(result.detail)}")
+        print(f"{status} {result.name}: {_redact(result.detail)}{suffix}")
+    for result, reason in stale:
+        _emit_structured_log(
+            {
+                "event": "watchdog.check",
+                "name": result.name,
+                "status": "stale",
+                "route": REPORT,
+                "failure_domain": result.failure_domain,
+                "attempt_count": result.attempt_count,
+                "detail": _redact(f"{result.detail}; {reason}"),
+            }
+        )
+        print(f"STALE {result.name}: {_redact(result.detail)} [{reason}]")
 
-    failures = [result for result in results if not result.ok]
-    if not failures:
+    if not paged:
         _emit_structured_log(
             {
                 "event": "watchdog.run.complete",
                 "status": "ok",
                 "failure_count": 0,
+                "report_failure_count": len(reported),
             }
         )
         return 0
 
-    message = format_failure_message(failures, run_url=_github_run_url(current_env))
-    if current_env.get("WATCHDOG_DRY_RUN") == "1":
+    message = format_failure_message(paged, run_url=_github_run_url(current_env))
+    if dry_run:
         print(message)
         _emit_structured_log(
             {
                 "event": "watchdog.run.complete",
                 "status": "fail",
-                "failure_count": len(failures),
+                "failure_count": len(paged),
+                "report_failure_count": len(reported),
                 "dry_run": True,
             }
         )
@@ -1118,13 +1356,13 @@ def main(env: Mapping[str, str] | None = None) -> int:
         deliver_out_of_band_alert(current_env, message)
     except Exception as exc:  # noqa: BLE001 - watchdog must not fail silently.
         fallback_issue_url = create_delivery_fallback_issue(
-            current_env, failures=failures, error=str(exc)
+            current_env, failures=paged, error=str(exc)
         )
         _emit_structured_log(
             {
                 "event": "watchdog.delivery.failure",
                 "status": "fail",
-                "failure_count": len(failures),
+                "failure_count": len(paged),
                 "error": _redact(_one_line(str(exc))),
                 "fallback_issue_url": fallback_issue_url or "",
             }
@@ -1134,7 +1372,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
         {
             "event": "watchdog.delivery.success",
             "status": "ok",
-            "failure_count": len(failures),
+            "failure_count": len(paged),
             "route": "github-actions->feishu-direct",
         }
     )
@@ -1142,7 +1380,8 @@ def main(env: Mapping[str, str] | None = None) -> int:
         {
             "event": "watchdog.run.complete",
             "status": "fail",
-            "failure_count": len(failures),
+            "failure_count": len(paged),
+            "report_failure_count": len(reported),
             "dry_run": False,
         }
     )
@@ -1150,9 +1389,18 @@ def main(env: Mapping[str, str] | None = None) -> int:
 
 
 def _record_issue_trail_verdicts(
-    env: Mapping[str, str], results: list[CheckResult]
+    env: Mapping[str, str],
+    results: list[CheckResult],
+    paging_checks: frozenset[str] | None,
 ) -> None:
-    """Hand this run's verdicts to the issue-trail step (truealpha#876 W4)."""
+    """Hand this run's PAGING verdicts to the issue-trail step (truealpha#876 W4).
+
+    Report-only checks never open issues (#908): their failures are report lines.
+    A failure of the watchdog itself that surfaced on a report-only check (its
+    configuration, the report path) is recorded as the watchdog step's own red
+    verdict, which the next run that records cleanly closes. When the registry is
+    unreadable nothing but that verdict is recorded: which checks page is unknown.
+    """
     path = env.get(VERDICTS_ENV, "").strip()
     if not path:
         return
@@ -1165,18 +1413,34 @@ def _record_issue_trail_verdicts(
             result.failure_domain,
         )
         for result in results
+        if paging_checks is not None and result.name in paging_checks
     ]
-    green_prefixes: list[str] = []
-    if not any(result.name == DOKPLOY_STATUS_CHECK for result in results):
-        # The status query answered: its units that are absent are green.
+    own = [
+        result
+        for result in results
+        if not result.ok
+        and result.failure_domain in WATCHDOG_SELF_DOMAINS
+        and (paging_checks is None or result.name not in paging_checks)
+    ]
+    if own:
         checks.append(
-            CheckVerdict(DOKPLOY_STATUS_CHECK, True, "dokploy status query answered")
+            CheckVerdict(
+                WATCHDOG_SOURCE,
+                False,
+                _redact(
+                    _one_line(
+                        "; ".join(f"{result.name}: {result.detail}" for result in own)
+                    )
+                ),
+                min(
+                    (result.severity for result in own),
+                    key=lambda severity: _SEVERITY_ORDER.get(severity, 99),
+                ),
+                "configuration",
+            )
         )
-        green_prefixes.append(DOKPLOY_STATUS_FAMILY)
     try:
-        record_verdicts(
-            path, source=WATCHDOG_SOURCE, checks=checks, green_prefixes=green_prefixes
-        )
+        record_verdicts(path, source=WATCHDOG_SOURCE, checks=checks)
     except OSError as exc:
         # The issue-trail step then finds no verdict from this source: red.
         print(f"could not record verdicts for the issue trail: {exc}", file=sys.stderr)
@@ -1220,8 +1484,6 @@ def deliver_out_of_band_alert(env: Mapping[str, str], message: str) -> None:
 
 
 def _failure_domain_for_http_target(name: str) -> str:
-    if name == "cloudflare-worker-health":
-        return "cloudflare-worker-health"
     if name == "infra2-public-entrypoint":
         return "host-reachability"
     if name.endswith("public-route"):
@@ -1269,10 +1531,10 @@ def _suggested_action_for_failure(name: str, failure_domain: str) -> str:
             "on the host, read /var/log/infra2-backup-restore-rehearsal.log and rerun "
             "the rehearsal cron command by hand per SOP-006A"
         )
-    if failure_domain == "state-discrepancy":
+    if failure_domain == "report-delivery":
         return (
-            "compare Dokploy status/deploy evidence with `docker ps` and `docker inspect`; "
-            "reconcile the control-plane state without blind restart"
+            "check the INFRA2_REPORTS_FEISHU_* secrets and the reports app; the "
+            "undelivered report-only findings are in this run's log"
         )
     return "inspect the failed check detail and verify target service health manually"
 
@@ -1287,12 +1549,6 @@ def _runbook_url_for_failure(failure_domain: str) -> str:
         return (
             "https://github.com/wangzitian0/infra2/blob/main/"
             f"docs/runbooks/infra022-p0.md{anchor}"
-        )
-    if failure_domain == "state-discrepancy":
-        return (
-            "https://github.com/wangzitian0/infra2/blob/main/"
-            "docs/ssot/ops.standards.md#rule-4-"
-            "状态不一致协议-state-discrepancy-protocol"
         )
     if failure_domain in {"backup", "restore-rehearsal"}:
         anchor = (

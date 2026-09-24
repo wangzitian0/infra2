@@ -63,9 +63,10 @@
 ### Rule 4: 状态不一致协议 (State Discrepancy Protocol)
 如果部署过程中出现“资源已存在/状态不一致”，禁止盲目重试。
 - **步骤**：1. 查询 Dokploy 应用状态；2. `docker ps`/日志确认实际运行；3. 必要时手动清理并更新 SSOT。
-- **交叉判定**：Dokploy `error` + 独立 Docker health 绿 = 仍然失败/送达，但标为
-  `state-discrepancy`/P2，先对账不盲目重启；Dokploy `error` + Docker health 红/未知 =
-  保留原 deploy/runtime 故障等级。任一平面的绿不得把另一平面的红静默掉。
+- **交叉判定**（GitHub 日审计的 Dokploy 状态族，#908）：Dokploy `error` + 同一运行里独立
+  Docker health 绿，或该单元最新部署记录超过 72h = **过期记录**，不算失败，但仍列入日报
+  供对账，先对账不盲目重启；Dokploy `error` + Docker health 红/未知且记录在 72h 内 =
+  仍是失败（只报告，不 page）。任一平面的绿不得把另一平面的红静默掉：过期记录照样送达。
 
 ### Rule 5: 传播冷却 (Cooldown Period)
 在部署 DNS 或证书后，必须在健康检查前加入等待窗口（建议 60s+），以应对解析延迟。

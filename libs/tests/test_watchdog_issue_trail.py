@@ -76,11 +76,10 @@ def _red(name, detail="broken"):
     return CheckVerdict(name, False, detail, "P1", "cloudflare-worker-health")
 
 
-def _trail(failing=(), green=(), prefixes=()):
+def _trail(failing=(), green=()):
     return Trail(
         failing={verdict.name: verdict for verdict in failing},
         green=set(green),
-        green_prefixes=set(prefixes),
     )
 
 
@@ -212,25 +211,17 @@ def test_off_writes_nothing() -> None:
     assert reconcile(api, _trail(), mode="bogus") == 1
 
 
-def test_the_dokploy_family_closes_absent_units_only_when_the_query_answered() -> None:
-    unit_ok = "dokploy-status:finance-report/staging/backend"
-    unit_red = "dokploy-status:finance-report/production/backend"
-    issues = [_issue(1, unit_ok), _issue(2, unit_red)]
-    answered = FakeIssues(issues)
-    reconcile(
-        answered,
-        _trail(
-            [_red(unit_red)],
-            green=["infra2-dokploy-status"],
-            prefixes=["dokploy-status:"],
-        ),
-        mode=FULL,
-    )
-    assert answered.closed == [1]
-    assert [number for number, body in answered.comments if "is red" in body] == [2]
-    unanswered = FakeIssues(issues)
-    reconcile(unanswered, _trail([_red("infra2-dokploy-status")]), mode=FULL)
-    assert unanswered.closed == []
+def test_an_issue_whose_check_recorded_no_verdict_is_left_alone() -> None:
+    """#908: report-only checks record nothing, so the trail never touches them.
+
+    Only a verdict recorded green closes an issue; an absent check is neither
+    green nor red (the dokploy-status family used to be greened by absence).
+    """
+    report_only = "dokploy-status:finance-report/production/backend"
+    api = FakeIssues([_issue(1, report_only), _issue(2, "cloudflare-worker-status")])
+    reconcile(api, _trail(green=["cloudflare-worker-status"]), mode=FULL)
+    assert api.closed == [2]
+    assert [number for number, _body in api.comments] == [2]
 
 
 def test_the_full_lifecycle_red_then_red_then_green() -> None:
@@ -324,7 +315,6 @@ def test_recorded_verdicts_merge_and_a_red_wins(tmp_path: Path) -> None:
         path,
         source=WATCHDOG_SOURCE,
         checks=[CheckVerdict("infra2-ssh", True), _red("cloudflare-worker-status")],
-        green_prefixes=["dokploy-status:"],
     )
     record_verdicts(
         path,
@@ -338,7 +328,7 @@ def test_recorded_verdicts_merge_and_a_red_wins(tmp_path: Path) -> None:
     assert set(trail.failing) == {"cloudflare-worker-status"}
     assert {"infra2-ssh", WATCHDOG_SOURCE, RUNNER_HEALTH_SOURCE} <= trail.green
     assert "cloudflare-worker-status" not in trail.green
-    assert trail.is_green("dokploy-status:any/unit")
+    assert not trail.is_green("dokploy-status:any/unit")
 
 
 def test_a_step_that_recorded_nothing_is_red_and_its_next_record_closes_it(

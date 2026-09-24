@@ -300,20 +300,28 @@ uv run python tools/backup_restore_rehearsal.py \
 
 ## out_of_band_watchdog.py
 
-Direct Feishu watchdog intended to run outside the infra2 host from GitHub
-Actions. It verifies public host reachability, Cloudflare Worker self-health,
-SSH diagnostics, and consumes Dokploy's per-compose/application status as an
-alert source (fail-closed `configuration` failure when `DOKPLOY_API_KEY` is
-missing, #543). A Dokploy deploy error remains failed; when the independent
-`infra2-docker-health` check is green it is routed as `state-discrepancy`/P2 for
-reconciliation instead of being mislabeled as a confirmed runtime outage.
+The daily out-of-band audit, run from GitHub Actions outside the infra2 host
+(ops.observability.md SOP-005B). It pages Feishu directly only for the failure
+classes the GitHub layer owns (#908): Cloudflare Worker liveness (`/status`
+freshness against the Worker's own `WATCHDOG_STATUS_MAX_AGE_SECONDS`), the
+production backup and the restore rehearsal, the peer scheduler, and failures of
+its own configuration. Which checks page is read from
+`docs/ssot/watchdog-signals.yaml` (GitHub signals that are not `type: report`).
+Everything else — host reachability, SSH, Docker, container health, the alert
+bridge, the staging backup, Dokploy per-compose/application status — still runs
+and goes into one daily report via `libs/alerting.py::deliver_infra2_report`. A
+Dokploy `error` whose latest deployment is older than 72 h, or that a green
+`infra2-docker-health` contradicts, is listed there as a stale record for
+reconciliation, not as a failure. A missing `DOKPLOY_API_KEY` or report secret is a
+`configuration` failure and pages.
 It is also the peer for truealpha's `scheduler-liveness` workflow
 (`truealpha-scheduler-liveness`, logic in `libs/scheduler_peer_liveness.py`,
 truealpha#876): red when that workflow is not active, has not ticked on schedule
 within 2 x its largest cron gap + 1 h, never ticked while its file is older than
 that bound, or cannot be read. `INFRA2_PEER_LIVENESS_BOUND_CAP_HOURS` only
 tightens the bound (`0` = drill red). With `INFRA2_WATCHDOG_VERDICTS_PATH` set it
-appends every verdict for the issue trail.
+appends the paging checks' verdicts for the issue trail (report-only checks open
+no issues).
 
 ```bash
 WATCHDOG_DRY_RUN=1 uv run python tools/out_of_band_watchdog.py
@@ -322,7 +330,7 @@ WATCHDOG_DRY_RUN=1 uv run python tools/out_of_band_watchdog.py
 ## watchdog_issue_trail.py
 
 The ops-checks watchdog job's last step (truealpha#876 W4): reads the verdicts the
-earlier steps recorded and keeps one issue per red check, titled exactly
+earlier steps recorded and keeps one issue per red paging check, titled exactly
 `ops-checks watchdog is red: <check>` — open or comment while red, comment and
 close when green in a scheduled run (or a plain dispatch on main). Drills and
 branch dispatches never close; dry runs and SSH-override runs write nothing. A

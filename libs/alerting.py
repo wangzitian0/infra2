@@ -761,20 +761,26 @@ def _deliver_feishu_app_message(
     )
 
 
+#: The credentials deliver_infra2_report needs, in (app id, app secret, chat id) order.
+INFRA2_REPORTS_ENV = (
+    "INFRA2_REPORTS_FEISHU_APP_ID",
+    "INFRA2_REPORTS_FEISHU_APP_SECRET",
+    "INFRA2_REPORTS_FEISHU_CHAT_ID",
+)
+
+
 def deliver_infra2_report(text: str, env: "Mapping[str, str] | None" = None) -> bool:
     """Post a daily-report message to the shared 'infra2 reports' Lark group via the infra2
     Feishu app bot. The single delivery entry every periodic REPORT reconciler uses (DNS drift,
     config drift, …) so the channel + credentials live in one place, not per-tool.
 
-    Reads ``INFRA2_REPORTS_FEISHU_{APP_ID,APP_SECRET,CHAT_ID}`` (+ optional ``_API_BASE``).
+    Reads ``INFRA2_REPORTS_ENV`` (+ optional ``INFRA2_REPORTS_FEISHU_API_BASE``).
     Returns True if delivered, False if not configured (so a not-yet-wired reconciler no-ops
     cleanly instead of erroring). A configured-but-failing delivery raises (a broken report
     path must be visible, not silently green).
     """
     e = os.environ if env is None else env
-    app_id = e.get("INFRA2_REPORTS_FEISHU_APP_ID", "")
-    app_secret = e.get("INFRA2_REPORTS_FEISHU_APP_SECRET", "")
-    chat_id = e.get("INFRA2_REPORTS_FEISHU_CHAT_ID", "")
+    app_id, app_secret, chat_id = (e.get(name, "") for name in INFRA2_REPORTS_ENV)
     if not (app_id and app_secret and chat_id):
         return False
     deliver_feishu_app_text(

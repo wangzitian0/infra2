@@ -142,21 +142,6 @@ relayering_debt:
   - signal_id: staging.truealpha-api.public-route
     phase: "#904"
     reason: the VPS public-route probes already check this route; the Worker keeps one entrypoint per product
-  - signal_id: global.infra2-public-entrypoint.github
-    phase: "#903"
-    reason: the cloudflare layer pages host-reachability; the daily GitHub audit reports it instead
-  - signal_id: global.infra2-ssh.github
-    phase: "#903"
-    reason: the cloudflare layer pages host-reachability; the daily GitHub audit reports it instead
-  - signal_id: global.infra2-docker.github
-    phase: "#903"
-    reason: the cloudflare layer pages host-reachability; the daily GitHub audit reports it instead
-  - signal_id: global.infra2-docker-health.github
-    phase: "#903"
-    reason: the vps layer pages service-health; the daily GitHub audit reports it instead
-  - signal_id: global.infra2-alert-bridge.github
-    phase: "#903"
-    reason: the cloudflare layer pages alert-pipeline; the daily GitHub audit reports it instead
 signals:
   # ── internal plane: GENERATED, do not hand-write entries here (#543) ──
   # Every `primary_owner: internal` entry is DERIVED from the ProbeFacet +
@@ -390,6 +375,12 @@ signals:
     cadence: 30m
     stale_threshold: 90m
 
+  # GitHub signals whose failure class another layer pages (#908): the daily audit
+  # still runs them and tools/out_of_band_watchdog.py puts their failures in one
+  # daily report to the reports chat, never the pager and never the issue trail.
+  # The watchdog reads `type` from this file to decide what pages, so flipping a
+  # signal to a pager here is the only way to make it page -- and the layering
+  # audit then fails it unless its class is paged by github.
   - signal_id: global.infra2-public-entrypoint.github
     environment: global
     component: host
@@ -398,16 +389,15 @@ signals:
     failure_class: host-reachability
     severity: critical
     cadence: 1d
+    tier: day
+    type: report
 
-  - signal_id: global.cloudflare-worker-health.github
-    environment: global
-    component: cloudflare-watchdog
-    signal: cloudflare-worker-health
-    primary_owner: github
-    failure_class: watchdog-liveness
-    severity: critical
-    cadence: 1d
-
+  # Worker liveness (#908): green while the Worker's last run is within its own
+  # WATCHDOG_STATUS_MAX_AGE_SECONDS (read from cloudflare/infra-watchdog/wrangler.toml).
+  # What that run found is a report note, not a page: the Worker pages its own
+  # findings and Healthchecks.io pages a run that failed. The former
+  # cloudflare-worker-health signal called the Worker's /health, which always
+  # answers ok, so it could detect nothing and was removed.
   - signal_id: global.cloudflare-worker-status.github
     environment: global
     component: cloudflare-watchdog
@@ -425,6 +415,8 @@ signals:
     failure_class: host-reachability
     severity: critical
     cadence: 1d
+    tier: day
+    type: report
 
   - signal_id: global.infra2-docker.github
     environment: global
@@ -434,6 +426,8 @@ signals:
     failure_class: host-reachability
     severity: critical
     cadence: 1d
+    tier: day
+    type: report
 
   - signal_id: global.infra2-docker-health.github
     environment: global
@@ -443,6 +437,8 @@ signals:
     failure_class: service-health
     severity: critical
     cadence: 1d
+    tier: day
+    type: report
 
   - signal_id: global.infra2-alert-bridge.github
     environment: global
@@ -452,6 +448,8 @@ signals:
     failure_class: alert-pipeline
     severity: critical
     cadence: 1d
+    tier: day
+    type: report
 
   # Peer liveness for truealpha's scheduler-liveness workflow (truealpha#876 W5).
   # That workflow watches every scheduled workflow in the estate but cannot report
@@ -488,6 +486,7 @@ signals:
     severity: critical
     cadence: 1d
 
+  # Staging never pages (#908): a stale Staging backup is a report line.
   - signal_id: staging.infra2-backup-staging.github
     environment: staging
     component: host
@@ -496,6 +495,8 @@ signals:
     failure_class: data-protection
     severity: warning
     cadence: 1d
+    tier: day
+    type: report
 
   - signal_id: production.infra2-restore-rehearsal.github
     environment: production

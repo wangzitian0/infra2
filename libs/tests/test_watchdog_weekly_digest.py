@@ -384,6 +384,30 @@ def test_summarize_watchdog_log_events_flags_missing_alert_evidence() -> None:
     assert audit["alert_recall_evidence_pct"] == 0.0
 
 
+def test_report_only_failures_are_not_unrecalled_alerts() -> None:
+    """#908: a report-routed failure never pages, so no delivery is owed for it.
+
+    A paged failure in the same log still is: the run stays alertable.
+    """
+    digest = _load_module()
+    report_only = (
+        '{"event":"watchdog.check","name":"infra2-ssh","status":"fail",'
+        '"route":"report","failure_domain":"host-reachability"}'
+    )
+    paged = (
+        '{"event":"watchdog.check","name":"cloudflare-worker-status",'
+        '"status":"fail","route":"page","failure_domain":"cloudflare-worker-health"}'
+    )
+
+    audit = digest.summarize_watchdog_log_events(
+        {"run-1": report_only, "run-2": f"{report_only}\n{paged}"}
+    )
+
+    assert audit["alertable_run_count"] == 1
+    assert audit["missing_alert_evidence_run_count"] == 1
+    assert audit["failed_check_count"] == 3
+
+
 def test_weekly_digest_workflow_schedule_and_dispatch_contract() -> None:
     """Infra-012.8: weekly digest workflow keeps fixed weekly schedule + manual dry-run."""
     workflow = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))

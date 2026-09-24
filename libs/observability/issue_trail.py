@@ -17,7 +17,8 @@ Each step of the watchdog job appends its verdicts to one JSON-lines file
 (``record_verdicts``) and the job's last step reconciles the issues from it
 (``tools/watchdog_issue_trail.py``). A step expected to record that did not is
 itself a red check named after that step: a watchdog that crashed is not a
-quiet one.
+quiet one. Steps record only checks that page (#908): a report-only check's
+failure is a line in the daily report, not an issue.
 
 Dedup is equality on the exact title over the repository's open-issue listing
 (the issues endpoint; the search index matches words and lags). A listing that
@@ -102,23 +103,15 @@ class Trail:
 
     failing: dict[str, CheckVerdict] = field(default_factory=dict)
     green: set[str] = field(default_factory=set)
-    #: Families whose members are reported only when red (``dokploy-status:``):
-    #: once the family was read, a member that is absent is green.
-    green_prefixes: set[str] = field(default_factory=set)
 
     def is_green(self, name: str) -> bool:
-        if name in self.failing:
-            return False
-        return name in self.green or any(
-            name.startswith(p) for p in self.green_prefixes
-        )
+        return name not in self.failing and name in self.green
 
     def renamed(self, rename) -> Trail:
         """The same verdicts under `rename(name)` (titles carry scrubbed names)."""
         return Trail(
             failing={rename(name): verdict for name, verdict in self.failing.items()},
             green={rename(name) for name in self.green},
-            green_prefixes={rename(prefix) for prefix in self.green_prefixes},
         )
 
 
@@ -163,22 +156,17 @@ def record_verdicts(
     *,
     source: str,
     checks: Iterable[CheckVerdict],
-    green_prefixes: Iterable[str] = (),
 ) -> None:
     """Append one step's verdicts to the job's verdict file."""
     line = json.dumps(
-        {
-            "source": source,
-            "checks": [asdict(check) for check in checks],
-            "green_prefixes": sorted(green_prefixes),
-        },
+        {"source": source, "checks": [asdict(check) for check in checks]},
         sort_keys=True,
     )
     with Path(path).open("a", encoding="utf-8") as handle:
         handle.write(line + "\n")
 
 
-def _parse_record(line: str) -> tuple[str, list[CheckVerdict], list[str]] | None:
+def _parse_record(line: str) -> tuple[str, list[CheckVerdict]] | None:
     try:
         record = json.loads(line)
         source = record["source"]
@@ -192,12 +180,11 @@ def _parse_record(line: str) -> tuple[str, list[CheckVerdict], list[str]] | None
             )
             for item in record["checks"]
         ]
-        prefixes = [str(prefix) for prefix in record.get("green_prefixes", [])]
     except (ValueError, KeyError, TypeError, AttributeError):
         return None
     if not isinstance(source, str) or not source:
         return None
-    return source, checks, prefixes
+    return source, checks
 
 
 def load_trail(
@@ -214,10 +201,9 @@ def load_trail(
         parsed = _parse_record(line) if line.strip() else None
         if parsed is None:
             continue
-        source, checks, prefixes = parsed
+        source, checks = parsed
         seen.add(source)
         trail.green.add(source)
-        trail.green_prefixes.update(prefixes)
         for check in checks:
             if check.ok:
                 trail.green.add(check.name)

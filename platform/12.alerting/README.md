@@ -132,7 +132,9 @@ The bridge remains internal only. Whole-host and bridge-down detection is handle
 primarily by `cloudflare/infra-watchdog`, which runs every 30 minutes from
 Cloudflare Workers Cron and sends Feishu directly when infra2, public routing,
 or the in-band probe runner cannot be trusted. `.github/workflows/ops-checks.yml`
-is retained as a daily Worker/VPS audit and manual diagnostic path.
+is retained as a daily Worker/VPS audit and manual diagnostic path. It pages only
+the failure classes the GitHub layer owns and reports the rest (#908, see
+[ops.observability.md SOP-005B](../../docs/ssot/ops.observability.md)).
 
 The bridge waits up to 300 seconds for `/secrets/.env` at startup, but it does
 not require the vault-agent sidecar to stay Docker-healthy after the file is
@@ -222,8 +224,9 @@ The same runner also owns synthetic closure probes:
 The 6h real-send `alert-delivery-canary` was retired (#425 T3) — proving the
 bridge→Feishu path with a periodic *alert* is the anti-pattern #425 forbids. The
 path is now covered without channel noise by `lark-delivery-http` (bridge config
-valid + Feishu reachable, no real post), the out-of-band watchdog's independent
-bridge `/health` check, the daily reports' own Feishu delivery, and real alerts.
+valid + Feishu reachable, no real post), the Cloudflare Worker paging on an
+unhealthy probe-runner heartbeat, the daily GitHub audit's bridge `/health` report
+line, the daily reports' own Feishu delivery, and real alerts.
 
 Optional tuning:
 
@@ -250,9 +253,20 @@ For `feishu_app` mode:
 - `INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID`
 - `INFRA2_OUT_OF_BAND_FEISHU_API_BASE`: optional, defaults to `https://open.feishu.cn`
 
+For the daily report of checks it does not page (the same app bot and reports chat
+as the other daily reports):
+
+- `INFRA2_REPORTS_FEISHU_APP_ID`
+- `INFRA2_REPORTS_FEISHU_APP_SECRET`
+- `INFRA2_REPORTS_FEISHU_CHAT_ID`
+
+A missing report secret pages as a watchdog configuration failure: the
+report-only findings would otherwise reach no one.
+
 Optional repository variables:
 
 - `INFRA2_WATCHDOG_HTTP_TARGETS`: newline-separated `name|url|status_csv`
+  (replaces the defaults; a target not registered as a paging signal is report-only)
 - `INFRA2_WATCHDOG_WORKER_STATUS_URL`: defaults to the deployed Worker
   `/status` endpoint.
 - `INFRA2_WATCHDOG_SSH_TARGETS`: newline-separated `name|command|expected_text`
@@ -266,7 +280,8 @@ When `.github/workflows/ops-checks.yml` cannot deliver to Feishu, it records
 
 Independently of delivery, the watchdog job's last step
 (`tools/watchdog_issue_trail.py`, truealpha#876) keeps one GitHub issue per red
-check, titled exactly `ops-checks watchdog is red: <check>` (label `incident`):
+paging check (report-only checks never open one, #908), titled exactly
+`ops-checks watchdog is red: <check>` (label `incident`):
 a red run opens it or comments on the open one, and the next green scheduled run
 (or a plain `workflow_dispatch` on `main`) comments and closes it. A step that
 recorded no verdict is itself red. Drills and branch dispatches open/comment but
@@ -289,12 +304,15 @@ failure-domain distribution before delivering through the same Feishu mode. Use
 `workflow_dispatch` + `dry_run=true` for safe preview.
 
 Cloudflare defaults cover production public routes, selected staging public
-routes, and production/staging probe-runner heartbeat freshness. GitHub fallback
-checks cover the public Dokploy entrypoint, Cloudflare Worker `/health`,
-Cloudflare Worker `/status`, Dokploy compose/application status, truealpha's
-scheduler-liveness workflow (peer liveness), SSH
-reachability, Docker daemon reachability, and the `platform-alerting`
-in-container `/health` endpoint via SSH.
+routes, and production/staging probe-runner heartbeat freshness. The daily GitHub
+audit pages on: Cloudflare Worker `/status` freshness (last run within the Worker's
+own `WATCHDOG_STATUS_MAX_AGE_SECONDS`), the production off-host backup, the restore
+rehearsal, truealpha's scheduler-liveness workflow (peer liveness), and failures of
+its own configuration. It reports, without paging: the public Dokploy entrypoint,
+SSH reachability, Docker daemon reachability, container health, the
+`platform-alerting` in-container `/health` endpoint, the staging backup, Dokploy
+compose/application status (records older than 72 h, or contradicted by a green
+container sweep, are listed as stale), and the Worker's own last-run findings.
 The closed-loop boundary is explicit: host/route/alert-delivery failures
 are machine-audited. SigNoz/OpenPanel now also have synthetic write-then-query
 round-trips, while app-specific post-deploy telemetry proof remains an

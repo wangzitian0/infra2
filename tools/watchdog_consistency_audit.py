@@ -450,7 +450,7 @@ def _github_signal_names() -> set[str]:
     ssh_targets = module.parse_ssh_targets("")
     names = {target.name for target in http_targets}
     names.update(target.name for target in ssh_targets)
-    names.add("cloudflare-worker-status")
+    names.add(module.WORKER_STATUS_CHECK)
     names.add(module.PEER_SCHEDULER_LIVENESS_CHECK)
     names.update(name for name, _ in module.BACKUP_CHECKS)
     names.add(module.RESTORE_REHEARSAL_CHECK)
