@@ -242,6 +242,9 @@ entries:
       - libs/tests/test_out_of_band_watchdog.py
       - libs/tests/test_watchdog_consistency_audit.py
       - libs/tests/test_availability_ledger.py
+      - libs/tests/test_local_ledger.py
+      - libs/tests/test_stability_report.py
+      - libs/tests/test_cloudflare_watchdog_kv_budget.py
       - libs/tests/test_observability_dashboards.py
       - libs/tests/test_deploy_queue.py
       - libs/tests/test_deploy_queue_guard.py
