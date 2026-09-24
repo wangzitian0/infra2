@@ -327,7 +327,7 @@ results.notSuppressed = {
   }
   results.suppressedThenVpsDies = runs.map((run) => ({
     minutes: (run.at - START) / MIN,
-    entrypointFiring: run.messages.some((m) => m.includes(`FIRING P0 host-reachability production/${FR}`)),
+    entrypointFiring: run.messages.some((m) => m.includes(`环境：production\n对象：finance_report/app · ${FR}\n现象：external entrypoint`)),
     vpsDown: run.messages.some((m) => m.includes("VPS or its egress is down")),
   }));
 }
@@ -680,6 +680,42 @@ for (const [label, fields, age] of [
     storedRoutes: posted.stored(PROD_HB).failingPublicRoutes.length,
     overlongRouteList: tooLong.stored(PROD_HB).failingPublicRoutes,
   };
+}
+
+// #905: the level a message shows comes from the target's configured severity
+// (ops.observability.md §3), for each severity vocabulary a target can carry.
+{
+  const base = TARGETS.find((t) => t.name === "dokploy-public-route");
+  results.severityLevels = {};
+  for (const severity of ["critical", "error", "warning", "P1", "p2", "garbage"]) {
+    const world = new World({ overrides: { WATCHDOG_TARGETS_JSON: JSON.stringify([{ ...base, severity }]) } });
+    world.routes[base.url] = 502;
+    const messages = [];
+    for (const at of [START, START + CRON_MS]) {
+      freshHeartbeats(world, at);
+      messages.push(...(await world.cron(at)).messages);
+    }
+    results.severityLevels[severity] = messages;
+  }
+}
+
+// #905: more failing objects than a message shows in full -- the VPS down and 12
+// entrypoints down in one run.
+{
+  const many = Array.from({ length: 12 }, (_, i) => ({
+    environment: "production",
+    name: `product-${String(i).padStart(2, "0")}-public-route`,
+    service_id: `product_${i}/app`,
+    url: `https://product-${i}.example.invalid/`,
+    statuses: [200],
+    severity: i % 2 ? "warning" : "error",
+  }));
+  const world = new World({ overrides: { WATCHDOG_TARGETS_JSON: JSON.stringify(many) } });
+  for (const target of many) world.routes[target.url] = 503;
+  world.heartbeat(PROD_HB, record(START - 3 * HOUR));
+  const messages = [];
+  for (const at of [START, START + CRON_MS]) messages.push(...(await world.cron(at)).messages);
+  results.manyDown = messages;
 }
 
 // Endpoints that no longer exist.

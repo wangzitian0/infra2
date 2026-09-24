@@ -67,6 +67,20 @@ const LOOP_RECOVERY_RUNS = 2;
 const DETAIL_MAX = 300;
 // /status serves at most this much of any one text field (worst case tested < 3 KB).
 const STATUS_TEXT_MAX = 120;
+// #905: every pager message has one layout (ops.observability.md §3.1). These are
+// libs/alerting.py's PAGER_FIELDS in the same order (the Worker has no log tail);
+// libs/tests/test_cloudflare_watchdog.py holds the two together.
+const PAGER_FIELDS = ["级别", "环境", "对象", "现象", "开始于", "影响", "下一步", "Runbook"];
+const FIELD_SEPARATOR = "：";
+// §3: critical = P0, error = P1, warning = P2; unknown counts as critical.
+const LEVEL_BY_SEVERITY = { critical: "P0", error: "P1", warning: "P2", p0: "P0", p1: "P1", p2: "P2" };
+const LEVEL_RANK = { P0: 0, P1: 1, P2: 2 };
+const LEVEL_EMOJI = { P0: "🔴", P1: "🟠", P2: "🟡" };
+// Feishu text limit shared with libs/alerting.py (MAX_MESSAGE_CHARS).
+const MAX_MESSAGE_CHARS = 3500;
+const TRUNCATION_SUFFIX = "\n...[truncated]";
+const MAX_FULL_EVENTS = 5;
+const REPO_BLOB = "https://github.com/wangzitian0/infra2/blob/main";
 
 export default {
   async scheduled(controller, env, ctx) {
@@ -156,7 +170,7 @@ async function runWatchdog(env, nowMs = Date.now()) {
   if (plan.events.length > 0) {
     try {
       const kind = plan.events.every((event) => event.kind === "resolved") ? "recovered" : "failure";
-      await deliverAlert(env, formatAlertMessage(plan.events), kind);
+      await deliverAlert(env, formatAlertMessage(plan.events, nowMs), kind);
       state.alerts = plan.alerts;
     } catch (error) {
       // Nothing undelivered is marked sent: the next run retries it.
@@ -318,7 +332,7 @@ function entrypointObservation(state, target, probe, threshold, vpsFailingRoutes
     name: target.name,
     service_id: target.service_id || "infra/unregistered",
     failureClass: "host-reachability",
-    severity: "P0",
+    severity: pagerLevel(target.severity),
     summary: `external entrypoint ${target.url} unreachable from Cloudflare`,
     detail: trimText(probe.detail),
     recovery: `${target.url} reachable again (${probe.detail})`,
@@ -387,7 +401,7 @@ function heartbeatObservations(state, heartbeat, verdict, outage) {
     ...common,
     identity: `${key}:heartbeat-stale`,
     failureClass: "host-reachability",
-    severity: "P0",
+    severity: pagerLevel(heartbeat.severity),
     status: fresh ? "ok" : "failing",
     since: outage ? outage.start : undefined,
     summary: "VPS or its egress is down",
@@ -483,6 +497,7 @@ function planAlerts(currentAlerts, observations, nowMs, renotifyMs, { resolveUno
       alerts[obs.identity] = {
         environment: obs.environment,
         name: obs.name,
+        service_id: obs.service_id,
         failureClass: obs.failureClass,
         severity: obs.severity,
         since,
@@ -509,31 +524,130 @@ function planAlerts(currentAlerts, observations, nowMs, renotifyMs, { resolveUno
   return { alerts, events };
 }
 
-function formatAlertMessage(events) {
-  const firing = events.filter((e) => e.kind !== "resolved");
-  const resolved = events.filter((e) => e.kind === "resolved");
-  const severity = firing.some((e) => e.obs.severity === "P0") ? "P0" : firing.length ? "P1" : "";
-  const headline = firing.length
-    ? `[OUT-OF-BAND] ${severity} Infra2 Cloudflare watchdog failed`
-    : "[RESOLVED] Infra2 Cloudflare watchdog recovered";
-  const lines = [headline, "Route: Cloudflare Workers Cron -> Feishu direct"];
-  for (const event of firing) {
-    const { obs } = event;
-    const label = event.kind === "renotify" ? "STILL FIRING" : "FIRING";
-    lines.push(
-      `${label} ${obs.severity} ${obs.failureClass} ${obs.environment}/${obs.name}: ${obs.summary} — ${obs.detail}`,
-    );
-    lines.push(`  Since: ${new Date(event.since).toISOString()}`);
-    lines.push(`  Action: ${suggestedAction(obs)}`);
-    lines.push(`  Runbook: ${runbookUrl(obs.failureClass)}`);
+// One message per run: the firing (and re-sent) events in full, then what recovered.
+// Fewer events are shown in full until the text fits MAX_MESSAGE_CHARS.
+function formatAlertMessage(events, nowMs) {
+  let text = "";
+  for (let full = MAX_FULL_EVENTS; full >= 1; full -= 1) {
+    text = pagerText(events, nowMs, full);
+    if (text.length <= MAX_MESSAGE_CHARS) return text;
   }
-  for (const event of resolved) {
-    const { obs } = event;
-    lines.push(
-      `RESOLVED ${obs.environment}/${obs.name} (${obs.failureClass}): ${obs.recovery}; failing since ${new Date(event.since).toISOString()}`,
-    );
+  return `${text.slice(0, MAX_MESSAGE_CHARS - TRUNCATION_SUFFIX.length).trimEnd()}${TRUNCATION_SUFFIX}`;
+}
+
+function pagerText(events, nowMs, full) {
+  // The most severe first, so the events shown in full are the ones that matter most.
+  const firing = events
+    .filter((e) => e.kind !== "resolved")
+    .map((event, order) => ({ event, order, rank: LEVEL_RANK[pagerLevel(event.obs.severity)] }))
+    .sort((a, b) => a.rank - b.rank || a.order - b.order)
+    .map(({ event }) => event);
+  const resolved = events.filter((e) => e.kind === "resolved");
+  const lines = [];
+  if (firing.length) {
+    const level = highestLevel(firing.map((e) => e.obs.severity));
+    lines.push(`${LEVEL_EMOJI[level]} [${level} 告警] Cloudflare 带外 watchdog · ${firing.length} 项`);
+  } else {
+    lines.push(`✅ [已恢复] Cloudflare 带外 watchdog · ${resolved.length} 项`);
+  }
+  lines.push("来源：Cloudflare Workers Cron → 飞书直发(不经 bridge)");
+  lines.push(...eventBlocks(firing, full, (event) => firingValues(event, nowMs)));
+  if (resolved.length) {
+    if (firing.length) lines.push("", `✅ 已恢复 ${resolved.length} 项`);
+    lines.push(...eventBlocks(resolved, full, (event) => resolvedValues(event, nowMs)));
   }
   return lines.join("\n");
+}
+
+// Each event is one block: its values under PAGER_FIELDS, in that order.
+function eventBlocks(events, full, valuesOf) {
+  const lines = [];
+  events.slice(0, full).forEach((event, index) => {
+    const note = event.kind === "renotify" ? " · 仍在告警" : "";
+    lines.push("", `— ${index + 1}/${events.length}${note} —`);
+    valuesOf(event).forEach((value, field) => {
+      if (value) lines.push(`${PAGER_FIELDS[field]}${FIELD_SEPARATOR}${oneLine(value)}`);
+    });
+  });
+  const rest = events.slice(full);
+  if (rest.length) {
+    lines.push("", `另有 ${rest.length} 项,只列摘要:`);
+    for (const event of rest) {
+      // 级别 · 环境 · 对象 · 现象 · 开始于
+      const values = valuesOf(event).slice(0, 5).filter(Boolean);
+      lines.push(`• ${values.map((value) => trimText(value, 160)).join(" · ")}`);
+    }
+  }
+  return lines;
+}
+
+function firingValues(event, nowMs) {
+  const { obs } = event;
+  return [
+    pagerLevel(obs.severity),
+    obs.environment,
+    objectName(obs),
+    `${obs.summary} — ${obs.detail}`,
+    `${formatUtc(event.since)}(已持续 ${formatDuration(nowMs - event.since)})`,
+    `[${obs.failureClass}] ${impactText(obs)}`,
+    suggestedAction(obs),
+    runbookUrl(obs),
+  ];
+}
+
+// What recovered and how long it was down (级别 through 开始于).
+function resolvedValues(event, nowMs) {
+  const { obs } = event;
+  return [
+    pagerLevel(obs.severity),
+    obs.environment,
+    objectName(obs),
+    obs.recovery,
+    `${formatUtc(event.since)} → ${formatUtc(nowMs)}(共 ${formatDuration(nowMs - event.since)})`,
+  ];
+}
+
+function objectName(obs) {
+  return obs.service_id ? `${obs.service_id} · ${obs.name}` : obs.name;
+}
+
+function pagerLevel(severity) {
+  return LEVEL_BY_SEVERITY[String(severity || "").trim().toLowerCase()] || "P0";
+}
+
+function highestLevel(severities) {
+  return severities.map(pagerLevel).reduce((best, level) => (LEVEL_RANK[level] < LEVEL_RANK[best] ? level : best), "P2");
+}
+
+function formatUtc(ms) {
+  const iso = new Date(ms).toISOString();
+  return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
+}
+
+function formatDuration(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  if (total < 60) return "不到 1 分钟";
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const parts = [];
+  if (days) parts.push(`${days} 天`);
+  if (hours) parts.push(`${hours} 小时`);
+  if (minutes && !days) parts.push(`${minutes} 分钟`);
+  return parts.join(" ");
+}
+
+function impactText(obs) {
+  switch (obs.failureClass) {
+    case "host-reachability":
+      return obs.url
+        ? `用户从公网打不开 ${obs.url}`
+        : "VPS 或它的出网中断:带内探测与告警一起静默,所有产品可能不可用";
+    case "alert-pipeline":
+      return "带内探测循环或告警投递失效:VPS 上的新故障可能无人告知";
+    default:
+      return "Worker 评估不了任何检查:带外兜底暂时失明";
+  }
 }
 
 function suggestedAction(obs) {
@@ -549,9 +663,18 @@ function suggestedAction(obs) {
   }
 }
 
-function runbookUrl(failureClass) {
-  const anchor = failureClass === "alert-pipeline" ? "#infra-service-probes" : "#out-of-band-watchdog";
-  return `https://github.com/wangzitian0/infra2/blob/main/platform/12.alerting/README.md${anchor}`;
+// A specific anchor per failure class (#905).
+function runbookUrl(obs) {
+  switch (obs.failureClass) {
+    case "host-reachability":
+      return obs.url
+        ? `${REPO_BLOB}/platform/12.alerting/README.md#public-route-probes`
+        : `${REPO_BLOB}/docs/runbooks/infra022-p0.md#watchdog-silent`;
+    case "alert-pipeline":
+      return `${REPO_BLOB}/platform/12.alerting/README.md#infra-service-probes`;
+    default:
+      return `${REPO_BLOB}/cloudflare/infra-watchdog/README.md#optional-vars`;
+  }
 }
 
 // ---------------------------------------------------------------------------

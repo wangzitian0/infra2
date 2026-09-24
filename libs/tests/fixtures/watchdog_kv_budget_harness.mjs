@@ -401,7 +401,7 @@ async function detection(deathAt) {
     const url = String(input);
     if (url.startsWith("https://feishu.invalid/")) {
       const text = JSON.parse(init.body).content.text;
-      if (firstSeen.entrypoint === undefined && /FIRING P0 host-reachability production\/\S+-public-route/.test(text)) {
+      if (firstSeen.entrypoint === undefined && /级别：P0\n环境：production\n对象：\S+ · \S+-public-route\n现象：external entrypoint /.test(text)) {
         firstSeen.entrypoint = clock;
       }
       if (firstSeen.stale === undefined && text.includes("VPS or its egress is down")) firstSeen.stale = clock;

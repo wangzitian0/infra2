@@ -31,9 +31,17 @@ if str(ROOT) not in sys.path:
 
 from libs.alerting import (  # noqa: E402
     INFRA2_REPORTS_ENV,
+    REPORT_TITLE_PREFIX,
+    PagerItem,
+    PagerMessage,
     deliver_feishu_app_text,
     deliver_feishu_text,
     deliver_infra2_report,
+    firing_title,
+    format_utc,
+    highest_level,
+    pager_level,
+    render_pager_text,
 )
 from libs.deploy_queue import deployment_start_epoch  # noqa: E402
 from libs.dokploy import get_dokploy  # noqa: E402
@@ -1279,37 +1287,76 @@ def _severity_for(name: str, failure_domain: str) -> str:
     return "P2"
 
 
-_SEVERITY_ORDER = {"P0": 0, "P1": 1, "P2": 2}
+#: 影响 per failure domain (#905), next to the action and runbook maps below.
+_IMPACT_BY_DOMAIN = {
+    "host-reachability": "VPS 或它的公网入口不可达:所有产品可能不可用",
+    "docker-runtime": "容器运行时异常:其上的服务降级或不可用",
+    "alert-bridge": "带内告警出口(bridge)不可用:VPS 上的故障无法送达",
+    "configuration": "watchdog 自身配置缺失或被拒:它看不见的故障没人报",
+    "cloudflare-worker-health": "Cloudflare 带外 watchdog 停跑或投递失败:整机失联时无人报警",
+    "dokploy-control-plane": "Dokploy 控制面异常:部署与回滚受阻",
+    "peer-scheduler-liveness": "truealpha 的 scheduler-liveness 死了:定时 workflow 停跑无人报",
+    "report-delivery": "报告投递失败:只报告的发现没有送到任何人",
+    "backup": "异地备份缺失或过期:数据在下次成功备份前无保护",
+    "restore-rehearsal": "恢复演练未通过或未运行:备份能否恢复没有证据",
+    "dokploy-deploy-status": "Dokploy 单元处于 error:该服务可能停在旧版本或不可用",
+    "public-route": "公网路由不可达:用户打不开该服务",
+}
+_DEFAULT_IMPACT = "未归类的检查失败:按现象判断影响范围"
 
 
-def format_failure_message(results: list[CheckResult], *, run_url: str) -> str:
-    """Build the Feishu page for failed paging checks (see route_failures)."""
-    failures = [result for result in results if not result.ok]
-    highest = min(
-        (result.severity for result in failures),
-        key=lambda severity: _SEVERITY_ORDER.get(severity, len(_SEVERITY_ORDER)),
-        default="P1",
+def format_failure_message(
+    results: list[CheckResult], *, run_url: str, now: float | None = None
+) -> str:
+    """Build the Feishu page for failed paging checks (see route_failures).
+
+    #905: the pager layout every source shares (``libs.alerting.PAGER_FIELDS``).
+    """
+    now = time.time() if now is None else now
+    failures = sorted(
+        (result for result in results if not result.ok),
+        key=lambda result: pager_level(result.severity),
     )
-    lines = [
-        "[OUT-OF-BAND] Infra2 watchdog failed",
-        f"Severity: {highest}",
-        "Scope: Cloudflare Worker liveness / backups and restore rehearsal / "
-        "peer scheduler / unregistered checks / the watchdog's own configuration",
-        "Route: GitHub Actions -> Feishu direct",
-    ]
+    level = highest_level(result.severity for result in failures)
+    items = tuple(
+        PagerItem(
+            level=pager_level(result.severity),
+            environment=_check_environment(result),
+            target=result.name,
+            symptom=_redact(result.detail),
+            since=f"{format_utc(now)} 检出(日级审计;实际开始时间未知)",
+            impact=(f"[{result.failure_domain}] " if result.failure_domain else "")
+            + _IMPACT_BY_DOMAIN.get(result.failure_domain, _DEFAULT_IMPACT),
+            action=_suggested_action_for_failure(result.name, result.failure_domain),
+            runbook=_runbook_url_for_failure(result.failure_domain),
+        )
+        for result in failures
+    )
+    preamble = ["来源：GitHub Actions 日级带外审计 → 飞书直发(不经 bridge)"]
     if run_url:
-        lines.append(f"Run: {run_url}")
-    lines.append("Failures:")
-    for result in failures:
-        domain = f"[{result.failure_domain}] " if result.failure_domain else ""
-        lines.append(
-            f"- [{result.severity}] {domain}{result.name}: {_redact(result.detail)}"
+        preamble.append(f"运行：{run_url}")
+    return render_pager_text(
+        PagerMessage(
+            title=firing_title(level, f"GitHub 日级带外审计 · {len(items)} 项"),
+            firing=items,
+            preamble=tuple(preamble),
         )
-        lines.append(
-            f"  Action: {_suggested_action_for_failure(result.name, result.failure_domain)}"
-        )
-        lines.append(f"  Runbook: {_runbook_url_for_failure(result.failure_domain)}")
-    return "\n".join(lines)
+    )
+
+
+def _check_environment(result: CheckResult) -> str:
+    """环境 of a GitHub check: staging by name, a Dokploy unit's own, production for
+    the production data checks, else global (the host and the watchdogs)."""
+    name = result.name.lower()
+    if "staging" in name:
+        return "staging"
+    if name.startswith(DOKPLOY_STATUS_FAMILY):
+        parts = name.removeprefix(DOKPLOY_STATUS_FAMILY).split("/")
+        if len(parts) >= 2 and parts[1]:
+            return parts[1]
+    if result.failure_domain in {"backup", "restore-rehearsal"}:
+        return "production"
+    return "global"
 
 
 def load_report_only_checks(path: Path = SIGNAL_REGISTRY) -> frozenset[str]:
@@ -1380,7 +1427,7 @@ def format_report_message(
     if not (reported or stale or notes):
         return ""
     lines = [
-        "[REPORT] Infra2 GitHub watchdog -- daily audit",
+        f"{REPORT_TITLE_PREFIX}Infra2 GitHub watchdog 日级审计",
         "Reported, not paged: another layer pages these failure classes "
         "(ops.observability.md §1.1).",
     ]
@@ -1708,10 +1755,7 @@ def _record_issue_trail_verdicts(
                         "; ".join(f"{result.name}: {result.detail}" for result in own)
                     )
                 ),
-                min(
-                    (result.severity for result in own),
-                    key=lambda severity: _SEVERITY_ORDER.get(severity, 99),
-                ),
+                highest_level(result.severity for result in own),
                 "configuration",
             )
         )
