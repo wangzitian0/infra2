@@ -339,6 +339,8 @@ def test_card_fields_are_separate_card_fields_in_the_shared_order(monkeypatch) -
         } <= set(item)
         (fields,) = [e["fields"] for e in card["elements"] if "fields" in e]
         assert len(fields) == len(item)
+        # one field per row: short fields sit side by side and read as one line
+        assert {field["is_short"] for field in fields} == {False}
 
 
 def test_resolved_names_what_recovered_and_for_how_long() -> None:

@@ -2270,6 +2270,7 @@ def test_a_github_page_shows_every_field_of_the_shared_layout() -> None:
             "dokploy-deploy-status",
             "production",
         ),
+        ("infra2-backup-staging", "backup", "staging"),
         ("infra2-restore-rehearsal", "restore-rehearsal", "production"),
         ("watchdog-signal-registry", "configuration", "global"),
         ("truealpha-scheduler-liveness", "peer-scheduler-liveness", "global"),
