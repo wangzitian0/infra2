@@ -1,5 +1,5 @@
 {
-  "$comment": "Config-as-code SigNoz alert rules for finance_report (#373/#1106). The app references FinanceReportBackendErrorLogs in apps/backend/src/observability.py; this file is the reviewable source of truth. Applied idempotently by `invoke fr-observability.shared.apply-alerts`, which routes rules to the shared Feishu/Lark bridge channel. The full SigNoz v5 log/PromQL payload is derived from this shape by libs/observability_dashboards.py + libs/alerting.py.",
+  "$comment": "Config-as-code SigNoz alert rules for finance_report (#373/#1106/#906). The app references FinanceReportBackendErrorLogs in apps/backend/src/observability.py; this file is the reviewable source of truth. Applied idempotently by `invoke fr-observability.shared.apply-alerts`, which routes rules to the shared Feishu/Lark bridge channel. The SigNoz v5 payloads are derived from this shape by libs/observability_dashboards.py + libs/alerting.py. PromQL must select OTel metrics by their dotted names in the quoted form ({\"metric.name\",\"label.key\"=\"v\"}) because SigNoz runs with DOT_METRICS_ENABLED; per-rule thresholds, windows and absence choices are explained in docs/ssot/ops.observability.md SOP-004C.",
   "service_id": "finance_report/app",
   "environment": "production",
   "rules": [
@@ -8,10 +8,11 @@
       "alert_name": "FinanceReportBackendErrorLogs",
       "service_name": "finance-report-backend",
       "severity": "error",
-      "threshold": 0,
-      "eval_window": "5m0s",
+      "threshold": 10,
+      "match_type": "in_total",
+      "eval_window": "15m0s",
       "frequency": "1m",
-      "summary": "finance-report-backend emitted ERROR/FATAL logs in the last 5 minutes. Runbook: docs/ssot/ops.observability.md SOP-004B."
+      "summary": "finance-report-backend emitted more than 10 ERROR/CRITICAL/FATAL logs in 15 minutes. Severity P1. Runbook: docs/ssot/ops.observability.md SOP-004B."
     },
     {
       "signal": "metrics",
@@ -21,24 +22,24 @@
       "threshold": 0.05,
       "threshold_unit": "%",
       "op": "above",
-      "match_type": "all_times",
+      "match_type": "at_least_once",
       "eval_window": "5m0s",
       "frequency": "1m",
-      "promql": "sum(rate(http_server_request_count{service_name=\"finance-report-backend\",deployment_environment_name=\"production\",http_response_status_code_class=\"5xx\"}[5m])) / clamp_min(sum(rate(http_server_request_count{service_name=\"finance-report-backend\",deployment_environment_name=\"production\"}[5m])), 1)",
-      "summary": "finance_report backend 5xx rate is above 5% for 5 minutes. Severity P0. Runbook: docs/ssot/ops.observability.md SOP-004C."
+      "promql": "(sum(increase({\"http.server.request.count\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"production\",\"http.route\"!~\"^(/health|/ping|/ping/toggle)$\",\"http.response.status_code_class\"=\"5xx\"}[5m])) / sum(increase({\"http.server.request.count\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"production\",\"http.route\"!~\"^(/health|/ping|/ping/toggle)$\"}[5m]))) and on() (sum(increase({\"http.server.request.count\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"production\",\"http.route\"!~\"^(/health|/ping|/ping/toggle)$\",\"http.response.status_code_class\"=\"5xx\"}[5m])) >= 5)",
+      "summary": "finance_report backend returned at least 5 HTTP 5xx and more than 5% 5xx across non-probe requests within 5 minutes. Severity P0. Runbook: docs/ssot/ops.observability.md SOP-004C."
     },
     {
       "signal": "metrics",
       "alert_name": "FinanceReportP95LatencyHigh",
       "service_name": "finance-report-backend",
-      "severity": "warning",
+      "severity": "error",
       "threshold": 1500,
       "threshold_unit": "ms",
       "op": "above",
       "match_type": "at_least_once",
       "eval_window": "5m0s",
       "frequency": "1m",
-      "promql": "histogram_quantile(0.95, sum(rate(http_server_request_duration_bucket{service_name=\"finance-report-backend\",deployment_environment_name=\"production\"}[5m])) by (le))",
+      "promql": "histogram_quantile(0.95, sum by (le) (rate({\"http.server.request.duration.bucket\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"production\"}[5m])))",
       "summary": "finance_report backend p95 request latency is above 1500ms. Severity P1. Runbook: docs/ssot/ops.observability.md SOP-004C."
     },
     {
@@ -49,25 +50,11 @@
       "threshold": 3,
       "threshold_unit": "count",
       "op": "above",
-      "match_type": "in_total",
-      "eval_window": "15m0s",
-      "frequency": "1m",
-      "promql": "sum(increase(finance_statement_parse_outcome{service_name=\"finance-report-backend\",deployment_environment_name=\"production\",outcome=~\"failure|rejected\"}[15m]))",
-      "summary": "finance_report statement parse failures exceeded 3 in 15 minutes. Severity P1. Runbook: docs/ssot/ops.observability.md SOP-004C."
-    },
-    {
-      "signal": "metrics",
-      "alert_name": "FinanceReportReconciliationAnomaly",
-      "service_name": "finance-report-backend",
-      "severity": "error",
-      "threshold": 0,
-      "threshold_unit": "count",
-      "op": "above",
       "match_type": "at_least_once",
-      "eval_window": "15m0s",
+      "eval_window": "5m0s",
       "frequency": "1m",
-      "promql": "sum(increase(finance_reconciliation_match_outcome{service_name=\"finance-report-backend\",deployment_environment_name=\"production\",outcome=~\"failed|error|anomaly\"}[15m]))",
-      "summary": "finance_report reconciliation anomaly or failure was observed. Severity P1. Runbook: docs/ssot/ops.observability.md SOP-004C."
+      "promql": "sum(increase({\"finance.statement_parse.outcome\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"production\",\"outcome\"=~\"^(failure|rejected)$\"}[15m]))",
+      "summary": "finance_report statement parse failures exceeded 3 in 15 minutes. Severity P1. Runbook: docs/ssot/ops.observability.md SOP-004C."
     },
     {
       "signal": "metrics",
@@ -77,10 +64,10 @@
       "threshold": 10,
       "threshold_unit": "count",
       "op": "above",
-      "match_type": "in_total",
+      "match_type": "at_least_once",
       "eval_window": "5m0s",
       "frequency": "1m",
-      "promql": "sum(increase(finance_rate_limit_rejected{service_name=\"finance-report-backend\",deployment_environment_name=\"production\"}[5m]))",
+      "promql": "sum(increase({\"finance.rate_limit.rejected\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"production\"}[5m]))",
       "summary": "finance_report rate-limit rejections exceeded 10 in 5 minutes. Severity P2. Runbook: docs/ssot/ops.observability.md SOP-004C."
     },
     {
@@ -94,8 +81,22 @@
       "match_type": "at_least_once",
       "eval_window": "5m0s",
       "frequency": "1m",
-      "promql": "sum(increase(finance_async_parse_failure{service_name=\"finance-report-backend\",deployment_environment_name=\"production\"}[5m]))",
+      "promql": "sum(increase({\"finance.async_parse.failure\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"production\"}[5m]))",
       "summary": "finance_report async statement parse task failure was observed. Severity P1. Runbook: docs/ssot/ops.observability.md SOP-004C."
+    },
+    {
+      "signal": "metrics",
+      "alert_name": "FinanceReportBackendTelemetryAbsent",
+      "service_name": "finance-report-backend",
+      "severity": "error",
+      "threshold": 0,
+      "threshold_unit": "",
+      "op": "above",
+      "match_type": "at_least_once",
+      "eval_window": "5m0s",
+      "frequency": "1m",
+      "promql": "absent_over_time({\"http.server.request.count\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"production\"}[10m])",
+      "summary": "finance-report-backend has reported no request metrics for 10 minutes: the backend is down or its OTLP export stopped, and every other finance_report rule is blind until it recovers. Severity P1. Runbook: docs/ssot/ops.observability.md SOP-004C."
     }
   ]
 }

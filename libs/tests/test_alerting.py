@@ -16,6 +16,7 @@ from libs.alerting import (
     BasicAuth,
     InvalidWebhookUrl,
     MAX_MESSAGE_CHARS,
+    _signoz_filter_literal,
     build_feishu_alert_card,
     build_feishu_app_card_payload,
     build_feishu_app_message_payload,
@@ -249,25 +250,89 @@ def test_log_error_alert_rule_uses_signoz_v2_threshold_schema() -> None:
     assert payload["schemaVersion"] == "v2alpha1"
     assert payload["version"] == "v5"
     assert payload["alertType"] == "LOGS_BASED_ALERT"
+    assert payload["ruleType"] == "threshold_rule"
     assert payload["condition"]["selectedQueryName"] == "A"
     threshold = payload["condition"]["thresholds"]["spec"][0]
     assert threshold["op"] == "1"
     assert threshold["matchType"] == "1"
     assert threshold["channels"] == ["channel-1"]
-
-    query = payload["condition"]["compositeQuery"]["builderQueries"]["A"]
-    assert query["dataSource"] == "logs"
-    assert query["aggregateOperator"] == "count"
-    filters = query["filters"]["items"]
-    assert filters[0]["key"]["key"] == "service.name"
-    assert filters[0]["key"]["type"] == "resource"
-    assert filters[0]["value"] == "example-backend"
-    assert filters[1]["key"]["key"] == "deployment.environment.name"
-    assert filters[1]["value"] == "production"
-    assert filters[2]["key"]["key"] == "severity_text"
-    assert filters[2]["value"] == ["ERROR", "FATAL"]
     assert payload["labels"]["service_id"] == "infra/example-backend"
     assert payload["labels"]["environment"] == "production"
+
+
+def test_log_error_alert_rule_carries_its_query_in_the_v5_queries_envelope() -> None:
+    """#906: a rule marked version v5 is evaluated only from compositeQuery.queries[].
+
+    SigNoz v0.105 copies `queries` into the query-range request and skips its v3->v5
+    migration for rules already marked v5, so the old `builderQueries` map made this
+    rule run no query at all: it could never fire.
+    """
+    payload = build_signoz_log_alert_rule_payload(
+        alert_name="ExampleBackendErrorLogs",
+        service_name="example-backend",
+        channel_ids=["channel-1"],
+        summary="example backend emitted error logs",
+        environment="staging",
+    )
+
+    composite = payload["condition"]["compositeQuery"]
+    assert composite["queryType"] == "builder"
+    assert "builderQueries" not in composite
+    assert composite["queries"] == [
+        {
+            "type": "builder_query",
+            "spec": {
+                "name": "A",
+                "signal": "logs",
+                "stepInterval": 60,
+                "aggregations": [{"expression": "count()"}],
+                "filter": {
+                    "expression": (
+                        "resource.service.name = 'example-backend' AND "
+                        "resource.deployment.environment.name = 'staging' AND "
+                        "severity_text IN ['ERROR', 'CRITICAL', 'FATAL']"
+                    )
+                },
+                "disabled": False,
+            },
+        }
+    ]
+    assert payload["condition"]["alertOnAbsent"] is False
+
+
+def test_signoz_filter_literals_escape_quotes_and_backslashes() -> None:
+    """#906: a value cannot close the filter literal early and inject a condition."""
+    assert (
+        _signoz_filter_literal("finance-report-backend") == "'finance-report-backend'"
+    )
+    assert _signoz_filter_literal("o'brien") == "'o\\'brien'"
+    assert _signoz_filter_literal("a\\' OR 1=1") == "'a\\\\\\' OR 1=1'"
+
+
+def test_log_error_alert_rule_threshold_semantics_are_configurable() -> None:
+    """#906: the error-log rule counts a burst (in_total over the window), not any error."""
+    payload = build_signoz_log_alert_rule_payload(
+        alert_name="BurstErrorLogs",
+        service_name="example-backend",
+        channel_ids=["channel-1"],
+        summary="burst",
+        threshold=10,
+        match_type="in_total",
+        eval_window="15m0s",
+    )
+
+    threshold = payload["condition"]["thresholds"]["spec"][0]
+    assert threshold["target"] == 10
+    assert threshold["matchType"] == "4"
+    assert payload["evaluation"]["spec"]["evalWindow"] == "15m0s"
+    with pytest.raises(AlertingError, match="match type"):
+        build_signoz_log_alert_rule_payload(
+            alert_name="BadMatch",
+            service_name="example-backend",
+            channel_ids=["channel-1"],
+            summary="bad",
+            match_type="sometiems",
+        )
 
 
 def test_metric_alert_rule_uses_signoz_v5_promql_schema() -> None:

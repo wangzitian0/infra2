@@ -11,7 +11,7 @@ objects. Definitions are JSON; provisioning is a post-merge `invoke` apply step
 
 | File | Purpose |
 |------|---------|
-| `alert_rules.json` | OTEL log-error rule plus RED SLO and business-anomaly metric rules: `FinanceReportBackendErrorLogs`, `FinanceReportHigh5xxRate`, `FinanceReportP95LatencyHigh`, `FinanceReportStatementParseFailureSpike`, `FinanceReportReconciliationAnomaly`, `FinanceReportRateLimitSaturation`, and `FinanceReportAsyncTaskFailures`. |
+| `alert_rules.json` | OTEL log-error rule, RED SLO and business-anomaly metric rules, and a telemetry-absence rule: `FinanceReportBackendErrorLogs`, `FinanceReportHigh5xxRate`, `FinanceReportP95LatencyHigh`, `FinanceReportStatementParseFailureSpike`, `FinanceReportRateLimitSaturation`, `FinanceReportAsyncTaskFailures`, and `FinanceReportBackendTelemetryAbsent`. The threshold, window, severity and no-data decision for each rule are in SOP-004C of [ops.observability.md](../../../docs/ssot/ops.observability.md). |
 | `dashboard.json` | Baseline dashboard: backend error rate + latency, frontend web-vitals + exceptions. |
 | `shared_tasks.py` | Idempotent apply/print invoke tasks. |
 
@@ -44,9 +44,20 @@ The metric rules are intentionally reviewed as config-as-code before live apply.
 but those two rules cannot fire until the metrics exist.
 
 Metric alerts render as SigNoz v5 PromQL rules (`METRIC_BASED_ALERT` +
-`promql_rule` with `condition.compositeQuery.queries`). The apply task must exit
-non-zero if SigNoz rejects any checked-in rule. The live SigNoz API still expects
-numeric threshold enums (`op` / `matchType`) inside that v5 envelope.
+`promql_rule` with `condition.compositeQuery.queries`). The error-log rule renders
+as a v5 builder `threshold_rule` whose logs query also sits in `queries[]`. The
+apply task must exit non-zero if SigNoz rejects any checked-in rule. The live
+SigNoz API still expects numeric threshold enums (`op` / `matchType`) inside that
+v5 envelope.
+
+SigNoz accepts a rule that can never fire, and it shows up as `inactive`. The
+rules on `main` before #906 were all in that state: the PromQL rules selected
+`http_server_request_count`-style names while SigNoz stores the dotted OTel names,
+and the error-log rule was marked v5 but carried only the legacy `builderQueries`.
+When you write a rule, follow the constraints in
+§4.6 of [ops.observability.md](../../../docs/ssot/ops.observability.md).
+The loader refuses bare metric selectors, `in_total` on range vectors and
+`alert_on_absent`.
 
 ## Apply (post-merge)
 
@@ -72,11 +83,17 @@ uv run python tools/signoz_alert_rule_probe.py
 1. Run `apply-observability.yml` with `mode=canary`; it creates one disabled
    temporary PromQL rule using the generated payload, verifies SigNoz stores the
    v5 `queries[]` envelope, then deletes it.
-2. Emit a synthetic backend ERROR log; confirm `FinanceReportBackendErrorLogs`
-   fires and a message lands in the Lark group.
-3. Use `fr-observability.shared.print-alerts` to verify the six `#1106` rules
-   render with a channel id, `schemaVersion=v2alpha1`, `METRIC_BASED_ALERT`,
-   `promql_rule`, and `condition.compositeQuery.queries`.
-4. Open the SigNoz dashboard "Finance Report — Backend & Frontend" and confirm
+2. Emit more than 10 synthetic backend ERROR logs within 15 minutes (one is
+   below the threshold by design); confirm `FinanceReportBackendErrorLogs` fires
+   and a message lands in the Lark group.
+3. Use `fr-observability.shared.print-alerts` to verify every rule renders with a
+   channel id, `schemaVersion=v2alpha1` and a non-empty
+   `condition.compositeQuery.queries` (`promql` for the metric rules,
+   `builder_query` with `signal=logs` for `FinanceReportBackendErrorLogs`).
+4. In SigNoz, open each rule after apply. An `error` health state means SigNoz
+   could not run the query; `inactive` is expected. If
+   `FinanceReportBackendTelemetryAbsent` fires right after apply, the backend's
+   request metrics are not arriving under the names this catalog selects.
+5. Open the SigNoz dashboard "Finance Report — Backend & Frontend" and confirm
    the four widgets render for `finance-report-backend` and
    `finance-report-frontend`.

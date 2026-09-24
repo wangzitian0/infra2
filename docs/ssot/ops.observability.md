@@ -189,7 +189,15 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 
 ### 4.6 finance_report 告警/仪表盘 config-as-code(#373)
 
-定义签入 `finance_report/finance_report/observability/`(`alert_rules.json` 含 `FinanceReportBackendErrorLogs` + RED/business 规则;`dashboard.json`;`shared_tasks.py`),**不在 UI 手点**;声明式 apply 见 SOP-004B/C 与 [ops.pipeline.md](./ops.pipeline.md)(apply 折进 tag reconcile 的目标态)。
+定义签入 `finance_report/finance_report/observability/`(`alert_rules.json` 含 `FinanceReportBackendErrorLogs` + RED/business/遥测缺失规则;`dashboard.json`;`shared_tasks.py`),**不在 UI 手点**;声明式 apply 见 SOP-004B/C 与 [ops.pipeline.md](./ops.pipeline.md)(apply 折进 tag reconcile 的目标态)。
+
+**规则能否触发由下列 SigNoz 行为决定(#906 按 v0.105.1 源码核实;违反任一条,规则照样被 API 接受、状态显示 inactive,但永远不会触发)**:
+
+- **PromQL 必须用点号名**:SigNoz 开着 `DOT_METRICS_ENABLED`,collector 以 OTel 原名落库(直方图为 `<name>.bucket`),PromQL 适配器按原样匹配 `metric_name` 与 label key。只有 `{"http.server.request.count","service.name"="…"}` 这种带引号的 UTF-8 写法能匹配到数据;`http_server_request_count{service_name=…}` 匹配不到任何序列。`libs/observability_dashboards.py` 加载时拒绝裸名选择器。
+- **正则 matcher 写 `^…$`**:适配器把 `=~`/`!~` 翻成 ClickHouse `match()`,是子串匹配,不是 Prometheus 的全锚定语义。
+- **v5 规则的 query 只能放在 `compositeQuery.queries[]`**:`version: v5` 的规则只从 `queries[]` 取 query,SigNoz 也不会对它跑 v3→v5 迁移;只带旧 `builderQueries` 的 v5 规则执行时没有任何 query。
+- **`alertOnAbsent` 只对 builder `threshold_rule` 生效**:PromQL 规则从不读这个字段(v0.105 到 v0.143 都是)。PromQL 规则要在"没数据"时告警,就在 query 里写 `absent_over_time(...)`;加载器拒绝 `alert_on_absent` 键。
+- **`in_total` 不能套在区间向量上**:PromQL 规则按 60s 步长跑 range query,`in_total` 把每个点相加;`increase(x[15m])` 的每个点已覆盖 15 分钟,一次事件会被重复计约 15 次。计数类规则用 `at_least_once` 比较窗口值;加载器拒绝 `in_total` + `[…]`。
 
 ---
 
@@ -216,9 +224,10 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 | L2 Platform | OpenPanel Worker / Dashboard | `/healthcheck` / `/api/healthcheck` fails | P2 / P2 | Live probes (`openpanel-worker-http`, `openpanel-dashboard-http`);worker 停止落库时由 `openpanel-roundtrip` 以 P1 发 |
 | L2 Platform | Portal / Prefect | frontend / server-health unavailable | P2 / P1 | Planned |
 | L3 Finance Report | fr-postgres / fr-redis | app db / cache health fails | P0 / P1 | Planned |
-| L3 Finance Report | fr-app backend | OTEL ERROR/FATAL > 0 over 5m | P1 | code (`FinanceReportBackendErrorLogs`) |
-| L3 Finance Report | fr-app backend | RED SLO: 5xx > 5% 5m / p95 > 1500ms | P0/P1 | code (`FinanceReportHigh5xxRate`, `FinanceReportP95LatencyHigh`) |
-| L3 Finance Report | fr-app backend | business anomaly: parse spike / reconciliation / rate-limit / async failure | P1/P2 | code (`FinanceReport{StatementParseFailureSpike,ReconciliationAnomaly,RateLimitSaturation,AsyncTaskFailures}`) |
+| L3 Finance Report | fr-app backend | OTEL ERROR/CRITICAL/FATAL > 10 in 15m | P1 | code (`FinanceReportBackendErrorLogs`) |
+| L3 Finance Report | fr-app backend | RED SLO: ≥5 5xx and >5% of non-probe requests in 5m / p95 > 1500ms | P0/P1 | code (`FinanceReportHigh5xxRate`, `FinanceReportP95LatencyHigh`) |
+| L3 Finance Report | fr-app backend | business anomaly: parse spike / rate-limit / async failure | P1/P2/P1 | code (`FinanceReport{StatementParseFailureSpike,RateLimitSaturation,AsyncTaskFailures}`) |
+| L3 Finance Report | fr-app backend | no request metrics from production for 10m (backend down or OTLP export stopped) | P1 | code (`FinanceReportBackendTelemetryAbsent`) |
 | L3 Finance Report | fr-app public route | `report[-staging].zitian.party/` (web) or `/api/health` fails | P0 prod / P2 staging | Live in-band public-route probes (`finance-report-{web,api}-public-route`);prod web 另由 Cloudflare 作为产品外部入口(2 次连续失败)|
 | Cross-cutting | Vault app tokens / rendered env | missing / malformed / invalid / low-TTL / `<no value>` | P0/P1 | Docker healthcheck + `vault-audit.self-refresh` |
 | Cross-cutting | Backup freshness | latest off-host backup missing/stale/empty/no-checksum | P1 | backup manifest verifier |
@@ -315,7 +324,19 @@ Runbook 入库仅交付操作路径；#723 要求的一次现场演练、完整�
    uv run python -m invoke fr-observability.shared.apply-dashboard
    uv run python -m invoke fr-observability.shared.print-alerts   # 离线看 payload
    ```
-3. **#1106 SLO/business 目录**:`FinanceReportHigh5xxRate`(5xx>5% 5m,P0)、`FinanceReportP95LatencyHigh`(p95>1500ms,P1)、`FinanceReportStatementParseFailureSpike`、`FinanceReportReconciliationAnomaly`、`FinanceReportRateLimitSaturation`(P2)、`FinanceReportAsyncTaskFailures`。须渲染为 SigNoz v5 PromQL(`alertType=METRIC_BASED_ALERT`, `ruleType=promql_rule`, `condition.compositeQuery.queries[]`);SigNoz 拒任一规则即 fail 整个 apply(部分 apply 不算成功 GitOps)。
+3. **finance_report 规则目录(#1106 / #906)**:metric 规则渲染为 SigNoz v5 PromQL(`alertType=METRIC_BASED_ALERT`, `ruleType=promql_rule`, `condition.compositeQuery.queries[]`),error-log 规则渲染为 v5 builder `threshold_rule`(`queries[]` 里的 `builder_query`, `signal=logs`);SigNoz 拒任一规则即 fail 整个 apply(部分 apply 不算成功 GitOps)。写法约束见 §4.6。每条规则的判定(阈值、窗口、无数据):
+
+   | 规则 | 触发条件 | 等级 | 无数据时 | 理由 |
+   |------|----------|------|----------|------|
+   | `FinanceReportBackendErrorLogs` | 15 分钟内 ERROR/CRITICAL/FATAL 日志 > 10 条(`in_total`,按分钟桶求和) | P1 | 不告警:没有错误日志就是健康 | #901 实测 backend 24h 约 626k 次调用中有 35 次错误;按每次错误约 1 条 ERROR 日志估算,平均每 15 分钟约 0.4 条(错误日志的真实条数未实测,apply 后需复核);单个失败请求或一次用户重试不会越线,持续失败(每分钟 ≥1 条持续 10 分钟以上)或爆发会越线。阈值 0 时每条孤立 ERROR 都会产生一对 FIRING/RESOLVED |
+   | `FinanceReportHigh5xxRate` | 5 分钟内非探针请求中 5xx ≥ 5 次**且**占比 > 5%(`at_least_once`) | P0 | PromQL 规则不支持 `alertOnAbsent`;由下面的遥测缺失规则覆盖 | 分母不做 `clamp_min`,低流量时整体宕机也会触发;最少 5 次这个下限挡住偶发 5xx。`/health`、`/ping`、`/ping/toggle` 同时从分子分母排除,否则健康的探针流量会把面向用户的故障稀释到 5% 以下 |
+   | `FinanceReportP95LatencyHigh` | p95 > 1500ms(5m rate,`at_least_once`) | P1 | 同上 | 慢但可用,符合 §3 对 P1 的定义(部分功能受损,核心链路仍通)。标签原为 `warning`,与摘要、本节和 §5 写的 P1 不一致 |
+   | `FinanceReportStatementParseFailureSpike` | 最近 15 分钟解析失败 > 3(`at_least_once`) | P1 | 同上 | 原先用 `in_total` 对重叠窗口求和,一次失败就会计成约 15 次 |
+   | `FinanceReportRateLimitSaturation` | 最近 5 分钟限流拒绝 > 10(`at_least_once`) | P2 | 同上 | 同上,原先 3 次拒绝就会越线 |
+   | `FinanceReportAsyncTaskFailures` | 最近 5 分钟有异步解析任务失败(> 0) | P1 | 同上 | 每次失败对应一个用户上传失败,需要处理 |
+   | `FinanceReportBackendTelemetryAbsent` | 10 分钟内生产 backend 没有任何 `http.server.request.count` 样本(`absent_over_time`) | P1 | 本规则就是无数据告警 | cumulative counter 在进程存活期间每个导出周期都会上报,所以连续 10 分钟没有样本只能是 backend 挂了或 OTLP 导出断了,这时其余规则全部失明。backend 整体宕机时,由 in-band 公网路由探针 `finance-report-api-public-route` 负责 P0;这条规则覆盖"服务还活着但遥测断了"的情况,所以定为 P1 |
+
+   已知限制:cumulative counter 的某个 attribute 组合只在第一次计数后才出现,序列一出现就是 1,`increase()` 看不到这第一次;所以进程重启后第一次失败/5xx 不计入。`increase()` 会按窗口外推,值可能略高于真实次数(3 次拒绝可能算成约 3.75)。p95 包含探针请求。`FinanceReportReconciliationAnomaly` 已移出目录:它过滤 `outcome=~"failed|error|anomaly"`,而 app 只会发出 `auto_accepted|pending_review|accepted|rejected|superseded`,永远不会触发;app 发出真正的失败 outcome 后再恢复。apply 默认只记录不 prune,线上那条旧规则会保留(它本来就不会触发),需要时用 `--prune` 删除。
 4. 先跑 schema canary:`gh workflow run apply-observability.yml --ref <ref> -f mode=canary`(建一条 disabled PromQL 规则验 v5 信封再删)。apply 应在 app 发完所有引用 metric 名后。
 
 > **注**:`apply_alerts` 现为声明式 reconcile(upsert + 默认只 log 的 prune),见 [ops.pipeline.md](./ops.pipeline.md)。
@@ -392,6 +413,7 @@ Feishu page，且告警携带同一结构化记录。不得通过破坏 producti
 | 采集:ClickHouse/SigNoz/bridge 健康 + OTLP 可用 | `invoke {clickhouse,signoz,alerting}.status`、`signoz.shared.test-trace` | ✅ |
 | Feishu payload + 日志错误规则 payload | `libs/tests/test_alerting.py` | ✅ |
 | finance_report 告警/看板 config-as-code(#373) | `libs/tests/test_observability_dashboards.py` | ✅ |
+| finance_report 规则逐条阈值/窗口/等级/无数据判定、点号名选择器对得上 app 导出的 metric 与 outcome 值、加载器拒绝裸名/`in_total`+区间/`alert_on_absent`(#906) | `libs/tests/test_observability_dashboards.py`, `libs/tests/test_alerting.py` | ✅ |
 | Cloudflare / out-of-band / GitHub 兜底 watchdog 契约 | `test_cloudflare_watchdog.py`, `test_out_of_band_watchdog.py` | ✅ |
 | GitHub watchdog issue 留痕(精确标题去重、列表失败不新建、drill 不关闭、缺失来源即红、公开正文脱敏)(truealpha#876) | `libs/tests/test_watchdog_issue_trail.py` | ✅ |
 | GitHub watchdog 只 page 本层故障类:page/报告分流(未知名默认 page)、只报告检查不进 issue 且退役 issue 被清扫、Worker 在跑且能投递、Dokploy 过期只凭单元级证据、401/403 即配置失效、报告通道缺失即 page(#908) | `libs/tests/test_out_of_band_watchdog.py`, `libs/tests/test_watchdog_issue_trail.py` | ✅ |

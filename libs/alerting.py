@@ -14,6 +14,10 @@ FEISHU_WEBHOOK_HOSTS = {"open.feishu.cn", "open.larksuite.com"}
 FEISHU_WEBHOOK_PATH_PREFIX = "/open-apis/bot/v2/hook/"
 SIGNOZ_ALERT_SCHEMA_VERSION = "v2alpha1"
 SIGNOZ_ALERT_VERSION = "v5"
+# Log severity texts an error-log rule counts. Python's OTel LoggingHandler sends a
+# CRITICAL record as FATAL in current SDK releases and as CRITICAL in older ones, so
+# both spellings are counted.
+ERROR_LOG_LEVELS = ("ERROR", "CRITICAL", "FATAL")
 MAX_ALERT_LINES = 8
 MAX_MESSAGE_CHARS = 3500
 TRUNCATION_SUFFIX = "\n...[truncated]"
@@ -415,12 +419,22 @@ def build_signoz_log_alert_rule_payload(
     summary: str,
     severity: str = "error",
     threshold: int = 0,
+    match_type: str = "at_least_once",
     eval_window: str = "5m0s",
     frequency: str = "1m",
     service_id: str = "",
     environment: str = "production",
 ) -> dict[str, Any]:
-    """Build a SigNoz v2 threshold rule for OTEL log error count alerts."""
+    """Build a SigNoz v5 threshold rule counting a service's error-level OTEL logs.
+
+    The query goes in the v5 ``compositeQuery.queries[]`` envelope. A rule marked
+    ``version: v5`` is evaluated only from that list: SigNoz v0.105 copies
+    ``queries`` into the query-range request and skips its v3→v5 migration for any
+    rule already marked v5, so a v5 rule carrying the old ``builderQueries`` map runs
+    no query at all and can never fire (#906).
+
+    ``alertOnAbsent`` stays off: no error logs is the healthy state for this count.
+    """
     from libs.service_identity import ServiceIdentity
 
     identity = ServiceIdentity.build(
@@ -428,6 +442,16 @@ def build_signoz_log_alert_rule_payload(
         environment,
         component=service_name,
         service_name=service_name,
+    )
+    log_filter = " AND ".join(
+        (
+            f"resource.service.name = {_signoz_filter_literal(service_name)}",
+            "resource.deployment.environment.name = "
+            f"{_signoz_filter_literal(identity.environment)}",
+            "severity_text IN ["
+            + ", ".join(_signoz_filter_literal(level) for level in ERROR_LOG_LEVELS)
+            + "]",
+        )
     )
     return {
         "alert": _required("alert_name", alert_name),
@@ -440,7 +464,7 @@ def build_signoz_log_alert_rule_payload(
                     {
                         "name": severity,
                         "target": int(threshold),
-                        "matchType": "1",
+                        "matchType": _signoz_match_type(match_type),
                         "op": "1",
                         "channels": [
                             channel_id for channel_id in channel_ids if channel_id
@@ -453,57 +477,19 @@ def build_signoz_log_alert_rule_payload(
                 "queryType": "builder",
                 "panelType": "graph",
                 "unit": "",
-                "builderQueries": {
-                    "A": {
-                        "dataSource": "logs",
-                        "queryName": "A",
-                        "aggregateOperator": "count",
-                        "aggregateAttribute": _signoz_attribute("", "", ""),
-                        "aggregations": [{"expression": "count() "}],
-                        "filters": {
-                            "op": "AND",
-                            "items": [
-                                {
-                                    "id": "service.name--string--resource",
-                                    "key": _signoz_attribute(
-                                        "service.name", "string", "resource"
-                                    ),
-                                    "op": "=",
-                                    "value": service_name,
-                                },
-                                {
-                                    "id": "deployment.environment.name--string--resource",
-                                    "key": _signoz_attribute(
-                                        "deployment.environment.name",
-                                        "string",
-                                        "resource",
-                                    ),
-                                    "op": "=",
-                                    "value": identity.environment,
-                                },
-                                {
-                                    "id": "severity_text--string--tag",
-                                    "key": _signoz_attribute(
-                                        "severity_text", "string", "tag"
-                                    ),
-                                    "op": "in",
-                                    "value": ["ERROR", "FATAL"],
-                                },
-                            ],
+                "queries": [
+                    {
+                        "type": "builder_query",
+                        "spec": {
+                            "name": "A",
+                            "signal": "logs",
+                            "stepInterval": 60,
+                            "aggregations": [{"expression": "count()"}],
+                            "filter": {"expression": log_filter},
+                            "disabled": False,
                         },
-                        "groupBy": [],
-                        "expression": "A",
-                        "disabled": False,
-                        "stepInterval": 60,
-                        "having": [],
-                        "limit": None,
-                        "orderBy": [],
-                        "legend": "",
-                        "reduceTo": "sum",
                     }
-                },
-                "promQueries": {},
-                "chQueries": {},
+                ],
             },
             "selectedQueryName": "A",
             "alertOnAbsent": False,
@@ -548,7 +534,13 @@ def build_signoz_metric_alert_rule_payload(
     service_id: str = "",
     environment: str = "production",
 ) -> dict[str, Any]:
-    """Build a SigNoz v5 PromQL rule for metric alerts."""
+    """Build a SigNoz v5 PromQL rule for metric alerts.
+
+    ``alertOnAbsent`` is always off here because SigNoz's PromQL rule never reads
+    it (only the builder ``threshold_rule`` implements absence, v0.105 through
+    v0.143). A PromQL rule that must fire on missing data says so in the query,
+    with ``absent_over_time(...)``.
+    """
     from libs.service_identity import ServiceIdentity
 
     identity = ServiceIdentity.build(
@@ -933,13 +925,10 @@ def _one_line(value: Any) -> str:
     return " ".join(str(value).split())
 
 
-def _signoz_attribute(key: str, data_type: str, attribute_type: str) -> dict[str, str]:
-    return {
-        "id": f"{key}--{data_type}--{attribute_type}" if key else "--",
-        "key": key,
-        "dataType": data_type,
-        "type": attribute_type,
-    }
+def _signoz_filter_literal(value: str) -> str:
+    """Quote a string for a SigNoz v5 filter expression (``'…'``, ``\\'`` escaped)."""
+    escaped = str(value).replace("\\", "\\\\").replace("'", "\\'")
+    return f"'{escaped}'"
 
 
 def _signoz_threshold_op(op: str) -> str:

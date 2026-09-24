@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 import types
 from pathlib import Path
@@ -120,47 +121,244 @@ def test_alert_definition_renders_signoz_log_rule_routed_to_channel() -> None:
     assert payload["schemaVersion"] == "v2alpha1"
     threshold = payload["condition"]["thresholds"]["spec"][0]
     assert threshold["channels"] == ["chan-1"]
-    query = payload["condition"]["compositeQuery"]["builderQueries"]["A"]
-    filters = query["filters"]["items"]
-    assert filters[0]["value"] == "finance-report-backend"
-    assert filters[1]["key"]["key"] == "deployment.environment.name"
-    assert filters[1]["value"] == "production"
-    assert filters[2]["value"] == ["ERROR", "FATAL"]
+    (query,) = payload["condition"]["compositeQuery"]["queries"]
+    assert query["type"] == "builder_query"
+    assert query["spec"]["signal"] == "logs"
+    assert query["spec"]["filter"]["expression"] == (
+        "resource.service.name = 'finance-report-backend' AND "
+        "resource.deployment.environment.name = 'production' AND "
+        "severity_text IN ['ERROR', 'CRITICAL', 'FATAL']"
+    )
     assert payload["labels"]["service_id"] == "finance_report/app"
 
 
-def test_finance_report_slo_and_business_alert_rules_are_defined() -> None:
-    """#1106: SLO and business-anomaly alert rules are config-as-code."""
-    definitions = load_alert_definitions()
-    by_name = {d.alert_name: d for d in definitions}
+# #906: what each checked-in rule must render to. (ruleType, severity, target,
+# SigNoz matchType, evalWindow, targetUnit). matchType: "1" at_least_once, "4" in_total.
+_EXPECTED_RULES = {
+    "FinanceReportBackendErrorLogs": ("threshold_rule", "error", 10, "4", "15m0s", ""),
+    "FinanceReportHigh5xxRate": ("promql_rule", "critical", 0.05, "1", "5m0s", "%"),
+    "FinanceReportP95LatencyHigh": ("promql_rule", "error", 1500.0, "1", "5m0s", "ms"),
+    "FinanceReportStatementParseFailureSpike": (
+        "promql_rule",
+        "error",
+        3.0,
+        "1",
+        "5m0s",
+        "count",
+    ),
+    "FinanceReportRateLimitSaturation": (
+        "promql_rule",
+        "warning",
+        10.0,
+        "1",
+        "5m0s",
+        "count",
+    ),
+    "FinanceReportAsyncTaskFailures": (
+        "promql_rule",
+        "error",
+        0.0,
+        "1",
+        "5m0s",
+        "count",
+    ),
+    "FinanceReportBackendTelemetryAbsent": (
+        "promql_rule",
+        "error",
+        0.0,
+        "1",
+        "5m0s",
+        "",
+    ),
+}
+# docs/ssot/ops.observability.md §3: the severity label is the P level.
+_P_LEVEL_BY_SEVERITY = {"critical": "P0", "error": "P1", "warning": "P2"}
 
-    expected = {
-        "FinanceReportHigh5xxRate": ("critical", 0.05, "%"),
-        "FinanceReportP95LatencyHigh": ("warning", 1500.0, "ms"),
-        "FinanceReportStatementParseFailureSpike": ("error", 3.0, "count"),
-        "FinanceReportReconciliationAnomaly": ("error", 0.0, "count"),
-        "FinanceReportRateLimitSaturation": ("warning", 10.0, "count"),
-        "FinanceReportAsyncTaskFailures": ("error", 0.0, "count"),
+
+def _rendered_rules() -> dict[str, dict]:
+    return {
+        d.alert_name: d.to_signoz_payload(["chan-1"]) for d in load_alert_definitions()
     }
-    assert expected.keys() <= by_name.keys()
 
-    for alert_name, (severity, threshold, unit) in expected.items():
-        rule = by_name[alert_name]
-        assert rule.severity == severity
-        assert rule.threshold == threshold
-        assert rule.threshold_unit == unit
-        assert "SOP-004C" in rule.summary
+
+def test_the_catalog_holds_exactly_the_reviewed_rules() -> None:
+    """#906: adding, dropping or renaming a rule has to update the reviewed table."""
+    assert set(_rendered_rules()) == set(_EXPECTED_RULES)
+
+
+@pytest.mark.parametrize("alert_name", sorted(_EXPECTED_RULES))
+def test_rule_renders_its_reviewed_threshold_window_and_severity(alert_name) -> None:
+    """#906: every rule renders the threshold, window, severity and absence choice
+    recorded in the PR's per-rule table; alertOnAbsent is off on all of them (PromQL
+    rules: SigNoz ignores it; the error-log count: no data is the healthy state)."""
+    rule_type, severity, target, match_type, eval_window, unit = _EXPECTED_RULES[
+        alert_name
+    ]
+    payload = _rendered_rules()[alert_name]
+
+    assert payload["ruleType"] == rule_type
+    (threshold,) = payload["condition"]["thresholds"]["spec"]
+    assert threshold["name"] == severity
+    assert threshold["target"] == target
+    assert threshold["op"] == "1"
+    assert threshold["matchType"] == match_type
+    assert threshold["targetUnit"] == unit
+    assert threshold["channels"] == ["chan-1"]
+    assert payload["evaluation"]["spec"] == {
+        "evalWindow": eval_window,
+        "frequency": "1m",
+    }
+    assert payload["labels"]["severity"] == severity
+    assert payload["condition"]["alertOnAbsent"] is False
+
+
+@pytest.mark.parametrize("alert_name", sorted(_EXPECTED_RULES))
+def test_rule_summary_names_the_p_level_of_its_severity_label(alert_name) -> None:
+    """#906: the label decides routing and the summary is what a human reads; the P95
+    rule said `warning` in one and `P1` in the other. §3: critical=P0, error=P1,
+    warning=P2."""
+    payload = _rendered_rules()[alert_name]
+
+    expected = _P_LEVEL_BY_SEVERITY[payload["labels"]["severity"]]
+    assert re.findall(r"Severity (P\d)\b", payload["annotations"]["summary"]) == [
+        expected
+    ]
+
+
+# What finance-report-backend exports (finance_report
+# apps/backend/src/observability/telemetry_metrics.py) under the names SigNoz stores
+# with DOT_METRICS_ENABLED: the OTel instrument name as-is, a histogram's buckets as
+# "<name>.bucket". Label values are listed where a rule filters on them.
+_APP_METRICS: dict[str, dict[str, set[str]]] = {
+    "http.server.request.count": {
+        "http.response.status_code_class": {"1xx", "2xx", "3xx", "4xx", "5xx"},
+        "http.route": {"/health", "/ping", "/ping/toggle", "/api/statements"},
+    },
+    "http.server.request.duration.bucket": {},
+    "finance.statement_parse.outcome": {"outcome": {"success", "failure"}},
+    "finance.reconciliation.match.outcome": {
+        "outcome": {
+            "auto_accepted",
+            "pending_review",
+            "accepted",
+            "rejected",
+            "superseded",
+        }
+    },
+    "finance.rate_limit.rejected": {},
+    "finance.async_parse.failure": {},
+}
+_SELECTOR = re.compile(r"\{([^{}]*)\}")
+_MATCHER = re.compile(r'"([^"]+)"\s*(=~|!~|!=|=)\s*"((?:[^"\\]|\\.)*)"')
+
+
+def _selectors(promql: str) -> list[tuple[str, list[tuple[str, str, str]]]]:
+    """(metric, [(label, op, value)]) for every `{"metric", …}` selector in a query."""
+    found = []
+    for body in _SELECTOR.findall(promql):
+        name = re.match(r'\s*"([^"]+)"\s*(?:,|$)', body)
+        assert name, f"selector without a quoted metric name: {{{body}}}"
+        found.append((name.group(1), _MATCHER.findall(body[name.end() :])))
+    return found
+
+
+def _promql_rules() -> dict[str, str]:
+    return {
+        name: payload["condition"]["compositeQuery"]["queries"][0]["spec"]["query"]
+        for name, payload in _rendered_rules().items()
+        if payload["ruleType"] == "promql_rule"
+    }
+
+
+def test_promql_selectors_reach_series_the_app_exports() -> None:
+    """#906: SigNoz matches metric_name and label keys exactly as written, so every
+    selector of every PromQL rule in the catalog must name a metric the app exports,
+    pin the production backend, and use label values the app can emit.
+    `outcome=~"failed|error|anomaly"` matched none of the reconciliation outcomes,
+    so that rule could never fire."""
+    rules = _promql_rules()
+    value_filters = []
+
+    assert rules
+    for alert_name, promql in rules.items():
+        selectors = _selectors(promql)
+        assert selectors, alert_name
+        for metric, matchers in selectors:
+            assert metric in _APP_METRICS, (alert_name, metric)
+            assert ("service.name", "=", "finance-report-backend") in matchers
+            assert ("deployment.environment.name", "=", "production") in matchers
+            value_filters += [
+                (alert_name, metric, label, value)
+                for label, op, value in matchers
+                if op == "=~"
+            ]
+
+    assert value_filters  # the parse-failure outcome filter at least
+    for alert_name, metric, label, value in value_filters:
+        emitted = _APP_METRICS[metric].get(label, set())
+        assert any(re.fullmatch(value, v) for v in emitted), (alert_name, value)
+
+
+def test_promql_regex_matchers_are_anchored() -> None:
+    """#906: SigNoz's PromQL adapter turns a regex matcher into ClickHouse `match()`,
+    which is a substring search; `!~"/health"` would also drop `/api/x/health-report`.
+    Explicit ^…$ gives the anchored Prometheus meaning on both engines."""
+    regexes = [
+        (name, value)
+        for name, promql in _promql_rules().items()
+        for _metric, matchers in _selectors(promql)
+        for _label, op, value in matchers
+        if op in {"=~", "!~"}
+    ]
+
+    assert regexes
+    for name, value in regexes:
+        assert value.startswith("^") and value.endswith("$"), (name, value)
+
+
+def test_5xx_rule_needs_a_minimum_5xx_count_and_ignores_probe_traffic() -> None:
+    """#906: the old ratio divided by clamp_min(total_rate, 1) and required every point
+    of the window, so a low-traffic outage never fired; healthy /health probes also
+    diluted a user-facing outage below 5%. Every selector now excludes the probe
+    routes, the ratio is not clamped, and at least 5 5xx must exist in the window."""
+    promql = _promql_rules()["FinanceReportHigh5xxRate"]
+    selectors = _selectors(promql)
+    ratio, guard = promql.split(" and on() ", 1)
+
+    assert "clamp_min" not in promql
+    assert re.fullmatch(r"\(sum\(increase\(\{[^{}]*\}\[5m\]\)\) >= 5\)", guard)
+    assert re.fullmatch(r"\(sum\(increase\(.*\)\) / sum\(increase\(.*\)\)\)", ratio)
+    assert len(selectors) == 3
+    for _metric, matchers in selectors:
+        assert ("http.route", "!~", "^(/health|/ping|/ping/toggle)$") in matchers
+    five_xx = [
+        m
+        for _metric, m in selectors
+        if ("http.response.status_code_class", "=", "5xx") in m
+    ]
+    assert len(five_xx) == 2  # the ratio's numerator and the count guard
+
+
+def test_backend_telemetry_absence_is_expressed_in_promql() -> None:
+    """#906: alertOnAbsent is a no-op on SigNoz PromQL rules, so the one rule that
+    must fire on missing data says so in the query: no request-count sample from the
+    production backend for 10 minutes."""
+    absent = {
+        name: promql
+        for name, promql in _promql_rules().items()
+        if "absent_over_time(" in promql
+    }
+
+    assert list(absent) == ["FinanceReportBackendTelemetryAbsent"]
+    promql = absent["FinanceReportBackendTelemetryAbsent"]
+    assert promql.startswith("absent_over_time(") and promql.endswith("[10m])")
+    assert [metric for metric, _ in _selectors(promql)] == ["http.server.request.count"]
 
 
 def test_metric_alert_definition_renders_signoz_v5_payload() -> None:
     """#1106: metric alerts render to SigNoz v5 PromQL rules routed to Lark."""
-    rule = {d.alert_name: d for d in load_alert_definitions()}[
-        "FinanceReportHigh5xxRate"
-    ]
+    payload = _rendered_rules()["FinanceReportHigh5xxRate"]
 
-    payload = rule.to_signoz_payload(["chan-1"])
-
-    assert payload["alert"] == "FinanceReportHigh5xxRate"
     assert payload["alertType"] == "METRIC_BASED_ALERT"
     assert payload["ruleType"] == "promql_rule"
     assert payload["schemaVersion"] == "v2alpha1"
@@ -168,16 +366,9 @@ def test_metric_alert_definition_renders_signoz_v5_payload() -> None:
     assert composite["queryType"] == "promql"
     assert "builderQueries" not in composite
     assert "promQueries" not in composite
-    assert (
-        "http_server_request_count"
-        in payload["condition"]["compositeQuery"]["queries"][0]["spec"]["query"]
-    )
-    threshold = payload["condition"]["thresholds"]["spec"][0]
-    assert threshold["op"] == "1"
-    assert threshold["matchType"] == "2"
-    assert threshold["target"] == 0.05
-    assert threshold["targetUnit"] == "%"
-    assert threshold["channels"] == ["chan-1"]
+    (query,) = composite["queries"]
+    assert query["type"] == "promql"
+    assert query["spec"]["name"] == "A"
     assert payload["labels"]["service"] == "finance-report-backend"
 
 
@@ -385,6 +576,82 @@ def test_metric_alert_requires_metric_specific_summary_and_service(tmp_path) -> 
     )
     with pytest.raises(ObservabilityDefinitionError, match="service_name"):
         load_alert_definitions(missing_service)
+
+
+def _write_catalog(tmp_path: Path, rule: dict) -> Path:
+    path = tmp_path / "alert_rules.json"
+    path.write_text(
+        json.dumps(
+            {
+                "service_id": "finance_report/app",
+                "environment": "production",
+                "rules": [rule],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+_VALID_METRIC_RULE = {
+    "signal": "metrics",
+    "alert_name": "GuardProbe",
+    "service_name": "finance-report-backend",
+    "threshold": 3,
+    "match_type": "at_least_once",
+    "summary": "guard probe",
+    "promql": 'sum(increase({"finance.async_parse.failure","service.name"="x"}[15m]))',
+}
+
+
+def test_the_guard_probe_rule_itself_loads(tmp_path) -> None:
+    """The fixture the guard tests mutate is valid, so each rejection below is caused
+    by the one field that test changes."""
+    (definition,) = load_alert_definitions(_write_catalog(tmp_path, _VALID_METRIC_RULE))
+
+    assert definition.alert_name == "GuardProbe"
+
+
+def test_bare_prometheus_style_metric_selector_is_rejected(tmp_path) -> None:
+    """#906: `finance_async_parse_failure{…}` names no series in a SigNoz that stores
+    dotted OTel names; the loader refuses it instead of shipping a rule that never fires."""
+    rule = {
+        **_VALID_METRIC_RULE,
+        "promql": 'sum(increase(finance_async_parse_failure{service_name="x"}[15m]))',
+    }
+
+    with pytest.raises(ObservabilityDefinitionError, match="bare name"):
+        load_alert_definitions(_write_catalog(tmp_path, rule))
+
+
+def test_braces_inside_a_quoted_regex_are_not_a_bare_selector(tmp_path) -> None:
+    """A `{` inside a label value is data, not a selector."""
+    rule = {
+        **_VALID_METRIC_RULE,
+        "promql": 'sum(increase({"finance.async_parse.failure","task"=~"^a{2}$"}[15m]))',
+    }
+
+    (definition,) = load_alert_definitions(_write_catalog(tmp_path, rule))
+
+    assert definition.promql == rule["promql"]
+
+
+def test_in_total_over_a_range_vector_is_rejected(tmp_path) -> None:
+    """#906: SigNoz sums every 60 s point for in_total; each point of
+    increase(x[15m]) already covers 15 minutes, so one failure summed to ~15."""
+    rule = {**_VALID_METRIC_RULE, "match_type": "in_total"}
+
+    with pytest.raises(ObservabilityDefinitionError, match="in_total"):
+        load_alert_definitions(_write_catalog(tmp_path, rule))
+
+
+def test_alert_on_absent_key_is_rejected(tmp_path) -> None:
+    """#906: SigNoz never reads alertOnAbsent on a PromQL rule, so the key would look
+    like coverage and do nothing; the loader points at absent_over_time() instead."""
+    rule = {**_VALID_METRIC_RULE, "alert_on_absent": True}
+
+    with pytest.raises(ObservabilityDefinitionError, match="absent_over_time"):
+        load_alert_definitions(_write_catalog(tmp_path, rule))
 
 
 def _load_fr_observability_tasks(monkeypatch):
@@ -667,7 +934,7 @@ def test_signoz_alert_canary_uses_disabled_v5_promql_payload() -> None:
     threshold = payload["condition"]["thresholds"]["spec"][0]
     assert threshold["channels"] == ["chan-1"]
     assert threshold["op"] == "1"
-    assert threshold["matchType"] == "2"
+    assert threshold["matchType"] == "1"
     assert payload["labels"]["canary"] == "true"
 
 
