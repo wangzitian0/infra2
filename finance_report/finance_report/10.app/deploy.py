@@ -35,10 +35,17 @@ class AppDeployer(Deployer):
         ),
         # #921: `?full=1` asserts every required dependency (finance_report#1653);
         # it answered 200 with all dependencies true in both envs on 2026-09-24.
+        # P2 on purpose: it 503s when ANY dependency does, including OpenPanel
+        # (whose own probes page it at P1) and Yahoo market data (third party).
+        # Its unique catch is the app's own view of a dependency (an expired key,
+        # a wrong endpoint), not an outage another probe already pages. Its
+        # dependency checks run in sequence, hence the 15 s timeout.
         PublicRouteFacet(
             name="finance-report-api-full-health-public-route",
             subdomain="report",
             path="/api/health?full=1",
+            severity="warning",
+            timeout_seconds=15,
         ),
     )
     service_port = 3000

@@ -303,7 +303,7 @@ signals:
     primary_owner: self
     layer: vps
     failure_class: service-health
-    severity: critical
+    severity: warning
     cadence: 60s
 
   - signal_id: staging.finance-report-api-full-health.public-route
