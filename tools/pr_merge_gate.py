@@ -746,7 +746,15 @@ class Verdict:
         return 2 if self.owner_required else 1
 
 
-GH_TIMEOUT_S = 60
+# `gh` routes through `.ws/bin/gh` -> `ws-gh-token`, whose own worst-case
+# single credential mint is ~120s (two `op read` + two GitHub HTTP calls at
+# up to 30s each, plus JWT-signing overhead) and whose lock-wait deadline is
+# `LOCK_WAIT_DEADLINE_SECONDS = 180` (workspace-iac/bin/ws-gh-token:95) to sit
+# comfortably above that. A shorter timeout here would kill a legitimately
+# slow mint mid-flight and report "gh unresponsive" for what a retry a moment
+# later would show already succeeded and cached (dev_env#138). 200s sits the
+# same way above ws-gh-token's own 180s deadline.
+GH_TIMEOUT_S = 200
 
 
 def _gh(argv: Sequence[str], *, max_retries: int = 3, initial_delay: float = 1.0) -> str:
