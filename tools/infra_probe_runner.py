@@ -183,7 +183,8 @@ def main() -> int:
     args = parser.parse_args()
 
     _configure_logging()
-    _load_env_file(Path(os.getenv("ALERTING_ENV_FILE", "/secrets/.env")))
+    env_file = Path(os.getenv("ALERTING_ENV_FILE", "/secrets/.env"))
+    _load_env_file(env_file)
     interval = int(
         os.getenv("INFRA_PROBE_INTERVAL_SECONDS", str(DEFAULT_PROBE_INTERVAL_SECONDS))
     )
@@ -227,6 +228,7 @@ def main() -> int:
             # not iteration duration — a long all-timeouts probe cycle plus
             # watcher sweeps must not read as a hung loop.
             _touch_state(state_path)
+            _load_env_file(env_file)
         try:
             exit_code = run_once(
                 as_json=args.json,
@@ -1026,16 +1028,36 @@ def _maintenance_active(now: float | None = None) -> bool:
     return (time.time() if now is None else now) < until
 
 
-def _load_env_file(path: Path) -> None:
+#: Keys this process took from the env file. Only these are refreshed on a
+#: re-read; a non-empty value set by the compose environment still wins (#915).
+_ENV_FILE_KEYS: set[str] = set()
+
+
+def _load_env_file(path: Path) -> bool:
+    """Load (or re-load) the Vault-rendered env file; False when it is missing.
+
+    Called at startup and before every loop iteration (#915): vault-agent
+    re-renders the file when a secret changes, and a runner that read it once
+    at start could come up before the file existed and keep empty probe
+    credentials for its whole life. Re-reading also applies rotated values.
+    """
     if not path.exists():
-        return
+        print(
+            f"infra probe env file {path} is missing; probes that need its "
+            "credentials will fail until it is rendered",
+            flush=True,
+        )
+        return False
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        if not os.environ.get(key):
+        key = key.strip()
+        if key in _ENV_FILE_KEYS or not os.environ.get(key):
             os.environ[key] = value.strip().strip('"').strip("'")
+            _ENV_FILE_KEYS.add(key)
+    return True
 
 
 if __name__ == "__main__":
