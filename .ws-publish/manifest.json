@@ -1,0 +1,25 @@
+{
+  "adapter": "rules-v2",
+  "dirty_inputs": [],
+  "inputs": {
+    "repo": "e59e7d76172035a45cfd4c8ec5f335cc3e0c15f0edd78ebbcc0d2b063abe22a7",
+    "root": "f73b8ab7dfd7a7901c5264c7694f32562f780d7fb4a5efc19f51dcee1f071259"
+  },
+  "language": "en",
+  "outputs": {
+    "AGENTS.md": "0561c4781d47f592cd778c48c4f78397f8eb45b3eeb93887479c2c00c6feab41",
+    "CLAUDE.md": "a54ff182c7e8acf56acfd6e4b9c3ff41e2c41a31c9b211b2deb9df75d9a478f9"
+  },
+  "profiles": [
+    "code",
+    "delivery",
+    "runtime"
+  ],
+  "schema": 2,
+  "source_revision": "3bd08b82cdbc44268e4e3b7234836fd0cbe5275f",
+  "target": {
+    "remote": "github.com/wangzitian0/infra2",
+    "repo": "infra2",
+    "workspace": "zitian"
+  }
+}
