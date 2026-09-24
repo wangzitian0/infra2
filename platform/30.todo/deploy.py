@@ -25,7 +25,7 @@ class TodoDeployer(Deployer):
     exemptions = (
         Exemption(
             check_id="probes",
-            reason="canary verification tool — self-proving via /api/canary/status and deploy_v2_canary",
+            reason="canary verification tool — self-proving via /api/canary/status",
         ),
     )
 
