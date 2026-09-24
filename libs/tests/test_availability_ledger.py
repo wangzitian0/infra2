@@ -10,7 +10,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from libs.availability_ledger import (
-    apply_outages,
+    apply_unavailability,
+    build_environment_line,
     build_report_message,
     summarize_ledger,
 )
@@ -149,7 +150,7 @@ def test_negative_zero_checks_does_not_divide_by_zero() -> None:
     assert "held 100% availability" in build_report_message(empty)
 
 
-# ---- #904: the VPS cannot count its own outage; the Worker's edges do ----------
+# ---- #904: time the VPS recorded nothing, or was unreachable, is unavailable ----
 
 NOW = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
 MS = 1000
@@ -175,14 +176,19 @@ def _vps_ledger() -> dict:
     }
 
 
-def _apply(outages: list) -> dict:
-    return apply_outages(
+def _apply(outages: list, gaps: list | None = None) -> dict:
+    return apply_unavailability(
         _vps_ledger(),
-        outages,
         environment="production",
+        gaps=gaps or [],
+        outages=outages,
         check_interval_seconds=60,
         now=NOW,
     )
+
+
+def _s(day: int, hour: int, minute: int = 0) -> float:
+    return _ms(day, hour, minute) / MS
 
 
 def _signal(ledger: dict, date: str, sid: str) -> dict:
@@ -198,10 +204,12 @@ def test_positive_an_outage_is_a_failure_of_every_production_signal() -> None:
         assert _signal(applied, "2026-09-24", sid)["fail"] == 0
     # staging was not what went down
     assert _signal(applied, "2026-09-23", "staging:vault-http")["fail"] == 0
-    assert applied["outages"] == {
+    assert applied["unavailability"] == {
         "environment": "production",
-        "count": 1,
         "minutes": 90.0,
+        "gap_minutes": 0.0,
+        "outage_minutes": 90.0,
+        "outage_count": 1,
         "unreadable": 0,
     }
 
@@ -221,8 +229,9 @@ def test_negative_a_runner_perfect_through_its_own_outage_is_not_reported_perfec
     assert summary["perfect_count"] == 1  # only staging
     message = build_report_message(summary)
     assert (
-        "production VPS unreachable (Cloudflare heartbeat edges): 1 outage(s), 30.0 min"
-        in message
+        "production unavailable 30.0 min, counted as failures: 0.0 min with no probe "
+        "round (outage, restart or deploy), 30.0 min unreachable per Cloudflare in "
+        "1 outage(s)" in message
     )
     assert "production:vault-http" in message
 
@@ -255,9 +264,10 @@ def test_a_whole_day_the_runner_never_recorded_is_added_as_failures() -> None:
     ledger["ledger"] = [
         day for day in ledger["ledger"] if day["date"] == "2026-09-23"
     ]  # the runner was down all of today so far
-    applied = apply_outages(
+    applied = apply_unavailability(
         ledger,
-        [{"environment": "production", "start": _ms(24, 0), "end": None}],
+        gaps=[],
+        outages=[{"environment": "production", "start": _ms(24, 0), "end": None}],
         environment="production",
         check_interval_seconds=60,
         now=NOW,
@@ -265,7 +275,7 @@ def test_a_whole_day_the_runner_never_recorded_is_added_as_failures() -> None:
     assert _signal(applied, "2026-09-24", "production:minio-public-route") == {
         "ok": 0,
         "fail": 720,
-        "lastDomain": "vps-unreachable",
+        "lastDomain": "unavailable",
     }
 
 
@@ -278,6 +288,49 @@ def test_other_environments_and_unreadable_records_are_not_counted_but_shown() -
         ]
     )
     assert _signal(applied, "2026-09-23", "production:vault-http")["fail"] == 0
-    assert applied["outages"]["unreadable"] == 2
+    assert applied["unavailability"]["unreadable"] == 2
     message = build_report_message(summarize_ledger(applied))
     assert "2 unreadable outage record(s) NOT counted" in message
+
+
+def test_negative_a_45_minute_gap_lowers_availability_by_45_minutes() -> None:
+    """#911 review: a stop shorter than the Worker's 90-minute staleness window left
+    no outage edge, and the runner's ledger recorded nothing to lower."""
+    before = _signal(_apply([]), "2026-09-23", "production:vault-http")
+    applied = _apply([], gaps=[(_s(23, 10), _s(23, 10, 45))])
+    after = _signal(applied, "2026-09-23", "production:vault-http")
+    assert after["fail"] - before["fail"] == 45
+    assert after["ok"] == before["ok"]
+    assert applied["unavailability"]["gap_minutes"] == 45.0
+    assert _signal(applied, "2026-09-23", "staging:vault-http")["fail"] == 0
+    summary = summarize_ledger(applied)
+    assert summary["perfect_count"] == 1  # only staging
+    assert "45.0 min with no probe round" in build_report_message(summary)
+
+
+def test_a_gap_inside_a_cloudflare_outage_is_counted_once() -> None:
+    applied = _apply(
+        [{"environment": "production", "start": _ms(23, 10), "end": _ms(23, 11)}],
+        gaps=[(_s(23, 10, 30), _s(23, 11, 30))],
+    )
+    assert _signal(applied, "2026-09-23", "production:vault-http")["fail"] == 90
+    assert applied["unavailability"]["minutes"] == 90.0
+    assert applied["unavailability"]["gap_minutes"] == 60.0
+    assert applied["unavailability"]["outage_minutes"] == 60.0
+
+
+def test_a_secondary_environment_is_one_line() -> None:
+    applied = apply_unavailability(
+        _vps_ledger(),
+        environment="staging",
+        gaps=[(_s(23, 1), _s(23, 1, 10))],
+        outages=[],
+        check_interval_seconds=60,
+        now=NOW,
+    )
+    line = build_environment_line(
+        "staging (reported, never paged)", summarize_ledger(applied)
+    )
+    assert line.startswith("staging (reported, never paged): ")
+    assert "10.0 min with no probe round" in line
+    assert "lowest staging:vault-http" in line

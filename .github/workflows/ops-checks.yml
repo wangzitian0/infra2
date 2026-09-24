@@ -445,8 +445,10 @@ jobs:
           deliver_out_of_band_alert(
               os.environ,
               "🚨 Weekly watchdog digest / stability report FAILED.\n"
-              "The week's alert ledger or the positive report was not delivered; the "
-              "ledger fetch or the Feishu delivery is broken, not the estate.\n"
+              "The week's digest or the positive availability report was not delivered. "
+              "Broken is one of: the production availability ledger read over SSH "
+              "(missing, empty or stale), the Worker /outages fetch, or the Feishu "
+              "delivery -- not necessarily the estate.\n"
               f"Run: {run_url}",
           )
           PY

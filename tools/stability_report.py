@@ -7,8 +7,9 @@ the VPS cannot count its own downtime), and delegates the math and the text to
 ``libs.availability_ledger``. It runs weekly from GitHub Actions, outside the
 VPS, and sends Lark a positive-proof summary. See ops.observability.md §6.
 
-A missing, empty or stale ledger, or an unreadable outage list, fails the run:
-a report built without them would overstate availability.
+A missing, empty or stale production ledger, or an unreadable outage list, fails
+the run: a report built without them would overstate availability. Staging is
+reported on its own line and never fails the run.
 
 Dry run from local files (print, no Lark):
 
@@ -37,17 +38,26 @@ if str(ROOT) not in sys.path:
 
 from libs.alerting import deliver_out_of_band_text  # noqa: E402
 from libs.availability_ledger import (  # noqa: E402
-    apply_outages,
+    apply_unavailability,
+    build_environment_line,
     build_report_message,
     summarize_ledger,
 )
-from libs.observability.local_ledger import host_ledger_path, to_report_days  # noqa: E402
+from libs.observability.local_ledger import (  # noqa: E402
+    gap_intervals,
+    host_ledger_path,
+    to_report_days,
+)
 
-ENVIRONMENTS = ("production", "staging")
+# Production is the report; a staging ledger that is missing or unusable is a
+# line in it, never a reason to withhold the production report (#911 review).
+REQUIRED_ENVIRONMENT = "production"
+OPTIONAL_ENVIRONMENTS = ("staging",)
+ENVIRONMENTS = (REQUIRED_ENVIRONMENT, *OPTIONAL_ENVIRONMENTS)
 # Only the production heartbeat's outages are recorded by the Worker (#904).
 OUTAGE_ENVIRONMENT = "production"
 # The probe runner's loop (INFRA_PROBE_INTERVAL_SECONDS): one missed check per
-# interval of outage. The real loop is ~66 s, so this slightly overcounts misses.
+# interval of unavailability. The real loop is ~66 s, so this slightly overcounts.
 CHECK_INTERVAL_SECONDS = 60
 # The runner rewrites its ledger every minute; older than this is a stopped writer.
 MAX_LEDGER_AGE_SECONDS = 6 * 3600
@@ -130,43 +140,64 @@ def _ledger_document(text: str, source: str) -> dict:
     return ledger
 
 
-def build_report(
-    ledgers: Mapping[str, Mapping[str, Any]], outages: list[Any], now: datetime
-) -> str:
-    """Merge the environments' ledgers, count the outages, render the report."""
-    days: dict[str, dict[str, Any]] = {}
-    for environment in ENVIRONMENTS:
-        ledger = ledgers.get(environment)
-        if ledger is None:
-            raise RuntimeError(f"{environment} ledger is missing")
-        env_days = to_report_days(ledger)
-        if not any(day["signals"] for day in env_days):
-            raise RuntimeError(f"{environment} ledger has no recorded signals")
-        age = now.timestamp() - float(ledger.get("updated_at") or 0)
-        if age > MAX_LEDGER_AGE_SECONDS:
-            raise RuntimeError(
-                f"{environment} ledger is stale: last round {int(age)}s ago "
-                f"(max {MAX_LEDGER_AGE_SECONDS}s)"
-            )
-        for day in env_days:
-            merged = days.setdefault(
-                day["date"], {"date": day["date"], "runs": 0, "signals": {}}
-            )
-            merged["runs"] += int(day["runs"] or 0)
-            merged["signals"].update(day["signals"])
-    report = apply_outages(
+def environment_report(
+    environment: str, ledger: Mapping[str, Any], outages: list[Any], now: datetime
+) -> dict[str, Any]:
+    """One environment's ledger with its unavailability counted as failures."""
+    days = to_report_days(ledger)
+    if not any(day["signals"] for day in days):
+        raise RuntimeError(f"{environment} ledger has no recorded signals")
+    age = now.timestamp() - float(ledger.get("updated_at") or 0)
+    if age > MAX_LEDGER_AGE_SECONDS:
+        raise RuntimeError(
+            f"{environment} ledger is stale: last round {int(age)}s ago "
+            f"(max {MAX_LEDGER_AGE_SECONDS}s)"
+        )
+    report = apply_unavailability(
         {
             "as_of": now.strftime("%Y-%m-%d"),
-            "window_days": len(days),
-            "ledger": sorted(days.values(), key=lambda day: day["date"], reverse=True),
+            "ledger": sorted(days, key=lambda day: day["date"], reverse=True),
         },
-        outages,
-        environment=OUTAGE_ENVIRONMENT,
+        environment=environment,
+        gaps=gap_intervals(ledger, now.timestamp()),
+        outages=outages if environment == OUTAGE_ENVIRONMENT else [],
         check_interval_seconds=CHECK_INTERVAL_SECONDS,
         now=now,
     )
     report["window_days"] = len(report["ledger"])
-    return build_report_message(summarize_ledger(report))
+    return report
+
+
+def build_report(
+    ledgers: Mapping[str, Mapping[str, Any] | str], outages: list[Any], now: datetime
+) -> str:
+    """The production report, then one line per optional environment. A value in
+    ``ledgers`` that is a string is the reason that environment could not be read."""
+    production = ledgers.get(REQUIRED_ENVIRONMENT)
+    if not isinstance(production, Mapping):
+        raise RuntimeError(
+            f"{REQUIRED_ENVIRONMENT} ledger is missing: {production or 'not read'}"
+        )
+    lines = [
+        build_report_message(
+            summarize_ledger(
+                environment_report(REQUIRED_ENVIRONMENT, production, outages, now)
+            )
+        )
+    ]
+    for environment in OPTIONAL_ENVIRONMENTS:
+        label = f"{environment} (reported, never paged)"
+        ledger = ledgers.get(environment)
+        if not isinstance(ledger, Mapping):
+            lines.append(f"{label}: ledger unavailable: {ledger or 'not read'}")
+            continue
+        try:
+            summary = summarize_ledger(environment_report(environment, ledger, [], now))
+        except RuntimeError as exc:
+            lines.append(f"{label}: ledger unusable: {exc}")
+            continue
+        lines.append(build_environment_line(label, summary))
+    return "\n".join(lines)
 
 
 def run(
@@ -178,7 +209,7 @@ def run(
 ) -> int:
     now = now or datetime.now(UTC)
     if ledger_files:
-        ledgers = {
+        ledgers: dict[str, Mapping[str, Any] | str] = {
             environment: _ledger_document(Path(path).read_text(encoding="utf-8"), path)
             for environment, path in ledger_files.items()
         }
@@ -199,10 +230,12 @@ def run(
             )
             return 2
         token = (env.get("INFRA2_WATCHDOG_WORKER_STATUS_TOKEN") or "").strip()
-        ledgers = {
-            environment: read_vps_ledger(env, environment)
-            for environment in ENVIRONMENTS
-        }
+        ledgers = {REQUIRED_ENVIRONMENT: read_vps_ledger(env, REQUIRED_ENVIRONMENT)}
+        for environment in OPTIONAL_ENVIRONMENTS:
+            try:
+                ledgers[environment] = read_vps_ledger(env, environment)
+            except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+                ledgers[environment] = str(exc)
         outages = fetch_outages(outages_url, token)
 
     message = build_report(ledgers, outages, now)

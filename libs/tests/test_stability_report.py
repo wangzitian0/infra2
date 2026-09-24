@@ -12,33 +12,40 @@ from pathlib import Path
 
 import pytest
 
+from libs.observability import local_ledger
 from libs.observability.local_ledger import host_ledger_path
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "tools" / "stability_report.py"
 NOW = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
+DAY0 = datetime(2026, 9, 24, tzinfo=UTC).timestamp()
 
 
 def _ledger(
-    environment: str, *, fail: int = 0, updated_at: float | None = None
+    environment: str,
+    *,
+    fail_every: int = 0,
+    until: float | None = None,
+    hole: tuple[float, float] | None = None,
 ) -> dict:
-    return {
-        "schema": 1,
-        "environment": environment,
-        "updated_at": int(NOW.timestamp() - 60) if updated_at is None else updated_at,
-        "days": {
-            "2026-09-24": {
-                "runs": 720,
-                "signals": {
-                    f"{environment}:minio-public-route": {
-                        "ok": 720 - fail,
-                        "fail": fail,
-                        "lastDomain": "public-route" if fail else "",
-                    }
-                },
-            }
-        },
-    }
+    """A ledger written the way the runner writes it: a round every 60 s from
+    midnight until ``until`` (default: a minute before NOW), none inside ``hole``."""
+    ledger = local_ledger.new_ledger(environment)
+    at = DAY0
+    end = NOW.timestamp() - 60 if until is None else until
+    count = 0
+    while at < end:
+        if not (hole and hole[0] <= at < hole[1]):
+            count += 1
+            ok = not (fail_every and count % fail_every == 0)
+            local_ledger.record_round(
+                ledger,
+                {"public-route": [{"spec": {"name": "minio-public-route"}, "ok": ok}]},
+                environment,
+                at,
+            )
+        at += 60
+    return ledger
 
 
 def _outage_ms(hour: int, minute: int) -> int:
@@ -82,11 +89,13 @@ def _files(tmp_path, production: dict, staging: dict, outages: dict) -> dict:
 # ---- 正例 ---------------------------------------------------------------------
 
 
-def test_positive_dry_run_reports_both_environments_and_the_outage(
+def test_positive_dry_run_reports_production_and_a_staging_line(
     tmp_path, capsys
 ) -> None:
     report = _load_module()
-    paths = _files(tmp_path, _ledger("production"), _ledger("staging", fail=3), OUTAGES)
+    paths = _files(
+        tmp_path, _ledger("production"), _ledger("staging", fail_every=100), OUTAGES
+    )
 
     rc = report.run(
         {"INFRA2_STABILITY_REPORT_DRY_RUN": "1"},
@@ -98,15 +107,46 @@ def test_positive_dry_run_reports_both_environments_and_the_outage(
     assert rc == 0
     out = capsys.readouterr().out
     assert "[STABILITY]" in out
-    assert "window 1d | 1440 probe runs" in out
+    assert "window 1d | 719 probe runs" in out
     # the runner saw production perfect; the Worker's 45-minute outage says otherwise
-    assert (
-        "production VPS unreachable (Cloudflare heartbeat edges): 1 outage(s), 45.0 min"
-        in out
-    )
+    assert "production unavailable 45.0 min, counted as failures" in out
+    assert "45.0 min unreachable per Cloudflare in 1 outage(s)" in out
     assert "production:minio-public-route" in out
-    assert "staging:minio-public-route" in out
-    assert "Signals at 100%: 0/2" in out
+    assert "Signals at 100%: 0/1" in out
+    (staging,) = [line for line in out.splitlines() if line.startswith("staging ")]
+    assert staging.startswith("staging (reported, never paged): 99.026% · 0/1")
+    assert "lowest staging:minio-public-route" in staging
+
+
+def test_negative_a_45_minute_stop_of_the_runner_is_45_minutes_unavailable(
+    tmp_path, capsys
+) -> None:
+    """#911 review: shorter than the Worker's staleness window, so no outage edge."""
+    report = _load_module()
+    hole = (DAY0 + 3 * 3600, DAY0 + 3 * 3600 + 45 * 60)
+    paths = _files(
+        tmp_path,
+        _ledger("production", hole=hole),
+        _ledger("staging"),
+        {"ok": True, "outages": []},
+    )
+    assert (
+        report.run(
+            {"INFRA2_STABILITY_REPORT_DRY_RUN": "1"},
+            ledger_files={
+                "production": paths["production"],
+                "staging": paths["staging"],
+            },
+            outages_file=paths["outages"],
+            now=NOW,
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert "production unavailable 45.0 min" in out
+    assert "45.0 min with no probe round" in out
+    # 719 minutes to 11:59: 674 rounds recorded + 45 missed checks
+    assert "production:minio-public-route: 93.741% (45 fail/719 checks)" in out
 
 
 def test_positive_the_vps_is_read_over_ssh_and_outages_from_the_worker(
@@ -148,6 +188,29 @@ def test_positive_the_vps_is_read_over_ssh_and_outages_from_the_worker(
     assert "45.0 min" in capsys.readouterr().out
 
 
+def test_an_unreadable_staging_ledger_over_ssh_is_reported(monkeypatch, capsys) -> None:
+    report = _load_module()
+
+    def fake_run(argv, **_kwargs):
+        if "-staging/" in argv[-1]:
+            return subprocess.CompletedProcess(argv, 1, "", "No such file")
+        return subprocess.CompletedProcess(
+            argv, 0, json.dumps(_ledger("production")), ""
+        )
+
+    monkeypatch.setattr(report.subprocess, "run", fake_run)
+    monkeypatch.setattr(report, "fetch_outages", lambda *_a, **_k: [])
+    env = {
+        "INFRA2_STABILITY_REPORT_DRY_RUN": "1",
+        "INFRA2_WATCHDOG_SSH_HOST": "vps.example.invalid",
+        "INFRA2_WATCHDOG_SSH_USER": "watchdog",
+        "INFRA2_WATCHDOG_SSH_KEY_PATH": "/tmp/key",
+    }
+    assert report.run(env, now=NOW) == 0
+    out = capsys.readouterr().out
+    assert "staging (reported, never paged): ledger unavailable: reading staging" in out
+
+
 # ---- 反例: every missing input fails loudly --------------------------------------
 
 
@@ -170,20 +233,49 @@ def test_negative_an_empty_ledger_is_not_a_perfect_week(tmp_path) -> None:
         _run_with(tmp_path, empty, _ledger("staging"))
 
 
-def test_negative_a_stopped_ledger_writer_is_not_fresh(tmp_path) -> None:
+def test_negative_a_stopped_production_ledger_writer_is_not_fresh(tmp_path) -> None:
     """STALE-REPORTED-AS-FRESH: a ledger nobody writes any more fails the run."""
-    stale = _ledger("staging", updated_at=NOW.timestamp() - 7 * 3600)
-    with pytest.raises(RuntimeError, match="staging ledger is stale"):
-        _run_with(tmp_path, _ledger("production"), stale)
+    stale = _ledger("production", until=NOW.timestamp() - 7 * 3600)
+    with pytest.raises(RuntimeError, match="production ledger is stale"):
+        _run_with(tmp_path, stale, _ledger("staging"))
 
 
-def test_negative_a_missing_environment_fails(tmp_path) -> None:
+def test_a_stale_staging_ledger_is_a_line_not_a_failure(tmp_path, capsys) -> None:
+    """#911 review: staging must not withhold the production report."""
+    stale = _ledger("staging", until=NOW.timestamp() - 7 * 3600)
+    assert _run_with(tmp_path, _ledger("production"), stale) == 0
+    out = capsys.readouterr().out
+    assert "Overall availability" in out
+    assert (
+        "staging (reported, never paged): ledger unusable: staging ledger is stale"
+        in out
+    )
+
+
+def test_a_missing_staging_ledger_is_a_line_not_a_failure(tmp_path, capsys) -> None:
     report = _load_module()
     paths = _files(tmp_path, _ledger("production"), _ledger("staging"), OUTAGES)
-    with pytest.raises(RuntimeError, match="staging ledger is missing"):
+    assert (
         report.run(
             {"INFRA2_STABILITY_REPORT_DRY_RUN": "1"},
             ledger_files={"production": paths["production"]},
+            outages_file=paths["outages"],
+            now=NOW,
+        )
+        == 0
+    )
+    assert "staging (reported, never paged): ledger unavailable: not read" in (
+        capsys.readouterr().out
+    )
+
+
+def test_negative_a_missing_production_ledger_fails(tmp_path) -> None:
+    report = _load_module()
+    paths = _files(tmp_path, _ledger("production"), _ledger("staging"), OUTAGES)
+    with pytest.raises(RuntimeError, match="production ledger is missing"):
+        report.run(
+            {"INFRA2_STABILITY_REPORT_DRY_RUN": "1"},
+            ledger_files={"staging": paths["staging"]},
             outages_file=paths["outages"],
             now=NOW,
         )
