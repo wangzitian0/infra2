@@ -225,7 +225,7 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 | L2 Platform | Portal / Prefect | frontend / server-health unavailable | P2 / P1 | Planned |
 | L3 Finance Report | fr-postgres / fr-redis | app db / cache health fails | P0 / P1 | Planned |
 | L3 Finance Report | fr-app backend | OTEL ERROR/CRITICAL/FATAL > 10 in 15m | P1 | code (`FinanceReportBackendErrorLogs`) |
-| L3 Finance Report | fr-app backend | RED SLO: ≥5 5xx and >5% of non-probe requests in 5m / p95 > 1500ms | P0/P1 | code (`FinanceReportHigh5xxRate`, `FinanceReportP95LatencyHigh`) |
+| L3 Finance Report | fr-app backend | RED SLO: ≥5 5xx and >5% of non-probe requests in 5m / non-probe p95 > 3000ms for 10m | P0/P1 | code (`FinanceReportHigh5xxRate`, `FinanceReportP95LatencyHigh`) |
 | L3 Finance Report | fr-app backend | business anomaly: parse spike / rate-limit / async failure | P1/P2/P1 | code (`FinanceReport{StatementParseFailureSpike,RateLimitSaturation,AsyncTaskFailures}`) |
 | L3 Finance Report | fr-app backend | no request metrics from production for 10m (backend down or OTLP export stopped) | P1 | code (`FinanceReportBackendTelemetryAbsent`) |
 | L3 Finance Report | fr-app public route | `report[-staging].zitian.party/` (web) or `/api/health` fails | P0 prod / P2 staging | Live in-band public-route probes (`finance-report-{web,api}-public-route`);prod web 另由 Cloudflare 作为产品外部入口(2 次连续失败)|
@@ -330,13 +330,13 @@ Runbook 入库仅交付操作路径；#723 要求的一次现场演练、完整�
    |------|----------|------|----------|------|
    | `FinanceReportBackendErrorLogs` | 15 分钟内 ERROR/CRITICAL/FATAL 日志 > 10 条(`in_total`,按分钟桶求和) | P1 | 不告警:没有错误日志就是健康 | #901 实测 backend 24h 约 626k 次调用中有 35 次错误;按每次错误约 1 条 ERROR 日志估算,平均每 15 分钟约 0.4 条(错误日志的真实条数未实测,apply 后需复核);单个失败请求或一次用户重试不会越线,持续失败(每分钟 ≥1 条持续 10 分钟以上)或爆发会越线。阈值 0 时每条孤立 ERROR 都会产生一对 FIRING/RESOLVED |
    | `FinanceReportHigh5xxRate` | 5 分钟内非探针请求中 5xx ≥ 5 次**且**占比 > 5%(`at_least_once`) | P0 | PromQL 规则不支持 `alertOnAbsent`;由下面的遥测缺失规则覆盖 | 分母不做 `clamp_min`,低流量时整体宕机也会触发;最少 5 次这个下限挡住偶发 5xx。`/health`、`/ping`、`/ping/toggle` 同时从分子分母排除,否则健康的探针流量会把面向用户的故障稀释到 5% 以下 |
-   | `FinanceReportP95LatencyHigh` | p95 > 1500ms(5m rate,`at_least_once`) | P1 | 同上 | 慢但可用,符合 §3 对 P1 的定义(部分功能受损,核心链路仍通)。标签原为 `warning`,与摘要、本节和 §5 写的 P1 不一致 |
+   | `FinanceReportP95LatencyHigh` | 非探针请求的 p95 > 3000ms,且在 10 分钟窗口的**每个点**都超出(`all_times`,5m rate) | P1 | 同上 | 2026-09-24 在线上只读实测 24h:含 `/health` 的 p95 基本就是健康检查自身的延迟(p50 1412ms、p90 2200ms、p99 4000ms、最大 10s),按旧写法(1500ms、`at_least_once`、5m)一天会在 197 个 5 分钟窗口触发,约 28 次 P1。排除探针路由后,24h 里只有 14 分钟有非探针请求;持续 10 分钟超 3000ms 的次数为 0(含 health 时按 2000ms 算为 1 次)。SigNoz 会先丢掉 NaN 点再判 `all_times`,而没有非探针请求的分钟 p95 是 NaN,所以 query 用 `>= 0` 去掉 NaN,再用 `or on() vector(0)` 补 0:空闲的分钟会打断"持续",而不是被跳过,单个慢请求不会触发。慢但可用符合 §3 对 P1 的定义;标签原为 `warning`,与摘要写的 P1 不一致 |
    | `FinanceReportStatementParseFailureSpike` | 最近 15 分钟解析失败 > 3(`at_least_once`) | P1 | 同上 | 原先用 `in_total` 对重叠窗口求和,一次失败就会计成约 15 次 |
    | `FinanceReportRateLimitSaturation` | 最近 5 分钟限流拒绝 > 10(`at_least_once`) | P2 | 同上 | 同上,原先 3 次拒绝就会越线 |
    | `FinanceReportAsyncTaskFailures` | 最近 5 分钟有异步解析任务失败(> 0) | P1 | 同上 | 每次失败对应一个用户上传失败,需要处理 |
    | `FinanceReportBackendTelemetryAbsent` | 10 分钟内生产 backend 没有任何 `http.server.request.count` 样本(`absent_over_time`) | P1 | 本规则就是无数据告警 | cumulative counter 在进程存活期间每个导出周期都会上报,所以连续 10 分钟没有样本只能是 backend 挂了或 OTLP 导出断了,这时其余规则全部失明。backend 整体宕机时,由 in-band 公网路由探针 `finance-report-api-public-route` 负责 P0;这条规则覆盖"服务还活着但遥测断了"的情况,所以定为 P1 |
 
-   已知限制:cumulative counter 的某个 attribute 组合只在第一次计数后才出现,序列一出现就是 1,`increase()` 看不到这第一次;所以进程重启后第一次失败/5xx 不计入。`increase()` 会按窗口外推,值可能略高于真实次数(3 次拒绝可能算成约 3.75)。p95 包含探针请求。`FinanceReportReconciliationAnomaly` 已移出目录:它过滤 `outcome=~"failed|error|anomaly"`,而 app 只会发出 `auto_accepted|pending_review|accepted|rejected|superseded`,永远不会触发;app 发出真正的失败 outcome 后再恢复。apply 默认只记录不 prune,线上那条旧规则会保留(它本来就不会触发),需要时用 `--prune` 删除。
+   已知限制:cumulative counter 的某个 attribute 组合只在第一次计数后才出现,序列一出现就是 1,`increase()` 看不到这第一次;所以进程重启后第一次失败/5xx 不计入。`increase()` 会按窗口外推,值可能略高于真实次数(3 次拒绝可能算成约 3.75)。非探针流量很少,p95 可能只由几个请求决定;规则要求连续 10 分钟每分钟都超线,正是为了应对这一点。backend 健康检查自身的 p95 偏高(中位约 1.4s,最高 10s),另记在 #906。`FinanceReportReconciliationAnomaly` 已移出目录:它过滤 `outcome=~"failed|error|anomaly"`,而 app 只会发出 `auto_accepted|pending_review|accepted|rejected|superseded`,永远不会触发;app 发出真正的失败 outcome 后再恢复。apply 默认只记录不 prune,线上那条旧规则会保留(它本来就不会触发),需要时用 `--prune` 删除。
 4. 先跑 schema canary:`gh workflow run apply-observability.yml --ref <ref> -f mode=canary`(建一条 disabled PromQL 规则验 v5 信封再删)。apply 应在 app 发完所有引用 metric 名后。
 
 > **注**:`apply_alerts` 现为声明式 reconcile(upsert + 默认只 log 的 prune),见 [ops.pipeline.md](./ops.pipeline.md)。

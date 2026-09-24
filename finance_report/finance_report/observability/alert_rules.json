@@ -33,14 +33,14 @@
       "alert_name": "FinanceReportP95LatencyHigh",
       "service_name": "finance-report-backend",
       "severity": "error",
-      "threshold": 1500,
+      "threshold": 3000,
       "threshold_unit": "ms",
       "op": "above",
-      "match_type": "at_least_once",
-      "eval_window": "5m0s",
+      "match_type": "all_times",
+      "eval_window": "10m0s",
       "frequency": "1m",
-      "promql": "histogram_quantile(0.95, sum by (le) (rate({\"http.server.request.duration.bucket\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"production\"}[5m])))",
-      "summary": "finance_report backend p95 request latency is above 1500ms. Severity P1. Runbook: docs/ssot/ops.observability.md SOP-004C."
+      "promql": "(histogram_quantile(0.95, sum by (le) (rate({\"http.server.request.duration.bucket\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"production\",\"http.route\"!~\"^(/health|/ping|/ping/toggle)$\"}[5m]))) >= 0) or on() vector(0)",
+      "summary": "finance_report backend p95 latency of non-probe requests stayed above 3000ms for 10 minutes. Severity P1. Runbook: docs/ssot/ops.observability.md SOP-004C."
     },
     {
       "signal": "metrics",

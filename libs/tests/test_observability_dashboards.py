@@ -133,11 +133,19 @@ def test_alert_definition_renders_signoz_log_rule_routed_to_channel() -> None:
 
 
 # #906: what each checked-in rule must render to. (ruleType, severity, target,
-# SigNoz matchType, evalWindow, targetUnit). matchType: "1" at_least_once, "4" in_total.
+# SigNoz matchType, evalWindow, targetUnit). matchType: "1" at_least_once,
+# "2" all_times, "4" in_total.
 _EXPECTED_RULES = {
     "FinanceReportBackendErrorLogs": ("threshold_rule", "error", 10, "4", "15m0s", ""),
     "FinanceReportHigh5xxRate": ("promql_rule", "critical", 0.05, "1", "5m0s", "%"),
-    "FinanceReportP95LatencyHigh": ("promql_rule", "error", 1500.0, "1", "5m0s", "ms"),
+    "FinanceReportP95LatencyHigh": (
+        "promql_rule",
+        "error",
+        3000.0,
+        "2",
+        "10m0s",
+        "ms",
+    ),
     "FinanceReportStatementParseFailureSpike": (
         "promql_rule",
         "error",
@@ -316,6 +324,10 @@ def test_promql_regex_matchers_are_anchored() -> None:
         assert value.startswith("^") and value.endswith("$"), (name, value)
 
 
+# The probe routes the 5xx ratio and the p95 leave out (finance_report health/system routers).
+_PROBE_ROUTE_EXCLUSION = ("http.route", "!~", "^(/health|/ping|/ping/toggle)$")
+
+
 def test_5xx_rule_needs_a_minimum_5xx_count_and_ignores_probe_traffic() -> None:
     """#906: the old ratio divided by clamp_min(total_rate, 1) and required every point
     of the window, so a low-traffic outage never fired; healthy /health probes also
@@ -330,13 +342,42 @@ def test_5xx_rule_needs_a_minimum_5xx_count_and_ignores_probe_traffic() -> None:
     assert re.fullmatch(r"\(sum\(increase\(.*\)\) / sum\(increase\(.*\)\)\)", ratio)
     assert len(selectors) == 3
     for _metric, matchers in selectors:
-        assert ("http.route", "!~", "^(/health|/ping|/ping/toggle)$") in matchers
+        assert _PROBE_ROUTE_EXCLUSION in matchers
     five_xx = [
         m
         for _metric, m in selectors
         if ("http.response.status_code_class", "=", "5xx") in m
     ]
     assert len(five_xx) == 2  # the ratio's numerator and the count guard
+
+
+def test_p95_rule_pages_only_on_a_sustained_non_probe_breach() -> None:
+    """#906 live check (2026-09-24, 24 h): with /health included the p95 was mostly the
+    health endpoint's own latency (p50 1412 ms, max 10 s), and 1500 ms / at_least_once
+    would have fired in 197 five-minute windows a day. The rule excludes the probe
+    routes and must hold above 3000 ms at every point of a 10 minute window.
+
+    SigNoz drops NaN points before all_times, and the p95 is NaN in any minute with no
+    non-probe request, so a lone slow request would pass "all remaining points above".
+    `>= 0` drops the NaN and `or on() vector(0)` puts a 0 in its place, so a quiet
+    minute breaks the streak instead of vanishing from it."""
+    payload = _rendered_rules()["FinanceReportP95LatencyHigh"]
+    promql = payload["condition"]["compositeQuery"]["queries"][0]["spec"]["query"]
+    (threshold,) = payload["condition"]["thresholds"]["spec"]
+    selectors = _selectors(promql)
+
+    assert threshold["matchType"] == "2"  # all_times
+    assert threshold["target"] == 3000.0
+    assert payload["evaluation"]["spec"]["evalWindow"] == "10m0s"
+    assert [metric for metric, _ in selectors] == [
+        "http.server.request.duration.bucket"
+    ]
+    assert _PROBE_ROUTE_EXCLUSION in selectors[0][1]
+    assert re.fullmatch(
+        r"\(histogram_quantile\(0\.95, sum by \(le\) \(rate\(\{[^{}]*\}\[5m\]\)\)\) >= 0\)"
+        r" or on\(\) vector\(0\)",
+        promql,
+    )
 
 
 def test_backend_telemetry_absence_is_expressed_in_promql() -> None:
