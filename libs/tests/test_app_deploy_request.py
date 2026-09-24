@@ -501,9 +501,13 @@ def test_production_evidence_rejects_pending_changes_requested(reviews, error) -
         [{"user": {"login": "octocat-author"}, "state": "APPROVED"}],
         [{"user": {"login": "reviewer"}, "state": "COMMENTED"}],
         [{"user": {"login": "reviewer"}, "state": "APPROVED"}],
+        [
+            {"user": {"login": "reviewer"}, "state": "CHANGES_REQUESTED"},
+            {"user": {"login": "reviewer"}, "state": "APPROVED"},
+        ],
     ],
 )
-def test_production_evidence_accepts_valid_reviews(reviews) -> None:
+def test_production_evidence_accepts_reviews_without_changes_requested(reviews) -> None:
     responses = {
         policy_path(): policy_contents(FINANCE_REPORT_POLICY),
         f"/repos/{APP_REPO}/actions/runs/100": successful_run(100),
