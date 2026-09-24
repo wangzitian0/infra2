@@ -13,7 +13,7 @@ shared_tasks = sys.modules.get("platform.30.todo.shared")
 class TodoDeployer(Deployer):
     service = "todo"
     compose_path = "platform/30.todo/compose.yaml"
-    data_path = "/data/platform/todo"
+    data_path = ""
 
     subdomain = None
     service_port = 8000

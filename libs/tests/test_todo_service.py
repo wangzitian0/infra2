@@ -26,7 +26,7 @@ def test_todo_service_registered_in_service_registry() -> None:
     assert meta.service_port == 8000
     assert meta.service_name == "todo"
     assert meta.compose_path == "platform/30.todo/compose.yaml"
-    assert meta.data_path == "/data/platform/todo"
+    assert meta.data_path == ""
     assert meta.prod_only is False
 
 
