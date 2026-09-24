@@ -320,7 +320,12 @@ def summarize_watchdog_log_events(logs_by_run: Mapping[str, str]) -> dict[str, A
             and _as_int(event.get("failure_count")) > 0
             for event in events
         )
-        alertable = bool(check_failures) or complete_failure
+        # #908: a report-only failure goes to the daily report, never the pager,
+        # so it is not an alert that recall must account for.
+        paged_failures = [
+            event for event in check_failures if event.get("route") != "report"
+        ]
+        alertable = bool(paged_failures) or complete_failure
         if alertable:
             alertable_run_count += 1
 
@@ -328,7 +333,9 @@ def summarize_watchdog_log_events(logs_by_run: Mapping[str, str]) -> dict[str, A
             event.get("event") == "watchdog.delivery.success" for event in events
         )
         delivery_failures = [
-            event for event in events if event.get("event") == "watchdog.delivery.failure"
+            event
+            for event in events
+            if event.get("event") == "watchdog.delivery.failure"
         ]
         fallback_issue = any(
             str(event.get("fallback_issue_url") or "").strip()
@@ -434,7 +441,9 @@ def fetch_stale_open_issues(
         for issue in page_issues:
             if not isinstance(issue, dict) or "pull_request" in issue:
                 continue  # the issues API also returns PRs; not what this reports on
-            updated = _parse_iso8601(issue["updated_at"]) if issue.get("updated_at") else None
+            updated = (
+                _parse_iso8601(issue["updated_at"]) if issue.get("updated_at") else None
+            )
             if updated is None:
                 continue
             if updated >= cutoff:
@@ -553,8 +562,13 @@ def main(env: Mapping[str, str] | None = None) -> int:
         "false",
         "no",
     }:
-        stale_days = _as_int(current_env.get("WATCHDOG_DIGEST_STALE_ISSUE_DAYS")) or STALE_ISSUE_DAYS
-        stale = fetch_stale_open_issues(repository, token, stale_days=stale_days, now=now)
+        stale_days = (
+            _as_int(current_env.get("WATCHDOG_DIGEST_STALE_ISSUE_DAYS"))
+            or STALE_ISSUE_DAYS
+        )
+        stale = fetch_stale_open_issues(
+            repository, token, stale_days=stale_days, now=now
+        )
         summary["stale_issues"] = summarize_stale_issues(stale)
     message = build_digest_message(summary, repository)
     if current_env.get("WATCHDOG_DIGEST_DRY_RUN") == "1":

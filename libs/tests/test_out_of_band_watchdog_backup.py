@@ -433,3 +433,30 @@ def test_the_lazy_imports_resolve_with_only_the_jobs_packages() -> None:
     assert result.returncode == 0, result.stderr
     assert "verifier unavailable" not in result.stdout, result.stdout
     assert "no production manifest" in result.stdout
+
+
+def test_the_routing_inputs_resolve_with_only_the_jobs_packages() -> None:
+    """#908: which checks page and the Worker's bound are read at run time.
+
+    Both come from repo files through lazy imports (PyYAML, tomllib); under the
+    job's packages alone a broken import would page every failure every day.
+    """
+    code = _JOB_ONLY_IMPORTS + (
+        "import tools.out_of_band_watchdog as w\n"
+        "print(sorted(w.load_report_only_checks()))\n"
+        "print(w.worker_status_max_age_seconds())\n"
+    )
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONSAFEPATH"}
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env={**env, "PYTHONPATH": "."},
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert result.returncode == 0, result.stderr
+    report_only, bound = result.stdout.splitlines()
+    assert report_only == str(sorted(watchdog.load_report_only_checks()))
+    assert int(bound) == watchdog.worker_status_max_age_seconds() > 0

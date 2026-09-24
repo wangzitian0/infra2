@@ -5,9 +5,14 @@ from __future__ import annotations
 import base64
 import importlib.util
 import json
+import re
+import subprocess
 import sys
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -15,6 +20,26 @@ WORKFLOW = ROOT / ".github/workflows/ops-checks.yml"
 WATCHDOG = ROOT / "tools/out_of_band_watchdog.py"
 ALERTING_README = ROOT / "platform/12.alerting/README.md"
 ALERTING_SSOT = ROOT / "docs/ssot/ops.observability.md"
+
+
+#: #908: a configured report path; without it the watchdog pages its own config.
+REPORT_ENV = {
+    "INFRA2_REPORTS_FEISHU_APP_ID": "cli_report",
+    "INFRA2_REPORTS_FEISHU_APP_SECRET": "report-secret",
+    "INFRA2_REPORTS_FEISHU_CHAT_ID": "oc_report",
+}
+
+
+@pytest.fixture(autouse=True)
+def _no_real_feishu(monkeypatch):
+    """No test here may reach Feishu: a real send would post to a live chat."""
+    import libs.alerting as alerting
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("a test tried to deliver to Feishu for real")
+
+    monkeypatch.setattr(alerting, "deliver_feishu_app_text", refuse)
+    monkeypatch.setattr(alerting, "deliver_feishu_text", refuse)
 
 
 def _load_watchdog():
@@ -78,12 +103,9 @@ def test_default_targets_cover_public_host_and_bridge_health() -> None:
     watchdog = _load_watchdog()
 
     http_targets = watchdog.parse_http_targets("")
-    assert [target.name for target in http_targets] == [
-        "infra2-public-entrypoint",
-        "cloudflare-worker-health",
-    ]
+    # #908: the Worker's /health always answered ok; /status freshness replaced it.
+    assert [target.name for target in http_targets] == ["infra2-public-entrypoint"]
     assert http_targets[0].url == "https://cloud.zitian.party"
-    assert http_targets[1].url.endswith("/health")
 
     ssh_targets = watchdog.parse_ssh_targets("")
     assert [target.name for target in ssh_targets] == [
@@ -186,11 +208,12 @@ def test_worker_status_check_accepts_fresh_nonempty_status(monkeypatch) -> None:
         timeout=3,
     )
 
+    bound = watchdog.worker_status_max_age_seconds()
     assert results == [
         watchdog.CheckResult(
             "cloudflare-worker-status",
             True,
-            "worker last-run fresh: age=1800s",
+            f"worker last run fresh: age=1800s (max {bound}s)",
         )
     ]
     assert captured == {
@@ -200,9 +223,9 @@ def test_worker_status_check_accepts_fresh_nonempty_status(monkeypatch) -> None:
     }
 
 
-def test_worker_status_check_reports_last_run_failure_context(monkeypatch) -> None:
-    """#209: unhealthy Worker status must expose whether cron checks failed."""
-    watchdog = _load_watchdog()
+def _worker_status_response(monkeypatch, watchdog, last_run: dict) -> list:
+    """Serve one /status body built from `last_run`; return the request log."""
+    served: list = []
 
     class FakeResponse:
         status = 200
@@ -214,33 +237,148 @@ def test_worker_status_check_reports_last_run_failure_context(monkeypatch) -> No
             return False
 
         def read(self, _limit):
-            return (
-                b'{"ok":false,"lastRun":{"ok":false,"ageSeconds":890,'
-                b'"failureCount":2,"routeTargetCount":8,'
-                b'"heartbeatTargetCount":2,'
-                b'"deliveryError":"feishu delivery failed"}}'
-            )
+            return json.dumps(
+                {"ok": last_run.get("ok", True), "lastRun": last_run}
+            ).encode()
 
-    monkeypatch.setattr(watchdog, "urlopen", lambda *_args, **_kwargs: FakeResponse())
+    def fake_urlopen(request, **_kwargs):
+        served.append(request.full_url)
+        return FakeResponse()
 
-    results = watchdog.run_worker_status_check(
+    monkeypatch.setattr(watchdog, "urlopen", fake_urlopen)
+    return served
+
+
+#: A fresh run that found failures and paged them itself.
+DELIVERED_FAILING_RUN = {
+    "ok": False,
+    "ageSeconds": 890,
+    "failureCount": 2,
+    "routeTargetCount": 8,
+    "heartbeatTargetCount": 2,
+    "deliveryError": "",
+}
+#: The same run, but its pages never arrived.
+UNDELIVERED_RUN = {**DELIVERED_FAILING_RUN, "deliveryError": "feishu delivery failed"}
+
+
+def test_worker_status_is_green_on_a_fresh_run_that_delivered_its_findings(
+    monkeypatch,
+) -> None:
+    """#908: the Worker paged its own findings; the audit judges only its liveness."""
+    watchdog = _load_watchdog()
+    _worker_status_response(monkeypatch, watchdog, DELIVERED_FAILING_RUN)
+
+    (result,) = watchdog.run_worker_status_check(
         {"INFRA2_WATCHDOG_WORKER_STATUS_TOKEN": "status-token"},
         timeout=3,
-        retry_delay_seconds=0,  # the retry is asserted below; its real 60 s wait is not
+        retry_delay_seconds=0,
+        max_age_seconds=7200,
     )
 
-    assert results == [
-        watchdog.CheckResult(
-            "cloudflare-worker-status",
-            False,
-            (
-                "worker status unhealthy: age=890 last_run_ok=False failures=2 "
-                "routes=8 heartbeats=2 delivery_error=feishu delivery failed"
-            ),
-            "cloudflare-worker-health",
-            attempt_count=2,
-        )
-    ]
+    assert result.ok is True
+    assert result.attempt_count == 1
+    assert result.detail == "worker last run fresh: age=890s (max 7200s)"
+    # ...and what the run found is carried to the report as information
+    assert "delivered by the Worker itself: ok=False failures=2" in result.note
+    assert "routes=8 heartbeats=2" in result.note
+
+
+def test_worker_status_pages_when_its_last_run_could_not_deliver(monkeypatch) -> None:
+    """Liveness is "runs AND delivers": undelivered pages are a blind Worker."""
+    watchdog = _load_watchdog()
+    served = _worker_status_response(monkeypatch, watchdog, UNDELIVERED_RUN)
+
+    (result,) = watchdog.run_worker_status_check(
+        {"INFRA2_WATCHDOG_WORKER_STATUS_TOKEN": "status-token"},
+        timeout=3,
+        retry_delay_seconds=0,
+        max_age_seconds=7200,
+    )
+
+    assert (result.ok, result.failure_domain) == (False, "cloudflare-worker-health")
+    assert result.detail == (
+        "worker runs but could not deliver its alerts: age=890s failures=2 "
+        "delivery_error=feishu delivery failed"
+    )
+    assert len(served) == 2  # retried once before turning red
+
+
+@pytest.mark.parametrize(
+    ("age", "expected"),
+    [
+        (7201, "worker last run is stale: age=7201s > max 7200s"),
+        (-301, "worker last run is 301s in the future (clock skew?)"),
+        (None, "worker has no recorded run: ageSeconds=None"),
+    ],
+)
+def test_worker_status_is_red_when_the_last_run_is_not_fresh(
+    monkeypatch, age, expected
+) -> None:
+    watchdog = _load_watchdog()
+    served = _worker_status_response(
+        monkeypatch, watchdog, {"ok": True, "ageSeconds": age}
+    )
+
+    (result,) = watchdog.run_worker_status_check(
+        {"INFRA2_WATCHDOG_WORKER_STATUS_TOKEN": "status-token"},
+        timeout=3,
+        retry_delay_seconds=0,
+        max_age_seconds=7200,
+    )
+
+    assert (result.ok, result.detail) == (False, expected)
+    assert result.failure_domain == "cloudflare-worker-health"
+    assert len(served) == 2  # retried once before turning red
+
+
+def test_worker_status_is_green_at_exactly_the_bound(monkeypatch) -> None:
+    watchdog = _load_watchdog()
+    _worker_status_response(monkeypatch, watchdog, {"ok": True, "ageSeconds": 7200})
+
+    (result,) = watchdog.run_worker_status_check(
+        {"INFRA2_WATCHDOG_WORKER_STATUS_TOKEN": "t"},
+        timeout=3,
+        retry_delay_seconds=0,
+        max_age_seconds=7200,
+    )
+
+    assert result.ok is True
+    assert result.note == ""  # a clean run has nothing to report
+
+
+def test_worker_status_bound_is_the_workers_own_configured_max_age(tmp_path) -> None:
+    """One value: the audit reads the Worker's WATCHDOG_STATUS_MAX_AGE_SECONDS."""
+    import tomllib
+
+    watchdog = _load_watchdog()
+    wrangler = tomllib.loads(watchdog.WORKER_WRANGLER.read_text(encoding="utf-8"))
+    configured = int(wrangler["vars"]["WATCHDOG_STATUS_MAX_AGE_SECONDS"])
+
+    assert watchdog.worker_status_max_age_seconds() == configured
+    edited = tmp_path / "wrangler.toml"
+    edited.write_text('[vars]\nWATCHDOG_STATUS_MAX_AGE_SECONDS = "600"\n')
+    assert watchdog.worker_status_max_age_seconds(edited) == 600
+    edited.write_text('[vars]\nWATCHDOG_STATUS_MAX_AGE_SECONDS = "0"\n')
+    with pytest.raises(ValueError, match="not a positive bound"):
+        watchdog.worker_status_max_age_seconds(edited)
+
+
+def test_an_unreadable_worker_bound_is_a_red_configuration_failure(
+    monkeypatch,
+) -> None:
+    watchdog = _load_watchdog()
+
+    def unreadable():
+        raise KeyError("vars")
+
+    monkeypatch.setattr(watchdog, "worker_status_max_age_seconds", unreadable)
+    (result,) = watchdog.run_worker_status_check(
+        {"INFRA2_WATCHDOG_WORKER_STATUS_TOKEN": "t"}, timeout=3
+    )
+
+    assert (result.ok, result.failure_domain) == (False, "configuration")
+    assert "WATCHDOG_STATUS_MAX_AGE_SECONDS" in result.detail
 
 
 def test_custom_ssh_targets_preserve_mandatory_docker_health() -> None:
@@ -316,16 +454,18 @@ def test_host_failures_link_to_concrete_p0_runbooks() -> None:
     )
 
 
-def test_main_sends_feishu_only_when_a_check_fails(monkeypatch) -> None:
-    """Infra-007.2: successful checks stay quiet, failures send direct Feishu."""
+def test_main_sends_feishu_only_when_a_paging_check_fails(monkeypatch) -> None:
+    """Infra-007.2: successful checks stay quiet, paging failures send direct Feishu."""
     watchdog = _load_watchdog()
     sent_messages: list[str] = []
+    reports: list[str] = []
+    worker = [watchdog.CheckResult("cloudflare-worker-status", True, "fresh")]
 
     monkeypatch.setattr(
         watchdog,
         "run_http_checks",
         lambda _targets, _timeout, **_kwargs: [
-            watchdog.CheckResult("infra2-iac-runner", True, "HTTP 200")
+            watchdog.CheckResult("infra2-public-entrypoint", True, "HTTP 200")
         ],
     )
     monkeypatch.setattr(watchdog, "run_ssh_checks", lambda _config, _targets: [])
@@ -333,9 +473,7 @@ def test_main_sends_feishu_only_when_a_check_fails(monkeypatch) -> None:
     monkeypatch.setattr(
         watchdog,
         "run_worker_status_check",
-        lambda _env, _timeout, **_kwargs: [
-            watchdog.CheckResult("cloudflare-worker-status", True, "fresh")
-        ],
+        lambda _env, _timeout, **_kwargs: list(worker),
     )
     monkeypatch.setattr(
         watchdog,
@@ -352,40 +490,35 @@ def test_main_sends_feishu_only_when_a_check_fails(monkeypatch) -> None:
         "deliver_out_of_band_alert",
         lambda _env, text: sent_messages.append(text),
     )
-
-    assert (
-        watchdog.main(
-            {
-                "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL": "https://open.feishu.cn/open-apis/bot/v2/hook/token",
-                "WATCHDOG_DRY_RUN": "0",
-            }
-        )
-        == 0
-    )
-    assert sent_messages == []
-
     monkeypatch.setattr(
-        watchdog,
-        "run_http_checks",
-        lambda _targets, _timeout, **_kwargs: [
-            watchdog.CheckResult("infra2-iac-runner", False, "connection refused")
-        ],
+        watchdog, "deliver_infra2_report", lambda text, _env: reports.append(text)
     )
+    env = {**REPORT_ENV, "WATCHDOG_DRY_RUN": "0"}
+
+    assert watchdog.main(env) == 0
+    assert sent_messages == []
+    assert reports == []
+
+    worker[:] = [
+        watchdog.CheckResult(
+            "cloudflare-worker-status", False, "stale", "cloudflare-worker-health"
+        )
+    ]
 
     assert (
         watchdog.main(
             {
-                "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL": "https://open.feishu.cn/open-apis/bot/v2/hook/token",
+                **env,
                 "GITHUB_SERVER_URL": "https://github.com",
                 "GITHUB_REPOSITORY": "wangzitian0/infra2",
                 "GITHUB_RUN_ID": "123",
-                "WATCHDOG_DRY_RUN": "0",
             }
         )
         == 1
     )
     assert len(sent_messages) == 1
     assert "OUT-OF-BAND" in sent_messages[0]
+    assert "cloudflare-worker-status: stale" in sent_messages[0]
 
 
 def test_http_checks_retry_transient_failure(monkeypatch) -> None:
@@ -462,7 +595,7 @@ def test_main_structured_check_logs_include_attempt_count(monkeypatch) -> None:
         watchdog, "_emit_structured_log", lambda payload: emitted.append(dict(payload))
     )
 
-    assert watchdog.main({"WATCHDOG_DRY_RUN": "0"}) == 0
+    assert watchdog.main({**REPORT_ENV, "WATCHDOG_DRY_RUN": "0"}) == 0
     check_events = [row for row in emitted if row.get("event") == "watchdog.check"]
     assert len(check_events) == 1
     assert check_events[0]["attempt_count"] == 2
@@ -498,6 +631,7 @@ def test_main_uses_default_retry_values_when_env_is_blank(monkeypatch) -> None:
 
     result = watchdog.main(
         {
+            **REPORT_ENV,
             "INFRA2_WATCHDOG_RETRY_MAX_ATTEMPTS": "",
             "INFRA2_WATCHDOG_RETRY_DELAY_SECONDS": "",
             "WATCHDOG_DRY_RUN": "0",
@@ -515,13 +649,7 @@ def test_main_records_delivery_failure_event_instead_of_crashing(monkeypatch) ->
     emitted: list[dict] = []
 
     monkeypatch.setattr(
-        watchdog,
-        "run_http_checks",
-        lambda _targets, _timeout, **_kwargs: [
-            watchdog.CheckResult(
-                "infra2-public-entrypoint", False, "connection refused"
-            )
-        ],
+        watchdog, "run_http_checks", lambda _targets, _timeout, **_kwargs: []
     )
     monkeypatch.setattr(watchdog, "run_ssh_checks", lambda _config, _targets: [])
     monkeypatch.setattr(watchdog, "run_backup_checks", lambda _config: [])
@@ -538,7 +666,14 @@ def test_main_records_delivery_failure_event_instead_of_crashing(monkeypatch) ->
     monkeypatch.setattr(
         watchdog,
         "run_peer_scheduler_liveness_check",
-        lambda _env, _timeout, **_kwargs: [],
+        lambda _env, _timeout, **_kwargs: [
+            watchdog.CheckResult(
+                "truealpha-scheduler-liveness",
+                False,
+                "STALE: 20h old",
+                "peer-scheduler-liveness",
+            )
+        ],
     )
     monkeypatch.setattr(
         watchdog,
@@ -554,7 +689,7 @@ def test_main_records_delivery_failure_event_instead_of_crashing(monkeypatch) ->
         watchdog, "_emit_structured_log", lambda payload: emitted.append(dict(payload))
     )
 
-    assert watchdog.main({"WATCHDOG_DRY_RUN": "0"}) == 1
+    assert watchdog.main({**REPORT_ENV, "WATCHDOG_DRY_RUN": "0"}) == 1
     delivery_events = [
         row for row in emitted if row.get("event") == "watchdog.delivery.failure"
     ]
@@ -572,13 +707,7 @@ def test_main_records_delivery_success_event_for_weekly_recall_audit(
     delivered: list[str] = []
 
     monkeypatch.setattr(
-        watchdog,
-        "run_http_checks",
-        lambda _targets, _timeout, **_kwargs: [
-            watchdog.CheckResult(
-                "infra2-public-entrypoint", False, "connection refused"
-            )
-        ],
+        watchdog, "run_http_checks", lambda _targets, _timeout, **_kwargs: []
     )
     monkeypatch.setattr(watchdog, "run_ssh_checks", lambda _config, _targets: [])
     monkeypatch.setattr(watchdog, "run_backup_checks", lambda _config: [])
@@ -595,7 +724,14 @@ def test_main_records_delivery_success_event_for_weekly_recall_audit(
     monkeypatch.setattr(
         watchdog,
         "run_peer_scheduler_liveness_check",
-        lambda _env, _timeout, **_kwargs: [],
+        lambda _env, _timeout, **_kwargs: [
+            watchdog.CheckResult(
+                "truealpha-scheduler-liveness",
+                False,
+                "STALE: 20h old",
+                "peer-scheduler-liveness",
+            )
+        ],
     )
     monkeypatch.setattr(
         watchdog,
@@ -606,7 +742,7 @@ def test_main_records_delivery_success_event_for_weekly_recall_audit(
         watchdog, "_emit_structured_log", lambda payload: emitted.append(dict(payload))
     )
 
-    assert watchdog.main({"WATCHDOG_DRY_RUN": "0"}) == 1
+    assert watchdog.main({**REPORT_ENV, "WATCHDOG_DRY_RUN": "0"}) == 1
     assert len(delivered) == 1
     delivery_events = [
         row for row in emitted if row.get("event") == "watchdog.delivery.success"
@@ -827,50 +963,309 @@ def test_dokploy_status_check_maps_prod_to_p1_and_staging_to_p2() -> None:
     )
 
 
-def test_healthy_runtime_reclassifies_dokploy_error_without_silencing_it() -> None:
+NOW_TS = 1_790_000_000.0
+
+
+def _dokploy_error(unit: str, *, recorded_hours_ago: float | None):
     watchdog = _load_watchdog()
-    results = [
-        watchdog.CheckResult(
-            "dokploy-status:truealpha/production/postgres",
-            False,
-            "composeStatus=error",
-            "dokploy-deploy-status",
-        ),
-        watchdog.CheckResult(
-            "infra2-docker-health",
+    return watchdog.CheckResult(
+        f"dokploy-status:truealpha/production/{unit}",
+        False,
+        "composeStatus=error",
+        "dokploy-deploy-status",
+        recorded_at=None
+        if recorded_hours_ago is None
+        else NOW_TS - recorded_hours_ago * 3600,
+    )
+
+
+CURRENT = "c" * 64
+OLD = "0" * 64
+
+
+def _container(
+    name, *, state="running", exit_code="0", health="healthy", config=CURRENT
+):
+    watchdog = _load_watchdog()
+    return watchdog.UnitContainer(name, state, exit_code, health, config)
+
+
+def test_a_dokploy_record_is_stale_only_with_per_unit_runtime_evidence() -> None:
+    """#908 review: age and a host-wide sweep prove nothing about one unit."""
+    watchdog = _load_watchdog()
+    proven = replace(
+        _dokploy_error("postgres", recorded_hours_ago=1),
+        runtime_evidence="1 container(s) of this unit run healthy on the current config",
+    )
+    old = _dokploy_error("redis", recorded_hours_ago=80)
+    at_bound = _dokploy_error("app", recorded_hours_ago=72)
+    no_time = _dokploy_error("worker", recorded_hours_ago=None)
+    sweep = watchdog.CheckResult("infra2-docker-health", True, "docker-health-ok")
+
+    kept, stale = watchdog.split_stale_dokploy_records(
+        [proven, old, at_bound, no_time, sweep], now_ts=NOW_TS
+    )
+
+    assert stale == [(proven, proven.runtime_evidence)]
+    # an old record with no per-unit evidence is still a failure, labelled truthfully
+    assert kept[0].name == old.name and not kept[0].ok
+    assert kept[0].detail == (
+        "composeStatus=error; old record: latest deployment is 80h old (over 72h), "
+        "and no per-unit runtime evidence shows the unit recovered"
+    )
+    # a green host-wide sweep no longer stales anything
+    assert kept[1:] == [at_bound, no_time, sweep]
+
+
+@pytest.mark.parametrize(
+    ("containers", "expected_hash", "proven", "why"),
+    [
+        (
+            [_container("app"), _container("init", state="exited", config="")],
+            CURRENT,
             True,
-            "docker-health-ok",
-            "docker-runtime",
+            "2 container(s) of this unit run healthy on the current config cccccccccccc",
         ),
-    ]
-
-    correlated = watchdog.correlate_control_plane_with_runtime(results)
-
-    finding = correlated[0]
-    assert finding.ok is False
-    assert finding.failure_domain == "state-discrepancy"
-    assert "runtime_evidence=infra2-docker-health:ok" in finding.detail
-    assert watchdog._severity_for(finding.name, finding.failure_domain) == "P2"
-
-
-def test_failed_runtime_keeps_dokploy_failure_in_deploy_domain() -> None:
+        (
+            # the reviewer's case: the pull failed, the old version runs healthy
+            [_container("app", config=OLD)],
+            CURRENT,
+            False,
+            "app runs config 000000000000, current is cccccccccccc",
+        ),
+        (
+            [_container("app"), _container("db", health="unhealthy")],
+            CURRENT,
+            False,
+            "db is running (health unhealthy, exit 0)",
+        ),
+        (
+            [_container("app"), _container("migrate", state="exited", exit_code="1")],
+            CURRENT,
+            False,
+            "migrate is exited (health healthy, exit 1)",
+        ),
+        (
+            [_container("app", config="")],
+            CURRENT,
+            False,
+            "no container carries IAC_CONFIG_HASH",
+        ),
+        ([], CURRENT, False, "no container of this unit on the host"),
+        (
+            [_container("app")],
+            "",
+            False,
+            "Dokploy holds no IAC_CONFIG_HASH for this unit, so its current config "
+            "cannot be matched",
+        ),
+        (
+            [_container("init", state="exited", config=CURRENT)],
+            CURRENT,
+            False,
+            "no container is running",
+        ),
+    ],
+    ids=[
+        "current-and-healthy",
+        "old-version-still-running",
+        "unhealthy",
+        "one-shot-failed",
+        "no-config-identity",
+        "no-containers",
+        "no-current-hash",
+        "nothing-running",
+    ],
+)
+def test_unit_runtime_verdict(containers, expected_hash, proven, why) -> None:
     watchdog = _load_watchdog()
-    results = [
-        watchdog.CheckResult(
-            "dokploy-status:truealpha/production/postgres",
-            False,
-            "composeStatus=error",
-            "dokploy-deploy-status",
+
+    assert watchdog.unit_runtime_verdict(containers, expected_hash) == (proven, why)
+
+
+def test_an_unreadable_container_line_is_no_evidence() -> None:
+    """Skipping a line could drop the one unhealthy container and prove the unit."""
+    watchdog = _load_watchdog()
+
+    (app,) = watchdog.parse_unit_containers(f"/app|running|0|healthy|{CURRENT}\n")
+    assert vars(app) == vars(_container("app"))
+    with pytest.raises(ValueError, match="unreadable container line"):
+        watchdog.parse_unit_containers(
+            f"/app|running|0|healthy|{CURRENT}\n/db|running\n"
+        )
+
+
+def test_the_unit_runtime_command_runs_under_sh_against_a_fake_docker(
+    tmp_path,
+) -> None:
+    """The real host command, with a `docker` on PATH that records its arguments."""
+    watchdog = _load_watchdog()
+    calls = tmp_path / "calls"
+    shim = tmp_path / "docker"
+    shim.write_text(
+        "#!/bin/sh\n"
+        f'printf "%s\\n" "$*" >> {calls}\n'
+        'case "$1" in\n'
+        '  ps) if [ "$4" = "label=com.docker.compose.project=fr-app-x1" ]; then '
+        'printf "id1\\nid2\\n"; fi ;;\n'
+        f'  inspect) printf "/app|running|0|healthy|{CURRENT}\\n'
+        f'/db|running|0|none|{CURRENT}\\n" ;;\n'
+        "esac\n",
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
+    env = {"PATH": f"{tmp_path}:/usr/bin:/bin"}
+
+    def run(project):
+        completed = subprocess.run(
+            ["sh", "-c", watchdog.unit_runtime_command(project)],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return completed.returncode, completed.stdout
+
+    code, out = run("fr-app-x1")
+    assert code == 0
+    assert watchdog.unit_runtime_verdict(
+        watchdog.parse_unit_containers(out), CURRENT
+    ) == (
+        True,
+        "2 container(s) of this unit run healthy on the current config cccccccccccc",
+    )
+    ps_call, inspect_call = calls.read_text().splitlines()
+    assert ps_call == "ps -aq --filter label=com.docker.compose.project=fr-app-x1"
+    assert inspect_call == f"inspect --format {watchdog.UNIT_RUNTIME_FORMAT} id1 id2"
+    # a unit with no containers prints nothing and still exits 0: no evidence
+    assert run("other") == (0, "")
+
+
+def _evidence_client(*, env_text: str, created_at: str = "2026-09-24T00:00:00Z"):
+    class FakeClient:
+        def list_projects(self):
+            return _dokploy_projects_fixture()
+
+        def get_latest_deployment(self, compose_id):
+            return {
+                "deploymentId": f"deploy-{compose_id}",
+                "status": "error",
+                "errorMessage": "image pull failed",
+                "createdAt": created_at,
+            }
+
+        def get_compose(self, compose_id):
+            return {"appName": f"app-{compose_id}", "env": env_text}
+
+    return FakeClient()
+
+
+def test_dokploy_status_check_gathers_per_unit_runtime_evidence() -> None:
+    watchdog = _load_watchdog()
+    asked: list[str] = []
+
+    def unit_runtime(project):
+        asked.append(project)
+        config = CURRENT if project == "app-compose-prod-backend" else OLD
+        return 0, f"/backend|running|0|healthy|{config}\n", ""
+
+    results = watchdog.run_dokploy_status_check(
+        {"DOKPLOY_API_KEY": "secret"},
+        client_factory=lambda *, host: _evidence_client(
+            env_text=f"A=1\nIAC_CONFIG_HASH={CURRENT}\n"
         ),
-        watchdog.CheckResult(
-            "infra2-docker-health",
-            False,
-            "postgres unhealthy",
-            "docker-runtime",
+        unit_runtime=unit_runtime,
+    )
+
+    assert asked == ["app-compose-prod-backend", "app-compose-staging-backend"]
+    prod, staging = results
+    assert prod.runtime_evidence.endswith("healthy on the current config cccccccccccc")
+    assert "runtime:" not in prod.detail
+    assert staging.runtime_evidence == ""
+    assert staging.detail.endswith(
+        "runtime: backend runs config 000000000000, current is cccccccccccc"
+    )
+    expected = datetime(2026, 9, 24, tzinfo=UTC).timestamp()
+    assert [result.recorded_at for result in results] == [expected, expected]
+
+
+@pytest.mark.parametrize(
+    ("unit_runtime", "why"),
+    [
+        (None, "runtime: no host access for per-unit runtime evidence"),
+        (
+            lambda _project: (255, "", "ssh: connect to host vps port 22: refused"),
+            "runtime: could not list the unit's containers (exit 255): "
+            "ssh: connect to host vps port 22: refused",
         ),
+        (
+            lambda _project: (0, "garbage\n", ""),
+            "runtime: runtime evidence unavailable: ValueError: unreadable "
+            "container line: garbage",
+        ),
+    ],
+    ids=["no-ssh", "host-unreachable", "unreadable-output"],
+)
+def test_no_per_unit_evidence_keeps_the_dokploy_error_a_failure(
+    unit_runtime, why
+) -> None:
+    watchdog = _load_watchdog()
+
+    results = watchdog.run_dokploy_status_check(
+        {"DOKPLOY_API_KEY": "secret"},
+        client_factory=lambda *, host: _evidence_client(
+            env_text=f"IAC_CONFIG_HASH={CURRENT}"
+        ),
+        unit_runtime=unit_runtime,
+    )
+
+    assert [
+        (result.runtime_evidence, result.detail.endswith(why)) for result in results
+    ] == [
+        ("", True),
+        ("", True),
     ]
 
-    assert watchdog.correlate_control_plane_with_runtime(results) == results
+
+@pytest.mark.parametrize(
+    ("status", "domain", "detail"),
+    [
+        (401, "configuration", "Dokploy rejected DOKPLOY_API_KEY: HTTP 401"),
+        (403, "configuration", "Dokploy rejected DOKPLOY_API_KEY: HTTP 403"),
+        (
+            500,
+            "dokploy-control-plane",
+            "dokploy status query raised HTTPStatusError: HTTP 500",
+        ),
+    ],
+)
+def test_a_rejected_dokploy_key_is_a_configuration_failure(
+    status, domain, detail
+) -> None:
+    """A watchdog that Dokploy refuses is blind: that pages, a 5xx is reported."""
+    import httpx
+
+    watchdog = _load_watchdog()
+    request = httpx.Request("GET", "https://dokploy.invalid/api/project.all")
+
+    class RejectingClient:
+        def list_projects(self):
+            raise httpx.HTTPStatusError(
+                f"HTTP {status}",
+                request=request,
+                response=httpx.Response(status, request=request),
+            )
+
+    (result,) = watchdog.run_dokploy_status_check(
+        {"DOKPLOY_API_KEY": "secret"}, client_factory=lambda *, host: RejectingClient()
+    )
+
+    assert (result.name, result.ok, result.failure_domain, result.detail) == (
+        "infra2-dokploy-status",
+        False,
+        domain,
+        detail,
+    )
 
 
 def test_dokploy_status_check_turns_client_exception_into_alert() -> None:
@@ -971,7 +1366,7 @@ def _patch_checks(monkeypatch, watchdog, *, dokploy=(), peer=()) -> None:
             watchdog.CheckResult(
                 "cloudflare-worker-status",
                 False,
-                "worker status unhealthy: token=abc",
+                "worker last run is stale: token=abc",
                 "cloudflare-worker-health",
             )
         ],
@@ -985,10 +1380,13 @@ def _patch_checks(monkeypatch, watchdog, *, dokploy=(), peer=()) -> None:
         lambda _env, _timeout, **_kwargs: list(peer),
     )
     monkeypatch.setattr(watchdog, "deliver_out_of_band_alert", lambda _env, _msg: None)
+    monkeypatch.setattr(watchdog, "deliver_infra2_report", lambda _text, _env: True)
 
 
-def test_main_records_every_verdict_for_the_issue_trail(monkeypatch, tmp_path) -> None:
-    """truealpha#876 W4: the watchdog hands the trail every verdict, green included."""
+def test_main_records_the_paging_verdicts_for_the_issue_trail(
+    monkeypatch, tmp_path
+) -> None:
+    """truealpha#876 W4 / #908: paging verdicts reach the trail, green included."""
     from libs.watchdog_issue_trail import load_trail
 
     watchdog = _load_watchdog()
@@ -1003,7 +1401,11 @@ def test_main_records_every_verdict_for_the_issue_trail(monkeypatch, tmp_path) -
 
     assert (
         watchdog.main(
-            {"WATCHDOG_DRY_RUN": "0", "INFRA2_WATCHDOG_VERDICTS_PATH": str(path)}
+            {
+                **REPORT_ENV,
+                "WATCHDOG_DRY_RUN": "0",
+                "INFRA2_WATCHDOG_VERDICTS_PATH": str(path),
+            }
         )
         == 1
     )
@@ -1016,28 +1418,48 @@ def test_main_records_every_verdict_for_the_issue_trail(monkeypatch, tmp_path) -
     assert trail.failing[watchdog.PEER_SCHEDULER_LIVENESS_CHECK].severity == "P1"
     # the watchdog's own redaction runs before anything leaves the step
     assert "abc" not in trail.failing["cloudflare-worker-status"].detail
-    assert {"infra2-public-entrypoint", "infra2-dokploy-status"} <= trail.green
-    # the status query answered, so a Dokploy unit that is absent is green
-    assert trail.is_green("dokploy-status:finance-report/production/backend")
+    # a report-only check (green here) never reaches the trail
+    assert trail.green == {"out-of-band-watchdog"}
 
 
-def test_main_does_not_green_the_dokploy_family_when_the_query_failed(
+def test_a_configuration_failure_on_a_report_only_check_pages_as_the_watchdog(
     monkeypatch, tmp_path
 ) -> None:
+    """#908: a blind watchdog pages, under its own name, not the report-only check's.
+
+    The next run that records cleanly closes that issue, which a report-only
+    check's own name never would (it is never recorded again).
+    """
     from libs.watchdog_issue_trail import load_trail
 
     watchdog = _load_watchdog()
-    failed = watchdog.CheckResult(
-        watchdog.DOKPLOY_STATUS_CHECK, False, "raised", "dokploy-control-plane"
+    missing_key = watchdog.CheckResult(
+        watchdog.DOKPLOY_STATUS_CHECK,
+        False,
+        "DOKPLOY_API_KEY is missing",
+        "configuration",
     )
-    _patch_checks(monkeypatch, watchdog, dokploy=[failed])
+    _patch_checks(monkeypatch, watchdog, dokploy=[missing_key])
+    pages: list[str] = []
+    monkeypatch.setattr(
+        watchdog, "deliver_out_of_band_alert", lambda _env, text: pages.append(text)
+    )
     path = tmp_path / "verdicts.jsonl"
 
-    watchdog.main({"WATCHDOG_DRY_RUN": "1", "INFRA2_WATCHDOG_VERDICTS_PATH": str(path)})
+    watchdog.main(
+        {
+            **REPORT_ENV,
+            "WATCHDOG_DRY_RUN": "0",
+            "INFRA2_WATCHDOG_VERDICTS_PATH": str(path),
+        }
+    )
 
+    assert "infra2-dokploy-status: DOKPLOY_API_KEY is missing" in pages[0]
     trail = load_trail(path, expected_sources=["out-of-band-watchdog"])
-    assert watchdog.DOKPLOY_STATUS_CHECK in trail.failing
-    assert not trail.is_green("dokploy-status:finance-report/production/backend")
+    assert set(trail.failing) == {"cloudflare-worker-status", "out-of-band-watchdog"}
+    own = trail.failing["out-of-band-watchdog"]
+    assert own.detail == "infra2-dokploy-status: DOKPLOY_API_KEY is missing"
+    assert (own.severity, own.failure_domain) == ("P0", "configuration")
 
 
 def test_main_runs_the_peer_check_with_the_watchdog_retry_settings(monkeypatch) -> None:
@@ -1167,6 +1589,528 @@ def test_peer_check_bound_cap_is_passed_and_validated(monkeypatch) -> None:
     )
     assert not bad.ok and bad.failure_domain == "configuration"
     assert "INFRA2_PEER_LIVENESS_BOUND_CAP_HOURS" in bad.detail
+
+
+# --- #908: the GitHub layer pages only its own failure classes ----------------------
+
+#: ops.observability.md §1.1: Worker liveness, data protection, the peer scheduler.
+PAGING = {
+    "cloudflare-worker-status",
+    "infra2-backup-production",
+    "infra2-restore-rehearsal",
+    "truealpha-scheduler-liveness",
+}
+_FAILURE_LINE = re.compile(r"^- \[P\d\] (?:\[[^\]]+\] )?(\S+): ", re.MULTILINE)
+
+
+def _failure_names(message: str) -> set[str]:
+    """The checks a page or report lists as failures (`- [P1] [domain] name: ...`)."""
+    return set(_FAILURE_LINE.findall(message))
+
+
+#: The GitHub checks another layer pages (#908): they only report.
+REPORT_ONLY = {
+    "infra2-public-entrypoint",
+    "infra2-ssh",
+    "infra2-docker",
+    "infra2-docker-health",
+    "infra2-alert-bridge",
+    "infra2-backup-staging",
+    "infra2-dokploy-status",
+}
+
+
+def test_the_report_only_set_is_read_from_the_signal_registry(tmp_path) -> None:
+    """What is not `type: report` pages -- including names the registry never saw."""
+    watchdog = _load_watchdog()
+
+    assert watchdog.load_report_only_checks() == REPORT_ONLY
+    inventory = yaml.safe_load(watchdog.SIGNAL_REGISTRY.read_text(encoding="utf-8"))
+    for signal in inventory["signals"]:
+        if signal["signal"] == "cloudflare-worker-status":
+            signal.update(type="report", tier="day")
+    edited = tmp_path / "watchdog-signals.yaml"
+    edited.write_text(yaml.safe_dump(inventory), encoding="utf-8")
+    assert watchdog.load_report_only_checks(edited) == REPORT_ONLY | {
+        "cloudflare-worker-status"
+    }
+    for signal in inventory["signals"]:
+        if signal.get("primary_owner") == "github":
+            signal.update(type="report", tier="day")
+    edited.write_text(yaml.safe_dump(inventory), encoding="utf-8")
+    with pytest.raises(ValueError, match="no paging GitHub signal"):
+        watchdog.load_report_only_checks(edited)
+
+
+def test_every_check_pages_unless_the_registry_says_report() -> None:
+    watchdog = _load_watchdog()
+    report_only = watchdog.load_report_only_checks()
+
+    def pages(name, domain="x"):
+        return watchdog.pages(
+            watchdog.CheckResult(name, False, "", domain), report_only
+        )
+
+    assert [pages(name) for name in sorted(PAGING)] == [True] * len(PAGING)
+    assert [pages(name) for name in sorted(REPORT_ONLY)] == [False] * len(REPORT_ONLY)
+    assert pages("dokploy-status:truealpha/production/app") is False
+    assert pages("fr-preview-leak") is True  # a vars-only target the audit never saw
+    assert pages("infra2-ssh", "configuration") is True  # a blind watchdog pages
+
+
+def _run_day(
+    monkeypatch,
+    tmp_path,
+    *,
+    worker_last_run: dict,
+    failing: set[str] = frozenset(),
+    dokploy=(),
+    env_extra: dict | None = None,
+    report_error: Exception | None = None,
+    registry_error: Exception | None = None,
+    extra_ssh=(),
+    dokploy_check=None,
+):
+    """One main() run with every check faked: `failing` names the red ones.
+
+    The Worker's /status is served to the real run_worker_status_check, so the
+    freshness judgment under test is the production one.
+    """
+    watchdog = _load_watchdog()
+    _worker_status_response(monkeypatch, watchdog, worker_last_run)
+    if registry_error is not None:
+
+        def unreadable(*_args):
+            raise registry_error
+
+        monkeypatch.setattr(watchdog, "load_report_only_checks", unreadable)
+
+    def result(name: str, domain: str):
+        red = name in failing
+        return watchdog.CheckResult(name, not red, "broken" if red else "ok", domain)
+
+    monkeypatch.setattr(
+        watchdog,
+        "run_http_checks",
+        lambda _targets, _timeout, **_kwargs: [
+            result("infra2-public-entrypoint", "host-reachability")
+        ],
+    )
+    monkeypatch.setattr(
+        watchdog,
+        "run_ssh_checks",
+        lambda _config, _targets: [
+            result("infra2-ssh", "host-reachability"),
+            result("infra2-docker", "docker-runtime"),
+            result("infra2-docker-health", "docker-runtime"),
+            result("infra2-alert-bridge", "alert-bridge"),
+            *(result(name, "host-diagnostics") for name in extra_ssh),
+        ],
+    )
+    monkeypatch.setattr(
+        watchdog,
+        "run_backup_checks",
+        lambda _config: [
+            result("infra2-backup-production", "backup"),
+            result("infra2-backup-staging", "backup"),
+            result("infra2-restore-rehearsal", "restore-rehearsal"),
+        ],
+    )
+    monkeypatch.setattr(
+        watchdog,
+        "run_dokploy_status_check",
+        dokploy_check or (lambda _env, **_kwargs: list(dokploy)),
+    )
+    monkeypatch.setattr(
+        watchdog,
+        "run_peer_scheduler_liveness_check",
+        lambda _env, _timeout, **_kwargs: [
+            result("truealpha-scheduler-liveness", "peer-scheduler-liveness")
+        ],
+    )
+    pages: list[str] = []
+    reports: list[str] = []
+    events: list[dict] = []
+
+    def deliver_report(text, env):
+        if report_error is not None:
+            raise report_error
+        assert env["INFRA2_REPORTS_FEISHU_CHAT_ID"] == "oc_report"
+        reports.append(text)
+        return True
+
+    monkeypatch.setattr(
+        watchdog, "deliver_out_of_band_alert", lambda _env, text: pages.append(text)
+    )
+    monkeypatch.setattr(watchdog, "deliver_infra2_report", deliver_report)
+    monkeypatch.setattr(watchdog, "_emit_structured_log", events.append)
+    verdicts = tmp_path / "verdicts.jsonl"
+    env = {
+        **REPORT_ENV,
+        "WATCHDOG_DRY_RUN": "0",
+        "INFRA2_WATCHDOG_WORKER_STATUS_TOKEN": "status-token",
+        "INFRA2_WATCHDOG_RETRY_DELAY_SECONDS": "0",
+        "INFRA2_WATCHDOG_VERDICTS_PATH": str(verdicts),
+        **(env_extra or {}),
+    }
+    code = watchdog.main(
+        {key: value for key, value in env.items() if value is not None}
+    )
+    from libs.watchdog_issue_trail import load_trail
+
+    trail = load_trail(verdicts, expected_sources=["out-of-band-watchdog"])
+    return code, pages, reports, trail, events
+
+
+FRESH_CLEAN_RUN = {"ok": True, "ageSeconds": 600, "failureCount": 0}
+
+
+def test_main_pages_only_the_owned_classes_and_reports_the_rest(
+    monkeypatch, tmp_path
+) -> None:
+    """#908 deliverables 1, 2, 3, 5 in one run.
+
+    Everything is red except the rehearsal and the peer; the Worker's last run is
+    fresh but found failures. Only the production backup pages; every
+    report-only failure lands in the one report; the trail sees paging checks only.
+    """
+    now = datetime.now(UTC).timestamp()
+    code, pages, reports, trail, events = _run_day(
+        monkeypatch,
+        tmp_path,
+        worker_last_run=DELIVERED_FAILING_RUN,
+        failing={
+            "infra2-public-entrypoint",
+            "infra2-ssh",
+            "infra2-docker-health",
+            "infra2-alert-bridge",
+            "infra2-backup-production",
+            "infra2-backup-staging",
+        },
+        dokploy=[
+            replace(
+                _dokploy_error("postgres", recorded_hours_ago=None),
+                recorded_at=now - 1 * 3600,
+            ),
+            replace(
+                _dokploy_error("redis", recorded_hours_ago=None),
+                recorded_at=now - 100 * 3600,
+                runtime_evidence="1 container(s) of this unit run healthy on the "
+                "current config cccccccccccc",
+            ),
+            replace(
+                _dokploy_error("app", recorded_hours_ago=None),
+                recorded_at=now - 100 * 3600,
+            ),
+        ],
+    )
+
+    assert code == 1
+    assert len(pages) == 1
+    assert _failure_names(pages[0]) == {"infra2-backup-production"}
+    assert len(reports) == 1
+    assert _failure_names(reports[0]) == {
+        "infra2-public-entrypoint",
+        "infra2-ssh",
+        "infra2-docker-health",
+        "infra2-alert-bridge",
+        "infra2-backup-staging",
+        "dokploy-status:truealpha/production/postgres",
+        "dokploy-status:truealpha/production/app",
+    }
+    failures, stale = reports[0].split("Stale Dokploy records (1)", 1)
+    assert "dokploy-status:truealpha/production/redis" in stale
+    assert "run healthy on the current config cccccccccccc" in stale
+    # an old record without per-unit evidence is a failure, labelled with its age
+    assert (
+        "production/app: composeStatus=error; old record: latest deployment is 100h old"
+        in failures
+    )
+    info = reports[0].split("Information:", 1)[1]
+    assert "delivered by the Worker itself: ok=False failures=2" in info
+    assert set(trail.failing) == {"infra2-backup-production"}
+    assert trail.complete
+    assert trail.green == {
+        "out-of-band-watchdog",
+        "cloudflare-worker-status",
+        "infra2-restore-rehearsal",
+        "truealpha-scheduler-liveness",
+    }
+    routes = {
+        event["name"]: event["route"]
+        for event in events
+        if event.get("event") == "watchdog.check" and event["status"] == "fail"
+    }
+    assert routes == {
+        "infra2-backup-production": "page",
+        **{name: "report" for name in _failure_names(reports[0])},
+    }
+    complete = [e for e in events if e.get("event") == "watchdog.run.complete"]
+    assert [(e["failure_count"], e["report_failure_count"]) for e in complete] == [
+        (1, 7)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("last_run", "paged", "code", "reported_note"),
+    [
+        (DELIVERED_FAILING_RUN, set(), 0, [True]),
+        (UNDELIVERED_RUN, {"cloudflare-worker-status"}, 1, []),
+        ({**FRESH_CLEAN_RUN, "ageSeconds": 7201}, {"cloudflare-worker-status"}, 1, []),
+    ],
+    ids=["fresh-and-delivered", "fresh-but-undelivered", "stale"],
+)
+def test_main_judges_the_worker_on_running_and_delivering(
+    monkeypatch, tmp_path, last_run, paged, code, reported_note
+) -> None:
+    """#908 deliverable 3 (+ review): the Worker's delivered findings are
+    information; a Worker that is stale or cannot deliver pages and opens the
+    trail issue."""
+    got_code, pages, reports, trail, _events = _run_day(
+        monkeypatch, tmp_path, worker_last_run=last_run
+    )
+
+    assert got_code == code
+    assert set().union(*map(_failure_names, pages)) == paged
+    assert set(trail.failing) == paged
+    assert ("cloudflare-worker-status" in trail.green) is (not paged)
+    assert ["ok=False failures=2" in report for report in reports] == reported_note
+
+
+def test_main_sends_nothing_on_a_green_day(monkeypatch, tmp_path) -> None:
+    code, pages, reports, trail, _events = _run_day(
+        monkeypatch, tmp_path, worker_last_run=FRESH_CLEAN_RUN
+    )
+
+    assert (code, pages, reports) == (0, [], [])
+    assert trail.failing == {}
+    assert trail.green == PAGING | {"out-of-band-watchdog"}
+
+
+def test_main_reports_a_report_only_day_without_paging(monkeypatch, tmp_path) -> None:
+    code, pages, reports, trail, _events = _run_day(
+        monkeypatch, tmp_path, worker_last_run=FRESH_CLEAN_RUN, failing={"infra2-ssh"}
+    )
+
+    assert (code, pages) == (0, [])
+    assert [_failure_names(report) for report in reports] == [{"infra2-ssh"}]
+    assert trail.failing == {}
+
+
+def test_main_pages_when_the_report_path_is_not_configured(
+    monkeypatch, tmp_path
+) -> None:
+    """A report nobody can receive is GREEN-WHILE-EMPTY; the pager says so."""
+    code, pages, reports, trail, _events = _run_day(
+        monkeypatch,
+        tmp_path,
+        worker_last_run=FRESH_CLEAN_RUN,
+        failing={"infra2-ssh"},
+        env_extra={"INFRA2_REPORTS_FEISHU_CHAT_ID": None},
+    )
+
+    assert code == 1 and reports == []
+    assert _failure_names(pages[0]) == {"watchdog-report-delivery"}
+    assert "INFRA2_REPORTS_FEISHU_CHAT_ID missing" in pages[0]
+    assert "undelivered: 1 report-only failure(s) (infra2-ssh)" in pages[0]
+    assert set(trail.failing) == {"out-of-band-watchdog"}
+    assert trail.failing["out-of-band-watchdog"].severity == "P0"
+
+
+def test_main_pages_when_the_report_cannot_be_delivered(monkeypatch, tmp_path) -> None:
+    code, pages, reports, trail, events = _run_day(
+        monkeypatch,
+        tmp_path,
+        worker_last_run=FRESH_CLEAN_RUN,
+        failing={"infra2-docker-health"},
+        report_error=RuntimeError("Feishu OpenAPI request failed"),
+    )
+
+    assert code == 1 and reports == []
+    assert _failure_names(pages[0]) == {"watchdog-report-delivery"}
+    assert "report delivery failed: Feishu OpenAPI request failed" in pages[0]
+    assert set(trail.failing) == {"out-of-band-watchdog"}
+    assert trail.failing["out-of-band-watchdog"].severity == "P1"
+    assert [e["event"] for e in events if "report.delivery" in e.get("event", "")] == [
+        "watchdog.report.delivery.failure"
+    ]
+
+
+def test_main_pages_every_failure_when_the_registry_is_unreadable(
+    monkeypatch, tmp_path
+) -> None:
+    """Unknown routing fails loud: everything pages, the trail records only itself."""
+    code, pages, _reports, trail, _events = _run_day(
+        monkeypatch,
+        tmp_path,
+        worker_last_run=FRESH_CLEAN_RUN,
+        failing={"infra2-ssh"},
+        registry_error=FileNotFoundError("watchdog-signals.yaml"),
+    )
+
+    assert code == 1
+    assert _failure_names(pages[0]) == {"infra2-ssh", "watchdog-signal-registry"}
+    assert set(trail.failing) == {"out-of-band-watchdog"}
+    assert trail.green == set()
+    # it could not tell which checks page, so the trail must not retire any issue
+    assert trail.complete is False
+
+
+def test_a_target_added_only_through_repository_variables_pages(
+    monkeypatch, tmp_path
+) -> None:
+    """#908 review: `vars.INFRA2_WATCHDOG_*_TARGETS` adds checks the registry and the
+    audit never see; unknown is not report-only, so it pages and is tracked."""
+    code, pages, reports, trail, _events = _run_day(
+        monkeypatch,
+        tmp_path,
+        worker_last_run=FRESH_CLEAN_RUN,
+        failing={"fr-preview-leak"},
+        extra_ssh=["fr-preview-leak"],
+    )
+
+    assert (code, reports) == (1, [])
+    assert _failure_names(pages[0]) == {"fr-preview-leak"}
+    assert set(trail.failing) == {"fr-preview-leak"}
+
+
+def test_a_rejected_dokploy_key_pages_from_main(monkeypatch, tmp_path) -> None:
+    """The real Dokploy check inside main(): a 401 is a blind watchdog, and pages."""
+    import httpx
+
+    watchdog = _load_watchdog()
+    real_check = watchdog.run_dokploy_status_check
+    request = httpx.Request("GET", "https://dokploy.invalid/api/project.all")
+
+    class RejectingClient:
+        def list_projects(self):
+            raise httpx.HTTPStatusError(
+                "HTTP 401",
+                request=request,
+                response=httpx.Response(401, request=request),
+            )
+
+    code, pages, _reports, trail, _events = _run_day(
+        monkeypatch,
+        tmp_path,
+        worker_last_run=FRESH_CLEAN_RUN,
+        env_extra={"DOKPLOY_API_KEY": "revoked"},
+        dokploy_check=lambda env, **kwargs: real_check(
+            env, client_factory=lambda *, host: RejectingClient(), **kwargs
+        ),
+    )
+
+    assert code == 1
+    assert _failure_names(pages[0]) == {"infra2-dokploy-status"}
+    assert "Dokploy rejected DOKPLOY_API_KEY: HTTP 401" in pages[0]
+    assert set(trail.failing) == {"out-of-band-watchdog"}
+
+
+def test_a_failed_pull_under_a_green_host_sweep_is_a_failure_not_stale(
+    monkeypatch, tmp_path
+) -> None:
+    """The reviewer's case end to end: a 300 s-old `image pull failed`, the old
+    version still running healthy, infra2-docker-health green. Real Dokploy check,
+    real verdict; only the Dokploy API and the host are faked."""
+    watchdog = _load_watchdog()
+    real_check = watchdog.run_dokploy_status_check
+    recent = datetime.fromtimestamp(datetime.now(UTC).timestamp() - 300, UTC)
+
+    def old_version_running(_project):
+        return 0, f"/backend|running|0|healthy|{OLD}\n", ""
+
+    code, pages, reports, _trail, _events = _run_day(
+        monkeypatch,
+        tmp_path,
+        worker_last_run=FRESH_CLEAN_RUN,
+        dokploy_check=lambda env, **_kwargs: real_check(
+            env,
+            client_factory=lambda *, host: _evidence_client(
+                env_text=f"IAC_CONFIG_HASH={CURRENT}", created_at=recent.isoformat()
+            ),
+            unit_runtime=old_version_running,
+        ),
+        env_extra={"DOKPLOY_API_KEY": "secret"},
+    )
+
+    assert (code, pages) == (0, [])
+    assert "Stale Dokploy records" not in reports[0]
+    assert _failure_names(reports[0]) == {
+        "dokploy-status:finance-report/production/backend",
+        "dokploy-status:finance-report/staging/backend",
+    }
+    assert "latest_deployment_errorMessage=image pull failed" in reports[0]
+    assert (
+        "runtime: backend runs config 000000000000, current is cccccccccccc"
+        in (reports[0])
+    )
+
+
+@pytest.mark.parametrize(
+    ("env_extra", "report_error", "lost"),
+    [
+        ({"INFRA2_REPORTS_FEISHU_CHAT_ID": None}, None, "missing"),
+        ({}, RuntimeError("Feishu OpenAPI request failed"), "request failed"),
+    ],
+    ids=["unconfigured", "delivery-failed"],
+)
+def test_a_notes_only_report_that_is_lost_says_what_was_lost(
+    monkeypatch, tmp_path, env_extra, report_error, lost
+) -> None:
+    """No failures, one Worker note: the page must not claim "0 failures" undelivered."""
+    code, pages, _reports, _trail, _events = _run_day(
+        monkeypatch,
+        tmp_path,
+        worker_last_run=DELIVERED_FAILING_RUN,
+        env_extra=env_extra,
+        report_error=report_error,
+    )
+
+    assert code == 1
+    assert lost in pages[0]
+    assert "; undelivered: 1 information line(s)" in pages[0]
+    assert "report-only failure(s)" not in pages[0]
+
+
+def test_a_dry_run_prints_a_page_holding_only_the_paging_classes(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    """#908 acceptance: the dry run shows what would page and what would be reported."""
+    code, pages, reports, _trail, _events = _run_day(
+        monkeypatch,
+        tmp_path,
+        worker_last_run=FRESH_CLEAN_RUN,
+        failing={"infra2-ssh", "infra2-restore-rehearsal"},
+        env_extra={"WATCHDOG_DRY_RUN": "1"},
+    )
+
+    assert (code, pages, reports) == (1, [], [])
+    out = capsys.readouterr().out
+    page = out[out.index("[OUT-OF-BAND]") :]
+    report = out[out.index("[REPORT]") : out.index("[OUT-OF-BAND]")]
+    assert _failure_names(page) == {"infra2-restore-rehearsal"}
+    assert _failure_names(report) == {"infra2-ssh"}
+
+
+def test_the_report_secrets_reach_only_the_run_watchdog_step() -> None:
+    """#908: without them report-only failures page as a config failure; with them
+    in the job env every other step (inline scripts included) would hold them."""
+    from libs.alerting import INFRA2_REPORTS_ENV
+
+    job = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["watchdog"]
+    holders = {
+        step.get("name"): sorted(set(INFRA2_REPORTS_ENV) & set(step.get("env") or {}))
+        for step in job["steps"]
+    }
+    run = next(step for step in job["steps"] if step.get("name") == "Run watchdog")
+
+    assert set(INFRA2_REPORTS_ENV).isdisjoint(job["env"])
+    assert {name: found for name, found in holders.items() if found} == {
+        "Run watchdog": sorted(INFRA2_REPORTS_ENV)
+    }
+    assert {name: run["env"][name] for name in INFRA2_REPORTS_ENV} == {
+        name: "${{ secrets.%s }}" % name for name in INFRA2_REPORTS_ENV
+    }
 
 
 def test_workflow_records_the_watchdog_verdicts_as_issues() -> None:

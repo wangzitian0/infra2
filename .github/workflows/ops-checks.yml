@@ -280,6 +280,11 @@ jobs:
           echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_watchdog" >> "$GITHUB_ENV"
 
       - name: Run watchdog
+        # #908: failures of checks another layer pages go to the daily report, not the pager.
+        env:
+          INFRA2_REPORTS_FEISHU_APP_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_ID }}
+          INFRA2_REPORTS_FEISHU_APP_SECRET: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_SECRET }}
+          INFRA2_REPORTS_FEISHU_CHAT_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_CHAT_ID }}
         run: python tools/out_of_band_watchdog.py
 
       # #625 item 2 / #658 recommendation 8: the runner's /health already carries the

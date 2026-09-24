@@ -365,18 +365,46 @@ def test_layering_debt_names_the_phase_that_pays_it() -> None:
 
 
 def test_layering_lets_a_report_live_in_any_layer() -> None:
-    """Turning a misplaced pager into a report is how #903 pays its debt."""
-    audit = _load_audit()
+    """Turning a misplaced pager into a report is how #903/#904 pay their debt.
 
-    def ssh_becomes_a_report(inventory, signals):
-        signals["global.infra2-ssh.github"].update(type="report", tier="day")
+    The signal is one still in debt, so dropping its entry without the report
+    flip must fail: otherwise this would pass on a registry already paid off.
+    """
+    audit = _load_audit()
+    misplaced = "production.vault.public-route"
+
+    def drop_debt(inventory, signals):
         inventory["relayering_debt"] = [
             entry
             for entry in inventory["relayering_debt"]
-            if entry["signal_id"] != "global.infra2-ssh.github"
+            if entry["signal_id"] != misplaced
         ]
 
-    assert _layering_errors(audit, ssh_becomes_a_report) == []
+    def becomes_a_report(inventory, signals):
+        signals[misplaced].update(type="report", tier="day")
+        drop_debt(inventory, signals)
+
+    assert _layering_errors(audit, drop_debt) == [
+        f"{misplaced}: pages service-health from the cloudflare layer, but "
+        "service-health is paged only by vps (one pager per failure class)"
+    ]
+    assert _layering_errors(audit, becomes_a_report) == []
+
+
+def test_the_github_layer_owes_no_relayering_debt() -> None:
+    """#908: the daily GitHub audit pages only the classes it owns.
+
+    Its checks for other layers' classes are `type: report`, so nothing from the
+    github owner may sit in the debt list again.
+    """
+    inventory = yaml.safe_load(INVENTORY.read_text(encoding="utf-8"))
+    owner = {
+        signal["signal_id"]: signal["primary_owner"] for signal in inventory["signals"]
+    }
+
+    debtors = {owner[entry["signal_id"]] for entry in inventory["relayering_debt"]}
+
+    assert "github" not in debtors
 
 
 def test_layering_requires_self_signals_to_declare_their_layer() -> None:
