@@ -29,15 +29,19 @@ class MemoryKV {
   constructor() {
     this.map = new Map();
     this.puts = {};
+    this.ops = 0; // every get/put/delete: each one is a subrequest inside a cron run
   }
   async get(key) {
+    this.ops += 1;
     return this.map.has(key) ? this.map.get(key) : null;
   }
   async put(key, value) {
+    this.ops += 1;
     this.puts[key] = (this.puts[key] || 0) + 1;
     this.map.set(key, value);
   }
   async delete(key) {
+    this.ops += 1;
     this.map.delete(key);
   }
   total() {
@@ -48,12 +52,11 @@ class MemoryKV {
 function makeEnv(kv, overrides = {}) {
   return {
     ...vars,
+    ALERT_DELIVERY_MODE: "feishu_webhook",
+    FEISHU_WEBHOOK_URL: "https://feishu.invalid/hook",
     ...overrides,
     WATCHDOG_STATE: kv,
     HEARTBEAT_TOKEN: "hb-token",
-    WATCHDOG_RETRY_DELAY_MS: "0",
-    ALERT_DELIVERY_MODE: "feishu_webhook",
-    FEISHU_WEBHOOK_URL: "https://feishu.invalid/hook",
     WATCHDOG_DEADMAN_PING_URL: "https://hc-ping.com/test-worker-check",
   };
 }
@@ -236,13 +239,15 @@ results.livenessOnly = summarize(
   results.unconfigured = { status: response.status, puts: kv.total() };
 }
 
-// 48 cron runs whose heartbeat verdicts alternate, so every run changes the alert
-// state (the most alert-state puts a day can cost).
+// 48 cron runs whose production heartbeat verdict alternates, so every run is a
+// transition (the loop-unhealthy alert fires, then resolves): the most state
+// writes a cron day can cost. A run still writes exactly one key.
 {
   const kv = new MemoryKV();
   const env = makeEnv(kv);
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response("ok", { status: 200 });
+  const putsPerRun = [];
   try {
     for (let run = 0; run < 48; run += 1) {
       clock = DAY_START + run * CRON_MS;
@@ -252,15 +257,132 @@ results.livenessOnly = summarize(
           JSON.stringify({ ok: run % 2 === 0, detail: "", receivedAt: clock - 1000 }),
         );
       }
+      const before = kv.total();
       const pending = [];
       await worker.scheduled({ scheduledTime: clock }, env, { waitUntil: (p) => pending.push(p) });
       await Promise.all(pending);
+      putsPerRun.push(kv.total() - before);
     }
   } finally {
     globalThis.fetch = originalFetch;
   }
-  results.cronDay = { puts: kv.total(), putsByKey: kv.puts };
+  results.cronDay = { puts: kv.total(), putsByKey: kv.puts, putsPerRun };
 }
+
+// A whole simulated UTC day of both runners (liveness ping + v2 verdict every
+// ~66 s) and the 48 cron runs, in time order, against one KV. Counts every put()
+// of the day and every subrequest (fetch + KV operation) of each cron run,
+// including the Feishu app token and send on an alert run.
+async function simulatedDay({ routeStatus, verdict }) {
+  const kv = new MemoryKV();
+  const env = makeEnv(kv, {
+    ALERT_DELIVERY_MODE: "feishu_app",
+    FEISHU_APP_ID: "app",
+    FEISHU_APP_SECRET: "secret",
+    FEISHU_CHAT_ID: "chat",
+    FEISHU_API_BASE: "https://feishu.invalid",
+  });
+  let fetches = 0;
+  let messages = 0;
+  let run = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    fetches += 1;
+    if (url.includes("/open-apis/auth/")) {
+      return new Response(JSON.stringify({ code: 0, tenant_access_token: "t" }), { status: 200 });
+    }
+    if (url.includes("/open-apis/im/")) {
+      messages += 1;
+      return new Response(JSON.stringify({ code: 0 }), { status: 200 });
+    }
+    if (url.startsWith("https://hc-ping.com/")) return new Response("ok", { status: 200 });
+    return new Response("", { status: routeStatus(url, run) });
+  };
+  const perRun = [];
+  // The runners were already posting yesterday: their records exist (not counted).
+  for (const configured of heartbeats) {
+    kv.map.set(
+      `heartbeat:${configured.environment}:${configured.name}`,
+      JSON.stringify({ environment: configured.environment, name: configured.name, ok: true, schema: 2,
+        failingPublicRoutes: [], lastDeliveryOkAt: 0, receivedAt: DAY_START - 60000 }),
+    );
+  }
+  let nextCron = DAY_START;
+  clock = DAY_START;
+  try {
+    for (let round = 0; clock < DAY_START + DAY_MS; round += 1) {
+      while (nextCron <= clock && nextCron < DAY_START + DAY_MS) {
+        const at = clock;
+        clock = nextCron;
+        const opsBefore = kv.ops;
+        const fetchesBefore = fetches;
+        const pending = [];
+        await worker.scheduled({ scheduledTime: clock }, env, { waitUntil: (p) => pending.push(p) });
+        await Promise.all(pending);
+        perRun.push(kv.ops - opsBefore + fetches - fetchesBefore);
+        clock = at;
+        nextCron += CRON_MS;
+        run += 1;
+      }
+      for (const configured of heartbeats) {
+        await post(env, {
+          env: configured.environment,
+          name: configured.name,
+          ok: true,
+          liveness: true,
+          detail: "probe loop iteration starting",
+          timestamp: Math.floor(clock / 1000),
+          schema: 2,
+        });
+      }
+      clock += PROBE_MS;
+      for (const configured of heartbeats) {
+        const { ok, failing } = verdict(configured, round);
+        await post(env, {
+          env: configured.environment,
+          name: configured.name,
+          ok,
+          detail: ok ? "probe loop completed" : "probe loop failed",
+          timestamp: Math.floor(clock / 1000),
+          schema: 2,
+          last_delivery_ok_at: Math.floor(clock / 1000) - 30,
+          failing_public_routes: failing,
+        });
+      }
+      clock += SLEEP_MS;
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  return {
+    puts: kv.total(),
+    putsByKey: kv.puts,
+    cronRuns: perRun.length,
+    maxSubrequests: Math.max(...perRun),
+    subrequestsPerRun: perRun,
+    messages,
+  };
+}
+
+const ENTRYPOINTS = new Set(JSON.parse(vars.WATCHDOG_TARGETS_JSON).map((target) => target.url));
+// Steady state: everything healthy.
+results.healthyDay = await simulatedDay({
+  routeStatus: () => 200,
+  verdict: () => ({ ok: true, failing: [] }),
+});
+// All three external entrypoints down all day, and the VPS does not report them:
+// the Worker pages them, renotifies every 6 h, and every run stays in budget.
+results.entrypointsDownDay = await simulatedDay({
+  routeStatus: (url) => (ENTRYPOINTS.has(url) ? 522 : 200),
+  verdict: () => ({ ok: true, failing: [] }),
+});
+// Worst case: each runner's failing route set flips every round (the status-change
+// budget is spent) and the entrypoints flip every run (a state write every run).
+results.worstDay = await simulatedDay({
+  routeStatus: (url, run) => (ENTRYPOINTS.has(url) && run % 2 === 1 ? 522 : 200),
+  verdict: (_configured, round) => ({ ok: true, failing: round % 2 ? ["vault-public-route"] : [] }),
+});
 
 results.heartbeatKeys = heartbeats.length;
 process.stdout.write(`${JSON.stringify(results)}\n`);

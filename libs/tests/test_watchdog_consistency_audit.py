@@ -462,3 +462,69 @@ def test_audit_enforces_layering_end_to_end(monkeypatch) -> None:
         error.startswith("global.cloudflare-worker-status.github: pages service-health")
         for error in audit.audit()
     )
+
+
+# --- #904: the Worker keeps three entrypoints; other routes are VPS-owned ------
+
+
+def _audit_with(monkeypatch, edit) -> list[str]:
+    audit = _load_audit()
+    original = audit._load_inventory
+
+    def fake_inventory():
+        inventory = original()
+        inventory["signals"] = [dict(signal) for signal in inventory["signals"]]
+        edit({signal["signal_id"]: signal for signal in inventory["signals"]})
+        return inventory
+
+    monkeypatch.setattr(audit, "_load_inventory", fake_inventory)
+    return audit.audit()
+
+
+def test_a_vps_route_entry_no_facet_renders_fails(monkeypatch) -> None:
+    def ghost(signals):
+        signals["production.minio.public-route"]["signal"] = "ghost-public-route"
+
+    assert (
+        "VPS public-route signal production.minio.public-route is not rendered by "
+        "any PublicRouteFacet in production"
+    ) in _audit_with(monkeypatch, ghost)
+
+
+def test_a_vps_route_entry_for_a_prod_only_service_in_staging_fails(
+    monkeypatch,
+) -> None:
+    """signoz is prod_only: no staging probe exists to own."""
+
+    def staging_signoz(signals):
+        signals["production.signoz.public-route"]["environment"] = "staging"
+
+    assert (
+        "VPS public-route signal production.signoz.public-route is not rendered by "
+        "any PublicRouteFacet in staging"
+    ) in _audit_with(monkeypatch, staging_signoz)
+
+
+def test_a_vps_route_entry_with_another_severity_fails(monkeypatch) -> None:
+    def downgraded(signals):
+        signals["production.vault.public-route"]["severity"] = "warning"
+
+    assert (
+        "VPS public-route signal production.vault.public-route: severity "
+        "'warning', but the facet renders 'critical'"
+    ) in _audit_with(monkeypatch, downgraded)
+
+
+def test_a_route_moved_back_to_cloudflare_is_a_second_pager(monkeypatch) -> None:
+    """Re-adding a service-health route to the Worker needs a relayering exemption."""
+
+    def back_to_the_worker(signals):
+        signal = signals["production.vault.public-route"]
+        signal["primary_owner"] = "cloudflare"
+        signal.pop("layer")
+
+    errors = _audit_with(monkeypatch, back_to_the_worker)
+    assert (
+        "production.vault.public-route: pages service-health from the cloudflare "
+        "layer, but service-health is paged only by vps (one pager per failure class)"
+    ) in errors

@@ -304,9 +304,11 @@ other ops-checks tasks before reviewing structured watchdog logs. The digest rev
 failure-domain distribution before delivering through the same Feishu mode. Use
 `workflow_dispatch` + `dry_run=true` for safe preview.
 
-Cloudflare defaults cover production public routes, selected staging public
-routes, and production/staging probe-runner heartbeat freshness. The daily GitHub
-audit pages on: Cloudflare Worker liveness via `/status` (last run within the
+Cloudflare checks only what the VPS cannot report about itself (#904): the
+production probe-runner heartbeat (stale, or `ok=false`) and one external
+entrypoint per product; every other public route is probed in-band here, and the
+staging heartbeat is shown on the Worker's `/status` without paging. The daily
+GitHub audit pages on: Cloudflare Worker liveness via `/status` (last run within the
 Worker's own `WATCHDOG_STATUS_MAX_AGE_SECONDS` and delivered), the production
 off-host backup, the restore rehearsal, truealpha's scheduler-liveness workflow
 (peer liveness), failures of its own configuration, and any check the signal

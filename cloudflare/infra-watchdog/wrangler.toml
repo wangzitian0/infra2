@@ -17,17 +17,21 @@ crons = ["*/30 * * * *"]
 [vars]
 WATCHDOG_ENVIRONMENTS = "production,staging"
 WATCHDOG_HTTP_TIMEOUT_MS = "8000"
-WATCHDOG_RETRY_MAX_ATTEMPTS = "2"
-WATCHDOG_RETRY_DELAY_MS = "60000"
-WATCHDOG_RENOTIFY_SECONDS = "7200"
+# One GET per entrypoint per run, no in-run retry: an entrypoint pages after this
+# many consecutive failing runs (2 runs = 30-60 min at the 30-minute cron).
+WATCHDOG_ENTRYPOINT_FAILURE_RUNS = "2"
+# A still-active alert is re-sent at most this often (6 h).
+WATCHDOG_RENOTIFY_SECONDS = "21600"
 WATCHDOG_STATUS_MAX_AGE_SECONDS = "7200"
-# KV free tier: 1000 put()/day for the whole account. Worst-case daily puts =
+# KV free tier: 1000 put()/day for the whole account (#904 budget: <= 200/day).
+# Worst-case daily puts =
 #   heartbeat keys * (ceil(86400 / MIN_WRITE_INTERVAL) + STATUS_CHANGE_WRITES_PER_DAY)
-#   + 48 cron runs * (lastRun + ledger + alert-state)
-#   = 2 * (96 + 24) + 48 * 3 = 384 (38%); healthy steady state 2 * 96 + 48 * 2 = 288.
+#   + 48 cron runs * 1 (the state document on a transition, else the last-run record)
+#   = 2 * (48 + 24) + 48 = 192; healthy steady state 2 * 48 + 48 = 144.
 # Only configured heartbeat keys are stored, and a runner's liveness ping never
 # changes the stored verdict (2026-09-15: that alternation wrote on every post).
-WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS = "900"
+# A 1800 s refresh still keeps a live runner's record far below maxAgeSeconds 5400.
+WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS = "1800"
 WATCHDOG_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY = "24"
 ALERT_DELIVERY_MODE = "feishu_app"
 # Secondary alert channel (email via Resend): used only when Feishu delivery
@@ -35,25 +39,16 @@ ALERT_DELIVERY_MODE = "feishu_app"
 # wrangler secret. Sender domain must be verified in Resend.
 ALERT_EMAIL_TO = "wangzitian.ai@gmail.com"
 ALERT_EMAIL_FROM = "watchdog@mail.zitian.party"
+# One external entrypoint per product (#904). Every other public route is probed
+# in-band by the VPS (PublicRouteFacet -> PUBLIC_ROUTE_PROBE_SPECS), which pages it.
 WATCHDOG_TARGETS_JSON = """
 [
   {"environment":"production","name":"dokploy-public-route","service_id":"bootstrap/dokploy","url":"https://cloud.zitian.party","statuses":[200,302],"severity":"critical"},
-  {"environment":"production","name":"vault-public-route","service_id":"bootstrap/vault","url":"https://vault.zitian.party/v1/sys/health","statuses":[200,429,472,473],"severity":"critical"},
-  {"environment":"production","name":"minio-public-route","service_id":"platform/minio","url":"https://minio.zitian.party/minio/health/live","statuses":[200],"severity":"warning"},
-  {"environment":"production","name":"authentik-public-route","service_id":"platform/authentik","url":"https://sso.zitian.party/-/health/live/","statuses":[200,204,302],"severity":"critical"},
-  {"environment":"production","name":"signoz-public-route","service_id":"platform/signoz","url":"https://signoz.zitian.party","statuses":[200,302],"severity":"critical"},
-  {"environment":"staging","name":"minio-public-route","service_id":"platform/minio","url":"https://minio-staging.zitian.party/minio/health/live","statuses":[200],"severity":"warning"},
-  {"environment":"staging","name":"authentik-public-route","service_id":"platform/authentik","url":"https://sso-staging.zitian.party/-/health/live/","statuses":[200,204,302],"severity":"warning"},
   {"environment":"production","name":"finance-report-web-public-route","service_id":"finance_report/app","url":"https://report.zitian.party/","statuses":[200,302,307,308],"severity":"critical"},
-  {"environment":"production","name":"finance-report-api-public-route","service_id":"finance_report/app","url":"https://report.zitian.party/api/health","statuses":[200],"severity":"critical"},
-  {"environment":"production","name":"truealpha-web-public-route","service_id":"truealpha/app","url":"https://truealpha.club/","statuses":[200,302,307,308],"severity":"critical"},
-  {"environment":"production","name":"truealpha-api-public-route","service_id":"truealpha/app","url":"https://truealpha.club/api/health","statuses":[200],"severity":"critical"},
-  {"environment":"staging","name":"finance-report-web-public-route","service_id":"finance_report/app","url":"https://report-staging.zitian.party/","statuses":[200,302,307,308],"severity":"warning"},
-  {"environment":"staging","name":"finance-report-api-public-route","service_id":"finance_report/app","url":"https://report-staging.zitian.party/api/health","statuses":[200],"severity":"warning"},
-  {"environment":"staging","name":"truealpha-web-public-route","service_id":"truealpha/app","url":"https://truealpha-staging.truealpha.club/","statuses":[200,302,307,308],"severity":"warning"},
-  {"environment":"staging","name":"truealpha-api-public-route","service_id":"truealpha/app","url":"https://truealpha-staging.truealpha.club/api/health","statuses":[200],"severity":"warning"}
+  {"environment":"production","name":"truealpha-web-public-route","service_id":"truealpha/app","url":"https://truealpha.club/","statuses":[200,302,307,308],"severity":"critical"}
 ]
 """
+# Production pages; staging is recorded for /status only.
 WATCHDOG_HEARTBEATS_JSON = """
 [
   {"environment":"production","name":"platform-alerting-probes","service_id":"platform/alerting","maxAgeSeconds":5400,"severity":"critical"},
@@ -65,11 +60,3 @@ WATCHDOG_HEARTBEATS_JSON = """
 binding = "WATCHDOG_STATE"
 id = "2b2eebc2a53c475797f92269e4d96248"
 preview_id = "64cb09c404f242d28dfb8861b3b63899"
-
-# Off-host cold archive of the availability ledger. Reuses the existing R2
-# backup bucket (the single off-host store, S3 standard); the Worker writes one
-# finalized day per object under watchdog-ledger/. The worker code is guarded,
-# so deploys stay safe even before the bucket exists.
-[[r2_buckets]]
-binding = "LEDGER_BUCKET"
-bucket_name = "infra2"

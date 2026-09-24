@@ -1,48 +1,31 @@
+// Infra2 out-of-band watchdog on Cloudflare Workers Cron (ops.observability.md §1.1, #904).
+//
+// The Worker judges only what the VPS cannot report about itself:
+//   - the production probe-runner heartbeat is stale: P0 host-reachability
+//     ("VPS or its egress is down");
+//   - the production heartbeat says the probe loop is unhealthy: P1 alert-pipeline;
+//   - one external entrypoint per product fails 2 consecutive runs: P0
+//     host-reachability, unless the fresh production heartbeat lists that route
+//     among its own failing in-band probes (then the VPS has paged it already).
+// Staging heartbeats are recorded for /status and never paged. The route
+// inventory, retries, availability counting and reports all live on the VPS.
+//
+// Per cron run: one GET per entrypoint (no retry, no sleep), one KV read per
+// production heartbeat, one KV read of the state document, one KV write (the
+// state document when something transitioned, otherwise the last-run record),
+// the Healthchecks.io ping, and on an alert run one Feishu delivery.
+
 const DEFAULT_TARGETS = [
-  ["production", "dokploy-public-route", "bootstrap/dokploy", "https://cloud.zitian.party", [200, 302], "critical"],
-  ["production", "vault-public-route", "bootstrap/vault", "https://vault.zitian.party/v1/sys/health", [200, 429, 472, 473], "critical"],
-  ["production", "minio-public-route", "platform/minio", "https://minio.zitian.party/minio/health/live", [200], "warning"],
-  ["production", "authentik-public-route", "platform/authentik", "https://sso.zitian.party/-/health/live/", [200, 204, 302], "critical"],
-  ["production", "signoz-public-route", "platform/signoz", "https://signoz.zitian.party", [200, 302], "critical"],
-  ["staging", "minio-public-route", "platform/minio", "https://minio-staging.zitian.party/minio/health/live", [200], "warning"],
-  ["staging", "authentik-public-route", "platform/authentik", "https://sso-staging.zitian.party/-/health/live/", [200, 204, 302], "warning"],
-  ["production", "finance-report-web-public-route", "finance_report/app", "https://report.zitian.party/", [200, 302, 307, 308], "critical"],
-  ["production", "finance-report-api-public-route", "finance_report/app", "https://report.zitian.party/api/health", [200], "critical"],
-  ["production", "truealpha-web-public-route", "truealpha/app", "https://truealpha.club/", [200, 302, 307, 308], "critical"],
-  ["production", "truealpha-api-public-route", "truealpha/app", "https://truealpha.club/api/health", [200], "critical"],
-  // finance_report#1653: `?full=1` asserts every DEPENDENCY_MANIFEST.required_for(tier)
-  // dependency is present (not just DB+S3 liveness). Without this, a required dep
-  // (e.g. workflow_engine/Prefect) can be down for days — the plain /api/health above
-  // stays 200 the whole time — and the only thing that catches it is the next deploy's
-  // smoke test failing closed. This target makes that detection out-of-band, on the
-  // same 30-minute cadence as every other route here.
-  [
-    "production",
-    "finance-report-api-full-health-route",
-    "finance_report/app",
-    "https://report.zitian.party/api/health?full=1",
-    [200],
-    "critical",
-  ],
-  ["staging", "finance-report-web-public-route", "finance_report/app", "https://report-staging.zitian.party/", [200, 302, 307, 308], "warning"],
-  ["staging", "finance-report-api-public-route", "finance_report/app", "https://report-staging.zitian.party/api/health", [200], "warning"],
-  ["staging", "truealpha-web-public-route", "truealpha/app", "https://truealpha-staging.truealpha.club/", [200, 302, 307, 308], "warning"],
-  ["staging", "truealpha-api-public-route", "truealpha/app", "https://truealpha-staging.truealpha.club/api/health", [200], "warning"],
-  [
-    "staging",
-    "finance-report-api-full-health-route",
-    "finance_report/app",
-    "https://report-staging.zitian.party/api/health?full=1",
-    [200],
-    "warning",
-  ],
-].map(([environment, name, service_id, url, statuses, severity]) => ({
+  ["production", "dokploy-public-route", "bootstrap/dokploy", "https://cloud.zitian.party", [200, 302]],
+  ["production", "finance-report-web-public-route", "finance_report/app", "https://report.zitian.party/", [200, 302, 307, 308]],
+  ["production", "truealpha-web-public-route", "truealpha/app", "https://truealpha.club/", [200, 302, 307, 308]],
+].map(([environment, name, service_id, url, statuses]) => ({
   environment,
   name,
   service_id,
   url,
   statuses,
-  severity,
+  severity: "critical",
 }));
 
 const DEFAULT_HEARTBEATS = [
@@ -62,6 +45,16 @@ const DEFAULT_HEARTBEATS = [
   },
 ];
 
+// Only this environment pages. Everything else is recorded for /status.
+const PAGED_ENVIRONMENT = "production";
+const STATE_KEY = "watchdog:state";
+const LAST_RUN_KEY = "watchdog:last-run";
+const DEFAULT_RENOTIFY_SECONDS = 21600;
+const DEFAULT_ENTRYPOINT_FAILURE_RUNS = 2;
+const OUTAGE_EDGES_KEPT = 50;
+const MAX_FAILING_PUBLIC_ROUTES = 64;
+const STATE_SCHEMA = 2;
+
 export default {
   async scheduled(controller, env, ctx) {
     ctx.waitUntil(runScheduledWatchdog(env, controller.scheduledTime || Date.now()));
@@ -75,8 +68,8 @@ export default {
     if (request.method === "GET" && url.pathname === "/status") {
       return statusResponse(request, env);
     }
-    if (request.method === "GET" && url.pathname === "/ledger") {
-      return ledgerResponse(request, env);
+    if (request.method === "GET" && url.pathname === "/outages") {
+      return outagesResponse(request, env);
     }
     if (request.method === "POST" && url.pathname === "/heartbeat") {
       return recordHeartbeat(request, env);
@@ -95,11 +88,11 @@ async function runScheduledWatchdog(env, nowMs) {
   try {
     await pingSchedulerDeadman(env, runError === null);
   } catch (error) {
-    logWatchdogResult({
+    logEvent({
       event: "watchdog.deadman.failure",
       timestamp: nowMs,
       status: "fail",
-      error: oneLine(error && error.message ? error.message : String(error)),
+      error: errorText(error),
     });
     if (runError === null) runError = error;
   }
@@ -128,161 +121,152 @@ async function pingSchedulerDeadman(env, ok) {
   if (!response.ok) throw new Error("external scheduler heartbeat returned an error");
 }
 
+// ---------------------------------------------------------------------------
+// Cron run
+// ---------------------------------------------------------------------------
+
 async function runWatchdog(env, nowMs = Date.now()) {
-  const environments = enabledEnvironments(env);
-  let targets;
-  let heartbeats;
-  try {
-   targets = filterByEnvironment(
-     parseJsonList(env.WATCHDOG_TARGETS_JSON, DEFAULT_TARGETS),
-     environments,
-   );
-   heartbeats = filterByEnvironment(
-     parseJsonList(env.WATCHDOG_HEARTBEATS_JSON, DEFAULT_HEARTBEATS),
-     environments,
-   );
-  } catch (error) {
-   const configFailure = failResult(
-     {
-       environment: "global",
-      name: "cloudflare-watchdog-config-preflight",
-      service_id: "infra/cloudflare-watchdog",
-       severity: "critical",
-     },
-     `config-preflight failed: ${oneLine(
-       error && error.message ? error.message : String(error),
-     )}`,
-     "config-preflight",
-   );
-   const failures = [configFailure];
-   const fingerprint = await failureFingerprint(failures);
-   let deliveryError = "";
-   try {
-     await notifyIfNeeded(env, failures, nowMs);
-   } catch (deliveryExc) {
-     deliveryError = oneLine(
-       deliveryExc && deliveryExc.message ? deliveryExc.message : String(deliveryExc),
-     );
-   }
-   await saveLastRun(env, {
-     ranAt: nowMs,
-     ok: false,
-     routeTargetCount: 0,
-     heartbeatTargetCount: 0,
-     failureCount: 1,
-     failureFingerprint: fingerprint,
-     deliveryError,
-   });
-   if (deliveryError) {
-     logWatchdogResult({
-       event: "watchdog.delivery.failure",
-       timestamp: nowMs,
-       status: "fail",
-       failureCount: failures.length,
-       error: deliveryError,
-     });
-     throw new Error(`watchdog delivery failed: ${deliveryError}`);
-   }
-   return {
-     failures,
-     routeResults: [],
-     heartbeatResults: [],
-     configResults: failures,
-   };
-  }
-  const timeoutMs = Number(env.WATCHDOG_HTTP_TIMEOUT_MS || 8000);
-  const maxAttempts = Math.max(1, Number(env.WATCHDOG_RETRY_MAX_ATTEMPTS || 2));
-  const retryDelayMs = Math.max(0, Number(env.WATCHDOG_RETRY_DELAY_MS || 60000));
+  const config = loadConfig(env);
+  const state = normalizeState(await loadState(env, STATE_KEY));
+  const before = JSON.stringify(withoutRunRecord(state));
 
-  const routeResults = await Promise.all(
-    targets.map((target) => checkHttpTargetWithRetry(target, timeoutMs, maxAttempts, retryDelayMs)),
-  );
-  const heartbeatResults = await checkHeartbeats(env, heartbeats, nowMs);
-  const configResults = checkEffectiveConfig(targets, heartbeats);
-  const allResults = routeResults.concat(heartbeatResults, configResults);
-  const failures = allResults.filter((result) => !result.ok);
-  const fingerprint = failures.length > 0 ? await failureFingerprint(failures) : "";
-
-  for (const result of allResults) {
-    logWatchdogResult({
-      event: "watchdog.check",
-      timestamp: nowMs,
-      environment: result.environment,
-      name: result.name,
-      service_id: result.service_id,
-      identity_schema: "v1",
-      managed_by: "infra2",
-      status: result.ok ? "ok" : "fail",
-      severity: result.severity,
-      failure_domain: result.failure_domain || "",
-      attempt_count: Number(result.attempt_count || 1),
-      detail: result.detail,
-    });
+  const configOk = config.problems.length === 0;
+  const observations = [configObservation(config.problems)];
+  if (configOk) {
+    observations.push(...(await observe(env, config, state, nowMs)));
   }
 
-  await recordLedger(env, allResults, nowMs);
-
+  const renotifyMs = budgetVar(env.WATCHDOG_RENOTIFY_SECONDS, DEFAULT_RENOTIFY_SECONDS, { min: 600 }) * 1000;
+  // With a broken config nothing else was evaluated, so nothing else may resolve.
+  const plan = planAlerts(state.alerts, observations, nowMs, renotifyMs, { resolveUnobserved: configOk });
   let deliveryError = "";
-  try {
-    await notifyIfNeeded(env, failures, nowMs);
-  } catch (error) {
-    deliveryError = oneLine(error && error.message ? error.message : String(error));
+  if (plan.events.length > 0) {
+    try {
+      const kind = plan.events.every((event) => event.kind === "resolved") ? "recovered" : "failure";
+      await deliverAlert(env, formatAlertMessage(plan.events), kind);
+      state.alerts = plan.alerts;
+    } catch (error) {
+      // Nothing undelivered is marked sent: the next run retries it.
+      deliveryError = errorText(error);
+    }
   }
-  await saveLastRun(env, {
+
+  const failing = observations.filter((o) => o.status === "failing");
+  const suppressed = observations.filter((o) => o.suppressedReason);
+  const runRecord = {
     ranAt: nowMs,
-    ok: failures.length === 0 && !deliveryError,
-    routeTargetCount: targets.length,
-    heartbeatTargetCount: heartbeats.length,
-    failureCount: failures.length,
-    failureFingerprint: fingerprint,
+    ok: configOk && !deliveryError,
+    routeTargetCount: config.targets.length,
+    heartbeatTargetCount: config.heartbeats.length,
+    failureCount: failing.length,
+    activeAlertCount: Object.keys(state.alerts).length,
+    suppressed: suppressed.map((o) => o.name),
+    deliveryError,
+  };
+  // One write per run. A transition rewrites the state document (it carries the
+  // run record too); a quiet run refreshes only the small last-run record that
+  // GitHub reads for the Worker's own freshness.
+  const changed = JSON.stringify(withoutRunRecord(state)) !== before;
+  if (env.WATCHDOG_STATE) {
+    if (changed) {
+      state.lastRun = runRecord;
+      await env.WATCHDOG_STATE.put(STATE_KEY, JSON.stringify(state));
+    } else {
+      await env.WATCHDOG_STATE.put(LAST_RUN_KEY, JSON.stringify(runRecord));
+    }
+  }
+  logEvent({
+    event: "watchdog.run",
+    timestamp: nowMs,
+    status: runRecord.ok && failing.length === 0 ? "ok" : "fail",
+    routeTargetCount: runRecord.routeTargetCount,
+    heartbeatTargetCount: runRecord.heartbeatTargetCount,
+    failing: failing.map((o) => o.identity),
+    suppressed: runRecord.suppressed,
+    fired: plan.events.filter((e) => e.kind === "firing").map((e) => e.identity),
+    renotified: plan.events.filter((e) => e.kind === "renotify").map((e) => e.identity),
+    resolved: plan.events.filter((e) => e.kind === "resolved").map((e) => e.identity),
+    activeAlertCount: runRecord.activeAlertCount,
+    kvWrite: env.WATCHDOG_STATE ? (changed ? STATE_KEY : LAST_RUN_KEY) : "",
     deliveryError,
   });
   if (deliveryError) {
-    logWatchdogResult({
-      event: "watchdog.delivery.failure",
-      timestamp: nowMs,
-      status: "fail",
-      failureCount: failures.length,
-      error: deliveryError,
-    });
     throw new Error(`watchdog delivery failed: ${deliveryError}`);
   }
-  logWatchdogResult({
-    event: "watchdog.run",
-    timestamp: nowMs,
-    status: failures.length === 0 ? "ok" : "fail",
-    routeTargetCount: targets.length,
-    heartbeatTargetCount: heartbeats.length,
-    failureCount: failures.length,
-    failureFingerprint: fingerprint,
-    deliveryError,
-  });
-  return { failures, routeResults, heartbeatResults, configResults };
+  return { observations, events: plan.events, state };
 }
 
-function checkEffectiveConfig(targets, heartbeats) {
-  const configTarget = {
+function loadConfig(env) {
+  const problems = [];
+  let targets = [];
+  let heartbeats = [];
+  try {
+    const environments = enabledEnvironments(env);
+    targets = filterByEnvironment(parseJsonList(env.WATCHDOG_TARGETS_JSON, DEFAULT_TARGETS), environments);
+    heartbeats = filterByEnvironment(parseJsonList(env.WATCHDOG_HEARTBEATS_JSON, DEFAULT_HEARTBEATS), environments);
+  } catch (error) {
+    problems.push(`config-preflight failed: ${errorText(error)}`);
+  }
+  if (problems.length === 0) {
+    if (targets.length === 0) problems.push("effective entrypoint target list is empty");
+    if (heartbeats.length === 0) problems.push("effective heartbeat target list is empty");
+  }
+  if (!env.WATCHDOG_STATE) problems.push("WATCHDOG_STATE KV binding is missing");
+  return { targets, heartbeats, problems };
+}
+
+function configObservation(problems) {
+  return {
+    identity: "global:cloudflare-watchdog:config-preflight",
     environment: "global",
-    name: "cloudflare-watchdog-effective-config",
-    severity: "critical",
+    name: "cloudflare-watchdog-config-preflight",
+    service_id: "infra/cloudflare-watchdog",
+    failureClass: "watchdog-config",
+    severity: "P1",
+    status: problems.length > 0 ? "failing" : "ok",
+    summary: "the Worker cannot evaluate its checks",
+    detail: problems.join("; "),
+    recovery: "Worker config valid again",
   };
-  const results = [];
-  if (targets.length === 0) {
-    results.push(
-      failResult(configTarget, "effective public route target list is empty", "config-preflight"),
-    );
-  }
-  if (heartbeats.length === 0) {
-    results.push(
-      failResult(configTarget, "effective heartbeat target list is empty", "config-preflight"),
-    );
-  }
-  return results;
 }
 
-async function checkHttpTarget(target, timeoutMs) {
+async function observe(env, config, state, nowMs) {
+  const timeoutMs = budgetVar(env.WATCHDOG_HTTP_TIMEOUT_MS, 8000, { min: 1000, max: 20000 });
+  const threshold = Math.floor(
+    budgetVar(env.WATCHDOG_ENTRYPOINT_FAILURE_RUNS, DEFAULT_ENTRYPOINT_FAILURE_RUNS, { min: 1, max: 6 }),
+  );
+  const pagedTargets = config.targets.filter((t) => t.environment === PAGED_ENVIRONMENT);
+  const pagedHeartbeats = config.heartbeats.filter((h) => h.environment === PAGED_ENVIRONMENT);
+
+  const [probes, records] = await Promise.all([
+    Promise.all(pagedTargets.map((target) => checkEntrypoint(target, timeoutMs))),
+    Promise.all(pagedHeartbeats.map((hb) => env.WATCHDOG_STATE.get(heartbeatKey(hb.environment, hb.name)))),
+  ]);
+
+  const observations = [];
+  // Routes the VPS itself reports failing, from any fresh v2 production heartbeat.
+  // Unknown (v1, stale, missing) never suppresses anything.
+  const vpsFailingRoutes = new Map();
+  pagedHeartbeats.forEach((heartbeat, index) => {
+    const verdict = heartbeatVerdict(heartbeat, records[index], nowMs);
+    const outage = trackOutageEdge(state, heartbeat, verdict, nowMs);
+    observations.push(...heartbeatObservations(heartbeat, verdict, outage));
+    if (verdict.state === "fresh" && Array.isArray(verdict.record.failingPublicRoutes)) {
+      for (const route of verdict.record.failingPublicRoutes) {
+        vpsFailingRoutes.set(route, `${heartbeat.environment}/${heartbeat.name}`);
+      }
+    }
+  });
+  pagedTargets.forEach((target, index) => {
+    observations.push(entrypointObservation(state, target, probes[index], threshold, vpsFailingRoutes, nowMs));
+  });
+  return observations;
+}
+
+async function checkEntrypoint(target, timeoutMs) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const statuses = Array.isArray(target.statuses) ? target.statuses : [200];
   try {
     const response = await fetch(target.url, {
       method: "GET",
@@ -290,118 +274,238 @@ async function checkHttpTarget(target, timeoutMs) {
       signal: controller.signal,
       headers: {
         Accept: "text/html,application/json,text/plain,*/*",
-        "User-Agent": "Mozilla/5.0 (compatible; infra2-cloudflare-watchdog/1.0; +https://zitian.party)",
+        "User-Agent": "Mozilla/5.0 (compatible; infra2-cloudflare-watchdog/2.0; +https://zitian.party)",
       },
     });
-    if (target.statuses.includes(response.status)) {
-      return okResult(target, `HTTP ${response.status}`, _failure_domain_for_http_target(target));
+    if (statuses.includes(response.status)) {
+      return { ok: true, detail: `HTTP ${response.status}` };
     }
-
-    const body = await safeBody(response);
-    return failResult(
-      target,
-      `HTTP ${response.status}; expected ${target.statuses.join(",")}; body=${body}`,
-      _failure_domain_for_http_target(target),
-    );
+    return {
+      ok: false,
+      detail: `HTTP ${response.status}; expected ${statuses.join(",")}; body=${await safeBody(response)}`,
+    };
   } catch (error) {
-    return failResult(
-      target,
-      `fetch failed: ${oneLine(error && error.message ? error.message : String(error))}`,
-      _failure_domain_for_http_target(target),
-    );
+    return { ok: false, detail: `fetch failed: ${errorText(error)}` };
   } finally {
     clearTimeout(timeout);
   }
 }
 
-async function checkHttpTargetWithRetry(target, timeoutMs, maxAttempts, retryDelayMs) {
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const result = await checkHttpTarget(target, timeoutMs);
-    result.attempt_count = attempt;
-    if (result.ok || attempt >= maxAttempts) {
-      return result;
-    }
-    if (retryDelayMs > 0) {
-      await sleep(retryDelayMs);
-    }
+function entrypointObservation(state, target, probe, threshold, vpsFailingRoutes, nowMs) {
+  const key = `${target.environment}:${target.name}`;
+  const base = {
+    identity: `${key}:entrypoint`,
+    environment: target.environment,
+    name: target.name,
+    service_id: target.service_id || "infra/unregistered",
+    failureClass: "host-reachability",
+    severity: "P0",
+    summary: `external entrypoint ${target.url} unreachable from Cloudflare`,
+    detail: probe.detail,
+    recovery: `${target.url} reachable again (${probe.detail})`,
+    url: target.url,
+  };
+  if (probe.ok) {
+    delete state.entrypoints[key];
+    return { ...base, status: "ok" };
   }
-  return failResult(target, "retry loop exhausted", _failure_domain_for_http_target(target));
+  const previous = state.entrypoints[key] || { failures: 0, since: nowMs };
+  // Capped at the threshold, so a sustained outage writes nothing after it pages.
+  const failures = Math.min(threshold, Number(previous.failures || 0) + 1);
+  // Stored in state, so it must not change from run to run while nothing else does.
+  const vpsReport = vpsFailingRoutes.get(target.name);
+  const suppressedReason = vpsReport
+    ? `the fresh ${vpsReport} heartbeat lists ${target.name} among its failing in-band probes; the VPS pages it`
+    : "";
+  const entry = { failures, since: Number(previous.since || nowMs) };
+  if (suppressedReason) entry.suppressedReason = suppressedReason;
+  state.entrypoints[key] = entry;
+  if (failures < threshold) {
+    return { ...base, status: "pending", since: entry.since, detail: `${probe.detail} (failing run ${failures}/${threshold})` };
+  }
+  return {
+    ...base,
+    status: "failing",
+    since: entry.since,
+    detail: `${probe.detail} (${failures} consecutive runs)`,
+    suppressedReason,
+  };
 }
 
-async function checkHeartbeats(env, heartbeats, nowMs) {
-  if (!env.WATCHDOG_STATE) {
-    return heartbeats.map((heartbeat) =>
-      failResult(
-        heartbeat,
-        "WATCHDOG_STATE KV binding is missing",
-        _failure_domain_for_heartbeat(heartbeat),
-      ),
-    );
+function heartbeatVerdict(heartbeat, raw, nowMs) {
+  if (!raw) {
+    return { state: "missing", detail: "heartbeat missing", ageSeconds: null, record: null };
   }
-
-  const results = [];
-  for (const heartbeat of heartbeats) {
-    const raw = await env.WATCHDOG_STATE.get(heartbeatKey(heartbeat.environment, heartbeat.name));
-    if (!raw) {
-      results.push(
-        failResult(heartbeat, "heartbeat missing", _failure_domain_for_heartbeat(heartbeat)),
-      );
-      continue;
-    }
-    let value;
-    try {
-      value = JSON.parse(raw);
-    } catch (_error) {
-      results.push(
-        failResult(
-          heartbeat,
-          "heartbeat payload is invalid JSON",
-          _failure_domain_for_heartbeat(heartbeat),
-        ),
-      );
-      continue;
-    }
-    const ageSeconds = Math.floor((nowMs - Number(value.receivedAt || 0)) / 1000);
-    if (ageSeconds < -300) {
-      results.push(
-        failResult(
-          heartbeat,
-          `heartbeat timestamp is in the future: ${ageSeconds}s old`,
-          _failure_domain_for_heartbeat(heartbeat),
-        ),
-      );
-      continue;
-    }
-    if (value.ok === false) {
-      results.push(
-        failResult(
-          heartbeat,
-          `heartbeat reports unhealthy: ${oneLine(value.detail || "")}`,
-          _failure_domain_for_heartbeat(heartbeat),
-        ),
-      );
-      continue;
-    }
-    if (ageSeconds > Number(heartbeat.maxAgeSeconds || 1800)) {
-      results.push(
-        failResult(
-          heartbeat,
-          `heartbeat stale: ${ageSeconds}s old`,
-          _failure_domain_for_heartbeat(heartbeat),
-        ),
-      );
-      continue;
-    }
-    results.push(
-      okResult(
-        heartbeat,
-        `heartbeat fresh: ${ageSeconds}s old`,
-        _failure_domain_for_heartbeat(heartbeat),
-      ),
-    );
+  const record = parseHeartbeatRecord(raw);
+  if (!record) {
+    return { state: "invalid", detail: "heartbeat payload is invalid JSON", ageSeconds: null, record: null };
   }
-  return results;
+  const ageSeconds = Math.floor((nowMs - Number(record.receivedAt || 0)) / 1000);
+  const maxAge = Number(heartbeat.maxAgeSeconds || 1800);
+  if (ageSeconds < -300) {
+    return { state: "future", detail: `heartbeat timestamp is in the future: ${ageSeconds}s old`, ageSeconds, record };
+  }
+  if (ageSeconds > maxAge) {
+    return { state: "stale", detail: `heartbeat stale: ${ageSeconds}s old (max ${maxAge}s)`, ageSeconds, record };
+  }
+  return { state: "fresh", detail: `heartbeat fresh: ${ageSeconds}s old`, ageSeconds, record };
 }
+
+function heartbeatObservations(heartbeat, verdict, outage) {
+  const key = `${heartbeat.environment}:${heartbeat.name}`;
+  const common = {
+    environment: heartbeat.environment,
+    name: heartbeat.name,
+    service_id: heartbeat.service_id || "infra/unregistered",
+  };
+  const fresh = verdict.state === "fresh";
+  const stale = {
+    ...common,
+    identity: `${key}:heartbeat-stale`,
+    failureClass: "host-reachability",
+    severity: "P0",
+    status: fresh ? "ok" : "failing",
+    since: outage ? outage.start : undefined,
+    summary: "VPS or its egress is down",
+    detail: verdict.detail,
+    recovery: `heartbeat fresh again (${verdict.ageSeconds}s old)`,
+  };
+  const loopDetail = fresh ? oneLine(verdict.record.detail || "") : "";
+  const unhealthy = {
+    ...common,
+    identity: `${key}:heartbeat-unhealthy`,
+    failureClass: "alert-pipeline",
+    severity: "P1",
+    // A stale record says nothing about the loop now: neither fire nor resolve.
+    status: !fresh ? "unknown" : verdict.record.ok === false ? "failing" : "ok",
+    summary: "probe loop reports unhealthy",
+    detail: loopDetail || "no detail",
+    recovery: `probe loop healthy again (${loopDetail || "ok"})`,
+  };
+  return [stale, unhealthy];
+}
+
+// Availability's out-of-band half: the VPS cannot record its own outage, so the
+// Worker keeps the down/up edges of the production heartbeat, one write at each
+// edge. The outage starts at the last recorded contact (conservative: it may
+// include up to one heartbeat write interval of uptime) and ends at the first
+// fresh heartbeat after it. Returns the open outage, if any.
+function trackOutageEdge(state, heartbeat, verdict, nowMs) {
+  const open = state.outages.find(
+    (edge) => edge.environment === heartbeat.environment && edge.name === heartbeat.name && edge.end === null,
+  );
+  const lastSeen = verdict.record ? Number(verdict.record.receivedAt || 0) : 0;
+  if (verdict.state === "fresh") {
+    if (open) {
+      open.end = lastSeen;
+      open.recoveredAt = nowMs;
+    }
+    return null;
+  }
+  if (open) {
+    return open;
+  }
+  const edge = {
+    environment: heartbeat.environment,
+    name: heartbeat.name,
+    start: lastSeen > 0 && lastSeen <= nowMs ? lastSeen : nowMs,
+    detectedAt: nowMs,
+    end: null,
+    reason: verdict.state,
+  };
+  state.outages.push(edge);
+  state.outages = state.outages.slice(-OUTAGE_EDGES_KEPT);
+  return edge;
+}
+
+// Alert state per failure identity. Returns the delivery events and the alert map
+// to commit once they are delivered.
+function planAlerts(currentAlerts, observations, nowMs, renotifyMs, { resolveUnobserved }) {
+  const alerts = { ...currentAlerts };
+  const events = [];
+  const observed = new Map(observations.map((o) => [o.identity, o]));
+  for (const obs of observations) {
+    if (obs.status !== "failing" || obs.suppressedReason) continue;
+    const active = alerts[obs.identity];
+    if (!active) {
+      const since = Number(obs.since || nowMs);
+      alerts[obs.identity] = {
+        environment: obs.environment,
+        name: obs.name,
+        failureClass: obs.failureClass,
+        severity: obs.severity,
+        since,
+        lastAlertAt: nowMs,
+      };
+      events.push({ kind: "firing", identity: obs.identity, obs, since });
+    } else if (nowMs - Number(active.lastAlertAt || 0) >= renotifyMs) {
+      alerts[obs.identity] = { ...active, lastAlertAt: nowMs };
+      events.push({ kind: "renotify", identity: obs.identity, obs, since: Number(active.since || nowMs) });
+    }
+  }
+  for (const [identity, active] of Object.entries(currentAlerts)) {
+    const obs = observed.get(identity);
+    if (obs && obs.status !== "ok") continue; // still failing, suppressed, pending or unknown
+    if (!obs && !resolveUnobserved) continue;
+    delete alerts[identity];
+    events.push({
+      kind: "resolved",
+      identity,
+      obs: obs || { ...active, recovery: "no longer checked by this Worker" },
+      since: Number(active.since || nowMs),
+    });
+  }
+  return { alerts, events };
+}
+
+function formatAlertMessage(events) {
+  const firing = events.filter((e) => e.kind !== "resolved");
+  const resolved = events.filter((e) => e.kind === "resolved");
+  const severity = firing.some((e) => e.obs.severity === "P0") ? "P0" : firing.length ? "P1" : "";
+  const headline = firing.length
+    ? `[OUT-OF-BAND] ${severity} Infra2 Cloudflare watchdog failed`
+    : "[RESOLVED] Infra2 Cloudflare watchdog recovered";
+  const lines = [headline, "Route: Cloudflare Workers Cron -> Feishu direct"];
+  for (const event of firing) {
+    const { obs } = event;
+    const label = event.kind === "renotify" ? "STILL FIRING" : "FIRING";
+    lines.push(
+      `${label} ${obs.severity} ${obs.failureClass} ${obs.environment}/${obs.name}: ${obs.summary} — ${obs.detail}`,
+    );
+    lines.push(`  Since: ${new Date(event.since).toISOString()}`);
+    lines.push(`  Action: ${suggestedAction(obs)}`);
+    lines.push(`  Runbook: ${runbookUrl(obs.failureClass)}`);
+  }
+  for (const event of resolved) {
+    const { obs } = event;
+    lines.push(
+      `RESOLVED ${obs.environment}/${obs.name} (${obs.failureClass}): ${obs.recovery}; failing since ${new Date(event.since).toISOString()}`,
+    );
+  }
+  return lines.join("\n");
+}
+
+function suggestedAction(obs) {
+  switch (obs.failureClass) {
+    case "host-reachability":
+      return obs.url
+        ? `curl -I "${obs.url}" from an external network; if the VPS heartbeat is also stale, the host or its egress is down`
+        : "reach the VPS over SSH; check the host, its network and the platform-alerting-probes container";
+    case "alert-pipeline":
+      return "read platform-alerting-probes logs: the probe loop or its alert delivery is failing";
+    default:
+      return "validate WATCHDOG_TARGETS_JSON / WATCHDOG_HEARTBEATS_JSON and the KV binding, then redeploy the Worker";
+  }
+}
+
+function runbookUrl(failureClass) {
+  const anchor = failureClass === "alert-pipeline" ? "#infra-service-probes" : "#out-of-band-watchdog";
+  return `https://github.com/wangzitian0/infra2/blob/main/platform/12.alerting/README.md${anchor}`;
+}
+
+// ---------------------------------------------------------------------------
+// Heartbeat POST
+// ---------------------------------------------------------------------------
 
 // Heartbeat KV budget. The free tier allows 1000 put()/day for the whole account,
 // and a spent quota silently freezes every heartbeat into a false "stale" page
@@ -412,9 +516,7 @@ async function checkHeartbeats(env, heartbeats, nowMs) {
 // per UTC day, however often the runner posts and however its verdict flaps.
 const DEFAULT_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS = 600;
 const DEFAULT_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY = 24;
-// Hard runtime limits, whatever the Worker env says: with 2 heartbeat keys and 48
-// cron runs, the worst case is 2 * (ceil(86400 / 600) + 24) + 48 * 3 = 480 puts/day,
-// under half the free tier.
+// Hard runtime limits, whatever the Worker env says.
 const MIN_HEARTBEAT_WRITE_INTERVAL_SECONDS = 600;
 const MAX_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY = 24;
 // A liveness ping may refresh the record only once verdict posts have left it
@@ -429,10 +531,9 @@ function isLivenessPing(payload) {
   return payload.liveness === true || String(payload.detail || "") === LEGACY_LIVENESS_DETAIL;
 }
 
-// A budget variable that is unset, empty or non-numeric falls back to its default,
-// and one outside [min, max] is clamped: NaN makes every `age < interval`
-// comparison false, and a tiny interval or a huge budget writes (nearly) every
-// post — each silently reopens the unbounded-write path.
+// A variable that is unset, empty or non-numeric falls back to its default, and
+// one outside [min, max] is clamped: NaN makes every comparison false, and a tiny
+// interval or a huge budget writes (nearly) every post.
 function budgetVar(raw, fallback, { min, max = Infinity }) {
   if (raw === undefined || raw === null || String(raw).trim() === "") {
     return fallback;
@@ -473,12 +574,25 @@ function parseHeartbeatRecord(raw) {
   }
 }
 
+// null = unknown (a v1 runner, or a malformed field); never suppresses anything.
+function failingRoutesKey(routes) {
+  return Array.isArray(routes) ? JSON.stringify(routes) : "unknown";
+}
+
+// A verdict is `ok` (the probe loop is healthy) plus the set of in-band public
+// routes the loop sees failing; a change in either is a status change.
+function verdictChanged(existing, verdict) {
+  return (
+    (existing.ok !== false) !== verdict.ok ||
+    failingRoutesKey(existing.failingPublicRoutes) !== failingRoutesKey(verdict.failingPublicRoutes)
+  );
+}
+
 // Decides whether one heartbeat POST is worth a KV put(), and what to store.
 // `incoming` is the verdict or liveness ping as received; `existing` the stored
-// record or null. Only a verdict can change the stored `ok`: the runner's
+// record or null. Only a verdict can change the stored verdict: the runner's
 // liveness ping (ok=true) used to alternate with a failing verdict (ok=false) on
-// every loop, and every alternation was written immediately — ~2 puts per
-// minute per environment while any probe failed.
+// every loop, and every alternation was written immediately.
 function heartbeatWrite(existing, incoming, nowMs, policy) {
   const day = utcDateKey(nowMs);
   const stored = existing && existing.statusChangeBudget;
@@ -512,8 +626,7 @@ function heartbeatWrite(existing, incoming, nowMs, policy) {
   if (ageMs >= policy.minWriteIntervalMs) {
     return { write: true, reason: "refresh", value: { ...verdict, statusChangeBudget: budget(spent) } };
   }
-  const statusChanged = (existing.ok !== false) !== verdict.ok;
-  if (!statusChanged) {
+  if (!verdictChanged(existing, verdict)) {
     return { write: false, reason: "throttled" };
   }
   if (spent >= policy.statusChangeWritesPerDay) {
@@ -535,6 +648,29 @@ function configuredHeartbeatKeys(env) {
   return new Set(heartbeats.map((heartbeat) => heartbeatKey(heartbeat.environment, heartbeat.name)));
 }
 
+function failingPublicRoutes(raw) {
+  if (!Array.isArray(raw)) {
+    return null;
+  }
+  const names = new Set();
+  for (const item of raw) {
+    const text = String(item || "").trim();
+    if (!/^[a-zA-Z0-9_.-]+$/.test(text)) {
+      return null; // a malformed list is unknown, not "nothing failing"
+    }
+    names.add(text);
+  }
+  if (names.size > MAX_FAILING_PUBLIC_ROUTES) {
+    return null;
+  }
+  return [...names].sort();
+}
+
+function deliveryTimestamp(raw) {
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
+}
+
 async function recordHeartbeat(request, env) {
   const expectedToken = String(env.HEARTBEAT_TOKEN || "");
   if (!expectedToken) {
@@ -554,9 +690,8 @@ async function recordHeartbeat(request, env) {
   } catch (_error) {
     payload = {};
   }
-  // request.json() also accepts valid JSON that is not an object (null, a
-  // string, a number, an array); normalize so the field access below cannot
-  // throw on `payload.env` etc.
+  // request.json() also accepts valid JSON that is not an object; normalize so
+  // the field access below cannot throw.
   if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
     payload = {};
   }
@@ -574,28 +709,21 @@ async function recordHeartbeat(request, env) {
     configuredKeys = configuredHeartbeatKeys(env);
   } catch (error) {
     // A malformed env/name (or heartbeat config) must not bubble up as an
-    // unhandled 500/CF-1101; degrade visibly with the same queryable event used
-    // for storage failures.
-    logWatchdogResult({
-      event: "watchdog.heartbeat.error",
-      timestamp: Date.now(),
-      status: "fail",
-      error: oneLine(error && error.message ? error.message : String(error)),
-    });
+    // unhandled 500/CF-1101; degrade visibly with a queryable event.
+    logEvent({ event: "watchdog.heartbeat.error", timestamp: Date.now(), status: "fail", error: errorText(error) });
     return jsonResponse({ ok: true, persisted: false, degraded: true });
   }
-  // Only keys the cron reads are stored: an unconfigured name would spend the
+  // Only keys the Worker reads are stored: an unconfigured name would spend the
   // shared put() budget on a record nobody checks.
   if (!configuredKeys.has(key)) {
-    logWatchdogResult({
-      event: "watchdog.heartbeat.ignored",
-      timestamp: Date.now(),
-      status: "fail",
-      key,
-    });
+    logEvent({ event: "watchdog.heartbeat.ignored", timestamp: Date.now(), status: "fail", key });
     return jsonResponse({ ok: false, key, persisted: false, error: "not a configured heartbeat" }, 404);
   }
   const now = Date.now();
+  // Contract v2 (#903/#904): `ok` is the probe loop's health; the loop's failing
+  // in-band public routes and its last successful alert delivery ride along. A v1
+  // payload (no `schema`) leaves both unknown.
+  const v2 = Number(payload.schema) === 2;
   const incoming = {
     environment,
     name,
@@ -604,14 +732,14 @@ async function recordHeartbeat(request, env) {
     timestamp: Number(payload.timestamp || 0),
     receivedAt: now,
     liveness: isLivenessPing(payload),
+    schema: v2 ? 2 : 1,
+    lastDeliveryOkAt: v2 ? deliveryTimestamp(payload.last_delivery_ok_at) : null,
+    failingPublicRoutes: v2 ? failingPublicRoutes(payload.failing_public_routes) : null,
   };
 
   // Read-then-maybe-write (reads are cheap, puts are budgeted): see heartbeatWrite.
-  // Fail-safe: a watcher must distinguish its own storage failure from a target
-  // failure. If KV get/put throws (e.g. the daily quota is exhausted), log a
-  // queryable structured event and degrade gracefully (HTTP 200) instead of
-  // throwing an unhandled exception (HTTP 500 / CF 1101) that is invisible
-  // unless someone is live-tailing the worker.
+  // A KV failure (e.g. the daily quota is exhausted) degrades to HTTP 200 with a
+  // queryable event instead of an unhandled 500/1101.
   let decision;
   try {
     const existingRaw = await env.WATCHDOG_STATE.get(key);
@@ -620,37 +748,73 @@ async function recordHeartbeat(request, env) {
       await env.WATCHDOG_STATE.put(key, JSON.stringify(decision.value));
     }
   } catch (error) {
-    logWatchdogResult({
-      event: "watchdog.heartbeat.error",
-      timestamp: now,
-      status: "fail",
-      key,
-      error: oneLine(error && error.message ? error.message : String(error)),
-    });
+    logEvent({ event: "watchdog.heartbeat.error", timestamp: now, status: "fail", key, error: errorText(error) });
     return jsonResponse({ ok: true, key, persisted: false, degraded: true });
   }
   return jsonResponse({ ok: true, key, persisted: decision.write, reason: decision.reason });
 }
 
-async function statusResponse(request, env) {
+// ---------------------------------------------------------------------------
+// Read endpoints
+// ---------------------------------------------------------------------------
+
+function authorizeRead(request, env) {
   const expectedToken = String(env.WATCHDOG_STATUS_TOKEN || "");
   if (!expectedToken) {
     return jsonResponse({ ok: false, error: "WATCHDOG_STATUS_TOKEN is not configured" }, 500);
   }
-  const actualToken = request.headers.get("Authorization") || "";
-  if (actualToken !== `Bearer ${expectedToken}`) {
+  if ((request.headers.get("Authorization") || "") !== `Bearer ${expectedToken}`) {
     return jsonResponse({ ok: false, error: "unauthorized" }, 401);
   }
   if (!env.WATCHDOG_STATE) {
     return jsonResponse({ ok: false, error: "WATCHDOG_STATE KV binding is missing" }, 500);
   }
+  return null;
+}
+
+async function statusResponse(request, env) {
+  const refused = authorizeRead(request, env);
+  if (refused) return refused;
   const nowMs = Date.now();
   const maxAgeSeconds = Number(env.WATCHDOG_STATUS_MAX_AGE_SECONDS || 7200);
-  const lastRun = await loadState(env, "watchdog:last-run");
-  const alertState = await loadState(env, "alert-state:cloudflare-watchdog");
+  const [lastRunRecord, rawState] = await Promise.all([loadState(env, LAST_RUN_KEY), loadState(env, STATE_KEY)]);
+  const state = normalizeState(rawState);
+  // A quiet run writes the last-run record, a transition the state document: the
+  // newer of the two is the last run.
+  const stateRun = state.lastRun || {};
+  const lastRun = Number(stateRun.ranAt || 0) > Number(lastRunRecord.ranAt || 0) ? stateRun : lastRunRecord;
   const ranAt = Number(lastRun.ranAt || 0);
   const ageSeconds = ranAt > 0 ? Math.floor((nowMs - ranAt) / 1000) : null;
   const stale = ageSeconds === null || ageSeconds > maxAgeSeconds || ageSeconds < -300;
+
+  let heartbeats = [];
+  try {
+    const configured = filterByEnvironment(
+      parseJsonList(env.WATCHDOG_HEARTBEATS_JSON, DEFAULT_HEARTBEATS),
+      enabledEnvironments(env),
+    );
+    const raws = await Promise.all(configured.map((hb) => env.WATCHDOG_STATE.get(heartbeatKey(hb.environment, hb.name))));
+    heartbeats = configured.map((heartbeat, index) => {
+      const verdict = heartbeatVerdict(heartbeat, raws[index], nowMs);
+      const record = verdict.record || {};
+      return {
+        environment: heartbeat.environment,
+        name: heartbeat.name,
+        paged: heartbeat.environment === PAGED_ENVIRONMENT,
+        state: verdict.state,
+        ageSeconds: verdict.ageSeconds,
+        loopOk: verdict.record ? record.ok !== false : null,
+        detail: oneLine(record.detail || ""),
+        schema: Number(record.schema || 1),
+        lastDeliveryOkAt: record.lastDeliveryOkAt ?? null,
+        failingPublicRoutes: Array.isArray(record.failingPublicRoutes) ? record.failingPublicRoutes : null,
+      };
+    });
+  } catch (error) {
+    heartbeats = [{ error: errorText(error) }];
+  }
+
+  const alerts = Object.entries(state.alerts).map(([identity, alert]) => ({ identity, ...alert }));
   return jsonResponse({
     ok: !stale && lastRun.ok !== false,
     lastRun: {
@@ -659,39 +823,36 @@ async function statusResponse(request, env) {
       routeTargetCount: Number(lastRun.routeTargetCount || 0),
       heartbeatTargetCount: Number(lastRun.heartbeatTargetCount || 0),
       failureCount: Number(lastRun.failureCount || 0),
+      activeAlertCount: Number(lastRun.activeAlertCount || 0),
+      suppressed: Array.isArray(lastRun.suppressed) ? lastRun.suppressed : [],
       deliveryError: oneLine(lastRun.deliveryError || ""),
     },
     alertState: {
-      active: Boolean(alertState.active),
-      lastAlertAt: Number(alertState.lastAlertAt || 0),
+      active: alerts.length > 0,
+      lastAlertAt: alerts.reduce((latest, alert) => Math.max(latest, Number(alert.lastAlertAt || 0)), 0),
+      alerts,
     },
+    entrypoints: Object.entries(state.entrypoints).map(([key, entry]) => ({ key, ...entry })),
+    heartbeats,
+    openOutages: state.outages.filter((edge) => edge.end === null),
   });
 }
 
-async function notifyIfNeeded(env, failures, nowMs) {
-  const stateKey = "alert-state:cloudflare-watchdog";
-  const state = await loadState(env, stateKey);
-  const renotifyMs = Number(env.WATCHDOG_RENOTIFY_SECONDS || 7200) * 1000;
-
-  if (failures.length === 0) {
-    if (state.active) {
-      await deliverAlert(env, formatResolvedMessage(), "recovered");
-      await saveState(env, stateKey, { active: false, fingerprint: "", lastAlertAt: nowMs });
-    }
-    return;
-  }
-
-  const fingerprint = await failureFingerprint(failures);
-  const shouldSend =
-    !state.active ||
-    state.fingerprint !== fingerprint ||
-    nowMs - Number(state.lastAlertAt || 0) >= renotifyMs;
-
-  if (shouldSend) {
-    await deliverAlert(env, formatFailureMessage(failures), "failure");
-    await saveState(env, stateKey, { active: true, fingerprint, lastAlertAt: nowMs });
-  }
+async function outagesResponse(request, env) {
+  const refused = authorizeRead(request, env);
+  if (refused) return refused;
+  const state = normalizeState(await loadState(env, STATE_KEY));
+  return jsonResponse({
+    ok: true,
+    generatedAt: Date.now(),
+    kept: OUTAGE_EDGES_KEPT,
+    outages: state.outages,
+  });
 }
+
+// ---------------------------------------------------------------------------
+// Delivery
+// ---------------------------------------------------------------------------
 
 async function sendFeishu(env, text) {
   const mode = String(env.ALERT_DELIVERY_MODE || "feishu_webhook").trim();
@@ -764,47 +925,20 @@ async function deliverAlert(env, text, kind) {
     await sendFeishu(env, text);
   } catch (feishuError) {
     const ts = Date.now();
-    const fe = oneLine(feishuError && feishuError.message ? feishuError.message : String(feishuError));
-    logWatchdogResult({
-      event: "watchdog.delivery.failure",
-      timestamp: ts,
-      kind,
-      channel: "feishu",
-      status: "fail",
-      error: fe,
-    });
+    const fe = errorText(feishuError);
+    logEvent({ event: "watchdog.delivery.failure", timestamp: ts, kind, channel: "feishu", status: "fail", error: fe });
     const emailConfigured =
       String(env.ALERT_EMAIL_TO || "").trim() !== "" && String(env.RESEND_API_KEY || "").trim() !== "";
     if (!emailConfigured) {
-      // No secondary channel configured: the Feishu failure stands as the
-      // delivery failure (escalation unavailable, recorded for querying).
-      logWatchdogResult({
-        event: "watchdog.delivery.escalation_unavailable",
-        timestamp: ts,
-        kind,
-        channel: "email",
-      });
+      logEvent({ event: "watchdog.delivery.escalation_unavailable", timestamp: ts, kind, channel: "email" });
       throw feishuError;
     }
     try {
       await sendEmail(env, `[infra2 watchdog] ${kind}`, `${text}\n\n(primary Feishu delivery failed: ${fe})`);
-      logWatchdogResult({
-        event: "watchdog.delivery.escalated",
-        timestamp: ts,
-        kind,
-        channel: "email",
-        status: "ok",
-      });
+      logEvent({ event: "watchdog.delivery.escalated", timestamp: ts, kind, channel: "email", status: "ok" });
     } catch (emailError) {
-      const ee = oneLine(emailError && emailError.message ? emailError.message : String(emailError));
-      logWatchdogResult({
-        event: "watchdog.delivery.failure",
-        timestamp: ts,
-        kind,
-        channel: "email",
-        status: "fail",
-        error: ee,
-      });
+      const ee = errorText(emailError);
+      logEvent({ event: "watchdog.delivery.failure", timestamp: ts, kind, channel: "email", status: "fail", error: ee });
       throw new Error(`all alert channels failed: feishu=${fe}; email=${ee}`);
     }
   }
@@ -830,55 +964,28 @@ async function sendEmail(env, subject, text) {
   }
 }
 
-function formatFailureMessage(failures) {
-  const highestSeverity = failures.some((failure) => failure.severity === "critical") ? "P0" : "P1";
-  const lines = [
-    "[OUT-OF-BAND] Infra2 Cloudflare watchdog failed",
-    `Severity: ${highestSeverity}`,
-    "Route: Cloudflare Workers Cron -> Feishu direct",
-    "Failures:",
-  ];
-  for (const failure of failures) {
-    const failureDomain = failure.failure_domain || "unknown";
-    lines.push(`- ${failure.environment}/${failure.name} [${failureDomain}]: ${failure.detail}`);
-    lines.push(`  Action: ${suggestedActionForFailure(failure)}`);
-    lines.push(`  Runbook: ${runbookUrlForDomain(failureDomain)}`);
-  }
-  return lines.join("\n");
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function normalizeState(raw) {
+  const state = raw && typeof raw === "object" && !Array.isArray(raw) ? { ...raw } : {};
+  state.schema = STATE_SCHEMA;
+  state.alerts = isPlainObject(state.alerts) ? { ...state.alerts } : {};
+  state.entrypoints = isPlainObject(state.entrypoints) ? { ...state.entrypoints } : {};
+  state.outages = Array.isArray(state.outages)
+    ? state.outages.filter(isPlainObject).map((edge) => ({ ...edge, end: edge.end ?? null }))
+    : [];
+  return state;
 }
 
-function suggestedActionForFailure(failure) {
-  const failureDomain = failure.failure_domain || "";
-  const name = failure.name || "";
-  const url = failure.url || "";
-  switch (failureDomain) {
-    case "public-route":
-      return `curl -I "${url || "https://cloud.zitian.party"}" from an external network to verify edge routing`;
-    case "heartbeat":
-      return "check platform-alerting probe runner logs and heartbeat publish environment variables";
-    case "config-preflight":
-      return "validate WATCHDOG_TARGETS_JSON / WATCHDOG_HEARTBEATS_JSON format and redeploy worker";
-    default:
-      return "inspect watchdog /status and last-run payload, then verify target service health";
-  }
+function withoutRunRecord(state) {
+  const { lastRun, ...rest } = state;
+  return rest;
 }
 
-function runbookUrlForDomain(failureDomain) {
-  const anchorByDomain = {
-    "public-route": "#out-of-band-watchdog",
-    heartbeat: "#infra-service-probes",
-    "config-preflight": "#out-of-band-watchdog",
-  };
-  const anchor = anchorByDomain[failureDomain] || "#out-of-band-watchdog";
-  return `https://github.com/wangzitian0/infra2/blob/main/platform/12.alerting/README.md${anchor}`;
-}
-
-function formatResolvedMessage() {
-  return [
-    "[RESOLVED] Infra2 Cloudflare watchdog recovered",
-    "Route: Cloudflare Workers Cron -> Feishu direct",
-    "All configured public route and heartbeat checks are healthy.",
-  ].join("\n");
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 async function loadState(env, key) {
@@ -890,169 +997,15 @@ async function loadState(env, key) {
     return {};
   }
   try {
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    return isPlainObject(parsed) ? parsed : {};
   } catch (_error) {
     return {};
   }
 }
 
-async function saveState(env, key, state) {
-  if (!env.WATCHDOG_STATE) {
-    return;
-  }
-  await env.WATCHDOG_STATE.put(key, JSON.stringify(state));
-}
-
-async function saveLastRun(env, state) {
-  await saveState(env, "watchdog:last-run", state);
-}
-
-const LEDGER_RETENTION_DAYS = 21;
-const R2_LEDGER_PREFIX = "watchdog-ledger/";
-// How many recent finalized days reconcileArchives() re-checks each run. Big
-// enough to self-heal a multi-day R2 outage at the 30-min cron cadence, small
-// enough that the per-run head() cost stays negligible.
-const ARCHIVE_BACKFILL_DAYS = 3;
-
 function utcDateKey(ms) {
   return new Date(ms).toISOString().slice(0, 10);
-}
-
-function ledgerKey(date) {
-  return `ledger:${date}`;
-}
-
-// Records this run's per-signal success/failure into a single rolling daily
-// rollup key. One read + one write per cron run keeps the Cloudflare KV free
-// tier (1000 put/day) safe; writing one key per signal per run would blow the
-// quota and silently break every put(). Positive proof (success counts) is the
-// point: it makes uptime% queryable, not just failures.
-async function recordLedger(env, results, nowMs) {
-  if (!env.WATCHDOG_STATE) {
-    return;
-  }
-  const date = utcDateKey(nowMs);
-  const key = ledgerKey(date);
-  const existing = await loadState(env, key);
-  const isNewDay = !existing.date;
-  const signals = existing.signals && typeof existing.signals === "object" ? existing.signals : {};
-  for (const result of results) {
-    const id = `${result.environment}:${result.name}`;
-    const entry = signals[id] || { ok: 0, fail: 0, severity: result.severity || "", lastDomain: "" };
-    if (result.ok) {
-      entry.ok += 1;
-    } else {
-      entry.fail += 1;
-      entry.lastDomain = result.failure_domain || entry.lastDomain || "";
-    }
-    entry.severity = result.severity || entry.severity || "";
-    signals[id] = entry;
-  }
-  await saveState(env, key, {
-    date,
-    updatedAt: nowMs,
-    runs: Number(existing.runs || 0) + 1,
-    signals,
-  });
-  // Cold-archive finalized days off-host to R2 every run, idempotently, rather
-  // than as a one-shot at the day rollover. A single hiccup on that one run --
-  // an R2 blip, the .date migration boundary, a thrown put -- used to lose a
-  // whole day's archive silently and forever. Reconciling every run instead
-  // retries until it sticks, backfills any gap, and surfaces a write failure as
-  // a queryable event instead of swallowing it.
-  await reconcileArchives(env, nowMs);
-  // On the first run of a new day, prune the day that aged out of the KV hot
-  // window. Once per day is enough and keeps the per-key delete budget tiny.
-  if (isNewDay && env.WATCHDOG_STATE.delete) {
-    const pruneDate = utcDateKey(nowMs - LEDGER_RETENTION_DAYS * 86400000);
-    await env.WATCHDOG_STATE.delete(ledgerKey(pruneDate));
-  }
-}
-
-// Idempotently ensure every finalized (past) day still in the KV hot window has
-// its off-host R2 cold archive. Bounded and cheap: a head() existence check per
-// recent day, a put only when the object is actually missing. Fully guarded so
-// a missing binding is a no-op and a transient R2 failure is logged-and-retried
-// next run rather than crashing the watchdog or vanishing silently.
-async function reconcileArchives(env, nowMs) {
-  if (!env.LEDGER_BUCKET) {
-    return;
-  }
-  const scanDays = Math.min(LEDGER_RETENTION_DAYS, ARCHIVE_BACKFILL_DAYS);
-  for (let dayOffset = 1; dayOffset <= scanDays; dayOffset += 1) {
-    const date = utcDateKey(nowMs - dayOffset * 86400000);
-    const record = await loadState(env, ledgerKey(date));
-    if (!record.date) {
-      continue;
-    }
-    const objectKey = `${R2_LEDGER_PREFIX}${date}.json`;
-    try {
-      if (await env.LEDGER_BUCKET.head(objectKey)) {
-        continue;
-      }
-      await env.LEDGER_BUCKET.put(objectKey, JSON.stringify(record), {
-        httpMetadata: { contentType: "application/json" },
-      });
-      logWatchdogResult({
-        event: "watchdog.ledger.archive",
-        timestamp: nowMs,
-        status: "ok",
-        date,
-      });
-    } catch (error) {
-      logWatchdogResult({
-        event: "watchdog.ledger.archive",
-        timestamp: nowMs,
-        status: "fail",
-        date,
-        error: oneLine(error && error.message ? error.message : String(error)),
-      });
-    }
-  }
-}
-
-async function ledgerResponse(request, env) {
-  const expectedToken = String(env.WATCHDOG_STATUS_TOKEN || "");
-  if (!expectedToken) {
-    return jsonResponse({ ok: false, error: "WATCHDOG_STATUS_TOKEN is not configured" }, 500);
-  }
-  if ((request.headers.get("Authorization") || "") !== `Bearer ${expectedToken}`) {
-    return jsonResponse({ ok: false, error: "unauthorized" }, 401);
-  }
-  if (!env.WATCHDOG_STATE) {
-    return jsonResponse({ ok: false, error: "WATCHDOG_STATE KV binding is missing" }, 500);
-  }
-  const nowMs = Date.now();
-  const days = [];
-  for (let offset = 0; offset < LEDGER_RETENTION_DAYS; offset += 1) {
-    const date = utcDateKey(nowMs - offset * 86400000);
-    const record = await loadState(env, ledgerKey(date));
-    if (record.date) {
-      days.push(record);
-    }
-  }
-  return jsonResponse({
-    ok: true,
-    as_of: utcDateKey(nowMs),
-    generatedAt: nowMs,
-    window_days: LEDGER_RETENTION_DAYS,
-    ledger: days,
-  });
-}
-
-async function failureFingerprint(failures) {
-  const encoded = new TextEncoder().encode(
-    JSON.stringify(
-      failures.map((failure) => ({
-        environment: failure.environment,
-        name: failure.name,
-        serviceId: failure.service_id || "infra/unregistered",
-        failureDomain: failure.failure_domain || "",
-      })),
-    ),
-  );
-  const digest = await crypto.subtle.digest("SHA-256", encoded);
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function parseJsonList(raw, fallback) {
@@ -1079,39 +1032,7 @@ function filterByEnvironment(items, environments) {
   return items.filter((item) => environments.has(item.environment));
 }
 
-function okResult(target, detail, failureDomain = "") {
-  return {
-    environment: target.environment,
-    name: target.name,
-    service_id: target.service_id || "infra/unregistered",
-    url: target.url || "",
-    severity: target.severity || "warning",
-    ok: true,
-    detail,
-    failure_domain: failureDomain,
-    attempt_count: 1,
-  };
-}
-
-function failResult(target, detail, failureDomain = "") {
-  return {
-    environment: target.environment,
-    name: target.name,
-    service_id: target.service_id || "infra/unregistered",
-    url: target.url || "",
-    severity: target.severity || "warning",
-    ok: false,
-    detail: oneLine(detail),
-    failure_domain: failureDomain,
-    attempt_count: 1,
-  };
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function logWatchdogResult(payload) {
+function logEvent(payload) {
   console.log(JSON.stringify(payload));
 }
 
@@ -1127,26 +1048,16 @@ function heartbeatKey(environment, name) {
   return `heartbeat:${environment}:${name}`;
 }
 
-function _failure_domain_for_http_target(target) {
-  if (target.name === "infra2-public-entrypoint") {
-    return "host-reachability";
-  }
-  if (target.name === "cloudflare-worker-health") {
-    return "worker-health";
-  }
-  return "public-route";
-}
-
-function _failure_domain_for_heartbeat(heartbeat) {
-  return "heartbeat";
-}
-
 function safeId(value) {
   const text = String(value || "").trim();
   if (!/^[a-zA-Z0-9_.-]+$/.test(text)) {
     throw new Error(`unsafe id: ${text}`);
   }
   return text;
+}
+
+function errorText(error) {
+  return oneLine(error && error.message ? error.message : String(error));
 }
 
 function oneLine(value) {

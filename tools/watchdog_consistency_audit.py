@@ -68,6 +68,7 @@ def audit() -> list[str]:
     errors: list[str] = []
     errors.extend(_validate_inventory(signals))
     errors.extend(_validate_layers(inventory, signals))
+    errors.extend(_vps_public_route_errors(signals))
 
     internal_specs = _compose_probe_specs()
     worker_targets, worker_heartbeats, worker_identities = _worker_keys()
@@ -283,6 +284,52 @@ def _validate_layers(
             f"relayering_debt {signal_id} is no longer a violation; remove the entry"
         )
     return errors
+
+
+def _vps_public_route_errors(signals: list[dict[str, Any]]) -> list[str]:
+    """#904: a VPS-owned public-route entry must be a probe the facets render.
+
+    The in-band probe runner pages these routes from PublicRouteFacet
+    declarations; the registry entry only records that ownership. An entry
+    for a route no facet renders in its environment, or at another severity,
+    would be ownership recorded for nothing.
+    """
+    rendered = _vps_public_routes()
+    errors: list[str] = []
+    for signal in signals:
+        if signal.get("primary_owner") != "self" or signal.get("layer") != "vps":
+            continue
+        name = str(signal.get("signal", ""))
+        if not name.endswith("-public-route"):
+            continue
+        key = (str(signal.get("environment", "")), name)
+        signal_id = signal.get("signal_id")
+        if key not in rendered:
+            errors.append(
+                f"VPS public-route signal {signal_id} is not rendered by any "
+                f"PublicRouteFacet in {key[0]}"
+            )
+        elif signal.get("severity") != rendered[key]:
+            errors.append(
+                f"VPS public-route signal {signal_id}: severity "
+                f"{signal.get('severity')!r}, but the facet renders {rendered[key]!r}"
+            )
+    return errors
+
+
+def _vps_public_routes() -> dict[tuple[str, str], str]:
+    """(environment, probe name) -> severity of every in-band public-route probe."""
+    from libs.probe_specs import render_public_route_spec_text
+
+    routes: dict[tuple[str, str], str] = {}
+    for environment in ("production", "staging"):
+        # the domain only shapes the URLs, which this check does not read
+        text = render_public_route_spec_text(environment, "example.invalid")
+        for line in text.splitlines():
+            fields = [field.strip() for field in line.split("|")]
+            if len(fields) > 4 and fields[0]:
+                routes[(environment, fields[0])] = fields[4]
+    return routes
 
 
 def _validate_tier_and_type(signal: dict[str, Any], signal_id: str) -> list[str]:
