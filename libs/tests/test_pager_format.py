@@ -977,6 +977,8 @@ PRODUCT_WORDS = frozenset(
 _TOKEN = re.compile(r"[A-Za-z0-9_'*%-]+")
 _WORD = re.compile(r"[A-Za-z][A-Za-z'-]*")
 _JOIN = re.compile(r"[\s,;:./()]*")
+#: two English words in a row are prose
+_MIN_RUN = 2
 
 
 def english_prose(text: str) -> list[str]:
@@ -995,11 +997,11 @@ def english_prose(text: str) -> list[str]:
         if word and run and _JOIN.fullmatch(bare[end : token.start()]):
             run.append(token.group())
         else:
-            if len(run) >= 2:
+            if len(run) >= _MIN_RUN:
                 runs.append(" ".join(run))
             run = [token.group()] if word else []
         end = token.end()
-    if len(run) >= 2:
+    if len(run) >= _MIN_RUN:
         runs.append(" ".join(run))
     return runs
 
