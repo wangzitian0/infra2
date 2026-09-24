@@ -58,6 +58,103 @@ owners:
   - github
   - excluded
   - self
+
+# Layered responsibility (#901 / #902; ops.observability.md §1.1). Every failure
+# class is PAGED by exactly one layer; the others may only REPORT it. One
+# outage paged in-band, by the Worker and again by GitHub -- three formats,
+# three diagnoses -- is what multiplied the 2,445 messages behind 57 distinct
+# conditions measured by the #901 audit.
+#   vps        -- heavy work and the primary alert surface: every probe, dedup,
+#                 aggregation, rendering, the single alert exit (the bridge).
+#   cloudflare -- light and stable, out of band: only what the VPS cannot
+#                 report about itself (heartbeat stale, loop or delivery broken,
+#                 the public entrypoint unreachable from outside).
+#   github     -- the daily out-of-band audit: the Worker's own liveness, data
+#                 protection, drift, and the peer scheduler.
+# A signal's layer follows its owner (internal -> vps, cloudflare, github);
+# `self` signals page from their own code path and declare `layer` explicitly.
+# `type: report` signals never page, so they may live in any layer.
+# tools/watchdog_consistency_audit.py fails a paging signal outside its class's
+# pager layer unless it is listed in `relayering_debt`, and fails a debt entry
+# that is no longer a violation.
+failure_classes:
+  host-reachability:
+    pager: cloudflare
+    covers: host down, network cut, public entrypoint unreachable from outside
+  alert-pipeline:
+    pager: cloudflare
+    covers: probe loop stuck or failing, alert bridge down, Feishu delivery failing
+  watchdog-liveness:
+    pager: github
+    covers: the Cloudflare Worker itself stopped running
+  service-health:
+    pager: vps
+    covers: services, public routes, containers, host resources, deploy queue
+  data-protection:
+    pager: github
+    covers: off-host backups and the restore rehearsal
+  config-drift:
+    pager: github
+    covers: deployed config, secrets and Vault self-refresh drift
+  peer-scheduler:
+    pager: github
+    covers: a peer repository's scheduler that cannot report its own death
+
+# Paging signals still in the wrong layer. Each entry names the #901 phase
+# issue that moves or retires it; the audit fails once an entry stops being a
+# violation, so the list can only shrink with the work that fixes it.
+relayering_debt:
+  - signal_id: production.vault.public-route
+    phase: "#904"
+    reason: the VPS public-route probes already check this route; the Worker keeps one entrypoint per product
+  - signal_id: production.minio.public-route
+    phase: "#904"
+    reason: the VPS public-route probes already check this route; the Worker keeps one entrypoint per product
+  - signal_id: production.authentik.public-route
+    phase: "#904"
+    reason: the VPS public-route probes already check this route; the Worker keeps one entrypoint per product
+  - signal_id: production.signoz.public-route
+    phase: "#904"
+    reason: the VPS public-route probes already check this route; the Worker keeps one entrypoint per product
+  - signal_id: staging.minio.public-route
+    phase: "#904"
+    reason: the VPS public-route probes already check this route; the Worker keeps one entrypoint per product
+  - signal_id: staging.authentik.public-route
+    phase: "#904"
+    reason: the VPS public-route probes already check this route; the Worker keeps one entrypoint per product
+  - signal_id: production.finance-report-api.public-route
+    phase: "#904"
+    reason: the VPS public-route probes already check this route; the Worker keeps one entrypoint per product
+  - signal_id: staging.finance-report-web.public-route
+    phase: "#904"
+    reason: the VPS public-route probes already check this route; the Worker keeps one entrypoint per product
+  - signal_id: staging.finance-report-api.public-route
+    phase: "#904"
+    reason: the VPS public-route probes already check this route; the Worker keeps one entrypoint per product
+  - signal_id: production.truealpha-api.public-route
+    phase: "#904"
+    reason: the VPS public-route probes already check this route; the Worker keeps one entrypoint per product
+  - signal_id: staging.truealpha-web.public-route
+    phase: "#904"
+    reason: the VPS public-route probes already check this route; the Worker keeps one entrypoint per product
+  - signal_id: staging.truealpha-api.public-route
+    phase: "#904"
+    reason: the VPS public-route probes already check this route; the Worker keeps one entrypoint per product
+  - signal_id: global.infra2-public-entrypoint.github
+    phase: "#903"
+    reason: the cloudflare layer pages host-reachability; the daily GitHub audit reports it instead
+  - signal_id: global.infra2-ssh.github
+    phase: "#903"
+    reason: the cloudflare layer pages host-reachability; the daily GitHub audit reports it instead
+  - signal_id: global.infra2-docker.github
+    phase: "#903"
+    reason: the cloudflare layer pages host-reachability; the daily GitHub audit reports it instead
+  - signal_id: global.infra2-docker-health.github
+    phase: "#903"
+    reason: the vps layer pages service-health; the daily GitHub audit reports it instead
+  - signal_id: global.infra2-alert-bridge.github
+    phase: "#903"
+    reason: the cloudflare layer pages alert-pipeline; the daily GitHub audit reports it instead
 signals:
   # ── internal plane: GENERATED, do not hand-write entries here (#543) ──
   # Every `primary_owner: internal` entry is DERIVED from the ProbeFacet +
@@ -81,6 +178,7 @@ signals:
     component: dokploy
     signal: dokploy-public-route
     primary_owner: cloudflare
+    failure_class: host-reachability
     severity: critical
     cadence: 30m
     expected: "200,302"
@@ -91,6 +189,7 @@ signals:
     component: vault
     signal: vault-public-route
     primary_owner: cloudflare
+    failure_class: service-health
     severity: critical
     cadence: 30m
     expected: "200,429,472,473"
@@ -101,6 +200,7 @@ signals:
     component: minio
     signal: minio-public-route
     primary_owner: cloudflare
+    failure_class: service-health
     severity: warning
     cadence: 30m
     expected: "200"
@@ -111,6 +211,7 @@ signals:
     component: authentik
     signal: authentik-public-route
     primary_owner: cloudflare
+    failure_class: service-health
     severity: critical
     cadence: 30m
     expected: "200,204,302"
@@ -121,6 +222,7 @@ signals:
     component: signoz
     signal: signoz-public-route
     primary_owner: cloudflare
+    failure_class: service-health
     severity: critical
     cadence: 30m
     expected: "200,302"
@@ -131,6 +233,7 @@ signals:
     component: minio
     signal: minio-public-route
     primary_owner: cloudflare
+    failure_class: service-health
     severity: warning
     cadence: 30m
     expected: "200"
@@ -141,6 +244,7 @@ signals:
     component: authentik
     signal: authentik-public-route
     primary_owner: cloudflare
+    failure_class: service-health
     severity: warning
     cadence: 30m
     expected: "200,204,302"
@@ -181,6 +285,7 @@ signals:
     component: finance-report-web
     signal: finance-report-web-public-route
     primary_owner: cloudflare
+    failure_class: host-reachability
     severity: critical
     cadence: 30m
     expected: "200,302,307,308"
@@ -191,6 +296,7 @@ signals:
     component: finance-report-api
     signal: finance-report-api-public-route
     primary_owner: cloudflare
+    failure_class: service-health
     severity: critical
     cadence: 30m
     expected: "200"
@@ -201,6 +307,7 @@ signals:
     component: finance-report-web
     signal: finance-report-web-public-route
     primary_owner: cloudflare
+    failure_class: service-health
     severity: warning
     cadence: 30m
     expected: "200,302,307,308"
@@ -211,6 +318,7 @@ signals:
     component: finance-report-api
     signal: finance-report-api-public-route
     primary_owner: cloudflare
+    failure_class: service-health
     severity: warning
     cadence: 30m
     expected: "200"
@@ -221,6 +329,7 @@ signals:
     component: app
     signal: truealpha-web-public-route
     primary_owner: cloudflare
+    failure_class: host-reachability
     severity: critical
     cadence: 30m
     expected: "200,302,307,308"
@@ -231,6 +340,7 @@ signals:
     component: app
     signal: truealpha-api-public-route
     primary_owner: cloudflare
+    failure_class: service-health
     severity: critical
     cadence: 30m
     expected: "200"
@@ -241,6 +351,7 @@ signals:
     component: app
     signal: truealpha-web-public-route
     primary_owner: cloudflare
+    failure_class: service-health
     severity: warning
     cadence: 30m
     expected: "200,302,307,308"
@@ -251,6 +362,7 @@ signals:
     component: app
     signal: truealpha-api-public-route
     primary_owner: cloudflare
+    failure_class: service-health
     severity: warning
     cadence: 30m
     expected: "200"
@@ -261,6 +373,7 @@ signals:
     component: alerting
     signal: platform-alerting-probes
     primary_owner: cloudflare
+    failure_class: alert-pipeline
     severity: critical
     cadence: 30m
     stale_threshold: 90m
@@ -270,6 +383,7 @@ signals:
     component: alerting
     signal: platform-alerting-probes-staging
     primary_owner: cloudflare
+    failure_class: alert-pipeline
     severity: warning
     cadence: 30m
     stale_threshold: 90m
@@ -279,6 +393,7 @@ signals:
     component: host
     signal: infra2-public-entrypoint
     primary_owner: github
+    failure_class: host-reachability
     severity: critical
     cadence: 1d
 
@@ -287,6 +402,7 @@ signals:
     component: cloudflare-watchdog
     signal: cloudflare-worker-health
     primary_owner: github
+    failure_class: watchdog-liveness
     severity: critical
     cadence: 1d
 
@@ -295,6 +411,7 @@ signals:
     component: cloudflare-watchdog
     signal: cloudflare-worker-status
     primary_owner: github
+    failure_class: watchdog-liveness
     severity: critical
     cadence: 1d
 
@@ -303,6 +420,7 @@ signals:
     component: host
     signal: infra2-ssh
     primary_owner: github
+    failure_class: host-reachability
     severity: critical
     cadence: 1d
 
@@ -311,6 +429,7 @@ signals:
     component: docker
     signal: infra2-docker
     primary_owner: github
+    failure_class: host-reachability
     severity: critical
     cadence: 1d
 
@@ -319,6 +438,7 @@ signals:
     component: docker
     signal: infra2-docker-health
     primary_owner: github
+    failure_class: service-health
     severity: critical
     cadence: 1d
 
@@ -327,6 +447,7 @@ signals:
     component: alerting
     signal: infra2-alert-bridge
     primary_owner: github
+    failure_class: alert-pipeline
     severity: critical
     cadence: 1d
 
@@ -344,6 +465,7 @@ signals:
     component: github
     signal: truealpha-scheduler-liveness
     primary_owner: github
+    failure_class: peer-scheduler
     severity: critical
     cadence: 1d
 
@@ -360,6 +482,7 @@ signals:
     component: host
     signal: infra2-backup-production
     primary_owner: github
+    failure_class: data-protection
     severity: critical
     cadence: 1d
 
@@ -368,6 +491,7 @@ signals:
     component: host
     signal: infra2-backup-staging
     primary_owner: github
+    failure_class: data-protection
     severity: warning
     cadence: 1d
 
@@ -376,6 +500,7 @@ signals:
     component: host
     signal: infra2-restore-rehearsal
     primary_owner: github
+    failure_class: data-protection
     severity: critical
     cadence: 1d
 
@@ -397,6 +522,8 @@ signals:
     component: docker
     signal: container-breakdown-watch
     primary_owner: self
+    failure_class: service-health
+    layer: vps
     severity: critical
     cadence: 60s
     tier: minute
@@ -423,6 +550,8 @@ signals:
     component: dokploy
     signal: deploy-queue-guard
     primary_owner: self
+    failure_class: service-health
+    layer: vps
     severity: critical
     cadence: 60s
     tier: minute
@@ -456,6 +585,8 @@ signals:
     component: vault
     signal: vault-self-refresh-audit
     primary_owner: self
+    failure_class: config-drift
+    layer: github
     severity: critical
     cadence: 1d
     tier: day
@@ -473,6 +604,8 @@ signals:
     component: iac
     signal: facet-reconcile
     primary_owner: self
+    failure_class: config-drift
+    layer: github
     severity: critical
     cadence: 1d
     tier: day
@@ -491,6 +624,8 @@ signals:
     component: iac
     signal: secrets-reconcile
     primary_owner: self
+    failure_class: config-drift
+    layer: github
     severity: critical
     cadence: 1d
     tier: day

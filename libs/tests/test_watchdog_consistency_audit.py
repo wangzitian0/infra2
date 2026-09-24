@@ -271,3 +271,144 @@ def test_vault_self_refresh_audit_registered_as_day_report() -> None:
 
     audit = _load_audit()
     assert audit._validate_tier_and_type(entry, entry["signal_id"]) == []
+
+
+# --- #902: one pager per failure class ----------------------------------------
+
+
+def _layering_errors(audit, edit) -> list[str]:
+    """Run only the layering rule over an edited copy of the real inventory."""
+    inventory = audit._load_inventory()
+    copied = {
+        **inventory,
+        "signals": [dict(signal) for signal in inventory["signals"]],
+        "relayering_debt": [dict(entry) for entry in inventory["relayering_debt"]],
+    }
+    edit(copied, {signal["signal_id"]: signal for signal in copied["signals"]})
+    return audit._validate_layers(copied, copied["signals"])
+
+
+def test_layering_holds_on_the_current_registry() -> None:
+    audit = _load_audit()
+
+    assert _layering_errors(audit, lambda inventory, signals: None) == []
+
+
+def test_layering_rejects_a_second_pager_for_a_class() -> None:
+    audit = _load_audit()
+
+    def github_pages_service_health(inventory, signals):
+        signals["global.truealpha-scheduler-liveness.github"]["failure_class"] = (
+            "service-health"
+        )
+
+    errors = _layering_errors(audit, github_pages_service_health)
+
+    assert errors == [
+        "global.truealpha-scheduler-liveness.github: pages service-health from the "
+        "github layer, but service-health is paged only by vps (one pager per "
+        "failure class)"
+    ]
+
+
+def test_layering_rejects_debt_that_is_already_paid() -> None:
+    """A debt entry for a compliant signal would exempt its next regression."""
+    audit = _load_audit()
+
+    def stale_debt(inventory, signals):
+        inventory["relayering_debt"].append(
+            {
+                "signal_id": "global.cloudflare-worker-status.github",
+                "phase": "#903",
+                "reason": "already compliant",
+            }
+        )
+
+    assert _layering_errors(audit, stale_debt) == [
+        "relayering_debt global.cloudflare-worker-status.github is no longer a "
+        "violation; remove the entry"
+    ]
+
+
+def test_layering_debt_names_the_phase_that_pays_it() -> None:
+    audit = _load_audit()
+
+    def no_phase(inventory, signals):
+        inventory["relayering_debt"][0].pop("phase")
+
+    errors = _layering_errors(audit, no_phase)
+
+    assert len(errors) == 1
+    assert errors[0].endswith("needs a phase issue (#N) and a reason")
+
+
+def test_layering_lets_a_report_live_in_any_layer() -> None:
+    """Turning a misplaced pager into a report is how #903 pays its debt."""
+    audit = _load_audit()
+
+    def ssh_becomes_a_report(inventory, signals):
+        signals["global.infra2-ssh.github"].update(type="report", tier="day")
+        inventory["relayering_debt"] = [
+            entry
+            for entry in inventory["relayering_debt"]
+            if entry["signal_id"] != "global.infra2-ssh.github"
+        ]
+
+    assert _layering_errors(audit, ssh_becomes_a_report) == []
+
+
+def test_layering_requires_self_signals_to_declare_their_layer() -> None:
+    audit = _load_audit()
+
+    def drop_layer(inventory, signals):
+        signals["production.docker.container-breakdown-watch"].pop("layer")
+
+    assert _layering_errors(audit, drop_layer) == [
+        "production.docker.container-breakdown-watch: self-owned signals declare "
+        "layer in ['cloudflare', 'github', 'vps']"
+    ]
+
+
+def test_layering_rejects_an_unclassified_signal() -> None:
+    audit = _load_audit()
+
+    def unclassified(inventory, signals):
+        signals["production.infra2-backup-production.github"].pop("failure_class")
+
+    assert _layering_errors(audit, unclassified) == [
+        "production.infra2-backup-production.github: unknown or missing "
+        "failure_class None"
+    ]
+
+
+def test_every_failure_class_has_exactly_one_pager_layer() -> None:
+    inventory = yaml.safe_load(INVENTORY.read_text(encoding="utf-8"))
+
+    pagers = {
+        name: spec["pager"] for name, spec in inventory["failure_classes"].items()
+    }
+
+    assert set(pagers.values()) <= {"vps", "cloudflare", "github"}
+    assert pagers["service-health"] == "vps"
+    assert pagers["host-reachability"] == pagers["alert-pipeline"] == "cloudflare"
+
+
+def test_audit_enforces_layering_end_to_end(monkeypatch) -> None:
+    """The CI entry point, not just the helper, must fail a second pager."""
+    audit = _load_audit()
+    original = audit._load_inventory
+
+    def fake_inventory():
+        inventory = original()
+        inventory["signals"] = [dict(signal) for signal in inventory["signals"]]
+        for signal in inventory["signals"]:
+            if signal["signal_id"] == "global.cloudflare-worker-status.github":
+                signal["failure_class"] = "service-health"
+        return inventory
+
+    monkeypatch.setattr(audit, "_load_inventory", fake_inventory)
+
+    assert any(
+        error.startswith("global.cloudflare-worker-status.github: pages service-health")
+        for error in audit.audit()
+    )
