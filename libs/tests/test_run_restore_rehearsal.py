@@ -334,12 +334,14 @@ def test_cron_invocation_starts_in_a_fresh_interpreter() -> None:
     on Linux ``uuid`` calls ``platform.system()`` at import time. pytest has already
     loaded the real ``platform`` in this process, so only a fresh interpreter shows
     the crash; it is Linux-only because CPython skips that import on darwin/win32.
+    The cron sets no PYTHONSAFEPATH, so the CI job's value is dropped here.
     """
     repo_root = Path(__file__).resolve().parents[2]
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONSAFEPATH"}
     result = subprocess.run(
         [sys.executable, "tools/run_restore_rehearsal.py", "--service-id", "all", "--help"],
         cwd=repo_root,
-        env={**os.environ, "PYTHONPATH": "."},
+        env={**env, "PYTHONPATH": "."},
         capture_output=True,
         text=True,
         timeout=60,
