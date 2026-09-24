@@ -6,6 +6,8 @@ services:
     image: platform-todo:${IAC_CONFIG_HASH:-latest}
     container_name: platform-todo${ENV_SUFFIX}
     restart: always
+    mem_limit: 256m
+    cpu_shares: 512
     environment:
       PORT: "8000"
       INTERNAL_DOMAIN: ${INTERNAL_DOMAIN:-zitian.party}
