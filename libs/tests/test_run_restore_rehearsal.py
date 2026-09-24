@@ -339,7 +339,13 @@ def test_cron_invocation_starts_in_a_fresh_interpreter() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     env = {k: v for k, v in os.environ.items() if k != "PYTHONSAFEPATH"}
     result = subprocess.run(
-        [sys.executable, "tools/run_restore_rehearsal.py", "--service-id", "all", "--help"],
+        [
+            sys.executable,
+            "tools/run_restore_rehearsal.py",
+            "--service-id",
+            "all",
+            "--help",
+        ],
         cwd=repo_root,
         env={**env, "PYTHONPATH": "."},
         capture_output=True,
