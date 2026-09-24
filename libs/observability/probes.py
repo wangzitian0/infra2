@@ -13,7 +13,7 @@ import socket
 import subprocess
 import time
 from dataclasses import asdict, dataclass
-from typing import Callable
+from typing import Callable, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -191,16 +191,27 @@ def build_probe_alert_payload(
     alert_name: str = "InfraServiceProbeFailed",
     external_url: str = "infra2://platform/12.alerting/infra-probes",
     severity_override: str | None = None,
+    started_at: Mapping[str, float] | None = None,
+    recovered: Mapping[str, float | None] | None = None,
+    now: float | None = None,
 ) -> dict:
     """Build an Alertmanager-shaped payload for the failing probes in ``results``.
 
     ``severity_override`` forces the severity of every alert AND the group severity —
     used to route "probe never succeeded" (misconfigured probe) failures to a low
     severity so a broken probe cannot page critical like a real service outage.
+
+    #905: every alert carries what the card shows — the probe's ``target`` and
+    ``expected`` next to its ``observed`` reading, and ``startsAt`` from ``started_at``
+    (probe name -> epoch seconds of its first failure in this incident). A resolve
+    (no failures) lists each probe in ``recovered`` (probe name -> when its failure
+    started) as a resolved alert with ``startsAt`` and ``endsAt`` (``now``), so the
+    RESOLVED card names what recovered and for how long it was down.
     """
     failures = failed_results(results)
     status = "firing" if failures else "resolved"
     environment = os.getenv("INFRA_ENVIRONMENT") or os.getenv("ENV") or "production"
+    started_at = started_at or {}
 
     def labels_for(result: ProbeResult) -> dict[str, str]:
         from libs.service_identity import ServiceIdentity
@@ -220,18 +231,50 @@ def build_probe_alert_payload(
             "probe_kind": result.spec.kind,
         }
 
+    def annotations_for(result: ProbeResult, summary: str) -> dict[str, str]:
+        return {
+            "summary": summary,
+            "description": result.summary,
+            "observed": result.observed,
+            "target": result.spec.target,
+            "expected": result.spec.expected,
+        }
+
     alerts = [
         {
             "status": status,
             "labels": labels_for(result),
-            "annotations": {
-                "summary": f"{result.spec.name} probe failed",
-                "description": result.summary,
-                "observed": result.observed,
-            },
+            "annotations": annotations_for(result, f"{result.spec.name} probe failed"),
+            **_starts_at(started_at.get(result.spec.name)),
         }
         for result in failures
     ]
+    if not failures and recovered:
+        now = time.time() if now is None else now
+        by_name = {result.spec.name: result for result in results}
+        for name, since in sorted((recovered or {}).items()):
+            result = by_name.get(name)
+            alerts.append(
+                {
+                    "status": status,
+                    # a probe no longer run in this stream still says what it was
+                    "labels": labels_for(result)
+                    if result is not None
+                    else {
+                        "alertname": alert_name,
+                        "component": name,
+                        "environment": environment,
+                    },
+                    "annotations": annotations_for(result, f"{name} recovered")
+                    if result is not None
+                    else {
+                        "summary": f"{name} recovered",
+                        "description": "no longer probed in this stream",
+                    },
+                    **_starts_at(since),
+                    "endsAt": _rfc3339(now),
+                }
+            )
     severity = severity_override or group_severity(failures)
     return {
         "status": status,
@@ -252,6 +295,14 @@ def build_probe_alert_payload(
         "alerts": alerts,
         "externalURL": external_url,
     }
+
+
+def _rfc3339(epoch: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+
+def _starts_at(epoch: float | None) -> dict[str, str]:
+    return {"startsAt": _rfc3339(epoch)} if epoch else {}
 
 
 def post_alert_bridge_payload(

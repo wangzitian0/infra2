@@ -510,6 +510,7 @@ def run_once(
                 alert_name=alert_name,
                 external_url=group.external_url,
                 severity_override=severity_override,
+                now=now,
             )
             if dry_run:
                 if failed_results(stream_results):
@@ -537,6 +538,8 @@ def run_once(
                 alert_name=alert_name,
                 external_url=group.external_url,
                 severity_override=severity_override,
+                now=now,
+                **_incident_times(paged, state, stream_key, before),
             )
             if not _send_payload(payload, state, now, stream_key):
                 # Undelivered: roll the stream back so the next loop sends it again
@@ -789,11 +792,14 @@ def _chronic_digest_payload(chronic: list, now: float) -> dict:
                         f"{failing_for % 86400 // 3600}h: "
                         + (", ".join(probe_names) or "no probe names recorded")
                     ),
+                    "symptom": "still failing: "
+                    + (", ".join(probe_names) or "no probe names recorded"),
                     "description": (
                         "not re-paged while its failing set is unchanged; a change "
                         "or the recovery is sent as usual"
                     ),
                 },
+                "startsAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(since)),
             }
         )
     return mark_report_payload(
@@ -846,6 +852,16 @@ def _should_send(
     group_state["streaks"] = streaks
     active = bool(group_state.get("active"))
     paged_names = set(group_state.get("probes") or []) if active else set()
+    # When each failure started (#905: the card's 开始于, and how long a recovered
+    # probe was down). Kept for a failing identity and, until the stream resolves, for
+    # a paged probe that is recovering.
+    since = group_state.get("failing_since")
+    since = since if isinstance(since, dict) else {}
+    group_state["failing_since"] = {
+        key: float(value)
+        for key, value in since.items()
+        if key in failing or key.split("|", 1)[0] in paged_names
+    } | {key: float(since.get(key) or now) for key in failing}
     page = {
         key
         for key, result in failing.items()
@@ -907,12 +923,41 @@ def _record_resolved(group_name: str, state: dict) -> None:
         {
             "active": False,
             "active_since": 0,
+            "failing_since": {},
             "probes": [],
             "fingerprint": "",
             "recovery_count": 0,
             "last_alert_at": 0,
         }
     )
+
+
+def _incident_times(
+    paged: list, state: dict, stream_key: str, before: dict | None
+) -> dict:
+    """What the payload needs to say when (#905): ``started_at`` for a page, from the
+    stream's ``failing_since``; ``recovered`` for a resolve — every probe the last
+    delivered send paged, with when its failure started (``before`` is the stream as
+    it was before this loop resolved it)."""
+
+    def by_name(failing_since: object) -> dict[str, float]:
+        starts: dict[str, float] = {}
+        for key, value in (failing_since or {}).items():
+            name = key.split("|", 1)[0]
+            starts[name] = min(float(value), starts.get(name, float(value)))
+        return starts
+
+    if failed_results(paged):
+        group_state = state.get("groups", {}).get(stream_key, {})
+        return {"started_at": by_name(group_state.get("failing_since"))}
+    before = before or {}
+    starts = by_name(before.get("failing_since"))
+    fallback = float(before.get("active_since") or 0) or None
+    return {
+        "recovered": {
+            name: starts.get(name, fallback) for name in before.get("probes") or []
+        }
+    }
 
 
 def _probe_identity(result) -> str:

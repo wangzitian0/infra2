@@ -806,3 +806,57 @@ def test_a_production_re_break_inside_the_floor_reaches_the_pager(monkeypatch):
         "platform-prefect-worker": "re-broke 1x inside the 6h stay-resolved floor"
     }
     assert list(_lines(reports[0])) == ["platform-prefect-worker-staging"]
+
+
+def test_a_breakdown_pages_when_it_started_and_resolves_how_long(monkeypatch):
+    """#905: the page says when the container first broke, the RESOLVED how long it
+    was down -- from the first broken sweep, not the page."""
+    import time
+
+    import libs.observability.watchers.breakdown_watch as w
+
+    clock = {"now": 1_790_236_800.0}  # 2026-09-24 08:00 UTC
+    monkeypatch.setattr(time, "time", lambda: clock["now"])
+    breakdown = Breakdown(
+        container="vault-agent",
+        state="restarting",
+        reason="r",
+        detail="d",
+        service_id="finance_report/app",
+    )
+    posted: list = []
+    monkeypatch.setattr(w, "_post_alert", posted.append)
+    state: dict = {}
+
+    def sweeps(found: list, count: int) -> None:
+        monkeypatch.setattr(w, "sweep", lambda client, tail: found)
+        for _ in range(count):
+            w.run_once(None, 25, state, 0, 3, 2)
+            clock["now"] += 60
+
+    sweeps([breakdown], 3)  # 08:00, 08:01, 08:02 pages
+    sweeps([], 2)  # 08:03, 08:04 resolves
+
+    firing, resolved = posted
+    assert firing["alerts"][0]["startsAt"] == "2026-09-24T08:00:00Z"
+    assert "endsAt" not in firing["alerts"][0]
+    assert (resolved["alerts"][0]["startsAt"], resolved["alerts"][0]["endsAt"]) == (
+        "2026-09-24T08:00:00Z",
+        "2026-09-24T08:04:00Z",
+    )
+
+
+def test_docker_log_frames_are_removed_from_the_log_tail():
+    """#905: without a TTY every Engine log frame starts with an 8-byte header; a
+    length of 65 is the byte "A", which would open the line the card shows."""
+    from libs.observability.watchers.breakdown_watch import demux_docker_logs
+
+    def frame(stream: int, text: str) -> bytes:
+        data = text.encode()
+        return bytes([stream, 0, 0, 0]) + len(data).to_bytes(4, "big") + data
+
+    line = "x" * 64 + "\n"
+    raw = frame(1, "booting\n") + frame(2, "permission denied\n") + frame(1, line)
+
+    assert demux_docker_logs(raw) == "booting\npermission denied\n" + line
+    assert demux_docker_logs(b"tty output, no frames\n") == "tty output, no frames\n"

@@ -16,7 +16,6 @@ from libs.alerting import (
     deliver_feishu_card,
     feishu_host_reachable,
     is_report_payload,
-    label_report_card,
     redacted_app_config,
     redacted_url,
     validate_feishu_api_base,
@@ -215,15 +214,14 @@ def _route(report: bool) -> str:
 
 
 def _deliver(card: dict[str, Any], *, report: bool = False) -> dict[str, Any]:
-    """Send ``card``; a report goes to the report chat, or is marked in the pager chat.
+    """Send ``card``; a report goes to the report chat when there is one.
 
     Nothing is dropped: without FEISHU_REPORT_CHAT_ID a report still reaches the pager
-    chat, titled ``[REPORT]`` so it does not read as a page.
+    chat. Its card is titled ``[报告]`` either way (``build_feishu_alert_card``, #905),
+    so it does not read as a page.
     """
     mode = _delivery_mode()
     report_chat_id = _report_chat_id() if report else ""
-    if report and not report_chat_id:
-        card = label_report_card(card)
     if mode == "feishu_webhook":
         return deliver_feishu_card(os.getenv("FEISHU_WEBHOOK_URL", ""), card)
     if mode == "feishu_app":

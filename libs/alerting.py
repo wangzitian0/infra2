@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Mapping
-from dataclasses import dataclass
+import re
+import time
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -18,24 +21,125 @@ SIGNOZ_ALERT_VERSION = "v5"
 # CRITICAL record as FATAL in current SDK releases and as CRITICAL in older ones, so
 # both spellings are counted.
 ERROR_LOG_LEVELS = ("ERROR", "CRITICAL", "FATAL")
-MAX_ALERT_LINES = 8
 MAX_MESSAGE_CHARS = 3500
 TRUNCATION_SUFFIX = "\n...[truncated]"
-_P0_RUNBOOK_BASE = (
-    "https://github.com/wangzitian0/infra2/blob/main/docs/runbooks/infra022-p0.md"
-)
-_RUNBOOK_BY_ALERT = {
-    "ContainerBreakdown": f"{_P0_RUNBOOK_BASE}#container-killed",
-    "DeployQueueStuck": f"{_P0_RUNBOOK_BASE}#deployment-failed",
-    "InfraServiceProbeFailed": _P0_RUNBOOK_BASE,
-    "InfraPublicRouteProbeFailed": _P0_RUNBOOK_BASE,
-}
 # #903: a payload labelled `delivery=report` is a REPORT, not a page. The bridge sends it
-# to FEISHU_REPORT_CHAT_ID (app mode) or, when that is unset, to the pager chat with
-# REPORT_TITLE_PREFIX so nothing is lost and nobody mistakes it for a page.
+# to FEISHU_REPORT_CHAT_ID (app mode) or, when that is unset, to the pager chat. Either
+# way its title starts with REPORT_TITLE_PREFIX (#905), so nobody mistakes it for a page.
 DELIVERY_LABEL = "delivery"
 REPORT_DELIVERY = "report"
-REPORT_TITLE_PREFIX = "[REPORT] "
+REPORT_TITLE_PREFIX = "[报告] "
+
+# ---------------------------------------------------------------------------
+# #905: one layout for every pager message (ops.observability.md §3.1).
+#
+# The bridge card, the Cloudflare Worker's text and the GitHub watchdog's text all
+# show these fields, in this order, under these labels (cloudflare/infra-watchdog
+# /worker.js keeps a copy; libs/tests/test_cloudflare_watchdog.py holds it to this
+# one). Labels are Chinese because the owner reads Chinese; values stay exactly as the
+# source wrote them.
+PAGER_FIELDS = (
+    "级别",
+    "环境",
+    "对象",
+    "现象",
+    "开始于",
+    "影响",
+    "下一步",
+    "Runbook",
+    "日志",
+)
+FIELD_SEPARATOR = "："
+#: The first N items of a message are shown in full; the rest one line each.
+MAX_FULL_ITEMS = 5
+MAX_SUMMARY_ITEMS = 20
+MAX_FIELD_CHARS = 300
+MAX_SUMMARY_CHARS = 160
+MAX_LOG_CHARS = 800
+MAX_LOG_LINES = 8
+#: Feishu refuses a card message whose request body is over 30 KB. Measured on the
+#: body the bridge actually sends (ASCII-escaped JSON, the card itself a JSON string
+#: inside it in app mode), with room to spare.
+MAX_CARD_BYTES = 28 * 1024
+
+# ops.observability.md §3: critical = P0, error = P1, warning = P2. An unknown value
+# counts as critical, so a typo pages loud instead of quiet.
+_LEVEL_BY_SEVERITY = {
+    "critical": "P0",
+    "error": "P1",
+    "warning": "P2",
+    "p0": "P0",
+    "p1": "P1",
+    "p2": "P2",
+}
+_LEVEL_RANK = {"P0": 0, "P1": 1, "P2": 2}
+_LEVEL_EMOJI = {"P0": "🔴", "P1": "🟠", "P2": "🟡"}
+_LEVEL_TEMPLATE = {"P0": "red", "P1": "orange", "P2": "yellow"}
+
+_REPO_BLOB = "https://github.com/wangzitian0/infra2/blob/main"
+_P0_RUNBOOK_BASE = f"{_REPO_BLOB}/docs/runbooks/infra022-p0.md"
+_ALERTING_README = f"{_REPO_BLOB}/platform/12.alerting/README.md"
+#: The runbook section every alert without a more specific anchor links to.
+RUNBOOK_SECTION = (
+    f"{_REPO_BLOB}/docs/ssot/ops.observability.md#7-标准操作程序-playbooks"
+)
+# Looked up by alertname first, then by failure domain (an alertname such as the
+# misconfigured lane means more than the domain its probe failed in).
+_RUNBOOK_BY_ALERT = {
+    "ContainerBreakdown": f"{_P0_RUNBOOK_BASE}#container-killed",
+    "ContainerBreakdownChronic": f"{_P0_RUNBOOK_BASE}#container-killed",
+    "DeployQueueStuck": f"{_P0_RUNBOOK_BASE}#deployment-failed",
+    "InfraServiceProbeFailed": f"{_ALERTING_README}#infra-service-probes",
+    "InfraPublicRouteProbeFailed": f"{_ALERTING_README}#public-route-probes",
+    "InfraProbeMisconfigured": f"{_ALERTING_README}#failing-round-trips-two-lanes-726",
+    "InfraProbeChronic": f"{_ALERTING_README}#infra-service-probes",
+}
+_RUNBOOK_BY_DOMAIN = {
+    "runtime": f"{_P0_RUNBOOK_BASE}#container-killed",
+    "host-memory": f"{_P0_RUNBOOK_BASE}#container-killed",
+    "deploy-queue": f"{_P0_RUNBOOK_BASE}#deployment-failed",
+    "probe-client-blocked": f"{_ALERTING_README}#public-route-probes",
+}
+_DISK_RUNBOOK = f"{_P0_RUNBOOK_BASE}#disk-full"
+_IMPACT_BY_ALERT = {
+    "InfraProbeMisconfigured": "探针没有测到目标(自身配置缺失,或仍在宽限期内):目标是否健康未知",
+    "InfraProbeChronic": "故障已持续超过一天;每日摘要,不再呼人",
+    "ContainerBreakdownChronic": "容器反复坏或一直坏;摘要,同一故障不再单独呼人",
+}
+_IMPACT_BY_DOMAIN = {
+    "service-or-route": "该服务或它的路由不可用:依赖它的请求失败",
+    "probe-client-blocked": "边缘拒绝了探针(error 1010):服务可能正常,但这条路由暂时失去监控",
+    "runtime": "容器崩溃循环、退出或不健康:它承载的服务降级或不可用",
+    "host-memory": "宿主机内存耗尽:同机其他容器也可能被 OOM kill",
+    "deploy-queue": "单并发 FIFO 部署队列被占住:之后的部署全部排队",
+}
+DEFAULT_IMPACT = "未声明 failure_domain:按现象判断影响范围"
+_ACTION_BY_ALERT = {
+    "InfraProbeMisconfigured": "核对该探针自己的配置(round-trip 的 client id、URL 等);目标是否健康另行确认",
+    "InfraProbeChronic": "确认有人在处理;修好它,或确认它不该再被探测",
+    "ContainerBreakdownChronic": "按 runbook 找根因,不要只重启",
+}
+_ACTION_BY_DOMAIN = {
+    "service-or-route": (
+        "在 VPS 上复现(http:curl -sS -m 10 -o /dev/null -w '%{http_code}' <目标>),"
+        "再看该服务容器的 docker logs --tail 80,对照最近一次部署"
+    ),
+    "probe-client-blocked": (
+        "在 Cloudflare 安全事件里找拦下探针的规则(error 1010)并放行探针 User-Agent;"
+        "服务本身用浏览器另行确认"
+    ),
+    "runtime": (
+        "先留证据再动手:docker inspect -f '{{.State.Status}} {{.State.ExitCode}} "
+        "{{.State.OOMKilled}}' <容器> 与 docker logs --tail 80 <容器>"
+    ),
+    "host-memory": "free -h 与 docker stats --no-stream 找出内存大户,先处理宿主机内存",
+    "deploy-queue": (
+        "对照 Dokploy 部署记录与 CI run;只用 Dokploy 自己的 cancel/clean"
+        "(DEPLOY_GUARD_REMEDIATE=1),绝不直接删 Redis/BullMQ 键"
+    ),
+}
+DEFAULT_ACTION = "按现象排查;SigNoz 规则可在 SigNoz 打开,看告警时段的指标与日志"
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 # Environments with nobody on call: staging and the preview slots. An allowlist on
 # purpose — "prod", a typo or an unset value is not on it, so it pages (#903 review).
 REPORT_ONLY_ENVIRONMENTS = frozenset({"staging", "preview"})
@@ -122,152 +226,577 @@ def build_feishu_app_message_payload(chat_id: str, text: str) -> dict[str, Any]:
     }
 
 
-# Feishu/Lark interactive-card header colour by status/severity (lark card "template").
-_CARD_TEMPLATE_BY_SEVERITY = {
-    "critical": "red",
-    "error": "red",
-    "warning": "orange",
-    "info": "blue",
-}
-_CARD_EMOJI_BY_SEVERITY = {
-    "critical": "🔴",
-    "error": "🔴",
-    "warning": "🟠",
-    "info": "🔵",
-}
+def pager_level(severity: object) -> str:
+    """P0/P1/P2 for a severity label (ops.observability.md §3).
 
-
-def _card_header(status: str, severity: str) -> tuple[str, str]:
-    """Return (template_colour, emoji) for the card header by status/severity."""
-    if status == "resolved":
-        return "green", "✅"
-    return (
-        _CARD_TEMPLATE_BY_SEVERITY.get(severity, "red"),
-        _CARD_EMOJI_BY_SEVERITY.get(severity, "🚨"),
-    )
-
-
-def build_feishu_alert_card(payload: dict[str, Any]) -> dict[str, Any]:
-    """Render a SigNoz/Alertmanager payload as a Feishu interactive card.
-
-    A colour-headed card (red/orange/blue by severity, green when resolved) with
-    status/severity/count fields, the summary, the per-alert lines, and an
-    "Open in SigNoz" button — far more readable in Lark than the flat text form.
+    ``critical`` is P0, ``error`` P1, ``warning`` P2; P0/P1/P2 pass through. Anything
+    else is P0: §3 counts an unknown severity as critical, so a typo pages loud.
     """
-    status = str(payload.get("status") or "unknown").lower()
-    common_labels = _dict(payload.get("commonLabels"))
-    common_annotations = _dict(payload.get("commonAnnotations"))
-    group_labels = _dict(payload.get("groupLabels"))
-    alerts = payload.get("alerts")
-    if not isinstance(alerts, list):
-        alerts = []
+    return _LEVEL_BY_SEVERITY.get(str(severity or "").strip().lower(), "P0")
 
-    alert_name = (
-        common_labels.get("alertname")
-        or group_labels.get("alertname")
-        or "SigNoz alert"
+
+def highest_level(levels: Iterable[str]) -> str:
+    """The most severe of ``levels`` (P0 before P1 before P2); P0 when there are none."""
+    return min(
+        (pager_level(level) for level in levels),
+        key=_LEVEL_RANK.__getitem__,
+        default="P0",
     )
-    severity = str(common_labels.get("severity") or "unknown").lower()
-    summary = common_annotations.get("summary") or common_annotations.get("info") or ""
-    template, emoji = _card_header(status, severity)
 
-    elements: list[dict[str, Any]] = [
-        {
-            "tag": "div",
-            "fields": [
-                {
-                    "is_short": True,
-                    "text": {
-                        "tag": "lark_md",
-                        "content": f"**Status**\n{status.upper()}",
-                    },
-                },
-                {
-                    "is_short": True,
-                    "text": {"tag": "lark_md", "content": f"**Severity**\n{severity}"},
-                },
-                {
-                    "is_short": True,
-                    "text": {"tag": "lark_md", "content": f"**Alerts**\n{len(alerts)}"},
-                },
-            ],
-        }
-    ]
-    if summary:
-        elements.append(
-            {
-                "tag": "div",
-                "text": {
-                    "tag": "lark_md",
-                    "content": f"**Summary**\n{_one_line(summary)}",
-                },
-            }
-        )
 
-    detail_lines: list[str] = []
-    for index, alert in enumerate(alerts[:MAX_ALERT_LINES], start=1):
-        if not isinstance(alert, dict):
-            continue
-        labels = _dict(alert.get("labels"))
-        annotations = _dict(alert.get("annotations"))
-        instance = labels.get("instance") or labels.get("service") or labels.get("job")
-        alert_summary = annotations.get("summary") or annotations.get("description")
-        line = f"**{index}.** {labels.get('alertname') or alert_name}"
-        if instance:
-            line += f" · `{instance}`"
-        if alert_summary:
-            line += f"\n{_one_line(alert_summary)}"
-        detail_lines.append(line)
-    if len(alerts) > MAX_ALERT_LINES:
-        detail_lines.append(f"…and {len(alerts) - MAX_ALERT_LINES} more alerts")
-    if detail_lines:
-        elements.append({"tag": "hr"})
-        elements.append(
-            {
-                "tag": "div",
-                "text": {"tag": "lark_md", "content": "\n".join(detail_lines)},
-            }
-        )
+def firing_title(level: str, subject: str) -> str:
+    """The title of a page: ``🔴 [P0 告警] <subject>`` (#905)."""
+    level = pager_level(level)
+    return f"{_LEVEL_EMOJI[level]} [{level} 告警] {subject}"
 
-    external_url = payload.get("externalURL")
-    actions: list[dict[str, Any]] = []
-    if isinstance(external_url, str) and external_url.startswith("http"):
-        actions.append(
-            {
-                "tag": "button",
-                "text": {"tag": "plain_text", "content": "Open in SigNoz"},
-                "url": external_url,
-                "type": "primary",
-            }
+
+def format_utc(epoch: float) -> str:
+    """``2026-09-24 08:00 UTC`` -- the one time format of every pager message."""
+    return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(epoch))
+
+
+def format_duration(seconds: float) -> str:
+    """A human duration in Chinese: ``3 天 2 小时``, ``1 小时 5 分钟``, ``12 分钟``."""
+    total = max(0, int(seconds))
+    if total < 60:
+        return "不到 1 分钟"
+    days, rest = divmod(total, 86400)
+    hours, rest = divmod(rest, 3600)
+    minutes = rest // 60
+    parts = []
+    if days:
+        parts.append(f"{days} 天")
+    if hours:
+        parts.append(f"{hours} 小时")
+    if minutes and not days:
+        parts.append(f"{minutes} 分钟")
+    return " ".join(parts)
+
+
+def since_text(start: float | None, *, now: float, end: float | None = None) -> str:
+    """The 开始于 value: when it started and how long it has lasted (or lasted)."""
+    if start is None:
+        return "未知"
+    if end is not None:
+        return f"{format_utc(start)} → {format_utc(end)}(共 {format_duration(end - start)})"
+    return f"{format_utc(start)}(已持续 {format_duration(now - start)})"
+
+
+@dataclass(frozen=True)
+class PagerItem:
+    """One failing (or recovered) object, in the field order of ``PAGER_FIELDS``."""
+
+    level: str = ""
+    environment: str = ""
+    target: str = ""
+    symptom: str = ""
+    since: str = ""
+    impact: str = ""
+    action: str = ""
+    runbook: str = ""
+    log: str = ""
+    #: shown next to the item number, e.g. 仍在告警 for a re-sent page
+    note: str = ""
+
+    def fields(self) -> list[tuple[str, str]]:
+        values = (
+            self.level,
+            self.environment,
+            self.target,
+            self.symptom,
+            self.since,
+            self.impact,
+            self.action,
+            self.runbook,
+            self.log,
         )
-    if runbook_url := _RUNBOOK_BY_ALERT.get(alert_name):
-        actions.append(
-            {
-                "tag": "button",
-                "text": {"tag": "plain_text", "content": "Open runbook"},
-                "url": runbook_url,
-                "type": "default",
-            }
+        return [(label, value) for label, value in zip(PAGER_FIELDS, values) if value]
+
+    def summary_line(self) -> str:
+        """The item in one line (级别 · 环境 · 对象 · 现象 · 开始于)."""
+        parts = (
+            self.level,
+            self.environment,
+            self.target,
+            _clip(_one_line(self.symptom), MAX_SUMMARY_CHARS),
+            self.since,
         )
-    if actions:
+        return " · ".join(part for part in parts if part)
+
+
+@dataclass(frozen=True)
+class PagerMessage:
+    """A pager (or report) message before it is rendered as a card or as text."""
+
+    title: str
+    firing: tuple[PagerItem, ...] = ()
+    resolved: tuple[PagerItem, ...] = ()
+    preamble: tuple[str, ...] = ()
+    #: a report: compact, one line per item, never the full blocks
+    report: bool = False
+
+
+def render_pager_text(message: PagerMessage) -> str:
+    """Plain-text rendering (the Worker and the GitHub watchdog send text).
+
+    The first ``MAX_FULL_ITEMS`` items are shown field by field, the rest one line
+    each; fewer items are shown in full until the text fits ``MAX_MESSAGE_CHARS``.
+    """
+    text = ""
+    for full in range(MAX_FULL_ITEMS, 0, -1):
+        text = _pager_text(message, full)
+        if len(text) <= MAX_MESSAGE_CHARS:
+            return text
+    return _truncate_message(text)
+
+
+def _pager_text(message: PagerMessage, full: int) -> str:
+    lines = [message.title, *message.preamble]
+    if message.report:
+        lines += _summary_lines([*message.firing, *message.resolved])
+        return "\n".join(lines)
+    lines += _text_blocks(message.firing, full)
+    if message.resolved:
+        if message.firing:
+            lines += ["", f"✅ 已恢复 {len(message.resolved)} 项"]
+        lines += _text_blocks(message.resolved, full)
+    return "\n".join(lines)
+
+
+def _text_blocks(items: tuple[PagerItem, ...], full: int) -> list[str]:
+    lines: list[str] = []
+    for index, item in enumerate(items[:full], start=1):
+        lines += ["", _item_heading(index, len(items), item)]
+        for label, value in item.fields():
+            if label == "日志":
+                lines.append(f"{label}{FIELD_SEPARATOR}")
+                lines += _log_lines(value)
+            else:
+                lines.append(f"{label}{FIELD_SEPARATOR}{_field_text(value)}")
+    rest = list(items[full:])
+    if rest:
+        lines += ["", f"另有 {len(rest)} 项,只列摘要:"]
+        lines += _summary_lines(rest)
+    return lines
+
+
+def _summary_lines(items: list[PagerItem]) -> list[str]:
+    lines = [f"• {item.summary_line()}" for item in items[:MAX_SUMMARY_ITEMS]]
+    hidden = len(items) - len(lines)
+    if hidden > 0:
+        lines.append(f"…及另外 {hidden} 项")
+    return lines
+
+
+def _item_heading(index: int, total: int, item: PagerItem) -> str:
+    note = f" · {item.note}" if item.note else ""
+    return f"— {index}/{total}{note} —"
+
+
+def _field_text(value: str) -> str:
+    return _clip(_one_line(_clean(value)), MAX_FIELD_CHARS)
+
+
+def _log_lines(value: str) -> list[str]:
+    lines = [
+        _clip(line.strip(), MAX_FIELD_CHARS)
+        for line in _clean(value).splitlines()
+        if line.strip()
+    ][-MAX_LOG_LINES:]
+    kept: list[str] = []
+    budget = MAX_LOG_CHARS
+    for line in reversed(lines):  # keep the newest lines
+        if len(line) + 1 > budget:
+            break
+        kept.insert(0, line)
+        budget -= len(line) + 1
+    return kept
+
+
+def render_pager_card(
+    message: PagerMessage, *, template: str, external_url: str = ""
+) -> dict[str, Any]:
+    """Feishu interactive card: every field of every item is its own card field.
+
+    Shrinks (fewer items in full, then fewer summary lines) until the request body
+    Feishu receives fits ``MAX_CARD_BYTES``.
+    """
+    card: dict[str, Any] = {}
+    for full, summaries in (
+        *((full, MAX_SUMMARY_ITEMS) for full in range(MAX_FULL_ITEMS, 0, -1)),
+        (1, 10),
+        (1, 5),
+        (1, 0),
+    ):
+        card = _pager_card(message, template, external_url, full, summaries)
+        if card_body_bytes(card) <= MAX_CARD_BYTES:
+            return card
+    return card
+
+
+def card_body_bytes(card: dict[str, Any]) -> int:
+    """The larger request body Feishu receives for ``card`` (webhook or app mode)."""
+    webhook = json.dumps(build_feishu_card_payload(card)).encode("utf-8")
+    app = json.dumps(build_feishu_app_card_payload("oc_" + "0" * 32, card))
+    return max(len(webhook), len(app.encode("utf-8")))
+
+
+def _pager_card(
+    message: PagerMessage,
+    template: str,
+    external_url: str,
+    full: int,
+    summaries: int,
+) -> dict[str, Any]:
+    elements: list[dict[str, Any]] = []
+    if message.preamble:
+        elements.append(_md_div("\n".join(_md(line) for line in message.preamble)))
+    if message.report:
+        items = [*message.firing, *message.resolved]
+        lines = [f"• {_md(item.summary_line())}" for item in items[:summaries]]
+        if len(items) > len(lines):
+            lines.append(f"…及另外 {len(items) - len(lines)} 项")
+        if lines:
+            elements.append(_md_div("\n".join(lines)))
+    else:
+        elements += _card_blocks(message.firing, full, summaries)
+        if message.resolved:
+            if message.firing:
+                elements += [
+                    {"tag": "hr"},
+                    _md_div(f"**✅ 已恢复 {len(message.resolved)} 项**"),
+                ]
+            elements += _card_blocks(message.resolved, full, summaries)
+    if external_url.startswith(("https://", "http://")):
         elements.append(
             {
                 "tag": "action",
-                "actions": actions,
+                "actions": [
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "打开 SigNoz"},
+                        "url": external_url,
+                        "type": "primary",
+                    }
+                ],
             }
         )
-
     return {
         "config": {"wide_screen_mode": True},
         "header": {
             "template": template,
-            "title": {
-                "tag": "plain_text",
-                "content": f"{emoji} [{status.upper()}] {alert_name}",
-            },
+            "title": {"tag": "plain_text", "content": message.title},
         },
         "elements": elements,
     }
+
+
+def _card_blocks(
+    items: tuple[PagerItem, ...], full: int, summaries: int
+) -> list[dict[str, Any]]:
+    elements: list[dict[str, Any]] = []
+    for index, item in enumerate(items[:full], start=1):
+        elements.append({"tag": "hr"})
+        if len(items) > 1 or item.note:
+            elements.append(_md_div(f"**{_item_heading(index, len(items), item)}**"))
+        elements.append(
+            {
+                "tag": "div",
+                "fields": [
+                    {
+                        "is_short": False,
+                        "text": {
+                            "tag": "lark_md",
+                            "content": f"**{label}**{FIELD_SEPARATOR}"
+                            + _card_value(label, value),
+                        },
+                    }
+                    for label, value in item.fields()
+                ],
+            }
+        )
+    rest = list(items[full:])
+    if rest:
+        lines = [f"• {_md(item.summary_line())}" for item in rest[:summaries]]
+        if len(rest) > len(lines):
+            lines.append(f"…及另外 {len(rest) - len(lines)} 项")
+        elements += [
+            {"tag": "hr"},
+            _md_div("\n".join([f"**另有 {len(rest)} 项,只列摘要:**", *lines])),
+        ]
+    return elements
+
+
+def _card_value(label: str, value: str) -> str:
+    if label == "日志":
+        return "\n" + "\n".join(_md(line) for line in _log_lines(value))
+    if label == "Runbook" and value.startswith("https://"):
+        name = value.rsplit("/", 1)[-1]
+        return f"[{_md(name)}]({value})"
+    return _md(_field_text(value))
+
+
+def _md_div(content: str) -> dict[str, Any]:
+    return {"tag": "div", "text": {"tag": "lark_md", "content": content}}
+
+
+def _md(value: str) -> str:
+    """Neutralise the lark_md markup a value could smuggle in (an <at> tag, a link)."""
+    return value.replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _clean(value: object) -> str:
+    return _CONTROL_CHARS.sub("", str(value))
+
+
+def _clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _epoch(value: object) -> float | None:
+    """Epoch seconds from an Alertmanager time (RFC 3339) or a number; None if unset.
+
+    Alertmanager's ``endsAt`` of a firing alert is Go's zero time, and a time before
+    2001 is no time this estate recorded: both are unknown.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        epoch = float(value)
+    else:
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        epoch = parsed.timestamp()
+    return epoch if epoch >= 1e9 else None
+
+
+def iso_utc(epoch: float) -> str:
+    """RFC 3339 in UTC, the way Alertmanager writes ``startsAt`` / ``endsAt``."""
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def pager_message_from_payload(
+    payload: dict[str, Any], *, now: float | None = None
+) -> PagerMessage:
+    """Read an Alertmanager/SigNoz payload into the one pager layout.
+
+    Per alert: ``labels`` (severity, environment, service_id, component,
+    failure_domain, probe_kind), ``annotations`` (``symptom``, or a probe's
+    ``target``/``expected``/``observed``, else ``description``/``summary``; optional
+    ``container``/``compose``, ``impact``, ``next_step``, ``runbook_url``, ``log_tail``)
+    and ``startsAt``/``endsAt``. A resolved alert names what recovered and how long
+    it was down.
+    """
+    now = time.time() if now is None else now
+    status = str(payload.get("status") or "unknown").lower()
+    common_labels = _dict(payload.get("commonLabels"))
+    common_annotations = _dict(payload.get("commonAnnotations"))
+    alert_name = str(
+        common_labels.get("alertname")
+        or _dict(payload.get("groupLabels")).get("alertname")
+        or "SigNoz alert"
+    )
+    raw_alerts = payload.get("alerts")
+    alerts = [
+        alert
+        for alert in (raw_alerts if isinstance(raw_alerts, list) else [])
+        if isinstance(alert, dict)
+    ]
+    if not alerts:  # say what the payload says, rather than an empty card
+        alerts = [{"status": status, "labels": {}, "annotations": {}}]
+    firing: list[PagerItem] = []
+    resolved: list[PagerItem] = []
+    for alert in alerts:
+        is_resolved = str(alert.get("status") or status).lower() == "resolved"
+        item = _payload_item(
+            alert,
+            resolved=is_resolved,
+            common_labels=common_labels,
+            common_annotations=common_annotations,
+            alert_name=alert_name,
+            now=now,
+        )
+        (resolved if is_resolved else firing).append(item)
+
+    # the most severe first: they are the ones shown in full
+    firing.sort(key=lambda item: _LEVEL_RANK[pager_level(item.level)])
+    environments = sorted({item.environment for item in [*firing, *resolved]} - {""})
+    where = (
+        environments[0] if len(environments) == 1 else "多环境" if environments else ""
+    )
+    count = len(firing) or len(resolved)
+    report = is_report_payload(payload)
+    if report:
+        title = f"{REPORT_TITLE_PREFIX}{alert_name}" + ("" if firing else " · 已恢复")
+    elif firing:
+        title = firing_title(highest_level(item.level for item in firing), alert_name)
+    else:
+        title = f"✅ [已恢复] {alert_name}"
+    title += (f" · {where}" if where else "") + f" · {count} 项"
+    return PagerMessage(
+        title=title, firing=tuple(firing), resolved=tuple(resolved), report=report
+    )
+
+
+def _payload_item(
+    alert: dict[str, Any],
+    *,
+    resolved: bool,
+    common_labels: dict[str, Any],
+    common_annotations: dict[str, Any],
+    alert_name: str,
+    now: float,
+) -> PagerItem:
+    labels = _dict(alert.get("labels"))
+    annotations = _dict(alert.get("annotations"))
+    severity = str(labels.get("severity") or common_labels.get("severity") or "")
+    # `info` is what a resolved push carries (§3), not a level: say nothing then.
+    level = (
+        ""
+        if resolved and severity.strip().lower() in {"", "info"}
+        else pager_level(severity)
+    )
+    name = str(labels.get("alertname") or alert_name)
+    start = _epoch(alert.get("startsAt"))
+    end = (_epoch(alert.get("endsAt")) or now) if resolved else None
+    item = PagerItem(
+        level=level,
+        environment=str(
+            labels.get("environment") or common_labels.get("environment") or ""
+        ),
+        target=_object_text(labels, annotations, name),
+        symptom=_symptom_text(labels, annotations, common_annotations),
+        since=since_text(start, now=now, end=end),
+    )
+    if resolved:
+        return item
+    domain = str(labels.get("failure_domain") or "")
+    impact = str(
+        annotations.get("impact")
+        or _IMPACT_BY_ALERT.get(name)
+        or _IMPACT_BY_DOMAIN.get(domain)
+        or DEFAULT_IMPACT
+    )
+    return replace(
+        item,
+        impact=f"[{domain}] {impact}" if domain else impact,
+        action=str(
+            annotations.get("next_step")
+            or _ACTION_BY_ALERT.get(name)
+            or _ACTION_BY_DOMAIN.get(domain)
+            or DEFAULT_ACTION
+        ),
+        runbook=_runbook_url(name, domain, labels, annotations),
+        log=str(annotations.get("log_tail") or ""),
+    )
+
+
+def _object_text(labels: dict[str, Any], annotations: dict[str, Any], name: str) -> str:
+    """对象: the full service_id plus the probe / container / check name."""
+    what = (
+        annotations.get("container")
+        or annotations.get("compose")
+        or labels.get("component")
+        or labels.get("stream")
+        or labels.get("instance")
+        or labels.get("service")
+        or labels.get("job")
+    )
+    parts = [str(part) for part in (labels.get("service_id"), what) if part]
+    return " · ".join(parts) or name
+
+
+def _symptom_text(
+    labels: dict[str, Any],
+    annotations: dict[str, Any],
+    common_annotations: dict[str, Any],
+) -> str:
+    """现象: expected vs observed for a probe, else what the source says went wrong."""
+    if annotations.get("symptom"):
+        return str(annotations["symptom"])
+    description = str(annotations.get("description") or "")
+    if "target" in annotations or "expected" in annotations:
+        head = " ".join(
+            str(part)
+            for part in (labels.get("probe_kind"), annotations.get("target"))
+            if part
+        )
+        body = "; ".join(
+            part
+            for part in (
+                f"期望 {annotations['expected']}"
+                if annotations.get("expected")
+                else "",
+                f"实际 {annotations['observed']}"
+                if annotations.get("observed")
+                else "",
+            )
+            if part
+        )
+        # the runner's own "expected X, observed Y" / "probe passed" add nothing
+        if description and not description.startswith(("expected ", "probe passed")):
+            body = f"{body}; {description}" if body else description
+        return f"{head} → {body}" if head and body else head or body
+    return str(
+        description
+        or annotations.get("summary")
+        or common_annotations.get("summary")
+        or common_annotations.get("info")
+        or ""
+    )
+
+
+def _runbook_url(
+    name: str, domain: str, labels: dict[str, Any], annotations: dict[str, Any]
+) -> str:
+    if annotations.get("runbook_url"):
+        return str(annotations["runbook_url"])
+    if labels.get("probe_kind") == "resource" and str(
+        annotations.get("target") or ""
+    ).startswith("disk:"):
+        return _DISK_RUNBOOK
+    return (
+        _RUNBOOK_BY_ALERT.get(name)
+        or _RUNBOOK_BY_DOMAIN.get(domain)
+        or (RUNBOOK_SECTION)
+    )
+
+
+def build_feishu_alert_card(
+    payload: dict[str, Any], *, now: float | None = None
+) -> dict[str, Any]:
+    """Render a SigNoz/Alertmanager payload as a Feishu interactive card (#905).
+
+    A page: header coloured by level (P0 red, P1 orange, P2 yellow; green once
+    resolved), one block of card fields per alert in ``PAGER_FIELDS`` order, the
+    first ``MAX_FULL_ITEMS`` in full and the rest one line each. A report
+    (``delivery=report``): blue, titled ``[报告]``, one line per item.
+    """
+    message = pager_message_from_payload(payload, now=now)
+    if message.report:
+        template = "blue"
+    elif message.firing:
+        template = _LEVEL_TEMPLATE[highest_level(item.level for item in message.firing)]
+    else:
+        template = "green"
+    external_url = payload.get("externalURL")
+    return render_pager_card(
+        message,
+        template=template,
+        external_url=external_url if isinstance(external_url, str) else "",
+    )
+
+
+def format_signoz_alert(payload: dict[str, Any], *, now: float | None = None) -> str:
+    """The same payload as ``build_feishu_alert_card``, rendered as text."""
+    return render_pager_text(pager_message_from_payload(payload, now=now))
 
 
 def mark_report_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -304,25 +833,6 @@ def is_report_payload(payload: dict[str, Any]) -> bool:
     return str(label).strip().lower() == REPORT_DELIVERY
 
 
-def label_report_card(card: dict[str, Any]) -> dict[str, Any]:
-    """A copy of ``card`` whose header title starts with ``[REPORT]``.
-
-    Used only on the fallback path — a report that has to share the pager chat.
-    """
-    header = _dict(card.get("header"))
-    title = _dict(header.get("title"))
-    content = str(title.get("content") or "")
-    if content.startswith(REPORT_TITLE_PREFIX):
-        return card
-    return {
-        **card,
-        "header": {
-            **header,
-            "title": {**title, "content": REPORT_TITLE_PREFIX + content},
-        },
-    }
-
-
 def build_feishu_card_payload(card: dict[str, Any]) -> dict[str, Any]:
     """Build a Feishu custom-bot interactive-card payload."""
     return {"msg_type": "interactive", "card": card}
@@ -335,58 +845,6 @@ def build_feishu_app_card_payload(chat_id: str, card: dict[str, Any]) -> dict[st
         "msg_type": "interactive",
         "content": json.dumps(card, ensure_ascii=False),
     }
-
-
-def format_signoz_alert(payload: dict[str, Any]) -> str:
-    """Convert an Alertmanager/SigNoz webhook payload into readable text."""
-    status = str(payload.get("status") or "unknown").upper()
-    common_labels = _dict(payload.get("commonLabels"))
-    common_annotations = _dict(payload.get("commonAnnotations"))
-    group_labels = _dict(payload.get("groupLabels"))
-    alerts = payload.get("alerts")
-    if not isinstance(alerts, list):
-        alerts = []
-
-    alert_name = (
-        common_labels.get("alertname")
-        or group_labels.get("alertname")
-        or "SigNoz alert"
-    )
-    severity = common_labels.get("severity") or "unknown"
-    summary = common_annotations.get("summary") or common_annotations.get("info") or ""
-
-    lines = [
-        f"[{status}] {alert_name}",
-        f"Severity: {severity}",
-        f"Alerts: {len(alerts)}",
-    ]
-    if summary:
-        lines.append(f"Summary: {_one_line(summary)}")
-
-    external_url = payload.get("externalURL")
-    if isinstance(external_url, str) and external_url:
-        lines.append(f"SigNoz: {external_url}")
-    if runbook_url := _RUNBOOK_BY_ALERT.get(alert_name):
-        lines.append(f"Runbook: {runbook_url}")
-
-    for index, alert in enumerate(alerts[:MAX_ALERT_LINES], start=1):
-        if not isinstance(alert, dict):
-            continue
-        labels = _dict(alert.get("labels"))
-        annotations = _dict(alert.get("annotations"))
-        instance = labels.get("instance") or labels.get("service") or labels.get("job")
-        alert_summary = annotations.get("summary") or annotations.get("description")
-        detail = f"{index}. {labels.get('alertname') or alert_name}"
-        if instance:
-            detail += f" on {instance}"
-        if alert_summary:
-            detail += f" - {_one_line(alert_summary)}"
-        lines.append(detail)
-
-    if len(alerts) > MAX_ALERT_LINES:
-        lines.append(f"...and {len(alerts) - MAX_ALERT_LINES} more alerts")
-
-    return "\n".join(lines)
 
 
 def build_signoz_channel_payload(
@@ -770,6 +1228,9 @@ def deliver_infra2_report(text: str, env: "Mapping[str, str] | None" = None) -> 
     Returns True if delivered, False if not configured (so a not-yet-wired reconciler no-ops
     cleanly instead of erroring). A configured-but-failing delivery raises (a broken report
     path must be visible, not silently green).
+
+    Every report starts with ``REPORT_TITLE_PREFIX`` (#905), added here once for all
+    senders, so a report never reads like a page.
     """
     e = os.environ if env is None else env
     app_id, app_secret, chat_id = (e.get(name, "") for name in INFRA2_REPORTS_ENV)
@@ -779,10 +1240,20 @@ def deliver_infra2_report(text: str, env: "Mapping[str, str] | None" = None) -> 
         app_id=app_id,
         app_secret=app_secret,
         chat_id=chat_id,
-        text=text,
+        text=as_report(text),
         api_base=e.get("INFRA2_REPORTS_FEISHU_API_BASE", "https://open.feishu.cn"),
     )
     return True
+
+
+def as_report(text: str) -> str:
+    """``text`` with the ``[报告]`` header (#905), added once."""
+    stripped = text.lstrip()
+    return (
+        stripped
+        if stripped.startswith(REPORT_TITLE_PREFIX)
+        else (REPORT_TITLE_PREFIX + stripped)
+    )
 
 
 def validate_feishu_api_base(api_base: str) -> str:
