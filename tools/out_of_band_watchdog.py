@@ -41,6 +41,7 @@ from libs.alerting import (  # noqa: E402
     format_time,
     highest_level,
     pager_level,
+    redact_credentials,
     render_pager_text,
 )
 from libs.deploy_queue import deployment_start_epoch  # noqa: E402
@@ -1864,7 +1865,7 @@ def _suggested_action_for_failure(name: str, failure_domain: str) -> str:
     if failure_domain == "peer-scheduler-liveness":
         return (
             "打开 truealpha 的 `scheduler-liveness` workflow:被禁用就重新启用,再看它最新"
-            "一次定时运行与 githubstatus.com;它停摆期间,全 estate 停跑的定时 workflow "
+            "一次定时运行与 https://www.githubstatus.com ;它停摆期间,全 estate 停跑的定时 workflow "
             "都无人报告"
         )
     if failure_domain == "backup":
@@ -2011,18 +2012,15 @@ def _one_line(value: str) -> str:
     return " ".join(value.split())
 
 
+#: Stricter than the shared redaction: this text also goes into public GitHub issues,
+#: so any word naming a secret, token or password is cut, with whatever follows it.
+_SECRET_WORD = re.compile(r"(?i)(secret|token|password)[A-Za-z0-9._:/=-]*")
+
+
 def _redact(value: str) -> str:
-    redacted = re.sub(
-        r"https://open\.(?:feishu\.cn|larksuite\.com)/open-apis/bot/v2/hook/[^\s]+",
-        "https://open.feishu.cn/open-apis/bot/v2/hook/***",
-        value,
-    )
-    redacted = re.sub(
-        r"(?i)(secret|token|password)[A-Za-z0-9._:/=-]*",
-        r"\1=***",
-        redacted,
-    )
-    return redacted
+    """This watchdog's redaction: its own stricter rule, then the shared credential
+    redaction (#905: DSN passwords, bearer tokens, custom-bot hooks)."""
+    return redact_credentials(_SECRET_WORD.sub(r"\1=***", value))
 
 
 def _env_int(env: Mapping[str, str], key: str, default: int) -> int:

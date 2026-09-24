@@ -2473,7 +2473,7 @@ def test_a_resolve_names_each_recovered_probe_and_how_long_it_was_down(
         "✅ [已恢复] InfraServiceProbeFailed · production · 2 项"
     )
     blob = json.dumps(card, ensure_ascii=False)
-    assert "**对象**：platform/vault · vault-http" in blob
+    assert "对象：platform/vault · vault-http" in blob
     assert "2026-09-24 16:00（UTC+8） → 2026-09-24 16:11（UTC+8）(共 11 分钟)" in blob
     assert "2026-09-24 16:02（UTC+8） → 2026-09-24 16:11（UTC+8）(共 9 分钟)" in blob
     assert "redis" not in blob

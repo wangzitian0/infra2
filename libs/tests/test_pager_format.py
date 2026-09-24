@@ -22,7 +22,7 @@ from libs.alerting import (
     DEFAULT_ACTION,
     DEFAULT_IMPACT,
     FIELD_SEPARATOR,
-    MAX_CARD_BYTES,
+    FEISHU_BODY_LIMITS,
     MAX_FIELD_CHARS,
     MAX_MESSAGE_CHARS,
     PAGER_FIELDS,
@@ -31,6 +31,7 @@ from libs.alerting import (
     build_feishu_alert_card,
     build_signoz_metric_alert_rule_payload,
     card_body_bytes,
+    card_budget,
     format_signoz_alert,
     mark_report_payload,
     pager_level,
@@ -71,22 +72,32 @@ def _text_items(text: str) -> list[dict[str, str]]:
     return items
 
 
-def _card_items(card: dict) -> list[dict[str, str]]:
-    """The field blocks of a card: ``{label: value}`` in card order."""
-    items = []
+def _card_fields(card: dict) -> list[list[tuple[str, str, str]]]:
+    """The field blocks of a card: ``(text tag, label, value)`` per field."""
+    blocks = []
     for element in card["elements"]:
         if "fields" not in element:
             continue
-        item = {}
+        block = []
         for field in element["fields"]:
-            content = field["text"]["content"]
-            match = re.fullmatch(
-                r"\*\*(.+?)\*\*" + FIELD_SEPARATOR + r"(.*)", content, re.S
+            text = field["text"]
+            pattern = (
+                (r"\*\*(Runbook)\*\*" if text["tag"] == "lark_md" else r"(\S+?)")
+                + FIELD_SEPARATOR
+                + r"(.*)"
             )
-            assert match, content
-            item[match.group(1)] = match.group(2)
-        items.append(item)
-    return items
+            match = re.fullmatch(pattern, text["content"], re.S)
+            assert match, text
+            block.append((text["tag"], match.group(1), match.group(2).lstrip("\n")))
+        blocks.append(block)
+    return blocks
+
+
+def _card_items(card: dict) -> list[dict[str, str]]:
+    """The field blocks of a card: ``{label: value}`` in card order."""
+    return [
+        {label: value for _tag, label, value in block} for block in _card_fields(card)
+    ]
 
 
 def _probe_payload(monkeypatch, *, name, target, expected, reading, alert_name):
@@ -339,6 +350,11 @@ def test_card_fields_are_separate_card_fields_in_the_shared_order(monkeypatch) -
         assert len(fields) == len(item)
         # one field per row: short fields sit side by side and read as one line
         assert {field["is_short"] for field in fields} == {False}
+        # values are plain text; only the runbook link is markup
+        (block,) = _card_fields(card)
+        assert {label for tag, label, _value in block if tag == "lark_md"} == {
+            "Runbook"
+        }
 
 
 def test_resolved_names_what_recovered_and_for_how_long() -> None:
@@ -494,25 +510,29 @@ def _huge_payload(count: int) -> dict:
     }
 
 
-def test_many_long_alerts_stay_inside_feishus_limits() -> None:
+@pytest.mark.parametrize("mode", sorted(FEISHU_BODY_LIMITS))
+def test_many_long_alerts_stay_inside_the_limit_of_the_mode_that_sends_them(
+    mode,
+) -> None:
     """#905: 60 alerts of 5,000-character symptoms and 12,000-character logs. The card
-    fits Feishu's 30 KB body, the text 3,500 characters; the first alerts are shown in
-    full, every other one is still counted."""
+    fits the body limit of its delivery mode (webhook 20 KB, app 30 KB), the text
+    3,500 characters; the first alerts are shown in full, every other one is still
+    counted."""
     payload = _huge_payload(60)
-    card = build_feishu_alert_card(payload, now=T0)
+    card = build_feishu_alert_card(payload, now=T0, delivery_mode=mode)
     text = format_signoz_alert(payload, now=T0)
     full = _card_items(card)
 
-    assert card_body_bytes(card) <= MAX_CARD_BYTES < 30 * 1024
+    assert card_body_bytes(card, mode) <= card_budget(mode) < FEISHU_BODY_LIMITS[mode]
     assert card["header"]["title"]["content"].endswith(" · 60 项")
     assert 1 <= len(full) < 60
     assert all(len(item["现象"]) == MAX_FIELD_CHARS for item in full)
-    summary = next(
+    headings = [
         e["text"]["content"]
         for e in card["elements"]
         if "另有" in e.get("text", {}).get("content", "")
-    )
-    assert f"**另有 {60 - len(full)} 项,只列摘要:**" in summary
+    ]
+    assert headings == [f"**另有 {60 - len(full)} 项,只列摘要:**"]
     assert len(text) <= MAX_MESSAGE_CHARS
     assert text.splitlines()[0].endswith(" · 60 项")
     assert "另有 " in text
@@ -532,17 +552,31 @@ def test_a_few_short_alerts_are_all_shown_in_full() -> None:
     ]
 
 
-def test_a_value_cannot_mention_everyone_or_break_the_markup() -> None:
+@pytest.mark.parametrize(
+    "value",
+    [
+        'body=<at id="all"></at> <b>x</b>',
+        "see [the fix](https://evil.example/steal) and **bold**",
+    ],
+)
+def test_a_value_is_shown_never_interpreted(value) -> None:
+    """#905: a value that holds an ``<at>`` tag or a markdown link is plain text on the
+    card: it cannot mention everyone, link out or restyle the card."""
     payload = {
         "status": "firing",
         "commonLabels": {"alertname": "X", "severity": "critical"},
-        "alerts": [
-            {"annotations": {"symptom": 'body=<at id="all"></at> <b>x</b>'}},
-        ],
+        "alerts": [{"annotations": {"symptom": value}}],
     }
-    (item,) = _card_items(build_feishu_alert_card(payload, now=T0))
+    card = build_feishu_alert_card(payload, now=T0)
+    (block,) = _card_fields(card)
+    markup = [
+        e["text"]["content"]
+        for e in card["elements"]
+        if e.get("text", {}).get("tag") == "lark_md"
+    ] + [value for tag, _label, value in block if tag == "lark_md"]
 
-    assert item["现象"] == 'body=&lt;at id="all"&gt;&lt;/at&gt; &lt;b&gt;x&lt;/b&gt;'
+    assert ("plain_text", "现象", value) in block
+    assert not [content for content in markup if "evil" in content or "<at" in content]
 
 
 # ---- the runbook links resolve ------------------------------------------------------
@@ -579,73 +613,406 @@ def test_the_anchor_slug_matches_githubs_on_a_known_link() -> None:
 def test_every_runbook_link_the_bridge_uses_resolves() -> None:
     urls = {
         RUNBOOK_SECTION,
-        alerting._DISK_RUNBOOK,
-        *alerting._RUNBOOK_BY_ALERT.values(),
+        *alerting._RUNBOOK_BY_ALERT_OVERRIDE.values(),
         *alerting._RUNBOOK_BY_DOMAIN.values(),
+        *alerting._RUNBOOK_BY_ALERT.values(),
     }
     missing = []
     for url in sorted(urls):
         path, anchor = url.removeprefix(f"{BLOB}/").split("#", 1)
         if anchor not in _anchors(ROOT / path):
             missing.append(url)
-    assert len(urls) >= 7
+    assert len(urls) >= 9
     assert missing == []
 
 
-def test_a_disk_probe_links_the_disk_runbook(monkeypatch) -> None:
+def _resource_page(monkeypatch, name: str, target: str) -> dict[str, str]:
+    """A host resource probe the production runner declares (platform/12.alerting
+    /deploy.py), failing above its ceiling, as the card shows it."""
     monkeypatch.setenv("INFRA_ENVIRONMENT", "production")
     spec = probes.ProbeSpec(
-        name="host-disk", kind="resource", target="disk:/data", expected="85"
+        name=name,
+        kind="resource",
+        target=target,
+        expected="80",
+        service_id="infra/host",
     )
     result = probes.ProbeResult(
         spec=spec,
         ok=False,
-        summary="expected '85', observed '91.0'",
+        summary="expected '80', observed '91.0'",
         observed="91.0",
         elapsed_ms=1,
     )
-    (item,) = _card_items(
-        build_feishu_alert_card(probes.build_probe_alert_payload([result]), now=T0)
+    payload = probes.build_probe_alert_payload([result])
+    assert payload["alerts"][0]["labels"]["failure_domain"] == f"host-{name[5:]}"
+    (item,) = _text_items(format_signoz_alert(payload, now=T0))
+    return item
+
+
+@pytest.mark.parametrize(
+    ("name", "target", "runbook"),
+    [
+        ("host-disk", "disk:/hostfs", "docs/runbooks/infra022-p0.md#disk-full"),
+        ("host-mem", "mem", "platform/12.alerting/README.md#host-resource-probes"),
+        ("host-cpu", "cpu", "platform/12.alerting/README.md#host-resource-probes"),
+    ],
+)
+def test_a_host_resource_probe_reads_as_the_host(monkeypatch, name, target, runbook):
+    """#905 review: host-cpu/mem/disk were `service-or-route`, so their card told the
+    reader to curl a route. They have their own domains, impacts and next steps."""
+    domain = f"host-{name[5:]}"
+    item = _resource_page(monkeypatch, name, target)
+
+    assert item["对象"] == f"infra/host · {name}"
+    assert item["现象"] == f"resource {target} → 期望 80; 实际 91.0"
+    assert item["影响"] == f"[{domain}] {alerting._IMPACT_BY_DOMAIN[domain]}"
+    assert item["下一步"] == alerting._ACTION_BY_DOMAIN[domain]
+    assert item["Runbook"] == f"{BLOB}/{runbook}"
+
+
+def test_a_backup_verification_page_says_what_is_stale_and_why() -> None:
+    """#905 review: `failure_domain=backup` had no impact, next step or runbook, and
+    the card showed the evidence without the summary it belongs to."""
+    from libs.backup.verification import build_backup_alert_payload
+
+    report = {
+        "checks": [
+            {
+                "service_id": "platform/postgres",
+                "status": "fail",
+                "severity": "P1",
+                "summary": "backup artifact is stale",
+                "evidence": {"age_hours": 200, "rpo_hours": 180},
+            }
+        ]
+    }
+
+    (item,) = _text_items(
+        format_signoz_alert(build_backup_alert_payload(report), now=T0)
     )
 
-    assert item["Runbook"].endswith(f"({alerting._DISK_RUNBOOK})")
-    assert item["现象"] == "resource disk:/data → 期望 85; 实际 91.0"
+    assert item["对象"] == "platform/postgres · backup"
+    assert item["现象"] == (
+        "backup artifact is stale — {'age_hours': 200, 'rpo_hours': 180}"
+    )
+    assert item["影响"] == "[backup] " + alerting._IMPACT_BY_DOMAIN["backup"]
+    assert item["下一步"] == alerting._ACTION_BY_DOMAIN["backup"]
+    assert item["Runbook"] == (
+        f"{BLOB}/docs/ssot/ops.recovery.md#sop-004-备份-freshness-验证"
+    )
 
 
-def test_the_bridge_payload_body_is_what_is_measured() -> None:
-    """card_body_bytes measures the bodies the delivery functions really send."""
-    card = build_feishu_alert_card(_huge_payload(2), now=T0)
-    app = alerting.build_feishu_app_card_payload("oc_" + "0" * 32, card)
+def test_a_summary_equal_to_its_description_is_shown_once() -> None:
+    (item,) = _card_items(build_feishu_alert_card(_signoz_payload(), now=T0))
 
-    assert card_body_bytes(card) == len(json.dumps(app).encode("utf-8"))
+    assert item["现象"] == "finance_report backend 5xx rate is above 5% for 5 minutes."
+
+
+# ---- what Feishu is actually sent ------------------------------------------------------
+
+
+class _FeishuServer:
+    """Records every request the send path makes; answers as Feishu does."""
+
+    def __init__(self) -> None:
+        self.requests = []
+
+    def __call__(self, request, timeout):
+        self.requests.append(request)
+        body = b'{"code": 0, "tenant_access_token": "t-test"}'
+
+        class _Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return body
+
+        return _Response()
+
+
+def _twenty_long_alerts() -> dict:
+    """The reviewer's case: 20 alerts of long Chinese text."""
+    payload = _huge_payload(20)
+    for alert in payload["alerts"]:
+        alert["annotations"]["symptom"] = "磁盘写满导致服务不可用" * 30
+    return payload
+
+
+def test_the_webhook_posts_utf8_under_its_20kb_limit(monkeypatch) -> None:
+    """#905 review: the webhook limit is 20 KB, and ASCII-escaped JSON made a Chinese
+    character cost 6 bytes (25,385 bytes for 20 alerts). The body is captured from the
+    send path itself."""
+    server = _FeishuServer()
+    monkeypatch.setattr(alerting, "urlopen", server)
+    card = build_feishu_alert_card(
+        _twenty_long_alerts(), now=T0, delivery_mode="feishu_webhook"
+    )
+
+    alerting.deliver_feishu_card(
+        "https://open.feishu.cn/open-apis/bot/v2/hook/test-token", card
+    )
+
+    (request,) = server.requests
+    assert request.get_header("Content-type") == "application/json; charset=utf-8"
+    assert len(request.data) <= FEISHU_BODY_LIMITS["feishu_webhook"] == 20_000
+    assert json.loads(request.data.decode("utf-8"))["card"] == card
+    assert "磁盘写满".encode() in request.data  # sent as UTF-8, not \\u escapes
+    # the same card ASCII-escaped, as it used to be sent, would not fit
+    ascii_body = json.dumps({"msg_type": "interactive", "card": card}).encode()
+    assert len(ascii_body) > FEISHU_BODY_LIMITS["feishu_webhook"]
+
+
+def test_the_app_bot_posts_utf8_under_its_30kb_limit(monkeypatch) -> None:
+    """Production and staging send through the app bot: its card body is budgeted
+    against 30 KB and captured from the send path."""
+    server = _FeishuServer()
+    monkeypatch.setattr(alerting, "urlopen", server)
+    card = build_feishu_alert_card(
+        _huge_payload(60), now=T0, delivery_mode="feishu_app"
+    )
+
+    alerting.deliver_feishu_app_card(
+        app_id="cli_test", app_secret="s", chat_id="oc_" + "a" * 32, card=card
+    )
+
+    token, message = server.requests
+    assert token.full_url.endswith("/tenant_access_token/internal")
+    assert message.get_header("Content-type") == "application/json; charset=utf-8"
+    assert len(message.data) <= FEISHU_BODY_LIMITS["feishu_app"] == 30_000
+    sent = json.loads(message.data.decode("utf-8"))
+    assert json.loads(sent["content"]) == card
+    assert "服务不可用".encode() in message.data
+    # the app bot fits more than the webhook would
+    assert card_body_bytes(card, "feishu_app") > card_budget("feishu_webhook")
+
+
+# ---- a page survives its own rendering -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("starts_at", "shown"),
+    [
+        (1_790_236_800_000, "2026-09-24 16:00（UTC+8）(已持续 10 分钟)"),  # epoch ms
+        (1_790_236_800, "2026-09-24 16:00（UTC+8）(已持续 10 分钟)"),
+        ("1790236800000", "2026-09-24 16:00（UTC+8）(已持续 10 分钟)"),
+        ("9999-12-31T23:59:59Z", "未知"),
+        (float("inf"), "未知"),
+        (float("nan"), "未知"),
+        (-5, "未知"),
+        ("not a time", "未知"),
+    ],
+)
+def test_a_malformed_time_is_read_or_unknown_never_a_crash(starts_at, shown) -> None:
+    payload = _signoz_payload()
+    payload["alerts"][0]["startsAt"] = starts_at
+
+    card = build_feishu_alert_card(payload, now=T0 + 600)
+    (item,) = _card_items(card)
+
+    assert "简化卡片" not in card["header"]["title"]["content"]
+    assert item["开始于"] == shown
+
+
+def test_a_render_failure_sends_the_minimal_card_and_logs_it(monkeypatch, caplog):
+    """#905 review: any exception while rendering used to drop the page. The minimal
+    card still says the level, environment, object and the raw summary."""
+
+    def broken(*_args, **_kwargs):
+        raise RuntimeError("renderer bug")
+
+    monkeypatch.setattr(alerting, "_payload_item", broken)
+    with caplog.at_level("ERROR", logger="alert-bridge"):
+        card = build_feishu_alert_card(_signoz_payload(), now=T0)
+
+    body = "\n".join(e["text"]["content"] for e in card["elements"])
+    assert card["header"]["title"]["content"] == (
+        "🔴 [P0 告警] FinanceReportHigh5xxRate · 简化卡片"
+    )
+    assert body.splitlines()[0] == (
+        "• P0 · production · finance_report/app · finance-report-backend · "
+        "finance_report backend 5xx rate is above 5% for 5 minutes."
+    )
+    assert "渲染失败 RuntimeError" in body
+    assert [r.message for r in caplog.records] == [
+        "alert card render failed; sending the minimal card"
+    ]
+
+
+def test_a_card_that_cannot_fit_goes_out_minimal_and_within_the_limit(
+    monkeypatch,
+) -> None:
+    """The final hard cap: when even the smallest plan is over budget, the minimal
+    card goes out, itself cut to fit."""
+    monkeypatch.setitem(alerting.FEISHU_BODY_LIMITS, "feishu_webhook", 4_000)
+    card = build_feishu_alert_card(_huge_payload(60), now=T0)
+
+    body = "\n".join(e["text"]["content"] for e in card["elements"])
+    assert card["header"]["title"]["content"].endswith(" · 简化卡片")
+    assert card_body_bytes(card, "feishu_webhook") <= card_budget("feishu_webhook")
+    assert "…及另外 " in body
+    assert "完整卡片超出大小上限" in body
+
+
+def test_the_title_and_the_links_are_bounded() -> None:
+    """#905 review: the alertname, a runbook_url and an externalURL could each carry
+    any size; the title is cut and an oversized or non-http link is not used."""
+    payload = _signoz_payload()
+    payload["commonLabels"]["alertname"] = "X" * 5_000
+    payload["alerts"][0]["labels"]["alertname"] = "X" * 5_000
+    payload["alerts"][0]["annotations"]["runbook_url"] = (
+        "https://a.example/" + "r" * 5_000
+    )
+    payload["externalURL"] = "https://signoz.example/" + "s" * 5_000
+
+    card = build_feishu_alert_card(payload, now=T0)
+    (item,) = _card_items(card)
+
+    assert len(card["header"]["title"]["content"]) < 130
+    assert (
+        item["Runbook"]
+        == f"[ops.observability.md#7-标准操作程序-playbooks]({RUNBOOK_SECTION})"
+    )
+    assert not [e for e in card["elements"] if e["tag"] == "action"]
+    for unsafe in (
+        "javascript:alert(1)",
+        "https://a.example/x)(y",
+        "https://a b.example",
+    ):
+        payload["alerts"][0]["annotations"]["runbook_url"] = unsafe
+        (item,) = _card_items(build_feishu_alert_card(payload, now=T0))
+        assert item["Runbook"].endswith(f"({RUNBOOK_SECTION})"), unsafe
+
+
+def test_a_log_tail_is_redacted_before_it_reaches_feishu() -> None:
+    """#905 review: the log tail is shown verbatim, so credentials in it are cut."""
+    logs = (
+        "connecting to postgresql://app:s3cr3t-pw@db:5432/finance\n"
+        "Authorization: Bearer eyJhbGciOi.payload.sig\n"
+        "retrying with password=hunter2 and api token=tok-123\n"
+    )
+    card = build_feishu_alert_card(_breakdown_payload(logs), now=T0)
+    (item,) = _card_items(card)
+    text = format_signoz_alert(_breakdown_payload(logs), now=T0)
+
+    for secret in ("s3cr3t-pw", "eyJhbGciOi", "hunter2", "tok-123"):
+        assert secret not in item["日志"] and secret not in text
+    assert "postgresql://***:***@db:5432/finance" in item["日志"]
+    assert "Bearer ***" in item["日志"]
+
+
+def test_the_recovered_section_survives_an_overflow() -> None:
+    """#905 review: overflow used to cut the tail of the text, which is where ✅ 已恢复
+    sits. Items are dropped from the end of each list instead; both sections keep
+    their heading and their count."""
+    payload = _huge_payload(15)
+    for index in range(15):
+        recovered = json.loads(json.dumps(payload["alerts"][index]))
+        recovered.update(status="resolved", endsAt="2026-09-24T08:00:00Z")
+        recovered["labels"]["service_id"] = f"infra/ok{index}"
+        payload["alerts"].append(recovered)
+
+    text = format_signoz_alert(payload, now=T0)
+    card = build_feishu_alert_card(payload, now=T0, delivery_mode="feishu_webhook")
+    lines = text.splitlines()
+
+    assert len(text) <= MAX_MESSAGE_CHARS and "[truncated]" not in text
+    assert "✅ 已恢复 15 项" in lines
+    after = lines[lines.index("✅ 已恢复 15 项") + 1 :]
+    assert after[-1].startswith("…及另外 ") and after[-1].endswith(" 项")
+    assert [line for line in after if line.startswith("• ")]
+    assert "**✅ 已恢复 15 项**" in json.dumps(card, ensure_ascii=False)
 
 
 # ---- pager prose is Chinese (#905) ----------------------------------------------------
 
-_WORD_RUN = re.compile(r"[A-Za-z][A-Za-z'-]*(?:[ ,;:./]+[A-Za-z][A-Za-z'-]*){2,}")
+#: Product and component names that stay in English wherever they appear.
+PRODUCT_WORDS = frozenset(
+    {
+        "Actions",
+        "API",
+        "AppRole",
+        "BullMQ",
+        "CGroup",
+        "CI",
+        "Cloudflare",
+        "Cron",
+        "Dokploy",
+        "DNS",
+        "FIFO",
+        "GitHub",
+        "HTTP",
+        "KV",
+        "OOM",
+        "Redis",
+        "SSH",
+        "SigNoz",
+        "Vault",
+        "VPS",
+        "Worker",
+        "Workers",
+    }
+)
+_TOKEN = re.compile(r"[A-Za-z0-9_'*%-]+")
+_WORD = re.compile(r"[A-Za-z][A-Za-z'-]*")
+_JOIN = re.compile(r"[\s,;:./()]*")
 
 
 def english_prose(text: str) -> list[str]:
-    """Runs of three or more English words outside `code` spans and URLs.
+    """Runs of two or more English words outside `code` spans, URLs and product names.
 
-    Pager prose is Chinese (#905); commands, paths and identifiers stay verbatim, in
-    backticks, and do not count.
+    Pager prose is Chinese (#905); commands, paths and identifiers stay verbatim in
+    backticks, evidence is quoted the same way, and neither counts.
     """
     bare = re.sub(r"`[^`]*`", " ", text)
     bare = re.sub(r"https?://\S+", " ", bare)
-    return _WORD_RUN.findall(bare)
+    runs: list[str] = []
+    run: list[str] = []
+    end = 0
+    for token in _TOKEN.finditer(bare):
+        word = _WORD.fullmatch(token.group()) and token.group() not in PRODUCT_WORDS
+        if word and run and _JOIN.fullmatch(bare[end : token.start()]):
+            run.append(token.group())
+        else:
+            if len(run) >= 2:
+                runs.append(" ".join(run))
+            run = [token.group()] if word else []
+        end = token.end()
+    if len(run) >= 2:
+        runs.append(" ".join(run))
+    return runs
 
 
-def test_the_english_prose_detector_sees_a_sentence_and_spares_commands() -> None:
-    assert english_prose("reach the VPS over SSH; check the host") == [
-        "reach the VPS over SSH; check the host"
-    ]
-    assert (
-        english_prose(
-            "在宿主机上执行 `docker compose logs --tail 80`,见 https://a.example/b/c"
-        )
-        == []
-    )
+@pytest.mark.parametrize(
+    "prose",
+    [
+        "reach the VPS over SSH; check the host",
+        "heartbeat missing",
+        "no detail",
+        "dependency unreachable (connection refused)",
+        "heartbeat stale: 9000s old (max 5400s)",
+        "心跳缺失 · probe loop healthy",
+    ],
+)
+def test_the_english_prose_detector_sees_english(prose) -> None:
+    assert english_prose(prose)
+
+
+@pytest.mark.parametrize(
+    "chinese",
+    [
+        "来源：Cloudflare Workers Cron → 飞书直发(不经 bridge)",
+        "在宿主机上执行 `docker compose logs --tail 80`,见 https://a.example/b/c",
+        "只用 Dokploy 自己的 `cancel` / `clean`,绝不直接删 Redis / BullMQ 键",
+        "依赖不可达(`connection refused`)",
+    ],
+)
+def test_the_english_prose_detector_spares_commands_links_and_products(chinese) -> None:
+    assert english_prose(chinese) == []
 
 
 def test_the_bridge_writes_its_own_prose_in_chinese() -> None:
@@ -654,10 +1021,10 @@ def test_the_bridge_writes_its_own_prose_in_chinese() -> None:
     from libs.observability.breakdown import BREAKDOWN_PATTERNS, classify_reason
 
     texts = [
-        *alerting._IMPACT_BY_ALERT.values(),
+        *alerting._IMPACT_BY_ALERT_OVERRIDE.values(),
         *alerting._IMPACT_BY_DOMAIN.values(),
         DEFAULT_IMPACT,
-        *alerting._ACTION_BY_ALERT.values(),
+        *alerting._ACTION_BY_ALERT_OVERRIDE.values(),
         *alerting._ACTION_BY_DOMAIN.values(),
         DEFAULT_ACTION,
         QUEUE_IMPACT,
@@ -666,7 +1033,7 @@ def test_the_bridge_writes_its_own_prose_in_chinese() -> None:
         classify_reason("some unknown line")[0],
     ]
 
-    assert len(texts) >= 25
+    assert len(texts) >= 30
     assert {text: english_prose(text) for text in texts if english_prose(text)} == {}
 
 

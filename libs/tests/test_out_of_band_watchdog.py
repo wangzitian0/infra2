@@ -2325,7 +2325,16 @@ def test_github_page_prose_is_chinese() -> None:
 
     watchdog = _load_watchdog()
     domains = [*watchdog._IMPACT_BY_DOMAIN, "http-target", "host-diagnostics"]
+    page = watchdog.format_failure_message(
+        [
+            watchdog.CheckResult(
+                "infra2-ssh", False, "ssh exited 255", "host-reachability"
+            )
+        ],
+        run_url="https://github.example/run/1",
+    )
     texts = [
+        *page.splitlines()[:3],  # the title, the source and the run
         *(watchdog._suggested_action_for_failure("x", domain) for domain in domains),
         *watchdog._IMPACT_BY_DOMAIN.values(),
         watchdog._DEFAULT_IMPACT,
@@ -2333,3 +2342,17 @@ def test_github_page_prose_is_chinese() -> None:
 
     assert len(texts) >= 25
     assert {text: english_prose(text) for text in texts if english_prose(text)} == {}
+
+
+def test_the_github_redaction_also_cuts_credentials() -> None:
+    """#905: the GitHub watchdog shares the bridge's credential redaction (DSN
+    passwords, bearer tokens) on top of its own stricter rule."""
+    watchdog = _load_watchdog()
+
+    redacted = watchdog._redact(
+        "psql postgresql://app:pw-9f3@db:5432/x failed; Bearer abc.def; token=zz9"
+    )
+
+    assert redacted == (
+        "psql postgresql://***:***@db:5432/x failed; Bearer ***; token=***"
+    )

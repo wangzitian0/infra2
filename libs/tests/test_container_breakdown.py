@@ -116,7 +116,7 @@ def test_find_breakdown_containers_filters_and_attaches_reason():
     by_name = {b.container: b for b in found}
     assert by_name["vault-agent"].state == "restarting"
     assert "Vault AppRole 凭据缺失" in by_name["vault-agent"].reason
-    assert by_name["sick"].reason == "依赖不可达(connection refused)"
+    assert by_name["sick"].reason == "依赖不可达(`connection refused`)"
 
 
 def test_build_alert_payload_shape_is_alertmanager_like():

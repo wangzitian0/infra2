@@ -45,7 +45,7 @@ BREAKDOWN_PATTERNS: tuple[tuple[str, str], ...] = (
     ("VAULT_ROLE_ID", "Vault AppRole 凭据缺失"),
     ("permission denied", "权限被拒(Vault / secret 访问)"),
     ("no such host", "DNS / 服务名解析失败"),
-    ("connection refused", "依赖不可达(connection refused)"),
+    ("connection refused", "依赖不可达(`connection refused`)"),
     ("out of memory", HOST_MEMORY_CAUSE),
     ("oom-killer", HOST_MEMORY_CAUSE),
     ("killed process", "进程被系统终止(SIGKILL)"),

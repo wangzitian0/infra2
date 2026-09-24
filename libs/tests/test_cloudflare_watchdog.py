@@ -241,7 +241,7 @@ def test_kv_is_written_on_transitions_only(world) -> None:
 def test_a_network_error_counts_as_a_failure(world) -> None:
     (message,) = world["networkError"]
     page = _block(message, "firing", "truealpha-web-public-route")
-    assert page["现象"].endswith("— 请求失败:connection refused(连续 2 次运行失败)")
+    assert page["现象"].endswith("— 请求失败:`connection refused`(连续 2 次运行失败)")
 
 
 @needs_node
@@ -358,7 +358,7 @@ def test_an_unhealthy_loop_pages_p1_after_two_runs_and_resolves_after_two(
     assert page["级别"] == "P1"
     assert page["影响"].startswith("[alert-pipeline] ")
     assert page["现象"] == (
-        "探测循环报告不健康 — alert bridge delivery failing for 42 min"
+        "探测循环报告不健康 — `alert bridge delivery failing for 42 min`"
     )
     (resolved,) = messages[4]
     assert _names(resolved, "resolved") == ["platform-alerting-probes"]
@@ -707,27 +707,79 @@ def test_every_runbook_the_worker_links_resolves(world) -> None:
 
 @needs_node
 def test_worker_prose_is_chinese(world) -> None:
-    """#905: the Worker's next steps, impacts and failure summaries are Chinese;
-    commands and identifiers stay verbatim in backticks."""
+    """#905: the Worker's own text is Chinese -- title, preamble, what went wrong,
+    when, the impact and the next step, of pages and recoveries. Commands and
+    identifiers stay verbatim in backticks; evidence is quoted the same way."""
     from libs.tests.test_pager_format import english_prose
 
     messages = [
         *world["entrypointDown"][1]["messages"],
+        *world["entrypointDown"][4]["messages"],
+        *world["networkError"],
         *world["vpsDown"]["messages"],
         *world["loopUnhealthy"]["messages"][1],
+        *world["loopUnhealthy"]["messages"][4],
         *world["configBroken"]["messages"],
     ]
-    firing = [
-        block
-        for message in messages
-        for block in _blocks(message)
-        if block["section"] == "firing"
-    ]
+    blocks = [block for message in messages for block in _blocks(message)]
     texts = [
-        text
-        for block in firing
-        for text in (block["下一步"], block["影响"], block["现象"].split(" — ")[0])
+        *(line for message in messages for line in message.splitlines()[:2]),
+        *(
+            block[label]
+            for block in blocks
+            for label in ("现象", "开始于", "影响", "下一步")
+            if label in block
+        ),
     ]
 
-    assert len(firing) == 4
+    assert {block["section"] for block in blocks} == {"firing", "resolved"}
+    assert len(texts) >= 30
     assert {text: english_prose(text) for text in texts if english_prose(text)} == {}
+
+
+@needs_node
+def test_worker_caps_summary_lines_at_twenty_like_the_bridge(world) -> None:
+    """#905 parity: 25 recoveries in one message; as many as fit are shown in full,
+    then at most 20 summary lines, and the rest are counted."""
+    (message,) = world["manyRecovered"]
+    lines = message.splitlines()
+    summary = [line for line in lines if line.startswith("• ")]
+    full = _blocks(message)
+
+    assert len(message) <= 3500
+    assert lines[0] == "✅ [已恢复] Cloudflare 带外 watchdog · 25 项"
+    assert len(summary) == 20
+    assert lines[-1] == f"…及另外 {25 - len(full) - 20} 项"
+    assert all(len(line) <= 242 for line in summary)
+
+
+@needs_node
+def test_worker_overflow_drops_items_from_the_end_not_the_recoveries(world) -> None:
+    """#905 parity: 15 pages and 15 recoveries in one message that cannot hold them
+    all. Both sections keep their heading and a count; it is the tail of each list
+    that goes, never the ✅ 已恢复 section as a whole."""
+    (message,) = world["mixedOverflow"]
+    lines = message.splitlines()
+    after = lines[lines.index("✅ 已恢复 15 项") + 1 :]
+
+    assert len(message) <= 3500 and "[truncated]" not in message
+    assert lines[0] == "🟠 [P1 告警] Cloudflare 带外 watchdog · 15 项"
+    assert [line for line in after if line.startswith("• ")]
+    assert after[-1].startswith("…及另外 ") and after[-1].endswith(" 项")
+    before = lines[: lines.index("✅ 已恢复 15 项")]
+    assert any(line.startswith("…及另外 ") for line in before)
+
+
+@needs_node
+def test_worker_clips_a_field_at_300_and_never_cuts_a_quote_open(world) -> None:
+    """#905 parity with the bridge's MAX_FIELD_CHARS: a value over 300 characters is
+    cut there. Evidence is cut before it is quoted, so the quotation stays closed."""
+    (long_url,) = world["longUrl"]
+    page = _block(long_url, "firing", "u00-public-route")
+    (long_detail,) = world["longLoopDetail"]
+    loop = _block(long_detail, "firing", "platform-alerting-probes")
+
+    assert len(page["现象"]) == 300 and page["现象"].endswith("…")
+    assert len(loop["现象"]) < 300
+    assert loop["现象"].startswith("探测循环报告不健康 — `bridge failing xxx")
+    assert loop["现象"].endswith("…`") and loop["现象"].count("`") == 2

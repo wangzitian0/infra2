@@ -531,8 +531,18 @@ def _matches_expected(spec: ProbeSpec, observed: str) -> bool:
 
 
 def failure_domain(result: ProbeResult) -> str:
-    """Where a failure sits: ``probe-client-blocked`` (the edge refused the probe, error
-    1010) or ``service-or-route``. Part of a failure's identity (#903)."""
+    """Where a failure sits. Part of a failure's identity (#903).
+
+    A host resource probe is ``host-disk``, ``host-mem`` or ``host-cpu`` (#905: its
+    card needs the host's impact and next step, not a service's). Otherwise
+    ``probe-client-blocked`` (the edge refused the probe, error 1010) or
+    ``service-or-route``.
+    """
+    if result.spec.kind == "resource":
+        target = result.spec.target.strip()
+        if target.startswith("disk:"):
+            return "host-disk"
+        return {"cpu": "host-cpu", "mem": "host-mem"}.get(target, "host-resource")
     observed = result.observed.lower()
     summary = result.summary.lower()
     if any(

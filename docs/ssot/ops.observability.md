@@ -105,11 +105,58 @@ probe runner 一次推送覆盖一组内所有失败探针,整条推送的 sever
 
 ### 3.1 推送格式(#905)
 
-所有告警推送——bridge 发的**飞书交互卡片**(`libs/alerting.py::build_feishu_alert_card`)、Cloudflare Worker 与 GitHub
-日级 watchdog 发的**文本**——用同一套字段、同一顺序、中文标签;值保持来源原样。
+**已转换的三个面**——bridge 发的**飞书交互卡片**(`libs/alerting.py::build_feishu_alert_card`)、Cloudflare Worker 与 GitHub
+日级 watchdog 发的**文本**——用同一套字段、同一顺序、中文标签。尚未转换:`tools/deploy_v2_canary.py` 的失败推送(#905 跟进项)。
 
 | # | 字段 | 内容 |
 |---|------|------|
+| 1 | 级别 | P0 / P1 / P2,按 §3 由 `severity` 映射(`critical`/`error`/`warning`,P0/P1/P2 原样;未知 = P0) |
+| 2 | 环境 | `environment` |
+| 3 | 对象 | 完整 `service_id` + 探针 / 容器 / compose / 检查名 |
+| 4 | 现象 | 探针:kind + target → 期望 vs 实际;来源写了 `symptom` 就用它;其余:`summary` 加上 `description`(证据) |
+| 5 | 开始于 | 开始时间,按 owner 时区显示:`2026-09-24 15:48（UTC+8）`,+ 已持续;RESOLVED 为起止时间与总时长(payload 内时间仍是 UTC) |
+| 6 | 影响 | `[failure_domain]` + 该域影响一句(一域一句) |
+| 7 | 下一步 | 按告警名 / failure domain 的第一步;Worker 与 GitHub 沿用各自的 action map |
+| 8 | Runbook | 按告警名 / failure domain 的具体锚点;没有更具体的就指向 §7 |
+| 9 | 日志 | 仅容器 breakdown:原因所在行 + 最后几行,截断、脱敏 |
+
+- **中文**:标签、标题、影响、下一步,以及各来源自己写的固定描述(Worker 的故障摘要、恢复语句与详情模板,breakdown 原因,部署队列
+  与每日摘要的现象)一律中文;命令、路径、标识符原样写在反引号里,Worker 引用的证据也放在反引号里。原样保留的只有证据:探针读数与
+  异常文本、HTTP body、日志行、runner 心跳 `detail`、SigNoz 规则文本(归 #906)、GitHub 各检查的 `detail`(它同时是 issue 留痕、
+  结构化日志与日报里的判定记录)。测试把反引号与 URL 之外、产品名白名单(Cloudflare、Dokploy、Vault …)之外"两个以上连续英文词"
+  判为回归(`libs/tests/test_pager_format.py::english_prose`),覆盖各面的标题与来源行。
+- **唯一定义**:`libs/alerting.py` 的 `PAGER_FIELDS` / `pager_level` / `since_text` / `format_time` / `_shrink_plans`。Worker 是
+  JS,保留一份副本,由 `libs/tests/test_cloudflare_watchdog.py` 以**渲染结果**对齐(字段顺序、级别映射、时间格式、单字段 300 字符、
+  至多 20 行摘要、溢出顺序);GitHub watchdog 直接调用 `libs.alerting` 的文本渲染。三种级别词汇在渲染文本里只剩 P0/P1/P2;Worker
+  的入口与心跳级别取其配置的 `severity`(`warning` = P2)。
+- **failure domain**:探针 `service-or-route` / `probe-client-blocked`;宿主机资源探针 `host-disk` / `host-mem` / `host-cpu`
+  (影响、下一步与 runbook 各自对应宿主机,磁盘指向 `infra022-p0.md#disk-full`);breakdown `runtime` / `host-memory`;部署队列
+  `deploy-queue`;备份核验 `backup`(runbook `ops.recovery.md` SOP-004)。
+- **标题**:页 `🔴 [P0 告警] <告警名> · <环境> · N 项`(🟠 P1 / 🟡 P2,卡片头红 / 橙 / 黄,取最高级别,最严重的项排在前);
+  恢复 `✅ [已恢复] …`(绿)。**报告**——`delivery=report` 推送(含每日摘要)、`deliver_infra2_report` 发出的日报(含 GitHub
+  日报)、周报——一律以 `[报告]` 开头(卡片蓝色),紧凑布局一项一行;报告投到报告群还是回落告警群都一样。
+- **RESOLVED 写明恢复了什么、坏了多久**:probe runner 的恢复推送为此前呼出的每个探针带一条 resolved alert(`startsAt` =
+  该探针本次首次失败,存于 runner state 的 `failing_since`;`endsAt` = 恢复时刻);breakdown 的恢复带容器首次被看到坏的
+  时间;Worker 用故障身份的 `since`;SigNoz 自带 `startsAt`/`endsAt`。
+- **长度有界,按投递方式计**:飞书请求体上限 webhook 20 KB、app bot 30 KB(生产与 staging 都走 app bot)。请求体一律是 UTF-8 JSON
+  (`Content-Type: application/json; charset=utf-8`;ASCII 转义会让一个汉字占 6 字节),卡片按**发送它的那种方式**实际发出的字节
+  计,留 1 KiB 余量。收缩顺序(`_shrink_plans`,Worker 同):先减少完整展示的项(5 → 1),再把恢复项改为摘要行,再从每段**末尾**
+  减摘要行(20 → 0,被减掉的计数为"…及另外 N 项")——`✅ 已恢复` 一段永远不先丢。单字段 300 字符、摘要行 240、日志 800、
+  标题里的告警名 80;超长或非 http(s) 的 `runbook_url` / `externalURL` 不用。仍放不下(或文本仍超 3,500 字符)才走最后的硬上限:
+  卡片换成**简化卡片**,文本截断。
+- **推送永不因渲染丢失**:`startsAt`/`endsAt` 可为 RFC 3339 或 epoch 数字(> 1e12 视为毫秒);2001 年前、2100 年后、非有限值与
+  读不懂的值记为"未知"。渲染中任何异常都改发**简化卡片**(每条:级别 · 环境 · 对象 · 原始 summary,纯文本,同样受大小上限)并记
+  错误日志,bridge 照常返回 2xx。
+- **值只显示、不解释**:卡片里每个值都是 `plain_text`,`<at>`、markdown 链接或加粗都原样显示;只有我们自己的 runbook 链接是
+  `lark_md`,且 URL 须是不含空白与括号类字符的 http(s) 地址。日志尾与证据先脱敏(`redact_secrets`:DSN 里的密码、Bearer
+  token、飞书 hook,以及 secret / token / password / api key 后面的值;名字本身保留),GitHub 面还有更严的规则(其文本也进公开
+  issue)。
+- **payload 契约**(来源 → bridge):labels `severity`、`environment`、`service_id`、`component`、`failure_domain`、
+  `probe_kind`;`startsAt` / `endsAt`;annotations `symptom`、`target` / `expected` / `observed`、`description` / `summary`、
+  `container` / `compose`、`impact`、`next_step`、`runbook_url`、`log_tail`。SigNoz 规则加 `runbook_url` annotation 即得具体
+  锚点(规则本身归 #906)。
+
+---|------|------|
 | 1 | 级别 | P0 / P1 / P2,按 §3 由 `severity` 映射(`critical`/`error`/`warning`,P0/P1/P2 原样;未知 = P0) |
 | 2 | 环境 | `environment` |
 | 3 | 对象 | 完整 `service_id` + 探针 / 容器 / compose / 检查名 |

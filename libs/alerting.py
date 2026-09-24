@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -22,6 +23,7 @@ SIGNOZ_ALERT_VERSION = "v5"
 # both spellings are counted.
 ERROR_LOG_LEVELS = ("ERROR", "CRITICAL", "FATAL")
 MAX_MESSAGE_CHARS = 3500
+JSON_UTF8 = "application/json; charset=utf-8"
 TRUNCATION_SUFFIX = "\n...[truncated]"
 # #903: a payload labelled `delivery=report` is a REPORT, not a page. The bridge sends it
 # to FEISHU_REPORT_CHAT_ID (app mode) or, when that is unset, to the pager chat. Either
@@ -36,8 +38,8 @@ REPORT_TITLE_PREFIX = "[报告] "
 # The bridge card, the Cloudflare Worker's text and the GitHub watchdog's text all
 # show these fields, in this order, under these labels (cloudflare/infra-watchdog
 # /worker.js keeps a copy; libs/tests/test_cloudflare_watchdog.py holds it to this
-# one). Labels are Chinese because the owner reads Chinese; values stay exactly as the
-# source wrote them.
+# one). Labels and the prose the sources write are Chinese; commands, paths and
+# identifiers stay verbatim; evidence is shown as captured.
 PAGER_FIELDS = (
     "级别",
     "环境",
@@ -58,12 +60,20 @@ MAX_FULL_ITEMS = 5
 MAX_SUMMARY_ITEMS = 20
 MAX_FIELD_CHARS = 300
 MAX_SUMMARY_CHARS = 160
+#: one summary line, all of it
+MAX_SUMMARY_LINE_CHARS = 240
+MAX_TITLE_NAME_CHARS = 80
+MAX_URL_CHARS = 500
 MAX_LOG_CHARS = 800
 MAX_LOG_LINES = 8
-#: Feishu refuses a card message whose request body is over 30 KB. Measured on the
-#: body the bridge actually sends (ASCII-escaped JSON, the card itself a JSON string
-#: inside it in app mode), with room to spare.
-MAX_CARD_BYTES = 28 * 1024
+#: What Feishu accepts per request body, by delivery mode: a custom-bot webhook 20 KB,
+#: an app-bot card message 30 KB. A card is budgeted against the mode that sends it,
+#: measured on the exact bytes that mode posts (``feishu_request_body``).
+FEISHU_BODY_LIMITS = {"feishu_webhook": 20_000, "feishu_app": 30_000}
+_BODY_MARGIN = 1_024
+#: Epoch seconds a pager time may carry; anything else is an unknown time.
+_EARLIEST_EPOCH = 1_000_000_000  # 2001-09-09
+_LATEST_EPOCH = 4_102_444_800  # 2100-01-01
 
 # ops.observability.md §3: critical = P0, error = P1, warning = P2. An unknown value
 # counts as critical, so a typo pages loud instead of quiet.
@@ -86,25 +96,31 @@ _ALERTING_README = f"{_REPO_BLOB}/platform/12.alerting/README.md"
 RUNBOOK_SECTION = (
     f"{_REPO_BLOB}/docs/ssot/ops.observability.md#7-标准操作程序-playbooks"
 )
-# Looked up by alertname first, then by failure domain (an alertname such as the
-# misconfigured lane means more than the domain its probe failed in).
-_RUNBOOK_BY_ALERT = {
-    "ContainerBreakdown": f"{_P0_RUNBOOK_BASE}#container-killed",
-    "ContainerBreakdownChronic": f"{_P0_RUNBOOK_BASE}#container-killed",
-    "DeployQueueStuck": f"{_P0_RUNBOOK_BASE}#deployment-failed",
-    "InfraServiceProbeFailed": f"{_ALERTING_README}#infra-service-probes",
-    "InfraPublicRouteProbeFailed": f"{_ALERTING_README}#public-route-probes",
+# Lookup order for 影响 / 下一步 / Runbook: an alertname whose meaning overrides the
+# failure domain (a probe in the misconfigured lane, a daily digest), then the failure
+# domain, then the alertname in general.
+_RUNBOOK_BY_ALERT_OVERRIDE = {
     "InfraProbeMisconfigured": f"{_ALERTING_README}#failing-round-trips-two-lanes-726",
     "InfraProbeChronic": f"{_ALERTING_README}#infra-service-probes",
+    "ContainerBreakdownChronic": f"{_P0_RUNBOOK_BASE}#container-killed",
 }
 _RUNBOOK_BY_DOMAIN = {
     "runtime": f"{_P0_RUNBOOK_BASE}#container-killed",
     "host-memory": f"{_P0_RUNBOOK_BASE}#container-killed",
     "deploy-queue": f"{_P0_RUNBOOK_BASE}#deployment-failed",
     "probe-client-blocked": f"{_ALERTING_README}#public-route-probes",
+    "host-disk": f"{_P0_RUNBOOK_BASE}#disk-full",
+    "host-mem": f"{_ALERTING_README}#host-resource-probes",
+    "host-cpu": f"{_ALERTING_README}#host-resource-probes",
+    "backup": f"{_REPO_BLOB}/docs/ssot/ops.recovery.md#sop-004-备份-freshness-验证",
 }
-_DISK_RUNBOOK = f"{_P0_RUNBOOK_BASE}#disk-full"
-_IMPACT_BY_ALERT = {
+_RUNBOOK_BY_ALERT = {
+    "ContainerBreakdown": f"{_P0_RUNBOOK_BASE}#container-killed",
+    "DeployQueueStuck": f"{_P0_RUNBOOK_BASE}#deployment-failed",
+    "InfraServiceProbeFailed": f"{_ALERTING_README}#infra-service-probes",
+    "InfraPublicRouteProbeFailed": f"{_ALERTING_README}#public-route-probes",
+}
+_IMPACT_BY_ALERT_OVERRIDE = {
     "InfraProbeMisconfigured": "探针没有测到目标(自身配置缺失,或仍在宽限期内):目标是否健康未知",
     "InfraProbeChronic": "故障已持续超过一天;每日摘要,不再呼人",
     "ContainerBreakdownChronic": "容器反复坏或一直坏;摘要,同一故障不再单独呼人",
@@ -113,12 +129,16 @@ _IMPACT_BY_DOMAIN = {
     "service-or-route": "该服务或它的路由不可用:依赖它的请求失败",
     "probe-client-blocked": "边缘拒绝了探针(error 1010):服务可能正常,但这条路由暂时失去监控",
     "runtime": "容器崩溃循环、退出或不健康:它承载的服务降级或不可用",
-    "host-memory": "宿主机内存耗尽:同机其他容器也可能被 OOM kill",
+    "host-memory": "宿主机内存耗尽:同机其他容器也可能被 OOM 终止",
     "deploy-queue": "单并发 FIFO 部署队列被占住:之后的部署全部排队",
+    "host-disk": "宿主机磁盘将满:Docker 写入、数据库提交与备份都可能失败",
+    "host-mem": "宿主机内存吃紧:再涨就会有容器被 OOM 终止",
+    "host-cpu": "宿主机 CPU 持续过高:所有服务变慢,探测与告警也可能超时",
+    "backup": "异地备份缺失或过期:数据在下次成功备份前没有保护",
 }
 DEFAULT_IMPACT = "未声明 failure_domain:按现象判断影响范围"
-_ACTION_BY_ALERT = {
-    "InfraProbeMisconfigured": "核对该探针自己的配置(round-trip 的 client id、URL 等);目标是否健康另行确认",
+_ACTION_BY_ALERT_OVERRIDE = {
+    "InfraProbeMisconfigured": "核对该探针自己的配置(round-trip 的客户端 id、URL 等);目标是否健康另行确认",
     "InfraProbeChronic": "确认有人在处理;修好它,或确认它不该再被探测",
     "ContainerBreakdownChronic": "按 runbook 找根因,不要只重启",
 }
@@ -137,12 +157,42 @@ _ACTION_BY_DOMAIN = {
     ),
     "host-memory": "用 `free -h` 与 `docker stats --no-stream` 找出内存大户,先处理宿主机内存",
     "deploy-queue": (
-        "对照 Dokploy 部署记录与 CI run;只用 Dokploy 自己的 cancel/clean"
-        "(`DEPLOY_GUARD_REMEDIATE=1`),绝不直接删 Redis/BullMQ 键"
+        "对照 Dokploy 部署记录与 CI 运行记录;只用 Dokploy 自己的 `cancel` / `clean`"
+        "(`DEPLOY_GUARD_REMEDIATE=1`),绝不直接删 Redis / BullMQ 键"
+    ),
+    "host-disk": (
+        "按 runbook 找增长来源:`du -xhd1 /data | sort -h` 与 `docker system df`,"
+        "再看 `systemctl status infra2-disk-guardian.timer --no-pager`;"
+        "不要删卷、在用的镜像或备份"
+    ),
+    "host-mem": "用 `free -h` 与 `docker stats --no-stream` 找出内存大户",
+    "host-cpu": "用 `top -o %CPU` 与 `docker stats --no-stream` 找出 CPU 大户(dockerd 忙循环是已知一类)",
+    "backup": (
+        "在宿主机上查 `/var/log/infra2-backup*.log` 的失败行,按 `ops.recovery.md` "
+        "SOP-006 重跑备份,再按 SOP-004 校验 manifest"
     ),
 }
 DEFAULT_ACTION = "按现象排查;SigNoz 规则可在 SigNoz 打开,看告警时段的指标与日志"
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+# What a log tail or a piece of evidence must not carry to Feishu (#905): credentials
+# in a DSN, bearer tokens, a custom-bot hook, and the value given to anything named
+# secret/token/password/api key. The names stay: `VAULT_SECRET_ID are required` is
+# the evidence a breakdown card exists to show.
+_CREDENTIAL_REDACTIONS = (
+    (re.compile(r"([a-z][a-z0-9+.-]*://)[^/\s:@]+:[^@\s/]+@", re.I), r"\1***:***@"),
+    (re.compile(r"\bbearer\s+[A-Za-z0-9._~+/=-]+", re.I), "Bearer ***"),
+    (
+        re.compile(
+            r"https://open\.(?:feishu\.cn|larksuite\.com)/open-apis/bot/v2/hook/[^\s]+"
+        ),
+        "https://open.feishu.cn/open-apis/bot/v2/hook/***",
+    ),
+)
+_SECRET_VALUE = re.compile(
+    r"(?i)\b([\w.-]*(?:secret|token|password|passwd|api[_-]?key)[\w.-]*)"
+    r"(\s*[=:]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"
+)
+logger = logging.getLogger("alert-bridge")
 # Environments with nobody on call: staging and the preview slots. An allowlist on
 # purpose — "prod", a typo or an unset value is not on it, so it pages (#903 review).
 REPORT_ONLY_ENVIRONMENTS = frozenset({"staging", "preview"})
@@ -289,6 +339,19 @@ def since_text(start: float | None, *, now: float, end: float | None = None) -> 
     return f"{format_time(start)}(已持续 {format_duration(now - start)})"
 
 
+def redact_credentials(value: str) -> str:
+    """``value`` without credentials in a DSN, bearer tokens or a custom-bot hook."""
+    for pattern, replacement in _CREDENTIAL_REDACTIONS:
+        value = pattern.sub(replacement, value)
+    return value
+
+
+def redact_secrets(value: str) -> str:
+    """``redact_credentials`` plus the value given to a secret/token/password/api-key
+    name (#905: what a log tail or a piece of evidence carries to Feishu)."""
+    return _SECRET_VALUE.sub(r"\1\2***", redact_credentials(value))
+
+
 @dataclass(frozen=True)
 class PagerItem:
     """One failing (or recovered) object, in the field order of ``PAGER_FIELDS``."""
@@ -324,11 +387,12 @@ class PagerItem:
         parts = (
             self.level,
             self.environment,
-            self.target,
+            _one_line(self.target),
             _clip(_one_line(self.symptom), MAX_SUMMARY_CHARS),
             self.since,
         )
-        return " · ".join(part for part in parts if part)
+        line = " · ".join(_one_line(_clean(part)) for part in parts if part)
+        return _clip(line, MAX_SUMMARY_LINE_CHARS)
 
 
 @dataclass(frozen=True)
@@ -343,34 +407,49 @@ class PagerMessage:
     report: bool = False
 
 
+def _shrink_plans() -> Iterable[tuple[int, int, int]]:
+    """(firing in full, recovered in full, summary lines per section), largest first.
+
+    Fewer items are shown in full first; then the recovered items become summary
+    lines; then the summary lines are cut from the end. The ✅ 已恢复 section is never
+    what goes first. The Worker walks the same plans (worker.js ``SHRINK_PLANS``).
+    """
+    for full in range(MAX_FULL_ITEMS, 0, -1):
+        yield full, full, MAX_SUMMARY_ITEMS
+    for summaries in (MAX_SUMMARY_ITEMS, 10, 5, 3, 1, 0):
+        yield 1, 0, summaries
+
+
 def render_pager_text(message: PagerMessage) -> str:
     """Plain-text rendering (the Worker and the GitHub watchdog send text).
 
-    The first ``MAX_FULL_ITEMS`` items are shown field by field, the rest one line
-    each; fewer items are shown in full until the text fits ``MAX_MESSAGE_CHARS``.
+    Shrinks along ``_shrink_plans`` until the text fits ``MAX_MESSAGE_CHARS``.
     """
     text = ""
-    for full in range(MAX_FULL_ITEMS, 0, -1):
-        text = _pager_text(message, full)
+    for plan in _shrink_plans():
+        text = _pager_text(message, *plan)
         if len(text) <= MAX_MESSAGE_CHARS:
             return text
     return _truncate_message(text)
 
 
-def _pager_text(message: PagerMessage, full: int) -> str:
+def _pager_text(
+    message: PagerMessage, full_firing: int, full_resolved: int, summaries: int
+) -> str:
     lines = [message.title, *message.preamble]
     if message.report:
-        lines += _summary_lines([*message.firing, *message.resolved])
+        lines += _summary_lines([*message.firing, *message.resolved], summaries)
         return "\n".join(lines)
-    lines += _text_blocks(message.firing, full)
+    lines += _text_blocks(message.firing, full_firing, summaries)
     if message.resolved:
         if message.firing:
             lines += ["", f"✅ 已恢复 {len(message.resolved)} 项"]
-        lines += _text_blocks(message.resolved, full)
+        full = full_resolved if message.firing else full_firing
+        lines += _text_blocks(message.resolved, full, summaries)
     return "\n".join(lines)
 
 
-def _text_blocks(items: tuple[PagerItem, ...], full: int) -> list[str]:
+def _text_blocks(items: tuple[PagerItem, ...], full: int, summaries: int) -> list[str]:
     lines: list[str] = []
     for index, item in enumerate(items[:full], start=1):
         lines += ["", _item_heading(index, len(items), item)]
@@ -382,13 +461,17 @@ def _text_blocks(items: tuple[PagerItem, ...], full: int) -> list[str]:
                 lines.append(f"{label}{FIELD_SEPARATOR}{_field_text(value)}")
     rest = list(items[full:])
     if rest:
-        lines += ["", f"另有 {len(rest)} 项,只列摘要:"]
-        lines += _summary_lines(rest)
+        if full:
+            lines += ["", f"另有 {len(rest)} 项,只列摘要:"]
+        lines += _summary_lines(rest, summaries)
     return lines
 
 
-def _summary_lines(items: list[PagerItem]) -> list[str]:
-    lines = [f"• {item.summary_line()}" for item in items[:MAX_SUMMARY_ITEMS]]
+def _summary_lines(items: list[PagerItem], limit: int = MAX_SUMMARY_ITEMS) -> list[str]:
+    """One line per item, the first ``limit`` of them; the rest are counted."""
+    lines = [
+        f"• {item.summary_line()}" for item in items[: min(limit, MAX_SUMMARY_ITEMS)]
+    ]
     hidden = len(items) - len(lines)
     if hidden > 0:
         lines.append(f"…及另外 {hidden} 项")
@@ -407,7 +490,7 @@ def _field_text(value: str) -> str:
 def _log_lines(value: str) -> list[str]:
     lines = [
         _clip(line.strip(), MAX_FIELD_CHARS)
-        for line in _clean(value).splitlines()
+        for line in redact_secrets(_clean(value)).splitlines()
         if line.strip()
     ][-MAX_LOG_LINES:]
     kept: list[str] = []
@@ -420,61 +503,79 @@ def _log_lines(value: str) -> list[str]:
     return kept
 
 
+def feishu_request_body(payload: dict[str, Any]) -> bytes:
+    """The exact bytes of every Feishu request: UTF-8 JSON (#905).
+
+    ASCII-escaping made one Chinese character cost 6 bytes; a webhook takes 20 KB.
+    """
+    return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+
+#: a chat id as long as Feishu's (``oc_`` + 32 hex), for measuring an app-mode body
+_CHAT_ID_PLACEHOLDER = "oc_" + "0" * 32
+
+
+def card_body_bytes(card: dict[str, Any], delivery_mode: str) -> int:
+    """The size of the request body ``delivery_mode`` posts for ``card``."""
+    if delivery_mode == "feishu_app":
+        body = build_feishu_app_card_payload(_CHAT_ID_PLACEHOLDER, card)
+    else:
+        body = build_feishu_card_payload(card)
+    return len(feishu_request_body(body))
+
+
+def card_budget(delivery_mode: str) -> int:
+    """Bytes a card may take in ``delivery_mode``; an unknown mode gets the smaller."""
+    limit = FEISHU_BODY_LIMITS.get(delivery_mode, min(FEISHU_BODY_LIMITS.values()))
+    return limit - _BODY_MARGIN
+
+
 def render_pager_card(
-    message: PagerMessage, *, template: str, external_url: str = ""
-) -> dict[str, Any]:
+    message: PagerMessage,
+    *,
+    template: str,
+    external_url: str = "",
+    delivery_mode: str = "feishu_webhook",
+) -> dict[str, Any] | None:
     """Feishu interactive card: every field of every item is its own card field.
 
-    Shrinks (fewer items in full, then fewer summary lines) until the request body
-    Feishu receives fits ``MAX_CARD_BYTES``.
+    Walks ``_shrink_plans`` until the body ``delivery_mode`` posts fits its budget;
+    None when even the smallest plan does not (the caller sends the minimal card).
     """
-    card: dict[str, Any] = {}
-    for full, summaries in (
-        *((full, MAX_SUMMARY_ITEMS) for full in range(MAX_FULL_ITEMS, 0, -1)),
-        (1, 10),
-        (1, 5),
-        (1, 0),
-    ):
-        card = _pager_card(message, template, external_url, full, summaries)
-        if card_body_bytes(card) <= MAX_CARD_BYTES:
+    for plan in _shrink_plans():
+        card = _pager_card(message, template, external_url, *plan)
+        if card_body_bytes(card, delivery_mode) <= card_budget(delivery_mode):
             return card
-    return card
-
-
-def card_body_bytes(card: dict[str, Any]) -> int:
-    """The larger request body Feishu receives for ``card`` (webhook or app mode)."""
-    webhook = json.dumps(build_feishu_card_payload(card)).encode("utf-8")
-    app = json.dumps(build_feishu_app_card_payload("oc_" + "0" * 32, card))
-    return max(len(webhook), len(app.encode("utf-8")))
+    return None
 
 
 def _pager_card(
     message: PagerMessage,
     template: str,
     external_url: str,
-    full: int,
+    full_firing: int,
+    full_resolved: int,
     summaries: int,
 ) -> dict[str, Any]:
     elements: list[dict[str, Any]] = []
     if message.preamble:
-        elements.append(_md_div("\n".join(_md(line) for line in message.preamble)))
+        elements.append(_text_div("\n".join(message.preamble)))
     if message.report:
-        items = [*message.firing, *message.resolved]
-        lines = [f"• {_md(item.summary_line())}" for item in items[:summaries]]
-        if len(items) > len(lines):
-            lines.append(f"…及另外 {len(items) - len(lines)} 项")
+        lines = _summary_lines([*message.firing, *message.resolved], summaries)
         if lines:
-            elements.append(_md_div("\n".join(lines)))
+            elements.append(_text_div("\n".join(lines)))
     else:
-        elements += _card_blocks(message.firing, full, summaries)
+        elements += _card_blocks(message.firing, full_firing, summaries)
         if message.resolved:
+            full = full_resolved if message.firing else full_firing
             if message.firing:
                 elements += [
                     {"tag": "hr"},
                     _md_div(f"**✅ 已恢复 {len(message.resolved)} 项**"),
                 ]
             elements += _card_blocks(message.resolved, full, summaries)
-    if external_url.startswith(("https://", "http://")):
+    url = _safe_url(external_url)
+    if url:
         elements.append(
             {
                 "tag": "action",
@@ -482,7 +583,7 @@ def _pager_card(
                     {
                         "tag": "button",
                         "text": {"tag": "plain_text", "content": "打开 SigNoz"},
-                        "url": external_url,
+                        "url": url,
                         "type": "primary",
                     }
                 ],
@@ -510,46 +611,59 @@ def _card_blocks(
             {
                 "tag": "div",
                 "fields": [
-                    {
-                        "is_short": False,
-                        "text": {
-                            "tag": "lark_md",
-                            "content": f"**{label}**{FIELD_SEPARATOR}"
-                            + _card_value(label, value),
-                        },
-                    }
+                    {"is_short": False, "text": _card_field(label, value)}
                     for label, value in item.fields()
                 ],
             }
         )
     rest = list(items[full:])
     if rest:
-        lines = [f"• {_md(item.summary_line())}" for item in rest[:summaries]]
-        if len(rest) > len(lines):
-            lines.append(f"…及另外 {len(rest) - len(lines)} 项")
-        elements += [
-            {"tag": "hr"},
-            _md_div("\n".join([f"**另有 {len(rest)} 项,只列摘要:**", *lines])),
-        ]
+        elements.append({"tag": "hr"})
+        if full:
+            elements.append(_md_div(f"**另有 {len(rest)} 项,只列摘要:**"))
+        elements.append(_text_div("\n".join(_summary_lines(rest, summaries))))
     return elements
 
 
-def _card_value(label: str, value: str) -> str:
+def _card_field(label: str, value: str) -> dict[str, str]:
+    """One card field. A value is plain text, never markup: whatever it holds (an
+    ``<at>`` tag, a markdown link) is shown, not interpreted. Only our own runbook
+    link is markup, and only after its URL passed ``_safe_url``."""
+    if label == "Runbook":
+        url = _safe_url(value)
+        if url:
+            name = re.sub(r"[\[\]()<>*`\\]", "", value.rsplit("/", 1)[-1])
+            return {
+                "tag": "lark_md",
+                "content": f"**{label}**{FIELD_SEPARATOR}[{name}]({url})",
+            }
     if label == "日志":
-        return "\n" + "\n".join(_md(line) for line in _log_lines(value))
-    if label == "Runbook" and value.startswith("https://"):
-        name = value.rsplit("/", 1)[-1]
-        return f"[{_md(name)}]({value})"
-    return _md(_field_text(value))
+        text = "\n".join(_log_lines(value))
+        return {"tag": "plain_text", "content": f"{label}{FIELD_SEPARATOR}\n{text}"}
+    return {
+        "tag": "plain_text",
+        "content": f"{label}{FIELD_SEPARATOR}{_field_text(value)}",
+    }
+
+
+def _safe_url(value: object) -> str:
+    """``value`` as a link target when it is a short http(s) URL with nothing that could
+    close the markup around it; "" otherwise."""
+    text = str(value or "").strip()
+    if len(text) > MAX_URL_CHARS or not text.startswith(("https://", "http://")):
+        return ""
+    if any(char.isspace() or char in '()[]<>"`\\' for char in text):
+        return ""
+    return text
 
 
 def _md_div(content: str) -> dict[str, Any]:
+    """Markup we write ourselves (a heading); never a value."""
     return {"tag": "div", "text": {"tag": "lark_md", "content": content}}
 
 
-def _md(value: str) -> str:
-    """Neutralise the lark_md markup a value could smuggle in (an <at> tag, a link)."""
-    return value.replace("<", "&lt;").replace(">", "&gt;")
+def _text_div(content: str) -> dict[str, Any]:
+    return {"tag": "div", "text": {"tag": "plain_text", "content": content}}
 
 
 def _clean(value: object) -> str:
@@ -561,10 +675,11 @@ def _clip(text: str, limit: int) -> str:
 
 
 def _epoch(value: object) -> float | None:
-    """Epoch seconds from an Alertmanager time (RFC 3339) or a number; None if unset.
+    """Epoch seconds from an Alertmanager time or a number; None when it is no time.
 
-    Alertmanager's ``endsAt`` of a firing alert is Go's zero time, and a time before
-    2001 is no time this estate recorded: both are unknown.
+    RFC 3339 strings and epoch numbers (a number above 1e12 is milliseconds) are
+    read. Go's zero time, anything before 2001 or after 2100 (a non-finite number
+    included) is unknown: a malformed time must never break a page.
     """
     if isinstance(value, bool) or value is None:
         return None
@@ -575,13 +690,21 @@ def _epoch(value: object) -> float | None:
         if not text:
             return None
         try:
-            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            epoch = float(text)
         except ValueError:
-            return None
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        epoch = parsed.timestamp()
-    return epoch if epoch >= 1e9 else None
+            try:
+                parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            try:
+                epoch = parsed.timestamp()
+            except (OverflowError, OSError, ValueError):
+                return None
+    if epoch > 1e12:
+        epoch /= 1000.0
+    return epoch if _EARLIEST_EPOCH <= epoch <= _LATEST_EPOCH else None
 
 
 def pager_message_from_payload(
@@ -591,19 +714,24 @@ def pager_message_from_payload(
 
     Per alert: ``labels`` (severity, environment, service_id, component,
     failure_domain, probe_kind), ``annotations`` (``symptom``, or a probe's
-    ``target``/``expected``/``observed``, else ``description``/``summary``; optional
-    ``container``/``compose``, ``impact``, ``next_step``, ``runbook_url``, ``log_tail``)
-    and ``startsAt``/``endsAt``. A resolved alert names what recovered and how long
-    it was down.
+    ``target``/``expected``/``observed``, else ``summary`` with ``description``;
+    optional ``container``/``compose``, ``impact``, ``next_step``, ``runbook_url``,
+    ``log_tail``) and ``startsAt``/``endsAt``. A resolved alert names what recovered
+    and how long it was down.
     """
     now = time.time() if now is None else now
     status = str(payload.get("status") or "unknown").lower()
     common_labels = _dict(payload.get("commonLabels"))
     common_annotations = _dict(payload.get("commonAnnotations"))
-    alert_name = str(
-        common_labels.get("alertname")
-        or _dict(payload.get("groupLabels")).get("alertname")
-        or "SigNoz alert"
+    alert_name = _clip(
+        _one_line(
+            _clean(
+                common_labels.get("alertname")
+                or _dict(payload.get("groupLabels")).get("alertname")
+                or "SigNoz alert"
+            )
+        ),
+        MAX_TITLE_NAME_CHARS,
     )
     raw_alerts = payload.get("alerts")
     alerts = [
@@ -631,7 +759,11 @@ def pager_message_from_payload(
     firing.sort(key=lambda item: _LEVEL_RANK[pager_level(item.level)])
     environments = sorted({item.environment for item in [*firing, *resolved]} - {""})
     where = (
-        environments[0] if len(environments) == 1 else "多环境" if environments else ""
+        _clip(environments[0], 40)
+        if len(environments) == 1
+        else "多环境"
+        if environments
+        else ""
     )
     count = len(firing) or len(resolved)
     report = is_report_payload(payload)
@@ -682,7 +814,7 @@ def _payload_item(
     domain = str(labels.get("failure_domain") or "")
     impact = str(
         annotations.get("impact")
-        or _IMPACT_BY_ALERT.get(name)
+        or _IMPACT_BY_ALERT_OVERRIDE.get(name)
         or _IMPACT_BY_DOMAIN.get(domain)
         or DEFAULT_IMPACT
     )
@@ -691,11 +823,11 @@ def _payload_item(
         impact=f"[{domain}] {impact}" if domain else impact,
         action=str(
             annotations.get("next_step")
-            or _ACTION_BY_ALERT.get(name)
+            or _ACTION_BY_ALERT_OVERRIDE.get(name)
             or _ACTION_BY_DOMAIN.get(domain)
             or DEFAULT_ACTION
         ),
-        runbook=_runbook_url(name, domain, labels, annotations),
+        runbook=_runbook_url(name, domain, annotations),
         log=str(annotations.get("log_tail") or ""),
     )
 
@@ -720,7 +852,12 @@ def _symptom_text(
     annotations: dict[str, Any],
     common_annotations: dict[str, Any],
 ) -> str:
-    """现象: expected vs observed for a probe, else what the source says went wrong."""
+    """现象: what the source says went wrong, with the evidence behind it.
+
+    A source-written ``symptom`` is shown as it is. A probe shows its target, what
+    was expected and what was observed. Anything else shows its ``summary`` with its
+    ``description``. Evidence is redacted (``redact_secrets``).
+    """
     if annotations.get("symptom"):
         return str(annotations["symptom"])
     description = str(annotations.get("description") or "")
@@ -745,55 +882,162 @@ def _symptom_text(
         # the runner's own "expected X, observed Y" / "probe passed" add nothing
         if description and not description.startswith(("expected ", "probe passed")):
             body = f"{body}; {description}" if body else description
-        return f"{head} → {body}" if head and body else head or body
-    return str(
-        description
-        or annotations.get("summary")
+        return redact_secrets(f"{head} → {body}" if head and body else head or body)
+    summary = str(
+        annotations.get("summary")
         or common_annotations.get("summary")
         or common_annotations.get("info")
         or ""
     )
+    if summary and description and description not in summary:
+        return redact_secrets(f"{summary} — {description}")
+    return redact_secrets(summary or description)
 
 
-def _runbook_url(
-    name: str, domain: str, labels: dict[str, Any], annotations: dict[str, Any]
-) -> str:
-    if annotations.get("runbook_url"):
-        return str(annotations["runbook_url"])
-    if labels.get("probe_kind") == "resource" and str(
-        annotations.get("target") or ""
-    ).startswith("disk:"):
-        return _DISK_RUNBOOK
+def _runbook_url(name: str, domain: str, annotations: dict[str, Any]) -> str:
     return (
-        _RUNBOOK_BY_ALERT.get(name)
+        _safe_url(annotations.get("runbook_url"))
+        and str(annotations["runbook_url"]).strip()
+        or _RUNBOOK_BY_ALERT_OVERRIDE.get(name)
         or _RUNBOOK_BY_DOMAIN.get(domain)
-        or (RUNBOOK_SECTION)
+        or _RUNBOOK_BY_ALERT.get(name)
+        or RUNBOOK_SECTION
     )
 
 
 def build_feishu_alert_card(
-    payload: dict[str, Any], *, now: float | None = None
+    payload: dict[str, Any],
+    *,
+    now: float | None = None,
+    delivery_mode: str = "feishu_webhook",
 ) -> dict[str, Any]:
     """Render a SigNoz/Alertmanager payload as a Feishu interactive card (#905).
 
     A page: header coloured by level (P0 red, P1 orange, P2 yellow; green once
     resolved), one block of card fields per alert in ``PAGER_FIELDS`` order, the
-    first ``MAX_FULL_ITEMS`` in full and the rest one line each. A report
-    (``delivery=report``): blue, titled ``[报告]``, one line per item.
+    first ``MAX_FULL_ITEMS`` in full and the rest one line each, within the body
+    budget of ``delivery_mode``. A report (``delivery=report``): blue, titled
+    ``[报告]``, one line per item.
+
+    Never raises and never drops the page: a payload the renderer cannot handle, or a
+    card that cannot fit, is sent as ``minimal_alert_card`` and the reason is logged.
     """
-    message = pager_message_from_payload(payload, now=now)
-    if message.report:
-        template = "blue"
-    elif message.firing:
-        template = _LEVEL_TEMPLATE[highest_level(item.level for item in message.firing)]
-    else:
-        template = "green"
-    external_url = payload.get("externalURL")
-    return render_pager_card(
-        message,
-        template=template,
-        external_url=external_url if isinstance(external_url, str) else "",
-    )
+    try:
+        message = pager_message_from_payload(payload, now=now)
+        if message.report:
+            template = "blue"
+        elif message.firing:
+            template = _LEVEL_TEMPLATE[
+                highest_level(item.level for item in message.firing)
+            ]
+        else:
+            template = "green"
+        external_url = payload.get("externalURL")
+        card = render_pager_card(
+            message,
+            template=template,
+            external_url=external_url if isinstance(external_url, str) else "",
+            delivery_mode=delivery_mode,
+        )
+    except Exception as exc:  # noqa: BLE001 - a page must survive its own rendering
+        logger.exception("alert card render failed; sending the minimal card")
+        return minimal_alert_card(
+            payload,
+            reason=f"渲染失败 {type(exc).__name__}",
+            delivery_mode=delivery_mode,
+        )
+    if card is None:
+        logger.warning(
+            "alert card over the %s body budget; sending the minimal card",
+            delivery_mode,
+        )
+        return minimal_alert_card(
+            payload, reason="完整卡片超出大小上限", delivery_mode=delivery_mode
+        )
+    return card
+
+
+def minimal_alert_card(
+    payload: object, *, reason: str, delivery_mode: str = "feishu_webhook"
+) -> dict[str, Any]:
+    """The last-resort card: per alert its level, environment, object and raw summary,
+    as plain text, inside the body budget of ``delivery_mode``. It reads the payload
+    defensively and falls back to a fixed card rather than raise."""
+    try:
+        data = payload if isinstance(payload, dict) else {}
+        common = _dict(data.get("commonLabels"))
+        common_annotations = _dict(data.get("commonAnnotations"))
+        name = _clip(
+            _one_line(_clean(common.get("alertname") or "告警")), MAX_TITLE_NAME_CHARS
+        )
+        raw_alerts = data.get("alerts")
+        alerts = (
+            [a for a in raw_alerts if isinstance(a, dict)]
+            if isinstance(raw_alerts, list)
+            else []
+        )
+        lines = []
+        for alert in alerts or [{}]:
+            labels = _dict(alert.get("labels"))
+            annotations = _dict(alert.get("annotations"))
+            what = labels.get("component") or labels.get("instance") or ""
+            parts = (
+                pager_level(labels.get("severity") or common.get("severity")),
+                str(labels.get("environment") or common.get("environment") or ""),
+                " · ".join(str(p) for p in (labels.get("service_id"), what) if p)
+                or name,
+                str(
+                    annotations.get("summary")
+                    or annotations.get("description")
+                    or common_annotations.get("summary")
+                    or ""
+                ),
+            )
+            line = " · ".join(_one_line(_clean(part)) for part in parts if part)
+            lines.append("• " + _clip(redact_secrets(line), MAX_SUMMARY_LINE_CHARS))
+        level = highest_level(
+            _dict(alert.get("labels")).get("severity") or common.get("severity")
+            for alert in (alerts or [{}])
+        )
+        resolved = str(data.get("status") or "").lower() == "resolved"
+        title = (
+            f"✅ [已恢复] {name}" if resolved else firing_title(level, name)
+        ) + " · 简化卡片"
+        if is_report_payload(data):
+            title = f"{REPORT_TITLE_PREFIX}{name} · 简化卡片"
+        shown = lines[:MAX_SUMMARY_ITEMS]
+        while True:
+            body = list(shown)
+            if len(lines) > len(shown):
+                body.append(f"…及另外 {len(lines) - len(shown)} 项")
+            card = {
+                "config": {"wide_screen_mode": True},
+                "header": {
+                    "template": "green" if resolved else "red",
+                    "title": {"tag": "plain_text", "content": title},
+                },
+                "elements": [
+                    _text_div("\n".join(body) or "(无告警明细)"),
+                    _text_div(f"完整卡片未能生成:{reason};详情见 bridge 日志"),
+                ],
+            }
+            if not shown or card_body_bytes(card, delivery_mode) <= card_budget(
+                delivery_mode
+            ):
+                return card
+            shown = shown[:-1]
+    except Exception:  # noqa: BLE001 - the last resort must not raise
+        logger.exception("minimal alert card failed; sending the fixed card")
+        return {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "template": "red",
+                "title": {"tag": "plain_text", "content": "🚨 告警(卡片生成失败)"},
+            },
+            "elements": [
+                _text_div(f"完整卡片与简化卡片都未能生成:{reason};详情见 bridge 日志")
+            ],
+        }
 
 
 def format_signoz_alert(payload: dict[str, Any], *, now: float | None = None) -> str:
@@ -1116,11 +1360,10 @@ def _deliver_feishu_webhook(
     webhook_url: str, payload: dict[str, Any], *, timeout: float
 ) -> dict[str, Any]:
     safe_url = validate_feishu_webhook_url(webhook_url)
-    body = json.dumps(payload).encode("utf-8")
     request = Request(
         safe_url,
-        data=body,
-        headers={"Content-Type": "application/json"},
+        data=feishu_request_body(payload),
+        headers={"Content-Type": JSON_UTF8},
         method="POST",
     )
     try:
@@ -1316,11 +1559,11 @@ def _post_json(
     headers: dict[str, str] | None = None,
     timeout: float,
 ) -> dict[str, Any]:
-    request_headers = {"Content-Type": "application/json"}
+    request_headers = {"Content-Type": JSON_UTF8}
     request_headers.update(headers or {})
     request = Request(
         url,
-        data=json.dumps(payload).encode("utf-8"),
+        data=feishu_request_body(payload),
         headers=request_headers,
         method="POST",
     )

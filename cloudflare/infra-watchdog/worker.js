@@ -80,6 +80,19 @@ const LEVEL_EMOJI = { P0: "🔴", P1: "🟠", P2: "🟡" };
 const MAX_MESSAGE_CHARS = 3500;
 const TRUNCATION_SUFFIX = "\n...[truncated]";
 const MAX_FULL_EVENTS = 5;
+const MAX_SUMMARY_ITEMS = 20;
+const MAX_FIELD_CHARS = 300;
+const MAX_SUMMARY_CHARS = 160;
+const MAX_SUMMARY_LINE_CHARS = 240;
+// libs/alerting.py _shrink_plans: [firing in full, recovered in full, summary lines].
+// Fewer in full first, then the recovered become summary lines, then summary lines are
+// cut from the end: the ✅ 已恢复 section is never what goes first.
+const SHRINK_PLANS = [
+  ...Array.from({ length: MAX_FULL_EVENTS }, (_, i) => [MAX_FULL_EVENTS - i, MAX_FULL_EVENTS - i, MAX_SUMMARY_ITEMS]),
+  ...[MAX_SUMMARY_ITEMS, 10, 5, 3, 1, 0].map((summaries) => [1, 0, summaries]),
+];
+const PREAMBLE = "来源：Cloudflare Workers Cron → 飞书直发(不经 bridge)";
+const QUOTE_MAX = 160;
 const DISPLAY_OFFSET_MS = 8 * 60 * 60 * 1000;
 const REPO_BLOB = "https://github.com/wangzitian0/infra2/blob/main";
 
@@ -233,7 +246,7 @@ function loadConfig(env) {
     targets = filterByEnvironment(parseJsonList(env.WATCHDOG_TARGETS_JSON, DEFAULT_TARGETS), environments);
     heartbeats = filterByEnvironment(parseJsonList(env.WATCHDOG_HEARTBEATS_JSON, DEFAULT_HEARTBEATS), environments);
   } catch (error) {
-    problems.push(`配置预检失败:${errorText(error)}`);
+    problems.push(`配置预检失败:${quote(errorText(error))}`);
   }
   if (problems.length === 0) {
     if (targets.length === 0) problems.push("生效的入口目标列表为空");
@@ -316,10 +329,10 @@ async function checkEntrypoint(target, timeoutMs) {
     }
     return {
       ok: false,
-      detail: `HTTP ${response.status};期望 ${statuses.join(",")};body=${await safeBody(response)}`,
+      detail: `HTTP ${response.status};期望 ${statuses.join(",")};body=${quote(await safeBody(response))}`,
     };
   } catch (error) {
-    return { ok: false, detail: `请求失败:${errorText(error)}` };
+    return { ok: false, detail: `请求失败:${quote(errorText(error))}` };
   } finally {
     clearTimeout(timeout);
   }
@@ -410,6 +423,7 @@ function heartbeatObservations(state, heartbeat, verdict, outage) {
     recovery: `心跳恢复新鲜(${verdict.ageSeconds}s 前)`,
   };
   const loopDetail = fresh ? trimText(verdict.record.detail) : "";
+  const quotedDetail = loopDetail ? quote(loopDetail) : "";
   const unhealthy = {
     ...common,
     identity: `${key}:heartbeat-unhealthy`,
@@ -417,8 +431,8 @@ function heartbeatObservations(state, heartbeat, verdict, outage) {
     severity: "P1",
     status: loopStatus(state, key, `${key}:heartbeat-unhealthy`, verdict),
     summary: "探测循环报告不健康",
-    detail: loopDetail || "无详情",
-    recovery: `探测循环恢复健康(${loopDetail || "ok"})`,
+    detail: quotedDetail || "无详情",
+    recovery: `探测循环恢复健康(${quotedDetail || "ok"})`,
   };
   return [stale, unhealthy];
 }
@@ -526,17 +540,17 @@ function planAlerts(currentAlerts, observations, nowMs, renotifyMs, { resolveUno
 }
 
 // One message per run: the firing (and re-sent) events in full, then what recovered.
-// Fewer events are shown in full until the text fits MAX_MESSAGE_CHARS.
+// Shrinks along SHRINK_PLANS until the text fits MAX_MESSAGE_CHARS.
 function formatAlertMessage(events, nowMs) {
   let text = "";
-  for (let full = MAX_FULL_EVENTS; full >= 1; full -= 1) {
-    text = pagerText(events, nowMs, full);
+  for (const plan of SHRINK_PLANS) {
+    text = pagerText(events, nowMs, plan);
     if (text.length <= MAX_MESSAGE_CHARS) return text;
   }
   return `${text.slice(0, MAX_MESSAGE_CHARS - TRUNCATION_SUFFIX.length).trimEnd()}${TRUNCATION_SUFFIX}`;
 }
 
-function pagerText(events, nowMs, full) {
+function pagerText(events, nowMs, [fullFiring, fullResolved, summaries]) {
   // The most severe first, so the events shown in full are the ones that matter most.
   const firing = events
     .filter((e) => e.kind !== "resolved")
@@ -551,33 +565,40 @@ function pagerText(events, nowMs, full) {
   } else {
     lines.push(`✅ [已恢复] Cloudflare 带外 watchdog · ${resolved.length} 项`);
   }
-  lines.push("来源：Cloudflare Workers Cron → 飞书直发(不经 bridge)");
-  lines.push(...eventBlocks(firing, full, (event) => firingValues(event, nowMs)));
+  lines.push(PREAMBLE);
+  lines.push(...eventBlocks(firing, fullFiring, summaries, (event) => firingValues(event, nowMs)));
   if (resolved.length) {
     if (firing.length) lines.push("", `✅ 已恢复 ${resolved.length} 项`);
-    lines.push(...eventBlocks(resolved, full, (event) => resolvedValues(event, nowMs)));
+    const full = firing.length ? fullResolved : fullFiring;
+    lines.push(...eventBlocks(resolved, full, summaries, (event) => resolvedValues(event, nowMs)));
   }
   return lines.join("\n");
 }
 
-// Each event is one block: its values under PAGER_FIELDS, in that order.
-function eventBlocks(events, full, valuesOf) {
+// Each event is one block: its values under PAGER_FIELDS, in that order, each cut to
+// MAX_FIELD_CHARS; the rest one line each, at most `summaries` of them, the others counted.
+function eventBlocks(events, full, summaries, valuesOf) {
   const lines = [];
   events.slice(0, full).forEach((event, index) => {
     const note = event.kind === "renotify" ? " · 仍在告警" : "";
     lines.push("", `— ${index + 1}/${events.length}${note} —`);
     valuesOf(event).forEach((value, field) => {
-      if (value) lines.push(`${PAGER_FIELDS[field]}${FIELD_SEPARATOR}${oneLine(value)}`);
+      if (value) lines.push(`${PAGER_FIELDS[field]}${FIELD_SEPARATOR}${trimText(value, MAX_FIELD_CHARS)}`);
     });
   });
   const rest = events.slice(full);
   if (rest.length) {
-    lines.push("", `另有 ${rest.length} 项,只列摘要:`);
-    for (const event of rest) {
+    if (full) lines.push("", `另有 ${rest.length} 项,只列摘要:`);
+    const shown = rest.slice(0, Math.min(summaries, MAX_SUMMARY_ITEMS));
+    for (const event of shown) {
       // 级别 · 环境 · 对象 · 现象 · 开始于
-      const values = valuesOf(event).slice(0, 5).filter(Boolean);
-      lines.push(`• ${values.map((value) => trimText(value, 160)).join(" · ")}`);
+      const values = valuesOf(event)
+        .slice(0, 5)
+        .map((value, field) => (field === 3 ? trimText(value, MAX_SUMMARY_CHARS) : oneLine(value)))
+        .filter(Boolean);
+      lines.push(`• ${trimText(values.join(" · "), MAX_SUMMARY_LINE_CHARS)}`);
     }
+    if (rest.length > shown.length) lines.push(`…及另外 ${rest.length - shown.length} 项`);
   }
   return lines;
 }
@@ -1249,6 +1270,14 @@ function safeId(value) {
 
 function errorText(error) {
   return oneLine(error && error.message ? error.message : String(error));
+}
+
+// Evidence (a runner's detail, an HTTP body, an error) is quoted as captured, so it
+// reads as a quotation inside the Chinese text. It is cut before it is quoted, so a
+// field's own clip never cuts a quotation open; a backtick inside it becomes a quote.
+function quote(value, max = QUOTE_MAX) {
+  const text = trimText(String(value || "").replace(/`/g, "'"), max);
+  return text ? `\`${text}\`` : "";
 }
 
 function oneLine(value) {

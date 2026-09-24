@@ -95,7 +95,8 @@ class AlertBridgeHandler(BaseHTTPRequestHandler):
 
         report = is_report_payload(payload)
         try:
-            card = build_feishu_alert_card(payload)
+            # Never raises: a payload it cannot render goes out as the minimal card.
+            card = build_feishu_alert_card(payload, delivery_mode=_delivery_mode())
             response = _deliver(card, report=report)
         except AlertingError as exc:
             self._json(502, {"status": "delivery_failed", "error": str(exc)})
