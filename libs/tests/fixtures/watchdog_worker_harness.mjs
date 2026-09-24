@@ -403,7 +403,7 @@ for (const [label, fields, age] of [
 
 // Feishu down, email configured: the page escalates to email and the run is ok.
 {
-  const world = new World({ overrides: { ALERT_EMAIL_TO: "oncall@example.invalid", RESEND_API_KEY: "re_test" } });
+  const world = new World({ overrides: { ALERT_EMAIL_TO: "oncall-test-inbox", RESEND_API_KEY: "re_test" } });
   world.routes[url("dokploy-public-route")] = 502;
   world.feishuFails = true;
   freshHeartbeats(world, START);
@@ -411,7 +411,7 @@ for (const [label, fields, age] of [
   freshHeartbeats(world, START + CRON_MS);
   const run = await world.cron(START + CRON_MS);
   // The dearest path: the token succeeds, the send fails, email carries the page.
-  const dear = new World({ overrides: { ALERT_EMAIL_TO: "oncall@example.invalid", RESEND_API_KEY: "re_test" } });
+  const dear = new World({ overrides: { ALERT_EMAIL_TO: "oncall-test-inbox", RESEND_API_KEY: "re_test" } });
   dear.routes[url("dokploy-public-route")] = 502;
   dear.feishuSendFails = true;
   freshHeartbeats(dear, START);
