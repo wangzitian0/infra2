@@ -228,7 +228,7 @@ def main() -> int:
             # not iteration duration — a long all-timeouts probe cycle plus
             # watcher sweeps must not read as a hung loop.
             _touch_state(state_path)
-            _load_env_file(env_file)
+        _load_env_file(env_file)
         try:
             exit_code = run_once(
                 as_json=args.json,
@@ -1031,32 +1031,61 @@ def _maintenance_active(now: float | None = None) -> bool:
 #: Keys this process took from the env file. Only these are refreshed on a
 #: re-read; a non-empty value set by the compose environment still wins (#915).
 _ENV_FILE_KEYS: set[str] = set()
+#: Whether the last read found the file, so a missing file is logged on change only.
+_ENV_FILE_SEEN: list[bool | None] = [None]
+#: Keys last reported as no longer rendered, so the log fires on change only.
+_ENV_FILE_VANISHED: list[tuple[str, ...]] = [()]
 
 
 def _load_env_file(path: Path) -> bool:
-    """Load (or re-load) the Vault-rendered env file; False when it is missing.
+    """Load (or re-load) the Vault-rendered env file; False when it is unreadable.
 
     Called at startup and before every loop iteration (#915): vault-agent
-    re-renders the file when a secret changes, and a runner that read it once
-    at start could come up before the file existed and keep empty probe
-    credentials for its whole life. Re-reading also applies rotated values.
+    re-renders the file when a secret changes (its entrypoint also deletes it
+    on every restart), so a runner that read it once could come up before the
+    file existed and keep empty probe credentials for its whole life.
+
+    Never raises: the loop that calls it also carries the resident watchers.
+    A failed or partial read keeps the values already loaded -- an empty value
+    never replaces a good one, and a key missing from one render keeps its old
+    value (logged): a revoked credential still shows up as a failing probe,
+    while a torn read never wipes working ones.
     """
-    if not path.exists():
-        print(
-            f"infra probe env file {path} is missing; probes that need its "
-            "credentials will fail until it is rendered",
-            flush=True,
-        )
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        if _ENV_FILE_SEEN[0] is not False:
+            print(
+                f"infra probe env file {path} is unreadable ({type(exc).__name__}); "
+                "keeping the values already loaded",
+                flush=True,
+            )
+        _ENV_FILE_SEEN[0] = False
         return False
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
+    if _ENV_FILE_SEEN[0] is False:
+        print(f"infra probe env file {path} is readable again", flush=True)
+    _ENV_FILE_SEEN[0] = True
+    rendered: set[str] = set()
+    for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        key = key.strip()
+        key, value = key.strip(), value.strip().strip('"').strip("'")
+        rendered.add(key)
+        if not value:
+            continue
         if key in _ENV_FILE_KEYS or not os.environ.get(key):
-            os.environ[key] = value.strip().strip('"').strip("'")
+            os.environ[key] = value
             _ENV_FILE_KEYS.add(key)
+    vanished = tuple(sorted(_ENV_FILE_KEYS - rendered))
+    if vanished and vanished != _ENV_FILE_VANISHED[0]:
+        print(
+            f"infra probe env file {path} no longer renders {', '.join(vanished)}; "
+            "keeping the last values",
+            flush=True,
+        )
+    _ENV_FILE_VANISHED[0] = vanished
     return True
 
 
