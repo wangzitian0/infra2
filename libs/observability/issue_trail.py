@@ -18,7 +18,10 @@ Each step of the watchdog job appends its verdicts to one JSON-lines file
 (``tools/watchdog_issue_trail.py``). A step expected to record that did not is
 itself a red check named after that step: a watchdog that crashed is not a
 quiet one. Steps record only checks that page (#908): a report-only check's
-failure is a line in the daily report, not an issue.
+failure is a line in the daily report, not an issue. When every expected step
+recorded a complete set of verdicts, an open trail issue whose check none of
+them recorded is swept: its check is report-only now, or no longer exists, and
+nothing else would ever close it.
 
 Dedup is equality on the exact title over the repository's open-issue listing
 (the issues endpoint; the search index matches words and lags). A listing that
@@ -103,15 +106,22 @@ class Trail:
 
     failing: dict[str, CheckVerdict] = field(default_factory=dict)
     green: set[str] = field(default_factory=set)
+    #: Every expected step recorded, and each said it recorded all its paging
+    #: checks: a check recorded by none of them does not report here any more.
+    complete: bool = False
 
     def is_green(self, name: str) -> bool:
         return name not in self.failing and name in self.green
+
+    def is_retired(self, name: str) -> bool:
+        return self.complete and name not in self.failing and name not in self.green
 
     def renamed(self, rename) -> Trail:
         """The same verdicts under `rename(name)` (titles carry scrubbed names)."""
         return Trail(
             failing={rename(name): verdict for name, verdict in self.failing.items()},
             green={rename(name) for name in self.green},
+            complete=self.complete,
         )
 
 
@@ -156,17 +166,26 @@ def record_verdicts(
     *,
     source: str,
     checks: Iterable[CheckVerdict],
+    complete: bool = True,
 ) -> None:
-    """Append one step's verdicts to the job's verdict file."""
+    """Append one step's verdicts to the job's verdict file.
+
+    `complete=False` says the step could not tell which of its checks page, so
+    the trail must not read an absent check as a retired one.
+    """
     line = json.dumps(
-        {"source": source, "checks": [asdict(check) for check in checks]},
+        {
+            "source": source,
+            "checks": [asdict(check) for check in checks],
+            "complete": complete,
+        },
         sort_keys=True,
     )
     with Path(path).open("a", encoding="utf-8") as handle:
         handle.write(line + "\n")
 
 
-def _parse_record(line: str) -> tuple[str, list[CheckVerdict]] | None:
+def _parse_record(line: str) -> tuple[str, list[CheckVerdict], bool] | None:
     try:
         record = json.loads(line)
         source = record["source"]
@@ -180,11 +199,12 @@ def _parse_record(line: str) -> tuple[str, list[CheckVerdict]] | None:
             )
             for item in record["checks"]
         ]
+        complete = record.get("complete", True) is True
     except (ValueError, KeyError, TypeError, AttributeError):
         return None
     if not isinstance(source, str) or not source:
         return None
-    return source, checks
+    return source, checks, complete
 
 
 def load_trail(
@@ -193,6 +213,7 @@ def load_trail(
     """Merge the verdict file. A missing file or a torn line records nothing."""
     trail = Trail()
     seen: set[str] = set()
+    all_complete = True
     try:
         lines = Path(path).read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -201,8 +222,9 @@ def load_trail(
         parsed = _parse_record(line) if line.strip() else None
         if parsed is None:
             continue
-        source, checks = parsed
+        source, checks, complete = parsed
         seen.add(source)
+        all_complete = all_complete and complete
         trail.green.add(source)
         for check in checks:
             if check.ok:
@@ -222,6 +244,7 @@ def load_trail(
                 failure_domain="watchdog-step",
             )
     trail.green.difference_update(trail.failing)
+    trail.complete = all_complete and all(source in seen for source in expected_sources)
     return trail
 
 
@@ -393,6 +416,20 @@ def _green_body(name: str, *, run_url: str, context: str) -> str:
     )
 
 
+def _retired_body(name: str, *, run_url: str, context: str) -> str:
+    return "\n".join(
+        [
+            f"**`{name}` no longer reports to this trail** "
+            f"({run_url or 'latest run'}, {context}): every watchdog step recorded "
+            "its paging checks and none recorded this one.",
+            "",
+            "It is report-only now (#908: its failures go to the daily infra2 report, "
+            "not the pager) or no longer exists. Closed by the ops-checks watchdog "
+            "issue trail so it is not left open forever.",
+        ]
+    )
+
+
 def reconcile(
     api: IssueApi,
     trail: Trail,
@@ -450,9 +487,14 @@ def reconcile(
     if mode == FULL:
         for title in sorted(by_title):
             name = check_name(title)
-            if name is None or not trail.is_green(name):
+            if name is None:
                 continue
-            body = _green_body(name, run_url=run_url, context=context)
+            if trail.is_green(name):
+                body = _green_body(name, run_url=run_url, context=context)
+            elif trail.is_retired(name):
+                body = _retired_body(name, run_url=run_url, context=context)
+            else:
+                continue
             # Every exact match: a duplicate left open is the stale alert this closes.
             for number in by_title[title]:
                 try:

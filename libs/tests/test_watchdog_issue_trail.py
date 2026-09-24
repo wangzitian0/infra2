@@ -76,10 +76,11 @@ def _red(name, detail="broken"):
     return CheckVerdict(name, False, detail, "P1", "cloudflare-worker-health")
 
 
-def _trail(failing=(), green=()):
+def _trail(failing=(), green=(), *, complete=False):
     return Trail(
         failing={verdict.name: verdict for verdict in failing},
         green=set(green),
+        complete=complete,
     )
 
 
@@ -211,17 +212,78 @@ def test_off_writes_nothing() -> None:
     assert reconcile(api, _trail(), mode="bogus") == 1
 
 
-def test_an_issue_whose_check_recorded_no_verdict_is_left_alone() -> None:
-    """#908: report-only checks record nothing, so the trail never touches them.
-
-    Only a verdict recorded green closes an issue; an absent check is neither
-    green nor red (the dokploy-status family used to be greened by absence).
-    """
+def test_an_unrecorded_check_is_left_alone_while_the_trail_is_incomplete() -> None:
+    """Only a verdict recorded green closes an issue; an absent check is neither
+    green nor red unless every step vouched for a complete record."""
     report_only = "dokploy-status:finance-report/production/backend"
     api = FakeIssues([_issue(1, report_only), _issue(2, "cloudflare-worker-status")])
     reconcile(api, _trail(green=["cloudflare-worker-status"]), mode=FULL)
     assert api.closed == [2]
     assert [number for number, _body in api.comments] == [2]
+
+
+def test_a_complete_trail_retires_issues_of_checks_that_no_longer_report() -> None:
+    """#908 review: an issue a now report-only (or removed) check opened would
+    otherwise stay open forever -- nothing records it any more."""
+    api = FakeIssues(
+        [
+            _issue(1, "infra2-ssh"),  # report-only since #908
+            _issue(2, "cloudflare-worker-health"),  # removed in #908
+            _issue(3, "cloudflare-worker-status"),  # still red
+            _issue(4, "infra2-restore-rehearsal"),  # green again
+            {"number": 5, "title": "an unrelated issue"},
+        ]
+    )
+    trail = _trail(
+        [_red("cloudflare-worker-status")],
+        green=["infra2-restore-rehearsal"],
+        complete=True,
+    )
+
+    assert reconcile(api, trail, mode=FULL, run_url=RUN_URL) == 0
+
+    assert sorted(api.closed) == [1, 2, 4]
+    bodies = dict(api.comments)
+    assert "no longer reports to this trail" in bodies[1]
+    assert "report-only now" in bodies[1] and RUN_URL in bodies[1]
+    assert "no longer reports to this trail" in bodies[2]
+    assert "is green again" in bodies[4]
+    assert "is red" in bodies[3]
+    # a drill or branch dispatch never closes, retired or not
+    drill = FakeIssues([_issue(1, "infra2-ssh")])
+    reconcile(drill, trail, mode=OPEN_ONLY)
+    assert drill.closed == []
+
+
+def test_the_trail_is_complete_only_when_every_step_recorded_completely(
+    tmp_path: Path,
+) -> None:
+    def trail_of(*records):
+        path = tmp_path / f"v{len(list(tmp_path.iterdir()))}.jsonl"
+        for source, complete in records:
+            record_verdicts(
+                path,
+                source=source,
+                checks=[CheckVerdict(source, True)],
+                complete=complete,
+            )
+        return load_trail(path)
+
+    assert trail_of((WATCHDOG_SOURCE, True), (RUNNER_HEALTH_SOURCE, True)).complete
+    # the watchdog could not read the registry, so it cannot say what pages
+    assert not trail_of((WATCHDOG_SOURCE, False), (RUNNER_HEALTH_SOURCE, True)).complete
+    # a step that crashed recorded nothing: its checks are unknown, not retired
+    assert not trail_of((WATCHDOG_SOURCE, True)).complete
+    # a record written before the flag existed counts as complete
+    legacy = tmp_path / "legacy.jsonl"
+    legacy.write_text(
+        json.dumps({"source": WATCHDOG_SOURCE, "checks": []})
+        + "\n"
+        + json.dumps({"source": RUNNER_HEALTH_SOURCE, "checks": []})
+        + "\n",
+        encoding="utf-8",
+    )
+    assert load_trail(legacy).complete
 
 
 def test_the_full_lifecycle_red_then_red_then_green() -> None:

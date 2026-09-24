@@ -443,7 +443,7 @@ def test_the_routing_inputs_resolve_with_only_the_jobs_packages() -> None:
     """
     code = _JOB_ONLY_IMPORTS + (
         "import tools.out_of_band_watchdog as w\n"
-        "print(sorted(w.load_paging_checks()))\n"
+        "print(sorted(w.load_report_only_checks()))\n"
         "print(w.worker_status_max_age_seconds())\n"
     )
     env = {k: v for k, v in os.environ.items() if k != "PYTHONSAFEPATH"}
@@ -457,6 +457,6 @@ def test_the_routing_inputs_resolve_with_only_the_jobs_packages() -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    paging, bound = result.stdout.splitlines()
-    assert paging == str(sorted(watchdog.load_paging_checks()))
+    report_only, bound = result.stdout.splitlines()
+    assert report_only == str(sorted(watchdog.load_report_only_checks()))
     assert int(bound) == watchdog.worker_status_max_age_seconds() > 0

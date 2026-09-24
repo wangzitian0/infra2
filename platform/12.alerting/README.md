@@ -254,7 +254,7 @@ For `feishu_app` mode:
 - `INFRA2_OUT_OF_BAND_FEISHU_API_BASE`: optional, defaults to `https://open.feishu.cn`
 
 For the daily report of checks it does not page (the same app bot and reports chat
-as the other daily reports):
+as the other daily reports; passed to the "Run watchdog" step only):
 
 - `INFRA2_REPORTS_FEISHU_APP_ID`
 - `INFRA2_REPORTS_FEISHU_APP_SECRET`
@@ -266,7 +266,7 @@ report-only findings would otherwise reach no one.
 Optional repository variables:
 
 - `INFRA2_WATCHDOG_HTTP_TARGETS`: newline-separated `name|url|status_csv`
-  (replaces the defaults; a target not registered as a paging signal is report-only)
+  (replaces the defaults; a target the registry does not mark `type: report` pages)
 - `INFRA2_WATCHDOG_WORKER_STATUS_URL`: defaults to the deployed Worker
   `/status` endpoint.
 - `INFRA2_WATCHDOG_SSH_TARGETS`: newline-separated `name|command|expected_text`
@@ -280,7 +280,8 @@ When `.github/workflows/ops-checks.yml` cannot deliver to Feishu, it records
 
 Independently of delivery, the watchdog job's last step
 (`tools/watchdog_issue_trail.py`, truealpha#876) keeps one GitHub issue per red
-paging check (report-only checks never open one, #908), titled exactly
+paging check (report-only checks never open one, and an issue whose check no
+longer reports is closed once every step recorded completely, #908), titled exactly
 `ops-checks watchdog is red: <check>` (label `incident`):
 a red run opens it or comments on the open one, and the next green scheduled run
 (or a plain `workflow_dispatch` on `main`) comments and closes it. A step that
@@ -305,14 +306,16 @@ failure-domain distribution before delivering through the same Feishu mode. Use
 
 Cloudflare defaults cover production public routes, selected staging public
 routes, and production/staging probe-runner heartbeat freshness. The daily GitHub
-audit pages on: Cloudflare Worker `/status` freshness (last run within the Worker's
-own `WATCHDOG_STATUS_MAX_AGE_SECONDS`), the production off-host backup, the restore
-rehearsal, truealpha's scheduler-liveness workflow (peer liveness), and failures of
-its own configuration. It reports, without paging: the public Dokploy entrypoint,
-SSH reachability, Docker daemon reachability, container health, the
-`platform-alerting` in-container `/health` endpoint, the staging backup, Dokploy
-compose/application status (records older than 72 h, or contradicted by a green
-container sweep, are listed as stale), and the Worker's own last-run findings.
+audit pages on: Cloudflare Worker liveness via `/status` (last run within the
+Worker's own `WATCHDOG_STATUS_MAX_AGE_SECONDS` and delivered), the production
+off-host backup, the restore rehearsal, truealpha's scheduler-liveness workflow
+(peer liveness), failures of its own configuration, and any check the signal
+registry does not mark `type: report`. It reports, without paging: the public
+Dokploy entrypoint, SSH reachability, Docker daemon reachability, container
+health, the `platform-alerting` in-container `/health` endpoint, the staging
+backup, Dokploy compose/application status (an `error` is listed as stale only
+when that unit's own containers run healthy on the current `IAC_CONFIG_HASH`),
+and the findings the Worker already delivered.
 The closed-loop boundary is explicit: host/route/alert-delivery failures
 are machine-audited. SigNoz/OpenPanel now also have synthetic write-then-query
 round-trips, while app-specific post-deploy telemetry proof remains an

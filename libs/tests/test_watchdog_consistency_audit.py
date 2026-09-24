@@ -404,7 +404,7 @@ def test_the_github_layer_owes_no_relayering_debt() -> None:
 
     debtors = {owner[entry["signal_id"]] for entry in inventory["relayering_debt"]}
 
-    assert debtors == {"cloudflare"}
+    assert "github" not in debtors
 
 
 def test_layering_requires_self_signals_to_declare_their_layer() -> None:

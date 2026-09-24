@@ -1,10 +1,11 @@
 """Out-of-band infra2 watchdog: the daily GitHub audit (ops.observability.md §1.1).
 
-It pages only the failure classes the GitHub layer owns -- the Cloudflare Worker's
-liveness, backups and the restore rehearsal, the peer scheduler -- plus failures
-of its own configuration. The other checks (host, Docker, bridge, Dokploy
-status, staging backups) still run, and their failures go to one daily report
-because another layer pages them (#908).
+It pages the failure classes the GitHub layer owns -- the Cloudflare Worker's
+liveness (runs and delivers), backups and the restore rehearsal, the peer
+scheduler -- plus failures of its own configuration and any check the signal
+registry does not mark `type: report`. The report-only checks (host, Docker,
+bridge, Dokploy status, staging backups) still run, and their failures go to one
+daily report because another layer pages them (#908).
 """
 
 from __future__ import annotations
@@ -77,18 +78,31 @@ REPORT_CHECK = "watchdog-report-delivery"
 #: Failures of the watchdog itself. They page whichever check they surfaced on:
 #: a watchdog that cannot see is silent, and only the pager is sure to be read.
 WATCHDOG_SELF_DOMAINS = frozenset({"configuration", "report-delivery"})
+#: Checks that exist only to report the watchdog's own failure. The issue trail
+#: records them as the watchdog step's own verdict, which a clean run closes.
+WATCHDOG_SELF_CHECKS = frozenset({SIGNAL_REGISTRY_CHECK, REPORT_CHECK})
 PAGE, REPORT = "page", "report"
 
 #: truealpha#876: the peer that sees truealpha's scheduler-liveness workflow die.
 PEER_SCHEDULER_LIVENESS_CHECK = "truealpha-scheduler-liveness"
 DOKPLOY_STATUS_CHECK = "infra2-dokploy-status"
 DOKPLOY_STATUS_FAMILY = "dokploy-status:"
-#: #908: a Dokploy `error` whose latest deployment is older than this is a stale
-#: record, not a failure (two units stayed "red" for 17 and 15 days while their
-#: containers were healthy).
+#: #908: a Dokploy `error` whose latest deployment is older than this is labelled
+#: an old record in the report. Age alone never makes it stale: only per-unit
+#: runtime evidence does (the unit's own containers run healthy on the current
+#: config), because an old version can keep running healthy after a failed pull.
 DOKPLOY_RECORD_MAX_AGE_HOURS = 72
-#: A healthy host-wide container sweep contradicts a Dokploy `error` record.
-RUNTIME_EVIDENCE_CHECK = "infra2-docker-health"
+#: Every config-bound app container carries the IAC_CONFIG_HASH it was created
+#: with, and Dokploy's compose env holds the current one (ops.pipeline.md).
+CONFIG_HASH_KEY = "IAC_CONFIG_HASH"
+#: `docker inspect` line per container of one unit. Only IAC_CONFIG_HASH is taken
+#: from the environment; no other variable leaves the host.
+UNIT_RUNTIME_FORMAT = (
+    "{{.Name}}|{{.State.Status}}|{{.State.ExitCode}}|"
+    "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|"
+    '{{range .Config.Env}}{{if eq (index (split . "=") 0) "IAC_CONFIG_HASH"}}'
+    '{{index (split . "=") 1}}{{end}}{{end}}'
+)
 STATE_DISCREPANCY_RUNBOOK = (
     "https://github.com/wangzitian0/infra2/blob/main/"
     "docs/ssot/ops.standards.md#rule-4-"
@@ -151,6 +165,9 @@ class CheckResult:
     note: str = ""
     #: Epoch seconds of the evidence behind a Dokploy `error` (its latest deployment).
     recorded_at: float | None = None
+    #: Per-unit proof that a Dokploy `error` is stale: the unit's own containers run
+    #: healthy on the current config. Empty means no such proof.
+    runtime_evidence: str = ""
 
 
 def parse_http_targets(raw: str) -> list[HttpTarget]:
@@ -251,13 +268,13 @@ def run_worker_status_check(
     retry_delay_seconds: float = 60.0,
     max_age_seconds: int | None = None,
 ) -> list[CheckResult]:
-    """Is the Cloudflare Worker still running? (watchdog-liveness, #908)
+    """Is the Cloudflare Worker running and delivering? (watchdog-liveness, #908)
 
-    Judged on freshness only: green while its last run is at most the Worker's own
-    `WATCHDOG_STATUS_MAX_AGE_SECONDS` old. What that run found (failures, delivery
-    errors, an empty config) the Worker pages itself, and Healthchecks.io pages a
-    run that failed to deliver; here it is a note for the daily report, so one
-    Worker finding is not paged a second time a day later.
+    Red when its last run is older than the Worker's own
+    `WATCHDOG_STATUS_MAX_AGE_SECONDS`, or when that run could not deliver its
+    alerts. What a run found and did deliver (failures, an empty config) the
+    Worker already paged; here it is a note for the daily report, so one Worker
+    finding is not paged a second time a day later.
     """
     url = (
         env.get("INFRA2_WATCHDOG_WORKER_STATUS_URL") or DEFAULT_WORKER_STATUS_URL
@@ -327,9 +344,9 @@ def _run_worker_status_once(
         method="GET",
     )
 
-    def red(detail: str, note: str = "") -> CheckResult:
+    def red(detail: str) -> CheckResult:
         return CheckResult(
-            WORKER_STATUS_CHECK, False, detail, "cloudflare-worker-health", note=note
+            WORKER_STATUS_CHECK, False, detail, "cloudflare-worker-health"
         )
 
     try:
@@ -351,38 +368,44 @@ def _run_worker_status_once(
     last_run = payload.get("lastRun") if isinstance(payload, dict) else None
     if not isinstance(last_run, dict):
         last_run = {}
-    note = _worker_own_verdict_note(last_run)
     age = last_run.get("ageSeconds")
     if not isinstance(age, (int, float)) or isinstance(age, bool):
-        return red(f"worker has no recorded run: ageSeconds={age!r}", note)
+        return red(f"worker has no recorded run: ageSeconds={age!r}")
     if age < -WORKER_FUTURE_TOLERANCE_SECONDS:
-        return red(f"worker last run is {-age}s in the future (clock skew?)", note)
+        return red(f"worker last run is {-age}s in the future (clock skew?)")
     if age > max_age_seconds:
+        return red(f"worker last run is stale: age={age}s > max {max_age_seconds}s")
+    delivery_error = _one_line(str(last_run.get("deliveryError") or ""))
+    if delivery_error:
+        # Liveness is "runs AND delivers": a Worker whose pages do not arrive is as
+        # blind as a stopped one, and nothing else in the Worker can say so.
         return red(
-            f"worker last run is stale: age={age}s > max {max_age_seconds}s", note
+            f"worker runs but could not deliver its alerts: age={age}s "
+            f"failures={last_run.get('failureCount') or 0} "
+            f"delivery_error={delivery_error}"
         )
     return CheckResult(
         WORKER_STATUS_CHECK,
         True,
         f"worker last run fresh: age={age}s (max {max_age_seconds}s)",
-        note=note,
+        note=_worker_delivered_findings_note(last_run),
     )
 
 
-def _worker_own_verdict_note(last_run: Mapping[str, object]) -> str:
-    """The Worker's own last-run verdict, for the report; empty when all was well."""
-    last_run_ok = last_run.get("ok")
+def _worker_delivered_findings_note(last_run: Mapping[str, object]) -> str:
+    """What a fresh, delivering Worker run found, for the report; empty when clean.
+
+    The Worker paged these itself, so here they are information, not a page.
+    """
     failure_count = last_run.get("failureCount") or 0
-    delivery_error = str(last_run.get("deliveryError") or "")
     # worker.js: `ok: lastRun.ok !== false`, so only an explicit False is a failure.
-    if last_run_ok is not False and not failure_count and not delivery_error:
+    if last_run.get("ok") is not False and not failure_count:
         return ""
     return (
-        f"Cloudflare Worker's own last run: ok={last_run_ok} "
-        f"failures={failure_count} routes={last_run.get('routeTargetCount')} "
-        f"heartbeats={last_run.get('heartbeatTargetCount')} "
-        f"delivery_error={_one_line(delivery_error) or 'none'} "
-        "(the Worker pages its own findings; Healthchecks.io pages a failed run)"
+        f"Cloudflare Worker's last run found failures, delivered by the Worker "
+        f"itself: ok={last_run.get('ok')} failures={failure_count} "
+        f"routes={last_run.get('routeTargetCount')} "
+        f"heartbeats={last_run.get('heartbeatTargetCount')}"
     )
 
 
@@ -766,15 +789,17 @@ def run_dokploy_status_check(
     env: Mapping[str, str],
     *,
     client_factory=get_dokploy,
+    unit_runtime=None,
 ) -> list[CheckResult]:
     """Read Dokploy's per-compose/app status for the daily report (#908).
 
-    A missing DOKPLOY_API_KEY is a configuration failure surfaced by this check
-    directly (the route canary that used to own that signal is retired,
-    #543/#425), and a configuration failure pages. Any compose/application whose
-    status is exactly ``error`` (case-insensitive) is a report-only failure, unless
-    split_stale_dokploy_records finds the record stale;
-    ``idle``/``done``/``running`` (and anything else) are not findings.
+    A missing or rejected DOKPLOY_API_KEY is a configuration failure, and a
+    configuration failure pages. Any compose/application whose status is exactly
+    ``error`` (case-insensitive) is a report-only failure; ``idle``/``done``/
+    ``running`` (and anything else) are not findings. For a compose in ``error``,
+    `unit_runtime(project) -> (returncode, stdout, stderr)` runs
+    unit_runtime_command on the host; when that unit's own containers run healthy
+    on the current config the record is stale (split_stale_dokploy_records).
     """
     if not env.get("DOKPLOY_API_KEY", "").strip():
         return [
@@ -797,7 +822,7 @@ def run_dokploy_status_check(
                 env_name = environment.get("name", "unknown")
                 for compose in environment.get("compose", []) or []:
                     evidence = (
-                        _dokploy_compose_error_evidence(client, compose)
+                        _dokploy_compose_error_evidence(client, compose, unit_runtime)
                         if _dokploy_status_is_error(compose.get("composeStatus"))
                         else {}
                     )
@@ -823,6 +848,17 @@ def run_dokploy_status_check(
                         )
                     )
     except Exception as exc:  # noqa: BLE001 - watchdog must turn errors into alerts.
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status in (401, 403):
+            # The key is wrong or revoked: the watchdog is blind to Dokploy.
+            return [
+                CheckResult(
+                    DOKPLOY_STATUS_CHECK,
+                    False,
+                    f"Dokploy rejected DOKPLOY_API_KEY: HTTP {status}",
+                    "configuration",
+                )
+            ]
         return [
             CheckResult(
                 DOKPLOY_STATUS_CHECK,
@@ -857,6 +893,10 @@ def _dokploy_status_failure(
         value = evidence.get(key)
         if value:
             detail_parts.append(f"{key}={_one_line(str(value))}")
+    proven = evidence.get("runtime_proven") is True
+    runtime = str(evidence.get("runtime") or "")
+    if runtime and not proven:
+        detail_parts.append(f"runtime: {runtime}")
     recorded_at = evidence.get("latest_deployment_at")
     return [
         CheckResult(
@@ -865,6 +905,7 @@ def _dokploy_status_failure(
             " ".join(detail_parts),
             "dokploy-deploy-status",
             recorded_at=recorded_at if isinstance(recorded_at, float) else None,
+            runtime_evidence=runtime if proven else "",
         )
     ]
 
@@ -874,12 +915,14 @@ def _dokploy_status_is_error(status: object) -> bool:
 
 
 def _dokploy_compose_error_evidence(
-    client: object, compose: Mapping[str, object]
+    client: object, compose: Mapping[str, object], unit_runtime=None
 ) -> dict[str, object]:
     compose_id = str(compose.get("composeId") or compose.get("id") or "").strip()
     if not compose_id:
         return {}
     evidence: dict[str, object] = {"composeId": compose_id}
+    proven, why = _dokploy_unit_runtime(client, compose_id, unit_runtime)
+    evidence.update(runtime_proven=proven, runtime=why)
     get_latest_deployment = getattr(client, "get_latest_deployment", None)
     if not callable(get_latest_deployment):
         return evidence
@@ -896,6 +939,126 @@ def _dokploy_compose_error_evidence(
         if recorded_at is not None:
             evidence["latest_deployment_at"] = float(recorded_at)
     return evidence
+
+
+@dataclass(frozen=True)
+class UnitContainer:
+    name: str
+    state: str
+    exit_code: str
+    health: str
+    config_hash: str
+
+
+def unit_runtime_command(project: str) -> str:
+    """List one Dokploy compose unit's containers (compose project = appName)."""
+    label = shlex.quote(f"label=com.docker.compose.project={project}")
+    return (
+        f"ids=$(docker ps -aq --filter {label}) && "
+        f'if [ -n "$ids" ]; then docker inspect --format '
+        f"{shlex.quote(UNIT_RUNTIME_FORMAT)} $ids; fi"
+    )
+
+
+def parse_unit_containers(output: str) -> list[UnitContainer]:
+    """Containers from unit_runtime_command. A line it cannot read is an error:
+    skipping it could drop the one unhealthy container and prove the unit well."""
+    containers = []
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        parts = line.strip().split("|")
+        if len(parts) != 5 or not parts[0].strip("/"):
+            raise ValueError(f"unreadable container line: {_one_line(line)[:120]}")
+        name, state, exit_code, health, config_hash = (part.strip() for part in parts)
+        containers.append(
+            UnitContainer(name.lstrip("/"), state, exit_code, health, config_hash)
+        )
+    return containers
+
+
+def unit_runtime_verdict(
+    containers: list[UnitContainer], expected_hash: str
+) -> tuple[bool, str]:
+    """Does this unit run healthy on the current config? (proven, why)
+
+    Every container must be running and healthy (or have no health check), or be
+    a one-shot that exited 0; every container that carries IAC_CONFIG_HASH must
+    carry the current one, and at least one must carry it. An old version still
+    running healthy after a failed deploy is exactly what this rejects.
+    """
+    if not expected_hash:
+        return False, (
+            f"Dokploy holds no {CONFIG_HASH_KEY} for this unit, so its current "
+            "config cannot be matched"
+        )
+    if not containers:
+        return False, "no container of this unit on the host"
+    problems = []
+    for container in containers:
+        running_well = container.state == "running" and container.health in {
+            "healthy",
+            "none",
+        }
+        finished_one_shot = container.state == "exited" and container.exit_code == "0"
+        if not (running_well or finished_one_shot):
+            problems.append(
+                f"{container.name} is {container.state} (health {container.health}, "
+                f"exit {container.exit_code})"
+            )
+    hashed = [container for container in containers if container.config_hash]
+    for container in hashed:
+        if container.config_hash != expected_hash:
+            problems.append(
+                f"{container.name} runs config {container.config_hash[:12]}, "
+                f"current is {expected_hash[:12]}"
+            )
+    if not hashed:
+        problems.append(f"no container carries {CONFIG_HASH_KEY}")
+    if not any(container.state == "running" for container in containers):
+        problems.append("no container is running")
+    if problems:
+        return False, "; ".join(problems)
+    return True, (
+        f"{len(containers)} container(s) of this unit run healthy on the current "
+        f"config {expected_hash[:12]}"
+    )
+
+
+def _dokploy_unit_runtime(
+    client: object, compose_id: str, unit_runtime
+) -> tuple[bool, str]:
+    """Per-unit runtime evidence for one compose in `error`; never raises."""
+    if unit_runtime is None:
+        return False, "no host access for per-unit runtime evidence"
+    get_compose = getattr(client, "get_compose", None)
+    if not callable(get_compose):
+        return False, "the Dokploy client cannot read the compose"
+    try:
+        record = get_compose(compose_id)
+        project = str(record.get("appName") or "").strip()
+        expected = ""
+        for line in str(record.get("env") or "").splitlines():
+            key, separator, value = line.partition("=")
+            if separator and key.strip() == CONFIG_HASH_KEY:
+                expected = value.strip()
+        if not project:
+            return (
+                False,
+                "Dokploy reports no appName, so its containers cannot be found",
+            )
+        returncode, stdout, stderr = unit_runtime(project)
+        if returncode != 0:
+            return False, (
+                f"could not list the unit's containers (exit {returncode}): "
+                f"{_last_line(stderr or stdout)}"
+            )
+        return unit_runtime_verdict(parse_unit_containers(stdout), expected)
+    except Exception as exc:  # noqa: BLE001 - no evidence is not a crash.
+        return False, (
+            f"runtime evidence unavailable: {type(exc).__name__}: "
+            f"{_one_line(str(exc))[:160]}"
+        )
 
 
 def _dokploy_deployment_evidence(deployment: Mapping[str, object]) -> dict[str, object]:
@@ -970,37 +1133,36 @@ def split_stale_dokploy_records(
 ) -> tuple[list[CheckResult], list[tuple[CheckResult, str]]]:
     """#908: separate stale Dokploy `error` records from current failures.
 
-    A record is stale when its latest deployment is older than
-    DOKPLOY_RECORD_MAX_AGE_HOURS, or when the host-wide container sweep
-    (RUNTIME_EVIDENCE_CHECK) is green in the same run and so contradicts it.
-    Stale records are not failures, but they are not dropped either: the daily
-    report lists them for reconciliation (ops.standards.md Rule 4). A record with
-    no timestamp and no healthy runtime evidence stays a failure.
+    A record is stale only with per-unit runtime evidence: that unit's own
+    containers run healthy on the current config (unit_runtime_verdict). A
+    host-wide sweep cannot see a failed pull that left the old version running,
+    and neither can age. A record older than DOKPLOY_RECORD_MAX_AGE_HOURS without
+    that evidence stays a failure, labelled with its age. Stale records are listed
+    in the daily report for reconciliation (ops.standards.md Rule 4), not dropped.
     """
-    runtime_healthy = any(
-        result.name == RUNTIME_EVIDENCE_CHECK and result.ok for result in results
-    )
     bound_seconds = DOKPLOY_RECORD_MAX_AGE_HOURS * 3600
     kept: list[CheckResult] = []
     stale: list[tuple[CheckResult, str]] = []
     for result in results:
         if result.ok or not result.name.startswith(DOKPLOY_STATUS_FAMILY):
             kept.append(result)
-            continue
-        reasons = []
-        if (
+        elif result.runtime_evidence:
+            stale.append((result, result.runtime_evidence))
+        elif (
             result.recorded_at is not None
             and now_ts - result.recorded_at > bound_seconds
         ):
             age_hours = (now_ts - result.recorded_at) / 3600
-            reasons.append(
-                f"latest deployment is {age_hours:.0f}h old "
-                f"(bound {DOKPLOY_RECORD_MAX_AGE_HOURS}h)"
+            kept.append(
+                replace(
+                    result,
+                    detail=(
+                        f"{result.detail}; old record: latest deployment is "
+                        f"{age_hours:.0f}h old (over {DOKPLOY_RECORD_MAX_AGE_HOURS}h), "
+                        "and no per-unit runtime evidence shows the unit recovered"
+                    ),
+                )
             )
-        if runtime_healthy:
-            reasons.append(f"contradicted by {RUNTIME_EVIDENCE_CHECK}: ok")
-        if reasons:
-            stale.append((result, "; ".join(reasons)))
         else:
             kept.append(result)
     return kept, stale
@@ -1054,7 +1216,7 @@ def format_failure_message(results: list[CheckResult], *, run_url: str) -> str:
         "[OUT-OF-BAND] Infra2 watchdog failed",
         f"Severity: {highest}",
         "Scope: Cloudflare Worker liveness / backups and restore rehearsal / "
-        "peer scheduler / the watchdog's own configuration",
+        "peer scheduler / unregistered checks / the watchdog's own configuration",
         "Route: GitHub Actions -> Feishu direct",
     ]
     if run_url:
@@ -1072,46 +1234,56 @@ def format_failure_message(results: list[CheckResult], *, run_url: str) -> str:
     return "\n".join(lines)
 
 
-def load_paging_checks(path: Path = SIGNAL_REGISTRY) -> frozenset[str]:
-    """The GitHub checks that page: registered `primary_owner: github`, not reports.
+def load_report_only_checks(path: Path = SIGNAL_REGISTRY) -> frozenset[str]:
+    """The GitHub checks that only report: registered `primary_owner: github` with
+    `type: report`. Every other check pages, including a name the registry never
+    saw (a target added through `vars.INFRA2_WATCHDOG_*_TARGETS`).
 
     Imported lazily: other jobs import this module for alert delivery without
-    PyYAML. An empty set would page nothing, so it is an error, not a quiet day.
+    PyYAML. A registry whose GitHub signals are all reports would leave the
+    GitHub layer's own classes without a pager, so that is an error.
     """
     import yaml
 
     inventory = yaml.safe_load(path.read_text(encoding="utf-8"))
-    names = frozenset(
-        str(signal["signal"])
+    github = [
+        signal
         for signal in inventory["signals"]
-        if signal.get("primary_owner") == "github" and signal.get("type") != "report"
+        if signal.get("primary_owner") == "github"
+    ]
+    report_only = frozenset(
+        str(signal["signal"]) for signal in github if signal.get("type") == "report"
     )
-    if not names:
+    if len(report_only) == len(github):
         raise ValueError(f"{path.name} registers no paging GitHub signal")
-    return names
+    return report_only
 
 
-def pages(result: CheckResult, paging_checks: frozenset[str] | None) -> bool:
-    """Does this failure page? `paging_checks=None` (registry unreadable) pages all."""
+def registry_signal(name: str) -> str:
+    """The registered signal a check reports under (a Dokploy unit -> its family)."""
+    return DOKPLOY_STATUS_CHECK if name.startswith(DOKPLOY_STATUS_FAMILY) else name
+
+
+def pages(result: CheckResult, report_only: frozenset[str] | None) -> bool:
+    """Does this failure page? `report_only=None` (registry unreadable) pages all."""
     return (
-        paging_checks is None
-        or result.name in paging_checks
+        report_only is None
+        or registry_signal(result.name) not in report_only
         or result.failure_domain in WATCHDOG_SELF_DOMAINS
     )
 
 
 def route_failures(
-    results: list[CheckResult], paging_checks: frozenset[str] | None
+    results: list[CheckResult], report_only: frozenset[str] | None
 ) -> tuple[list[CheckResult], list[CheckResult]]:
     """Split failures into (paged, reported) -- #908, ops.observability.md §1.1.
 
-    GitHub pages only the failure classes it owns (Worker liveness, data
-    protection, config drift, the peer scheduler) plus failures of the watchdog
-    itself; everything else another layer pages, so here it is a report line.
+    A check pages unless the registry marks it `type: report`, i.e. another layer
+    pages its failure class; failures of the watchdog itself always page.
     """
     failures = [result for result in results if not result.ok]
-    paged = [result for result in failures if pages(result, paging_checks)]
-    reported = [result for result in failures if not pages(result, paging_checks)]
+    paged = [result for result in failures if pages(result, report_only)]
+    reported = [result for result in failures if not pages(result, report_only)]
     return paged, reported
 
 
@@ -1156,20 +1328,30 @@ def format_report_message(
     return "\n".join(lines)
 
 
+def _undelivered(reported: list[CheckResult], stale_count: int, note_count: int) -> str:
+    """What a report that cannot be sent would have said, for the page instead."""
+    parts = []
+    if reported:
+        names = ", ".join(result.name for result in reported)
+        parts.append(f"{len(reported)} report-only failure(s) ({names})")
+    if stale_count:
+        parts.append(f"{stale_count} stale Dokploy record(s)")
+    if note_count:
+        parts.append(f"{note_count} information line(s)")
+    return f"; undelivered: {', '.join(parts)}" if parts else ""
+
+
 def _deliver_report(
     env: Mapping[str, str],
     report: str,
     reported: list[CheckResult],
     *,
+    stale_count: int = 0,
+    note_count: int = 0,
     dry_run: bool,
 ) -> CheckResult | None:
     """Send the report; a report path that is missing or broken pages instead."""
-    undelivered = (
-        f"; undelivered: {len(reported)} report-only failure(s)"
-        + (f" ({', '.join(result.name for result in reported)})" if reported else "")
-        if report
-        else ""
-    )
+    undelivered = _undelivered(reported, stale_count, note_count) if report else ""
     missing = [name for name in INFRA2_REPORTS_ENV if not env.get(name, "").strip()]
     if missing:
         return CheckResult(
@@ -1249,7 +1431,9 @@ def main(env: Mapping[str, str] | None = None) -> int:
             retry_delay_seconds=retry_delay_seconds,
         )
     )
-    results.extend(run_dokploy_status_check(current_env))
+    results.extend(
+        run_dokploy_status_check(current_env, unit_runtime=_ssh_capture(ssh_config))
+    )
     results.extend(run_ssh_checks(ssh_config, ssh_targets))
     results.extend(run_backup_checks(ssh_config))
     results.extend(
@@ -1266,9 +1450,9 @@ def main(env: Mapping[str, str] | None = None) -> int:
     ]
     results, stale = split_stale_dokploy_records(results, now_ts=time.time())
     try:
-        paging_checks: frozenset[str] | None = load_paging_checks()
+        report_only: frozenset[str] | None = load_report_only_checks()
     except Exception as exc:  # noqa: BLE001 - unknown routing pages everything.
-        paging_checks = None
+        report_only = None
         results.append(
             CheckResult(
                 SIGNAL_REGISTRY_CHECK,
@@ -1279,15 +1463,20 @@ def main(env: Mapping[str, str] | None = None) -> int:
                 severity=_severity_for(SIGNAL_REGISTRY_CHECK, "configuration"),
             )
         )
-    paged, reported = route_failures(results, paging_checks)
+    paged, reported = route_failures(results, report_only)
     dry_run = current_env.get("WATCHDOG_DRY_RUN") == "1"
+    notes = [result.note for result in results if result.note]
     report = format_report_message(
-        reported,
-        stale,
-        [result.note for result in results if result.note],
-        run_url=_github_run_url(current_env),
+        reported, stale, notes, run_url=_github_run_url(current_env)
     )
-    report_failure = _deliver_report(current_env, report, reported, dry_run=dry_run)
+    report_failure = _deliver_report(
+        current_env,
+        report,
+        reported,
+        stale_count=len(stale),
+        note_count=len(notes),
+        dry_run=dry_run,
+    )
     if report_failure is not None:
         report_failure = replace(
             report_failure,
@@ -1296,9 +1485,9 @@ def main(env: Mapping[str, str] | None = None) -> int:
         results.append(report_failure)
         paged.append(report_failure)
 
-    _record_issue_trail_verdicts(current_env, results, paging_checks)
+    _record_issue_trail_verdicts(current_env, results, report_only)
     for result in results:
-        route = "" if result.ok else PAGE if pages(result, paging_checks) else REPORT
+        route = "" if result.ok else PAGE if pages(result, report_only) else REPORT
         _emit_structured_log(
             {
                 "event": "watchdog.check",
@@ -1391,7 +1580,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
 def _record_issue_trail_verdicts(
     env: Mapping[str, str],
     results: list[CheckResult],
-    paging_checks: frozenset[str] | None,
+    report_only: frozenset[str] | None,
 ) -> None:
     """Hand this run's PAGING verdicts to the issue-trail step (truealpha#876 W4).
 
@@ -1399,11 +1588,20 @@ def _record_issue_trail_verdicts(
     A failure of the watchdog itself that surfaced on a report-only check (its
     configuration, the report path) is recorded as the watchdog step's own red
     verdict, which the next run that records cleanly closes. When the registry is
-    unreadable nothing but that verdict is recorded: which checks page is unknown.
+    unreadable nothing but that verdict is recorded, and the record says it is
+    incomplete so the trail does not close issues of checks it did not record.
     """
     path = env.get(VERDICTS_ENV, "").strip()
     if not path:
         return
+
+    def is_paging(result: CheckResult) -> bool:
+        return (
+            report_only is not None
+            and result.name not in WATCHDOG_SELF_CHECKS
+            and registry_signal(result.name) not in report_only
+        )
+
     checks = [
         CheckVerdict(
             result.name,
@@ -1413,14 +1611,14 @@ def _record_issue_trail_verdicts(
             result.failure_domain,
         )
         for result in results
-        if paging_checks is not None and result.name in paging_checks
+        if is_paging(result)
     ]
     own = [
         result
         for result in results
         if not result.ok
         and result.failure_domain in WATCHDOG_SELF_DOMAINS
-        and (paging_checks is None or result.name not in paging_checks)
+        and not is_paging(result)
     ]
     if own:
         checks.append(
@@ -1440,10 +1638,38 @@ def _record_issue_trail_verdicts(
             )
         )
     try:
-        record_verdicts(path, source=WATCHDOG_SOURCE, checks=checks)
+        record_verdicts(
+            path,
+            source=WATCHDOG_SOURCE,
+            checks=checks,
+            complete=report_only is not None,
+        )
     except OSError as exc:
         # The issue-trail step then finds no verdict from this source: red.
         print(f"could not record verdicts for the issue trail: {exc}", file=sys.stderr)
+
+
+def _ssh_capture(config: SshConfig | None, timeout: float = 20.0):
+    """`command -> (returncode, stdout, stderr)` on the host, or None without SSH."""
+    if config is None:
+        return None
+
+    def capture(remote_command: str) -> tuple[int, str, str]:
+        completed = subprocess.run(
+            _ssh_argv(config, remote_command),
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+        return completed.returncode, completed.stdout, completed.stderr
+
+    def unit_runtime(project: str) -> tuple[int, str, str]:
+        return capture(unit_runtime_command(project))
+
+    return unit_runtime
 
 
 def deliver_out_of_band_alert(env: Mapping[str, str], message: str) -> None:

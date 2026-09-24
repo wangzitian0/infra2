@@ -5,8 +5,9 @@ The last step of the ops-checks ``watchdog`` job. It reads the verdict file the
 earlier steps appended to (``INFRA2_WATCHDOG_VERDICTS_PATH``) and, per
 ``libs/watchdog_issue_trail.py``, opens or comments on one issue per red paging
 check and closes the issues of checks that are green again. Report-only checks
-are never recorded, so they never open issues (#908). Feishu delivery is the
-watchdog steps' own and is untouched.
+are never recorded, so they never open issues (#908); when every step recorded
+completely, an open issue whose check nobody recorded is closed as retired.
+Feishu delivery is the watchdog steps' own and is untouched.
 
 Run kind decides what may be written (``issue_trail_mode``):
 
@@ -92,7 +93,8 @@ def main(env: Mapping[str, str] | None = None, *, issues_factory=GitHubIssues) -
     trail = load_trail(path)
     print(
         f"issue trail ({mode}): {len(trail.failing)} red "
-        f"[{', '.join(sorted(trail.failing)) or 'none'}], {len(trail.green)} green"
+        f"[{', '.join(sorted(trail.failing)) or 'none'}], {len(trail.green)} green, "
+        f"complete={trail.complete}"
     )
     return reconcile(
         issues_factory(repository, token),

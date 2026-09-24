@@ -378,9 +378,10 @@ signals:
   # GitHub signals whose failure class another layer pages (#908): the daily audit
   # still runs them and tools/out_of_band_watchdog.py puts their failures in one
   # daily report to the reports chat, never the pager and never the issue trail.
-  # The watchdog reads `type` from this file to decide what pages, so flipping a
-  # signal to a pager here is the only way to make it page -- and the layering
-  # audit then fails it unless its class is paged by github.
+  # The watchdog reads `type` from this file: a check pages unless it is
+  # registered here as `type: report` (a name added only through the
+  # INFRA2_WATCHDOG_*_TARGETS repository variables pages too), and the layering
+  # audit fails a paging signal whose class github does not own.
   - signal_id: global.infra2-public-entrypoint.github
     environment: global
     component: host
@@ -392,12 +393,28 @@ signals:
     tier: day
     type: report
 
-  # Worker liveness (#908): green while the Worker's last run is within its own
-  # WATCHDOG_STATUS_MAX_AGE_SECONDS (read from cloudflare/infra-watchdog/wrangler.toml).
-  # What that run found is a report note, not a page: the Worker pages its own
-  # findings and Healthchecks.io pages a run that failed. The former
-  # cloudflare-worker-health signal called the Worker's /health, which always
-  # answers ok, so it could detect nothing and was removed.
+  # Dokploy per-compose/application status (#908). One signal for the family: each
+  # unit in `error` is reported as dokploy-status:<project>/<env>/<unit> under it.
+  # A unit is a stale record (still listed) only when its own containers run
+  # healthy on the current IAC_CONFIG_HASH; a query rejected with 401/403 is a
+  # configuration failure and pages like every other blind-watchdog failure.
+  - signal_id: global.infra2-dokploy-status.github
+    environment: global
+    component: dokploy
+    signal: infra2-dokploy-status
+    primary_owner: github
+    failure_class: service-health
+    severity: warning
+    cadence: 1d
+    tier: day
+    type: report
+
+  # Worker liveness (#908): red when the Worker's last run is older than its own
+  # WATCHDOG_STATUS_MAX_AGE_SECONDS (read from cloudflare/infra-watchdog/wrangler.toml)
+  # or could not deliver its alerts -- liveness is "runs AND delivers". What a run
+  # found and delivered is a report note, not a page: the Worker paged it already.
+  # The former cloudflare-worker-health signal called the Worker's /health, which
+  # always answers ok, so it could detect nothing and was removed.
   - signal_id: global.cloudflare-worker-status.github
     environment: global
     component: cloudflare-watchdog

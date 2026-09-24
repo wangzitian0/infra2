@@ -451,6 +451,7 @@ def _github_signal_names() -> set[str]:
     names = {target.name for target in http_targets}
     names.update(target.name for target in ssh_targets)
     names.add(module.WORKER_STATUS_CHECK)
+    names.add(module.DOKPLOY_STATUS_CHECK)
     names.add(module.PEER_SCHEDULER_LIVENESS_CHECK)
     names.update(name for name, _ in module.BACKUP_CHECKS)
     names.add(module.RESTORE_REHEARSAL_CHECK)

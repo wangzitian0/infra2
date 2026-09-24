@@ -305,15 +305,18 @@ The daily out-of-band audit, run from GitHub Actions outside the infra2 host
 classes the GitHub layer owns (#908): Cloudflare Worker liveness (`/status`
 freshness against the Worker's own `WATCHDOG_STATUS_MAX_AGE_SECONDS`), the
 production backup and the restore rehearsal, the peer scheduler, and failures of
-its own configuration. Which checks page is read from
-`docs/ssot/watchdog-signals.yaml` (GitHub signals that are not `type: report`).
-Everything else — host reachability, SSH, Docker, container health, the alert
-bridge, the staging backup, Dokploy per-compose/application status — still runs
-and goes into one daily report via `libs/alerting.py::deliver_infra2_report`. A
-Dokploy `error` whose latest deployment is older than 72 h, or that a green
-`infra2-docker-health` contradicts, is listed there as a stale record for
-reconciliation, not as a failure. A missing `DOKPLOY_API_KEY` or report secret is a
-`configuration` failure and pages.
+its own configuration. The Worker counts as live only if its last run is fresh
+and delivered its alerts. Which checks only report is read from
+`docs/ssot/watchdog-signals.yaml` (GitHub signals with `type: report`); every
+other check pages, including targets added only through repository variables.
+The report-only checks — host reachability, SSH, Docker, container health, the
+alert bridge, the staging backup, Dokploy per-compose/application status — still
+run and go into one daily report via `libs/alerting.py::deliver_infra2_report`. A
+Dokploy `error` is listed there as a stale record only when that unit's own
+containers (compose project = `appName`, read over SSH) run healthy on the
+current `IAC_CONFIG_HASH`; otherwise it stays a failure, labelled with its age
+past 72 h. A missing or rejected (401/403) `DOKPLOY_API_KEY`, or a missing report
+secret, is a `configuration` failure and pages.
 It is also the peer for truealpha's `scheduler-liveness` workflow
 (`truealpha-scheduler-liveness`, logic in `libs/scheduler_peer_liveness.py`,
 truealpha#876): red when that workflow is not active, has not ticked on schedule
@@ -330,7 +333,8 @@ WATCHDOG_DRY_RUN=1 uv run python tools/out_of_band_watchdog.py
 ## watchdog_issue_trail.py
 
 The ops-checks watchdog job's last step (truealpha#876 W4): reads the verdicts the
-earlier steps recorded and keeps one issue per red paging check, titled exactly
+earlier steps recorded and keeps one issue per red paging check (and, when every
+step recorded completely, closes issues of checks nobody records any more), titled exactly
 `ops-checks watchdog is red: <check>` — open or comment while red, comment and
 close when green in a scheduled run (or a plain dispatch on main). Drills and
 branch dispatches never close; dry runs and SSH-override runs write nothing. A
