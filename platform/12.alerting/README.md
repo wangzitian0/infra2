@@ -1,7 +1,8 @@
 # Alerting Bridge
 
 Internal bridge that receives SigNoz Alertmanager webhook payloads and sends
-Feishu alert messages.
+them to Feishu as interactive cards, in the one pager layout every alert source
+shares ([Reading an alert](#reading-an-alert)).
 
 ## Why This Exists
 
@@ -107,7 +108,7 @@ Runtime mirror: Vault path `secret/platform/{env}/alerting`.
 | `FEISHU_APP_ID` | app mode | Feishu Open Platform app ID |
 | `FEISHU_APP_SECRET` | app mode | Feishu Open Platform app secret |
 | `FEISHU_CHAT_ID` | app mode | Target chat ID for app bot messages |
-| `FEISHU_REPORT_CHAT_ID` | optional, app mode | Chat for `delivery=report` payloads (#903); unset = pager chat with a `[REPORT]` title |
+| `FEISHU_REPORT_CHAT_ID` | optional, app mode | Chat for `delivery=report` payloads (#903); unset = the pager chat. A report's card is titled `[报告]` either way (#905) |
 | `FEISHU_API_BASE` | no | Defaults to `https://open.feishu.cn` |
 | `BRIDGE_BASIC_AUTH_USERNAME` | no | Optional SigNoz webhook basic auth username |
 | `BRIDGE_BASIC_AUTH_PASSWORD` | no | Optional SigNoz webhook basic auth password |
@@ -125,6 +126,38 @@ uv run python -m invoke alerting.shared.ensure-log-error-rule \
 
 `test-feishu` sends a synthetic SigNoz-style alert through the bridge and should
 result in a Feishu group message.
+
+## Reading an alert
+
+Every page — this bridge's card, the Cloudflare Worker's text and the GitHub
+watchdog's text — shows the same fields in the same order
+([ops.observability.md §3.1](../../docs/ssot/ops.observability.md#31-推送格式905)):
+
+| Field | What it says |
+|---|---|
+| 级别 | P0 / P1 / P2, from the `severity` label (`critical` / `error` / `warning`; unknown = P0) |
+| 环境 | `environment` label |
+| 对象 | full `service_id` + the probe, container, compose or check name |
+| 现象 | a probe's target, expected and observed; otherwise what the source reports |
+| 开始于 | when the failure started and how long it has lasted |
+| 影响 | the failure domain and what it means |
+| 下一步 | the first thing to check |
+| Runbook | the most specific runbook anchor for the alert or its failure domain |
+| 日志 | container breakdowns only: the log line the reason came from and the last lines |
+
+The title carries the highest level, the alert name, the environment and the item
+count. The first 5 items are shown in full, the rest one line each, and the card
+stays under Feishu's 30 KB body limit (text: 3,500 characters). A RESOLVED card
+(green) names each recovered object with its start, end and duration. A report
+(`delivery=report`) is blue, titled `[报告]` and one line per item; the reports sent
+through `deliver_infra2_report` get the same title.
+
+Sources fill the fields from the Alertmanager payload: `labels` (`severity`,
+`environment`, `service_id`, `component`, `failure_domain`, `probe_kind`),
+`startsAt`/`endsAt`, and the annotations `symptom`, `target`/`expected`/`observed`,
+`description`/`summary`, `container`/`compose`, `impact`, `next_step`,
+`runbook_url` and `log_tail`. A SigNoz rule gets a specific runbook by adding a
+`runbook_url` annotation.
 
 ## Out-of-band Watchdog
 
@@ -378,6 +411,20 @@ INFRA_PROBE_DRY_RUN=1 uv run python tools/infra_probe_runner.py --once --json
 
 Heartbeat dry-run is intentionally disabled: `INFRA_PROBE_DRY_RUN=1` does not
 write alert state or post heartbeat.
+
+### Public-route probes
+
+`PUBLIC_ROUTE_PROBE_SPECS` (rendered from each service's `PublicRouteFacet`) probes
+every public route in-band and pages `InfraPublicRouteProbeFailed`. The Cloudflare
+Worker also GETs one external entrypoint per product and pages it only when the VPS
+has not (see `cloudflare/infra-watchdog/README.md`). Read the card's 影响 line first:
+
+- `[service-or-route]`: the route or the service behind it is failing. Reproduce with
+  `curl -sS -m 10 -o /dev/null -w '%{http_code}' <url>` from the VPS and from outside,
+  then read the service's container logs and compare with the latest deployment.
+- `[probe-client-blocked]`: the edge refused the probe itself (`error code: 1010`).
+  The service may be fine; find the Cloudflare security rule that blocked the probe
+  and allow the probe's User-Agent. Until then the route is not watched.
 
 ### Failing round-trips: two lanes (#726)
 

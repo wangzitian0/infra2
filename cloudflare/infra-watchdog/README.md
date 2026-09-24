@@ -36,9 +36,12 @@ Every 30 minutes, from Cloudflare, outside the VPS:
 - **Alert state per failure identity** (`<env>:<name>:heartbeat-stale`,
   `:heartbeat-unhealthy`, `:entrypoint`). A still-active alert is re-sent at most
   every `WATCHDOG_RENOTIFY_SECONDS` (6 h); a changing detail is not a new alert;
-  `RESOLVED` names what recovered. All events of one run go out as one message,
-  directly to Feishu (never through the bridge it watches), with email as the
-  fallback channel.
+  a recovery names what recovered and how long it was down. All events of one run
+  go out as one message, directly to Feishu (never through the bridge it watches),
+  with email as the fallback channel. The text uses the pager layout every source
+  shares ([ops.observability.md §3.1](../../docs/ssot/ops.observability.md), #905):
+  级别 · 环境 · 对象 · 现象 · 开始于 · 影响 · 下一步 · Runbook, the level taken from
+  each target's or heartbeat's configured `severity` (`warning` is P2).
 - **Outage edges.** The production heartbeat's down and up transitions are kept
   (the last 50) for the weekly availability report, which cannot learn about the
   VPS's own downtime from the VPS: `start` is the last recorded contact, `end` the

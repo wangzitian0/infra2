@@ -249,6 +249,7 @@ entries:
       - libs/tests/test_observability_dashboards.py
       - libs/tests/test_deploy_queue.py
       - libs/tests/test_deploy_queue_guard.py
+      - libs/tests/test_pager_format.py
   watchdog.signals:
     owner: docs/ssot/watchdog-signals.yaml
     summary: Active watchdog signal inventory and ownership
