@@ -1,4 +1,4 @@
-<!-- WS_STATIC_START adapter=rules-v2 inputs=40d952908f21d69b1b479809068511281b5fcae716213ef504ca6cd062cde900 -->
+<!-- WS_STATIC_START adapter=rules-v2 inputs=12ee20bd63883495baefda4896f1219271b47c3ebacaf3079dd5f34793c9be96 -->
 <!-- Generated file: do not edit by hand. These rules are maintained in the owner's rule source and re-rendered here. -->
 
 ## Engineering discipline
@@ -64,7 +64,7 @@ Full procedures are in [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.
 ## Security and hard boundaries
 
 - Never commit sensitive files (`*.pem`, `.env`, `*.tfvars`).
-- On an infrastructure Apply conflict, follow the [State Discrepancy Protocol](docs/ssot/ops.standards.md).
+- On an infrastructure Apply conflict, follow the [State Discrepancy Protocol](docs/ssot/ops.standards.md#rule-4-状态不一致协议-state-discrepancy-protocol).
 - 1Password is the only authority for static secrets.
 - Surface any downtime risk. If downtime is unavoidable, provide a plan to shorten it.
 
