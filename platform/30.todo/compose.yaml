@@ -1,0 +1,44 @@
+services:
+  todo:
+    build:
+      context: ../..
+      dockerfile: platform/30.todo/Dockerfile
+    image: platform-todo:${IAC_CONFIG_HASH:-latest}
+    container_name: platform-todo${ENV_SUFFIX}
+    restart: always
+    environment:
+      PORT: "8000"
+      INTERNAL_DOMAIN: ${INTERNAL_DOMAIN:-zitian.party}
+      ENV_SUFFIX: ${ENV_SUFFIX:-}
+      POSTGRES_HOST: platform-postgres${ENV_SUFFIX}
+      POSTGRES_PORT: "5432"
+      REDIS_HOST: platform-redis${ENV_SUFFIX}
+      REDIS_PORT: "6379"
+      MINIO_ENDPOINT: http://platform-minio${ENV_SUFFIX}:9000/minio/health/live
+      SIGNOZ_OTEL_COLLECTOR: http://platform-signoz-otel-collector:13133
+      OPENPANEL_API_URL: http://platform-openpanel-api:3000/healthcheck
+      AUTHENTIK_ENDPOINT: http://platform-authentik-server${ENV_SUFFIX}:9000/-/health/live/
+      GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).read()\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.platform-todo${ENV_DOMAIN_SUFFIX}.rule=Host(`todo${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`)"
+      - "traefik.http.routers.platform-todo${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
+      - "traefik.http.routers.platform-todo${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
+      - "traefik.http.services.platform-todo${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=8000"
+
+networks:
+  dokploy-network:
+    external: true
