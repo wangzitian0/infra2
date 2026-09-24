@@ -198,8 +198,8 @@ def test_an_entrypoint_pages_after_two_failing_runs_then_every_six_hours(world) 
     again = _block(renotify, "firing", "dokploy-public-route")
     assert again["heading"] == "— 1/1 · 仍在告警 —"
     # the incident started at the first failing run, not at the page
-    assert page["开始于"] == "2026-09-24 00:00 UTC(已持续 30 分钟)"
-    assert again["开始于"] == "2026-09-24 00:00 UTC(已持续 6 小时 30 分钟)"
+    assert page["开始于"] == "2026-09-24 08:00（UTC+8）(已持续 30 分钟)"
+    assert again["开始于"] == "2026-09-24 08:00（UTC+8）(已持续 6 小时 30 分钟)"
     assert all(run["error"] is None for run in runs)
 
 
@@ -208,9 +208,11 @@ def test_resolved_names_what_recovered(world) -> None:
     resolved = world["entrypointDown"][4]["messages"][0]
     assert resolved.startswith("✅ [已恢复] Cloudflare 带外 watchdog · 1 项")
     block = _block(resolved, "resolved", "dokploy-public-route")
-    assert block["现象"] == "https://cloud.zitian.party reachable again (HTTP 200)"
+    assert block["现象"] == "https://cloud.zitian.party 已恢复可达(HTTP 200)"
     # what recovered, and how long it was down: first failing run to recovery
-    assert block["开始于"] == ("2026-09-24 00:00 UTC → 2026-09-24 07:00 UTC(共 7 小时)")
+    assert block["开始于"] == (
+        "2026-09-24 08:00（UTC+8） → 2026-09-24 15:00（UTC+8）(共 7 小时)"
+    )
     assert _names(resolved, "firing") == []
 
 
@@ -239,7 +241,7 @@ def test_kv_is_written_on_transitions_only(world) -> None:
 def test_a_network_error_counts_as_a_failure(world) -> None:
     (message,) = world["networkError"]
     page = _block(message, "firing", "truealpha-web-public-route")
-    assert "fetch failed: connection refused" in page["现象"]
+    assert page["现象"].endswith("— 请求失败:connection refused(连续 2 次运行失败)")
 
 
 @needs_node
@@ -323,11 +325,11 @@ def test_a_stale_production_heartbeat_pages_p0_vps_down_once(world) -> None:
     firing, resolved = down["messages"]
     page = _block(firing, "firing", "platform-alerting-probes")
     assert page["级别"] == "P0"
-    assert page["现象"].startswith("VPS or its egress is down — heartbeat stale")
+    assert page["现象"].startswith("VPS 或它的出网中断 — 心跳过期:")
     assert page["影响"].startswith("[host-reachability] VPS")
     assert page["Runbook"].endswith("docs/runbooks/infra022-p0.md#watchdog-silent")
     recovered = _block(resolved, "resolved", "platform-alerting-probes")
-    assert recovered["现象"].startswith("heartbeat fresh again")
+    assert recovered["现象"].startswith("心跳恢复新鲜(")
 
 
 @needs_node
@@ -356,7 +358,7 @@ def test_an_unhealthy_loop_pages_p1_after_two_runs_and_resolves_after_two(
     assert page["级别"] == "P1"
     assert page["影响"].startswith("[alert-pipeline] ")
     assert page["现象"] == (
-        "probe loop reports unhealthy — alert bridge delivery failing for 42 min"
+        "探测循环报告不健康 — alert bridge delivery failing for 42 min"
     )
     (resolved,) = messages[4]
     assert _names(resolved, "resolved") == ["platform-alerting-probes"]
@@ -464,7 +466,7 @@ def test_a_broken_config_pages_itself_and_resolves_nothing_it_could_not_check(
     page = _block(message, "firing", "cloudflare-watchdog-config-preflight")
     assert (page["级别"], page["环境"]) == ("P1", "global")
     assert page["影响"].startswith("[watchdog-config] ")
-    assert "config-preflight failed" in page["现象"]
+    assert page["现象"].startswith("Worker 无法评估它的检查 — 配置预检失败:")
     assert _names(message, "resolved") == []
     assert broken["lastRunOk"] is False
     assert "production:dokploy-public-route:entrypoint" in broken["stillActive"]
@@ -587,7 +589,10 @@ def test_worker_messages_follow_the_shared_field_order(world) -> None:
     assert page["Runbook"].endswith(
         "platform/12.alerting/README.md#public-route-probes"
     )
-    assert page["下一步"].startswith('curl -I "https://cloud.zitian.party"')
+    assert page["下一步"] == (
+        '从外部网络执行 `curl -I "https://cloud.zitian.party"`;'
+        "若 VPS 心跳也过期,就是整机或它的出网中断"
+    )
 
 
 @needs_node
@@ -698,3 +703,31 @@ def test_every_runbook_the_worker_links_resolves(world) -> None:
         not in _anchors(ROOT / url.removeprefix(f"{BLOB}/").split("#", 1)[0])
     ]
     assert missing == []
+
+
+@needs_node
+def test_worker_prose_is_chinese(world) -> None:
+    """#905: the Worker's next steps, impacts and failure summaries are Chinese;
+    commands and identifiers stay verbatim in backticks."""
+    from libs.tests.test_pager_format import english_prose
+
+    messages = [
+        *world["entrypointDown"][1]["messages"],
+        *world["vpsDown"]["messages"],
+        *world["loopUnhealthy"]["messages"][1],
+        *world["configBroken"]["messages"],
+    ]
+    firing = [
+        block
+        for message in messages
+        for block in _blocks(message)
+        if block["section"] == "firing"
+    ]
+    texts = [
+        text
+        for block in firing
+        for text in (block["下一步"], block["影响"], block["现象"].split(" — ")[0])
+    ]
+
+    assert len(firing) == 4
+    assert {text: english_prose(text) for text in texts if english_prose(text)} == {}

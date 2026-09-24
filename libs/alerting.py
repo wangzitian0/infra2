@@ -8,7 +8,7 @@ import re
 import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -50,6 +50,9 @@ PAGER_FIELDS = (
     "日志",
 )
 FIELD_SEPARATOR = "："
+#: Times are shown in the owner's zone; durations are zone-free.
+DISPLAY_TIMEZONE = timezone(timedelta(hours=8))
+DISPLAY_TIMEZONE_LABEL = "UTC+8"
 #: The first N items of a message are shown in full; the rest one line each.
 MAX_FULL_ITEMS = 5
 MAX_SUMMARY_ITEMS = 20
@@ -121,21 +124,21 @@ _ACTION_BY_ALERT = {
 }
 _ACTION_BY_DOMAIN = {
     "service-or-route": (
-        "在 VPS 上复现(http:curl -sS -m 10 -o /dev/null -w '%{http_code}' <目标>),"
-        "再看该服务容器的 docker logs --tail 80,对照最近一次部署"
+        "在 VPS 上对目标复现(http:`curl -sS -m 10 -o /dev/null -w '%{http_code}'`),"
+        "再看该服务容器的 `docker logs --tail 80`,对照最近一次部署"
     ),
     "probe-client-blocked": (
         "在 Cloudflare 安全事件里找拦下探针的规则(error 1010)并放行探针 User-Agent;"
         "服务本身用浏览器另行确认"
     ),
     "runtime": (
-        "先留证据再动手:docker inspect -f '{{.State.Status}} {{.State.ExitCode}} "
-        "{{.State.OOMKilled}}' <容器> 与 docker logs --tail 80 <容器>"
+        "先留证据再动手:对该容器执行 `docker inspect -f '{{.State.Status}} "
+        "{{.State.ExitCode}} {{.State.OOMKilled}}'` 与 `docker logs --tail 80`"
     ),
-    "host-memory": "free -h 与 docker stats --no-stream 找出内存大户,先处理宿主机内存",
+    "host-memory": "用 `free -h` 与 `docker stats --no-stream` 找出内存大户,先处理宿主机内存",
     "deploy-queue": (
         "对照 Dokploy 部署记录与 CI run;只用 Dokploy 自己的 cancel/clean"
-        "(DEPLOY_GUARD_REMEDIATE=1),绝不直接删 Redis/BullMQ 键"
+        "(`DEPLOY_GUARD_REMEDIATE=1`),绝不直接删 Redis/BullMQ 键"
     ),
 }
 DEFAULT_ACTION = "按现象排查;SigNoz 规则可在 SigNoz 打开,看告警时段的指标与日志"
@@ -250,9 +253,13 @@ def firing_title(level: str, subject: str) -> str:
     return f"{_LEVEL_EMOJI[level]} [{level} 告警] {subject}"
 
 
-def format_utc(epoch: float) -> str:
-    """``2026-09-24 08:00 UTC`` -- the one time format of every pager message."""
-    return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(epoch))
+def format_time(epoch: float) -> str:
+    """``2026-09-24 16:00（UTC+8）`` -- the one time format of every pager message.
+
+    The owner's zone (UTC+8, no daylight saving) is the display; payloads keep UTC.
+    """
+    shown = datetime.fromtimestamp(epoch, tz=DISPLAY_TIMEZONE)
+    return shown.strftime("%Y-%m-%d %H:%M") + f"（{DISPLAY_TIMEZONE_LABEL}）"
 
 
 def format_duration(seconds: float) -> str:
@@ -278,8 +285,8 @@ def since_text(start: float | None, *, now: float, end: float | None = None) -> 
     if start is None:
         return "未知"
     if end is not None:
-        return f"{format_utc(start)} → {format_utc(end)}(共 {format_duration(end - start)})"
-    return f"{format_utc(start)}(已持续 {format_duration(now - start)})"
+        return f"{format_time(start)} → {format_time(end)}(共 {format_duration(end - start)})"
+    return f"{format_time(start)}(已持续 {format_duration(now - start)})"
 
 
 @dataclass(frozen=True)
@@ -575,11 +582,6 @@ def _epoch(value: object) -> float | None:
             parsed = parsed.replace(tzinfo=timezone.utc)
         epoch = parsed.timestamp()
     return epoch if epoch >= 1e9 else None
-
-
-def iso_utc(epoch: float) -> str:
-    """RFC 3339 in UTC, the way Alertmanager writes ``startsAt`` / ``endsAt``."""
-    return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def pager_message_from_payload(

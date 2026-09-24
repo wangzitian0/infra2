@@ -266,7 +266,7 @@ def test_run_once_remediate_kills_then_escalates_if_still_running(monkeypatch) -
     descriptions = [
         a["alerts"][0]["annotations"]["description"] for a in alerts if a.get("alerts")
     ]
-    assert any("manual intervention" in d or "STILL running" in d for d in descriptions)
+    assert any("需要人工介入" in d for d in descriptions)
 
 
 def test_remediate_survives_kill_api_failure(monkeypatch) -> None:

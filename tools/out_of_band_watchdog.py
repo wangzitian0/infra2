@@ -38,7 +38,7 @@ from libs.alerting import (  # noqa: E402
     deliver_feishu_text,
     deliver_infra2_report,
     firing_title,
-    format_utc,
+    format_time,
     highest_level,
     pager_level,
     render_pager_text,
@@ -1324,7 +1324,7 @@ def format_failure_message(
             environment=_check_environment(result),
             target=result.name,
             symptom=_redact(result.detail),
-            since=f"{format_utc(now)} 检出(日级审计;实际开始时间未知)",
+            since=f"{format_time(now)} 检出(日级审计;实际开始时间未知)",
             impact=(f"[{result.failure_domain}] " if result.failure_domain else "")
             + _IMPACT_BY_DOMAIN.get(result.failure_domain, _DEFAULT_IMPACT),
             action=_suggested_action_for_failure(result.name, result.failure_domain),
@@ -1428,13 +1428,12 @@ def format_report_message(
         return ""
     lines = [
         f"{REPORT_TITLE_PREFIX}Infra2 GitHub watchdog 日级审计",
-        "Reported, not paged: another layer pages these failure classes "
-        "(ops.observability.md §1.1).",
+        "只报告、不呼人:这些故障类由另一层呼人(ops.observability.md §1.1)。",
     ]
     if run_url:
-        lines.append(f"Run: {run_url}")
+        lines.append(f"运行:{run_url}")
     if reported:
-        lines.append(f"Failures ({len(reported)}):")
+        lines.append(f"失败({len(reported)} 项):")
         for result in reported:
             domain = f"[{result.failure_domain}] " if result.failure_domain else ""
             lines.append(
@@ -1442,13 +1441,13 @@ def format_report_message(
             )
     if stale:
         lines.append(
-            f"Stale Dokploy records ({len(stale)}), not failures; reconcile per "
-            f"{STATE_DISCREPANCY_RUNBOOK}:"
+            f"过期的 Dokploy 记录({len(stale)} 条,不算失败),按 "
+            f"{STATE_DISCREPANCY_RUNBOOK} 对账:"
         )
         for result, reason in stale:
             lines.append(f"- {result.name}: {_redact(result.detail)} [{reason}]")
     if notes:
-        lines.append("Information:")
+        lines.append("信息:")
         lines.extend(f"- {_redact(note)}" for note in notes)
     return "\n".join(lines)
 
@@ -1850,42 +1849,41 @@ def _failure_domain_for_ssh_target(name: str) -> str:
 
 
 def _suggested_action_for_failure(name: str, failure_domain: str) -> str:
+    """下一步 of a GitHub page (#905: Chinese; commands, paths and identifiers kept
+    verbatim, in backticks)."""
     if failure_domain == "host-reachability":
-        return "verify VPS reachability and DNS from an external network (curl + traceroute)"
+        return "从外部网络确认 VPS 可达与 DNS(`curl` + `traceroute`)"
     if failure_domain == "docker-runtime":
-        return "SSH into infra2 and run `docker ps` / `docker inspect` for unhealthy containers"
+        return "SSH 登录 infra2,对不健康的容器执行 `docker ps` / `docker inspect`"
     if failure_domain == "alert-bridge":
-        return (
-            "check `platform-alerting` container logs and /health from inside the host"
-        )
+        return "在宿主机内查看 `platform-alerting` 容器的日志与 `/health`"
     if failure_domain == "cloudflare-worker-health":
-        return "call worker /status with WATCHDOG_STATUS_TOKEN and verify last-run freshness"
+        return "用 `WATCHDOG_STATUS_TOKEN` 调用 Worker 的 `/status`,确认最近一次运行是否新鲜"
     if failure_domain == "dokploy-control-plane":
-        return "check Dokploy API and deploy logs for rollout/network failures"
+        return "检查 Dokploy API 与部署日志,找出发布或网络失败"
     if failure_domain == "peer-scheduler-liveness":
         return (
-            "open truealpha's scheduler-liveness workflow: re-enable it if disabled, "
-            "check its newest scheduled run and githubstatus.com; while it is dead no "
-            "stopped scheduled workflow in the estate is reported"
+            "打开 truealpha 的 `scheduler-liveness` workflow:被禁用就重新启用,再看它最新"
+            "一次定时运行与 githubstatus.com;它停摆期间,全 estate 停跑的定时 workflow "
+            "都无人报告"
         )
     if failure_domain == "backup":
         return (
-            "on the host, read /var/log/infra2-backup*.log for FAILED lines, rerun "
-            "/usr/local/sbin/infra2-host-backup.sh per SOP-006, then verify the "
-            "manifest per SOP-004"
+            "在宿主机上查 `/var/log/infra2-backup*.log` 里的 FAILED 行,按 SOP-006 重跑 "
+            "`/usr/local/sbin/infra2-host-backup.sh`,再按 SOP-004 校验 manifest"
         )
     if failure_domain == "restore-rehearsal":
         return (
-            "on the host, read /var/log/infra2-backup-restore-rehearsal.log (or, if "
-            "it is missing, root's crontab) and rerun or install the rehearsal cron "
-            "command per SOP-006A"
+            "在宿主机上查看 `/var/log/infra2-backup-restore-rehearsal.log`"
+            "(日志不存在时查看 root 的 crontab),"
+            "按 SOP-006A 手动重跑或安装演练的 cron 命令"
         )
     if failure_domain == "report-delivery":
         return (
-            "check the INFRA2_REPORTS_FEISHU_* secrets and the reports app; the "
-            "undelivered report-only findings are in this run's log"
+            "检查 `INFRA2_REPORTS_FEISHU_*` secrets 与报告 app;"
+            "未送达的只报告发现在本次运行的日志里"
         )
-    return "inspect the failed check detail and verify target service health manually"
+    return "查看失败检查的详情,手动确认目标服务是否健康"
 
 
 def _runbook_url_for_failure(failure_domain: str) -> str:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from libs.container_breakdown import (
     Breakdown,
     broken_state,
@@ -45,19 +47,19 @@ def test_container_name_strips_leading_slash():
 def test_classify_reason_matches_known_breakdown_first():
     logs = "starting agent\nVAULT_ROLE_ID and VAULT_SECRET_ID are required\nexiting"
     reason, detail = classify_reason(logs)
-    assert "Vault AppRole creds missing" in reason
+    assert reason == "Vault AppRole 凭据缺失(VAULT_ROLE_ID / VAULT_SECRET_ID)"
     assert "VAULT_ROLE_ID" in detail
 
 
 def test_classify_reason_falls_back_to_last_nonempty_line():
     reason, detail = classify_reason("boom: something unexpected\n\n")
-    assert "see log tail" in reason
+    assert reason == "崩溃循环 / 不健康(见日志尾)"
     assert detail == "boom: something unexpected"
 
 
 def test_classify_reason_handles_no_logs():
     reason, detail = classify_reason("")
-    assert "no logs" in reason
+    assert reason == "崩溃循环 / 不健康(未取到日志)"
     assert detail == ""
 
 
@@ -113,8 +115,8 @@ def test_find_breakdown_containers_filters_and_attaches_reason():
     assert names == {"vault-agent", "sick"}  # healthy one excluded
     by_name = {b.container: b for b in found}
     assert by_name["vault-agent"].state == "restarting"
-    assert "Vault AppRole creds missing" in by_name["vault-agent"].reason
-    assert "dependency unreachable" in by_name["sick"].reason
+    assert "Vault AppRole 凭据缺失" in by_name["vault-agent"].reason
+    assert by_name["sick"].reason == "依赖不可达(connection refused)"
 
 
 def test_build_alert_payload_shape_is_alertmanager_like():
@@ -625,7 +627,7 @@ def test_oom_killed_breakdown_classifies_as_host_memory():
     reason, detail = classify_reason(
         "kernel: Out of memory: Killed process 1234 (python)"
     )
-    assert "out of memory" in reason
+    assert reason == "内存耗尽(宿主机 CGroup 触发 OOM kill)"
 
     bd = Breakdown(
         container="finance_report-backend",
@@ -640,7 +642,10 @@ def test_oom_killed_breakdown_classifies_as_host_memory():
     assert payload["status"] == "firing"
     alert = payload["alerts"][0]
     assert alert["labels"]["failure_domain"] == "host-memory"
-    assert "out of memory" in alert["annotations"]["description"].lower()
+    assert alert["annotations"]["description"] == reason
+    # the cause alone says host memory, whatever the log line kept
+    (bare,) = build_breakdown_alert_payload([replace(bd, detail="")])["alerts"]
+    assert bare["labels"]["failure_domain"] == "host-memory"
 
 
 def _docker_entry(name: str, environment_label: str | None = None) -> dict:
@@ -772,8 +777,7 @@ def test_staging_and_preview_breakdowns_go_to_the_digest_never_the_pager(monkeyp
         "finance_report-backend-pr-5",
     }
     assert all(
-        reason.startswith("staging/preview container, never paged")
-        for reason in lines.values()
+        reason.startswith("staging/预览容器,从不呼人:") for reason in lines.values()
     )
 
 
@@ -803,7 +807,7 @@ def test_a_production_re_break_inside_the_floor_reaches_the_pager(monkeypatch):
     reports = [p for p in digests if p["commonLabels"].get("delivery") == "report"]
     assert len(pager) == 1 and len(reports) == 1
     assert _lines(pager[0]) == {
-        "platform-prefect-worker": "re-broke 1x inside the 6h stay-resolved floor"
+        "platform-prefect-worker": "恢复后 6h 保持期内又坏了 1 次"
     }
     assert list(_lines(reports[0])) == ["platform-prefect-worker-staging"]
 

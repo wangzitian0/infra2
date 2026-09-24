@@ -139,14 +139,17 @@ watchdog's text — shows the same fields in the same order
 | 环境 | `environment` label |
 | 对象 | full `service_id` + the probe, container, compose or check name |
 | 现象 | a probe's target, expected and observed; otherwise what the source reports |
-| 开始于 | when the failure started and how long it has lasted |
+| 开始于 | when the failure started, shown in UTC+8 (`2026-09-24 15:48（UTC+8）`), and how long it has lasted |
 | 影响 | the failure domain and what it means |
 | 下一步 | the first thing to check |
 | Runbook | the most specific runbook anchor for the alert or its failure domain |
 | 日志 | container breakdowns only: the log line the reason came from and the last lines |
 
-The title carries the highest level, the alert name, the environment and the item
-count. The first 5 items are shown in full, the rest one line each, and the card
+Labels, impacts, next steps and the causes and summaries the sources write are in
+Chinese; commands, paths and identifiers stay verbatim, in backticks, and evidence
+(probe readings, error text, HTTP bodies, log lines, GitHub check details) is shown
+as captured. The title carries the highest level, the alert name, the environment
+and the item count. The first 5 items are shown in full, the rest one line each, and the card
 stays under Feishu's 30 KB body limit (text: 3,500 characters). A RESOLVED card
 (green) names each recovered object with its start, end and duration. A report
 (`delivery=report`) is blue, titled `[报告]` and one line per item; the reports sent
@@ -447,8 +450,8 @@ into one of two streams per probe group:
     missing (no OpenPanel client id for the environment, an invalid URL) stays
     here for as long as the problem lasts, even if it passed before.
   - A never-passed failure also waits here during the 15-minute grace period.
-    Its description starts with `has not passed since the probe runner started`
-    and names the stream it will move to.
+    Its description starts with `自 probe runner 启动以来从未通过` (it has not
+    passed since the probe runner started) and names the stream it will move to.
 
 The grace period used to be permanent. A runner recreated during the 2026-09-15/16
 OpenPanel `NOSCRIPT` outage reported `openpanel-roundtrip` as "misconfigured" while

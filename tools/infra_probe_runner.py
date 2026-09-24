@@ -348,8 +348,8 @@ def _grace_note(result, alert_name: str, runs: int, seconds: int):
     return dataclasses.replace(
         result,
         summary=(
-            "has not passed since the probe runner started — probe or target broken; "
-            f"becomes {alert_name} after {runs} failed runs over {seconds // 60} min: "
+            "自 probe runner 启动以来从未通过:探针或目标坏了;连续失败 "
+            f"{runs} 次且超过 {seconds // 60} 分钟后转为 {alert_name}:"
             f"{result.summary}"
         ),
     )
@@ -792,8 +792,7 @@ def _chronic_digest_payload(chronic: list, now: float) -> dict:
                         f"{failing_for % 86400 // 3600}h: "
                         + (", ".join(probe_names) or "no probe names recorded")
                     ),
-                    "symptom": "still failing: "
-                    + (", ".join(probe_names) or "no probe names recorded"),
+                    "symptom": "仍在失败:" + (", ".join(probe_names) or "未记录探针名"),
                     "description": (
                         "not re-paged while its failing set is unchanged; a change "
                         "or the recovery is sent as usual"

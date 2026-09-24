@@ -792,10 +792,8 @@ def test_never_green_round_trip_escalates_after_the_grace_period(
     assert len(grace) == 1  # debounced per stream; the wording is stable
     assert grace[0]["commonLabels"]["severity"] == "warning"
     description = grace[0]["alerts"][0]["annotations"]["description"]
-    assert description.startswith("has not passed since the probe runner started")
-    assert "becomes InfraServiceProbeFailed after 3 failed runs over 15 min" in (
-        description
-    )
+    assert description.startswith("自 probe runner 启动以来从未通过")
+    assert "连续失败 3 次且超过 15 分钟后转为 InfraServiceProbeFailed" in description
     assert "HTTP Error 500" in description
 
     cycle(900)  # the streak now spans the window: an outage, not a misconfiguration
@@ -902,7 +900,7 @@ def test_a_round_trip_missing_its_own_configuration_never_escalates(
     )
     description = misconfigured[0]["alerts"][0]["annotations"]["description"]
     assert "no OpenPanel client id" in description
-    assert "has not passed" not in description
+    assert "从未通过" not in description
     assert not any("escalated" in line for line in printed)
     assert json.loads(state_path.read_text())["never_green"] == {}
 
@@ -2476,8 +2474,8 @@ def test_a_resolve_names_each_recovered_probe_and_how_long_it_was_down(
     )
     blob = json.dumps(card, ensure_ascii=False)
     assert "**对象**：platform/vault · vault-http" in blob
-    assert "2026-09-24 08:00 UTC → 2026-09-24 08:11 UTC(共 11 分钟)" in blob
-    assert "2026-09-24 08:02 UTC → 2026-09-24 08:11 UTC(共 9 分钟)" in blob
+    assert "2026-09-24 16:00（UTC+8） → 2026-09-24 16:11（UTC+8）(共 11 分钟)" in blob
+    assert "2026-09-24 16:02（UTC+8） → 2026-09-24 16:11（UTC+8）(共 9 分钟)" in blob
     assert "redis" not in blob
 
 

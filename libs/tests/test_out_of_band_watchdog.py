@@ -1850,7 +1850,7 @@ def test_main_pages_only_the_owned_classes_and_reports_the_rest(
         "dokploy-status:truealpha/production/postgres",
         "dokploy-status:truealpha/production/app",
     }
-    failures, stale = reports[0].split("Stale Dokploy records (1)", 1)
+    failures, stale = reports[0].split("过期的 Dokploy 记录(1 条,不算失败)", 1)
     assert "dokploy-status:truealpha/production/redis" in stale
     assert "run healthy on the current config cccccccccccc" in stale
     # an old record without per-unit evidence is a failure, labelled with its age
@@ -1858,7 +1858,7 @@ def test_main_pages_only_the_owned_classes_and_reports_the_rest(
         "production/app: composeStatus=error; old record: latest deployment is 100h old"
         in failures
     )
-    info = reports[0].split("Information:", 1)[1]
+    info = reports[0].split("信息:", 1)[1]
     assert "delivered by the Worker itself: ok=False failures=2" in info
     assert set(trail.failing) == {"infra2-backup-production"}
     assert trail.complete
@@ -2066,7 +2066,7 @@ def test_a_failed_pull_under_a_green_host_sweep_is_a_failure_not_stale(
     )
 
     assert (code, pages) == (0, [])
-    assert "Stale Dokploy records" not in reports[0]
+    assert "过期的 Dokploy 记录" not in reports[0]
     assert _failure_names(reports[0]) == {
         "dokploy-status:finance-report/production/backend",
         "dokploy-status:finance-report/staging/backend",
@@ -2243,7 +2243,7 @@ def test_a_github_page_shows_every_field_of_the_shared_layout() -> None:
         "环境": "global",
         "对象": "cloudflare-worker-status",
         "现象": "worker last ran 9000s ago (max 7200s); token=***",
-        "开始于": "2026-09-24 08:00 UTC 检出(日级审计;实际开始时间未知)",
+        "开始于": "2026-09-24 16:00（UTC+8） 检出(日级审计;实际开始时间未知)",
         "影响": "[cloudflare-worker-health] "
         + watchdog._IMPACT_BY_DOMAIN["cloudflare-worker-health"],
         "下一步": watchdog._suggested_action_for_failure(
@@ -2316,3 +2316,20 @@ def test_the_github_report_is_titled_as_a_report() -> None:
     )
 
     assert report.splitlines()[0] == "[报告] Infra2 GitHub watchdog 日级审计"
+
+
+def test_github_page_prose_is_chinese() -> None:
+    """#905: every next step and impact the GitHub page can show is Chinese;
+    commands, paths and identifiers stay verbatim in backticks."""
+    from libs.tests.test_pager_format import english_prose
+
+    watchdog = _load_watchdog()
+    domains = [*watchdog._IMPACT_BY_DOMAIN, "http-target", "host-diagnostics"]
+    texts = [
+        *(watchdog._suggested_action_for_failure("x", domain) for domain in domains),
+        *watchdog._IMPACT_BY_DOMAIN.values(),
+        watchdog._DEFAULT_IMPACT,
+    ]
+
+    assert len(texts) >= 25
+    assert {text: english_prose(text) for text in texts if english_prose(text)} == {}

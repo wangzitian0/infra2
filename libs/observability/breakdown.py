@@ -35,20 +35,23 @@ from libs.service_registry import resolve_container_host
 
 # (substring, human-readable cause) — ordered, first match wins. These are the
 # concrete breakdown signals seen in the finance_report outage + adjacent ones.
+HOST_MEMORY_CAUSE = "内存耗尽(宿主机 CGroup 触发 OOM kill)"
 BREAKDOWN_PATTERNS: tuple[tuple[str, str], ...] = (
     (
         "VAULT_ROLE_ID and VAULT_SECRET_ID are required",
-        "Vault AppRole creds missing (VAULT_ROLE_ID / VAULT_SECRET_ID)",
+        "Vault AppRole 凭据缺失(VAULT_ROLE_ID / VAULT_SECRET_ID)",
     ),
-    ("VAULT_APP_TOKEN is required", "Vault app token missing (VAULT_APP_TOKEN)"),
-    ("VAULT_ROLE_ID", "Vault AppRole creds missing"),
-    ("permission denied", "permission denied (Vault / secret access)"),
-    ("no such host", "DNS / service resolution failure"),
-    ("connection refused", "dependency unreachable (connection refused)"),
-    ("out of memory", "out of memory (host CGroup OOM killed)"),
-    ("oom-killer", "out of memory (host CGroup OOM killed)"),
-    ("killed process", "process terminated by system (SIGKILL)"),
+    ("VAULT_APP_TOKEN is required", "Vault 应用 token 缺失(VAULT_APP_TOKEN)"),
+    ("VAULT_ROLE_ID", "Vault AppRole 凭据缺失"),
+    ("permission denied", "权限被拒(Vault / secret 访问)"),
+    ("no such host", "DNS / 服务名解析失败"),
+    ("connection refused", "依赖不可达(connection refused)"),
+    ("out of memory", HOST_MEMORY_CAUSE),
+    ("oom-killer", HOST_MEMORY_CAUSE),
+    ("killed process", "进程被系统终止(SIGKILL)"),
 )
+# The cause is shown on the pager card (#905), so it is written in Chinese; the log
+# markers it is matched on, and every identifier in it, stay verbatim.
 
 _MAX_DETAIL = 200
 _LOG_TAIL_LINES = 5
@@ -124,8 +127,8 @@ def classify_reason(logs: str) -> tuple[str, str]:
                 return cause, line.strip()[:_MAX_DETAIL]
     for line in reversed(logs.splitlines()):
         if line.strip():
-            return "crash-loop / unhealthy (see log tail)", line.strip()[:_MAX_DETAIL]
-    return "crash-loop / unhealthy (no logs captured)", ""
+            return "崩溃循环 / 不健康(见日志尾)", line.strip()[:_MAX_DETAIL]
+    return "崩溃循环 / 不健康(未取到日志)", ""
 
 
 def log_tail(logs: str, detail: str = "") -> str:
@@ -250,7 +253,8 @@ def build_breakdown_alert_payload(
         combined_text = (b.reason + " " + b.detail).lower()
         domain = (
             "host-memory"
-            if any(
+            if b.reason == HOST_MEMORY_CAUSE
+            or any(
                 k in combined_text
                 for k in ("out of memory", "oom-killer", "cgroup oom")
             )

@@ -408,18 +408,17 @@ def run_once(
                 container=name,
                 state="chronic",
                 reason=(
-                    f"staging/preview container, never paged: broken in "
-                    f"{chronic[name]} sweep(s)"
+                    f"staging/预览容器,从不呼人:{chronic[name]} 次巡检坏着"
                     if is_report_only(context(name))
                     # Keyed on the floor itself, not on `active`: a floor-suppressed
                     # re-break leaves the incident active, so keying on `active` made
                     # this wording unreachable in exactly the case it describes
                     # (review on #686).
-                    else f"re-broke {chronic[name]}x inside the "
-                    f"{stay_resolved_seconds // 3600}h stay-resolved floor"
+                    else f"恢复后 {stay_resolved_seconds // 3600}h 保持期内又坏了 "
+                    f"{chronic[name]} 次"
                     if now - resolved_at.get(name, float("-inf"))
                     < stay_resolved_seconds
-                    else f"still broken, {chronic[name]} sweep(s) since it last paged"
+                    else f"仍坏着:上次呼人后已 {chronic[name]} 次巡检"
                 ),
                 detail=context(name).detail if context(name) else "",
                 log_tail=context(name).log_tail if context(name) else "",

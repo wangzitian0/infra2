@@ -269,7 +269,7 @@ def build_probe_alert_payload(
                     if result is not None
                     else {
                         "summary": f"{name} recovered",
-                        "description": "no longer probed in this stream",
+                        "description": "本流已不再探测它",
                     },
                     **_starts_at(since),
                     "endsAt": _rfc3339(now),

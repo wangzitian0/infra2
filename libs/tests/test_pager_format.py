@@ -123,7 +123,7 @@ def test_a_probe_page_shows_every_field(monkeypatch) -> None:
         "对象": "finance_report/app · finance-report-backend-http",
         "现象": "http http://finance-report-backend:8000/api/health → 期望 200; "
         "实际 502:Bad Gateway",
-        "开始于": "2026-09-24 07:48 UTC(已持续 12 分钟)",
+        "开始于": "2026-09-24 15:48（UTC+8）(已持续 12 分钟)",
         "影响": "[service-or-route] " + alerting._IMPACT_BY_DOMAIN["service-or-route"],
         "下一步": alerting._ACTION_BY_DOMAIN["service-or-route"],
         "Runbook": f"{BLOB}/platform/12.alerting/README.md#infra-service-probes",
@@ -187,9 +187,8 @@ def test_a_container_breakdown_shows_its_log_tail() -> None:
         "级别": "P0",
         "环境": "production",
         "对象": "finance_report/app · finance_report-backend",
-        "现象": "restarting: Vault AppRole creds missing "
-        "(VAULT_ROLE_ID / VAULT_SECRET_ID)",
-        "开始于": "2026-09-24 07:57 UTC(已持续 3 分钟)",
+        "现象": "restarting: Vault AppRole 凭据缺失(VAULT_ROLE_ID / VAULT_SECRET_ID)",
+        "开始于": "2026-09-24 15:57（UTC+8）(已持续 3 分钟)",
         "影响": "[runtime] " + alerting._IMPACT_BY_DOMAIN["runtime"],
         "下一步": alerting._ACTION_BY_DOMAIN["runtime"],
         "Runbook": f"{BLOB}/docs/runbooks/infra022-p0.md#container-killed",
@@ -241,10 +240,9 @@ def test_a_stuck_deploy_shows_the_queue_impact() -> None:
         "级别": "P0",
         "环境": "production",
         "对象": "finance_report/app · finance_report-app",
-        "现象": "deployment d1 running 2400s, past the ceiling",
-        "开始于": "2026-09-24 07:20 UTC(已持续 40 分钟)",
-        "影响": "[deploy-queue] queue is single-concurrency FIFO so this blocks "
-        "all deploys",
+        "现象": "部署 d1 已运行 2400s,超过上限",
+        "开始于": "2026-09-24 15:20（UTC+8）(已持续 40 分钟)",
+        "影响": "[deploy-queue] 部署队列单并发 FIFO:它阻塞之后的所有部署",
         "下一步": alerting._ACTION_BY_DOMAIN["deploy-queue"],
         "Runbook": f"{BLOB}/docs/runbooks/infra022-p0.md#deployment-failed",
     }
@@ -296,7 +294,7 @@ def test_a_signoz_rule_page_shows_every_field() -> None:
         "环境": "production",
         "对象": "finance_report/app · finance-report-backend",
         "现象": "finance_report backend 5xx rate is above 5% for 5 minutes.",
-        "开始于": "2026-09-24 07:54 UTC(已持续 5 分钟)",
+        "开始于": "2026-09-24 15:54（UTC+8）(已持续 5 分钟)",
         "影响": DEFAULT_IMPACT,
         "下一步": DEFAULT_ACTION,
         "Runbook": f"[ops.observability.md#7-标准操作程序-playbooks]({RUNBOOK_SECTION})",
@@ -356,7 +354,7 @@ def test_resolved_names_what_recovered_and_for_how_long() -> None:
         "环境": "production",
         "对象": "finance_report/app · finance-report-backend",
         "现象": "finance_report backend 5xx rate is above 5% for 5 minutes.",
-        "开始于": "2026-09-24 07:54 UTC → 2026-09-24 08:00 UTC(共 5 分钟)",
+        "开始于": "2026-09-24 15:54（UTC+8） → 2026-09-24 16:00（UTC+8）(共 5 分钟)",
     }
 
 
@@ -380,7 +378,7 @@ def test_a_resolved_breakdown_carries_its_start_and_end() -> None:
     assert item["对象"] == "infra/unregistered · prefect-worker"
     assert (
         item["开始于"]
-        == "2026-09-24 06:30 UTC → 2026-09-24 08:00 UTC(共 1 小时 30 分钟)"
+        == "2026-09-24 14:30（UTC+8） → 2026-09-24 16:00（UTC+8）(共 1 小时 30 分钟)"
     )
 
 
@@ -450,7 +448,7 @@ def test_a_report_is_titled_as_one_and_compact() -> None:
     assert body == (
         "• P0 · production · finance_report/app · finance-report-backend · "
         "finance_report backend 5xx rate is above 5% for 5 minutes. · "
-        "2026-09-24 07:54 UTC(已持续 5 分钟)"
+        "2026-09-24 15:54（UTC+8）(已持续 5 分钟)"
     )
     assert text.splitlines() == [card["header"]["title"]["content"], body]
 
@@ -620,3 +618,62 @@ def test_the_bridge_payload_body_is_what_is_measured() -> None:
     app = alerting.build_feishu_app_card_payload("oc_" + "0" * 32, card)
 
     assert card_body_bytes(card) == len(json.dumps(app).encode("utf-8"))
+
+
+# ---- pager prose is Chinese (#905) ----------------------------------------------------
+
+_WORD_RUN = re.compile(r"[A-Za-z][A-Za-z'-]*(?:[ ,;:./]+[A-Za-z][A-Za-z'-]*){2,}")
+
+
+def english_prose(text: str) -> list[str]:
+    """Runs of three or more English words outside `code` spans and URLs.
+
+    Pager prose is Chinese (#905); commands, paths and identifiers stay verbatim, in
+    backticks, and do not count.
+    """
+    bare = re.sub(r"`[^`]*`", " ", text)
+    bare = re.sub(r"https?://\S+", " ", bare)
+    return _WORD_RUN.findall(bare)
+
+
+def test_the_english_prose_detector_sees_a_sentence_and_spares_commands() -> None:
+    assert english_prose("reach the VPS over SSH; check the host") == [
+        "reach the VPS over SSH; check the host"
+    ]
+    assert (
+        english_prose(
+            "在宿主机上执行 `docker compose logs --tail 80`,见 https://a.example/b/c"
+        )
+        == []
+    )
+
+
+def test_the_bridge_writes_its_own_prose_in_chinese() -> None:
+    """Every impact, next step and cause the in-band sources write is Chinese."""
+    from libs.deploy_queue import QUEUE_IMPACT
+    from libs.observability.breakdown import BREAKDOWN_PATTERNS, classify_reason
+
+    texts = [
+        *alerting._IMPACT_BY_ALERT.values(),
+        *alerting._IMPACT_BY_DOMAIN.values(),
+        DEFAULT_IMPACT,
+        *alerting._ACTION_BY_ALERT.values(),
+        *alerting._ACTION_BY_DOMAIN.values(),
+        DEFAULT_ACTION,
+        QUEUE_IMPACT,
+        *(cause for _marker, cause in BREAKDOWN_PATTERNS),
+        classify_reason("")[0],
+        classify_reason("some unknown line")[0],
+    ]
+
+    assert len(texts) >= 25
+    assert {text: english_prose(text) for text in texts if english_prose(text)} == {}
+
+
+def test_times_are_shown_in_utc_plus_8() -> None:
+    """The owner's zone; durations do not depend on it."""
+    assert alerting.format_time(T0) == "2026-09-24 16:00（UTC+8）"
+    assert alerting.format_time(T0 + 9 * 3600) == "2026-09-25 01:00（UTC+8）"
+    assert alerting.since_text(T0, now=T0 + 3 * 86400 + 7200) == (
+        "2026-09-24 16:00（UTC+8）(已持续 3 天 2 小时)"
+    )

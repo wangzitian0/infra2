@@ -11,7 +11,7 @@ Every 30 minutes, from Cloudflare, outside the VPS:
 
 | Check | Pages | Class |
 |---|---|---|
-| Production probe-runner heartbeat older than `maxAgeSeconds` (or missing) | P0 "VPS or its egress is down" | host-reachability |
+| Production probe-runner heartbeat older than `maxAgeSeconds` (or missing) | P0 "VPS 或它的出网中断" (the VPS or its egress is down) | host-reachability |
 | Production v2 heartbeat fresh with `ok=false` (the probe loop or its delivery is unhealthy) for 2 consecutive runs; resolves after 2 healthy runs | P1, naming the runner's `detail` | alert-pipeline |
 | One external entrypoint per product (`dokploy`, `finance-report-web`, `truealpha-web`, production) fails 2 consecutive runs | P0 | host-reachability |
 | Staging heartbeat | never; shown on `/status` | — |
@@ -41,7 +41,9 @@ Every 30 minutes, from Cloudflare, outside the VPS:
   with email as the fallback channel. The text uses the pager layout every source
   shares ([ops.observability.md §3.1](../../docs/ssot/ops.observability.md), #905):
   级别 · 环境 · 对象 · 现象 · 开始于 · 影响 · 下一步 · Runbook, the level taken from
-  each target's or heartbeat's configured `severity` (`warning` is P2).
+  each target's or heartbeat's configured `severity` (`warning` is P2), times in
+  UTC+8, and its own prose (summaries, recoveries, next steps) in Chinese with
+  commands and identifiers verbatim.
 - **Outage edges.** The production heartbeat's down and up transitions are kept
   (the last 50) for the weekly availability report, which cannot learn about the
   VPS's own downtime from the VPS: `start` is the last recorded contact, `end` the

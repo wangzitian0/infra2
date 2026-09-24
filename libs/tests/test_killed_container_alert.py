@@ -69,7 +69,7 @@ def test_manually_killed_container_triggers_breakdown_alert():
     text_alert = format_signoz_alert(payload).splitlines()
     assert text_alert[0] == "🔴 [P0 告警] ContainerBreakdown · production · 1 项"
     assert "对象：finance_report/app · finance_report-backend" in text_alert
-    assert "现象：exited: crash-loop / unhealthy (see log tail)" in text_alert
+    assert "现象：exited: 崩溃循环 / 不健康(见日志尾)" in text_alert
     # and the log tail says why
     assert text_alert[-3:] == [
         "日志：",

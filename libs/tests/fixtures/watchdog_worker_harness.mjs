@@ -327,8 +327,8 @@ results.notSuppressed = {
   }
   results.suppressedThenVpsDies = runs.map((run) => ({
     minutes: (run.at - START) / MIN,
-    entrypointFiring: run.messages.some((m) => m.includes(`环境：production\n对象：finance_report/app · ${FR}\n现象：external entrypoint`)),
-    vpsDown: run.messages.some((m) => m.includes("VPS or its egress is down")),
+    entrypointFiring: run.messages.some((m) => m.includes(`环境：production\n对象：finance_report/app · ${FR}\n现象：从 Cloudflare 访问不到外部入口`)),
+    vpsDown: run.messages.some((m) => m.includes("现象：VPS 或它的出网中断")),
   }));
 }
 

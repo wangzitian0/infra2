@@ -2,7 +2,7 @@
 //
 // The Worker judges only what the VPS cannot report about itself:
 //   - the production probe-runner heartbeat is stale: P0 host-reachability
-//     ("VPS or its egress is down");
+//     ("VPS 或它的出网中断", the VPS or its egress is down);
 //   - the production heartbeat says the probe loop is unhealthy: P1 alert-pipeline;
 //   - one external entrypoint per product fails 2 consecutive runs: P0
 //     host-reachability, unless the fresh production heartbeat lists that route
@@ -80,6 +80,7 @@ const LEVEL_EMOJI = { P0: "🔴", P1: "🟠", P2: "🟡" };
 const MAX_MESSAGE_CHARS = 3500;
 const TRUNCATION_SUFFIX = "\n...[truncated]";
 const MAX_FULL_EVENTS = 5;
+const DISPLAY_OFFSET_MS = 8 * 60 * 60 * 1000;
 const REPO_BLOB = "https://github.com/wangzitian0/infra2/blob/main";
 
 export default {
@@ -232,13 +233,13 @@ function loadConfig(env) {
     targets = filterByEnvironment(parseJsonList(env.WATCHDOG_TARGETS_JSON, DEFAULT_TARGETS), environments);
     heartbeats = filterByEnvironment(parseJsonList(env.WATCHDOG_HEARTBEATS_JSON, DEFAULT_HEARTBEATS), environments);
   } catch (error) {
-    problems.push(`config-preflight failed: ${errorText(error)}`);
+    problems.push(`配置预检失败:${errorText(error)}`);
   }
   if (problems.length === 0) {
-    if (targets.length === 0) problems.push("effective entrypoint target list is empty");
-    if (heartbeats.length === 0) problems.push("effective heartbeat target list is empty");
+    if (targets.length === 0) problems.push("生效的入口目标列表为空");
+    if (heartbeats.length === 0) problems.push("生效的心跳目标列表为空");
   }
-  if (!env.WATCHDOG_STATE) problems.push("WATCHDOG_STATE KV binding is missing");
+  if (!env.WATCHDOG_STATE) problems.push("缺少 WATCHDOG_STATE KV 绑定");
   return { targets, heartbeats, problems };
 }
 
@@ -251,9 +252,9 @@ function configObservation(problems) {
     failureClass: "watchdog-config",
     severity: "P1",
     status: problems.length > 0 ? "failing" : "ok",
-    summary: "the Worker cannot evaluate its checks",
+    summary: "Worker 无法评估它的检查",
     detail: problems.join("; "),
-    recovery: "Worker config valid again",
+    recovery: "Worker 配置恢复有效",
   };
 }
 
@@ -315,10 +316,10 @@ async function checkEntrypoint(target, timeoutMs) {
     }
     return {
       ok: false,
-      detail: `HTTP ${response.status}; expected ${statuses.join(",")}; body=${await safeBody(response)}`,
+      detail: `HTTP ${response.status};期望 ${statuses.join(",")};body=${await safeBody(response)}`,
     };
   } catch (error) {
-    return { ok: false, detail: `fetch failed: ${errorText(error)}` };
+    return { ok: false, detail: `请求失败:${errorText(error)}` };
   } finally {
     clearTimeout(timeout);
   }
@@ -333,9 +334,9 @@ function entrypointObservation(state, target, probe, threshold, vpsFailingRoutes
     service_id: target.service_id || "infra/unregistered",
     failureClass: "host-reachability",
     severity: pagerLevel(target.severity),
-    summary: `external entrypoint ${target.url} unreachable from Cloudflare`,
+    summary: `从 Cloudflare 访问不到外部入口 ${target.url}`,
     detail: trimText(probe.detail),
-    recovery: `${target.url} reachable again (${probe.detail})`,
+    recovery: `${target.url} 已恢复可达(${probe.detail})`,
     url: target.url,
   };
   if (probe.ok) {
@@ -359,34 +360,34 @@ function entrypointObservation(state, target, probe, threshold, vpsFailingRoutes
   if (suppressedReason) entry.suppressedReason = suppressedReason;
   state.entrypoints[key] = entry;
   if (failures < threshold) {
-    return { ...base, status: "pending", since: entry.since, detail: `${probe.detail} (failing run ${failures}/${threshold})` };
+    return { ...base, status: "pending", since: entry.since, detail: `${probe.detail}(连续失败第 ${failures}/${threshold} 次)` };
   }
   return {
     ...base,
     status: "failing",
     since: entry.since,
-    detail: `${probe.detail} (${failures} consecutive runs)`,
+    detail: `${probe.detail}(连续 ${failures} 次运行失败)`,
     suppressedReason,
   };
 }
 
 function heartbeatVerdict(heartbeat, raw, nowMs) {
   if (!raw) {
-    return { state: "missing", detail: "heartbeat missing", ageSeconds: null, record: null };
+    return { state: "missing", detail: "心跳缺失", ageSeconds: null, record: null };
   }
   const record = parseHeartbeatRecord(raw);
   if (!record) {
-    return { state: "invalid", detail: "heartbeat payload is invalid JSON", ageSeconds: null, record: null };
+    return { state: "invalid", detail: "心跳内容不是合法 JSON", ageSeconds: null, record: null };
   }
   const ageSeconds = Math.floor((nowMs - Number(record.receivedAt || 0)) / 1000);
   const maxAge = Number(heartbeat.maxAgeSeconds || 1800);
   if (ageSeconds < -300) {
-    return { state: "future", detail: `heartbeat timestamp is in the future: ${ageSeconds}s old`, ageSeconds, record };
+    return { state: "future", detail: `心跳时间戳在未来:${ageSeconds}s`, ageSeconds, record };
   }
   if (ageSeconds > maxAge) {
-    return { state: "stale", detail: `heartbeat stale: ${ageSeconds}s old (max ${maxAge}s)`, ageSeconds, record };
+    return { state: "stale", detail: `心跳过期:${ageSeconds}s 前(上限 ${maxAge}s)`, ageSeconds, record };
   }
-  return { state: "fresh", detail: `heartbeat fresh: ${ageSeconds}s old`, ageSeconds, record };
+  return { state: "fresh", detail: `心跳新鲜:${ageSeconds}s 前`, ageSeconds, record };
 }
 
 function heartbeatObservations(state, heartbeat, verdict, outage) {
@@ -404,9 +405,9 @@ function heartbeatObservations(state, heartbeat, verdict, outage) {
     severity: pagerLevel(heartbeat.severity),
     status: fresh ? "ok" : "failing",
     since: outage ? outage.start : undefined,
-    summary: "VPS or its egress is down",
+    summary: "VPS 或它的出网中断",
     detail: verdict.detail,
-    recovery: `heartbeat fresh again (${verdict.ageSeconds}s old)`,
+    recovery: `心跳恢复新鲜(${verdict.ageSeconds}s 前)`,
   };
   const loopDetail = fresh ? trimText(verdict.record.detail) : "";
   const unhealthy = {
@@ -415,9 +416,9 @@ function heartbeatObservations(state, heartbeat, verdict, outage) {
     failureClass: "alert-pipeline",
     severity: "P1",
     status: loopStatus(state, key, `${key}:heartbeat-unhealthy`, verdict),
-    summary: "probe loop reports unhealthy",
-    detail: loopDetail || "no detail",
-    recovery: `probe loop healthy again (${loopDetail || "ok"})`,
+    summary: "探测循环报告不健康",
+    detail: loopDetail || "无详情",
+    recovery: `探测循环恢复健康(${loopDetail || "ok"})`,
   };
   return [stale, unhealthy];
 }
@@ -517,7 +518,7 @@ function planAlerts(currentAlerts, observations, nowMs, renotifyMs, { resolveUno
     events.push({
       kind: "resolved",
       identity,
-      obs: obs || { ...active, recovery: "no longer checked by this Worker" },
+      obs: obs || { ...active, recovery: "本 Worker 不再检查它" },
       since: Number(active.since || nowMs),
     });
   }
@@ -588,7 +589,7 @@ function firingValues(event, nowMs) {
     obs.environment,
     objectName(obs),
     `${obs.summary} — ${obs.detail}`,
-    `${formatUtc(event.since)}(已持续 ${formatDuration(nowMs - event.since)})`,
+    `${formatTime(event.since)}(已持续 ${formatDuration(nowMs - event.since)})`,
     `[${obs.failureClass}] ${impactText(obs)}`,
     suggestedAction(obs),
     runbookUrl(obs),
@@ -603,7 +604,7 @@ function resolvedValues(event, nowMs) {
     obs.environment,
     objectName(obs),
     obs.recovery,
-    `${formatUtc(event.since)} → ${formatUtc(nowMs)}(共 ${formatDuration(nowMs - event.since)})`,
+    `${formatTime(event.since)} → ${formatTime(nowMs)}(共 ${formatDuration(nowMs - event.since)})`,
   ];
 }
 
@@ -619,9 +620,10 @@ function highestLevel(severities) {
   return severities.map(pagerLevel).reduce((best, level) => (LEVEL_RANK[level] < LEVEL_RANK[best] ? level : best), "P2");
 }
 
-function formatUtc(ms) {
-  const iso = new Date(ms).toISOString();
-  return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
+// The owner's zone (UTC+8, no daylight saving), as libs/alerting.py format_time.
+function formatTime(ms) {
+  const iso = new Date(ms + DISPLAY_OFFSET_MS).toISOString();
+  return `${iso.slice(0, 10)} ${iso.slice(11, 16)}（UTC+8）`;
 }
 
 function formatDuration(ms) {
@@ -650,16 +652,17 @@ function impactText(obs) {
   }
 }
 
+// Commands, paths and identifiers stay verbatim, in backticks.
 function suggestedAction(obs) {
   switch (obs.failureClass) {
     case "host-reachability":
       return obs.url
-        ? `curl -I "${obs.url}" from an external network; if the VPS heartbeat is also stale, the host or its egress is down`
-        : "reach the VPS over SSH; check the host, its network and the platform-alerting-probes container";
+        ? `从外部网络执行 \`curl -I "${obs.url}"\`;若 VPS 心跳也过期,就是整机或它的出网中断`
+        : "通过 SSH 登录 VPS,检查宿主机、它的网络与 `platform-alerting-probes` 容器";
     case "alert-pipeline":
-      return "read platform-alerting-probes logs: the probe loop or its alert delivery is failing";
+      return "查看 `platform-alerting-probes` 的日志:探测循环或它的告警投递在失败";
     default:
-      return "validate WATCHDOG_TARGETS_JSON / WATCHDOG_HEARTBEATS_JSON and the KV binding, then redeploy the Worker";
+      return "核对 `WATCHDOG_TARGETS_JSON` / `WATCHDOG_HEARTBEATS_JSON` 与 KV 绑定,再重新部署 Worker";
   }
 }
 

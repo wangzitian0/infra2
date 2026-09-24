@@ -114,13 +114,17 @@ probe runner 一次推送覆盖一组内所有失败探针,整条推送的 sever
 | 2 | 环境 | `environment` |
 | 3 | 对象 | 完整 `service_id` + 探针 / 容器 / compose / 检查名 |
 | 4 | 现象 | 探针:kind + target → 期望 vs 实际;其余:来源给的 `symptom` / `description` |
-| 5 | 开始于 | 开始时间(UTC)+ 已持续;RESOLVED 为起止时间与总时长 |
+| 5 | 开始于 | 开始时间,按 owner 时区显示:`2026-09-24 15:48（UTC+8）`,+ 已持续;RESOLVED 为起止时间与总时长(payload 内时间仍是 UTC) |
 | 6 | 影响 | `[failure_domain]` + 该域影响一句(一域一句) |
 | 7 | 下一步 | 按告警名 / failure domain 的第一步;Worker 与 GitHub 沿用各自的 action map |
 | 8 | Runbook | 按告警名 / failure domain 的具体锚点;没有更具体的就指向 §7 |
 | 9 | 日志 | 仅容器 breakdown:原因所在行 + 最后几行,截断 |
 
-- **唯一定义**:`libs/alerting.py` 的 `PAGER_FIELDS` / `pager_level` / `since_text`。Worker 是 JS,保留一份副本,由
+- **中文**:标签、标题、影响、下一步,以及各来源自己写的固定描述(Worker 的故障摘要与恢复语句、breakdown 原因、部署队列与每日摘要
+  的现象)一律中文;命令、路径、标识符原样写在反引号里。原样保留的只有证据:探针读数与异常文本、HTTP body、日志行、runner 心跳
+  `detail`、SigNoz 规则文本(归 #906)、GitHub 各检查的 `detail`(它同时是 issue 留痕、结构化日志与日报里的判定记录)。测试把
+  "三个以上连续英文词"判为回归(`libs/tests/test_pager_format.py::english_prose`)。
+- **唯一定义**:`libs/alerting.py` 的 `PAGER_FIELDS` / `pager_level` / `since_text` / `format_time`。Worker 是 JS,保留一份副本,由
   `libs/tests/test_cloudflare_watchdog.py` 以**渲染结果**对齐(字段顺序、级别映射、时间格式);GitHub watchdog 直接调用
   `libs.alerting` 的文本渲染。三种级别词汇(critical/error/warning、P0/P1、P0/P1/P2)在渲染文本里只剩 P0/P1/P2;Worker 的
   入口与心跳级别取其配置的 `severity`(`warning` = P2,不再一律 P1)。
@@ -219,7 +223,7 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
     默认 3 / 900)后也升级到这里——`/healthcheck` 为绿不代表能写入(OpenPanel 在 NOSCRIPT 期间 `/healthcheck` 一直 200,事件丢了 17h)。
   - `InfraProbeMisconfigured`(`<group>:misconfigured`,固定 warning):探针自报配置缺失(退出码 `EX_CONFIG`=78,如 OpenPanel client id
     缺失、URL 非法)**永远**留在这里,不论历史——它没测到目标;从未成功过、仍在 15min 宽限期内的失败也暂留这里,描述写明
-    "has not passed since the probe runner started … becomes InfraServiceProbeFailed after …",而不是"探针坏了"。
+    "自 probe runner 启动以来从未通过 … 后转为 InfraServiceProbeFailed",而不是"探针坏了"。
 
 ### 4.6 finance_report 告警/仪表盘 config-as-code(#373)
 
@@ -377,7 +381,7 @@ Runbook 入库仅交付操作路径；#723 要求的一次现场演练、完整�
 
 ### SOP-005: Cloudflare 带外 watchdog(轻量带外,边缘 30min;#904)
 活在 [`cloudflare/infra-watchdog`](../../cloudflare/infra-watchdog/),**直发 Feishu**(不经它要验证的 bridge,email 兜底)。只判 VPS 自己报告不了的(§1.1),归属记于 [`watchdog-signals.yaml`](watchdog-signals.yaml);细节见其 README。
-- **报警,只报 production**:prod 心跳过期 → P0 host-reachability「VPS or its egress is down」;v2 心跳新鲜但 `ok=false` **连续 2 次运行** → P1 alert-pipeline,带 runner 的 `detail`,**连续 2 次** `ok` 才 RESOLVED(翻转的循环不报);**v1 心跳的 `ok` 视为未知**(v1 runner 任一探针失败即 `ok=false`,不代表循环坏了),不报也不恢复。3 个产品外部入口(`dokploy`、`finance-report-web`、`truealpha-web`)每次运行各 GET 一次、**无 run 内 sleep 重试**,连续 2 次失败 → P0 host-reachability。
+- **报警,只报 production**:prod 心跳过期 → P0 host-reachability「VPS 或它的出网中断」;v2 心跳新鲜但 `ok=false` **连续 2 次运行** → P1 alert-pipeline,带 runner 的 `detail`,**连续 2 次** `ok` 才 RESOLVED(翻转的循环不报);**v1 心跳的 `ok` 视为未知**(v1 runner 任一探针失败即 `ok=false`,不代表循环坏了),不报也不恢复。3 个产品外部入口(`dokploy`、`finance-report-web`、`truealpha-web`)每次运行各 GET 一次、**无 run 内 sleep 重试**,连续 2 次失败 → P0 host-reachability。
 - **入口抑制(VPS 已报则不重复报)只在全部成立时生效**:心跳新鲜、`schema: 2`、`ok` 不为 false、`failing_public_routes` 列出该路由(#903:只列已投递且仍活跃的告警)、且 `last_delivery_ok_at` 不早于上一次看到该入口健康的运行(`since` − 一个 cron 间隔,故障只可能始于其后)。维护期(列表为空)、runner 从未报过该路由、循环不健康、投递过旧或 v1/过期心跳——都**不**抑制。抑制每次运行重新评估,条件一失效当次即报;原因记在 `/status`。staging 心跳只记录、在 `/status` 展示,从不报警。其余公网路由全部由 VPS in-band 探针报(SOP-006)。
 - **部署顺序**:先部署 #903 的 runner(心跳 v2),再部署 Worker。反过来时 v1 心跳的 `ok` 被当作未知:循环/投递失效的 P1 在 runner 升级前缺席(覆盖空洞而非噪音),入口抑制也不生效(可能与 VPS 重复报)。
 - **实测检出时延**(`test_cloudflare_watchdog_kv_budget.py`,VPS 在 30 min cron 窗口内每分钟各死一次):入口告警 31–60 min,心跳过期「VPS down」82–111 min;入口告警总是先到。

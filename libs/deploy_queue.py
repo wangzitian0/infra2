@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from libs.service_identity import ServiceIdentity
 
 RUNNING_STATUS = "running"
-QUEUE_IMPACT = "queue is single-concurrency FIFO so this blocks all deploys"
+QUEUE_IMPACT = "部署队列单并发 FIFO:它阻塞之后的所有部署"
 
 
 @dataclass(frozen=True)
@@ -171,8 +171,8 @@ def build_deploy_guard_alert_payload(
                     "observed": f"compose={s.compose_id} age={int(s.age_seconds)}s",
                     "compose": s.compose_name,
                     "symptom": (
-                        f"deployment {s.deployment_id} running {int(s.age_seconds)}s, "
-                        "past the ceiling" + (f"; {action_note}" if action_note else "")
+                        f"部署 {s.deployment_id} 已运行 {int(s.age_seconds)}s,超过上限"
+                        + (f";{action_note}" if action_note else "")
                     ),
                     "impact": QUEUE_IMPACT,
                 },
