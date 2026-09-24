@@ -228,12 +228,14 @@ Scheduled on the host via crontab:
 0 4 1 1,4,7,10 * BACKUP_REMOTE=gdrive-backup:infra2 BACKUP_TIER=quarterly /usr/local/sbin/infra2-host-backup.sh >> /var/log/infra2-backup-quarterly.log 2>&1
 ```
 
-> **OFF-HOST STATUS**: Transport active; full-state coverage unverified.
-> The encrypted `rclone crypt` remote is readable and writable, but the latest
-> observed legacy root manifest contained only 9 of 17 declared services and
-> no environment marker. Production and Staging are not considered fully
-> protected until each has a fresh 17/17 off-host manifest and downloaded
-> archives pass size/SHA256 checks and isolated restore checks.
+> **OFF-HOST STATUS (2026-09-24)**: The Production run `20260924T034246Z`
+> has an environment-specific 17/17 manifest. All 17 archives were downloaded
+> from `rclone crypt` and passed byte-count, SHA256, gzip and tar checks; the
+> Finance Report and TrueAlpha database archives also passed isolated restores.
+> Staging still has no environment-specific 17/17 remote manifest. The older
+> unprefixed root manifest remains only 9/17 and has no environment marker.
+> Full two-environment coverage remains unverified until Staging passes the
+> same download, checksum and isolated-restore checks.
 > Backups are uploaded to Google Drive (`gdrive-backup:infra2`).
 > The root of trust is 1Password (`bootstrap/gdrive`). To restore credentials on a
 > fresh host: `op item get "bootstrap/gdrive" --vault "Infra2" --fields "rclone_conf" > ~/.config/rclone/rclone.conf`.
