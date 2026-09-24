@@ -295,6 +295,27 @@ signals:
     severity: warning
     cadence: 60s
 
+  # #921: the full-dependency health route (finance_report#1653), probed in-band.
+  - signal_id: production.finance-report-api-full-health.public-route
+    environment: production
+    component: finance-report-api
+    signal: finance-report-api-full-health-public-route
+    primary_owner: self
+    layer: vps
+    failure_class: service-health
+    severity: warning
+    cadence: 60s
+
+  - signal_id: staging.finance-report-api-full-health.public-route
+    environment: staging
+    component: finance-report-api
+    signal: finance-report-api-full-health-public-route
+    primary_owner: self
+    layer: vps
+    failure_class: service-health
+    severity: warning
+    cadence: 60s
+
   - signal_id: production.truealpha-web.public-route
     environment: production
     component: app
