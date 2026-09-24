@@ -8,7 +8,6 @@ RUN pip install --no-cache-dir \
     "infra2-sdk @ https://github.com/wangzitian0/infra2-sdk/releases/download/v2.1.1/infra2_sdk-2.1.1-py3-none-any.whl"
 
 COPY platform/30.todo /app/
-COPY libs /app/libs
 
 ENV PYTHONPATH=/app
 EXPOSE 8000

@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.service_facets import BackupFacet, Exemption, PublicRouteFacet
+from libs.service_facets import Exemption
 
 shared_tasks = sys.modules.get("platform.30.todo.shared")
 
@@ -15,25 +15,12 @@ class TodoDeployer(Deployer):
     compose_path = "platform/30.todo/compose.yaml"
     data_path = "/data/platform/todo"
 
-    subdomain = "todo"
+    subdomain = None
     service_port = 8000
     service_name = "todo"
     deploy_v2_canary = False
 
-    backups = (
-        BackupFacet(
-            method="config_archive",
-            restore_command="restore todo app config.",
-        ),
-    )
-
-    public_routes = (
-        PublicRouteFacet(
-            subdomain="todo",
-            path="/api/health",
-            expected="200",
-        ),
-    )
+    backups = ()
 
     exemptions = (
         Exemption(
