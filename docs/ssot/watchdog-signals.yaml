@@ -16,6 +16,9 @@
 #                                this audit's owner-specific existence checks
 #                                (see libs/container_breakdown_watch.py,
 #                                tools/vault_self_refresh_audit_check.py).
+#                                Exception: a `layer: vps` *-public-route entry
+#                                must be rendered by a PublicRouteFacet in its
+#                                environment at the same severity (#904).
 #
 # `tier` (minute|hour|day|month) + `type` (alert|report) -- #425 T5.
 # ops.observability.md §2 is the SSOT law (landed by #425 T1/#426): ALERT is
@@ -105,43 +108,9 @@ failure_classes:
 # Paging signals still in the wrong layer. Each entry names the #901 phase
 # issue that moves or retires it; the audit fails once an entry stops being a
 # violation, so the list can only shrink with the work that fixes it.
-relayering_debt:
-  - signal_id: production.vault.public-route
-    phase: "#904"
-    reason: the VPS public-route probes already check this route; the Worker keeps one entrypoint per product
-  - signal_id: production.minio.public-route
-    phase: "#904"
-    reason: the VPS public-route probes already check this route; the Worker keeps one entrypoint per product
-  - signal_id: production.authentik.public-route
-    phase: "#904"
-    reason: the VPS public-route probes already check this route; the Worker keeps one entrypoint per product
-  - signal_id: production.signoz.public-route
-    phase: "#904"
-    reason: the VPS public-route probes already check this route; the Worker keeps one entrypoint per product
-  - signal_id: staging.minio.public-route
-    phase: "#904"
-    reason: the VPS public-route probes already check this route; the Worker keeps one entrypoint per product
-  - signal_id: staging.authentik.public-route
-    phase: "#904"
-    reason: the VPS public-route probes already check this route; the Worker keeps one entrypoint per product
-  - signal_id: production.finance-report-api.public-route
-    phase: "#904"
-    reason: the VPS public-route probes already check this route; the Worker keeps one entrypoint per product
-  - signal_id: staging.finance-report-web.public-route
-    phase: "#904"
-    reason: the VPS public-route probes already check this route; the Worker keeps one entrypoint per product
-  - signal_id: staging.finance-report-api.public-route
-    phase: "#904"
-    reason: the VPS public-route probes already check this route; the Worker keeps one entrypoint per product
-  - signal_id: production.truealpha-api.public-route
-    phase: "#904"
-    reason: the VPS public-route probes already check this route; the Worker keeps one entrypoint per product
-  - signal_id: staging.truealpha-web.public-route
-    phase: "#904"
-    reason: the VPS public-route probes already check this route; the Worker keeps one entrypoint per product
-  - signal_id: staging.truealpha-api.public-route
-    phase: "#904"
-    reason: the VPS public-route probes already check this route; the Worker keeps one entrypoint per product
+# Empty since #908 (GitHub checks now report) and #904 (the Worker keeps one
+# entrypoint per product; every other route pages from the VPS).
+relayering_debt: []
 signals:
   # ── internal plane: GENERATED, do not hand-write entries here (#543) ──
   # Every `primary_owner: internal` entry is DERIVED from the ProbeFacet +
@@ -159,6 +128,22 @@ signals:
   # by a WRITE-PATH healthcheck (op-ch & platform-clickhouse compose ->
   # unhealthy -> Dokploy restart) plus the signoz/openpanel-roundtrip signals
   # (write+query) as the alert path.
+  #
+  # ── Cloudflare Worker: one external entrypoint per product (#904) ──
+  # The Worker GETs these three production URLs once per 30-minute run and pages
+  # host-reachability after 2 consecutive failing runs, unless the fresh
+  # production heartbeat lists the route among the VPS's own failing in-band
+  # probes (then the VPS has paged it). They must equal the Worker's
+  # WATCHDOG_TARGETS_JSON (audited) and its built-in defaults (tested).
+  #
+  # ── VPS in-band public-route probes (`primary_owner: self`, `layer: vps`) ──
+  # Every other public route is probed every minute by the probe runner from its
+  # PublicRouteFacet declarations (PUBLIC_ROUTE_PROBE_SPECS) and paged through
+  # the bridge as service-health. Their URL, expected statuses and timeout live
+  # on the facet only; these entries register ownership, and the audit fails one
+  # whose (environment, signal) the facets no longer render or whose severity
+  # disagrees with the render. Until #904 the Worker probed these too, every 30
+  # minutes, and paged them a second time.
 
   - signal_id: production.dokploy.public-route
     environment: production
@@ -170,72 +155,70 @@ signals:
     cadence: 30m
     expected: "200,302"
     url: https://cloud.zitian.party
+    tier: hour
+    type: alert
+    consecutive_failures: 2 # WATCHDOG_ENTRYPOINT_FAILURE_RUNS: one GET per 30-minute run, no in-run retry
+    renotify_window_sec: 21600 # WATCHDOG_RENOTIFY_SECONDS
 
   - signal_id: production.vault.public-route
     environment: production
     component: vault
     signal: vault-public-route
-    primary_owner: cloudflare
+    primary_owner: self
+    layer: vps
     failure_class: service-health
     severity: critical
-    cadence: 30m
-    expected: "200,429,472,473"
-    url: https://vault.zitian.party/v1/sys/health
+    cadence: 60s
 
   - signal_id: production.minio.public-route
     environment: production
     component: minio
     signal: minio-public-route
-    primary_owner: cloudflare
+    primary_owner: self
+    layer: vps
     failure_class: service-health
-    severity: warning
-    cadence: 30m
-    expected: "200"
-    url: https://minio.zitian.party/minio/health/live
+    severity: critical
+    cadence: 60s
 
   - signal_id: production.authentik.public-route
     environment: production
     component: authentik
     signal: authentik-public-route
-    primary_owner: cloudflare
+    primary_owner: self
+    layer: vps
     failure_class: service-health
     severity: critical
-    cadence: 30m
-    expected: "200,204,302"
-    url: https://sso.zitian.party/-/health/live/
+    cadence: 60s
 
   - signal_id: production.signoz.public-route
     environment: production
     component: signoz
     signal: signoz-public-route
-    primary_owner: cloudflare
+    primary_owner: self
+    layer: vps
     failure_class: service-health
     severity: critical
-    cadence: 30m
-    expected: "200,302"
-    url: https://signoz.zitian.party
+    cadence: 60s
 
   - signal_id: staging.minio.public-route
     environment: staging
     component: minio
     signal: minio-public-route
-    primary_owner: cloudflare
+    primary_owner: self
+    layer: vps
     failure_class: service-health
     severity: warning
-    cadence: 30m
-    expected: "200"
-    url: https://minio-staging.zitian.party/minio/health/live
+    cadence: 60s
 
   - signal_id: staging.authentik.public-route
     environment: staging
     component: authentik
     signal: authentik-public-route
-    primary_owner: cloudflare
+    primary_owner: self
+    layer: vps
     failure_class: service-health
     severity: warning
-    cadence: 30m
-    expected: "200,204,302"
-    url: https://sso-staging.zitian.party/-/health/live/
+    cadence: 60s
 
   - signal_id: staging.signoz.public-route
     environment: staging
@@ -277,39 +260,40 @@ signals:
     cadence: 30m
     expected: "200,302,307,308"
     url: https://report.zitian.party/
+    tier: hour
+    type: alert
+    consecutive_failures: 2 # WATCHDOG_ENTRYPOINT_FAILURE_RUNS: one GET per 30-minute run, no in-run retry
+    renotify_window_sec: 21600 # WATCHDOG_RENOTIFY_SECONDS
 
   - signal_id: production.finance-report-api.public-route
     environment: production
     component: finance-report-api
     signal: finance-report-api-public-route
-    primary_owner: cloudflare
+    primary_owner: self
+    layer: vps
     failure_class: service-health
     severity: critical
-    cadence: 30m
-    expected: "200"
-    url: https://report.zitian.party/api/health
+    cadence: 60s
 
   - signal_id: staging.finance-report-web.public-route
     environment: staging
     component: finance-report-web
     signal: finance-report-web-public-route
-    primary_owner: cloudflare
+    primary_owner: self
+    layer: vps
     failure_class: service-health
     severity: warning
-    cadence: 30m
-    expected: "200,302,307,308"
-    url: https://report-staging.zitian.party/
+    cadence: 60s
 
   - signal_id: staging.finance-report-api.public-route
     environment: staging
     component: finance-report-api
     signal: finance-report-api-public-route
-    primary_owner: cloudflare
+    primary_owner: self
+    layer: vps
     failure_class: service-health
     severity: warning
-    cadence: 30m
-    expected: "200"
-    url: https://report-staging.zitian.party/api/health
+    cadence: 60s
 
   - signal_id: production.truealpha-web.public-route
     environment: production
@@ -321,40 +305,46 @@ signals:
     cadence: 30m
     expected: "200,302,307,308"
     url: https://truealpha.club/
+    tier: hour
+    type: alert
+    consecutive_failures: 2 # WATCHDOG_ENTRYPOINT_FAILURE_RUNS: one GET per 30-minute run, no in-run retry
+    renotify_window_sec: 21600 # WATCHDOG_RENOTIFY_SECONDS
 
   - signal_id: production.truealpha-api.public-route
     environment: production
     component: app
     signal: truealpha-api-public-route
-    primary_owner: cloudflare
+    primary_owner: self
+    layer: vps
     failure_class: service-health
     severity: critical
-    cadence: 30m
-    expected: "200"
-    url: https://truealpha.club/api/health
+    cadence: 60s
 
   - signal_id: staging.truealpha-web.public-route
     environment: staging
     component: app
     signal: truealpha-web-public-route
-    primary_owner: cloudflare
+    primary_owner: self
+    layer: vps
     failure_class: service-health
     severity: warning
-    cadence: 30m
-    expected: "200,302,307,308"
-    url: https://truealpha-staging.truealpha.club/
+    cadence: 60s
 
   - signal_id: staging.truealpha-api.public-route
     environment: staging
     component: app
     signal: truealpha-api-public-route
-    primary_owner: cloudflare
+    primary_owner: self
+    layer: vps
     failure_class: service-health
     severity: warning
-    cadence: 30m
-    expected: "200"
-    url: https://truealpha-staging.truealpha.club/api/health
+    cadence: 60s
 
+  # The production probe-runner heartbeat pages two ways, both from the Worker:
+  # stale -> P0 "VPS or its egress is down" (host-reachability, also a Cloudflare
+  # class), where the staleness threshold is the debounce, so one failing run
+  # fires; a fresh v2 heartbeat with ok=false for 2 consecutive runs -> P1 "probe
+  # loop unhealthy" (alert-pipeline), resolved after 2 healthy runs. A v1 ok is unknown.
   - signal_id: production.alerting-probes.heartbeat
     environment: production
     component: alerting
@@ -364,7 +354,12 @@ signals:
     severity: critical
     cadence: 30m
     stale_threshold: 90m
+    tier: hour
+    type: alert
+    consecutive_failures: 1 # stale_threshold is the debounce
+    renotify_window_sec: 21600 # WATCHDOG_RENOTIFY_SECONDS
 
+  # Staging is recorded by the Worker and shown on /status, never paged (#904).
   - signal_id: staging.alerting-probes.heartbeat
     environment: staging
     component: alerting
@@ -374,6 +369,8 @@ signals:
     severity: warning
     cadence: 30m
     stale_threshold: 90m
+    tier: day
+    type: report
 
   # GitHub signals whose failure class another layer pages (#908): the daily audit
   # still runs them and tools/out_of_band_watchdog.py puts their failures in one

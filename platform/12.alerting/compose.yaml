@@ -177,6 +177,10 @@ services:
       INFRA_PROBE_NEVER_GREEN_ESCALATION_FAILURES: ${INFRA_PROBE_NEVER_GREEN_ESCALATION_FAILURES:-3}
       INFRA_PROBE_NEVER_GREEN_ESCALATION_SECONDS: ${INFRA_PROBE_NEVER_GREEN_ESCALATION_SECONDS:-900}
       INFRA_PROBE_STATE_FILE: /tmp/infra_probe_runner_state.json
+      # #904: per-signal daily ok/fail counts (libs/observability/local_ledger.py),
+      # on a host directory so they survive redeploys; the weekly stability report
+      # reads it over SSH at libs.observability.local_ledger.host_ledger_path().
+      INFRA_PROBE_LEDGER_FILE: /var/lib/infra2-availability-ledger/availability-ledger.json
       INFRA_PROBE_HEARTBEAT_URL: ${INFRA_PROBE_HEARTBEAT_URL:-}
       INFRA_PROBE_HEARTBEAT_TOKEN: ${INFRA_PROBE_HEARTBEAT_TOKEN:-}
       INFRA_PROBE_HEARTBEAT_ENV: ${ENV:-production}
@@ -239,6 +243,8 @@ services:
       # (SSH keys/configs). Read-only. If /var is split out on some host, point
       # this at a path on the filesystem you want to watch.
       - /var/lib/infra2-disk-probe:/hostfs:ro
+      # The availability ledger (#904): one host directory per environment.
+      - /var/lib/infra2-availability-ledger${ENV_SUFFIX}:/var/lib/infra2-availability-ledger
     networks:
       - dokploy-network
     logging:

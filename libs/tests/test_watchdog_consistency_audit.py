@@ -356,7 +356,17 @@ def test_layering_debt_names_the_phase_that_pays_it() -> None:
     audit = _load_audit()
 
     def no_phase(inventory, signals):
-        inventory["relayering_debt"][0].pop("phase")
+        # The registry carries no debt since #904/#908, so the fixture makes its
+        # own: a real violation whose debt entry names no phase.
+        signals["global.truealpha-scheduler-liveness.github"]["failure_class"] = (
+            "service-health"
+        )
+        inventory["relayering_debt"].append(
+            {
+                "signal_id": "global.truealpha-scheduler-liveness.github",
+                "reason": "moved by a later phase",
+            }
+        )
 
     errors = _layering_errors(audit, no_phase)
 
@@ -365,26 +375,32 @@ def test_layering_debt_names_the_phase_that_pays_it() -> None:
 
 
 def test_layering_lets_a_report_live_in_any_layer() -> None:
-    """Turning a misplaced pager into a report is how #903/#904 pay their debt.
+    """Turning a misplaced pager into a report is how #903/#904 paid their debt.
 
-    The signal is one still in debt, so dropping its entry without the report
-    flip must fail: otherwise this would pass on a registry already paid off.
+    The registry carries no debt since #904/#908, so the fixture makes its own
+    misplaced pager, the way the Worker's route checks were before #904: dropping
+    its debt without the report flip must fail, with the flip it must pass.
     """
     audit = _load_audit()
-    misplaced = "production.vault.public-route"
+    misplaced = "production.dokploy.public-route"
 
-    def drop_debt(inventory, signals):
-        inventory["relayering_debt"] = [
-            entry
-            for entry in inventory["relayering_debt"]
-            if entry["signal_id"] != misplaced
-        ]
+    def misplace(inventory, signals):
+        signals[misplaced]["failure_class"] = "service-health"
+
+    def with_debt(inventory, signals):
+        misplace(inventory, signals)
+        inventory["relayering_debt"].append(
+            {"signal_id": misplaced, "phase": "#904", "reason": "fixture"}
+        )
 
     def becomes_a_report(inventory, signals):
+        misplace(inventory, signals)
         signals[misplaced].update(type="report", tier="day")
-        drop_debt(inventory, signals)
+        signals[misplaced].pop("consecutive_failures", None)
+        signals[misplaced].pop("renotify_window_sec", None)
 
-    assert _layering_errors(audit, drop_debt) == [
+    assert _layering_errors(audit, with_debt) == []
+    assert _layering_errors(audit, misplace) == [
         f"{misplaced}: pages service-health from the cloudflare layer, but "
         "service-health is paged only by vps (one pager per failure class)"
     ]
@@ -462,3 +478,69 @@ def test_audit_enforces_layering_end_to_end(monkeypatch) -> None:
         error.startswith("global.cloudflare-worker-status.github: pages service-health")
         for error in audit.audit()
     )
+
+
+# --- #904: the Worker keeps three entrypoints; other routes are VPS-owned ------
+
+
+def _audit_with(monkeypatch, edit) -> list[str]:
+    audit = _load_audit()
+    original = audit._load_inventory
+
+    def fake_inventory():
+        inventory = original()
+        inventory["signals"] = [dict(signal) for signal in inventory["signals"]]
+        edit({signal["signal_id"]: signal for signal in inventory["signals"]})
+        return inventory
+
+    monkeypatch.setattr(audit, "_load_inventory", fake_inventory)
+    return audit.audit()
+
+
+def test_a_vps_route_entry_no_facet_renders_fails(monkeypatch) -> None:
+    def ghost(signals):
+        signals["production.minio.public-route"]["signal"] = "ghost-public-route"
+
+    assert (
+        "VPS public-route signal production.minio.public-route is not rendered by "
+        "any PublicRouteFacet in production"
+    ) in _audit_with(monkeypatch, ghost)
+
+
+def test_a_vps_route_entry_for_a_prod_only_service_in_staging_fails(
+    monkeypatch,
+) -> None:
+    """signoz is prod_only: no staging probe exists to own."""
+
+    def staging_signoz(signals):
+        signals["production.signoz.public-route"]["environment"] = "staging"
+
+    assert (
+        "VPS public-route signal production.signoz.public-route is not rendered by "
+        "any PublicRouteFacet in staging"
+    ) in _audit_with(monkeypatch, staging_signoz)
+
+
+def test_a_vps_route_entry_with_another_severity_fails(monkeypatch) -> None:
+    def downgraded(signals):
+        signals["production.vault.public-route"]["severity"] = "warning"
+
+    assert (
+        "VPS public-route signal production.vault.public-route: severity "
+        "'warning', but the facet renders 'critical'"
+    ) in _audit_with(monkeypatch, downgraded)
+
+
+def test_a_route_moved_back_to_cloudflare_is_a_second_pager(monkeypatch) -> None:
+    """Re-adding a service-health route to the Worker needs a relayering exemption."""
+
+    def back_to_the_worker(signals):
+        signal = signals["production.vault.public-route"]
+        signal["primary_owner"] = "cloudflare"
+        signal.pop("layer")
+
+    errors = _audit_with(monkeypatch, back_to_the_worker)
+    assert (
+        "production.vault.public-route: pages service-health from the cloudflare "
+        "layer, but service-health is paged only by vps (one pager per failure class)"
+    ) in errors

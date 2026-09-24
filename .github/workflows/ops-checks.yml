@@ -384,8 +384,13 @@ jobs:
       INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
       WATCHDOG_DIGEST_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
       INFRA2_STABILITY_REPORT_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
-      INFRA2_WATCHDOG_LEDGER_URL: ${{ vars.INFRA2_WATCHDOG_LEDGER_URL }}
+      # #904: the stability report reads the VPS availability ledger over SSH and the
+      # Worker's /outages (same token as /status).
+      INFRA2_WATCHDOG_OUTAGES_URL: ${{ vars.INFRA2_WATCHDOG_OUTAGES_URL }}
       INFRA2_WATCHDOG_WORKER_STATUS_TOKEN: ${{ secrets.INFRA2_WATCHDOG_WORKER_STATUS_TOKEN }}
+      INFRA2_WATCHDOG_SSH_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
+      INFRA2_WATCHDOG_SSH_USER: ${{ secrets.INFRA2_WATCHDOG_SSH_USER }}
+      INFRA2_WATCHDOG_SSH_PORT: ${{ vars.INFRA2_WATCHDOG_SSH_PORT }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -395,20 +400,29 @@ jobs:
         with:
           python-version: "3.11"
 
+      # httpx: tools/out_of_band_watchdog imports the Dokploy client, and both the
+      # stability report and the failure alert below import that module. Without it
+      # the failure alert died on ModuleNotFoundError (measured 2026-09-24, #904).
       - name: Install Python dependencies
-        run: python -m pip install python-dotenv rich
+        run: python -m pip install httpx python-dotenv rich
+
+      - name: Configure SSH key
+        env:
+          INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_stability_report
+          chmod 600 ~/.ssh/infra2_stability_report
+          echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_stability_report" >> "$GITHUB_ENV"
 
       - name: Build and send digest
         run: python tools/watchdog_weekly_digest.py
 
       - name: Build and send positive stability report
-        # finance_report#1851 G4: this step used to be gated on
-        # `env.INFRA2_WATCHDOG_LEDGER_URL != ''`, which silently skipped it every
-        # week since the variable was never set (no code path ever surfaced that
-        # gap — the containing job stayed green). stability_report.py now falls
-        # back to DEFAULT_LEDGER_URL when the var is absent, so this step always
-        # runs and any real misconfiguration fails the job loudly instead of
-        # skipping quietly.
+        # Never gated on configuration (finance_report#1851 G4: a gated step was
+        # skipped silently for weeks). A missing SSH key, ledger or /outages fails
+        # the job loudly, and the step below pages.
         run: python tools/stability_report.py
 
       # Two Mondays (08-31, 09-07) the stability report died on the watchdog ledger and
@@ -431,8 +445,10 @@ jobs:
           deliver_out_of_band_alert(
               os.environ,
               "🚨 Weekly watchdog digest / stability report FAILED.\n"
-              "The week's alert ledger or the positive report was not delivered; the "
-              "ledger fetch or the Feishu delivery is broken, not the estate.\n"
+              "The week's digest or the positive availability report was not delivered. "
+              "Broken is one of: the production availability ledger read over SSH "
+              "(missing, empty or stale), the Worker /outages fetch, or the Feishu "
+              "delivery -- not necessarily the estate.\n"
               f"Run: {run_url}",
           )
           PY
