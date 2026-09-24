@@ -405,6 +405,7 @@ Feishu page，且告警携带同一结构化记录。不得通过破坏 producti
 | 账本聚合(正例+反例:降级绝不报 100%/perfect、畸形输入不抬高、0 检查不除零、空槽与失联区间并集计为失败) | `libs/tests/test_availability_ledger.py` | ✅ |
 | VPS 账本记账(每轮计数与 5 min 在场槽、空槽区间、按 UTC 日、21 天裁剪、类型损坏移走、fsync 后原子写、失败不打断循环、runner 调用点) | `libs/tests/test_local_ledger.py` | ✅ |
 | Worker 行为契约(入口去抖、VPS 已报则抑制、按身份告警、失联边沿与 `/outages`、预算) | `libs/tests/test_cloudflare_watchdog.py`, `test_cloudflare_watchdog_kv_budget.py` | ✅ |
+| 心跳契约 v2 端到端:真实 runner 的 POST 进真实 Worker(VPS 已投递的路由不重复报;未过去抖、未投递、维护期照报)(#903/#904) | `libs/tests/test_heartbeat_contract.py` | ✅ |
 | 周 watchdog recall digest / 周正向稳定性报告 | `test_watchdog_weekly_digest.py`, `test_stability_report.py` | ✅ |
 | Env×Stage failure-domain / disagreement 契约 | `libs/tests/test_pipeline_stage_contract.py` | ✅ |
 | synthetic round-trip(配置缺失 → `EX_CONFIG`,后端失败 → 1) | `test_observability_roundtrip_probe.py` | ✅ |
