@@ -544,3 +544,19 @@ def test_a_route_moved_back_to_cloudflare_is_a_second_pager(monkeypatch) -> None
         "production.vault.public-route: pages service-health from the cloudflare "
         "layer, but service-health is paged only by vps (one pager per failure class)"
     ) in errors
+
+
+def test_public_route_probes_must_follow_the_naming_contract(monkeypatch) -> None:
+    """#921: the orphan check keys on `-public-route`, so a facet named outside
+    that contract would have escaped it; the audit fails the name instead."""
+    audit = _load_audit()
+    monkeypatch.setattr(
+        audit,
+        "_vps_public_routes",
+        lambda: {("production", "finance-report-api-full-health-route"): "critical"},
+    )
+
+    assert audit._vps_public_route_errors([]) == [
+        "public-route probe finance-report-api-full-health-route (production) must "
+        "be named '*-public-route' (libs/probe_specs.py naming contract)"
+    ]

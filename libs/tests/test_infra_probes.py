@@ -1538,6 +1538,23 @@ def test_probe_runner_loop_survives_an_unreadable_env_file(
     assert len(reads) == 3  # startup, then once per iteration
 
 
+def test_the_full_dependency_route_is_probed_in_band_per_environment() -> None:
+    """#921: `/api/health?full=1` asserts every finance_report dependency."""
+    from libs.probe_specs import render_public_route_spec_text
+
+    prod = render_public_route_spec_text("production", "zitian.party").splitlines()
+    staging = render_public_route_spec_text("staging", "zitian.party").splitlines()
+
+    assert (
+        "finance-report-api-full-health-public-route|http|"
+        "https://report.zitian.party/api/health?full=1|200|critical|10||finance_report/app"
+    ) in prod
+    assert (
+        "finance-report-api-full-health-public-route|http|"
+        "https://report-staging.zitian.party/api/health?full=1|200|warning|10||finance_report/app"
+    ) in staging
+
+
 def test_resource_probe_threshold_pass_fail() -> None:
     """A `resource` probe passes while usage <= the % ceiling, fails above it."""
     spec = parse_probe_specs("host-cpu|resource|cpu|80")[0]

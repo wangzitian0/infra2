@@ -296,6 +296,14 @@ def _vps_public_route_errors(signals: list[dict[str, Any]]) -> list[str]:
     """
     rendered = _vps_public_routes()
     errors: list[str] = []
+    # #921: the orphan check below keys on the `-public-route` suffix, so a
+    # facet named outside that contract would escape it; name it or fail here.
+    for environment, name in sorted(rendered):
+        if not name.endswith("-public-route"):
+            errors.append(
+                f"public-route probe {name} ({environment}) must be named "
+                f"'*-public-route' (libs/probe_specs.py naming contract)"
+            )
     for signal in signals:
         if signal.get("primary_owner") != "self" or signal.get("layer") != "vps":
             continue

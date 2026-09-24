@@ -33,6 +33,13 @@ class AppDeployer(Deployer):
             subdomain="report",
             path="/api/health",
         ),
+        # #921: `?full=1` asserts every required dependency (finance_report#1653);
+        # it answered 200 with all dependencies true in both envs on 2026-09-24.
+        PublicRouteFacet(
+            name="finance-report-api-full-health-public-route",
+            subdomain="report",
+            path="/api/health?full=1",
+        ),
     )
     service_port = 3000
     service_name = "frontend"
