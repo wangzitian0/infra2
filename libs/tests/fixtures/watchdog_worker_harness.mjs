@@ -192,9 +192,18 @@ class World {
   }
 }
 
-// A heartbeat record as the Worker stores it for a runner that posted at `at`.
+// A heartbeat record as the Worker stores it for a v2 runner that posted at `at`
+// and last delivered an alert at that moment.
 function record(at, fields = {}) {
-  return { ok: true, detail: "probe loop completed", receivedAt: at, schema: 2, failingPublicRoutes: [], lastDeliveryOkAt: 0, ...fields };
+  return {
+    ok: true,
+    detail: "probe loop completed",
+    receivedAt: at,
+    schema: 2,
+    failingPublicRoutes: [],
+    lastDeliveryOkAt: Math.floor(at / 1000),
+    ...fields,
+  };
 }
 
 function freshHeartbeats(world, at, fields = {}) {
@@ -255,7 +264,9 @@ const results = {};
   results.networkError = (await world.cron(START + CRON_MS)).messages;
 }
 
-// The VPS already reports the route failing: suppress, and say why.
+// The VPS already reports the route paged and failing: suppress, and say why.
+// Suppression is re-evaluated every run: once the heartbeat stops listing the
+// route, the Worker pages it at once.
 {
   const world = new World();
   const down = url("finance-report-web-public-route");
@@ -266,13 +277,66 @@ const results = {};
     runs.push(await world.cron(at));
   }
   const status = await world.status(START + 2 * CRON_MS + MIN);
+  freshHeartbeats(world, START + 3 * CRON_MS, { failingPublicRoutes: [] });
+  const released = await world.cron(START + 3 * CRON_MS);
   results.suppressed = {
     messages: runs.flatMap((run) => run.messages),
     stateWrites: runs.filter((run) => run.putKeys.includes("watchdog:state")).length,
     lastRunSuppressed: status.body.lastRun.suppressed,
     entrypoints: status.body.entrypoints,
+    released: released.messages,
   };
 }
+
+// When the Worker must not believe the list (#911 review). Each case: the
+// entrypoint fails two runs while the fresh v2 heartbeat says what it says.
+const FR = "finance-report-web-public-route";
+async function twoFailingRuns(fields) {
+  const world = new World();
+  world.routes[url(FR)] = 503;
+  const messages = [];
+  for (const at of [START, START + CRON_MS]) {
+    freshHeartbeats(world, at, typeof fields === "function" ? fields(at) : fields);
+    messages.push(...(await world.cron(at)).messages);
+  }
+  return messages;
+}
+results.notSuppressed = {
+  // the loop itself is unhealthy: its list proves nothing was delivered
+  loopUnhealthy: await twoFailingRuns({ ok: false, detail: "bridge delivery failed: HTTP 502", failingPublicRoutes: [FR] }),
+  // nothing delivered since before the last run that saw the route healthy
+  deliveryPredatesFailure: await twoFailingRuns({ failingPublicRoutes: [FR], lastDeliveryOkAt: Math.floor((START - CRON_MS - MIN) / 1000) }),
+  // nothing ever delivered
+  neverDelivered: await twoFailingRuns({ failingPublicRoutes: [FR], lastDeliveryOkAt: 0 }),
+  // maintenance: the runner pages nothing, so it lists nothing
+  maintenance: await twoFailingRuns({ detail: "probe loop completed; alerts suppressed during maintenance", failingPublicRoutes: [] }),
+  // the runner paged another route, never this one
+  neverPaged: await twoFailingRuns({ failingPublicRoutes: ["vault-public-route"] }),
+};
+// Suppressed while the VPS pages it, then the VPS dies: its last record still
+// lists the route (and a recent-enough delivery), but a stale heartbeat speaks for
+// nothing, so the entrypoint pages once the record goes stale.
+{
+  const world = new World();
+  world.routes[url(FR)] = 503;
+  const runs = [];
+  for (let run = 0; run < 6; run += 1) {
+    const at = START + run * CRON_MS;
+    if (run < 3) freshHeartbeats(world, at, { failingPublicRoutes: [FR] });
+    runs.push({ at, messages: (await world.cron(at)).messages });
+  }
+  results.suppressedThenVpsDies = runs.map((run) => ({
+    minutes: (run.at - START) / MIN,
+    entrypointFiring: run.messages.some((m) => m.includes(`FIRING P0 host-reachability production/${FR}`)),
+    vpsDown: run.messages.some((m) => m.includes("VPS or its egress is down")),
+  }));
+}
+
+// A delivery after the last healthy run (since - one run) is recent enough.
+results.deliveryAfterLastHealthyRun = await twoFailingRuns({
+  failingPublicRoutes: [FR],
+  lastDeliveryOkAt: Math.floor((START - CRON_MS + MIN) / 1000),
+});
 
 // Unknown is not "the VPS has it": a v1 heartbeat or a stale one never suppresses.
 for (const [label, fields, age] of [
@@ -317,14 +381,51 @@ for (const [label, fields, age] of [
   };
 }
 
-// Fresh production heartbeat, probe loop unhealthy: P1 naming the runner's detail.
+// Fresh v2 heartbeat, probe loop unhealthy: P1 after 2 consecutive unhealthy runs,
+// RESOLVED after 2 healthy ones, naming the runner's detail.
 {
   const world = new World();
-  freshHeartbeats(world, START, { ok: false, detail: "alert bridge delivery failing for 12 min" });
-  const run = await world.cron(START);
-  freshHeartbeats(world, START + CRON_MS, { ok: false, detail: "alert bridge delivery failing for 42 min" });
-  const repeat = await world.cron(START + CRON_MS);
-  results.loopUnhealthy = { first: run.messages, repeat: repeat.messages, repeatPutKeys: repeat.putKeys };
+  const steps = [
+    { ok: false, detail: "alert bridge delivery failing for 12 min" },
+    { ok: false, detail: "alert bridge delivery failing for 42 min" },
+    { ok: false, detail: "alert bridge delivery failing for 72 min" },
+    { ok: true },
+    { ok: true },
+  ];
+  const runs = [];
+  for (const [index, fields] of steps.entries()) {
+    const at = START + index * CRON_MS;
+    freshHeartbeats(world, at, fields);
+    runs.push(await world.cron(at));
+  }
+  results.loopUnhealthy = {
+    messages: runs.map((run) => run.messages),
+    putKeys: runs.map((run) => run.putKeys),
+  };
+}
+
+// A loop that flips every run never pages (#911 review: 48 messages a day before).
+{
+  const world = new World();
+  const messages = [];
+  for (let run = 0; run < 12; run += 1) {
+    const at = START + run * CRON_MS;
+    freshHeartbeats(world, at, { ok: run % 2 === 1, detail: run % 2 ? "probe loop completed" : "group raised" });
+    messages.push(...(await world.cron(at)).messages);
+  }
+  results.loopFlapping = messages;
+}
+
+// A v1 runner's ok=false means "some probe failed", not a broken loop: unknown.
+{
+  const world = new World();
+  const messages = [];
+  for (let run = 0; run < 3; run += 1) {
+    const at = START + run * CRON_MS;
+    freshHeartbeats(world, at, { ok: false, schema: 1, failingPublicRoutes: null, lastDeliveryOkAt: null, detail: "probe loop failed" });
+    messages.push(...(await world.cron(at)).messages);
+  }
+  results.v1LoopFalse = messages;
 }
 
 // Staging is recorded, never paged.
@@ -367,10 +468,13 @@ for (const [label, fields, age] of [
   freshHeartbeats(world, START + CRON_MS, { ok: false, detail: "probe loop failed: iteration failed" });
   const fired = await world.cron(START + CRON_MS);
   freshHeartbeats(world, START + 2 * CRON_MS, { ok: true });
-  const partial = await world.cron(START + 2 * CRON_MS);
-  const status = await world.status(START + 2 * CRON_MS + MIN);
+  const firstHealthy = await world.cron(START + 2 * CRON_MS);
+  freshHeartbeats(world, START + 3 * CRON_MS, { ok: true });
+  const partial = await world.cron(START + 3 * CRON_MS);
+  const status = await world.status(START + 3 * CRON_MS + MIN);
   results.partialRecovery = {
     fired: fired.messages,
+    firstHealthy: firstHealthy.messages,
     resolved: partial.messages,
     stillActive: status.body.alertState.alerts.map((a) => a.identity),
   };
@@ -528,6 +632,53 @@ for (const [label, fields, age] of [
     legacyStored: legacy.stored(PROD_HB),
     malformedStored: malformed.stored(PROD_HB),
     degraded: { status: degraded.status, body: degraded.body },
+  };
+}
+
+// /status in the worst incident stays far inside GitHub's 4096-byte read: every
+// identity active, every entrypoint suppressed with a reason, an open outage, a
+// delivery error, and heartbeat records a pre-#904 Worker stored untrimmed.
+{
+  const world = new World();
+  const long = "x".repeat(5000);
+  const routes = Array.from({ length: 32 }, (_, i) => `r${String(i).padStart(2, "0")}-${"a".repeat(60)}`);
+  const alerts = {};
+  const identities = [
+    "global:cloudflare-watchdog:config-preflight",
+    "production:platform-alerting-probes:heartbeat-stale",
+    "production:platform-alerting-probes:heartbeat-unhealthy",
+    ...TARGETS.map((t) => `production:${t.name}:entrypoint`),
+  ];
+  for (const identity of identities) {
+    alerts[identity] = { environment: "production", name: identity.split(":")[1], failureClass: "host-reachability", severity: "P0", since: START, lastAlertAt: START };
+  }
+  const entrypoints = {};
+  for (const t of TARGETS) {
+    entrypoints[`production:${t.name}`] = { failures: 2, since: START, suppressedReason: long };
+  }
+  world.map.set("watchdog:state", JSON.stringify({
+    schema: 2,
+    alerts,
+    entrypoints,
+    loops: { "production:platform-alerting-probes": { bad: 2, good: 1 } },
+    outages: [{ environment: "production", name: "platform-alerting-probes", start: START, detectedAt: START, end: null, reason: "stale" }],
+    lastRun: { ranAt: START, ok: false, routeTargetCount: 3, heartbeatTargetCount: 2, failureCount: 7, activeAlertCount: 6, suppressed: TARGETS.map((t) => t.name), deliveryError: long },
+  }));
+  for (const key of [PROD_HB, STAGING_HB]) {
+    world.heartbeat(key, { ok: false, detail: long, receivedAt: START, schema: 2, failingPublicRoutes: routes, lastDeliveryOkAt: 1 });
+  }
+  const status = await world.status(START + MIN);
+  // and a runner cannot store an oversized detail through POST
+  const posted = new World();
+  await posted.post(START, { env: "production", name: "platform-alerting-probes", ok: false, schema: 2, detail: long, failing_public_routes: routes });
+  const tooLong = new World();
+  await tooLong.post(START, { env: "production", name: "platform-alerting-probes", ok: true, schema: 2, failing_public_routes: [`r-${"a".repeat(80)}`] });
+  results.statusSize = {
+    status: status.status,
+    bytes: Buffer.byteLength(JSON.stringify(status.body)),
+    storedDetailLength: posted.stored(PROD_HB).detail.length,
+    storedRoutes: posted.stored(PROD_HB).failingPublicRoutes.length,
+    overlongRouteList: tooLong.stored(PROD_HB).failingPublicRoutes,
   };
 }
 

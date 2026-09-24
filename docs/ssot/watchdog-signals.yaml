@@ -342,8 +342,9 @@ signals:
 
   # The production probe-runner heartbeat pages two ways, both from the Worker:
   # stale -> P0 "VPS or its egress is down" (host-reachability, also a Cloudflare
-  # class); fresh with ok=false -> P1 "probe loop unhealthy" (alert-pipeline).
-  # The staleness threshold is the debounce, so one failing run fires.
+  # class), where the staleness threshold is the debounce, so one failing run
+  # fires; a fresh v2 heartbeat with ok=false for 2 consecutive runs -> P1 "probe
+  # loop unhealthy" (alert-pipeline), resolved after 2 healthy runs. A v1 ok is unknown.
   - signal_id: production.alerting-probes.heartbeat
     environment: production
     component: alerting

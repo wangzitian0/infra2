@@ -169,6 +169,8 @@ def test_a_cron_run_writes_exactly_one_key_even_when_every_run_transitions(
     assert set(cron["putsByKey"]) == {"watchdog:state", "watchdog:last-run"}
     # every run of this day is a transition, so all but the first write the state
     assert cron["putsByKey"]["watchdog:state"] >= CRON_RUNS_PER_DAY - 1
+    # and the loop that flips every run never pages (#911 review: 48 messages a day)
+    assert cron["messages"] == 0
 
 
 def test_worst_case_day_is_within_the_904_budget(day, budget_vars) -> None:
@@ -217,3 +219,23 @@ def test_the_worst_flapping_day_stays_within_both_budgets(day, budget_vars) -> N
             budget_vars["WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS"]
         )
     assert worst["putsByKey"]["watchdog:state"] >= CRON_RUNS_PER_DAY - 1
+
+
+# ---- detection latency: what the owner actually waits for -----------------------
+
+
+def test_a_dead_vps_is_paged_within_an_hour_and_diagnosed_within_two(day) -> None:
+    """The VPS dies (runner stops, entrypoints stop answering) at each minute of a
+    30-minute cron window, after hours of normal posting through /heartbeat. The
+    entrypoint pages on the 2nd failing run; the stale heartbeat pages once the
+    record (refreshed every 30 min) is older than maxAgeSeconds (90 min)."""
+    latency = day["detectionLatency"]
+    entrypoint, stale = latency["entrypoint"], latency["stale"]
+    assert len(entrypoint) == len(stale) == 30
+    assert None not in entrypoint and None not in stale
+    # two runs: between 30 and 60 minutes, depending on where in the window it died
+    assert 30 <= min(entrypoint) and max(entrypoint) <= 60
+    # maxAgeSeconds 90 min, minus the record's age at death, plus the cron alignment
+    assert 60 <= min(stale) and max(stale) <= 120
+    # the cheap signal always arrives first
+    assert all(e < s for e, s in zip(entrypoint, stale))

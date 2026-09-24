@@ -52,8 +52,21 @@ const LAST_RUN_KEY = "watchdog:last-run";
 const DEFAULT_RENOTIFY_SECONDS = 21600;
 const DEFAULT_ENTRYPOINT_FAILURE_RUNS = 2;
 const OUTAGE_EDGES_KEPT = 50;
-const MAX_FAILING_PUBLIC_ROUTES = 64;
+const MAX_FAILING_PUBLIC_ROUTES = 32;
+const MAX_ROUTE_NAME_LENGTH = 64;
 const STATE_SCHEMA = 2;
+// The cron cadence (wrangler.toml `*/30 * * * *`). A failure first seen at
+// `since` began after the previous run, which saw the entrypoint healthy.
+const RUN_INTERVAL_MS = 30 * 60 * 1000;
+// The probe-loop P1 fires after this many consecutive unhealthy runs and resolves
+// after this many healthy ones, so a flapping loop does not page every flip.
+const LOOP_FAILURE_RUNS = 2;
+const LOOP_RECOVERY_RUNS = 2;
+// Every stored or served free-text field is cut to this; GitHub reads /status
+// through a 4096-byte window.
+const DETAIL_MAX = 300;
+// /status serves at most this much of any one text field (worst case tested < 3 KB).
+const STATUS_TEXT_MAX = 120;
 
 export default {
   async scheduled(controller, env, ctx) {
@@ -147,7 +160,7 @@ async function runWatchdog(env, nowMs = Date.now()) {
       state.alerts = plan.alerts;
     } catch (error) {
       // Nothing undelivered is marked sent: the next run retries it.
-      deliveryError = errorText(error);
+      deliveryError = trimText(errorText(error));
     }
   }
 
@@ -244,16 +257,22 @@ async function observe(env, config, state, nowMs) {
   ]);
 
   const observations = [];
-  // Routes the VPS itself reports failing, from any fresh v2 production heartbeat.
-  // Unknown (v1, stale, missing) never suppresses anything.
+  // Routes the VPS says it has paged and still sees failing (#903: the heartbeat
+  // lists only pages it delivered), from a fresh production heartbeat whose loop is
+  // healthy. The list is null (unknown) for a v1 runner; unknown, stale, missing or
+  // an unhealthy loop never suppresses.
   const vpsFailingRoutes = new Map();
   pagedHeartbeats.forEach((heartbeat, index) => {
     const verdict = heartbeatVerdict(heartbeat, records[index], nowMs);
     const outage = trackOutageEdge(state, heartbeat, verdict, nowMs);
-    observations.push(...heartbeatObservations(heartbeat, verdict, outage));
-    if (verdict.state === "fresh" && Array.isArray(verdict.record.failingPublicRoutes)) {
-      for (const route of verdict.record.failingPublicRoutes) {
-        vpsFailingRoutes.set(route, `${heartbeat.environment}/${heartbeat.name}`);
+    observations.push(...heartbeatObservations(state, heartbeat, verdict, outage));
+    const record = verdict.record;
+    if (verdict.state === "fresh" && record.ok !== false && Array.isArray(record.failingPublicRoutes)) {
+      for (const route of record.failingPublicRoutes) {
+        vpsFailingRoutes.set(route, {
+          source: `${heartbeat.environment}/${heartbeat.name}`,
+          lastDeliveryOkAtMs: Number(record.lastDeliveryOkAt || 0) * 1000,
+        });
       }
     }
   });
@@ -301,7 +320,7 @@ function entrypointObservation(state, target, probe, threshold, vpsFailingRoutes
     failureClass: "host-reachability",
     severity: "P0",
     summary: `external entrypoint ${target.url} unreachable from Cloudflare`,
-    detail: probe.detail,
+    detail: trimText(probe.detail),
     recovery: `${target.url} reachable again (${probe.detail})`,
     url: target.url,
   };
@@ -312,12 +331,17 @@ function entrypointObservation(state, target, probe, threshold, vpsFailingRoutes
   const previous = state.entrypoints[key] || { failures: 0, since: nowMs };
   // Capped at the threshold, so a sustained outage writes nothing after it pages.
   const failures = Math.min(threshold, Number(previous.failures || 0) + 1);
+  const since = Number(previous.since || nowMs);
+  // Re-evaluated every run, so the entrypoint pages as soon as this stops holding.
+  // The VPS must have delivered something after the last run that saw the route
+  // healthy (since - one run); a delivery before that cannot be about this failure.
   // Stored in state, so it must not change from run to run while nothing else does.
   const vpsReport = vpsFailingRoutes.get(target.name);
-  const suppressedReason = vpsReport
-    ? `the fresh ${vpsReport} heartbeat lists ${target.name} among its failing in-band probes; the VPS pages it`
-    : "";
-  const entry = { failures, since: Number(previous.since || nowMs) };
+  const suppressedReason =
+    vpsReport && vpsReport.lastDeliveryOkAtMs >= since - RUN_INTERVAL_MS
+      ? `${vpsReport.source} heartbeat: ${target.name} paged in-band and still failing`
+      : "";
+  const entry = { failures, since };
   if (suppressedReason) entry.suppressedReason = suppressedReason;
   state.entrypoints[key] = entry;
   if (failures < threshold) {
@@ -351,7 +375,7 @@ function heartbeatVerdict(heartbeat, raw, nowMs) {
   return { state: "fresh", detail: `heartbeat fresh: ${ageSeconds}s old`, ageSeconds, record };
 }
 
-function heartbeatObservations(heartbeat, verdict, outage) {
+function heartbeatObservations(state, heartbeat, verdict, outage) {
   const key = `${heartbeat.environment}:${heartbeat.name}`;
   const common = {
     environment: heartbeat.environment,
@@ -370,19 +394,46 @@ function heartbeatObservations(heartbeat, verdict, outage) {
     detail: verdict.detail,
     recovery: `heartbeat fresh again (${verdict.ageSeconds}s old)`,
   };
-  const loopDetail = fresh ? oneLine(verdict.record.detail || "") : "";
+  const loopDetail = fresh ? trimText(verdict.record.detail) : "";
   const unhealthy = {
     ...common,
     identity: `${key}:heartbeat-unhealthy`,
     failureClass: "alert-pipeline",
     severity: "P1",
-    // A stale record says nothing about the loop now: neither fire nor resolve.
-    status: !fresh ? "unknown" : verdict.record.ok === false ? "failing" : "ok",
+    status: loopStatus(state, key, `${key}:heartbeat-unhealthy`, verdict),
     summary: "probe loop reports unhealthy",
     detail: loopDetail || "no detail",
     recovery: `probe loop healthy again (${loopDetail || "ok"})`,
   };
   return [stale, unhealthy];
+}
+
+// The probe loop's own health, debounced over cron runs. Only a v2 heartbeat
+// speaks for the loop: a v1 runner sends ok=false whenever any probe fails, and a
+// stale record says nothing about the loop now. Either is "unknown": no counter
+// moves, nothing fires or resolves.
+function loopStatus(state, key, identity, verdict) {
+  if (verdict.state !== "fresh" || Number(verdict.record.schema) !== 2) {
+    return "unknown";
+  }
+  const active = Boolean(state.alerts[identity]);
+  const streak = state.loops[key] || { bad: 0, good: 0 };
+  if (verdict.record.ok === false) {
+    const bad = Math.min(LOOP_FAILURE_RUNS, Number(streak.bad || 0) + 1);
+    state.loops[key] = { bad, good: 0 };
+    return active || bad >= LOOP_FAILURE_RUNS ? "failing" : "pending";
+  }
+  if (!active) {
+    delete state.loops[key]; // one unhealthy run that never paged is forgotten
+    return "ok";
+  }
+  const good = Math.min(LOOP_RECOVERY_RUNS, Number(streak.good || 0) + 1);
+  if (good >= LOOP_RECOVERY_RUNS) {
+    delete state.loops[key];
+    return "ok";
+  }
+  state.loops[key] = { bad: Number(streak.bad || 0), good };
+  return "pending";
 }
 
 // Availability's out-of-band half: the VPS cannot record its own outage, so the
@@ -655,7 +706,7 @@ function failingPublicRoutes(raw) {
   const names = new Set();
   for (const item of raw) {
     const text = String(item || "").trim();
-    if (!/^[a-zA-Z0-9_.-]+$/.test(text)) {
+    if (!/^[a-zA-Z0-9_.-]+$/.test(text) || text.length > MAX_ROUTE_NAME_LENGTH) {
       return null; // a malformed list is unknown, not "nothing failing"
     }
     names.add(text);
@@ -728,7 +779,7 @@ async function recordHeartbeat(request, env) {
     environment,
     name,
     ok: payload.ok !== false,
-    detail: String(payload.detail || ""),
+    detail: trimText(payload.detail),
     timestamp: Number(payload.timestamp || 0),
     receivedAt: now,
     liveness: isLivenessPing(payload),
@@ -804,17 +855,25 @@ async function statusResponse(request, env) {
         state: verdict.state,
         ageSeconds: verdict.ageSeconds,
         loopOk: verdict.record ? record.ok !== false : null,
-        detail: oneLine(record.detail || ""),
+        detail: trimText(record.detail, STATUS_TEXT_MAX),
         schema: Number(record.schema || 1),
         lastDeliveryOkAt: record.lastDeliveryOkAt ?? null,
-        failingPublicRoutes: Array.isArray(record.failingPublicRoutes) ? record.failingPublicRoutes : null,
+        // A count and a cut-down list: the full list can be 32 names of 64 chars.
+        failingPublicRouteCount: Array.isArray(record.failingPublicRoutes) ? record.failingPublicRoutes.length : null,
+        failingPublicRoutes: Array.isArray(record.failingPublicRoutes)
+          ? trimText(record.failingPublicRoutes.join(","), STATUS_TEXT_MAX)
+          : null,
       };
     });
   } catch (error) {
-    heartbeats = [{ error: errorText(error) }];
+    heartbeats = [{ error: trimText(errorText(error), STATUS_TEXT_MAX) }];
   }
 
-  const alerts = Object.entries(state.alerts).map(([identity, alert]) => ({ identity, ...alert }));
+  const alerts = Object.entries(state.alerts).map(([identity, alert]) => ({
+    identity,
+    severity: String(alert.severity || ""),
+    since: Number(alert.since || 0),
+  }));
   return jsonResponse({
     ok: !stale && lastRun.ok !== false,
     lastRun: {
@@ -825,14 +884,19 @@ async function statusResponse(request, env) {
       failureCount: Number(lastRun.failureCount || 0),
       activeAlertCount: Number(lastRun.activeAlertCount || 0),
       suppressed: Array.isArray(lastRun.suppressed) ? lastRun.suppressed : [],
-      deliveryError: oneLine(lastRun.deliveryError || ""),
+      deliveryError: trimText(lastRun.deliveryError, STATUS_TEXT_MAX),
     },
     alertState: {
       active: alerts.length > 0,
-      lastAlertAt: alerts.reduce((latest, alert) => Math.max(latest, Number(alert.lastAlertAt || 0)), 0),
+      lastAlertAt: Object.values(state.alerts).reduce((latest, alert) => Math.max(latest, Number(alert.lastAlertAt || 0)), 0),
       alerts,
     },
-    entrypoints: Object.entries(state.entrypoints).map(([key, entry]) => ({ key, ...entry })),
+    entrypoints: Object.entries(state.entrypoints).map(([key, entry]) => ({
+      key,
+      failures: Number(entry.failures || 0),
+      since: Number(entry.since || 0),
+      suppressedReason: trimText(entry.suppressedReason, STATUS_TEXT_MAX),
+    })),
     heartbeats,
     openOutages: state.outages.filter((edge) => edge.end === null),
   });
@@ -973,6 +1037,7 @@ function normalizeState(raw) {
   state.schema = STATE_SCHEMA;
   state.alerts = isPlainObject(state.alerts) ? { ...state.alerts } : {};
   state.entrypoints = isPlainObject(state.entrypoints) ? { ...state.entrypoints } : {};
+  state.loops = isPlainObject(state.loops) ? { ...state.loops } : {};
   state.outages = Array.isArray(state.outages)
     ? state.outages.filter(isPlainObject).map((edge) => ({ ...edge, end: edge.end ?? null }))
     : [];
@@ -1062,6 +1127,11 @@ function errorText(error) {
 
 function oneLine(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function trimText(value, max = DETAIL_MAX) {
+  const text = oneLine(value);
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
 function jsonResponse(payload, status = 200) {

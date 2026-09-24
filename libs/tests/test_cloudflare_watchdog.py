@@ -181,7 +181,14 @@ def test_kv_is_written_on_transitions_only(world) -> None:
         ["watchdog:state"],
         ["watchdog:state"],
     ]
-    assert world["loopUnhealthy"]["repeatPutKeys"] == ["watchdog:last-run"]
+    # the loop P1: streak opens, fires, holds (no write), recovery opens, resolves
+    assert world["loopUnhealthy"]["putKeys"] == [
+        ["watchdog:state"],
+        ["watchdog:state"],
+        ["watchdog:last-run"],
+        ["watchdog:state"],
+        ["watchdog:state"],
+    ]
 
 
 @needs_node
@@ -198,9 +205,62 @@ def test_a_route_the_vps_already_reports_failing_is_suppressed(world) -> None:
     assert suppressed["lastRunSuppressed"] == ["finance-report-web-public-route"]
     (entry,) = suppressed["entrypoints"]
     assert entry["key"] == "production:finance-report-web-public-route"
-    assert "platform-alerting-probes heartbeat lists" in entry["suppressedReason"]
+    assert entry["suppressedReason"] == (
+        "production/platform-alerting-probes heartbeat: "
+        "finance-report-web-public-route paged in-band and still failing"
+    )
     # recorded once, not rewritten every run
     assert suppressed["stateWrites"] == 2
+
+
+@needs_node
+def test_a_suppressed_entrypoint_pages_as_soon_as_suppression_stops(world) -> None:
+    """Re-evaluated every run: no second debounce once the VPS stops listing it."""
+    (message,) = world["suppressed"]["released"]
+    assert message.splitlines()[2].startswith(
+        "FIRING P0 host-reachability production/finance-report-web-public-route"
+    )
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "case",
+    [
+        "loopUnhealthy",
+        "deliveryPredatesFailure",
+        "neverDelivered",
+        "maintenance",
+        "neverPaged",
+    ],
+)
+def test_the_worker_does_not_take_the_vps_at_its_word(world, case) -> None:
+    """#911 review (HIGH): a listed route is suppressed only if the loop is healthy
+    and delivered something after the last run that saw the route healthy; an empty
+    list (maintenance) or a list without the route (never paged) never suppresses."""
+    messages = world["notSuppressed"][case]
+    assert len(messages) == 1
+    assert (
+        "FIRING P0 host-reachability production/finance-report-web-public-route"
+        in messages[0]
+    )
+
+
+@needs_node
+def test_a_suppressed_entrypoint_pages_once_the_vps_heartbeat_goes_stale(world) -> None:
+    """The VPS paged the route, then died: its last record still lists the route
+    and a recent-enough delivery, but a stale heartbeat speaks for nothing."""
+    runs = world["suppressedThenVpsDies"]
+    # last fresh record at 59 min; stale (> 90 min old) from the 150-minute run on
+    assert [run["minutes"] for run in runs] == [0, 30, 60, 90, 120, 150]
+    assert [run["entrypointFiring"] for run in runs] == [False] * 5 + [True]
+    assert [run["vpsDown"] for run in runs] == [False] * 5 + [True]
+
+
+@needs_node
+def test_a_delivery_after_the_last_healthy_run_is_recent_enough(world) -> None:
+    """The failure began after the previous (healthy) run, one cron interval before
+    the Worker first saw it; a delivery since then may be the VPS's page for it."""
+    assert world["deliveryAfterLastHealthyRun"] == []
 
 
 @needs_node
@@ -249,14 +309,30 @@ def test_an_outage_costs_one_write_down_and_one_up_and_is_served(world) -> None:
 
 
 @needs_node
-def test_an_unhealthy_loop_pages_p1_alert_pipeline_with_its_detail(world) -> None:
-    unhealthy = world["loopUnhealthy"]
-    (message,) = unhealthy["first"]
-    assert message.startswith("[OUT-OF-BAND] P1 ")
-    assert "FIRING P1 alert-pipeline production/platform-alerting-probes" in message
-    assert "alert bridge delivery failing for 12 min" in message
-    # a changing detail is the same failure identity: no second page
-    assert unhealthy["repeat"] == []
+def test_an_unhealthy_loop_pages_p1_after_two_runs_and_resolves_after_two(
+    world,
+) -> None:
+    messages = world["loopUnhealthy"]["messages"]
+    # unhealthy, unhealthy (fire), unhealthy, healthy, healthy (resolve)
+    assert [len(run) for run in messages] == [0, 1, 0, 0, 1]
+    (fired,) = messages[1]
+    assert fired.startswith("[OUT-OF-BAND] P1 ")
+    assert "FIRING P1 alert-pipeline production/platform-alerting-probes" in fired
+    assert "alert bridge delivery failing for 42 min" in fired
+    (resolved,) = messages[4]
+    assert "RESOLVED production/platform-alerting-probes (alert-pipeline)" in resolved
+
+
+@needs_node
+def test_a_flapping_loop_never_pages(world) -> None:
+    """#911 review: one flip per run paged and resolved 48 times a day."""
+    assert world["loopFlapping"] == []
+
+
+@needs_node
+def test_a_v1_runners_ok_false_is_not_a_broken_loop(world) -> None:
+    """A v1 runner sends ok=false whenever any probe fails: unknown, never a P1."""
+    assert world["v1LoopFalse"] == []
 
 
 @needs_node
@@ -277,6 +353,7 @@ def test_each_failure_identity_resolves_on_its_own(world) -> None:
     partial = world["partialRecovery"]
     (fired,) = partial["fired"]
     assert "production/dokploy-public-route" in fired
+    assert partial["firstHealthy"] == []  # one healthy run does not resolve the loop
     (resolved,) = partial["resolved"]
     assert "RESOLVED production/platform-alerting-probes (alert-pipeline)" in resolved
     assert "dokploy-public-route" not in resolved
@@ -350,6 +427,19 @@ def test_a_broken_config_pages_itself_and_resolves_nothing_it_could_not_check(
     assert "RESOLVED" not in message
     assert broken["lastRunOk"] is False
     assert "production:dokploy-public-route:entrypoint" in broken["stillActive"]
+
+
+@needs_node
+def test_status_stays_far_inside_githubs_4096_byte_read(world) -> None:
+    """#911 review: every served text is cut, even from records stored untrimmed."""
+    size = world["statusSize"]
+    assert size["status"] == 200
+    assert size["bytes"] < 3072
+    # a runner cannot store more than 300 characters of detail
+    assert size["storedDetailLength"] == 300
+    assert size["storedRoutes"] == 32
+    # a route name longer than any probe name makes the list unknown
+    assert size["overlongRouteList"] is None
 
 
 @needs_node

@@ -239,14 +239,19 @@ results.livenessOnly = summarize(
   results.unconfigured = { status: response.status, puts: kv.total() };
 }
 
-// 48 cron runs whose production heartbeat verdict alternates, so every run is a
-// transition (the loop-unhealthy alert fires, then resolves): the most state
-// writes a cron day can cost. A run still writes exactly one key.
+// 48 cron runs whose v2 production heartbeat verdict alternates, so every run is a
+// transition (the loop's unhealthy streak opens, then clears): the most state
+// writes a cron day can cost. A run still writes exactly one key, and the
+// debounce (2 consecutive unhealthy runs) keeps the flapping loop from paging.
 {
   const kv = new MemoryKV();
   const env = makeEnv(kv);
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => new Response("ok", { status: 200 });
+  let messages = 0;
+  globalThis.fetch = async (input) => {
+    if (String(input).startsWith("https://feishu.invalid/")) messages += 1;
+    return new Response("ok", { status: 200 });
+  };
   const putsPerRun = [];
   try {
     for (let run = 0; run < 48; run += 1) {
@@ -254,7 +259,7 @@ results.livenessOnly = summarize(
       for (const configured of heartbeats) {
         kv.map.set(
           `heartbeat:${configured.environment}:${configured.name}`,
-          JSON.stringify({ ok: run % 2 === 0, detail: "", receivedAt: clock - 1000 }),
+          JSON.stringify({ ok: run % 2 === 0, detail: "", receivedAt: clock - 1000, schema: 2, failingPublicRoutes: [] }),
         );
       }
       const before = kv.total();
@@ -266,7 +271,7 @@ results.livenessOnly = summarize(
   } finally {
     globalThis.fetch = originalFetch;
   }
-  results.cronDay = { puts: kv.total(), putsByKey: kv.puts, putsPerRun };
+  results.cronDay = { puts: kv.total(), putsByKey: kv.puts, putsPerRun, messages };
 }
 
 // A whole simulated UTC day of both runners (liveness ping + v2 verdict every
@@ -383,6 +388,76 @@ results.worstDay = await simulatedDay({
   routeStatus: (url, run) => (ENTRYPOINTS.has(url) && run % 2 === 1 ? 522 : 200),
   verdict: (_configured, round) => ({ ok: true, failing: round % 2 ? ["vault-public-route"] : [] }),
 });
+
+// Detection latency: the VPS dies (runner stops posting, entrypoints stop
+// answering) at every minute of a 30-minute cron window. How long until the
+// entrypoint page and until the stale-heartbeat page, in real minutes?
+async function detection(deathAt) {
+  const kv = new MemoryKV();
+  const env = makeEnv(kv);
+  const firstSeen = {};
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.startsWith("https://feishu.invalid/")) {
+      const text = JSON.parse(init.body).content.text;
+      if (firstSeen.entrypoint === undefined && /FIRING P0 host-reachability production\/\S+-public-route/.test(text)) {
+        firstSeen.entrypoint = clock;
+      }
+      if (firstSeen.stale === undefined && text.includes("VPS or its egress is down")) firstSeen.stale = clock;
+      return new Response("ok", { status: 200 });
+    }
+    if (url.startsWith("https://hc-ping.com/")) return new Response("ok", { status: 200 });
+    return new Response("", { status: ENTRYPOINTS.has(url) && clock >= deathAt ? 522 : 200 });
+  };
+  // The runners were already posting yesterday: their records exist.
+  for (const configured of heartbeats) {
+    kv.map.set(
+      `heartbeat:${configured.environment}:${configured.name}`,
+      JSON.stringify({ environment: configured.environment, name: configured.name, ok: true, schema: 2,
+        failingPublicRoutes: [], lastDeliveryOkAt: 0, receivedAt: DAY_START - 60000 }),
+    );
+  }
+  try {
+    let nextCron = DAY_START;
+    clock = DAY_START;
+    const end = deathAt + 4 * 3600 * 1000;
+    for (let round = 0; clock < end; round += 1) {
+      while (nextCron <= clock) {
+        const at = clock;
+        clock = nextCron;
+        const pending = [];
+        await worker.scheduled({ scheduledTime: clock }, env, { waitUntil: (p) => pending.push(p) });
+        await Promise.all(pending);
+        clock = at;
+        nextCron += CRON_MS;
+      }
+      if (clock < deathAt) {
+        for (const configured of heartbeats) {
+          await post(env, {
+            env: configured.environment, name: configured.name, ok: true, schema: 2,
+            detail: "probe loop completed", timestamp: Math.floor(clock / 1000),
+            last_delivery_ok_at: 0, failing_public_routes: [],
+          });
+        }
+      }
+      clock += PROBE_MS + SLEEP_MS;
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  const minutes = (at) => (at === undefined ? null : Math.round((at - deathAt) / 60000));
+  return { entrypoint: minutes(firstSeen.entrypoint), stale: minutes(firstSeen.stale) };
+}
+{
+  const samples = [];
+  // die at 06:00 .. 06:29 plus a few seconds, after 6 h of normal operation
+  for (let minute = 0; minute < 30; minute += 1) {
+    samples.push(await detection(DAY_START + 6 * 3600 * 1000 + minute * 60000 + 7000));
+  }
+  const pick = (key) => samples.map((sample) => sample[key]);
+  results.detectionLatency = { entrypoint: pick("entrypoint"), stale: pick("stale") };
+}
 
 results.heartbeatKeys = heartbeats.length;
 process.stdout.write(`${JSON.stringify(results)}\n`);

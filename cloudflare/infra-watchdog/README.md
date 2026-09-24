@@ -12,16 +12,27 @@ Every 30 minutes, from Cloudflare, outside the VPS:
 | Check | Pages | Class |
 |---|---|---|
 | Production probe-runner heartbeat older than `maxAgeSeconds` (or missing) | P0 "VPS or its egress is down" | host-reachability |
-| Production heartbeat fresh with `ok=false` (the probe loop or its delivery is unhealthy) | P1, naming the runner's `detail` | alert-pipeline |
+| Production v2 heartbeat fresh with `ok=false` (the probe loop or its delivery is unhealthy) for 2 consecutive runs; resolves after 2 healthy runs | P1, naming the runner's `detail` | alert-pipeline |
 | One external entrypoint per product (`dokploy`, `finance-report-web`, `truealpha-web`, production) fails 2 consecutive runs | P0 | host-reachability |
 | Staging heartbeat | never; shown on `/status` | — |
 
 - **One GET per entrypoint per run.** No in-run retry or sleep; the debounce is
   `WATCHDOG_ENTRYPOINT_FAILURE_RUNS` (2) consecutive runs.
-- **The VPS pages its own routes.** An entrypoint failure is suppressed, with the
-  reason recorded on `/status`, when the fresh production heartbeat lists that route
-  in `failing_public_routes`: the in-band probe runner already paged it. An unknown
-  list (a v1 heartbeat, or a stale one) never suppresses anything.
+- **The VPS pages its own routes, if it can prove it.** An entrypoint failure is
+  suppressed, with the reason recorded on `/status`, only when the production
+  heartbeat is fresh, `schema: 2`, `ok` is not false, `failing_public_routes` lists
+  the route (the runner lists only pages it delivered that are still active), and
+  `last_delivery_ok_at` is no older than the last run that saw the entrypoint
+  healthy (`since` minus one cron interval). Maintenance (an empty list), a route
+  the runner never paged, an unhealthy loop, a stale delivery, or a v1 or stale
+  heartbeat never suppress. Suppression is re-evaluated every run, so the Worker
+  pages the moment it stops holding.
+- **A v1 heartbeat's `ok` is unknown.** A v1 runner sends `ok=false` whenever any
+  probe fails, so it neither fires nor resolves the loop P1. Deploy the v2 runner
+  (#903) before this Worker.
+- **Detection latency, measured** (`test_cloudflare_watchdog_kv_budget.py`, the
+  VPS dying at each minute of a cron window): entrypoint page 31–60 min, stale
+  heartbeat "VPS down" 82–111 min; the entrypoint page always comes first.
 - **Alert state per failure identity** (`<env>:<name>:heartbeat-stale`,
   `:heartbeat-unhealthy`, `:entrypoint`). A still-active alert is re-sent at most
   every `WATCHDOG_RENOTIFY_SECONDS` (6 h); a changing detail is not a new alert;
@@ -58,9 +69,12 @@ The GitHub daily audit reads `/status` for the Worker's liveness
 last 2xx from the alert bridge, 0 = none yet) and `"failing_public_routes"`
 (sorted in-band public-route probe names failing in that loop). `ok` is the
 probe loop's health, not "no probe failed". A payload without `schema` is v1: the
-two new fields are stored as unknown (`null`). A change of `ok` or of the failing
-route set is a verdict change under the write budget below; a liveness ping never
-changes either.
+two new fields are stored as unknown (`null`), and so, for paging, is its `ok`. A
+change of `ok` or of the failing route set is a verdict change under the write
+budget below; a liveness ping never changes either. `detail` is stored cut to 300
+characters; a route list longer than 32 names, or with a name over 64 characters,
+is stored as unknown. `/status` serves at most 120 characters of any text field
+and stays under 3 KB in the worst incident (GitHub reads 4096 bytes).
 
 ## Required Secrets
 
