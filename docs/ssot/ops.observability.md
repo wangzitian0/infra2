@@ -211,7 +211,7 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 | L2 Platform | MinIO | live endpoint unavailable | P1 | Live probe |
 | L2 Platform | Authentik | health endpoint fails | P0 | Live probe |
 | L2 Platform | SigNoz | frontend/query fails or synthetic OTLP nonce cannot be queried back | P0 | `signoz-internal-http`, `otel-collector-http`, `signoz-roundtrip` |
-| L2 Platform | Alert Bridge | `/health` fails / Feishu unreachable | P0 | `alert-bridge-http`, `lark-delivery-http` + Cloudflare 读 probe-runner 心跳 verdict(`ok=false` 即 page);GitHub 日审计 bridge `/health` 只报告(#908) |
+| L2 Platform | Alert Bridge | `/health` fails / Feishu unreachable | P0 | `alert-bridge-http`, `lark-delivery-http` + Cloudflare 读 probe-runner 心跳(v2 下 bridge 投递失败即 `ok=false`,Worker page,#903);GitHub 日审计 bridge `/health` 只报告(#908) |
 | L2 Platform | OpenPanel API | `/healthcheck` fails or synthetic `/track` nonce not queryable | P1 | `openpanel-api-http`, `openpanel-roundtrip` |
 | L2 Platform | OpenPanel ClickHouse (op-ch) | data dir unwritable / event store broken | P1 | Write-path healthcheck + `openpanel-roundtrip` |
 | L2 Platform | OpenPanel Worker / Dashboard | `/healthcheck` / `/api/healthcheck` fails | P2 / P2 | Live probes (`openpanel-worker-http`, `openpanel-dashboard-http`);worker 停止落库时由 `openpanel-roundtrip` 以 P1 发 |
