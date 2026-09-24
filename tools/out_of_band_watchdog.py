@@ -6,6 +6,7 @@ import base64
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -59,6 +60,17 @@ infra2-docker|docker info >/dev/null && echo docker-ok|docker-ok
 infra2-docker-health|sh -lc 'bad="$(docker ps --filter health=unhealthy --format "{{.Names}}"; docker ps --filter health=starting --format "{{.Names}}"; docker ps --filter status=restarting --format "{{.Names}}"; docker ps -a --filter status=created --format "{{.Names}}"; docker ps -a --filter status=exited --format "{{.Names}}")"; seen=""; flagged=""; for container in $bad; do case " $seen " in *" $container "*) continue;; esac; seen="$seen $container"; line="$(docker inspect "$container" --format "name={{.Name}} status={{.State.Status}} exit_code={{.State.ExitCode}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} image={{.Config.Image}}")"; status="$(docker inspect "$container" --format "{{.State.Status}}")"; code="$(docker inspect "$container" --format "{{.State.ExitCode}}")"; if [ "$status" = "exited" ] && [ "$code" = "0" ]; then continue; fi; flagged="$flagged\\n$line"; done; if [ -z "$flagged" ]; then echo docker-health-ok; else printf "%b" "$flagged"; echo; exit 1; fi'|docker-health-ok
 infra2-alert-bridge|docker exec platform-alerting python -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8080/health", timeout=3).read(); print("healthy")'|healthy
 """
+
+#: #895: the weekly off-host backups (SOP-006) and the restore rehearsal
+#: (SOP-006A) only wrote host log files, so a failed or skipped run reached no one
+#: (#618 went unnoticed for weeks; the rehearsal cron in #892 had never run).
+BACKUP_CHECKS = (
+    ("infra2-backup-production", "production"),
+    ("infra2-backup-staging", "staging"),
+)
+RESTORE_REHEARSAL_CHECK = "infra2-restore-rehearsal"
+#: Where the rehearsal cron appends its output (crontab in ops.recovery.md SOP-006A).
+RESTORE_REHEARSAL_LOG = "/var/log/infra2-backup-restore-rehearsal.log"
 
 
 @dataclass(frozen=True)
@@ -390,24 +402,7 @@ def run_ssh_checks(
 
     results: list[CheckResult] = []
     for target in targets:
-        target_command = _decode_ssh_command(target.command)
-        command = [
-            "ssh",
-            "-i",
-            config.key_path,
-            "-p",
-            str(config.port),
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=10",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "UserKnownHostsFile=/dev/null",
-            f"{config.user}@{config.host}",
-            target_command,
-        ]
+        command = _ssh_argv(config, _decode_ssh_command(target.command))
         try:
             completed = subprocess.run(
                 command,
@@ -466,6 +461,232 @@ def run_ssh_checks(
             )
         )
     return results
+
+
+def _ssh_argv(config: SshConfig, remote_command: str) -> list[str]:
+    return [
+        "ssh",
+        "-i",
+        config.key_path,
+        "-p",
+        str(config.port),
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        f"{config.user}@{config.host}",
+        remote_command,
+    ]
+
+
+def run_backup_checks(
+    config: SshConfig | None,
+    timeout: float = 20.0,
+    *,
+    now: datetime | None = None,
+    capture=None,
+) -> list[CheckResult]:
+    """#895: are the weekly off-host backups and the restore rehearsal current?
+
+    Each environment's latest manifest is judged by the SOP-004 verifier an
+    operator runs by hand (every BackupFacet present, within its RPO, non-empty,
+    checksummed, off-host), plus the manifest's own environment: a Staging run
+    once overwrote the only pointer. The verifier is imported here, not at module
+    top: other jobs import this module for alert delivery without PyYAML, and a
+    broken import must stay a red check instead of a dead watchdog.
+    """
+    names = [name for name, _ in BACKUP_CHECKS] + [RESTORE_REHEARSAL_CHECK]
+    if config is None:
+        return [
+            CheckResult(name, False, "SSH watchdog config is missing", "configuration")
+            for name in names
+        ]
+    try:
+        from libs.backup.verification import (
+            INVENTORY_DEFAULTS,
+            latest_manifest_path,
+            load_backup_inventory,
+            verify_backup_manifest,
+        )
+        from tools.run_restore_rehearsal import ALL_SERVICES, PASS_SUMMARY_PREFIX
+
+        inventory = load_backup_inventory()
+    except Exception as exc:  # noqa: BLE001 - a broken verifier is red, never a pass.
+        detail = (
+            f"backup verifier unavailable: {type(exc).__name__}: {_one_line(str(exc))}"
+        )
+        return [CheckResult(name, False, detail, "configuration") for name in names]
+
+    def run(remote_command: str) -> tuple[int, str, str]:
+        if capture is not None:
+            return capture(remote_command)
+        completed = subprocess.run(
+            _ssh_argv(config, remote_command),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return completed.returncode, completed.stdout, completed.stderr
+
+    now_ts = int((now or datetime.now(UTC)).timestamp())
+    results = []
+    for name, environment in BACKUP_CHECKS:
+        path = latest_manifest_path(environment)
+        try:
+            results.append(
+                _backup_manifest_result(
+                    name,
+                    environment,
+                    path,
+                    run(f"cat {shlex.quote(path)}"),
+                    inventory=inventory,
+                    verify=verify_backup_manifest,
+                    now_ts=now_ts,
+                )
+            )
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            results.append(
+                CheckResult(name, False, f"ssh failed reading {path}: {exc}", "backup")
+            )
+    # The rehearsal runs 45 minutes after the weekly backup, so the backup RPO is
+    # also the bound on how old the last proven restore may be.
+    log = shlex.quote(RESTORE_REHEARSAL_LOG)
+    try:
+        results.append(
+            _restore_rehearsal_result(
+                run(f"stat -c %Y {log} && tail -n 5 {log}"),
+                now_ts=now_ts,
+                max_age_hours=INVENTORY_DEFAULTS["rpo_hours"],
+                expected_summary=PASS_SUMMARY_PREFIX + ", ".join(ALL_SERVICES),
+            )
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        results.append(
+            CheckResult(
+                RESTORE_REHEARSAL_CHECK,
+                False,
+                f"ssh failed reading {RESTORE_REHEARSAL_LOG}: {exc}",
+                "restore-rehearsal",
+            )
+        )
+    return results
+
+
+def _backup_manifest_result(
+    name: str,
+    environment: str,
+    path: str,
+    completed: tuple[int, str, str],
+    *,
+    inventory: list,
+    verify,
+    now_ts: int,
+) -> CheckResult:
+    returncode, stdout, stderr = completed
+    if returncode != 0:
+        return CheckResult(
+            name,
+            False,
+            f"no {environment} manifest at {path}: {_last_line(stderr or stdout)}",
+            "backup",
+        )
+    try:
+        manifest = json.loads(stdout)
+    except ValueError as exc:
+        return CheckResult(name, False, f"{path} is not JSON: {exc}", "backup")
+    if not isinstance(manifest, dict):
+        return CheckResult(name, False, f"{path} is not a JSON object", "backup")
+    if manifest.get("environment") != environment:
+        return CheckResult(
+            name,
+            False,
+            f"{path} records environment {manifest.get('environment')!r}, "
+            f"expected {environment!r}",
+            "backup",
+        )
+    checks = verify(inventory, manifest, now=now_ts)["checks"]
+    if not checks:
+        # An empty inventory verifies nothing; 0 of 0 is not a pass.
+        return CheckResult(name, False, "backup inventory is empty", "configuration")
+    failed = [check for check in checks if check["status"] != "pass"]
+    if failed:
+        shown = "; ".join(
+            f"{check['service_id']}: {check['summary']}" for check in failed[:6]
+        )
+        more = f" (+{len(failed) - 6} more)" if len(failed) > 6 else ""
+        return CheckResult(
+            name,
+            False,
+            f"{len(failed)}/{len(checks)} artifacts failed: {shown}{more}",
+            "backup",
+        )
+    oldest = max(check["evidence"]["age_hours"] for check in checks)
+    return CheckResult(
+        name,
+        True,
+        f"{len(checks)}/{len(checks)} artifacts fresh and off-host; oldest {oldest}h",
+        "backup",
+    )
+
+
+def _last_line(output: str) -> str:
+    # ssh prepends "Warning: Permanently added <host ip> ..." to the command's stderr.
+    lines = [line for line in output.strip().splitlines() if line.strip()]
+    return _one_line(lines[-1]) if lines else ""
+
+
+def _restore_rehearsal_result(
+    completed: tuple[int, str, str],
+    *,
+    now_ts: int,
+    max_age_hours: int,
+    expected_summary: str,
+) -> CheckResult:
+    returncode, stdout, stderr = completed
+    if returncode != 0:
+        return CheckResult(
+            RESTORE_REHEARSAL_CHECK,
+            False,
+            f"no rehearsal log at {RESTORE_REHEARSAL_LOG}, so the weekly restore "
+            f"rehearsal has never run: {_last_line(stderr or stdout)}",
+            "restore-rehearsal",
+        )
+    lines = stdout.splitlines()
+    try:
+        age_hours = (now_ts - int(lines[0].strip())) / 3600
+    except (IndexError, ValueError):
+        return CheckResult(
+            RESTORE_REHEARSAL_CHECK,
+            False,
+            f"unreadable rehearsal log mtime: {_one_line(stdout)}",
+            "restore-rehearsal",
+        )
+    last = next((line.strip() for line in reversed(lines[1:]) if line.strip()), "")
+    if age_hours > max_age_hours:
+        return CheckResult(
+            RESTORE_REHEARSAL_CHECK,
+            False,
+            f"last rehearsal wrote its log {age_hours:.1f}h ago (bound {max_age_hours}h)",
+            "restore-rehearsal",
+        )
+    if last != expected_summary.strip():
+        return CheckResult(
+            RESTORE_REHEARSAL_CHECK,
+            False,
+            f"last rehearsal did not pass every service: {_one_line(last)}",
+            "restore-rehearsal",
+        )
+    return CheckResult(
+        RESTORE_REHEARSAL_CHECK,
+        True,
+        f"{last} ({age_hours:.1f}h ago)",
+        "restore-rehearsal",
+    )
 
 
 def run_dokploy_status_check(
@@ -711,6 +932,9 @@ def _severity_for(name: str, failure_domain: str) -> str:
         "peer-scheduler-liveness",
     }:
         return "P1"
+    if failure_domain in {"backup", "restore-rehearsal"}:
+        # Production data is unprotected until the next weekly run; Staging is not.
+        return "P2" if "staging" in name.lower() else "P1"
     if failure_domain in {"dokploy-deploy-status", "public-route"}:
         lowered = name.lower()
         if "staging" in lowered or "-pr-" in lowered or "preview" in lowered:
@@ -794,6 +1018,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
     )
     results.extend(run_dokploy_status_check(current_env))
     results.extend(run_ssh_checks(ssh_config, ssh_targets))
+    results.extend(run_backup_checks(ssh_config))
     results.extend(
         run_peer_scheduler_liveness_check(
             current_env,
@@ -997,6 +1222,17 @@ def _suggested_action_for_failure(name: str, failure_domain: str) -> str:
             "check its newest scheduled run and githubstatus.com; while it is dead no "
             "stopped scheduled workflow in the estate is reported"
         )
+    if failure_domain == "backup":
+        return (
+            "on the host, read /var/log/infra2-backup*.log for FAILED lines, rerun "
+            "/usr/local/sbin/infra2-host-backup.sh per SOP-006, then verify the "
+            "manifest per SOP-004"
+        )
+    if failure_domain == "restore-rehearsal":
+        return (
+            "on the host, read /var/log/infra2-backup-restore-rehearsal.log and rerun "
+            "the rehearsal cron command by hand per SOP-006A"
+        )
     if failure_domain == "state-discrepancy":
         return (
             "compare Dokploy status/deploy evidence with `docker ps` and `docker inspect`; "
@@ -1021,6 +1257,16 @@ def _runbook_url_for_failure(failure_domain: str) -> str:
             "https://github.com/wangzitian0/infra2/blob/main/"
             "docs/ssot/ops.standards.md#rule-4-"
             "状态不一致协议-state-discrepancy-protocol"
+        )
+    if failure_domain in {"backup", "restore-rehearsal"}:
+        anchor = (
+            "#sop-004-备份-freshness-验证"
+            if failure_domain == "backup"
+            else "#sop-006a-off-host-restore-rehearsal"
+        )
+        return (
+            "https://github.com/wangzitian0/infra2/blob/main/"
+            f"docs/ssot/ops.recovery.md{anchor}"
         )
     if failure_domain == "peer-scheduler-liveness":
         return (

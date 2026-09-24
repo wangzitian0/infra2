@@ -27,7 +27,14 @@ from libs.backup_restore import (
     materialize_artifact,
     run_postgres_restore_rehearsal,
 )
+from libs.backup.verification import latest_manifest_path
 from libs.backup_verification import load_backup_inventory
+
+#: `--service-id all`: every Postgres service that has rehearsal invariants.
+ALL_SERVICES = ("finance_report/postgres", "truealpha/postgres")
+#: The last line of a run in which every service passed. The out-of-band watchdog
+#: reads it from the weekly cron's log (#895), so it is a contract, not prose.
+PASS_SUMMARY_PREFIX = "[+] restore rehearsal passed for: "
 
 
 def wait_for_postgres(container: str, user: str, timeout: int = 30) -> None:
@@ -309,7 +316,7 @@ def run_rehearsal(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--manifest", default="/data/backups/infra2/production-manifest.json"
+        "--manifest", default=latest_manifest_path("production")
     )
     parser.add_argument(
         "--environment", choices=("production", "staging"), default="production"
@@ -325,11 +332,7 @@ def main() -> int:
             "each service restores into its own database"
         )
 
-    services = (
-        ["finance_report/postgres", "truealpha/postgres"]
-        if args.service_id == "all"
-        else [args.service_id]
-    )
+    services = list(ALL_SERVICES) if args.service_id == "all" else [args.service_id]
 
     # One failing service never stops the others (#618): every service is
     # attempted, and the run exits 1 naming each failure. Otherwise a permanent
@@ -365,7 +368,7 @@ def main() -> int:
     if failures:
         print(f"\n[!] restore rehearsal FAILED for: {', '.join(failures)}")
         return 1
-    print(f"\n[+] restore rehearsal passed for: {', '.join(services)}")
+    print(f"\n{PASS_SUMMARY_PREFIX}{', '.join(services)}")
     return 0
 
 

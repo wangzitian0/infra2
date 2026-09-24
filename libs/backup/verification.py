@@ -52,6 +52,15 @@ class BackupCheck:
 # "use these". Weekly cadence defaults to 180h RPO (7.5d) and gdrive-backup remote.
 INVENTORY_DEFAULTS = {"retention_days": 60, "rpo_hours": 180, "remote": "gdrive-backup"}
 
+# Where tools/host_backup.sh (SOP-006) writes its runs on the host. Each run also
+# refreshes one latest pointer per environment; the restore rehearsal and the
+# out-of-band watchdog read that pointer, never a guessed "newest" run.
+HOST_BACKUP_DIR = "/data/backups/infra2"
+
+
+def latest_manifest_path(environment: str) -> str:
+    return f"{HOST_BACKUP_DIR}/{environment}-manifest.json"
+
 
 def load_backup_inventory(path: Path | str | None = None) -> list[BackupEntry]:
     """The backup inventory, DERIVED from each service's BackupFacet declarations.

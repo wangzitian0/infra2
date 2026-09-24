@@ -267,7 +267,8 @@ jobs:
           python-version: "3.11"
 
       - name: Install Python dependencies
-        run: python -m pip install httpx python-dotenv rich
+        # PyYAML: the backup checks derive the BackupFacet inventory (#895).
+        run: python -m pip install httpx python-dotenv rich PyYAML
 
       - name: Configure SSH key
         if: env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY != ''

@@ -347,6 +347,38 @@ signals:
     severity: critical
     cadence: 1d
 
+  # Weekly off-host backups and the restore rehearsal (#895). Until this, both only
+  # wrote host log files: #618's aborted prod runs went unnoticed for weeks and the
+  # rehearsal cron in #892 had never run. tools/out_of_band_watchdog.py
+  # run_backup_checks reads each environment's latest manifest over SSH and judges
+  # it with the SOP-004 verifier (every BackupFacet present, within its RPO, sized,
+  # checksummed, off-host) plus the manifest's own environment field. The rehearsal
+  # check wants the cron log's final line to be the all-services pass summary,
+  # written within the same RPO. Daily, so a missed Sunday run is red by Monday.
+  - signal_id: production.infra2-backup-production.github
+    environment: production
+    component: host
+    signal: infra2-backup-production
+    primary_owner: github
+    severity: critical
+    cadence: 1d
+
+  - signal_id: staging.infra2-backup-staging.github
+    environment: staging
+    component: host
+    signal: infra2-backup-staging
+    primary_owner: github
+    severity: warning
+    cadence: 1d
+
+  - signal_id: production.infra2-restore-rehearsal.github
+    environment: production
+    component: host
+    signal: infra2-restore-rehearsal
+    primary_owner: github
+    severity: critical
+    cadence: 1d
+
   # Container-breakdown watch (#425 T5 registration; #475 is the debounce this
   # entry declares). Watcher PLUGIN inside the single resident alerting sidecar
   # (#543): libs/container_breakdown_watch.py running inside

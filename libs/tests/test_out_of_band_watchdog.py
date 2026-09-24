@@ -329,6 +329,7 @@ def test_main_sends_feishu_only_when_a_check_fails(monkeypatch) -> None:
         ],
     )
     monkeypatch.setattr(watchdog, "run_ssh_checks", lambda _config, _targets: [])
+    monkeypatch.setattr(watchdog, "run_backup_checks", lambda _config: [])
     monkeypatch.setattr(
         watchdog,
         "run_worker_status_check",
@@ -441,6 +442,7 @@ def test_main_structured_check_logs_include_attempt_count(monkeypatch) -> None:
         ],
     )
     monkeypatch.setattr(watchdog, "run_ssh_checks", lambda _config, _targets: [])
+    monkeypatch.setattr(watchdog, "run_backup_checks", lambda _config: [])
     monkeypatch.setattr(
         watchdog,
         "run_worker_status_check",
@@ -477,6 +479,7 @@ def test_main_uses_default_retry_values_when_env_is_blank(monkeypatch) -> None:
 
     monkeypatch.setattr(watchdog, "run_http_checks", fake_run_http_checks)
     monkeypatch.setattr(watchdog, "run_ssh_checks", lambda _config, _targets: [])
+    monkeypatch.setattr(watchdog, "run_backup_checks", lambda _config: [])
     monkeypatch.setattr(
         watchdog,
         "run_worker_status_check",
@@ -521,6 +524,7 @@ def test_main_records_delivery_failure_event_instead_of_crashing(monkeypatch) ->
         ],
     )
     monkeypatch.setattr(watchdog, "run_ssh_checks", lambda _config, _targets: [])
+    monkeypatch.setattr(watchdog, "run_backup_checks", lambda _config: [])
     monkeypatch.setattr(
         watchdog,
         "run_worker_status_check",
@@ -577,6 +581,7 @@ def test_main_records_delivery_success_event_for_weekly_recall_audit(
         ],
     )
     monkeypatch.setattr(watchdog, "run_ssh_checks", lambda _config, _targets: [])
+    monkeypatch.setattr(watchdog, "run_backup_checks", lambda _config: [])
     monkeypatch.setattr(
         watchdog,
         "run_worker_status_check",
@@ -958,6 +963,7 @@ def _patch_checks(monkeypatch, watchdog, *, dokploy=(), peer=()) -> None:
         ],
     )
     monkeypatch.setattr(watchdog, "run_ssh_checks", lambda _config, _targets: [])
+    monkeypatch.setattr(watchdog, "run_backup_checks", lambda _config: [])
     monkeypatch.setattr(
         watchdog,
         "run_worker_status_check",
