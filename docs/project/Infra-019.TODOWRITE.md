@@ -736,7 +736,7 @@ worktree 的每个 generation 触及，所以 `generation-local` 描述的是一
 - [x] ~~skill 双真源漂移~~ **scout 修正：今天 16:14 已被 ws-apply 收敛**。现为三层
       symlink 投影：SSOT=`dev_env/skills/common`（git 仓库，7 skill）→ 汇流点 B
       `~/zitian/.agents/skills`（逐 skill symlink）← A `.ws/.pi/agent/skills`（B
-      的别名）；旧 56 个企业技能已迁 `~/.agents/skills.shopee/`。残留风险：
+      的别名）；旧企业技能已迁出个人 workspace。残留风险：
       dev_env 里 audit/SKILL.md 有未提交改动；workspace/config.yml 自引用已随
       dev_env#22 删除；synced/ 是投影体系外的 Claude 云同步失控面。
 
