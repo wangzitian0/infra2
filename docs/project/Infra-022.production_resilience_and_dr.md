@@ -34,6 +34,7 @@
   - 同一 Production canary 的两份 Redis RDB 在网络隔离的一次性实例中通过 `redis-check-rdb` 并启动：platform 还原 1,313 键，在线检查时 1,333 键（热数据变化）；finance_report 还原及在线均为 0 键。MinIO 归档在同版本隔离实例中启动并列出 6 个 bucket、11,306 个对象，抽取其中一个 405,214 字节对象成功读回并计算 SHA256。上述只证明选定状态可恢复；未验全部对象或异地包。临时容器与提取数据均已删除。
   - 同一 Production canary 的 ClickHouse 归档在同版本、网络隔离的一次性实例中启动，非系统表与在线同为 104 张；强制扫描后，SigNoz 日志还原 463,395 行（在线检查时 464,263），trace summary 还原 8,502,704 行（在线检查时 8,517,914）。这证明两个关键表可查询；在线写入持续发生，且未逐表验证一致性。临时容器及提取数据均已删除。
   - 同一 Production canary 的 OpenPanel 归档（75,435,503 字节）在同版本 ClickHouse 25.10.2.65 的无网络、受内存/CPU 限制的一次性实例中启动；18 张表与在线一致，实际 `SELECT count()` 读回 `events` 53,864 行、`sessions` 199 行。在线当时的 part 元数据分别为 54,069 / 199 行；持续写入可解释事件差额，但未逐行对账。演练容器和临时数据目录均确认为 0 残留；这仍是本机归档，不是异地恢复证明。
+  - 同一 Production canary 的 Vault 归档在同版本 Vault 1.15.4 的无网络、受内存/CPU 限制的一次性实例中启动，`vault status` 返回 `initialized=true`、`sealed=true`、`storage_type=file`；容器和提取出的临时数据目录均确认为 0 残留。这只证明文件存储可识别，不证明解封、密钥读回或异地可恢复。
   - 同一 Production canary 的 platform Postgres 归档在网络隔离的一次性实例中还原，5 个数据库与在线实例名称、各库表数均一致：activepieces 64、authentik 314、openpanel 31、postgres 0、prefect 36。临时容器及其匿名数据卷已删除。
 - [ ] **T2.2 备份自动恢复演练（Recovery Proof）**：沙箱工具和五项业务不变量已落地，历史手动运行在 10.62 秒内通过。2026-09-24 又从旧版异地根清单下载 Finance Report/TrueAlpha 两份数据库归档，各通过 manifest 字节数、SHA256、gzip 完整性检查，并在网络隔离的一次性 Postgres 容器中分别通过 5 项不变量；临时源码、下载目录及容器已清理。该旧清单只有 9 项、没有环境标记，演练时仅在临时副本上标为 `legacy-unknown`，不构成 Production 或 Staging 的环境证明。代码现按环境分离并默认验证 Production manifest。仍须在 VPS 上用新脚本完成两次连续周周期的 Production `--service-id all` 演练，并保留期间的并行兜底。
 - [ ] **T2.3 带外死人开关（Dead Man's Switch）**：宿主机 systemd timer 定时向外部 Healthchecks.io 上报心跳与磁盘 P1/P0 状态，Cloudflare Worker 的 30 分钟 cron 向第四个独立检查上报；主机失联与 Worker 停摆分别由外部通知。代码准备不等于现场验收，须配置四条真实检查 URL、生产安装并验证外部通知送达。
@@ -71,6 +72,7 @@
 
 | Date | Change |
 |---|---|
+| 2026-09-24 | Production Vault 本机归档在无网络的一次性 Vault 1.15.4 实例中启动并返回已初始化、待解封的文件存储状态；未使用解封密钥，不能据此声称密钥可读或整机 DR 通过。临时容器与数据目录清理完成。 |
 | 2026-09-24 | Production OpenPanel 本机归档在无网络的一次性同版本 ClickHouse 中恢复：18 张表，`events` 53,864 行、`sessions` 199 行可实际查询；在线同期 part 元数据为 54,069 / 199，临时容器与数据目录清理完成。异地包仍待验证。 |
 | 2026-09-24 | 再次只读核验 VPS：安装脚本仍为旧 SHA256 `b8f9b117a7bf426bb12c89cd307a7c89f91d25edf309c4852e1c4524404fc0a7`，crontab 有 3 条指向该脚本的备份任务；远端 `production/manifest.json` 与 `staging/manifest.json` 均不存在，旧根清单仍为无环境标记的 9 项。因此即使定时任务存在，不能判定新版分环境 17/17 已运行。 |
 | 2026-09-24 | 核对 GitHub Actions 现场记录：2026-09-23 的 `deploy_v2 live canary` job 成功，`finance_report/app` 的临时 `pr-999` 槽公开健康与版本证明通过，并完成销毁；该定时检查不等于正式发布候选版本的 Stage 1 烟测。 |
