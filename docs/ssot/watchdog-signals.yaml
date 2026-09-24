@@ -520,7 +520,9 @@ signals:
   # debounce whose ABSENCE caused #475 (333 firing/resolved pairs in 48h from a
   # single flapping container, each wrongly resetting the renotify clock).
   # Staging and preview containers never page (#903): they go to the daily
-  # ContainerBreakdownChronic digest, which is itself a REPORT (delivery=report).
+  # ContainerBreakdownChronic digest as REPORT lines (delivery=report). Its
+  # production lines (a floor-suppressed re-break, an incident still broken since
+  # it paged) still go to the pager.
   - signal_id: production.docker.container-breakdown-watch
     environment: production
     component: docker

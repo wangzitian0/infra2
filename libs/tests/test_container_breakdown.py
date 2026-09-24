@@ -643,108 +643,166 @@ def test_oom_killed_breakdown_classifies_as_host_memory():
     assert "out of memory" in alert["annotations"]["description"].lower()
 
 
-def test_staging_and_preview_container_names_are_report_only():
-    """#903: the names that mark staging (`-staging`) or a preview slot
-    (`-pr-<n>`, `-branch-<name>`, `-commit-<sha7>`, `-tag-<v>`) — and nothing else."""
+def _docker_entry(name: str, environment_label: str | None = None) -> dict:
+    """A Docker Engine /containers/json element for an unhealthy container."""
+    labels = {"com.docker.compose.project": "dokploy-app"}
+    if environment_label is not None:
+        labels["party.zitian.infra.environment"] = environment_label
+    return {
+        "Id": f"id-{name}",
+        "Names": [f"/{name}"],
+        "State": "running",
+        "Status": "Up 5 minutes (unhealthy)",
+        "Labels": labels,
+    }
+
+
+def test_report_only_follows_the_environment_label_then_the_name():
+    """#903 review: report-only is the container's ENVIRONMENT — the canonical label
+    when present, else what its compose project and name say (-staging, or a preview
+    slot's -pr-/-branch-/-commit-/-tag-). Not a second name-only classifier."""
     from libs.observability.watchers.breakdown_watch import is_report_only
 
-    report_only = [
+    def report_only(entry: dict) -> bool:
+        [breakdown] = find_breakdown_containers([entry], lambda _cid: "")
+        return is_report_only(breakdown)
+
+    unlabelled_reports = [
         "platform-prefect-worker-staging",
         "finance_report-backend-pr-12",
         "finance_report-preview-db-branch-main",
         "finance_report-frontend-commit-1ab32d5",
         "finance_report-backend-tag-v1-2-3",
     ]
-    paging = [
-        "platform-prefect-worker",
-        "finance_report-preview-db",  # the shared preview DB runs in production
-        "vault",
-        "platform-alerting-probes",
-        "fr-preview",
-    ]
-    assert [n for n in report_only if not is_report_only(n)] == []
-    assert [n for n in paging if is_report_only(n)] == []
+    unlabelled_pages = ["platform-prefect-worker", "vault", "platform-alerting-probes"]
+    assert [n for n in unlabelled_reports if not report_only(_docker_entry(n))] == []
+    assert [n for n in unlabelled_pages if report_only(_docker_entry(n))] == []
+
+    # the label wins over the name, both ways
+    assert not report_only(_docker_entry("x-staging", environment_label="production"))
+    assert not report_only(_docker_entry("x-staging", environment_label="prod"))
+    assert report_only(_docker_entry("worker", environment_label="staging"))
+    assert report_only(_docker_entry("worker", environment_label="pr-7"))
 
 
-def test_staging_and_preview_breakdowns_go_to_the_digest_never_the_pager(monkeypatch):
-    """#903: the production runner sees every container on the shared engine, and
-    `platform-prefect-worker(-staging)` alone fired 684 times in 30 days. A staging or
-    preview container never pages — firing or resolved — and is reported in the daily
-    ContainerBreakdownChronic digest, which is itself a REPORT."""
+def _sweeping_watch(monkeypatch, entries: dict):
+    """run_once over Docker-shaped entries (name -> entry, or absent when healthy)."""
     import time
 
     import libs.observability.watchers.breakdown_watch as w
 
     clock = {"now": 1000.0}
     monkeypatch.setattr(time, "monotonic", lambda: clock["now"])
-    names = [
-        "platform-prefect-worker-staging",
-        "finance_report-backend-pr-5",
-        "platform-prefect-worker",
-    ]
-    observed = {"broken": True}
-    monkeypatch.setattr(
-        w,
-        "sweep",
-        lambda client, tail: (
-            [
-                Breakdown(container=n, state="unhealthy", reason="r", detail="d")
-                for n in names
-            ]
-            if observed["broken"]
-            else []
-        ),
-    )
+    monkeypatch.setattr(w, "_list_containers", lambda _client: list(entries.values()))
+    monkeypatch.setattr(w, "_container_logs", lambda _client, _cid, _tail: "")
     posted: list = []
     monkeypatch.setattr(w, "_post_alert", lambda payload: posted.append(payload))
-    state: dict = {}
-    chronic: dict = {}
+    kept = {"state": {}, "resolved_at": {}, "chronic": {}, "chronic_context": {}}
 
-    def sweep_n(n: int) -> int:
+    def sweep_n(n: int, *, jump: float = 0.0) -> int:
+        clock["now"] += jump
         fired = 0
         for _ in range(n):
             clock["now"] += 60
             fired += w.run_once(
                 client=None,
                 log_tail=25,
-                container_state=state,
+                container_state=kept["state"],
                 renotify=0,
                 failure_threshold=3,
                 recovery_threshold=5,
-                chronic=chronic,
+                resolved_at=kept["resolved_at"],
+                chronic=kept["chronic"],
+                chronic_context=kept["chronic_context"],
+                stay_resolved_seconds=6 * 3600,
                 chronic_digest_seconds=3600,
             )
         return fired
 
+    return sweep_n, posted
+
+
+def _digests(posted: list) -> list:
+    return [
+        p
+        for p in posted
+        if p["commonLabels"]["alertname"] == "ContainerBreakdownChronic"
+    ]
+
+
+def _lines(payload: dict) -> dict:
+    return {
+        a["annotations"]["summary"].split()[0]: a["annotations"]["description"]
+        for a in payload["alerts"]
+    }
+
+
+def test_staging_and_preview_breakdowns_go_to_the_digest_never_the_pager(monkeypatch):
+    """#903: the production runner sees every container on the shared engine, and
+    `platform-prefect-worker(-staging)` alone fired 684 times in 30 days. A staging or
+    preview container never pages — firing or resolved — and is reported in the
+    daily ContainerBreakdownChronic digest as a REPORT."""
+    names = [
+        "platform-prefect-worker-staging",
+        "finance_report-backend-pr-5",
+        "platform-prefect-worker",
+    ]
+    entries = {name: _docker_entry(name) for name in names}
+    sweep_n, posted = _sweeping_watch(monkeypatch, entries)
+
     assert sweep_n(10) == 1
-    observed["broken"] = False
+    entries.clear()
     sweep_n(5)
 
     pages = [
         p for p in posted if p["commonLabels"]["alertname"] == "ContainerBreakdown"
     ]
     assert [p["status"] for p in pages] == ["firing", "resolved"]
-    for page in pages:
-        assert [a["annotations"]["summary"].split()[0] for a in page["alerts"]] == [
-            "platform-prefect-worker"
-        ]
-        assert "delivery" not in page["commonLabels"]
+    assert [list(_lines(p)) for p in pages] == [["platform-prefect-worker"]] * 2
+    assert all("delivery" not in p["commonLabels"] for p in pages)
 
-    clock["now"] += 3600
-    sweep_n(1)
-    digests = [
-        p
-        for p in posted
-        if p["commonLabels"]["alertname"] == "ContainerBreakdownChronic"
-    ]
-    assert len(digests) == 1
-    assert digests[0]["commonLabels"]["delivery"] == "report"
-    listed = {
-        a["annotations"]["summary"].split()[0]: a["annotations"]["description"]
-        for a in digests[0]["alerts"]
+    sweep_n(1, jump=3600)
+    reports = [p for p in _digests(posted) if p["commonLabels"].get("delivery")]
+    assert len(reports) == 1
+    assert reports[0]["commonLabels"]["delivery"] == "report"
+    assert all(a["labels"]["delivery"] == "report" for a in reports[0]["alerts"])
+    lines = _lines(reports[0])
+    assert set(lines) == {
+        "platform-prefect-worker-staging",
+        "finance_report-backend-pr-5",
     }
-    for name in ("platform-prefect-worker-staging", "finance_report-backend-pr-5"):
-        assert listed[name].startswith("staging/preview container, never paged"), name
-    # the production container paged, so its digest line is the ordinary one
-    assert "never paged" not in listed["platform-prefect-worker"]
-    assert all(a["labels"]["delivery"] == "report" for a in digests[0]["alerts"])
+    assert all(
+        reason.startswith("staging/preview container, never paged")
+        for reason in lines.values()
+    )
+
+
+def test_a_production_re_break_inside_the_floor_reaches_the_pager(monkeypatch):
+    """#903 review (HIGH): a production container that resolves and breaks again inside
+    the stay-resolved floor is only ever told in the digest. With the whole digest a
+    report, that incident reached nobody on call. Its line must go to the pager; the
+    staging line of the same digest stays a report."""
+    entries = {
+        name: _docker_entry(name)
+        for name in ("platform-prefect-worker", "platform-prefect-worker-staging")
+    }
+    sweep_n, posted = _sweeping_watch(monkeypatch, entries)
+
+    assert sweep_n(3) == 1  # production pages; staging does not
+    broken = dict(entries)
+    entries.clear()
+    sweep_n(5)  # both recover; production resolves
+    entries.update(broken)
+    assert sweep_n(3) == 0  # re-broke inside the 6h floor: no page now
+    entries.clear()
+    sweep_n(5)  # recovered again: both pruned from the tracked state
+
+    sweep_n(1, jump=3600)
+    digests = _digests(posted)
+    pager = [p for p in digests if "delivery" not in p["commonLabels"]]
+    reports = [p for p in digests if p["commonLabels"].get("delivery") == "report"]
+    assert len(pager) == 1 and len(reports) == 1
+    assert _lines(pager[0]) == {
+        "platform-prefect-worker": "re-broke 1x inside the 6h stay-resolved floor"
+    }
+    assert list(_lines(reports[0])) == ["platform-prefect-worker-staging"]

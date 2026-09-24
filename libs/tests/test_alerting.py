@@ -683,3 +683,24 @@ def test_bridge_without_a_report_chat_marks_reports_in_the_pager_chat(
         assert sent[0]["title"].startswith("[REPORT] "), mode
         assert "ContainerBreakdownChronic" in sent[0]["title"], mode
         assert not sent[1]["title"].startswith("[REPORT]"), mode
+
+
+def test_only_staging_and_preview_environments_are_report_only() -> None:
+    """#903 review: the report-only decision is an allowlist over the normalized
+    environment. `prod`, `PRODUCTION `, unset and garbage page; staging and the
+    preview slots report."""
+    from libs.alerting import is_report_only_environment
+
+    pages = [None, "", "production", "PRODUCTION ", "prod", "garbage", "x/y", "pr"]
+    reports = [
+        "staging",
+        " STAGING",
+        "stg",
+        "preview",
+        "pr-5",
+        "branch-main",
+        "commit-1ab32d5",
+        "tag-v1-2-3",
+    ]
+    assert [v for v in pages if is_report_only_environment(v)] == []
+    assert [v for v in reports if not is_report_only_environment(v)] == []

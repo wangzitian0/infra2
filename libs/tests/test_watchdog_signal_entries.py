@@ -212,3 +212,43 @@ def test_probe_declaring_services_all_carry_a_signal_facet() -> None:
                 f"derived watchdog-signals entries would be unclassified "
                 f"(Infra-012.10 / #425 T5)"
             )
+
+
+def test_an_alert_facet_must_declare_its_renotify_window() -> None:
+    """#903 review: `renotify_window_sec=0` is a real declaration ("never on a
+    timer"), so a default of 0 made a forgotten window indistinguishable from a
+    declared one. Left out, it stays None and the derived entry fails the audit;
+    declared as 0 it passes."""
+    from libs.service_facets import ProbeFacet, SignalFacet
+    from libs.service_registry import ServiceMeta
+
+    spec = importlib.util.spec_from_file_location("watchdog_audit_for_facets", AUDIT)
+    assert spec and spec.loader
+    audit = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(audit)
+
+    def derived_errors(signal: SignalFacet) -> list[str]:
+        meta = ServiceMeta(
+            service_id="platform/example",
+            layer="platform",
+            service="example",
+            prod_only=False,
+            subdomain=None,
+            service_port=None,
+            service_name=None,
+            telemetry_service_name=None,
+            telemetry_component=None,
+            project="platform",
+            probes=(ProbeFacet(name="example-http", kind="http", target="http://x"),),
+            signals=(signal,),
+        )
+        [entry, *_] = render_internal_signal_entries(attrs={"platform/example": meta})
+        return audit._validate_tier_and_type(entry, entry["signal_id"])
+
+    forgotten = SignalFacet(tier="minute", type="alert", consecutive_failures=3)
+    assert forgotten.renotify_window_sec is None
+    assert any("renotify_window_sec" in error for error in derived_errors(forgotten))
+    declared = SignalFacet(
+        tier="minute", type="alert", consecutive_failures=3, renotify_window_sec=0
+    )
+    assert derived_errors(declared) == []

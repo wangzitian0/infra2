@@ -1621,7 +1621,7 @@ class _HeartbeatResponse:
         return b"ok"
 
 
-def _scripted_runner(monkeypatch, *, env: str = "production", clock=None):
+def _scripted_runner(monkeypatch, *, env: str | None = "production", clock=None):
     """A runner whose probes return scripted results and whose bridge records posts.
 
     ``script["results"]`` maps probe name -> None (passing) or the observed reading of a
@@ -1641,8 +1641,11 @@ def _scripted_runner(monkeypatch, *, env: str = "production", clock=None):
         "DEPLOY_ENV",
     ):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("ENV", env)
-    monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_ENV", env)
+    for name in ("ENV", "INFRA_PROBE_HEARTBEAT_ENV"):
+        if env is None:  # a runner that was never told its environment
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, env)
     monkeypatch.setenv(
         "INFRA_PROBE_HEARTBEAT_URL", "https://watchdog.example/heartbeat"
     )
@@ -1884,7 +1887,7 @@ def test_a_failed_bridge_delivery_fails_the_heartbeat_until_a_retry_lands(
     runner.run_once(state_path=state_path, failure_threshold=1)
     assert posted == []
     assert beats[-1]["ok"] is False
-    assert beats[-1]["detail"] == "bridge delivery failed: HTTP 502"
+    assert beats[-1]["detail"] == "bridge delivery failed: HTTP 502 (infra-service)"
     assert beats[-1]["last_delivery_ok_at"] == 0
 
     bridge["fail"] = None
@@ -2030,3 +2033,228 @@ def test_the_liveness_ping_carries_the_v2_fields_of_the_last_loop(
     assert beats[0]["schema"] == 2
     assert beats[0]["last_delivery_ok_at"] == 1_767_225_000
     assert beats[0]["failing_public_routes"] == ["vault-public-route"]
+
+
+# --- #903 review: allowlisted environments, per-stream delivery failures, per-probe debounce
+
+
+def test_only_a_recognised_non_production_runner_reports(monkeypatch, tmp_path) -> None:
+    """#903 review: `!= "production"` turned `prod` or a typo into silence. Only an
+    environment on the report-only allowlist reports; anything else pages."""
+    monkeypatch.setenv("INFRA_PROBE_SPECS", "vault|http|http://vault|200")
+    monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
+
+    def delivery_of_first_page(env: str | None) -> str | None:
+        runner, posted, _beats, script, _bridge = _scripted_runner(monkeypatch, env=env)
+        script["results"] = {"vault": "503:sealed"}
+        runner.run_once(state_path=tmp_path / f"{env!r}.json", failure_threshold=1)
+        assert len(posted) == 1, env
+        return posted[0]["commonLabels"].get("delivery")
+
+    for pages in ("prod", "PRODUCTION ", None, "garbage"):
+        assert delivery_of_first_page(pages) is None, pages
+    for reports in ("staging", "STG", "pr-5"):
+        assert delivery_of_first_page(reports) == "report", reports
+
+
+def test_host_probes_stay_on_unless_the_runner_is_recognisably_non_production(
+    monkeypatch,
+) -> None:
+    """#903 review: the host-probe gate compared exactly too, so a production runner
+    told `prod` stopped watching the host. Only a recognised non-production runner
+    drops the shared-host probes."""
+    runner = _load_probe_runner()
+    specs = parse_probe_specs("vault|http|http://vault|200\nhost-cpu|resource|cpu|80")
+    for name in ("ENV", "DEPLOY_ENV"):
+        monkeypatch.delenv(name, raising=False)
+
+    for env in ("prod", "PRODUCTION ", "garbage"):
+        monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_ENV", env)
+        kinds = {spec.kind for spec in runner._host_specs_for_env(specs)}
+        assert kinds == {"http", "resource"}, env
+    monkeypatch.delenv("INFRA_PROBE_HEARTBEAT_ENV")
+    assert {s.kind for s in runner._host_specs_for_env(specs)} == {"http", "resource"}
+    monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_ENV", "stg")
+    assert {s.kind for s in runner._host_specs_for_env(specs)} == {"http"}
+
+
+def test_a_failed_delivery_stops_failing_the_heartbeat_once_nothing_is_pending(
+    monkeypatch, tmp_path
+) -> None:
+    """#903 review: the error used to clear only on a later success. A stream whose
+    page never went out and that then recovered — never active, nothing left to send —
+    held the heartbeat red for as long as the bridge stayed quiet."""
+    from urllib.error import HTTPError
+
+    monkeypatch.setenv("INFRA_PROBE_SPECS", "vault|http|http://vault|200")
+    monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
+    runner, posted, beats, script, bridge = _scripted_runner(monkeypatch)
+    state_path = tmp_path / "state.json"
+    bridge["fail"] = HTTPError("http://bridge", 503, "Unavailable", None, None)
+
+    script["results"] = {"vault": "503:sealed"}
+    runner.run_once(state_path=state_path, failure_threshold=1)
+    assert beats[-1]["ok"] is False
+    script["results"] = {}  # recovered before its page ever landed
+    runner.run_once(state_path=state_path, failure_threshold=1)
+
+    assert bridge["attempts"] == 1  # nothing was retried: there was nothing to send
+    assert posted == []
+    assert beats[-1]["ok"] is True
+    assert beats[-1]["detail"] == "probe loop completed"
+
+
+def test_a_delivery_that_keeps_failing_keeps_the_heartbeat_red(
+    monkeypatch, tmp_path
+) -> None:
+    """#903 review: the clearing must not swallow a page that never went out. A
+    bridge that refuses every report (say a wrong FEISHU_REPORT_CHAT_ID) is retried
+    every loop and holds the heartbeat red every loop."""
+    from urllib.error import HTTPError
+
+    monkeypatch.setenv("INFRA_PROBE_SPECS", "vault|http|http://vault|200")
+    monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
+    runner, posted, beats, script, bridge = _scripted_runner(monkeypatch, env="staging")
+    state_path = tmp_path / "state.json"
+    bridge["fail"] = HTTPError("http://bridge", 502, "Bad Gateway", None, None)
+    script["results"] = {"vault": "503:sealed"}
+
+    for _ in range(5):
+        runner.run_once(state_path=state_path, failure_threshold=1)
+
+    assert bridge["attempts"] == 5
+    assert [beat["ok"] for beat in beats] == [False] * 5
+    assert posted == []
+
+
+def test_a_hard_down_probe_pages_while_a_sibling_flaps(monkeypatch, tmp_path) -> None:
+    """#903 review: the debounce counted the WHOLE failing set, so a sibling failing
+    every other loop reset it and a probe that was hard down never paged. Each probe
+    now counts its own streak; the page names only what crossed the threshold."""
+    monkeypatch.setenv("INFRA_PROBE_SPECS", _HOST_SPECS)
+    monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
+    runner, posted, _beats, script, _bridge = _scripted_runner(monkeypatch)
+    state_path = tmp_path / "state.json"
+
+    for loop in range(3):
+        script["results"] = {"host-cpu": "97.0"}
+        if loop % 2 == 0:
+            script["results"]["host-mem"] = "85.0"  # flapping sibling
+        runner.run_once(state_path=state_path, failure_threshold=3)
+
+    assert [p["status"] for p in posted] == ["firing"]
+    assert _firing_names(posted[0]) == ["host-cpu"]
+
+
+def test_a_sibling_flapping_below_the_threshold_does_not_re_page(
+    monkeypatch, tmp_path
+) -> None:
+    """#903 review: once a probe has paged, a sibling that fails every other loop —
+    never three in a row — is not news: no re-page each time it joins or leaves."""
+    monkeypatch.setenv("INFRA_PROBE_SPECS", _HOST_SPECS)
+    monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
+    runner, posted, _beats, script, _bridge = _scripted_runner(monkeypatch)
+    state_path = tmp_path / "state.json"
+
+    script["results"] = {"host-cpu": "97.0"}
+    for _ in range(3):
+        runner.run_once(state_path=state_path, failure_threshold=3)
+    assert [_firing_names(p) for p in posted] == [["host-cpu"]]
+
+    for loop in range(10):
+        script["results"] = {"host-cpu": "97.0"}
+        if loop % 2 == 0:
+            script["results"]["host-mem"] = "85.0"
+        runner.run_once(state_path=state_path, failure_threshold=3)
+
+    assert [_firing_names(p) for p in posted] == [["host-cpu"]]
+
+
+# --- #903 x #911: failing_public_routes lists only routes whose page was delivered
+
+_TWO_ROUTES = "a-public-route|http|https://a.example|200\nb-public-route|http|https://b.example|200"
+
+
+def test_failing_public_routes_stays_empty_while_nothing_has_paged(
+    monkeypatch, tmp_path
+) -> None:
+    """#911 review (HIGH): the Worker stands down its entrypoint page for every route
+    listed. Two routes failing on alternate loops never reach the threshold, so the
+    VPS never paged — listing them silenced both sides."""
+    monkeypatch.setenv("INFRA_PROBE_SPECS", "vault|http|http://vault|200")
+    monkeypatch.setenv("PUBLIC_ROUTE_PROBE_SPECS", _TWO_ROUTES)
+    runner, posted, beats, script, _bridge = _scripted_runner(monkeypatch)
+    state_path = tmp_path / "state.json"
+
+    for loop in range(6):
+        failing = "a-public-route" if loop % 2 == 0 else "b-public-route"
+        script["results"] = {failing: "521:down"}
+        runner.run_once(state_path=state_path, failure_threshold=3)
+
+    assert posted == []
+    assert [beat["failing_public_routes"] for beat in beats] == [[]] * 6
+
+
+def test_failing_public_routes_stays_empty_while_the_page_is_undelivered(
+    monkeypatch, tmp_path
+) -> None:
+    """#911 review: a route whose page the bridge refused has told nobody yet."""
+    from urllib.error import HTTPError
+
+    monkeypatch.setenv("INFRA_PROBE_SPECS", "vault|http|http://vault|200")
+    monkeypatch.setenv("PUBLIC_ROUTE_PROBE_SPECS", _TWO_ROUTES)
+    runner, posted, beats, script, bridge = _scripted_runner(monkeypatch)
+    state_path = tmp_path / "state.json"
+    bridge["fail"] = HTTPError("http://bridge", 502, "Bad Gateway", None, None)
+    script["results"] = {"a-public-route": "521:down"}
+
+    for _ in range(2):
+        runner.run_once(state_path=state_path, failure_threshold=1)
+
+    assert bridge["attempts"] == 2 and posted == []
+    assert [beat["failing_public_routes"] for beat in beats] == [[], []]
+
+
+def test_failing_public_routes_stays_empty_during_maintenance(
+    monkeypatch, tmp_path
+) -> None:
+    """#911 review: maintenance skips the sends, so the Worker must not stand down on
+    the VPS's behalf — even for a route paged before the window opened."""
+    monkeypatch.setenv("INFRA_PROBE_SPECS", "vault|http|http://vault|200")
+    monkeypatch.setenv("PUBLIC_ROUTE_PROBE_SPECS", _TWO_ROUTES)
+    clock = _Clock(1_767_225_600.0)
+    runner, _posted, beats, script, _bridge = _scripted_runner(monkeypatch, clock=clock)
+    state_path = tmp_path / "state.json"
+    script["results"] = {"a-public-route": "521:down"}
+
+    runner.run_once(state_path=state_path, failure_threshold=1)
+    assert beats[-1]["failing_public_routes"] == ["a-public-route"]
+    monkeypatch.setenv("INFRA_PROBE_MAINTENANCE_UNTIL", str(clock.now + 3600))
+    clock.now += 60
+    runner.run_once(state_path=state_path, failure_threshold=1)
+
+    assert beats[-1]["failing_public_routes"] == []
+
+
+def test_failing_public_routes_lists_a_route_once_its_page_is_delivered(
+    monkeypatch, tmp_path
+) -> None:
+    """#911 review: a route is listed from the loop its page lands until it stops
+    failing — and a sibling still below the threshold is not listed with it."""
+    monkeypatch.setenv("INFRA_PROBE_SPECS", "vault|http|http://vault|200")
+    monkeypatch.setenv("PUBLIC_ROUTE_PROBE_SPECS", _TWO_ROUTES)
+    runner, posted, beats, script, _bridge = _scripted_runner(monkeypatch)
+    state_path = tmp_path / "state.json"
+
+    script["results"] = {"a-public-route": "521:down"}
+    runner.run_once(state_path=state_path, failure_threshold=3, recovery_threshold=2)
+    runner.run_once(state_path=state_path, failure_threshold=3, recovery_threshold=2)
+    assert beats[-1]["failing_public_routes"] == []  # below the threshold
+    script["results"] = {"a-public-route": "521:down", "b-public-route": "522:down"}
+    runner.run_once(state_path=state_path, failure_threshold=3, recovery_threshold=2)
+    assert [p["status"] for p in posted] == ["firing"]
+    assert beats[-1]["failing_public_routes"] == ["a-public-route"]
+
+    script["results"] = {}  # passing again; the page is still open (recovery 1/2)
+    runner.run_once(state_path=state_path, failure_threshold=3, recovery_threshold=2)
+    assert beats[-1]["failing_public_routes"] == []

@@ -36,6 +36,7 @@ import os
 import time
 from pathlib import Path
 
+from libs.alerting import is_report_only_environment
 from libs.deploy_queue import (
     ComposeDeployments,
     build_deploy_guard_alert_payload,
@@ -302,7 +303,8 @@ class DeployQueueGuard(ResidentWatcher):
         }
         self.env_path = Path(env.get("ALERTING_ENV_FILE") or "/secrets/.env")
         self.alerted: dict[str, float] = {}
-        self.enabled = env.get("ENV", "production") == "production"
+        # Idle only on a recognised non-production runner: `prod` or a typo sweeps.
+        self.enabled = not is_report_only_environment(env.get("ENV"))
         if not self.enabled:
             logger.info(
                 "deploy-queue guard is prod-only (Dokploy is shared; the production "

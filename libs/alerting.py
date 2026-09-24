@@ -32,6 +32,31 @@ _RUNBOOK_BY_ALERT = {
 DELIVERY_LABEL = "delivery"
 REPORT_DELIVERY = "report"
 REPORT_TITLE_PREFIX = "[REPORT] "
+# Environments with nobody on call: staging and the preview slots. An allowlist on
+# purpose — "prod", a typo or an unset value is not on it, so it pages (#903 review).
+REPORT_ONLY_ENVIRONMENTS = frozenset({"staging", "preview"})
+
+
+def is_report_only_environment(value: str | None) -> bool:
+    """True only for an environment known to have no pager: staging or a preview slot.
+
+    The value is normalized first (``libs.common.normalize_env_name``: ``stg`` is
+    staging, ``PRODUCTION `` and unset are production). Preview slots are ``preview``
+    or ``<kind>-<value>`` for the preview kinds (``pr-5``, ``branch-main``, ...).
+    Anything else — production, an unknown name, garbage — pages: an environment
+    that cannot be recognised must fail loud, not quiet.
+    """
+    from libs.common import normalize_env_name
+    from libs.deploy_env_config import PREVIEW_KINDS
+
+    raw = (value or "").strip().lower().replace("-", "_")
+    try:
+        name = normalize_env_name(raw)
+    except ValueError:  # e.g. a "/" in it: not an environment this estate names
+        return False
+    if name in REPORT_ONLY_ENVIRONMENTS:
+        return True
+    return any(name.startswith(f"{kind}_") for kind in (*PREVIEW_KINDS, "preview"))
 
 
 class AlertingError(Exception):

@@ -159,9 +159,9 @@ services:
       start_period: 90s
     environment:
       # ENV gates the prod-only breakdown watcher and deploy-queue guard, labels
-      # probe alert payloads with the runner's real environment, and makes every
-      # non-production runner's alert a REPORT (delivery=report, never the pager;
-      # #903). A missing ENV means production: it pages rather than going quiet.
+      # probe alert payloads with the runner's real environment, and makes a
+      # staging/preview runner's alerts REPORTS (delivery=report, never the pager;
+      # #903). Only that allowlist reports: `prod`, a typo or no ENV pages.
       ENV: ${ENV:-production}
       ALERT_BRIDGE_URL: http://platform-alerting${ENV_SUFFIX}:8080/signoz/webhook
       ALERTING_ENV_FILE: /secrets/.env

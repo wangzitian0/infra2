@@ -199,10 +199,14 @@ environment variables are configured:
 Each loop posts a liveness ping (`"liveness": true`) before the probes and the
 loop verdict (`ok`) after them. Since contract v2 (#903, `"schema": 2`) `ok` is the
 probe loop's own health — false only when a group run raised, the state save failed,
-or the latest bridge delivery failed, with `detail` naming which — and a failing
+or a send that is still pending failed its bridge delivery (cleared once the retry
+lands or the stream has nothing left to send), with `detail` naming which — and a failing
 probe no longer flips it. Every post also carries `last_delivery_ok_at` (epoch
-seconds of the last bridge 2xx, 0 if none) and `failing_public_routes` (sorted names
-of the public-route probes failing in that loop). The Worker never lets the liveness
+seconds of the last bridge 2xx, 0 if none) and `failing_public_routes`: the sorted
+public-route probes that are failing in that loop AND whose page the runner delivered
+and has not resolved. The Worker stands down its own entrypoint page for exactly these,
+so the list is empty before the debounce threshold, while a page is undelivered, and
+during maintenance. The Worker never lets the liveness
 ping change the stored verdict, and it budgets its KV writes per heartbeat key (see
 [`cloudflare/infra-watchdog/README.md`](../../cloudflare/infra-watchdog/README.md#free-quota-safety)).
 The `(env, name)` pair must be listed in the Worker's `WATCHDOG_HEARTBEATS_JSON`;
