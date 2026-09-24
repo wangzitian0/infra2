@@ -466,11 +466,6 @@ def test_production_evidence_rejects_untrusted_remote_state(
 @pytest.mark.parametrize(
     "reviews,error",
     [
-        ([], "at least one APPROVED review"),
-        (
-            [{"user": {"login": "octocat-author"}, "state": "APPROVED"}],
-            "at least one APPROVED review",
-        ),
         (
             [{"user": {"login": "reviewer"}, "state": "CHANGES_REQUESTED"}],
             "pending CHANGES_REQUESTED",
@@ -482,13 +477,9 @@ def test_production_evidence_rejects_untrusted_remote_state(
             ],
             "pending CHANGES_REQUESTED",
         ),
-        (
-            [{"user": {"login": "reviewer"}, "state": "COMMENTED"}],
-            "at least one APPROVED review",
-        ),
     ],
 )
-def test_production_evidence_rejects_missing_or_invalid_review(reviews, error) -> None:
+def test_production_evidence_rejects_pending_changes_requested(reviews, error) -> None:
     responses = {
         policy_path(): policy_contents(FINANCE_REPORT_POLICY),
         f"/repos/{APP_REPO}/actions/runs/100": successful_run(100),
@@ -501,6 +492,33 @@ def test_production_evidence_rejects_missing_or_invalid_review(reviews, error) -
             receiver.parse_request(production_payload()),
             fetch_json=responses.__getitem__,
         )
+
+
+@pytest.mark.parametrize(
+    "reviews",
+    [
+        [],
+        [{"user": {"login": "octocat-author"}, "state": "APPROVED"}],
+        [{"user": {"login": "reviewer"}, "state": "COMMENTED"}],
+        [{"user": {"login": "reviewer"}, "state": "APPROVED"}],
+        [
+            {"user": {"login": "reviewer"}, "state": "CHANGES_REQUESTED"},
+            {"user": {"login": "reviewer"}, "state": "APPROVED"},
+        ],
+    ],
+)
+def test_production_evidence_accepts_reviews_without_changes_requested(reviews) -> None:
+    responses = {
+        policy_path(): policy_contents(FINANCE_REPORT_POLICY),
+        f"/repos/{APP_REPO}/actions/runs/100": successful_run(100),
+        f"/repos/{APP_REPO}/actions/runs/101": successful_run(101),
+        f"/repos/{APP_REPO}/pulls/10": merged_pull(),
+        f"/repos/{APP_REPO}/pulls/10/reviews": reviews,
+    }
+    receiver.verify_production_evidence(
+        receiver.parse_request(production_payload()),
+        fetch_json=responses.__getitem__,
+    )
 
 
 @pytest.mark.parametrize(

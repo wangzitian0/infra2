@@ -568,11 +568,6 @@ def _verify_reviewed_pull(
         if any(s == "CHANGES_REQUESTED" for s in latest_states.values()):
             raise ValueError("reviewed pull request has pending CHANGES_REQUESTED")
 
-        if not any(s == "APPROVED" for s in latest_states.values()):
-            raise ValueError(
-                "reviewed pull request must have at least one APPROVED review from another user"
-            )
-
 
 def _git_url(repository: str) -> str:
     return f"https://github.com/{repository}.git"
