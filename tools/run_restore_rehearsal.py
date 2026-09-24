@@ -12,11 +12,11 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import secrets
 import shutil
 import subprocess
 import tempfile
 import time
-import uuid
 from pathlib import Path
 from typing import Any
 
@@ -82,7 +82,9 @@ def run_rehearsal(
         raise ValueError(f"Invalid database name: {db!r}")
 
     safe_name = service_id.replace("/", "-")
-    container = f"{safe_name}-restore-rehearsal-{uuid.uuid4().hex[:8]}-throwaway"
+    # Not uuid: on Linux it imports `platform`, which the repo's platform/ package
+    # shadows under the cron's PYTHONPATH=. (#892).
+    container = f"{safe_name}-restore-rehearsal-{secrets.token_hex(4)}-throwaway"
     download_root = Path(download_dir)
     safe_root = download_root.resolve()
     tmp_root = Path(tempfile.gettempdir()).resolve()
