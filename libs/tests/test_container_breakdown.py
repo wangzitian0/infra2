@@ -359,8 +359,9 @@ def test_run_once_logs_firing_and_resolved_decisions(monkeypatch):
     module calls logging.basicConfig, so caplog is unreliable here)."""
     import libs.observability.watchers.breakdown_watch as w
 
+    # a production container: a preview one (…-branch-main) is digest-only (#903)
     bd = Breakdown(
-        container="finance_report-frontend-branch-main",
+        container="finance_report-frontend",
         state="unhealthy",
         reason="r",
         detail="d",
@@ -396,7 +397,7 @@ def test_run_once_logs_firing_and_resolved_decisions(monkeypatch):
     blob = "\n".join(logs)
     assert "BREAKDOWN-ALERT firing" in blob  # firing decision + bridge-post logged
     assert "BREAKDOWN-RESOLVED" in blob  # resolve decision now logged (was silent)
-    assert "finance_report-frontend-branch-main" in blob  # named, not anonymous
+    assert "finance_report-frontend" in blob  # named, not anonymous
 
 
 def test_an_unchanged_ongoing_incident_pages_once_and_escalation_pages_again(
@@ -640,3 +641,110 @@ def test_oom_killed_breakdown_classifies_as_host_memory():
     alert = payload["alerts"][0]
     assert alert["labels"]["failure_domain"] == "host-memory"
     assert "out of memory" in alert["annotations"]["description"].lower()
+
+
+def test_staging_and_preview_container_names_are_report_only():
+    """#903: the names that mark staging (`-staging`) or a preview slot
+    (`-pr-<n>`, `-branch-<name>`, `-commit-<sha7>`, `-tag-<v>`) — and nothing else."""
+    from libs.observability.watchers.breakdown_watch import is_report_only
+
+    report_only = [
+        "platform-prefect-worker-staging",
+        "finance_report-backend-pr-12",
+        "finance_report-preview-db-branch-main",
+        "finance_report-frontend-commit-1ab32d5",
+        "finance_report-backend-tag-v1-2-3",
+    ]
+    paging = [
+        "platform-prefect-worker",
+        "finance_report-preview-db",  # the shared preview DB runs in production
+        "vault",
+        "platform-alerting-probes",
+        "fr-preview",
+    ]
+    assert [n for n in report_only if not is_report_only(n)] == []
+    assert [n for n in paging if is_report_only(n)] == []
+
+
+def test_staging_and_preview_breakdowns_go_to_the_digest_never_the_pager(monkeypatch):
+    """#903: the production runner sees every container on the shared engine, and
+    `platform-prefect-worker(-staging)` alone fired 684 times in 30 days. A staging or
+    preview container never pages — firing or resolved — and is reported in the daily
+    ContainerBreakdownChronic digest, which is itself a REPORT."""
+    import time
+
+    import libs.observability.watchers.breakdown_watch as w
+
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(time, "monotonic", lambda: clock["now"])
+    names = [
+        "platform-prefect-worker-staging",
+        "finance_report-backend-pr-5",
+        "platform-prefect-worker",
+    ]
+    observed = {"broken": True}
+    monkeypatch.setattr(
+        w,
+        "sweep",
+        lambda client, tail: (
+            [
+                Breakdown(container=n, state="unhealthy", reason="r", detail="d")
+                for n in names
+            ]
+            if observed["broken"]
+            else []
+        ),
+    )
+    posted: list = []
+    monkeypatch.setattr(w, "_post_alert", lambda payload: posted.append(payload))
+    state: dict = {}
+    chronic: dict = {}
+
+    def sweep_n(n: int) -> int:
+        fired = 0
+        for _ in range(n):
+            clock["now"] += 60
+            fired += w.run_once(
+                client=None,
+                log_tail=25,
+                container_state=state,
+                renotify=0,
+                failure_threshold=3,
+                recovery_threshold=5,
+                chronic=chronic,
+                chronic_digest_seconds=3600,
+            )
+        return fired
+
+    assert sweep_n(10) == 1
+    observed["broken"] = False
+    sweep_n(5)
+
+    pages = [
+        p for p in posted if p["commonLabels"]["alertname"] == "ContainerBreakdown"
+    ]
+    assert [p["status"] for p in pages] == ["firing", "resolved"]
+    for page in pages:
+        assert [a["annotations"]["summary"].split()[0] for a in page["alerts"]] == [
+            "platform-prefect-worker"
+        ]
+        assert "delivery" not in page["commonLabels"]
+
+    clock["now"] += 3600
+    sweep_n(1)
+    digests = [
+        p
+        for p in posted
+        if p["commonLabels"]["alertname"] == "ContainerBreakdownChronic"
+    ]
+    assert len(digests) == 1
+    assert digests[0]["commonLabels"]["delivery"] == "report"
+    listed = {
+        a["annotations"]["summary"].split()[0]: a["annotations"]["description"]
+        for a in digests[0]["alerts"]
+    }
+    for name in ("platform-prefect-worker-staging", "finance_report-backend-pr-5"):
+        assert listed[name].startswith("staging/preview container, never paged"), name
+    # the production container paged, so its digest line is the ordinary one
+    assert "never paged" not in listed["platform-prefect-worker"]
+    assert all(a["labels"]["delivery"] == "report" for a in digests[0]["alerts"])

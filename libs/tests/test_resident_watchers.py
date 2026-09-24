@@ -162,14 +162,30 @@ def test_breakdown_env_triad_maps_into_config_for_continuity() -> None:
     assert defaults.recovery_threshold == mod.DEFAULT_RECOVERY_THRESHOLD
 
 
-def test_deploy_queue_guard_runs_in_every_env() -> None:
-    """The guard watches the shared Dokploy control plane; unlike the breakdown
-    watcher it stays active on every env's runner (pre-merge behavior: the
-    deploy-queue-guard service ran in prod AND staging)."""
-    w = DeployQueueGuard({"ENV": "staging", "ALERTING_ENV_FILE": "/nonexistent"})
-    assert w.name == "deploy-queue-guard"
-    # no `enabled` gate exists on the guard — construction implies active
-    assert not hasattr(w, "enabled")
+def test_deploy_queue_guard_is_prod_only_and_idles_elsewhere(monkeypatch) -> None:
+    """#903: the guard watches the SHARED Dokploy control plane, so the staging copy
+    paged every stuck deploy a second time. Like the breakdown watcher it is now a
+    prod-only singleton: the staging plugin stays registered but never talks to
+    Dokploy, and a runner without ENV counts as production."""
+    import libs.deploy_queue_guard as guard
+
+    # Recorded, not raised: maybe_run swallows a sweep's exceptions by contract, so a
+    # stub that raises would let a staging sweep pass unnoticed.
+    clients: list[str] = []
+    monkeypatch.setattr(guard, "_make_client", lambda: clients.append("c") or "client")
+    staging = DeployQueueGuard({"ENV": "staging", "ALERTING_ENV_FILE": "/nonexistent"})
+    assert staging.name == "deploy-queue-guard"
+    assert staging.enabled is False
+    assert staging.maybe_run(now=0.0) is True  # ticked, swept as a no-op
+    assert clients == []  # never talked to Dokploy
+
+    swept: list[str] = []
+    monkeypatch.setattr(guard, "run_once", lambda client, **_k: swept.append(client))
+    for environ in ({"ENV": "production"}, {}):
+        prod = DeployQueueGuard({**environ, "ALERTING_ENV_FILE": "/nonexistent"})
+        assert prod.enabled is True
+        prod.maybe_run(now=0.0)
+    assert swept == ["client", "client"]
 
 
 # ---------------------------------------------------------------------------

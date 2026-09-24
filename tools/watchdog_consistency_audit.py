@@ -353,15 +353,19 @@ def _validate_tier_and_type(signal: dict[str, Any], signal_id: str) -> list[str]
                 f"(the debounce that distinguishes a real failure from a transient "
                 f"blip -- #425 T5 / #475 / #531), got {consecutive_failures!r}"
             )
+        # 0 is a declaration, not an absence: "never re-page an unchanged incident
+        # on a timer" (#475 for the breakdown watcher, #903 for the probe runner) —
+        # the incident re-pages on a change and a daily REPORT digest carries it.
         renotify_window_sec = signal.get("renotify_window_sec")
         if (
             not isinstance(renotify_window_sec, int)
             or isinstance(renotify_window_sec, bool)
-            or renotify_window_sec < 1
+            or renotify_window_sec < 0
         ):
             errors.append(
-                f"{signal_id}: type=alert requires an int renotify_window_sec >= 1 "
-                f"seconds (#425 T5 / #475 / #531), got {renotify_window_sec!r}"
+                f"{signal_id}: type=alert requires an int renotify_window_sec >= 0 "
+                f"seconds, 0 = never re-page on a timer (#425 T5 / #475 / #531), "
+                f"got {renotify_window_sec!r}"
             )
     return errors
 

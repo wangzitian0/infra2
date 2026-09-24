@@ -25,11 +25,24 @@ ROOT = Path(__file__).resolve().parents[2]
 FROZEN = Path(__file__).parent / "fixtures/watchdog_internal_signals_frozen.yaml"
 AUDIT = ROOT / "tools/watchdog_consistency_audit.py"
 
+
+def _probe_runner():
+    spec = importlib.util.spec_from_file_location(
+        "infra_probe_runner_for_signal_entries", ROOT / "tools/infra_probe_runner.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 # The probe runner's actual shared debounce (tools/infra_probe_runner.py
 # DEFAULT_FAILURE_THRESHOLD / DEFAULT_RENOTIFY_SECONDS) — what every derived
-# entry must state, because the registry documents what the runner DOES.
-RUNNER_CONSECUTIVE_FAILURES = 3
-RUNNER_RENOTIFY_WINDOW_SEC = 1800
+# entry must state, because the registry documents what the runner DOES. Read
+# from the runner itself (#903), so a SignalFacet that restates a stale value
+# fails here instead of drifting.
+RUNNER_CONSECUTIVE_FAILURES = _probe_runner().DEFAULT_FAILURE_THRESHOLD
+RUNNER_RENOTIFY_WINDOW_SEC = _probe_runner().DEFAULT_RENOTIFY_SECONDS
 
 
 def _frozen() -> dict[tuple[str, str], dict]:
@@ -94,9 +107,9 @@ def test_structured_debounce_supersedes_frozen_free_text_threshold() -> None:
     in #425 T5's structured fields, matching the runner's real defaults.
 
     One handwritten entry (production.dokploy.internal-http) claimed
-    `renotify_window_sec: 3600` — an aspiration nothing implemented; the
-    runner renotifies every 1800s for all probes. The derivation states the
-    truth, so that entry normalizes 3600 -> 1800.
+    `renotify_window_sec: 3600` — an aspiration nothing implemented. The
+    derivation states what the runner does for every probe: since #903 it never
+    re-notifies on a timer (0), so that entry normalizes 3600 -> 0.
     """
     frozen = _frozen()
     for key, entry in _rendered().items():

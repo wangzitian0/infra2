@@ -26,6 +26,12 @@ _RUNBOOK_BY_ALERT = {
     "InfraServiceProbeFailed": _P0_RUNBOOK_BASE,
     "InfraPublicRouteProbeFailed": _P0_RUNBOOK_BASE,
 }
+# #903: a payload labelled `delivery=report` is a REPORT, not a page. The bridge sends it
+# to FEISHU_REPORT_CHAT_ID (app mode) or, when that is unset, to the pager chat with
+# REPORT_TITLE_PREFIX so nothing is lost and nobody mistakes it for a page.
+DELIVERY_LABEL = "delivery"
+REPORT_DELIVERY = "report"
+REPORT_TITLE_PREFIX = "[REPORT] "
 
 
 class AlertingError(Exception):
@@ -232,6 +238,59 @@ def build_feishu_alert_card(payload: dict[str, Any]) -> dict[str, Any]:
             },
         },
         "elements": elements,
+    }
+
+
+def mark_report_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of an Alertmanager-shaped payload labelled ``delivery=report``.
+
+    The label goes on ``commonLabels`` (what the bridge routes on) and on every alert,
+    because Alertmanager's commonLabels are by definition the labels all alerts share.
+    """
+    marked = dict(payload)
+    marked["commonLabels"] = {
+        **_dict(payload.get("commonLabels")),
+        DELIVERY_LABEL: REPORT_DELIVERY,
+    }
+    alerts = payload.get("alerts")
+    if isinstance(alerts, list):
+        marked["alerts"] = [
+            {
+                **alert,
+                "labels": {
+                    **_dict(alert.get("labels")),
+                    DELIVERY_LABEL: REPORT_DELIVERY,
+                },
+            }
+            if isinstance(alert, dict)
+            else alert
+            for alert in alerts
+        ]
+    return marked
+
+
+def is_report_payload(payload: dict[str, Any]) -> bool:
+    """True when the payload asks to be delivered as a report (``delivery=report``)."""
+    label = _dict(payload.get("commonLabels")).get(DELIVERY_LABEL, "")
+    return str(label).strip().lower() == REPORT_DELIVERY
+
+
+def label_report_card(card: dict[str, Any]) -> dict[str, Any]:
+    """A copy of ``card`` whose header title starts with ``[REPORT]``.
+
+    Used only on the fallback path — a report that has to share the pager chat.
+    """
+    header = _dict(card.get("header"))
+    title = _dict(header.get("title"))
+    content = str(title.get("content") or "")
+    if content.startswith(REPORT_TITLE_PREFIX):
+        return card
+    return {
+        **card,
+        "header": {
+            **header,
+            "title": {**title, "content": REPORT_TITLE_PREFIX + content},
+        },
     }
 
 

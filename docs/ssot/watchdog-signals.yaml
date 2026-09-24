@@ -30,7 +30,9 @@
 # audit.py._validate_tier_and_type() MAKES MANDATORY a structured (not
 # free-text) debounce:
 #   consecutive_failures: <int>   # consecutive bad polls before firing
-#   renotify_window_sec:  <int>   # seconds between re-alerts on an active incident
+#   renotify_window_sec:  <int>   # seconds between re-alerts on an active incident;
+#                                 # 0 = never on a timer (re-alerts only on a change,
+#                                 # a daily REPORT digest carries the rest; #475/#903)
 # This is #425's own comment thread, verbatim: "an alert-tier check must
 # declare not only {tier, type} but, for type=alert, a debounce/threshold =
 # what distinguishes a real failure from a transient blip. That makes
@@ -517,6 +519,8 @@ signals:
   # libs.recency.evaluate_consecutive_hysteresis's fire thresholds -- exactly the
   # debounce whose ABSENCE caused #475 (333 firing/resolved pairs in 48h from a
   # single flapping container, each wrongly resetting the renotify clock).
+  # Staging and preview containers never page (#903): they go to the daily
+  # ContainerBreakdownChronic digest, which is itself a REPORT (delivery=report).
   - signal_id: production.docker.container-breakdown-watch
     environment: production
     component: docker
@@ -529,7 +533,7 @@ signals:
     tier: minute
     type: alert
     consecutive_failures: 3 # BREAKDOWN_FAILURE_THRESHOLD
-    renotify_window_sec: 1800 # BREAKDOWN_RENOTIFY_SECONDS
+    renotify_window_sec: 0 # BREAKDOWN_RENOTIFY_SECONDS: never on a timer (#475); escalation re-pages, the chronic digest reports
     recovery_threshold: 5 # BREAKDOWN_RECOVERY_THRESHOLD (consecutive healthy polls to resolve; not a mandatory field, kept for completeness)
     alert_threshold: 3 consecutive broken polls (~3 minutes at 60s cadence)
 
@@ -539,7 +543,8 @@ signals:
   # tools/infra_probe_runner.py --loop, sweeping Dokploy's deployment records
   # every DEPLOY_GUARD_INTERVAL_SECONDS=60s and paging Feishu directly
   # (primary_owner=self). environment=global: the guard watches the whole
-  # shared Dokploy control plane (every project/env) from each runner.
+  # shared Dokploy control plane (every project/env) from the production runner
+  # only; the staging copy idles (#903 — it paged every stuck deploy twice).
   # consecutive_failures=1 is honest, not lax: a deploy only qualifies once it
   # has been `running` past DEPLOY_GUARD_CEILING_SECONDS (1800s) — the ceiling
   # IS the debounce (a 30-minute-sustained state cannot be a transient blip),

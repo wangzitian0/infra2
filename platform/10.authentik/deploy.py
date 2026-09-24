@@ -62,7 +62,7 @@ class AuthentikDeployer(Deployer):
     )
     # Signal classification (#425 T5 / #543): every probe above is a
     # minute-tier alert debounced by the probe runner's shared loop —
-    # DEFAULT_FAILURE_THRESHOLD=3 / DEFAULT_RENOTIFY_SECONDS=1800
+    # DEFAULT_FAILURE_THRESHOLD=3 / DEFAULT_RENOTIFY_SECONDS=0 (#903: no timer)
     # (tools/infra_probe_runner.py). watchdog-signals entries derive from this
     # (libs/watchdog_signal_entries.py); the values here must state what the
     # runner actually does, not an aspiration.
@@ -71,7 +71,7 @@ class AuthentikDeployer(Deployer):
             tier="minute",
             type="alert",
             consecutive_failures=3,
-            renotify_window_sec=1800,
+            renotify_window_sec=0,
         ),
     )
 

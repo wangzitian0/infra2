@@ -15,6 +15,8 @@ from libs.alerting import (
     deliver_feishu_app_card,
     deliver_feishu_card,
     feishu_host_reachable,
+    is_report_payload,
+    label_report_card,
     redacted_app_config,
     redacted_url,
     validate_feishu_api_base,
@@ -92,9 +94,10 @@ class AlertBridgeHandler(BaseHTTPRequestHandler):
             self._json(400, {"status": "invalid_payload"})
             return
 
+        report = is_report_payload(payload)
         try:
             card = build_feishu_alert_card(payload)
-            response = _deliver(card)
+            response = _deliver(card, report=report)
         except AlertingError as exc:
             self._json(502, {"status": "delivery_failed", "error": str(exc)})
             return
@@ -110,7 +113,8 @@ class AlertBridgeHandler(BaseHTTPRequestHandler):
             f"alert-bridge delivered status={payload.get('status', '?')} "
             f"alertname={labels.get('alertname', '?')} "
             f"severity={labels.get('severity', '?')} "
-            f"alerts={alert_count}",
+            f"alerts={alert_count} "
+            f"delivery={_route(report)}",
             flush=True,
         )
         self._json(202, {"status": "accepted", "feishu": response})
@@ -175,7 +179,11 @@ def _validate_delivery_config() -> dict[str, Any]:
             raise AlertingError(
                 "FEISHU_APP_ID, FEISHU_APP_SECRET, and FEISHU_CHAT_ID are required"
             )
-        return {"mode": mode, "app": redacted_app_config(app_id, chat_id, api_base)}
+        return {
+            "mode": mode,
+            "app": redacted_app_config(app_id, chat_id, api_base),
+            "report_route": "report-chat" if _report_chat_id() else "pager-fallback",
+        }
     raise AlertingError(f"Unsupported ALERT_DELIVERY_MODE: {mode}")
 
 
@@ -193,15 +201,36 @@ def _parse_content_length(raw_value: str | None) -> int:
     return content_length
 
 
-def _deliver(card: dict[str, Any]) -> dict[str, Any]:
+def _report_chat_id() -> str:
+    """The optional report chat (#903); app mode only — a webhook is bound to one chat."""
+    if _delivery_mode() != "feishu_app":
+        return ""
+    return os.getenv("FEISHU_REPORT_CHAT_ID", "").strip()
+
+
+def _route(report: bool) -> str:
+    if not report:
+        return "page"
+    return "report-chat" if _report_chat_id() else "report-pager-fallback"
+
+
+def _deliver(card: dict[str, Any], *, report: bool = False) -> dict[str, Any]:
+    """Send ``card``; a report goes to the report chat, or is marked in the pager chat.
+
+    Nothing is dropped: without FEISHU_REPORT_CHAT_ID a report still reaches the pager
+    chat, titled ``[REPORT]`` so it does not read as a page.
+    """
     mode = _delivery_mode()
+    report_chat_id = _report_chat_id() if report else ""
+    if report and not report_chat_id:
+        card = label_report_card(card)
     if mode == "feishu_webhook":
         return deliver_feishu_card(os.getenv("FEISHU_WEBHOOK_URL", ""), card)
     if mode == "feishu_app":
         return deliver_feishu_app_card(
             app_id=os.getenv("FEISHU_APP_ID", ""),
             app_secret=os.getenv("FEISHU_APP_SECRET", ""),
-            chat_id=os.getenv("FEISHU_CHAT_ID", ""),
+            chat_id=report_chat_id or os.getenv("FEISHU_CHAT_ID", ""),
             card=card,
             api_base=os.getenv("FEISHU_API_BASE", "https://open.feishu.cn"),
         )

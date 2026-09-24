@@ -136,9 +136,10 @@ def test_alert_type_missing_debounce_fields_fails_with_clear_message() -> None:
     )
 
 
-def test_alert_type_with_non_int_or_zero_debounce_fields_fails() -> None:
-    """A free-text or zero/negative threshold doesn't satisfy the structured
-    requirement -- it must be a real int >= 1."""
+def test_alert_type_with_non_int_or_negative_debounce_fields_fails() -> None:
+    """A free-text threshold or a negative window doesn't satisfy the structured
+    requirement: consecutive_failures must be an int >= 1, renotify_window_sec an
+    int >= 0."""
     audit = _load_audit()
 
     signal = {
@@ -146,12 +147,33 @@ def test_alert_type_with_non_int_or_zero_debounce_fields_fails() -> None:
         "tier": "minute",
         "type": "alert",
         "consecutive_failures": "3 consecutive failures",
-        "renotify_window_sec": 0,
+        "renotify_window_sec": -1,
     }
     errors = audit._validate_tier_and_type(signal, "x")
 
     assert any("consecutive_failures" in error for error in errors)
     assert any("renotify_window_sec" in error for error in errors)
+
+    zero_failures = {**signal, "consecutive_failures": 0, "renotify_window_sec": 0}
+    errors = audit._validate_tier_and_type(zero_failures, "x")
+    assert any("consecutive_failures" in error for error in errors)
+
+
+def test_zero_renotify_window_is_a_declaration_not_an_absence() -> None:
+    """#475 / #903: `renotify_window_sec: 0` declares "never re-page an unchanged
+    incident on a timer" — what the breakdown watcher and the probe runner actually
+    do. Requiring >= 1 forced the registry to state a timer neither runs."""
+    audit = _load_audit()
+
+    signal = {
+        **_BASE_SIGNAL,
+        "tier": "minute",
+        "type": "alert",
+        "consecutive_failures": 3,
+        "renotify_window_sec": 0,
+    }
+
+    assert audit._validate_tier_and_type(signal, "x") == []
 
 
 def test_alert_type_with_valid_debounce_fields_passes() -> None:
