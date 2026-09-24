@@ -76,6 +76,7 @@
 | Date | Change |
 |---|---|
 | 2026-09-24 | owner 授权后安装 main `a6f29e5` 的 `host_backup.sh`（SHA256 `e2a897cf2d583e5b612946834c9d80b176339ebcc32c56c5e23da0df3c9cea83`）并运行 Production 异地备份。run `20260924T034246Z` 17/17，2,559,250,821 字节；远端逐项重新下载的大小、SHA256、gzip/tar 校验全过。Finance Report 与 TrueAlpha 这两份实际远端归档在隔离 Postgres 中分别通过 5 项不变量，清理 0 残留。Staging 上传被自动审批拒绝，仍未完成。 |
+| 2026-09-24 | 备份 runner 的 run ID 改为 UTC 秒级时间戳加进程 ID，避免同秒并发运行共用本地目录、artifact 路径或远端前缀。新增并发屏障回归测试：修复前失败，修复后两个独立 17 项 manifest 均通过；`libs/tests/test_host_backup_script.py` 13 项通过。 |
 | 2026-09-24 | Production 1Password Connect 本机归档解包后通过凭证 JSON 解析和 SQLite 完整性检查（9 张表）；没有打印凭证内容，临时数据清理完成。Connect 同步及异地恢复仍待验证。 |
 | 2026-09-24 | Production Vault 本机归档在无网络的一次性 Vault 1.15.4 实例中启动并返回已初始化、待解封的文件存储状态；未使用解封密钥，不能据此声称密钥可读或整机 DR 通过。临时容器与数据目录清理完成。 |
 | 2026-09-24 | Production OpenPanel 本机归档在无网络的一次性同版本 ClickHouse 中恢复：18 张表，`events` 53,864 行、`sessions` 199 行可实际查询；在线同期 part 元数据为 54,069 / 199，临时容器与数据目录清理完成。异地包仍待验证。 |

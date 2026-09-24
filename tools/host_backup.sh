@@ -47,14 +47,15 @@ esac
 PG_SUPERUSER="${PG_SUPERUSER:-postgres}"
 BACKUP_KEEP="${BACKUP_KEEP:-7}"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
-RUN_DIR="${OUTPUT_DIR}/${ENVIRONMENT}-${TS}"
+RUN_ID="${TS}-$$"
+RUN_DIR="${OUTPUT_DIR}/${ENVIRONMENT}-${RUN_ID}"
 MANIFEST="${RUN_DIR}/manifest.json"
 LATEST_MANIFEST="${OUTPUT_DIR}/${ENVIRONMENT}-manifest.json"
 ARTIFACTS_FILE="${RUN_DIR}/.artifacts.jsonl"
 
 RUN_REMOTE=""
 if [ -n "${REMOTE}" ]; then
-  RUN_REMOTE="${REMOTE%/}/${TIER}/${ENVIRONMENT}/${TS}"
+  RUN_REMOTE="${REMOTE%/}/${TIER}/${ENVIRONMENT}/${RUN_ID}"
 fi
 
 mkdir -p "${RUN_DIR}"

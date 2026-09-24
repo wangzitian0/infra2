@@ -231,6 +231,70 @@ def test_a_failing_service_does_not_stop_the_rest(host) -> None:
     assert all(run_dir.exists() for run_dir in old)
 
 
+def test_same_second_concurrent_runs_get_isolated_run_directories(host) -> None:
+    bin_dir = Path(host["env"]["PATH"].split(os.pathsep)[0])
+    barrier = Path(host["out"]).parent / "date-barrier"
+    barrier.mkdir()
+    (bin_dir / "date").write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        '  *%Y%m%dT%H%M%SZ*)\n'
+        '    touch "$FAKE_DATE_BARRIER/$$"\n'
+        '    i=0\n'
+        '    while [ "$i" -lt 500 ]; do\n'
+        '      count=0\n'
+        '      for marker in "$FAKE_DATE_BARRIER"/*; do\n'
+        '        [ -f "$marker" ] && count=$((count + 1))\n'
+        '      done\n'
+        '      [ "$count" -ge 2 ] && break\n'
+        '      i=$((i + 1))\n'
+        '      sleep 0.01\n'
+        '    done\n'
+        '    [ "$count" -ge 2 ] || { echo "concurrency barrier timed out" >&2; exit 99; }\n'
+        '    echo 20260924T120000Z ;;\n'
+        '  *%s*) echo 1790251200 ;;\n'
+        '  *) exec /bin/date "$@" ;;\n'
+        "esac\n",
+        encoding="utf-8",
+    )
+    (bin_dir / "date").chmod(0o755)
+    env = {
+        **host["env"],
+        "FAKE_DATE_BARRIER": str(barrier),
+        "ENV_SUFFIX": "",
+    }
+
+    processes = [
+        subprocess.Popen(
+            [shutil.which("bash") or "bash", str(SCRIPT)],
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        for _ in range(2)
+    ]
+    results = []
+    try:
+        for proc in processes:
+            stdout, stderr = proc.communicate(timeout=30)
+            results.append((proc.returncode, stdout, stderr))
+    finally:
+        for proc in processes:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+
+    assert all(code == 0 for code, _, _ in results), results
+    assert len(list(barrier.iterdir())) == 2, "both runs must overlap at timestamp creation"
+    run_dirs = sorted(host["out"].glob("production-20260924T120000Z*"))
+    assert len(run_dirs) == 2, [str(path) for path in run_dirs]
+    for run_dir in run_dirs:
+        manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+        assert _ids(manifest) == ALL_SERVICES
+        assert len(manifest["artifacts"]) == len(ALL_SERVICES)
+
+
 def test_retention_keeps_the_newest_runs_on_success(host) -> None:
     for i in range(1, 6):
         (host["out"] / f"production-2026010{i}T000000Z").mkdir()
