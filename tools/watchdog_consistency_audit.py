@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import re
 import sys
 import tomllib
 from typing import Any
@@ -44,6 +45,11 @@ VALID_TYPES = {"alert", "report"}
 # day line -- there is no such thing as an hourly report or a monthly alert.
 ALERT_TIERS = {"minute", "hour"}
 REPORT_TIERS = {"day", "month"}
+# #902: which layer each owner pages from. `self` signals page from their own
+# code path, which may run on the VPS or in a GitHub job, so they declare it.
+VALID_LAYERS = {"vps", "cloudflare", "github"}
+LAYER_OF_OWNER = {"internal": "vps", "cloudflare": "cloudflare", "github": "github"}
+PHASE_REF = re.compile(r"^#\d+$")
 
 
 def main() -> int:
@@ -61,6 +67,7 @@ def audit() -> list[str]:
     signals = inventory.get("signals", [])
     errors: list[str] = []
     errors.extend(_validate_inventory(signals))
+    errors.extend(_validate_layers(inventory, signals))
 
     internal_specs = _compose_probe_specs()
     worker_targets, worker_heartbeats, worker_identities = _worker_keys()
@@ -201,6 +208,80 @@ def _validate_inventory(signals: list[dict[str, Any]]) -> list[str]:
         except ValueError as exc:
             errors.append(f"unresolvable service identity for {signal_id}: {exc}")
         errors.extend(_validate_tier_and_type(signal, signal_id))
+    return errors
+
+
+def _validate_layers(
+    inventory: dict[str, Any], signals: list[dict[str, Any]]
+) -> list[str]:
+    """#902: every failure class is paged by exactly one layer.
+
+    A paging signal (anything not `type: report`) outside its class's pager
+    layer is an error unless `relayering_debt` lists it with the phase issue
+    that fixes it; a debt entry that is no longer a violation is an error too,
+    so the list can only shrink together with the work.
+    """
+    classes = inventory.get("failure_classes") or {}
+    if not classes:
+        return ["failure_classes is missing or empty"]
+    errors: list[str] = []
+    for name, spec in classes.items():
+        if (spec or {}).get("pager") not in VALID_LAYERS:
+            errors.append(
+                f"failure class {name}: pager must be one of {sorted(VALID_LAYERS)}"
+            )
+    debt: dict[str, dict[str, Any]] = {}
+    for entry in inventory.get("relayering_debt") or []:
+        signal_id = str(entry.get("signal_id", ""))
+        if not PHASE_REF.match(str(entry.get("phase", ""))) or not entry.get("reason"):
+            errors.append(
+                f"relayering_debt {signal_id}: needs a phase issue (#N) and a reason"
+            )
+        debt[signal_id] = entry
+
+    violations: set[str] = set()
+    for signal in signals:
+        owner = signal.get("primary_owner")
+        signal_id = str(signal.get("signal_id", ""))
+        if owner == "excluded":
+            continue
+        # Internal entries are rendered from ProbeFacet/SignalFacet (#543): all
+        # of them are in-band service checks on the VPS.
+        failure_class = signal.get("failure_class") or (
+            "service-health" if owner == "internal" else None
+        )
+        if failure_class not in classes:
+            errors.append(
+                f"{signal_id}: unknown or missing failure_class {failure_class!r}"
+            )
+            continue
+        if owner == "self":
+            layer = signal.get("layer")
+            if layer not in VALID_LAYERS:
+                errors.append(
+                    f"{signal_id}: self-owned signals declare layer in {sorted(VALID_LAYERS)}"
+                )
+                continue
+        else:
+            layer = LAYER_OF_OWNER.get(str(owner))
+            if "layer" in signal and signal["layer"] != layer:
+                errors.append(
+                    f"{signal_id}: layer follows primary_owner {owner!r}; drop the field"
+                )
+        if signal.get("type") == "report":
+            continue
+        pager = classes[failure_class]["pager"]
+        if layer != pager:
+            violations.add(signal_id)
+            if signal_id not in debt:
+                errors.append(
+                    f"{signal_id}: pages {failure_class} from the {layer} layer, but "
+                    f"{failure_class} is paged only by {pager} (one pager per failure class)"
+                )
+    for signal_id in sorted(set(debt) - violations):
+        errors.append(
+            f"relayering_debt {signal_id} is no longer a violation; remove the entry"
+        )
     return errors
 
 

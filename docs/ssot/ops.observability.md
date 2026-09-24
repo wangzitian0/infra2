@@ -21,7 +21,7 @@
 | **告警 - 规则** | **SigNoz Alert Manager** + `finance_report/finance_report/observability/alert_rules.json`(config-as-code) | 告警规则 |
 | **告警 - 通知** | [platform/12.alerting](../../platform/12.alerting/) | SigNoz webhook → Feishu custom bot / app bot bridge;in-band probe runner |
 | **告警 - 密钥源头** | 1Password `platform/{env}/alerting` → 运行时镜像 Vault `secret/platform/{env}/alerting` | Feishu 凭据 + 可选 bridge basic auth |
-| **带外 watchdog** | [`cloudflare/infra-watchdog`](../../cloudflare/infra-watchdog/)(主,边缘 30min)+ [`.github/workflows/ops-checks.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/ops-checks.yml)(GitHub 兜底,日级) | 整机/整栈失联检测 |
+| **带外 watchdog** | [`cloudflare/infra-watchdog`](../../cloudflare/infra-watchdog/)(轻量带外,边缘 30min)+ [`.github/workflows/ops-checks.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/ops-checks.yml)(日级带外审计) | 只判 VPS 自己报告不了的:整机/整栈失联、告警链路自身失效;分工见 §1.1 |
 | **信号清单** | [`watchdog-signals.yaml`](watchdog-signals.yaml) | 按信号(非组件)追踪 watchdog 归属 |
 | **报告 - 账本** | Cloudflare KV(热 21 天)+ R2(冷长期)·`libs/availability_ledger.py`(聚合)·`tools/stability_report.py`(周报) | 正向证明 |
 | **部署指南** | [Infra-007](../project/archive/Infra-007.signoz_install.md) | SigNoz 安装 |
@@ -42,6 +42,30 @@ ping。`WATCHDOG_DEADMAN_PING_URL` 是 Cloudflare Worker secret，不入库、�
 owner 批准的当前 head SHA，才能满足 `AGENTS.md` 的生产权限边界。
 >
 > **防假绿与维度下钻铁律**：所有业务指标与告警规则必须按 `(service_namespace, environment)` 维度分组计算，严禁在无标签的全局均值上计算成功率。单策略/单任务池故障时禁止被大盘平均值稀释覆盖。告警静默（Cooldown/Snooze）期必须在看板中明确标记为“已静音”而非“健康正常”。
+
+### 1.1 分层职责与唯一报警层 (#901 / #902)
+
+**重活在 VPS,Cloudflare 只做 VPS 自己报告不了的判定。** 容量不是问题:按这个体量,各家免费额度都绰绰有余(#901 实测
+日配额用量 5–38%)。#901 审计发现的问题是**职责错位**:Worker 每次 cron 重做 VPS 已经在做的 15 条路由检查、
+可用率台账与 R2 归档,单次 CPU 超过免费档 10 ms;同一故障又被 in-band、Worker、GitHub 各报一遍,三种格式三种诊断——
+这正是 30 天 2,445 条飞书消息只对应 57 个不同告警对象的放大器。
+
+| 层 | 承担 | 不承担 |
+|----|------|--------|
+| **VPS**(重活,主告警面) | 全部探测(内部、公网路由、容器、资源、部署队列)· 去重/防抖/聚合/分级 · 卡片渲染 · 唯一告警出口(bridge)· 可用率成功计数 · 日报 | — |
+| **Cloudflare Worker**(轻、稳,带外) | 只判 VPS 自己报告不了的:VPS 心跳过期(整机/出网断)、探测循环与投递失效(心跳字段携带)、每个产品 1 个公网入口的外部可达性;直发飞书 | 路由清单、run 内 sleep 重试、台账累加、R2 归档、可用率计算、报告 |
+| **GitHub Actions**(日级带外审计) | Worker 自身存活 · 备份与恢复演练 · 配置/密钥漂移 · 对等调度器 · 周报 | VPS 已在做的实时探测(降为报告行) |
+| **Healthchecks.io**(可选) | 看守 Worker 的 cron(谁来看守看守者) | — |
+
+- **每类故障只由一层报警**,其余层只能报告。"故障类别 → 报警层"的映射**只**维护在
+  [`watchdog-signals.yaml`](watchdog-signals.yaml) 的 `failure_classes`;每个信号标 `failure_class`,层随 `primary_owner`
+  (`self` 显式声明 `layer`)。`tools/watchdog_consistency_audit.py` 让报警层不符的信号失败,除非它在 `relayering_debt`
+  里挂着清偿它的阶段 issue;已不再违规的欠账条目同样失败——欠账只能随修复一起缩短。
+- **Cloudflare 预算(#904 验收)**:cron CPU p99 < 5 ms、每次运行子请求 ≤ 10、KV 只在状态变化时写(≤ 200/天),留在免费档。
+  超出是设计缺陷,不是升级付费的理由。
+- **可用率(目标态,#904)**:成功计数由 VPS 探针累加(重活);VPS 失联区间由 Worker 只在心跳过期/恢复两个边沿各写一次
+  KV(每次事故 2 次写);二者合算可用率。VPS 无法记录自己宕机期间的状态,这部分仍必须在带外——但只记边沿,不做累加。
+  §6 描述的是迁移前的现状。
 
 ---
 
@@ -233,7 +257,7 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 
 > 故障流告警**证明不了"它一直是好的"**。账本是闭环的正向一半:**成功也记,且绝不能把降级信号报成健康**。
 
-- **为何外置(KV/R2 而非 SigNoz)**:SigNoz 与 bridge 都在单台 VPS,**度量不了自己宿主的可用率**。账本必须活在比被测对象更可靠的层(Cloudflare)。
+- **为何外置(KV/R2 而非 SigNoz)**:SigNoz 与 bridge 都在单台 VPS,**度量不了自己宿主的可用率**。账本必须活在比被测对象更可靠的层(Cloudflare)。**#904 将按 §1.1 拆分**:累加迁回 VPS,带外只记失联边沿。
 - **记账**:`worker.js` `recordLedger` 每次 cron 把各信号 ok/fail 累加进**当日一个聚合 rollup**(绝不一信号一键,否则击穿 KV 免费写配额→静默假死);跨天结算的昨日写入 R2(S3 标准、静态凭据、与备份同后端、Worker 原生 binding,无需第二套同步)。
 - **热 21 天 KV `ledger:YYYY-MM-DD`** 供 `/ledger`/`/status`/周报;**冷长期 R2 `watchdog-ledger/YYYY-MM-DD.json`**。
 - **聚合/算 uptime** 只在 `libs/availability_ledger.py`(纯函数,CLI 与测试共用);R2/KV 缺失时**安全降级 no-op**,部署不挂。
@@ -280,11 +304,11 @@ Runbook 入库仅交付操作路径；#723 要求的一次现场演练、完整�
 
 > **注**:`apply_alerts` 现为声明式 reconcile(upsert + 默认只 log 的 prune),见 [ops.pipeline.md](./ops.pipeline.md)。
 
-### SOP-005: Cloudflare 带外 watchdog(主,边缘 30min)
+### SOP-005: Cloudflare 带外 watchdog(轻量带外,边缘 30min;#904 瘦身中)
 活在 [`cloudflare/infra-watchdog`](../../cloudflare/infra-watchdog/),**直发 Feishu**(不经它要验证的 bridge)。归属按信号记于 [`watchdog-signals.yaml`](watchdog-signals.yaml)。默认覆盖:prod 公网路由 `cloud/vault/minio/sso/signoz` + report web/api;staging 选定路由;prod/staging probe-runner heartbeat 新鲜度。每个 target 携带 registry 校验的 `service_id`;结构化事件写 `identity_schema=v1` / `managed_by=infra2`,dedupe keys on **stable failure identity plus failure domain**，具体 fingerprint 使用 `(environment, service_id, signal, failure_domain)`。config-preflight 失败单独报(不冒充路由故障);投递失败发 `watchdog.delivery.failure` 结构化事件不静默。
 - secrets:webhook 模式 `FEISHU_WEBHOOK_URL`;app 模式 `FEISHU_APP_SECRET`;两者 `HEARTBEAT_TOKEN`、`WATCHDOG_STATUS_TOKEN`(源 1Password `Infra2/bootstrap/cloudflare-worker`)。
 - KV `WATCHDOG_STATE`;vars `WATCHDOG_ENVIRONMENTS=production,staging`、`WATCHDOG_RENOTIFY_SECONDS=7200` 等。
-- 部署:首次 `cd cloudflare/infra-watchdog && wrangler kv namespace create WATCHDOG_STATE && wrangler secret put ... && wrangler deploy`;之后 push 到 main 且改动 `cloudflare/infra-watchdog/**` 即由 `deploy-cloudflare-watchdog.yml` 自动 `wrangler deploy`(合流即部署 → `tools/pr_merge_gate.py` 视为 deploy-triggering,需 owner 批准该 head)。再配 probe runner heartbeat:`env.set INFRA_PROBE_HEARTBEAT_URL=.../heartbeat` + `INFRA_PROBE_HEARTBEAT_TOKEN`(prod+staging)→ deploy_v2。
+- 部署:首次 `cd cloudflare/infra-watchdog && wrangler kv namespace create WATCHDOG_STATE && wrangler secret put ... && wrangler deploy`;之后由 `deploy-cloudflare-watchdog.yml` **手动 dispatch** 部署,输入必须是 owner 批准的 main 精确 head SHA(`approved_sha`);合流本身不部署。再配 probe runner heartbeat:`env.set INFRA_PROBE_HEARTBEAT_URL=.../heartbeat` + `INFRA_PROBE_HEARTBEAT_TOKEN`(prod+staging)→ deploy_v2。
 - **KV 写预算**(免费档全账号 1000 put/天;耗尽后心跳 put 全失败、记录冻结 → 假 stale 告警):心跳 verdict 每 `WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS`(900)刷新一次;verdict 变化提前写,每 key 每 UTC 日至多 `WATCHDOG_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY`(24)次;runner 的 liveness ping(`liveness: true`)**不得改写** verdict;只存 `WATCHDOG_HEARTBEATS_JSON` 里的 key。最坏 `2×(96+24)+48×3=384/天`(38%)。事故先例:2026-09-15/16 liveness `ok=true` 与失败 verdict 每轮交替、每次交替都写 → 1198 / 1157 put/天。证明:`libs/tests/test_cloudflare_watchdog_kv_budget.py`(node 回放整日流量);每日 `tools/secrets_reconcile.py` 报告 `cloudflare.kv.write` 近 7 日 + 今日趋势。
 
 ### SOP-005B: GitHub 兜底带外 watchdog(日级)
