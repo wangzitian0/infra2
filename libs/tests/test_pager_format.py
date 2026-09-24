@@ -558,6 +558,7 @@ def test_a_few_short_alerts_are_all_shown_in_full() -> None:
         'body=<at id="all"></at> <b>x</b>',
         "see [the fix](https://evil.example/steal) and **bold**",
     ],
+    ids=["at-tag", "markdown-link"],
 )
 def test_a_value_is_shown_never_interpreted(value) -> None:
     """#905: a value that holds an ``<at>`` tag or a markdown link is plain text on the
@@ -657,6 +658,7 @@ def _resource_page(monkeypatch, name: str, target: str) -> dict[str, str]:
         ("host-mem", "mem", "platform/12.alerting/README.md#host-resource-probes"),
         ("host-cpu", "cpu", "platform/12.alerting/README.md#host-resource-probes"),
     ],
+    ids=["disk", "mem", "cpu"],
 )
 def test_a_host_resource_probe_reads_as_the_host(monkeypatch, name, target, runbook):
     """#905 review: host-cpu/mem/disk were `service-or-route`, so their card told the
@@ -806,6 +808,16 @@ def test_the_app_bot_posts_utf8_under_its_30kb_limit(monkeypatch) -> None:
         (-5, "未知"),
         ("not a time", "未知"),
     ],
+    ids=[
+        "epoch-ms",
+        "epoch-s",
+        "epoch-ms-string",
+        "far-future",
+        "infinity",
+        "nan",
+        "negative",
+        "garbage",
+    ],
 )
 def test_a_malformed_time_is_read_or_unknown_never_a_crash(starts_at, shown) -> None:
     payload = _signoz_payload()
@@ -849,13 +861,18 @@ def test_a_card_that_cannot_fit_goes_out_minimal_and_within_the_limit(
     """The final hard cap: when even the smallest plan is over budget, the minimal
     card goes out, itself cut to fit."""
     monkeypatch.setitem(alerting.FEISHU_BODY_LIMITS, "feishu_webhook", 4_000)
-    card = build_feishu_alert_card(_huge_payload(60), now=T0)
+    payload = _huge_payload(60)
+    for alert in payload["alerts"]:  # a raw summary that the minimal card must cut
+        alert["annotations"]["summary"] = "磁盘写满" * 100
+    card = build_feishu_alert_card(payload, now=T0)
 
     body = "\n".join(e["text"]["content"] for e in card["elements"])
     assert card["header"]["title"]["content"].endswith(" · 简化卡片")
     assert card_body_bytes(card, "feishu_webhook") <= card_budget("feishu_webhook")
-    assert "…及另外 " in body
     assert "完整卡片超出大小上限" in body
+    shown = [line for line in body.splitlines() if line.startswith("• ")]
+    assert 1 <= len(shown) < 20  # cut to fit, not just to the 20-line cap
+    assert f"…及另外 {60 - len(shown)} 项" in body
 
 
 def test_the_title_and_the_links_are_bounded() -> None:
@@ -997,6 +1014,14 @@ def english_prose(text: str) -> list[str]:
         "heartbeat stale: 9000s old (max 5400s)",
         "心跳缺失 · probe loop healthy",
     ],
+    ids=[
+        "sentence",
+        "two-words",
+        "no-detail",
+        "parenthesised",
+        "with-numbers",
+        "mixed",
+    ],
 )
 def test_the_english_prose_detector_sees_english(prose) -> None:
     assert english_prose(prose)
@@ -1010,6 +1035,7 @@ def test_the_english_prose_detector_sees_english(prose) -> None:
         "只用 Dokploy 自己的 `cancel` / `clean`,绝不直接删 Redis / BullMQ 键",
         "依赖不可达(`connection refused`)",
     ],
+    ids=["source-line", "code-and-url", "products", "quoted-evidence"],
 )
 def test_the_english_prose_detector_spares_commands_links_and_products(chinese) -> None:
     assert english_prose(chinese) == []
