@@ -2260,11 +2260,7 @@ def test_a_github_page_shows_every_field_of_the_shared_layout() -> None:
 @pytest.mark.parametrize(
     ("name", "domain", "environment"),
     [
-        (
-            "dokploy-status:finance_report/staging/backend",
-            "dokploy-deploy-status",
-            "staging",
-        ),
+        ("dokploy-status:truealpha/pr-7/web", "dokploy-deploy-status", "pr-7"),
         (
             "dokploy-status:platform/production/vault",
             "dokploy-deploy-status",
