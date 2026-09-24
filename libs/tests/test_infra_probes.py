@@ -1394,6 +1394,150 @@ def test_probe_runner_env_file_overrides_empty_compose_defaults(
     )
 
 
+def test_probe_runner_env_file_that_appears_late_is_picked_up(
+    monkeypatch, tmp_path
+) -> None:
+    """#915: a runner that starts before vault-agent renders the file recovers."""
+    runner = _load_probe_runner()
+    env_file = tmp_path / ".env"
+    monkeypatch.delenv("PROBE_POSTGRES_PASSWORD", raising=False)
+
+    assert runner._load_env_file(env_file) is False
+    assert "PROBE_POSTGRES_PASSWORD" not in runner.os.environ
+
+    env_file.write_text("PROBE_POSTGRES_PASSWORD=late\n", encoding="utf-8")
+
+    assert runner._load_env_file(env_file) is True
+    assert runner.os.environ["PROBE_POSTGRES_PASSWORD"] == "late"
+
+
+def test_probe_runner_env_file_rotation_replaces_file_values_only(
+    monkeypatch, tmp_path
+) -> None:
+    """#915: a re-rendered secret replaces the old file value; compose still wins."""
+    runner = _load_probe_runner()
+    env_file = tmp_path / ".env"
+    monkeypatch.delenv("PROBE_S3_SECRET_KEY", raising=False)
+    monkeypatch.setenv("ENV", "staging")
+    env_file.write_text("PROBE_S3_SECRET_KEY=old\nENV=production\n", encoding="utf-8")
+    runner._load_env_file(env_file)
+
+    env_file.write_text("PROBE_S3_SECRET_KEY=new\nENV=production\n", encoding="utf-8")
+    runner._load_env_file(env_file)
+
+    assert runner.os.environ["PROBE_S3_SECRET_KEY"] == "new"
+    assert runner.os.environ["ENV"] == "staging"
+
+
+def test_probe_runner_loop_rereads_the_env_file_every_iteration(
+    monkeypatch, tmp_path
+) -> None:
+    """#915: the credentials a late render supplies reach the next probe round."""
+    runner = _load_probe_runner()
+    env_file = tmp_path / ".env"
+    seen = []
+
+    def fake_run_once(**_kwargs):
+        seen.append(runner.os.environ.get("PROBE_POSTGRES_PASSWORD", ""))
+        if len(seen) == 1:
+            env_file.write_text("PROBE_POSTGRES_PASSWORD=rendered\n", encoding="utf-8")
+        return 0
+
+    def fake_sleep(_seconds):
+        if len(seen) >= 2:
+            raise SystemExit(0)
+
+    monkeypatch.delenv("PROBE_POSTGRES_PASSWORD", raising=False)
+    monkeypatch.setenv("ALERTING_ENV_FILE", str(env_file))
+    monkeypatch.setattr(runner, "run_once", fake_run_once)
+    monkeypatch.setattr(runner, "_build_watchers", lambda: [])
+    monkeypatch.setattr(runner, "_post_heartbeat", lambda **_k: None)
+    monkeypatch.setattr(runner, "_touch_state", lambda _p: None)
+    monkeypatch.setattr(runner.time, "sleep", fake_sleep)
+    monkeypatch.setattr("sys.argv", ["infra_probe_runner.py", "--loop"])
+
+    with pytest.raises(SystemExit):
+        runner.main()
+
+    assert seen == ["", "rendered"]
+
+
+def test_probe_runner_env_file_read_error_never_escapes(tmp_path, capsys) -> None:
+    """#915 review: vault-agent deletes the file on restart; a read that loses
+    that race must not kill the loop that also carries the watchers."""
+    runner = _load_probe_runner()
+    unreadable = tmp_path / "env-as-dir"
+    unreadable.mkdir()
+
+    assert runner._load_env_file(unreadable) is False
+    assert runner._load_env_file(unreadable) is False
+    assert capsys.readouterr().out.count("is unreadable") == 1
+
+
+def test_probe_runner_env_file_blank_render_keeps_good_values(
+    monkeypatch, tmp_path
+) -> None:
+    runner = _load_probe_runner()
+    env_file = tmp_path / ".env"
+    monkeypatch.delenv("PROBE_POSTGRES_PASSWORD", raising=False)
+    env_file.write_text("PROBE_POSTGRES_PASSWORD=good\n", encoding="utf-8")
+    runner._load_env_file(env_file)
+
+    env_file.write_text('PROBE_POSTGRES_PASSWORD=""\n', encoding="utf-8")
+    runner._load_env_file(env_file)
+
+    assert runner.os.environ["PROBE_POSTGRES_PASSWORD"] == "good"
+
+
+def test_probe_runner_env_file_vanished_key_keeps_value_and_says_so_once(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    runner = _load_probe_runner()
+    env_file = tmp_path / ".env"
+    monkeypatch.delenv("PROBE_S3_BUCKET", raising=False)
+    env_file.write_text("PROBE_S3_BUCKET=b1\nOTHER=x\n", encoding="utf-8")
+    runner._load_env_file(env_file)
+
+    env_file.write_text("OTHER=x\n", encoding="utf-8")
+    runner._load_env_file(env_file)
+    runner._load_env_file(env_file)
+
+    assert runner.os.environ["PROBE_S3_BUCKET"] == "b1"
+    assert capsys.readouterr().out.count("no longer renders PROBE_S3_BUCKET") == 1
+
+
+def test_probe_runner_loop_survives_an_unreadable_env_file(
+    monkeypatch, tmp_path
+) -> None:
+    """The per-iteration re-read runs for every loop, dry-run included, and a
+    read error in it never ends the loop."""
+    runner = _load_probe_runner()
+    unreadable = tmp_path / "env-as-dir"
+    unreadable.mkdir()
+    rounds = []
+
+    def fake_sleep(_seconds):
+        if len(rounds) >= 2:
+            raise SystemExit(0)
+
+    monkeypatch.setenv("ALERTING_ENV_FILE", str(unreadable))
+    monkeypatch.setenv("INFRA_PROBE_DRY_RUN", "1")
+    monkeypatch.setattr(runner, "run_once", lambda **_k: rounds.append(1) or 0)
+    monkeypatch.setattr(runner.time, "sleep", fake_sleep)
+    reads = []
+    original = runner._load_env_file
+    monkeypatch.setattr(
+        runner, "_load_env_file", lambda path: reads.append(path) or original(path)
+    )
+    monkeypatch.setattr("sys.argv", ["infra_probe_runner.py", "--loop"])
+
+    with pytest.raises(SystemExit):
+        runner.main()
+
+    assert len(rounds) == 2
+    assert len(reads) == 3  # startup, then once per iteration
+
+
 def test_resource_probe_threshold_pass_fail() -> None:
     """A `resource` probe passes while usage <= the % ceiling, fails above it."""
     spec = parse_probe_specs("host-cpu|resource|cpu|80")[0]
