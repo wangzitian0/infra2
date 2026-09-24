@@ -71,6 +71,8 @@ BACKUP_CHECKS = (
 RESTORE_REHEARSAL_CHECK = "infra2-restore-rehearsal"
 #: Where the rehearsal cron appends its output (crontab in ops.recovery.md SOP-006A).
 RESTORE_REHEARSAL_LOG = "/var/log/infra2-backup-restore-rehearsal.log"
+#: ssh's own exit status when it cannot connect or authenticate.
+SSH_TRANSPORT_FAILURE = 255
 
 
 @dataclass(frozen=True)
@@ -507,6 +509,7 @@ def run_backup_checks(
         ]
     try:
         from libs.backup.verification import (
+            FUTURE_TOLERANCE_HOURS,
             INVENTORY_DEFAULTS,
             latest_manifest_path,
             load_backup_inventory,
@@ -529,6 +532,8 @@ def run_backup_checks(
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
         return completed.returncode, completed.stdout, completed.stderr
@@ -549,9 +554,15 @@ def run_backup_checks(
                     now_ts=now_ts,
                 )
             )
-        except (subprocess.TimeoutExpired, OSError) as exc:
+        except Exception as exc:  # noqa: BLE001 - one bad input must not end main().
             results.append(
-                CheckResult(name, False, f"ssh failed reading {path}: {exc}", "backup")
+                CheckResult(
+                    name,
+                    False,
+                    f"backup check raised {type(exc).__name__} on {path}: "
+                    f"{_one_line(str(exc))}",
+                    "backup",
+                )
             )
     # The rehearsal runs 45 minutes after the weekly backup, so the backup RPO is
     # also the bound on how old the last proven restore may be.
@@ -559,18 +570,20 @@ def run_backup_checks(
     try:
         results.append(
             _restore_rehearsal_result(
-                run(f"stat -c %Y {log} && tail -n 5 {log}"),
+                run(f"date -r {log} +%s && tail -n 5 {log}"),
                 now_ts=now_ts,
                 max_age_hours=INVENTORY_DEFAULTS["rpo_hours"],
+                future_tolerance_hours=FUTURE_TOLERANCE_HOURS,
                 expected_summary=PASS_SUMMARY_PREFIX + ", ".join(ALL_SERVICES),
             )
         )
-    except (subprocess.TimeoutExpired, OSError) as exc:
+    except Exception as exc:  # noqa: BLE001 - one bad input must not end main().
         results.append(
             CheckResult(
                 RESTORE_REHEARSAL_CHECK,
                 False,
-                f"ssh failed reading {RESTORE_REHEARSAL_LOG}: {exc}",
+                f"rehearsal check raised {type(exc).__name__} on "
+                f"{RESTORE_REHEARSAL_LOG}: {_one_line(str(exc))}",
                 "restore-rehearsal",
             )
         )
@@ -588,6 +601,13 @@ def _backup_manifest_result(
     now_ts: int,
 ) -> CheckResult:
     returncode, stdout, stderr = completed
+    if returncode == SSH_TRANSPORT_FAILURE:
+        return CheckResult(
+            name,
+            False,
+            f"could not reach the host to read {path}: {_last_line(stderr)}",
+            "backup",
+        )
     if returncode != 0:
         return CheckResult(
             name,
@@ -645,9 +665,18 @@ def _restore_rehearsal_result(
     *,
     now_ts: int,
     max_age_hours: int,
+    future_tolerance_hours: int,
     expected_summary: str,
 ) -> CheckResult:
     returncode, stdout, stderr = completed
+    if returncode == SSH_TRANSPORT_FAILURE:
+        return CheckResult(
+            RESTORE_REHEARSAL_CHECK,
+            False,
+            f"could not reach the host to read {RESTORE_REHEARSAL_LOG}: "
+            f"{_last_line(stderr)}",
+            "restore-rehearsal",
+        )
     if returncode != 0:
         return CheckResult(
             RESTORE_REHEARSAL_CHECK,
@@ -667,6 +696,13 @@ def _restore_rehearsal_result(
             "restore-rehearsal",
         )
     last = next((line.strip() for line in reversed(lines[1:]) if line.strip()), "")
+    if age_hours < -future_tolerance_hours:
+        return CheckResult(
+            RESTORE_REHEARSAL_CHECK,
+            False,
+            f"rehearsal log mtime is {-age_hours:.1f}h in the future (clock skew?)",
+            "restore-rehearsal",
+        )
     if age_hours > max_age_hours:
         return CheckResult(
             RESTORE_REHEARSAL_CHECK,

@@ -51,6 +51,8 @@ class BackupCheck:
 # block (#542). A BackupFacet leaving retention/rpo/remote at zero-values means
 # "use these". Weekly cadence defaults to 180h RPO (7.5d) and gdrive-backup remote.
 INVENTORY_DEFAULTS = {"retention_days": 60, "rpo_hours": 180, "remote": "gdrive-backup"}
+#: Clock skew allowed between the host that stamps an artifact and the checker.
+FUTURE_TOLERANCE_HOURS = 1
 
 # Where tools/host_backup.sh (SOP-006) writes its runs on the host. Each run also
 # refreshes one latest pointer per environment; the restore rehearsal and the
@@ -248,6 +250,12 @@ def _verify_artifact(
         "remote_uri": remote_uri,
         "sha256_present": bool(checksum),
     }
+    if age_hours < -FUTURE_TOLERANCE_HOURS:
+        # A clock ahead of real time, or milliseconds in a seconds field, would
+        # otherwise read as fresh for as long as the error lasts.
+        return _check(
+            entry, "fail", "P1", "backup artifact timestamp is in the future", evidence
+        )
     if age_hours > entry.rpo_hours:
         return _check(entry, "fail", "P1", "backup artifact is stale", evidence)
     if size <= 0:
