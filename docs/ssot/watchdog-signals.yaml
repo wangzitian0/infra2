@@ -362,7 +362,7 @@ signals:
     cadence: 60s
 
   # The production probe-runner heartbeat pages two ways, both from the Worker:
-  # stale -> P0 "VPS or its egress is down" (host-reachability, also a Cloudflare
+  # stale -> P0 "VPS 或它的出网中断" (host-reachability, also a Cloudflare
   # class), where the staleness threshold is the debounce, so one failing run
   # fires; a fresh v2 heartbeat with ok=false for 2 consecutive runs -> P1 "probe
   # loop unhealthy" (alert-pipeline), resolved after 2 healthy runs. A v1 ok is unknown.

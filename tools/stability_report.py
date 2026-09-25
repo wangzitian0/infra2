@@ -36,7 +36,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from libs.alerting import deliver_out_of_band_text  # noqa: E402
+from libs.alerting import as_report, deliver_out_of_band_text  # noqa: E402
 from libs.availability_ledger import (  # noqa: E402
     apply_unavailability,
     build_environment_line,
@@ -238,7 +238,7 @@ def run(
                 ledgers[environment] = str(exc)
         outages = fetch_outages(outages_url, token)
 
-    message = build_report(ledgers, outages, now)
+    message = as_report(build_report(ledgers, outages, now))
     if env.get("INFRA2_STABILITY_REPORT_DRY_RUN") == "1":
         print(message)
         return 0

@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from libs.alerting import FIELD_SEPARATOR, PAGER_FIELDS, pager_level, since_text
+
 ROOT = Path(__file__).resolve().parents[2]
 WORKER_DIR = ROOT / "cloudflare/infra-watchdog"
 WORKER = WORKER_DIR / "worker.js"
@@ -53,6 +55,41 @@ def world(tmp_path_factory) -> dict:
 
 def _entrypoint_urls() -> list[str]:
     return [target["url"] for target in json.loads(_vars()["WATCHDOG_TARGETS_JSON"])]
+
+
+def _blocks(message: str) -> list[dict[str, str]]:
+    """The event blocks of a Worker message, each ``{label: value}`` plus its
+    ``section`` (firing / resolved) and ``heading``, in message order (#905)."""
+    blocks: list[dict[str, str]] = []
+    section = "resolved" if message.startswith("✅") else "firing"
+    for line in message.splitlines():
+        if line.startswith("✅ 已恢复 "):
+            section = "resolved"
+        elif line.startswith("— ") and line.endswith(" —"):
+            blocks.append({"section": section, "heading": line})
+        elif blocks:
+            label, separator, value = line.partition(FIELD_SEPARATOR)
+            if separator and label in PAGER_FIELDS:
+                blocks[-1][label] = value
+    return blocks
+
+
+def _block(message: str, section: str, name: str) -> dict[str, str]:
+    """The one ``section`` block whose object is ``name``."""
+    (found,) = [
+        block
+        for block in _blocks(message)
+        if block["section"] == section and block["对象"].endswith(f" · {name}")
+    ]
+    return found
+
+
+def _names(message: str, section: str) -> list[str]:
+    return [
+        block["对象"].rsplit(" · ", 1)[-1]
+        for block in _blocks(message)
+        if block["section"] == section
+    ]
 
 
 # ---- what a run costs ----------------------------------------------------------
@@ -151,23 +188,32 @@ def test_an_entrypoint_pages_after_two_failing_runs_then_every_six_hours(world) 
     # run 1 fails (pending), run 2 pages, run 3 is quiet, +6 h renotifies, recovery
     assert counts == [0, 1, 0, 1, 1]
     first, renotify = runs[1]["messages"][0], runs[3]["messages"][0]
-    assert first.splitlines()[2].startswith(
-        "FIRING P0 host-reachability production/dokploy-public-route"
+    page = _block(first, "firing", "dokploy-public-route")
+    assert (page["级别"], page["环境"], page["对象"]) == (
+        "P0",
+        "production",
+        "bootstrap/dokploy · dokploy-public-route",
     )
-    assert renotify.splitlines()[2].startswith(
-        "STILL FIRING P0 host-reachability production/dokploy-public-route"
-    )
+    assert page["影响"].startswith("[host-reachability] ")
+    again = _block(renotify, "firing", "dokploy-public-route")
+    assert again["heading"] == "— 1/1 · 仍在告警 —"
     # the incident started at the first failing run, not at the page
-    assert "Since: 2026-09-24T00:00:00.000Z" in first
+    assert page["开始于"] == "2026-09-24 08:00（UTC+8）(已持续 30 分钟)"
+    assert again["开始于"] == "2026-09-24 08:00（UTC+8）(已持续 6 小时 30 分钟)"
     assert all(run["error"] is None for run in runs)
 
 
 @needs_node
 def test_resolved_names_what_recovered(world) -> None:
     resolved = world["entrypointDown"][4]["messages"][0]
-    assert resolved.startswith("[RESOLVED]")
-    assert "RESOLVED production/dokploy-public-route (host-reachability)" in resolved
-    assert "https://cloud.zitian.party reachable again (HTTP 200)" in resolved
+    assert resolved.startswith("✅ [已恢复] Cloudflare 带外 watchdog · 1 项")
+    block = _block(resolved, "resolved", "dokploy-public-route")
+    assert block["现象"] == "https://cloud.zitian.party 已恢复可达(HTTP 200)"
+    # what recovered, and how long it was down: first failing run to recovery
+    assert block["开始于"] == (
+        "2026-09-24 08:00（UTC+8） → 2026-09-24 15:00（UTC+8）(共 7 小时)"
+    )
+    assert _names(resolved, "firing") == []
 
 
 @needs_node
@@ -194,8 +240,8 @@ def test_kv_is_written_on_transitions_only(world) -> None:
 @needs_node
 def test_a_network_error_counts_as_a_failure(world) -> None:
     (message,) = world["networkError"]
-    assert "production/truealpha-web-public-route" in message
-    assert "fetch failed: connection refused" in message
+    page = _block(message, "firing", "truealpha-web-public-route")
+    assert page["现象"].endswith("— 请求失败:`connection refused`(连续 2 次运行失败)")
 
 
 @needs_node
@@ -217,9 +263,7 @@ def test_a_route_the_vps_already_reports_failing_is_suppressed(world) -> None:
 def test_a_suppressed_entrypoint_pages_as_soon_as_suppression_stops(world) -> None:
     """Re-evaluated every run: no second debounce once the VPS stops listing it."""
     (message,) = world["suppressed"]["released"]
-    assert message.splitlines()[2].startswith(
-        "FIRING P0 host-reachability production/finance-report-web-public-route"
-    )
+    assert _names(message, "firing") == ["finance-report-web-public-route"]
 
 
 @needs_node
@@ -239,10 +283,7 @@ def test_the_worker_does_not_take_the_vps_at_its_word(world, case) -> None:
     list (maintenance) or a list without the route (never paged) never suppresses."""
     messages = world["notSuppressed"][case]
     assert len(messages) == 1
-    assert (
-        "FIRING P0 host-reachability production/finance-report-web-public-route"
-        in messages[0]
-    )
+    assert "finance-report-web-public-route" in _names(messages[0], "firing")
 
 
 @needs_node
@@ -267,14 +308,12 @@ def test_a_delivery_after_the_last_healthy_run_is_recent_enough(world) -> None:
 def test_an_unknown_route_list_never_suppresses(world) -> None:
     """A v1 heartbeat carries no route list; a stale one is not evidence of anything."""
     (v1,) = world["v1Heartbeat"]
-    assert (
-        "FIRING P0 host-reachability production/finance-report-web-public-route" in v1
-    )
-    stale = "\n".join(world["staleHeartbeat"])
-    assert (
-        "FIRING P0 host-reachability production/finance-report-web-public-route"
-        in stale
-    )
+    assert _names(v1, "firing") == ["finance-report-web-public-route"]
+    assert "finance-report-web-public-route" in [
+        name
+        for message in world["staleHeartbeat"]
+        for name in _names(message, "firing")
+    ]
 
 
 # ---- heartbeats --------------------------------------------------------------------
@@ -284,15 +323,13 @@ def test_an_unknown_route_list_never_suppresses(world) -> None:
 def test_a_stale_production_heartbeat_pages_p0_vps_down_once(world) -> None:
     down = world["vpsDown"]
     firing, resolved = down["messages"]
-    assert (
-        "FIRING P0 host-reachability production/platform-alerting-probes: "
-        "VPS or its egress is down" in firing
-    )
-    assert "heartbeat stale" in firing
-    assert (
-        "RESOLVED production/platform-alerting-probes (host-reachability)" in resolved
-    )
-    assert "heartbeat fresh again" in resolved
+    page = _block(firing, "firing", "platform-alerting-probes")
+    assert page["级别"] == "P0"
+    assert page["现象"].startswith("VPS 或它的出网中断 — 心跳过期:")
+    assert page["影响"].startswith("[host-reachability] VPS")
+    assert page["Runbook"].endswith("docs/runbooks/infra022-p0.md#watchdog-silent")
+    recovered = _block(resolved, "resolved", "platform-alerting-probes")
+    assert recovered["现象"].startswith("心跳恢复新鲜(")
 
 
 @needs_node
@@ -316,11 +353,15 @@ def test_an_unhealthy_loop_pages_p1_after_two_runs_and_resolves_after_two(
     # unhealthy, unhealthy (fire), unhealthy, healthy, healthy (resolve)
     assert [len(run) for run in messages] == [0, 1, 0, 0, 1]
     (fired,) = messages[1]
-    assert fired.startswith("[OUT-OF-BAND] P1 ")
-    assert "FIRING P1 alert-pipeline production/platform-alerting-probes" in fired
-    assert "alert bridge delivery failing for 42 min" in fired
+    assert fired.startswith("🟠 [P1 告警] ")
+    page = _block(fired, "firing", "platform-alerting-probes")
+    assert page["级别"] == "P1"
+    assert page["影响"].startswith("[alert-pipeline] ")
+    assert page["现象"] == (
+        "探测循环报告不健康 — `alert bridge delivery failing for 42 min`"
+    )
     (resolved,) = messages[4]
-    assert "RESOLVED production/platform-alerting-probes (alert-pipeline)" in resolved
+    assert _names(resolved, "resolved") == ["platform-alerting-probes"]
 
 
 @needs_node
@@ -352,10 +393,13 @@ def test_staging_is_recorded_for_status_and_never_paged(world) -> None:
 def test_each_failure_identity_resolves_on_its_own(world) -> None:
     partial = world["partialRecovery"]
     (fired,) = partial["fired"]
-    assert "production/dokploy-public-route" in fired
+    assert sorted(_names(fired, "firing")) == [
+        "dokploy-public-route",
+        "platform-alerting-probes",
+    ]
     assert partial["firstHealthy"] == []  # one healthy run does not resolve the loop
     (resolved,) = partial["resolved"]
-    assert "RESOLVED production/platform-alerting-probes (alert-pipeline)" in resolved
+    assert _names(resolved, "resolved") == ["platform-alerting-probes"]
     assert "dokploy-public-route" not in resolved
     assert partial["stillActive"] == ["production:dokploy-public-route:entrypoint"]
 
@@ -374,7 +418,7 @@ def test_an_undelivered_page_is_retried_and_fails_the_run(world) -> None:
     assert failed["statusOk"] is False and failed["lastRunOk"] is False
     assert "Feishu tenant token failed" in failed["deliveryError"]
     (retried,) = failed["retried"]
-    assert "FIRING P0 host-reachability production/dokploy-public-route" in retried
+    assert _names(retried, "firing") == ["dokploy-public-route"]
 
 
 @needs_node
@@ -382,7 +426,7 @@ def test_a_feishu_outage_escalates_to_email(world) -> None:
     escalation = world["emailEscalation"]
     assert escalation["error"] is None
     (email,) = escalation["messages"]
-    assert email.startswith("EMAIL [OUT-OF-BAND] P0")
+    assert email.startswith("EMAIL 🔴 [P0 告警] Cloudflare 带外 watchdog")
     assert "primary Feishu delivery failed" in email
     # token refused, email sent: 7 + token + email
     assert escalation["subrequests"] == 9
@@ -419,12 +463,11 @@ def test_a_broken_config_pages_itself_and_resolves_nothing_it_could_not_check(
 ) -> None:
     broken = world["configBroken"]
     (message,) = broken["messages"]
-    assert (
-        "FIRING P1 watchdog-config global/cloudflare-watchdog-config-preflight"
-        in message
-    )
-    assert "config-preflight failed" in message
-    assert "RESOLVED" not in message
+    page = _block(message, "firing", "cloudflare-watchdog-config-preflight")
+    assert (page["级别"], page["环境"]) == ("P1", "global")
+    assert page["影响"].startswith("[watchdog-config] ")
+    assert page["现象"].startswith("Worker 无法评估它的检查 — 配置预检失败:")
+    assert _names(message, "resolved") == []
     assert broken["lastRunOk"] is False
     assert "production:dokploy-public-route:entrypoint" in broken["stillActive"]
 
@@ -525,3 +568,218 @@ def test_worker_docs_carry_the_deploy_and_secret_contract() -> None:
         assert command in readme
     assert "INFRA_PROBE_HEARTBEAT_URL" in readme
     assert "/outages" in readme
+
+
+# ---- the pager layout (#905) ---------------------------------------------------------
+
+#: 2026-09-24 00:00 UTC, the harness clock's start.
+HARNESS_START = 1_790_208_000
+
+
+@needs_node
+def test_worker_messages_follow_the_shared_field_order(world) -> None:
+    """#905: the Worker's text uses libs/alerting.py's labels, separator and order: a
+    page shows every field but the log tail, a recovery 级别 through 开始于."""
+    runs = world["entrypointDown"]
+    (page,) = _blocks(runs[1]["messages"][0])
+    (recovery,) = _blocks(runs[4]["messages"][0])
+
+    assert [key for key in page if key in PAGER_FIELDS] == list(PAGER_FIELDS[:8])
+    assert [key for key in recovery if key in PAGER_FIELDS] == list(PAGER_FIELDS[:5])
+    assert page["Runbook"].endswith(
+        "platform/12.alerting/README.md#public-route-probes"
+    )
+    assert page["下一步"] == (
+        '从外部网络执行 `curl -I "https://cloud.zitian.party"`;'
+        "若 VPS 心跳也过期,就是整机或它的出网中断"
+    )
+
+
+@needs_node
+def test_worker_times_read_like_the_bridges(world) -> None:
+    """#905: 开始于 is written the way libs.alerting.since_text writes it."""
+    runs = world["entrypointDown"]
+    page = _block(runs[1]["messages"][0], "firing", "dokploy-public-route")
+    recovery = _block(runs[4]["messages"][0], "resolved", "dokploy-public-route")
+
+    assert page["开始于"] == since_text(HARNESS_START, now=HARNESS_START + 1800)
+    assert recovery["开始于"] == since_text(
+        HARNESS_START, now=0, end=HARNESS_START + 7 * 3600
+    )
+
+
+@needs_node
+@pytest.mark.parametrize(
+    ("severity", "level"),
+    [
+        ("critical", "P0"),
+        ("error", "P1"),
+        ("warning", "P2"),
+        ("P1", "P1"),
+        ("p2", "P2"),
+        ("garbage", "P0"),
+    ],
+)
+def test_worker_levels_follow_the_ssot(world, severity, level) -> None:
+    """#905: one vocabulary. A target's severity renders as §3 maps it -- warning is
+    P2, not P1 -- in the block and in the title, exactly as the bridge maps it."""
+    (message,) = world["severityLevels"][severity]
+    page = _block(message, "firing", "dokploy-public-route")
+
+    assert page["级别"] == level == pager_level(severity)
+    assert message.splitlines()[0] == f"{_EMOJI[level]} [{level} 告警] " + (
+        "Cloudflare 带外 watchdog · 1 项"
+    )
+
+
+_EMOJI = {"P0": "🔴", "P1": "🟠", "P2": "🟡"}
+
+
+@needs_node
+def test_a_worker_message_with_many_failures_stays_bounded(world) -> None:
+    """#905: twelve entrypoints down in one run. The most severe come first, as many
+    as fit are shown in full, every other one is still named on a summary line, and
+    the text stays inside Feishu's limit."""
+    _stale, message = world["manyDown"]
+    full = _blocks(message)
+    summary = [line for line in message.splitlines() if line.startswith("• ")]
+    names = [f"product-{index:02d}-public-route" for index in range(12)]
+
+    assert len(message) <= 3500
+    assert message.splitlines()[0] == "🟠 [P1 告警] Cloudflare 带外 watchdog · 12 项"
+    assert 1 <= len(full) < 12
+    assert len(full) + len(summary) == 12
+    assert f"另有 {len(summary)} 项,只列摘要:" in message
+    # every P1 (even index) before every P2 (odd index)
+    shown = [block["对象"].rsplit(" · ", 1)[-1] for block in full] + [
+        line.split(" · ")[3] for line in summary
+    ]
+    assert sorted(shown) == names
+    assert [name[8:10] for name in shown] == [
+        *(f"{index:02d}" for index in range(0, 12, 2)),
+        *(f"{index:02d}" for index in range(1, 12, 2)),
+    ]
+
+
+@needs_node
+def test_every_runbook_the_worker_links_resolves(world) -> None:
+    """#905: each failure class links a specific anchor, and the anchor exists."""
+    from libs.tests.test_pager_format import BLOB, _anchors
+
+    messages = [
+        *world["entrypointDown"][1]["messages"],
+        *world["vpsDown"]["messages"],
+        *world["loopUnhealthy"]["messages"][1],
+        *world["configBroken"]["messages"],
+    ]
+    links = {
+        (block["影响"].split("]")[0][1:], block["对象"].rsplit(" · ", 1)[-1]): block[
+            "Runbook"
+        ]
+        for message in messages
+        for block in _blocks(message)
+        if block["section"] == "firing"
+    }
+
+    assert links == {
+        ("host-reachability", "dokploy-public-route"): (
+            f"{BLOB}/platform/12.alerting/README.md#public-route-probes"
+        ),
+        ("host-reachability", "platform-alerting-probes"): (
+            f"{BLOB}/docs/runbooks/infra022-p0.md#watchdog-silent"
+        ),
+        ("alert-pipeline", "platform-alerting-probes"): (
+            f"{BLOB}/platform/12.alerting/README.md#infra-service-probes"
+        ),
+        ("watchdog-config", "cloudflare-watchdog-config-preflight"): (
+            f"{BLOB}/cloudflare/infra-watchdog/README.md#optional-vars"
+        ),
+    }
+    urls = set(links.values())
+    missing = [
+        url
+        for url in sorted(urls)
+        if url.split("#", 1)[1]
+        not in _anchors(ROOT / url.removeprefix(f"{BLOB}/").split("#", 1)[0])
+    ]
+    assert missing == []
+
+
+@needs_node
+def test_worker_prose_is_chinese(world) -> None:
+    """#905: the Worker's own text is Chinese -- title, preamble, what went wrong,
+    when, the impact and the next step, of pages and recoveries. Commands and
+    identifiers stay verbatim in backticks; evidence is quoted the same way."""
+    from libs.tests.test_pager_format import english_prose
+
+    messages = [
+        *world["entrypointDown"][1]["messages"],
+        *world["entrypointDown"][4]["messages"],
+        *world["networkError"],
+        *world["vpsDown"]["messages"],
+        *world["loopUnhealthy"]["messages"][1],
+        *world["loopUnhealthy"]["messages"][4],
+        *world["configBroken"]["messages"],
+    ]
+    blocks = [block for message in messages for block in _blocks(message)]
+    texts = [
+        *(line for message in messages for line in message.splitlines()[:2]),
+        *(
+            block[label]
+            for block in blocks
+            for label in ("现象", "开始于", "影响", "下一步")
+            if label in block
+        ),
+    ]
+
+    assert {block["section"] for block in blocks} == {"firing", "resolved"}
+    assert len(texts) >= 30
+    assert {text: english_prose(text) for text in texts if english_prose(text)} == {}
+
+
+@needs_node
+def test_worker_caps_summary_lines_at_twenty_like_the_bridge(world) -> None:
+    """#905 parity: 25 recoveries in one message; as many as fit are shown in full,
+    then at most 20 summary lines, and the rest are counted."""
+    (message,) = world["manyRecovered"]
+    lines = message.splitlines()
+    summary = [line for line in lines if line.startswith("• ")]
+    full = _blocks(message)
+
+    assert len(message) <= 3500
+    assert lines[0] == "✅ [已恢复] Cloudflare 带外 watchdog · 25 项"
+    assert len(summary) == 20
+    assert lines[-1] == f"…及另外 {25 - len(full) - 20} 项"
+    assert all(len(line) <= 242 for line in summary)
+
+
+@needs_node
+def test_worker_overflow_drops_items_from_the_end_not_the_recoveries(world) -> None:
+    """#905 parity: 15 pages and 15 recoveries in one message that cannot hold them
+    all. Both sections keep their heading and a count; it is the tail of each list
+    that goes, never the ✅ 已恢复 section as a whole."""
+    (message,) = world["mixedOverflow"]
+    lines = message.splitlines()
+    after = lines[lines.index("✅ 已恢复 15 项") + 1 :]
+
+    assert len(message) <= 3500 and "[truncated]" not in message
+    assert lines[0] == "🟠 [P1 告警] Cloudflare 带外 watchdog · 15 项"
+    assert [line for line in after if line.startswith("• ")]
+    assert after[-1].startswith("…及另外 ") and after[-1].endswith(" 项")
+    before = lines[: lines.index("✅ 已恢复 15 项")]
+    assert any(line.startswith("…及另外 ") for line in before)
+
+
+@needs_node
+def test_worker_clips_a_field_at_300_and_never_cuts_a_quote_open(world) -> None:
+    """#905 parity with the bridge's MAX_FIELD_CHARS: a value over 300 characters is
+    cut there. Evidence is cut before it is quoted, so the quotation stays closed."""
+    (long_url,) = world["longUrl"]
+    page = _block(long_url, "firing", "u00-public-route")
+    (long_detail,) = world["longLoopDetail"]
+    loop = _block(long_detail, "firing", "platform-alerting-probes")
+
+    assert len(page["现象"]) == 300 and page["现象"].endswith("…")
+    assert len(loop["现象"]) < 300
+    assert loop["现象"].startswith("探测循环报告不健康 — `bridge failing xxx")
+    assert loop["现象"].endswith("…`") and loop["现象"].count("`") == 2

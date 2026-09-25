@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from libs.alerting import deliver_out_of_band_text  # noqa: E402
+from libs.alerting import REPORT_TITLE_PREFIX, deliver_out_of_band_text  # noqa: E402
 
 WORKFLOW_FILE = "ops-checks.yml"
 WATCHDOG_JOB_NAME = "Check infra2 host and alert bridge"
@@ -473,7 +473,7 @@ def summarize_stale_issues(issues: list[Mapping[str, Any]]) -> list[dict[str, An
 def build_digest_message(summary: Mapping[str, Any], repository: str) -> str:
     """Build a compact weekly digest message."""
     lines = [
-        "[WATCHDOG DIGEST] Infra2 out-of-band weekly summary",
+        f"{REPORT_TITLE_PREFIX}[WATCHDOG DIGEST] Infra2 out-of-band weekly summary",
         f"Repository: {repository}",
         f"Window (UTC): {summary['week_start_utc']} -> {summary['week_end_utc']}",
         (

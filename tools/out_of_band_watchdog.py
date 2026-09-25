@@ -31,9 +31,18 @@ if str(ROOT) not in sys.path:
 
 from libs.alerting import (  # noqa: E402
     INFRA2_REPORTS_ENV,
+    REPORT_TITLE_PREFIX,
+    PagerItem,
+    PagerMessage,
     deliver_feishu_app_text,
     deliver_feishu_text,
     deliver_infra2_report,
+    firing_title,
+    format_time,
+    highest_level,
+    pager_level,
+    redact_credentials,
+    render_pager_text,
 )
 from libs.deploy_queue import deployment_start_epoch  # noqa: E402
 from libs.dokploy import get_dokploy  # noqa: E402
@@ -1279,37 +1288,76 @@ def _severity_for(name: str, failure_domain: str) -> str:
     return "P2"
 
 
-_SEVERITY_ORDER = {"P0": 0, "P1": 1, "P2": 2}
+#: 影响 per failure domain (#905), next to the action and runbook maps below.
+_IMPACT_BY_DOMAIN = {
+    "host-reachability": "VPS 或它的公网入口不可达:所有产品可能不可用",
+    "docker-runtime": "容器运行时异常:其上的服务降级或不可用",
+    "alert-bridge": "带内告警出口(bridge)不可用:VPS 上的故障无法送达",
+    "configuration": "watchdog 自身配置缺失或被拒:它看不见的故障没人报",
+    "cloudflare-worker-health": "Cloudflare 带外 watchdog 停跑或投递失败:整机失联时无人报警",
+    "dokploy-control-plane": "Dokploy 控制面异常:部署与回滚受阻",
+    "peer-scheduler-liveness": "truealpha 的 scheduler-liveness 死了:定时 workflow 停跑无人报",
+    "report-delivery": "报告投递失败:只报告的发现没有送到任何人",
+    "backup": "异地备份缺失或过期:数据在下次成功备份前无保护",
+    "restore-rehearsal": "恢复演练未通过或未运行:备份能否恢复没有证据",
+    "dokploy-deploy-status": "Dokploy 单元处于 error:该服务可能停在旧版本或不可用",
+    "public-route": "公网路由不可达:用户打不开该服务",
+}
+_DEFAULT_IMPACT = "未归类的检查失败:按现象判断影响范围"
 
 
-def format_failure_message(results: list[CheckResult], *, run_url: str) -> str:
-    """Build the Feishu page for failed paging checks (see route_failures)."""
-    failures = [result for result in results if not result.ok]
-    highest = min(
-        (result.severity for result in failures),
-        key=lambda severity: _SEVERITY_ORDER.get(severity, len(_SEVERITY_ORDER)),
-        default="P1",
+def format_failure_message(
+    results: list[CheckResult], *, run_url: str, now: float | None = None
+) -> str:
+    """Build the Feishu page for failed paging checks (see route_failures).
+
+    #905: the pager layout every source shares (``libs.alerting.PAGER_FIELDS``).
+    """
+    now = time.time() if now is None else now
+    failures = sorted(
+        (result for result in results if not result.ok),
+        key=lambda result: pager_level(result.severity),
     )
-    lines = [
-        "[OUT-OF-BAND] Infra2 watchdog failed",
-        f"Severity: {highest}",
-        "Scope: Cloudflare Worker liveness / backups and restore rehearsal / "
-        "peer scheduler / unregistered checks / the watchdog's own configuration",
-        "Route: GitHub Actions -> Feishu direct",
-    ]
+    level = highest_level(result.severity for result in failures)
+    items = tuple(
+        PagerItem(
+            level=pager_level(result.severity),
+            environment=_check_environment(result),
+            target=result.name,
+            symptom=_redact(result.detail),
+            since=f"{format_time(now)} 检出(日级审计;实际开始时间未知)",
+            impact=(f"[{result.failure_domain}] " if result.failure_domain else "")
+            + _IMPACT_BY_DOMAIN.get(result.failure_domain, _DEFAULT_IMPACT),
+            action=_suggested_action_for_failure(result.name, result.failure_domain),
+            runbook=_runbook_url_for_failure(result.failure_domain),
+        )
+        for result in failures
+    )
+    preamble = ["来源：GitHub Actions 日级带外审计 → 飞书直发(不经 bridge)"]
     if run_url:
-        lines.append(f"Run: {run_url}")
-    lines.append("Failures:")
-    for result in failures:
-        domain = f"[{result.failure_domain}] " if result.failure_domain else ""
-        lines.append(
-            f"- [{result.severity}] {domain}{result.name}: {_redact(result.detail)}"
+        preamble.append(f"运行：{run_url}")
+    return render_pager_text(
+        PagerMessage(
+            title=firing_title(level, f"GitHub 日级带外审计 · {len(items)} 项"),
+            firing=items,
+            preamble=tuple(preamble),
         )
-        lines.append(
-            f"  Action: {_suggested_action_for_failure(result.name, result.failure_domain)}"
-        )
-        lines.append(f"  Runbook: {_runbook_url_for_failure(result.failure_domain)}")
-    return "\n".join(lines)
+    )
+
+
+def _check_environment(result: CheckResult) -> str:
+    """环境 of a GitHub check: staging by name, a Dokploy unit's own, production for
+    the production data checks, else global (the host and the watchdogs)."""
+    name = result.name.lower()
+    if "staging" in name:
+        return "staging"
+    if name.startswith(DOKPLOY_STATUS_FAMILY):
+        parts = name.removeprefix(DOKPLOY_STATUS_FAMILY).split("/")
+        if len(parts) >= 2 and parts[1]:
+            return parts[1]
+    if result.failure_domain in {"backup", "restore-rehearsal"}:
+        return "production"
+    return "global"
 
 
 def load_report_only_checks(path: Path = SIGNAL_REGISTRY) -> frozenset[str]:
@@ -1380,14 +1428,13 @@ def format_report_message(
     if not (reported or stale or notes):
         return ""
     lines = [
-        "[REPORT] Infra2 GitHub watchdog -- daily audit",
-        "Reported, not paged: another layer pages these failure classes "
-        "(ops.observability.md §1.1).",
+        f"{REPORT_TITLE_PREFIX}Infra2 GitHub watchdog 日级审计",
+        "只报告、不呼人:这些故障类由另一层呼人(ops.observability.md §1.1)。",
     ]
     if run_url:
-        lines.append(f"Run: {run_url}")
+        lines.append(f"运行:{run_url}")
     if reported:
-        lines.append(f"Failures ({len(reported)}):")
+        lines.append(f"失败({len(reported)} 项):")
         for result in reported:
             domain = f"[{result.failure_domain}] " if result.failure_domain else ""
             lines.append(
@@ -1395,13 +1442,13 @@ def format_report_message(
             )
     if stale:
         lines.append(
-            f"Stale Dokploy records ({len(stale)}), not failures; reconcile per "
-            f"{STATE_DISCREPANCY_RUNBOOK}:"
+            f"过期的 Dokploy 记录({len(stale)} 条,不算失败),按 "
+            f"{STATE_DISCREPANCY_RUNBOOK} 对账:"
         )
         for result, reason in stale:
             lines.append(f"- {result.name}: {_redact(result.detail)} [{reason}]")
     if notes:
-        lines.append("Information:")
+        lines.append("信息:")
         lines.extend(f"- {_redact(note)}" for note in notes)
     return "\n".join(lines)
 
@@ -1708,10 +1755,7 @@ def _record_issue_trail_verdicts(
                         "; ".join(f"{result.name}: {result.detail}" for result in own)
                     )
                 ),
-                min(
-                    (result.severity for result in own),
-                    key=lambda severity: _SEVERITY_ORDER.get(severity, 99),
-                ),
+                highest_level(result.severity for result in own),
                 "configuration",
             )
         )
@@ -1806,42 +1850,41 @@ def _failure_domain_for_ssh_target(name: str) -> str:
 
 
 def _suggested_action_for_failure(name: str, failure_domain: str) -> str:
+    """下一步 of a GitHub page (#905: Chinese; commands, paths and identifiers kept
+    verbatim, in backticks)."""
     if failure_domain == "host-reachability":
-        return "verify VPS reachability and DNS from an external network (curl + traceroute)"
+        return "从外部网络确认 VPS 可达与 DNS(`curl` + `traceroute`)"
     if failure_domain == "docker-runtime":
-        return "SSH into infra2 and run `docker ps` / `docker inspect` for unhealthy containers"
+        return "SSH 登录 infra2,对不健康的容器执行 `docker ps` / `docker inspect`"
     if failure_domain == "alert-bridge":
-        return (
-            "check `platform-alerting` container logs and /health from inside the host"
-        )
+        return "在宿主机内查看 `platform-alerting` 容器的日志与 `/health`"
     if failure_domain == "cloudflare-worker-health":
-        return "call worker /status with WATCHDOG_STATUS_TOKEN and verify last-run freshness"
+        return "用 `WATCHDOG_STATUS_TOKEN` 调用 Worker 的 `/status`,确认最近一次运行是否新鲜"
     if failure_domain == "dokploy-control-plane":
-        return "check Dokploy API and deploy logs for rollout/network failures"
+        return "检查 Dokploy API 与部署日志,找出发布或网络失败"
     if failure_domain == "peer-scheduler-liveness":
         return (
-            "open truealpha's scheduler-liveness workflow: re-enable it if disabled, "
-            "check its newest scheduled run and githubstatus.com; while it is dead no "
-            "stopped scheduled workflow in the estate is reported"
+            "打开 truealpha 的 `scheduler-liveness` workflow:被禁用就重新启用,再看它最新"
+            "一次定时运行与 https://www.githubstatus.com ;它停摆期间,全 estate 停跑的定时 workflow "
+            "都无人报告"
         )
     if failure_domain == "backup":
         return (
-            "on the host, read /var/log/infra2-backup*.log for FAILED lines, rerun "
-            "/usr/local/sbin/infra2-host-backup.sh per SOP-006, then verify the "
-            "manifest per SOP-004"
+            "在宿主机上查 `/var/log/infra2-backup*.log` 里的 FAILED 行,按 SOP-006 重跑 "
+            "`/usr/local/sbin/infra2-host-backup.sh`,再按 SOP-004 校验 manifest"
         )
     if failure_domain == "restore-rehearsal":
         return (
-            "on the host, read /var/log/infra2-backup-restore-rehearsal.log (or, if "
-            "it is missing, root's crontab) and rerun or install the rehearsal cron "
-            "command per SOP-006A"
+            "在宿主机上查看 `/var/log/infra2-backup-restore-rehearsal.log`"
+            "(日志不存在时查看 root 的 crontab),"
+            "按 SOP-006A 手动重跑或安装演练的 cron 命令"
         )
     if failure_domain == "report-delivery":
         return (
-            "check the INFRA2_REPORTS_FEISHU_* secrets and the reports app; the "
-            "undelivered report-only findings are in this run's log"
+            "检查 `INFRA2_REPORTS_FEISHU_*` secrets 与报告 app;"
+            "未送达的只报告发现在本次运行的日志里"
         )
-    return "inspect the failed check detail and verify target service health manually"
+    return "查看失败检查的详情,手动确认目标服务是否健康"
 
 
 def _runbook_url_for_failure(failure_domain: str) -> str:
@@ -1969,18 +2012,15 @@ def _one_line(value: str) -> str:
     return " ".join(value.split())
 
 
+#: Stricter than the shared redaction: this text also goes into public GitHub issues,
+#: so any word naming a secret, token or password is cut, with whatever follows it.
+_SECRET_WORD = re.compile(r"(?i)(secret|token|password)[A-Za-z0-9._:/=-]*")
+
+
 def _redact(value: str) -> str:
-    redacted = re.sub(
-        r"https://open\.(?:feishu\.cn|larksuite\.com)/open-apis/bot/v2/hook/[^\s]+",
-        "https://open.feishu.cn/open-apis/bot/v2/hook/***",
-        value,
-    )
-    redacted = re.sub(
-        r"(?i)(secret|token|password)[A-Za-z0-9._:/=-]*",
-        r"\1=***",
-        redacted,
-    )
-    return redacted
+    """This watchdog's redaction: its own stricter rule, then the shared credential
+    redaction (#905: DSN passwords, bearer tokens, custom-bot hooks)."""
+    return redact_credentials(_SECRET_WORD.sub(r"\1=***", value))
 
 
 def _env_int(env: Mapping[str, str], key: str, default: int) -> int:
