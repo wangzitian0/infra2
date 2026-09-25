@@ -126,6 +126,10 @@ BACKUP_CHECKS = (
 RESTORE_REHEARSAL_CHECK = "infra2-restore-rehearsal"
 #: Where the rehearsal cron appends its output (crontab in ops.recovery.md SOP-006A).
 RESTORE_REHEARSAL_LOG = "/var/log/infra2-backup-restore-rehearsal.log"
+#: The crontab that holds that cron (root's). Read only while the log is missing
+#: (#926): its entry separates "not scheduled" from "not yet due", and its mtime
+#: is when the schedule was last written.
+RESTORE_REHEARSAL_CRONTAB = "/var/spool/cron/crontabs/root"
 #: ssh's own exit status when it cannot connect or authenticate.
 SSH_TRANSPORT_FAILURE = 255
 
@@ -627,10 +631,16 @@ def run_backup_checks(
     # The rehearsal runs 45 minutes after the weekly backup, so the backup RPO is
     # also the bound on how old the last proven restore may be.
     log = shlex.quote(RESTORE_REHEARSAL_LOG)
+    crontab = shlex.quote(RESTORE_REHEARSAL_CRONTAB)
     try:
+        completed = run(f"date -r {log} +%s && tail -n 5 {log}")
+        schedule = None
+        if completed[0] not in (0, SSH_TRANSPORT_FAILURE):
+            schedule = run(f"date -r {crontab} +%s && cat {crontab}")
         results.append(
             _restore_rehearsal_result(
-                run(f"date -r {log} +%s && tail -n 5 {log}"),
+                completed,
+                schedule,
                 now_ts=now_ts,
                 max_age_hours=INVENTORY_DEFAULTS["rpo_hours"],
                 future_tolerance_hours=FUTURE_TOLERANCE_HOURS,
@@ -722,6 +732,7 @@ def _last_line(output: str) -> str:
 
 def _restore_rehearsal_result(
     completed: tuple[int, str, str],
+    schedule: tuple[int, str, str] | None = None,
     *,
     now_ts: int,
     max_age_hours: int,
@@ -738,12 +749,12 @@ def _restore_rehearsal_result(
             "restore-rehearsal",
         )
     if returncode != 0:
-        return CheckResult(
-            RESTORE_REHEARSAL_CHECK,
-            False,
-            f"no rehearsal log at {RESTORE_REHEARSAL_LOG}, so the weekly restore "
-            f"rehearsal has never run: {_last_line(stderr or stdout)}",
-            "restore-rehearsal",
+        return _unrun_rehearsal_result(
+            _last_line(stderr or stdout),
+            schedule,
+            now_ts=now_ts,
+            max_age_hours=max_age_hours,
+            future_tolerance_hours=future_tolerance_hours,
         )
     lines = stdout.splitlines()
     try:
@@ -781,6 +792,73 @@ def _restore_rehearsal_result(
         RESTORE_REHEARSAL_CHECK,
         True,
         f"{last} ({age_hours:.1f}h ago)",
+        "restore-rehearsal",
+    )
+
+
+def _unrun_rehearsal_result(
+    missing: str,
+    schedule: tuple[int, str, str] | None,
+    *,
+    now_ts: int,
+    max_age_hours: int,
+    future_tolerance_hours: int,
+) -> CheckResult:
+    """#926: no log yet, so the crontab decides between unscheduled, due and overdue.
+
+    A cron installed mid-week has no log until its first slot, which is not a
+    missed rehearsal. The clock is the crontab's mtime under the same bound as a
+    stale log. Any crontab edit restarts it, but only until the first run writes
+    the log; after that the log's own age is the bound.
+    """
+
+    def red(detail: str) -> CheckResult:
+        return CheckResult(RESTORE_REHEARSAL_CHECK, False, detail, "restore-rehearsal")
+
+    no_log = f"no rehearsal log at {RESTORE_REHEARSAL_LOG} ({missing})"
+    if schedule is None:
+        return red(f"{no_log}, so the weekly restore rehearsal has never run")
+    returncode, stdout, stderr = schedule
+    if returncode == SSH_TRANSPORT_FAILURE:
+        return red(
+            f"{no_log}, and could not reach the host to read "
+            f"{RESTORE_REHEARSAL_CRONTAB}: {_last_line(stderr)}"
+        )
+    if returncode != 0:
+        return red(
+            f"{no_log}, and {RESTORE_REHEARSAL_CRONTAB} is unreadable: "
+            f"{_last_line(stderr or stdout)}"
+        )
+    lines = stdout.splitlines()
+    try:
+        age_hours = (now_ts - int(lines[0].strip())) / 3600
+    except (IndexError, ValueError):
+        return red(f"{no_log}, and unreadable {RESTORE_REHEARSAL_CRONTAB} mtime")
+    # Never echo the crontab itself: the detail lands in a public GitHub issue.
+    if not any(
+        RESTORE_REHEARSAL_LOG in line and not line.lstrip().startswith("#")
+        for line in lines[1:]
+    ):
+        return red(
+            f"{no_log}, and no entry in {RESTORE_REHEARSAL_CRONTAB} writes it, "
+            "so the weekly restore rehearsal is not scheduled"
+        )
+    if age_hours < -future_tolerance_hours:
+        return red(
+            f"{no_log}, and {RESTORE_REHEARSAL_CRONTAB} mtime is "
+            f"{-age_hours:.1f}h in the future (clock skew?)"
+        )
+    if age_hours > max_age_hours:
+        return red(
+            f"{no_log}, though {RESTORE_REHEARSAL_CRONTAB} was last written "
+            f"{age_hours:.1f}h ago (bound {max_age_hours}h), so the weekly restore "
+            "rehearsal has never run"
+        )
+    return CheckResult(
+        RESTORE_REHEARSAL_CHECK,
+        True,
+        f"first rehearsal not yet due: no log yet, and {RESTORE_REHEARSAL_CRONTAB} "
+        f"was last written {age_hours:.1f}h ago (bound {max_age_hours}h)",
         "restore-rehearsal",
     )
 
@@ -1754,8 +1832,9 @@ def _suggested_action_for_failure(name: str, failure_domain: str) -> str:
         )
     if failure_domain == "restore-rehearsal":
         return (
-            "on the host, read /var/log/infra2-backup-restore-rehearsal.log and rerun "
-            "the rehearsal cron command by hand per SOP-006A"
+            "on the host, read /var/log/infra2-backup-restore-rehearsal.log (or, if "
+            "it is missing, root's crontab) and rerun or install the rehearsal cron "
+            "command per SOP-006A"
         )
     if failure_domain == "report-delivery":
         return (

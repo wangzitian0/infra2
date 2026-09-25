@@ -2,8 +2,9 @@
 
 Every red case here is a way the weekly backup or rehearsal has failed silently
 before (#618 aborted runs, a Staging run overwriting the only pointer, the #892
-rehearsal cron that had never run), so each must turn its signal red. The
-watchdog's real remote commands run under a local `sh` against temp files, so a
+rehearsal cron that had never run), so each must turn its signal red. A
+rehearsal whose cron is newer than a whole bound is not yet due, though (#926).
+The watchdog's real remote commands run under a local `sh` against temp files, so a
 wrong path, a broken pipeline or an undecodable byte fails here, not on the host.
 """
 
@@ -61,8 +62,19 @@ def _manifest(environment: str, *, drop=(), stale=(), created_at=None) -> dict:
     return {"schema_version": 1, "environment": environment, "artifacts": artifacts}
 
 
+def _crontab(log: str) -> str:
+    """Root's crontab as installed on the host (#892), plus a job with an env var."""
+    return (
+        "30 3 * * 0 BACKUP_REMOTE=gdrive-backup:infra2 "
+        "/usr/local/sbin/infra2-host-backup.sh >> /var/log/infra2-backup.log 2>&1\n"
+        "# Infra2 weekly sandboxed backup restore rehearsal (Sundays 04:15 UTC)\n"
+        "15 4 * * 0 cd /opt/infra2 && git pull -q origin main && PYTHONPATH=. "
+        f"python3 tools/run_restore_rehearsal.py --service-id all >> {log} 2>&1\n"
+    )
+
+
 class Host:
-    """The VPS stand-in: manifests and the rehearsal log as real files."""
+    """The VPS stand-in: manifests, the rehearsal log and its crontab as real files."""
 
     def __init__(self, root: Path):
         self.root = root
@@ -83,10 +95,25 @@ class Host:
         mtime = NOW_TS - age_hours * 3600
         os.utime(log, (mtime, mtime))
 
+    def write_crontab(self, text: str, *, age_hours: float) -> None:
+        crontab = self.root / "crontab"
+        crontab.write_text(text)
+        mtime = NOW_TS - age_hours * 3600
+        os.utime(crontab, (mtime, mtime))
+
+    def never_rehearsed(self, *, crontab_age_hours: float) -> Host:
+        """No log yet; the rehearsal cron was written `crontab_age_hours` ago."""
+        (self.root / "rehearsal.log").unlink()
+        self.write_crontab(
+            _crontab(str(self.root / "rehearsal.log")), age_hours=crontab_age_hours
+        )
+        return self
+
     def healthy(self) -> Host:
         for environment in ("production", "staging"):
             self.write_manifest(environment, _manifest(environment))
         self.write_rehearsal(PASS_LOG, age_hours=22)
+        self.write_crontab(_crontab(str(self.root / "rehearsal.log")), age_hours=400)
         return self
 
     def results(self) -> dict[str, watchdog.CheckResult]:
@@ -104,6 +131,9 @@ def host(tmp_path, monkeypatch) -> Host:
     )
     monkeypatch.setattr(
         watchdog, "RESTORE_REHEARSAL_LOG", str(tmp_path / "rehearsal.log")
+    )
+    monkeypatch.setattr(
+        watchdog, "RESTORE_REHEARSAL_CRONTAB", str(tmp_path / "crontab")
     )
     # The exact remote command string, run by a real shell instead of over ssh.
     monkeypatch.setattr(
@@ -314,6 +344,103 @@ def test_a_rehearsal_that_did_not_prove_every_restore_is_red(
 
     assert not result.ok
     assert expected in result.detail
+
+
+def test_a_rehearsal_cron_younger_than_the_bound_is_not_yet_due(host) -> None:
+    """#926: the cron went in on Monday; the watchdog paged "never run" on Friday.
+
+    Root's crontab was written 2026-09-21 10:19:06Z, after that Sunday's 04:15
+    slot, and the red run came 88.3h later: no slot had passed yet.
+    """
+    host.healthy().never_rehearsed(crontab_age_hours=88.3)
+
+    result = host.results()[REHEARSAL]
+
+    assert result.ok, result.detail
+    assert result.detail.startswith("first rehearsal not yet due: no log yet")
+    assert "last written 88.3h ago (bound 180h)" in result.detail
+
+
+def test_a_rehearsal_cron_older_than_the_bound_without_a_log_has_never_run(
+    host,
+) -> None:
+    host.healthy().never_rehearsed(crontab_age_hours=181)
+
+    result = host.results()[REHEARSAL]
+
+    assert not result.ok
+    assert "last written 181.0h ago (bound 180h)" in result.detail
+    assert result.detail.endswith("so the weekly restore rehearsal has never run")
+
+
+@pytest.mark.parametrize(
+    "crontab",
+    [
+        "30 3 * * 0 /usr/local/sbin/infra2-host-backup.sh\n",
+        "#15 4 * * 0 python3 tools/run_restore_rehearsal.py >> {log} 2>&1\n",
+        "   # 15 4 * * 0 python3 tools/run_restore_rehearsal.py >> {log} 2>&1\n",
+        "",
+    ],
+    ids=["other-jobs-only", "commented-out", "indented-comment", "empty"],
+)
+def test_no_log_and_no_cron_writing_it_is_not_scheduled(host, crontab) -> None:
+    host.healthy().never_rehearsed(crontab_age_hours=1)
+    host.write_crontab(crontab.format(log=host.root / "rehearsal.log"), age_hours=1)
+
+    result = host.results()[REHEARSAL]
+
+    assert not result.ok
+    assert result.detail.endswith("so the weekly restore rehearsal is not scheduled")
+
+
+def test_the_not_scheduled_detail_never_echoes_the_crontab(host) -> None:
+    host.healthy().never_rehearsed(crontab_age_hours=1)
+    host.write_crontab(_crontab("/var/log/elsewhere.log"), age_hours=1)
+
+    result = host.results()[REHEARSAL]
+
+    assert not result.ok
+    assert "gdrive-backup" not in result.detail
+    assert "run_restore_rehearsal" not in result.detail
+
+
+def test_no_log_and_an_unreadable_crontab_is_red(host) -> None:
+    host.healthy().never_rehearsed(crontab_age_hours=1)
+    (host.root / "crontab").unlink()
+
+    result = host.results()[REHEARSAL]
+
+    assert not result.ok
+    assert "crontab is unreadable" in result.detail
+
+
+def test_no_log_and_a_future_crontab_mtime_is_red(host) -> None:
+    host.healthy().never_rehearsed(crontab_age_hours=-2)
+
+    result = host.results()[REHEARSAL]
+
+    assert not result.ok
+    assert "mtime is 2.0h in the future (clock skew?)" in result.detail
+
+
+def test_an_ssh_failure_reading_the_crontab_is_not_reported_as_not_due() -> None:
+    def log_missing_then_unreachable(command):
+        if "crontab" in command:
+            return 255, "", f"{SSH_NOISE}\nssh: connect to host vps port 22: timed out"
+        if "rehearsal" in command:
+            return 1, "", "date: rehearsal.log: No such file or directory"
+        return 0, json.dumps(_manifest("production")), ""
+
+    results = {
+        result.name: result
+        for result in watchdog.run_backup_checks(
+            CONFIG, now=NOW, capture=log_missing_then_unreachable
+        )
+    }
+
+    assert not results[REHEARSAL].ok
+    assert "could not reach the host to read" in results[REHEARSAL].detail
+    assert results[REHEARSAL].detail.endswith("timed out")
 
 
 def _rehearsal_output(capsys, statuses: dict[str, str]) -> str:
