@@ -454,7 +454,7 @@ def test_todo_traefik_dual_router_auth_contract() -> None:
         "traefik.http.middlewares.todo-auth${ENV_DOMAIN_SUFFIX}.forwardauth.address"
     )
     assert mw_addr is not None
-    assert "platform-authentik-server${ENV_SUFFIX}:9000" in mw_addr
+    assert "platform-authentik-server:9000" in mw_addr
     assert "/outpost.goauthentik.io/auth/traefik" in mw_addr
 
 
@@ -528,6 +528,12 @@ def test_todo_app_authentik_identity_and_me_endpoint() -> None:
             html_xss = resp.read().decode()
             assert "<script>alert('xss')</script>" not in html_xss
             assert "&lt;script&gt;" in html_xss
+
+        # HTTP HEAD requests supported without 501 error
+        head_req = urllib.request.Request(f"http://127.0.0.1:{port}/api/health", method="HEAD")
+        with urllib.request.urlopen(head_req, timeout=3) as resp:
+            assert resp.getcode() == 200
+            assert resp.read() == b""
     finally:
         server.shutdown()
         server.server_close()
