@@ -281,3 +281,110 @@ def test_todo_app_concurrency_nonblocking(monkeypatch) -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_probe_redis_noauth_handshake() -> None:
+    """Verify _probe_redis treats -NOAUTH challenge as physical proof of RESP engine responsiveness."""
+    spec = importlib.util.spec_from_file_location(
+        "todo_app", REPO_ROOT / "platform/30.todo/app.py"
+    )
+    assert spec is not None and spec.loader is not None
+    todo_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(todo_mod)
+
+    import socket
+
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+
+    def _serve():
+        conn, _ = srv.accept()
+        with conn:
+            req = conn.recv(1024)
+            if b"PING" in req:
+                conn.sendall(b"-NOAUTH Authentication required.\r\n")
+
+    th = threading.Thread(target=_serve, daemon=True)
+    th.start()
+    try:
+        res = todo_mod._probe_redis("127.0.0.1", port, timeout=1.0)
+        assert res["status"] == "pass"
+        assert "auth required" in res["detail"]
+    finally:
+        srv.close()
+
+
+def test_probe_redis_authenticated_lifecycle() -> None:
+    """Verify _probe_redis with password completes full AUTH -> PING -> SETEX -> GET cycle."""
+    spec = importlib.util.spec_from_file_location(
+        "todo_app", REPO_ROOT / "platform/30.todo/app.py"
+    )
+    assert spec is not None and spec.loader is not None
+    todo_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(todo_mod)
+
+    import socket
+
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+
+    def _serve():
+        conn, _ = srv.accept()
+        with conn:
+            rf = conn.makefile("rb")
+            # 1. Expect AUTH
+            rf.readline()
+            rf.readline()
+            cmd = rf.readline()
+            rf.readline()
+            passwd = rf.readline()
+            assert b"AUTH" in cmd
+            assert b"secret123" in passwd
+            conn.sendall(b"+OK\r\n")
+            # 2. Expect PING
+            rf.readline()
+            rf.readline()
+            rf.readline()
+            conn.sendall(b"+PONG\r\n")
+            # 3. Expect SETEX
+            for _ in range(7):
+                rf.readline()
+            conn.sendall(b"+OK\r\n")
+            # 4. Expect GET
+            for _ in range(3):
+                rf.readline()
+            conn.sendall(b"$2\r\nok\r\n")
+
+    th = threading.Thread(target=_serve, daemon=True)
+    th.start()
+    try:
+        res = todo_mod._probe_redis("127.0.0.1", port, password="secret123", timeout=1.0)
+        assert res["status"] == "pass"
+        assert "PONG & SETEX/GET verified" in res["detail"]
+    finally:
+        srv.close()
+
+
+def test_prepare_dirs_noop_on_empty_data_path() -> None:
+    """Verify _prepare_dirs returns True without calling ssh when data_path is empty."""
+    from libs.deploy.deployer import Deployer
+
+    class DummyStatelessDeployer(Deployer):
+        service = "stateless-dummy"
+        data_path = ""
+
+    calls = []
+
+    class DummyContext:
+        def run(self, cmd, **kwargs):
+            calls.append(cmd)
+
+    ctx = DummyContext()
+    result = DummyStatelessDeployer._prepare_dirs(ctx)
+    assert result is True
+    assert len(calls) == 0
+
