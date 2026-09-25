@@ -39,6 +39,8 @@ class MinioDeployer(Deployer):
     service = "minio"
     compose_path = "platform/03.minio/compose.yaml"
     data_path = "/data/platform/minio"
+    uid: str = "10001"
+    gid: str = "10001"
 
     # Backup facts (#542): the backup inventory derives from these
     # (formerly the ops.backup-inventory YAML, deleted).
@@ -175,9 +177,12 @@ class MinioDeployer(Deployer):
         success("pre_compose complete")
         domain_suffix = e.get("ENV_DOMAIN_SUFFIX", "")
         info(
-            f"MinIO Console: https://{cls.subdomain}{domain_suffix}.{e.get('INTERNAL_DOMAIN')}"
+            f"RustFS Console: https://rustfs{domain_suffix}.{e.get('INTERNAL_DOMAIN')}"
         )
-        info(f"MinIO S3 API: https://s3{domain_suffix}.{e.get('INTERNAL_DOMAIN')}")
+        info(
+            f"MinIO Console (legacy): https://{cls.subdomain}{domain_suffix}.{e.get('INTERNAL_DOMAIN')}"
+        )
+        info(f"S3 API: https://s3{domain_suffix}.{e.get('INTERNAL_DOMAIN')}")
         info(f"Login: {root_user} / (password in 1Password)")
         return result
 
@@ -187,14 +192,14 @@ class MinioDeployer(Deployer):
         # Call parent to deploy
         compose_id = super().composing(c, env_vars)
 
-        # Sync domains: minio=Console(9001), s3=API(9000)
+        # Sync domains: rustfs/minio=Console(9001), s3=API(9000)
         cls._sync_domains(compose_id)
 
         return compose_id
 
     @classmethod
     def _sync_domains(cls, compose_id: str):
-        """Ensure domains exist: minio.{domain}=Console, s3.{domain}=API."""
+        """Ensure domains exist: rustfs/minio.{domain}=Console, s3.{domain}=API."""
         from libs.dokploy import get_dokploy
 
         e = cls.env()
@@ -209,10 +214,15 @@ class MinioDeployer(Deployer):
 
         desired_domains = [
             {
+                "host": f"rustfs{domain_suffix}.{domain}",
+                "port": 9001,
+                "https": True,
+            },  # RustFS Console
+            {
                 "host": f"minio{domain_suffix}.{domain}",
                 "port": 9001,
                 "https": True,
-            },  # Console
+            },  # Legacy MinIO Console
             {
                 "host": f"s3{domain_suffix}.{domain}",
                 "port": 9000,
@@ -221,7 +231,7 @@ class MinioDeployer(Deployer):
         ]
 
         info(
-            f"Ensuring domains: minio{domain_suffix}.{domain}->9001(Console), s3{domain_suffix}.{domain}->9000(API)"
+            f"Ensuring domains: rustfs/minio{domain_suffix}.{domain}->9001(Console), s3{domain_suffix}.{domain}->9000(API)"
         )
         result = client.ensure_domains(
             compose_id=compose_id,
