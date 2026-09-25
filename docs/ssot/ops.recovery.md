@@ -111,13 +111,14 @@ graph TD
 
 ```json
 {
+  "environment": "production",
   "artifacts": [
     {
       "service_id": "platform/postgres",
       "created_at": "2026-06-05T00:00:00Z",
       "size_bytes": 123456,
       "sha256": "<64 hex chars>",
-      "remote_uri": "gdrive-backup:infra2/weekly/20260920T033000Z/platform/postgres/archive.tar.gz"
+      "remote_uri": "gdrive-backup:infra2/weekly/production/20260920T033000Z/platform/postgres/archive.tar.gz"
     }
   ]
 }
@@ -227,8 +228,15 @@ Scheduled on the host via crontab:
 0 4 1 1,4,7,10 * BACKUP_REMOTE=gdrive-backup:infra2 BACKUP_TIER=quarterly /usr/local/sbin/infra2-host-backup.sh >> /var/log/infra2-backup-quarterly.log 2>&1
 ```
 
-> **OFF-HOST STATUS**: **ACTIVE**. Off-host logical backups are encrypted end-to-end
-> (`rclone crypt`) and uploaded to Google Drive (`gdrive-backup:infra2`).
+> **OFF-HOST STATUS (2026-09-24)**: The Production run `20260924T034246Z`
+> has an environment-specific 17/17 manifest. All 17 archives were downloaded
+> from `rclone crypt` and passed byte-count, SHA256, gzip and tar checks; the
+> Finance Report and TrueAlpha database archives also passed isolated restores.
+> Staging still has no environment-specific 17/17 remote manifest. The older
+> unprefixed root manifest remains only 9/17 and has no environment marker.
+> Full two-environment coverage remains unverified until Staging passes the
+> same download, checksum and isolated-restore checks.
+> Backups are uploaded to Google Drive (`gdrive-backup:infra2`).
 > The root of trust is 1Password (`bootstrap/gdrive`). To restore credentials on a
 > fresh host: `op item get "bootstrap/gdrive" --vault "Infra2" --fields "rclone_conf" > ~/.config/rclone/rclone.conf`.
 > The off-host manifest is verified with SOP-004.
@@ -348,7 +356,7 @@ Recommended schedule after the rehearsal target is provisioned:
 | **Backup archive + checksum runner** | `tools/backup_runner.py` | ✅ Implemented |
 | **Backup freshness/checksum manifest** | `tools/backup_verification.py` | ✅ Implemented |
 | **On-host backup runner (SOP-006): dumps first, one failure never stops the rest, tar exit 1 is a WARN, authenticated redis SAVE** | `libs/tests/test_host_backup_script.py` | ✅ Implemented |
-| **Off-host restore rehearsal** | `tools/run_restore_rehearsal.py` + `libs/backup/` (`libs/tests/test_backup_verification.py`) | ✅ Implemented & Live Verified (10.62s PASS) |
+| **Off-host restore rehearsal** | `tools/run_restore_rehearsal.py` + `libs/backup/` (`libs/tests/test_backup_verification.py`) | Implemented; one Production remote restore run passed for Finance Report and TrueAlpha on 2026-09-24; automated `--service-id all` two-cycle burn-in pending |
 | **Vault Unseal 流程（自动）** | `bootstrap/05.vault/unsealer.py` 常驻自动解封;契约由 `libs/tests/test_vault_unsealer.py`(过期 Connect token 拒绝 / sync 非 ACTIVE / sealed 报不健康 / key 不足中止)+ `libs/tests/test_bootstrap_health.py`(healthcheck 接线)覆盖 | ✅ Automated |
 | **Vault Unseal 流程（手动兜底,SOP-001）** | `vault status` + `vault operator unseal` | ✅ Manual |
 | **vault-agent 凭证 re-provision (SOP-007)** | `vault.setup-approle --deploy` | ✅ Manual |
