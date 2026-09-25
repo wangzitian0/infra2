@@ -224,10 +224,13 @@ def test_todo_app_concurrency_nonblocking(monkeypatch) -> None:
     todo_mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(todo_mod)
 
-    # Simulate slow probe that sleeps 0.5 seconds
+    probe_started = threading.Event()
+
+    # Simulate slow probe: each of the 6 checks sleeps 0.2s (total 1.2s)
     def _slow_probe(*args, **kwargs):
-        time.sleep(0.5)
-        return {"status": "pass", "latency_ms": 500.0, "detail": "slow mock"}
+        probe_started.set()
+        time.sleep(0.2)
+        return {"status": "pass", "latency_ms": 200.0, "detail": "slow mock"}
 
     monkeypatch.setattr(todo_mod, "_probe_postgres", _slow_probe)
     monkeypatch.setattr(todo_mod, "_probe_redis", _slow_probe)
@@ -255,8 +258,8 @@ def test_todo_app_concurrency_nonblocking(monkeypatch) -> None:
         t_canary = threading.Thread(target=_fetch_canary)
         t_canary.start()
 
-        # Small pause to ensure canary probe is running in server
-        time.sleep(0.05)
+        # Wait deterministically until the server actually enters the slow probe
+        assert probe_started.wait(timeout=2.0), "Slow probe never started executing"
 
         # Health probe must return quickly (< 0.25s) even while canary probe is sleeping
         health_start = time.perf_counter()
@@ -269,7 +272,7 @@ def test_todo_app_concurrency_nonblocking(monkeypatch) -> None:
                 f"Health check was blocked by slow probe! elapsed={health_elapsed}s"
             )
 
-        t_canary.join(timeout=3)
+        t_canary.join(timeout=5)
         assert not t_canary.is_alive(), "Background canary probe timed out or hung"
         assert canary_result.get("code") == 200, (
             f"Background canary probe failed: {canary_result}"

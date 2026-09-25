@@ -375,33 +375,42 @@ def _probe_redis(host: str, port: int = 6379, timeout: float = 2.0) -> Dict[str,
     start = time.perf_counter()
     try:
         with socket.create_connection((host, port), timeout=timeout) as sock:
-            # 1. PING -> +PONG
-            sock.sendall(b"*1\r\n$4\r\nPING\r\n")
-            response = sock.recv(1024)
-            if not response.startswith(b"+PONG"):
-                elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
-                return {
-                    "status": "fail",
-                    "latency_ms": elapsed_ms,
-                    "detail": f"PING failed: {response!r}",
-                }
-            # 2. SETEX canary:ping 10 ok -> +OK
-            sock.sendall(
-                b"*4\r\n$5\r\nSETEX\r\n$11\r\ncanary:ping\r\n$2\r\n10\r\n$2\r\nok\r\n"
-            )
-            set_resp = sock.recv(1024)
-            if not set_resp.startswith(b"+OK"):
-                elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
-                return {
-                    "status": "fail",
-                    "latency_ms": elapsed_ms,
-                    "detail": f"SETEX failed: {set_resp!r}",
-                }
-            # 3. GET canary:ping -> $2\r\nok\r\n
-            sock.sendall(b"*2\r\n$3\r\nGET\r\n$11\r\ncanary:ping\r\n")
-            get_resp = sock.recv(1024)
+            with sock.makefile("rb") as rf:
+                # 1. PING -> +PONG\r\n
+                sock.sendall(b"*1\r\n$4\r\nPING\r\n")
+                pong_line = rf.readline()
+                if not pong_line.startswith(b"+PONG"):
+                    elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
+                    return {
+                        "status": "fail",
+                        "latency_ms": elapsed_ms,
+                        "detail": f"PING failed: {pong_line!r}",
+                    }
+                # 2. SETEX canary:ping 10 ok -> +OK\r\n
+                sock.sendall(
+                    b"*4\r\n$5\r\nSETEX\r\n$11\r\ncanary:ping\r\n$2\r\n10\r\n$2\r\nok\r\n"
+                )
+                set_line = rf.readline()
+                if not set_line.startswith(b"+OK"):
+                    elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
+                    return {
+                        "status": "fail",
+                        "latency_ms": elapsed_ms,
+                        "detail": f"SETEX failed: {set_line!r}",
+                    }
+                # 3. GET canary:ping -> $2\r\nok\r\n
+                sock.sendall(b"*2\r\n$3\r\nGET\r\n$11\r\ncanary:ping\r\n")
+                len_line = rf.readline()
+                if not len_line.startswith(b"$2"):
+                    elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
+                    return {
+                        "status": "fail",
+                        "latency_ms": elapsed_ms,
+                        "detail": f"GET length header unexpected: {len_line!r}",
+                    }
+                val_data = rf.readline()
         elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
-        if get_resp.startswith(b"$2\r\nok\r\n"):
+        if val_data.startswith(b"ok"):
             return {
                 "status": "pass",
                 "latency_ms": elapsed_ms,
@@ -410,7 +419,7 @@ def _probe_redis(host: str, port: int = 6379, timeout: float = 2.0) -> Dict[str,
         return {
             "status": "fail",
             "latency_ms": elapsed_ms,
-            "detail": f"GET unexpected bulk string: {get_resp!r}",
+            "detail": f"GET unexpected bulk string payload: {val_data!r}",
         }
     except Exception as exc:
         elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
@@ -514,7 +523,7 @@ class TodoHandler(BaseHTTPRequestHandler):
 
         if path == "/api/todos":
             with _todos_lock:
-                items = list(_FALLBACK_TODOS)
+                items = [dict(t) for t in _FALLBACK_TODOS]
             self._send_json(200, items)
             return
 
