@@ -307,13 +307,12 @@ def _probe_postgres(
     """Test PostgreSQL server engine via wire protocol startup handshake."""
     start = time.perf_counter()
     try:
-        sock = socket.create_connection((host, port), timeout=timeout)
-        # PostgreSQL StartupMessage (v3.0): length(4B) + proto 3.0(4B) + user\0canary\0database\0canary\0\0
-        payload = b"\x00\x03\x00\x00user\x00canary\x00database\x00canary\x00\x00"
-        length = len(payload) + 4
-        sock.sendall(length.to_bytes(4, byteorder="big") + payload)
-        resp = sock.recv(1024)
-        sock.close()
+        with socket.create_connection((host, port), timeout=timeout) as sock:
+            # PostgreSQL StartupMessage (v3.0): length(4B) + proto 3.0(4B) + user\0canary\0database\0canary\0\0
+            payload = b"\x00\x03\x00\x00user\x00canary\x00database\x00canary\x00\x00"
+            length = len(payload) + 4
+            sock.sendall(length.to_bytes(4, byteorder="big") + payload)
+            resp = sock.recv(1024)
         elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
         if resp and resp[0:1] in (b"R", b"E"):
             detail = "PostgreSQL engine handshake verified"
@@ -333,8 +332,8 @@ def _probe_postgres(
 def _probe_tcp(host: str, port: int, timeout: float = 2.0) -> Dict[str, Any]:
     start = time.perf_counter()
     try:
-        sock = socket.create_connection((host, port), timeout=timeout)
-        sock.close()
+        with socket.create_connection((host, port), timeout=timeout):
+            pass
         elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
         return {
             "status": "pass",
@@ -375,37 +374,34 @@ def _probe_redis(host: str, port: int = 6379, timeout: float = 2.0) -> Dict[str,
     """Test raw Redis RESP protocol over TCP socket: ping and key read/write lifecycle."""
     start = time.perf_counter()
     try:
-        sock = socket.create_connection((host, port), timeout=timeout)
-        # 1. PING -> +PONG
-        sock.sendall(b"*1\r\n$4\r\nPING\r\n")
-        response = sock.recv(1024)
-        if b"+PONG" not in response:
-            sock.close()
-            elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
-            return {
-                "status": "fail",
-                "latency_ms": elapsed_ms,
-                "detail": f"PING failed: {response!r}",
-            }
-        # 2. SETEX canary:ping 10 ok -> +OK
-        sock.sendall(
-            b"*4\r\n$5\r\nSETEX\r\n$11\r\ncanary:ping\r\n$2\r\n10\r\n$2\r\nok\r\n"
-        )
-        set_resp = sock.recv(1024)
-        if b"+OK" not in set_resp:
-            sock.close()
-            elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
-            return {
-                "status": "fail",
-                "latency_ms": elapsed_ms,
-                "detail": f"SETEX failed: {set_resp!r}",
-            }
-        # 3. GET canary:ping -> $2\r\nok\r\n
-        sock.sendall(b"*2\r\n$3\r\nGET\r\n$11\r\ncanary:ping\r\n")
-        get_resp = sock.recv(1024)
-        sock.close()
+        with socket.create_connection((host, port), timeout=timeout) as sock:
+            # 1. PING -> +PONG
+            sock.sendall(b"*1\r\n$4\r\nPING\r\n")
+            response = sock.recv(1024)
+            if not response.startswith(b"+PONG"):
+                elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
+                return {
+                    "status": "fail",
+                    "latency_ms": elapsed_ms,
+                    "detail": f"PING failed: {response!r}",
+                }
+            # 2. SETEX canary:ping 10 ok -> +OK
+            sock.sendall(
+                b"*4\r\n$5\r\nSETEX\r\n$11\r\ncanary:ping\r\n$2\r\n10\r\n$2\r\nok\r\n"
+            )
+            set_resp = sock.recv(1024)
+            if not set_resp.startswith(b"+OK"):
+                elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
+                return {
+                    "status": "fail",
+                    "latency_ms": elapsed_ms,
+                    "detail": f"SETEX failed: {set_resp!r}",
+                }
+            # 3. GET canary:ping -> $2\r\nok\r\n
+            sock.sendall(b"*2\r\n$3\r\nGET\r\n$11\r\ncanary:ping\r\n")
+            get_resp = sock.recv(1024)
         elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
-        if b"ok" in get_resp:
+        if get_resp.startswith(b"$2\r\nok\r\n"):
             return {
                 "status": "pass",
                 "latency_ms": elapsed_ms,
@@ -414,7 +410,7 @@ def _probe_redis(host: str, port: int = 6379, timeout: float = 2.0) -> Dict[str,
         return {
             "status": "fail",
             "latency_ms": elapsed_ms,
-            "detail": f"GET unexpected: {get_resp!r}",
+            "detail": f"GET unexpected bulk string: {get_resp!r}",
         }
     except Exception as exc:
         elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
@@ -539,17 +535,38 @@ class TodoHandler(BaseHTTPRequestHandler):
             else:
                 payload = {}
 
+            if "completed" in payload:
+                if not isinstance(payload["completed"], bool):
+                    self._send_json(
+                        400, {"error": "Field 'completed' must be a boolean"}
+                    )
+                    return
+                completed_val = payload["completed"]
+            else:
+                completed_val = False
+
+            if "title" in payload and not isinstance(payload["title"], str):
+                self._send_json(400, {"error": "Field 'title' must be a string"})
+                return
+
             with _todos_lock:
                 new_id = max((t["id"] for t in _FALLBACK_TODOS), default=0) + 1
+                title = (
+                    str(payload["title"]).strip()
+                    if "title" in payload
+                    else f"Todo #{new_id}"
+                )
                 item = {
                     "id": new_id,
-                    "title": str(payload.get("title", f"Todo #{new_id}")).strip(),
-                    "completed": bool(payload.get("completed", False)),
+                    "title": title,
+                    "completed": completed_val,
                     "capability": str(payload.get("capability", "general")),
                     "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 }
                 _FALLBACK_TODOS.append(item)
-            self._send_json(201, item)
+                item_copy = dict(item)
+
+            self._send_json(201, item_copy)
             return
 
         self._send_json(404, {"error": "Not Found"})
@@ -569,13 +586,18 @@ class TodoHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "Invalid todo ID"})
                 return
 
+            item_copy = None
             with _todos_lock:
                 for t in _FALLBACK_TODOS:
                     if t["id"] == todo_id:
                         t["completed"] = not t["completed"]
-                        self._send_json(200, t)
-                        return
-            self._send_json(404, {"error": "Todo not found"})
+                        item_copy = dict(t)
+                        break
+
+            if item_copy is not None:
+                self._send_json(200, item_copy)
+            else:
+                self._send_json(404, {"error": "Todo not found"})
             return
 
         self._send_json(404, {"error": "Not Found"})
@@ -590,15 +612,25 @@ class TodoHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "Invalid todo ID"})
                 return
 
+            removed_copy = None
             with _todos_lock:
                 for idx, t in enumerate(_FALLBACK_TODOS):
                     if t["id"] == todo_id:
                         removed = _FALLBACK_TODOS.pop(idx)
-                        self._send_json(
-                            200, {"ok": True, "deleted_id": todo_id, "item": removed}
-                        )
-                        return
-            self._send_json(404, {"error": "Todo not found"})
+                        removed_copy = dict(removed)
+                        break
+
+            if removed_copy is not None:
+                self._send_json(
+                    200,
+                    {
+                        "ok": True,
+                        "deleted_id": todo_id,
+                        "item": removed_copy,
+                    },
+                )
+            else:
+                self._send_json(404, {"error": "Todo not found"})
             return
 
         self._send_json(404, {"error": "Not Found"})

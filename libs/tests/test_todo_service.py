@@ -155,6 +155,21 @@ def test_todo_app_endpoints_contract(monkeypatch) -> None:
             err_body = json.loads(err.read().decode())
             assert "error" in err_body
 
+        # 5b. /api/todos (POST non-boolean completed -> 400 Bad Request)
+        invalid_type_req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/todos",
+            data=json.dumps({"title": "bad", "completed": "false"}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            urllib.request.urlopen(invalid_type_req, timeout=3)
+            assert False, "Expected HTTPError 400 on string completed field"
+        except urllib.error.HTTPError as err:
+            assert err.code == 400
+            err_body = json.loads(err.read().decode())
+            assert "completed" in err_body.get("error", "")
+
         # 6. /api/todos/{id}/toggle (PUT)
         toggle_req = urllib.request.Request(
             f"http://127.0.0.1:{port}/api/todos/{created_id}/toggle",
@@ -224,13 +239,20 @@ def test_todo_app_concurrency_nonblocking(monkeypatch) -> None:
     thread.daemon = True
     thread.start()
 
+    canary_result = {}
+
+    def _fetch_canary():
+        try:
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/api/canary/status")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                canary_result["code"] = resp.getcode()
+                canary_result["data"] = json.loads(resp.read().decode())
+        except Exception as exc:
+            canary_result["error"] = exc
+
     try:
         # Start slow canary probe in background thread
-        t_canary = threading.Thread(
-            target=lambda: urllib.request.urlopen(
-                f"http://127.0.0.1:{port}/api/canary/status", timeout=5
-            )
-        )
+        t_canary = threading.Thread(target=_fetch_canary)
         t_canary.start()
 
         # Small pause to ensure canary probe is running in server
@@ -248,6 +270,11 @@ def test_todo_app_concurrency_nonblocking(monkeypatch) -> None:
             )
 
         t_canary.join(timeout=3)
+        assert not t_canary.is_alive(), "Background canary probe timed out or hung"
+        assert canary_result.get("code") == 200, (
+            f"Background canary probe failed: {canary_result}"
+        )
+        assert "checks" in canary_result.get("data", {})
     finally:
         server.shutdown()
         server.server_close()
