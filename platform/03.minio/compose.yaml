@@ -92,7 +92,7 @@ services:
         export RUSTFS_ROOT_PASSWORD="$${MINIO_ROOT_PASSWORD}"
         export RUSTFS_ACCESS_KEY="$${MINIO_ROOT_USER:-admin}"
         export RUSTFS_SECRET_KEY="$${MINIO_ROOT_PASSWORD}"
-        exec rustfs server /data --console-address ":9001" --address ":9000"
+        exec /entrypoint.sh --address ":9000" --console-address ":9001" /data
     healthcheck:
       test: [ "CMD-SHELL", "wget -q -O /dev/null http://localhost:9000/minio/health/live || exit 1" ]
       start_period: 30s
