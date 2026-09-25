@@ -16,6 +16,7 @@
   "platform/prefect": "platform/prefect",
   "platform/redis": "platform/redis",
   "platform/signoz": "platform/signoz",
+  "platform/todo": "platform/todo",
   "truealpha/app": "truealpha/app",
   "truealpha/data_engine": "truealpha/data_engine",
   "truealpha/postgres": "truealpha/postgres"
