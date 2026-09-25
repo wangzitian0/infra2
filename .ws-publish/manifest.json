@@ -2,13 +2,13 @@
   "adapter": "rules-v2",
   "dirty_inputs": [],
   "inputs": {
-    "repo": "ecc40321e99bca836093f02b7eb006d3a5431bced3088253cdf087a0fb917740",
+    "repo": "7130b62781078d23e8469bbb8eed17a930247ad3dba8e8b1234c0844edffb8bf",
     "root": "f73b8ab7dfd7a7901c5264c7694f32562f780d7fb4a5efc19f51dcee1f071259",
-    "skills": "d6602161e9795fb2df5285a7292088442311e35048c5ead383ffc178ef7d84fa"
+    "skills": "ef5bb7c8fdc59dfafd856c6e3f57fe3813b83e90d69391b5cba036531ef9d7d0"
   },
   "language": "en",
   "outputs": {
-    "AGENTS.md": "09661087baa9a214f550229d2ccbce5df0971d968210bcc6178254a89e96368b",
+    "AGENTS.md": "a1e0da2afb4754b82318aa81b34acdb875672c7ab5df4ad60925a17683221b51",
     "CLAUDE.md": "a54ff182c7e8acf56acfd6e4b9c3ff41e2c41a31c9b211b2deb9df75d9a478f9"
   },
   "profiles": [
@@ -19,7 +19,7 @@
   "schema": 2,
   "skills": {
     "files": {
-      "skills/deploy-evidence/SKILL.md": "7b78fad99a7e3824f791a0162a4b9fab7bbbd25862f5294abd2e0a4d585ed120"
+      "skills/deploy-evidence/SKILL.md": "84a8d20aa69136ee2d0cab6dab0ae5e123cc8ff2792927ee90791afe128abd1c"
     },
     "link_dirs": [
       ".claude/skills",
@@ -31,7 +31,7 @@
     },
     "root": "skills"
   },
-  "source_revision": "784793174ea5f098a04cbca1f03dff240f97ae20",
+  "source_revision": "c3b93409ada99e56179ab24975023aadb52bd2e7",
   "target": {
     "remote": "github.com/wangzitian0/infra2",
     "repo": "infra2",

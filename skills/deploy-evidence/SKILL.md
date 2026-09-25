@@ -48,20 +48,20 @@ Never declare success based only on GitHub green! Verify the physical system:
 ```bash
 # SSH to VPS (host from 1Password 'local' item, user: root)
 docker inspect -f '{{.Config.Image}}' platform-alerting-probes
-docker inspect -f '{{.Config.Image}}' platform-alerting-feishu-bridge
+docker inspect -f '{{.Config.Image}}' platform-alerting
 ```
 
 #### Probe B: Availability Ledger State
-Verify ledger JSON is writable and accumulating successful cycles:
+Verify ledger JSON is writable and accumulating successful cycles (read-only probe without Lark side-effects):
 ```bash
 cat /var/lib/infra2-availability-ledger/availability-ledger.json | head -20
-python -m tools.stability_report
+INFRA2_STABILITY_REPORT_DRY_RUN=1 python -m tools.stability_report
 ```
 
 #### Probe C: External Watchdog Blackbox
-Query Cloudflare watchdog from external network:
+Query Cloudflare watchdog from external network using configured status token:
 ```bash
-curl -fsS -H "Authorization: Bearer $INFRA2_WATCHDOG_WORKER_STATUS_TOKEN" https://infra2-watchdog.wangzitian0.workers.dev/outages
+curl -fsS -H "Authorization: Bearer $INFRA2_WATCHDOG_WORKER_STATUS_TOKEN" https://infra2-cloudflare-watchdog.wangzitian0.workers.dev/outages
 ```
 
 ## 3. Red Lines (Instant Rejection)
