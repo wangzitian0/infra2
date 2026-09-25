@@ -1208,7 +1208,33 @@ def test_gh_is_called_without_a_terminal_and_with_a_deadline(monkeypatch):
     assert seen["stdin"] is gate.subprocess.DEVNULL
     # A literal, not gate.GH_TIMEOUT_S: comparing the observed value against
     # the constant it came from passes for any value, including 0.
-    assert seen["timeout"] == 60
+    assert seen["timeout"] == 200
+
+
+def test_gh_survives_a_slow_credential_mint_within_the_deadline(monkeypatch):
+    # ws-gh-token's own worst-case single mint is ~120s, and its lock-wait
+    # deadline is 180s (workspace-iac/bin/ws-gh-token:95) -- both were already
+    # longer than the old GH_TIMEOUT_S=60, so a legitimately slow mint (cache
+    # just expired, 1Password/GitHub both near their own 30s ceilings) got
+    # killed mid-flight and reported as "gh unresponsive" (dev_env#138). This
+    # simulates that mint taking 150s: it must fit under the current deadline.
+    # Asserting against the mint duration, not gate.GH_TIMEOUT_S, is what
+    # makes this fail on the old value instead of passing for any timeout.
+    mint_duration_s = 150
+
+    def fake_run(argv, *, timeout, **kwargs):
+        if timeout < mint_duration_s:
+            raise gate.subprocess.TimeoutExpired(cmd=["gh", *argv], timeout=timeout)
+
+        class R:
+            returncode = 0
+            stdout = "{}"
+            stderr = ""
+
+        return R()
+
+    monkeypatch.setattr(gate.subprocess, "run", fake_run)
+    assert gate._gh(["pr", "view", "1"]) == "{}"
 
 
 def test_a_required_check_skipped_on_a_code_pr_is_the_unexpected_kind():
