@@ -94,6 +94,8 @@ services:
         export RUSTFS_SECRET_KEY="$${MINIO_ROOT_PASSWORD}"
         exec /entrypoint.sh --address ":9000" --console-address ":9001" /data
     healthcheck:
+      # wget is present in the rustfs/rustfs:1.0.0 base image (Alpine layer).
+      # curl is also available but wget is lighter and needs no extra flags.
       test: [ "CMD-SHELL", "wget -q -O /dev/null http://localhost:9000/minio/health/live || exit 1" ]
       start_period: 30s
       interval: 30s
