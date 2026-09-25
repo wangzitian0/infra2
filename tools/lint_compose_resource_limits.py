@@ -32,6 +32,37 @@ from pathlib import Path
 
 import yaml
 
+try:
+    from infra2_sdk.rules.compose import is_memory_ceiling as _is_ceiling
+except ImportError:
+    # 512m, 1.5g, 2G, 1073741824. A bare 0, "0", "0b" or prose is not a ceiling.
+    SIZE_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([kmgtb]?b?)\s*$", re.I)
+    UNITS = {
+        "": 1,
+        "b": 1,
+        "k": 2**10,
+        "kb": 2**10,
+        "m": 2**20,
+        "mb": 2**20,
+        "g": 2**30,
+        "gb": 2**30,
+        "t": 2**40,
+        "tb": 2**40,
+    }
+
+    def _is_ceiling(value: object) -> bool:
+        """A value that actually caps memory. Docker treats 0 as unlimited."""
+        if isinstance(value, bool) or value is None:
+            return False
+        if isinstance(value, int | float):
+            return value > 0
+        if not isinstance(value, str):
+            return False
+        match = SIZE_RE.match(value)
+        if not match:
+            return False
+        return float(match.group(1)) * UNITS.get(match.group(2).lower(), 0) > 0
+
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE_PATH = ROOT / "docs/ssot/compose-resource-baseline.json"
 COMPOSE_NAMES = (
@@ -40,20 +71,6 @@ COMPOSE_NAMES = (
     "docker-compose.yaml",
     "docker-compose.yml",
 )
-# 512m, 1.5g, 2G, 1073741824. A bare 0, "0", "0b" or prose is not a ceiling.
-SIZE_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([kmgtb]?b?)\s*$", re.I)
-UNITS = {
-    "": 1,
-    "b": 1,
-    "k": 2**10,
-    "kb": 2**10,
-    "m": 2**20,
-    "mb": 2**20,
-    "g": 2**30,
-    "gb": 2**30,
-    "t": 2**40,
-    "tb": 2**40,
-}
 
 
 def _git(*args: str) -> str:
@@ -67,10 +84,6 @@ def _tracked_composes() -> list[str]:
         p for p in _git("ls-files").splitlines() if Path(p).name in COMPOSE_NAMES
     )
 
-
-from infra2_sdk.rules.compose import is_memory_ceiling
-
-_is_ceiling = is_memory_ceiling
 
 
 def _unlimited_services(path: Path) -> tuple[list[str], str | None]:
