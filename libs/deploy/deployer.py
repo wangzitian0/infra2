@@ -1407,7 +1407,6 @@ class Deployer:
         from libs.dokploy import get_dokploy
 
         client = get_dokploy()
-        domain = e.get("INTERNAL_DOMAIN")
         project_name = cls.project_name(e)
         env_name = e.get("ENV", "production")
         existing = client.find_compose_by_name(
@@ -1614,10 +1613,7 @@ class Deployer:
     @classmethod
     def verify_vault_app_token(cls) -> dict:
         """Verify VAULT_APP_TOKEN stored in Dokploy is valid."""
-        from libs.dokploy import get_dokploy
-
         e = cls.env()
-        env_name = e.get("ENV", "production")
         existing = cls._find_remote_compose(e)
 
         if not existing:
