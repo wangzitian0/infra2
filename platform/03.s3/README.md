@@ -1,27 +1,31 @@
-# Platform Object Storage (RustFS / MinIO-Compatible)
+# Platform S3-Compatible Object Storage
 
-> **Purpose**: S3-compatible object storage for platform and application services.
-> Powered by **RustFS** (Apache 2.0, memory-safe Rust implementation) as a drop-in replacement for MinIO (#930).
+> **Purpose**: Generic S3-compatible object storage service for platform and application services (`platform/s3`).
+> Designed with storage engine neutrality: currently powered by **RustFS** (Apache 2.0, memory-safe Rust implementation) as the default engine, while maintaining dynamic backend compatibility for future alternatives (Garage, SeaweedFS, Ceph, etc.).
 
 ## Quick Start
 
 ```bash
 # Deploy staging
-python -m tools.deploy_v2 --service platform/minio --type staging --iac-ref vX.Y.Z --domain zitian.party
+python -m tools.deploy_v2 --service platform/s3 --type staging --iac-ref vX.Y.Z --domain zitian.party
 
 # Check status
-invoke minio.status
+invoke s3.status
+# (legacy alias: invoke minio.status)
 ```
 
 ## Architecture
 
-- **Engine**: [RustFS](https://github.com/rustfs/rustfs) with embedded `mc` CLI for administration compatibility.
+- **Capability**: Standard AWS S3 API + Web Console.
+- **Current Engine**: [RustFS](https://github.com/rustfs/rustfs) with embedded `mc` CLI for administration compatibility.
 - **Vault-init pattern**:
   - Secrets stored in Vault (`secret/platform/<env>/minio`).
   - Fetched at container runtime via `vault-agent` sidecar.
+  - Rendered into tmpfs in-memory volume `/secrets/.env` and exported as generic `S3_*` and engine-specific `RUSTFS_*`/`MINIO_*` variables.
   - No secrets in Dokploy env vars or on unencrypted disk.
 - **Downstream Compatibility**:
-  - Container maintains Docker network alias `platform-minio` and `platform-rustfs`.
+  - Container maintains Docker network aliases: `platform-s3`, `platform-rustfs`, and `platform-minio`.
+  - Zero code modifications required for existing downstream consumers (`truealpha`, `finance_report`).
   - Supports standard AWS S3 SDK, boto3, `mc`, and `rc`.
 
 ## Domains & Ports
@@ -29,7 +33,7 @@ invoke minio.status
 | Port | Protocol / Purpose | Staging Domain | Production Domain |
 |------|--------------------|----------------|-------------------|
 | **9000** | S3 API | `https://s3-staging.zitian.party` | `https://s3.zitian.party` |
-| **9001** | Web Console | `https://rustfs-staging.zitian.party`<br>*(alias: minio-staging)* | `https://rustfs.zitian.party`<br>*(alias: minio)* |
+| **9001** | Web Console | `https://s3-console-staging.zitian.party`<br>*(aliases: rustfs-staging, minio-staging)* | `https://s3-console.zitian.party`<br>*(aliases: rustfs, minio)* |
 | **19000/19001** | Host Loopback S3 | `127.0.0.1:19000` | `127.0.0.1:19001` |
 
 ## Vault Secrets

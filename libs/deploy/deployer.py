@@ -602,8 +602,9 @@ class Deployer:
         e = cls.env()
         # Use cls.project if PROJECT env not set
         project = cls.project_name(e)
+        service = getattr(cls, "vault_service_name", None) or cls.service
         return get_secrets(
-            project=project, service=cls.service, env=env or e.get("ENV", "production")
+            project=project, service=service, env=env or e.get("ENV", "production")
         )
 
     @classmethod
@@ -854,6 +855,19 @@ class Deployer:
         existing = client.find_compose_by_name(
             cls.service, project_name, env_name=env_name
         )
+        if not existing:
+            for legacy_name in getattr(cls, "legacy_compose_names", ()):
+                existing = client.find_compose_by_name(
+                    legacy_name, project_name, env_name=env_name
+                )
+                if existing:
+                    info(f"Adopting legacy compose {legacy_name} -> {cls.service}")
+                    client.update_compose(
+                        existing["composeId"],
+                        name=cls.service,
+                        composePath=cls.compose_path,
+                    )
+                    break
 
         # autoDeploy=False on every path. These services are deployed by the
         # iac-runner, which already does change detection via the content
@@ -1392,11 +1406,21 @@ class Deployer:
         """This service's full compose record in its Dokploy project and environment."""
         from libs.dokploy import get_dokploy
 
+        client = get_dokploy()
         domain = e.get("INTERNAL_DOMAIN")
-        client = get_dokploy(host=f"cloud.{domain}" if domain else None)
-        return client.find_compose_by_name(
-            cls.service, cls.project_name(e), env_name=e.get("ENV", "production")
+        project_name = cls.project_name(e)
+        env_name = e.get("ENV", "production")
+        existing = client.find_compose_by_name(
+            cls.service, project_name, env_name=env_name
         )
+        if not existing:
+            for legacy_name in getattr(cls, "legacy_compose_names", ()):
+                existing = client.find_compose_by_name(
+                    legacy_name, project_name, env_name=env_name
+                )
+                if existing:
+                    break
+        return existing
 
     @classmethod
     def get_remote_config_identity(cls) -> dict[str, str | None]:
@@ -1594,14 +1618,7 @@ class Deployer:
 
         e = cls.env()
         env_name = e.get("ENV", "production")
-        project_name = cls.project_name(e)
-        domain = e.get("INTERNAL_DOMAIN")
-        host = f"cloud.{domain}" if domain else None
-
-        client = get_dokploy(host=host)
-        existing = client.find_compose_by_name(
-            cls.service, project_name, env_name=env_name
-        )
+        existing = cls._find_remote_compose(e)
 
         if not existing:
             return {"valid": True, "error": None, "details": "No existing deployment"}

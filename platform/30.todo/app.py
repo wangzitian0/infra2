@@ -5,7 +5,7 @@ Serves todo.zitian.party as the acceptance and verification tool for ALL
 platform infrastructure capabilities:
 - Postgres (platform/postgres)
 - Redis (platform/redis)
-- MinIO S3 (platform/minio)
+- S3 Object Storage (platform/s3)
 - SigNoz OpenTelemetry (platform/signoz)
 - OpenPanel (platform/openpanel)
 - Authentik SSO (platform/authentik)
@@ -43,9 +43,9 @@ _FALLBACK_TODOS: List[Dict[str, Any]] = [
     },
     {
         "id": 3,
-        "title": "平台 MinIO 对象存储与预签名上传校验",
+        "title": "平台 S3 兼容对象存储与预签名上传校验",
         "completed": True,
-        "capability": "minio",
+        "capability": "s3",
         "created_at": "2026-09-24T20:02:00Z",
     },
     {
@@ -119,12 +119,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           <span class="badge badge-wait" id="badge-redis">WAIT</span>
         </div>
 
-        <div class="p-4 bg-slate-950/60 rounded-lg border border-slate-800/80 flex items-center justify-between" id="card-minio">
+        <div class="p-4 bg-slate-950/60 rounded-lg border border-slate-800/80 flex items-center justify-between" id="card-s3">
           <div>
-            <div class="text-xs text-slate-400 font-medium">MinIO (S3/Storage)</div>
-            <div class="text-xs text-slate-500 mt-0.5" id="latency-minio">-- ms</div>
+            <div class="text-xs text-slate-400 font-medium">S3 (Object Storage)</div>
+            <div class="text-xs text-slate-500 mt-0.5" id="latency-s3">-- ms</div>
           </div>
-          <span class="badge badge-wait" id="badge-minio">WAIT</span>
+          <span class="badge badge-wait" id="badge-s3">WAIT</span>
         </div>
 
         <div class="p-4 bg-slate-950/60 rounded-lg border border-slate-800/80 flex items-center justify-between" id="card-signoz">
@@ -464,8 +464,11 @@ def run_all_checks() -> Dict[str, Any]:
     redis_host = os.environ.get("REDIS_HOST", f"platform-redis{suffix}")
     redis_port = int(os.environ.get("REDIS_PORT", "6379"))
     redis_password = os.environ.get("REDIS_PASSWORD") or None
-    minio_url = os.environ.get(
-        "MINIO_ENDPOINT", "http://platform-minio:9000/minio/health/live"
+    s3_url = (
+        os.environ.get("S3_ENDPOINT")
+        or os.environ.get("RUSTFS_ENDPOINT")
+        or os.environ.get("MINIO_ENDPOINT")
+        or f"http://platform-s3{suffix}:9000/minio/health/live"
     )
     signoz_url = os.environ.get(
         "SIGNOZ_OTEL_COLLECTOR", "http://platform-signoz-otel-collector:13133"
@@ -477,10 +480,12 @@ def run_all_checks() -> Dict[str, Any]:
         "AUTHENTIK_ENDPOINT", "http://platform-authentik-server:9000/-/health/live/"
     )
 
+    s3_check = _probe_http(s3_url)
     checks = {
         "postgres": _probe_postgres(pg_host, pg_port),
         "redis": _probe_redis(redis_host, redis_port, password=redis_password),
-        "minio": _probe_http(minio_url),
+        "s3": s3_check,
+        "minio": s3_check,  # backward-compatibility alias for existing dashboards
         "signoz": _probe_http(signoz_url),
         "openpanel": _probe_http(openpanel_url),
         "authentik": _probe_http(authentik_url),

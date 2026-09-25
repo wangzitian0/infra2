@@ -105,6 +105,7 @@ def test_todo_app_endpoints_contract(monkeypatch) -> None:
             assert set(checks.keys()) == {
                 "postgres",
                 "redis",
+                "s3",
                 "minio",
                 "signoz",
                 "openpanel",

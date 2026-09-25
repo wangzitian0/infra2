@@ -13,7 +13,7 @@ Platform services use **vault-init pattern**:
 
 | Range | Category | Services |
 |-------|----------|----------|
-| `01-09` | **Databases** | `01.postgres`, `02.redis`, `03.clickhouse`, `03.minio` |
+| `01-09` | **Databases** | `01.postgres`, `02.redis`, `03.clickhouse`, `03.s3` |
 | `10-19` | **Auth, Observability & Alerting** | `10.authentik`, `11.signoz`, `12.alerting` |
 | `20-29` | **Portal & Applications** | `21.portal`, `23.prefect`, `24.openpanel`, `25.free` |
 
@@ -35,7 +35,7 @@ platform/{nn}.{service}/
 - [Postgres](./01.postgres/README.md) - Database for Authentik, Prefect
 - [Redis](./02.redis/README.md) - Cache for Authentik; Messaging for Prefect (DB 1)
 - [ClickHouse](./03.clickhouse/README.md) - SigNoz storage
-- [MinIO](./03.minio/README.md) - S3-compatible object storage
+- [S3 Object Storage](./03.s3/README.md) - S3-compatible object storage
 - [Authentik](./10.authentik/README.md) - SSO provider
 - [SigNoz](./11.signoz/README.md) - Observability platform
 - [Alerting Bridge](./12.alerting/README.md) - SigNoz to Feishu alert delivery
