@@ -69,7 +69,7 @@ flowchart TB
         Postgres["PostgreSQL"]
         Redis["Redis"]
         Authentik["Authentik"]
-        MinIO["MinIO"]
+        RustFS["RustFS (S3)"]
     end
 
     GitHub -->|push tag vX.Y.Z| Reconcile
@@ -83,7 +83,7 @@ flowchart TB
     IaCRunner -->|invoke *.sync @ tag| Postgres
     IaCRunner -->|invoke *.sync @ tag| Redis
     IaCRunner -->|invoke *.sync @ tag| Authentik
-    IaCRunner -->|invoke *.sync @ tag| MinIO
+    IaCRunner -->|invoke *.sync @ tag| RustFS
 
     Vault -.->|bootstrap secrets| 1P
 ```

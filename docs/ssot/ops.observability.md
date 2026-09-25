@@ -300,7 +300,7 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 | L2 Platform | platform Postgres | TCP readiness fails / restart loop | P0 | Live probe |
 | L2 Platform | platform Redis | TCP readiness fails / restart loop | P1 | Live probe |
 | L2 Platform | ClickHouse | data dir unwritable / ingestion broken | P0 | Write-path healthcheck + `signoz-roundtrip` |
-| L2 Platform | MinIO | live endpoint unavailable | P1 | Live probe |
+| L2 Platform | platform minio (RustFS) | live endpoint unavailable | P1 | Live probe |
 | L2 Platform | Authentik | health endpoint fails | P0 | Live probe |
 | L2 Platform | SigNoz | frontend/query fails or synthetic OTLP nonce cannot be queried back | P0 | `signoz-internal-http`, `otel-collector-http`, `signoz-roundtrip` |
 | L2 Platform | Alert Bridge | `/health` fails / Feishu unreachable | P0 | `alert-bridge-http`, `lark-delivery-http` + Cloudflare 读 probe-runner 心跳(v2 下 bridge 投递失败即 `ok=false`,Worker page,#903);GitHub 日审计 bridge `/health` 只报告(#908) |
