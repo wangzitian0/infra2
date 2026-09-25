@@ -2,7 +2,7 @@
 
 > **Purpose**: Internal domain packages, deployment backends, and platform clients used by deploy scripts, CLI tools, and background workers.
 > Stable cross-repository contracts live in [`infra2-sdk`](https://github.com/wangzitian0/infra2-sdk) and are imported directly.
-> The infra2 release pin is `v2.1.1`; adoption and equality are guarded by `libs/tests/test_sdk_contract_adoption.py`.
+> The infra2 release pin is `v2.2.0`; adoption and equality are guarded by `libs/tests/test_sdk_contract_adoption.py`.
 
 ---
 

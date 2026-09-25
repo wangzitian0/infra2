@@ -68,18 +68,9 @@ def _tracked_composes() -> list[str]:
     )
 
 
-def _is_ceiling(value: object) -> bool:
-    """A value that actually caps memory. Docker treats 0 as unlimited."""
-    if isinstance(value, bool) or value is None:
-        return False
-    if isinstance(value, int | float):
-        return value > 0
-    if not isinstance(value, str):
-        return False
-    match = SIZE_RE.match(value)
-    if not match:
-        return False
-    return float(match.group(1)) * UNITS.get(match.group(2).lower(), 0) > 0
+from infra2_sdk.rules.compose import is_memory_ceiling
+
+_is_ceiling = is_memory_ceiling
 
 
 def _unlimited_services(path: Path) -> tuple[list[str], str | None]:
