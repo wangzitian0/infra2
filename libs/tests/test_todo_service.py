@@ -454,7 +454,7 @@ def test_todo_traefik_dual_router_auth_contract() -> None:
         "traefik.http.middlewares.todo-auth${ENV_DOMAIN_SUFFIX}.forwardauth.address"
     )
     assert mw_addr is not None
-    assert "platform-authentik-server:9000" in mw_addr
+    assert "platform-authentik-server${ENV_SUFFIX}:9000" in mw_addr
     assert "/outpost.goauthentik.io/auth/traefik" in mw_addr
 
 
