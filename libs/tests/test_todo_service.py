@@ -398,3 +398,148 @@ def test_prepare_dirs_noop_on_empty_data_path(monkeypatch) -> None:
     assert result is True
     assert len(cmds) == 0
 
+
+def test_todo_traefik_dual_router_auth_contract() -> None:
+    """Verify compose.yaml specifies dual routers for Authentik ForwardAuth + public probe bypass."""
+    import yaml
+
+    compose_file = REPO_ROOT / "platform/30.todo/compose.yaml"
+    assert compose_file.exists()
+    content = yaml.safe_load(compose_file.read_text())
+
+    labels = content["services"]["todo"]["labels"]
+    labels_dict = {}
+    for item in labels:
+        if "=" in item:
+            k, v = item.split("=", 1)
+            labels_dict[k] = v
+
+    # 1. Traefik enabled
+    assert labels_dict.get("traefik.enable") == "true"
+
+    # 2. Public bypass router: priority 100, matches health and canary status, no auth middleware
+    public_rule = labels_dict.get(
+        "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.rule"
+    )
+    assert public_rule is not None
+    assert "/api/health" in public_rule
+    assert "/api/canary/status" in public_rule
+    assert (
+        labels_dict.get(
+            "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.priority"
+        )
+        == "100"
+    )
+    assert (
+        "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.middlewares"
+        not in labels_dict
+    )
+
+    # 3. Protected router: priority 10, protected by Authentik ForwardAuth middleware
+    assert (
+        labels_dict.get(
+            "traefik.http.routers.platform-todo${ENV_DOMAIN_SUFFIX}.priority"
+        )
+        == "10"
+    )
+    assert (
+        labels_dict.get(
+            "traefik.http.routers.platform-todo${ENV_DOMAIN_SUFFIX}.middlewares"
+        )
+        == "todo-auth${ENV_DOMAIN_SUFFIX}@docker"
+    )
+
+    # 4. Middleware forwardauth points to authentik server
+    mw_addr = labels_dict.get(
+        "traefik.http.middlewares.todo-auth${ENV_DOMAIN_SUFFIX}.forwardauth.address"
+    )
+    assert mw_addr is not None
+    assert "platform-authentik-server${ENV_SUFFIX}:9000" in mw_addr
+    assert "/outpost.goauthentik.io/auth/traefik" in mw_addr
+
+
+def test_todo_app_authentik_identity_and_me_endpoint() -> None:
+    """Verify /api/auth/me and UI rendering under Authentik ForwardAuth headers."""
+    spec = importlib.util.spec_from_file_location(
+        "todo_app", REPO_ROOT / "platform/30.todo/app.py"
+    )
+    assert spec is not None and spec.loader is not None
+    todo_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(todo_mod)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), todo_mod.TodoHandler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        # Unauthenticated /api/auth/me
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/api/auth/me", timeout=3
+        ) as resp:
+            assert resp.getcode() == 200
+            data = json.loads(resp.read().decode())
+            assert data["authenticated"] is False
+            assert data["username"] is None
+            assert data["groups"] == []
+
+        # Authenticated /api/auth/me with ForwardAuth headers
+        auth_req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/auth/me",
+            headers={
+                "X-authentik-username": "wangzitian0",
+                "X-authentik-name": "Zitian Wang",
+                "X-authentik-email": "wangzitian0@gmail.com",
+                "X-authentik-groups": "admins,developers",
+            },
+        )
+        with urllib.request.urlopen(auth_req, timeout=3) as resp:
+            assert resp.getcode() == 200
+            auth_data = json.loads(resp.read().decode())
+            assert auth_data["authenticated"] is True
+            assert auth_data["username"] == "wangzitian0"
+            assert auth_data["name"] == "Zitian Wang"
+            assert auth_data["email"] == "wangzitian0@gmail.com"
+            assert auth_data["groups"] == ["admins", "developers"]
+
+        # UI renders authenticated badge with name
+        ui_req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/",
+            headers={
+                "X-authentik-username": "wangzitian0",
+                "X-authentik-name": "Zitian Wang",
+            },
+        )
+        with urllib.request.urlopen(ui_req, timeout=3) as resp:
+            assert resp.getcode() == 200
+            html = resp.read().decode()
+            assert "SSO 认证通过: Zitian Wang" in html
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_portal_config_template_contains_canary_todo() -> None:
+    """Verify platform/21.portal/config.yml.tmpl includes Canary Todo card."""
+    import yaml
+
+    portal_tmpl = REPO_ROOT / "platform/21.portal/config.yml.tmpl"
+    assert portal_tmpl.exists()
+    content = yaml.safe_load(portal_tmpl.read_text())
+
+    platform_services = None
+    for group in content.get("services", []):
+        if group.get("name") == "Platform Services":
+            platform_services = group
+            break
+    assert platform_services is not None, "Platform Services section not found in Homer config"
+
+    todo_item = None
+    for item in platform_services.get("items", []):
+        if item.get("name") == "Canary Todo":
+            todo_item = item
+            break
+    assert todo_item is not None, "Canary Todo item not found in Homer config"
+    assert todo_item["url"] == "https://todo{{ENV_DOMAIN_SUFFIX}}.{{INTERNAL_DOMAIN}}"
+    assert todo_item["tag"] == "canary"
+
