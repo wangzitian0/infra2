@@ -46,7 +46,7 @@ to the promoted digest; recording a Dokploy config hash alone is insufficient.
 
 - OpenD remains host-only on `127.0.0.1:11111`; no bridge-facing proxy is permitted.
 - All three Dagster roles use host networking. They reach the environment's
-  loopback-only Postgres port (`15432` Staging, `15433` Production) and MinIO S3
+  loopback-only Postgres port (`15432` Staging, `15433` Production) and the RustFS S3
   loopback port (`19000` Staging, `19001` Production).
 - Dagster UI binds only to host loopback (`13001` Staging, `13002` Production), has
   `traefik.enable=false`, and is accessed through an SSH tunnel.

@@ -58,7 +58,7 @@ flowchart TB
         PG["PostgreSQL"]
         Redis["Redis"]
         Authentik["Authentik SSO"]
-        MinIO["MinIO"]
+        RustFS["RustFS (S3)"]
     end
 
     subgraph Apps["L4 Apps (Business Logic)"]
@@ -87,7 +87,7 @@ flowchart TB
     PG -->|database| Apps
     Redis -->|cache| Apps
     Authentik -->|SSO| Apps
-    MinIO -->|storage| Apps
+    RustFS -->|storage| Apps
 ```
 
 ### 2.2 Simplified Layer Dependency
