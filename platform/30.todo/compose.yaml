@@ -40,7 +40,7 @@ services:
       - "traefik.http.services.platform-todo${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=8000"
 
       # Public bypass router: unauthenticated access for container healthcheck and external probes
-      - "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.rule=Host(`todo${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`) && PathPrefix(`/api/health`, `/api/canary/status`)"
+      - "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.rule=Host(`todo${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`) && (PathPrefix(`/api/health`) || PathPrefix(`/api/canary/status`))"
       - "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
       - "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.tls=true"
       - "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"

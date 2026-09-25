@@ -528,6 +528,12 @@ def test_todo_app_authentik_identity_and_me_endpoint() -> None:
             html_xss = resp.read().decode()
             assert "<script>alert('xss')</script>" not in html_xss
             assert "&lt;script&gt;" in html_xss
+
+        # HTTP HEAD requests supported without 501 error
+        head_req = urllib.request.Request(f"http://127.0.0.1:{port}/api/health", method="HEAD")
+        with urllib.request.urlopen(head_req, timeout=3) as resp:
+            assert resp.getcode() == 200
+            assert resp.read() == b""
     finally:
         server.shutdown()
         server.server_close()
