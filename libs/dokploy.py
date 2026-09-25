@@ -467,19 +467,22 @@ class DokployClient:
         # Get existing domains
         compose = self.get_compose(compose_id)
         existing = compose.get("domains", [])
-        existing_hosts = {d["host"]: d for d in existing}
+        existing_by_key = {(d["host"], d.get("path") or "/"): d for d in existing}
 
         for spec in desired_domains:
             host = spec["host"]
             desired_port = spec["port"]
+            path = spec.get("path") or "/"
+            target_service = spec.get("service_name") or service_name
+            key = (host, path)
 
-            if host in existing_hosts:
-                existing_port = existing_hosts[host].get("port")
+            if key in existing_by_key:
+                existing_port = existing_by_key[key].get("port")
                 if existing_port == desired_port:
                     # Already configured correctly
                     result["skipped"] += 1
                 else:
-                    # Conflict: same host, different port
+                    # Conflict: same host and path, different port
                     result["conflicts"].append(
                         {
                             "host": host,
@@ -495,8 +498,8 @@ class DokployClient:
                         host=host,
                         port=desired_port,
                         https=spec.get("https", True),
-                        path=spec.get("path", "/"),
-                        service_name=service_name,
+                        path=path,
+                        service_name=target_service,
                     )
                     result["created"] += 1
                 except Exception as e:
