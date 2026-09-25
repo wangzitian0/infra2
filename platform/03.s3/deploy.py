@@ -1,4 +1,7 @@
-"""MinIO deployment with vault-init
+"""S3-Compatible Object Storage deployment with vault-init
+
+Generic S3 platform service (currently powered by RustFS 1.0.0 engine).
+Designed for storage backend neutrality (RustFS, Garage, SeaweedFS, Ceph, etc.).
 
 Root credentials pattern:
 - Stored in 1Password for Web Console login (human access)
@@ -19,10 +22,10 @@ from libs.service_facets import (
     SignalFacet,
 )
 
-shared_tasks = sys.modules.get("platform.03.minio.shared")
+shared_tasks = sys.modules.get("platform.03.s3.shared") or sys.modules.get("platform.03.minio.shared")
 
 
-class MinioDeployer(Deployer):
+class S3Deployer(Deployer):
     # Host-loopback S3 port per env (see compose.yaml ports comment;
     # truealpha#496). Staging 19000 / production 19001, mirroring the
     # truealpha postgres 15432/15433 convention.
@@ -31,57 +34,49 @@ class MinioDeployer(Deployer):
     @classmethod
     def compose_env_base(cls, env: dict | None = None) -> dict[str, str]:
         base = super().compose_env_base(env)
-        base["MINIO_S3_HOST_PORT"] = cls._S3_HOST_PORTS.get(
-            base.get("ENV", ""), "127.0.0.1:0"
-        )
+        host_port = cls._S3_HOST_PORTS.get(base.get("ENV", ""), "127.0.0.1:0")
+        base["S3_HOST_PORT"] = host_port
+        base["MINIO_S3_HOST_PORT"] = host_port  # backward compatibility
         return base
 
-    service = "minio"
-    compose_path = "platform/03.minio/compose.yaml"
-    data_path = "/data/platform/minio"
+    service = "s3"
+    display_name = "S3-Compatible Object Storage"
+    legacy_compose_names = ("minio",)
+    vault_service_name = "minio"  # preserve physical Vault path secret/data/platform/{env}/minio
+    compose_path = "platform/03.s3/compose.yaml"
+    data_path = "/data/platform/minio"  # host data directory
     uid: str = "10001"
     gid: str = "10001"
 
     # Backup facts (#542): the backup inventory derives from these
-    # (formerly the ops.backup-inventory YAML, deleted).
     backups = (
         BackupFacet(
-            method="minio_bucket_mirror",
-            restore_command="mirror the selected off-host bucket snapshot back into MinIO.",
+            method="s3_bucket_mirror",
+            restore_command="mirror the selected off-host bucket snapshot back into S3 storage.",
         ),
     )
     secret_key = "root_password"
 
     # Infra probes (#541): rendered into INFRA_PROBE_SPECS by platform/alerting.
-    # The http probe below only proves the MinIO process answers its liveness
-    # endpoint — no bucket, no credentials, no S3 API call. kind="s3"
-    # (infra2_sdk.runtime.s3, via libs/infra_probes.py) does a real `head_bucket`
+    # The http probe proves the S3 process answers its liveness endpoint.
+    # kind="s3" (infra2_sdk.runtime.s3, via libs/infra_probes.py) does a real `head_bucket`
     # through a dedicated, minimal-privilege monitoring key against one small
-    # healthcheck bucket — proves the S3 API path actually works, not just that
-    # the server process is up. Credentials come from the probe-runner's own
-    # vault secret (PROBE_S3_BUCKET/PROBE_S3_ACCESS_KEY/PROBE_S3_SECRET_KEY),
-    # never from this spec text. Kept alongside the http probe rather than
-    # replacing it: liveness and S3-API-reachability are genuinely different
-    # failure modes worth distinguishing in an alert.
+    # healthcheck bucket — proves the S3 API path actually works.
     probes = (
         ProbeFacet(
-            name="minio-internal-http",
+            name="s3-internal-http",
             kind="http",
-            target="http://platform-minio${ENV_SUFFIX}:9000/minio/health/live",
+            target="http://platform-s3${ENV_SUFFIX}:9000/minio/health/live",
             expected="200",
         ),
         ProbeFacet(
-            name="minio-s3-head-bucket",
+            name="s3-head-bucket",
             kind="s3",
-            target="http://platform-minio${ENV_SUFFIX}:9000",
+            target="http://platform-s3${ENV_SUFFIX}:9000",
         ),
     )
     # Signal classification (#425 T5 / #543): every probe above is a
-    # minute-tier alert debounced by the probe runner's shared loop —
-    # DEFAULT_FAILURE_THRESHOLD=3 / DEFAULT_RENOTIFY_SECONDS=0 (#903: no timer)
-    # (tools/infra_probe_runner.py). watchdog-signals entries derive from this
-    # (libs/watchdog_signal_entries.py); the values here must state what the
-    # runner actually does, not an aspiration.
+    # minute-tier alert debounced by the probe runner's shared loop
     signals = (
         SignalFacet(
             tier="minute",
@@ -91,28 +86,29 @@ class MinioDeployer(Deployer):
         ),
     )
 
-    # Vault self-refresh facts (#542): the audit inventory derives from this
-    # (AppRole auth per #257/#259).
+    # Vault self-refresh facts (#542): the audit inventory derives from this (AppRole auth).
     secrets = (
         SecretsFacet(
-            vault_agent_container="platform-minio-vault-agent${ENV_SUFFIX}",
-            app_containers=("platform-minio${ENV_SUFFIX}",),
+            vault_agent_container="platform-s3-vault-agent${ENV_SUFFIX}",
+            app_containers=("platform-s3${ENV_SUFFIX}",),
             auth_method="approle",
+            vault_path_template="secret/data/platform/{env}/minio",
         ),
     )
 
-    # Domain configuration for Dokploy (Console)
-    subdomain = "minio"  # minio.{INTERNAL_DOMAIN} -> Console
+    # Domain configuration for Dokploy: None because compose owns explicit Traefik routers (#941)
+    subdomain = None
 
     # Public route probed from inside (#543, #209 reversed).
     public_routes = (
         PublicRouteFacet(
-            name="minio-public-route",
+            name="s3-public-route",
+            subdomain="s3",
             path="/minio/health/live",
         ),
     )
-    service_port = 9001  # MinIO Console port
-    service_name = "minio"
+    service_port = 9000  # S3 API port
+    service_name = "s3"
 
     # 1Password item for root credentials
     OP_ITEM = "platform/minio/admin"
@@ -126,7 +122,7 @@ class MinioDeployer(Deployer):
 
         if not root_password:
             root_password = generate_password(32)
-            warning("Generated new MinIO root password")
+            warning("Generated new S3 root password")
 
         if not vault_secrets.set("root_user", root_user):
             error("Failed to store root_user in Vault")
@@ -137,6 +133,37 @@ class MinioDeployer(Deployer):
             error("Failed to store root_password in Vault")
             return False
         info("Vault: root_password stored")
+        return True
+
+    @classmethod
+    def _prepare_dirs(cls, c) -> bool:
+        """Create host data directory with appropriate ownership and permissions."""
+        e = cls.env()
+        on_host = cls._on_host(c, e)
+        if on_host is None:
+            return True
+
+        path = cls.data_path
+        uid = cls.uid
+        gid = cls.gid
+
+        result = on_host(f"mkdir -p {path}")
+        if not result.ok:
+            error(f"Failed to create directory {path}: {result.stderr}")
+            return False
+        success("Create directory")
+
+        result = on_host(f"chown -R {uid}:{gid} {path}")
+        if not result.ok:
+            error(f"Failed to set ownership on {path}: {result.stderr}")
+            return False
+        success("Set ownership")
+
+        result = on_host(f"chmod 755 {path}")
+        if not result.ok:
+            error(f"Failed to set permissions on {path}: {result.stderr}")
+            return False
+        success("Set permissions")
         return True
 
     @classmethod
@@ -176,30 +203,28 @@ class MinioDeployer(Deployer):
         env_vars("DOKPLOY ENV (vault-init)", result)
         success("pre_compose complete")
         domain_suffix = e.get("ENV_DOMAIN_SUFFIX", "")
-        info(
-            f"RustFS Console: https://rustfs{domain_suffix}.{e.get('INTERNAL_DOMAIN')}"
-        )
-        info(
-            f"MinIO Console (legacy): https://{cls.subdomain}{domain_suffix}.{e.get('INTERNAL_DOMAIN')}"
-        )
-        info(f"S3 API: https://s3{domain_suffix}.{e.get('INTERNAL_DOMAIN')}")
+        domain = e.get("INTERNAL_DOMAIN", "localhost")
+        info(f"S3 API: https://s3{domain_suffix}.{domain}")
+        info(f"S3 Console: https://s3-console{domain_suffix}.{domain}")
+        info(f"RustFS Console: https://rustfs{domain_suffix}.{domain}")
+        info(f"MinIO Console (legacy): https://minio{domain_suffix}.{domain}")
         info(f"Login: {root_user} / (password in 1Password)")
         return result
 
     @classmethod
     def composing(cls, c, env_vars: dict) -> str:
-        """Deploy via Dokploy API and sync dual domains."""
+        """Deploy via Dokploy API and sync domains."""
         # Call parent to deploy
         compose_id = super().composing(c, env_vars)
 
-        # Sync domains: rustfs/minio=Console(9001), s3=API(9000)
+        # Sync domains: s3=API(9000), s3-console/rustfs/minio=Console(9001)
         cls._sync_domains(compose_id)
 
         return compose_id
 
     @classmethod
     def _sync_domains(cls, compose_id: str):
-        """Ensure domains exist: rustfs/minio.{domain}=Console, s3.{domain}=API."""
+        """Ensure domains exist: s3.{domain}=API (9000), console domains=Console (9001)."""
         from libs.dokploy import get_dokploy
 
         e = cls.env()
@@ -214,24 +239,29 @@ class MinioDeployer(Deployer):
 
         desired_domains = [
             {
-                "host": f"rustfs{domain_suffix}.{domain}",
-                "port": 9001,
-                "https": True,
-            },  # RustFS Console
-            {
-                "host": f"minio{domain_suffix}.{domain}",
-                "port": 9001,
-                "https": True,
-            },  # Legacy MinIO Console
-            {
                 "host": f"s3{domain_suffix}.{domain}",
                 "port": 9000,
                 "https": True,
             },  # S3 API
+            {
+                "host": f"s3-console{domain_suffix}.{domain}",
+                "port": 9001,
+                "https": True,
+            },  # Generic S3 Console
+            {
+                "host": f"rustfs{domain_suffix}.{domain}",
+                "port": 9001,
+                "https": True,
+            },  # RustFS Console alias
+            {
+                "host": f"minio{domain_suffix}.{domain}",
+                "port": 9001,
+                "https": True,
+            },  # Legacy MinIO Console alias
         ]
 
         info(
-            f"Ensuring domains: rustfs/minio{domain_suffix}.{domain}->9001(Console), s3{domain_suffix}.{domain}->9000(API)"
+            f"Ensuring domains: s3{domain_suffix}.{domain}->9000(API), console domains->9001(Console)"
         )
         result = client.ensure_domains(
             compose_id=compose_id,
@@ -242,9 +272,9 @@ class MinioDeployer(Deployer):
         # Report results
         if result["conflicts"]:
             error("Domain conflicts detected! Please fix manually in Dokploy UI:")
-            for c in result["conflicts"]:
+            for item in result["conflicts"]:
                 warning(
-                    f"  {c['host']}: exists with port {c['existing_port']}, need port {c['desired_port']}"
+                    f"  {item['host']}: exists with port {item['existing_port']}, need port {item['desired_port']}"
                 )
 
         if result["errors"]:
@@ -313,8 +343,11 @@ class MinioDeployer(Deployer):
             return False
 
 
+# Backward compatibility class alias
+MinioDeployer = S3Deployer
+
 if shared_tasks:
-    _tasks = make_tasks(MinioDeployer, shared_tasks)
+    _tasks = make_tasks(S3Deployer, shared_tasks)
     status = _tasks["status"]
     pre_compose = _tasks["pre_compose"]
     composing = _tasks["composing"]

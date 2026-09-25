@@ -82,10 +82,10 @@ SERVICES: tuple[Service, ...] = (
         ("platform/02.redis/env.manifest.json",),
     ),
     Service(
-        "platform/03.minio",
+        "platform/03.s3",
         "platform",
         "minio",
-        ("platform/03.minio/env.manifest.json",),
+        ("platform/03.s3/env.manifest.json",),
     ),
     Service(
         "platform/10.authentik",

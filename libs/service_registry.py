@@ -68,6 +68,7 @@ _EXTERNAL_COMPONENT_IDS = {
     # infra/host: monitored, but not a deployable service
     "iac": "infra/iac",
     "iac-runner": "bootstrap/iac-runner",
+    "minio": "platform/s3",
     "vault": "bootstrap/vault",
 }
 

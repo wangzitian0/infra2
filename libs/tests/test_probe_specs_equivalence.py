@@ -138,7 +138,7 @@ def test_rendering_is_deterministic() -> None:
 def test_duplicate_probe_names_across_services_fail_closed() -> None:
     attrs = service_registry.service_attrs()
     dup = dict(attrs)
-    donor = dup["platform/minio"]
+    donor = dup["platform/s3"]
     from dataclasses import replace
 
     dup["platform/zz-dup"] = replace(

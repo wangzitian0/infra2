@@ -236,6 +236,7 @@ class SecretsFacet:
     min_token_ttl_hours: int = 48
     mount_exempt_containers: tuple[str, ...] = ()
     optional_inert_fields: tuple[str, ...] = ()
+    vault_path_template: str = ""
 
 
 @dataclass(frozen=True)

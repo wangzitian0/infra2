@@ -251,7 +251,8 @@ def _vault_service_from_facet(meta, facet) -> VaultService:
         compose_path=compose_path,
         vault_agent_config_path=f"{compose_dir}/vault-agent.hcl",
         secret_template_path=f"{compose_dir}/secrets.ctmpl",
-        vault_path_template=vault_path_template(meta.project, meta.service),
+        vault_path_template=facet.vault_path_template
+        or vault_path_template(meta.project, meta.service),
         vault_agent_container=facet.vault_agent_container,
         app_containers=tuple(facet.app_containers),
         vault_token_env_key=facet.vault_token_env_key,

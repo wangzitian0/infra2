@@ -499,10 +499,10 @@ def _audit_with(monkeypatch, edit) -> list[str]:
 
 def test_a_vps_route_entry_no_facet_renders_fails(monkeypatch) -> None:
     def ghost(signals):
-        signals["production.minio.public-route"]["signal"] = "ghost-public-route"
+        signals["production.s3.public-route"]["signal"] = "ghost-public-route"
 
     assert (
-        "VPS public-route signal production.minio.public-route is not rendered by "
+        "VPS public-route signal production.s3.public-route is not rendered by "
         "any PublicRouteFacet in production"
     ) in _audit_with(monkeypatch, ghost)
 
