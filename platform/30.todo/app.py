@@ -17,10 +17,13 @@ import json
 import os
 import socket
 import time
+import threading
 import urllib.parse
 import urllib.request
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from typing import Any, Dict, List
+
+_todos_lock = threading.Lock()
 
 # In-memory fallback if postgres is initializing or offline during probe
 _FALLBACK_TODOS: List[Dict[str, Any]] = [
@@ -298,13 +301,46 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 """
 
 
+def _probe_postgres(
+    host: str, port: int = 5432, timeout: float = 2.0
+) -> Dict[str, Any]:
+    """Test PostgreSQL server engine via wire protocol startup handshake."""
+    start = time.perf_counter()
+    try:
+        sock = socket.create_connection((host, port), timeout=timeout)
+        # PostgreSQL StartupMessage (v3.0): length(4B) + proto 3.0(4B) + user\0canary\0database\0canary\0\0
+        payload = b"\x00\x03\x00\x00user\x00canary\x00database\x00canary\x00\x00"
+        length = len(payload) + 4
+        sock.sendall(length.to_bytes(4, byteorder="big") + payload)
+        resp = sock.recv(1024)
+        sock.close()
+        elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
+        if resp and resp[0:1] in (b"R", b"E"):
+            detail = "PostgreSQL engine handshake verified"
+            if resp[0:1] == b"R":
+                detail += " (AuthRequest)"
+            return {"status": "pass", "latency_ms": elapsed_ms, "detail": detail}
+        return {
+            "status": "fail",
+            "latency_ms": elapsed_ms,
+            "detail": f"Unexpected server response: {resp[:20]!r}",
+        }
+    except Exception as exc:
+        elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
+        return {"status": "fail", "latency_ms": elapsed_ms, "detail": str(exc)}
+
+
 def _probe_tcp(host: str, port: int, timeout: float = 2.0) -> Dict[str, Any]:
     start = time.perf_counter()
     try:
         sock = socket.create_connection((host, port), timeout=timeout)
         sock.close()
         elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
-        return {"status": "pass", "latency_ms": elapsed_ms, "detail": f"Connected to {host}:{port}"}
+        return {
+            "status": "pass",
+            "latency_ms": elapsed_ms,
+            "detail": f"Connected to {host}:{port}",
+        }
     except Exception as exc:
         elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
         return {"status": "fail", "latency_ms": elapsed_ms, "detail": str(exc)}
@@ -313,30 +349,73 @@ def _probe_tcp(host: str, port: int, timeout: float = 2.0) -> Dict[str, Any]:
 def _probe_http(url: str, timeout: float = 3.0) -> Dict[str, Any]:
     start = time.perf_counter()
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "canary-todo-probe/1.0"})
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "canary-todo-probe/1.0"}
+        )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
             code = resp.getcode()
             if 200 <= code < 400:
-                return {"status": "pass", "latency_ms": elapsed_ms, "detail": f"HTTP {code}"}
-            return {"status": "fail", "latency_ms": elapsed_ms, "detail": f"HTTP {code}"}
+                return {
+                    "status": "pass",
+                    "latency_ms": elapsed_ms,
+                    "detail": f"HTTP {code}",
+                }
+            return {
+                "status": "fail",
+                "latency_ms": elapsed_ms,
+                "detail": f"HTTP {code}",
+            }
     except Exception as exc:
         elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
         return {"status": "fail", "latency_ms": elapsed_ms, "detail": str(exc)}
 
 
 def _probe_redis(host: str, port: int = 6379, timeout: float = 2.0) -> Dict[str, Any]:
-    """Test raw Redis RESP protocol over TCP socket (zero external dependency)."""
+    """Test raw Redis RESP protocol over TCP socket: ping and key read/write lifecycle."""
     start = time.perf_counter()
     try:
         sock = socket.create_connection((host, port), timeout=timeout)
+        # 1. PING -> +PONG
         sock.sendall(b"*1\r\n$4\r\nPING\r\n")
         response = sock.recv(1024)
+        if b"+PONG" not in response:
+            sock.close()
+            elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
+            return {
+                "status": "fail",
+                "latency_ms": elapsed_ms,
+                "detail": f"PING failed: {response!r}",
+            }
+        # 2. SETEX canary:ping 10 ok -> +OK
+        sock.sendall(
+            b"*4\r\n$5\r\nSETEX\r\n$11\r\ncanary:ping\r\n$2\r\n10\r\n$2\r\nok\r\n"
+        )
+        set_resp = sock.recv(1024)
+        if b"+OK" not in set_resp:
+            sock.close()
+            elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
+            return {
+                "status": "fail",
+                "latency_ms": elapsed_ms,
+                "detail": f"SETEX failed: {set_resp!r}",
+            }
+        # 3. GET canary:ping -> $2\r\nok\r\n
+        sock.sendall(b"*2\r\n$3\r\nGET\r\n$11\r\ncanary:ping\r\n")
+        get_resp = sock.recv(1024)
         sock.close()
         elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
-        if b"+PONG" in response:
-            return {"status": "pass", "latency_ms": elapsed_ms, "detail": "PONG (RESP protocol ok)"}
-        return {"status": "fail", "latency_ms": elapsed_ms, "detail": f"Unexpected reply: {response!r}"}
+        if b"ok" in get_resp:
+            return {
+                "status": "pass",
+                "latency_ms": elapsed_ms,
+                "detail": "PONG & SETEX/GET verified",
+            }
+        return {
+            "status": "fail",
+            "latency_ms": elapsed_ms,
+            "detail": f"GET unexpected: {get_resp!r}",
+        }
     except Exception as exc:
         elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
         return {"status": "fail", "latency_ms": elapsed_ms, "detail": str(exc)}
@@ -349,13 +428,21 @@ def run_all_checks() -> Dict[str, Any]:
     pg_port = int(os.environ.get("POSTGRES_PORT", "5432"))
     redis_host = os.environ.get("REDIS_HOST", f"platform-redis{suffix}")
     redis_port = int(os.environ.get("REDIS_PORT", "6379"))
-    minio_url = os.environ.get("MINIO_ENDPOINT", "http://platform-minio:9000/minio/health/live")
-    signoz_url = os.environ.get("SIGNOZ_OTEL_COLLECTOR", "http://platform-signoz-otel-collector:13133")
-    openpanel_url = os.environ.get("OPENPANEL_API_URL", "http://platform-openpanel-api:3000/healthcheck")
-    authentik_url = os.environ.get("AUTHENTIK_ENDPOINT", "http://platform-authentik-server:9000/-/health/live/")
+    minio_url = os.environ.get(
+        "MINIO_ENDPOINT", "http://platform-minio:9000/minio/health/live"
+    )
+    signoz_url = os.environ.get(
+        "SIGNOZ_OTEL_COLLECTOR", "http://platform-signoz-otel-collector:13133"
+    )
+    openpanel_url = os.environ.get(
+        "OPENPANEL_API_URL", "http://platform-openpanel-api:3000/healthcheck"
+    )
+    authentik_url = os.environ.get(
+        "AUTHENTIK_ENDPOINT", "http://platform-authentik-server:9000/-/health/live/"
+    )
 
     checks = {
-        "postgres": _probe_tcp(pg_host, pg_port),
+        "postgres": _probe_postgres(pg_host, pg_port),
         "redis": _probe_redis(redis_host, redis_port),
         "minio": _probe_http(minio_url),
         "signoz": _probe_http(signoz_url),
@@ -380,7 +467,9 @@ class TodoHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+        self.send_header(
+            "Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"
+        )
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
         self.wfile.write(body)
@@ -388,7 +477,9 @@ class TodoHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+        self.send_header(
+            "Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"
+        )
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
 
@@ -407,13 +498,16 @@ class TodoHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/health":
-            self._send_json(200, {
-                "ok": True,
-                "status": "healthy",
-                "service": "platform/todo",
-                "domain": "todo.zitian.party",
-                "uptime_seconds": round(time.time() - SERVER_START_TIME, 1)
-            })
+            self._send_json(
+                200,
+                {
+                    "ok": True,
+                    "status": "healthy",
+                    "service": "platform/todo",
+                    "domain": "todo.zitian.party",
+                    "uptime_seconds": round(time.time() - SERVER_START_TIME, 1),
+                },
+            )
             return
 
         if path == "/api/canary/status":
@@ -423,7 +517,9 @@ class TodoHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/todos":
-            self._send_json(200, _FALLBACK_TODOS)
+            with _todos_lock:
+                items = list(_FALLBACK_TODOS)
+            self._send_json(200, items)
             return
 
         self._send_json(404, {"error": "Not Found"})
@@ -432,16 +528,27 @@ class TodoHandler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path == "/api/todos":
             length = int(self.headers.get("Content-Length", 0))
-            payload = json.loads(self.rfile.read(length).decode("utf-8")) if length > 0 else {}
-            new_id = len(_FALLBACK_TODOS) + 1
-            item = {
-                "id": new_id,
-                "title": payload.get("title", f"Todo #{new_id}"),
-                "completed": False,
-                "capability": payload.get("capability", "postgres"),
-                "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            }
-            _FALLBACK_TODOS.append(item)
+            if length > 0:
+                try:
+                    payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as err:
+                    self._send_json(
+                        400, {"error": "Invalid JSON body", "detail": str(err)}
+                    )
+                    return
+            else:
+                payload = {}
+
+            with _todos_lock:
+                new_id = max((t["id"] for t in _FALLBACK_TODOS), default=0) + 1
+                item = {
+                    "id": new_id,
+                    "title": str(payload.get("title", f"Todo #{new_id}")).strip(),
+                    "completed": bool(payload.get("completed", False)),
+                    "capability": str(payload.get("capability", "general")),
+                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                }
+                _FALLBACK_TODOS.append(item)
             self._send_json(201, item)
             return
 
@@ -450,18 +557,26 @@ class TodoHandler(BaseHTTPRequestHandler):
     def do_PUT(self):
         parsed = urllib.parse.urlparse(self.path)
         parts = parsed.path.strip("/").split("/")
-        if len(parts) == 4 and parts[0] == "api" and parts[1] == "todos" and parts[3] == "toggle":
+        if (
+            len(parts) == 4
+            and parts[0] == "api"
+            and parts[1] == "todos"
+            and parts[3] == "toggle"
+        ):
             try:
                 todo_id = int(parts[2])
+            except ValueError:
+                self._send_json(400, {"error": "Invalid todo ID"})
+                return
+
+            with _todos_lock:
                 for t in _FALLBACK_TODOS:
                     if t["id"] == todo_id:
                         t["completed"] = not t["completed"]
                         self._send_json(200, t)
                         return
-                self._send_json(404, {"error": "Todo not found"})
-                return
-            except ValueError:
-                pass
+            self._send_json(404, {"error": "Todo not found"})
+            return
 
         self._send_json(404, {"error": "Not Found"})
 
@@ -471,12 +586,20 @@ class TodoHandler(BaseHTTPRequestHandler):
         if len(parts) == 3 and parts[0] == "api" and parts[1] == "todos":
             try:
                 todo_id = int(parts[2])
-                global _FALLBACK_TODOS
-                _FALLBACK_TODOS = [t for t in _FALLBACK_TODOS if t["id"] != todo_id]
-                self._send_json(200, {"ok": True, "deleted_id": todo_id})
-                return
             except ValueError:
-                pass
+                self._send_json(400, {"error": "Invalid todo ID"})
+                return
+
+            with _todos_lock:
+                for idx, t in enumerate(_FALLBACK_TODOS):
+                    if t["id"] == todo_id:
+                        removed = _FALLBACK_TODOS.pop(idx)
+                        self._send_json(
+                            200, {"ok": True, "deleted_id": todo_id, "item": removed}
+                        )
+                        return
+            self._send_json(404, {"error": "Todo not found"})
+            return
 
         self._send_json(404, {"error": "Not Found"})
 
@@ -486,8 +609,10 @@ SERVER_START_TIME = time.time()
 
 def main():
     port = int(os.environ.get("PORT", "8000"))
-    server = HTTPServer(("0.0.0.0", port), TodoHandler)
-    print(f"Canary Todo service running at http://0.0.0.0:{port} (target domain: todo.zitian.party)")
+    server = ThreadingHTTPServer(("0.0.0.0", port), TodoHandler)
+    print(
+        f"Canary Todo service running at http://0.0.0.0:{port} (target domain: todo.zitian.party)"
+    )
     try:
         server.serve_forever()
     except KeyboardInterrupt:
