@@ -2,12 +2,13 @@
   "adapter": "rules-v2",
   "dirty_inputs": [],
   "inputs": {
-    "repo": "b1896bf315cf84a4e37a14aca8036feb68107523c0bc38a646a419fa379e09d6",
-    "root": "f73b8ab7dfd7a7901c5264c7694f32562f780d7fb4a5efc19f51dcee1f071259"
+    "repo": "7130b62781078d23e8469bbb8eed17a930247ad3dba8e8b1234c0844edffb8bf",
+    "root": "f73b8ab7dfd7a7901c5264c7694f32562f780d7fb4a5efc19f51dcee1f071259",
+    "skills": "ef5bb7c8fdc59dfafd856c6e3f57fe3813b83e90d69391b5cba036531ef9d7d0"
   },
   "language": "en",
   "outputs": {
-    "AGENTS.md": "750156b640493b4950dc93ea4c6e1367415ac86796adc67cd02fc7b52956477b",
+    "AGENTS.md": "a1e0da2afb4754b82318aa81b34acdb875672c7ab5df4ad60925a17683221b51",
     "CLAUDE.md": "a54ff182c7e8acf56acfd6e4b9c3ff41e2c41a31c9b211b2deb9df75d9a478f9"
   },
   "profiles": [
@@ -16,7 +17,21 @@
     "runtime"
   ],
   "schema": 2,
-  "source_revision": "ff1ac2f805e20c565bd4b1ab09bfa144a1eec736",
+  "skills": {
+    "files": {
+      "skills/deploy-evidence/SKILL.md": "84a8d20aa69136ee2d0cab6dab0ae5e123cc8ff2792927ee90791afe128abd1c"
+    },
+    "link_dirs": [
+      ".claude/skills",
+      ".agents/skills"
+    ],
+    "links": {
+      ".agents/skills/deploy-evidence": "../../skills/deploy-evidence",
+      ".claude/skills/deploy-evidence": "../../skills/deploy-evidence"
+    },
+    "root": "skills"
+  },
+  "source_revision": "c3b93409ada99e56179ab24975023aadb52bd2e7",
   "target": {
     "remote": "github.com/wangzitian0/infra2",
     "repo": "infra2",
