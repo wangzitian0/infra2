@@ -15,6 +15,7 @@ via :func:`libs.alerting.build_signoz_log_alert_rule_payload`. The apply path
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,7 @@ class LogErrorAlertDefinition:
     environment: str
     severity: str = "error"
     threshold: int = 0
+    match_type: str = "at_least_once"
     eval_window: str = "5m0s"
     frequency: str = "1m"
 
@@ -68,6 +70,7 @@ class LogErrorAlertDefinition:
             summary=self.summary,
             severity=self.severity,
             threshold=self.threshold,
+            match_type=self.match_type,
             eval_window=self.eval_window,
             frequency=self.frequency,
             service_id=self.service_id,
@@ -165,11 +168,20 @@ def load_alert_definitions(
                 f"Duplicate alert_name '{alert_name}' in {path}"
             )
         seen.add(alert_name)
+        if "alert_on_absent" in raw:
+            raise ObservabilityDefinitionError(
+                f"Alert '{alert_name}' sets alert_on_absent in {path}: SigNoz ignores "
+                "it on PromQL rules, and an error-log count has no data when healthy. "
+                "Express 'no data is an outage' in the query with absent_over_time()."
+            )
         raw_threshold = raw.get("threshold", 0)
         if signal == "metrics":
             summary = _required_text(raw.get("summary"), "summary", alert_name, path)
             promql = _required_text(raw.get("promql"), "promql", alert_name, path)
             threshold = _float_threshold(raw_threshold, alert_name, path)
+            match_type = str(raw.get("match_type") or "at_least_once")
+            _require_dotted_metric_selectors(promql, alert_name, path)
+            _reject_in_total_over_range_vectors(promql, match_type, alert_name, path)
             _require_alert_identity(service_id, environment, path)
             definitions.append(
                 MetricAlertDefinition(
@@ -182,7 +194,7 @@ def load_alert_definitions(
                     threshold=threshold,
                     threshold_unit=str(raw.get("threshold_unit") or ""),
                     op=str(raw.get("op") or "above"),
-                    match_type=str(raw.get("match_type") or "at_least_once"),
+                    match_type=match_type,
                     eval_window=str(raw.get("eval_window") or "5m0s"),
                     frequency=str(raw.get("frequency") or "1m"),
                     service_name=service_name,
@@ -217,11 +229,56 @@ def load_alert_definitions(
                 environment=environment,
                 severity=str(raw.get("severity") or "error"),
                 threshold=threshold,
+                match_type=str(raw.get("match_type") or "at_least_once"),
                 eval_window=str(raw.get("eval_window") or "5m0s"),
                 frequency=str(raw.get("frequency") or "1m"),
             )
         )
     return definitions
+
+
+# A PromQL string literal, and a bare (unquoted) metric selector such as `foo_bar{`.
+_PROMQL_STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
+_BARE_METRIC_SELECTOR = re.compile(r"[A-Za-z_:][A-Za-z0-9_:]*\s*\{")
+# A range selector (`[5m]`) or subquery (`[5m:1m]`): one value covers a whole window.
+_RANGE_SELECTOR = re.compile(r"\[\s*\d+(?:ms|[smhdwy])")
+
+
+def _require_dotted_metric_selectors(promql: str, alert_name: str, path: Path) -> None:
+    """Reject the Prometheus-normalized selector form (`http_server_request_count{`).
+
+    SigNoz runs with DOT_METRICS_ENABLED (platform/11.signoz/compose.yaml) and the
+    collector stores OTel metrics under their own dotted names, so its PromQL adapter
+    matches `metric_name` and label keys exactly as written. A normalized name matches
+    no series: the rule is accepted, evaluates to nothing, and can never fire (#906).
+    The only form that reaches the data is `{"http.server.request.count", "service.name"="…"}`.
+    """
+    unquoted = _PROMQL_STRING.sub('""', promql)
+    bare = _BARE_METRIC_SELECTOR.search(unquoted)
+    if bare:
+        raise ObservabilityDefinitionError(
+            f"Alert '{alert_name}' in {path} selects a metric by bare name "
+            f"({bare.group(0).rstrip('{').strip()!r}); SigNoz stores OTel metrics under "
+            'dotted names, so write the selector as {"metric.name", "label.key"="value"}.'
+        )
+
+
+def _reject_in_total_over_range_vectors(
+    promql: str, match_type: str, alert_name: str, path: Path
+) -> None:
+    """Reject ``in_total`` on a query whose points each cover a trailing window.
+
+    SigNoz evaluates a PromQL rule as a range query with a 60 s step and ``in_total``
+    sums every point. When each point is already ``increase(x[15m])`` the windows
+    overlap, so one event is counted once per step it stays inside the window: a
+    single failure summed to ~15 against a threshold of 3 (#906).
+    """
+    if match_type == "in_total" and _RANGE_SELECTOR.search(promql):
+        raise ObservabilityDefinitionError(
+            f"Alert '{alert_name}' in {path} uses match_type in_total on a range "
+            "vector: SigNoz sums every 60s step, and each step already covers the "
+            "whole window. Compare the windowed value with at_least_once instead."
+        )
 
 
 def _require_alert_identity(service_id: str, environment: str, path: Path) -> None:
