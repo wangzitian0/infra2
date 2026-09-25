@@ -271,11 +271,21 @@ Safety rules:
   `SELECT count(*) >= 1 FROM pg_database`, table count assertions, and domain
   row count checks (e.g. `SELECT count(*) FROM accounts`, `alembic_version`).
 
-Recommended schedule after the rehearsal target is provisioned:
+Schedule, as installed in root's crontab on the host (#892):
 
 ```cron
-15 4 * * 0 BACKUP_REMOTE=gdrive-backup:infra2 python3 /infra2/tools/run_restore_rehearsal.py >> /var/log/infra2-backup-restore-rehearsal.log 2>&1
+15 4 * * 0 cd /opt/infra2 && git pull -q origin main && PYTHONPATH=. python3 tools/run_restore_rehearsal.py --service-id all >> /var/log/infra2-backup-restore-rehearsal.log 2>&1
 ```
+
+The out-of-band watchdog signal `infra2-restore-rehearsal` reads the last lines of
+that log and holds them to the backup RPO bound (180h). While the log does not
+exist yet, it reads root's crontab instead (#926):
+
+- If no uncommented entry writes that log, the rehearsal is not scheduled and the signal is red.
+- If the crontab was last written within the bound, the first rehearsal is not yet due and the signal is green, saying so.
+- If the crontab was last written earlier than the bound, the rehearsal has never run and the signal is red.
+
+Until the first run writes the log, any crontab edit restarts that clock. After the first run, only the log's age counts.
 
 ### SOP-006B: VPS 全灭后的整机恢复演练与 RTO 计时
 
