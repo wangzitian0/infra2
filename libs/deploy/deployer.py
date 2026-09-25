@@ -39,6 +39,7 @@ from libs.service_facets import (
 
 if TYPE_CHECKING:
     from invoke import Context
+    from libs.dokploy import DokployClient
 
 
 __all__ = ["Deployer", "make_tasks", "discover_services", "load_deployer_class"]
@@ -447,6 +448,7 @@ class Deployer:
 
     # Domain configuration (optional)
     subdomain: str = None  # e.g., "sso" for sso.{INTERNAL_DOMAIN}
+    route_preference: Any = None  # Optional infra2_sdk.routing.AppRoutePreference
     # Override the shared INTERNAL_DOMAIN entirely for this service (e.g. a dedicated
     # product domain instead of the platform's shared one). None = use whatever domain
     # the deploy request/caller passes in (today's behavior for every existing service).
@@ -933,40 +935,80 @@ class Deployer:
         # deploy=True performs the first credentialed deployment.
         cls._assert_approle_creds_present(effective_env)
 
+        # Configure domains BEFORE deploying compose so Dokploy includes domain
+        # labels in a single pass (avoiding an expensive second redeploy).
+        cls.ensure_compose_domains(client, compose_id, e)
+
         info(f"Deploying compose {compose_id}...")
         cls._deploy_compose_with_record_check(client, compose_id)
 
-        # Configure domain if specified
-        if cls.subdomain and cls.service_port:
-            domain_host = service_domain(cls.subdomain, e)
-            if not domain_host:
-                warning("Domain configuration skipped: INTERNAL_DOMAIN missing")
-            else:
-                info(f"Ensuring domain: {domain_host}")
-                desired_domains = [
-                    {"host": domain_host, "port": cls.service_port, "https": True}
-                ]
+        success(f"Deployed {cls.service} (composeId: {compose_id})")
+        return compose_id
+
+    @classmethod
+    def ensure_compose_domains(
+        cls, client: DokployClient, compose_id: str, e: dict[str, str]
+    ) -> dict:
+        """Ensure Dokploy-managed domains are configured BEFORE compose deployment.
+
+        Configuring domains before running ``_deploy_compose_with_record_check`` ensures
+        Dokploy includes the domain routing in the compose startup in a single pass,
+        eliminating the redundant second redeploy.
+        """
+        route_pref = getattr(cls, "route_preference", None)
+        if route_pref is not None:
+            from dataclasses import asdict
+            from infra2_sdk.routing import resolve_dokploy_domains
+
+            effective_env = e.get("ENV", "production")
+            domain = e.get("INTERNAL_DOMAIN", "zitian.party")
+            specs = resolve_dokploy_domains(
+                route_pref, tier=effective_env, base_domain=domain
+            )
+            desired_domains = [asdict(s) for s in specs]
+            if desired_domains:
+                for d in desired_domains:
+                    info(f"Ensuring domain: https://{d['host']}{d.get('path', '')}")
                 result = client.ensure_domains(
                     compose_id=compose_id,
                     desired_domains=desired_domains,
-                    service_name=cls.service_name,
                 )
-                if result["created"] > 0:
-                    success(f"Domain configured: https://{domain_host}")
-                    # Redeploy to apply domain labels
-                    info("Redeploying to apply domain labels...")
-                    cls._deploy_compose_with_record_check(client, compose_id)
-                    success("Domain labels updated")
-                elif result["skipped"] > 0:
-                    info(f"Domain already configured: {domain_host}")
-                if result["conflicts"]:
+                if result.get("created", 0) > 0:
+                    success(f"Configured {result['created']} domain(s) in Dokploy")
+                if result.get("conflicts"):
                     for c in result["conflicts"]:
                         warning(
                             f"Domain conflict: {c['host']} exists with port {c['existing_port']}, need {c['desired_port']}"
                         )
+                return result
 
-        success(f"Deployed {cls.service} (composeId: {compose_id})")
-        return compose_id
+        if cls.subdomain and cls.service_port:
+            domain_host = service_domain(cls.subdomain, e)
+            if not domain_host:
+                warning("Domain configuration skipped: INTERNAL_DOMAIN missing")
+                return {"created": 0, "skipped": 0, "conflicts": [], "errors": []}
+
+            info(f"Ensuring domain: {domain_host}")
+            desired_domains = [
+                {"host": domain_host, "port": cls.service_port, "https": True}
+            ]
+            result = client.ensure_domains(
+                compose_id=compose_id,
+                desired_domains=desired_domains,
+                service_name=cls.service_name,
+            )
+            if result.get("created", 0) > 0:
+                success(f"Domain configured: https://{domain_host}")
+            elif result.get("skipped", 0) > 0:
+                info(f"Domain already configured: {domain_host}")
+            if result.get("conflicts"):
+                for c in result["conflicts"]:
+                    warning(
+                        f"Domain conflict: {c['host']} exists with port {c['existing_port']}, need {c['desired_port']}"
+                    )
+            return result
+
+        return {"created": 0, "skipped": 0, "conflicts": [], "errors": []}
 
     @classmethod
     def _checkout_ref(cls) -> str | None:

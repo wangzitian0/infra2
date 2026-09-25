@@ -32,6 +32,7 @@ MUST_IMPORT_WITHOUT_SDK = [
     "tools.out_of_band_watchdog",
     "libs.container_breakdown",
     "libs.secrets_registry",
+    "libs.image_pins",
 ]
 
 # **实测既有缺陷，不在本表** —— 记在这里而不是静默删掉，因为「名单里没有」和

@@ -57,8 +57,8 @@ from libs.deploy_env_config import (  # noqa: E402
 _PREVIEW_CONFIG = preview_service_config("finance_report/app")
 PREVIEW_PROJECT = _PREVIEW_CONFIG.project
 
-# The bare main-tip preview that the current model always wants up.
-ALWAYS_KEEP_ALIASES = frozenset({"branch-main"})
+# The bare main-tip preview and canary preview that are never treated as leaks.
+ALWAYS_KEEP_ALIASES = frozenset({"branch-main", "canary-preview"})
 # The reserved canary slot (deploy_v2_canary stands it up/tears it down hourly);
 # never reap it even when PR 999 is obviously not "open".
 CANARY_ALIAS = f"pr-{CANARY_PR}"

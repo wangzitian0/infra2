@@ -13,19 +13,14 @@ import re
 _IMAGE_RE = re.compile(r"^\s*image:\s*(\S+)\s*$")
 
 
-def _tag_of(ref: str) -> str:
+def _tag_of_fallback(ref: str) -> str:
     """The tag of an image ref, or '' if untagged. Ignores a registry:port colon."""
     last = ref.rsplit("/", 1)[-1]
     return last.rsplit(":", 1)[-1] if ":" in last else ""
 
 
-def bare_latest_violations(compose_text: str) -> list[str]:
-    """Image refs that use a bare ``:latest`` tag with no digest.
-
-    Allowed (skipped): digest-pinned refs (``...@sha256:...``) and
-    variable-templated refs (``${IMAGE_TAG}`` etc. — app images carry their own
-    promote-not-rebuild discipline).
-    """
+def _bare_latest_violations_fallback(compose_text: str) -> list[str]:
+    """Image refs that use a bare ``:latest`` tag with no digest."""
     violations: list[str] = []
     for line in compose_text.splitlines():
         match = _IMAGE_RE.match(line)
@@ -37,3 +32,21 @@ def bare_latest_violations(compose_text: str) -> list[str]:
         if _tag_of(ref) == "latest":
             violations.append(ref)
     return violations
+
+
+try:
+    from infra2_sdk.rules.compose import (
+        find_bare_latest_violations as bare_latest_violations,
+        tag_of_image_ref as _tag_of,
+    )
+except ImportError as exc:
+    name = getattr(exc, "name", None)
+    if name is not None and name != "infra2_sdk" and not name.startswith("infra2_sdk."):
+        raise
+    if name is None and "infra2_sdk" not in str(exc):
+        raise
+    _tag_of = _tag_of_fallback
+    bare_latest_violations = _bare_latest_violations_fallback
+
+__all__ = ["bare_latest_violations", "_tag_of"]
+

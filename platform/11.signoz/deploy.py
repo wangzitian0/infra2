@@ -255,33 +255,22 @@ class SigNozDeployer(Deployer):
         return result
 
     @classmethod
-    def composing(cls, c, env_vars):
-        """Deploy via the base flow, then register the SECOND Dokploy-managed domain.
+    @classmethod
+    def ensure_compose_domains(cls, client, compose_id: str, e: dict) -> dict:
+        """Register both SigNoz Web UI domain and OTLP ingest domain BEFORE compose deploy.
 
-        The base composing() registers ONE domain (signoz.<domain> → signoz:8080) from
+        The base ensure_compose_domains() registers ONE domain (signoz.<domain> → signoz:8080) from
         cls.subdomain/service_port/service_name. The public browser-OTLP ingest needs a
         second domain on the same compose (otel.<domain> → otel-collector:4318), so we
-        add an extra ensure_domains() call here. This keeps routing Dokploy-managed (no
-        hand-written Traefik labels) and is idempotent — ensure_domains skips domains
-        that already exist.
+        add an extra ensure_domains() call here. Configuring both BEFORE the compose deploy
+        keeps routing Dokploy-managed and avoids any redundant redeploy.
         """
-        e = cls.env()
-        # #372: ship the collector config to the host BEFORE the (re)deploy so
-        # `sync`/redeploys actually apply config changes (the container mounts it
-        # read-only; sync skips pre_compose, so deliver it here too).
-        if not cls._deliver_collector_config(c, e):
-            raise RuntimeError("Failed to deliver otel-collector config to host")
-        compose_id = super().composing(c, env_vars)
+        res = super().ensure_compose_domains(client, compose_id, e)
 
         otel_host = service_domain(cls.otel_ingest_subdomain, e)
         if not otel_host:
             warning("OTLP ingest domain skipped: INTERNAL_DOMAIN missing")
-            return compose_id
-
-        from libs.dokploy import get_dokploy
-
-        domain = e.get("INTERNAL_DOMAIN")
-        client = get_dokploy(host=f"cloud.{domain}" if domain else None)
+            return res
 
         info(f"Ensuring OTLP ingest domain: {otel_host}")
         result = client.ensure_domains(
@@ -293,9 +282,6 @@ class SigNozDeployer(Deployer):
         )
         if result["created"] > 0:
             success(f"OTLP ingest domain configured: https://{otel_host}")
-            info("Redeploying to apply domain labels...")
-            cls._deploy_compose_with_record_check(client, compose_id)
-            success("OTLP ingest domain labels updated")
         elif result["skipped"] > 0:
             info(f"OTLP ingest domain already configured: {otel_host}")
         for conflict in result["conflicts"]:
@@ -315,7 +301,18 @@ class SigNozDeployer(Deployer):
                 f"{len(errors)} error(s) — see log above."
             )
 
-        return compose_id
+        return result
+
+    @classmethod
+    def composing(cls, c, env_vars):
+        """Deploy SigNoz with collector config delivered and both domains ensured."""
+        e = cls.env()
+        # #372: ship the collector config to the host BEFORE the deploy so
+        # `sync`/redeploys actually apply config changes (the container mounts it
+        # read-only; sync skips pre_compose, so deliver it here too).
+        if not cls._deliver_collector_config(c, e):
+            raise RuntimeError("Failed to deliver otel-collector config to host")
+        return super().composing(c, env_vars)
 
 
 if shared_tasks:

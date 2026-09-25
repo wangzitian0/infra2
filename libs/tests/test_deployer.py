@@ -1395,3 +1395,129 @@ def test_config_hash_counts_a_value_that_became_empty() -> None:
     assert (
         _compute_config_hash("x: 1", {"B": "2", "A": "1"}) == with_value
     )  # order-blind
+
+
+def test_ensure_compose_domains_configures_subdomain_before_deploy():
+    from libs.deploy.deployer import Deployer
+
+    class DemoDeployer(Deployer):
+        service = "demo"
+        subdomain = "demo"
+        service_port = 8080
+        service_name = "web"
+
+    client = MagicMock()
+    client.ensure_domains.return_value = {
+        "created": 1,
+        "skipped": 0,
+        "conflicts": [],
+        "errors": [],
+    }
+
+    env_map = {"INTERNAL_DOMAIN": "test.party", "ENV": "staging"}
+    res = DemoDeployer.ensure_compose_domains(client, "cmp-123", env_map)
+
+    assert res["created"] == 1
+    client.ensure_domains.assert_called_once_with(
+        compose_id="cmp-123",
+        desired_domains=[
+            {"host": "demo-staging.test.party", "port": 8080, "https": True}
+        ],
+        service_name="web",
+    )
+
+
+def test_ensure_compose_domains_with_route_preference():
+    from libs.deploy.deployer import Deployer
+    from infra2_sdk.routing import AppRoutePreference, RouteEndpoint
+
+    class AppDeployerWithPref(Deployer):
+        service = "my-app"
+        route_preference = AppRoutePreference(
+            slug="my-app",
+            endpoints=[
+                RouteEndpoint(service_name="frontend", port=3000),
+                RouteEndpoint(service_name="backend", port=8000, path="/api"),
+            ],
+        )
+
+    client = MagicMock()
+    client.ensure_domains.return_value = {
+        "created": 2,
+        "skipped": 0,
+        "conflicts": [],
+        "errors": [],
+    }
+
+    env_map = {"INTERNAL_DOMAIN": "test.party", "ENV": "prod"}
+    res = AppDeployerWithPref.ensure_compose_domains(client, "cmp-456", env_map)
+
+    assert res["created"] == 2
+    client.ensure_domains.assert_called_once_with(
+        compose_id="cmp-456",
+        desired_domains=[
+            {
+                "host": "my-app.test.party",
+                "port": 3000,
+                "path": "/",
+                "service_name": "frontend",
+                "https": True,
+            },
+            {
+                "host": "my-app.test.party",
+                "port": 8000,
+                "path": "/api",
+                "service_name": "backend",
+                "https": True,
+            },
+        ],
+    )
+
+
+def test_composing_ensures_domains_before_single_deploy(monkeypatch):
+    from libs.deploy.deployer import Deployer
+
+    order = []
+
+    class OrderDeployer(Deployer):
+        service = "order-test"
+        subdomain = "order"
+        service_port = 8080
+
+        @classmethod
+        def ensure_compose_domains(cls, client, compose_id, e):
+            order.append("ensure_domains")
+            return {"created": 1, "skipped": 0, "conflicts": [], "errors": []}
+
+        @classmethod
+        def _deploy_compose_with_record_check(cls, client, compose_id):
+            order.append("deploy_compose")
+
+        @classmethod
+        def effective_env_name(cls, e):
+            return "prod"
+
+        @classmethod
+        def env(cls):
+            return {"INTERNAL_DOMAIN": "test.party"}
+
+        @classmethod
+        def _assert_approle_creds_present(cls, env):
+            pass
+
+    client = MagicMock()
+    client.find_compose_by_name.return_value = {"composeId": "cmp-order"}
+    client.get_compose_env.return_value = ""
+
+    monkeypatch.setattr(
+        "libs.dokploy.ensure_project",
+        lambda *args, **kwargs: ("proj-1", "env-1"),
+    )
+    monkeypatch.setattr(
+        "libs.dokploy.get_dokploy",
+        lambda *args, **kwargs: client,
+    )
+
+    OrderDeployer.composing(MagicMock(), {"INTERNAL_DOMAIN": "test.party"})
+
+    assert order == ["ensure_domains", "deploy_compose"]
