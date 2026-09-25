@@ -4,7 +4,7 @@
 # - truealpha/10.app/provision_bucket.sh (docker exec platform-minio mc ...)
 FROM minio/mc:RELEASE.2025-04-16T18-13-29Z AS mc-source
 
-FROM rustfs/rustfs:latest
+FROM rustfs/rustfs:1.0.0
 
 USER root
 COPY --from=mc-source /usr/bin/mc /usr/local/bin/mc
