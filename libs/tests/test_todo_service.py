@@ -369,22 +369,24 @@ def test_probe_redis_authenticated_lifecycle() -> None:
         srv.close()
 
 
-def test_prepare_dirs_noop_on_empty_data_path() -> None:
+def test_prepare_dirs_noop_on_empty_data_path(monkeypatch) -> None:
     """Verify _prepare_dirs returns True without calling ssh when data_path is empty."""
-    from libs.deploy.deployer import Deployer
+    import libs.deploy.deployer as d
+    from unittest.mock import MagicMock
 
-    class DummyStatelessDeployer(Deployer):
+    cmds: list[str] = []
+    monkeypatch.setattr(d, "validate_env", lambda: [])
+    monkeypatch.setattr(d, "run_with_status", lambda c, cmd, label: cmds.append(cmd))
+
+    class DummyStatelessDeployer(d.Deployer):
         service = "stateless-dummy"
         data_path = ""
 
-    calls = []
+        @classmethod
+        def env(cls):
+            return {"ENV": "production", "VPS_HOST": "vps"}
 
-    class DummyContext:
-        def run(self, cmd, **kwargs):
-            calls.append(cmd)
-
-    ctx = DummyContext()
-    result = DummyStatelessDeployer._prepare_dirs(ctx)
+    result = DummyStatelessDeployer._prepare_dirs(MagicMock())
     assert result is True
-    assert len(calls) == 0
+    assert len(cmds) == 0
 
