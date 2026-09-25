@@ -34,8 +34,8 @@ env:
 
 # Job shape (truealpha#860). A job pays its own runner, checkout and install (~17 s), so
 # each job below exists for one reason only:
-#   - preflight_canary is its own job because the deploy-v2-canary concurrency group can
-#     only be held by a whole job, and it must cover the canary alone, not the promote.
+#   - preflight_canary is its own job because the pr-999 canary lock can only be
+#     held by a whole job, and it must cover the canary alone, not the promote.
 #     It runs for production requests only (DeployPlan.requires_preflight_canary).
 #   - deploy validates and executes in one job. A staging request runs this job alone.
 # Credentials are scoped per step, not per job: every job validates the request in a step
@@ -54,7 +54,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
-      group: deploy-v2-canary
+      group: deploy-v2-canary-pr-999
+      queue: max
       cancel-in-progress: false
     outputs:
       iac_ref: ${{ steps.plan.outputs.iac_ref }}

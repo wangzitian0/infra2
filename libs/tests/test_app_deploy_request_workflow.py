@@ -56,7 +56,8 @@ def test_the_canary_lock_covers_the_canary_and_not_the_promote() -> None:
     definition = workflow()
     jobs = definition["jobs"]
     assert jobs["preflight_canary"]["concurrency"] == {
-        "group": "deploy-v2-canary",
+        "group": "deploy-v2-canary-pr-999",
+        "queue": "max",
         "cancel-in-progress": "false",
     }
     assert "concurrency" not in jobs["deploy"]
