@@ -39,8 +39,11 @@ try:
         find_bare_latest_violations as bare_latest_violations,
         tag_of_image_ref as _tag_of,
     )
-except ModuleNotFoundError as exc:
-    if exc.name not in ("infra2_sdk", None) and not exc.name.startswith("infra2_sdk."):
+except ImportError as exc:
+    name = getattr(exc, "name", None)
+    if name is not None and name != "infra2_sdk" and not name.startswith("infra2_sdk."):
+        raise
+    if name is None and "infra2_sdk" not in str(exc):
         raise
     _tag_of = _tag_of_fallback
     bare_latest_violations = _bare_latest_violations_fallback
