@@ -47,6 +47,7 @@ from libs.security import (
 # 1. libs.core Tests
 # ==========================================
 
+
 def test_core_service_entity_properties() -> None:
     """Test Service domain entity constructor and derived properties."""
     svc = Service(
@@ -112,6 +113,7 @@ def test_core_environment_handling() -> None:
 # 2. libs.security Tests
 # ==========================================
 
+
 def test_security_secret_token_generation() -> None:
     """S-01: Verify token generation uniqueness, length, and entropy."""
     t1 = generate_secret_token(32)
@@ -146,6 +148,7 @@ def test_security_interfaces_exposed() -> None:
 # 3. libs.backup Tests
 # ==========================================
 
+
 def test_backup_inventory_and_rehearsal_spec() -> None:
     """B-01: Verify backup inventory and rehearsal specification."""
     inventory = load_backup_inventory()
@@ -172,6 +175,7 @@ def test_backup_inventory_and_rehearsal_spec() -> None:
 # 4. libs.observability Tests
 # ==========================================
 
+
 def test_observability_breakdown_analysis() -> None:
     """O-01: Verify container log analysis returns categorized verdicts."""
     log_sample = "2026-09-23 ERROR: connection refused to host platform-postgres:5432"
@@ -181,7 +185,7 @@ def test_observability_breakdown_analysis() -> None:
 
     vault_log = "Error: VAULT_ROLE_ID and VAULT_SECRET_ID are required to authenticate"
     vault_verdict = analyze_container_logs("vault-agent", vault_log)
-    assert "vault approle creds missing" in vault_verdict.cause.lower()
+    assert "vault approle 凭据缺失" in vault_verdict.cause.lower()
 
 
 def test_observability_watcher_and_trail_aliases() -> None:
@@ -195,6 +199,7 @@ def test_observability_watcher_and_trail_aliases() -> None:
 # ==========================================
 # 5. Compatibility Shims Tests
 # ==========================================
+
 
 def test_backward_compatibility_shims() -> None:
     """Verify all re-exports in legacy modules work identically."""
@@ -256,7 +261,9 @@ def test_truealpha_deploy_s3_fails_closed(monkeypatch) -> None:
         "S3_ACCESS_KEY": "test-key",
         "S3_SECRET_KEY": "test-secret",
     }.get(k)
-    monkeypatch.setattr(AppDeployer, "secrets_backend", classmethod(lambda cls, env=None: mock_backend))
+    monkeypatch.setattr(
+        AppDeployer, "secrets_backend", classmethod(lambda cls, env=None: mock_backend)
+    )
 
     def broken_ensure_bucket(*args, **kwargs):
         raise ConnectionRefusedError("MinIO connection failed")
@@ -265,5 +272,3 @@ def test_truealpha_deploy_s3_fails_closed(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="unreachable; failing deploy closed"):
         AppDeployer._ensure_minio_bucket(MagicMock())
-
-

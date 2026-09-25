@@ -124,9 +124,10 @@ def test_alertmanager_payload_is_rendered_as_feishu_text() -> None:
     }
 
     text = format_signoz_alert(payload)
-    assert "[FIRING] ExampleBackendDown" in text
-    assert "Severity: critical" in text
-    assert "example-backend" in text
+    assert text.splitlines()[0] == "🔴 [P0 告警] ExampleBackendDown · 1 项"
+    assert "级别：P0" in text.splitlines()
+    assert "对象：example-backend" in text.splitlines()
+    assert "现象：GET /api/health returned 503" in text.splitlines()
 
     feishu_payload = build_feishu_text_payload(text)
     assert feishu_payload == {"msg_type": "text", "content": {"text": text}}
@@ -145,11 +146,12 @@ def test_p0_alerts_link_to_existing_runbook_in_text_and_card(
     payload = _sample_alert_payload(
         commonLabels={"alertname": alert_name, "severity": "critical"}
     )
+    payload["alerts"][0]["labels"]["alertname"] = alert_name
     text = format_signoz_alert(payload)
     card = build_feishu_alert_card(payload)
     url = f"https://github.com/wangzitian0/infra2/blob/main/docs/runbooks/infra022-p0.md{anchor}"
-    assert f"Runbook: {url}" in text
-    assert url in json.dumps(card)
+    assert f"Runbook：{url}" in text.splitlines()
+    assert f"]({url})" in json.dumps(card, ensure_ascii=False)
     heading = anchor.removeprefix("#").replace("-", " ")
     headings = (ROOT / "docs/runbooks/infra022-p0.md").read_text(encoding="utf-8")
     assert f"## {heading}" in headings.lower()
@@ -181,17 +183,22 @@ def test_alert_card_has_severity_colored_header_fields_and_signoz_button() -> No
 
     assert card["header"]["template"] == "red"
     title = card["header"]["title"]["content"]
-    assert "[FIRING] ExampleBackendDown" in title and "🔴" in title
+    assert title == "🔴 [P0 告警] ExampleBackendDown · 1 项"
 
-    blob = json.dumps(card, ensure_ascii=False)
-    assert "**Status**" in blob and "FIRING" in blob
-    assert "**Severity**" in blob and "critical" in blob
-    assert "example-backend" in blob  # per-alert instance line
-    assert "Production API health check failed" in blob  # summary
+    (fields,) = [e["fields"] for e in card["elements"] if "fields" in e]
+    contents = [field["text"]["content"] for field in fields]
+    assert contents[:4] == [
+        "级别：P0",
+        "对象：example-backend",  # the per-alert instance
+        "现象：GET /api/health returned 503",
+        "开始于：未知",
+    ]
 
     # the only action button links to SigNoz
-    actions = [e for e in card["elements"] if e.get("tag") == "action"]
-    assert actions and actions[0]["actions"][0]["url"] == "https://signoz.zitian.party"
+    (action,) = [e for e in card["elements"] if e.get("tag") == "action"]
+    assert [button["url"] for button in action["actions"]] == [
+        "https://signoz.zitian.party"
+    ]
 
 
 def test_alert_card_resolved_is_green_and_nonhttp_url_has_no_button() -> None:
@@ -203,8 +210,7 @@ def test_alert_card_resolved_is_green_and_nonhttp_url_has_no_button() -> None:
     )
 
     assert card["header"]["template"] == "green"
-    assert "✅" in card["header"]["title"]["content"]
-    assert "[RESOLVED]" in card["header"]["title"]["content"]
+    assert card["header"]["title"]["content"] == "✅ [已恢复] ExampleBackendDown · 1 项"
     assert not [e for e in card["elements"] if e.get("tag") == "action"]
 
 
@@ -672,11 +678,19 @@ def _bridge_under_test(monkeypatch, *, mode: str = "feishu_app", report_chat: st
     sent: list[dict] = []
 
     def app_card(*, chat_id, card, **_kwargs):
-        sent.append({"chat": chat_id, "title": card["header"]["title"]["content"]})
+        sent.append(
+            {"chat": chat_id, "title": card["header"]["title"]["content"], "card": card}
+        )
         return {"code": 0}
 
     def webhook_card(url, card, **_kwargs):
-        sent.append({"chat": "webhook", "title": card["header"]["title"]["content"]})
+        sent.append(
+            {
+                "chat": "webhook",
+                "title": card["header"]["title"]["content"],
+                "card": card,
+            }
+        )
         return {"code": 0}
 
     monkeypatch.setattr(module, "deliver_feishu_app_card", app_card)
@@ -718,7 +732,8 @@ def test_bridge_sends_a_report_to_the_report_chat_and_a_page_to_the_pager(
     monkeypatch,
 ) -> None:
     """#903: `delivery=report` goes to FEISHU_REPORT_CHAT_ID; everything else still
-    reaches the pager chat, untouched."""
+    reaches the pager chat. #905: the report is titled `[报告]` there too, the page is
+    not."""
     post, sent, stop = _bridge_under_test(monkeypatch, report_chat="oc_reports")
     try:
         assert post(_payload("InfraProbeChronic", report=True)) == 202
@@ -727,14 +742,17 @@ def test_bridge_sends_a_report_to_the_report_chat_and_a_page_to_the_pager(
         stop()
 
     assert [s["chat"] for s in sent] == ["oc_reports", "oc_pager"]
-    assert not any(s["title"].startswith("[REPORT]") for s in sent)
+    assert [s["title"] for s in sent] == [
+        "[报告] InfraProbeChronic · 1 项",
+        "🟡 [P2 告警] InfraServiceProbeFailed · 1 项",
+    ]
 
 
 def test_bridge_without_a_report_chat_marks_reports_in_the_pager_chat(
     monkeypatch,
 ) -> None:
     """#903: with FEISHU_REPORT_CHAT_ID unset nothing is lost — the report lands in the
-    pager chat, titled [REPORT] so it does not read as a page. A webhook is bound to
+    pager chat, titled [报告] so it does not read as a page. A webhook is bound to
     one chat, so webhook mode always takes this fallback."""
     for mode, pager in (("feishu_app", "oc_pager"), ("feishu_webhook", "webhook")):
         post, sent, stop = _bridge_under_test(monkeypatch, mode=mode)
@@ -745,9 +763,8 @@ def test_bridge_without_a_report_chat_marks_reports_in_the_pager_chat(
             stop()
 
         assert [s["chat"] for s in sent] == [pager, pager], mode
-        assert sent[0]["title"].startswith("[REPORT] "), mode
-        assert "ContainerBreakdownChronic" in sent[0]["title"], mode
-        assert not sent[1]["title"].startswith("[REPORT]"), mode
+        assert sent[0]["title"] == "[报告] ContainerBreakdownChronic · 1 项", mode
+        assert sent[1]["title"] == "🟡 [P2 告警] ContainerBreakdown · 1 项", mode
 
 
 def test_only_staging_and_preview_environments_are_report_only() -> None:
@@ -769,3 +786,104 @@ def test_only_staging_and_preview_environments_are_report_only() -> None:
     ]
     assert [v for v in pages if is_report_only_environment(v)] == []
     assert [v for v in reports if not is_report_only_environment(v)] == []
+
+
+# ---------------------------------------------------------------------------
+# #905 review: the bridge never drops a page, and budgets for its delivery mode
+
+
+def _unrenderable(starts_at) -> dict:
+    return {
+        "status": "firing",
+        "commonLabels": {
+            "alertname": "InfraServiceProbeFailed",
+            "severity": "critical",
+        },
+        "alerts": [
+            {
+                "status": "firing",
+                "labels": {
+                    "service_id": "platform/vault",
+                    "component": "vault-http",
+                    "environment": "production",
+                },
+                "annotations": {"summary": "vault-http probe failed"},
+                "startsAt": starts_at,
+            }
+        ],
+    }
+
+
+def test_the_bridge_delivers_a_page_with_a_malformed_time(monkeypatch) -> None:
+    """Epoch milliseconds, a far-future time and JSON Infinity used to raise in the
+    renderer, and the bridge only caught AlertingError: the page was lost."""
+    post, sent, stop = _bridge_under_test(monkeypatch)
+    try:
+        for starts_at in (1_790_236_800_000, "9999-12-31T23:59:59Z", float("inf")):
+            assert post(_unrenderable(starts_at)) == 202
+    finally:
+        stop()
+
+    assert [s["title"] for s in sent] == [
+        "🔴 [P0 告警] InfraServiceProbeFailed · production · 1 项"
+    ] * 3
+
+
+def test_the_bridge_delivers_a_page_it_cannot_render(monkeypatch) -> None:
+    """Any renderer failure still pages, as the minimal card."""
+    import libs.alerting as alerting
+
+    def broken(*_args, **_kwargs):
+        raise KeyError("renderer bug")
+
+    monkeypatch.setattr(alerting, "pager_message_from_payload", broken)
+    post, sent, stop = _bridge_under_test(monkeypatch)
+    try:
+        assert post(_unrenderable("2026-09-24T08:00:00Z")) == 202
+    finally:
+        stop()
+
+    (page,) = sent
+    assert page["title"] == "🔴 [P0 告警] InfraServiceProbeFailed · 简化卡片"
+    body = "\n".join(e["text"]["content"] for e in page["card"]["elements"])
+    assert (
+        "P0 · production · platform/vault · vault-http · vault-http probe failed"
+        in body
+    )
+
+
+def test_the_bridge_budgets_the_card_for_its_delivery_mode(monkeypatch) -> None:
+    """Production and staging run the app bot (30 KB); the webhook takes 20 KB. The
+    bridge sizes each card for the mode it sends through."""
+    from libs.alerting import card_body_bytes, card_budget
+
+    chinese = "服务不可用" * 200
+    payload = {
+        "status": "firing",
+        "commonLabels": {"alertname": "ContainerBreakdown", "severity": "critical"},
+        "alerts": [
+            {
+                "labels": {
+                    "service_id": f"infra/s{index}",
+                    "environment": "production",
+                },
+                "annotations": {"symptom": chinese, "log_tail": chinese},
+            }
+            for index in range(40)
+        ],
+    }
+    sizes = {}
+    for mode in ("feishu_app", "feishu_webhook"):
+        post, sent, stop = _bridge_under_test(monkeypatch, mode=mode)
+        try:
+            assert post(payload) == 202
+        finally:
+            stop()
+        (page,) = sent
+        sizes[mode] = card_body_bytes(page["card"], mode)
+
+    assert sizes["feishu_webhook"] <= card_budget("feishu_webhook")
+    # the app bot's card uses the room it has, which a webhook would not take
+    assert (
+        card_budget("feishu_webhook") < sizes["feishu_app"] <= card_budget("feishu_app")
+    )

@@ -35,22 +35,27 @@ from libs.service_registry import resolve_container_host
 
 # (substring, human-readable cause) — ordered, first match wins. These are the
 # concrete breakdown signals seen in the finance_report outage + adjacent ones.
+HOST_MEMORY_CAUSE = "内存耗尽(宿主机 CGroup 触发 OOM kill)"
 BREAKDOWN_PATTERNS: tuple[tuple[str, str], ...] = (
     (
         "VAULT_ROLE_ID and VAULT_SECRET_ID are required",
-        "Vault AppRole creds missing (VAULT_ROLE_ID / VAULT_SECRET_ID)",
+        "Vault AppRole 凭据缺失(VAULT_ROLE_ID / VAULT_SECRET_ID)",
     ),
-    ("VAULT_APP_TOKEN is required", "Vault app token missing (VAULT_APP_TOKEN)"),
-    ("VAULT_ROLE_ID", "Vault AppRole creds missing"),
-    ("permission denied", "permission denied (Vault / secret access)"),
-    ("no such host", "DNS / service resolution failure"),
-    ("connection refused", "dependency unreachable (connection refused)"),
-    ("out of memory", "out of memory (host CGroup OOM killed)"),
-    ("oom-killer", "out of memory (host CGroup OOM killed)"),
-    ("killed process", "process terminated by system (SIGKILL)"),
+    ("VAULT_APP_TOKEN is required", "Vault 应用 token 缺失(VAULT_APP_TOKEN)"),
+    ("VAULT_ROLE_ID", "Vault AppRole 凭据缺失"),
+    ("permission denied", "权限被拒(Vault / secret 访问)"),
+    ("no such host", "DNS / 服务名解析失败"),
+    ("connection refused", "依赖不可达(`connection refused`)"),
+    ("out of memory", HOST_MEMORY_CAUSE),
+    ("oom-killer", HOST_MEMORY_CAUSE),
+    ("killed process", "进程被系统终止(SIGKILL)"),
 )
+# The cause is shown on the pager card (#905), so it is written in Chinese; the log
+# markers it is matched on, and every identifier in it, stay verbatim.
 
 _MAX_DETAIL = 200
+_LOG_TAIL_LINES = 5
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 # A preview slot's containers carry `-<kind>-<value>` (libs.deploy_env_config:
 # -pr-5, -branch-main, -commit-1ab32d5, -tag-v1-2-3).
 _PREVIEW_SLOT_NAME = re.compile(
@@ -69,6 +74,10 @@ class Breakdown:
     service_id: str = ""
     component: str = "container"
     environment: str = "production"
+    #: the last lines of its log, for the card's 日志 (#905)
+    log_tail: str = ""
+    #: epoch seconds this container was first seen broken in this incident; 0 unknown
+    since: float = 0.0
 
 
 def container_name(entry: dict) -> str:
@@ -118,8 +127,25 @@ def classify_reason(logs: str) -> tuple[str, str]:
                 return cause, line.strip()[:_MAX_DETAIL]
     for line in reversed(logs.splitlines()):
         if line.strip():
-            return "crash-loop / unhealthy (see log tail)", line.strip()[:_MAX_DETAIL]
-    return "crash-loop / unhealthy (no logs captured)", ""
+            return "崩溃循环 / 不健康(见日志尾)", line.strip()[:_MAX_DETAIL]
+    return "崩溃循环 / 不健康(未取到日志)", ""
+
+
+def log_tail(logs: str, detail: str = "") -> str:
+    """The last few non-empty log lines, each cut to 200 characters (#905).
+
+    The line the reason was read from comes first when it is not among them, so the
+    card shows both the evidence and what the container said last.
+    """
+    lines = [
+        _CONTROL_CHARS.sub("", line).strip()[:_MAX_DETAIL]
+        for line in logs.splitlines()
+        if _CONTROL_CHARS.sub("", line).strip()
+    ][-_LOG_TAIL_LINES:]
+    evidence = _CONTROL_CHARS.sub("", detail).strip()
+    if evidence and evidence not in lines:
+        lines = [evidence, "…", *lines]
+    return "\n".join(lines)
 
 
 def container_identity(entry: dict) -> tuple[str, str, str]:
@@ -169,7 +195,8 @@ def find_breakdown_containers(containers, logs_fn) -> list[Breakdown]:
         state = broken_state(entry)
         if not state:
             continue
-        reason, detail = classify_reason(logs_fn(str(entry.get("Id", ""))))
+        logs = logs_fn(str(entry.get("Id", "")))
+        reason, detail = classify_reason(logs)
         service_id, component, environment = container_identity(entry)
         found.append(
             Breakdown(
@@ -180,6 +207,7 @@ def find_breakdown_containers(containers, logs_fn) -> list[Breakdown]:
                 service_id=service_id,
                 component=component,
                 environment=environment,
+                log_tail=log_tail(logs, detail),
             )
         )
     return found
@@ -192,14 +220,26 @@ def build_breakdown_alert_payload(
     external_url: str = "infra2://platform/12.alerting/container-breakdown",
     severity: str = "critical",
     alertname: str = "ContainerBreakdown",
+    now: float | None = None,
 ) -> dict:
     """Alertmanager/SigNoz-shaped payload for the alert bridge (``format_signoz_alert``).
 
     ``severity`` / ``alertname`` default to the paging ContainerBreakdown; the chronic
     digest (#658) posts as ``ContainerBreakdownChronic`` at ``warning`` so the routing
     that pages on critical does not fire for a once-a-day summary.
+
+    #905: each alert names its container, carries the symptom and the log tail the
+    card shows, ``startsAt`` when the breakdown's ``since`` is known and, resolved,
+    ``endsAt`` (``now``).
     """
+    import time
+
     status = "firing" if firing else "resolved"
+    now = time.time() if now is None else now
+
+    def rfc3339(epoch: float) -> str:
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
     alerts = []
     for b in breakdowns:
         identity = ServiceIdentity.build(
@@ -213,7 +253,8 @@ def build_breakdown_alert_payload(
         combined_text = (b.reason + " " + b.detail).lower()
         domain = (
             "host-memory"
-            if any(
+            if b.reason == HOST_MEMORY_CAUSE
+            or any(
                 k in combined_text
                 for k in ("out of memory", "oom-killer", "cgroup oom")
             )
@@ -231,7 +272,12 @@ def build_breakdown_alert_payload(
                     "summary": f"{b.container} {b.state} — {b.reason}",
                     "description": b.reason,
                     "observed": f"state={b.state} log={b.detail}",
+                    "container": b.container,
+                    "symptom": f"{b.state}: {b.reason}",
+                    "log_tail": b.log_tail or b.detail,
                 },
+                **({"startsAt": rfc3339(b.since)} if b.since else {}),
+                **({} if firing else {"endsAt": rfc3339(now)}),
             }
         )
     return {
@@ -287,4 +333,5 @@ __all__ = [
     "container_name",
     "find_breakdown_containers",
     "find_breakdown_reason",
+    "log_tail",
 ]

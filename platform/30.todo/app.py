@@ -13,6 +13,7 @@ platform infrastructure capabilities:
 
 from __future__ import annotations
 
+import html
 import json
 import os
 import socket
@@ -62,6 +63,13 @@ _FALLBACK_TODOS: List[Dict[str, Any]] = [
         "capability": "openpanel",
         "created_at": "2026-09-24T20:04:00Z",
     },
+    {
+        "id": 6,
+        "title": "平台 Authentik SSO 与 GitHub OAuth 单点登录受验",
+        "completed": True,
+        "capability": "authentik",
+        "created_at": "2026-09-25T11:00:00Z",
+    },
 ]
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -90,6 +98,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           <span class="px-2 py-0.5 text-xs font-mono bg-indigo-500/20 text-indigo-400 rounded border border-indigo-500/30">todo.zitian.party</span>
         </div>
         <p class="text-sm text-slate-400 mt-1">全平台基础设施验收与运行时物理真源校验工具 (Verification Tool for All Infra)</p>
+        <div class="mt-2.5 flex items-center gap-2">
+          ${AUTH_BADGE}
+        </div>
       </div>
       <button onclick="runInfraProbe()" id="probeBtn" class="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium shadow-lg transition active:scale-95 text-sm">
         <span>⚡ 触发全链路基建体检</span>
@@ -370,21 +381,51 @@ def _probe_http(url: str, timeout: float = 3.0) -> Dict[str, Any]:
         return {"status": "fail", "latency_ms": elapsed_ms, "detail": str(exc)}
 
 
-def _probe_redis(host: str, port: int = 6379, timeout: float = 2.0) -> Dict[str, Any]:
+def _probe_redis(
+    host: str,
+    port: int = 6379,
+    password: str | None = None,
+    timeout: float = 2.0,
+) -> Dict[str, Any]:
     """Test raw Redis RESP protocol over TCP socket: ping and key read/write lifecycle."""
     start = time.perf_counter()
     try:
         with socket.create_connection((host, port), timeout=timeout) as sock:
             with sock.makefile("rb") as rf:
-                # 1. PING -> +PONG\r\n
+                if password:
+                    pass_bytes = password.encode("utf-8")
+                    sock.sendall(
+                        b"*2\r\n$4\r\nAUTH\r\n$"
+                        + str(len(pass_bytes)).encode("ascii")
+                        + b"\r\n"
+                        + pass_bytes
+                        + b"\r\n"
+                    )
+                    auth_line = rf.readline()
+                    if not auth_line.startswith(b"+OK"):
+                        elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
+                        return {
+                            "status": "fail",
+                            "latency_ms": elapsed_ms,
+                            "detail": f"AUTH failed: {auth_line.decode('latin1', errors='replace').strip()}",
+                        }
+
+                # 1. PING -> +PONG\r\n or -NOAUTH (when requirepass enabled and no password provided)
                 sock.sendall(b"*1\r\n$4\r\nPING\r\n")
                 pong_line = rf.readline()
+                if pong_line.startswith(b"-NOAUTH"):
+                    elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
+                    return {
+                        "status": "pass",
+                        "latency_ms": elapsed_ms,
+                        "detail": "Redis RESP verified (auth required)",
+                    }
                 if not pong_line.startswith(b"+PONG"):
                     elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
                     return {
                         "status": "fail",
                         "latency_ms": elapsed_ms,
-                        "detail": f"PING failed: {pong_line!r}",
+                        "detail": f"PING failed: {pong_line.decode('latin1', errors='replace').strip()}",
                     }
                 # 2. SETEX canary:ping 10 ok -> +OK\r\n
                 sock.sendall(
@@ -396,21 +437,21 @@ def _probe_redis(host: str, port: int = 6379, timeout: float = 2.0) -> Dict[str,
                     return {
                         "status": "fail",
                         "latency_ms": elapsed_ms,
-                        "detail": f"SETEX failed: {set_line!r}",
+                        "detail": f"SETEX failed: {set_line.decode('latin1', errors='replace').strip()}",
                     }
                 # 3. GET canary:ping -> $2\r\nok\r\n
                 sock.sendall(b"*2\r\n$3\r\nGET\r\n$11\r\ncanary:ping\r\n")
                 len_line = rf.readline()
-                if not len_line.startswith(b"$2"):
+                if len_line.strip() != b"$2":
                     elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
                     return {
                         "status": "fail",
                         "latency_ms": elapsed_ms,
-                        "detail": f"GET length header unexpected: {len_line!r}",
+                        "detail": f"GET length header unexpected: {len_line.decode('latin1', errors='replace').strip()}",
                     }
                 val_data = rf.readline()
         elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
-        if val_data.startswith(b"ok"):
+        if val_data.strip() == b"ok":
             return {
                 "status": "pass",
                 "latency_ms": elapsed_ms,
@@ -433,6 +474,7 @@ def run_all_checks() -> Dict[str, Any]:
     pg_port = int(os.environ.get("POSTGRES_PORT", "5432"))
     redis_host = os.environ.get("REDIS_HOST", f"platform-redis{suffix}")
     redis_port = int(os.environ.get("REDIS_PORT", "6379"))
+    redis_password = os.environ.get("REDIS_PASSWORD") or None
     minio_url = os.environ.get(
         "MINIO_ENDPOINT", "http://platform-minio:9000/minio/health/live"
     )
@@ -448,7 +490,7 @@ def run_all_checks() -> Dict[str, Any]:
 
     checks = {
         "postgres": _probe_postgres(pg_host, pg_port),
-        "redis": _probe_redis(redis_host, redis_port),
+        "redis": _probe_redis(redis_host, redis_port, password=redis_password),
         "minio": _probe_http(minio_url),
         "signoz": _probe_http(signoz_url),
         "openpanel": _probe_http(openpanel_url),
@@ -493,13 +535,56 @@ class TodoHandler(BaseHTTPRequestHandler):
         path = parsed.path
 
         if path == "/" or path == "/index.html":
+            username = self.headers.get("X-authentik-username", "")
+            name = self.headers.get("X-authentik-name", "")
+            email = self.headers.get("X-authentik-email", "")
+            user_display = name or username or email
+            if username:
+                safe_display = html.escape(user_display)
+                auth_badge = (
+                    f'<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">'
+                    f'<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>'
+                    f'SSO 认证通过: {safe_display}'
+                    f'</span>'
+                )
+            else:
+                auth_badge = (
+                    '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-slate-800 text-slate-400 border border-slate-700">'
+                    '<span class="w-2 h-2 rounded-full bg-slate-500"></span>'
+                    '未检测到 ForwardAuth 头 (开发/直连模式)'
+                    '</span>'
+                )
             sha = os.environ.get("GIT_COMMIT_SHA", "dev-local")[:7]
-            rendered = HTML_TEMPLATE.replace("${GIT_COMMIT_SHA}", sha).encode("utf-8")
+            rendered = (
+                HTML_TEMPLATE
+                .replace("${GIT_COMMIT_SHA}", sha)
+                .replace("${AUTH_BADGE}", auth_badge)
+                .encode("utf-8")
+            )
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(rendered)))
             self.end_headers()
             self.wfile.write(rendered)
+            return
+
+        if path == "/api/auth/me":
+            username = self.headers.get("X-authentik-username", "")
+            groups = [
+                g.strip()
+                for g in self.headers.get("X-authentik-groups", "").split(",")
+                if g.strip()
+            ]
+            self._send_json(
+                200,
+                {
+                    "authenticated": bool(username),
+                    "username": username or None,
+                    "name": self.headers.get("X-authentik-name") or None,
+                    "email": self.headers.get("X-authentik-email") or None,
+                    "groups": groups,
+                },
+            )
             return
 
         if path == "/api/health":

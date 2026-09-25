@@ -197,7 +197,7 @@ def _remediate(client, stuck, grace_seconds: int) -> None:
         _post_alert(
             build_deploy_guard_alert_payload(
                 [s],
-                action_note=f"killing stuck deploy {s.deployment_id} via Dokploy API",
+                action_note=f"正通过 Dokploy API 终止卡住的部署 {s.deployment_id}",
             )
         )
         for label, call in (
@@ -233,7 +233,7 @@ def _remediate(client, stuck, grace_seconds: int) -> None:
         _post_alert(
             build_deploy_guard_alert_payload(
                 persistent,
-                action_note="STILL running after Dokploy kill — manual intervention / worker restart required",
+                action_note="Dokploy 终止后仍在运行:需要人工介入或重启 worker",
             )
         )
 

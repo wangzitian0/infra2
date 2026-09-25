@@ -18,7 +18,11 @@ from libs.container_breakdown import (
     find_breakdown_containers,
     build_breakdown_alert_payload,
 )
-from libs.alerting import format_signoz_alert, build_feishu_card_payload
+from libs.alerting import (
+    build_feishu_alert_card,
+    build_feishu_card_payload,
+    format_signoz_alert,
+)
 from tools.out_of_band_watchdog import CheckResult, format_failure_message
 
 
@@ -62,14 +66,21 @@ def test_manually_killed_container_triggers_breakdown_alert():
     assert len(payload["alerts"]) == 1
 
     # 4. Text formatter must clearly state container exited and show breakdown
-    text_alert = format_signoz_alert(payload)
-    assert "[FIRING] ContainerBreakdown" in text_alert
-    assert "finance_report-backend exited" in text_alert
+    text_alert = format_signoz_alert(payload).splitlines()
+    assert text_alert[0] == "🔴 [P0 告警] ContainerBreakdown · production · 1 项"
+    assert "对象：finance_report/app · finance_report-backend" in text_alert
+    assert "现象：exited: 崩溃循环 / 不健康(见日志尾)" in text_alert
+    # and the log tail says why
+    assert text_alert[-3:] == [
+        "日志：",
+        "2026-09-15T10:00:00Z process terminated by signal SIGKILL",
+        "Killed",
+    ]
 
     # 5. Interactive card payload must be well-formed
-    card_msg = build_feishu_card_payload(payload)
+    card_msg = build_feishu_card_payload(build_feishu_alert_card(payload))
     assert card_msg["msg_type"] == "interactive"
-    assert "card" in card_msg
+    assert card_msg["card"]["header"]["template"] == "red"
 
 
 def test_clean_stop_does_not_trigger_false_alarm():

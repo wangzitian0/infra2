@@ -327,8 +327,8 @@ results.notSuppressed = {
   }
   results.suppressedThenVpsDies = runs.map((run) => ({
     minutes: (run.at - START) / MIN,
-    entrypointFiring: run.messages.some((m) => m.includes(`FIRING P0 host-reachability production/${FR}`)),
-    vpsDown: run.messages.some((m) => m.includes("VPS or its egress is down")),
+    entrypointFiring: run.messages.some((m) => m.includes(`环境：production\n对象：finance_report/app · ${FR}\n现象：从 Cloudflare 访问不到外部入口`)),
+    vpsDown: run.messages.some((m) => m.includes("现象：VPS 或它的出网中断")),
   }));
 }
 
@@ -680,6 +680,105 @@ for (const [label, fields, age] of [
     storedRoutes: posted.stored(PROD_HB).failingPublicRoutes.length,
     overlongRouteList: tooLong.stored(PROD_HB).failingPublicRoutes,
   };
+}
+
+// #905: the level a message shows comes from the target's configured severity
+// (ops.observability.md §3), for each severity vocabulary a target can carry.
+{
+  const base = TARGETS.find((t) => t.name === "dokploy-public-route");
+  results.severityLevels = {};
+  for (const severity of ["critical", "error", "warning", "P1", "p2", "garbage"]) {
+    const world = new World({ overrides: { WATCHDOG_TARGETS_JSON: JSON.stringify([{ ...base, severity }]) } });
+    world.routes[base.url] = 502;
+    const messages = [];
+    for (const at of [START, START + CRON_MS]) {
+      freshHeartbeats(world, at);
+      messages.push(...(await world.cron(at)).messages);
+    }
+    results.severityLevels[severity] = messages;
+  }
+}
+
+// #905: more failing objects than a message shows in full -- the VPS down and 12
+// entrypoints down in one run.
+{
+  const many = Array.from({ length: 12 }, (_, i) => ({
+    environment: "production",
+    name: `product-${String(i).padStart(2, "0")}-public-route`,
+    service_id: `product_${i}/app`,
+    url: `https://product-${i}.example.invalid/`,
+    statuses: [200],
+    severity: i % 2 ? "warning" : "error",
+  }));
+  const world = new World({ overrides: { WATCHDOG_TARGETS_JSON: JSON.stringify(many) } });
+  for (const target of many) world.routes[target.url] = 503;
+  world.heartbeat(PROD_HB, record(START - 3 * HOUR));
+  const messages = [];
+  for (const at of [START, START + CRON_MS]) messages.push(...(await world.cron(at)).messages);
+  results.manyDown = messages;
+}
+
+// #905 parity with libs/alerting.py: the shrink order, the 20-line cap, the field clip.
+function shortTargets(prefix, count) {
+  return Array.from({ length: count }, (_, i) => ({
+    environment: "production",
+    name: `${prefix}${String(i).padStart(2, "0")}-public-route`,
+    service_id: `p/${prefix}${i}`,
+    url: `https://${prefix}${i}.invalid/`,
+    statuses: [200],
+    severity: "error",
+  }));
+}
+{
+  // 25 entrypoints recover in one run: a recovery-only message with 25 items.
+  const many = shortTargets("r", 25);
+  const world = new World({ overrides: { WATCHDOG_TARGETS_JSON: JSON.stringify(many) } });
+  for (const target of many) world.routes[target.url] = 503;
+  for (const at of [START, START + CRON_MS]) {
+    freshHeartbeats(world, at);
+    await world.cron(at);
+  }
+  for (const target of many) delete world.routes[target.url];
+  freshHeartbeats(world, START + 2 * CRON_MS);
+  results.manyRecovered = (await world.cron(START + 2 * CRON_MS)).messages;
+}
+{
+  // 15 entrypoints recover while 15 others go down, in one run and one message.
+  const a = shortTargets("a", 15);
+  const b = shortTargets("b", 15);
+  const world = new World({
+    overrides: { WATCHDOG_TARGETS_JSON: JSON.stringify([...a, ...b]), WATCHDOG_ENTRYPOINT_FAILURE_RUNS: "1" },
+  });
+  for (const target of a) world.routes[target.url] = 503;
+  freshHeartbeats(world, START);
+  await world.cron(START);
+  for (const target of a) delete world.routes[target.url];
+  for (const target of b) world.routes[target.url] = 503;
+  freshHeartbeats(world, START + CRON_MS);
+  results.mixedOverflow = (await world.cron(START + CRON_MS)).messages;
+}
+{
+  // A runner detail far longer than a field may show.
+  const world = new World();
+  const runs = [];
+  for (const at of [START, START + CRON_MS]) {
+    world.heartbeat(PROD_HB, record(at - MIN, { ok: false, detail: `bridge failing ${"x".repeat(1000)}` }));
+    world.heartbeat(STAGING_HB, record(at - MIN));
+    runs.push(...(await world.cron(at)).messages);
+  }
+  results.longLoopDetail = runs;
+}
+{
+  // An entrypoint whose URL alone is longer than a field may show.
+  const long = [{ ...shortTargets("u", 1)[0], url: `https://u.invalid/${"p".repeat(400)}` }];
+  const world = new World({ overrides: { WATCHDOG_TARGETS_JSON: JSON.stringify(long) } });
+  world.routes[long[0].url] = 503;
+  const runs = [];
+  for (const at of [START, START + CRON_MS]) {
+    freshHeartbeats(world, at);
+    runs.push(...(await world.cron(at)).messages);
+  }
+  results.longUrl = runs;
 }
 
 // Endpoints that no longer exist.

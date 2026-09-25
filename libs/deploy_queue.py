@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from libs.service_identity import ServiceIdentity
 
 RUNNING_STATUS = "running"
+QUEUE_IMPACT = "部署队列单并发 FIFO:它阻塞之后的所有部署"
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,8 @@ class StuckDeploy:
     age_seconds: float
     service_id: str = ""
     environment: str = "production"
+    #: epoch seconds the deployment started; 0 when unknown (#905: the card's 开始于)
+    started_at: float = 0.0
 
 
 def parse_epoch_seconds(value) -> float | None:
@@ -119,6 +122,7 @@ def find_stuck_deploys(composes, now_epoch: float, ceiling_seconds: float):
                     age_seconds=age,
                     service_id=compose.service_id,
                     environment=compose.environment,
+                    started_at=start,
                 )
         if oldest is not None:
             stuck.append(oldest)
@@ -132,7 +136,11 @@ def build_deploy_guard_alert_payload(
     action_note: str = "",
     external_url: str = "infra2://platform/12.alerting/deploy-queue-guard",
 ) -> dict:
-    """Alertmanager/SigNoz-shaped payload for the alert bridge (`format_signoz_alert`)."""
+    """Alertmanager/SigNoz-shaped payload for the alert bridge (`format_signoz_alert`).
+
+    #905: each alert names the compose, carries the symptom and the queue impact the
+    card shows, and ``startsAt`` (when the deployment started).
+    """
     status = "firing" if firing else "resolved"
     alerts = []
     for s in stuck:
@@ -158,10 +166,25 @@ def build_deploy_guard_alert_payload(
                     "description": action_note
                     or (
                         f"deployment {s.deployment_id} has been running > ceiling; "
-                        "queue is single-concurrency FIFO so this blocks all deploys"
+                        f"{QUEUE_IMPACT}"
                     ),
                     "observed": f"compose={s.compose_id} age={int(s.age_seconds)}s",
+                    "compose": s.compose_name,
+                    "symptom": (
+                        f"部署 {s.deployment_id} 已运行 {int(s.age_seconds)}s,超过上限"
+                        + (f";{action_note}" if action_note else "")
+                    ),
+                    "impact": QUEUE_IMPACT,
                 },
+                **(
+                    {
+                        "startsAt": datetime.fromtimestamp(
+                            s.started_at, tz=timezone.utc
+                        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    }
+                    if s.started_at
+                    else {}
+                ),
             }
         )
     summary = (

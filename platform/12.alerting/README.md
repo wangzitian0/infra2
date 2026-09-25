@@ -1,7 +1,8 @@
 # Alerting Bridge
 
 Internal bridge that receives SigNoz Alertmanager webhook payloads and sends
-Feishu alert messages.
+them to Feishu as interactive cards, in the one pager layout every alert source
+shares ([Reading an alert](#reading-an-alert)).
 
 ## Why This Exists
 
@@ -107,7 +108,7 @@ Runtime mirror: Vault path `secret/platform/{env}/alerting`.
 | `FEISHU_APP_ID` | app mode | Feishu Open Platform app ID |
 | `FEISHU_APP_SECRET` | app mode | Feishu Open Platform app secret |
 | `FEISHU_CHAT_ID` | app mode | Target chat ID for app bot messages |
-| `FEISHU_REPORT_CHAT_ID` | optional, app mode | Chat for `delivery=report` payloads (#903); unset = pager chat with a `[REPORT]` title |
+| `FEISHU_REPORT_CHAT_ID` | optional, app mode | Chat for `delivery=report` payloads (#903); unset = the pager chat. A report's card is titled `[报告]` either way (#905) |
 | `FEISHU_API_BASE` | no | Defaults to `https://open.feishu.cn` |
 | `BRIDGE_BASIC_AUTH_USERNAME` | no | Optional SigNoz webhook basic auth username |
 | `BRIDGE_BASIC_AUTH_PASSWORD` | no | Optional SigNoz webhook basic auth password |
@@ -125,6 +126,51 @@ uv run python -m invoke alerting.shared.ensure-log-error-rule \
 
 `test-feishu` sends a synthetic SigNoz-style alert through the bridge and should
 result in a Feishu group message.
+
+## Reading an alert
+
+Every page on the three converted surfaces — this bridge's card, the Cloudflare
+Worker's text and the GitHub watchdog's text — shows the same fields in the same
+order (`tools/deploy_v2_canary.py` is not converted yet; a #905 follow-up)
+([ops.observability.md §3.1](../../docs/ssot/ops.observability.md#31-推送格式905)):
+
+| Field | What it says |
+|---|---|
+| 级别 | P0 / P1 / P2, from the `severity` label (`critical` / `error` / `warning`; unknown = P0) |
+| 环境 | `environment` label |
+| 对象 | full `service_id` + the probe, container, compose or check name |
+| 现象 | a probe's target, expected and observed; else the source's `symptom`; else its summary with the evidence |
+| 开始于 | when the failure started, shown in UTC+8 (`2026-09-24 15:48（UTC+8）`), and how long it has lasted |
+| 影响 | the failure domain and what it means |
+| 下一步 | the first thing to check |
+| Runbook | the most specific runbook anchor for the alert or its failure domain |
+| 日志 | container breakdowns only: the log line the reason came from and the last lines, redacted |
+
+Labels, impacts, next steps and the causes and summaries the sources write are in
+Chinese; commands, paths and identifiers stay verbatim, in backticks, and evidence
+(probe readings, error text, HTTP bodies, log lines, GitHub check details) is shown
+as captured. The title carries the highest level, the alert name, the environment
+and the item count. The first 5 items are shown in full, the rest one line each (at
+most 20, the others counted); when that does not fit, fewer are shown in full, then
+recoveries become summary lines, then summary lines are cut from the end, so the
+✅ 已恢复 section never goes first. The card is sized for the delivery mode that
+sends it, on the UTF-8 body Feishu receives: a webhook takes 20 KB, the app bot
+(production and staging) 30 KB; text stays within 3,500 characters. Every value is
+plain text on the card, so an `<at>` tag or a markdown link in it is shown, not
+followed; log tails and evidence are redacted (DSN passwords, bearer tokens, values
+of secret/token/password names). A payload the renderer cannot handle — a malformed
+time, a bug — still pages, as a minimal plain card (level, environment, object, raw
+summary), and the error is logged. A RESOLVED card
+(green) names each recovered object with its start, end and duration. A report
+(`delivery=report`) is blue, titled `[报告]` and one line per item; the reports sent
+through `deliver_infra2_report` get the same title.
+
+Sources fill the fields from the Alertmanager payload: `labels` (`severity`,
+`environment`, `service_id`, `component`, `failure_domain`, `probe_kind`),
+`startsAt`/`endsAt`, and the annotations `symptom`, `target`/`expected`/`observed`,
+`description`/`summary`, `container`/`compose`, `impact`, `next_step`,
+`runbook_url` and `log_tail`. A SigNoz rule gets a specific runbook by adding a
+`runbook_url` annotation.
 
 ## Out-of-band Watchdog
 
@@ -379,6 +425,35 @@ INFRA_PROBE_DRY_RUN=1 uv run python tools/infra_probe_runner.py --once --json
 Heartbeat dry-run is intentionally disabled: `INFRA_PROBE_DRY_RUN=1` does not
 write alert state or post heartbeat.
 
+### Public-route probes
+
+`PUBLIC_ROUTE_PROBE_SPECS` (rendered from each service's `PublicRouteFacet`) probes
+every public route in-band and pages `InfraPublicRouteProbeFailed`. The Cloudflare
+Worker also GETs one external entrypoint per product and pages it only when the VPS
+has not (see `cloudflare/infra-watchdog/README.md`). Read the card's 影响 line first:
+
+- `[service-or-route]`: the route or the service behind it is failing. Reproduce with
+  `curl -sS -m 10 -o /dev/null -w '%{http_code}' <url>` from the VPS and from outside,
+  then read the service's container logs and compare with the latest deployment.
+- `[probe-client-blocked]`: the edge refused the probe itself (`error code: 1010`).
+  The service may be fine; find the Cloudflare security rule that blocked the probe
+  and allow the probe's User-Agent. Until then the route is not watched.
+
+### Host resource probes
+
+The production runner probes the shared host itself: `host-cpu`, `host-mem` (both
+`warning`, P2) and `host-disk` (`critical`, P0), each paging above its percentage
+ceiling with its own failure domain (`host-cpu`, `host-mem`, `host-disk`), so the card
+says what the host is short of rather than pointing at a service.
+
+- `host-disk`: follow [Disk full](../../docs/runbooks/infra022-p0.md#disk-full):
+  `du -xhd1 /data | sort -h`, `docker system df`, and the disk guardian's timer.
+- `host-mem`: `free -h` and `docker stats --no-stream` for the largest consumers; a
+  container killed for memory follows
+  [Container killed](../../docs/runbooks/infra022-p0.md#container-killed).
+- `host-cpu`: `top -o %CPU` and `docker stats --no-stream`; a busy-looping `dockerd`
+  is a known cause.
+
 ### Failing round-trips: two lanes (#726)
 
 `command` probes (the `signoz-roundtrip` / `openpanel-roundtrip` round-trips) fail
@@ -400,8 +475,8 @@ into one of two streams per probe group:
     missing (no OpenPanel client id for the environment, an invalid URL) stays
     here for as long as the problem lasts, even if it passed before.
   - A never-passed failure also waits here during the 15-minute grace period.
-    Its description starts with `has not passed since the probe runner started`
-    and names the stream it will move to.
+    Its description starts with `自 probe runner 启动以来从未通过` (it has not
+    passed since the probe runner started) and names the stream it will move to.
 
 The grace period used to be permanent. A runner recreated during the 2026-09-15/16
 OpenPanel `NOSCRIPT` outage reported `openpanel-roundtrip` as "misconfigured" while

@@ -281,3 +281,279 @@ def test_todo_app_concurrency_nonblocking(monkeypatch) -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_probe_redis_noauth_handshake() -> None:
+    """Verify _probe_redis treats -NOAUTH challenge as physical proof of RESP engine responsiveness."""
+    spec = importlib.util.spec_from_file_location(
+        "todo_app", REPO_ROOT / "platform/30.todo/app.py"
+    )
+    assert spec is not None and spec.loader is not None
+    todo_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(todo_mod)
+
+    import socket
+
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+
+    def _serve():
+        conn, _ = srv.accept()
+        with conn:
+            req = conn.recv(1024)
+            if b"PING" in req:
+                conn.sendall(b"-NOAUTH Authentication required.\r\n")
+
+    th = threading.Thread(target=_serve, daemon=True)
+    th.start()
+    try:
+        res = todo_mod._probe_redis("127.0.0.1", port, timeout=1.0)
+        assert res["status"] == "pass"
+        assert "auth required" in res["detail"]
+    finally:
+        srv.close()
+
+
+def test_probe_redis_authenticated_lifecycle() -> None:
+    """Verify _probe_redis with password completes full AUTH -> PING -> SETEX -> GET cycle."""
+    spec = importlib.util.spec_from_file_location(
+        "todo_app", REPO_ROOT / "platform/30.todo/app.py"
+    )
+    assert spec is not None and spec.loader is not None
+    todo_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(todo_mod)
+
+    import socket
+
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+
+    def _serve():
+        conn, _ = srv.accept()
+        with conn:
+            rf = conn.makefile("rb")
+            # 1. Expect AUTH
+            assert rf.readline() == b"*2\r\n"
+            assert rf.readline() == b"$4\r\n"
+            assert rf.readline() == b"AUTH\r\n"
+            assert rf.readline() == b"$9\r\n"
+            assert rf.readline() == b"secret123\r\n"
+            conn.sendall(b"+OK\r\n")
+            # 2. Expect PING
+            assert rf.readline() == b"*1\r\n"
+            assert rf.readline() == b"$4\r\n"
+            assert rf.readline() == b"PING\r\n"
+            conn.sendall(b"+PONG\r\n")
+            # 3. Expect SETEX
+            assert rf.readline() == b"*4\r\n"
+            assert rf.readline() == b"$5\r\n"
+            assert rf.readline() == b"SETEX\r\n"
+            assert rf.readline() == b"$11\r\n"
+            assert rf.readline() == b"canary:ping\r\n"
+            assert rf.readline() == b"$2\r\n"
+            assert rf.readline() == b"10\r\n"
+            assert rf.readline() == b"$2\r\n"
+            assert rf.readline() == b"ok\r\n"
+            conn.sendall(b"+OK\r\n")
+            # 4. Expect GET
+            assert rf.readline() == b"*2\r\n"
+            assert rf.readline() == b"$3\r\n"
+            assert rf.readline() == b"GET\r\n"
+            assert rf.readline() == b"$11\r\n"
+            assert rf.readline() == b"canary:ping\r\n"
+            conn.sendall(b"$2\r\nok\r\n")
+
+    th = threading.Thread(target=_serve, daemon=True)
+    th.start()
+    try:
+        res = todo_mod._probe_redis("127.0.0.1", port, password="secret123", timeout=1.0)
+        assert res["status"] == "pass"
+        assert "PONG & SETEX/GET verified" in res["detail"]
+    finally:
+        srv.close()
+
+
+def test_prepare_dirs_noop_on_empty_data_path(monkeypatch) -> None:
+    """Verify _prepare_dirs returns True without calling ssh when data_path is empty."""
+    import libs.deploy.deployer as d
+    from unittest.mock import MagicMock
+
+    cmds: list[str] = []
+    monkeypatch.setattr(d, "validate_env", lambda: [])
+    monkeypatch.setattr(d, "run_with_status", lambda c, cmd, label: cmds.append(cmd))
+
+    class DummyStatelessDeployer(d.Deployer):
+        service = "stateless-dummy"
+        data_path = ""
+
+        @classmethod
+        def env(cls):
+            return {"ENV": "production", "VPS_HOST": "vps"}
+
+    result = DummyStatelessDeployer._prepare_dirs(MagicMock())
+    assert result is True
+    assert len(cmds) == 0
+
+
+def test_todo_traefik_dual_router_auth_contract() -> None:
+    """Verify compose.yaml specifies dual routers for Authentik ForwardAuth + public probe bypass."""
+    import yaml
+
+    compose_file = REPO_ROOT / "platform/30.todo/compose.yaml"
+    assert compose_file.exists()
+    content = yaml.safe_load(compose_file.read_text())
+
+    labels = content["services"]["todo"]["labels"]
+    labels_dict = {}
+    for item in labels:
+        if "=" in item:
+            k, v = item.split("=", 1)
+            labels_dict[k] = v
+
+    # 1. Traefik enabled
+    assert labels_dict.get("traefik.enable") == "true"
+
+    # 2. Public bypass router: priority 100, matches health and canary status, no auth middleware
+    public_rule = labels_dict.get(
+        "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.rule"
+    )
+    assert public_rule is not None
+    assert "/api/health" in public_rule
+    assert "/api/canary/status" in public_rule
+    assert (
+        labels_dict.get(
+            "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.priority"
+        )
+        == "100"
+    )
+    assert (
+        "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.middlewares"
+        not in labels_dict
+    )
+
+    # 3. Protected router: priority 10, protected by Authentik ForwardAuth middleware
+    assert (
+        labels_dict.get(
+            "traefik.http.routers.platform-todo${ENV_DOMAIN_SUFFIX}.priority"
+        )
+        == "10"
+    )
+    assert (
+        labels_dict.get(
+            "traefik.http.routers.platform-todo${ENV_DOMAIN_SUFFIX}.middlewares"
+        )
+        == "todo-auth${ENV_DOMAIN_SUFFIX}@docker"
+    )
+
+    # 4. Middleware forwardauth points to authentik server
+    mw_addr = labels_dict.get(
+        "traefik.http.middlewares.todo-auth${ENV_DOMAIN_SUFFIX}.forwardauth.address"
+    )
+    assert mw_addr is not None
+    assert "platform-authentik-server${ENV_SUFFIX}:9000" in mw_addr
+    assert "/outpost.goauthentik.io/auth/traefik" in mw_addr
+
+
+def test_todo_app_authentik_identity_and_me_endpoint() -> None:
+    """Verify /api/auth/me and UI rendering under Authentik ForwardAuth headers."""
+    spec = importlib.util.spec_from_file_location(
+        "todo_app", REPO_ROOT / "platform/30.todo/app.py"
+    )
+    assert spec is not None and spec.loader is not None
+    todo_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(todo_mod)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), todo_mod.TodoHandler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        # Unauthenticated /api/auth/me
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/api/auth/me", timeout=3
+        ) as resp:
+            assert resp.getcode() == 200
+            data = json.loads(resp.read().decode())
+            assert data["authenticated"] is False
+            assert data["username"] is None
+            assert data["groups"] == []
+
+        # Authenticated /api/auth/me with ForwardAuth headers
+        auth_req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/auth/me",
+            headers={
+                "X-authentik-username": "wangzitian0",
+                "X-authentik-name": "Zitian Wang",
+                "X-authentik-email": "wangzitian0@gmail.com",
+                "X-authentik-groups": "admins,developers",
+            },
+        )
+        with urllib.request.urlopen(auth_req, timeout=3) as resp:
+            assert resp.getcode() == 200
+            auth_data = json.loads(resp.read().decode())
+            assert auth_data["authenticated"] is True
+            assert auth_data["username"] == "wangzitian0"
+            assert auth_data["name"] == "Zitian Wang"
+            assert auth_data["email"] == "wangzitian0@gmail.com"
+            assert auth_data["groups"] == ["admins", "developers"]
+
+        # UI renders authenticated badge with name
+        ui_req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/",
+            headers={
+                "X-authentik-username": "wangzitian0",
+                "X-authentik-name": "Zitian Wang",
+            },
+        )
+        with urllib.request.urlopen(ui_req, timeout=3) as resp:
+            assert resp.getcode() == 200
+            html = resp.read().decode()
+            assert "SSO 认证通过: Zitian Wang" in html
+
+        # UI escapes HTML entities in user header to prevent XSS
+        xss_req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/",
+            headers={
+                "X-authentik-username": "attacker",
+                "X-authentik-name": "<script>alert('xss')</script>",
+            },
+        )
+        with urllib.request.urlopen(xss_req, timeout=3) as resp:
+            assert resp.getcode() == 200
+            html_xss = resp.read().decode()
+            assert "<script>alert('xss')</script>" not in html_xss
+            assert "&lt;script&gt;" in html_xss
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_portal_config_template_contains_canary_todo() -> None:
+    """Verify platform/21.portal/config.yml.tmpl includes Canary Todo card."""
+    import yaml
+
+    portal_tmpl = REPO_ROOT / "platform/21.portal/config.yml.tmpl"
+    assert portal_tmpl.exists()
+    content = yaml.safe_load(portal_tmpl.read_text())
+
+    platform_services = None
+    for group in content.get("services", []):
+        if group.get("name") == "Platform Services":
+            platform_services = group
+            break
+    assert platform_services is not None, "Platform Services section not found in Homer config"
+
+    todo_item = None
+    for item in platform_services.get("items", []):
+        if item.get("name") == "Canary Todo":
+            todo_item = item
+            break
+    assert todo_item is not None, "Canary Todo item not found in Homer config"
+    assert todo_item["url"] == "https://todo{{ENV_DOMAIN_SUFFIX}}.{{INTERNAL_DOMAIN}}"
+    assert todo_item["tag"] == "canary"
+

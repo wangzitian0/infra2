@@ -735,6 +735,8 @@ class Deployer:
         except ValueError as exc:
             error(str(exc))
             return False
+        if not data_path:
+            return True
         header(f"{cls.service} pre_compose", f"Preparing ({e['ENV']})")
 
         host = e["VPS_HOST"]

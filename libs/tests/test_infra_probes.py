@@ -792,10 +792,8 @@ def test_never_green_round_trip_escalates_after_the_grace_period(
     assert len(grace) == 1  # debounced per stream; the wording is stable
     assert grace[0]["commonLabels"]["severity"] == "warning"
     description = grace[0]["alerts"][0]["annotations"]["description"]
-    assert description.startswith("has not passed since the probe runner started")
-    assert "becomes InfraServiceProbeFailed after 3 failed runs over 15 min" in (
-        description
-    )
+    assert description.startswith("自 probe runner 启动以来从未通过")
+    assert "连续失败 3 次且超过 15 分钟后转为 InfraServiceProbeFailed" in description
     assert "HTTP Error 500" in description
 
     cycle(900)  # the streak now spans the window: an outage, not a misconfiguration
@@ -902,7 +900,7 @@ def test_a_round_trip_missing_its_own_configuration_never_escalates(
     )
     description = misconfigured[0]["alerts"][0]["annotations"]["description"]
     assert "no OpenPanel client id" in description
-    assert "has not passed" not in description
+    assert "从未通过" not in description
     assert not any("escalated" in line for line in printed)
     assert json.loads(state_path.read_text())["never_green"] == {}
 
@@ -2420,3 +2418,84 @@ def test_failing_public_routes_lists_a_route_once_its_page_is_delivered(
     script["results"] = {}  # passing again; the page is still open (recovery 1/2)
     runner.run_once(state_path=state_path, failure_threshold=3, recovery_threshold=2)
     assert beats[-1]["failing_public_routes"] == []
+
+
+def test_a_resolve_names_each_recovered_probe_and_how_long_it_was_down(
+    monkeypatch, tmp_path
+) -> None:
+    """#905: RESOLVED used to say "All infra service probes recovered" and name
+    nothing. The resolve now carries one resolved alert per probe it had paged, from
+    that probe's first failure (kept through the recovery window) to the recovery."""
+    from libs.alerting import build_feishu_alert_card
+
+    monkeypatch.setenv(
+        "INFRA_PROBE_SPECS",
+        "vault-http|http|http://vault:8200/v1/sys/health|200|critical|5||platform/vault\n"
+        "minio-http|http|http://minio:9000/minio/health/live|200|error|5||platform/minio\n"
+        "redis|tcp|platform-redis:6379|connected|error",
+    )
+    monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
+    clock = _Clock(1_790_236_800.0)  # 2026-09-24 08:00 UTC
+    runner, posted, _beats, script, _bridge = _scripted_runner(monkeypatch, clock=clock)
+    state_path = tmp_path / "state.json"
+
+    def loop() -> None:
+        runner.run_once(
+            state_path=state_path, failure_threshold=3, recovery_threshold=2
+        )
+        clock.now += 60
+
+    for minute in range(10):  # vault fails from 08:00, minio from 08:02
+        script["results"] = {"vault-http": "503:sealed"}
+        if minute >= 2:
+            script["results"]["minio-http"] = "000:timed out"
+        loop()
+    script["results"] = {}
+    loop()  # 08:10, first healthy loop: not resolved yet
+    loop()  # 08:11: resolved
+
+    first_page, joined, resolved = posted
+    assert [a["startsAt"] for a in first_page["alerts"]] == ["2026-09-24T08:00:00Z"]
+    assert sorted(a["startsAt"] for a in joined["alerts"]) == [
+        "2026-09-24T08:00:00Z",
+        "2026-09-24T08:02:00Z",
+    ]
+    assert resolved["status"] == "resolved"
+    assert sorted(
+        (a["labels"]["component"], a["startsAt"], a["endsAt"])
+        for a in resolved["alerts"]
+    ) == [
+        ("minio-http", "2026-09-24T08:02:00Z", "2026-09-24T08:11:00Z"),
+        ("vault-http", "2026-09-24T08:00:00Z", "2026-09-24T08:11:00Z"),
+    ]
+    card = build_feishu_alert_card(resolved, now=clock.now)
+    assert card["header"]["title"]["content"] == (
+        "✅ [已恢复] InfraServiceProbeFailed · production · 2 项"
+    )
+    blob = json.dumps(card, ensure_ascii=False)
+    assert "对象：platform/vault · vault-http" in blob
+    assert "2026-09-24 16:00（UTC+8） → 2026-09-24 16:11（UTC+8）(共 11 分钟)" in blob
+    assert "2026-09-24 16:02（UTC+8） → 2026-09-24 16:11（UTC+8）(共 9 分钟)" in blob
+    assert "redis" not in blob
+
+
+def test_a_page_carries_the_probe_target_and_expectation(monkeypatch) -> None:
+    """#905: the card's 现象 needs the target and the expectation next to the reading."""
+    monkeypatch.setenv("INFRA_ENVIRONMENT", "production")
+    spec = parse_probe_specs(
+        "vault-http|http|http://vault:8200/v1/sys/health|200,429|critical|5||platform/vault"
+    )[0]
+    result = probes.run_probe(spec, http_get=lambda *_args: (503, "sealed"))
+
+    (alert,) = build_probe_alert_payload(
+        [result], started_at={"vault-http": 1_790_236_800}
+    )["alerts"]
+
+    assert alert["annotations"] == {
+        "summary": "vault-http probe failed",
+        "description": "expected '200,429', observed '503:sealed'",
+        "observed": "503:sealed",
+        "target": "http://vault:8200/v1/sys/health",
+        "expected": "200,429",
+    }
+    assert alert["startsAt"] == "2026-09-24T08:00:00Z"
