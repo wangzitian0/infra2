@@ -71,8 +71,8 @@ for (const [label, beat] of Object.entries(beats)) {
       status: response.status,
       storedRoutes: stored ? stored.failingPublicRoutes : null,
       storedDeliveryAt: stored ? stored.lastDeliveryOkAt : null,
-      entrypointPages: messages.filter((m) => /FIRING P0 host-reachability production\/\S+-public-route/.test(m)).length,
-      loopPages: messages.filter((m) => m.includes("FIRING P1 alert-pipeline")).length,
+      entrypointPages: messages.filter((m) => /级别：P0\n环境：production\n对象：\S+ · \S+-public-route\n现象：从 Cloudflare 访问不到外部入口 /.test(m)).length,
+      loopPages: messages.filter((m) => /级别：P1\n环境：production\n对象：\S+ · \S+\n现象：探测循环报告不健康/.test(m)).length,
     };
   } finally {
     globalThis.fetch = original;

@@ -401,10 +401,10 @@ async function detection(deathAt) {
     const url = String(input);
     if (url.startsWith("https://feishu.invalid/")) {
       const text = JSON.parse(init.body).content.text;
-      if (firstSeen.entrypoint === undefined && /FIRING P0 host-reachability production\/\S+-public-route/.test(text)) {
+      if (firstSeen.entrypoint === undefined && /级别：P0\n环境：production\n对象：\S+ · \S+-public-route\n现象：从 Cloudflare 访问不到外部入口 /.test(text)) {
         firstSeen.entrypoint = clock;
       }
-      if (firstSeen.stale === undefined && text.includes("VPS or its egress is down")) firstSeen.stale = clock;
+      if (firstSeen.stale === undefined && text.includes("现象：VPS 或它的出网中断")) firstSeen.stale = clock;
       return new Response("ok", { status: 200 });
     }
     if (url.startsWith("https://hc-ping.com/")) return new Response("ok", { status: 200 });

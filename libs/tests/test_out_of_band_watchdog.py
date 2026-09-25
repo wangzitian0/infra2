@@ -42,6 +42,20 @@ def _no_real_feishu(monkeypatch):
     monkeypatch.setattr(alerting, "deliver_feishu_text", refuse)
 
 
+def _page_blocks(message: str) -> list[dict[str, str]]:
+    """A page's item blocks (#905): ``{label: value}`` in message order."""
+    from libs.alerting import FIELD_SEPARATOR, PAGER_FIELDS
+
+    blocks: list[dict[str, str]] = []
+    for line in message.splitlines():
+        label, separator, value = line.partition(FIELD_SEPARATOR)
+        if re.fullmatch(r"— \d+/\d+ —", line):
+            blocks.append({})
+        elif blocks and separator and label in PAGER_FIELDS:
+            blocks[-1][label] = value
+    return blocks
+
+
 def _load_watchdog():
     spec = importlib.util.spec_from_file_location("out_of_band_watchdog", WATCHDOG)
     module = importlib.util.module_from_spec(spec)
@@ -433,14 +447,22 @@ def test_failure_message_is_out_of_band_and_redacts_secrets() -> None:
     ]
 
     message = watchdog.format_failure_message(results, run_url="https://github/run/1")
+    lines = message.splitlines()
 
-    assert "[OUT-OF-BAND] Infra2 watchdog failed" in message
-    assert "Route: GitHub Actions -> Feishu direct" in message
-    assert "[host-diagnostics] infra2-iac-runner" in message
-    assert "[alert-bridge] infra2-alert-bridge" in message
-    assert "Action:" in message
-    assert "Runbook:" in message
-    assert "https://github/run/1" in message
+    assert lines[:3] == [
+        "🟠 [P1 告警] GitHub 日级带外审计 · 2 项",
+        "来源：GitHub Actions 日级带外审计 → 飞书直发(不经 bridge)",
+        "运行：https://github/run/1",
+    ]
+    iac, bridge = _page_blocks(message)
+    assert iac["对象"] == "infra2-iac-runner"
+    assert iac["影响"].startswith("[host-diagnostics] ")
+    assert bridge["对象"] == "infra2-alert-bridge"
+    assert bridge["影响"].startswith("[alert-bridge] ")
+    assert bridge["下一步"] == watchdog._suggested_action_for_failure(
+        "infra2-alert-bridge", "alert-bridge"
+    )
+    assert bridge["Runbook"] == watchdog._runbook_url_for_failure("alert-bridge")
     assert "secret-token" not in message
 
 
@@ -517,8 +539,9 @@ def test_main_sends_feishu_only_when_a_paging_check_fails(monkeypatch) -> None:
         == 1
     )
     assert len(sent_messages) == 1
-    assert "OUT-OF-BAND" in sent_messages[0]
-    assert "cloudflare-worker-status: stale" in sent_messages[0]
+    (block,) = _page_blocks(sent_messages[0])
+    assert block["对象"] == "cloudflare-worker-status"
+    assert block["现象"] == "stale"
 
 
 def test_http_checks_retry_transient_failure(monkeypatch) -> None:
@@ -1319,12 +1342,16 @@ def test_format_failure_message_shows_max_severity_and_per_line_tags() -> None:
 
     message = watchdog.format_failure_message(results, run_url="")
 
-    assert "Severity: P0" in message
-    assert "- [P0] [host-reachability] infra2-ssh:" in message
-    assert "- [P1] [dokploy-control-plane] infra2-worker-status:" in message
-    assert "- [P2] [dokploy-deploy-status] dokploy-status:app/staging/backend:" in (
-        message
-    )
+    assert message.startswith("🔴 [P0 告警] GitHub 日级带外审计 · 3 项\n")
+    # the most severe first, each block with its own level
+    assert [
+        (block["级别"], block["影响"].split("]")[0], block["对象"])
+        for block in _page_blocks(message)
+    ] == [
+        ("P0", "[host-reachability", "infra2-ssh"),
+        ("P1", "[dokploy-control-plane", "infra2-worker-status"),
+        ("P2", "[dokploy-deploy-status", "dokploy-status:app/staging/backend"),
+    ]
 
 
 def test_docker_health_command_covers_created_and_exited_containers() -> None:
@@ -1454,7 +1481,10 @@ def test_a_configuration_failure_on_a_report_only_check_pages_as_the_watchdog(
         }
     )
 
-    assert "infra2-dokploy-status: DOKPLOY_API_KEY is missing" in pages[0]
+    assert {
+        (block["对象"], block["现象"], block["级别"])
+        for block in _page_blocks(pages[0])
+    } >= {("infra2-dokploy-status", "DOKPLOY_API_KEY is missing", "P0")}
     trail = load_trail(path, expected_sources=["out-of-band-watchdog"])
     assert set(trail.failing) == {"cloudflare-worker-status", "out-of-band-watchdog"}
     own = trail.failing["out-of-band-watchdog"]
@@ -1601,11 +1631,13 @@ PAGING = {
     "truealpha-scheduler-liveness",
 }
 _FAILURE_LINE = re.compile(r"^- \[P\d\] (?:\[[^\]]+\] )?(\S+): ", re.MULTILINE)
+_PAGE_OBJECT = re.compile(r"^对象：(\S+)$", re.MULTILINE)
 
 
 def _failure_names(message: str) -> set[str]:
-    """The checks a page or report lists as failures (`- [P1] [domain] name: ...`)."""
-    return set(_FAILURE_LINE.findall(message))
+    """The checks a page or report lists as failures: a page's 对象 lines (#905), a
+    report's `- [P1] [domain] name: ...` lines."""
+    return set(_FAILURE_LINE.findall(message)) | set(_PAGE_OBJECT.findall(message))
 
 
 #: The GitHub checks another layer pages (#908): they only report.
@@ -1818,7 +1850,7 @@ def test_main_pages_only_the_owned_classes_and_reports_the_rest(
         "dokploy-status:truealpha/production/postgres",
         "dokploy-status:truealpha/production/app",
     }
-    failures, stale = reports[0].split("Stale Dokploy records (1)", 1)
+    failures, stale = reports[0].split("过期的 Dokploy 记录(1 条,不算失败)", 1)
     assert "dokploy-status:truealpha/production/redis" in stale
     assert "run healthy on the current config cccccccccccc" in stale
     # an old record without per-unit evidence is a failure, labelled with its age
@@ -1826,7 +1858,7 @@ def test_main_pages_only_the_owned_classes_and_reports_the_rest(
         "production/app: composeStatus=error; old record: latest deployment is 100h old"
         in failures
     )
-    info = reports[0].split("Information:", 1)[1]
+    info = reports[0].split("信息:", 1)[1]
     assert "delivered by the Worker itself: ok=False failures=2" in info
     assert set(trail.failing) == {"infra2-backup-production"}
     assert trail.complete
@@ -2034,7 +2066,7 @@ def test_a_failed_pull_under_a_green_host_sweep_is_a_failure_not_stale(
     )
 
     assert (code, pages) == (0, [])
-    assert "Stale Dokploy records" not in reports[0]
+    assert "过期的 Dokploy 记录" not in reports[0]
     assert _failure_names(reports[0]) == {
         "dokploy-status:finance-report/production/backend",
         "dokploy-status:finance-report/staging/backend",
@@ -2086,8 +2118,9 @@ def test_a_dry_run_prints_a_page_holding_only_the_paging_classes(
 
     assert (code, pages, reports) == (1, [], [])
     out = capsys.readouterr().out
-    page = out[out.index("[OUT-OF-BAND]") :]
-    report = out[out.index("[REPORT]") : out.index("[OUT-OF-BAND]")]
+    page_start = out.index("告警] GitHub 日级带外审计")
+    page = out[page_start:]
+    report = out[out.index("[报告] Infra2 GitHub watchdog") : page_start]
     assert _failure_names(page) == {"infra2-restore-rehearsal"}
     assert _failure_names(report) == {"infra2-ssh"}
 
@@ -2164,3 +2197,162 @@ def test_the_drill_input_reaches_the_tool_only_through_env() -> None:
         for step in body["steps"]:
             assert "peer_liveness_bound_cap_hours" not in step.get("run", "")
             assert "inputs.ssh_targets_override" not in step.get("run", "")
+
+
+# ---- the pager layout (#905) ---------------------------------------------------------
+
+
+def test_a_github_page_shows_every_field_of_the_shared_layout() -> None:
+    """#905: the page carries 级别 · 环境 · 对象 · 现象 · 开始于 · 影响 · 下一步 ·
+    Runbook for every failure, and no fixed scope line that describes nothing."""
+    from libs.alerting import PAGER_FIELDS
+
+    watchdog = _load_watchdog()
+    results = [
+        watchdog.CheckResult(
+            "infra2-backup-staging",
+            False,
+            "latest manifest is 9 days old",
+            "backup",
+            severity="P2",
+        ),
+        watchdog.CheckResult(
+            "cloudflare-worker-status",
+            False,
+            "worker last ran 9000s ago (max 7200s); token=abc123",
+            "cloudflare-worker-health",
+            severity="P1",
+        ),
+        watchdog.CheckResult(
+            "infra2-backup-production",
+            False,
+            "postgres dump missing from the manifest",
+            "backup",
+            severity="P1",
+        ),
+    ]
+
+    message = watchdog.format_failure_message(
+        results, run_url="https://github.example/run/9", now=1_790_236_800
+    )
+    worker, production, staging = _page_blocks(message)
+
+    assert "Scope" not in message and "abc123" not in message
+    assert worker == {
+        "级别": "P1",
+        "环境": "global",
+        "对象": "cloudflare-worker-status",
+        "现象": "worker last ran 9000s ago (max 7200s); token=***",
+        "开始于": "2026-09-24 16:00（UTC+8） 检出(日级审计;实际开始时间未知)",
+        "影响": "[cloudflare-worker-health] "
+        + watchdog._IMPACT_BY_DOMAIN["cloudflare-worker-health"],
+        "下一步": watchdog._suggested_action_for_failure(
+            "cloudflare-worker-status", "cloudflare-worker-health"
+        ),
+        "Runbook": watchdog._runbook_url_for_failure("cloudflare-worker-health"),
+    }
+    assert list(worker) == list(PAGER_FIELDS[:8])
+    assert (production["环境"], production["级别"]) == ("production", "P1")
+    assert (staging["环境"], staging["级别"]) == ("staging", "P2")
+    assert production["Runbook"].endswith("ops.recovery.md#sop-004-备份-freshness-验证")
+
+
+@pytest.mark.parametrize(
+    ("name", "domain", "environment"),
+    [
+        ("dokploy-status:truealpha/pr-7/web", "dokploy-deploy-status", "pr-7"),
+        (
+            "dokploy-status:platform/production/vault",
+            "dokploy-deploy-status",
+            "production",
+        ),
+        ("infra2-backup-staging", "backup", "staging"),
+        ("infra2-restore-rehearsal", "restore-rehearsal", "production"),
+        ("watchdog-signal-registry", "configuration", "global"),
+        ("truealpha-scheduler-liveness", "peer-scheduler-liveness", "global"),
+    ],
+)
+def test_a_github_check_names_its_environment(name, domain, environment) -> None:
+    watchdog = _load_watchdog()
+    result = watchdog.CheckResult(name, False, "x", domain)
+
+    assert watchdog._check_environment(result) == environment
+
+
+def test_every_runbook_the_github_watchdog_links_resolves() -> None:
+    """Each infra2 runbook anchor the page uses is a heading that exists."""
+    from libs.tests.test_pager_format import BLOB, _anchors
+
+    watchdog = _load_watchdog()
+    domains = [
+        *watchdog._IMPACT_BY_DOMAIN,
+        "http-target",
+        "host-diagnostics",
+    ]
+    urls = {watchdog._runbook_url_for_failure(domain) for domain in domains}
+    infra2 = sorted(url for url in urls if url.startswith(f"{BLOB}/"))
+    missing = [
+        url
+        for url in infra2
+        if url.split("#", 1)[1]
+        not in _anchors(ROOT / url.removeprefix(f"{BLOB}/").split("#", 1)[0])
+    ]
+
+    assert len(infra2) >= 6
+    assert missing == []
+
+
+def test_the_github_report_is_titled_as_a_report() -> None:
+    watchdog = _load_watchdog()
+    report = watchdog.format_report_message(
+        [
+            watchdog.CheckResult(
+                "infra2-ssh", False, "ssh exited 255", "host-reachability"
+            )
+        ],
+        [],
+        [],
+        run_url="",
+    )
+
+    assert report.splitlines()[0] == "[报告] Infra2 GitHub watchdog 日级审计"
+
+
+def test_github_page_prose_is_chinese() -> None:
+    """#905: every next step and impact the GitHub page can show is Chinese;
+    commands, paths and identifiers stay verbatim in backticks."""
+    from libs.tests.test_pager_format import english_prose
+
+    watchdog = _load_watchdog()
+    domains = [*watchdog._IMPACT_BY_DOMAIN, "http-target", "host-diagnostics"]
+    page = watchdog.format_failure_message(
+        [
+            watchdog.CheckResult(
+                "infra2-ssh", False, "ssh exited 255", "host-reachability"
+            )
+        ],
+        run_url="https://github.example/run/1",
+    )
+    texts = [
+        *page.splitlines()[:3],  # the title, the source and the run
+        *(watchdog._suggested_action_for_failure("x", domain) for domain in domains),
+        *watchdog._IMPACT_BY_DOMAIN.values(),
+        watchdog._DEFAULT_IMPACT,
+    ]
+
+    assert len(texts) >= 25
+    assert {text: english_prose(text) for text in texts if english_prose(text)} == {}
+
+
+def test_the_github_redaction_also_cuts_credentials() -> None:
+    """#905: the GitHub watchdog shares the bridge's credential redaction (DSN
+    passwords, bearer tokens) on top of its own stricter rule."""
+    watchdog = _load_watchdog()
+
+    redacted = watchdog._redact(
+        "psql postgresql://app:pw-9f3@db:5432/x failed; Bearer abc.def; token=zz9"
+    )
+
+    assert redacted == (
+        "psql postgresql://***:***@db:5432/x failed; Bearer ***; token=***"
+    )

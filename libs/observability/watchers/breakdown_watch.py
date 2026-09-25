@@ -128,19 +128,41 @@ def _list_containers(client: httpx.Client) -> list[dict]:
 
 
 def _container_logs(client: httpx.Client, container_id: str, tail: int) -> str:
-    """Recent stdout+stderr. The Engine multiplexes a frame header per line when
-    the container has no TTY; substring matching still works on the decoded text,
-    so we don't bother de-framing."""
+    """Recent stdout+stderr, de-framed (``demux_docker_logs``)."""
     try:
         resp = client.get(
             f"/containers/{container_id}/logs",
             params={"stdout": "1", "stderr": "1", "tail": str(tail)},
         )
         resp.raise_for_status()
-        return resp.content.decode("utf-8", errors="replace")
+        return demux_docker_logs(resp.content)
     except Exception as exc:  # logs are best-effort; never abort the sweep
         logger.warning("log fetch failed for %s: %s", container_id[:12], exc)
         return ""
+
+
+def demux_docker_logs(raw: bytes) -> str:
+    """The text of a Docker Engine log stream.
+
+    Without a TTY the Engine prefixes every frame with an 8-byte header (stream type,
+    three zero bytes, big-endian length). Substring matching survived it, but the log
+    tail a card shows (#905) must not start every line with header bytes. A stream
+    that does not start with a header (a TTY container) is returned as it is.
+    """
+    frames: list[bytes] = []
+    position = 0
+    while (
+        position + 8 <= len(raw)
+        and raw[position] in (0, 1, 2)
+        and raw[position + 1 : position + 4] == b"\x00\x00\x00"
+    ):
+        size = int.from_bytes(raw[position + 4 : position + 8], "big")
+        frames.append(raw[position + 8 : position + 8 + size])
+        position += 8 + size
+    if not frames:
+        return raw.decode("utf-8", errors="replace")
+    frames.append(raw[position:])
+    return b"".join(frames).decode("utf-8", errors="replace")
 
 
 def _post_alert(payload: dict) -> None:
@@ -200,9 +222,11 @@ def run_once(
     and preview lines go out as a report, production lines to the pager (#903). All
     three dicts are mutated in place and owned by the caller like ``container_state``.
     """
+    import dataclasses
     import time
 
     now = time.monotonic()
+    wall = time.time()  # when a breakdown started, for the card (#905)
     resolved_at = {} if resolved_at is None else resolved_at
     chronic = {} if chronic is None else chronic
     chronic_context = {} if chronic_context is None else chronic_context
@@ -218,6 +242,10 @@ def run_once(
     for name, b in broken_by_name.items():
         state = container_state.setdefault(name, ConsecutiveObservationState())
         previous = state.context
+        # A tracked container is mid-streak or mid-incident: it broke when it first did.
+        b = dataclasses.replace(
+            b, since=previous.since if previous is not None and previous.since else wall
+        )
         state.context = b  # latest breakdown, so a later RESOLVED reuses its labels
         # An ongoing incident whose CAUSE changed is news again: "unhealthy" becoming
         # "restarting", or a different reason extracted from the logs, is what an
@@ -359,7 +387,7 @@ def run_once(
             len(recovered),
             ",".join(sorted(rec.container for rec in recovered)),
         )
-        _post_alert(build_breakdown_alert_payload(recovered, firing=False))
+        _post_alert(build_breakdown_alert_payload(recovered, firing=False, now=wall))
     chronic_names = sorted(n for n in chronic if n != "__digest_at__")
     if chronic_names and "__digest_at__" not in chronic:
         # Start the clock on the first chronic observation instead of posting on it.
@@ -380,20 +408,21 @@ def run_once(
                 container=name,
                 state="chronic",
                 reason=(
-                    f"staging/preview container, never paged: broken in "
-                    f"{chronic[name]} sweep(s)"
+                    f"staging/预览容器,从不呼人:{chronic[name]} 次巡检坏着"
                     if is_report_only(context(name))
                     # Keyed on the floor itself, not on `active`: a floor-suppressed
                     # re-break leaves the incident active, so keying on `active` made
                     # this wording unreachable in exactly the case it describes
                     # (review on #686).
-                    else f"re-broke {chronic[name]}x inside the "
-                    f"{stay_resolved_seconds // 3600}h stay-resolved floor"
+                    else f"恢复后 {stay_resolved_seconds // 3600}h 保持期内又坏了 "
+                    f"{chronic[name]} 次"
                     if now - resolved_at.get(name, float("-inf"))
                     < stay_resolved_seconds
-                    else f"still broken, {chronic[name]} sweep(s) since it last paged"
+                    else f"仍坏着:上次呼人后已 {chronic[name]} 次巡检"
                 ),
                 detail=context(name).detail if context(name) else "",
+                log_tail=context(name).log_tail if context(name) else "",
+                since=context(name).since if context(name) else 0.0,
                 service_id=context(name).service_id if context(name) else "",
                 component=context(name).component if context(name) else "container",
                 # no context: production, so the line pages rather than going quiet
