@@ -34,7 +34,9 @@ import yaml
 
 try:
     from infra2_sdk.rules.compose import is_memory_ceiling as _is_ceiling
-except ImportError:
+except ModuleNotFoundError as exc:
+    if exc.name not in ("infra2_sdk", None) and not exc.name.startswith("infra2_sdk."):
+        raise
     # 512m, 1.5g, 2G, 1073741824. A bare 0, "0", "0b" or prose is not a ceiling.
     SIZE_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([kmgtb]?b?)\s*$", re.I)
     UNITS = {
