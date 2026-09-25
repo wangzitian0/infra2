@@ -337,26 +337,34 @@ def test_probe_redis_authenticated_lifecycle() -> None:
         with conn:
             rf = conn.makefile("rb")
             # 1. Expect AUTH
-            rf.readline()
-            rf.readline()
-            cmd = rf.readline()
-            rf.readline()
-            passwd = rf.readline()
-            assert b"AUTH" in cmd
-            assert b"secret123" in passwd
+            assert rf.readline() == b"*2\r\n"
+            assert rf.readline() == b"$4\r\n"
+            assert rf.readline() == b"AUTH\r\n"
+            assert rf.readline() == b"$9\r\n"
+            assert rf.readline() == b"secret123\r\n"
             conn.sendall(b"+OK\r\n")
             # 2. Expect PING
-            rf.readline()
-            rf.readline()
-            rf.readline()
+            assert rf.readline() == b"*1\r\n"
+            assert rf.readline() == b"$4\r\n"
+            assert rf.readline() == b"PING\r\n"
             conn.sendall(b"+PONG\r\n")
             # 3. Expect SETEX
-            for _ in range(7):
-                rf.readline()
+            assert rf.readline() == b"*4\r\n"
+            assert rf.readline() == b"$5\r\n"
+            assert rf.readline() == b"SETEX\r\n"
+            assert rf.readline() == b"$11\r\n"
+            assert rf.readline() == b"canary:ping\r\n"
+            assert rf.readline() == b"$2\r\n"
+            assert rf.readline() == b"10\r\n"
+            assert rf.readline() == b"$2\r\n"
+            assert rf.readline() == b"ok\r\n"
             conn.sendall(b"+OK\r\n")
             # 4. Expect GET
-            for _ in range(3):
-                rf.readline()
+            assert rf.readline() == b"*2\r\n"
+            assert rf.readline() == b"$3\r\n"
+            assert rf.readline() == b"GET\r\n"
+            assert rf.readline() == b"$11\r\n"
+            assert rf.readline() == b"canary:ping\r\n"
             conn.sendall(b"$2\r\nok\r\n")
 
     th = threading.Thread(target=_serve, daemon=True)

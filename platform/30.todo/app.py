@@ -431,7 +431,7 @@ def _probe_redis(
                 # 3. GET canary:ping -> $2\r\nok\r\n
                 sock.sendall(b"*2\r\n$3\r\nGET\r\n$11\r\ncanary:ping\r\n")
                 len_line = rf.readline()
-                if not len_line.startswith(b"$2"):
+                if len_line.strip() != b"$2":
                     elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
                     return {
                         "status": "fail",
@@ -440,7 +440,7 @@ def _probe_redis(
                     }
                 val_data = rf.readline()
         elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
-        if val_data.startswith(b"ok"):
+        if val_data.strip() == b"ok":
             return {
                 "status": "pass",
                 "latency_ms": elapsed_ms,
