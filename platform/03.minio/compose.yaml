@@ -62,19 +62,20 @@ services:
       start_period: 10s
 
   minio:
-    # After RELEASE.2025-04-22T22-12-26Z, MinIO removed most of the admin UI
-    # Using the last version with full Console admin features
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    # RustFS (S3-compatible, Apache 2.0, Rust memory-safe object storage)
+    # Built with mc embedded to preserve 100% compatibility with shared tasks and scripts (#930)
+    build:
+      context: ../..
+      dockerfile: platform/03.minio/Dockerfile
+    pull_policy: build
+    image: platform-minio-rustfs:${IAC_CONFIG_HASH:-latest}
     container_name: platform-minio${ENV_SUFFIX}
     restart: always
     depends_on:
       - vault-agent
     environment:
-      # Clear _FILE vars from base image to use env vars from /secrets/.env
-      MINIO_ROOT_USER_FILE: ""
-      MINIO_ROOT_PASSWORD_FILE: ""
-      MINIO_ACCESS_KEY_FILE: ""
-      MINIO_SECRET_KEY_FILE: ""
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_HEALTH_ENDPOINT_ENABLE: "true"
     entrypoint:
       - sh
       - -c
@@ -87,9 +88,13 @@ services:
         set -a
         . /secrets/.env
         set +a
-        exec minio server /data --console-address ":9001"
+        export RUSTFS_ROOT_USER="$${MINIO_ROOT_USER:-admin}"
+        export RUSTFS_ROOT_PASSWORD="$${MINIO_ROOT_PASSWORD}"
+        export RUSTFS_ACCESS_KEY="$${MINIO_ROOT_USER:-admin}"
+        export RUSTFS_SECRET_KEY="$${MINIO_ROOT_PASSWORD}"
+        exec rustfs server /data --console-address ":9001" --address ":9000"
     healthcheck:
-      test: [ "CMD", "mc", "ready", "local" ]
+      test: [ "CMD-SHELL", "mc ready local || wget -q -O /dev/null http://localhost:9000/minio/health/live || exit 1" ]
       start_period: 30s
       interval: 30s
       retries: 5
@@ -109,7 +114,9 @@ services:
       - secrets:/secrets:ro
       - ${DATA_PATH}:/data
     networks:
-      - dokploy-network
+      dokploy-network:
+        aliases:
+          - platform-rustfs${ENV_SUFFIX}
     logging:
       driver: json-file
       options:
