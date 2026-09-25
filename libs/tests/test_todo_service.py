@@ -281,3 +281,120 @@ def test_todo_app_concurrency_nonblocking(monkeypatch) -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_probe_redis_noauth_handshake() -> None:
+    """Verify _probe_redis treats -NOAUTH challenge as physical proof of RESP engine responsiveness."""
+    spec = importlib.util.spec_from_file_location(
+        "todo_app", REPO_ROOT / "platform/30.todo/app.py"
+    )
+    assert spec is not None and spec.loader is not None
+    todo_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(todo_mod)
+
+    import socket
+
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+
+    def _serve():
+        conn, _ = srv.accept()
+        with conn:
+            req = conn.recv(1024)
+            if b"PING" in req:
+                conn.sendall(b"-NOAUTH Authentication required.\r\n")
+
+    th = threading.Thread(target=_serve, daemon=True)
+    th.start()
+    try:
+        res = todo_mod._probe_redis("127.0.0.1", port, timeout=1.0)
+        assert res["status"] == "pass"
+        assert "auth required" in res["detail"]
+    finally:
+        srv.close()
+
+
+def test_probe_redis_authenticated_lifecycle() -> None:
+    """Verify _probe_redis with password completes full AUTH -> PING -> SETEX -> GET cycle."""
+    spec = importlib.util.spec_from_file_location(
+        "todo_app", REPO_ROOT / "platform/30.todo/app.py"
+    )
+    assert spec is not None and spec.loader is not None
+    todo_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(todo_mod)
+
+    import socket
+
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+
+    def _serve():
+        conn, _ = srv.accept()
+        with conn:
+            rf = conn.makefile("rb")
+            # 1. Expect AUTH
+            assert rf.readline() == b"*2\r\n"
+            assert rf.readline() == b"$4\r\n"
+            assert rf.readline() == b"AUTH\r\n"
+            assert rf.readline() == b"$9\r\n"
+            assert rf.readline() == b"secret123\r\n"
+            conn.sendall(b"+OK\r\n")
+            # 2. Expect PING
+            assert rf.readline() == b"*1\r\n"
+            assert rf.readline() == b"$4\r\n"
+            assert rf.readline() == b"PING\r\n"
+            conn.sendall(b"+PONG\r\n")
+            # 3. Expect SETEX
+            assert rf.readline() == b"*4\r\n"
+            assert rf.readline() == b"$5\r\n"
+            assert rf.readline() == b"SETEX\r\n"
+            assert rf.readline() == b"$11\r\n"
+            assert rf.readline() == b"canary:ping\r\n"
+            assert rf.readline() == b"$2\r\n"
+            assert rf.readline() == b"10\r\n"
+            assert rf.readline() == b"$2\r\n"
+            assert rf.readline() == b"ok\r\n"
+            conn.sendall(b"+OK\r\n")
+            # 4. Expect GET
+            assert rf.readline() == b"*2\r\n"
+            assert rf.readline() == b"$3\r\n"
+            assert rf.readline() == b"GET\r\n"
+            assert rf.readline() == b"$11\r\n"
+            assert rf.readline() == b"canary:ping\r\n"
+            conn.sendall(b"$2\r\nok\r\n")
+
+    th = threading.Thread(target=_serve, daemon=True)
+    th.start()
+    try:
+        res = todo_mod._probe_redis("127.0.0.1", port, password="secret123", timeout=1.0)
+        assert res["status"] == "pass"
+        assert "PONG & SETEX/GET verified" in res["detail"]
+    finally:
+        srv.close()
+
+
+def test_prepare_dirs_noop_on_empty_data_path(monkeypatch) -> None:
+    """Verify _prepare_dirs returns True without calling ssh when data_path is empty."""
+    import libs.deploy.deployer as d
+    from unittest.mock import MagicMock
+
+    cmds: list[str] = []
+    monkeypatch.setattr(d, "validate_env", lambda: [])
+    monkeypatch.setattr(d, "run_with_status", lambda c, cmd, label: cmds.append(cmd))
+
+    class DummyStatelessDeployer(d.Deployer):
+        service = "stateless-dummy"
+        data_path = ""
+
+        @classmethod
+        def env(cls):
+            return {"ENV": "production", "VPS_HOST": "vps"}
+
+    result = DummyStatelessDeployer._prepare_dirs(MagicMock())
+    assert result is True
+    assert len(cmds) == 0
+

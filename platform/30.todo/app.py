@@ -370,21 +370,51 @@ def _probe_http(url: str, timeout: float = 3.0) -> Dict[str, Any]:
         return {"status": "fail", "latency_ms": elapsed_ms, "detail": str(exc)}
 
 
-def _probe_redis(host: str, port: int = 6379, timeout: float = 2.0) -> Dict[str, Any]:
+def _probe_redis(
+    host: str,
+    port: int = 6379,
+    password: str | None = None,
+    timeout: float = 2.0,
+) -> Dict[str, Any]:
     """Test raw Redis RESP protocol over TCP socket: ping and key read/write lifecycle."""
     start = time.perf_counter()
     try:
         with socket.create_connection((host, port), timeout=timeout) as sock:
             with sock.makefile("rb") as rf:
-                # 1. PING -> +PONG\r\n
+                if password:
+                    pass_bytes = password.encode("utf-8")
+                    sock.sendall(
+                        b"*2\r\n$4\r\nAUTH\r\n$"
+                        + str(len(pass_bytes)).encode("ascii")
+                        + b"\r\n"
+                        + pass_bytes
+                        + b"\r\n"
+                    )
+                    auth_line = rf.readline()
+                    if not auth_line.startswith(b"+OK"):
+                        elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
+                        return {
+                            "status": "fail",
+                            "latency_ms": elapsed_ms,
+                            "detail": f"AUTH failed: {auth_line.decode('latin1', errors='replace').strip()}",
+                        }
+
+                # 1. PING -> +PONG\r\n or -NOAUTH (when requirepass enabled and no password provided)
                 sock.sendall(b"*1\r\n$4\r\nPING\r\n")
                 pong_line = rf.readline()
+                if pong_line.startswith(b"-NOAUTH"):
+                    elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
+                    return {
+                        "status": "pass",
+                        "latency_ms": elapsed_ms,
+                        "detail": "Redis RESP verified (auth required)",
+                    }
                 if not pong_line.startswith(b"+PONG"):
                     elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
                     return {
                         "status": "fail",
                         "latency_ms": elapsed_ms,
-                        "detail": f"PING failed: {pong_line!r}",
+                        "detail": f"PING failed: {pong_line.decode('latin1', errors='replace').strip()}",
                     }
                 # 2. SETEX canary:ping 10 ok -> +OK\r\n
                 sock.sendall(
@@ -396,21 +426,21 @@ def _probe_redis(host: str, port: int = 6379, timeout: float = 2.0) -> Dict[str,
                     return {
                         "status": "fail",
                         "latency_ms": elapsed_ms,
-                        "detail": f"SETEX failed: {set_line!r}",
+                        "detail": f"SETEX failed: {set_line.decode('latin1', errors='replace').strip()}",
                     }
                 # 3. GET canary:ping -> $2\r\nok\r\n
                 sock.sendall(b"*2\r\n$3\r\nGET\r\n$11\r\ncanary:ping\r\n")
                 len_line = rf.readline()
-                if not len_line.startswith(b"$2"):
+                if len_line.strip() != b"$2":
                     elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
                     return {
                         "status": "fail",
                         "latency_ms": elapsed_ms,
-                        "detail": f"GET length header unexpected: {len_line!r}",
+                        "detail": f"GET length header unexpected: {len_line.decode('latin1', errors='replace').strip()}",
                     }
                 val_data = rf.readline()
         elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
-        if val_data.startswith(b"ok"):
+        if val_data.strip() == b"ok":
             return {
                 "status": "pass",
                 "latency_ms": elapsed_ms,
@@ -433,6 +463,7 @@ def run_all_checks() -> Dict[str, Any]:
     pg_port = int(os.environ.get("POSTGRES_PORT", "5432"))
     redis_host = os.environ.get("REDIS_HOST", f"platform-redis{suffix}")
     redis_port = int(os.environ.get("REDIS_PORT", "6379"))
+    redis_password = os.environ.get("REDIS_PASSWORD") or None
     minio_url = os.environ.get(
         "MINIO_ENDPOINT", "http://platform-minio:9000/minio/health/live"
     )
@@ -448,7 +479,7 @@ def run_all_checks() -> Dict[str, Any]:
 
     checks = {
         "postgres": _probe_postgres(pg_host, pg_port),
-        "redis": _probe_redis(redis_host, redis_port),
+        "redis": _probe_redis(redis_host, redis_port, password=redis_password),
         "minio": _probe_http(minio_url),
         "signoz": _probe_http(signoz_url),
         "openpanel": _probe_http(openpanel_url),
