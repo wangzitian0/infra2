@@ -13,6 +13,7 @@ platform infrastructure capabilities:
 
 from __future__ import annotations
 
+import html
 import json
 import os
 import socket
@@ -67,7 +68,7 @@ _FALLBACK_TODOS: List[Dict[str, Any]] = [
         "title": "平台 Authentik SSO 与 GitHub OAuth 单点登录受验",
         "completed": True,
         "capability": "authentik",
-        "created_at": "2026-09-25T19:00:00Z",
+        "created_at": "2026-09-25T11:00:00Z",
     },
 ]
 
@@ -539,10 +540,11 @@ class TodoHandler(BaseHTTPRequestHandler):
             email = self.headers.get("X-authentik-email", "")
             user_display = name or username or email
             if username:
+                safe_display = html.escape(user_display)
                 auth_badge = (
                     f'<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">'
                     f'<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>'
-                    f'SSO 认证通过: {user_display}'
+                    f'SSO 认证通过: {safe_display}'
                     f'</span>'
                 )
             else:

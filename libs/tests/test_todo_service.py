@@ -514,6 +514,20 @@ def test_todo_app_authentik_identity_and_me_endpoint() -> None:
             assert resp.getcode() == 200
             html = resp.read().decode()
             assert "SSO 认证通过: Zitian Wang" in html
+
+        # UI escapes HTML entities in user header to prevent XSS
+        xss_req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/",
+            headers={
+                "X-authentik-username": "attacker",
+                "X-authentik-name": "<script>alert('xss')</script>",
+            },
+        )
+        with urllib.request.urlopen(xss_req, timeout=3) as resp:
+            assert resp.getcode() == 200
+            html_xss = resp.read().decode()
+            assert "<script>alert('xss')</script>" not in html_xss
+            assert "&lt;script&gt;" in html_xss
     finally:
         server.shutdown()
         server.server_close()
