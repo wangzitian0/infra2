@@ -81,7 +81,10 @@ remains routable during replacement, or a backend that starts while the frontend
 not be used by a blocking deployment workflow.
 
 The reserved `pr-999` canary is a singleton mutable resource, so all workflow events share
-one non-cancelling job concurrency group. A same-repository PR records its exact head SHA as
+the non-cancelling **job** concurrency group `deploy-v2-canary-pr-999` with
+`queue: max` (up to 100 pending jobs; a full queue still cancels excess jobs). The scheduled
+`ops-checks.yml` workflow has a separate workflow-level group; its canary job must not
+reuse that workflow-level name. A same-repository PR records its exact head SHA as
 the authoritative IaC identity and may pass the head branch only as a clone transport; the
 front door proves both refs resolve to the same commit before mutating Dokploy. If the
 non-idempotent `compose.create` call times out after Dokploy commits it, the lifecycle
@@ -220,7 +223,7 @@ App 不再 checkout/执行 infra2。发送 `repository_dispatch` type `app-deplo
    这个 staging run 成功。prod 跑在 production marker 上，这个坐标在 prod 之前没人部署过，所以 canary 继续门控 prod。
 6. **作业形状**（truealpha#860）：`deploy` 一个 job 内先无凭据验证（`plan` step），下一 step 才拿到
    `DOKPLOY_API_KEY` / `IAC_WEBHOOK_SECRET` 执行——凭据按 step 作用域，不按 job；staging 请求只跑这一个 job。
-   `preflight_canary` 单独成 job，只因为 `deploy-v2-canary` 并发组只能挂在整个 job 上，而它只应覆盖 canary、
+   `preflight_canary` 单独成 job，只因为 `deploy-v2-canary-pr-999` 并发组只能挂在整个 job 上，而它只应覆盖 canary、
    不覆盖 promote；`deploy` job 断言自己的 checkout 仍选出 canary 证明过的 `iac_ref`。canary job 的 `if:` 在任何
    plan 之前求值，只能读 payload，它镜像 `DeployPlan.requires_preflight_canary`：workflow 测试把两者钉在一起，
    运行时两边再对 plan 复核（`--require-preflight-canary` / `--preflight-canary-result`），漂移即 fail-closed。
