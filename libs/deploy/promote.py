@@ -30,7 +30,7 @@ from libs.deploy_queue import deployment_start_epoch
 from libs.core import REPO_ROOT
 from libs.deploy.failure_snapshot import emit_failure_snapshot
 from libs.observability.openpanel import openpanel_env
-from tools.resolve_deploy_ref import resolve_to_sha
+from libs.deploy.refs import resolve_to_sha
 
 # infra2#525: Dokploy deployment records carry no caller-supplied correlation id, so a
 # start-timestamp floor (captured just before OUR OWN deploy_compose() call) is the only
@@ -415,7 +415,7 @@ def deploy(
 ) -> DeployPlan:
     """Deploy a resolved app commit to a fixed app environment.
 
-    code  -> resolve_deploy_ref (main / vX.Y.Z / <sha>) -> a commit sha.
+    code  -> libs.deploy.refs (main / vX.Y.Z / <sha>) -> a commit sha.
     env   -> deploy_env_config (which compose, URL, suffix, default data).
     data  -> derived from the env's data_default; callers cannot override it here.
 
@@ -591,7 +591,7 @@ def deploy(
     # #372: the finance_report app frontend reads OPENPANEL_CLIENT_ID at runtime
     # (server layout -> <Analytics>). This fixed-compose path never ran the app's
     # pre_compose, so the per-env client id was dropped and analytics never started.
-    # Inject it here (single source: tools.openpanel_clients) for the fixed envs
+    # Inject it here (single source: libs.observability.openpanel) for the fixed envs
     # this path handles (staging/production); empty for any env without a project.
     env_vars.update(openpanel_env(env))
     # #368: FE OTLP endpoint built ONCE (libs.deploy_env_config.otel_env) and injected

@@ -17,6 +17,8 @@
 | `supply.py` | Manifest secret supply pipeline | `apply_secret_supply()`, `create_secrets_resolver()`, `SupplyReport` |
 | `prune.py` | Orphan KV key detection & cleanup | `prune_orphan_secrets()` |
 
+`import libs.security` needs no infra2-sdk: `supply.py` / `prune.py` load lazily (PEP 562) on first access of an SDK-backed name, which then raises the SDK's `ImportError` if the wheel is absent (#847; pinned by `libs/tests/test_sdk_free_import_surface.py`).
+
 ## Usage Examples
 
 ### Applying Secret Supply during Deployment

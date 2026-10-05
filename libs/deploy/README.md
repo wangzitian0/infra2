@@ -21,6 +21,7 @@
 | `in_service.py` | Container health & liveness verification | `assert_in_service()`, `wait_for_containers()` |
 | `rollout.py` | Terminal rollout hooks & post-deploy checks | `verify_rollout()`, `terminal_summary()` |
 | `failure_snapshot.py` | Dokploy failure diagnosis & GitHub summary snapshot | `emit_failure_snapshot()`, `build_snapshot()`, `classify()` |
+| `refs.py` | `version_ref` -> commit sha / image ref resolution (the CLI front door is `tools/resolve_deploy_ref.py`) | `resolve_to_sha()`, `resolve_image_ref()`, `resolve_pr()`, `resolve_branch_to_sha()` |
 
 ## Usage Examples
 

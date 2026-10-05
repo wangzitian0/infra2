@@ -76,16 +76,22 @@ are **implementation modules that a domain package imports**, not re-exports. Th
 listed above so the table stays exhaustive, and the guard asserts they are *not*
 structurally shims — migrate one and the table must move with it.
 
-`libs/env.py` cannot simply move into `libs/security/store.py` as things stand:
-`libs/security/__init__.py` eagerly imports `libs/security/supply.py`, whose
-`from infra2_sdk.secrets import ...` is unconditional, so any `libs.security.*` import
-requires the wheel. `libs/env.py` deliberately does not — it guards that import so
-minimal GitHub Actions jobs can still use `verify_vault_token` / `generate_password`
-(see its `try/except ModuleNotFoundError`, and the guards
-`libs/tests/test_env.py::TestWithoutTheSdk`,
+`libs.security` imports without infra2-sdk (#847): `libs/security/__init__.py` loads
+`supply` / `prune` lazily (PEP 562), so only touching an SDK-backed name needs the wheel;
+`libs/tests/test_sdk_free_import_surface.py` pins it. `libs/env.py` still guards its own
+SDK import so minimal GitHub Actions jobs can use `verify_vault_token` /
+`generate_password`; its guards (`libs/tests/test_env.py::TestWithoutTheSdk`,
 `test_secrets_registry.py::test_the_registry_table_is_readable_without_the_sdk` and
-`test_workflow_runtime_deps.py::test_a_job_can_import_what_it_runs`). Moving it
-requires first deciding whether `libs.security` may be imported without infra2-sdk.
+`test_workflow_runtime_deps.py::test_a_job_can_import_what_it_runs`) must keep passing
+unchanged when it moves.
+
+### Import boundaries
+
+`libs/tests/test_import_boundaries.py` walks the AST of `libs/**` and fails on a domain
+package importing a flat `libs/<name>.py`, or on anything under `libs/` importing
+`tools`, `platform` or `bootstrap`. Violations that predate the guard (#955) sit in a
+shrink-only debt ledger in that file: a new violation fails, and so does a ledger entry
+whose import no longer exists.
 
 ---
 
