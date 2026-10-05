@@ -6,7 +6,6 @@ Simplified: minimal class attributes, uses new env.py API.
 from __future__ import annotations
 
 import os
-import re
 import shlex
 import time
 from collections.abc import Callable
@@ -14,7 +13,6 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from invoke import task
 
-from infra2_sdk.deploy import DeployState
 from libs.common import get_env, service_domain, validate_env
 from libs.console import (
     env_vars,
@@ -46,6 +44,13 @@ from libs.deploy.env_util import (
     _parse_env_text,
     _preserve_runtime_env,
 )
+from libs.deploy.sync_pipeline import (
+    SOURCE_CONFIG_HASH_VERSION,
+    ConsoleLogger,
+    SyncAction,
+    SyncPipeline,
+    SyncResult,
+)
 from libs.env import get_secrets, verify_vault_token
 from libs.service_facets import (
     BackupFacet,
@@ -64,6 +69,7 @@ if TYPE_CHECKING:
 __all__ = [
     "Deployer",
     "RUNTIME_ENV_KEYS_TO_PRESERVE",
+    "SOURCE_CONFIG_HASH_VERSION",
     "SyncAction",
     "SyncResult",
     "_artifact_items_from_disk",
@@ -83,32 +89,6 @@ __all__ = [
     "make_tasks",
 ]
 
-
-class SyncAction:
-    """Deployment sync action types aligned with infra2-sdk DeployState."""
-
-    SKIPPED = "skipped"
-    FAILED = DeployState.FAILED.value  # "failed"
-    CREATED = "created"
-    UPDATED = "updated"
-    SUPPLIED = "supplied"
-
-
-class SyncResult(dict):
-    """Backward-compatible dictionary mapping for Deployer.sync result."""
-
-    def __init__(self, action: str, details: str, **extra: Any):
-        super().__init__(action=action, details=details, **extra)
-        self.action = action
-        self.details = details
-
-    @property
-    def is_success(self) -> bool:
-        return self.action != SyncAction.FAILED
-
-
-SOURCE_CONFIG_HASH_VERSION = "v1"
-EXACT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 # infra2#525: like libs.deploy.promote.wait_for_rollout, Dokploy deployment records
 # carry no caller-supplied correlation id, so a start-timestamp floor (captured just
@@ -1024,8 +1004,10 @@ class Deployer:
             compose_id,
             timeout_seconds=cls._resolve_record_timeout(timeout_seconds),
             interval_seconds=cls._resolve_record_interval(interval_seconds),
-            wait_fn=lambda c, cid, prev, to, iv, min_s: cls._wait_for_new_deployment_record(
-                c, cid, prev, to, iv, min_started_at=min_s
+            wait_fn=lambda c, cid, prev, to, iv, min_s: (
+                cls._wait_for_new_deployment_record(
+                    c, cid, prev, to, iv, min_started_at=min_s
+                )
             ),
             start_epoch_fn=deployment_start_epoch,
             log_warning=warning,
@@ -1252,392 +1234,33 @@ class Deployer:
         )
 
     @classmethod
+    def validate_preflight_env(cls) -> list[str]:
+        """Validate required environment variables."""
+        return validate_env()
+
+    @classmethod
+    def service_id_from_path(cls) -> str | None:
+        """Derive service identity key from compose_path."""
+        from libs.deploy_dependencies import service_key_from_path
+
+        return service_key_from_path(cls.compose_path)
+
+    @classmethod
     def sync(cls, c: "Context", force: bool = False) -> dict:
         """Sync IaC state - update only if config changed.
 
         Returns:
             dict with keys: action (skipped|updated|created|failed), details
         """
-        header(f"{cls.service} sync", "Checking for changes")
-
-        # Prepare env vars (without full pre_compose side effects)
-        e = cls.env()
-        if cls.prod_only and e.get("ENV", "production") != "production":
-            info(f"{cls.service} is prod-only; skipping {e.get('ENV')} sync")
-            return SyncResult(
-                action=SyncAction.SKIPPED,
-                details=f"prod-only service; not deployed to {e.get('ENV')}",
-            )
-        if missing := validate_env():
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details=f"Missing env: {', '.join(missing)}",
-            )
-
-        if os.environ.get("DEPLOY_ACTION") == "secrets-supply":
-            # The runner was asked for the secret supply alone: deploy_v2 runs it before
-            # an app stack's Dokploy promote, a path that never enters this Deployer.
-            # Copy human values, generate runtime ones, report what is missing — and
-            # stop; the promote that follows recreates the containers (#649).
-            if not cls.apply_secret_supply(c, env=e.get("ENV")):
-                return SyncResult(
-                    action=SyncAction.FAILED,
-                    details="secret supply left required values missing",
-                )
-            return SyncResult(
-                action=SyncAction.SUPPLIED,
-                details="secret supply applied; no compose",
-            )
-
-        # Pre-check: verify VAULT_APP_TOKEN validity
-        try:
-            token_status = cls.verify_vault_app_token()
-            if not token_status["valid"]:
-                return SyncResult(
-                    action=SyncAction.FAILED,
-                    details=(
-                        f"VAULT_APP_TOKEN issue: {token_status.get('details', 'unknown')}. "
-                        "This is a legacy static token; remove it from the service's Dokploy "
-                        "env (services authenticate via AppRole now — `invoke vault.setup-approle`)."
-                    ),
-                )
-            elif token_status.get("ttl_hours", 999) < 48:
-                return SyncResult(
-                    action=SyncAction.FAILED,
-                    details=(
-                        f"VAULT_APP_TOKEN expires in {token_status['ttl_hours']}h. "
-                        "It is a legacy static token; remove it from the Dokploy env "
-                        "(AppRole services don't use it)."
-                    ),
-                )
-        except Exception as exc:
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details=f"Could not verify VAULT_APP_TOKEN: {exc}",
-            )
-
-        if not cls.ensure_runtime_secrets(c):
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details=f"Failed to ensure runtime secrets for {cls.service}",
-            )
-
-        # The secret supply runs on EVERY sync, before change detection: a human value
-        # that changed in 1Password is exactly the deploy where nothing else changed and
-        # the compose hash says "skip" (data_engine staging kept a stale SEC_USER_AGENT
-        # through a green v1.1.68 deploy, #649). Changed values restart the consumers.
-        if not cls.apply_secret_supply(c, env=e.get("ENV")):
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details="secret supply left required values missing",
-            )
-
-        # Build env vars
-        env_vars_dict = cls.config_env_with_vault_addr(cls.compose_env_base(e), e)
-        source_env_vars = cls.config_env_with_vault_addr(
-            cls.source_config_env_base(e), e
+        logger = ConsoleLogger(
+            header=header,
+            info=info,
+            warning=warning,
+            error=error,
+            success=success,
         )
-
-        # Runtime identity drives deploy idempotence; source identity is secret-free
-        # and can be independently reconstructed from the immutable release.
-        local_hash = cls.compute_local_config_hash(c, env_vars_dict)
-        source_hash = (
-            f"{SOURCE_CONFIG_HASH_VERSION}:"
-            f"{cls.compute_local_config_hash(c, source_env_vars)}"
-        )
-        deploy_ref = (os.getenv("IAC_DEPLOY_REF") or "").strip().lower()
-        if not deploy_ref:
-            try:
-                import subprocess
-
-                result = subprocess.run(
-                    ["git", "rev-parse", "HEAD"],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    timeout=10,
-                )
-                deploy_ref = (
-                    result.stdout.strip().lower() if result.returncode == 0 else ""
-                )
-            except (OSError, subprocess.SubprocessError):
-                deploy_ref = ""
-        if not EXACT_COMMIT_RE.fullmatch(deploy_ref):
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details="Deployment identity requires an exact 40-character IAC_DEPLOY_REF",
-            )
-        from libs.deploy_dependencies import service_key_from_path
-        from libs.service_identity import ServiceIdentity
-
-        service_id = service_key_from_path(cls.compose_path)
-        if not service_id:
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details=f"Could not derive service identity from {cls.compose_path}",
-            )
-        runtime_identity = ServiceIdentity.build(
-            service_id,
-            e.get("ENV", "production"),
-            component=cls.service,
-            service_name=cls.telemetry_service_name or cls.service,
-            version=deploy_ref,
-            iac_ref=deploy_ref,
-        )
-
-        # Read the remote (deployed) hash. FAIL CLOSED: reading it hits the
-        # Dokploy API, which can error/time out exactly when the host is under
-        # load. Treating that failure as "no remote config -> redeploy" forms a
-        # positive feedback loop (more jam -> more API errors -> more forced
-        # redeploys -> more jam). When the remote state is unreadable, skip and
-        # alert instead of deploying. (`--force` still proceeds deliberately.)
-        try:
-            remote_identity = cls.get_remote_config_identity()
-            remote_hash = remote_identity["runtime_hash"]
-        except Exception as exc:  # noqa: BLE001 - any lookup failure must fail closed
-            if not force:
-                warning(
-                    f"{cls.service}: remote config hash unreadable ({exc}); "
-                    "skipping deploy (fail-closed) to avoid load-amplifying redeploys"
-                )
-                return SyncResult(
-                    action=SyncAction.SKIPPED,
-                    details=f"Remote config unreadable; fail-closed: {exc}",
-                )
-            warning(
-                f"{cls.service}: remote config unreadable ({exc}); "
-                "proceeding because --force was requested"
-            )
-            remote_identity = {
-                "runtime_hash": None,
-                "source_hash": None,
-                "deploy_ref": None,
-                "identity_schema": None,
-                "managed_by": None,
-                "service_id": None,
-                "environment": None,
-            }
-            remote_hash = None
-
-        info(f"Local config hash: {local_hash}")
-        info(f"Remote config hash: {remote_hash or 'not found'}")
-
-        remote_ref = remote_identity["deploy_ref"] or ""
-        expected_deploy_identity = runtime_identity.deploy_env()
-        remote_source_identity_valid = remote_identity[
-            "source_hash"
-        ] == source_hash and bool(EXACT_COMMIT_RE.fullmatch(remote_ref))
-        remote_service_identity_valid = all(
-            remote_identity.get(remote_key) == expected_deploy_identity[env_key]
-            for remote_key, env_key in (
-                ("identity_schema", "INFRA_IDENTITY_SCHEMA"),
-                ("managed_by", "INFRA_MANAGED_BY"),
-                ("service_id", "INFRA_SERVICE_ID"),
-                ("environment", "INFRA_ENVIRONMENT"),
-            )
-        )
-        if (
-            not force
-            and local_hash == remote_hash
-            and remote_source_identity_valid
-            and remote_service_identity_valid
-        ):
-            # A skip still has to leave the stack in service: dead, crashed or missing
-            # containers force a redeploy (#691, #698). Only the containers — this
-            # release did not deploy the stack, so Dokploy's checkout is at its last
-            # deploy's ref, not this one (verify_still_in_service).
-            try:
-                existing = cls._find_remote_compose(e)
-                in_service_error = (
-                    cls.verify_still_in_service(c, existing["composeId"])
-                    if existing and existing.get("composeId")
-                    else None
-                )
-            except Exception as exc:  # noqa: BLE001 - unobservable is not dead
-                # Same stance as the unreadable remote hash above: a Dokploy or host
-                # that cannot answer is no evidence the stack is down, and redeploying
-                # on it would amplify the load that made it unreadable.
-                warning(
-                    f"{cls.service}: could not check the unchanged stack is in "
-                    f"service ({exc}); skipping deploy (fail-closed)"
-                )
-                in_service_error = None
-
-            if in_service_error:
-                warning(
-                    f"{cls.service}: config unchanged but containers not in-service "
-                    f"({in_service_error}); forcing redeploy"
-                )
-            else:
-                success(f"{cls.service}: config unchanged, skipping deploy")
-                return SyncResult(
-                    action=SyncAction.SKIPPED,
-                    details="Runtime and source config identities match",
-                )
-
-        # Config changed or force - do full deploy
-        if remote_hash is None:
-            info("No remote config found, creating new deployment")
-        elif force:
-            warning("Force sync requested")
-        elif local_hash == remote_hash:
-            info(
-                "Runtime config unchanged but release identity is missing or stale; reconciling"
-            )
-        else:
-            info(f"Config changed ({remote_hash} -> {local_hash}), deploying")
-
-        # Prepare directories
-        if not cls._prepare_dirs(c):
-            return SyncResult(
-                action=SyncAction.FAILED, details="Failed to prepare directories"
-            )
-
-        # Persist both config planes and the exact checked-out revision. These are
-        # deliberately excluded from their own hash inputs above.
-        env_vars_dict["IAC_CONFIG_HASH"] = local_hash
-        env_vars_dict["IAC_SOURCE_CONFIG_HASH"] = source_hash
-        env_vars_dict["IAC_DEPLOY_REF"] = deploy_ref
-        env_vars_dict.update(runtime_identity.deploy_env())
-        if cls.telemetry_service_name:
-            telemetry_identity = ServiceIdentity.build(
-                service_id,
-                e.get("ENV", "production"),
-                component=cls.telemetry_component or cls.service,
-                service_name=cls.telemetry_service_name,
-                version=deploy_ref,
-                iac_ref=deploy_ref,
-            )
-            env_vars_dict["OTEL_SERVICE_NAME"] = telemetry_identity.service_name
-            env_vars_dict["OTEL_RESOURCE_ATTRIBUTES"] = (
-                telemetry_identity.otel_resource_attributes()
-            )
-
-        # Deploy
-        try:
-            compose_id = cls.composing(c, env_vars_dict)
-        except Exception as exc:
-            error(f"Deploy failed: {exc}")
-            return SyncResult(action=SyncAction.FAILED, details=str(exc))
-
-        # Post-deploy verification: confirm Dokploy's effective compose env now
-        # carries the intended IAC_CONFIG_HASH. This fails closed on the stale-env
-        # failure mode where a deploy is accepted but the effective config does
-        # not advance to the deployed revision.
-        #
-        # Dokploy applies the compose-env update asynchronously, so the effective
-        # hash can briefly lag the deploy call by a few seconds. Poll until it
-        # advances rather than false-failing on that settling delay; still fails
-        # closed if it never advances within the window.
-        try:
-            effective_hash = cls._await_effective_config_hash(local_hash)
-        except Exception as exc:  # noqa: BLE001 - verification must not crash the task.
-            error(f"Post-deploy verification could not read effective config: {exc}")
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details=f"Post-deploy verification failed: {exc}",
-            )
-        if effective_hash != local_hash:
-            error(
-                "Post-deploy verification failed: effective IAC_CONFIG_HASH is stale "
-                f"(expected {local_hash}, got {effective_hash or 'none'})"
-            )
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details=(
-                    "Effective remote config is stale after deploy "
-                    f"(expected {local_hash}, got {effective_hash or 'none'}); "
-                    "runtime may still be running prior config"
-                ),
-            )
-
-        try:
-            effective_identity = cls.get_remote_config_identity()
-        except Exception as exc:  # noqa: BLE001 - identity proof is fail-closed.
-            error(f"Post-deploy identity verification failed: {exc}")
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details=f"Post-deploy identity verification failed: {exc}",
-            )
-        identity_mismatches = []
-        if effective_identity["source_hash"] != source_hash:
-            identity_mismatches.append(
-                "IAC_SOURCE_CONFIG_HASH "
-                f"expected {source_hash}, got {effective_identity['source_hash'] or 'none'}"
-            )
-        if deploy_ref and effective_identity["deploy_ref"] != deploy_ref:
-            identity_mismatches.append(
-                "IAC_DEPLOY_REF "
-                f"expected {deploy_ref}, got {effective_identity['deploy_ref'] or 'none'}"
-            )
-        for remote_key, env_key in (
-            ("identity_schema", "INFRA_IDENTITY_SCHEMA"),
-            ("managed_by", "INFRA_MANAGED_BY"),
-            ("service_id", "INFRA_SERVICE_ID"),
-            ("environment", "INFRA_ENVIRONMENT"),
-        ):
-            expected_value = expected_deploy_identity[env_key]
-            if effective_identity.get(remote_key) != expected_value:
-                identity_mismatches.append(
-                    f"{env_key} expected {expected_value}, "
-                    f"got {effective_identity.get(remote_key) or 'none'}"
-                )
-        if identity_mismatches:
-            details = "; ".join(identity_mismatches)
-            error(f"Post-deploy identity verification failed: {details}")
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details=f"Effective remote identity is stale after deploy: {details}",
-            )
-
-        # Runtime-applied verification (closed loop): the hash check above only
-        # proves Dokploy RECORDED the intended config. Let services additionally
-        # assert that the actually-running container reflects it, catching the
-        # failure mode where a deploy is accepted but the container was never
-        # recreated (so it keeps running prior config while the catalog says
-        # "Live"). Default is a no-op; only services that override it pay the cost.
-        runtime_error = cls.verify_runtime_applied(c, env_vars_dict)
-        if runtime_error:
-            error(f"{cls.service}: runtime verification failed: {runtime_error}")
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details=f"Runtime verification failed: {runtime_error}",
-            )
-
-        # The record said done and the env carries the hash; now the containers
-        # (#629, #691, #698): a deploy is not a success until the stack is in service.
-        try:
-            in_service_error = cls.verify_in_service(c, compose_id)
-        except Exception as exc:  # noqa: BLE001 - the proof is fail-closed, never a crash.
-            in_service_error = f"could not verify: {exc}"
-        if in_service_error:
-            error(f"{cls.service}: not in service after deploy: {in_service_error}")
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details=f"Not in service after deploy: {in_service_error}",
-            )
-
-        # In service; now the services that do not survive this one being recreated
-        # (#726). Only here, after an applied deploy — a skip recreated nothing.
-        try:
-            restarted = cls.restart_dependents(c, e)
-        except Exception as exc:  # noqa: BLE001 - a failed restart fails the sync, never crashes it.
-            error(
-                f"{cls.service}: deployed, but its dependents were not restarted: {exc}"
-            )
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details=f"Deployed, but dependents were not restarted: {exc}",
-            )
-
-        success(f"{cls.service}: deployed with hash {local_hash}")
-        result = SyncResult(
-            action=SyncAction.UPDATED if remote_hash else SyncAction.CREATED,
-            details=f"composeId: {compose_id}",
-        )
-        if restarted:
-            result["restarted_dependents"] = restarted
-        return result
+        pipeline = SyncPipeline(deployer=cls, context=c, force=force, logger=logger)
+        return pipeline.run()
 
     @classmethod
     def verify_runtime_applied(

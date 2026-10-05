@@ -7,7 +7,6 @@ This module communicates with Dokploy API endpoints and tracks deployment record
 from __future__ import annotations
 
 import logging
-import os
 import time
 from collections.abc import Callable
 from dataclasses import asdict
@@ -138,14 +137,20 @@ def deploy_compose_with_record_check(
     before_ids = deployment_ids(get_compose_deployments(client, compose_id))
     trigger_epoch = time.time()
     client.deploy_compose(compose_id)
-    if waiter(client, compose_id, before_ids, timeout_seconds, interval_seconds, trigger_epoch):
+    if waiter(
+        client, compose_id, before_ids, timeout_seconds, interval_seconds, trigger_epoch
+    ):
         return
 
-    warn("Dokploy deploy did not produce a new deployment record; retrying with compose.redeploy")
+    warn(
+        "Dokploy deploy did not produce a new deployment record; retrying with compose.redeploy"
+    )
     before_ids = deployment_ids(get_compose_deployments(client, compose_id))
     trigger_epoch = time.time()
     client.redeploy_compose(compose_id)
-    if waiter(client, compose_id, before_ids, timeout_seconds, interval_seconds, trigger_epoch):
+    if waiter(
+        client, compose_id, before_ids, timeout_seconds, interval_seconds, trigger_epoch
+    ):
         return
 
     raise RuntimeError(
@@ -193,7 +198,9 @@ def prune_stale_dokploy_domains(
                 )
                 client.delete_domain(d_id)
             except Exception as err:  # noqa: BLE001
-                warn_log(f"Failed to delete stale Dokploy domain {d.get('host')}: {err}")
+                warn_log(
+                    f"Failed to delete stale Dokploy domain {d.get('host')}: {err}"
+                )
 
 
 def find_remote_compose(
@@ -207,7 +214,9 @@ def find_remote_compose(
     existing = client.find_compose_by_name(service, project_name, env_name=env_name)
     if not existing:
         for legacy_name in legacy_names:
-            existing = client.find_compose_by_name(legacy_name, project_name, env_name=env_name)
+            existing = client.find_compose_by_name(
+                legacy_name, project_name, env_name=env_name
+            )
             if existing:
                 break
     return existing
@@ -301,7 +310,9 @@ def ensure_compose_domains(
             warn_log("Domain configuration skipped: INTERNAL_DOMAIN missing")
             return {"created": 0, "skipped": 0, "conflicts": [], "errors": []}
         effective_env = env.get("ENV", "production")
-        specs = resolve_dokploy_domains(route_pref, tier=effective_env, base_domain=domain)
+        specs = resolve_dokploy_domains(
+            route_pref, tier=effective_env, base_domain=domain
+        )
         desired_domains = [asdict(s) for s in specs]
         if desired_domains:
             for d in desired_domains:
@@ -323,7 +334,11 @@ def ensure_compose_domains(
         domain_host = (
             service_domain_fn(subdomain, env)
             if service_domain_fn
-            else (f"{subdomain}.{env.get('INTERNAL_DOMAIN')}" if env.get("INTERNAL_DOMAIN") else None)
+            else (
+                f"{subdomain}.{env.get('INTERNAL_DOMAIN')}"
+                if env.get("INTERNAL_DOMAIN")
+                else None
+            )
         )
         if not domain_host:
             warn_log("Domain configuration skipped: INTERNAL_DOMAIN missing")
