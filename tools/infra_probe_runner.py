@@ -61,6 +61,9 @@ DEFAULT_PROBE_INTERVAL_SECONDS = 60
 DEFAULT_RENOTIFY_SECONDS = 0
 DEFAULT_FAILURE_THRESHOLD = 3
 DEFAULT_RECOVERY_THRESHOLD = 2
+# Local/dev fallback only. The deployed runner sets INFRA_PROBE_STATE_FILE onto the
+# `probe-state` volume (platform/12.alerting/compose.yaml, #960): state in the
+# container /tmp is lost on every redeploy, and with it every open page.
 DEFAULT_STATE_FILE = "/tmp/infra_probe_runner_state.json"
 # The `<group>:misconfigured` lane: a distinct, warning-severity alert for `command`
 # probes whose failure is not (yet) evidence about their target —

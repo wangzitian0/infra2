@@ -154,38 +154,6 @@ probe runner 一次推送覆盖一组内所有失败探针,整条推送的 sever
 - **payload 契约**(来源 → bridge):labels `severity`、`environment`、`service_id`、`component`、`failure_domain`、
   `probe_kind`;`startsAt` / `endsAt`;annotations `symptom`、`target` / `expected` / `observed`、`description` / `summary`、
   `container` / `compose`、`impact`、`next_step`、`runbook_url`、`log_tail`。SigNoz 规则加 `runbook_url` annotation 即得具体
-  锚点(规则本身归 #906)。
-
----|------|------|
-| 1 | 级别 | P0 / P1 / P2,按 §3 由 `severity` 映射(`critical`/`error`/`warning`,P0/P1/P2 原样;未知 = P0) |
-| 2 | 环境 | `environment` |
-| 3 | 对象 | 完整 `service_id` + 探针 / 容器 / compose / 检查名 |
-| 4 | 现象 | 探针:kind + target → 期望 vs 实际;其余:来源给的 `symptom` / `description` |
-| 5 | 开始于 | 开始时间,按 owner 时区显示:`2026-09-24 15:48（UTC+8）`,+ 已持续;RESOLVED 为起止时间与总时长(payload 内时间仍是 UTC) |
-| 6 | 影响 | `[failure_domain]` + 该域影响一句(一域一句) |
-| 7 | 下一步 | 按告警名 / failure domain 的第一步;Worker 与 GitHub 沿用各自的 action map |
-| 8 | Runbook | 按告警名 / failure domain 的具体锚点;没有更具体的就指向 §7 |
-| 9 | 日志 | 仅容器 breakdown:原因所在行 + 最后几行,截断 |
-
-- **中文**:标签、标题、影响、下一步,以及各来源自己写的固定描述(Worker 的故障摘要与恢复语句、breakdown 原因、部署队列与每日摘要
-  的现象)一律中文;命令、路径、标识符原样写在反引号里。原样保留的只有证据:探针读数与异常文本、HTTP body、日志行、runner 心跳
-  `detail`、SigNoz 规则文本(归 #906)、GitHub 各检查的 `detail`(它同时是 issue 留痕、结构化日志与日报里的判定记录)。测试把
-  "三个以上连续英文词"判为回归(`libs/tests/test_pager_format.py::english_prose`)。
-- **唯一定义**:`libs/alerting.py` 的 `PAGER_FIELDS` / `pager_level` / `since_text` / `format_time`。Worker 是 JS,保留一份副本,由
-  `libs/tests/test_cloudflare_watchdog.py` 以**渲染结果**对齐(字段顺序、级别映射、时间格式);GitHub watchdog 直接调用
-  `libs.alerting` 的文本渲染。三种级别词汇(critical/error/warning、P0/P1、P0/P1/P2)在渲染文本里只剩 P0/P1/P2;Worker 的
-  入口与心跳级别取其配置的 `severity`(`warning` = P2,不再一律 P1)。
-- **标题**:页 `🔴 [P0 告警] <告警名> · <环境> · N 项`(🟠 P1 / 🟡 P2,卡片头红 / 橙 / 黄,取最高级别,最严重的项排在前);
-  恢复 `✅ [已恢复] …`(绿)。**报告**——`delivery=report` 推送(含每日摘要)、`deliver_infra2_report` 发出的日报(含 GitHub
-  日报)、周报——一律以 `[报告]` 开头(卡片蓝色),紧凑布局一项一行;报告投到报告群还是回落告警群都一样。
-- **RESOLVED 写明恢复了什么、坏了多久**:probe runner 的恢复推送为此前呼出的每个探针带一条 resolved alert(`startsAt` =
-  该探针本次首次失败,存于 runner state 的 `failing_since`;`endsAt` = 恢复时刻);breakdown 的恢复带容器首次被看到坏的
-  时间;Worker 用故障身份的 `since`;SigNoz 自带 `startsAt`/`endsAt`。
-- **长度有界**:前 5 项完整展示,其余每项一行(至多 20 行,再多只计数);单字段 300 字符,日志 800 字符;卡片按飞书实际收到的
-  请求体计 ≤ 28 KiB(飞书上限 30 KB,超出时依次减少完整项与摘要行);文本 ≤ 3,500 字符(`MAX_MESSAGE_CHARS`)。
-- **payload 契约**(来源 → bridge):labels `severity`、`environment`、`service_id`、`component`、`failure_domain`、
-  `probe_kind`;`startsAt` / `endsAt`;annotations `symptom`、`target` / `expected` / `observed`、`description` / `summary`、
-  `container` / `compose`、`impact`、`next_step`、`runbook_url`、`log_tail`。SigNoz 规则加 `runbook_url` annotation 即得具体
   锚点(规则本身归 #906)。值里的 `<` / `>` 转义:值不能 @所有人,也不能伪造链接。
 
 ---
@@ -462,7 +430,7 @@ Runbook 入库仅交付操作路径；#723 要求的一次现场演练、完整�
 - **不按定时器重发**:`RENOTIFY_SECONDS=0`。已发出的故障只在失败集合身份变化时再发(新探针加入/离开、failure domain 变化、round-trip 从 misconfigured 通道升级进正常流——升级即身份变化);恢复照常发 resolved。正数仍可显式配置,恢复旧的定时重发。
 - **每日摘要(报告)**:持续失败超过 24h 的流,在越过 24h 的那一轮发一次 `InfraProbeChronic`,之后每个 UTC 日至多一次;带 `delivery=report`,是报告不是告警(§2 铁律:定时器发出的都是报告)。与 breakdown watcher 的 `ContainerBreakdownChronic` 同构。
 - **投递失败不丢**:bridge 非 2xx 时该流状态回滚,下一轮重发(resolved 也一样)。失败按流记录,心跳随之变红;该流重发成功、或该流已没有待发内容(例如页还没送达探针就恢复了)时清除。一直失败的投递(如报告群 id 配错)每轮重试、心跳一直红。
-- **心跳契约 v2**(Worker 侧见 Phase 3):`POST /heartbeat` 保留 `env`/`name`/`ok`/`detail`/`timestamp`/可选 `liveness`,新增 `schema: 2`、`last_delivery_ok_at`(最近一次 bridge 2xx 的 epoch 秒,从未成功为 0,持久化在 runner state,进程重启不丢)、`failing_public_routes`(排序;**本轮仍在失败、且 runner 已成功投递其告警且该告警尚未 resolved** 的公网路由探针——Worker 只对这些路由让出自己的入口告警,所以未达去抖阈值、告警未送达、维护窗口内都为空,见 #911)。**`ok` 只表示探测循环自身健康**:仅在某组运行抛异常、state 写盘失败、或某个仍待发送的推送投递失败时为 false,`detail` 写明哪一项(如 `bridge delivery failed: HTTP 502 (infra-service)`、`group infra-service raised TimeoutError: …`);探针失败不再是心跳失败。liveness ping 携带上一轮的这两个字段。一组抛异常不再中断整轮:其他组照常告警、state 照常保存。
+- **心跳契约 v2**(Worker 侧见 Phase 3):`POST /heartbeat` 保留 `env`/`name`/`ok`/`detail`/`timestamp`/可选 `liveness`,新增 `schema: 2`、`last_delivery_ok_at`(最近一次 bridge 2xx 的 epoch 秒,从未成功为 0,持久化在 runner state,state 文件位于命名卷 `probe-state`,容器重建(重新部署)后也不丢,#960)、`failing_public_routes`(排序;**本轮仍在失败、且 runner 已成功投递其告警且该告警尚未 resolved** 的公网路由探针——Worker 只对这些路由让出自己的入口告警,所以未达去抖阈值、告警未送达、维护窗口内都为空,见 #911)。**`ok` 只表示探测循环自身健康**:仅在某组运行抛异常、state 写盘失败、或某个仍待发送的推送投递失败时为 false,`detail` 写明哪一项(如 `bridge delivery failed: HTTP 502 (infra-service)`、`group infra-service raised TimeoutError: …`);探针失败不再是心跳失败。liveness ping 携带上一轮的这两个字段。一组抛异常不再中断整轮:其他组照常告警、state 照常保存。
 - **staging 与预览不呼人**:只有**白名单**里的非生产环境只报告——staging 与预览槽位(`libs/alerting.is_report_only_environment`,先经 `libs/common.normalize_env_name` 归一:`stg` 即 staging,`pr-5`/`branch-main`/`commit-…`/`tag-…` 即预览);`prod`、拼写错误、未设置一律按生产呼人,宁可呼人也不静默。同一判定用于:staging runner 的推送带 `delivery=report`;host 资源探针、breakdown watcher、deploy-queue guard 的 prod-only 闸门(Dokploy 与 Docker 引擎共享,staging 副本空转)。breakdown watcher 只在 production runner 运行却能看到整台宿主的容器:容器的环境取规范标签 `party.zitian.infra.environment`,缺标签时才由 compose project 与名字推断(`-staging`、预览槽位的 `-{pr,branch,commit,tag}-…`);staging/预览容器只进每日摘要、从不呼人(也不发 resolved)。`ContainerBreakdownChronic` 按受众拆开:staging/预览行是报告(`delivery=report`),生产行(stay-resolved floor 内的重坏、呼出后仍坏着的故障)仍发告警群——它们只在摘要里出现。
 - **路由**:bridge 按 `commonLabels.delivery == "report"` 把报告投到 `FEISHU_REPORT_CHAT_ID`,未配置则回落告警群(SOP-003);报告卡片标题恒以 `[报告]` 开头(§3.1)。
 

@@ -487,5 +487,9 @@ The round-trip state (`OBS_ROUNDTRIP_STATE_FILE`) only throttles successes (a pa
 suppresses the next runs for `OBS_ROUNDTRIP_INTERVAL_SECONDS`, reported as
 `mode=suppressed`). Failures are never throttled. The runner's own state file
 (`INFRA_PROBE_STATE_FILE`) holds `ever_succeeded` and the per-probe `never_green`
-failure streaks. Both files live in the container's `/tmp`, so a recreated
-runner starts with neither.
+failure streaks. Both files live on the `probe-state` named volume
+(`/var/lib/infra-probe-state`), not in the container's `/tmp` (#960): a recreated
+runner keeps what the old one had paged (`paged` / `failing_since`, so it can send
+the RESOLVED), its debounce counters, `last_delivery_ok_at` and `ever_succeeded`.
+"Never passed since the runner started" therefore means since the state began
+(first deploy, a new probe, or a wiped volume), not since the container started.

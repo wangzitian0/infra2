@@ -18,6 +18,8 @@ from tools.openpanel_clients import openpanel_env
 
 
 DEFAULT_INTERVAL_SECONDS = 5 * 60
+# Local/dev fallback only; the deployed runner sets OBS_ROUNDTRIP_STATE_FILE onto the
+# `probe-state` volume (platform/12.alerting/compose.yaml, #960).
 DEFAULT_STATE_FILE = "/tmp/observability_roundtrip_probe_state.json"
 DEFAULT_QUERY_WAIT_SECONDS = 30
 DEFAULT_QUERY_POLL_SECONDS = 2
