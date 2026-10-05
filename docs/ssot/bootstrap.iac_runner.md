@@ -152,7 +152,10 @@ flowchart TB
 gh workflow run reconcile-iac-inputs.yml -f after=vX.Y.Z -f promote_prod=true
         │
         │ 1. 晋升守卫：after 必须是 vX.Y.Z、存在、reachable from origin/main，
-        │    且该 tag 有一次 push 触发的绿色 staging soak（dispatch 触发的 staging run 不算）
+        │    且该 tag 有一次 push 触发的绿色 staging soak（dispatch 触发的 staging run 不算）。
+        │    查找由 `tools/promotion_soak_guard.py` 完成：按 tag 指向的 commit（`head_sha`）查，并接受
+        │    按 branch 过滤的列表；**只在一个 run 都没查到时**（列表为空或查询出错）有界重试（3 × 15s，GitHub
+        │    的列表索引最终一致）；已查到的 run 立即定论。非 success 的已结束 run、始终为空、始终出错一律拒绝（fail-closed，#970）
         │ 2. before = 当前最新 production/v* marker（首个 marker 需显式 -f before=<已知 prod 版本>）
         │ 3. 与 staging 相同的 fan-out → deploy_v2 --type prod → 签名 /deploy（DEPLOY_ENV=production）
         ▼

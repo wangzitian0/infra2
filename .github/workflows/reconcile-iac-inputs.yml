@@ -34,7 +34,7 @@ name: Reconcile IaC Inputs
 permissions:
   # Explicit production promotion records an immutable production/v* marker.
   contents: write
-  # the promotion guard lists this workflow's runs for the promoted tag (gh run list)
+  # the promotion guard lists this workflow's runs for the promoted tag (gh api .../runs)
   actions: read
 
 concurrency:
@@ -89,6 +89,9 @@ jobs:
       # workflow. A dispatch-triggered staging run does not count (it may have been a dry run,
       # or a promotion itself); the remedy is a new tag. The identity of the promoted tag is
       # checked here as well, and the change set production will receive is listed.
+      # The soak lookup is tools/promotion_soak_guard.py (#970): GitHub's branch-filtered run
+      # listing is eventually consistent, so it finds the run by the tag's commit, retries only
+      # an empty listing (bounded), and still refuses on anything but a green soak.
       - name: Production promotion guard (soak, identity, change set)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.promote_prod }}
         env:
@@ -111,14 +114,7 @@ jobs:
             echo "::error::release tag '$after' is not reachable from origin/main."
             exit 1
           fi
-          runs="$(gh run list --workflow reconcile-iac-inputs.yml --event push --branch "$after" \
-                    --json conclusion,status,url,createdAt --limit 10)"
-          soak="$(jq -r '[.[] | select(.conclusion == "success")] | first | .url // empty' <<<"$runs")"
-          if [[ -z "$soak" ]]; then
-            echo "::error::'$after' has no green staging soak: no push-triggered run of this workflow for the tag concluded success. Seen: $(jq -c '[.[] | {conclusion, status, url}]' <<<"$runs"). Fix the release and cut a new tag; production is never promoted from a tag whose staging reconcile did not pass."
-            exit 1
-          fi
-          echo "staging soak of $after: $soak (concluded $(jq -r '[.[] | select(.conclusion == "success")] | first | .createdAt' <<<"$runs"))"
+          python -m tools.promotion_soak_guard "$after"
           marker="$(git tag --list 'production/v*.*.*' --sort=-v:refname | head -n1 || true)"
           echo "production marker: ${marker:-<none>}"
           if [[ -n "$marker" ]]; then

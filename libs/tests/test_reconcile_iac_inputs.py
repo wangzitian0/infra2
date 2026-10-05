@@ -432,11 +432,9 @@ def test_promote_prod_refuses_a_tag_without_a_green_staging_soak() -> None:
     # gh run list needs actions: read on the workflow token (review on #641)
     assert workflow["permissions"] == {"contents": "write", "actions": "read"}
     script = guard["run"]
-    assert (
-        '--workflow reconcile-iac-inputs.yml --event push --branch "$after"' in script
-    )
-    assert 'select(.conclusion == "success")' in script
-    assert "has no green staging soak" in script
+    # the soak lookup is the tested tool (libs/tests/test_promotion_soak_guard.py), which
+    # finds the run by commit and owns the "has no green staging soak" refusal (#970).
+    assert 'python -m tools.promotion_soak_guard "$after"' in script
     assert "merge-base --is-ancestor" in script
     assert "production/v*.*.*" in script and "git diff --stat" in script
 
