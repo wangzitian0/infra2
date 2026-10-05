@@ -1,4 +1,4 @@
-<!-- WS_STATIC_START adapter=rules-v2 inputs=b51176843804ec97300ccbbee9eb25272ff47d36cdb6112025d54429eaab88bf -->
+<!-- WS_STATIC_START adapter=rules-v2 inputs=9598b8936dcccaf2049ad435cd18919fb9a398a272fdda32014ba834091f9f5a -->
 <!-- Generated file: do not edit by hand. These rules are maintained in the owner's rule source and re-rendered here. -->
 
 ## Engineering discipline
@@ -11,6 +11,7 @@
 - **Clean up during migration:** After the new mechanism is live and equivalence is proved, remove its predecessor, obsolete files, and dead code in the same change. Define contracts first and derive CI from them.
 - **Deletion can leave guards green and empty:** A guard for an old structure can stop checking anything after deletion. Check each guard and remove it or redirect it to the new structure; green tests alone do not prove safe deletion.
 - **Define guard scope from what it must govern, not from today's passing tree.** Let the guard fail on existing violations, then repair them. A guard never seen failing is not yet evidence of protection.
+- **Worktree self-sufficiency:** Every worktree must resolve its dependencies, toolchain, skills, and configuration internally. Tools and tests must not navigate upward with `../..` to locate files in parent checkouts.
 
 ## Delivery and merge
 
@@ -42,6 +43,7 @@ This repository is both the implementation/deployment control plane for `infra2`
 3. **Workspace tooling:** Root-level `oh-my-code-agent/` is an independent submodule for TUI management. It evolves independently and must not become a runtime or source dependency of infra or Apps.
 4. **Preferences are not cross-repository commands:** Default GitHub, collaboration, and design preferences live in [`harness/workspace/`](harness/workspace/). More specific rules in the target repository prevail.
 5. **Dependency boundary:** A submodule is a development snapshot, not a package, runtime, deployment, or configuration-hash dependency. Stable cross-repository code contracts travel only through a published `infra2-sdk` version.
+6. **Submodule development boundary:** Submodule checkouts in `repos/` and `oh-my-code-agent/` must remain detached or on tracked commits matching parent pins. Develop submodule changes in independent checkouts or worktrees outside the harness working tree.
 
 ## Core mandatory principles (SSOT first)
 
@@ -65,7 +67,12 @@ Full procedures are in [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.
    - **Stage 3 -- Production Deploy:** Requires an explicit separate action (`deploy.yml type=prod` or `reconcile-iac-inputs.yml promote_prod=true`). Tag push never auto-deploys prod.
 
    **Prod Gatekeeper protocol (mandatory before any session close on service-touching tasks):** Before closing or declaring a task complete, the agent MUST proactively report all three stage statuses -- (a) merge status with SHA, (b) staging deploy evidence (run URL + soak result), (c) current prod state (container image hash / Cloudflare watchdog heartbeat) -- and explicitly ask: "Authorize production deployment?" Closing silently without obtaining an explicit prod disposition (either "deploy" or "hold") is forbidden. Once the owner grants prod authorization, the agent owns the ENTIRE deployment loop including physical verification (Touch Reality probe), and must never ask the owner to run commands manually.
-6. **Judge self-adjudication by direction, not merely by file** (owner instruction, 2026-09-22): The risk is a change favorable to the PR itself. A mechanically proven tightening can proceed under the gate; a relaxation or a change whose direction cannot be proven returns to the owner. Proof must be computed, not asserted in a PR description. It is possible only for closed-set decision inputs with mechanically comparable base and head values. `tools/pr_merge_gate.py` owns `_direction_proof_for()`; do not duplicate its file list here. Python and rule prose can loosen behavior in arbitrary ways and therefore return to the owner. Unknown files, unreadable input, parse failure, or missing base input also return to the owner by default. A protected rule-text change must cite the owner's instruction.
+6. **Judge self-adjudication by direction, not merely by file** (owner instruction, 2026-09-22): The risk is a change favorable to the PR itself. A mechanically proven tightening can proceed under the gate; a relaxation or a change whose direction cannot be proven returns to the owner. Proof must be computed, not asserted in a PR description. It is possible only for closed-set decision inputs with mechanically comparable base and head values. `tools/pr_merge_gate.py` owns `_direction_proof_for()`; do not duplicate its file list here. Python and rule prose can loosen behavior in arbitrary ways and therefore return to the owner. Unknown files, unreadable input, parse failure, or missing base input also return to the owner by default. A protected rule-text change must cite the owner's instruction in the PR description using this exact markdown syntax:
+   ```markdown
+   ### Owner instruction
+   > <exact owner instruction text>
+   ```
+   Unformatted quotes or custom header levels fail mechanical extraction in `tools.pr_merge_gate`.
 
    This prose once disagreed with implementation by being stricter (#855). The strict direction was still wrong: one reader unnecessarily asked the owner, while another reader followed code. A rule that requires reading implementation again to interpret it has failed as a rule. The mechanical criterion now lives in code; this paragraph points to it.
 
