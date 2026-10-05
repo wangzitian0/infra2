@@ -22,6 +22,7 @@ STATEFUL_DEPLOY_ENVIRONMENTS = (
 MANAGED_BY = "infra2"
 DOCKER_LABEL_PREFIX = "party.zitian.infra"
 IDENTITY_SCHEMA_VERSION = "v1"
+PREVIEW_KINDS = ("branch", "pr", "commit", "tag", "canary")
 
 APP_SOURCES: dict[str, str] = {
     "finance_report/app": "wangzitian0/finance_report",
@@ -66,6 +67,7 @@ __all__ = [
     "IDENTITY_SCHEMA_VERSION",
     "MANAGED_BY",
     "PREVIEW",
+    "PREVIEW_KINDS",
     "PRODUCTION",
     "PROJECT_REPOS",
     "REPO_ROOT",

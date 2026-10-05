@@ -16,6 +16,7 @@ from libs.core.constants import (
     STATEFUL_DEPLOY_ENVIRONMENTS,
     is_stateful_deploy_env,
 )
+from libs.core.environ import normalize_env_name
 
 __all__ = [
     "CONTAINERS",
@@ -145,36 +146,6 @@ def infra_domain() -> str:
 
 # Cache for env config (simple dict, no lru_cache to avoid OpSecrets caching issues)
 _env_cache: dict | None = None
-
-
-
-
-def normalize_env_name(value: str | None) -> str:
-    """Normalize environment name for consistent behavior."""
-    if not value or not value.strip():
-        return "production"
-    val = value.strip().lower()
-    if val in ("prod", "production"):
-        return "production"
-    if val in ("stg", "staging"):
-        return "staging"
-    if val in ("preview", "preview_env", "preview-env"):
-        return "preview"
-    if val in ("canary", "canary-preview", "canary_preview"):
-        return "canary_preview"
-    if val.startswith("pr-") or val.startswith("pr_"):
-        return val.replace("-", "_")
-    if val.startswith("preview-") or val.startswith("preview_"):
-        return val.replace("-", "_")
-    if val.startswith("branch-") or val.startswith("branch_"):
-        return val.replace("-", "_")
-    if val.startswith("commit-") or val.startswith("commit_"):
-        return val.replace("-", "_")
-    if val.startswith("tag-") or val.startswith("tag_"):
-        return val.replace("-", "_")
-    if "/" in val or "\\" in val or " " in val or "\t" in val or "\n" in val:
-        raise ValueError("ENV name must not include '/' or whitespace")
-    return val.replace("-", "_")
 
 
 def reset_env_cache() -> None:
