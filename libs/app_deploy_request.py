@@ -45,10 +45,8 @@ __all__ = [
     "verify_production_evidence",
 ]
 
-APP_SOURCES: dict[str, str] = {
-    "finance_report/app": "wangzitian0/finance_report",
-    "truealpha/app": "wangzitian0/truealpha",
-}
+from libs.core.constants import APP_SOURCES
+
 ALLOWED_SENDERS = frozenset({"wangzitian0"})
 FIXED_DEPLOY_TYPES = frozenset({DeployType.STAGING, DeployType.PRODUCTION})
 #: The deploy types whose request is canaried before it executes (truealpha#860):

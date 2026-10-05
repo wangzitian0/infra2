@@ -911,7 +911,6 @@ def deploy_v2(
             "(pass staging_validated, or break_glass for an emergency)"
         )
 
-
     _wait_for_image_dependencies(
         svc_spec,
         resolved.image_ref,

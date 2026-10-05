@@ -42,6 +42,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from libs.common import normalize_env_name  # noqa: E402
+from libs.core.constants import PROJECT_REPOS  # noqa: E402
 from libs.deploy_env_config import (  # noqa: E402
     CANARY_SLOT,
     PREVIEW_ENVIRONMENT,
@@ -56,11 +57,7 @@ ALWAYS_KEEP_ALIASES = frozenset({"branch-main", CANARY_SLOT})
 # longer reach. Derived from the public PREVIEW_KINDS so a new kind can't silently
 # be misclassified as an orphan.
 VALID_KIND_PREFIXES = tuple(f"{kind}-" for kind in PREVIEW_KINDS)
-APP_REPO = "wangzitian0/finance_report"
-PROJECT_REPOS: dict[str, str] = {
-    "finance_report": "wangzitian0/finance_report",
-    "truealpha": "wangzitian0/truealpha",
-}
+APP_REPO = PROJECT_REPOS.get("finance_report", "wangzitian0/finance_report")
 
 
 @dataclass(frozen=True)
@@ -219,9 +216,7 @@ def detect(client, *, token: str | None, opener=urllib.request.urlopen) -> dict:
     )
     return {
         "preview_composes_seen": len(composes),
-        "open_pr_fetch": "ok"
-        if fetch_ok
-        else "unavailable (PR leaks not flagged)",
+        "open_pr_fetch": "ok" if fetch_ok else "unavailable (PR leaks not flagged)",
         "leaks": leaks,
     }
 

@@ -191,3 +191,90 @@ def test_teardown_is_composeid_based_not_name_based():
     # the real (suffixed) project is gone; the bare-name stray survives — proving the
     # model distinguishes the two keys and that composeId-teardown is what saves us.
     assert client.survivors() == {bare_name: "cmp-stray"}
+
+
+class ContainerListFakeDokploy:
+    """Fake Dokploy client with configurable container list."""
+
+    def __init__(self, containers_sequence: list[list[dict]] | None = None):
+        self._seq = list(containers_sequence or [[]])
+        self.call_count = 0
+
+    def get_containers(self) -> list[dict]:
+        self.call_count += 1
+        if self._seq:
+            return self._seq.pop(0) if len(self._seq) > 1 else self._seq[0]
+        return []
+
+    def find_compose_by_name(self, name, project_name=None, env_name=None):
+        return None
+
+    def delete_compose(self, compose_id, *, delete_volumes=False):
+        pass
+
+
+def test_check_containers_absent_returns_true_when_empty():
+    client = ContainerListFakeDokploy([[]])
+    absent, survivors = pl.check_containers_absent(
+        client, "finance_report/app", "-canary-preview"
+    )
+    assert absent is True
+    assert survivors == []
+
+
+def test_check_containers_absent_detects_survivor_containers():
+    client = ContainerListFakeDokploy(
+        [
+            [
+                {"name": "/finance-report-preview-canary-preview"},
+                {"name": "/finance_report-canary-preview"},
+                {"name": "/other-service-main"},
+            ]
+        ]
+    )
+    absent, survivors = pl.check_containers_absent(
+        client, "finance_report/app", "-canary-preview"
+    )
+    assert absent is False
+    assert survivors == [
+        "/finance-report-preview-canary-preview",
+        "/finance_report-canary-preview",
+    ]
+
+
+def test_down_with_wait_true_verifies_physical_container_absence():
+    # Sequence: first read sees a container, next two reads see empty (2 consecutive clean reads)
+    client = ContainerListFakeDokploy(
+        [
+            [{"name": "/finance-report-canary-preview"}],
+            [],
+            [],
+        ]
+    )
+    result = pl.down(
+        "canary",
+        "preview",
+        domain="zitian.party",
+        client=client,
+        wait=True,
+        attempts=5,
+        _sleep=lambda _: None,
+    )
+    assert result.containers_cleared is True
+    assert client.call_count >= 3
+
+
+def test_down_with_wait_true_detects_container_survivors():
+    # Container never disappears
+    client = ContainerListFakeDokploy([[{"name": "/finance-report-canary-preview"}]])
+    result = pl.down(
+        "canary",
+        "preview",
+        domain="zitian.party",
+        client=client,
+        wait=True,
+        attempts=3,
+        _sleep=lambda _: None,
+    )
+    assert result.containers_cleared is False
+    assert client.call_count == 3
