@@ -70,7 +70,6 @@ _DEBT_ROWS: tuple[tuple[str, str], ...] = (
     ("libs/deploy/deployer.py", "libs.env"),
     ("libs/deploy/deployer.py", "libs.secrets_registry"),
     ("libs/deploy/deployer.py", "libs.service_facets"),
-    ("libs/deploy/deployer.py", "libs.service_identity"),
     ("libs/deploy/deployer.py", "libs.service_registry"),
     ("libs/deploy/preview.py", "libs.common"),
     ("libs/deploy/preview.py", "libs.compose_lock"),

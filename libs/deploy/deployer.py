@@ -4,28 +4,53 @@ Simplified: minimal class attributes, uses new env.py API.
 """
 
 from __future__ import annotations
+
+import os
+import shlex
+import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NamedTuple
-from pathlib import Path
-import importlib.util
-import os
-import hashlib
-import json
-import re
-import shlex
-import sys
-import time
+
 from invoke import task
 
-from libs.common import get_env, validate_env, service_domain
+from libs.common import get_env, service_domain, validate_env
 from libs.console import (
-    header,
-    success,
-    error,
-    warning,
-    info,
     env_vars,
+    error,
+    header,
+    info,
     run_with_status,
+    success,
+    warning,
+)
+from libs.deploy.config_hash import (
+    _artifact_items_from_disk,
+    _compose_artifact_files,
+    _compute_config_hash,
+    _dependency_items_from_globs,
+    _dockerfile_copy_sources,
+    _iter_path_files,
+    _repo_rel,
+    _resolve_build_relative,
+    _resolve_compose_relative,
+    config_hash_from_items,
+)
+from libs.deploy.discovery import (
+    discover_services as _discover_services_pure,
+    load_deployer_class as _load_deployer_class_pure,
+)
+from libs.deploy.env_util import (
+    RUNTIME_ENV_KEYS_TO_PRESERVE,
+    _parse_env_text,
+    _preserve_runtime_env,
+)
+from libs.deploy.sync_pipeline import (
+    EXACT_COMMIT_RE,
+    SOURCE_CONFIG_HASH_VERSION,
+    ConsoleLogger,
+    SyncAction,
+    SyncPipeline,
+    SyncResult,
 )
 from libs.env import get_secrets, verify_vault_token
 from libs.service_facets import (
@@ -36,7 +61,6 @@ from libs.service_facets import (
     RestartAfterFacet,
     SignalFacet,
 )
-from infra2_sdk.deploy import DeployState
 
 if TYPE_CHECKING:
     from invoke import Context
@@ -45,53 +69,28 @@ if TYPE_CHECKING:
 
 __all__ = [
     "Deployer",
+    "EXACT_COMMIT_RE",
+    "RUNTIME_ENV_KEYS_TO_PRESERVE",
+    "SOURCE_CONFIG_HASH_VERSION",
     "SyncAction",
     "SyncResult",
-    "make_tasks",
+    "_artifact_items_from_disk",
+    "_compose_artifact_files",
+    "_compute_config_hash",
+    "_dependency_items_from_disk",
+    "_dockerfile_copy_sources",
+    "_iter_path_files",
+    "_parse_env_text",
+    "_preserve_runtime_env",
+    "_repo_rel",
+    "_resolve_build_relative",
+    "_resolve_compose_relative",
+    "config_hash_from_items",
     "discover_services",
     "load_deployer_class",
+    "make_tasks",
 ]
 
-
-class SyncAction:
-    """Deployment sync action types aligned with infra2-sdk DeployState."""
-
-    SKIPPED = "skipped"
-    FAILED = DeployState.FAILED.value  # "failed"
-    CREATED = "created"
-    UPDATED = "updated"
-    SUPPLIED = "supplied"
-
-
-class SyncResult(dict):
-    """Backward-compatible dictionary mapping for Deployer.sync result."""
-
-    def __init__(self, action: str, details: str, **extra: Any):
-        super().__init__(action=action, details=details, **extra)
-        self.action = action
-        self.details = details
-
-    @property
-    def is_success(self) -> bool:
-        return self.action != SyncAction.FAILED
-
-
-# Runtime-only AppRole credentials injected into Dokploy env out-of-band (by
-# bootstrap/05.vault setup-approle), not present in the git-derived desired env.
-# They must survive a redeploy that regenerates the env, otherwise the
-# vault-agent loses its credentials and crash-loops (#257/#259/#369). The legacy
-# static VAULT_APP_TOKEN was dropped here in #369's v2 cleanup once every service
-# was on AppRole — leaving it out also lets a redeploy clean up any vestigial copy.
-# Ordered (not a set) so the preserved keys append deterministically — set
-# iteration order would vary the generated env line order and churn the config
-# hash, causing spurious redeploys.
-RUNTIME_ENV_KEYS_TO_PRESERVE = (
-    "VAULT_ROLE_ID",
-    "VAULT_SECRET_ID",
-)
-
-SOURCE_CONFIG_HASH_VERSION = "v1"
-EXACT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 # infra2#525: like libs.deploy.promote.wait_for_rollout, Dokploy deployment records
 # carry no caller-supplied correlation id, so a start-timestamp floor (captured just
@@ -113,338 +112,24 @@ class _StackUnobservable(RuntimeError):
     """The host could not be asked about the stack — no evidence either way."""
 
 
-def load_deployer_class(service_id: str) -> "type[Deployer] | None":
-    """Dynamically import `service_id`'s deploy.py and return its Deployer subclass.
-
-    Every OTHER consumer of a service's facts (service_registry, promote.py's
-    assert_approle_creds_present) deliberately reads deploy.py via AST, never
-    importing it — importing runs the module's own top-level code. This is the
-    one place that import is actually needed: a fixed-compose deploy
-    (libs.deploy.promote) that wants to call a real Deployer classmethod (e.g.
-    ensure_runtime_secrets, truealpha#447) rather than re-derive its logic.
-    Safe to do here because a deploy.py's only load-time side effect
-    (make_tasks -> invoke task registration) is gated on its own
-    ``shared_tasks = sys.modules.get(...)`` lookup finding something — which is
-    never true for a standalone load like this one (mirrors the identical
-    precedent in tools/dokploy_config_drift.py and tests' _load_deploy_module).
-    Returns None if the service has no deploy.py or it defines no Deployer
-    subclass — callers treat that as "nothing to provision", not an error.
-    """
-    from libs.service_registry import _LAYERS
-
-    if "/" not in service_id:
-        return None
-    layer, name = service_id.split("/", 1)
-    layer_path = _LAYERS.get(layer)
-    if layer_path is None:
-        return None
-    deploy_file = next(layer_path.glob(f"*.{name}/deploy.py"), None)
-    if deploy_file is None:
-        return None
-    module_name = f"_deployer_{layer}_{name}"
-    spec = importlib.util.spec_from_file_location(module_name, deploy_file)
-    if spec is None or spec.loader is None:
-        return None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    for obj in vars(module).values():
-        if (
-            isinstance(obj, type)
-            and issubclass(obj, Deployer)
-            and obj is not Deployer
-            and obj.__module__ == module_name
-        ):
-            return obj
-    return None
-
-
 def discover_services() -> dict[str, str]:
-    """Discover deployable services based on deploy.py files."""
     from libs.service_registry import _LAYERS as layers
 
-    service_map: dict[str, str] = {}
-
-    for layer, layer_path in layers.items():
-        if not layer_path.exists():
-            continue
-
-        for service_dir in layer_path.iterdir():
-            if not service_dir.is_dir():
-                continue
-
-            parts = service_dir.name.split(".", 1)
-            if len(parts) != 2:
-                continue
-
-            service_name = parts[1]
-            deploy_file = service_dir / "deploy.py"
-            if not deploy_file.exists():
-                continue
-
-            key = f"{layer}/{service_name}"
-            # App layers get prefixed task names (tools/loader.py uses the same
-            # prefixes) to avoid colliding with platform/postgres etc.
-            task_prefix = {"finance_report": "fr-", "truealpha": "ta-"}.get(layer, "")
-            # Invoke exposes collection underscores as dashes on its CLI. The runner
-            # executes these values verbatim, so discovery must return the CLI name.
-            task_name = service_name.replace("_", "-")
-            service_map[key] = f"{task_prefix}{task_name}.sync"
-
-    return service_map
+    return _discover_services_pure(layers)
 
 
-def _compute_config_hash(
-    compose_content: str,
-    env_vars: dict[str, str],
-    artifact_payload: str = "",
-) -> str:
-    """Compute hash of compose content + env vars for change detection."""
-    # Normalize env vars (sort keys). Empty values COUNT: a variable flipping from a
-    # value to "" changes the container env just as surely (#663 review) and must
-    # redeploy; only an absent key is absent.
-    env_str = "\n".join(
-        f"{k}={'' if v is None else v}" for k, v in sorted(env_vars.items())
-    )
-    combined = (
-        f"{compose_content}\n---ENV---\n{env_str}\n---ARTIFACTS---\n{artifact_payload}"
-    )
-    return hashlib.sha256(combined.encode()).hexdigest()[:12]
+def load_deployer_class(service_id: str) -> type[Deployer] | None:
+    from libs.service_registry import _LAYERS as layers
 
-
-def _iter_path_files(path: Path) -> list[Path]:
-    if path.is_file():
-        return [path]
-    if not path.is_dir():
-        return []
-    return sorted(
-        child
-        for child in path.rglob("*")
-        if child.is_file()
-        and "__pycache__" not in child.parts
-        and not child.name.endswith((".pyc", ".pyo"))
-    )
-
-
-def _resolve_compose_relative(compose_dir: Path, source: str) -> Path | None:
-    if not source or "${" in source or source.startswith("/"):
-        return None
-    return (compose_dir / source).resolve()
-
-
-def _resolve_build_relative(context_dir: Path, source: str) -> Path | None:
-    if (
-        not source
-        or "${" in source
-        or source.startswith("/")
-        or source.startswith("--")
-    ):
-        return None
-    return (context_dir / source).resolve()
-
-
-def _dockerfile_copy_sources(dockerfile: Path, context_dir: Path) -> list[Path]:
-    if not dockerfile.exists():
-        return []
-
-    sources: list[Path] = []
-    for raw_line in dockerfile.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        instruction, _, remainder = line.partition(" ")
-        if instruction.upper() not in {"COPY", "ADD"} or not remainder:
-            continue
-        if "--from=" in remainder:
-            continue
-
-        parsed_sources: list[str] = []
-        if remainder.startswith("["):
-            try:
-                values = json.loads(remainder)
-            except json.JSONDecodeError:
-                values = []
-            if isinstance(values, list) and len(values) >= 2:
-                parsed_sources = [str(value) for value in values[:-1]]
-        else:
-            parts = [
-                part for part in shlex.split(remainder) if not part.startswith("--")
-            ]
-            if len(parts) >= 2:
-                parsed_sources = parts[:-1]
-
-        for source in parsed_sources:
-            resolved = _resolve_build_relative(context_dir, source)
-            if resolved:
-                sources.extend(_iter_path_files(resolved))
-
-    return sources
-
-
-def _compose_artifact_files(compose_path: str, compose_content: str) -> list[Path]:
-    try:
-        import yaml
-    except ModuleNotFoundError:
-        return []
-
-    compose_file = Path(compose_path)
-    compose_dir = compose_file.parent.resolve()
-    try:
-        compose = yaml.safe_load(compose_content) or {}
-    except yaml.YAMLError:
-        return []
-
-    services = compose.get("services", {})
-    if not isinstance(services, dict):
-        return []
-
-    files: list[Path] = []
-    for service in services.values():
-        if not isinstance(service, dict):
-            continue
-
-        build = service.get("build")
-        if build:
-            if isinstance(build, str):
-                context_dir = _resolve_compose_relative(compose_dir, build)
-                dockerfile = context_dir / "Dockerfile" if context_dir else None
-            elif isinstance(build, dict):
-                context = str(build.get("context") or ".")
-                context_dir = _resolve_compose_relative(compose_dir, context)
-                dockerfile_name = str(build.get("dockerfile") or "Dockerfile")
-                dockerfile = (
-                    _resolve_build_relative(context_dir, dockerfile_name)
-                    if context_dir
-                    else None
-                )
-            else:
-                context_dir = None
-                dockerfile = None
-
-            if dockerfile:
-                files.extend(_iter_path_files(dockerfile))
-                if context_dir:
-                    files.extend(_dockerfile_copy_sources(dockerfile, context_dir))
-
-        volumes = service.get("volumes", [])
-        if isinstance(volumes, list):
-            for volume in volumes:
-                if isinstance(volume, str):
-                    source = volume.split(":", 1)[0]
-                elif isinstance(volume, dict):
-                    source = str(volume.get("source") or "")
-                    if volume.get("type") not in (None, "bind"):
-                        continue
-                else:
-                    continue
-                if not source.startswith("."):
-                    continue
-                resolved = _resolve_compose_relative(compose_dir, source)
-                if resolved:
-                    files.extend(_iter_path_files(resolved))
-
-    return sorted(set(files))
-
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _repo_rel(path: Path) -> str:
-    """Repo-relative label for a file, anchored at the REPO ROOT (not ``Path.cwd()``), so the
-    config hash is reproducible from any working directory / checkout — the property the
-    config-drift reconciler needs to recompute a service's hash at an arbitrary git ref. An
-    out-of-tree path keeps its absolute form (never happens for in-repo artifacts/deps)."""
-    try:
-        return str(path.resolve().relative_to(_REPO_ROOT))
-    except ValueError:
-        return str(path)
-
-
-def config_hash_from_items(
-    compose_content: str,
-    env_vars: dict[str, str],
-    artifact_items: list[tuple[str, bytes]],
-    dep_items: list[tuple[str, bytes]],
-) -> str:
-    """Pure config hash from explicit inputs — no filesystem / cwd access in here.
-
-    ``artifact_items`` / ``dep_items`` are ``(repo-relative-label, content-bytes)`` pairs
-    (artifact in discovery order; deps caller-sorted). Because labels are repo-relative and
-    content is passed in, feeding the SAME (compose, env, files) yields the SAME hash whether
-    the files were gathered from disk (the deploy path) or from a git ref (the drift
-    reconciler) — there is no second, divergent implementation to disagree with the deploy.
-    """
-    art = [f"{lbl}:{hashlib.sha256(c).hexdigest()}" for lbl, c in artifact_items]
-    deps = [f"dep:{lbl}:{hashlib.sha256(c).hexdigest()}" for lbl, c in dep_items]
-    payload = "\n".join(art)
-    if deps:
-        payload = f"{payload}\n" + "\n".join(deps)
-    return _compute_config_hash(compose_content, env_vars, payload)
-
-
-def _artifact_items_from_disk(
-    compose_path: str, compose_content: str
-) -> list[tuple[str, bytes]]:
-    """(repo-relative label, content) for each compose build-context file, on disk."""
-    return [
-        (_repo_rel(path), path.read_bytes())
-        for path in _compose_artifact_files(compose_path, compose_content)
-    ]
+    return _load_deployer_class_pure(service_id, layers=layers, base_class=Deployer)
 
 
 def _dependency_items_from_disk(compose_path: str) -> list[tuple[str, bytes]]:
-    """(repo-relative label, content) for a service's DECLARED extra build/config dependencies,
-    sorted by path. Empty unless the service lists `depends_on` globs in deploy-dependencies.yaml
-    (a no-op for services that only depend on their own directory)."""
-    import glob as _glob
-    from libs.deploy_dependencies import (
-        extra_dependency_globs,
-        service_key_from_path,
-    )
+    from libs.deploy_dependencies import extra_dependency_globs, service_key_from_path
 
     key = service_key_from_path(compose_path)
-    if not key:
-        return []
-    globs = extra_dependency_globs(key)
-    if not globs:
-        return []
-
-    matched: set[Path] = set()
-    for pattern in globs:
-        for hit in _glob.glob(str(_REPO_ROOT / pattern), recursive=True):
-            p = Path(hit)
-            # Exclude transient __pycache__/.pyc/.pyo (mirrors _iter_path_files). The iac-runner
-            # deploys from a CLEAN git checkout that has none, so its hash already ignores them;
-            # without this exclusion a dev machine (which has compiled .pyc) computes a DIFFERENT
-            # hash than the iac-runner for any dep-baking service — non-reproducible by accident.
-            if (
-                p.is_file()
-                and "__pycache__" not in p.parts
-                and not p.name.endswith((".pyc", ".pyo"))
-            ):
-                matched.add(p.resolve())
-
-    return [(_repo_rel(path), path.read_bytes()) for path in sorted(matched)]
-
-
-def _parse_env_text(env_text: str) -> dict[str, str]:
-    env: dict[str, str] = {}
-    for line in env_text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        env[key] = value
-    return env
-
-
-def _preserve_runtime_env(env_str: str, existing_env: str | None) -> str:
-    desired = _parse_env_text(env_str)
-    existing = _parse_env_text(existing_env or "")
-    for key in RUNTIME_ENV_KEYS_TO_PRESERVE:
-        if key not in desired and key in existing:
-            desired[key] = existing[key]
-    return "\n".join(f"{key}={value}" for key, value in desired.items())
+    globs = extra_dependency_globs(key) if key else ()
+    return _dependency_items_from_globs(globs)
 
 
 class Deployer:
@@ -956,49 +641,23 @@ class Deployer:
         else:
             effective_env = env_str
 
-        if existing:
-            info("Updating existing compose service")
-            client.update_compose(
-                compose_id,
-                source_type="github",
-                githubId=github_id,
-                repository=GITHUB_REPO,
-                owner=GITHUB_OWNER,
-                branch=branch,
-                composePath=cls.compose_path,
-                env=effective_env,
-                autoDeploy=False,
-            )
-        else:
-            info("Creating new compose service with GitHub provider")
-            result = client.create_compose(
-                environment_id=env_id,
-                name=cls.service,
-                app_name=f"{project_name}-{cls.service}",
-                source_type="github",
-                githubId=github_id,
-                repository=GITHUB_REPO,
-                owner=GITHUB_OWNER,
-                branch=branch,
-                composePath=cls.compose_path,
-                env=effective_env,
-                autoDeploy=False,
-            )
-            compose_id = result["composeId"]
-            # Dokploy initializes new GitHub compose records with default source
-            # fields on some versions; update immediately so first deploy uses
-            # the intended repository and compose path.
-            client.update_compose(
-                compose_id,
-                source_type="github",
-                githubId=github_id,
-                repository=GITHUB_REPO,
-                owner=GITHUB_OWNER,
-                branch=branch,
-                composePath=cls.compose_path,
-                env=env_str,
-                autoDeploy=False,
-            )
+        from libs.deploy.dokploy_adapter import upsert_github_compose
+
+        compose_id = upsert_github_compose(
+            client,
+            service_name=cls.service,
+            project_name=project_name,
+            env_id=env_id,
+            github_id=github_id,
+            repository=GITHUB_REPO,
+            owner=GITHUB_OWNER,
+            branch=branch,
+            compose_path=cls.compose_path,
+            effective_env=effective_env,
+            existing=existing,
+            raw_env_str=env_str,
+            log_info=info,
+        )
 
         # Deploy
         # Fail closed BEFORE any deployment if an AppRole compose would ship
@@ -1030,70 +689,24 @@ class Deployer:
     def ensure_compose_domains(
         cls, client: DokployClient, compose_id: str, e: dict[str, str]
     ) -> dict:
-        """Ensure Dokploy-managed domains are configured BEFORE compose deployment.
+        """Ensure Dokploy-managed domains are configured BEFORE compose deployment."""
+        from libs.deploy.dokploy_adapter import (
+            ensure_compose_domains as _ensure_domains,
+        )
 
-        Configuring domains before running ``_deploy_compose_with_record_check`` ensures
-        Dokploy includes the domain routing in the compose startup in a single pass,
-        eliminating the redundant second redeploy.
-        """
-        route_pref = getattr(cls, "route_preference", None)
-        if route_pref is not None:
-            from dataclasses import asdict
-            from infra2_sdk.routing import resolve_dokploy_domains
-
-            domain = e.get("INTERNAL_DOMAIN")
-            if not domain:
-                warning("Domain configuration skipped: INTERNAL_DOMAIN missing")
-                return {"created": 0, "skipped": 0, "conflicts": [], "errors": []}
-
-            effective_env = e.get("ENV", "production")
-            specs = resolve_dokploy_domains(
-                route_pref, tier=effective_env, base_domain=domain
-            )
-            desired_domains = [asdict(s) for s in specs]
-            if desired_domains:
-                for d in desired_domains:
-                    info(f"Ensuring domain: https://{d['host']}{d.get('path', '')}")
-                result = client.ensure_domains(
-                    compose_id=compose_id,
-                    desired_domains=desired_domains,
-                )
-                if result.get("created", 0) > 0:
-                    success(f"Configured {result['created']} domain(s) in Dokploy")
-                if result.get("conflicts"):
-                    for c in result["conflicts"]:
-                        warning(
-                            f"Domain conflict: {c['host']} exists with port {c['existing_port']}, need {c['desired_port']}"
-                        )
-                return result
-
-        if cls.subdomain and cls.service_port:
-            domain_host = service_domain(cls.subdomain, e)
-            if not domain_host:
-                warning("Domain configuration skipped: INTERNAL_DOMAIN missing")
-                return {"created": 0, "skipped": 0, "conflicts": [], "errors": []}
-
-            info(f"Ensuring domain: {domain_host}")
-            desired_domains = [
-                {"host": domain_host, "port": cls.service_port, "https": True}
-            ]
-            result = client.ensure_domains(
-                compose_id=compose_id,
-                desired_domains=desired_domains,
-                service_name=cls.service_name,
-            )
-            if result.get("created", 0) > 0:
-                success(f"Domain configured: https://{domain_host}")
-            elif result.get("skipped", 0) > 0:
-                info(f"Domain already configured: {domain_host}")
-            if result.get("conflicts"):
-                for c in result["conflicts"]:
-                    warning(
-                        f"Domain conflict: {c['host']} exists with port {c['existing_port']}, need {c['desired_port']}"
-                    )
-            return result
-
-        return {"created": 0, "skipped": 0, "conflicts": [], "errors": []}
+        return _ensure_domains(
+            client,
+            compose_id,
+            env=e,
+            route_pref=getattr(cls, "route_preference", None),
+            subdomain=cls.subdomain,
+            service_port=cls.service_port,
+            service_name=cls.service_name,
+            service_domain_fn=service_domain,
+            log_info=info,
+            log_warning=warning,
+            log_success=success,
+        )
 
     @classmethod
     def _checkout_ref(cls) -> str | None:
@@ -1357,91 +970,48 @@ class Deployer:
         interval_seconds: int | None = None,
     ) -> None:
         """Trigger deploy and fail fast if Dokploy does not record runtime work."""
-        timeout = cls._resolve_record_timeout(timeout_seconds)
-        interval = cls._resolve_record_interval(interval_seconds)
-
-        before_ids = cls._deployment_ids(
-            cls._get_compose_deployments(client, compose_id)
+        from libs.deploy_queue import deployment_start_epoch
+        from libs.deploy.dokploy_adapter import (
+            deploy_compose_with_record_check as _deploy_check,
         )
-        # infra2#525: captured immediately before triggering so
-        # _wait_for_new_deployment_record can rule out a "new" record that started
-        # before we even called deploy_compose (see min_started_at below) — it cannot
-        # be the record OUR call produced.
-        trigger_epoch = time.time()
-        client.deploy_compose(compose_id)
-        if cls._wait_for_new_deployment_record(
+
+        _deploy_check(
             client,
             compose_id,
-            before_ids,
-            timeout,
-            interval,
-            min_started_at=trigger_epoch,
-        ):
-            return
-
-        warning(
-            "Dokploy deploy did not produce a new deployment record; retrying with compose.redeploy"
-        )
-        before_ids = cls._deployment_ids(
-            cls._get_compose_deployments(client, compose_id)
-        )
-        trigger_epoch = time.time()
-        client.redeploy_compose(compose_id)
-        if cls._wait_for_new_deployment_record(
-            client,
-            compose_id,
-            before_ids,
-            timeout,
-            interval,
-            min_started_at=trigger_epoch,
-        ):
-            return
-
-        raise RuntimeError(
-            "Dokploy deploy/redeploy did not produce a new deployment record; "
-            "runtime may still be running stale code"
+            timeout_seconds=cls._resolve_record_timeout(timeout_seconds),
+            interval_seconds=cls._resolve_record_interval(interval_seconds),
+            wait_fn=lambda c, cid, prev, to, iv, min_s: (
+                cls._wait_for_new_deployment_record(
+                    c, cid, prev, to, iv, min_started_at=min_s
+                )
+            ),
+            start_epoch_fn=deployment_start_epoch,
+            log_warning=warning,
         )
 
     @staticmethod
     def _deployment_ids(deployments: list[dict]) -> set[str]:
-        return {
-            str(deployment.get("deploymentId") or deployment.get("id") or "")
-            for deployment in deployments
-            if deployment.get("deploymentId") or deployment.get("id")
-        }
+        from libs.deploy.dokploy_adapter import deployment_ids
+
+        return deployment_ids(deployments)
 
     @staticmethod
     def _get_compose_deployments(client: Any, compose_id: str) -> list[dict]:
-        get_compose_deployments = getattr(client, "get_compose_deployments", None)
-        if callable(get_compose_deployments):
-            try:
-                deployments = get_compose_deployments(compose_id)
-            except Exception:  # noqa: BLE001 - keep compose snapshot as compatibility fallback.
-                deployments = client.get_compose(compose_id).get("deployments")
-        else:
-            deployments = client.get_compose(compose_id).get("deployments")
-        return (
-            [deployment for deployment in deployments if isinstance(deployment, dict)]
-            if isinstance(deployments, list)
-            else []
-        )
+        from libs.deploy.dokploy_adapter import get_compose_deployments
+
+        return get_compose_deployments(client, compose_id)
 
     @staticmethod
     def _started_before_trigger(deployment: dict, floor_epoch: float) -> bool:
-        """True if `deployment` has a parseable start timestamp clearly before
-        `floor_epoch` (beyond the clock-skew tolerance) — i.e. it cannot be the record
-        produced by OUR OWN deploy/redeploy_compose() call, since it started before we
-        even called it (infra2#525 finding 2). A record with no parseable
-        startedAt/createdAt/updatedAt is AMBIGUOUS, not excluded — this is only ever
-        used to rule a record OUT, never to rule one in, so an unparseable timestamp
-        preserves prior (pre-infra2#525) behavior rather than a new false-negative.
-        """
         from libs.deploy_queue import deployment_start_epoch
+        from libs.deploy.dokploy_adapter import started_before_trigger
 
-        started = deployment_start_epoch(deployment)
-        if started is None:
-            return False
-        return started < floor_epoch - _CLOCK_SKEW_TOLERANCE_SECONDS
+        return started_before_trigger(
+            deployment,
+            floor_epoch,
+            start_epoch_fn=deployment_start_epoch,
+            clock_skew_tolerance=_CLOCK_SKEW_TOLERANCE_SECONDS,
+        )
 
     _TERMINAL_SUCCESS_STATUSES = frozenset({"done", "success", "successful"})
 
@@ -1456,52 +1026,19 @@ class Deployer:
         *,
         min_started_at: float | None = None,
     ) -> bool:
-        """Wait for the record OUR trigger produced to reach a terminal status.
+        from libs.deploy_queue import deployment_start_epoch
+        from libs.deploy.dokploy_adapter import wait_for_new_deployment_record
 
-        True when it finished successfully; False when no record of ours appeared within
-        the deadline (the caller may re-trigger); raises when it entered ``error`` or is
-        still in progress at the deadline. ``running`` is not a result (#629): on
-        2026-09-07 the release lane went red 45–200 s before Dokploy had even created the
-        record, while the deploy went on and the redeploy fallback queued a second one. A
-        record that exists is therefore never re-triggered.
-        """
-        deadline = time.monotonic() + max(0, timeout_seconds)
-        in_progress: tuple[str, str] | None = None
-        while True:
-            deployments = cls._get_compose_deployments(client, compose_id)
-            current_ids = cls._deployment_ids(deployments)
-            new_ids = current_ids - previous_ids
-            if new_ids and isinstance(deployments, list):
-                for deployment in deployments:
-                    deployment_id = str(
-                        deployment.get("deploymentId") or deployment.get("id") or ""
-                    )
-                    if deployment_id not in new_ids:
-                        continue
-                    if min_started_at is not None and cls._started_before_trigger(
-                        deployment, min_started_at
-                    ):
-                        # infra2#525: a "new" record whose own timestamp predates when
-                        # WE called deploy/redeploy_compose cannot be the record our
-                        # call produced — it belongs to a different, unrelated
-                        # trigger. Skip it rather than reporting its status as ours.
-                        continue
-                    status = str(deployment.get("status") or "").lower()
-                    if status == "error":
-                        raise RuntimeError("Dokploy deployment record entered error")
-                    if status in cls._TERMINAL_SUCCESS_STATUSES:
-                        return True
-                    in_progress = (deployment_id, status or "unknown")
-            if time.monotonic() >= deadline:
-                if in_progress is not None:
-                    raise RuntimeError(
-                        f"Dokploy deployment {in_progress[0]} is still "
-                        f"'{in_progress[1]}' after {timeout_seconds}s; not re-triggering. "
-                        "Raise DOKPLOY_DEPLOYMENT_RECORD_TIMEOUT_SECONDS if this Dokploy "
-                        "is slow (#629)."
-                    )
-                return False
-            time.sleep(max(1, interval_seconds))
+        return wait_for_new_deployment_record(
+            client,
+            compose_id,
+            previous_ids,
+            timeout_seconds,
+            interval_seconds,
+            min_started_at=min_started_at,
+            start_epoch_fn=deployment_start_epoch,
+            terminal_success_statuses=cls._TERMINAL_SUCCESS_STATUSES,
+        )
 
     @classmethod
     def post_compose(cls, c: "Context", shared_tasks: Any) -> bool:
@@ -1516,106 +1053,32 @@ class Deployer:
 
     @classmethod
     def _prune_stale_dokploy_domains(cls, client: Any, compose_id: str) -> None:
-        """Prune Dokploy-attached domains on composes using compose-level Traefik routing (subdomain=None).
+        from libs.deploy.dokploy_adapter import prune_stale_dokploy_domains
 
-        Dokploy validates attached domains during compose deployment and immediately fails if any
-        domain points to a serviceName not present in compose.yaml (e.g. after service renaming or adoption).
-        Services with subdomain=None manage their own routing via Traefik labels in compose.yaml.
-        """
-        if not hasattr(client, "delete_domain"):
-            return
-        domains: list[dict] = []
-        if hasattr(client, "_request"):
-            try:
-                res = client._request(
-                    "GET", f"domain.byComposeId?composeId={compose_id}"
-                )
-                if isinstance(res, list):
-                    domains = [d for d in res if isinstance(d, dict)]
-            except Exception:
-                domains = []
-        if not domains and hasattr(client, "get_compose"):
-            try:
-                comp = client.get_compose(compose_id)
-                if isinstance(comp, dict):
-                    raw_domains = comp.get("domains")
-                    if isinstance(raw_domains, list):
-                        domains = [d for d in raw_domains if isinstance(d, dict)]
-            except Exception:
-                domains = []
-        for d in domains:
-            d_id = d.get("domainId")
-            if d_id:
-                try:
-                    info(
-                        f"Pruning stale Dokploy domain attachment: {d.get('host')} "
-                        f"(serviceName={d.get('serviceName')})"
-                    )
-                    client.delete_domain(d_id)
-                except Exception as err:
-                    warning(
-                        f"Failed to delete stale Dokploy domain {d.get('host')}: {err}"
-                    )
+        prune_stale_dokploy_domains(
+            client, compose_id, log_info=info, log_warning=warning
+        )
 
     @classmethod
     def _find_remote_compose(cls, e: dict[str, str]) -> dict | None:
-        """This service's full compose record in its Dokploy project and environment."""
         from libs.dokploy import get_dokploy
+        from libs.deploy.dokploy_adapter import find_remote_compose
 
         client = get_dokploy()
-        project_name = cls.project_name(e)
-        env_name = e.get("ENV", "production")
-        existing = client.find_compose_by_name(
-            cls.service, project_name, env_name=env_name
+        return find_remote_compose(
+            client,
+            cls.service,
+            cls.project_name(e),
+            env_name=e.get("ENV", "production"),
+            legacy_names=getattr(cls, "legacy_compose_names", ()),
         )
-        if not existing:
-            for legacy_name in getattr(cls, "legacy_compose_names", ()):
-                existing = client.find_compose_by_name(
-                    legacy_name, project_name, env_name=env_name
-                )
-                if existing:
-                    break
-        return existing
 
     @classmethod
     def get_remote_config_identity(cls) -> dict[str, str | None]:
-        """Read the config identity stored in Dokploy's effective compose env."""
+        from libs.deploy.dokploy_adapter import parse_remote_config_identity
+
         existing = cls._find_remote_compose(cls.env())
-
-        if not existing:
-            return {
-                "runtime_hash": None,
-                "source_hash": None,
-                "deploy_ref": None,
-                "identity_schema": None,
-                "managed_by": None,
-                "service_id": None,
-                "environment": None,
-            }
-
-        env_str = existing.get("env", "")
-        values: dict[str, str] = {}
-        for line in env_str.split("\n"):
-            key, separator, value = line.partition("=")
-            if separator and key in {
-                "IAC_CONFIG_HASH",
-                "IAC_SOURCE_CONFIG_HASH",
-                "IAC_DEPLOY_REF",
-                "INFRA_IDENTITY_SCHEMA",
-                "INFRA_MANAGED_BY",
-                "INFRA_SERVICE_ID",
-                "INFRA_ENVIRONMENT",
-            }:
-                values[key] = value.strip()
-        return {
-            "runtime_hash": values.get("IAC_CONFIG_HASH"),
-            "source_hash": values.get("IAC_SOURCE_CONFIG_HASH"),
-            "deploy_ref": values.get("IAC_DEPLOY_REF"),
-            "identity_schema": values.get("INFRA_IDENTITY_SCHEMA"),
-            "managed_by": values.get("INFRA_MANAGED_BY"),
-            "service_id": values.get("INFRA_SERVICE_ID"),
-            "environment": values.get("INFRA_ENVIRONMENT"),
-        }
+        return parse_remote_config_identity(existing)
 
     @classmethod
     def get_remote_config_hash(cls) -> str | None:
@@ -1624,12 +1087,6 @@ class Deployer:
 
     @classmethod
     def _resolve_record_timeout(cls, timeout_seconds: int | None = None) -> int:
-        """Deployment-record / hash-poll timeout, honoring the env override.
-
-        Shared by the deploy-record wait and the post-deploy hash poll so an operator
-        who raises DOKPLOY_DEPLOYMENT_RECORD_TIMEOUT_SECONDS to tolerate a slow Dokploy
-        widens both windows, not just one.
-        """
         return int(
             os.getenv(
                 "DOKPLOY_DEPLOYMENT_RECORD_TIMEOUT_SECONDS",
@@ -1643,7 +1100,6 @@ class Deployer:
 
     @classmethod
     def _resolve_record_interval(cls, interval_seconds: int | None = None) -> int:
-        """Deployment-record / hash-poll interval, honoring the env override."""
         return int(
             os.getenv(
                 "DOKPLOY_DEPLOYMENT_RECORD_INTERVAL_SECONDS",
@@ -1657,40 +1113,14 @@ class Deployer:
 
     @classmethod
     def _await_effective_config_hash(cls, expected_hash: str) -> str | None:
-        """Poll Dokploy's effective IAC_CONFIG_HASH until it matches `expected_hash`
-        or the deployment timeout elapses, returning the last value read.
+        from libs.deploy.dokploy_adapter import await_effective_config_hash
 
-        Dokploy applies the compose-env update asynchronously, so a read taken
-        immediately after deploy can lag the deployed revision (returning a stale
-        hash or none). Polling avoids a false "stale config" verdict on that
-        settling delay while still surfacing a genuinely-unadvanced config (the
-        returned hash will still differ from `expected_hash` once the window
-        elapses).
-
-        A transient read error (one flaky Dokploy `compose.one`) does NOT abort the
-        deploy: polling multiplies the number of reads, so each is an independent
-        chance to hit a blip. A read error is tolerated like a non-matching read and
-        retried until the deadline; only if no clean read ever lands in the whole
-        window is the last error surfaced. The timeout/interval honor the same env
-        overrides as the deploy-record wait.
-        """
-        deadline = time.monotonic() + cls._resolve_record_timeout()
-        interval = max(1, cls._resolve_record_interval())
-        last_value: str | None = None
-        last_error: Exception | None = None
-        while True:
-            try:
-                last_value = cls.get_remote_config_hash()
-                last_error = None
-            except Exception as exc:  # transient Dokploy read; tolerate within window
-                last_error = exc
-            if last_value == expected_hash:
-                return last_value
-            if time.monotonic() >= deadline:
-                if last_value is None and last_error is not None:
-                    raise last_error
-                return last_value
-            time.sleep(interval)
+        return await_effective_config_hash(
+            cls.get_remote_config_hash,
+            expected_hash,
+            cls._resolve_record_timeout(),
+            cls._resolve_record_interval(),
+        )
 
     @classmethod
     def _assert_approle_creds_present(cls, effective_env: str) -> None:
@@ -1780,392 +1210,49 @@ class Deployer:
         )
 
     @classmethod
+    def validate_preflight_env(cls) -> list[str]:
+        """Validate required environment variables."""
+        return validate_env()
+
+    @classmethod
+    def service_id_from_path(cls) -> str | None:
+        """Derive service identity key from compose_path."""
+        from libs.deploy_dependencies import service_key_from_path
+
+        return service_key_from_path(cls.compose_path)
+
+    @classmethod
+    def build_service_identity(cls, service_id: str, env: str, deploy_ref: str) -> Any:
+        """Construct ServiceIdentity for deployment boundary."""
+        from libs.core.service_identity import ServiceIdentity
+
+        identity = ServiceIdentity.build(
+            service_id,
+            env,
+            component=cls.service,
+            service_name=cls.telemetry_service_name or cls.service,
+            version=deploy_ref,
+            iac_ref=deploy_ref,
+        )
+        _ = identity.deploy_env()
+        return identity
+
+    @classmethod
     def sync(cls, c: "Context", force: bool = False) -> dict:
         """Sync IaC state - update only if config changed.
 
         Returns:
             dict with keys: action (skipped|updated|created|failed), details
         """
-        header(f"{cls.service} sync", "Checking for changes")
-
-        # Prepare env vars (without full pre_compose side effects)
-        e = cls.env()
-        if cls.prod_only and e.get("ENV", "production") != "production":
-            info(f"{cls.service} is prod-only; skipping {e.get('ENV')} sync")
-            return SyncResult(
-                action=SyncAction.SKIPPED,
-                details=f"prod-only service; not deployed to {e.get('ENV')}",
-            )
-        if missing := validate_env():
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details=f"Missing env: {', '.join(missing)}",
-            )
-
-        if os.environ.get("DEPLOY_ACTION") == "secrets-supply":
-            # The runner was asked for the secret supply alone: deploy_v2 runs it before
-            # an app stack's Dokploy promote, a path that never enters this Deployer.
-            # Copy human values, generate runtime ones, report what is missing — and
-            # stop; the promote that follows recreates the containers (#649).
-            if not cls.apply_secret_supply(c, env=e.get("ENV")):
-                return SyncResult(
-                    action=SyncAction.FAILED,
-                    details="secret supply left required values missing",
-                )
-            return SyncResult(
-                action=SyncAction.SUPPLIED,
-                details="secret supply applied; no compose",
-            )
-
-        # Pre-check: verify VAULT_APP_TOKEN validity
-        try:
-            token_status = cls.verify_vault_app_token()
-            if not token_status["valid"]:
-                return SyncResult(
-                    action=SyncAction.FAILED,
-                    details=(
-                        f"VAULT_APP_TOKEN issue: {token_status.get('details', 'unknown')}. "
-                        "This is a legacy static token; remove it from the service's Dokploy "
-                        "env (services authenticate via AppRole now — `invoke vault.setup-approle`)."
-                    ),
-                )
-            elif token_status.get("ttl_hours", 999) < 48:
-                return SyncResult(
-                    action=SyncAction.FAILED,
-                    details=(
-                        f"VAULT_APP_TOKEN expires in {token_status['ttl_hours']}h. "
-                        "It is a legacy static token; remove it from the Dokploy env "
-                        "(AppRole services don't use it)."
-                    ),
-                )
-        except Exception as exc:
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details=f"Could not verify VAULT_APP_TOKEN: {exc}",
-            )
-
-        if not cls.ensure_runtime_secrets(c):
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details=f"Failed to ensure runtime secrets for {cls.service}",
-            )
-
-        # The secret supply runs on EVERY sync, before change detection: a human value
-        # that changed in 1Password is exactly the deploy where nothing else changed and
-        # the compose hash says "skip" (data_engine staging kept a stale SEC_USER_AGENT
-        # through a green v1.1.68 deploy, #649). Changed values restart the consumers.
-        if not cls.apply_secret_supply(c, env=e.get("ENV")):
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details="secret supply left required values missing",
-            )
-
-        # Build env vars
-        env_vars_dict = cls.config_env_with_vault_addr(cls.compose_env_base(e), e)
-        source_env_vars = cls.config_env_with_vault_addr(
-            cls.source_config_env_base(e), e
+        logger = ConsoleLogger(
+            header=header,
+            info=info,
+            warning=warning,
+            error=error,
+            success=success,
         )
-
-        # Runtime identity drives deploy idempotence; source identity is secret-free
-        # and can be independently reconstructed from the immutable release.
-        local_hash = cls.compute_local_config_hash(c, env_vars_dict)
-        source_hash = (
-            f"{SOURCE_CONFIG_HASH_VERSION}:"
-            f"{cls.compute_local_config_hash(c, source_env_vars)}"
-        )
-        deploy_ref = (os.getenv("IAC_DEPLOY_REF") or "").strip().lower()
-        if not deploy_ref:
-            try:
-                import subprocess
-
-                result = subprocess.run(
-                    ["git", "rev-parse", "HEAD"],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    timeout=10,
-                )
-                deploy_ref = (
-                    result.stdout.strip().lower() if result.returncode == 0 else ""
-                )
-            except (OSError, subprocess.SubprocessError):
-                deploy_ref = ""
-        if not EXACT_COMMIT_RE.fullmatch(deploy_ref):
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details="Deployment identity requires an exact 40-character IAC_DEPLOY_REF",
-            )
-        from libs.deploy_dependencies import service_key_from_path
-        from libs.service_identity import ServiceIdentity
-
-        service_id = service_key_from_path(cls.compose_path)
-        if not service_id:
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details=f"Could not derive service identity from {cls.compose_path}",
-            )
-        runtime_identity = ServiceIdentity.build(
-            service_id,
-            e.get("ENV", "production"),
-            component=cls.service,
-            service_name=cls.telemetry_service_name or cls.service,
-            version=deploy_ref,
-            iac_ref=deploy_ref,
-        )
-
-        # Read the remote (deployed) hash. FAIL CLOSED: reading it hits the
-        # Dokploy API, which can error/time out exactly when the host is under
-        # load. Treating that failure as "no remote config -> redeploy" forms a
-        # positive feedback loop (more jam -> more API errors -> more forced
-        # redeploys -> more jam). When the remote state is unreadable, skip and
-        # alert instead of deploying. (`--force` still proceeds deliberately.)
-        try:
-            remote_identity = cls.get_remote_config_identity()
-            remote_hash = remote_identity["runtime_hash"]
-        except Exception as exc:  # noqa: BLE001 - any lookup failure must fail closed
-            if not force:
-                warning(
-                    f"{cls.service}: remote config hash unreadable ({exc}); "
-                    "skipping deploy (fail-closed) to avoid load-amplifying redeploys"
-                )
-                return SyncResult(
-                    action=SyncAction.SKIPPED,
-                    details=f"Remote config unreadable; fail-closed: {exc}",
-                )
-            warning(
-                f"{cls.service}: remote config unreadable ({exc}); "
-                "proceeding because --force was requested"
-            )
-            remote_identity = {
-                "runtime_hash": None,
-                "source_hash": None,
-                "deploy_ref": None,
-                "identity_schema": None,
-                "managed_by": None,
-                "service_id": None,
-                "environment": None,
-            }
-            remote_hash = None
-
-        info(f"Local config hash: {local_hash}")
-        info(f"Remote config hash: {remote_hash or 'not found'}")
-
-        remote_ref = remote_identity["deploy_ref"] or ""
-        expected_deploy_identity = runtime_identity.deploy_env()
-        remote_source_identity_valid = remote_identity[
-            "source_hash"
-        ] == source_hash and bool(EXACT_COMMIT_RE.fullmatch(remote_ref))
-        remote_service_identity_valid = all(
-            remote_identity.get(remote_key) == expected_deploy_identity[env_key]
-            for remote_key, env_key in (
-                ("identity_schema", "INFRA_IDENTITY_SCHEMA"),
-                ("managed_by", "INFRA_MANAGED_BY"),
-                ("service_id", "INFRA_SERVICE_ID"),
-                ("environment", "INFRA_ENVIRONMENT"),
-            )
-        )
-        if (
-            not force
-            and local_hash == remote_hash
-            and remote_source_identity_valid
-            and remote_service_identity_valid
-        ):
-            # A skip still has to leave the stack in service: dead, crashed or missing
-            # containers force a redeploy (#691, #698). Only the containers — this
-            # release did not deploy the stack, so Dokploy's checkout is at its last
-            # deploy's ref, not this one (verify_still_in_service).
-            try:
-                existing = cls._find_remote_compose(e)
-                in_service_error = (
-                    cls.verify_still_in_service(c, existing["composeId"])
-                    if existing and existing.get("composeId")
-                    else None
-                )
-            except Exception as exc:  # noqa: BLE001 - unobservable is not dead
-                # Same stance as the unreadable remote hash above: a Dokploy or host
-                # that cannot answer is no evidence the stack is down, and redeploying
-                # on it would amplify the load that made it unreadable.
-                warning(
-                    f"{cls.service}: could not check the unchanged stack is in "
-                    f"service ({exc}); skipping deploy (fail-closed)"
-                )
-                in_service_error = None
-
-            if in_service_error:
-                warning(
-                    f"{cls.service}: config unchanged but containers not in-service "
-                    f"({in_service_error}); forcing redeploy"
-                )
-            else:
-                success(f"{cls.service}: config unchanged, skipping deploy")
-                return SyncResult(
-                    action=SyncAction.SKIPPED,
-                    details="Runtime and source config identities match",
-                )
-
-        # Config changed or force - do full deploy
-        if remote_hash is None:
-            info("No remote config found, creating new deployment")
-        elif force:
-            warning("Force sync requested")
-        elif local_hash == remote_hash:
-            info(
-                "Runtime config unchanged but release identity is missing or stale; reconciling"
-            )
-        else:
-            info(f"Config changed ({remote_hash} -> {local_hash}), deploying")
-
-        # Prepare directories
-        if not cls._prepare_dirs(c):
-            return SyncResult(
-                action=SyncAction.FAILED, details="Failed to prepare directories"
-            )
-
-        # Persist both config planes and the exact checked-out revision. These are
-        # deliberately excluded from their own hash inputs above.
-        env_vars_dict["IAC_CONFIG_HASH"] = local_hash
-        env_vars_dict["IAC_SOURCE_CONFIG_HASH"] = source_hash
-        env_vars_dict["IAC_DEPLOY_REF"] = deploy_ref
-        env_vars_dict.update(runtime_identity.deploy_env())
-        if cls.telemetry_service_name:
-            telemetry_identity = ServiceIdentity.build(
-                service_id,
-                e.get("ENV", "production"),
-                component=cls.telemetry_component or cls.service,
-                service_name=cls.telemetry_service_name,
-                version=deploy_ref,
-                iac_ref=deploy_ref,
-            )
-            env_vars_dict["OTEL_SERVICE_NAME"] = telemetry_identity.service_name
-            env_vars_dict["OTEL_RESOURCE_ATTRIBUTES"] = (
-                telemetry_identity.otel_resource_attributes()
-            )
-
-        # Deploy
-        try:
-            compose_id = cls.composing(c, env_vars_dict)
-        except Exception as exc:
-            error(f"Deploy failed: {exc}")
-            return SyncResult(action=SyncAction.FAILED, details=str(exc))
-
-        # Post-deploy verification: confirm Dokploy's effective compose env now
-        # carries the intended IAC_CONFIG_HASH. This fails closed on the stale-env
-        # failure mode where a deploy is accepted but the effective config does
-        # not advance to the deployed revision.
-        #
-        # Dokploy applies the compose-env update asynchronously, so the effective
-        # hash can briefly lag the deploy call by a few seconds. Poll until it
-        # advances rather than false-failing on that settling delay; still fails
-        # closed if it never advances within the window.
-        try:
-            effective_hash = cls._await_effective_config_hash(local_hash)
-        except Exception as exc:  # noqa: BLE001 - verification must not crash the task.
-            error(f"Post-deploy verification could not read effective config: {exc}")
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details=f"Post-deploy verification failed: {exc}",
-            )
-        if effective_hash != local_hash:
-            error(
-                "Post-deploy verification failed: effective IAC_CONFIG_HASH is stale "
-                f"(expected {local_hash}, got {effective_hash or 'none'})"
-            )
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details=(
-                    "Effective remote config is stale after deploy "
-                    f"(expected {local_hash}, got {effective_hash or 'none'}); "
-                    "runtime may still be running prior config"
-                ),
-            )
-
-        try:
-            effective_identity = cls.get_remote_config_identity()
-        except Exception as exc:  # noqa: BLE001 - identity proof is fail-closed.
-            error(f"Post-deploy identity verification failed: {exc}")
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details=f"Post-deploy identity verification failed: {exc}",
-            )
-        identity_mismatches = []
-        if effective_identity["source_hash"] != source_hash:
-            identity_mismatches.append(
-                "IAC_SOURCE_CONFIG_HASH "
-                f"expected {source_hash}, got {effective_identity['source_hash'] or 'none'}"
-            )
-        if deploy_ref and effective_identity["deploy_ref"] != deploy_ref:
-            identity_mismatches.append(
-                "IAC_DEPLOY_REF "
-                f"expected {deploy_ref}, got {effective_identity['deploy_ref'] or 'none'}"
-            )
-        for remote_key, env_key in (
-            ("identity_schema", "INFRA_IDENTITY_SCHEMA"),
-            ("managed_by", "INFRA_MANAGED_BY"),
-            ("service_id", "INFRA_SERVICE_ID"),
-            ("environment", "INFRA_ENVIRONMENT"),
-        ):
-            expected_value = expected_deploy_identity[env_key]
-            if effective_identity.get(remote_key) != expected_value:
-                identity_mismatches.append(
-                    f"{env_key} expected {expected_value}, "
-                    f"got {effective_identity.get(remote_key) or 'none'}"
-                )
-        if identity_mismatches:
-            details = "; ".join(identity_mismatches)
-            error(f"Post-deploy identity verification failed: {details}")
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details=f"Effective remote identity is stale after deploy: {details}",
-            )
-
-        # Runtime-applied verification (closed loop): the hash check above only
-        # proves Dokploy RECORDED the intended config. Let services additionally
-        # assert that the actually-running container reflects it, catching the
-        # failure mode where a deploy is accepted but the container was never
-        # recreated (so it keeps running prior config while the catalog says
-        # "Live"). Default is a no-op; only services that override it pay the cost.
-        runtime_error = cls.verify_runtime_applied(c, env_vars_dict)
-        if runtime_error:
-            error(f"{cls.service}: runtime verification failed: {runtime_error}")
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details=f"Runtime verification failed: {runtime_error}",
-            )
-
-        # The record said done and the env carries the hash; now the containers
-        # (#629, #691, #698): a deploy is not a success until the stack is in service.
-        try:
-            in_service_error = cls.verify_in_service(c, compose_id)
-        except Exception as exc:  # noqa: BLE001 - the proof is fail-closed, never a crash.
-            in_service_error = f"could not verify: {exc}"
-        if in_service_error:
-            error(f"{cls.service}: not in service after deploy: {in_service_error}")
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details=f"Not in service after deploy: {in_service_error}",
-            )
-
-        # In service; now the services that do not survive this one being recreated
-        # (#726). Only here, after an applied deploy — a skip recreated nothing.
-        try:
-            restarted = cls.restart_dependents(c, e)
-        except Exception as exc:  # noqa: BLE001 - a failed restart fails the sync, never crashes it.
-            error(
-                f"{cls.service}: deployed, but its dependents were not restarted: {exc}"
-            )
-            return SyncResult(
-                action=SyncAction.FAILED,
-                details=f"Deployed, but dependents were not restarted: {exc}",
-            )
-
-        success(f"{cls.service}: deployed with hash {local_hash}")
-        result = SyncResult(
-            action=SyncAction.UPDATED if remote_hash else SyncAction.CREATED,
-            details=f"composeId: {compose_id}",
-        )
-        if restarted:
-            result["restarted_dependents"] = restarted
-        return result
+        pipeline = SyncPipeline(deployer=cls, context=c, force=force, logger=logger)
+        return pipeline.run()
 
     @classmethod
     def verify_runtime_applied(
