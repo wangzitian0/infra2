@@ -236,42 +236,63 @@ jobs:
           uv pip install --system invoke httpx python-dotenv rich \
             "$(grep -oE 'infra2-sdk @ https://[^"]+' pyproject.toml)"
 
-      - name: Test config hash idempotency
+      # Fail fast left to right: run sub-second static, SSOT and drift gates first
+      # so documentation/contract drift fails in <5 seconds rather than waiting for
+      # the 2-minute unit test suite.
+      - name: Gate SSOT index generated from MANIFEST
         run: |
           cd ${{ github.workspace }}
-          python -c "
-          import sys
-          sys.path.insert(0, 'libs')
-          from deploy.deployer import _compute_config_hash
-          
-          # Test hash stability with different order
-          hash1 = _compute_config_hash('test: true', {'A': '1', 'B': '2'})
-          hash2 = _compute_config_hash('test: true', {'B': '2', 'A': '1'})
-          assert hash1 == hash2, f'Hash not stable! {hash1} != {hash2}'
-          
-          # Test hash changes when content changes
-          hash3 = _compute_config_hash('test: false', {'A': '1', 'B': '2'})
-          assert hash1 != hash3, 'Hash should change with content'
-          
-          print('✅ Config hash idempotency verified')
-          "
+          uv run python tools/gen_ssot_index.py
 
-      - name: Test service discovery
+      - name: Gate project index generated from docs/project
         run: |
           cd ${{ github.workspace }}
-          python -c "
-          import sys
-          sys.path.insert(0, 'libs')
-          from deploy.deployer import discover_services
-          
-          services = discover_services()
-          print(f'Discovered {len(services)} services:')
-          for key, task in sorted(services.items()):
-            print(f'  {key} -> {task}')
-          
-          assert len(services) > 0, 'Should discover at least one service'
-          print('✅ Service discovery working')
-          "
+          uv run python tools/gen_project_index.py
+
+      - name: Gate CI inventory drift (scope = workflows that run on a pull request)
+        run: |
+          cd ${{ github.workspace }}
+          uv run python -m tools.ci_gate_audit --enforce
+
+      - name: Gate CI hierarchy and workflow budgets
+        run: |
+          cd ${{ github.workspace }}
+          uv run python -m tools.ci_gate_lint .github/workflows/
+
+      - name: Gate watchdog signal consistency
+        run: |
+          cd ${{ github.workspace }}
+          uv run python tools/watchdog_consistency_audit.py
+
+      - name: Gate no-new-wheels (alert surfaces must be registered)
+        run: |
+          cd ${{ github.workspace }}
+          uv run python tools/no_new_wheels_lint.py
+
+      - name: Gate cross-plane service identity
+        run: |
+          cd ${{ github.workspace }}
+          uv run python tools/service_identity_audit.py
+
+      - name: Gate deploy fan-out coverage
+        run: |
+          cd ${{ github.workspace }}
+          uv run python tools/deploy_guard_audit.py
+
+      - name: Gate OMCA audit policy evaluator
+        run: |
+          cd ${{ github.workspace }}
+          uv run python -m tools.omca_gate_policy --self-test
+
+      - name: Gate backup inventory covers registered data paths
+        run: |
+          cd ${{ github.workspace }}
+          uv run python tools/backup_inventory_audit.py
+
+      - name: Test deployer contract pre-flight (config hash & service discovery)
+        run: |
+          cd ${{ github.workspace }}
+          uv run python tools/test_deployer_contract_light.py
 
       - name: Run infra unit tests
         # PYTHONSAFEPATH (not -P) so pytest-xdist's execnet worker subprocesses also
@@ -320,36 +341,6 @@ jobs:
           cd ${{ github.workspace }}
           uv run python tools/coverage_regression_audit.py
 
-      - name: Gate no-new-wheels (alert surfaces must be registered)
-        run: |
-          cd ${{ github.workspace }}
-          uv run python tools/no_new_wheels_lint.py
-
-      - name: Gate watchdog signal consistency
-        run: |
-          cd ${{ github.workspace }}
-          uv run python tools/watchdog_consistency_audit.py
-
-      - name: Gate cross-plane service identity
-        run: |
-          cd ${{ github.workspace }}
-          uv run python tools/service_identity_audit.py
-
-      - name: Gate deploy fan-out coverage
-        run: |
-          cd ${{ github.workspace }}
-          uv run python tools/deploy_guard_audit.py
-
-      - name: Gate CI hierarchy and workflow budgets
-        run: |
-          cd ${{ github.workspace }}
-          uv run python -m tools.ci_gate_lint .github/workflows/
-
-      - name: Gate OMCA audit policy evaluator
-        run: |
-          cd ${{ github.workspace }}
-          uv run python -m tools.omca_gate_policy --self-test
-
       # Shift-left: surface what this PR would re-deploy once released, and prove the
       # reconcile plan BUILDS on these changes (deploy-dependencies fan-out + service
       # contracts resolve) — so 'release-time only' failures fail here, in the PR, instead.
@@ -366,22 +357,6 @@ jobs:
           done
           uv run python -m tools.reconcile_iac_inputs "${args[@]}"
 
-      # Infra-016 #461: coordinate-ized CI gate inventory drift audit. Schema errors and
-      # dangling gates are always hard. `--enforce` additionally fails on an unregistered
-      # job, within the scope `tools.ci_gate_audit.covered_workflows()` computes: a
-      # workflow is covered exactly when its own triggers include `pull_request` /
-      # `pull_request_target`, which is precisely when one of its jobs can appear on a
-      # pull request with nobody having decided whether it gates merge (#791). Today that
-      # is infra-ci.yml, ops-checks.yml and docs.yml -- 22 jobs, all registered, locked by
-      # libs/tests/test_ci_gate_audit.py. Add `pull_request:` to any workflow and it joins
-      # the scope automatically; its jobs then have to be registered or this step fails.
-      # The remaining workflows never run on a pull request, so they cannot gate one; the
-      # tool's JSON names them under out_of_scope_workflows.
-      - name: Gate CI inventory drift (scope = workflows that run on a pull request)
-        run: |
-          cd ${{ github.workspace }}
-          uv run python -m tools.ci_gate_audit --enforce
-
       # #504/#541: the inventory's `blocks_merge: true` gates vs the LIVE GitHub branch
       # ruleset for main (the repo is public, so the default token can read the rules
       # API). Report-only, matching the inventory audit above: a live-API check must not
@@ -393,39 +368,6 @@ jobs:
         run: |
           cd ${{ github.workspace }}
           uv run python -m tools.ci_gate_ruleset_audit
-
-      # #541 quick wire: the SSOT README topic index must stay a generated projection of
-      # docs/ssot/MANIFEST.yaml (tools/gen_ssot_index.py --write). The default (check)
-      # mode exits non-zero when stale; the pytest lock (test_ssot_index_generated)
-      # covers the same invariant — this explicit step surfaces it as its own line.
-      - name: Gate SSOT index generated from MANIFEST
-        run: |
-          cd ${{ github.workspace }}
-          uv run python tools/gen_ssot_index.py
-
-      # The project portfolio index is generated the same way and was not
-      # gated, so it could drift silently while the SSOT index could not --
-      # an asymmetry with no reason behind it. Default (check) mode exits
-      # non-zero when stale, exactly like the step above.
-      - name: Gate project index generated from docs/project
-        run: |
-          cd ${{ github.workspace }}
-          uv run python tools/gen_project_index.py
-
-      - name: Gate backup inventory covers registered data paths
-        run: |
-          cd ${{ github.workspace }}
-          uv run python -c "
-          from libs.backup_verification import load_backup_inventory
-          entries = load_backup_inventory()
-          assert entries, 'Backup inventory must not be empty'
-          ids = [e.service_id for e in entries]
-          assert len(ids) == len(set(ids)), 'Duplicate backup service_id'
-          for e in entries:
-              assert e.data_path.startswith('/data/'), f'{e.service_id} data_path must live under /data/'
-              assert e.method, f'{e.service_id} missing backup method'
-          print(f'✅ Backup inventory covers {len(ids)} services')
-          "
 
   test-1password-healthcheck:
     name: Test 1Password Healthcheck
