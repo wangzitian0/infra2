@@ -1,4 +1,5 @@
 """HTTP delivery and reachability checks for Feishu webhooks and app messages."""
+# alert-delivery-exempt: defines deliver_infra2_report primitive
 
 from __future__ import annotations
 
