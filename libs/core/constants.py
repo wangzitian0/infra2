@@ -24,6 +24,14 @@ DOCKER_LABEL_PREFIX = "party.zitian.infra"
 IDENTITY_SCHEMA_VERSION = "v1"
 PREVIEW_KINDS = ("branch", "pr", "commit", "tag", "canary")
 
+APP_SOURCES: dict[str, str] = {
+    "finance_report/app": "wangzitian0/finance_report",
+    "truealpha/app": "wangzitian0/truealpha",
+}
+PROJECT_REPOS: dict[str, str] = {
+    service.split("/", 1)[0]: repo for service, repo in APP_SOURCES.items()
+}
+
 
 def is_stateful_deploy_env(env: str | None, *, strict: bool = False) -> bool:
     """Return True if env represents one of the 3 stateful deploy environments.
@@ -51,6 +59,7 @@ def is_stateful_deploy_env(env: str | None, *, strict: bool = False) -> bool:
 
 
 __all__ = [
+    "APP_SOURCES",
     "DEPLOYMENT_ENV_PREVIEW",
     "DEPLOYMENT_ENV_PRODUCTION",
     "DEPLOYMENT_ENV_STAGING",
@@ -60,6 +69,7 @@ __all__ = [
     "PREVIEW",
     "PREVIEW_KINDS",
     "PRODUCTION",
+    "PROJECT_REPOS",
     "REPO_ROOT",
     "STAGING",
     "STATEFUL_DEPLOY_ENVIRONMENTS",

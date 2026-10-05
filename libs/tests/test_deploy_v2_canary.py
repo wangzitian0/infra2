@@ -232,7 +232,10 @@ def test_best_effort_down_rejects_record_only_false_pass(monkeypatch, capsys):
         def get_containers(self):
             return [
                 {"name": f"finance_report-frontend-{CANARY_SLOT}", "state": "created"},
-                {"name": f"finance_report-preview-db-{CANARY_SLOT}", "state": "running"},
+                {
+                    "name": f"finance_report-preview-db-{CANARY_SLOT}",
+                    "state": "running",
+                },
                 {
                     "name": f"finance_report-app-vault-agent-{CANARY_SLOT}",
                     "state": "restarting",
@@ -723,4 +726,3 @@ def test_best_effort_down_detects_hyphenated_container_survivors(monkeypatch):
         _sleep=lambda *_: None,
     )
     assert ok is False
-

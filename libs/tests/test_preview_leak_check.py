@@ -233,4 +233,3 @@ def test_multi_project_leak_check_isolates_repos() -> None:
     # ta_30 is leaked (closed in truealpha)
     assert leak_ids == {"ta_30"}
     assert result["open_pr_fetch"] == "ok"
-

@@ -594,7 +594,7 @@ def run_lint(verbose: bool = False) -> int:
     return 0
 
 
-def run_unit_tests(verbose: bool = False) -> int:
+def run_unit_tests(verbose: bool = False, timeout: float = 600.0) -> int:
     """Run full unit test suite with coverage and isolation."""
     print("▶ Running infra unit test suite...")
     start_time = time.monotonic()
@@ -614,10 +614,13 @@ def run_unit_tests(verbose: bool = False) -> int:
     ]
     env = {"PYTHONSAFEPATH": "1"}
     try:
-        _run_cmd(cmd, env=env, set_pythonpath=False)
+        _run_cmd(cmd, env=env, set_pythonpath=False, timeout=timeout)
         total_time = time.monotonic() - start_time
         print(f"✅ Unit tests passed in {total_time:.2f}s.")
         return 0
+    except subprocess.TimeoutExpired:
+        print(f"❌ Unit tests timed out after {timeout}s.")
+        return 1
     except subprocess.CalledProcessError:
         print("❌ Unit tests failed.")
         return 1

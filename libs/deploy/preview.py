@@ -65,6 +65,7 @@ class PreviewResult:
     sha: str | None
     url: str
     healthy: bool | None  # None when no health check was performed (down / --no-wait)
+    containers_cleared: bool | None = None
 
 
 # The source env's app compose to read AppRole creds from (its name in Dokploy).
@@ -418,6 +419,61 @@ def up(
     )
 
 
+def check_containers_absent(
+    client, service: str, slot_suffix: str
+) -> tuple[bool, list[str]]:
+    """Inspect Dokploy container inventory for surviving containers matching slot_suffix.
+
+    Returns:
+        (True, []) if no matching containers exist, or (False, survivors) if
+        matching containers remain.
+    """
+    service_project = service.split("/", 1)[0]
+    project_hyphen = service_project.replace("_", "-")
+    containers = client.get_containers()
+    if not isinstance(containers, list) or not all(
+        isinstance(row, dict) and isinstance(row.get("name"), str) for row in containers
+    ):
+        raise RuntimeError("Dokploy container inventory is not readable")
+    survivors = sorted(
+        row["name"]
+        for row in containers
+        if (
+            row["name"].lstrip("/").startswith(f"{service_project}-")
+            or row["name"].lstrip("/").startswith(f"{project_hyphen}-")
+        )
+        and row["name"].endswith(slot_suffix)
+    )
+    return (not bool(survivors), survivors)
+
+
+def wait_for_containers_absent(
+    client,
+    service: str,
+    slot_suffix: str,
+    *,
+    attempts: int = 6,
+    _sleep=None,
+) -> bool:
+    """Poll container absence until two consecutive clean reads occur."""
+    sleep = _sleep or time.sleep
+    consecutive_absent = 0
+    for i in range(attempts):
+        try:
+            absent, _ = check_containers_absent(client, service, slot_suffix)
+            if absent:
+                consecutive_absent += 1
+                if consecutive_absent >= 2:
+                    return True
+            else:
+                consecutive_absent = 0
+        except Exception:
+            consecutive_absent = 0
+        if i < attempts - 1:
+            sleep(min(2 ** (i + 1), 8))
+    return False
+
+
 def down(
     kind: str,
     value: int | str | None,
@@ -425,6 +481,9 @@ def down(
     domain: str,
     client,
     service: str = "finance_report/app",
+    wait: bool = False,
+    attempts: int = 6,
+    _sleep=None,
 ) -> PreviewResult:
     """Tear down the preview stack for one alias, destroying its ephemeral DB volume.
 
@@ -440,7 +499,15 @@ def down(
     alias = preview_alias(kind, value, slug_prefix=config.slug_prefix)
     existing = _find_compose(client, config.project, alias.compose_name)
     url = alias.app_url(domain=domain, base_subdomain=config.base_subdomain)
+    slot_suffix = f"-{alias.alias}"
     if not existing:
+        cleared = (
+            wait_for_containers_absent(
+                client, service, slot_suffix, attempts=attempts, _sleep=_sleep
+            )
+            if wait
+            else None
+        )
         return PreviewResult(
             action="down",
             alias=alias.alias,
@@ -448,9 +515,17 @@ def down(
             sha=None,
             url=url,
             healthy=None,
+            containers_cleared=cleared,
         )
     compose_id = existing["composeId"]
     client.delete_compose(compose_id, delete_volumes=True)
+    cleared = (
+        wait_for_containers_absent(
+            client, service, slot_suffix, attempts=attempts, _sleep=_sleep
+        )
+        if wait
+        else None
+    )
     return PreviewResult(
         action="down",
         alias=alias.alias,
@@ -458,6 +533,7 @@ def down(
         sha=None,
         url=url,
         healthy=None,
+        containers_cleared=cleared,
     )
 
 
