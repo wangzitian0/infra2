@@ -235,22 +235,36 @@ def _domain_env_label(env_name: str) -> str:
     return env_name.replace("_", "-")
 
 
-def _domain_env_suffix(env_name: str) -> str:
-    """Build env suffix for domains: '' for production, '-<env>' otherwise."""
-    if env_name == "production":
-        return ""
-    return f"-{_domain_env_label(env_name)}"
+try:
+    from infra2_sdk.routing import resolve_app_hostname, resolve_service_url
+except ImportError:
+    # Minimal fallback for SDK-free environments
+    def resolve_app_hostname(
+        subdomain: str,
+        tier: str,
+        *,
+        base_domain: str = "zitian.party",
+        **kw,
+    ) -> str:
+        norm = normalize_env_name(tier)
+        suffix = "" if norm == "production" else f"-{_domain_env_label(norm)}"
+        return f"{subdomain}{suffix}.{base_domain}"
 
-
-def _build_domain(subdomain: str, env_name: str, domain: str) -> str:
-    """Build domain as {subdomain}{env_suffix}.{domain}."""
-    return f"{subdomain}{_domain_env_suffix(env_name)}.{domain}"
+    def resolve_service_url(
+        subdomain: str,
+        tier: str,
+        *,
+        base_domain: str = "zitian.party",
+        **kw,
+    ) -> str:
+        host = resolve_app_hostname(subdomain, tier, base_domain=base_domain)
+        return f"https://{host}"
 
 
 def get_service_url(
     service: str, domain: str | None = None, env: dict | None = None
 ) -> str:
-    """Get full HTTPS URL for a service.
+    """Get full HTTPS URL for a service via infra2_sdk.routing.
 
     Args:
         service: Service key from SERVICE_SUBDOMAINS
@@ -258,7 +272,7 @@ def get_service_url(
         env: Optional env override (defaults to get_env())
 
     Returns:
-        Full HTTPS URL for the service
+        Full HTTPS URL for the service (no trailing slash)
     """
     e = env or get_env()
     if domain is None:
@@ -274,7 +288,7 @@ def get_service_url(
     if service in SHARED_PLATFORM_SERVICES():
         env_name = "production"
 
-    return f"https://{_build_domain(subdomain, env_name, domain)}"
+    return resolve_service_url(subdomain, tier=env_name, base_domain=domain).rstrip("/")
 
 
 def validate_env() -> list[str]:
@@ -292,12 +306,13 @@ def with_env_suffix(name: str, env: dict | None = None) -> str:
 
 
 def service_domain(subdomain: str, env: dict | None = None) -> str:
-    """Build public domain with env suffix ('' for production)."""
+    """Build public domain with env suffix ('' for production) via infra2_sdk.routing."""
     e = env or get_env()
     domain = e.get("INTERNAL_DOMAIN")
     if not subdomain or not domain:
         return ""
-    return _build_domain(subdomain, e.get("ENV", "production"), domain)
+    env_name = e.get("ENV", "production")
+    return resolve_app_hostname(subdomain, tier=env_name, base_domain=domain)
 
 
 # --------------------------------------------------------------------------- #

@@ -37,6 +37,24 @@ def test_alerting_dockerfile_sdk_pin_matches_pyproject() -> None:
     )
 
 
+def test_todo_dockerfile_sdk_pin_matches_pyproject() -> None:
+    dockerfile = (ROOT / "platform/30.todo/Dockerfile").read_text(encoding="utf-8")
+    pyproject_data = tomllib.loads(
+        (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    dependencies = pyproject_data.get("project", {}).get("dependencies", [])
+    sdk_entries = [dep for dep in dependencies if dep.startswith("infra2-sdk @ ")]
+    assert len(sdk_entries) == 1, (
+        f"Expected exactly 1 infra2-sdk requirement in pyproject.toml, found: {sdk_entries}"
+    )
+    sdk_requirement = sdk_entries[0]
+    assert sdk_requirement in dockerfile, (
+        f"Todo Dockerfile must contain the exact infra2-sdk requirement from pyproject.toml:\n"
+        f"Wanted: {sdk_requirement}\n"
+        f"In Dockerfile: {dockerfile}"
+    )
+
+
 def test_local_stage_mirror_matches_the_released_sdk() -> None:
     document = yaml.safe_load(LOCAL_STAGES.read_text(encoding="utf-8"))
     local_stages = load_delivery_stages(LOCAL_STAGES)

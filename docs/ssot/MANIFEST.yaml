@@ -107,6 +107,13 @@ entries:
     proofs:
       - platform/24.openpanel/compose.yaml
       - platform/24.openpanel/deploy.py
+  platform.canary_todo:
+    owner: docs/ssot/platform.canary_todo.md
+    summary: Canary Todo 平台基建校验工具
+    description: Canary Todo service for platform infrastructure acceptance and physical runtime verification.
+    proofs:
+      - platform/30.todo/compose.yaml
+      - platform/30.todo/deploy.py
 
   db.overview:
     owner: docs/ssot/db.overview.md
