@@ -45,6 +45,7 @@ from libs.deploy.env_util import (
     _preserve_runtime_env,
 )
 from libs.deploy.sync_pipeline import (
+    EXACT_COMMIT_RE,
     SOURCE_CONFIG_HASH_VERSION,
     ConsoleLogger,
     SyncAction,
@@ -68,6 +69,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "Deployer",
+    "EXACT_COMMIT_RE",
     "RUNTIME_ENV_KEYS_TO_PRESERVE",
     "SOURCE_CONFIG_HASH_VERSION",
     "SyncAction",
@@ -1218,6 +1220,22 @@ class Deployer:
         from libs.deploy_dependencies import service_key_from_path
 
         return service_key_from_path(cls.compose_path)
+
+    @classmethod
+    def build_service_identity(cls, service_id: str, env: str, deploy_ref: str) -> Any:
+        """Construct ServiceIdentity for deployment boundary."""
+        from libs.core.service_identity import ServiceIdentity
+
+        identity = ServiceIdentity.build(
+            service_id,
+            env,
+            component=cls.service,
+            service_name=cls.telemetry_service_name or cls.service,
+            version=deploy_ref,
+            iac_ref=deploy_ref,
+        )
+        _ = identity.deploy_env()
+        return identity
 
     @classmethod
     def sync(cls, c: "Context", force: bool = False) -> dict:
