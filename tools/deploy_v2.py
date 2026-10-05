@@ -249,7 +249,6 @@ def _resolve_for_type(spec, version_ref, *, repo: str):
         "branch": ref,  # the branch name -> slot branch-<name>
         "commit": resolved.sha,  # preview_alias truncates to the 7-char short sha
         "tag": ref,
-        "canary": CANARY_SLOT,
         None: None,  # fixed staging / prod carry no preview slot
     }[spec.alias_kind]
     return resolved, alias_value

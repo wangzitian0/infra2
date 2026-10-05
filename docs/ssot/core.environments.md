@@ -645,14 +645,12 @@ ls /data/finance_report/
 ```bash
 # 模拟全新 VPS
 export DEPLOY_ENV=test
-export ENV_SUFFIX=-pr-999
-export PR_NUMBER=999
+export ENV_SUFFIX=-canary-preview
 
 # 计时开始
 time python -m tools.deploy_v2 \
   --service finance_report/app \
-  --type preview/pr \
-  --version-ref 999 \
+  --type canary \
   --iac-ref vX.Y.Z \
   --domain zitian.party
 

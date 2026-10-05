@@ -1,7 +1,7 @@
 # Canary Todo 平台基建校验工具 SSOT
 
 > **SSOT Key**: `platform.canary_todo`
-> **核心定义**：Canary Todo (`platform/30.todo`) 是部署于 `todo.zitian.party` 的合成探针与平台基建验收服务。它通过主动物理读写，自证与验收平台全部基础设施（Postgres, Redis, S3/MinIO, SigNoz OTel, OpenPanel, Authentik SSO）的运行时可用性。
+> **核心定义**：Canary Todo (`platform/30.todo`) 是部署于 `todo.zitian.party` 的合成探针与平台基建验收服务。它通过网络协议与端点握手，自证与验收平台基础设施（Postgres, Redis, S3/MinIO, SigNoz, OpenPanel, Authentik SSO）的运行时可达性。深层带鉴权读写与追踪遥测闭环跟踪于 Issue #973。
 
 ---
 
@@ -43,10 +43,10 @@ graph TD
     end
 
     subgraph Platform Physical Reality Probes
-        TodoApp -->|Relational CRUD| PG["platform-postgres:5432"]
-        TodoApp -->|Cache & Distributed Lock| Redis["platform-redis:6379"]
+        TodoApp -->|StartupMessage Handshake| PG["platform-postgres:5432"]
+        TodoApp -->|TCP PING Handshake| Redis["platform-redis:6379"]
         TodoApp -->|S3 Health & Presigned URL| S3["platform-s3:9000"]
-        TodoApp -->|OTel Tracing Ingest| SigNoz["platform-signoz-otel-collector:13133"]
+        TodoApp -->|OTel Collector Health Check| SigNoz["platform-signoz-otel-collector:13133"]
         TodoApp -->|Analytics Ingest API| OpenPanel["platform-openpanel-api:3000"]
         TodoApp -->|SSO Endpoint Liveness| Authentik["platform-authentik-server:9000"]
     end
@@ -57,8 +57,8 @@ graph TD
 1. **双轨路由分流 (Bypass vs SSO-Protected)**：
    - 合成探针和健康检查（`/api/health`, `/api/canary/status`）以 Traefik 优先级 100 直接放行，不走 SSO 重定向，供 CI 及外部监控检测。
    - 交互式看板（`/`）以优先级 10 绑定 Authentik ForwardAuth 中间件，供团队成员以单点登录身份安全访问。
-2. **物理真源自证 (Physical Reality Probe)**：
-   - 探针不依赖静态假数据，直接执行真实的 Postgres 写入/读取、Redis SET/GET、S3 HEAD、OTel 连通性，并在 `/api/canary/status` 暴露细粒度诊断状态。
+2. **物理真源可达性探测 (Physical Reality Reachability)**：
+   - 探针直接对 Postgres 发送 StartupMessage 握手、向 Redis 发送 TCP PING、请求 S3 HEAD 与 SigNoz 健康端点，并在 `/api/canary/status` 暴露诊断状态。真实带鉴权 CRUD 读写与 OTel trace 追踪上报在 Issue #973 中分阶段实现。
 3. **SDK 一致性保证**：
    - `Dockerfile` 中的 `infra2-sdk` 版本由 `libs/tests/test_sdk_contract_adoption.py` 自动化测试严格守护，与 `pyproject.toml` 保持 100% 对齐。
 
