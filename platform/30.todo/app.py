@@ -43,6 +43,24 @@ CANARY_S3_PREFIX = "canary/"
 # hold the status document past it, so each check gets this hard deadline.
 CHECK_DEADLINE_SECONDS = 8.0
 
+# Check states. `unconfigured` means a credential the check needs is missing: the check
+# is red (a gap is never green) but it is not a failure of the path it would prove.
+PASS = "pass"
+FAIL = "fail"
+UNCONFIGURED = "unconfigured"
+
+# Only the canary's own write paths gate `ok` and the HTTP status. SigNoz, OpenPanel and
+# Authentik have their own probes and severities, so they stay informational here.
+GATING_CHECKS = ("postgres", "redis", "s3")
+INFORMATIONAL_CHECKS = ("signoz", "openpanel", "authentik")
+
+# Each run does real writes and opens a Postgres connection, and the canary role allows 5.
+# One run is in flight at a time, and a result is reused for this long. It stays below the
+# probe runner's 60 s interval, so every probe round still sees a fresh run.
+STATUS_CACHE_TTL_SECONDS = 30.0
+_STATUS_LOCK = threading.Lock()
+_STATUS_CACHE: tuple[float, Dict[str, Any]] | None = None
+
 # Set by configure_service_telemetry(). None means no OTLP endpoint was issued.
 _TRACER: Any | None = None
 
@@ -106,6 +124,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     .badge { padding: 4px 10px; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; }
     .badge-pass { background-color: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.4); }
     .badge-fail { background-color: rgba(239, 68, 68, 0.2); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.4); }
+    .badge-warn { background-color: rgba(245, 158, 11, 0.2); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.4); }
     .badge-wait { background-color: rgba(100, 116, 139, 0.2); color: #94a3b8; border: 1px solid rgba(100, 116, 139, 0.4); }
   </style>
 </head>
@@ -305,6 +324,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             if (result.status === 'pass') {
               badge.className = 'badge badge-pass';
               badge.innerText = 'PASS';
+            } else if (result.status === 'unconfigured') {
+              badge.className = 'badge badge-warn';
+              badge.innerText = 'UNCONFIGURED';
             } else {
               badge.className = 'badge badge-fail';
               badge.innerText = 'FAIL';
@@ -350,6 +372,10 @@ def _outcome(status: str, start: float, detail: str) -> Dict[str, Any]:
     return {"status": status, "latency_ms": _elapsed_ms(start), "detail": detail}
 
 
+def _unconfigured(start: float, detail: str) -> Dict[str, Any]:
+    return _outcome(UNCONFIGURED, start, detail)
+
+
 def _probe_postgres(
     host: str,
     port: int = 5432,
@@ -368,8 +394,7 @@ def _probe_postgres(
     """
     start = time.perf_counter()
     if not (user and password):
-        return _outcome(
-            "fail",
+        return _unconfigured(
             start,
             "CANARY_POSTGRES_USER and CANARY_POSTGRES_PASSWORD are not configured",
         )
@@ -454,14 +479,14 @@ def _probe_redis(
 ) -> Dict[str, Any]:
     """AUTH, PING, then SETEX, GET and DEL of a random value on a per-run key.
 
-    No password fails the check. A `-NOAUTH` reply fails it too: the old probe counted
+    No password reports `unconfigured`: the check stays red, but it is a configuration
+    gap, not a failed write path. A `-NOAUTH` reply fails the check: the old probe counted
     that reply as a pass and never wrote to Redis in production. The random value stops a
     stale key from the previous run passing a broken write.
     """
     start = time.perf_counter()
     if not password:
-        return _outcome(
-            "fail",
+        return _unconfigured(
             start,
             "REDIS_PASSWORD is not configured; the canary cannot prove an authenticated write",
         )
@@ -521,7 +546,7 @@ def _probe_s3(
         if not value
     ]
     if missing:
-        return _outcome("fail", start, f"{', '.join(missing)} not configured")
+        return _unconfigured(start, f"{', '.join(missing)} not configured")
     key = f"{CANARY_S3_PREFIX}{secrets.token_hex(8)}"
     body = secrets.token_hex(16).encode("utf-8")
     owned = client is None
@@ -601,8 +626,10 @@ def _traced_check(name: str, probe: Callable[[], Dict[str, Any]]) -> Dict[str, A
         span.set_attribute("canary.status", result["status"])
         span.set_attribute("canary.latency_ms", result["latency_ms"])
         span.set_attribute("canary.detail", result["detail"])
-    if result["status"] != "pass":
-        LOGGER.warning("canary check %s failed: %s", name, result["detail"])
+    if result["status"] != PASS:
+        LOGGER.warning(
+            "canary check %s is %s: %s", name, result["status"], result["detail"]
+        )
     return result
 
 
@@ -691,22 +718,69 @@ def run_all_checks() -> Dict[str, Any]:
             "openpanel": results["openpanel"],
             "authentik": results["authentik"],
         }
-        failed = sorted(name for name, c in results.items() if c["status"] != "pass")
-        all_pass = not failed
+        unconfigured = [
+            n for n in GATING_CHECKS if results[n]["status"] == UNCONFIGURED
+        ]
+        failed = [
+            n for n in GATING_CHECKS if results[n]["status"] not in (PASS, UNCONFIGURED)
+        ]
+        informational_down = [
+            n for n in INFORMATIONAL_CHECKS if results[n]["status"] != PASS
+        ]
+        # A status other than `pass` or `unconfigured` counts as a failure (fail closed).
+        all_pass = not failed and not unconfigured
         run_span.set_attribute("canary.ok", all_pass)
         run_span.set_attribute("canary.failed_checks", ",".join(failed))
+        run_span.set_attribute("canary.unconfigured_checks", ",".join(unconfigured))
+        run_span.set_attribute(
+            "canary.informational_down", ",".join(informational_down)
+        )
         # inside the span, so the exported log record carries the trace id
         if all_pass:
-            LOGGER.info("canary run ok: %d checks passed", len(results))
+            LOGGER.info("canary run ok: %d write paths passed", len(GATING_CHECKS))
         else:
-            LOGGER.error("canary run failed: %s", ", ".join(failed))
+            LOGGER.error(
+                "canary run red: failed=%s unconfigured=%s",
+                ",".join(failed) or "-",
+                ",".join(unconfigured) or "-",
+            )
+        if informational_down:
+            LOGGER.warning(
+                "canary informational checks not passing: %s",
+                ",".join(informational_down),
+            )
+    # The probe runner keeps only the first 128 bytes of this body as its observed text, so
+    # the verdict and its classification come first.
     return {
         "ok": all_pass,
+        "unconfigured": unconfigured,
+        "failed": failed,
         "service": "platform/todo",
         "domain": "todo.zitian.party",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "gating": list(GATING_CHECKS),
+        "informational": list(INFORMATIONAL_CHECKS),
         "checks": checks,
     }
+
+
+def cached_canary_status() -> Dict[str, Any]:
+    """The status document, with one run in flight and a short-lived reuse.
+
+    Requests queue on the lock. The first one runs the probes. The others get that result
+    until STATUS_CACHE_TTL_SECONDS pass. `age_seconds` says how old the result is, so a
+    reused result never reads as a fresh one.
+    """
+    global _STATUS_CACHE
+    with _STATUS_LOCK:
+        cached = _STATUS_CACHE
+        if cached is None or time.monotonic() - cached[0] >= STATUS_CACHE_TTL_SECONDS:
+            report = run_all_checks()
+            cached = (time.monotonic(), report)
+            _STATUS_CACHE = cached
+        document = dict(cached[1])
+        document["age_seconds"] = round(time.monotonic() - cached[0], 1)
+        return document
 
 
 def _acquire_tracer() -> Any:
@@ -848,7 +922,7 @@ class TodoHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/canary/status":
-            result = run_all_checks()
+            result = cached_canary_status()
             status_code = 200 if result["ok"] else 503
             self._send_json(status_code, result, send_body=send_body)
             return

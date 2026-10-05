@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import http.server
+import json
 import importlib.metadata
 import importlib.util
 import re
@@ -34,6 +35,7 @@ from libs import secrets_registry
 from libs import service_registry as reg
 from libs.probe_specs import render_probe_spec_text
 from libs.tests.compose_env import compose_services, container_env, resolve
+from libs.tests.docker_host import DockerHost
 from libs.tests.traefik_rules import routers_from_labels, serving_router
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -259,17 +261,19 @@ class FakeS3:
 # ------------------------------------------------------------------------- 1. Redis
 
 
-def test_redis_probe_fails_without_a_password(app) -> None:
+def test_redis_probe_reports_unconfigured_without_a_password(app) -> None:
     """The production canary ran with an empty REDIS_PASSWORD and passed. No password
-    means the canary cannot prove the write path, so it must fail."""
-    redis = FakeRedis(password=PG_PASSWORD)
+    still keeps the check red, but as `unconfigured`: a configuration gap is not a
+    write-path failure, and an operator must be able to tell the two apart."""
+    redis = FakeRedis(password=REDIS_PW)
     try:
         result = app._probe_redis("127.0.0.1", redis.port, password=None, timeout=1.0)
     finally:
         redis.close()
-    assert result["status"] == "fail"
+    assert result["status"] == "unconfigured"
     assert "REDIS_PASSWORD" in result["detail"]
     assert redis.store == {}
+    assert redis.commands == [], "an unconfigured check sends nothing"
 
 
 def test_redis_probe_fails_on_noauth_after_auth_reports_ok(app) -> None:
@@ -368,9 +372,16 @@ class _FakeConnection:
         return None
 
 
-def test_postgres_probe_fails_without_credentials(app) -> None:
-    result = app._probe_postgres("127.0.0.1", 1, user="", password="", timeout=1.0)
-    assert result["status"] == "fail"
+@pytest.mark.parametrize(
+    ("user", "password"), [("", ""), ("canary_ro", ""), ("", "x" * 20)]
+)
+def test_postgres_probe_reports_unconfigured_without_credentials(
+    app, user, password
+) -> None:
+    result = app._probe_postgres(
+        "127.0.0.1", 1, user=user, password=password, timeout=1.0
+    )
+    assert result["status"] == "unconfigured"
     assert "CANARY_POSTGRES" in result["detail"]
 
 
@@ -504,7 +515,9 @@ def test_s3_probe_fails_when_the_delete_is_denied(app) -> None:
 
 
 @pytest.mark.parametrize("missing", ["bucket", "access_key", "secret_key"])
-def test_s3_probe_fails_when_credentials_are_not_configured(app, missing) -> None:
+def test_s3_probe_reports_unconfigured_when_credentials_are_missing(
+    app, missing
+) -> None:
     server = FakeS3()
     try:
         args = _s3_args(server)
@@ -513,9 +526,52 @@ def test_s3_probe_fails_when_credentials_are_not_configured(app, missing) -> Non
         requests = list(server.requests)
     finally:
         server.close()
-    assert result["status"] == "fail"
+    assert result["status"] == "unconfigured"
     assert "CANARY_S3" in result["detail"]
     assert requests == [], "no request may be sent without credentials"
+
+
+def test_s3_probe_uses_a_new_key_every_run_and_deletes_only_its_own(app) -> None:
+    """A fixed key lets one run delete the object another run is about to read, and lets
+    a stale object from a crashed run pass the next read."""
+    server = FakeS3()
+    other = "/platform-canary/canary/written-by-someone-else"
+    server.objects[other] = b"keep me"
+    try:
+        for _ in range(2):
+            assert app._probe_s3(**_s3_args(server))["status"] == "pass"
+        requests = list(server.requests)
+        leftover = dict(server.objects)
+    finally:
+        server.close()
+    puts = [path for method, path, _key in requests if method == "PUT"]
+    deletes = [path for method, path, _key in requests if method == "DELETE"]
+    assert len(puts) == 2 and puts[0] != puts[1]
+    assert deletes == puts, "each run deletes its own key and no other"
+    assert leftover == {other: b"keep me"}
+
+
+def test_s3_probe_runs_in_parallel_do_not_share_a_key(app) -> None:
+    server = FakeS3()
+    results: list[dict] = []
+    try:
+        threads = [
+            threading.Thread(
+                target=lambda: results.append(app._probe_s3(**_s3_args(server)))
+            )
+            for _ in range(6)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+        puts = [path for method, path, _key in server.requests if method == "PUT"]
+        leftover = dict(server.objects)
+    finally:
+        server.close()
+    assert [r["status"] for r in results] == ["pass"] * 6, results
+    assert len(set(puts)) == 6
+    assert leftover == {}
 
 
 # --------------------------------------------------------------- the status document
@@ -587,53 +643,172 @@ def test_run_all_checks_hands_each_probe_its_credentials(app, monkeypatch) -> No
     }
 
 
-def test_run_all_checks_reports_the_first_real_failure_as_503(app, monkeypatch) -> None:
-    """A forced failure turns the status document red, which is what the probe reads."""
-    _env(monkeypatch)
-    ok = {"status": "pass", "latency_ms": 1.0, "detail": "ok"}
-    monkeypatch.setattr(app, "_probe_redis", lambda *a, **k: dict(ok))
-    monkeypatch.setattr(app, "_probe_postgres", lambda *a, **k: dict(ok))
-    monkeypatch.setattr(app, "_probe_http", lambda *a, **k: dict(ok))
-    monkeypatch.setattr(
-        app,
-        "_probe_s3",
-        lambda **k: {"status": "fail", "latency_ms": 2.0, "detail": "AccessDenied"},
-    )
+OK_RESULT = {"status": "pass", "latency_ms": 1.0, "detail": "ok"}
+
+
+def _patch_probes(app, monkeypatch, **overrides) -> None:
+    """Every probe passes except the ones named: redis, postgres, s3, and http by host."""
+    redis = overrides.get("redis", OK_RESULT)
+    postgres = overrides.get("postgres", OK_RESULT)
+    s3 = overrides.get("s3", OK_RESULT)
+    monkeypatch.setattr(app, "_probe_redis", lambda *a, **k: dict(redis))
+    monkeypatch.setattr(app, "_probe_postgres", lambda *a, **k: dict(postgres))
+    monkeypatch.setattr(app, "_probe_s3", lambda **k: dict(s3))
+
+    def http(url, **kwargs):
+        for name in ("signoz", "openpanel", "authentik"):
+            if name in url and name in overrides:
+                return dict(overrides[name])
+        return dict(OK_RESULT)
+
+    monkeypatch.setattr(app, "_probe_http", http)
+
+
+def _get_status(app) -> tuple[int, str]:
+    """The raw status response as the probe runner receives it: (HTTP code, body)."""
+    import urllib.error
+    import urllib.request
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), app.TodoHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        import json
-        import urllib.error
-        import urllib.request
-
         url = f"http://127.0.0.1:{server.server_address[1]}/api/canary/status"
-        with pytest.raises(urllib.error.HTTPError) as caught:
-            urllib.request.urlopen(url, timeout=3)
-        body = json.loads(caught.value.read().decode())
+        try:
+            with urllib.request.urlopen(url, timeout=5) as response:
+                return response.status, response.read().decode()
+        except urllib.error.HTTPError as error:
+            return error.code, error.read().decode()
     finally:
         server.shutdown()
         server.server_close()
-    assert caught.value.code == 503
+
+
+def test_a_failed_write_path_turns_the_document_red_as_503(app, monkeypatch) -> None:
+    """A forced failure turns the status document red, which is what the probe reads."""
+    _env(monkeypatch)
+    failed = {"status": "fail", "latency_ms": 2.0, "detail": "AccessDenied"}
+    _patch_probes(app, monkeypatch, s3=failed)
+
+    code, raw = _get_status(app)
+    body = json.loads(raw)
+
+    assert code == 503
     assert body["ok"] is False
+    assert body["failed"] == ["s3"] and body["unconfigured"] == []
     assert body["checks"]["s3"]["detail"] == "AccessDenied"
     assert body["checks"]["minio"]["status"] == "fail", "the legacy alias follows s3"
+
+
+def test_an_unconfigured_write_path_is_red_but_never_a_failure(
+    app, monkeypatch
+) -> None:
+    """A missing credential must keep the probe red (a gap is not green) and must not be
+    reported as a failed write path (#991 audit: a false P1 page)."""
+    _env(monkeypatch)
+    gap = {
+        "status": "unconfigured",
+        "latency_ms": 0.1,
+        "detail": "CANARY_S3_ACCESS_KEY, CANARY_S3_SECRET_KEY not configured",
+    }
+    _patch_probes(app, monkeypatch, s3=gap)
+
+    code, raw = _get_status(app)
+    body = json.loads(raw)
+
+    assert code == 503, "an unconfigured check keeps the probe red"
+    assert body["ok"] is False
+    assert body["unconfigured"] == ["s3"]
+    assert body["failed"] == [], "a configuration gap is not a write-path failure"
+    assert body["checks"]["s3"]["status"] == "unconfigured"
+    assert body["checks"]["redis"]["status"] == "pass"
+
+
+def test_failed_and_unconfigured_checks_are_listed_apart(app, monkeypatch) -> None:
+    _env(monkeypatch)
+    _patch_probes(
+        app,
+        monkeypatch,
+        redis={"status": "fail", "latency_ms": 1.0, "detail": "AUTH failed"},
+        s3={"status": "unconfigured", "latency_ms": 0.1, "detail": "gap"},
+    )
+    body = app.run_all_checks()
+    assert body["failed"] == ["redis"] and body["unconfigured"] == ["s3"]
+    assert body["ok"] is False
+
+
+def test_the_probe_runner_sees_the_gap_in_its_observed_text(app, monkeypatch) -> None:
+    """Run the real probe runner against the real handler. The runner keeps the first
+    128 bytes of the body, so the classification must sit inside them."""
+    from libs.observability.probes import ProbeSpec, run_probe
+
+    _env(monkeypatch)
+    gap = {"status": "unconfigured", "latency_ms": 0.1, "detail": "CANARY_S3 gap"}
+    _patch_probes(app, monkeypatch, s3=gap)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), app.TodoHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        spec = ProbeSpec(
+            name="todo-canary-status",
+            kind="http",
+            target=f"http://127.0.0.1:{server.server_address[1]}/api/canary/status",
+            expected="200",
+            severity="warning",
+            timeout_seconds=5,
+        )
+        result = run_probe(spec)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert result.ok is False, "the gap keeps the probe red"
+    assert '"unconfigured": ["s3"]' in result.observed
+    assert '"failed": []' in result.observed
+    assert '"ok": false' in result.observed
+
+
+@pytest.mark.parametrize("dependency", ["signoz", "openpanel", "authentik"])
+def test_a_non_canary_dependency_never_gates_the_document(
+    app, monkeypatch, dependency
+) -> None:
+    """SigNoz, OpenPanel and Authentik have their own probes and severities. Their outage
+    must not page again as `todo-canary-status`. They stay visible as information."""
+    _env(monkeypatch)
+    down = {"status": "fail", "latency_ms": 3.0, "detail": f"{dependency} is down"}
+    _patch_probes(app, monkeypatch, **{dependency: down})
+
+    code, raw = _get_status(app)
+    body = json.loads(raw)
+
+    assert code == 200
+    assert body["ok"] is True and body["failed"] == [] and body["unconfigured"] == []
+    assert body["checks"][dependency]["status"] == "fail", "still visible"
+    assert body["checks"][dependency]["detail"] == f"{dependency} is down"
+    assert body["gating"] == ["postgres", "redis", "s3"]
+    assert body["informational"] == ["signoz", "openpanel", "authentik"]
+
+
+def test_every_write_path_gates_the_document(app, monkeypatch) -> None:
+    _env(monkeypatch)
+    down = {"status": "fail", "latency_ms": 1.0, "detail": "down"}
+    for name in ("postgres", "redis", "s3"):
+        _patch_probes(app, monkeypatch, **{name: down})
+        body = app.run_all_checks()
+        assert body["ok"] is False and body["failed"] == [name], name
 
 
 def test_run_all_checks_bounds_a_hung_probe(app, monkeypatch) -> None:
     """The probe runner waits a fixed time. One hung dependency must not hold the whole
     status document past it, and it must show as a failed check."""
     _env(monkeypatch)
-    ok = {"status": "pass", "latency_ms": 1.0, "detail": "ok"}
     monkeypatch.setattr(app, "CHECK_DEADLINE_SECONDS", 0.3)
-    monkeypatch.setattr(app, "_probe_redis", lambda *a, **k: dict(ok))
-    monkeypatch.setattr(app, "_probe_postgres", lambda *a, **k: dict(ok))
-    monkeypatch.setattr(app, "_probe_s3", lambda **k: dict(ok))
+    monkeypatch.setattr(app, "_probe_redis", lambda *a, **k: dict(OK_RESULT))
+    monkeypatch.setattr(app, "_probe_postgres", lambda *a, **k: dict(OK_RESULT))
+    monkeypatch.setattr(app, "_probe_s3", lambda **k: dict(OK_RESULT))
 
     def hung_http(url, **kwargs):
         if "openpanel" in url:
             time.sleep(1.5)
-        return dict(ok)
+        return dict(OK_RESULT)
 
     monkeypatch.setattr(app, "_probe_http", hung_http)
     monkeypatch.setenv(
@@ -647,10 +822,140 @@ def test_run_all_checks_bounds_a_hung_probe(app, monkeypatch) -> None:
     assert elapsed < 1.2, (
         f"the status document waited for the hung probe ({elapsed:.2f}s)"
     )
-    assert report["ok"] is False
     assert report["checks"]["openpanel"]["status"] == "fail"
     assert "did not finish" in report["checks"]["openpanel"]["detail"]
     assert report["checks"]["redis"]["status"] == "pass"
+    assert report["ok"] is True, "OpenPanel is informational and does not gate"
+
+
+def test_a_hung_write_path_fails_the_document_within_the_deadline(
+    app, monkeypatch
+) -> None:
+    _env(monkeypatch)
+    monkeypatch.setattr(app, "CHECK_DEADLINE_SECONDS", 0.3)
+    _patch_probes(app, monkeypatch)
+
+    def hung_redis(*args, **kwargs):
+        time.sleep(1.5)
+        return dict(OK_RESULT)
+
+    monkeypatch.setattr(app, "_probe_redis", hung_redis)
+    started = time.monotonic()
+    report = app.run_all_checks()
+    assert time.monotonic() - started < 1.2
+    assert report["ok"] is False and report["failed"] == ["redis"]
+
+
+# ---------------------------------------------- one run in flight, a short-lived cache
+
+
+def test_concurrent_requests_share_one_run(app, monkeypatch) -> None:
+    """Each run does real writes and opens a Postgres connection. The canary role holds 5
+    connections, so five parallel page loads must not become five runs."""
+    runs: list[int] = []
+    release = threading.Event()
+
+    def slow_run():
+        runs.append(1)
+        release.wait(timeout=5)
+        return {"ok": True, "timestamp": "t", "checks": {}}
+
+    monkeypatch.setattr(app, "run_all_checks", slow_run)
+    answers: list[dict] = []
+    threads = [
+        threading.Thread(target=lambda: answers.append(app.cached_canary_status()))
+        for _ in range(8)
+    ]
+    for thread in threads:
+        thread.start()
+    deadline = time.monotonic() + 2
+    while not runs and time.monotonic() < deadline:
+        time.sleep(0.01)
+    time.sleep(0.1)
+    release.set()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert len(runs) == 1, f"{len(runs)} runs for 8 concurrent requests"
+    assert len(answers) == 8 and all(a["ok"] is True for a in answers)
+
+
+def test_requests_inside_the_ttl_reuse_the_result_and_say_how_old_it_is(
+    app, monkeypatch
+) -> None:
+    runs: list[int] = []
+
+    def run():
+        runs.append(1)
+        return {"ok": True, "timestamp": "t", "checks": {}}
+
+    monkeypatch.setattr(app, "run_all_checks", run)
+    first = app.cached_canary_status()
+    second = app.cached_canary_status()
+    assert len(runs) == 1
+    assert first["age_seconds"] == 0.0
+    assert 0.0 <= second["age_seconds"] < app.STATUS_CACHE_TTL_SECONDS, (
+        "a reused result must state its age, never pass as fresh"
+    )
+
+
+def test_a_result_older_than_the_ttl_is_run_again(app, monkeypatch) -> None:
+    runs: list[int] = []
+    monkeypatch.setattr(app, "STATUS_CACHE_TTL_SECONDS", 0.05)
+    monkeypatch.setattr(
+        app,
+        "run_all_checks",
+        lambda: runs.append(1) or {"ok": True, "timestamp": "t", "checks": {}},
+    )
+    app.cached_canary_status()
+    time.sleep(0.12)
+    app.cached_canary_status()
+    assert len(runs) == 2
+
+
+def test_the_ttl_is_shorter_than_the_probe_interval(app) -> None:
+    """Every probe round must see a fresh run. The runner polls every
+    INFRA_PROBE_INTERVAL_SECONDS (a cache as long as that would show one run twice)."""
+    alerting = compose_services(ROOT / "platform/12.alerting/compose.yaml")
+    raw = alerting["infra-probe-runner"]["environment"]["INFRA_PROBE_INTERVAL_SECONDS"]
+    interval = float(resolve(raw, {}))
+    assert interval == 60.0
+    assert 0 < app.STATUS_CACHE_TTL_SECONDS < interval
+
+
+def test_parallel_http_requests_run_the_probes_once(app, monkeypatch) -> None:
+    import urllib.request
+
+    _env(monkeypatch)
+    calls: list[int] = []
+
+    def counting_postgres(*args, **kwargs):
+        calls.append(1)
+        time.sleep(0.2)
+        return dict(OK_RESULT)
+
+    _patch_probes(app, monkeypatch)
+    monkeypatch.setattr(app, "_probe_postgres", counting_postgres)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), app.TodoHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    codes: list[int] = []
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}/api/canary/status"
+
+        def fetch():
+            with urllib.request.urlopen(url, timeout=10) as response:
+                codes.append(response.status)
+
+        threads = [threading.Thread(target=fetch) for _ in range(6)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=15)
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert codes == [200] * 6
+    assert len(calls) == 1, "six page loads must open one Postgres connection"
 
 
 def test_probe_budget_fits_inside_the_declared_probe_timeout(app) -> None:
@@ -672,7 +977,9 @@ def test_todo_declares_a_probe_on_the_internal_canary_status(deploy) -> None:
     probe = by_name["todo-canary-status"]
     assert probe.kind == "http"
     assert probe.expected == "200"
-    assert probe.severity == "error"
+    assert probe.severity == "warning", (
+        "P2 until staging and production acceptance; raise to `error` only then"
+    )
     assert probe.depends_on == ""
     assert probe.service_id == ""
 
@@ -698,7 +1005,7 @@ def test_probe_renders_into_the_probe_runner_specs() -> None:
     ]
     assert lines == [
         "todo-canary-status|http|http://platform-todo${ENV_SUFFIX}:8000/api/canary/status"
-        "|200|error|15||platform/todo"
+        "|200|warning|15||platform/todo"
     ]
 
 
@@ -714,7 +1021,7 @@ def test_todo_signal_is_a_debounced_minute_alert() -> None:
     for entry in entries:
         assert entry["service_id"] == "platform/todo"
         assert entry["component"] == "todo"
-        assert entry["severity"] == "error"
+        assert entry["severity"] == "warning"
         assert entry["tier"] == "minute" and entry["type"] == "alert"
         assert entry["consecutive_failures"] == 3
         assert entry["renotify_window_sec"] == 0
@@ -1349,3 +1656,88 @@ def test_supply_hook_fails_when_the_role_cannot_be_provisioned(
         classmethod(lambda cls, c, env=None: False),
     )
     assert deployer.apply_secret_supply(object(), env="staging") is False
+
+
+def test_first_sync_creates_the_role_although_no_consumer_exists_yet(
+    deploy, monkeypatch
+) -> None:
+    """The first deploy: the supply writes the generated password and asks for a restart of
+    a vault-agent and an app container that do not exist. The sync must still reach the
+    role creation (#991 audit: it failed on `docker restart` first)."""
+    from libs.security import supply as supply_module
+
+    deployer = deploy.TodoDeployer
+    _stub_role_env(monkeypatch, deployer, {"CANARY_POSTGRES_PASSWORD": PG_PASSWORD})
+
+    def apply(service, env_name, restart=None, resolver=None):
+        restart(("CANARY_POSTGRES_PASSWORD",))
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            ok=True, notes=(), missing=(), summary=lambda: "generated the password"
+        )
+
+    monkeypatch.setattr(supply_module, "apply", apply)
+    host = DockerHost(containers={"platform-postgres-staging"})
+
+    assert deployer.apply_secret_supply(host, env="staging") is True
+
+    assert host.restart_commands == []
+    psql = [
+        (command, stdin)
+        for command, stdin in zip(host.commands, host.stdin)
+        if "psql" in DockerHost.remote(command)
+    ]
+    assert len(psql) == 1, "the role is created on the first sync"
+    assert psql[0][1] == deployer.canary_role_sql(PG_PASSWORD)
+
+
+def test_role_sql_keeps_the_password_out_of_the_server_log(deploy) -> None:
+    """A failed ALTER ROLE is logged with its statement text by default. The session turns
+    statement logging off before the password statement runs."""
+    sql = " ".join(deploy.TodoDeployer.canary_role_sql(PG_PASSWORD).split())
+    alter = sql.index("ALTER ROLE canary_ro WITH")
+    for setting in (
+        "SET log_min_error_statement = 'panic';",
+        "SET log_statement = 'none';",
+        "SET log_min_duration_statement = -1;",
+    ):
+        assert setting in sql, setting
+        assert sql.index(setting) < alter, f"{setting} must come before the password"
+    assert sql.index("SET log_min_error_statement") < sql.index("DO $do$")
+
+
+def test_a_failed_role_sync_never_prints_the_password(deploy, monkeypatch) -> None:
+    """psql prints the failing statement with a caret under the error, and that statement
+    holds the password."""
+    deployer = deploy.TodoDeployer
+    _stub_role_env(monkeypatch, deployer, {"CANARY_POSTGRES_PASSWORD": PG_PASSWORD})
+    stderr = (
+        'psql:<stdin>:12: ERROR:  syntax error at or near "x"\n'
+        f"LINE 1: ALTER ROLE canary_ro WITH LOGIN PASSWORD '{PG_PASSWORD}';\n"
+        "                                                  ^\n"
+        f"DETAIL: rejected {PG_PASSWORD}"
+    )
+    host = DockerHost(other_ok=False, other_stderr=stderr)
+    printed: list[str] = []
+    monkeypatch.setattr(
+        deploy,
+        "error",
+        lambda *args, **kwargs: printed.append(" ".join(map(str, args))),
+    )
+
+    assert deployer._ensure_canary_postgres_role(host) is False
+
+    assert printed, "the failure must be reported"
+    assert all(PG_PASSWORD not in line for line in printed), printed
+    assert any("<redacted>" in line for line in printed), printed
+    assert any("syntax error" in line for line in printed), "the cause stays readable"
+
+
+def test_redaction_removes_any_password_clause_not_only_the_known_value(deploy) -> None:
+    redact = deploy.TodoDeployer.redact_password
+    text = "x PASSWORD 'some-other-value' y PASSWORD  'and-this' z known-secret-1"
+    cleaned = redact(text, "known-secret-1")
+    assert "some-other-value" not in cleaned and "and-this" not in cleaned
+    assert "known-secret-1" not in cleaned
+    assert cleaned.count("<redacted>") == 3

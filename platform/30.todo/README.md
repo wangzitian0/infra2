@@ -22,7 +22,7 @@ Canary service at `todo.zitian.party`. It proves the platform's real runtime pat
 ## Endpoints
 
 - **Health (public)**: `GET /api/health` returns HTTP 200 JSON.
-- **Canary status (internal)**: `GET /api/canary/status` returns the check matrix. The probe runner reads it over the Docker network. SSO users reach it through the protected router. It is not public.
+- **Canary status (internal)**: `GET /api/canary/status` returns the check matrix. Each check is `pass`, `fail` or `unconfigured` (a missing credential). Only Redis, Postgres and S3 gate the HTTP status. SigNoz, OpenPanel and Authentik are informational. The probe runner reads it over the Docker network. SSO users reach it through the protected router. It is not public.
 - **Web UI (SSO)**: `GET /` is protected by Authentik ForwardAuth.
 
 ## Deploy

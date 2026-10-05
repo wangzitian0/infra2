@@ -34,16 +34,18 @@ class TodoDeployer(Deployer):
 
     # The probe runner reads the status document over the Docker network (#991). The old
     # `Exemption(probes)` called the service "self-proving"; nothing read the status, and
-    # staging answered 503 for hours unnoticed. Severity `error` is P1: a broken canary
-    # means a platform write path is broken, while the platform's own probes carry P0 for
-    # the core services. The 15 s timeout exceeds the 8 s per-check deadline in app.py.
+    # staging answered 503 for hours unnoticed. Severity is `warning` (P2) for now: a probe
+    # that is new, and that stays red while an operator step is open, must not page. Raise
+    # it to `error` (P1) only after staging and production acceptance. The platform's own
+    # probes carry P0 for the core services. The 15 s timeout exceeds the 8 s per-check
+    # deadline in app.py.
     probes = (
         ProbeFacet(
             name="todo-canary-status",
             kind="http",
             target="http://platform-todo${ENV_SUFFIX}:8000/api/canary/status",
             expected="200",
-            severity="error",
+            severity="warning",
             timeout_seconds=15,
         ),
     )
@@ -93,6 +95,11 @@ class TodoDeployer(Deployer):
             f"CONNECTION LIMIT {cls.CANARY_PG_CONNECTION_LIMIT}"
         )
         return (
+            # The server logs a failed statement with its text by default, and the
+            # ALTER ROLE below carries the password. The session turns that logging off first.
+            "SET log_min_error_statement = 'panic';\n"
+            "SET log_statement = 'none';\n"
+            "SET log_min_duration_statement = -1;\n"
             "DO $do$\nBEGIN\n"
             f"  IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '{role}') THEN\n"
             f"    CREATE ROLE {role} {attributes};\n"
@@ -101,6 +108,17 @@ class TodoDeployer(Deployer):
             f"ALTER ROLE {role} WITH {attributes} PASSWORD '{password}';\n"
             f"ALTER ROLE {role} SET default_transaction_read_only = on;\n"
         )
+
+    @staticmethod
+    def redact_password(text: str, password: str) -> str:
+        """Remove the password, and any `PASSWORD '...'` clause, from text that is printed.
+
+        psql echoes the failing statement with a caret under the error, and that statement
+        holds the password.
+        """
+        if password:
+            text = text.replace(password, "<redacted>")
+        return re.sub(r"(?i)(PASSWORD\s+)'[^']*'", r"\1<redacted>", text)
 
     @classmethod
     def _ensure_canary_postgres_role(cls, c, env: str | None = None) -> bool:
@@ -139,7 +157,7 @@ class TodoDeployer(Deployer):
         if result.failed:
             error(
                 f"{cls.service}: could not provision Postgres role {cls.CANARY_PG_ROLE}: "
-                f"{(result.stderr or '').strip()}"
+                f"{cls.redact_password((result.stderr or '').strip(), password)}"
             )
             return False
         info(

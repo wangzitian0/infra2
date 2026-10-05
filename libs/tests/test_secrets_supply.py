@@ -15,6 +15,7 @@ import libs.deploy.deployer as deployer_module
 from libs.security import supply as secrets_supply
 from libs.deploy.deployer import Deployer
 from libs.secrets_supply import SupplyReport, TransientTransportError
+from libs.tests.docker_host import DockerHost
 
 ENV = {"ENV": "staging", "ENV_SUFFIX": "-staging", "VPS_HOST": "vps.test"}
 
@@ -68,9 +69,15 @@ def test_changed_values_restart_the_agent_and_the_apps(harness) -> None:
         SupplyReport("platform/alerting", "staging", changed=("FEISHU_WEBHOOK_URL",)),
         changed_seen=("FEISHU_WEBHOOK_URL",),
     )
-    assert AlertingLike.apply_secret_supply(object()) is True
+    host = DockerHost(
+        containers={
+            "platform-alerting-vault-agent-staging",
+            "platform-alerting-staging",
+        }
+    )
+    assert AlertingLike.apply_secret_supply(host) is True
     assert calls["apply"] == [("platform/alerting", "staging")]
-    ((cmd, _label),) = calls["run"]
+    (cmd,) = host.restart_commands
     assert cmd.startswith("ssh root@vps.test ")
     assert (
         "docker restart platform-alerting-vault-agent-staging platform-alerting-staging"
@@ -145,13 +152,19 @@ def test_vault_backend_accepts_the_transition_alias(monkeypatch) -> None:
 
 
 def test_a_failed_restart_fails_the_deploy_closed(harness, capsys) -> None:
-    calls = harness(
+    harness(
         SupplyReport("platform/alerting", "staging", changed=("FEISHU_WEBHOOK_URL",)),
         changed_seen=("FEISHU_WEBHOOK_URL",),
     )
-    calls["restart_ok"] = False  # ssh/docker restart returned non-zero
-    assert AlertingLike.apply_secret_supply(object()) is False
-    assert len(calls["run"]) == 1
+    host = DockerHost(
+        containers={
+            "platform-alerting-vault-agent-staging",
+            "platform-alerting-staging",
+        },
+        restart_ok=False,  # ssh/docker restart returned non-zero
+    )
+    assert AlertingLike.apply_secret_supply(host) is False
+    assert len(host.restart_commands) == 1
     assert "could not restart" in capsys.readouterr().out
 
 
