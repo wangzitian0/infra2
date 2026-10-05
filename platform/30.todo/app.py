@@ -513,29 +513,36 @@ def run_all_checks() -> Dict[str, Any]:
 
 
 class TodoHandler(BaseHTTPRequestHandler):
-    def _send_json(self, status: int, data: Any):
+    def _send_json(self, status: int, data: Any, send_body: bool = True):
         body = json.dumps(data).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header(
-            "Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"
+            "Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD"
         )
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
-        self.wfile.write(body)
+        if send_body:
+            self.wfile.write(body)
 
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header(
-            "Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"
+            "Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD"
         )
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
 
+    def do_HEAD(self):
+        self._handle_get(send_body=False)
+
     def do_GET(self):
+        self._handle_get(send_body=True)
+
+    def _handle_get(self, send_body: bool = True):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
 
@@ -549,28 +556,35 @@ class TodoHandler(BaseHTTPRequestHandler):
                 auth_badge = (
                     f'<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">'
                     f'<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>'
-                    f'SSO 认证通过: {safe_display}'
-                    f'</span>'
+                    f"SSO 认证通过: {safe_display}"
+                    f"</span>"
                 )
             else:
                 auth_badge = (
                     '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-slate-800 text-slate-400 border border-slate-700">'
                     '<span class="w-2 h-2 rounded-full bg-slate-500"></span>'
-                    '未检测到 ForwardAuth 头 (开发/直连模式)'
-                    '</span>'
+                    "未检测到 ForwardAuth 头 (开发/直连模式)"
+                    "</span>"
                 )
             sha = os.environ.get("GIT_COMMIT_SHA", "dev-local")[:7]
             rendered = (
-                HTML_TEMPLATE
-                .replace("${GIT_COMMIT_SHA}", sha)
+                HTML_TEMPLATE.replace("${GIT_COMMIT_SHA}", sha)
                 .replace("${AUTH_BADGE}", auth_badge)
                 .encode("utf-8")
             )
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(rendered)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header(
+                "Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD"
+            )
+            self.send_header(
+                "Access-Control-Allow-Headers", "Content-Type, Authorization"
+            )
             self.end_headers()
-            self.wfile.write(rendered)
+            if send_body:
+                self.wfile.write(rendered)
             return
 
         if path == "/api/auth/me":
@@ -589,6 +603,7 @@ class TodoHandler(BaseHTTPRequestHandler):
                     "email": self.headers.get("X-authentik-email") or None,
                     "groups": groups,
                 },
+                send_body=send_body,
             )
             return
 
@@ -602,22 +617,23 @@ class TodoHandler(BaseHTTPRequestHandler):
                     "domain": "todo.zitian.party",
                     "uptime_seconds": round(time.time() - SERVER_START_TIME, 1),
                 },
+                send_body=send_body,
             )
             return
 
         if path == "/api/canary/status":
             result = run_all_checks()
             status_code = 200 if result["ok"] else 503
-            self._send_json(status_code, result)
+            self._send_json(status_code, result, send_body=send_body)
             return
 
         if path == "/api/todos":
             with _todos_lock:
                 items = [dict(t) for t in _FALLBACK_TODOS]
-            self._send_json(200, items)
+            self._send_json(200, items, send_body=send_body)
             return
 
-        self._send_json(404, {"error": "Not Found"})
+        self._send_json(404, {"error": "Not Found"}, send_body=send_body)
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
