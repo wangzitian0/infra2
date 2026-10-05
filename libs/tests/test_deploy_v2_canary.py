@@ -17,7 +17,7 @@ from infra2_sdk.delivery import FailureDomain, PipelineStage, StageStatus
 
 import tools.deploy_v2_canary as canary
 from libs.deploy_contract import make_target
-from tools.deploy_v2_canary import CANARY_PR, run_canary
+from tools.deploy_v2_canary import CANARY_SLOT, run_canary
 
 SHA_CODE = "e" * 40
 SHA_IAC = "f" * 40
@@ -39,7 +39,7 @@ def _fake_target():
         service="finance_report/app",
         version=SHA_CODE,
         iac_ref=SHA_IAC,
-        alias_value=CANARY_PR,
+        alias_value=CANARY_SLOT,
     )
 
 
@@ -65,10 +65,10 @@ def spies(monkeypatch):
             data_lane="staging",
             backend="preview-lifecycle",
             detail={
-                "alias": f"pr-{CANARY_PR}",
+                "alias": CANARY_SLOT,
                 "compose_id": "cmp",
                 "sha": SHA_CODE,
-                "url": f"https://report-pr-{CANARY_PR}.{kw['domain']}",
+                "url": f"https://report-{CANARY_SLOT}.{kw['domain']}",
                 "healthy": healthy,
             },
         )
@@ -90,14 +90,14 @@ def test_canary_deploys_reserved_slot_then_tears_down(spies):
         version_ref="main",
     )
     assert res.ok is True
-    assert res.alias == f"pr-{CANARY_PR}"
+    assert res.alias == CANARY_SLOT
     assert res.torn_down is True
     # deployed via the unified front door with the canary type...
     assert spies["deploy"]["deploy_type"] == "canary"
     assert spies["deploy"]["version_ref"] == "main"
     # ...then tore the reserved slot down.
-    assert spies["down"]["kind"] == "pr"
-    assert spies["down"]["value"] == CANARY_PR
+    assert spies["down"]["kind"] == "canary"
+    assert spies["down"]["value"] == "preview"
     assert spies["down"]["domain"] == "zitian.party"
 
 
@@ -133,7 +133,7 @@ def test_teardown_runs_even_when_deploy_raises(monkeypatch):
             domain="zitian.party",
             version_ref="main",
         )
-    assert rec["down"] == ("pr", CANARY_PR)  # cleanup still ran
+    assert rec["down"] == ("canary", "preview")  # cleanup still ran
 
 
 def test_no_wait_reports_unknown_health_but_still_tears_down(spies):
@@ -150,7 +150,7 @@ def test_no_wait_reports_unknown_health_but_still_tears_down(spies):
     assert res.healthy is None
     assert res.torn_down is True
     assert spies["deploy"]["wait"] is False
-    assert spies["down"]["value"] == CANARY_PR
+    assert spies["down"]["value"] == "preview"
 
 
 def test_version_ref_forwarded(spies):
@@ -161,7 +161,7 @@ def test_version_ref_forwarded(spies):
         version_ref="v2.0.0",
     )
     assert spies["deploy"]["version_ref"] == "v2.0.0"
-    assert spies["down"]["value"] == CANARY_PR  # slot stays fixed regardless of code
+    assert spies["down"]["value"] == "preview"  # slot stays fixed regardless of code
 
 
 def test_service_defaults_to_finance_report_but_is_overridable(spies):
@@ -231,13 +231,13 @@ def test_best_effort_down_rejects_record_only_false_pass(monkeypatch, capsys):
     class OrphanedClient:
         def get_containers(self):
             return [
-                {"name": "finance_report-frontend-pr-999", "state": "created"},
-                {"name": "finance_report-preview-db-pr-999", "state": "running"},
+                {"name": f"finance_report-frontend-{CANARY_SLOT}", "state": "created"},
+                {"name": f"finance_report-preview-db-{CANARY_SLOT}", "state": "running"},
                 {
-                    "name": "finance_report-app-vault-agent-pr-999",
+                    "name": f"finance_report-app-vault-agent-{CANARY_SLOT}",
                     "state": "restarting",
                 },
-                {"name": "truealpha-app-pr-999", "state": "running"},
+                {"name": f"truealpha-app-{CANARY_SLOT}", "state": "running"},
             ]
 
     ok = canary._best_effort_down(
@@ -249,7 +249,7 @@ def test_best_effort_down_rejects_record_only_false_pass(monkeypatch, capsys):
     )
 
     assert ok is False
-    assert "finance_report-preview-db-pr-999" in capsys.readouterr().err
+    assert f"finance_report-preview-db-{CANARY_SLOT}" in capsys.readouterr().err
 
 
 def test_best_effort_down_waits_for_container_disappearance(monkeypatch):
@@ -263,8 +263,8 @@ def test_best_effort_down_waits_for_container_disappearance(monkeypatch):
         def get_containers(self):
             self.reads += 1
             if self.reads < 3:
-                return [{"name": "finance_report-preview-db-pr-999"}]
-            return [{"name": "truealpha-preview-db-pr-999"}]
+                return [{"name": f"finance_report-preview-db-{CANARY_SLOT}"}]
+            return [{"name": f"truealpha-preview-db-{CANARY_SLOT}"}]
 
     client = EventuallyCleanClient()
     ok = canary._best_effort_down(
@@ -322,7 +322,7 @@ def test_best_effort_down_warns_and_returns_false_on_persistent_failure(
     assert ok is False
     assert calls["n"] == 3  # exhausted retries
     err = capsys.readouterr().err
-    assert "teardown failed" in err and f"pr-{CANARY_PR}" in err  # loud leak warning
+    assert "teardown failed" in err and CANARY_SLOT in err  # loud leak warning
 
 
 def test_run_canary_teardown_failure_does_not_mask_deploy_error(monkeypatch, capsys):

@@ -11,7 +11,8 @@ reusable logic belongs in `libs/` (see the division-of-labor note below):
    (pre-deploy enum & schema compatibility gate, #698), `deploy_guard_audit.py` /
    `ci_gate_audit.py` / `service_identity_audit.py` / `lint_platform_image_pins.py` /
    `coverage_regression_audit.py` (infra-ci
-   gates), `reconcile_iac_inputs.py` (tag reconcile), `out_of_band_watchdog.py`
+   gates), `reconcile_iac_inputs.py` (tag reconcile), `promotion_soak_guard.py`
+   (the prod-promotion guard's staging-soak lookup, #970), `out_of_band_watchdog.py`
    / `watchdog_issue_trail.py` / `watchdog_weekly_digest.py` (scheduled
    watchdogs), `dns_drift_report.py` /
    `dokploy_config_drift.py` (drift reports), `pr_merge_gate.py` (the AGENTS.md

@@ -244,6 +244,44 @@ def test_http_probe_sends_stable_browser_compatible_headers(monkeypatch) -> None
     }
 
 
+@pytest.mark.parametrize(
+    "credentials", [{}, {"username": "probe", "password": "s3cret"}]
+)
+def test_the_bridge_post_sends_the_probe_user_agent(monkeypatch, credentials) -> None:
+    """#849: only the GET probe set a User-Agent; the POST to the alert bridge went out
+    as ``Python-urllib`` — the client Cloudflare rejects with error 1010, so an alert
+    could be dropped on the way out. The POST must identify as the probe, with or
+    without Basic auth."""
+    captured: dict = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b"{}"
+
+    def fake_urlopen(request, *, timeout):
+        captured["request"] = request
+        return FakeResponse()
+
+    monkeypatch.setattr(probes, "urlopen", fake_urlopen)
+
+    probes.post_alert_bridge_payload(
+        "https://bridge.example/alert", {"status": "firing"}, **credentials
+    )
+
+    request = captured["request"]
+    assert request.get_method() == "POST"
+    assert request.get_header("User-agent") == probes.HTTP_PROBE_HEADERS["User-Agent"]
+    assert "infra2-" in request.get_header("User-agent")
+    assert request.get_header("Content-type") == "application/json"
+    assert ("Authorization" in request.headers) is bool(credentials)
+
+
 def test_probe_runner_loop_catches_iteration_errors(monkeypatch) -> None:
     """#183: looped runner keeps future probes alive after one failed iteration."""
     runner = _load_probe_runner()

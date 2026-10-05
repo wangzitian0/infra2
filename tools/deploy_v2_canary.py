@@ -53,7 +53,7 @@ from infra2_sdk.delivery import (
 from libs.common import infra_domain
 from libs.deploy.preview import down
 from libs.deploy_contract import DeployTarget
-from libs.deploy_env_config import CANARY_PR
+from libs.deploy_env_config import CANARY_SLOT
 from tools.deploy_v2 import deploy_v2
 
 _DEFAULT_SERVICE = "finance_report/app"
@@ -112,11 +112,11 @@ def _best_effort_down(
     last = None
     consecutive_absent = 0
     service_project = service.split("/", 1)[0]
-    slot_suffix = f"-pr-{CANARY_PR}"
+    slot_suffix = f"-{CANARY_SLOT}"
     for i in range(attempts):
         try:
             result = down(
-                "pr", CANARY_PR, domain=domain, client=client, service=service
+                "canary", "preview", domain=domain, client=client, service=service
             )
             if not hasattr(result, "compose_id"):
                 raise RuntimeError(
@@ -157,7 +157,7 @@ def _best_effort_down(
             sleep(min(2 ** (i + 1), 8))
     print(
         f"WARNING: canary teardown failed after {attempts} attempts ({last}); "
-        f"possible leaked stack pr-{CANARY_PR} — clean it up manually",
+        f"possible leaked stack {CANARY_SLOT} — clean it up manually",
         file=sys.stderr,
     )
     return False

@@ -219,7 +219,8 @@ def test_type_first_derives_env_and_sub_domain():
         ("preview/branch", "main", "report-branch-main"),
         ("preview/pr", 7, "report-pr-7"),
         ("preview/commit", "1ab32d5", "report-commit-1ab32d5"),
-        ("canary", 999, "report-pr-999"),  # canary is an explicit type -> a pr preview
+        ("canary", "preview", "report-canary-preview"),  # canary is an explicit type -> semantic canary-preview slot
+        ("canary", 999, "report-canary-preview"),  # legacy 999 also maps to semantic slot
     ],
 )
 def test_type_first_preview_aliases(deploy_type, alias_value, expected):

@@ -217,7 +217,7 @@ def sub_domain_for(
             raise ValueError(f"{spec.key} has no preview instances ({kind})")
         if alias_kind is None:
             raise ValueError(
-                "preview requires an alias_kind (branch | pr | commit | tag)"
+                "preview requires an alias_kind (branch | pr | commit | tag | canary)"
             )
         return (
             f"{spec.base_subdomain}{preview_alias(alias_kind, alias_value).env_suffix}"
@@ -341,7 +341,7 @@ def _is_valid_preview_sub_domain(spec: ServiceSpec, sub_domain: str) -> bool:
     #   -branch-<name> / -pr-<N> / -commit-<sha7> / -tag-<v1-2-3> (dots/slashes -> dashes).
     pattern = (
         rf"\A{re.escape(spec.base_subdomain)}-"
-        r"(branch-[a-z0-9-]+|pr-[1-9][0-9]*|commit-[0-9a-f]{7}|tag-v[0-9]+-[0-9]+-[0-9]+)\Z"
+        r"(branch-[a-z0-9-]+|pr-[1-9][0-9]*|commit-[0-9a-f]{7}|tag-v[0-9]+-[0-9]+-[0-9]+|canary-preview|canary)\Z"
     )
     return re.match(pattern, sub_domain) is not None
 
@@ -434,7 +434,7 @@ DEPLOY_TYPES: dict[str, DeployTypeSpec] = {
         "preview/tag", env="preview", alias_kind="tag", accepted_forms=("tag",)
     ),
     "canary": DeployTypeSpec(
-        "canary", env="preview", alias_kind="pr", accepted_forms=_ALL_REF_FORMS
+        "canary", env="preview", alias_kind="canary", accepted_forms=_ALL_REF_FORMS
     ),
 }
 

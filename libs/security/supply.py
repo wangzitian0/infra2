@@ -237,12 +237,15 @@ def apply_secret_supply(
     store: Any = None,
     resolver: Any = None,
     restart: Any = None,
-    **kwargs: Any,
 ) -> SupplyReport:
-    """S-03: Apply secrets resolution and synchronization for a service."""
+    """S-03: Apply secrets resolution and synchronization for a service.
+
+    No ``**kwargs``: ``apply`` takes only the ``resolver`` and ``restart`` named here, so
+    a passthrough could only turn a caller's typo into a TypeError raised from ``apply``.
+    """
     if resolver is None and store is not None:
         resolver = resolver_for(service, env_name, store=store)
-    return apply(service, env_name, resolver=resolver, restart=restart, **kwargs)
+    return apply(service, env_name, resolver=resolver, restart=restart)
 
 
 def create_secrets_resolver(
@@ -250,10 +253,14 @@ def create_secrets_resolver(
     env_name: str,
     *,
     store: Any = None,
-    **kwargs: Any,
+    human: Any = None,
 ) -> Any:
-    """S-04: Construct a secrets resolver for a service and environment."""
-    return resolver_for(service, env_name, store=store, **kwargs)
+    """S-04: Construct a secrets resolver for a service and environment.
+
+    ``store`` and ``human`` are exactly what ``resolver_for`` accepts; naming them keeps
+    both reachable and makes any other keyword fail here, at the caller's call site.
+    """
+    return resolver_for(service, env_name, store=store, human=human)
 
 
 __all__ = [

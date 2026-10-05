@@ -59,10 +59,10 @@ _PREVIEW_CONFIG = preview_service_config("finance_report/app")
 PREVIEW_PROJECT = _PREVIEW_CONFIG.project
 
 # The bare main-tip preview and canary preview that are never treated as leaks.
-ALWAYS_KEEP_ALIASES = frozenset({"branch-main", CANARY_SLOT})
-# The reserved canary slot (deploy_v2_canary stands it up/tears it down hourly);
-# never reap it even when PR 999 is obviously not "open".
-CANARY_ALIAS = f"pr-{CANARY_PR}"
+# Also keep legacy pr-999 during transition so old stacks are safely preserved if present.
+ALWAYS_KEEP_ALIASES = frozenset({"branch-main", CANARY_SLOT, f"pr-{CANARY_PR}"})
+# The canonical canary slot (deploy_v2_canary stands it up/tears it down on the CANARY_SLOT)
+CANARY_ALIAS = CANARY_SLOT
 # Every current alias is `<kind>-<slug>` for a known kind (branch/pr/commit/tag);
 # an alias with no known kind prefix (e.g. the bare `main` slug from before the
 # branch-main rename) is a pre-rename orphan the deterministic-name `down` can no

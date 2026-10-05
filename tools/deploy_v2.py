@@ -53,7 +53,7 @@ from libs.deploy_contract import (
     validate_iac_ref_form,
     validate_ref_form,
 )
-from libs.deploy_env_config import CANARY_PR, env_config
+from libs.deploy_env_config import CANARY_SLOT, env_config
 from libs.service_registry import domain_for_service
 from libs.deploy.promote import deploy as _deploy_fixed
 from libs.deploy.promote import model_overrides_from_env
@@ -227,7 +227,7 @@ def _resolve_for_type(spec, version_ref, *, repo: str):
     if spec.key == "canary":
         ref = _default_main(version_ref)
         validate_ref_form(spec.key, classify_ref(ref))
-        return resolve_image_ref(ref, repo=repo), CANARY_PR
+        return resolve_image_ref(ref, repo=repo), CANARY_SLOT
     if spec.alias_kind == "pr":
         return resolve_pr(version_ref, repo=repo), version_ref
     # `branch` defaults to the main tip; the other ref types require an explicit version_ref.
@@ -249,6 +249,7 @@ def _resolve_for_type(spec, version_ref, *, repo: str):
         "branch": ref,  # the branch name -> slot branch-<name>
         "commit": resolved.sha,  # preview_alias truncates to the 7-char short sha
         "tag": ref,
+        "canary": CANARY_SLOT,
         None: None,  # fixed staging / prod carry no preview slot
     }[spec.alias_kind]
     return resolved, alias_value
@@ -1133,11 +1134,12 @@ def main(argv: list[str] | None = None) -> int:
                 )
             # Mirror `up`'s value read: branch defaults to the main tip; pr/commit/tag take
             # --version-ref verbatim (preview_alias normalizes a commit to its short sha).
-            alias_value = (
-                _default_main(args.version_ref)
-                if spec.alias_kind == "branch"
-                else args.version_ref
-            )
+            if spec.alias_kind == "branch":
+                alias_value = _default_main(args.version_ref)
+            elif spec.alias_kind == "canary":
+                alias_value = CANARY_SLOT
+            else:
+                alias_value = args.version_ref
             from libs.dokploy import get_dokploy
 
             # Reject a malformed domain before it reaches the Dokploy host string — the
