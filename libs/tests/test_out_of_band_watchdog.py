@@ -94,7 +94,13 @@ def test_workflow_runs_daily_and_can_be_dispatched() -> None:
         for name, job in jobs.items()
         if (job.get("permissions") or {}).get("issues") == "write"
     ]
-    assert writers == ["watchdog"]
+    # #962: the three daily jobs that page keep their page-dedup state as issues.
+    assert writers == [
+        "watchdog",
+        "facet-reconcile",
+        "vault-self-refresh-audit",
+        "secrets-reconcile",
+    ]
 
 
 def test_workflow_alerts_directly_and_does_not_call_the_bridge() -> None:
@@ -1702,6 +1708,7 @@ def _run_day(
     registry_error: Exception | None = None,
     extra_ssh=(),
     dokploy_check=None,
+    backup=None,
 ):
     """One main() run with every check faked: `failing` names the red ones.
 
@@ -1742,7 +1749,9 @@ def _run_day(
     monkeypatch.setattr(
         watchdog,
         "run_backup_checks",
-        lambda _config: [
+        (lambda _config: list(backup))
+        if backup is not None
+        else lambda _config: [
             result("infra2-backup-production", "backup"),
             result("infra2-backup-staging", "backup"),
             result("infra2-restore-rehearsal", "restore-rehearsal"),
@@ -1966,6 +1975,282 @@ def test_main_pages_when_the_report_cannot_be_delivered(monkeypatch, tmp_path) -
     assert [e["event"] for e in events if "report.delivery" in e.get("event", "")] == [
         "watchdog.report.delivery.failure"
     ]
+
+
+# ---- #962: the same paged set again is a report, not another page ----------------------
+
+
+def _dedup_env(monkeypatch, api, **extra):
+    """A scheduled run whose page-dedup state lives in the fake issues `api`."""
+    from libs import page_dedup
+
+    monkeypatch.setattr(page_dedup, "_api_from_env", lambda _env: api)
+    return {
+        "GITHUB_EVENT_NAME": "schedule",
+        "GITHUB_REPOSITORY": "wangzitian0/infra2",
+        "GITHUB_TOKEN": "token-for-tests",
+        **extra,
+    }
+
+
+def test_a_persistent_red_check_pages_once_then_reports_then_resolves(
+    monkeypatch, tmp_path
+) -> None:
+    """#962 on the real main(): `infra2-backup-production` paged 10 times in 10 days."""
+    from libs.tests.test_page_dedup import FakeIssues, age_state
+
+    api = FakeIssues()
+    env = _dedup_env(monkeypatch, api)
+    red = {"infra2-backup-production"}
+
+    def run(failing):
+        return _run_day(
+            monkeypatch,
+            tmp_path,
+            worker_last_run=FRESH_CLEAN_RUN,
+            failing=failing,
+            env_extra=env,
+        )
+
+    # day 1: a new check paged -> the pager, and the state is recorded
+    code, pages, reports, _trail, events = run(red)
+    assert code == 1 and len(pages) == 1 and reports == []
+    assert _failure_names(pages[0]) == red
+    assert api.open_titles() == ["ops-checks paged: out-of-band-watchdog"]
+    success = [e for e in events if e["event"] == "watchdog.delivery.success"]
+    assert [(e["route"], e.get("deduplicated", False)) for e in success] == [
+        ("github-actions->feishu-direct", False)
+    ]
+
+    # day 2: the same check, a different reading in its detail -> a report, no page;
+    # the job still fails (it is red), and nothing was written to the state
+    age_state(api, "out-of-band-watchdog", 1)
+    writes = list(api.writes)
+    code, pages, reports, _trail, events = run(red)
+    assert code == 1 and pages == []
+    assert [r.splitlines()[0] for r in reports] == [
+        "[报告] 仍未恢复 · 第 2 天 · out-of-band-watchdog"
+    ]
+    assert "• infra2-backup-production" in reports[0]
+    assert api.writes == writes
+    success = [e for e in events if e["event"] == "watchdog.delivery.success"]
+    assert [(e["route"], e["deduplicated"]) for e in success] == [
+        ("github-actions->infra2-reports", True)
+    ]
+    # the weekly digest counts delivery.success as recall evidence: a deduplicated day
+    # is delivered, not "missing alert evidence"
+    from tools.watchdog_weekly_digest import summarize_watchdog_log_events
+
+    audit = summarize_watchdog_log_events(
+        {"run": "\n".join(json.dumps(event) for event in events)}
+    )
+    assert audit["alertable_run_count"] == 1
+    assert audit["missing_alert_evidence_run_count"] == 0
+
+    # day 3: a second check goes red -> page again, with the whole new set
+    code, pages, reports, _trail, _events = run(red | {"infra2-restore-rehearsal"})
+    assert code == 1 and reports == []
+    assert _failure_names(pages[0]) == red | {"infra2-restore-rehearsal"}
+
+    # day 4: the restore rehearsal recovers but the backup stays red -> page the new set
+    code, pages, reports, _trail, _events = run(red)
+    assert code == 1 and reports == [] and len(pages) == 1
+    assert _failure_names(pages[0]) == red
+
+    # day 5: everything is green -> one RESOLVED page, the state closed, exit 0
+    code, pages, reports, _trail, events = run(set())
+    assert code == 0 and reports == []
+    assert len(pages) == 1 and pages[0].startswith("✅ [已恢复] GitHub 日级带外审计")
+    assert "• infra2-backup-production" in pages[0]
+    assert api.open_titles() == []
+    assert [e["event"] for e in events if "resolved" in e["event"]] == [
+        "watchdog.resolved.delivery.success"
+    ]
+
+    # day 6: still green -> silence
+    code, pages, reports, _trail, _events = run(set())
+    assert (code, pages, reports) == (0, [], [])
+
+
+def _backup_day(watchdog, *, detail, units, domain="backup"):
+    """The aggregated production backup check as one day's run left it, plus the
+    two single-unit backup checks, green."""
+    return [
+        watchdog.CheckResult(
+            "infra2-backup-production", False, detail, domain, units=tuple(units)
+        ),
+        watchdog.CheckResult("infra2-backup-staging", True, "ok", "backup"),
+        watchdog.CheckResult(
+            "infra2-restore-rehearsal", True, "ok", "restore-rehearsal"
+        ),
+    ]
+
+
+def test_a_backup_that_gets_worse_within_its_check_pages_instead_of_reporting(
+    monkeypatch, tmp_path
+) -> None:
+    """#962 review: `infra2-backup-production` aggregates artifacts and mixes severities.
+    Keyed by the check name alone, 1 failing artifact -> 5, another artifact, or a
+    P1 -> P0 configuration failure would all have been `仍未恢复` reports."""
+    from libs.tests.test_page_dedup import FakeIssues, age_state
+
+    watchdog = _load_watchdog()
+    api = FakeIssues()
+    env = _dedup_env(monkeypatch, api)
+    stale = "backup artifact is stale"
+    missing = "backup artifact is missing from manifest"
+
+    def run(detail, units, domain="backup"):
+        return _run_day(
+            monkeypatch,
+            tmp_path,
+            worker_last_run=FRESH_CLEAN_RUN,
+            backup=_backup_day(watchdog, detail=detail, units=units, domain=domain),
+            env_extra=env,
+        )
+
+    # day 1: one artifact is stale -> page
+    code, pages, reports, *_ = run(
+        "1/8 artifacts failed: a: stale, 190h", [f"a:P1:{stale}"]
+    )
+    assert code == 1 and len(pages) == 1 and reports == []
+
+    # day 2: the same artifact, only its age and a count differ -> a report whose
+    # detail shows today's reading, not a page
+    age_state(api, "out-of-band-watchdog", 1)
+    code, pages, reports, *_ = run(
+        "1/8 artifacts failed: a: stale, 214h", [f"a:P1:{stale}"]
+    )
+    assert pages == [] and len(reports) == 1
+    assert (
+        reports[0].splitlines()[0] == "[报告] 仍未恢复 · 第 2 天 · out-of-band-watchdog"
+    )
+    assert "stale, 214h" in reports[0]
+
+    # day 3: a second artifact fails -> page with the whole new set
+    code, pages, reports, *_ = run(
+        "2/8 artifacts failed: a: stale; b: stale",
+        [f"a:P1:{stale}", f"b:P1:{stale}"],
+    )
+    assert reports == [] and len(pages) == 1
+    assert "2/8 artifacts failed" in pages[0]
+
+    # day 4: a DIFFERENT artifact replaces them -> page
+    code, pages, reports, *_ = run("1/8 artifacts failed: c: stale", [f"c:P1:{stale}"])
+    assert reports == [] and len(pages) == 1
+
+    # day 5: the same artifact now fails another way (missing, not stale) -> page
+    code, pages, reports, *_ = run(
+        "1/8 artifacts failed: c: missing", [f"c:P1:{missing}"]
+    )
+    assert reports == [] and len(pages) == 1
+
+    # day 6: the check goes from backup/P1 to configuration/P0 (inventory empty): page
+    code, pages, reports, *_ = run(
+        "backup inventory is empty", ["inventory:empty"], domain="configuration"
+    )
+    assert reports == [] and len(pages) == 1
+    assert "P0" in pages[0]
+
+    # day 7: unchanged -> report again, on its own day 2
+    age_state(api, "out-of-band-watchdog", 1)
+    code, pages, reports, *_ = run(
+        "backup inventory is empty", ["inventory:empty"], domain="configuration"
+    )
+    assert pages == [] and len(reports) == 1
+
+
+def test_page_findings_key_each_failing_unit_with_its_domain_and_level() -> None:
+    watchdog = _load_watchdog()
+    backup = watchdog.CheckResult(
+        "infra2-backup-production",
+        False,
+        "2/8 artifacts failed: a: stale, 190h",
+        "backup",
+        severity="P1",
+        units=("b:P1:stale", "a:P1:stale"),
+    )
+    single = watchdog.CheckResult(
+        "cloudflare-worker-status",
+        False,
+        "last ran 31h ago",
+        "cloudflare-worker-health",
+    )
+
+    findings = watchdog.page_findings([backup, single])
+    keys = sorted(finding.key for finding in findings)
+
+    assert keys == [
+        "cloudflare-worker-status [cloudflare-worker-health/P1]",
+        "infra2-backup-production [backup/P1] a:P1:stale",
+        "infra2-backup-production [backup/P1] b:P1:stale",
+    ]
+    # a reading in the detail is never part of any key, but is shown in a report
+    assert not any("190h" in finding.key for finding in findings)
+    assert any("190h" in finding.line for finding in findings)
+    # the same unit at another severity or domain is another finding
+    raised = watchdog.page_findings(
+        [
+            watchdog.CheckResult(
+                backup.name,
+                False,
+                backup.detail,
+                "configuration",
+                severity="P0",
+                units=backup.units,
+            )
+        ]
+    )
+    assert not {f.key for f in raised} & {f.key for f in findings}
+
+
+def test_main_pages_as_before_when_the_page_state_cannot_be_read(
+    monkeypatch, tmp_path
+) -> None:
+    from libs.observability.issue_trail import ListingFailed
+    from libs.tests.test_page_dedup import FakeIssues
+
+    api = FakeIssues()
+    api.listing_error = ListingFailed("GET /issues: HTTP 502")
+    env = _dedup_env(monkeypatch, api)
+    pages_by_day = []
+
+    for _ in range(2):  # twice: an unreadable state never turns into a report
+        code, pages, reports, _trail, _events = _run_day(
+            monkeypatch,
+            tmp_path,
+            worker_last_run=FRESH_CLEAN_RUN,
+            failing={"infra2-backup-production"},
+            env_extra=env,
+        )
+        assert code == 1 and reports == []
+        pages_by_day.append(pages)
+
+    assert [len(pages) for pages in pages_by_day] == [1, 1]
+    assert "跨运行去重状态读取失败" in pages_by_day[1][0]
+    assert api.writes == []
+
+
+def test_main_in_a_dry_run_neither_reads_nor_writes_page_state(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    from libs.tests.test_page_dedup import ExplodingIssues
+
+    env = _dedup_env(monkeypatch, ExplodingIssues(), WATCHDOG_DRY_RUN="1")
+
+    red = _run_day(
+        monkeypatch,
+        tmp_path,
+        worker_last_run=FRESH_CLEAN_RUN,
+        failing={"infra2-backup-production"},
+        env_extra=env,
+    )
+    green = _run_day(
+        monkeypatch, tmp_path, worker_last_run=FRESH_CLEAN_RUN, env_extra=env
+    )
+
+    assert (red[0], red[1], red[2]) == (1, [], [])
+    assert (green[0], green[1], green[2]) == (0, [], [])
 
 
 def test_main_pages_every_failure_when_the_registry_is_unreadable(

@@ -6,6 +6,11 @@ scheduler -- plus failures of its own configuration and any check the signal
 registry does not mark `type: report`. The report-only checks (host, Docker,
 bridge, Dokploy status, staging backups) still run, and their failures go to one
 daily report because another layer pages them (#908).
+
+A page is delivered only when the set of paged checks changes (#962,
+``libs/page_dedup.py``): the same set on a later day is a
+`[报告] 仍未恢复` in the reports chat, and a day on which the set empties sends a
+RESOLVED page. Unreadable state pages as before.
 """
 
 from __future__ import annotations
@@ -46,6 +51,13 @@ from libs.alerting import (  # noqa: E402
 )
 from libs.deploy_queue import deployment_start_epoch  # noqa: E402
 from libs.dokploy import get_dokploy  # noqa: E402
+from libs.page_dedup import (  # noqa: E402
+    REPORT as DEDUP_REPORT,
+    RESOLVED as DEDUP_RESOLVED,
+    Finding,
+    dedup_page,
+    resolve_page_state,
+)
 from libs.scheduler_peer_liveness import (  # noqa: E402
     BOUND_CAP_ENV,
     OK as PEER_OK,
@@ -71,6 +83,9 @@ DEFAULT_WORKER_STATUS_URL = (
     "https://infra2-cloudflare-watchdog.wangzitian-ai.workers.dev/status"
 )
 WORKER_STATUS_CHECK = "cloudflare-worker-status"
+#: #962: the page-dedup state of this job's pages (one issue, identity = the paged checks).
+PAGE_DEDUP_JOB = "out-of-band-watchdog"
+PAGE_DEDUP_LABEL = "GitHub 日级带外审计"
 #: The Worker's own staleness bound (`WATCHDOG_STATUS_MAX_AGE_SECONDS`) lives in
 #: its deploy config; the GitHub audit reads the same value instead of a copy.
 WORKER_WRANGLER = ROOT / "cloudflare/infra-watchdog/wrangler.toml"
@@ -181,6 +196,11 @@ class CheckResult:
     #: Per-unit proof that a Dokploy `error` is stale: the unit's own containers run
     #: healthy on the current config. Empty means no such proof.
     runtime_evidence: str = ""
+    #: What is failing inside this check, as stable ids: the failing units of a check
+    #: that aggregates several (backup artifacts, as `service_id:severity:summary`) or a
+    #: failure-mode token (`manifest:missing`). Identity of the page dedup (#962):
+    #: never an age, a size, a count or a timestamp. Empty = the check is one unit.
+    units: tuple[str, ...] = ()
 
 
 def parse_http_targets(raw: str) -> list[HttpTarget]:
@@ -635,6 +655,7 @@ def run_backup_checks(
                     f"backup check raised {type(exc).__name__} on {path}: "
                     f"{_one_line(str(exc))}",
                     "backup",
+                    units=(f"check:raised:{type(exc).__name__}",),
                 )
             )
     # The rehearsal runs 45 minutes after the weekly backup, so the backup RPO is
@@ -686,6 +707,7 @@ def _backup_manifest_result(
             False,
             f"could not reach the host to read {path}: {_last_line(stderr)}",
             "backup",
+            units=("manifest:host-unreachable",),
         )
     if returncode != 0:
         return CheckResult(
@@ -693,13 +715,26 @@ def _backup_manifest_result(
             False,
             f"no {environment} manifest at {path}: {_last_line(stderr or stdout)}",
             "backup",
+            units=("manifest:missing",),
         )
     try:
         manifest = json.loads(stdout)
     except ValueError as exc:
-        return CheckResult(name, False, f"{path} is not JSON: {exc}", "backup")
+        return CheckResult(
+            name,
+            False,
+            f"{path} is not JSON: {exc}",
+            "backup",
+            units=("manifest:not-json",),
+        )
     if not isinstance(manifest, dict):
-        return CheckResult(name, False, f"{path} is not a JSON object", "backup")
+        return CheckResult(
+            name,
+            False,
+            f"{path} is not a JSON object",
+            "backup",
+            units=("manifest:not-an-object",),
+        )
     if manifest.get("environment") != environment:
         return CheckResult(
             name,
@@ -707,11 +742,18 @@ def _backup_manifest_result(
             f"{path} records environment {manifest.get('environment')!r}, "
             f"expected {environment!r}",
             "backup",
+            units=("manifest:wrong-environment",),
         )
     checks = verify(inventory, manifest, now=now_ts)["checks"]
     if not checks:
         # An empty inventory verifies nothing; 0 of 0 is not a pass.
-        return CheckResult(name, False, "backup inventory is empty", "configuration")
+        return CheckResult(
+            name,
+            False,
+            "backup inventory is empty",
+            "configuration",
+            units=("inventory:empty",),
+        )
     failed = [check for check in checks if check["status"] != "pass"]
     if failed:
         shown = "; ".join(
@@ -723,6 +765,17 @@ def _backup_manifest_result(
             False,
             f"{len(failed)}/{len(checks)} artifacts failed: {shown}{more}",
             "backup",
+            # structured, not parsed from the detail: which artifact, at what severity,
+            # failing how (the verifier's fixed phrases: stale, empty, missing, ...;
+            # its readings are in `evidence`, never in the summary)
+            units=tuple(
+                sorted(
+                    {
+                        f"{check['service_id']}:{check['severity']}:{check['summary']}"
+                        for check in failed
+                    }
+                )
+            ),
         )
     oldest = max(check["evidence"]["age_hours"] for check in checks)
     return CheckResult(
@@ -1642,15 +1695,16 @@ def main(env: Mapping[str, str] | None = None) -> int:
         print(f"STALE {result.name}: {_redact(result.detail)} [{reason}]")
 
     if not paged:
+        resolve_code = _resolve_paged_state(current_env, dry_run=dry_run)
         _emit_structured_log(
             {
                 "event": "watchdog.run.complete",
-                "status": "ok",
+                "status": "ok" if not resolve_code else "fail",
                 "failure_count": 0,
                 "report_failure_count": len(reported),
             }
         )
-        return 0
+        return resolve_code
 
     message = format_failure_message(paged, run_url=_github_run_url(current_env))
     if dry_run:
@@ -1667,7 +1721,20 @@ def main(env: Mapping[str, str] | None = None) -> int:
         return 1
 
     try:
-        deliver_out_of_band_alert(current_env, message)
+        # #962: the pager only when the set of failing units changed; the same set again
+        # is a report (whose detail lines show a reading getting worse). Identity =
+        # `page_findings`: check, domain, level, failing unit; never the detail.
+        outcome = dedup_page(
+            current_env,
+            job=PAGE_DEDUP_JOB,
+            label=PAGE_DEDUP_LABEL,
+            findings=page_findings(paged),
+            page_message=message,
+            deliver_page=deliver_out_of_band_alert,
+            deliver_report=deliver_infra2_report,
+            observed_clean=True,
+            run_url=_github_run_url(current_env),
+        )
     except Exception as exc:  # noqa: BLE001 - watchdog must not fail silently.
         fallback_issue_url = create_delivery_fallback_issue(
             current_env, failures=paged, error=str(exc)
@@ -1682,14 +1749,19 @@ def main(env: Mapping[str, str] | None = None) -> int:
             }
         )
         return 1
-    _emit_structured_log(
-        {
-            "event": "watchdog.delivery.success",
-            "status": "ok",
-            "failure_count": len(paged),
-            "route": "github-actions->feishu-direct",
-        }
-    )
+    # The weekly digest counts `watchdog.delivery.success` as the recall evidence of a
+    # red run: a deduplicated day (the reports chat took it) is delivered too.
+    delivered_event = {
+        "event": "watchdog.delivery.success",
+        "status": "ok",
+        "failure_count": len(paged),
+        "route": "github-actions->feishu-direct",
+    }
+    if outcome.action == DEDUP_REPORT:
+        delivered_event.update(
+            route="github-actions->infra2-reports", deduplicated=True
+        )
+    _emit_structured_log(delivered_event)
     _emit_structured_log(
         {
             "event": "watchdog.run.complete",
@@ -1700,6 +1772,65 @@ def main(env: Mapping[str, str] | None = None) -> int:
         }
     )
     return 1
+
+
+def page_findings(paged: list[CheckResult]) -> list[Finding]:
+    """The identity of a day's pages (#962): one finding per failing unit of each
+    paged check, keyed ``<check> [<failure domain>/<level>] <unit>``.
+
+    A check that aggregates units (the backup check over its artifacts) names each
+    failing unit, so a different artifact failing, one more failing, or the same one
+    failing at a higher severity is a different identity, while a reading changing
+    (its age, its size) is not. The failure domain and level are in every key: the
+    same check going from `backup`/P1 to `configuration`/P0 is a different finding.
+    The line is the redacted detail, shown in a report, never part of the identity.
+    """
+    findings = []
+    for result in paged:
+        subject = (
+            f"{result.name} [{result.failure_domain or '-'}/"
+            f"{pager_level(result.severity)}]"
+        )
+        line = f"{result.name}: {_redact(_one_line(result.detail))}"
+        for unit in result.units or ("",):
+            findings.append(Finding(f"{subject} {unit}".strip(), line))
+    return findings
+
+
+def _resolve_paged_state(env: Mapping[str, str], *, dry_run: bool) -> int:
+    """A run with no paged check: resolve what an earlier run paged (#962).
+
+    Returns the exit code. A RESOLVED page that cannot be delivered fails the run
+    and keeps the state, so the next run sends it again.
+    """
+    if dry_run:
+        return 0
+    try:
+        outcome = resolve_page_state(
+            env,
+            job=PAGE_DEDUP_JOB,
+            label=PAGE_DEDUP_LABEL,
+            deliver_page=deliver_out_of_band_alert,
+            run_url=_github_run_url(env),
+        )
+    except Exception as exc:  # noqa: BLE001 - a lost RESOLVED must be visible.
+        _emit_structured_log(
+            {
+                "event": "watchdog.resolved.delivery.failure",
+                "status": "fail",
+                "error": _redact(_one_line(str(exc))),
+            }
+        )
+        return 1
+    if outcome.action == DEDUP_RESOLVED:
+        _emit_structured_log(
+            {
+                "event": "watchdog.resolved.delivery.success",
+                "status": "ok",
+                "route": "github-actions->feishu-direct",
+            }
+        )
+    return outcome.exit_code
 
 
 def _record_issue_trail_verdicts(

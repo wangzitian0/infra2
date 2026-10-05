@@ -302,7 +302,9 @@ uv run python tools/backup_restore_rehearsal.py \
 
 The daily out-of-band audit, run from GitHub Actions outside the infra2 host
 (ops.observability.md SOP-005B). It pages Feishu directly only for the failure
-classes the GitHub layer owns (#908): Cloudflare Worker liveness (`/status`
+classes the GitHub layer owns (#908), and only when the set of paged checks changes
+(#962, `libs/page_dedup.py`; the same set later is a `[报告] 仍未恢复`
+in the reports chat, an emptied set one RESOLVED page): Cloudflare Worker liveness (`/status`
 freshness against the Worker's own `WATCHDOG_STATUS_MAX_AGE_SECONDS`), the
 production backup and the restore rehearsal, the peer scheduler, and failures of
 its own configuration. The Worker counts as live only if its last run is fresh

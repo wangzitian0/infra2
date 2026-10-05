@@ -31,8 +31,10 @@ confirmed_drift discipline, preserved per section).
 
 from __future__ import annotations
 
+import json
 import os
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -48,6 +50,9 @@ class Section:
     blockers: list[str] = field(default_factory=list)  # fail the job (incl. transient)
     confirmed: list[str] = field(default_factory=list)  # page-worthy findings only
     skipped: str = ""  # non-empty = section not runnable here (with reason)
+    # Stable identity of each `confirmed` line, same order (#962): names and
+    # verdicts only -- never a hash, id or note, which would make every day new.
+    confirmed_keys: list[str] = field(default_factory=list)
 
 
 def run_compose_id_section() -> Section:
@@ -66,8 +71,12 @@ def run_compose_id_section() -> Section:
         return section
     section.report = format_report(rows)
     section.blockers = [r.verdict for r in rows if r.verdict != "ok"]
+    drift = confirmed_drift(rows)
     section.confirmed = [
-        f"{r.target.service} ({r.target.env}): {r.note}" for r in confirmed_drift(rows)
+        f"{r.target.service} ({r.target.env}): {r.note}" for r in drift
+    ]
+    section.confirmed_keys = [
+        f"compose-id:{r.target.service}:{r.target.env}:{r.verdict}" for r in drift
     ]
     return section
 
@@ -95,6 +104,7 @@ def run_config_drift_section() -> Section:
     confirmed = strict_blockers(rows)
     section.blockers = [str(r) for r in confirmed]
     section.confirmed = [str(r) for r in confirmed]  # hash drift is never transient
+    section.confirmed_keys = [f"config-hash:{r.service}:{r.verdict}" for r in confirmed]
     return section
 
 
@@ -161,11 +171,59 @@ def run_dns_section() -> Section:
     # `unmanaged` is informational by the tool's own contract — report-only.
     section.blockers = [str(f) for f in drift.missing]
     section.confirmed = [str(f) for f in drift.missing]
+    section.confirmed_keys = [f"dns:{f}" for f in drift.missing]
     return section
 
 
 def run_all() -> list[Section]:
     return [run_compose_id_section(), run_config_drift_section(), run_dns_section()]
+
+
+#: Where `main()` leaves what the run actually observed, for the step that resolves
+#: a paged finding after a green run (#962). Job-level env; absent = not recorded.
+OBSERVATION_ENV = "FACET_RECONCILE_OBSERVATION"
+
+
+def unevaluated_prefixes(sections: list[Section]) -> list[str]:
+    """Key prefixes of the sections that did not really run (#962).
+
+    A section that was skipped (Cloudflare credentials missing, 401/403) or hit a
+    blocker (a lookup that failed) makes no claim about its findings: a paged
+    finding of that section has not recovered, it is unknown. Every finding key
+    starts with its section's name and a colon (`dns:`, `config-hash:`, `compose-id:`).
+    """
+    return [f"{s.name}:" for s in sections if s.skipped or s.blockers]
+
+
+def write_observation(
+    sections: list[Section], env: Mapping[str, str] | None = None
+) -> None:
+    """Record which sections did not run, if the job asked for it."""
+    path = (os.environ if env is None else env).get(OBSERVATION_ENV, "").strip()
+    if not path:
+        return
+    try:
+        Path(path).write_text(
+            json.dumps({"unevaluated": unevaluated_prefixes(sections)}),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        # No observation reads as "nothing observed": a paged finding stays paged.
+        print(f"could not record the observation: {exc}", file=sys.stderr)
+
+
+def read_unevaluated(env: Mapping[str, str]) -> list[str]:
+    """The prefixes the last `main()` run did not evaluate. A missing or unreadable
+    observation is everything (``[""]``): without proof of a section, nothing resolves."""
+    path = env.get(OBSERVATION_ENV, "").strip()
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        prefixes = data["unevaluated"]
+        if isinstance(prefixes, list) and all(isinstance(p, str) for p in prefixes):
+            return prefixes
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return [""]
 
 
 def combined_report(sections: list[Section]) -> str:
@@ -182,11 +240,29 @@ def combined_report(sections: list[Section]) -> str:
 
 
 def confirmed_findings(sections: list[Section]) -> list[str]:
-    return [f"[{s.name}] {c}" for s in sections for c in s.confirmed]
+    return [line for _key, line in confirmed_finding_pairs(sections)]
+
+
+def confirmed_finding_pairs(sections: list[Section]) -> list[tuple[str, str]]:
+    """``(identity key, display line)`` per confirmed finding (#962).
+
+    The key is what the cross-run page dedup compares; the line is what a page
+    shows. A section that gives no key for a line (a builder that predates
+    ``confirmed_keys``) falls back to the line itself: that can only page more,
+    never less.
+    """
+    pairs: list[tuple[str, str]] = []
+    for section in sections:
+        keyed = len(section.confirmed_keys) == len(section.confirmed)
+        for index, line in enumerate(section.confirmed):
+            key = section.confirmed_keys[index] if keyed else f"{section.name}:{line}"
+            pairs.append((key, f"[{section.name}] {line}"))
+    return pairs
 
 
 def main() -> int:
     sections = run_all()
+    write_observation(sections)
     report = combined_report(sections)
     print(report)
 

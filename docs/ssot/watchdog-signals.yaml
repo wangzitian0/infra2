@@ -610,7 +610,11 @@ signals:
   # the VPS + reads live Dokploy compose env to inspect every service's
   # vault-agent/app-container self-refresh state. primary_owner=self: it pages
   # Feishu directly from its own workflow step (see ops-checks.yml's "Alert on
-  # confirmed failure" step), not via a separate out-of-band watchdog.
+  # confirmed failure" step), not via a separate out-of-band watchdog. #962: that
+  # page is cross-run deduplicated (libs/page_dedup.py): it fires
+  # only when the set of failing service::check identities changes (first
+  # appearance, added, removed, all resolved -> RESOLVED); the same set on a later
+  # day is "[报告] 仍未恢复 · 第 N 天" in the reports chat, not the pager.
   # tier=day/type=report, NOT alert: the job is silent on success and its only
   # notification is a page on a *confirmed* `status="fail"` result -- the same
   # silent-success/page-only-on-confirmed-failure shape this SSOT already
@@ -640,8 +644,11 @@ signals:
   # signal-less; config-hash drift; dns drift). ops-checks.yml `facet-reconcile`
   # (cron "17 7 * * *") running tools/facet_reconcile.py. primary_owner=self: it
   # delivers its own daily report (self-proving, #425) and pages Feishu directly
-  # only on confirmed findings (#524 discipline). tier=day/type=report: silent-
-  # success-report shape; drift harm timescales are hours-to-days.
+  # only on confirmed findings (#524 discipline) -- and, since #962, only when the
+  # set of confirmed finding identities changes (same set later = "[报告] 仍未恢复
+  # · 第 N 天" in the reports chat; all resolved = one RESOLVED page).
+  # tier=day/type=report: silent-success-report shape; drift harm timescales are
+  # hours-to-days.
   - signal_id: global.infra2.facet-reconcile
     environment: global
     component: iac
@@ -661,7 +668,10 @@ signals:
   # `secrets-reconcile` (cron "27 8 * * *") running tools/secrets_reconcile_check.py,
   # which executes tools/secrets_reconcile.py inside the iac-runner over SSH.
   # primary_owner=self: the job's own alert step pages Feishu on confirmed findings
-  # only (#524 discipline). tier=day/type=report: drift harm timescales are days.
+  # only (#524 discipline), deduplicated across runs since #962: it pages when the
+  # set of finding identities (store names / quota names, never readings) changes,
+  # reports "仍未恢复 · 第 N 天" while it stays the same, and pages RESOLVED once.
+  # tier=day/type=report: drift harm timescales are days.
   - signal_id: global.infra2.secrets-reconcile
     environment: global
     component: iac

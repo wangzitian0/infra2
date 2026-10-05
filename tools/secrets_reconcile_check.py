@@ -86,31 +86,86 @@ def run(
     return report
 
 
-def page_worthy_summary(report: Mapping[str, Any]) -> str:
-    """Findings worth a page, or '' (transport errors, warn-level quotas and
-    ``unclassified`` leftovers are not: a key nobody declared cannot break a deploy; it
-    stays in the run log for cleanup, see #649). ``over_privileged`` always pages: an
-    application holding the object store's root credential is #677 happening again.
+def _page_worthy(report: Mapping[str, Any]) -> list[tuple[tuple[str, ...], str]]:
+    """``(identity keys, display text)`` per page-worthy finding: the one place that
+    decides what pages, so the summary and the identity cannot disagree (#962).
+
+    A store row's keys are ``store:<service>:<env>:<kind>:<name>`` (names only, as
+    the report is); a quota's is ``quota:<name>:<window>`` -- never its reading,
+    which changes every day while the finding does not.
     """
-    lines: list[str] = []
+    findings: list[tuple[tuple[str, ...], str]] = []
     for row in report.get("stores") or []:
         if row.get("ok"):
             continue
         parts = [f"{k}={row[k]}" for k in PAGING_FINDINGS if row.get(k)]
-        if parts:
-            lines.append(f"- {row.get('service')} {row.get('env')}: {', '.join(parts)}")
+        if not parts:
+            continue
+        keys: list[str] = []
+        for kind in PAGING_FINDINGS:
+            held = row.get(kind)
+            if not held:
+                continue
+            names = held if isinstance(held, (list, tuple, set)) else [""]
+            keys += [
+                f"store:{row.get('service')}:{row.get('env')}:{kind}:{name}"
+                for name in sorted(str(name) for name in names)
+            ]
+        findings.append(
+            (
+                tuple(keys),
+                f"- {row.get('service')} {row.get('env')}: {', '.join(parts)}",
+            )
+        )
     trend = report.get("capacity_trend") or {}
     for item in (report.get("capacity") or {}).get("items") or []:
         if item.get("level") == "exceeded":
-            lines.append(
+            text = (
                 f"- quota {item.get('name')} {item.get('used')}/{item.get('limit')} "
                 f"per {item.get('window')} exceeded"
             )
             # The trend (rendered inside the runner, where the SDK lives) tells a
             # one-day spike from a budget that has been creeping up.
             if trend.get("name") == item.get("name") and trend.get("rendered"):
-                lines.append(f"  {trend['rendered']}")
-    return "\n".join(lines)
+                text += f"\n  {trend['rendered']}"
+            findings.append(((f"quota:{item.get('name')}:{item.get('window')}",), text))
+    return findings
+
+
+def page_worthy_summary(report: Mapping[str, Any]) -> str:
+    """Findings worth a page, or '' (transport errors, warn-level quotas and
+    ``unclassified`` leftovers are not: a key nobody declared cannot break a deploy; it
+    stays in the run log for cleanup, see #649). ``over_privileged`` always pages: an
+    application holding the object store's root credential is #677 happening again.
+    """
+    return "\n".join(text for _keys, text in _page_worthy(report))
+
+
+def page_worthy_keys(report: Mapping[str, Any]) -> list[str]:
+    """The identity keys of the page-worthy findings (#962): what the cross-run page
+    dedup compares. Empty exactly when ``page_worthy_summary`` is."""
+    return [key for keys, _text in _page_worthy(report) for key in keys]
+
+
+def unevaluated_prefixes(report: Mapping[str, Any]) -> list[str]:
+    """Key prefixes of what this report did not observe (#962).
+
+    A paged finding under one of them has not recovered, it is unknown: no report
+    at all (transport error) is everything (``""``); an unread quota section is
+    every `quota:` finding; a store reconciled while 1Password was unavailable (its
+    ``note``) cannot prove its own `stale` / `missing` / `empty` findings.
+    """
+    if report.get("transport_error") or not isinstance(report.get("stores"), list):
+        return [""]
+    prefixes: list[str] = []
+    if not isinstance(report.get("capacity"), Mapping):
+        prefixes.append("quota:")
+    prefixes += [
+        f"store:{row.get('service')}:{row.get('env')}:"
+        for row in report["stores"]
+        if row.get("note")
+    ]
+    return prefixes
 
 
 def report_path(env: Mapping[str, str]) -> Path:

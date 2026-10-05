@@ -322,7 +322,9 @@ class GitHubIssues:
             raw = response.read().decode("utf-8")
         return json.loads(raw) if raw.strip() else None
 
-    def open_issues(self) -> list[dict]:
+    def open_issues(self, *, with_body: bool = False) -> list[dict]:
+        """Open issues as ``{"number", "title"}``; ``with_body`` adds the issue's
+        ``body`` and its author's ``author`` login (the page-dedup state, #962)."""
         issues: list[dict] = []
         for page in range(1, MAX_PAGES + 1):
             path = f"/issues?state=open&per_page={PER_PAGE}&page={page}"
@@ -344,7 +346,16 @@ class GitHubIssues:
                     raise ListingFailed(
                         f"GET {path} returned an issue without number/title"
                     )
-                issues.append({"number": number, "title": title})
+                entry = {"number": number, "title": title}
+                if with_body:
+                    author = item.get("user")
+                    entry["body"] = item.get("body") or ""
+                    entry["author"] = (
+                        str(author.get("login") or "")
+                        if isinstance(author, dict)
+                        else ""
+                    )
+                issues.append(entry)
             if len(items) < PER_PAGE:
                 return issues
         raise ListingFailed(
@@ -368,6 +379,9 @@ class GitHubIssues:
 
     def comment(self, number: int, body: str) -> None:
         self._write("POST", f"/issues/{number}/comments", {"body": body})
+
+    def update_body(self, number: int, body: str) -> None:
+        self._write("PATCH", f"/issues/{number}", {"body": body})
 
     def close(self, number: int) -> None:
         self._write(
