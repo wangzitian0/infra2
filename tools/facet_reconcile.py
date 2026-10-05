@@ -48,6 +48,9 @@ class Section:
     blockers: list[str] = field(default_factory=list)  # fail the job (incl. transient)
     confirmed: list[str] = field(default_factory=list)  # page-worthy findings only
     skipped: str = ""  # non-empty = section not runnable here (with reason)
+    # Stable identity of each `confirmed` line, same order (#962): names and
+    # verdicts only -- never a hash, id or note, which would make every day new.
+    confirmed_keys: list[str] = field(default_factory=list)
 
 
 def run_compose_id_section() -> Section:
@@ -66,8 +69,12 @@ def run_compose_id_section() -> Section:
         return section
     section.report = format_report(rows)
     section.blockers = [r.verdict for r in rows if r.verdict != "ok"]
+    drift = confirmed_drift(rows)
     section.confirmed = [
-        f"{r.target.service} ({r.target.env}): {r.note}" for r in confirmed_drift(rows)
+        f"{r.target.service} ({r.target.env}): {r.note}" for r in drift
+    ]
+    section.confirmed_keys = [
+        f"compose-id:{r.target.service}:{r.target.env}:{r.verdict}" for r in drift
     ]
     return section
 
@@ -95,6 +102,7 @@ def run_config_drift_section() -> Section:
     confirmed = strict_blockers(rows)
     section.blockers = [str(r) for r in confirmed]
     section.confirmed = [str(r) for r in confirmed]  # hash drift is never transient
+    section.confirmed_keys = [f"config-hash:{r.service}:{r.verdict}" for r in confirmed]
     return section
 
 
@@ -161,6 +169,7 @@ def run_dns_section() -> Section:
     # `unmanaged` is informational by the tool's own contract — report-only.
     section.blockers = [str(f) for f in drift.missing]
     section.confirmed = [str(f) for f in drift.missing]
+    section.confirmed_keys = [f"dns:{f}" for f in drift.missing]
     return section
 
 
@@ -182,7 +191,24 @@ def combined_report(sections: list[Section]) -> str:
 
 
 def confirmed_findings(sections: list[Section]) -> list[str]:
-    return [f"[{s.name}] {c}" for s in sections for c in s.confirmed]
+    return [line for _key, line in confirmed_finding_pairs(sections)]
+
+
+def confirmed_finding_pairs(sections: list[Section]) -> list[tuple[str, str]]:
+    """``(identity key, display line)`` per confirmed finding (#962).
+
+    The key is what the cross-run page dedup compares; the line is what a page
+    shows. A section that gives no key for a line (a builder that predates
+    ``confirmed_keys``) falls back to the line itself: that can only page more,
+    never less.
+    """
+    pairs: list[tuple[str, str]] = []
+    for section in sections:
+        keyed = len(section.confirmed_keys) == len(section.confirmed)
+        for index, line in enumerate(section.confirmed):
+            key = section.confirmed_keys[index] if keyed else f"{section.name}:{line}"
+            pairs.append((key, f"[{section.name}] {line}"))
+    return pairs
 
 
 def main() -> int:

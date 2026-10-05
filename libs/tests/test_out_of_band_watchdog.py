@@ -94,7 +94,13 @@ def test_workflow_runs_daily_and_can_be_dispatched() -> None:
         for name, job in jobs.items()
         if (job.get("permissions") or {}).get("issues") == "write"
     ]
-    assert writers == ["watchdog"]
+    # #962: the three daily jobs that page keep their page-dedup state as issues.
+    assert writers == [
+        "watchdog",
+        "facet-reconcile",
+        "vault-self-refresh-audit",
+        "secrets-reconcile",
+    ]
 
 
 def test_workflow_alerts_directly_and_does_not_call_the_bridge() -> None:
@@ -1966,6 +1972,150 @@ def test_main_pages_when_the_report_cannot_be_delivered(monkeypatch, tmp_path) -
     assert [e["event"] for e in events if "report.delivery" in e.get("event", "")] == [
         "watchdog.report.delivery.failure"
     ]
+
+
+# ---- #962: the same paged set again is a report, not another page ----------------------
+
+
+def _dedup_env(monkeypatch, api, **extra):
+    """A scheduled run whose page-dedup state lives in the fake issues `api`."""
+    from libs.observability import page_dedup
+
+    monkeypatch.setattr(page_dedup, "_api_from_env", lambda _env: api)
+    return {
+        "GITHUB_EVENT_NAME": "schedule",
+        "GITHUB_REPOSITORY": "wangzitian0/infra2",
+        "GITHUB_TOKEN": "token-for-tests",
+        **extra,
+    }
+
+
+def test_a_persistent_red_check_pages_once_then_reports_then_resolves(
+    monkeypatch, tmp_path
+) -> None:
+    """#962 on the real main(): `infra2-backup-production` paged 10 times in 10 days."""
+    from libs.tests.test_page_dedup import FakeIssues, age_state
+
+    api = FakeIssues()
+    env = _dedup_env(monkeypatch, api)
+    red = {"infra2-backup-production"}
+
+    def run(failing):
+        return _run_day(
+            monkeypatch,
+            tmp_path,
+            worker_last_run=FRESH_CLEAN_RUN,
+            failing=failing,
+            env_extra=env,
+        )
+
+    # day 1: a new check paged -> the pager, and the state is recorded
+    code, pages, reports, _trail, events = run(red)
+    assert code == 1 and len(pages) == 1 and reports == []
+    assert _failure_names(pages[0]) == red
+    assert api.open_titles() == ["ops-checks paged: out-of-band-watchdog"]
+    success = [e for e in events if e["event"] == "watchdog.delivery.success"]
+    assert [(e["route"], e.get("deduplicated", False)) for e in success] == [
+        ("github-actions->feishu-direct", False)
+    ]
+
+    # day 2: the same check, a different reading in its detail -> a report, no page;
+    # the job still fails (it is red), and nothing was written to the state
+    age_state(api, "out-of-band-watchdog", 1)
+    writes = list(api.writes)
+    code, pages, reports, _trail, events = run(red)
+    assert code == 1 and pages == []
+    assert [r.splitlines()[0] for r in reports] == [
+        "[报告] 仍未恢复 · 第 2 天 · out-of-band-watchdog"
+    ]
+    assert "• infra2-backup-production" in reports[0]
+    assert api.writes == writes
+    success = [e for e in events if e["event"] == "watchdog.delivery.success"]
+    assert [(e["route"], e["deduplicated"]) for e in success] == [
+        ("github-actions->infra2-reports", True)
+    ]
+    # the weekly digest counts delivery.success as recall evidence: a deduplicated day
+    # is delivered, not "missing alert evidence"
+    from tools.watchdog_weekly_digest import summarize_watchdog_log_events
+
+    audit = summarize_watchdog_log_events(
+        {"run": "\n".join(json.dumps(event) for event in events)}
+    )
+    assert audit["alertable_run_count"] == 1
+    assert audit["missing_alert_evidence_run_count"] == 0
+
+    # day 3: a second check goes red -> page again, with the whole new set
+    code, pages, reports, _trail, _events = run(red | {"infra2-restore-rehearsal"})
+    assert code == 1 and reports == []
+    assert _failure_names(pages[0]) == red | {"infra2-restore-rehearsal"}
+
+    # day 4: the restore rehearsal recovers but the backup stays red -> page the new set
+    code, pages, reports, _trail, _events = run(red)
+    assert code == 1 and reports == [] and len(pages) == 1
+    assert _failure_names(pages[0]) == red
+
+    # day 5: everything is green -> one RESOLVED page, the state closed, exit 0
+    code, pages, reports, _trail, events = run(set())
+    assert code == 0 and reports == []
+    assert len(pages) == 1 and pages[0].startswith("✅ [已恢复] GitHub 日级带外审计")
+    assert "• infra2-backup-production" in pages[0]
+    assert api.open_titles() == []
+    assert [e["event"] for e in events if "resolved" in e["event"]] == [
+        "watchdog.resolved.delivery.success"
+    ]
+
+    # day 6: still green -> silence
+    code, pages, reports, _trail, _events = run(set())
+    assert (code, pages, reports) == (0, [], [])
+
+
+def test_main_pages_as_before_when_the_page_state_cannot_be_read(
+    monkeypatch, tmp_path
+) -> None:
+    from libs.observability.issue_trail import ListingFailed
+    from libs.tests.test_page_dedup import FakeIssues
+
+    api = FakeIssues()
+    api.listing_error = ListingFailed("GET /issues: HTTP 502")
+    env = _dedup_env(monkeypatch, api)
+    pages_by_day = []
+
+    for _ in range(2):  # twice: an unreadable state never turns into a report
+        code, pages, reports, _trail, _events = _run_day(
+            monkeypatch,
+            tmp_path,
+            worker_last_run=FRESH_CLEAN_RUN,
+            failing={"infra2-backup-production"},
+            env_extra=env,
+        )
+        assert code == 1 and reports == []
+        pages_by_day.append(pages)
+
+    assert [len(pages) for pages in pages_by_day] == [1, 1]
+    assert "跨运行去重状态读取失败" in pages_by_day[1][0]
+    assert api.writes == []
+
+
+def test_main_in_a_dry_run_neither_reads_nor_writes_page_state(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    from libs.tests.test_page_dedup import ExplodingIssues
+
+    env = _dedup_env(monkeypatch, ExplodingIssues(), WATCHDOG_DRY_RUN="1")
+
+    red = _run_day(
+        monkeypatch,
+        tmp_path,
+        worker_last_run=FRESH_CLEAN_RUN,
+        failing={"infra2-backup-production"},
+        env_extra=env,
+    )
+    green = _run_day(
+        monkeypatch, tmp_path, worker_last_run=FRESH_CLEAN_RUN, env_extra=env
+    )
+
+    assert (red[0], red[1], red[2]) == (1, [], [])
+    assert (green[0], green[1], green[2]) == (0, [], [])
 
 
 def test_main_pages_every_failure_when_the_registry_is_unreadable(

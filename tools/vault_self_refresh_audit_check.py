@@ -73,6 +73,23 @@ def run(env: str = "production") -> dict[str, Any]:
     return audit_from_observations(services, observations, env=env)
 
 
+def confirmed_finding_pairs(report: dict[str, Any]) -> list[tuple[str, str]]:
+    """``(identity key, display line)`` per confirmed ``fail`` result (#962).
+
+    The key is ``service_id::check_id`` -- no summary, which carries ages and
+    counts -- so the same failing check is the same finding every day. ``info``
+    results never page (#531).
+    """
+    return [
+        (
+            f"{r['service_id']}::{r['check_id']}",
+            f"- {r['severity']} {r['service_id']}::{r['check_id']} - {r['summary']}",
+        )
+        for r in report["results"]
+        if r["status"] == "fail"
+    ]
+
+
 def main() -> int:
     env = os.environ.get("VAULT_SELF_REFRESH_AUDIT_ENV", "production")
     report = run(env)

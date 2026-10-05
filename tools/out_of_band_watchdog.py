@@ -6,6 +6,11 @@ scheduler -- plus failures of its own configuration and any check the signal
 registry does not mark `type: report`. The report-only checks (host, Docker,
 bridge, Dokploy status, staging backups) still run, and their failures go to one
 daily report because another layer pages them (#908).
+
+A page is delivered only when the set of paged checks changes (#962,
+``libs/observability/page_dedup.py``): the same set on a later day is a
+`[报告] 仍未恢复` in the reports chat, and a day on which the set empties sends a
+RESOLVED page. Unreadable state pages as before.
 """
 
 from __future__ import annotations
@@ -46,6 +51,13 @@ from libs.alerting import (  # noqa: E402
 )
 from libs.deploy_queue import deployment_start_epoch  # noqa: E402
 from libs.dokploy import get_dokploy  # noqa: E402
+from libs.observability.page_dedup import (  # noqa: E402
+    REPORT as DEDUP_REPORT,
+    RESOLVED as DEDUP_RESOLVED,
+    Finding,
+    dedup_page,
+    resolve_page_state,
+)
 from libs.scheduler_peer_liveness import (  # noqa: E402
     BOUND_CAP_ENV,
     OK as PEER_OK,
@@ -71,6 +83,9 @@ DEFAULT_WORKER_STATUS_URL = (
     "https://infra2-cloudflare-watchdog.wangzitian-ai.workers.dev/status"
 )
 WORKER_STATUS_CHECK = "cloudflare-worker-status"
+#: #962: the page-dedup state of this job's pages (one issue, identity = the paged checks).
+PAGE_DEDUP_JOB = "out-of-band-watchdog"
+PAGE_DEDUP_LABEL = "GitHub 日级带外审计"
 #: The Worker's own staleness bound (`WATCHDOG_STATUS_MAX_AGE_SECONDS`) lives in
 #: its deploy config; the GitHub audit reads the same value instead of a copy.
 WORKER_WRANGLER = ROOT / "cloudflare/infra-watchdog/wrangler.toml"
@@ -1642,15 +1657,16 @@ def main(env: Mapping[str, str] | None = None) -> int:
         print(f"STALE {result.name}: {_redact(result.detail)} [{reason}]")
 
     if not paged:
+        resolve_code = _resolve_paged_state(current_env, dry_run=dry_run)
         _emit_structured_log(
             {
                 "event": "watchdog.run.complete",
-                "status": "ok",
+                "status": "ok" if not resolve_code else "fail",
                 "failure_count": 0,
                 "report_failure_count": len(reported),
             }
         )
-        return 0
+        return resolve_code
 
     message = format_failure_message(paged, run_url=_github_run_url(current_env))
     if dry_run:
@@ -1667,7 +1683,19 @@ def main(env: Mapping[str, str] | None = None) -> int:
         return 1
 
     try:
-        deliver_out_of_band_alert(current_env, message)
+        # #962: the pager only when the set of paged checks changed; the same set
+        # again is a report. Identity = check names (never detail: it has ages and sizes).
+        outcome = dedup_page(
+            current_env,
+            job=PAGE_DEDUP_JOB,
+            label=PAGE_DEDUP_LABEL,
+            findings=[Finding(result.name) for result in paged],
+            page_message=message,
+            deliver_page=deliver_out_of_band_alert,
+            deliver_report=deliver_infra2_report,
+            observed_clean=True,
+            run_url=_github_run_url(current_env),
+        )
     except Exception as exc:  # noqa: BLE001 - watchdog must not fail silently.
         fallback_issue_url = create_delivery_fallback_issue(
             current_env, failures=paged, error=str(exc)
@@ -1682,14 +1710,19 @@ def main(env: Mapping[str, str] | None = None) -> int:
             }
         )
         return 1
-    _emit_structured_log(
-        {
-            "event": "watchdog.delivery.success",
-            "status": "ok",
-            "failure_count": len(paged),
-            "route": "github-actions->feishu-direct",
-        }
-    )
+    # The weekly digest counts `watchdog.delivery.success` as the recall evidence of a
+    # red run: a deduplicated day (the reports chat took it) is delivered too.
+    delivered_event = {
+        "event": "watchdog.delivery.success",
+        "status": "ok",
+        "failure_count": len(paged),
+        "route": "github-actions->feishu-direct",
+    }
+    if outcome.action == DEDUP_REPORT:
+        delivered_event.update(
+            route="github-actions->infra2-reports", deduplicated=True
+        )
+    _emit_structured_log(delivered_event)
     _emit_structured_log(
         {
             "event": "watchdog.run.complete",
@@ -1700,6 +1733,42 @@ def main(env: Mapping[str, str] | None = None) -> int:
         }
     )
     return 1
+
+
+def _resolve_paged_state(env: Mapping[str, str], *, dry_run: bool) -> int:
+    """A run with no paged check: resolve what an earlier run paged (#962).
+
+    Returns the exit code. A RESOLVED page that cannot be delivered fails the run
+    and keeps the state, so the next run sends it again.
+    """
+    if dry_run:
+        return 0
+    try:
+        outcome = resolve_page_state(
+            env,
+            job=PAGE_DEDUP_JOB,
+            label=PAGE_DEDUP_LABEL,
+            deliver_page=deliver_out_of_band_alert,
+            run_url=_github_run_url(env),
+        )
+    except Exception as exc:  # noqa: BLE001 - a lost RESOLVED must be visible.
+        _emit_structured_log(
+            {
+                "event": "watchdog.resolved.delivery.failure",
+                "status": "fail",
+                "error": _redact(_one_line(str(exc))),
+            }
+        )
+        return 1
+    if outcome.action == DEDUP_RESOLVED:
+        _emit_structured_log(
+            {
+                "event": "watchdog.resolved.delivery.success",
+                "status": "ok",
+                "route": "github-actions->feishu-direct",
+            }
+        )
+    return outcome.exit_code
 
 
 def _record_issue_trail_verdicts(

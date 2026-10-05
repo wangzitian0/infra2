@@ -30,6 +30,7 @@ name: Ops Checks
       - "libs/deploy_contract.py"
       - "libs/deploy_env_config.py"
       - "tools/resolve_deploy_ref.py"
+      - "libs/deploy/refs.py"
       - "libs/dokploy.py"
       - "pyproject.toml"
       - "uv.lock"
@@ -46,6 +47,7 @@ name: Ops Checks
       - "libs/deploy_contract.py"
       - "libs/deploy_env_config.py"
       - "tools/resolve_deploy_ref.py"
+      - "libs/deploy/refs.py"
       - "libs/dokploy.py"
       - "pyproject.toml"
       - "uv.lock"
@@ -102,8 +104,10 @@ name: Ops Checks
         type: string
         default: ""
 
-# issues: granted per job below (watchdog writes the issue trail, digest reads
-# issues), not here: the deploy-v2-canary job runs same-repo PR code.
+# issues: granted per job below (watchdog writes the issue trail and its page state,
+# digest reads issues, facet-reconcile / vault-self-refresh-audit / secrets-reconcile
+# write their page-dedup state, #962), not here: the deploy-v2-canary job runs
+# same-repo PR code.
 permissions:
   contents: read
   actions: read
@@ -705,6 +709,11 @@ jobs:
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '17 7 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'facet-reconcile' || inputs.task == 'all')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      # #962: the page-dedup state, one issue per job (libs/observability/page_dedup.py).
+      issues: write
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
       INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
@@ -748,35 +757,62 @@ jobs:
           # in the next step.
           python -m tools.facet_reconcile
 
+      # #962: pages only when the set of confirmed findings changes (first appearance, one
+      # added or removed, all resolved -> RESOLVED); the same set on a later day is a
+      # `[报告] 仍未恢复 · 第 N 天` in the reports chat. Unreadable state pages as before.
       - name: Alert on confirmed findings
         if: failure() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           python - <<'PY'
           import os
-          from tools.facet_reconcile import confirmed_findings, run_all
+          from libs.observability.page_dedup import dedup_page, run_url_from_env
+          from tools.facet_reconcile import confirmed_finding_pairs, run_all
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
 
-          confirmed = confirmed_findings(run_all())
-          if not confirmed:
+          sections = run_all()
+          pairs = confirmed_finding_pairs(sections)
+          if not pairs:
               print("facet reconcile failed without confirmed findings "
                     "(transient) -- not paging.")
-              raise SystemExit(0)
-          run_url = "/".join(
-              v for v in (
-                  os.environ.get("GITHUB_SERVER_URL"),
-                  os.environ.get("GITHUB_REPOSITORY"),
-                  "actions/runs",
-                  os.environ.get("GITHUB_RUN_ID"),
-              ) if v
-          )
-          detail = "\n".join(f"- {c}" for c in confirmed)
-          deliver_out_of_band_alert(
+          detail = "\n".join(f"- {line}" for _key, line in pairs)
+          outcome = dedup_page(
               os.environ,
-              f"🚨 Daily facet reconcile: {len(confirmed)} confirmed drift "
-              "finding(s).\n"
-              f"{detail}\n"
-              f"Run: {run_url}",
+              job="facet-reconcile",
+              label="每日 facet 对账",
+              findings=pairs,
+              # Blockers (a lookup that failed) may hide a finding: only a run
+              # without any proves the earlier findings are gone.
+              observed_clean=not any(s.blockers for s in sections),
+              page_message=(
+                  f"🚨 Daily facet reconcile: {len(pairs)} confirmed drift "
+                  "finding(s).\n"
+                  f"{detail}\n"
+                  f"Run: {run_url_from_env(os.environ)}"
+              ),
+              deliver_page=deliver_out_of_band_alert,
           )
+          raise SystemExit(outcome.exit_code)
+          PY
+
+      - name: Resolve the paged findings
+        if: success() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import os
+          from libs.observability.page_dedup import resolve_page_state
+          from tools.out_of_band_watchdog import deliver_out_of_band_alert
+
+          outcome = resolve_page_state(
+              os.environ,
+              job="facet-reconcile",
+              label="每日 facet 对账",
+              deliver_page=deliver_out_of_band_alert,
+          )
+          raise SystemExit(outcome.exit_code)
           PY
 
   vault-self-refresh-audit:
@@ -790,6 +826,11 @@ jobs:
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '17 8 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'vault-self-refresh-audit' || inputs.task == 'all')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      # #962: the page-dedup state, one issue per job (libs/observability/page_dedup.py).
+      issues: write
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
       INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
@@ -852,46 +893,71 @@ jobs:
           # result (never an "info" note, #531) pages Feishu, in the next step.
           python -m tools.vault_self_refresh_audit_check
 
+      # #962: pages only when the set of failing checks changes; the same set on a later
+      # day is a `[报告] 仍未恢复 · 第 N 天` in the reports chat (wired into this step
+      # alone). A transient step failure with no confirmed `fail` result neither pages
+      # nor resolves anything.
       - name: Alert on confirmed failure
         if: failure() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INFRA2_REPORTS_FEISHU_APP_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_ID }}
+          INFRA2_REPORTS_FEISHU_APP_SECRET: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_SECRET }}
+          INFRA2_REPORTS_FEISHU_CHAT_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_CHAT_ID }}
         run: |
           python - <<'PY'
           import os
+          from libs.observability.page_dedup import dedup_page, run_url_from_env
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
-          from tools.vault_self_refresh_audit_check import run
+          from tools.vault_self_refresh_audit_check import confirmed_finding_pairs, run
 
           report = run()
-          failed = [r for r in report["results"] if r["status"] == "fail"]
-          if not failed:
+          pairs = confirmed_finding_pairs(report)
+          if not pairs:
               # The step failed without a confirmed fail result (e.g. a transient SSH
               # or Dokploy lookup hiccup) -- visible in the run log for a human to
               # notice, but not alert-worthy on its own (#524/#425/#475: don't page on
               # a transient blip you can't distinguish from a real failure).
               print("vault self-refresh audit step failed without a confirmed fail "
                     "result -- not paging.")
-              raise SystemExit(0)
-
-          run_url = "/".join(
-              v for v in (
-                  os.environ.get("GITHUB_SERVER_URL"),
-                  os.environ.get("GITHUB_REPOSITORY"),
-                  "actions/runs",
-                  os.environ.get("GITHUB_RUN_ID"),
-              ) if v
-          )
-          detail = "\n".join(
-              f"- {r['severity']} {r['service_id']}::{r['check_id']} - {r['summary']}"
-              for r in failed
-          )
-          deliver_out_of_band_alert(
+          detail = "\n".join(line for _key, line in pairs)
+          outcome = dedup_page(
               os.environ,
-              f"🚨 Vault self-refresh audit found {len(failed)} confirmed failing "
-              "check(s).\n"
-              f"{detail}\n"
-              "Read-only findings — investigate the named service's vault-agent/app "
-              "containers on the VPS.\n"
-              f"Run: {run_url}",
+              job="vault-self-refresh-audit",
+              label="Vault self-refresh 审计",
+              findings=pairs,
+              # Only an all-pass run proves the earlier failures are gone.
+              observed_clean=report["status"] == "pass",
+              page_message=(
+                  f"🚨 Vault self-refresh audit found {len(pairs)} confirmed failing "
+                  "check(s).\n"
+                  f"{detail}\n"
+                  "Read-only findings — investigate the named service's vault-agent/app "
+                  "containers on the VPS.\n"
+                  f"Run: {run_url_from_env(os.environ)}"
+              ),
+              deliver_page=deliver_out_of_band_alert,
           )
+          raise SystemExit(outcome.exit_code)
+          PY
+
+      - name: Resolve the paged failures
+        if: success() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import os
+          from libs.observability.page_dedup import resolve_page_state
+          from tools.out_of_band_watchdog import deliver_out_of_band_alert
+
+          outcome = resolve_page_state(
+              os.environ,
+              job="vault-self-refresh-audit",
+              label="Vault self-refresh 审计",
+              deliver_page=deliver_out_of_band_alert,
+          )
+          raise SystemExit(outcome.exit_code)
           PY
 
   secrets-reconcile:
@@ -905,6 +971,11 @@ jobs:
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '27 8 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'secrets-reconcile' || inputs.task == 'all')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      # #962: the page-dedup state, one issue per job (libs/observability/page_dedup.py).
+      issues: write
     env:
       INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
       VPS_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
@@ -953,34 +1024,71 @@ jobs:
           # Fails the STEP on any finding or transport error so it shows in the run log;
           # only a confirmed finding (never an SSH hiccup) pages Feishu in the next step.
           python -m tools.secrets_reconcile_check
+      # #962: pages only when the set of page-worthy findings changes; the same set on a
+      # later day is a `[报告] 仍未恢复 · 第 N 天` in the reports chat (wired into this step
+      # alone). Only a complete report (stores and quotas both read) proves a finding gone.
       - name: Alert on confirmed findings
         if: failure() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INFRA2_REPORTS_FEISHU_APP_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_ID }}
+          INFRA2_REPORTS_FEISHU_APP_SECRET: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_SECRET }}
+          INFRA2_REPORTS_FEISHU_CHAT_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_CHAT_ID }}
         run: |
           python - <<'PY'
           import os
+          from libs.observability.page_dedup import dedup_page, run_url_from_env
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
-          from tools.secrets_reconcile_check import load_report, page_worthy_summary
+          from tools.secrets_reconcile_check import (
+              load_report,
+              page_worthy_keys,
+              page_worthy_summary,
+              report_is_complete,
+          )
 
           report = load_report(os.environ)
           summary = page_worthy_summary(report)
           if not summary:
               print("secrets reconcile step failed without a confirmed finding -- not paging.")
-              raise SystemExit(0)
-          run_url = "/".join(
-              v for v in (
-                  os.environ.get("GITHUB_SERVER_URL"),
-                  os.environ.get("GITHUB_REPOSITORY"),
-                  "actions/runs",
-                  os.environ.get("GITHUB_RUN_ID"),
-              ) if v
-          )
-          deliver_out_of_band_alert(
+          outcome = dedup_page(
               os.environ,
-              "🚨 Secrets reconcile found drift or a quota over budget.\n"
-              f"{summary}\n"
-              "Names only; fix the 1Password item or rerun the deploy, never type into Vault.\n"
-              f"Run: {run_url}",
+              job="secrets-reconcile",
+              label="密钥对账与容量",
+              findings=page_worthy_keys(report),
+              observed_clean=report_is_complete(report),
+              page_message=(
+                  "🚨 Secrets reconcile found drift or a quota over budget.\n"
+                  f"{summary}\n"
+                  "Names only; fix the 1Password item or rerun the deploy, never type into Vault.\n"
+                  f"Run: {run_url_from_env(os.environ)}"
+              ),
+              deliver_page=deliver_out_of_band_alert,
           )
+          raise SystemExit(outcome.exit_code)
+          PY
+
+      - name: Resolve the paged findings
+        if: success() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import os
+          from libs.observability.page_dedup import resolve_page_state
+          from tools.out_of_band_watchdog import deliver_out_of_band_alert
+          from tools.secrets_reconcile_check import load_report, report_is_complete
+
+          if not report_is_complete(load_report(os.environ)):
+              # A quota that could not be read is not a quota that is fine.
+              print("secrets reconcile report is incomplete -- paged state kept.")
+              raise SystemExit(0)
+          outcome = resolve_page_state(
+              os.environ,
+              job="secrets-reconcile",
+              label="密钥对账与容量",
+              deliver_page=deliver_out_of_band_alert,
+          )
+          raise SystemExit(outcome.exit_code)
           PY
 
   pi-chain-smoke:

@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 # 增删此表前先去 .github/workflows/ 核对那个 job 的 pip install 清单。
 MUST_IMPORT_WITHOUT_SDK = [
     "libs.watchdog_issue_trail",
+    "libs.observability.page_dedup",
     "tools.out_of_band_watchdog",
     "libs.container_breakdown",
     "libs.secrets_registry",

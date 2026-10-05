@@ -17,6 +17,7 @@
 | `probes.py` | In-band health probe specification & execution | `ProbeSpec`, `execute_probe()`, `run_probes()`, `parse_probe_specs()` |
 | `breakdown.py` | Container log triage & failure classification | `BreakdownVerdict`, `analyze_container_logs()`, `classify_reason()`, `build_breakdown_alert_payload()` |
 | `issue_trail.py` | GitHub Issue trail reconciliation | `reconcile_watchdog_issues()`, `record_verdicts()`, `load_trail()`, `CheckVerdict` |
+| `page_dedup.py` | Cross-run page dedup for GitHub-plane daily jobs (#962): page only when the finding identity changes, report `仍未恢复 · 第 N 天` while unchanged, RESOLVED once; state = one issue per job | `dedup_page()`, `resolve_page_state()`, `decide()`, `make_identity()`, `Finding` |
 | `openpanel.py` | OpenPanel analytics client configuration SSOT | `OPENPANEL_CLIENTS`, `openpanel_env()` |
 | `local_ledger.py` | VPS availability ledger: per-signal daily ok/fail counts written by the probe runner (#904) | `record_probe_round()`, `host_ledger_path()`, `to_report_days()` |
 | `watchers/` | Alerting sidecar resident watcher plugins | `ContainerBreakdownWatcher`, `BreakdownWatch`, `sweep_breakdowns()` |
