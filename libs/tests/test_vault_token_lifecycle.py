@@ -184,6 +184,25 @@ def test_vault_token_targets_includes_alerting_bridge(monkeypatch) -> None:
     )
 
 
+def test_vault_token_targets_includes_the_canary_todo(monkeypatch) -> None:
+    """#991: the canary renders its secrets through a vault-agent, so `setup-approle`
+    must find it. A service missing from this map answers "No matching AppRole targets"
+    (data_engine hit exactly that)."""
+    tasks, _exit_cls = _load_vault_tasks(monkeypatch)
+    targets = tasks._vault_token_targets(str(ROOT))
+
+    (todo,) = [
+        target
+        for target in targets
+        if target.project == "platform" and target.service == "todo"
+    ]
+    assert todo.service_dir == "30.todo"
+    assert todo.dokploy_project == "platform"
+    selected = tasks._select_token_targets(targets, "platform", "todo")
+    assert selected == [todo]
+    assert (ROOT / "platform" / todo.service_dir / "vault-policy.hcl").exists()
+
+
 def test_configure_dokploy_approle_injects_creds_and_redeploys(monkeypatch) -> None:
     """#257: AppRole injection (VAULT_ROLE_ID/VAULT_SECRET_ID) succeeds only after a runtime
     apply proof — same shared spine (`_redeploy_with_vault_creds`) and record-wait as the

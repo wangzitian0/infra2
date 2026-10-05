@@ -717,20 +717,48 @@ class Deployer:
             names = cls._secret_consumer_containers(e)
             if not names:
                 return
+            on_host = cls._on_host(c, e)
+            if on_host is None:
+                raise RuntimeError(
+                    f"VPS_HOST unset; restart by hand: {shlex.join(['docker', 'restart', *names])}"
+                )
+            # A restart is for a consumer that holds a stale value. On the first deploy of a
+            # service its vault-agent and app containers do not exist yet, and `docker
+            # restart` of a missing name exits 1: the sync used to fail before it could
+            # create them. `ps -a` lists every container that exists, stopped ones too,
+            # because `docker restart` starts a stopped consumer with the new value.
+            listing = on_host(
+                shlex.join(["docker", "ps", "-a", "--format", "{{.Names}}"])
+            )
+            if not listing.ok:
+                # Fail closed: when the host cannot say what exists, consumers could keep
+                # a stale value while the store already changed.
+                raise RuntimeError(
+                    f"could not list containers "
+                    f"({(listing.stderr or '').strip() or 'docker ps failed'}); "
+                    f"restart by hand: {shlex.join(['docker', 'restart', *names])}"
+                )
+            existing = {line.strip() for line in listing.stdout.splitlines()}
+            present = [name for name in names if name in existing]
+            absent = [name for name in names if name not in existing]
+            if absent:
+                info(
+                    f"{cls.service}: not created yet, not restarted: {', '.join(absent)}"
+                )
+            if not present:
+                return
             info(
-                f"{cls.service}: {len(changed)} secret value(s) changed; restarting {', '.join(names)}"
+                f"{cls.service}: {len(changed)} secret value(s) changed; restarting {', '.join(present)}"
             )
-            result = run_with_status(
-                c,
-                f"ssh root@{e['VPS_HOST']} {shlex.quote(shlex.join(['docker', 'restart', *names]))}",
-                "Restart secret consumers",
-            )
-            if not result:
+            result = on_host(shlex.join(["docker", "restart", *present]))
+            if not result.ok:
                 # Fail closed (review on #648): consumers would keep running on the
                 # previously rendered values while the store already changed.
                 raise RuntimeError(
-                    f"could not restart {', '.join(names)} after {', '.join(changed)} changed"
+                    f"could not restart {', '.join(present)} after {', '.join(changed)} changed "
+                    f"({(result.stderr or '').strip() or 'no output'})"
                 )
+            success(f"{cls.service}: restarted secret consumers: {', '.join(present)}")
 
         try:
             report = secrets_supply.apply(service, env_name, restart=restart)

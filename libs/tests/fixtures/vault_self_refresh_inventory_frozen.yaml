@@ -120,6 +120,19 @@ services:
       - platform-openpanel-api${ENV_SUFFIX}
       - platform-openpanel-dashboard${ENV_SUFFIX}
       - platform-openpanel-worker${ENV_SUFFIX}
+  - id: platform/todo
+    project: platform
+    dokploy_service: todo
+    # Added with #991: the canary reads the Redis password, its Postgres role password and
+    # its S3 key through a vault-agent, like every other platform service (AppRole auth).
+    auth_method: approle
+    compose_path: platform/30.todo/compose.yaml
+    vault_agent_config_path: platform/30.todo/vault-agent.hcl
+    secret_template_path: platform/30.todo/secrets.ctmpl
+    vault_path_template: secret/data/platform/{env}/todo
+    vault_agent_container: platform-todo-vault-agent${ENV_SUFFIX}
+    app_containers:
+      - platform-todo${ENV_SUFFIX}
   - id: finance_report/postgres
     project: finance_report
     dokploy_service: postgres

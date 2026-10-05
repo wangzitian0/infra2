@@ -115,6 +115,12 @@ SERVICES: tuple[Service, ...] = (
         ("platform/24.openpanel/env.manifest.json",),
     ),
     Service(
+        "platform/30.todo",
+        "platform",
+        "todo",
+        ("platform/30.todo/env.manifest.json",),
+    ),
+    Service(
         "finance_report/finance_report/01.postgres",
         "finance_report",
         "postgres",
