@@ -294,8 +294,12 @@ def test_truealpha_deploy_s3_module_resolution_and_fail_loud(monkeypatch) -> Non
     monkeypatch.setattr(
         AppDeployer, "secrets_backend", classmethod(lambda cls, env=None: mock_backend)
     )
-    monkeypatch.setattr(AppDeployer, "_ensure_never_expires", classmethod(lambda cls, c, b: None))
-    monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/docker" if cmd == "docker" else None)
+    monkeypatch.setattr(
+        AppDeployer, "_ensure_never_expires", classmethod(lambda cls, c, b: None)
+    )
+    monkeypatch.setattr(
+        "shutil.which", lambda cmd: "/usr/bin/docker" if cmd == "docker" else None
+    )
 
     # 1. Missing module raises RuntimeError
     monkeypatch.delitem(sys.modules, "platform.03.s3.shared", raising=False)
@@ -306,7 +310,9 @@ def test_truealpha_deploy_s3_module_resolution_and_fail_loud(monkeypatch) -> Non
     # 2. Module missing create_app_bucket raises RuntimeError
     mock_empty = MagicMock(spec=[])
     monkeypatch.setitem(sys.modules, "platform.03.s3.shared", mock_empty)
-    with pytest.raises(RuntimeError, match="S3 shared task create_app_bucket not found"):
+    with pytest.raises(
+        RuntimeError, match="S3 shared task create_app_bucket not found"
+    ):
         AppDeployer._ensure_s3_bucket(MagicMock())
 
     # 3. Canonical platform.03.s3.shared is honored
@@ -359,7 +365,9 @@ def test_finance_report_deploy_s3_module_resolution_and_fail_loud(monkeypatch) -
     # 2. Module missing create_app_bucket raises RuntimeError
     mock_empty = MagicMock(spec=[])
     monkeypatch.setitem(sys.modules, "platform.03.s3.shared", mock_empty)
-    with pytest.raises(RuntimeError, match="S3 shared task create_app_bucket not found"):
+    with pytest.raises(
+        RuntimeError, match="S3 shared task create_app_bucket not found"
+    ):
         AppDeployer._ensure_s3_bucket(MagicMock())
 
     # 3. Canonical platform.03.s3.shared is honored
@@ -388,7 +396,9 @@ def test_tools_loader_populates_minio_alias() -> None:
     import sys
     from tools.loader import ns
 
+    assert ns is not None
     assert "platform.03.s3.shared" in sys.modules
     assert "platform.03.minio.shared" in sys.modules
-    assert sys.modules["platform.03.minio.shared"] is sys.modules["platform.03.s3.shared"]
-
+    assert (
+        sys.modules["platform.03.minio.shared"] is sys.modules["platform.03.s3.shared"]
+    )

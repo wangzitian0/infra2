@@ -455,7 +455,9 @@ class AppDeployer(Deployer):
                     # Fallback to legacy hostname if platform-s3 is not yet adopted
                     s3_settings = S3Settings(
                         bucket=bucket_name,
-                        endpoint_url=f"http://platform-minio{env_suffix}:9000" if env_suffix else "http://platform-minio:9000",
+                        endpoint_url=f"http://platform-minio{env_suffix}:9000"
+                        if env_suffix
+                        else "http://platform-minio:9000",
                         access_key_id=existing_access_key,
                         secret_access_key=existing_secret_key,
                     )

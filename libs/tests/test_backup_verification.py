@@ -337,7 +337,9 @@ def test_backup_restore_rehearsal_downloads_remote_artifact(tmp_path) -> None:
     )
 
 
-def test_materialize_artifact_verifies_real_checksum_and_cleans_corrupted(tmp_path) -> None:
+def test_materialize_artifact_verifies_real_checksum_and_cleans_corrupted(
+    tmp_path,
+) -> None:
     content = b"valid sql dump data"
     correct_hash = hashlib.sha256(content).hexdigest()
     corrupt_hash = "f" * 64
