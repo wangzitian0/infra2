@@ -231,60 +231,11 @@ jobs:
       # Fail fast left to right: run sub-second static, SSOT and drift gates first
       # so documentation/contract drift fails in <5 seconds rather than waiting for
       # the 2-minute unit test suite.
-      - name: Gate SSOT index generated from MANIFEST
+      - name: Gate preflight static, SSOT, and drift checks
         run: |
           cd ${{ github.workspace }}
-          uv run python tools/gen_ssot_index.py
-
-      - name: Gate project index generated from docs/project
-        run: |
-          cd ${{ github.workspace }}
-          uv run python tools/gen_project_index.py
-
-      - name: Gate CI inventory drift (scope = workflows that run on a pull request)
-        run: |
-          cd ${{ github.workspace }}
+          uv run python -m tools.ci_runner preflight
           uv run python -m tools.ci_gate_audit --enforce
-
-      - name: Gate CI hierarchy and workflow budgets
-        run: |
-          cd ${{ github.workspace }}
-          uv run python -m tools.ci_gate_lint .github/workflows/
-
-      - name: Gate watchdog signal consistency
-        run: |
-          cd ${{ github.workspace }}
-          uv run python tools/watchdog_consistency_audit.py
-
-      - name: Gate no-new-wheels (alert surfaces must be registered)
-        run: |
-          cd ${{ github.workspace }}
-          uv run python tools/no_new_wheels_lint.py
-
-      - name: Gate cross-plane service identity
-        run: |
-          cd ${{ github.workspace }}
-          uv run python tools/service_identity_audit.py
-
-      - name: Gate deploy fan-out coverage
-        run: |
-          cd ${{ github.workspace }}
-          uv run python tools/deploy_guard_audit.py
-
-      - name: Gate OMCA audit policy evaluator
-        run: |
-          cd ${{ github.workspace }}
-          uv run python -m tools.omca_gate_policy --self-test
-
-      - name: Gate backup inventory covers registered data paths
-        run: |
-          cd ${{ github.workspace }}
-          uv run python tools/backup_inventory_audit.py
-
-      - name: Test deployer contract pre-flight (config hash & service discovery)
-        run: |
-          cd ${{ github.workspace }}
-          uv run python libs/tests/test_deployer_contract_light.py
 
       - name: Run infra unit tests
         # PYTHONSAFEPATH (not -P) so pytest-xdist's execnet worker subprocesses also
@@ -510,88 +461,10 @@ jobs:
           uv pip install --system invoke httpx python-dotenv rich \
             "$(grep -oE 'infra2-sdk @ https://[^"]+' pyproject.toml)"
 
-      - name: Validate all deploy.py files
+      - name: Validate Deployer classes and service facet matrix
         run: |
           cd ${{ github.workspace }}
-          python -c "
-          import sys
-          import importlib.util
-          from pathlib import Path
-
-          sys.path.insert(0, '.')
-
-          failed = []
-          deploy_files = list(Path('.').rglob('deploy.py'))
-
-          print(f'Found {len(deploy_files)} deploy.py files')
-
-          for deploy_file in deploy_files:
-            # Skip playground and tests
-            if 'playground' in str(deploy_file) or 'test' in str(deploy_file):
-              continue
-
-            print(f'Validating: {deploy_file}')
-            try:
-              # Load the module
-              spec = importlib.util.spec_from_file_location('deploy', deploy_file)
-              module = importlib.util.module_from_spec(spec)
-
-              # Import libs.deploy.deployer to get Deployer class
-              from libs.deploy.deployer import Deployer
-
-              # Execute the module
-              spec.loader.exec_module(module)
-
-              # Find Deployer subclass
-              deployer_cls = None
-              for name, obj in vars(module).items():
-                if isinstance(obj, type) and issubclass(obj, Deployer) and obj is not Deployer:
-                  deployer_cls = obj
-                  break
-
-              if deployer_cls:
-                # Validate required attributes
-                errors = []
-                if not deployer_cls.service:
-                  errors.append('missing service name')
-                if not deployer_cls.compose_path:
-                  errors.append('missing compose_path')
-                # data_path is optional for stateless services (e.g., app containers)
-
-                # Validate compose_path exists
-                compose_path = Path(deployer_cls.compose_path)
-                if not compose_path.exists():
-                  errors.append(f'compose file not found: {deployer_cls.compose_path}')
-
-                if errors:
-                  failed.append((deploy_file, errors))
-                  print(f'  ❌ {deploy_file}: {errors}')
-                else:
-                  print(f'  ✅ {deployer_cls.__name__}: service={deployer_cls.service}')
-              else:
-                print(f'  ⚠️ No Deployer subclass found (may be OK for bootstrap)')
-
-            except Exception as e:
-              failed.append((deploy_file, [str(e)]))
-              print(f'  ❌ {deploy_file}: {e}')
-
-          if failed:
-            print(f'\\n❌ {len(failed)} deploy.py files have errors')
-            sys.exit(1)
-
-          print(f'\\n✅ All deploy.py files validated')
-          "
-
-      # #541: service × facet completeness matrix. Every service × {probes,
-      # signals, backup} cell is declared / exempt / MISSING, plus cross-facet
-      # consistency flags (e.g. a critical probe with no SignalFacet debounce —
-      # the Infra-012.10 gap). Report-only ratchet (repo pattern, mirrors
-      # tools/ci_gate_audit.py Phase 1): flip to --enforce once the printed
-      # backlog is cleared.
-      - name: Service facet completeness matrix (report-only)
-        run: |
-          cd ${{ github.workspace }}
-          python -m tools.service_facet_matrix
+          python -m tools.ci_runner deployers
 
   lint-python:
     name: Lint Python Code
