@@ -112,13 +112,15 @@ def test_canonical_stateful_deployment_environments():
     for runner in ("local", "dev", "github-actions", "runner", "ci", "", None):
         assert is_stateful_deploy_env(runner) is False
 
-    # Normalization preserves canonical tiers
+    # Normalization preserves canonical tiers and hyphenated preview slugs
     assert normalize_env_name("prod") == "production"
     assert normalize_env_name("stg") == "staging"
     assert normalize_env_name("staging") == "staging"
     assert normalize_env_name("preview") == "preview"
-    assert normalize_env_name("pr-123") == "pr_123"
-    assert normalize_env_name("preview-web") == "preview_web"
+    assert normalize_env_name("pr-123") == "pr-123"
+    assert normalize_env_name("preview-web") == "preview-web"
+    assert normalize_env_name("canary") == "canary-preview"
+    assert normalize_env_name("canary-preview") == "canary-preview"
 
 
 VALID_DOKPLOY_DYNAMIC_ALIASES = [
@@ -130,6 +132,7 @@ VALID_DOKPLOY_DYNAMIC_ALIASES = [
     "tag-v1.0.0",
     "tag-2.1.0",
     "preview-service",
+    "canary-preview",
     "prod",
     "stg",
 ]

@@ -46,16 +46,14 @@ from libs.deploy_env_config import (  # noqa: E402
     CANARY_SLOT,
     PREVIEW_ENVIRONMENT,
     PREVIEW_KINDS,
-    preview_alias,
-    preview_service_config,
 )
 
-# This tool is finance_report/app-scoped only (its open-PR fetch is hardcoded to
-# APP_REPO below) — #522 generalized libs.deploy_env_config for multiple preview-capable
-# services, but extending leak detection to scan every registered service's own
-# Dokploy project is a separate, deliberate follow-up, not done here.
-_PREVIEW_CONFIG = preview_service_config("finance_report/app")
-PREVIEW_PROJECT = _PREVIEW_CONFIG.project
+# Multi-project preview tracking: queries each project's matching repository for open PRs.
+PROJECT_REPOS: dict[str, str] = {
+    "finance_report": "wangzitian0/finance_report",
+    "truealpha": "wangzitian0/truealpha",
+}
+APP_REPO = PROJECT_REPOS["finance_report"]
 
 # The bare main-tip preview and canary preview that are never treated as leaks.
 ALWAYS_KEEP_ALIASES = frozenset({"branch-main", CANARY_SLOT})
@@ -65,19 +63,16 @@ ALWAYS_KEEP_ALIASES = frozenset({"branch-main", CANARY_SLOT})
 # longer reach. Derived from the public PREVIEW_KINDS so a new kind can't silently
 # be misclassified as an orphan.
 VALID_KIND_PREFIXES = tuple(f"{kind}-" for kind in PREVIEW_KINDS)
-APP_REPO = "wangzitian0/finance_report"
-# The compose-name prefix ("finance-report-preview-"), derived from the canonical
-# builder (every compose_name is "<prefix>-<alias>") rather than a private constant.
-_COMPOSE_PREFIX = preview_alias("pr", 1).compose_name.removesuffix("pr-1")
 
 
 @dataclass(frozen=True)
 class PreviewCompose:
-    """A preview compose Dokploy is running under finance_report/preview."""
+    """A preview compose Dokploy is running under a preview environment."""
 
     compose_name: str
     compose_id: str
     alias: str
+    project_name: str = "finance_report"
 
 
 def collect_preview_composes(projects: list[dict]) -> list[PreviewCompose]:
@@ -108,6 +103,7 @@ def collect_preview_composes(projects: list[dict]) -> list[PreviewCompose]:
                         compose_name=cname,
                         compose_id=str(cid),
                         alias=cname[len(prefix) :],
+                        project_name=pname,
                     )
                 )
     return found
@@ -141,19 +137,27 @@ def orphan_reason(alias: str, *, open_pr_numbers: set[int] | None) -> str | None
 def select_orphans(
     composes: list[PreviewCompose],
     *,
-    open_pr_numbers: set[int] | None,
+    open_pr_numbers: set[int] | None = None,
+    open_prs_by_project: dict[str, set[int] | None] | None = None,
 ) -> list[tuple[PreviewCompose, str]]:
     """Return (compose, reason) for each orphan to reap; everything else kept."""
     out: list[tuple[PreviewCompose, str]] = []
     for c in composes:
-        reason = orphan_reason(c.alias, open_pr_numbers=open_pr_numbers)
+        if open_prs_by_project is not None:
+            prs = open_prs_by_project.get(c.project_name)
+        else:
+            prs = open_pr_numbers
+        reason = orphan_reason(c.alias, open_pr_numbers=prs)
         if reason is not None:
             out.append((c, reason))
     return out
 
 
 def fetch_open_pr_numbers(
-    token: str | None, *, opener=urllib.request.urlopen
+    token: str | None,
+    *,
+    repo: str = APP_REPO,
+    opener=urllib.request.urlopen,
 ) -> set[int] | None:
     """Open PR numbers for the app repo, or None if it can't be determined."""
     if not token:
@@ -162,7 +166,7 @@ def fetch_open_pr_numbers(
     page = 1
     while page <= 10:  # bound: 1000 PRs is far more than this repo ever has open
         url = (
-            f"https://api.github.com/repos/{APP_REPO}/pulls"
+            f"https://api.github.com/repos/{repo}/pulls"
             f"?state=open&per_page=100&page={page}"
         )
         request = urllib.request.Request(
@@ -202,13 +206,30 @@ def detect(client, *, token: str | None, opener=urllib.request.urlopen) -> dict:
     """Detect leaked previews (no mutation). Pure: lists, classifies, reports."""
     projects = client.list_projects()
     composes = collect_preview_composes(projects)
-    open_prs = fetch_open_pr_numbers(token, opener=opener)
-    leaks = select_orphans(composes, open_pr_numbers=open_prs)
+    active_projects = {c.project_name for c in composes}
+    open_prs_by_project: dict[str, set[int] | None] = {}
+    any_failed = False
+    for p in active_projects:
+        repo = PROJECT_REPOS.get(p)
+        if repo:
+            prs = fetch_open_pr_numbers(token, repo=repo, opener=opener)
+            open_prs_by_project[p] = prs
+            if prs is None and token:
+                any_failed = True
+        else:
+            open_prs_by_project[p] = None
+
+    leaks = select_orphans(composes, open_prs_by_project=open_prs_by_project)
+    if not token:
+        status = "unavailable (PR leaks not flagged)"
+    elif any_failed:
+        status = "failed"
+    else:
+        status = "ok"
+
     return {
         "preview_composes_seen": len(composes),
-        "open_pr_fetch": "ok"
-        if open_prs is not None
-        else "unavailable (PR leaks not flagged)",
+        "open_pr_fetch": status,
         "leaks": leaks,
     }
 

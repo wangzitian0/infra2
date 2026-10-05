@@ -51,7 +51,7 @@ from infra2_sdk.delivery import (
 )
 
 from libs.common import infra_domain
-from libs.deploy.preview import down
+from libs.deploy.preview import check_containers_absent, down
 from libs.deploy_contract import DeployTarget
 from libs.deploy_env_config import CANARY_SLOT
 from tools.deploy_v2 import deploy_v2
@@ -111,8 +111,6 @@ def _best_effort_down(
     sleep = _sleep or time.sleep
     last = None
     consecutive_absent = 0
-    service_project = service.split("/", 1)[0]
-    project_hyphen = service_project.replace("_", "-")
     slot_suffix = f"-{CANARY_SLOT}"
     dispatched_compose_id: str | None = None
     for i in range(attempts):
@@ -137,22 +135,10 @@ def _best_effort_down(
                         f"canary compose {result.compose_id} deletion dispatched, awaiting convergence"
                     )
             else:
-                containers = client.get_containers()
-                if not isinstance(containers, list) or not all(
-                    isinstance(row, dict) and isinstance(row.get("name"), str)
-                    for row in containers
-                ):
-                    raise RuntimeError("Dokploy container inventory is not readable")
-                survivors = sorted(
-                    row["name"]
-                    for row in containers
-                    if (
-                        row["name"].lstrip("/").startswith(f"{service_project}-")
-                        or row["name"].lstrip("/").startswith(f"{project_hyphen}-")
-                    )
-                    and row["name"].endswith(slot_suffix)
+                is_absent, survivors = check_containers_absent(
+                    client, service, slot_suffix
                 )
-                if survivors:
+                if not is_absent:
                     consecutive_absent = 0
                     last = RuntimeError(
                         f"canary Docker containers still present after compose deletion: {survivors}"

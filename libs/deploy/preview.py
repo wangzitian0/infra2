@@ -35,6 +35,7 @@ This is a pure importable backend — the operator surface is the deploy_v2 CLI:
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -65,6 +66,7 @@ class PreviewResult:
     sha: str | None
     url: str
     healthy: bool | None  # None when no health check was performed (down / --no-wait)
+    containers_cleared: bool | None = None
 
 
 # The source env's app compose to read AppRole creds from (its name in Dokploy).
@@ -417,6 +419,66 @@ def up(
         healthy=healthy,
     )
 
+def check_containers_absent(
+    client,
+    service: str,
+    slot_suffix: str,
+) -> tuple[bool, list[str]]:
+    """Check Dokploy container inventory once for containers matching service and slot_suffix.
+
+    Returns (is_absent, matching_survivors).
+    """
+    service_project = service.split("/", 1)[0]
+    project_hyphen = service_project.replace("_", "-")
+    containers = client.get_containers()
+    if not isinstance(containers, list) or not all(
+        isinstance(row, dict) and isinstance(row.get("name"), str)
+        for row in containers
+    ):
+        raise RuntimeError("Dokploy container inventory is not readable")
+
+    survivors = sorted(
+        row["name"]
+        for row in containers
+        if (
+            row["name"].lstrip("/").startswith(f"{service_project}-")
+            or row["name"].lstrip("/").startswith(f"{project_hyphen}-")
+        )
+        and row["name"].endswith(slot_suffix)
+    )
+    return len(survivors) == 0, survivors
+
+
+def wait_for_containers_absent(
+    client,
+    service: str,
+    slot_suffix: str,
+    attempts: int = 6,
+    _sleep: Callable[[float], None] | None = None,
+) -> tuple[bool, list[str]]:
+    """Poll Dokploy container inventory until slot containers are confirmed absent.
+
+    Requires two consecutive clean reads from client.get_containers().
+    Returns (is_clean, last_observed_survivors).
+    """
+    sleep = _sleep or time.sleep
+    consecutive_absent = 0
+    last_survivors: list[str] = []
+
+    for i in range(attempts):
+        is_absent, survivors = check_containers_absent(client, service, slot_suffix)
+        if not is_absent:
+            consecutive_absent = 0
+            last_survivors = survivors
+        else:
+            consecutive_absent += 1
+            if consecutive_absent >= 2:
+                return True, []
+        if i < attempts - 1:
+            sleep(min(2 ** (i + 1), 8))
+
+    return False, last_survivors
+
 
 def down(
     kind: str,
@@ -425,6 +487,9 @@ def down(
     domain: str,
     client,
     service: str = "finance_report/app",
+    wait: bool = False,
+    attempts: int = 6,
+    _sleep=None,
 ) -> PreviewResult:
     """Tear down the preview stack for one alias, destroying its ephemeral DB volume.
 
@@ -440,17 +505,18 @@ def down(
     alias = preview_alias(kind, value, slug_prefix=config.slug_prefix)
     existing = _find_compose(client, config.project, alias.compose_name)
     url = alias.app_url(domain=domain, base_subdomain=config.base_subdomain)
-    if not existing:
-        return PreviewResult(
-            action="down",
-            alias=alias.alias,
-            compose_id=None,
-            sha=None,
-            url=url,
-            healthy=None,
+    compose_id = existing["composeId"] if existing else None
+    if existing:
+        client.delete_compose(compose_id, delete_volumes=True)
+
+    containers_cleared = None
+    if wait:
+        slot_suffix = f"-{alias.alias}"
+        clean, _ = wait_for_containers_absent(
+            client, service, slot_suffix, attempts=attempts, _sleep=_sleep
         )
-    compose_id = existing["composeId"]
-    client.delete_compose(compose_id, delete_volumes=True)
+        containers_cleared = clean
+
     return PreviewResult(
         action="down",
         alias=alias.alias,
@@ -458,6 +524,7 @@ def down(
         sha=None,
         url=url,
         healthy=None,
+        containers_cleared=containers_cleared,
     )
 
 

@@ -127,6 +127,12 @@ class ConvergenceFakeDokploy:
                 del self.records[name]
                 break
 
+    def get_containers(self):
+        containers = []
+        for name in self.records:
+            containers.append({"name": f"{name}"})
+        return containers
+
     # --- assertions --------------------------------------------------------
     def survivors(self) -> dict[str, str]:
         """Docker projects still running — non-empty means a leaked orphan."""
@@ -191,3 +197,43 @@ def test_teardown_is_composeid_based_not_name_based():
     # the real (suffixed) project is gone; the bare-name stray survives — proving the
     # model distinguishes the two keys and that composeId-teardown is what saves us.
     assert client.survivors() == {bare_name: "cmp-stray"}
+
+
+def test_down_with_wait_true_verifies_physical_container_absence():
+    client = ConvergenceFakeDokploy()
+    pl.up("pr", 7, code="main", domain="zitian.party", client=client, http_get=_ok_get)
+    res = pl.down(
+        "pr", 7, domain="zitian.party", client=client, wait=True, _sleep=lambda *_: None
+    )
+
+    assert res.action == "down"
+    assert res.containers_cleared is True
+
+
+def test_down_with_wait_true_detects_container_survivors():
+    client = ConvergenceFakeDokploy()
+    pl.up("pr", 7, code="main", domain="zitian.party", client=client, http_get=_ok_get)
+
+    class SurvivorClient:
+        def find_compose_by_name(self, *a, **kw):
+            return client.find_compose_by_name(*a, **kw)
+
+        def delete_compose(self, *a, **kw):
+            return client.delete_compose(*a, **kw)
+
+        def get_containers(self):
+            return [{"name": "finance_report-preview-db-pr-7"}]
+
+    res = pl.down(
+        "pr",
+        7,
+        domain="zitian.party",
+        client=SurvivorClient(),
+        wait=True,
+        attempts=2,
+        _sleep=lambda *_: None,
+    )
+
+    assert res.action == "down"
+    assert res.containers_cleared is False
+

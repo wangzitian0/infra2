@@ -40,10 +40,12 @@ from libs.common import normalize_env_name
 
 # The canary runs arbitrary code on a fixed throwaway preview slot no real PR reuses.
 # Canonical SSOT slot is CANARY_SLOT ("canary-preview") defined in infra2-sdk.
-# Kept as a pure string literal here so lightweight ops-checks jobs (preview-leak-check,
-# host-hygiene-schedule) can import this module without needing infra2-sdk installed (#783).
-CANARY_SLOT = "canary-preview"
-CANARY_PR = 999
+try:
+    from infra2_sdk import CANARY_SLOT, LEGACY_CANARY_PR
+except ImportError:
+    CANARY_SLOT = "canary-preview"
+    LEGACY_CANARY_PR = 999
+CANARY_PR = LEGACY_CANARY_PR
 
 # data default per env. Non-prod defaults to `staging` data (operator choice); prod is
 # always real prod data. A PR sha never runs on prod data and prod data never leaves
@@ -443,9 +445,9 @@ def _normalize_alias(kind: str, value: int | str | None) -> tuple[str, str]:
         return "branch", text
     if kind == "pr":
         text = str(value).strip()
-        if text == str(CANARY_PR):
+        if text == str(LEGACY_CANARY_PR):
             warnings.warn(
-                f"Legacy canary slot pr-{CANARY_PR} mapped to {CANARY_SLOT}. "
+                f"Legacy canary slot pr-{LEGACY_CANARY_PR} mapped to {CANARY_SLOT}. "
                 "Use kind='canary' or CANARY_SLOT.",
                 DeprecationWarning,
                 stacklevel=3,
@@ -458,7 +460,15 @@ def _normalize_alias(kind: str, value: int | str | None) -> tuple[str, str]:
         return "pr", text
     if kind == "canary":
         text = str(value).strip().lower() if value is not None else ""
-        if not text or text in ("999", "pr-999", "preview", "canary", CANARY_SLOT):
+        if not text or text in (
+            "preview",
+            "canary",
+            CANARY_SLOT,
+            str(LEGACY_CANARY_PR),
+            f"pr-{LEGACY_CANARY_PR}",
+            f"canary-{LEGACY_CANARY_PR}",
+            "canary-999",
+        ):
             text = "preview"
         elif not _CANARY_VALUE_RE.match(text):
             raise ValueError(

@@ -184,3 +184,59 @@ def test_main_remediate_deletes_and_exits_zero(monkeypatch) -> None:
     assert rc == 0
     # with no token only the bare-slug orphan is confirmed -> remediated
     assert client.deleted == [("mainslug", True)]
+
+
+def test_detect_supports_truealpha_and_finance_report_pr_isolation() -> None:
+    multi_projects = [
+        {
+            "name": "finance_report",
+            "environments": [
+                {
+                    "name": "preview",
+                    "compose": [
+                        {
+                            "name": "finance-report-preview-pr-10",
+                            "composeId": "fr_pr10",
+                        },
+                        {
+                            "name": "finance-report-preview-pr-11",
+                            "composeId": "fr_pr11",
+                        },
+                    ],
+                }
+            ],
+        },
+        {
+            "name": "truealpha",
+            "environments": [
+                {
+                    "name": "preview",
+                    "compose": [
+                        {
+                            "name": "truealpha-preview-pr-20",
+                            "composeId": "ta_pr20",
+                        },
+                        {
+                            "name": "truealpha-preview-pr-99",
+                            "composeId": "ta_pr99",
+                        },
+                    ],
+                }
+            ],
+        },
+    ]
+
+    def multi_opener(request, timeout=0):
+        url = request.full_url
+        if "wangzitian0/finance_report" in url:
+            return _Resp(json.dumps([{"number": 10}]).encode())
+        if "wangzitian0/truealpha" in url:
+            return _Resp(json.dumps([{"number": 20}]).encode())
+        return _Resp(b"[]")
+
+    client = _FakeClient(multi_projects)
+    result = plc.detect(client, token="tok", opener=multi_opener)
+    leaked_ids = {c.compose_id for c, _ in result["leaks"]}
+    # fr_pr10 and ta_pr20 are open in their respective repos; fr_pr11 and ta_pr99 are closed leaks.
+    assert leaked_ids == {"fr_pr11", "ta_pr99"}
+

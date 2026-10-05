@@ -211,14 +211,17 @@ def is_report_only_environment(value: str | None) -> bool:
     from libs.common import normalize_env_name
     from libs.deploy_env_config import PREVIEW_KINDS
 
-    raw = (value or "").strip().lower().replace("-", "_")
+    raw = (value or "").strip().lower()
     try:
         name = normalize_env_name(raw)
     except ValueError:  # e.g. a "/" in it: not an environment this estate names
         return False
     if name in REPORT_ONLY_ENVIRONMENTS:
         return True
-    return any(name.startswith(f"{kind}_") for kind in (*PREVIEW_KINDS, "preview"))
+    return any(
+        name.startswith(f"{kind}-") or name.startswith(f"{kind}_")
+        for kind in (*PREVIEW_KINDS, "preview")
+    )
 
 
 class AlertingError(Exception):

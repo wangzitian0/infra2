@@ -160,12 +160,34 @@ def normalize_env_name(value: str | None) -> str:
         return "staging"
     if val in ("preview", "preview_env", "preview-env"):
         return "preview"
-    if val.startswith("pr-") or val.startswith("pr_"):
-        return val.replace("-", "_")
-    if val.startswith("preview-"):
-        return val.replace("-", "_")
-    if "-" in val or "/" in val:
-        raise ValueError("ENV name must not include '-' or '/' (use '_')")
+    if val in (
+        "canary",
+        "canary-preview",
+        "canary_preview",
+        "canary-999",
+        "canary_999",
+    ):
+        return "canary-preview"
+    if "/" in val:
+        raise ValueError("ENV name must not include '/'")
+    for prefix in (
+        "pr-",
+        "pr_",
+        "branch-",
+        "branch_",
+        "commit-",
+        "commit_",
+        "tag-",
+        "tag_",
+        "preview-",
+        "preview_",
+    ):
+        if val.startswith(prefix):
+            return val.replace("_", "-")
+    if "-" in val:
+        raise ValueError(
+            f"ENV name must not include '-' unless a valid preview alias (got {val!r})"
+        )
     return val
 
 

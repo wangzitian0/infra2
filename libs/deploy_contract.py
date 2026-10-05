@@ -415,7 +415,7 @@ _ALL_REF_FORMS = _CODE_FORMS + _RELEASE_FORMS
 #   preview/commit — a pinned commit sha -> report-commit-<sha7>.
 #   preview/tag    — a release tag -> report-tag-<slug>.
 #   canary         — any ref form, code OR release (_ALL_REF_FORMS); runs on a fixed
-#                    throwaway pr-<N> slot (a deploy-path probe, kept maximally flexible).
+#                    throwaway canary-preview slot (a deploy-path probe, kept maximally flexible).
 # Every preview slot is uniformly <kind>-<value>; `branch` (not a bare `main`) is what makes
 # that uniform — so downstream slot parsing/generation never special-cases the main tip.
 DEPLOY_TYPES: dict[str, DeployTypeSpec] = {
