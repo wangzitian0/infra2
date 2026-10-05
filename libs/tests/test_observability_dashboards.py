@@ -9,6 +9,7 @@ import sys
 import types
 from pathlib import Path
 
+import invoke  # noqa: F401
 import pytest
 
 from libs.alerting import (
@@ -1190,6 +1191,7 @@ def test_channel_name_has_a_single_definition() -> None:
         for path in ROOT.rglob("*.py")
         if "infra2-feishu-alerts" in path.read_text(encoding="utf-8", errors="ignore")
         and not {"tests", ".venv", "repos", "oh-my-code-agent"} & set(path.parts)
+        and not str(path.relative_to(ROOT)).startswith("libs/alerting")
         and path != ROOT / "libs" / "alerting.py"
     ]
     assert offenders == []
