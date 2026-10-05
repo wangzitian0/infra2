@@ -31,8 +31,10 @@ confirmed_drift discipline, preserved per section).
 
 from __future__ import annotations
 
+import json
 import os
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -177,6 +179,53 @@ def run_all() -> list[Section]:
     return [run_compose_id_section(), run_config_drift_section(), run_dns_section()]
 
 
+#: Where `main()` leaves what the run actually observed, for the step that resolves
+#: a paged finding after a green run (#962). Job-level env; absent = not recorded.
+OBSERVATION_ENV = "FACET_RECONCILE_OBSERVATION"
+
+
+def unevaluated_prefixes(sections: list[Section]) -> list[str]:
+    """Key prefixes of the sections that did not really run (#962).
+
+    A section that was skipped (Cloudflare credentials missing, 401/403) or hit a
+    blocker (a lookup that failed) makes no claim about its findings: a paged
+    finding of that section has not recovered, it is unknown. Every finding key
+    starts with its section's name and a colon (`dns:`, `config-hash:`, `compose-id:`).
+    """
+    return [f"{s.name}:" for s in sections if s.skipped or s.blockers]
+
+
+def write_observation(
+    sections: list[Section], env: Mapping[str, str] | None = None
+) -> None:
+    """Record which sections did not run, if the job asked for it."""
+    path = (os.environ if env is None else env).get(OBSERVATION_ENV, "").strip()
+    if not path:
+        return
+    try:
+        Path(path).write_text(
+            json.dumps({"unevaluated": unevaluated_prefixes(sections)}),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        # No observation reads as "nothing observed": a paged finding stays paged.
+        print(f"could not record the observation: {exc}", file=sys.stderr)
+
+
+def read_unevaluated(env: Mapping[str, str]) -> list[str]:
+    """The prefixes the last `main()` run did not evaluate. A missing or unreadable
+    observation is everything (``[""]``): without proof of a section, nothing resolves."""
+    path = env.get(OBSERVATION_ENV, "").strip()
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        prefixes = data["unevaluated"]
+        if isinstance(prefixes, list) and all(isinstance(p, str) for p in prefixes):
+            return prefixes
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return [""]
+
+
 def combined_report(sections: list[Section]) -> str:
     n_blockers = sum(len(s.blockers) for s in sections)
     n_confirmed = sum(len(s.confirmed) for s in sections)
@@ -213,6 +262,7 @@ def confirmed_finding_pairs(sections: list[Section]) -> list[tuple[str, str]]:
 
 def main() -> int:
     sections = run_all()
+    write_observation(sections)
     report = combined_report(sections)
     print(report)
 

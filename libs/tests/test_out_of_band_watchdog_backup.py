@@ -184,6 +184,66 @@ def test_a_missing_or_stale_service_is_red_and_named(host) -> None:
     assert detail.startswith(f"2/{len(load_backup_inventory())} artifacts failed")
 
 
+def test_the_failing_artifacts_are_structured_units_not_parsed_prose(host) -> None:
+    """#962: the page dedup's identity of the aggregated backup check is which
+    artifacts fail and how, taken from the verifier's own structure."""
+    inventory_size = len(load_backup_inventory())
+    host.healthy().write_manifest(
+        "production",
+        _manifest("production", drop=["platform/s3"], stale=["truealpha/postgres"]),
+    )
+
+    result = host.results()[PRODUCTION]
+
+    assert result.units == (
+        "platform/s3:P1:backup artifact is missing from manifest",
+        "truealpha/postgres:P1:backup artifact is stale",
+    )
+    assert (
+        f"2/{inventory_size} artifacts failed" in result.detail
+    )  # the count stays prose
+
+
+def test_the_units_ignore_ages_and_sizes_but_not_which_artifact_or_how(host) -> None:
+    def units(**manifest_kwargs) -> tuple[str, ...]:
+        host.healthy().write_manifest(
+            "production", _manifest("production", **manifest_kwargs)
+        )
+        return host.results()[PRODUCTION].units
+
+    stale = units(stale=["truealpha/postgres"])
+    # the same artifact is older tomorrow: the reading moves, the unit does not
+    manifest = _manifest("production", stale=["truealpha/postgres"])
+    for artifact in manifest["artifacts"]:
+        if artifact["service_id"] == "truealpha/postgres":
+            artifact["created_at"] -= 40 * 3600
+            artifact["size_bytes"] = 99999
+    host.write_manifest("production", manifest)
+    older = host.results()[PRODUCTION]
+
+    assert older.units == stale
+    assert older.detail != host.healthy().results()[PRODUCTION].detail
+    # a second artifact, a different one, or the same one failing another way differ
+    assert units(stale=["truealpha/postgres", "platform/s3"]) != stale
+    assert units(stale=["platform/s3"]) != stale
+    assert units(drop=["truealpha/postgres"]) != stale
+
+
+def test_every_manifest_level_failure_has_its_own_mode_token(host) -> None:
+    host.healthy().manifest_path("production").unlink()
+    missing = host.results()[PRODUCTION].units
+    host.write_manifest("production", "{not json")
+    not_json = host.results()[PRODUCTION].units
+    host.write_manifest("production", _manifest("staging"))
+    wrong_environment = host.results()[PRODUCTION].units
+
+    assert [missing, not_json, wrong_environment] == [
+        ("manifest:missing",),
+        ("manifest:not-json",),
+        ("manifest:wrong-environment",),
+    ]
+
+
 def test_a_future_timestamp_is_red_not_fresh(host) -> None:
     """Clock skew or milliseconds in a seconds field must not read as fresh."""
     host.healthy().write_manifest(

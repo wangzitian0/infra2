@@ -28,7 +28,19 @@ recorded                              open-only run: a drill or branch dispatch 
                                       closes anything)
 no findings, run did not prove none   nothing (a transient lookup failure is not a
                                       recovery); the state is kept
+no findings, but a recorded finding   nothing: a check that did not run (a skipped
+belongs to a check not evaluated      section, an unreadable quota) has not recovered
+open-only run (drill, branch          may page and report, but records nothing: a
+dispatch)                             drill's identity must not become what the next
+                                      scheduled run trusts
 ====================================  =================================================
+
+The identity deliberately excludes readings (ages, sizes, counts, quota levels): a
+worsening *within* one finding is not a new page. It is visible in the daily
+``[报告] 仍未恢复`` message, which carries the current detail lines. A finding that
+aggregates several units (a backup check over many artifacts) names each failing unit
+in its keys, so a different unit failing, or the same unit failing worse in kind
+(severity), is a new identity.
 
 **State** is one open GitHub issue per job, titled exactly ``ops-checks paged: <job>``,
 whose body ends in a ``<!-- infra2-page-dedup {json} -->`` marker holding the
@@ -81,11 +93,18 @@ STATE_VERSION = 1
 MAX_STORED_KEYS = 100
 #: Keys listed in a report or RESOLVED message; the rest are counted.
 MAX_LISTED_KEYS = 10
-MAX_KEY_CHARS = 300
+#: A key is shown (issue body, report, RESOLVED) at most this long; its fingerprint
+#: always covers the whole key.
+MAX_SHOWN_KEY_CHARS = 200
+#: Detail lines shown in a report, each at most this long.
+MAX_DETAIL_LINES = 15
+MAX_DETAIL_CHARS = 300
 #: Issues authored by these (plus the repository owner) count as page state.
 TRUSTED_AUTHORS = ("github-actions[bot]",)
 
 PAGE, REPORT, RESOLVED, NONE = "page", "report", "resolved", "none"
+#: `unevaluated` for a run that observed nothing: every recorded finding is unproven.
+ALL_UNEVALUATED = ("",)
 FOUND, ABSENT, CORRUPT, UNREADABLE = "found", "none", "corrupt", "unreadable"
 
 _BLANK = re.compile(r"\s+")
@@ -124,7 +143,11 @@ def _as_finding(item: Finding | tuple[str, str] | str) -> Finding:
 
 
 def _clean(text: str) -> str:
-    return _BLANK.sub(" ", str(text)).strip()[:MAX_KEY_CHARS]
+    return _BLANK.sub(" ", str(text)).strip()
+
+
+def _clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def fingerprint(job: str, keys: Iterable[str]) -> str:
@@ -145,7 +168,10 @@ def make_identity(
             for item in map(_as_finding, findings)
         }
     )
-    shown = tuple(scrub(key, env or {}).replace("`", "'") for key in keys)
+    shown = tuple(
+        _clip(scrub(key, env or {}).replace("`", "'"), MAX_SHOWN_KEY_CHARS)
+        for key in keys
+    )
     return Identity(job, tuple(keys), shown, fingerprint(job, keys))
 
 
@@ -169,6 +195,8 @@ class State:
     since: int
     #: When the job first went red; survives identity changes (RESOLVED duration).
     incident_since: int
+    #: How many keys the identity had; more than ``keys`` holds when it was cut.
+    total: int = 0
 
 
 def state_title(job: str) -> str:
@@ -210,14 +238,35 @@ def parse_marker(body: str, job: str) -> State | None:
             or type(payload["incident_since"]) is not int
         ):
             return None
+        total = payload.get("count")
         return State(
             payload["fingerprint"],
             tuple(keys),
             payload["since"],
             payload["incident_since"],
+            total if type(total) is int else len(keys),
         )
     except (ValueError, KeyError, TypeError):
         return None
+
+
+def encode_cleared_marker(job: str) -> str:
+    """The marker of a state issue whose findings were resolved: lookups ignore it."""
+    payload = {"v": STATE_VERSION, "job": job, "cleared": True}
+    return f"<!-- {MARKER} {json.dumps(payload, sort_keys=True, separators=(',', ':'))} -->"
+
+
+def is_cleared(body: str, job: str) -> bool:
+    """Was this state resolved? An issue that stayed open after RESOLVED went out
+    (the close call failed) says so in its marker, and is not state any more."""
+    matches = _MARKER.findall(body or "")
+    if not matches:
+        return False
+    try:
+        payload = json.loads(matches[-1])
+        return payload["cleared"] is True and payload["job"] == job
+    except (ValueError, KeyError, TypeError):
+        return False
 
 
 @dataclass(frozen=True)
@@ -268,6 +317,11 @@ def find_state(api: StateApi, job: str, trusted: frozenset[str]) -> Lookup:
                 f"authored by {issue.get('author') or 'an unknown author'}, not the "
                 "Actions bot or the repository owner"
             )
+    # A resolved state that could not be closed is no longer state: a relapse of the
+    # same identity is a new incident and must page, not read as "still unresolved".
+    mine = [
+        issue for issue in mine if not is_cleared(str(issue.get("body") or ""), job)
+    ]
     if not mine:
         return Lookup(ABSENT)
     numbers = tuple(issue["number"] for issue in mine)
@@ -295,6 +349,27 @@ class Decision:
     note: str = ""
 
 
+def _unproven(lookup: Lookup, unevaluated: Sequence[str]) -> str:
+    """Which recorded finding belongs to a check this run did not evaluate, or ''.
+
+    ``unevaluated`` are key prefixes: a skipped section, a quota that could not be
+    read, a check that answered "could not tell". Its recorded findings have not
+    recovered, they are unknown; ``""`` (all) when nothing was observed.
+    """
+    if not unevaluated:
+        return ""
+    state = lookup.state
+    if state is None:
+        return "the recorded findings are unknown (unreadable state)"
+    if state.total > len(state.keys):
+        return "the recorded findings were cut short"
+    hit = next(
+        (key for key in state.keys if any(key.startswith(p) for p in unevaluated)),
+        None,
+    )
+    return "" if hit is None else f"`{hit}` was not evaluated in this run"
+
+
 def decide(
     identity: Identity,
     lookup: Lookup,
@@ -302,14 +377,20 @@ def decide(
     mode: str,
     now: float,
     observed_clean: bool = False,
+    unevaluated: Sequence[str] = (),
 ) -> Decision:
     """The whole decision table, pure. ``observed_clean`` says that a run with no
     findings actually proved there are none (a clean job, or a complete report);
-    without it an empty finding list is only a transient lookup failure."""
+    without it an empty finding list is only a transient lookup failure.
+    ``unevaluated`` (key prefixes) narrows that: a recorded finding whose check did
+    not run in this run is not proven gone."""
     if mode == OFF:
         if identity.keys:
             return Decision(PAGE, "dedup is off for this run: paging as before")
         return Decision(NONE, "dedup is off for this run and nothing is red")
+    #: A drill or a branch dispatch may page and report, but what it records is what
+    #: the next scheduled run would trust: it records nothing.
+    write = mode != OPEN_ONLY
     if not identity.keys:
         if not observed_clean:
             return Decision(
@@ -322,6 +403,11 @@ def decide(
                 return Decision(
                     NONE, "open-only run (drill or branch dispatch) never resolves"
                 )
+            unproven = _unproven(lookup, unevaluated)
+            if unproven:
+                return Decision(
+                    NONE, f"cannot prove the paged findings are gone: {unproven}"
+                )
             removed = lookup.state.keys if lookup.state else ()
             return Decision(RESOLVED, "every paged finding is gone", removed=removed)
         return Decision(NONE, "nothing is red and no page is outstanding")
@@ -332,12 +418,12 @@ def decide(
             note=_STATE_NOTE,
         )
     if lookup.kind == ABSENT:
-        return Decision(PAGE, "first appearance", write=True)
+        return Decision(PAGE, "first appearance", write=write)
     if lookup.kind == CORRUPT:
         return Decision(
             PAGE,
             f"recorded state is unreadable ({lookup.detail}): paging",
-            write=True,
+            write=write,
             note=_STATE_NOTE,
         )
     state = lookup.state
@@ -356,7 +442,7 @@ def decide(
         f"identity changed (+{len(added)} -{len(removed)})",
         added=added,
         removed=removed,
-        write=True,
+        write=write,
     )
 
 
@@ -378,16 +464,43 @@ def _key_lines(keys: Sequence[str]) -> list[str]:
     return lines
 
 
+def detail_lines(detail: str, findings: Sequence[Finding]) -> list[str]:
+    """The current detail of the findings, one clipped line each: the explicit
+    ``detail`` text, else the findings' own display lines. Unique, in order."""
+    raw = detail.splitlines() if detail.strip() else [f.line for f in findings]
+    seen: dict[str, None] = {}
+    for line in raw:
+        text = _clip(_clean(line), MAX_DETAIL_CHARS)
+        if text:
+            seen.setdefault(text)
+    lines = list(seen)
+    if len(lines) > MAX_DETAIL_LINES:
+        hidden = len(lines) - MAX_DETAIL_LINES
+        lines = [*lines[:MAX_DETAIL_LINES], f"…及另外 {hidden} 行"]
+    return lines
+
+
 def report_text(
-    job: str, identity: Identity, state: State, day: int, run_url: str
+    job: str,
+    identity: Identity,
+    state: State,
+    day: int,
+    run_url: str,
+    detail: Sequence[str] = (),
 ) -> str:
-    """The compact "still unresolved" report for the reports chat."""
+    """The compact "still unresolved" report for the reports chat.
+
+    The identity excludes readings, so a finding that got worse (older, bigger,
+    more of them) does not page. The current ``detail`` lines are here so that it is
+    still visible to whoever reads the daily report."""
     lines = [
         f"{REPORT_TITLE_PREFIX}仍未恢复 · 第 {day} 天 · {job}",
         f"{len(identity.keys)} 项结论与上次呼出相同,不再呼人;首次呼出 "
         f"{format_time(state.since)}。",
         *_key_lines(identity.shown),
     ]
+    if detail:
+        lines += ["今日详情(读数可能已变化):", *detail]
     if run_url:
         lines.append(f"运行:{run_url}")
     return "\n".join(lines)
@@ -466,6 +579,7 @@ def _record(
         identity.shown[:MAX_STORED_KEYS],
         int(now),
         int(incident),
+        len(identity.keys),
     )
     body = state_body(job, label, state, identity, run_url)
     if lookup.numbers:
@@ -491,8 +605,14 @@ def _change_comment(decision: Decision, identity: Identity, run_url: str) -> str
 def _close(
     api: StateApi, job: str, lookup: Lookup, *, now: float, run_url: str
 ) -> None:
-    """Comment on and close every trusted state issue of the job (a duplicate left
-    open would read as a live page tomorrow)."""
+    """Clear and close every trusted state issue of the job (a duplicate left open
+    would read as a live page tomorrow).
+
+    The cleared marker is written first: it is what makes a state issue stop being
+    state, so even when the comment or the close call then fails, a relapse of the same
+    identity is a new incident that pages, not "still unresolved". If the marker
+    itself cannot be written nothing is cleared and the next run resolves again.
+    """
     state = lookup.state
     duration = (
         f" after {since_text(state.incident_since, now=now, end=now)}" if state else ""
@@ -502,10 +622,21 @@ def _close(
         f"{run_url or 'the latest run'}. Closed by the page-dedup state "
         "(`libs/observability/page_dedup.py`, #962). A later red run opens a new issue."
     )
+    cleared = f"{body}\n\n{encode_cleared_marker(job)}"
+    failures: list[str] = []
     for number in lookup.numbers:
-        api.comment(number, body)
-        api.close(number)
-        print(f"page dedup: closed #{number} ({state_title(job)})")
+        api.update_body(number, cleared)
+        for step, call in (
+            ("comment", lambda n=number: api.comment(n, body)),
+            ("close", lambda n=number: api.close(n)),
+        ):
+            try:
+                call()
+            except Exception as exc:  # noqa: BLE001 - cleared already; keep going.
+                failures.append(f"#{number} {step}: {type(exc).__name__}: {exc}")
+        print(f"page dedup: cleared #{number} ({state_title(job)})")
+    if failures:
+        raise RuntimeError("; ".join(failures))
 
 
 # --- the entry points ---------------------------------------------------------------------------
@@ -543,6 +674,8 @@ def dedup_page(
     label: str = "",
     run_url: str | None = None,
     observed_clean: bool = False,
+    unevaluated: Sequence[str] = (),
+    detail: str = "",
     mode: str | None = None,
     now: float | None = None,
     api: StateApi | None = None,
@@ -552,7 +685,10 @@ def dedup_page(
     ``deliver_page(env, text)`` is the job's pager (``deliver_out_of_band_alert``);
     ``deliver_report(text, env) -> bool`` the reports chat (``deliver_infra2_report``:
     False = not configured). ``observed_clean`` is for the call that has no findings:
-    True only when the run proved there are none.
+    True only when the run proved there are none; ``unevaluated`` are the key
+    prefixes of checks that did not run, whose recorded findings are then unproven
+    (``""`` = nothing was observed). ``detail`` is the current detail text a report
+    shows (default: the findings' own lines), since identity excludes readings.
     """
     findings = list(findings)
     now = time.time() if now is None else now
@@ -577,7 +713,12 @@ def dedup_page(
                 else Lookup(UNREADABLE, detail="no GITHUB_TOKEN or GITHUB_REPOSITORY")
             )
         decision = decide(
-            identity, lookup, mode=run_mode, now=now, observed_clean=observed_clean
+            identity,
+            lookup,
+            mode=run_mode,
+            now=now,
+            observed_clean=observed_clean,
+            unevaluated=unevaluated,
         )
     except Exception as exc:  # noqa: BLE001 - a bug here must page, never silence.
         print(
@@ -598,7 +739,14 @@ def dedup_page(
 
     if decision.action == REPORT:
         assert identity is not None and lookup.state is not None
-        text = report_text(job, identity, lookup.state, decision.day, run_url)
+        text = report_text(
+            job,
+            identity,
+            lookup.state,
+            decision.day,
+            run_url,
+            detail_lines(detail, [_as_finding(item) for item in findings]),
+        )
         try:
             delivered = (deliver_report or deliver_infra2_report)(text, env)
             failure = "" if delivered else "the reports chat is not configured"
@@ -652,8 +800,8 @@ def dedup_page(
     except Exception as exc:  # noqa: BLE001 - the page went out; say loudly.
         code = 1
         print(
-            f"::error::page dedup [{job}]: RESOLVED was delivered but the state issue "
-            f"was not closed ({type(exc).__name__}: {exc}); the next run resolves again"
+            f"::error::page dedup [{job}]: RESOLVED was delivered but clearing or "
+            f"closing the state issue failed ({type(exc).__name__}: {exc})"
         )
     return Outcome(RESOLVED, decision.reason, exit_code=code)
 
@@ -665,11 +813,13 @@ def resolve_page_state(
     deliver_page: Callable[[Mapping[str, str], str], None],
     label: str = "",
     run_url: str | None = None,
+    unevaluated: Sequence[str] = (),
     mode: str | None = None,
     now: float | None = None,
     api: StateApi | None = None,
 ) -> Outcome:
-    """A run that proved the job is clean: resolve what was paged, if anything."""
+    """A run that proved the job is clean: resolve what was paged, if anything,
+    except findings whose check this run did not evaluate (``unevaluated`` prefixes)."""
     return dedup_page(
         env,
         job=job,
@@ -679,6 +829,7 @@ def resolve_page_state(
         label=label,
         run_url=run_url,
         observed_clean=True,
+        unevaluated=unevaluated,
         mode=mode,
         now=now,
         api=api,
@@ -701,6 +852,7 @@ __all__ = [
     "Outcome",
     "State",
     "StateApi",
+    "ALL_UNEVALUATED",
     "dedup_page",
     "day_number",
     "decide",

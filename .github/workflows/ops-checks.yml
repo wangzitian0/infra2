@@ -728,6 +728,8 @@ jobs:
       INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
       INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
       INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+      # #962: which sections really ran, for the step that resolves a paged finding.
+      FACET_RECONCILE_OBSERVATION: ${{ github.workspace }}/facet-reconcile-observation.json
       GITHUB_SERVER_URL: ${{ github.server_url }}
       GITHUB_REPOSITORY: ${{ github.repository }}
       GITHUB_RUN_ID: ${{ github.run_id }}
@@ -768,7 +770,11 @@ jobs:
           python - <<'PY'
           import os
           from libs.observability.page_dedup import dedup_page, run_url_from_env
-          from tools.facet_reconcile import confirmed_finding_pairs, run_all
+          from tools.facet_reconcile import (
+              confirmed_finding_pairs,
+              run_all,
+              unevaluated_prefixes,
+          )
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
 
           sections = run_all()
@@ -782,9 +788,11 @@ jobs:
               job="facet-reconcile",
               label="每日 facet 对账",
               findings=pairs,
-              # Blockers (a lookup that failed) may hide a finding: only a run
-              # without any proves the earlier findings are gone.
-              observed_clean=not any(s.blockers for s in sections),
+              # A section that was skipped or blocked proves nothing about its own
+              # earlier findings; the others may still be resolved.
+              observed_clean=True,
+              unevaluated=unevaluated_prefixes(sections),
+              detail=detail,
               page_message=(
                   f"🚨 Daily facet reconcile: {len(pairs)} confirmed drift "
                   "finding(s).\n"
@@ -804,12 +812,16 @@ jobs:
           python - <<'PY'
           import os
           from libs.observability.page_dedup import resolve_page_state
+          from tools.facet_reconcile import read_unevaluated
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
 
+          # Green with a skipped section (no Cloudflare credentials, 401/403) is not
+          # proof that section's earlier findings are gone.
           outcome = resolve_page_state(
               os.environ,
               job="facet-reconcile",
               label="每日 facet 对账",
+              unevaluated=read_unevaluated(os.environ),
               deliver_page=deliver_out_of_band_alert,
           )
           raise SystemExit(outcome.exit_code)
@@ -844,6 +856,8 @@ jobs:
       INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
       INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
       INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+      # #962: the audit's report, for the step that resolves a paged failure.
+      VAULT_SELF_REFRESH_AUDIT_REPORT: ${{ github.workspace }}/vault-self-refresh-audit-report.json
       GITHUB_SERVER_URL: ${{ github.server_url }}
       GITHUB_REPOSITORY: ${{ github.repository }}
       GITHUB_RUN_ID: ${{ github.run_id }}
@@ -909,7 +923,11 @@ jobs:
           import os
           from libs.observability.page_dedup import dedup_page, run_url_from_env
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
-          from tools.vault_self_refresh_audit_check import confirmed_finding_pairs, run
+          from tools.vault_self_refresh_audit_check import (
+              confirmed_finding_pairs,
+              run,
+              unevaluated_keys,
+          )
 
           report = run()
           pairs = confirmed_finding_pairs(report)
@@ -926,8 +944,11 @@ jobs:
               job="vault-self-refresh-audit",
               label="Vault self-refresh 审计",
               findings=pairs,
-              # Only an all-pass run proves the earlier failures are gone.
+              # Only an all-pass run proves the earlier failures are gone, and not
+              # for a check that could only say "could not compare".
               observed_clean=report["status"] == "pass",
+              unevaluated=unevaluated_keys(report),
+              detail=detail,
               page_message=(
                   f"🚨 Vault self-refresh audit found {len(pairs)} confirmed failing "
                   "check(s).\n"
@@ -950,11 +971,15 @@ jobs:
           import os
           from libs.observability.page_dedup import resolve_page_state
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
+          from tools.vault_self_refresh_audit_check import read_unevaluated
 
+          # A passing audit whose check could only say "could not compare" (info)
+          # does not prove that check's earlier failure is gone.
           outcome = resolve_page_state(
               os.environ,
               job="vault-self-refresh-audit",
               label="Vault self-refresh 审计",
+              unevaluated=read_unevaluated(os.environ),
               deliver_page=deliver_out_of_band_alert,
           )
           raise SystemExit(outcome.exit_code)
@@ -1026,7 +1051,7 @@ jobs:
           python -m tools.secrets_reconcile_check
       # #962: pages only when the set of page-worthy findings changes; the same set on a
       # later day is a `[报告] 仍未恢复 · 第 N 天` in the reports chat (wired into this step
-      # alone). Only a complete report (stores and quotas both read) proves a finding gone.
+      # alone). Only what the report actually observed can prove a finding gone.
       - name: Alert on confirmed findings
         if: failure() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
         env:
@@ -1043,7 +1068,7 @@ jobs:
               load_report,
               page_worthy_keys,
               page_worthy_summary,
-              report_is_complete,
+              unevaluated_prefixes,
           )
 
           report = load_report(os.environ)
@@ -1055,7 +1080,11 @@ jobs:
               job="secrets-reconcile",
               label="密钥对账与容量",
               findings=page_worthy_keys(report),
-              observed_clean=report_is_complete(report),
+              # What the report did not observe (a transport error, an unread quota,
+              # a store reconciled without 1Password) proves nothing about its findings.
+              observed_clean=True,
+              unevaluated=unevaluated_prefixes(report),
+              detail=summary,
               page_message=(
                   "🚨 Secrets reconcile found drift or a quota over budget.\n"
                   f"{summary}\n"
@@ -1076,16 +1105,14 @@ jobs:
           import os
           from libs.observability.page_dedup import resolve_page_state
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
-          from tools.secrets_reconcile_check import load_report, report_is_complete
+          from tools.secrets_reconcile_check import load_report, unevaluated_prefixes
 
-          if not report_is_complete(load_report(os.environ)):
-              # A quota that could not be read is not a quota that is fine.
-              print("secrets reconcile report is incomplete -- paged state kept.")
-              raise SystemExit(0)
           outcome = resolve_page_state(
               os.environ,
               job="secrets-reconcile",
               label="密钥对账与容量",
+              # A quota that could not be read is not a quota that is fine.
+              unevaluated=unevaluated_prefixes(load_report(os.environ)),
               deliver_page=deliver_out_of_band_alert,
           )
           raise SystemExit(outcome.exit_code)

@@ -82,6 +82,8 @@ class FakeIssues:
         self.calls: list[tuple] = []
         self.listing_error: Exception | None = None
         self.write_error: Exception | None = None
+        #: operations ("comment", "close", ...) that fail while the others work
+        self.fail_ops: set[str] = set()
         self._next = 100
 
     @property
@@ -110,6 +112,8 @@ class FakeIssues:
         self.calls.append((op, *args))
         if self.write_error is not None:
             raise self.write_error
+        if op in self.fail_ops:
+            raise RuntimeError(f"HTTP 500 on {op}")
 
     def create(self, title: str, body: str, labels) -> int:
         self._write("create", title)
@@ -240,6 +244,16 @@ def test_findings_that_exist_can_never_make_an_empty_identity() -> None:
     )
 
 
+def test_two_long_keys_with_the_same_prefix_are_different_findings() -> None:
+    """The fingerprint covers the whole key; only what is shown is cut short."""
+    prefix = "unit-" + "x" * 400
+    a = pd.make_identity(JOB, [Finding(prefix + "-a")])
+    b = pd.make_identity(JOB, [Finding(prefix + "-b")])
+
+    assert a.fingerprint != b.fingerprint
+    assert len(a.shown[0]) <= pd.MAX_SHOWN_KEY_CHARS
+
+
 def test_public_issue_text_is_scrubbed_but_the_fingerprint_covers_the_raw_key() -> None:
     env = {"INFRA2_WATCHDOG_SSH_HOST": "vps.internal.example", "OTHER": "x"}
     identity = pd.make_identity(
@@ -264,7 +278,7 @@ def test_day_number_counts_calendar_days_in_the_owners_zone() -> None:
 
 
 def test_marker_round_trips_and_a_forged_or_torn_one_is_rejected() -> None:
-    state = State(pd.fingerprint(JOB, ["k"]), ("k --> <b>",), 100, 50)
+    state = State(pd.fingerprint(JOB, ["k"]), ("k --> <b>",), 100, 50, 1)
     marker = pd.encode_marker(JOB, state, 1)
 
     assert "-->" not in marker[:-4] and "<b>" not in marker  # cannot end the comment
@@ -430,15 +444,84 @@ def test_secrets_keys_are_names_not_quota_readings() -> None:
     )
 
 
-def test_a_secrets_report_with_an_unread_quota_proves_nothing() -> None:
+def test_a_secrets_report_proves_only_what_it_observed() -> None:
     from tools import secrets_reconcile_check as check
 
     full = {"ok": True, "stores": [], "capacity": {"ok": True, "items": []}}
 
-    assert check.report_is_complete(full)
-    assert not check.report_is_complete({**full, "capacity": None})
-    assert not check.report_is_complete({"ok": False, "transport_error": "ssh failed"})
-    assert not check.report_is_complete({**full, "transport_error": "x"})
+    assert check.unevaluated_prefixes(full) == []
+    # an unread quota says nothing about quota findings, only about them
+    assert check.unevaluated_prefixes({**full, "capacity": None}) == ["quota:"]
+    # a store reconciled while 1Password was unavailable cannot prove its own findings
+    noted = {
+        **full,
+        "stores": [
+            {"service": "platform/alerting", "env": "staging", "ok": True},
+            {
+                "service": "truealpha/app",
+                "env": "production",
+                "ok": True,
+                "note": "1Password unavailable: ssh timeout",
+            },
+        ],
+    }
+    assert check.unevaluated_prefixes(noted) == ["store:truealpha/app:production:"]
+    # no report at all proves nothing
+    assert check.unevaluated_prefixes({"ok": False, "transport_error": "ssh"}) == [""]
+    assert check.unevaluated_prefixes({**full, "transport_error": "x"}) == [""]
+    assert check.unevaluated_prefixes({"ok": True}) == [""]
+
+
+def test_facet_and_vault_name_what_they_did_not_evaluate(tmp_path) -> None:
+    from libs.vault_self_refresh_audit import classify_deployed_template
+    from tools import facet_reconcile as fr
+    from tools import vault_self_refresh_audit_check as vault
+
+    sections = [
+        fr.Section("compose-id", blockers=["live lookup failed"]),
+        fr.Section("config-hash"),
+        fr.Section("dns", skipped="Cloudflare credentials not configured"),
+    ]
+    assert fr.unevaluated_prefixes(sections) == ["compose-id:", "dns:"]
+    observation = {fr.OBSERVATION_ENV: str(tmp_path / "observation.json")}
+    assert fr.read_unevaluated(observation) == [""]  # nothing recorded: nothing proven
+    fr.write_observation(sections, observation)
+    assert fr.read_unevaluated(observation) == ["compose-id:", "dns:"]
+    (tmp_path / "observation.json").write_text("{not json", encoding="utf-8")
+    assert fr.read_unevaluated(observation) == [""]
+
+    # the vault check that can also fail reports `info` when it could not look: the
+    # id in `CAN_FAIL_BUT_REPORT_INFO` is the real classifier's, not a copy that drifts
+    service = SimpleNamespace(
+        id="platform/redis",
+        secret_template_path="/t",
+        compose_path="c",
+    )
+    unreadable = classify_deployed_template(service, "")
+    assert unreadable.status == "info"
+    assert unreadable.check_id in vault.CAN_FAIL_BUT_REPORT_INFO
+    report = {
+        "status": "pass",
+        "results": [
+            unreadable.to_dict(),
+            {
+                "service_id": "platform/redis",
+                "check_id": "preview-stack",
+                "status": "info",
+            },
+            {"service_id": "platform/redis", "check_id": "token", "status": "pass"},
+        ],
+    }
+    assert vault.unevaluated_keys(report) == ["platform/redis::deployed-template"]
+    # a missing or failing report proves nothing
+    env = {vault.REPORT_ENV: str(tmp_path / "vault.json")}
+    assert vault.read_unevaluated(env) == [""]
+    (tmp_path / "vault.json").write_text(json.dumps(report), encoding="utf-8")
+    assert vault.read_unevaluated(env) == ["platform/redis::deployed-template"]
+    (tmp_path / "vault.json").write_text(
+        json.dumps({**report, "status": "fail"}), encoding="utf-8"
+    )
+    assert vault.read_unevaluated(env) == [""]
 
 
 # --- the decision table: pure ------------------------------------------------------------
@@ -509,6 +592,47 @@ def test_decision_table(label, keys, lookup, mode, clean, expected) -> None:
     assert decision.action == expected, label
 
 
+@pytest.mark.parametrize(
+    ("label", "recorded", "unevaluated", "expected"),
+    [
+        ("a check that ran resolves", ("dns:a",), ["compose-id:"], RESOLVED),
+        ("every check ran", ("dns:a",), [], RESOLVED),
+        ("its own check did not run", ("dns:a",), ["dns:"], NONE),
+        ("one of several did not run", ("dns:a", "compose-id:x"), ["dns:"], NONE),
+        ("nothing was observed", ("dns:a",), list(pd.ALL_UNEVALUATED), NONE),
+    ],
+)
+def test_a_finding_whose_check_did_not_run_is_not_resolved(
+    label, recorded, unevaluated, expected
+) -> None:
+    decision = pd.decide(
+        _identity(),
+        _found(*recorded),
+        mode=FULL,
+        now=day(2),
+        observed_clean=True,
+        unevaluated=unevaluated,
+    )
+
+    assert decision.action == expected, label
+
+
+def test_cut_short_or_unreadable_state_is_never_resolved_past_an_unevaluated_check() -> (
+    None
+):
+    cut = State(pd.fingerprint(JOB, ["a"]), ("a",), int(day(1)), int(day(1)), total=250)
+    for lookup in (Lookup(FOUND, (7,), cut), Lookup(CORRUPT, (7,))):
+        decision = pd.decide(
+            _identity(),
+            lookup,
+            mode=FULL,
+            now=day(2),
+            observed_clean=True,
+            unevaluated=["dns:"],
+        )
+        assert decision.action == NONE
+
+
 def test_decision_details_name_what_changed_and_the_day() -> None:
     changed = pd.decide(_identity("a", "c"), _found("a", "b"), mode=FULL, now=day(2))
     same = pd.decide(_identity("a"), _found("a", since=day(1)), mode=FULL, now=day(3))
@@ -521,6 +645,12 @@ def test_decision_details_name_what_changed_and_the_day() -> None:
         _identity("a"), Lookup(UNREADABLE, detail="x"), mode=FULL, now=day(1)
     )
     assert unreadable.write is False and unreadable.note
+    # a drill pages new findings but records nothing: what it writes would be what the
+    # next scheduled run trusts
+    drill = pd.decide(_identity("a"), Lookup(ABSENT), mode=OPEN_ONLY, now=day(1))
+    assert (drill.action, drill.write) == (PAGE, False)
+    drill_change = pd.decide(_identity("b"), _found("a"), mode=OPEN_ONLY, now=day(1))
+    assert (drill_change.action, drill_change.write) == (PAGE, False)
 
 
 # --- the daily sequence, end to end against a fake GitHub ----------------------------------
@@ -752,14 +882,39 @@ def test_a_state_write_failure_after_a_good_page_is_loud_and_repeats_tomorrow() 
     assert run_day(api, ch, 2, keys=["A"]).action == PAGE  # nothing recorded -> pages
 
 
-def test_a_close_failure_after_a_resolved_page_is_loud() -> None:
+@pytest.mark.parametrize("failing", [{"comment", "close"}, {"close"}, {"comment"}])
+def test_a_close_failure_after_a_resolved_page_is_loud_and_a_relapse_still_pages(
+    failing,
+) -> None:
+    """RESOLVED went out but the issue stayed open with the old fingerprint: a relapse
+    of the same identity must be a new page, not "still unresolved, day 5"."""
     api, ch = FakeIssues(), Channels()
     run_day(api, ch, 1, keys=["A"])
-    api.write_error = RuntimeError("HTTP 500")
+    api.fail_ops = set(failing)
 
     out = run_day(api, ch, 2, keys=[])
 
     assert out.action == RESOLVED and out.exit_code == 1
+    assert len(ch.pages) == 2  # the page, and RESOLVED
+    # the old state may still be open on GitHub, but it no longer counts as state
+    api.fail_ops = set()
+    relapse = run_day(api, ch, 3, keys=["A"])
+    assert relapse.action == PAGE and ch.reports == []
+    assert len(ch.pages) == 3
+
+
+def test_a_cleared_marker_that_cannot_be_written_resolves_again_next_run() -> None:
+    api, ch = FakeIssues(), Channels()
+    run_day(api, ch, 1, keys=["A"])
+    api.fail_ops = {"update_body"}
+
+    out = run_day(api, ch, 2, keys=[])
+
+    assert out.action == RESOLVED and out.exit_code == 1
+    api.fail_ops = set()
+    # nothing was cleared, so a run that is still clean resolves it (and says so)
+    assert run_day(api, ch, 3, keys=[]).action == RESOLVED
+    assert api.open_titles() == []
 
 
 def test_a_stranger_s_issue_with_the_same_title_cannot_silence_the_pager() -> None:
@@ -866,7 +1021,9 @@ def test_manual_ssh_diagnostics_do_not_use_or_write_state() -> None:
     assert api.writes == writes and api.open_titles() != []
 
 
-def test_a_drill_opens_and_pages_but_never_closes() -> None:
+def test_a_drill_pages_but_records_nothing_so_the_next_scheduled_run_pages() -> None:
+    """A drill's identity must not become what a scheduled run trusts: the real
+    first page of that identity would otherwise read as "still unresolved"."""
     api, ch = FakeIssues(), Channels()
     drill = {
         **SCHEDULED,
@@ -875,24 +1032,90 @@ def test_a_drill_opens_and_pages_but_never_closes() -> None:
     }
 
     first = run_day(api, ch, 1, keys=["A"], env=drill)
-    assert first.action == PAGE and api.open_titles() != []
+
+    assert first.action == PAGE and len(ch.pages) == 1
+    assert api.issues == {} and api.writes == []  # nothing recorded, nothing opened
+    # the next scheduled run with the same identity is its first appearance
+    scheduled = run_day(api, ch, 2, keys=["A"])
+    assert scheduled.action == PAGE and len(ch.pages) == 2 and ch.reports == []
+    assert api.open_titles() == ["ops-checks paged: facet-reconcile"]
+
+
+def test_a_drill_never_closes_resolves_or_rewrites_recorded_state() -> None:
+    api, ch = FakeIssues(), Channels()
+    drill = {
+        **SCHEDULED,
+        "GITHUB_EVENT_NAME": "workflow_dispatch",
+        "INFRA2_PEER_LIVENESS_BOUND_CAP_HOURS": "0",
+    }
+    run_day(api, ch, 1, keys=["A"])  # recorded by a scheduled run
+    writes = list(api.writes)
 
     clear = run_day(api, ch, 2, keys=[], env=drill)
+    changed = run_day(api, ch, 2, keys=["A", "drill"], env=drill)
+    same = run_day(api, ch, 2, keys=["A"], env=drill)
 
-    assert clear.action == NONE
-    assert len(ch.pages) == 1  # no RESOLVED from a run whose green proves nothing
-    assert api.open_titles() == ["ops-checks paged: facet-reconcile"]
-    # the next real run resolves it
-    assert run_day(api, ch, 3, keys=[]).action == RESOLVED
+    assert clear.action == NONE  # no RESOLVED from a run whose green proves nothing
+    assert changed.action == PAGE and same.action == REPORT
+    assert api.writes == writes and api.open_titles() != []
+    # the scheduled state is untouched: tomorrow's real run is still day 2 of {A}
+    assert run_day(api, ch, 3, keys=["A"]).action == REPORT
+    assert run_day(api, ch, 4, keys=[]).action == RESOLVED
 
 
-def test_a_branch_dispatch_never_closes_either() -> None:
+def test_a_branch_dispatch_never_closes_or_records_either() -> None:
+    api, ch = FakeIssues(), Channels()
+    run_day(api, ch, 1, keys=["A"])
+    writes = list(api.writes)
+
+    out = run_day(api, ch, 2, keys=[], env=BRANCH_DISPATCH)
+    new = run_day(api, ch, 2, keys=["B"], env=BRANCH_DISPATCH)
+
+    assert out.action == NONE and new.action == PAGE
+    assert api.writes == writes and api.open_titles() != []
+    assert len(ch.pages) == 2
+
+
+# --- a report shows what the identity leaves out ----------------------------------------------
+
+
+def test_a_report_carries_the_current_detail_lines_so_a_worsening_is_visible() -> None:
+    """Identity excludes readings, so a finding getting worse does not page; the
+    daily report must show it."""
     api, ch = FakeIssues(), Channels()
     run_day(api, ch, 1, keys=["A"])
 
-    out = run_day(api, ch, 2, keys=[], env=BRANCH_DISPATCH)
+    findings = [Finding("A", "A: backup is 190h old (bound 180h), 3 of 8 artifacts")]
+    outcome = dedup_page(
+        SCHEDULED,
+        job=JOB,
+        findings=findings,
+        page_message="PAGE",
+        deliver_page=ch.page,
+        deliver_report=ch.report,
+        now=day(2),
+        api=api,
+    )
 
-    assert out.action == NONE and api.open_titles() != [] and len(ch.pages) == 1
+    assert outcome.action == REPORT and len(ch.pages) == 1
+    assert "A: backup is 190h old (bound 180h), 3 of 8 artifacts" in ch.reports[-1]
+    # an explicit detail text wins over the findings' own lines, and is bounded
+    explicit = "\n".join(f"- line {n}" for n in range(40)) + "\n- line 0"
+    dedup_page(
+        SCHEDULED,
+        job=JOB,
+        findings=findings,
+        page_message="PAGE",
+        deliver_page=ch.page,
+        deliver_report=ch.report,
+        detail=explicit,
+        now=day(2),
+        api=api,
+    )
+    text = ch.reports[-1]
+    assert "- line 14" in text and "- line 15" not in text
+    assert "…及另外 25 行" in text  # 40 unique lines, 15 shown
+    assert text.count("- line 0") == 1  # unique
 
 
 # --- the real workflow steps, executed ---------------------------------------------------------
@@ -982,21 +1205,36 @@ def step_env(monkeypatch):
     return api, channels, monkeypatch
 
 
-def test_facet_steps_page_report_and_resolve(step_env) -> None:
+def test_facet_steps_page_report_and_resolve(step_env, tmp_path) -> None:
     import tools.facet_reconcile as fr
 
     api, ch, monkeypatch = step_env
     alert, resolve = DEDUPED_JOBS["facet-reconcile"]
+    observation = tmp_path / "observation.json"
+    monkeypatch.setenv(fr.OBSERVATION_ENV, str(observation))
 
-    def sections(note: str, blockers=()):
+    def sections(note="", *, dns="ran", compose_blocked=False):
         return [
             fr.Section(
+                "compose-id",
+                blockers=["live lookup failed"] if compose_blocked else [],
+            ),
+            fr.Section("config-hash"),
+            fr.Section(
                 "dns",
-                blockers=list(blockers),
-                confirmed=[f"a.example.test {note}"],
-                confirmed_keys=["dns:a.example.test"],
-            )
+                confirmed=[f"a.example.test {note}"] if note else [],
+                confirmed_keys=["dns:a.example.test"] if note else [],
+                skipped="Cloudflare API observation blocked"
+                if dns == "skipped"
+                else "",
+            ),
         ]
+
+    def job_ran(secs):
+        """The check step's observation, then the green job's resolve step."""
+        monkeypatch.setattr(fr, "run_all", lambda: secs)
+        fr.write_observation(secs)
+        return _execute("facet-reconcile", resolve)
 
     monkeypatch.setattr(fr, "run_all", lambda: sections("missing since 09-20"))
     assert _execute("facet-reconcile", alert) == 0
@@ -1009,35 +1247,50 @@ def test_facet_steps_page_report_and_resolve(step_env) -> None:
     assert _execute("facet-reconcile", alert) == 0
     assert len(ch.pages) == 1
     assert ch.reports[0].startswith("[报告] 仍未恢复 · 第 2 天 · facet-reconcile")
+    assert "missing since 09-20 (day 2)" in ch.reports[0]  # the current reading
 
-    # a failed run whose only blocker is a transient lookup error: no page, no resolve
-    monkeypatch.setattr(
-        fr,
-        "run_all",
-        lambda: [fr.Section("compose-id", blockers=["live lookup failed"])],
-    )
+    # the job is green only because the dns section was skipped (Cloudflare 401): that
+    # is not proof the drift is gone, so no RESOLVED and the state is kept
+    assert job_ran(sections(dns="skipped")) == 0
+    assert len(ch.pages) == 1 and api.open_titles() != []
+    # ... the same on a failed run whose alert step finds no finding
+    monkeypatch.setattr(fr, "run_all", lambda: sections(dns="skipped"))
     assert _execute("facet-reconcile", alert) == 0
     assert len(ch.pages) == 1 and api.open_titles() != []
+    # a blocker in ANOTHER section does not stop the dns finding from being resolved
+    # once dns really ran and found nothing
+    monkeypatch.setattr(fr, "run_all", lambda: sections(compose_blocked=True))
+    assert _execute("facet-reconcile", alert) == 0
+    assert ch.pages[-1].startswith("✅ [已恢复] 每日 facet 对账")
+    assert api.open_titles() == []
 
-    # a green run resolves
+    # a green run resolves what it observed; without an observation nothing resolves
+    monkeypatch.setattr(fr, "run_all", lambda: sections("missing again"))
+    assert _execute("facet-reconcile", alert) == 0
+    pages = len(ch.pages)
+    observation.unlink(missing_ok=True)
     assert _execute("facet-reconcile", resolve) == 0
+    assert len(ch.pages) == pages and api.open_titles() != []
+    assert job_ran(sections()) == 0
     assert ch.pages[-1].startswith("✅ [已恢复] 每日 facet 对账")
     assert api.open_titles() == []
 
 
-def test_vault_steps_page_report_and_resolve(step_env) -> None:
+def test_vault_steps_page_report_and_resolve(step_env, tmp_path) -> None:
     import tools.vault_self_refresh_audit_check as vault
 
     api, ch, monkeypatch = step_env
     alert, resolve = DEDUPED_JOBS["vault-self-refresh-audit"]
+    saved = tmp_path / "vault-report.json"
+    monkeypatch.setenv(vault.REPORT_ENV, str(saved))
 
-    def report(summary: str, status="fail", result_status="fail"):
+    def report(summary: str, status="fail", result_status="fail", check_id="agent"):
         return {
             "status": status,
             "results": [
                 {
                     "service_id": "platform/redis",
-                    "check_id": "vault-agent-container",
+                    "check_id": check_id,
                     "status": result_status,
                     "severity": "critical",
                     "summary": summary,
@@ -1056,15 +1309,66 @@ def test_vault_steps_page_report_and_resolve(step_env) -> None:
     assert ch.reports[0].startswith(
         "[报告] 仍未恢复 · 第 3 天 · vault-self-refresh-audit"
     )
+    assert "restarted 8 times" in ch.reports[0]  # the reading that moved
 
     # the rerun is non-pass without any `fail` result (a hiccup): nothing resolves
     monkeypatch.setattr(vault, "run", lambda: report("?", "fail", "error"))
     assert _execute("vault-self-refresh-audit", alert) == 0
     assert len(ch.pages) == 1 and api.open_titles() != []
 
-    # an all-pass rerun, or a green job, resolves
+    # a green job that has no readable report proves nothing
+    assert _execute("vault-self-refresh-audit", resolve) == 0
+    assert len(ch.pages) == 1 and api.open_titles() != []
+
+    # an all-pass rerun resolves
     monkeypatch.setattr(vault, "run", lambda: report("ok", "pass", "pass"))
     assert _execute("vault-self-refresh-audit", alert) == 0
+    assert ch.pages[-1].startswith("✅ [已恢复] Vault self-refresh 审计")
+    assert api.open_titles() == []
+
+
+def test_vault_info_for_a_check_that_could_not_compare_does_not_resolve_its_failure(
+    step_env, tmp_path
+) -> None:
+    """`deployed-template` answers `info` ("could not compare") when it could not look
+    and `fail` when the template is stale: the audit passes on the info, but the
+    earlier failure is unknown, not gone."""
+    import tools.vault_self_refresh_audit_check as vault
+
+    api, ch, monkeypatch = step_env
+    alert, resolve = DEDUPED_JOBS["vault-self-refresh-audit"]
+    saved = tmp_path / "vault-report.json"
+    monkeypatch.setenv(vault.REPORT_ENV, str(saved))
+
+    def report(result_status: str, status: str) -> dict:
+        return {
+            "status": status,
+            "results": [
+                {
+                    "service_id": "platform/redis",
+                    "check_id": "deployed-template",
+                    "status": result_status,
+                    "severity": "P1" if result_status == "fail" else "P3",
+                    "summary": "template",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(vault, "run", lambda: report("fail", "fail"))
+    assert _execute("vault-self-refresh-audit", alert) == 0
+    assert len(ch.pages) == 1
+
+    # failed job, rerun passes on an `info`
+    monkeypatch.setattr(vault, "run", lambda: report("info", "pass"))
+    assert _execute("vault-self-refresh-audit", alert) == 0
+    # green job whose saved report has the same `info`
+    saved.write_text(json.dumps(report("info", "pass")), encoding="utf-8")
+    assert _execute("vault-self-refresh-audit", resolve) == 0
+    assert len(ch.pages) == 1 and api.open_titles() != []
+
+    # the template was compared and matches: now it is resolved
+    saved.write_text(json.dumps(report("pass", "pass")), encoding="utf-8")
+    assert _execute("vault-self-refresh-audit", resolve) == 0
     assert ch.pages[-1].startswith("✅ [已恢复] Vault self-refresh 审计")
     assert api.open_titles() == []
 
@@ -1125,3 +1429,39 @@ def test_secrets_steps_page_report_and_resolve(step_env, tmp_path) -> None:
     assert _execute("secrets-reconcile", resolve) == 0
     assert ch.pages[-1].startswith("✅ [已恢复] 密钥对账与容量")
     assert api.open_titles() == []
+
+
+def test_secrets_store_reconciled_without_1password_does_not_resolve_its_findings(
+    step_env, tmp_path
+) -> None:
+    api, ch, monkeypatch = step_env
+    alert, resolve = DEDUPED_JOBS["secrets-reconcile"]
+    path = tmp_path / "report.json"
+    monkeypatch.setenv("SECRETS_RECONCILE_REPORT", str(path))
+
+    def write(*, missing, note=""):
+        row = {
+            "service": "platform/alerting",
+            "env": "staging",
+            "missing": missing,
+            "ok": not missing,
+        }
+        if note:
+            row["note"] = note
+        path.write_text(
+            json.dumps({"ok": False, "stores": [row], "capacity": {"items": []}}),
+            encoding="utf-8",
+        )
+
+    write(missing=["FEISHU_APP_ID"])
+    assert _execute("secrets-reconcile", alert) == 0
+    assert len(ch.pages) == 1
+
+    # 1Password was unavailable, so the comparison that found it could not be repeated
+    write(missing=[], note="1Password unavailable: ssh timeout")
+    assert _execute("secrets-reconcile", resolve) == 0
+    assert len(ch.pages) == 1 and api.open_titles() != []
+
+    write(missing=[])
+    assert _execute("secrets-reconcile", resolve) == 0
+    assert ch.pages[-1].startswith("✅ [已恢复] 密钥对账与容量")

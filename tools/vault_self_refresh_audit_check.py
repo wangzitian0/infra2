@@ -35,8 +35,10 @@ alerting only on a confirmed signal, not a transient blip, matters).
 
 from __future__ import annotations
 
+import json
 import os
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -90,10 +92,48 @@ def confirmed_finding_pairs(report: dict[str, Any]) -> list[tuple[str, str]]:
     ]
 
 
+#: Where `main()` leaves the report, for the step that resolves a paged failure after
+#: a green run (#962). Job-level env; absent = not recorded.
+REPORT_ENV = "VAULT_SELF_REFRESH_AUDIT_REPORT"
+#: Checks that answer `info` ("could not compare") instead of a verdict when they
+#: could not look, and `fail` when they could: an `info` from one of these is not a
+#: pass. `libs/tests/test_page_dedup.py` ties this to `classify_deployed_template`.
+CAN_FAIL_BUT_REPORT_INFO = ("deployed-template",)
+
+
+def unevaluated_keys(report: dict[str, Any]) -> list[str]:
+    """Key prefixes of checks that could not tell (#962): `info` from a check that
+    can also `fail`. The audit passes with them, but a finding paged for that check
+    has not recovered, it is unknown."""
+    return [
+        f"{r['service_id']}::{r['check_id']}"
+        for r in report["results"]
+        if r["status"] == "info" and r["check_id"] in CAN_FAIL_BUT_REPORT_INFO
+    ]
+
+
+def read_unevaluated(env: Mapping[str, str]) -> list[str]:
+    """The prefixes the last `main()` run could not evaluate. No readable passing
+    report is everything (``[""]``): without proof of a check, nothing resolves."""
+    path = (env.get(REPORT_ENV) or "").strip()
+    try:
+        report = json.loads(Path(path).read_text(encoding="utf-8"))
+        if report["status"] == "pass":
+            return unevaluated_keys(report)
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return [""]
+
+
 def main() -> int:
     env = os.environ.get("VAULT_SELF_REFRESH_AUDIT_ENV", "production")
     report = run(env)
     print(write_report(report))
+    if path := os.environ.get(REPORT_ENV, "").strip():
+        try:
+            Path(path).write_text(json.dumps(report), encoding="utf-8")
+        except OSError as exc:
+            print(f"could not record the report: {exc}", file=sys.stderr)
     return 0 if report["status"] == "pass" else 1
 
 

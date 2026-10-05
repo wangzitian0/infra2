@@ -147,14 +147,25 @@ def page_worthy_keys(report: Mapping[str, Any]) -> list[str]:
     return [key for keys, _text in _page_worthy(report) for key in keys]
 
 
-def report_is_complete(report: Mapping[str, Any]) -> bool:
-    """Did the report observe every store and quota? A transport error or an absent
-    section is not an observation, so an empty finding list from it proves nothing."""
-    return (
-        not report.get("transport_error")
-        and isinstance(report.get("stores"), list)
-        and isinstance(report.get("capacity"), Mapping)
-    )
+def unevaluated_prefixes(report: Mapping[str, Any]) -> list[str]:
+    """Key prefixes of what this report did not observe (#962).
+
+    A paged finding under one of them has not recovered, it is unknown: no report
+    at all (transport error) is everything (``""``); an unread quota section is
+    every `quota:` finding; a store reconciled while 1Password was unavailable (its
+    ``note``) cannot prove its own `stale` / `missing` / `empty` findings.
+    """
+    if report.get("transport_error") or not isinstance(report.get("stores"), list):
+        return [""]
+    prefixes: list[str] = []
+    if not isinstance(report.get("capacity"), Mapping):
+        prefixes.append("quota:")
+    prefixes += [
+        f"store:{row.get('service')}:{row.get('env')}:"
+        for row in report["stores"]
+        if row.get("note")
+    ]
+    return prefixes
 
 
 def report_path(env: Mapping[str, str]) -> Path:

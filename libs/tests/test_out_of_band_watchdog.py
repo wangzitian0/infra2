@@ -1708,6 +1708,7 @@ def _run_day(
     registry_error: Exception | None = None,
     extra_ssh=(),
     dokploy_check=None,
+    backup=None,
 ):
     """One main() run with every check faked: `failing` names the red ones.
 
@@ -1748,7 +1749,9 @@ def _run_day(
     monkeypatch.setattr(
         watchdog,
         "run_backup_checks",
-        lambda _config: [
+        (lambda _config: list(backup))
+        if backup is not None
+        else lambda _config: [
             result("infra2-backup-production", "backup"),
             result("infra2-backup-staging", "backup"),
             result("infra2-restore-rehearsal", "restore-rehearsal"),
@@ -2067,6 +2070,138 @@ def test_a_persistent_red_check_pages_once_then_reports_then_resolves(
     # day 6: still green -> silence
     code, pages, reports, _trail, _events = run(set())
     assert (code, pages, reports) == (0, [], [])
+
+
+def _backup_day(watchdog, *, detail, units, domain="backup"):
+    """The aggregated production backup check as one day's run left it, plus the
+    two single-unit backup checks, green."""
+    return [
+        watchdog.CheckResult(
+            "infra2-backup-production", False, detail, domain, units=tuple(units)
+        ),
+        watchdog.CheckResult("infra2-backup-staging", True, "ok", "backup"),
+        watchdog.CheckResult(
+            "infra2-restore-rehearsal", True, "ok", "restore-rehearsal"
+        ),
+    ]
+
+
+def test_a_backup_that_gets_worse_within_its_check_pages_instead_of_reporting(
+    monkeypatch, tmp_path
+) -> None:
+    """#962 review: `infra2-backup-production` aggregates artifacts and mixes severities.
+    Keyed by the check name alone, 1 failing artifact -> 5, another artifact, or a
+    P1 -> P0 configuration failure would all have been `仍未恢复` reports."""
+    from libs.tests.test_page_dedup import FakeIssues, age_state
+
+    watchdog = _load_watchdog()
+    api = FakeIssues()
+    env = _dedup_env(monkeypatch, api)
+    stale = "backup artifact is stale"
+    missing = "backup artifact is missing from manifest"
+
+    def run(detail, units, domain="backup"):
+        return _run_day(
+            monkeypatch,
+            tmp_path,
+            worker_last_run=FRESH_CLEAN_RUN,
+            backup=_backup_day(watchdog, detail=detail, units=units, domain=domain),
+            env_extra=env,
+        )
+
+    # day 1: one artifact is stale -> page
+    code, pages, reports, *_ = run(
+        "1/8 artifacts failed: a: stale, 190h", [f"a:P1:{stale}"]
+    )
+    assert code == 1 and len(pages) == 1 and reports == []
+
+    # day 2: the same artifact, only its age and a count differ -> a report whose
+    # detail shows today's reading, not a page
+    age_state(api, "out-of-band-watchdog", 1)
+    code, pages, reports, *_ = run(
+        "1/8 artifacts failed: a: stale, 214h", [f"a:P1:{stale}"]
+    )
+    assert pages == [] and len(reports) == 1
+    assert (
+        reports[0].splitlines()[0] == "[报告] 仍未恢复 · 第 2 天 · out-of-band-watchdog"
+    )
+    assert "stale, 214h" in reports[0]
+
+    # day 3: a second artifact fails -> page with the whole new set
+    code, pages, reports, *_ = run(
+        "2/8 artifacts failed: a: stale; b: stale",
+        [f"a:P1:{stale}", f"b:P1:{stale}"],
+    )
+    assert reports == [] and len(pages) == 1
+    assert "2/8 artifacts failed" in pages[0]
+
+    # day 4: a DIFFERENT artifact replaces them -> page
+    code, pages, reports, *_ = run("1/8 artifacts failed: c: stale", [f"c:P1:{stale}"])
+    assert reports == [] and len(pages) == 1
+
+    # day 5: the same artifact now fails another way (missing, not stale) -> page
+    code, pages, reports, *_ = run(
+        "1/8 artifacts failed: c: missing", [f"c:P1:{missing}"]
+    )
+    assert reports == [] and len(pages) == 1
+
+    # day 6: the check goes from backup/P1 to configuration/P0 (inventory empty): page
+    code, pages, reports, *_ = run(
+        "backup inventory is empty", ["inventory:empty"], domain="configuration"
+    )
+    assert reports == [] and len(pages) == 1
+    assert "P0" in pages[0]
+
+    # day 7: unchanged -> report again, on its own day 2
+    age_state(api, "out-of-band-watchdog", 1)
+    code, pages, reports, *_ = run(
+        "backup inventory is empty", ["inventory:empty"], domain="configuration"
+    )
+    assert pages == [] and len(reports) == 1
+
+
+def test_page_findings_key_each_failing_unit_with_its_domain_and_level() -> None:
+    watchdog = _load_watchdog()
+    backup = watchdog.CheckResult(
+        "infra2-backup-production",
+        False,
+        "2/8 artifacts failed: a: stale, 190h",
+        "backup",
+        severity="P1",
+        units=("b:P1:stale", "a:P1:stale"),
+    )
+    single = watchdog.CheckResult(
+        "cloudflare-worker-status",
+        False,
+        "last ran 31h ago",
+        "cloudflare-worker-health",
+    )
+
+    findings = watchdog.page_findings([backup, single])
+    keys = sorted(finding.key for finding in findings)
+
+    assert keys == [
+        "cloudflare-worker-status [cloudflare-worker-health/P1]",
+        "infra2-backup-production [backup/P1] a:P1:stale",
+        "infra2-backup-production [backup/P1] b:P1:stale",
+    ]
+    # a reading in the detail is never part of any key, but is shown in a report
+    assert not any("190h" in finding.key for finding in findings)
+    assert any("190h" in finding.line for finding in findings)
+    # the same unit at another severity or domain is another finding
+    raised = watchdog.page_findings(
+        [
+            watchdog.CheckResult(
+                backup.name,
+                False,
+                backup.detail,
+                "configuration",
+                severity="P0",
+                units=backup.units,
+            )
+        ]
+    )
+    assert not {f.key for f in raised} & {f.key for f in findings}
 
 
 def test_main_pages_as_before_when_the_page_state_cannot_be_read(

@@ -196,6 +196,11 @@ class CheckResult:
     #: Per-unit proof that a Dokploy `error` is stale: the unit's own containers run
     #: healthy on the current config. Empty means no such proof.
     runtime_evidence: str = ""
+    #: What is failing inside this check, as stable ids: the failing units of a check
+    #: that aggregates several (backup artifacts, as `service_id:severity:summary`) or a
+    #: failure-mode token (`manifest:missing`). Identity of the page dedup (#962):
+    #: never an age, a size, a count or a timestamp. Empty = the check is one unit.
+    units: tuple[str, ...] = ()
 
 
 def parse_http_targets(raw: str) -> list[HttpTarget]:
@@ -650,6 +655,7 @@ def run_backup_checks(
                     f"backup check raised {type(exc).__name__} on {path}: "
                     f"{_one_line(str(exc))}",
                     "backup",
+                    units=(f"check:raised:{type(exc).__name__}",),
                 )
             )
     # The rehearsal runs 45 minutes after the weekly backup, so the backup RPO is
@@ -701,6 +707,7 @@ def _backup_manifest_result(
             False,
             f"could not reach the host to read {path}: {_last_line(stderr)}",
             "backup",
+            units=("manifest:host-unreachable",),
         )
     if returncode != 0:
         return CheckResult(
@@ -708,13 +715,26 @@ def _backup_manifest_result(
             False,
             f"no {environment} manifest at {path}: {_last_line(stderr or stdout)}",
             "backup",
+            units=("manifest:missing",),
         )
     try:
         manifest = json.loads(stdout)
     except ValueError as exc:
-        return CheckResult(name, False, f"{path} is not JSON: {exc}", "backup")
+        return CheckResult(
+            name,
+            False,
+            f"{path} is not JSON: {exc}",
+            "backup",
+            units=("manifest:not-json",),
+        )
     if not isinstance(manifest, dict):
-        return CheckResult(name, False, f"{path} is not a JSON object", "backup")
+        return CheckResult(
+            name,
+            False,
+            f"{path} is not a JSON object",
+            "backup",
+            units=("manifest:not-an-object",),
+        )
     if manifest.get("environment") != environment:
         return CheckResult(
             name,
@@ -722,11 +742,18 @@ def _backup_manifest_result(
             f"{path} records environment {manifest.get('environment')!r}, "
             f"expected {environment!r}",
             "backup",
+            units=("manifest:wrong-environment",),
         )
     checks = verify(inventory, manifest, now=now_ts)["checks"]
     if not checks:
         # An empty inventory verifies nothing; 0 of 0 is not a pass.
-        return CheckResult(name, False, "backup inventory is empty", "configuration")
+        return CheckResult(
+            name,
+            False,
+            "backup inventory is empty",
+            "configuration",
+            units=("inventory:empty",),
+        )
     failed = [check for check in checks if check["status"] != "pass"]
     if failed:
         shown = "; ".join(
@@ -738,6 +765,17 @@ def _backup_manifest_result(
             False,
             f"{len(failed)}/{len(checks)} artifacts failed: {shown}{more}",
             "backup",
+            # structured, not parsed from the detail: which artifact, at what severity,
+            # failing how (the verifier's fixed phrases: stale, empty, missing, ...;
+            # its readings are in `evidence`, never in the summary)
+            units=tuple(
+                sorted(
+                    {
+                        f"{check['service_id']}:{check['severity']}:{check['summary']}"
+                        for check in failed
+                    }
+                )
+            ),
         )
     oldest = max(check["evidence"]["age_hours"] for check in checks)
     return CheckResult(
@@ -1683,13 +1721,14 @@ def main(env: Mapping[str, str] | None = None) -> int:
         return 1
 
     try:
-        # #962: the pager only when the set of paged checks changed; the same set
-        # again is a report. Identity = check names (never detail: it has ages and sizes).
+        # #962: the pager only when the set of failing units changed; the same set again
+        # is a report (whose detail lines show a reading getting worse). Identity =
+        # `page_findings`: check, domain, level, failing unit; never the detail.
         outcome = dedup_page(
             current_env,
             job=PAGE_DEDUP_JOB,
             label=PAGE_DEDUP_LABEL,
-            findings=[Finding(result.name) for result in paged],
+            findings=page_findings(paged),
             page_message=message,
             deliver_page=deliver_out_of_band_alert,
             deliver_report=deliver_infra2_report,
@@ -1733,6 +1772,29 @@ def main(env: Mapping[str, str] | None = None) -> int:
         }
     )
     return 1
+
+
+def page_findings(paged: list[CheckResult]) -> list[Finding]:
+    """The identity of a day's pages (#962): one finding per failing unit of each
+    paged check, keyed ``<check> [<failure domain>/<level>] <unit>``.
+
+    A check that aggregates units (the backup check over its artifacts) names each
+    failing unit, so a different artifact failing, one more failing, or the same one
+    failing at a higher severity is a different identity, while a reading changing
+    (its age, its size) is not. The failure domain and level are in every key: the
+    same check going from `backup`/P1 to `configuration`/P0 is a different finding.
+    The line is the redacted detail, shown in a report, never part of the identity.
+    """
+    findings = []
+    for result in paged:
+        subject = (
+            f"{result.name} [{result.failure_domain or '-'}/"
+            f"{pager_level(result.severity)}]"
+        )
+        line = f"{result.name}: {_redact(_one_line(result.detail))}"
+        for unit in result.units or ("",):
+            findings.append(Finding(f"{subject} {unit}".strip(), line))
+    return findings
 
 
 def _resolve_paged_state(env: Mapping[str, str], *, dry_run: bool) -> int:
