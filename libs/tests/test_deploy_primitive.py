@@ -13,6 +13,7 @@ from libs.deploy.promote import (
     ensure_generated_secrets as _real_ensure_generated_secrets,
 )
 from libs.deploy_queue import parse_epoch_seconds
+from libs.tests.compose_env import container_env
 
 # A realistic full commit sha and its 7-char short form (the tag images are published
 # under). resolve_to_sha returns a full sha; IMAGE_TAG must be the short form.
@@ -21,6 +22,10 @@ SHORT_SHA = "1af32e6"
 FIXED_FINANCE_REPORT_COMPOSE = (
     Path(__file__).parents[2] / "finance_report/finance_report/10.app/compose.yaml"
 )
+FIXED_TRUEALPHA_COMPOSE = (
+    Path(__file__).parents[2] / "truealpha/truealpha/10.app/compose.yaml"
+)
+COLLECTOR_OTLP_HTTP = "http://platform-signoz-otel-collector:4318"
 
 
 class FakeDokploy:
@@ -283,6 +288,51 @@ def test_truealpha_prod_deploy_resolves_its_own_compose_and_identity():
     assert env["INFRA_SERVICE_ID"] == "truealpha/app"
     assert env["INFRA_ENVIRONMENT"] == "production"
     assert client.deployed == ["j-gIAk0GfF0bGOitZN-og"]
+
+
+@pytest.mark.parametrize(
+    ("env_type", "deploy_environment", "env_suffix"),
+    [("staging", "staging", "-staging"), ("prod", "production", "")],
+)
+def test_truealpha_llm_container_receives_the_collector_endpoint_and_issued_identity(
+    env_type, deploy_environment, env_suffix
+):
+    """infra2#906: truealpha's llm-service exports telemetry to the shared SigNoz the way
+    finance_report's backend does. The deploy issues the identity; the compose hands it to
+    the container. Resolving the compose against the env THIS path pushes is the only
+    check that proves the container gets it (a deploy-side assertion alone passed while
+    truealpha's compose consumed none of it, and the service sent nothing for weeks)."""
+    client = FakeDokploy()
+    dp.deploy(
+        env_type,
+        FULL_SHA,
+        domain="zitian.party",
+        client=client,
+        service="truealpha/app",
+        staging_validated=True,
+        iac_ref="b" * 40,
+    )
+    _, pushed = client.updated[0]
+
+    llm = container_env(FIXED_TRUEALPHA_COMPOSE, "llm", pushed)
+    assert llm["OTEL_EXPORTER_OTLP_ENDPOINT"] == COLLECTOR_OTLP_HTTP
+    assert llm["OTEL_SERVICE_NAME"] == "truealpha-app"
+    attributes = dict(
+        pair.split("=", 1) for pair in llm["OTEL_RESOURCE_ATTRIBUTES"].split(",")
+    )
+    assert attributes["deployment.environment.name"] == deploy_environment
+    assert attributes["service.name"] == llm["OTEL_SERVICE_NAME"]
+    assert attributes["infra.service.id"] == "truealpha/app"
+    assert attributes["service.version"] == SHORT_SHA
+    assert attributes["infra.iac.ref"] == "b" * 40
+
+    # The endpoint turns export ON and the service refuses to start on it without the
+    # identity above, so it must reach no container that is not handed the identity too
+    # (finance_report's worker crash-looped staging on exactly this, 2026-09-10).
+    for service in ("web", "vault-agent"):
+        assert "OTEL_EXPORTER_OTLP_ENDPOINT" not in container_env(
+            FIXED_TRUEALPHA_COMPOSE, service, pushed
+        ), service
 
 
 def test_truealpha_staging_deploy_sets_app_host():
