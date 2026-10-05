@@ -6,7 +6,7 @@
     "infra2",
     "config-as-code"
   ],
-  "version": "v6",
+  "version": "v5",
   "variables": {
     "deployment_environment": {
       "type": "QUERY",
@@ -24,56 +24,38 @@
       "description": "Count of finance-report-backend ERROR/FATAL logs (matches the FinanceReportBackendErrorLogs alert).",
       "panelTypes": "graph",
       "query": {
-        "queryType": "builder",
         "builder": {
           "queryData": [
             {
-              "dataSource": "logs",
               "queryName": "A",
-              "aggregateOperator": "count",
+              "dataSource": "logs",
+              "aggregations": [
+                {
+                  "expression": "count()"
+                }
+              ],
+              "filter": {
+                "expression": "(service.name = 'finance-report-backend' AND severity_text IN ['ERROR', 'FATAL'] AND deployment.environment IN $deployment_environment)"
+              },
+              "having": {
+                "expression": ""
+              },
               "expression": "A",
               "disabled": false,
               "stepInterval": 60,
-              "filters": {
-                "op": "AND",
-                "items": [
-                  {
-                    "key": {
-                      "key": "service.name",
-                      "dataType": "string",
-                      "type": "resource"
-                    },
-                    "op": "=",
-                    "value": "finance-report-backend"
-                  },
-                  {
-                    "key": {
-                      "key": "severity_text",
-                      "dataType": "string",
-                      "type": "tag"
-                    },
-                    "op": "in",
-                    "value": [
-                      "ERROR",
-                      "FATAL"
-                    ]
-                  },
-                  {
-                    "key": {
-                      "key": "deployment.environment",
-                      "dataType": "string",
-                      "type": "resource"
-                    },
-                    "op": "in",
-                    "value": "$deployment_environment"
-                  }
-                ]
-              },
               "legend": "errors"
             }
           ]
-        }
-      }
+        },
+        "queryType": "builder"
+      },
+      "opacity": "1",
+      "nullZeroValues": "zero",
+      "timePreferance": "GLOBAL_TIME",
+      "softMin": null,
+      "softMax": null,
+      "selectedLogFields": null,
+      "selectedTracesFields": null
     },
     {
       "id": "be-latency-p95",
@@ -82,49 +64,38 @@
       "panelTypes": "graph",
       "yAxisUnit": "ns",
       "query": {
-        "queryType": "builder",
         "builder": {
           "queryData": [
             {
-              "dataSource": "traces",
               "queryName": "A",
-              "aggregateOperator": "p95",
-              "aggregateAttribute": {
-                "key": "durationNano",
-                "dataType": "float64",
-                "type": "tag"
+              "dataSource": "traces",
+              "aggregations": [
+                {
+                  "expression": "p95(durationNano)"
+                }
+              ],
+              "filter": {
+                "expression": "(service.name = 'finance-report-backend' AND deployment.environment IN $deployment_environment)"
+              },
+              "having": {
+                "expression": ""
               },
               "expression": "A",
               "disabled": false,
               "stepInterval": 60,
-              "filters": {
-                "op": "AND",
-                "items": [
-                  {
-                    "key": {
-                      "key": "service.name",
-                      "dataType": "string",
-                      "type": "resource"
-                    },
-                    "op": "=",
-                    "value": "finance-report-backend"
-                  },
-                  {
-                    "key": {
-                      "key": "deployment.environment",
-                      "dataType": "string",
-                      "type": "resource"
-                    },
-                    "op": "in",
-                    "value": "$deployment_environment"
-                  }
-                ]
-              },
               "legend": "p95 latency"
             }
           ]
-        }
-      }
+        },
+        "queryType": "builder"
+      },
+      "opacity": "1",
+      "nullZeroValues": "zero",
+      "timePreferance": "GLOBAL_TIME",
+      "softMin": null,
+      "softMax": null,
+      "selectedLogFields": null,
+      "selectedTracesFields": null
     },
     {
       "id": "be-throughput",
@@ -132,53 +103,38 @@
       "description": "Request throughput — count of finance-report-backend server spans per step.",
       "panelTypes": "graph",
       "query": {
-        "queryType": "builder",
         "builder": {
           "queryData": [
             {
-              "dataSource": "traces",
               "queryName": "A",
-              "aggregateOperator": "count",
+              "dataSource": "traces",
+              "aggregations": [
+                {
+                  "expression": "count()"
+                }
+              ],
+              "filter": {
+                "expression": "(service.name = 'finance-report-backend' AND kind_string = 'Server' AND deployment.environment IN $deployment_environment)"
+              },
+              "having": {
+                "expression": ""
+              },
               "expression": "A",
               "disabled": false,
               "stepInterval": 60,
-              "filters": {
-                "op": "AND",
-                "items": [
-                  {
-                    "key": {
-                      "key": "service.name",
-                      "dataType": "string",
-                      "type": "resource"
-                    },
-                    "op": "=",
-                    "value": "finance-report-backend"
-                  },
-                  {
-                    "key": {
-                      "key": "kind_string",
-                      "dataType": "string",
-                      "type": "tag"
-                    },
-                    "op": "=",
-                    "value": "Server"
-                  },
-                  {
-                    "key": {
-                      "key": "deployment.environment",
-                      "dataType": "string",
-                      "type": "resource"
-                    },
-                    "op": "in",
-                    "value": "$deployment_environment"
-                  }
-                ]
-              },
               "legend": "requests"
             }
           ]
-        }
-      }
+        },
+        "queryType": "builder"
+      },
+      "opacity": "1",
+      "nullZeroValues": "zero",
+      "timePreferance": "GLOBAL_TIME",
+      "softMin": null,
+      "softMax": null,
+      "selectedLogFields": null,
+      "selectedTracesFields": null
     },
     {
       "id": "be-error-rate-5xx",
@@ -186,62 +142,38 @@
       "description": "Count of finance-report-backend server spans flagged hasError=true (5xx / unhandled).",
       "panelTypes": "graph",
       "query": {
-        "queryType": "builder",
         "builder": {
           "queryData": [
             {
-              "dataSource": "traces",
               "queryName": "A",
-              "aggregateOperator": "count",
+              "dataSource": "traces",
+              "aggregations": [
+                {
+                  "expression": "count()"
+                }
+              ],
+              "filter": {
+                "expression": "(service.name = 'finance-report-backend' AND hasError = true AND kind_string = 'Server' AND deployment.environment IN $deployment_environment)"
+              },
+              "having": {
+                "expression": ""
+              },
               "expression": "A",
               "disabled": false,
               "stepInterval": 60,
-              "filters": {
-                "op": "AND",
-                "items": [
-                  {
-                    "key": {
-                      "key": "service.name",
-                      "dataType": "string",
-                      "type": "resource"
-                    },
-                    "op": "=",
-                    "value": "finance-report-backend"
-                  },
-                  {
-                    "key": {
-                      "key": "hasError",
-                      "dataType": "bool",
-                      "type": "tag"
-                    },
-                    "op": "=",
-                    "value": "true"
-                  },
-                  {
-                    "key": {
-                      "key": "kind_string",
-                      "dataType": "string",
-                      "type": "tag"
-                    },
-                    "op": "=",
-                    "value": "Server"
-                  },
-                  {
-                    "key": {
-                      "key": "deployment.environment",
-                      "dataType": "string",
-                      "type": "resource"
-                    },
-                    "op": "in",
-                    "value": "$deployment_environment"
-                  }
-                ]
-              },
               "legend": "errors"
             }
           ]
-        }
-      }
+        },
+        "queryType": "builder"
+      },
+      "opacity": "1",
+      "nullZeroValues": "zero",
+      "timePreferance": "GLOBAL_TIME",
+      "softMin": null,
+      "softMax": null,
+      "selectedLogFields": null,
+      "selectedTracesFields": null
     },
     {
       "id": "be-latency-p50",
@@ -250,49 +182,38 @@
       "panelTypes": "graph",
       "yAxisUnit": "ns",
       "query": {
-        "queryType": "builder",
         "builder": {
           "queryData": [
             {
-              "dataSource": "traces",
               "queryName": "A",
-              "aggregateOperator": "p50",
-              "aggregateAttribute": {
-                "key": "durationNano",
-                "dataType": "float64",
-                "type": "tag"
+              "dataSource": "traces",
+              "aggregations": [
+                {
+                  "expression": "p50(durationNano)"
+                }
+              ],
+              "filter": {
+                "expression": "(service.name = 'finance-report-backend' AND deployment.environment IN $deployment_environment)"
+              },
+              "having": {
+                "expression": ""
               },
               "expression": "A",
               "disabled": false,
               "stepInterval": 60,
-              "filters": {
-                "op": "AND",
-                "items": [
-                  {
-                    "key": {
-                      "key": "service.name",
-                      "dataType": "string",
-                      "type": "resource"
-                    },
-                    "op": "=",
-                    "value": "finance-report-backend"
-                  },
-                  {
-                    "key": {
-                      "key": "deployment.environment",
-                      "dataType": "string",
-                      "type": "resource"
-                    },
-                    "op": "in",
-                    "value": "$deployment_environment"
-                  }
-                ]
-              },
               "legend": "p50 latency"
             }
           ]
-        }
-      }
+        },
+        "queryType": "builder"
+      },
+      "opacity": "1",
+      "nullZeroValues": "zero",
+      "timePreferance": "GLOBAL_TIME",
+      "softMin": null,
+      "softMax": null,
+      "selectedLogFields": null,
+      "selectedTracesFields": null
     },
     {
       "id": "be-latency-p99",
@@ -301,49 +222,38 @@
       "panelTypes": "graph",
       "yAxisUnit": "ns",
       "query": {
-        "queryType": "builder",
         "builder": {
           "queryData": [
             {
-              "dataSource": "traces",
               "queryName": "A",
-              "aggregateOperator": "p99",
-              "aggregateAttribute": {
-                "key": "durationNano",
-                "dataType": "float64",
-                "type": "tag"
+              "dataSource": "traces",
+              "aggregations": [
+                {
+                  "expression": "p99(durationNano)"
+                }
+              ],
+              "filter": {
+                "expression": "(service.name = 'finance-report-backend' AND deployment.environment IN $deployment_environment)"
+              },
+              "having": {
+                "expression": ""
               },
               "expression": "A",
               "disabled": false,
               "stepInterval": 60,
-              "filters": {
-                "op": "AND",
-                "items": [
-                  {
-                    "key": {
-                      "key": "service.name",
-                      "dataType": "string",
-                      "type": "resource"
-                    },
-                    "op": "=",
-                    "value": "finance-report-backend"
-                  },
-                  {
-                    "key": {
-                      "key": "deployment.environment",
-                      "dataType": "string",
-                      "type": "resource"
-                    },
-                    "op": "in",
-                    "value": "$deployment_environment"
-                  }
-                ]
-              },
               "legend": "p99 latency"
             }
           ]
-        }
-      }
+        },
+        "queryType": "builder"
+      },
+      "opacity": "1",
+      "nullZeroValues": "zero",
+      "timePreferance": "GLOBAL_TIME",
+      "softMin": null,
+      "softMax": null,
+      "selectedLogFields": null,
+      "selectedTracesFields": null
     },
     {
       "id": "fe-page-load",
@@ -352,58 +262,38 @@
       "panelTypes": "graph",
       "yAxisUnit": "ns",
       "query": {
-        "queryType": "builder",
         "builder": {
           "queryData": [
             {
-              "dataSource": "traces",
               "queryName": "A",
-              "aggregateOperator": "p75",
-              "aggregateAttribute": {
-                "key": "durationNano",
-                "dataType": "float64",
-                "type": "tag"
+              "dataSource": "traces",
+              "aggregations": [
+                {
+                  "expression": "p75(durationNano)"
+                }
+              ],
+              "filter": {
+                "expression": "(service.name = 'finance-report-frontend' AND name = 'documentLoad' AND deployment.environment IN $deployment_environment)"
+              },
+              "having": {
+                "expression": ""
               },
               "expression": "A",
               "disabled": false,
               "stepInterval": 60,
-              "filters": {
-                "op": "AND",
-                "items": [
-                  {
-                    "key": {
-                      "key": "service.name",
-                      "dataType": "string",
-                      "type": "resource"
-                    },
-                    "op": "=",
-                    "value": "finance-report-frontend"
-                  },
-                  {
-                    "key": {
-                      "key": "name",
-                      "dataType": "string",
-                      "type": "tag"
-                    },
-                    "op": "=",
-                    "value": "documentLoad"
-                  },
-                  {
-                    "key": {
-                      "key": "deployment.environment",
-                      "dataType": "string",
-                      "type": "resource"
-                    },
-                    "op": "in",
-                    "value": "$deployment_environment"
-                  }
-                ]
-              },
               "legend": "page load p75"
             }
           ]
-        }
-      }
+        },
+        "queryType": "builder"
+      },
+      "opacity": "1",
+      "nullZeroValues": "zero",
+      "timePreferance": "GLOBAL_TIME",
+      "softMin": null,
+      "softMax": null,
+      "selectedLogFields": null,
+      "selectedTracesFields": null
     },
     {
       "id": "fe-web-vitals",
@@ -411,56 +301,45 @@
       "description": "p75 of browser web-vital measurements reported by finance-report-frontend, grouped by metric name.",
       "panelTypes": "graph",
       "query": {
-        "queryType": "builder",
         "builder": {
           "queryData": [
             {
-              "dataSource": "traces",
               "queryName": "A",
-              "aggregateOperator": "p75",
-              "aggregateAttribute": {
-                "key": "web_vital.value",
-                "dataType": "float64",
-                "type": "tag"
+              "dataSource": "traces",
+              "aggregations": [
+                {
+                  "expression": "p75(web_vital.value)"
+                }
+              ],
+              "filter": {
+                "expression": "(service.name = 'finance-report-frontend' AND deployment.environment IN $deployment_environment) AND web_vital.name EXISTS"
+              },
+              "groupBy": [
+                {
+                  "dataType": "string",
+                  "key": "web_vital.name",
+                  "type": "tag"
+                }
+              ],
+              "having": {
+                "expression": ""
               },
               "expression": "A",
               "disabled": false,
               "stepInterval": 60,
-              "filters": {
-                "op": "AND",
-                "items": [
-                  {
-                    "key": {
-                      "key": "service.name",
-                      "dataType": "string",
-                      "type": "resource"
-                    },
-                    "op": "=",
-                    "value": "finance-report-frontend"
-                  },
-                  {
-                    "key": {
-                      "key": "deployment.environment",
-                      "dataType": "string",
-                      "type": "resource"
-                    },
-                    "op": "in",
-                    "value": "$deployment_environment"
-                  }
-                ]
-              },
-              "groupBy": [
-                {
-                  "key": "web_vital.name",
-                  "dataType": "string",
-                  "type": "tag"
-                }
-              ],
               "legend": "{{web_vital.name}}"
             }
           ]
-        }
-      }
+        },
+        "queryType": "builder"
+      },
+      "opacity": "1",
+      "nullZeroValues": "zero",
+      "timePreferance": "GLOBAL_TIME",
+      "softMin": null,
+      "softMax": null,
+      "selectedLogFields": null,
+      "selectedTracesFields": null
     },
     {
       "id": "fe-exceptions",
@@ -468,53 +347,121 @@
       "description": "Count of browser exception events reported by finance-report-frontend.",
       "panelTypes": "graph",
       "query": {
-        "queryType": "builder",
         "builder": {
           "queryData": [
             {
-              "dataSource": "traces",
               "queryName": "A",
-              "aggregateOperator": "count",
+              "dataSource": "traces",
+              "aggregations": [
+                {
+                  "expression": "count()"
+                }
+              ],
+              "filter": {
+                "expression": "(service.name = 'finance-report-frontend' AND name = 'exception' AND deployment.environment IN $deployment_environment)"
+              },
+              "having": {
+                "expression": ""
+              },
               "expression": "A",
               "disabled": false,
               "stepInterval": 60,
-              "filters": {
-                "op": "AND",
-                "items": [
-                  {
-                    "key": {
-                      "key": "service.name",
-                      "dataType": "string",
-                      "type": "resource"
-                    },
-                    "op": "=",
-                    "value": "finance-report-frontend"
-                  },
-                  {
-                    "key": {
-                      "key": "name",
-                      "dataType": "string",
-                      "type": "tag"
-                    },
-                    "op": "=",
-                    "value": "exception"
-                  },
-                  {
-                    "key": {
-                      "key": "deployment.environment",
-                      "dataType": "string",
-                      "type": "resource"
-                    },
-                    "op": "in",
-                    "value": "$deployment_environment"
-                  }
-                ]
-              },
               "legend": "exceptions"
             }
           ]
-        }
-      }
+        },
+        "queryType": "builder"
+      },
+      "opacity": "1",
+      "nullZeroValues": "zero",
+      "timePreferance": "GLOBAL_TIME",
+      "softMin": null,
+      "softMax": null,
+      "selectedLogFields": null,
+      "selectedTracesFields": null
+    }
+  ],
+  "layout": [
+    {
+      "i": "be-error-rate",
+      "x": 0,
+      "y": 0,
+      "w": 6,
+      "h": 6,
+      "moved": false,
+      "static": false
+    },
+    {
+      "i": "be-latency-p95",
+      "x": 6,
+      "y": 0,
+      "w": 6,
+      "h": 6,
+      "moved": false,
+      "static": false
+    },
+    {
+      "i": "be-throughput",
+      "x": 0,
+      "y": 6,
+      "w": 6,
+      "h": 6,
+      "moved": false,
+      "static": false
+    },
+    {
+      "i": "be-error-rate-5xx",
+      "x": 6,
+      "y": 6,
+      "w": 6,
+      "h": 6,
+      "moved": false,
+      "static": false
+    },
+    {
+      "i": "be-latency-p50",
+      "x": 0,
+      "y": 12,
+      "w": 6,
+      "h": 6,
+      "moved": false,
+      "static": false
+    },
+    {
+      "i": "be-latency-p99",
+      "x": 6,
+      "y": 12,
+      "w": 6,
+      "h": 6,
+      "moved": false,
+      "static": false
+    },
+    {
+      "i": "fe-page-load",
+      "x": 0,
+      "y": 18,
+      "w": 6,
+      "h": 6,
+      "moved": false,
+      "static": false
+    },
+    {
+      "i": "fe-web-vitals",
+      "x": 6,
+      "y": 18,
+      "w": 6,
+      "h": 6,
+      "moved": false,
+      "static": false
+    },
+    {
+      "i": "fe-exceptions",
+      "x": 0,
+      "y": 24,
+      "w": 6,
+      "h": 6,
+      "moved": false,
+      "static": false
     }
   ]
 }

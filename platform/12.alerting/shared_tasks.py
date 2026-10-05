@@ -14,6 +14,7 @@ from libs.alerting import (
     build_signoz_log_alert_rule_payload,
     find_signoz_channel_id,
     find_signoz_rule_id,
+    signoz_feishu_channel_name,
 )
 from libs.common import get_env, service_domain, with_env_suffix
 
@@ -23,7 +24,9 @@ def _bridge_url(env: dict[str, str | None]) -> str:
 
 
 def _channel_name(env: dict[str, str | None]) -> str:
-    return f"infra2-feishu-alerts-{env.get('ENV', 'production')}"
+    # One definition (libs.alerting) for the channel this module creates and the name
+    # every alert rule binds to: SigNoz routes a rule to a channel by NAME (#973).
+    return signoz_feishu_channel_name(env.get("ENV"))
 
 
 def _deploy_env(env: dict[str, str | None]) -> str:
@@ -57,7 +60,12 @@ def _signoz_context():
         )
         return None
 
-    return {"env": env, "deploy_env": deploy_env, "domain": signoz_domain, "api_key": api_key}
+    return {
+        "env": env,
+        "deploy_env": deploy_env,
+        "domain": signoz_domain,
+        "api_key": api_key,
+    }
 
 
 def _signoz_request(c, *, method: str, path: str, payload: dict | None = None):
@@ -105,6 +113,13 @@ def _signoz_request(c, *, method: str, path: str, payload: dict | None = None):
 
 
 def _ensure_signoz_channel(c) -> str | None:
+    """Ensure the Feishu bridge channel exists; return its NAME, or None on failure.
+
+    Rules bind to a channel by name, not by id: SigNoz uses the threshold's
+    ``channels`` entries as alertmanager receiver names, and a rule that carries the
+    channel id is undeliverable (``stage for receiver missing``, #973). The id is only
+    used here to prove the channel exists.
+    """
     from libs.console import success, warning
 
     env = get_env()
@@ -114,7 +129,7 @@ def _ensure_signoz_channel(c) -> str | None:
     channel_id = find_signoz_channel_id(listed["data"], channel_name)
     if channel_id:
         success(f"SigNoz Feishu channel already exists: {channel_name}")
-        return channel_id
+        return channel_name
 
     auth = None
     from libs.env import get_secrets
@@ -130,20 +145,22 @@ def _ensure_signoz_channel(c) -> str | None:
         bridge_url=_bridge_url(env),
         basic_auth=auth,
     )
-    created = _signoz_request(c, method="POST", path="/api/v1/channels", payload=payload)
+    created = _signoz_request(
+        c, method="POST", path="/api/v1/channels", payload=payload
+    )
     channel_id = find_signoz_channel_id(created["data"], channel_name)
     if channel_id:
         success(f"SigNoz Feishu channel created: {channel_name}")
-        return channel_id
+        return channel_name
 
     listed = _signoz_request(c, method="GET", path="/api/v1/channels")
     channel_id = find_signoz_channel_id(listed["data"], channel_name)
     if channel_id:
         success(f"SigNoz Feishu channel ensured: {channel_name}")
-        return channel_id
+        return channel_name
 
     warning(
-        f"Could not resolve SigNoz channel id for {channel_name}; "
+        f"Could not resolve SigNoz channel {channel_name}; "
         f"last status={created['status']}"
     )
     return None
@@ -163,7 +180,7 @@ def status(c):
     host = env["VPS_HOST"]
     container = with_env_suffix("platform-alerting", env)
     python_code = (
-        'import urllib.request; '
+        "import urllib.request; "
         'urllib.request.urlopen("http://127.0.0.1:8080/health", timeout=3).read()'
     )
     remote_cmd = shlex.quote(
@@ -251,7 +268,7 @@ def print_log_error_rule_payload(
     c,
     alert_name,
     service_name,
-    channel_id="channel-id",
+    channel_name="",
     summary="",
     severity="error",
     threshold=0,
@@ -259,11 +276,13 @@ def print_log_error_rule_payload(
     frequency="1m",
 ):
     """Print a reusable SigNoz OTEL log error alert rule payload."""
-    summary = summary or f"{service_name} emitted ERROR/FATAL logs in the last 5 minutes"
+    summary = (
+        summary or f"{service_name} emitted ERROR/FATAL logs in the last 5 minutes"
+    )
     payload = build_signoz_log_alert_rule_payload(
         alert_name=alert_name,
         service_name=service_name,
-        channel_ids=[channel_id],
+        channel_names=[channel_name or _channel_name(get_env())],
         summary=summary,
         severity=severity,
         threshold=threshold,
@@ -289,16 +308,18 @@ def ensure_log_error_rule(
     """Ensure a reusable SigNoz OTEL log error alert rule routes to Feishu."""
     from libs.console import error, success
 
-    channel_id = _ensure_signoz_channel(c)
-    if not channel_id:
-        error("Cannot create alert rule without a SigNoz channel id")
+    channel_name = _ensure_signoz_channel(c)
+    if not channel_name:
+        error("Cannot create alert rule without the SigNoz Feishu channel")
         return False
 
-    summary = summary or f"{service_name} emitted ERROR/FATAL logs in the last 5 minutes"
+    summary = (
+        summary or f"{service_name} emitted ERROR/FATAL logs in the last 5 minutes"
+    )
     payload = build_signoz_log_alert_rule_payload(
         alert_name=alert_name,
         service_name=service_name,
-        channel_ids=[channel_id],
+        channel_names=[channel_name],
         summary=summary,
         severity=severity,
         threshold=threshold,

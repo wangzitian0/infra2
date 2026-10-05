@@ -12,8 +12,8 @@ objects. Definitions are JSON; provisioning is a post-merge `invoke` apply step
 | File | Purpose |
 |------|---------|
 | `alert_rules.json` | OTEL log-error rule, RED SLO and business-anomaly metric rules, and a telemetry-absence rule: `FinanceReportBackendErrorLogs`, `FinanceReportHigh5xxRate`, `FinanceReportP95LatencyHigh`, `FinanceReportStatementParseFailureSpike`, `FinanceReportRateLimitSaturation`, `FinanceReportAsyncTaskFailures`, and `FinanceReportBackendTelemetryAbsent`. The threshold, window, severity and no-data decision for each rule are in SOP-004C of [ops.observability.md](../../../docs/ssot/ops.observability.md). |
-| `dashboard.json` | Baseline dashboard: backend error rate + latency, frontend web-vitals + exceptions. |
-| `shared_tasks.py` | Idempotent apply/print invoke tasks. |
+| `dashboard.json` | Baseline dashboard: backend error rate + latency, frontend web-vitals + exceptions. Stored in SigNoz's v5 query shape with a `layout`, and sent as the dashboard map itself (no `{"data": …}` wrapper). |
+| `shared_tasks.py` | Idempotent apply/print invoke tasks, plus the read-only `verify-alert-routing` / `verify-dashboard` and the explicit `test-alert-channel`. |
 
 The catalog has one top-level `service_id` and environment. Every generated SigNoz
 rule receives the same low-cardinality `ServiceIdentity v1` labels, and log/metric
@@ -22,7 +22,11 @@ preview traffic cannot page a production rule.
 
 ## How the alert reaches Lark/Feishu
 
-The rules route to the shared bridge channel, not to Feishu directly:
+The rules route to the shared bridge channel, not to Feishu directly. Each rule
+binds to the channel by **name** (`condition.thresholds.spec[].channels`): SigNoz
+uses those strings as alertmanager receiver names, so a channel id there is never
+delivered (#973). The name is defined once, in
+`libs/alerting.py::signoz_feishu_channel_name`:
 
 ```text
 finance-report-backend OTEL logs/metrics
@@ -69,6 +73,13 @@ uv run python -m invoke signoz.shared.create-api-key
 # Apply finance_report definitions (idempotent):
 uv run python -m invoke fr-observability.shared.apply-alerts
 uv run python -m invoke fr-observability.shared.apply-dashboard
+# Duplicate same-title dashboards are only reported; remove them explicitly (#934):
+uv run python -m invoke fr-observability.shared.apply-dashboard --delete-duplicates
+
+# Prove it (read-only), then send one real test notification through the channel:
+uv run python -m invoke fr-observability.shared.verify-alert-routing
+uv run python -m invoke fr-observability.shared.verify-dashboard
+uv run python -m invoke fr-observability.shared.test-alert-channel
 
 # Inspect payloads without touching SigNoz:
 uv run python -m invoke fr-observability.shared.print-alerts
@@ -86,14 +97,16 @@ uv run python tools/signoz_alert_rule_probe.py
 2. Emit more than 10 synthetic backend ERROR logs within 15 minutes (one is
    below the threshold by design); confirm `FinanceReportBackendErrorLogs` fires
    and a message lands in the Lark group.
-3. Use `fr-observability.shared.print-alerts` to verify every rule renders with a
-   channel id, `schemaVersion=v2alpha1` and a non-empty
+3. Use `fr-observability.shared.print-alerts` to verify every rule renders with the
+   channel name, `schemaVersion=v2alpha1` and a non-empty
    `condition.compositeQuery.queries` (`promql` for the metric rules,
    `builder_query` with `signal=logs` for `FinanceReportBackendErrorLogs`).
-4. In SigNoz, open each rule after apply. An `error` health state means SigNoz
+4. Run `verify-alert-routing`: it fails unless every managed rule is stored bound to
+   the channel name. Then `test-alert-channel` and confirm the card in the Lark group.
+5. In SigNoz, open each rule after apply. An `error` health state means SigNoz
    could not run the query; `inactive` is expected. If
    `FinanceReportBackendTelemetryAbsent` fires right after apply, the backend's
    request metrics are not arriving under the names this catalog selects.
-5. Open the SigNoz dashboard "Finance Report — Backend & Frontend" and confirm
-   the four widgets render for `finance-report-backend` and
+6. Run `verify-dashboard`, then open the SigNoz dashboard "Finance Report — Backend &
+   Frontend" and confirm the nine widgets render for `finance-report-backend` and
    `finance-report-frontend`.

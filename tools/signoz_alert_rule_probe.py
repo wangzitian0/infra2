@@ -21,7 +21,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from libs.alerting import find_signoz_channel_id, find_signoz_rule_id  # noqa: E402
+from libs.alerting import (  # noqa: E402
+    find_signoz_channel_id,
+    find_signoz_rule_id,
+    signoz_feishu_channel_name,
+)
 from libs.observability_dashboards import load_alert_definitions  # noqa: E402
 
 
@@ -33,9 +37,9 @@ def main(env: dict[str, str] | None = None) -> int:
         return 2
 
     base_url = _signoz_base_url(current_env)
-    channel_name = current_env.get("SIGNOZ_CANARY_CHANNEL_NAME", "").strip() or (
-        f"infra2-feishu-alerts-{current_env.get('ENV', 'production')}"
-    )
+    channel_name = current_env.get(
+        "SIGNOZ_CANARY_CHANNEL_NAME", ""
+    ).strip() or signoz_feishu_channel_name(current_env.get("ENV"))
     channel_response = _signoz_request(
         base_url, api_key, method="GET", path="/api/v1/channels"
     )
@@ -46,13 +50,13 @@ def main(env: dict[str, str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
-    channel_id = find_signoz_channel_id(channel_response["data"], channel_name)
-    if not channel_id:
+    if not find_signoz_channel_id(channel_response["data"], channel_name):
         print(f"SigNoz channel not found: {channel_name}", file=sys.stderr)
         return 1
 
     alert_name = _canary_alert_name(current_env)
-    payload = _build_canary_payload(alert_name, channel_id)
+    # Bind by channel NAME: SigNoz routes a rule to the receiver of that name (#973).
+    payload = _build_canary_payload(alert_name, channel_name)
     created = _signoz_request(
         base_url, api_key, method="POST", path="/api/v1/rules", payload=payload
     )
@@ -111,9 +115,9 @@ def _canary_alert_name(env: dict[str, str]) -> str:
     return f"CanarySigNozPromqlPayload-{suffix}"
 
 
-def _build_canary_payload(alert_name: str, channel_id: str) -> dict[str, Any]:
+def _build_canary_payload(alert_name: str, channel_name: str) -> dict[str, Any]:
     definitions = {d.alert_name: d for d in load_alert_definitions()}
-    source = definitions["FinanceReportHigh5xxRate"].to_signoz_payload([channel_id])
+    source = definitions["FinanceReportHigh5xxRate"].to_signoz_payload([channel_name])
     payload = json.loads(json.dumps(source))
     payload["alert"] = alert_name
     payload["disabled"] = True

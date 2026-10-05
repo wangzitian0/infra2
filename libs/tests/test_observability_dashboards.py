@@ -11,14 +11,24 @@ from pathlib import Path
 
 import pytest
 
+from libs.alerting import (
+    AlertingError,
+    build_signoz_channel_payload,
+    signoz_feishu_channel_name,
+)
 from libs.observability_dashboards import (
     ALERT_RULES_FILE,
     DASHBOARD_FILE,
     ObservabilityDefinitionError,
     build_dashboard_import_payload,
+    check_alert_routing,
+    check_dashboard_state,
+    find_stored_dashboards,
     load_alert_definitions,
     load_dashboard,
     load_openpanel_analytics,
+    render_alert_payloads,
+    require_rule_channel,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -445,32 +455,30 @@ def test_dashboard_has_full_backend_red_and_fe_page_load() -> None:
     assert "fe-page-load" in widgets
 
     # the latency widgets request the right aggregate on durationNano (p50/p95/p99)
-    def _agg(wid: str) -> tuple[str, str]:
-        q = widgets[wid]["query"]["builder"]["queryData"][0]
-        return q["aggregateOperator"], q["aggregateAttribute"]["key"]
+    def _agg(wid: str) -> str:
+        (aggregation,) = widgets[wid]["query"]["builder"]["queryData"][0][
+            "aggregations"
+        ]
+        return aggregation["expression"]
 
-    assert _agg("be-latency-p50") == ("p50", "durationNano")
-    assert _agg("be-latency-p95") == ("p95", "durationNano")
-    assert _agg("be-latency-p99") == ("p99", "durationNano")
+    assert _agg("be-latency-p50") == "p50(durationNano)"
+    assert _agg("be-latency-p95") == "p95(durationNano)"
+    assert _agg("be-latency-p99") == "p99(durationNano)"
 
     # fe-page-load is p75 of documentLoad span duration
-    assert _agg("fe-page-load") == ("p75", "durationNano")
-    page_load_filters = widgets["fe-page-load"]["query"]["builder"]["queryData"][0][
-        "filters"
-    ]["items"]
-    assert any(
-        f["key"]["key"] == "name" and f["value"] == "documentLoad"
-        for f in page_load_filters
-    )
+    assert _agg("fe-page-load") == "p75(durationNano)"
+    assert "name = 'documentLoad'" in _filter("fe-page-load", widgets)
 
-    # the error-rate panel counts only SERVER spans (matches its description)
-    err_filters = widgets["be-error-rate-5xx"]["query"]["builder"]["queryData"][0][
-        "filters"
-    ]["items"]
-    assert any(
-        f["key"]["key"] == "kind_string" and f["value"] == "Server" for f in err_filters
-    )
-    assert any(f["key"]["key"] == "hasError" for f in err_filters)
+    # the error-rate panel counts only SERVER spans flagged hasError (matches its text)
+    err_filter = _filter("be-error-rate-5xx", widgets)
+    assert "kind_string = 'Server'" in err_filter
+    assert "hasError = true" in err_filter
+
+
+def _filter(widget_id: str, widgets: dict[str, dict]) -> str:
+    return widgets[widget_id]["query"]["builder"]["queryData"][0]["filter"][
+        "expression"
+    ]
 
 
 def test_every_widget_is_filterable_by_deployment_environment() -> None:
@@ -478,12 +486,10 @@ def test_every_widget_is_filterable_by_deployment_environment() -> None:
     references it — assert EVERY widget carries the `$deployment_environment` filter so
     the dashboard variable is real, not decorative (CR #391)."""
     for w in load_dashboard()["widgets"]:
-        items = w["query"]["builder"]["queryData"][0]["filters"]["items"]
-        assert any(
-            f["key"]["key"] == "deployment.environment"
-            and f["value"] == "$deployment_environment"
-            for f in items
-        ), f"widget {w['id']} is not filterable by deployment_environment"
+        expression = w["query"]["builder"]["queryData"][0]["filter"]["expression"]
+        assert "deployment.environment IN $deployment_environment" in expression, (
+            f"widget {w['id']} is not filterable by deployment_environment"
+        )
 
 
 def test_env_variable_query_targets_the_live_v2_logs_schema() -> None:
@@ -498,11 +504,107 @@ def test_env_variable_query_targets_the_live_v2_logs_schema() -> None:
     assert "signoz_logs.distributed_logs " not in query + " "
 
 
-def test_dashboard_import_payload_wraps_in_data_envelope() -> None:
-    """#373: dashboard apply body matches the SigNoz /api/v1/dashboards envelope."""
+def test_dashboard_body_is_the_dashboard_map_signoz_stores() -> None:
+    """#934: SigNoz v0.105.1 decodes the POST/PUT body straight into the dashboard map
+    (`PostableDashboard = StorableDashboardData = map[string]interface{}`, handler.go
+    `Create`) and stores it verbatim, so title/widgets/layout must be top-level keys.
+    The old test pinned `{"data": …}` -- our code checked against itself -- and every
+    apply stored an untitled, widget-less wrapper."""
     payload = build_dashboard_import_payload()
-    assert set(payload.keys()) == {"data"}
-    assert payload["data"]["title"] == load_dashboard()["title"]
+
+    assert payload["title"] == "Finance Report — Backend & Frontend"
+    assert "data" not in payload
+    assert isinstance(payload["widgets"], list) and payload["widgets"]
+    assert isinstance(payload["layout"], list) and payload["layout"]
+    assert payload == json.loads(DASHBOARD_FILE.read_text(encoding="utf-8"))
+
+
+def test_dashboard_widgets_are_the_ones_signoz_counts_and_draws() -> None:
+    """#934: what SigNoz does with the stored map. `GetWidgetIds` counts a widget only
+    if it has `query` and a string `id`; the UI draws only widgets that have a `layout`
+    entry. Both must cover every checked-in widget."""
+    payload = build_dashboard_import_payload()
+
+    counted = [
+        w["id"]
+        for w in payload["widgets"]
+        if w.get("query") is not None and isinstance(w.get("id"), str)
+    ]
+    drawn = [entry["i"] for entry in payload["layout"]]
+    assert counted == [w["id"] for w in payload["widgets"]]
+    assert sorted(drawn) == sorted(counted)
+    for entry in payload["layout"]:
+        assert all(isinstance(entry[key], int) for key in ("x", "y", "w", "h"))
+
+
+def test_dashboard_is_stored_in_the_v5_query_shape_so_create_equals_update() -> None:
+    """#934: `Create` runs SigNoz's v4->v5 migration unless `version == "v5"`, `Update`
+    never does. A v4 file would be stored migrated on the first apply and raw on every
+    later one; and the migration drops a bare `count` aggregation. The file is v5 and
+    every query says what it aggregates."""
+    payload = build_dashboard_import_payload()
+
+    assert payload["version"] == "v5"
+    for widget in payload["widgets"]:
+        for query in widget["query"]["builder"]["queryData"]:
+            assert not {"aggregateOperator", "aggregateAttribute", "filters"} & set(
+                query
+            )
+            assert query["aggregations"] and all(
+                a["expression"] for a in query["aggregations"]
+            )
+            assert query["filter"]["expression"]
+
+
+def _dashboard_with(tmp_path: Path, mutate) -> Path:
+    data = json.loads(DASHBOARD_FILE.read_text(encoding="utf-8"))
+    mutate(data)
+    path = tmp_path / "dashboard.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+def test_the_unmutated_dashboard_copy_loads(tmp_path) -> None:
+    """The fixture the rejection tests below mutate is valid, so each rejection is
+    caused by the one field that test changes."""
+    assert load_dashboard(_dashboard_with(tmp_path, lambda d: None))["widgets"]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda d: d.update(version="v4"), "version"),
+        (lambda d: d.update(version="v6"), "version"),
+        (lambda d: d.pop("layout"), "layout"),
+        (lambda d: d["layout"].pop(), "layout must place each widget"),
+        (lambda d: d["layout"][0].update(i="not-a-widget"), "layout must place"),
+        (lambda d: d["layout"][0].pop("w"), "layout entry"),
+        (
+            lambda d: d["widgets"][0]["query"]["builder"]["queryData"][0].update(
+                aggregateOperator="count"
+            ),
+            "v4 query keys",
+        ),
+        (
+            lambda d: d["widgets"][0]["query"]["builder"]["queryData"][0].pop(
+                "aggregations"
+            ),
+            "no aggregations",
+        ),
+        (
+            lambda d: d["widgets"][0]["query"]["builder"]["queryData"][0].pop("filter"),
+            "filter.expression",
+        ),
+        (lambda d: d["widgets"][1].update(id=d["widgets"][0]["id"]), "unique id"),
+    ],
+)
+def test_dashboard_that_signoz_would_store_broken_is_rejected(
+    tmp_path, mutate, message
+) -> None:
+    """#934: the loader refuses what SigNoz would store as an empty or half-migrated
+    dashboard, instead of the apply finding out on the live instance."""
+    with pytest.raises(ObservabilityDefinitionError, match=message):
+        load_dashboard(_dashboard_with(tmp_path, mutate))
 
 
 def test_invalid_definitions_raise() -> None:
@@ -726,15 +828,22 @@ def test_apply_tasks_are_invoke_tasks(monkeypatch) -> None:
         assert hasattr(module, name), name
 
 
+def _real_definition(alert_name: str):
+    return next(d for d in load_alert_definitions() if d.alert_name == alert_name)
+
+
+class _Def:
+    """The real checked-in definition, so the payload carries a real channel binding."""
+
+    alert_name = "FinanceReportHigh5xxRate"
+
+    def to_signoz_payload(self, channel_names):
+        return _real_definition(self.alert_name).to_signoz_payload(channel_names)
+
+
 def test_apply_alerts_raises_nonzero_exit_when_rule_create_fails(monkeypatch) -> None:
     """#1106 regression: SigNoz 400s must fail the GitHub apply workflow."""
     module, Exit = _load_fr_observability_tasks(monkeypatch)
-
-    class Definition:
-        alert_name = "FinanceReportHigh5xxRate"
-
-        def to_signoz_payload(self, channel_ids):
-            return {"alert": self.alert_name, "channels": channel_ids}
 
     calls = []
 
@@ -759,31 +868,20 @@ def test_apply_alerts_raises_nonzero_exit_when_rule_create_fails(monkeypatch) ->
     fake_console.info = lambda *_args, **_kwargs: None
     monkeypatch.setitem(sys.modules, "platform.12.alerting.shared", alerting)
     monkeypatch.setitem(sys.modules, "libs.console", fake_console)
-    monkeypatch.setattr(module, "load_alert_definitions", lambda: [Definition()])
+    monkeypatch.setattr(module, "load_alert_definitions", lambda: [_Def()])
 
     with pytest.raises(Exit) as exc:
         module.apply_alerts(object())
 
     assert exc.value.code == 1
-    assert calls == [
-        ("GET", "/api/v1/rules", None),
-        (
-            "POST",
-            "/api/v1/rules",
-            {
-                "alert": "FinanceReportHigh5xxRate",
-                "channels": ["chan-1"],
-                "labels": {"source": "infra2/finance_report-alerts"},
-            },
-        ),
+    assert [(method, path) for method, path, _ in calls] == [
+        ("GET", "/api/v1/rules"),
+        ("POST", "/api/v1/rules"),
     ]
-
-
-class _Def:
-    alert_name = "FinanceReportHigh5xxRate"
-
-    def to_signoz_payload(self, channel_ids):
-        return {"alert": self.alert_name, "channels": channel_ids}
+    posted = calls[1][2]
+    assert posted["alert"] == "FinanceReportHigh5xxRate"
+    assert posted["labels"]["source"] == "infra2/finance_report-alerts"
+    assert posted["condition"]["thresholds"]["spec"][0]["channels"] == ["chan-1"]
 
 
 def _patch_console(monkeypatch, **overrides):
@@ -936,16 +1034,12 @@ def test_apply_dashboard_raises_nonzero_exit_when_list_fails(monkeypatch) -> Non
             "body": "unavailable",
         }
 
-    fake_console = types.ModuleType("libs.console")
-    fake_console.error = lambda *_args, **_kwargs: None
-    fake_console.success = lambda *_args, **_kwargs: None
+    _patch_console(monkeypatch)
     monkeypatch.setitem(
         sys.modules,
         "platform.12.alerting.shared",
         types.SimpleNamespace(_signoz_request=fake_request),
     )
-    monkeypatch.setitem(sys.modules, "libs.console", fake_console)
-    monkeypatch.setattr(module, "load_dashboard", lambda: {"title": "Dashboard"})
 
     with pytest.raises(Exit) as exc:
         module.apply_dashboard(object())
@@ -1034,3 +1128,695 @@ def test_ssot_documents_alert_and_dashboard_apply_path() -> None:
     assert "SOP-004C" in alerting
     assert "fr-observability.shared.apply-alerts" in alerting
     assert "fr-observability.shared.apply-dashboard" in observability
+
+
+# ---------------------------------------------------------------------------
+# #973: every rule is bound to the Feishu channel, by name
+
+
+BRIDGE_CHANNEL = "infra2-feishu-alerts-production"
+CHANNEL_ID = "0199aaaa-0000-7000-8000-000000000001"  # what SigNoz lists as the id
+
+
+def _spec_channels(rule: dict) -> list[list[str]]:
+    return [spec["channels"] for spec in rule["condition"]["thresholds"]["spec"]]
+
+
+def test_every_rendered_rule_is_bound_to_the_bridge_channel_by_name() -> None:
+    """#973: SigNoz v0.105.1 routes a v2alpha1 rule through
+    `condition.thresholds.spec[].channels` (BasicRuleThreshold.Channels), turned into a
+    route policy when the rule is created and into alertmanager receiver NAMES at
+    delivery (dispatcher.go `getOrCreateRoute`). The rendered rules carry the bridge
+    channel's name there and keep `usePolicy` off so those channels are the ones used."""
+    payloads = render_alert_payloads()
+
+    assert {p["alert"] for p in payloads} == set(_EXPECTED_RULES)
+    for payload in payloads:
+        assert _spec_channels(payload) == [[BRIDGE_CHANNEL]], payload["alert"]
+        assert payload["schemaVersion"] == "v2alpha1"
+        assert payload["notificationSettings"]["usePolicy"] is False
+        # the v1-schema binding is not read for v2alpha1 rules
+        assert "preferredChannels" not in payload
+
+
+def test_rendered_channel_is_the_one_the_bridge_creates(monkeypatch) -> None:
+    """#973: one definition of the channel name. The name platform/12.alerting creates
+    the channel under (print-channel-payload posts exactly that payload) is the name
+    every rule binds to, for production and for any other environment."""
+    fake_invoke = types.ModuleType("invoke")
+    fake_invoke.task = lambda func=None, **_kwargs: func if func else (lambda f: f)
+    monkeypatch.setitem(sys.modules, "invoke", fake_invoke)
+    spec = importlib.util.spec_from_file_location(
+        "alerting_shared_channel_name", ROOT / "platform/12.alerting/shared_tasks.py"
+    )
+    assert spec and spec.loader
+    alerting = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(alerting)
+
+    for env_name in ("production", "staging"):
+        env = {"ENV": env_name, "ENV_SUFFIX": ""}
+        monkeypatch.setattr(alerting, "get_env", lambda env=env: env)
+        created = alerting.print_channel_payload(object())["name"]
+        rendered = render_alert_payloads(created)
+        assert created == signoz_feishu_channel_name(env_name)
+        assert all(_spec_channels(p) == [[created]] for p in rendered)
+    assert BRIDGE_CHANNEL == signoz_feishu_channel_name("production")
+
+
+def test_channel_name_has_a_single_definition() -> None:
+    """#973: no second hand-written copy of the channel name to drift."""
+    offenders = [
+        str(path.relative_to(ROOT))
+        for path in ROOT.rglob("*.py")
+        if "infra2-feishu-alerts" in path.read_text(encoding="utf-8", errors="ignore")
+        and not {"tests", ".venv", "repos", "oh-my-code-agent"} & set(path.parts)
+        and path != ROOT / "libs" / "alerting.py"
+    ]
+    assert offenders == []
+
+
+@pytest.mark.parametrize("channels", [[], [""], ["  "], [None]])
+def test_a_rule_with_no_channel_cannot_be_rendered(channels) -> None:
+    """#973: SigNoz creates a route policy from the channels and rejects none ("at least
+    one channel is required"); a rule that silently dropped them is undeliverable. The
+    renderer raises instead of filtering them away."""
+    for definition in load_alert_definitions():
+        with pytest.raises(AlertingError):
+            definition.to_signoz_payload(channels)
+
+
+def test_a_bare_string_is_not_a_channel_list() -> None:
+    """`"abc"` iterates as `a`,`b`,`c`: refuse it rather than bind three wrong names."""
+    with pytest.raises(AlertingError):
+        load_alert_definitions()[0].to_signoz_payload(BRIDGE_CHANNEL)
+
+
+def test_renderer_rejects_a_rule_that_ends_up_unbound(monkeypatch) -> None:
+    """#973: defence in depth. Even if a rule type's builder forgot the binding, the
+    renderer's own check refuses it, so the apply never POSTs an unrouted rule."""
+    from libs import observability_dashboards as obs
+
+    real = obs.MetricAlertDefinition.to_signoz_payload
+
+    def forgetful(self, channel_names):
+        payload = real(self, channel_names)
+        payload["condition"]["thresholds"]["spec"][0]["channels"] = []
+        return payload
+
+    monkeypatch.setattr(obs.MetricAlertDefinition, "to_signoz_payload", forgetful)
+
+    with pytest.raises(ObservabilityDefinitionError, match="would not be delivered"):
+        render_alert_payloads()
+
+
+def test_require_rule_channel_rejects_every_way_a_rule_misses_the_channel() -> None:
+    """#973: the checks `require_rule_channel` makes, one mutation each."""
+    base = render_alert_payloads()[0]
+    assert require_rule_channel(base, BRIDGE_CHANNEL) is base
+
+    def mutated(change):
+        payload = json.loads(json.dumps(base))
+        change(payload)
+        return payload
+
+    wrong = {
+        "no thresholds": lambda p: p["condition"]["thresholds"].update(spec=[]),
+        "empty channels": lambda p: p["condition"]["thresholds"]["spec"][0].update(
+            channels=[]
+        ),
+        "missing channels key": lambda p: p["condition"]["thresholds"]["spec"][0].pop(
+            "channels"
+        ),
+        "other channel": lambda p: p["condition"]["thresholds"]["spec"][0].update(
+            channels=["someone-else"]
+        ),
+        "channel id instead of name": lambda p: p["condition"]["thresholds"]["spec"][
+            0
+        ].update(channels=[CHANNEL_ID]),
+        "usePolicy": lambda p: p["notificationSettings"].update(usePolicy=True),
+        "no notificationSettings": lambda p: p.pop("notificationSettings"),
+        "v1 schema": lambda p: p.update(schemaVersion="v1"),
+    }
+    for label, change in wrong.items():
+        with pytest.raises(ObservabilityDefinitionError):
+            require_rule_channel(mutated(change), BRIDGE_CHANNEL)
+        assert label
+
+
+# ---- check_alert_routing: what `verify-alert-routing` decides ----------------
+
+_CHANNELS_RESPONSE = {
+    "status": "success",
+    "data": [{"id": CHANNEL_ID, "name": BRIDGE_CHANNEL, "type": "webhook"}],
+}
+_MANAGED = "infra2/finance_report-alerts"
+
+
+def _stored_rules(**overrides) -> dict:
+    """What GET /api/v1/rules lists after a correct apply, one entry per catalog rule."""
+    rules = []
+    for index, payload in enumerate(render_alert_payloads(), start=1):
+        rule = json.loads(json.dumps(payload))
+        rule.update(id=f"rule-{index}", state="inactive")
+        rule["labels"]["source"] = _MANAGED
+        rules.append(rule)
+    for rule in rules:
+        rule.update(overrides.get(rule["alert"], {}))
+    return {"status": "success", "data": {"rules": rules}}
+
+
+def _routing_problems(rules=None, channels=None, **kwargs) -> list[str]:
+    return check_alert_routing(
+        rules if rules is not None else _stored_rules(),
+        channels if channels is not None else _CHANNELS_RESPONSE,
+        expected_alerts=_EXPECTED_RULES,
+        channel_name=BRIDGE_CHANNEL,
+        managed_source=_MANAGED,
+        **kwargs,
+    )
+
+
+def test_routing_check_passes_when_every_rule_is_bound() -> None:
+    assert _routing_problems() == []
+
+
+def test_routing_check_flags_a_rule_bound_to_the_channel_id() -> None:
+    """#973: binding the channel id (what the old apply wrote) is accepted by SigNoz and
+    never delivered; the check names it."""
+    spec = json.loads(json.dumps(_stored_rules()["data"]["rules"][0]))
+    spec["condition"]["thresholds"]["spec"][0]["channels"] = [CHANNEL_ID]
+    name = spec["alert"]
+
+    problems = _routing_problems(_stored_rules(**{name: spec}))
+
+    assert any(
+        problem.startswith(f"{name}:") and "channel id" in problem
+        for problem in problems
+    ), problems
+
+
+def test_routing_check_flags_each_way_delivery_can_be_missing() -> None:
+    rules = _stored_rules()["data"]["rules"]
+    first, second, third = rules[0], rules[1], rules[2]
+
+    unbound = json.loads(json.dumps(first))
+    unbound["condition"]["thresholds"]["spec"][0]["channels"] = []
+    disabled = {**second, "disabled": True}
+    duplicated = rules + [dict(third, id="rule-dup")]
+    stale = {
+        "id": "stale-1",
+        "alert": "RenamedAwayRule",
+        "labels": {"source": _MANAGED},
+        "schemaVersion": "v2alpha1",
+        "condition": {"thresholds": {"spec": [{"channels": []}]}},
+        "notificationSettings": {},
+    }
+    hand_made = {"id": "mine", "alert": "HandMade", "labels": {}}
+
+    def run(rule_list, channels=None):
+        return _routing_problems({"data": {"rules": rule_list}}, channels)
+
+    assert any("channels [] do not include" in p for p in run([unbound, *rules[1:]]))
+    assert any("rule is disabled" in p for p in run([first, disabled, *rules[2:]]))
+    assert any("rule is not in SigNoz" in p for p in run(rules[1:]))
+    assert any("2 rules share this name" in p for p in run(duplicated))
+    assert any(p.startswith("RenamedAwayRule:") for p in run(rules + [stale]))
+    assert not any("HandMade" in p for p in run(rules + [hand_made]))
+    assert any("exists 0 times" in p for p in run(rules, {"data": []}))
+    twice = {"data": _CHANNELS_RESPONSE["data"] * 2}
+    assert any("exists 2 times" in p for p in run(rules, twice))
+
+
+# ---- the tasks, against a fake SigNoz HTTP client ----------------------------
+
+
+def _fake_signoz(routes: dict, calls: list):
+    """`_signoz_request` stand-in: serves (method, path) from `routes`, 404 otherwise."""
+
+    def request(_c, *, method, path, payload=None):
+        calls.append((method, path, payload))
+        handler = routes.get((method, path))
+        if handler is None:
+            return {"ok": False, "data": None, "status": 404, "body": "not found"}
+        if callable(handler):
+            return handler(payload)
+        return {"ok": True, "data": handler, "status": 200, "body": "{}"}
+
+    return types.SimpleNamespace(
+        _signoz_request=request,
+        _channel_name=lambda env: signoz_feishu_channel_name(env.get("ENV")),
+        get_env=lambda: {"ENV": "production"},
+    )
+
+
+def _install_fake_signoz(monkeypatch, routes, calls):
+    errors: list[str] = []
+    _patch_console(monkeypatch, error=lambda *a, **k: errors.append(str(a[0])))
+    monkeypatch.setitem(
+        sys.modules, "platform.12.alerting.shared", _fake_signoz(routes, calls)
+    )
+    return errors
+
+
+def test_verify_alert_routing_passes_and_only_reads(monkeypatch) -> None:
+    """#973: the post-apply check is read-only (GET only) and succeeds on bound rules."""
+    module, _ = _load_fr_observability_tasks(monkeypatch)
+    calls: list = []
+    _install_fake_signoz(
+        monkeypatch,
+        {
+            ("GET", "/api/v1/rules"): _stored_rules(),
+            ("GET", "/api/v1/channels"): _CHANNELS_RESPONSE,
+        },
+        calls,
+    )
+
+    assert module.verify_alert_routing(object()) is True
+    assert {method for method, _, _ in calls} == {"GET"}
+
+
+def test_verify_alert_routing_fails_on_unbound_rule(monkeypatch) -> None:
+    """#973: the exact failure live SigNoz had -- rules that name no deliverable
+    channel -- makes the check exit non-zero and name the rule."""
+    module, Exit = _load_fr_observability_tasks(monkeypatch)
+    rules = _stored_rules()
+    rules["data"]["rules"][0]["condition"]["thresholds"]["spec"][0]["channels"] = [
+        CHANNEL_ID
+    ]
+    calls: list = []
+    errors = _install_fake_signoz(
+        monkeypatch,
+        {
+            ("GET", "/api/v1/rules"): rules,
+            ("GET", "/api/v1/channels"): _CHANNELS_RESPONSE,
+        },
+        calls,
+    )
+
+    with pytest.raises(Exit) as exc:
+        module.verify_alert_routing(object())
+
+    assert exc.value.code == 1
+    assert any(rules["data"]["rules"][0]["alert"] in message for message in errors)
+
+
+def test_verify_alert_routing_fails_when_a_listing_fails(monkeypatch) -> None:
+    module, Exit = _load_fr_observability_tasks(monkeypatch)
+    _install_fake_signoz(
+        monkeypatch, {("GET", "/api/v1/channels"): _CHANNELS_RESPONSE}, []
+    )
+
+    with pytest.raises(Exit) as exc:
+        module.verify_alert_routing(object())
+
+    assert exc.value.code == 1
+
+
+def _stored_channel(**overrides) -> dict:
+    """SigNoz stores a channel as `data` = the receiver config JSON string."""
+    receiver = build_signoz_channel_payload(
+        channel_name=BRIDGE_CHANNEL,
+        bridge_url="http://platform-alerting:8080/signoz/webhook",
+    )
+    return {
+        "id": CHANNEL_ID,
+        "name": BRIDGE_CHANNEL,
+        "type": "webhook",
+        "data": json.dumps(receiver),
+        **overrides,
+    }
+
+
+def test_test_alert_channel_posts_the_stored_receiver_to_test_channel(
+    monkeypatch,
+) -> None:
+    """#973: one explicit test notification: SigNoz `/api/v1/testChannel` takes the
+    receiver config (same body as channel create) and sends a test alert through it."""
+    module, _ = _load_fr_observability_tasks(monkeypatch)
+    calls: list = []
+    _install_fake_signoz(
+        monkeypatch,
+        {
+            ("GET", "/api/v1/channels"): {"data": [_stored_channel()]},
+            ("POST", "/api/v1/testChannel"): lambda payload: {
+                "ok": True,
+                "data": None,
+                "status": 204,
+                "body": "",
+            },
+        },
+        calls,
+    )
+
+    assert module.test_alert_channel(object()) is True
+    posts = [call for call in calls if call[0] == "POST"]
+    assert [(m, p) for m, p, _ in posts] == [("POST", "/api/v1/testChannel")]
+    assert posts[0][2] == json.loads(_stored_channel()["data"])
+    assert posts[0][2]["name"] == BRIDGE_CHANNEL
+
+
+def test_test_alert_channel_sends_nothing_without_exactly_one_channel(
+    monkeypatch,
+) -> None:
+    module, Exit = _load_fr_observability_tasks(monkeypatch)
+    for channels in ([], [_stored_channel(), _stored_channel(id="other")]):
+        calls: list = []
+        _install_fake_signoz(
+            monkeypatch,
+            {
+                ("GET", "/api/v1/channels"): {"data": channels},
+                ("POST", "/api/v1/testChannel"): {},
+            },
+            calls,
+        )
+        with pytest.raises(Exit) as exc:
+            module.test_alert_channel(object())
+        assert exc.value.code == 1
+        assert not [call for call in calls if call[0] == "POST"]
+
+
+def test_test_alert_channel_fails_when_signoz_rejects_the_test(monkeypatch) -> None:
+    module, Exit = _load_fr_observability_tasks(monkeypatch)
+    _install_fake_signoz(
+        monkeypatch,
+        {
+            ("GET", "/api/v1/channels"): {"data": [_stored_channel()]},
+            ("POST", "/api/v1/testChannel"): lambda payload: {
+                "ok": False,
+                "data": None,
+                "status": 500,
+                "body": "webhook unreachable",
+            },
+        },
+        [],
+    )
+
+    with pytest.raises(Exit) as exc:
+        module.test_alert_channel(object())
+
+    assert exc.value.code == 1
+
+
+def test_apply_alerts_binds_the_channel_name_not_the_id(monkeypatch) -> None:
+    """#973: the apply posts every catalog rule with the channel NAME the alerting
+    module resolved (ensure returns the name), checked by the renderer."""
+    module, _ = _load_fr_observability_tasks(monkeypatch)
+    calls: list = []
+    alerting = _stateful_alerting([], calls)
+    alerting._ensure_signoz_channel = lambda _c: BRIDGE_CHANNEL
+    _patch_console(monkeypatch)
+    monkeypatch.setitem(sys.modules, "platform.12.alerting.shared", alerting)
+
+    assert module.apply_alerts(object()) is True
+
+    posted = [payload for method, _, payload in calls if method == "POST"]
+    assert {p["alert"] for p in posted} == set(_EXPECTED_RULES)
+    for payload in posted:
+        assert _spec_channels(payload) == [[BRIDGE_CHANNEL]]
+
+
+# ---------------------------------------------------------------------------
+# #934: dashboards are upserted by title and sent the way SigNoz stores them
+
+DASH_TITLE = "Finance Report — Backend & Frontend"
+
+
+def _proper_row(dashboard_id: str, title: str = DASH_TITLE) -> dict:
+    """A GET /api/v1/dashboards row as v0.105.1 lists it: the dashboard map at `data`."""
+    return {
+        "id": dashboard_id,
+        "createdAt": "2026-09-25T00:00:00Z",
+        "locked": False,
+        "data": {"title": title, "widgets": [], "version": "v5"},
+    }
+
+
+def _legacy_row(dashboard_id: str) -> dict:
+    """A row the pre-#934 apply stored: the `{"data": dashboard}` wrapper, saved as-is."""
+    return {
+        "id": dashboard_id,
+        "data": {
+            "data": {"title": DASH_TITLE, "widgets": [{"id": "x"}]},
+            "version": "v6",
+        },
+    }
+
+
+def _stateful_dashboards(initial: list[dict], calls: list):
+    """SigNoz dashboards API mock: POST adds a row, PUT replaces `data`, DELETE removes."""
+    rows = {row["id"]: row for row in initial}
+    counter = {"next": 0}
+
+    def request(_c, *, method, path, payload=None):
+        calls.append((method, path, payload))
+        ok = {"ok": True, "status": 200, "body": "{}"}
+        if (method, path) == ("GET", "/api/v1/dashboards"):
+            return {**ok, "data": {"status": "success", "data": list(rows.values())}}
+        if (method, path) == ("POST", "/api/v1/dashboards"):
+            counter["next"] += 1
+            new_id = f"new-{counter['next']}"
+            rows[new_id] = {"id": new_id, "data": payload}
+            return {**ok, "data": {"status": "success", "data": rows[new_id]}}
+        prefix = "/api/v1/dashboards/"
+        if path.startswith(prefix):
+            dashboard_id = path[len(prefix) :]
+            if method == "PUT" and dashboard_id in rows:
+                rows[dashboard_id]["data"] = payload
+                return {**ok, "data": None}
+            if method == "DELETE":
+                rows.pop(dashboard_id, None)
+                return {**ok, "data": None}
+        return {"ok": False, "data": None, "status": 404, "body": "nope"}
+
+    return types.SimpleNamespace(_signoz_request=request), rows
+
+
+def _install_dashboards(monkeypatch, initial):
+    calls: list = []
+    alerting, rows = _stateful_dashboards(initial, calls)
+    messages: dict[str, list[str]] = {"warning": [], "info": [], "error": []}
+    _patch_console(
+        monkeypatch,
+        **{
+            level: (lambda *a, level=level, **k: messages[level].append(str(a[0])))
+            for level in messages
+        },
+    )
+    monkeypatch.setitem(sys.modules, "platform.12.alerting.shared", alerting)
+    return calls, rows, messages
+
+
+def _writes(calls):
+    return [(m, p) for m, p, _ in calls if m != "GET"]
+
+
+def test_apply_dashboard_creates_it_unwrapped_when_absent(monkeypatch) -> None:
+    """#934: the POST body is the dashboard map itself, not `{"data": …}`."""
+    module, _ = _load_fr_observability_tasks(monkeypatch)
+    calls, rows, _ = _install_dashboards(monkeypatch, [_proper_row("other", "Other")])
+
+    assert module.apply_dashboard(object()) is True
+
+    ((method, path, body),) = [c for c in calls if c[0] == "POST"]
+    assert (method, path) == ("POST", "/api/v1/dashboards")
+    assert body["title"] == DASH_TITLE and "data" not in body
+    assert body == build_dashboard_import_payload()
+    assert check_dashboard_state({"data": list(rows.values())}, load_dashboard()) == []
+
+
+def test_apply_dashboard_updates_in_place_and_never_adds_a_copy(monkeypatch) -> None:
+    """#934: applying twice leaves one dashboard: the first apply creates, the second
+    finds it by its top-level title and PUTs. (The old lookup never matched the row it
+    had just stored, so every apply was a POST: 23 copies.)"""
+    module, _ = _load_fr_observability_tasks(monkeypatch)
+    calls, rows, _ = _install_dashboards(monkeypatch, [])
+
+    module.apply_dashboard(object())
+    module.apply_dashboard(object())
+    module.apply_dashboard(object())
+
+    assert [m for m, _ in _writes(calls)] == ["POST", "PUT", "PUT"]
+    assert len(rows) == 1
+    ((_, put_path, put_body),) = [c for c in calls if c[0] == "PUT"][:1]
+    assert put_path == "/api/v1/dashboards/new-1" and put_body == (
+        build_dashboard_import_payload()
+    )
+
+
+def test_apply_dashboard_converts_a_legacy_row_instead_of_adding_one(
+    monkeypatch,
+) -> None:
+    """#934: prod holds rows stored as `{"data": dashboard}`. The apply finds one by its
+    nested title and rewrites it in place (PUT does not run the v4 migration, so it
+    stores exactly the checked-in v5 bytes); it does not POST a 24th."""
+    module, _ = _load_fr_observability_tasks(monkeypatch)
+    calls, rows, _ = _install_dashboards(
+        monkeypatch, [_legacy_row("old-1"), _legacy_row("old-2")]
+    )
+
+    module.apply_dashboard(object())
+
+    assert _writes(calls) == [("PUT", "/api/v1/dashboards/old-1")]
+    assert rows["old-1"]["data"] == build_dashboard_import_payload()
+
+
+def test_apply_dashboard_reports_duplicates_and_deletes_nothing_by_default(
+    monkeypatch,
+) -> None:
+    """#934: duplicates are reported, with their ids; without the flag no DELETE runs."""
+    module, _ = _load_fr_observability_tasks(monkeypatch)
+    calls, rows, messages = _install_dashboards(
+        monkeypatch,
+        [_proper_row("keep"), _legacy_row("dup-1"), _proper_row("dup-2")],
+    )
+
+    assert module.apply_dashboard(object()) is True
+
+    assert _writes(calls) == [("PUT", "/api/v1/dashboards/keep")]
+    assert set(rows) == {"keep", "dup-1", "dup-2"}
+    (warning,) = messages["warning"]
+    assert (
+        "dup-1" in warning and "dup-2" in warning and "--delete-duplicates" in warning
+    )
+
+
+def test_apply_dashboard_delete_duplicates_deletes_only_exact_title_extras(
+    monkeypatch,
+) -> None:
+    """#934: with the explicit flag the extras go, and only those: not the row that was
+    updated, not a dashboard with another title (even a similar one)."""
+    module, _ = _load_fr_observability_tasks(monkeypatch)
+    calls, rows, messages = _install_dashboards(
+        monkeypatch,
+        [
+            _proper_row("keep"),
+            _legacy_row("dup-1"),
+            _proper_row("dup-2"),
+            _proper_row("other", "Finance Report — Backend"),
+            _proper_row("someone-else", "Hand made"),
+        ],
+    )
+
+    assert module.apply_dashboard(object(), delete_duplicates=True) is True
+
+    assert _writes(calls) == [
+        ("PUT", "/api/v1/dashboards/keep"),
+        ("DELETE", "/api/v1/dashboards/dup-2"),  # correctly stored copies first
+        ("DELETE", "/api/v1/dashboards/dup-1"),
+    ]
+    assert set(rows) == {"keep", "other", "someone-else"}
+    assert any("dup-1" in message for message in messages["info"])
+
+
+def test_apply_dashboard_delete_duplicates_fails_if_a_duplicate_survives(
+    monkeypatch,
+) -> None:
+    """SigNoz answers an undone delete like a done one (the rules canary leaked that
+    way): the apply trusts the re-list, so a surviving duplicate is a failure."""
+    module, Exit = _load_fr_observability_tasks(monkeypatch)
+    calls, rows, _ = _install_dashboards(
+        monkeypatch, [_proper_row("keep"), _proper_row("stubborn")]
+    )
+    real = sys.modules["platform.12.alerting.shared"]._signoz_request
+
+    def refuses_delete(c, *, method, path, payload=None):
+        if method == "DELETE":
+            calls.append((method, path, payload))
+            return {"ok": True, "data": None, "status": 200, "body": "{}"}
+        return real(c, method=method, path=path, payload=payload)
+
+    sys.modules["platform.12.alerting.shared"]._signoz_request = refuses_delete
+
+    with pytest.raises(Exit) as exc:
+        module.apply_dashboard(object(), delete_duplicates=True)
+
+    assert exc.value.code == 1
+    assert "stubborn" in rows
+
+
+def test_apply_dashboard_does_not_delete_when_the_update_failed(monkeypatch) -> None:
+    module, Exit = _load_fr_observability_tasks(monkeypatch)
+    calls, rows, _ = _install_dashboards(
+        monkeypatch, [_proper_row("keep"), _proper_row("dup")]
+    )
+    real = sys.modules["platform.12.alerting.shared"]._signoz_request
+
+    def put_fails(c, *, method, path, payload=None):
+        if method == "PUT":
+            calls.append((method, path, payload))
+            return {"ok": False, "data": None, "status": 400, "body": "bad"}
+        return real(c, method=method, path=path, payload=payload)
+
+    sys.modules["platform.12.alerting.shared"]._signoz_request = put_fails
+
+    with pytest.raises(Exit):
+        module.apply_dashboard(object(), delete_duplicates=True)
+
+    assert not [call for call in calls if call[0] == "DELETE"]
+    assert set(rows) == {"keep", "dup"}
+
+
+def test_find_stored_dashboards_reads_the_v0_105_list_shape() -> None:
+    """#934: lookup fixture shaped like the real list (`{"status","data":[{id,data}]}`),
+    including an integration dashboard, a similarly named one and a legacy row."""
+    listing = {
+        "status": "success",
+        "data": [
+            {"id": "integration--x", "data": {"title": "Redis", "widgets": []}},
+            _legacy_row("legacy"),
+            _proper_row("proper"),
+            _proper_row("near", DASH_TITLE + " (copy)"),
+            {"id": "broken", "data": "not a map"},
+            {"data": {"title": DASH_TITLE}},  # no id: cannot be addressed
+        ],
+    }
+
+    found = find_stored_dashboards(listing, DASH_TITLE)
+
+    assert [(d.id, d.legacy) for d in found] == [("proper", False), ("legacy", True)]
+
+
+def test_dashboard_state_check_accepts_only_one_correct_copy() -> None:
+    dashboard = load_dashboard()
+    good = {"id": "g", "data": dict(dashboard)}
+
+    assert check_dashboard_state({"data": [good]}, dashboard) == []
+    assert any(
+        "expected 1" in p for p in check_dashboard_state({"data": []}, dashboard)
+    )
+    twice = [good, {"id": "h", "data": dict(dashboard)}]
+    assert any(
+        "expected 1" in p for p in check_dashboard_state({"data": twice}, dashboard)
+    )
+    wrapped = check_dashboard_state({"data": [_legacy_row("l")]}, dashboard)
+    assert any("envelope" in p for p in wrapped)
+    stale_version = {"id": "g", "data": {**dashboard, "version": "v4"}}
+    assert any(
+        "version" in p
+        for p in check_dashboard_state({"data": [stale_version]}, dashboard)
+    )
+    no_layout = {
+        "id": "g",
+        "data": {k: v for k, v in dashboard.items() if k != "layout"},
+    }
+    assert any(
+        "layout" in p for p in check_dashboard_state({"data": [no_layout]}, dashboard)
+    )
+    fewer = {"id": "g", "data": {**dashboard, "widgets": dashboard["widgets"][:1]}}
+    assert any(
+        "widgets" in p for p in check_dashboard_state({"data": [fewer]}, dashboard)
+    )
+
+
+def test_verify_dashboard_task_reads_and_judges(monkeypatch) -> None:
+    module, Exit = _load_fr_observability_tasks(monkeypatch)
+    dashboard = load_dashboard()
+    calls, rows, _ = _install_dashboards(monkeypatch, [{"id": "g", "data": dashboard}])
+
+    assert module.verify_dashboard(object()) is True
+    assert _writes(calls) == []
+
+    rows["dup"] = {"id": "dup", "data": dict(dashboard)}
+    with pytest.raises(Exit) as exc:
+        module.verify_dashboard(object())
+    assert exc.value.code == 1
