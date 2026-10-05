@@ -7,7 +7,7 @@ Enforces Apocalypse Engineering rules for non-reversible operations:
    - Physical byte check (> 1024 bytes)
    - Structural catalog verification via pg_restore -l
 2. Off-host / cold storage archive preservation:
-   - Upload verified backup to MinIO archive bucket
+   - Upload verified backup to S3 archive bucket
 3. Multi-layer safety gate:
    - DROP DATABASE and host path deletion require explicit --confirm AND dry_run=False.
    - Refuse execution on failed or missing backup.
@@ -172,19 +172,19 @@ def upload_backup_to_archive(
     archive_dir: Path | None = None,
     runner: Callable[..., Any] = default_runner,
 ) -> str:
-    """Save backup file to local archive directory and upload to MinIO archive bucket."""
+    """Save backup file to local archive directory and upload to S3 archive bucket."""
     target_dir = archive_dir or Path("/tmp/infra2_archive")
     target_dir.mkdir(parents=True, exist_ok=True)
     destination = target_dir / backup_file.name
     shutil.copy2(backup_file, destination)
 
-    # MinIO upload via mc with strict returncode verification
-    minio_target = f"minio/{bucket}/activepieces/{backup_file.name}"
-    cmd = ["mc", "cp", str(backup_file), minio_target]
+    # S3 upload via mc with strict returncode verification
+    s3_target = f"minio/{bucket}/activepieces/{backup_file.name}"
+    cmd = ["mc", "cp", str(backup_file), s3_target]
     res = runner(cmd)
     if res.returncode != 0:
         raise RuntimeError(
-            f"Failed to upload backup to MinIO ({minio_target}): exit {res.returncode}, stderr: {getattr(res, 'stderr', '')}"
+            f"Failed to upload backup to S3 ({s3_target}): exit {res.returncode}, stderr: {getattr(res, 'stderr', '')}"
         )
 
     return f"s3://{bucket}/activepieces/{backup_file.name}"

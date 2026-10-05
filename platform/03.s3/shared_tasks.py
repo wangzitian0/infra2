@@ -61,15 +61,21 @@ def _ensure_admin_alias(c, container_name: str, e: dict) -> bool:
     from libs.env import get_secrets
 
     env_name = e.get("ENV", "production")
+    s3_secrets = None
     try:
-        minio_secrets = get_secrets("platform", "minio", env_name)
-        root_user = minio_secrets.get("root_user") or "admin"
-        root_password = minio_secrets.get("root_password")
-    except Exception as exc:  # noqa: BLE001 - a missing store is a clear operator error
-        error(f"Could not read the MinIO root credential from Vault: {exc}")
-        return False
+        s3_secrets = get_secrets("platform", "s3", env_name)
+    except Exception:
+        s3_secrets = None
+    if not s3_secrets or not s3_secrets.get("root_password"):
+        try:
+            s3_secrets = get_secrets("platform", "minio", env_name)
+        except Exception as exc:  # noqa: BLE001 - a missing store is a clear operator error
+            error(f"Could not read the S3 root credential from Vault: {exc}")
+            return False
+    root_user = (s3_secrets.get("root_user") if s3_secrets else None) or "admin"
+    root_password = s3_secrets.get("root_password") if s3_secrets else None
     if not root_password:
-        error(f"platform/{env_name}/minio holds no root_password")
+        error(f"platform/{env_name}/s3 (or minio) holds no root_password")
         return False
     payload = json.dumps(
         {
@@ -87,7 +93,7 @@ def _ensure_admin_alias(c, container_name: str, e: dict) -> bool:
         warn=True,
     )
     if not result.ok:
-        error("Failed to configure the MinIO admin alias")
+        error("Failed to configure the S3 admin alias")
         return False
     return True
 
@@ -103,12 +109,12 @@ def create_app_bucket(
     enable_versioning=False,
     public_download=False,
 ):
-    """Create MinIO bucket with security best practices for application usage.
+    """Create S3 bucket with security best practices for application usage.
 
     Args:
         bucket_name: Name of the bucket to create (e.g., 'finance-report-statements')
-        access_key: MinIO access key for the application user (auto-generated if None)
-        secret_key: MinIO secret key for the application user (auto-generated if None)
+        access_key: S3 access key for the application user (auto-generated if None)
+        secret_key: S3 secret key for the application user (auto-generated if None)
         enable_encryption: Enable server-side encryption (SSE-S3) - default True
         lifecycle_days: Auto-delete files after N days (default 90, 0 to disable)
         enable_versioning: Enable bucket versioning - default False
@@ -120,8 +126,8 @@ def create_app_bucket(
     Example:
         # In downstream deploy.py pre_compose:
         import sys
-        minio_shared = sys.modules.get("platform.03.minio.shared")
-        create_app_bucket = minio_shared.create_app_bucket
+        s3_shared = sys.modules.get("platform.03.s3.shared") or sys.modules.get("platform.03.minio.shared")
+        create_app_bucket = s3_shared.create_app_bucket
 
         result = create_app_bucket(
             c,
@@ -236,7 +242,7 @@ def create_app_bucket(
             warning(f"Failed to enable versioning: {result.stderr}")
 
     # Step 6: Create access key (service account)
-    info(f"Creating MinIO service account: {access_key}...")
+    info(f"Creating S3 service account: {access_key}...")
     result = c.run(
         f"docker exec {container_name} mc admin user add local {access_key} {secret_key}",
         hide=True,

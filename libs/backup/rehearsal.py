@@ -59,10 +59,14 @@ def latest_artifact_for_service(
     manifest: dict[str, Any], service_id: str
 ) -> dict[str, Any]:
     """Return the newest manifest artifact for one service."""
+    from libs.backup.verification import legacy_backup_aliases
+
+    aliases = legacy_backup_aliases().get(service_id, ())
+    accepted_ids = {service_id, *aliases}
     candidates = [
         item
         for item in manifest.get("artifacts", [])
-        if isinstance(item, dict) and item.get("service_id") == service_id
+        if isinstance(item, dict) and item.get("service_id") in accepted_ids
     ]
     if not candidates:
         raise BackupRestoreError(f"manifest has no artifact for {service_id}")

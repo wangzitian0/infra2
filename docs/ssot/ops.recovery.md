@@ -169,7 +169,7 @@ inventory archiver, it produces **restorable logical backups**:
   container's `/secrets/.env`), then archive `dump.rdb` only. A SAVE that does not
   answer `OK` logs `WARN` and the archive holds the last automatic snapshot
   (`--save 60 1`).
-- Other data paths: gzip tar, **last** (minio is the busiest live tree).
+- Other data paths: gzip tar, **last** (s3 is the busiest live tree).
 
 Failure contract (#618, found by the truealpha#650 restore drill):
 

@@ -106,7 +106,7 @@ platform compose 中的镜像禁止浮动 tag——上游静默漂移且不可�
 
 ### 5.1 隔离原则
 
-隔离的轴 = 风险的轴。**控制/平台面**（Dokploy/Vault/SigNoz/Authentik/MinIO/Prefect…）有内建多租户 → 一份 + HA + 逻辑租户即可；**数据/工作负载面**（app 容器 + 其逻辑库/bucket）→ per-(env×app) 隔离。staging 与 prod **故意两套**(staging 是升级/IaC 变更的金丝雀,挂了也比 prod 直接挂强)，但 staging 跑**最低资源 tier**。
+隔离的轴 = 风险的轴。**控制/平台面**（Dokploy/Vault/SigNoz/Authentik/S3/Prefect…）有内建多租户 → 一份 + HA + 逻辑租户即可；**数据/工作负载面**（app 容器 + 其逻辑库/bucket）→ per-(env×app) 隔离。staging 与 prod **故意两套**(staging 是升级/IaC 变更的金丝雀,挂了也比 prod 直接挂强)，但 staging 跑**最低资源 tier**。
 
 ### 5.2 资源 tier(两个独立旋钮:预算 ≠ 优先级)
 

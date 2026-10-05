@@ -57,6 +57,9 @@ def _frozen_inventory() -> list[VaultService]:
     for raw_service in data.get("services", []):
         merged = {**defaults, **raw_service}
         merged["app_containers"] = tuple(merged.get("app_containers", ()))
+        merged["legacy_dokploy_services"] = tuple(
+            merged.get("legacy_dokploy_services", ())
+        )
         services.append(VaultService(**merged))
     return services
 

@@ -159,6 +159,8 @@ class VaultService:
     # name — trivially green until the template content check (#692) compared the
     # preview template against the fixed agent. The live audit reports it as skipped.
     ephemeral: bool = False
+    # Legacy compose names for backward-compatibility fallback during migration (#954, #958)
+    legacy_dokploy_services: tuple[str, ...] = ()
 
     @property
     def auth_env_keys(self) -> tuple[str, ...]:
@@ -248,6 +250,7 @@ def _vault_service_from_facet(meta, facet) -> VaultService:
         id=facet.service_id or meta.service_id,
         project=meta.project,
         dokploy_service=meta.service,
+        legacy_dokploy_services=getattr(meta, "legacy_compose_names", ()),
         compose_path=compose_path,
         vault_agent_config_path=f"{compose_dir}/vault-agent.hcl",
         secret_template_path=f"{compose_dir}/secrets.ctmpl",
@@ -852,6 +855,15 @@ def collect_live_observations(
             project_name=service.project,
             env_name=env,
         )
+        if compose is None and service.legacy_dokploy_services:
+            for legacy_name in service.legacy_dokploy_services:
+                compose = client.find_compose_by_name(
+                    legacy_name,
+                    project_name=service.project,
+                    env_name=env,
+                )
+                if compose is not None:
+                    break
         env_text = compose.get("env", "") if compose else ""
         # AppRole services (#264/#531) have no static token to look up -- mirrors the
         # skip in classify_token / preflight_vault_token above.
@@ -869,7 +881,37 @@ def collect_live_observations(
                 else None
             )
         vault_agent_name = _resolve_env_suffix(service.vault_agent_container, env)
+        agent_state = _remote_container_state(vps_host, vault_agent_name)
+        if agent_state.get("status") == "missing" and service.legacy_dokploy_services:
+            for legacy_name in service.legacy_dokploy_services:
+                candidate_agent = _resolve_env_suffix(
+                    service.vault_agent_container.replace(
+                        service.dokploy_service, legacy_name
+                    ),
+                    env,
+                )
+                candidate_state = _remote_container_state(vps_host, candidate_agent)
+                if candidate_state.get("status") != "missing":
+                    vault_agent_name = candidate_agent
+                    agent_state = candidate_state
+                    break
+
         app_names = [_resolve_env_suffix(name, env) for name in service.app_containers]
+        app_states = []
+        for name in app_names:
+            st = _remote_container_state(vps_host, name)
+            if st.get("status") == "missing" and service.legacy_dokploy_services:
+                for legacy_name in service.legacy_dokploy_services:
+                    candidate_app = _resolve_env_suffix(
+                        name.replace(service.dokploy_service, legacy_name),
+                        env,
+                    )
+                    candidate_st = _remote_container_state(vps_host, candidate_app)
+                    if candidate_st.get("status") != "missing":
+                        st = candidate_st
+                        break
+            app_states.append(st)
+
         inert_fields = service.optional_inert_fields
         observations["services"][service.id] = {
             "dokploy_env": env_text,
@@ -889,12 +931,8 @@ def collect_live_observations(
             "vault_agent_logs": _remote_container_logs(
                 vps_host, vault_agent_name, since=log_since
             ),
-            "vault_agent_container": _remote_container_state(
-                vps_host, vault_agent_name
-            ),
-            "app_containers": [
-                _remote_container_state(vps_host, name) for name in app_names
-            ],
+            "vault_agent_container": agent_state,
+            "app_containers": app_states,
         }
     return observations
 

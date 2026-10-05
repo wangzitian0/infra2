@@ -90,7 +90,7 @@ npm run dev  # Next.js dev server (localhost:3000)
 **位置**: 开发者工作站 (Docker Compose)  
 **用途**: 端到端测试、集成测试、依赖验证  
 **特点**:
-- ✅ **完整栈** - PostgreSQL + Redis + MinIO + Backend + Frontend
+- ✅ **完整栈** - PostgreSQL + Redis + S3 + Backend + Frontend
 - ✅ **真实依赖** - 真实数据库、真实 S3
 - ✅ **快速重置** - `docker compose down -v && docker compose up`
 - ✅ **调试友好** - 容器日志、端口映射
@@ -98,7 +98,7 @@ npm run dev  # Next.js dev server (localhost:3000)
 **配置**:
 ```bash
 # Finance Report 示例
-docker compose up -d postgres minio redis  # 启动依赖
+docker compose up -d postgres s3 redis  # 启动依赖
 moon run backend:dev  # 后端连接真实 DB
 moon run frontend:dev  # 前端
 
@@ -451,7 +451,7 @@ compose、env、secret 路径、**外部镜像 tag**、Traefik 路由 label、�
 | 平台服务无 code version | `version_ref` 为空；制品由 `iac_ref` 钉死 |
 | `secret_key` / vault 路径 | IaC（`iac_ref`）+ per-service deployer |
 | openpanel 自带 op-ch，版本 ≠ 平台 clickhouse | 两个镜像 tag 各 pin 在各自 compose（`iac_ref`）；坐标只选「部署 openpanel 这个服务」|
-| minio 双端点 / SSO 路由 label | compose 里的 Traefik label（`iac_ref`）|
+| s3 双端点 / SSO 路由 label | compose 里的 Traefik label（`iac_ref`）|
 | 多容器编排 | 服务 compose（`iac_ref`）|
 
 **结论**：坐标和当前实现均已完备，不需要第五轴：
@@ -503,14 +503,14 @@ invoke test.cleanup --pr-number=123
   1. 停止容器
   2. 删除数据目录
   3. 删除 Vault 密钥 (secret/data/finance_report/test/*)
-  4. 删除 MinIO bucket
+  4. 删除 S3 bucket
   5. 删除 Dokploy 域名配置
 ```
 
 ### 6.3 验证清单
 
 每次 PR 部署到 Test 环境时，自动验证：
-- [ ] MinIO bucket 自动创建
+- [ ] S3 bucket 自动创建
 - [ ] PostgreSQL 用户自动创建
 - [ ] Vault 密钥自动生成
 - [ ] 应用健康检查通过

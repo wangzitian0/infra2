@@ -300,6 +300,12 @@ def scan(tag: str) -> list[Row]:
             continue
         identity = deployed.get(sid)
         if identity is None:
+            for legacy in getattr(dep, "legacy_compose_names", ()):
+                legacy_sid = f"{getattr(dep, 'project', 'platform')}/{legacy}"
+                if legacy_sid in deployed:
+                    identity = deployed[legacy_sid]
+                    break
+        if identity is None:
             rows.append(Row(sid, "not_deployed"))
             continue
         if (identity.runtime_hash or "").startswith("deploy-"):

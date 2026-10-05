@@ -18,7 +18,7 @@ Use this page for the five failure classes named by [#723](https://github.com/wa
 
 1. Identify growth without deleting data: `du -xhd1 /data | sort -h` and `docker system df`. Confirm that the backup directory is not the cause of a misconfigured retention policy before touching it.
 2. At ≥80%, run only the approved safe cleanup if the guard failed to run: `docker image prune -f --filter dangling=true` and `docker builder prune -f --filter until=24h`. Recheck `df -P /data`. Do not prune volumes, running containers, in-use images, preview resources or backups.
-3. At ≥85% after cleanup, page P0 and inspect `journalctl -u infra2-disk-guardian.service -n 80 --no-pager`. Follow the guardian's oversized json-log path only after confirming the target is a Docker json log; do not truncate database, Vault, MinIO or backup files. Recheck writes and external alert delivery.
+3. At ≥85% after cleanup, page P0 and inspect `journalctl -u infra2-disk-guardian.service -n 80 --no-pager`. Follow the guardian's oversized json-log path only after confirming the target is a Docker json log; do not truncate database, Vault, S3 (object storage) or backup files. Recheck writes and external alert delivery.
 
 **Brake / recovery:** If the new guardian itself misbehaves, stop its timer with `systemctl stop infra2-disk-guardian.timer` after owner approval, keep the external disk check active, and restore the prior approved script. Space recovered is not data recovered; use [recovery SOP](../ssot/ops.recovery.md) for damaged state.
 

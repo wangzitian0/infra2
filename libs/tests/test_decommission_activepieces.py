@@ -4,7 +4,7 @@ Enforces Apocalypse Engineering rules:
 - Never execute destructive operations without verified cold backup.
 - Never drop database when backup is missing, empty (<= 1024 bytes), or invalid schema.
 - Never drop database without explicit confirmation.
-- Subprocess timeouts and MinIO upload failures must immediately abort before destructive action.
+- Subprocess timeouts and S3 upload failures must immediately abort before destructive action.
 """
 
 from __future__ import annotations
@@ -286,8 +286,8 @@ def test_decommission_aborts_without_dropping_db_when_backup_fails(
     assert not runner.has_command_containing("DROP DATABASE")
 
 
-def test_decommission_aborts_on_minio_upload_failure(tmp_path: Path) -> None:
-    """Invariant: Failed MinIO upload must abort and never drop database."""
+def test_decommission_aborts_on_s3_upload_failure(tmp_path: Path) -> None:
+    """Invariant: Failed S3 upload must abort and never drop database."""
     runner = MockRunner(
         {
             "SELECT 1 FROM pg_database": subprocess.CompletedProcess([], 0, "1\n", ""),
@@ -296,7 +296,7 @@ def test_decommission_aborts_on_minio_upload_failure(tmp_path: Path) -> None:
         }
     )
 
-    with pytest.raises(RuntimeError, match="Failed to upload backup to MinIO"):
+    with pytest.raises(RuntimeError, match="Failed to upload backup to S3"):
         decommission_activepieces(
             confirm=True,
             dry_run=False,
@@ -325,7 +325,7 @@ def test_decommission_aborts_on_subprocess_timeout(tmp_path: Path) -> None:
         )
     assert not runner_dump_timeout.has_command_containing("DROP DATABASE")
 
-    # 2. Timeout during MinIO upload
+    # 2. Timeout during S3 upload
     runner_upload_timeout = MockRunner(
         {
             "SELECT 1 FROM pg_database": subprocess.CompletedProcess([], 0, "1\n", ""),

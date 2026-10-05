@@ -126,6 +126,8 @@ class ServiceMeta:
     restart_after: tuple[RestartAfterFacet, ...] = ()
     # Storage bucket facts (#822 / Phase 3 SSOT)
     storage: tuple[StorageFacet, ...] = ()
+    # Legacy compose names for backward-compatibility during rollout (#954, #958)
+    legacy_compose_names: tuple[str, ...] = ()
 
     def exempted(self, check_id: str) -> bool:
         """True if this service explicitly opted out of facet ``check_id``."""
@@ -186,6 +188,7 @@ def _meta_from_deploy_file(
         deploy_v2_canary=bool(_class_attr(tree, "deploy_v2_canary") or False),
         restart_after=_facet_seq(tree, "restart_after", RestartAfterFacet, where),
         storage=_facet_seq(tree, "storage", StorageFacet, where),
+        legacy_compose_names=_class_tuple_str_attr(tree, "legacy_compose_names"),
     )
 
 
@@ -528,6 +531,19 @@ def _class_attr(tree: ast.Module, attr_name: str) -> str | int | bool | None:
     ):
         return value.value
     return None
+
+
+def _class_tuple_str_attr(tree: ast.Module, attr_name: str) -> tuple[str, ...]:
+    """Return a tuple of strings from a literal tuple/list class attribute."""
+    value = _deployer_assign(tree, attr_name)
+    if value is not None:
+        try:
+            val = ast.literal_eval(value)
+            if isinstance(val, (tuple, list)):
+                return tuple(str(x) for x in val)
+        except (ValueError, TypeError, SyntaxError):
+            pass
+    return ()
 
 
 def _facet_instance(node: ast.expr, facet_cls: type, where: str):

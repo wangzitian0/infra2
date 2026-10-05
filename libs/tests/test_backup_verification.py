@@ -110,6 +110,63 @@ def test_backup_manifest_requires_fresh_off_host_artifacts() -> None:
     assert failed["checks"][0]["summary"] == "backup artifact is stale"
 
 
+def test_backup_manifest_resolves_legacy_service_alias() -> None:
+    """Issue #952/#954/#958: When an inventory service is renamed (e.g. platform/s3),
+    unpromoted production backup manifests may still label the artifact with the legacy ID
+    (platform/minio). The verification must accept the legacy artifact rather than failing."""
+    s3_entry = next(e for e in load_backup_inventory() if e.service_id == "platform/s3")
+    now = 1_800_000_000
+    manifest = {
+        "artifacts": [
+            {
+                "service_id": "platform/minio",
+                "created_at": now - 3600,
+                "size_bytes": 2048,
+                "sha256": "b" * 64,
+                "remote_uri": f"{s3_entry.remote}:infra2/platform/minio.tar.zst",
+            }
+        ]
+    }
+
+    report = verify_backup_manifest([s3_entry], manifest, now=now)
+
+    assert report["status"] == "pass"
+    assert report["checks"][0]["service_id"] == "platform/s3"
+    assert report["checks"][0]["status"] == "pass"
+    assert report["checks"][0]["summary"] == "backup artifact is fresh and verifiable"
+    assert (
+        report["checks"][0]["evidence"]["satisfied_by_legacy_alias"] == "platform/minio"
+    )
+
+
+def test_latest_artifact_for_service_resolves_legacy_service_alias() -> None:
+    """Rehearsal artifact lookup must honor the same legacy alias as manifest verification."""
+    from libs.backup.rehearsal import latest_artifact_for_service
+
+    manifest = {
+        "artifacts": [
+            {
+                "service_id": "platform/minio",
+                "created_at": "2026-10-05T00:00:00Z",
+                "size_bytes": 2048,
+                "sha256": "b" * 64,
+                "remote_uri": "gdrive-backup:infra2/platform/minio.tar.zst",
+            }
+        ]
+    }
+    artifact = latest_artifact_for_service(manifest, "platform/s3")
+    assert artifact["service_id"] == "platform/minio"
+
+
+def test_legacy_backup_aliases_derived_from_registry() -> None:
+    """Legacy backup aliases must derive from Deployer.legacy_compose_names (SSOT)."""
+    from libs.backup.verification import legacy_backup_aliases
+
+    aliases = legacy_backup_aliases()
+    assert "platform/s3" in aliases
+    assert aliases["platform/s3"] == ("platform/minio",)
+
+
 def test_backup_manifest_invalid_timestamp_becomes_failed_check() -> None:
     """#158: malformed manifests fail loudly without crashing verification."""
     entry = load_backup_inventory()[0]
@@ -280,7 +337,9 @@ def test_backup_restore_rehearsal_downloads_remote_artifact(tmp_path) -> None:
     )
 
 
-def test_materialize_artifact_verifies_real_checksum_and_cleans_corrupted(tmp_path) -> None:
+def test_materialize_artifact_verifies_real_checksum_and_cleans_corrupted(
+    tmp_path,
+) -> None:
     content = b"valid sql dump data"
     correct_hash = hashlib.sha256(content).hexdigest()
     corrupt_hash = "f" * 64

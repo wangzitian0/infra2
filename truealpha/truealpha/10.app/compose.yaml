@@ -110,7 +110,7 @@ services:
       # Was defaulted by the hand-written secrets.ctmpl; the generated template renders
       # only human / runtime values, so the deployment states these here.
       APP_ENV: ${ENV:-production}
-      S3_ENDPOINT: http://platform-minio${ENV_SUFFIX}:9000
+      S3_ENDPOINT: http://platform-s3${ENV_SUFFIX}:9000
     healthcheck:
       # python stdlib probe: the uv-based slim image ships no curl/wget.
       # 127.0.0.1, not localhost: alpine/slim images often resolve localhost to
@@ -184,7 +184,7 @@ services:
       # Was defaulted by the hand-written secrets.ctmpl; the generated template renders
       # only human / runtime values, so the deployment states these here.
       APP_ENV: ${ENV:-production}
-      S3_ENDPOINT: http://platform-minio${ENV_SUFFIX}:9000
+      S3_ENDPOINT: http://platform-s3${ENV_SUFFIX}:9000
       HOSTNAME: 0.0.0.0
       PORT: "3000"
     healthcheck:

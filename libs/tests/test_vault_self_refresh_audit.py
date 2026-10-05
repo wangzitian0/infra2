@@ -1066,6 +1066,99 @@ def test_collect_live_observations_skips_token_lookup_for_approle_service(
     assert observations["services"][service.id]["token_lookup"] is None
 
 
+def test_collect_live_observations_falls_back_to_legacy_dokploy_services(
+    monkeypatch,
+) -> None:
+    """Issue #954/#958: When a platform service is renamed (e.g. minio -> s3), production
+    runs on the legacy Dokploy compose name until explicitly promoted. The audit must
+    fall back to legacy_dokploy_services rather than falsely reporting empty env."""
+    service = VaultService(
+        id="platform/s3",
+        project="platform",
+        dokploy_service="s3",
+        compose_path="platform/03.s3/compose.yaml",
+        vault_agent_config_path="platform/03.s3/vault-agent.hcl",
+        secret_template_path="platform/03.s3/secrets.ctmpl",
+        vault_path_template="secret/data/platform/{env}/s3",
+        rendered_secret_path="/data/platform/s3/secrets.env",
+        vault_agent_container="platform-s3-vault-agent",
+        app_containers=("platform-s3",),
+        vault_token_env_key="VAULT_TOKEN",
+        auth_method="approle",
+        legacy_dokploy_services=("minio",),
+    )
+
+    searched_names: list[str] = []
+
+    class FakeDokployClient:
+        def find_compose_by_name(self, name, project_name=None, env_name=None):
+            searched_names.append(name)
+            if name == "s3":
+                return None
+            if name == "minio":
+                return {
+                    "env": (
+                        "VAULT_ROLE_ID=test-role-id-legacy\n"
+                        "VAULT_SECRET_ID=test-secret-id-legacy\n"
+                    )
+                }
+            return None
+
+    def fake_get_env():
+        return {"VPS_HOST": "vps.example", "INTERNAL_DOMAIN": "example.test"}
+
+    def fake_ssh(host, command):
+        class Result:
+            returncode = 0
+            stdout = (
+                '{"exists":true,"readable":true,"size":10,"mtime":1,'
+                '"has_no_value":false}'
+            )
+            stderr = ""
+
+        return Result()
+
+    def fake_container_state(host, container_name):
+        if "minio" in container_name:
+            return {"status": "running", "healthy": True, "container": container_name}
+        return {"status": "missing", "healthy": False, "container": container_name}
+
+    monkeypatch.setattr("libs.common.get_env", fake_get_env)
+    monkeypatch.setattr(
+        "libs.dokploy.get_dokploy", lambda host=None: FakeDokployClient()
+    )
+    monkeypatch.setattr(vault_self_refresh_audit_module, "_ssh", fake_ssh)
+    monkeypatch.setattr(
+        vault_self_refresh_audit_module,
+        "_remote_container_state",
+        fake_container_state,
+    )
+
+    observations = collect_live_observations([service], env="production")
+
+    assert searched_names == ["s3", "minio"]
+    assert (
+        "VAULT_ROLE_ID=test-role-id-legacy"
+        in observations["services"][service.id]["dokploy_env"]
+    )
+    assert (
+        observations["services"][service.id]["vault_agent_container"]["status"]
+        == "running"
+    )
+    assert (
+        observations["services"][service.id]["vault_agent_container"]["container"]
+        == "platform-minio-vault-agent"
+    )
+    assert (
+        observations["services"][service.id]["app_containers"][0]["status"]
+        == "running"
+    )
+    assert (
+        observations["services"][service.id]["app_containers"][0]["container"]
+        == "platform-minio"
+    )
+
+
 def test_age_alone_is_information_however_old_the_render_is() -> None:
     """#688: treating age as a fault failed five services at 65-67 days on 2026-09-10 —
     authentik, openpanel, postgres, prefect, redis — every one a long-lived secret nobody
