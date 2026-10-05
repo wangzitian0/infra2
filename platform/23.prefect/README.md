@@ -13,12 +13,13 @@ Prefect is a modern workflow orchestration platform. This deployment includes:
 - **postgres**: Stores flow runs, deployments, and task state (shared platform DB)
 - **redis**: Message broker for event streaming (shared platform Redis, DB 1)
 
-### Environment Strategy
+### Environment Strategy and Multi-Environment Note
 
-**Single global deployment** - No per-environment instances (staging/production).
-Use **Prefect projects** and **tags** for environment isolation:
-- Project: `finance-report-prod`, `finance-report-staging`
-- Tags: `env:production`, `env:staging`
+Prefect uses a shared deployment topology:
+- The deployer supports standard `ENV_SUFFIX` parameters for staging and production.
+- Applications currently share a single global Prefect instance to reduce resource usage.
+- Projects and tags separate workloads between environments (e.g., `env:production`, `env:staging`).
+- **Isolation Note**: This shared topology diverges from strict multi-environment isolation. Workloads needing full isolation must deploy dedicated runner pools or separate instances.
 
 ## Architecture
 

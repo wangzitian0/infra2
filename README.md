@@ -57,8 +57,8 @@ infra2/
 ├── oh-my-code-agent/ # Coding-agent 配置观察与隔离 runtime (git submodule)
 ├── bootstrap/        # L1 - 基础层 (1Password, Vault)
 ├── platform/         # L2 - 平台层 (PostgreSQL, Redis, Authentik)
-├── finance_report/   # L3 - 应用层 (Finance Report)
-├── truealpha/        # L3 - 应用层 (TrueAlpha IaC)
+├── finance_report/   # L4 - 业务应用 IaC 编排 (Finance Report Deployer)
+├── truealpha/        # L4 - 业务应用 IaC 编排 (TrueAlpha Deployer)
 ├── repos/            # 统一开发 workspace (git submodules)
 ├── cloudflare/       # Cloudflare Worker (infra-watchdog)
 ├── scripts/          # 一次性/引导 shell 脚本

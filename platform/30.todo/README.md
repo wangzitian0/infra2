@@ -6,8 +6,9 @@ Canary service deployed at `todo.zitian.party` for verifying and self-proving al
 
 - **Service**: todo
 - **Port**: 8000 (container) -> 443 (Traefik)
-- **Subdomain**: `todo` (`todo.zitian.party`)
+- **Subdomain**: `subdomain = None` (uses Authentik ForwardAuth proxy labels in `compose.yaml`)
 - **Deployer**: `TodoDeployer` (`platform/30.todo/deploy.py`)
+- **Watchdog Probes**: Exempt (`check_id="probes"`, self-proving via `/api/canary/status`)
 
 ## Validated Capabilities
 

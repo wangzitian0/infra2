@@ -1,6 +1,7 @@
 # Finance Report Deployment
 
 > **Purpose**: Deploy Finance Report application with dedicated database and cache instances.
+> **Boundary**: This directory contains only the IaC orchestration coordinates, Dokploy Compose specifications, and deployment tasks for Finance Report. The application source code, business logic, domain models, and developer guides reside in the autonomous repository `repos/finance_report`.
 
 ## Architecture
 
@@ -24,7 +25,7 @@ finance_report/
 |---------|------------|-------|
 | postgres | vault | Secrets from Vault |
 | redis | vault | Secrets from Vault |
-| app | postgres, redis, minio | MinIO from platform/03.minio |
+| app | postgres, redis, s3 | S3 (RustFS) from platform/03.s3 |
 
 ## Quick Start
 

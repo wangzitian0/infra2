@@ -54,6 +54,14 @@ invoke s3.status
 - **Persistence**: Host volume mount
 - **User/Group**: UID `10001`, GID `10001` (managed automatically by `Deployer._prepare_dirs`)
 
+## Legacy Compatibility Aliases
+
+The platform keeps compatibility aliases during the transition from MinIO to RustFS:
+- **CLI Commands**: `invoke minio.status` maps to `invoke s3.status`.
+- **Docker Network**: Containers expose the `platform-minio` network alias together with `platform-s3`.
+- **Vault Secret Paths**: Secrets stay at `secret/platform/<env>/minio` to avoid secret migrations.
+- **Backup Identifiers**: Automated backup processes accept `platform/minio-*` archive names during the retention window.
+
 ## References
 
 - [RustFS GitHub](https://github.com/rustfs/rustfs)

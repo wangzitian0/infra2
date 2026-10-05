@@ -51,7 +51,7 @@ redis ────┘
 ## Prerequisites
 
 1. **Vault ready**: `invoke vault.status` should return healthy
-2. **MinIO ready**: `invoke minio.status` should return healthy
+2. **S3 ready**: `invoke s3.status` should return healthy (legacy alias `invoke minio.status` also supported)
 3. **Secrets written**: Secrets in `secret/finance_report/<env>/*`
 
 ## Quick Start
