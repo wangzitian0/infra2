@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 from tools.ci_runner import (
@@ -138,3 +139,22 @@ def test_ci_runner_deployer_mutation_fails(
     assert ret == 1
     captured = capsys.readouterr()
     assert "missing service name" in captured.out
+
+
+def test_ci_runner_unit_tests_timeout_fails(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Falsifiability test: run_unit_tests handles TimeoutExpired gracefully
+    import subprocess
+    from tools.ci_runner import run_unit_tests
+
+    def mock_run_cmd(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if "pytest" in args[0]:
+            raise subprocess.TimeoutExpired(cmd=args[0], timeout=0.01)
+        return subprocess.CompletedProcess(args=args[0], returncode=0)
+
+    monkeypatch.setattr("tools.ci_runner._run_cmd", mock_run_cmd)
+    ret = run_unit_tests(verbose=False, timeout=0.01)
+    assert ret == 1
+    captured = capsys.readouterr()
+    assert "timed out after 0.01s" in captured.out
