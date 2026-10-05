@@ -1118,11 +1118,21 @@ def test_collect_live_observations_falls_back_to_legacy_dokploy_services(
 
         return Result()
 
+    def fake_container_state(host, container_name):
+        if "minio" in container_name:
+            return {"status": "running", "healthy": True, "container": container_name}
+        return {"status": "missing", "healthy": False, "container": container_name}
+
     monkeypatch.setattr("libs.common.get_env", fake_get_env)
     monkeypatch.setattr(
         "libs.dokploy.get_dokploy", lambda host=None: FakeDokployClient()
     )
     monkeypatch.setattr(vault_self_refresh_audit_module, "_ssh", fake_ssh)
+    monkeypatch.setattr(
+        vault_self_refresh_audit_module,
+        "_remote_container_state",
+        fake_container_state,
+    )
 
     observations = collect_live_observations([service], env="production")
 
@@ -1130,6 +1140,22 @@ def test_collect_live_observations_falls_back_to_legacy_dokploy_services(
     assert (
         "VAULT_ROLE_ID=test-role-id-legacy"
         in observations["services"][service.id]["dokploy_env"]
+    )
+    assert (
+        observations["services"][service.id]["vault_agent_container"]["status"]
+        == "running"
+    )
+    assert (
+        observations["services"][service.id]["vault_agent_container"]["container"]
+        == "platform-minio-vault-agent"
+    )
+    assert (
+        observations["services"][service.id]["app_containers"][0]["status"]
+        == "running"
+    )
+    assert (
+        observations["services"][service.id]["app_containers"][0]["container"]
+        == "platform-minio"
     )
 
 
