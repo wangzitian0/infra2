@@ -158,7 +158,7 @@ services:
       # Configuration the hand-written preview secrets.ctmpl used to default (values
       # previews effectively ran with on 2026-09-07, borrowing staging's); the generated
       # template renders only human / runtime values from the staging path.
-      S3_ENDPOINT: http://platform-minio:9000
+      S3_ENDPOINT: http://platform-s3:9000
       S3_BUCKET: finance-report-staging
       S3_PUBLIC_BUCKET: finance-report-staging
       S3_PRESIGN_EXPIRY_SECONDS: "900"

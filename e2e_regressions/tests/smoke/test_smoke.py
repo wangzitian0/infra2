@@ -26,8 +26,8 @@ def _core_services(config: TestConfig):
 @pytest.mark.smoke
 @pytest.mark.e2e
 async def test_minio_health(config: TestConfig):
-    """Verify MinIO Console and S3 API are accessible."""
-    async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
+    """Verify S3/MinIO Console and S3 API are accessible."""
+    async with httpx.AsyncClient(verify=False, timeout=10.0, follow_redirects=True) as client:
         # Console should return 200 (HTML login page)
         console_resp = await client.get(config.MINIO_CONSOLE_URL)
         assert console_resp.status_code == 200, (

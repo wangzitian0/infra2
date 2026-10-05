@@ -592,6 +592,19 @@ class TestDokployClient:
             "errors": ["create bad.example.test: create failed"],
         }
 
+    def test_delete_domain_calls_api(self, dokploy_env):
+        client = DokployClient()
+        calls = []
+        client._request = lambda method, endpoint, **kwargs: (
+            calls.append((method, endpoint, kwargs))
+            or {"domainId": kwargs.get("json", {}).get("domainId")}
+        )
+        res = client.delete_domain("domain-123")
+        assert res == {"domainId": "domain-123"}
+        assert calls == [
+            ("POST", "domain.delete", {"json": {"domainId": "domain-123"}})
+        ]
+
     def test_update_compose_env_merges_existing_values(self, dokploy_env):
         client = DokployClient()
         client.get_compose_env = lambda compose_id: "A=1\n# comment\nB=old\nINVALID"

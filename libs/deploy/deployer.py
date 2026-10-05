@@ -944,8 +944,15 @@ class Deployer:
         # vault-agent crash-loops on "VAULT_ROLE_ID and VAULT_SECRET_ID are
         # required". The compose record now exists either way, so
         # `vault.setup-approle` has a target to inject into and its
-        # deploy=True performs the first credentialed deployment.
         cls._assert_approle_creds_present(effective_env)
+
+        # Prune stale Dokploy-attached domains before deployment.
+        # If cls.subdomain is None (the service manages its own routing via compose.yaml Traefik labels, Infra-011.5)
+        # or if the compose was adopted from a legacy name (e.g. minio -> s3), Dokploy DB may have domains
+        # attached with a serviceName that no longer exists in compose.yaml. Dokploy validates domain attachments
+        # during compose deployment and immediately aborts if any domain references a non-existent service.
+        if cls.subdomain is None:
+            cls._prune_stale_dokploy_domains(client, compose_id)
 
         info(f"Deploying compose {compose_id}...")
         cls._deploy_compose_with_record_check(client, compose_id)
@@ -1400,6 +1407,45 @@ class Deployer:
             return True
         error("Verification failed", result["details"])
         return False
+
+    @classmethod
+    def _prune_stale_dokploy_domains(cls, client: Any, compose_id: str) -> None:
+        """Prune Dokploy-attached domains on composes using compose-level Traefik routing (subdomain=None).
+
+        Dokploy validates attached domains during compose deployment and immediately fails if any
+        domain points to a serviceName not present in compose.yaml (e.g. after service renaming or adoption).
+        Services with subdomain=None manage their own routing via Traefik labels in compose.yaml.
+        """
+        if not hasattr(client, "delete_domain"):
+            return
+        domains: list[dict] = []
+        if hasattr(client, "_request"):
+            try:
+                res = client._request("GET", f"domain.byComposeId?composeId={compose_id}")
+                if isinstance(res, list):
+                    domains = [d for d in res if isinstance(d, dict)]
+            except Exception:
+                domains = []
+        if not domains and hasattr(client, "get_compose"):
+            try:
+                comp = client.get_compose(compose_id)
+                if isinstance(comp, dict):
+                    raw_domains = comp.get("domains")
+                    if isinstance(raw_domains, list):
+                        domains = [d for d in raw_domains if isinstance(d, dict)]
+            except Exception:
+                domains = []
+        for d in domains:
+            d_id = d.get("domainId")
+            if d_id:
+                try:
+                    info(
+                        f"Pruning stale Dokploy domain attachment: {d.get('host')} "
+                        f"(serviceName={d.get('serviceName')})"
+                    )
+                    client.delete_domain(d_id)
+                except Exception as err:
+                    warning(f"Failed to delete stale Dokploy domain {d.get('host')}: {err}")
 
     @classmethod
     def _find_remote_compose(cls, e: dict[str, str]) -> dict | None:
