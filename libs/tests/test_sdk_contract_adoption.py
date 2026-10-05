@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+import subprocess
 import tomllib
 from importlib.metadata import version
 from pathlib import Path
@@ -16,7 +18,95 @@ OPS_CHECKS = ROOT / ".github/workflows/ops-checks.yml"
 
 
 def test_infra_pins_the_expected_sdk_release() -> None:
-    assert version("infra2-sdk") == "2.3.1"
+    assert version("infra2-sdk") == "2.4.1"
+
+
+def _sdk_contract_violations(source: str) -> list[str]:
+    """Imports of an ``infra2_sdk`` private name or deprecated surface in ``source``.
+
+    Only the published contract is stable across SDK releases (#955): a module or name
+    starting with an underscore is private, and ``infra2_sdk.images`` /
+    ``to_otel_resource_attributes`` are deprecated (removed in the SDK's 3.0.0).
+    """
+    violations: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            modules = [(alias.name, ()) for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            modules = [(node.module, tuple(alias.name for alias in node.names))]
+        else:
+            if isinstance(node, ast.Attribute) and (
+                node.attr == "to_otel_resource_attributes"
+            ):
+                violations.append(f"deprecated attribute {node.attr}")
+            continue
+        for module, names in modules:
+            parts = module.split(".")
+            if parts[0] != "infra2_sdk":
+                continue
+            if any(part.startswith("_") for part in parts[1:]):
+                violations.append(f"private module {module}")
+            if parts[1:2] == ["images"] or (len(parts) == 1 and "images" in names):
+                violations.append("deprecated module infra2_sdk.images")
+            violations.extend(
+                f"private name {module}.{name}"
+                for name in names
+                if name.startswith("_")
+            )
+    return violations
+
+
+def _infra_python_sources() -> list[Path]:
+    tracked = subprocess.run(
+        ["git", "-C", str(ROOT), "ls-files", "-z", "--", "*.py"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.split("\0")
+    return [
+        ROOT / name
+        for name in tracked
+        if name and not name.startswith("repos/") and (ROOT / name).is_file()
+    ]
+
+
+def test_infra_imports_only_the_published_sdk_contract() -> None:
+    sources = _infra_python_sources()
+    assert len(sources) > 100, "the tracked-file scan found almost nothing"
+    found = {
+        str(path.relative_to(ROOT)): violations
+        for path in sources
+        if (violations := _sdk_contract_violations(path.read_text(encoding="utf-8")))
+    }
+    assert found == {}, f"private or deprecated infra2_sdk use: {found}"
+
+
+def test_the_sdk_contract_scan_flags_private_and_deprecated_use() -> None:
+    assert _sdk_contract_violations(
+        "from infra2_sdk.refs import _ls_remote_rows, classify_ref\n"
+    ) == ["private name infra2_sdk.refs._ls_remote_rows"]
+    assert _sdk_contract_violations("import infra2_sdk._transport\n") == [
+        "private module infra2_sdk._transport"
+    ]
+    assert _sdk_contract_violations("from infra2_sdk._transport import send\n") == [
+        "private module infra2_sdk._transport"
+    ]
+    assert _sdk_contract_violations("from infra2_sdk import images\n") == [
+        "deprecated module infra2_sdk.images"
+    ]
+    assert _sdk_contract_violations("import infra2_sdk.images\n") == [
+        "deprecated module infra2_sdk.images"
+    ]
+    assert _sdk_contract_violations("identity.to_otel_resource_attributes()\n") == [
+        "deprecated attribute to_otel_resource_attributes"
+    ]
+    assert (
+        _sdk_contract_violations(
+            "from infra2_sdk.refs import ls_remote_rows, redact_repo\n"
+            "from other_pkg._private import _x\n"
+        )
+        == []
+    )
 
 
 def test_alerting_dockerfile_sdk_pin_matches_pyproject() -> None:
@@ -158,11 +248,16 @@ def test_detect_disagreement_can_produce_every_disagreement_kind() -> None:
             failure_domain=FailureDomain.TRAEFIK_PUBLIC_ROUTE,
         ),
     ]
-    assert detect_disagreement(disagreement_results) == DisagreementKind.INTERNAL_HEALTH_PUBLIC_ROUTE
+    assert (
+        detect_disagreement(disagreement_results)
+        == DisagreementKind.INTERNAL_HEALTH_PUBLIC_ROUTE
+    )
 
     producers = {
         DisagreementKind.NONE: lambda: detect_disagreement(normal_results),
-        DisagreementKind.INTERNAL_HEALTH_PUBLIC_ROUTE: lambda: detect_disagreement(disagreement_results),
+        DisagreementKind.INTERNAL_HEALTH_PUBLIC_ROUTE: lambda: detect_disagreement(
+            disagreement_results
+        ),
     }
     produced_kinds = {kind: fn() for kind, fn in producers.items()}
     for kind, val in produced_kinds.items():

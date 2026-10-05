@@ -40,6 +40,12 @@ class AppDeployer(Deployer):
     domain = "truealpha.club"
     service_port = 3000
     service_name = "web"
+    # Telemetry identity (infra2#906). The `ta-app.sync` path (this Deployer) and the
+    # fixed-compose promote / preview paths (libs.deploy_contract.SERVICES["truealpha/app"])
+    # each issue OTEL_SERVICE_NAME / OTEL_RESOURCE_ATTRIBUTES into the one compose; both
+    # must name the same service or the compose flips identity depending on who deployed
+    # it last. The llm container consumes it (compose.yaml); component stays "app" in both.
+    telemetry_service_name = "truealpha-app"
 
     # Minute-tier internal probes (#608, the half that stayed open: the two app
     # containers had no probe at all, so the production runner reported

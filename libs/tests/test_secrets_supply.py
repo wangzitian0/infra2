@@ -314,7 +314,7 @@ def test_deployer_sync_runs_the_supply_even_when_the_compose_hash_says_skip(
 class _FakeHttpResponse:
     """Mimics what ``urllib.request.urlopen`` returns: a context manager with
     ``.status``, ``.headers.items()`` and ``.read()`` -- exactly what
-    ``infra2_sdk._transport.urllib_transport``'s ``send()`` reads off it."""
+    ``infra2_sdk.transport.urllib_transport``'s ``send()`` reads off it."""
 
     def __init__(self, status: int = 200, body: bytes = b"{}") -> None:
         self.status = status

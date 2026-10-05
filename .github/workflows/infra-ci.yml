@@ -292,7 +292,7 @@ jobs:
       - name: Test deployer contract pre-flight (config hash & service discovery)
         run: |
           cd ${{ github.workspace }}
-          uv run python tools/test_deployer_contract_light.py
+          uv run python libs/tests/test_deployer_contract_light.py
 
       - name: Run infra unit tests
         # PYTHONSAFEPATH (not -P) so pytest-xdist's execnet worker subprocesses also

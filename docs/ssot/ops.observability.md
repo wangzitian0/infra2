@@ -201,6 +201,17 @@ graph LR
 
 > 表层别名与底层 commit 由 infra2 部署时签发,应用只消费、对缺失 fast-fail。
 
+**签发范围(#906)**:端点与身份只给"进程里真有 OTel SDK 的 Python 服务";`OTEL_SERVICE_NAME` 是**整个 compose 一个值**(由部署签发),所以一个 compose 里只有一个服务能用它。
+
+| 服务 | 容器 | `OTEL_SERVICE_NAME` | 端点 | 说明 |
+|------|------|---------------------|------|------|
+| `finance_report/app` | backend | `finance-report-backend` | 签发 | worker 不给:端点开着而没有环境标签会拒绝启动(2026-09-10 staging crash-loop) |
+| `truealpha/app` | llm | `truealpha-app` | 签发(app 与 preview 两份 compose) | `ta-app.sync`(`AppDeployer.telemetry_service_name`)、固定 compose promote、preview 三入口同名;`component=app` |
+| `truealpha/app` | web | — | 不签发 | Node/Next.js,无 OTel SDK;且一个 compose 的 `OTEL_SERVICE_NAME` 不能同时命名两个服务 |
+| `truealpha/data_engine` | dagster-* | — | **不签发** | 三个角色全是 `network_mode: host`(为 OpenD),Docker DNS 名 `platform-signoz-otel-collector` 在宿主网络解析不了;§4.4 规定 collector 永不 publish,故不另开端口,等有宿主可达的 ingest 再接。没有端点就不会触发应用侧"缺身份即 fast-fail" |
+
+compose 里 `OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES` 只写成 `${…:-}`(不硬编码、不给默认):身份只有部署一个签发方。`libs/tests/compose_env.py` 把 compose 对着各入口真实推送的 env 解析一遍,证明**容器**拿到的是签发值,而不只是"部署签发了"或"compose 引用了"。
+
 ### 4.3 finance_report 接入(BE + 浏览器 FE,Infra-014)
 
 后端(Docker 网络内 OTLP HTTP)由 `10.app/secrets.ctmpl` / `preview/secrets.ctmpl` 按环境渲染
@@ -283,6 +294,8 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 | L3 Finance Report | fr-app backend | RED SLO: ≥5 5xx and >5% of non-probe requests in 5m / non-probe p95 > 3000ms for 10m | P0/P1 | code (`FinanceReportHigh5xxRate`, `FinanceReportP95LatencyHigh`) |
 | L3 Finance Report | fr-app backend | business anomaly: parse spike / rate-limit / async failure | P1/P2/P1 | code (`FinanceReport{StatementParseFailureSpike,RateLimitSaturation,AsyncTaskFailures}`) |
 | L3 Finance Report | fr-app backend | no request metrics from production for 10m (backend down or OTLP export stopped) | P1 | code (`FinanceReportBackendTelemetryAbsent`) |
+| L3 TrueAlpha | truealpha-app llm | 端点与身份已签发(#906);遥测缺失 / 错误率 / 延迟规则待数据流通后补(依赖 truealpha#1034 的应用侧接入) | P1 | Planned(规则);签发 ✅ `test_truealpha_app.py` |
+| L3 TrueAlpha | data_engine(Dagster) | 无遥测:host 网络够不到 collector(§4.2),存活仍由容器 healthcheck + breakdown watch | — | Not issued(有意) |
 | L3 Finance Report | fr-app public route | `report[-staging].zitian.party/` (web) or `/api/health` fails | P0 prod / P2 staging | Live in-band public-route probes (`finance-report-{web,api}-public-route`);prod web 另由 Cloudflare 作为产品外部入口(2 次连续失败)|
 | Cross-cutting | Vault app tokens / rendered env | missing / malformed / invalid / low-TTL / `<no value>` | P0/P1 | Docker healthcheck + `vault-audit.self-refresh` |
 | Cross-cutting | Backup freshness | latest off-host backup missing/stale/empty/no-checksum | P1 | backup manifest verifier |
@@ -507,6 +520,7 @@ Feishu page，且告警携带同一结构化记录。不得通过破坏 producti
 | Env×Stage failure-domain / disagreement 契约 | `libs/tests/test_pipeline_stage_contract.py` | ✅ |
 | synthetic round-trip(配置缺失 → `EX_CONFIG`,后端失败 → 1) | `test_observability_roundtrip_probe.py` | ✅ |
 | IaC/runtime/telemetry/alert 身份契约 | `tools/service_identity_audit.py`, `libs/tests/test_service_identity*.py` | ✅ |
+| truealpha 端点与身份签发(llm 容器拿到 collector 端点 + 各入口签发的身份;端点不无身份出现、不进 host 网络、不进 web;sync 与 promote/preview 同名)(#906) | `libs/tests/test_truealpha_app.py`, `test_deploy_primitive.py`, `test_preview_lifecycle.py` | ✅ |
 | 告警通道手动连通 | `uv run invoke alerting.test-feishu` | Manual gate |
 
 ---
