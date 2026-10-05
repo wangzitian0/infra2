@@ -2019,3 +2019,35 @@ def test_gh_retries_transient_failures(monkeypatch):
     out = gate._gh(["api", "user"], max_retries=3, initial_delay=0.01)
     assert out == "success_output\n"
     assert attempts == 3
+
+
+def test_external_app_repo_does_not_enforce_infra2_inventory_or_rule_drift():
+    """An external app repo (e.g. truealpha) is autonomous: it must not be judged
+    by infra2's local working tree drift or infra2's ci-gate-inventory.yaml."""
+    facts = _facts(
+        repo="wangzitian0/truealpha",
+        files=("services/worker.py",),
+        checks=(("CI / Unit Tests", "pass"), ("CI / Lint", "pass")),
+        rule_drift=("tools/pr_merge_gate.py",),
+    )
+    verdict = gate.evaluate(facts, now=NOW)
+    assert verdict.ready and verdict.exit_code == 0
+    assert not verdict.reasons
+
+
+def test_external_app_repo_still_enforces_general_checks_and_threads():
+    """An external app repo still respects general merge gate criteria:
+    non-green checks, unresolved review threads, and quiet window."""
+    facts = _facts(
+        repo="wangzitian0/truealpha",
+        files=("services/worker.py",),
+        checks=(("CI / Unit Tests", "fail"),),
+        unresolved_threads=1,
+        unresolved_weight=1.0,
+    )
+    verdict = gate.evaluate(facts, now=NOW)
+    assert not verdict.ready
+    assert verdict.exit_code == 1
+    assert "check(s) not green: CI / Unit Tests" in verdict.reasons
+    assert any("weigh 1" in r for r in verdict.reasons)
+
