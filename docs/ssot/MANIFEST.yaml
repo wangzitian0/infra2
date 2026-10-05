@@ -151,7 +151,7 @@ entries:
     description: >-
       Infrastructure naming and labeling conventions, resource-assessment priority,
       and defensive operations standards (including the no-bare-:latest image-pin
-      rule enforced by tools/lint_platform_image_pins.py in infra-ci).
+      rule enforced by tools/lint_compose_resource_limits.py in infra-ci).
     proofs:
       - libs/tests/test_image_pins.py
   ops.pipeline:
