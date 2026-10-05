@@ -61,8 +61,6 @@ services:
     vault_agent_container: platform-s3-vault-agent${ENV_SUFFIX}
     app_containers:
       - platform-s3${ENV_SUFFIX}
-    legacy_dokploy_services:
-      - minio
   - id: platform/authentik
     project: platform
     dokploy_service: authentik
